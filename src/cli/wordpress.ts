@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import type {
   AgentRuntimeProfile,
+  CampaignHistory,
   DiscoveryTransportResult,
   DiscoveryTransportRun,
   ProviderAttachmentStore,
@@ -44,6 +45,7 @@ import {
 } from "../profiles/wordpress/selection/index.js";
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
+import { extractCampaignHistory } from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import {
   wordpressReproductionRenderer,
@@ -72,6 +74,13 @@ export const wordpressCampaignConfigSchema = z.strictObject({
     })
     .default({ maxRuns: 40, noFindingRuns: 4 }),
   runWallTimeMinutes: z.number().positive().max(240).default(30),
+  /** Splits runs into arm a without history and arm b with the local public history. */
+  ablation: z
+    .strictObject({
+      axis: z.literal("history"),
+      armBFraction: z.number().min(0).max(1),
+    })
+    .optional(),
   wordpressVersion: z.string().min(1).max(32),
   lab: z.strictObject({
     siteTitle: z.string().min(1).max(120),
@@ -178,6 +187,24 @@ export function createWordPressCliProfile(options: {
     readonly statePath: string;
   };
 }): CliProfile {
+  /** Public records before the stable version's release; none when the cutoff or mirror is missing. */
+  const historyFor = (
+    config: WordPressCampaignConfig,
+    target: WordPressTargetSelection,
+  ): CampaignHistory => {
+    if (
+      config.ablation === undefined ||
+      options.wordfenceHistory === undefined ||
+      target.versionPublishedAt === undefined
+    )
+      return { mode: "none" };
+    const extracted = extractCampaignHistory(
+      target.slug,
+      target.versionPublishedAt,
+      options.wordfenceHistory,
+    );
+    return extracted.status === "ready" ? extracted.history : { mode: "none" };
+  };
   return {
     review: (state) =>
       new Review({
@@ -275,9 +302,12 @@ export function createWordPressCliProfile(options: {
                 promptDigest: objective.digest,
                 stopRules,
                 lab: { setupDigest: lab.setupDigest },
-                history: { mode: "none" },
+                history: historyFor(config, target),
               },
-              historyFraction: 0,
+              historyFraction: config.ablation?.armBFraction ?? 0,
+              ...(config.ablation === undefined
+                ? {}
+                : { ablation: { axis: config.ablation.axis } }),
               plannedRuns: Array.from({ length: maxRuns }, () => ({
                 configuration: {
                   promptVariant: config.promptId,

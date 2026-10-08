@@ -138,25 +138,27 @@ export function validateProductionCampaignInput(
   return parsed;
 }
 
+/** Deterministic fractional allocation of run ordinals to arm b; zero means none and one means all. */
+export function allocateArm(ordinal: number, armBFraction: number): "a" | "b" {
+  if (!Number.isSafeInteger(ordinal) || ordinal < 0)
+    throw new Error("Invalid run ordinal");
+  if (!Number.isFinite(armBFraction) || armBFraction < 0 || armBFraction > 1)
+    throw new Error("Invalid arm fraction");
+  return Math.floor((ordinal + 1) * armBFraction) >
+    Math.floor(ordinal * armBFraction)
+    ? "b"
+    : "a";
+}
+
 /** Deterministic fractional allocation; zero means no history and one means all runs. */
 export function historyForRun(
   ordinal: number,
   historyFraction: number,
   catalogHistory: Extract<CampaignHistory, { mode: "catalog" }>,
 ): CampaignHistory {
-  if (!Number.isSafeInteger(ordinal) || ordinal < 0)
-    throw new Error("Invalid run ordinal");
-  if (
-    !Number.isFinite(historyFraction) ||
-    historyFraction < 0 ||
-    historyFraction > 1
-  )
-    throw new Error("Invalid history fraction");
+  const arm = allocateArm(ordinal, historyFraction);
   const admitted = catalog.parse(catalogHistory);
-  return Math.floor((ordinal + 1) * historyFraction) >
-    Math.floor(ordinal * historyFraction)
-    ? admitted
-    : { mode: "none" };
+  return arm === "b" ? admitted : { mode: "none" };
 }
 
 type AdmittedFinding = {
@@ -189,6 +191,8 @@ export async function runDiscoveryCampaign(options: {
   readonly labId: string;
   readonly input: CampaignInputV1;
   readonly historyFraction: number;
+  /** Records each run's arm on the history axis: a without history, b with it. */
+  readonly ablation?: { readonly axis: "history" };
   readonly plannedRuns: readonly PlannedDiscoveryRun[];
   readonly executor: {
     execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
@@ -259,7 +263,14 @@ export async function runDiscoveryCampaign(options: {
       runId: run.runId,
       labId: options.labId,
       history: historyMetadata,
-      configuration: planned.configuration,
+      configuration:
+        options.ablation === undefined
+          ? planned.configuration
+          : {
+              ...planned.configuration,
+              axis: options.ablation.axis,
+              arm: history.mode === "catalog" ? "b" : "a",
+            },
     });
     if (started.status === "conflict")
       throw new Error("Discovery run identity conflict");

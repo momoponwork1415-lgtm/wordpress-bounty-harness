@@ -48,6 +48,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     configuration: z.strictObject({
       promptVariant: id,
       assignmentUnit: id,
+      axis: z.literal("history").optional(),
+      arm: z.enum(["a", "b"]).optional(),
     }),
   }),
   event({
@@ -169,6 +171,13 @@ export type CampaignFunnel = FunnelCounts & {
   /** Sum of each candidate's latest reported reward. */
   readonly rewardUsd: number;
   readonly byCategory: Readonly<Record<string, FunnelCounts>>;
+  /** Runs and their Findings per ablation arm, keyed `<axis>:<arm>`. */
+  readonly byArm: Readonly<Record<string, ArmCounts>>;
+};
+export type ArmCounts = {
+  readonly runs: number;
+  readonly findings: number;
+  readonly confirmed: number;
 };
 
 const querySchema = z.strictObject({
@@ -514,6 +523,7 @@ export class Ledger {
     );
     const readyLabs = new Set<string>();
     const startedRuns = new Map<string, string>();
+    const runArms = new Map<string, string>();
     let knownCostUsd = 0;
     let unpricedRuns = 0;
     let wallTimeMs = 0;
@@ -542,6 +552,14 @@ export class Ledger {
           break;
         case "discovery-run-started":
           startedRuns.set(current.runId, current.labId);
+          if (
+            current.configuration.axis !== undefined &&
+            current.configuration.arm !== undefined
+          )
+            runArms.set(
+              current.runId,
+              `${current.configuration.axis}:${current.configuration.arm}`,
+            );
           break;
         case "discovery-run-finished":
           if (current.costUsd === "unavailable") unpricedRuns++;
@@ -632,6 +650,26 @@ export class Ledger {
         (outcomesByKind[latest.outcome] ?? 0) + 1;
       rewardUsd += latest.rewardUsd ?? 0;
     }
+    const byArm: Record<
+      string,
+      { runs: number; findings: number; confirmed: number }
+    > = Object.create(null) as Record<
+      string,
+      { runs: number; findings: number; confirmed: number }
+    >;
+    for (const arm of runArms.values())
+      (byArm[arm] ??= { runs: 0, findings: 0, confirmed: 0 }).runs++;
+    for (const finding of findings.values()) {
+      const arm = runArms.get(finding.runId);
+      if (arm === undefined) continue;
+      const counts = byArm[arm]!;
+      counts.findings++;
+      if (
+        verifications.get(finding.findingId)?.result.status ===
+        "runtime-confirmed"
+      )
+        counts.confirmed++;
+    }
     const discoveryAttempts = [...startedRuns.entries()].filter(
       ([runId, labId]) => readyLabs.has(labId) && !setupFailedRuns.has(runId),
     ).length;
@@ -647,6 +685,7 @@ export class Ledger {
       outcomesByKind,
       rewardUsd,
       byCategory,
+      byArm: { ...byArm },
     };
   }
 }

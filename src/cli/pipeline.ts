@@ -40,6 +40,7 @@ export interface CampaignPipeline<
     readonly input: CampaignInputV1;
     readonly plannedRuns: readonly PlannedDiscoveryRun[];
     readonly historyFraction: number;
+    readonly ablation?: NonNullable<DiscoveryOptions["ablation"]>;
     readonly executor: DiscoveryOptions["executor"];
     readonly attachments: DiscoveryOptions["attachments"];
     readonly admitFinding: DiscoveryOptions["admitFinding"];

@@ -473,6 +473,7 @@ describe("Ledger public interface", () => {
       inScope: 1,
       inScopeByProgramme: { "programme-1": 1, "programme-2": 0 },
       outcomesByKind: { triaged: 1 },
+      byArm: {},
       rewardUsd: 0,
       submitted: 1,
       outcome: 1,
