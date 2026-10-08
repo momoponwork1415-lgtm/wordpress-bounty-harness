@@ -594,6 +594,15 @@ describe("harness CLI vertical slice", () => {
     expect(funnel.stdout).toContain(
       "  history:b: runs 1  findings 0  confirmed 0",
     );
+    const comparison = await run("eval", "compare", "--axis", "history");
+    expect(comparison.code).toBe(0);
+    expect(comparison.stdout.split("\n")).toEqual([
+      "compare history  paired targets 1  unpaired 0",
+      "  arm a: hits 1/2 (50.0%, 95% CI 1.3–98.7%)  findings 2  cost $0.00 known, 2 run(s) unavailable",
+      "  arm b: hits 0/1 (0.0%, 95% CI 0.0–97.5%)  findings 0  cost $0.00 known, 1 run(s) unavailable",
+      "  verdict: 判定不能（区間が重なる）",
+      "  target wporg:synthetic-plugin@9.9.9  a 1/2  b 0/1",
+    ]);
   });
 
   it("keeps every run in arm a when the pinned version has no history cutoff", async () => {
