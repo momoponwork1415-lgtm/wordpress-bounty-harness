@@ -22,6 +22,9 @@ import type {
   CodexSandboxResult,
 } from "./codex-native-agent-runtime.js";
 
+/** Memory ceiling of one Codex sandbox container. */
+export const CODEX_SANDBOX_MEMORY_MIB = 2048;
+
 const imageSchema = z
   .string()
   .regex(/^(?:sha256:[a-f0-9]{64}|[^\s@]+@sha256:[a-f0-9]{64})$/);
@@ -156,7 +159,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
       "--cap-drop=ALL",
       "--security-opt=no-new-privileges",
       "--pids-limit=64",
-      "--memory=2g",
+      `--memory=${CODEX_SANDBOX_MEMORY_MIB}m`,
       "--cpus=1",
       "--tmpfs=/tmp:rw,nosuid,nodev,size=256m",
     ];

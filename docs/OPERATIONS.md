@@ -23,6 +23,7 @@ harness review                 # 検証済みの列を見る
 
 `campaign run` は無人で回る。1対象あたり、短命のdiscovery runを最大40回（同時4）、新規Findingなしが4回続いたら止まる。各Findingは別コンテナのVerifierと判定器を通り、`runtime-confirmed` / `contradicted` / `incomplete` として台帳に入る。
 
+- 同時run数はcampaign設定の `resources` で決める。`{"maxConcurrentRuns": 4, "memoryBudgetMiB": 10240}` が既定。実効の同時数は `min(maxConcurrentRuns, floor(memoryBudgetMiB / 2560))` で、2,560 MiBはCodex sandbox（2 GiB）とrunごとのegress broker（512 MiB）の `--memory` の合計。ホストが小さいときは `memoryBudgetMiB` を下げる。1run分に満たない値では開始しない。Labのメモリは対象ごとに別に要る。
 - 購読のrate limit / quotaの応答、または任意の日次run上限（`dailyRunCap`）に達したら、新しいrunを出さず、進行中のrunを記録して止まる。終了コードは3で、台帳に `campaign-stopped` が残る。自動retryはしない。同じコマンドをもう一度実行すると、探索を終えた対象は飛ばし、途中の対象は残り回数から続け、未検証のFindingだけを検証する。
 - 対象ごとの失敗（取得、探索、検証）は標準エラーに `skipped <対象> <版> at <段階>: <理由>` と出し、台帳には `target-skipped`（段階だけ）を残して次の対象へ進む。
 

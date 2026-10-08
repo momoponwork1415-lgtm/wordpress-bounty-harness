@@ -84,6 +84,8 @@ async function harness(
     readonly candidates?: readonly string[];
     /** A slug whose snapshot cannot be frozen. */
     readonly failFreeze?: string;
+    /** Extra campaign config fields. */
+    readonly config?: Readonly<Record<string, unknown>>;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
@@ -239,6 +241,8 @@ async function harness(
   const attachments = new ProviderAttachmentStore(join(root, "provider"));
   const prompts: string[] = [];
   const histories: string[] = [];
+  let inFlight = 0;
+  let maxInFlight = 0;
   const boundaries: WordPressCampaignBoundaries = {
     selection,
     freeze: async (target) => {
@@ -252,9 +256,12 @@ async function harness(
     attachments,
     executor: {
       async execute(run: DiscoveryTransportRun) {
-        prompts.push(run.prompt);
+        const call = prompts.push(run.prompt);
         histories.push(run.campaignInput.history.mode);
-        if (options.limitOnCalls?.includes(prompts.length) === true)
+        maxInFlight = Math.max(maxInFlight, ++inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+        if (options.limitOnCalls?.includes(call) === true)
           return {
             receipt: createNativeRunReceipt({
               runId: run.runId,
@@ -269,7 +276,7 @@ async function harness(
           };
         const report = {
           findings:
-            prompts.length === 1
+            call === 1
               ? [
                   claim("account-takeover", "includes/synthetic.php"),
                   claim("sensitive-object-access", "synthetic-plugin.php"),
@@ -384,6 +391,9 @@ async function harness(
       ...(options.ablation === undefined
         ? {}
         : { ablation: { axis: "history", armBFraction: options.ablation } }),
+      // Sequential by default so the call order is deterministic.
+      resources: { maxConcurrentRuns: 1, memoryBudgetMiB: 10_240 },
+      ...options.config,
       wordpressVersion: "6.8",
       lab: {
         siteTitle: "Synthetic",
@@ -429,6 +439,7 @@ async function harness(
     docker,
     root,
     ledger: () => state.ledger,
+    maxInFlight: () => maxInFlight,
   };
 }
 
@@ -742,6 +753,61 @@ describe("harness CLI vertical slice", () => {
     expect(again.code).toBe(0);
     expect(again.stdout).toContain("runs 0  stopped by no-new-finding");
     expect(again.stdout).not.toContain("  finding ");
+  });
+
+  it("runs discovery concurrently within the configured count and memory budget", async () => {
+    const { run, configPath, maxInFlight } = await harness({
+      config: {
+        stopRules: { maxRuns: 4, noFindingRuns: 4 },
+        // Room for two runs of a Codex sandbox and its broker (2,560 MiB each).
+        resources: { maxConcurrentRuns: 4, memoryBudgetMiB: 6000 },
+      },
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(campaign.stdout).toContain("runs 4  stopped by max-runs");
+    expect(maxInFlight()).toBe(2);
+  });
+
+  it("refuses a memory budget below one run and stops at the daily run cap", async () => {
+    const small = await harness({
+      config: { resources: { maxConcurrentRuns: 1, memoryBudgetMiB: 1024 } },
+    });
+    const refused = await small.run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      small.configPath,
+    );
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain(
+      "memory budget is below one discovery run",
+    );
+    expect(small.prompts).toHaveLength(0);
+
+    const capped = await harness({ config: { dailyRunCap: 1 } });
+    const stopped = await capped.run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      capped.configPath,
+    );
+    expect(stopped.code).toBe(3);
+    expect(stopped.stdout).toContain("runs 1  stopped by daily-run-cap");
   });
 
   it("skips a target that fails, records the stage and continues with the rest", async () => {

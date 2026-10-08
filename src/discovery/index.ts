@@ -60,3 +60,6 @@ export {
   providerAttachmentRefSchema,
   type ProviderAttachmentRef,
 } from "./provider-research-report.js";
+
+export { CODEX_SANDBOX_MEMORY_MIB } from "./codex-gvisor-sandbox.js";
+export { EGRESS_BROKER_MEMORY_MIB } from "./provider-credential-egress-broker.js";
