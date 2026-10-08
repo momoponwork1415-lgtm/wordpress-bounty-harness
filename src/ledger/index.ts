@@ -33,7 +33,19 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     labId: id,
     status: z.enum(["ready", "failed"]),
   }),
-  event({ type: z.literal("discovery-run-started"), runId: id, labId: id }),
+  event({
+    type: z.literal("discovery-run-started"),
+    runId: id,
+    labId: id,
+    history: z.union([
+      z.strictObject({ mode: z.literal("none") }),
+      z.strictObject({
+        mode: z.literal("catalog"),
+        digest,
+        recordIds: z.array(id),
+      }),
+    ]),
+  }),
   event({
     type: z.literal("discovery-run-finished"),
     runId: id,
@@ -44,6 +56,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     findingId: id,
     runId: id,
     category: id,
+    historyRecordId: id.optional(),
   }),
   event({
     type: z.literal("verification-finished"),
@@ -267,7 +280,59 @@ export class Ledger {
         return { status };
       }
 
+      if (parsed.type === "discovery-run-started") {
+        const previousRuns = this.#db
+          .prepare(
+            "SELECT event_json FROM ledger_events WHERE campaign_id = ? AND event_type = 'discovery-run-started' ORDER BY sequence",
+          )
+          .all(parsed.campaignId);
+        if (
+          previousRuns.some((row) => {
+            const previous = ledgerEventV1Schema.parse(
+              JSON.parse(
+                z.object({ event_json: z.string() }).parse(row).event_json,
+              ) as unknown,
+            );
+            return (
+              previous.type === "discovery-run-started" &&
+              previous.runId === parsed.runId
+            );
+          })
+        ) {
+          this.#db.exec("COMMIT");
+          return { status: "conflict" };
+        }
+      }
+
       if (parsed.type === "finding-recorded") {
+        if (parsed.historyRecordId !== undefined) {
+          const runRow = this.#db
+            .prepare(
+              "SELECT event_json FROM ledger_events WHERE campaign_id = ? AND event_type = 'discovery-run-started' ORDER BY sequence",
+            )
+            .all(parsed.campaignId)
+            .map((row) =>
+              ledgerEventV1Schema.parse(
+                JSON.parse(
+                  z.object({ event_json: z.string() }).parse(row).event_json,
+                ) as unknown,
+              ),
+            )
+            .find(
+              (event) =>
+                event.type === "discovery-run-started" &&
+                event.runId === parsed.runId,
+            );
+          if (
+            runRow?.type !== "discovery-run-started" ||
+            runRow.snapshotDigest !== parsed.snapshotDigest ||
+            runRow.history.mode !== "catalog" ||
+            !runRow.history.recordIds.includes(parsed.historyRecordId)
+          ) {
+            this.#db.exec("COMMIT");
+            return { status: "conflict" };
+          }
+        }
         const previousFinding = this.#db
           .prepare(
             "SELECT sequence FROM ledger_events WHERE campaign_id = ? AND event_type = 'finding-recorded' AND finding_id = ? LIMIT 1",

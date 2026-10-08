@@ -239,12 +239,14 @@ describe("Ledger public interface", () => {
       type: "discovery-run-started",
       runId: "run-1",
       labId: "lab-1",
+      history: { mode: "catalog", digest: snapshot, recordIds: ["public-1"] },
     });
     await ledger.append({
       ...common("run-2-started"),
       type: "discovery-run-started",
       runId: "run-2",
       labId: "lab-2",
+      history: { mode: "none" },
     });
     await ledger.append({
       ...common("run-1-finished"),
@@ -423,5 +425,52 @@ describe("Ledger public interface", () => {
       },
     });
     expect(ledger.funnel("campaign-2")).toMatchObject({ raw: 1, verified: 0 });
+  });
+
+  it("records a Finding reference only to a catalog record given to that run", async () => {
+    const { ledger } = await fixture();
+    expect(
+      await ledger.append({
+        ...common("run-history"),
+        type: "discovery-run-started",
+        runId: "run-history",
+        labId: "lab-1",
+        history: { mode: "catalog", digest: snapshot, recordIds: ["public-1"] },
+      }),
+    ).toEqual({ status: "appended" });
+    expect(
+      await ledger.append({
+        ...common("run-history-duplicate"),
+        type: "discovery-run-started",
+        runId: "run-history",
+        labId: "lab-1",
+        history: { mode: "none" },
+      }),
+    ).toEqual({ status: "conflict" });
+    expect(
+      await ledger.append({
+        ...common("finding-history"),
+        type: "finding-recorded",
+        findingId: "finding-history",
+        runId: "run-history",
+        category: "sql-injection",
+        historyRecordId: "public-1",
+      }),
+    ).toEqual({ status: "appended" });
+    expect(
+      ledger.read({ findingId: "finding-history" })[0]?.event,
+    ).toMatchObject({
+      historyRecordId: "public-1",
+    });
+    expect(
+      await ledger.append({
+        ...common("finding-unknown-history"),
+        type: "finding-recorded",
+        findingId: "finding-unknown-history",
+        runId: "run-history",
+        category: "sql-injection",
+        historyRecordId: "not-shown",
+      }),
+    ).toEqual({ status: "conflict" });
   });
 });

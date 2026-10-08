@@ -3,6 +3,7 @@ import { isAbsolute } from "node:path";
 
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
+import { campaignInputV1Schema, type CampaignInputV1 } from "./campaign.js";
 import {
   admitAgentRuntimeProfile,
   agentRuntimeProfileSchema,
@@ -77,6 +78,7 @@ export interface DiscoveryTransportRun {
   readonly targetSnapshotDigest: string;
   readonly profile: AgentRuntimeProfile;
   readonly prompt: string;
+  readonly campaignInput: CampaignInputV1;
   readonly sourceDirectory: string;
   readonly sourceTree: ExpectedSourceTree;
   readonly expiresAt: string;
@@ -91,6 +93,7 @@ const discoveryTransportRunSchema = z.strictObject({
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
+  campaignInput: campaignInputV1Schema,
   sourceDirectory: z.string().min(1),
   sourceTree: z.strictObject({
     digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
@@ -220,6 +223,8 @@ export class CodexNativeAgentRuntime {
     });
     if (
       !discoveryTransportRunSchema.safeParse(run).success ||
+      run.campaignInput.snapshotDigest !== run.targetSnapshotDigest ||
+      run.campaignInput.modelProfileDigest !== run.profile.digest ||
       admitAgentRuntimeProfile(run.profile, this.sandboxImage).status !==
         "admitted" ||
       run.prompt.length === 0 ||
@@ -282,7 +287,10 @@ export class CodexNativeAgentRuntime {
               "--json",
               "-",
             ],
-            stdin: run.prompt,
+            stdin:
+              run.campaignInput.history.mode === "catalog"
+                ? `${run.prompt}\n\nPublic history catalog (records strictly before the cutoff):\n${canonicalJson(run.campaignInput.history)}`
+                : run.prompt,
             supportFiles: [
               {
                 path: "/opt/codex-support/report-schema.json",
