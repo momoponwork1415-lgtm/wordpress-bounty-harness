@@ -121,6 +121,7 @@ const event = z.looseObject({ type: z.string() });
 const verificationReportSchema = z.strictObject({
   "http.json": z.string().nullable(),
   "steps.md": z.string().nullable(),
+  "route.json": z.string().nullable(),
   "refutation.md": z.string().nullable(),
   precondition: z.string().nullable(),
 });
@@ -130,10 +131,17 @@ const verificationReportJsonSchema = {
   properties: {
     "http.json": { type: ["string", "null"] },
     "steps.md": { type: ["string", "null"] },
+    "route.json": { type: ["string", "null"] },
     "refutation.md": { type: ["string", "null"] },
     precondition: { type: ["string", "null"] },
   },
-  required: ["http.json", "steps.md", "refutation.md", "precondition"],
+  required: [
+    "http.json",
+    "steps.md",
+    "route.json",
+    "refutation.md",
+    "precondition",
+  ],
 } as const;
 const usageSchema = z.looseObject({
   input_tokens: z.number().int().nonnegative(),

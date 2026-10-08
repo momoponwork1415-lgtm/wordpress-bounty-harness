@@ -181,7 +181,7 @@ describe("CodexVerifier.attempt", () => {
     expect(event?.type).toBe("verifier-run-finished");
     if (event?.type !== "verifier-run-finished") return;
     expect(event.promptDigest).toBe(
-      "sha256:fd4d4800473542edb9d6fcda466055669984c4edb914871e81a72ac068508c7e",
+      "sha256:889b3c012fe37c3f14629e4771cc27c7b505e862dfd8c93c2a2a86f510435c89",
     );
     const storedReceipt = await f.store.readFile(
       event.receiptDigest,
@@ -197,6 +197,33 @@ describe("CodexVerifier.attempt", () => {
       usage: { inputTokens: 10, outputTokens: 20 },
     });
     expect(f.runs[0]?.campaignInput.history).toEqual({ mode: "none" });
+  });
+
+  it("preserves the route facts needed by the Harness judge", async () => {
+    const route = { role: "subscriber", defaultSettings: true, steps: [] };
+    const f = await fixture([
+      {
+        "http.json": JSON.stringify({
+          exchanges: [{ request: {}, response: { body: "ordinary" } }],
+        }),
+        "steps.md": "Synthetic steps",
+        "route.json": JSON.stringify(route),
+      },
+    ]);
+    const attempt = await f.verifier.attempt({
+      finding: f.finding,
+      lab: f.lab,
+    });
+    expect(attempt.status).toBe("attempted");
+    if (attempt.status !== "attempted") return;
+    const stored = await f.store.readFile(
+      attempt.recipeDigest,
+      "route.json",
+      1024,
+    );
+    expect(stored.status).toBe("resolved");
+    if (stored.status === "resolved")
+      expect(JSON.parse(stored.bytes.toString("utf8"))).toEqual(route);
   });
 
   it("keeps refutation separate from the recipe and ignores a claimed verdict", async () => {
@@ -272,6 +299,9 @@ describe("CodexVerifier.attempt", () => {
     expect(f.runs[0]?.runId).not.toBe(f.runs[1]?.runId);
     for (const run of f.runs) {
       expect(run.prompt).toContain("subscriber-secret");
+      expect(run.prompt).toContain("sensitive-object-access");
+      expect(run.prompt).toContain("labObservations");
+      expect(run.prompt).toContain("existingControls");
       expect(run.prompt).toContain("customer-secret");
       expect(run.prompt).not.toContain("admin-secret");
       expect(run.prompt).not.toContain("contributor-secret");

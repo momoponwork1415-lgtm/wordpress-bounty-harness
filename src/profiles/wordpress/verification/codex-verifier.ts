@@ -40,8 +40,17 @@ const httpSchema = z.looseObject({
 const attachmentSchema = z.looseObject({
   "http.json": z.string().nullable().optional(),
   "steps.md": z.string().nullable().optional(),
+  "route.json": z.string().nullable().optional(),
   "refutation.md": z.string().nullable().optional(),
   precondition: z.string().nullable().optional(),
+});
+const routeSchema = z.looseObject({
+  role: z.enum(["unauthenticated", "subscriber", "customer"]),
+  defaultSettings: z.boolean(),
+  steps: z
+    .array(z.looseObject({ kind: z.string(), path: z.string().optional() }))
+    .max(30)
+    .optional(),
 });
 
 type LowPrivilegeAccounts = Readonly<{
@@ -160,14 +169,7 @@ export class CodexVerifier implements Verifier<
     const prompt = [
       fixed.text.trim(),
       "## Finding",
-      canonicalJson({
-        claim: admitted.claim,
-        attackerPosition: admitted.attackerPosition,
-        configurationPrecondition: admitted.configurationPrecondition,
-        brokenProperty: admitted.brokenProperty,
-        sourceTrace: admitted.sourceTrace,
-        recipeRef: admitted.recipeRef,
-      }),
+      canonicalJson(admitted),
       "## Lab",
       canonicalJson({ endpoint: lab.endpoint, accounts }),
     ].join("\n\n");
@@ -300,9 +302,27 @@ export class CodexVerifier implements Verifier<
         nextStep: "Repair the http.json exchanges schema and repeat",
       };
     }
+    let route: string | undefined;
+    if (typeof data["route.json"] === "string") {
+      try {
+        const parsed = routeSchema.parse(
+          JSON.parse(data["route.json"]) as unknown,
+        );
+        if (parsed.role !== admitted.attackerPosition)
+          throw new Error("Route role differs from Finding");
+        route = data["route.json"];
+      } catch {
+        return {
+          status: "incomplete",
+          reason: "recipe",
+          nextStep: "Repair the route.json role and settings, then repeat",
+        };
+      }
+    }
     const recipeDigest = await this.options.store.putFiles({
       "http.json": data["http.json"],
       "steps.md": data["steps.md"],
+      ...(route === undefined ? {} : { "route.json": route }),
     });
     const refutationDigest =
       typeof data["refutation.md"] === "string" && data["refutation.md"].trim()

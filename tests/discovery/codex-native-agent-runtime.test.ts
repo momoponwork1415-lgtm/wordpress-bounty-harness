@@ -156,6 +156,7 @@ describe("Codex native agent runtime", () => {
       const report = {
         "http.json": '{"exchanges":[]}',
         "steps.md": "Synthetic steps",
+        "route.json": null,
         "refutation.md": null,
         precondition: null,
       };
