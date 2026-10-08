@@ -76,7 +76,15 @@ export interface WordPressCanaryLedger {
   readonly postMeta: string;
   readonly file: string;
   readonly user: string;
+  /** Administrator canary: a takeover target the attacker never holds credentials for. */
+  readonly adminUser: string;
+  /** Roles of each attacker account when the Lab was seeded. */
+  readonly roleBaseline: Readonly<Record<string, readonly string[]>>;
 }
+
+export type WordPressRoleObservation =
+  | { readonly status: "roles"; readonly roles: readonly string[] }
+  | { readonly status: "unavailable" };
 
 export type WordPressSessionObservation =
   | { readonly status: "user"; readonly login: string }
@@ -102,6 +110,11 @@ export interface WordPressLab extends LabProvisioner<
     handle: WordPressLabHandle,
     cookie: string,
   ): Promise<WordPressSessionObservation>;
+  /** Reads an account's current roles inside the Lab. */
+  observeAccountRoles(
+    handle: WordPressLabHandle,
+    username: string,
+  ): Promise<WordPressRoleObservation>;
 }
 
 interface Resources {
@@ -231,6 +244,31 @@ export function openWordPressLab(options: {
     }
     if (okay) active.delete(resource.id);
     return okay;
+  };
+  const roles = async (
+    resource: Resources,
+    username: string,
+  ): Promise<WordPressRoleObservation> => {
+    if (!/^[A-Za-z0-9._@-]{1,60}$/.test(username))
+      return { status: "unavailable" };
+    try {
+      const result = await wp(resource, [
+        "user",
+        "get",
+        username,
+        "--field=roles",
+      ]);
+      return {
+        status: "roles",
+        roles: result.stdout
+          .split(",")
+          .map((role) => role.trim())
+          .filter((role) => role.length > 0)
+          .sort(),
+      };
+    } catch {
+      return { status: "unavailable" };
+    }
   };
   const verifySource = async (
     source: WordPressSource,
@@ -559,8 +597,26 @@ export function openWordPressLab(options: {
           "--role=subscriber",
           `--user_pass=${randomUUID()}`,
         ]);
+        const adminUser = `wbh-canary-admin-${token}`;
+        await wp(resource, [
+          "user",
+          "create",
+          adminUser,
+          `${adminUser}@example.invalid`,
+          "--role=administrator",
+          `--user_pass=${randomUUID()}`,
+        ]);
+        const roleBaseline: Record<string, readonly string[]> = {};
+        for (const account of Object.values(handle.attackerAccounts)) {
+          const observed = await roles(resource, account.username);
+          if (observed.status !== "roles")
+            throw new Error("Role baseline unavailable");
+          roleBaseline[account.username] = observed.roles;
+        }
         resource.canaries = {
           nonce: token,
+          adminUser,
+          roleBaseline,
           option: `wbh_canary_${token}`,
           postId,
           postMeta: `wbh_canary_${token}`,
@@ -628,6 +684,12 @@ export function openWordPressLab(options: {
       } catch {
         return { status: "unavailable" };
       }
+    },
+    async observeAccountRoles(handle, username) {
+      const resource = active.get(handle.id);
+      return resource?.handle === handle
+        ? roles(resource, username)
+        : { status: "unavailable" };
     },
     async observeExecutionCanary(handle, canary) {
       const resource = active.get(handle.id);

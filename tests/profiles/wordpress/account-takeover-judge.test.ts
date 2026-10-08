@@ -41,6 +41,8 @@ const canaries: WordPressCanaryLedger = {
   postMeta: "wbh_canary_synthetic-nonce",
   file: "/var/www/html/wp-content/wbh-canary-synthetic-nonce.txt",
   user: "wbh-canary-synthetic-nonce",
+  adminUser: "wbh-canary-admin-synthetic-nonce",
+  roleBaseline: { "lab-subscriber": ["subscriber"] },
 };
 const finding = (impact: WordPressFinding["impact"]): WordPressFinding => ({
   findingId: "finding-1",

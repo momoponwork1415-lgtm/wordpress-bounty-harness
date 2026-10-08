@@ -81,6 +81,8 @@ async function fixture(
           return { exitCode: 0, stdout: "172.20.0.2", stderr: "" };
         if (request.args[0] === "exec" && request.args[2] === "cat")
           return { exitCode: 0, stdout: "fixed-nonce", stderr: "" };
+        if (request.args.includes("--field=roles"))
+          return { exitCode: 0, stdout: "subscriber\n", stderr: "" };
         if (request.args.includes("eval"))
           return {
             exitCode: 0,
@@ -186,6 +188,38 @@ describe("WordPress gVisor Lab", () => {
     expect(
       await lab.observeSessionUser(provisioned.handle, "bad value'"),
     ).toEqual({ status: "none" });
+    expect(commands.length).toBe(before);
+  });
+
+  it("seeds an administrator canary and records each attacker role baseline", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup);
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    expect((await lab.seedCanaries(provisioned.handle)).status).toBe("seeded");
+    const subscriber = provisioned.handle.attackerAccounts.subscriber.username;
+    expect(lab.canaryLedger(provisioned.handle)).toMatchObject({
+      user: "wbh-canary-fixed-nonce",
+      adminUser: "wbh-canary-admin-fixed-nonce",
+      roleBaseline: { [subscriber]: ["subscriber"] },
+    });
+    expect(
+      commands.some(
+        (command) =>
+          command.args.includes("wbh-canary-admin-fixed-nonce") &&
+          command.args.includes("--role=administrator"),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(provisioned.handle)).not.toContain("canary-admin");
+    expect(
+      await lab.observeAccountRoles(provisioned.handle, subscriber),
+    ).toEqual({
+      status: "roles",
+      roles: ["subscriber"],
+    });
+    const before = commands.length;
+    expect(
+      await lab.observeAccountRoles(provisioned.handle, "bad name;"),
+    ).toEqual({ status: "unavailable" });
     expect(commands.length).toBe(before);
   });
 
