@@ -6,7 +6,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
-import { defineAgentRuntimeProfile } from "../../src/discovery/index.js";
+import {
+  createHistoryCatalog,
+  defineAgentRuntimeProfile,
+} from "../../src/discovery/index.js";
 import {
   CodexNativeAgentRuntime,
   type CodexSandbox,
@@ -42,6 +45,17 @@ const run = {
   sourceDirectory: "/private/frozen-source",
   sourceTree: { digest, entries: 1, bytes: 1 },
   prompt: "Inspect the fixed source and report findings.",
+  campaignInput: {
+    schemaVersion: 1 as const,
+    snapshotDigest: digest,
+    trustBoundary: { version: "v1", text: "Untrusted request" },
+    programmeBoundary: { version: "v1", text: "Low privilege" },
+    modelProfileDigest: profile.digest,
+    promptDigest: digest,
+    stopRules: { maxRuns: 40, noFindingRuns: 4 },
+    lab: { setupDigest: digest },
+    history: { mode: "none" as const },
+  },
   expiresAt: "2026-10-08T07:30:00.000Z",
 };
 const transcript = [
@@ -131,6 +145,57 @@ function sandbox(
 }
 
 describe("Codex native agent runtime", () => {
+  it("sends only validated pre-cutoff catalog history to the agent", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
+    try {
+      const commands: CodexSandboxCommand[] = [];
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(transcript, commands),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      const history = createHistoryCatalog("2026-02-01T00:00:00Z", [
+        {
+          id: "public-1",
+          kind: "sql-injection",
+          affectedVersions: ["1.0"],
+          fixedVersions: ["1.1"],
+          publishedAt: "2026-01-01T00:00:00Z",
+          title: "Synthetic title",
+          changedFiles: [],
+        },
+      ]);
+      expect(
+        (
+          await runtime.execute({
+            ...run,
+            campaignInput: { ...run.campaignInput, history },
+          })
+        ).receipt.terminal,
+      ).toBe("completed");
+      expect(commands[0]?.stdin).toContain("Synthetic title");
+      expect(commands[0]?.stdin).toContain("2026-02-01T00:00:00Z");
+      const unsafe = {
+        ...run,
+        campaignInput: {
+          ...run.campaignInput,
+          history: {
+            ...history,
+            records: [{ ...history.records[0]!, payload: "secret" }],
+          },
+        },
+      };
+      expect((await runtime.execute(unsafe)).receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "policy",
+      });
+      expect(commands).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("rejects an Answer Key field before invoking the agent", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
     try {

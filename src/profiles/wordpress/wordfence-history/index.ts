@@ -2,6 +2,11 @@ import Database from "better-sqlite3";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 
+import {
+  createHistoryCatalog,
+  type CampaignHistory,
+} from "../../../discovery/campaign.js";
+
 const propertySchema = z.enum([
   "rce",
   "php-file-write",
@@ -293,6 +298,104 @@ export function findDuplicates(
     };
   } catch {
     return unavailable;
+  } finally {
+    db?.close();
+  }
+}
+
+const catalogSoftwareSchema = z.object({
+  slug: z.string(),
+  affected_versions: z.record(z.string(), z.unknown()).optional(),
+  patched_versions: z.array(z.string()).optional(),
+});
+const catalogSourceSchema = z.object({
+  software: z.array(catalogSoftwareSchema),
+});
+
+/** Project the local Wordfence mirror into the exact public catalog allowlist. */
+export function extractCampaignHistory(
+  plugin: string,
+  historyCutoff: string,
+  options: Pick<WordfenceHistoryOptions, "databasePath" | "statePath">,
+):
+  | {
+      readonly status: "ready";
+      readonly history: Extract<CampaignHistory, { mode: "catalog" }>;
+    }
+  | { readonly status: "unavailable" } {
+  if (plugin.length === 0) throw new Error("Plugin slug is required");
+  const cutoff = z.iso.datetime({ offset: true }).parse(historyCutoff);
+  let db: Database.Database | undefined;
+  try {
+    const state = stateSchema.parse(
+      JSON.parse(readFileSync(options.statePath, "utf8")) as unknown,
+    );
+    if (state.stale_fallback === true) return { status: "unavailable" };
+    db = new Database(options.databasePath, {
+      readonly: true,
+      fileMustExist: true,
+    });
+    if (
+      metadata(db, "projection_schema") !== "wordfence-history/v1" ||
+      metadata(db, "content_sha256") !== state.content_sha256 ||
+      metadata(db, "record_count") !== String(state.record_count)
+    ) {
+      return { status: "unavailable" };
+    }
+    const rows = db
+      .prepare(
+        "SELECT v.id, v.title, v.published, v.record_json FROM vulnerabilities v JOIN software s ON s.vulnerability_id = v.id WHERE s.slug = ? AND s.type = 'plugin' ORDER BY v.published, v.id",
+      )
+      .all(plugin);
+    const signalQuery = db.prepare(
+      "SELECT value FROM signals WHERE vulnerability_id = ? AND slug = ? AND kind = 'primitive' ORDER BY value",
+    );
+    const records = [];
+    for (const source of rows) {
+      const row = vulnerabilityRowSchema.parse(source);
+      if (row.published === null) continue;
+      const published = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(
+        row.published,
+      )
+        ? `${row.published.replace(" ", "T")}Z`
+        : row.published;
+      const instant = Date.parse(published);
+      if (!Number.isFinite(instant)) continue;
+      if (instant >= Date.parse(cutoff)) continue;
+      const sourceRecord = catalogSourceSchema.parse(
+        JSON.parse(row.record_json) as unknown,
+      );
+      const software = sourceRecord.software.filter(
+        (item) => item.slug === plugin,
+      );
+      if (software.length === 0) continue;
+      const signals = z
+        .array(signalRowSchema)
+        .parse(signalQuery.all(row.id, plugin));
+      records.push({
+        id: row.id,
+        kind: signals.map((item) => item.value).join(", ") || "unknown",
+        affectedVersions: [
+          ...new Set(
+            software.flatMap((item) =>
+              Object.keys(item.affected_versions ?? {}),
+            ),
+          ),
+        ].sort(),
+        fixedVersions: [
+          ...new Set(software.flatMap((item) => item.patched_versions ?? [])),
+        ].sort(),
+        publishedAt: new Date(instant).toISOString(),
+        title: row.title,
+        changedFiles: [],
+      });
+    }
+    return {
+      status: "ready",
+      history: createHistoryCatalog(cutoff, records),
+    };
+  } catch {
+    return { status: "unavailable" };
   } finally {
     db?.close();
   }

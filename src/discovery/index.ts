@@ -1,4 +1,15 @@
 export {
+  campaignHistorySchema,
+  campaignInputV1Schema,
+  createHistoryCatalog,
+  historyForRun,
+  validateEvaluationCampaignInput,
+  validateProductionCampaignInput,
+  type CampaignHistory,
+  type CampaignInputV1,
+  type CatalogRecord,
+} from "./campaign.js";
+export {
   agentRuntimeProfileSchema,
   admitAgentRuntimeProfile,
   codexModelCatalog,
