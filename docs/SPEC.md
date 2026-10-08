@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.2、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
+版: v0.3、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
 
 ## 1. 目的と指標
 
@@ -41,6 +41,21 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `cli` | 上記を薄く接続する | コマンド | なし | | 移植: `cli.ts` の構成だけ |
 
 持ち込まないもの: `research/` のResearch Campaigns内部、継続Campaignとcheckpoint再開、条件付き3試行、Human Candidate Review、Research Grant、Approved Target Batch、wp2shell prompt（v7 / v8 / v9）、旧スキーマ、Grok / Claude Code / GLM / DeepSeek adapter（開発比較が必要になったら移す）。
+
+## 4a. Target Profile（対象固有部分の置き場）
+
+将来の別言語・別プラットフォームへの使い回しのため、WordPress固有のものは `profiles/wordpress/` に閉じ込める（[ADR 0011](adr/0011-target-specific-code-lives-in-a-profile.md)）。
+
+| profileが提供するもの | WordPress版の中身 |
+| --- | --- |
+| source取得 | WordPress.orgからのplugin / 本体の取得と検査 |
+| Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、canaryの配置先（options、post meta、ファイル、canaryユーザー） |
+| 判定器集合 | 第7節の種別別判定器 |
+| scope方針 | `policy/programme-scope.md`（Wordfence / Patchstack） |
+| prompt雛形 | 短い目的prompt、trust境界宣言の雛形、file分担の規則（hook / route / AJAX action単位） |
+| 答えの鍵の形式 | 入口の表現（hook名、route、action名） |
+
+汎用モジュールはこれらをインターフェース経由で受け取り、WordPressの型やpathをimportしない。2つ目のprofileを作るまでインターフェースは汎用化せず、WordPress版の完成後に共通部分を抽出する。
 
 ## 5. 受け渡し契約（版付き、Zodで実行時検査）
 
@@ -129,6 +144,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 8. strict TypeScriptのモジュラーモノリスと薄いCLI（旧ADR 0054 / 0055 / 0084を引き継ぐ）。
 9. provider認証情報は有界のegress brokerを通す（旧ADR 0142を引き継ぐ）。
 10. プログラム対象範囲は技術的検証を止めず、reviewで提出先ごとに評価する。authz / IDORは重大な影響へつながる場合だけ対象。
+11. 対象固有のコードはTarget Profileに閉じ込め、汎用モジュールはprofileを型でしか知らない。2つ目のprofileまで汎用化しない。
 
 ## 12. 最初の縦断スライスと受入条件
 
