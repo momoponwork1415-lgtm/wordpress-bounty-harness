@@ -82,6 +82,8 @@ function harness(options: {
   >;
   programmeStatus?: "current" | "stale";
   clock?: string;
+  /** The clock moves on by this much each time it is read, as a real one does. */
+  advanceMsPerRead?: number;
 }) {
   const observations = options.observations ?? {
     popular: observation("popular", [], 100_000),
@@ -123,7 +125,14 @@ function harness(options: {
     targetSource,
     programme,
     programmeRef,
-    clock: () => new Date(options.clock ?? now),
+    clock: (() => {
+      let reads = 0;
+      return () =>
+        new Date(
+          Date.parse(options.clock ?? now) +
+            (options.advanceMsPerRead ?? 0) * reads++,
+        );
+    })(),
   });
 }
 
@@ -237,6 +246,34 @@ describe("WordPress selection public interface", () => {
     expect((await staleTarget.inspect(basePolicy))[0]?.reasons).toContain(
       "observation-stale",
     );
+  });
+
+  it("keeps a target observed during the selection itself fresh", async () => {
+    // A live fetch finishes after selection reads the clock, so the
+    // observation is stamped a moment later than "now".
+    const fetchedJustNow = (
+      slug: string,
+      tags: string[],
+      installations: number,
+    ) => {
+      const observed = observation(slug, tags, installations);
+      return {
+        ...observed,
+        observation: {
+          ...observed.observation,
+          observedAt: "2026-10-08T00:00:02.000Z",
+        },
+      };
+    };
+    const selection = harness({
+      observations: {
+        popular: fetchedJustNow("popular", [], 100_000),
+        exposed: fetchedJustNow("exposed", ["form"], 1_000),
+      },
+      advanceMsPerRead: 3_000,
+    });
+    expect((await selection.inspect(basePolicy))[0]?.reasons).toEqual([]);
+    expect(await selection.select(basePolicy)).toHaveLength(2);
   });
 
   it("dates the stable version by its last update and leaves a pinned version undated", async () => {

@@ -159,7 +159,11 @@ export function createWordPressSelection(
         continue;
       }
       const observation = result.observation;
-      const observedAge = ageDays(observation.observedAt, now);
+      // A live fetch stamps the observation after `now` was read.
+      const observedAge = ageDays(
+        observation.observedAt,
+        Math.max(now, clock().getTime()),
+      );
       if (
         observedAge === undefined ||
         observedAge > policy.maximumObservationAgeDays
