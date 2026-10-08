@@ -119,6 +119,11 @@ export class Verification<
     readonly findingId: string;
     readonly verificationId: string;
     readonly snapshot: { readonly digest: string };
+    /** Re-verify a Finding recorded on an earlier snapshot of the same target. */
+    readonly basis?: {
+      readonly kind: "latest-version";
+      readonly findingSnapshotDigest: string;
+    };
     readonly setup: Setup;
     readonly campaignLabSetupDigest: string;
     readonly reconstruction: Reconstruction;
@@ -136,7 +141,10 @@ export class Verification<
           "precondition",
           "Record the finding with its private claim before verification",
         );
-      if (finding.snapshotDigest !== snapshotDigest)
+      if (
+        finding.snapshotDigest !==
+        (input.basis?.findingSnapshotDigest ?? snapshotDigest)
+      )
         return incomplete(
           "digest-mismatch",
           "Repeat verification against the finding snapshot",
@@ -159,7 +167,13 @@ export class Verification<
       labSetupDigest = lab.setupDigest;
       let result: VerificationResultV1;
       try {
-        result = await this.#judge(finding, judge, lab, input.reconstruction);
+        result = await this.#judge(
+          finding,
+          snapshotDigest,
+          judge,
+          lab,
+          input.reconstruction,
+        );
       } catch {
         result = incomplete(
           "evidence",
@@ -187,6 +201,16 @@ export class Verification<
       verificationId,
       findingId,
       labSetupDigest,
+      ...(input.basis === undefined
+        ? {}
+        : {
+            basis: {
+              kind: input.basis.kind,
+              findingSnapshotDigest: digest.parse(
+                input.basis.findingSnapshotDigest,
+              ),
+            },
+          }),
       result: decided,
     });
     if (appended.status === "conflict")
@@ -209,16 +233,18 @@ export class Verification<
     return recorded.event.result;
   }
 
+  /** `snapshotDigest` is the snapshot under test: the Finding's own, or its target's latest. */
   async #judge(
     finding: Finding,
+    snapshotDigest: string,
     judge: Judge<Finding, Handle>,
     lab: Handle,
     reconstruction: Reconstruction,
   ): Promise<VerificationResultV1> {
-    if (lab.snapshotDigest !== finding.snapshotDigest)
+    if (lab.snapshotDigest !== snapshotDigest)
       return incomplete(
         "digest-mismatch",
-        "Provision the Lab from the finding snapshot",
+        "Provision the Lab from the snapshot under test",
       );
     const seeded = await this.#options.lab.seedCanaries(lab).catch(() => null);
     if (seeded?.status !== "seeded")
@@ -256,7 +282,7 @@ export class Verification<
       return publishReproductionPackage({
         store: this.#options.store,
         renderer: this.#options.renderer,
-        findingSnapshotDigest: finding.snapshotDigest,
+        findingSnapshotDigest: snapshotDigest,
         labSnapshotDigest: lab.snapshotDigest,
         labSetupDigest: lab.setupDigest,
         judgeResult: {

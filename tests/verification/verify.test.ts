@@ -38,6 +38,8 @@ async function fixture(
     readonly judge?: "observed" | "not-observed" | "throws";
     readonly teardown?: "removed" | "incomplete";
     readonly refute?: boolean;
+    /** Re-verify on another frozen snapshot of the same target. */
+    readonly latestVersion?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-verify-"));
@@ -157,11 +159,31 @@ async function fixture(
     },
     clock: () => new Date("2026-10-08T01:00:00Z"),
   });
+  if (options.latestVersion === true)
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "latest-frozen",
+      campaignId: "campaign-1",
+      snapshotDigest: otherDigest,
+      occurredAt: "2026-10-08T00:30:00Z",
+      type: "snapshot-frozen",
+      sourceDigest: otherDigest,
+    });
   const result = await verification.verify({
     campaignId: "campaign-1",
     findingId: "finding-1",
     verificationId: "verification-1",
-    snapshot: { digest: snapshotDigest },
+    snapshot: {
+      digest: options.latestVersion === true ? otherDigest : snapshotDigest,
+    },
+    ...(options.latestVersion === true
+      ? {
+          basis: {
+            kind: "latest-version" as const,
+            findingSnapshotDigest: snapshotDigest,
+          },
+        }
+      : {}),
     setup: { name: "synthetic" },
     campaignLabSetupDigest: setupDigest,
     reconstruction: { note: "synthetic" },
@@ -257,6 +279,24 @@ describe("verification public interface", () => {
   it("does not confirm when the Lab is not removed", async () => {
     const { result } = await fixture({ teardown: "incomplete" });
     expect(result).toMatchObject({ status: "incomplete", reason: "cleanup" });
+  });
+
+  it("re-verifies the same finding on a newer frozen snapshot and records the basis", async () => {
+    const { result, ledger } = await fixture({
+      latestVersion: true,
+      labSnapshotDigest: otherDigest,
+    });
+    expect(result).toMatchObject({
+      status: "runtime-confirmed",
+      judgeId: "synthetic-canary",
+    });
+    expect(
+      ledger.read({ findingId: "finding-1", type: "verification-finished" })[0]
+        ?.event,
+    ).toMatchObject({
+      snapshotDigest: otherDigest,
+      basis: { kind: "latest-version", findingSnapshotDigest: snapshotDigest },
+    });
   });
 
   it("does not judge a Lab built from another snapshot", async () => {
