@@ -130,6 +130,11 @@ export interface WordPressCampaignBoundaries {
     readonly tree: ExpectedSourceTree;
   }>;
   readonly runtimeProfile: AgentRuntimeProfile;
+  /** What the pinned Codex image actually ships (GvisorCodexSandbox.probe). */
+  readonly probeRuntime: () => Promise<{
+    readonly cliVersion: string;
+    readonly bundledCatalogDigest: string;
+  }>;
   readonly executor: {
     execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
   };
@@ -394,6 +399,23 @@ export function createWordPressCliProfile(options: {
           reconstructionFor: reconstructionFor(config),
         },
       });
+    },
+    async checkRuntime(state, input) {
+      const { config } = await loadConfig(input.configPath);
+      const boundaries = await options.boundaries(config, state);
+      const measured = await boundaries.probeRuntime();
+      return [
+        {
+          item: "codex-cli",
+          profile: boundaries.runtimeProfile.codexCliVersion,
+          image: measured.cliVersion,
+        },
+        {
+          item: "catalog",
+          profile: boundaries.runtimeProfile.bundledCatalogDigest,
+          image: measured.bundledCatalogDigest,
+        },
+      ];
     },
     async reverify(state, input) {
       const { config, policy } = await loadConfig(input.configPath);

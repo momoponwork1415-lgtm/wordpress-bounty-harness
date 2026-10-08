@@ -69,6 +69,17 @@ export interface CliProfile {
       readonly target: string | null;
     },
   ): Promise<CampaignSummary>;
+  /** Runtime items the profile pins next to what the provider image reports. */
+  checkRuntime(
+    state: CliState,
+    input: { readonly configPath: string },
+  ): Promise<
+    readonly {
+      readonly item: string;
+      readonly profile: string;
+      readonly image: string;
+    }[]
+  >;
   /** Re-verifies one Finding on its target's latest version in a fresh Lab. */
   reverify(
     state: CliState,
@@ -104,6 +115,7 @@ const USAGE = [
   "  ledger usage [--campaign <id>]",
   "  ledger runtime [--campaign <id>]",
   "  history status",
+  "  runtime check --config <path>",
   "  eval score --campaign <id> --keys <path> --case <id>",
   "  eval compare [--axis history] [--campaign <id>]",
   "  eval prospective --advisories <path> [--campaign <id>]",
@@ -567,6 +579,20 @@ export async function runCli(
             `  ${runtime.requestedModelId} effort ${runtime.requestedEffort}  codex-cli ${runtime.codexCliVersion}  catalog ${runtime.bundledCatalogDigest}  tier ${runtime.serviceTier}  access ${runtime.cyberAccessProgram}  auth ${runtime.authenticationMethod}  runs ${runs}  ${firstDay}..${lastDay}`,
           );
         return 0;
+      }
+      case "runtime check": {
+        const items = await environment.profile.checkRuntime(state, {
+          configPath: resolve(required(values.config, "config")),
+        });
+        for (const { item, profile, image } of items)
+          io.stdout(
+            `${item}  profile ${profile}  image ${image}  ${profile === image ? "ok" : "differs"}`,
+          );
+        if (items.every(({ profile, image }) => profile === image)) return 0;
+        io.stdout(
+          "The image differs from the runtime profile; runs would end incomplete(policy). Update the runtime profile, then confirm the new values with ledger runtime after the next campaign.",
+        );
+        return 1;
       }
       case "history status": {
         const status = environment.profile.historyStatus(state);

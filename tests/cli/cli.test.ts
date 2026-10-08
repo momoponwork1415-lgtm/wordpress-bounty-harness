@@ -86,6 +86,11 @@ async function harness(
     readonly failFreeze?: string;
     /** Extra campaign config fields. */
     readonly config?: Readonly<Record<string, unknown>>;
+    /** What the Codex image reports; defaults to the runtime profile's values. */
+    readonly probe?: {
+      readonly cliVersion: string;
+      readonly bundledCatalogDigest: string;
+    };
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
@@ -253,6 +258,11 @@ async function harness(
     lab,
     sourceFor: async () => ({ directory: sourceDirectory, tree }),
     runtimeProfile: profile,
+    probeRuntime: async () =>
+      options.probe ?? {
+        cliVersion: profile.codexCliVersion,
+        bundledCatalogDigest: profile.bundledCatalogDigest,
+      },
     attachments,
     executor: {
       async execute(run: DiscoveryTransportRun) {
@@ -881,6 +891,32 @@ describe("harness CLI vertical slice", () => {
     const unconfigured = await (await harness()).run("history", "status");
     expect(unconfigured.code).toBe(1);
     expect(unconfigured.stdout).toBe("history mirror not configured");
+  });
+
+  it("checks the Codex image against the runtime profile before a campaign", async () => {
+    const same = await harness();
+    const ok = await same.run("runtime", "check", "--config", same.configPath);
+    expect(ok.code).toBe(0);
+    expect(ok.stdout.split("\n")).toEqual([
+      "codex-cli  profile 0.161.0  image 0.161.0  ok",
+      `catalog  profile ${sha("e")}  image ${sha("e")}  ok`,
+    ]);
+
+    const updated = await harness({
+      probe: { cliVersion: "0.162.0", bundledCatalogDigest: sha("f") },
+    });
+    const differs = await updated.run(
+      "runtime",
+      "check",
+      "--config",
+      updated.configPath,
+    );
+    expect(differs.code).toBe(1);
+    expect(differs.stdout.split("\n")).toEqual([
+      "codex-cli  profile 0.161.0  image 0.162.0  differs",
+      `catalog  profile ${sha("e")}  image ${sha("f")}  differs`,
+      "The image differs from the runtime profile; runs would end incomplete(policy). Update the runtime profile, then confirm the new values with ledger runtime after the next campaign.",
+    ]);
   });
 
   it("skips a target that fails, records the stage and continues with the rest", async () => {
