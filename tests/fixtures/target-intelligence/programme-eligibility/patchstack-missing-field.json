@@ -1,0 +1,19 @@
+{
+  "programmeIdentity": "programme:patchstack",
+  "eligibility": {
+    "assets": [
+      {
+        "kind": "wordpress-plugin",
+        "scope": "listed-by-programme"
+      }
+    ],
+    "vulnerabilityClasses": ["authorization"],
+    "activeInstallThreshold": {
+      "kind": "minimum",
+      "value": 1000
+    },
+    "researcherTiers": ["verified"],
+    "exclusions": []
+  },
+  "programmeOpportunityBand": "broad"
+}

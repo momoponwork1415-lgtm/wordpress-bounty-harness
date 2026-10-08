@@ -1,0 +1,24 @@
+{
+  "programmeIdentity": "programme:wordfence",
+  "eligibility": {
+    "assets": [
+      {
+        "kind": "wordpress-plugin",
+        "scope": "publicly-distributed"
+      }
+    ],
+    "vulnerabilityClasses": [
+      "authentication-bypass",
+      "privilege-escalation",
+      "remote-code-execution"
+    ],
+    "attackerRoles": ["unauthenticated", "subscriber", "contributor"],
+    "activeInstallThreshold": {
+      "kind": "minimum",
+      "value": 50000
+    },
+    "researcherTiers": ["verified"],
+    "exclusions": ["best-practice-only", "outdated-software-only"]
+  },
+  "programmeOpportunityBand": "high-impact-only"
+}

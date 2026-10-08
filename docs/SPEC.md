@@ -51,7 +51,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | source取得 | WordPress.orgからのplugin / 本体の取得と検査 |
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、canaryの配置先（options、post meta、ファイル、canaryユーザー） |
 | 判定器集合 | 第7節の種別別判定器 |
-| scope方針 | `policy/programme-scope.md`（Wordfence / Patchstack） |
+| scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
 | prompt雛形 | 短い目的prompt、trust境界宣言の雛形、file分担の規則（hook / route / AJAX action単位） |
 | 答えの鍵の形式 | 入口の表現（hook名、route、action名） |
 
@@ -107,7 +107,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 8a. プログラム対象範囲の方針
 
-技術的な真偽（`runtime-confirmed`）とプログラム対象範囲は分ける。対象範囲は `review` で提出先ごとに評価し、検証を止める条件にしない。方針は [policy/programme-scope.md](../policy/programme-scope.md) に観測日付きで置き、提出前に公式ページで再確認する。
+技術的な真偽（`runtime-confirmed`）とプログラム対象範囲は分ける。対象範囲は `review` で提出先ごとに評価し、検証を止める条件にしない。方針は [src/profiles/wordpress/policy/programme-scope.md](../src/profiles/wordpress/policy/programme-scope.md) に観測日付きで置き、提出前に公式ページで再確認する。
 
 2026-10-08時点の方針（判断者の指示と旧リポジトリIssue 214の観測）:
 

@@ -1,0 +1,24 @@
+{
+  "programmeIdentity": "programme:patchstack",
+  "eligibility": {
+    "assets": [
+      {
+        "kind": "wordpress-plugin",
+        "scope": "listed-by-programme"
+      }
+    ],
+    "vulnerabilityClasses": [
+      "authorization",
+      "injection",
+      "unsafe-file-operation"
+    ],
+    "attackerRoles": ["unauthenticated", "subscriber"],
+    "activeInstallThreshold": {
+      "kind": "minimum",
+      "value": 1000
+    },
+    "researcherTiers": ["standard", "verified"],
+    "exclusions": ["duplicate-report", "self-xss"]
+  },
+  "programmeOpportunityBand": "research-only"
+}
