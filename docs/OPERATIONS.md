@@ -68,13 +68,13 @@ harness ledger funnel --month 2026-11     # 月単位
 主指標は本番から得る。追加費用はかからない。
 
 ```
-harness ledger funnel --month 2026-11 --by config     # 本番A/B: 構成別の当たり率と費用
-harness eval prospective --since 2026-10 --advisories <file>   # 後日公開されたadvisoryで本番台帳を再採点
+harness eval compare --axis history [--campaign <id>]   # 本番A/B: arm別の当たり率（Clopper-Pearson 95%）と費用
+harness eval prospective --advisories <file> [--campaign <id>]   # 後日公開されたadvisoryで本番台帳を再採点
 harness eval score --set held-out --cases <slugs> --trials 1   # 任意。大きな設計変更時だけ、予算内で
 ```
 
-- 本番A/B: 同じ対象でrunを構成A / Bに分担して回す。どちらが見つけても提出できる。現在の軸は履歴有無だけ。campaign設定に `"ablation": {"axis": "history", "armBFraction": 0.5}` を書くと、runnerが各runへarm a（履歴なし）/ b（履歴あり）を割り当てて台帳のrun記録に残し、`ledger funnel --campaign <id>` の `by arm:` にarm別のrun数・Finding数・confirmed数を出す。履歴は安定版の公開日時（WordPress.orgの最終更新）より前の公開記録だけで、版を固定した対象やmirrorが使えない対象は全runがarm aとして記録される。
-- 前向き評価: 四半期ごとに、公開されたadvisoryで本番台帳を再採点し、見逃しを数える。
+- 本番A/B: 同じ対象でrunを構成A / Bに分担して回す。どちらが見つけても提出できる。現在の軸は履歴有無だけ。campaign設定に `"ablation": {"axis": "history", "armBFraction": 0.5}` を書くと、runnerが各runへarm a（履歴なし）/ b（履歴あり）を割り当てて台帳のrun記録に残し、`ledger funnel --campaign <id>` の `by arm:` にarm別のrun数・Finding数・confirmed数を出す。`eval compare` は両armのrunがある対象だけを台帳の全campaignからプールし、runtime-confirmedのFindingを出したrunを当たりとして数える。区間が重なれば「判定不能」と出す。片方のarmしかない対象は除外して行に示す。履歴は安定版の公開日時（WordPress.orgの最終更新）より前の公開記録だけで、版を固定した対象やmirrorが使えない対象は全runがarm aとして記録される。
+- 前向き評価: 四半期ごとに、公開されたadvisoryで本番台帳を再採点し、見逃しを数える。advisoryファイルはGit外に置く私的データで、1件ごとに `{schemaVersion: 1, advisoryId, slug, affectedVersions: [{fromVersion, fromInclusive, toVersion, toInclusive}], publishedAt, impact, allowedLocations: [{file, function?}]}` を書く。公開カタログには変更ファイルがないため、`allowedLocations` は公開パッチを読んで人間が書く。結果は `found` / `missed` / `unscorable`（読めないFindingだけで採点失敗、見逃しに数えない）/ `predates-run`（選定前に公開済み、数えない）/ `not-searched`（その版を探索していない）に分かれる。`blind rubric pairs:` の (advisory, Finding) 対だけを、armや検証結果を見ずに人間がtarget-hit / partial / non-targetで採点する。
 - held-out: 既定では回さない。回すならcutoff後の補助4件を優先し、試行数は予算で決める。
 - held-outの結果を見てpromptを変えたら、そのcaseは開発セットへ移す。
 

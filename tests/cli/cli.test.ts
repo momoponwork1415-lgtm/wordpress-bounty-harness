@@ -594,6 +594,69 @@ describe("harness CLI vertical slice", () => {
     expect(funnel.stdout).toContain(
       "  history:b: runs 1  findings 0  confirmed 0",
     );
+    const comparison = await run("eval", "compare", "--axis", "history");
+    expect(comparison.code).toBe(0);
+    expect(comparison.stdout.split("\n")).toEqual([
+      "compare history  paired targets 1  unpaired 0",
+      "  arm a: hits 1/2 (50.0%, 95% CI 1.3–98.7%)  findings 2  cost $0.00 known, 2 run(s) unavailable",
+      "  arm b: hits 0/1 (0.0%, 95% CI 0.0–97.5%)  findings 0  cost $0.00 known, 1 run(s) unavailable",
+      "  verdict: 判定不能（区間が重なる）",
+      "  target wporg:synthetic-plugin@9.9.9  a 1/2  b 0/1",
+    ]);
+  });
+
+  it("scores the campaign against later public advisories and lists blind rubric pairs", async () => {
+    const { run, configPath, root } = await harness();
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    );
+    const advisoriesPath = join(root, "advisories.json");
+    const advisory = (advisoryId: string, file: string) => ({
+      schemaVersion: 1,
+      advisoryId,
+      slug: "synthetic-plugin",
+      affectedVersions: [
+        {
+          fromVersion: "*",
+          fromInclusive: true,
+          toVersion: "3.4.0",
+          toInclusive: false,
+        },
+      ],
+      publishedAt: "2026-11-01",
+      impact: "account-takeover",
+      allowedLocations: [{ file }],
+    });
+    await writeFile(
+      advisoriesPath,
+      JSON.stringify([
+        advisory("adv-1", "includes/synthetic.php"),
+        advisory("adv-2", "includes/unrelated.php"),
+      ]),
+    );
+    const scored = await run(
+      "eval",
+      "prospective",
+      "--advisories",
+      advisoriesPath,
+    );
+    expect(scored.code).toBe(0);
+    const lines = scored.stdout.split("\n");
+    expect(lines.slice(0, 3)).toEqual([
+      "prospective location-overlap  advisories 2  found 1  missed 1  unscorable 0  predates-run 0  not-searched 0",
+      "  found adv-1  overlapping 1  unreadable 0",
+      "  missed adv-2  overlapping 0  unreadable 0",
+    ]);
+    expect(lines[3]).toBe("blind rubric pairs:");
+    expect(lines[4]).toMatch(/^  adv-1  finding \S+$/);
+    // Key locations stay in the advisory file.
+    expect(scored.stdout).not.toContain("includes/");
   });
 
   it("keeps every run in arm a when the pinned version has no history cutoff", async () => {

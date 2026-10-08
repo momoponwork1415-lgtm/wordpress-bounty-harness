@@ -3,7 +3,13 @@ import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
-import type { LocationAnswerKey, SourceLocation } from "../evaluation/index.js";
+import type {
+  ArmComparison,
+  LocationAnswerKey,
+  ProspectiveAdvisory,
+  ProspectiveScore,
+  SourceLocation,
+} from "../evaluation/index.js";
 import { Evaluation } from "../evaluation/index.js";
 import { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import {
@@ -36,6 +42,8 @@ export type CliState = {
 export interface CliProfile {
   review(state: CliState): Review;
   answerKeys(value: unknown): readonly LocationAnswerKey[];
+  /** Later public advisories in key form, matched to targets by the profile. */
+  advisories(value: unknown): readonly ProspectiveAdvisory[];
   locationsOf(finding: unknown): readonly SourceLocation[];
   select(
     state: CliState,
@@ -89,6 +97,8 @@ const USAGE = [
   "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
   "  ledger funnel --campaign <id>",
   "  eval score --campaign <id> --keys <path> --case <id>",
+  "  eval compare [--axis history] [--campaign <id>]",
+  "  eval prospective --advisories <path> [--campaign <id>]",
 ].join("\n");
 
 const options = {
@@ -112,6 +122,8 @@ const options = {
   to: { type: "string" },
   outcome: { type: "string" },
   case: { type: "string" },
+  axis: { type: "string" },
+  advisories: { type: "string" },
 } as const;
 
 class UsageError extends Error {}
@@ -179,6 +191,48 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
     );
   }
   return lines;
+}
+
+const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
+
+export function formatComparison(comparison: ArmComparison): string[] {
+  const paired = comparison.targets.filter((target) => target.paired);
+  const arm = (name: "a" | "b") => {
+    const tally = comparison.pooled[name];
+    const rate = tally.runs === 0 ? 0 : tally.hits / tally.runs;
+    return `  arm ${name}: hits ${tally.hits}/${tally.runs} (${percent(rate)}, 95% CI ${(tally.interval.lower * 100).toFixed(1)}–${percent(tally.interval.upper)})  findings ${tally.findings}  cost $${tally.knownCostUsd.toFixed(2)} known, ${tally.unpricedRuns} run(s) unavailable`;
+  };
+  const verdict = {
+    inconclusive:
+      paired.length === 0 ? "判定不能（対なし）" : "判定不能（区間が重なる）",
+    "a-higher": "arm a が高い",
+    "b-higher": "arm b が高い",
+  }[comparison.verdict];
+  return [
+    `compare ${comparison.axis}  paired targets ${paired.length}  unpaired ${comparison.targets.length - paired.length}`,
+    arm("a"),
+    arm("b"),
+    `  verdict: ${verdict}`,
+    ...comparison.targets.map(
+      (target) =>
+        `  target ${target.selectionId ?? target.snapshotDigest}  a ${target.arms.a.hits}/${target.arms.a.runs}  b ${target.arms.b.hits}/${target.arms.b.runs}${target.paired ? "" : "  (unpaired, excluded)"}`,
+    ),
+  ];
+}
+
+export function formatProspective(score: ProspectiveScore): string[] {
+  const { counts } = score;
+  return [
+    `prospective ${score.metric}  advisories ${score.advisories.length}  found ${counts.found}  missed ${counts.missed}  unscorable ${counts.unscorable}  predates-run ${counts["predates-run"]}  not-searched ${counts["not-searched"]}`,
+    ...score.advisories.map(
+      (advisory) =>
+        `  ${advisory.status} ${advisory.caseId}  overlapping ${advisory.overlapping.length}  unreadable ${advisory.unreadable.length}`,
+    ),
+    ...(score.rubric.length === 0 ? [] : ["blind rubric pairs:"]),
+    ...score.rubric.map(
+      (pair) => `  ${pair.caseId}  finding ${pair.findingId}`,
+    ),
+  ];
 }
 
 export function formatQueue(
@@ -515,6 +569,53 @@ export async function runCli(
           io.stdout(`  overlapping finding ${findingId}`);
         for (const findingId of score.unreadable)
           io.stdout(`  unreadable finding ${findingId}`);
+        return 0;
+      }
+      case "eval prospective": {
+        const advisories = environment.profile.advisories(
+          JSON.parse(
+            await readFile(
+              resolve(required(values.advisories, "advisories")),
+              "utf8",
+            ),
+          ) as unknown,
+        );
+        print(
+          formatProspective(
+            await new Evaluation({
+              ledger: state.ledger,
+              store: state.store,
+              locationsOf: (finding) =>
+                environment.profile.locationsOf(finding),
+            }).prospective({
+              advisories,
+              ...(values.campaign === undefined
+                ? {}
+                : { campaignId: values.campaign }),
+            }),
+          ),
+        );
+        return 0;
+      }
+      case "eval compare": {
+        const axis = values.axis ?? "history";
+        if (axis !== "history")
+          throw new UsageError("--axis supports only history");
+        print(
+          formatComparison(
+            new Evaluation({
+              ledger: state.ledger,
+              store: state.store,
+              locationsOf: (finding) =>
+                environment.profile.locationsOf(finding),
+            }).compare({
+              axis,
+              ...(values.campaign === undefined
+                ? {}
+                : { campaignId: values.campaign }),
+            }),
+          ),
+        );
         return 0;
       }
       default:
