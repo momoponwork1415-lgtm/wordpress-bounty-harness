@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createWordPressSelection } from "../../../src/profiles/wordpress/selection/index.js";
+import {
+  createWordPressSelection,
+  loadWordPressSelectionPolicy,
+} from "../../../src/profiles/wordpress/selection/index.js";
 import type { WordPressOrgTargetSource } from "../../../src/profiles/wordpress/acquisition/index.js";
 import type { ProgrammeIntelligence } from "../../../src/profiles/wordpress/programme-intelligence/index.js";
 
@@ -60,7 +63,8 @@ const basePolicy = {
   excludedAuthors: ["Automattic", "Facebook", "Google", "SiteGround", "Yoast"],
   excludedSlugs: [],
   surfaceTagWeights: { form: 5 },
-  scoreWeights: { installations: 10, recency: 0, surface: 1 },
+  highThreatTags: ["file manager"],
+  scoreWeights: { installations: 10, recency: 0, surface: 1, highThreat: 0 },
 };
 
 const failed = (slug: string, reason: "closed" | "not-found") => ({
@@ -133,11 +137,58 @@ describe("WordPress selection public interface", () => {
 
     const second = await selection.select({
       ...basePolicy,
-      scoreWeights: { installations: 0, recency: 0, surface: 10 },
+      scoreWeights: {
+        installations: 0,
+        recency: 0,
+        surface: 10,
+        highThreat: 0,
+      },
     });
     expect(second.map((item) => item.slug)).toEqual(["exposed", "popular"]);
     expect(second[0]?.scoreBreakdown.surface).toBeGreaterThan(0);
     expect(second[0]?.policy.digest).not.toBe(first[0]?.policy.digest);
+  });
+
+  it("ships a policy that parses, keeps the 500-install threshold and excludes out-of-scope authors", async () => {
+    const policy = await loadWordPressSelectionPolicy();
+    expect(policy.minimumActiveInstallations).toBe(500);
+    expect(policy.excludedAuthors).toEqual(
+      expect.arrayContaining([
+        "Automattic",
+        "Facebook",
+        "Google",
+        "SiteGround",
+        "Yoast",
+      ]),
+    );
+    expect(policy.scoreWeights.highThreat).toBeGreaterThan(0);
+  });
+
+  it("weights High Threat attack surfaces as their own score component", async () => {
+    const selection = harness({
+      observations: {
+        popular: observation("popular", [], 100_000),
+        files: observation("files", ["File Manager"], 1_000),
+      },
+    });
+    const policy = { ...basePolicy, candidateSlugs: ["popular", "files"] };
+    const plain = await selection.select(policy);
+    expect(plain.map((item) => item.slug)).toEqual(["popular", "files"]);
+    expect(plain.find((item) => item.slug === "files")).toMatchObject({
+      highThreatSurface: true,
+      scoreBreakdown: { highThreat: 0 },
+    });
+
+    const weighted = await selection.select({
+      ...policy,
+      scoreWeights: { ...policy.scoreWeights, highThreat: 100 },
+    });
+    expect(weighted.map((item) => item.slug)).toEqual(["files", "popular"]);
+    expect(weighted[0]?.scoreBreakdown.highThreat).toBe(100);
+    expect(weighted[1]).toMatchObject({
+      highThreatSurface: false,
+      scoreBreakdown: { highThreat: 0 },
+    });
   });
 
   it("keeps unavailable, stale, excluded and under-threshold observations in inspect but out of select", async () => {

@@ -19,10 +19,13 @@ export const wordPressSelectionPolicySchema = z
     excludedAuthors: z.array(z.string().min(1)),
     excludedSlugs: z.array(slugSchema),
     surfaceTagWeights: z.record(z.string(), z.number().nonnegative()),
+    /** Public tags that suggest a High Threat surface (file operations, options, authentication). */
+    highThreatTags: z.array(z.string().min(1)),
     scoreWeights: z.strictObject({
       installations: z.number().nonnegative(),
       recency: z.number().nonnegative(),
       surface: z.number().nonnegative(),
+      highThreat: z.number().nonnegative(),
     }),
     /** Manual pin: select this version instead of the observed stable version. */
     pinnedVersions: z
@@ -57,10 +60,13 @@ export type SelectionReason =
 export interface WordPressTargetSelection extends TargetSelection {
   readonly slug: string;
   readonly activeInstallations: number;
+  /** A public tag matched the policy's High Threat surface list. */
+  readonly highThreatSurface: boolean;
   readonly scoreBreakdown: {
     readonly installations: number;
     readonly recency: number;
     readonly surface: number;
+    readonly highThreat: number;
   };
   readonly observationRef: WordPressOrgTargetObservationRef;
   readonly programmeRef: ProgrammeEligibilitySnapshotRef;

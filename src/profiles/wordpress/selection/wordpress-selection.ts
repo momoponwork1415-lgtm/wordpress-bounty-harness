@@ -76,7 +76,18 @@ function score(
     0,
   );
   const surface = surfacePoints * policy.scoreWeights.surface;
-  return { installations, recency, surface };
+  const highThreat =
+    (highThreatSurface(observation, policy) ? 1 : 0) *
+    policy.scoreWeights.highThreat;
+  return { installations, recency, surface, highThreat };
+}
+
+function highThreatSurface(
+  observation: WordPressOrgTargetObservation,
+  policy: WordPressSelectionPolicy,
+): boolean {
+  const tags = new Set(policy.highThreatTags.map(normalizeName));
+  return (observation.tags ?? []).some((tag) => tags.has(normalizeName(tag)));
 }
 
 export function createWordPressSelection(
@@ -179,11 +190,13 @@ export function createWordPressSelection(
         slug,
         version: policy.pinnedVersions?.[slug] ?? observation.stableVersion,
         activeInstallations: observation.activeInstallations,
+        highThreatSurface: highThreatSurface(observation, policy),
         scoreBreakdown,
         score:
           scoreBreakdown.installations +
           scoreBreakdown.recency +
-          scoreBreakdown.surface,
+          scoreBreakdown.surface +
+          scoreBreakdown.highThreat,
         selectedAt: nowDate.toISOString(),
         policy: { id: policy.id, digest: policyDigest },
         observationRef: result.observationRef,

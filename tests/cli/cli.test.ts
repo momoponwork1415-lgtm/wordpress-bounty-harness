@@ -324,7 +324,8 @@ async function harness(
       excludedAuthors: [],
       excludedSlugs: [],
       surfaceTagWeights: {},
-      scoreWeights: { installations: 1, recency: 1, surface: 1 },
+      highThreatTags: [],
+      scoreWeights: { installations: 1, recency: 1, surface: 1, highThreat: 1 },
     }),
   );
   const configPath = join(root, "campaign.json");
