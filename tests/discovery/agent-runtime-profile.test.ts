@@ -15,7 +15,7 @@ const definition = {
   codexCliVersion: "0.161.0",
   bundledCatalogDigest: digest,
   authenticationMethod: "unavailable",
-  cyberAccessProgram: "unavailable",
+  cyberAccessProgram: "unavailable" as const,
   serviceTier: "unavailable",
   subagent: { modelId: "unavailable", effort: "unavailable" },
 };
@@ -40,8 +40,20 @@ describe("Codex runtime profile", () => {
         requestedModelId: "gpt-6-luna",
       }).requestedModelId,
     ).toBe("gpt-6-luna");
+    expect(
+      defineAgentRuntimeProfile({
+        ...definition,
+        codexCliVersion: "0.162.0-alpha.2",
+      }).codexCliVersion,
+    ).toBe("0.162.0-alpha.2");
     expect(() =>
       defineAgentRuntimeProfile({ ...definition, codexCliVersion: "0.160.0" }),
+    ).toThrow();
+    expect(() =>
+      defineAgentRuntimeProfile({
+        ...definition,
+        codexCliVersion: "0.161.0-alpha.1",
+      }),
     ).toThrow();
     expect(() =>
       defineAgentRuntimeProfile({

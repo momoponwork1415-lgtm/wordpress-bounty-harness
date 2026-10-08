@@ -26,7 +26,12 @@ const bodySchema = z.strictObject({
   codexCliVersion: value,
   bundledCatalogDigest: digest,
   authenticationMethod: reported,
-  cyberAccessProgram: reported,
+  cyberAccessProgram: z.enum([
+    "standard",
+    "daybreak_blue",
+    "daybreak_red",
+    "unavailable",
+  ]),
   serviceTier: reported,
   subagent: z.strictObject({ modelId: reported, effort: reported }),
 });
@@ -42,8 +47,16 @@ export const agentRuntimeProfileSchema = bodySchema
         message: "Profile digest mismatch",
       });
     }
-    const match = /^(\d+)\.(\d+)(?:\.(\d+))?$/.exec(profile.codexCliVersion);
-    if (match === null || Number(match[1]) !== 0 || Number(match[2]) < 161) {
+    const match = /^(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z0-9.-]+))?$/.exec(
+      profile.codexCliVersion,
+    );
+    if (
+      match === null ||
+      (Number(match[1]) === 0 && Number(match[2]) < 161) ||
+      (Number(match[1]) === 0 &&
+        Number(match[2]) === 161 &&
+        match[4] !== undefined)
+    ) {
       context.addIssue({
         code: "custom",
         path: ["codexCliVersion"],
