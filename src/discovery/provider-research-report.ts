@@ -10,7 +10,12 @@ import {
 } from "../infrastructure/private-artifact-store.js";
 
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
-const kindSchema = z.enum(["findings", "coverage", "diagnostic"]);
+const kindSchema = z.enum([
+  "findings",
+  "coverage",
+  "diagnostic",
+  "verification",
+]);
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export const providerAttachmentRefSchema = z.strictObject({
   kind: kindSchema,
