@@ -102,6 +102,9 @@ export function quietLab(overrides: Partial<JudgeLab> = {}): JudgeLab {
     async observeCanaryFiles() {
       return { status: "observed", deleted: [] };
     },
+    async observeOptions() {
+      return { status: "observed", changed: [] };
+    },
     ...overrides,
   } satisfies Partial<WordPressLab>;
 }

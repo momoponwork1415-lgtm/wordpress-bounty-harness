@@ -32,6 +32,16 @@ const setupSchema = z.strictObject({
   customerRole: z.boolean(),
 });
 const SQL_CANARY_TABLE = "wbh_canary";
+/** Options whose change alone is a security impact; anything else is not observed. */
+const CRITICAL_OPTIONS = [
+  "users_can_register",
+  "default_role",
+  "siteurl",
+  "home",
+  "admin_email",
+  "active_plugins",
+  "wp_user_roles",
+];
 const snapshotWithDigestSchema = snapshotSchema.safeExtend({ digest });
 
 export type WordPressLabSetup = z.infer<typeof setupSchema>;
@@ -86,6 +96,10 @@ export interface WordPressCanaryLedger {
   /** Files outside wp-content at fixed paths; only their values are secret. */
   readonly fileCanaries: readonly WordPressFileCanary[];
 }
+
+export type WordPressOptionsObservation =
+  | { readonly status: "observed"; readonly changed: readonly string[] }
+  | { readonly status: "unavailable" };
 
 export interface WordPressFileCanary {
   /** Different directory and extension, so reaching both shows full path control. */
@@ -152,6 +166,10 @@ export interface WordPressLab extends LabProvisioner<
   observeCanaryFiles(
     handle: WordPressLabHandle,
   ): Promise<WordPressCanaryFilesObservation>;
+  /** Names of watched options (canary and critical) that differ from the seeded baseline. */
+  observeOptions(
+    handle: WordPressLabHandle,
+  ): Promise<WordPressOptionsObservation>;
   /** Reads an account's current roles inside the Lab. */
   observeAccountRoles(
     handle: WordPressLabHandle,
@@ -171,6 +189,8 @@ interface Resources {
   readonly executionSalt: string;
   handle?: WordPressLabHandle;
   canaries?: WordPressCanaryLedger;
+  /** Option digests taken when canaries were seeded. */
+  optionBaseline?: ReadonlyMap<string, string>;
   executionNonces: Set<string>;
   networkCreated: boolean;
   volumeCreated: boolean;
@@ -232,34 +252,55 @@ export function openWordPressLab(options: {
     if (result.exitCode !== 0) throw new Error("gVisor Lab command failed");
     return result;
   };
+  const wpCommand = (
+    resource: Resources,
+    args: readonly string[],
+    environment: readonly string[] = [],
+  ): readonly string[] => [
+    "run",
+    "--rm",
+    "--runtime=runsc",
+    "--network",
+    resource.network,
+    "--security-opt=no-new-privileges",
+    ...environment.flatMap((entry) => ["--env", entry]),
+    "--env",
+    "WORDPRESS_DB_HOST=database",
+    "--env",
+    "WORDPRESS_DB_NAME=wordpress",
+    "--env",
+    "WORDPRESS_DB_USER=root",
+    "--env",
+    `WORDPRESS_DB_PASSWORD=${resource.databasePassword}`,
+    "--volume",
+    `${resource.volume}:/var/www/html`,
+    options.images.wordpressCli,
+    "wp",
+    ...args,
+    "--allow-root",
+  ];
   const wp = (
     resource: Resources,
     args: readonly string[],
     environment: readonly string[] = [],
   ): Promise<DockerResult> =>
-    requireDocker([
-      "run",
-      "--rm",
-      "--runtime=runsc",
-      "--network",
-      resource.network,
-      "--security-opt=no-new-privileges",
-      ...environment.flatMap((entry) => ["--env", entry]),
-      "--env",
-      "WORDPRESS_DB_HOST=database",
-      "--env",
-      "WORDPRESS_DB_NAME=wordpress",
-      "--env",
-      "WORDPRESS_DB_USER=root",
-      "--env",
-      `WORDPRESS_DB_PASSWORD=${resource.databasePassword}`,
-      "--volume",
-      `${resource.volume}:/var/www/html`,
-      options.images.wordpressCli,
-      "wp",
-      ...args,
-      "--allow-root",
-    ]);
+    requireDocker(wpCommand(resource, args, environment));
+  /** Digest of an option as WP-CLI prints it; a missing option has its own marker. */
+  const optionDigest = async (
+    resource: Resources,
+    name: string,
+  ): Promise<string> => {
+    const result = await docker(
+      wpCommand(resource, ["option", "get", name, "--format=json"]),
+    );
+    if (result.exitCode === 1) return "absent";
+    if (result.exitCode !== 0) throw new Error("Option unreadable");
+    return createHash("sha256").update(result.stdout.trim()).digest("hex");
+  };
+  const watchedOptions = (canaries: WordPressCanaryLedger) => [
+    canaries.option,
+    ...CRITICAL_OPTIONS,
+  ];
   const cleanup = async (resource: Resources): Promise<boolean> => {
     let okay = true;
     for (const args of [
@@ -702,6 +743,10 @@ export function openWordPressLab(options: {
           file: `/var/www/html/wp-content/wbh-canary-${token}.txt`,
           user: `wbh-canary-${token}`,
         };
+        const optionBaseline = new Map<string, string>();
+        for (const name of watchedOptions(resource.canaries))
+          optionBaseline.set(name, await optionDigest(resource, name));
+        resource.optionBaseline = optionBaseline;
         return { status: "seeded", digest: canonicalDigest(resource.canaries) };
       } catch {
         return {
@@ -806,6 +851,21 @@ export function openWordPressLab(options: {
         else if (result.exitCode !== 0) return { status: "unavailable" };
       }
       return { status: "observed", deleted };
+    },
+    async observeOptions(handle) {
+      const resource = active.get(handle.id);
+      const baseline = resource?.optionBaseline;
+      if (resource?.handle !== handle || baseline === undefined)
+        return { status: "unavailable" };
+      try {
+        const changed: string[] = [];
+        for (const [name, digest] of baseline)
+          if ((await optionDigest(resource, name)) !== digest)
+            changed.push(name);
+        return { status: "observed", changed };
+      } catch {
+        return { status: "unavailable" };
+      }
     },
     async observeAccountRoles(handle, username) {
       const resource = active.get(handle.id);
