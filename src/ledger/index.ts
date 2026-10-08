@@ -1,0 +1,496 @@
+import { DatabaseSync } from "node:sqlite";
+
+import { z } from "zod";
+
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../infrastructure/canonical-json.js";
+import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
+
+const id = z.string().min(1).max(128);
+const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const artifactRef = z.strictObject({ kind: id, digest });
+const base = z.strictObject({
+  schemaVersion: z.literal(1),
+  identity: id,
+  campaignId: id,
+  snapshotDigest: digest,
+  occurredAt: z.iso.datetime({ offset: true }),
+  artifacts: z.array(artifactRef).default([]),
+});
+
+const verificationResult = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("runtime-confirmed"),
+    judgeId: id,
+    proofKind: z.literal("nonce-canary"),
+    evidenceDigest: digest,
+  }),
+  z.strictObject({
+    status: z.literal("contradicted"),
+    judgeId: id,
+    evidenceDigest: digest,
+  }),
+  z.strictObject({
+    status: z.literal("incomplete"),
+    reason: z.enum([
+      "provision",
+      "precondition",
+      "recipe",
+      "observation",
+      "evidence",
+      "cleanup",
+      "digest-mismatch",
+      "no-judge",
+    ]),
+    nextStep: z.string().min(1).max(2000),
+  }),
+]);
+
+const event = <T extends z.ZodRawShape>(shape: T) =>
+  z.strictObject({ ...base.shape, ...shape });
+
+/** LedgerEvent v1 carries only routing metadata and private artifact digests. */
+export const ledgerEventV1Schema = z.discriminatedUnion("type", [
+  event({ type: z.literal("target-selected"), selectionId: id }),
+  event({ type: z.literal("snapshot-frozen"), sourceDigest: digest }),
+  event({
+    type: z.literal("lab-provisioned"),
+    labId: id,
+    status: z.enum(["ready", "failed"]),
+  }),
+  event({ type: z.literal("discovery-run-started"), runId: id, labId: id }),
+  event({
+    type: z.literal("discovery-run-finished"),
+    runId: id,
+    outcome: z.enum(["completed", "failed", "setup-failed"]),
+  }),
+  event({
+    type: z.literal("finding-recorded"),
+    findingId: id,
+    runId: id,
+    category: id,
+  }),
+  event({
+    type: z.literal("verification-finished"),
+    verificationId: id,
+    findingId: id,
+    labSetupDigest: digest,
+    result: verificationResult,
+  }),
+  event({
+    type: z.literal("review-decided"),
+    findingId: id,
+    decision: z.enum(["accept", "reject", "defer"]),
+  }),
+  event({
+    type: z.literal("scope-assessed"),
+    findingId: id,
+    programmeId: id,
+    status: z.enum(["in-scope", "out-of-scope", "ambiguous", "incomplete"]),
+  }),
+  event({
+    type: z.literal("draft-saved"),
+    findingId: id,
+    candidateId: id,
+    revisionDigest: digest,
+  }),
+  event({
+    type: z.literal("external-action-authorized"),
+    candidateId: id,
+    revisionDigest: digest,
+    destination: id,
+  }),
+  // A separate submission receipt lets the funnel distinguish sent from authorized.
+  event({
+    type: z.literal("submission-recorded"),
+    findingId: id,
+    candidateId: id,
+  }),
+  event({
+    type: z.literal("submission-outcome"),
+    candidateId: id,
+    outcome: z.enum([
+      "triaged",
+      "resolved",
+      "duplicate",
+      "informative",
+      "not-applicable",
+      "rejected",
+    ]),
+  }),
+]);
+
+export type LedgerEventV1 = z.infer<typeof ledgerEventV1Schema>;
+export type LedgerEventInput = z.input<typeof ledgerEventV1Schema>;
+export type LedgerReadQuery = {
+  readonly campaignId?: string;
+  readonly type?: LedgerEventV1["type"];
+  readonly findingId?: string;
+  readonly afterSequence?: number;
+  readonly limit?: number;
+};
+export type LedgerRecord = {
+  readonly sequence: number;
+  readonly event: LedgerEventV1;
+};
+export type FunnelCounts = {
+  readonly raw: number;
+  readonly verified: number;
+  readonly confirmed: number;
+  readonly contradicted: number;
+  readonly incomplete: number;
+  readonly reviewed: number;
+  readonly inScope: number;
+  readonly submitted: number;
+  readonly outcome: number;
+};
+export type CampaignFunnel = FunnelCounts & {
+  readonly campaignId: string;
+  readonly discoveryAttempts: number;
+  readonly byCategory: Readonly<Record<string, FunnelCounts>>;
+};
+
+const querySchema = z.strictObject({
+  campaignId: id.optional(),
+  type: z
+    .enum([
+      "target-selected",
+      "snapshot-frozen",
+      "lab-provisioned",
+      "discovery-run-started",
+      "discovery-run-finished",
+      "finding-recorded",
+      "verification-finished",
+      "review-decided",
+      "scope-assessed",
+      "draft-saved",
+      "external-action-authorized",
+      "submission-recorded",
+      "submission-outcome",
+    ])
+    .optional(),
+  findingId: id.optional(),
+  afterSequence: z.number().int().nonnegative().optional(),
+  limit: z.number().int().min(1).max(1000).optional(),
+});
+
+const storedRow = z.strictObject({
+  sequence: z.number().int().positive(),
+  identity: z.string(),
+  input_digest: digest,
+  event_json: z.string(),
+});
+
+type Counts = { -readonly [K in keyof FunnelCounts]: number };
+
+function emptyCounts(): Counts {
+  return {
+    raw: 0,
+    verified: 0,
+    confirmed: 0,
+    contradicted: 0,
+    incomplete: 0,
+    reviewed: 0,
+    inScope: 0,
+    submitted: 0,
+    outcome: 0,
+  };
+}
+
+function findingIdOf(value: LedgerEventV1): string | null {
+  return "findingId" in value ? value.findingId : null;
+}
+
+/** The only operations on a ledger are append, read and a derived funnel view. */
+export class Ledger {
+  readonly #db: DatabaseSync;
+  readonly #artifacts: PrivateArtifactStore;
+
+  constructor(options: {
+    readonly databasePath: string;
+    readonly artifactStore: PrivateArtifactStore;
+  }) {
+    this.#db = new DatabaseSync(options.databasePath);
+    this.#artifacts = options.artifactStore;
+    this.#db.exec(`
+      CREATE TABLE IF NOT EXISTS ledger_events (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        identity TEXT NOT NULL UNIQUE,
+        campaign_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        finding_id TEXT,
+        input_digest TEXT NOT NULL,
+        event_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS ledger_campaign_sequence
+        ON ledger_events (campaign_id, sequence);
+    `);
+  }
+
+  async append(
+    candidate: LedgerEventInput,
+  ): Promise<{ readonly status: "appended" | "existing" | "conflict" }> {
+    const parsed = ledgerEventV1Schema.parse(candidate);
+    const inputDigest = canonicalDigest(parsed);
+    const prior = this.#db
+      .prepare(
+        "SELECT sequence, identity, input_digest, event_json FROM ledger_events WHERE identity = ?",
+      )
+      .get(parsed.identity);
+    if (prior !== undefined) {
+      return {
+        status:
+          storedRow.parse(prior).input_digest === inputDigest
+            ? "existing"
+            : "conflict",
+      };
+    }
+    for (const ref of parsed.artifacts) {
+      const resolution = await this.#artifacts.resolve(ref.digest);
+      if (
+        resolution.status !== "resolved" ||
+        resolution.artifact.digest !== ref.digest
+      ) {
+        throw new Error(`Private artifact is unavailable: ${ref.digest}`);
+      }
+    }
+    let evidenceAvailable = true;
+    if (
+      parsed.type === "verification-finished" &&
+      "evidenceDigest" in parsed.result
+    ) {
+      const resolution = await this.#artifacts.resolve(
+        parsed.result.evidenceDigest,
+      );
+      evidenceAvailable =
+        resolution.status === "resolved" &&
+        resolution.artifact.digest === parsed.result.evidenceDigest;
+    }
+
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.#db
+        .prepare(
+          "SELECT sequence, identity, input_digest, event_json FROM ledger_events WHERE identity = ?",
+        )
+        .get(parsed.identity);
+      if (existing !== undefined) {
+        const status =
+          storedRow.parse(existing).input_digest === inputDigest
+            ? "existing"
+            : "conflict";
+        this.#db.exec("COMMIT");
+        return { status };
+      }
+
+      if (parsed.type === "finding-recorded") {
+        const previousFinding = this.#db
+          .prepare(
+            "SELECT sequence FROM ledger_events WHERE campaign_id = ? AND event_type = 'finding-recorded' AND finding_id = ? LIMIT 1",
+          )
+          .get(parsed.campaignId, parsed.findingId);
+        if (previousFinding !== undefined) {
+          this.#db.exec("COMMIT");
+          return { status: "conflict" };
+        }
+      }
+
+      let recorded: LedgerEventV1 = parsed;
+      if (parsed.type === "verification-finished") {
+        const finding = this.#db
+          .prepare(
+            "SELECT event_json FROM ledger_events WHERE campaign_id = ? AND event_type = 'finding-recorded' AND finding_id = ? ORDER BY sequence LIMIT 1",
+          )
+          .get(parsed.campaignId, parsed.findingId);
+        const findingEvent =
+          finding === undefined
+            ? null
+            : ledgerEventV1Schema.parse(
+                JSON.parse(
+                  z.object({ event_json: z.string() }).parse(finding)
+                    .event_json,
+                ) as unknown,
+              );
+        if (
+          findingEvent?.type !== "finding-recorded" ||
+          findingEvent.snapshotDigest !== parsed.snapshotDigest
+        ) {
+          recorded = {
+            ...parsed,
+            result: {
+              status: "incomplete",
+              reason:
+                findingEvent === null ? "precondition" : "digest-mismatch",
+              nextStep:
+                findingEvent === null
+                  ? "Record the finding before verification"
+                  : "Repeat verification against the finding snapshot",
+            },
+          };
+        } else if (!evidenceAvailable) {
+          recorded = {
+            ...parsed,
+            result: {
+              status: "incomplete",
+              reason: "evidence",
+              nextStep: "Restore verification evidence and repeat verification",
+            },
+          };
+        }
+      }
+      this.#db
+        .prepare(
+          "INSERT INTO ledger_events (identity, campaign_id, event_type, finding_id, input_digest, event_json) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          recorded.identity,
+          recorded.campaignId,
+          recorded.type,
+          findingIdOf(recorded),
+          inputDigest,
+          canonicalJson(recorded),
+        );
+      this.#db.exec("COMMIT");
+      return { status: "appended" };
+    } catch (error: unknown) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  read(query: LedgerReadQuery = {}): readonly LedgerRecord[] {
+    const parsed = querySchema.parse(query);
+    const clauses = ["sequence > ?"];
+    const params: (string | number)[] = [parsed.afterSequence ?? 0];
+    if (parsed.campaignId !== undefined) {
+      clauses.push("campaign_id = ?");
+      params.push(parsed.campaignId);
+    }
+    if (parsed.type !== undefined) {
+      clauses.push("event_type = ?");
+      params.push(parsed.type);
+    }
+    if (parsed.findingId !== undefined) {
+      clauses.push("finding_id = ?");
+      params.push(parsed.findingId);
+    }
+    const rows = this.#db
+      .prepare(
+        `SELECT sequence, identity, input_digest, event_json FROM ledger_events WHERE ${clauses.join(" AND ")} ORDER BY sequence LIMIT ?`,
+      )
+      .all(...params, parsed.limit ?? 100);
+    return rows.map((row) => {
+      const stored = storedRow.parse(row);
+      return {
+        sequence: stored.sequence,
+        event: ledgerEventV1Schema.parse(
+          JSON.parse(stored.event_json) as unknown,
+        ),
+      };
+    });
+  }
+
+  funnel(campaignId: string): CampaignFunnel {
+    const campaign = id.parse(campaignId);
+    const rows = this.#db
+      .prepare(
+        "SELECT sequence, identity, input_digest, event_json FROM ledger_events WHERE campaign_id = ? ORDER BY sequence",
+      )
+      .all(campaign);
+    const events = rows.map((row) =>
+      ledgerEventV1Schema.parse(
+        JSON.parse(storedRow.parse(row).event_json) as unknown,
+      ),
+    );
+    const readyLabs = new Set<string>();
+    const startedRuns = new Map<string, string>();
+    const setupFailedRuns = new Set<string>();
+    const findings = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "finding-recorded" }>
+    >();
+    const verifications = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "verification-finished" }>
+    >();
+    const reviews = new Set<string>();
+    const scopes = new Map<string, Map<string, string>>();
+    const submissions = new Map<string, string>();
+    const outcomes = new Set<string>();
+
+    for (const current of events) {
+      switch (current.type) {
+        case "lab-provisioned":
+          if (current.status === "ready") readyLabs.add(current.labId);
+          break;
+        case "discovery-run-started":
+          startedRuns.set(current.runId, current.labId);
+          break;
+        case "discovery-run-finished":
+          if (current.outcome === "setup-failed")
+            setupFailedRuns.add(current.runId);
+          break;
+        case "finding-recorded":
+          if (!findings.has(current.findingId))
+            findings.set(current.findingId, current);
+          break;
+        case "verification-finished":
+          verifications.set(current.findingId, current);
+          break;
+        case "review-decided":
+          reviews.add(current.findingId);
+          break;
+        case "scope-assessed": {
+          const byProgramme =
+            scopes.get(current.findingId) ?? new Map<string, string>();
+          byProgramme.set(current.programmeId, current.status);
+          scopes.set(current.findingId, byProgramme);
+          break;
+        }
+        case "submission-recorded":
+          submissions.set(current.findingId, current.candidateId);
+          break;
+        case "submission-outcome":
+          outcomes.add(current.candidateId);
+          break;
+      }
+    }
+
+    const totals = emptyCounts();
+    const byCategory: Record<string, Counts> = Object.create(null) as Record<
+      string,
+      Counts
+    >;
+    for (const finding of findings.values()) {
+      const category = (byCategory[finding.category] ??= emptyCounts());
+      for (const count of [totals, category]) {
+        count.raw++;
+        const verification = verifications.get(finding.findingId);
+        if (verification === undefined) continue;
+        count.verified++;
+        const status = verification.result.status;
+        if (status === "runtime-confirmed") count.confirmed++;
+        else if (status === "contradicted") count.contradicted++;
+        else count.incomplete++;
+        if (status === "contradicted" || !reviews.has(finding.findingId))
+          continue;
+        count.reviewed++;
+        const inScope = [
+          ...(scopes.get(finding.findingId)?.values() ?? []),
+        ].includes("in-scope");
+        if (!inScope) continue;
+        count.inScope++;
+        const candidateId = submissions.get(finding.findingId);
+        if (candidateId === undefined) continue;
+        count.submitted++;
+        if (outcomes.has(candidateId)) count.outcome++;
+      }
+    }
+    const discoveryAttempts = [...startedRuns.entries()].filter(
+      ([runId, labId]) => readyLabs.has(labId) && !setupFailedRuns.has(runId),
+    ).length;
+    return { campaignId: campaign, discoveryAttempts, ...totals, byCategory };
+  }
+}
