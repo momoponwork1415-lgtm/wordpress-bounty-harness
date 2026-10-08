@@ -239,6 +239,21 @@ describe("WordPress selection public interface", () => {
     );
   });
 
+  it("dates the stable version by its last update and leaves a pinned version undated", async () => {
+    const selection = harness({});
+    const [stable] = await selection.select({
+      ...basePolicy,
+      candidateSlugs: ["exposed"],
+    });
+    expect(stable?.versionPublishedAt).toBe("2026-09-01T00:00:00.000Z");
+    const [pinned] = await selection.select({
+      ...basePolicy,
+      candidateSlugs: ["exposed"],
+      pinnedVersions: { exposed: "1.0.0" },
+    });
+    expect(pinned).not.toHaveProperty("versionPublishedAt");
+  });
+
   it("selects a manually pinned version and binds the pin into the policy digest", async () => {
     const selection = harness({});
     const unpinned = await selection.select(basePolicy);

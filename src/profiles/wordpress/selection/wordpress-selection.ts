@@ -27,7 +27,8 @@ export interface CreateWordPressSelectionOptions {
   readonly clock?: () => Date;
 }
 
-function ageDays(date: string, now: number): number | undefined {
+/** WordPress.org dates look like `2026-09-01 12:00am GMT`; ISO strings also parse. */
+function parseObservedDate(date: string): number | undefined {
   const wpTimestamp =
     /^(\d{4}-\d{2}-\d{2}) (\d{1,2}):(\d{2})(am|pm) GMT$/i.exec(date);
   let parsed: number;
@@ -52,7 +53,12 @@ function ageDays(date: string, now: number): number | undefined {
   } else {
     parsed = Date.parse(date);
   }
-  if (!Number.isFinite(parsed) || parsed > now) return undefined;
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function ageDays(date: string, now: number): number | undefined {
+  const parsed = parseObservedDate(date);
+  if (parsed === undefined || parsed > now) return undefined;
   return (now - parsed) / dayMs;
 }
 
@@ -185,10 +191,16 @@ export function createWordPressSelection(
         continue;
       }
       const scoreBreakdown = score(observation, policy, updateAge);
+      const pinnedVersion = policy.pinnedVersions?.[slug];
+      const lastUpdated = parseObservedDate(observation.lastUpdated);
       const selection: WordPressTargetSelection = {
         targetId: observation.pluginIdentity,
         slug,
-        version: policy.pinnedVersions?.[slug] ?? observation.stableVersion,
+        version: pinnedVersion ?? observation.stableVersion,
+        // Only the stable version is dated; a pin may name any older release.
+        ...(pinnedVersion === undefined && lastUpdated !== undefined
+          ? { versionPublishedAt: new Date(lastUpdated).toISOString() }
+          : {}),
         activeInstallations: observation.activeInstallations,
         highThreatSurface: highThreatSurface(observation, policy),
         runBudget: highThreatSurface(observation, policy)

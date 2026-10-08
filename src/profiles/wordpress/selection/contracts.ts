@@ -69,6 +69,8 @@ export interface WordPressTargetSelection extends TargetSelection {
   readonly highThreatSurface: boolean;
   /** Upper bound on discovery runs for this target; the campaign ceiling still applies. */
   readonly runBudget: number;
+  /** The plugin's last update on WordPress.org, standing in for the stable version's release. */
+  readonly versionPublishedAt?: string;
   readonly scoreBreakdown: {
     readonly installations: number;
     readonly recency: number;
