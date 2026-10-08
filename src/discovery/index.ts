@@ -3,11 +3,13 @@ export {
   campaignInputV1Schema,
   createHistoryCatalog,
   historyForRun,
+  runDiscoveryCampaign,
   validateEvaluationCampaignInput,
   validateProductionCampaignInput,
   type CampaignHistory,
   type CampaignInputV1,
   type CatalogRecord,
+  type PlannedDiscoveryRun,
 } from "./campaign.js";
 export {
   agentRuntimeProfileSchema,

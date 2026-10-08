@@ -45,6 +45,11 @@ const run = {
   sourceDirectory: "/private/frozen-source",
   sourceTree: { digest, entries: 1, bytes: 1 },
   prompt: "Inspect the fixed source and report findings.",
+  lab: {
+    endpoint: "http://wordpress",
+    networkName: "lab-internal",
+    internalIp: "172.20.0.2",
+  },
   campaignInput: {
     schemaVersion: 1 as const,
     snapshotDigest: digest,
@@ -110,7 +115,7 @@ function broker(): ProviderCredentialEgressBroker {
       const value = await operation({
         baseUrl: "http://127.0.0.1:8080",
         authorization: `Bearer ${randomBytes(32).toString("hex")}`,
-        dockerNetworkName: "internal-run",
+        dockerNetworkName: request.agentNetworkName ?? "internal-run",
         model: request.model,
         protocol: request.protocol,
         expiresAt: request.expiresAt,
@@ -246,7 +251,14 @@ describe("Codex native agent runtime", () => {
         mode: "ro",
         expectedTree: run.sourceTree,
       });
+      expect(commands[0]?.labHost).toEqual({
+        name: "wordpress",
+        ipv4: "172.20.0.2",
+      });
+      expect(commands[0]?.grant.dockerNetworkName).toBe("lab-internal");
       expect(commands[0]?.args).toContain("gpt-6.1-sol");
+      expect(commands[0]?.args).toContain("danger-full-access");
+      expect(commands[0]?.args).not.toContain("read-only");
       expect(commands[0]?.args).toContain('model_reasoning_effort="high"');
       expect(commands[0]?.args).toContain(
         'openai_base_url="http://127.0.0.1:8080/v1"',

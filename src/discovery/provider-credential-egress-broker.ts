@@ -38,6 +38,7 @@ export const providerCredentialEgressGrantRequestSchema = z
       .int()
       .positive()
       .max(1024 * 1024 * 1024),
+    agentNetworkName: dockerNameSchema.optional(),
     expiresAt: z.iso.datetime({ offset: true }),
   })
   .strict();
@@ -68,6 +69,7 @@ const providerCredentialEgressSetupSchema = z.discriminatedUnion("status", [
       "credential",
       "broker-preflight",
       "network-create",
+      "network-admit",
       "broker-start",
       "provider-network-connect",
       "broker-address",
@@ -77,6 +79,7 @@ const providerCredentialEgressSetupSchema = z.discriminatedUnion("status", [
       "credential-unavailable",
       "broker-bundle-unavailable",
       "docker-network-unavailable",
+      "agent-network-not-internal",
       "broker-container-unavailable",
       "provider-network-unavailable",
       "broker-address-unavailable",
@@ -367,7 +370,8 @@ export function createProviderCredentialEgressBroker(
       validateGrantDeadline(request, startedAt);
       const grantId = nextUuid();
       dockerNameSchema.parse(grantId);
-      const networkName = `provider-egress-${grantId}`;
+      const networkName =
+        request.agentNetworkName ?? `provider-egress-${grantId}`;
       const containerName = `provider-egress-broker-${grantId}`;
       dockerNameSchema.parse(networkName);
       dockerNameSchema.parse(containerName);
@@ -482,24 +486,33 @@ export function createProviderCredentialEgressBroker(
           await resolveAddresses(PROVIDER_UPSTREAM_HOSTNAME),
         );
 
-        pendingSetupFailure = {
-          status: "failed",
-          stage: "network-create",
-          reason: "docker-network-unavailable",
-        };
+        pendingSetupFailure =
+          request.agentNetworkName === undefined
+            ? {
+                status: "failed",
+                stage: "network-create",
+                reason: "docker-network-unavailable",
+              }
+            : {
+                status: "failed",
+                stage: "network-admit",
+                reason: "agent-network-not-internal",
+              };
         const executeDocker = runDocker;
         const network = await executeDocker(
-          ["network", "create", "--internal", networkName],
+          request.agentNetworkName === undefined
+            ? ["network", "create", "--internal", networkName]
+            : ["network", "inspect", "--format", "{{.Internal}}", networkName],
           20_000,
         );
-        if (!dockerSucceeded(network)) {
-          setup = {
-            status: "failed",
-            stage: "network-create",
-            reason: "docker-network-unavailable",
-          };
+        if (
+          !dockerSucceeded(network) ||
+          (request.agentNetworkName !== undefined &&
+            network.stdout.trim() !== "true")
+        ) {
+          setup = pendingSetupFailure;
         } else {
-          networkCreated = true;
+          networkCreated = request.agentNetworkName === undefined;
           pendingSetupFailure = {
             status: "failed",
             stage: "broker-start",

@@ -7,6 +7,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import { isIP } from "node:net";
 
 import { z } from "zod";
 
@@ -90,6 +91,8 @@ export class GvisorCodexSandbox implements CodexSandbox {
     }
     if (
       command.executable !== "codex" ||
+      !/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.labHost.name) ||
+      isIP(command.labHost.ipv4) !== 4 ||
       command.sourceMount.mode !== "ro" ||
       command.sourceMount.path !== "/workspace/main" ||
       !isAbsolute(command.sourceMount.directory) ||
@@ -197,6 +200,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
       const args = [
         ...base,
         `--network=${command.grant.dockerNetworkName}`,
+        `--add-host=${command.labHost.name}:${command.labHost.ipv4}`,
         `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
         `--mount=type=bind,src=${staging},dst=/opt/codex-support,readonly`,
         "--workdir=/workspace/main",

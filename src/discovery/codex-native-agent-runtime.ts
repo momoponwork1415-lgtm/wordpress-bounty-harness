@@ -53,6 +53,7 @@ export interface CodexSandboxCommand {
     readonly mode: "ro";
     readonly expectedTree: ExpectedSourceTree;
   };
+  readonly labHost: { readonly name: string; readonly ipv4: string };
 }
 export interface CodexSandboxResult {
   readonly status: "exited" | "failed";
@@ -78,6 +79,11 @@ export interface DiscoveryTransportRun {
   readonly targetSnapshotDigest: string;
   readonly profile: AgentRuntimeProfile;
   readonly prompt: string;
+  readonly lab: {
+    readonly endpoint: string;
+    readonly networkName: string;
+    readonly internalIp: string;
+  };
   readonly campaignInput: CampaignInputV1;
   readonly sourceDirectory: string;
   readonly sourceTree: ExpectedSourceTree;
@@ -93,6 +99,11 @@ const discoveryTransportRunSchema = z.strictObject({
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
+  lab: z.strictObject({
+    endpoint: z.url(),
+    networkName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
+    internalIp: z.ipv4(),
+  }),
   campaignInput: campaignInputV1Schema,
   sourceDirectory: z.string().min(1),
   sourceTree: z.strictObject({
@@ -234,6 +245,14 @@ export class CodexNativeAgentRuntime {
       run.profile.subagent.effort !== "unavailable"
     )
       return incomplete("policy");
+    const labEndpoint = new URL(run.lab.endpoint);
+    if (
+      labEndpoint.protocol !== "http:" ||
+      !/^[a-z0-9][a-z0-9-]{0,62}$/.test(labEndpoint.hostname) ||
+      labEndpoint.username !== "" ||
+      labEndpoint.password !== ""
+    )
+      return incomplete("policy");
     const granted = await this.broker
       .withGrant(
         {
@@ -245,8 +264,11 @@ export class CodexNativeAgentRuntime {
           maxRequestBytes: 1024 * 1024,
           maxResponseBytes: 8 * 1024 * 1024,
           expiresAt: run.expiresAt,
+          agentNetworkName: run.lab.networkName,
         },
         async (grant) => {
+          if (grant.dockerNetworkName !== run.lab.networkName)
+            throw new Error("Provider grant is not on the Lab network");
           if (!/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(grant.baseUrl)) {
             throw new Error("Provider broker address is invalid");
           }
@@ -257,7 +279,7 @@ export class CodexNativeAgentRuntime {
               "--model",
               run.profile.requestedModelId,
               "--sandbox",
-              "read-only",
+              "danger-full-access",
               "--skip-git-repo-check",
               "--ephemeral",
               "-a",
@@ -304,6 +326,7 @@ export class CodexNativeAgentRuntime {
               mode: "ro",
               expectedTree: run.sourceTree,
             },
+            labHost: { name: labEndpoint.hostname, ipv4: run.lab.internalIp },
           });
         },
       )

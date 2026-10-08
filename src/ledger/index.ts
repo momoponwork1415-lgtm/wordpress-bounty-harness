@@ -45,11 +45,17 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         recordIds: z.array(id),
       }),
     ]),
+    configuration: z.strictObject({
+      promptVariant: id,
+      assignmentUnit: id,
+    }),
   }),
   event({
     type: z.literal("discovery-run-finished"),
     runId: id,
     outcome: z.enum(["completed", "failed", "setup-failed"]),
+    costUsd: z.union([z.number().nonnegative(), z.literal("unavailable")]),
+    wallTimeMs: z.number().int().nonnegative(),
   }),
   event({
     type: z.literal("finding-recorded"),
@@ -135,6 +141,10 @@ export type FunnelCounts = {
 export type CampaignFunnel = FunnelCounts & {
   readonly campaignId: string;
   readonly discoveryAttempts: number;
+  readonly runCount: number;
+  readonly knownCostUsd: number;
+  readonly unpricedRuns: number;
+  readonly wallTimeMs: number;
   readonly byCategory: Readonly<Record<string, FunnelCounts>>;
 };
 
@@ -453,6 +463,9 @@ export class Ledger {
     );
     const readyLabs = new Set<string>();
     const startedRuns = new Map<string, string>();
+    let knownCostUsd = 0;
+    let unpricedRuns = 0;
+    let wallTimeMs = 0;
     const setupFailedRuns = new Set<string>();
     const findings = new Map<
       string,
@@ -476,6 +489,9 @@ export class Ledger {
           startedRuns.set(current.runId, current.labId);
           break;
         case "discovery-run-finished":
+          if (current.costUsd === "unavailable") unpricedRuns++;
+          else knownCostUsd += current.costUsd;
+          wallTimeMs += current.wallTimeMs;
           if (current.outcome === "setup-failed")
             setupFailedRuns.add(current.runId);
           break;
@@ -538,6 +554,15 @@ export class Ledger {
     const discoveryAttempts = [...startedRuns.entries()].filter(
       ([runId, labId]) => readyLabs.has(labId) && !setupFailedRuns.has(runId),
     ).length;
-    return { campaignId: campaign, discoveryAttempts, ...totals, byCategory };
+    return {
+      campaignId: campaign,
+      discoveryAttempts,
+      runCount: startedRuns.size,
+      knownCostUsd,
+      unpricedRuns,
+      wallTimeMs,
+      ...totals,
+      byCategory,
+    };
   }
 }

@@ -28,6 +28,23 @@ afterEach(async () => {
 });
 
 describe("PrivateArtifactStore", () => {
+  it("stores named files under their content digest and reads them back", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "private-artifact-store-"));
+    directories.push(directory);
+    const store = new PrivateArtifactStore({
+      rootDirectory: join(directory, "artifacts"),
+      maxEntries: 4,
+      maxBytes: 1024,
+    });
+    const first = await store.putFiles({ "record.json": "{}", "b.txt": "b" });
+    const second = await store.putFiles({ "b.txt": "b", "record.json": "{}" });
+    expect(second).toBe(first);
+    expect(first).toMatch(/^sha256:[a-f0-9]{64}$/);
+    const read = await store.readFile(first, "b.txt", 10);
+    expect(read.status === "resolved" && read.bytes.toString()).toBe("b");
+    await expect(store.putFiles({ "../escape": "x" })).rejects.toThrow();
+  });
+
   it("atomically stores and resolves a bounded private artifact", async () => {
     const directory = await mkdtemp(join(tmpdir(), "private-artifact-store-"));
     directories.push(directory);

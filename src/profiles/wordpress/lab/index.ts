@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
+import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
 
 import { z } from "zod";
@@ -60,6 +61,8 @@ export interface WordPressSourceResolver {
 }
 
 export interface WordPressLabHandle extends LabHandle {
+  readonly networkName: string;
+  readonly internalIp: string;
   readonly attackerAccounts: Readonly<{
     subscriber: { readonly username: string; readonly password: string };
     customer?: { readonly username: string; readonly password: string };
@@ -73,7 +76,19 @@ export interface WordPressCanaryLedger {
   readonly postMeta: string;
   readonly file: string;
   readonly user: string;
+  /** Administrator canary: a takeover target the attacker never holds credentials for. */
+  readonly adminUser: string;
+  /** Roles of each attacker account when the Lab was seeded. */
+  readonly roleBaseline: Readonly<Record<string, readonly string[]>>;
 }
+
+export type WordPressRoleObservation =
+  | { readonly status: "roles"; readonly roles: readonly string[] }
+  | { readonly status: "unavailable" };
+
+export type WordPressSessionObservation =
+  | { readonly status: "user"; readonly login: string }
+  | { readonly status: "none" | "unavailable" };
 
 export interface ExecutionCanary {
   readonly nonce: string;
@@ -90,6 +105,16 @@ export interface WordPressLab extends LabProvisioner<
     handle: WordPressLabHandle,
     canary: ExecutionCanary,
   ): Promise<"observed" | "missing">;
+  /** Asks WordPress inside the Lab which user a logged-in cookie value authenticates. */
+  observeSessionUser(
+    handle: WordPressLabHandle,
+    cookie: string,
+  ): Promise<WordPressSessionObservation>;
+  /** Reads an account's current roles inside the Lab. */
+  observeAccountRoles(
+    handle: WordPressLabHandle,
+    username: string,
+  ): Promise<WordPressRoleObservation>;
 }
 
 interface Resources {
@@ -100,7 +125,7 @@ interface Resources {
   readonly wordpress: string;
   readonly databasePassword: string;
   readonly adminPassword: string;
-  readonly handle: WordPressLabHandle;
+  handle?: WordPressLabHandle;
   canaries?: WordPressCanaryLedger;
   executionNonces: Set<string>;
   networkCreated: boolean;
@@ -166,6 +191,7 @@ export function openWordPressLab(options: {
   const wp = (
     resource: Resources,
     args: readonly string[],
+    environment: readonly string[] = [],
   ): Promise<DockerResult> =>
     requireDocker([
       "run",
@@ -174,6 +200,7 @@ export function openWordPressLab(options: {
       "--network",
       resource.network,
       "--security-opt=no-new-privileges",
+      ...environment.flatMap((entry) => ["--env", entry]),
       "--env",
       "WORDPRESS_DB_HOST=database",
       "--env",
@@ -217,6 +244,31 @@ export function openWordPressLab(options: {
     }
     if (okay) active.delete(resource.id);
     return okay;
+  };
+  const roles = async (
+    resource: Resources,
+    username: string,
+  ): Promise<WordPressRoleObservation> => {
+    if (!/^[A-Za-z0-9._@-]{1,60}$/.test(username))
+      return { status: "unavailable" };
+    try {
+      const result = await wp(resource, [
+        "user",
+        "get",
+        username,
+        "--field=roles",
+      ]);
+      return {
+        status: "roles",
+        roles: result.stdout
+          .split(",")
+          .map((role) => role.trim())
+          .filter((role) => role.length > 0)
+          .sort(),
+      };
+    } catch {
+      return { status: "unavailable" };
+    }
   };
   const verifySource = async (
     source: WordPressSource,
@@ -306,16 +358,6 @@ export function openWordPressLab(options: {
               password: randomUUID(),
             }
           : undefined;
-        const handle: WordPressLabHandle = {
-          id,
-          snapshotDigest: snapshot.digest,
-          setupDigest: canonicalDigest({ setup, images: options.images }),
-          endpoint: "http://wordpress",
-          attackerAccounts: {
-            subscriber,
-            ...(customer === undefined ? {} : { customer }),
-          },
-        };
         resource = {
           id,
           network: `${prefix}-net`,
@@ -324,7 +366,6 @@ export function openWordPressLab(options: {
           wordpress: `${prefix}-wp`,
           databasePassword: randomUUID(),
           adminPassword: randomUUID(),
-          handle,
           executionNonces: new Set(),
           networkCreated: false,
           volumeCreated: false,
@@ -382,6 +423,23 @@ export function openWordPressLab(options: {
           options.images.wordpress,
         ]);
         resource.wordpressCreated = true;
+        const inspected = await requireDocker([
+          "inspect",
+          "--format",
+          "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+          resource.wordpress,
+        ]);
+        const internalIp = inspected.stdout.trim();
+        const octets = internalIp.split(".").map(Number);
+        if (
+          isIP(internalIp) !== 4 ||
+          !(
+            octets[0] === 10 ||
+            (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) ||
+            (octets[0] === 192 && octets[1] === 168)
+          )
+        )
+          throw new Error("Lab internal address is unavailable");
         let healthy = false;
         for (let attempt = 0; attempt < attempts; attempt++) {
           const [wordpressHealth, databaseHealth] = await Promise.all([
@@ -469,6 +527,19 @@ export function openWordPressLab(options: {
             "--post_status=publish",
             `--post_title=${title}`,
           ]);
+        const handle: WordPressLabHandle = {
+          id,
+          snapshotDigest: snapshot.digest,
+          setupDigest: canonicalDigest({ setup, images: options.images }),
+          endpoint: "http://wordpress",
+          networkName: resource.network,
+          internalIp,
+          attackerAccounts: {
+            subscriber,
+            ...(customer === undefined ? {} : { customer }),
+          },
+        };
+        resource.handle = handle;
         active.set(id, resource);
         return { status: "ready", handle };
       } catch {
@@ -526,8 +597,26 @@ export function openWordPressLab(options: {
           "--role=subscriber",
           `--user_pass=${randomUUID()}`,
         ]);
+        const adminUser = `wbh-canary-admin-${token}`;
+        await wp(resource, [
+          "user",
+          "create",
+          adminUser,
+          `${adminUser}@example.invalid`,
+          "--role=administrator",
+          `--user_pass=${randomUUID()}`,
+        ]);
+        const roleBaseline: Record<string, readonly string[]> = {};
+        for (const account of Object.values(handle.attackerAccounts)) {
+          const observed = await roles(resource, account.username);
+          if (observed.status !== "roles")
+            throw new Error("Role baseline unavailable");
+          roleBaseline[account.username] = observed.roles;
+        }
         resource.canaries = {
           nonce: token,
+          adminUser,
+          roleBaseline,
           option: `wbh_canary_${token}`,
           postId,
           postMeta: `wbh_canary_${token}`,
@@ -574,6 +663,33 @@ export function openWordPressLab(options: {
         nonce: token,
         php: `<?php file_put_contents('${path}', '${token}'); ?>`,
       };
+    },
+    async observeSessionUser(handle, cookie) {
+      const resource = active.get(handle.id);
+      if (resource?.handle !== handle) return { status: "unavailable" };
+      // The value travels as an environment variable, never as PHP source.
+      if (!/^[A-Za-z0-9%|._@+-]{1,4096}$/.test(cookie))
+        return { status: "none" };
+      try {
+        const result = await wp(
+          resource,
+          [
+            "eval",
+            '$id = wp_validate_auth_cookie(rawurldecode((string) getenv("WBH_SESSION_COOKIE")), "logged_in"); echo $id ? get_userdata($id)->user_login : "";',
+          ],
+          [`WBH_SESSION_COOKIE=${cookie}`],
+        );
+        const login = result.stdout.trim();
+        return login === "" ? { status: "none" } : { status: "user", login };
+      } catch {
+        return { status: "unavailable" };
+      }
+    },
+    async observeAccountRoles(handle, username) {
+      const resource = active.get(handle.id);
+      return resource?.handle === handle
+        ? roles(resource, username)
+        : { status: "unavailable" };
     },
     async observeExecutionCanary(handle, canary) {
       const resource = active.get(handle.id);

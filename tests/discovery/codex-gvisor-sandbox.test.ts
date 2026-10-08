@@ -63,6 +63,7 @@ describe("gVisor Codex sandbox", () => {
           mode: "ro" as const,
           expectedTree,
         },
+        labHost: { name: "wordpress", ipv4: "172.20.0.2" },
       };
       const result = await sandbox.execute(command);
       expect(result).toMatchObject({
@@ -78,6 +79,7 @@ describe("gVisor Codex sandbox", () => {
       expect(calls[0]?.args).toContain("--network=none");
       expect(calls[1]?.args).toContain("--network=none");
       expect(calls[2]?.args).toContain("--network=internal-run");
+      expect(calls[2]?.args).toContain("--add-host=wordpress:172.20.0.2");
       expect(calls[2]?.args).toContain(
         `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
       );

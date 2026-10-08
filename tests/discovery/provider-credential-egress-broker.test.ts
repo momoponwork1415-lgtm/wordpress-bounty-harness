@@ -166,7 +166,12 @@ describe("provider credential egress", () => {
           commands.push([...args]);
           return {
             exitCode: 0,
-            stdout: args[0] === "inspect" ? "172.28.0.2\n" : "",
+            stdout:
+              args[0] === "inspect"
+                ? "172.28.0.2\n"
+                : args[0] === "network" && args[1] === "inspect"
+                  ? "true\n"
+                  : "",
             stderr: "",
           };
         },
@@ -197,6 +202,30 @@ describe("provider credential egress", () => {
         "--internal",
         expect.any(String),
       ]);
+      const beforeReuse = commands.length;
+      const reused = await broker.withGrant(
+        { ...request, agentNetworkName: "lab-internal" },
+        async (grant) => grant.dockerNetworkName,
+      );
+      expect(reused.operation).toEqual({
+        status: "completed",
+        value: "lab-internal",
+      });
+      expect(commands.slice(beforeReuse)).toContainEqual([
+        "network",
+        "inspect",
+        "--format",
+        "{{.Internal}}",
+        "lab-internal",
+      ]);
+      expect(
+        commands
+          .slice(beforeReuse)
+          .some(
+            (args) =>
+              args[0] === "network" && ["create", "rm"].includes(args[1] ?? ""),
+          ),
+      ).toBe(false);
       await expect(
         broker.withGrant(
           { ...request, model: "unregistered" as never },

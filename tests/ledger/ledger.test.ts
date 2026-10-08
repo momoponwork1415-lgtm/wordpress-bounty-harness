@@ -240,6 +240,10 @@ describe("Ledger public interface", () => {
       runId: "run-1",
       labId: "lab-1",
       history: { mode: "catalog", digest: snapshot, recordIds: ["public-1"] },
+      configuration: {
+        promptVariant: "short-objective",
+        assignmentUnit: "route",
+      },
     });
     await ledger.append({
       ...common("run-2-started"),
@@ -247,18 +251,26 @@ describe("Ledger public interface", () => {
       runId: "run-2",
       labId: "lab-2",
       history: { mode: "none" },
+      configuration: {
+        promptVariant: "wp2shell-derived",
+        assignmentUnit: "file",
+      },
     });
     await ledger.append({
       ...common("run-1-finished"),
       type: "discovery-run-finished",
       runId: "run-1",
       outcome: "completed",
+      costUsd: "unavailable",
+      wallTimeMs: 1200,
     });
     await ledger.append({
       ...common("run-2-finished"),
       type: "discovery-run-finished",
       runId: "run-2",
       outcome: "setup-failed",
+      costUsd: "unavailable",
+      wallTimeMs: 0,
     });
     for (const [findingId, category] of [
       ["finding-1", "injection"],
@@ -390,6 +402,10 @@ describe("Ledger public interface", () => {
     expect(ledger.funnel("campaign-1")).toEqual({
       campaignId: "campaign-1",
       discoveryAttempts: 1,
+      runCount: 2,
+      knownCostUsd: 0,
+      unpricedRuns: 2,
+      wallTimeMs: 1200,
       raw: 4,
       verified: 4,
       confirmed: 1,
@@ -425,6 +441,15 @@ describe("Ledger public interface", () => {
       },
     });
     expect(ledger.funnel("campaign-2")).toMatchObject({ raw: 1, verified: 0 });
+    expect(
+      ledger.read({ type: "discovery-run-started" })[0]?.event,
+    ).toMatchObject({
+      configuration: {
+        promptVariant: "short-objective",
+        assignmentUnit: "route",
+      },
+      history: { mode: "catalog" },
+    });
   });
 
   it("records a Finding reference only to a catalog record given to that run", async () => {
@@ -436,6 +461,10 @@ describe("Ledger public interface", () => {
         runId: "run-history",
         labId: "lab-1",
         history: { mode: "catalog", digest: snapshot, recordIds: ["public-1"] },
+        configuration: {
+          promptVariant: "short-objective",
+          assignmentUnit: "route",
+        },
       }),
     ).toEqual({ status: "appended" });
     expect(
@@ -445,6 +474,10 @@ describe("Ledger public interface", () => {
         runId: "run-history",
         labId: "lab-1",
         history: { mode: "none" },
+        configuration: {
+          promptVariant: "short-objective",
+          assignmentUnit: "route",
+        },
       }),
     ).toEqual({ status: "conflict" });
     expect(

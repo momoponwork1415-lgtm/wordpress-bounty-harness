@@ -9,11 +9,21 @@ import type { PrivateArtifactStore } from "../infrastructure/private-artifact-st
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const id = z.string().min(1).max(128);
 
+/** What the judge itself observed: roles used and reached, configuration, and so on. */
+const conditionsSchema = z
+  .record(
+    z.string().regex(/^[a-z][A-Za-z0-9-]{0,63}$/),
+    z.string().min(1).max(256),
+  )
+  .refine((value) => Object.keys(value).length <= 20)
+  .default({});
+
 export const verificationResultV1Schema = z.discriminatedUnion("status", [
   z.strictObject({
     status: z.literal("runtime-confirmed"),
     judgeId: id,
     proofKind: z.literal("nonce-canary"),
+    conditions: conditionsSchema,
     evidenceDigest: digest,
     reproductionPackageDigest: digest,
   }),
@@ -172,6 +182,7 @@ export async function publishReproductionPackage<Reconstruction>(input: {
       status: "runtime-confirmed",
       judgeId: judge.judgeId,
       proofKind: judge.proofKind,
+      conditions: judge.conditions,
       evidenceDigest: judge.evidenceDigest,
       reproductionPackageDigest: committed.artifact.digest,
     };
