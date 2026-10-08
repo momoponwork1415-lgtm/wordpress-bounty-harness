@@ -51,8 +51,12 @@ export {
   type ProviderCredentialEgressReceipt,
 } from "./provider-credential-egress-broker.js";
 export {
+  BROKER_TLS_HOSTNAME,
+  CHATGPT_PLACEHOLDER_ACCOUNT_ID,
+  CHATGPT_UPSTREAM_ORIGIN,
   openProviderCredentialProxy,
   PROVIDER_UPSTREAM_ORIGIN,
+  type ChatgptProxyCredential,
   type OpenProviderCredentialProxyOptions,
   type ProviderCredentialProxy,
 } from "./provider-credential-proxy.js";

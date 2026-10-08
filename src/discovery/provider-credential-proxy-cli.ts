@@ -1,8 +1,10 @@
 import { readFile } from "node:fs/promises";
 
 import {
+  CHATGPT_UPSTREAM_ORIGIN,
   PROVIDER_UPSTREAM_ORIGIN,
   openProviderCredentialProxy,
+  type OpenProviderCredentialProxyOptions,
   type ProviderApiProtocol,
 } from "./provider-credential-proxy.js";
 
@@ -30,15 +32,53 @@ function protocol(): ProviderApiProtocol {
   return value;
 }
 
+/** The credential half of the proxy options, chosen by the broker. */
+async function credential(): Promise<
+  | { upstreamOrigin: string; apiKey: string }
+  | {
+      upstreamOrigin: string;
+      chatgpt: NonNullable<OpenProviderCredentialProxyOptions["chatgpt"]>;
+    }
+> {
+  const authentication = process.env.PROVIDER_AUTHENTICATION ?? "api-key";
+  if (authentication === "api-key")
+    return {
+      upstreamOrigin: PROVIDER_UPSTREAM_ORIGIN,
+      apiKey: (await readFile("/run/secrets/provider-api-key", "utf8")).trim(),
+    };
+  if (authentication !== "chatgpt")
+    throw new Error("Provider credential proxy authentication is invalid");
+  const login = JSON.parse(
+    await readFile("/run/secrets/provider-chatgpt.json", "utf8"),
+  ) as unknown;
+  if (
+    typeof login !== "object" ||
+    login === null ||
+    !("accessToken" in login) ||
+    typeof login.accessToken !== "string" ||
+    !("accountId" in login) ||
+    typeof login.accountId !== "string"
+  )
+    throw new Error("Provider credential proxy login is invalid");
+  return {
+    upstreamOrigin: CHATGPT_UPSTREAM_ORIGIN,
+    chatgpt: {
+      accessToken: login.accessToken,
+      accountId: login.accountId,
+      tls: {
+        keyPem: await readFile("/run/secrets/grant-tls-key.pem", "utf8"),
+        certPem: await readFile("/run/secrets/grant-tls-cert.pem", "utf8"),
+      },
+      healthPort: 8081,
+    },
+  };
+}
+
 async function main(): Promise<void> {
-  const apiKey = (
-    await readFile("/run/secrets/provider-api-key", "utf8")
-  ).trim();
   const proxy = await openProviderCredentialProxy({
     listenHost: "0.0.0.0",
     port: 8080,
-    upstreamOrigin: PROVIDER_UPSTREAM_ORIGIN,
-    apiKey,
+    ...(await credential()),
     grantToken: requiredEnvironment("PROVIDER_GRANT_TOKEN"),
     model: requiredEnvironment("PROVIDER_MODEL"),
     protocol: protocol(),
