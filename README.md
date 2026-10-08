@@ -3,6 +3,7 @@
 WordPressプラグインの未知脆弱性をAIで発見し、実行時検証を通ったものだけを人間がWordfence / Patchstackへ提出するためのHarness。
 
 - 設計の読み解き（まずこれ）: [docs/DESIGN-WALKTHROUGH.md](docs/DESIGN-WALKTHROUGH.md)
+- 判断の根拠と未証明の項目: [docs/DESIGN-EVIDENCE.md](docs/DESIGN-EVIDENCE.md)
 - 仕様: [docs/SPEC.md](docs/SPEC.md)
 - 設計理由: [docs/adr/](docs/adr/)
 - 運用手引き（完成後に人間がすること）: [docs/OPERATIONS.md](docs/OPERATIONS.md)

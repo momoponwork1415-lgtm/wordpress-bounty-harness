@@ -1,6 +1,6 @@
 # 設計の読み解き（理解のための1ページ）
 
-正本は [SPEC.md](SPEC.md) と [ADR](adr/)。この文書は仕様を「1つのプラグインが通る道」に沿ってかみ砕いたもので、規則の追加はしない。食い違えば正本が勝つ。完成後の操作は [OPERATIONS.md](OPERATIONS.md)。
+正本は [SPEC.md](SPEC.md) と [ADR](adr/)。この文書は仕様を「1つのプラグインが通る道」に沿ってかみ砕いたもので、規則の追加はしない。食い違えば正本が勝つ。完成後の操作は [OPERATIONS.md](OPERATIONS.md)。各判断の根拠と未証明の項目は [DESIGN-EVIDENCE.md](DESIGN-EVIDENCE.md)。
 
 ## 1. 全体の考え方
 
