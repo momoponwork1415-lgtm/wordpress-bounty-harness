@@ -61,6 +61,11 @@ async function fixture(
     execution: "executed" as "executed" | "plain-write" | "absent",
     /** Canary file paths that no longer exist. */
     deleted: new Set<string>(),
+    /** Option values as `wp option get --format=json` prints them. */
+    options: new Map<string, string>([
+      ["users_can_register", "0"],
+      ["default_role", '"subscriber"'],
+    ]),
   };
   const salts = new Map<string, string>();
   let seededRow = "";
@@ -112,6 +117,13 @@ async function fixture(
                 : (token ?? ""),
             stderr: "",
           };
+        }
+        const option = request.args.indexOf("option");
+        if (option >= 0 && request.args[option + 1] === "get") {
+          const value = database.options.get(request.args[option + 2] ?? "");
+          return value === undefined
+            ? { exitCode: 1, stdout: "", stderr: "missing" }
+            : { exitCode: 0, stdout: `${value}\n`, stderr: "" };
         }
         if (request.args[0] === "exec" && request.args[2] === "test")
           return {
@@ -379,6 +391,27 @@ describe("WordPress gVisor Lab", () => {
     expect(await lab.observeCanaryFiles(provisioned.handle)).toEqual({
       status: "observed",
       deleted: ["php-source"],
+    });
+  });
+
+  it("records option baselines at seeding and reports only canary or critical options that changed", async () => {
+    const { lab, snapshot, setup, database } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup);
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    expect(await lab.observeOptions(provisioned.handle)).toEqual({
+      status: "unavailable",
+    });
+    expect((await lab.seedCanaries(provisioned.handle)).status).toBe("seeded");
+    expect(await lab.observeOptions(provisioned.handle)).toEqual({
+      status: "observed",
+      changed: [],
+    });
+    database.options.set("blogdescription", '"changed tagline"');
+    database.options.set("default_role", '"administrator"');
+    database.options.set("wbh_canary_fixed-nonce", '"overwritten"');
+    expect(await lab.observeOptions(provisioned.handle)).toEqual({
+      status: "observed",
+      changed: ["wbh_canary_fixed-nonce", "default_role"],
     });
   });
 
