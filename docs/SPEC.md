@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.9、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
+版: v0.10、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
 
 ## 1. 目的と指標
 
@@ -52,7 +52,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、canaryの配置先（options、post meta、ファイル、canaryユーザー） |
 | 判定器集合 | 第7節の種別別判定器 |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
-| prompt雛形 | 探索prompt（版付きの変数。初期候補は wp2shell由来 と 短い目的prompt の2本）、trust境界宣言の雛形、file分担の規則（hook / route / AJAX action単位） |
+| prompt雛形 | 探索prompt（版付きの変数。既定は短い目的prompt、比較用にwp2shell由来）、trust境界宣言の雛形、file分担の規則（hook / route / AJAX action単位） |
 | 答えの鍵の形式 | 入口の表現（hook名、route、action名） |
 
 汎用モジュールはこれらをインターフェース経由で受け取り、WordPressの型やpathをimportしない。2つ目のprofileを作るまでインターフェースは汎用化せず、WordPress版の完成後に共通部分を抽出する。
@@ -74,7 +74,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 ## 6. Discovery runの仕様
 
 - 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
-- 入力: 探索prompt（版付き、digestを記録。初期候補は2本: wp2shell由来からCTF前提「脆弱性が必ず存在しRCE / flagへ到達する」と最低6時間の指定だけを外したものと、短い目的prompt。どちらを本番にするかは第10節の評価で同じheld-out case・同じmodel・同じHarnessで比べて決める）、trust境界宣言、分担されたfile集合、Lab endpointとロール別認証情報（Lab内のみ）、読み取り専用source。
+- 入力: 探索prompt（版付き、digestを記録。**既定は短い目的prompt**（目的、trust境界、影響の分類と報奨順、出力形式だけ。手順を書かない）。比較用の変種として、wp2shell由来からCTF前提「脆弱性が必ず存在しRCE / flagへ到達する」と最低6時間の指定だけを外したものを持ち、第10節の評価で同じheld-out case・同じmodel・同じHarnessで比べる。wp2shellの元になったCycle Double Cover型promptは「解が必ず存在し、費用を無制限にかけて解く」前提で、対象の大半に脆弱性がなく費用が収益を決めるバグバウンティには合わないため既定にしない）、trust境界宣言、分担されたfile集合、Lab endpointとロール別認証情報（Lab内のみ）、読み取り専用source。
 - 許可する操作: sourceの読み取り、LabへのHTTP、Lab DBの読み取り、Lab内でのcanary確認。外向き通信なし。
 - 出力: `Finding[]`（0件可）と、調べた範囲・調べなかった範囲の短い記述。
 - Campaign停止規則: 新規Findingなしがk回連続（初期値 k = 4、Codex Security deep scanの既定に合わせる）、または対象あたりの上限run数（初期値 N = 40）。wall timeはrunごとに上限を持つ。
