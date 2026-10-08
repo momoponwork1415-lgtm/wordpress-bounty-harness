@@ -5,11 +5,26 @@ import { describe, expect, it } from "vitest";
 
 import {
   loadWordPressDiscoveryAsset,
+  loadWordPressVerifierPrompt,
   WORDPRESS_DISCOVERY_ASSET_IDS,
   WORDPRESS_DISCOVERY_PROMPT_IDS,
 } from "../../../src/profiles/wordpress/prompts/index.js";
 
 describe("WordPress discovery prompt assets", () => {
+  it("pins the Verifier prompt and keeps known answers and attack strings out", async () => {
+    const prompt = await loadWordPressVerifierPrompt();
+    expect(prompt.digest).toBe(
+      "sha256:889b3c012fe37c3f14629e4771cc27c7b505e862dfd8c93c2a2a86f510435c89",
+    );
+    expect(prompt.text).toContain("http.json");
+    expect(prompt.text).toContain("refutation.md");
+    expect(prompt.text).not.toMatch(
+      /\bCVE-\d{4}-\d+\b|\bPoC\b|\bpayload\b|既知(?:の)?脆弱性/i,
+    );
+    expect(prompt.text).not.toMatch(
+      /\b(?:curl|python|php)\s+-|\/wp-admin\/admin-ajax\.php|<script\b/i,
+    );
+  });
   it("publishes two versioned prompt variants and the shared boundary and assignment rules", async () => {
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       "wp2shell-derived-v1",

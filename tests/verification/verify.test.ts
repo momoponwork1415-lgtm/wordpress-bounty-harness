@@ -10,6 +10,7 @@ import type { LabHandle, LabProvisioner } from "../../src/lab/index.js";
 import { Ledger } from "../../src/ledger/index.js";
 import {
   Verification,
+  VerifierTransportIncompleteError,
   type Judge,
   type Verifier,
 } from "../../src/verification/index.js";
@@ -192,6 +193,14 @@ async function fixture(
 }
 
 describe("verification public interface", () => {
+  it("keeps a sandbox transport failure incomplete with its own reason", async () => {
+    const { result } = await fixture({
+      verifier: async () => {
+        throw new VerifierTransportIncompleteError("sandbox");
+      },
+    });
+    expect(result).toMatchObject({ status: "incomplete", reason: "sandbox" });
+  });
   it("confirms only from the judge observation and records a reproduction package", async () => {
     const { result, calls, ledger } = await fixture();
     expect(result).toMatchObject({

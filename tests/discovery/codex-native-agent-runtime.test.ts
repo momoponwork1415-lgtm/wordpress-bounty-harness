@@ -150,6 +150,56 @@ function sandbox(
 }
 
 describe("Codex native agent runtime", () => {
+  it("uses the same isolated transport for a sealed Verifier attachment", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-verifier-transport-"));
+    try {
+      const report = {
+        "http.json": '{"exchanges":[]}',
+        "steps.md": "Synthetic steps",
+        "route.json": null,
+        "refutation.md": null,
+        precondition: null,
+      };
+      const verifierTranscript = [
+        { type: "thread.started", thread_id: crypto.randomUUID() },
+        { type: "turn.started" },
+        {
+          type: "item.completed",
+          item: { type: "agent_message", text: JSON.stringify(report) },
+        },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 2, output_tokens: 3 },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+      const commands: CodexSandboxCommand[] = [];
+      const attachments = new ProviderAttachmentStore(root);
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(verifierTranscript, commands),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const result = await runtime.execute({
+        ...run,
+        outputKind: "verification",
+      });
+      expect(result.receipt.terminal).toBe("completed");
+      expect(result.attachment?.kind).toBe("verification");
+      expect(commands[0]?.sourceMount.mode).toBe("ro");
+      expect(commands[0]?.args).toContain("--ephemeral");
+      expect(commands[0]?.args).not.toContain("resume");
+      expect(commands[0]?.supportFiles[0]?.content).toContain("http.json");
+      const stored =
+        result.attachment && (await attachments.read(result.attachment));
+      expect(stored?.status).toBe("resolved");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("sends only validated pre-cutoff catalog history to the agent", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
     try {

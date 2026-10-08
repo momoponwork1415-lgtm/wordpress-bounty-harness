@@ -65,6 +65,14 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     historyRecordId: id.optional(),
   }),
   event({
+    type: z.literal("verifier-run-finished"),
+    findingId: id,
+    runId: id,
+    promptDigest: digest,
+    receiptDigest: digest,
+    terminal: z.enum(["completed", "incomplete"]),
+  }),
+  event({
     type: z.literal("verification-finished"),
     verificationId: id,
     findingId: id,
@@ -173,6 +181,7 @@ const querySchema = z.strictObject({
       "discovery-run-started",
       "discovery-run-finished",
       "finding-recorded",
+      "verifier-run-finished",
       "verification-finished",
       "review-decided",
       "scope-assessed",

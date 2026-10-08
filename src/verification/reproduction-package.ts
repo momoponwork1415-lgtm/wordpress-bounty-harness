@@ -38,6 +38,8 @@ export const verificationResultV1Schema = z.discriminatedUnion("status", [
       "provision",
       "precondition",
       "recipe",
+      "provider",
+      "sandbox",
       "observation",
       "evidence",
       "cleanup",

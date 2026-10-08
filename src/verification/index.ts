@@ -44,6 +44,13 @@ export type VerifierAttempt =
       readonly nextStep: string;
     };
 
+/** A transport receipt already recorded the failure; Verification preserves its cause. */
+export class VerifierTransportIncompleteError extends Error {
+  constructor(readonly reason: "provider" | "sandbox") {
+    super(`Verifier transport incomplete: ${reason}`);
+  }
+}
+
 /** Harness-owned deterministic observation of a nonce canary. */
 export interface Judge<Finding, Handle extends LabHandle> {
   readonly id: string;
@@ -255,7 +262,12 @@ export class Verification<
     let attempt: VerifierAttempt;
     try {
       attempt = await this.#options.verifier.attempt({ finding, lab });
-    } catch {
+    } catch (error) {
+      if (error instanceof VerifierTransportIncompleteError)
+        return incomplete(
+          error.reason,
+          `Repair the ${error.reason} transport and repeat with a fresh Verifier`,
+        );
       return incomplete(
         "recipe",
         "The Verifier did not finish; repeat with a fresh Verifier",

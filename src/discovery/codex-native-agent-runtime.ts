@@ -79,6 +79,8 @@ export interface DiscoveryTransportRun {
   readonly targetSnapshotDigest: string;
   readonly profile: AgentRuntimeProfile;
   readonly prompt: string;
+  /** Verification uses the same isolated transport with a different sealed report. */
+  readonly outputKind?: "verification";
   readonly lab: {
     readonly endpoint: string;
     readonly networkName: string;
@@ -99,6 +101,7 @@ const discoveryTransportRunSchema = z.strictObject({
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
+  outputKind: z.literal("verification").optional(),
   lab: z.strictObject({
     endpoint: z.url(),
     networkName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
@@ -115,15 +118,44 @@ const discoveryTransportRunSchema = z.strictObject({
 });
 
 const event = z.looseObject({ type: z.string() });
+const verificationReportSchema = z.strictObject({
+  "http.json": z.string().nullable(),
+  "steps.md": z.string().nullable(),
+  "route.json": z.string().nullable(),
+  "refutation.md": z.string().nullable(),
+  precondition: z.string().nullable(),
+});
+const verificationReportJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    "http.json": { type: ["string", "null"] },
+    "steps.md": { type: ["string", "null"] },
+    "route.json": { type: ["string", "null"] },
+    "refutation.md": { type: ["string", "null"] },
+    precondition: { type: ["string", "null"] },
+  },
+  required: [
+    "http.json",
+    "steps.md",
+    "route.json",
+    "refutation.md",
+    "precondition",
+  ],
+} as const;
 const usageSchema = z.looseObject({
   input_tokens: z.number().int().nonnegative(),
   cached_input_tokens: z.number().int().nonnegative().optional(),
   output_tokens: z.number().int().nonnegative(),
   reasoning_output_tokens: z.number().int().nonnegative().optional(),
 });
-function decodeTranscript(stdout: string):
+function decodeTranscript(
+  stdout: string,
+  outputKind?: "verification",
+):
   | {
-      report: z.infer<typeof reportSchema>;
+      report:
+        z.infer<typeof reportSchema> | z.infer<typeof verificationReportSchema>;
       usage: {
         inputTokens: number | "unavailable";
         cachedInputTokens: number | "unavailable";
@@ -135,7 +167,10 @@ function decodeTranscript(stdout: string):
   const lines = stdout.split("\n").filter((line) => line.trim().length > 0);
   let started = false;
   let completed = false;
-  let report: z.infer<typeof reportSchema> | undefined;
+  let report:
+    | z.infer<typeof reportSchema>
+    | z.infer<typeof verificationReportSchema>
+    | undefined;
   let usage: ReturnType<typeof usageSchema.parse> | undefined;
   for (const line of lines) {
     let value: unknown;
@@ -180,7 +215,11 @@ function decodeTranscript(stdout: string):
         } catch {
           return undefined;
         }
-        const found = reportSchema.safeParse(reportValue);
+        const found = (
+          outputKind === "verification"
+            ? verificationReportSchema
+            : reportSchema
+        ).safeParse(reportValue);
         if (!found.success) return undefined;
         report = found.data;
       } else if (
@@ -316,7 +355,11 @@ export class CodexNativeAgentRuntime {
             supportFiles: [
               {
                 path: "/opt/codex-support/report-schema.json",
-                content: JSON.stringify(reportJsonSchema),
+                content: JSON.stringify(
+                  run.outputKind === "verification"
+                    ? verificationReportJsonSchema
+                    : reportJsonSchema,
+                ),
               },
             ],
             grant,
@@ -357,13 +400,13 @@ export class CodexNativeAgentRuntime {
       return incomplete("policy", result.completedAt, granted.receipt.digest);
     if (result.status !== "exited" || result.exitCode !== 0)
       return incomplete("provider", result.completedAt, granted.receipt.digest);
-    const decoded = decodeTranscript(result.stdout);
+    const decoded = decodeTranscript(result.stdout, run.outputKind);
     if (decoded === undefined)
       return incomplete("schema", result.completedAt, granted.receipt.digest);
     let attachment: ProviderAttachmentRef;
     try {
       attachment = await this.attachments.put(
-        "findings",
+        run.outputKind === "verification" ? "verification" : "findings",
         Buffer.from(canonicalJson(decoded.report)),
       );
     } catch {
