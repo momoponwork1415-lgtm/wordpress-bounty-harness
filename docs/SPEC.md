@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.11、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
+版: v0.12、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
 
 ## 1. 目的と指標
 
@@ -164,14 +164,28 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 10. 評価
 
-- Answer Key（Research外に保管）: 入口（hook / route / AJAX action）、破られるproperty、欠けているcheck、攻撃者権限、到達する影響、許容file / function集合、公開日、model cutoff。
-- 評価セットの構成（2026-10-08時点、11件）: 本人発見の公開7件（旧リポジトリIssue 213）＋第三者の補助4件（任意ファイルアップロード / RCE、管理者への権限昇格、乗っ取り）。開発セット2件（TranslatePress）はprompt調整用で採点しない。held-out 9件（本人5 + 補助4）が採点対象。本人発見分と補助分は混算せず系統別に併記する。負の対照は同じ9件の修正版。本番で発見・公開した件は、公開後にheld-outへ追加して増やす。
-- 試行数: 1 caseにつき独立5試行（k/5）。費用が許さない場合はcaseを減らさず試行を3に落とし、区間の幅をそのまま示す。
+主指標は本番から得る。held-outは任意で、回すときは予算で件数と試行を決める。理由は [DESIGN-EVIDENCE.md 第9節・第12節](DESIGN-EVIDENCE.md)。
+
+### 主指標（本番の台帳から、追加費用なし）
+
+- **本番A/B（ablation）**: runは独立なので、同じ対象に対してrunを構成A / 構成Bに分担して回す。どちらが見つけても提出でき、予算を無駄にしない。比較する軸: prompt（短い目的 vs wp2shell由来）、履歴有無（ADR 0012）、分担単位、Verifier有無、判定器有無、Lab内実行有無。各runの構成は台帳のrun記録に残し、対象をまたいで集計する。差は同じ対象内の対で示し、区間を併記する。
+- **前向き評価**: 本番Campaignの台帳を、後日公開されたadvisory（自分の提出以外も含む）で採点する。「あったのに見逃した」が分かる唯一の方法。採点はheld-outと同じ `location-overlap` と盲検rubric。
+- **提出転帰**: triaged / resolved / duplicate / informative / N/A / rejected の率と、報奨額。収益に直結する最終の数字。
+- **funnel**: raw → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・種別別。
+
+### 判定器の負の対照（安い。判定器のテストとして回す）
+
+- 修正版pluginで同じ手順を流し、判定器が鳴らないことを確認する。鍵と同じpropertyを主張したFindingだけ `control-false-alarm` と数える。
+
+### 答えの鍵（登録は行う。回すかは任意）
+
+- Answer Key（Research外に保管）: 入口（hook / route / AJAX action）、破られるproperty、欠けているcheck、攻撃者権限、到達する影響、許容file / function集合、公開日、model cutoff、本人発見 / 補助の区分。
+- 登録する鍵（2026-10-08時点、11件）: 本人発見の公開7件（旧リポジトリIssue 213）＋第三者の補助4件（任意ファイルアップロード / RCE、管理者への権限昇格、乗っ取り）。本人発見のうち2026-04-30（gpt-6.1-sol cutoff）以前の公開は contamination 可能性ありとして区間を分けて表示する。
+- 開発セット: TranslatePress 2件（prompt調整と縦断スライスに使う。採点に使わない）。
+- held-out評価を回す条件: 大きな設計変更（判定器の方式、探索の構造）をしたときに限る。回すときは、cutoff後の補助4件を優先し、試行数は予算で決め（1〜5）、区間の幅をそのまま示す。9件×5試行の全量は本番15〜17対象分の費用に相当するので、既定では回さない。
 - 採点: 一次は機械の `location-overlap`（必要条件）。二次は人間の盲検rubric（場所、root cause、攻撃者条件、影響の4要素）で `target-hit` / `partial` / `non-target`。実行水準は `target-hit ∧ runtime-confirmed`。
-- 精度の代替: 修正版pluginの負の対照（鍵と同じpropertyを主張したFindingだけ `control-false-alarm`）、Finding内訳、当たり1件あたりのFinding数。
-- 統計: k/5にClopper-Pearson区間。pass@kはunion / 全回 / 試行別の3表示。種別別は件数のまま。構成差は同じcase・試行の対で示す。
-- ablation: promptを固定し、Verifier有無、判定器有無、Lab内実行有無、分担有無、履歴有無（ADR 0012）で差を測る。prompt比較（wp2shell由来 vs 短い目的prompt）はHarness構成を固定して別に行い、`target-hit` と当たり1件あたりの費用で選ぶ。
-- 前向き評価: 本番Campaignの台帳を、後日公開されたadvisoryで採点する。held-outの結果を見てpromptを変えたら、そのcaseは開発セットへ移す。
+- 統計: k/n にClopper-Pearson区間。pass@kはunion / 全回 / 試行別の3表示。種別別は件数のまま。重なる区間は「差なし」でなく「判定不能」と書く。
+- held-outの結果を見てpromptを変えたら、そのcaseは開発セットへ移す。
 
 ## 11. ADR（新リポジトリで最初に書くもの）
 
@@ -190,18 +204,18 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 12. 最初の縦断スライスと受入条件
 
-held-out 1件（開発セットのTranslatePressではなく、鍵を事前登録した1件）で、次が一度通ること。
+開発セット1件（TranslatePress 3.3.1 ATO。答えを知っていてよい）で、次が一度通ること。目的はHarnessが端から端まで動くことの確認で、当たり率の主張ではない。
 
 1. `selection` が方針からその対象を含む選定を出す（手動pinで可）。
 2. `snapshot` がTarget / Dependency Snapshotをdigestで固定する。
 3. `lab` がgVisor内にWordPress + MySQLを供給し、canaryとロール別アカウントを仕込む。
-4. `discovery` が `gpt-6.1-sol` でN runを回し、Findingを台帳へ記録する。停止規則が働く。
+4. `discovery` が `gpt-6.1-sol` でrunを回し、Findingを台帳へ記録する。停止規則が働く。1試行でよい。
 5. `verification` がVerifierと判定器で結果を出し、`incomplete` の理由コードが残る。
 6. `review` のCLIがconfirmedとincompleteを表示し、判断を記録する。
-7. `evaluation` が鍵に対して `location-overlap` と人間rubricの入力を出し、funnelを表示する。
+7. `ledger` がfunnelを表示し、`evaluation` が鍵に対して `location-overlap` を出す（鍵は開発セットのもの）。
 8. `pnpm check` が通り、各モジュールの振る舞いテストが公開インターフェースから観測する。
 
-受入: 上記が一度通り、台帳から「Finding数、verifier通過数、confirmed / contradicted / incomplete、target-hit」が読める。提出は行わない。
+受入: 上記が一度通り、台帳から「Finding数、verifier通過数、confirmed / contradicted / incomplete、run数と費用」が読める。提出は行わない。held-outは使わない。
 
 ## 13. 移植一覧（旧リポジトリ → 新モジュール）
 

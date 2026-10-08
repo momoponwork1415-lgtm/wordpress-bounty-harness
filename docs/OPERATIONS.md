@@ -63,16 +63,20 @@ harness ledger funnel --month 2026-11     # 月単位
 | in-scopeが少ない | 選定方針（対象外になりやすい種別・tierを避ける） |
 | duplicateが多い | 選定方針（公開履歴の多いpluginを避ける）、履歴DBの鮮度 |
 
-## 5. 評価（Harnessを変えたときだけ）
+## 5. 評価
+
+主指標は本番から得る。追加費用はかからない。
 
 ```
-harness eval score --set held-out --config <name>     # 鍵に対する location-overlap と盲検rubricの入力
-harness eval compare <config-a> <config-b>            # 同じcase・同じ試行の対で差を出す
+harness ledger funnel --month 2026-11 --by config     # 本番A/B: 構成別の当たり率と費用
+harness eval prospective --since 2026-10 --advisories <file>   # 後日公開されたadvisoryで本番台帳を再採点
+harness eval score --set held-out --cases <slugs> --trials 1   # 任意。大きな設計変更時だけ、予算内で
 ```
 
-- 評価セットは第10節の構成。開発セット2件はprompt調整に使い、採点には使わない。
+- 本番A/B: 同じ対象でrunを構成A / Bに分担して回す。どちらが見つけても提出できる。
+- 前向き評価: 四半期ごとに、公開されたadvisoryで本番台帳を再採点し、見逃しを数える。
+- held-out: 既定では回さない。回すならcutoff後の補助4件を優先し、試行数は予算で決める。
 - held-outの結果を見てpromptを変えたら、そのcaseは開発セットへ移す。
-- 本番Campaignの台帳は、後日公開されたadvisoryで後から採点できる（前向き評価）。これが最も信頼できる数字。
 
 ## 6. やらないこと
 
