@@ -6,6 +6,8 @@ import { parseArgs } from "node:util";
 import type {
   ArmComparison,
   LocationAnswerKey,
+  ProspectiveAdvisory,
+  ProspectiveScore,
   SourceLocation,
 } from "../evaluation/index.js";
 import { Evaluation } from "../evaluation/index.js";
@@ -40,6 +42,8 @@ export type CliState = {
 export interface CliProfile {
   review(state: CliState): Review;
   answerKeys(value: unknown): readonly LocationAnswerKey[];
+  /** Later public advisories in key form, matched to targets by the profile. */
+  advisories(value: unknown): readonly ProspectiveAdvisory[];
   locationsOf(finding: unknown): readonly SourceLocation[];
   select(
     state: CliState,
@@ -94,6 +98,7 @@ const USAGE = [
   "  ledger funnel --campaign <id>",
   "  eval score --campaign <id> --keys <path> --case <id>",
   "  eval compare [--axis history] [--campaign <id>]",
+  "  eval prospective --advisories <path> [--campaign <id>]",
 ].join("\n");
 
 const options = {
@@ -118,6 +123,7 @@ const options = {
   outcome: { type: "string" },
   case: { type: "string" },
   axis: { type: "string" },
+  advisories: { type: "string" },
 } as const;
 
 class UsageError extends Error {}
@@ -210,6 +216,21 @@ export function formatComparison(comparison: ArmComparison): string[] {
     ...comparison.targets.map(
       (target) =>
         `  target ${target.selectionId ?? target.snapshotDigest}  a ${target.arms.a.hits}/${target.arms.a.runs}  b ${target.arms.b.hits}/${target.arms.b.runs}${target.paired ? "" : "  (unpaired, excluded)"}`,
+    ),
+  ];
+}
+
+export function formatProspective(score: ProspectiveScore): string[] {
+  const { counts } = score;
+  return [
+    `prospective ${score.metric}  advisories ${score.advisories.length}  found ${counts.found}  missed ${counts.missed}  unscorable ${counts.unscorable}  predates-run ${counts["predates-run"]}  not-searched ${counts["not-searched"]}`,
+    ...score.advisories.map(
+      (advisory) =>
+        `  ${advisory.status} ${advisory.caseId}  overlapping ${advisory.overlapping.length}  unreadable ${advisory.unreadable.length}`,
+    ),
+    ...(score.rubric.length === 0 ? [] : ["blind rubric pairs:"]),
+    ...score.rubric.map(
+      (pair) => `  ${pair.caseId}  finding ${pair.findingId}`,
     ),
   ];
 }
@@ -548,6 +569,32 @@ export async function runCli(
           io.stdout(`  overlapping finding ${findingId}`);
         for (const findingId of score.unreadable)
           io.stdout(`  unreadable finding ${findingId}`);
+        return 0;
+      }
+      case "eval prospective": {
+        const advisories = environment.profile.advisories(
+          JSON.parse(
+            await readFile(
+              resolve(required(values.advisories, "advisories")),
+              "utf8",
+            ),
+          ) as unknown,
+        );
+        print(
+          formatProspective(
+            await new Evaluation({
+              ledger: state.ledger,
+              store: state.store,
+              locationsOf: (finding) =>
+                environment.profile.locationsOf(finding),
+            }).prospective({
+              advisories,
+              ...(values.campaign === undefined
+                ? {}
+                : { campaignId: values.campaign }),
+            }),
+          ),
+        );
         return 0;
       }
       case "eval compare": {

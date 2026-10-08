@@ -14,6 +14,7 @@ import { Review, type ScopeFactsProvider } from "../review/index.js";
 import type { Selection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
 import { Verification, type Verifier } from "../verification/index.js";
+import { parseWordPressAdvisories } from "../profiles/wordpress/advisory.js";
 import {
   parseWordPressAnswerKeys,
   wordpressFindingLocations,
@@ -229,6 +230,7 @@ export function createWordPressCliProfile(options: {
         clock: state.clock,
       }),
     answerKeys: parseWordPressAnswerKeys,
+    advisories: parseWordPressAdvisories,
     locationsOf: wordpressFindingLocations,
     async select(state, input) {
       const { config, policy } = await loadConfig(input.configPath);
