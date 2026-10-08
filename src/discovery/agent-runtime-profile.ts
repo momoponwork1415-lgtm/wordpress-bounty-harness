@@ -36,6 +36,12 @@ const bodySchema = z.strictObject({
   subagent: z.strictObject({ modelId: reported, effort: reported }),
 });
 
+/** What a human writes; the kind, schema version and digest are derived. */
+export const agentRuntimeProfileDefinitionSchema = bodySchema.omit({
+  kind: true,
+  schemaVersion: true,
+});
+
 export const agentRuntimeProfileSchema = bodySchema
   .extend({ digest })
   .superRefine((profile, context) => {
