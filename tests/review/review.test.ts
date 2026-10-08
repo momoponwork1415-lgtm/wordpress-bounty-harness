@@ -123,6 +123,7 @@ async function fixture(
       artifactStore,
       scopeEvaluator,
       factsProvider: { load: async () => ({ category: "sqli" }) },
+      clock: () => new Date("2026-10-08T01:00:00Z"),
     }),
     directory,
   };
@@ -358,5 +359,139 @@ describe("review public interface", () => {
     ).toBe("not-authorized");
     const next = await refreshed.assessScope({ ref });
     expect(next[0]?.id).not.toBe(first.id);
+  });
+});
+
+async function queueFixture() {
+  const context = await fixture();
+  const base = {
+    schemaVersion: 1 as const,
+    campaignId: "campaign-1",
+    snapshotDigest: snapshot,
+    occurredAt: "2026-10-08T00:00:00Z",
+  };
+  for (const [findingId, category] of [
+    ["finding-2", "account-takeover"],
+    ["finding-3", "stored-xss"],
+    ["finding-4", "other"],
+  ] as const)
+    await context.ledger.append({
+      ...base,
+      identity: findingId,
+      type: "finding-recorded",
+      findingId,
+      runId: "run-1",
+      category,
+    });
+  await context.ledger.append({
+    ...base,
+    identity: "verification-2",
+    type: "verification-finished",
+    verificationId: "verification-2",
+    findingId: "finding-2",
+    labSetupDigest: labSetup,
+    result: {
+      status: "incomplete",
+      reason: "observation",
+      nextStep: "Repair the recipe and repeat",
+    },
+  });
+  const refutation = await context.artifactStore.putFiles({
+    "refutation.md": "Synthetic refutation\n",
+  });
+  await context.ledger.append({
+    ...base,
+    identity: "verification-3",
+    type: "verification-finished",
+    verificationId: "verification-3",
+    findingId: "finding-3",
+    labSetupDigest: labSetup,
+    result: {
+      status: "contradicted",
+      judgeId: "synthetic",
+      evidenceDigest: refutation,
+    },
+  });
+  return context;
+}
+
+describe("review queue and decisions", () => {
+  it("lists confirmed items with evidence and incomplete items with next steps, and counts contradicted", async () => {
+    const { review } = await queueFixture();
+    const queue = review.queue({ campaignId: "campaign-1" });
+    expect(queue.contradicted).toBe(1);
+    expect(queue.unverified).toBe(1);
+    expect(queue.items).toEqual([
+      expect.objectContaining({
+        status: "runtime-confirmed",
+        category: "sqli",
+        ref,
+        judgeId: "sqli-canary",
+        evidenceDigest: expect.stringMatching(/^sha256:/),
+        reproductionPackageDigest: expect.stringMatching(/^sha256:/),
+        decision: null,
+      }),
+      expect.objectContaining({
+        status: "incomplete",
+        category: "account-takeover",
+        reason: "observation",
+        nextStep: "Repair the recipe and repeat",
+        decision: null,
+      }),
+    ]);
+  });
+
+  it("records a decision with reason, opened evidence, duplicate result and elapsed time", async () => {
+    const { review, ledger, artifactStore } = await queueFixture();
+    const [confirmed] = review.queue({ campaignId: "campaign-1" }).items;
+    if (confirmed?.status !== "runtime-confirmed") throw new Error("missing");
+    const decision = await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "reproduced-by-hand",
+      openedEvidence: [confirmed.reproductionPackageDigest],
+      duplicate: { status: "no-match" },
+      decidedBy: "operator",
+    });
+    expect(decision).toMatchObject({
+      schemaVersion: 1,
+      decision: "accept",
+      reasonCode: "reproduced-by-hand",
+      duplicate: { status: "no-match" },
+      elapsedMs: 3_600_000,
+    });
+    const [recorded] = ledger.read({ type: "review-decided" });
+    expect(recorded?.event).toMatchObject({
+      type: "review-decided",
+      findingId: "finding-1",
+      decision: "accept",
+    });
+    const stored = await artifactStore.readFile(
+      recorded!.event.artifacts[0]!.digest,
+      "record.json",
+      10_000,
+    );
+    expect(stored.status).toBe("resolved");
+    expect(review.queue({ campaignId: "campaign-1" }).items[0]).toMatchObject({
+      decision: "accept",
+    });
+    expect(ledger.funnel("campaign-1").reviewed).toBe(1);
+  });
+
+  it("refuses decisions on contradicted or unknown verifications", async () => {
+    const { review } = await queueFixture();
+    await expect(
+      review.decide({
+        ref: {
+          ...ref,
+          findingId: "finding-3",
+          verificationId: "verification-3",
+        },
+        decision: "accept",
+        reasonCode: "manual",
+        openedEvidence: [],
+        decidedBy: "operator",
+      }),
+    ).rejects.toThrow();
   });
 });

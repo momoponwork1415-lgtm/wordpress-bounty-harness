@@ -1,9 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
-
 import { z } from "zod";
 
-import { measureCanonicalSourceTree } from "../infrastructure/canonical-source-tree.js";
 import {
   canonicalDigest,
   canonicalJson,
@@ -60,7 +56,52 @@ const authorizationSchema = z.strictObject({
   authorizedAt: z.iso.datetime(),
 });
 
+const duplicateSchema = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.enum(["unavailable", "no-match"]) }),
+  z.strictObject({
+    status: z.literal("possible-match"),
+    reference: z.string().min(1).max(256),
+  }),
+]);
+const reviewDecisionV1Schema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ref: refSchema,
+  verificationStatus: z.enum(["runtime-confirmed", "incomplete"]),
+  decision: z.enum(["accept", "reject", "defer"]),
+  reasonCode: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+  duplicate: duplicateSchema,
+  openedEvidence: z.array(digest).max(100),
+  decidedBy: id,
+  decidedAt: z.iso.datetime(),
+  elapsedMs: z.number().int().nonnegative(),
+});
+
 export type ReviewRef = z.infer<typeof refSchema>;
+export type ReviewDecisionV1 = z.infer<typeof reviewDecisionV1Schema>;
+type Decision = ReviewDecisionV1["decision"];
+export type ReviewItem =
+  | {
+      readonly status: "runtime-confirmed";
+      readonly ref: ReviewRef;
+      readonly category: string;
+      readonly judgeId: string;
+      readonly evidenceDigest: string;
+      readonly reproductionPackageDigest: string;
+      readonly decision: Decision | null;
+    }
+  | {
+      readonly status: "incomplete";
+      readonly ref: ReviewRef;
+      readonly category: string;
+      readonly reason: string;
+      readonly nextStep: string;
+      readonly decision: Decision | null;
+    };
+export type ReviewQueue = {
+  readonly items: readonly ReviewItem[];
+  readonly contradicted: number;
+  readonly unverified: number;
+};
 export type ScopeAssessment = z.infer<typeof assessmentSchema>;
 export type SubmissionDraftRef = Omit<z.infer<typeof draftSchema>, "content">;
 export type ReviewView = {
@@ -141,6 +182,136 @@ export class Review<TFacts = unknown> {
     if (new Set(identities).size !== identities.length)
       throw new Error("Programme identities must be unique");
     digest.parse(options.scopeEvaluator.policyDigest);
+  }
+
+  /** confirmed and incomplete need a human; contradicted is only counted. */
+  queue(input: { readonly campaignId?: string } = {}): ReviewQueue {
+    const campaignId =
+      input.campaignId === undefined ? undefined : id.parse(input.campaignId);
+    const key = (event: { campaignId: string; findingId: string }) =>
+      `${event.campaignId}\u0000${event.findingId}`;
+    const inCampaign = (event: LedgerEventV1) =>
+      campaignId === undefined || event.campaignId === campaignId;
+    const latestVerification = new Map<
+      string,
+      {
+        sequence: number;
+        event: Extract<LedgerEventV1, { type: "verification-finished" }>;
+      }
+    >();
+    for (const { sequence, event } of this.#readAll("verification-finished"))
+      if (event.type === "verification-finished" && inCampaign(event))
+        latestVerification.set(key(event), { sequence, event });
+    const latestDecision = new Map<
+      string,
+      { sequence: number; decision: Decision }
+    >();
+    for (const { sequence, event } of this.#readAll("review-decided"))
+      if (event.type === "review-decided" && inCampaign(event))
+        latestDecision.set(key(event), { sequence, decision: event.decision });
+
+    const items: ReviewItem[] = [];
+    let contradicted = 0;
+    let unverified = 0;
+    for (const { event: finding } of this.#readAll("finding-recorded")) {
+      if (finding.type !== "finding-recorded" || !inCampaign(finding)) continue;
+      const verified = latestVerification.get(key(finding));
+      if (verified === undefined) {
+        unverified++;
+        continue;
+      }
+      const { event, sequence } = verified;
+      const ref = {
+        campaignId: event.campaignId,
+        findingId: event.findingId,
+        verificationId: event.verificationId,
+        snapshotDigest: event.snapshotDigest,
+      };
+      const decided = latestDecision.get(key(finding));
+      const decision =
+        decided !== undefined && decided.sequence > sequence
+          ? decided.decision
+          : null;
+      const result = event.result;
+      if (result.status === "contradicted") contradicted++;
+      else if (result.status === "runtime-confirmed")
+        items.push({
+          status: result.status,
+          ref,
+          category: finding.category,
+          judgeId: result.judgeId,
+          evidenceDigest: result.evidenceDigest,
+          reproductionPackageDigest: result.reproductionPackageDigest,
+          decision,
+        });
+      else
+        items.push({
+          status: result.status,
+          ref,
+          category: finding.category,
+          reason: result.reason,
+          nextStep: result.nextStep,
+          decision,
+        });
+    }
+    return { items, contradicted, unverified };
+  }
+
+  async decide(input: {
+    readonly ref: ReviewRef;
+    readonly decision: Decision;
+    readonly reasonCode: string;
+    readonly openedEvidence: readonly string[];
+    readonly duplicate?: DuplicateLookupResult;
+    readonly decidedBy: string;
+  }): Promise<ReviewDecisionV1> {
+    const ref = refSchema.parse(input.ref);
+    const verification = this.#readAll("verification-finished").find(
+      ({ event }) =>
+        event.type === "verification-finished" &&
+        event.campaignId === ref.campaignId &&
+        event.findingId === ref.findingId &&
+        event.verificationId === ref.verificationId &&
+        event.snapshotDigest === ref.snapshotDigest,
+    )?.event;
+    if (
+      verification?.type !== "verification-finished" ||
+      verification.result.status === "contradicted"
+    )
+      throw new Error(
+        "Only runtime-confirmed or incomplete verifications are reviewed",
+      );
+    const decidedAt = this.#clock();
+    const record = reviewDecisionV1Schema.parse({
+      schemaVersion: 1,
+      ref,
+      verificationStatus: verification.result.status,
+      decision: input.decision,
+      reasonCode: input.reasonCode,
+      duplicate: input.duplicate ?? { status: "unavailable" },
+      openedEvidence: [...input.openedEvidence],
+      decidedBy: input.decidedBy,
+      decidedAt: decidedAt.toISOString(),
+      elapsedMs: Math.max(
+        0,
+        decidedAt.getTime() - Date.parse(verification.occurredAt),
+      ),
+    });
+    const artifactDigest = await this.#storeRecord(record);
+    const appended = await this.#ledger.append({
+      schemaVersion: 1,
+      identity: `review:${canonicalDigest(record)}`,
+      campaignId: ref.campaignId,
+      snapshotDigest: ref.snapshotDigest,
+      occurredAt: record.decidedAt,
+      type: "review-decided",
+      findingId: ref.findingId,
+      decision: record.decision,
+      artifacts: [{ kind: "review-decision", digest: artifactDigest }],
+    });
+    if (appended.status === "conflict")
+      throw new Error("Review decision ledger conflict");
+    return record;
   }
 
   async assessScope(input: {
@@ -528,19 +699,7 @@ export class Review<TFacts = unknown> {
   }
 
   async #storeRecord(record: object): Promise<string> {
-    const staging = await this.#store.stage();
-    const content = canonicalJson(record);
-    await writeFile(join(staging.contentDirectory, "record.json"), content, {
-      mode: 0o600,
-    });
-    const measured = await measureCanonicalSourceTree(
-      staging.contentDirectory,
-      { maxEntries: 1, maxBytes: 100_000 },
-    );
-    const committed = await this.#store.commit(measured.digest, staging);
-    if (committed.status === "conflict")
-      throw new Error("Private Evidence conflict");
-    return committed.artifact.digest;
+    return this.#store.putFiles({ "record.json": canonicalJson(record) });
   }
 
   async #readRecord<T>(
