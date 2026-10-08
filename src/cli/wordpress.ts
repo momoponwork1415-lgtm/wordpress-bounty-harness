@@ -197,8 +197,17 @@ export function createWordPressCliProfile(options: {
           freeze: boundaries.freeze,
           lab: boundaries.lab,
           setupFor,
-          async discovery({ snapshot, lab }) {
+          async discovery({ target, snapshot, lab }) {
             const source = await boundaries.sourceFor(snapshot);
+            // The campaign ceiling is a safety bound; selection decides depth per target.
+            const maxRuns = Math.min(
+              config.stopRules.maxRuns,
+              target.runBudget,
+            );
+            const stopRules = {
+              maxRuns,
+              noFindingRuns: Math.min(config.stopRules.noFindingRuns, maxRuns),
+            };
             const accounts = Object.entries(lab.attackerAccounts).map(
               ([role, account]) =>
                 `- ${role}: ${account.username} / ${account.password} (Lab only)`,
@@ -228,36 +237,33 @@ export function createWordPressCliProfile(options: {
                 programmeBoundary: config.programmeBoundary,
                 modelProfileDigest: boundaries.runtimeProfile.digest,
                 promptDigest: objective.digest,
-                stopRules: config.stopRules,
+                stopRules,
                 lab: { setupDigest: lab.setupDigest },
                 history: { mode: "none" },
               },
               historyFraction: 0,
-              plannedRuns: Array.from(
-                { length: config.stopRules.maxRuns },
-                () => ({
-                  configuration: {
-                    promptVariant: config.promptId,
-                    assignmentUnit: "plugin",
+              plannedRuns: Array.from({ length: maxRuns }, () => ({
+                configuration: {
+                  promptVariant: config.promptId,
+                  assignmentUnit: "plugin",
+                },
+                run: {
+                  runId: state.newId(),
+                  targetSnapshotDigest: snapshot.digest,
+                  profile: boundaries.runtimeProfile,
+                  prompt,
+                  lab: {
+                    endpoint: lab.endpoint,
+                    networkName: lab.networkName,
+                    internalIp: lab.internalIp,
                   },
-                  run: {
-                    runId: state.newId(),
-                    targetSnapshotDigest: snapshot.digest,
-                    profile: boundaries.runtimeProfile,
-                    prompt,
-                    lab: {
-                      endpoint: lab.endpoint,
-                      networkName: lab.networkName,
-                      internalIp: lab.internalIp,
-                    },
-                    sourceDirectory: source.directory,
-                    sourceTree: source.tree,
-                    expiresAt: new Date(
-                      now + config.runWallTimeMinutes * 60_000,
-                    ).toISOString(),
-                  },
-                }),
-              ),
+                  sourceDirectory: source.directory,
+                  sourceTree: source.tree,
+                  expiresAt: new Date(
+                    now + config.runWallTimeMinutes * 60_000,
+                  ).toISOString(),
+                },
+              })),
               executor: boundaries.executor,
               attachments: boundaries.attachments,
               admitFinding: admitWordPressFinding,

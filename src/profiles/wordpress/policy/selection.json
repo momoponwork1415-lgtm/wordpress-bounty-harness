@@ -52,5 +52,9 @@
     "recency": 5,
     "surface": 1,
     "highThreat": 15
+  },
+  "runBudget": {
+    "default": 20,
+    "highThreat": 40
   }
 }

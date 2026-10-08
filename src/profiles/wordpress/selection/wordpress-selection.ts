@@ -191,6 +191,9 @@ export function createWordPressSelection(
         version: policy.pinnedVersions?.[slug] ?? observation.stableVersion,
         activeInstallations: observation.activeInstallations,
         highThreatSurface: highThreatSurface(observation, policy),
+        runBudget: highThreatSurface(observation, policy)
+          ? policy.runBudget.highThreat
+          : policy.runBudget.default,
         scoreBreakdown,
         score:
           scoreBreakdown.installations +

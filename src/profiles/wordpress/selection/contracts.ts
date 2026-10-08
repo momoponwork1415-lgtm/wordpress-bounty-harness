@@ -27,6 +27,11 @@ export const wordPressSelectionPolicySchema = z
       surface: z.number().nonnegative(),
       highThreat: z.number().nonnegative(),
     }),
+    /** Discovery runs per target: deeper where the expected reward is higher. */
+    runBudget: z.strictObject({
+      default: z.number().int().positive().max(40),
+      highThreat: z.number().int().positive().max(40),
+    }),
     /** Manual pin: select this version instead of the observed stable version. */
     pinnedVersions: z
       .record(slugSchema, z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/))
@@ -62,6 +67,8 @@ export interface WordPressTargetSelection extends TargetSelection {
   readonly activeInstallations: number;
   /** A public tag matched the policy's High Threat surface list. */
   readonly highThreatSurface: boolean;
+  /** Upper bound on discovery runs for this target; the campaign ceiling still applies. */
+  readonly runBudget: number;
   readonly scoreBreakdown: {
     readonly installations: number;
     readonly recency: number;

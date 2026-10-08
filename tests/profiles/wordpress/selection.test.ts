@@ -65,6 +65,7 @@ const basePolicy = {
   surfaceTagWeights: { form: 5 },
   highThreatTags: ["file manager"],
   scoreWeights: { installations: 10, recency: 0, surface: 1, highThreat: 0 },
+  runBudget: { default: 10, highThreat: 30 },
 };
 
 const failed = (slug: string, reason: "closed" | "not-found") => ({
@@ -176,8 +177,10 @@ describe("WordPress selection public interface", () => {
     expect(plain.map((item) => item.slug)).toEqual(["popular", "files"]);
     expect(plain.find((item) => item.slug === "files")).toMatchObject({
       highThreatSurface: true,
+      runBudget: 30,
       scoreBreakdown: { highThreat: 0 },
     });
+    expect(plain.find((item) => item.slug === "popular")?.runBudget).toBe(10);
 
     const weighted = await selection.select({
       ...policy,
