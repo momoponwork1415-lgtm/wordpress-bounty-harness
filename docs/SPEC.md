@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.5、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
+版: v0.6、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
 
 ## 1. 目的と指標
 
@@ -73,6 +73,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 6. Discovery runの仕様
 
+- 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
 - 入力: 探索prompt（版付き、digestを記録。初期候補は2本: wp2shell由来からCTF前提「脆弱性が必ず存在しRCE / flagへ到達する」と最低6時間の指定だけを外したものと、短い目的prompt。どちらを本番にするかは第10節の評価で同じheld-out case・同じmodel・同じHarnessで比べて決める）、trust境界宣言、分担されたfile集合、Lab endpointとロール別認証情報（Lab内のみ）、読み取り専用source。
 - 許可する操作: sourceの読み取り、LabへのHTTP、Lab DBの読み取り、Lab内でのcanary確認。外向き通信なし。
 - 出力: `Finding[]`（0件可）と、調べた範囲・調べなかった範囲の短い記述。
@@ -112,6 +113,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 2026-10-08時点の方針（判断者の指示と旧リポジトリIssue 214の観測）:
 
+- 攻撃者の権限は未認証とsubscriber（customer相当を含む）に限る。contributor以上を要するものはWordfence / Patchstackのどちらでも報奨に届かない（判断者の指示。Patchstackはcontributorをx0.75のmVDPのみ、editor以上は不受理と公表。Wordfenceの該当文言は提出前に公式ページで再確認）。したがってtrust境界宣言ではcontributor以上を信頼する側に置き、探索の攻撃者位置を未認証とsubscriberに限る。
 - Reflected XSSはWordfenceで明示的に対象外。候補としては記録するが、Wordfence向けのSubmission Candidateにしない。
 - IDOR・broken access control・missing authorizationは、アカウント乗っ取り、権限昇格、サイト全体に及ぶデータ改ざん・漏えいなどの重大な影響へつながる場合だけ対象。影響が個別レコードの読み取りに留まるものは対象外として記録する。判定器はauthz系も技術的に確認するが、scope評価で影響を問う。
 - Wordfenceの閾値は分類と研究者tierで異なる（High Threatは25件以上かつ条件付き、Stored XSS / SQLiは500件以上かつ条件付き、その他は1337 tierで1,000件以上、premiumの1,000件未満は除外）。数値だけでなく、未認証・低権限などの条件を判定する。
