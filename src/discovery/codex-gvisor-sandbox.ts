@@ -80,6 +80,11 @@ export class GvisorCodexSandbox implements CodexSandbox {
 
   async execute(command: CodexSandboxCommand): Promise<CodexSandboxResult> {
     networkSchema.parse(command.grant.dockerNetworkName);
+    if (
+      !/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(command.grant.baseUrl)
+    ) {
+      throw new Error("Provider broker address is invalid");
+    }
     if (!/^Bearer [A-Za-z0-9_-]{32,}$/.test(command.grant.authorization)) {
       throw new Error("Provider grant is invalid");
     }
@@ -197,7 +202,6 @@ export class GvisorCodexSandbox implements CodexSandbox {
         "--workdir=/workspace/main",
         "--env=HOME=/tmp",
         "--env=CODEX_HOME=/tmp/codex",
-        `--env=OPENAI_BASE_URL=${command.grant.baseUrl}`,
         `--env=OPENAI_API_KEY=${token}`,
         "--entrypoint=codex",
         this.#options.image,
