@@ -14,7 +14,11 @@ import type { ExpectedSourceTree } from "../../../infrastructure/canonical-sourc
 import { canonicalJson } from "../../../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
 import type { Ledger } from "../../../ledger/index.js";
-import type { Verifier, VerifierAttempt } from "../../../verification/index.js";
+import {
+  VerifierTransportIncompleteError,
+  type Verifier,
+  type VerifierAttempt,
+} from "../../../verification/index.js";
 import {
   readWordPressFinding,
   type WordPressFinding,
@@ -64,12 +68,6 @@ function lowPrivilegeAccounts(
           },
         }),
   };
-}
-
-export class VerifierTransportIncompleteError extends Error {
-  constructor(readonly reason: "provider" | "sandbox") {
-    super(`Verifier transport incomplete: ${reason}`);
-  }
 }
 
 /** A fresh, isolated transport invocation for each Finding attempt. */
