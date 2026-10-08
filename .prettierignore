@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.private/
+pnpm-lock.yaml
+
+# 人間が書く設計文書は整形ゲートの外に置く。
+**/*.md
