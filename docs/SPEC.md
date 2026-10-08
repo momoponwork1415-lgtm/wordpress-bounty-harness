@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.8、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
+版: v0.9、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
 
 ## 1. 目的と指標
 
@@ -63,8 +63,8 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | --- | --- | --- |
 | `TargetSelection v1` | selection → snapshot | plugin slug、version、スコア内訳、方針の版、選定時刻 |
 | `CampaignInput v1` | snapshot → discovery | Target / Dependency Snapshot digest、trust境界宣言（人間が書く、版付き）、Programme Boundary（匿名化）、model profile digest、prompt digest、停止規則、Lab設定 |
-| `Finding v1` | discovery → verification / ledger | claim、attacker position（unauthenticated / subscriber / …）、破られるproperty、入口からeffectまでのtrace（file、function、行）、既存controlへの評価、Lab内で観測した事実、recipe ref（Private）、discovery run id、snapshot digest |
-| `VerificationResult v1` | verification → ledger / review | `runtime-confirmed` / `contradicted` / `incomplete`、判定器の種類、証拠ref、Lab Setup digest、`incomplete` 理由コード、次の手（verifierが書く）、再現パッケージref（confirmedのみ） |
+| `Finding v1` | discovery → verification / ledger | claim、attacker position（`unauthenticated` / `subscriber` / `customer` のみ）、到達する影響の種別（第8b節の共通分類）、設定前提（`default` / 変更内容）、破られるproperty、入口からeffectまでのtrace（file、function、行）、既存controlへの評価、Lab内で観測した事実、recipe ref（Private）、discovery run id、snapshot digest |
+| `VerificationResult v1` | verification → ledger / review | `runtime-confirmed` / `contradicted` / `incomplete`、判定器の種類、判定器が観測した条件（使ったrole、path / 拡張子の制御、到達role、XSSの発火context、変更したoption、設定前提）、証拠ref、Lab Setup digest、`incomplete` 理由コード、次の手（verifierが書く）、再現パッケージref（confirmedのみ） |
 | `ReviewDecision v1` | review → ledger | 採否、理由コード、重複照合の結果、判断時刻、開いた証拠の一覧 |
 | `SubmissionCandidate v1` | review → review（承認） | Verified Vulnerability ref、programme、scope判定、Draft revision digest、送信先 |
 | `LedgerEvent v1` | 全モジュール → ledger | 型付きunion。全イベントがsnapshot digestとcampaign idを持つ |
@@ -123,7 +123,38 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - 両プログラムとも最新版・既定設定での成立を要する。提出直前に最新版のsnapshotで再検証し、再現パッケージは遠隔攻撃者の視点の手順（HTTPリクエスト、画面画像）で書き、WP-CLIなどサーバー側だけの手順を含めない。
 - 公開資料間で矛盾するときは `in-scope` にせず `ambiguous` として人間へ回す。
 
-## 9. 台帳
+## 8b. 対象範囲の守らせ方
+
+対象範囲は4か所で、それぞれ違う強さで効かせる。promptだけに頼らない。
+
+| 場所 | 手段 | 強さ |
+| --- | --- | --- |
+| `selection` | 対象外資産（作者、配布停止、ベンダー側service）を除外リストで落とす。閾値（500件以上、WordPress.org掲載）を方針ファイルで持つ | 機械的。対象が入らない |
+| `lab` | discoveryとverifierに渡す認証情報を未認証・subscriber・customer（WooCommerce有効時）に限る。contributor以上と管理者の認証情報は渡さない。設定は既定のまま、一般的な利用範囲の初期データ（公開フォーム1つ等）はprofileのsetup manifestで入れ、Lab Setup digestに記録する | 機械的。contributor以上の経路は試せない。設定変更もできない |
+| `discovery` | 目的promptに到達すべき影響の共通分類（下表）と報奨順を書き、trust境界宣言でcontributor以上と管理者の明示設定を信頼側に置く | 誘導。agentは他も報告してよいが、台帳で分類される |
+| `verification` と `review` | 判定器の成功条件をプログラムの受理条件に合わせる（下表）。scope評価はFindingと判定器の観測だけから、方針ファイルの規則で `in-scope` / `out` / `ambiguous` を出す。agentの自己申告は使わない | 機械的。提出候補にならない |
+
+影響の共通分類（両プログラムの受理条件を1つの語彙にしたもの。判定器とscope評価が共有する）:
+
+| 分類 | 判定器の成功条件 | Wordfence | Patchstack |
+| --- | --- | --- | --- |
+| `rce` / `php-file-write` | Execution Canaryが実行される。SVG、二重拡張子、安全な拡張子内のコードは不可 | High Threat ≥25 | 受理 |
+| `arbitrary-file-read` / `delete` / `download` | canaryファイルに届く。pathと拡張子の両方を攻撃者が決められたことを判定器が記録する | High Threat（PHPファイル）/ その他 ≥500 | 受理（path + 拡張子の完全制御が条件） |
+| `lfi` / `rfi` | 同上 | その他 ≥500 | 受理（同上） |
+| `sqli` | canary行の読み出しまたは書き込み。Labは `wp_magic_quotes` 既定のまま | Common ≥500 | 受理 |
+| `options-update` | Labが置いたcanary optionまたは重大なoption（`users_can_register`、`default_role`、`siteurl`、`admin_email` 等）が低権限から変わる | High Threat ≥25 | 受理（重大な影響が条件） |
+| `privesc-to-admin` / `auth-bypass-to-admin` / `account-takeover` | 低権限主体が管理者の認証状態または管理者相当の能力を得る | High Threat ≥25 | 受理 |
+| `privesc-to-contributor+` / `auth-bypass-non-admin` | 低権限主体がcontributor以上の能力または他主体の認証状態を得る | その他 ≥500 | 受理（contributor以上が条件） |
+| `sensitive-object-access` | API key / secret、password hash、backup / SQLファイルなどのcanary相当に低権限から届く | その他 ≥500（Sensitive Information Disclosure） | 受理（機微な対象が条件） |
+| `content-deletion` | 他主体または全体のコンテンツ（canary投稿）が低権限から消える | その他 ≥500 | broken access controlの条件次第 |
+| `stored-xss` | 低権限主体のnonce付き値が、未認証訪問者が見る前面ページまたは全管理画面で実行されcanary受信先へ届く。発火contextを記録 | Common ≥500 | 受理（サイト全体に効くことが条件。それ以外はmVDPのみ） |
+| `reflected-xss` | nonceを要しないURLで実行される | 対象外 | 受理（JS実行、nonce不要が条件） |
+| `csrf-to-write` | 上記の書き込み系へ連鎖する | 対象外 | 受理（連鎖が条件） |
+| `missing-authz` / `idor`（到達先なし） | 判定器は技術的に確認するが分類は到達先が決める | 対象外 | 機微な対象以外は対象外 |
+
+分類に入らない主張（DoS、open redirect、SSRF、情報列挙等）は `other` として台帳に残し、探索の目的にも提出候補にもしない。
+
+
 
 - イベント例: `target-selected`、`snapshot-frozen`、`lab-provisioned`、`discovery-run-started / finished`、`finding-recorded`、`verification-finished`、`review-decided`、`scope-assessed`、`draft-saved`、`external-action-authorized`、`submission-outcome`。
 - 規則: 追記のみ。全イベントにsnapshot digest。判定系イベントはdigest一致時のみ有効。setup失敗はdiscovery試行に数えない。
