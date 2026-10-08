@@ -73,7 +73,7 @@ harness eval prospective --since 2026-10 --advisories <file>   # 後日公開さ
 harness eval score --set held-out --cases <slugs> --trials 1   # 任意。大きな設計変更時だけ、予算内で
 ```
 
-- 本番A/B: 同じ対象でrunを構成A / Bに分担して回す。どちらが見つけても提出できる。
+- 本番A/B: 同じ対象でrunを構成A / Bに分担して回す。どちらが見つけても提出できる。現在の軸は履歴有無だけ。campaign設定に `"ablation": {"axis": "history", "armBFraction": 0.5}` を書くと、runnerが各runへarm a（履歴なし）/ b（履歴あり）を割り当てて台帳のrun記録に残し、`ledger funnel --campaign <id>` の `by arm:` にarm別のrun数・Finding数・confirmed数を出す。履歴は安定版の公開日時（WordPress.orgの最終更新）より前の公開記録だけで、版を固定した対象やmirrorが使えない対象は全runがarm aとして記録される。
 - 前向き評価: 四半期ごとに、公開されたadvisoryで本番台帳を再採点し、見逃しを数える。
 - held-out: 既定では回さない。回すならcutoff後の補助4件を優先し、試行数は予算で決める。
 - held-outの結果を見てpromptを変えたら、そのcaseは開発セットへ移す。

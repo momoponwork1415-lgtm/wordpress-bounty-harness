@@ -1,4 +1,6 @@
+import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -70,6 +72,12 @@ async function harness(
       readonly default: number;
       readonly highThreat: number;
     };
+    /** Arm b fraction of a history ablation in the campaign config. */
+    readonly ablation?: number;
+    /** False selects the observed stable version instead of the 3.3.1 pin. */
+    readonly pinned?: boolean;
+    /** Opens a synthetic local Wordfence mirror holding one public record. */
+    readonly history?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
@@ -224,6 +232,7 @@ async function harness(
 
   const attachments = new ProviderAttachmentStore(join(root, "provider"));
   const prompts: string[] = [];
+  const histories: string[] = [];
   const boundaries: WordPressCampaignBoundaries = {
     selection,
     freeze: (target) => snapshots.freeze(target),
@@ -234,6 +243,7 @@ async function harness(
     executor: {
       async execute(run: DiscoveryTransportRun) {
         prompts.push(run.prompt);
+        histories.push(run.campaignInput.history.mode);
         const report = {
           findings:
             prompts.length === 1
@@ -306,6 +316,9 @@ async function harness(
       ...(options.scopeFacts === undefined
         ? {}
         : { scopeFacts: options.scopeFacts }),
+      ...(options.history === true
+        ? { wordfenceHistory: syntheticMirror(root) }
+        : {}),
       boundaries: async (_config, opened) => {
         state = opened;
         return boundaries;
@@ -320,7 +333,8 @@ async function harness(
       schemaVersion: 1,
       id: "synthetic-pin",
       candidateSlugs: ["synthetic-plugin"],
-      pinnedVersions: { "synthetic-plugin": "3.3.1" },
+      pinnedVersions:
+        options.pinned === false ? {} : { "synthetic-plugin": "3.3.1" },
       minimumActiveInstallations: 500,
       maximumObservationAgeDays: 2,
       maximumUpdateAgeDays: 365,
@@ -344,6 +358,9 @@ async function harness(
         text: "Synthetic programme boundary",
       },
       stopRules: { maxRuns: 6, noFindingRuns: 2 },
+      ...(options.ablation === undefined
+        ? {}
+        : { ablation: { axis: "history", armBFraction: options.ablation } }),
       wordpressVersion: "6.8",
       lab: {
         siteTitle: "Synthetic",
@@ -380,7 +397,61 @@ async function harness(
     });
     return { code, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
   };
-  return { run, configPath, keysPath, prompts, docker, root };
+  return { run, configPath, keysPath, prompts, histories, docker, root };
+}
+
+/** A local mirror with one public record for the synthetic plugin, published before its last update. */
+function syntheticMirror(root: string) {
+  const databasePath = join(root, "wordfence.sqlite");
+  const statePath = join(root, "wordfence-state.json");
+  const db = new Database(databasePath);
+  db.exec(`
+    CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE vulnerabilities (id TEXT PRIMARY KEY, title TEXT NOT NULL, published TEXT, record_json TEXT NOT NULL);
+    CREATE TABLE software (vulnerability_id TEXT NOT NULL, slug TEXT NOT NULL, type TEXT, name TEXT, PRIMARY KEY(vulnerability_id, slug));
+    CREATE TABLE signals (vulnerability_id TEXT NOT NULL, slug TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(vulnerability_id, slug, kind, value));
+  `);
+  for (const [key, value] of [
+    ["projection_schema", "wordfence-history/v1"],
+    ["content_sha256", "synthetic-digest"],
+    ["record_count", "1"],
+  ])
+    db.prepare("INSERT INTO metadata VALUES (?, ?)").run(key, value);
+  db.prepare("INSERT INTO vulnerabilities VALUES (?, ?, ?, ?)").run(
+    "synthetic-public-record",
+    "Synthetic public title",
+    "2026-08-01 00:00:00",
+    JSON.stringify({
+      software: [
+        {
+          slug: "synthetic-plugin",
+          affected_versions: { "1.0 - 1.4": {} },
+          patched_versions: ["1.5"],
+        },
+      ],
+    }),
+  );
+  db.prepare("INSERT INTO software VALUES (?, ?, ?, ?)").run(
+    "synthetic-public-record",
+    "synthetic-plugin",
+    "plugin",
+    "Synthetic",
+  );
+  db.close();
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      schema_version: "wordfence-cache/v1",
+      content_sha256: "synthetic-digest",
+      record_count: 1,
+      last_successful_at: "2026-10-01T00:00:00Z",
+      stale_fallback: false,
+    }),
+  );
+  return {
+    databasePath,
+    statePath,
+  };
 }
 
 const programmeRef = {
@@ -497,6 +568,52 @@ describe("harness CLI vertical slice", () => {
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("stopped by max-runs");
     expect(prompts).toHaveLength(1);
+  });
+
+  it("splits runs into history arms and reads runs and Findings per arm from the ledger", async () => {
+    const { run, configPath, histories } = await harness({
+      ablation: 0.5,
+      pinned: false,
+      history: true,
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(histories).toEqual(["none", "catalog", "none"]);
+    const funnel = await run("ledger", "funnel", "--campaign", "campaign-1");
+    expect(funnel.stdout).toContain(
+      "  history:a: runs 2  findings 2  confirmed 1",
+    );
+    expect(funnel.stdout).toContain(
+      "  history:b: runs 1  findings 0  confirmed 0",
+    );
+  });
+
+  it("keeps every run in arm a when the pinned version has no history cutoff", async () => {
+    const { run, configPath, histories } = await harness({
+      ablation: 0.5,
+      history: true,
+    });
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    );
+    expect(histories).toEqual(["none", "none", "none"]);
+    const funnel = await run("ledger", "funnel", "--campaign", "campaign-1");
+    expect(funnel.stdout).toContain("  history:a: runs 3");
+    expect(funnel.stdout).not.toContain("history:b");
   });
 
   it("lists the policy selection and runs only the named target or --all", async () => {

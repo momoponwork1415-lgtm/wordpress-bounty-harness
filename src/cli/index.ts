@@ -170,6 +170,14 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
   if (categories.length > 0) lines.push("by category:");
   for (const category of categories)
     lines.push(`  ${category}: ${stages(funnel.byCategory[category]!)}`);
+  const arms = Object.keys(funnel.byArm).sort();
+  if (arms.length > 0) lines.push("by arm:");
+  for (const arm of arms) {
+    const counts = funnel.byArm[arm]!;
+    lines.push(
+      `  ${arm}: runs ${counts.runs}  findings ${counts.findings}  confirmed ${counts.confirmed}`,
+    );
+  }
   return lines;
 }
 
