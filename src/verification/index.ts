@@ -54,7 +54,12 @@ export interface Judge<Finding, Handle extends LabHandle> {
   }): Promise<JudgeObservation>;
 }
 export type JudgeObservation =
-  | { readonly status: "observed"; readonly evidenceDigest: string }
+  | {
+      readonly status: "observed";
+      readonly evidenceDigest: string;
+      /** Facts the judge observed, e.g. attacker role and reached role. */
+      readonly conditions: Readonly<Record<string, string>>;
+    }
   | { readonly status: "not-observed" }
   | {
       readonly status: "incomplete";
@@ -258,6 +263,7 @@ export class Verification<
           status: "runtime-confirmed",
           judgeId: judge.id,
           proofKind: "nonce-canary",
+          conditions: observation.conditions,
           evidenceDigest: observation.evidenceDigest,
         },
         reconstruction,

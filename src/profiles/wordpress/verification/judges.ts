@@ -92,7 +92,11 @@ function accountTakeoverJudge(options: {
           observedUser: observed.login,
         }),
       });
-      return { status: "observed", evidenceDigest };
+      return {
+        status: "observed",
+        evidenceDigest,
+        conditions: { reachedPrincipal: "canary-user" },
+      };
     },
   };
 }

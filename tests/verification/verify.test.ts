@@ -119,6 +119,7 @@ async function fixture(
       if (options.judge === "not-observed") return { status: "not-observed" };
       return {
         status: "observed",
+        conditions: { attackerRole: "subscriber", reachedRole: "synthetic" },
         evidenceDigest: await store.putFiles({
           "confirmed-route.json": canonicalJson({
             snapshotDigest: observed.snapshotDigest,
@@ -175,6 +176,9 @@ describe("verification public interface", () => {
       status: "runtime-confirmed",
       judgeId: "synthetic-canary",
       proofKind: "nonce-canary",
+    });
+    expect(result).toMatchObject({
+      conditions: { attackerRole: "subscriber", reachedRole: "synthetic" },
     });
     expect(calls).toEqual({ provision: 1, verifier: 1, teardown: 1 });
     expect(ledger.funnel("campaign-1")).toMatchObject({
