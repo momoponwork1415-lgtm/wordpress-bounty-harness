@@ -1,0 +1,143 @@
+# 設計の読み解き（理解のための1ページ）
+
+正本は [SPEC.md](SPEC.md) と [ADR](adr/)。この文書は仕様を「1つのプラグインが通る道」に沿ってかみ砕いたもので、規則の追加はしない。食い違えば正本が勝つ。完成後の操作は [OPERATIONS.md](OPERATIONS.md)。
+
+## 1. 全体の考え方
+
+3つの原則でできている。
+
+- **機械が流し、人間は最後だけ触る。** 選定、探索、検証までは無人で回る。人間が見るのは検証を通ったものだけ。未検証の候補を人間が見ても判断の質が出ず、人間が律速になるため。
+- **「見つけた」と「本当だ」を分ける。** 探索エージェントが出すのは主張（Finding）で、確認ではない。確認は別コンテナの検証役（Verifier）と、Harness自身が持つ決定論的な判定器が行う。エージェントが「できた」と言っても、canaryが回収されなければ確認にならない。
+- **全部を記録して、後から測る。** 台帳に全イベントを追記し、どこで何件減ったか（funnel）を読む。Harnessを変えたら、答えが分かっている問題で採点して差を数字で見る。
+
+旧リポジトリ（wordpress-harness）は「人間の判断」と「prompt」が中心にあった。新リポジトリは「判定器」と「台帳」が中心にある。
+
+```mermaid
+flowchart LR
+  S[selection<br/>方針で機械選定] --> N[snapshot<br/>digestで固定]
+  N --> L[lab<br/>gVisor + canary]
+  L --> D[discovery<br/>短命run × N]
+  D -->|Finding| V[verification<br/>Verifier → 判定器]
+  V -->|confirmed / contradicted / incomplete| G[(ledger<br/>追記専用)]
+  G --> R[review<br/>人間: 再現 → scope → 文案 → 承認]
+  R -->|提出は人間が手で| P[Wordfence / Patchstack]
+  P -->|転帰| G
+  G -.読むだけ.-> E[evaluation<br/>鍵で採点]
+```
+
+## 2. 1つのプラグインが通る道
+
+例: インストール数3万、WordPress.org配布の投稿フォーム系プラグイン。
+
+### (1) selection: 今週の対象を機械的に決める
+
+方針ファイルを読み、WordPress.orgの一覧から条件に合うものを順位付けする。条件は「500件以上」「WordPress.org掲載」「最近更新がある」「作者がAutomattic / Facebook / Google / SiteGround / Yoastでない」「配布停止でない」。順位は攻撃面の大きさ（未認証で届くAJAX / REST / shortcodeの多さなど）で付ける。人間の承認はない。方針ファイルを直せば順位が変わる。
+
+### (2) snapshot: 調べるコードを固定する
+
+プラグインのzipとWordPress本体を取得し、ファイル一覧とハッシュから1つのdigestを作る。以後の全記録はこのdigestを持つ。「このFindingはどの版のコードに対する主張か」が常に分かり、別の版の検証結果と混ざらない。
+
+### (3) lab: 壊してよいWordPressを使い捨てで立てる
+
+gVisor（隔離の強いコンテナ）の中に WordPress + MySQL + 対象プラグインを立てる。設定は既定のまま。「公開フォームが1つある」程度の一般的な初期データはprofileのsetup manifestで入れ、その内容もdigestに記録する。そして仕掛けを置く。
+
+| 仕掛け | 何を置くか | 何の判定に使うか |
+| --- | --- | --- |
+| ロール別アカウント | subscriber、customer（WooCommerce時）と、基準記録用のcontributor〜admin | 探索・検証にはsubscriber以下だけ渡す。contributor以上は「正常動作の記録」にしか使わない |
+| canary option | `wp_options` にランダム値の行 | SQLiで読み出されたか、options更新で書き換わったか |
+| canary file | 推測不能な名前と中身のファイル | 任意ファイル読み取り / LFIで中身が返ったか |
+| canary user | 他人のアカウント | 乗っ取りで認証状態を得たか |
+| Execution Canary | 実行されると記録が残る仕掛け | RCE / PHPファイル書き込みが本当に実行に至ったか |
+| canary受信先 | Lab内のHTTP受け口 | XSSがheadless browserで本当に実行されたか |
+
+### (4) discovery: 短い探索を独立に何十回も回す
+
+1回のrunが受け取るもの:
+
+- 探索prompt（版付き、digest記録。初期候補はwp2shell由来と短い目的promptの2本で、評価で選ぶ）
+- trust境界宣言（「未認証とsubscriberが攻撃者。contributor以上と管理者の設定は信頼する」）
+- 担当するファイルの集合（プラグインを入口単位で分割したうちの1つ）
+- Labの接続先と subscriber / customer の認証情報
+- 読み取り専用のソース
+
+渡さないもの: 既知の脆弱性情報、前のrunの結果、管理者やcontributor以上の認証情報、外向き通信。
+
+runの中でエージェントはソースを読み、入口（AJAX action、RESTルート、shortcode）から辿り、「このcheckが欠けている」と思ったらLabに実際にリクエストして確かめる。そして主張を書く。主張には、攻撃者の立場、到達する影響の分類（SPEC第8b節の共通分類）、入口から効果までの経路（ファイル・関数・行）、既存のcheckをどう評価したか、Labで観測した事実、再現の手がかり、が必須。出せなければ0件で終わり、「調べた範囲と調べなかった範囲」だけ残す。
+
+1つの対象に対して、ファイル分担を変えながら最大40回、同時4つ。新規Findingが4回続けて出なければ止まる。長い1セッションでなく短い多数にする理由は、文脈が肥大しないこと、並列化と費用見積もりが簡単なこと、同じ場所を複数runが独立に指せばそれ自体が信号になること。
+
+### (5) verification: 別のコンテナで反証し、判定器で決める
+
+各Findingは新しいコンテナのVerifierに渡される。Verifierは探索時の会話を持たず、Findingとソースと新しいLabだけで「本当か」を試す。役割は再現手順の環境不備を直すことと反証で、再探索はしない。
+
+最後にHarness所有の判定器が結果を決める。判定器は決定論的で、分類ごとに成功条件が決まっていて、プログラムの受理条件に合わせてある。
+
+- ファイルアップロード: 「Execution Canaryが実行された」だけが成功。`.php.png` や安全な拡張子内のコードは成功にならない。
+- stored XSS: 「subscriberが置いた値が、未認証訪問者が見るページか全管理画面で実行され、canary受信先に届いた」が条件。文字列が反射しただけでは成功にならない。
+- SQLi: canary行の読み出しか書き込み。Labは `wp_magic_quotes` 既定のまま。
+- 権限昇格 / 乗っ取り: 低権限主体が管理者（またはcontributor以上）の認証状態か能力を得る。
+- ファイル系 / LFI: canaryファイルに届き、pathと拡張子の両方を攻撃者が決められたことを記録する。
+
+結果は3つ。
+
+| 結果 | 意味 | その後 |
+| --- | --- | --- |
+| `runtime-confirmed` | 判定器の条件を満たした | 再現パッケージを生成し、レビュー列へ |
+| `contradicted` | 手順どおりに実行したが条件を満たさず、Verifierが反証を書けた | 件数だけ記録 |
+| `incomplete` | 環境、前提、手順、観測、証拠、digest不一致のどれかが欠けた | 理由コードと次の手を付けてレビュー列へ |
+
+「検証できなかった」を「誤検知」と呼ばない。環境が原因で捨てると当たりを失う。
+
+### (6) ledger: 全部を追記する
+
+選定、snapshot、Lab供給、各run、各Finding、各検証結果、レビュー判断、scope評価、文案、承認、提出転帰が1つの台帳に入る。削除や上書きはなく、判定系のイベントはsnapshot digestが一致するときだけ有効。payloadや画面画像は台帳に入れず、Git外のPrivate Evidenceにdigest参照だけで結ぶ。
+
+### (7) review: 人間が検証済みだけを見る
+
+見るのは `runtime-confirmed` と、次の手付きの `incomplete`。confirmedには再現パッケージが付く。
+
+- 手動手順（遠隔攻撃者の視点。WP-CLIのようなサーバー側操作は含めない）
+- `requests` だけで動くPythonスクリプト
+- Labの再構築情報（WordPress版、プラグイン版とdigest、初期データ、ロール）
+- 判定器が取った証拠（HTTP記録、画面画像、canary回収ログ）
+
+人間がやることは順に: 自分で再現する → 意味のある影響か・意図された動作でないかを判断する → ローカルのWordfence履歴DBで重複を照合する → プログラムごとのscope評価を見る（WordfenceとPatchstackで別に出る。Reflected XSSとCSRFはPatchstackだけ）→ AIが作った文案の版を承認する → 外部行動を承認する → 自分でプログラムの画面から送る → 転帰を台帳に戻す。提出直前には最新版のsnapshotで再検証する（両プログラムが「最新版で成立」を要求する）。
+
+## 3. 対象範囲をどう守らせるか
+
+promptだけに頼らず、4か所で違う強さで効かせる（SPEC第8b節）。
+
+| 場所 | 手段 | 強さ |
+| --- | --- | --- |
+| selection | 対象外資産と閾値を方針ファイルで落とす | 機械的。対象が入らない |
+| lab | 渡す認証情報を未認証・subscriber・customerに限る。設定は既定のまま | 機械的。contributor以上の経路は試せず、設定変更もできない |
+| discovery | 目的promptに影響の分類と報奨順を書く。trust境界宣言でcontributor以上を信頼側に置く | 誘導。他も報告してよいが台帳で分類される |
+| verification / review | 判定器の成功条件を受理条件に合わせる。scope評価は観測と方針ファイルの規則だけから出す | 機械的。提出候補にならない |
+
+## 4. 守り（不変条件を仕組みで成立させる）
+
+- 既知脆弱性の情報を探索に渡さない。渡すと「見つけた」のか「知っていた」のか区別がつかず、未知を見つける能力を測れない。prompt雛形には混入検査のテストが付く。
+- 対象コードはgVisorの中でしか動かさない。隔離が使えないときは止まり、通常のDockerへ黙って落ちない。
+- エージェントに渡さないもの: provider認証情報（egress brokerが代理で通す）、管理者とcontributor以上のアカウント、コンテナソケット、外向き通信。渡さないので使えない。
+- 確認は判定器だけ。証明はcanaryの回収に限り、リバースシェルや永続化は使わない。
+- 外部送信はHarnessが行わない。承認を記録するだけで、送るのは人間。
+
+## 5. 測り（Harnessを変えたとき良くなったかを数字で答える）
+
+- 答えの鍵: 本人発見7件＋補助4件。開発セット2件はprompt調整に使い、held-out 9件は採点だけに使う。鍵はGit外に置き、開発セッションにも探索にも見せない。
+- 採点: 機械で「経路が鍵の場所と重なるか」を必要条件として見る。次に人間が盲検で「場所、原因、攻撃者条件、影響」の4要素を見て target-hit / partial / non-target を付ける。本当の成功は「target-hit かつ runtime-confirmed」。
+- 誤検知の代替: 修正版のプラグインを同じ条件で回し、鍵と同じ性質を主張したFindingだけを誤警報と数える。
+- 比較: promptを固定して、Verifier有無、判定器有無、Lab内実行有無、分担有無で差を取る。prompt比較（wp2shell由来 vs 短い目的prompt）はHarnessを固定して別に行う。「promptが効いたのかHarnessが効いたのか」を分離する。
+- 前向き評価: 本番の台帳を、後日公開されたadvisoryで採点する。本番で見逃したものが分かる、最も信頼できる数字。
+
+## 6. 旧リポジトリから何を持ってきて、何を新しく作るか
+
+| 持ってくる | 持ってこない | 新しく作る |
+| --- | --- | --- |
+| snapshot固定、gVisor Lab供給、Codex adapterと認証ブローカー、Wordfence観測、scope評価、Draft / Authorization | Research Campaignsの内部、継続Campaign、条件付き3試行、Human Candidate Review、Approved Target Batch、旧スキーマ | discoveryの多数run制御、Verifier、判定器、台帳、review CLI、evaluation |
+
+## 7. 参照した設計
+
+- Anthropic find-and-fix loop: 短い目的prompt、短命runの多数独立実行、独立verifier、「PoC失敗≠誤検知」。
+- Google Mantis: 固定段階は採らない。記録の規則（snapshot gating、再現したものだけ数える、重複判定は安全側）だけ採る。
+- OpenAI Codex Security、Cloudflare VDH、XBOW: 隔離コンテナでの検証、段階別の記録とfunnel、決定論的な判定器。

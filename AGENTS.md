@@ -6,6 +6,7 @@
 
 1. [docs/SPEC.md](docs/SPEC.md) — 目的、不変条件、モジュール境界、受け渡し契約、最初の縦断スライス。
 2. [docs/adr/](docs/adr/) — 番号順。設計の理由と、採らなかった選択肢。
+3. [docs/DESIGN-WALKTHROUGH.md](docs/DESIGN-WALKTHROUGH.md) — 全体を1つの流れで理解したいときだけ。規則は増やさない。
 
 ## 不変条件（SPEC.md 第2節）
 
