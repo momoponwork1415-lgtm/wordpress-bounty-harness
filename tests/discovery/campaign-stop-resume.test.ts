@@ -69,6 +69,7 @@ async function open() {
     readonly prefix: string;
     readonly replies: (call: number) => Reply;
     readonly concurrency?: number;
+    readonly dailyRunCap?: number;
   }) =>
     runDiscoveryCampaign({
       campaignId: "campaign-1",
@@ -78,6 +79,10 @@ async function open() {
       ...(options.concurrency === undefined
         ? {}
         : { concurrency: options.concurrency }),
+      ...(options.dailyRunCap === undefined
+        ? {}
+        : { dailyRunCap: options.dailyRunCap }),
+      clock: () => new Date("2026-10-08T09:00:00Z"),
       ledger,
       attachments,
       evidence,
@@ -261,5 +266,38 @@ describe("discovery campaign stop and resume", () => {
       "completed",
     ]);
     expect(result.findingsRecorded).toBe(2);
+  });
+
+  it("stops at the daily run cap counted across campaigns in the same UTC day", async () => {
+    const { ledger, campaign, finished } = await open();
+    for (const [identity, occurredAt] of [
+      ["earlier-today", "2026-10-08T01:00:00Z"],
+      ["yesterday", "2026-10-07T23:59:59Z"],
+    ] as const)
+      await ledger.append({
+        schemaVersion: 1,
+        identity,
+        campaignId: "campaign-0",
+        snapshotDigest: digest,
+        occurredAt,
+        type: "discovery-run-started",
+        runId: identity,
+        labId: "lab-0",
+        history: { mode: "none" },
+        configuration: {
+          promptVariant: "short-objective",
+          assignmentUnit: "plugin",
+        },
+      });
+    const capped = await campaign({
+      prefix: "capped",
+      dailyRunCap: 3,
+      replies: () => "empty",
+    });
+    expect(capped).toMatchObject({ runCount: 2, stoppedBy: "daily-run-cap" });
+    expect(
+      finished().filter((event) => event?.campaignId === "campaign-1"),
+    ).toHaveLength(2);
+    expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
   });
 });
