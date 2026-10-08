@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.6、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
+版: v0.7、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
 
 ## 1. 目的と指標
 
@@ -111,12 +111,13 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 技術的な真偽（`runtime-confirmed`）とプログラム対象範囲は分ける。対象範囲は `review` で提出先ごとに評価し、検証を止める条件にしない。方針は [src/profiles/wordpress/policy/programme-scope.md](../src/profiles/wordpress/policy/programme-scope.md) に観測日付きで置き、提出前に公式ページで再確認する。
 
-2026-10-08時点の方針（判断者の指示と旧リポジトリIssue 214の観測）:
+2026-10-08時点の方針（Wordfence公式ページの写しとPatchstack 2026年版ガイドライン、判断者の指示）:
 
-- 攻撃者の権限は未認証とsubscriber（customer相当を含む）に限る。contributor以上を要するものはWordfence / Patchstackのどちらでも報奨に届かない（判断者の指示。Patchstackはcontributorをx0.75のmVDPのみ、editor以上は不受理と公表。Wordfenceの該当文言は提出前に公式ページで再確認）。したがってtrust境界宣言ではcontributor以上を信頼する側に置き、探索の攻撃者位置を未認証とsubscriberに限る。
-- Reflected XSSはWordfenceで明示的に対象外。候補としては記録するが、Wordfence向けのSubmission Candidateにしない。
-- IDOR・broken access control・missing authorizationは、アカウント乗っ取り、権限昇格、サイト全体に及ぶデータ改ざん・漏えいなどの重大な影響へつながる場合だけ対象。影響が個別レコードの読み取りに留まるものは対象外として記録する。判定器はauthz系も技術的に確認するが、scope評価で影響を問う。
-- Wordfenceの閾値は分類と研究者tierで異なる（High Threatは25件以上かつ条件付き、Stored XSS / SQLiは500件以上かつ条件付き、その他は1337 tierで1,000件以上、premiumの1,000件未満は除外）。数値だけでなく、未認証・低権限などの条件を判定する。
+- 攻撃者の権限は未認証とsubscriber / customer相当に限る。Wordfenceは contributor / author（中間権限）と administrator / editor / shop manager / `unfiltered_html`（PR:H）を要するものを明示的に対象外にしている。Patchstackはcontributorをx0.75のmVDPのみ、editor以上は不受理。したがってtrust境界宣言ではcontributor以上を信頼する側に置き、探索の攻撃者位置を未認証とsubscriberに限る。
+- Wordfenceの分類と閾値（判断者は1337 tier）: High Threat（任意PHP file upload / read / delete、任意options更新、RCE、管理者への認証回避 / 権限昇格）は25件以上、Stored XSS / SQLiは500件以上、その他は500件以上。1,000件未満はWordPress.org掲載が条件、premiumは1,000件未満を除外。
+- Wordfenceの対象外資産（WordPress core、Automattic、Facebook、Google、SiteGround、Yoast、配布停止、ベンダー側web service）は `selection` の除外リストに入れる。
+- Reflected XSS、CSRF、Missing Authorization、IDORはWordfenceで明示的に対象外。候補としては記録するが、Submission Candidateにしない。ただし同じ欠陥が任意options更新、任意コンテンツ削除、権限昇格、認証回避、機微情報の漏えいに到達する場合は、到達先の種別として対象。判定器はauthz系も技術的に確認し、scope評価で到達先を問う。
+- Wordfenceの却下条件のうちLabと判定器に効くもの: `wp_magic_quotes` 無効前提のSQLi、SVG / 二重拡張子 / 安全な拡張子内のコードによるupload、nonceで守られたactionのmissing authorization、管理者の誤設定前提。Labは既定設定で供給し、file upload系はExecution Canaryの実行で証明する。
 - 公開資料間で矛盾するときは `in-scope` にせず `ambiguous` として人間へ回す。
 
 ## 9. 台帳

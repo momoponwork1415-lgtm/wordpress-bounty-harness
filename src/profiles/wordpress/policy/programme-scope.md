@@ -4,12 +4,17 @@
 
 ## Wordfence
 
-- 公式: https://www.wordfence.com/threat-intel/bug-bounty-program/
-- Reflected XSSは明示的に対象外。
-- 閾値は分類と研究者tierで異なる。High Threatは25件以上かつ条件付き、Stored XSS / SQLiは500件以上かつ条件付き、その他は1337 tierで1,000件以上。premiumで1,000件未満は除外。
-- 攻撃者の権限: 未認証とsubscriber（WooCommerceのcustomer相当を含む）だけを提出候補にする。contributor以上を要するものは対象外として記録する（判断者の指示、2026-10-08）。公式規約の該当文言は未取得（wordfence.comがbot検査で取得できず）。検索結果では規約がPR:H（administrator / editor）を報奨対象外としていることだけ確認できた。提出前に公式ページでcontributorの扱いを再確認する。
-- 権限昇格は、未認証またはsubscriberからcontributor以上へ上がるものだけを対象にする。
-- IDOR・broken access control・missing authorizationは、アカウント乗っ取り・権限昇格・サイト全体への影響に到達する場合だけ提出候補にする（判断者の方針）。
+- 公式: https://www.wordfence.com/threat-intel/bug-bounty-program/ 。本文の写しは [wordfence-scope-2026-10-08.md](wordfence-scope-2026-10-08.md)（2026-10-08、判断者がブラウザで取得。Harnessからは自動取得できない）。
+- 攻撃者の権限: 未認証、またはsubscriber / customer相当だけ。PR:H（administrator、editor、shop manager、`unfiltered_html` を持つrole）と中間権限（contributor、author、管理者が付与するrole）を要するものは対象外。
+- 分類と閾値（判断者は1337 tier）:
+  - High Threat（≥25件。25〜999件はWordPress.org掲載が条件）: 任意PHPファイルのupload / read / delete、任意options更新、RCE、管理者への認証回避、管理者への権限昇格。
+  - Common and Dangerous（≥500件。500〜999件はWordPress.org掲載が条件。premiumは1,000件未満を除外）: Stored XSS、SQLi。
+  - その他（1337 tierで≥500件）: 任意コンテンツ削除、任意ファイルのdownload / read / delete、LFI / RFI、directory traversal、非管理者への権限昇格 / 認証回避、機微情報の漏えい、gadget付きPHP object injection、開発者が仕込んだbackdoor。
+- 対象外の資産: WordPress core、Automattic、Facebook、Google、SiteGround、Yoastの製品。提出時点で配布停止のplugin / theme。ローカルで動かないベンダー側のweb service。`selection` の除外リストに入れる。
+- 明示的に対象外の種別: Reflected XSS、CSRF、Missing Authorization、IDOR、任意shortcode実行、DoS、限定的なfile upload、基本的な情報露出、gadgetなしPHP object injection、open redirect、SSRF、race condition依存、cache poisoning、API keyの更新 / 読み取り、非公開 / 下書き投稿の閲覧、業務ロジックの欠陥、過度なbrute force依存、管理者が明示的に権限を与える前提のもの。
+- Missing Authorization / IDORは種別としては対象外だが、同じ欠陥が「任意options更新」「任意コンテンツ削除」「権限昇格」「認証回避」「機微情報の漏えい」に到達すれば、その到達先の種別として対象になる。scope評価では到達先で分類する（判断者の方針と一致）。
+- 判定器と Lab 構成に効く却下条件: `wp_magic_quotes` 無効が前提のSQLiは不可（Labは既定設定のまま）。SVG upload経由のXSS、二重拡張子、安全な拡張子内のPHPコードは不可（file upload系はExecution Canaryの実行で証明する）。nonceで守られていて低権限に露出しないactionのmissing authorizationは不可。管理者の誤設定が前提のものは不可（Labの設定は既定または一般的な利用範囲に限る）。
+- 提出前に公式ページで再確認し、差分があれば新しい日付の写しを置く。
 
 ## Patchstack
 
