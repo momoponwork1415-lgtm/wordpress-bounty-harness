@@ -127,6 +127,8 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 ## 10. 評価
 
 - Answer Key（Research外に保管）: 入口（hook / route / AJAX action）、破られるproperty、欠けているcheck、攻撃者権限、到達する影響、許容file / function集合、公開日、model cutoff。
+- 評価セットの構成（2026-10-08時点、11件）: 本人発見の公開7件（旧リポジトリIssue 213）＋第三者の補助4件（任意ファイルアップロード / RCE、管理者への権限昇格、乗っ取り）。開発セット2件（TranslatePress）はprompt調整用で採点しない。held-out 9件（本人5 + 補助4）が採点対象。本人発見分と補助分は混算せず系統別に併記する。負の対照は同じ9件の修正版。本番で発見・公開した件は、公開後にheld-outへ追加して増やす。
+- 試行数: 1 caseにつき独立5試行（k/5）。費用が許さない場合はcaseを減らさず試行を3に落とし、区間の幅をそのまま示す。
 - 採点: 一次は機械の `location-overlap`（必要条件）。二次は人間の盲検rubric（場所、root cause、攻撃者条件、影響の4要素）で `target-hit` / `partial` / `non-target`。実行水準は `target-hit ∧ runtime-confirmed`。
 - 精度の代替: 修正版pluginの負の対照（鍵と同じpropertyを主張したFindingだけ `control-false-alarm`）、Finding内訳、当たり1件あたりのFinding数。
 - 統計: k/5にClopper-Pearson区間。pass@kはunion / 全回 / 試行別の3表示。種別別は件数のまま。構成差は同じcase・試行の対で示す。
