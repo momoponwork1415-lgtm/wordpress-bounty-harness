@@ -107,6 +107,7 @@ async function harness(
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
       wordpressCli: `wordpress-cli@${sha("3")}`,
+      browser: `verification-browser@${sha("4")}`,
     },
     source: {
       resolve: async () => ({
