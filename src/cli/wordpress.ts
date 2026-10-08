@@ -33,7 +33,6 @@ import {
 } from "../profiles/wordpress/prompts/index.js";
 import {
   createWordpressScopeEvaluator,
-  loadWordpressScopePolicy,
   type WordpressScopeInput,
   type WordpressScopePolicy,
 } from "../profiles/wordpress/scope-policy.js";
@@ -110,6 +109,24 @@ const noScopeFacts = {
   },
 };
 
+async function loadConfig(configPath: string): Promise<{
+  readonly config: WordPressCampaignConfig;
+  readonly policy: WordPressSelectionPolicy;
+}> {
+  const config = wordpressCampaignConfigSchema.parse(
+    JSON.parse(await readFile(configPath, "utf8")) as unknown,
+  );
+  const policy =
+    config.selectionPolicyPath === undefined
+      ? await loadWordPressSelectionPolicy()
+      : wordPressSelectionPolicySchema.parse(
+          JSON.parse(
+            await readFile(config.selectionPolicyPath, "utf8"),
+          ) as unknown,
+        );
+  return { config, policy };
+}
+
 export function createWordPressCliProfile(options: {
   readonly boundaries: (
     config: WordPressCampaignConfig,
@@ -128,18 +145,17 @@ export function createWordPressCliProfile(options: {
       }),
     answerKeys: parseWordPressAnswerKeys,
     locationsOf: wordpressFindingLocations,
+    async select(state, input) {
+      const { config, policy } = await loadConfig(input.configPath);
+      const boundaries = await options.boundaries(config, state);
+      return (await boundaries.selection.select(policy)).map((target) => ({
+        targetId: target.targetId,
+        version: target.version,
+        score: target.score,
+      }));
+    },
     async runCampaign(state, input) {
-      const config = wordpressCampaignConfigSchema.parse(
-        JSON.parse(await readFile(input.configPath, "utf8")) as unknown,
-      );
-      const policy =
-        config.selectionPolicyPath === undefined
-          ? await loadWordPressSelectionPolicy()
-          : wordPressSelectionPolicySchema.parse(
-              JSON.parse(
-                await readFile(config.selectionPolicyPath, "utf8"),
-              ) as unknown,
-            );
+      const { config, policy } = await loadConfig(input.configPath);
       const boundaries = await options.boundaries(config, state);
       const [objective, trustBoundary] = await Promise.all([
         loadWordPressDiscoveryAsset(config.promptId),
@@ -157,7 +173,10 @@ export function createWordPressCliProfile(options: {
         clock: state.clock,
         newId: state.newId,
         pipeline: {
-          select: () => boundaries.selection.select(policy),
+          select: async () =>
+            (await boundaries.selection.select(policy)).filter(
+              (target) => input.target === null || target.slug === input.target,
+            ),
           freeze: boundaries.freeze,
           lab: boundaries.lab,
           setupFor,
@@ -260,5 +279,3 @@ export function createWordPressCliProfile(options: {
     },
   };
 }
-
-export { loadWordpressScopePolicy };

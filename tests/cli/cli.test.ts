@@ -381,6 +381,7 @@ describe("harness CLI vertical slice", () => {
     const campaign = await run(
       "campaign",
       "run",
+      "synthetic-plugin",
       "--campaign",
       "campaign-1",
       "--config",
@@ -457,6 +458,51 @@ describe("harness CLI vertical slice", () => {
       "location-overlap  case synthetic-case  campaign campaign-1  findings 2  overlapping 1  unreadable 0  hit yes",
     );
     expect(score.stdout).not.toContain("includes/synthetic.php");
+  });
+
+  it("lists the policy selection and runs only the named target or --all", async () => {
+    const { run, configPath, prompts } = await harness();
+    const selected = await run("select", "--config", configPath);
+    expect(selected.code).toBe(0);
+    expect(selected.stdout).toMatch(/^wporg:synthetic-plugin 3\.3\.1 score /m);
+
+    const unmatched = await run(
+      "campaign",
+      "run",
+      "another-plugin",
+      "--campaign",
+      "campaign-x",
+      "--config",
+      configPath,
+    );
+    expect(unmatched.code).toBe(0);
+    expect(unmatched.stdout).toContain(
+      "no selected target matched another-plugin",
+    );
+    expect(prompts).toHaveLength(0);
+
+    const missing = await run(
+      "campaign",
+      "run",
+      "--campaign",
+      "campaign-x",
+      "--config",
+      configPath,
+    );
+    expect(missing.code).toBe(2);
+    expect(missing.stderr).toContain("<slug> or --all");
+
+    const all = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-all",
+      "--config",
+      configPath,
+    );
+    expect(all.code).toBe(0);
+    expect(all.stdout).toContain("wporg:synthetic-plugin 3.3.1");
   });
 
   it("refuses to record a decision for a finding outside the review queue", async () => {

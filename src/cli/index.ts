@@ -35,9 +35,24 @@ export interface CliProfile {
   review(state: CliState): Review;
   answerKeys(value: unknown): readonly LocationAnswerKey[];
   locationsOf(finding: unknown): readonly SourceLocation[];
+  select(
+    state: CliState,
+    input: { readonly configPath: string },
+  ): Promise<
+    readonly {
+      readonly targetId: string;
+      readonly version: string;
+      readonly score: number;
+    }[]
+  >;
   runCampaign(
     state: CliState,
-    input: { readonly campaignId: string; readonly configPath: string },
+    input: {
+      readonly campaignId: string;
+      readonly configPath: string;
+      /** A profile target name, or null for every selected target. */
+      readonly target: string | null;
+    },
   ): Promise<CampaignSummary>;
 }
 
@@ -50,7 +65,8 @@ export type CliEnvironment = {
 
 const USAGE = [
   "usage: harness [--state <dir>] <command>",
-  "  campaign run --campaign <id> --config <path>",
+  "  select --config <path>",
+  "  campaign run <slug>|--all --campaign <id> --config <path>",
   "  review [--campaign <id>]",
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>]",
   "  ledger funnel --campaign <id>",
@@ -59,6 +75,7 @@ const USAGE = [
 
 const options = {
   state: { type: "string" },
+  all: { type: "boolean" },
   campaign: { type: "string" },
   config: { type: "string" },
   finding: { type: "string" },
@@ -176,14 +193,40 @@ export async function runCli(
       values.state ?? environment.stateDirectory,
       environment,
     );
-    const command = positionals.join(" ");
+    const [group, sub, ...rest] = positionals;
+    const command = [group, sub].filter((part) => part !== undefined).join(" ");
     const print = (lines: readonly string[]) => lines.forEach(io.stdout);
     switch (command) {
+      case "select": {
+        const selected = await environment.profile.select(state, {
+          configPath: resolve(required(values.config, "config")),
+        });
+        for (const target of selected)
+          io.stdout(
+            `${target.targetId} ${target.version} score ${target.score.toFixed(2)}`,
+          );
+        if (selected.length === 0) io.stdout("no targets selected");
+        return 0;
+      }
       case "campaign run": {
+        const target = rest[0] ?? null;
+        if ((target === null) === (values.all !== true) || rest.length > 1)
+          throw new UsageError(
+            "campaign run takes exactly one of <slug> or --all",
+          );
         const summary = await environment.profile.runCampaign(state, {
           campaignId: required(values.campaign, "campaign"),
           configPath: resolve(required(values.config, "config")),
+          target,
         });
+        if (summary.targets.length === 0) {
+          io.stdout(
+            target === null
+              ? "no targets selected"
+              : `no selected target matched ${target}`,
+          );
+          return 0;
+        }
         for (const target of summary.targets) {
           io.stdout(
             `${target.targetId} ${target.version}  snapshot ${target.snapshotDigest}  lab ${target.lab}  runs ${target.runCount}  stopped by ${target.stoppedBy}`,
