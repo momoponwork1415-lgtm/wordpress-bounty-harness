@@ -246,6 +246,38 @@ function decodeTranscript(
   };
 }
 
+const failureEventSchema = z.union([
+  z.looseObject({ type: z.literal("error"), message: z.string() }),
+  z.looseObject({
+    type: z.literal("turn.failed"),
+    error: z.looseObject({ message: z.string() }),
+  }),
+]);
+
+/** Classifies the CLI's failure events; the broker's own grant cap is not a provider limit. */
+function providerLimitOf(stdout: string): "rate-limit" | "quota" | undefined {
+  let limit: "rate-limit" | "quota" | undefined;
+  for (const line of stdout.split("\n")) {
+    let value: unknown;
+    try {
+      value = JSON.parse(line) as unknown;
+    } catch {
+      continue;
+    }
+    const parsed = failureEventSchema.safeParse(value);
+    if (!parsed.success) continue;
+    const message =
+      parsed.data.type === "error"
+        ? parsed.data.message
+        : parsed.data.error.message;
+    if (message.includes("grant-request-limit-exceeded")) continue;
+    if (/usage limit|quota/i.test(message)) return "quota";
+    if (/\b429\b|too many requests|rate[ _-]?limit/i.test(message))
+      limit = "rate-limit";
+  }
+  return limit;
+}
+
 export class CodexNativeAgentRuntime {
   constructor(
     readonly sandbox: CodexSandbox,
@@ -261,11 +293,13 @@ export class CodexNativeAgentRuntime {
       reason: "provider" | "schema" | "sandbox" | "policy" | "evidence",
       completedAt = this.clock().toISOString(),
       grantReceiptDigest?: string,
+      providerLimit?: "rate-limit" | "quota",
     ): DiscoveryTransportResult => ({
       receipt: createNativeRunReceipt({
         ...run,
         terminal: "incomplete",
         reason,
+        ...(providerLimit === undefined ? {} : { providerLimit }),
         startedAt,
         completedAt,
         ...(grantReceiptDigest === undefined ? {} : { grantReceiptDigest }),
@@ -398,9 +432,22 @@ export class CodexNativeAgentRuntime {
       result.bundledCatalogDigest !== run.profile.bundledCatalogDigest
     )
       return incomplete("policy", result.completedAt, granted.receipt.digest);
+    const decoded =
+      result.status === "exited" && result.exitCode === 0
+        ? decodeTranscript(result.stdout, run.outputKind)
+        : undefined;
+    if (decoded === undefined) {
+      const limit = providerLimitOf(result.stdout);
+      if (limit !== undefined)
+        return incomplete(
+          "provider",
+          result.completedAt,
+          granted.receipt.digest,
+          limit,
+        );
+    }
     if (result.status !== "exited" || result.exitCode !== 0)
       return incomplete("provider", result.completedAt, granted.receipt.digest);
-    const decoded = decodeTranscript(result.stdout, run.outputKind);
     if (decoded === undefined)
       return incomplete("schema", result.completedAt, granted.receipt.digest);
     let attachment: ProviderAttachmentRef;
