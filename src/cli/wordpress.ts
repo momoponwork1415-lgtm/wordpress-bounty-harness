@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import {
   CODEX_SANDBOX_MEMORY_MIB,
+  EGRESS_BROKER_LEFTOVER_PATTERNS,
   EGRESS_BROKER_MEMORY_MIB,
 } from "../discovery/index.js";
 import type {
@@ -398,6 +399,14 @@ export function createWordPressCliProfile(options: {
           verification: verificationFor(state, boundaries),
           reconstructionFor: reconstructionFor(config),
         },
+      });
+    },
+    async cleanupLeftovers(state, input) {
+      const { config } = await loadConfig(input.configPath);
+      const boundaries = await options.boundaries(config, state);
+      return boundaries.lab.cleanupLeftovers({
+        remove: input.remove,
+        patterns: EGRESS_BROKER_LEFTOVER_PATTERNS,
       });
     },
     async checkRuntime(state, input) {

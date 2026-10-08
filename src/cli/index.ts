@@ -69,6 +69,15 @@ export interface CliProfile {
       readonly target: string | null;
     },
   ): Promise<CampaignSummary>;
+  /** Docker resources a crashed run left behind; removed only when asked. */
+  cleanupLeftovers(
+    state: CliState,
+    input: { readonly configPath: string; readonly remove: boolean },
+  ): Promise<{
+    readonly containers: readonly string[];
+    readonly networks: readonly string[];
+    readonly volumes: readonly string[];
+  }>;
   /** Runtime items the profile pins next to what the provider image reports. */
   checkRuntime(
     state: CliState,
@@ -116,6 +125,7 @@ const USAGE = [
   "  ledger runtime [--campaign <id>]",
   "  history status",
   "  runtime check --config <path>",
+  "  lab cleanup --config <path> [--remove]",
   "  eval score --campaign <id> --keys <path> --case <id>",
   "  eval compare [--axis history] [--campaign <id>]",
   "  eval prospective --advisories <path> [--campaign <id>]",
@@ -144,6 +154,7 @@ const options = {
   case: { type: "string" },
   axis: { type: "string" },
   advisories: { type: "string" },
+  remove: { type: "boolean" },
 } as const;
 
 class UsageError extends Error {}
@@ -578,6 +589,23 @@ export async function runCli(
           io.stdout(
             `  ${runtime.requestedModelId} effort ${runtime.requestedEffort}  codex-cli ${runtime.codexCliVersion}  catalog ${runtime.bundledCatalogDigest}  tier ${runtime.serviceTier}  access ${runtime.cyberAccessProgram}  auth ${runtime.authenticationMethod}  runs ${runs}  ${firstDay}..${lastDay}`,
           );
+        return 0;
+      }
+      case "lab cleanup": {
+        const remove = values.remove === true;
+        const leftovers = await environment.profile.cleanupLeftovers(state, {
+          configPath: resolve(required(values.config, "config")),
+          remove,
+        });
+        for (const kind of ["containers", "networks", "volumes"] as const)
+          io.stdout(
+            `leftover ${kind} ${leftovers[kind].length}${leftovers[kind].length === 0 ? "" : `: ${leftovers[kind].join(", ")}`}`,
+          );
+        io.stdout(
+          remove
+            ? `removed ${leftovers.containers.length} containers, ${leftovers.networks.length} networks, ${leftovers.volumes.length} volumes`
+            : "nothing removed; run again with --remove when no campaign is running",
+        );
         return 0;
       }
       case "runtime check": {

@@ -30,6 +30,7 @@ import { createWordPressSelection } from "../../src/profiles/wordpress/selection
 import { openSnapshot } from "../../src/snapshot/index.js";
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
+const uuid = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
 const now = "2026-10-08T00:00:00.000Z";
 const directories: string[] = [];
 afterEach(async () => {
@@ -147,6 +148,34 @@ async function harness(
     runner: {
       async run(request) {
         docker.push(request);
+        if (request.args[0] === "ps")
+          return {
+            exitCode: 0,
+            stdout: [
+              `wbh-${uuid}-db`,
+              `wbh-${uuid}-wp`,
+              `provider-egress-broker-${uuid}`,
+              "operator-postgres",
+              "wbh-notes",
+            ].join("\n"),
+            stderr: "",
+          };
+        if (request.args[0] === "network" && request.args[1] === "ls")
+          return {
+            exitCode: 0,
+            stdout: [
+              `wbh-${uuid}-net`,
+              `provider-egress-${uuid}`,
+              "bridge",
+            ].join("\n"),
+            stderr: "",
+          };
+        if (request.args[0] === "volume" && request.args[1] === "ls")
+          return {
+            exitCode: 0,
+            stdout: [`wbh-${uuid}-site`, "operator-data"].join("\n"),
+            stderr: "",
+          };
         if (request.args[0] === "info")
           return { exitCode: 0, stdout: '{"runsc":{}}', stderr: "" };
         if (request.args[0] === "inspect")
@@ -916,6 +945,49 @@ describe("harness CLI vertical slice", () => {
       "codex-cli  profile 0.161.0  image 0.162.0  differs",
       `catalog  profile ${sha("e")}  image ${sha("f")}  differs`,
       "The image differs from the runtime profile; runs would end incomplete(policy). Update the runtime profile, then confirm the new values with ledger runtime after the next campaign.",
+    ]);
+  });
+
+  it("lists leftover Lab and broker resources and removes only them on request", async () => {
+    const { run, configPath, docker } = await harness();
+    const listed = await run("lab", "cleanup", "--config", configPath);
+    expect(listed.code).toBe(0);
+    expect(listed.stdout.split("\n")).toEqual([
+      `leftover containers 3: wbh-${uuid}-db, wbh-${uuid}-wp, provider-egress-broker-${uuid}`,
+      `leftover networks 2: wbh-${uuid}-net, provider-egress-${uuid}`,
+      `leftover volumes 1: wbh-${uuid}-site`,
+      "nothing removed; run again with --remove when no campaign is running",
+    ]);
+    expect(docker.some(({ args }) => args[0] === "rm")).toBe(false);
+
+    const removed = await run(
+      "lab",
+      "cleanup",
+      "--config",
+      configPath,
+      "--remove",
+    );
+    expect(removed.code).toBe(0);
+    expect(removed.stdout).toContain(
+      "removed 3 containers, 2 networks, 1 volumes",
+    );
+    const removals = docker
+      .map(({ args }) => args)
+      .filter(
+        (args) =>
+          args[0] === "rm" ||
+          ((args[0] === "network" || args[0] === "volume") && args[1] === "rm"),
+      );
+    expect(removals).toEqual([
+      [
+        "rm",
+        "-f",
+        `wbh-${uuid}-db`,
+        `wbh-${uuid}-wp`,
+        `provider-egress-broker-${uuid}`,
+      ],
+      ["network", "rm", `wbh-${uuid}-net`, `provider-egress-${uuid}`],
+      ["volume", "rm", `wbh-${uuid}-site`],
     ]);
   });
 
