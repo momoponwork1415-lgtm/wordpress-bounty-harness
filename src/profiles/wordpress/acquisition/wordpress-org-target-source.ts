@@ -136,6 +136,18 @@ function isOfficialDownloadUrl(sourceUrl: string, slug: string): boolean {
   }
 }
 
+/** The stable release uses the observed link; a pinned release uses its official versioned archive. */
+function archiveUrlFor(
+  observation: WordPressOrgTargetObservation,
+  version: string,
+): string | undefined {
+  if (version === observation.stableVersion)
+    return observation.downloadProvenance.sourceUrl;
+  if (!/^[0-9A-Za-z][0-9A-Za-z.-]*$/.test(version)) return undefined;
+  const url = `https://downloads.wordpress.org/plugin/${observation.officialSlug}.${version}.zip`;
+  return isOfficialDownloadUrl(url, observation.officialSlug) ? url : undefined;
+}
+
 async function boundedResponseBytes(
   response: Response,
   maximumBytes: number,
@@ -327,7 +339,8 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
   ): Promise<WordPressOrgAcquisitionResult> {
     const request = wordPressOrgAcquireRequestSchema.parse(requestValue);
     const observation = await this.#readObservation(request.observationRef);
-    if (request.requestedVersion !== observation.stableVersion) {
+    const archiveUrl = archiveUrlFor(observation, request.requestedVersion);
+    if (archiveUrl === undefined) {
       return acquisitionFailure(
         "requested-version-mismatch",
         observation.pluginIdentity,
@@ -338,7 +351,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
       response = wordPressOrgSourceResponseSchema.parse(
         await this.#adapter.retrieve({
           kind: "archive",
-          sourceUrl: observation.downloadProvenance.sourceUrl,
+          sourceUrl: archiveUrl,
           maximumBytes: request.policy.limits.maxTotalBytes,
         }),
       );
@@ -357,7 +370,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
     if (failureReason !== undefined) {
       return acquisitionFailure(failureReason, observation.pluginIdentity);
     }
-    if (response.sourceUrl !== observation.downloadProvenance.sourceUrl) {
+    if (response.sourceUrl !== archiveUrl) {
       return acquisitionFailure(
         "metadata-archive-mismatch",
         observation.pluginIdentity,
@@ -427,7 +440,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
         canonicalInstallDirectory: observation.officialSlug,
         provenance: {
           kind: "wordpress-org",
-          sourceUrl: observation.downloadProvenance.sourceUrl,
+          sourceUrl: archiveUrl,
           acquisitionRef: acquisitionOriginalRef,
         },
         policy: request.policy,

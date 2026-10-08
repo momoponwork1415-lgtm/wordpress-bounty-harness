@@ -485,28 +485,33 @@ Version: 2.4.1
     }
   });
 
-  it("does not download or silently substitute an unobserved requested version", async () => {
+  it("acquires a pinned older release from its official versioned archive", async () => {
     const directory = await mkdtemp(join(tmpdir(), "wporg-target-version-"));
-    let archiveRequests = 0;
+    const archiveUrls: string[] = [];
+    const pinnedArchive = archive({
+      "versioned-plugin/plugin.php":
+        "<?php\n/* Plugin Name: Versioned\nVersion: 2.9.0\n*/\n",
+    });
     const adapter: WordPressOrgSourceAdapter = {
       retrieve: async (request) => {
-        if (request.kind === "archive") {
-          archiveRequests += 1;
-        }
+        if (request.kind === "archive") archiveUrls.push(request.sourceUrl);
         return {
           status: 200,
           sourceUrl: request.sourceUrl,
-          bytes: Buffer.from(
-            JSON.stringify({
-              slug: "versioned-plugin",
-              name: "Versioned Plugin",
-              version: "3.0.0",
-              active_installs: 2_000,
-              last_updated: "2026-09-01T00:00:00Z",
-              download_link:
-                "https://downloads.wordpress.org/plugin/versioned-plugin.3.0.0.zip",
-            }),
-          ),
+          bytes:
+            request.kind === "archive"
+              ? pinnedArchive
+              : Buffer.from(
+                  JSON.stringify({
+                    slug: "versioned-plugin",
+                    name: "Versioned Plugin",
+                    version: "3.0.0",
+                    active_installs: 2_000,
+                    last_updated: "2026-09-01T00:00:00Z",
+                    download_link:
+                      "https://downloads.wordpress.org/plugin/versioned-plugin.3.0.0.zip",
+                  }),
+                ),
         };
       },
     };
@@ -523,22 +528,39 @@ Version: 2.4.1
       if (observed.status !== "observed") {
         throw new Error("Expected a version observation");
       }
-
-      await expect(
+      const acquire = (requestedVersion: string) =>
         source.acquire({
           kind: "wordpress-org-target-acquire",
           schemaVersion: 1,
           observationRef: observed.observationRef,
-          requestedVersion: "2.9.0",
+          requestedVersion,
           policy: intakePolicy,
-        }),
-      ).resolves.toEqual({
+        });
+
+      await expect(acquire("2.9.0")).resolves.toMatchObject({
+        status: "ready",
+        acquisitionOriginal: {
+          version: "2.9.0",
+          sourceUrl:
+            "https://downloads.wordpress.org/plugin/versioned-plugin.2.9.0.zip",
+        },
+      });
+      // The Main Plugin File still has to name the pinned version.
+      await expect(acquire("2.8.0")).resolves.toMatchObject({
+        status: "failed",
+        reason: "metadata-archive-mismatch",
+      });
+      // A version that cannot be an archive name is refused before any download.
+      await expect(acquire("2.9.0/../../x")).resolves.toEqual({
         status: "failed",
         operation: "acquire",
         reason: "requested-version-mismatch",
         pluginIdentity: "wporg:versioned-plugin",
       });
-      expect(archiveRequests).toBe(0);
+      expect(archiveUrls).toEqual([
+        "https://downloads.wordpress.org/plugin/versioned-plugin.2.9.0.zip",
+        "https://downloads.wordpress.org/plugin/versioned-plugin.2.8.0.zip",
+      ]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
