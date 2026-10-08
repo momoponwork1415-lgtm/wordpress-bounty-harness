@@ -1,0 +1,32 @@
+{
+  "kind": "wordpress-selection-policy",
+  "schemaVersion": 1,
+  "id": "wordpress-selection-2026-10-08",
+  "candidateSlugs": [],
+  "minimumActiveInstallations": 500,
+  "maximumObservationAgeDays": 2,
+  "maximumUpdateAgeDays": 365,
+  "maximumTargets": 10,
+  "excludedAuthors": [
+    "Automattic",
+    "Facebook",
+    "Google",
+    "SiteGround",
+    "Yoast"
+  ],
+  "excludedSlugs": [],
+  "surfaceTagWeights": {
+    "form": 4,
+    "forms": 4,
+    "upload": 4,
+    "api": 3,
+    "user": 2,
+    "login": 2,
+    "ecommerce": 2
+  },
+  "scoreWeights": {
+    "installations": 10,
+    "recency": 5,
+    "surface": 1
+  }
+}

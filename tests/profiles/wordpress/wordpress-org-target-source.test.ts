@@ -153,6 +153,9 @@ Version: 2.4.1
                 version: "2.4.1",
                 active_installs: 80_000,
                 last_updated: "2026-09-04T12:00:00Z",
+                author:
+                  '<a href="https://profiles.wordpress.org/example">Independent Author</a>',
+                tags: { forms: "forms", upload: "upload" },
                 download_link:
                   "https://downloads.wordpress.org/plugin/example-security.2.4.1.zip",
                 advisory: "must not cross the seam",
@@ -191,6 +194,8 @@ Version: 2.4.1
           stableVersion: "2.4.1",
           activeInstallations: 80_000,
           lastUpdated: "2026-09-04T12:00:00Z",
+          author: "Independent Author",
+          tags: ["forms", "upload"],
           observedAt: "2030-07-01T00:00:00.000Z",
           intelligenceSource: {
             kind: "wordpress-org-plugin-directory",
