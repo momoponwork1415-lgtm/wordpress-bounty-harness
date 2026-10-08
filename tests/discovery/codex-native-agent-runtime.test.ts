@@ -131,6 +131,28 @@ function sandbox(
 }
 
 describe("Codex native agent runtime", () => {
+  it("rejects an Answer Key field before invoking the agent", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
+    try {
+      const commands: CodexSandboxCommand[] = [];
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(transcript, commands),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      const candidate = { ...run, answerKey: "private-evaluation-data" };
+      expect((await runtime.execute(candidate)).receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "policy",
+      });
+      expect(commands).toHaveLength(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses the sealed model and source mount and stores only a private report reference", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
     try {
