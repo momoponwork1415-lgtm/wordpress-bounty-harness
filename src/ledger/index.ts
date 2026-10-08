@@ -69,6 +69,13 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     verificationId: id,
     findingId: id,
     labSetupDigest: digest,
+    /** Present when the Finding was re-verified on a newer snapshot of its target. */
+    basis: z
+      .strictObject({
+        kind: z.literal("latest-version"),
+        findingSnapshotDigest: digest,
+      })
+      .optional(),
     result: verificationResultV1Schema,
   }),
   event({
@@ -372,9 +379,26 @@ export class Ledger {
                     .event_json,
                 ) as unknown,
               );
+        // A latest-version basis must name the Finding's own snapshot and a snapshot frozen here.
+        const latestFrozen =
+          parsed.basis === undefined ||
+          this.#db
+            .prepare(
+              "SELECT event_json FROM ledger_events WHERE campaign_id = ? AND event_type = 'snapshot-frozen'",
+            )
+            .all(parsed.campaignId)
+            .some(
+              (row) =>
+                ledgerEventV1Schema.parse(
+                  JSON.parse(
+                    z.object({ event_json: z.string() }).parse(row).event_json,
+                  ) as unknown,
+                ).snapshotDigest === parsed.snapshotDigest,
+            );
         if (
           findingEvent?.type !== "finding-recorded" ||
-          findingEvent.snapshotDigest !== parsed.snapshotDigest
+          findingEvent.snapshotDigest !==
+            (parsed.basis?.findingSnapshotDigest ?? parsed.snapshotDigest)
         ) {
           recorded = {
             ...parsed,
@@ -386,6 +410,16 @@ export class Ledger {
                 findingEvent === null
                   ? "Record the finding before verification"
                   : "Repeat verification against the finding snapshot",
+            },
+          };
+        } else if (!latestFrozen) {
+          recorded = {
+            ...parsed,
+            result: {
+              status: "incomplete",
+              reason: "precondition",
+              nextStep:
+                "Freeze the latest version in this campaign before re-verifying",
             },
           };
         } else if (!evidenceAvailable) {

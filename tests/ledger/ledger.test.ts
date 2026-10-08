@@ -219,6 +219,57 @@ describe("Ledger public interface", () => {
     );
   });
 
+  it("admits a latest-version re-verification only against the finding's snapshot and a snapshot frozen in the campaign", async () => {
+    const { ledger, artifactStore } = await fixture();
+    const proof = await evidence(artifactStore);
+    await ledger.append({
+      ...common("finding-1"),
+      type: "finding-recorded",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "injection",
+    });
+    const reverify = (identity: string, findingSnapshotDigest = snapshot) => ({
+      ...common(identity, otherSnapshot),
+      type: "verification-finished" as const,
+      verificationId: identity,
+      findingId: "finding-1",
+      labSetupDigest: labSetup,
+      basis: { kind: "latest-version" as const, findingSnapshotDigest },
+      result: {
+        status: "runtime-confirmed" as const,
+        judgeId: "judge-1",
+        proofKind: "nonce-canary" as const,
+        evidenceDigest: proof,
+        reproductionPackageDigest: proof,
+      },
+    });
+    const latest = (identity: string) =>
+      ledger
+        .read({ findingId: "finding-1" })
+        .find((record) => record.event.identity === identity)?.event;
+
+    await ledger.append(reverify("before-freeze"));
+    expect(latest("before-freeze")).toMatchObject({
+      result: { status: "incomplete", reason: "precondition" },
+    });
+    await ledger.append({
+      ...common("latest-frozen", otherSnapshot),
+      type: "snapshot-frozen",
+      sourceDigest: otherSnapshot,
+    });
+    await ledger.append(reverify("wrong-basis", otherSnapshot));
+    expect(latest("wrong-basis")).toMatchObject({
+      result: { status: "incomplete", reason: "digest-mismatch" },
+    });
+    await ledger.append(reverify("on-latest"));
+    expect(latest("on-latest")).toMatchObject({
+      snapshotDigest: otherSnapshot,
+      basis: { kind: "latest-version", findingSnapshotDigest: snapshot },
+      result: { status: "runtime-confirmed" },
+    });
+  });
+
   it("derives the complete campaign and category funnel without counting setup failures", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);
