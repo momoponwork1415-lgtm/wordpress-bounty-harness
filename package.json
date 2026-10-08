@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "harness": "dist/cli/main.js"
+  },
   "engines": {
     "node": ">=22.0.0"
   },
@@ -14,6 +17,7 @@
   },
   "scripts": {
     "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "prettier --check . --ignore-unknown",
     "format": "prettier --write . --ignore-unknown",

@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "transcribedAt": "2026-10-08",
+  "pages": [
+    {
+      "kind": "wordfence-programme-page",
+      "schemaVersion": 2,
+      "sourceKind": "programme",
+      "assertions": {
+        "eligibility": {
+          "assets": [
+            {
+              "kind": "wordpress-plugin",
+              "scope": "publicly-distributed"
+            },
+            {
+              "kind": "wordpress-theme",
+              "scope": "publicly-distributed"
+            }
+          ],
+          "vulnerabilityClasses": [
+            "stored-cross-site-scripting",
+            "arbitrary-content-deletion",
+            "sql-injection",
+            "arbitrary-file-upload",
+            "arbitrary-file-read",
+            "arbitrary-file-deletion",
+            "file-inclusion",
+            "directory-traversal",
+            "privilege-escalation",
+            "authentication-bypass",
+            "remote-code-execution",
+            "sensitive-information-disclosure",
+            "php-object-injection",
+            "intentional-backdoor"
+          ],
+          "attackerRoles": ["unauthenticated", "subscriber", "customer"],
+          "activeInstallThreshold": {
+            "kind": "minimum",
+            "value": 25
+          },
+          "researcherTiers": ["standard", "resourceful", "1337"],
+          "exclusions": [
+            "wordpress-core",
+            "automattic-products",
+            "facebook-products",
+            "google-products",
+            "siteground-products",
+            "yoast-products",
+            "closed-to-downloads",
+            "high-privilege-required",
+            "mid-level-authentication-required",
+            "reflected-cross-site-scripting",
+            "denial-of-service",
+            "business-logic-only"
+          ],
+          "conditions": []
+        },
+        "programmeOpportunityBand": "high-impact-only"
+      }
+    },
+    {
+      "kind": "wordfence-programme-page",
+      "schemaVersion": 2,
+      "sourceKind": "terms",
+      "assertions": {}
+    },
+    {
+      "kind": "wordfence-programme-page",
+      "schemaVersion": 2,
+      "sourceKind": "report-form",
+      "assertions": {}
+    }
+  ]
+}

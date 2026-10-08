@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "dockerExecutablePath": "/usr/bin/docker",
+  "workDirectory": "/home/<user>/.local/share/wordpress-bounty-harness/work",
+  "credentialFilePath": "/home/<user>/.config/wordpress-bounty-harness/provider-credential",
+  "images": {
+    "database": "mariadb@sha256:<docker image inspect の RepoDigests にある64桁>",
+    "wordpress": "wordpress@sha256:<docker image inspect の RepoDigests にある64桁>",
+    "wordpressCli": "wordpress@sha256:<docker image inspect の RepoDigests にある64桁>",
+    "browser": "mcr.microsoft.com/playwright@sha256:<docker image inspect の RepoDigests にある64桁>",
+    "codex": "<Codex CLI image>@sha256:<docker image inspect の RepoDigests にある64桁>",
+    "broker": "node@sha256:<docker image inspect の RepoDigests にある64桁>"
+  },
+  "codex": {
+    "bundledCatalogPath": "<Codex image内の、CLI同梱モデルカタログの絶対パス>",
+    "runtimeProfile": {
+      "id": "codex-sol-high",
+      "requestedModelId": "gpt-6.1-sol",
+      "requestedEffort": "high",
+      "codexCliVersion": "<image内の codex --version>",
+      "bundledCatalogDigest": "sha256:<image内カタログの sha256sum>",
+      "authenticationMethod": "host-private-bearer",
+      "cyberAccessProgram": "standard",
+      "serviceTier": "default",
+      "subagent": {
+        "modelId": "unavailable",
+        "effort": "unavailable"
+      }
+    }
+  },
+  "wordfenceProgrammeTranscriptionPath": "/home/<user>/.config/wordpress-bounty-harness/wordfence-programme.json",
+  "wordfenceHistory": {
+    "databasePath": "/home/<user>/wp-bounty-workspace/<Wordfence履歴mirrorのDB>",
+    "statePath": "/home/<user>/wp-bounty-workspace/<Wordfence履歴mirrorのstate>"
+  }
+}

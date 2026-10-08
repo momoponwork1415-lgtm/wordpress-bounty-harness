@@ -54,3 +54,4 @@ export {
   openWordPressOrgTargetSource,
 } from "./wordpress-org-target-source.js";
 export { openWordPressOrgSnapshotSource } from "./snapshot-source.js";
+export { openMaterializedSources } from "./materialized-sources.js";

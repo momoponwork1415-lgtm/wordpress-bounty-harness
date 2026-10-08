@@ -1,13 +1,22 @@
 # 運用手引き（完成後に人間がすること）
 
-対象読者: このHarnessを一人で回す運用者。正本は [SPEC.md](SPEC.md)。コマンドは `runCli`（`src/cli/index.ts`）が受け付ける実際の名前。実際の境界アダプターを束ねる `harness` 実行ファイルは #40 で用意する。全コマンドは `--state <dir>` で台帳とPrivate Evidenceの置き場を選べる。
+対象読者: このHarnessを一人で回す運用者。正本は [SPEC.md](SPEC.md)。
+
+- `harness` は `pnpm build` が作る `dist/cli/main.js`（`bin.harness`）。実際の境界アダプターを束ねる。
+- コマンド名は `runCli`（`src/cli/index.ts`）が受け付けるもの。
+- host設定は `--host <path>` か `WBH_HOST_CONFIG` で渡す。
+- 台帳とPrivate Evidenceの置き場は `--state <dir>` か `WBH_STATE_DIRECTORY` で選ぶ。既定は `~/.local/state/wordpress-bounty-harness`。
+- 開発セットの設定例は [examples/translatepress-3.3.1/](../examples/translatepress-3.3.1/README.md)。
 
 ## 1. 一度だけやる準備
 
 | やること | 中身 | 頻度 |
 | --- | --- | --- |
 | 実行環境 | gVisor（`runsc`）入りのDockerホスト。Codex CLI ≥ 0.161。ChatGPT Proにログイン。費用は購読の月額固定で、Harnessは金額でなく使用量（rate limit / quota）を見る | 初回とCLI更新時 |
-| 認証 | provider認証情報をegress brokerへ登録する。エージェントには渡らない | 初回と失効時 |
+| build | `pnpm install && pnpm build`。credential proxyも `dist/discovery` にでき、brokerがそれを読み取り専用でmountする | 更新のたび |
+| host設定 | Git外のJSON（`wordpressHostConfigSchema`、雛形は `examples/translatepress-3.3.1/host.example.json`）。docker、作業dir、全imageのdigest固定、Codex runtime profile、認証情報ファイルの**パス**、Programme写しのパス、履歴mirror | 初回とimage更新時 |
+| 認証 | provider認証情報を1つのファイルに置く（0600、本人所有）。読むのはegress brokerだけで、エージェントには渡らない | 初回と失効時 |
+| Programmeの写し | wordfence.comは自動取得できないので、公式3ページを人間がpage documentへ写す（雛形は `examples/translatepress-3.3.1/wordfence-programme.example.json`）。35日を超えると選定が止まる | 月1回 |
 | campaign設定 | JSONファイル（`wordpressCampaignConfigSchema`）。Programme Boundary、停止規則、Lab、`resources`、任意の `dailyRunCap` と `ablation` を書く。認証情報と鍵は書かない | 方針を変えるとき |
 | 選定方針 | `src/profiles/wordpress/policy/selection.json`（説明は同じ場所の `selection.md`）。インストール数の下限、更新の鮮度、除外slug、High Threatタグ、run予算 | 月1回程度 |
 | trust境界宣言 | `src/profiles/wordpress/prompts/trust-boundary-v1.md` をそのまま使う | ほぼ変えない |
@@ -19,11 +28,19 @@
 
 ```
 harness history status                                   # 履歴mirrorの鮮度。fresh以外は終了コード1
-harness runtime check --config <path>                    # Codex imageとruntime profileの一致。食い違えば終了コード1
+harness runtime check --config <path>                    # 起動時検査の全項目とCodex image / runtime profileの一致。欠ければ終了コード1
 harness select --config <path>                           # 方針から今週の対象を出す。承認は不要
 harness campaign run --all --campaign <id> --config <path>   # 選定済み対象を順に: snapshot → lab → discovery → verification → ledger
 harness review [--campaign <id>]                         # 検証済みの列を見る
 ```
+
+**起動時検査**: 境界を使うコマンド（`select`、`campaign run`、`runtime check`、`lab cleanup`、`review reverify`）は、境界を組む前に次を全部確かめる。1つでも欠ければ何も起動せず、runc・通常Docker・ホストプロセスへ切り替えずに止まる。
+
+- dockerが応答し、`runsc` が登録されている。
+- host設定の全imageが、digest固定のまま手元にある。
+- 認証情報ファイルが通常ファイル、0600、本人所有で、空でない。中身は読まない。
+- proxy bundle（`dist/discovery`）がある。
+- Codex imageのCLI版と同梱カタログのdigestが、runtime profileと一致する。
 
 `campaign run` は無人で回る。1対象あたりのdiscovery runは、選定のrun予算（既定20、High Threat面は40）と設定の上限（既定40）の小さい方まで。新規Findingなしが続いたら（既定4回）止まる。各Findingは別コンテナのVerifierと判定器を通り、`runtime-confirmed` / `contradicted` / `incomplete` として台帳に入る。
 

@@ -12,6 +12,7 @@ export {
   type PlannedDiscoveryRun,
 } from "./campaign.js";
 export {
+  agentRuntimeProfileDefinitionSchema,
   agentRuntimeProfileSchema,
   admitAgentRuntimeProfile,
   codexModelCatalog,
