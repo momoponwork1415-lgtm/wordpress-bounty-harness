@@ -45,6 +45,7 @@ async function verifyOnce(
   let seededRow = "";
   let salt = "";
   let attempted = false;
+  const beacons: string[] = [];
   const root = await mkdtemp(join(tmpdir(), "wbh-negative-"));
   directories.push(root);
   const sourceDirectory = join(root, "source");
@@ -67,6 +68,7 @@ async function verifyOnce(
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
       wordpressCli: `wordpress-cli@${sha("3")}`,
+      browser: `verification-browser@${sha("4")}`,
     },
     source: {
       resolve: async () => ({
@@ -85,6 +87,25 @@ async function verifyOnce(
         );
         if (saltArg !== undefined)
           salt = saltArg.slice("WBH_EXECUTION_SALT=".length);
+        if (
+          request.args[0] === "run" &&
+          request.args.includes(`verification-browser@${sha("4")}`)
+        ) {
+          // Unchanged Lab: the front page loads but nothing reaches the receiver.
+          if (
+            changed &&
+            request.args.includes("WBH_VISIT_PATH=/") &&
+            !request.args.some((arg) => arg.startsWith("WBH_LOGIN_USER="))
+          )
+            beacons.push("/b/fixed-nonce");
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        if (request.args[0] === "exec" && request.args[1]?.endsWith("-canary"))
+          return {
+            exitCode: beacons.length === 0 ? 1 : 0,
+            stdout: beacons.map((line) => `${line}\n`).join(""),
+            stderr: "",
+          };
         if (request.args[0] === "exec" && request.args[2] === "cat") {
           // Unchanged Lab: the stored file holds the nonce but never ran.
           const token = (request.args[3] ?? "").replace(
@@ -218,6 +239,7 @@ async function verifyOnce(
       // The Verifier always claims success; only the Lab state may decide.
       async attempt({ lab: handle }) {
         lab.prepareExecutionCanary(handle);
+        lab.prepareScriptCanary(handle);
         attempted = true;
         return {
           status: "attempted",
@@ -349,6 +371,24 @@ describe("WordPress verification negative control", () => {
       status: "runtime-confirmed",
       judgeId: "wordpress-option-canary",
       conditions: { changedOptions: "default_role", optionClass: "critical" },
+    });
+  });
+
+  it("does not confirm stored-xss while no beacon reaches the Lab receiver", async () => {
+    const { result, funnel } = await verifyOnce(false, "stored-xss");
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+    });
+    expect(funnel.confirmed).toBe(0);
+  });
+
+  it("confirms stored-xss once the front page sends the issued beacon", async () => {
+    const { result } = await verifyOnce(true, "stored-xss");
+    expect(result).toMatchObject({
+      status: "runtime-confirmed",
+      judgeId: "wordpress-stored-script",
+      conditions: { firedContexts: "front", siteWide: "yes" },
     });
   });
 

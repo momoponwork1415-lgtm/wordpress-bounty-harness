@@ -101,6 +101,9 @@ async function fixture(options: {
       async observeOptions() {
         return { status: "observed", changed: [] };
       },
+      async observeStoredScript() {
+        return { status: "observed", contexts: [] };
+      },
       async observeAccountRoles(): Promise<WordPressRoleObservation> {
         return options.roles === "unavailable"
           ? { status: "unavailable" }

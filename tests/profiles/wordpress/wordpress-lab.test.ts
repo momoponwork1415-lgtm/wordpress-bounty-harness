@@ -66,6 +66,9 @@ async function fixture(
       ["users_can_register", "0"],
       ["default_role", '"subscriber"'],
     ]),
+    /** Paths whose visit makes the stored script reach the beacon receiver. */
+    firesOn: [] as string[],
+    beacons: [] as string[],
   };
   const salts = new Map<string, string>();
   let seededRow = "";
@@ -75,6 +78,7 @@ async function fixture(
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
       wordpressCli: `wordpress-cli@${sha("3")}`,
+      browser: `verification-browser@${sha("4")}`,
     },
     source: {
       resolve: async () => ({
@@ -103,7 +107,11 @@ async function fixture(
             request.args[request.args.indexOf("--name") + 1] ?? "",
             saltArg.slice("WBH_EXECUTION_SALT=".length),
           );
-        if (request.args[0] === "exec" && request.args[2] === "cat") {
+        if (
+          request.args[0] === "exec" &&
+          request.args[2] === "cat" &&
+          request.args[3]?.startsWith("/tmp/wbh-execution-")
+        ) {
           const token = request.args[3]?.replace("/tmp/wbh-execution-", "");
           if (database.execution === "absent")
             return { exitCode: 1, stdout: "", stderr: "missing" };
@@ -118,6 +126,27 @@ async function fixture(
             stderr: "",
           };
         }
+        if (
+          request.args[0] === "run" &&
+          request.args.includes(`verification-browser@${sha("4")}`)
+        ) {
+          const visit = request.args
+            .find((arg) => arg.startsWith("WBH_VISIT_PATH="))
+            ?.slice("WBH_VISIT_PATH=".length);
+          if (visit !== undefined && database.firesOn.includes(visit))
+            database.beacons.push("/b/fixed-nonce");
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        if (
+          request.args[0] === "exec" &&
+          request.args[1]?.endsWith("-canary") &&
+          request.args[2] === "cat"
+        )
+          return {
+            exitCode: database.beacons.length === 0 ? 1 : 0,
+            stdout: database.beacons.map((line) => `${line}\n`).join(""),
+            stderr: "",
+          };
         const option = request.args.indexOf("option");
         if (option >= 0 && request.args[option + 1] === "get") {
           const value = database.options.get(request.args[option + 2] ?? "");
@@ -413,6 +442,86 @@ describe("WordPress gVisor Lab", () => {
       status: "observed",
       changed: ["wbh_canary_fixed-nonce", "default_role"],
     });
+  });
+
+  it("runs a beacon receiver and reports which page contexts made an issued script canary reach it", async () => {
+    const { lab, snapshot, setup, commands, database } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup);
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const { handle } = provisioned;
+    const receiver = commands.find((command) =>
+      command.args.includes("canary"),
+    );
+    expect(receiver?.args).toEqual(
+      expect.arrayContaining(["--runtime=runsc", "--read-only"]),
+    );
+    expect(
+      await lab.observeStoredScript(handle, { routePaths: ["/?p=7"] }),
+    ).toEqual({ status: "not-prepared" });
+    expect(lab.prepareScriptCanary(handle)).toEqual({
+      nonce: "fixed-nonce",
+      beaconUrl: "http://canary:8080/b/fixed-nonce",
+    });
+
+    const contexts = async (firesOn: string[]) => {
+      database.firesOn = firesOn;
+      return lab.observeStoredScript(handle, { routePaths: ["/?p=7"] });
+    };
+    expect(await contexts(["/"])).toEqual({
+      status: "observed",
+      contexts: ["front"],
+    });
+    expect(await contexts(["/wp-admin/", "/wp-admin/edit.php"])).toEqual({
+      status: "observed",
+      contexts: ["admin-all"],
+    });
+    expect(await contexts(["/wp-admin/"])).toEqual({
+      status: "observed",
+      contexts: ["admin-partial"],
+    });
+    expect(await contexts(["/?p=7"])).toEqual({
+      status: "observed",
+      contexts: ["route-page"],
+    });
+    expect(await contexts([])).toEqual({ status: "observed", contexts: [] });
+
+    const browsers = commands.filter(
+      (command) =>
+        command.args[0] === "run" &&
+        command.args.includes(`verification-browser@${sha("4")}`),
+    );
+    expect(browsers.length).toBeGreaterThan(0);
+    for (const browser of browsers) {
+      expect(browser.args).toContain("--runtime=runsc");
+      expect(browser.args).toContain("--add-host=canary:172.20.0.2");
+    }
+    // Only the admin visits log in, and only the Lab's own browser sees that account.
+    expect(
+      browsers
+        .filter((browser) =>
+          browser.args.includes("WBH_LOGIN_USER=harness-admin"),
+        )
+        .map((browser) =>
+          browser.args.find((arg) => arg.startsWith("WBH_VISIT_PATH=")),
+        ),
+    ).toEqual(
+      expect.arrayContaining([
+        "WBH_VISIT_PATH=/wp-admin/",
+        "WBH_VISIT_PATH=/wp-admin/edit.php",
+      ]),
+    );
+    expect(JSON.stringify(handle)).not.toContain("harness-admin");
+    expect(
+      await lab.observeStoredScript(handle, { routePaths: ["no-slash"] }),
+    ).toEqual({ status: "unavailable" });
+    expect(await lab.teardown(handle)).toEqual({ status: "removed" });
+    expect(
+      commands.some(
+        (command) =>
+          command.args[0] === "rm" &&
+          command.args.some((arg) => arg.endsWith("-canary")),
+      ),
+    ).toBe(true);
   });
 
   it("does not start target containers when source differs from its snapshot", async () => {

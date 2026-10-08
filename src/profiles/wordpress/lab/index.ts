@@ -32,6 +32,53 @@ const setupSchema = z.strictObject({
   customerRole: z.boolean(),
 });
 const SQL_CANARY_TABLE = "wbh_canary";
+const BEACON_LOG = "/tmp/wbh-beacons";
+/** Logs only well-formed beacon paths; anything else is ignored. */
+const BEACON_ROUTER = `<?php
+$path = (string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
+if (preg_match('#^/b/[A-Za-z0-9-]{1,100}$#', $path)) file_put_contents('${BEACON_LOG}', $path . "\\n", FILE_APPEND | LOCK_EX);
+header('Access-Control-Allow-Origin: *');
+http_response_code(204);
+`;
+/** One page visit by the Lab's observer; dialogs are dismissed and never count. */
+const BROWSER_VISIT = `const { chromium } = require("playwright");
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const base = "http://wordpress";
+  const user = process.env.WBH_LOGIN_USER;
+  if (user) {
+    await page.goto(base + "/wp-login.php");
+    await page.fill("#user_login", user);
+    await page.fill("#user_pass", process.env.WBH_LOGIN_PASSWORD ?? "");
+    await Promise.all([page.waitForNavigation(), page.click("#wp-submit")]);
+  }
+  await page.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
+  await page.waitForTimeout(3000);
+  await browser.close();
+})().catch((error) => {
+  console.error(error.message);
+  process.exitCode = 1;
+});`;
+const visitPath = z
+  .string()
+  .max(2048)
+  .regex(/^\/(?!\/)[^\s\0]*$/);
+
+function privateIpv4(output: string): string {
+  const address = output.trim();
+  const octets = address.split(".").map(Number);
+  if (
+    isIP(address) !== 4 ||
+    !(
+      octets[0] === 10 ||
+      (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) ||
+      (octets[0] === 192 && octets[1] === 168)
+    )
+  )
+    throw new Error("Lab internal address is unavailable");
+  return address;
+}
 /** Options whose change alone is a security impact; anything else is not observed. */
 const CRITICAL_OPTIONS = [
   "users_can_register",
@@ -96,6 +143,21 @@ export interface WordPressCanaryLedger {
   /** Files outside wp-content at fixed paths; only their values are secret. */
   readonly fileCanaries: readonly WordPressFileCanary[];
 }
+
+export interface ScriptCanary {
+  readonly nonce: string;
+  readonly beaconUrl: string;
+}
+
+export type WordPressScriptContext =
+  "front" | "admin-all" | "admin-partial" | "route-page";
+
+export type WordPressStoredScriptObservation =
+  | {
+      readonly status: "observed";
+      readonly contexts: readonly WordPressScriptContext[];
+    }
+  | { readonly status: "not-prepared" | "unavailable" };
 
 export type WordPressOptionsObservation =
   | { readonly status: "observed"; readonly changed: readonly string[] }
@@ -166,6 +228,16 @@ export interface WordPressLab extends LabProvisioner<
   observeCanaryFiles(
     handle: WordPressLabHandle,
   ): Promise<WordPressCanaryFilesObservation>;
+  /** Issues a nonce whose beacon URL a stored script would request from inside the Lab. */
+  prepareScriptCanary(handle: WordPressLabHandle): ScriptCanary | null;
+  /**
+   * Opens the front page, two admin screens and the route's pages in fresh
+   * browsers; a context counts only when the receiver logged an issued nonce.
+   */
+  observeStoredScript(
+    handle: WordPressLabHandle,
+    input: { readonly routePaths: readonly string[] },
+  ): Promise<WordPressStoredScriptObservation>;
   /** Names of watched options (canary and critical) that differ from the seeded baseline. */
   observeOptions(
     handle: WordPressLabHandle,
@@ -192,6 +264,11 @@ interface Resources {
   /** Option digests taken when canaries were seeded. */
   optionBaseline?: ReadonlyMap<string, string>;
   executionNonces: Set<string>;
+  scriptNonces: Set<string>;
+  /** Beacon receiver container; only the Lab reads what it logged. */
+  readonly receiver: string;
+  receiverIp?: string;
+  receiverCreated: boolean;
   networkCreated: boolean;
   volumeCreated: boolean;
   databaseCreated: boolean;
@@ -204,6 +281,8 @@ export function openWordPressLab(options: {
     readonly database: string;
     readonly wordpress: string;
     readonly wordpressCli: string;
+    /** Playwright Chromium, used only by the Lab's own observer visits. */
+    readonly browser: string;
   };
   readonly source: WordPressSourceResolver;
   readonly runner?: DockerRunner;
@@ -304,7 +383,9 @@ export function openWordPressLab(options: {
   const cleanup = async (resource: Resources): Promise<boolean> => {
     let okay = true;
     for (const args of [
-      ...(resource.wordpressCreated || resource.databaseCreated
+      ...(resource.wordpressCreated ||
+      resource.databaseCreated ||
+      resource.receiverCreated
         ? [
             [
               "rm",
@@ -312,6 +393,7 @@ export function openWordPressLab(options: {
               ...[
                 resource.wordpressCreated ? resource.wordpress : undefined,
                 resource.databaseCreated ? resource.database : undefined,
+                resource.receiverCreated ? resource.receiver : undefined,
               ].filter((value): value is string => value !== undefined),
             ],
           ]
@@ -453,6 +535,9 @@ export function openWordPressLab(options: {
           adminPassword: randomUUID(),
           executionSalt: randomBytes(16).toString("hex"),
           executionNonces: new Set(),
+          scriptNonces: new Set(),
+          receiver: `${prefix}-canary`,
+          receiverCreated: false,
           networkCreated: false,
           volumeCreated: false,
           databaseCreated: false,
@@ -517,17 +602,38 @@ export function openWordPressLab(options: {
           "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
           resource.wordpress,
         ]);
-        const internalIp = inspected.stdout.trim();
-        const octets = internalIp.split(".").map(Number);
-        if (
-          isIP(internalIp) !== 4 ||
-          !(
-            octets[0] === 10 ||
-            (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) ||
-            (octets[0] === 192 && octets[1] === 168)
-          )
-        )
-          throw new Error("Lab internal address is unavailable");
+        const internalIp = privateIpv4(inspected.stdout);
+        await requireDocker([
+          "run",
+          "--detach",
+          "--name",
+          resource.receiver,
+          "--runtime=runsc",
+          "--network",
+          resource.network,
+          "--network-alias",
+          "canary",
+          "--read-only",
+          "--cap-drop=ALL",
+          "--security-opt=no-new-privileges",
+          "--tmpfs=/tmp:rw,nosuid,nodev,size=16m",
+          "--entrypoint",
+          "sh",
+          options.images.wordpress,
+          "-c",
+          `echo ${Buffer.from(BEACON_ROUTER).toString("base64")} | base64 -d > /tmp/router.php && exec php -S 0.0.0.0:8080 /tmp/router.php`,
+        ]);
+        resource.receiverCreated = true;
+        resource.receiverIp = privateIpv4(
+          (
+            await requireDocker([
+              "inspect",
+              "--format",
+              "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+              resource.receiver,
+            ])
+          ).stdout,
+        );
         let healthy = false;
         for (let attempt = 0; attempt < attempts; attempt++) {
           const [wordpressHealth, databaseHealth] = await Promise.all([
@@ -851,6 +957,86 @@ export function openWordPressLab(options: {
         else if (result.exitCode !== 0) return { status: "unavailable" };
       }
       return { status: "observed", deleted };
+    },
+    prepareScriptCanary(handle) {
+      const resource = active.get(handle.id);
+      if (resource?.handle !== handle) return null;
+      const token = nonce();
+      if (!/^[A-Za-z0-9-]{1,100}$/.test(token)) return null;
+      resource.scriptNonces.add(token);
+      return { nonce: token, beaconUrl: `http://canary:8080/b/${token}` };
+    },
+    async observeStoredScript(handle, input) {
+      const resource = active.get(handle.id);
+      const receiverIp = resource?.receiverIp;
+      if (resource?.handle !== handle || receiverIp === undefined)
+        return { status: "unavailable" };
+      if (resource.scriptNonces.size === 0) return { status: "not-prepared" };
+      const routePaths = z.array(visitPath).max(5).safeParse(input.routePaths);
+      if (!routePaths.success) return { status: "unavailable" };
+      const issued = new Set(
+        [...resource.scriptNonces].map((token) => `/b/${token}`),
+      );
+      const beacons = async (): Promise<number> => {
+        const log = await docker(
+          ["exec", resource.receiver, "cat", BEACON_LOG],
+          10_000,
+        );
+        if (log.exitCode === 1 && log.stdout === "") return 0;
+        if (log.exitCode !== 0) throw new Error("Beacon log unreadable");
+        return log.stdout.split("\n").filter((line) => issued.has(line)).length;
+      };
+      const visit = async (path: string, admin: boolean): Promise<boolean> => {
+        const before = await beacons();
+        const result = await docker(
+          [
+            "run",
+            "--rm",
+            "--runtime=runsc",
+            "--network",
+            resource.network,
+            `--add-host=wordpress:${handle.internalIp}`,
+            `--add-host=canary:${receiverIp}`,
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--tmpfs=/tmp:rw,nosuid,nodev,size=512m",
+            "--workdir=/harness",
+            ...(admin
+              ? [
+                  "--env",
+                  "WBH_LOGIN_USER=harness-admin",
+                  "--env",
+                  `WBH_LOGIN_PASSWORD=${resource.adminPassword}`,
+                ]
+              : []),
+            "--env",
+            `WBH_VISIT_PATH=${path}`,
+            "--entrypoint=node",
+            options.images.browser,
+            "-e",
+            BROWSER_VISIT,
+          ],
+          120_000,
+        );
+        if (result.exitCode !== 0) throw new Error("Browser visit failed");
+        return (await beacons()) > before;
+      };
+      try {
+        const contexts: WordPressScriptContext[] = [];
+        if (await visit("/", false)) contexts.push("front");
+        const dashboard = await visit("/wp-admin/", true);
+        const posts = await visit("/wp-admin/edit.php", true);
+        if (dashboard && posts) contexts.push("admin-all");
+        else if (dashboard || posts) contexts.push("admin-partial");
+        let routePage = false;
+        for (const path of routePaths.data)
+          if (await visit(path, false)) routePage = true;
+        if (routePage) contexts.push("route-page");
+        return { status: "observed", contexts };
+      } catch {
+        return { status: "unavailable" };
+      }
     },
     async observeOptions(handle) {
       const resource = active.get(handle.id);
