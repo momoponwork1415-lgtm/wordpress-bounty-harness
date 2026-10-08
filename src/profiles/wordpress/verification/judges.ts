@@ -22,6 +22,7 @@ type JudgeLab = Pick<
   | "observeCanaryTable"
   | "observeExecution"
   | "observeCanaryFiles"
+  | "observeOptions"
 >;
 type Options = { readonly store: PrivateArtifactStore; readonly lab: JudgeLab };
 
@@ -417,6 +418,31 @@ function fileDeleteJudge(options: Options) {
   );
 }
 
+/** Options update: the seeded canary option or a critical option moved from its baseline. */
+function optionJudge(options: Options) {
+  return canaryJudge(
+    options,
+    "wordpress-option-canary",
+    async ({ lab, recipeDigest, canaries }) => {
+      const route = await routeConditions(options.store, recipeDigest);
+      if (route === null) return missingRoute;
+      const watched = await options.lab.observeOptions(lab);
+      if (watched.status === "unavailable") return unavailable;
+      if (watched.changed.length === 0) return null;
+      return {
+        conditions: {
+          observedVia: "option-change",
+          changedOptions: watched.changed.join(","),
+          optionClass: watched.changed.every((name) => name === canaries.option)
+            ? "canary"
+            : "critical",
+          ...route,
+        },
+      };
+    },
+  );
+}
+
 /** Judges built so far; other impacts stay incomplete(no-judge). */
 export function createWordPressJudges(
   options: Options,
@@ -427,6 +453,7 @@ export function createWordPressJudges(
   const execution = executionCanaryJudge(options);
   const fileRead = fileReadJudge(options);
   const fileDelete = fileDeleteJudge(options);
+  const option = optionJudge(options);
   return {
     for(finding) {
       switch (finding.impact) {
@@ -448,6 +475,8 @@ export function createWordPressJudges(
           return fileRead;
         case "arbitrary-file-delete":
           return fileDelete;
+        case "options-update":
+          return option;
         default:
           return null;
       }
