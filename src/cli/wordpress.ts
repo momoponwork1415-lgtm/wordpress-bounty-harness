@@ -42,6 +42,7 @@ import {
   type WordPressSelectionPolicy,
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
+import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import {
   wordpressReproductionRenderer,
@@ -135,6 +136,11 @@ export function createWordPressCliProfile(options: {
   readonly scopePolicy: WordpressScopePolicy;
   /** Scope facts from judge evidence; absent, every scope assessment stays incomplete. */
   readonly scopeFacts?: ScopeFactsProvider<WordpressScopeInput>;
+  /** Local Wordfence history mirror; absent, duplicate lookup is unavailable. */
+  readonly wordfenceHistory?: {
+    readonly databasePath: string;
+    readonly statePath: string;
+  };
 }): CliProfile {
   return {
     review: (state) =>
@@ -143,6 +149,15 @@ export function createWordPressCliProfile(options: {
         artifactStore: state.store,
         scopeEvaluator: createWordpressScopeEvaluator(options.scopePolicy),
         factsProvider: options.scopeFacts ?? noScopeFacts,
+        ...(options.wordfenceHistory === undefined
+          ? {}
+          : {
+              duplicateLookup: createWordfenceDuplicateLookup({
+                ledger: state.ledger,
+                history: options.wordfenceHistory,
+                clock: state.clock,
+              }),
+            }),
         clock: state.clock,
       }),
     answerKeys: parseWordPressAnswerKeys,

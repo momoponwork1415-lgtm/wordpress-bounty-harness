@@ -69,6 +69,7 @@ const USAGE = [
   "  campaign run <slug>|--all --campaign <id> --config <path>",
   "  review [--campaign <id>]",
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>]",
+  "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
   "  review authorize --candidate <id> --draft <digest> --to <destination> [--by <name>]",
@@ -329,6 +330,20 @@ export async function runCli(
         });
         io.stdout(
           `recorded ${recorded.decision} (${recorded.reasonCode}) for finding ${findingId} at ${recorded.decidedAt}`,
+        );
+        return 0;
+      }
+      case "review dedupe": {
+        const review = environment.profile.review(state);
+        const item = queued(review, values);
+        const result = await review.inspectDuplicate({
+          campaignId: item.ref.campaignId,
+          findingId: item.ref.findingId,
+        });
+        io.stdout(
+          result.status === "possible-match"
+            ? `duplicate: possible-match ${result.reference}`
+            : `duplicate: ${result.status}`,
         );
         return 0;
       }

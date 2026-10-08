@@ -148,8 +148,8 @@ export interface ScopeFactsProvider<TFacts> {
 /** The #12 Wordfence history DB plugs in here; review never imports its storage. */
 export interface DuplicateLookup {
   inspect(input: {
+    readonly campaignId: string;
     readonly findingId: string;
-    readonly candidateId: string;
   }): Promise<DuplicateLookupResult>;
 }
 
@@ -648,11 +648,11 @@ export class Review<TFacts = unknown> {
   }
 
   async inspectDuplicate(input: {
+    readonly campaignId: string;
     readonly findingId: string;
-    readonly candidateId: string;
   }): Promise<DuplicateLookupResult> {
     const request = z
-      .strictObject({ findingId: id, candidateId: id })
+      .strictObject({ campaignId: id, findingId: id })
       .parse(input);
     return this.#duplicateLookup?.inspect(request) ?? { status: "unavailable" };
   }

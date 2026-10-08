@@ -538,6 +538,11 @@ describe("harness CLI vertical slice", () => {
     )![1]!;
     const target = [...campaign, "--finding", finding];
 
+    const dedupe = await run("review", "dedupe", ...target);
+    expect(dedupe.code).toBe(0);
+    // No local Wordfence mirror is configured, so no duplicate verdict is inferred.
+    expect(dedupe.stdout).toBe("duplicate: unavailable");
+
     const scoped = await run("review", "scope", ...target);
     expect(scoped.stderr).toBe("");
     expect(scoped.stdout).toMatch(/^wordfence in-scope /m);

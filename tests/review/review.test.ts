@@ -265,8 +265,8 @@ describe("review public interface", () => {
     expect(ledger.read({ type: "scope-assessed" })).toHaveLength(0);
     expect(
       await review.inspectDuplicate({
+        campaignId: "campaign-1",
         findingId: "finding-1",
-        candidateId: "candidate-1",
       }),
     ).toEqual({ status: "unavailable" });
   });
