@@ -145,6 +145,8 @@ export type CampaignFunnel = FunnelCounts & {
   readonly knownCostUsd: number;
   readonly unpricedRuns: number;
   readonly wallTimeMs: number;
+  /** Reviewed, non-contradicted findings judged in-scope, per assessed programme. */
+  readonly inScopeByProgramme: Readonly<Record<string, number>>;
   readonly byCategory: Readonly<Record<string, FunnelCounts>>;
 };
 
@@ -521,6 +523,22 @@ export class Ledger {
       }
     }
 
+    const inScopeByProgramme: Record<string, number> = Object.create(
+      null,
+    ) as Record<string, number>;
+    for (const finding of findings.values()) {
+      const status = verifications.get(finding.findingId)?.result.status;
+      if (
+        status === undefined ||
+        status === "contradicted" ||
+        !reviews.has(finding.findingId)
+      )
+        continue;
+      for (const [programmeId, scope] of scopes.get(finding.findingId) ?? [])
+        inScopeByProgramme[programmeId] =
+          (inScopeByProgramme[programmeId] ?? 0) +
+          (scope === "in-scope" ? 1 : 0);
+    }
     const totals = emptyCounts();
     const byCategory: Record<string, Counts> = Object.create(null) as Record<
       string,
@@ -562,6 +580,7 @@ export class Ledger {
       unpricedRuns,
       wallTimeMs,
       ...totals,
+      inScopeByProgramme: { ...inScopeByProgramme },
       byCategory,
     };
   }
