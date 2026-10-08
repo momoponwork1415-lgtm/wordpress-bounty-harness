@@ -23,6 +23,7 @@ type JudgeLab = Pick<
   | "observeExecution"
   | "observeCanaryFiles"
   | "observeOptions"
+  | "observeStoredScript"
 >;
 type Options = { readonly store: PrivateArtifactStore; readonly lab: JudgeLab };
 
@@ -443,6 +444,66 @@ function optionJudge(options: Options) {
   );
 }
 
+const browserStepsSchema = z.looseObject({
+  steps: z
+    .array(z.looseObject({ kind: z.string(), path: z.string().optional() }))
+    .max(30),
+});
+
+/**
+ * Stored XSS: an issued script canary reached the Lab receiver while the Lab's
+ * own browser opened the front page or every admin screen. Alerts and strings never count.
+ */
+function storedScriptJudge(options: Options) {
+  return canaryJudge(
+    options,
+    "wordpress-stored-script",
+    async ({ lab, recipeDigest }) => {
+      const route = await routeConditions(options.store, recipeDigest);
+      const steps = browserStepsSchema.safeParse(
+        await readJson(options.store, recipeDigest, "route.json"),
+      );
+      if (route === null || !steps.success) return missingRoute;
+      const routePaths = steps.data.steps
+        .filter((step) => step.kind === "browser" && step.path !== undefined)
+        .map((step) => step.path!)
+        .slice(0, 5);
+      const script = await options.lab.observeStoredScript(lab, { routePaths });
+      switch (script.status) {
+        case "unavailable":
+          return unavailable;
+        case "not-prepared":
+          return {
+            status: "incomplete",
+            reason: "precondition",
+            nextStep:
+              "Issue a script canary from this Lab and store it through the route; then repeat",
+          };
+        case "observed":
+          break;
+      }
+      if (script.contexts.length === 0) return null;
+      const siteWide = script.contexts.some(
+        (context) => context === "front" || context === "admin-all",
+      );
+      if (!siteWide)
+        return {
+          status: "incomplete",
+          reason: "observation",
+          nextStep: `The beacon arrived only from ${script.contexts.join(", ")}, not site-wide; a human decides whether it qualifies`,
+        };
+      return {
+        conditions: {
+          observedVia: "canary-beacon",
+          firedContexts: script.contexts.join(","),
+          siteWide: "yes",
+          ...route,
+        },
+      };
+    },
+  );
+}
+
 /** Judges built so far; other impacts stay incomplete(no-judge). */
 export function createWordPressJudges(
   options: Options,
@@ -454,6 +515,7 @@ export function createWordPressJudges(
   const fileRead = fileReadJudge(options);
   const fileDelete = fileDeleteJudge(options);
   const option = optionJudge(options);
+  const storedScript = storedScriptJudge(options);
   return {
     for(finding) {
       switch (finding.impact) {
@@ -477,6 +539,8 @@ export function createWordPressJudges(
           return fileDelete;
         case "options-update":
           return option;
+        case "stored-xss":
+          return storedScript;
         default:
           return null;
       }

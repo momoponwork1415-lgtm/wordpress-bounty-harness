@@ -105,6 +105,9 @@ export function quietLab(overrides: Partial<JudgeLab> = {}): JudgeLab {
     async observeOptions() {
       return { status: "observed", changed: [] };
     },
+    async observeStoredScript() {
+      return { status: "observed", contexts: [] };
+    },
     ...overrides,
   } satisfies Partial<WordPressLab>;
 }
