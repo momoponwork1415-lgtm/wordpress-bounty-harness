@@ -95,3 +95,21 @@ export function admitWordPressFinding(
   };
   return { ...body, findingId: canonicalDigest(body) };
 }
+
+const storedFindingSchema = wordpressFindingClaimSchema.extend({
+  findingId: digest,
+  discoveryRunId: id,
+  snapshotDigest: digest,
+  recipeRef: z.strictObject({
+    kind: z.literal("provider-report"),
+    digest,
+  }),
+});
+
+/** Reads a private Finding record back and rejects one whose identity no longer matches. */
+export function readWordPressFinding(value: unknown): WordPressFinding {
+  const { findingId, ...body } = storedFindingSchema.parse(value);
+  if (canonicalDigest(body) !== findingId)
+    throw new Error("Finding identity does not match its content");
+  return { ...body, findingId };
+}

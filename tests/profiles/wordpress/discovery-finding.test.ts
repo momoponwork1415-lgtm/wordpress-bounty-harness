@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { admitWordPressFinding } from "../../../src/profiles/wordpress/discovery/finding.js";
+import {
+  admitWordPressFinding,
+  readWordPressFinding,
+} from "../../../src/profiles/wordpress/discovery/finding.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const candidate = {
@@ -52,4 +55,29 @@ describe("WordPress Finding admission", () => {
       ),
     ).toThrow();
   });
+});
+
+it("reads a stored Finding back only when its identity matches its content", () => {
+  const admitted = admitWordPressFinding(
+    {
+      claim: "Synthetic claim",
+      attackerPosition: "subscriber",
+      impact: "account-takeover",
+      configurationPrecondition: "default",
+      brokenProperty: "Synthetic property",
+      sourceTrace: [{ file: "includes/a.php", function: "f", line: 1 }],
+      existingControls: "Synthetic control",
+      labObservations: "Synthetic observation",
+    },
+    {
+      runId: "run-1",
+      snapshotDigest: `sha256:${"a".repeat(64)}`,
+      reportArtifactDigest: `sha256:${"b".repeat(64)}`,
+    },
+  );
+  const stored = JSON.parse(JSON.stringify(admitted)) as unknown;
+  expect(readWordPressFinding(stored)).toEqual(admitted);
+  expect(() =>
+    readWordPressFinding({ ...admitted, impact: "privesc-to-admin" }),
+  ).toThrow();
 });
