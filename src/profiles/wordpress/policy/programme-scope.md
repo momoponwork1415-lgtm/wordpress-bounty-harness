@@ -18,15 +18,20 @@
 
 ## Patchstack
 
-- 公式: https://patchstack.com/ の規則ページ。2026-06-01の改定で報奨poolの対象が変わっている。提出前に確認する。
-- 攻撃者の権限（2026-10-08、公式ガイドライン2026年版の観測）: 未認証はx2、subscriber / customerはx1。contributorはmVDPのみでx0.75（XPが付かないことがある）。editor / author / admin / shop managerは不受理。subscriberより多い権限のcustom roleは不受理。管理者が明示的に付与するroleは対象外。
-- contributor以上のStored XSSは除外。権限昇格はcontributor以上へ到達するものだけ。
-- 除外種別（抜粋）: open redirect、CSV injection、full path disclosure、HTMLのみ / CSSのみのinjection、2FA bypass、rate limit欠如、multi-step CSRF、non-arbitrary LFI、AC:Hの報告、PIIだけのIDOR、添付 / チケット / 注文 / 予約のIDOR。
-- 閾値: 1,000件以上。倍率は件数帯で x0.5（1K）〜x10（5M）。
-- 管理画面だけで発火するStored XSSは出さない（旧リポジトリIssue 200の決定を引き継ぐ）。
+- 公式: 報告フォームの対象範囲（2026-06-01改定）の写しは [patchstack-scope-2026-10-08.md](patchstack-scope-2026-10-08.md)（2026-10-08、判断者がブラウザで取得）。詳細規則は https://patchstack.com/articles/bug-bounty-guidelines-rules/ （2026年版）。
+- 受理条件: 次のどれか1つ。(a) guideline 22.4を満たすzero-day（最新安定版、既定設定、動くexploit、未認証 / subscriber / customerでのサイト全体の侵害）、(b) 下の受理種別で条件を満たす、(c) mVDP対象ソフトで実害を示す（mVDPではcontributorも対象。XPは付かないことがある）。
+- 攻撃者の権限: 未認証、subscriber、customer、同等のcustom roleだけ。contributor以上と、subscriberより多い権限のcustom roleは不受理。倍率は未認証x2、subscriber / customer x1、contributor（mVDPのみ）x0.75。
+- 受理種別と条件: SQLi。任意ファイルupload / delete / download（pathと拡張子の両方を完全に制御）。RCE。PHP object injection。任意設定変更（サイトに重大な影響を持つoption）。権限昇格（contributor以上へ到達）。LFI / RFI（pathと拡張子を完全に制御）。broken access control（API key / secret、password hash、backup / SQLファイルなど機微な対象）。IDOR（重大な影響。PIIだけ、添付 / ticket / event / order / appointmentはmVDPのみ）。CSRF（上の書き込み系に連鎖する場合）。XSS（サイト全体に効くstored、またはJS実行を伴うreflected。contributor級stored、HTMLのみ、nonce付きreflectedは不可）。DoS（サイト全体のcrash / deface）。
+- 不受理: 機微でない情報露出・列挙・full path disclosure、race condition、blind SSRF、open redirect、CRLF、XXE（影響なし）、CSV injection、clickjacking、AC:H、2FA bypass、rate limit欠如、contributor未満への登録、multi-step CSRF、admin notice dismissal、非arbitraryなLFI / upload、`.phtml` などlegacy拡張子、価格改ざん / 決済回避（mVDPのみ）、サイト全体に効かないstored XSS（mVDPのみ）、高権限者の明示設定が前提、pluginのPermissions UIで管理者が権限を付与する前提、WordPress core由来、既定機能の範囲内。
+- 件数: 1,000件未満はCVSS 8.5以上のときだけ。100件未満は常に不受理。倍率は件数帯でx0.5（1K）〜x10（5M）、WordPress coreはx20。
+- 提出要件のうちHarnessに効くもの: 最新版に対して検証済みであること（提出直前に最新版でLab再検証する）。PoCは遠隔攻撃者の視点の手順（HTTPリクエスト、画面画像または動画）で、WP-CLIなどサーバー側だけの手順は不可（再現パッケージの手動手順とPythonスクリプトはこの形式に合わせる）。同種の複数発見は1報告に統合。pro版の問題をfree版に報告しない。
+- 管理画面だけで発火するStored XSSは出さない（旧リポジトリIssue 200の決定を引き継ぐ。Patchstackの「サイト全体に効く」条件とも一致）。
 
 ## 判定の規則
 
 - 探索の攻撃者位置は未認証とsubscriberに限る。trust境界宣言ではcontributor以上を信頼する側に置く（両プログラムで報奨に届かないため）。判定器はcontributor以上の経路も技術的に確認できるが、探索の目的には含めない。
+- Reflected XSSはWordfenceでは対象外、PatchstackではJS実行を伴いnonceを要しない場合だけ対象。Reflected XSSの候補はPatchstack向けにだけscope評価する。
+- CSRFはWordfenceでは対象外、Patchstackでは受理種別の書き込み系に連鎖する場合だけ対象。
+- 両プログラムとも「最新版で成立すること」「既定設定または一般的な利用範囲で成立すること」を要する。提出直前に最新版のsnapshotで再検証し、設定前提を再現パッケージに明記する。
 - `runtime-confirmed` と対象範囲は別に記録する。対象外でもVerified Vulnerabilityは残す。
 - 公開資料間で矛盾する場合は `ambiguous` にして人間へ回す。
