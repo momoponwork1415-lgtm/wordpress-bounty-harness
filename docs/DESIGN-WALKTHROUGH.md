@@ -214,3 +214,38 @@ Verifierはエージェント（LLM）で、判定器はコード。Verifierの�
 ### 分担（file partition）の単位
 
 プラグインを「ファイル単位」で割ると、1つの機能が複数ファイルにまたがって文脈が切れる。「入口単位」（1つのAJAX action、1つのRESTルート、1つのshortcodeと、そこから到達する関数群）で割ると、各runが1つの機能を端から端まで読める。profileが入口を列挙して分担を作り、共通ライブラリ（ヘルパー、DB層）は全runに読み取り可能にする。どちらの単位が良いかも評価で比べる（SPEC第10節のablation「分担有無」）。
+
+## 9. 起きやすい認識のずれ
+
+| ずれやすい理解 | 実際 |
+| --- | --- |
+| Harnessが脆弱性を見つける | 見つけるのはモデル（gpt-6.1-sol）。Harnessは流れの管理、隔離、判定、記録だけを持つ。探索の手順を持たない |
+| 40回回すから費用は1回の40倍 | 40は上限。新規なし4回連続で止まるので、空の対象は10回前後で終わる見込み。費用はspikeで測ってから上限を決め直す |
+| Verifierが確認する | Verifierは手順を整えて反証を試すLLM。確認（`runtime-confirmed`）を出すのは判定器（コード）だけ |
+| `incomplete` は失敗 | 失敗ではなく「まだ判定できていない」列。理由コードと次の手が付き、人間かHarnessが続きをやる |
+| scopeで探索を絞る | 探索を直接は絞らない。Labの認証情報（subscriber以下だけ）と判定器の成功条件で機械的に効かせ、promptでは誘導するだけ。scope外の発見も台帳には残る |
+| 評価は本番と別の作業 | 本番そのものが評価。同じ対象でrunを構成A / Bに分けて回し（本番A/B）、後日のadvisoryで台帳を再採点する（前向き評価）。held-outは任意 |
+| 履歴を渡す = 答えを渡す | 履歴は「このpluginで過去に何が修正されたか」のカタログ情報。評価では時点で切る。答え（原因箇所、PoC）は渡さない |
+| 人間が承認しないと進まない | 人間の判断点は「提出前のレビュー」と「外部行動の承認」だけ。選定と探索と検証は無人で進む |
+| Labは1つ | Labは探索runごと、検証ごとに使い捨てで作る。同時4 runなら同時に4つ以上のLabが動く。ホストのCPUとメモリが制約 |
+| Pro購読なら使い放題 | rate limitと使用量上限がある。1 runの消費を測り、上限に当たるならAPIキーへ切り替えを判断 |
+| 再現パッケージ = Verifierのログ | 判定器が通った経路だけを再生成した資料。試行錯誤は入らない。途中経過はPrivate EvidenceのVerifier run記録を別に開く |
+| Harnessが提出する | 提出は人間がプログラムの画面で行う。Harnessは承認を記録するだけ |
+| Target Profileの汎用化を今やる | WordPress固有をprofileに閉じ込めるだけ。インターフェースの汎用化は2つ目の対象が来てから |
+| 実装セッションが設計を決める | 設計はSPECとADRで決まっている。実装セッションが決めるのはモジュール内の詳細。SPECにない設計判断はIssueにコメントして推奨で進める |
+| Findingが出れば提出できる | Finding → `runtime-confirmed` → Verified Vulnerability → scope評価で in-scope → Submission Candidate → 人間の承認、の順で絞られる。各段の件数がfunnel |
+
+### 用語の対応
+
+| 語 | 意味 | 誰が作るか |
+| --- | --- | --- |
+| Campaign | 1つの対象（snapshot）に対する探索と検証の一式 | `discovery.campaign` |
+| Discovery run | 短命エージェントの1回の実行 | `discovery` |
+| Finding | runが出した主張。確認ではない | エージェント |
+| VerificationResult | `runtime-confirmed` / `contradicted` / `incomplete` | 判定器 |
+| Verified Vulnerability | `runtime-confirmed` から作る技術的記録。scopeと独立 | `ledger` |
+| Programme Scope Assessment | プログラムごとの in-scope / out / ambiguous | `review`（規則） |
+| Submission Candidate | in-scopeのVerified Vulnerabilityに文案の版と送信先を結び付けたもの | `review` |
+| External Action Authorization | 「この版をこの送信先へ出す」の承認記録 | 人間 |
+| Private Evidence | payload、HTTP記録、画面画像、ログ、再現パッケージの置き場。Git外、content-addressed | 各モジュール |
+| LedgerEvent | 台帳の1行。全部snapshot digestとcampaign idを持つ | 全モジュール |
