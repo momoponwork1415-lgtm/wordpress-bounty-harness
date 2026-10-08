@@ -32,7 +32,7 @@ const profile = defineAgentRuntimeProfile({
   bundledCatalogDigest: digest,
   authenticationMethod: "host-private-bearer",
   cyberAccessProgram: "standard",
-  serviceTier: "unavailable",
+  serviceTier: "priority",
   subagent: { modelId: "unavailable", effort: "unavailable" },
 });
 const run = {
@@ -161,6 +161,11 @@ describe("Codex native agent runtime", () => {
       });
       expect(commands[0]?.args).toContain("gpt-6.1-sol");
       expect(commands[0]?.args).toContain('model_reasoning_effort="high"');
+      expect(commands[0]?.args).toContain(
+        'openai_base_url="http://127.0.0.1:8080/v1"',
+      );
+      expect(commands[0]?.args).toContain('service_tier="priority"');
+      expect(result.receipt.serviceTier).toBe("priority");
       expect(commands[0]?.args).toContain("--cyber-access-program");
       expect(result.receipt.cyberAccessProgram).toBe("standard");
       expect(commands[0]?.args).not.toContain("resume");

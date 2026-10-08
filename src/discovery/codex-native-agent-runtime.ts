@@ -225,8 +225,11 @@ export class CodexNativeAgentRuntime {
           maxResponseBytes: 8 * 1024 * 1024,
           expiresAt: run.expiresAt,
         },
-        async (grant) =>
-          this.sandbox.execute({
+        async (grant) => {
+          if (!/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(grant.baseUrl)) {
+            throw new Error("Provider broker address is invalid");
+          }
+          return this.sandbox.execute({
             executable: "codex",
             args: [
               "exec",
@@ -252,6 +255,11 @@ export class CodexNativeAgentRuntime {
               "-c",
               `model_reasoning_effort="${run.profile.requestedEffort}"`,
               "-c",
+              `openai_base_url="${grant.baseUrl}/v1"`,
+              ...(run.profile.serviceTier === "unavailable"
+                ? []
+                : ["-c", `service_tier="${run.profile.serviceTier}"`]),
+              "-c",
               'history.persistence="none"',
               "--output-schema",
               "/opt/codex-support/report-schema.json",
@@ -272,7 +280,8 @@ export class CodexNativeAgentRuntime {
               mode: "ro",
               expectedTree: run.sourceTree,
             },
-          }),
+          });
+        },
       )
       .catch(() => undefined);
     if (granted === undefined) return incomplete("provider");
