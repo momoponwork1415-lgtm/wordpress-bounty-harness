@@ -3,6 +3,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
+import { summarizeRecordedRuntimes } from "../discovery/index.js";
 import type {
   ArmComparison,
   LocationAnswerKey,
@@ -101,6 +102,7 @@ const USAGE = [
   "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
   "  ledger funnel --campaign <id>",
   "  ledger usage [--campaign <id>]",
+  "  ledger runtime [--campaign <id>]",
   "  history status",
   "  eval score --campaign <id> --keys <path> --case <id>",
   "  eval compare [--axis history] [--campaign <id>]",
@@ -549,6 +551,21 @@ export async function runCli(
             ? `outcome ${outcome} recorded`
             : `outcome ${outcome} recorded (reward $${reward.toFixed(2)})`,
         );
+        return 0;
+      }
+      case "ledger runtime": {
+        const groups = await summarizeRecordedRuntimes({
+          ledger: state.ledger,
+          store: state.store,
+          ...(values.campaign === undefined
+            ? {}
+            : { campaignId: values.campaign }),
+        });
+        io.stdout("recorded runtimes (oldest first)");
+        for (const { runtime, runs, firstDay, lastDay } of groups)
+          io.stdout(
+            `  ${runtime.requestedModelId} effort ${runtime.requestedEffort}  codex-cli ${runtime.codexCliVersion}  catalog ${runtime.bundledCatalogDigest}  tier ${runtime.serviceTier}  access ${runtime.cyberAccessProgram}  auth ${runtime.authenticationMethod}  runs ${runs}  ${firstDay}..${lastDay}`,
+          );
         return 0;
       }
       case "history status": {

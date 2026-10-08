@@ -346,6 +346,7 @@ export async function runDiscoveryCampaign(options: {
     let wallTimeMs = 0;
     let foundNew = false;
     let usage: NativeRunReceipt["usage"] | undefined;
+    let receiptDigest: string | undefined;
     try {
       const result = await options.executor.execute({
         ...run,
@@ -357,6 +358,10 @@ export async function runDiscoveryCampaign(options: {
         Date.parse(receipt.completedAt) - Date.parse(receipt.startedAt),
       );
       usage = receipt.usage;
+      // The receipt carries the runtime the run used (CLI version, catalog digest, model).
+      receiptDigest = await options.evidence.putFiles({
+        "receipt.json": canonicalJson(receipt),
+      });
       if (receipt.providerLimit !== undefined) outcome = "provider-limited";
       if (
         receipt.terminal === "completed" &&
@@ -428,6 +433,11 @@ export async function runDiscoveryCampaign(options: {
       costUsd: "unavailable",
       wallTimeMs,
       ...(usage === undefined ? {} : { usage }),
+      ...(receiptDigest === undefined
+        ? {}
+        : {
+            artifacts: [{ kind: "native-run-receipt", digest: receiptDigest }],
+          }),
     });
     if (finished.status === "conflict")
       throw new Error("Discovery finish identity conflict");

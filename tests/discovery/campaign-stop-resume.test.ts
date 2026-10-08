@@ -8,6 +8,8 @@ import {
   defineAgentRuntimeProfile,
   ProviderAttachmentStore,
   runDiscoveryCampaign,
+  summarizeRecordedRuntimes,
+  type AgentRuntimeProfile,
   type DiscoveryTransportResult,
   type DiscoveryTransportRun,
 } from "../../src/discovery/index.js";
@@ -70,11 +72,16 @@ async function open() {
     readonly replies: (call: number) => Reply;
     readonly concurrency?: number;
     readonly dailyRunCap?: number;
+    readonly profile?: AgentRuntimeProfile;
+    readonly campaignId?: string;
   }) =>
     runDiscoveryCampaign({
-      campaignId: "campaign-1",
+      campaignId: options.campaignId ?? "campaign-1",
       labId: "lab-1",
-      input,
+      input: {
+        ...input,
+        modelProfileDigest: (options.profile ?? profile).digest,
+      },
       historyFraction: 0,
       ...(options.concurrency === undefined
         ? {}
@@ -168,7 +175,7 @@ async function open() {
         run: {
           runId: `${options.prefix}-${index}`,
           targetSnapshotDigest: digest,
-          profile,
+          profile: options.profile ?? profile,
           prompt: "Synthetic objective",
           lab: {
             endpoint: "http://wordpress",
@@ -189,6 +196,7 @@ async function open() {
       );
   return {
     ledger,
+    evidence,
     campaign,
     finished,
     maxInFlight: () => maxInFlight,
@@ -299,5 +307,75 @@ describe("discovery campaign stop and resume", () => {
       finished().filter((event) => event?.campaignId === "campaign-1"),
     ).toHaveLength(2);
     expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
+  });
+
+  it("keeps each run's receipt so a CLI or catalog update shows up in the recorded runtimes", async () => {
+    const { ledger, evidence, campaign } = await open();
+    await campaign({
+      prefix: "before",
+      replies: (call) => (call === 1 ? "limit" : "empty"),
+    });
+    const updated = defineAgentRuntimeProfile({
+      id: "synthetic",
+      transportKind: "codex-native/v1",
+      sandboxImageDigest: digest,
+      requestedModelId: "gpt-6.1-sol",
+      requestedEffort: "high",
+      codexCliVersion: "0.162.0",
+      bundledCatalogDigest: `sha256:${"b".repeat(64)}`,
+      authenticationMethod: "host-private-bearer",
+      cyberAccessProgram: "standard",
+      serviceTier: "priority",
+      subagent: { modelId: "unavailable", effort: "unavailable" },
+    });
+    await campaign({
+      prefix: "after",
+      campaignId: "campaign-2",
+      profile: updated,
+      replies: () => "empty",
+    });
+    const runtimes = await summarizeRecordedRuntimes({
+      ledger,
+      store: evidence,
+    });
+    expect(runtimes).toEqual([
+      {
+        runtime: {
+          requestedModelId: "gpt-6.1-sol",
+          requestedEffort: "high",
+          codexCliVersion: "0.161.0",
+          bundledCatalogDigest: digest,
+          serviceTier: "priority",
+          cyberAccessProgram: "standard",
+          authenticationMethod: "host-private-bearer",
+        },
+        runs: 2,
+        firstDay: "2026-10-08",
+        lastDay: "2026-10-08",
+      },
+      {
+        runtime: {
+          requestedModelId: "gpt-6.1-sol",
+          requestedEffort: "high",
+          codexCliVersion: "0.162.0",
+          bundledCatalogDigest: `sha256:${"b".repeat(64)}`,
+          serviceTier: "priority",
+          cyberAccessProgram: "standard",
+          authenticationMethod: "host-private-bearer",
+        },
+        runs: 6,
+        firstDay: "2026-10-08",
+        lastDay: "2026-10-08",
+      },
+    ]);
+    expect(
+      (
+        await summarizeRecordedRuntimes({
+          ledger,
+          store: evidence,
+          campaignId: "campaign-2",
+        })
+      ).map((group) => group.runtime.codexCliVersion),
+    ).toEqual(["0.162.0"]);
   });
 });

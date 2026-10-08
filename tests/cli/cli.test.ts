@@ -827,6 +827,12 @@ describe("harness CLI vertical slice", () => {
       "--config",
       configPath,
     );
+    const runtimes = await run("ledger", "runtime", "--campaign", "campaign-1");
+    expect(runtimes.code).toBe(0);
+    expect(runtimes.stdout.split("\n")).toEqual([
+      "recorded runtimes (oldest first)",
+      `  gpt-6.1-sol effort high  codex-cli 0.161.0  catalog ${sha("e")}  tier priority  access standard  auth host-private-bearer  runs 3  2026-10-08..2026-10-08`,
+    ]);
     const usage = await run("ledger", "usage");
     expect(usage.code).toBe(0);
     // The refused third run reported nothing, so every field shows it as unavailable.
