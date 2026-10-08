@@ -21,6 +21,12 @@
 7. 外部送信（報告、ベンダー連絡、公開）は、正確な Submission Candidate、文案の版、送信先へ結び付いた承認があるときだけ。Harness 自身は送信を実行しない。
 8. 台帳は追記専用で、持つのは digest 参照だけ。payload、HTTP 記録、画面画像、実行ログ、認証情報、未公開の発見は Git 外の Private Evidence に置く。
 
+## 探索promptの規則（SPEC.md 第6節）
+
+- 探索promptは短い目的promptの1本だけ。書くのは目的、trust境界、到達すべき影響の分類と報奨順、出力形式。探索の手順、checklist、役割分担、段階は書かない。手順はエージェントが決める。
+- wp2shell由来のpromptや、固定手順をHarnessに持たせる設計は持ち込まない。Harnessが持つのは隔離、分担、停止規則、判定、記録だけ。
+- prompt本文は版とdigestを記録し、変更は本番A/Bで測ってから既定にする。
+
 ## `profiles/wordpress/` の規則（ADR 0011）
 
 WordPress 固有のもの（WordPress.org からの取得、WordPress + MySQL の Lab 供給、PHP 向けの判定器、Wordfence / Patchstack の対象範囲方針、trust 境界宣言の雛形、file 分担の規則、答えの鍵の形式）は `profiles/wordpress/` に置く。
