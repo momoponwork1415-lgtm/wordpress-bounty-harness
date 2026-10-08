@@ -495,3 +495,55 @@ describe("review queue and decisions", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("review submission records", () => {
+  it("records a human submission only for an exactly authorized draft, then its outcome", async () => {
+    const { review, ledger } = await fixture();
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "reproduced-by-hand",
+      openedEvidence: [],
+      decidedBy: "operator",
+    });
+    const [assessment] = await review.assessScope({ ref });
+    const draft = await review.saveDraft({
+      assessmentId: assessment!.id,
+      content: "Private report text",
+      preparedBy: "human",
+    });
+    const submission = {
+      candidateId: draft.candidateId,
+      draftDigest: draft.digest,
+      destination: "wordfence",
+    };
+    await expect(review.recordSubmission(submission)).rejects.toThrow();
+    await expect(
+      review.recordOutcome({
+        candidateId: draft.candidateId,
+        outcome: "triaged",
+      }),
+    ).rejects.toThrow();
+    await review.authorizeExternalAction({
+      ...submission,
+      authorizedBy: "human-1",
+    });
+    await review.recordSubmission(submission);
+    await review.recordOutcome({
+      candidateId: draft.candidateId,
+      outcome: "triaged",
+    });
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      reviewed: 1,
+      inScope: 1,
+      submitted: 1,
+      outcome: 1,
+    });
+    expect(ledger.read({ type: "submission-outcome" })[0]?.event).toMatchObject(
+      {
+        candidateId: draft.candidateId,
+        outcome: "triaged",
+      },
+    );
+  });
+});

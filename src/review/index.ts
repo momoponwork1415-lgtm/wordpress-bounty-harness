@@ -584,6 +584,69 @@ export class Review<TFacts = unknown> {
       : { status: "authorized", authorizationId: authorization.event.identity };
   }
 
+  /** Records that the human submitted this exact authorized draft; Harness sends nothing. */
+  async recordSubmission(input: {
+    readonly candidateId: string;
+    readonly draftDigest: string;
+    readonly destination: string;
+  }): Promise<void> {
+    const admission = await this.admitExternalAction(input);
+    if (admission.status !== "authorized")
+      throw new Error(`Submission is not authorized: ${admission.reason}`);
+    const draft = (await this.#allDrafts()).find(
+      (item) =>
+        item.candidateId === input.candidateId &&
+        item.digest === input.draftDigest,
+    );
+    const assessment = (await this.#allAssessments()).find(
+      (item) => item.id === draft?.assessmentId,
+    );
+    if (assessment === undefined)
+      throw new Error("Submission Candidate has no assessment");
+    const recordedAt = this.#clock().toISOString();
+    const appended = await this.#ledger.append({
+      schemaVersion: 1,
+      identity: `submission:${input.candidateId}:${input.destination}`,
+      campaignId: assessment.ref.campaignId,
+      snapshotDigest: assessment.ref.snapshotDigest,
+      occurredAt: recordedAt,
+      type: "submission-recorded",
+      findingId: assessment.ref.findingId,
+      candidateId: input.candidateId,
+    });
+    if (appended.status === "conflict")
+      throw new Error("Submission ledger conflict");
+  }
+
+  async recordOutcome(input: {
+    readonly candidateId: string;
+    readonly outcome: Extract<
+      LedgerEventV1,
+      { type: "submission-outcome" }
+    >["outcome"];
+  }): Promise<void> {
+    const candidateId = id.parse(input.candidateId);
+    const submission = this.#readAll("submission-recorded").find(
+      ({ event }) =>
+        event.type === "submission-recorded" &&
+        event.candidateId === candidateId,
+    )?.event;
+    if (submission === undefined)
+      throw new Error("Record the submission before its outcome");
+    const appended = await this.#ledger.append({
+      schemaVersion: 1,
+      identity: `outcome:${candidateId}:${input.outcome}`,
+      campaignId: submission.campaignId,
+      snapshotDigest: submission.snapshotDigest,
+      occurredAt: this.#clock().toISOString(),
+      type: "submission-outcome",
+      candidateId,
+      outcome: input.outcome,
+    });
+    if (appended.status === "conflict")
+      throw new Error("Outcome ledger conflict");
+  }
+
   async inspectDuplicate(input: {
     readonly findingId: string;
     readonly candidateId: string;
