@@ -16,7 +16,7 @@ const definition = {
   bundledCatalogDigest: digest,
   authenticationMethod: "unavailable",
   cyberAccessProgram: "unavailable" as const,
-  serviceTier: "unavailable",
+  serviceTier: "unavailable" as const,
   subagent: { modelId: "unavailable", effort: "unavailable" },
 };
 

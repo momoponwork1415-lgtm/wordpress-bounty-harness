@@ -32,7 +32,7 @@ const bodySchema = z.strictObject({
     "daybreak_red",
     "unavailable",
   ]),
-  serviceTier: reported,
+  serviceTier: z.enum(["default", "priority", "flex", "fast", "unavailable"]),
   subagent: z.strictObject({ modelId: reported, effort: reported }),
 });
 
