@@ -86,7 +86,7 @@ const USAGE = [
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
   "  review authorize --candidate <id> --draft <digest> --to <destination> [--by <name>]",
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
-  "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected",
+  "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
   "  ledger funnel --campaign <id>",
   "  eval score --campaign <id> --keys <path> --case <id>",
 ].join("\n");
@@ -101,6 +101,7 @@ const options = {
   reason: { type: "string" },
   opened: { type: "string", multiple: true },
   duplicate: { type: "string" },
+  reward: { type: "string" },
   by: { type: "string" },
   keys: { type: "string" },
   programme: { type: "string" },
@@ -159,6 +160,11 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
   if (programmes.length > 0)
     lines.push(
       `in-scope by programme: ${programmes.map((programme) => `${programme} ${funnel.inScopeByProgramme[programme]}`).join(", ")}`,
+    );
+  const outcomes = Object.keys(funnel.outcomesByKind).sort();
+  if (outcomes.length > 0)
+    lines.push(
+      `outcomes: ${outcomes.map((outcome) => `${outcome} ${funnel.outcomesByKind[outcome]}`).join(", ")}  reward $${funnel.rewardUsd.toFixed(2)}`,
     );
   const categories = Object.keys(funnel.byCategory).sort();
   if (categories.length > 0) lines.push("by category:");
@@ -448,11 +454,24 @@ export async function runCli(
           throw new UsageError(
             `--outcome must be one of ${OUTCOMES.join(", ")}`,
           );
+        const reward =
+          values.reward === undefined ? undefined : Number(values.reward);
+        if (
+          reward !== undefined &&
+          (!/^\d+(\.\d{1,2})?$/.test(values.reward ?? "") ||
+            !Number.isFinite(reward))
+        )
+          throw new UsageError("--reward must be a non-negative USD amount");
         await environment.profile.review(state).recordOutcome({
           candidateId: required(values.candidate, "candidate"),
           outcome: outcome as (typeof OUTCOMES)[number],
+          ...(reward === undefined ? {} : { rewardUsd: reward }),
         });
-        io.stdout(`outcome ${outcome} recorded`);
+        io.stdout(
+          reward === undefined
+            ? `outcome ${outcome} recorded`
+            : `outcome ${outcome} recorded (reward $${reward.toFixed(2)})`,
+        );
         return 0;
       }
       case "ledger funnel":

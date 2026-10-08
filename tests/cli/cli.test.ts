@@ -630,11 +630,39 @@ describe("harness CLI vertical slice", () => {
         )
       ).code,
     ).toBe(0);
+    const resolved = await run(
+      "review",
+      "outcome",
+      "--candidate",
+      candidate!,
+      "--outcome",
+      "resolved",
+      "--reward",
+      "250",
+    );
+    expect(resolved.stderr).toBe("");
+    expect(resolved.stdout).toBe("outcome resolved recorded (reward $250.00)");
+    expect(
+      (
+        await run(
+          "review",
+          "outcome",
+          "--candidate",
+          candidate!,
+          "--outcome",
+          "resolved",
+          "--reward",
+          "-1",
+        )
+      ).code,
+    ).toBe(2);
 
     const funnel = await run("ledger", "funnel", ...campaign);
     expect(funnel.stdout).toContain(
       "reviewed 1 → in-scope 1 → submitted 1 → outcome 1",
     );
+    // Each candidate counts once, under its latest outcome.
+    expect(funnel.stdout).toContain("outcomes: resolved 1  reward $250.00");
     expect(funnel.stdout).toContain("in-scope by programme: patchstack");
     expect(funnel.stdout).toMatch(/wordfence 1/);
   });

@@ -118,6 +118,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       "not-applicable",
       "rejected",
     ]),
+    /** Bounty paid in USD, when the programme reported one. */
+    rewardUsd: z.number().nonnegative().max(1_000_000).optional(),
   }),
 ]);
 
@@ -154,6 +156,10 @@ export type CampaignFunnel = FunnelCounts & {
   readonly wallTimeMs: number;
   /** Reviewed, non-contradicted findings judged in-scope, per assessed programme. */
   readonly inScopeByProgramme: Readonly<Record<string, number>>;
+  /** Candidates by their latest recorded outcome. */
+  readonly outcomesByKind: Readonly<Record<string, number>>;
+  /** Sum of each candidate's latest reported reward. */
+  readonly rewardUsd: number;
   readonly byCategory: Readonly<Record<string, FunnelCounts>>;
 };
 
@@ -515,6 +521,10 @@ export class Ledger {
     const scopes = new Map<string, Map<string, string>>();
     const submissions = new Map<string, string>();
     const outcomes = new Set<string>();
+    const latestOutcome = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "submission-outcome" }>
+    >();
 
     for (const current of events) {
       switch (current.type) {
@@ -553,6 +563,7 @@ export class Ledger {
           break;
         case "submission-outcome":
           outcomes.add(current.candidateId);
+          latestOutcome.set(current.candidateId, current);
           break;
       }
     }
@@ -603,6 +614,15 @@ export class Ledger {
         if (outcomes.has(candidateId)) count.outcome++;
       }
     }
+    const outcomesByKind: Record<string, number> = Object.create(
+      null,
+    ) as Record<string, number>;
+    let rewardUsd = 0;
+    for (const latest of latestOutcome.values()) {
+      outcomesByKind[latest.outcome] =
+        (outcomesByKind[latest.outcome] ?? 0) + 1;
+      rewardUsd += latest.rewardUsd ?? 0;
+    }
     const discoveryAttempts = [...startedRuns.entries()].filter(
       ([runId, labId]) => readyLabs.has(labId) && !setupFailedRuns.has(runId),
     ).length;
@@ -615,6 +635,8 @@ export class Ledger {
       wallTimeMs,
       ...totals,
       inScopeByProgramme: { ...inScopeByProgramme },
+      outcomesByKind,
+      rewardUsd,
       byCategory,
     };
   }
