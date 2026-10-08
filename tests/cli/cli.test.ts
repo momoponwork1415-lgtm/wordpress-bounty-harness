@@ -30,6 +30,7 @@ import { createWordPressSelection } from "../../src/profiles/wordpress/selection
 import { openSnapshot } from "../../src/snapshot/index.js";
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
+const uuid = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
 const now = "2026-10-08T00:00:00.000Z";
 const directories: string[] = [];
 afterEach(async () => {
@@ -86,6 +87,11 @@ async function harness(
     readonly failFreeze?: string;
     /** Extra campaign config fields. */
     readonly config?: Readonly<Record<string, unknown>>;
+    /** What the Codex image reports; defaults to the runtime profile's values. */
+    readonly probe?: {
+      readonly cliVersion: string;
+      readonly bundledCatalogDigest: string;
+    };
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
@@ -142,6 +148,34 @@ async function harness(
     runner: {
       async run(request) {
         docker.push(request);
+        if (request.args[0] === "ps")
+          return {
+            exitCode: 0,
+            stdout: [
+              `wbh-${uuid}-db`,
+              `wbh-${uuid}-wp`,
+              `provider-egress-broker-${uuid}`,
+              "operator-postgres",
+              "wbh-notes",
+            ].join("\n"),
+            stderr: "",
+          };
+        if (request.args[0] === "network" && request.args[1] === "ls")
+          return {
+            exitCode: 0,
+            stdout: [
+              `wbh-${uuid}-net`,
+              `provider-egress-${uuid}`,
+              "bridge",
+            ].join("\n"),
+            stderr: "",
+          };
+        if (request.args[0] === "volume" && request.args[1] === "ls")
+          return {
+            exitCode: 0,
+            stdout: [`wbh-${uuid}-site`, "operator-data"].join("\n"),
+            stderr: "",
+          };
         if (request.args[0] === "info")
           return { exitCode: 0, stdout: '{"runsc":{}}', stderr: "" };
         if (request.args[0] === "inspect")
@@ -253,6 +287,11 @@ async function harness(
     lab,
     sourceFor: async () => ({ directory: sourceDirectory, tree }),
     runtimeProfile: profile,
+    probeRuntime: async () =>
+      options.probe ?? {
+        cliVersion: profile.codexCliVersion,
+        bundledCatalogDigest: profile.bundledCatalogDigest,
+      },
     attachments,
     executor: {
       async execute(run: DiscoveryTransportRun) {
@@ -827,12 +866,128 @@ describe("harness CLI vertical slice", () => {
       "--config",
       configPath,
     );
+    const runtimes = await run("ledger", "runtime", "--campaign", "campaign-1");
+    expect(runtimes.code).toBe(0);
+    expect(runtimes.stdout.split("\n")).toEqual([
+      "recorded runtimes (oldest first)",
+      `  gpt-6.1-sol effort high  codex-cli 0.161.0  catalog ${sha("e")}  tier priority  access standard  auth host-private-bearer  runs 3  2026-10-08..2026-10-08`,
+    ]);
     const usage = await run("ledger", "usage");
     expect(usage.code).toBe(0);
     // The refused third run reported nothing, so every field shows it as unavailable.
     expect(usage.stdout.split("\n")).toEqual([
       "usage by target and UTC day",
       "  2026-10-08  wporg:synthetic-plugin@3.3.1  runs 3  input 2000  cached 200  output 40  reasoning 0  unavailable: input 1, cached 1, output 1, reasoning 3",
+    ]);
+  });
+
+  it("shows the history mirror freshness by the same rule as the duplicate lookup", async () => {
+    const { run, root } = await harness({ history: true });
+    const stale = await run("history", "status");
+    expect(stale.code).toBe(1);
+    expect(stale.stdout).toBe(
+      "history mirror stale  last success 2026-10-01T00:00:00Z (168.0 h ago, limit 24 h)  records 1",
+    );
+    await writeFile(
+      join(root, "wordfence-state.json"),
+      JSON.stringify({
+        schema_version: "wordfence-cache/v1",
+        content_sha256: "synthetic-digest",
+        record_count: 1,
+        last_successful_at: "2026-10-07T12:00:00Z",
+        stale_fallback: false,
+      }),
+    );
+    const fresh = await run("history", "status");
+    expect(fresh.code).toBe(0);
+    expect(fresh.stdout).toBe(
+      "history mirror fresh  last success 2026-10-07T12:00:00Z (12.0 h ago, limit 24 h)  records 1",
+    );
+    await writeFile(
+      join(root, "wordfence-state.json"),
+      JSON.stringify({
+        schema_version: "wordfence-cache/v1",
+        content_sha256: "other-digest",
+        record_count: 1,
+        last_successful_at: "2026-10-07T12:00:00Z",
+      }),
+    );
+    const mismatched = await run("history", "status");
+    expect(mismatched.code).toBe(1);
+    expect(mismatched.stdout).toBe(
+      "history mirror unavailable  database and state disagree",
+    );
+    const unconfigured = await (await harness()).run("history", "status");
+    expect(unconfigured.code).toBe(1);
+    expect(unconfigured.stdout).toBe("history mirror not configured");
+  });
+
+  it("checks the Codex image against the runtime profile before a campaign", async () => {
+    const same = await harness();
+    const ok = await same.run("runtime", "check", "--config", same.configPath);
+    expect(ok.code).toBe(0);
+    expect(ok.stdout.split("\n")).toEqual([
+      "codex-cli  profile 0.161.0  image 0.161.0  ok",
+      `catalog  profile ${sha("e")}  image ${sha("e")}  ok`,
+    ]);
+
+    const updated = await harness({
+      probe: { cliVersion: "0.162.0", bundledCatalogDigest: sha("f") },
+    });
+    const differs = await updated.run(
+      "runtime",
+      "check",
+      "--config",
+      updated.configPath,
+    );
+    expect(differs.code).toBe(1);
+    expect(differs.stdout.split("\n")).toEqual([
+      "codex-cli  profile 0.161.0  image 0.162.0  differs",
+      `catalog  profile ${sha("e")}  image ${sha("f")}  differs`,
+      "The image differs from the runtime profile; runs would end incomplete(policy). Update the runtime profile, then confirm the new values with ledger runtime after the next campaign.",
+    ]);
+  });
+
+  it("lists leftover Lab and broker resources and removes only them on request", async () => {
+    const { run, configPath, docker } = await harness();
+    const listed = await run("lab", "cleanup", "--config", configPath);
+    expect(listed.code).toBe(0);
+    expect(listed.stdout.split("\n")).toEqual([
+      `leftover containers 3: wbh-${uuid}-db, wbh-${uuid}-wp, provider-egress-broker-${uuid}`,
+      `leftover networks 2: wbh-${uuid}-net, provider-egress-${uuid}`,
+      `leftover volumes 1: wbh-${uuid}-site`,
+      "nothing removed; run again with --remove when no campaign is running",
+    ]);
+    expect(docker.some(({ args }) => args[0] === "rm")).toBe(false);
+
+    const removed = await run(
+      "lab",
+      "cleanup",
+      "--config",
+      configPath,
+      "--remove",
+    );
+    expect(removed.code).toBe(0);
+    expect(removed.stdout).toContain(
+      "removed 3 containers, 2 networks, 1 volumes",
+    );
+    const removals = docker
+      .map(({ args }) => args)
+      .filter(
+        (args) =>
+          args[0] === "rm" ||
+          ((args[0] === "network" || args[0] === "volume") && args[1] === "rm"),
+      );
+    expect(removals).toEqual([
+      [
+        "rm",
+        "-f",
+        `wbh-${uuid}-db`,
+        `wbh-${uuid}-wp`,
+        `provider-egress-broker-${uuid}`,
+      ],
+      ["network", "rm", `wbh-${uuid}-net`, `provider-egress-${uuid}`],
+      ["volume", "rm", `wbh-${uuid}-site`],
     ]);
   });
 

@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import {
   CODEX_SANDBOX_MEMORY_MIB,
+  EGRESS_BROKER_LEFTOVER_PATTERNS,
   EGRESS_BROKER_MEMORY_MIB,
 } from "../discovery/index.js";
 import type {
@@ -50,7 +51,10 @@ import {
 } from "../profiles/wordpress/selection/index.js";
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
-import { extractCampaignHistory } from "../profiles/wordpress/wordfence-history/index.js";
+import {
+  extractCampaignHistory,
+  inspectHistoryMirror,
+} from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import {
   wordpressReproductionRenderer,
@@ -127,6 +131,11 @@ export interface WordPressCampaignBoundaries {
     readonly tree: ExpectedSourceTree;
   }>;
   readonly runtimeProfile: AgentRuntimeProfile;
+  /** What the pinned Codex image actually ships (GvisorCodexSandbox.probe). */
+  readonly probeRuntime: () => Promise<{
+    readonly cliVersion: string;
+    readonly bundledCatalogDigest: string;
+  }>;
   readonly executor: {
     execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
   };
@@ -254,6 +263,23 @@ export function createWordPressCliProfile(options: {
         clock: state.clock,
       }),
     answerKeys: parseWordPressAnswerKeys,
+    historyStatus(state) {
+      if (options.wordfenceHistory === undefined) return null;
+      const mirror = inspectHistoryMirror({
+        ...options.wordfenceHistory,
+        now: state.clock(),
+      });
+      if (mirror.status === "unavailable")
+        return {
+          fresh: false,
+          line: `history mirror unavailable  ${mirror.reason === "state-unreadable" ? "state is unreadable" : "database and state disagree"}`,
+        };
+      const hours = (ms: number) => (ms / 3_600_000).toFixed(1);
+      return {
+        fresh: mirror.status === "fresh",
+        line: `history mirror ${mirror.status}${mirror.staleFallback ? " (last refresh failed)" : ""}  last success ${mirror.lastSuccessfulAt} (${hours(mirror.ageMs)} h ago, limit ${mirror.maxAgeMs / 3_600_000} h)  records ${mirror.recordCount}`,
+      };
+    },
     advisories: parseWordPressAdvisories,
     locationsOf: wordpressFindingLocations,
     async select(state, input) {
@@ -374,6 +400,31 @@ export function createWordPressCliProfile(options: {
           reconstructionFor: reconstructionFor(config),
         },
       });
+    },
+    async cleanupLeftovers(state, input) {
+      const { config } = await loadConfig(input.configPath);
+      const boundaries = await options.boundaries(config, state);
+      return boundaries.lab.cleanupLeftovers({
+        remove: input.remove,
+        patterns: EGRESS_BROKER_LEFTOVER_PATTERNS,
+      });
+    },
+    async checkRuntime(state, input) {
+      const { config } = await loadConfig(input.configPath);
+      const boundaries = await options.boundaries(config, state);
+      const measured = await boundaries.probeRuntime();
+      return [
+        {
+          item: "codex-cli",
+          profile: boundaries.runtimeProfile.codexCliVersion,
+          image: measured.cliVersion,
+        },
+        {
+          item: "catalog",
+          profile: boundaries.runtimeProfile.bundledCatalogDigest,
+          image: measured.bundledCatalogDigest,
+        },
+      ];
     },
     async reverify(state, input) {
       const { config, policy } = await loadConfig(input.configPath);

@@ -12,6 +12,12 @@ import { PROVIDER_UPSTREAM_ORIGIN } from "./provider-credential-proxy.js";
 import { runNativeModelProcess } from "../infrastructure/native-model-process.js";
 import { readPrivateProviderCredential } from "./provider-private-credential.js";
 
+/** Names of the per-run broker container and the network it creates when none is given. */
+export const EGRESS_BROKER_LEFTOVER_PATTERNS = {
+  containers: [/^provider-egress-broker-[A-Za-z0-9_.-]+$/],
+  networks: [/^provider-egress-(?!broker-)[A-Za-z0-9_.-]+$/],
+} as const;
+
 /** Memory ceiling of one per-run broker container. */
 export const EGRESS_BROKER_MEMORY_MIB = 512;
 

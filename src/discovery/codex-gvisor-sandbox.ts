@@ -40,12 +40,14 @@ export interface GvisorCodexSandboxOptions {
   readonly maxOutputBytes: number;
   readonly timeoutMs: number;
   readonly clock?: () => Date;
-  readonly runDocker?: (
-    args: readonly string[],
-    stdin: string | undefined,
-    timeoutMs: number,
-  ) => Promise<NativeModelProcessResult>;
+  readonly runDocker?: DockerRun;
 }
+
+type DockerRun = (
+  args: readonly string[],
+  stdin: string | undefined,
+  timeoutMs: number,
+) => Promise<NativeModelProcessResult>;
 
 function nonRootUser(): string {
   if (
@@ -80,6 +82,105 @@ export class GvisorCodexSandbox implements CodexSandbox {
     imageSchema.parse(options.image);
     this.#options = options;
     this.#user = nonRootUser();
+  }
+
+  /** Measures the image's CLI version and bundled catalog, with no network and no source. */
+  async probe(): Promise<{
+    readonly cliVersion: string;
+    readonly bundledCatalogDigest: string;
+  }> {
+    return this.#probe(
+      this.#docker(await realpath(this.#options.scratchRootDirectory)),
+    );
+  }
+
+  async #probe(
+    runDocker: DockerRun,
+  ): Promise<{ cliVersion: string; bundledCatalogDigest: string }> {
+    const base = this.#base();
+    const versionResult = await runDocker(
+      [
+        ...base,
+        "--network=none",
+        "--entrypoint=codex",
+        this.#options.image,
+        "--version",
+      ],
+      undefined,
+      20_000,
+    );
+    if (versionResult.kind !== "exited" || versionResult.exitCode !== 0)
+      throw new Error("Codex CLI version is unavailable");
+    const match =
+      /\bcodex-cli\s+(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?)\b/.exec(
+        versionResult.stdout,
+      );
+    if (match?.[1] === undefined)
+      throw new Error("Codex CLI version is invalid");
+    const catalogResult = await runDocker(
+      [
+        ...base,
+        "--network=none",
+        "--entrypoint=sha256sum",
+        this.#options.image,
+        this.#options.bundledCatalogPath,
+      ],
+      undefined,
+      20_000,
+    );
+    if (catalogResult.kind !== "exited" || catalogResult.exitCode !== 0)
+      throw new Error("Codex model catalog is unavailable");
+    const catalogHash = /^([a-f0-9]{64})\s/.exec(catalogResult.stdout)?.[1];
+    if (catalogHash === undefined)
+      throw new Error("Codex model catalog digest is invalid");
+    return {
+      cliVersion: match[1],
+      bundledCatalogDigest: digestSchema.parse(`sha256:${catalogHash}`),
+    };
+  }
+
+  #docker(workingDirectory: string, secret?: string): DockerRun {
+    return (
+      this.#options.runDocker ??
+      ((
+        args: readonly string[],
+        stdin: string | undefined,
+        timeoutMs: number,
+      ) =>
+        runNativeModelProcess({
+          executablePath: this.#options.dockerExecutablePath,
+          args,
+          ...(stdin === undefined ? {} : { stdin }),
+          workingDirectory,
+          environment: {
+            PATH: process.env.PATH,
+            LANG: "C",
+            LC_ALL: "C",
+            TZ: "UTC",
+          },
+          timeoutMs,
+          maxOutputBytes: this.#options.maxOutputBytes,
+          redact: (text) =>
+            secret === undefined ? text : text.split(secret).join("[REDACTED]"),
+        }))
+    );
+  }
+
+  #base(): string[] {
+    return [
+      "run",
+      "--rm",
+      "--pull=never",
+      "--runtime=runsc",
+      `--user=${this.#user}`,
+      "--read-only",
+      "--cap-drop=ALL",
+      "--security-opt=no-new-privileges",
+      "--pids-limit=64",
+      `--memory=${CODEX_SANDBOX_MEMORY_MIB}m`,
+      "--cpus=1",
+      "--tmpfs=/tmp:rw,nosuid,nodev,size=256m",
+    ];
   }
 
   async execute(command: CodexSandboxCommand): Promise<CodexSandboxResult> {
@@ -127,78 +228,15 @@ export class GvisorCodexSandbox implements CodexSandbox {
     const staging = await mkdtemp(join(scratchRoot, "codex-run-"));
     const now = this.#options.clock ?? (() => new Date());
     const token = command.grant.authorization.replace(/^Bearer /, "");
-    const runDocker =
-      this.#options.runDocker ??
-      ((
-        args: readonly string[],
-        stdin: string | undefined,
-        timeoutMs: number,
-      ) =>
-        runNativeModelProcess({
-          executablePath: this.#options.dockerExecutablePath,
-          args,
-          ...(stdin === undefined ? {} : { stdin }),
-          workingDirectory: scratchRoot,
-          environment: {
-            PATH: process.env.PATH,
-            LANG: "C",
-            LC_ALL: "C",
-            TZ: "UTC",
-          },
-          timeoutMs,
-          maxOutputBytes: this.#options.maxOutputBytes,
-          redact: (text) => text.split(token).join("[REDACTED]"),
-        }));
-    const base = [
-      "run",
-      "--rm",
-      "--pull=never",
-      "--runtime=runsc",
-      `--user=${this.#user}`,
-      "--read-only",
-      "--cap-drop=ALL",
-      "--security-opt=no-new-privileges",
-      "--pids-limit=64",
-      `--memory=${CODEX_SANDBOX_MEMORY_MIB}m`,
-      "--cpus=1",
-      "--tmpfs=/tmp:rw,nosuid,nodev,size=256m",
-    ];
+    const runDocker = this.#docker(scratchRoot, token);
+    const base = this.#base();
     try {
       await writeFile(
         join(staging, "report-schema.json"),
         command.supportFiles[0].content,
         { flag: "wx", mode: 0o600 },
       );
-      const probe = [
-        ...base,
-        "--network=none",
-        "--entrypoint=codex",
-        this.#options.image,
-        "--version",
-      ];
-      const versionResult = await runDocker(probe, undefined, 20_000);
-      if (versionResult.kind !== "exited" || versionResult.exitCode !== 0)
-        throw new Error("Codex CLI version is unavailable");
-      const match =
-        /\bcodex-cli\s+(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)?)\b/.exec(
-          versionResult.stdout,
-        );
-      if (match?.[1] === undefined)
-        throw new Error("Codex CLI version is invalid");
-      const catalogProbe = [
-        ...base,
-        "--network=none",
-        "--entrypoint=sha256sum",
-        this.#options.image,
-        this.#options.bundledCatalogPath,
-      ];
-      const catalogResult = await runDocker(catalogProbe, undefined, 20_000);
-      if (catalogResult.kind !== "exited" || catalogResult.exitCode !== 0)
-        throw new Error("Codex model catalog is unavailable");
-      const catalogHash = /^([a-f0-9]{64})\s/.exec(catalogResult.stdout)?.[1];
-      if (catalogHash === undefined)
-        throw new Error("Codex model catalog digest is invalid");
-      const bundledCatalogDigest = digestSchema.parse(`sha256:${catalogHash}`);
+      const { cliVersion, bundledCatalogDigest } = await this.#probe(runDocker);
       const startedAt = now().toISOString();
       const args = [
         ...base,
@@ -227,7 +265,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
         startedAt,
         completedAt,
         image: this.#options.image,
-        cliVersion: match[1],
+        cliVersion,
         bundledCatalogDigest,
         isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
       };

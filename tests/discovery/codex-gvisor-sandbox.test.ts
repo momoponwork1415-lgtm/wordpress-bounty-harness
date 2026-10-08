@@ -133,4 +133,43 @@ describe("gVisor Codex sandbox", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("probes the image's CLI version and catalog digest without network or source", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
+    try {
+      const calls: (readonly string[])[] = [];
+      const sandbox = new GvisorCodexSandbox({
+        dockerExecutablePath: "/usr/bin/docker",
+        image: `node@${digest}`,
+        bundledCatalogPath: "/opt/codex/model-catalog.json",
+        scratchRootDirectory: root,
+        maxOutputBytes: 1024 * 1024,
+        timeoutMs: 60_000,
+        runDocker: async (args) => {
+          calls.push(args);
+          return {
+            kind: "exited",
+            exitCode: 0,
+            stdout: args.includes("--version")
+              ? "codex-cli 0.162.0\n"
+              : `${"c".repeat(64)}  /opt/codex/model-catalog.json\n`,
+            stderr: "",
+          };
+        },
+      });
+      expect(await sandbox.probe()).toEqual({
+        cliVersion: "0.162.0",
+        bundledCatalogDigest: `sha256:${"c".repeat(64)}`,
+      });
+      expect(calls).toHaveLength(2);
+      for (const args of calls) {
+        expect(args).toEqual(
+          expect.arrayContaining(["--runtime=runsc", "--network=none"]),
+        );
+        expect(args.some((arg) => arg.startsWith("--mount="))).toBe(false);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

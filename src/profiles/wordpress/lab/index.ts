@@ -247,7 +247,33 @@ export interface WordPressLab extends LabProvisioner<
     handle: WordPressLabHandle,
     username: string,
   ): Promise<WordPressRoleObservation>;
+  /**
+   * Lists Docker resources a crashed run left behind: Lab names and the given
+   * patterns only. Removes them when asked; use only while no campaign runs.
+   */
+  cleanupLeftovers(input: {
+    readonly remove: boolean;
+    readonly patterns?: LeftoverPatterns;
+  }): Promise<Leftovers>;
 }
+
+export type LeftoverPatterns = {
+  readonly containers?: readonly RegExp[];
+  readonly networks?: readonly RegExp[];
+  readonly volumes?: readonly RegExp[];
+};
+export type Leftovers = {
+  readonly containers: readonly string[];
+  readonly networks: readonly string[];
+  readonly volumes: readonly string[];
+};
+
+const labId = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const LAB_LEFTOVERS = {
+  containers: [new RegExp(`^wbh-${labId}-(?:db|wp|canary)$`)],
+  networks: [new RegExp(`^wbh-${labId}-net$`)],
+  volumes: [new RegExp(`^wbh-${labId}-site$`)],
+} as const;
 
 interface Resources {
   readonly id: string;
@@ -474,6 +500,39 @@ export function openWordPressLab(options: {
       await requireDocker(["image", "inspect", image], 30_000);
   };
   return {
+    async cleanupLeftovers({ remove, patterns = {} }) {
+      const kinds = [
+        ["containers", ["ps", "-a", "--format", "{{.Names}}"], ["rm", "-f"]],
+        [
+          "networks",
+          ["network", "ls", "--format", "{{.Name}}"],
+          ["network", "rm"],
+        ],
+        [
+          "volumes",
+          ["volume", "ls", "--format", "{{.Name}}"],
+          ["volume", "rm"],
+        ],
+      ] as const;
+      const found: Record<(typeof kinds)[number][0], string[]> = {
+        containers: [],
+        networks: [],
+        volumes: [],
+      };
+      for (const [kind, list] of kinds) {
+        const owned = [...LAB_LEFTOVERS[kind], ...(patterns[kind] ?? [])];
+        found[kind] = (await requireDocker(list)).stdout
+          .split("\n")
+          .map((name) => name.trim())
+          .filter((name) => owned.some((pattern) => pattern.test(name)));
+      }
+      // Containers go first so their networks and volumes are no longer in use.
+      if (remove)
+        for (const [kind, , removal] of kinds)
+          if (found[kind].length > 0)
+            await requireDocker([...removal, ...found[kind]]);
+      return found;
+    },
     async provision(
       candidateSnapshot,
       candidateSetup,

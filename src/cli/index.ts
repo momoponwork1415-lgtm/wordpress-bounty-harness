@@ -3,6 +3,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
+import { summarizeRecordedRuntimes } from "../discovery/index.js";
 import type {
   ArmComparison,
   LocationAnswerKey,
@@ -42,6 +43,10 @@ export type CliState = {
 export interface CliProfile {
   review(state: CliState): Review;
   answerKeys(value: unknown): readonly LocationAnswerKey[];
+  /** Lines describing the public history mirror, and whether it is fresh; null when none is configured. */
+  historyStatus(
+    state: CliState,
+  ): { readonly fresh: boolean; readonly line: string } | null;
   /** Later public advisories in key form, matched to targets by the profile. */
   advisories(value: unknown): readonly ProspectiveAdvisory[];
   locationsOf(finding: unknown): readonly SourceLocation[];
@@ -64,6 +69,26 @@ export interface CliProfile {
       readonly target: string | null;
     },
   ): Promise<CampaignSummary>;
+  /** Docker resources a crashed run left behind; removed only when asked. */
+  cleanupLeftovers(
+    state: CliState,
+    input: { readonly configPath: string; readonly remove: boolean },
+  ): Promise<{
+    readonly containers: readonly string[];
+    readonly networks: readonly string[];
+    readonly volumes: readonly string[];
+  }>;
+  /** Runtime items the profile pins next to what the provider image reports. */
+  checkRuntime(
+    state: CliState,
+    input: { readonly configPath: string },
+  ): Promise<
+    readonly {
+      readonly item: string;
+      readonly profile: string;
+      readonly image: string;
+    }[]
+  >;
   /** Re-verifies one Finding on its target's latest version in a fresh Lab. */
   reverify(
     state: CliState,
@@ -97,6 +122,10 @@ const USAGE = [
   "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
   "  ledger funnel --campaign <id>",
   "  ledger usage [--campaign <id>]",
+  "  ledger runtime [--campaign <id>]",
+  "  history status",
+  "  runtime check --config <path>",
+  "  lab cleanup --config <path> [--remove]",
   "  eval score --campaign <id> --keys <path> --case <id>",
   "  eval compare [--axis history] [--campaign <id>]",
   "  eval prospective --advisories <path> [--campaign <id>]",
@@ -125,6 +154,7 @@ const options = {
   case: { type: "string" },
   axis: { type: "string" },
   advisories: { type: "string" },
+  remove: { type: "boolean" },
 } as const;
 
 class UsageError extends Error {}
@@ -545,6 +575,57 @@ export async function runCli(
             : `outcome ${outcome} recorded (reward $${reward.toFixed(2)})`,
         );
         return 0;
+      }
+      case "ledger runtime": {
+        const groups = await summarizeRecordedRuntimes({
+          ledger: state.ledger,
+          store: state.store,
+          ...(values.campaign === undefined
+            ? {}
+            : { campaignId: values.campaign }),
+        });
+        io.stdout("recorded runtimes (oldest first)");
+        for (const { runtime, runs, firstDay, lastDay } of groups)
+          io.stdout(
+            `  ${runtime.requestedModelId} effort ${runtime.requestedEffort}  codex-cli ${runtime.codexCliVersion}  catalog ${runtime.bundledCatalogDigest}  tier ${runtime.serviceTier}  access ${runtime.cyberAccessProgram}  auth ${runtime.authenticationMethod}  runs ${runs}  ${firstDay}..${lastDay}`,
+          );
+        return 0;
+      }
+      case "lab cleanup": {
+        const remove = values.remove === true;
+        const leftovers = await environment.profile.cleanupLeftovers(state, {
+          configPath: resolve(required(values.config, "config")),
+          remove,
+        });
+        for (const kind of ["containers", "networks", "volumes"] as const)
+          io.stdout(
+            `leftover ${kind} ${leftovers[kind].length}${leftovers[kind].length === 0 ? "" : `: ${leftovers[kind].join(", ")}`}`,
+          );
+        io.stdout(
+          remove
+            ? `removed ${leftovers.containers.length} containers, ${leftovers.networks.length} networks, ${leftovers.volumes.length} volumes`
+            : "nothing removed; run again with --remove when no campaign is running",
+        );
+        return 0;
+      }
+      case "runtime check": {
+        const items = await environment.profile.checkRuntime(state, {
+          configPath: resolve(required(values.config, "config")),
+        });
+        for (const { item, profile, image } of items)
+          io.stdout(
+            `${item}  profile ${profile}  image ${image}  ${profile === image ? "ok" : "differs"}`,
+          );
+        if (items.every(({ profile, image }) => profile === image)) return 0;
+        io.stdout(
+          "The image differs from the runtime profile; runs would end incomplete(policy). Update the runtime profile, then confirm the new values with ledger runtime after the next campaign.",
+        );
+        return 1;
+      }
+      case "history status": {
+        const status = environment.profile.historyStatus(state);
+        io.stdout(status?.line ?? "history mirror not configured");
+        return status?.fresh === true ? 0 : 1;
       }
       case "ledger usage": {
         const labels = {
