@@ -44,6 +44,7 @@ const canaries: WordPressCanaryLedger = {
   user: "wbh-canary-synthetic-nonce",
   adminUser: "wbh-canary-admin-synthetic-nonce",
   roleBaseline: { "lab-subscriber": ["subscriber"] },
+  sqlCanary: { table: "wbh_canary", value: "0".repeat(32) },
 };
 const finding = (impact: WordPressFinding["impact"]): WordPressFinding => ({
   findingId: "finding-1",
