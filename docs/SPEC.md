@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.12、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
+版: v0.13、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
 
 ## 1. 目的と指標
 
@@ -52,7 +52,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、canaryの配置先（options、post meta、ファイル、canaryユーザー） |
 | 判定器集合 | 第7節の種別別判定器 |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
-| prompt雛形 | 探索prompt（版付きの変数。既定は短い目的prompt、比較用にwp2shell由来）、trust境界宣言の雛形、file分担の規則（hook / route / AJAX action単位） |
+| prompt雛形 | 探索prompt（短い目的promptの1本、版付き）、trust境界宣言の雛形、file分担の規則（hook / route / AJAX action単位） |
 | 答えの鍵の形式 | 入口の表現（hook名、route、action名） |
 
 汎用モジュールはこれらをインターフェース経由で受け取り、WordPressの型やpathをimportしない。2つ目のprofileを作るまでインターフェースは汎用化せず、WordPress版の完成後に共通部分を抽出する。
@@ -75,7 +75,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 - 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
 - 対象の公開履歴: ローカルWordfence履歴DBから、snapshotの版より前（評価runではheld-outの公開日より前）に公開された対象プラグインの記録を抽出して渡す。内容は種別、影響版、修正版、公開日、公開記録のタイトル、修正版との差分で変わったファイルの一覧まで。PoC・payload・再現手順は含めない。runの一部にだけ渡す分担にでき、渡した・渡さないを `CampaignInput` に記録する（ADR 0012）。
-- 入力: 探索prompt（版付き、digestを記録。**既定は短い目的prompt**（目的、trust境界、影響の分類と報奨順、出力形式だけ。手順を書かない）。比較用の変種として、wp2shell由来からCTF前提「脆弱性が必ず存在しRCE / flagへ到達する」と最低6時間の指定だけを外したものを持ち、第10節の評価で同じheld-out case・同じmodel・同じHarnessで比べる。wp2shellの元になったCycle Double Cover型promptは「解が必ず存在し、費用を無制限にかけて解く」前提で、対象の大半に脆弱性がなく費用が収益を決めるバグバウンティには合わないため既定にしない）、trust境界宣言、分担されたfile集合、Lab endpointとロール別認証情報（Lab内のみ）、読み取り専用source。
+- 入力: 探索prompt（版付き、digestを記録。**短い目的promptの1本だけ**。目的、trust境界、影響の分類と報奨順、出力形式だけを書き、手順を書かない。wp2shell由来の変種は当面作らない。wp2shellの元になったCycle Double Cover型promptは「解が必ず存在し、費用を無制限にかけて解く」前提で、対象の大半に脆弱性がなく費用が収益を決めるバグバウンティには合わない。prompt変種の比較が必要になったら本番A/Bの軸として追加する）、trust境界宣言、分担されたfile集合、Lab endpointとロール別認証情報（Lab内のみ）、読み取り専用source。
 - 許可する操作: sourceの読み取り、LabへのHTTP、Lab DBの読み取り、Lab内でのcanary確認。外向き通信なし。
 - 出力: `Finding[]`（0件可）と、調べた範囲・調べなかった範囲の短い記述。
 - Campaign停止規則: 新規Findingなしがk回連続（初期値 k = 4、Codex Security deep scanの既定に合わせる）、または対象あたりの上限run数（初期値 N = 40）。wall timeはrunごとに上限を持つ。
@@ -168,7 +168,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ### 主指標（本番の台帳から、追加費用なし）
 
-- **本番A/B（ablation）**: runは独立なので、同じ対象に対してrunを構成A / 構成Bに分担して回す。どちらが見つけても提出でき、予算を無駄にしない。比較する軸: prompt（短い目的 vs wp2shell由来）、履歴有無（ADR 0012）、分担単位、Verifier有無、判定器有無、Lab内実行有無。各runの構成は台帳のrun記録に残し、対象をまたいで集計する。差は同じ対象内の対で示し、区間を併記する。
+- **本番A/B（ablation）**: runは独立なので、同じ対象に対してrunを構成A / 構成Bに分担して回す。どちらが見つけても提出でき、予算を無駄にしない。比較する軸: 履歴有無（ADR 0012）、分担単位、Verifier有無、判定器有無、Lab内実行有無。promptは短い目的promptの1本で固定し、当面は軸にしない。各runの構成は台帳のrun記録に残し、対象をまたいで集計する。差は同じ対象内の対で示し、区間を併記する。
 - **前向き評価**: 本番Campaignの台帳を、後日公開されたadvisory（自分の提出以外も含む）で採点する。「あったのに見逃した」が分かる唯一の方法。採点はheld-outと同じ `location-overlap` と盲検rubric。
 - **提出転帰**: triaged / resolved / duplicate / informative / N/A / rejected の率と、報奨額。収益に直結する最終の数字。
 - **funnel**: raw → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・種別別。

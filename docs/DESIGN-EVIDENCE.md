@@ -29,8 +29,8 @@
 
 - **観測**: Anthropicは「discovery promptは目的とcontextを与え、方法をmodelに任せる。長いchecklistは新規bugを減らす」と述べる（2026-05-27）。Mythos scaffoldはほぼ「find a security vulnerability」だけのpromptで、file別agentを並列に走らせた（2026-04-07）。Naptimeは「一つのtrajectoryで複数の仮説を扱うのは非効率なので独立trajectoryを複数sampleする」（2024-06）。Semgrepは同じpromptを同じappで繰り返すと指摘が毎回変わり（3→6→11件）部分的にしか重ならないと報告（2025-09-02）。run間の安定性は0.63–1.0（Semgrep 2026-07-17）。XBOWは永続coordinatorが多数の短命agentを指揮する（2026-03-02）。
 - **示さないこと**: 「短いpromptが長いpromptより当たる」のAnthropicの観察は数値なし。本人のwp2shell promptで50万ドル級の発見があった事実と直接比較した資料はない。pass@kの独立性の保証（provider側cacheの排除等）を示した資料はない。
-- **測る**: SPEC第6節のprompt比較。wp2shell由来と短い目的promptを、同じheld-out、同じmodel、同じHarnessで5試行ずつ回し、union@5とpass^5（全回成功）の両方を区間付きで出す。片方だけを報告しない。
-- **退けた代替**: wp2shell promptを唯一の既定にする案。退けたのではなく「評価で選ぶ変数」にした。
+- **測る**: 当面は測らない。短い目的promptの1本で本番を回し、前向き評価と提出転帰で見る。prompt変種の比較が必要になったら本番A/Bの軸として足す。
+- **退けた代替**: wp2shell promptを既定にする案。元のCycle Double Cover型promptは「解が必ず存在し費用無制限」の前提で、空の対象を安く見切る必要があるバグバウンティと合わない（判断者の判断、2026-10-08）。
 
 ## 5. N = 40、k = 4、同時4の初期値
 
