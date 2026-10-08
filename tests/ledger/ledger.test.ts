@@ -148,6 +148,7 @@ describe("Ledger public interface", () => {
         judgeId: "judge-1",
         proofKind: "nonce-canary" as const,
         evidenceDigest: proof,
+        reproductionPackageDigest: proof,
       },
     };
     expect(await ledger.append(mismatched)).toEqual({ status: "appended" });
@@ -189,6 +190,26 @@ describe("Ledger public interface", () => {
         judgeId: "judge-1",
         proofKind: "nonce-canary",
         evidenceDigest: otherSnapshot,
+        reproductionPackageDigest: proof,
+      },
+    });
+    expect(ledger.read({ findingId: "finding-1" }).at(-1)?.event).toMatchObject(
+      {
+        result: { status: "incomplete", reason: "evidence" },
+      },
+    );
+    await ledger.append({
+      ...common("verification-without-package"),
+      type: "verification-finished",
+      verificationId: "verification-without-package",
+      findingId: "finding-1",
+      labSetupDigest: labSetup,
+      result: {
+        status: "runtime-confirmed",
+        judgeId: "judge-1",
+        proofKind: "nonce-canary",
+        evidenceDigest: proof,
+        reproductionPackageDigest: otherSnapshot,
       },
     });
     expect(ledger.read({ findingId: "finding-1" }).at(-1)?.event).toMatchObject(
@@ -262,6 +283,7 @@ describe("Ledger public interface", () => {
         judgeId: "judge",
         proofKind: "nonce-canary",
         evidenceDigest: proof,
+        reproductionPackageDigest: proof,
       },
     });
     await ledger.append({

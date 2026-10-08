@@ -10,6 +10,7 @@ import {
 } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
+import { openReproductionPackage } from "./reproduction-package.js";
 
 const id = z.string().min(1).max(128);
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -68,6 +69,7 @@ export type ReviewView = {
   readonly scopeAssessments: readonly ScopeAssessment[];
   readonly drafts: readonly SubmissionDraftRef[];
   readonly privateEvidenceDigests: readonly string[];
+  readonly reproductionPackageDigest: string | null;
 };
 export type ExternalActionAdmission =
   | { readonly status: "authorized"; readonly authorizationId: string }
@@ -421,6 +423,12 @@ export class Review<TFacts = unknown> {
     return this.#duplicateLookup?.inspect(request) ?? { status: "unavailable" };
   }
 
+  async openReproductionPackage(input: { readonly ref: ReviewRef }) {
+    const ref = refSchema.parse(input.ref);
+    const verification = this.#requireConfirmed(ref);
+    return openReproductionPackage(this.#store, verification.result);
+  }
+
   async inspect(input: {
     readonly campaignId: string;
     readonly findingId: string;
@@ -480,6 +488,11 @@ export class Review<TFacts = unknown> {
       scopeAssessments: assessments,
       drafts,
       privateEvidenceDigests,
+      reproductionPackageDigest:
+        verification?.event.type === "verification-finished" &&
+        verification.event.result.status === "runtime-confirmed"
+          ? verification.event.result.reproductionPackageDigest
+          : null,
     };
   }
 

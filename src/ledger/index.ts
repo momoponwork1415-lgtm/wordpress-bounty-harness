@@ -7,6 +7,7 @@ import {
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
+import { verificationResultV1Schema } from "../verification/reproduction-package.js";
 
 const id = z.string().min(1).max(128);
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -19,34 +20,6 @@ const base = z.strictObject({
   occurredAt: z.iso.datetime({ offset: true }),
   artifacts: z.array(artifactRef).default([]),
 });
-
-const verificationResult = z.discriminatedUnion("status", [
-  z.strictObject({
-    status: z.literal("runtime-confirmed"),
-    judgeId: id,
-    proofKind: z.literal("nonce-canary"),
-    evidenceDigest: digest,
-  }),
-  z.strictObject({
-    status: z.literal("contradicted"),
-    judgeId: id,
-    evidenceDigest: digest,
-  }),
-  z.strictObject({
-    status: z.literal("incomplete"),
-    reason: z.enum([
-      "provision",
-      "precondition",
-      "recipe",
-      "observation",
-      "evidence",
-      "cleanup",
-      "digest-mismatch",
-      "no-judge",
-    ]),
-    nextStep: z.string().min(1).max(2000),
-  }),
-]);
 
 const event = <T extends z.ZodRawShape>(shape: T) =>
   z.strictObject({ ...base.shape, ...shape });
@@ -77,7 +50,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     verificationId: id,
     findingId: id,
     labSetupDigest: digest,
-    result: verificationResult,
+    result: verificationResultV1Schema,
   }),
   event({
     type: z.literal("review-decided"),
@@ -267,6 +240,15 @@ export class Ledger {
       evidenceAvailable =
         resolution.status === "resolved" &&
         resolution.artifact.digest === parsed.result.evidenceDigest;
+      if (parsed.result.status === "runtime-confirmed") {
+        const packageResolution = await this.#artifacts.resolve(
+          parsed.result.reproductionPackageDigest,
+        );
+        evidenceAvailable &&=
+          packageResolution.status === "resolved" &&
+          packageResolution.artifact.digest ===
+            parsed.result.reproductionPackageDigest;
+      }
     }
 
     this.#db.exec("BEGIN IMMEDIATE");

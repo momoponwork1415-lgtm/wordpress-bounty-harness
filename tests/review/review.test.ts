@@ -61,6 +61,31 @@ async function fixture(
     maxBytes: 100_000,
   });
   await artifactStore.commit(proof.digest, staging);
+  const packageStaging = await artifactStore.stage();
+  await writeFile(
+    join(packageStaging.contentDirectory, "manual.md"),
+    "GET /test\n",
+  );
+  await writeFile(
+    join(packageStaging.contentDirectory, "reproduce.py"),
+    "import requests\n",
+  );
+  await writeFile(
+    join(packageStaging.contentDirectory, "lab.json"),
+    JSON.stringify({ wordpressVersion: "6.8" }),
+  );
+  await writeFile(
+    join(packageStaging.contentDirectory, "evidence.json"),
+    JSON.stringify({ judgeEvidenceDigest: proof.digest }),
+  );
+  const reproduction = await measureCanonicalSourceTree(
+    packageStaging.contentDirectory,
+    {
+      maxEntries: 10,
+      maxBytes: 100_000,
+    },
+  );
+  await artifactStore.commit(reproduction.digest, packageStaging);
   const base = {
     schemaVersion: 1 as const,
     campaignId: "campaign-1",
@@ -87,6 +112,7 @@ async function fixture(
       judgeId: "sqli-canary",
       proofKind: "nonce-canary",
       evidenceDigest: proof.digest,
+      reproductionPackageDigest: reproduction.digest,
     },
   });
   return {
@@ -110,6 +136,19 @@ const ref = {
 };
 
 describe("review public interface", () => {
+  it("opens the confirmed reproduction package through the review interface", async () => {
+    const { review } = await fixture();
+    const opened = await review.openReproductionPackage({ ref });
+    expect(opened).toMatchObject({ status: "opened", manual: "GET /test\n" });
+    expect(
+      await review.inspect({
+        campaignId: ref.campaignId,
+        findingId: ref.findingId,
+      }),
+    ).toMatchObject({
+      reproductionPackageDigest: expect.stringMatching(/^sha256:/),
+    });
+  });
   it("evaluates each configured programme once and retains a confirmed finding when scope fails", async () => {
     const { review, ledger } = await fixture();
     const assessments = await review.assessScope({ ref });
