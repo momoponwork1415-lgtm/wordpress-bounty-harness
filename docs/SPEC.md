@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.4、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
+版: v0.5、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
 
 ## 1. 目的と指標
 
@@ -40,7 +40,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `evaluation` | 答えの鍵を使って台帳を採点し、ablationを回す | `score(campaign, answerKey)`、`ablate(config[])`、`prospective(campaign, advisory)` | Answer Key（Research外）、採点記録、区間 | 鍵の不備は採点失敗として残す | 新規 |
 | `cli` | 上記を薄く接続する | コマンド | なし | | 移植: `cli.ts` の構成だけ |
 
-持ち込まないもの: `research/` のResearch Campaigns内部、継続Campaignとcheckpoint再開、条件付き3試行、Human Candidate Review、Research Grant、Approved Target Batch、wp2shell prompt（v7 / v8 / v9）、旧スキーマ、Grok / Claude Code / GLM / DeepSeek adapter（開発比較が必要になったら移す）。
+持ち込まないもの: `research/` のResearch Campaigns内部、継続Campaignとcheckpoint再開、条件付き3試行、Human Candidate Review、Research Grant、Approved Target Batch、旧スキーマ、Grok / Claude Code / GLM / DeepSeek adapter（開発比較が必要になったら移す）。
 
 ## 4a. Target Profile（対象固有部分の置き場）
 
@@ -52,7 +52,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、canaryの配置先（options、post meta、ファイル、canaryユーザー） |
 | 判定器集合 | 第7節の種別別判定器 |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
-| prompt雛形 | 短い目的prompt、trust境界宣言の雛形、file分担の規則（hook / route / AJAX action単位） |
+| prompt雛形 | 探索prompt（版付きの変数。初期候補は wp2shell由来 と 短い目的prompt の2本）、trust境界宣言の雛形、file分担の規則（hook / route / AJAX action単位） |
 | 答えの鍵の形式 | 入口の表現（hook名、route、action名） |
 
 汎用モジュールはこれらをインターフェース経由で受け取り、WordPressの型やpathをimportしない。2つ目のprofileを作るまでインターフェースは汎用化せず、WordPress版の完成後に共通部分を抽出する。
@@ -73,7 +73,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 6. Discovery runの仕様
 
-- 入力: 短い目的prompt（固定文、digestを記録）、trust境界宣言、分担されたfile集合、Lab endpointとロール別認証情報（Lab内のみ）、読み取り専用source。
+- 入力: 探索prompt（版付き、digestを記録。初期候補は2本: wp2shell由来からCTF前提「脆弱性が必ず存在しRCE / flagへ到達する」と最低6時間の指定だけを外したものと、短い目的prompt。どちらを本番にするかは第10節の評価で同じheld-out case・同じmodel・同じHarnessで比べて決める）、trust境界宣言、分担されたfile集合、Lab endpointとロール別認証情報（Lab内のみ）、読み取り専用source。
 - 許可する操作: sourceの読み取り、LabへのHTTP、Lab DBの読み取り、Lab内でのcanary確認。外向き通信なし。
 - 出力: `Finding[]`（0件可）と、調べた範囲・調べなかった範囲の短い記述。
 - Campaign停止規則: 新規Findingなしがk回連続（初期値 k = 4、Codex Security deep scanの既定に合わせる）、または対象あたりの上限run数（初期値 N = 40）。wall timeはrunごとに上限を持つ。
@@ -130,7 +130,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - 採点: 一次は機械の `location-overlap`（必要条件）。二次は人間の盲検rubric（場所、root cause、攻撃者条件、影響の4要素）で `target-hit` / `partial` / `non-target`。実行水準は `target-hit ∧ runtime-confirmed`。
 - 精度の代替: 修正版pluginの負の対照（鍵と同じpropertyを主張したFindingだけ `control-false-alarm`）、Finding内訳、当たり1件あたりのFinding数。
 - 統計: k/5にClopper-Pearson区間。pass@kはunion / 全回 / 試行別の3表示。種別別は件数のまま。構成差は同じcase・試行の対で示す。
-- ablation: promptを固定し、Verifier有無、判定器有無、Lab内実行有無、分担有無で差を測る。
+- ablation: promptを固定し、Verifier有無、判定器有無、Lab内実行有無、分担有無で差を測る。prompt比較（wp2shell由来 vs 短い目的prompt）はHarness構成を固定して別に行い、`target-hit` と当たり1件あたりの費用で選ぶ。
 - 前向き評価: 本番Campaignの台帳を、後日公開されたadvisoryで採点する。held-outの結果を見てpromptを変えたら、そのcaseは開発セットへ移す。
 
 ## 11. ADR（新リポジトリで最初に書くもの）
@@ -176,7 +176,7 @@ held-out 1件（開発セットのTranslatePressではなく、鍵を事前登�
 
 - 探索agentのコンテナからLabへ、コンテナソケットを渡さずにネットワーク到達できるか（runごとのinternal network）。
 - gVisor Lab内でheadless browserが動くか（XSS判定器）。
-- ChatGPT Pro（$500）でのSolの実利用量と、cyber access programの要否。
+- 費用の経路はChatGPT Proのサブスクリプション（Codex CLI認証）で始める。Proでの Sol の実利用量と、cyber access programの要否。上限に当たるならAPIキーへの切り替えをその時点で判断する。
 - Sol 1 runあたりの費用と時間（分担file数とwall timeの初期値を決める）。
 - Codex CLIをgVisor内で動かす際のCLI自身のsandbox（Bubblewrap）の扱い。
 
