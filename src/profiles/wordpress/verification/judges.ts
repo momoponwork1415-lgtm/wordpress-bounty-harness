@@ -21,6 +21,7 @@ type JudgeLab = Pick<
   | "observeAccountRoles"
   | "observeCanaryTable"
   | "observeExecution"
+  | "observeCanaryFiles"
 >;
 type Options = { readonly store: PrivateArtifactStore; readonly lab: JudgeLab };
 
@@ -42,6 +43,25 @@ const httpRecordSchema = z.looseObject({
     .min(1)
     .max(500),
 });
+type HttpRecord = z.infer<typeof httpRecordSchema>;
+
+/** A Lab-held value came back in a response that no request carried. */
+function returnedOnly(http: HttpRecord, secret: string): boolean {
+  return (
+    http.exchanges.some((entry) => entry.response.body.includes(secret)) &&
+    !http.exchanges.some((entry) =>
+      JSON.stringify(entry.request ?? null).includes(secret),
+    )
+  );
+}
+
+const missingHttp: Incomplete = {
+  status: "incomplete",
+  reason: "evidence",
+  nextStep:
+    "Record the route and every HTTP exchange with its response body; then repeat",
+};
+
 /** Highest first; a role gained beyond the seeded baseline counts as escalation. */
 const ELEVATED_ROLES = ["administrator", "editor", "author", "contributor"];
 
@@ -257,23 +277,10 @@ function sqlCanaryJudge(options: Options) {
       const http = httpRecordSchema.safeParse(
         await readJson(options.store, recipeDigest, "http.json"),
       );
-      if (route === null || !http.success)
-        return {
-          status: "incomplete",
-          reason: "evidence",
-          nextStep:
-            "Record the route and every HTTP exchange with its response body; then repeat",
-        };
+      if (route === null || !http.success) return missingHttp;
       const table = await options.lab.observeCanaryTable(lab);
       if (table.status === "unavailable") return unavailable;
-      const secret = canaries.sqlCanary.value;
-      const read =
-        http.data.exchanges.some((entry) =>
-          entry.response.body.includes(secret),
-        ) &&
-        !http.data.exchanges.some((entry) =>
-          JSON.stringify(entry.request ?? null).includes(secret),
-        );
+      const read = returnedOnly(http.data, canaries.sqlCanary.value);
       if (table.status !== "changed" && !read) return null;
       return {
         conditions: {
@@ -352,6 +359,64 @@ function executionCanaryJudge(options: Options) {
   );
 }
 
+/** Both canary files sit in different directories with different extensions. */
+function fileControl(reached: readonly string[]): Record<string, string> {
+  return {
+    pathAndExtension:
+      new Set(reached).size >= 2 ? "attacker-chosen" : "partial",
+  };
+}
+
+/** File read / download / LFI: a canary file's value came back in a response. */
+function fileReadJudge(options: Options) {
+  return canaryJudge(
+    options,
+    "wordpress-file-canary-read",
+    async ({ recipeDigest, canaries }) => {
+      const route = await routeConditions(options.store, recipeDigest);
+      const http = httpRecordSchema.safeParse(
+        await readJson(options.store, recipeDigest, "http.json"),
+      );
+      if (route === null || !http.success) return missingHttp;
+      const read = canaries.fileCanaries
+        .filter((file) => returnedOnly(http.data, file.value))
+        .map((file) => file.kind);
+      if (read.length === 0) return null;
+      return {
+        conditions: {
+          observedVia: "canary-file-read",
+          canaryFilesRead: read.join(","),
+          ...fileControl(read),
+          ...route,
+        },
+      };
+    },
+  );
+}
+
+/** File delete: a seeded canary file no longer exists inside the Lab. */
+function fileDeleteJudge(options: Options) {
+  return canaryJudge(
+    options,
+    "wordpress-file-canary-delete",
+    async ({ lab, recipeDigest }) => {
+      const route = await routeConditions(options.store, recipeDigest);
+      if (route === null) return missingRoute;
+      const files = await options.lab.observeCanaryFiles(lab);
+      if (files.status === "unavailable") return unavailable;
+      if (files.deleted.length === 0) return null;
+      return {
+        conditions: {
+          observedVia: "canary-file-deleted",
+          canaryFilesDeleted: files.deleted.join(","),
+          ...fileControl(files.deleted),
+          ...route,
+        },
+      };
+    },
+  );
+}
+
 /** Judges built so far; other impacts stay incomplete(no-judge). */
 export function createWordPressJudges(
   options: Options,
@@ -360,6 +425,8 @@ export function createWordPressJudges(
   const nonAdministrator = nonAdministratorJudge(options);
   const sql = sqlCanaryJudge(options);
   const execution = executionCanaryJudge(options);
+  const fileRead = fileReadJudge(options);
+  const fileDelete = fileDeleteJudge(options);
   return {
     for(finding) {
       switch (finding.impact) {
@@ -375,6 +442,12 @@ export function createWordPressJudges(
         case "rce":
         case "php-file-write":
           return execution;
+        case "arbitrary-file-read":
+        case "arbitrary-file-download":
+        case "lfi":
+          return fileRead;
+        case "arbitrary-file-delete":
+          return fileDelete;
         default:
           return null;
       }

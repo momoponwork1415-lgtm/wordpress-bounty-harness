@@ -95,6 +95,9 @@ async function fixture(options: {
       async observeExecution() {
         return { status: "not-executed" };
       },
+      async observeCanaryFiles() {
+        return { status: "observed", deleted: [] };
+      },
       async observeAccountRoles(): Promise<WordPressRoleObservation> {
         return options.roles === "unavailable"
           ? { status: "unavailable" }
