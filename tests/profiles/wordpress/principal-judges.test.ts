@@ -100,6 +100,9 @@ async function fixture(options: {
           ? { status: "none" }
           : { status: "user", login: options.sessionUser };
       },
+      async observeCanaryTable() {
+        return { status: "intact" };
+      },
       async observeAccountRoles(): Promise<WordPressRoleObservation> {
         return options.roles === "unavailable"
           ? { status: "unavailable" }
@@ -144,12 +147,7 @@ describe("WordPress principal judges", () => {
       expect(judges.for(finding(impact))?.id).toBe(
         "wordpress-non-administrator-principal",
       );
-    for (const impact of [
-      "sqli",
-      "reflected-xss",
-      "csrf-to-write",
-      "idor",
-    ] as const)
+    for (const impact of ["reflected-xss", "csrf-to-write", "idor"] as const)
       expect(judges.for(finding(impact))).toBeNull();
   });
 

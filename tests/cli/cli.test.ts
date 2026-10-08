@@ -234,7 +234,7 @@ async function harness(
             prompts.length === 1
               ? [
                   claim("account-takeover", "includes/synthetic.php"),
-                  claim("sqli", "synthetic-plugin.php"),
+                  claim("sensitive-object-access", "synthetic-plugin.php"),
                 ]
               : [],
           examined: "synthetic",
@@ -425,7 +425,7 @@ describe("harness CLI vertical slice", () => {
       "observed: observedVia=session reachedRole=administrator",
     );
     expect(queue.stdout).toMatch(/evidence: sha256:[a-f0-9]{64}/);
-    expect(queue.stdout).toMatch(/^incomplete .* sqli$/m);
+    expect(queue.stdout).toMatch(/^incomplete .* sensitive-object-access$/m);
     expect(queue.stdout).toContain("reason: no-judge");
     expect(queue.stdout).toMatch(/next: .+/);
     const confirmedFinding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
