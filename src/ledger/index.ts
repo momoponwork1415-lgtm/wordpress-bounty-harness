@@ -69,6 +69,13 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     verificationId: id,
     findingId: id,
     labSetupDigest: digest,
+    /** Present when the Finding was re-verified on a newer snapshot of its target. */
+    basis: z
+      .strictObject({
+        kind: z.literal("latest-version"),
+        findingSnapshotDigest: digest,
+      })
+      .optional(),
     result: verificationResultV1Schema,
   }),
   event({
@@ -111,6 +118,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       "not-applicable",
       "rejected",
     ]),
+    /** Bounty paid in USD, when the programme reported one. */
+    rewardUsd: z.number().nonnegative().max(1_000_000).optional(),
   }),
 ]);
 
@@ -147,6 +156,10 @@ export type CampaignFunnel = FunnelCounts & {
   readonly wallTimeMs: number;
   /** Reviewed, non-contradicted findings judged in-scope, per assessed programme. */
   readonly inScopeByProgramme: Readonly<Record<string, number>>;
+  /** Candidates by their latest recorded outcome. */
+  readonly outcomesByKind: Readonly<Record<string, number>>;
+  /** Sum of each candidate's latest reported reward. */
+  readonly rewardUsd: number;
   readonly byCategory: Readonly<Record<string, FunnelCounts>>;
 };
 
@@ -372,9 +385,26 @@ export class Ledger {
                     .event_json,
                 ) as unknown,
               );
+        // A latest-version basis must name the Finding's own snapshot and a snapshot frozen here.
+        const latestFrozen =
+          parsed.basis === undefined ||
+          this.#db
+            .prepare(
+              "SELECT event_json FROM ledger_events WHERE campaign_id = ? AND event_type = 'snapshot-frozen'",
+            )
+            .all(parsed.campaignId)
+            .some(
+              (row) =>
+                ledgerEventV1Schema.parse(
+                  JSON.parse(
+                    z.object({ event_json: z.string() }).parse(row).event_json,
+                  ) as unknown,
+                ).snapshotDigest === parsed.snapshotDigest,
+            );
         if (
           findingEvent?.type !== "finding-recorded" ||
-          findingEvent.snapshotDigest !== parsed.snapshotDigest
+          findingEvent.snapshotDigest !==
+            (parsed.basis?.findingSnapshotDigest ?? parsed.snapshotDigest)
         ) {
           recorded = {
             ...parsed,
@@ -386,6 +416,16 @@ export class Ledger {
                 findingEvent === null
                   ? "Record the finding before verification"
                   : "Repeat verification against the finding snapshot",
+            },
+          };
+        } else if (!latestFrozen) {
+          recorded = {
+            ...parsed,
+            result: {
+              status: "incomplete",
+              reason: "precondition",
+              nextStep:
+                "Freeze the latest version in this campaign before re-verifying",
             },
           };
         } else if (!evidenceAvailable) {
@@ -481,6 +521,10 @@ export class Ledger {
     const scopes = new Map<string, Map<string, string>>();
     const submissions = new Map<string, string>();
     const outcomes = new Set<string>();
+    const latestOutcome = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "submission-outcome" }>
+    >();
 
     for (const current of events) {
       switch (current.type) {
@@ -519,6 +563,7 @@ export class Ledger {
           break;
         case "submission-outcome":
           outcomes.add(current.candidateId);
+          latestOutcome.set(current.candidateId, current);
           break;
       }
     }
@@ -569,6 +614,15 @@ export class Ledger {
         if (outcomes.has(candidateId)) count.outcome++;
       }
     }
+    const outcomesByKind: Record<string, number> = Object.create(
+      null,
+    ) as Record<string, number>;
+    let rewardUsd = 0;
+    for (const latest of latestOutcome.values()) {
+      outcomesByKind[latest.outcome] =
+        (outcomesByKind[latest.outcome] ?? 0) + 1;
+      rewardUsd += latest.rewardUsd ?? 0;
+    }
     const discoveryAttempts = [...startedRuns.entries()].filter(
       ([runId, labId]) => readyLabs.has(labId) && !setupFailedRuns.has(runId),
     ).length;
@@ -581,6 +635,8 @@ export class Ledger {
       wallTimeMs,
       ...totals,
       inScopeByProgramme: { ...inScopeByProgramme },
+      outcomesByKind,
+      rewardUsd,
       byCategory,
     };
   }

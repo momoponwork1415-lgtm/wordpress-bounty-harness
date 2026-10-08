@@ -206,6 +206,9 @@ describe("WordPress principal judges", () => {
         reachedRole: "administrator",
         observedVia: "role-change",
         attackerBaselineRoles: "subscriber",
+        // Scope evaluation reads who attacked and whether settings were default.
+        attackerRole: "subscriber",
+        defaultSettings: "true",
       },
     });
     expect(presented).toEqual([]);

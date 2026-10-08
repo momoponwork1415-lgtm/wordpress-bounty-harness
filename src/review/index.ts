@@ -627,8 +627,16 @@ export class Review<TFacts = unknown> {
       LedgerEventV1,
       { type: "submission-outcome" }
     >["outcome"];
+    /** Bounty in USD as the programme reported it. */
+    readonly rewardUsd?: number;
   }): Promise<void> {
     const candidateId = id.parse(input.candidateId);
+    const rewardUsd = z
+      .number()
+      .nonnegative()
+      .max(1_000_000)
+      .optional()
+      .parse(input.rewardUsd);
     const submission = this.#readAll("submission-recorded").find(
       ({ event }) =>
         event.type === "submission-recorded" &&
@@ -638,13 +646,14 @@ export class Review<TFacts = unknown> {
       throw new Error("Record the submission before its outcome");
     const appended = await this.#ledger.append({
       schemaVersion: 1,
-      identity: `outcome:${candidateId}:${input.outcome}`,
+      identity: `outcome:${candidateId}:${input.outcome}:${rewardUsd ?? "none"}`,
       campaignId: submission.campaignId,
       snapshotDigest: submission.snapshotDigest,
       occurredAt: this.#clock().toISOString(),
       type: "submission-outcome",
       candidateId,
       outcome: input.outcome,
+      ...(rewardUsd === undefined ? {} : { rewardUsd }),
     });
     if (appended.status === "conflict")
       throw new Error("Outcome ledger conflict");

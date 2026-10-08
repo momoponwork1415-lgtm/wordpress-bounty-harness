@@ -429,7 +429,7 @@ describe("harness CLI vertical slice", () => {
       /reproduction package: sha256:[a-f0-9]{64} \(\S+private-evidence\/sha256:[a-f0-9]{64}\)/,
     );
     expect(queue.stdout).toContain(
-      "observed: observedVia=session reachedRole=administrator",
+      "observed: attackerRole=subscriber defaultSettings=true observedVia=session reachedRole=administrator",
     );
     expect(queue.stdout).toMatch(/evidence: sha256:[a-f0-9]{64}/);
     expect(queue.stdout).toMatch(/^incomplete .* sensitive-object-access$/m);
@@ -630,13 +630,107 @@ describe("harness CLI vertical slice", () => {
         )
       ).code,
     ).toBe(0);
+    const resolved = await run(
+      "review",
+      "outcome",
+      "--candidate",
+      candidate!,
+      "--outcome",
+      "resolved",
+      "--reward",
+      "250",
+    );
+    expect(resolved.stderr).toBe("");
+    expect(resolved.stdout).toBe("outcome resolved recorded (reward $250.00)");
+    expect(
+      (
+        await run(
+          "review",
+          "outcome",
+          "--candidate",
+          candidate!,
+          "--outcome",
+          "resolved",
+          "--reward",
+          "-1",
+        )
+      ).code,
+    ).toBe(2);
 
     const funnel = await run("ledger", "funnel", ...campaign);
     expect(funnel.stdout).toContain(
       "reviewed 1 → in-scope 1 → submitted 1 → outcome 1",
     );
+    // Each candidate counts once, under its latest outcome.
+    expect(funnel.stdout).toContain("outcomes: resolved 1  reward $250.00");
     expect(funnel.stdout).toContain("in-scope by programme: patchstack");
     expect(funnel.stdout).toMatch(/wordfence 1/);
+  });
+
+  it("assesses scope from the judge's evidence and the selection record without injected facts", async () => {
+    const { run, configPath } = await harness();
+    const campaign = ["--campaign", "campaign-1"];
+    await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    const queue = await run("review", ...campaign);
+    const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      queue.stdout,
+    )![1]!;
+    const scoped = await run(
+      "review",
+      "scope",
+      ...campaign,
+      "--finding",
+      finding,
+    );
+    expect(scoped.stderr).toBe("");
+    // Facts are read; only the unverified latest version keeps scope open.
+    expect(scoped.stdout).toMatch(
+      /^wordfence ambiguous \(version-or-configuration-unknown;/m,
+    );
+    expect(scoped.stdout).toMatch(
+      /^patchstack ambiguous \(version-or-configuration-unknown;/m,
+    );
+  });
+
+  it("re-verifies a finding on the target's latest version and only then treats the version as verified", async () => {
+    const { run, configPath } = await harness();
+    const campaign = ["--campaign", "campaign-1"];
+    await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    const queue = await run("review", ...campaign);
+    const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      queue.stdout,
+    )![1]!;
+    const original = /verification (\S+)\s+snapshot (\S+)/.exec(queue.stdout)!;
+
+    const reverified = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding,
+      "--config",
+      configPath,
+    );
+    expect(reverified.stderr).toBe("");
+    expect(reverified.code).toBe(0);
+    expect(reverified.stdout).toMatch(
+      /^reverified finding \S+ on wporg:synthetic-plugin 9\.9\.9  snapshot sha256:[a-f0-9]{64}  verification \S+: runtime-confirmed$/m,
+    );
+
+    const after = await run("review", ...campaign);
+    const latest = /verification (\S+)\s+snapshot (\S+)/.exec(after.stdout)!;
+    // A fresh verification on a fresh snapshot; the old digest is not reused.
+    expect(latest[1]).not.toBe(original[1]);
+    expect(latest[2]).not.toBe(original[2]);
+    const scoped = await run(
+      "review",
+      "scope",
+      ...campaign,
+      "--finding",
+      finding,
+    );
+    expect(scoped.stdout).toMatch(/^wordfence in-scope /m);
+    expect(scoped.stdout).toMatch(/^patchstack in-scope /m);
   });
 
   it("refuses to record a decision for a finding outside the review queue", async () => {

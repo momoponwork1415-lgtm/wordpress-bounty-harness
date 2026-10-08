@@ -16,7 +16,7 @@ import type {
   Review,
   ReviewQueue,
 } from "../review/index.js";
-import type { CampaignSummary } from "./pipeline.js";
+import type { CampaignSummary, ReverificationSummary } from "./pipeline.js";
 
 export interface CliIo {
   stdout(line: string): void;
@@ -56,6 +56,15 @@ export interface CliProfile {
       readonly target: string | null;
     },
   ): Promise<CampaignSummary>;
+  /** Re-verifies one Finding on its target's latest version in a fresh Lab. */
+  reverify(
+    state: CliState,
+    input: {
+      readonly campaignId: string;
+      readonly findingId: string;
+      readonly configPath: string;
+    },
+  ): Promise<ReverificationSummary>;
 }
 
 export type CliEnvironment = {
@@ -73,10 +82,11 @@ const USAGE = [
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>]",
   "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
+  "  review reverify --campaign <id> --finding <id> --config <path>",
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
   "  review authorize --candidate <id> --draft <digest> --to <destination> [--by <name>]",
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
-  "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected",
+  "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
   "  ledger funnel --campaign <id>",
   "  eval score --campaign <id> --keys <path> --case <id>",
 ].join("\n");
@@ -91,6 +101,7 @@ const options = {
   reason: { type: "string" },
   opened: { type: "string", multiple: true },
   duplicate: { type: "string" },
+  reward: { type: "string" },
   by: { type: "string" },
   keys: { type: "string" },
   programme: { type: "string" },
@@ -149,6 +160,11 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
   if (programmes.length > 0)
     lines.push(
       `in-scope by programme: ${programmes.map((programme) => `${programme} ${funnel.inScopeByProgramme[programme]}`).join(", ")}`,
+    );
+  const outcomes = Object.keys(funnel.outcomesByKind).sort();
+  if (outcomes.length > 0)
+    lines.push(
+      `outcomes: ${outcomes.map((outcome) => `${outcome} ${funnel.outcomesByKind[outcome]}`).join(", ")}  reward $${funnel.rewardUsd.toFixed(2)}`,
     );
   const categories = Object.keys(funnel.byCategory).sort();
   if (categories.length > 0) lines.push("by category:");
@@ -361,6 +377,17 @@ export async function runCli(
         );
         return 0;
       }
+      case "review reverify": {
+        const summary = await environment.profile.reverify(state, {
+          campaignId: required(values.campaign, "campaign"),
+          findingId: required(values.finding, "finding"),
+          configPath: resolve(required(values.config, "config")),
+        });
+        io.stdout(
+          `reverified finding ${values.finding} on ${summary.targetId} ${summary.version}  snapshot ${summary.snapshotDigest}  verification ${summary.verificationId}: ${summary.status}`,
+        );
+        return 0;
+      }
       case "review scope": {
         const review = environment.profile.review(state);
         const item = queued(review, values);
@@ -427,11 +454,24 @@ export async function runCli(
           throw new UsageError(
             `--outcome must be one of ${OUTCOMES.join(", ")}`,
           );
+        const reward =
+          values.reward === undefined ? undefined : Number(values.reward);
+        if (
+          reward !== undefined &&
+          (!/^\d+(\.\d{1,2})?$/.test(values.reward ?? "") ||
+            !Number.isFinite(reward))
+        )
+          throw new UsageError("--reward must be a non-negative USD amount");
         await environment.profile.review(state).recordOutcome({
           candidateId: required(values.candidate, "candidate"),
           outcome: outcome as (typeof OUTCOMES)[number],
+          ...(reward === undefined ? {} : { rewardUsd: reward }),
         });
-        io.stdout(`outcome ${outcome} recorded`);
+        io.stdout(
+          reward === undefined
+            ? `outcome ${outcome} recorded`
+            : `outcome ${outcome} recorded (reward $${reward.toFixed(2)})`,
+        );
         return 0;
       }
       case "ledger funnel":

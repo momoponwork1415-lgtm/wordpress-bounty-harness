@@ -3,6 +3,10 @@ import type {
   PlannedDiscoveryRun,
 } from "../discovery/index.js";
 import { runDiscoveryCampaign } from "../discovery/index.js";
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { LabHandle, LabProvisioner } from "../lab/index.js";
 import type { Ledger } from "../ledger/index.js";
@@ -101,6 +105,15 @@ export async function runCampaignPipeline<
       occurredAt: target.selectedAt,
       type: "target-selected",
       selectionId: `${target.targetId}@${target.version}`,
+      // The full selection record (install counts, score) stays in Private Evidence.
+      artifacts: [
+        {
+          kind: "target-selection",
+          digest: await options.store.putFiles({
+            "target-selection.json": canonicalJson(target),
+          }),
+        },
+      ],
     });
     await append({
       ...base,
@@ -194,4 +207,116 @@ export async function runCampaignPipeline<
     });
   }
   return { campaignId, targets };
+}
+
+export type ReverificationSummary = {
+  readonly targetId: string;
+  readonly version: string;
+  readonly snapshotDigest: string;
+  readonly verificationId: string;
+  readonly status: VerificationResultV1["status"];
+};
+
+/**
+ * Freezes the target's latest version and verifies the same Finding against it
+ * in a fresh Lab. Nothing from the earlier snapshot's verification is reused.
+ */
+export async function reverifyOnLatestVersion<
+  Target extends TargetSelection,
+  Setup,
+  Handle extends LabHandle,
+  Finding extends VerifiableFinding,
+  Reconstruction,
+>(options: {
+  readonly campaignId: string;
+  readonly findingId: string;
+  readonly ledger: Ledger;
+  readonly store: PrivateArtifactStore;
+  readonly pipeline: Pick<
+    CampaignPipeline<Target, Setup, Handle, Finding, Reconstruction>,
+    "freeze" | "setupFor" | "verification" | "reconstructionFor"
+  > & {
+    /** The latest version of the target the Finding's snapshot was selected from. */
+    readonly selectLatest: (input: {
+      readonly selectionId: string;
+    }) => Promise<Target | null>;
+  };
+  readonly clock: () => Date;
+  readonly newId: () => string;
+}): Promise<ReverificationSummary> {
+  const { campaignId, findingId, ledger, pipeline } = options;
+  const finding = ledger
+    .read({ campaignId, findingId, type: "finding-recorded", limit: 1 })
+    .at(0)?.event;
+  if (finding?.type !== "finding-recorded")
+    throw new Error("The finding is not recorded in this campaign");
+  const selected = ledger
+    .read({ campaignId, type: "target-selected", limit: 1000 })
+    .map(({ event }) => event)
+    .find(
+      (event) =>
+        event.type === "target-selected" &&
+        event.snapshotDigest === finding.snapshotDigest,
+    );
+  if (selected?.type !== "target-selected")
+    throw new Error("The finding's target selection is not recorded");
+  const target = await pipeline.selectLatest({
+    selectionId: selected.selectionId,
+  });
+  if (target === null)
+    throw new Error("The target's latest version is not selectable now");
+  const snapshot = await pipeline.freeze(target);
+  const verificationId = options.newId();
+  const base = {
+    schemaVersion: 1 as const,
+    campaignId,
+    snapshotDigest: snapshot.digest,
+  };
+  for (const event of [
+    {
+      ...base,
+      identity: `target-selected-${verificationId}`,
+      occurredAt: target.selectedAt,
+      type: "target-selected" as const,
+      selectionId: `${target.targetId}@${target.version}`,
+      artifacts: [
+        {
+          kind: "target-selection",
+          digest: await options.store.putFiles({
+            "target-selection.json": canonicalJson(target),
+          }),
+        },
+      ],
+    },
+    {
+      ...base,
+      identity: `snapshot-frozen-${verificationId}`,
+      occurredAt: options.clock().toISOString(),
+      type: "snapshot-frozen" as const,
+      sourceDigest: snapshot.target.sourceDigest,
+    },
+  ])
+    if ((await ledger.append(event)).status === "conflict")
+      throw new Error(`Ledger conflict: ${event.identity}`);
+  const setup = pipeline.setupFor(snapshot);
+  const result = await pipeline.verification.verify({
+    campaignId,
+    findingId,
+    verificationId,
+    snapshot,
+    basis: {
+      kind: "latest-version",
+      findingSnapshotDigest: finding.snapshotDigest,
+    },
+    setup,
+    campaignLabSetupDigest: canonicalDigest(setup),
+    reconstruction: pipeline.reconstructionFor(snapshot),
+  });
+  return {
+    targetId: target.targetId,
+    version: target.version,
+    snapshotDigest: snapshot.digest,
+    verificationId,
+    status: result.status,
+  };
 }
