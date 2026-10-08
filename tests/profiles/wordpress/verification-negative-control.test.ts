@@ -44,6 +44,7 @@ async function verifyOnce(
 ) {
   let seededRow = "";
   let salt = "";
+  let attempted = false;
   const root = await mkdtemp(join(tmpdir(), "wbh-negative-"));
   directories.push(root);
   const sourceDirectory = join(root, "source");
@@ -98,6 +99,19 @@ async function verifyOnce(
             stderr: "",
           };
         }
+        const option = request.args.indexOf("option");
+        if (option >= 0 && request.args[option + 1] === "get")
+          return {
+            exitCode: 0,
+            // Unchanged Lab: default_role reads the same before and after the route.
+            stdout:
+              changed &&
+              attempted &&
+              request.args[option + 2] === "default_role"
+                ? '"administrator"\n'
+                : '"subscriber"\n',
+            stderr: "",
+          };
         if (request.args[0] === "exec" && request.args[2] === "test")
           return { exitCode: changed ? 1 : 0, stdout: "", stderr: "" };
         if (request.args[0] === "exec" && request.args[2] === "grep")
@@ -204,6 +218,7 @@ async function verifyOnce(
       // The Verifier always claims success; only the Lab state may decide.
       async attempt({ lab: handle }) {
         lab.prepareExecutionCanary(handle);
+        attempted = true;
         return {
           status: "attempted",
           recipeDigest: await store.putFiles({
@@ -316,6 +331,24 @@ describe("WordPress verification negative control", () => {
       status: "runtime-confirmed",
       judgeId: "wordpress-file-canary-delete",
       conditions: { pathAndExtension: "attacker-chosen" },
+    });
+  });
+
+  it("does not confirm options-update while every watched option keeps its baseline", async () => {
+    const { result, funnel } = await verifyOnce(false, "options-update");
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+    });
+    expect(funnel.confirmed).toBe(0);
+  });
+
+  it("confirms options-update once a critical option moved after the route", async () => {
+    const { result } = await verifyOnce(true, "options-update");
+    expect(result).toMatchObject({
+      status: "runtime-confirmed",
+      judgeId: "wordpress-option-canary",
+      conditions: { changedOptions: "default_role", optionClass: "critical" },
     });
   });
 
