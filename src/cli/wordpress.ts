@@ -42,6 +42,7 @@ import {
   type WordPressSelectionPolicy,
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
+import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import {
@@ -103,13 +104,6 @@ export interface WordPressCampaignBoundaries {
   readonly verifier: Verifier<WordPressFinding, WordPressLabHandle>;
 }
 
-/** Scope facts come from judge evidence; until that reader exists scope stays incomplete. */
-const noScopeFacts = {
-  async load(): Promise<WordpressScopeInput> {
-    throw new Error("Scope facts from judge evidence are not wired yet");
-  },
-};
-
 async function loadConfig(configPath: string): Promise<{
   readonly config: WordPressCampaignConfig;
   readonly policy: WordPressSelectionPolicy;
@@ -134,7 +128,7 @@ export function createWordPressCliProfile(options: {
     state: CliState,
   ) => Promise<WordPressCampaignBoundaries>;
   readonly scopePolicy: WordpressScopePolicy;
-  /** Scope facts from judge evidence; absent, every scope assessment stays incomplete. */
+  /** Overrides the scope facts read from judge evidence and the selection record. */
   readonly scopeFacts?: ScopeFactsProvider<WordpressScopeInput>;
   /** Local Wordfence history mirror; absent, duplicate lookup is unavailable. */
   readonly wordfenceHistory?: {
@@ -148,7 +142,12 @@ export function createWordPressCliProfile(options: {
         ledger: state.ledger,
         artifactStore: state.store,
         scopeEvaluator: createWordpressScopeEvaluator(options.scopePolicy),
-        factsProvider: options.scopeFacts ?? noScopeFacts,
+        factsProvider:
+          options.scopeFacts ??
+          createWordPressScopeFacts({
+            ledger: state.ledger,
+            store: state.store,
+          }),
         ...(options.wordfenceHistory === undefined
           ? {}
           : {

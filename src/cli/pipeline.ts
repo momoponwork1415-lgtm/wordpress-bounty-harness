@@ -3,6 +3,7 @@ import type {
   PlannedDiscoveryRun,
 } from "../discovery/index.js";
 import { runDiscoveryCampaign } from "../discovery/index.js";
+import { canonicalJson } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { LabHandle, LabProvisioner } from "../lab/index.js";
 import type { Ledger } from "../ledger/index.js";
@@ -101,6 +102,15 @@ export async function runCampaignPipeline<
       occurredAt: target.selectedAt,
       type: "target-selected",
       selectionId: `${target.targetId}@${target.version}`,
+      // The full selection record (install counts, score) stays in Private Evidence.
+      artifacts: [
+        {
+          kind: "target-selection",
+          digest: await options.store.putFiles({
+            "target-selection.json": canonicalJson(target),
+          }),
+        },
+      ],
     });
     await append({
       ...base,

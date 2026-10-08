@@ -639,6 +639,31 @@ describe("harness CLI vertical slice", () => {
     expect(funnel.stdout).toMatch(/wordfence 1/);
   });
 
+  it("assesses scope from the judge's evidence and the selection record without injected facts", async () => {
+    const { run, configPath } = await harness();
+    const campaign = ["--campaign", "campaign-1"];
+    await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    const queue = await run("review", ...campaign);
+    const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      queue.stdout,
+    )![1]!;
+    const scoped = await run(
+      "review",
+      "scope",
+      ...campaign,
+      "--finding",
+      finding,
+    );
+    expect(scoped.stderr).toBe("");
+    // Facts are read; only the unverified latest version keeps scope open.
+    expect(scoped.stdout).toMatch(
+      /^wordfence ambiguous \(version-or-configuration-unknown;/m,
+    );
+    expect(scoped.stdout).toMatch(
+      /^patchstack ambiguous \(version-or-configuration-unknown;/m,
+    );
+  });
+
   it("refuses to record a decision for a finding outside the review queue", async () => {
     const { run } = await harness();
     const result = await run(
