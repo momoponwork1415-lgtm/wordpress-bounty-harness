@@ -309,6 +309,9 @@ describe("Codex native agent runtime", () => {
       expect(commands[0]?.args).toContain("gpt-6.1-sol");
       expect(commands[0]?.args).toContain("danger-full-access");
       expect(commands[0]?.args).not.toContain("read-only");
+      // `codex exec` 0.161 has no `-a`; approvals are set through config.
+      expect(commands[0]?.args).not.toContain("-a");
+      expect(commands[0]?.args).toContain('approval_policy="never"');
       expect(commands[0]?.args).toContain('model_reasoning_effort="high"');
       expect(commands[0]?.args).toContain(
         'openai_base_url="http://127.0.0.1:8080/v1"',

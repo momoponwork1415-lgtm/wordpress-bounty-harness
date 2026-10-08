@@ -377,8 +377,8 @@ export class CodexNativeAgentRuntime {
               "danger-full-access",
               "--skip-git-repo-check",
               "--ephemeral",
-              "-a",
-              "never",
+              "-c",
+              'approval_policy="never"',
               ...(run.profile.cyberAccessProgram === "unavailable"
                 ? []
                 : ["--cyber-access-program", run.profile.cyberAccessProgram]),
