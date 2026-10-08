@@ -203,6 +203,74 @@ function metadata(db: Database.Database, key: string): string | null {
   return row.success ? row.data.value : null;
 }
 
+function isStale(
+  state: z.infer<typeof stateSchema>,
+  now: Date,
+  maxAgeMs: number,
+): boolean {
+  const fetchedAt = Date.parse(state.last_successful_at);
+  return (
+    state.stale_fallback === true ||
+    fetchedAt > now.getTime() ||
+    now.getTime() - fetchedAt > maxAgeMs
+  );
+}
+
+export type HistoryMirrorStatus =
+  | {
+      readonly status: "fresh" | "stale";
+      readonly lastSuccessfulAt: string;
+      readonly ageMs: number;
+      readonly maxAgeMs: number;
+      readonly recordCount: number;
+      readonly staleFallback: boolean;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly reason: "state-unreadable" | "database-mismatch";
+    };
+
+/** Freshness and consistency by the same rules the duplicate lookup applies. */
+export function inspectHistoryMirror(
+  options: WordfenceHistoryOptions,
+): HistoryMirrorStatus {
+  const now = options.now ?? new Date();
+  const maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
+  let state: z.infer<typeof stateSchema>;
+  try {
+    state = stateSchema.parse(
+      JSON.parse(readFileSync(options.statePath, "utf8")) as unknown,
+    );
+  } catch {
+    return { status: "unavailable", reason: "state-unreadable" };
+  }
+  let db: Database.Database | undefined;
+  try {
+    db = new Database(options.databasePath, {
+      readonly: true,
+      fileMustExist: true,
+    });
+    if (
+      metadata(db, "projection_schema") !== "wordfence-history/v1" ||
+      metadata(db, "content_sha256") !== state.content_sha256 ||
+      metadata(db, "record_count") !== String(state.record_count)
+    )
+      return { status: "unavailable", reason: "database-mismatch" };
+  } catch {
+    return { status: "unavailable", reason: "database-mismatch" };
+  } finally {
+    db?.close();
+  }
+  return {
+    status: isStale(state, now, maxAgeMs) ? "stale" : "fresh",
+    lastSuccessfulAt: state.last_successful_at,
+    ageMs: now.getTime() - Date.parse(state.last_successful_at),
+    maxAgeMs,
+    recordCount: state.record_count,
+    staleFallback: state.stale_fallback === true,
+  };
+}
+
 /** Read-only review lookup. Candidates are possible duplicates; no automatic duplicate verdict is issued. */
 export function findDuplicates(
   input: DuplicateQuery,
@@ -231,11 +299,7 @@ export function findDuplicates(
   }
   const state = stateSchema.safeParse(stateSource);
   if (!state.success) return unavailable;
-  const fetchedAt = Date.parse(state.data.last_successful_at);
-  const stale =
-    state.data.stale_fallback === true ||
-    fetchedAt > now.getTime() ||
-    now.getTime() - fetchedAt > maxAgeMs;
+  const stale = isStale(state.data, now, maxAgeMs);
 
   let db: Database.Database | undefined;
   try {

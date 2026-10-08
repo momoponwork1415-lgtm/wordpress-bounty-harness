@@ -836,6 +836,47 @@ describe("harness CLI vertical slice", () => {
     ]);
   });
 
+  it("shows the history mirror freshness by the same rule as the duplicate lookup", async () => {
+    const { run, root } = await harness({ history: true });
+    const stale = await run("history", "status");
+    expect(stale.code).toBe(1);
+    expect(stale.stdout).toBe(
+      "history mirror stale  last success 2026-10-01T00:00:00Z (168.0 h ago, limit 24 h)  records 1",
+    );
+    await writeFile(
+      join(root, "wordfence-state.json"),
+      JSON.stringify({
+        schema_version: "wordfence-cache/v1",
+        content_sha256: "synthetic-digest",
+        record_count: 1,
+        last_successful_at: "2026-10-07T12:00:00Z",
+        stale_fallback: false,
+      }),
+    );
+    const fresh = await run("history", "status");
+    expect(fresh.code).toBe(0);
+    expect(fresh.stdout).toBe(
+      "history mirror fresh  last success 2026-10-07T12:00:00Z (12.0 h ago, limit 24 h)  records 1",
+    );
+    await writeFile(
+      join(root, "wordfence-state.json"),
+      JSON.stringify({
+        schema_version: "wordfence-cache/v1",
+        content_sha256: "other-digest",
+        record_count: 1,
+        last_successful_at: "2026-10-07T12:00:00Z",
+      }),
+    );
+    const mismatched = await run("history", "status");
+    expect(mismatched.code).toBe(1);
+    expect(mismatched.stdout).toBe(
+      "history mirror unavailable  database and state disagree",
+    );
+    const unconfigured = await (await harness()).run("history", "status");
+    expect(unconfigured.code).toBe(1);
+    expect(unconfigured.stdout).toBe("history mirror not configured");
+  });
+
   it("skips a target that fails, records the stage and continues with the rest", async () => {
     const { run, configPath, ledger } = await harness({
       candidates: ["broken-plugin", "synthetic-plugin"],

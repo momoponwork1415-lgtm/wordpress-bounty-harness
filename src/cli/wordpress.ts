@@ -50,7 +50,10 @@ import {
 } from "../profiles/wordpress/selection/index.js";
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
-import { extractCampaignHistory } from "../profiles/wordpress/wordfence-history/index.js";
+import {
+  extractCampaignHistory,
+  inspectHistoryMirror,
+} from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import {
   wordpressReproductionRenderer,
@@ -254,6 +257,23 @@ export function createWordPressCliProfile(options: {
         clock: state.clock,
       }),
     answerKeys: parseWordPressAnswerKeys,
+    historyStatus(state) {
+      if (options.wordfenceHistory === undefined) return null;
+      const mirror = inspectHistoryMirror({
+        ...options.wordfenceHistory,
+        now: state.clock(),
+      });
+      if (mirror.status === "unavailable")
+        return {
+          fresh: false,
+          line: `history mirror unavailable  ${mirror.reason === "state-unreadable" ? "state is unreadable" : "database and state disagree"}`,
+        };
+      const hours = (ms: number) => (ms / 3_600_000).toFixed(1);
+      return {
+        fresh: mirror.status === "fresh",
+        line: `history mirror ${mirror.status}${mirror.staleFallback ? " (last refresh failed)" : ""}  last success ${mirror.lastSuccessfulAt} (${hours(mirror.ageMs)} h ago, limit ${mirror.maxAgeMs / 3_600_000} h)  records ${mirror.recordCount}`,
+      };
+    },
     advisories: parseWordPressAdvisories,
     locationsOf: wordpressFindingLocations,
     async select(state, input) {

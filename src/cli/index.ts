@@ -42,6 +42,10 @@ export type CliState = {
 export interface CliProfile {
   review(state: CliState): Review;
   answerKeys(value: unknown): readonly LocationAnswerKey[];
+  /** Lines describing the public history mirror, and whether it is fresh; null when none is configured. */
+  historyStatus(
+    state: CliState,
+  ): { readonly fresh: boolean; readonly line: string } | null;
   /** Later public advisories in key form, matched to targets by the profile. */
   advisories(value: unknown): readonly ProspectiveAdvisory[];
   locationsOf(finding: unknown): readonly SourceLocation[];
@@ -97,6 +101,7 @@ const USAGE = [
   "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
   "  ledger funnel --campaign <id>",
   "  ledger usage [--campaign <id>]",
+  "  history status",
   "  eval score --campaign <id> --keys <path> --case <id>",
   "  eval compare [--axis history] [--campaign <id>]",
   "  eval prospective --advisories <path> [--campaign <id>]",
@@ -545,6 +550,11 @@ export async function runCli(
             : `outcome ${outcome} recorded (reward $${reward.toFixed(2)})`,
         );
         return 0;
+      }
+      case "history status": {
+        const status = environment.profile.historyStatus(state);
+        io.stdout(status?.line ?? "history mirror not configured");
+        return status?.fresh === true ? 0 : 1;
       }
       case "ledger usage": {
         const labels = {
