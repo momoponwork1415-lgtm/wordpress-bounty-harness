@@ -36,6 +36,11 @@ const metadataSchema = z.object({
   version: z.string().min(1).max(64),
   active_installs: z.number().int().nonnegative(),
   last_updated: z.string().min(1).max(128),
+  author: z.string().min(1).max(1024).optional(),
+  tags: z
+    .union([z.array(z.string()), z.record(z.string(), z.string())])
+    .optional(),
+  closed: z.boolean().optional(),
   download_link: z.url(),
 });
 
@@ -280,6 +285,9 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
     ) {
       return observationFailure("invalid-metadata", pluginIdentity);
     }
+    if (metadata.closed === true) {
+      return observationFailure("not-found", pluginIdentity);
+    }
     const retrievedAt = this.#clock().toISOString();
     const observation = wordPressOrgTargetObservationSchema.parse({
       kind: "wordpress-org-target-observation",
@@ -290,6 +298,16 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
       stableVersion: metadata.version,
       activeInstallations: metadata.active_installs,
       lastUpdated: metadata.last_updated,
+      ...(metadata.author === undefined
+        ? {}
+        : { author: metadata.author.replace(/<[^>]*>/g, "").trim() }),
+      ...(metadata.tags === undefined
+        ? {}
+        : {
+            tags: Array.isArray(metadata.tags)
+              ? metadata.tags
+              : Object.keys(metadata.tags),
+          }),
       observedAt: retrievedAt,
       intelligenceSource: {
         kind: "wordpress-org-plugin-directory",

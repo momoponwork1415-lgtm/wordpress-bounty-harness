@@ -33,6 +33,8 @@ export const wordPressOrgTargetObservationSchema = z.strictObject({
   stableVersion: versionSchema,
   activeInstallations: z.number().int().nonnegative(),
   lastUpdated: z.string().min(1).max(128),
+  author: z.string().min(1).max(256).optional(),
+  tags: z.array(z.string().min(1).max(128)).optional(),
   observedAt: z.string().datetime({ offset: true }),
   intelligenceSource: z.strictObject({
     kind: z.literal("wordpress-org-plugin-directory"),
