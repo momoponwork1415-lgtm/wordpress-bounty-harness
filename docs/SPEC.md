@@ -215,6 +215,12 @@ held-out 1件（開発セットのTranslatePressではなく、鍵を事前登�
 
 ## 14. 未確認事項（最初のスライスの前にspikeで確かめる）
 
+2026-10-08の#6 spike実測（[結果と再現手順](../spike/results-2026-10-08.md)）:
+
+- 探索コンテナからLabへのinternal network到達: **条件付きでできた**。network aliasのDNSは `EAI_AGAIN`、Labの内部IPを `--add-host` で渡すとHTTP応答を750 ms（再試行1,269 ms）で回収。
+- gVisor Lab内のheadless browser: **できた**。Playwright Chromiumで同じLab応答を1,438 ms（再試行1,189 ms）で回収。
+- Codex CLIの追加sandbox: **できない**。0.162.0-alpha.2の `codex sandbox` はgVisor内でbubblewrapのloopback設定に失敗（exit 1）。CLI sandboxを無効にしたローカルprobeはexit 0。provider接続を伴うrunは未確認で、#7前に人間の方式選択が必要。
+
 - 探索agentのコンテナからLabへ、コンテナソケットを渡さずにネットワーク到達できるか（runごとのinternal network）。
 - gVisor Lab内でheadless browserが動くか（XSS判定器）。
 - 費用の経路はChatGPT Proのサブスクリプション（Codex CLI認証）で始める。Proでの Sol の実利用量と、cyber access programの要否。上限に当たるならAPIキーへの切り替えをその時点で判断する。
