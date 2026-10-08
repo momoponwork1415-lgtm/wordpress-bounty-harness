@@ -2,6 +2,63 @@
 
 観測日: 2026-10-08。提出前に各プログラムの公式ページで再確認し、観測日と差分をこのファイルへ追記する。既知脆弱性の答えは書かない。
 
+## 機械判定パラメータ（v1）
+
+このブロックは下の人間向け方針と同時に更新する。`requiredObservations` は Harness 判定器が観測した条件だけで満たし、不明なら `ambiguous` とする。
+
+```json scope-policy-v1
+{
+  "observedAt": "2026-10-08",
+  "programmes": ["wordfence", "patchstack"],
+  "wordfence": {
+    "highThreatMinimum": 25,
+    "commonMinimum": 500,
+    "otherMinimum": 500,
+    "wordpressOrgRequiredBelow": 1000,
+    "premiumMinimum": 1000,
+    "highThreat": ["rce", "php-file-write", "arbitrary-php-file-read", "arbitrary-php-file-delete", "options-update", "privesc-to-admin", "auth-bypass-to-admin", "account-takeover"],
+    "common": ["stored-xss", "sqli"],
+    "excluded": ["reflected-xss", "csrf-to-write", "missing-authz", "idor", "other"],
+    "requiredObservations": {
+      "rce": ["execution-canary"], "php-file-write": ["execution-canary"],
+      "arbitrary-php-file-read": ["canary-file-read"], "arbitrary-php-file-delete": ["canary-file-deleted"],
+      "options-update": ["option-canary-changed"], "stored-xss": ["javascript-executed", "site-wide"],
+      "sqli": ["canary-row-access"], "content-deletion": ["other-content-deleted"],
+      "sensitive-object-access": ["sensitive-canary-access"],
+      "arbitrary-file-read": ["canary-file-read"], "arbitrary-file-delete": ["canary-file-deleted"],
+      "arbitrary-file-download": ["canary-file-read"], "lfi": ["canary-file-read"], "rfi": ["canary-file-read"],
+      "privesc-to-admin": ["admin-capability-reached"], "auth-bypass-to-admin": ["admin-session-reached"],
+      "account-takeover": ["admin-session-reached"],
+      "privesc-to-contributor+": ["contributor-capability-reached"],
+      "auth-bypass-non-admin": ["other-session-reached"]
+    }
+  },
+  "patchstack": {
+    "minimumInstalls": 100,
+    "cvssGateBelow": 1000,
+    "cvssMinimumBelowGate": 8.5,
+    "excluded": ["missing-authz", "idor", "other"],
+    "requiredObservations": {
+      "rce": ["execution-canary"], "php-file-write": ["execution-canary", "path-extension-control"],
+      "arbitrary-php-file-read": ["canary-file-read", "path-extension-control"],
+      "arbitrary-php-file-delete": ["canary-file-deleted", "path-extension-control"],
+      "arbitrary-file-read": ["canary-file-read", "path-extension-control"],
+      "arbitrary-file-delete": ["canary-file-deleted", "path-extension-control"],
+      "arbitrary-file-download": ["canary-file-read", "path-extension-control"],
+      "lfi": ["canary-file-read", "path-extension-control"], "rfi": ["canary-file-read", "path-extension-control"],
+      "sqli": ["canary-row-access"], "options-update": ["significant-option-changed"],
+      "privesc-to-admin": ["admin-capability-reached"], "privesc-to-contributor+": ["contributor-capability-reached"],
+      "auth-bypass-to-admin": ["admin-session-reached"], "auth-bypass-non-admin": ["contributor-capability-reached"],
+      "account-takeover": ["other-session-reached"], "sensitive-object-access": ["sensitive-canary-access"],
+      "stored-xss": ["javascript-executed", "site-wide"],
+      "reflected-xss": ["javascript-executed", "nonce-free"],
+      "csrf-to-write": ["accepted-write-chained"],
+      "content-deletion": ["other-content-deleted", "significant-impact"]
+    }
+  }
+}
+```
+
 ## Wordfence
 
 - 公式: https://www.wordfence.com/threat-intel/bug-bounty-program/ 。本文の写しは [wordfence-scope-2026-10-08.md](wordfence-scope-2026-10-08.md)（2026-10-08、判断者がブラウザで取得。Harnessからは自動取得できない）。
