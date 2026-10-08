@@ -294,11 +294,19 @@ interface Resources {
   /** Beacon receiver container; only the Lab reads what it logged. */
   readonly receiver: string;
   receiverIp?: string;
+  /** gVisor containers cannot use Docker's name resolution, so WordPress gets this address. */
+  databaseIp?: string;
   receiverCreated: boolean;
   networkCreated: boolean;
   volumeCreated: boolean;
   databaseCreated: boolean;
   wordpressCreated: boolean;
+}
+
+function databaseIp(resource: Resources): string {
+  if (resource.databaseIp === undefined)
+    throw new Error("Lab database address is unavailable");
+  return resource.databaseIp;
 }
 
 export function openWordPressLab(options: {
@@ -370,7 +378,7 @@ export function openWordPressLab(options: {
     "--security-opt=no-new-privileges",
     ...environment.flatMap((entry) => ["--env", entry]),
     "--env",
-    "WORDPRESS_DB_HOST=database",
+    `WORDPRESS_DB_HOST=${databaseIp(resource)}`,
     "--env",
     "WORDPRESS_DB_NAME=wordpress",
     "--env",
@@ -619,8 +627,6 @@ export function openWordPressLab(options: {
           "--runtime=runsc",
           "--network",
           resource.network,
-          "--network-alias",
-          "database",
           "--security-opt=no-new-privileges",
           "--env",
           `MARIADB_ROOT_PASSWORD=${resource.databasePassword}`,
@@ -629,6 +635,16 @@ export function openWordPressLab(options: {
           options.images.database,
         ]);
         resource.databaseCreated = true;
+        resource.databaseIp = privateIpv4(
+          (
+            await requireDocker([
+              "inspect",
+              "--format",
+              "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+              resource.database,
+            ])
+          ).stdout,
+        );
         await requireDocker([
           "run",
           "--detach",
@@ -643,7 +659,7 @@ export function openWordPressLab(options: {
           "--volume",
           `${resource.volume}:/var/www/html`,
           "--env",
-          "WORDPRESS_DB_HOST=database",
+          `WORDPRESS_DB_HOST=${resource.databaseIp}`,
           "--env",
           "WORDPRESS_DB_NAME=wordpress",
           "--env",
