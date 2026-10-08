@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +43,7 @@ async function verifyOnce(
   impact: WordPressFinding["impact"] = "account-takeover",
 ) {
   let seededRow = "";
+  let salt = "";
   const root = await mkdtemp(join(tmpdir(), "wbh-negative-"));
   directories.push(root);
   const sourceDirectory = join(root, "source");
@@ -77,6 +79,31 @@ async function verifyOnce(
           return { exitCode: 0, stdout: '{"runsc":{}}', stderr: "" };
         if (request.args[0] === "inspect")
           return { exitCode: 0, stdout: "172.20.0.2", stderr: "" };
+        const saltArg = request.args.find((arg) =>
+          arg.startsWith("WBH_EXECUTION_SALT="),
+        );
+        if (saltArg !== undefined)
+          salt = saltArg.slice("WBH_EXECUTION_SALT=".length);
+        if (request.args[0] === "exec" && request.args[2] === "cat") {
+          // Unchanged Lab: the stored file holds the nonce but never ran.
+          const token = (request.args[3] ?? "").replace(
+            "/tmp/wbh-execution-",
+            "",
+          );
+          return {
+            exitCode: 0,
+            stdout: changed
+              ? createHash("sha256").update(`${token}${salt}`).digest("hex")
+              : token,
+            stderr: "",
+          };
+        }
+        if (request.args[0] === "exec" && request.args[2] === "grep")
+          return {
+            exitCode: 0,
+            stdout: "/var/www/html/wp-content/uploads/synthetic.php\n",
+            stderr: "",
+          };
         if (request.args.includes("--field=roles"))
           return { exitCode: 0, stdout: "subscriber\n", stderr: "" };
         const query = request.args.includes("query")
@@ -173,7 +200,8 @@ async function verifyOnce(
     renderer: wordpressReproductionRenderer,
     verifier: {
       // The Verifier always claims success; only the Lab state may decide.
-      async attempt() {
+      async attempt({ lab: handle }) {
+        lab.prepareExecutionCanary(handle);
         return {
           status: "attempted",
           recipeDigest: await store.putFiles({
@@ -248,6 +276,24 @@ describe("WordPress verification negative control", () => {
       conditions: { reachedRole: "administrator", observedVia: "session" },
     });
     expect(funnel.confirmed).toBe(1);
+  });
+
+  it("does not confirm rce when the stored canary file holds the nonce but never ran", async () => {
+    const { result, funnel } = await verifyOnce(false, "rce");
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+    });
+    expect(funnel.confirmed).toBe(0);
+  });
+
+  it("confirms rce once the Lab holds the salted marker", async () => {
+    const { result } = await verifyOnce(true, "rce");
+    expect(result).toMatchObject({
+      status: "runtime-confirmed",
+      judgeId: "wordpress-execution-canary",
+      conditions: { canaryFiles: "wp-content/uploads/synthetic.php" },
+    });
   });
 
   it("does not confirm sqli while the canary table is intact and no response carries its row", async () => {

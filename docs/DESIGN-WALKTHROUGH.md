@@ -176,7 +176,7 @@ canaryは「本来触れないはずの場所に置いた、推測不能な値�
 
 | 分類 | canaryの置き方 | 判定器が見る事実 |
 | --- | --- | --- |
-| RCE / PHPファイル書き込み | Execution Canary: 実行されるとLab内の受信先へnonceを送るコード片。攻撃者が置けるのは「実行されたら記録が残る」ものだけで、シェルは取らない | 受信先のログにnonceがある |
+| RCE / PHPファイル書き込み | Execution Canary: 実行されると、nonceとLabだけが持つsaltから作ったhashをLab内に書くコード片。攻撃者が置けるのは「実行されたら記録が残る」ものだけで、シェルは取らない。ファイルに書いただけでは正しいhashにならない | Labが同じhashを照合できる |
 | SQLi | `wp_options` やcanary表にnonce入りの行 | 応答にnonceが出る、またはcanary表に書き込みがある |
 | ファイル読み取り / LFI | nonceを中身に持つファイルを `wp-content` 外に置く | 応答にnonceが出る。path と拡張子を攻撃者が指定した記録 |
 | options更新 | nonce入りのcanary option と、重大なoption（`users_can_register` 等）の初期値 | 低権限のリクエスト後に値が変わった |
