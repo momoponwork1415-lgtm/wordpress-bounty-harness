@@ -1,0 +1,9 @@
+{
+  "kind": "patchstack-programme-page",
+  "schemaVersion": 2,
+  "sourceKind": "marketing",
+  "precedence": 4,
+  "assertions": {
+    "programmeOpportunityBand": "broad"
+  }
+}

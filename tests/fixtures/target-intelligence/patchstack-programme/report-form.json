@@ -1,0 +1,28 @@
+{
+  "kind": "patchstack-programme-page",
+  "schemaVersion": 2,
+  "sourceKind": "report-form",
+  "precedence": 2,
+  "assertions": {
+    "eligibility": {
+      "assets": [
+        {
+          "kind": "wordpress-plugin",
+          "scope": "publicly-distributed"
+        }
+      ],
+      "attackerRoles": [
+        "unauthenticated",
+        "subscriber",
+        "customer",
+        "contributor-for-mvdp"
+      ],
+      "conditions": [
+        "latest-stable-version",
+        "updated-within-three-years",
+        "mvdp-scope-exception",
+        "working-exploit-required"
+      ]
+    }
+  }
+}

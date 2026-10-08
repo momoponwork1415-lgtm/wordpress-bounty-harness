@@ -1,0 +1,30 @@
+{
+  "kind": "patchstack-programme-page",
+  "schemaVersion": 2,
+  "sourceKind": "mvdp-directory",
+  "precedence": 3,
+  "assertions": {
+    "eligibility": {
+      "attackerRoles": [
+        "unauthenticated",
+        "subscriber",
+        "customer",
+        "contributor-for-mvdp"
+      ],
+      "conditions": [
+        "latest-stable-version",
+        "updated-within-three-years",
+        "mvdp-scope-exception",
+        "working-exploit-required"
+      ]
+    },
+    "directoryEligibilityRules": [
+      {
+        "directoryIdentity": "managed-vulnerability-disclosure-programme",
+        "requiredMembership": "listed-plugin",
+        "eligibilityEffect": "contributor-attacker-role-exception",
+        "authorizationCondition": "mvdp-scope-exception"
+      }
+    ]
+  }
+}

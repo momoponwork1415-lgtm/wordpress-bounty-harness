@@ -1,0 +1,51 @@
+{
+  "kind": "patchstack-programme-page",
+  "schemaVersion": 2,
+  "sourceKind": "rules",
+  "precedence": 1,
+  "assertions": {
+    "eligibility": {
+      "assets": [
+        {
+          "kind": "wordpress-plugin",
+          "scope": "publicly-distributed"
+        }
+      ],
+      "vulnerabilityClasses": [
+        "arbitrary-file-operation",
+        "authorization",
+        "cross-site-scripting",
+        "csrf-with-write-impact",
+        "idor-with-significant-impact",
+        "injection",
+        "php-object-injection",
+        "privilege-escalation",
+        "remote-code-execution"
+      ],
+      "attackerRoles": [
+        "unauthenticated",
+        "subscriber",
+        "customer",
+        "contributor-for-mvdp"
+      ],
+      "activeInstallThreshold": {
+        "kind": "minimum",
+        "value": 1000
+      },
+      "researcherTiers": ["standard", "verified"],
+      "exclusions": [
+        "duplicate-report",
+        "outdated-version",
+        "low-impact",
+        "vendor-self-submission"
+      ],
+      "conditions": [
+        "latest-stable-version",
+        "updated-within-three-years",
+        "mvdp-scope-exception",
+        "working-exploit-required"
+      ]
+    },
+    "programmeOpportunityBand": "broad"
+  }
+}
