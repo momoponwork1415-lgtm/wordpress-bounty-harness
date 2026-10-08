@@ -5,6 +5,7 @@ import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import {
   admitAgentRuntimeProfile,
+  agentRuntimeProfileSchema,
   type AgentRuntimeProfile,
 } from "./agent-runtime-profile.js";
 import {
@@ -84,6 +85,20 @@ export interface DiscoveryTransportResult {
   readonly receipt: NativeRunReceipt;
   readonly attachment?: ProviderAttachmentRef;
 }
+
+const discoveryTransportRunSchema = z.strictObject({
+  runId: z.string().min(1).max(128),
+  targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  profile: agentRuntimeProfileSchema,
+  prompt: z.string().min(1),
+  sourceDirectory: z.string().min(1),
+  sourceTree: z.strictObject({
+    digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    entries: z.number().int().nonnegative(),
+    bytes: z.number().int().nonnegative(),
+  }),
+  expiresAt: z.iso.datetime({ offset: true }),
+});
 
 const event = z.looseObject({ type: z.string() });
 const usageSchema = z.looseObject({
@@ -204,6 +219,7 @@ export class CodexNativeAgentRuntime {
       }),
     });
     if (
+      !discoveryTransportRunSchema.safeParse(run).success ||
       admitAgentRuntimeProfile(run.profile, this.sandboxImage).status !==
         "admitted" ||
       run.prompt.length === 0 ||
