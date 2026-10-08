@@ -1,0 +1,127 @@
+{
+  "11111111-1111-4111-8111-111111111111": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "title": "Sanitized example one",
+    "software": [
+      {
+        "type": "plugin",
+        "name": "Fixture Plugin",
+        "slug": "fixture-plugin",
+        "affected_versions": {
+          "1.0.0 - 1.4.0": {
+            "from_version": "1.0.0",
+            "from_inclusive": true,
+            "to_version": "1.4.0",
+            "to_inclusive": true
+          }
+        },
+        "patched": true,
+        "patched_versions": ["1.4.1"],
+        "remediation": "Sanitized remediation"
+      },
+      {
+        "type": "plugin",
+        "name": "Sanitized Commercial Extension",
+        "slug": "Commercial_Extension",
+        "affected_versions": {
+          "range-1": {
+            "from_version": "*",
+            "from_inclusive": true,
+            "to_version": "3.0.0",
+            "to_inclusive": true
+          }
+        },
+        "patched": true,
+        "patched_versions": ["3.0.1"],
+        "remediation": "Sanitized remediation"
+      },
+      {
+        "type": "plugin",
+        "name": "Sanitized Commercial Extension",
+        "slug": "Commercial_Extension",
+        "affected_versions": {
+          "range-2": {
+            "from_version": "4.0.0",
+            "from_inclusive": true,
+            "to_version": "4.2.0",
+            "to_inclusive": false
+          }
+        },
+        "patched": true,
+        "patched_versions": ["4.2.0"],
+        "remediation": "Sanitized remediation"
+      }
+    ],
+    "informational": false,
+    "description": "Sanitized description",
+    "references": ["https://fixtures.invalid/records/one"],
+    "cwe": {
+      "id": 79,
+      "name": "Sanitized class",
+      "description": "Sanitized class description"
+    },
+    "cvss": {
+      "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N",
+      "score": 6.1,
+      "rating": "Medium"
+    },
+    "cve": "CVE-2099-0001",
+    "cve_link": "https://fixtures.invalid/cve/one",
+    "researchers": ["Fixture Researcher"],
+    "published": "2028-01-10 12:00:00",
+    "updated": "2028-01-11 12:00:00",
+    "copyrights": {
+      "message": "Sanitized attribution message",
+      "defiant": {
+        "notice": "Sanitized Wordfence notice",
+        "license": "Sanitized Wordfence license",
+        "license_url": "https://www.wordfence.com/wti-community-edition-terms-and-conditions/"
+      },
+      "mitre": {
+        "notice": "Sanitized MITRE notice",
+        "license": "Sanitized MITRE license",
+        "license_url": "https://www.cve.org/Legal/TermsOfUse"
+      }
+    }
+  },
+  "22222222-2222-4222-8222-222222222222": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "title": "Sanitized example two",
+    "software": [
+      {
+        "type": "plugin",
+        "name": "Fixture Plugin",
+        "slug": "fixture-plugin",
+        "affected_versions": {
+          "all before 2.0.0": {
+            "from_version": "*",
+            "from_inclusive": true,
+            "to_version": "2.0.0",
+            "to_inclusive": false
+          }
+        },
+        "patched": true,
+        "patched_versions": ["2.0.0"],
+        "remediation": "Sanitized remediation"
+      }
+    ],
+    "informational": false,
+    "description": "Sanitized description",
+    "references": ["https://fixtures.invalid/records/two"],
+    "cwe": null,
+    "cvss": null,
+    "cve": null,
+    "cve_link": null,
+    "researchers": [],
+    "published": "2029-02-20 08:30:00",
+    "updated": null,
+    "copyrights": {
+      "message": "Sanitized attribution message",
+      "defiant": {
+        "notice": "Sanitized Wordfence notice",
+        "license": "Sanitized Wordfence license",
+        "license_url": "https://www.wordfence.com/wti-community-edition-terms-and-conditions/"
+      }
+    }
+  }
+}

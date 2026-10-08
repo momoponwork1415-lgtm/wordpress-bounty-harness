@@ -1,0 +1,70 @@
+[
+  {
+    "kind": "known-record-access-authorization",
+    "schemaVersion": 2,
+    "verifiedFindingRef": {
+      "id": "verified-finding:fixture",
+      "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "purpose": "known-duplicate-disposition",
+    "subject": {
+      "pluginIdentity": "wporg:fixture-plugin",
+      "verifiedVersion": "1.2.0",
+      "canonicalFileManifestDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "authorizedAt": "2030-08-02T00:00:00.000Z",
+    "id": "known-record-access:82ff1a0f3f5eae2dc7e96dd0",
+    "digest": "sha256:82ff1a0f3f5eae2dc7e96dd0f7da2afeb411ccee4e26e5ecb2a2ce7355f64f82"
+  },
+  {
+    "kind": "known-record-access-authorization",
+    "schemaVersion": 2,
+    "verifiedFindingRef": {
+      "id": "verified-finding:fixture",
+      "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "purpose": "known-duplicate-disposition",
+    "subject": {
+      "pluginIdentity": "wporg:fixture-plugin",
+      "verifiedVersion": "1.4.1",
+      "canonicalFileManifestDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "authorizedAt": "2030-08-02T00:00:00.000Z",
+    "id": "known-record-access:a483b9691cb334824acff209",
+    "digest": "sha256:a483b9691cb334824acff209e77a4e2e4bbc866cc84127d0331a45248e70782f"
+  },
+  {
+    "kind": "known-record-access-authorization",
+    "schemaVersion": 2,
+    "verifiedFindingRef": {
+      "id": "verified-finding:fixture",
+      "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "purpose": "known-duplicate-disposition",
+    "subject": {
+      "pluginIdentity": "wporg:fixture-plugin",
+      "verifiedVersion": "2.0.0",
+      "canonicalFileManifestDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "authorizedAt": "2030-08-02T00:00:00.000Z",
+    "id": "known-record-access:93f3f15a17d8641ca145faf0",
+    "digest": "sha256:93f3f15a17d8641ca145faf0757ce24e68a079f6d38e25da3e9ee931cdba7f69"
+  },
+  {
+    "kind": "known-record-access-authorization",
+    "schemaVersion": 2,
+    "verifiedFindingRef": {
+      "id": "verified-finding:fixture",
+      "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "purpose": "known-duplicate-disposition",
+    "subject": {
+      "pluginIdentity": "wporg:fixture-plugin",
+      "verifiedVersion": "2.0",
+      "canonicalFileManifestDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "authorizedAt": "2030-08-02T00:00:00.000Z",
+    "id": "known-record-access:ef774b3b3386e013affae499",
+    "digest": "sha256:ef774b3b3386e013affae499d40f64b3376e30833bc26afc28813ed2542f6ded"
+  }
+]
