@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,7 +55,12 @@ async function fixture(
   };
   const commands: DockerRequest[] = [];
   /** What the fake database holds in the SQL canary table. */
-  const database = { table: "seeded" as "seeded" | "changed" | "dropped" };
+  const database = {
+    table: "seeded" as "seeded" | "changed" | "dropped",
+    /** What the WordPress container holds at the Execution Canary path. */
+    execution: "executed" as "executed" | "plain-write" | "absent",
+  };
+  const salts = new Map<string, string>();
   let seededRow = "";
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
@@ -82,8 +88,35 @@ async function fixture(
           return { exitCode: 1, stdout: "", stderr: "unavailable" };
         if (request.args[0] === "inspect")
           return { exitCode: 0, stdout: "172.20.0.2", stderr: "" };
-        if (request.args[0] === "exec" && request.args[2] === "cat")
-          return { exitCode: 0, stdout: "fixed-nonce", stderr: "" };
+        const saltArg = request.args.find((arg) =>
+          arg.startsWith("WBH_EXECUTION_SALT="),
+        );
+        if (request.args[0] === "run" && saltArg !== undefined)
+          salts.set(
+            request.args[request.args.indexOf("--name") + 1] ?? "",
+            saltArg.slice("WBH_EXECUTION_SALT=".length),
+          );
+        if (request.args[0] === "exec" && request.args[2] === "cat") {
+          const token = request.args[3]?.replace("/tmp/wbh-execution-", "");
+          if (database.execution === "absent")
+            return { exitCode: 1, stdout: "", stderr: "missing" };
+          return {
+            exitCode: 0,
+            stdout:
+              database.execution === "executed"
+                ? createHash("sha256")
+                    .update(`${token}${salts.get(request.args[1] ?? "")}`)
+                    .digest("hex")
+                : (token ?? ""),
+            stderr: "",
+          };
+        }
+        if (request.args[0] === "exec" && request.args[2] === "grep")
+          return {
+            exitCode: 0,
+            stdout: "/var/www/html/wp-content/uploads/synthetic.php\n",
+            stderr: "",
+          };
         if (request.args.includes("--field=roles"))
           return { exitCode: 0, stdout: "subscriber\n", stderr: "" };
         const query = request.args.includes("query")
@@ -158,10 +191,9 @@ describe("WordPress gVisor Lab", () => {
     });
     const execution = lab.prepareExecutionCanary(first.handle);
     expect(execution?.php).toContain("file_put_contents");
-    if (execution !== null)
-      expect(await lab.observeExecutionCanary(first.handle, execution)).toBe(
-        "observed",
-      );
+    expect(await lab.observeExecution(first.handle)).toMatchObject({
+      status: "executed",
+    });
     expect(
       commands
         .filter(
@@ -273,6 +305,37 @@ describe("WordPress gVisor Lab", () => {
     database.table = "dropped";
     expect(await lab.observeCanaryTable(provisioned.handle)).toEqual({
       status: "changed",
+    });
+  });
+
+  it("observes an Execution Canary only when its code ran with the Lab's hidden salt", async () => {
+    const { lab, snapshot, setup, commands, database } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup);
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    expect(await lab.observeExecution(provisioned.handle)).toEqual({
+      status: "not-prepared",
+    });
+    const canary = lab.prepareExecutionCanary(provisioned.handle);
+    expect(canary?.php).toContain("WBH_EXECUTION_SALT");
+    const saltValue = commands
+      .flatMap((command) => command.args)
+      .find((arg) => arg.startsWith("WBH_EXECUTION_SALT="))
+      ?.slice("WBH_EXECUTION_SALT=".length);
+    expect(saltValue).toMatch(/^[a-f0-9]{32}$/);
+    // Neither the handle nor the canary handed to a Verifier carries the salt.
+    expect(JSON.stringify(provisioned.handle)).not.toContain(saltValue);
+    expect(canary?.php).not.toContain(saltValue);
+    expect(await lab.observeExecution(provisioned.handle)).toEqual({
+      status: "executed",
+      files: ["wp-content/uploads/synthetic.php"],
+    });
+    database.execution = "plain-write";
+    expect(await lab.observeExecution(provisioned.handle)).toEqual({
+      status: "not-executed",
+    });
+    database.execution = "absent";
+    expect(await lab.observeExecution(provisioned.handle)).toEqual({
+      status: "not-executed",
     });
   });
 

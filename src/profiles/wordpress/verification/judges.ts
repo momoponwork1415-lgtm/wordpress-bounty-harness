@@ -20,6 +20,7 @@ type JudgeLab = Pick<
   | "observeSessionUser"
   | "observeAccountRoles"
   | "observeCanaryTable"
+  | "observeExecution"
 >;
 type Options = { readonly store: PrivateArtifactStore; readonly lab: JudgeLab };
 
@@ -252,13 +253,11 @@ function sqlCanaryJudge(options: Options) {
     options,
     "wordpress-sql-canary",
     async ({ lab, recipeDigest, canaries }) => {
-      const route = routeConditionsSchema.safeParse(
-        await readJson(options.store, recipeDigest, "route.json"),
-      );
+      const route = await routeConditions(options.store, recipeDigest);
       const http = httpRecordSchema.safeParse(
         await readJson(options.store, recipeDigest, "http.json"),
       );
-      if (!route.success || !http.success)
+      if (route === null || !http.success)
         return {
           status: "incomplete",
           reason: "evidence",
@@ -282,12 +281,73 @@ function sqlCanaryJudge(options: Options) {
             table.status === "changed"
               ? "canary-table-write"
               : "canary-row-read",
-          attackerRole: route.data.role,
-          defaultSettings: String(route.data.defaultSettings),
+          ...route,
           // The Lab never touches wp_magic_quotes.
           magicQuotes: "wordpress-default",
         },
       };
+    },
+  );
+}
+
+/** The route's attacker role and settings, as recorded by the Verifier. */
+async function routeConditions(
+  store: PrivateArtifactStore,
+  recipeDigest: string,
+): Promise<Readonly<Record<string, string>> | null> {
+  const route = routeConditionsSchema.safeParse(
+    await readJson(store, recipeDigest, "route.json"),
+  );
+  return route.success
+    ? {
+        attackerRole: route.data.role,
+        defaultSettings: String(route.data.defaultSettings),
+      }
+    : null;
+}
+
+const missingRoute: Incomplete = {
+  status: "incomplete",
+  reason: "evidence",
+  nextStep: "Record the route with its role and settings; then repeat",
+};
+
+/**
+ * RCE / PHP file write: only an issued Execution Canary that ran inside the Lab
+ * counts. Stored-but-inert code (`.php.png`, SVG, safe extensions) leaves no marker.
+ */
+function executionCanaryJudge(options: Options) {
+  return canaryJudge(
+    options,
+    "wordpress-execution-canary",
+    async ({ lab, recipeDigest }) => {
+      const route = await routeConditions(options.store, recipeDigest);
+      if (route === null) return missingRoute;
+      const execution = await options.lab.observeExecution(lab);
+      switch (execution.status) {
+        case "unavailable":
+          return unavailable;
+        case "not-prepared":
+          return {
+            status: "incomplete",
+            reason: "precondition",
+            nextStep:
+              "Issue an Execution Canary from this Lab and place it through the route; then repeat",
+          };
+        case "not-executed":
+          return null;
+        case "executed":
+          return {
+            conditions: {
+              observedVia: "execution-canary",
+              canaryFiles:
+                execution.files.length === 0
+                  ? "none-on-disk"
+                  : execution.files.join(","),
+              ...route,
+            },
+          };
+      }
     },
   );
 }
@@ -299,6 +359,7 @@ export function createWordPressJudges(
   const administrator = administratorJudge(options);
   const nonAdministrator = nonAdministratorJudge(options);
   const sql = sqlCanaryJudge(options);
+  const execution = executionCanaryJudge(options);
   return {
     for(finding) {
       switch (finding.impact) {
@@ -311,6 +372,9 @@ export function createWordPressJudges(
           return nonAdministrator;
         case "sqli":
           return sql;
+        case "rce":
+        case "php-file-write":
+          return execution;
         default:
           return null;
       }

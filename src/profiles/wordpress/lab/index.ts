@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
@@ -97,6 +97,14 @@ export type WordPressSessionObservation =
   | { readonly status: "user"; readonly login: string }
   | { readonly status: "none" | "unavailable" };
 
+export type WordPressExecutionObservation =
+  | {
+      readonly status: "executed";
+      /** Files under the web root that hold the canary, relative to it. */
+      readonly files: readonly string[];
+    }
+  | { readonly status: "not-executed" | "not-prepared" | "unavailable" };
+
 export interface ExecutionCanary {
   readonly nonce: string;
   readonly php: string;
@@ -108,10 +116,13 @@ export interface WordPressLab extends LabProvisioner<
 > {
   canaryLedger(handle: WordPressLabHandle): WordPressCanaryLedger | null;
   prepareExecutionCanary(handle: WordPressLabHandle): ExecutionCanary | null;
-  observeExecutionCanary(
+  /**
+   * Checks every Execution Canary issued for this Lab. Only code that ran inside
+   * the WordPress container can produce the salted marker; a plain file write cannot.
+   */
+  observeExecution(
     handle: WordPressLabHandle,
-    canary: ExecutionCanary,
-  ): Promise<"observed" | "missing">;
+  ): Promise<WordPressExecutionObservation>;
   /** Asks WordPress inside the Lab which user a logged-in cookie value authenticates. */
   observeSessionUser(
     handle: WordPressLabHandle,
@@ -136,6 +147,8 @@ interface Resources {
   readonly wordpress: string;
   readonly databasePassword: string;
   readonly adminPassword: string;
+  /** Only the WordPress container's environment holds this. */
+  readonly executionSalt: string;
   handle?: WordPressLabHandle;
   canaries?: WordPressCanaryLedger;
   executionNonces: Set<string>;
@@ -377,6 +390,7 @@ export function openWordPressLab(options: {
           wordpress: `${prefix}-wp`,
           databasePassword: randomUUID(),
           adminPassword: randomUUID(),
+          executionSalt: randomBytes(16).toString("hex"),
           executionNonces: new Set(),
           networkCreated: false,
           volumeCreated: false,
@@ -431,6 +445,8 @@ export function openWordPressLab(options: {
           "WORDPRESS_DB_USER=root",
           "--env",
           `WORDPRESS_DB_PASSWORD=${resource.databasePassword}`,
+          "--env",
+          `WBH_EXECUTION_SALT=${resource.executionSalt}`,
           options.images.wordpress,
         ]);
         resource.wordpressCreated = true;
@@ -682,7 +698,7 @@ export function openWordPressLab(options: {
       const path = `/tmp/wbh-execution-${token}`;
       return {
         nonce: token,
-        php: `<?php file_put_contents('${path}', '${token}'); ?>`,
+        php: `<?php file_put_contents('${path}', hash('sha256', '${token}' . getenv('WBH_EXECUTION_SALT'))); ?>`,
       };
     },
     async observeSessionUser(handle, cookie) {
@@ -739,25 +755,45 @@ export function openWordPressLab(options: {
         ? roles(resource, username)
         : { status: "unavailable" };
     },
-    async observeExecutionCanary(handle, canary) {
+    async observeExecution(handle) {
       const resource = active.get(handle.id);
-      if (
-        resource?.handle !== handle ||
-        !resource.executionNonces.has(canary.nonce)
-      )
-        return "missing";
-      const result = await docker(
-        [
-          "exec",
-          resource.wordpress,
-          "cat",
-          `/tmp/wbh-execution-${canary.nonce}`,
-        ],
-        10_000,
-      );
-      return result.exitCode === 0 && result.stdout.trim() === canary.nonce
-        ? "observed"
-        : "missing";
+      if (resource?.handle !== handle) return { status: "unavailable" };
+      if (resource.executionNonces.size === 0)
+        return { status: "not-prepared" };
+      try {
+        for (const token of resource.executionNonces) {
+          const marker = await docker(
+            ["exec", resource.wordpress, "cat", `/tmp/wbh-execution-${token}`],
+            10_000,
+          );
+          const expected = createHash("sha256")
+            .update(`${token}${resource.executionSalt}`)
+            .digest("hex");
+          if (marker.exitCode !== 0 || marker.stdout.trim() !== expected)
+            continue;
+          const found = await docker(
+            [
+              "exec",
+              resource.wordpress,
+              "grep",
+              "-rlF",
+              "--",
+              token,
+              "/var/www/html",
+            ],
+            30_000,
+          );
+          const files = found.stdout
+            .split("\n")
+            .filter((line) => line.startsWith("/var/www/html/"))
+            .slice(0, 5)
+            .map((line) => line.slice("/var/www/html/".length));
+          return { status: "executed", files };
+        }
+        return { status: "not-executed" };
+      } catch {
+        return { status: "unavailable" };
+      }
     },
   };
 }

@@ -103,6 +103,9 @@ async function fixture(options: {
       async observeCanaryTable() {
         return { status: "intact" };
       },
+      async observeExecution() {
+        return { status: "not-executed" };
+      },
       async observeAccountRoles(): Promise<WordPressRoleObservation> {
         return options.roles === "unavailable"
           ? { status: "unavailable" }
