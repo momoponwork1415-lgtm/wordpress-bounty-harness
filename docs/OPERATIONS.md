@@ -15,7 +15,7 @@
 | 実行環境 | gVisor（`runsc`）入りのDockerホスト。Codex CLI ≥ 0.161。ChatGPT Proにログイン。費用は購読の月額固定で、Harnessは金額でなく使用量（rate limit / quota）を見る | 初回とCLI更新時 |
 | build | `pnpm install && pnpm build`。credential proxyも `dist/discovery` にでき、brokerがそれを読み取り専用でmountする | 更新のたび |
 | host設定 | Git外のJSON（`wordpressHostConfigSchema`、雛形は `examples/translatepress-3.3.1/host.example.json`）。docker、作業dir、全imageのdigest固定、Codex runtime profile、認証情報ファイルの**パス**、Programme写しのパス、履歴mirror | 初回とimage更新時 |
-| 認証 | provider認証情報を1つのファイルに置く（0600、本人所有）。読むのはegress brokerだけで、エージェントには渡らない | 初回と失効時 |
+| 認証 | ホストでCodex CLIにChatGPTログインし（`codex login`）、その `auth.json`（0600、本人所有）のパスをhost設定の `credentialFilePath` に、`authenticationMethod` を `chatgpt-oauth-host` にする。読むのはegress brokerだけで、エージェントには渡らない（下記） | 初回とログイン失効時 |
 | Programmeの写し | wordfence.comは自動取得できないので、公式3ページを人間がpage documentへ写す（雛形は `examples/translatepress-3.3.1/wordfence-programme.example.json`）。35日を超えると選定が止まる | 月1回 |
 | campaign設定 | JSONファイル（`wordpressCampaignConfigSchema`）。Programme Boundary、停止規則、Lab、`resources`、任意の `dailyRunCap` と `ablation` を書く。認証情報と鍵は書かない | 方針を変えるとき |
 | 選定方針 | `src/profiles/wordpress/policy/selection.json`（説明は同じ場所の `selection.md`）。インストール数の下限、更新の鮮度、除外slug、High Threatタグ、run予算 | 月1回程度 |
@@ -38,9 +38,16 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 - dockerが応答し、`runsc` が登録されている。
 - host設定の全imageが、digest固定のまま手元にある。
-- 認証情報ファイルが通常ファイル、0600、本人所有で、空でない。中身は読まない。
+- 認証情報ファイルが通常ファイル、0600、本人所有で、空でない。APIキーの中身は読まない。ChatGPTログインはメモリ上で読み、access tokenが1時間以上残っていることだけを確かめる。
 - proxy bundle（`dist/discovery`）がある。
 - Codex imageのCLI版と同梱カタログのdigestが、runtime profileと一致する。
+
+**ChatGPTログインの中継**: runごとのbroker（runsc）が、そのrunだけのCAと `provider-egress.internal` の証明書でHTTPSを待ち受ける。
+
+- エージェントのsandboxには、grant tokenとダミーaccountだけでできた使い捨ての `auth.json`、そのCA、brokerのIPだけが入る。本物のaccess tokenとaccount IDはbrokerだけが持ち、refresh tokenはbrokerにも渡さない。
+- brokerは `responses` のPOSTだけを、bindしたmodel・件数・大きさ・期限の範囲で `chatgpt.com` へ転送する。workspace discoveryはbrokerが自分で答え、それ以外のendpoint（plugins、analyticsなど）は403にする。
+- tokenの更新はしない。preflightが「1時間以内に失効」を出したら、ホストで `codex login` をやり直す。
+- APIキー（`host-private-bearer`）の経路も残っている。
 
 `campaign run` は無人で回る。1対象あたりのdiscovery runは、選定のrun予算（既定20、High Threat面は40）と設定の上限（既定40）の小さい方まで。新規Findingなしが続いたら（既定4回）止まる。各Findingは別コンテナのVerifierと判定器を通り、`runtime-confirmed` / `contradicted` / `incomplete` として台帳に入る。
 

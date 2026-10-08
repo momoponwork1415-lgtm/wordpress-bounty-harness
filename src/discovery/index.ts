@@ -76,3 +76,7 @@ export {
   type RecordedRuntime,
   type RecordedRuntimeGroup,
 } from "./recorded-runtimes.js";
+export {
+  readPrivateChatgptLogin,
+  type PrivateChatgptLogin,
+} from "./provider-private-credential.js";

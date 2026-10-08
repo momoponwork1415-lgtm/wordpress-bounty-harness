@@ -11,6 +11,7 @@ import {
   defineAgentRuntimeProfile,
   GvisorCodexSandbox,
   ProviderAttachmentStore,
+  readPrivateChatgptLogin,
 } from "../discovery/index.js";
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
 import {
@@ -256,6 +257,10 @@ export async function createWordPressHostProfile(options: {
         dockerExecutablePath: host.dockerExecutablePath,
         brokerImage: host.images.broker,
         credentialFilePath: host.credentialFilePath,
+        credentialKind:
+          runtimeProfile.authenticationMethod === "chatgpt-oauth-host"
+            ? "chatgpt-login"
+            : "api-key",
         scratchRootDirectory: directories.brokerScratch,
         proxyBundleDirectory,
         clock: state.clock,
@@ -355,7 +360,11 @@ export async function createWordPressHostProfile(options: {
   });
 }
 
-/** Checks the host without starting a target container or reading the credential. */
+/**
+ * Checks the host without starting a target container. An API key is never
+ * read; a ChatGPT login is parsed in memory only to see that it outlives the
+ * next hour, since the broker does not refresh it.
+ */
 async function preflight(options: {
   readonly host: WordPressHostConfig;
   readonly runDocker: HostDockerRun;
@@ -363,6 +372,7 @@ async function preflight(options: {
   readonly runtimeProfile: {
     codexCliVersion: string;
     bundledCatalogDigest: string;
+    authenticationMethod: string;
   };
   readonly probe: () => Promise<{
     readonly cliVersion: string;
@@ -437,6 +447,23 @@ async function preflight(options: {
     );
   } catch {
     check("credential", false, "the credential file is missing");
+  }
+  if (
+    options.runtimeProfile.authenticationMethod === "chatgpt-oauth-host" &&
+    items.at(-1)?.ok === true
+  ) {
+    const login = await readPrivateChatgptLogin(
+      options.host.credentialFilePath,
+      new Date(Date.now() + 60 * 60_000),
+    ).catch(() => undefined);
+    items.pop();
+    check(
+      "credential",
+      login !== undefined,
+      login === undefined
+        ? "the ChatGPT login is unreadable or expires within an hour (log in again with the Codex CLI)"
+        : `ChatGPT login valid until ${login.expiresAt.toISOString()} (broker only)`,
+    );
   }
 
   const bundleFiles = [

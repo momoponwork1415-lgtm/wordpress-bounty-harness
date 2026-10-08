@@ -481,7 +481,10 @@ export function createProviderCredentialEgressBroker(
           );
           secrets = [login.accessToken, login.accountId];
           stagedFiles = {
-            "provider-chatgpt.json": JSON.stringify(login),
+            "provider-chatgpt.json": JSON.stringify({
+              accessToken: login.accessToken,
+              accountId: login.accountId,
+            }),
           };
         } else {
           const apiKey = await readPrivateProviderCredential(

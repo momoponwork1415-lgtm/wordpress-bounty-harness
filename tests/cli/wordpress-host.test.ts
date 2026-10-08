@@ -26,11 +26,37 @@ type Docker = {
   readonly cliVersion?: string;
 };
 
-async function setup(docker: Docker = {}) {
+const base64url = (value: unknown) =>
+  Buffer.from(JSON.stringify(value)).toString("base64url");
+/** A Codex CLI ChatGPT login file with synthetic values. */
+const chatgptLogin = (exp: Date) =>
+  JSON.stringify({
+    auth_mode: "chatgpt",
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: "synthetic",
+      access_token: `${base64url({ alg: "none" })}.${base64url({
+        exp: Math.floor(exp.getTime() / 1000),
+      })}.c2ln`,
+      refresh_token: "synthetic-refresh",
+      account_id: "synthetic-account",
+    },
+  });
+
+async function setup(
+  docker: Docker = {},
+  login?: { readonly expiresAt: Date },
+) {
   const root = await mkdtemp(join(tmpdir(), "wbh-host-"));
   directories.push(root);
   const credentialFilePath = join(root, "provider-credential");
-  await writeFile(credentialFilePath, "synthetic-not-a-key\n", { mode: 0o600 });
+  await writeFile(
+    credentialFilePath,
+    login === undefined
+      ? "synthetic-not-a-key\n"
+      : chatgptLogin(login.expiresAt),
+    { mode: 0o600 },
+  );
   const proxyBundleDirectory = join(root, "bundle");
   await mkdir(proxyBundleDirectory);
   for (const file of [
@@ -69,7 +95,8 @@ async function setup(docker: Docker = {}) {
         requestedEffort: "high",
         codexCliVersion: "0.161.0",
         bundledCatalogDigest: `sha256:${catalogHex}`,
-        authenticationMethod: "host-private-bearer",
+        authenticationMethod:
+          login === undefined ? "host-private-bearer" : "chatgpt-oauth-host",
         cyberAccessProgram: "standard",
         serviceTier: "default",
         subagent: { modelId: "unavailable", effort: "unavailable" },
@@ -192,6 +219,25 @@ describe("WordPress host entry", () => {
     expect(result.stderr.join("\n")).toContain(
       "credential: readable by others",
     );
+  });
+
+  it("checks that a ChatGPT login outlives the next hour without printing it", async () => {
+    const valid = await setup(
+      {},
+      { expiresAt: new Date(Date.now() + 9 * 24 * 60 * 60_000) },
+    );
+    const ok = await valid.run();
+    expect(ok.code).toBe(0);
+    const expiring = await setup(
+      {},
+      { expiresAt: new Date(Date.now() + 30 * 60_000) },
+    );
+    const failed = await expiring.run();
+    expect(failed.code).toBe(1);
+    expect(failed.stderr.join("\n")).toContain(
+      "credential: the ChatGPT login is unreadable or expires within an hour",
+    );
+    expect(failed.stderr.join("\n")).not.toContain("synthetic-account");
   });
 
   it("rejects a host image that is not pinned by digest", () => {

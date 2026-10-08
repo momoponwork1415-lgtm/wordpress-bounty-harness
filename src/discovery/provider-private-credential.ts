@@ -42,6 +42,7 @@ export async function readPrivateProviderCredential(
 export interface PrivateChatgptLogin {
   readonly accessToken: string;
   readonly accountId: string;
+  readonly expiresAt: Date;
 }
 
 const tokenPattern = /^[A-Za-z0-9._~+/=-]{8,16384}$/u;
@@ -104,5 +105,9 @@ export async function readPrivateChatgptLogin(
   if (expiry === undefined || expiry <= mustOutlive.getTime()) {
     throw new Error("credential is expired");
   }
-  return { accessToken: tokens.access_token, accountId: tokens.account_id };
+  return {
+    accessToken: tokens.access_token,
+    accountId: tokens.account_id,
+    expiresAt: new Date(expiry),
+  };
 }
