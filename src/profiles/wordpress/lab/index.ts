@@ -83,7 +83,23 @@ export interface WordPressCanaryLedger {
   readonly roleBaseline: Readonly<Record<string, readonly string[]>>;
   /** One row whose value is stored only in this table; reading it needs SQL access. */
   readonly sqlCanary: { readonly table: string; readonly value: string };
+  /** Files outside wp-content at fixed paths; only their values are secret. */
+  readonly fileCanaries: readonly WordPressFileCanary[];
 }
+
+export interface WordPressFileCanary {
+  /** Different directory and extension, so reaching both shows full path control. */
+  readonly kind: "outside-webroot" | "php-source";
+  readonly path: string;
+  readonly value: string;
+}
+
+export type WordPressCanaryFilesObservation =
+  | {
+      readonly status: "observed";
+      readonly deleted: readonly WordPressFileCanary["kind"][];
+    }
+  | { readonly status: "unavailable" };
 
 export type WordPressCanaryTableObservation = {
   readonly status: "intact" | "changed" | "unavailable";
@@ -132,6 +148,10 @@ export interface WordPressLab extends LabProvisioner<
   observeCanaryTable(
     handle: WordPressLabHandle,
   ): Promise<WordPressCanaryTableObservation>;
+  /** Reports which seeded canary files no longer exist. */
+  observeCanaryFiles(
+    handle: WordPressLabHandle,
+  ): Promise<WordPressCanaryFilesObservation>;
   /** Reads an account's current roles inside the Lab. */
   observeAccountRoles(
     handle: WordPressLabHandle,
@@ -642,6 +662,27 @@ export function openWordPressLab(options: {
           "query",
           `CREATE TABLE ${sqlCanary.table} (id INT PRIMARY KEY, value CHAR(32) NOT NULL); INSERT INTO ${sqlCanary.table} VALUES (1, '${sqlCanary.value}')`,
         ]);
+        const fileCanaries: WordPressFileCanary[] = [
+          {
+            kind: "outside-webroot",
+            path: "/etc/wbh-canary",
+            value: randomBytes(16).toString("hex"),
+          },
+          {
+            kind: "php-source",
+            path: "/var/www/html/wbh-canary.php",
+            value: randomBytes(16).toString("hex"),
+          },
+        ];
+        for (const file of fileCanaries)
+          await requireDocker([
+            "exec",
+            resource.wordpress,
+            "sh",
+            "-c",
+            // Served over HTTP the PHP canary runs and prints nothing; only its source holds the value.
+            `printf %s '${file.kind === "php-source" ? `<?php /* ${file.value} */` : file.value}' > ${file.path}`,
+          ]);
         const roleBaseline: Record<string, readonly string[]> = {};
         for (const account of Object.values(handle.attackerAccounts)) {
           const observed = await roles(resource, account.username);
@@ -654,6 +695,7 @@ export function openWordPressLab(options: {
           adminUser,
           roleBaseline,
           sqlCanary,
+          fileCanaries,
           option: `wbh_canary_${token}`,
           postId,
           postMeta: `wbh_canary_${token}`,
@@ -748,6 +790,22 @@ export function openWordPressLab(options: {
       } catch {
         return { status: "unavailable" };
       }
+    },
+    async observeCanaryFiles(handle) {
+      const resource = active.get(handle.id);
+      const files = resource?.canaries?.fileCanaries;
+      if (resource?.handle !== handle || files === undefined)
+        return { status: "unavailable" };
+      const deleted: WordPressFileCanary["kind"][] = [];
+      for (const file of files) {
+        const result = await docker(
+          ["exec", resource.wordpress, "test", "-e", file.path],
+          10_000,
+        );
+        if (result.exitCode === 1) deleted.push(file.kind);
+        else if (result.exitCode !== 0) return { status: "unavailable" };
+      }
+      return { status: "observed", deleted };
     },
     async observeAccountRoles(handle, username) {
       const resource = active.get(handle.id);
