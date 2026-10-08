@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.13、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
+版: v0.14、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
 
 ## 1. 目的と指標
 
@@ -86,16 +86,17 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 ## 7. Verificationの仕様
 
 - Verifier: 新しいコンテナ。渡すのはFinding、source、Lab。会話履歴と作業領域は渡さない。役割はrecipeの環境不備の修正と反証に限り、再探索はしない。
-- 判定器（Harness所有、決定論的）:
+- 判定器（Harness所有、決定論的）。作るのは両プログラムで報奨に届く分類だけ。Reflected XSS、CSRF、到達先のないmissing authorization / IDOR、コンテンツ削除は判定器を作らず、探索の目的にも含めない（記録はする）:
 
 | 種別 | 成功条件 | 不採用の観測 |
 | --- | --- | --- |
-| Stored / Reflected XSS | 低権限主体が置いたnonce付き値が、指定contextのheadless browserで実行され、Labのcanary受信先へ届く | alertの有無、文字列の存在だけ |
-| SQLi | canary行の値が応答に現れる、またはcanary表への書き込みが観測される | timing差 |
-| LFI / 任意ファイル読み取り | Labが置いたcanaryファイルの内容が応答に現れる | パス文字列の反射 |
-| RCE / ファイル書き込み | Execution Canary（nonce）がLab内で実行された痕跡 | シェル取得 |
-| authz / IDOR / 権限昇格 | 各ロールの正常操作を先に記録し、低権限主体が基準外の状態変化または読み取りを起こす。scope評価では乗っ取り・権限昇格・サイト全体への影響に到達するかを別に問う | エラーメッセージの差 |
-| アカウント乗っ取り | 低権限主体が他主体の認証状態を得る（Labのcanaryユーザー） | パスワードリセットメールの存在だけ |
+| RCE / PHPファイル書き込み | Execution Canary（nonce）がLab内で実行された痕跡 | シェル取得、`.php.png` や安全な拡張子内のコード |
+| SQLi | canary行の値が応答に現れる、またはcanary表への書き込みが観測される。Labは `wp_magic_quotes` 既定のまま | timing差 |
+| 任意ファイル読み取り / LFI / RFI | Labが置いたcanaryファイルの内容が応答に現れる。pathと拡張子の両方を攻撃者が決めたことを記録 | パス文字列の反射 |
+| options更新 | Labが置いたcanary option、または重大なoption（`users_can_register`、`default_role`、`siteurl`、`admin_email` 等）が低権限主体から変わる | 影響のないoption |
+| 管理者への権限昇格 / 認証回避 / アカウント乗っ取り | 低権限主体が管理者の認証状態または管理者相当の能力を得る（Labのcanaryユーザー、各ロールの正常操作記録との差） | パスワードリセットメールの存在だけ、エラーメッセージの差 |
+| contributor以上への権限昇格 / 非管理者の認証回避 | 低権限主体がcontributor以上の能力または他主体の認証状態を得る | 同上 |
+| Stored XSS（サイト全体） | 低権限主体が置いたnonce付き値が、未認証訪問者が見る前面ページまたは全管理画面でheadless browserにより実行され、Labのcanary受信先へ届く。発火contextを記録 | alertの有無、文字列の存在だけ、特定ページだけの発火 |
 
 - 結果: `runtime-confirmed` / `contradicted` / `incomplete`。`incomplete` は理由コード（provision、precondition、recipe、observation、evidence、cleanup、digest-mismatch）と次の手を持つ。
 - 判定器を定義できない種別は自動確認せず、`incomplete(no-judge)` として人間へ回す。
@@ -120,7 +121,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - Reflected XSS、CSRF、Missing Authorization、IDORはWordfenceで明示的に対象外。候補としては記録するが、Submission Candidateにしない。ただし同じ欠陥が任意options更新、任意コンテンツ削除、権限昇格、認証回避、機微情報の漏えいに到達する場合は、到達先の種別として対象。判定器はauthz系も技術的に確認し、scope評価で到達先を問う。
 - Wordfenceの却下条件のうちLabと判定器に効くもの: `wp_magic_quotes` 無効前提のSQLi、SVG / 二重拡張子 / 安全な拡張子内のコードによるupload、nonceで守られたactionのmissing authorization、管理者の誤設定前提。Labは既定設定で供給し、file upload系はExecution Canaryの実行で証明する。
 - Patchstack（報告フォーム2026-06-01改定の写し `src/profiles/wordpress/policy/patchstack-scope-2026-10-08.md`）: 攻撃者は未認証 / subscriber / customerだけ（contributorはmVDPのみ）。受理種別には条件が付く: ファイル系とLFI / RFIはpathと拡張子の完全制御、権限昇格はcontributor以上へ到達、設定変更は重大な影響を持つoption、broken access controlは機微な対象、XSSはサイト全体に効くstoredかJS実行を伴うreflected、CSRFは受理種別の書き込みへ連鎖。1,000件未満はCVSS 8.5以上のみ、100件未満は不受理。
-- プログラム間の差: Reflected XSSはPatchstack向けにだけ、CSRFはPatchstack向けに連鎖する場合だけscope評価する。
+- Reflected XSSとCSRFはPatchstackでは条件付きで受理されるが、この設計では探索の目的にも提出候補にもしない（判断者の指示、2026-10-08）。記録だけ残す。
 - 両プログラムとも最新版・既定設定での成立を要する。提出直前に最新版のsnapshotで再検証し、再現パッケージは遠隔攻撃者の視点の手順（HTTPリクエスト、画面画像）で書き、WP-CLIなどサーバー側だけの手順を含めない。
 - 公開資料間で矛盾するときは `in-scope` にせず `ambiguous` として人間へ回す。
 
@@ -146,12 +147,12 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `options-update` | Labが置いたcanary optionまたは重大なoption（`users_can_register`、`default_role`、`siteurl`、`admin_email` 等）が低権限から変わる | High Threat ≥25 | 受理（重大な影響が条件） |
 | `privesc-to-admin` / `auth-bypass-to-admin` / `account-takeover` | 低権限主体が管理者の認証状態または管理者相当の能力を得る | High Threat ≥25 | 受理 |
 | `privesc-to-contributor+` / `auth-bypass-non-admin` | 低権限主体がcontributor以上の能力または他主体の認証状態を得る | その他 ≥500 | 受理（contributor以上が条件） |
-| `sensitive-object-access` | API key / secret、password hash、backup / SQLファイルなどのcanary相当に低権限から届く | その他 ≥500（Sensitive Information Disclosure） | 受理（機微な対象が条件） |
-| `content-deletion` | 他主体または全体のコンテンツ（canary投稿）が低権限から消える | その他 ≥500 | broken access controlの条件次第 |
+| `sensitive-object-access` | 判定器は後回し（`incomplete(no-judge)` として人間へ） | その他 ≥500（Sensitive Information Disclosure） | 受理（機微な対象が条件） |
+| `content-deletion` | 判定器を作らない。探索の目的に含めない | その他 ≥500 | broken access controlの条件次第 |
 | `stored-xss` | 低権限主体のnonce付き値が、未認証訪問者が見る前面ページまたは全管理画面で実行されcanary受信先へ届く。発火contextを記録 | Common ≥500 | 受理（サイト全体に効くことが条件。それ以外はmVDPのみ） |
-| `reflected-xss` | nonceを要しないURLで実行される | 対象外 | 受理（JS実行、nonce不要が条件） |
-| `csrf-to-write` | 上記の書き込み系へ連鎖する | 対象外 | 受理（連鎖が条件） |
-| `missing-authz` / `idor`（到達先なし） | 判定器は技術的に確認するが分類は到達先が決める | 対象外 | 機微な対象以外は対象外 |
+| `reflected-xss` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（JS実行、nonce不要が条件）だが出さない |
+| `csrf-to-write` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（連鎖が条件）だが出さない |
+| `missing-authz` / `idor`（到達先なし） | 判定器を作らない。到達先がある場合はその分類で判定する | 対象外 | 機微な対象以外は対象外 |
 
 分類に入らない主張（DoS、open redirect、SSRF、情報列挙等）は `other` として台帳に残し、探索の目的にも提出候補にもしない。
 
