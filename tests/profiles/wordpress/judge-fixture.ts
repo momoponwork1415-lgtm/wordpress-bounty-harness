@@ -39,6 +39,14 @@ export const canaries: WordPressCanaryLedger = {
   adminUser: "wbh-canary-admin-synthetic-nonce",
   roleBaseline: { "lab-subscriber": ["subscriber"] },
   sqlCanary: { table: "wbh_canary", value: "c".repeat(32) },
+  fileCanaries: [
+    { kind: "outside-webroot", path: "/etc/wbh-canary", value: "d".repeat(32) },
+    {
+      kind: "php-source",
+      path: "/var/www/html/wbh-canary.php",
+      value: "e".repeat(32),
+    },
+  ],
 };
 
 export const finding = (
@@ -90,6 +98,9 @@ export function quietLab(overrides: Partial<JudgeLab> = {}): JudgeLab {
     },
     async observeExecution() {
       return { status: "not-executed" };
+    },
+    async observeCanaryFiles() {
+      return { status: "observed", deleted: [] };
     },
     ...overrides,
   } satisfies Partial<WordPressLab>;

@@ -59,6 +59,8 @@ async function fixture(
     table: "seeded" as "seeded" | "changed" | "dropped",
     /** What the WordPress container holds at the Execution Canary path. */
     execution: "executed" as "executed" | "plain-write" | "absent",
+    /** Canary file paths that no longer exist. */
+    deleted: new Set<string>(),
   };
   const salts = new Map<string, string>();
   let seededRow = "";
@@ -111,6 +113,12 @@ async function fixture(
             stderr: "",
           };
         }
+        if (request.args[0] === "exec" && request.args[2] === "test")
+          return {
+            exitCode: database.deleted.has(request.args[4] ?? "") ? 1 : 0,
+            stdout: "",
+            stderr: "",
+          };
         if (request.args[0] === "exec" && request.args[2] === "grep")
           return {
             exitCode: 0,
@@ -336,6 +344,41 @@ describe("WordPress gVisor Lab", () => {
     database.execution = "absent";
     expect(await lab.observeExecution(provisioned.handle)).toEqual({
       status: "not-executed",
+    });
+  });
+
+  it("places secret canary files outside wp-content and reports which ones were deleted", async () => {
+    const { lab, snapshot, setup, commands, database } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup);
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    expect(await lab.observeCanaryFiles(provisioned.handle)).toEqual({
+      status: "unavailable",
+    });
+    expect((await lab.seedCanaries(provisioned.handle)).status).toBe("seeded");
+    const files = lab.canaryLedger(provisioned.handle)?.fileCanaries ?? [];
+    expect(files.map(({ kind, path }) => ({ kind, path }))).toEqual([
+      { kind: "outside-webroot", path: "/etc/wbh-canary" },
+      { kind: "php-source", path: "/var/www/html/wbh-canary.php" },
+    ]);
+    for (const file of files) {
+      expect(file.value).toMatch(/^[a-f0-9]{32}$/);
+      expect(file.path).not.toContain("wp-content");
+      // Only the command that writes the file carries its value.
+      expect(
+        commands.filter((command) =>
+          command.args.some((arg) => arg.includes(file.value)),
+        ),
+      ).toHaveLength(1);
+    }
+    expect(files[0]?.value).not.toBe(files[1]?.value);
+    expect(await lab.observeCanaryFiles(provisioned.handle)).toEqual({
+      status: "observed",
+      deleted: [],
+    });
+    database.deleted.add("/var/www/html/wbh-canary.php");
+    expect(await lab.observeCanaryFiles(provisioned.handle)).toEqual({
+      status: "observed",
+      deleted: ["php-source"],
     });
   });
 

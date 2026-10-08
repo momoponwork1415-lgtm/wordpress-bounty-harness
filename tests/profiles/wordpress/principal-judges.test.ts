@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import type { WordPressFinding } from "../../../src/profiles/wordpress/discovery/finding.js";
 import type {
-  WordPressCanaryLedger,
   WordPressLabHandle,
   WordPressRoleObservation,
   WordPressSessionObservation,
@@ -15,6 +14,7 @@ import type {
 import { createWordPressJudges } from "../../../src/profiles/wordpress/verification/judges.js";
 import { wordpressReproductionRenderer } from "../../../src/profiles/wordpress/verification/reproduction-package.js";
 import { publishReproductionPackage } from "../../../src/verification/index.js";
+import { canaries } from "./judge-fixture.js";
 
 const snapshotDigest = `sha256:${"a".repeat(64)}`;
 const setupDigest = `sha256:${"b".repeat(64)}`;
@@ -34,17 +34,6 @@ const handle: WordPressLabHandle = {
   attackerAccounts: {
     subscriber: { username: "lab-subscriber", password: "lab-only" },
   },
-};
-const canaries: WordPressCanaryLedger = {
-  nonce: "synthetic-nonce",
-  option: "wbh_canary_synthetic-nonce",
-  postId: "7",
-  postMeta: "wbh_canary_synthetic-nonce",
-  file: "/var/www/html/wp-content/wbh-canary-synthetic-nonce.txt",
-  user: "wbh-canary-synthetic-nonce",
-  adminUser: "wbh-canary-admin-synthetic-nonce",
-  roleBaseline: { "lab-subscriber": ["subscriber"] },
-  sqlCanary: { table: "wbh_canary", value: "0".repeat(32) },
 };
 const finding = (impact: WordPressFinding["impact"]): WordPressFinding => ({
   findingId: "finding-1",
@@ -105,6 +94,9 @@ async function fixture(options: {
       },
       async observeExecution() {
         return { status: "not-executed" };
+      },
+      async observeCanaryFiles() {
+        return { status: "observed", deleted: [] };
       },
       async observeAccountRoles(): Promise<WordPressRoleObservation> {
         return options.roles === "unavailable"

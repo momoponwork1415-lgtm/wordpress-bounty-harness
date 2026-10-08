@@ -98,6 +98,8 @@ async function verifyOnce(
             stderr: "",
           };
         }
+        if (request.args[0] === "exec" && request.args[2] === "test")
+          return { exitCode: changed ? 1 : 0, stdout: "", stderr: "" };
         if (request.args[0] === "exec" && request.args[2] === "grep")
           return {
             exitCode: 0,
@@ -293,6 +295,27 @@ describe("WordPress verification negative control", () => {
       status: "runtime-confirmed",
       judgeId: "wordpress-execution-canary",
       conditions: { canaryFiles: "wp-content/uploads/synthetic.php" },
+    });
+  });
+
+  it.each(["arbitrary-file-read", "arbitrary-file-delete"] as const)(
+    "does not confirm %s while every canary file is in place and none came back",
+    async (impact) => {
+      const { result, funnel } = await verifyOnce(false, impact);
+      expect(result).toMatchObject({
+        status: "incomplete",
+        reason: "observation",
+      });
+      expect(funnel.confirmed).toBe(0);
+    },
+  );
+
+  it("confirms arbitrary-file-delete once the Lab reports the canary files gone", async () => {
+    const { result } = await verifyOnce(true, "arbitrary-file-delete");
+    expect(result).toMatchObject({
+      status: "runtime-confirmed",
+      judgeId: "wordpress-file-canary-delete",
+      conditions: { pathAndExtension: "attacker-chosen" },
     });
   });
 
