@@ -85,6 +85,8 @@ export type ReviewItem =
       readonly ref: ReviewRef;
       readonly category: string;
       readonly judgeId: string;
+      /** What the judge itself observed (roles, configuration). */
+      readonly conditions: Readonly<Record<string, string>>;
       readonly evidenceDigest: string;
       readonly reproductionPackageDigest: string;
       readonly decision: Decision | null;
@@ -240,6 +242,7 @@ export class Review<TFacts = unknown> {
           ref,
           category: finding.category,
           judgeId: result.judgeId,
+          conditions: result.conditions,
           evidenceDigest: result.evidenceDigest,
           reproductionPackageDigest: result.reproductionPackageDigest,
           decision,

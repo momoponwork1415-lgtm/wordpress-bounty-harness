@@ -26,6 +26,8 @@ export interface CliIo {
 export type CliState = {
   readonly ledger: Ledger;
   readonly store: PrivateArtifactStore;
+  /** Where Private Evidence artifacts live on this host (outside Git). */
+  readonly evidenceDirectory: string;
   readonly clock: () => Date;
   readonly newId: () => string;
 };
@@ -115,13 +117,15 @@ async function openState(
 ): Promise<CliState> {
   const root = resolve(directory);
   await mkdir(root, { recursive: true, mode: 0o700 });
+  const evidenceDirectory = join(root, "private-evidence");
   const store = new PrivateArtifactStore({
-    rootDirectory: join(root, "private-evidence"),
+    rootDirectory: evidenceDirectory,
     maxEntries: 64,
     maxBytes: 64 * 1024 * 1024,
   });
   return {
     store,
+    evidenceDirectory,
     ledger: new Ledger({
       databasePath: join(root, "ledger.sqlite"),
       artifactStore: store,
@@ -153,7 +157,10 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
   return lines;
 }
 
-export function formatQueue(queue: ReviewQueue): string[] {
+export function formatQueue(
+  queue: ReviewQueue,
+  evidenceDirectory: string,
+): string[] {
   const lines: string[] = [];
   for (const item of queue.items) {
     const head = `${item.status}  ${item.ref.campaignId}  finding ${item.ref.findingId}  ${item.category}`;
@@ -164,8 +171,14 @@ export function formatQueue(queue: ReviewQueue): string[] {
         head,
         verification,
         `  judge: ${item.judgeId}`,
+        `  observed: ${
+          Object.entries(item.conditions)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, value]) => `${key}=${value}`)
+            .join(" ") || "none"
+        }`,
         `  evidence: ${item.evidenceDigest}`,
-        `  reproduction package: ${item.reproductionPackageDigest}`,
+        `  reproduction package: ${item.reproductionPackageDigest} (${join(evidenceDirectory, item.reproductionPackageDigest)})`,
         decision,
       );
     else
@@ -306,6 +319,7 @@ export async function runCli(
                   ? {}
                   : { campaignId: values.campaign },
               ),
+            state.evidenceDirectory,
           ),
         );
         return 0;

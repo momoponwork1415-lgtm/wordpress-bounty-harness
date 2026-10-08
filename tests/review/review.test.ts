@@ -427,6 +427,7 @@ describe("review queue and decisions", () => {
         category: "sqli",
         ref,
         judgeId: "sqli-canary",
+        conditions: {},
         evidenceDigest: expect.stringMatching(/^sha256:/),
         reproductionPackageDigest: expect.stringMatching(/^sha256:/),
         decision: null,

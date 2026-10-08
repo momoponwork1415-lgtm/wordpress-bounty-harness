@@ -418,7 +418,12 @@ describe("harness CLI vertical slice", () => {
     const queue = await run("review", "--campaign", "campaign-1");
     expect(queue.code).toBe(0);
     expect(queue.stdout).toMatch(/^runtime-confirmed .* account-takeover$/m);
-    expect(queue.stdout).toMatch(/reproduction package: sha256:[a-f0-9]{64}/);
+    expect(queue.stdout).toMatch(
+      /reproduction package: sha256:[a-f0-9]{64} \(\S+private-evidence\/sha256:[a-f0-9]{64}\)/,
+    );
+    expect(queue.stdout).toContain(
+      "observed: observedVia=session reachedRole=administrator",
+    );
     expect(queue.stdout).toMatch(/evidence: sha256:[a-f0-9]{64}/);
     expect(queue.stdout).toMatch(/^incomplete .* sqli$/m);
     expect(queue.stdout).toContain("reason: no-judge");
