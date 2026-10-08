@@ -78,6 +78,10 @@ export interface WordPressCanaryLedger {
   readonly user: string;
 }
 
+export type WordPressSessionObservation =
+  | { readonly status: "user"; readonly login: string }
+  | { readonly status: "none" | "unavailable" };
+
 export interface ExecutionCanary {
   readonly nonce: string;
   readonly php: string;
@@ -93,6 +97,11 @@ export interface WordPressLab extends LabProvisioner<
     handle: WordPressLabHandle,
     canary: ExecutionCanary,
   ): Promise<"observed" | "missing">;
+  /** Asks WordPress inside the Lab which user a logged-in cookie value authenticates. */
+  observeSessionUser(
+    handle: WordPressLabHandle,
+    cookie: string,
+  ): Promise<WordPressSessionObservation>;
 }
 
 interface Resources {
@@ -169,6 +178,7 @@ export function openWordPressLab(options: {
   const wp = (
     resource: Resources,
     args: readonly string[],
+    environment: readonly string[] = [],
   ): Promise<DockerResult> =>
     requireDocker([
       "run",
@@ -177,6 +187,7 @@ export function openWordPressLab(options: {
       "--network",
       resource.network,
       "--security-opt=no-new-privileges",
+      ...environment.flatMap((entry) => ["--env", entry]),
       "--env",
       "WORDPRESS_DB_HOST=database",
       "--env",
@@ -596,6 +607,27 @@ export function openWordPressLab(options: {
         nonce: token,
         php: `<?php file_put_contents('${path}', '${token}'); ?>`,
       };
+    },
+    async observeSessionUser(handle, cookie) {
+      const resource = active.get(handle.id);
+      if (resource?.handle !== handle) return { status: "unavailable" };
+      // The value travels as an environment variable, never as PHP source.
+      if (!/^[A-Za-z0-9%|._@+-]{1,4096}$/.test(cookie))
+        return { status: "none" };
+      try {
+        const result = await wp(
+          resource,
+          [
+            "eval",
+            '$id = wp_validate_auth_cookie(rawurldecode((string) getenv("WBH_SESSION_COOKIE")), "logged_in"); echo $id ? get_userdata($id)->user_login : "";',
+          ],
+          [`WBH_SESSION_COOKIE=${cookie}`],
+        );
+        const login = result.stdout.trim();
+        return login === "" ? { status: "none" } : { status: "user", login };
+      } catch {
+        return { status: "unavailable" };
+      }
     },
     async observeExecutionCanary(handle, canary) {
       const resource = active.get(handle.id);

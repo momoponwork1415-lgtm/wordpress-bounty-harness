@@ -81,6 +81,12 @@ async function fixture(
           return { exitCode: 0, stdout: "172.20.0.2", stderr: "" };
         if (request.args[0] === "exec" && request.args[2] === "cat")
           return { exitCode: 0, stdout: "fixed-nonce", stderr: "" };
+        if (request.args.includes("eval"))
+          return {
+            exitCode: 0,
+            stdout: "wbh-canary-fixed-nonce\n",
+            stderr: "",
+          };
         if (request.args.includes("--porcelain"))
           return { exitCode: 0, stdout: "7", stderr: "" };
         return { exitCode: 0, stdout: "ok", stderr: "" };
@@ -155,6 +161,32 @@ describe("WordPress gVisor Lab", () => {
     expect(await lab.teardown(first.handle)).toEqual({ status: "removed" });
     expect(lab.canaryLedger(first.handle)).toBeNull();
     expect(await lab.teardown(second.handle)).toEqual({ status: "removed" });
+  });
+
+  it("resolves a presented session inside the Lab without placing it in PHP source", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup);
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    expect(
+      await lab.observeSessionUser(provisioned.handle, "synthetic%7C1%7Cvalue"),
+    ).toEqual({ status: "user", login: "wbh-canary-fixed-nonce" });
+    const evaluation = commands.find((command) =>
+      command.args.includes("eval"),
+    );
+    expect(evaluation?.args).toContain(
+      "WBH_SESSION_COOKIE=synthetic%7C1%7Cvalue",
+    );
+    expect(evaluation?.args).toContain("--runtime=runsc");
+    expect(
+      evaluation?.args.some(
+        (arg) => arg.includes("synthetic") && arg.includes("wp_validate"),
+      ),
+    ).toBe(false);
+    const before = commands.length;
+    expect(
+      await lab.observeSessionUser(provisioned.handle, "bad value'"),
+    ).toEqual({ status: "none" });
+    expect(commands.length).toBe(before);
   });
 
   it("does not start target containers when source differs from its snapshot", async () => {
