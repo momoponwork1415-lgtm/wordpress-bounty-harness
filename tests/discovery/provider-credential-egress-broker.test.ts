@@ -65,12 +65,14 @@ describe("provider credential egress", () => {
           body: JSON.stringify({ model, input: "review" }),
         });
       expect(
-        (await send("/responses", "gpt-6.1-sol", "Bearer invalid")).status,
+        (await send("/v1/responses", "gpt-6.1-sol", "Bearer invalid")).status,
       ).toBe(401);
-      expect((await send("/chat/completions", "gpt-6.1-sol")).status).toBe(404);
-      expect((await send("/responses", "gpt-6-luna")).status).toBe(403);
-      expect((await send("/responses", "gpt-6.1-sol")).status).toBe(200);
-      expect((await send("/responses", "gpt-6.1-sol")).status).toBe(429);
+      expect((await send("/v1/chat/completions", "gpt-6.1-sol")).status).toBe(
+        404,
+      );
+      expect((await send("/v1/responses", "gpt-6-luna")).status).toBe(403);
+      expect((await send("/v1/responses", "gpt-6.1-sol")).status).toBe(200);
+      expect((await send("/v1/responses", "gpt-6.1-sol")).status).toBe(429);
       expect(received).toEqual([`/v1/responses Bearer ${credential}`]);
       expect(JSON.stringify(received)).not.toContain(grant);
     } finally {
@@ -119,7 +121,7 @@ describe("provider credential egress", () => {
     });
     try {
       const send = (origin: string) =>
-        fetch(`${origin}/responses`, {
+        fetch(`${origin}/v1/responses`, {
           method: "POST",
           headers: { authorization: `Bearer ${token}` },
           body: JSON.stringify({ model: "gpt-6.1-sol" }),

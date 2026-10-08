@@ -31,7 +31,7 @@ export interface ProviderCredentialProxy {
 }
 
 function protocolPath(protocol: ProviderApiProtocol): string {
-  return protocol === "responses" ? "/responses" : "/chat/completions";
+  return protocol === "responses" ? "/v1/responses" : "/v1/chat/completions";
 }
 
 function sendJson(
@@ -187,10 +187,13 @@ export async function openProviderCredentialProxy(
         return;
       }
       forwardedRequests += 1;
-      const upstreamUrl = new URL(
-        `${upstreamOrigin.pathname.replace(/\/$/, "")}${path}`,
-        upstreamOrigin.origin,
-      );
+      const upstreamUrl = new URL(path, upstreamOrigin.origin);
+      const remainingMs =
+        new Date(options.expiresAt).getTime() - clock().getTime();
+      if (remainingMs <= 0) {
+        sendJson(response, 401, "grant-expired");
+        return;
+      }
       const upstream = await fetch(upstreamUrl, {
         method: "POST",
         headers: {
@@ -200,6 +203,7 @@ export async function openProviderCredentialProxy(
         },
         body: new Uint8Array(body),
         redirect: "error",
+        signal: AbortSignal.timeout(remainingMs),
       });
       const upstreamBody = await boundedResponseBody(
         upstream,
