@@ -60,3 +60,34 @@ export const wordpressAnswerKeySchema = z.strictObject({
 });
 
 export type WordPressAnswerKey = z.infer<typeof wordpressAnswerKeySchema>;
+
+const findingTraceSchema = z.looseObject({
+  sourceTrace: z
+    .array(z.looseObject({ file: relativeFile, function: nonEmpty.optional() }))
+    .min(1),
+});
+
+/** The trace locations of a private WordPress Finding record, for location-overlap. */
+export function wordpressFindingLocations(
+  finding: unknown,
+): readonly { readonly file: string; readonly function?: string }[] {
+  return findingTraceSchema
+    .parse(finding)
+    .sourceTrace.map((location) =>
+      location.function === undefined
+        ? { file: location.file }
+        : { file: location.file, function: location.function },
+    );
+}
+
+/** Answer keys live outside Git; a file holds one key or an array of keys. */
+export function parseWordPressAnswerKeys(
+  value: unknown,
+): readonly WordPressAnswerKey[] {
+  return z
+    .union([
+      wordpressAnswerKeySchema.transform((key) => [key]),
+      z.array(wordpressAnswerKeySchema).min(1),
+    ])
+    .parse(value);
+}

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { wordpressAnswerKeySchema } from "../../../src/profiles/wordpress/answer-key.js";
+import {
+  parseWordPressAnswerKeys,
+  wordpressAnswerKeySchema,
+} from "../../../src/profiles/wordpress/answer-key.js";
 
 const example = {
   schemaVersion: 1,
@@ -45,5 +48,15 @@ describe("WordPress Answer Key v1", () => {
         allowedLocations: [{ file: "../outside.php" }],
       }).success,
     ).toBe(false);
+  });
+
+  it("reads a key file holding one key or several keys", () => {
+    expect(parseWordPressAnswerKeys(example).map((key) => key.caseId)).toEqual([
+      "synthetic-case",
+    ]);
+    expect(
+      parseWordPressAnswerKeys([example, { ...example, caseId: "second" }]),
+    ).toHaveLength(2);
+    expect(() => parseWordPressAnswerKeys([])).toThrow();
   });
 });

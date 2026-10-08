@@ -352,6 +352,13 @@ describe("Ledger public interface", () => {
       status: "in-scope",
     });
     await ledger.append({
+      ...common("scope-1-other-programme"),
+      type: "scope-assessed",
+      findingId: "finding-1",
+      programmeId: "programme-2",
+      status: "out-of-scope",
+    });
+    await ledger.append({
       ...common("scope-3"),
       type: "scope-assessed",
       findingId: "finding-3",
@@ -413,6 +420,7 @@ describe("Ledger public interface", () => {
       incomplete: 2,
       reviewed: 3,
       inScope: 1,
+      inScopeByProgramme: { "programme-1": 1, "programme-2": 0 },
       submitted: 1,
       outcome: 1,
       byCategory: {

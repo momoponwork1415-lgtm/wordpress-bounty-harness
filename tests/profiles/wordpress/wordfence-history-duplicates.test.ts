@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
+import { Ledger } from "../../../src/ledger/index.js";
+import { createWordfenceDuplicateLookup } from "../../../src/profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import { findDuplicates } from "../../../src/profiles/wordpress/wordfence-history/index.js";
 
 const directories: string[] = [];
@@ -282,5 +285,88 @@ describe("findDuplicates", () => {
         { ...paths, now: NOW },
       ).status,
     ).toBe("unavailable");
+  });
+});
+
+describe("Wordfence duplicate lookup for review", () => {
+  function ledgerWith(category: string) {
+    const directory = mkdtempSync(join(tmpdir(), "wbh-dedupe-ledger-"));
+    directories.push(directory);
+    const ledger = new Ledger({
+      databasePath: join(directory, "ledger.sqlite"),
+      artifactStore: new PrivateArtifactStore({
+        rootDirectory: join(directory, "evidence"),
+        maxEntries: 1,
+        maxBytes: 1,
+      }),
+    });
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: "campaign-1",
+      snapshotDigest: `sha256:${"a".repeat(64)}`,
+      occurredAt: "2026-10-08T00:00:00Z",
+    };
+    return Promise.all([
+      ledger.append({
+        ...base,
+        identity: "selected",
+        type: "target-selected",
+        selectionId: "wporg:target@1.5",
+      }),
+      ledger.append({
+        ...base,
+        identity: "finding",
+        type: "finding-recorded",
+        findingId: "finding-1",
+        runId: "run-1",
+        category,
+      }),
+    ]).then(() => ledger);
+  }
+
+  it("reports matching records as possible duplicates and a fresh empty result as no match", async () => {
+    const paths = mirror([
+      {
+        id: "match",
+        title: "Synthetic SQLi",
+        slug: "target",
+        signals: ["sql-injection"],
+        ranges: RANGE,
+      },
+    ]);
+    const query = { campaignId: "campaign-1", findingId: "finding-1" };
+    const sqli = createWordfenceDuplicateLookup({
+      ledger: await ledgerWith("sqli"),
+      history: paths,
+      clock: () => NOW,
+    });
+    expect(await sqli.inspect(query)).toEqual({
+      status: "possible-match",
+      reference: "match",
+    });
+    const xss = createWordfenceDuplicateLookup({
+      ledger: await ledgerWith("stored-xss"),
+      history: paths,
+      clock: () => NOW,
+    });
+    expect(await xss.inspect(query)).toEqual({ status: "no-match" });
+  });
+
+  it("does not infer no-match from a stale mirror or an unknown finding", async () => {
+    const stale = mirror([], "2026-10-01T00:00:00Z");
+    const lookup = createWordfenceDuplicateLookup({
+      ledger: await ledgerWith("sqli"),
+      history: stale,
+      clock: () => NOW,
+    });
+    expect(
+      await lookup.inspect({
+        campaignId: "campaign-1",
+        findingId: "finding-1",
+      }),
+    ).toEqual({ status: "unavailable" });
+    expect(
+      await lookup.inspect({ campaignId: "campaign-1", findingId: "absent" }),
+    ).toEqual({ status: "unavailable" });
   });
 });
