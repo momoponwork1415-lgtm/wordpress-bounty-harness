@@ -16,7 +16,7 @@ import type {
   Review,
   ReviewQueue,
 } from "../review/index.js";
-import type { CampaignSummary } from "./pipeline.js";
+import type { CampaignSummary, ReverificationSummary } from "./pipeline.js";
 
 export interface CliIo {
   stdout(line: string): void;
@@ -56,6 +56,15 @@ export interface CliProfile {
       readonly target: string | null;
     },
   ): Promise<CampaignSummary>;
+  /** Re-verifies one Finding on its target's latest version in a fresh Lab. */
+  reverify(
+    state: CliState,
+    input: {
+      readonly campaignId: string;
+      readonly findingId: string;
+      readonly configPath: string;
+    },
+  ): Promise<ReverificationSummary>;
 }
 
 export type CliEnvironment = {
@@ -73,6 +82,7 @@ const USAGE = [
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>]",
   "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
+  "  review reverify --campaign <id> --finding <id> --config <path>",
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
   "  review authorize --candidate <id> --draft <digest> --to <destination> [--by <name>]",
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
@@ -358,6 +368,17 @@ export async function runCli(
           result.status === "possible-match"
             ? `duplicate: possible-match ${result.reference}`
             : `duplicate: ${result.status}`,
+        );
+        return 0;
+      }
+      case "review reverify": {
+        const summary = await environment.profile.reverify(state, {
+          campaignId: required(values.campaign, "campaign"),
+          findingId: required(values.finding, "finding"),
+          configPath: resolve(required(values.config, "config")),
+        });
+        io.stdout(
+          `reverified finding ${values.finding} on ${summary.targetId} ${summary.version}  snapshot ${summary.snapshotDigest}  verification ${summary.verificationId}: ${summary.status}`,
         );
         return 0;
       }

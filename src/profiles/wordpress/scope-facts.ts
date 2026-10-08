@@ -157,7 +157,7 @@ export function createWordPressScopeFacts(options: {
         target: selectionRecordSchema.parse(
           JSON.parse(file.bytes.toString("utf8")) as unknown,
         ),
-        latestVersionVerified: false,
+        latestVersionVerified: verification.basis?.kind === "latest-version",
       });
     },
   };

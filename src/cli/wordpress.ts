@@ -50,7 +50,7 @@ import {
   type WordPressReconstruction,
 } from "../profiles/wordpress/verification/reproduction-package.js";
 import type { CliProfile, CliState } from "./index.js";
-import { runCampaignPipeline } from "./pipeline.js";
+import { reverifyOnLatestVersion, runCampaignPipeline } from "./pipeline.js";
 
 const text = z.strictObject({
   version: z.string().min(1).max(64),
@@ -122,6 +122,48 @@ async function loadConfig(configPath: string): Promise<{
   return { config, policy };
 }
 
+const setupFor =
+  (config: WordPressCampaignConfig) =>
+  (snapshot: Snapshot): WordPressLabSetup => ({
+    schemaVersion: 1,
+    snapshotDigest: snapshot.digest,
+    ...config.lab,
+  });
+
+const reconstructionFor =
+  (config: WordPressCampaignConfig) =>
+  (snapshot: Snapshot): WordPressReconstruction => ({
+    wordpressVersion: config.wordpressVersion,
+    target: snapshot.target,
+    enabledSettings: [],
+    roles: [
+      "unauthenticated",
+      "subscriber",
+      ...(config.lab.customerRole ? ["customer"] : []),
+    ],
+  });
+
+function verificationFor(
+  state: CliState,
+  boundaries: WordPressCampaignBoundaries,
+) {
+  return new Verification<
+    WordPressFinding,
+    WordPressLabSetup,
+    WordPressLabHandle,
+    WordPressReconstruction
+  >({
+    ledger: state.ledger,
+    store: state.store,
+    lab: boundaries.lab,
+    verifier: boundaries.verifier,
+    judges: createWordPressJudges({ store: state.store, lab: boundaries.lab }),
+    readFinding: readWordPressFinding,
+    renderer: wordpressReproductionRenderer,
+    clock: state.clock,
+  });
+}
+
 export function createWordPressCliProfile(options: {
   readonly boundaries: (
     config: WordPressCampaignConfig,
@@ -177,11 +219,6 @@ export function createWordPressCliProfile(options: {
         loadWordPressDiscoveryAsset(config.promptId),
         loadWordPressDiscoveryAsset("trust-boundary-v1"),
       ]);
-      const setupFor = (snapshot: Snapshot): WordPressLabSetup => ({
-        schemaVersion: 1,
-        snapshotDigest: snapshot.digest,
-        ...config.lab,
-      });
       return runCampaignPipeline({
         campaignId: input.campaignId,
         ledger: state.ledger,
@@ -195,7 +232,7 @@ export function createWordPressCliProfile(options: {
             ),
           freeze: boundaries.freeze,
           lab: boundaries.lab,
-          setupFor,
+          setupFor: setupFor(config),
           async discovery({ target, snapshot, lab }) {
             const source = await boundaries.sourceFor(snapshot);
             // The campaign ceiling is a safety bound; selection decides depth per target.
@@ -268,34 +305,38 @@ export function createWordPressCliProfile(options: {
               admitFinding: admitWordPressFinding,
             };
           },
-          verification: new Verification<
-            WordPressFinding,
-            WordPressLabSetup,
-            WordPressLabHandle,
-            WordPressReconstruction
-          >({
-            ledger: state.ledger,
-            store: state.store,
-            lab: boundaries.lab,
-            verifier: boundaries.verifier,
-            judges: createWordPressJudges({
-              store: state.store,
-              lab: boundaries.lab,
-            }),
-            readFinding: readWordPressFinding,
-            renderer: wordpressReproductionRenderer,
-            clock: state.clock,
-          }),
-          reconstructionFor: (snapshot) => ({
-            wordpressVersion: config.wordpressVersion,
-            target: snapshot.target,
-            enabledSettings: [],
-            roles: [
-              "unauthenticated",
-              "subscriber",
-              ...(config.lab.customerRole ? ["customer"] : []),
-            ],
-          }),
+          verification: verificationFor(state, boundaries),
+          reconstructionFor: reconstructionFor(config),
+        },
+      });
+    },
+    async reverify(state, input) {
+      const { config, policy } = await loadConfig(input.configPath);
+      const boundaries = await options.boundaries(config, state);
+      return reverifyOnLatestVersion({
+        campaignId: input.campaignId,
+        findingId: input.findingId,
+        ledger: state.ledger,
+        store: state.store,
+        clock: state.clock,
+        newId: state.newId,
+        pipeline: {
+          async selectLatest({ selectionId }) {
+            const slug = /^wporg:([a-z0-9][a-z0-9-]*)@/.exec(selectionId)?.[1];
+            if (slug === undefined) return null;
+            // No pin: the observed stable version is the latest one.
+            const latest = await boundaries.selection.select({
+              ...policy,
+              candidateSlugs: [slug],
+              pinnedVersions: {},
+              maximumTargets: 1,
+            });
+            return latest[0] ?? null;
+          },
+          freeze: boundaries.freeze,
+          setupFor: setupFor(config),
+          verification: verificationFor(state, boundaries),
+          reconstructionFor: reconstructionFor(config),
         },
       });
     },

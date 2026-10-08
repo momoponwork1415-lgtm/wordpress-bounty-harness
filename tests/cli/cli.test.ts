@@ -664,6 +664,47 @@ describe("harness CLI vertical slice", () => {
     );
   });
 
+  it("re-verifies a finding on the target's latest version and only then treats the version as verified", async () => {
+    const { run, configPath } = await harness();
+    const campaign = ["--campaign", "campaign-1"];
+    await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    const queue = await run("review", ...campaign);
+    const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      queue.stdout,
+    )![1]!;
+    const original = /verification (\S+)\s+snapshot (\S+)/.exec(queue.stdout)!;
+
+    const reverified = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding,
+      "--config",
+      configPath,
+    );
+    expect(reverified.stderr).toBe("");
+    expect(reverified.code).toBe(0);
+    expect(reverified.stdout).toMatch(
+      /^reverified finding \S+ on wporg:synthetic-plugin 9\.9\.9  snapshot sha256:[a-f0-9]{64}  verification \S+: runtime-confirmed$/m,
+    );
+
+    const after = await run("review", ...campaign);
+    const latest = /verification (\S+)\s+snapshot (\S+)/.exec(after.stdout)!;
+    // A fresh verification on a fresh snapshot; the old digest is not reused.
+    expect(latest[1]).not.toBe(original[1]);
+    expect(latest[2]).not.toBe(original[2]);
+    const scoped = await run(
+      "review",
+      "scope",
+      ...campaign,
+      "--finding",
+      finding,
+    );
+    expect(scoped.stdout).toMatch(/^wordfence in-scope /m);
+    expect(scoped.stdout).toMatch(/^patchstack in-scope /m);
+  });
+
   it("refuses to record a decision for a finding outside the review queue", async () => {
     const { run } = await harness();
     const result = await run(
