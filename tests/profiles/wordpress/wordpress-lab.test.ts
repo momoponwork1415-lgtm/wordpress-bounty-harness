@@ -98,7 +98,13 @@ async function fixture(
         if (request.args[0] === "image" && preflight === "missing-image")
           return { exitCode: 1, stdout: "", stderr: "unavailable" };
         if (request.args[0] === "inspect")
-          return { exitCode: 0, stdout: "172.20.0.2", stderr: "" };
+          return {
+            exitCode: 0,
+            stdout: request.args.at(-1)?.endsWith("-db")
+              ? "172.20.0.3"
+              : "172.20.0.2",
+            stderr: "",
+          };
         const saltArg = request.args.find((arg) =>
           arg.startsWith("WBH_EXECUTION_SALT="),
         );
@@ -267,6 +273,19 @@ describe("WordPress gVisor Lab", () => {
     expect(await lab.teardown(first.handle)).toEqual({ status: "removed" });
     expect(lab.canaryLedger(first.handle)).toBeNull();
     expect(await lab.teardown(second.handle)).toEqual({ status: "removed" });
+  });
+
+  it("points WordPress at the database by address, since gVisor containers cannot use Docker's name resolution", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup);
+    expect(provisioned.status).toBe("ready");
+    const databaseHosts = commands.flatMap((command) =>
+      command.args.filter((arg) => arg.startsWith("WORDPRESS_DB_HOST=")),
+    );
+    expect(databaseHosts.length).toBeGreaterThan(1);
+    expect(new Set(databaseHosts)).toEqual(
+      new Set(["WORDPRESS_DB_HOST=172.20.0.3"]),
+    );
   });
 
   it("resolves a presented session inside the Lab without placing it in PHP source", async () => {
