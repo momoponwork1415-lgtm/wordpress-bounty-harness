@@ -257,7 +257,7 @@ export class CodexNativeAgentRuntime {
               "--model",
               run.profile.requestedModelId,
               "--sandbox",
-              "read-only",
+              "danger-full-access",
               "--skip-git-repo-check",
               "--ephemeral",
               "-a",
