@@ -108,10 +108,14 @@ function certificate(options: {
 export function createGrantTls(options: {
   readonly hostname: string;
   readonly notAfter: Date;
+  /** Start of validity, before skew allowance; the current time by default. */
+  readonly now?: Date;
 }): GrantTls {
   if (!hostnamePattern.test(options.hostname))
     throw new Error("Broker TLS name is invalid");
-  const notBefore = new Date(Date.now() - 5 * 60_000);
+  const notBefore = new Date(
+    (options.now?.getTime() ?? Date.now()) - 5 * 60_000,
+  );
   const notAfter = new Date(options.notAfter.getTime() + 5 * 60_000);
   if (!(notAfter.getTime() > notBefore.getTime()))
     throw new Error("Broker TLS validity is invalid");

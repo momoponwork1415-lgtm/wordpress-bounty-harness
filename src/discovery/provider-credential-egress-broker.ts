@@ -7,10 +7,18 @@ import { isIP } from "node:net";
 import { z } from "zod";
 
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
+import { createGrantTls } from "./grant-tls.js";
 import type { ProviderApiProtocol } from "./provider-credential-proxy.js";
-import { PROVIDER_UPSTREAM_ORIGIN } from "./provider-credential-proxy.js";
+import {
+  BROKER_TLS_HOSTNAME,
+  CHATGPT_UPSTREAM_ORIGIN,
+  PROVIDER_UPSTREAM_ORIGIN,
+} from "./provider-credential-proxy.js";
 import { runNativeModelProcess } from "../infrastructure/native-model-process.js";
-import { readPrivateProviderCredential } from "./provider-private-credential.js";
+import {
+  readPrivateChatgptLogin,
+  readPrivateProviderCredential,
+} from "./provider-private-credential.js";
 
 /** Names of the per-run broker container and the network it creates when none is given. */
 export const EGRESS_BROKER_LEFTOVER_PATTERNS = {
@@ -58,6 +66,16 @@ export type ProviderCredentialEgressGrantRequest = z.infer<
 
 export interface ProviderCredentialEgressGrant {
   readonly baseUrl: string;
+  /**
+   * Present for a ChatGPT login grant: the broker speaks TLS under a fixed
+   * name, which the sandbox maps to this address and trusts only through this
+   * grant's CA.
+   */
+  readonly tls?: {
+    readonly hostname: string;
+    readonly address: string;
+    readonly caPem: string;
+  };
   readonly authorization: string;
   readonly dockerNetworkName: string;
   readonly model: string;
@@ -113,7 +131,7 @@ const providerCredentialEgressReceiptBodySchema = z.strictObject({
   grantId: dockerNameSchema,
   runtimeProfileDigest: digestSchema,
   brokerImage: pinnedImageSchema,
-  upstreamOrigin: z.literal(PROVIDER_UPSTREAM_ORIGIN),
+  upstreamOrigin: z.enum([PROVIDER_UPSTREAM_ORIGIN, CHATGPT_UPSTREAM_ORIGIN]),
   model: modelSchema,
   protocol: z.enum(["responses", "chat-completions"]),
   maxRequests: z.number().int().positive().max(10_000),
@@ -186,6 +204,8 @@ export interface ProviderCredentialEgressBrokerOptions {
   readonly dockerExecutablePath: string;
   readonly brokerImage: string;
   readonly credentialFilePath: string;
+  /** An API key file (the default) or a Codex CLI ChatGPT `auth.json`. */
+  readonly credentialKind?: "api-key" | "chatgpt-login";
   readonly scratchRootDirectory: string;
   readonly proxyBundleDirectory: string;
   readonly providerNetworkName?: string;
@@ -203,8 +223,9 @@ export interface ProviderCredentialEgressBrokerOptions {
 
 const BROKER_ALIAS = "provider-egress";
 const BROKER_PORT = 8080;
+/** Plain-HTTP health port of a TLS broker; checked only from inside it. */
+const BROKER_TLS_HEALTH_PORT = 8081;
 const MAX_PROVIDER_ADDRESSES = 16;
-const PROVIDER_UPSTREAM_HOSTNAME = new URL(PROVIDER_UPSTREAM_ORIGIN).hostname;
 
 async function resolveProviderAddresses(hostname: string): Promise<string[]> {
   const addresses = await lookup(hostname, { all: true, verbatim: true });
@@ -223,8 +244,10 @@ function admittedProviderAddresses(addresses: readonly string[]): string[] {
   return admitted;
 }
 
-function redactSecret(value: string, secret: string): string {
-  return value.split(secret).join("[REDACTED]");
+function redactSecret(value: string, ...secrets: readonly string[]): string {
+  let text = value;
+  for (const secret of secrets) text = text.split(secret).join("[REDACTED]");
+  return text;
 }
 
 function receiptWithDigest(
@@ -240,7 +263,7 @@ async function defaultDockerCommand(
   executablePath: string,
   args: readonly string[],
   timeoutMs: number,
-  secret: string,
+  secrets: readonly string[],
 ): Promise<DockerCommandResult> {
   const result = await runNativeModelProcess({
     executablePath,
@@ -254,7 +277,7 @@ async function defaultDockerCommand(
     },
     timeoutMs,
     maxOutputBytes: 64 * 1024,
-    redact: (text) => redactSecret(text, secret),
+    redact: (text) => redactSecret(text, ...secrets),
   });
   if (result.kind !== "exited") {
     return {
@@ -325,6 +348,7 @@ async function waitForBrokerHealth(
     timeoutMs: number,
   ) => Promise<DockerCommandResult>,
   containerName: string,
+  port: number,
 ): Promise<boolean> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const result = await runDocker(
@@ -334,7 +358,7 @@ async function waitForBrokerHealth(
         "node",
         "--input-type=module",
         "-e",
-        `const r=await fetch('http://127.0.0.1:${BROKER_PORT}/healthz');if(!r.ok)process.exit(1)`,
+        `const r=await fetch('http://127.0.0.1:${port}/healthz');if(!r.ok)process.exit(1)`,
       ],
       5_000,
     );
@@ -367,6 +391,11 @@ export function createProviderCredentialEgressBroker(
     options.resolveProviderAddresses ?? resolveProviderAddresses;
   const providerNetworkName = options.providerNetworkName ?? "bridge";
   const containerUser = nonRootHostUser();
+  const chatgpt = options.credentialKind === "chatgpt-login";
+  const upstreamOrigin = chatgpt
+    ? CHATGPT_UPSTREAM_ORIGIN
+    : PROVIDER_UPSTREAM_ORIGIN;
+  const upstreamHostname = new URL(upstreamOrigin).hostname;
 
   return {
     async withGrant<T>(
@@ -399,7 +428,7 @@ export function createProviderCredentialEgressBroker(
       let networkCreated = false;
       let brokerCreated = false;
       let stagingDirectory: string | undefined;
-      let rawApiKey: string | undefined;
+      let secrets: readonly string[] = [];
       let pendingSetupFailure: Extract<
         ProviderCredentialEgressSetup,
         { readonly status: "failed" }
@@ -416,7 +445,7 @@ export function createProviderCredentialEgressBroker(
           grantId,
           runtimeProfileDigest: request.runtimeProfileDigest,
           brokerImage: options.brokerImage,
-          upstreamOrigin: PROVIDER_UPSTREAM_ORIGIN,
+          upstreamOrigin,
           model: request.model,
           protocol: request.protocol,
           maxRequests: request.maxRequests,
@@ -443,10 +472,25 @@ export function createProviderCredentialEgressBroker(
           ) => Promise<DockerCommandResult>)
         | undefined;
       try {
-        rawApiKey = await readPrivateProviderCredential(
-          options.credentialFilePath,
-        );
-        const secret = rawApiKey;
+        // Staged secret files, by their path inside the broker container.
+        let stagedFiles: Readonly<Record<string, string>>;
+        if (chatgpt) {
+          const login = await readPrivateChatgptLogin(
+            options.credentialFilePath,
+            new Date(request.expiresAt),
+          );
+          secrets = [login.accessToken, login.accountId];
+          stagedFiles = {
+            "provider-chatgpt.json": JSON.stringify(login),
+          };
+        } else {
+          const apiKey = await readPrivateProviderCredential(
+            options.credentialFilePath,
+          );
+          secrets = [apiKey];
+          stagedFiles = { "provider-api-key": `${apiKey}\n` };
+        }
+        const grantSecrets = secrets;
         runDocker = async (args, timeoutMs) => {
           const result =
             options.runDocker === undefined
@@ -454,13 +498,13 @@ export function createProviderCredentialEgressBroker(
                   options.dockerExecutablePath,
                   args,
                   timeoutMs,
-                  secret,
+                  grantSecrets,
                 )
               : await options.runDocker(args, timeoutMs);
           return {
             exitCode: result.exitCode,
-            stdout: redactSecret(result.stdout, secret),
-            stderr: redactSecret(result.stderr, secret),
+            stdout: redactSecret(result.stdout, ...grantSecrets),
+            stderr: redactSecret(result.stderr, ...grantSecrets),
           };
         };
         pendingSetupFailure = {
@@ -479,12 +523,29 @@ export function createProviderCredentialEgressBroker(
           throw new Error("Provider credential proxy bundle is unavailable");
         }
         stagingDirectory = await mkdtemp(join(scratchRoot, "provider-egress-"));
-        const stagedCredential = join(stagingDirectory, "provider-api-key");
-        await writeFile(stagedCredential, `${rawApiKey}\n`, {
-          encoding: "utf8",
-          mode: 0o600,
-          flag: "wx",
-        });
+        const grantTls = chatgpt
+          ? createGrantTls({
+              hostname: BROKER_TLS_HOSTNAME,
+              notAfter: new Date(request.expiresAt),
+              now: startedAt,
+            })
+          : undefined;
+        if (grantTls !== undefined)
+          stagedFiles = {
+            ...stagedFiles,
+            "grant-tls-key.pem": grantTls.keyPem,
+            "grant-tls-cert.pem": grantTls.certPem,
+          };
+        const secretMounts: string[] = [];
+        for (const [name, content] of Object.entries(stagedFiles)) {
+          const staged = join(stagingDirectory, name);
+          await writeFile(staged, content, {
+            encoding: "utf8",
+            mode: 0o600,
+            flag: "wx",
+          });
+          secretMounts.push("--volume", `${staged}:/run/secrets/${name}:ro`);
+        }
 
         pendingSetupFailure = {
           status: "failed",
@@ -492,7 +553,7 @@ export function createProviderCredentialEgressBroker(
           reason: "provider-network-unavailable",
         };
         const providerAddresses = admittedProviderAddresses(
-          await resolveAddresses(PROVIDER_UPSTREAM_HOSTNAME),
+          await resolveAddresses(upstreamHostname),
         );
 
         pendingSetupFailure =
@@ -539,8 +600,7 @@ export function createProviderCredentialEgressBroker(
               networkName,
               `--network-alias=${BROKER_ALIAS}`,
               ...providerAddresses.map(
-                (address) =>
-                  `--add-host=${PROVIDER_UPSTREAM_HOSTNAME}=${address}`,
+                (address) => `--add-host=${upstreamHostname}=${address}`,
               ),
               "--read-only",
               "--cap-drop=ALL",
@@ -551,8 +611,9 @@ export function createProviderCredentialEgressBroker(
               "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=32m",
               "--volume",
               `${proxyBundle}:/opt/provider-egress:ro`,
-              "--volume",
-              `${stagedCredential}:/run/secrets/provider-api-key:ro`,
+              ...secretMounts,
+              "--env",
+              `PROVIDER_AUTHENTICATION=${chatgpt ? "chatgpt" : "api-key"}`,
               "--env",
               `PROVIDER_GRANT_TOKEN=${grantToken}`,
               "--env",
@@ -643,6 +704,7 @@ export function createProviderCredentialEgressBroker(
                   const healthy = await waitForBrokerHealth(
                     executeDocker,
                     containerName,
+                    chatgpt ? BROKER_TLS_HEALTH_PORT : BROKER_PORT,
                   );
                   if (!healthy) {
                     setup = {
@@ -654,7 +716,18 @@ export function createProviderCredentialEgressBroker(
                     setup = { status: "ready" };
                     try {
                       const value = await operation({
-                        baseUrl: `http://${brokerAddress}:${BROKER_PORT}`,
+                        ...(grantTls === undefined
+                          ? {
+                              baseUrl: `http://${brokerAddress}:${BROKER_PORT}`,
+                            }
+                          : {
+                              baseUrl: `https://${BROKER_TLS_HOSTNAME}:${BROKER_PORT}`,
+                              tls: {
+                                hostname: BROKER_TLS_HOSTNAME,
+                                address: brokerAddress,
+                                caPem: grantTls.caPem,
+                              },
+                            }),
                         authorization: `Bearer ${grantToken}`,
                         dockerNetworkName: networkName,
                         model: request.model,
@@ -712,7 +785,7 @@ export function createProviderCredentialEgressBroker(
               ? { status: "completed" }
               : { status: "failed", failedSteps };
         }
-        rawApiKey = undefined;
+        secrets = [];
       }
 
       return complete();
