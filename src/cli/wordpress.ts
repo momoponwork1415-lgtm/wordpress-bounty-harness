@@ -2,6 +2,10 @@ import { readFile } from "node:fs/promises";
 
 import { z } from "zod";
 
+import {
+  CODEX_SANDBOX_MEMORY_MIB,
+  EGRESS_BROKER_MEMORY_MIB,
+} from "../discovery/index.js";
 import type {
   AgentRuntimeProfile,
   CampaignHistory,
@@ -60,6 +64,10 @@ const text = z.strictObject({
   text: z.string().min(1).max(16_384),
 });
 
+/** One discovery run holds a Codex sandbox and its own egress broker. */
+const DISCOVERY_RUN_MEMORY_MIB =
+  CODEX_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
+
 /** Human-edited, Git-tracked run configuration. It carries no credentials or keys. */
 export const wordpressCampaignConfigSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -75,6 +83,18 @@ export const wordpressCampaignConfigSchema = z.strictObject({
     })
     .default({ maxRuns: 40, noFindingRuns: 4 }),
   runWallTimeMinutes: z.number().positive().max(240).default(30),
+  /** Host bounds: concurrent discovery runs and the memory the Harness may use for them. */
+  resources: z
+    .strictObject({
+      maxConcurrentRuns: z.number().int().min(1).max(4).default(4),
+      memoryBudgetMiB: z.number().int().positive(),
+    })
+    .default({
+      maxConcurrentRuns: 4,
+      memoryBudgetMiB: 4 * DISCOVERY_RUN_MEMORY_MIB,
+    }),
+  /** Optional ceiling on discovery runs started per UTC day across campaigns. */
+  dailyRunCap: z.number().int().positive().optional(),
   /** Splits runs into arm a without history and arm b with the local public history. */
   ablation: z
     .strictObject({
@@ -121,6 +141,10 @@ async function loadConfig(configPath: string): Promise<{
   const config = wordpressCampaignConfigSchema.parse(
     JSON.parse(await readFile(configPath, "utf8")) as unknown,
   );
+  if (config.resources.memoryBudgetMiB < DISCOVERY_RUN_MEMORY_MIB)
+    throw new Error(
+      `The memory budget is below one discovery run (${DISCOVERY_RUN_MEMORY_MIB} MiB)`,
+    );
   const policy =
     config.selectionPolicyPath === undefined
       ? await loadWordPressSelectionPolicy()
@@ -307,6 +331,15 @@ export function createWordPressCliProfile(options: {
                 history: historyFor(config, target),
               },
               historyFraction: config.ablation?.armBFraction ?? 0,
+              concurrency: Math.min(
+                config.resources.maxConcurrentRuns,
+                Math.floor(
+                  config.resources.memoryBudgetMiB / DISCOVERY_RUN_MEMORY_MIB,
+                ),
+              ),
+              ...(config.dailyRunCap === undefined
+                ? {}
+                : { dailyRunCap: config.dailyRunCap }),
               ...(config.ablation === undefined
                 ? {}
                 : { ablation: { axis: config.ablation.axis } }),

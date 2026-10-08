@@ -45,6 +45,8 @@ const bodySchema = z.strictObject({
     z.enum(["provider", "schema", "sandbox", "policy", "evidence"]),
     z.literal("unavailable"),
   ]),
+  /** The subscription refused the run; the campaign stops instead of retrying. */
+  providerLimit: z.enum(["rate-limit", "quota"]).optional(),
   startedAt: z.iso.datetime({ offset: true }),
   completedAt: z.iso.datetime({ offset: true }),
   isolation: z.strictObject({
@@ -65,6 +67,12 @@ export const nativeRunReceiptSchema = bodySchema
         code: "custom",
         path: ["digest"],
         message: "Receipt digest mismatch",
+      });
+    if (receipt.providerLimit !== undefined && receipt.reason !== "provider")
+      context.addIssue({
+        code: "custom",
+        path: ["providerLimit"],
+        message: "Only a provider failure carries a provider limit",
       });
     if (
       (receipt.terminal === "completed") !==
@@ -89,6 +97,7 @@ export function createNativeRunReceipt(
   input: NativeRunIdentity & {
     readonly terminal: "completed" | "incomplete";
     readonly reason: NativeRunReceipt["reason"];
+    readonly providerLimit?: "rate-limit" | "quota";
     readonly startedAt: string;
     readonly completedAt: string;
     readonly usage?: z.infer<typeof usage>;
@@ -119,6 +128,9 @@ export function createNativeRunReceipt(
     },
     terminal: input.terminal,
     reason: input.reason,
+    ...(input.providerLimit === undefined
+      ? {}
+      : { providerLimit: input.providerLimit }),
     startedAt: input.startedAt,
     completedAt: input.completedAt,
     isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },

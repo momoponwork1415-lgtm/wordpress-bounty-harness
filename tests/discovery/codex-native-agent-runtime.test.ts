@@ -327,6 +327,56 @@ describe("Codex native agent runtime", () => {
     }
   });
 
+  it("marks a provider rate limit or quota as a provider limit and nothing else", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
+    try {
+      const attachments = new ProviderAttachmentStore(root);
+      const failed = (message: string) =>
+        new CodexNativeAgentRuntime(
+          sandbox(
+            [
+              { type: "thread.started", thread_id: "synthetic" },
+              { type: "turn.started" },
+              { type: "error", message },
+              { type: "turn.failed", error: { message } },
+            ]
+              .map((event) => JSON.stringify(event))
+              .join("\n"),
+            [],
+            { exitCode: 1 },
+          ),
+          broker(),
+          attachments,
+          image,
+          () => new Date(now),
+        ).execute(run);
+      const cases: [string, string | undefined][] = [
+        ["You've hit your usage limit. Try again later.", "quota"],
+        ["Quota exceeded. Check your plan and billing details.", "quota"],
+        [
+          "exceeded retry limit, last status: 429 Too Many Requests",
+          "rate-limit",
+        ],
+        // The broker's own per-grant cap is a Harness bound, not the subscription's.
+        [
+          "unexpected status 429 Too Many Requests: grant-request-limit-exceeded",
+          undefined,
+        ],
+        ["stream disconnected before completion", undefined],
+      ];
+      for (const [message, providerLimit] of cases) {
+        const { receipt } = await failed(message);
+        expect(receipt).toMatchObject({
+          terminal: "incomplete",
+          reason: "provider",
+        });
+        expect(receipt.providerLimit).toBe(providerLimit);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns typed incomplete receipts for unbound CLI and malformed output", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
     try {

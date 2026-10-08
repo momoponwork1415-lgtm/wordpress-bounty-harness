@@ -10,7 +10,10 @@ import type {
   DiscoveryTransportRun,
   DiscoveryTransportResult,
 } from "./codex-native-agent-runtime.js";
-import { nativeRunReceiptSchema } from "./native-run-receipts.js";
+import {
+  nativeRunReceiptSchema,
+  type NativeRunReceipt,
+} from "./native-run-receipts.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -185,12 +188,23 @@ const providerReportSchema = z.strictObject({
   unexamined: z.string(),
 });
 
+export type DiscoveryStop =
+  | "no-new-finding"
+  | "max-runs"
+  | "plans-exhausted"
+  | "provider-limit"
+  | "daily-run-cap";
+
 /** Run independent provider calls, record only admitted claims, and stop on no new findings. */
 export async function runDiscoveryCampaign(options: {
   readonly campaignId: string;
   readonly labId: string;
   readonly input: CampaignInputV1;
   readonly historyFraction: number;
+  /** Runs in flight at once on this host; at most four. */
+  readonly concurrency?: number;
+  /** Optional ceiling on runs started per UTC day across every campaign in the ledger. */
+  readonly dailyRunCap?: number;
   /** Records each run's arm on the history axis: a without history, b with it. */
   readonly ablation?: { readonly axis: "history" };
   readonly plannedRuns: readonly PlannedDiscoveryRun[];
@@ -212,7 +226,7 @@ export async function runDiscoveryCampaign(options: {
 }): Promise<{
   readonly runCount: number;
   readonly findingsRecorded: number;
-  readonly stoppedBy: "no-new-finding" | "max-runs" | "plans-exhausted";
+  readonly stoppedBy: DiscoveryStop;
 }> {
   const input = campaignInputV1Schema.parse(options.input);
   const id = z.string().min(1).max(128);
@@ -225,12 +239,65 @@ export async function runDiscoveryCampaign(options: {
   )
     throw new Error("Invalid history allocation fraction");
   const clock = options.clock ?? (() => new Date());
+  const concurrency = options.concurrency ?? 1;
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4)
+    throw new Error("Invalid discovery concurrency");
+  const ofTarget = <T extends { readonly snapshotDigest: string }>(
+    events: readonly T[],
+  ) => events.filter((event) => event.snapshotDigest === input.snapshotDigest);
+  // A concluded target is done; otherwise continue after the runs already spent.
+  const concluded = ofTarget(
+    options.ledger
+      .read({ campaignId: options.campaignId, type: "discovery-concluded" })
+      .map(({ event }) => event),
+  ).at(0);
+  if (concluded?.type === "discovery-concluded")
+    return { runCount: 0, findingsRecorded: 0, stoppedBy: concluded.stoppedBy };
+  const spent = ofTarget(
+    options.ledger
+      .read({
+        campaignId: options.campaignId,
+        type: "discovery-run-finished",
+        limit: 1000,
+      })
+      .map(({ event }) => event),
+  ).filter(
+    (event) =>
+      event.type === "discovery-run-finished" &&
+      (event.outcome === "completed" || event.outcome === "failed"),
+  ).length;
   const seen = new Set<string>();
   let noNewFindings = 0;
   let runCount = 0;
   let findingsRecorded = 0;
+  let stopped:
+    "no-new-finding" | "provider-limit" | "daily-run-cap" | undefined;
+  if (
+    options.dailyRunCap !== undefined &&
+    (!Number.isSafeInteger(options.dailyRunCap) || options.dailyRunCap < 1)
+  )
+    throw new Error("Invalid daily run cap");
+  let startedToday = 0;
+  if (options.dailyRunCap !== undefined) {
+    const day = clock().toISOString().slice(0, 10);
+    let afterSequence = 0;
+    for (;;) {
+      const page = options.ledger.read({
+        type: "discovery-run-started",
+        afterSequence,
+        limit: 1000,
+      });
+      startedToday += page.filter(
+        ({ event }) =>
+          new Date(event.occurredAt).toISOString().slice(0, 10) === day,
+      ).length;
+      if (page.length < 1000) break;
+      afterSequence = page[page.length - 1]!.sequence;
+    }
+  }
   const limit = Math.min(input.stopRules.maxRuns, options.plannedRuns.length);
-  for (let index = 0; index < limit; index++) {
+  let next = spent;
+  const runOne = async (index: number) => {
     const planned = options.plannedRuns[index]!;
     const run = planned.run;
     if (
@@ -275,9 +342,10 @@ export async function runDiscoveryCampaign(options: {
     if (started.status === "conflict")
       throw new Error("Discovery run identity conflict");
     runCount++;
-    let outcome: "completed" | "failed" = "failed";
+    let outcome: "completed" | "failed" | "provider-limited" = "failed";
     let wallTimeMs = 0;
     let foundNew = false;
+    let usage: NativeRunReceipt["usage"] | undefined;
     try {
       const result = await options.executor.execute({
         ...run,
@@ -288,6 +356,8 @@ export async function runDiscoveryCampaign(options: {
         0,
         Date.parse(receipt.completedAt) - Date.parse(receipt.startedAt),
       );
+      usage = receipt.usage;
+      if (receipt.providerLimit !== undefined) outcome = "provider-limited";
       if (
         receipt.terminal === "completed" &&
         receipt.runId === run.runId &&
@@ -357,20 +427,48 @@ export async function runDiscoveryCampaign(options: {
       outcome,
       costUsd: "unavailable",
       wallTimeMs,
+      ...(usage === undefined ? {} : { usage }),
     });
     if (finished.status === "conflict")
       throw new Error("Discovery finish identity conflict");
+    // Stop rules are evaluated in completion order; in-flight runs still finish.
+    if (outcome === "provider-limited") stopped ??= "provider-limit";
     if (outcome === "completed")
       noNewFindings = foundNew ? 0 : noNewFindings + 1;
     if (noNewFindings >= input.stopRules.noFindingRuns)
-      return { runCount, findingsRecorded, stoppedBy: "no-new-finding" };
-  }
-  return {
-    runCount,
-    findingsRecorded,
-    stoppedBy:
-      options.plannedRuns.length >= input.stopRules.maxRuns
-        ? "max-runs"
-        : "plans-exhausted",
+      stopped ??= "no-new-finding";
   };
+  const worker = async () => {
+    while (stopped === undefined && next < limit) {
+      if (options.dailyRunCap !== undefined) {
+        if (startedToday >= options.dailyRunCap) {
+          stopped = "daily-run-cap";
+          return;
+        }
+        startedToday++;
+      }
+      await runOne(next++);
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, worker));
+  const stoppedBy =
+    stopped ??
+    (options.plannedRuns.length >= input.stopRules.maxRuns
+      ? "max-runs"
+      : "plans-exhausted");
+  // A provider limit or the daily cap leaves the target open so the campaign can resume it.
+  if (stoppedBy !== "provider-limit" && stoppedBy !== "daily-run-cap") {
+    const recorded = await options.ledger.append({
+      schemaVersion: 1,
+      campaignId: options.campaignId,
+      snapshotDigest: input.snapshotDigest,
+      occurredAt: clock().toISOString(),
+      identity: `discovery-concluded-${options.campaignId}-${input.snapshotDigest}`,
+      type: "discovery-concluded",
+      stoppedBy,
+    });
+    if (recorded.status === "conflict")
+      throw new Error("Discovery conclusion identity conflict");
+  }
+  return { runCount, findingsRecorded, stoppedBy };
 }

@@ -41,6 +41,8 @@ export interface CampaignPipeline<
     readonly plannedRuns: readonly PlannedDiscoveryRun[];
     readonly historyFraction: number;
     readonly ablation?: NonNullable<DiscoveryOptions["ablation"]>;
+    readonly concurrency?: number;
+    readonly dailyRunCap?: number;
     readonly executor: DiscoveryOptions["executor"];
     readonly attachments: DiscoveryOptions["attachments"];
     readonly admitFinding: DiscoveryOptions["admitFinding"];
@@ -49,8 +51,19 @@ export interface CampaignPipeline<
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
 }
 
+type SkipStage = "freeze" | "discovery" | "verification";
+
 export type CampaignSummary = {
   readonly campaignId: string;
+  /** Targets left behind by an error; the next target still runs. */
+  readonly skipped: readonly {
+    readonly targetId: string;
+    readonly version: string;
+    readonly stage: SkipStage;
+    readonly message: string;
+  }[];
+  /** Set when the campaign stopped early and can be resumed with the same id. */
+  readonly stopped?: "provider-limit" | "daily-run-cap";
   readonly targets: readonly {
     readonly targetId: string;
     readonly version: string;
@@ -92,122 +105,191 @@ export async function runCampaignPipeline<
     if ((await ledger.append(event)).status === "conflict")
       throw new Error(`Ledger conflict: ${event.identity}`);
   };
+  // Selection and freeze records are keyed by campaign and snapshot; a resumed run keeps the first.
+  const appendOnce = async (event: Parameters<Ledger["append"]>[0]) => {
+    await ledger.append(event);
+  };
   const targets: CampaignSummary["targets"][number][] = [];
+  const skipped: CampaignSummary["skipped"][number][] = [];
+  let stopped: CampaignSummary["stopped"];
   for (const target of await pipeline.select()) {
-    const snapshot = await pipeline.freeze(target);
-    const base = {
-      schemaVersion: 1 as const,
-      campaignId,
-      snapshotDigest: snapshot.digest,
-    };
-    await append({
-      ...base,
-      identity: `target-selected-${campaignId}-${snapshot.digest}`,
-      occurredAt: target.selectedAt,
-      type: "target-selected",
-      selectionId: `${target.targetId}@${target.version}`,
-      // The full selection record (install counts, score) stays in Private Evidence.
-      artifacts: [
-        {
-          kind: "target-selection",
-          digest: await options.store.putFiles({
-            "target-selection.json": canonicalJson(target),
-          }),
-        },
-      ],
-    });
-    await append({
-      ...base,
-      identity: `snapshot-frozen-${campaignId}-${snapshot.digest}`,
-      occurredAt: at(),
-      type: "snapshot-frozen",
-      sourceDigest: snapshot.target.sourceDigest,
-    });
+    const selectionId = `${target.targetId}@${target.version}`;
+    let stage: SkipStage = "freeze";
+    // Before a snapshot exists, the selection record stands in for its digest.
+    let snapshotDigest = canonicalDigest(target);
+    try {
+      const snapshot = await pipeline.freeze(target);
+      snapshotDigest = snapshot.digest;
+      const base = {
+        schemaVersion: 1 as const,
+        campaignId,
+        snapshotDigest: snapshot.digest,
+      };
+      await appendOnce({
+        ...base,
+        identity: `target-selected-${campaignId}-${snapshot.digest}`,
+        occurredAt: target.selectedAt,
+        type: "target-selected",
+        selectionId,
+        // The full selection record (install counts, score) stays in Private Evidence.
+        artifacts: [
+          {
+            kind: "target-selection",
+            digest: await options.store.putFiles({
+              "target-selection.json": canonicalJson(target),
+            }),
+          },
+        ],
+      });
+      await appendOnce({
+        ...base,
+        identity: `snapshot-frozen-${campaignId}-${snapshot.digest}`,
+        occurredAt: at(),
+        type: "snapshot-frozen",
+        sourceDigest: snapshot.target.sourceDigest,
+      });
 
-    const setup = pipeline.setupFor(snapshot);
-    const provisioned = await pipeline.lab.provision(snapshot, setup);
-    const seeded =
-      provisioned.status === "ready"
-        ? await pipeline.lab.seedCanaries(provisioned.handle)
-        : null;
-    const labId =
-      provisioned.status === "ready" ? provisioned.handle.id : options.newId();
-    const ready = provisioned.status === "ready" && seeded?.status === "seeded";
-    await append({
-      ...base,
-      identity: `lab-provisioned-${labId}`,
-      occurredAt: at(),
-      type: "lab-provisioned",
-      labId,
-      status: ready ? "ready" : "failed",
-    });
-    if (!ready || provisioned.status !== "ready") {
-      if (provisioned.status === "ready")
+      stage = "discovery";
+      const setup = pipeline.setupFor(snapshot);
+      const provisioned = await pipeline.lab.provision(snapshot, setup);
+      const seeded =
+        provisioned.status === "ready"
+          ? await pipeline.lab.seedCanaries(provisioned.handle)
+          : null;
+      const labId =
+        provisioned.status === "ready"
+          ? provisioned.handle.id
+          : options.newId();
+      const ready =
+        provisioned.status === "ready" && seeded?.status === "seeded";
+      await append({
+        ...base,
+        identity: `lab-provisioned-${labId}`,
+        occurredAt: at(),
+        type: "lab-provisioned",
+        labId,
+        status: ready ? "ready" : "failed",
+      });
+      if (!ready || provisioned.status !== "ready") {
+        if (provisioned.status === "ready")
+          await pipeline.lab.teardown(provisioned.handle);
+        targets.push({
+          targetId: target.targetId,
+          version: target.version,
+          snapshotDigest: snapshot.digest,
+          lab: "failed",
+          runCount: 0,
+          stoppedBy: "setup-failed",
+          verifications: [],
+        });
+        continue;
+      }
+
+      let discovered: Awaited<ReturnType<typeof runDiscoveryCampaign>>;
+      let campaignInput: CampaignInputV1;
+      try {
+        const prepared = await pipeline.discovery({
+          target,
+          snapshot,
+          lab: provisioned.handle,
+        });
+        campaignInput = prepared.input;
+        discovered = await runDiscoveryCampaign({
+          campaignId,
+          labId,
+          ledger,
+          evidence: options.store,
+          clock,
+          ...prepared,
+        });
+      } finally {
         await pipeline.lab.teardown(provisioned.handle);
-      targets.push({
+      }
+      const summary = {
         targetId: target.targetId,
         version: target.version,
         snapshotDigest: snapshot.digest,
-        lab: "failed",
-        runCount: 0,
-        stoppedBy: "setup-failed",
-        verifications: [],
-      });
-      continue;
-    }
+        lab: "ready" as const,
+        runCount: discovered.runCount,
+        stoppedBy: discovered.stoppedBy,
+      };
+      // The Verifier draws on the same subscription, so nothing else runs after a stop.
+      if (
+        discovered.stoppedBy === "provider-limit" ||
+        discovered.stoppedBy === "daily-run-cap"
+      ) {
+        stopped = discovered.stoppedBy;
+        await append({
+          ...base,
+          identity: `campaign-stopped-${options.newId()}`,
+          occurredAt: at(),
+          type: "campaign-stopped",
+          reason: discovered.stoppedBy,
+        });
+        targets.push({ ...summary, verifications: [] });
+        break;
+      }
 
-    let discovered: Awaited<ReturnType<typeof runDiscoveryCampaign>>;
-    let campaignInput: CampaignInputV1;
-    try {
-      const prepared = await pipeline.discovery({
-        target,
-        snapshot,
-        lab: provisioned.handle,
-      });
-      campaignInput = prepared.input;
-      discovered = await runDiscoveryCampaign({
+      stage = "verification";
+      const verified = new Set(
+        ledger
+          .read({ campaignId, type: "verification-finished", limit: 1000 })
+          .map(({ event }) =>
+            event.type === "verification-finished" ? event.findingId : "",
+          ),
+      );
+      const verifications: {
+        findingId: string;
+        status: VerificationResultV1["status"];
+      }[] = [];
+      const findings = ledger
+        .read({ campaignId, type: "finding-recorded", limit: 1000 })
+        .filter(({ event }) => event.snapshotDigest === snapshot.digest);
+      for (const { event } of findings) {
+        // A resumed campaign verifies only what an earlier pass left unverified.
+        if (event.type !== "finding-recorded" || verified.has(event.findingId))
+          continue;
+        const result = await pipeline.verification.verify({
+          campaignId,
+          findingId: event.findingId,
+          verificationId: options.newId(),
+          snapshot,
+          setup,
+          campaignLabSetupDigest: campaignInput.lab.setupDigest,
+          reconstruction: pipeline.reconstructionFor(snapshot),
+        });
+        verifications.push({
+          findingId: event.findingId,
+          status: result.status,
+        });
+      }
+      targets.push({ ...summary, verifications });
+    } catch (error: unknown) {
+      // The failure text may hold paths; it goes to the operator, not the ledger.
+      await append({
+        schemaVersion: 1,
         campaignId,
-        labId,
-        ledger,
-        evidence: options.store,
-        clock,
-        ...prepared,
+        snapshotDigest,
+        identity: `target-skipped-${options.newId()}`,
+        occurredAt: at(),
+        type: "target-skipped",
+        selectionId,
+        stage,
       });
-    } finally {
-      await pipeline.lab.teardown(provisioned.handle);
-    }
-
-    const verifications: {
-      findingId: string;
-      status: VerificationResultV1["status"];
-    }[] = [];
-    const findings = ledger
-      .read({ campaignId, type: "finding-recorded", limit: 1000 })
-      .filter(({ event }) => event.snapshotDigest === snapshot.digest);
-    for (const { event } of findings) {
-      if (event.type !== "finding-recorded") continue;
-      const result = await pipeline.verification.verify({
-        campaignId,
-        findingId: event.findingId,
-        verificationId: options.newId(),
-        snapshot,
-        setup,
-        campaignLabSetupDigest: campaignInput.lab.setupDigest,
-        reconstruction: pipeline.reconstructionFor(snapshot),
+      skipped.push({
+        targetId: target.targetId,
+        version: target.version,
+        stage,
+        message: error instanceof Error ? error.message : String(error),
       });
-      verifications.push({ findingId: event.findingId, status: result.status });
     }
-    targets.push({
-      targetId: target.targetId,
-      version: target.version,
-      snapshotDigest: snapshot.digest,
-      lab: "ready",
-      runCount: discovered.runCount,
-      stoppedBy: discovered.stoppedBy,
-      verifications,
-    });
   }
-  return { campaignId, targets };
+  return {
+    campaignId,
+    targets,
+    skipped,
+    ...(stopped === undefined ? {} : { stopped }),
+  };
 }
 
 export type ReverificationSummary = {

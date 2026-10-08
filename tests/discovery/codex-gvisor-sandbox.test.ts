@@ -84,6 +84,41 @@ describe("gVisor Codex sandbox", () => {
         `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
       );
       expect(calls[2]?.stdin).toBe(command.stdin);
+      // The CLI's own sandbox is off, so these outer controls are the boundary.
+      for (const { args } of calls) {
+        expect(args).toEqual(
+          expect.arrayContaining([
+            "--runtime=runsc",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+          ]),
+        );
+        expect(
+          args.filter(
+            (arg) =>
+              arg === "--privileged" ||
+              arg.startsWith("--cap-add") ||
+              arg === "--network=host" ||
+              arg.startsWith("--pid=") ||
+              arg.startsWith("--ipc=") ||
+              arg.startsWith("--volume") ||
+              arg.includes("docker.sock"),
+          ),
+        ).toEqual([]);
+      }
+      // Writable mounts are only the tmpfs; the source and support files are read-only.
+      expect(
+        calls[2]?.args.filter((arg) => arg.startsWith("--mount=")),
+      ).toEqual([
+        `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
+        expect.stringMatching(
+          /^--mount=type=bind,src=.+,dst=\/opt\/codex-support,readonly$/,
+        ),
+      ]);
+      expect(
+        calls[2]?.args.filter((arg) => arg.startsWith("--network")),
+      ).toEqual(["--network=internal-run"]);
       await expect(
         sandbox.execute({
           ...command,

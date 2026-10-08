@@ -78,6 +78,14 @@ async function harness(
     readonly pinned?: boolean;
     /** Opens a synthetic local Wordfence mirror holding one public record. */
     readonly history?: boolean;
+    /** Provider calls (1-based) that the subscription refuses with a quota limit. */
+    readonly limitOnCalls?: readonly number[];
+    /** Candidate slugs; the first is not pinned. */
+    readonly candidates?: readonly string[];
+    /** A slug whose snapshot cannot be frozen. */
+    readonly failFreeze?: string;
+    /** Extra campaign config fields. */
+    readonly config?: Readonly<Record<string, unknown>>;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
@@ -233,20 +241,42 @@ async function harness(
   const attachments = new ProviderAttachmentStore(join(root, "provider"));
   const prompts: string[] = [];
   const histories: string[] = [];
+  let inFlight = 0;
+  let maxInFlight = 0;
   const boundaries: WordPressCampaignBoundaries = {
     selection,
-    freeze: (target) => snapshots.freeze(target),
+    freeze: async (target) => {
+      if (target.slug === options.failFreeze)
+        throw new Error("Synthetic download failure");
+      return snapshots.freeze(target);
+    },
     lab,
     sourceFor: async () => ({ directory: sourceDirectory, tree }),
     runtimeProfile: profile,
     attachments,
     executor: {
       async execute(run: DiscoveryTransportRun) {
-        prompts.push(run.prompt);
+        const call = prompts.push(run.prompt);
         histories.push(run.campaignInput.history.mode);
+        maxInFlight = Math.max(maxInFlight, ++inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+        if (options.limitOnCalls?.includes(call) === true)
+          return {
+            receipt: createNativeRunReceipt({
+              runId: run.runId,
+              targetSnapshotDigest: run.targetSnapshotDigest,
+              profile: run.profile,
+              terminal: "incomplete",
+              reason: "provider",
+              providerLimit: "quota",
+              startedAt: now,
+              completedAt: now,
+            }),
+          };
         const report = {
           findings:
-            prompts.length === 1
+            call === 1
               ? [
                   claim("account-takeover", "includes/synthetic.php"),
                   claim("sensitive-object-access", "synthetic-plugin.php"),
@@ -270,6 +300,12 @@ async function harness(
             startedAt: now,
             completedAt: "2026-10-08T00:00:02.000Z",
             reportArtifactDigest: attachment.digest,
+            usage: {
+              inputTokens: 1000,
+              cachedInputTokens: 100,
+              outputTokens: 20,
+              reasoningOutputTokens: "unavailable",
+            },
           }),
         };
       },
@@ -332,13 +368,13 @@ async function harness(
       kind: "wordpress-selection-policy",
       schemaVersion: 1,
       id: "synthetic-pin",
-      candidateSlugs: ["synthetic-plugin"],
+      candidateSlugs: options.candidates ?? ["synthetic-plugin"],
       pinnedVersions:
         options.pinned === false ? {} : { "synthetic-plugin": "3.3.1" },
       minimumActiveInstallations: 500,
       maximumObservationAgeDays: 2,
       maximumUpdateAgeDays: 365,
-      maximumTargets: 1,
+      maximumTargets: options.candidates?.length ?? 1,
       excludedAuthors: [],
       excludedSlugs: [],
       surfaceTagWeights: {},
@@ -361,6 +397,9 @@ async function harness(
       ...(options.ablation === undefined
         ? {}
         : { ablation: { axis: "history", armBFraction: options.ablation } }),
+      // Sequential by default so the call order is deterministic.
+      resources: { maxConcurrentRuns: 1, memoryBudgetMiB: 10_240 },
+      ...options.config,
       wordpressVersion: "6.8",
       lab: {
         siteTitle: "Synthetic",
@@ -397,7 +436,17 @@ async function harness(
     });
     return { code, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
   };
-  return { run, configPath, keysPath, prompts, histories, docker, root };
+  return {
+    run,
+    configPath,
+    keysPath,
+    prompts,
+    histories,
+    docker,
+    root,
+    ledger: () => state.ledger,
+    maxInFlight: () => maxInFlight,
+  };
 }
 
 /** A local mirror with one public record for the synthetic plugin, published before its last update. */
@@ -677,6 +726,149 @@ describe("harness CLI vertical slice", () => {
     const funnel = await run("ledger", "funnel", "--campaign", "campaign-1");
     expect(funnel.stdout).toContain("  history:a: runs 3");
     expect(funnel.stdout).not.toContain("history:b");
+  });
+
+  it("stops the campaign on a provider limit and resumes it with the same command", async () => {
+    const { run, configPath } = await harness({ limitOnCalls: [2] });
+    const command = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    ];
+    const stopped = await run(...command);
+    expect(stopped.code).toBe(3);
+    expect(stopped.stdout).toContain("runs 2  stopped by provider-limit");
+    expect(stopped.stdout).not.toContain("  finding ");
+    expect(stopped.stdout).toContain(
+      "campaign stopped by provider-limit; run the same command again to resume",
+    );
+    expect(stopped.stdout).toContain("raw 2 → verifier通過 0");
+
+    const resumed = await run(...command);
+    expect(resumed.code).toBe(0);
+    // One completed run was spent; two more without new Findings meet the stop rule.
+    expect(resumed.stdout).toContain("runs 2  stopped by no-new-finding");
+    expect(resumed.stdout.match(/^  finding /gm)).toHaveLength(2);
+    expect(resumed.stdout).toContain("raw 2 → verifier通過 2 → confirmed 1");
+
+    const again = await run(...command);
+    expect(again.code).toBe(0);
+    expect(again.stdout).toContain("runs 0  stopped by no-new-finding");
+    expect(again.stdout).not.toContain("  finding ");
+  });
+
+  it("runs discovery concurrently within the configured count and memory budget", async () => {
+    const { run, configPath, maxInFlight } = await harness({
+      config: {
+        stopRules: { maxRuns: 4, noFindingRuns: 4 },
+        // Room for two runs of a Codex sandbox and its broker (2,560 MiB each).
+        resources: { maxConcurrentRuns: 4, memoryBudgetMiB: 6000 },
+      },
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(campaign.stdout).toContain("runs 4  stopped by max-runs");
+    expect(maxInFlight()).toBe(2);
+  });
+
+  it("refuses a memory budget below one run and stops at the daily run cap", async () => {
+    const small = await harness({
+      config: { resources: { maxConcurrentRuns: 1, memoryBudgetMiB: 1024 } },
+    });
+    const refused = await small.run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      small.configPath,
+    );
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain(
+      "memory budget is below one discovery run",
+    );
+    expect(small.prompts).toHaveLength(0);
+
+    const capped = await harness({ config: { dailyRunCap: 1 } });
+    const stopped = await capped.run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      capped.configPath,
+    );
+    expect(stopped.code).toBe(3);
+    expect(stopped.stdout).toContain("runs 1  stopped by daily-run-cap");
+  });
+
+  it("totals provider-reported usage per target and UTC day", async () => {
+    const { run, configPath } = await harness({ limitOnCalls: [3] });
+    await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    );
+    const usage = await run("ledger", "usage");
+    expect(usage.code).toBe(0);
+    // The refused third run reported nothing, so every field shows it as unavailable.
+    expect(usage.stdout.split("\n")).toEqual([
+      "usage by target and UTC day",
+      "  2026-10-08  wporg:synthetic-plugin@3.3.1  runs 3  input 2000  cached 200  output 40  reasoning 0  unavailable: input 1, cached 1, output 1, reasoning 3",
+    ]);
+  });
+
+  it("skips a target that fails, records the stage and continues with the rest", async () => {
+    const { run, configPath, ledger } = await harness({
+      candidates: ["broken-plugin", "synthetic-plugin"],
+      failFreeze: "broken-plugin",
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(campaign.stderr).toContain(
+      "skipped wporg:broken-plugin 9.9.9 at freeze: Synthetic download failure",
+    );
+    expect(campaign.stdout).toMatch(
+      /^wporg:synthetic-plugin 3\.3\.1 .*stopped by no-new-finding$/m,
+    );
+    const skipped = ledger()
+      .read({ type: "target-skipped" })
+      .map(({ event }) => event);
+    expect(skipped).toMatchObject([
+      {
+        type: "target-skipped",
+        selectionId: "wporg:broken-plugin@9.9.9",
+        stage: "freeze",
+      },
+    ]);
+    // The failure text stays out of the ledger.
+    expect(JSON.stringify(skipped)).not.toContain("Synthetic download failure");
   });
 
   it("lists the policy selection and runs only the named target or --all", async () => {

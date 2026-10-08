@@ -12,6 +12,9 @@ import { PROVIDER_UPSTREAM_ORIGIN } from "./provider-credential-proxy.js";
 import { runNativeModelProcess } from "../infrastructure/native-model-process.js";
 import { readPrivateProviderCredential } from "./provider-private-credential.js";
 
+/** Memory ceiling of one per-run broker container. */
+export const EGRESS_BROKER_MEMORY_MIB = 512;
+
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
 const modelSchema = z.enum(["gpt-6.1-sol", "gpt-6-luna"]);
 const dockerNameSchema = z
@@ -537,7 +540,7 @@ export function createProviderCredentialEgressBroker(
               "--cap-drop=ALL",
               "--security-opt=no-new-privileges",
               "--pids-limit=64",
-              "--memory=512m",
+              `--memory=${EGRESS_BROKER_MEMORY_MIB}m`,
               "--cpus=1",
               "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=32m",
               "--volume",

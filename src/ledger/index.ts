@@ -21,6 +21,11 @@ const base = z.strictObject({
   artifacts: z.array(artifactRef).default([]),
 });
 
+const tokens = z.union([
+  z.number().int().nonnegative(),
+  z.literal("unavailable"),
+]);
+
 const event = <T extends z.ZodRawShape>(shape: T) =>
   z.strictObject({ ...base.shape, ...shape });
 
@@ -55,9 +60,42 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
   event({
     type: z.literal("discovery-run-finished"),
     runId: id,
-    outcome: z.enum(["completed", "failed", "setup-failed"]),
+    /** `provider-limited`: the subscription refused the run; it does not spend the target's budget. */
+    outcome: z.enum([
+      "completed",
+      "failed",
+      "setup-failed",
+      "provider-limited",
+    ]),
     costUsd: z.union([z.number().nonnegative(), z.literal("unavailable")]),
     wallTimeMs: z.number().int().nonnegative(),
+    /** Provider-reported tokens; absent when the transport returned no receipt. */
+    usage: z
+      .strictObject({
+        inputTokens: tokens,
+        cachedInputTokens: tokens,
+        outputTokens: tokens,
+        reasoningOutputTokens: tokens,
+      })
+      .optional(),
+  }),
+  event({
+    type: z.literal("discovery-concluded"),
+    stoppedBy: z.enum(["no-new-finding", "max-runs", "plans-exhausted"]),
+  }),
+  /** The campaign stopped early; rerunning it with the same id resumes it. */
+  event({
+    type: z.literal("campaign-stopped"),
+    reason: z.enum(["provider-limit", "daily-run-cap"]),
+  }),
+  /**
+   * A target was left behind by an error. Before a snapshot exists, the
+   * snapshot digest is the digest of the selection record.
+   */
+  event({
+    type: z.literal("target-skipped"),
+    selectionId: id,
+    stage: z.enum(["freeze", "discovery", "verification"]),
   }),
   event({
     type: z.literal("finding-recorded"),
@@ -157,6 +195,24 @@ export type FunnelCounts = {
   readonly submitted: number;
   readonly outcome: number;
 };
+const usageFields = [
+  "inputTokens",
+  "cachedInputTokens",
+  "outputTokens",
+  "reasoningOutputTokens",
+] as const;
+export type UsageField = (typeof usageFields)[number];
+
+/** Provider-reported tokens of discovery runs, per target and UTC day of the run's end. */
+export type UsageRow = {
+  readonly day: string;
+  readonly selectionId: string | null;
+  readonly runs: number;
+  readonly tokens: Readonly<Record<UsageField, number>>;
+  /** Runs that did not report the field; their tokens are not in the total. */
+  readonly unavailable: Readonly<Record<UsageField, number>>;
+};
+
 export type CampaignFunnel = FunnelCounts & {
   readonly campaignId: string;
   readonly discoveryAttempts: number;
@@ -189,6 +245,9 @@ const querySchema = z.strictObject({
       "lab-provisioned",
       "discovery-run-started",
       "discovery-run-finished",
+      "discovery-concluded",
+      "campaign-stopped",
+      "target-skipped",
       "finding-recorded",
       "verifier-run-finished",
       "verification-finished",
@@ -507,6 +566,74 @@ export class Ledger {
         ),
       };
     });
+  }
+
+  usage(query: { readonly campaignId?: string } = {}): readonly UsageRow[] {
+    const campaign =
+      query.campaignId === undefined ? undefined : id.parse(query.campaignId);
+    const rows = this.#db
+      .prepare(
+        campaign === undefined
+          ? "SELECT event_json FROM ledger_events WHERE event_type IN ('target-selected', 'discovery-run-finished') ORDER BY sequence"
+          : "SELECT event_json FROM ledger_events WHERE campaign_id = ? AND event_type IN ('target-selected', 'discovery-run-finished') ORDER BY sequence",
+      )
+      .all(...(campaign === undefined ? [] : [campaign]));
+    const selections = new Map<string, string>();
+    const totals = new Map<
+      string,
+      {
+        day: string;
+        selectionId: string | null;
+        runs: number;
+        tokens: Record<UsageField, number>;
+        unavailable: Record<UsageField, number>;
+      }
+    >();
+    for (const row of rows) {
+      const event = ledgerEventV1Schema.parse(
+        JSON.parse(
+          z.object({ event_json: z.string() }).parse(row).event_json,
+        ) as unknown,
+      );
+      const target = `${event.campaignId} ${event.snapshotDigest}`;
+      if (event.type === "target-selected") {
+        if (!selections.has(target)) selections.set(target, event.selectionId);
+        continue;
+      }
+      // A run that never reached the provider used nothing.
+      if (
+        event.type !== "discovery-run-finished" ||
+        event.outcome === "setup-failed"
+      )
+        continue;
+      const day = new Date(event.occurredAt).toISOString().slice(0, 10);
+      const selectionId = selections.get(target) ?? null;
+      const key = `${day} ${selectionId ?? event.snapshotDigest}`;
+      const zero = () =>
+        Object.fromEntries(usageFields.map((field) => [field, 0])) as Record<
+          UsageField,
+          number
+        >;
+      const total = totals.get(key) ?? {
+        day,
+        selectionId,
+        runs: 0,
+        tokens: zero(),
+        unavailable: zero(),
+      };
+      totals.set(key, total);
+      total.runs++;
+      for (const field of usageFields) {
+        const value = event.usage?.[field] ?? "unavailable";
+        if (value === "unavailable") total.unavailable[field]++;
+        else total.tokens[field] += value;
+      }
+    }
+    return [...totals.values()].sort(
+      (left, right) =>
+        left.day.localeCompare(right.day) ||
+        (left.selectionId ?? "").localeCompare(right.selectionId ?? ""),
+    );
   }
 
   funnel(campaignId: string): CampaignFunnel {

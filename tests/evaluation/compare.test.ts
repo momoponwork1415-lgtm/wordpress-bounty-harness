@@ -24,6 +24,7 @@ type SyntheticRun = {
   readonly finding?: "runtime-confirmed" | "contradicted";
   readonly costUsd?: number;
   readonly setupFailed?: boolean;
+  readonly providerLimited?: boolean;
 };
 
 async function ledgerWith(runs: readonly SyntheticRun[]) {
@@ -76,7 +77,12 @@ async function ledgerWith(runs: readonly SyntheticRun[]) {
       identity: `finish-${runId}`,
       type: "discovery-run-finished",
       runId,
-      outcome: run.setupFailed === true ? "setup-failed" : "completed",
+      outcome:
+        run.setupFailed === true
+          ? "setup-failed"
+          : run.providerLimited === true
+            ? "provider-limited"
+            : "completed",
       costUsd: run.costUsd ?? "unavailable",
       wallTimeMs: 1000,
     });
@@ -146,6 +152,13 @@ describe("evaluation compare", () => {
         arm: "b",
         setupFailed: true,
         costUsd: 9,
+      },
+      // A run the subscription refused is not a discovery attempt either.
+      {
+        campaignId: "campaign-1",
+        snapshot: one,
+        arm: "b",
+        providerLimited: true,
       },
       { campaignId: "campaign-2", snapshot: two, arm: "a", costUsd: 0.5 },
       {
