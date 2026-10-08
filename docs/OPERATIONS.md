@@ -77,6 +77,6 @@ harness eval compare <config-a> <config-b>            # 同じcase・同じ試�
 ## 6. やらないこと
 
 - 対象の承認、未検証候補の採否。
-- 探索エージェントへの既知脆弱性・CVE・advisory・PoCの提供。
+- 探索エージェントへのPoC・payload・再現手順の提供。評価runへのheld-out公開日以降の記録の提供。
 - Harnessからの外部送信。
 - payload、HTTP記録、画面画像、未公開の発見のGitへのコミット。

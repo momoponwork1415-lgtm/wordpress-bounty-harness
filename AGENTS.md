@@ -12,7 +12,7 @@
 
 設計・実装・レビューのすべてで守る。
 
-1. 探索エージェントへ渡すのは、固定した source、人間が書いた trust 境界宣言、Programme Boundary だけ。既知脆弱性（CVE、advisory、PoC、過去の修正）の自動採掘は渡さない。
+1. 探索エージェントへ渡すのは、固定した source、人間が書いた trust 境界宣言、Programme Boundary、Lab、時点で切った対象の公開履歴（カタログ情報のみ、ADR 0012）だけ。評価対象の答え、held-out 公開日以降の記録、PoC、payload、再現手順は渡さない。
 2. 対象の実行は gVisor（`runsc`）の使い捨て環境の中だけ。ホストでは実行せず、弱い隔離へ暗黙に切り替えない。外向き通信は認証ブローカー経由の provider API だけ。
 3. `runtime-confirmed` は Harness 所有の決定論的判定器だけが出す。証明は nonce 付き canary の回収に限る。エージェントや recipe の自己申告、リバースシェル、永続化、ホストアクセスは証明にしない。
 4. 検証の失敗（環境、手順、観測、証拠の不足）は `incomplete`。`contradicted` にも棄却にもしない。

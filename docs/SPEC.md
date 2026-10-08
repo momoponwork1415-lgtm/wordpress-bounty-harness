@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.10、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
+版: v0.11、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
 
 ## 1. 目的と指標
 
@@ -11,7 +11,7 @@
 
 ## 2. 不変条件
 
-1. 既知脆弱性・CVE・advisory・PoC・過去修正の自動採掘を探索エージェントへ渡さない。渡すのは固定source、人間が書いたtrust境界宣言、Programme Boundaryだけ。
+1. 探索エージェントへ渡すのは、固定source、人間が書いたtrust境界宣言、Programme Boundary、Lab、そして時点で切った対象の公開履歴（カタログ情報のみ）だけ。評価対象の答え（held-outのadvisory本文、原因箇所、PoC）と、評価runではheld-outの公開日以降の記録は渡さない。PoC、payload、他人の再現手順は本番でも渡さない（[ADR 0012](adr/0012-time-cut-known-vulnerability-history.md)）。
 2. 探索・検証はgVisor（`runsc`）の使い捨て環境でのみ対象を実行する。ホストで対象コードを実行しない。弱い隔離へ暗黙に切り替えない。外向き通信は認証ブローカー経由のprovider APIだけ。
 3. `runtime-confirmed` はHarness所有の決定論的判定器だけが出す。エージェントやrecipeの自己申告は確認にしない。証明はnonce付きcanaryの回収に限り、リバースシェル・永続化・ホストアクセスを使わない。
 4. 検証の失敗（環境・手順・観測・証拠の不足）は `incomplete` であり、`contradicted` にも棄却にもしない。
@@ -62,7 +62,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | 契約 | 送り元 → 受け手 | 主な項目 |
 | --- | --- | --- |
 | `TargetSelection v1` | selection → snapshot | plugin slug、version、スコア内訳、方針の版、選定時刻 |
-| `CampaignInput v1` | snapshot → discovery | Target / Dependency Snapshot digest、trust境界宣言（人間が書く、版付き）、Programme Boundary（匿名化）、model profile digest、prompt digest、停止規則、Lab設定 |
+| `CampaignInput v1` | snapshot → discovery | Target / Dependency Snapshot digest、trust境界宣言（人間が書く、版付き）、Programme Boundary（匿名化）、対象の公開履歴（カタログ情報、`historyCutoff` とdigest付き。渡さないrunは `none`）、model profile digest、prompt digest、停止規則、Lab設定 |
 | `Finding v1` | discovery → verification / ledger | claim、attacker position（`unauthenticated` / `subscriber` / `customer` のみ）、到達する影響の種別（第8b節の共通分類）、設定前提（`default` / 変更内容）、破られるproperty、入口からeffectまでのtrace（file、function、行）、既存controlへの評価、Lab内で観測した事実、recipe ref（Private）、discovery run id、snapshot digest |
 | `VerificationResult v1` | verification → ledger / review | `runtime-confirmed` / `contradicted` / `incomplete`、判定器の種類、判定器が観測した条件（使ったrole、path / 拡張子の制御、到達role、XSSの発火context、変更したoption、設定前提）、証拠ref、Lab Setup digest、`incomplete` 理由コード、次の手（verifierが書く）、再現パッケージref（confirmedのみ） |
 | `ReviewDecision v1` | review → ledger | 採否、理由コード、重複照合の結果、判断時刻、開いた証拠の一覧 |
@@ -74,6 +74,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 ## 6. Discovery runの仕様
 
 - 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
+- 対象の公開履歴: ローカルWordfence履歴DBから、snapshotの版より前（評価runではheld-outの公開日より前）に公開された対象プラグインの記録を抽出して渡す。内容は種別、影響版、修正版、公開日、公開記録のタイトル、修正版との差分で変わったファイルの一覧まで。PoC・payload・再現手順は含めない。runの一部にだけ渡す分担にでき、渡した・渡さないを `CampaignInput` に記録する（ADR 0012）。
 - 入力: 探索prompt（版付き、digestを記録。**既定は短い目的prompt**（目的、trust境界、影響の分類と報奨順、出力形式だけ。手順を書かない）。比較用の変種として、wp2shell由来からCTF前提「脆弱性が必ず存在しRCE / flagへ到達する」と最低6時間の指定だけを外したものを持ち、第10節の評価で同じheld-out case・同じmodel・同じHarnessで比べる。wp2shellの元になったCycle Double Cover型promptは「解が必ず存在し、費用を無制限にかけて解く」前提で、対象の大半に脆弱性がなく費用が収益を決めるバグバウンティには合わないため既定にしない）、trust境界宣言、分担されたfile集合、Lab endpointとロール別認証情報（Lab内のみ）、読み取り専用source。
 - 許可する操作: sourceの読み取り、LabへのHTTP、Lab DBの読み取り、Lab内でのcanary確認。外向き通信なし。
 - 出力: `Finding[]`（0件可）と、調べた範囲・調べなかった範囲の短い記述。
@@ -105,7 +106,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - レビュー列に出すもの: `runtime-confirmed`（証拠refと再現パッケージつき）と、次の手付きの `incomplete`。`contradicted` は件数と抽出だけ。人間は再現パッケージで自分の手で再現してから文案を査読する。
 - 人間が決めること: 影響が意味を持つか、意図された動作ではないか、重複でないか（ローカルWordfence履歴DBで照合）、どのprogrammeへ出すか、文案の承認、外部行動の承認。
 - 記録: 判断、理由コード、判断までの時間、開いた証拠。覆し率は監視信号。
-- 提出転帰（triaged / resolved / duplicate / informative / N/A / rejected）を台帳へ戻し、選定方針と判定器の改善材料にする。既知脆弱性の内容は探索へ戻さない。
+- 提出転帰（triaged / resolved / duplicate / informative / N/A / rejected）を台帳へ戻し、選定方針と判定器の改善材料にする。自分の未公開の発見は公開されるまで探索へ戻さない（公開後はADR 0012の履歴として扱う）。
 
 ## 8a. プログラム対象範囲の方針
 
@@ -169,12 +170,12 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - 採点: 一次は機械の `location-overlap`（必要条件）。二次は人間の盲検rubric（場所、root cause、攻撃者条件、影響の4要素）で `target-hit` / `partial` / `non-target`。実行水準は `target-hit ∧ runtime-confirmed`。
 - 精度の代替: 修正版pluginの負の対照（鍵と同じpropertyを主張したFindingだけ `control-false-alarm`）、Finding内訳、当たり1件あたりのFinding数。
 - 統計: k/5にClopper-Pearson区間。pass@kはunion / 全回 / 試行別の3表示。種別別は件数のまま。構成差は同じcase・試行の対で示す。
-- ablation: promptを固定し、Verifier有無、判定器有無、Lab内実行有無、分担有無で差を測る。prompt比較（wp2shell由来 vs 短い目的prompt）はHarness構成を固定して別に行い、`target-hit` と当たり1件あたりの費用で選ぶ。
+- ablation: promptを固定し、Verifier有無、判定器有無、Lab内実行有無、分担有無、履歴有無（ADR 0012）で差を測る。prompt比較（wp2shell由来 vs 短い目的prompt）はHarness構成を固定して別に行い、`target-hit` と当たり1件あたりの費用で選ぶ。
 - 前向き評価: 本番Campaignの台帳を、後日公開されたadvisoryで採点する。held-outの結果を見てpromptを変えたら、そのcaseは開発セットへ移す。
 
 ## 11. ADR（新リポジトリで最初に書くもの）
 
-1. 探索に既知脆弱性の答えを与えない（旧ADR 0003を引き継ぐ）。
+1. 探索に既知脆弱性の答えを与えない（旧ADR 0003を引き継ぐ）。→ **0012で置き換え**: 評価では時点で切り、本番では対象の公開履歴（カタログ情報）を変種分析の入力として渡す。
 2. 自動の実行時検証を人間レビューの前に置く（旧ADR 0135を置き換える）。
 3. 探索エージェントは隔離Lab内で対象を実行してよい。Lab外への到達と外部行動は禁止。
 4. `runtime-confirmed` はHarness所有の決定論的判定器だけが出す。
@@ -185,6 +186,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 9. provider認証情報は有界のegress brokerを通す（旧ADR 0142を引き継ぐ）。
 10. プログラム対象範囲は技術的検証を止めず、reviewで提出先ごとに評価する。authz / IDORは重大な影響へつながる場合だけ対象。
 11. 対象固有のコードはTarget Profileに閉じ込め、汎用モジュールはprofileを型でしか知らない。2つ目のprofileまで汎用化しない。
+12. 既知脆弱性は評価では時点で切り、本番では対象の公開履歴を変種分析の入力として渡す（0001を置き換え）。
 
 ## 12. 最初の縦断スライスと受入条件
 
@@ -231,4 +233,6 @@ held-out 1件（開発セットのTranslatePressではなく、鍵を事前登�
 | 判定器 | Harness所有の決定論的な確認手段。`runtime-confirmed` を出せる唯一の主体 |
 | Verified Vulnerability | `runtime-confirmed` からだけ作る技術的記録。programme scopeと独立 |
 | Trust境界宣言 | 人間が書く「何を信頼するか」の宣言。既知脆弱性を含まない |
+| 公開履歴（history） | 対象プラグインの公開advisoryのカタログ情報。時点で切って探索に渡す。PoCは含まない |
+| historyCutoff | 探索runに渡す履歴の時点。本番はsnapshotの版、評価はheld-outの公開日 |
 | Answer Key | 評価側だけが持つheld-out caseの正解。探索へ渡さない |
