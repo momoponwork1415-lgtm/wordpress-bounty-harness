@@ -63,8 +63,18 @@ const basePolicy = {
   scoreWeights: { installations: 10, recency: 0, surface: 1 },
 };
 
+const failed = (slug: string, reason: "closed" | "not-found") => ({
+  status: "failed" as const,
+  operation: "observe" as const,
+  reason,
+  pluginIdentity: `wporg:${slug}`,
+});
+
 function harness(options: {
-  observations?: Record<string, ReturnType<typeof observation>>;
+  observations?: Record<
+    string,
+    ReturnType<typeof observation> | ReturnType<typeof failed>
+  >;
   programmeStatus?: "current" | "stale";
   clock?: string;
 }) {
@@ -139,11 +149,12 @@ describe("WordPress selection public interface", () => {
         recent: observation("recent", []),
         excluded,
         tiny: observation("tiny", [], 499),
+        closed: failed("closed", "closed"),
       },
     });
     const policy = {
       ...basePolicy,
-      candidateSlugs: ["recent", "excluded", "tiny", "missing"],
+      candidateSlugs: ["recent", "excluded", "tiny", "missing", "closed"],
     };
     const inspected = await selection.inspect(policy);
     expect(
@@ -153,6 +164,7 @@ describe("WordPress selection public interface", () => {
       ["excluded", "ineligible", ["excluded-author"]],
       ["tiny", "ineligible", ["below-installation-threshold"]],
       ["missing", "ineligible", ["observation-unavailable"]],
+      ["closed", "ineligible", ["distribution-closed"]],
     ]);
     expect((await selection.select(policy)).map((item) => item.slug)).toEqual([
       "recent",

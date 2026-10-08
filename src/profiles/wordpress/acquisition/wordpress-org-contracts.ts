@@ -131,6 +131,7 @@ export interface WordPressOrgObservationFailure extends WordPressOrgSourceFailur
   readonly operation: "observe";
   readonly reason:
     | "not-found"
+    | "closed"
     | "rate-limited"
     | "network-failure"
     | "quota-exceeded"

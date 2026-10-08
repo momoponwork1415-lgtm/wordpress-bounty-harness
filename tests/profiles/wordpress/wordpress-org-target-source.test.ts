@@ -444,6 +444,47 @@ Version: 2.4.1
     }
   });
 
+  it("reports a plugin closed for distribution as closed, not as an observation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wporg-target-closed-"));
+    try {
+      const source = openWordPressOrgTargetSource({
+        storageDirectory: directory,
+        adapter: {
+          retrieve: async (request) => ({
+            status: 200,
+            sourceUrl: request.sourceUrl,
+            bytes: Buffer.from(
+              JSON.stringify({
+                slug: "closed-plugin",
+                name: "Closed Plugin",
+                version: "1.0.0",
+                active_installs: 9_000,
+                last_updated: "2026-09-01T00:00:00Z",
+                closed: true,
+                download_link:
+                  "https://downloads.wordpress.org/plugin/closed-plugin.1.0.0.zip",
+              }),
+            ),
+          }),
+        },
+      });
+      await expect(
+        source.observe({
+          kind: "wordpress-org-target-observe",
+          schemaVersion: 1,
+          slug: "closed-plugin",
+        }),
+      ).resolves.toEqual({
+        status: "failed",
+        operation: "observe",
+        reason: "closed",
+        pluginIdentity: "wporg:closed-plugin",
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("does not download or silently substitute an unobserved requested version", async () => {
     const directory = await mkdtemp(join(tmpdir(), "wporg-target-version-"));
     let archiveRequests = 0;

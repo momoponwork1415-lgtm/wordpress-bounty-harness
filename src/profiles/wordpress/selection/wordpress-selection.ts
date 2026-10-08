@@ -133,7 +133,11 @@ export function createWordPressSelection(
         })
         .catch(() => undefined);
       if (result?.status !== "observed") {
-        reasons.push("observation-unavailable");
+        reasons.push(
+          result?.status === "failed" && result.reason === "closed"
+            ? "distribution-closed"
+            : "observation-unavailable",
+        );
         results.push({ slug, status: "ineligible", reasons });
         continue;
       }

@@ -43,6 +43,7 @@ export type WordPressSelectionPolicy = z.infer<
 
 export type SelectionReason =
   | "observation-unavailable"
+  | "distribution-closed"
   | "observation-stale"
   | "update-date-unavailable"
   | "update-stale"
