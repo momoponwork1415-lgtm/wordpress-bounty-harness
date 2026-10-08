@@ -118,6 +118,37 @@ export class PrivateArtifactStore {
     return { rootDirectory, contentDirectory };
   }
 
+  /** Content-addressed write of flat named files; the returned digest is the artifact id. */
+  async putFiles(
+    files: Readonly<Record<string, string | Uint8Array>>,
+  ): Promise<string> {
+    const names = Object.keys(files);
+    if (
+      names.length === 0 ||
+      names.some((name) => !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name))
+    )
+      throw new TypeError("Private artifact file names are invalid");
+    const staging = await this.stage();
+    try {
+      for (const name of names)
+        await writeFile(join(staging.contentDirectory, name), files[name]!, {
+          mode: 0o600,
+          flag: "wx",
+        });
+      const measured = await measureCanonicalSourceTree(
+        staging.contentDirectory,
+        this.#limits,
+      );
+      const committed = await this.commit(measured.digest, staging);
+      if (committed.status === "conflict")
+        throw new Error("Private artifact conflict");
+      return committed.artifact.digest;
+    } catch (error: unknown) {
+      await rm(staging.rootDirectory, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
   async commit(
     candidateArtifactId: string,
     staging: PrivateArtifactStaging,
