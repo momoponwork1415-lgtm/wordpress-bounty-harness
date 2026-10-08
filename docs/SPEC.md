@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.14、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
+版: v0.15、2026-10-08。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
 
 ## 1. 目的と指標
 
@@ -238,9 +238,9 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 - 探索agentのコンテナからLabへ、コンテナソケットを渡さずにネットワーク到達できるか（runごとのinternal network）。
 - gVisor Lab内でheadless browserが動くか（XSS判定器）。
-- 費用の経路はChatGPT Proのサブスクリプション（Codex CLI認証）で始める。Proでの Sol の実利用量と、cyber access programの要否。上限に当たるならAPIキーへの切り替えをその時点で判断する。
+- 費用の経路はChatGPT Proのサブスクリプション（Codex CLI認証、月額固定）。Harnessは金額の上限を持たず、購読の使用量（rate limit / quota）を観測する。上限応答を受けたらcampaignを安全に止めて再開可能にし、providerが返すusageを台帳に記録する。日次run数の上限は任意の設定とする。APIキーへの切り替えは購読で足りなくなった時点で判断する。
 - Sol 1 runあたりの費用と時間（分担file数とwall timeの初期値を決める）。
-- Codex CLIをgVisor内で動かす際のCLI自身のsandbox（Bubblewrap）の扱い。
+- Codex CLIをgVisor内で動かす際のCLI自身のsandbox（Bubblewrap）の扱い。→ 決定（2026-10-08、判断者）: CLIの内側sandboxは無効にし（`--sandbox danger-full-access`）、外側のrunsc、読み取り専用source mount、read-only rootfs、capability除去、internal network、brokerによる外向き制限を必須にする。これらの強制は実運用前にテストする。
 
 ## 15. 用語
 

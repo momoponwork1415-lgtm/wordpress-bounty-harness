@@ -6,7 +6,7 @@
 
 | やること | 中身 | 頻度 |
 | --- | --- | --- |
-| 実行環境 | gVisor（`runsc`）入りのDockerホスト。Codex CLI ≥ 0.161。ChatGPT Proにログイン | 初回とCLI更新時 |
+| 実行環境 | gVisor（`runsc`）入りのDockerホスト。Codex CLI ≥ 0.161。ChatGPT Proにログイン。費用は購読の月額固定で、Harnessは金額でなく使用量（rate limit / quota）を見る | 初回とCLI更新時 |
 | 認証 | provider認証情報をegress brokerへ登録する。エージェントには渡らない | 初回と失効時 |
 | 選定方針 | `profiles/wordpress/policy/selection.*` を編集する（インストール数の下限、更新の鮮さ、除外slug、週の対象数） | 月1回程度 |
 | trust境界宣言 | profileの雛形をそのまま使う。特殊なロールを持つpluginだけ1〜2行足す | ほぼ変えない |
