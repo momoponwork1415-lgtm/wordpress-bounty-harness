@@ -6,18 +6,18 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
-import { defineAgentRuntimeProfile } from "../../src/discovery/agent-runtime-profile.js";
+import { defineAgentRuntimeProfile } from "../../src/discovery/index.js";
 import {
   CodexNativeAgentRuntime,
   type CodexSandbox,
   type CodexSandboxCommand,
-} from "../../src/discovery/codex-native-agent-runtime.js";
+} from "../../src/discovery/index.js";
 import {
   providerCredentialEgressReceiptSchema,
   type ProviderCredentialEgressBroker,
-} from "../../src/discovery/provider-credential-egress-broker.js";
-import { PROVIDER_UPSTREAM_ORIGIN } from "../../src/discovery/provider-credential-proxy.js";
-import { ProviderAttachmentStore } from "../../src/discovery/provider-research-report.js";
+} from "../../src/discovery/index.js";
+import { PROVIDER_UPSTREAM_ORIGIN } from "../../src/discovery/index.js";
+import { ProviderAttachmentStore } from "../../src/discovery/index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const image = `node@${digest}`;

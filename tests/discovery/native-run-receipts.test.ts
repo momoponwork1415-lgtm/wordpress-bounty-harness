@@ -4,11 +4,11 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { defineAgentRuntimeProfile } from "../../src/discovery/agent-runtime-profile.js";
+import { defineAgentRuntimeProfile } from "../../src/discovery/index.js";
 import {
   createNativeRunReceipt,
   NativeRunReceiptStore,
-} from "../../src/discovery/native-run-receipts.js";
+} from "../../src/discovery/index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const profile = defineAgentRuntimeProfile({

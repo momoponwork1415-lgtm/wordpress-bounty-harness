@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
-import { GvisorCodexSandbox } from "../../src/discovery/codex-gvisor-sandbox.js";
+import { GvisorCodexSandbox } from "../../src/discovery/index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 

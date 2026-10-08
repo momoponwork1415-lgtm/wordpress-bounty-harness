@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   admitAgentRuntimeProfile,
   defineAgentRuntimeProfile,
-} from "../../src/discovery/agent-runtime-profile.js";
+} from "../../src/discovery/index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const definition = {

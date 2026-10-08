@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ProviderAttachmentStore } from "../../src/discovery/provider-research-report.js";
+import { ProviderAttachmentStore } from "../../src/discovery/index.js";
 
 describe("provider attachments", () => {
   it("stores report attachments in the private store and returns a digest reference", async () => {

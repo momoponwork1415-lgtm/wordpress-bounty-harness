@@ -6,8 +6,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { createProviderCredentialEgressBroker } from "../../src/discovery/provider-credential-egress-broker.js";
-import { openProviderCredentialProxy } from "../../src/discovery/provider-credential-proxy.js";
+import { createProviderCredentialEgressBroker } from "../../src/discovery/index.js";
+import { openProviderCredentialProxy } from "../../src/discovery/index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const expiresAt = "2026-10-08T07:30:00.000Z";
