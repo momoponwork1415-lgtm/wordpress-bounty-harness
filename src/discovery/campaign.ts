@@ -1,6 +1,14 @@
+import { rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import { z } from "zod";
 
-import { canonicalDigest } from "../infrastructure/canonical-json.js";
+import { measureCanonicalSourceTree } from "../infrastructure/canonical-source-tree.js";
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../infrastructure/canonical-json.js";
+import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger } from "../ledger/index.js";
 import type {
   DiscoveryTransportRun,
@@ -179,6 +187,32 @@ const providerReportSchema = z.strictObject({
   unexamined: z.string(),
 });
 
+/** The full claim, including its trace, stays in Private Evidence; the ledger keeps the digest. */
+async function storeFinding(
+  store: PrivateArtifactStore,
+  finding: AdmittedFinding,
+): Promise<string> {
+  const staging = await store.stage();
+  try {
+    await writeFile(
+      join(staging.contentDirectory, "finding.json"),
+      canonicalJson(finding),
+      { mode: 0o600 },
+    );
+    const measured = await measureCanonicalSourceTree(
+      staging.contentDirectory,
+      { maxEntries: 1, maxBytes: 1024 * 1024 },
+    );
+    const committed = await store.commit(measured.digest, staging);
+    if (committed.status === "conflict")
+      throw new Error("Finding evidence conflict");
+    return committed.artifact.digest;
+  } catch (error: unknown) {
+    await rm(staging.rootDirectory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 /** Run independent provider calls, record only admitted claims, and stop on no new findings. */
 export async function runDiscoveryCampaign(options: {
   readonly campaignId: string;
@@ -190,6 +224,7 @@ export async function runDiscoveryCampaign(options: {
     execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
   };
   readonly attachments: ProviderAttachmentStore;
+  readonly evidence: PrivateArtifactStore;
   readonly ledger: Ledger;
   readonly admitFinding: (
     candidate: unknown,
@@ -300,8 +335,10 @@ export async function runDiscoveryCampaign(options: {
               throw new Error("Finding differs from its run");
           }
           for (const finding of findings) {
+            const findingDigest = await storeFinding(options.evidence, finding);
             const appended = await options.ledger.append({
               ...base,
+              artifacts: [{ kind: "finding", digest: findingDigest }],
               identity: `discovery-finding-${finding.findingId}`,
               type: "finding-recorded",
               findingId: finding.findingId,

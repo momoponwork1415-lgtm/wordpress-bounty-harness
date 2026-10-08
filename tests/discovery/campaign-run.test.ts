@@ -34,17 +34,18 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 
-it("stops after consecutive completed runs without a new Finding and records each run configuration", async () => {
+async function campaign(findingRuns: readonly number[]) {
   const root = await mkdtemp(join(tmpdir(), "wbh-campaign-"));
   directories.push(root);
   const attachments = new ProviderAttachmentStore(join(root, "reports"));
+  const evidence = new PrivateArtifactStore({
+    rootDirectory: join(root, "evidence"),
+    maxEntries: 10,
+    maxBytes: 1024 * 1024,
+  });
   const ledger = new Ledger({
     databasePath: join(root, "ledger.sqlite"),
-    artifactStore: new PrivateArtifactStore({
-      rootDirectory: join(root, "evidence"),
-      maxEntries: 10,
-      maxBytes: 1024 * 1024,
-    }),
+    artifactStore: evidence,
   });
   await ledger.append({
     schemaVersion: 1,
@@ -98,11 +99,12 @@ it("stops after consecutive completed runs without a new Finding and records eac
     historyFraction: 0.5,
     ledger,
     attachments,
+    evidence,
     admitFinding: admitWordPressFinding,
     executor: {
       async execute(run) {
         const report = {
-          findings: calls++ === 0 ? [claim] : [],
+          findings: findingRuns.includes(calls++) ? [claim] : [],
           examined: "source",
           unexamined: "none",
         };
@@ -147,6 +149,11 @@ it("stops after consecutive completed runs without a new Finding and records eac
     })),
     clock: () => new Date("2026-10-08T07:00:00Z"),
   });
+  return { result, calls, ledger, evidence };
+}
+
+it("stops after consecutive completed runs without a new Finding and records each run configuration", async () => {
+  const { result, calls, ledger } = await campaign([0]);
   expect(result).toEqual({
     runCount: 3,
     findingsRecorded: 1,
@@ -174,4 +181,28 @@ it("stops after consecutive completed runs without a new Finding and records eac
     unpricedRuns: 3,
     wallTimeMs: 3000,
   });
+});
+
+it("keeps the admitted Finding trace in Private Evidence and references it from the ledger", async () => {
+  const { ledger, evidence } = await campaign([0]);
+  const [recorded] = ledger.read({ type: "finding-recorded" });
+  const reference = recorded?.event.artifacts.find(
+    (artifact) => artifact.kind === "finding",
+  );
+  expect(reference).toBeDefined();
+  const stored = await evidence.readFile(
+    reference!.digest,
+    "finding.json",
+    100_000,
+  );
+  expect(stored.status).toBe("resolved");
+  const finding = JSON.parse(
+    stored.status === "resolved" ? stored.bytes.toString("utf8") : "{}",
+  ) as { findingId: string; sourceTrace: unknown };
+  expect(finding.findingId).toBe(
+    recorded?.event.type === "finding-recorded" ? recorded.event.findingId : "",
+  );
+  expect(finding.sourceTrace).toEqual([
+    { file: "includes/example.php", function: "fixture", line: 12 },
+  ]);
 });
