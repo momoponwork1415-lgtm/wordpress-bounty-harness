@@ -19,10 +19,18 @@ export const wordPressSelectionPolicySchema = z
     excludedAuthors: z.array(z.string().min(1)),
     excludedSlugs: z.array(slugSchema),
     surfaceTagWeights: z.record(z.string(), z.number().nonnegative()),
+    /** Public tags that suggest a High Threat surface (file operations, options, authentication). */
+    highThreatTags: z.array(z.string().min(1)),
     scoreWeights: z.strictObject({
       installations: z.number().nonnegative(),
       recency: z.number().nonnegative(),
       surface: z.number().nonnegative(),
+      highThreat: z.number().nonnegative(),
+    }),
+    /** Discovery runs per target: deeper where the expected reward is higher. */
+    runBudget: z.strictObject({
+      default: z.number().int().positive().max(40),
+      highThreat: z.number().int().positive().max(40),
     }),
     /** Manual pin: select this version instead of the observed stable version. */
     pinnedVersions: z
@@ -43,6 +51,7 @@ export type WordPressSelectionPolicy = z.infer<
 
 export type SelectionReason =
   | "observation-unavailable"
+  | "distribution-closed"
   | "observation-stale"
   | "update-date-unavailable"
   | "update-stale"
@@ -56,10 +65,15 @@ export type SelectionReason =
 export interface WordPressTargetSelection extends TargetSelection {
   readonly slug: string;
   readonly activeInstallations: number;
+  /** A public tag matched the policy's High Threat surface list. */
+  readonly highThreatSurface: boolean;
+  /** Upper bound on discovery runs for this target; the campaign ceiling still applies. */
+  readonly runBudget: number;
   readonly scoreBreakdown: {
     readonly installations: number;
     readonly recency: number;
     readonly surface: number;
+    readonly highThreat: number;
   };
   readonly observationRef: WordPressOrgTargetObservationRef;
   readonly programmeRef: ProgrammeEligibilitySnapshotRef;

@@ -24,9 +24,37 @@
     "login": 2,
     "ecommerce": 2
   },
+  "highThreatTags": [
+    "file manager",
+    "file upload",
+    "upload",
+    "import",
+    "export",
+    "backup",
+    "migration",
+    "login",
+    "authentication",
+    "registration",
+    "user registration",
+    "social login",
+    "2fa",
+    "two-factor",
+    "password",
+    "membership",
+    "user role",
+    "roles",
+    "capabilities",
+    "settings",
+    "options"
+  ],
   "scoreWeights": {
     "installations": 10,
     "recency": 5,
-    "surface": 1
+    "surface": 1,
+    "highThreat": 15
+  },
+  "runBudget": {
+    "default": 20,
+    "highThreat": 40
   }
 }

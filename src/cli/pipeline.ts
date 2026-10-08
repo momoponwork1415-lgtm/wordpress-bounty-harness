@@ -29,6 +29,7 @@ export interface CampaignPipeline<
   readonly lab: LabProvisioner<Setup, Handle>;
   readonly setupFor: (snapshot: Snapshot) => Setup;
   readonly discovery: (input: {
+    readonly target: Target;
     readonly snapshot: Snapshot;
     readonly lab: Handle;
   }) => Promise<{
@@ -145,6 +146,7 @@ export async function runCampaignPipeline<
     let campaignInput: CampaignInputV1;
     try {
       const prepared = await pipeline.discovery({
+        target,
         snapshot,
         lab: provisioned.handle,
       });

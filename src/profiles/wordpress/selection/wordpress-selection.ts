@@ -76,7 +76,18 @@ function score(
     0,
   );
   const surface = surfacePoints * policy.scoreWeights.surface;
-  return { installations, recency, surface };
+  const highThreat =
+    (highThreatSurface(observation, policy) ? 1 : 0) *
+    policy.scoreWeights.highThreat;
+  return { installations, recency, surface, highThreat };
+}
+
+function highThreatSurface(
+  observation: WordPressOrgTargetObservation,
+  policy: WordPressSelectionPolicy,
+): boolean {
+  const tags = new Set(policy.highThreatTags.map(normalizeName));
+  return (observation.tags ?? []).some((tag) => tags.has(normalizeName(tag)));
 }
 
 export function createWordPressSelection(
@@ -133,7 +144,11 @@ export function createWordPressSelection(
         })
         .catch(() => undefined);
       if (result?.status !== "observed") {
-        reasons.push("observation-unavailable");
+        reasons.push(
+          result?.status === "failed" && result.reason === "closed"
+            ? "distribution-closed"
+            : "observation-unavailable",
+        );
         results.push({ slug, status: "ineligible", reasons });
         continue;
       }
@@ -175,11 +190,16 @@ export function createWordPressSelection(
         slug,
         version: policy.pinnedVersions?.[slug] ?? observation.stableVersion,
         activeInstallations: observation.activeInstallations,
+        highThreatSurface: highThreatSurface(observation, policy),
+        runBudget: highThreatSurface(observation, policy)
+          ? policy.runBudget.highThreat
+          : policy.runBudget.default,
         scoreBreakdown,
         score:
           scoreBreakdown.installations +
           scoreBreakdown.recency +
-          scoreBreakdown.surface,
+          scoreBreakdown.surface +
+          scoreBreakdown.highThreat,
         selectedAt: nowDate.toISOString(),
         policy: { id: policy.id, digest: policyDigest },
         observationRef: result.observationRef,

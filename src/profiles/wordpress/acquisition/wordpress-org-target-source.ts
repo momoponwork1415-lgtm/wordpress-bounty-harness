@@ -286,7 +286,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
       return observationFailure("invalid-metadata", pluginIdentity);
     }
     if (metadata.closed === true) {
-      return observationFailure("not-found", pluginIdentity);
+      return observationFailure("closed", pluginIdentity);
     }
     const retrievedAt = this.#clock().toISOString();
     const observation = wordPressOrgTargetObservationSchema.parse({

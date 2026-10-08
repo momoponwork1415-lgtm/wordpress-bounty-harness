@@ -66,6 +66,10 @@ async function harness(
     readonly scopeFacts?: Parameters<
       typeof createWordPressCliProfile
     >[0]["scopeFacts"];
+    readonly runBudget?: {
+      readonly default: number;
+      readonly highThreat: number;
+    };
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
@@ -324,7 +328,9 @@ async function harness(
       excludedAuthors: [],
       excludedSlugs: [],
       surfaceTagWeights: {},
-      scoreWeights: { installations: 1, recency: 1, surface: 1 },
+      highThreatTags: [],
+      scoreWeights: { installations: 1, recency: 1, surface: 1, highThreat: 1 },
+      runBudget: options.runBudget ?? { default: 40, highThreat: 40 },
     }),
   );
   const configPath = join(root, "campaign.json");
@@ -473,6 +479,24 @@ describe("harness CLI vertical slice", () => {
       "location-overlap  case synthetic-case  campaign campaign-1  findings 2  overlapping 1  unreadable 0  hit yes",
     );
     expect(score.stdout).not.toContain("includes/synthetic.php");
+  });
+
+  it("caps a target's runs at its selection run budget below the campaign ceiling", async () => {
+    const { run, configPath, prompts } = await harness({
+      runBudget: { default: 1, highThreat: 1 },
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(campaign.stdout).toContain("stopped by max-runs");
+    expect(prompts).toHaveLength(1);
   });
 
   it("lists the policy selection and runs only the named target or --all", async () => {
