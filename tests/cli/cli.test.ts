@@ -429,7 +429,7 @@ describe("harness CLI vertical slice", () => {
       /reproduction package: sha256:[a-f0-9]{64} \(\S+private-evidence\/sha256:[a-f0-9]{64}\)/,
     );
     expect(queue.stdout).toContain(
-      "observed: observedVia=session reachedRole=administrator",
+      "observed: attackerRole=subscriber defaultSettings=true observedVia=session reachedRole=administrator",
     );
     expect(queue.stdout).toMatch(/evidence: sha256:[a-f0-9]{64}/);
     expect(queue.stdout).toMatch(/^incomplete .* sensitive-object-access$/m);

@@ -206,10 +206,14 @@ function principalJudge(
   decide: (facts: PrincipalFacts) => Record<string, string> | null,
 ) {
   return canaryJudge(options, id, async (input) => {
+    const route = await routeConditions(options.store, input.recipeDigest);
+    if (route === null) return missingRoute;
     const facts = await observePrincipals(options, input);
     if ("status" in facts) return facts;
     const conditions = decide(facts);
-    return conditions === null ? null : { conditions };
+    return conditions === null
+      ? null
+      : { conditions: { ...conditions, ...route } };
   });
 }
 
