@@ -37,7 +37,11 @@ afterEach(async () => {
 });
 
 /** The Lab answers with Docker output; `changed` decides whether the canary state moved. */
-async function verifyOnce(changed: boolean) {
+async function verifyOnce(
+  changed: boolean,
+  impact: WordPressFinding["impact"] = "account-takeover",
+) {
+  let seededRow = "";
   const root = await mkdtemp(join(tmpdir(), "wbh-negative-"));
   directories.push(root);
   const sourceDirectory = join(root, "source");
@@ -75,6 +79,19 @@ async function verifyOnce(changed: boolean) {
           return { exitCode: 0, stdout: "172.20.0.2", stderr: "" };
         if (request.args.includes("--field=roles"))
           return { exitCode: 0, stdout: "subscriber\n", stderr: "" };
+        const query = request.args.includes("query")
+          ? (request.args[request.args.indexOf("query") + 1] ?? "")
+          : "";
+        if (query.startsWith("CREATE TABLE"))
+          seededRow = /'([a-f0-9]{32})'/.exec(query)?.[1] ?? "";
+        if (query.includes("information_schema"))
+          return { exitCode: 0, stdout: "1\n", stderr: "" };
+        if (query.startsWith("SELECT"))
+          return {
+            exitCode: 0,
+            stdout: `1\t${changed ? "overwritten" : seededRow}\n`,
+            stderr: "",
+          };
         if (request.args.includes("eval")) {
           // Unchanged Lab: the presented session is the attacker's own account.
           const attacker = request.args.find((arg) =>
@@ -110,7 +127,7 @@ async function verifyOnce(changed: boolean) {
     {
       claim: "Synthetic administrator takeover claim",
       attackerPosition: "subscriber",
-      impact: "account-takeover",
+      impact,
       configurationPrecondition: "default",
       brokenProperty: "Synthetic property",
       sourceTrace: [{ file: "example.php", function: "fixture", line: 1 }],
@@ -174,7 +191,14 @@ async function verifyOnce(changed: boolean) {
                 },
               ],
             }),
-            "http.json": "[]",
+            "http.json": JSON.stringify({
+              exchanges: [
+                {
+                  request: { method: "GET", path: "/synthetic" },
+                  response: { status: 200, body: "Synthetic page" },
+                },
+              ],
+            }),
             "session.json": JSON.stringify({ cookie: "synthetic-session" }),
             "notes.md": "Administrator access was obtained.\n",
           }),
@@ -224,5 +248,23 @@ describe("WordPress verification negative control", () => {
       conditions: { reachedRole: "administrator", observedVia: "session" },
     });
     expect(funnel.confirmed).toBe(1);
+  });
+
+  it("does not confirm sqli while the canary table is intact and no response carries its row", async () => {
+    const { result, funnel } = await verifyOnce(false, "sqli");
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+    });
+    expect(funnel.confirmed).toBe(0);
+  });
+
+  it("confirms sqli once the Lab reports the canary table changed", async () => {
+    const { result } = await verifyOnce(true, "sqli");
+    expect(result).toMatchObject({
+      status: "runtime-confirmed",
+      judgeId: "wordpress-sql-canary",
+      conditions: { observedVia: "canary-table-write" },
+    });
   });
 });

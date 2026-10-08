@@ -16,12 +16,31 @@ import type {
 
 type JudgeLab = Pick<
   WordPressLab,
-  "canaryLedger" | "observeSessionUser" | "observeAccountRoles"
+  | "canaryLedger"
+  | "observeSessionUser"
+  | "observeAccountRoles"
+  | "observeCanaryTable"
 >;
 type Options = { readonly store: PrivateArtifactStore; readonly lab: JudgeLab };
 
 const sessionSchema = z.strictObject({ cookie: z.string().min(1).max(4096) });
 const routeFieldsSchema = z.looseObject({});
+const routeConditionsSchema = z.looseObject({
+  role: z.string().min(1).max(64),
+  defaultSettings: z.boolean(),
+});
+/** The Verifier's HTTP record; only responses can carry what the Lab held back. */
+const httpRecordSchema = z.looseObject({
+  exchanges: z
+    .array(
+      z.looseObject({
+        request: z.unknown(),
+        response: z.looseObject({ body: z.string() }),
+      }),
+    )
+    .min(1)
+    .max(500),
+});
 /** Highest first; a role gained beyond the seeded baseline counts as escalation. */
 const ELEVATED_ROLES = ["administrator", "editor", "author", "contributor"];
 
@@ -39,7 +58,7 @@ async function readJson(
   }
 }
 
-type LabFacts = {
+type PrincipalFacts = {
   readonly canaries: WordPressCanaryLedger;
   /** Who the presented session authenticates as, if a session was presented. */
   readonly sessionLogin: string | null;
@@ -49,25 +68,25 @@ type LabFacts = {
   }[];
 };
 type Incomplete = Extract<JudgeObservation, { status: "incomplete" }>;
+type Decision =
+  { readonly conditions: Readonly<Record<string, string>> } | null | Incomplete;
+type DecideInput = {
+  readonly lab: WordPressLabHandle;
+  readonly recipeDigest: string;
+  readonly canaries: WordPressCanaryLedger;
+};
+
+const unavailable: Incomplete = {
+  status: "incomplete",
+  reason: "observation",
+  nextStep: "The Lab could not report its state; repeat in a fresh Lab",
+};
 
 /** Reads only Lab state and the presented session; never the Verifier's narrative. */
-async function observeLab(
+async function observePrincipals(
   options: Options,
-  lab: WordPressLabHandle,
-  recipeDigest: string,
-): Promise<LabFacts | Incomplete> {
-  const canaries = options.lab.canaryLedger(lab);
-  if (canaries === null)
-    return {
-      status: "incomplete",
-      reason: "precondition",
-      nextStep: "Seed canaries in the Lab before judging",
-    };
-  const unavailable: Incomplete = {
-    status: "incomplete",
-    reason: "observation",
-    nextStep: "The Lab could not report its state; repeat in a fresh Lab",
-  };
+  { lab, recipeDigest, canaries }: DecideInput,
+): Promise<PrincipalFacts | Incomplete> {
   let sessionLogin: string | null = null;
   const session = sessionSchema.safeParse(
     await readJson(options.store, recipeDigest, "session.json"),
@@ -122,18 +141,26 @@ async function recordEvidence(
   });
 }
 
-function principalJudge(
+/** Seeded canaries are the only ground truth; each judge decides from what it observes of them. */
+function canaryJudge(
   options: Options,
   id: string,
-  decide: (facts: LabFacts) => Record<string, string> | null,
+  decide: (input: DecideInput) => Promise<Decision>,
 ): Judge<WordPressFinding, WordPressLabHandle> {
   return {
     id,
     async observe({ lab, recipeDigest }) {
-      const facts = await observeLab(options, lab, recipeDigest);
-      if ("status" in facts) return facts;
-      const conditions = decide(facts);
-      if (conditions === null) return { status: "not-observed" };
+      const canaries = options.lab.canaryLedger(lab);
+      if (canaries === null)
+        return {
+          status: "incomplete",
+          reason: "precondition",
+          nextStep: "Seed canaries in the Lab before judging",
+        };
+      const decision = await decide({ lab, recipeDigest, canaries });
+      if (decision === null) return { status: "not-observed" };
+      if ("status" in decision) return decision;
+      const { conditions } = decision;
       const evidenceDigest = await recordEvidence(options, lab, recipeDigest, {
         judgeId: id,
         ...conditions,
@@ -150,8 +177,21 @@ function principalJudge(
   };
 }
 
+function principalJudge(
+  options: Options,
+  id: string,
+  decide: (facts: PrincipalFacts) => Record<string, string> | null,
+) {
+  return canaryJudge(options, id, async (input) => {
+    const facts = await observePrincipals(options, input);
+    if ("status" in facts) return facts;
+    const conditions = decide(facts);
+    return conditions === null ? null : { conditions };
+  });
+}
+
 function highestGained(
-  facts: LabFacts,
+  facts: PrincipalFacts,
   admitted: readonly string[],
 ): { role: string; baseline: readonly string[] } | null {
   for (const role of admitted)
@@ -203,12 +243,62 @@ function nonAdministratorJudge(options: Options) {
   );
 }
 
+/**
+ * SQL: the seeded row changed, or its value (held nowhere else) came back in a
+ * response that no request carried. Timing differences never count.
+ */
+function sqlCanaryJudge(options: Options) {
+  return canaryJudge(
+    options,
+    "wordpress-sql-canary",
+    async ({ lab, recipeDigest, canaries }) => {
+      const route = routeConditionsSchema.safeParse(
+        await readJson(options.store, recipeDigest, "route.json"),
+      );
+      const http = httpRecordSchema.safeParse(
+        await readJson(options.store, recipeDigest, "http.json"),
+      );
+      if (!route.success || !http.success)
+        return {
+          status: "incomplete",
+          reason: "evidence",
+          nextStep:
+            "Record the route and every HTTP exchange with its response body; then repeat",
+        };
+      const table = await options.lab.observeCanaryTable(lab);
+      if (table.status === "unavailable") return unavailable;
+      const secret = canaries.sqlCanary.value;
+      const read =
+        http.data.exchanges.some((entry) =>
+          entry.response.body.includes(secret),
+        ) &&
+        !http.data.exchanges.some((entry) =>
+          JSON.stringify(entry.request ?? null).includes(secret),
+        );
+      if (table.status !== "changed" && !read) return null;
+      return {
+        conditions: {
+          observedVia:
+            table.status === "changed"
+              ? "canary-table-write"
+              : "canary-row-read",
+          attackerRole: route.data.role,
+          defaultSettings: String(route.data.defaultSettings),
+          // The Lab never touches wp_magic_quotes.
+          magicQuotes: "wordpress-default",
+        },
+      };
+    },
+  );
+}
+
 /** Judges built so far; other impacts stay incomplete(no-judge). */
 export function createWordPressJudges(
   options: Options,
 ): JudgeSet<WordPressFinding, WordPressLabHandle> {
   const administrator = administratorJudge(options);
   const nonAdministrator = nonAdministratorJudge(options);
+  const sql = sqlCanaryJudge(options);
   return {
     for(finding) {
       switch (finding.impact) {
@@ -219,6 +309,8 @@ export function createWordPressJudges(
         case "privesc-to-contributor+":
         case "auth-bypass-non-admin":
           return nonAdministrator;
+        case "sqli":
+          return sql;
         default:
           return null;
       }

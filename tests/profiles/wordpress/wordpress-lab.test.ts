@@ -53,6 +53,9 @@ async function fixture(
     digest: canonicalDigest(snapshotBody),
   };
   const commands: DockerRequest[] = [];
+  /** What the fake database holds in the SQL canary table. */
+  const database = { table: "seeded" as "seeded" | "changed" | "dropped" };
+  let seededRow = "";
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
     images: {
@@ -83,6 +86,26 @@ async function fixture(
           return { exitCode: 0, stdout: "fixed-nonce", stderr: "" };
         if (request.args.includes("--field=roles"))
           return { exitCode: 0, stdout: "subscriber\n", stderr: "" };
+        const query = request.args.includes("query")
+          ? (request.args[request.args.indexOf("query") + 1] ?? "")
+          : null;
+        if (query?.startsWith("CREATE TABLE"))
+          seededRow = /'([a-f0-9]{32})'/.exec(query)?.[1] ?? "";
+        else if (query?.includes("information_schema"))
+          return {
+            exitCode: 0,
+            stdout: database.table === "dropped" ? "0\n" : "1\n",
+            stderr: "",
+          };
+        else if (query?.startsWith("SELECT"))
+          return {
+            exitCode: 0,
+            stdout:
+              database.table === "seeded"
+                ? `1\t${seededRow}\n`
+                : `1\t${seededRow}\n2\tadded\n`,
+            stderr: "",
+          };
         if (request.args.includes("eval"))
           return {
             exitCode: 0,
@@ -104,7 +127,7 @@ async function fixture(
     initialPosts: ["Welcome"],
     customerRole: false,
   };
-  return { lab, snapshot, setup, commands, sourceDirectory };
+  return { lab, snapshot, setup, commands, sourceDirectory, database };
 }
 
 describe("WordPress gVisor Lab", () => {
@@ -221,6 +244,36 @@ describe("WordPress gVisor Lab", () => {
       await lab.observeAccountRoles(provisioned.handle, "bad name;"),
     ).toEqual({ status: "unavailable" });
     expect(commands.length).toBe(before);
+  });
+
+  it("seeds a SQL canary row whose value appears nowhere else and reports whether the table changed", async () => {
+    const { lab, snapshot, setup, commands, database } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup);
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    expect(await lab.observeCanaryTable(provisioned.handle)).toEqual({
+      status: "unavailable",
+    });
+    expect((await lab.seedCanaries(provisioned.handle)).status).toBe("seeded");
+    const ledger = lab.canaryLedger(provisioned.handle);
+    expect(ledger?.sqlCanary.table).toBe("wbh_canary");
+    expect(ledger?.sqlCanary.value).toMatch(/^[a-f0-9]{32}$/);
+    // Only the table insert carries the row value; posts, options and files do not.
+    expect(
+      commands.filter((command) =>
+        command.args.some((arg) => arg.includes(ledger!.sqlCanary.value)),
+      ),
+    ).toHaveLength(1);
+    expect(await lab.observeCanaryTable(provisioned.handle)).toEqual({
+      status: "intact",
+    });
+    database.table = "changed";
+    expect(await lab.observeCanaryTable(provisioned.handle)).toEqual({
+      status: "changed",
+    });
+    database.table = "dropped";
+    expect(await lab.observeCanaryTable(provisioned.handle)).toEqual({
+      status: "changed",
+    });
   });
 
   it("does not start target containers when source differs from its snapshot", async () => {

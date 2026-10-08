@@ -44,6 +44,7 @@ const canaries: WordPressCanaryLedger = {
   user: "wbh-canary-synthetic-nonce",
   adminUser: "wbh-canary-admin-synthetic-nonce",
   roleBaseline: { "lab-subscriber": ["subscriber"] },
+  sqlCanary: { table: "wbh_canary", value: "0".repeat(32) },
 };
 const finding = (impact: WordPressFinding["impact"]): WordPressFinding => ({
   findingId: "finding-1",
@@ -99,6 +100,9 @@ async function fixture(options: {
           ? { status: "none" }
           : { status: "user", login: options.sessionUser };
       },
+      async observeCanaryTable() {
+        return { status: "intact" };
+      },
       async observeAccountRoles(): Promise<WordPressRoleObservation> {
         return options.roles === "unavailable"
           ? { status: "unavailable" }
@@ -143,12 +147,7 @@ describe("WordPress principal judges", () => {
       expect(judges.for(finding(impact))?.id).toBe(
         "wordpress-non-administrator-principal",
       );
-    for (const impact of [
-      "sqli",
-      "reflected-xss",
-      "csrf-to-write",
-      "idor",
-    ] as const)
+    for (const impact of ["reflected-xss", "csrf-to-write", "idor"] as const)
       expect(judges.for(finding(impact))).toBeNull();
   });
 

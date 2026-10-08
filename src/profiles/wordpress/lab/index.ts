@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
@@ -31,6 +31,7 @@ const setupSchema = z.strictObject({
   initialPosts: z.array(z.string().min(1).max(120)).max(20),
   customerRole: z.boolean(),
 });
+const SQL_CANARY_TABLE = "wbh_canary";
 const snapshotWithDigestSchema = snapshotSchema.safeExtend({ digest });
 
 export type WordPressLabSetup = z.infer<typeof setupSchema>;
@@ -80,7 +81,13 @@ export interface WordPressCanaryLedger {
   readonly adminUser: string;
   /** Roles of each attacker account when the Lab was seeded. */
   readonly roleBaseline: Readonly<Record<string, readonly string[]>>;
+  /** One row whose value is stored only in this table; reading it needs SQL access. */
+  readonly sqlCanary: { readonly table: string; readonly value: string };
 }
+
+export type WordPressCanaryTableObservation = {
+  readonly status: "intact" | "changed" | "unavailable";
+};
 
 export type WordPressRoleObservation =
   | { readonly status: "roles"; readonly roles: readonly string[] }
@@ -110,6 +117,10 @@ export interface WordPressLab extends LabProvisioner<
     handle: WordPressLabHandle,
     cookie: string,
   ): Promise<WordPressSessionObservation>;
+  /** Compares the SQL canary table with the row seeded into it. */
+  observeCanaryTable(
+    handle: WordPressLabHandle,
+  ): Promise<WordPressCanaryTableObservation>;
   /** Reads an account's current roles inside the Lab. */
   observeAccountRoles(
     handle: WordPressLabHandle,
@@ -606,6 +617,15 @@ export function openWordPressLab(options: {
           "--role=administrator",
           `--user_pass=${randomUUID()}`,
         ]);
+        const sqlCanary = {
+          table: SQL_CANARY_TABLE,
+          value: randomBytes(16).toString("hex"),
+        };
+        await wp(resource, [
+          "db",
+          "query",
+          `CREATE TABLE ${sqlCanary.table} (id INT PRIMARY KEY, value CHAR(32) NOT NULL); INSERT INTO ${sqlCanary.table} VALUES (1, '${sqlCanary.value}')`,
+        ]);
         const roleBaseline: Record<string, readonly string[]> = {};
         for (const account of Object.values(handle.attackerAccounts)) {
           const observed = await roles(resource, account.username);
@@ -617,6 +637,7 @@ export function openWordPressLab(options: {
           nonce: token,
           adminUser,
           roleBaseline,
+          sqlCanary,
           option: `wbh_canary_${token}`,
           postId,
           postMeta: `wbh_canary_${token}`,
@@ -681,6 +702,33 @@ export function openWordPressLab(options: {
         );
         const login = result.stdout.trim();
         return login === "" ? { status: "none" } : { status: "user", login };
+      } catch {
+        return { status: "unavailable" };
+      }
+    },
+    async observeCanaryTable(handle) {
+      const resource = active.get(handle.id);
+      const canary = resource?.canaries?.sqlCanary;
+      if (resource?.handle !== handle || canary === undefined)
+        return { status: "unavailable" };
+      try {
+        const present = await wp(resource, [
+          "db",
+          "query",
+          `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '${canary.table}'`,
+          "--skip-column-names",
+        ]);
+        if (present.stdout.trim() === "0") return { status: "changed" };
+        const rows = await wp(resource, [
+          "db",
+          "query",
+          `SELECT id, value FROM ${canary.table} ORDER BY id`,
+          "--skip-column-names",
+        ]);
+        return {
+          status:
+            rows.stdout.trim() === `1\t${canary.value}` ? "intact" : "changed",
+        };
       } catch {
         return { status: "unavailable" };
       }
