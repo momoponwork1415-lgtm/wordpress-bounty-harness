@@ -9,7 +9,7 @@ import type {
   ProviderAttachmentStore,
 } from "../discovery/index.js";
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
-import { Review } from "../review/index.js";
+import { Review, type ScopeFactsProvider } from "../review/index.js";
 import type { Selection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
 import { Verification, type Verifier } from "../verification/index.js";
@@ -133,6 +133,8 @@ export function createWordPressCliProfile(options: {
     state: CliState,
   ) => Promise<WordPressCampaignBoundaries>;
   readonly scopePolicy: WordpressScopePolicy;
+  /** Scope facts from judge evidence; absent, every scope assessment stays incomplete. */
+  readonly scopeFacts?: ScopeFactsProvider<WordpressScopeInput>;
 }): CliProfile {
   return {
     review: (state) =>
@@ -140,7 +142,7 @@ export function createWordPressCliProfile(options: {
         ledger: state.ledger,
         artifactStore: state.store,
         scopeEvaluator: createWordpressScopeEvaluator(options.scopePolicy),
-        factsProvider: noScopeFacts,
+        factsProvider: options.scopeFacts ?? noScopeFacts,
         clock: state.clock,
       }),
     answerKeys: parseWordPressAnswerKeys,

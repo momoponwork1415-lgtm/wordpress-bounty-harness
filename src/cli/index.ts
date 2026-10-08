@@ -69,6 +69,11 @@ const USAGE = [
   "  campaign run <slug>|--all --campaign <id> --config <path>",
   "  review [--campaign <id>]",
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>]",
+  "  review scope --campaign <id> --finding <id>",
+  "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
+  "  review authorize --candidate <id> --draft <digest> --to <destination> [--by <name>]",
+  "  review submitted --candidate <id> --draft <digest> --to <destination>",
+  "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected",
   "  ledger funnel --campaign <id>",
   "  eval score --campaign <id> --keys <path> --case <id>",
 ].join("\n");
@@ -85,6 +90,13 @@ const options = {
   duplicate: { type: "string" },
   by: { type: "string" },
   keys: { type: "string" },
+  programme: { type: "string" },
+  file: { type: "string" },
+  "prepared-by": { type: "string" },
+  candidate: { type: "string" },
+  draft: { type: "string" },
+  to: { type: "string" },
+  outcome: { type: "string" },
   case: { type: "string" },
 } as const;
 
@@ -128,6 +140,11 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
     `runs ${funnel.runCount} (discovery attempts ${funnel.discoveryAttempts})  cost $${funnel.knownCostUsd.toFixed(2)} known, ${funnel.unpricedRuns} run(s) unavailable  wall time ${(funnel.wallTimeMs / 1000).toFixed(1)}s`,
     stages(funnel),
   ];
+  const programmes = Object.keys(funnel.inScopeByProgramme).sort();
+  if (programmes.length > 0)
+    lines.push(
+      `in-scope by programme: ${programmes.map((programme) => `${programme} ${funnel.inScopeByProgramme[programme]}`).join(", ")}`,
+    );
   const categories = Object.keys(funnel.byCategory).sort();
   if (categories.length > 0) lines.push("by category:");
   for (const category of categories)
@@ -175,6 +192,45 @@ function parseDuplicate(value: string | undefined): DuplicateLookupResult {
   throw new UsageError(
     "--duplicate must be unavailable, no-match or possible-match:<ref>",
   );
+}
+
+const OUTCOMES = [
+  "triaged",
+  "resolved",
+  "duplicate",
+  "informative",
+  "not-applicable",
+  "rejected",
+] as const;
+
+type Values = {
+  readonly campaign?: string | undefined;
+  readonly finding?: string | undefined;
+  readonly candidate?: string | undefined;
+  readonly draft?: string | undefined;
+  readonly to?: string | undefined;
+};
+
+/** Only runtime-confirmed and incomplete findings are reviewable. */
+function queued(review: Review, values: Values) {
+  const campaignId = required(values.campaign, "campaign");
+  const findingId = required(values.finding, "finding");
+  const item = review
+    .queue({ campaignId })
+    .items.find((candidate) => candidate.ref.findingId === findingId);
+  if (item === undefined)
+    throw new UsageError(
+      "The finding is not in the review queue (only runtime-confirmed and incomplete are reviewed)",
+    );
+  return item;
+}
+
+function exactDraft(values: Values) {
+  return {
+    candidateId: required(values.candidate, "candidate"),
+    draftDigest: required(values.draft, "draft"),
+    destination: required(values.to, "to"),
+  };
 }
 
 export async function runCli(
@@ -253,16 +309,9 @@ export async function runCli(
         );
         return 0;
       case "review decide": {
-        const campaignId = required(values.campaign, "campaign");
-        const findingId = required(values.finding, "finding");
         const review = environment.profile.review(state);
-        const item = review
-          .queue({ campaignId })
-          .items.find((candidate) => candidate.ref.findingId === findingId);
-        if (item === undefined)
-          throw new UsageError(
-            "The finding is not in the review queue (only runtime-confirmed and incomplete are reviewed)",
-          );
+        const item = queued(review, values);
+        const findingId = item.ref.findingId;
         const decision = required(values.decision, "decision");
         if (
           decision !== "accept" &&
@@ -281,6 +330,79 @@ export async function runCli(
         io.stdout(
           `recorded ${recorded.decision} (${recorded.reasonCode}) for finding ${findingId} at ${recorded.decidedAt}`,
         );
+        return 0;
+      }
+      case "review scope": {
+        const review = environment.profile.review(state);
+        const item = queued(review, values);
+        if (item.status !== "runtime-confirmed")
+          throw new UsageError(
+            "Scope is assessed only for runtime-confirmed findings",
+          );
+        for (const assessment of await review.assessScope({ ref: item.ref }))
+          io.stdout(
+            `${assessment.programmeId} ${assessment.status} (${assessment.reason})  assessment ${assessment.id}`,
+          );
+        return 0;
+      }
+      case "review draft": {
+        const review = environment.profile.review(state);
+        const item = queued(review, values);
+        const programmeId = required(values.programme, "programme");
+        const view = await review.inspect({
+          campaignId: item.ref.campaignId,
+          findingId: item.ref.findingId,
+        });
+        const assessment = view.scopeAssessments
+          .filter(
+            (candidate) =>
+              candidate.programmeId === programmeId &&
+              candidate.status === "in-scope",
+          )
+          .at(-1);
+        if (assessment === undefined)
+          throw new UsageError(`No in-scope assessment for ${programmeId}`);
+        const preparedBy = values["prepared-by"] ?? "human";
+        if (preparedBy !== "human" && preparedBy !== "ai")
+          throw new UsageError("--prepared-by must be human or ai");
+        const draft = await review.saveDraft({
+          assessmentId: assessment.id,
+          content: await readFile(
+            resolve(required(values.file, "file")),
+            "utf8",
+          ),
+          preparedBy,
+        });
+        // The draft text stays in Private Evidence; only its identity is printed.
+        io.stdout(
+          `candidate ${draft.candidateId}  draft ${draft.digest}  revision ${draft.revision}  to ${draft.destination}`,
+        );
+        return 0;
+      }
+      case "review authorize":
+        await environment.profile.review(state).authorizeExternalAction({
+          ...exactDraft(values),
+          authorizedBy: values.by ?? "operator",
+        });
+        io.stdout("authorization recorded; Harness sends nothing");
+        return 0;
+      case "review submitted":
+        await environment.profile
+          .review(state)
+          .recordSubmission(exactDraft(values));
+        io.stdout("submission recorded");
+        return 0;
+      case "review outcome": {
+        const outcome = required(values.outcome, "outcome");
+        if (!OUTCOMES.includes(outcome as (typeof OUTCOMES)[number]))
+          throw new UsageError(
+            `--outcome must be one of ${OUTCOMES.join(", ")}`,
+          );
+        await environment.profile.review(state).recordOutcome({
+          candidateId: required(values.candidate, "candidate"),
+          outcome: outcome as (typeof OUTCOMES)[number],
+        });
+        io.stdout(`outcome ${outcome} recorded`);
         return 0;
       }
       case "ledger funnel":

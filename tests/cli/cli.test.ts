@@ -61,7 +61,13 @@ const claim = (impact: string, file: string) => ({
 });
 
 /** Real modules; only WordPress.org, Docker/runsc and the provider CLI are fakes. */
-async function harness() {
+async function harness(
+  options: {
+    readonly scopeFacts?: Parameters<
+      typeof createWordPressCliProfile
+    >[0]["scopeFacts"];
+  } = {},
+) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
   directories.push(root);
   const sourceDirectory = join(root, "source");
@@ -292,6 +298,9 @@ async function harness() {
     newId: () => `id-${++ids}`,
     profile: createWordPressCliProfile({
       scopePolicy: await loadWordpressScopePolicy(),
+      ...(options.scopeFacts === undefined
+        ? {}
+        : { scopeFacts: options.scopeFacts }),
       boundaries: async (_config, opened) => {
         state = opened;
         return boundaries;
@@ -364,7 +373,7 @@ async function harness() {
     });
     return { code, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
   };
-  return { run, configPath, keysPath, prompts, docker };
+  return { run, configPath, keysPath, prompts, docker, root };
 }
 
 const programmeRef = {
@@ -503,6 +512,96 @@ describe("harness CLI vertical slice", () => {
     );
     expect(all.code).toBe(0);
     expect(all.stdout).toContain("wporg:synthetic-plugin 3.3.1");
+  });
+
+  it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {
+    const { run, configPath, root } = await harness({
+      scopeFacts: {
+        // Synthetic facts standing in for judge evidence and target observations.
+        load: async () => ({
+          category: "account-takeover",
+          attacker: "subscriber",
+          activeInstalls: 5000,
+          wordpressOrgListed: true,
+          premium: false,
+          latestVersionVerified: true,
+          defaultOrCommonSettings: true,
+          observations: ["admin-session-reached", "other-session-reached"],
+        }),
+      },
+    });
+    const campaign = ["--campaign", "campaign-1"];
+    await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    const queue = await run("review", ...campaign);
+    const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      queue.stdout,
+    )![1]!;
+    const target = [...campaign, "--finding", finding];
+
+    const scoped = await run("review", "scope", ...target);
+    expect(scoped.stderr).toBe("");
+    expect(scoped.stdout).toMatch(/^wordfence in-scope /m);
+    expect(scoped.stdout).toMatch(/^patchstack \S+ /m);
+
+    await run(
+      "review",
+      "decide",
+      ...target,
+      "--decision",
+      "accept",
+      "--reason",
+      "reproduced-by-hand",
+    );
+    const draftPath = join(root, "draft.md");
+    await writeFile(draftPath, "Synthetic private draft text\n");
+    const drafted = await run(
+      "review",
+      "draft",
+      ...target,
+      "--programme",
+      "wordfence",
+      "--file",
+      draftPath,
+    );
+    expect(drafted.stderr).toBe("");
+    expect(drafted.stdout).not.toContain("Synthetic private draft text");
+    const [, candidate, draft] =
+      /candidate (\S+)\s+draft (\S+)\s+revision 1/.exec(drafted.stdout)!;
+    const exact = [
+      "--candidate",
+      candidate!,
+      "--draft",
+      draft!,
+      "--to",
+      "wordfence",
+    ];
+
+    const early = await run("review", "submitted", ...exact);
+    expect(early.code).toBe(1);
+    expect(early.stderr).toContain("not authorized");
+    expect(
+      (await run("review", "authorize", ...exact, "--by", "operator")).code,
+    ).toBe(0);
+    expect((await run("review", "submitted", ...exact)).code).toBe(0);
+    expect(
+      (
+        await run(
+          "review",
+          "outcome",
+          "--candidate",
+          candidate!,
+          "--outcome",
+          "triaged",
+        )
+      ).code,
+    ).toBe(0);
+
+    const funnel = await run("ledger", "funnel", ...campaign);
+    expect(funnel.stdout).toContain(
+      "reviewed 1 → in-scope 1 → submitted 1 → outcome 1",
+    );
+    expect(funnel.stdout).toContain("in-scope by programme: patchstack");
+    expect(funnel.stdout).toMatch(/wordfence 1/);
   });
 
   it("refuses to record a decision for a finding outside the review queue", async () => {
