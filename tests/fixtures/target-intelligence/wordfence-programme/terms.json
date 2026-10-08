@@ -1,0 +1,20 @@
+{
+  "kind": "wordfence-programme-page",
+  "schemaVersion": 2,
+  "sourceKind": "terms",
+  "assertions": {
+    "eligibility": {
+      "conditions": [
+        "latest-stable-version",
+        "exclusive-responsible-disclosure",
+        "working-proof-of-concept"
+      ],
+      "exclusions": [
+        "administrator-required",
+        "duplicate-submission",
+        "developer-self-submission",
+        "unsupported-software"
+      ]
+    }
+  }
+}

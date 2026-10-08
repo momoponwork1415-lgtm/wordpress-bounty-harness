@@ -1,0 +1,51 @@
+{
+  "kind": "wordfence-programme-page",
+  "schemaVersion": 2,
+  "sourceKind": "programme",
+  "assertions": {
+    "eligibility": {
+      "assets": [
+        {
+          "kind": "wordpress-plugin",
+          "scope": "publicly-distributed"
+        },
+        {
+          "kind": "wordpress-theme",
+          "scope": "publicly-distributed"
+        }
+      ],
+      "vulnerabilityClasses": [
+        "arbitrary-file-operation",
+        "authorization-bypass",
+        "injection",
+        "privilege-escalation",
+        "remote-code-execution",
+        "cross-site-scripting"
+      ],
+      "attackerRoles": ["unauthenticated", "subscriber", "contributor"],
+      "activeInstallThreshold": {
+        "kind": "minimum",
+        "value": 1000
+      },
+      "researcherTiers": ["standard", "resourceful", "elite"],
+      "exclusions": [
+        "administrator-required",
+        "duplicate-submission",
+        "developer-self-submission",
+        "unsupported-software"
+      ],
+      "conditions": [
+        "latest-stable-version",
+        "exclusive-responsible-disclosure",
+        "working-proof-of-concept"
+      ],
+      "limits": [
+        {
+          "key": "pending-submission-cap",
+          "value": 10
+        }
+      ]
+    },
+    "programmeOpportunityBand": "high-impact-only"
+  }
+}
