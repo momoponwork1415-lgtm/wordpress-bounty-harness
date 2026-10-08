@@ -172,4 +172,20 @@ describe("WordPress selection public interface", () => {
       "observation-stale",
     );
   });
+
+  it("selects a manually pinned version and binds the pin into the policy digest", async () => {
+    const selection = harness({});
+    const unpinned = await selection.select(basePolicy);
+    const pinnedPolicy = {
+      ...basePolicy,
+      candidateSlugs: ["exposed"],
+      pinnedVersions: { exposed: "1.0.0" },
+    };
+    const [pinned] = await selection.select(pinnedPolicy);
+    expect(pinned).toMatchObject({ slug: "exposed", version: "1.0.0" });
+    expect(pinned?.policy.digest).not.toBe(unpinned[0]?.policy.digest);
+    await expect(
+      selection.select({ ...basePolicy, pinnedVersions: { absent: "1.0.0" } }),
+    ).rejects.toThrow();
+  });
 });

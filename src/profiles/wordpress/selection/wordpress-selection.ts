@@ -173,7 +173,7 @@ export function createWordPressSelection(
       const selection: WordPressTargetSelection = {
         targetId: observation.pluginIdentity,
         slug,
-        version: observation.stableVersion,
+        version: policy.pinnedVersions?.[slug] ?? observation.stableVersion,
         activeInstallations: observation.activeInstallations,
         scoreBreakdown,
         score:
