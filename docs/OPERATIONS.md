@@ -56,6 +56,7 @@ harness review outcome <candidate> triaged|resolved|duplicate|informative|reject
 ```
 harness ledger funnel --campaign <id>     # raw → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome
 harness ledger funnel --month 2026-11     # 月単位
+harness ledger usage [--campaign <id>]   # providerが返したtokenを対象ごと・UTC日ごとに合計。返らなかった項目はunavailableの件数で示す
 ```
 
 収益の式は「対象数 × 当たり率 × in-scope率 × 平均報奨 − 月費用」。funnelの各段がこの各項に対応する。

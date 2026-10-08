@@ -96,6 +96,7 @@ const USAGE = [
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
   "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
   "  ledger funnel --campaign <id>",
+  "  ledger usage [--campaign <id>]",
   "  eval score --campaign <id> --keys <path> --case <id>",
   "  eval compare [--axis history] [--campaign <id>]",
   "  eval prospective --advisories <path> [--campaign <id>]",
@@ -543,6 +544,28 @@ export async function runCli(
             ? `outcome ${outcome} recorded`
             : `outcome ${outcome} recorded (reward $${reward.toFixed(2)})`,
         );
+        return 0;
+      }
+      case "ledger usage": {
+        const labels = {
+          inputTokens: "input",
+          cachedInputTokens: "cached",
+          outputTokens: "output",
+          reasoningOutputTokens: "reasoning",
+        } as const;
+        const rows = state.ledger.usage(
+          values.campaign === undefined ? {} : { campaignId: values.campaign },
+        );
+        io.stdout("usage by target and UTC day");
+        for (const row of rows) {
+          const fields = Object.keys(labels) as (keyof typeof labels)[];
+          const missing = fields
+            .filter((field) => row.unavailable[field] > 0)
+            .map((field) => `${labels[field]} ${row.unavailable[field]}`);
+          io.stdout(
+            `  ${row.day}  ${row.selectionId ?? "unselected"}  runs ${row.runs}  ${fields.map((field) => `${labels[field]} ${row.tokens[field]}`).join("  ")}${missing.length === 0 ? "" : `  unavailable: ${missing.join(", ")}`}`,
+          );
+        }
         return 0;
       }
       case "ledger funnel":

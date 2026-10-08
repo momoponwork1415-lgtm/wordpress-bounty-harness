@@ -300,6 +300,12 @@ async function harness(
             startedAt: now,
             completedAt: "2026-10-08T00:00:02.000Z",
             reportArtifactDigest: attachment.digest,
+            usage: {
+              inputTokens: 1000,
+              cachedInputTokens: 100,
+              outputTokens: 20,
+              reasoningOutputTokens: "unavailable",
+            },
           }),
         };
       },
@@ -808,6 +814,26 @@ describe("harness CLI vertical slice", () => {
     );
     expect(stopped.code).toBe(3);
     expect(stopped.stdout).toContain("runs 1  stopped by daily-run-cap");
+  });
+
+  it("totals provider-reported usage per target and UTC day", async () => {
+    const { run, configPath } = await harness({ limitOnCalls: [3] });
+    await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    );
+    const usage = await run("ledger", "usage");
+    expect(usage.code).toBe(0);
+    // The refused third run reported nothing, so every field shows it as unavailable.
+    expect(usage.stdout.split("\n")).toEqual([
+      "usage by target and UTC day",
+      "  2026-10-08  wporg:synthetic-plugin@3.3.1  runs 3  input 2000  cached 200  output 40  reasoning 0  unavailable: input 1, cached 1, output 1, reasoning 3",
+    ]);
   });
 
   it("skips a target that fails, records the stage and continues with the rest", async () => {
