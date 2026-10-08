@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
+import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
 
 import { z } from "zod";
@@ -60,6 +61,8 @@ export interface WordPressSourceResolver {
 }
 
 export interface WordPressLabHandle extends LabHandle {
+  readonly networkName: string;
+  readonly internalIp: string;
   readonly attackerAccounts: Readonly<{
     subscriber: { readonly username: string; readonly password: string };
     customer?: { readonly username: string; readonly password: string };
@@ -100,7 +103,7 @@ interface Resources {
   readonly wordpress: string;
   readonly databasePassword: string;
   readonly adminPassword: string;
-  readonly handle: WordPressLabHandle;
+  handle?: WordPressLabHandle;
   canaries?: WordPressCanaryLedger;
   executionNonces: Set<string>;
   networkCreated: boolean;
@@ -306,16 +309,6 @@ export function openWordPressLab(options: {
               password: randomUUID(),
             }
           : undefined;
-        const handle: WordPressLabHandle = {
-          id,
-          snapshotDigest: snapshot.digest,
-          setupDigest: canonicalDigest({ setup, images: options.images }),
-          endpoint: "http://wordpress",
-          attackerAccounts: {
-            subscriber,
-            ...(customer === undefined ? {} : { customer }),
-          },
-        };
         resource = {
           id,
           network: `${prefix}-net`,
@@ -324,7 +317,6 @@ export function openWordPressLab(options: {
           wordpress: `${prefix}-wp`,
           databasePassword: randomUUID(),
           adminPassword: randomUUID(),
-          handle,
           executionNonces: new Set(),
           networkCreated: false,
           volumeCreated: false,
@@ -382,6 +374,23 @@ export function openWordPressLab(options: {
           options.images.wordpress,
         ]);
         resource.wordpressCreated = true;
+        const inspected = await requireDocker([
+          "inspect",
+          "--format",
+          "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+          resource.wordpress,
+        ]);
+        const internalIp = inspected.stdout.trim();
+        const octets = internalIp.split(".").map(Number);
+        if (
+          isIP(internalIp) !== 4 ||
+          !(
+            octets[0] === 10 ||
+            (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) ||
+            (octets[0] === 192 && octets[1] === 168)
+          )
+        )
+          throw new Error("Lab internal address is unavailable");
         let healthy = false;
         for (let attempt = 0; attempt < attempts; attempt++) {
           const [wordpressHealth, databaseHealth] = await Promise.all([
@@ -469,6 +478,19 @@ export function openWordPressLab(options: {
             "--post_status=publish",
             `--post_title=${title}`,
           ]);
+        const handle: WordPressLabHandle = {
+          id,
+          snapshotDigest: snapshot.digest,
+          setupDigest: canonicalDigest({ setup, images: options.images }),
+          endpoint: "http://wordpress",
+          networkName: resource.network,
+          internalIp,
+          attackerAccounts: {
+            subscriber,
+            ...(customer === undefined ? {} : { customer }),
+          },
+        };
+        resource.handle = handle;
         active.set(id, resource);
         return { status: "ready", handle };
       } catch {

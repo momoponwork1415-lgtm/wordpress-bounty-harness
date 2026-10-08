@@ -109,6 +109,14 @@ describe("WordPress gVisor Lab", () => {
     if (first.status !== "ready" || second.status !== "ready") return;
     expect(first.handle.id).not.toBe(second.handle.id);
     expect(first.handle.setupDigest).toMatch(/^sha256:/);
+    expect(first.handle.internalIp).toBe("172.20.0.2");
+    expect(first.handle.networkName).toMatch(/^wbh-.+-net$/);
+    expect(
+      commands.some(
+        (command) =>
+          command.args[0] === "inspect" && command.args.includes("--format"),
+      ),
+    ).toBe(true);
     expect(Object.keys(first.handle.attackerAccounts)).toEqual(["subscriber"]);
     expect(JSON.stringify(first.handle)).not.toContain("harness-admin");
     const canaries = await lab.seedCanaries(first.handle);
