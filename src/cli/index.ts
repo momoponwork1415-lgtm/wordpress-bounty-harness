@@ -367,7 +367,11 @@ export async function runCli(
           configPath: resolve(required(values.config, "config")),
           target,
         });
-        if (summary.targets.length === 0) {
+        for (const skipped of summary.skipped)
+          io.stderr(
+            `skipped ${skipped.targetId} ${skipped.version} at ${skipped.stage}: ${skipped.message}`,
+          );
+        if (summary.targets.length === 0 && summary.skipped.length === 0) {
           io.stdout(
             target === null
               ? "no targets selected"
@@ -384,8 +388,13 @@ export async function runCli(
               `  finding ${verification.findingId}: ${verification.status}`,
             );
         }
+        if (summary.stopped !== undefined)
+          io.stdout(
+            `campaign stopped by ${summary.stopped}; run the same command again to resume`,
+          );
         print(formatFunnel(state.ledger.funnel(summary.campaignId)));
-        return 0;
+        // A distinct exit code lets an unattended schedule tell a resumable stop apart.
+        return summary.stopped === undefined ? 0 : 3;
       }
       case "review":
         print(

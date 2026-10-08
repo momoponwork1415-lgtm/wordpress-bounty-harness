@@ -78,6 +78,12 @@ async function harness(
     readonly pinned?: boolean;
     /** Opens a synthetic local Wordfence mirror holding one public record. */
     readonly history?: boolean;
+    /** Provider calls (1-based) that the subscription refuses with a quota limit. */
+    readonly limitOnCalls?: readonly number[];
+    /** Candidate slugs; the first is not pinned. */
+    readonly candidates?: readonly string[];
+    /** A slug whose snapshot cannot be frozen. */
+    readonly failFreeze?: string;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
@@ -235,7 +241,11 @@ async function harness(
   const histories: string[] = [];
   const boundaries: WordPressCampaignBoundaries = {
     selection,
-    freeze: (target) => snapshots.freeze(target),
+    freeze: async (target) => {
+      if (target.slug === options.failFreeze)
+        throw new Error("Synthetic download failure");
+      return snapshots.freeze(target);
+    },
     lab,
     sourceFor: async () => ({ directory: sourceDirectory, tree }),
     runtimeProfile: profile,
@@ -244,6 +254,19 @@ async function harness(
       async execute(run: DiscoveryTransportRun) {
         prompts.push(run.prompt);
         histories.push(run.campaignInput.history.mode);
+        if (options.limitOnCalls?.includes(prompts.length) === true)
+          return {
+            receipt: createNativeRunReceipt({
+              runId: run.runId,
+              targetSnapshotDigest: run.targetSnapshotDigest,
+              profile: run.profile,
+              terminal: "incomplete",
+              reason: "provider",
+              providerLimit: "quota",
+              startedAt: now,
+              completedAt: now,
+            }),
+          };
         const report = {
           findings:
             prompts.length === 1
@@ -332,13 +355,13 @@ async function harness(
       kind: "wordpress-selection-policy",
       schemaVersion: 1,
       id: "synthetic-pin",
-      candidateSlugs: ["synthetic-plugin"],
+      candidateSlugs: options.candidates ?? ["synthetic-plugin"],
       pinnedVersions:
         options.pinned === false ? {} : { "synthetic-plugin": "3.3.1" },
       minimumActiveInstallations: 500,
       maximumObservationAgeDays: 2,
       maximumUpdateAgeDays: 365,
-      maximumTargets: 1,
+      maximumTargets: options.candidates?.length ?? 1,
       excludedAuthors: [],
       excludedSlugs: [],
       surfaceTagWeights: {},
@@ -397,7 +420,16 @@ async function harness(
     });
     return { code, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
   };
-  return { run, configPath, keysPath, prompts, histories, docker, root };
+  return {
+    run,
+    configPath,
+    keysPath,
+    prompts,
+    histories,
+    docker,
+    root,
+    ledger: () => state.ledger,
+  };
 }
 
 /** A local mirror with one public record for the synthetic plugin, published before its last update. */
@@ -677,6 +709,74 @@ describe("harness CLI vertical slice", () => {
     const funnel = await run("ledger", "funnel", "--campaign", "campaign-1");
     expect(funnel.stdout).toContain("  history:a: runs 3");
     expect(funnel.stdout).not.toContain("history:b");
+  });
+
+  it("stops the campaign on a provider limit and resumes it with the same command", async () => {
+    const { run, configPath } = await harness({ limitOnCalls: [2] });
+    const command = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    ];
+    const stopped = await run(...command);
+    expect(stopped.code).toBe(3);
+    expect(stopped.stdout).toContain("runs 2  stopped by provider-limit");
+    expect(stopped.stdout).not.toContain("  finding ");
+    expect(stopped.stdout).toContain(
+      "campaign stopped by provider-limit; run the same command again to resume",
+    );
+    expect(stopped.stdout).toContain("raw 2 → verifier通過 0");
+
+    const resumed = await run(...command);
+    expect(resumed.code).toBe(0);
+    // One completed run was spent; two more without new Findings meet the stop rule.
+    expect(resumed.stdout).toContain("runs 2  stopped by no-new-finding");
+    expect(resumed.stdout.match(/^  finding /gm)).toHaveLength(2);
+    expect(resumed.stdout).toContain("raw 2 → verifier通過 2 → confirmed 1");
+
+    const again = await run(...command);
+    expect(again.code).toBe(0);
+    expect(again.stdout).toContain("runs 0  stopped by no-new-finding");
+    expect(again.stdout).not.toContain("  finding ");
+  });
+
+  it("skips a target that fails, records the stage and continues with the rest", async () => {
+    const { run, configPath, ledger } = await harness({
+      candidates: ["broken-plugin", "synthetic-plugin"],
+      failFreeze: "broken-plugin",
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(campaign.stderr).toContain(
+      "skipped wporg:broken-plugin 9.9.9 at freeze: Synthetic download failure",
+    );
+    expect(campaign.stdout).toMatch(
+      /^wporg:synthetic-plugin 3\.3\.1 .*stopped by no-new-finding$/m,
+    );
+    const skipped = ledger()
+      .read({ type: "target-skipped" })
+      .map(({ event }) => event);
+    expect(skipped).toMatchObject([
+      {
+        type: "target-skipped",
+        selectionId: "wporg:broken-plugin@9.9.9",
+        stage: "freeze",
+      },
+    ]);
+    // The failure text stays out of the ledger.
+    expect(JSON.stringify(skipped)).not.toContain("Synthetic download failure");
   });
 
   it("lists the policy selection and runs only the named target or --all", async () => {

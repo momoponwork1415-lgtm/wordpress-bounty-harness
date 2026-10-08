@@ -83,6 +83,20 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     type: z.literal("discovery-concluded"),
     stoppedBy: z.enum(["no-new-finding", "max-runs", "plans-exhausted"]),
   }),
+  /** The campaign stopped early; rerunning it with the same id resumes it. */
+  event({
+    type: z.literal("campaign-stopped"),
+    reason: z.enum(["provider-limit", "daily-run-cap"]),
+  }),
+  /**
+   * A target was left behind by an error. Before a snapshot exists, the
+   * snapshot digest is the digest of the selection record.
+   */
+  event({
+    type: z.literal("target-skipped"),
+    selectionId: id,
+    stage: z.enum(["freeze", "discovery", "verification"]),
+  }),
   event({
     type: z.literal("finding-recorded"),
     findingId: id,
@@ -214,6 +228,8 @@ const querySchema = z.strictObject({
       "discovery-run-started",
       "discovery-run-finished",
       "discovery-concluded",
+      "campaign-stopped",
+      "target-skipped",
       "finding-recorded",
       "verifier-run-finished",
       "verification-finished",
