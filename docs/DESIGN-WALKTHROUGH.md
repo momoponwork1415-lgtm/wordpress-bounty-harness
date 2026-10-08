@@ -141,3 +141,73 @@ promptだけに頼らず、4か所で違う強さで効かせる（SPEC第8b節�
 - Anthropic find-and-fix loop: 短い目的prompt、短命runの多数独立実行、独立verifier、「PoC失敗≠誤検知」。
 - Google Mantis: 固定段階は採らない。記録の規則（snapshot gating、再現したものだけ数える、重複判定は安全側）だけ採る。
 - OpenAI Codex Security、Cloudflare VDH、XBOW: 隔離コンテナでの検証、段階別の記録とfunnel、決定論的な判定器。
+
+## 8. 技術的な補足
+
+### gVisorとは何で、なぜ使うか
+
+通常のDockerコンテナは、ホストのLinuxカーネルをそのまま共有する。コンテナ内のプロセスが出すシステムコールはホストカーネルが直接処理するので、カーネルの脆弱性を突かれるとコンテナから抜けてホストに届く。探索エージェントも対象プラグインも「信用できないコード」なので、この壁では足りない。
+
+gVisor（実行コマンド名 `runsc`）は、コンテナとホストカーネルの間に「ユーザー空間で動く小さなカーネル」（Sentry）を挟む。コンテナ内のシステムコールはまずSentryが受け、Sentryが自分で処理するか、ごく限られた呼び出しだけをホストへ渡す。ホストカーネルに届く攻撃面が大幅に減るため、Google Cloud RunやAnthropicの探索基盤が同じ方式を使っている。Dockerからは `--runtime=runsc` を付けるだけで使え、イメージは変えなくてよい。代償は性能（I/Oとシステムコールが遅い）と、一部の機能が動かないこと（ここが第14節のspike: headless browserが中で動くか）。
+
+Harnessでは2種類のコンテナをgVisorで動かす。
+
+| コンテナ | 中身 | 外に出られる先 |
+| --- | --- | --- |
+| Lab | WordPress + MySQL + 対象プラグイン + canary | なし。同じrunのinternal networkだけ |
+| agent（discovery run / Verifier） | Codex CLI + 読み取り専用source | Lab（HTTP）と、egress broker経由のprovider APIだけ |
+
+「利用不能時に弱い隔離へ黙って切り替えない」のは、runscがないホストで通常のDockerにfallbackすると、対象コードがホストカーネルに触れるため。起動前に確認し、なければ止まる。
+
+### egress broker（認証ブローカー）
+
+エージェントがOpenAIのAPIを呼ぶにはAPIキーかログイン情報が要るが、それをコンテナに置くと、対象コードやpromptの汚染で盗まれうる。そこでキーはホスト側のブローカーだけが持ち、コンテナからは認証なしのローカルendpointへ送り、ブローカーが認証を付けて転送する。ブローカーは転送先をprovider APIに固定し、それ以外の外向き通信は存在しない。旧リポジトリの `provider-credential-egress-broker` がこれで、新リポジトリの `src/discovery/` に移してある。
+
+### Snapshot digest
+
+取得したzipを展開し、ファイルの相対path・内容ハッシュ・権限を正規化した一覧（canonical manifest）にして、その一覧のハッシュをdigestとする。symlinkや不正pathやサイズ超過はここで拒否する。Findingにも検証結果にもこのdigestが入り、台帳はdigestが一致するときだけ判定を有効にする。これにより「探索したのは3.1.0、検証したのは3.1.1だった」という事故が起きない。
+
+### canaryとnonce
+
+canaryは「本来触れないはずの場所に置いた、推測不能な値」。nonceはその値のこと（1回限りの乱数）。判定器は「nonceが応答に出た」「nonceが受信先に届いた」「nonceの行が変わった」という事実だけを見る。エージェントの説明文を読まない。これが決定論的判定器の意味で、同じ入力なら誰がやっても同じ結果になる。
+
+| 分類 | canaryの置き方 | 判定器が見る事実 |
+| --- | --- | --- |
+| RCE / PHPファイル書き込み | Execution Canary: 実行されるとLab内の受信先へnonceを送るコード片。攻撃者が置けるのは「実行されたら記録が残る」ものだけで、シェルは取らない | 受信先のログにnonceがある |
+| SQLi | `wp_options` やcanary表にnonce入りの行 | 応答にnonceが出る、またはcanary表に書き込みがある |
+| ファイル読み取り / LFI | nonceを中身に持つファイルを `wp-content` 外に置く | 応答にnonceが出る。path と拡張子を攻撃者が指定した記録 |
+| options更新 | nonce入りのcanary option と、重大なoption（`users_can_register` 等）の初期値 | 低権限のリクエスト後に値が変わった |
+| XSS | subscriberがnonce入りのscriptを置く。Lab内のheadless browser（Chromium）が、未認証訪問者としてページを開き、別に管理者として管理画面を開く | 受信先にnonceが届いた。どのcontextで発火したかを記録 |
+| 権限昇格 / 乗っ取り | canary user と、各ロールの正常操作の記録 | 低権限のセッションが管理者だけの操作に成功、または他主体の認証状態を得た |
+
+### 探索1回（discovery run）の中で何が起きるか
+
+Harnessが用意するのは、prompt、trust境界宣言、担当ファイル、Lab、認証情報だけ。中の手順はエージェント（Codex CLIの上のgpt-6.1-sol）が自分で決める。典型的にはこう進む。
+
+1. 担当ファイルから入口を列挙する。WordPressでは、`add_action('wp_ajax_nopriv_…')`（未認証AJAX）、`wp_ajax_…`（認証AJAX）、`register_rest_route`（REST。`permission_callback` が誰を通すか）、`add_shortcode`（投稿内で動く）、`init` / `template_redirect` で `$_GET` / `$_POST` を読むもの、フォームの送信先。
+2. 入口ごとに「誰が叩けるか」を読む。nonce検査、`current_user_can`、ログイン要否、`permission_callback`。trust境界宣言により、subscriberで届く入口だけが価値を持つ。
+3. 入口から先を辿り、危険な到達点（SQL、ファイル操作、option更新、user metaやroleの変更、出力）までのデータの流れを追う。途中の制御（`$wpdb->prepare`、`sanitize_*`、`esc_*`、拡張子検査、path正規化）を1つずつ評価する。
+4. 「このcheckが欠けている、または迂回できる」という仮説を立てたら、Labに対してsubscriberまたは未認証でリクエストを送り、canaryが動いたかを自分で見る。動かなければ仮説を直すか捨てる。
+5. 成立したと思うものをFindingとして書く。攻撃者の立場、影響の分類、経路、既存controlの評価、Labで観測した事実、再現の手がかり。成立しなければ0件で終わり、「読んだ範囲と読まなかった範囲」を残す。
+
+Harnessはこの手順を強制しない。promptに手順を書き込むのはwp2shell由来の変種で、短い目的promptの変種は目標と境界だけを渡す。どちらが良いかは評価で決める。
+
+### なぜ1回ではなく40回か
+
+1回の探索でその脆弱性が見つかる確率を p とすると、独立に k 回やって1度でも見つかる確率は 1 − (1 − p)^k。p が 0.2 でも k = 10 で 0.89、k = 20 で 0.99 になる。探索は確率的で、同じ入力でも読む順番や立てる仮説がrunごとに違うため、独立試行を重ねるほど見逃しが減る。これがpass@kの考え方で、AnthropicもOpenAIも同じ理由で多数の短いrunを使う。
+
+加えて3つの利点がある。
+
+- **分担で網羅する。** 1 runに全ファイルを渡すと、文脈が肥大して後半の判断が落ちる。入口単位で分割して各runに違う担当を渡せば、各runは自分の範囲を深く読める。
+- **一致が信号になる。** 互いを知らない複数のrunが同じ場所を指したら、それ自体が確度の根拠になる。長い1セッションではこの信号が得られない。
+- **測れる。** 各runが独立なので、5試行の当たり率に区間が付けられ、構成を変えたときの差を統計的に比べられる。
+
+40は上限であって目標ではない。実際の停止は「新規Findingなしが4回続いたら」で、多くの対象は10〜20回で止まる見込み。40とk = 4の初期値はCodex Securityのdeep scanの既定に合わせたもので、第14節のspikeで1 runの費用と時間を測ってから調整する。同時4つはホストの資源とproviderのrate limitによる上限。
+
+### Verifierと判定器の分業
+
+Verifierはエージェント（LLM）で、判定器はコード。Verifierの仕事は「Findingの再現手がかりを、新しいLabで動く手順にすること」と「反証を試みること」。たとえばFindingが指すAJAX actionが別の設定に依存していたら、それを見つけて `incomplete(precondition)` に理由を書く。判定器の仕事は、その手順を実行した後にcanaryの事実があるかを見るだけ。Verifierが「成功した」と書いても、判定器がnonceを見つけなければ `runtime-confirmed` にならない。逆にVerifierが懐疑的でも、nonceがあれば confirmed になる。
+
+### 分担（file partition）の単位
+
+プラグインを「ファイル単位」で割ると、1つの機能が複数ファイルにまたがって文脈が切れる。「入口単位」（1つのAJAX action、1つのRESTルート、1つのshortcodeと、そこから到達する関数群）で割ると、各runが1つの機能を端から端まで読める。profileが入口を列挙して分担を作り、共通ライブラリ（ヘルパー、DB層）は全runに読み取り可能にする。どちらの単位が良いかも評価で比べる（SPEC第10節のablation「分担有無」）。
