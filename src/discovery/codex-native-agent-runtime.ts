@@ -276,6 +276,15 @@ const failureEventSchema = z.union([
   }),
 ]);
 
+/**
+ * How the CLI reaches the provider: an API key held by the broker, or the
+ * host's ChatGPT login relayed by a TLS broker. Neither reaches the agent.
+ */
+const CODEX_AUTHENTICATION_METHODS: readonly string[] = [
+  "host-private-bearer",
+  "chatgpt-oauth-host",
+];
+
 /** Classifies the CLI's failure events; the broker's own grant cap is not a provider limit. */
 function providerLimitOf(stdout: string): "rate-limit" | "quota" | undefined {
   let limit: "rate-limit" | "quota" | undefined;
@@ -335,7 +344,9 @@ export class CodexNativeAgentRuntime {
         "admitted" ||
       run.prompt.length === 0 ||
       !isAbsolute(run.sourceDirectory) ||
-      run.profile.authenticationMethod !== "host-private-bearer" ||
+      !CODEX_AUTHENTICATION_METHODS.includes(
+        run.profile.authenticationMethod,
+      ) ||
       run.profile.subagent.modelId !== "unavailable" ||
       run.profile.subagent.effort !== "unavailable"
     )
@@ -364,7 +375,15 @@ export class CodexNativeAgentRuntime {
         async (grant) => {
           if (grant.dockerNetworkName !== run.lab.networkName)
             throw new Error("Provider grant is not on the Lab network");
-          if (!/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(grant.baseUrl)) {
+          const login =
+            run.profile.authenticationMethod === "chatgpt-oauth-host";
+          if (
+            login
+              ? grant.tls === undefined ||
+                grant.baseUrl !== `https://${grant.tls.hostname}:8080`
+              : grant.tls !== undefined ||
+                !/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(grant.baseUrl)
+          ) {
             throw new Error("Provider broker address is invalid");
           }
           return this.sandbox.execute({
@@ -392,8 +411,15 @@ export class CodexNativeAgentRuntime {
               "features.multi_agent=false",
               "-c",
               `model_reasoning_effort="${run.profile.requestedEffort}"`,
-              "-c",
-              `openai_base_url="${grant.baseUrl}/v1"`,
+              ...(login
+                ? [
+                    "-c",
+                    `chatgpt_base_url="${grant.baseUrl}/backend-api/"`,
+                    // The broker reads the model from the body before forwarding.
+                    "--disable",
+                    "enable_request_compression",
+                  ]
+                : ["-c", `openai_base_url="${grant.baseUrl}/v1"`]),
               ...(run.profile.serviceTier === "unavailable"
                 ? []
                 : ["-c", `service_tier="${run.profile.serviceTier}"`]),

@@ -16,6 +16,10 @@ import {
   runNativeModelProcess,
   type NativeModelProcessResult,
 } from "../infrastructure/native-model-process.js";
+import {
+  BROKER_TLS_HOSTNAME,
+  CHATGPT_PLACEHOLDER_ACCOUNT_ID,
+} from "./provider-credential-proxy.js";
 import type {
   CodexSandbox,
   CodexSandboxCommand,
@@ -48,6 +52,45 @@ type DockerRun = (
   stdin: string | undefined,
   timeoutMs: number,
 ) => Promise<NativeModelProcessResult>;
+
+const base64url = (value: unknown) =>
+  Buffer.from(JSON.stringify(value)).toString("base64url");
+
+/**
+ * A Codex CLI login whose only secret is the grant token. The id token is
+ * unsigned and carries just the placeholder account the broker expects; the
+ * real login never leaves the broker.
+ */
+function grantLogin(grantToken: string, now: Date, expiresAt: string): string {
+  const issuedAt = Math.floor(now.getTime() / 1000);
+  const idToken = [
+    base64url({ alg: "none", typ: "JWT" }),
+    base64url({
+      iss: "https://auth.openai.com",
+      sub: "egress-grant",
+      email: "egress-grant@example.invalid",
+      iat: issuedAt,
+      exp: Math.floor(new Date(expiresAt).getTime() / 1000),
+      "https://api.openai.com/auth": {
+        chatgpt_plan_type: "pro",
+        chatgpt_account_id: CHATGPT_PLACEHOLDER_ACCOUNT_ID,
+        chatgpt_user_id: "egress-grant",
+      },
+    }),
+    Buffer.from("unsigned").toString("base64url"),
+  ].join(".");
+  return JSON.stringify({
+    auth_mode: "chatgpt",
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: idToken,
+      access_token: grantToken,
+      refresh_token: "",
+      account_id: CHATGPT_PLACEHOLDER_ACCOUNT_ID,
+    },
+    last_refresh: now.toISOString(),
+  });
+}
 
 function nonRootUser(): string {
   if (
@@ -185,8 +228,16 @@ export class GvisorCodexSandbox implements CodexSandbox {
 
   async execute(command: CodexSandboxCommand): Promise<CodexSandboxResult> {
     networkSchema.parse(command.grant.dockerNetworkName);
+    const tls = command.grant.tls;
     if (
-      !/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(command.grant.baseUrl)
+      tls === undefined
+        ? !/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(command.grant.baseUrl)
+        : tls.hostname !== BROKER_TLS_HOSTNAME ||
+          command.grant.baseUrl !== `https://${BROKER_TLS_HOSTNAME}:8080` ||
+          isIP(tls.address) !== 4 ||
+          !/^-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]+-----END CERTIFICATE-----\n$/.test(
+            tls.caPem,
+          )
     ) {
       throw new Error("Provider broker address is invalid");
     }
@@ -226,6 +277,16 @@ export class GvisorCodexSandbox implements CodexSandbox {
     )
       throw new Error("Codex scratch root is unavailable");
     const staging = await mkdtemp(join(scratchRoot, "codex-run-"));
+    // A login grant needs a writable CLI home holding the per-run login.
+    const codexHome =
+      tls === undefined
+        ? undefined
+        : await mkdtemp(join(scratchRoot, "codex-home-")).catch(
+            async (error: unknown) => {
+              await rm(staging, { recursive: true, force: true });
+              throw error;
+            },
+          );
     const now = this.#options.clock ?? (() => new Date());
     const token = command.grant.authorization.replace(/^Bearer /, "");
     const runDocker = this.#docker(scratchRoot, token);
@@ -236,6 +297,17 @@ export class GvisorCodexSandbox implements CodexSandbox {
         command.supportFiles[0].content,
         { flag: "wx", mode: 0o600 },
       );
+      if (tls !== undefined && codexHome !== undefined) {
+        await writeFile(join(staging, "grant-ca.pem"), tls.caPem, {
+          flag: "wx",
+          mode: 0o600,
+        });
+        await writeFile(
+          join(codexHome, "auth.json"),
+          grantLogin(token, now(), command.grant.expiresAt),
+          { flag: "wx", mode: 0o600 },
+        );
+      }
       const { cliVersion, bundledCatalogDigest } = await this.#probe(runDocker);
       const startedAt = now().toISOString();
       const args = [
@@ -249,7 +321,13 @@ export class GvisorCodexSandbox implements CodexSandbox {
         "--workdir=/workspace/main",
         "--env=HOME=/tmp",
         "--env=CODEX_HOME=/tmp/codex",
-        `--env=OPENAI_API_KEY=${token}`,
+        ...(tls === undefined || codexHome === undefined
+          ? [`--env=OPENAI_API_KEY=${token}`]
+          : [
+              `--add-host=${BROKER_TLS_HOSTNAME}:${tls.address}`,
+              `--mount=type=bind,src=${codexHome},dst=/tmp/codex`,
+              "--env=CODEX_CA_CERTIFICATE=/opt/codex-support/grant-ca.pem",
+            ]),
         "--entrypoint=codex",
         this.#options.image,
         ...command.args,
@@ -273,6 +351,8 @@ export class GvisorCodexSandbox implements CodexSandbox {
       };
     } finally {
       await rm(staging, { recursive: true, force: true });
+      if (codexHome !== undefined)
+        await rm(codexHome, { recursive: true, force: true });
     }
   }
 }
