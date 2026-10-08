@@ -1,6 +1,13 @@
 import { z } from "zod";
 
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
+import type { Ledger } from "../ledger/index.js";
+import type {
+  DiscoveryTransportRun,
+  DiscoveryTransportResult,
+} from "./codex-native-agent-runtime.js";
+import { nativeRunReceiptSchema } from "./native-run-receipts.js";
+import type { ProviderAttachmentStore } from "./provider-research-report.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const publishedAt = z.iso.datetime({ offset: true });
@@ -146,4 +153,203 @@ export function historyForRun(
     Math.floor(ordinal * historyFraction)
     ? admitted
     : { mode: "none" };
+}
+
+type AdmittedFinding = {
+  readonly findingId: string;
+  readonly discoveryRunId: string;
+  readonly snapshotDigest: string;
+  readonly claim: string;
+  readonly impact: string;
+  readonly sourceTrace: readonly unknown[];
+  readonly historyRecordId?: string | undefined;
+};
+
+export type PlannedDiscoveryRun = {
+  readonly run: Omit<DiscoveryTransportRun, "campaignInput">;
+  readonly configuration: {
+    readonly promptVariant: string;
+    readonly assignmentUnit: string;
+  };
+};
+
+const providerReportSchema = z.strictObject({
+  findings: z.array(z.unknown()),
+  examined: z.string(),
+  unexamined: z.string(),
+});
+
+/** Run independent provider calls, record only admitted claims, and stop on no new findings. */
+export async function runDiscoveryCampaign(options: {
+  readonly campaignId: string;
+  readonly labId: string;
+  readonly input: CampaignInputV1;
+  readonly historyFraction: number;
+  readonly plannedRuns: readonly PlannedDiscoveryRun[];
+  readonly executor: {
+    execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
+  };
+  readonly attachments: ProviderAttachmentStore;
+  readonly ledger: Ledger;
+  readonly admitFinding: (
+    candidate: unknown,
+    context: {
+      runId: string;
+      snapshotDigest: string;
+      reportArtifactDigest: string;
+    },
+  ) => AdmittedFinding;
+  readonly clock?: () => Date;
+}): Promise<{
+  readonly runCount: number;
+  readonly findingsRecorded: number;
+  readonly stoppedBy: "no-new-finding" | "max-runs" | "plans-exhausted";
+}> {
+  const input = campaignInputV1Schema.parse(options.input);
+  const id = z.string().min(1).max(128);
+  id.parse(options.campaignId);
+  id.parse(options.labId);
+  if (
+    !Number.isFinite(options.historyFraction) ||
+    options.historyFraction < 0 ||
+    options.historyFraction > 1
+  )
+    throw new Error("Invalid history allocation fraction");
+  const clock = options.clock ?? (() => new Date());
+  const seen = new Set<string>();
+  let noNewFindings = 0;
+  let runCount = 0;
+  let findingsRecorded = 0;
+  const limit = Math.min(input.stopRules.maxRuns, options.plannedRuns.length);
+  for (let index = 0; index < limit; index++) {
+    const planned = options.plannedRuns[index]!;
+    const run = planned.run;
+    if (
+      run.targetSnapshotDigest !== input.snapshotDigest ||
+      run.profile.digest !== input.modelProfileDigest
+    )
+      throw new Error("Planned run differs from the CampaignInput");
+    const history =
+      input.history.mode === "catalog"
+        ? historyForRun(index, options.historyFraction, input.history)
+        : { mode: "none" as const };
+    const historyMetadata =
+      history.mode === "catalog"
+        ? {
+            mode: "catalog" as const,
+            digest: history.digest,
+            recordIds: history.records.map((record) => record.id),
+          }
+        : { mode: "none" as const };
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: options.campaignId,
+      snapshotDigest: input.snapshotDigest,
+      occurredAt: clock().toISOString(),
+    };
+    const started = await options.ledger.append({
+      ...base,
+      identity: `discovery-start-${run.runId}`,
+      type: "discovery-run-started",
+      runId: run.runId,
+      labId: options.labId,
+      history: historyMetadata,
+      configuration: planned.configuration,
+    });
+    if (started.status === "conflict")
+      throw new Error("Discovery run identity conflict");
+    runCount++;
+    let outcome: "completed" | "failed" = "failed";
+    let wallTimeMs = 0;
+    let foundNew = false;
+    try {
+      const result = await options.executor.execute({
+        ...run,
+        campaignInput: { ...input, history },
+      });
+      const receipt = nativeRunReceiptSchema.parse(result.receipt);
+      wallTimeMs = Math.max(
+        0,
+        Date.parse(receipt.completedAt) - Date.parse(receipt.startedAt),
+      );
+      if (
+        receipt.terminal === "completed" &&
+        receipt.runId === run.runId &&
+        receipt.targetSnapshotDigest === input.snapshotDigest &&
+        receipt.runtimeProfileDigest === run.profile.digest &&
+        result.attachment !== undefined &&
+        receipt.reportArtifactDigest === result.attachment.digest
+      ) {
+        const stored = await options.attachments.read(result.attachment);
+        if (stored.status === "resolved") {
+          const report = providerReportSchema.parse(
+            JSON.parse(stored.bytes.toString("utf8")) as unknown,
+          );
+          const findings = report.findings.map((candidate) =>
+            options.admitFinding(candidate, {
+              runId: run.runId,
+              snapshotDigest: input.snapshotDigest,
+              reportArtifactDigest: result.attachment!.digest,
+            }),
+          );
+          for (const finding of findings) {
+            if (
+              finding.discoveryRunId !== run.runId ||
+              finding.snapshotDigest !== input.snapshotDigest
+            )
+              throw new Error("Finding differs from its run");
+          }
+          for (const finding of findings) {
+            const appended = await options.ledger.append({
+              ...base,
+              identity: `discovery-finding-${finding.findingId}`,
+              type: "finding-recorded",
+              findingId: finding.findingId,
+              runId: run.runId,
+              category: finding.impact,
+              ...(finding.historyRecordId === undefined
+                ? {}
+                : { historyRecordId: finding.historyRecordId }),
+            });
+            if (appended.status === "conflict")
+              throw new Error("Finding identity conflict");
+            findingsRecorded += appended.status === "appended" ? 1 : 0;
+            const signature = canonicalDigest({
+              claim: finding.claim,
+              impact: finding.impact,
+              sourceTrace: finding.sourceTrace,
+            });
+            if (!seen.has(signature)) foundNew = true;
+            seen.add(signature);
+          }
+          outcome = "completed";
+        }
+      }
+    } catch {
+      outcome = "failed";
+    }
+    const finished = await options.ledger.append({
+      ...base,
+      identity: `discovery-finish-${run.runId}`,
+      type: "discovery-run-finished",
+      runId: run.runId,
+      outcome,
+      costUsd: "unavailable",
+      wallTimeMs,
+    });
+    if (finished.status === "conflict")
+      throw new Error("Discovery finish identity conflict");
+    if (outcome === "completed")
+      noNewFindings = foundNew ? 0 : noNewFindings + 1;
+    if (noNewFindings >= input.stopRules.noFindingRuns)
+      return { runCount, findingsRecorded, stoppedBy: "no-new-finding" };
+  }
+  return {
+    runCount,
+    findingsRecorded,
+    stoppedBy:
+      options.plannedRuns.length >= input.stopRules.maxRuns
+        ? "max-runs"
+        : "plans-exhausted",
+  };
 }
