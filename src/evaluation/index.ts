@@ -210,8 +210,13 @@ export class Evaluation {
       )
         continue;
       const end = finished.get(event.runId);
-      // An unfinished or setup-failed run was never a discovery attempt.
-      if (end === undefined || end.outcome === "setup-failed") continue;
+      // Unfinished, setup-failed and provider-refused runs were never discovery attempts.
+      if (
+        end === undefined ||
+        end.outcome === "setup-failed" ||
+        end.outcome === "provider-limited"
+      )
+        continue;
       const target = targets.get(event.snapshotDigest) ?? {
         a: emptyTally(),
         b: emptyTally(),

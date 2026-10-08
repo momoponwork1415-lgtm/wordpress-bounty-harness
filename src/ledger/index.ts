@@ -21,6 +21,11 @@ const base = z.strictObject({
   artifacts: z.array(artifactRef).default([]),
 });
 
+const tokens = z.union([
+  z.number().int().nonnegative(),
+  z.literal("unavailable"),
+]);
+
 const event = <T extends z.ZodRawShape>(shape: T) =>
   z.strictObject({ ...base.shape, ...shape });
 
@@ -55,9 +60,28 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
   event({
     type: z.literal("discovery-run-finished"),
     runId: id,
-    outcome: z.enum(["completed", "failed", "setup-failed"]),
+    /** `provider-limited`: the subscription refused the run; it does not spend the target's budget. */
+    outcome: z.enum([
+      "completed",
+      "failed",
+      "setup-failed",
+      "provider-limited",
+    ]),
     costUsd: z.union([z.number().nonnegative(), z.literal("unavailable")]),
     wallTimeMs: z.number().int().nonnegative(),
+    /** Provider-reported tokens; absent when the transport returned no receipt. */
+    usage: z
+      .strictObject({
+        inputTokens: tokens,
+        cachedInputTokens: tokens,
+        outputTokens: tokens,
+        reasoningOutputTokens: tokens,
+      })
+      .optional(),
+  }),
+  event({
+    type: z.literal("discovery-concluded"),
+    stoppedBy: z.enum(["no-new-finding", "max-runs", "plans-exhausted"]),
   }),
   event({
     type: z.literal("finding-recorded"),
@@ -189,6 +213,7 @@ const querySchema = z.strictObject({
       "lab-provisioned",
       "discovery-run-started",
       "discovery-run-finished",
+      "discovery-concluded",
       "finding-recorded",
       "verifier-run-finished",
       "verification-finished",
