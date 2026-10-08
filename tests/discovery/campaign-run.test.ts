@@ -97,6 +97,7 @@ async function campaign(findingRuns: readonly number[]) {
     labId: "lab-1",
     input,
     historyFraction: 0.5,
+    ablation: { axis: "history" },
     ledger,
     attachments,
     evidence,
@@ -180,6 +181,32 @@ it("stops after consecutive completed runs without a new Finding and records eac
     knownCostUsd: 0,
     unpricedRuns: 3,
     wallTimeMs: 3000,
+  });
+});
+
+it("records the history arm the runner allocated to each run and counts runs and Findings per arm", async () => {
+  const { ledger } = await campaign([1]);
+  expect(
+    ledger
+      .read({ type: "discovery-run-started" })
+      .map(({ event }) =>
+        event.type === "discovery-run-started"
+          ? [
+              event.history.mode,
+              event.configuration.axis,
+              event.configuration.arm,
+            ]
+          : null,
+      ),
+  ).toEqual([
+    ["none", "history", "a"],
+    ["catalog", "history", "b"],
+    ["none", "history", "a"],
+    ["catalog", "history", "b"],
+  ]);
+  expect(ledger.funnel("campaign-1").byArm).toEqual({
+    "history:a": { runs: 2, findings: 0, confirmed: 0 },
+    "history:b": { runs: 2, findings: 1, confirmed: 0 },
   });
 });
 
