@@ -225,6 +225,11 @@ export type AdmittedLead = {
   readonly discoveryRunId: string;
   readonly trialId: string;
   readonly snapshotDigest: string;
+  readonly primitive: string;
+  readonly storage: { readonly kind: string; readonly key: string } | null;
+  readonly missingEdge:
+    "producer" | "consumer" | "auth-use" | "reachability" | "precondition";
+  readonly sourceTrace: readonly { readonly file: string }[];
 };
 
 export type PlannedTrial = {
@@ -281,6 +286,16 @@ export async function runDiscoveryCampaign(options: {
       reportArtifactDigest: string;
     },
   ) => AdmittedFinding;
+  readonly admitLead?: (
+    candidate: unknown,
+    context: {
+      runId: string;
+      trialId: string;
+      snapshotDigest: string;
+      reportArtifactDigest: string;
+    },
+  ) => AdmittedLead;
+  readonly leadSignature?: (lead: AdmittedLead) => string;
   readonly clock?: () => Date;
 }): Promise<{
   readonly runCount: number;
@@ -384,25 +399,13 @@ export async function runDiscoveryCampaign(options: {
   let next = spent;
   const runOne = async (index: number) => {
     const trial = options.plannedTrials[index]!;
-    const planned = trial.explore;
-    const run =
-      options.runWallTimeMs === undefined
-        ? planned.run
-        : {
-            ...planned.run,
-            expiresAt: new Date(
-              clock().getTime() + options.runWallTimeMs,
-            ).toISOString(),
-          };
-    if (trial.trialId !== run.runId || trial.trialOrdinal !== index)
+    if (
+      trial.trialId !== trial.explore.run.runId ||
+      trial.trialOrdinal !== index
+    )
       throw new Error(
         "Trial identity or ordinal differs from its exploration run",
       );
-    if (
-      run.targetSnapshotDigest !== input.snapshotDigest ||
-      run.profile.digest !== input.modelProfileDigest
-    )
-      throw new Error("Planned run differs from the CampaignInput");
     const assignedArms = allocateTrialArms(
       trial.trialOrdinal,
       options.ablation?.axes ?? [],
@@ -427,175 +430,315 @@ export async function runDiscoveryCampaign(options: {
             recordIds: history.records.map((record) => record.id),
           }
         : { mode: "none" as const };
-    const base = {
-      schemaVersion: 1 as const,
-      campaignId: options.campaignId,
-      snapshotDigest: input.snapshotDigest,
-      occurredAt: clock().toISOString(),
-    };
-    const started = await options.ledger.append({
-      ...base,
-      identity: `discovery-start-${run.runId}`,
-      type: "discovery-run-started",
-      runId: run.runId,
-      trialId: trial.trialId,
-      trialOrdinal: trial.trialOrdinal,
-      runKind: "explore",
-      labId: options.labId,
-      history: historyMetadata,
-      configuration: {
-        ...planned.configuration,
-        promptDigest: planned.configuration.promptDigest ?? input.promptDigest,
-        trustBoundaryVersion: input.trustBoundary.version,
-        sourcePack: {
-          dependency:
-            run.dependencySource === undefined
-              ? ("none" as const)
-              : ("mounted" as const),
-        },
-        ...(options.ablation === undefined ? {} : { arms }),
-      },
-    });
-    if (started.status === "conflict")
-      throw new Error("Discovery run identity conflict");
-    runCount++;
-    let outcome: "completed" | "failed" | "provider-limited" = "failed";
-    let wallTimeMs = 0;
-    let foundNew = false;
-    let usage: NativeRunReceipt["usage"] | undefined;
-    let observed: NativeRunReceipt["observed"] | undefined;
-    let sandboxExitCode: number | undefined;
-    let diagnosticArtifactDigest: string | undefined;
-    let receiptDigest: string | undefined;
-    let failure:
-      | {
-          readonly reason: Exclude<NativeRunReceipt["reason"], "unavailable">;
-          readonly reasonDetail?: string;
-          readonly providerLimit?: "rate-limit" | "quota";
-        }
-      | undefined;
-    try {
-      const result = await options.executor.execute({
-        ...run,
-        campaignInput: {
-          ...input,
+    const executePlanned = async (
+      planned: PlannedDiscoveryRun,
+      runKind: "explore" | "continue",
+      continuationOf?: string,
+      runWallTimeMs = options.runWallTimeMs,
+    ): Promise<{
+      outcome: "completed" | "failed" | "provider-limited";
+      foundNew: boolean;
+      leads: AdmittedLead[];
+    }> => {
+      const run =
+        runWallTimeMs === undefined
+          ? planned.run
+          : {
+              ...planned.run,
+              expiresAt: new Date(
+                clock().getTime() + runWallTimeMs,
+              ).toISOString(),
+            };
+      if (
+        runKind === "continue" &&
+        (continuationOf === undefined ||
+          run.runId === trial.trialId ||
+          run.sourceDirectory !== trial.explore.run.sourceDirectory ||
+          run.sourceTree.digest !== trial.explore.run.sourceTree.digest ||
+          run.dependencySource?.tree.digest !==
+            trial.explore.run.dependencySource?.tree.digest ||
+          canonicalDigest(run.lab) !== canonicalDigest(trial.explore.run.lab))
+      )
+        throw new Error(
+          "Continuation differs from its Trial source pack or Lab",
+        );
+      if (
+        run.targetSnapshotDigest !== input.snapshotDigest ||
+        run.profile.digest !== input.modelProfileDigest
+      )
+        throw new Error("Planned run differs from the CampaignInput");
+      const base = {
+        schemaVersion: 1 as const,
+        campaignId: options.campaignId,
+        snapshotDigest: input.snapshotDigest,
+        occurredAt: clock().toISOString(),
+      };
+      const started = await options.ledger.append({
+        ...base,
+        identity: `discovery-start-${run.runId}`,
+        type: "discovery-run-started",
+        runId: run.runId,
+        trialId: trial.trialId,
+        trialOrdinal: trial.trialOrdinal,
+        runKind,
+        ...(continuationOf === undefined ? {} : { continuationOf }),
+        labId: options.labId,
+        history: historyMetadata,
+        configuration: {
+          ...planned.configuration,
           promptDigest:
             planned.configuration.promptDigest ?? input.promptDigest,
-          history,
+          trustBoundaryVersion: input.trustBoundary.version,
+          sourcePack: {
+            dependency:
+              run.dependencySource === undefined
+                ? ("none" as const)
+                : ("mounted" as const),
+          },
+          ...(options.ablation === undefined ? {} : { arms }),
         },
       });
-      const receipt = nativeRunReceiptSchema.parse(result.receipt);
-      wallTimeMs = Math.max(
-        0,
-        Date.parse(receipt.completedAt) - Date.parse(receipt.startedAt),
-      );
-      usage = receipt.usage;
-      observed = receipt.observed;
-      sandboxExitCode = receipt.sandboxExitCode;
-      diagnosticArtifactDigest = receipt.diagnosticArtifactDigest;
-      // The receipt carries the runtime the run used (CLI version, catalog digest, model).
-      receiptDigest = await options.evidence.putFiles({
-        "receipt.json": canonicalJson(receipt),
-      });
-      if (receipt.providerLimit !== undefined) outcome = "provider-limited";
-      if (receipt.terminal === "incomplete" && receipt.reason !== "unavailable")
-        failure = {
-          reason: receipt.reason,
-          ...(receipt.reasonDetail === undefined
-            ? {}
-            : { reasonDetail: receipt.reasonDetail }),
-          ...(receipt.providerLimit === undefined
-            ? {}
-            : { providerLimit: receipt.providerLimit }),
-        };
-      if (
-        receipt.terminal === "completed" &&
-        receipt.runId === run.runId &&
-        receipt.targetSnapshotDigest === input.snapshotDigest &&
-        receipt.runtimeProfileDigest === run.profile.digest &&
-        result.attachment !== undefined &&
-        receipt.reportArtifactDigest === result.attachment.digest
-      ) {
-        const stored = await options.attachments.read(result.attachment);
-        if (stored.status === "resolved") {
-          const report = providerReportSchema.parse(
-            JSON.parse(stored.bytes.toString("utf8")) as unknown,
-          );
-          const findings = report.findings.map((candidate) =>
-            options.admitFinding(candidate, {
-              runId: run.runId,
-              snapshotDigest: input.snapshotDigest,
-              reportArtifactDigest: result.attachment!.digest,
+      if (started.status === "conflict")
+        throw new Error("Discovery run identity conflict");
+      if (runKind === "explore") runCount++;
+      let outcome: "completed" | "failed" | "provider-limited" = "failed";
+      let wallTimeMs = 0;
+      let foundNew = false;
+      const admittedLeads: AdmittedLead[] = [];
+      let usage: NativeRunReceipt["usage"] | undefined;
+      let observed: NativeRunReceipt["observed"] | undefined;
+      let sandboxExitCode: number | undefined;
+      let diagnosticArtifactDigest: string | undefined;
+      let receiptDigest: string | undefined;
+      let failure:
+        | {
+            readonly reason: Exclude<NativeRunReceipt["reason"], "unavailable">;
+            readonly reasonDetail?: string;
+            readonly providerLimit?: "rate-limit" | "quota";
+          }
+        | undefined;
+      try {
+        const result = await options.executor.execute({
+          ...run,
+          campaignInput: {
+            ...input,
+            promptDigest:
+              planned.configuration.promptDigest ?? input.promptDigest,
+            history,
+          },
+        });
+        const receipt = nativeRunReceiptSchema.parse(result.receipt);
+        wallTimeMs = Math.max(
+          0,
+          Date.parse(receipt.completedAt) - Date.parse(receipt.startedAt),
+        );
+        usage = receipt.usage;
+        observed = receipt.observed;
+        sandboxExitCode = receipt.sandboxExitCode;
+        diagnosticArtifactDigest = receipt.diagnosticArtifactDigest;
+        // The receipt carries the runtime the run used (CLI version, catalog digest, model).
+        receiptDigest = await options.evidence.putFiles({
+          "receipt.json": canonicalJson(receipt),
+        });
+        if (receipt.providerLimit !== undefined) outcome = "provider-limited";
+        if (
+          receipt.terminal === "incomplete" &&
+          receipt.reason !== "unavailable"
+        )
+          failure = {
+            reason: receipt.reason,
+            ...(receipt.reasonDetail === undefined
+              ? {}
+              : { reasonDetail: receipt.reasonDetail }),
+            ...(receipt.providerLimit === undefined
+              ? {}
+              : { providerLimit: receipt.providerLimit }),
+          };
+        const attachment = result.attachment;
+        if (
+          receipt.terminal === "completed" &&
+          receipt.runId === run.runId &&
+          receipt.targetSnapshotDigest === input.snapshotDigest &&
+          receipt.runtimeProfileDigest === run.profile.digest &&
+          attachment !== undefined &&
+          receipt.reportArtifactDigest === attachment.digest
+        ) {
+          const stored = await options.attachments.read(attachment);
+          if (stored.status === "resolved") {
+            const report = providerReportSchema.parse(
+              JSON.parse(stored.bytes.toString("utf8")) as unknown,
+            );
+            const findings = report.findings.map((candidate) =>
+              options.admitFinding(candidate, {
+                runId: run.runId,
+                snapshotDigest: input.snapshotDigest,
+                reportArtifactDigest: attachment.digest,
+              }),
+            );
+            for (const finding of findings) {
+              if (
+                finding.discoveryRunId !== run.runId ||
+                finding.snapshotDigest !== input.snapshotDigest
+              )
+                throw new Error("Finding differs from its run");
+            }
+            for (const finding of findings) {
+              // The full claim and trace stay private; the ledger keeps the digest.
+              const findingDigest = await options.evidence.putFiles({
+                "finding.json": canonicalJson(finding),
+              });
+              const appended = await options.ledger.append({
+                ...base,
+                artifacts: [{ kind: "finding", digest: findingDigest }],
+                identity: `discovery-finding-${finding.findingId}`,
+                type: "finding-recorded",
+                findingId: finding.findingId,
+                runId: run.runId,
+                category: finding.impact,
+                ...(finding.historyRecordId === undefined
+                  ? {}
+                  : { historyRecordId: finding.historyRecordId }),
+              });
+              if (appended.status === "conflict")
+                throw new Error("Finding identity conflict");
+              findingsRecorded += appended.status === "appended" ? 1 : 0;
+              const signature = canonicalDigest({
+                claim: finding.claim,
+                impact: finding.impact,
+                sourceTrace: finding.sourceTrace,
+              });
+              if (!seen.has(signature)) foundNew = true;
+              seen.add(signature);
+            }
+            for (const candidate of report.leads) {
+              if (
+                options.admitLead === undefined ||
+                options.leadSignature === undefined
+              )
+                throw new Error("Lead admission is unavailable");
+              let lead: AdmittedLead;
+              try {
+                lead = options.admitLead(candidate, {
+                  runId: run.runId,
+                  trialId: trial.trialId,
+                  snapshotDigest: input.snapshotDigest,
+                  reportArtifactDigest: attachment.digest,
+                });
+              } catch {
+                // A malformed candidate is discarded without changing the run outcome.
+                continue;
+              }
+              if (
+                lead.discoveryRunId !== run.runId ||
+                lead.trialId !== trial.trialId ||
+                lead.snapshotDigest !== input.snapshotDigest
+              )
+                throw new Error("Lead differs from its run");
+              const leadDigest = await options.evidence.putFiles({
+                "lead.json": canonicalJson(lead),
+              });
+              const appended = await options.ledger.append({
+                ...base,
+                artifacts: [{ kind: "lead", digest: leadDigest }],
+                identity: `discovery-lead-${lead.leadId}`,
+                type: "lead-recorded",
+                leadId: lead.leadId,
+                runId: run.runId,
+                trialId: trial.trialId,
+                missingEdge: lead.missingEdge,
+                primitive: lead.primitive,
+                storageKind: lead.storage?.kind ?? "none",
+              });
+              if (appended.status === "conflict")
+                throw new Error("Lead identity conflict");
+              admittedLeads.push(lead);
+              const signature = digest.parse(options.leadSignature(lead));
+              if (!seen.has(signature)) foundNew = true;
+              seen.add(signature);
+            }
+            outcome = "completed";
+          }
+        }
+      } catch {
+        outcome = "failed";
+      }
+      const finished = await options.ledger.append({
+        ...base,
+        identity: `discovery-finish-${run.runId}`,
+        type: "discovery-run-finished",
+        runId: run.runId,
+        outcome,
+        costUsd: "unavailable",
+        wallTimeMs,
+        ...(usage === undefined ? {} : { usage }),
+        ...(observed === undefined ? {} : { observed }),
+        ...(sandboxExitCode === undefined ? {} : { sandboxExitCode }),
+        ...(diagnosticArtifactDigest === undefined
+          ? {}
+          : { diagnosticArtifactDigest }),
+        ...(outcome === "completed" || failure === undefined ? {} : failure),
+        ...(receiptDigest === undefined
+          ? {}
+          : {
+              artifacts: [
+                { kind: "native-run-receipt", digest: receiptDigest },
+              ],
             }),
-          );
-          for (const finding of findings) {
-            if (
-              finding.discoveryRunId !== run.runId ||
-              finding.snapshotDigest !== input.snapshotDigest
-            )
-              throw new Error("Finding differs from its run");
-          }
-          for (const finding of findings) {
-            // The full claim and trace stay private; the ledger keeps the digest.
-            const findingDigest = await options.evidence.putFiles({
-              "finding.json": canonicalJson(finding),
-            });
-            const appended = await options.ledger.append({
-              ...base,
-              artifacts: [{ kind: "finding", digest: findingDigest }],
-              identity: `discovery-finding-${finding.findingId}`,
-              type: "finding-recorded",
-              findingId: finding.findingId,
-              runId: run.runId,
-              category: finding.impact,
-              ...(finding.historyRecordId === undefined
-                ? {}
-                : { historyRecordId: finding.historyRecordId }),
-            });
-            if (appended.status === "conflict")
-              throw new Error("Finding identity conflict");
-            findingsRecorded += appended.status === "appended" ? 1 : 0;
-            const signature = canonicalDigest({
-              claim: finding.claim,
-              impact: finding.impact,
-              sourceTrace: finding.sourceTrace,
-            });
-            if (!seen.has(signature)) foundNew = true;
-            seen.add(signature);
-          }
-          outcome = "completed";
+      });
+      if (finished.status === "conflict")
+        throw new Error("Discovery finish identity conflict");
+      return { outcome, foundNew, leads: admittedLeads };
+    };
+    const explore = await executePlanned(trial.explore, "explore");
+    let trialFoundNew = explore.foundNew;
+    if (
+      explore.outcome === "completed" &&
+      trial.continuation !== undefined &&
+      explore.leads.length > 0
+    ) {
+      if (
+        !Number.isSafeInteger(trial.continuation.maxRuns) ||
+        trial.continuation.maxRuns < 1 ||
+        trial.continuation.maxRuns > 2 ||
+        !Number.isSafeInteger(trial.continuation.wallTimeMs) ||
+        trial.continuation.wallTimeMs < 1 ||
+        trial.continuation.wallTimeMs > 120 * 60_000
+      )
+        throw new Error("Invalid Trial continuation bounds");
+      const edgeOrder = [
+        "auth-use",
+        "consumer",
+        "producer",
+        "reachability",
+        "precondition",
+      ] as const;
+      const ranked = [...explore.leads].sort(
+        (a, b) =>
+          edgeOrder.indexOf(a.missingEdge) - edgeOrder.indexOf(b.missingEdge) ||
+          (a.sourceTrace[0]?.file ?? "").localeCompare(
+            b.sourceTrace[0]?.file ?? "",
+          ) ||
+          a.leadId.localeCompare(b.leadId),
+      );
+      for (const lead of ranked.slice(0, trial.continuation.maxRuns)) {
+        const followUp = trial.continuation.plan(lead);
+        const continued = await executePlanned(
+          followUp,
+          "continue",
+          lead.leadId,
+          trial.continuation.wallTimeMs,
+        );
+        trialFoundNew ||= continued.foundNew;
+        if (continued.outcome === "provider-limited") {
+          stopped ??= "provider-limit";
+          break;
         }
       }
-    } catch {
-      outcome = "failed";
     }
-    const finished = await options.ledger.append({
-      ...base,
-      identity: `discovery-finish-${run.runId}`,
-      type: "discovery-run-finished",
-      runId: run.runId,
-      outcome,
-      costUsd: "unavailable",
-      wallTimeMs,
-      ...(usage === undefined ? {} : { usage }),
-      ...(observed === undefined ? {} : { observed }),
-      ...(sandboxExitCode === undefined ? {} : { sandboxExitCode }),
-      ...(diagnosticArtifactDigest === undefined
-        ? {}
-        : { diagnosticArtifactDigest }),
-      ...(outcome === "completed" || failure === undefined ? {} : failure),
-      ...(receiptDigest === undefined
-        ? {}
-        : {
-            artifacts: [{ kind: "native-run-receipt", digest: receiptDigest }],
-          }),
-    });
-    if (finished.status === "conflict")
-      throw new Error("Discovery finish identity conflict");
-    // Stop rules are evaluated in completion order; in-flight runs still finish.
-    if (outcome === "provider-limited") stopped ??= "provider-limit";
-    if (outcome === "completed")
-      noNewFindings = foundNew ? 0 : noNewFindings + 1;
+    // Stop rules are evaluated once per Trial; in-flight Trials still finish.
+    if (explore.outcome === "provider-limited") stopped ??= "provider-limit";
+    if (explore.outcome === "completed")
+      noNewFindings = trialFoundNew ? 0 : noNewFindings + 1;
     if (noNewFindings >= input.stopRules.noFindingRuns)
       stopped ??= "no-new-finding";
   };

@@ -49,7 +49,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
 - tokenの更新はしない。preflightが「1時間以内に失効」を出したら、ホストで `codex login` をやり直す。
 - APIキー（`host-private-bearer`）の経路も残っている。
 
-`campaign run` は無人で回る。1対象あたりの Trial は、選定のrun予算（既定20、High Threat面は40）と設定の上限（既定6）の小さい方まで。新規Findingなしの Trial が続いたら（既定3回）止まる。各Findingは別コンテナのVerifierと判定器を通り、`runtime-confirmed` / `contradicted` / `incomplete` として台帳に入る。
+`campaign run` は無人で回る。1対象あたりの Trial は、選定のrun予算（既定20、High Threat面は40）と設定の上限（既定6）の小さい方まで。新規 Finding も Lead もない Trial が続いたら（既定3回）止まる。各 Finding は別コンテナの Verifier と判定器を通り、`runtime-confirmed` / `contradicted` / `incomplete` として台帳に入る。
 
 - **同時run数**: campaign設定の `resources` で決める。
   - 既定は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。`stopRules.maxRuns` は Trial 上限（既定 6）、`noFindingRuns` は新規発見のない Trial の連続数（既定 3）、探索 run の wall time は既定 90 分。`dailyRunCap` は探索 run（Trial）だけを数える。
@@ -62,6 +62,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
   - 同じコマンドをもう一度実行すると再開する。探索を終えた対象は飛ばし、途中の対象は残り回数から続け、未検証のFindingだけを検証する。
 - **入口の分担**: campaign の `assignment: {"unit":"entry-point","entriesPerRun":8}` で有効にする。WordPress profile が登録入口、保存先、core 交差、1 hop の include を text 走査し、保存先を共有する入口を同じ scope に置く。索引は事実の列挙で、探索範囲を制限しない。台帳には索引・成分の digest だけを置く。上限（PHP file 20,000、1 file 2 MiB、成分 key 200）を超えた索引は scope に partial と表示する。
 - **A/B の軸**: `ablation.axes` に `history`、`prompt`、`continuation` を最大3本指定する。旧 `ablation: {"axis":"history","armBFraction":...}` も読める。Trial ordinal から arm を決め、台帳 `configuration.arms` に記録する。`prompt` 軸の arm b は `armBPromptId` の版付き prompt を使う。`continuation` 軸は `continuation` ブロックを要する。`eval compare --axis` は各軸の探索 run だけを分母にする。
+- **Lead の継続**: `continuation: {"maxRunsPerTrial":2,"runWallTimeMinutes":30}` を指定すると、completed の探索 run で得た Lead から同じ Trial 内で最大2本、1 hop の継続 run を順に実行する。`continuation` 軸がある場合は arm b だけで実行する。継続には選んだ Lead と source index の近傍だけを渡す。失敗した継続 run は探索 Trial の失敗にしない。Lead の本文は Private Evidence に置き、台帳には digest と分類だけを記録する。`eval score` は Lead の location-overlap を source candidates の別列に表示する。
 - **対象ごとの失敗**（取得、探索、検証）: 標準エラーに `skipped <対象> <版> at <段階>: <理由>` と出す。台帳には `target-skipped`（段階だけ）を残し、次の対象へ進む。
 - Lab 準備では使い捨て runsc コンテナから HTTP 到達を確認する。`lab-provisioned.reachability.http = failed` なら探索を始めず、`failureStage` と `reason` を記録する。DB 到達の失敗は記録するが HTTP が通れば続ける。Docker の診断文は Private Evidence に置き、台帳には digest だけを残す。
 - pinned WordPress image の core は `<workDirectory>/wordpress-core` に実行せず取り出し、Dependency Snapshot として固定する。探索と Verifier は `/workspace/wordpress` の read-only mount で同じ版を読む。

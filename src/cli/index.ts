@@ -674,7 +674,7 @@ export async function runCli(
           campaignId: required(values.campaign, "campaign"),
           answerKey,
         });
-        // Only counts and Finding ids are printed; key locations stay in the key file.
+        // Only counts and record ids are printed; key locations stay in the key file.
         io.stdout(
           `${score.metric}  case ${score.caseId}  campaign ${score.campaignId}  findings ${score.findings}  overlapping ${score.overlapping.length}  unreadable ${score.unreadable.length}  hit ${score.hit ? "yes" : "no"}`,
         );
@@ -682,6 +682,15 @@ export async function runCli(
           io.stdout(`  overlapping finding ${findingId}`);
         for (const findingId of score.unreadable)
           io.stdout(`  unreadable finding ${findingId}`);
+        if (score.leadCandidates !== undefined) {
+          io.stdout(
+            `  source candidates ${score.leadCandidates.total}  overlapping ${score.leadCandidates.overlapping.length}  unreadable ${score.leadCandidates.unreadable.length}  hit ${score.leadCandidates.hit ? "yes" : "no"}`,
+          );
+          for (const leadId of score.leadCandidates.overlapping)
+            io.stdout(`  overlapping lead ${leadId}`);
+          for (const leadId of score.leadCandidates.unreadable)
+            io.stdout(`  unreadable lead ${leadId}`);
+        }
         return 0;
       }
       case "eval prospective": {

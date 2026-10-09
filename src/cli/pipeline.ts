@@ -48,6 +48,8 @@ export interface CampaignPipeline<
     readonly executor: DiscoveryOptions["executor"];
     readonly attachments: DiscoveryOptions["attachments"];
     readonly admitFinding: DiscoveryOptions["admitFinding"];
+    readonly admitLead?: NonNullable<DiscoveryOptions["admitLead"]>;
+    readonly leadSignature?: NonNullable<DiscoveryOptions["leadSignature"]>;
   }>;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;

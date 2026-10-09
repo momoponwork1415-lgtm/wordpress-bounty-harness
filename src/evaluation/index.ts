@@ -55,6 +55,12 @@ export type LocationOverlapScore = {
   /** Findings whose private record could not be read; a scoring failure, not a miss. */
   readonly unreadable: readonly string[];
   readonly hit: boolean;
+  readonly leadCandidates?: {
+    readonly total: number;
+    readonly overlapping: readonly string[];
+    readonly unreadable: readonly string[];
+    readonly hit: boolean;
+  };
 };
 
 export type ArmTally = {
@@ -105,7 +111,7 @@ function overlaps(
   );
 }
 
-/** Reads the ledger and private Finding records only; nothing flows back to discovery. */
+/** Reads ledger references and private records only; nothing flows back to discovery. */
 export class Evaluation {
   readonly #ledger: Ledger;
   readonly #store: PrivateArtifactStore;
@@ -152,6 +158,28 @@ export class Evaluation {
       if (page.length < 1000) break;
       afterSequence = page[page.length - 1]!.sequence;
     }
+    const leadOverlapping: string[] = [];
+    const leadUnreadable: string[] = [];
+    let leads = 0;
+    let leadAfterSequence = 0;
+    for (;;) {
+      const page = this.#ledger.read({
+        campaignId,
+        type: "lead-recorded",
+        afterSequence: leadAfterSequence,
+        limit: 1000,
+      });
+      for (const { event } of page) {
+        if (event.type !== "lead-recorded") continue;
+        leads++;
+        const trace = await this.#trace(event.artifacts, "lead");
+        if (trace === null) leadUnreadable.push(event.leadId);
+        else if (overlaps(trace, input.answerKey.allowedLocations))
+          leadOverlapping.push(event.leadId);
+      }
+      if (page.length < 1000) break;
+      leadAfterSequence = page[page.length - 1]!.sequence;
+    }
     return {
       metric: "location-overlap",
       campaignId,
@@ -160,6 +188,16 @@ export class Evaluation {
       overlapping,
       unreadable,
       hit: overlapping.length > 0,
+      ...(leads === 0
+        ? {}
+        : {
+            leadCandidates: {
+              total: leads,
+              overlapping: leadOverlapping,
+              unreadable: leadUnreadable,
+              hit: leadOverlapping.length > 0,
+            },
+          }),
     };
   }
 
@@ -186,13 +224,20 @@ export class Evaluation {
           event.findingId,
           event.result.status === "runtime-confirmed",
         );
+    const starts = events("discovery-run-started");
+    const trialByRun = new Map<string, string>();
+    for (const event of starts)
+      if (event.type === "discovery-run-started")
+        trialByRun.set(event.runId, event.trialId ?? event.runId);
     const findingsByRun = new Map<string, string[]>();
     for (const event of events("finding-recorded"))
-      if (event.type === "finding-recorded")
-        findingsByRun.set(event.runId, [
-          ...(findingsByRun.get(event.runId) ?? []),
+      if (event.type === "finding-recorded") {
+        const trialId = trialByRun.get(event.runId) ?? event.runId;
+        findingsByRun.set(trialId, [
+          ...(findingsByRun.get(trialId) ?? []),
           event.findingId,
         ]);
+      }
     const selections = new Map<string, string>();
     for (const event of events("target-selected"))
       if (
@@ -202,7 +247,7 @@ export class Evaluation {
         selections.set(event.snapshotDigest, event.selectionId);
 
     const targets = new Map<string, { a: MutableTally; b: MutableTally }>();
-    for (const event of events("discovery-run-started")) {
+    for (const event of starts) {
       if (
         event.type !== "discovery-run-started" ||
         (event.runKind ?? "explore") !== "explore" ||
@@ -385,12 +430,13 @@ export class Evaluation {
 
   async #trace(
     artifacts: readonly { readonly kind: string; readonly digest: string }[],
+    kind: "finding" | "lead" = "finding",
   ): Promise<readonly SourceLocation[] | null> {
-    const reference = artifacts.find((artifact) => artifact.kind === "finding");
+    const reference = artifacts.find((artifact) => artifact.kind === kind);
     if (reference === undefined) return null;
     const file = await this.#store.readFile(
       reference.digest,
-      "finding.json",
+      `${kind}.json`,
       1024 * 1024,
     );
     if (file.status !== "resolved") return null;

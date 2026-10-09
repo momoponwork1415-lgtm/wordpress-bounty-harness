@@ -57,6 +57,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     trialId: id.optional(),
     trialOrdinal: z.number().int().nonnegative().optional(),
     runKind: z.enum(["explore", "continue"]).optional(),
+    continuationOf: id.optional(),
     history: z.union([
       z.strictObject({ mode: z.literal("none") }),
       z.strictObject({
@@ -162,6 +163,15 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     runId: id,
     category: id,
     historyRecordId: id.optional(),
+  }),
+  event({
+    type: z.literal("lead-recorded"),
+    leadId: id,
+    runId: id,
+    trialId: id,
+    missingEdge: id,
+    primitive: id,
+    storageKind: id,
   }),
   event({
     type: z.literal("verifier-run-finished"),
@@ -309,6 +319,7 @@ const querySchema = z.strictObject({
       "campaign-stopped",
       "target-skipped",
       "finding-recorded",
+      "lead-recorded",
       "verifier-run-finished",
       "verification-finished",
       "review-decided",
@@ -381,6 +392,11 @@ export class Ledger {
     candidate: LedgerEventInput,
   ): Promise<{ readonly status: "appended" | "existing" | "conflict" }> {
     const parsed = ledgerEventV1Schema.parse(candidate);
+    if (
+      parsed.type === "lead-recorded" &&
+      !parsed.artifacts.some((artifact) => artifact.kind === "lead")
+    )
+      throw new Error("A Lead must reference Private Evidence");
     const inputDigest = canonicalDigest(parsed);
     const prior = this.#db
       .prepare(
@@ -710,6 +726,7 @@ export class Ledger {
     );
     const readyLabs = new Set<string>();
     const startedRuns = new Map<string, string>();
+    const trialByRun = new Map<string, string>();
     const runArms = new Map<string, string[]>();
     let knownCostUsd = 0;
     let unpricedRuns = 0;
@@ -739,6 +756,7 @@ export class Ledger {
           break;
         case "discovery-run-started":
           startedRuns.set(current.runId, current.labId);
+          trialByRun.set(current.runId, current.trialId ?? current.runId);
           if ((current.runKind ?? "explore") !== "explore") break;
           if (current.configuration.arms !== undefined) {
             const arms = (
@@ -857,7 +875,9 @@ export class Ledger {
       for (const arm of arms)
         (byArm[arm] ??= { runs: 0, findings: 0, confirmed: 0 }).runs++;
     for (const finding of findings.values()) {
-      for (const arm of runArms.get(finding.runId) ?? []) {
+      for (const arm of runArms.get(
+        trialByRun.get(finding.runId) ?? finding.runId,
+      ) ?? []) {
         const counts = byArm[arm]!;
         counts.findings++;
         if (
