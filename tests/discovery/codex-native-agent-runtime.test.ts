@@ -407,4 +407,77 @@ describe("Codex native agent runtime", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("asks the provider for a strict report and turns each Finding text back into an object", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
+    try {
+      const commands: CodexSandboxCommand[] = [];
+      const attachments = new ProviderAttachmentStore(root);
+      const finding = { claim: "synthetic", sourceTrace: [{ line: 1 }] };
+      const withFindings = (findings: unknown[]) =>
+        transcript.replace(
+          JSON.stringify(
+            JSON.stringify({
+              findings: [],
+              examined: "source",
+              unexamined: "none",
+            }),
+          ),
+          JSON.stringify(
+            JSON.stringify({
+              findings,
+              examined: "source",
+              unexamined: "none",
+            }),
+          ),
+        );
+      const runtime = (stdout: string) =>
+        new CodexNativeAgentRuntime(
+          sandbox(stdout, commands),
+          broker(),
+          attachments,
+          image,
+          () => new Date(now),
+        );
+      const result = await runtime(
+        withFindings([JSON.stringify(finding)]),
+      ).execute(run);
+      expect(result.receipt.terminal).toBe("completed");
+      const stored =
+        result.attachment && (await attachments.read(result.attachment));
+      expect(
+        stored?.status === "resolved"
+          ? (JSON.parse(stored.bytes.toString("utf8")) as unknown)
+          : undefined,
+      ).toMatchObject({ findings: [finding] });
+
+      // Strict structured output: every object closes and requires all keys.
+      const schema = JSON.parse(
+        commands[0]?.supportFiles[0]?.content ?? "{}",
+      ) as unknown;
+      const objects: Record<string, unknown>[] = [];
+      const walk = (node: unknown): void => {
+        if (typeof node !== "object" || node === null) return;
+        const record = node as Record<string, unknown>;
+        if (record.type === "object") objects.push(record);
+        Object.values(record).forEach(walk);
+      };
+      walk(schema);
+      expect(objects.length).toBeGreaterThan(0);
+      for (const object of objects) {
+        expect(object.additionalProperties).toBe(false);
+        expect([...((object.required as string[]) ?? [])].sort()).toEqual(
+          Object.keys((object.properties as object) ?? {}).sort(),
+        );
+      }
+
+      for (const malformed of ["not json", JSON.stringify([1])])
+        expect(
+          (await runtime(withFindings([malformed])).execute(run)).receipt
+            .reason,
+        ).toBe("schema");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
