@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | `campaign.json` | 管理する | campaign設定。discovery 1run、同時1run、日次上限2、WordPress 6.8.3、Lab初期データ | `wordpressVersion` を、`images.wordpress` に固定したimageのWordPress版と合わせる |
 | `selection.json` | 管理する | 選定方針。`translatepress-multilingual` だけを候補にし、3.3.1を手動pinする | なし |
+| `campaign-luna-40.json` / `selection-luna-40.json` | 管理する | 同じ固定版で、`gpt-6-luna` の40 run試行。同時4run、新規Findingなし4回で停止、日次上限40 | host設定のruntime profileを `gpt-6-luna` にする |
 | `host.example.json` | 雛形だけ | host設定の形。`<...>` はすべて埋める前提で、このままでは起動しない | Git外へ複製して埋める |
 | `wordfence-programme.example.json` | 雛形だけ | 2026-10-08の公式ページの写し（`policy/wordfence-scope-2026-10-08.md`）から書いたProgramme page document | Git外へ複製し、`pending-submission-cap` を公式ページで確かめて `limits` に書く。書くまで選定は止まる |
 

@@ -41,6 +41,28 @@ describe("TranslatePress 3.3.1 development-set example", () => {
     });
   });
 
+  it("runs the 40-run luna trial on the same pinned target with four concurrent runs", async () => {
+    const config = wordpressCampaignConfigSchema.parse(
+      await example("campaign-luna-40.json"),
+    );
+    const policy = wordPressSelectionPolicySchema.parse(
+      await example("selection-luna-40.json"),
+    );
+    expect(config.stopRules).toEqual({ maxRuns: 40, noFindingRuns: 4 });
+    expect(config.resources).toEqual({
+      maxConcurrentRuns: 4,
+      memoryBudgetMiB: 10240,
+    });
+    expect(config.dailyRunCap).toBe(40);
+    expect(config.selectionPolicyPath).toBe(
+      "examples/translatepress-3.3.1/selection-luna-40.json",
+    );
+    expect(policy.runBudget).toEqual({ default: 40, highThreat: 40 });
+    expect(policy.pinnedVersions).toEqual({
+      "translatepress-multilingual": "3.3.1",
+    });
+  });
+
   it("keeps the programme transcription unusable until a human adds the pending submission cap", async () => {
     const transcription = wordfenceProgrammeTranscriptionSchema.parse(
       await example("wordfence-programme.example.json"),
