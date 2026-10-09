@@ -22,16 +22,39 @@ import {
   type ProviderAttachmentRef,
 } from "./provider-research-report.js";
 
+/** One Finding, sent as JSON text so the provider's strict schema stays closed. */
+const findingTextSchema = z.string().transform((text, context) => {
+  try {
+    const value = JSON.parse(text) as unknown;
+    if (typeof value === "object" && value !== null && !Array.isArray(value))
+      return value as Record<string, unknown>;
+  } catch {
+    // Reported below.
+  }
+  context.addIssue({ code: "custom", message: "Finding is not a JSON object" });
+  return z.NEVER;
+});
 const reportSchema = z.strictObject({
-  findings: z.array(z.record(z.string(), z.unknown())),
+  findings: z.array(findingTextSchema),
   examined: z.string().max(16_384),
   unexamined: z.string().max(16_384),
 });
+/**
+ * Structured outputs require every object to be closed with all keys
+ * required, but a Finding's shape belongs to the target profile, so each
+ * Finding travels as a JSON object encoded in a string.
+ */
 const reportJsonSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    findings: { type: "array", items: { type: "object" } },
+    findings: {
+      type: "array",
+      items: {
+        type: "string",
+        description: "One Finding as a JSON object, encoded as a string",
+      },
+    },
     examined: { type: "string" },
     unexamined: { type: "string" },
   },
