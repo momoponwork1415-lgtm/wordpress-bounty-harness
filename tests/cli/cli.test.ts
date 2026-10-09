@@ -96,6 +96,7 @@ async function harness(
     readonly labProvisionFailure?: boolean;
     readonly labSeedFailure?: boolean;
     readonly coreSource?: boolean;
+    readonly databaseAccess?: "read-only" | "none";
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
@@ -197,12 +198,18 @@ async function harness(
           return { exitCode: 1, stdout: "", stderr: "fixture seed error" };
         if (request.args[0] === "inspect")
           return { exitCode: 0, stdout: "172.20.0.2", stderr: "" };
+        if (request.args.some((arg) => arg.startsWith("SHOW TABLES FROM ")))
+          return { exitCode: 0, stdout: "wp_options\nwp_posts\n", stderr: "" };
         if (request.args.includes("--entrypoint=php"))
           return {
             exitCode: 0,
             stdout: JSON.stringify({
               http: options.labProbeHttp ?? "ok",
-              database: "not-exposed",
+              database: request.args.some((arg) =>
+                arg.startsWith("WBH_DB_USER="),
+              )
+                ? "ok"
+                : "not-exposed",
             }),
             stderr: "",
           };
@@ -476,6 +483,9 @@ async function harness(
         siteTitle: "Synthetic",
         initialPosts: ["Welcome"],
         customerRole: false,
+        ...(options.databaseAccess === undefined
+          ? {}
+          : { databaseAccess: options.databaseAccess }),
       },
     }),
   );
@@ -582,6 +592,50 @@ const programmeRef = {
 };
 
 describe("harness CLI vertical slice", () => {
+  it("records read-only DB access without storing its account in the ledger", async () => {
+    const { run, configPath, prompts, ledger } = await harness();
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-db",
+      "--config",
+      configPath,
+    );
+    expect(prompts[0]).toContain(
+      "Database (read-only, Lab only): host database port 3306",
+    );
+    const started = ledger()
+      .read({ type: "discovery-run-started" })
+      .at(0)?.event;
+    expect(started).toMatchObject({
+      configuration: { labAccess: { database: "read-only" } },
+    });
+    expect(JSON.stringify(started)).not.toContain("wbh_reader");
+  });
+
+  it("keeps DB access disabled when the campaign requests none", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      databaseAccess: "none",
+    });
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-no-db",
+      "--config",
+      configPath,
+    );
+    expect(prompts[0]).toContain("Database: not exposed to this run.");
+    expect(
+      ledger().read({ type: "discovery-run-started" }).at(0)?.event,
+    ).toMatchObject({
+      configuration: { labAccess: { database: "none" } },
+    });
+  });
+
   it("includes the frozen core path in the discovery Lab context", async () => {
     const { run, configPath, prompts } = await harness({ coreSource: true });
     await run(
@@ -667,7 +721,7 @@ describe("harness CLI vertical slice", () => {
       ledger().read({ type: "lab-provisioned" }).at(0)?.event,
     ).toMatchObject({
       status: "failed",
-      reachability: { http: "failed", database: "not-exposed" },
+      reachability: { http: "failed", database: "ok" },
       failureStage: "probe",
       reason: "reachability",
     });

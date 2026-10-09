@@ -179,6 +179,7 @@ export type PlannedDiscoveryRun = {
   readonly configuration: {
     readonly promptVariant: string;
     readonly assignmentUnit: string;
+    readonly labAccess?: { readonly database: "read-only" | "none" };
   };
 };
 

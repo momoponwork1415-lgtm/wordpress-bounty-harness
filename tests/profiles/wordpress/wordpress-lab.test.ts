@@ -138,6 +138,12 @@ async function fixture(
               : '{"http":"ok","database":"not-exposed"}',
             stderr: "",
           };
+        if (request.args.some((arg) => arg.startsWith("SHOW TABLES FROM ")))
+          return {
+            exitCode: 0,
+            stdout: "wp_options\nwp_posts\nwbh_canary\ninvalid;table\n",
+            stderr: "",
+          };
         if (request.args.includes("core") && request.args.includes("version"))
           return {
             exitCode: 0,
@@ -258,6 +264,65 @@ async function fixture(
 }
 
 describe("WordPress gVisor Lab", () => {
+  it("grants SELECT only on existing non-canary tables before seeding", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, {
+      ...setup,
+      databaseAccess: "read-only",
+    });
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status !== "ready") return;
+    expect(provisioned.handle.database).toMatchObject({
+      host: "database",
+      ipv4: "172.20.0.3",
+      port: 3306,
+      name: "wordpress",
+      readOnlyAccount: { username: "wbh_reader" },
+    });
+    expect(provisioned.handle.database?.readOnlyAccount.password).toMatch(
+      /^[a-f0-9]{64}$/,
+    );
+    const grants = commands.filter((command) =>
+      command.args.some((arg) => arg.includes("CREATE USER 'wbh_reader'")),
+    );
+    expect(grants).toHaveLength(1);
+    const grant = grants[0];
+    if (grant === undefined) return;
+    const sql = grant.args.at(-1) ?? "";
+    expect(sql.includes("GRANT SELECT ON wordpress.wp_options")).toBe(true);
+    expect(sql.includes("GRANT SELECT ON wordpress.wp_posts")).toBe(true);
+    expect(sql.includes("wordpress.*")).toBe(false);
+    expect(sql.includes("wbh_canary")).toBe(false);
+    expect(sql.includes("invalid;table")).toBe(false);
+    expect(await lab.seedCanaries(provisioned.handle)).toMatchObject({
+      status: "seeded",
+    });
+    const grantIndex = commands.indexOf(grant);
+    const canaryIndex = commands.findIndex((command) =>
+      command.args.some((arg) => arg.startsWith("CREATE TABLE wbh_canary")),
+    );
+    expect(grantIndex).toBeGreaterThanOrEqual(0);
+    expect(canaryIndex).toBeGreaterThan(grantIndex);
+    await lab.teardown(provisioned.handle);
+  });
+
+  it("does not create a reader when database access is disabled", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, {
+      ...setup,
+      databaseAccess: "none",
+    });
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status !== "ready") return;
+    expect(provisioned.handle.database).toBeUndefined();
+    expect(
+      commands.some((command) =>
+        command.args.some((arg) => arg.includes("CREATE USER 'wbh_reader'")),
+      ),
+    ).toBe(false);
+    await lab.teardown(provisioned.handle);
+  });
+
   it("refuses to provision when the running core differs from its dependency snapshot", async () => {
     const { lab, snapshot, setup, commands } = await fixture("ready", {
       version: "6.8.3",

@@ -31,6 +31,7 @@ const setupSchema = z.strictObject({
   siteTitle: z.string().min(1).max(120),
   initialPosts: z.array(z.string().min(1).max(120)).max(20),
   customerRole: z.boolean(),
+  databaseAccess: z.enum(["read-only", "none"]).default("none"),
 });
 const REACHABILITY_PROBE = `$http = @file_get_contents("http://wordpress/");
 $database = "not-exposed";
@@ -41,6 +42,8 @@ if ($user !== false && $user !== "") {
 }
 echo json_encode(["http" => $http !== false ? "ok" : "failed", "database" => $database]);`;
 const SQL_CANARY_TABLE = "wbh_canary";
+const DATABASE_NAME = "wordpress";
+const READ_ONLY_DATABASE_USER = "wbh_reader";
 const BEACON_LOG = "/tmp/wbh-beacons";
 /** Logs only well-formed beacon paths; anything else is ignored. */
 const BEACON_ROUTER = `<?php
@@ -101,7 +104,7 @@ const CRITICAL_OPTIONS = [
 const snapshotWithDigestSchema = snapshotSchema.safeExtend({ digest });
 export const WORDPRESS_CORE_IDENTITY = "wordpress-core";
 
-export type WordPressLabSetup = z.infer<typeof setupSchema>;
+export type WordPressLabSetup = z.input<typeof setupSchema>;
 export type DockerRequest = {
   readonly args: readonly string[];
   readonly timeoutMs: number;
@@ -148,9 +151,9 @@ export interface WordPressLabHandle extends LabHandle {
     readonly host: "database";
     readonly ipv4: string;
     readonly port: 3306;
-    readonly name: string;
+    readonly name: "wordpress";
     readonly readOnlyAccount: {
-      readonly username: string;
+      readonly username: "wbh_reader";
       readonly password: string;
     };
   };
@@ -316,6 +319,7 @@ interface Resources {
   readonly database: string;
   readonly wordpress: string;
   readonly databasePassword: string;
+  readonly readerPassword: string;
   readonly adminPassword: string;
   /** Only the WordPress container's environment holds this. */
   readonly executionSalt: string;
@@ -645,6 +649,7 @@ export function openWordPressLab(options: {
           database: `${prefix}-db`,
           wordpress: `${prefix}-wp`,
           databasePassword: randomUUID(),
+          readerPassword: randomBytes(32).toString("hex"),
           adminPassword: randomUUID(),
           executionSalt: randomBytes(16).toString("hex"),
           executionNonces: new Set(),
@@ -847,6 +852,45 @@ export function openWordPressLab(options: {
             "--post_status=publish",
             `--post_title=${title}`,
           ]);
+        if (setup.databaseAccess === "read-only") {
+          // Only existing tables are visible; the canary table is created later.
+          const tables = (
+            await requireDocker([
+              "exec",
+              resource.database,
+              "mariadb",
+              "--user=root",
+              `--password=${resource.databasePassword}`,
+              "--skip-column-names",
+              "--batch",
+              "--execute",
+              `SHOW TABLES FROM ${DATABASE_NAME}`,
+            ])
+          ).stdout
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(
+              (line) =>
+                /^[A-Za-z0-9_]{1,64}$/.test(line) && line !== SQL_CANARY_TABLE,
+            );
+          if (tables.length === 0) throw new Error("No tables to expose");
+          await requireDocker([
+            "exec",
+            resource.database,
+            "mariadb",
+            "--user=root",
+            `--password=${resource.databasePassword}`,
+            "--execute",
+            [
+              `CREATE USER '${READ_ONLY_DATABASE_USER}'@'%' IDENTIFIED BY '${resource.readerPassword}'`,
+              ...tables.map(
+                (table) =>
+                  `GRANT SELECT ON ${DATABASE_NAME}.${table} TO '${READ_ONLY_DATABASE_USER}'@'%'`,
+              ),
+              "FLUSH PRIVILEGES",
+            ].join("; "),
+          ]);
+        }
         const handle: WordPressLabHandle = {
           id,
           snapshotDigest: snapshot.digest,
@@ -858,6 +902,20 @@ export function openWordPressLab(options: {
             subscriber,
             ...(customer === undefined ? {} : { customer }),
           },
+          ...(setup.databaseAccess === "read-only"
+            ? {
+                database: {
+                  host: "database" as const,
+                  ipv4: databaseIp(resource),
+                  port: 3306 as const,
+                  name: DATABASE_NAME,
+                  readOnlyAccount: {
+                    username: READ_ONLY_DATABASE_USER,
+                    password: resource.readerPassword,
+                  },
+                },
+              }
+            : {}),
         };
         resource.handle = handle;
         active.set(id, resource);

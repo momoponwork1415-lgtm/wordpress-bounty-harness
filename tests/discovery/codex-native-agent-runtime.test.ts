@@ -357,13 +357,26 @@ describe("Codex native agent runtime", () => {
         tree: { digest, entries: 1, bytes: 20 },
       };
       expect(
-        (await runtime.execute({ ...run, dependencySource })).receipt.terminal,
+        (
+          await runtime.execute({
+            ...run,
+            dependencySource,
+            lab: {
+              ...run.lab,
+              database: { host: "database", ipv4: "172.20.0.3" },
+            },
+          })
+        ).receipt.terminal,
       ).toBe("completed");
       expect(commands[0]?.dependencyMount).toEqual({
         directory: dependencySource.directory,
         expectedTree: dependencySource.tree,
         path: "/workspace/wordpress",
         mode: "ro",
+      });
+      expect(commands[0]?.databaseHost).toEqual({
+        name: "database",
+        ipv4: "172.20.0.3",
       });
       expect(
         (

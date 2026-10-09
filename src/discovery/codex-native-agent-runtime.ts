@@ -83,6 +83,7 @@ export interface CodexSandboxCommand {
     readonly expectedTree: ExpectedSourceTree;
   };
   readonly labHost: { readonly name: string; readonly ipv4: string };
+  readonly databaseHost?: { readonly name: string; readonly ipv4: string };
 }
 export interface CodexSandboxResult {
   readonly status: "exited" | "failed";
@@ -114,6 +115,7 @@ export interface DiscoveryTransportRun {
     readonly endpoint: string;
     readonly networkName: string;
     readonly internalIp: string;
+    readonly database?: { readonly host: string; readonly ipv4: string };
   };
   readonly campaignInput: CampaignInputV1;
   readonly sourceDirectory: string;
@@ -139,6 +141,12 @@ const discoveryTransportRunSchema = z.strictObject({
     endpoint: z.url(),
     networkName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
     internalIp: z.ipv4(),
+    database: z
+      .strictObject({
+        host: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+        ipv4: z.ipv4(),
+      })
+      .optional(),
   }),
   campaignInput: campaignInputV1Schema,
   sourceDirectory: z.string().min(1),
@@ -495,6 +503,14 @@ export class CodexNativeAgentRuntime {
                   },
                 }),
             labHost: { name: labEndpoint.hostname, ipv4: run.lab.internalIp },
+            ...(run.lab.database === undefined
+              ? {}
+              : {
+                  databaseHost: {
+                    name: run.lab.database.host,
+                    ipv4: run.lab.database.ipv4,
+                  },
+                }),
           });
         },
       )

@@ -252,6 +252,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
       command.executable !== "codex" ||
       !/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.labHost.name) ||
       isIP(command.labHost.ipv4) !== 4 ||
+      (command.databaseHost !== undefined &&
+        (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.databaseHost.name) ||
+          command.databaseHost.name === command.labHost.name ||
+          isIP(command.databaseHost.ipv4) !== 4)) ||
       command.sourceMount.mode !== "ro" ||
       command.sourceMount.path !== "/workspace/main" ||
       !isAbsolute(command.sourceMount.directory) ||
@@ -336,6 +340,11 @@ export class GvisorCodexSandbox implements CodexSandbox {
         "--interactive",
         `--network=${command.grant.dockerNetworkName}`,
         `--add-host=${command.labHost.name}:${command.labHost.ipv4}`,
+        ...(command.databaseHost === undefined
+          ? []
+          : [
+              `--add-host=${command.databaseHost.name}:${command.databaseHost.ipv4}`,
+            ]),
         `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
         ...(dependency === undefined
           ? []
