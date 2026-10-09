@@ -342,6 +342,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
         status: result.kind === "exited" ? "exited" : "failed",
         exitCode: result.kind === "exited" ? result.exitCode : -1,
         stdout: result.stdout,
+        stderr: result.stderr,
         startedAt,
         completedAt,
         image: this.#options.image,

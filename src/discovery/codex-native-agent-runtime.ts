@@ -82,6 +82,8 @@ export interface CodexSandboxResult {
   readonly status: "exited" | "failed";
   readonly exitCode: number;
   readonly stdout: string;
+  /** The CLI's error output, redacted and capped by the process runner. */
+  readonly stderr?: string;
   readonly startedAt: string;
   readonly completedAt: string;
   readonly image: string;
@@ -296,6 +298,7 @@ function decodeTranscript(
 
 /** Transcript bytes kept with a diagnostic; the tail holds the failure. */
 const MAX_DIAGNOSTIC_TRANSCRIPT_BYTES = 4 * 1024 * 1024;
+const MAX_DIAGNOSTIC_STDERR_BYTES = 16 * 1024;
 
 const failureEventSchema = z.union([
   z.looseObject({ type: z.literal("error"), message: z.string() }),
@@ -538,6 +541,11 @@ export class CodexNativeAgentRuntime {
               exitCode: result.exitCode,
               truncated: transcript.length < result.stdout.length,
               transcript,
+              ...(result.stderr === undefined || result.stderr === ""
+                ? {}
+                : {
+                    stderr: result.stderr.slice(-MAX_DIAGNOSTIC_STDERR_BYTES),
+                  }),
             }),
           ),
         )

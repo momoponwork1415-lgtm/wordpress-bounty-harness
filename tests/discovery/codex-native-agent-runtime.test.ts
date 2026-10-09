@@ -731,4 +731,24 @@ describe("transcript item admission and diagnostics", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps the CLI's error output when it exits non-zero after a finished turn", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-items-"));
+    try {
+      const { result, diagnostic } = await execute(root, withItems([]), {
+        exitCode: 2,
+        stderr: "Error: final write failed\n",
+      });
+      expect(result.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "provider",
+      });
+      expect(diagnostic).toMatchObject({
+        exitCode: 2,
+        stderr: "Error: final write failed\n",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

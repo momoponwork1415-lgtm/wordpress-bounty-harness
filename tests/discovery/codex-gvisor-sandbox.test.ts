@@ -264,6 +264,79 @@ describe("gVisor Codex sandbox", () => {
     }
   });
 
+  it("returns the CLI's error output with a non-zero exit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
+    try {
+      const source = join(root, "source");
+      await mkdir(source);
+      await writeFile(join(source, "main.txt"), "fixed source");
+      const expectedTree = await measureCanonicalSourceTree(source, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      const sandbox = new GvisorCodexSandbox({
+        dockerExecutablePath: "/usr/bin/docker",
+        image: `node@${digest}`,
+        bundledCatalogPath: "/opt/codex/model-catalog.json",
+        scratchRootDirectory: root,
+        maxOutputBytes: 1024 * 1024,
+        timeoutMs: 60_000,
+        clock: () => new Date("2026-10-08T07:00:00Z"),
+        runDocker: async (args) =>
+          args.includes("--version")
+            ? {
+                kind: "exited",
+                exitCode: 0,
+                stdout: "codex-cli 0.161.0\n",
+                stderr: "",
+              }
+            : args.includes("--entrypoint=sha256sum")
+              ? {
+                  kind: "exited",
+                  exitCode: 0,
+                  stdout: `${"b".repeat(64)}  /opt/codex/model-catalog.json\n`,
+                  stderr: "",
+                }
+              : {
+                  kind: "exited",
+                  exitCode: 2,
+                  stdout: "{}\n",
+                  stderr: "Error: final write failed\n",
+                },
+      });
+      const result = await sandbox.execute({
+        executable: "codex" as const,
+        args: ["exec", "--json"],
+        stdin: "Inspect the source.",
+        supportFiles: [
+          { path: "/opt/codex-support/report-schema.json", content: "{}" },
+        ],
+        grant: {
+          baseUrl: "http://172.28.0.2:8080",
+          authorization: `Bearer ${randomBytes(32).toString("hex")}`,
+          dockerNetworkName: "internal-run",
+          model: "gpt-6.1-sol",
+          protocol: "responses" as const,
+          expiresAt: "2026-10-08T07:30:00Z",
+        },
+        sourceMount: {
+          directory: source,
+          path: "/workspace/main" as const,
+          mode: "ro" as const,
+          expectedTree,
+        },
+        labHost: { name: "wordpress", ipv4: "172.20.0.2" },
+      });
+      expect(result).toMatchObject({
+        status: "exited",
+        exitCode: 2,
+        stderr: "Error: final write failed\n",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("probes the image's CLI version and catalog digest without network or source", async () => {
     const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
     try {
