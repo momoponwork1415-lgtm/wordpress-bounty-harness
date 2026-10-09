@@ -95,6 +95,7 @@ async function harness(
     readonly labProbeHttp?: "ok" | "failed";
     readonly labProvisionFailure?: boolean;
     readonly labSeedFailure?: boolean;
+    readonly coreSource?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
@@ -141,6 +142,7 @@ async function harness(
     source: {
       resolve: async () => ({
         target: {
+          kind: "plugin",
           pluginSlug: "synthetic-plugin",
           sourceDirectory,
           sourceTree: tree,
@@ -309,7 +311,13 @@ async function harness(
       return snapshots.freeze(target);
     },
     lab,
-    sourceFor: async () => ({ directory: sourceDirectory, tree }),
+    sourceFor: async () => ({
+      directory: sourceDirectory,
+      tree,
+      ...(options.coreSource === true
+        ? { dependency: { directory: sourceDirectory, tree } }
+        : {}),
+    }),
     runtimeProfile: profile,
     probeRuntime: async () =>
       options.probe ?? {
@@ -574,6 +582,22 @@ const programmeRef = {
 };
 
 describe("harness CLI vertical slice", () => {
+  it("includes the frozen core path in the discovery Lab context", async () => {
+    const { run, configPath, prompts } = await harness({ coreSource: true });
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-core",
+      "--config",
+      configPath,
+    );
+    expect(prompts[0]).toContain(
+      "WordPress core source (read-only): /workspace/wordpress",
+    );
+  });
+
   it("records the seed stage when canary setup fails", async () => {
     const { run, configPath, prompts, ledger } = await harness({
       labSeedFailure: true,

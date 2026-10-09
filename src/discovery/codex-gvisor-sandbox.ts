@@ -11,7 +11,11 @@ import { isIP } from "node:net";
 
 import { z } from "zod";
 
-import { verifyCanonicalSourceTree } from "../infrastructure/canonical-source-tree.js";
+import {
+  verifyCanonicalSourceTree,
+  type ExpectedSourceTree,
+} from "../infrastructure/canonical-source-tree.js";
+
 import {
   runNativeModelProcess,
   type NativeModelProcessResult,
@@ -251,25 +255,41 @@ export class GvisorCodexSandbox implements CodexSandbox {
       command.sourceMount.mode !== "ro" ||
       command.sourceMount.path !== "/workspace/main" ||
       !isAbsolute(command.sourceMount.directory) ||
+      (command.dependencyMount !== undefined &&
+        (command.dependencyMount.mode !== "ro" ||
+          command.dependencyMount.path !== "/workspace/wordpress" ||
+          !isAbsolute(command.dependencyMount.directory))) ||
       command.supportFiles.length !== 1 ||
       command.supportFiles[0]?.path !== "/opt/codex-support/report-schema.json"
     ) {
       throw new Error("Codex sandbox command is not admitted");
     }
-    const source = await realpath(command.sourceMount.directory);
-    const sourceEntry = await lstat(command.sourceMount.directory);
-    if (
-      /[,:\n\0]/.test(source) ||
-      sourceEntry.isSymbolicLink() ||
-      !(await stat(source)).isDirectory()
-    )
-      throw new Error("Codex source mount is unavailable");
-    const verified = await verifyCanonicalSourceTree(
-      source,
-      command.sourceMount.expectedTree,
-    );
-    if (!verified.matches)
-      throw new Error("Codex source differs from the fixed snapshot tree");
+    const mountOf = async (mount: {
+      readonly directory: string;
+      readonly expectedTree: ExpectedSourceTree;
+    }): Promise<string> => {
+      const directory = await realpath(mount.directory);
+      const entry = await lstat(mount.directory);
+      if (
+        /[,:\n\0]/.test(directory) ||
+        entry.isSymbolicLink() ||
+        !(await stat(directory)).isDirectory()
+      )
+        throw new Error("Codex source mount is unavailable");
+      const verified = await verifyCanonicalSourceTree(
+        directory,
+        mount.expectedTree,
+      );
+      if (!verified.matches)
+        throw new Error("Codex source differs from the fixed snapshot tree");
+      return directory;
+    };
+    const source = await mountOf(command.sourceMount);
+    const dependency =
+      command.dependencyMount === undefined
+        ? undefined
+        : await mountOf(command.dependencyMount);
+
     const scratchRoot = await realpath(this.#options.scratchRootDirectory);
     if (
       /[,:\n\0]/.test(scratchRoot) ||
@@ -317,6 +337,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
         `--network=${command.grant.dockerNetworkName}`,
         `--add-host=${command.labHost.name}:${command.labHost.ipv4}`,
         `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
+        ...(dependency === undefined
+          ? []
+          : [
+              `--mount=type=bind,src=${dependency},dst=/workspace/wordpress,readonly`,
+            ]),
+
         `--mount=type=bind,src=${staging},dst=/opt/codex-support,readonly`,
         "--workdir=/workspace/main",
         "--env=HOME=/tmp",

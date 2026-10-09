@@ -249,6 +249,31 @@ describe("gVisor Codex sandbox", () => {
       expect(
         calls[2]?.args.filter((arg) => arg.startsWith("--network")),
       ).toEqual(["--network=internal-run"]);
+      const core = join(root, "wordpress-core");
+      await mkdir(core);
+      await writeFile(join(core, "version.php"), "<?php // fixed core");
+      const coreTree = await measureCanonicalSourceTree(core, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      const dependencyMount = {
+        directory: core,
+        path: "/workspace/wordpress" as const,
+        mode: "ro" as const,
+        expectedTree: coreTree,
+      };
+      await sandbox.execute({ ...command, dependencyMount });
+      expect(calls.at(-1)?.args).toContain(
+        `--mount=type=bind,src=${core},dst=/workspace/wordpress,readonly`,
+      );
+      await writeFile(join(core, "version.php"), "changed core");
+      await expect(
+        sandbox.execute({ ...command, dependencyMount }),
+      ).rejects.toThrow("fixed snapshot tree");
+      Object.assign(dependencyMount, { path: "/workspace/else" });
+      await expect(
+        sandbox.execute({ ...command, dependencyMount }),
+      ).rejects.toThrow();
       await expect(
         sandbox.execute({
           ...command,
@@ -258,7 +283,7 @@ describe("gVisor Codex sandbox", () => {
           },
         }),
       ).rejects.toThrow();
-      expect(calls).toHaveLength(3);
+      expect(calls).toHaveLength(6);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

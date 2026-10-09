@@ -129,6 +129,10 @@ export interface WordPressCampaignBoundaries {
   readonly sourceFor: (snapshot: Snapshot) => Promise<{
     readonly directory: string;
     readonly tree: ExpectedSourceTree;
+    readonly dependency?: {
+      readonly directory: string;
+      readonly tree: ExpectedSourceTree;
+    };
   }>;
   readonly runtimeProfile: AgentRuntimeProfile;
   /** What the pinned Codex image actually ships (GvisorCodexSandbox.probe). */
@@ -337,6 +341,11 @@ export function createWordPressCliProfile(options: {
               "## Lab",
               `Endpoint: ${lab.endpoint}`,
               ...accounts,
+              ...(source.dependency === undefined
+                ? []
+                : [
+                    "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
+                  ]),
               "## Assigned files",
               "All files under /workspace/main.",
             ].join("\n\n");
@@ -386,6 +395,9 @@ export function createWordPressCliProfile(options: {
                   },
                   sourceDirectory: source.directory,
                   sourceTree: source.tree,
+                  ...(source.dependency === undefined
+                    ? {}
+                    : { dependencySource: source.dependency }),
                   expiresAt: new Date(
                     now + config.runWallTimeMinutes * 60_000,
                   ).toISOString(),

@@ -32,7 +32,11 @@ const event = <T extends z.ZodRawShape>(shape: T) =>
 /** LedgerEvent v1 carries only routing metadata and private artifact digests. */
 export const ledgerEventV1Schema = z.discriminatedUnion("type", [
   event({ type: z.literal("target-selected"), selectionId: id }),
-  event({ type: z.literal("snapshot-frozen"), sourceDigest: digest }),
+  event({
+    type: z.literal("snapshot-frozen"),
+    sourceDigest: digest,
+    dependencyDigests: z.array(digest).optional(),
+  }),
   event({
     type: z.literal("lab-provisioned"),
     labId: id,

@@ -151,6 +151,9 @@ export async function runCampaignPipeline<
         occurredAt: at(),
         type: "snapshot-frozen",
         sourceDigest: snapshot.target.sourceDigest,
+        dependencyDigests: snapshot.dependencies.map(
+          (dependency) => dependency.sourceDigest,
+        ),
       });
 
       stage = "discovery";
@@ -425,6 +428,9 @@ export async function reverifyOnLatestVersion<
       occurredAt: options.clock().toISOString(),
       type: "snapshot-frozen" as const,
       sourceDigest: snapshot.target.sourceDigest,
+      dependencyDigests: snapshot.dependencies.map(
+        (dependency) => dependency.sourceDigest,
+      ),
     },
   ])
     if ((await ledger.append(event)).status === "conflict")

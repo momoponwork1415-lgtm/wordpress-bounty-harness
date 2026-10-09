@@ -76,6 +76,12 @@ export interface CodexSandboxCommand {
     readonly mode: "ro";
     readonly expectedTree: ExpectedSourceTree;
   };
+  readonly dependencyMount?: {
+    readonly directory: string;
+    readonly path: "/workspace/wordpress";
+    readonly mode: "ro";
+    readonly expectedTree: ExpectedSourceTree;
+  };
   readonly labHost: { readonly name: string; readonly ipv4: string };
 }
 export interface CodexSandboxResult {
@@ -112,6 +118,10 @@ export interface DiscoveryTransportRun {
   readonly campaignInput: CampaignInputV1;
   readonly sourceDirectory: string;
   readonly sourceTree: ExpectedSourceTree;
+  readonly dependencySource?: {
+    readonly directory: string;
+    readonly tree: ExpectedSourceTree;
+  };
   readonly expiresAt: string;
 }
 export interface DiscoveryTransportResult {
@@ -137,6 +147,16 @@ const discoveryTransportRunSchema = z.strictObject({
     entries: z.number().int().nonnegative(),
     bytes: z.number().int().nonnegative(),
   }),
+  dependencySource: z
+    .strictObject({
+      directory: z.string().min(1),
+      tree: z.strictObject({
+        digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+        entries: z.number().int().nonnegative(),
+        bytes: z.number().int().nonnegative(),
+      }),
+    })
+    .optional(),
   expiresAt: z.iso.datetime({ offset: true }),
 });
 
@@ -355,6 +375,8 @@ export class CodexNativeAgentRuntime {
         "admitted" ||
       run.prompt.length === 0 ||
       !isAbsolute(run.sourceDirectory) ||
+      (run.dependencySource !== undefined &&
+        !isAbsolute(run.dependencySource.directory)) ||
       !CODEX_AUTHENTICATION_METHODS.includes(
         run.profile.authenticationMethod,
       ) ||
@@ -462,6 +484,16 @@ export class CodexNativeAgentRuntime {
               mode: "ro",
               expectedTree: run.sourceTree,
             },
+            ...(run.dependencySource === undefined
+              ? {}
+              : {
+                  dependencyMount: {
+                    directory: run.dependencySource.directory,
+                    path: "/workspace/wordpress" as const,
+                    mode: "ro" as const,
+                    expectedTree: run.dependencySource.tree,
+                  },
+                }),
             labHost: { name: labEndpoint.hostname, ipv4: run.lab.internalIp },
           });
         },

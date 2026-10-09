@@ -13,15 +13,20 @@ import type {
   SourceAcquisition,
 } from "../../../snapshot/index.js";
 import type { WordPressSource, WordPressSourceResolver } from "../lab/index.js";
+import { WORDPRESS_CORE_IDENTITY } from "./wordpress-core-source.js";
 
 /** Generous bounds for re-measuring a tree whose sealed size is not at hand. */
 const MEASURE_LIMITS = { maxEntries: 200_000, maxBytes: 2 * 1024 ** 3 };
 
-const pluginSlug = (identity: string): string => {
+/** A frozen source is a WordPress.org plugin or the WordPress core itself. */
+const sourceKind = (
+  identity: string,
+): { kind: "plugin"; slug: string } | { kind: "wordpress-core" } => {
+  if (identity === WORDPRESS_CORE_IDENTITY) return { kind: "wordpress-core" };
   const slug = /^wporg:([a-z0-9][a-z0-9-]*)$/.exec(identity)?.[1];
   if (slug === undefined)
     throw new Error("Materialized source needs a WordPress.org identity");
-  return slug;
+  return { kind: "plugin", slug };
 };
 
 async function exists(path: string): Promise<boolean> {
@@ -98,14 +103,24 @@ export function openMaterializedSources(options: {
 
   const resolveOne = async (record: {
     readonly identity: string;
+    readonly version: string;
     readonly sourceDigest: string;
   }): Promise<WordPressSource> => {
     const { directory, tree } = await verified(record.sourceDigest);
-    return {
-      pluginSlug: pluginSlug(record.identity),
-      sourceDirectory: directory,
-      sourceTree: tree,
-    };
+    const kind = sourceKind(record.identity);
+    return kind.kind === "plugin"
+      ? {
+          kind: "plugin",
+          pluginSlug: kind.slug,
+          sourceDirectory: directory,
+          sourceTree: tree,
+        }
+      : {
+          kind: "wordpress-core",
+          version: record.version,
+          sourceDirectory: directory,
+          sourceTree: tree,
+        };
   };
 
   return {
@@ -113,9 +128,10 @@ export function openMaterializedSources(options: {
       async acquire(selection) {
         const acquired = await inner.acquire(selection);
         for (const source of [acquired.target, ...acquired.dependencies]) {
-          pluginSlug(source.identity);
+          sourceKind(source.identity);
           await materialize(source);
         }
+
         return acquired;
       },
     }),
