@@ -283,7 +283,18 @@ describe("gVisor Codex sandbox", () => {
           },
         }),
       ).rejects.toThrow();
-      expect(calls).toHaveLength(6);
+      await sandbox.execute({
+        ...command,
+        databaseHost: { name: "database", ipv4: "172.20.0.3" },
+      });
+      expect(calls.at(-1)?.args).toContain("--add-host=database:172.20.0.3");
+      await expect(
+        sandbox.execute({
+          ...command,
+          databaseHost: { name: "wordpress", ipv4: "172.20.0.3" },
+        }),
+      ).rejects.toThrow();
+      expect(calls).toHaveLength(9);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

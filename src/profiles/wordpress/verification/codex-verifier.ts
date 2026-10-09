@@ -227,6 +227,16 @@ export class CodexVerifier implements Verifier<
       canonicalJson({
         endpoint: lab.endpoint,
         accounts,
+        ...(lab.database === undefined
+          ? {}
+          : {
+              database: {
+                host: lab.database.host,
+                port: lab.database.port,
+                name: lab.database.name,
+                readOnlyAccount: lab.database.readOnlyAccount,
+              },
+            }),
         ...(this.options.dependencySource === undefined
           ? {}
           : { wordpressCoreSource: "/workspace/wordpress" }),
@@ -244,6 +254,14 @@ export class CodexVerifier implements Verifier<
         endpoint: lab.endpoint,
         networkName: lab.networkName,
         internalIp: lab.internalIp,
+        ...(lab.database === undefined
+          ? {}
+          : {
+              database: {
+                host: lab.database.host,
+                ipv4: lab.database.ipv4,
+              },
+            }),
       },
       campaignInput: {
         schemaVersion: 1,

@@ -111,6 +111,7 @@ export const wordpressCampaignConfigSchema = z.strictObject({
     siteTitle: z.string().min(1).max(120),
     initialPosts: z.array(z.string().min(1).max(120)).max(20),
     customerRole: z.boolean(),
+    databaseAccess: z.enum(["read-only", "none"]).default("read-only"),
   }),
 });
 export type WordPressCampaignConfig = z.infer<
@@ -341,6 +342,11 @@ export function createWordPressCliProfile(options: {
               "## Lab",
               `Endpoint: ${lab.endpoint}`,
               ...accounts,
+              ...(lab.database === undefined
+                ? ["Database: not exposed to this run."]
+                : [
+                    `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
+                  ]),
               ...(source.dependency === undefined
                 ? []
                 : [
@@ -382,6 +388,9 @@ export function createWordPressCliProfile(options: {
                 configuration: {
                   promptVariant: config.promptId,
                   assignmentUnit: "plugin",
+                  labAccess: {
+                    database: lab.database === undefined ? "none" : "read-only",
+                  },
                 },
                 run: {
                   runId: state.newId(),
@@ -392,6 +401,14 @@ export function createWordPressCliProfile(options: {
                     endpoint: lab.endpoint,
                     networkName: lab.networkName,
                     internalIp: lab.internalIp,
+                    ...(lab.database === undefined
+                      ? {}
+                      : {
+                          database: {
+                            host: lab.database.host,
+                            ipv4: lab.database.ipv4,
+                          },
+                        }),
                   },
                   sourceDirectory: source.directory,
                   sourceTree: source.tree,

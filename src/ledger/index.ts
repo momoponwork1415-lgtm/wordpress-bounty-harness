@@ -65,6 +65,9 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     configuration: z.strictObject({
       promptVariant: id,
       assignmentUnit: id,
+      labAccess: z
+        .strictObject({ database: z.enum(["read-only", "none"]) })
+        .optional(),
       axis: z.literal("history").optional(),
       arm: z.enum(["a", "b"]).optional(),
     }),

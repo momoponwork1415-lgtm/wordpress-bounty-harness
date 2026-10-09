@@ -168,6 +168,40 @@ async function fixture(
 }
 
 describe("CodexVerifier.attempt", () => {
+  it("passes the Lab's read-only database endpoint to the verifier transport", async () => {
+    const f = await fixture([
+      {
+        "http.json": JSON.stringify({
+          exchanges: [{ request: {}, response: { body: "ordinary" } }],
+        }),
+        "steps.md": "Step",
+      },
+    ]);
+    Object.assign(f.lab, {
+      database: {
+        host: "database",
+        ipv4: "172.20.0.3",
+        port: 3306,
+        name: "wordpress",
+        readOnlyAccount: {
+          username: "fixture_reader",
+          password: "fixture_only",
+        },
+      },
+    });
+    expect(
+      (await f.verifier.attempt({ finding: f.finding, lab: f.lab })).status,
+    ).toBe("attempted");
+    expect(f.runs[0]?.lab.database).toEqual({
+      host: "database",
+      ipv4: "172.20.0.3",
+    });
+    expect(f.runs[0]?.prompt).toContain("fixture_reader");
+    expect(
+      JSON.stringify(f.ledger.read({ type: "verifier-run-finished" })),
+    ).not.toContain("fixture_only");
+  });
+
   it.each([
     ["rce", "execution", "synthetic-canary-php"],
     ["stored-xss", "script", "http://wordpress/fake-beacon"],
