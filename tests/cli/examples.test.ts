@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { wordpressCampaignConfigSchema } from "../../src/cli/wordpress.js";
+import { allocateTrialArms } from "../../src/discovery/index.js";
 import { wordPressSelectionPolicySchema } from "../../src/profiles/wordpress/selection/index.js";
 import { wordfenceProgrammeTranscriptionSchema } from "../../src/profiles/wordpress/wordfence-programme/index.js";
 
-const example = async (file: string): Promise<unknown> =>
+const example = async (file: string, version = "3.3.1"): Promise<unknown> =>
   JSON.parse(
     await readFile(
       join(
@@ -15,7 +16,7 @@ const example = async (file: string): Promise<unknown> =>
         "..",
         "..",
         "examples",
-        "translatepress-3.3.1",
+        `translatepress-${version}`,
         file,
       ),
       "utf8",
@@ -71,5 +72,73 @@ describe("TranslatePress 3.3.1 development-set example", () => {
       transcription.pages.find((page) => page.sourceKind === "programme")
         ?.assertions.eligibility?.limits,
     ).toBeUndefined();
+  });
+});
+
+describe("TranslatePress 3.2.5 A/B development-set example", () => {
+  it("pins one source and balances prompt and continuation across twelve Trials", async () => {
+    const config = wordpressCampaignConfigSchema.parse(
+      await example("campaign-luna-ab.json", "3.2.5"),
+    );
+    const policy = wordPressSelectionPolicySchema.parse(
+      await example("selection-luna-40.json", "3.2.5"),
+    );
+    expect(policy.pinnedVersions).toEqual({
+      "translatepress-multilingual": "3.2.5",
+    });
+    expect(config.selectionPolicyPath).toBe(
+      "examples/translatepress-3.2.5/selection-luna-40.json",
+    );
+    expect(config.stopRules).toEqual({ maxRuns: 12, noFindingRuns: 12 });
+    expect(config.runWallTimeMinutes).toBe(90);
+    expect(config.dailyRunCap).toBe(6);
+    expect(config.resources.maxConcurrentRuns).toBe(2);
+    expect(config.lab.databaseAccess).toBe("read-only");
+    expect(config.assignment).toEqual({
+      unit: "entry-point",
+      entriesPerRun: 8,
+    });
+    expect(config.continuation).toEqual({
+      maxRunsPerTrial: 2,
+      runWallTimeMinutes: 30,
+    });
+    expect(config.promptId).toBe("short-objective-v2");
+    expect(config.ablation?.axes).toEqual([
+      {
+        axis: "prompt",
+        armBFraction: 0.5,
+        armBPromptId: "wp2shell-single-http-v2",
+      },
+      { axis: "continuation", armBFraction: 0.5 },
+    ]);
+    const cells = Array.from({ length: 12 }, (_, ordinal) =>
+      JSON.stringify(allocateTrialArms(ordinal, config.ablation?.axes ?? [])),
+    );
+    expect(new Set(cells).size).toBe(4);
+    for (const cell of new Set(cells))
+      expect(cells.filter((candidate) => candidate === cell)).toHaveLength(3);
+  });
+
+  it("sets a separate 150-minute no-continuation control with three Trials per prompt", async () => {
+    const config = wordpressCampaignConfigSchema.parse(
+      await example("campaign-luna-ab-time-control.json", "3.2.5"),
+    );
+    expect(config.stopRules).toEqual({ maxRuns: 6, noFindingRuns: 6 });
+    expect(config.runWallTimeMinutes).toBe(150);
+    expect(config.continuation).toBeUndefined();
+    expect(config.ablation?.axes).toEqual([
+      {
+        axis: "prompt",
+        armBFraction: 0.5,
+        armBPromptId: "wp2shell-single-http-v2",
+      },
+    ]);
+    expect(
+      Array.from(
+        { length: 6 },
+        (_, ordinal) =>
+          allocateTrialArms(ordinal, config.ablation?.axes ?? []).prompt,
+      ),
+    ).toEqual(["a", "b", "a", "b", "a", "b"]);
   });
 });
