@@ -75,6 +75,7 @@ const transcript = [
       type: "agent_message",
       text: JSON.stringify({
         findings: [],
+        leads: [],
         examined: "source",
         unexamined: "none",
       }),
@@ -554,11 +555,12 @@ describe("Codex native agent runtime", () => {
       const commands: CodexSandboxCommand[] = [];
       const attachments = new ProviderAttachmentStore(root);
       const finding = { claim: "synthetic", sourceTrace: [{ line: 1 }] };
-      const withFindings = (findings: unknown[]) =>
+      const withFindings = (findings: unknown[], leads: unknown[] = []) =>
         transcript.replace(
           JSON.stringify(
             JSON.stringify({
               findings: [],
+              leads: [],
               examined: "source",
               unexamined: "none",
             }),
@@ -566,6 +568,7 @@ describe("Codex native agent runtime", () => {
           JSON.stringify(
             JSON.stringify({
               findings,
+              leads,
               examined: "source",
               unexamined: "none",
             }),
@@ -590,6 +593,17 @@ describe("Codex native agent runtime", () => {
           ? (JSON.parse(stored.bytes.toString("utf8")) as unknown)
           : undefined,
       ).toMatchObject({ findings: [finding] });
+      const lead = { summary: "synthetic partial source route" };
+      const withLead = await runtime(
+        withFindings([], [JSON.stringify(lead)]),
+      ).execute(run);
+      const leadAttachment =
+        withLead.attachment && (await attachments.read(withLead.attachment));
+      expect(
+        leadAttachment?.status === "resolved"
+          ? (JSON.parse(leadAttachment.bytes.toString("utf8")) as unknown)
+          : undefined,
+      ).toMatchObject({ leads: [lead] });
 
       // Strict structured output: every object closes and requires all keys.
       const schema = JSON.parse(
@@ -604,6 +618,7 @@ describe("Codex native agent runtime", () => {
       };
       walk(schema);
       expect(objects.length).toBeGreaterThan(0);
+      expect(objects[0]?.required).toContain("leads");
       for (const object of objects) {
         expect(object.additionalProperties).toBe(false);
         expect([...((object.required as string[]) ?? [])].sort()).toEqual(

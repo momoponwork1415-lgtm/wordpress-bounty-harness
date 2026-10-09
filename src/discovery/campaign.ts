@@ -153,6 +153,32 @@ export function allocateArm(ordinal: number, armBFraction: number): "a" | "b" {
     : "a";
 }
 
+export type AblationAxis = {
+  readonly axis: "history" | "prompt" | "continuation";
+  readonly armBFraction: number;
+};
+export type TrialArms = Partial<Record<AblationAxis["axis"], "a" | "b">>;
+
+/** Offset each axis by powers of two to cover a 2x2 cell every four Trials. */
+export function allocateTrialArms(
+  trialOrdinal: number,
+  axes: readonly AblationAxis[],
+): TrialArms {
+  if (!Number.isSafeInteger(trialOrdinal) || trialOrdinal < 0)
+    throw new Error("Invalid Trial ordinal");
+  const arms: TrialArms = {};
+  const seen = new Set<AblationAxis["axis"]>();
+  for (const [index, axis] of axes.entries()) {
+    if (seen.has(axis.axis)) throw new Error("Duplicate ablation axis");
+    seen.add(axis.axis);
+    arms[axis.axis] = allocateArm(
+      Math.floor(trialOrdinal / 2 ** index),
+      axis.armBFraction,
+    );
+  }
+  return arms;
+}
+
 /** Deterministic fractional allocation; zero means no history and one means all runs. */
 export function historyForRun(
   ordinal: number,
@@ -214,6 +240,7 @@ export type PlannedTrial = {
 
 const providerReportSchema = z.strictObject({
   findings: z.array(z.unknown()),
+  leads: z.array(z.unknown()).default([]),
   examined: z.string(),
   unexamined: z.string(),
 });
@@ -238,7 +265,7 @@ export async function runDiscoveryCampaign(options: {
   /** Exploration wall time, stamped when each Trial starts rather than when all plans are built. */
   readonly runWallTimeMs?: number;
   /** Records each run's arm on the history axis: a without history, b with it. */
-  readonly ablation?: { readonly axis: "history" };
+  readonly ablation?: { readonly axes: readonly AblationAxis[] };
   readonly plannedTrials: readonly PlannedTrial[];
   readonly executor: {
     execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
@@ -376,9 +403,21 @@ export async function runDiscoveryCampaign(options: {
       run.profile.digest !== input.modelProfileDigest
     )
       throw new Error("Planned run differs from the CampaignInput");
+    const assignedArms = allocateTrialArms(
+      trial.trialOrdinal,
+      options.ablation?.axes ?? [],
+    );
+    const arms: TrialArms =
+      input.history.mode === "none" && assignedArms.history !== undefined
+        ? { ...assignedArms, history: "a" }
+        : assignedArms;
     const history =
       input.history.mode === "catalog"
-        ? historyForRun(index, options.historyFraction, input.history)
+        ? arms.history === undefined
+          ? historyForRun(index, options.historyFraction, input.history)
+          : arms.history === "b"
+            ? input.history
+            : { mode: "none" as const }
         : { mode: "none" as const };
     const historyMetadata =
       history.mode === "catalog"
@@ -404,34 +443,18 @@ export async function runDiscoveryCampaign(options: {
       runKind: "explore",
       labId: options.labId,
       history: historyMetadata,
-      configuration:
-        options.ablation === undefined
-          ? {
-              ...planned.configuration,
-              promptDigest:
-                planned.configuration.promptDigest ?? input.promptDigest,
-              trustBoundaryVersion: input.trustBoundary.version,
-              sourcePack: {
-                dependency:
-                  run.dependencySource === undefined
-                    ? ("none" as const)
-                    : ("mounted" as const),
-              },
-            }
-          : {
-              ...planned.configuration,
-              promptDigest:
-                planned.configuration.promptDigest ?? input.promptDigest,
-              trustBoundaryVersion: input.trustBoundary.version,
-              sourcePack: {
-                dependency:
-                  run.dependencySource === undefined
-                    ? ("none" as const)
-                    : ("mounted" as const),
-              },
-              axis: options.ablation.axis,
-              arm: history.mode === "catalog" ? "b" : "a",
-            },
+      configuration: {
+        ...planned.configuration,
+        promptDigest: planned.configuration.promptDigest ?? input.promptDigest,
+        trustBoundaryVersion: input.trustBoundary.version,
+        sourcePack: {
+          dependency:
+            run.dependencySource === undefined
+              ? ("none" as const)
+              : ("mounted" as const),
+        },
+        ...(options.ablation === undefined ? {} : { arms }),
+      },
     });
     if (started.status === "conflict")
       throw new Error("Discovery run identity conflict");
@@ -454,7 +477,12 @@ export async function runDiscoveryCampaign(options: {
     try {
       const result = await options.executor.execute({
         ...run,
-        campaignInput: { ...input, history },
+        campaignInput: {
+          ...input,
+          promptDigest:
+            planned.configuration.promptDigest ?? input.promptDigest,
+          history,
+        },
       });
       const receipt = nativeRunReceiptSchema.parse(result.receipt);
       wallTimeMs = Math.max(

@@ -127,7 +127,7 @@ const USAGE = [
   "  runtime check --config <path>",
   "  lab cleanup --config <path> [--remove]",
   "  eval score --campaign <id> --keys <path> --case <id>",
-  "  eval compare [--axis history] [--campaign <id>]",
+  "  eval compare [--axis history|prompt|continuation] [--campaign <id>]",
   "  eval prospective --advisories <path> [--campaign <id>]",
 ].join("\n");
 
@@ -712,8 +712,10 @@ export async function runCli(
       }
       case "eval compare": {
         const axis = values.axis ?? "history";
-        if (axis !== "history")
-          throw new UsageError("--axis supports only history");
+        if (axis !== "history" && axis !== "prompt" && axis !== "continuation")
+          throw new UsageError(
+            "--axis supports history, prompt or continuation",
+          );
         print(
           formatComparison(
             new Evaluation({

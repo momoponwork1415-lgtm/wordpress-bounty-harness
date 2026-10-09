@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "../../src/cli/index.js";
 import {
   createWordPressCliProfile,
+  wordpressCampaignConfigSchema,
   type WordPressCampaignBoundaries,
 } from "../../src/cli/wordpress.js";
 import {
@@ -312,6 +313,7 @@ async function harness(
 
   const attachments = new ProviderAttachmentStore(join(root, "provider"));
   const prompts: string[] = [];
+  const promptDigests: string[] = [];
   const histories: string[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
@@ -340,6 +342,7 @@ async function harness(
     executor: {
       async execute(run: DiscoveryTransportRun) {
         const call = prompts.push(run.prompt);
+        promptDigests.push(run.campaignInput.promptDigest);
         histories.push(run.campaignInput.history.mode);
         maxInFlight = Math.max(maxInFlight, ++inFlight);
         await new Promise((resolve) => setTimeout(resolve, 5));
@@ -527,6 +530,7 @@ async function harness(
     configPath,
     keysPath,
     prompts,
+    promptDigests,
     histories,
     docker,
     root,
@@ -921,6 +925,96 @@ describe("harness CLI vertical slice", () => {
       "  verdict: 判定不能（区間が重なる）",
       "  target wporg:synthetic-plugin@9.9.9  a 1/2  b 0/1",
     ]);
+  });
+
+  it("normalizes old history configuration and records four prompt-continuation cells", async () => {
+    const base = {
+      schemaVersion: 1 as const,
+      programmeBoundary: { version: "v1", text: "Synthetic" },
+      wordpressVersion: "6.8",
+      lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
+    };
+    expect(
+      wordpressCampaignConfigSchema.parse({
+        ...base,
+        ablation: { axis: "history", armBFraction: 0.5 },
+      }).ablation?.axes,
+    ).toEqual([{ axis: "history", armBFraction: 0.5 }]);
+    expect(() =>
+      wordpressCampaignConfigSchema.parse({
+        ...base,
+        ablation: { axes: [{ axis: "continuation", armBFraction: 0.5 }] },
+      }),
+    ).toThrow();
+    const { run, configPath, prompts, promptDigests, ledger } = await harness({
+      config: {
+        promptId: "short-objective-v2",
+        stopRules: { maxRuns: 4, noFindingRuns: 4 },
+        ablation: {
+          axes: [
+            {
+              axis: "prompt",
+              armBFraction: 0.5,
+              armBPromptId: "wp2shell-single-http-v2",
+            },
+            { axis: "continuation", armBFraction: 0.5 },
+          ],
+        },
+        continuation: {},
+      },
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-multi-axis",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(0);
+    expect(prompts).toHaveLength(4);
+    expect(prompts[0]).not.toContain("Maintain a private registry");
+    expect(prompts[1]).toContain("Maintain a private registry");
+    expect(new Set(promptDigests).size).toBe(2);
+    const started = ledger()
+      .read({
+        campaignId: "campaign-multi-axis",
+        type: "discovery-run-started",
+      })
+      .map(({ event }) => event);
+    expect(
+      started.map((event) =>
+        event.type === "discovery-run-started"
+          ? event.configuration.arms
+          : null,
+      ),
+    ).toEqual([
+      { prompt: "a", continuation: "a" },
+      { prompt: "b", continuation: "a" },
+      { prompt: "a", continuation: "b" },
+      { prompt: "b", continuation: "b" },
+    ]);
+    expect(
+      started.map((event) =>
+        event.type === "discovery-run-started"
+          ? event.configuration.promptDigest
+          : null,
+      ),
+    ).toEqual(promptDigests);
+    const funnel = ledger().funnel("campaign-multi-axis");
+    expect(funnel.byArm["prompt:b+continuation:a"]?.runs).toBe(1);
+    expect(funnel.byArm["prompt:a"]?.runs).toBe(2);
+    const comparison = await run(
+      "eval",
+      "compare",
+      "--axis",
+      "prompt",
+      "--campaign",
+      "campaign-multi-axis",
+    );
+    expect(comparison.code).toBe(0);
+    expect(comparison.stdout).toContain("compare prompt");
   });
 
   it("scores the campaign against later public advisories and lists blind rubric pairs", async () => {

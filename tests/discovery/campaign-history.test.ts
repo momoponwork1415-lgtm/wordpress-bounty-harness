@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
 import {
+  allocateTrialArms,
   campaignInputV1Schema,
   createHistoryCatalog,
   historyForRun,
@@ -108,5 +109,32 @@ describe("CampaignInput public boundary", () => {
     ).toEqual(["none", "catalog", "none", "catalog", "none", "catalog"]);
     expect(historyForRun(0, 1, history)).toEqual(history);
     expect(historyForRun(0, 0, history)).toEqual({ mode: "none" });
+  });
+
+  it("cycles through all four cells for two half-fraction axes", () => {
+    const axes = [
+      { axis: "prompt" as const, armBFraction: 0.5 },
+      { axis: "continuation" as const, armBFraction: 0.5 },
+    ];
+    expect(
+      Array.from({ length: 4 }, (_, ordinal) =>
+        allocateTrialArms(ordinal, axes),
+      ),
+    ).toEqual([
+      { prompt: "a", continuation: "a" },
+      { prompt: "b", continuation: "a" },
+      { prompt: "a", continuation: "b" },
+      { prompt: "b", continuation: "b" },
+    ]);
+    expect(
+      Array.from({ length: 4 }, (_, ordinal) =>
+        allocateTrialArms(ordinal, axes.slice(0, 1)),
+      ),
+    ).toEqual([
+      { prompt: "a" },
+      { prompt: "b" },
+      { prompt: "a" },
+      { prompt: "b" },
+    ]);
   });
 });

@@ -4,6 +4,9 @@ import { readFile } from "node:fs/promises";
 export const WORDPRESS_DISCOVERY_PROMPT_IDS = [
   "wp2shell-derived-v1",
   "short-objective-v1",
+  "wp2shell-derived-v2",
+  "short-objective-v2",
+  "wp2shell-single-http-v2",
 ] as const;
 
 export const WORDPRESS_DISCOVERY_ASSET_IDS = [
@@ -29,6 +32,9 @@ export async function loadWordPressDiscoveryAsset(
   switch (id) {
     case "wp2shell-derived-v1":
     case "short-objective-v1":
+    case "wp2shell-derived-v2":
+    case "short-objective-v2":
+    case "wp2shell-single-http-v2":
     case "trust-boundary-v1":
     case "file-assignment-v1":
       fileName = `${id}.md`;

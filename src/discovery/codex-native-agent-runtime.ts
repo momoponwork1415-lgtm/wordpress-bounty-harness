@@ -22,8 +22,8 @@ import {
   type ProviderAttachmentRef,
 } from "./provider-research-report.js";
 
-/** One Finding, sent as JSON text so the provider's strict schema stays closed. */
-const findingTextSchema = z.string().transform((text, context) => {
+/** A profile claim travels as JSON text so the provider's strict schema stays closed. */
+const claimTextSchema = z.string().transform((text, context) => {
   try {
     const value = JSON.parse(text) as unknown;
     if (typeof value === "object" && value !== null && !Array.isArray(value))
@@ -31,11 +31,12 @@ const findingTextSchema = z.string().transform((text, context) => {
   } catch {
     // Reported below.
   }
-  context.addIssue({ code: "custom", message: "Finding is not a JSON object" });
+  context.addIssue({ code: "custom", message: "Claim is not a JSON object" });
   return z.NEVER;
 });
 const reportSchema = z.strictObject({
-  findings: z.array(findingTextSchema),
+  findings: z.array(claimTextSchema),
+  leads: z.array(claimTextSchema),
   examined: z.string().max(16_384),
   unexamined: z.string().max(16_384),
 });
@@ -55,10 +56,17 @@ const reportJsonSchema = {
         description: "One Finding as a JSON object, encoded as a string",
       },
     },
+    leads: {
+      type: "array",
+      items: {
+        type: "string",
+        description: "One Lead as a JSON object, encoded as a string",
+      },
+    },
     examined: { type: "string" },
     unexamined: { type: "string" },
   },
-  required: ["findings", "examined", "unexamined"],
+  required: ["findings", "leads", "examined", "unexamined"],
 } as const;
 
 export interface CodexSandboxCommand {

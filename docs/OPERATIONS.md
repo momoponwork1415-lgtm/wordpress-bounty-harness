@@ -61,6 +61,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
   - 新しいrunを出さず、進行中のrunを記録して止まる。終了コードは3で、台帳に `campaign-stopped` が残る。自動retryはしない。
   - 同じコマンドをもう一度実行すると再開する。探索を終えた対象は飛ばし、途中の対象は残り回数から続け、未検証のFindingだけを検証する。
 - **入口の分担**: campaign の `assignment: {"unit":"entry-point","entriesPerRun":8}` で有効にする。WordPress profile が登録入口、保存先、core 交差、1 hop の include を text 走査し、保存先を共有する入口を同じ scope に置く。索引は事実の列挙で、探索範囲を制限しない。台帳には索引・成分の digest だけを置く。上限（PHP file 20,000、1 file 2 MiB、成分 key 200）を超えた索引は scope に partial と表示する。
+- **A/B の軸**: `ablation.axes` に `history`、`prompt`、`continuation` を最大3本指定する。旧 `ablation: {"axis":"history","armBFraction":...}` も読める。Trial ordinal から arm を決め、台帳 `configuration.arms` に記録する。`prompt` 軸の arm b は `armBPromptId` の版付き prompt を使う。`continuation` 軸は `continuation` ブロックを要する。`eval compare --axis` は各軸の探索 run だけを分母にする。
 - **対象ごとの失敗**（取得、探索、検証）: 標準エラーに `skipped <対象> <版> at <段階>: <理由>` と出す。台帳には `target-skipped`（段階だけ）を残し、次の対象へ進む。
 - Lab 準備では使い捨て runsc コンテナから HTTP 到達を確認する。`lab-provisioned.reachability.http = failed` なら探索を始めず、`failureStage` と `reason` を記録する。DB 到達の失敗は記録するが HTTP が通れば続ける。Docker の診断文は Private Evidence に置き、台帳には digest だけを残す。
 - pinned WordPress image の core は `<workDirectory>/wordpress-core` に実行せず取り出し、Dependency Snapshot として固定する。探索と Verifier は `/workspace/wordpress` の read-only mount で同じ版を読む。
