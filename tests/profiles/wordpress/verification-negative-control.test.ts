@@ -72,7 +72,12 @@ async function verifyOnce(
     },
     source: {
       resolve: async () => ({
-        target: { pluginSlug: "example", sourceDirectory, sourceTree: tree },
+        target: {
+          kind: "plugin",
+          pluginSlug: "example",
+          sourceDirectory,
+          sourceTree: tree,
+        },
         dependencies: [],
       }),
     },

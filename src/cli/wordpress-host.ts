@@ -14,6 +14,7 @@ import {
   readPrivateChatgptLogin,
 } from "../discovery/index.js";
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
+import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import {
   runNativeModelProcess,
   type NativeModelProcessResult,
@@ -23,6 +24,7 @@ import type { Verifier } from "../verification/index.js";
 import {
   createWordPressOrgFetchAdapter,
   openMaterializedSources,
+  openWordPressCoreSource,
   openWordPressOrgSnapshotSource,
   openWordPressOrgTargetSource,
 } from "../profiles/wordpress/acquisition/index.js";
@@ -162,6 +164,7 @@ export async function createWordPressHostProfile(options: {
     wordpressOrg: join(host.workDirectory, "wordpress-org"),
     snapshots: join(host.workDirectory, "snapshots"),
     sources: join(host.workDirectory, "sources"),
+    wordpressCore: join(host.workDirectory, "wordpress-core"),
     programme: join(host.workDirectory, "programme"),
     codexScratch: join(host.workDirectory, "codex-scratch"),
     brokerScratch: join(host.workDirectory, "broker-scratch"),
@@ -215,15 +218,33 @@ export async function createWordPressHostProfile(options: {
     const sources = openMaterializedSources({
       rootDirectory: directories.sources,
     });
+    const coreSource = openWordPressCoreSource({
+      dockerExecutablePath: host.dockerExecutablePath,
+      image: host.images.wordpress,
+      stagingDirectory: directories.wordpressCore,
+      expectedVersion: config.wordpressVersion,
+      runDocker: (args, timeoutMs) => runDocker(args, undefined, timeoutMs),
+    });
     const snapshotStore = openSnapshot({
       storageDirectory: directories.snapshots,
       source: sources.acquisition(
         openWordPressOrgSnapshotSource({
           targetSource,
           storageDirectory: directories.wordpressOrg,
+          dependencies: coreSource,
         }),
       ),
     });
+    const coreOf = (
+      resolved: Awaited<ReturnType<typeof sources.resolve>>,
+    ): { directory: string; tree: ExpectedSourceTree } | undefined => {
+      const core = resolved.dependencies.find(
+        (dependency) => dependency.kind === "wordpress-core",
+      );
+      return core === undefined
+        ? undefined
+        : { directory: core.sourceDirectory, tree: core.sourceTree };
+    };
     const lab = openWordPressLab({
       dockerExecutablePath: host.dockerExecutablePath,
       images: {
@@ -304,6 +325,7 @@ export async function createWordPressHostProfile(options: {
             nextStep:
               "Freeze the target again so its materialized source matches the Lab snapshot",
           };
+        const core = coreOf(source);
         return new CodexVerifier({
           runtime,
           store: state.store,
@@ -313,6 +335,7 @@ export async function createWordPressHostProfile(options: {
             directory: source.target.sourceDirectory,
             tree: source.target.sourceTree,
           },
+          ...(core === undefined ? {} : { dependencySource: core }),
           lab,
           clock: state.clock,
         }).attempt({ finding, lab: handle });
@@ -339,8 +362,13 @@ export async function createWordPressHostProfile(options: {
       },
       lab,
       async sourceFor(snapshot) {
-        const { target } = await sources.resolve(snapshot);
-        return { directory: target.sourceDirectory, tree: target.sourceTree };
+        const resolved = await sources.resolve(snapshot);
+        const core = coreOf(resolved);
+        return {
+          directory: resolved.target.sourceDirectory,
+          tree: resolved.target.sourceTree,
+          ...(core === undefined ? {} : { dependency: core }),
+        };
       },
       runtimeProfile,
       probeRuntime: () => sandbox.probe(),

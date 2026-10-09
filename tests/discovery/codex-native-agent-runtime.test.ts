@@ -341,6 +341,50 @@ describe("Codex native agent runtime", () => {
     }
   });
 
+  it("passes a frozen core dependency mount and rejects a relative dependency path", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-core-transport-"));
+    try {
+      const commands: CodexSandboxCommand[] = [];
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(transcript, commands),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      const dependencySource = {
+        directory: "/synthetic/wordpress-core",
+        tree: { digest, entries: 1, bytes: 20 },
+      };
+      expect(
+        (await runtime.execute({ ...run, dependencySource })).receipt.terminal,
+      ).toBe("completed");
+      expect(commands[0]?.dependencyMount).toEqual({
+        directory: dependencySource.directory,
+        expectedTree: dependencySource.tree,
+        path: "/workspace/wordpress",
+        mode: "ro",
+      });
+      expect(
+        (
+          await runtime.execute({
+            ...run,
+            dependencySource: {
+              ...dependencySource,
+              directory: "relative/core",
+            },
+          })
+        ).receipt,
+      ).toMatchObject({
+        terminal: "incomplete",
+        reason: "policy",
+      });
+      expect(commands).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("marks a provider rate limit or quota as a provider limit and nothing else", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
     try {

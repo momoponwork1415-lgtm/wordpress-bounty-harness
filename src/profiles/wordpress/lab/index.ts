@@ -99,6 +99,7 @@ const CRITICAL_OPTIONS = [
   "wp_user_roles",
 ];
 const snapshotWithDigestSchema = snapshotSchema.safeExtend({ digest });
+export const WORDPRESS_CORE_IDENTITY = "wordpress-core";
 
 export type WordPressLabSetup = z.infer<typeof setupSchema>;
 export type DockerRequest = {
@@ -120,11 +121,19 @@ export interface DockerRunner {
   run(request: DockerRequest): Promise<DockerResult>;
 }
 
-export interface WordPressSource {
-  readonly pluginSlug: string;
-  readonly sourceDirectory: string;
-  readonly sourceTree: ExpectedSourceTree;
-}
+export type WordPressSource =
+  | {
+      readonly kind: "plugin";
+      readonly pluginSlug: string;
+      readonly sourceDirectory: string;
+      readonly sourceTree: ExpectedSourceTree;
+    }
+  | {
+      readonly kind: "wordpress-core";
+      readonly version: string;
+      readonly sourceDirectory: string;
+      readonly sourceTree: ExpectedSourceTree;
+    };
 export interface WordPressSourceResolver {
   resolve(snapshot: Snapshot): Promise<{
     readonly target: WordPressSource;
@@ -500,7 +509,7 @@ export function openWordPressLab(options: {
     source: WordPressSource,
     expected: string,
   ): Promise<string> => {
-    slug.parse(source.pluginSlug);
+    if (source.kind === "plugin") slug.parse(source.pluginSlug);
     if (
       !isAbsolute(source.sourceDirectory) ||
       source.sourceDirectory.includes("\0") ||
@@ -585,24 +594,36 @@ export function openWordPressLab(options: {
         if (
           setup.customerRole &&
           ![resolved.target, ...resolved.dependencies].some(
-            (source) => source.pluginSlug === "woocommerce",
+            (source) =>
+              source.kind === "plugin" && source.pluginSlug === "woocommerce",
           )
         )
           throw new Error("Customer role needs WooCommerce");
+        if (resolved.target.kind !== "plugin")
+          throw new Error("The target must be a plugin");
         const targetDirectory = await verifySource(
           resolved.target,
           snapshot.target.sourceDigest,
         );
         const dependencies: { slug: string; directory: string }[] = [];
+        let coreVersion: string | undefined;
         for (let index = 0; index < resolved.dependencies.length; index++) {
           const item = resolved.dependencies[index];
           const expected = snapshot.dependencies[index];
           if (item === undefined || expected === undefined)
             throw new Error("Dependency missing");
-          dependencies.push({
-            slug: item.pluginSlug,
-            directory: await verifySource(item, expected.sourceDigest),
-          });
+          const directory = await verifySource(item, expected.sourceDigest);
+          if (item.kind === "wordpress-core") {
+            if (
+              expected.identity !== WORDPRESS_CORE_IDENTITY ||
+              expected.version !== item.version ||
+              coreVersion !== undefined
+            )
+              throw new Error("WordPress core dependency mismatch");
+            coreVersion = item.version;
+          } else {
+            dependencies.push({ slug: item.pluginSlug, directory });
+          }
         }
         await preflight();
         const id = randomUUID();
@@ -769,6 +790,11 @@ export function openWordPressLab(options: {
             await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
         }
         if (!healthy) throw new Error("WordPress health check failed");
+        if (coreVersion !== undefined) {
+          const running = await wp(resource, ["core", "version"]);
+          if (running.stdout.trim() !== coreVersion)
+            throw new Error("The Lab image runs another WordPress version");
+        }
         await wp(resource, [
           "core",
           "install",
@@ -842,7 +868,10 @@ export function openWordPressLab(options: {
           status: "incomplete",
           reason: "provision",
           nextStep:
-            "Check source, pinned images, runsc, and Lab initialization; then provision a fresh Lab",
+            error instanceof Error &&
+            error.message === "The Lab image runs another WordPress version"
+              ? error.message
+              : "Check source, pinned images, runsc, and Lab initialization; then provision a fresh Lab",
           ...(error instanceof LabDockerFailure && error.diagnostic
             ? { diagnostic: error.diagnostic }
             : {}),

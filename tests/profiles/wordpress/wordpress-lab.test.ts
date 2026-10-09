@@ -26,6 +26,7 @@ afterEach(async () => {
 
 async function fixture(
   preflight: "ready" | "no-runsc" | "missing-image" = "ready",
+  core?: { readonly version: string; readonly runningVersion: string },
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-lab-"));
   directories.push(root);
@@ -47,7 +48,16 @@ async function fixture(
       version: "1.0",
       sourceDigest: sourceTree.digest,
     },
-    dependencies: [],
+    dependencies:
+      core === undefined
+        ? []
+        : [
+            {
+              identity: "wordpress-core",
+              version: core.version,
+              sourceDigest: sourceTree.digest,
+            },
+          ],
   };
   const snapshot: Snapshot = {
     ...snapshotBody,
@@ -82,8 +92,23 @@ async function fixture(
     },
     source: {
       resolve: async () => ({
-        target: { pluginSlug: "example", sourceDirectory, sourceTree },
-        dependencies: [],
+        target: {
+          kind: "plugin",
+          pluginSlug: "example",
+          sourceDirectory,
+          sourceTree,
+        },
+        dependencies:
+          core === undefined
+            ? []
+            : [
+                {
+                  kind: "wordpress-core" as const,
+                  version: core.version,
+                  sourceDirectory,
+                  sourceTree,
+                },
+              ],
       }),
     },
     runner: {
@@ -111,6 +136,12 @@ async function fixture(
             stdout: request.args.some((arg) => arg.startsWith("WBH_DB_USER="))
               ? '{"http":"ok","database":"ok"}'
               : '{"http":"ok","database":"not-exposed"}',
+            stderr: "",
+          };
+        if (request.args.includes("core") && request.args.includes("version"))
+          return {
+            exitCode: 0,
+            stdout: `${core?.runningVersion ?? "6.8.3"}\n`,
             stderr: "",
           };
         const saltArg = request.args.find((arg) =>
@@ -227,6 +258,27 @@ async function fixture(
 }
 
 describe("WordPress gVisor Lab", () => {
+  it("refuses to provision when the running core differs from its dependency snapshot", async () => {
+    const { lab, snapshot, setup, commands } = await fixture("ready", {
+      version: "6.8.3",
+      runningVersion: "6.8.2",
+    });
+    expect(await lab.provision(snapshot, setup)).toMatchObject({
+      status: "incomplete",
+      reason: "provision",
+      nextStep: "The Lab image runs another WordPress version",
+    });
+    expect(
+      commands.some(
+        (command) =>
+          command.args.includes("core") && command.args.includes("version"),
+      ),
+    ).toBe(true);
+    expect(commands.some((command) => command.args.includes("install"))).toBe(
+      false,
+    );
+  });
+
   it("probes HTTP from a disposable runsc container on the Lab network", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const provisioned = await lab.provision(snapshot, setup);

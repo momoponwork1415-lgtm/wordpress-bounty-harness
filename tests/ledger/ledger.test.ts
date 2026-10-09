@@ -70,6 +70,26 @@ async function evidence(store: PrivateArtifactStore): Promise<string> {
 }
 
 describe("Ledger public interface", () => {
+  it("keeps old snapshot events readable and records optional dependency digests", async () => {
+    const { ledger } = await fixture();
+    await ledger.append({
+      ...common("snapshot-old"),
+      type: "snapshot-frozen",
+      sourceDigest: snapshot,
+    });
+    await ledger.append({
+      ...common("snapshot-core"),
+      type: "snapshot-frozen",
+      sourceDigest: snapshot,
+      dependencyDigests: [otherSnapshot],
+    });
+    const events = ledger
+      .read({ type: "snapshot-frozen" })
+      .map(({ event }) => event);
+    expect(events[0]).not.toHaveProperty("dependencyDigests");
+    expect(events[1]).toMatchObject({ dependencyDigests: [otherSnapshot] });
+  });
+
   it("appends durably, keeps the first identity immutable, and reads in sequence", async () => {
     const { ledger, artifactStore, databasePath } = await fixture();
     const ref = await evidence(artifactStore);

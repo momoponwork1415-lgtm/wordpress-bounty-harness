@@ -103,6 +103,10 @@ export class CodexVerifier implements Verifier<
         readonly directory: string;
         readonly tree: ExpectedSourceTree;
       };
+      readonly dependencySource?: {
+        readonly directory: string;
+        readonly tree: ExpectedSourceTree;
+      };
       /** Issues the canary a Finding's impact needs; only the Lab can observe it. */
       readonly lab: Pick<
         WordPressLab,
@@ -223,6 +227,9 @@ export class CodexVerifier implements Verifier<
       canonicalJson({
         endpoint: lab.endpoint,
         accounts,
+        ...(this.options.dependencySource === undefined
+          ? {}
+          : { wordpressCoreSource: "/workspace/wordpress" }),
         ...(canary === undefined ? {} : { canary }),
       }),
     ].join("\n\n");
@@ -257,6 +264,9 @@ export class CodexVerifier implements Verifier<
       },
       sourceDirectory: this.options.source.directory,
       sourceTree: this.options.source.tree,
+      ...(this.options.dependencySource === undefined
+        ? {}
+        : { dependencySource: this.options.dependencySource }),
       expiresAt: new Date(
         now.getTime() + (this.options.wallTimeMs ?? 30 * 60_000),
       ).toISOString(),

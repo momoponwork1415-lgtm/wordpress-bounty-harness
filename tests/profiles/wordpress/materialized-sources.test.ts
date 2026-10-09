@@ -62,6 +62,27 @@ async function setup(acquired: {
 }
 
 describe("materialized snapshot sources", () => {
+  it("resolves the frozen core dependency by kind and version", async () => {
+    const { sources, snapshots } = await setup({
+      target: source("wporg:example-plugin", {
+        "plugin.php": "<?php // plugin",
+      }),
+      dependencies: [
+        source("wordpress-core", {
+          "wp-includes/version.php": "<?php // core",
+        }),
+      ],
+    });
+    const snapshot = await snapshots.freeze("example-plugin");
+    const resolved = await sources.resolve(snapshot);
+    expect(resolved.target).toMatchObject({ kind: "plugin" });
+    expect(resolved.dependencies[0]).toMatchObject({
+      kind: "wordpress-core",
+      version: "1.0.0",
+      sourceTree: { digest: snapshot.dependencies[0]?.sourceDigest },
+    });
+  });
+
   it("lays every frozen source out as a read-only tree that matches the snapshot digest", async () => {
     const { sources, snapshots } = await setup({
       target: source("wporg:example-plugin", {
@@ -73,13 +94,18 @@ describe("materialized snapshot sources", () => {
     const snapshot = await snapshots.freeze("example-plugin");
     const resolved = await sources.resolve(snapshot);
 
-    expect(resolved.target.pluginSlug).toBe("example-plugin");
+    expect(resolved.target).toMatchObject({
+      kind: "plugin",
+      pluginSlug: "example-plugin",
+    });
     expect(resolved.target.sourceTree.digest).toBe(
       snapshot.target.sourceDigest,
     );
-    expect(resolved.dependencies.map((item) => item.pluginSlug)).toEqual([
-      "woocommerce",
-    ]);
+    expect(
+      resolved.dependencies.map((item) =>
+        item.kind === "plugin" ? item.pluginSlug : item.version,
+      ),
+    ).toEqual(["woocommerce"]);
     for (const item of [resolved.target, ...resolved.dependencies])
       expect(
         (await verifyCanonicalSourceTree(item.sourceDirectory, item.sourceTree))
