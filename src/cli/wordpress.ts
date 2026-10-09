@@ -25,6 +25,13 @@ import {
   wordpressFindingLocations,
 } from "../profiles/wordpress/answer-key.js";
 import {
+  planWordPressEntryAssignments,
+  renderWordPressEntryAssignment,
+  type WordPressEntryAssignment,
+} from "../profiles/wordpress/discovery/entry-points.js";
+import { buildWordPressSourceIndex } from "../profiles/wordpress/discovery/storage-index.js";
+import { canonicalDigest } from "../infrastructure/canonical-json.js";
+import {
   admitWordPressFinding,
   readWordPressFinding,
   type WordPressFinding,
@@ -104,6 +111,13 @@ export const wordpressCampaignConfigSchema = z.strictObject({
     .strictObject({
       axis: z.literal("history"),
       armBFraction: z.number().min(0).max(1),
+    })
+    .optional(),
+  /** Opt-in connected entry scopes; the index is profile-owned and does not constrain exploration. */
+  assignment: z
+    .strictObject({
+      unit: z.literal("entry-point"),
+      entriesPerRun: z.number().int().min(1).max(64).default(8),
     })
     .optional(),
   wordpressVersion: z.string().min(1).max(32),
@@ -324,37 +338,79 @@ export function createWordPressCliProfile(options: {
               config.stopRules.maxRuns,
               target.runBudget,
             );
+            const assignments: readonly WordPressEntryAssignment[] =
+              config.assignment === undefined
+                ? []
+                : planWordPressEntryAssignments(
+                    await buildWordPressSourceIndex(
+                      source.directory,
+                      target.slug,
+                    ),
+                    config.assignment.entriesPerRun,
+                  );
+            if (config.assignment !== undefined && assignments.length === 0)
+              throw new Error(
+                "Entry-point assignment found no registrations in the source",
+              );
             const stopRules = {
               maxRuns,
-              noFindingRuns: Math.min(config.stopRules.noFindingRuns, maxRuns),
+              noFindingRuns: Math.min(
+                Math.max(config.stopRules.noFindingRuns, assignments.length),
+                maxRuns,
+              ),
             };
             const accounts = Object.entries(lab.attackerAccounts).map(
               ([role, account]) =>
                 `- ${role}: ${account.username} / ${account.password} (Lab only)`,
             );
             // Only low-privilege Lab accounts exist on the handle; nothing else is offered.
-            const prompt = [
-              objective.text.trim(),
-              "## Trust boundary",
-              trustBoundary.text.trim(),
-              `## Programme Boundary (${config.programmeBoundary.version})`,
-              config.programmeBoundary.text.trim(),
-              "## Lab",
-              `Endpoint: ${lab.endpoint}`,
-              ...accounts,
-              ...(lab.database === undefined
-                ? ["Database: not exposed to this run."]
-                : [
-                    `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
-                  ]),
-              ...(source.dependency === undefined
-                ? []
-                : [
-                    "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
-                  ]),
-              "## Assigned files",
-              "All files under /workspace/main.",
-            ].join("\n\n");
+            const promptFor = (
+              assignment: WordPressEntryAssignment | undefined,
+            ) =>
+              [
+                objective.text.trim(),
+                "## Trust boundary",
+                trustBoundary.text.trim(),
+                `## Programme Boundary (${config.programmeBoundary.version})`,
+                config.programmeBoundary.text.trim(),
+                "## Lab",
+                `Endpoint: ${lab.endpoint}`,
+                ...accounts,
+                ...(lab.database === undefined
+                  ? ["Database: not exposed to this run."]
+                  : [
+                      `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
+                    ]),
+                ...(source.dependency === undefined
+                  ? []
+                  : [
+                      "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
+                    ]),
+                ...(assignment === undefined
+                  ? ["## Assigned files", "All files under /workspace/main."]
+                  : [
+                      renderWordPressEntryAssignment(
+                        assignment,
+                        source.dependency !== undefined,
+                      ),
+                    ]),
+              ].join("\n\n");
+            const assignmentMetadata = (
+              assignment: WordPressEntryAssignment,
+            ) => {
+              if (
+                assignment.indexDigest === undefined ||
+                assignment.componentIds === undefined
+              )
+                throw new Error("Indexed assignment metadata is missing");
+              return {
+                partition: assignment.partition,
+                of: assignment.of,
+                planDigest: assignment.planDigest,
+                indexDigest: assignment.indexDigest,
+                componentDigest: canonicalDigest(assignment.componentIds),
+              };
+            };
             const now = state.clock().getTime();
             return {
               input: {
@@ -389,6 +445,10 @@ export function createWordPressCliProfile(options: {
                 { length: maxRuns },
                 (_, trialOrdinal) => {
                   const trialId = state.newId();
+                  const assignment =
+                    assignments.length === 0
+                      ? undefined
+                      : assignments[trialOrdinal % assignments.length]!;
                   return {
                     trialId,
                     trialOrdinal,
@@ -403,7 +463,11 @@ export function createWordPressCliProfile(options: {
                               ? ("none" as const)
                               : ("mounted" as const),
                         },
-                        assignmentUnit: "plugin",
+                        assignmentUnit:
+                          assignment === undefined ? "plugin" : "entry-point",
+                        ...(assignment === undefined
+                          ? {}
+                          : { assignment: assignmentMetadata(assignment) }),
                         labAccess: {
                           database:
                             lab.database === undefined ? "none" : "read-only",
@@ -413,7 +477,7 @@ export function createWordPressCliProfile(options: {
                         runId: trialId,
                         targetSnapshotDigest: snapshot.digest,
                         profile: boundaries.runtimeProfile,
-                        prompt,
+                        prompt: promptFor(assignment),
                         lab: {
                           endpoint: lab.endpoint,
                           networkName: lab.networkName,

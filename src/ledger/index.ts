@@ -73,6 +73,15 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         .strictObject({ dependency: z.enum(["mounted", "none"]) })
         .optional(),
       assignmentUnit: id,
+      assignment: z
+        .strictObject({
+          partition: z.number().int().nonnegative(),
+          of: z.number().int().positive(),
+          planDigest: digest,
+          indexDigest: digest.optional(),
+          componentDigest: digest.optional(),
+        })
+        .optional(),
       labAccess: z
         .strictObject({ database: z.enum(["read-only", "none"]) })
         .optional(),

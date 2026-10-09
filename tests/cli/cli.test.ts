@@ -87,6 +87,7 @@ async function harness(
     readonly failFreeze?: string;
     /** Extra campaign config fields. */
     readonly config?: Readonly<Record<string, unknown>>;
+    readonly entryPoints?: boolean;
     /** What the Codex image reports; defaults to the runtime profile's values. */
     readonly probe?: {
       readonly cliVersion: string;
@@ -105,11 +106,15 @@ async function harness(
   await mkdir(join(sourceDirectory, "includes"), { recursive: true });
   await writeFile(
     join(sourceDirectory, "includes", "synthetic.php"),
-    "<?php // harmless synthetic fixture\n",
+    options.entryPoints === true
+      ? "<?php\nadd_action('wp_ajax_nopriv_synthetic_save', 'synthetic_save');\nadd_action('wp_ajax_nopriv_synthetic_load', 'synthetic_load');\nfunction synthetic_save() { update_option('synthetic_plugin_shared', 'value'); }\nfunction synthetic_load() { get_option('synthetic_plugin_shared'); }\n"
+      : "<?php // harmless synthetic fixture\n",
   );
   await writeFile(
     join(sourceDirectory, "synthetic-plugin.php"),
-    "<?php // harmless synthetic fixture\n",
+    options.entryPoints === true
+      ? "<?php\nadd_action('init', 'synthetic_boot');\nfunction synthetic_boot() {}\n"
+      : "<?php // harmless synthetic fixture\n",
   );
   const tree = await measureCanonicalSourceTree(sourceDirectory, {
     maxEntries: 10,
@@ -833,6 +838,54 @@ describe("harness CLI vertical slice", () => {
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("stopped by max-runs");
     expect(prompts).toHaveLength(1);
+  });
+
+  it("assigns connected source scopes and records index and component digests", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      entryPoints: true,
+      config: {
+        stopRules: { maxRuns: 2, noFindingRuns: 2 },
+        assignment: { unit: "entry-point", entriesPerRun: 2 },
+      },
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-entry",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(
+      prompts.some((prompt) => prompt.includes("## Assigned entry points")),
+    ).toBe(true);
+    expect(
+      prompts.some((prompt) =>
+        prompt.includes("option `synthetic_plugin_shared`"),
+      ),
+    ).toBe(true);
+    expect(
+      prompts.some(
+        (prompt) => prompt.includes("written by") && prompt.includes("read by"),
+      ),
+    ).toBe(true);
+    const started = ledger().read({
+      campaignId: "campaign-entry",
+      type: "discovery-run-started",
+    });
+    expect(started).toHaveLength(prompts.length);
+    for (const { event } of started) {
+      if (event.type !== "discovery-run-started")
+        throw new Error("Unexpected event");
+      expect(event.configuration.assignmentUnit).toBe("entry-point");
+      expect(event.configuration.assignment?.indexDigest).toMatch(/^sha256:/);
+      expect(event.configuration.assignment?.componentDigest).toMatch(
+        /^sha256:/,
+      );
+      expect(JSON.stringify(event)).not.toContain("synthetic_plugin_shared");
+    }
   });
 
   it("splits runs into history arms and reads runs and Findings per arm from the ledger", async () => {

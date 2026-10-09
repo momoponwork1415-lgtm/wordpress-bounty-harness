@@ -182,6 +182,13 @@ export type PlannedDiscoveryRun = {
     readonly trustBoundaryVersion?: string;
     readonly sourcePack?: { readonly dependency: "mounted" | "none" };
     readonly assignmentUnit: string;
+    readonly assignment?: {
+      readonly partition: number;
+      readonly of: number;
+      readonly planDigest: string;
+      readonly indexDigest?: string;
+      readonly componentDigest?: string;
+    };
     readonly labAccess?: { readonly database: "read-only" | "none" };
   };
 };
