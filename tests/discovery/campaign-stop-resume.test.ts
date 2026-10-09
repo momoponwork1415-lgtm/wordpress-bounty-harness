@@ -205,6 +205,20 @@ async function open() {
 }
 
 describe("discovery campaign stop and resume", () => {
+  it("concludes a campaign with a maximum-length id", async () => {
+    const { campaign, ledger } = await open();
+    const campaignId = "c".repeat(128);
+    const result = await campaign({
+      campaignId,
+      prefix: "long-id",
+      replies: () => "empty",
+    });
+    expect(result).toMatchObject({ runCount: 6, stoppedBy: "no-new-finding" });
+    const concluded = ledger.read({ campaignId, type: "discovery-concluded" });
+    expect(concluded).toHaveLength(1);
+    expect(concluded[0]?.event.identity.length).toBeLessThanOrEqual(128);
+  });
+
   it("stops on a provider limit, records the refused run and resumes after the completed runs", async () => {
     const { ledger, campaign, finished } = await open();
     const stopped = await campaign({

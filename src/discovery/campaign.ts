@@ -728,7 +728,10 @@ export async function runDiscoveryCampaign(options: {
       campaignId: options.campaignId,
       snapshotDigest: input.snapshotDigest,
       occurredAt: clock().toISOString(),
-      identity: `discovery-concluded-${options.campaignId}-${input.snapshotDigest}`,
+      identity: `discovery-concluded-${canonicalDigest({
+        campaignId: options.campaignId,
+        snapshotDigest: input.snapshotDigest,
+      })}`,
       type: "discovery-concluded",
       stoppedBy,
     });
