@@ -25,16 +25,22 @@ describe("WordPress discovery prompt assets", () => {
       /\b(?:curl|python|php)\s+-|\/wp-admin\/admin-ajax\.php|<script\b/i,
     );
   });
-  it("publishes two versioned prompt variants and the shared boundary and assignment rules", async () => {
+  it("publishes versioned prompt variants and the shared boundary and assignment rules", async () => {
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       "wp2shell-derived-v1",
       "short-objective-v1",
+      "wp2shell-derived-v2",
+      "short-objective-v2",
+      "wp2shell-single-http-v2",
       "trust-boundary-v1",
       "file-assignment-v1",
     ]);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-derived-v1",
       "short-objective-v1",
+      "wp2shell-derived-v2",
+      "short-objective-v2",
+      "wp2shell-single-http-v2",
     ]);
 
     for (const id of WORDPRESS_DISCOVERY_ASSET_IDS) {
@@ -46,6 +52,25 @@ describe("WordPress discovery prompt assets", () => {
         `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
       );
       expect(asset.text.length).toBeGreaterThan(100);
+    }
+  });
+
+  it("pins the v2 bytes and excludes answer clues and scripted commands", async () => {
+    const pins = {
+      "short-objective-v2":
+        "sha256:e6a7a1650f2af3c1e34d73a42c2d378497f4553818967cb804227cbd01436809",
+      "wp2shell-derived-v2":
+        "sha256:f9d90b8ad1dd955527756bf9ad9869624cff999dd7fab3908a7f050b1cd422be",
+      "wp2shell-single-http-v2":
+        "sha256:a466aa5d5abba7ff18b70135d3ae7730880674652c87fd65feaa3534765904fe",
+    } as const;
+    for (const [id, digest] of Object.entries(pins)) {
+      const asset = await loadWordPressDiscoveryAsset(id as keyof typeof pins);
+      expect(asset.digest).toBe(digest);
+      expect(asset.text).toContain("A Lead is not a Finding.");
+      expect(asset.text).not.toMatch(
+        /\b(?:PoC|payload|CVE)\b|<script\b|\bcurl\s+-/i,
+      );
     }
   });
 

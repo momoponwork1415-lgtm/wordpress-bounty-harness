@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
 import {
+  allocateTrialArms,
   CODEX_SANDBOX_MEMORY_MIB,
   EGRESS_BROKER_LEFTOVER_PATTERNS,
   EGRESS_BROKER_MEMORY_MIB,
@@ -79,55 +80,92 @@ const text = z.strictObject({
 const DISCOVERY_RUN_MEMORY_MIB =
   CODEX_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
 
-/** Human-edited, Git-tracked run configuration. It carries no credentials or keys. */
-export const wordpressCampaignConfigSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  selectionPolicyPath: z.string().min(1).optional(),
-  promptId: z
-    .enum(WORDPRESS_DISCOVERY_PROMPT_IDS)
-    .default("short-objective-v1"),
-  programmeBoundary: text,
-  stopRules: z
-    .strictObject({
-      maxRuns: z.number().int().positive().max(40),
-      noFindingRuns: z.number().int().positive(),
-    })
-    .default({ maxRuns: 6, noFindingRuns: 3 }),
-  runWallTimeMinutes: z.number().positive().max(240).default(90),
-  /** Host bounds: concurrent discovery runs and the memory the Harness may use for them. */
-  resources: z
-    .strictObject({
-      maxConcurrentRuns: z.number().int().min(1).max(4).default(2),
-      memoryBudgetMiB: z.number().int().positive(),
-    })
-    .default({
-      maxConcurrentRuns: 2,
-      memoryBudgetMiB: 4 * DISCOVERY_RUN_MEMORY_MIB,
-    }),
-  /** Optional ceiling on exploration runs (Trials) started per UTC day across campaigns. */
-  dailyRunCap: z.number().int().positive().optional(),
-  /** Splits runs into arm a without history and arm b with the local public history. */
-  ablation: z
-    .strictObject({
-      axis: z.literal("history"),
-      armBFraction: z.number().min(0).max(1),
-    })
-    .optional(),
-  /** Opt-in connected entry scopes; the index is profile-owned and does not constrain exploration. */
-  assignment: z
-    .strictObject({
-      unit: z.literal("entry-point"),
-      entriesPerRun: z.number().int().min(1).max(64).default(8),
-    })
-    .optional(),
-  wordpressVersion: z.string().min(1).max(32),
-  lab: z.strictObject({
-    siteTitle: z.string().min(1).max(120),
-    initialPosts: z.array(z.string().min(1).max(120)).max(20),
-    customerRole: z.boolean(),
-    databaseAccess: z.enum(["read-only", "none"]).default("read-only"),
+const armBFraction = z.number().min(0).max(1);
+const ablationAxis = z.discriminatedUnion("axis", [
+  z.strictObject({ axis: z.literal("history"), armBFraction }),
+  z.strictObject({
+    axis: z.literal("prompt"),
+    armBFraction,
+    armBPromptId: z.enum(WORDPRESS_DISCOVERY_PROMPT_IDS),
   }),
-});
+  z.strictObject({ axis: z.literal("continuation"), armBFraction }),
+]);
+const ablation = z
+  .union([
+    z.strictObject({ axes: z.array(ablationAxis).min(1).max(3) }),
+    z.strictObject({ axis: z.literal("history"), armBFraction }),
+  ])
+  .transform((value) => ("axes" in value ? value : { axes: [value] }));
+
+/** Human-edited, Git-tracked run configuration. It carries no credentials or keys. */
+export const wordpressCampaignConfigSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    selectionPolicyPath: z.string().min(1).optional(),
+    promptId: z
+      .enum(WORDPRESS_DISCOVERY_PROMPT_IDS)
+      .default("short-objective-v1"),
+    programmeBoundary: text,
+    stopRules: z
+      .strictObject({
+        maxRuns: z.number().int().positive().max(40),
+        noFindingRuns: z.number().int().positive(),
+      })
+      .default({ maxRuns: 6, noFindingRuns: 3 }),
+    runWallTimeMinutes: z.number().positive().max(240).default(90),
+    /** Host bounds: concurrent discovery runs and the memory the Harness may use for them. */
+    resources: z
+      .strictObject({
+        maxConcurrentRuns: z.number().int().min(1).max(4).default(2),
+        memoryBudgetMiB: z.number().int().positive(),
+      })
+      .default({
+        maxConcurrentRuns: 2,
+        memoryBudgetMiB: 4 * DISCOVERY_RUN_MEMORY_MIB,
+      }),
+    /** Optional ceiling on exploration runs (Trials) started per UTC day across campaigns. */
+    dailyRunCap: z.number().int().positive().optional(),
+    /** Splits runs into arm a without history and arm b with the local public history. */
+    ablation: ablation.optional(),
+    continuation: z
+      .strictObject({
+        maxRunsPerTrial: z.number().int().min(1).max(2).default(2),
+        runWallTimeMinutes: z.number().positive().max(120).default(30),
+      })
+      .optional(),
+    /** Opt-in connected entry scopes; the index is profile-owned and does not constrain exploration. */
+    assignment: z
+      .strictObject({
+        unit: z.literal("entry-point"),
+        entriesPerRun: z.number().int().min(1).max(64).default(8),
+      })
+      .optional(),
+    wordpressVersion: z.string().min(1).max(32),
+    lab: z.strictObject({
+      siteTitle: z.string().min(1).max(120),
+      initialPosts: z.array(z.string().min(1).max(120)).max(20),
+      customerRole: z.boolean(),
+      databaseAccess: z.enum(["read-only", "none"]).default("read-only"),
+    }),
+  })
+  .superRefine((config, context) => {
+    const axes = config.ablation?.axes ?? [];
+    if (new Set(axes.map((axis) => axis.axis)).size !== axes.length)
+      context.addIssue({
+        code: "custom",
+        path: ["ablation", "axes"],
+        message: "Ablation axes must be distinct",
+      });
+    if (
+      axes.some((axis) => axis.axis === "continuation") &&
+      config.continuation === undefined
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["continuation"],
+        message: "Continuation axis requires a continuation block",
+      });
+  });
 export type WordPressCampaignConfig = z.infer<
   typeof wordpressCampaignConfigSchema
 >;
@@ -246,7 +284,7 @@ export function createWordPressCliProfile(options: {
     target: WordPressTargetSelection,
   ): CampaignHistory => {
     if (
-      config.ablation === undefined ||
+      !config.ablation?.axes.some((axis) => axis.axis === "history") ||
       options.wordfenceHistory === undefined ||
       target.versionPublishedAt === undefined
     )
@@ -317,6 +355,13 @@ export function createWordPressCliProfile(options: {
         loadWordPressDiscoveryAsset(config.promptId),
         loadWordPressDiscoveryAsset("trust-boundary-v1"),
       ]);
+      const promptAxis = config.ablation?.axes.find(
+        (axis) => axis.axis === "prompt",
+      );
+      const armBObjective =
+        promptAxis?.axis === "prompt"
+          ? await loadWordPressDiscoveryAsset(promptAxis.armBPromptId)
+          : undefined;
       return runCampaignPipeline({
         campaignId: input.campaignId,
         ledger: state.ledger,
@@ -366,9 +411,10 @@ export function createWordPressCliProfile(options: {
             // Only low-privilege Lab accounts exist on the handle; nothing else is offered.
             const promptFor = (
               assignment: WordPressEntryAssignment | undefined,
+              objectiveText: string,
             ) =>
               [
-                objective.text.trim(),
+                objectiveText.trim(),
                 "## Trust boundary",
                 trustBoundary.text.trim(),
                 `## Programme Boundary (${config.programmeBoundary.version})`,
@@ -427,7 +473,9 @@ export function createWordPressCliProfile(options: {
                 lab: { setupDigest: lab.setupDigest },
                 history: historyFor(config, target),
               },
-              historyFraction: config.ablation?.armBFraction ?? 0,
+              historyFraction:
+                config.ablation?.axes.find((axis) => axis.axis === "history")
+                  ?.armBFraction ?? 0,
               runWallTimeMs: config.runWallTimeMinutes * 60_000,
               concurrency: Math.min(
                 config.resources.maxConcurrentRuns,
@@ -440,11 +488,19 @@ export function createWordPressCliProfile(options: {
                 : { dailyRunCap: config.dailyRunCap }),
               ...(config.ablation === undefined
                 ? {}
-                : { ablation: { axis: config.ablation.axis } }),
+                : { ablation: { axes: config.ablation.axes } }),
               plannedTrials: Array.from(
                 { length: maxRuns },
                 (_, trialOrdinal) => {
                   const trialId = state.newId();
+                  const arms = allocateTrialArms(
+                    trialOrdinal,
+                    config.ablation?.axes ?? [],
+                  );
+                  const selectedObjective =
+                    arms.prompt === "b" && armBObjective !== undefined
+                      ? armBObjective
+                      : objective;
                   const assignment =
                     assignments.length === 0
                       ? undefined
@@ -454,8 +510,8 @@ export function createWordPressCliProfile(options: {
                     trialOrdinal,
                     explore: {
                       configuration: {
-                        promptVariant: config.promptId,
-                        promptDigest: objective.digest,
+                        promptVariant: selectedObjective.id,
+                        promptDigest: selectedObjective.digest,
                         trustBoundaryVersion: trustBoundary.id,
                         sourcePack: {
                           dependency:
@@ -477,7 +533,7 @@ export function createWordPressCliProfile(options: {
                         runId: trialId,
                         targetSnapshotDigest: snapshot.digest,
                         profile: boundaries.runtimeProfile,
-                        prompt: promptFor(assignment),
+                        prompt: promptFor(assignment, selectedObjective.text),
                         lab: {
                           endpoint: lab.endpoint,
                           networkName: lab.networkName,

@@ -25,6 +25,11 @@ type SyntheticRun = {
   readonly costUsd?: number;
   readonly setupFailed?: boolean;
   readonly providerLimited?: boolean;
+  readonly runKind?: "explore" | "continue";
+  readonly arms?: {
+    readonly prompt?: "a" | "b";
+    readonly continuation?: "a" | "b";
+  };
 };
 
 async function ledgerWith(runs: readonly SyntheticRun[]) {
@@ -63,13 +68,15 @@ async function ledgerWith(runs: readonly SyntheticRun[]) {
       identity: `start-${runId}`,
       type: "discovery-run-started",
       runId,
+      ...(run.runKind === undefined ? {} : { runKind: run.runKind }),
       labId: "lab-1",
       history: { mode: "none" },
       configuration: {
         promptVariant: "short-objective-v1",
         assignmentUnit: "plugin",
-        axis: "history",
-        arm: run.arm,
+        ...(run.arms === undefined
+          ? { axis: "history" as const, arm: run.arm }
+          : { arms: run.arms }),
       },
     });
     await ledger.append({
@@ -128,6 +135,35 @@ async function ledgerWith(runs: readonly SyntheticRun[]) {
 }
 
 describe("evaluation compare", () => {
+  it("compares a new prompt axis using exploration runs only", async () => {
+    const snapshot = digest("a");
+    const evaluation = await ledgerWith([
+      {
+        campaignId: "campaign-1",
+        snapshot,
+        arm: "a",
+        arms: { prompt: "a", continuation: "a" },
+      },
+      {
+        campaignId: "campaign-1",
+        snapshot,
+        arm: "b",
+        arms: { prompt: "b", continuation: "a" },
+        finding: "runtime-confirmed",
+      },
+      {
+        campaignId: "campaign-1",
+        snapshot,
+        arm: "b",
+        arms: { prompt: "b", continuation: "a" },
+        runKind: "continue",
+      },
+    ]);
+    const comparison = evaluation.compare({ axis: "prompt" });
+    expect(comparison.pooled.a.runs).toBe(1);
+    expect(comparison.pooled.b.runs).toBe(1);
+    expect(comparison.pooled.b.hits).toBe(1);
+  });
   it("pools only targets with both arms and counts runs with a confirmed Finding as hits", async () => {
     const [one, two, three] = [digest("1"), digest("2"), digest("3")];
     const evaluation = await ledgerWith([

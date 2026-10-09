@@ -67,7 +67,7 @@ export type ArmTally = {
 };
 
 export type ArmComparison = {
-  readonly axis: "history";
+  readonly axis: "history" | "prompt" | "continuation";
   /** One row per searched snapshot; only paired rows enter the pooled numbers. */
   readonly targets: readonly {
     readonly snapshotDigest: string;
@@ -165,7 +165,7 @@ export class Evaluation {
 
   /** Pairs arms within each target, then pools the paired targets across campaigns. */
   compare(input: {
-    readonly axis: "history";
+    readonly axis: "history" | "prompt" | "continuation";
     readonly campaignId?: string;
   }): ArmComparison {
     const campaignId =
@@ -206,8 +206,10 @@ export class Evaluation {
       if (
         event.type !== "discovery-run-started" ||
         (event.runKind ?? "explore") !== "explore" ||
-        event.configuration.axis !== input.axis ||
-        event.configuration.arm === undefined
+        (event.configuration.arms?.[input.axis] ??
+          (event.configuration.axis === input.axis
+            ? event.configuration.arm
+            : undefined)) === undefined
       )
         continue;
       const end = finished.get(event.runId);
@@ -223,7 +225,10 @@ export class Evaluation {
         b: emptyTally(),
       };
       targets.set(event.snapshotDigest, target);
-      const tally = target[event.configuration.arm];
+      const arm =
+        event.configuration.arms?.[input.axis] ?? event.configuration.arm;
+      if (arm === undefined) continue;
+      const tally = target[arm];
       const findings = findingsByRun.get(event.runId) ?? [];
       tally.runs++;
       tally.findings += findings.length;

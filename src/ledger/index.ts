@@ -87,6 +87,13 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         .optional(),
       axis: z.literal("history").optional(),
       arm: z.enum(["a", "b"]).optional(),
+      arms: z
+        .strictObject({
+          history: z.enum(["a", "b"]).optional(),
+          prompt: z.enum(["a", "b"]).optional(),
+          continuation: z.enum(["a", "b"]).optional(),
+        })
+        .optional(),
     }),
   }),
   event({
@@ -703,7 +710,7 @@ export class Ledger {
     );
     const readyLabs = new Set<string>();
     const startedRuns = new Map<string, string>();
-    const runArms = new Map<string, string>();
+    const runArms = new Map<string, string[]>();
     let knownCostUsd = 0;
     let unpricedRuns = 0;
     let wallTimeMs = 0;
@@ -732,14 +739,23 @@ export class Ledger {
           break;
         case "discovery-run-started":
           startedRuns.set(current.runId, current.labId);
-          if (
+          if ((current.runKind ?? "explore") !== "explore") break;
+          if (current.configuration.arms !== undefined) {
+            const arms = (
+              ["history", "prompt", "continuation"] as const
+            ).flatMap((axis) => {
+              const arm = current.configuration.arms?.[axis];
+              return arm === undefined ? [] : [`${axis}:${arm}`];
+            });
+            if (arms.length > 1) arms.push(arms.join("+"));
+            runArms.set(current.runId, arms);
+          } else if (
             current.configuration.axis !== undefined &&
             current.configuration.arm !== undefined
           )
-            runArms.set(
-              current.runId,
+            runArms.set(current.runId, [
               `${current.configuration.axis}:${current.configuration.arm}`,
-            );
+            ]);
           break;
         case "discovery-run-finished":
           if (current.costUsd === "unavailable") unpricedRuns++;
@@ -837,18 +853,19 @@ export class Ledger {
       string,
       { runs: number; findings: number; confirmed: number }
     >;
-    for (const arm of runArms.values())
-      (byArm[arm] ??= { runs: 0, findings: 0, confirmed: 0 }).runs++;
+    for (const arms of runArms.values())
+      for (const arm of arms)
+        (byArm[arm] ??= { runs: 0, findings: 0, confirmed: 0 }).runs++;
     for (const finding of findings.values()) {
-      const arm = runArms.get(finding.runId);
-      if (arm === undefined) continue;
-      const counts = byArm[arm]!;
-      counts.findings++;
-      if (
-        verifications.get(finding.findingId)?.result.status ===
-        "runtime-confirmed"
-      )
-        counts.confirmed++;
+      for (const arm of runArms.get(finding.runId) ?? []) {
+        const counts = byArm[arm]!;
+        counts.findings++;
+        if (
+          verifications.get(finding.findingId)?.result.status ===
+          "runtime-confirmed"
+        )
+          counts.confirmed++;
+      }
     }
     const discoveryAttempts = [...startedRuns.entries()].filter(
       ([runId, labId]) => readyLabs.has(labId) && !setupFailedRuns.has(runId),

@@ -98,7 +98,7 @@ async function campaign(findingRuns: readonly number[]) {
     input,
     historyFraction: 0.5,
     runWallTimeMs: 90 * 60_000,
-    ablation: { axis: "history" },
+    ablation: { axes: [{ axis: "history", armBFraction: 0.5 }] },
     ledger,
     attachments,
     evidence,
@@ -217,18 +217,14 @@ it("records the history arm the runner allocated to each run and counts runs and
       .read({ type: "discovery-run-started" })
       .map(({ event }) =>
         event.type === "discovery-run-started"
-          ? [
-              event.history.mode,
-              event.configuration.axis,
-              event.configuration.arm,
-            ]
+          ? [event.history.mode, event.configuration.arms?.history]
           : null,
       ),
   ).toEqual([
-    ["none", "history", "a"],
-    ["catalog", "history", "b"],
-    ["none", "history", "a"],
-    ["catalog", "history", "b"],
+    ["none", "a"],
+    ["catalog", "b"],
+    ["none", "a"],
+    ["catalog", "b"],
   ]);
   expect(ledger.funnel("campaign-1").byArm).toEqual({
     "history:a": { runs: 2, findings: 0, confirmed: 0 },
