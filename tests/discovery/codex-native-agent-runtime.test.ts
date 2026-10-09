@@ -480,4 +480,43 @@ describe("Codex native agent runtime", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("reads only the final agent message as the report and treats earlier ones as progress", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
+    try {
+      const events = transcript.split("\n");
+      const progress = (text: string) =>
+        JSON.stringify({
+          type: "item.completed",
+          item: { type: "agent_message", text },
+        });
+      const runtime = (stdout: string) =>
+        new CodexNativeAgentRuntime(
+          sandbox(stdout, []),
+          broker(),
+          new ProviderAttachmentStore(root),
+          image,
+          () => new Date(now),
+        );
+      const withProgress = [
+        ...events.slice(0, 2),
+        progress("I'll map the pinned source first."),
+        ...events.slice(2),
+      ].join("\n");
+      expect((await runtime(withProgress).execute(run)).receipt.terminal).toBe(
+        "completed",
+      );
+      // The run must still end on its report.
+      const endsInProse = [
+        ...events.slice(0, 3),
+        progress("Done."),
+        ...events.slice(3),
+      ].join("\n");
+      expect((await runtime(endsInProse).execute(run)).receipt.reason).toBe(
+        "schema",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
