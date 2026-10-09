@@ -84,6 +84,8 @@ describe("gVisor Codex sandbox", () => {
         `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
       );
       expect(calls[2]?.stdin).toBe(command.stdin);
+      // Without --interactive, docker run never hands stdin to the CLI.
+      expect(calls[2]?.args).toContain("--interactive");
       // The CLI's own sandbox is off, so these outer controls are the boundary.
       for (const { args } of calls) {
         expect(args).toEqual(

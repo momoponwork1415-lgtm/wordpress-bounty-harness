@@ -240,6 +240,8 @@ export class GvisorCodexSandbox implements CodexSandbox {
       const startedAt = now().toISOString();
       const args = [
         ...base,
+        // The prompt arrives on stdin.
+        "--interactive",
         `--network=${command.grant.dockerNetworkName}`,
         `--add-host=${command.labHost.name}:${command.labHost.ipv4}`,
         `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
