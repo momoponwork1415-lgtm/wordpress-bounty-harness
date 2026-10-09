@@ -45,6 +45,10 @@ const bodySchema = z.strictObject({
     z.enum(["provider", "schema", "sandbox", "policy", "evidence"]),
     z.literal("unavailable"),
   ]),
+  reasonDetail: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9:_-]{0,127}$/)
+    .optional(),
   /** The subscription refused the run; the campaign stops instead of retrying. */
   providerLimit: z.enum(["rate-limit", "quota"]).optional(),
   startedAt: z.iso.datetime({ offset: true }),
@@ -97,6 +101,7 @@ export function createNativeRunReceipt(
   input: NativeRunIdentity & {
     readonly terminal: "completed" | "incomplete";
     readonly reason: NativeRunReceipt["reason"];
+    readonly reasonDetail?: string;
     readonly providerLimit?: "rate-limit" | "quota";
     readonly startedAt: string;
     readonly completedAt: string;
@@ -128,6 +133,9 @@ export function createNativeRunReceipt(
     },
     terminal: input.terminal,
     reason: input.reason,
+    ...(input.reasonDetail === undefined
+      ? {}
+      : { reasonDetail: input.reasonDetail }),
     ...(input.providerLimit === undefined
       ? {}
       : { providerLimit: input.providerLimit }),

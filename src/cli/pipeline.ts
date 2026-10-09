@@ -8,7 +8,11 @@ import {
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
-import type { LabHandle, LabProvisioner } from "../lab/index.js";
+import type {
+  LabHandle,
+  LabProvisioner,
+  LabReachability,
+} from "../lab/index.js";
 import type { Ledger } from "../ledger/index.js";
 import type { TargetSelection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
@@ -160,8 +164,38 @@ export async function runCampaignPipeline<
         provisioned.status === "ready"
           ? provisioned.handle.id
           : options.newId();
+      const reachability =
+        provisioned.status === "ready" &&
+        seeded?.status === "seeded" &&
+        pipeline.lab.probe !== undefined
+          ? await pipeline.lab
+              .probe(provisioned.handle)
+              .catch((): LabReachability => ({
+                http: "failed",
+                database: "failed",
+              }))
+          : undefined;
       const ready =
-        provisioned.status === "ready" && seeded?.status === "seeded";
+        provisioned.status === "ready" &&
+        seeded?.status === "seeded" &&
+        reachability?.http !== "failed";
+      const failure =
+        provisioned.status === "incomplete"
+          ? { failureStage: "provision" as const, reason: provisioned.reason }
+          : seeded?.status === "incomplete"
+            ? { failureStage: "seed" as const, reason: seeded.reason }
+            : reachability?.http === "failed"
+              ? {
+                  failureStage: "probe" as const,
+                  reason: "reachability" as const,
+                }
+              : undefined;
+      const diagnostic =
+        provisioned.status === "incomplete"
+          ? provisioned.diagnostic
+          : seeded?.status === "incomplete"
+            ? seeded.diagnostic
+            : undefined;
       await append({
         ...base,
         identity: `lab-provisioned-${labId}`,
@@ -169,6 +203,20 @@ export async function runCampaignPipeline<
         type: "lab-provisioned",
         labId,
         status: ready ? "ready" : "failed",
+        ...(reachability === undefined ? {} : { reachability }),
+        ...(failure === undefined ? {} : failure),
+        ...(diagnostic === undefined
+          ? {}
+          : {
+              artifacts: [
+                {
+                  kind: "lab-diagnostic",
+                  digest: await options.store.putFiles({
+                    "stderr.txt": diagnostic,
+                  }),
+                },
+              ],
+            }),
       });
       if (!ready || provisioned.status !== "ready") {
         if (provisioned.status === "ready")

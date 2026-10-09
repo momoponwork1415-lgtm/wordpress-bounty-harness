@@ -92,6 +92,9 @@ async function harness(
       readonly cliVersion: string;
       readonly bundledCatalogDigest: string;
     };
+    readonly labProbeHttp?: "ok" | "failed";
+    readonly labProvisionFailure?: boolean;
+    readonly labSeedFailure?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
@@ -178,8 +181,29 @@ async function harness(
           };
         if (request.args[0] === "info")
           return { exitCode: 0, stdout: '{"runsc":{}}', stderr: "" };
+        if (
+          options.labProvisionFailure === true &&
+          request.args[0] === "network" &&
+          request.args[1] === "create"
+        )
+          return { exitCode: 1, stdout: "", stderr: "fixture docker error" };
+        if (
+          options.labSeedFailure === true &&
+          request.args.includes("wbh_canary_fixed-nonce") &&
+          request.args.includes("add")
+        )
+          return { exitCode: 1, stdout: "", stderr: "fixture seed error" };
         if (request.args[0] === "inspect")
           return { exitCode: 0, stdout: "172.20.0.2", stderr: "" };
+        if (request.args.includes("--entrypoint=php"))
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              http: options.labProbeHttp ?? "ok",
+              database: "not-exposed",
+            }),
+            stderr: "",
+          };
         if (request.args.includes("--field=roles"))
           return { exitCode: 0, stdout: "subscriber\n", stderr: "" };
         if (request.args.includes("eval"))
@@ -550,6 +574,81 @@ const programmeRef = {
 };
 
 describe("harness CLI vertical slice", () => {
+  it("records the seed stage when canary setup fails", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      labSeedFailure: true,
+    });
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-seed",
+      "--config",
+      configPath,
+    );
+    expect(prompts).toHaveLength(0);
+    const event = ledger().read({ type: "lab-provisioned" }).at(0)?.event;
+    expect(event).toMatchObject({
+      status: "failed",
+      failureStage: "seed",
+      reason: "provision",
+    });
+    expect(JSON.stringify(event)).not.toContain("fixture seed error");
+  });
+
+  it("records the Lab provision stage and stores Docker diagnostics by private digest", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      labProvisionFailure: true,
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-provision",
+      "--config",
+      configPath,
+    );
+    expect(result.stdout).toContain("stopped by setup-failed");
+    expect(prompts).toHaveLength(0);
+    const event = ledger().read({ type: "lab-provisioned" }).at(0)?.event;
+    expect(event).toMatchObject({
+      status: "failed",
+      failureStage: "provision",
+      reason: "provision",
+      artifacts: [
+        { kind: "lab-diagnostic", digest: expect.stringMatching(/^sha256:/) },
+      ],
+    });
+    expect(JSON.stringify(event)).not.toContain("fixture docker error");
+  });
+
+  it("records a failed Lab probe before starting discovery", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      labProbeHttp: "failed",
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-probe",
+      "--config",
+      configPath,
+    );
+    expect(result.stdout).toContain("stopped by setup-failed");
+    expect(prompts).toHaveLength(0);
+    expect(
+      ledger().read({ type: "lab-provisioned" }).at(0)?.event,
+    ).toMatchObject({
+      status: "failed",
+      reachability: { http: "failed", database: "not-exposed" },
+      failureStage: "probe",
+      reason: "reachability",
+    });
+  });
+
   it("runs a pinned campaign end to end and exposes review, funnel and location-overlap", async () => {
     const { run, configPath, keysPath, prompts, docker } = await harness();
 

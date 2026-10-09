@@ -37,6 +37,14 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     type: z.literal("lab-provisioned"),
     labId: id,
     status: z.enum(["ready", "failed"]),
+    reachability: z
+      .strictObject({
+        http: z.enum(["ok", "failed"]),
+        database: z.enum(["ok", "failed", "not-exposed"]),
+      })
+      .optional(),
+    failureStage: z.enum(["provision", "seed", "probe"]).optional(),
+    reason: z.enum(["provision", "reachability"]).optional(),
   }),
   event({
     type: z.literal("discovery-run-started"),
@@ -69,6 +77,14 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     ]),
     costUsd: z.union([z.number().nonnegative(), z.literal("unavailable")]),
     wallTimeMs: z.number().int().nonnegative(),
+    reason: z
+      .enum(["provider", "schema", "sandbox", "policy", "evidence"])
+      .optional(),
+    reasonDetail: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9:_-]{0,127}$/)
+      .optional(),
+    providerLimit: z.enum(["rate-limit", "quota"]).optional(),
     /** Provider-reported tokens; absent when the transport returned no receipt. */
     usage: z
       .strictObject({

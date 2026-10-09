@@ -14,6 +14,7 @@ import { runNativeModelProcess } from "../../../infrastructure/native-model-proc
 import type {
   LabHandle,
   LabProvisioner,
+  LabReachability,
   ProvisionResult,
 } from "../../../lab/index.js";
 import { snapshotSchema, type Snapshot } from "../../../snapshot/index.js";
@@ -31,6 +32,14 @@ const setupSchema = z.strictObject({
   initialPosts: z.array(z.string().min(1).max(120)).max(20),
   customerRole: z.boolean(),
 });
+const REACHABILITY_PROBE = `$http = @file_get_contents("http://wordpress/");
+$database = "not-exposed";
+$user = getenv("WBH_DB_USER");
+if ($user !== false && $user !== "") {
+  $link = @mysqli_connect(getenv("WBH_DB_HOST"), $user, getenv("WBH_DB_PASSWORD"), getenv("WBH_DB_NAME"));
+  $database = $link !== false && @mysqli_query($link, "SELECT 1") !== false ? "ok" : "failed";
+}
+echo json_encode(["http" => $http !== false ? "ok" : "failed", "database" => $database]);`;
 const SQL_CANARY_TABLE = "wbh_canary";
 const BEACON_LOG = "/tmp/wbh-beacons";
 /** Logs only well-formed beacon paths; anything else is ignored. */
@@ -102,6 +111,11 @@ export type DockerResult = {
   readonly stdout: string;
   readonly stderr: string;
 };
+class LabDockerFailure extends Error {
+  constructor(readonly diagnostic: string) {
+    super("gVisor Lab command failed");
+  }
+}
 export interface DockerRunner {
   run(request: DockerRequest): Promise<DockerResult>;
 }
@@ -121,6 +135,16 @@ export interface WordPressSourceResolver {
 export interface WordPressLabHandle extends LabHandle {
   readonly networkName: string;
   readonly internalIp: string;
+  readonly database?: {
+    readonly host: "database";
+    readonly ipv4: string;
+    readonly port: 3306;
+    readonly name: string;
+    readonly readOnlyAccount: {
+      readonly username: string;
+      readonly password: string;
+    };
+  };
   readonly attackerAccounts: Readonly<{
     subscriber: { readonly username: string; readonly password: string };
     customer?: { readonly username: string; readonly password: string };
@@ -206,6 +230,7 @@ export interface WordPressLab extends LabProvisioner<
   WordPressLabSetup,
   WordPressLabHandle
 > {
+  probe(handle: WordPressLabHandle): Promise<LabReachability>;
   canaryLedger(handle: WordPressLabHandle): WordPressCanaryLedger | null;
   prepareExecutionCanary(handle: WordPressLabHandle): ExecutionCanary | null;
   /**
@@ -362,7 +387,7 @@ export function openWordPressLab(options: {
     timeoutMs?: number,
   ): Promise<DockerResult> => {
     const result = await docker(args, timeoutMs);
-    if (result.exitCode !== 0) throw new Error("gVisor Lab command failed");
+    if (result.exitCode !== 0) throw new LabDockerFailure(result.stderr);
     return result;
   };
   const wpCommand = (
@@ -811,13 +836,16 @@ export function openWordPressLab(options: {
         resource.handle = handle;
         active.set(id, resource);
         return { status: "ready", handle };
-      } catch {
+      } catch (error: unknown) {
         if (resource !== undefined) await cleanup(resource);
         return {
           status: "incomplete",
           reason: "provision",
           nextStep:
             "Check source, pinned images, runsc, and Lab initialization; then provision a fresh Lab",
+          ...(error instanceof LabDockerFailure && error.diagnostic
+            ? { diagnostic: error.diagnostic }
+            : {}),
         };
       }
     },
@@ -929,11 +957,14 @@ export function openWordPressLab(options: {
           optionBaseline.set(name, await optionDigest(resource, name));
         resource.optionBaseline = optionBaseline;
         return { status: "seeded", digest: canonicalDigest(resource.canaries) };
-      } catch {
+      } catch (error: unknown) {
         return {
           status: "incomplete",
           reason: "provision",
           nextStep: "Discard this Lab and seed canaries in a fresh Lab",
+          ...(error instanceof LabDockerFailure && error.diagnostic
+            ? { diagnostic: error.diagnostic }
+            : {}),
         };
       }
     },
@@ -952,6 +983,59 @@ export function openWordPressLab(options: {
             reason: "cleanup",
             nextStep: "Inspect and remove remaining Lab resources",
           };
+    },
+    async probe(handle) {
+      const resource = active.get(handle.id);
+      const database = handle.database;
+      const failed = (): LabReachability => ({
+        http: "failed",
+        database: database === undefined ? "not-exposed" : "failed",
+      });
+      if (resource?.handle !== handle) return failed();
+      try {
+        const result = await docker(
+          [
+            "run",
+            "--rm",
+            "--runtime=runsc",
+            "--network",
+            resource.network,
+            `--add-host=wordpress:${handle.internalIp}`,
+            ...(database === undefined
+              ? []
+              : [
+                  `--add-host=${database.host}:${database.ipv4}`,
+                  "--env",
+                  `WBH_DB_HOST=${database.host}`,
+                  "--env",
+                  `WBH_DB_USER=${database.readOnlyAccount.username}`,
+                  "--env",
+                  `WBH_DB_PASSWORD=${database.readOnlyAccount.password}`,
+                  "--env",
+                  `WBH_DB_NAME=${database.name}`,
+                ]),
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--tmpfs=/tmp:rw,nosuid,nodev,size=16m",
+            "--entrypoint=php",
+            options.images.wordpress,
+            "-r",
+            REACHABILITY_PROBE,
+          ],
+          60_000,
+        );
+        if (result.exitCode !== 0) return failed();
+        const parsed = z
+          .strictObject({
+            http: z.enum(["ok", "failed"]),
+            database: z.enum(["ok", "failed", "not-exposed"]),
+          })
+          .safeParse(JSON.parse(result.stdout.trim()) as unknown);
+        return parsed.success ? parsed.data : failed();
+      } catch {
+        return failed();
+      }
     },
     canaryLedger(handle) {
       const resource = active.get(handle.id);

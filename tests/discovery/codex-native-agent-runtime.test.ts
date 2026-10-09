@@ -416,7 +416,32 @@ describe("Codex native agent runtime", () => {
       expect((await invalidOutput.execute(run)).receipt).toMatchObject({
         terminal: "incomplete",
         reason: "schema",
+        reasonDetail: "invalid-event-json",
       });
+      const exited = new CodexNativeAgentRuntime(
+        sandbox(transcript, [], { exitCode: 2 }),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      expect((await exited.execute(run)).receipt).toMatchObject({
+        reason: "provider",
+        reasonDetail: "cli-exit:2",
+      });
+      const unadmitted = new CodexNativeAgentRuntime(
+        sandbox(
+          transcript.replace('"type":"agent_message"', '"type":"file_change"'),
+          [],
+        ),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      expect((await unadmitted.execute(run)).receipt.reasonDetail).toBe(
+        "unadmitted-item-type:file_change",
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -526,9 +551,10 @@ describe("Codex native agent runtime", () => {
         progress("Done."),
         ...events.slice(3),
       ].join("\n");
-      expect((await runtime(endsInProse).execute(run)).receipt.reason).toBe(
-        "schema",
-      );
+      expect((await runtime(endsInProse).execute(run)).receipt).toMatchObject({
+        reason: "schema",
+        reasonDetail: "final-message-not-report",
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
