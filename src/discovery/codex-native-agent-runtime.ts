@@ -203,6 +203,38 @@ const usageSchema = z.looseObject({
   output_tokens: z.number().int().nonnegative(),
   reasoning_output_tokens: z.number().int().nonnegative().optional(),
 });
+type Observed = NonNullable<NativeRunReceipt["observed"]>;
+function observedFromCommands(commands: readonly string[]): Observed {
+  const paths = new Set<string>();
+  let filesRead = 0;
+  let labRequests = 0;
+  let dbQueries = 0;
+  for (const command of commands) {
+    for (const match of command.matchAll(
+      /\/workspace\/(?:main|wordpress)\/[^\s'"`;&|)]+/g,
+    )) {
+      filesRead++;
+      paths.add(match[0]);
+    }
+    if (
+      /(?:^|[\s;&|])(?:curl|wget|python|php)(?=\s|$)/.test(command) &&
+      /\bwordpress\b/.test(command)
+    )
+      labRequests++;
+    if (
+      /(?:^|[\s;&|])(?:mysql|mariadb)(?=\s|$)/.test(command) &&
+      /\bdatabase\b/.test(command)
+    )
+      dbQueries++;
+  }
+  return {
+    toolCalls: commands.length,
+    filesRead,
+    uniqueFilesRead: paths.size,
+    labRequests,
+    dbQueries,
+  };
+}
 function decodeTranscript(
   stdout: string,
   outputKind?: "verification",
@@ -216,6 +248,7 @@ function decodeTranscript(
         outputTokens: number | "unavailable";
         reasoningOutputTokens: number | "unavailable";
       };
+      observed: Observed;
     }
   | { reasonDetail: string } {
   const lines = stdout.split("\n").filter((line) => line.trim().length > 0);
@@ -227,6 +260,7 @@ function decodeTranscript(
     | undefined;
   let usage: ReturnType<typeof usageSchema.parse> | undefined;
   let finalMessage: string | undefined;
+  const commands: string[] = [];
   for (const line of lines) {
     let value: unknown;
     try {
@@ -258,6 +292,14 @@ function decodeTranscript(
       const item = (parsed.data as Record<string, unknown>).item;
       if (typeof item !== "object" || item === null || !("type" in item))
         return { reasonDetail: "invalid-item-shape" };
+      if (
+        item.type === "command_execution" &&
+        parsed.data.type === "item.completed" &&
+        "command" in item &&
+        typeof item.command === "string"
+      ) {
+        commands.push(item.command);
+      }
       if (
         item.type === "agent_message" &&
         parsed.data.type === "item.completed" &&
@@ -302,6 +344,7 @@ function decodeTranscript(
       outputTokens: usage?.output_tokens ?? "unavailable",
       reasoningOutputTokens: usage?.reasoning_output_tokens ?? "unavailable",
     },
+    observed: observedFromCommands(commands),
   };
 }
 
@@ -357,6 +400,7 @@ export class CodexNativeAgentRuntime {
 
   async execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult> {
     const startedAt = this.clock().toISOString();
+    let sandboxExitCode: number | undefined;
     const incomplete = (
       reason: "provider" | "schema" | "sandbox" | "policy" | "evidence",
       completedAt = this.clock().toISOString(),
@@ -373,6 +417,7 @@ export class CodexNativeAgentRuntime {
         startedAt,
         completedAt,
         ...(grantReceiptDigest === undefined ? {} : { grantReceiptDigest }),
+        ...(sandboxExitCode === undefined ? {} : { sandboxExitCode }),
       }),
     });
     if (
@@ -527,6 +572,7 @@ export class CodexNativeAgentRuntime {
         granted.receipt.digest,
       );
     const result = granted.operation.value;
+    sandboxExitCode = result.exitCode;
     if (
       result.isolation.backend !== "gvisor" ||
       result.isolation.runtime !== "runsc" ||
@@ -590,6 +636,8 @@ export class CodexNativeAgentRuntime {
         startedAt: result.startedAt,
         completedAt: result.completedAt,
         usage: decoded.usage,
+        observed: decoded.observed,
+        sandboxExitCode: result.exitCode,
         grantReceiptDigest: granted.receipt.digest,
         reportArtifactDigest: attachment.digest,
       }),

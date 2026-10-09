@@ -52,7 +52,8 @@ harness review [--campaign <id>]                         # 検証済みの列を
 `campaign run` は無人で回る。1対象あたりのdiscovery runは、選定のrun予算（既定20、High Threat面は40）と設定の上限（既定40）の小さい方まで。新規Findingなしが続いたら（既定4回）止まる。各Findingは別コンテナのVerifierと判定器を通り、`runtime-confirmed` / `contradicted` / `incomplete` として台帳に入る。
 
 - **同時run数**: campaign設定の `resources` で決める。
-  - 既定は `{"maxConcurrentRuns": 4, "memoryBudgetMiB": 10240}`。
+  - 既定は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。`stopRules.maxRuns` は Trial 上限（既定 6）、`noFindingRuns` は新規発見のない Trial の連続数（既定 3）、探索 run の wall time は既定 90 分。`dailyRunCap` は探索 run（Trial）だけを数える。
+  - `observed` は完了した command event の文字列から Harness が数える下限の近似。script 内部のファイル読出しや通信は含まない。
   - 実効の同時数は `min(maxConcurrentRuns, floor(memoryBudgetMiB / 2560))`。2,560 MiBは、Codex sandbox（2 GiB）とrunごとのegress broker（512 MiB）の `--memory` の合計。
   - ホストが小さいときは `memoryBudgetMiB` を下げる。1run分に満たない値では開始しない。
   - Labのメモリは対象ごとに別に要る。

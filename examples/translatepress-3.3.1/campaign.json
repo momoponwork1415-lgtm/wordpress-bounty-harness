@@ -10,7 +10,7 @@
     "maxRuns": 1,
     "noFindingRuns": 1
   },
-  "runWallTimeMinutes": 30,
+  "runWallTimeMinutes": 90,
   "resources": {
     "maxConcurrentRuns": 1,
     "memoryBudgetMiB": 2560

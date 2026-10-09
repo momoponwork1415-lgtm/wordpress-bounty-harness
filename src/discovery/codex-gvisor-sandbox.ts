@@ -122,7 +122,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
       options.maxOutputBytes <= 0 ||
       !Number.isSafeInteger(options.timeoutMs) ||
       options.timeoutMs <= 0 ||
-      options.timeoutMs > 60 * 60_000
+      options.timeoutMs > 240 * 60_000
     ) {
       throw new Error("Codex sandbox options are invalid");
     }

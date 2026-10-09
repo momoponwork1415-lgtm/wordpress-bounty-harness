@@ -160,6 +160,50 @@ function sandbox(
 }
 
 describe("Codex native agent runtime", () => {
+  it("counts command observations from completed items without trusting report text", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-observed-"));
+    try {
+      const events = transcript.split("\n");
+      const command = (text: string) =>
+        JSON.stringify({
+          type: "item.completed",
+          item: { type: "command_execution", command: text },
+        });
+      const stdout = [
+        ...events.slice(0, 2),
+        command(
+          "cat /workspace/main/a.php /workspace/main/a.php /workspace/wordpress/wp.php",
+        ),
+        command("curl http://wordpress/health && mysql -h database -e SELECT"),
+        JSON.stringify({
+          type: "item.started",
+          item: {
+            type: "command_execution",
+            command: "cat /workspace/main/ignored.php",
+          },
+        }),
+        ...events.slice(2),
+      ].join("\n");
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(stdout, []),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      const result = await runtime.execute(run);
+      expect(result.receipt.observed).toEqual({
+        toolCalls: 2,
+        filesRead: 3,
+        uniqueFilesRead: 2,
+        labRequests: 1,
+        dbQueries: 1,
+      });
+      expect(result.receipt.sandboxExitCode).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("uses the same isolated transport for a sealed Verifier attachment", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-verifier-transport-"));
     try {

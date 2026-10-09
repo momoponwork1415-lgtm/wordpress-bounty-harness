@@ -54,6 +54,9 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     type: z.literal("discovery-run-started"),
     runId: id,
     labId: id,
+    trialId: id.optional(),
+    trialOrdinal: z.number().int().nonnegative().optional(),
+    runKind: z.enum(["explore", "continue"]).optional(),
     history: z.union([
       z.strictObject({ mode: z.literal("none") }),
       z.strictObject({
@@ -64,6 +67,11 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     ]),
     configuration: z.strictObject({
       promptVariant: id,
+      promptDigest: digest.optional(),
+      trustBoundaryVersion: id.optional(),
+      sourcePack: z
+        .strictObject({ dependency: z.enum(["mounted", "none"]) })
+        .optional(),
       assignmentUnit: id,
       labAccess: z
         .strictObject({ database: z.enum(["read-only", "none"]) })
@@ -92,6 +100,18 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       .regex(/^[a-z0-9][a-z0-9:_-]{0,127}$/)
       .optional(),
     providerLimit: z.enum(["rate-limit", "quota"]).optional(),
+    /** Lower-bound counts inferred from completed command events, not agent claims. */
+    observed: z
+      .strictObject({
+        toolCalls: z.number().int().nonnegative(),
+        filesRead: z.number().int().nonnegative(),
+        uniqueFilesRead: z.number().int().nonnegative(),
+        labRequests: z.number().int().nonnegative(),
+        dbQueries: z.number().int().nonnegative(),
+      })
+      .optional(),
+    sandboxExitCode: z.number().int().optional(),
+    diagnosticArtifactDigest: digest.optional(),
     /** Provider-reported tokens; absent when the transport returned no receipt. */
     usage: z
       .strictObject({

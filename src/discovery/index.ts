@@ -10,6 +10,8 @@ export {
   type CampaignInputV1,
   type CatalogRecord,
   type PlannedDiscoveryRun,
+  type PlannedTrial,
+  type AdmittedLead,
 } from "./campaign.js";
 export {
   agentRuntimeProfileDefinitionSchema,

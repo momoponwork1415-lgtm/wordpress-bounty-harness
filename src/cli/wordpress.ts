@@ -85,19 +85,19 @@ export const wordpressCampaignConfigSchema = z.strictObject({
       maxRuns: z.number().int().positive().max(40),
       noFindingRuns: z.number().int().positive(),
     })
-    .default({ maxRuns: 40, noFindingRuns: 4 }),
-  runWallTimeMinutes: z.number().positive().max(240).default(30),
+    .default({ maxRuns: 6, noFindingRuns: 3 }),
+  runWallTimeMinutes: z.number().positive().max(240).default(90),
   /** Host bounds: concurrent discovery runs and the memory the Harness may use for them. */
   resources: z
     .strictObject({
-      maxConcurrentRuns: z.number().int().min(1).max(4).default(4),
+      maxConcurrentRuns: z.number().int().min(1).max(4).default(2),
       memoryBudgetMiB: z.number().int().positive(),
     })
     .default({
-      maxConcurrentRuns: 4,
+      maxConcurrentRuns: 2,
       memoryBudgetMiB: 4 * DISCOVERY_RUN_MEMORY_MIB,
     }),
-  /** Optional ceiling on discovery runs started per UTC day across campaigns. */
+  /** Optional ceiling on exploration runs (Trials) started per UTC day across campaigns. */
   dailyRunCap: z.number().int().positive().optional(),
   /** Splits runs into arm a without history and arm b with the local public history. */
   ablation: z
@@ -372,6 +372,7 @@ export function createWordPressCliProfile(options: {
                 history: historyFor(config, target),
               },
               historyFraction: config.ablation?.armBFraction ?? 0,
+              runWallTimeMs: config.runWallTimeMinutes * 60_000,
               concurrency: Math.min(
                 config.resources.maxConcurrentRuns,
                 Math.floor(
@@ -384,42 +385,61 @@ export function createWordPressCliProfile(options: {
               ...(config.ablation === undefined
                 ? {}
                 : { ablation: { axis: config.ablation.axis } }),
-              plannedRuns: Array.from({ length: maxRuns }, () => ({
-                configuration: {
-                  promptVariant: config.promptId,
-                  assignmentUnit: "plugin",
-                  labAccess: {
-                    database: lab.database === undefined ? "none" : "read-only",
-                  },
+              plannedTrials: Array.from(
+                { length: maxRuns },
+                (_, trialOrdinal) => {
+                  const trialId = state.newId();
+                  return {
+                    trialId,
+                    trialOrdinal,
+                    explore: {
+                      configuration: {
+                        promptVariant: config.promptId,
+                        promptDigest: objective.digest,
+                        trustBoundaryVersion: trustBoundary.id,
+                        sourcePack: {
+                          dependency:
+                            source.dependency === undefined
+                              ? ("none" as const)
+                              : ("mounted" as const),
+                        },
+                        assignmentUnit: "plugin",
+                        labAccess: {
+                          database:
+                            lab.database === undefined ? "none" : "read-only",
+                        },
+                      },
+                      run: {
+                        runId: trialId,
+                        targetSnapshotDigest: snapshot.digest,
+                        profile: boundaries.runtimeProfile,
+                        prompt,
+                        lab: {
+                          endpoint: lab.endpoint,
+                          networkName: lab.networkName,
+                          internalIp: lab.internalIp,
+                          ...(lab.database === undefined
+                            ? {}
+                            : {
+                                database: {
+                                  host: lab.database.host,
+                                  ipv4: lab.database.ipv4,
+                                },
+                              }),
+                        },
+                        sourceDirectory: source.directory,
+                        sourceTree: source.tree,
+                        ...(source.dependency === undefined
+                          ? {}
+                          : { dependencySource: source.dependency }),
+                        expiresAt: new Date(
+                          now + config.runWallTimeMinutes * 60_000,
+                        ).toISOString(),
+                      },
+                    },
+                  };
                 },
-                run: {
-                  runId: state.newId(),
-                  targetSnapshotDigest: snapshot.digest,
-                  profile: boundaries.runtimeProfile,
-                  prompt,
-                  lab: {
-                    endpoint: lab.endpoint,
-                    networkName: lab.networkName,
-                    internalIp: lab.internalIp,
-                    ...(lab.database === undefined
-                      ? {}
-                      : {
-                          database: {
-                            host: lab.database.host,
-                            ipv4: lab.database.ipv4,
-                          },
-                        }),
-                  },
-                  sourceDirectory: source.directory,
-                  sourceTree: source.tree,
-                  ...(source.dependency === undefined
-                    ? {}
-                    : { dependencySource: source.dependency }),
-                  expiresAt: new Date(
-                    now + config.runWallTimeMinutes * 60_000,
-                  ).toISOString(),
-                },
-              })),
+              ),
               executor: boundaries.executor,
               attachments: boundaries.attachments,
               admitFinding: admitWordPressFinding,

@@ -168,24 +168,28 @@ async function open() {
           };
         },
       },
-      plannedRuns: Array.from({ length: 6 }, (_, index) => ({
-        configuration: {
-          promptVariant: "short-objective",
-          assignmentUnit: "plugin",
-        },
-        run: {
-          runId: `${options.prefix}-${index}`,
-          targetSnapshotDigest: digest,
-          profile: options.profile ?? profile,
-          prompt: "Synthetic objective",
-          lab: {
-            endpoint: "http://wordpress",
-            networkName: "lab-network",
-            internalIp: "172.20.0.2",
+      plannedTrials: Array.from({ length: 6 }, (_, index) => ({
+        trialId: `${options.prefix}-${index}`,
+        trialOrdinal: index,
+        explore: {
+          configuration: {
+            promptVariant: "short-objective",
+            assignmentUnit: "plugin",
           },
-          sourceDirectory: "/synthetic/source",
-          sourceTree: { digest, entries: 1, bytes: 1 },
-          expiresAt: "2026-10-08T08:00:00Z",
+          run: {
+            runId: `${options.prefix}-${index}`,
+            targetSnapshotDigest: digest,
+            profile: options.profile ?? profile,
+            prompt: "Synthetic objective",
+            lab: {
+              endpoint: "http://wordpress",
+              networkName: "lab-network",
+              internalIp: "172.20.0.2",
+            },
+            sourceDirectory: "/synthetic/source",
+            sourceTree: { digest, entries: 1, bytes: 1 },
+            expiresAt: "2026-10-08T08:00:00Z",
+          },
         },
       })),
     });
@@ -305,6 +309,36 @@ describe("discovery campaign stop and resume", () => {
           assignmentUnit: "plugin",
         },
       });
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "continuation-start",
+      campaignId: "campaign-1",
+      snapshotDigest: digest,
+      occurredAt: "2026-10-08T02:00:00Z",
+      type: "discovery-run-started",
+      runId: "continuation-1",
+      trialId: "earlier-today",
+      trialOrdinal: 0,
+      runKind: "continue",
+      labId: "lab-0",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "short-objective",
+        assignmentUnit: "plugin",
+      },
+    });
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "continuation-finish",
+      campaignId: "campaign-1",
+      snapshotDigest: digest,
+      occurredAt: "2026-10-08T02:00:01Z",
+      type: "discovery-run-finished",
+      runId: "continuation-1",
+      outcome: "completed",
+      costUsd: "unavailable",
+      wallTimeMs: 1000,
+    });
     const capped = await campaign({
       prefix: "capped",
       dailyRunCap: 3,
@@ -313,7 +347,7 @@ describe("discovery campaign stop and resume", () => {
     expect(capped).toMatchObject({ runCount: 2, stoppedBy: "daily-run-cap" });
     expect(
       finished().filter((event) => event?.campaignId === "campaign-1"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
   });
 
