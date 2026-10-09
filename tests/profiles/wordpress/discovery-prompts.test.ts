@@ -25,16 +25,20 @@ describe("WordPress discovery prompt assets", () => {
       /\b(?:curl|python|php)\s+-|\/wp-admin\/admin-ajax\.php|<script\b/i,
     );
   });
-  it("publishes two versioned prompt variants and the shared boundary and assignment rules", async () => {
+  it("publishes the versioned prompt variants and the shared boundary and assignment rules", async () => {
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       "wp2shell-derived-v1",
       "short-objective-v1",
+      "short-objective-v2",
+      "short-objective-v3",
       "trust-boundary-v1",
       "file-assignment-v1",
     ]);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-derived-v1",
       "short-objective-v1",
+      "short-objective-v2",
+      "short-objective-v3",
     ]);
 
     for (const id of WORDPRESS_DISCOVERY_ASSET_IDS) {

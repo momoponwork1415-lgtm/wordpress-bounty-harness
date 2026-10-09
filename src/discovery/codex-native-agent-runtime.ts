@@ -117,6 +117,8 @@ export interface DiscoveryTransportRun {
 export interface DiscoveryTransportResult {
   readonly receipt: NativeRunReceipt;
   readonly attachment?: ProviderAttachmentRef;
+  /** Why a run ended without a report, with its transcript, for the operator (Issue #63). */
+  readonly diagnostic?: ProviderAttachmentRef;
 }
 
 const discoveryTransportRunSchema = z.strictObject({
@@ -172,21 +174,30 @@ const usageSchema = z.looseObject({
   output_tokens: z.number().int().nonnegative(),
   reasoning_output_tokens: z.number().int().nonnegative().optional(),
 });
+/** Items the CLI emits on its own: shell commands, edits under /tmp, plans and its built-in tool listing. */
+const ADMITTED_ITEM_TYPES: readonly string[] = [
+  "reasoning",
+  "error",
+  "agent_message",
+  "command_execution",
+  "file_change",
+  "todo_list",
+];
+type Decoded = {
+  report:
+    z.infer<typeof reportSchema> | z.infer<typeof verificationReportSchema>;
+  usage: {
+    inputTokens: number | "unavailable";
+    cachedInputTokens: number | "unavailable";
+    outputTokens: number | "unavailable";
+    reasoningOutputTokens: number | "unavailable";
+  };
+};
 function decodeTranscript(
   stdout: string,
   outputKind?: "verification",
-):
-  | {
-      report:
-        z.infer<typeof reportSchema> | z.infer<typeof verificationReportSchema>;
-      usage: {
-        inputTokens: number | "unavailable";
-        cachedInputTokens: number | "unavailable";
-        outputTokens: number | "unavailable";
-        reasoningOutputTokens: number | "unavailable";
-      };
-    }
-  | undefined {
+): { ok: true; decoded: Decoded } | { ok: false; reason: string } {
+  const fail = (reason: string) => ({ ok: false as const, reason });
   const lines = stdout.split("\n").filter((line) => line.trim().length > 0);
   let started = false;
   let completed = false;
@@ -196,23 +207,23 @@ function decodeTranscript(
     | undefined;
   let usage: ReturnType<typeof usageSchema.parse> | undefined;
   let finalMessage: string | undefined;
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
     let value: unknown;
     try {
       value = JSON.parse(line) as unknown;
     } catch {
-      return undefined;
+      return fail(`line ${index + 1} is not JSON`);
     }
     const parsed = event.safeParse(value);
-    if (!parsed.success) return undefined;
+    if (!parsed.success) return fail(`line ${index + 1} has no event type`);
     if (parsed.data.type === "thread.started") {
-      if (started) return undefined;
+      if (started) return fail("thread started twice");
       started = true;
       continue;
     }
     if (parsed.data.type === "turn.started") continue;
     if (parsed.data.type === "turn.completed") {
-      if (completed) return undefined;
+      if (completed) return fail("turn completed twice");
       const object = parsed.data as Record<string, unknown>;
       const found = usageSchema.safeParse(object.usage);
       if (found.success) usage = found.data;
@@ -226,9 +237,10 @@ function decodeTranscript(
     ) {
       const item = (parsed.data as Record<string, unknown>).item;
       if (typeof item !== "object" || item === null || !("type" in item))
-        return undefined;
+        return fail(`line ${index + 1} item has no type`);
+      const itemType = String(item.type);
       if (
-        item.type === "agent_message" &&
+        itemType === "agent_message" &&
         parsed.data.type === "item.completed" &&
         "text" in item &&
         typeof item.text === "string"
@@ -236,37 +248,54 @@ function decodeTranscript(
         // Earlier messages are progress notes; only the last is the report.
         finalMessage = item.text;
       } else if (
-        !["reasoning", "error", "agent_message", "command_execution"].includes(
-          String(item.type),
-        )
+        itemType === "mcp_tool_call" &&
+        (item as { server?: unknown }).server === "codex"
       ) {
+        // The CLI's built-in server (resource listing); no external server is configured.
+      } else if (!ADMITTED_ITEM_TYPES.includes(itemType)) {
         // A tool not admitted by this transport makes the transcript unusable.
-        return undefined;
+        return fail(`item type not admitted: ${itemType}`);
       }
       continue;
     }
-    return undefined;
+    return fail(`event type not admitted: ${parsed.data.type}`);
   }
-  if (!started || !completed || finalMessage === undefined) return undefined;
+  if (!started) return fail("thread never started");
+  if (!completed) return fail("turn never completed");
+  if (finalMessage === undefined) return fail("no agent message");
+  let value: unknown;
   try {
-    const found = (
-      outputKind === "verification" ? verificationReportSchema : reportSchema
-    ).safeParse(JSON.parse(finalMessage) as unknown);
-    if (!found.success) return undefined;
-    report = found.data;
+    value = JSON.parse(finalMessage) as unknown;
   } catch {
-    return undefined;
+    return fail("final agent message is not a JSON report");
   }
+  const found = (
+    outputKind === "verification" ? verificationReportSchema : reportSchema
+  ).safeParse(value);
+  if (!found.success)
+    return fail(
+      `final agent message is not a report: ${found.error.issues
+        .slice(0, 3)
+        .map((issue) => `${issue.path.join(".")} ${issue.message}`)
+        .join("; ")}`,
+    );
+  report = found.data;
   return {
-    report,
-    usage: {
-      inputTokens: usage?.input_tokens ?? "unavailable",
-      cachedInputTokens: usage?.cached_input_tokens ?? "unavailable",
-      outputTokens: usage?.output_tokens ?? "unavailable",
-      reasoningOutputTokens: usage?.reasoning_output_tokens ?? "unavailable",
+    ok: true,
+    decoded: {
+      report,
+      usage: {
+        inputTokens: usage?.input_tokens ?? "unavailable",
+        cachedInputTokens: usage?.cached_input_tokens ?? "unavailable",
+        outputTokens: usage?.output_tokens ?? "unavailable",
+        reasoningOutputTokens: usage?.reasoning_output_tokens ?? "unavailable",
+      },
     },
   };
 }
+
+/** Transcript bytes kept with a diagnostic; the tail holds the failure. */
+const MAX_DIAGNOSTIC_TRANSCRIPT_BYTES = 4 * 1024 * 1024;
 
 const failureEventSchema = z.union([
   z.looseObject({ type: z.literal("error"), message: z.string() }),
@@ -480,29 +509,46 @@ export class CodexNativeAgentRuntime {
       result.bundledCatalogDigest !== run.profile.bundledCatalogDigest
     )
       return incomplete("policy", result.completedAt, granted.receipt.digest);
-    const decoded =
-      result.status === "exited" && result.exitCode === 0
-        ? decodeTranscript(result.stdout, run.outputKind)
-        : undefined;
-    if (decoded === undefined) {
+    const exited = result.status === "exited" && result.exitCode === 0;
+    const decoded = exited
+      ? decodeTranscript(result.stdout, run.outputKind)
+      : {
+          ok: false as const,
+          reason: `sandbox process ${result.status} with exit code ${result.exitCode}`,
+        };
+    if (!decoded.ok) {
       const limit = providerLimitOf(result.stdout);
-      if (limit !== undefined)
-        return incomplete(
-          "provider",
-          result.completedAt,
-          granted.receipt.digest,
-          limit,
-        );
+      const reason: "provider" | "schema" =
+        limit !== undefined || !exited ? "provider" : "schema";
+      const failed = incomplete(
+        reason,
+        result.completedAt,
+        granted.receipt.digest,
+        limit,
+      );
+      // The receipt stays as it was; the transcript and cause go to Private Evidence.
+      const transcript = result.stdout.slice(-MAX_DIAGNOSTIC_TRANSCRIPT_BYTES);
+      const diagnostic = await this.attachments
+        .put(
+          "diagnostic",
+          Buffer.from(
+            canonicalJson({
+              reason: decoded.reason,
+              status: result.status,
+              exitCode: result.exitCode,
+              truncated: transcript.length < result.stdout.length,
+              transcript,
+            }),
+          ),
+        )
+        .catch(() => undefined);
+      return diagnostic === undefined ? failed : { ...failed, diagnostic };
     }
-    if (result.status !== "exited" || result.exitCode !== 0)
-      return incomplete("provider", result.completedAt, granted.receipt.digest);
-    if (decoded === undefined)
-      return incomplete("schema", result.completedAt, granted.receipt.digest);
     let attachment: ProviderAttachmentRef;
     try {
       attachment = await this.attachments.put(
         run.outputKind === "verification" ? "verification" : "findings",
-        Buffer.from(canonicalJson(decoded.report)),
+        Buffer.from(canonicalJson(decoded.decoded.report)),
       );
     } catch {
       return incomplete("evidence", result.completedAt, granted.receipt.digest);
@@ -515,7 +561,7 @@ export class CodexNativeAgentRuntime {
         reason: "unavailable",
         startedAt: result.startedAt,
         completedAt: result.completedAt,
-        usage: decoded.usage,
+        usage: decoded.decoded.usage,
         grantReceiptDigest: granted.receipt.digest,
         reportArtifactDigest: attachment.digest,
       }),

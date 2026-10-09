@@ -601,3 +601,134 @@ describe("Codex native agent runtime", () => {
     }
   });
 });
+
+describe("transcript item admission and diagnostics", () => {
+  const report = JSON.stringify({
+    findings: [],
+    examined: "source",
+    unexamined: "none",
+  });
+  const withItems = (items: unknown[]) =>
+    [
+      { type: "thread.started", thread_id: crypto.randomUUID() },
+      { type: "turn.started" },
+      ...items.map((item) => ({ type: "item.completed", item })),
+      {
+        type: "item.completed",
+        item: { type: "agent_message", text: report },
+      },
+      { type: "turn.completed", usage: { input_tokens: 10, output_tokens: 4 } },
+    ]
+      .map((event) => JSON.stringify(event))
+      .join("\n");
+  const execute = async (
+    root: string,
+    stdout: string,
+    overrides: Partial<Awaited<ReturnType<CodexSandbox["execute"]>>> = {},
+  ) => {
+    const attachments = new ProviderAttachmentStore(root);
+    const runtime = new CodexNativeAgentRuntime(
+      sandbox(stdout, [], overrides),
+      broker(),
+      attachments,
+      image,
+      () => new Date(now),
+    );
+    const result = await runtime.execute(run);
+    const diagnostic =
+      result.diagnostic === undefined
+        ? undefined
+        : await attachments.read(result.diagnostic);
+    return {
+      result,
+      diagnostic:
+        diagnostic?.status === "resolved"
+          ? (JSON.parse(diagnostic.bytes.toString("utf8")) as Record<
+              string,
+              unknown
+            >)
+          : undefined,
+    };
+  };
+
+  it("admits the CLI's own file edits, plans and built-in tool listing alongside commands", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-items-"));
+    try {
+      const { result } = await execute(
+        root,
+        withItems([
+          { type: "command_execution", command: "ls", exit_code: 0 },
+          { type: "file_change", changes: [{ path: "/tmp/probe.sh" }] },
+          { type: "todo_list", items: [{ text: "map entry points" }] },
+          {
+            type: "mcp_tool_call",
+            server: "codex",
+            tool: "list_mcp_resources",
+            status: "completed",
+          },
+        ]),
+      );
+      expect(result.receipt.terminal).toBe("completed");
+      expect(result.diagnostic).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still refuses tools that reach outside the transport and says which one", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-items-"));
+    try {
+      for (const [item, named] of [
+        [{ type: "web_search", query: "x" }, "web_search"],
+        [
+          { type: "mcp_tool_call", server: "external", tool: "fetch" },
+          "mcp_tool_call",
+        ],
+      ] as const) {
+        const { result, diagnostic } = await execute(root, withItems([item]));
+        expect(result.receipt).toMatchObject({
+          terminal: "incomplete",
+          reason: "schema",
+        });
+        expect(result.diagnostic?.kind).toBe("diagnostic");
+        expect(String(diagnostic?.reason)).toContain(named);
+        expect(typeof diagnostic?.transcript).toBe("string");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records why a report failed to decode and keeps the transcript for the operator", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-items-"));
+    try {
+      const prose = withItems([]).replace(
+        JSON.stringify(report),
+        JSON.stringify("Done, nothing found."),
+      );
+      const { result, diagnostic } = await execute(root, prose);
+      expect(result.receipt.reason).toBe("schema");
+      expect(String(diagnostic?.reason)).toMatch(/report/i);
+      expect(diagnostic?.transcript).toBe(prose);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a diagnostic when the sandbox process dies before reporting", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-items-"));
+    try {
+      const partial = withItems([]).split("\n").slice(0, 3).join("\n");
+      const { result, diagnostic } = await execute(root, partial, {
+        exitCode: 137,
+      });
+      expect(result.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "provider",
+      });
+      expect(diagnostic).toMatchObject({ exitCode: 137, status: "exited" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

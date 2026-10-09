@@ -205,6 +205,12 @@ export async function runDiscoveryCampaign(options: {
   readonly concurrency?: number;
   /** Optional ceiling on runs started per UTC day across every campaign in the ledger. */
   readonly dailyRunCap?: number;
+  /**
+   * Wall-time budget of one run, measured from the moment it starts. When set,
+   * it replaces the planned `expiresAt`, which the CLI computes once for the
+   * whole campaign and which would otherwise lie in the past for later runs.
+   */
+  readonly runDeadlineMs?: number;
   /** Records each run's arm on the history axis: a without history, b with it. */
   readonly ablation?: { readonly axis: "history" };
   readonly plannedRuns: readonly PlannedDiscoveryRun[];
@@ -242,6 +248,11 @@ export async function runDiscoveryCampaign(options: {
   const concurrency = options.concurrency ?? 1;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4)
     throw new Error("Invalid discovery concurrency");
+  if (
+    options.runDeadlineMs !== undefined &&
+    (!Number.isSafeInteger(options.runDeadlineMs) || options.runDeadlineMs < 1)
+  )
+    throw new Error("Invalid run deadline");
   const ofTarget = <T extends { readonly snapshotDigest: string }>(
     events: readonly T[],
   ) => events.filter((event) => event.snapshotDigest === input.snapshotDigest);
@@ -347,9 +358,17 @@ export async function runDiscoveryCampaign(options: {
     let foundNew = false;
     let usage: NativeRunReceipt["usage"] | undefined;
     let receiptDigest: string | undefined;
+    const artifacts: { kind: string; digest: string }[] = [];
     try {
       const result = await options.executor.execute({
         ...run,
+        ...(options.runDeadlineMs === undefined
+          ? {}
+          : {
+              expiresAt: new Date(
+                clock().getTime() + options.runDeadlineMs,
+              ).toISOString(),
+            }),
         campaignInput: { ...input, history },
       });
       const receipt = nativeRunReceiptSchema.parse(result.receipt);
@@ -362,6 +381,17 @@ export async function runDiscoveryCampaign(options: {
       receiptDigest = await options.evidence.putFiles({
         "receipt.json": canonicalJson(receipt),
       });
+      artifacts.push({ kind: "native-run-receipt", digest: receiptDigest });
+      if (result.diagnostic !== undefined) {
+        const stored = await options.attachments.read(result.diagnostic);
+        if (stored.status === "resolved")
+          artifacts.push({
+            kind: "transport-diagnostic",
+            digest: await options.evidence.putFiles({
+              "diagnostic.json": stored.bytes,
+            }),
+          });
+      }
       if (receipt.providerLimit !== undefined) outcome = "provider-limited";
       if (
         receipt.terminal === "completed" &&
@@ -376,13 +406,35 @@ export async function runDiscoveryCampaign(options: {
           const report = providerReportSchema.parse(
             JSON.parse(stored.bytes.toString("utf8")) as unknown,
           );
-          const findings = report.findings.map((candidate) =>
-            options.admitFinding(candidate, {
-              runId: run.runId,
-              snapshotDigest: input.snapshotDigest,
-              reportArtifactDigest: result.attachment!.digest,
-            }),
-          );
+          // One malformed claim must not erase the others or the coverage report.
+          const findings: AdmittedFinding[] = [];
+          const rejected: { candidate: unknown; reason: string }[] = [];
+          for (const candidate of report.findings) {
+            try {
+              findings.push(
+                options.admitFinding(candidate, {
+                  runId: run.runId,
+                  snapshotDigest: input.snapshotDigest,
+                  reportArtifactDigest: result.attachment!.digest,
+                }),
+              );
+            } catch (error: unknown) {
+              rejected.push({
+                candidate,
+                reason: (error instanceof Error
+                  ? error.message
+                  : String(error)
+                ).slice(0, 2000),
+              });
+            }
+          }
+          if (rejected.length > 0)
+            artifacts.push({
+              kind: "rejected-findings",
+              digest: await options.evidence.putFiles({
+                "rejected-findings.json": canonicalJson({ rejected }),
+              }),
+            });
           for (const finding of findings) {
             if (
               finding.discoveryRunId !== run.runId ||
@@ -433,11 +485,7 @@ export async function runDiscoveryCampaign(options: {
       costUsd: "unavailable",
       wallTimeMs,
       ...(usage === undefined ? {} : { usage }),
-      ...(receiptDigest === undefined
-        ? {}
-        : {
-            artifacts: [{ kind: "native-run-receipt", digest: receiptDigest }],
-          }),
+      ...(artifacts.length === 0 ? {} : { artifacts }),
     });
     if (finished.status === "conflict")
       throw new Error("Discovery finish identity conflict");

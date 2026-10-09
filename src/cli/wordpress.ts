@@ -366,6 +366,8 @@ export function createWordPressCliProfile(options: {
               ...(config.dailyRunCap === undefined
                 ? {}
                 : { dailyRunCap: config.dailyRunCap }),
+              // Each run's grant and sandbox deadline start when the run starts.
+              runDeadlineMs: config.runWallTimeMinutes * 60_000,
               ...(config.ablation === undefined
                 ? {}
                 : { ablation: { axis: config.ablation.axis } }),
