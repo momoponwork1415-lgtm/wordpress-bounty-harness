@@ -23,7 +23,7 @@ import {
   readWordPressFinding,
   type WordPressFinding,
 } from "../discovery/finding.js";
-import type { WordPressLabHandle } from "../lab/index.js";
+import type { WordPressLab, WordPressLabHandle } from "../lab/index.js";
 import { loadWordPressVerifierPrompt } from "../prompts/index.js";
 
 const httpSchema = z.looseObject({
@@ -41,9 +41,15 @@ const attachmentSchema = z.looseObject({
   "http.json": z.string().nullable().optional(),
   "steps.md": z.string().nullable().optional(),
   "route.json": z.string().nullable().optional(),
+  "session.json": z.string().nullable().optional(),
   "refutation.md": z.string().nullable().optional(),
   precondition: z.string().nullable().optional(),
 });
+/** The same cookie shape the Lab accepts when it resolves a session. */
+const sessionSchema = z.strictObject({
+  cookie: z.string().regex(/^[A-Za-z0-9%|._@+-]{1,4096}$/),
+});
+
 const routeSchema = z.looseObject({
   role: z.enum(["unauthenticated", "subscriber", "customer"]),
   defaultSettings: z.boolean(),
@@ -97,10 +103,42 @@ export class CodexVerifier implements Verifier<
         readonly directory: string;
         readonly tree: ExpectedSourceTree;
       };
+      /** Issues the canary a Finding's impact needs; only the Lab can observe it. */
+      readonly lab: Pick<
+        WordPressLab,
+        "prepareExecutionCanary" | "prepareScriptCanary"
+      >;
       readonly clock: () => Date;
       readonly wallTimeMs?: number;
     },
   ) {}
+
+  /** The canary the Finding's impact needs, issued fresh for this attempt. */
+  #canaryFor(
+    finding: WordPressFinding,
+    lab: WordPressLabHandle,
+  ):
+    | { readonly kind: "execution"; readonly php: string }
+    | { readonly kind: "script"; readonly beaconUrl: string }
+    | undefined {
+    switch (finding.impact) {
+      case "rce":
+      case "php-file-write": {
+        const canary = this.options.lab.prepareExecutionCanary(lab);
+        return canary === null
+          ? undefined
+          : { kind: "execution", php: canary.php };
+      }
+      case "stored-xss": {
+        const canary = this.options.lab.prepareScriptCanary(lab);
+        return canary === null
+          ? undefined
+          : { kind: "script", beaconUrl: canary.beaconUrl };
+      }
+      default:
+        return undefined;
+    }
+  }
 
   async attempt({
     finding,
@@ -166,13 +204,29 @@ export class CodexVerifier implements Verifier<
     const runId = `verify-${finding.findingId}-${randomUUID()}`;
     const now = this.options.clock();
     const accounts = lowPrivilegeAccounts(lab);
+    const needsCanary =
+      admitted.impact === "rce" ||
+      admitted.impact === "php-file-write" ||
+      admitted.impact === "stored-xss";
+    const canary = this.#canaryFor(admitted, lab);
+    if (needsCanary && canary === undefined)
+      return {
+        status: "incomplete",
+        reason: "precondition",
+        nextStep: "Issue a canary from a fresh Lab and repeat",
+      };
     const prompt = [
       fixed.text.trim(),
       "## Finding",
       canonicalJson(admitted),
       "## Lab",
-      canonicalJson({ endpoint: lab.endpoint, accounts }),
+      canonicalJson({
+        endpoint: lab.endpoint,
+        accounts,
+        ...(canary === undefined ? {} : { canary }),
+      }),
     ].join("\n\n");
+
     const run: DiscoveryTransportRun = {
       runId,
       targetSnapshotDigest: finding.snapshotDigest,
@@ -233,7 +287,9 @@ export class CodexVerifier implements Verifier<
       finding.findingId,
       fixed.digest,
       receipt,
+      canary?.kind,
     );
+
     if (receipt.terminal === "incomplete") {
       if (receipt.reason === "provider" || receipt.reason === "sandbox")
         throw new VerifierTransportIncompleteError(receipt.reason);
@@ -319,11 +375,27 @@ export class CodexVerifier implements Verifier<
         };
       }
     }
+    let session: string | undefined;
+    if (typeof data["session.json"] === "string") {
+      try {
+        session = canonicalJson(
+          sessionSchema.parse(JSON.parse(data["session.json"]) as unknown),
+        );
+      } catch {
+        return {
+          status: "incomplete",
+          reason: "recipe",
+          nextStep: "Repair the session.json cookie record, then repeat",
+        };
+      }
+    }
     const recipeDigest = await this.options.store.putFiles({
       "http.json": data["http.json"],
       "steps.md": data["steps.md"],
       ...(route === undefined ? {} : { "route.json": route }),
+      ...(session === undefined ? {} : { "session.json": session }),
     });
+
     const refutationDigest =
       typeof data["refutation.md"] === "string" && data["refutation.md"].trim()
         ? await this.options.store.putFiles({
@@ -342,6 +414,7 @@ export class CodexVerifier implements Verifier<
     findingId: string,
     promptDigest: string,
     receipt: NativeRunReceipt,
+    canaryIssued?: "execution" | "script",
   ): Promise<void> {
     const receiptDigest = await this.options.store.putFiles({
       "receipt.json": canonicalJson(receipt),
@@ -358,6 +431,7 @@ export class CodexVerifier implements Verifier<
       promptDigest,
       receiptDigest,
       terminal: receipt.terminal,
+      ...(canaryIssued === undefined ? {} : { canaryIssued }),
       artifacts: [{ kind: "native-run-receipt", digest: receiptDigest }],
     });
     if (appended.status === "conflict")

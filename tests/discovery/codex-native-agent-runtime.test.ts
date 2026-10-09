@@ -167,6 +167,7 @@ describe("Codex native agent runtime", () => {
         "http.json": '{"exchanges":[]}',
         "steps.md": "Synthetic steps",
         "route.json": null,
+        "session.json": null,
         "refutation.md": null,
         precondition: null,
       };
