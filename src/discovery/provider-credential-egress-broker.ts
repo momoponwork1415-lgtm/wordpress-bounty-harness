@@ -226,6 +226,8 @@ const BROKER_PORT = 8080;
 /** Plain-HTTP health port of a TLS broker; checked only from inside it. */
 const BROKER_TLS_HEALTH_PORT = 8081;
 const MAX_PROVIDER_ADDRESSES = 16;
+/** Matches the largest admitted discovery wall time while keeping each grant bounded. */
+const MAX_GRANT_DURATION_MS = 240 * 60_000;
 
 async function resolveProviderAddresses(hostname: string): Promise<string[]> {
   const addresses = await lookup(hostname, { all: true, verbatim: true });
@@ -333,8 +335,10 @@ function validateGrantDeadline(
 ): void {
   const deadline = new Date(request.expiresAt).getTime();
   const duration = deadline - now.getTime();
-  if (duration <= 0 || duration > 60 * 60_000) {
-    throw new Error("Provider credential grant must expire in the future");
+  if (duration <= 0 || duration > MAX_GRANT_DURATION_MS) {
+    throw new Error(
+      "Provider credential grant deadline is outside the admitted bound",
+    );
   }
 }
 
