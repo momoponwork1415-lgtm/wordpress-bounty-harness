@@ -134,8 +134,6 @@ export const wordpressCampaignConfigSchema = z
         maxConcurrentRuns: 2,
         memoryBudgetMiB: 4 * DISCOVERY_RUN_MEMORY_MIB,
       }),
-    /** Optional ceiling on exploration runs (Trials) started per UTC day across campaigns. */
-    dailyRunCap: z.number().int().positive().optional(),
     /** Splits runs into arm a without history and arm b with the local public history. */
     ablation: ablation.optional(),
     continuation: z
@@ -501,9 +499,6 @@ export function createWordPressCliProfile(options: {
                   config.resources.memoryBudgetMiB / DISCOVERY_RUN_MEMORY_MIB,
                 ),
               ),
-              ...(config.dailyRunCap === undefined
-                ? {}
-                : { dailyRunCap: config.dailyRunCap }),
               ...(config.ablation === undefined
                 ? {}
                 : { ablation: { axes: config.ablation.axes } }),

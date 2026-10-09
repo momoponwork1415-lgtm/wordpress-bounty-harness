@@ -1,24 +1,46 @@
 {
   "schemaVersion": 1,
-  "selectionPolicyPath": "examples/translatepress-3.3.1/selection-luna-40.json",
-  "promptId": "short-objective-v1",
+  "selectionPolicyPath": "examples/translatepress-3.2.5/selection-luna-40.json",
+  "promptId": "short-objective-v2",
   "programmeBoundary": {
     "version": "wordfence-2026-10-08",
     "text": "Wordfence Bug Bounty Program, transcribed 2026-10-08. In scope: impact reachable by an unauthenticated visitor, a Subscriber or a Customer. Highest value: arbitrary PHP file upload or read, arbitrary PHP file deletion, arbitrary options update, remote code execution, authentication bypass to admin, privilege escalation to admin. Also in scope: stored XSS, SQL injection, account takeover, sensitive information disclosure. Out of scope: anything needing Contributor, Author, Editor, Shop Manager or Administrator; reflected XSS; denial of service; business-logic-only impact."
   },
   "stopRules": {
-    "maxRuns": 40,
-    "noFindingRuns": 4
+    "maxRuns": 12,
+    "noFindingRuns": 12
   },
-  "runWallTimeMinutes": 30,
+  "runWallTimeMinutes": 90,
   "resources": {
-    "maxConcurrentRuns": 4,
+    "maxConcurrentRuns": 2,
     "memoryBudgetMiB": 10240
   },
   "wordpressVersion": "6.8.3",
   "lab": {
     "siteTitle": "Harness Lab",
     "initialPosts": ["Welcome", "Sample page for translation"],
-    "customerRole": false
+    "customerRole": false,
+    "databaseAccess": "read-only"
+  },
+  "ablation": {
+    "axes": [
+      {
+        "axis": "prompt",
+        "armBFraction": 0.5,
+        "armBPromptId": "wp2shell-single-http-v2"
+      },
+      {
+        "axis": "continuation",
+        "armBFraction": 0.5
+      }
+    ]
+  },
+  "continuation": {
+    "maxRunsPerTrial": 2,
+    "runWallTimeMinutes": 30
+  },
+  "assignment": {
+    "unit": "entry-point",
+    "entriesPerRun": 8
   }
 }

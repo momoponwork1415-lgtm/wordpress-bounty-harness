@@ -1217,7 +1217,7 @@ describe("harness CLI vertical slice", () => {
     expect(maxInFlight()).toBe(2);
   });
 
-  it("refuses a memory budget below one run and stops at the daily run cap", async () => {
+  it("refuses a memory budget below one run", async () => {
     const small = await harness({
       config: { resources: { maxConcurrentRuns: 1, memoryBudgetMiB: 1024 } },
     });
@@ -1235,19 +1235,6 @@ describe("harness CLI vertical slice", () => {
       "memory budget is below one discovery run",
     );
     expect(small.prompts).toHaveLength(0);
-
-    const capped = await harness({ config: { dailyRunCap: 1 } });
-    const stopped = await capped.run(
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "campaign-1",
-      "--config",
-      capped.configPath,
-    );
-    expect(stopped.code).toBe(3);
-    expect(stopped.stdout).toContain("runs 1  stopped by daily-run-cap");
   });
 
   it("totals provider-reported usage per target and UTC day", async () => {

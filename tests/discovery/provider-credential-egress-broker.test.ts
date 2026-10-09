@@ -226,6 +226,21 @@ describe("provider credential egress", () => {
               args[0] === "network" && ["create", "rm"].includes(args[1] ?? ""),
           ),
       ).toBe(false);
+      const long = await broker.withGrant(
+        { ...request, expiresAt: "2026-10-08T09:30:00.000Z" },
+        async () => "long trial",
+      );
+      expect(long.operation).toEqual({
+        status: "completed",
+        value: "long trial",
+      });
+      expect(long.receipt.expiresAt).toBe("2026-10-08T09:30:00.000Z");
+      await expect(
+        broker.withGrant(
+          { ...request, expiresAt: "2026-10-08T11:01:00.000Z" },
+          async () => "too long",
+        ),
+      ).rejects.toThrow("outside the admitted bound");
       await expect(
         broker.withGrant(
           { ...request, model: "unregistered" as never },

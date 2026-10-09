@@ -77,7 +77,6 @@ async function trialCampaign(options: {
   readonly trialCount: number;
   readonly continueTrials: readonly number[];
   readonly noFindingRuns: number;
-  readonly dailyRunCap?: number;
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-trial-continuation-"));
   directories.push(root);
@@ -156,9 +155,6 @@ async function trialCampaign(options: {
     input,
     historyFraction: 0,
     ablation: { axes: [{ axis: "prompt", armBFraction: 0.5 }] },
-    ...(options.dailyRunCap === undefined
-      ? {}
-      : { dailyRunCap: options.dailyRunCap }),
     plannedTrials,
     ledger,
     evidence,
@@ -214,12 +210,11 @@ async function trialCampaign(options: {
   return { result, calls, ledger, evidence };
 }
 
-it("selects two Leads in priority order, records parent links, and excludes continuations from the daily cap", async () => {
+it("selects two Leads in priority order and records parent links", async () => {
   const { result, calls, ledger, evidence } = await trialCampaign({
     trialCount: 1,
     continueTrials: [0],
     noFindingRuns: 1,
-    dailyRunCap: 1,
     replies: {
       "trial-0": {
         leads: [
