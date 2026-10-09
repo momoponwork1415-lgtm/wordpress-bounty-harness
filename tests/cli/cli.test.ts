@@ -82,6 +82,7 @@ async function harness(
     readonly history?: boolean;
     /** Provider calls (1-based) that the subscription refuses with a quota limit. */
     readonly limitOnCalls?: readonly number[];
+    readonly leadsOnCalls?: Readonly<Record<number, readonly unknown[]>>;
     /** Candidate slugs; the first is not pinned. */
     readonly candidates?: readonly string[];
     /** A slug whose snapshot cannot be frozen. */
@@ -368,6 +369,7 @@ async function harness(
                   claim("sensitive-object-access", "synthetic-plugin.php"),
                 ]
               : [],
+          leads: options.leadsOnCalls?.[call] ?? [],
           examined: "synthetic",
           unexamined: "none",
         };
@@ -1015,6 +1017,75 @@ describe("harness CLI vertical slice", () => {
     );
     expect(comparison.code).toBe(0);
     expect(comparison.stdout).toContain("compare prompt");
+  });
+
+  it("builds a one-hop continuation prompt from one Lead and source-index facts", async () => {
+    const makeLead = (summary: string, missingEdge: string) => ({
+      summary,
+      attackerPosition: "subscriber",
+      primitive: "write",
+      storage: { kind: "option", key: "synthetic_plugin_shared" },
+      missingEdge,
+      sourceTrace: [
+        { file: "includes/synthetic.php", function: "synthetic_save", line: 4 },
+      ],
+      labObservations: "Synthetic partial observation",
+    });
+    const { run, configPath, keysPath, prompts, ledger } = await harness({
+      entryPoints: true,
+      leadsOnCalls: {
+        1: [
+          makeLead("Selected Lead", "auth-use"),
+          makeLead("Other Lead", "precondition"),
+        ],
+      },
+      config: {
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+        continuation: { maxRunsPerTrial: 1, runWallTimeMinutes: 30 },
+      },
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-lead",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(0);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("## Lead");
+    expect(prompts[1]).toContain("## Neighbourhood");
+    expect(prompts[1]).toContain("Selected Lead");
+    expect(prompts[1]).toContain("synthetic_save");
+    expect(prompts[1]).not.toContain("Other Lead");
+    expect(prompts[1]).not.toContain("Synthetic account-takeover claim");
+    expect(prompts[1]).not.toContain("transcript");
+    const started = ledger()
+      .read({ campaignId: "campaign-lead", type: "discovery-run-started" })
+      .map(({ event }) => event);
+    expect(started).toHaveLength(2);
+    expect(started[1]).toMatchObject({
+      type: "discovery-run-started",
+      runKind: "continue",
+      trialId:
+        started[0]?.type === "discovery-run-started" ? started[0].runId : "",
+    });
+    const scored = await run(
+      "eval",
+      "score",
+      "--campaign",
+      "campaign-lead",
+      "--keys",
+      keysPath,
+      "--case",
+      "synthetic-case",
+    );
+    expect(scored.code).toBe(0);
+    expect(scored.stdout).toContain(
+      "source candidates 2  overlapping 2  unreadable 0  hit yes",
+    );
   });
 
   it("scores the campaign against later public advisories and lists blind rubric pairs", async () => {

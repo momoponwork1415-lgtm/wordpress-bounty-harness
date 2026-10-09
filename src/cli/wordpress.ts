@@ -13,6 +13,8 @@ import type {
   CampaignHistory,
   DiscoveryTransportResult,
   DiscoveryTransportRun,
+  PlannedDiscoveryRun,
+  AdmittedLead,
   ProviderAttachmentStore,
 } from "../discovery/index.js";
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
@@ -31,7 +33,16 @@ import {
   type WordPressEntryAssignment,
 } from "../profiles/wordpress/discovery/entry-points.js";
 import { buildWordPressSourceIndex } from "../profiles/wordpress/discovery/storage-index.js";
-import { canonicalDigest } from "../infrastructure/canonical-json.js";
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../infrastructure/canonical-json.js";
+import {
+  admitWordPressLead,
+  readWordPressLead,
+  renderWordPressLeadNeighbourhood,
+  wordPressLeadSignature,
+} from "../profiles/wordpress/discovery/lead.js";
 import {
   admitWordPressFinding,
   readWordPressFinding,
@@ -383,16 +394,23 @@ export function createWordPressCliProfile(options: {
               config.stopRules.maxRuns,
               target.runBudget,
             );
-            const assignments: readonly WordPressEntryAssignment[] =
-              config.assignment === undefined
-                ? []
-                : planWordPressEntryAssignments(
-                    await buildWordPressSourceIndex(
-                      source.directory,
-                      target.slug,
-                    ),
-                    config.assignment.entriesPerRun,
+            const sourceIndex =
+              config.assignment === undefined &&
+              config.continuation === undefined
+                ? undefined
+                : await buildWordPressSourceIndex(
+                    source.directory,
+                    target.slug,
                   );
+            let assignments: readonly WordPressEntryAssignment[] = [];
+            if (config.assignment !== undefined) {
+              if (sourceIndex === undefined)
+                throw new Error("Source index is unavailable");
+              assignments = planWordPressEntryAssignments(
+                sourceIndex,
+                config.assignment.entriesPerRun,
+              );
+            }
             if (config.assignment !== undefined && assignments.length === 0)
               throw new Error(
                 "Entry-point assignment found no registrations in the source",
@@ -505,56 +523,95 @@ export function createWordPressCliProfile(options: {
                     assignments.length === 0
                       ? undefined
                       : assignments[trialOrdinal % assignments.length]!;
+                  const explore: PlannedDiscoveryRun = {
+                    configuration: {
+                      promptVariant: selectedObjective.id,
+                      promptDigest: selectedObjective.digest,
+                      trustBoundaryVersion: trustBoundary.id,
+                      sourcePack: {
+                        dependency:
+                          source.dependency === undefined
+                            ? ("none" as const)
+                            : ("mounted" as const),
+                      },
+                      assignmentUnit:
+                        assignment === undefined ? "plugin" : "entry-point",
+                      ...(assignment === undefined
+                        ? {}
+                        : { assignment: assignmentMetadata(assignment) }),
+                      labAccess: {
+                        database:
+                          lab.database === undefined ? "none" : "read-only",
+                      },
+                    },
+                    run: {
+                      runId: trialId,
+                      targetSnapshotDigest: snapshot.digest,
+                      profile: boundaries.runtimeProfile,
+                      prompt: promptFor(assignment, selectedObjective.text),
+                      lab: {
+                        endpoint: lab.endpoint,
+                        networkName: lab.networkName,
+                        internalIp: lab.internalIp,
+                        ...(lab.database === undefined
+                          ? {}
+                          : {
+                              database: {
+                                host: lab.database.host,
+                                ipv4: lab.database.ipv4,
+                              },
+                            }),
+                      },
+                      sourceDirectory: source.directory,
+                      sourceTree: source.tree,
+                      ...(source.dependency === undefined
+                        ? {}
+                        : { dependencySource: source.dependency }),
+                      expiresAt: new Date(
+                        now + config.runWallTimeMinutes * 60_000,
+                      ).toISOString(),
+                    },
+                  };
+                  const continuationConfig = config.continuation;
+                  if (
+                    continuationConfig === undefined ||
+                    arms.continuation === "a"
+                  )
+                    return { trialId, trialOrdinal, explore };
+                  if (sourceIndex === undefined)
+                    throw new Error("Continuation index is unavailable");
                   return {
                     trialId,
                     trialOrdinal,
-                    explore: {
-                      configuration: {
-                        promptVariant: selectedObjective.id,
-                        promptDigest: selectedObjective.digest,
-                        trustBoundaryVersion: trustBoundary.id,
-                        sourcePack: {
-                          dependency:
-                            source.dependency === undefined
-                              ? ("none" as const)
-                              : ("mounted" as const),
-                        },
-                        assignmentUnit:
-                          assignment === undefined ? "plugin" : "entry-point",
-                        ...(assignment === undefined
-                          ? {}
-                          : { assignment: assignmentMetadata(assignment) }),
-                        labAccess: {
-                          database:
-                            lab.database === undefined ? "none" : "read-only",
-                        },
-                      },
-                      run: {
-                        runId: trialId,
-                        targetSnapshotDigest: snapshot.digest,
-                        profile: boundaries.runtimeProfile,
-                        prompt: promptFor(assignment, selectedObjective.text),
-                        lab: {
-                          endpoint: lab.endpoint,
-                          networkName: lab.networkName,
-                          internalIp: lab.internalIp,
-                          ...(lab.database === undefined
-                            ? {}
-                            : {
-                                database: {
-                                  host: lab.database.host,
-                                  ipv4: lab.database.ipv4,
-                                },
-                              }),
-                        },
-                        sourceDirectory: source.directory,
-                        sourceTree: source.tree,
-                        ...(source.dependency === undefined
-                          ? {}
-                          : { dependencySource: source.dependency }),
-                        expiresAt: new Date(
-                          now + config.runWallTimeMinutes * 60_000,
-                        ).toISOString(),
+                    explore,
+                    continuation: {
+                      maxRuns: continuationConfig.maxRunsPerTrial,
+                      wallTimeMs:
+                        continuationConfig.runWallTimeMinutes * 60_000,
+                      plan: (lead: AdmittedLead): PlannedDiscoveryRun => {
+                        const admitted = readWordPressLead(lead);
+                        if (
+                          admitted.trialId !== trialId ||
+                          admitted.snapshotDigest !== snapshot.digest
+                        )
+                          throw new Error("Lead differs from its Trial");
+                        return {
+                          configuration: explore.configuration,
+                          run: {
+                            ...explore.run,
+                            runId: state.newId(),
+                            prompt: [
+                              explore.run.prompt,
+                              "## Lead",
+                              canonicalJson(admitted),
+                              "## Neighbourhood",
+                              renderWordPressLeadNeighbourhood(
+                                admitted,
+                                sourceIndex,
+                              ),
+                            ].join("\n\n"),
+                          },
+                        };
                       },
                     },
                   };
@@ -563,6 +620,9 @@ export function createWordPressCliProfile(options: {
               executor: boundaries.executor,
               attachments: boundaries.attachments,
               admitFinding: admitWordPressFinding,
+              admitLead: admitWordPressLead,
+              leadSignature: (lead: AdmittedLead) =>
+                wordPressLeadSignature(readWordPressLead(lead)),
             };
           },
           verification: verificationFor(state, boundaries),
