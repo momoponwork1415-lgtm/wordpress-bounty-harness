@@ -1,0 +1,63 @@
+{
+  "kind": "wordpress-selection-policy",
+  "schemaVersion": 1,
+  "id": "wordpress-selection-dev-translatepress-3.3.1-luna-40",
+  "candidateSlugs": ["translatepress-multilingual"],
+  "minimumActiveInstallations": 500,
+  "maximumObservationAgeDays": 2,
+  "maximumUpdateAgeDays": 365,
+  "maximumTargets": 1,
+  "excludedAuthors": [
+    "Automattic",
+    "Facebook",
+    "Google",
+    "SiteGround",
+    "Yoast"
+  ],
+  "excludedSlugs": [],
+  "surfaceTagWeights": {
+    "form": 4,
+    "forms": 4,
+    "upload": 4,
+    "api": 3,
+    "user": 2,
+    "login": 2,
+    "ecommerce": 2
+  },
+  "highThreatTags": [
+    "file manager",
+    "file upload",
+    "upload",
+    "import",
+    "export",
+    "backup",
+    "migration",
+    "login",
+    "authentication",
+    "registration",
+    "user registration",
+    "social login",
+    "2fa",
+    "two-factor",
+    "password",
+    "membership",
+    "user role",
+    "roles",
+    "capabilities",
+    "settings",
+    "options"
+  ],
+  "scoreWeights": {
+    "installations": 10,
+    "recency": 5,
+    "surface": 1,
+    "highThreat": 15
+  },
+  "runBudget": {
+    "default": 40,
+    "highThreat": 40
+  },
+  "pinnedVersions": {
+    "translatepress-multilingual": "3.3.1"
+  }
+}
