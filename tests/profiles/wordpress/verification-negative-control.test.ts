@@ -69,6 +69,7 @@ async function verifyOnce(
       wordpress: `wordpress@${sha("2")}`,
       wordpressCli: `wordpress-cli@${sha("3")}`,
       browser: `verification-browser@${sha("4")}`,
+      recorder: `node-recorder@${sha("5")}`,
     },
     source: {
       resolve: async () => ({
@@ -299,7 +300,17 @@ async function verifyOnce(
       roles: ["unauthenticated", "subscriber"],
     },
   });
-  return { result, funnel: ledger.funnel("campaign-1") };
+  const event = ledger
+    .read({ campaignId: "campaign-1", type: "verification-finished" })
+    .at(0)?.event;
+  return {
+    result,
+    funnel: ledger.funnel("campaign-1"),
+    evidenceCapture:
+      event?.type === "verification-finished"
+        ? event.evidenceCapture
+        : undefined,
+  };
 }
 
 describe("WordPress verification negative control", () => {
@@ -313,13 +324,14 @@ describe("WordPress verification negative control", () => {
   });
 
   it("confirms the same route once the Lab reports the administrator canary session", async () => {
-    const { result, funnel } = await verifyOnce(true);
+    const { result, funnel, evidenceCapture } = await verifyOnce(true);
     expect(result).toMatchObject({
       status: "runtime-confirmed",
       judgeId: "wordpress-administrator-principal",
       conditions: { reachedRole: "administrator", observedVia: "session" },
     });
     expect(funnel.confirmed).toBe(1);
+    expect(evidenceCapture).toBe("agent-authored");
   });
 
   it("does not confirm rce when the stored canary file holds the nonce but never ran", async () => {

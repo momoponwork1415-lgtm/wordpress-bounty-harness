@@ -42,6 +42,7 @@ describe("WordPress Execution Canary judge", () => {
       expect(observed).toEqual({
         status: "observed",
         evidenceDigest: expect.stringMatching(/^sha256:/),
+        evidenceCapture: "agent-authored",
         conditions: {
           observedVia: "execution-canary",
           canaryFiles: "wp-content/uploads/synthetic.php",

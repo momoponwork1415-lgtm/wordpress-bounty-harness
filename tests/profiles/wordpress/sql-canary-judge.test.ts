@@ -46,6 +46,7 @@ describe("WordPress SQL canary judge", () => {
     expect(observed).toEqual({
       status: "observed",
       evidenceDigest: expect.stringMatching(/^sha256:/),
+      evidenceCapture: "agent-authored",
       conditions: {
         observedVia: "canary-row-read",
         attackerRole: "subscriber",

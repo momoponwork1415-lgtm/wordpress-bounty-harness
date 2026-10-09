@@ -36,6 +36,7 @@ describe("WordPress option canary judge", () => {
     expect(observed).toEqual({
       status: "observed",
       evidenceDigest: expect.stringMatching(/^sha256:/),
+      evidenceCapture: "agent-authored",
       conditions: {
         observedVia: "option-change",
         changedOptions: "users_can_register,default_role",

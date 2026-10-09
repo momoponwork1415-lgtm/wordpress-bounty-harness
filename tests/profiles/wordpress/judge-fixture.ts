@@ -24,6 +24,7 @@ export const handle: WordPressLabHandle = {
   endpoint: "http://wordpress",
   networkName: "wbh-lab-net",
   internalIp: "172.20.0.2",
+  recorderIp: "172.20.0.4",
   attackerAccounts: {
     subscriber: { username: "lab-subscriber", password: "lab-only" },
   },
@@ -86,6 +87,9 @@ export type JudgeLab = Parameters<typeof createWordPressJudges>[0]["lab"];
 /** A Lab where nothing changed; tests override only what they observe. */
 export function quietLab(overrides: Partial<JudgeLab> = {}): JudgeLab {
   return {
+    async readCapture() {
+      return { status: "unavailable" };
+    },
     canaryLedger: () => canaries,
     async observeSessionUser() {
       return { status: "none" };

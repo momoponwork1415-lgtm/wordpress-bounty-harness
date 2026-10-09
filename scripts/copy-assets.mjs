@@ -15,3 +15,10 @@ for (const entry of await readdir(source, {
   );
   await cp(new URL(relative, source), new URL(relative, target));
 }
+
+// The recorder is mounted alone into the Lab's pinned Node image.
+await cp(
+  new URL("../dist/lab/recorder/", import.meta.url),
+  new URL("../dist/lab-recorder/", import.meta.url),
+  { recursive: true },
+);

@@ -48,6 +48,7 @@ describe("WordPress stored script judge", () => {
     expect(observed).toEqual({
       status: "observed",
       evidenceDigest: expect.stringMatching(/^sha256:/),
+      evidenceCapture: "agent-authored",
       conditions: {
         observedVia: "canary-beacon",
         firedContexts: "front,admin-all",

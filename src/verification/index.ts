@@ -64,6 +64,7 @@ export type JudgeObservation =
   | {
       readonly status: "observed";
       readonly evidenceDigest: string;
+      readonly evidenceCapture?: "harness-captured" | "agent-authored";
       /** Facts the judge observed, e.g. attacker role and reached role. */
       readonly conditions: Readonly<Record<string, string>>;
     }
@@ -140,6 +141,7 @@ export class Verification<
     const verificationId = id.parse(input.verificationId);
     const snapshotDigest = digest.parse(input.snapshot.digest);
     let labSetupDigest = digest.parse(input.campaignLabSetupDigest);
+    let evidenceCapture: "harness-captured" | "agent-authored" | undefined;
     const finding = await this.#loadFinding(campaignId, findingId);
 
     const decide = async (): Promise<VerificationResultV1> => {
@@ -180,6 +182,9 @@ export class Verification<
           judge,
           lab,
           input.reconstruction,
+          (capture) => {
+            evidenceCapture = capture;
+          },
         );
       } catch {
         result = incomplete(
@@ -219,6 +224,7 @@ export class Verification<
             },
           }),
       result: decided,
+      ...(evidenceCapture === undefined ? {} : { evidenceCapture }),
     });
     if (appended.status === "conflict")
       throw new Error("Verification identity conflict");
@@ -247,6 +253,7 @@ export class Verification<
     judge: Judge<Finding, Handle>,
     lab: Handle,
     reconstruction: Reconstruction,
+    onCapture: (capture: "harness-captured" | "agent-authored") => void,
   ): Promise<VerificationResultV1> {
     if (lab.snapshotDigest !== snapshotDigest)
       return incomplete(
@@ -290,7 +297,9 @@ export class Verification<
     }
     if (observation.status === "incomplete")
       return incomplete(observation.reason, observation.nextStep);
-    if (observation.status === "observed")
+    if (observation.status === "observed") {
+      if (observation.evidenceCapture !== undefined)
+        onCapture(observation.evidenceCapture);
       return publishReproductionPackage({
         store: this.#options.store,
         renderer: this.#options.renderer,
@@ -306,6 +315,7 @@ export class Verification<
         },
         reconstruction,
       });
+    }
     if (attempt.refutationDigest !== undefined)
       return {
         status: "contradicted",

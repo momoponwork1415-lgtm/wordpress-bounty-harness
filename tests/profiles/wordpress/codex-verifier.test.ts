@@ -132,6 +132,7 @@ async function fixture(
   const verifier = new CodexVerifier({
     runtime,
     lab: {
+      markCapture: async () => "0",
       prepareExecutionCanary: () =>
         issueCanary
           ? { nonce: "fake-nonce", php: "synthetic-canary-php" }
@@ -157,6 +158,7 @@ async function fixture(
     endpoint: "http://wordpress",
     networkName: "lab-internal",
     internalIp: "172.20.0.2",
+    recorderIp: "172.20.0.4",
     attackerAccounts: {
       subscriber: { username: "subscriber", password: "subscriber-secret" },
       customer: { username: "customer", password: "customer-secret" },
@@ -189,13 +191,26 @@ describe("CodexVerifier.attempt", () => {
         },
       },
     });
+    const attempt = await f.verifier.attempt({
+      finding: f.finding,
+      lab: f.lab,
+    });
+    expect(attempt.status).toBe("attempted");
+    if (attempt.status !== "attempted") return;
     expect(
-      (await f.verifier.attempt({ finding: f.finding, lab: f.lab })).status,
-    ).toBe("attempted");
+      (
+        await f.store.readFile(
+          attempt.recipeDigest,
+          "capture-marker.json",
+          1000,
+        )
+      ).status,
+    ).toBe("resolved");
     expect(f.runs[0]?.lab.database).toEqual({
       host: "database",
       ipv4: "172.20.0.3",
     });
+    expect(f.runs[0]?.lab.internalIp).toBe("172.20.0.4");
     expect(f.runs[0]?.prompt).toContain("fixture_reader");
     expect(
       JSON.stringify(f.ledger.read({ type: "verifier-run-finished" })),

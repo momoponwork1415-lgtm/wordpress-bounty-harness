@@ -89,6 +89,7 @@ async function fixture(
       wordpress: `wordpress@${sha("2")}`,
       wordpressCli: `wordpress-cli@${sha("3")}`,
       browser: `verification-browser@${sha("4")}`,
+      recorder: `node-recorder@${sha("5")}`,
     },
     source: {
       resolve: async () => ({
@@ -127,9 +128,23 @@ async function fixture(
             exitCode: 0,
             stdout: request.args.at(-1)?.endsWith("-db")
               ? "172.20.0.3"
-              : "172.20.0.2",
+              : request.args.at(-1)?.endsWith("-proxy")
+                ? "172.20.0.4"
+                : "172.20.0.2",
             stderr: "",
           };
+        if (request.args[0] === "exec" && request.args[1]?.endsWith("-proxy")) {
+          if (request.args[2] === "wc")
+            return {
+              exitCode: 0,
+              stdout: "0 /var/lib/wbh/capture.jsonl\n",
+              stderr: "",
+            };
+          if (request.args[2] === "tail")
+            return { exitCode: 0, stdout: '{"synthetic":true}\n', stderr: "" };
+          if (request.args[2] === "sh")
+            return { exitCode: 0, stdout: "0", stderr: "" };
+        }
         if (request.args.includes("--entrypoint=php"))
           return {
             exitCode: 0,
@@ -405,6 +420,20 @@ describe("WordPress gVisor Lab", () => {
     expect(first.handle.id).not.toBe(second.handle.id);
     expect(first.handle.setupDigest).toMatch(/^sha256:/);
     expect(first.handle.internalIp).toBe("172.20.0.2");
+    expect(first.handle.recorderIp).toBe("172.20.0.4");
+    const proxy = commands.find(
+      (command) =>
+        command.args[0] === "run" &&
+        command.args.some((arg) => arg === `wbh-${first.handle.id}-proxy`),
+    );
+    expect(proxy?.args).toContain("--runtime=runsc");
+    expect(proxy?.args).toContain("--add-host=wordpress:172.20.0.2");
+    expect(await lab.markCapture(first.handle)).toBe("0");
+    expect(await lab.readCapture(first.handle, "0")).toMatchObject({
+      status: "captured",
+      bytes: Buffer.from('{"synthetic":true}\n'),
+      dropped: 0,
+    });
     expect(first.handle.networkName).toMatch(/^wbh-.+-net$/);
     expect(
       commands.some(
