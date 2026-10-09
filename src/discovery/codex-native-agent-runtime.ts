@@ -195,6 +195,7 @@ function decodeTranscript(
     | z.infer<typeof verificationReportSchema>
     | undefined;
   let usage: ReturnType<typeof usageSchema.parse> | undefined;
+  let finalMessage: string | undefined;
   for (const line of lines) {
     let value: unknown;
     try {
@@ -232,19 +233,8 @@ function decodeTranscript(
         "text" in item &&
         typeof item.text === "string"
       ) {
-        let reportValue: unknown;
-        try {
-          reportValue = JSON.parse(item.text) as unknown;
-        } catch {
-          return undefined;
-        }
-        const found = (
-          outputKind === "verification"
-            ? verificationReportSchema
-            : reportSchema
-        ).safeParse(reportValue);
-        if (!found.success) return undefined;
-        report = found.data;
+        // Earlier messages are progress notes; only the last is the report.
+        finalMessage = item.text;
       } else if (
         !["reasoning", "error", "agent_message", "command_execution"].includes(
           String(item.type),
@@ -257,7 +247,16 @@ function decodeTranscript(
     }
     return undefined;
   }
-  if (!started || !completed || report === undefined) return undefined;
+  if (!started || !completed || finalMessage === undefined) return undefined;
+  try {
+    const found = (
+      outputKind === "verification" ? verificationReportSchema : reportSchema
+    ).safeParse(JSON.parse(finalMessage) as unknown);
+    if (!found.success) return undefined;
+    report = found.data;
+  } catch {
+    return undefined;
+  }
   return {
     report,
     usage: {
