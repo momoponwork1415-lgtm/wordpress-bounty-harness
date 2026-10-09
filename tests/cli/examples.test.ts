@@ -91,7 +91,7 @@ describe("TranslatePress 3.2.5 A/B development-set example", () => {
     );
     expect(config.stopRules).toEqual({ maxRuns: 12, noFindingRuns: 12 });
     expect(config.runWallTimeMinutes).toBe(90);
-    expect(config.dailyRunCap).toBe(6);
+    expect(config.dailyRunCap).toBeUndefined();
     expect(config.resources.maxConcurrentRuns).toBe(2);
     expect(config.lab.databaseAccess).toBe("read-only");
     expect(config.assignment).toEqual({
@@ -125,6 +125,7 @@ describe("TranslatePress 3.2.5 A/B development-set example", () => {
     );
     expect(config.stopRules).toEqual({ maxRuns: 6, noFindingRuns: 6 });
     expect(config.runWallTimeMinutes).toBe(150);
+    expect(config.dailyRunCap).toBeUndefined();
     expect(config.continuation).toBeUndefined();
     expect(config.ablation?.axes).toEqual([
       {
