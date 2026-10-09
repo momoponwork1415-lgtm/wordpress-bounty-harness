@@ -117,6 +117,7 @@ async function open() {
                 ...identity,
                 terminal: "incomplete",
                 reason: "provider",
+                reasonDetail: "cli-exit:2",
                 providerLimit: "quota",
               }),
             };
@@ -216,6 +217,13 @@ describe("discovery campaign stop and resume", () => {
       "completed",
       "provider-limited",
     ]);
+    expect(finished().map((event) => event?.reason)).toEqual([
+      undefined,
+      undefined,
+      "provider",
+    ]);
+    expect(finished().at(-1)?.providerLimit).toBe("quota");
+    expect(finished().at(-1)?.reasonDetail).toBe("cli-exit:2");
     expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
 
     const resumed = await campaign({

@@ -347,6 +347,13 @@ export async function runDiscoveryCampaign(options: {
     let foundNew = false;
     let usage: NativeRunReceipt["usage"] | undefined;
     let receiptDigest: string | undefined;
+    let failure:
+      | {
+          readonly reason: Exclude<NativeRunReceipt["reason"], "unavailable">;
+          readonly reasonDetail?: string;
+          readonly providerLimit?: "rate-limit" | "quota";
+        }
+      | undefined;
     try {
       const result = await options.executor.execute({
         ...run,
@@ -363,6 +370,16 @@ export async function runDiscoveryCampaign(options: {
         "receipt.json": canonicalJson(receipt),
       });
       if (receipt.providerLimit !== undefined) outcome = "provider-limited";
+      if (receipt.terminal === "incomplete" && receipt.reason !== "unavailable")
+        failure = {
+          reason: receipt.reason,
+          ...(receipt.reasonDetail === undefined
+            ? {}
+            : { reasonDetail: receipt.reasonDetail }),
+          ...(receipt.providerLimit === undefined
+            ? {}
+            : { providerLimit: receipt.providerLimit }),
+        };
       if (
         receipt.terminal === "completed" &&
         receipt.runId === run.runId &&
@@ -433,6 +450,7 @@ export async function runDiscoveryCampaign(options: {
       costUsd: "unavailable",
       wallTimeMs,
       ...(usage === undefined ? {} : { usage }),
+      ...(outcome === "completed" || failure === undefined ? {} : failure),
       ...(receiptDigest === undefined
         ? {}
         : {

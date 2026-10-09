@@ -189,7 +189,7 @@ function decodeTranscript(
         reasoningOutputTokens: number | "unavailable";
       };
     }
-  | undefined {
+  | { reasonDetail: string } {
   const lines = stdout.split("\n").filter((line) => line.trim().length > 0);
   let started = false;
   let completed = false;
@@ -204,18 +204,18 @@ function decodeTranscript(
     try {
       value = JSON.parse(line) as unknown;
     } catch {
-      return undefined;
+      return { reasonDetail: "invalid-event-json" };
     }
     const parsed = event.safeParse(value);
-    if (!parsed.success) return undefined;
+    if (!parsed.success) return { reasonDetail: "invalid-event-shape" };
     if (parsed.data.type === "thread.started") {
-      if (started) return undefined;
+      if (started) return { reasonDetail: "duplicate-thread-start" };
       started = true;
       continue;
     }
     if (parsed.data.type === "turn.started") continue;
     if (parsed.data.type === "turn.completed") {
-      if (completed) return undefined;
+      if (completed) return { reasonDetail: "duplicate-turn-completion" };
       const object = parsed.data as Record<string, unknown>;
       const found = usageSchema.safeParse(object.usage);
       if (found.success) usage = found.data;
@@ -229,7 +229,7 @@ function decodeTranscript(
     ) {
       const item = (parsed.data as Record<string, unknown>).item;
       if (typeof item !== "object" || item === null || !("type" in item))
-        return undefined;
+        return { reasonDetail: "invalid-item-shape" };
       if (
         item.type === "agent_message" &&
         parsed.data.type === "item.completed" &&
@@ -244,21 +244,27 @@ function decodeTranscript(
         )
       ) {
         // A tool not admitted by this transport makes the transcript unusable.
-        return undefined;
+        const itemType = String(item.type);
+        return {
+          reasonDetail: `unadmitted-item-type:${/^[a-z][a-z_]{0,31}$/.test(itemType) ? itemType : "other"}`,
+        };
       }
       continue;
     }
-    return undefined;
+    return { reasonDetail: "unadmitted-event-type" };
   }
-  if (!started || !completed || finalMessage === undefined) return undefined;
+  if (!started) return { reasonDetail: "missing-thread-start" };
+  if (!completed) return { reasonDetail: "missing-turn-completion" };
+  if (finalMessage === undefined)
+    return { reasonDetail: "missing-final-message" };
   try {
     const found = (
       outputKind === "verification" ? verificationReportSchema : reportSchema
     ).safeParse(JSON.parse(finalMessage) as unknown);
-    if (!found.success) return undefined;
+    if (!found.success) return { reasonDetail: "final-message-not-report" };
     report = found.data;
   } catch {
-    return undefined;
+    return { reasonDetail: "final-message-not-report" };
   }
   return {
     report,
@@ -328,11 +334,13 @@ export class CodexNativeAgentRuntime {
       completedAt = this.clock().toISOString(),
       grantReceiptDigest?: string,
       providerLimit?: "rate-limit" | "quota",
+      reasonDetail?: string,
     ): DiscoveryTransportResult => ({
       receipt: createNativeRunReceipt({
         ...run,
         terminal: "incomplete",
         reason,
+        ...(reasonDetail === undefined ? {} : { reasonDetail }),
         ...(providerLimit === undefined ? {} : { providerLimit }),
         startedAt,
         completedAt,
@@ -487,7 +495,7 @@ export class CodexNativeAgentRuntime {
       result.status === "exited" && result.exitCode === 0
         ? decodeTranscript(result.stdout, run.outputKind)
         : undefined;
-    if (decoded === undefined) {
+    if (decoded === undefined || "reasonDetail" in decoded) {
       const limit = providerLimitOf(result.stdout);
       if (limit !== undefined)
         return incomplete(
@@ -495,12 +503,27 @@ export class CodexNativeAgentRuntime {
           result.completedAt,
           granted.receipt.digest,
           limit,
+          decoded === undefined
+            ? `cli-exit:${result.exitCode}`
+            : decoded.reasonDetail,
         );
     }
     if (result.status !== "exited" || result.exitCode !== 0)
-      return incomplete("provider", result.completedAt, granted.receipt.digest);
-    if (decoded === undefined)
-      return incomplete("schema", result.completedAt, granted.receipt.digest);
+      return incomplete(
+        "provider",
+        result.completedAt,
+        granted.receipt.digest,
+        undefined,
+        `cli-exit:${result.exitCode}`,
+      );
+    if (decoded === undefined || "reasonDetail" in decoded)
+      return incomplete(
+        "schema",
+        result.completedAt,
+        granted.receipt.digest,
+        undefined,
+        decoded?.reasonDetail ?? "missing-transcript",
+      );
     let attachment: ProviderAttachmentRef;
     try {
       attachment = await this.attachments.put(

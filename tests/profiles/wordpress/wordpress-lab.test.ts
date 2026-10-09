@@ -105,6 +105,14 @@ async function fixture(
               : "172.20.0.2",
             stderr: "",
           };
+        if (request.args.includes("--entrypoint=php"))
+          return {
+            exitCode: 0,
+            stdout: request.args.some((arg) => arg.startsWith("WBH_DB_USER="))
+              ? '{"http":"ok","database":"ok"}'
+              : '{"http":"ok","database":"not-exposed"}',
+            stderr: "",
+          };
         const saltArg = request.args.find((arg) =>
           arg.startsWith("WBH_EXECUTION_SALT="),
         );
@@ -219,6 +227,57 @@ async function fixture(
 }
 
 describe("WordPress gVisor Lab", () => {
+  it("probes HTTP from a disposable runsc container on the Lab network", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup);
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status !== "ready") return;
+    expect(await lab.probe(provisioned.handle)).toEqual({
+      http: "ok",
+      database: "not-exposed",
+    });
+    const probe = commands.find((command) =>
+      command.args.includes("--entrypoint=php"),
+    );
+    expect(probe?.args).toContain("--runtime=runsc");
+    expect(probe?.args).toContain("--network");
+    expect(probe?.args).toContain(
+      `--add-host=wordpress:${provisioned.handle.internalIp}`,
+    );
+    expect(probe?.args).toContain("--read-only");
+    await lab.teardown(provisioned.handle);
+  });
+
+  it("probes an exposed read-only database through the same isolated network", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup);
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status !== "ready") return;
+    Object.assign(provisioned.handle, {
+      database: {
+        host: "database",
+        ipv4: "172.20.0.3",
+        port: 3306,
+        name: "wordpress",
+        readOnlyAccount: {
+          username: "fixture_reader",
+          password: "fixture_only",
+        },
+      },
+    });
+    expect(await lab.probe(provisioned.handle)).toEqual({
+      http: "ok",
+      database: "ok",
+    });
+    const probe = commands.find((command) =>
+      command.args.includes("--entrypoint=php"),
+    );
+    expect(probe?.args).toContain("--add-host=database:172.20.0.3");
+    expect(probe?.args).toContain("WBH_DB_USER=fixture_reader");
+    expect(probe?.args).toContain("WBH_DB_NAME=wordpress");
+    await lab.teardown(provisioned.handle);
+  });
+
   it("provisions two independent internal labs, seeds canaries, and removes resources", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const first = await lab.provision(snapshot, setup);
