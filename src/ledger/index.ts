@@ -111,6 +111,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     promptDigest: digest,
     receiptDigest: digest,
     terminal: z.enum(["completed", "incomplete"]),
+    canaryIssued: z.enum(["execution", "script"]).optional(),
   }),
   event({
     type: z.literal("verification-finished"),

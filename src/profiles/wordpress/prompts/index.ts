@@ -52,7 +52,7 @@ export async function loadWordPressVerifierPrompt(): Promise<{
   readonly text: string;
   readonly digest: `sha256:${string}`;
 }> {
-  const bytes = await readFile(new URL("./verifier-v1.md", import.meta.url));
+  const bytes = await readFile(new URL("./verifier-v2.md", import.meta.url));
   return {
     text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
     digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,

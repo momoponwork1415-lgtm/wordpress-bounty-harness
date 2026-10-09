@@ -313,6 +313,7 @@ export async function createWordPressHostProfile(options: {
             directory: source.target.sourceDirectory,
             tree: source.target.sourceTree,
           },
+          lab,
           clock: state.clock,
         }).attempt({ finding, lab: handle });
       },

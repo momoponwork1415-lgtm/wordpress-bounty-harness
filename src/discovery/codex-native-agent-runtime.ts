@@ -145,6 +145,7 @@ const verificationReportSchema = z.strictObject({
   "http.json": z.string().nullable(),
   "steps.md": z.string().nullable(),
   "route.json": z.string().nullable(),
+  "session.json": z.string().nullable(),
   "refutation.md": z.string().nullable(),
   precondition: z.string().nullable(),
 });
@@ -155,6 +156,7 @@ const verificationReportJsonSchema = {
     "http.json": { type: ["string", "null"] },
     "steps.md": { type: ["string", "null"] },
     "route.json": { type: ["string", "null"] },
+    "session.json": { type: ["string", "null"] },
     "refutation.md": { type: ["string", "null"] },
     precondition: { type: ["string", "null"] },
   },
@@ -162,6 +164,7 @@ const verificationReportJsonSchema = {
     "http.json",
     "steps.md",
     "route.json",
+    "session.json",
     "refutation.md",
     "precondition",
   ],

@@ -14,7 +14,7 @@ describe("WordPress discovery prompt assets", () => {
   it("pins the Verifier prompt and keeps known answers and attack strings out", async () => {
     const prompt = await loadWordPressVerifierPrompt();
     expect(prompt.digest).toBe(
-      "sha256:889b3c012fe37c3f14629e4771cc27c7b505e862dfd8c93c2a2a86f510435c89",
+      "sha256:a95b104f54d482095c766f91f91e8dd645f7f6c50c54aa11ccdc39d7c6a24161",
     );
     expect(prompt.text).toContain("http.json");
     expect(prompt.text).toContain("refutation.md");

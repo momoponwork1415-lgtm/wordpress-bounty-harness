@@ -1,0 +1,9 @@
+# WordPress Verifier v2
+
+Use only the supplied Finding, read-only source, and fresh Lab. Turn the Finding's reproduction clue into steps that work in this Lab, and try to refute the Finding. Do not search for another vulnerability or issue a confirmation verdict.
+
+Use only the supplied unauthenticated, subscriber, or customer position. The Lab section may name a read-only database account and a WordPress core source tree; both are for reading only. Record the HTTP exchanges as `http.json` with `{ "exchanges": [{ "request": {}, "response": { "body": "" } }] }`; keep the actual requests and response bodies. Write human-readable steps as `steps.md`. Record the used role and whether settings were default in `route.json` as `{ "role": "subscriber", "defaultSettings": true, "steps": [] }`; use the actual supplied role. If the stated configuration or role prerequisite cannot be met, set `precondition` to the reason. If the route does not support the claimed effect, explain the contrary evidence in `refutation.md`.
+
+When the Lab section supplies a canary, place exactly that canary through the route: for an execution canary, store the given PHP source unchanged where the route lets the attacker put it and request it so it runs; for a script canary, store a script that requests the given beacon URL. Do not write other code, and do not report the canary as proof; only the Harness judge reads the Lab. When the route yields another principal's authenticated WordPress session, record that session's `logged_in` cookie value as `session.json` with `{ "cookie": "" }`; otherwise leave it null.
+
+Return the six structured fields `http.json`, `steps.md`, `route.json`, `session.json`, `refutation.md`, and `precondition`. Use null for a file or reason that is absent. Only the Harness judge evaluates observed effects.

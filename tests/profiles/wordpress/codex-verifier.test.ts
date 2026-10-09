@@ -13,7 +13,10 @@ import {
 import { canonicalJson } from "../../../src/infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../../src/ledger/index.js";
-import { admitWordPressFinding } from "../../../src/profiles/wordpress/discovery/finding.js";
+import {
+  admitWordPressFinding,
+  type WordPressFinding,
+} from "../../../src/profiles/wordpress/discovery/finding.js";
 import type { WordPressLabHandle } from "../../../src/profiles/wordpress/lab/index.js";
 import { CodexVerifier } from "../../../src/profiles/wordpress/verification/codex-verifier.js";
 
@@ -40,6 +43,8 @@ afterEach(async () => {
 async function fixture(
   reports: readonly Record<string, unknown>[],
   failure?: "provider" | "sandbox",
+  impact: WordPressFinding["impact"] = "sensitive-object-access",
+  issueCanary = true,
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-codex-verifier-"));
   roots.push(root);
@@ -57,7 +62,7 @@ async function fixture(
     {
       claim: "A synthetic access rule is missing",
       attackerPosition: "subscriber",
-      impact: "sensitive-object-access",
+      impact,
       configurationPrecondition: "default",
       brokenProperty: "Only the owner may read it",
       sourceTrace: [{ file: "plugin.php", function: "view", line: 12 }],
@@ -126,6 +131,16 @@ async function fixture(
   };
   const verifier = new CodexVerifier({
     runtime,
+    lab: {
+      prepareExecutionCanary: () =>
+        issueCanary
+          ? { nonce: "fake-nonce", php: "synthetic-canary-php" }
+          : null,
+      prepareScriptCanary: () =>
+        issueCanary
+          ? { nonce: "fake-nonce", beaconUrl: "http://wordpress/fake-beacon" }
+          : null,
+    },
     store,
     ledger,
     profile,
@@ -153,6 +168,75 @@ async function fixture(
 }
 
 describe("CodexVerifier.attempt", () => {
+  it.each([
+    ["rce", "execution", "synthetic-canary-php"],
+    ["stored-xss", "script", "http://wordpress/fake-beacon"],
+  ] as const)(
+    "issues the %s canary through the Lab",
+    async (impact, kind, value) => {
+      const f = await fixture(
+        [
+          {
+            "http.json": JSON.stringify({
+              exchanges: [{ request: {}, response: { body: "ordinary" } }],
+            }),
+            "steps.md": "Step",
+          },
+        ],
+        undefined,
+        impact,
+      );
+      const attempt = await f.verifier.attempt({
+        finding: f.finding,
+        lab: f.lab,
+      });
+      expect(attempt.status).toBe("attempted");
+      expect(f.runs).toHaveLength(1);
+      expect(f.runs[0]?.prompt).toContain(value);
+      expect(
+        f.ledger.read({ type: "verifier-run-finished" }).at(0)?.event,
+      ).toMatchObject({ canaryIssued: kind });
+    },
+  );
+
+  it("returns incomplete before starting a run when the Lab cannot issue a required canary", async () => {
+    const f = await fixture([], undefined, "rce", false);
+    expect(
+      await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+    ).toMatchObject({ status: "incomplete", reason: "precondition" });
+    expect(f.runs).toHaveLength(0);
+  });
+
+  it("keeps a valid session in private evidence and rejects a malformed cookie", async () => {
+    const report = (cookie: string) => ({
+      "http.json": JSON.stringify({
+        exchanges: [{ request: {}, response: { body: "ordinary" } }],
+      }),
+      "steps.md": "Step",
+      "session.json": JSON.stringify({ cookie }),
+    });
+    const valid = await fixture([report("wordpress_logged_in%7Cfake")]);
+    const attempted = await valid.verifier.attempt({
+      finding: valid.finding,
+      lab: valid.lab,
+    });
+    expect(attempted.status).toBe("attempted");
+    if (attempted.status === "attempted") {
+      const saved = await valid.store.readFile(
+        attempted.recipeDigest,
+        "session.json",
+        1024,
+      );
+      expect(saved.status).toBe("resolved");
+    }
+    const invalid = await fixture([report("invalid cookie with spaces")]);
+    expect(
+      await invalid.verifier.attempt({
+        finding: invalid.finding,
+        lab: invalid.lab,
+      }),
+    ).toMatchObject({ status: "incomplete", reason: "recipe" });
+  });
   it("returns a private HTTP recipe and records a fresh verifier receipt", async () => {
     const http = {
       exchanges: [
@@ -181,7 +265,7 @@ describe("CodexVerifier.attempt", () => {
     expect(event?.type).toBe("verifier-run-finished");
     if (event?.type !== "verifier-run-finished") return;
     expect(event.promptDigest).toBe(
-      "sha256:889b3c012fe37c3f14629e4771cc27c7b505e862dfd8c93c2a2a86f510435c89",
+      "sha256:a95b104f54d482095c766f91f91e8dd645f7f6c50c54aa11ccdc39d7c6a24161",
     );
     const storedReceipt = await f.store.readFile(
       event.receiptDigest,
