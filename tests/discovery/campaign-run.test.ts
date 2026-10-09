@@ -97,6 +97,7 @@ async function campaign(findingRuns: readonly number[]) {
     labId: "lab-1",
     input,
     historyFraction: 0.5,
+    runWallTimeMs: 90 * 60_000,
     ablation: { axis: "history" },
     ledger,
     attachments,
@@ -104,6 +105,7 @@ async function campaign(findingRuns: readonly number[]) {
     admitFinding: admitWordPressFinding,
     executor: {
       async execute(run) {
+        expect(run.expiresAt).toBe("2026-10-08T08:30:00.000Z");
         const report = {
           findings: findingRuns.includes(calls++) ? [claim] : [],
           examined: "source",
@@ -128,24 +130,28 @@ async function campaign(findingRuns: readonly number[]) {
         };
       },
     },
-    plannedRuns: Array.from({ length: 6 }, (_, index) => ({
-      configuration: {
-        promptVariant: index % 2 ? "wp2shell-derived" : "short-objective",
-        assignmentUnit: "route",
-      },
-      run: {
-        runId: `run-${index}`,
-        targetSnapshotDigest: digest,
-        profile,
-        prompt: "Synthetic objective",
-        sourceDirectory: "/private/source",
-        sourceTree: { digest, entries: 1, bytes: 1 },
-        lab: {
-          endpoint: "http://wordpress",
-          networkName: "lab-internal",
-          internalIp: "172.20.0.2",
+    plannedTrials: Array.from({ length: 6 }, (_, index) => ({
+      trialId: `run-${index}`,
+      trialOrdinal: index,
+      explore: {
+        configuration: {
+          promptVariant: index % 2 ? "wp2shell-derived" : "short-objective",
+          assignmentUnit: "route",
         },
-        expiresAt: "2026-10-08T07:30:00Z",
+        run: {
+          runId: `run-${index}`,
+          targetSnapshotDigest: digest,
+          profile,
+          prompt: "Synthetic objective",
+          sourceDirectory: "/private/source",
+          sourceTree: { digest, entries: 1, bytes: 1 },
+          lab: {
+            endpoint: "http://wordpress",
+            networkName: "lab-internal",
+            internalIp: "172.20.0.2",
+          },
+          expiresAt: "2026-10-08T07:30:00Z",
+        },
       },
     })),
     clock: () => new Date("2026-10-08T07:00:00Z"),
@@ -161,6 +167,26 @@ it("stops after consecutive completed runs without a new Finding and records eac
     stoppedBy: "no-new-finding",
   });
   expect(calls).toBe(3);
+  expect(
+    ledger
+      .read({ type: "discovery-run-started" })
+      .map(({ event }) =>
+        event.type === "discovery-run-started"
+          ? [
+              event.trialId,
+              event.trialOrdinal,
+              event.runKind,
+              event.configuration.promptDigest,
+              event.configuration.trustBoundaryVersion,
+              event.configuration.sourcePack?.dependency,
+            ]
+          : null,
+      ),
+  ).toEqual([
+    ["run-0", 0, "explore", digest, "v1", "none"],
+    ["run-1", 1, "explore", digest, "v1", "none"],
+    ["run-2", 2, "explore", digest, "v1", "none"],
+  ]);
   expect(
     ledger
       .read({ type: "discovery-run-started" })

@@ -205,6 +205,7 @@ export class Evaluation {
     for (const event of events("discovery-run-started")) {
       if (
         event.type !== "discovery-run-started" ||
+        (event.runKind ?? "explore") !== "explore" ||
         event.configuration.axis !== input.axis ||
         event.configuration.arm === undefined
       )

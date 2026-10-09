@@ -1,7 +1,4 @@
-import type {
-  CampaignInputV1,
-  PlannedDiscoveryRun,
-} from "../discovery/index.js";
+import type { CampaignInputV1, PlannedTrial } from "../discovery/index.js";
 import { runDiscoveryCampaign } from "../discovery/index.js";
 import {
   canonicalDigest,
@@ -42,11 +39,12 @@ export interface CampaignPipeline<
     readonly lab: Handle;
   }) => Promise<{
     readonly input: CampaignInputV1;
-    readonly plannedRuns: readonly PlannedDiscoveryRun[];
+    readonly plannedTrials: readonly PlannedTrial[];
     readonly historyFraction: number;
     readonly ablation?: NonNullable<DiscoveryOptions["ablation"]>;
     readonly concurrency?: number;
     readonly dailyRunCap?: number;
+    readonly runWallTimeMs?: number;
     readonly executor: DiscoveryOptions["executor"];
     readonly attachments: DiscoveryOptions["attachments"];
     readonly admitFinding: DiscoveryOptions["admitFinding"];

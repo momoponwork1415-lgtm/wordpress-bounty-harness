@@ -178,8 +178,30 @@ export type PlannedDiscoveryRun = {
   readonly run: Omit<DiscoveryTransportRun, "campaignInput">;
   readonly configuration: {
     readonly promptVariant: string;
+    readonly promptDigest?: string;
+    readonly trustBoundaryVersion?: string;
+    readonly sourcePack?: { readonly dependency: "mounted" | "none" };
     readonly assignmentUnit: string;
     readonly labAccess?: { readonly database: "read-only" | "none" };
+  };
+};
+
+/** Shared identity of an admitted lead; a profile supplies its claim fields. */
+export type AdmittedLead = {
+  readonly leadId: string;
+  readonly discoveryRunId: string;
+  readonly trialId: string;
+  readonly snapshotDigest: string;
+};
+
+export type PlannedTrial = {
+  readonly trialId: string;
+  readonly trialOrdinal: number;
+  readonly explore: PlannedDiscoveryRun;
+  readonly continuation?: {
+    readonly maxRuns: number;
+    readonly wallTimeMs: number;
+    readonly plan: (lead: AdmittedLead) => PlannedDiscoveryRun;
   };
 };
 
@@ -206,9 +228,11 @@ export async function runDiscoveryCampaign(options: {
   readonly concurrency?: number;
   /** Optional ceiling on runs started per UTC day across every campaign in the ledger. */
   readonly dailyRunCap?: number;
+  /** Exploration wall time, stamped when each Trial starts rather than when all plans are built. */
+  readonly runWallTimeMs?: number;
   /** Records each run's arm on the history axis: a without history, b with it. */
   readonly ablation?: { readonly axis: "history" };
-  readonly plannedRuns: readonly PlannedDiscoveryRun[];
+  readonly plannedTrials: readonly PlannedTrial[];
   readonly executor: {
     execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
   };
@@ -254,6 +278,21 @@ export async function runDiscoveryCampaign(options: {
   ).at(0);
   if (concluded?.type === "discovery-concluded")
     return { runCount: 0, findingsRecorded: 0, stoppedBy: concluded.stoppedBy };
+  const startedRuns = new Map<string, "explore" | "continue">();
+  let startAfterSequence = 0;
+  for (;;) {
+    const page = options.ledger.read({
+      campaignId: options.campaignId,
+      type: "discovery-run-started",
+      afterSequence: startAfterSequence,
+      limit: 1000,
+    });
+    for (const { event } of page)
+      if (event.type === "discovery-run-started")
+        startedRuns.set(event.runId, event.runKind ?? "explore");
+    if (page.length < 1000) break;
+    startAfterSequence = page[page.length - 1]!.sequence;
+  }
   const spent = ofTarget(
     options.ledger
       .read({
@@ -265,6 +304,8 @@ export async function runDiscoveryCampaign(options: {
   ).filter(
     (event) =>
       event.type === "discovery-run-finished" &&
+      // Old events precede runKind and each represented one exploration.
+      (startedRuns.get(event.runId) ?? "explore") === "explore" &&
       (event.outcome === "completed" || event.outcome === "failed"),
   ).length;
   const seen = new Set<string>();
@@ -278,6 +319,13 @@ export async function runDiscoveryCampaign(options: {
     (!Number.isSafeInteger(options.dailyRunCap) || options.dailyRunCap < 1)
   )
     throw new Error("Invalid daily run cap");
+  if (
+    options.runWallTimeMs !== undefined &&
+    (!Number.isSafeInteger(options.runWallTimeMs) ||
+      options.runWallTimeMs < 1 ||
+      options.runWallTimeMs > 240 * 60_000)
+  )
+    throw new Error("Invalid exploration wall time");
   let startedToday = 0;
   if (options.dailyRunCap !== undefined) {
     const day = clock().toISOString().slice(0, 10);
@@ -290,17 +338,32 @@ export async function runDiscoveryCampaign(options: {
       });
       startedToday += page.filter(
         ({ event }) =>
-          new Date(event.occurredAt).toISOString().slice(0, 10) === day,
+          new Date(event.occurredAt).toISOString().slice(0, 10) === day &&
+          (event.type !== "discovery-run-started" ||
+            (event.runKind ?? "explore") === "explore"),
       ).length;
       if (page.length < 1000) break;
       afterSequence = page[page.length - 1]!.sequence;
     }
   }
-  const limit = Math.min(input.stopRules.maxRuns, options.plannedRuns.length);
+  const limit = Math.min(input.stopRules.maxRuns, options.plannedTrials.length);
   let next = spent;
   const runOne = async (index: number) => {
-    const planned = options.plannedRuns[index]!;
-    const run = planned.run;
+    const trial = options.plannedTrials[index]!;
+    const planned = trial.explore;
+    const run =
+      options.runWallTimeMs === undefined
+        ? planned.run
+        : {
+            ...planned.run,
+            expiresAt: new Date(
+              clock().getTime() + options.runWallTimeMs,
+            ).toISOString(),
+          };
+    if (trial.trialId !== run.runId || trial.trialOrdinal !== index)
+      throw new Error(
+        "Trial identity or ordinal differs from its exploration run",
+      );
     if (
       run.targetSnapshotDigest !== input.snapshotDigest ||
       run.profile.digest !== input.modelProfileDigest
@@ -329,13 +392,36 @@ export async function runDiscoveryCampaign(options: {
       identity: `discovery-start-${run.runId}`,
       type: "discovery-run-started",
       runId: run.runId,
+      trialId: trial.trialId,
+      trialOrdinal: trial.trialOrdinal,
+      runKind: "explore",
       labId: options.labId,
       history: historyMetadata,
       configuration:
         options.ablation === undefined
-          ? planned.configuration
+          ? {
+              ...planned.configuration,
+              promptDigest:
+                planned.configuration.promptDigest ?? input.promptDigest,
+              trustBoundaryVersion: input.trustBoundary.version,
+              sourcePack: {
+                dependency:
+                  run.dependencySource === undefined
+                    ? ("none" as const)
+                    : ("mounted" as const),
+              },
+            }
           : {
               ...planned.configuration,
+              promptDigest:
+                planned.configuration.promptDigest ?? input.promptDigest,
+              trustBoundaryVersion: input.trustBoundary.version,
+              sourcePack: {
+                dependency:
+                  run.dependencySource === undefined
+                    ? ("none" as const)
+                    : ("mounted" as const),
+              },
               axis: options.ablation.axis,
               arm: history.mode === "catalog" ? "b" : "a",
             },
@@ -347,6 +433,9 @@ export async function runDiscoveryCampaign(options: {
     let wallTimeMs = 0;
     let foundNew = false;
     let usage: NativeRunReceipt["usage"] | undefined;
+    let observed: NativeRunReceipt["observed"] | undefined;
+    let sandboxExitCode: number | undefined;
+    let diagnosticArtifactDigest: string | undefined;
     let receiptDigest: string | undefined;
     let failure:
       | {
@@ -366,6 +455,9 @@ export async function runDiscoveryCampaign(options: {
         Date.parse(receipt.completedAt) - Date.parse(receipt.startedAt),
       );
       usage = receipt.usage;
+      observed = receipt.observed;
+      sandboxExitCode = receipt.sandboxExitCode;
+      diagnosticArtifactDigest = receipt.diagnosticArtifactDigest;
       // The receipt carries the runtime the run used (CLI version, catalog digest, model).
       receiptDigest = await options.evidence.putFiles({
         "receipt.json": canonicalJson(receipt),
@@ -451,6 +543,11 @@ export async function runDiscoveryCampaign(options: {
       costUsd: "unavailable",
       wallTimeMs,
       ...(usage === undefined ? {} : { usage }),
+      ...(observed === undefined ? {} : { observed }),
+      ...(sandboxExitCode === undefined ? {} : { sandboxExitCode }),
+      ...(diagnosticArtifactDigest === undefined
+        ? {}
+        : { diagnosticArtifactDigest }),
       ...(outcome === "completed" || failure === undefined ? {} : failure),
       ...(receiptDigest === undefined
         ? {}
@@ -482,7 +579,7 @@ export async function runDiscoveryCampaign(options: {
   await Promise.all(Array.from({ length: concurrency }, worker));
   const stoppedBy =
     stopped ??
-    (options.plannedRuns.length >= input.stopRules.maxRuns
+    (options.plannedTrials.length >= input.stopRules.maxRuns
       ? "max-runs"
       : "plans-exhausted");
   // A provider limit or the daily cap leaves the target open so the campaign can resume it.

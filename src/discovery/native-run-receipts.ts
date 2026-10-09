@@ -25,6 +25,13 @@ const usage = z.strictObject({
   outputTokens: z.union([count, z.literal("unavailable")]),
   reasoningOutputTokens: z.union([count, z.literal("unavailable")]),
 });
+const observed = z.strictObject({
+  toolCalls: count,
+  filesRead: count,
+  uniqueFilesRead: count,
+  labRequests: count,
+  dbQueries: count,
+});
 const bodySchema = z.strictObject({
   kind: z.literal("native-run-receipt"),
   schemaVersion: z.literal(1),
@@ -40,6 +47,9 @@ const bodySchema = z.strictObject({
   serviceTier: reported,
   subagent: z.strictObject({ modelId: reported, effort: reported }),
   usage,
+  observed: observed.optional(),
+  sandboxExitCode: z.number().int().optional(),
+  diagnosticArtifactDigest: digest.optional(),
   terminal: z.enum(["completed", "incomplete"]),
   reason: z.union([
     z.enum(["provider", "schema", "sandbox", "policy", "evidence"]),
@@ -106,6 +116,9 @@ export function createNativeRunReceipt(
     readonly startedAt: string;
     readonly completedAt: string;
     readonly usage?: z.infer<typeof usage>;
+    readonly observed?: z.infer<typeof observed>;
+    readonly sandboxExitCode?: number;
+    readonly diagnosticArtifactDigest?: string;
     readonly grantReceiptDigest?: string;
     readonly reportArtifactDigest?: string;
   },
@@ -131,6 +144,13 @@ export function createNativeRunReceipt(
       outputTokens: "unavailable",
       reasoningOutputTokens: "unavailable",
     },
+    ...(input.observed === undefined ? {} : { observed: input.observed }),
+    ...(input.sandboxExitCode === undefined
+      ? {}
+      : { sandboxExitCode: input.sandboxExitCode }),
+    ...(input.diagnosticArtifactDigest === undefined
+      ? {}
+      : { diagnosticArtifactDigest: input.diagnosticArtifactDigest }),
     terminal: input.terminal,
     reason: input.reason,
     ...(input.reasonDetail === undefined
