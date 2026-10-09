@@ -43,7 +43,6 @@ export interface CampaignPipeline<
     readonly historyFraction: number;
     readonly ablation?: NonNullable<DiscoveryOptions["ablation"]>;
     readonly concurrency?: number;
-    readonly dailyRunCap?: number;
     readonly runWallTimeMs?: number;
     readonly executor: DiscoveryOptions["executor"];
     readonly attachments: DiscoveryOptions["attachments"];
@@ -67,7 +66,7 @@ export type CampaignSummary = {
     readonly message: string;
   }[];
   /** Set when the campaign stopped early and can be resumed with the same id. */
-  readonly stopped?: "provider-limit" | "daily-run-cap";
+  readonly stopped?: "provider-limit";
   readonly targets: readonly {
     readonly targetId: string;
     readonly version: string;
@@ -265,10 +264,7 @@ export async function runCampaignPipeline<
         stoppedBy: discovered.stoppedBy,
       };
       // The Verifier draws on the same subscription, so nothing else runs after a stop.
-      if (
-        discovered.stoppedBy === "provider-limit" ||
-        discovered.stoppedBy === "daily-run-cap"
-      ) {
+      if (discovered.stoppedBy === "provider-limit") {
         stopped = discovered.stoppedBy;
         await append({
           ...base,

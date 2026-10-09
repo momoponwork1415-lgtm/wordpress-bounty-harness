@@ -15,7 +15,6 @@
     "maxConcurrentRuns": 4,
     "memoryBudgetMiB": 10240
   },
-  "dailyRunCap": 40,
   "wordpressVersion": "6.8.3",
   "lab": {
     "siteTitle": "Harness Lab",

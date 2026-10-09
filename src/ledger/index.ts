@@ -146,6 +146,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
   /** The campaign stopped early; rerunning it with the same id resumes it. */
   event({
     type: z.literal("campaign-stopped"),
+    /** Keep the historical cap reason readable; new campaigns only emit provider-limit. */
     reason: z.enum(["provider-limit", "daily-run-cap"]),
   }),
   /**

@@ -251,11 +251,7 @@ const providerReportSchema = z.strictObject({
 });
 
 export type DiscoveryStop =
-  | "no-new-finding"
-  | "max-runs"
-  | "plans-exhausted"
-  | "provider-limit"
-  | "daily-run-cap";
+  "no-new-finding" | "max-runs" | "plans-exhausted" | "provider-limit";
 
 /** Run independent provider calls, record only admitted claims, and stop on no new findings. */
 export async function runDiscoveryCampaign(options: {
@@ -265,8 +261,6 @@ export async function runDiscoveryCampaign(options: {
   readonly historyFraction: number;
   /** Runs in flight at once on this host; at most four. */
   readonly concurrency?: number;
-  /** Optional ceiling on runs started per UTC day across every campaign in the ledger. */
-  readonly dailyRunCap?: number;
   /** Exploration wall time, stamped when each Trial starts rather than when all plans are built. */
   readonly runWallTimeMs?: number;
   /** Records each run's arm on the history axis: a without history, b with it. */
@@ -361,13 +355,7 @@ export async function runDiscoveryCampaign(options: {
   let noNewFindings = 0;
   let runCount = 0;
   let findingsRecorded = 0;
-  let stopped:
-    "no-new-finding" | "provider-limit" | "daily-run-cap" | undefined;
-  if (
-    options.dailyRunCap !== undefined &&
-    (!Number.isSafeInteger(options.dailyRunCap) || options.dailyRunCap < 1)
-  )
-    throw new Error("Invalid daily run cap");
+  let stopped: "no-new-finding" | "provider-limit" | undefined;
   if (
     options.runWallTimeMs !== undefined &&
     (!Number.isSafeInteger(options.runWallTimeMs) ||
@@ -375,26 +363,6 @@ export async function runDiscoveryCampaign(options: {
       options.runWallTimeMs > 240 * 60_000)
   )
     throw new Error("Invalid exploration wall time");
-  let startedToday = 0;
-  if (options.dailyRunCap !== undefined) {
-    const day = clock().toISOString().slice(0, 10);
-    let afterSequence = 0;
-    for (;;) {
-      const page = options.ledger.read({
-        type: "discovery-run-started",
-        afterSequence,
-        limit: 1000,
-      });
-      startedToday += page.filter(
-        ({ event }) =>
-          new Date(event.occurredAt).toISOString().slice(0, 10) === day &&
-          (event.type !== "discovery-run-started" ||
-            (event.runKind ?? "explore") === "explore"),
-      ).length;
-      if (page.length < 1000) break;
-      afterSequence = page[page.length - 1]!.sequence;
-    }
-  }
   const limit = Math.min(input.stopRules.maxRuns, options.plannedTrials.length);
   let next = spent;
   const runOne = async (index: number) => {
@@ -744,13 +712,6 @@ export async function runDiscoveryCampaign(options: {
   };
   const worker = async () => {
     while (stopped === undefined && next < limit) {
-      if (options.dailyRunCap !== undefined) {
-        if (startedToday >= options.dailyRunCap) {
-          stopped = "daily-run-cap";
-          return;
-        }
-        startedToday++;
-      }
       await runOne(next++);
     }
   };
@@ -760,8 +721,8 @@ export async function runDiscoveryCampaign(options: {
     (options.plannedTrials.length >= input.stopRules.maxRuns
       ? "max-runs"
       : "plans-exhausted");
-  // A provider limit or the daily cap leaves the target open so the campaign can resume it.
-  if (stoppedBy !== "provider-limit" && stoppedBy !== "daily-run-cap") {
+  // A provider limit leaves the target open so the campaign can resume it.
+  if (stoppedBy !== "provider-limit") {
     const recorded = await options.ledger.append({
       schemaVersion: 1,
       campaignId: options.campaignId,

@@ -17,7 +17,7 @@
 | host設定 | Git外のJSON（`wordpressHostConfigSchema`、雛形は `examples/translatepress-3.3.1/host.example.json`）。docker、作業dir、全imageのdigest固定、Codex runtime profile、認証情報ファイルの**パス**、Programme写しのパス、履歴mirror | 初回とimage更新時 |
 | 認証 | ホストでCodex CLIにChatGPTログインし（`codex login`）、その `auth.json`（0600、本人所有）のパスをhost設定の `credentialFilePath` に、`authenticationMethod` を `chatgpt-oauth-host` にする。読むのはegress brokerだけで、エージェントには渡らない（下記） | 初回とログイン失効時 |
 | Programmeの写し | wordfence.comは自動取得できないので、公式3ページを人間がpage documentへ写す（雛形は `examples/translatepress-3.3.1/wordfence-programme.example.json`）。35日を超えると選定が止まる | 月1回 |
-| campaign設定 | JSONファイル（`wordpressCampaignConfigSchema`）。Programme Boundary、停止規則、Lab、`resources`、任意の `dailyRunCap` と `ablation` を書く。認証情報と鍵は書かない | 方針を変えるとき |
+| campaign設定 | JSONファイル（`wordpressCampaignConfigSchema`）。Programme Boundary、停止規則、Lab、`resources`、任意の `ablation` を書く。認証情報と鍵は書かない | 方針を変えるとき |
 | 選定方針 | `src/profiles/wordpress/policy/selection.json`（説明は同じ場所の `selection.md`）。インストール数の下限、更新の鮮度、除外slug、High Threatタグ、run予算 | 月1回程度 |
 | trust境界宣言 | `src/profiles/wordpress/prompts/trust-boundary-v1.md` をそのまま使う | ほぼ変えない |
 | 対象範囲の方針 | `src/profiles/wordpress/policy/programme-scope.md` を公式ページで見直す | 提出前と月1回 |
@@ -52,12 +52,12 @@ harness review [--campaign <id>]                         # 検証済みの列を
 `campaign run` は無人で回る。1対象あたりの Trial は、選定のrun予算（既定20、High Threat面は40）と設定の上限（既定6）の小さい方まで。新規 Finding も Lead もない Trial が続いたら（既定3回）止まる。各 Finding は別コンテナの Verifier と判定器を通り、`runtime-confirmed` / `contradicted` / `incomplete` として台帳に入る。
 
 - **同時run数**: campaign設定の `resources` で決める。
-  - 既定は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。`stopRules.maxRuns` は Trial 上限（既定 6）、`noFindingRuns` は新規発見のない Trial の連続数（既定 3）、探索 run の wall time は既定 90 分。`dailyRunCap` は探索 run（Trial）だけを数える。
+  - 既定は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。`stopRules.maxRuns` は Trial 上限（既定 6）、`noFindingRuns` は新規発見のない Trial の連続数（既定 3）、探索 run の wall time は既定 90 分。
   - `observed` は完了した command event の文字列から Harness が数える下限の近似。script 内部のファイル読出しや通信は含まない。
   - 実効の同時数は `min(maxConcurrentRuns, floor(memoryBudgetMiB / 2560))`。2,560 MiBは、Codex sandbox（2 GiB）とrunごとのegress broker（512 MiB）の `--memory` の合計。
   - ホストが小さいときは `memoryBudgetMiB` を下げる。1run分に満たない値では開始しない。
   - Labのメモリは対象ごとに別に要る。
-- **上限での停止**: 購読のrate limit / quotaの応答、または任意の日次run上限（`dailyRunCap`、UTC日で全campaignを数える）に達したとき。
+- **上限での停止**: provider のrate limit / quotaの応答を受けたとき。
   - 新しいrunを出さず、進行中のrunを記録して止まる。終了コードは3で、台帳に `campaign-stopped` が残る。自動retryはしない。
   - 同じコマンドをもう一度実行すると再開する。探索を終えた対象は飛ばし、途中の対象は残り回数から続け、未検証のFindingだけを検証する。
 - **入口の分担**: campaign の `assignment: {"unit":"entry-point","entriesPerRun":8}` で有効にする。WordPress profile が登録入口、保存先、core 交差、1 hop の include を text 走査し、保存先を共有する入口を同じ scope に置く。索引は事実の列挙で、探索範囲を制限しない。台帳には索引・成分の digest だけを置く。上限（PHP file 20,000、1 file 2 MiB、成分 key 200）を超えた索引は scope に partial と表示する。

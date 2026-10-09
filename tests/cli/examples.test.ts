@@ -54,7 +54,6 @@ describe("TranslatePress 3.3.1 development-set example", () => {
       maxConcurrentRuns: 4,
       memoryBudgetMiB: 10240,
     });
-    expect(config.dailyRunCap).toBe(40);
     expect(config.selectionPolicyPath).toBe(
       "examples/translatepress-3.3.1/selection-luna-40.json",
     );
@@ -76,6 +75,16 @@ describe("TranslatePress 3.3.1 development-set example", () => {
 });
 
 describe("TranslatePress 3.2.5 A/B development-set example", () => {
+  it("rejects the removed daily run cap setting", async () => {
+    const config = await example("campaign-luna-ab.json", "3.2.5");
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...wordpressCampaignConfigSchema.parse(config),
+        dailyRunCap: 6,
+      }).success,
+    ).toBe(false);
+  });
+
   it("pins one source and balances prompt and continuation across twelve Trials", async () => {
     const config = wordpressCampaignConfigSchema.parse(
       await example("campaign-luna-ab.json", "3.2.5"),
@@ -91,7 +100,6 @@ describe("TranslatePress 3.2.5 A/B development-set example", () => {
     );
     expect(config.stopRules).toEqual({ maxRuns: 12, noFindingRuns: 12 });
     expect(config.runWallTimeMinutes).toBe(90);
-    expect(config.dailyRunCap).toBeUndefined();
     expect(config.resources.maxConcurrentRuns).toBe(2);
     expect(config.lab.databaseAccess).toBe("read-only");
     expect(config.assignment).toEqual({
@@ -125,7 +133,6 @@ describe("TranslatePress 3.2.5 A/B development-set example", () => {
     );
     expect(config.stopRules).toEqual({ maxRuns: 6, noFindingRuns: 6 });
     expect(config.runWallTimeMinutes).toBe(150);
-    expect(config.dailyRunCap).toBeUndefined();
     expect(config.continuation).toBeUndefined();
     expect(config.ablation?.axes).toEqual([
       {
