@@ -25,19 +25,19 @@
 - **測る**: `incomplete` の理由コード別件数と、再検証後にconfirmedへ転じた割合。
 - **退けた代替**: AVDH型（動的試験を通らない候補を破棄）。再現率を落とす。
 
-## 4. 短い目的prompt＋短命runの多数独立実行（長い1セッションでなく）
+## 4. 短い目的prompt＋独立Trial（管理指示変種とLead継続を測る）
 
 - **観測**: Anthropicは「discovery promptは目的とcontextを与え、方法をmodelに任せる。長いchecklistは新規bugを減らす」と述べる（2026-05-27）。Mythos scaffoldはほぼ「find a security vulnerability」だけのpromptで、file別agentを並列に走らせた（2026-04-07）。Naptimeは「一つのtrajectoryで複数の仮説を扱うのは非効率なので独立trajectoryを複数sampleする」（2024-06）。Semgrepは同じpromptを同じappで繰り返すと指摘が毎回変わり（3→6→11件）部分的にしか重ならないと報告（2025-09-02）。run間の安定性は0.63–1.0（Semgrep 2026-07-17）。XBOWは永続coordinatorが多数の短命agentを指揮する（2026-03-02）。
-- **示さないこと**: 「短いpromptが長いpromptより当たる」のAnthropicの観察は数値なし。本人のwp2shell promptで50万ドル級の発見があった事実と直接比較した資料はない。pass@kの独立性の保証（provider側cacheの排除等）を示した資料はない。
-- **測る**: 当面は測らない。短い目的promptの1本で本番を回し、前向き評価と提出転帰で見る。prompt変種の比較が必要になったら本番A/Bの軸として足す。
-- **退けた代替**: wp2shell promptを既定にする案。元のCycle Double Cover型promptは「解が必ず存在し費用無制限」の前提で、空の対象を安く見切る必要があるバグバウンティと合わない（判断者の判断、2026-10-08）。
+- **示さないこと**: 「短いpromptが長いpromptより当たる」のAnthropicの観察は数値なし。本人のwp2shell promptで50万ドル級の発見があった事実と直接比較した資料はない。pass@kの独立性の保証（provider側cacheの排除等）を示した資料はない。#73の開発セットでも4 cellすべて公開2事例のsource候補0/3で、変種や継続の優劣は分からなかった。
+- **測る**: 版とdigestを固定した管理指示変種、Lead継続の有無をopt-in本番A/B軸にし、独立Trialを分母としてsource候補・完全経路・費用を分けて数える。#73では150分の時間対照も回したが、実wallは設定上限より短く、実時間一定の比較にはならなかった。既定は短い目的promptと継続なしに残し、本番の前向き評価と提出転帰を見る。
+- **退けた代替**: wp2shell由来の固定手順・checklistを既定にする案。元のCycle Double Cover型promptは「解が必ず存在し費用無制限」の前提で、空の対象を安く見切る必要があるバグバウンティと合わない（判断者の判断、2026-10-08）。管理指示だけの変種は捨てず、A/Bで測る。
 
-## 5. N = 40、k = 4、同時4の初期値
+## 5. Trial上限6、k_t = 3、同時2の初期値
 
 - **観測**: Codex Securityのdeep scanが停止規則を設定で持つ（docs、2026-10-08取得）。Naptime、Chrome、XBOWは「複数run」「多数の短命agent」としか書かない。
-- **示さないこと**: 40と4がWordPressプラグインで最適だという根拠はない。**これは初期値であって結論ではない。**
-- **測る**: SPEC第14節のspikeで1 runの費用と時間を測り、held-outでの「何回目で初めて当たるか」の分布から上限とkを決め直す。
-- **退けた代替**: なし。費用の実測前に固定しない。
+- **示さないこと**: 6、3、2がWordPressプラグインで最適だという根拠はない。#73のLuna開発セットではsource候補が0件で、適切なTrial上限を推定できない。**これは初期値であって結論ではない。**
+- **測る**: `ledger usage` とprovider limitの停止回数、何Trial目で初めて当たるかを本番で追い、上限とkを見直す。日付による追加のrun上限は設けない。
+- **退けた代替**: 失敗した準備試行まで数えて翌UTC日を待つ日次上限。providerの実際のquotaとは別であり、#73の補充を妨げた。
 
 ## 6. gVisorでの隔離と、エージェントに認証情報を渡さない
 
@@ -78,17 +78,17 @@
 
 | 項目 | 状態 | いつ確かめるか |
 | --- | --- | --- |
-| N = 40、k = 4、同時4 | 他社既定の流用 | spikeと最初の縦断スライス |
-| 入口単位のfile分担 | Mythosのfile別並列からの類推 | ablation「分担有無」 |
+| Trial上限6、k_t = 3、同時2 | #73では公開2事例のsource候補0件で最適値は不明 | 本番のusage、provider limit、初回発見Trialを追う |
+| 保存先成分での分担 | Mythosのfile別並列からの類推 | 本番のscope別候補率を見る |
 | 探索agentへsubscriber認証情報だけ渡す | 両プログラムの規則からの演繹。探索への影響は未測定 | Findingの攻撃者位置の分布を見る |
 | Sol（gpt-6.1-sol）のWordPressでの当たり率 | 公開数値なし | held-out評価 |
-| 1 runの費用 | 未測定 | spike |
+| 1 Trialの費用 | #73でtokenとwallを記録。金額はproviderが返さず `unavailable` | 本番のusageと提出転帰から見直す |
 | 盲検rubricの採点者が本人1人 | 盲検の独立性が弱い | 採点記録を残し、後日再採点できるようにする |
-| gVisor内headless browser | 未確認 | spike |
+| gVisor内headless browser | 2026-10-08のspikeで起動とLab応答を確認 | 実候補の検証で再確認 |
 
 ## 12. held-outを既定にしない（本番A/Bと前向き評価を主指標にする）
 
-- **観測**: held-out 9件×5試行は最大1,800 run、停止規則が効いても600〜700 runで、本番の15〜17対象分に相当する（第5節のN = 40から算出）。本人発見5件は2026年前半の公開で、gpt-6.1-solのcutoff（2026-04-30）以前の可能性が高い。5/5と3/5の区間は重なる（第9節）。公開資料で、探索対象を凍結して後日のadvisoryで採点する前向き評価の例は見つからなかったが、Chromeは「Not Reproducible」で閉じたbugを評価caseに再利用し、XBOWは提出転帰（resolved / triaged / duplicate / informative / N/A）を主要な公開指標にしている。
+- **観測**: 旧N = 40で見積もったheld-out 9件×5試行の最大1,800 runは、現行のTrial上限6には当てはまらない。それでも評価caseを増やすと本番探索に使うTrialとprovider quotaを消費する。本人発見5件は2026年前半の公開で、gpt-6.1-solのcutoff（2026-04-30）以前の可能性が高い。5/5と3/5の区間は重なる（第9節）。公開資料で、探索対象を凍結して後日のadvisoryで採点する前向き評価の例は見つからなかったが、Chromeは「Not Reproducible」で閉じたbugを評価caseに再利用し、XBOWは提出転帰（resolved / triaged / duplicate / informative / N/A）を主要な公開指標にしている。
 - **示さないこと**: 本番A/Bが対象ごとの差を同じcaseで比べるheld-outと同じ検出力を持つかは未確認。前向き評価は数か月遅れる。
 - **理由**: runが独立なので、同じ対象でrunを構成A / Bに分担すれば、予算を本番に使いながら構成差を測れる。収益に直結するのは提出転帰で、held-outの当たり率ではない。
 - **測る**: 本番A/Bは対象をまたいで対で集計し区間を付ける。前向き評価は四半期ごとに台帳を再採点する。held-outは大きな設計変更時に、cutoff後の補助4件を優先して予算内で回す。

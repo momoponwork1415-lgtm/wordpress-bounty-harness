@@ -25,6 +25,7 @@ type SyntheticRun = {
   readonly costUsd?: number;
   readonly setupFailed?: boolean;
   readonly providerLimited?: boolean;
+  readonly providerFailed?: boolean;
   readonly runKind?: "explore" | "continue";
   readonly arms?: {
     readonly prompt?: "a" | "b";
@@ -89,7 +90,9 @@ async function ledgerWith(runs: readonly SyntheticRun[]) {
           ? "setup-failed"
           : run.providerLimited === true
             ? "provider-limited"
-            : "completed",
+            : run.providerFailed === true
+              ? "failed"
+              : "completed",
       costUsd: run.costUsd ?? "unavailable",
       wallTimeMs: 1000,
     });
@@ -195,6 +198,12 @@ describe("evaluation compare", () => {
         snapshot: one,
         arm: "b",
         providerLimited: true,
+      },
+      {
+        campaignId: "campaign-1",
+        snapshot: one,
+        arm: "b",
+        providerFailed: true,
       },
       { campaignId: "campaign-2", snapshot: two, arm: "a", costUsd: 0.5 },
       {

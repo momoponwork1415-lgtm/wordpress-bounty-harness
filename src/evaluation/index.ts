@@ -258,13 +258,8 @@ export class Evaluation {
       )
         continue;
       const end = finished.get(event.runId);
-      // Unfinished, setup-failed and provider-refused runs were never discovery attempts.
-      if (
-        end === undefined ||
-        end.outcome === "setup-failed" ||
-        end.outcome === "provider-limited"
-      )
-        continue;
+      // A failed Trial has no valid discovery result and cannot be a miss.
+      if (end?.outcome !== "completed") continue;
       const target = targets.get(event.snapshotDigest) ?? {
         a: emptyTally(),
         b: emptyTally(),

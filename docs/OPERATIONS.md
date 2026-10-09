@@ -6,14 +6,14 @@
 - コマンド名は `runCli`（`src/cli/index.ts`）が受け付けるもの。
 - host設定は `--host <path>` か `WBH_HOST_CONFIG` で渡す。
 - 台帳とPrivate Evidenceの置き場は `--state <dir>` か `WBH_STATE_DIRECTORY` で選ぶ。既定は `~/.local/state/wordpress-bounty-harness`。
-- 開発セットの設定例は [examples/translatepress-3.3.1/](../examples/translatepress-3.3.1/README.md)。
+- 縦断スライスの設定例は [examples/translatepress-3.3.1/](../examples/translatepress-3.3.1/README.md)、2×2の開発セットは [examples/translatepress-3.2.5/](../examples/translatepress-3.2.5/README.md)。
 
 ## 1. 一度だけやる準備
 
 | やること | 中身 | 頻度 |
 | --- | --- | --- |
 | 実行環境 | gVisor（`runsc`）入りのDockerホスト。Codex CLI ≥ 0.161。ChatGPT Proにログイン。費用は購読の月額固定で、Harnessは金額でなく使用量（rate limit / quota）を見る | 初回とCLI更新時 |
-| build | `pnpm install && pnpm build`。credential proxyも `dist/discovery` にでき、brokerがそれを読み取り専用でmountする | 更新のたび |
+| build | `pnpm install && pnpm build`。credential proxyは `dist/discovery`、HTTP捕捉proxyは `dist/lab-recorder` にでき、それぞれrunsc containerへ読み取り専用でmountする | 更新のたび |
 | host設定 | Git外のJSON（`wordpressHostConfigSchema`、雛形は `examples/translatepress-3.3.1/host.example.json`）。docker、作業dir、全imageのdigest固定、Codex runtime profile、認証情報ファイルの**パス**、Programme写しのパス、履歴mirror | 初回とimage更新時 |
 | 認証 | ホストでCodex CLIにChatGPTログインし（`codex login`）、その `auth.json`（0600、本人所有）のパスをhost設定の `credentialFilePath` に、`authenticationMethod` を `chatgpt-oauth-host` にする。読むのはegress brokerだけで、エージェントには渡らない（下記） | 初回とログイン失効時 |
 | Programmeの写し | wordfence.comは自動取得できないので、公式3ページを人間がpage documentへ写す（雛形は `examples/translatepress-3.3.1/wordfence-programme.example.json`）。35日を超えると選定が止まる | 月1回 |
@@ -39,7 +39,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
 - dockerが応答し、`runsc` が登録されている。
 - host設定の全imageが、digest固定のまま手元にある。
 - 認証情報ファイルが通常ファイル、0600、本人所有で、空でない。APIキーの中身は読まない。ChatGPTログインはメモリ上で読み、access tokenが1時間以上残っていることだけを確かめる。
-- proxy bundle（`dist/discovery`）がある。
+- credential proxy（`dist/discovery`）のbundleがある。Lab HTTP捕捉proxy（`dist/lab-recorder`）はLab provision時に使うため、実行前の `pnpm build` を要する。
 - Codex imageのCLI版と同梱カタログのdigestが、runtime profileと一致する。
 
 **ChatGPTログインの中継**: runごとのbroker（runsc）が、そのrunだけのCAと `provider-egress.internal` の証明書でHTTPSを待ち受ける。
@@ -50,6 +50,8 @@ harness review [--campaign <id>]                         # 検証済みの列を
 - APIキー（`host-private-bearer`）の経路も残っている。
 
 `campaign run` は無人で回る。1対象あたりの Trial は、選定のrun予算（既定20、High Threat面は40）と設定の上限（既定6）の小さい方まで。新規 Finding も Lead もない Trial が続いたら（既定3回）止まる。各 Finding は別コンテナの Verifier と判定器を通り、`runtime-confirmed` / `contradicted` / `incomplete` として台帳に入る。
+
+既定promptは `short-objective-v2`。版を明示した設定はその版で再現できる。Trial数には対象ごとの上限があり、日次上限の設定はない。provider limitで停止したcampaignは自動retryせず、同じIDで再開する。
 
 - **同時run数**: campaign設定の `resources` で決める。
   - 既定は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。`stopRules.maxRuns` は Trial 上限（既定 6）、`noFindingRuns` は新規発見のない Trial の連続数（既定 3）、探索 run の wall time は既定 90 分。
@@ -67,6 +69,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
 - Lab 準備では使い捨て runsc コンテナから HTTP 到達を確認する。`lab-provisioned.reachability.http = failed` なら探索を始めず、`failureStage` と `reason` を記録する。DB 到達の失敗は記録するが HTTP が通れば続ける。Docker の診断文は Private Evidence に置き、台帳には digest だけを残す。
 - pinned WordPress image の core は `<workDirectory>/wordpress-core` に実行せず取り出し、Dependency Snapshot として固定する。探索と Verifier は `/workspace/wordpress` の read-only mount で同じ版を読む。
 - campaign の `lab.databaseAccess` は既定で `read-only`、Lab 単体の既定は `none`。reader は provision 時点で存在する table にだけ SELECT 権限を持ち、後で作る canary table は読めない。`configuration.labAccess` と `lab-provisioned.reachability.database` を併せて見る。Codex image に MySQL client があるかは実 run で未確認で、無い場合は image に `mariadb-client` が要る。
+- VerifierのHTTPはLab内のrunsc捕捉proxyへ向ける。判定器はHarness捕捉のrequest / responseを優先し、捕捉がないときだけVerifierの `http.json` を `agent-authored` として読む。HTTP本文はPrivate Evidence、台帳にはoptionalな `verification-finished.evidenceCapture` enumだけを残す。`runtime-confirmed` には引き続きcanary回収が要る。
 - 失敗した探索 run は `discovery-run-finished.reason`、`reasonDetail`、`providerLimit` で区別する。`reasonDetail` は検査名などの短いコードで、実行記録や HTTP 本文は含まない。
 
 人間が触るのは `review` だけ。並ぶのは次の2種類。
@@ -135,7 +138,7 @@ harness lab cleanup --config <path>            # 一覧だけ
 harness lab cleanup --config <path> --remove   # 削除
 ```
 
-- 対象は、Labが付ける `wbh-<uuid>-{db,wp,canary,net,site}` と、brokerが付ける `provider-egress-broker-<id>` / `provider-egress-<id>` の名前に一致するものだけ。
+- 対象は、Labが付ける `wbh-<uuid>-{db,wp,canary,proxy,net,site}` と、brokerが付ける `provider-egress-broker-<id>` / `provider-egress-<id>` の名前に一致するものだけ。
 - **実行中のcampaignがないときに使う。**
 
 ## 6. 評価
@@ -143,15 +146,15 @@ harness lab cleanup --config <path> --remove   # 削除
 主指標は本番から得る。追加費用はかからない。
 
 ```
-harness eval compare [--axis history] [--campaign <id>]           # 本番A/B: arm別の当たり率（Clopper-Pearson 95%）と費用
+harness eval compare [--axis history|prompt|continuation] [--campaign <id>]   # 本番A/B: Trial別の当たり率（Clopper-Pearson 95%）と費用
 harness eval prospective --advisories <path> [--campaign <id>]    # 後日公開されたadvisoryで本番台帳を再採点
 harness eval score --campaign <id> --keys <path> --case <id>      # 答えの鍵でlocation-overlap。held-outは任意
 ```
 
-- **本番A/B**: 同じ対象でrunを構成A / Bに分担して回す。どちらが見つけても提出できる。
-  - 現在の軸は履歴有無だけ。campaign設定に `"ablation": {"axis": "history", "armBFraction": 0.5}` を書くと、runnerが各runへarm a（履歴なし）/ b（履歴あり）を割り当てて台帳に残す。
-  - `eval compare` は、両armのrunがある対象だけを台帳の全campaignからプールする。runtime-confirmedのFindingを出したrunを当たりとして数え、区間が重なれば「判定不能」と出す。
-  - providerに拒否されたrunは分母に数えない。
+- **本番A/B**: 同じ対象の独立Trialへ `ablation.axes` で `history`、`prompt`、`continuation` をopt-in割当する。どのarmが見つけても提出できる。旧 `{"axis":"history","armBFraction":0.5}` も読める。
+  - 既定は `short-objective-v2` と継続なし。`prompt` 軸のarm bは `armBPromptId` で版付きpromptを指定し、`continuation` 軸のarm bは `continuation` ブロックの上限内で、自分のLeadだけを1 hop継続する。割当とdigestは台帳へ残る。
+  - `eval compare --axis` の分母はLab HTTP到達 `ok` のcompleted探索Trial。継続runを別Trialに数えず、provider失敗も分母に入れない。区間が重なれば「判定不能」と出す。
+  - #73のLuna開発セットでは公開2事例に対して全cellでsource候補0/3だった。事前登録の規則で安い短い目的promptと継続なしを既定に残したが、優劣の証明ではない。失敗Trialの補充は元の12試行と分けて記録した。150分対照も実wallは設定上限より短かった。
   - 履歴を渡せるのは、安定版の公開日時（WordPress.orgの最終更新）より前の公開記録だけ。版を固定した対象やmirrorが使えない対象では、全runがarm aになる。
 - **前向き評価**: 四半期ごとに、公開されたadvisoryで本番台帳を再採点し、見逃しを数える。
   - advisoryファイルはGit外に置く私的データ。1件ごとに `{schemaVersion: 1, advisoryId, slug, affectedVersions: [{fromVersion, fromInclusive, toVersion, toInclusive}], publishedAt, impact, allowedLocations: [{file, function?}]}` を書く。`allowedLocations` は公開パッチを読んで人間が書く。

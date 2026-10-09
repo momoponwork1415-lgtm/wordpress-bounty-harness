@@ -111,6 +111,12 @@ describe("TranslatePress 3.2.5 A/B development-set example", () => {
       runWallTimeMinutes: 30,
     });
     expect(config.promptId).toBe("short-objective-v2");
+    expect(
+      wordpressCampaignConfigSchema.parse({
+        ...config,
+        promptId: undefined,
+      }).promptId,
+    ).toBe("short-objective-v2");
     expect(config.ablation?.axes).toEqual([
       {
         axis: "prompt",

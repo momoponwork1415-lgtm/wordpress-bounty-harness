@@ -8,7 +8,7 @@
 
 - **機械が流し、人間は最後だけ触る。** 選定、探索、検証までは無人で回る。人間が見るのは検証を通ったものだけ。未検証の候補を人間が見ても判断の質が出ず、人間が律速になるため。
 - **「見つけた」と「本当だ」を分ける。** 探索エージェントが出すのは主張（Finding）で、確認ではない。確認は別コンテナの検証役（Verifier）と、Harness自身が持つ決定論的な判定器が行う。エージェントが「できた」と言っても、canaryが回収されなければ確認にならない。
-- **全部を記録して、後から測る。** 台帳に全イベントを追記し、どこで何件減ったか（funnel）を読む。Harnessを変えたら、答えが分かっている問題で採点して差を数字で見る。
+- **全部を記録して、後から測る。** 台帳に全イベントを追記し、どこで何件減ったか（funnel）を読む。構成差は本番A/Bと前向き評価を主指標として測る。
 
 旧リポジトリ（wordpress-harness）は「人間の判断」と「prompt」が中心にあった。新リポジトリは「判定器」と「台帳」が中心にある。
 
@@ -16,7 +16,7 @@
 flowchart LR
   S[selection<br/>方針で機械選定] --> N[snapshot<br/>digestで固定]
   N --> L[lab<br/>gVisor + canary]
-  L --> D[discovery<br/>短命run × N]
+  L --> D[discovery<br/>独立Trial]
   D -->|Finding| V[verification<br/>Verifier → 判定器]
   V -->|confirmed / contradicted / incomplete| G[(ledger<br/>追記専用)]
   G --> R[review<br/>人間: 再現 → scope → 文案 → 承認]
@@ -39,7 +39,7 @@ flowchart LR
 
 ### (3) lab: 壊してよいWordPressを使い捨てで立てる
 
-gVisor（隔離の強いコンテナ）の中に WordPress + MySQL + 対象プラグインを立てる。設定は既定のまま。「公開フォームが1つある」程度の一般的な初期データはprofileのsetup manifestで入れ、その内容もdigestに記録する。そして仕掛けを置く。
+gVisor（隔離の強いコンテナ）の中に WordPress + MySQL + 対象プラグインを立てる。設定は既定のまま。「公開フォームが1つある」程度の一般的な初期データはprofileのsetup manifestで入れ、その内容もdigestに記録する。探索には低権限のLabアカウントと、provision時点のtableだけを読めるRO DB accountを渡す。canaryは探索へ渡さず、検証時にHarnessが発行する。
 
 | 仕掛け | 何を置くか | 何の判定に使うか |
 | --- | --- | --- |
@@ -50,27 +50,28 @@ gVisor（隔離の強いコンテナ）の中に WordPress + MySQL + 対象プ�
 | Execution Canary | 実行されると記録が残る仕掛け | RCE / PHPファイル書き込みが本当に実行に至ったか |
 | canary受信先 | Lab内のHTTP受け口 | XSSがheadless browserで本当に実行されたか |
 
-### (4) discovery: 短い探索を独立に何十回も回す
+### (4) discovery: 短い探索を独立Trialとして回す
 
 1回のrunが受け取るもの:
 
-- 探索prompt（短い目的promptの1本、版付き、digest記録。目的、trust境界、影響の分類と報奨順、出力形式だけ）
+- 探索prompt（既定は短い目的prompt `short-objective-v2`。版とdigestを記録。管理指示変種はopt-inのA/B軸）
 - trust境界宣言（「未認証とsubscriberが攻撃者。contributor以上と管理者の設定は信頼する」）
-- 担当するファイルの集合（プラグインを入口単位で分割したうちの1つ）
+- 担当する保存先成分のscope（profileが作る索引の一部）
 - Labの接続先と subscriber / customer の認証情報
+- provision時点のtableだけを読めるRO DB account
 - 読み取り専用のソース
 
 渡すものに、時点で切った対象の公開履歴（カタログ情報）を加えることができる（ADR 0012）。渡さないもの: PoC・payload・再現手順、評価対象の答え、前のrunの結果、管理者やcontributor以上の認証情報、外向き通信。
 
 runの中でエージェントはソースを読み、入口（AJAX action、RESTルート、shortcode）から辿り、「このcheckが欠けている」と思ったらLabに実際にリクエストして確かめる。そして主張を書く。主張には、攻撃者の立場、到達する影響の分類（SPEC第8b節の共通分類）、入口から効果までの経路（ファイル・関数・行）、既存のcheckをどう評価したか、Labで観測した事実、再現の手がかり、が必須。出せなければ0件で終わり、「調べた範囲と調べなかった範囲」だけ残す。
 
-1つの対象に対して、ファイル分担を変えながら最大40回、同時4つ。新規Findingが4回続けて出なければ止まる。長い1セッションでなく短い多数にする理由は、文脈が肥大しないこと、並列化と費用見積もりが簡単なこと、同じ場所を複数runが独立に指せばそれ自体が信号になること。
+1つの対象に対して、独立Trialを既定で最大6回、同時2つまで回す。新規FindingもLeadもないTrialが3回続けば止まる。Leadがあればopt-inで同じTrial内に1 hopだけ継続でき、独立試行数は増えない。日次上限はない。長い1セッションにしないのは、文脈と費用をTrialごとに区切るため。
 
 ### (5) verification: 別のコンテナで反証し、判定器で決める
 
 各Findingは新しいコンテナのVerifierに渡される。Verifierは探索時の会話を持たず、Findingとソースと新しいLabだけで「本当か」を試す。役割は再現手順の環境不備を直すことと反証で、再探索はしない。
 
-最後にHarness所有の判定器が結果を決める。判定器は決定論的で、分類ごとに成功条件が決まっていて、プログラムの受理条件に合わせてある。
+最後にHarness所有の判定器が結果を決める。判定器は決定論的で、分類ごとに成功条件が決まっていて、プログラムの受理条件に合わせてある。VerifierのLab HTTPはHarness管理の捕捉proxyを通し、判定器は捕捉記録を優先する。記録の本文はGit外のPrivate Evidenceに置く。
 
 - ファイルアップロード: 「Execution Canaryが実行された」だけが成功。`.php.png` や安全な拡張子内のコードは成功にならない。
 - stored XSS: 「subscriberが置いた値が、未認証訪問者が見るページか全管理画面で実行され、canary受信先に届いた」が条件。文字列が反射しただけでは成功にならない。
@@ -126,7 +127,7 @@ promptだけに頼らず、4か所で違う強さで効かせる（SPEC第8b節�
 
 主指標は本番から得る。held-outは任意（理由は DESIGN-EVIDENCE 第12節）。
 
-- 本番A/B: runが独立なので、同じ対象でrunを構成A / Bに分担して回す。どちらが見つけても提出でき、予算を無駄にしない。履歴有無、分担単位、Verifier有無などはこれで比べる。promptは1本で固定。
+- 本番A/B: 同じ対象の独立Trialへ、履歴有無、版付きprompt、Trial内Lead継続のopt-in軸を割り当てる。どちらが見つけても提出できる。判定器や隔離は外さない。開発セット#73は全cellでsource候補0/3だったため、既定は短い目的promptと継続なし。
 - 前向き評価: 本番の台帳を、後日公開されたadvisoryで採点する。「あったのに見逃した」が分かる唯一の方法で、費用はゼロ。
 - 提出転帰: triaged / duplicate / rejected の率と報奨額。収益に直結する最終の数字。
 - 判定器の負の対照: 修正版で判定器が鳴らないことを確認する。安い。
@@ -183,29 +184,13 @@ canaryは「本来触れないはずの場所に置いた、推測不能な値�
 | XSS | subscriberがnonce入りのscriptを置く。Lab内のheadless browser（Chromium）が、未認証訪問者としてページを開き、別に管理者として管理画面を開く | 受信先にnonceが届いた。どのcontextで発火したかを記録 |
 | 権限昇格 / 乗っ取り | canary user と、各ロールの正常操作の記録 | 低権限のセッションが管理者だけの操作に成功、または他主体の認証状態を得た |
 
-### 探索1回（discovery run）の中で何が起きるか
+### 探索Trialの中で何が起きるか
 
-Harnessが用意するのは、prompt、trust境界宣言、担当ファイル、Lab、認証情報だけ。中の手順はエージェント（Codex CLIの上のgpt-6.1-sol）が自分で決める。典型的にはこう進む。
+Harnessが用意するのは版付きprompt、trust境界宣言、保存先成分のscope、Lab、低権限の認証情報、時点で切った公開履歴。中の手順はエージェントが決める。Findingのほか、sourceに根拠があるが影響までの経路が欠けたLeadも報告できる。Leadの継続を有効にした場合だけ、選んだLeadと索引上の近傍を新しいcontainerへ渡し、同じTrialで1 hop調べる。別Trialの結果や探索transcriptは渡さない。canaryの回収は探索エージェントの自己申告ではなく、検証時の判定器が行う。
 
-1. 担当ファイルから入口を列挙する。WordPressでは、`add_action('wp_ajax_nopriv_…')`（未認証AJAX）、`wp_ajax_…`（認証AJAX）、`register_rest_route`（REST。`permission_callback` が誰を通すか）、`add_shortcode`（投稿内で動く）、`init` / `template_redirect` で `$_GET` / `$_POST` を読むもの、フォームの送信先。
-2. 入口ごとに「誰が叩けるか」を読む。nonce検査、`current_user_can`、ログイン要否、`permission_callback`。trust境界宣言により、subscriberで届く入口だけが価値を持つ。
-3. 入口から先を辿り、危険な到達点（SQL、ファイル操作、option更新、user metaやroleの変更、出力）までのデータの流れを追う。途中の制御（`$wpdb->prepare`、`sanitize_*`、`esc_*`、拡張子検査、path正規化）を1つずつ評価する。
-4. 「このcheckが欠けている、または迂回できる」という仮説を立てたら、Labに対してsubscriberまたは未認証でリクエストを送り、canaryが動いたかを自分で見る。動かなければ仮説を直すか捨てる。
-5. 成立したと思うものをFindingとして書く。攻撃者の立場、影響の分類、経路、既存controlの評価、Labで観測した事実、再現の手がかり。成立しなければ0件で終わり、「読んだ範囲と読まなかった範囲」を残す。
+### なぜ複数の独立Trialか
 
-Harnessはこの手順を強制しない。短い目的promptは目標と境界だけを渡し、手順はagentが決める。
-
-### なぜ1回ではなく40回か
-
-1回の探索でその脆弱性が見つかる確率を p とすると、独立に k 回やって1度でも見つかる確率は 1 − (1 − p)^k。p が 0.2 でも k = 10 で 0.89、k = 20 で 0.99 になる。探索は確率的で、同じ入力でも読む順番や立てる仮説がrunごとに違うため、独立試行を重ねるほど見逃しが減る。これがpass@kの考え方で、AnthropicもOpenAIも同じ理由で多数の短いrunを使う。
-
-加えて3つの利点がある。
-
-- **分担で網羅する。** 1 runに全ファイルを渡すと、文脈が肥大して後半の判断が落ちる。入口単位で分割して各runに違う担当を渡せば、各runは自分の範囲を深く読める。
-- **一致が信号になる。** 互いを知らない複数のrunが同じ場所を指したら、それ自体が確度の根拠になる。長い1セッションではこの信号が得られない。
-- **測れる。** 各runが独立なので、5試行の当たり率に区間が付けられ、構成を変えたときの差を統計的に比べられる。
-
-40は上限であって目標ではない。実際の停止は「新規Findingなしが4回続いたら」で、多くの対象は10〜20回で止まる見込み。40とk = 4の初期値はCodex Securityのdeep scanの既定に合わせたもので、第14節のspikeで1 runの費用と時間を測ってから調整する。同時4つはホストの資源とproviderのrate limitによる上限。
+1 Trialで見つかる確率を p と仮定すると、独立に k Trialで1度でも見つかる確率は 1 − (1 − p)^k。探索は確率的なので試行を分ける。実際の独立性は保証されず、#73の開発セットでも各cellのsource候補は0/3だった。既定のTrial上限6、FindingもLeadもない連続3 Trial、同時2 Trialは初期設定であり、当たり率とproviderの使用量から見直す。継続runは親Trialの成果に含め、pass@kのkを増やさない。
 
 ### Verifierと判定器の分業
 
@@ -213,21 +198,21 @@ Verifierはエージェント（LLM）で、判定器はコード。Verifierの�
 
 ### 分担（file partition）の単位
 
-プラグインを「ファイル単位」で割ると、1つの機能が複数ファイルにまたがって文脈が切れる。「入口単位」（1つのAJAX action、1つのRESTルート、1つのshortcodeと、そこから到達する関数群）で割ると、各runが1つの機能を端から端まで読める。profileが入口を列挙して分担を作り、共通ライブラリ（ヘルパー、DB層）は全runに読み取り可能にする。どちらの単位が良いかも評価で比べる（SPEC第10節のablation「分担有無」）。
+profileが保存先索引から成分を作り、各Trialのscopeを決める。登録済みの保存先からreaderまでを同じ成分にまとめ、依存sourceと共通ライブラリを読めるようにする。分担の規則はWordPress profileに置き、汎用discoveryへ入口やhookの型を持ち込まない。
 
 ## 9. 起きやすい認識のずれ
 
 | ずれやすい理解 | 実際 |
 | --- | --- |
 | Harnessが脆弱性を見つける | 見つけるのはモデル（gpt-6.1-sol）。Harnessは流れの管理、隔離、判定、記録だけを持つ。探索の手順を持たない |
-| 40回回すから費用は1回の40倍 | 40は上限。新規なし4回連続で止まるので、空の対象は10回前後で終わる見込み。費用はspikeで測ってから上限を決め直す |
+| Trialは必ず6回走る | 6は対象ごとの既定上限。FindingもLeadもないTrialが3回続くと止まる。日次上限はない |
 | Verifierが確認する | Verifierは手順を整えて反証を試すLLM。確認（`runtime-confirmed`）を出すのは判定器（コード）だけ |
 | `incomplete` は失敗 | 失敗ではなく「まだ判定できていない」列。理由コードと次の手が付き、人間かHarnessが続きをやる |
 | scopeで探索を絞る | 探索を直接は絞らない。Labの認証情報（subscriber以下だけ）と判定器の成功条件で機械的に効かせ、promptでは誘導するだけ。scope外の発見も台帳には残る |
-| 評価は本番と別の作業 | 本番そのものが評価。同じ対象でrunを構成A / Bに分けて回し（本番A/B）、後日のadvisoryで台帳を再採点する（前向き評価）。held-outは任意 |
+| 評価は本番と別の作業 | 同じ対象の独立Trialへopt-in軸を割り当てる本番A/Bと、後日のadvisoryで台帳を再採点する前向き評価が主指標。held-outは任意 |
 | 履歴を渡す = 答えを渡す | 履歴は「このpluginで過去に何が修正されたか」のカタログ情報。評価では時点で切る。答え（原因箇所、PoC）は渡さない |
 | 人間が承認しないと進まない | 人間の判断点は「提出前のレビュー」と「外部行動の承認」だけ。選定と探索と検証は無人で進む |
-| Labは1つ | Labは探索runごと、検証ごとに使い捨てで作る。同時4 runなら同時に4つ以上のLabが動く。ホストのCPUとメモリが制約 |
+| Labは1つ | Labは探索Trialごと、検証ごとに使い捨てで作る。同時Trialの既定は2。ホストのCPUとメモリが制約 |
 | Pro購読なら使い放題 | rate limitと使用量上限がある。1 runの消費を測り、上限に当たるならAPIキーへ切り替えを判断 |
 | 再現パッケージ = Verifierのログ | 判定器が通った経路だけを再生成した資料。試行錯誤は入らない。途中経過はPrivate EvidenceのVerifier run記録を別に開く |
 | Harnessが提出する | 提出は人間がプログラムの画面で行う。Harnessは承認を記録するだけ |
@@ -240,7 +225,9 @@ Verifierはエージェント（LLM）で、判定器はコード。Verifierの�
 | 語 | 意味 | 誰が作るか |
 | --- | --- | --- |
 | Campaign | 1つの対象（snapshot）に対する探索と検証の一式 | `discovery.campaign` |
-| Discovery run | 短命エージェントの1回の実行 | `discovery` |
+| Trial | 独立試行。1つの探索runと、任意の同Trial内Lead継続を含む | `discovery.campaign` |
+| Discovery run | 短命エージェントの1回の実行。`explore` または `continue` | `discovery` |
+| Lead | sourceに根拠があり、影響までの経路が欠けた報告。Verifierへ渡さない | エージェント |
 | Finding | runが出した主張。確認ではない | エージェント |
 | VerificationResult | `runtime-confirmed` / `contradicted` / `incomplete` | 判定器 |
 | Verified Vulnerability | `runtime-confirmed` から作る技術的記録。scopeと独立 | `ledger` |
