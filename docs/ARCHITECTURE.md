@@ -25,7 +25,8 @@ flowchart TB
     VER[Verifier container<br/>Finding + source だけ]
     LAB2[新しいLab]
     JUDGE[判定器（Harnessのコード）<br/>canary回収を観測]
-    VER <-->|HTTP| LAB2
+    VER <-->|HTTP| PROXY[Harness HTTP捕捉proxy]
+    PROXY <-->|HTTP| LAB2
     JUDGE -->|読む| LAB2
   end
   WPORG[(WordPress.org)] -->|zip取得| SNAP
@@ -75,31 +76,22 @@ flowchart LR
 flowchart TB
   subgraph CAMPAIGN[Campaign（対象1つ）]
     direction TB
-    PART[profileが入口単位で<br/>file分担を作る] --> Q[run待ち行列<br/>最大N=40]
-    Q --> R1[run 1] & R2[run 2] & R3[run 3] & R4[run 4]
-    R1 & R2 & R3 & R4 --> STOP{新規Findingなしが<br/>k=4回連続?}
+    PART[profileが保存先成分の<br/>scopeを作る] --> Q[Trial待ち行列<br/>既定上限6]
+    Q --> R1[Trial 1] & R2[Trial 2]
+    R1 & R2 --> STOP{新規FindingとLeadなしが<br/>3 Trial連続?}
     STOP -->|いいえ| Q
     STOP -->|はい| END[停止・台帳へ]
   end
-  subgraph ONERUN[run 1つの中（agentの裁量。Harnessは手順を指定しない）]
+  subgraph ONERUN[Trial 1つの中（agentの裁量。Harnessは手順を指定しない）]
     direction TB
-    IN[受け取る: prompt / trust境界 /<br/>担当file / Lab + subscriber認証 / 履歴] --> E1[入口を列挙<br/>wp_ajax_nopriv / REST / shortcode / $_GET]
-    E1 --> E2[誰が叩けるか<br/>nonce? capability? login?]
-    E2 -->|subscriber以下で届く| E3[危険な到達点まで追う<br/>SQL / file / option / role / 出力]
-    E3 --> E4[途中のcheckを評価<br/>prepare / sanitize / esc / path検査]
-    E4 --> E5{欠けている?}
-    E5 -->|仮説あり| E6[Labに実際に送る<br/>canaryが動いたか自分で見る]
-    E6 -->|成立| F[Findingを書く<br/>攻撃者位置 / 分類 / 経路 / 観測]
-    E6 -->|不成立| E4
-    E5 -->|なし| NX[次の入口]
-    NX --> E2
-    F --> OUT[出力: Finding[] + 読んだ範囲 / 読まなかった範囲]
-    NX -.全部見た.-> OUT
+    IN[受け取る: 版付きprompt / trust境界 /<br/>scope / Lab + subscriber認証 / 時点で切った履歴] --> AG[探索エージェントが手順を決める]
+    AG --> OUT[出力: Finding[] / Lead[] + coverage]
+    OUT -->|opt-inで根拠あるLeadがあるとき| CONT[別containerで近傍を1 hop継続<br/>同じTrialに集計]
   end
   R1 -.-> ONERUN
 ```
 
-- runは互いを知らない。同じ場所を複数のrunが独立に指せば、それが確度の根拠になる。
+- Trialは互いを知らない。Leadの継続は同じTrial内の1 hopで、独立試行数を増やさない。
 - 1回で見つかる確率 p のとき、k 回で1度でも見つかる確率は 1 − (1 − p)^k。
 
 ## 図4. 検証: Verifierと判定器の分業
@@ -144,9 +136,9 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-  T[本番対象] --> A[runの半分: 構成A<br/>例: 短い目的prompt / 履歴あり]
-  T --> B[runの半分: 構成B<br/>例: wp2shell由来 / 履歴なし]
-  A & B --> V[検証 → 台帳（runごとの構成を記録）]
+  T[本番対象] --> A[独立Trial: arm A]
+  T --> B[独立Trial: arm B]
+  A & B --> V[検証 → 台帳（履歴 / prompt / 継続のopt-in軸を記録）]
   V --> SUB[どちらが見つけても提出]
   V --> CMP[対象をまたいで対で集計<br/>当たり率と費用、区間付き]
   V -.数か月後.-> PRO[前向き評価<br/>公開されたadvisoryで再採点<br/>見逃しを数える]
