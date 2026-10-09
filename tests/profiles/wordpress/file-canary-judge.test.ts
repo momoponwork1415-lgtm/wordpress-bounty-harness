@@ -59,6 +59,7 @@ describe("WordPress canary file judges", () => {
     expect(observed).toEqual({
       status: "observed",
       evidenceDigest: expect.stringMatching(/^sha256:/),
+      evidenceCapture: "agent-authored",
       conditions: {
         observedVia: "canary-file-read",
         canaryFilesRead: "outside-webroot,php-source",

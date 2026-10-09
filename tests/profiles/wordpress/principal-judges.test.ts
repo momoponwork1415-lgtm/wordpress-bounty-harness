@@ -31,6 +31,7 @@ const handle: WordPressLabHandle = {
   endpoint: "http://wordpress",
   networkName: "wbh-lab-net",
   internalIp: "172.20.0.2",
+  recorderIp: "172.20.0.4",
   attackerAccounts: {
     subscriber: { username: "lab-subscriber", password: "lab-only" },
   },
@@ -81,6 +82,9 @@ async function fixture(options: {
   const judges = createWordPressJudges({
     store,
     lab: {
+      async readCapture() {
+        return { status: "unavailable" };
+      },
       canaryLedger: () => (options.seeded === false ? null : canaries),
       async observeSessionUser(_lab, cookie) {
         presented.push(cookie);

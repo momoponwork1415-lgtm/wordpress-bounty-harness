@@ -146,6 +146,7 @@ async function harness(
       wordpress: `wordpress@${sha("2")}`,
       wordpressCli: `wordpress-cli@${sha("3")}`,
       browser: `verification-browser@${sha("4")}`,
+      recorder: `node-recorder@${sha("5")}`,
     },
     source: {
       resolve: async () => ({
@@ -167,6 +168,7 @@ async function harness(
             stdout: [
               `wbh-${uuid}-db`,
               `wbh-${uuid}-wp`,
+              `wbh-${uuid}-proxy`,
               `provider-egress-broker-${uuid}`,
               "operator-postgres",
               "wbh-notes",
@@ -1335,7 +1337,7 @@ describe("harness CLI vertical slice", () => {
     const listed = await run("lab", "cleanup", "--config", configPath);
     expect(listed.code).toBe(0);
     expect(listed.stdout.split("\n")).toEqual([
-      `leftover containers 3: wbh-${uuid}-db, wbh-${uuid}-wp, provider-egress-broker-${uuid}`,
+      `leftover containers 4: wbh-${uuid}-db, wbh-${uuid}-wp, wbh-${uuid}-proxy, provider-egress-broker-${uuid}`,
       `leftover networks 2: wbh-${uuid}-net, provider-egress-${uuid}`,
       `leftover volumes 1: wbh-${uuid}-site`,
       "nothing removed; run again with --remove when no campaign is running",
@@ -1351,7 +1353,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(removed.code).toBe(0);
     expect(removed.stdout).toContain(
-      "removed 3 containers, 2 networks, 1 volumes",
+      "removed 4 containers, 2 networks, 1 volumes",
     );
     const removals = docker
       .map(({ args }) => args)
@@ -1366,6 +1368,7 @@ describe("harness CLI vertical slice", () => {
         "-f",
         `wbh-${uuid}-db`,
         `wbh-${uuid}-wp`,
+        `wbh-${uuid}-proxy`,
         `provider-egress-broker-${uuid}`,
       ],
       ["network", "rm", `wbh-${uuid}-net`, `provider-egress-${uuid}`],

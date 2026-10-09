@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
@@ -147,6 +148,8 @@ export interface WordPressSourceResolver {
 export interface WordPressLabHandle extends LabHandle {
   readonly networkName: string;
   readonly internalIp: string;
+  /** Verifier traffic passes through this Lab-local recorder. */
+  readonly recorderIp: string;
   readonly database?: {
     readonly host: "database";
     readonly ipv4: string;
@@ -243,6 +246,18 @@ export interface WordPressLab extends LabProvisioner<
   WordPressLabHandle
 > {
   probe(handle: WordPressLabHandle): Promise<LabReachability>;
+  markCapture(handle: WordPressLabHandle): Promise<string | null>;
+  readCapture(
+    handle: WordPressLabHandle,
+    sinceMarker: string,
+  ): Promise<
+    | {
+        readonly status: "captured";
+        readonly bytes: Buffer;
+        readonly dropped: number;
+      }
+    | { readonly status: "unavailable" }
+  >;
   canaryLedger(handle: WordPressLabHandle): WordPressCanaryLedger | null;
   prepareExecutionCanary(handle: WordPressLabHandle): ExecutionCanary | null;
   /**
@@ -307,7 +322,7 @@ export type Leftovers = {
 
 const labId = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const LAB_LEFTOVERS = {
-  containers: [new RegExp(`^wbh-${labId}-(?:db|wp|canary)$`)],
+  containers: [new RegExp(`^wbh-${labId}-(?:db|wp|canary|proxy)$`)],
   networks: [new RegExp(`^wbh-${labId}-net$`)],
   volumes: [new RegExp(`^wbh-${labId}-site$`)],
 } as const;
@@ -318,6 +333,7 @@ interface Resources {
   readonly volume: string;
   readonly database: string;
   readonly wordpress: string;
+  readonly recorder: string;
   readonly databasePassword: string;
   readonly readerPassword: string;
   readonly adminPassword: string;
@@ -339,6 +355,7 @@ interface Resources {
   volumeCreated: boolean;
   databaseCreated: boolean;
   wordpressCreated: boolean;
+  recorderCreated: boolean;
 }
 
 function databaseIp(resource: Resources): string {
@@ -355,6 +372,7 @@ export function openWordPressLab(options: {
     readonly wordpressCli: string;
     /** Playwright Chromium, used only by the Lab's own observer visits. */
     readonly browser: string;
+    readonly recorder: string;
   };
   readonly source: WordPressSourceResolver;
   readonly runner?: DockerRunner;
@@ -393,8 +411,8 @@ export function openWordPressLab(options: {
   const docker = (
     args: readonly string[],
     timeoutMs = 60_000,
-  ): Promise<DockerResult> =>
-    runner.run({ args, timeoutMs, maxOutputBytes: 64 * 1024 });
+    maxOutputBytes = 64 * 1024,
+  ): Promise<DockerResult> => runner.run({ args, timeoutMs, maxOutputBytes });
   const requireDocker = async (
     args: readonly string[],
     timeoutMs?: number,
@@ -457,7 +475,8 @@ export function openWordPressLab(options: {
     for (const args of [
       ...(resource.wordpressCreated ||
       resource.databaseCreated ||
-      resource.receiverCreated
+      resource.receiverCreated ||
+      resource.recorderCreated
         ? [
             [
               "rm",
@@ -466,6 +485,7 @@ export function openWordPressLab(options: {
                 resource.wordpressCreated ? resource.wordpress : undefined,
                 resource.databaseCreated ? resource.database : undefined,
                 resource.receiverCreated ? resource.receiver : undefined,
+                resource.recorderCreated ? resource.recorder : undefined,
               ].filter((value): value is string => value !== undefined),
             ],
           ]
@@ -648,6 +668,7 @@ export function openWordPressLab(options: {
           volume: `${prefix}-site`,
           database: `${prefix}-db`,
           wordpress: `${prefix}-wp`,
+          recorder: `${prefix}-proxy`,
           databasePassword: randomUUID(),
           readerPassword: randomBytes(32).toString("hex"),
           adminPassword: randomUUID(),
@@ -660,6 +681,7 @@ export function openWordPressLab(options: {
           volumeCreated: false,
           databaseCreated: false,
           wordpressCreated: false,
+          recorderCreated: false,
         };
         await requireDocker([
           "network",
@@ -729,6 +751,38 @@ export function openWordPressLab(options: {
           resource.wordpress,
         ]);
         const internalIp = privateIpv4(inspected.stdout);
+        await requireDocker([
+          "run",
+          "--detach",
+          "--name",
+          resource.recorder,
+          "--runtime=runsc",
+          "--network",
+          resource.network,
+          `--add-host=wordpress:${internalIp}`,
+          "--read-only",
+          "--cap-drop=ALL",
+          "--security-opt=no-new-privileges",
+          "--tmpfs=/var/lib/wbh:rw,nosuid,nodev,size=65m",
+          "--env",
+          "WBH_UPSTREAM_HOST=wordpress",
+          "--volume",
+          `${fileURLToPath(new URL("../../../lab-recorder/", import.meta.url))}:/opt/wbh-recorder:ro`,
+          "--entrypoint=node",
+          options.images.recorder,
+          "/opt/wbh-recorder/cli.js",
+        ]);
+        resource.recorderCreated = true;
+        const recorderIp = privateIpv4(
+          (
+            await requireDocker([
+              "inspect",
+              "--format",
+              "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+              resource.recorder,
+            ])
+          ).stdout,
+        );
         await requireDocker([
           "run",
           "--detach",
@@ -898,6 +952,7 @@ export function openWordPressLab(options: {
           endpoint: "http://wordpress",
           networkName: resource.network,
           internalIp,
+          recorderIp,
           attackerAccounts: {
             subscriber,
             ...(customer === undefined ? {} : { customer }),
@@ -1070,6 +1125,67 @@ export function openWordPressLab(options: {
             reason: "cleanup",
             nextStep: "Inspect and remove remaining Lab resources",
           };
+    },
+    async markCapture(handle) {
+      const resource = active.get(handle.id);
+      if (resource?.handle !== handle) return null;
+      const result = await docker([
+        "exec",
+        resource.recorder,
+        "wc",
+        "-c",
+        "/var/lib/wbh/capture.jsonl",
+      ]);
+      const marker = result.stdout.trim().split(/\s+/)[0];
+      return result.exitCode === 0 &&
+        marker !== undefined &&
+        /^\d+$/.test(marker)
+        ? marker
+        : null;
+    },
+    async readCapture(handle, sinceMarker) {
+      const resource = active.get(handle.id);
+      if (
+        resource?.handle !== handle ||
+        !/^\d+$/.test(sinceMarker) ||
+        !Number.isSafeInteger(Number(sinceMarker)) ||
+        Number(sinceMarker) > 64 * 1024 * 1024
+      )
+        return { status: "unavailable" };
+      const [capture, dropped] = await Promise.all([
+        docker(
+          [
+            "exec",
+            resource.recorder,
+            "tail",
+            "-c",
+            `+${Number(sinceMarker) + 1}`,
+            "/var/lib/wbh/capture.jsonl",
+          ],
+          60_000,
+          64 * 1024 * 1024 + 1024,
+        ),
+        docker([
+          "exec",
+          resource.recorder,
+          "sh",
+          "-c",
+          "cat /var/lib/wbh/dropped 2>/dev/null || printf 0",
+        ]),
+      ]);
+      const count = Number(dropped.stdout.trim());
+      if (
+        capture.exitCode !== 0 ||
+        dropped.exitCode !== 0 ||
+        !Number.isSafeInteger(count) ||
+        count < 0
+      )
+        return { status: "unavailable" };
+      return {
+        status: "captured",
+        bytes: Buffer.from(capture.stdout, "utf8"),
+        dropped: count,
+      };
     },
     async probe(handle) {
       const resource = active.get(handle.id);

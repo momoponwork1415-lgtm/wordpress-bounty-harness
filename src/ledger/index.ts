@@ -196,6 +196,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       })
       .optional(),
     result: verificationResultV1Schema,
+    evidenceCapture: z.enum(["harness-captured", "agent-authored"]).optional(),
   }),
   event({
     type: z.literal("review-decided"),

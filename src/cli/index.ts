@@ -175,7 +175,8 @@ async function openState(
   const store = new PrivateArtifactStore({
     rootDirectory: evidenceDirectory,
     maxEntries: 64,
-    maxBytes: 64 * 1024 * 1024,
+    // A bounded capture and its supporting evidence fit in one artifact.
+    maxBytes: 72 * 1024 * 1024,
   });
   return {
     store,

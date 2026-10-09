@@ -54,6 +54,7 @@ const routeSchema = z.strictObject({
       z.strictObject({
         kind: z.enum(["http", "screenshot", "canary"]),
         path: evidencePath,
+        capture: z.enum(["harness-captured", "agent-authored"]).optional(),
       }),
     )
     .min(2)
@@ -101,7 +102,9 @@ export const wordpressReproductionRenderer: ReproductionRenderer<WordPressRecons
         const resolved = await input.store.readFile(
           input.evidenceDigest,
           entry.path,
-          5 * 1024 * 1024,
+          entry.capture === "harness-captured"
+            ? 64 * 1024 * 1024 + 1024
+            : 5 * 1024 * 1024,
         );
         if (resolved.status !== "resolved")
           throw new Error("Judge evidence is unavailable");

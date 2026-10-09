@@ -110,7 +110,7 @@ export class CodexVerifier implements Verifier<
       /** Issues the canary a Finding's impact needs; only the Lab can observe it. */
       readonly lab: Pick<
         WordPressLab,
-        "prepareExecutionCanary" | "prepareScriptCanary"
+        "prepareExecutionCanary" | "prepareScriptCanary" | "markCapture"
       >;
       readonly clock: () => Date;
       readonly wallTimeMs?: number;
@@ -253,7 +253,7 @@ export class CodexVerifier implements Verifier<
       lab: {
         endpoint: lab.endpoint,
         networkName: lab.networkName,
-        internalIp: lab.internalIp,
+        internalIp: lab.recorderIp,
         ...(lab.database === undefined
           ? {}
           : {
@@ -290,6 +290,7 @@ export class CodexVerifier implements Verifier<
       ).toISOString(),
     };
     let result: Awaited<ReturnType<CodexNativeAgentRuntime["execute"]>>;
+    const captureMarker = await this.options.lab.markCapture(lab);
     try {
       result = await this.options.runtime.execute(run);
     } catch {
@@ -420,6 +421,9 @@ export class CodexVerifier implements Verifier<
     const recipeDigest = await this.options.store.putFiles({
       "http.json": data["http.json"],
       "steps.md": data["steps.md"],
+      ...(captureMarker === null
+        ? {}
+        : { "capture-marker.json": canonicalJson({ marker: captureMarker }) }),
       ...(route === undefined ? {} : { "route.json": route }),
       ...(session === undefined ? {} : { "session.json": session }),
     });

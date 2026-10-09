@@ -252,6 +252,7 @@ export async function createWordPressHostProfile(options: {
         wordpress: host.images.wordpress,
         wordpressCli: host.images.wordpressCli,
         browser: host.images.browser,
+        recorder: host.images.broker,
       },
       source: sources,
       ...(options.runDocker === undefined
