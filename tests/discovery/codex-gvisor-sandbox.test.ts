@@ -1,16 +1,144 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
-import { GvisorCodexSandbox } from "../../src/discovery/index.js";
+import {
+  BROKER_TLS_HOSTNAME,
+  CHATGPT_PLACEHOLDER_ACCOUNT_ID,
+  GvisorCodexSandbox,
+} from "../../src/discovery/index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 
 describe("gVisor Codex sandbox", () => {
+  it("logs the CLI in with only the grant token and trusts only the grant's CA for a ChatGPT login grant", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
+    try {
+      const source = join(root, "source");
+      await mkdir(source);
+      await writeFile(join(source, "main.txt"), "fixed source");
+      const expectedTree = await measureCanonicalSourceTree(source, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      const caPem =
+        "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+      let run: readonly string[] = [];
+      let codexHome = "";
+      let auth: unknown;
+      let ca = "";
+      const sandbox = new GvisorCodexSandbox({
+        dockerExecutablePath: "/usr/bin/docker",
+        image: `node@${digest}`,
+        bundledCatalogPath: "/opt/codex/model-catalog.json",
+        scratchRootDirectory: root,
+        maxOutputBytes: 1024 * 1024,
+        timeoutMs: 60_000,
+        clock: () => new Date("2026-10-08T07:00:00Z"),
+        runDocker: async (args) => {
+          if (args.includes("--network=internal-run")) {
+            run = args;
+            for (const arg of args) {
+              const home = /^--mount=type=bind,src=(.+),dst=\/tmp\/codex$/.exec(
+                arg,
+              );
+              if (home?.[1] !== undefined) codexHome = home[1];
+              const support =
+                /^--mount=type=bind,src=(.+),dst=\/opt\/codex-support,readonly$/.exec(
+                  arg,
+                );
+              if (support?.[1] !== undefined)
+                ca = await readFile(join(support[1], "grant-ca.pem"), "utf8");
+            }
+            auth = JSON.parse(
+              await readFile(join(codexHome, "auth.json"), "utf8"),
+            );
+          }
+          const output = args.includes("--version")
+            ? "codex-cli 0.161.0\n"
+            : args.includes("--entrypoint=sha256sum")
+              ? `${"b".repeat(64)}  /opt/codex/model-catalog.json\n`
+              : "{}\n";
+          return { kind: "exited", exitCode: 0, stdout: output, stderr: "" };
+        },
+      });
+      const grantToken = randomBytes(32).toString("hex");
+      const command = {
+        executable: "codex" as const,
+        args: ["exec", "--json"],
+        stdin: "Inspect the source.",
+        supportFiles: [
+          { path: "/opt/codex-support/report-schema.json", content: "{}" },
+        ],
+        grant: {
+          baseUrl: `https://${BROKER_TLS_HOSTNAME}:8080`,
+          tls: { hostname: BROKER_TLS_HOSTNAME, address: "172.28.0.2", caPem },
+          authorization: `Bearer ${grantToken}`,
+          dockerNetworkName: "internal-run",
+          model: "gpt-6-luna",
+          protocol: "responses" as const,
+          expiresAt: "2026-10-08T07:30:00Z",
+        },
+        sourceMount: {
+          directory: source,
+          path: "/workspace/main" as const,
+          mode: "ro" as const,
+          expectedTree,
+        },
+        labHost: { name: "wordpress", ipv4: "172.20.0.2" },
+      };
+      await sandbox.execute(command);
+      expect(run).toContain(`--add-host=${BROKER_TLS_HOSTNAME}:172.28.0.2`);
+      expect(run).toContain(
+        "--env=CODEX_CA_CERTIFICATE=/opt/codex-support/grant-ca.pem",
+      );
+      expect(run.join(" ")).not.toContain("OPENAI_API_KEY");
+      expect(ca).toBe(caPem);
+      // The CLI holds a login made of the grant token and a placeholder account.
+      expect(auth).toMatchObject({
+        auth_mode: "chatgpt",
+        OPENAI_API_KEY: null,
+        tokens: {
+          access_token: grantToken,
+          refresh_token: "",
+          account_id: CHATGPT_PLACEHOLDER_ACCOUNT_ID,
+        },
+      });
+      const idToken = (auth as { tokens: { id_token: string } }).tokens
+        .id_token;
+      expect(
+        JSON.parse(
+          Buffer.from(idToken.split(".")[1] ?? "", "base64url").toString(),
+        ),
+      ).toMatchObject({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: CHATGPT_PLACEHOLDER_ACCOUNT_ID,
+        },
+      });
+      // The login lives only for the run.
+      await expect(stat(codexHome)).rejects.toThrow();
+      await expect(
+        sandbox.execute({
+          ...command,
+          grant: { ...command.grant, baseUrl: "https://chatgpt.com:8080" },
+        }),
+      ).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("measures the source and CLI before a pinned runsc execution", async () => {
     const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
     try {

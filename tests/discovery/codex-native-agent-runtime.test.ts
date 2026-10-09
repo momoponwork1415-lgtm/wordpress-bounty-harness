@@ -19,7 +19,10 @@ import {
   providerCredentialEgressReceiptSchema,
   type ProviderCredentialEgressBroker,
 } from "../../src/discovery/index.js";
-import { PROVIDER_UPSTREAM_ORIGIN } from "../../src/discovery/index.js";
+import {
+  BROKER_TLS_HOSTNAME,
+  PROVIDER_UPSTREAM_ORIGIN,
+} from "../../src/discovery/index.js";
 import { ProviderAttachmentStore } from "../../src/discovery/index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
@@ -82,7 +85,13 @@ const transcript = [
   .map((event) => JSON.stringify(event))
   .join("\n");
 
-function broker(): ProviderCredentialEgressBroker {
+type Grant = Parameters<
+  Parameters<ProviderCredentialEgressBroker["withGrant"]>[1]
+>[0];
+
+function broker(
+  grantOverrides: Partial<Grant> = {},
+): ProviderCredentialEgressBroker {
   return {
     async withGrant(request, operation) {
       const body = {
@@ -119,6 +128,7 @@ function broker(): ProviderCredentialEgressBroker {
         model: request.model,
         protocol: request.protocol,
         expiresAt: request.expiresAt,
+        ...grantOverrides,
       });
       return { operation: { status: "completed", value }, receipt };
     },
@@ -309,6 +319,9 @@ describe("Codex native agent runtime", () => {
       expect(commands[0]?.args).toContain("gpt-6.1-sol");
       expect(commands[0]?.args).toContain("danger-full-access");
       expect(commands[0]?.args).not.toContain("read-only");
+      // `codex exec` 0.161 has no `-a`; approvals are set through config.
+      expect(commands[0]?.args).not.toContain("-a");
+      expect(commands[0]?.args).toContain('approval_policy="never"');
       expect(commands[0]?.args).toContain('model_reasoning_effort="high"');
       expect(commands[0]?.args).toContain(
         'openai_base_url="http://127.0.0.1:8080/v1"',
@@ -515,6 +528,74 @@ describe("Codex native agent runtime", () => {
       expect((await runtime(endsInProse).execute(run)).receipt.reason).toBe(
         "schema",
       );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("points a ChatGPT login run at the TLS broker's subscription backend", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
+    try {
+      const {
+        kind: _kind,
+        schemaVersion: _version,
+        digest: _digest,
+        ...base
+      } = profile;
+      const chatgptProfile = defineAgentRuntimeProfile({
+        ...base,
+        requestedModelId: "gpt-6-luna",
+        authenticationMethod: "chatgpt-oauth-host",
+        cyberAccessProgram: "daybreak_blue",
+      });
+      const chatgptRun = {
+        ...run,
+        profile: chatgptProfile,
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: chatgptProfile.digest,
+        },
+      };
+      const tlsGrant = {
+        baseUrl: `https://${BROKER_TLS_HOSTNAME}:8080`,
+        tls: {
+          hostname: BROKER_TLS_HOSTNAME,
+          address: "172.20.0.9",
+          caPem:
+            "-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n",
+        },
+      };
+      const commands: CodexSandboxCommand[] = [];
+      const runtime = (grant: Partial<Grant>) =>
+        new CodexNativeAgentRuntime(
+          sandbox(transcript, commands),
+          broker(grant),
+          new ProviderAttachmentStore(root),
+          image,
+          () => new Date(now),
+        );
+      const result = await runtime(tlsGrant).execute(chatgptRun);
+      expect(result.receipt.terminal).toBe("completed");
+      expect(result.receipt.authenticationMethod).toBe("chatgpt-oauth-host");
+      const args = commands[0]?.args ?? [];
+      expect(args).toContain(
+        `chatgpt_base_url="https://${BROKER_TLS_HOSTNAME}:8080/backend-api/"`,
+      );
+      expect(args.join(" ")).not.toContain("openai_base_url");
+      // A compressed request body would hide the model from the broker.
+      expect(args.join(" ")).toContain("--disable enable_request_compression");
+      expect(args.join(" ")).toContain("--cyber-access-program daybreak_blue");
+      expect(commands[0]?.grant.tls?.address).toBe("172.20.0.9");
+
+      // A login run never falls back to a plain API-key grant, and back.
+      commands.length = 0;
+      expect((await runtime({}).execute(chatgptRun)).receipt.terminal).toBe(
+        "incomplete",
+      );
+      expect((await runtime(tlsGrant).execute(run)).receipt.terminal).toBe(
+        "incomplete",
+      );
+      expect(commands).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

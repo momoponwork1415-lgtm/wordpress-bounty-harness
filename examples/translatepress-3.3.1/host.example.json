@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "dockerExecutablePath": "/usr/bin/docker",
   "workDirectory": "/home/<user>/.local/share/wordpress-bounty-harness/work",
-  "credentialFilePath": "/home/<user>/.config/wordpress-bounty-harness/provider-credential",
+  "credentialFilePath": "/home/<user>/.codex/auth.json",
   "images": {
     "database": "mariadb@sha256:<docker image inspect の RepoDigests にある64桁>",
     "wordpress": "wordpress@sha256:<docker image inspect の RepoDigests にある64桁>",
@@ -19,7 +19,7 @@
       "requestedEffort": "high",
       "codexCliVersion": "<image内の codex --version>",
       "bundledCatalogDigest": "sha256:<image内カタログの sha256sum>",
-      "authenticationMethod": "host-private-bearer",
+      "authenticationMethod": "chatgpt-oauth-host",
       "cyberAccessProgram": "standard",
       "serviceTier": "default",
       "subagent": {
