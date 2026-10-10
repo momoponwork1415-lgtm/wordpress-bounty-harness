@@ -187,6 +187,9 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     candidateKind: z.enum(["finding", "lead"]),
     candidateIndex: z.number().int().nonnegative(),
     reason: z.enum(["schema", "identity"]),
+    impact: id.optional(),
+    primitive: id.optional(),
+    missingEdge: id.optional(),
   }),
   event({
     type: z.literal("candidate-normalized"),
@@ -331,6 +334,9 @@ export type LedgerRecord = {
   readonly event: LedgerEventV1;
 };
 export type FunnelCounts = {
+  readonly reached: number;
+  readonly accepted: number;
+  readonly held: number;
   readonly raw: number;
   readonly verified: number;
   readonly confirmed: number;
@@ -366,6 +372,11 @@ export type CampaignFunnel = FunnelCounts & {
   readonly knownCostUsd: number;
   readonly unpricedRuns: number;
   readonly wallTimeMs: number;
+  readonly noncachedInputTokens: number;
+  readonly unavailableInputRuns: number;
+  readonly confirmedPerMillionInputTokens: number | null;
+  readonly confirmedPerAgentWallHour: number | null;
+  readonly verificationAttempts: Readonly<Record<string, number>>;
   /** Reviewed, non-contradicted findings judged in-scope, per assessed programme. */
   readonly inScopeByProgramme: Readonly<Record<string, number>>;
   /** Candidates by their latest recorded outcome. */
@@ -375,7 +386,17 @@ export type CampaignFunnel = FunnelCounts & {
   readonly byCategory: Readonly<Record<string, FunnelCounts>>;
   /** Runs and their Findings per ablation arm, keyed `<axis>:<arm>`. */
   readonly byArm: Readonly<Record<string, ArmCounts>>;
+  readonly byObjective: Readonly<Record<string, FunnelSlice>>;
 };
+export type FunnelSlice = FunnelCounts & {
+  readonly runs: number;
+  readonly noncachedInputTokens: number;
+  readonly unavailableInputRuns: number;
+  readonly wallTimeMs: number;
+  readonly confirmedPerMillionInputTokens: number | null;
+  readonly confirmedPerAgentWallHour: number | null;
+};
+type MutableSlice = { -readonly [K in keyof FunnelSlice]: FunnelSlice[K] };
 export type ArmCounts = {
   readonly runs: number;
   readonly findings: number;
@@ -427,6 +448,9 @@ type Counts = { -readonly [K in keyof FunnelCounts]: number };
 
 function emptyCounts(): Counts {
   return {
+    reached: 0,
+    accepted: 0,
+    held: 0,
     raw: 0,
     verified: 0,
     confirmed: 0,
@@ -842,6 +866,15 @@ export class Ledger {
     const runKinds = new Map<string, "explore" | "continue" | "child">();
     const trialByRun = new Map<string, string>();
     const runArms = new Map<string, string[]>();
+    const objectiveByRun = new Map<string, string>();
+    const candidateKeys = new Set<string>();
+    const heldKeys = new Set<string>();
+    const legacyReached: { runId: string; category: string }[] = [];
+    const candidateCategory = new Map<string, string>();
+    const normalizationSeen = new Set<string>();
+    const verificationAttempts: Record<string, number> = Object.create(null);
+    let noncachedInputTokens = 0;
+    let unavailableInputRuns = 0;
     let knownCostUsd = 0;
     let unpricedRuns = 0;
     let wallTimeMs = 0;
@@ -872,6 +905,10 @@ export class Ledger {
           startedRuns.set(current.runId, current.labId);
           runKinds.set(current.runId, current.runKind ?? "explore");
           trialByRun.set(current.runId, current.trialId ?? current.runId);
+          objectiveByRun.set(
+            current.runId,
+            current.configuration.promptVariant,
+          );
           if ((current.runKind ?? "explore") !== "explore") break;
           if (current.configuration.arms !== undefined) {
             const arms = (
@@ -894,14 +931,65 @@ export class Ledger {
           if (current.costUsd === "unavailable") unpricedRuns++;
           else knownCostUsd += current.costUsd;
           wallTimeMs += current.wallTimeMs;
+          if (current.outcome !== "setup-failed") {
+            const input = current.usage?.inputTokens;
+            const cached = current.usage?.cachedInputTokens;
+            if (
+              input === undefined ||
+              input === "unavailable" ||
+              cached === undefined ||
+              cached === "unavailable" ||
+              cached > input
+            )
+              unavailableInputRuns++;
+            else noncachedInputTokens += input - cached;
+          }
           if (current.outcome === "setup-failed")
             setupFailedRuns.add(current.runId);
           break;
+        case "candidate-normalized":
+        case "candidate-held":
+        case "candidate-rejected": {
+          const boundary = `${current.runId}\0${current.candidateKind}`;
+          const key = `${boundary}\0${current.candidateIndex}`;
+          candidateKeys.add(key);
+          if (current.type === "candidate-normalized") {
+            normalizationSeen.add(boundary);
+            heldKeys.delete(key);
+            candidateCategory.delete(key);
+          } else {
+            heldKeys.add(key);
+            candidateCategory.set(
+              key,
+              current.candidateKind === "finding"
+                ? (current.impact ?? "unclassified")
+                : `lead:${current.primitive ?? "unclassified"}/${current.missingEdge ?? "unclassified"}`,
+            );
+          }
+          break;
+        }
         case "finding-recorded":
+          if (
+            current.derivationKind !== "fixed-version-control" &&
+            !normalizationSeen.has(`${current.runId}\0finding`)
+          )
+            legacyReached.push({
+              runId: current.runId,
+              category: current.category,
+            });
           if (!findings.has(current.findingId))
             findings.set(current.findingId, current);
           break;
+        case "lead-recorded":
+          if (!normalizationSeen.has(`${current.runId}\0lead`))
+            legacyReached.push({
+              runId: current.runId,
+              category: `lead:${current.primitive}/${current.missingEdge}`,
+            });
+          break;
         case "verification-finished":
+          verificationAttempts[current.findingId] =
+            (verificationAttempts[current.findingId] ?? 0) + 1;
           verifications.set(current.findingId, current);
           break;
         case "review-decided":
@@ -946,10 +1034,61 @@ export class Ledger {
       string,
       Counts
     >;
+    const byObjective: Record<string, MutableSlice> = Object.create(
+      null,
+    ) as Record<string, MutableSlice>;
+    const objective = (runId: string): MutableSlice => {
+      const name = objectiveByRun.get(runId) ?? "unclassified";
+      return (byObjective[name] ??= {
+        ...emptyCounts(),
+        runs: 0,
+        noncachedInputTokens: 0,
+        unavailableInputRuns: 0,
+        wallTimeMs: 0,
+        confirmedPerMillionInputTokens: null,
+        confirmedPerAgentWallHour: null,
+      });
+    };
+    for (const runId of startedRuns.keys()) objective(runId).runs++;
+    for (const event of events) {
+      if (event.type !== "discovery-run-finished") continue;
+      const slice = objective(event.runId);
+      slice.wallTimeMs += event.wallTimeMs;
+      if (event.outcome === "setup-failed") continue;
+      const input = event.usage?.inputTokens;
+      const cached = event.usage?.cachedInputTokens;
+      if (
+        input === undefined ||
+        input === "unavailable" ||
+        cached === undefined ||
+        cached === "unavailable" ||
+        cached > input
+      )
+        slice.unavailableInputRuns++;
+      else slice.noncachedInputTokens += input - cached;
+    }
+    for (const key of candidateKeys) {
+      const runId = key.split("\0", 1)[0]!;
+      totals.reached++;
+      objective(runId).reached++;
+      if (!heldKeys.has(key)) continue;
+      totals.held++;
+      objective(runId).held++;
+      const category = candidateCategory.get(key) ?? "unclassified";
+      const counts = (byCategory[category] ??= emptyCounts());
+      counts.reached++;
+      counts.held++;
+    }
+    for (const { runId, category } of legacyReached) {
+      totals.reached++;
+      objective(runId).reached++;
+      (byCategory[category] ??= emptyCounts()).reached++;
+    }
     for (const finding of findings.values()) {
       if (finding.derivationKind === "fixed-version-control") continue;
       const category = (byCategory[finding.category] ??= emptyCounts());
-      for (const count of [totals, category]) {
+      for (const count of [totals, category, objective(finding.runId)]) {
+        count.accepted++;
         count.raw++;
         const verification = verifications.get(finding.findingId);
         if (verification === undefined) continue;
@@ -972,6 +1111,63 @@ export class Ledger {
         if (outcomes.has(candidateId)) count.outcome++;
       }
     }
+    const leads = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "lead-recorded" }>
+    >();
+    for (const event of events)
+      if (event.type === "lead-recorded" && !leads.has(event.leadId))
+        leads.set(event.leadId, event);
+    for (const lead of leads.values()) {
+      const category = `lead:${lead.primitive}/${lead.missingEdge}`;
+      for (const count of [
+        totals,
+        (byCategory[category] ??= emptyCounts()),
+        objective(lead.runId),
+      ])
+        count.accepted++;
+    }
+    for (const counts of [
+      totals,
+      ...Object.values(byCategory),
+      ...Object.values(byObjective),
+    ]) {
+      // A normalized candidate may have no later admission or hold event.
+      counts.reached = Math.max(counts.reached, counts.accepted + counts.held);
+    }
+    const classifiedReached = Object.values(byCategory).reduce(
+      (sum, counts) => sum + counts.reached,
+      0,
+    );
+    if (classifiedReached < totals.reached)
+      (byCategory.unclassified ??= emptyCounts()).reached +=
+        totals.reached - classifiedReached;
+    const rate = (
+      confirmed: number,
+      tokens: number,
+      missing: number,
+      wall: number,
+    ) => ({
+      token:
+        missing === 0 && tokens > 0 ? (confirmed * 1_000_000) / tokens : null,
+      wall: wall > 0 ? (confirmed * 3_600_000) / wall : null,
+    });
+    for (const slice of Object.values(byObjective)) {
+      const rates = rate(
+        slice.confirmed,
+        slice.noncachedInputTokens,
+        slice.unavailableInputRuns,
+        slice.wallTimeMs,
+      );
+      slice.confirmedPerMillionInputTokens = rates.token;
+      slice.confirmedPerAgentWallHour = rates.wall;
+    }
+    const campaignRates = rate(
+      totals.confirmed,
+      noncachedInputTokens,
+      unavailableInputRuns,
+      wallTimeMs,
+    );
     const outcomesByKind: Record<string, number> = Object.create(
       null,
     ) as Record<string, number>;
@@ -1018,12 +1214,18 @@ export class Ledger {
       knownCostUsd,
       unpricedRuns,
       wallTimeMs,
+      noncachedInputTokens,
+      unavailableInputRuns,
+      confirmedPerMillionInputTokens: campaignRates.token,
+      confirmedPerAgentWallHour: campaignRates.wall,
+      verificationAttempts: { ...verificationAttempts },
       ...totals,
       inScopeByProgramme: { ...inScopeByProgramme },
       outcomesByKind,
       rewardUsd,
       byCategory,
       byArm: { ...byArm },
+      byObjective: { ...byObjective },
     };
   }
 }
