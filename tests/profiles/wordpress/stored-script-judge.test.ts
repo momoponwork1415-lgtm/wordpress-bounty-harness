@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { WordPressStoredScriptObservation } from "../../../src/profiles/wordpress/lab/index.js";
+import type {
+  WordPressStoredScriptObservation,
+  WordPressVictimRoute,
+} from "../../../src/profiles/wordpress/lab/index.js";
 import { judgeOnce, quietLab, route } from "./judge-fixture.js";
 
 const browserRoute = {
@@ -11,18 +14,23 @@ const browserRoute = {
   ],
 };
 
-async function judge(observation: WordPressStoredScriptObservation) {
+async function judge(
+  observation: WordPressStoredScriptObservation,
+  victim?: WordPressVictimRoute,
+) {
   const visited: (readonly string[])[] = [];
+  const victims: (WordPressVictimRoute | undefined)[] = [];
   const result = await judgeOnce({
     impact: "stored-xss",
     lab: quietLab({
       async observeStoredScript(_lab, input) {
         visited.push(input.routePaths);
+        victims.push(input.victim);
         return observation;
       },
     }),
     files: {
-      "route.json": JSON.stringify(browserRoute),
+      "route.json": JSON.stringify({ ...browserRoute, victim }),
       "http.json": JSON.stringify({
         exchanges: [
           {
@@ -34,7 +42,7 @@ async function judge(observation: WordPressStoredScriptObservation) {
       "notes.md": "The Verifier saw an alert box.\n",
     },
   });
-  return { ...result, visited };
+  return { ...result, visited, victims };
 }
 
 describe("WordPress stored script judge", () => {
@@ -71,6 +79,37 @@ describe("WordPress stored script judge", () => {
         },
       });
     }
+  });
+
+  it("records a victim-role screen separately from site-wide firing", async () => {
+    const victim = {
+      role: "administrator" as const,
+      paths: ["/wp-admin/admin.php?page=fixture"],
+    };
+    const { observed, victims } = await judge(
+      { status: "observed", contexts: ["victim-route-page"] },
+      victim,
+    );
+    expect(victims).toEqual([victim]);
+    expect(observed).toMatchObject({
+      status: "observed",
+      conditions: {
+        firedContexts: "victim-route-page",
+        victimRole: "administrator",
+        siteWide: "no",
+      },
+    });
+  });
+
+  it("requires a Lab account for a declared customer victim", async () => {
+    const { observed } = await judge(
+      { status: "observed", contexts: ["victim-route-page"] },
+      { role: "customer", paths: ["/account"] },
+    );
+    expect(observed).toMatchObject({
+      status: "incomplete",
+      reason: "precondition",
+    });
   });
 
   it("does not fire when no beacon arrived, whatever the Verifier saw", async () => {

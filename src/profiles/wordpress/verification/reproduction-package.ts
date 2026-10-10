@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { ReproductionRenderer } from "../../../verification/reproduction-package.js";
+import { wordpressVictimRouteSchema } from "../lab/index.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const path = z
@@ -45,6 +46,7 @@ const routeSchema = z.strictObject({
   defaultSettings: z.boolean(),
   configurationChanges: z.array(z.string().min(1).max(500)).max(30),
   steps: z.array(wordpressReproductionStepSchema).min(1).max(30),
+  victim: wordpressVictimRouteSchema.optional(),
   evidence: z
     .array(
       z.strictObject({
@@ -117,6 +119,11 @@ export const wordpressReproductionRenderer: ReproductionRenderer<WordPressRecons
         `Configuration changes: ${route.configurationChanges.length ? route.configurationChanges.join("; ") : "none"}`,
         `Attacker role: ${route.role}`,
         `Lab account: ${route.account}`,
+        ...(route.victim === undefined
+          ? []
+          : [
+              `Victim observation: ${route.victim.role} opens ${route.victim.paths.join(", ")}`,
+            ]),
         "",
         "Use a fresh Lab with the reconstruction data. Set WBH_BASE_URL to its HTTP endpoint. Use only this route's remote HTTP and browser actions.",
         ...(route.role === "unauthenticated"

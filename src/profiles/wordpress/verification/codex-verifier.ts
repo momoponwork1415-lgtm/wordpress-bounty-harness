@@ -23,7 +23,11 @@ import {
   readWordPressFinding,
   type WordPressFinding,
 } from "../discovery/finding.js";
-import type { WordPressLab, WordPressLabHandle } from "../lab/index.js";
+import {
+  wordpressVictimRouteSchema,
+  type WordPressLab,
+  type WordPressLabHandle,
+} from "../lab/index.js";
 import { nextWordPressScenario } from "../lab/scenarios.js";
 import { loadWordPressVerifierPrompt } from "../prompts/index.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
@@ -56,11 +60,13 @@ const routeSchema = z.looseObject({
   role: z.enum(["unauthenticated", "subscriber", "customer"]),
   defaultSettings: z.boolean(),
   steps: z.unknown().optional(),
+  victim: wordpressVictimRouteSchema.optional(),
 });
 const referenceRouteSchema = z.looseObject({
   role: z.enum(["unauthenticated", "subscriber", "customer"]),
   defaultSettings: z.boolean(),
   steps: z.array(wordpressReproductionStepSchema).min(1).max(30),
+  victim: wordpressVictimRouteSchema.optional(),
 });
 const recordedRequestSchema = z.looseObject({
   method: z.enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]),
@@ -365,6 +371,9 @@ export class CodexVerifier implements Verifier<
               role: routeReference.data.role,
               defaultSettings: routeReference.data.defaultSettings,
               steps: routeReference.data.steps,
+              ...(routeReference.data.victim === undefined
+                ? {}
+                : { victim: routeReference.data.victim }),
             }),
           ]
         : []),
@@ -548,6 +557,7 @@ export class CodexVerifier implements Verifier<
           defaultSettings: parsed.defaultSettings,
           configurationChanges: changes,
           steps,
+          ...(parsed.victim === undefined ? {} : { victim: parsed.victim }),
         });
       } catch {
         return {

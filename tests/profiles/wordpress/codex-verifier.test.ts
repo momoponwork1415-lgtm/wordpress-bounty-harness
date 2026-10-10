@@ -457,7 +457,7 @@ describe("CodexVerifier.attempt", () => {
     expect(event?.type).toBe("verifier-run-finished");
     if (event?.type !== "verifier-run-finished") return;
     expect(event.promptDigest).toBe(
-      "sha256:ddff21a73b534fd4c775163195f838e428124cf481fedad8ae9f3948dd1acd1d",
+      "sha256:f548a5a3121fc8eb1d761042577944c3fbf5899bd481884ed690753cf3400d58",
     );
     const storedReceipt = await f.store.readFile(
       event.receiptDigest,
@@ -480,6 +480,10 @@ describe("CodexVerifier.attempt", () => {
       role: "subscriber",
       defaultSettings: true,
       steps: ["GET /synthetic", "HEAD /synthetic"],
+      victim: {
+        role: "administrator",
+        paths: ["/wp-admin/admin.php?page=fixture"],
+      },
     };
     const f = await fixture([
       {
@@ -517,6 +521,10 @@ describe("CodexVerifier.attempt", () => {
         account: "subscriber",
         defaultSettings: true,
         configurationChanges: [],
+        victim: {
+          role: "administrator",
+          paths: ["/wp-admin/admin.php?page=fixture"],
+        },
         steps: [
           {
             kind: "http",
@@ -550,6 +558,30 @@ describe("CodexVerifier.attempt", () => {
           role: "subscriber",
           defaultSettings: true,
           steps: ["GET /path"],
+        }),
+      },
+    ]);
+    expect(
+      await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+    ).toMatchObject({ status: "incomplete", reason: "recipe" });
+  });
+
+  it("rejects a victim path that could leave the Lab origin", async () => {
+    const f = await fixture([
+      {
+        "http.json": JSON.stringify({
+          exchanges: [
+            {
+              request: { method: "GET", path: "/synthetic" },
+              response: { body: "ordinary" },
+            },
+          ],
+        }),
+        "steps.md": "Synthetic steps",
+        "route.json": JSON.stringify({
+          role: "subscriber",
+          defaultSettings: true,
+          victim: { role: "administrator", paths: ["//outside.invalid/"] },
         }),
       },
     ]);

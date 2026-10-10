@@ -63,6 +63,10 @@ const route = {
   account: "lab-subscriber",
   defaultSettings: true,
   configurationChanges: [],
+  victim: {
+    role: "administrator",
+    paths: ["/wp-admin/admin.php?page=fixture"],
+  },
   steps: [
     {
       kind: "http",
@@ -113,6 +117,9 @@ it("publishes a confirmed judge route to Private Evidence and opens it for revie
   expect(opened.manual).toContain("GET /demo?case=1");
   expect(opened.manual).toContain("subscriber");
   expect(opened.manual).toContain("Default settings: yes");
+  expect(opened.manual).toContain(
+    "Victim observation: administrator opens /wp-admin/admin.php?page=fixture",
+  );
   expect(opened.script).toContain("import requests");
   expect(opened.script).toContain("/demo?case=1");
   expect(opened.reconstruction).toMatchObject({
