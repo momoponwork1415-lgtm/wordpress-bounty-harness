@@ -155,7 +155,12 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
   }),
   event({
     type: z.literal("discovery-concluded"),
-    stoppedBy: z.enum(["no-new-finding", "max-runs", "plans-exhausted"]),
+    stoppedBy: z.enum([
+      "no-new-finding",
+      "output-boundary",
+      "max-runs",
+      "plans-exhausted",
+    ]),
   }),
   /** The campaign stopped early; rerunning it with the same id resumes it. */
   event({
@@ -178,6 +183,28 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     candidateKind: z.enum(["finding", "lead"]),
     candidateIndex: z.number().int().nonnegative(),
     reason: z.enum(["schema", "identity"]),
+  }),
+  event({
+    type: z.literal("candidate-normalized"),
+    runId: id,
+    candidateKind: z.enum(["finding", "lead"]),
+    candidateIndex: z.number().int().nonnegative(),
+    changes: z.array(
+      z.strictObject({
+        path: z.string().max(256),
+        operation: id,
+      }),
+    ),
+  }),
+  event({
+    type: z.literal("candidate-held"),
+    runId: id,
+    candidateKind: z.enum(["finding", "lead"]),
+    candidateIndex: z.number().int().nonnegative(),
+    issuePaths: z.array(z.string().max(256)),
+    impact: id.optional(),
+    primitive: id.optional(),
+    missingEdge: id.optional(),
   }),
   event({
     type: z.literal("finding-recorded"),
@@ -355,6 +382,8 @@ const querySchema = z.strictObject({
       "campaign-stopped",
       "target-skipped",
       "candidate-rejected",
+      "candidate-normalized",
+      "candidate-held",
       "finding-recorded",
       "lead-recorded",
       "child-report-recovered",

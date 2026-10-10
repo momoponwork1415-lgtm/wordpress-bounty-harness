@@ -49,6 +49,10 @@ import {
   readWordPressFinding,
   type WordPressFinding,
 } from "../profiles/wordpress/discovery/finding.js";
+import {
+  normalizeWordPressCandidate,
+  classifyWordPressCandidate,
+} from "../profiles/wordpress/discovery/normalize-candidate.js";
 import type {
   WordPressLab,
   WordPressLabHandle,
@@ -647,6 +651,8 @@ export function createWordPressCliProfile(options: {
               executor: boundaries.executor,
               attachments: boundaries.attachments,
               admitFinding: admitWordPressFinding,
+              normalizeCandidate: normalizeWordPressCandidate,
+              classifyCandidate: classifyWordPressCandidate,
               admitLead: admitWordPressLead,
               leadSignature: (lead: AdmittedLead) =>
                 wordPressLeadSignature(readWordPressLead(lead)),

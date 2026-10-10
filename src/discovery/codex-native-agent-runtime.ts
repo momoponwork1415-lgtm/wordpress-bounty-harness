@@ -52,6 +52,41 @@ const childReportSchema = z.strictObject({
   examined: childCoverageSchema,
   unexamined: childCoverageSchema,
 });
+const candidateReportSchema = z.object({
+  findings: z.array(z.unknown()).default([]),
+  leads: z.array(z.unknown()).default([]),
+  examined: childCoverageSchema.default(""),
+  unexamined: childCoverageSchema.default(""),
+});
+function extractCandidateReport(message: string) {
+  const value = JSON.parse(message) as unknown;
+  const record = object(value);
+  if (
+    record === undefined ||
+    (!Array.isArray(record.findings) && !Array.isArray(record.leads))
+  )
+    throw new Error("Final message has no candidate arrays");
+  return candidateReportSchema.parse(value);
+}
+/** Candidate extraction is independent of transcript event admission. */
+function extractRootCandidateReport(stdout: string) {
+  let message: string | undefined;
+  for (const line of stdout.split("\n")) {
+    try {
+      const event = object(JSON.parse(line) as unknown);
+      const item = object(event?.item);
+      if (
+        event?.type === "item.completed" &&
+        item?.type === "agent_message" &&
+        typeof item.text === "string"
+      )
+        message = item.text;
+    } catch {
+      // A malformed event does not erase a later final message.
+    }
+  }
+  return message === undefined ? undefined : extractCandidateReport(message);
+}
 function childClaim(value: unknown): unknown {
   if (typeof value !== "string") return value;
   try {
@@ -401,8 +436,8 @@ function decodeChildRollout(
 
 function parseChildFinalMessage(
   message: string,
-): z.infer<typeof childReportSchema> {
-  return childReportSchema.parse(JSON.parse(message) as unknown);
+): z.infer<typeof candidateReportSchema> {
+  return extractCandidateReport(message);
 }
 
 /** Reinterpret an archived child report only when its lineage and runtime match the receipt. */
@@ -796,6 +831,7 @@ export class CodexNativeAgentRuntime {
       grantReceiptDigest?: string,
       providerLimit?: "rate-limit" | "quota",
       reasonDetail?: string,
+      attachment?: ProviderAttachmentRef,
     ): DiscoveryTransportResult => ({
       receipt: createNativeRunReceipt({
         ...run,
@@ -813,7 +849,11 @@ export class CodexNativeAgentRuntime {
         ...(rootUsage === undefined ? {} : { usage: rootUsage }),
         ...(rootObserved === undefined ? {} : { observed: rootObserved }),
         ...(brokerMetrics === undefined ? {} : { brokerMetrics }),
+        ...(attachment === undefined
+          ? {}
+          : { reportArtifactDigest: attachment.digest }),
       }),
+      ...(attachment === undefined ? {} : { attachment }),
       ...(cooperative ? { agentRuns } : {}),
     });
     if (
@@ -1090,13 +1130,7 @@ export class CodexNativeAgentRuntime {
             const report = parseChildFinalMessage(child.finalMessage ?? "");
             attachment = await this.attachments.put(
               "findings",
-              Buffer.from(
-                canonicalJson({
-                  ...report,
-                  findings: report.findings.map(childClaim),
-                  leads: report.leads.map(childClaim),
-                }),
-              ),
+              Buffer.from(canonicalJson(report)),
             );
           } catch {
             reason = "schema";
@@ -1187,19 +1221,46 @@ export class CodexNativeAgentRuntime {
         undefined,
         result.failureKind ?? `cli-exit:${result.exitCode}`,
       );
-    if (decoded === undefined || "reasonDetail" in decoded)
+    if (decoded === undefined || "reasonDetail" in decoded) {
+      if (run.outputKind === "verification")
+        return incomplete(
+          "schema",
+          result.completedAt,
+          granted.receipt.digest,
+          undefined,
+          decoded?.reasonDetail ?? "missing-transcript",
+        );
+      let attachment: ProviderAttachmentRef | undefined;
+      try {
+        const report = extractRootCandidateReport(result.stdout);
+        if (report !== undefined)
+          attachment = await this.attachments.put(
+            "findings",
+            Buffer.from(canonicalJson(report)),
+          );
+      } catch {
+        // Keep the original transcript failure when no candidate report can be extracted.
+      }
       return incomplete(
         "schema",
         result.completedAt,
         granted.receipt.digest,
         undefined,
         decoded?.reasonDetail ?? "missing-transcript",
+        attachment,
       );
+    }
     let attachment: ProviderAttachmentRef;
     try {
       attachment = await this.attachments.put(
         run.outputKind === "verification" ? "verification" : "findings",
-        Buffer.from(canonicalJson(decoded.report)),
+        Buffer.from(
+          canonicalJson(
+            run.outputKind === "verification"
+              ? decoded.report
+              : (extractRootCandidateReport(result.stdout) ?? decoded.report),
+          ),
+        ),
       );
     } catch {
       return incomplete("evidence", result.completedAt, granted.receipt.digest);
