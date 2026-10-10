@@ -48,12 +48,14 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 - エージェントのsandboxには、grant tokenとダミーaccountだけでできた使い捨ての `auth.json`、そのCA、brokerのIPだけが入る。本物のaccess tokenとaccount IDはbrokerだけが持ち、refresh tokenはbrokerにも渡さない。
 - brokerは `responses` のPOSTだけを、bindしたmodel・件数・大きさ・期限の範囲で `chatgpt.com` へ転送する。workspace discoveryはbrokerが自分で答え、それ以外のendpoint（plugins、analyticsなど）は403にする。
+- Root＋3 Trialのbroker上限は1,600 provider要求、単独Trialは100要求。90分のwall上限と別に記録し、上限到達は `incomplete(policy: broker-request-cap)` として扱う。30分探索指示の実測に先立ち、400要求では足りない可能性があったためRoot＋3の上限を拡張した。
+- provider要求本文の上限はRoot＋3で8 MiB、単独Trialで1 MiB。長い協調探索で1 MiBを超えた実測を受けて拡張した。413応答は `incomplete(policy: broker-request-bytes-cap)` として記録し、探索0件として数えない。
 - tokenの更新はしない。preflightが「1時間以内に失効」を出したら、ホストで `codex login` をやり直す。
 - APIキー（`host-private-bearer`）の経路も残っている。
 
 `campaign run` は無人で回る。1対象あたりの Trial は、選定のrun予算（既定20、High Threat面は40）と設定の上限（既定6）の小さい方まで。新規 Finding も Lead もない Trial が続いたら（既定3回）止まる。各 Finding は別コンテナの Verifier と判定器を通り、`runtime-confirmed` / `contradicted` / `incomplete` として台帳に入る。
 
-既定promptは `short-objective-managed-v3`。比較armの `wp2shell-bounty-v1` は優先Findingがない場合にRootへ30分以上と複数waveを指示するが、現行Harnessは下限を強制しない。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。版を明示した設定はその版で再現できる。Trial数には対象ごとの上限があり、日次上限の設定はない。provider limitで停止したcampaignは自動retryせず、同じIDで再開する。
+既定promptは `short-objective-managed-v4`。比較armの `wp2shell-bounty-v2` は優先Findingがない場合にRootへ30分以上と複数waveを指示するが、現行Harnessは下限を強制しない。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。版を明示した設定はその版で再現できる。Trial数には対象ごとの上限があり、日次上限の設定はない。provider limitで停止したcampaignは自動retryせず、同じIDで再開する。
 
 - **同時run数**: campaign設定の `resources` で決める。
   - 既定は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。`stopRules.maxRuns` は Trial 上限（既定 6）、`noFindingRuns` は新規発見のない Trial の連続数（既定 3）、探索 run の wall time は既定 90 分。
@@ -184,7 +186,7 @@ harness eval rubric --file <path>                                 # 私的な盲
 ```
 
 - **本番A/B**: 同じ対象の独立Trialへ `ablation.axes` で `history`、`prompt`、`continuation` をopt-in割当する。どのarmが見つけても提出できる。旧 `{"axis":"history","armBFraction":0.5}` も読める。
-  - 既定は `short-objective-managed-v3` と継続なし。`prompt` 軸のarm bは `armBPromptId` で版付きpromptを指定し、`continuation` 軸のarm bは `continuation` ブロックの上限内で、自分のLeadだけを1 hop継続する。割当とdigestは台帳へ残る。
+  - 既定は `short-objective-managed-v4` と継続なし。`prompt` 軸のarm bは `armBPromptId` で版付きpromptを指定し、`continuation` 軸のarm bは `continuation` ブロックの上限内で、自分のLeadだけを1 hop継続する。割当とdigestは台帳へ残る。
   - `eval compare --axis` の分母はLab HTTP到達 `ok` のcompleted探索Trial。継続runを別Trialに数えず、provider失敗も分母に入れない。区間が重なれば「判定不能」と出す。
   - #73のLuna開発セットでは公開2事例に対して全cellでsource候補0/3だった。当時の事前登録の規則で短い目的promptを既定に残したが、優劣の証明ではない。失敗Trialの補充は元の12試行と分けて記録した。150分対照も実wallは設定上限より短かった。現在の既定と比較方針はADR 0017に従う。
   - 履歴を渡せるのは、安定版の公開日時（WordPress.orgの最終更新）より前の公開記録だけ。版を固定した対象やmirrorが使えない対象では、全runがarm aになる。

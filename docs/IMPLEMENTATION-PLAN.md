@@ -25,7 +25,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | Snapshot / Lab | source digest、WordPress core pack、gVisor Lab、低権限アカウント、RO DB、canary、HTTP捕捉proxyがあり、TranslatePress実機判定を通過した。pilotでは3対象を供給できた | 別のpluginでLab供給に失敗した原因を切り分ける | 再利用 |
 | Discovery | Root＋最大3子を実機で起動し、子ごとのsource読取・wall・usage・成果を台帳へ残す。3対象のpilotは各1 Trialを完了した | 子reportの配列schemaを修正済み。残るRoot未許容eventを診断する | 実測済み |
-| Prompt / 出力 | pilotは `short-objective-managed-v2`、現行既定はXSSの対象範囲を修正した `short-objective-managed-v3`。ADR 0017でWP2Shell式の報奨prompt `wp2shell-bounty-v1` を比較armとして追加した | 同条件のTrialで両promptのXSS再発見、ATO再発見、coverage、wall、出力の安定性を測る | 旧runと区別して記録 |
+| Prompt / 出力 | pilotは `short-objective-managed-v2`、現行既定はXSSの対象範囲と影響優先順位を修正した `short-objective-managed-v4`。ADR 0017でWP2Shell式の報奨prompt `wp2shell-bounty-v2` を比較armとして追加した | 同条件のTrialで両promptのXSS再発見、ATO再発見、coverage、wall、出力の安定性を測る | 旧runと区別して記録 |
 | Verification | TranslatePressのFinding 2件を独立Labでnonce確認し、修正版の同経路を `contradicted` とした。pilotのFinding 2件は `incomplete(no-judge)` | 根拠がある候補に限り安全なnonce判定器を追加する。確認後に最新版の再検証と人間の手動再現へ進む | 実機通過 |
 | Selection | 新鮮なWordfence履歴から低権限・高影響候補を抽出し、WordPress.orgのactive install数をGit外DBへ観測日時付きで保存する。1万件以上・最新版・scopeを実行時に再検査し、履歴件数をscoreに記録する | pilot後に選定実績と既知重複から順位を調整する | 最小方針を実装 |
 | 重複照合 | Wordfenceローカルmirrorの候補検索はある。更新は旧リポジトリのscriptに依存し、staleを未重複と扱わない | 検証後にfeed更新を試し、Wordfenceに加えてPatchstack / WPScanの公開情報を照合する。完全一致の自動断定はしない | 提出前の必須ゲート |

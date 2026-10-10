@@ -23,7 +23,7 @@
 
 ## 探索promptの規則（SPEC.md 第6節）
 
-- 既定はpilotで使ったv2からXSSのサイト全体制限を除いた `short-objective-managed-v3`。`wp2shell-bounty-v1` はADR 0017の比較armとして使う。どちらも脆弱性が必ずあるという前提や固定された攻撃経路は与えない。
+- 既定はpilotで使ったv2からWordfenceのXSS対象範囲と影響優先順位を修正した `short-objective-managed-v4`。`wp2shell-bounty-v2` はADR 0017の比較armとして使う。どちらも脆弱性が必ずあるという前提や固定された攻撃経路は与えない。
 - 主経路は Root＋最大3 subagent の協調Trial（ADR 0016）。人数と隔離はHarnessが管理し、分担と仮説はRootが決める。
 - WP2Shell変種の30分下限はRootへの指示であり、Harnessが強制する保証ではない。run wallとcoverageを測り、守られない場合は継続境界を改善する。
 - prompt本文を変えたら版を上げ、旧版を残してdigest pinを更新する。旧promptは過去Trialの再現用として維持する。

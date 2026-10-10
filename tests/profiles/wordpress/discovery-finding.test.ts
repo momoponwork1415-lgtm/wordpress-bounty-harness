@@ -35,6 +35,11 @@ describe("WordPress Finding admission", () => {
             function: "g",
             line: 1,
           },
+          {
+            file: "../wordpress/wp-admin/admin-ajax.php",
+            function: "h",
+            line: 2,
+          },
         ],
         privateRecipeReference: "See the sealed report for Lab steps",
       },
@@ -43,6 +48,7 @@ describe("WordPress Finding admission", () => {
     expect(finding.sourceTrace.map((location) => location.file)).toEqual([
       "includes/example.php",
       "@wordpress/wp-includes/load.php",
+      "@wordpress/wp-admin/admin-ajax.php",
     ]);
     expect(readWordPressFinding(finding)).toEqual(finding);
     expect(() =>

@@ -9,8 +9,10 @@ export const WORDPRESS_DISCOVERY_PROMPT_IDS = [
   "short-objective-managed-v1",
   "short-objective-managed-v2",
   "short-objective-managed-v3",
+  "short-objective-managed-v4",
   "wp2shell-single-http-v2",
   "wp2shell-bounty-v1",
+  "wp2shell-bounty-v2",
 ] as const;
 
 export const WORDPRESS_DISCOVERY_ASSET_IDS = [
@@ -41,8 +43,10 @@ export async function loadWordPressDiscoveryAsset(
     case "short-objective-managed-v1":
     case "short-objective-managed-v2":
     case "short-objective-managed-v3":
+    case "short-objective-managed-v4":
     case "wp2shell-single-http-v2":
     case "wp2shell-bounty-v1":
+    case "wp2shell-bounty-v2":
     case "trust-boundary-v1":
     case "file-assignment-v1":
       fileName = `${id}.md`;

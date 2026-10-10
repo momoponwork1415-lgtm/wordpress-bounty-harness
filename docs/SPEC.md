@@ -52,7 +52,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、canaryの配置先（options、post meta、ファイル、canaryユーザー） |
 | 判定器集合 | 第7節の種別別判定器 |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
-| prompt雛形 | 既定 `short-objective-managed-v3` と比較用 `wp2shell-bounty-v1`、過去の版付きprompt、trust境界宣言の雛形。ADR 0017 |
+| prompt雛形 | 既定 `short-objective-managed-v4` と比較用 `wp2shell-bounty-v2`、過去の版付きprompt、trust境界宣言の雛形。ADR 0017 |
 | source補助 | 保存先のwrite / readをつなぐ索引と登録入口。Rootと子が参照できるが、固定した役割分担の命令にはしない |
 | Lead型 | sourceに根拠があり、影響までの辺が1つ足りないprimitiveの分類と記録 |
 | 評価対象の表現 | 開発対象のslug、版、修正版、影響分類。正解表の手入力は初期受入条件にしない |
@@ -79,7 +79,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 - 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
 - 対象の公開履歴: ローカルWordfence履歴DBから、snapshotの版より前（評価runではheld-outの公開日より前）に公開された対象プラグインの記録を抽出して渡す。内容は種別、影響版、修正版、公開日、公開記録のタイトル、修正版との差分で変わったファイルの一覧まで。PoC・payload・再現手順は含めない。runの一部にだけ渡す分担にでき、渡した・渡さないを `CampaignInput` に記録する（ADR 0012）。
-- 入力: 版とdigestを記録した `short-objective-managed-v3`（既定）または `wp2shell-bounty-v1`（比較用、ADR 0017）、人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、参照用の保存先索引、Lab HTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB account。どちらのpromptでも分担する具体的な問いはRootが決める。WP2Shell変種は多様な仮説の並行探索、複数wave、反証と連鎖の統合もRootへ求める。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
+- 入力: 版とdigestを記録した `short-objective-managed-v4`（既定）または `wp2shell-bounty-v2`（比較用、ADR 0017）、人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、参照用の保存先索引、Lab HTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB account。どちらのpromptでも分担する具体的な問いはRootが決める。WP2Shell変種は多様な仮説の並行探索、複数wave、反証と連鎖の統合もRootへ求める。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
 - 許可する操作: 固定sourceの読み取り、LabへのHTTP、Lab DBのRO accountによる読み取り。探索runにcanaryは渡さず、canaryの発行と確認は検証段階のHarnessが行う。外向き通信は認証ブローカー経由のprovider APIだけ。
 - 構成: 1 TrialにRoot 1つと最大3つのsubagentを置き、Rootが調べる問いと分担を決める。Harnessは人数上限、隔離、実行時間、証拠保存、停止を管理する。子の有効なFindingとLeadは個別にPrivate Evidenceへ保存し、Rootの最終JSONの整形失敗で消さない。
 - 出力: `Finding[]`（0件可）、`Lead[]`（0件可）、調べた範囲・調べなかった範囲の短い記述。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。

@@ -423,7 +423,7 @@ describe("Codex native agent runtime", () => {
         },
       });
       expect(result.receipt.terminal).toBe("completed");
-      expect(maxRequests).toBe(400);
+      expect(maxRequests).toBe(1600);
       expect(result.receipt.subagent).toEqual({
         modelId: "gpt-6-sol",
         effort: "high",
@@ -765,6 +765,17 @@ describe("Codex native agent runtime", () => {
         });
         expect(receipt.providerLimit).toBe(providerLimit);
       }
+      expect(
+        (
+          await failed(
+            'unexpected status 413 Payload Too Large: {"error":{"reason":"request-limit-exceeded"}}',
+          )
+        ).receipt,
+      ).toMatchObject({
+        terminal: "incomplete",
+        reason: "policy",
+        reasonDetail: "broker-request-bytes-cap",
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -834,7 +845,7 @@ describe("Codex native agent runtime", () => {
       });
       const unadmitted = new CodexNativeAgentRuntime(
         sandbox(
-          transcript.replace('"type":"agent_message"', '"type":"file_change"'),
+          transcript.replace('"type":"agent_message"', '"type":"unknown_tool"'),
           [],
         ),
         broker(),
@@ -843,8 +854,40 @@ describe("Codex native agent runtime", () => {
         () => new Date(now),
       );
       expect((await unadmitted.execute(run)).receipt.reasonDetail).toBe(
-        "unadmitted-item-type:file_change",
+        "unadmitted-item-type:unknown_tool",
       );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a completed report when the agent writes disposable scratch notes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
+    try {
+      const events = transcript.split("\n");
+      const withScratchNote = [
+        ...events.slice(0, 2),
+        JSON.stringify({
+          type: "item.completed",
+          item: {
+            type: "file_change",
+            changes: [{ path: "/tmp/approach-registry.md", kind: "add" }],
+            status: "completed",
+          },
+        }),
+        ...events.slice(2),
+      ].join("\n");
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(withScratchNote, []),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      expect((await runtime.execute(run)).receipt).toMatchObject({
+        terminal: "completed",
+        reportArtifactDigest: expect.stringMatching(/^sha256:/),
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
