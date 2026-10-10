@@ -189,6 +189,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     runId: id,
     candidateKind: z.enum(["finding", "lead"]),
     candidateIndex: z.number().int().nonnegative(),
+    parserVersion: id.optional(),
     changes: z.array(
       z.strictObject({
         path: z.string().max(256),
@@ -201,6 +202,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     runId: id,
     candidateKind: z.enum(["finding", "lead"]),
     candidateIndex: z.number().int().nonnegative(),
+    parserVersion: id.optional(),
     issuePaths: z.array(z.string().max(256)),
     impact: id.optional(),
     primitive: id.optional(),
@@ -230,6 +232,13 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
   /** A schema-only child failure was reinterpreted from its immutable private rollout. */
   event({
     type: z.literal("child-report-recovered"),
+    runId: id,
+    sourceDiagnosticDigest: digest,
+    reportArtifactDigest: digest,
+    parserVersion: id,
+  }),
+  event({
+    type: z.literal("discovery-report-recovered"),
     runId: id,
     sourceDiagnosticDigest: digest,
     reportArtifactDigest: digest,
@@ -387,6 +396,7 @@ const querySchema = z.strictObject({
       "finding-recorded",
       "lead-recorded",
       "child-report-recovered",
+      "discovery-report-recovered",
       "verifier-run-finished",
       "verification-finished",
       "review-decided",
