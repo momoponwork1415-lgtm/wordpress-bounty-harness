@@ -2,12 +2,18 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
+
+import { wordpressFindingClaimSchema } from "../../../src/profiles/wordpress/discovery/finding.js";
+import { wordpressLeadClaimSchema } from "../../../src/profiles/wordpress/discovery/lead.js";
+import { wordPressDiscoveryOutputContract } from "../../../src/profiles/wordpress/discovery/output-contract.js";
 
 import {
   loadWordPressDiscoveryAsset,
   loadWordPressVerifierPrompt,
   WORDPRESS_DISCOVERY_ASSET_IDS,
   WORDPRESS_DISCOVERY_PROMPT_IDS,
+  WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS,
 } from "../../../src/profiles/wordpress/prompts/index.js";
 
 describe("WordPress discovery prompt assets", () => {
@@ -35,6 +41,7 @@ describe("WordPress discovery prompt assets", () => {
       "short-objective-managed-v2",
       "short-objective-managed-v3",
       "short-objective-managed-v4",
+      "short-objective-managed-v5",
       "wp2shell-single-http-v2",
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
@@ -49,6 +56,7 @@ describe("WordPress discovery prompt assets", () => {
       "short-objective-managed-v2",
       "short-objective-managed-v3",
       "short-objective-managed-v4",
+      "short-objective-managed-v5",
       "wp2shell-single-http-v2",
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
@@ -77,6 +85,43 @@ describe("WordPress discovery prompt assets", () => {
       );
       expect(text).toContain("`labObservations`");
       expect(text).toContain("positive integer");
+    }
+  });
+
+  it("renders both complete claim schemas and normalization rules in one versioned contract", () => {
+    const contract = wordPressDiscoveryOutputContract();
+    const schemaLine = (label: string) =>
+      JSON.parse(contract.text.split(`${label} schema: `)[1]!.split("\n")[0]!);
+    expect(schemaLine("Finding")).toEqual(
+      z.toJSONSchema(wordpressFindingClaimSchema, { io: "output" }),
+    );
+    expect(schemaLine("Lead")).toEqual(
+      z.toJSONSchema(wordpressLeadClaimSchema, { io: "output" }),
+    );
+    expect(contract.text).toContain("single strings, not arrays");
+    expect(contract.text).toContain("`sourceTrace` is an array of objects");
+    expect(contract.text).toContain("`@wordpress/`");
+    expect(contract.text).toContain("Root's final report");
+    expect(contract.text).not.toMatch(
+      /checklist|investigate|start three|30 minutes/i,
+    );
+    expect(contract.digest).toBe(
+      "sha256:f4acb2d480739f0e89d2f01c14c7ae15b62c340a77ee01d34778f04821c07e41",
+    );
+  });
+
+  it("keeps the new objective assets free of the claim contract", async () => {
+    const pins = {
+      "short-objective-managed-v5":
+        "sha256:972ebe7d10a0173fef24a7603e01defcb17fd81e87810795f705737114f584b4",
+    } as const;
+    for (const id of WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS) {
+      const { text, digest } = await loadWordPressDiscoveryAsset(id);
+      expect(digest).toBe(pins[id]);
+      expect(text).toContain("A Lead is not a Finding.");
+      expect(text).not.toMatch(
+        /sourceTrace|labObservations|JSON string|Each Finding is an object/,
+      );
     }
   });
 
@@ -136,9 +181,11 @@ describe("WordPress discovery prompt assets", () => {
       expect(text).toContain("customer");
       expect(text).toContain("rce");
       expect(text).toContain("stored-xss");
-      expect(text).toContain("attackerPosition");
-      expect(text).toContain("configurationPrecondition");
-      expect(text).toContain("sourceTrace");
+      if (!WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id)) {
+        expect(text).toContain("attackerPosition");
+        expect(text).toContain("configurationPrecondition");
+        expect(text).toContain("sourceTrace");
+      }
       expect(text).not.toMatch(
         /\/flag|at least 6 hours|guaranteed vulnerability/i,
       );

@@ -53,6 +53,7 @@ import {
   normalizeWordPressCandidate,
   classifyWordPressCandidate,
 } from "../profiles/wordpress/discovery/normalize-candidate.js";
+import { wordPressDiscoveryOutputContract } from "../profiles/wordpress/discovery/output-contract.js";
 import type {
   WordPressLab,
   WordPressLabHandle,
@@ -61,6 +62,7 @@ import type {
 import { wordPressScenario } from "../profiles/wordpress/lab/scenarios.js";
 import {
   loadWordPressDiscoveryAsset,
+  WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS,
   WORDPRESS_DISCOVERY_PROMPT_IDS,
 } from "../profiles/wordpress/prompts/index.js";
 import {
@@ -426,6 +428,9 @@ export function createWordPressCliProfile(options: {
         promptAxis?.axis === "prompt"
           ? await loadWordPressDiscoveryAsset(promptAxis.armBPromptId)
           : undefined;
+      const outputContract = wordPressDiscoveryOutputContract();
+      const objectiveOnly = (id: string) =>
+        WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
       return runCampaignPipeline({
         campaignId: input.campaignId,
         ...(input.retryIncompleteVerifications === undefined
@@ -487,10 +492,13 @@ export function createWordPressCliProfile(options: {
             // Only low-privilege Lab accounts exist on the handle; nothing else is offered.
             const promptFor = (
               assignment: WordPressEntryAssignment | undefined,
-              objectiveText: string,
+              selectedObjective: typeof objective,
             ) =>
               [
-                objectiveText.trim(),
+                selectedObjective.text.trim(),
+                ...(objectiveOnly(selectedObjective.id)
+                  ? [outputContract.text]
+                  : []),
                 "## Trust boundary",
                 trustBoundary.text.trim(),
                 `## Programme Boundary (${config.programmeBoundary.version})`,
@@ -587,6 +595,12 @@ export function createWordPressCliProfile(options: {
                     configuration: {
                       promptVariant: selectedObjective.id,
                       promptDigest: selectedObjective.digest,
+                      ...(objectiveOnly(selectedObjective.id)
+                        ? {
+                            objectiveDigest: selectedObjective.digest,
+                            contractDigest: outputContract.digest,
+                          }
+                        : {}),
                       trustBoundaryVersion: trustBoundary.id,
                       sourcePack: {
                         dependency:
@@ -608,7 +622,7 @@ export function createWordPressCliProfile(options: {
                       runId: trialId,
                       targetSnapshotDigest: snapshot.digest,
                       profile: boundaries.runtimeProfile,
-                      prompt: promptFor(assignment, selectedObjective.text),
+                      prompt: promptFor(assignment, selectedObjective),
                       lab: {
                         endpoint: lab.endpoint,
                         networkName: lab.networkName,
