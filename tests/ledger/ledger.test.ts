@@ -70,6 +70,28 @@ async function evidence(store: PrivateArtifactStore): Promise<string> {
 }
 
 describe("Ledger public interface", () => {
+  it("reads discovery events written before upstream broker counters existed", async () => {
+    const { ledger } = await fixture();
+    await ledger.append({
+      ...common("run-with-legacy-broker-metrics"),
+      type: "discovery-run-finished",
+      runId: "run-1",
+      outcome: "failed",
+      costUsd: "unavailable",
+      wallTimeMs: 100,
+      brokerMetrics: {
+        forwardedRequests: 3,
+        requestLimitExceeded: 0,
+        unauthorizedRequests: 0,
+      },
+    });
+    expect(
+      ledger.read({ type: "discovery-run-finished" })[0]?.event,
+    ).toMatchObject({
+      brokerMetrics: { forwardedRequests: 3 },
+    });
+  });
+
   it("keeps old snapshot events readable and records optional dependency digests", async () => {
     const { ledger } = await fixture();
     await ledger.append({
@@ -239,7 +261,7 @@ describe("Ledger public interface", () => {
     );
   });
 
-  it("admits a latest-version re-verification only against the finding's snapshot and a snapshot frozen in the campaign", async () => {
+  it("requires a new-snapshot Finding for a version comparison", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);
     await ledger.append({
@@ -271,7 +293,7 @@ describe("Ledger public interface", () => {
 
     await ledger.append(reverify("before-freeze"));
     expect(latest("before-freeze")).toMatchObject({
-      result: { status: "incomplete", reason: "precondition" },
+      result: { status: "incomplete", reason: "digest-mismatch" },
     });
     await ledger.append({
       ...common("latest-frozen", otherSnapshot),
@@ -286,8 +308,29 @@ describe("Ledger public interface", () => {
     expect(latest("on-latest")).toMatchObject({
       snapshotDigest: otherSnapshot,
       basis: { kind: "latest-version", findingSnapshotDigest: snapshot },
-      result: { status: "runtime-confirmed" },
+      result: { status: "incomplete", reason: "digest-mismatch" },
     });
+    expect(
+      await ledger.append({
+        ...common("finding-on-latest", otherSnapshot),
+        type: "finding-recorded",
+        findingId: "finding-2",
+        runId: "reverify-1",
+        category: "injection",
+        derivedFromFindingId: "finding-1",
+        derivationKind: "latest-version",
+      }),
+    ).toMatchObject({ status: "appended" });
+    await ledger.append({
+      ...reverify("derived-verification", otherSnapshot),
+      findingId: "finding-2",
+    });
+    expect(
+      ledger
+        .read({ findingId: "finding-2" })
+        .find((record) => record.event.identity === "derived-verification")
+        ?.event,
+    ).toMatchObject({ result: { status: "runtime-confirmed" } });
   });
 
   it("derives the complete campaign and category funnel without counting setup failures", async () => {

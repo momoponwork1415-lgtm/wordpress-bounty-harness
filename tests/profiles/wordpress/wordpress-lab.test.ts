@@ -27,6 +27,7 @@ afterEach(async () => {
 async function fixture(
   preflight: "ready" | "no-runsc" | "missing-image" = "ready",
   core?: { readonly version: string; readonly runningVersion: string },
+  pluginSlug = "example",
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-lab-"));
   directories.push(root);
@@ -95,7 +96,7 @@ async function fixture(
       resolve: async () => ({
         target: {
           kind: "plugin",
-          pluginSlug: "example",
+          pluginSlug,
           sourceDirectory,
           sourceTree,
         },
@@ -549,6 +550,31 @@ describe("WordPress gVisor Lab", () => {
       await lab.observeAccountRoles(provisioned.handle, "bad name;"),
     ).toEqual({ status: "unavailable" });
     expect(commands.length).toBe(before);
+  });
+
+  it("gives the administrator canary the configured published secondary locale", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "translatepress-multilingual",
+    );
+    const provisioned = await lab.provision(snapshot, {
+      ...setup,
+      translatePress: { administratorSecondaryLocale: "fr_FR" },
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    expect((await lab.seedCanaries(provisioned.handle)).status).toBe("seeded");
+    expect(
+      commands.some(
+        (command) =>
+          command.args.includes("eval") &&
+          command.args.some(
+            (arg) =>
+              arg.includes("wbh-canary-admin-fixed-nonce") &&
+              arg.includes('get_user_locale($admin->ID)!=="fr_FR"'),
+          ),
+      ),
+    ).toBe(true);
   });
 
   it("seeds a SQL canary row whose value appears nowhere else and reports whether the table changed", async () => {

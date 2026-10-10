@@ -39,7 +39,7 @@ async function fixture(
     readonly judge?: "observed" | "not-observed" | "throws";
     readonly teardown?: "removed" | "incomplete";
     readonly refute?: boolean;
-    /** Re-verify on another frozen snapshot of the same target. */
+    /** Attempt a comparison against another frozen snapshot. */
     readonly latestVersion?: boolean;
   } = {},
 ) {
@@ -290,21 +290,23 @@ describe("verification public interface", () => {
     expect(result).toMatchObject({ status: "incomplete", reason: "cleanup" });
   });
 
-  it("re-verifies the same finding on a newer frozen snapshot and records the basis", async () => {
-    const { result, ledger } = await fixture({
+  it("rejects a cross-snapshot verdict even when a version basis is declared", async () => {
+    const { result, ledger, calls } = await fixture({
       latestVersion: true,
       labSnapshotDigest: otherDigest,
     });
     expect(result).toMatchObject({
-      status: "runtime-confirmed",
-      judgeId: "synthetic-canary",
+      status: "incomplete",
+      reason: "digest-mismatch",
     });
+    expect(calls.verifier).toBe(0);
     expect(
       ledger.read({ findingId: "finding-1", type: "verification-finished" })[0]
         ?.event,
     ).toMatchObject({
       snapshotDigest: otherDigest,
       basis: { kind: "latest-version", findingSnapshotDigest: snapshotDigest },
+      result: { status: "incomplete", reason: "digest-mismatch" },
     });
   });
 

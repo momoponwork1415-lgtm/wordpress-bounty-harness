@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   agentRuntimeProfileDefinitionSchema,
   CodexNativeAgentRuntime,
+  CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   createProviderCredentialEgressBroker,
   defineAgentRuntimeProfile,
   GvisorCodexSandbox,
@@ -189,6 +190,9 @@ export async function createWordPressHostProfile(options: {
       scratchRootDirectory: directories.codexScratch,
       maxOutputBytes: 16 * 1024 * 1024,
       timeoutMs: config.runWallTimeMinutes * 60_000,
+      ...(runtimeProfile.subagent.modelId === "unavailable"
+        ? {}
+        : { memoryMiB: CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB }),
       clock: state.clock,
       ...(options.runDocker === undefined
         ? {}
@@ -313,7 +317,7 @@ export async function createWordPressHostProfile(options: {
 
     const frozen = new Map<string, Snapshot>();
     const verifier: Verifier<WordPressFinding, WordPressLabHandle> = {
-      async attempt({ finding, lab: handle }) {
+      async attempt({ finding, lab: handle, referenceRoute }) {
         const snapshot = frozen.get(handle.snapshotDigest);
         const source =
           snapshot === undefined
@@ -339,7 +343,11 @@ export async function createWordPressHostProfile(options: {
           ...(core === undefined ? {} : { dependencySource: core }),
           lab,
           clock: state.clock,
-        }).attempt({ finding, lab: handle });
+        }).attempt({
+          finding,
+          lab: handle,
+          ...(referenceRoute === undefined ? {} : { referenceRoute }),
+        });
       },
     };
 

@@ -20,14 +20,18 @@ export {
   agentRuntimeProfileDefinitionSchema,
   agentRuntimeProfileSchema,
   admitAgentRuntimeProfile,
+  admitCooperativeRuntimeProfile,
   codexModelCatalog,
   defineAgentRuntimeProfile,
   type AgentRuntimeProfile,
   type AgentRuntimeProfileAdmission,
+  type CooperativeRuntimeProfileAdmission,
   type AgentRuntimeProfileDefinition,
 } from "./agent-runtime-profile.js";
 export {
   CodexNativeAgentRuntime,
+  recoverChildReportFromRollout,
+  rootThreadIdFromRollout,
   type CodexSandbox,
   type CodexSandboxCommand,
   type CodexSandboxResult,
@@ -71,7 +75,10 @@ export {
   type ProviderAttachmentRef,
 } from "./provider-research-report.js";
 
-export { CODEX_SANDBOX_MEMORY_MIB } from "./codex-gvisor-sandbox.js";
+export {
+  CODEX_SANDBOX_MEMORY_MIB,
+  CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
+} from "./codex-gvisor-sandbox.js";
 export {
   EGRESS_BROKER_LEFTOVER_PATTERNS,
   EGRESS_BROKER_MEMORY_MIB,

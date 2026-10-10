@@ -321,6 +321,10 @@ JS,
         join(source, "second.php"),
         "<?php\n/*\nPlugin Name: Second\nVersion: 1.0.0\n*/\n",
       );
+      await writeFile(
+        join(source, "plugin.php"),
+        "<?php\n/*\nPlugin Name: Slug Named\nVersion: 2.0.0\n*/\n",
+      );
       const intake = openLocalDirectoryTargetIntake({
         storageDirectory: join(directory, "storage"),
       });

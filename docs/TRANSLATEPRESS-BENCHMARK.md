@@ -60,3 +60,9 @@ TP-SXの修正版はWordfence履歴の修正情報と公開archiveの版を実�
 計画した最大2 TrialでFindingが0でも、脆弱性が無いという結論にしない。sourceをほぼ読まず数分で終了したか、provider・schema・Labで失敗したか、十分読んで候補が無かったかを分ける。まず失敗した境界を直して同じ条件を再実行し、promptや対象数を同時に変えない。Leadがあれば欠けた一辺を次回の問いにできる。
 
 ゲート達成後はTranslatePressの追加採点を止めて本番へ進む。広域スクリーニング、pass@k、別prompt、別モデル、候補選定の詳細な予測モデルは、3対象の費用・歩留まりから具体的なボトルネックが分かった後に比較する。
+
+## 6. 2026-10-10の実測
+
+TP-SX 3.2.6ではsource候補は出たが、判定器に合う証明を得られず `incomplete` だったためゲートに数えなかった。次のTP-ATO 3.3.1の1協調Trialでは3件のFindingを保存し、Rootと子のアカウント乗っ取り候補2件をそれぞれ新しいgVisor Labのnonce判定器が `runtime-confirmed` とした。残る1件は `incomplete` として保持した。修正版3.3.2の別Snapshotで確認済み経路を再実行した負の対照は、証拠付きで `contradicted` となった。隔離・brokerの実機preflight、Snapshot・usage・停止記録も揃い、本番探索開始ゲートを満たした。
+
+この実測は公開済み事例での実行能力を示す。未知脆弱性の発見率は3対象pilotで別に観測する。HTTP本文、recipe、Lab認証情報と未公開の候補はGit外のPrivate Evidenceに置く。

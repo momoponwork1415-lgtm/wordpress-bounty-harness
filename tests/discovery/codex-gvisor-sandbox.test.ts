@@ -64,6 +64,18 @@ describe("gVisor Codex sandbox", () => {
             auth = JSON.parse(
               await readFile(join(codexHome, "auth.json"), "utf8"),
             );
+            const sessionDirectory = join(
+              codexHome,
+              "sessions",
+              "2026",
+              "10",
+              "08",
+            );
+            await mkdir(sessionDirectory, { recursive: true });
+            await writeFile(
+              join(sessionDirectory, "rollout-child.jsonl"),
+              '{"type":"session_meta","payload":{"id":"child"}}\n',
+            );
           }
           const output = args.includes("--version")
             ? "codex-cli 0.161.0\n"
@@ -98,7 +110,7 @@ describe("gVisor Codex sandbox", () => {
         },
         labHost: { name: "wordpress", ipv4: "172.20.0.2" },
       };
-      await sandbox.execute(command);
+      const result = await sandbox.execute(command);
       expect(run).toContain(`--add-host=${BROKER_TLS_HOSTNAME}:172.28.0.2`);
       expect(run).toContain(
         "--env=CODEX_CA_CERTIFICATE=/opt/codex-support/grant-ca.pem",
@@ -126,6 +138,9 @@ describe("gVisor Codex sandbox", () => {
           chatgpt_account_id: CHATGPT_PLACEHOLDER_ACCOUNT_ID,
         },
       });
+      expect(result.rollouts).toEqual([
+        '{"type":"session_meta","payload":{"id":"child"}}\n',
+      ]);
       // The login lives only for the run.
       await expect(stat(codexHome)).rejects.toThrow();
       await expect(
@@ -204,6 +219,9 @@ describe("gVisor Codex sandbox", () => {
       expect(calls.every(({ args }) => args.includes("--runtime=runsc"))).toBe(
         true,
       );
+      expect(calls.every(({ args }) => args.includes("--pids-limit=256"))).toBe(
+        true,
+      );
       expect(calls[0]?.args).toContain("--network=none");
       expect(calls[1]?.args).toContain("--network=none");
       expect(calls[2]?.args).toContain("--network=internal-run");
@@ -245,6 +263,7 @@ describe("gVisor Codex sandbox", () => {
         expect.stringMatching(
           /^--mount=type=bind,src=.+,dst=\/opt\/codex-support,readonly$/,
         ),
+        expect.stringMatching(/^--mount=type=bind,src=.+,dst=\/tmp\/codex$/),
       ]);
       expect(
         calls[2]?.args.filter((arg) => arg.startsWith("--network")),

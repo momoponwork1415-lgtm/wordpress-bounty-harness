@@ -56,8 +56,9 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     labId: id,
     trialId: id.optional(),
     trialOrdinal: z.number().int().nonnegative().optional(),
-    runKind: z.enum(["explore", "continue"]).optional(),
+    runKind: z.enum(["explore", "continue", "child"]).optional(),
     continuationOf: id.optional(),
+    parentRunId: id.optional(),
     history: z.union([
       z.strictObject({ mode: z.literal("none") }),
       z.strictObject({
@@ -74,6 +75,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         .strictObject({ dependency: z.enum(["mounted", "none"]) })
         .optional(),
       assignmentUnit: id,
+      agentPath: id.optional(),
       assignment: z
         .strictObject({
           partition: z.number().int().nonnegative(),
@@ -127,6 +129,18 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         dbQueries: z.number().int().nonnegative(),
       })
       .optional(),
+    brokerMetrics: z
+      .strictObject({
+        forwardedRequests: z.number().int().nonnegative(),
+        requestLimitExceeded: z.number().int().nonnegative(),
+        unauthorizedRequests: z.number().int().nonnegative(),
+        upstreamSuccess: z.number().int().nonnegative().optional(),
+        upstreamClientError: z.number().int().nonnegative().optional(),
+        upstreamServerError: z.number().int().nonnegative().optional(),
+        relayFailures: z.number().int().nonnegative().optional(),
+        responseLimitExceeded: z.number().int().nonnegative().optional(),
+      })
+      .optional(),
     sandboxExitCode: z.number().int().optional(),
     diagnosticArtifactDigest: digest.optional(),
     /** Provider-reported tokens; absent when the transport returned no receipt. */
@@ -146,8 +160,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
   /** The campaign stopped early; rerunning it with the same id resumes it. */
   event({
     type: z.literal("campaign-stopped"),
-    /** Keep the historical cap reason readable; new campaigns only emit provider-limit. */
-    reason: z.enum(["provider-limit", "daily-run-cap"]),
+    /** Keep the historical cap reason readable; an incomplete attempt remains resumable. */
+    reason: z.enum(["provider-limit", "incomplete", "daily-run-cap"]),
   }),
   /**
    * A target was left behind by an error. Before a snapshot exists, the
@@ -159,11 +173,23 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     stage: z.enum(["freeze", "discovery", "verification"]),
   }),
   event({
+    type: z.literal("candidate-rejected"),
+    runId: id,
+    candidateKind: z.enum(["finding", "lead"]),
+    candidateIndex: z.number().int().nonnegative(),
+    reason: z.enum(["schema", "identity"]),
+  }),
+  event({
     type: z.literal("finding-recorded"),
     findingId: id,
     runId: id,
     category: id,
     historyRecordId: id.optional(),
+    /** A fresh-snapshot hypothesis derived from an earlier Finding. */
+    derivedFromFindingId: id.optional(),
+    derivationKind: z
+      .enum(["latest-version", "fixed-version-control"])
+      .optional(),
   }),
   event({
     type: z.literal("lead-recorded"),
@@ -174,6 +200,14 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     primitive: id,
     storageKind: id,
   }),
+  /** A schema-only child failure was reinterpreted from its immutable private rollout. */
+  event({
+    type: z.literal("child-report-recovered"),
+    runId: id,
+    sourceDiagnosticDigest: digest,
+    reportArtifactDigest: digest,
+    parserVersion: id,
+  }),
   event({
     type: z.literal("verifier-run-finished"),
     findingId: id,
@@ -181,17 +215,17 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     promptDigest: digest,
     receiptDigest: digest,
     terminal: z.enum(["completed", "incomplete"]),
-    canaryIssued: z.enum(["execution", "script"]).optional(),
+    canaryIssued: z.enum(["execution", "script", "principal"]).optional(),
   }),
   event({
     type: z.literal("verification-finished"),
     verificationId: id,
     findingId: id,
     labSetupDigest: digest,
-    /** Present when the Finding was re-verified on a newer snapshot of its target. */
+    /** Present for a version comparison using a Finding bound to this snapshot. */
     basis: z
       .strictObject({
-        kind: z.literal("latest-version"),
+        kind: z.enum(["latest-version", "fixed-version"]),
         findingSnapshotDigest: digest,
       })
       .optional(),
@@ -320,8 +354,10 @@ const querySchema = z.strictObject({
       "discovery-concluded",
       "campaign-stopped",
       "target-skipped",
+      "candidate-rejected",
       "finding-recorded",
       "lead-recorded",
+      "child-report-recovered",
       "verifier-run-finished",
       "verification-finished",
       "review-decided",
@@ -485,6 +521,37 @@ export class Ledger {
       }
 
       if (parsed.type === "finding-recorded") {
+        if (
+          (parsed.derivedFromFindingId === undefined) !==
+          (parsed.derivationKind === undefined)
+        ) {
+          this.#db.exec("COMMIT");
+          return { status: "conflict" };
+        }
+        if (parsed.derivedFromFindingId !== undefined) {
+          const source = this.#db
+            .prepare(
+              "SELECT event_json FROM ledger_events WHERE campaign_id = ? AND event_type = 'finding-recorded' AND finding_id = ? ORDER BY sequence LIMIT 1",
+            )
+            .get(parsed.campaignId, parsed.derivedFromFindingId);
+          const origin =
+            source === undefined
+              ? null
+              : ledgerEventV1Schema.parse(
+                  JSON.parse(
+                    z.object({ event_json: z.string() }).parse(source)
+                      .event_json,
+                  ) as unknown,
+                );
+          if (
+            origin?.type !== "finding-recorded" ||
+            origin.snapshotDigest === parsed.snapshotDigest ||
+            parsed.historyRecordId !== undefined
+          ) {
+            this.#db.exec("COMMIT");
+            return { status: "conflict" };
+          }
+        }
         if (parsed.historyRecordId !== undefined) {
           const runRow = this.#db
             .prepare(
@@ -540,7 +607,7 @@ export class Ledger {
                     .event_json,
                 ) as unknown,
               );
-        // A latest-version basis must name the Finding's own snapshot and a snapshot frozen here.
+        // Every verdict must bind the Finding to this exact frozen snapshot.
         const latestFrozen =
           parsed.basis === undefined ||
           this.#db
@@ -558,8 +625,9 @@ export class Ledger {
             );
         if (
           findingEvent?.type !== "finding-recorded" ||
-          findingEvent.snapshotDigest !==
-            (parsed.basis?.findingSnapshotDigest ?? parsed.snapshotDigest)
+          findingEvent.snapshotDigest !== parsed.snapshotDigest ||
+          (parsed.basis !== undefined &&
+            parsed.basis.findingSnapshotDigest !== parsed.snapshotDigest)
         ) {
           recorded = {
             ...parsed,
@@ -580,7 +648,7 @@ export class Ledger {
               status: "incomplete",
               reason: "precondition",
               nextStep:
-                "Freeze the latest version in this campaign before re-verifying",
+                "Freeze the selected version in this campaign before re-verifying",
             },
           };
         } else if (!evidenceAvailable) {
@@ -728,6 +796,7 @@ export class Ledger {
     );
     const readyLabs = new Set<string>();
     const startedRuns = new Map<string, string>();
+    const runKinds = new Map<string, "explore" | "continue" | "child">();
     const trialByRun = new Map<string, string>();
     const runArms = new Map<string, string[]>();
     let knownCostUsd = 0;
@@ -758,6 +827,7 @@ export class Ledger {
           break;
         case "discovery-run-started":
           startedRuns.set(current.runId, current.labId);
+          runKinds.set(current.runId, current.runKind ?? "explore");
           trialByRun.set(current.runId, current.trialId ?? current.runId);
           if ((current.runKind ?? "explore") !== "explore") break;
           if (current.configuration.arms !== undefined) {
@@ -815,6 +885,7 @@ export class Ledger {
       null,
     ) as Record<string, number>;
     for (const finding of findings.values()) {
+      if (finding.derivationKind === "fixed-version-control") continue;
       const status = verifications.get(finding.findingId)?.result.status;
       if (
         status === undefined ||
@@ -833,6 +904,7 @@ export class Ledger {
       Counts
     >;
     for (const finding of findings.values()) {
+      if (finding.derivationKind === "fixed-version-control") continue;
       const category = (byCategory[finding.category] ??= emptyCounts());
       for (const count of [totals, category]) {
         count.raw++;
@@ -877,6 +949,7 @@ export class Ledger {
       for (const arm of arms)
         (byArm[arm] ??= { runs: 0, findings: 0, confirmed: 0 }).runs++;
     for (const finding of findings.values()) {
+      if (finding.derivationKind === "fixed-version-control") continue;
       for (const arm of runArms.get(
         trialByRun.get(finding.runId) ?? finding.runId,
       ) ?? []) {
@@ -890,7 +963,10 @@ export class Ledger {
       }
     }
     const discoveryAttempts = [...startedRuns.entries()].filter(
-      ([runId, labId]) => readyLabs.has(labId) && !setupFailedRuns.has(runId),
+      ([runId, labId]) =>
+        runKinds.get(runId) !== "child" &&
+        readyLabs.has(labId) &&
+        !setupFailedRuns.has(runId),
     ).length;
     return {
       campaignId: campaign,
