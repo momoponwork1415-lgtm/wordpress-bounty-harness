@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded for the default discovery route by 0025
 ---
 # Root＋最大3 subagent の縦断スライスを先に完成させる
 
@@ -8,6 +8,8 @@ status: accepted
 WordPress プラグインの探索は、固定した Target Snapshot ごとに Root 1つと最大3つの subagent を使う協調 Trial を主経路にする。Root は分担と統合を行うが、Harness は脆弱性探索の手順・checklist・固定した役割を prompt に書かない。既定 prompt は短い目的 prompt のまま版と digest を記録する。WP2Shell から採るのは協調の形であり、旧 prompt の「必ず脆弱性がある」「最低6時間」などの前提は持ち込まない。
 
 **更新:** promptの選択と比較方針はADR 0017で更新した。Root＋3の構成、隔離、独立検証の決定は維持する。
+
+**2026-10-11 更新:** [ADR 0025](0025-two-stage-discovery-with-harness-continuation.md) が主経路を単独 screening → 条件付き Root＋3 deep-dive に変更した。以下の「最初から Root＋3」の記述は旧縦断スライスの記録であり、Root＋最大3子、隔離、独立検証の規則は二段目で維持する。
 
 最初は人間が指定した公開済みTranslatePress 3.2.6を1協調Trialで調べる。独立確認と同一経路の修正版対照が通らなければ診断後に3.3.1を1協調Trialで調べる。どちらかでゲートを通したらベンチマークを止め、最小の自動選定で最新版3対象の本番探索を始める。レポートJSONの完全自動化や多数の評価caseを本番探索開始の条件にしない。実Findingの外部提出には最新版の独立確認、重複・scope照合、証拠、人間の手動Lab再現と承認を要する。詳細は [TranslatePressベンチマーク](../TRANSLATEPRESS-BENCHMARK.md)。pass@k、安価な広域スクリーニング、複数探索方式の切替は、本番の費用と歩留まりを観測してから判断する。スクリーニングを追加しても、陰性だけで Root Trial を止める規則は設けない。
 

@@ -1,10 +1,10 @@
 ---
 status: superseded
-superseded-by: 0016
+superseded-by: 0016, 0025
 ---
 # Leadの継続は同一Trial内の1 hopに限る
 
-この文書は旧単独Trialの履歴と互換読取のために残す。新しい主経路は [ADR 0016](0016-root-plus-three-first-vertical-slice.md)。
+この文書は旧単独Trialの履歴と互換読取のために残す。現在の主経路と Harness が持つ継続境界は [ADR 0025](0025-two-stage-discovery-with-harness-continuation.md) が定める。
 
 ## 決定
 

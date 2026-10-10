@@ -4,6 +4,8 @@ status: accepted
 
 # 検証 Lab の前提を profile の版付き通常機能シナリオにして Finding と照合する
 
+**2026-10-11 更新:** [ADR 0026](0026-generic-lab-scenarios-no-verifier-browser.md) が scenario catalogue の追加順を plugin 非依存の通常利用状態優先にし、被害者側の操作を Harness 所有の Lab 観測器へ限定した。以下の個別シナリオは当時の記録として残す。
+
 ## 決定
 
 対象プラグインの通常の利用状態を、profile が持つ版と digest 付きの「通常機能シナリオ」として定義し、探索 Lab と検証 Lab の setup はシナリオ ID を持つ。
