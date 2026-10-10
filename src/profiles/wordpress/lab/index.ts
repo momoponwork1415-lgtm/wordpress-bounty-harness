@@ -82,6 +82,9 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
     await page.fill("#user_login", user);
     await page.fill("#user_pass", process.env.WBH_LOGIN_PASSWORD ?? "");
     await Promise.all([page.waitForNavigation(), page.click("#wp-submit")]);
+    const cookies = await page.context().cookies(base);
+    if (!cookies.some((cookie) => cookie.name.startsWith("wordpress_logged_in_")))
+      throw new Error("Victim login failed");
   }
   await page.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
   await page.waitForTimeout(3000);
@@ -90,10 +93,15 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   console.error(error.message);
   process.exitCode = 1;
 });`;
-const visitPath = z
+export const wordpressVisitPathSchema = z
   .string()
   .max(2048)
-  .regex(/^\/(?!\/)[^\s\0]*$/);
+  .regex(/^\/(?!\/)[^\s\0\\]*$/);
+export const wordpressVictimRouteSchema = z.strictObject({
+  role: z.enum(["administrator", "subscriber", "customer", "unauthenticated"]),
+  paths: z.array(wordpressVisitPathSchema).min(1).max(5),
+});
+export type WordPressVictimRoute = z.infer<typeof wordpressVictimRouteSchema>;
 
 function privateIpv4(output: string): string {
   const address = output.trim();
@@ -220,7 +228,7 @@ export interface ScriptCanary {
 }
 
 export type WordPressScriptContext =
-  "front" | "admin-all" | "admin-partial" | "route-page";
+  "front" | "admin-all" | "admin-partial" | "route-page" | "victim-route-page";
 
 export type WordPressStoredScriptObservation =
   | {
@@ -320,7 +328,10 @@ export interface WordPressLab extends LabProvisioner<
    */
   observeStoredScript(
     handle: WordPressLabHandle,
-    input: { readonly routePaths: readonly string[] },
+    input: {
+      readonly routePaths: readonly string[];
+      readonly victim?: WordPressVictimRoute;
+    },
   ): Promise<WordPressStoredScriptObservation>;
   /** Names of watched options (canary and critical) that differ from the seeded baseline. */
   observeOptions(
@@ -1521,8 +1532,17 @@ export function openWordPressLab(options: {
       if (resource?.handle !== handle || receiverIp === undefined)
         return { status: "unavailable" };
       if (resource.scriptNonces.size === 0) return { status: "not-prepared" };
-      const routePaths = z.array(visitPath).max(5).safeParse(input.routePaths);
+      const routePaths = z
+        .array(wordpressVisitPathSchema)
+        .max(5)
+        .safeParse(input.routePaths);
       if (!routePaths.success) return { status: "unavailable" };
+      const victim =
+        input.victim === undefined
+          ? undefined
+          : wordpressVictimRouteSchema.safeParse(input.victim);
+      if (victim !== undefined && !victim.success)
+        return { status: "unavailable" };
       const issued = new Set(
         [...resource.scriptNonces].map((token) => `/b/${token}`),
       );
@@ -1535,7 +1555,18 @@ export function openWordPressLab(options: {
         if (log.exitCode !== 0) throw new Error("Beacon log unreadable");
         return log.stdout.split("\n").filter((line) => issued.has(line)).length;
       };
-      const visit = async (path: string, admin: boolean): Promise<boolean> => {
+      const visit = async (
+        path: string,
+        role: WordPressVictimRoute["role"],
+      ): Promise<boolean> => {
+        const account =
+          role === "administrator"
+            ? { username: "harness-admin", password: resource.adminPassword }
+            : role === "unauthenticated"
+              ? undefined
+              : handle.attackerAccounts[role];
+        if (role !== "unauthenticated" && account === undefined)
+          throw new Error("Victim role is unavailable");
         const before = await beacons();
         const result = await docker(
           [
@@ -1551,14 +1582,14 @@ export function openWordPressLab(options: {
             "--security-opt=no-new-privileges",
             "--tmpfs=/tmp:rw,nosuid,nodev,size=512m",
             "--workdir=/harness",
-            ...(admin
-              ? [
+            ...(account === undefined
+              ? []
+              : [
                   "--env",
-                  "WBH_LOGIN_USER=harness-admin",
+                  `WBH_LOGIN_USER=${account.username}`,
                   "--env",
-                  `WBH_LOGIN_PASSWORD=${resource.adminPassword}`,
-                ]
-              : []),
+                  `WBH_LOGIN_PASSWORD=${account.password}`,
+                ]),
             "--env",
             `WBH_VISIT_PATH=${path}`,
             "--entrypoint=node",
@@ -1573,15 +1604,20 @@ export function openWordPressLab(options: {
       };
       try {
         const contexts: WordPressScriptContext[] = [];
-        if (await visit("/", false)) contexts.push("front");
-        const dashboard = await visit("/wp-admin/", true);
-        const posts = await visit("/wp-admin/edit.php", true);
+        if (await visit("/", "unauthenticated")) contexts.push("front");
+        const dashboard = await visit("/wp-admin/", "administrator");
+        const posts = await visit("/wp-admin/edit.php", "administrator");
         if (dashboard && posts) contexts.push("admin-all");
         else if (dashboard || posts) contexts.push("admin-partial");
         let routePage = false;
         for (const path of routePaths.data)
-          if (await visit(path, false)) routePage = true;
+          if (await visit(path, "unauthenticated")) routePage = true;
         if (routePage) contexts.push("route-page");
+        let victimPage = false;
+        if (victim?.success)
+          for (const path of victim.data.paths)
+            if (await visit(path, victim.data.role)) victimPage = true;
+        if (victimPage) contexts.push("victim-route-page");
         return { status: "observed", contexts };
       } catch {
         return { status: "unavailable" };

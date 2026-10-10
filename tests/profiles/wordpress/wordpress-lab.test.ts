@@ -10,6 +10,7 @@ import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import {
   openWordPressLab,
   type DockerRequest,
+  type WordPressVictimRoute,
 } from "../../../src/profiles/wordpress/lab/index.js";
 import type { Snapshot } from "../../../src/snapshot/index.js";
 import {
@@ -837,9 +838,15 @@ describe("WordPress gVisor Lab", () => {
       beaconUrl: "http://canary:8080/b/fixed-nonce",
     });
 
-    const contexts = async (firesOn: string[]) => {
+    const contexts = async (
+      firesOn: string[],
+      victim?: WordPressVictimRoute,
+    ) => {
       database.firesOn = firesOn;
-      return lab.observeStoredScript(handle, { routePaths: ["/?p=7"] });
+      return lab.observeStoredScript(handle, {
+        routePaths: ["/?p=7"],
+        ...(victim === undefined ? {} : { victim }),
+      });
     };
     expect(await contexts(["/"])).toEqual({
       status: "observed",
@@ -857,6 +864,18 @@ describe("WordPress gVisor Lab", () => {
       status: "observed",
       contexts: ["route-page"],
     });
+    expect(
+      await contexts(["/wp-admin/admin.php?page=fixture"], {
+        role: "administrator",
+        paths: ["/wp-admin/admin.php?page=fixture"],
+      }),
+    ).toEqual({ status: "observed", contexts: ["victim-route-page"] });
+    expect(
+      await contexts(["/?p=8"], {
+        role: "subscriber",
+        paths: ["/?p=8"],
+      }),
+    ).toEqual({ status: "observed", contexts: ["victim-route-page"] });
     expect(await contexts([])).toEqual({ status: "observed", contexts: [] });
 
     const browsers = commands.filter(
@@ -884,9 +903,32 @@ describe("WordPress gVisor Lab", () => {
         "WBH_VISIT_PATH=/wp-admin/edit.php",
       ]),
     );
+    expect(
+      browsers.some(
+        (browser) =>
+          browser.args.includes(
+            "WBH_VISIT_PATH=/wp-admin/admin.php?page=fixture",
+          ) && browser.args.includes("WBH_LOGIN_USER=harness-admin"),
+      ),
+    ).toBe(true);
+    expect(
+      browsers.some(
+        (browser) =>
+          browser.args.includes("WBH_VISIT_PATH=/?p=8") &&
+          browser.args.includes(
+            `WBH_LOGIN_USER=${handle.attackerAccounts.subscriber.username}`,
+          ),
+      ),
+    ).toBe(true);
     expect(JSON.stringify(handle)).not.toContain("harness-admin");
     expect(
       await lab.observeStoredScript(handle, { routePaths: ["no-slash"] }),
+    ).toEqual({ status: "unavailable" });
+    expect(
+      await lab.observeStoredScript(handle, {
+        routePaths: [],
+        victim: { role: "administrator", paths: ["/\\outside.invalid"] },
+      }),
     ).toEqual({ status: "unavailable" });
     expect(await lab.teardown(handle)).toEqual({ status: "removed" });
     expect(

@@ -8,6 +8,7 @@ import type {
   JudgeSet,
 } from "../../../verification/index.js";
 import type { WordPressFinding } from "../discovery/finding.js";
+import { wordpressVictimRouteSchema } from "../lab/index.js";
 import type {
   WordPressCanaryLedger,
   WordPressLab,
@@ -699,6 +700,7 @@ function optionJudge(options: Options) {
 }
 
 const browserStepsSchema = z.looseObject({
+  victim: wordpressVictimRouteSchema.optional(),
   steps: z
     .array(z.looseObject({ kind: z.string(), path: z.string().optional() }))
     .max(30),
@@ -723,7 +725,21 @@ function storedScriptJudge(options: Options) {
         .filter((step) => step.kind === "browser" && step.path !== undefined)
         .map((step) => step.path!)
         .slice(0, 5);
-      const script = await options.lab.observeStoredScript(lab, { routePaths });
+      const victim = steps.data.victim;
+      if (
+        victim?.role === "customer" &&
+        lab.attackerAccounts.customer === undefined
+      )
+        return {
+          status: "incomplete",
+          reason: "precondition",
+          nextStep:
+            "Provision a Lab scenario with the declared victim role and repeat",
+        };
+      const script = await options.lab.observeStoredScript(lab, {
+        routePaths,
+        ...(victim === undefined ? {} : { victim }),
+      });
       switch (script.status) {
         case "unavailable":
           return unavailable;
@@ -746,6 +762,7 @@ function storedScriptJudge(options: Options) {
           observedVia: "canary-beacon",
           firedContexts: script.contexts.join(","),
           siteWide: siteWide ? "yes" : "no",
+          ...(victim === undefined ? {} : { victimRole: victim.role }),
           ...route,
         },
       };
