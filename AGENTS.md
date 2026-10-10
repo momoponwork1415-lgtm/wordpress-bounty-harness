@@ -4,7 +4,7 @@
 
 ## 読む順
 
-1. [docs/SPEC.md](docs/SPEC.md) — 目的、不変条件、モジュール境界、受け渡し契約、最初の縦断スライス。
+1. [docs/SPEC.md](docs/SPEC.md) — 目的、不変条件、モジュール境界、受け渡し契約、二段構えの主経路と最初の縦断スライス。
 2. [docs/adr/](docs/adr/) — 番号順。設計の理由と、採らなかった選択肢。
 3. [docs/DESIGN-WALKTHROUGH.md](docs/DESIGN-WALKTHROUGH.md) — 全体を1つの流れで理解したいときだけ。規則は増やさない。
 
@@ -21,13 +21,19 @@
 7. 外部送信（報告、ベンダー連絡、公開）は、正確な Submission Candidate、文案の版、送信先へ結び付いた承認があるときだけ。Harness 自身は送信を実行しない。
 8. 台帳は追記専用で、持つのは digest 参照だけ。payload、HTTP 記録、画面画像、実行ログ、認証情報、未公開の発見は Git 外の Private Evidence に置く。
 
-## 探索promptの規則（SPEC.md 第6節）
+## 二段構えの探索（SPEC.md 第6節、ADR 0025〜0027）
 
-- 既定はpilotで使ったv2からWordfenceのXSS対象範囲と影響優先順位を修正した `short-objective-managed-v4`。`wp2shell-bounty-v2` はADR 0017の比較armとして使う。どちらも脆弱性が必ずあるという前提や固定された攻撃経路は与えない。
-- 主経路は Root＋最大3 subagent の協調Trial（ADR 0016）。人数と隔離はHarnessが管理し、分担と仮説はRootが決める。
-- WP2Shell変種の30分下限はRootへの指示であり、Harnessが強制する保証ではない。run wallとcoverageを測り、守られない場合は継続境界を改善する。
+- 主経路は対象ごとに入口索引付きの単独agent `screening-v1` を1 Trial（wall上限30分）。受理されたFindingか具体的Leadがあるときだけ、同じSnapshotでRoot＋最大3子の `deep-dive-v1` を回す（wall上限90分）。一段目の0件は `unexplored` として再訪可能に記録する。初期予算配分は7:3。
+- 報告時に入口が未処理で経過wallが30分未満なら、Harnessが同じ使い捨てコンテナへ1回だけ続行を差し込む。継続方式と結果は台帳へ記録する。新promptに30分下限やwave数の命令を置かない。
+- `short-objective-managed-v4` と `wp2shell-bounty-v2` は旧版と比較armとして保持する。どの版も脆弱性が必ずあるという前提や固定された攻撃経路を与えない。
 - prompt本文を変えたら版を上げ、旧版を残してdigest pinを更新する。旧promptは過去Trialの再現用として維持する。
 - Finding / Leadの出力契約はprompt本文に書かず、Harnessがschemaから生成する節として渡す（ADR 0019）。候補は出力境界で棄却せず、正規化して受理するか保留する（ADR 0018）。
+- contributor以上と管理者が意図して付与する権限はtrust境界の内側に置く。公開済み7件の再発見は配線と判定器の確認であり、未知の発見率を示さない。promptとscenarioに対象固有の関数名、option名、URL、画面名を入れない。
+
+## 検証Labの前提（SPEC.md 第7節、ADR 0026）
+
+- WordPress profileの通常機能scenarioはplugin非依存の状態を優先して追加する。頻出する `incomplete(precondition)` の理由を集計して決め、版とdigestを固定する。
+- 被害者側の操作はHarness所有のLab観測器が型付き手順で行う。Verifierにブラウザや管理者セッションを渡さない。
 
 ## `profiles/wordpress/` の規則（ADR 0011）
 
