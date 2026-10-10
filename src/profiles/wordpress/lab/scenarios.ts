@@ -60,7 +60,14 @@ export function nextWordPressScenario(
       ? "approved-comment-v1"
       : undefined;
   const scenario = id === undefined ? undefined : wordPressScenario(id);
-  return scenario === undefined || scenario.id === currentId
+  const current =
+    currentId === undefined ? undefined : wordPressScenario(currentId);
+  const alreadyPresent =
+    scenario !== undefined &&
+    (scenario.id === currentId ||
+      (scenario.id === "approved-comment-v1" &&
+        current?.approvedComment === true));
+  return scenario === undefined || alreadyPresent
     ? "catalogue に無い前提"
     : scenario.name;
 }

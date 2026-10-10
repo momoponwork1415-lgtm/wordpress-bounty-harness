@@ -318,6 +318,9 @@ describe("WordPress gVisor Lab", () => {
     expect(
       nextWordPressScenario("translation dictionary is empty", scenario.id),
     ).toBe("catalogue に無い前提");
+    expect(nextWordPressScenario("approved comment missing", scenario.id)).toBe(
+      "catalogue に無い前提",
+    );
     await lab.teardown(provisioned.handle);
   });
 
