@@ -243,17 +243,18 @@ export type PlannedTrial = {
   };
 };
 
-const providerReportSchema = z.strictObject({
+const providerReportSchema = z.object({
   findings: z.array(z.unknown()),
   leads: z.array(z.unknown()).default([]),
-  examined: z.string(),
-  unexamined: z.string(),
+  examined: z.string().default(""),
+  unexamined: z.string().default(""),
 });
 
 class DiscoveryReportError extends Error {}
 
 export type DiscoveryStop =
   | "no-new-finding"
+  | "output-boundary"
   | "max-runs"
   | "plans-exhausted"
   | "provider-limit"
@@ -286,6 +287,18 @@ export async function runDiscoveryCampaign(options: {
       reportArtifactDigest: string;
     },
   ) => AdmittedFinding;
+  readonly normalizeCandidate?: (candidate: unknown) => {
+    value: unknown;
+    changes: { path: string; operation: string }[];
+  };
+  readonly classifyCandidate?: (
+    candidate: unknown,
+    kind: "finding" | "lead",
+  ) => {
+    impact?: string;
+    primitive?: string;
+    missingEdge?: string;
+  };
   readonly admitLead?: (
     candidate: unknown,
     context: {
@@ -361,7 +374,12 @@ export async function runDiscoveryCampaign(options: {
   let noNewFindings = 0;
   let runCount = 0;
   let findingsRecorded = 0;
-  let stopped: "no-new-finding" | "provider-limit" | "incomplete" | undefined;
+  let stopped:
+    | "no-new-finding"
+    | "output-boundary"
+    | "provider-limit"
+    | "incomplete"
+    | undefined;
   if (
     options.runWallTimeMs !== undefined &&
     (!Number.isSafeInteger(options.runWallTimeMs) ||
@@ -412,6 +430,7 @@ export async function runDiscoveryCampaign(options: {
     ): Promise<{
       outcome: "completed" | "failed" | "provider-limited";
       foundNew: boolean;
+      heldBoundary: boolean;
       leads: AdmittedLead[];
     }> => {
       const run =
@@ -478,6 +497,7 @@ export async function runDiscoveryCampaign(options: {
       let outcome: "completed" | "failed" | "provider-limited" = "failed";
       let wallTimeMs = 0;
       let foundNew = false;
+      let heldBoundary = false;
       const admittedLeads: AdmittedLead[] = [];
       let usage: NativeRunReceipt["usage"] | undefined;
       let observed: NativeRunReceipt["observed"] | undefined;
@@ -492,28 +512,66 @@ export async function runDiscoveryCampaign(options: {
             readonly providerLimit?: "rate-limit" | "quota";
           }
         | undefined;
-      const rejectCandidate = async (
+      const holdCandidate = async (
         ownerRunId: string,
         candidateKind: "finding" | "lead",
         candidateIndex: number,
         candidate: unknown,
-        reason: "schema" | "identity",
+        rawDigest: string,
+        error: unknown,
       ) => {
-        const candidateDigest = await options.evidence.putFiles({
-          "candidate.json": canonicalJson(candidate),
-        });
+        heldBoundary = true;
+        const issuePaths =
+          error instanceof z.ZodError
+            ? error.issues.map((issue) => issue.path.join("."))
+            : [
+                error instanceof Error &&
+                error.message === "Candidate identity mismatch"
+                  ? "identity"
+                  : "admission",
+              ];
+        const classification =
+          options.classifyCandidate?.(candidate, candidateKind) ?? {};
         const appended = await options.ledger.append({
           ...base,
-          identity: `candidate-rejected-${ownerRunId}-${candidateKind}-${candidateIndex}`,
-          type: "candidate-rejected",
+          identity: `candidate-held-${ownerRunId}-${candidateKind}-${candidateIndex}`,
+          type: "candidate-held",
           runId: ownerRunId,
           candidateKind,
           candidateIndex,
-          reason,
-          artifacts: [{ kind: "candidate", digest: candidateDigest }],
+          issuePaths,
+          ...classification,
+          artifacts: [{ kind: "candidate", digest: rawDigest }],
         });
         if (appended.status === "conflict")
-          throw new Error("Candidate rejection identity conflict");
+          throw new Error("Candidate hold identity conflict");
+      };
+      const prepareCandidate = async (
+        ownerRunId: string,
+        kind: "finding" | "lead",
+        index: number,
+        raw: unknown,
+      ) => {
+        const rawDigest = await options.evidence.putFiles({
+          "candidate.json": canonicalJson(raw),
+        });
+        const normalized = options.normalizeCandidate?.(raw) ?? {
+          value: raw,
+          changes: [],
+        };
+        const appended = await options.ledger.append({
+          ...base,
+          identity: `candidate-normalized-${ownerRunId}-${kind}-${index}`,
+          type: "candidate-normalized",
+          runId: ownerRunId,
+          candidateKind: kind,
+          candidateIndex: index,
+          changes: normalized.changes,
+          artifacts: [{ kind: "candidate", digest: rawDigest }],
+        });
+        if (appended.status === "conflict")
+          throw new Error("Candidate normalization identity conflict");
+        return { ...normalized, rawDigest };
       };
       const recordReport = async (
         ownerRunId: string,
@@ -533,20 +591,27 @@ export async function runDiscoveryCampaign(options: {
           throw new DiscoveryReportError("Discovery report is malformed");
         }
         for (const [index, candidate] of report.findings.entries()) {
+          const prepared = await prepareCandidate(
+            ownerRunId,
+            "finding",
+            index,
+            candidate,
+          );
           let finding: AdmittedFinding;
           try {
-            finding = options.admitFinding(candidate, {
+            finding = options.admitFinding(prepared.value, {
               runId: ownerRunId,
               snapshotDigest: input.snapshotDigest,
               reportArtifactDigest: attachment.digest,
             });
-          } catch {
-            await rejectCandidate(
+          } catch (error) {
+            await holdCandidate(
               ownerRunId,
               "finding",
               index,
-              candidate,
-              "schema",
+              prepared.value,
+              prepared.rawDigest,
+              error,
             );
             continue;
           }
@@ -554,12 +619,13 @@ export async function runDiscoveryCampaign(options: {
             finding.discoveryRunId !== ownerRunId ||
             finding.snapshotDigest !== input.snapshotDigest
           ) {
-            await rejectCandidate(
+            await holdCandidate(
               ownerRunId,
               "finding",
               index,
-              candidate,
-              "identity",
+              prepared.value,
+              prepared.rawDigest,
+              new Error("Candidate identity mismatch"),
             );
             continue;
           }
@@ -590,6 +656,12 @@ export async function runDiscoveryCampaign(options: {
           seen.add(signature);
         }
         for (const [index, candidate] of report.leads.entries()) {
+          const prepared = await prepareCandidate(
+            ownerRunId,
+            "lead",
+            index,
+            candidate,
+          );
           let lead: AdmittedLead;
           try {
             if (
@@ -597,19 +669,20 @@ export async function runDiscoveryCampaign(options: {
               options.leadSignature === undefined
             )
               throw new Error("Lead admission is unavailable");
-            lead = options.admitLead(candidate, {
+            lead = options.admitLead(prepared.value, {
               runId: ownerRunId,
               trialId: trial.trialId,
               snapshotDigest: input.snapshotDigest,
               reportArtifactDigest: attachment.digest,
             });
-          } catch {
-            await rejectCandidate(
+          } catch (error) {
+            await holdCandidate(
               ownerRunId,
               "lead",
               index,
-              candidate,
-              "schema",
+              prepared.value,
+              prepared.rawDigest,
+              error,
             );
             continue;
           }
@@ -618,12 +691,13 @@ export async function runDiscoveryCampaign(options: {
             lead.trialId !== trial.trialId ||
             lead.snapshotDigest !== input.snapshotDigest
           ) {
-            await rejectCandidate(
+            await holdCandidate(
               ownerRunId,
               "lead",
               index,
-              candidate,
-              "identity",
+              prepared.value,
+              prepared.rawDigest,
+              new Error("Candidate identity mismatch"),
             );
             continue;
           }
@@ -717,7 +791,9 @@ export async function runDiscoveryCampaign(options: {
           let childOutcome: "completed" | "failed" = "failed";
           let childFailure: typeof failure;
           if (
-            childReceipt.terminal === "completed" &&
+            (childReceipt.terminal === "completed" ||
+              (childReceipt.terminal === "incomplete" &&
+                childReceipt.reason === "schema")) &&
             childReceipt.targetSnapshotDigest === input.snapshotDigest &&
             childReceipt.runtimeProfileDigest === run.profile.digest &&
             child.attachment !== undefined &&
@@ -725,7 +801,14 @@ export async function runDiscoveryCampaign(options: {
           ) {
             try {
               await recordReport(childReceipt.runId, child.attachment);
-              childOutcome = "completed";
+              if (childReceipt.terminal === "completed")
+                childOutcome = "completed";
+              else
+                childFailure = {
+                  reason: "schema",
+                  reasonDetail:
+                    childReceipt.reasonDetail ?? "child-report-unreadable",
+                };
             } catch (error) {
               if (!(error instanceof DiscoveryReportError)) throw error;
               childFailure = {
@@ -778,7 +861,9 @@ export async function runDiscoveryCampaign(options: {
         }
         const attachment = result.attachment;
         if (
-          receipt.terminal === "completed" &&
+          (receipt.terminal === "completed" ||
+            (receipt.terminal === "incomplete" &&
+              receipt.reason === "schema")) &&
           receipt.runId === run.runId &&
           receipt.targetSnapshotDigest === input.snapshotDigest &&
           receipt.runtimeProfileDigest === run.profile.digest &&
@@ -787,7 +872,7 @@ export async function runDiscoveryCampaign(options: {
         ) {
           try {
             await recordReport(run.runId, attachment);
-            outcome = "completed";
+            if (receipt.terminal === "completed") outcome = "completed";
           } catch (error) {
             if (!(error instanceof DiscoveryReportError)) throw error;
             failure = {
@@ -825,10 +910,11 @@ export async function runDiscoveryCampaign(options: {
       });
       if (finished.status === "conflict")
         throw new Error("Discovery finish identity conflict");
-      return { outcome, foundNew, leads: admittedLeads };
+      return { outcome, foundNew, heldBoundary, leads: admittedLeads };
     };
     const explore = await executePlanned(trial.explore, "explore");
     let trialFoundNew = explore.foundNew;
+    let trialHeldBoundary = explore.heldBoundary;
     if (
       explore.outcome === "completed" &&
       trial.continuation !== undefined &&
@@ -867,6 +953,7 @@ export async function runDiscoveryCampaign(options: {
           trial.continuation.wallTimeMs,
         );
         trialFoundNew ||= continued.foundNew;
+        trialHeldBoundary ||= continued.heldBoundary;
         if (continued.outcome === "provider-limited") {
           stopped ??= "provider-limit";
           break;
@@ -876,8 +963,10 @@ export async function runDiscoveryCampaign(options: {
     // Stop rules are evaluated once per Trial; in-flight Trials still finish.
     if (explore.outcome === "provider-limited") stopped ??= "provider-limit";
     if (explore.outcome === "failed") stopped ??= "incomplete";
-    if (explore.outcome === "completed")
-      noNewFindings = trialFoundNew ? 0 : noNewFindings + 1;
+    if (explore.outcome === "completed") {
+      if (trialHeldBoundary && !trialFoundNew) stopped ??= "output-boundary";
+      else noNewFindings = trialFoundNew ? 0 : noNewFindings + 1;
+    }
     if (noNewFindings >= input.stopRules.noFindingRuns)
       stopped ??= "no-new-finding";
   };

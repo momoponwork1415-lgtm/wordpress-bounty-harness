@@ -893,6 +893,53 @@ describe("Codex native agent runtime", () => {
     }
   });
 
+  it("extracts candidates when an unrelated transcript event is invalid", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
+    try {
+      const candidate = { claim: "raw candidate" };
+      const events = transcript.split("\n");
+      const withCandidate = events.map((line) => {
+        const event = JSON.parse(line) as { item?: { text?: string } };
+        if (event.item?.text)
+          event.item.text = JSON.stringify({
+            findings: [candidate],
+            leads: [],
+            examined: "source",
+            unexamined: "none",
+          });
+        return JSON.stringify(event);
+      });
+      withCandidate.splice(
+        2,
+        0,
+        JSON.stringify({
+          type: "item.completed",
+          item: { type: "unknown_tool" },
+        }),
+      );
+      const attachments = new ProviderAttachmentStore(root);
+      const result = await new CodexNativeAgentRuntime(
+        sandbox(withCandidate.join("\n"), []),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      ).execute(run);
+      expect(result.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "schema",
+      });
+      const stored =
+        result.attachment && (await attachments.read(result.attachment));
+      expect(
+        stored?.status === "resolved" &&
+          JSON.parse(stored.bytes.toString("utf8")),
+      ).toMatchObject({ findings: [candidate] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("asks the provider for a strict report and turns each Finding text back into an object", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
     try {
@@ -936,7 +983,7 @@ describe("Codex native agent runtime", () => {
         stored?.status === "resolved"
           ? (JSON.parse(stored.bytes.toString("utf8")) as unknown)
           : undefined,
-      ).toMatchObject({ findings: [finding] });
+      ).toMatchObject({ findings: [JSON.stringify(finding)] });
       const lead = { summary: "synthetic partial source route" };
       const withLead = await runtime(
         withFindings([], [JSON.stringify(lead)]),
@@ -947,7 +994,7 @@ describe("Codex native agent runtime", () => {
         leadAttachment?.status === "resolved"
           ? (JSON.parse(leadAttachment.bytes.toString("utf8")) as unknown)
           : undefined,
-      ).toMatchObject({ leads: [lead] });
+      ).toMatchObject({ leads: [JSON.stringify(lead)] });
 
       // Strict structured output: every object closes and requires all keys.
       const schema = JSON.parse(

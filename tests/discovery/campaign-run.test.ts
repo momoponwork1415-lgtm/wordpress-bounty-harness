@@ -13,6 +13,10 @@ import {
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
 import { admitWordPressFinding } from "../../src/profiles/wordpress/discovery/finding.js";
+import {
+  classifyWordPressCandidate,
+  normalizeWordPressCandidate,
+} from "../../src/profiles/wordpress/discovery/normalize-candidate.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const profile = defineAgentRuntimeProfile({
@@ -36,7 +40,11 @@ afterEach(async () => {
 
 async function campaign(
   findingRuns: readonly number[],
-  options: { readonly childSurvivesBrokenRoot?: boolean } = {},
+  options: {
+    readonly childSurvivesBrokenRoot?: boolean;
+    readonly heldOnly?: boolean;
+    readonly rootTranscriptInvalid?: boolean;
+  } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-campaign-"));
   directories.push(root);
@@ -106,10 +114,39 @@ async function campaign(
     attachments,
     evidence,
     admitFinding: admitWordPressFinding,
+    normalizeCandidate: normalizeWordPressCandidate,
+    classifyCandidate: classifyWordPressCandidate,
     executor: {
       async execute(run) {
         expect(run.expiresAt).toBe("2026-10-08T08:30:00.000Z");
         const ordinal = calls++;
+        if (ordinal === 0 && options.rootTranscriptInvalid) {
+          const attachment = await attachments.put(
+            "findings",
+            Buffer.from(
+              JSON.stringify({
+                findings: [claim],
+                leads: [],
+                examined: "source",
+                unexamined: "none",
+              }),
+            ),
+          );
+          return {
+            attachment,
+            receipt: createNativeRunReceipt({
+              runId: run.runId,
+              targetSnapshotDigest: run.targetSnapshotDigest,
+              profile: run.profile,
+              terminal: "incomplete",
+              reason: "schema",
+              reasonDetail: "invalid-event-shape",
+              startedAt: "2026-10-08T07:00:00Z",
+              completedAt: "2026-10-08T07:00:01Z",
+              reportArtifactDigest: attachment.digest,
+            }),
+          };
+        }
         if (ordinal === 0 && options.childSurvivesBrokenRoot) {
           const childAttachment = await attachments.put(
             "findings",
@@ -152,7 +189,12 @@ async function campaign(
           };
         }
         const report = {
-          findings: findingRuns.includes(ordinal) ? [claim] : [],
+          findings:
+            options.heldOnly && ordinal === 0
+              ? [{ ...claim, sourceTrace: ["invalid trace"] }]
+              : findingRuns.includes(ordinal)
+                ? [claim]
+                : [],
           examined: "source",
           unexamined: "none",
         };
@@ -211,7 +253,7 @@ it("records valid child claims even when Root formatting and a sibling claim fai
   const findings = ledger.read({ type: "finding-recorded" });
   expect(findings).toHaveLength(1);
   expect(findings[0]?.event).toMatchObject({ runId: "child-1" });
-  expect(ledger.read({ type: "candidate-rejected" })).toHaveLength(1);
+  expect(ledger.read({ type: "candidate-held" })).toHaveLength(1);
   const childFinish = ledger
     .read({ type: "discovery-run-finished" })
     .find(
@@ -229,6 +271,34 @@ it("records valid child claims even when Root formatting and a sibling claim fai
     reference &&
       (await evidence.readFile(reference.digest, "finding.json", 100_000))
         .status,
+  ).toBe("resolved");
+});
+
+it("admits an extracted Root candidate without treating the transcript as completed", async () => {
+  const { result, ledger } = await campaign([], {
+    rootTranscriptInvalid: true,
+  });
+  expect(result).toMatchObject({
+    runCount: 1,
+    findingsRecorded: 1,
+    stoppedBy: "incomplete",
+  });
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(1);
+  expect(ledger.read({ type: "candidate-normalized" })).toHaveLength(1);
+});
+
+it("keeps raw held candidates and stops at the output boundary", async () => {
+  const { result, ledger, evidence } = await campaign([], { heldOnly: true });
+  expect(result).toMatchObject({ runCount: 1, stoppedBy: "output-boundary" });
+  const held = ledger.read({ type: "candidate-held" })[0]?.event;
+  expect(held).toMatchObject({
+    issuePaths: ["sourceTrace.0"],
+    impact: "account-takeover",
+  });
+  const ref = held?.artifacts[0];
+  expect(
+    ref &&
+      (await evidence.readFile(ref.digest, "candidate.json", 100_000)).status,
   ).toBe("resolved");
 });
 
