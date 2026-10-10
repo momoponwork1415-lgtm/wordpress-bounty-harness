@@ -10,6 +10,7 @@ import {
 } from "../infrastructure/private-artifact-store.js";
 
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const MAX_DIAGNOSTIC_BYTES = 64 * 1024 * 1024;
 const kindSchema = z.enum([
   "findings",
   "coverage",
@@ -37,13 +38,15 @@ export class ProviderAttachmentStore {
     this.#store = new PrivateArtifactStore({
       rootDirectory,
       maxEntries: 1,
-      maxBytes: MAX_ATTACHMENT_BYTES,
+      maxBytes: MAX_DIAGNOSTIC_BYTES,
     });
   }
 
   async put(kindValue: unknown, bytes: Buffer): Promise<ProviderAttachmentRef> {
     const kind = kindSchema.parse(kindValue);
-    if (bytes.byteLength === 0 || bytes.byteLength > MAX_ATTACHMENT_BYTES)
+    const limit =
+      kind === "diagnostic" ? MAX_DIAGNOSTIC_BYTES : MAX_ATTACHMENT_BYTES;
+    if (bytes.byteLength === 0 || bytes.byteLength > limit)
       throw new Error("Provider attachment size is invalid");
     const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
     const staging = await this.#store.stage();
@@ -79,7 +82,9 @@ export class ProviderAttachmentStore {
     const result = await this.#store.readFile(
       parsed.data.artifact as PrivateArtifactDescriptor,
       `${parsed.data.kind}.json`,
-      MAX_ATTACHMENT_BYTES,
+      parsed.data.kind === "diagnostic"
+        ? MAX_DIAGNOSTIC_BYTES
+        : MAX_ATTACHMENT_BYTES,
     );
     if (result.status === "missing") return { status: "missing" };
     if (result.status !== "resolved") return { status: "invalid" };

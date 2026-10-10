@@ -30,7 +30,7 @@ export const EGRESS_BROKER_LEFTOVER_PATTERNS = {
 export const EGRESS_BROKER_MEMORY_MIB = 512;
 
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
-const modelSchema = z.enum(["gpt-6.1-sol", "gpt-6-luna"]);
+const modelSchema = z.enum(["gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"]);
 const dockerNameSchema = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u);
@@ -150,6 +150,18 @@ const providerCredentialEgressReceiptBodySchema = z.strictObject({
   completedAt: z.iso.datetime({ offset: true }),
   setup: providerCredentialEgressSetupSchema,
   cleanup: providerCredentialEgressCleanupSchema,
+  metrics: z
+    .strictObject({
+      forwardedRequests: z.number().int().nonnegative(),
+      requestLimitExceeded: z.number().int().nonnegative(),
+      unauthorizedRequests: z.number().int().nonnegative(),
+      upstreamSuccess: z.number().int().nonnegative().optional(),
+      upstreamClientError: z.number().int().nonnegative().optional(),
+      upstreamServerError: z.number().int().nonnegative().optional(),
+      relayFailures: z.number().int().nonnegative().optional(),
+      responseLimitExceeded: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
   isolation: z.strictObject({
     backend: z.literal("gvisor"),
     runtime: z.literal("runsc"),
@@ -431,6 +443,7 @@ export function createProviderCredentialEgressBroker(
       };
       let networkCreated = false;
       let brokerCreated = false;
+      let proxyMetrics: ProviderCredentialEgressReceipt["metrics"];
       let stagingDirectory: string | undefined;
       let secrets: readonly string[] = [];
       let pendingSetupFailure: Extract<
@@ -460,6 +473,7 @@ export function createProviderCredentialEgressBroker(
           completedAt: clock().toISOString(),
           setup,
           cleanup,
+          ...(proxyMetrics === undefined ? {} : { metrics: proxyMetrics }),
           isolation: {
             backend: "gvisor",
             runtime: "runsc",
@@ -758,6 +772,26 @@ export function createProviderCredentialEgressBroker(
           "broker-remove" | "network-remove" | "credential-staging-remove"
         )[] = [];
         if (brokerCreated && runDocker !== undefined) {
+          try {
+            const metrics = await runDocker(
+              [
+                "exec",
+                containerName,
+                "node",
+                "--input-type=module",
+                "-e",
+                `const r=await fetch('http://127.0.0.1:${chatgpt ? BROKER_TLS_HEALTH_PORT : BROKER_PORT}/healthz');if(!r.ok)process.exit(1);process.stdout.write(await r.text())`,
+              ],
+              5_000,
+            );
+            if (dockerSucceeded(metrics))
+              proxyMetrics =
+                providerCredentialEgressReceiptBodySchema.shape.metrics
+                  .unwrap()
+                  .parse(JSON.parse(metrics.stdout) as unknown);
+          } catch {
+            // A missing broker metric never changes the operation's outcome.
+          }
           try {
             const stopped = await runDocker(
               ["rm", "--force", containerName],

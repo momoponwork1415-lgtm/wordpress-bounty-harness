@@ -1,11 +1,12 @@
 import { z } from "zod";
-import { isAbsolute } from "node:path";
+import { isAbsolute, posix } from "node:path";
 
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import { campaignInputV1Schema, type CampaignInputV1 } from "./campaign.js";
 import {
   admitAgentRuntimeProfile,
+  admitCooperativeRuntimeProfile,
   agentRuntimeProfileSchema,
   type AgentRuntimeProfile,
 } from "./agent-runtime-profile.js";
@@ -40,6 +41,25 @@ const reportSchema = z.strictObject({
   examined: z.string().max(16_384),
   unexamined: z.string().max(16_384),
 });
+/** Children are not constrained by Root's --output-schema; admit both object and encoded claims. */
+const childCoverageSchema = z
+  .union([z.string(), z.array(z.string())])
+  .transform((value) => (Array.isArray(value) ? value.join("\n") : value))
+  .pipe(z.string().max(16_384));
+const childReportSchema = z.strictObject({
+  findings: z.array(z.unknown()),
+  leads: z.array(z.unknown()),
+  examined: childCoverageSchema,
+  unexamined: childCoverageSchema,
+});
+function childClaim(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return object(JSON.parse(value) as unknown) ?? value;
+  } catch {
+    return value;
+  }
+}
 /**
  * Structured outputs require every object to be closed with all keys
  * required, but a Finding's shape belongs to the target profile, so each
@@ -97,11 +117,16 @@ export interface CodexSandboxResult {
   readonly status: "exited" | "failed";
   readonly exitCode: number;
   readonly stdout: string;
+  readonly stderr?: string;
+  readonly failureKind?: "timed-out" | "output-limit-exceeded";
   readonly startedAt: string;
   readonly completedAt: string;
   readonly image: string;
   readonly cliVersion: string;
   readonly bundledCatalogDigest: string;
+  /** Private CLI session records, including child threads omitted from --json stdout. */
+  readonly rollouts?: readonly string[];
+  readonly rolloutFailure?: "capture-failed";
   readonly isolation: {
     readonly backend: "gvisor";
     readonly runtime: "runsc";
@@ -137,6 +162,12 @@ export interface DiscoveryTransportRun {
 export interface DiscoveryTransportResult {
   readonly receipt: NativeRunReceipt;
   readonly attachment?: ProviderAttachmentRef;
+  /** Each child is independent of the Root's final report and receipt. */
+  readonly agentRuns?: readonly {
+    readonly agentPath: string;
+    readonly receipt: NativeRunReceipt;
+    readonly attachment?: ProviderAttachmentRef;
+  }[];
 }
 
 const discoveryTransportRunSchema = z.strictObject({
@@ -211,19 +242,251 @@ const usageSchema = z.looseObject({
   output_tokens: z.number().int().nonnegative(),
   reasoning_output_tokens: z.number().int().nonnegative().optional(),
 });
+const object = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+
+function rootThreadId(stdout: string): string | undefined {
+  for (const line of stdout.split("\n")) {
+    try {
+      const event = object(JSON.parse(line) as unknown);
+      if (
+        event?.type === "thread.started" &&
+        typeof event.thread_id === "string"
+      )
+        return event.thread_id;
+    } catch {
+      // A broken final report does not hide the earlier thread identity.
+    }
+  }
+  return undefined;
+}
+
+function isRootRollout(raw: string, threadId: string): boolean {
+  for (const line of raw.split("\n")) {
+    try {
+      const event = object(JSON.parse(line) as unknown);
+      const payload = object(event?.payload);
+      if (
+        event?.type === "session_meta" &&
+        payload?.id === threadId &&
+        payload.source === "exec"
+      )
+        return true;
+    } catch {
+      // A later malformed event does not hide the session header.
+    }
+  }
+  return false;
+}
+
+/** The Root's immutable rollout identifies the parent of archived child reports. */
+export function rootThreadIdFromRollout(raw: string): string {
+  const ids = new Set<string>();
+  for (const line of raw.split("\n")) {
+    try {
+      const event = object(JSON.parse(line) as unknown);
+      const payload = object(event?.payload);
+      if (
+        event?.type === "session_meta" &&
+        payload?.source === "exec" &&
+        typeof payload.id === "string"
+      )
+        ids.add(payload.id);
+    } catch {
+      // A malformed non-header line cannot create a parent identity.
+    }
+  }
+  if (ids.size !== 1) throw new Error("Root rollout identity is ambiguous");
+  return [...ids][0]!;
+}
+
+type ChildRollout = {
+  readonly threadId: string;
+  readonly agentPath: string;
+  readonly modelId: string | undefined;
+  readonly effort: string | undefined;
+  readonly cyberAccessProgram: string | undefined;
+  readonly usage: z.infer<typeof usageSchema> | undefined;
+  readonly observed: Observed;
+  readonly finalMessage: string | undefined;
+  readonly startedAt: string;
+  readonly completedAt: string;
+};
+
+function decodeChildRollout(
+  raw: string,
+  parentThreadId: string,
+): ChildRollout | undefined {
+  let threadId: string | undefined;
+  let agentPath: string | undefined;
+  let modelId: string | undefined;
+  let effort: string | undefined;
+  let cyberAccessProgram: string | undefined;
+  let usage: z.infer<typeof usageSchema> | undefined;
+  let finalMessage: string | undefined;
+  let startedAt: string | undefined;
+  let completedAt: string | undefined;
+  const commands: ObservedCommand[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.trim().length === 0) continue;
+    let event: Record<string, unknown> | undefined;
+    try {
+      event = object(JSON.parse(line) as unknown);
+    } catch {
+      continue;
+    }
+    if (event === undefined) continue;
+    const payload = object(event.payload);
+    if (event.type === "session_meta") {
+      const spawn = object(
+        object(object(payload?.source)?.subagent)?.thread_spawn,
+      );
+      if (
+        spawn?.parent_thread_id === parentThreadId &&
+        spawn.depth === 1 &&
+        typeof payload?.id === "string" &&
+        typeof spawn.agent_path === "string"
+      ) {
+        threadId = payload.id;
+        agentPath = spawn.agent_path;
+        if (typeof event.timestamp === "string") startedAt = event.timestamp;
+      }
+    } else if (event.type === "turn_context") {
+      if (typeof payload?.model === "string") modelId = payload.model;
+      if (typeof payload?.effort === "string") effort = payload.effort;
+      if (typeof payload?.cyber_access_program === "string")
+        cyberAccessProgram = payload.cyber_access_program;
+    } else if (event.type === "event_msg") {
+      if (payload?.type === "token_count") {
+        const parsed = usageSchema.safeParse(
+          object(payload.info)?.total_token_usage,
+        );
+        if (parsed.success) usage = parsed.data;
+      } else if (payload?.type === "item_completed") {
+        const item = object(payload.item);
+        if (item?.type === "CommandExecution" && Array.isArray(item.command))
+          commands.push({
+            text:
+              item.command
+                .filter((part): part is string => typeof part === "string")
+                .at(-1) ?? "",
+            ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
+            ...(Array.isArray(item.parsed_cmd)
+              ? { parsed: item.parsed_cmd }
+              : {}),
+          });
+      } else if (payload?.type === "task_complete") {
+        if (typeof payload.last_agent_message === "string")
+          finalMessage = payload.last_agent_message;
+        if (typeof event.timestamp === "string") completedAt = event.timestamp;
+      }
+    }
+  }
+  if (threadId === undefined || agentPath === undefined) return undefined;
+  return {
+    threadId,
+    agentPath,
+    modelId,
+    effort,
+    cyberAccessProgram,
+    usage,
+    observed: observedFromCommands(commands),
+    finalMessage,
+    startedAt: startedAt ?? new Date(0).toISOString(),
+    completedAt: completedAt ?? startedAt ?? new Date(0).toISOString(),
+  };
+}
+
+function parseChildFinalMessage(
+  message: string,
+): z.infer<typeof childReportSchema> {
+  return childReportSchema.parse(JSON.parse(message) as unknown);
+}
+
+/** Reinterpret an archived child report only when its lineage and runtime match the receipt. */
+export function recoverChildReportFromRollout(
+  raw: string,
+  expected: {
+    readonly parentThreadId: string;
+    readonly childThreadId: string;
+    readonly agentPath: string;
+    readonly modelId: string;
+    readonly effort: string;
+    readonly cyberAccessProgram: string;
+  },
+): z.infer<typeof childReportSchema> {
+  const child = decodeChildRollout(raw, expected.parentThreadId);
+  if (
+    child === undefined ||
+    child.threadId !== expected.childThreadId ||
+    child.agentPath !== expected.agentPath ||
+    child.modelId !== expected.modelId ||
+    child.effort !== expected.effort ||
+    child.cyberAccessProgram !== expected.cyberAccessProgram ||
+    child.finalMessage === undefined
+  )
+    throw new Error("Archived child report lineage or runtime does not match");
+  const report = parseChildFinalMessage(child.finalMessage);
+  return {
+    ...report,
+    findings: report.findings.map(childClaim),
+    leads: report.leads.map(childClaim),
+  };
+}
 type Observed = NonNullable<NativeRunReceipt["observed"]>;
-function observedFromCommands(commands: readonly string[]): Observed {
+type ObservedCommand = {
+  readonly text: string;
+  readonly cwd?: string;
+  readonly parsed?: readonly unknown[];
+};
+function sourcePath(path: string, cwd?: string): string | undefined {
+  let directory = cwd;
+  if (cwd?.startsWith("file://")) {
+    try {
+      directory = new URL(cwd).pathname;
+    } catch {
+      return undefined;
+    }
+  }
+  const resolved = posix.resolve(directory ?? "/", path);
+  return resolved.startsWith("/workspace/main/") ||
+    resolved.startsWith("/workspace/wordpress/")
+    ? resolved
+    : undefined;
+}
+function observedFromCommands(
+  commands: readonly (string | ObservedCommand)[],
+): Observed {
   const paths = new Set<string>();
   let filesRead = 0;
   let labRequests = 0;
   let dbQueries = 0;
-  for (const command of commands) {
-    for (const match of command.matchAll(
-      /\/workspace\/(?:main|wordpress)\/[^\s'"`;&|)]+/g,
-    )) {
-      filesRead++;
-      paths.add(match[0]);
-    }
+  for (const entry of commands) {
+    const command = typeof entry === "string" ? entry : entry.text;
+    const before = filesRead;
+    if (typeof entry !== "string")
+      for (const raw of entry.parsed ?? []) {
+        const parsed = object(raw);
+        if (
+          (parsed?.type === "read" || parsed?.type === "search") &&
+          typeof parsed.path === "string"
+        ) {
+          const path = sourcePath(parsed.path, entry.cwd);
+          if (path !== undefined) {
+            filesRead++;
+            if (parsed.type === "read") paths.add(path);
+          }
+        }
+      }
+    if (filesRead === before)
+      for (const match of command.matchAll(
+        /\/workspace\/(?:main|wordpress)\/[^\s'"`;&|)]+/g,
+      )) {
+        filesRead++;
+        paths.add(match[0]);
+      }
     if (
       /(?:^|[\s;&|])(?:curl|wget|python|php)(?=\s|$)/.test(command) &&
       /\bwordpress\b/.test(command)
@@ -242,6 +505,85 @@ function observedFromCommands(commands: readonly string[]): Observed {
     labRequests,
     dbQueries,
   };
+}
+
+function observedFromRollout(raw: string): Observed {
+  const commands: ObservedCommand[] = [];
+  for (const line of raw.split("\n")) {
+    try {
+      const event = object(JSON.parse(line) as unknown);
+      const payload = object(event?.payload);
+      const item = object(payload?.item);
+      if (
+        event?.type === "event_msg" &&
+        payload?.type === "item_completed" &&
+        item?.type === "CommandExecution" &&
+        Array.isArray(item.command)
+      ) {
+        commands.push({
+          text:
+            item.command
+              .filter((part): part is string => typeof part === "string")
+              .at(-1) ?? "",
+          ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
+          ...(Array.isArray(item.parsed_cmd)
+            ? { parsed: item.parsed_cmd }
+            : {}),
+        });
+      }
+    } catch {
+      // Keep observations from other well-formed events.
+    }
+  }
+  return observedFromCommands(commands);
+}
+
+function usageFromTranscript(
+  stdout: string,
+): NativeRunReceipt["usage"] | undefined {
+  let usage: z.infer<typeof usageSchema> | undefined;
+  for (const line of stdout.split("\n")) {
+    try {
+      const event = object(JSON.parse(line) as unknown);
+      if (event?.type !== "turn.completed") continue;
+      const parsed = usageSchema.safeParse(event.usage);
+      if (parsed.success) usage = parsed.data;
+    } catch {
+      // A malformed report does not erase earlier usage.
+    }
+  }
+  if (usage === undefined) return undefined;
+  return {
+    inputTokens: usage.input_tokens,
+    cachedInputTokens: usage.cached_input_tokens ?? "unavailable",
+    outputTokens: usage.output_tokens,
+    reasoningOutputTokens: usage.reasoning_output_tokens ?? "unavailable",
+  };
+}
+function usageFromRollout(raw: string): NativeRunReceipt["usage"] | undefined {
+  let usage: z.infer<typeof usageSchema> | undefined;
+  for (const line of raw.split("\n")) {
+    try {
+      const event = object(JSON.parse(line) as unknown);
+      const payload = object(event?.payload);
+      if (event?.type !== "event_msg" || payload?.type !== "token_count")
+        continue;
+      const parsed = usageSchema.safeParse(
+        object(payload.info)?.total_token_usage,
+      );
+      if (parsed.success) usage = parsed.data;
+    } catch {
+      // Earlier counters remain useful if a later event is malformed.
+    }
+  }
+  return usage === undefined
+    ? undefined
+    : {
+        inputTokens: usage.input_tokens,
+        cachedInputTokens: usage.cached_input_tokens ?? "unavailable",
+        outputTokens: usage.output_tokens,
+        reasoningOutputTokens: usage.reasoning_output_tokens ?? "unavailable",
+      };
 }
 function decodeTranscript(
   stdout: string,
@@ -317,9 +659,16 @@ function decodeTranscript(
         // Earlier messages are progress notes; only the last is the report.
         finalMessage = item.text;
       } else if (
-        !["reasoning", "error", "agent_message", "command_execution"].includes(
-          String(item.type),
-        )
+        ![
+          "reasoning",
+          "error",
+          "agent_message",
+          "command_execution",
+          "collab_tool_call",
+          // Notes created inside the disposable agent container do not alter
+          // the pinned read-only source or the independently provisioned Lab.
+          "file_change",
+        ].includes(String(item.type))
       ) {
         // A tool not admitted by this transport makes the transcript unusable.
         const itemType = String(item.type);
@@ -329,7 +678,9 @@ function decodeTranscript(
       }
       continue;
     }
-    return { reasonDetail: "unadmitted-event-type" };
+    return {
+      reasonDetail: `unadmitted-event-type:${/^[a-z][a-z._-]{0,31}$/.test(parsed.data.type) ? parsed.data.type : "other"}`,
+    };
   }
   if (!started) return { reasonDetail: "missing-thread-start" };
   if (!completed) return { reasonDetail: "missing-turn-completion" };
@@ -397,6 +748,27 @@ function providerLimitOf(stdout: string): "rate-limit" | "quota" | undefined {
   return limit;
 }
 
+/** A broker body-size rejection is a Harness bound, not a provider failure. */
+function brokerRequestBytesExceeded(stdout: string): boolean {
+  for (const line of stdout.split("\n")) {
+    let value: unknown;
+    try {
+      value = JSON.parse(line) as unknown;
+    } catch {
+      continue;
+    }
+    const parsed = failureEventSchema.safeParse(value);
+    if (!parsed.success) continue;
+    const message =
+      parsed.data.type === "error"
+        ? parsed.data.message
+        : parsed.data.error.message;
+    if (/\b413\b/.test(message) && message.includes("request-limit-exceeded"))
+      return true;
+  }
+  return false;
+}
+
 export class CodexNativeAgentRuntime {
   constructor(
     readonly sandbox: CodexSandbox,
@@ -408,6 +780,15 @@ export class CodexNativeAgentRuntime {
 
   async execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult> {
     const startedAt = this.clock().toISOString();
+    let agentRuns: NonNullable<DiscoveryTransportResult["agentRuns"]> = [];
+    let rootDiagnosticArtifactDigest: string | undefined;
+    let rootUsage: NativeRunReceipt["usage"] | undefined;
+    let rootObserved: Observed | undefined;
+    let brokerMetrics: NativeRunReceipt["brokerMetrics"];
+    const cooperative =
+      run.outputKind !== "verification" &&
+      (run.profile.subagent.modelId !== "unavailable" ||
+        run.profile.subagent.effort !== "unavailable");
     let sandboxExitCode: number | undefined;
     const incomplete = (
       reason: "provider" | "schema" | "sandbox" | "policy" | "evidence",
@@ -426,7 +807,14 @@ export class CodexNativeAgentRuntime {
         completedAt,
         ...(grantReceiptDigest === undefined ? {} : { grantReceiptDigest }),
         ...(sandboxExitCode === undefined ? {} : { sandboxExitCode }),
+        ...(rootDiagnosticArtifactDigest === undefined
+          ? {}
+          : { diagnosticArtifactDigest: rootDiagnosticArtifactDigest }),
+        ...(rootUsage === undefined ? {} : { usage: rootUsage }),
+        ...(rootObserved === undefined ? {} : { observed: rootObserved }),
+        ...(brokerMetrics === undefined ? {} : { brokerMetrics }),
       }),
+      ...(cooperative ? { agentRuns } : {}),
     });
     if (
       !discoveryTransportRunSchema.safeParse(run).success ||
@@ -441,8 +829,9 @@ export class CodexNativeAgentRuntime {
       !CODEX_AUTHENTICATION_METHODS.includes(
         run.profile.authenticationMethod,
       ) ||
-      run.profile.subagent.modelId !== "unavailable" ||
-      run.profile.subagent.effort !== "unavailable"
+      (cooperative &&
+        admitCooperativeRuntimeProfile(run.profile, this.sandboxImage)
+          .status !== "admitted")
     )
       return incomplete("policy");
     const labEndpoint = new URL(run.lab.endpoint);
@@ -460,8 +849,8 @@ export class CodexNativeAgentRuntime {
           runtimeProfileDigest: run.profile.digest,
           model: run.profile.requestedModelId,
           protocol: "responses",
-          maxRequests: 100,
-          maxRequestBytes: 1024 * 1024,
+          maxRequests: cooperative ? 1600 : 100,
+          maxRequestBytes: cooperative ? 8 * 1024 * 1024 : 1024 * 1024,
           maxResponseBytes: 8 * 1024 * 1024,
           expiresAt: run.expiresAt,
           agentNetworkName: run.lab.networkName,
@@ -489,7 +878,7 @@ export class CodexNativeAgentRuntime {
               "--sandbox",
               "danger-full-access",
               "--skip-git-repo-check",
-              "--ephemeral",
+              ...(cooperative ? [] : ["--ephemeral"]),
               "-c",
               'approval_policy="never"',
               ...(run.profile.cyberAccessProgram === "unavailable"
@@ -498,11 +887,23 @@ export class CodexNativeAgentRuntime {
               "--ignore-user-config",
               "--ignore-rules",
               "--disable",
+              "apps",
+              "--disable",
+              "remote_plugin",
+              "--disable",
               "unified_exec",
               "-c",
               'web_search="disabled"',
-              "-c",
-              "features.multi_agent=false",
+              ...(cooperative
+                ? [
+                    "--enable",
+                    "multi_agent",
+                    "-c",
+                    "agents.max_threads=3",
+                    "-c",
+                    "agents.max_depth=1",
+                  ]
+                : ["-c", "features.multi_agent=false"]),
               "-c",
               `model_reasoning_effort="${run.profile.requestedEffort}"`,
               ...(login
@@ -569,6 +970,7 @@ export class CodexNativeAgentRuntime {
       )
       .catch(() => undefined);
     if (granted === undefined) return incomplete("provider");
+    brokerMetrics = granted.receipt.metrics;
     if (
       granted.receipt.setup.status !== "ready" ||
       granted.receipt.cleanup.status !== "completed" ||
@@ -581,6 +983,7 @@ export class CodexNativeAgentRuntime {
       );
     const result = granted.operation.value;
     sandboxExitCode = result.exitCode;
+    rootUsage = usageFromTranscript(result.stdout);
     if (
       result.isolation.backend !== "gvisor" ||
       result.isolation.runtime !== "runsc" ||
@@ -593,10 +996,174 @@ export class CodexNativeAgentRuntime {
       result.bundledCatalogDigest !== run.profile.bundledCatalogDigest
     )
       return incomplete("policy", result.completedAt, granted.receipt.digest);
+    if (cooperative && run.outputKind !== "verification") {
+      if (result.rolloutFailure !== undefined)
+        return incomplete(
+          "evidence",
+          result.completedAt,
+          granted.receipt.digest,
+          undefined,
+          "rollout-capture-failed",
+        );
+      const parentThreadId = rootThreadId(result.stdout);
+      if (parentThreadId === undefined)
+        return incomplete(
+          "schema",
+          result.completedAt,
+          granted.receipt.digest,
+          undefined,
+          "missing-root-thread-id",
+        );
+      const rootRollout = (result.rollouts ?? []).find((raw) =>
+        isRootRollout(raw, parentThreadId),
+      );
+      if (rootRollout === undefined)
+        return incomplete(
+          "evidence",
+          result.completedAt,
+          granted.receipt.digest,
+          undefined,
+          "root-rollout-missing",
+        );
+      try {
+        const processDiagnostic =
+          result.status === "failed" || result.exitCode !== 0
+            ? `${rootRollout}\n${JSON.stringify({
+                type: "sandbox_process_diagnostic",
+                payload: {
+                  status: result.status,
+                  exitCode: result.exitCode,
+                  failureKind: result.failureKind ?? null,
+                  stderrTail: result.stderr?.slice(-64 * 1024) ?? "",
+                  stdoutTail: result.stdout.slice(-64 * 1024),
+                },
+              })}`
+            : rootRollout;
+        rootDiagnosticArtifactDigest = (
+          await this.attachments.put(
+            "diagnostic",
+            Buffer.from(processDiagnostic),
+          )
+        ).digest;
+        rootObserved = observedFromRollout(rootRollout);
+        rootUsage ??= usageFromRollout(rootRollout);
+      } catch {
+        return incomplete(
+          "evidence",
+          result.completedAt,
+          granted.receipt.digest,
+          undefined,
+          "root-rollout-unavailable",
+        );
+      }
+      const seen = new Set<string>();
+      const children: NonNullable<
+        DiscoveryTransportResult["agentRuns"]
+      >[number][] = [];
+      for (const raw of result.rollouts ?? []) {
+        const child = decodeChildRollout(raw, parentThreadId);
+        if (child === undefined || seen.has(child.threadId)) continue;
+        seen.add(child.threadId);
+        let reason: "policy" | "schema" | "evidence" | undefined;
+        let reasonDetail: string | undefined;
+        if (
+          child.modelId !== run.profile.subagent.modelId ||
+          child.effort !== run.profile.subagent.effort ||
+          child.cyberAccessProgram !== run.profile.cyberAccessProgram ||
+          !/^\/root\/[a-z0-9_-]+$/.test(child.agentPath)
+        ) {
+          reason = "policy";
+          reasonDetail = "child-profile-mismatch";
+        }
+        let diagnosticArtifactDigest: string | undefined;
+        try {
+          diagnosticArtifactDigest = (
+            await this.attachments.put("diagnostic", Buffer.from(raw))
+          ).digest;
+        } catch {
+          reason = "evidence";
+          reasonDetail = "child-rollout-unavailable";
+        }
+        let attachment: ProviderAttachmentRef | undefined;
+        if (reason === undefined) {
+          try {
+            const report = parseChildFinalMessage(child.finalMessage ?? "");
+            attachment = await this.attachments.put(
+              "findings",
+              Buffer.from(
+                canonicalJson({
+                  ...report,
+                  findings: report.findings.map(childClaim),
+                  leads: report.leads.map(childClaim),
+                }),
+              ),
+            );
+          } catch {
+            reason = "schema";
+            reasonDetail = "child-final-message-not-report";
+          }
+        }
+        const receipt = createNativeRunReceipt({
+          ...run,
+          runId: child.threadId,
+          terminal: reason === undefined ? "completed" : "incomplete",
+          reason: reason ?? "unavailable",
+          ...(reasonDetail === undefined ? {} : { reasonDetail }),
+          startedAt: child.startedAt,
+          completedAt: child.completedAt,
+          usage: {
+            inputTokens: child.usage?.input_tokens ?? "unavailable",
+            cachedInputTokens:
+              child.usage?.cached_input_tokens ?? "unavailable",
+            outputTokens: child.usage?.output_tokens ?? "unavailable",
+            reasoningOutputTokens:
+              child.usage?.reasoning_output_tokens ?? "unavailable",
+          },
+          observed: child.observed,
+          grantReceiptDigest: granted.receipt.digest,
+          ...(diagnosticArtifactDigest === undefined
+            ? {}
+            : { diagnosticArtifactDigest }),
+          ...(attachment === undefined
+            ? {}
+            : { reportArtifactDigest: attachment.digest }),
+        });
+        children.push({
+          agentPath: child.agentPath,
+          receipt,
+          ...(attachment === undefined ? {} : { attachment }),
+        });
+      }
+      agentRuns = children;
+      if (children.length > 3)
+        return incomplete(
+          "policy",
+          result.completedAt,
+          granted.receipt.digest,
+          undefined,
+          "child-count-exceeded",
+        );
+    }
     const decoded =
       result.status === "exited" && result.exitCode === 0
         ? decodeTranscript(result.stdout, run.outputKind)
         : undefined;
+    if ((brokerMetrics?.requestLimitExceeded ?? 0) > 0)
+      return incomplete(
+        "policy",
+        result.completedAt,
+        granted.receipt.digest,
+        undefined,
+        "broker-request-cap",
+      );
+    if (brokerRequestBytesExceeded(result.stdout))
+      return incomplete(
+        "policy",
+        result.completedAt,
+        granted.receipt.digest,
+        undefined,
+        "broker-request-bytes-cap",
+      );
     if (decoded === undefined || "reasonDetail" in decoded) {
       const limit = providerLimitOf(result.stdout);
       if (limit !== undefined)
@@ -612,11 +1179,13 @@ export class CodexNativeAgentRuntime {
     }
     if (result.status !== "exited" || result.exitCode !== 0)
       return incomplete(
-        "provider",
+        result.status === "failed" || result.exitCode === 137
+          ? "sandbox"
+          : "provider",
         result.completedAt,
         granted.receipt.digest,
         undefined,
-        `cli-exit:${result.exitCode}`,
+        result.failureKind ?? `cli-exit:${result.exitCode}`,
       );
     if (decoded === undefined || "reasonDetail" in decoded)
       return incomplete(
@@ -637,15 +1206,20 @@ export class CodexNativeAgentRuntime {
     }
     return {
       attachment,
+      ...(cooperative ? { agentRuns } : {}),
       receipt: createNativeRunReceipt({
         ...run,
         terminal: "completed",
         reason: "unavailable",
         startedAt: result.startedAt,
         completedAt: result.completedAt,
-        usage: decoded.usage,
-        observed: decoded.observed,
+        usage: rootUsage ?? decoded.usage,
+        observed: rootObserved ?? decoded.observed,
+        ...(brokerMetrics === undefined ? {} : { brokerMetrics }),
         sandboxExitCode: result.exitCode,
+        ...(rootDiagnosticArtifactDigest === undefined
+          ? {}
+          : { diagnosticArtifactDigest: rootDiagnosticArtifactDigest }),
         grantReceiptDigest: granted.receipt.digest,
         reportArtifactDigest: attachment.digest,
       }),

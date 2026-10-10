@@ -250,8 +250,14 @@ const providerReportSchema = z.strictObject({
   unexamined: z.string(),
 });
 
+class DiscoveryReportError extends Error {}
+
 export type DiscoveryStop =
-  "no-new-finding" | "max-runs" | "plans-exhausted" | "provider-limit";
+  | "no-new-finding"
+  | "max-runs"
+  | "plans-exhausted"
+  | "provider-limit"
+  | "incomplete";
 
 /** Run independent provider calls, record only admitted claims, and stop on no new findings. */
 export async function runDiscoveryCampaign(options: {
@@ -321,7 +327,7 @@ export async function runDiscoveryCampaign(options: {
   ).at(0);
   if (concluded?.type === "discovery-concluded")
     return { runCount: 0, findingsRecorded: 0, stoppedBy: concluded.stoppedBy };
-  const startedRuns = new Map<string, "explore" | "continue">();
+  const startedRuns = new Map<string, "explore" | "continue" | "child">();
   let startAfterSequence = 0;
   for (;;) {
     const page = options.ledger.read({
@@ -349,13 +355,13 @@ export async function runDiscoveryCampaign(options: {
       event.type === "discovery-run-finished" &&
       // Old events precede runKind and each represented one exploration.
       (startedRuns.get(event.runId) ?? "explore") === "explore" &&
-      (event.outcome === "completed" || event.outcome === "failed"),
+      event.outcome === "completed",
   ).length;
   const seen = new Set<string>();
   let noNewFindings = 0;
   let runCount = 0;
   let findingsRecorded = 0;
-  let stopped: "no-new-finding" | "provider-limit" | undefined;
+  let stopped: "no-new-finding" | "provider-limit" | "incomplete" | undefined;
   if (
     options.runWallTimeMs !== undefined &&
     (!Number.isSafeInteger(options.runWallTimeMs) ||
@@ -475,6 +481,7 @@ export async function runDiscoveryCampaign(options: {
       const admittedLeads: AdmittedLead[] = [];
       let usage: NativeRunReceipt["usage"] | undefined;
       let observed: NativeRunReceipt["observed"] | undefined;
+      let brokerMetrics: NativeRunReceipt["brokerMetrics"];
       let sandboxExitCode: number | undefined;
       let diagnosticArtifactDigest: string | undefined;
       let receiptDigest: string | undefined;
@@ -485,6 +492,164 @@ export async function runDiscoveryCampaign(options: {
             readonly providerLimit?: "rate-limit" | "quota";
           }
         | undefined;
+      const rejectCandidate = async (
+        ownerRunId: string,
+        candidateKind: "finding" | "lead",
+        candidateIndex: number,
+        candidate: unknown,
+        reason: "schema" | "identity",
+      ) => {
+        const candidateDigest = await options.evidence.putFiles({
+          "candidate.json": canonicalJson(candidate),
+        });
+        const appended = await options.ledger.append({
+          ...base,
+          identity: `candidate-rejected-${ownerRunId}-${candidateKind}-${candidateIndex}`,
+          type: "candidate-rejected",
+          runId: ownerRunId,
+          candidateKind,
+          candidateIndex,
+          reason,
+          artifacts: [{ kind: "candidate", digest: candidateDigest }],
+        });
+        if (appended.status === "conflict")
+          throw new Error("Candidate rejection identity conflict");
+      };
+      const recordReport = async (
+        ownerRunId: string,
+        attachment: NonNullable<DiscoveryTransportResult["attachment"]>,
+      ): Promise<void> => {
+        const stored = await options.attachments.read(attachment);
+        if (stored.status !== "resolved")
+          throw new DiscoveryReportError(
+            "Discovery report attachment is unavailable",
+          );
+        let report: z.infer<typeof providerReportSchema>;
+        try {
+          report = providerReportSchema.parse(
+            JSON.parse(stored.bytes.toString("utf8")) as unknown,
+          );
+        } catch {
+          throw new DiscoveryReportError("Discovery report is malformed");
+        }
+        for (const [index, candidate] of report.findings.entries()) {
+          let finding: AdmittedFinding;
+          try {
+            finding = options.admitFinding(candidate, {
+              runId: ownerRunId,
+              snapshotDigest: input.snapshotDigest,
+              reportArtifactDigest: attachment.digest,
+            });
+          } catch {
+            await rejectCandidate(
+              ownerRunId,
+              "finding",
+              index,
+              candidate,
+              "schema",
+            );
+            continue;
+          }
+          if (
+            finding.discoveryRunId !== ownerRunId ||
+            finding.snapshotDigest !== input.snapshotDigest
+          ) {
+            await rejectCandidate(
+              ownerRunId,
+              "finding",
+              index,
+              candidate,
+              "identity",
+            );
+            continue;
+          }
+          const findingDigest = await options.evidence.putFiles({
+            "finding.json": canonicalJson(finding),
+          });
+          const appended = await options.ledger.append({
+            ...base,
+            artifacts: [{ kind: "finding", digest: findingDigest }],
+            identity: `discovery-finding-${finding.findingId}`,
+            type: "finding-recorded",
+            findingId: finding.findingId,
+            runId: ownerRunId,
+            category: finding.impact,
+            ...(finding.historyRecordId === undefined
+              ? {}
+              : { historyRecordId: finding.historyRecordId }),
+          });
+          if (appended.status === "conflict")
+            throw new Error("Finding identity conflict");
+          findingsRecorded += appended.status === "appended" ? 1 : 0;
+          const signature = canonicalDigest({
+            claim: finding.claim,
+            impact: finding.impact,
+            sourceTrace: finding.sourceTrace,
+          });
+          if (!seen.has(signature)) foundNew = true;
+          seen.add(signature);
+        }
+        for (const [index, candidate] of report.leads.entries()) {
+          let lead: AdmittedLead;
+          try {
+            if (
+              options.admitLead === undefined ||
+              options.leadSignature === undefined
+            )
+              throw new Error("Lead admission is unavailable");
+            lead = options.admitLead(candidate, {
+              runId: ownerRunId,
+              trialId: trial.trialId,
+              snapshotDigest: input.snapshotDigest,
+              reportArtifactDigest: attachment.digest,
+            });
+          } catch {
+            await rejectCandidate(
+              ownerRunId,
+              "lead",
+              index,
+              candidate,
+              "schema",
+            );
+            continue;
+          }
+          if (
+            lead.discoveryRunId !== ownerRunId ||
+            lead.trialId !== trial.trialId ||
+            lead.snapshotDigest !== input.snapshotDigest
+          ) {
+            await rejectCandidate(
+              ownerRunId,
+              "lead",
+              index,
+              candidate,
+              "identity",
+            );
+            continue;
+          }
+          const leadDigest = await options.evidence.putFiles({
+            "lead.json": canonicalJson(lead),
+          });
+          const appended = await options.ledger.append({
+            ...base,
+            artifacts: [{ kind: "lead", digest: leadDigest }],
+            identity: `discovery-lead-${lead.leadId}`,
+            type: "lead-recorded",
+            leadId: lead.leadId,
+            runId: ownerRunId,
+            trialId: trial.trialId,
+            missingEdge: lead.missingEdge,
+            primitive: lead.primitive,
+            storageKind: lead.storage?.kind ?? "none",
+          });
+          if (appended.status === "conflict")
+            throw new Error("Lead identity conflict");
+          admittedLeads.push(lead);
+          const signature = digest.parse(options.leadSignature!(lead));
+          if (!seen.has(signature)) foundNew = true;
+          seen.add(signature);
+        }
+      };
       try {
         const result = await options.executor.execute({
           ...run,
@@ -502,6 +667,7 @@ export async function runDiscoveryCampaign(options: {
         );
         usage = receipt.usage;
         observed = receipt.observed;
+        brokerMetrics = receipt.brokerMetrics;
         sandboxExitCode = receipt.sandboxExitCode;
         diagnosticArtifactDigest = receipt.diagnosticArtifactDigest;
         // The receipt carries the runtime the run used (CLI version, catalog digest, model).
@@ -522,6 +688,94 @@ export async function runDiscoveryCampaign(options: {
               ? {}
               : { providerLimit: receipt.providerLimit }),
           };
+        for (const child of result.agentRuns ?? []) {
+          const childReceipt = nativeRunReceiptSchema.parse(child.receipt);
+          const childStart = await options.ledger.append({
+            ...base,
+            identity: `discovery-start-${childReceipt.runId}`,
+            type: "discovery-run-started",
+            runId: childReceipt.runId,
+            trialId: trial.trialId,
+            trialOrdinal: trial.trialOrdinal,
+            runKind: "child",
+            parentRunId: run.runId,
+            labId: options.labId,
+            history: historyMetadata,
+            configuration: {
+              ...planned.configuration,
+              promptDigest:
+                planned.configuration.promptDigest ?? input.promptDigest,
+              trustBoundaryVersion: input.trustBoundary.version,
+              agentPath: child.agentPath,
+            },
+          });
+          if (childStart.status === "conflict")
+            throw new Error("Child start identity conflict");
+          const childReceiptDigest = await options.evidence.putFiles({
+            "receipt.json": canonicalJson(childReceipt),
+          });
+          let childOutcome: "completed" | "failed" = "failed";
+          let childFailure: typeof failure;
+          if (
+            childReceipt.terminal === "completed" &&
+            childReceipt.targetSnapshotDigest === input.snapshotDigest &&
+            childReceipt.runtimeProfileDigest === run.profile.digest &&
+            child.attachment !== undefined &&
+            childReceipt.reportArtifactDigest === child.attachment.digest
+          ) {
+            try {
+              await recordReport(childReceipt.runId, child.attachment);
+              childOutcome = "completed";
+            } catch (error) {
+              if (!(error instanceof DiscoveryReportError)) throw error;
+              childFailure = {
+                reason: "schema",
+                reasonDetail: "child-report-unreadable",
+              };
+            }
+          } else {
+            childFailure = {
+              reason:
+                childReceipt.reason === "unavailable"
+                  ? "policy"
+                  : childReceipt.reason,
+              reasonDetail:
+                childReceipt.reasonDetail ?? "child-receipt-invalid",
+            };
+          }
+          const childFinished = await options.ledger.append({
+            ...base,
+            identity: `discovery-finish-${childReceipt.runId}`,
+            type: "discovery-run-finished",
+            runId: childReceipt.runId,
+            outcome: childOutcome,
+            costUsd: "unavailable",
+            wallTimeMs: Math.max(
+              0,
+              Date.parse(childReceipt.completedAt) -
+                Date.parse(childReceipt.startedAt),
+            ),
+            usage: childReceipt.usage,
+            ...(childReceipt.observed === undefined
+              ? {}
+              : { observed: childReceipt.observed }),
+            ...(childReceipt.sandboxExitCode === undefined
+              ? {}
+              : { sandboxExitCode: childReceipt.sandboxExitCode }),
+            ...(childReceipt.diagnosticArtifactDigest === undefined
+              ? {}
+              : {
+                  diagnosticArtifactDigest:
+                    childReceipt.diagnosticArtifactDigest,
+                }),
+            ...(childFailure === undefined ? {} : childFailure),
+            artifacts: [
+              { kind: "native-run-receipt", digest: childReceiptDigest },
+            ],
+          });
+          if (childFinished.status === "conflict")
+            throw new Error("Child finish identity conflict");
+        }
         const attachment = result.attachment;
         if (
           receipt.terminal === "completed" &&
@@ -531,100 +785,15 @@ export async function runDiscoveryCampaign(options: {
           attachment !== undefined &&
           receipt.reportArtifactDigest === attachment.digest
         ) {
-          const stored = await options.attachments.read(attachment);
-          if (stored.status === "resolved") {
-            const report = providerReportSchema.parse(
-              JSON.parse(stored.bytes.toString("utf8")) as unknown,
-            );
-            const findings = report.findings.map((candidate) =>
-              options.admitFinding(candidate, {
-                runId: run.runId,
-                snapshotDigest: input.snapshotDigest,
-                reportArtifactDigest: attachment.digest,
-              }),
-            );
-            for (const finding of findings) {
-              if (
-                finding.discoveryRunId !== run.runId ||
-                finding.snapshotDigest !== input.snapshotDigest
-              )
-                throw new Error("Finding differs from its run");
-            }
-            for (const finding of findings) {
-              // The full claim and trace stay private; the ledger keeps the digest.
-              const findingDigest = await options.evidence.putFiles({
-                "finding.json": canonicalJson(finding),
-              });
-              const appended = await options.ledger.append({
-                ...base,
-                artifacts: [{ kind: "finding", digest: findingDigest }],
-                identity: `discovery-finding-${finding.findingId}`,
-                type: "finding-recorded",
-                findingId: finding.findingId,
-                runId: run.runId,
-                category: finding.impact,
-                ...(finding.historyRecordId === undefined
-                  ? {}
-                  : { historyRecordId: finding.historyRecordId }),
-              });
-              if (appended.status === "conflict")
-                throw new Error("Finding identity conflict");
-              findingsRecorded += appended.status === "appended" ? 1 : 0;
-              const signature = canonicalDigest({
-                claim: finding.claim,
-                impact: finding.impact,
-                sourceTrace: finding.sourceTrace,
-              });
-              if (!seen.has(signature)) foundNew = true;
-              seen.add(signature);
-            }
-            for (const candidate of report.leads) {
-              if (
-                options.admitLead === undefined ||
-                options.leadSignature === undefined
-              )
-                throw new Error("Lead admission is unavailable");
-              let lead: AdmittedLead;
-              try {
-                lead = options.admitLead(candidate, {
-                  runId: run.runId,
-                  trialId: trial.trialId,
-                  snapshotDigest: input.snapshotDigest,
-                  reportArtifactDigest: attachment.digest,
-                });
-              } catch {
-                // A malformed candidate is discarded without changing the run outcome.
-                continue;
-              }
-              if (
-                lead.discoveryRunId !== run.runId ||
-                lead.trialId !== trial.trialId ||
-                lead.snapshotDigest !== input.snapshotDigest
-              )
-                throw new Error("Lead differs from its run");
-              const leadDigest = await options.evidence.putFiles({
-                "lead.json": canonicalJson(lead),
-              });
-              const appended = await options.ledger.append({
-                ...base,
-                artifacts: [{ kind: "lead", digest: leadDigest }],
-                identity: `discovery-lead-${lead.leadId}`,
-                type: "lead-recorded",
-                leadId: lead.leadId,
-                runId: run.runId,
-                trialId: trial.trialId,
-                missingEdge: lead.missingEdge,
-                primitive: lead.primitive,
-                storageKind: lead.storage?.kind ?? "none",
-              });
-              if (appended.status === "conflict")
-                throw new Error("Lead identity conflict");
-              admittedLeads.push(lead);
-              const signature = digest.parse(options.leadSignature(lead));
-              if (!seen.has(signature)) foundNew = true;
-              seen.add(signature);
-            }
+          try {
+            await recordReport(run.runId, attachment);
             outcome = "completed";
+          } catch (error) {
+            if (!(error instanceof DiscoveryReportError)) throw error;
+            failure = {
+              reason: "schema",
+              reasonDetail: "root-report-unreadable",
+            };
           }
         }
       } catch {
@@ -640,6 +809,7 @@ export async function runDiscoveryCampaign(options: {
         wallTimeMs,
         ...(usage === undefined ? {} : { usage }),
         ...(observed === undefined ? {} : { observed }),
+        ...(brokerMetrics === undefined ? {} : { brokerMetrics }),
         ...(sandboxExitCode === undefined ? {} : { sandboxExitCode }),
         ...(diagnosticArtifactDigest === undefined
           ? {}
@@ -705,6 +875,7 @@ export async function runDiscoveryCampaign(options: {
     }
     // Stop rules are evaluated once per Trial; in-flight Trials still finish.
     if (explore.outcome === "provider-limited") stopped ??= "provider-limit";
+    if (explore.outcome === "failed") stopped ??= "incomplete";
     if (explore.outcome === "completed")
       noNewFindings = trialFoundNew ? 0 : noNewFindings + 1;
     if (noNewFindings >= input.stopRules.noFindingRuns)
@@ -721,8 +892,8 @@ export async function runDiscoveryCampaign(options: {
     (options.plannedTrials.length >= input.stopRules.maxRuns
       ? "max-runs"
       : "plans-exhausted");
-  // A provider limit leaves the target open so the campaign can resume it.
-  if (stoppedBy !== "provider-limit") {
+  // An incomplete attempt or provider limit leaves the target open for a fresh Trial.
+  if (stoppedBy !== "provider-limit" && stoppedBy !== "incomplete") {
     const recorded = await options.ledger.append({
       schemaVersion: 1,
       campaignId: options.campaignId,

@@ -217,6 +217,7 @@ export class Review<TFacts = unknown> {
     let unverified = 0;
     for (const { event: finding } of this.#readAll("finding-recorded")) {
       if (finding.type !== "finding-recorded" || !inCampaign(finding)) continue;
+      if (finding.derivationKind === "fixed-version-control") continue;
       const verified = latestVerification.get(key(finding));
       if (verified === undefined) {
         unverified++;

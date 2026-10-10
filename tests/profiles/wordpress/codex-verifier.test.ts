@@ -141,6 +141,21 @@ async function fixture(
         issueCanary
           ? { nonce: "fake-nonce", beaconUrl: "http://wordpress/fake-beacon" }
           : null,
+      canaryLedger: () =>
+        issueCanary
+          ? {
+              nonce: "fake-nonce",
+              adminUser: "wbh-canary-admin-fake-nonce",
+              roleBaseline: {},
+              sqlCanary: { table: "wbh_canary", value: "fake-value" },
+              fileCanaries: [],
+              option: "wbh_canary_fake-nonce",
+              postId: "1",
+              postMeta: "wbh_canary_fake-nonce",
+              file: "/tmp/wbh-canary.txt",
+              user: "wbh-canary-fake-nonce",
+            }
+          : null,
     },
     store,
     ledger,
@@ -248,6 +263,60 @@ describe("CodexVerifier.attempt", () => {
     },
   );
 
+  it("passes the administrator principal canary to an account takeover verifier", async () => {
+    const f = await fixture(
+      [
+        {
+          "http.json": JSON.stringify({
+            exchanges: [{ request: {}, response: { body: "ordinary" } }],
+          }),
+          "steps.md": "Step",
+        },
+      ],
+      undefined,
+      "account-takeover",
+    );
+    expect(
+      await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+    ).toMatchObject({ status: "attempted" });
+    expect(f.runs[0]?.prompt).toContain("wbh-canary-admin-fake-nonce");
+    expect(
+      f.ledger.read({ type: "verifier-run-finished" }).at(0)?.event,
+    ).toMatchObject({ canaryIssued: "principal" });
+  });
+
+  it("passes a judge-owned earlier route only to the version-comparison Verifier", async () => {
+    const f = await fixture([
+      {
+        "http.json": JSON.stringify({
+          exchanges: [{ request: {}, response: { body: "ordinary" } }],
+        }),
+        "steps.md": "Step",
+      },
+    ]);
+    const referenceRoute = {
+      role: "subscriber",
+      defaultSettings: false,
+      steps: [
+        {
+          kind: "http",
+          method: "POST",
+          path: "/same-route",
+          expected: "Earlier observed response",
+        },
+      ],
+    };
+    expect(
+      await f.verifier.attempt({
+        finding: f.finding,
+        lab: f.lab,
+        referenceRoute,
+      }),
+    ).toMatchObject({ status: "attempted" });
+    expect(f.runs[0]?.prompt).toContain("## Earlier confirmed route");
+    expect(f.runs[0]?.prompt).toContain("/same-route");
+  });
+
   it("returns incomplete before starting a run when the Lab cannot issue a required canary", async () => {
     const f = await fixture([], undefined, "rce", false);
     expect(
@@ -286,6 +355,45 @@ describe("CodexVerifier.attempt", () => {
       }),
     ).toMatchObject({ status: "incomplete", reason: "recipe" });
   });
+
+  it("takes a missing session candidate from a reported login Set-Cookie header", async () => {
+    const f = await fixture([
+      {
+        "http.json": JSON.stringify({
+          exchanges: [
+            {
+              request: { method: "GET", url: "http://wordpress/" },
+              response: {
+                body: "ordinary",
+                headers: {
+                  "set-cookie": [
+                    "wordpress_logged_in_fixture=example%7Ctoken; Path=/; HttpOnly",
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+        "steps.md": "Synthetic steps",
+      },
+    ]);
+    const attempt = await f.verifier.attempt({
+      finding: f.finding,
+      lab: f.lab,
+    });
+    expect(attempt.status).toBe("attempted");
+    if (attempt.status !== "attempted") return;
+    const saved = await f.store.readFile(
+      attempt.recipeDigest,
+      "session.json",
+      1024,
+    );
+    expect(saved.status).toBe("resolved");
+    if (saved.status === "resolved")
+      expect(JSON.parse(saved.bytes.toString("utf8"))).toEqual({
+        cookie: "example%7Ctoken",
+      });
+  });
   it("returns a private HTTP recipe and records a fresh verifier receipt", async () => {
     const http = {
       exchanges: [
@@ -314,7 +422,7 @@ describe("CodexVerifier.attempt", () => {
     expect(event?.type).toBe("verifier-run-finished");
     if (event?.type !== "verifier-run-finished") return;
     expect(event.promptDigest).toBe(
-      "sha256:a95b104f54d482095c766f91f91e8dd645f7f6c50c54aa11ccdc39d7c6a24161",
+      "sha256:ddff21a73b534fd4c775163195f838e428124cf481fedad8ae9f3948dd1acd1d",
     );
     const storedReceipt = await f.store.readFile(
       event.receiptDigest,
@@ -333,11 +441,24 @@ describe("CodexVerifier.attempt", () => {
   });
 
   it("preserves the route facts needed by the Harness judge", async () => {
-    const route = { role: "subscriber", defaultSettings: true, steps: [] };
+    const route = {
+      role: "subscriber",
+      defaultSettings: true,
+      steps: ["GET /synthetic", "HEAD /synthetic"],
+    };
     const f = await fixture([
       {
         "http.json": JSON.stringify({
-          exchanges: [{ request: {}, response: { body: "ordinary" } }],
+          exchanges: [
+            {
+              request: { method: "GET", url: "http://wordpress/synthetic" },
+              response: { body: "ordinary" },
+            },
+            {
+              request: { method: "HEAD", url: "http://wordpress/synthetic" },
+              response: { body: "" },
+            },
+          ],
         }),
         "steps.md": "Synthetic steps",
         "route.json": JSON.stringify(route),
@@ -356,7 +477,50 @@ describe("CodexVerifier.attempt", () => {
     );
     expect(stored.status).toBe("resolved");
     if (stored.status === "resolved")
-      expect(JSON.parse(stored.bytes.toString("utf8"))).toEqual(route);
+      expect(JSON.parse(stored.bytes.toString("utf8"))).toEqual({
+        role: "subscriber",
+        account: "subscriber",
+        defaultSettings: true,
+        configurationChanges: [],
+        steps: [
+          {
+            kind: "http",
+            method: "GET",
+            path: "/synthetic",
+            expected: "Observe the response recorded in http.json",
+          },
+          {
+            kind: "http",
+            method: "HEAD",
+            path: "/synthetic",
+            expected: "Observe the response recorded in http.json",
+          },
+        ],
+      });
+  });
+
+  it("rejects a route reconstructed from an off-Lab HTTP request", async () => {
+    const f = await fixture([
+      {
+        "http.json": JSON.stringify({
+          exchanges: [
+            {
+              request: { method: "GET", url: "http://outside.invalid/path" },
+              response: { body: "ordinary" },
+            },
+          ],
+        }),
+        "steps.md": "Synthetic steps",
+        "route.json": JSON.stringify({
+          role: "subscriber",
+          defaultSettings: true,
+          steps: ["GET /path"],
+        }),
+      },
+    ]);
+    expect(
+      await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+    ).toMatchObject({ status: "incomplete", reason: "recipe" });
   });
 
   it("keeps refutation separate from the recipe and ignores a claimed verdict", async () => {

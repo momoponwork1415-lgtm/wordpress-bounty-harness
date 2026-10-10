@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "selectionPolicyPath": "examples/translatepress-3.3.1/selection.json",
+  "promptId": "short-objective-managed-v1",
+  "programmeBoundary": {
+    "version": "wordfence-2026-10-08",
+    "text": "Wordfence Bug Bounty Program, transcribed 2026-10-08. In scope: impact reachable by an unauthenticated visitor, a Subscriber or a Customer. Highest value: arbitrary PHP file upload or read, arbitrary PHP file deletion, arbitrary options update, remote code execution, authentication bypass to admin, privilege escalation to admin. Also in scope: stored XSS, SQL injection, account takeover, sensitive information disclosure. Out of scope: anything needing Contributor, Author, Editor, Shop Manager or Administrator; reflected XSS; denial of service; business-logic-only impact."
+  },
+  "stopRules": {
+    "maxRuns": 1,
+    "noFindingRuns": 1
+  },
+  "runWallTimeMinutes": 90,
+  "resources": {
+    "maxConcurrentRuns": 1,
+    "memoryBudgetMiB": 10240
+  },
+  "wordpressVersion": "6.8.3",
+  "lab": {
+    "siteTitle": "Harness Lab",
+    "initialPosts": ["Welcome", "Sample page for translation"],
+    "customerRole": false,
+    "translatePress": {
+      "administratorSecondaryLocale": "fr_FR"
+    }
+  }
+}

@@ -23,13 +23,15 @@
 
 ## 探索promptの規則（SPEC.md 第6節）
 
-- 既定は短い目的prompt `short-objective-v2`。書くのは目的、trust境界、到達すべき影響の分類と報奨順、Finding / Lead の出力形式。探索の手順、checklist、役割分担、段階は書かない。手順はエージェントが決める。
-- wp2shell由来の固定手順や役割分担をHarnessに持ち込まない。探索の管理指示だけを書く変種は版付き・digest付きのopt-in本番A/B軸にできる。Harnessが持つのは隔離、分担、停止規則、判定、記録だけ。
-- prompt本文を変えたら版を上げ、旧版を残してdigest pinを更新する。管理指示変種を既定にする前に本番A/Bで測る。#73の開発セットでは両変種とも公開2事例に対してsource候補0件で、短い目的promptを既定に残した。
+- 既定はpilotで使ったv2からWordfenceのXSS対象範囲と影響優先順位を修正した `short-objective-managed-v4`。`wp2shell-bounty-v2` はADR 0017の比較armとして使う。どちらも脆弱性が必ずあるという前提や固定された攻撃経路は与えない。
+- 主経路は Root＋最大3 subagent の協調Trial（ADR 0016）。人数と隔離はHarnessが管理し、分担と仮説はRootが決める。
+- WP2Shell変種の30分下限はRootへの指示であり、Harnessが強制する保証ではない。run wallとcoverageを測り、守られない場合は継続境界を改善する。
+- prompt本文を変えたら版を上げ、旧版を残してdigest pinを更新する。旧promptは過去Trialの再現用として維持する。
+- Finding / Leadの出力契約はprompt本文に書かず、Harnessがschemaから生成する節として渡す（ADR 0019）。候補は出力境界で棄却せず、正規化して受理するか保留する（ADR 0018）。
 
 ## `profiles/wordpress/` の規則（ADR 0011）
 
-WordPress 固有のもの（WordPress.org からの取得、WordPress + MySQL の Lab 供給、PHP 向けの判定器、Wordfence / Patchstack の対象範囲方針、trust 境界宣言の雛形、保存先索引と成分分担、Lead 型、答えの鍵の形式）は `profiles/wordpress/` に置く。
+WordPress 固有のもの（WordPress.org からの取得、WordPress + MySQL の Lab 供給、PHP 向けの判定器、Wordfence / Patchstack の対象範囲方針、trust 境界宣言の雛形、保存先索引と成分分担、Lead 型、評価対象の分類）は `profiles/wordpress/` に置く。
 
 汎用モジュール（selection / snapshot / lab / discovery / verification / ledger / review / evaluation）は profile が実装するインターフェースの型だけに依存し、WordPress の型や path を import しない。plugin、slug、hook、AJAX action、`wp_options` のような語が汎用モジュールに現れたら、それは profile へ移す合図。
 
@@ -44,3 +46,17 @@ profile のインターフェースは、2つ目の profile ができるまで�
 - 変更は「今週の問い」1 つに答える PR 1 本。PR テンプレートの 5 項目（問い、変えたこと、変えなかったこと、測った数字、消し方）を日本語で埋める。
 - 探索に触る PR は開発セットで最低 3 Trial の結果を貼る。数字のない探索変更は merge されない。
 - 「調べて報告」の成果物は `docs/reviews/` に日付付きで置く。正本ではない。
+
+## Agent skills
+
+### Issue tracker
+
+作業IssueはGitHub Issuesで管理する。手順は `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+Matt Pocock系スキルの5つの標準ラベルを使う。対応は `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+単一コンテキストとして、用語集はルートの `GLOSSARY.md`、判断記録は `docs/adr/` に置く。読み方は `docs/agents/domain.md`。

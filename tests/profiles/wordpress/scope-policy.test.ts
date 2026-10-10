@@ -52,6 +52,20 @@ describe("WordPress programme scope policy", () => {
     expect(
       assessWordpressScope(policy, {
         ...base,
+        category: "stored-xss",
+        observations: ["javascript-executed"],
+      }).map(({ status }) => status),
+    ).toEqual(["in-scope", "ambiguous"]);
+    expect(
+      assessWordpressScope(policy, {
+        ...base,
+        category: "stored-xss",
+        observations: ["javascript-executed", "site-wide"],
+      }).map(({ status }) => status),
+    ).toEqual(["in-scope", "in-scope"]);
+    expect(
+      assessWordpressScope(policy, {
+        ...base,
         category: "reflected-xss",
         observations: ["javascript-executed", "nonce-free"],
       }).map(({ status }) => status),

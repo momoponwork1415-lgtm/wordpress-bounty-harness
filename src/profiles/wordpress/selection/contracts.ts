@@ -12,6 +12,16 @@ export const wordPressSelectionPolicySchema = z
     schemaVersion: z.literal(1),
     id: z.string().min(1).max(128),
     candidateSlugs: z.array(slugSchema),
+    /** Counts of public low-privilege, high-impact catalog records used to nominate candidates. */
+    historySignals: z
+      .record(slugSchema, z.number().int().nonnegative())
+      .optional(),
+    historySource: z
+      .strictObject({
+        digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+        refreshedAt: z.iso.datetime({ offset: true }),
+      })
+      .optional(),
     minimumActiveInstallations: z.number().int().nonnegative(),
     maximumObservationAgeDays: z.number().positive(),
     maximumUpdateAgeDays: z.number().positive(),
@@ -26,6 +36,7 @@ export const wordPressSelectionPolicySchema = z
       recency: z.number().nonnegative(),
       surface: z.number().nonnegative(),
       highThreat: z.number().nonnegative(),
+      history: z.number().nonnegative().optional(),
     }),
     /** Discovery runs per target: deeper where the expected reward is higher. */
     runBudget: z.strictObject({
@@ -41,8 +52,19 @@ export const wordPressSelectionPolicySchema = z
     (policy) =>
       Object.keys(policy.pinnedVersions ?? {}).every((slug) =>
         policy.candidateSlugs.includes(slug),
+      ) &&
+      Object.keys(policy.historySignals ?? {}).every((slug) =>
+        policy.candidateSlugs.includes(slug),
       ),
-    { message: "Pinned slugs must be candidates", path: ["pinnedVersions"] },
+    {
+      message: "Pinned and history slugs must be candidates",
+      path: ["candidateSlugs"],
+    },
+  )
+  .refine(
+    (policy) =>
+      policy.historySignals === undefined || policy.historySource !== undefined,
+    { message: "History signals require a source", path: ["historySource"] },
   );
 
 export type WordPressSelectionPolicy = z.infer<
@@ -60,7 +82,8 @@ export type SelectionReason =
   | "excluded-slug"
   | "below-installation-threshold"
   | "programme-asset-out-of-scope"
-  | "programme-stale";
+  | "programme-stale"
+  | "history-stale";
 
 export interface WordPressTargetSelection extends TargetSelection {
   readonly slug: string;
@@ -76,6 +99,7 @@ export interface WordPressTargetSelection extends TargetSelection {
     readonly recency: number;
     readonly surface: number;
     readonly highThreat: number;
+    readonly history: number;
   };
   readonly observationRef: WordPressOrgTargetObservationRef;
   readonly programmeRef: ProgrammeEligibilitySnapshotRef;

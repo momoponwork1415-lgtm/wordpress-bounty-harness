@@ -27,6 +27,7 @@ afterEach(async () => {
 async function fixture(
   preflight: "ready" | "no-runsc" | "missing-image" = "ready",
   core?: { readonly version: string; readonly runningVersion: string },
+  pluginSlug = "example",
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-lab-"));
   directories.push(root);
@@ -95,7 +96,7 @@ async function fixture(
       resolve: async () => ({
         target: {
           kind: "plugin",
-          pluginSlug: "example",
+          pluginSlug,
           sourceDirectory,
           sourceTree,
         },
@@ -279,6 +280,30 @@ async function fixture(
 }
 
 describe("WordPress gVisor Lab", () => {
+  it("seeds an ordinary approved comment on the first published post when requested", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, {
+      ...setup,
+      initialApprovedComment: true,
+    });
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status !== "ready") return;
+    const post = commands.find((command) =>
+      command.args.includes("--post_title=Welcome"),
+    );
+    const comment = commands.find((command) =>
+      command.args.includes("--comment_content=Thanks for the useful post."),
+    );
+    expect(post?.args).toContain("--porcelain");
+    expect(comment?.args).toContain("--comment_post_ID=7");
+    expect(comment?.args).toContain("--comment_approved=1");
+    expect(comment).toBeDefined();
+    expect(post).toBeDefined();
+    if (comment !== undefined && post !== undefined)
+      expect(commands.indexOf(comment)).toBeGreaterThan(commands.indexOf(post));
+    await lab.teardown(provisioned.handle);
+  });
+
   it("grants SELECT only on existing non-canary tables before seeding", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const provisioned = await lab.provision(snapshot, {
@@ -549,6 +574,31 @@ describe("WordPress gVisor Lab", () => {
       await lab.observeAccountRoles(provisioned.handle, "bad name;"),
     ).toEqual({ status: "unavailable" });
     expect(commands.length).toBe(before);
+  });
+
+  it("gives the administrator canary the configured published secondary locale", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "translatepress-multilingual",
+    );
+    const provisioned = await lab.provision(snapshot, {
+      ...setup,
+      translatePress: { administratorSecondaryLocale: "fr_FR" },
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    expect((await lab.seedCanaries(provisioned.handle)).status).toBe("seeded");
+    expect(
+      commands.some(
+        (command) =>
+          command.args.includes("eval") &&
+          command.args.some(
+            (arg) =>
+              arg.includes("wbh-canary-admin-fixed-nonce") &&
+              arg.includes('get_user_locale($admin->ID)!=="fr_FR"'),
+          ),
+      ),
+    ).toBe(true);
   });
 
   it("seeds a SQL canary row whose value appears nowhere else and reports whether the table changed", async () => {

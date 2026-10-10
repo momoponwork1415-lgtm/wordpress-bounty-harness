@@ -17,6 +17,18 @@ const relativeFile = z
         .split("/")
         .every((part) => part !== "" && part !== "." && part !== ".."),
   );
+const sourceFile = z
+  .string()
+  .transform((value) =>
+    value.startsWith("/workspace/main/")
+      ? value.slice("/workspace/main/".length)
+      : value.startsWith("/workspace/wordpress/")
+        ? `@wordpress/${value.slice("/workspace/wordpress/".length)}`
+        : value.startsWith("../wordpress/")
+          ? `@wordpress/${value.slice("../wordpress/".length)}`
+          : value,
+  )
+  .pipe(relativeFile);
 
 export const wordpressLeadClaimSchema = z.strictObject({
   summary: z.string().min(1).max(2000),
@@ -51,7 +63,7 @@ export const wordpressLeadClaimSchema = z.strictObject({
   sourceTrace: z
     .array(
       z.strictObject({
-        file: relativeFile,
+        file: sourceFile,
         function: z.string().min(1).max(256),
         line: z.number().int().positive(),
       }),

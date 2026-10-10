@@ -34,7 +34,10 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 
-async function campaign(findingRuns: readonly number[]) {
+async function campaign(
+  findingRuns: readonly number[],
+  options: { readonly childSurvivesBrokenRoot?: boolean } = {},
+) {
   const root = await mkdtemp(join(tmpdir(), "wbh-campaign-"));
   directories.push(root);
   const attachments = new ProviderAttachmentStore(join(root, "reports"));
@@ -106,8 +109,50 @@ async function campaign(findingRuns: readonly number[]) {
     executor: {
       async execute(run) {
         expect(run.expiresAt).toBe("2026-10-08T08:30:00.000Z");
+        const ordinal = calls++;
+        if (ordinal === 0 && options.childSurvivesBrokenRoot) {
+          const childAttachment = await attachments.put(
+            "findings",
+            Buffer.from(
+              JSON.stringify({
+                findings: [{ broken: true }, claim],
+                leads: [],
+                examined: "child examined source",
+                unexamined: "none",
+              }),
+            ),
+          );
+          return {
+            receipt: createNativeRunReceipt({
+              runId: run.runId,
+              targetSnapshotDigest: run.targetSnapshotDigest,
+              profile: run.profile,
+              terminal: "incomplete",
+              reason: "schema",
+              reasonDetail: "final-message-not-report",
+              startedAt: "2026-10-08T07:00:00Z",
+              completedAt: "2026-10-08T07:00:01Z",
+            }),
+            agentRuns: [
+              {
+                agentPath: "/root/child-1",
+                attachment: childAttachment,
+                receipt: createNativeRunReceipt({
+                  runId: "child-1",
+                  targetSnapshotDigest: run.targetSnapshotDigest,
+                  profile: run.profile,
+                  terminal: "completed",
+                  reason: "unavailable",
+                  startedAt: "2026-10-08T07:00:00Z",
+                  completedAt: "2026-10-08T07:00:01Z",
+                  reportArtifactDigest: childAttachment.digest,
+                }),
+              },
+            ],
+          };
+        }
         const report = {
-          findings: findingRuns.includes(calls++) ? [claim] : [],
+          findings: findingRuns.includes(ordinal) ? [claim] : [],
           examined: "source",
           unexamined: "none",
         };
@@ -158,6 +203,34 @@ async function campaign(findingRuns: readonly number[]) {
   });
   return { result, calls, ledger, evidence };
 }
+
+it("records valid child claims even when Root formatting and a sibling claim fail", async () => {
+  const { ledger, evidence } = await campaign([], {
+    childSurvivesBrokenRoot: true,
+  });
+  const findings = ledger.read({ type: "finding-recorded" });
+  expect(findings).toHaveLength(1);
+  expect(findings[0]?.event).toMatchObject({ runId: "child-1" });
+  expect(ledger.read({ type: "candidate-rejected" })).toHaveLength(1);
+  const childFinish = ledger
+    .read({ type: "discovery-run-finished" })
+    .find(
+      ({ event }) =>
+        event.type === "discovery-run-finished" && event.runId === "child-1",
+    );
+  expect(childFinish?.event).toMatchObject({ outcome: "completed" });
+  expect(ledger.funnel("campaign-1")).toMatchObject({
+    runCount: 2,
+    discoveryAttempts: 1,
+  });
+  const reference = findings[0]?.event.artifacts[0];
+  expect(reference?.kind).toBe("finding");
+  expect(
+    reference &&
+      (await evidence.readFile(reference.digest, "finding.json", 100_000))
+        .status,
+  ).toBe("resolved");
+});
 
 it("stops after consecutive completed runs without a new Finding and records each run configuration", async () => {
   const { result, calls, ledger } = await campaign([0]);

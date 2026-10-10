@@ -605,7 +605,8 @@ const browserStepsSchema = z.looseObject({
 
 /**
  * Stored XSS: an issued script canary reached the Lab receiver while the Lab's
- * own browser opened the front page or every admin screen. Alerts and strings never count.
+ * own browser opened an affected page. Scope decides whether the observed
+ * context qualifies for each programme. Alerts and strings never count.
  */
 function storedScriptJudge(options: Options) {
   return canaryJudge(
@@ -639,17 +640,11 @@ function storedScriptJudge(options: Options) {
       const siteWide = script.contexts.some(
         (context) => context === "front" || context === "admin-all",
       );
-      if (!siteWide)
-        return {
-          status: "incomplete",
-          reason: "observation",
-          nextStep: `The beacon arrived only from ${script.contexts.join(", ")}, not site-wide; a human decides whether it qualifies`,
-        };
       return {
         conditions: {
           observedVia: "canary-beacon",
           firedContexts: script.contexts.join(","),
-          siteWide: "yes",
+          siteWide: siteWide ? "yes" : "no",
           ...route,
         },
       };

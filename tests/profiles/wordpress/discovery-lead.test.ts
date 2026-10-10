@@ -31,6 +31,21 @@ it("admits and signs a private WordPress Lead independently of its wording", () 
   const lead = admitWordPressLead(claim, context);
   expect(readWordPressLead(lead)).toEqual(lead);
   expect(lead.recipeRef).toEqual({ kind: "provider-report", digest });
+  expect(
+    admitWordPressLead(
+      {
+        ...claim,
+        sourceTrace: [
+          {
+            file: "../wordpress/wp-includes/user.php",
+            function: "core",
+            line: 8,
+          },
+        ],
+      },
+      context,
+    ).sourceTrace[0]?.file,
+  ).toBe("@wordpress/wp-includes/user.php");
   expect(wordPressLeadSignature(lead)).toBe(
     wordPressLeadSignature(
       admitWordPressLead({ ...claim, summary: "Other wording" }, context),

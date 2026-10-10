@@ -12,6 +12,8 @@ import {
 } from "../../src/discovery/index.js";
 import {
   CodexNativeAgentRuntime,
+  recoverChildReportFromRollout,
+  rootThreadIdFromRollout,
   type CodexSandbox,
   type CodexSandboxCommand,
 } from "../../src/discovery/index.js";
@@ -92,9 +94,21 @@ type Grant = Parameters<
 
 function broker(
   grantOverrides: Partial<Grant> = {},
+  metrics?: {
+    forwardedRequests: number;
+    requestLimitExceeded: number;
+    unauthorizedRequests: number;
+    upstreamSuccess: number;
+    upstreamClientError: number;
+    upstreamServerError: number;
+    relayFailures: number;
+    responseLimitExceeded: number;
+  },
+  onMaxRequests?: (count: number) => void,
 ): ProviderCredentialEgressBroker {
   return {
     async withGrant(request, operation) {
+      onMaxRequests?.(request.maxRequests);
       const body = {
         schemaVersion: 1 as const,
         grantId: "grant-1",
@@ -111,6 +125,7 @@ function broker(
         completedAt: now,
         setup: { status: "ready" as const },
         cleanup: { status: "completed" as const },
+        ...(metrics === undefined ? {} : { metrics }),
         isolation: {
           backend: "gvisor" as const,
           runtime: "runsc" as const,
@@ -161,6 +176,268 @@ function sandbox(
 }
 
 describe("Codex native agent runtime", () => {
+  it("keeps a child report when the Root final JSON is malformed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-child-salvage-"));
+    try {
+      const cooperativeProfile = defineAgentRuntimeProfile({
+        id: "cooperative",
+        transportKind: "codex-native/v1",
+        sandboxImageDigest: digest,
+        requestedModelId: "gpt-6-sol",
+        requestedEffort: "high",
+        codexCliVersion: "0.161.0",
+        bundledCatalogDigest: digest,
+        authenticationMethod: "host-private-bearer",
+        cyberAccessProgram: "daybreak_blue",
+        serviceTier: "priority",
+        subagent: { modelId: "gpt-6-sol", effort: "high" },
+      });
+      const parentThreadId = "parent-thread";
+      const brokenRoot = [
+        { type: "thread.started", thread_id: parentThreadId },
+        { type: "turn.started" },
+        {
+          type: "item.completed",
+          item: { type: "agent_message", text: "{broken" },
+        },
+      ]
+        .map((value) => JSON.stringify(value))
+        .join("\n");
+      const childReport = JSON.stringify({
+        findings: [{ claim: "source-backed candidate" }],
+        leads: [],
+        examined: ["source path", "Lab route"],
+        unexamined: ["none"],
+      });
+      const childRollout = [
+        {
+          timestamp: now,
+          type: "session_meta",
+          payload: {
+            id: "child-thread",
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: parentThreadId,
+                  depth: 1,
+                  agent_path: "/root/child-1",
+                },
+              },
+            },
+          },
+        },
+        {
+          timestamp: now,
+          type: "turn_context",
+          payload: {
+            model: "gpt-6-sol",
+            effort: "high",
+            cyber_access_program: "daybreak_blue",
+          },
+        },
+        {
+          timestamp: now,
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            info: {
+              total_token_usage: { input_tokens: 8, output_tokens: 3 },
+            },
+          },
+        },
+        {
+          timestamp: now,
+          type: "event_msg",
+          payload: {
+            type: "item_completed",
+            item: {
+              type: "CommandExecution",
+              cwd: "file:///workspace/main",
+              command: ["/bin/bash", "-lc", "sed -n '1,5p' child.php"],
+              parsed_cmd: [{ type: "read", path: "child.php" }],
+            },
+          },
+        },
+        {
+          timestamp: now,
+          type: "event_msg",
+          payload: { type: "task_complete", last_agent_message: childReport },
+        },
+      ]
+        .map((value) => JSON.stringify(value))
+        .join("\n");
+      const rootRollout = [
+        {
+          timestamp: now,
+          type: "session_meta",
+          payload: { id: parentThreadId, source: "exec" },
+        },
+        {
+          timestamp: now,
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            info: {
+              total_token_usage: { input_tokens: 20, output_tokens: 5 },
+            },
+          },
+        },
+        {
+          timestamp: now,
+          type: "event_msg",
+          payload: {
+            type: "item_completed",
+            item: {
+              type: "CommandExecution",
+              command: ["/bin/bash", "-lc", "cat /workspace/main/d.txt"],
+            },
+          },
+        },
+        {
+          timestamp: now,
+          type: "event_msg",
+          payload: {
+            type: "item_completed",
+            item: {
+              type: "CommandExecution",
+              command: ["/bin/bash", "-lc", "curl http://wordpress:8080/"],
+            },
+          },
+        },
+      ]
+        .map((value) => JSON.stringify(value))
+        .join("\n");
+      expect(rootThreadIdFromRollout(rootRollout)).toBe(parentThreadId);
+      const recovered = recoverChildReportFromRollout(childRollout, {
+        parentThreadId,
+        childThreadId: "child-thread",
+        agentPath: "/root/child-1",
+        modelId: "gpt-6-sol",
+        effort: "high",
+        cyberAccessProgram: "daybreak_blue",
+      });
+      expect(recovered).toMatchObject({
+        examined: "source path\nLab route",
+        unexamined: "none",
+      });
+      expect(() =>
+        recoverChildReportFromRollout(childRollout, {
+          parentThreadId: "another-root",
+          childThreadId: "child-thread",
+          agentPath: "/root/child-1",
+          modelId: "gpt-6-sol",
+          effort: "high",
+          cyberAccessProgram: "daybreak_blue",
+        }),
+      ).toThrow(/lineage/);
+      const attachments = new ProviderAttachmentStore(root);
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(brokenRoot, [], { rollouts: [rootRollout, childRollout] }),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const result = await runtime.execute({
+        ...run,
+        profile: cooperativeProfile,
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(result.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "schema",
+        usage: { inputTokens: 20, outputTokens: 5 },
+        observed: { toolCalls: 2, filesRead: 1, labRequests: 1 },
+      });
+      expect(result.receipt.diagnosticArtifactDigest).toMatch(/^sha256:/);
+      expect(result.agentRuns).toHaveLength(1);
+      expect(result.agentRuns?.[0]?.receipt).toMatchObject({
+        runId: "child-thread",
+        terminal: "completed",
+        usage: { inputTokens: 8, outputTokens: 3 },
+        observed: { toolCalls: 1, filesRead: 1, uniqueFilesRead: 1 },
+      });
+      const attachment = result.agentRuns?.[0]?.attachment;
+      expect(attachment && (await attachments.read(attachment))).toMatchObject({
+        status: "resolved",
+      });
+      if (attachment !== undefined) {
+        const stored = await attachments.read(attachment);
+        if (stored.status !== "resolved")
+          throw new Error("Expected child report");
+        expect(JSON.parse(stored.bytes.toString("utf8"))).toMatchObject({
+          examined: "source path\nLab route",
+          unexamined: "none",
+        });
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("starts a bounded cooperative Root without an ephemeral thread store", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-cooperative-"));
+    try {
+      const cooperativeProfile = defineAgentRuntimeProfile({
+        id: profile.id,
+        transportKind: profile.transportKind,
+        sandboxImageDigest: profile.sandboxImageDigest,
+        requestedModelId: "gpt-6-sol",
+        requestedEffort: profile.requestedEffort,
+        codexCliVersion: profile.codexCliVersion,
+        bundledCatalogDigest: profile.bundledCatalogDigest,
+        authenticationMethod: profile.authenticationMethod,
+        cyberAccessProgram: "daybreak_blue",
+        serviceTier: profile.serviceTier,
+        subagent: { modelId: "gpt-6-sol", effort: "high" },
+      });
+      const commands: CodexSandboxCommand[] = [];
+      let maxRequests = 0;
+      const parentThreadId = (
+        JSON.parse(transcript.split("\n")[0] ?? "{}") as {
+          thread_id: string;
+        }
+      ).thread_id;
+      const rootRollout = JSON.stringify({
+        timestamp: now,
+        type: "session_meta",
+        payload: { id: parentThreadId, source: "exec" },
+      });
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(transcript, commands, { rollouts: [rootRollout] }),
+        broker({}, undefined, (count) => {
+          maxRequests = count;
+        }),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      const result = await runtime.execute({
+        ...run,
+        profile: cooperativeProfile,
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(result.receipt.terminal).toBe("completed");
+      expect(maxRequests).toBe(1600);
+      expect(result.receipt.subagent).toEqual({
+        modelId: "gpt-6-sol",
+        effort: "high",
+      });
+      expect(commands[0]?.args).toContain("multi_agent");
+      expect(commands[0]?.args).toContain("agents.max_threads=3");
+      expect(commands[0]?.args).toContain("agents.max_depth=1");
+      expect(commands[0]?.args).toContain("apps");
+      expect(commands[0]?.args).toContain("remote_plugin");
+      expect(commands[0]?.args).not.toContain("--ephemeral");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("counts command observations from completed items without trusting report text", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-observed-"));
     try {
@@ -488,6 +765,17 @@ describe("Codex native agent runtime", () => {
         });
         expect(receipt.providerLimit).toBe(providerLimit);
       }
+      expect(
+        (
+          await failed(
+            'unexpected status 413 Payload Too Large: {"error":{"reason":"request-limit-exceeded"}}',
+          )
+        ).receipt,
+      ).toMatchObject({
+        terminal: "incomplete",
+        reason: "policy",
+        reasonDetail: "broker-request-bytes-cap",
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -531,9 +819,33 @@ describe("Codex native agent runtime", () => {
         reason: "provider",
         reasonDetail: "cli-exit:2",
       });
+      const capped = new CodexNativeAgentRuntime(
+        sandbox(transcript, [], { exitCode: 2 }),
+        broker(
+          {},
+          {
+            forwardedRequests: 100,
+            requestLimitExceeded: 1,
+            unauthorizedRequests: 0,
+            upstreamSuccess: 100,
+            upstreamClientError: 0,
+            upstreamServerError: 0,
+            relayFailures: 0,
+            responseLimitExceeded: 0,
+          },
+        ),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      expect((await capped.execute(run)).receipt).toMatchObject({
+        reason: "policy",
+        reasonDetail: "broker-request-cap",
+        brokerMetrics: { forwardedRequests: 100, requestLimitExceeded: 1 },
+      });
       const unadmitted = new CodexNativeAgentRuntime(
         sandbox(
-          transcript.replace('"type":"agent_message"', '"type":"file_change"'),
+          transcript.replace('"type":"agent_message"', '"type":"unknown_tool"'),
           [],
         ),
         broker(),
@@ -542,8 +854,40 @@ describe("Codex native agent runtime", () => {
         () => new Date(now),
       );
       expect((await unadmitted.execute(run)).receipt.reasonDetail).toBe(
-        "unadmitted-item-type:file_change",
+        "unadmitted-item-type:unknown_tool",
       );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a completed report when the agent writes disposable scratch notes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
+    try {
+      const events = transcript.split("\n");
+      const withScratchNote = [
+        ...events.slice(0, 2),
+        JSON.stringify({
+          type: "item.completed",
+          item: {
+            type: "file_change",
+            changes: [{ path: "/tmp/approach-registry.md", kind: "add" }],
+            status: "completed",
+          },
+        }),
+        ...events.slice(2),
+      ].join("\n");
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(withScratchNote, []),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      expect((await runtime.execute(run)).receipt).toMatchObject({
+        terminal: "completed",
+        reportArtifactDigest: expect.stringMatching(/^sha256:/),
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

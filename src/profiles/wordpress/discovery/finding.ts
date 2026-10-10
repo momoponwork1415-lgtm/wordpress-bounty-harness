@@ -17,40 +17,58 @@ const relativeFile = z
           (segment) => segment !== "" && segment !== "." && segment !== "..",
         ),
   );
+// Codex sees two fixed read-only mounts. Keep the target relative and mark
+// core/dependency locations with a distinct virtual prefix in private evidence.
+const sourceFile = z
+  .string()
+  .transform((value) =>
+    value.startsWith("/workspace/main/")
+      ? value.slice("/workspace/main/".length)
+      : value.startsWith("/workspace/wordpress/")
+        ? `@wordpress/${value.slice("/workspace/wordpress/".length)}`
+        : value.startsWith("../wordpress/")
+          ? `@wordpress/${value.slice("../wordpress/".length)}`
+          : value,
+  )
+  .pipe(relativeFile);
 
 export const wordpressFindingClaimSchema = z.strictObject({
   claim: z.string().min(1).max(4000),
   attackerPosition: z.enum(["unauthenticated", "subscriber", "customer"]),
-  impact: z.enum([
-    "rce",
-    "php-file-write",
-    "arbitrary-file-read",
-    "arbitrary-file-delete",
-    "arbitrary-file-download",
-    "lfi",
-    "rfi",
-    "sqli",
-    "options-update",
-    "privesc-to-admin",
-    "auth-bypass-to-admin",
-    "account-takeover",
-    "privesc-to-contributor+",
-    "auth-bypass-non-admin",
-    "sensitive-object-access",
-    "content-deletion",
-    "stored-xss",
-    "reflected-xss",
-    "csrf-to-write",
-    "missing-authz",
-    "idor",
-    "other",
-  ]),
+  impact: z.preprocess(
+    (value) =>
+      value === "account-takeover-to-admin" ? "account-takeover" : value,
+    z.enum([
+      "rce",
+      "php-file-write",
+      "arbitrary-file-read",
+      "arbitrary-file-delete",
+      "arbitrary-file-download",
+      "lfi",
+      "rfi",
+      "sqli",
+      "options-update",
+      "privesc-to-admin",
+      "auth-bypass-to-admin",
+      "account-takeover",
+      "privesc-to-contributor+",
+      "auth-bypass-non-admin",
+      "sensitive-object-access",
+      "content-deletion",
+      "stored-xss",
+      "reflected-xss",
+      "csrf-to-write",
+      "missing-authz",
+      "idor",
+      "other",
+    ]),
+  ),
   configurationPrecondition: z.string().min(1).max(1000),
   brokenProperty: z.string().min(1).max(1000),
   sourceTrace: z
     .array(
       z.strictObject({
-        file: relativeFile,
+        file: sourceFile,
         function: z.string().min(1).max(256),
         line: z.number().int().positive(),
       }),
@@ -58,6 +76,8 @@ export const wordpressFindingClaimSchema = z.strictObject({
     .min(1),
   existingControls: z.string().min(1).max(4000),
   labObservations: z.string().min(1).max(4000),
+  /** The agent's note stays private; the authoritative recipe is the pinned report. */
+  privateRecipeReference: z.string().min(1).max(4000).optional(),
   historyRecordId: id.optional(),
 });
 

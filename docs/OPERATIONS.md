@@ -1,12 +1,15 @@
 # 運用手引き（完成後に人間がすること）
 
+この文書のコマンドは2026-10-10時点の単独Trial実装用。Root＋最大3 subagentの主経路は [実装計画](IMPLEMENTATION-PLAN.md) に従って移行中で、実機縦断の受入前に本番稼働したものとみなさない。
+
 対象読者: このHarnessを一人で回す運用者。正本は [SPEC.md](SPEC.md)。
 
 - `harness` は `pnpm build` が作る `dist/cli/main.js`（`bin.harness`）。実際の境界アダプターを束ねる。
+- Root＋3の実機preflightは `pnpm preflight:root-three --host <Git外host.json> --state <Git外Private Evidence dir>`。固定した無害なtext sourceとrunscのHTTP Labを使い、broker経由でRootと3子のmodel・usage・source読取・Lab到達を測る。`preflight.json` とrolloutはrunごとにGit外へ保存される。これ自体はTranslatePress探索Trialには数えない。
 - コマンド名は `runCli`（`src/cli/index.ts`）が受け付けるもの。
 - host設定は `--host <path>` か `WBH_HOST_CONFIG` で渡す。
 - 台帳とPrivate Evidenceの置き場は `--state <dir>` か `WBH_STATE_DIRECTORY` で選ぶ。既定は `~/.local/state/wordpress-bounty-harness`。
-- 縦断スライスの設定例は [examples/translatepress-3.3.1/](../examples/translatepress-3.3.1/README.md)、2×2の開発セットは [examples/translatepress-3.2.5/](../examples/translatepress-3.2.5/README.md)。
+- 現行の単独Trialの設定例は [examples/translatepress-3.3.1/](../examples/translatepress-3.3.1/README.md)、過去の2×2開発セットは [examples/translatepress-3.2.5/](../examples/translatepress-3.2.5/README.md)。新しいRoot＋3の本番開始条件は [TranslatePressベンチマーク](TRANSLATEPRESS-BENCHMARK.md)。
 
 ## 1. 一度だけやる準備
 
@@ -22,7 +25,6 @@
 | trust境界宣言 | `src/profiles/wordpress/prompts/trust-boundary-v1.md` をそのまま使う | ほぼ変えない |
 | 対象範囲の方針 | `src/profiles/wordpress/policy/programme-scope.md` を公式ページで見直す | 提出前と月1回 |
 | 履歴mirror | 第5節の手順で更新し、`history status` で鮮度を確かめる | 週1回と提出前 |
-| 答えの鍵 | 評価用。Git外に置く。開発セッションに見せない | 鍵を増やすとき |
 
 ## 2. 週の流れ
 
@@ -46,12 +48,14 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 - エージェントのsandboxには、grant tokenとダミーaccountだけでできた使い捨ての `auth.json`、そのCA、brokerのIPだけが入る。本物のaccess tokenとaccount IDはbrokerだけが持ち、refresh tokenはbrokerにも渡さない。
 - brokerは `responses` のPOSTだけを、bindしたmodel・件数・大きさ・期限の範囲で `chatgpt.com` へ転送する。workspace discoveryはbrokerが自分で答え、それ以外のendpoint（plugins、analyticsなど）は403にする。
+- Root＋3 Trialのbroker上限は1,600 provider要求、単独Trialは100要求。90分のwall上限と別に記録し、上限到達は `incomplete(policy: broker-request-cap)` として扱う。30分探索指示の実測に先立ち、400要求では足りない可能性があったためRoot＋3の上限を拡張した。
+- provider要求本文の上限はRoot＋3で8 MiB、単独Trialで1 MiB。長い協調探索で1 MiBを超えた実測を受けて拡張した。413応答は `incomplete(policy: broker-request-bytes-cap)` として記録し、探索0件として数えない。
 - tokenの更新はしない。preflightが「1時間以内に失効」を出したら、ホストで `codex login` をやり直す。
 - APIキー（`host-private-bearer`）の経路も残っている。
 
 `campaign run` は無人で回る。1対象あたりの Trial は、選定のrun予算（既定20、High Threat面は40）と設定の上限（既定6）の小さい方まで。新規 Finding も Lead もない Trial が続いたら（既定3回）止まる。各 Finding は別コンテナの Verifier と判定器を通り、`runtime-confirmed` / `contradicted` / `incomplete` として台帳に入る。
 
-既定promptは `short-objective-v2`。版を明示した設定はその版で再現できる。Trial数には対象ごとの上限があり、日次上限の設定はない。provider limitで停止したcampaignは自動retryせず、同じIDで再開する。
+既定promptは `short-objective-managed-v4`。比較armの `wp2shell-bounty-v2` は優先Findingがない場合にRootへ30分以上と複数waveを指示するが、現行Harnessは下限を強制しない。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。版を明示した設定はその版で再現できる。Trial数には対象ごとの上限があり、日次上限の設定はない。provider limitで停止したcampaignは自動retryせず、同じIDで再開する。
 
 - **同時run数**: campaign設定の `resources` で決める。
   - 既定は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。`stopRules.maxRuns` は Trial 上限（既定 6）、`noFindingRuns` は新規発見のない Trial の連続数（既定 3）、探索 run の wall time は既定 90 分。
@@ -124,6 +128,34 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 - 更新後に `harness history status` を見る。照合口と同じ規則で、`fresh` / `stale`（既定24時間超、または前回更新の失敗）/ `unavailable`（stateが読めない、DBとstateが食い違う）を表示する。
 - `stale` / `unavailable` は「重複なし」を意味しない。詳細は [wordfence-history/README.md](../src/profiles/wordpress/wordfence-history/README.md)。
 
+### pilot候補の自動準備
+
+`scripts/prepare-pilot-selection.mjs` は、24時間以内のWordfence公開履歴から低権限・高影響の記録が2件以上あるpluginを候補にし、WordPress.orgのactive install数を観測日時付きのGit外SQLite DBへ保存する。キャッシュは7日以内なら候補準備に再利用する。生成した選定方針はinstall数1万以上の候補、履歴件数、feed digestと更新日時を持つ。`select` / `campaign run` はWordPress.orgを改めて観測し、最新版、install数、更新日、Programme scopeを確認する。キャッシュの古い数字だけで対象を確定しない。
+
+```sh
+node scripts/prepare-pilot-selection.mjs \
+  --history /path/to/intelligence/history.sqlite \
+  --state /path/to/intelligence/state.json \
+  --cache /path/to/private/selection-observations.sqlite \
+  --template examples/translatepress-3.3.1/selection.json \
+  --output /path/to/private/pilot-selection.json
+```
+
+履歴mirrorは更新時にDB全体を入れ替えるため、WordPress.orgの観測キャッシュは別DBに置く。`historySignals` は候補選定の公開カタログ件数であり、未知の脆弱性の証拠ではない。選定済み対象のscore内訳と観測参照はGit外の`target-selection` artifactに記録される。
+
+### 子の最終JSONがschemaで失敗したとき
+
+子のrunが `child-final-message-not-report` で失敗しても、Private Evidenceの不変rolloutに完全なJSONが残っている場合がある。parserを修正・テストした後、同じcampaignの失敗runを次のコマンドで再解釈できる。Rootと子のthread lineage、model、effort、cyber access、Snapshotを照合し、元の失敗eventは残したまま `child-report-recovered` と有効なFinding / Leadを追記する。source traceやrecipe本文は標準出力へ出さない。
+
+```sh
+node scripts/recover-child-reports.mjs \
+  --campaign <id> \
+  --state /path/to/private/state \
+  --attachments /path/to/private/provider-attachments
+```
+
+復旧後は同じcampaign IDで `campaign run` を再開する。`incomplete` のTrialを正常な0件として扱わず、独立Verifierへ渡すのは復旧して台帳へ入ったFindingだけにする。
+
 ### Codex CLI / model catalogの更新
 
 1. 新しいCodex imageを固定digestで用意する。
@@ -143,24 +175,32 @@ harness lab cleanup --config <path> --remove   # 削除
 
 ## 6. 評価
 
-主指標は本番から得る。追加費用はかからない。
+主指標は本番から得る。現在の `eval score --keys` は任意の研究用互換機能で、TranslatePressベンチマークや本番開始には使わない。下記のCLIは現行の単独Trial実装用であり、Root＋3への移行後に更新する。
 
 ```
 harness eval compare [--axis history|prompt|continuation] [--campaign <id>]   # 本番A/B: Trial別の当たり率（Clopper-Pearson 95%）と費用
 harness eval prospective --advisories <path> [--campaign <id>]    # 後日公開されたadvisoryで本番台帳を再採点
-harness eval score --campaign <id> --keys <path> --case <id>      # 答えの鍵でlocation-overlap。held-outは任意
+harness eval score --campaign <id> --keys <path> --case <id> [--manifest <path>] # 答えの鍵でlocation-overlap。held-outは任意
+harness eval keys --keys <path> [--manifest <path>]                # 私的な鍵を検査し、公開可能なcase IDとdigestだけを出す
+harness eval rubric --file <path>                                 # 私的な盲検rubricを検査し、件数とdigestだけを出す
 ```
 
 - **本番A/B**: 同じ対象の独立Trialへ `ablation.axes` で `history`、`prompt`、`continuation` をopt-in割当する。どのarmが見つけても提出できる。旧 `{"axis":"history","armBFraction":0.5}` も読める。
-  - 既定は `short-objective-v2` と継続なし。`prompt` 軸のarm bは `armBPromptId` で版付きpromptを指定し、`continuation` 軸のarm bは `continuation` ブロックの上限内で、自分のLeadだけを1 hop継続する。割当とdigestは台帳へ残る。
+  - 既定は `short-objective-managed-v4` と継続なし。`prompt` 軸のarm bは `armBPromptId` で版付きpromptを指定し、`continuation` 軸のarm bは `continuation` ブロックの上限内で、自分のLeadだけを1 hop継続する。割当とdigestは台帳へ残る。
   - `eval compare --axis` の分母はLab HTTP到達 `ok` のcompleted探索Trial。継続runを別Trialに数えず、provider失敗も分母に入れない。区間が重なれば「判定不能」と出す。
-  - #73のLuna開発セットでは公開2事例に対して全cellでsource候補0/3だった。事前登録の規則で安い短い目的promptと継続なしを既定に残したが、優劣の証明ではない。失敗Trialの補充は元の12試行と分けて記録した。150分対照も実wallは設定上限より短かった。
+  - #73のLuna開発セットでは公開2事例に対して全cellでsource候補0/3だった。当時の事前登録の規則で短い目的promptを既定に残したが、優劣の証明ではない。失敗Trialの補充は元の12試行と分けて記録した。150分対照も実wallは設定上限より短かった。現在の既定と比較方針はADR 0017に従う。
   - 履歴を渡せるのは、安定版の公開日時（WordPress.orgの最終更新）より前の公開記録だけ。版を固定した対象やmirrorが使えない対象では、全runがarm aになる。
 - **前向き評価**: 四半期ごとに、公開されたadvisoryで本番台帳を再採点し、見逃しを数える。
   - advisoryファイルはGit外に置く私的データ。1件ごとに `{schemaVersion: 1, advisoryId, slug, affectedVersions: [{fromVersion, fromInclusive, toVersion, toInclusive}], publishedAt, impact, allowedLocations: [{file, function?}]}` を書く。`allowedLocations` は公開パッチを読んで人間が書く。
   - 結果は `found` / `missed` / `unscorable`（採点失敗）/ `predates-run` / `not-searched` に分かれる。`missed` 以外は見逃しに数えない。
   - `blind rubric pairs:` の (advisory, Finding) 対だけを、armや検証結果を見ずに人間がtarget-hit / partial / non-targetで採点する。
-- **held-out**: 既定では回さない。回すならcutoff後の補助4件を優先し、試行数は予算で決める。held-outの結果を見てpromptを変えたら、そのcaseは開発セットへ移す。
+- **held-out**: 初期の開発と本番開始には使わない。比較研究が必要になった時だけ予算とcaseを決める。
+
+### 任意の旧評価鍵と盲検rubric
+
+将来の比較研究で旧採点器を使う場合だけ、Answer Keyの本文をGit外の権限を絞ったJSONファイルに置く。`eval keys --keys <path>` は形式と重複を検査し、case IDと正規化した鍵のSHA-256 digestだけをJSONで出す。この出力だけをGitのdigest manifestに保存できる。`eval keys --keys <path> --manifest <path>` で全鍵のdigestを照合し、`eval score` にも `--manifest <path>` を付けて採点する鍵のdigestを確認できる。鍵本文や原因箇所は標準出力・台帳に出さない。現行計画では人間に鍵の記入を求めない。
+
+人間の盲検採点には [入力テンプレート](../examples/evaluation/blind-rubric.template.json) をGit外へコピーし、caseとFindingの対ごとに場所、root cause、攻撃者条件、影響を `match` / `partial` / `mismatch` / `unknown` で評価する。armと検証結果を見ずに `target-hit` / `partial` / `non-target` を人間が決め、記入者と時刻を残す。`eval rubric --file <path>` は必須欄と重複を検査し、件数とdigestだけを出す。記入済みフォームはPrivate EvidenceとしてGit外に保管する。
 
 ## 7. やらないこと
 

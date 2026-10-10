@@ -66,7 +66,7 @@ export type CampaignSummary = {
     readonly message: string;
   }[];
   /** Set when the campaign stopped early and can be resumed with the same id. */
-  readonly stopped?: "provider-limit";
+  readonly stopped?: "provider-limit" | "incomplete";
   readonly targets: readonly {
     readonly targetId: string;
     readonly version: string;
@@ -101,6 +101,8 @@ export async function runCampaignPipeline<
   >;
   readonly clock: () => Date;
   readonly newId: () => string;
+  /** An explicit operator retry after repairing the Verifier protocol. */
+  readonly retryIncompleteVerifications?: boolean;
 }): Promise<CampaignSummary> {
   const { campaignId, ledger, pipeline, clock } = options;
   const at = () => clock().toISOString();
@@ -278,13 +280,24 @@ export async function runCampaignPipeline<
       }
 
       stage = "verification";
-      const verified = new Set(
-        ledger
-          .read({ campaignId, type: "verification-finished", limit: 1000 })
-          .map(({ event }) =>
-            event.type === "verification-finished" ? event.findingId : "",
-          ),
-      );
+      const latestOriginalVerification = new Map<
+        string,
+        { labSetupDigest: string; status: VerificationResultV1["status"] }
+      >();
+      for (const { event } of ledger.read({
+        campaignId,
+        type: "verification-finished",
+        limit: 1000,
+      }))
+        if (
+          event.type === "verification-finished" &&
+          event.basis === undefined &&
+          event.snapshotDigest === snapshot.digest
+        )
+          latestOriginalVerification.set(event.findingId, {
+            labSetupDigest: event.labSetupDigest,
+            status: event.result.status,
+          });
       const verifications: {
         findingId: string;
         status: VerificationResultV1["status"];
@@ -293,8 +306,14 @@ export async function runCampaignPipeline<
         .read({ campaignId, type: "finding-recorded", limit: 1000 })
         .filter(({ event }) => event.snapshotDigest === snapshot.digest);
       for (const { event } of findings) {
-        // A resumed campaign verifies only what an earlier pass left unverified.
-        if (event.type !== "finding-recorded" || verified.has(event.findingId))
+        // A changed Lab setup can repair an earlier incomplete precondition.
+        if (event.type !== "finding-recorded") continue;
+        const previous = latestOriginalVerification.get(event.findingId);
+        if (
+          previous?.labSetupDigest === campaignInput.lab.setupDigest &&
+          (!options.retryIncompleteVerifications ||
+            previous.status !== "incomplete")
+        )
           continue;
         const result = await pipeline.verification.verify({
           campaignId,
@@ -311,6 +330,17 @@ export async function runCampaignPipeline<
         });
       }
       targets.push({ ...summary, verifications });
+      if (discovered.stoppedBy === "incomplete") {
+        stopped = "incomplete";
+        await append({
+          ...base,
+          identity: `campaign-stopped-${options.newId()}`,
+          occurredAt: at(),
+          type: "campaign-stopped",
+          reason: "incomplete",
+        });
+        break;
+      }
     } catch (error: unknown) {
       // The failure text may hold paths; it goes to the operator, not the ledger.
       await append({
@@ -343,15 +373,16 @@ export type ReverificationSummary = {
   readonly targetId: string;
   readonly version: string;
   readonly snapshotDigest: string;
+  readonly findingId: string;
   readonly verificationId: string;
   readonly status: VerificationResultV1["status"];
 };
 
 /**
- * Freezes the target's latest version and verifies the same Finding against it
- * in a fresh Lab. Nothing from the earlier snapshot's verification is reused.
+ * Freezes the selected version and binds a derived Finding to that snapshot
+ * before verification. The original Finding remains on its own snapshot.
  */
-export async function reverifyOnLatestVersion<
+export async function reverifyOnSelectedVersion<
   Target extends TargetSelection,
   Setup,
   Handle extends LabHandle,
@@ -360,16 +391,23 @@ export async function reverifyOnLatestVersion<
 >(options: {
   readonly campaignId: string;
   readonly findingId: string;
+  readonly version?: string;
   readonly ledger: Ledger;
   readonly store: PrivateArtifactStore;
   readonly pipeline: Pick<
     CampaignPipeline<Target, Setup, Handle, Finding, Reconstruction>,
     "freeze" | "setupFor" | "verification" | "reconstructionFor"
   > & {
-    /** The latest version of the target the Finding's snapshot was selected from. */
-    readonly selectLatest: (input: {
+    /** The current or explicitly pinned version of the same target. */
+    readonly selectVersion: (input: {
       readonly selectionId: string;
+      readonly version?: string;
     }) => Promise<Target | null>;
+    readonly deriveFinding: (input: {
+      readonly original: unknown;
+      readonly snapshotDigest: string;
+      readonly runId: string;
+    }) => { readonly finding: Finding; readonly category: string };
   };
   readonly clock: () => Date;
   readonly newId: () => string;
@@ -390,11 +428,37 @@ export async function reverifyOnLatestVersion<
     );
   if (selected?.type !== "target-selected")
     throw new Error("The finding's target selection is not recorded");
-  const target = await pipeline.selectLatest({
+  const confirmed = ledger
+    .read({ campaignId, findingId, type: "verification-finished", limit: 1000 })
+    .map(({ event }) => event)
+    .filter(
+      (event) =>
+        event.type === "verification-finished" &&
+        event.snapshotDigest === finding.snapshotDigest &&
+        event.result.status === "runtime-confirmed",
+    )
+    .at(-1);
+  if (
+    confirmed?.type !== "verification-finished" ||
+    confirmed.result.status !== "runtime-confirmed"
+  )
+    throw new Error("A confirmed route is required for version comparison");
+  const routeFile = await options.store.readFile(
+    confirmed.result.evidenceDigest,
+    "confirmed-route.json",
+    64 * 1024,
+  );
+  if (routeFile.status !== "resolved")
+    throw new Error("The confirmed route is unavailable in Private Evidence");
+  const referenceRoute = JSON.parse(
+    routeFile.bytes.toString("utf8"),
+  ) as unknown;
+  const target = await pipeline.selectVersion({
     selectionId: selected.selectionId,
+    ...(options.version === undefined ? {} : { version: options.version }),
   });
   if (target === null)
-    throw new Error("The target's latest version is not selectable now");
+    throw new Error("The selected target version is not available now");
   const snapshot = await pipeline.freeze(target);
   const verificationId = options.newId();
   const base = {
@@ -431,24 +495,73 @@ export async function reverifyOnLatestVersion<
   ])
     if ((await ledger.append(event)).status === "conflict")
       throw new Error(`Ledger conflict: ${event.identity}`);
+  let verificationFindingId = findingId;
+  if (snapshot.digest !== finding.snapshotDigest) {
+    const reference = finding.artifacts.find(
+      (artifact) => artifact.kind === "finding",
+    );
+    if (reference === undefined)
+      throw new Error("The original Finding has no private record");
+    const original = await options.store.readFile(
+      reference.digest,
+      "finding.json",
+      1024 * 1024,
+    );
+    if (original.status !== "resolved")
+      throw new Error("The original Finding private record is unavailable");
+    const derivedRunId = `reverify-${verificationId}`;
+    const derived = pipeline.deriveFinding({
+      original: JSON.parse(original.bytes.toString("utf8")) as unknown,
+      snapshotDigest: snapshot.digest,
+      runId: derivedRunId,
+    });
+    if (
+      derived.finding.snapshotDigest !== snapshot.digest ||
+      derived.finding.findingId === findingId
+    )
+      throw new Error("The derived Finding is not bound to the new snapshot");
+    const derivedArtifact = await options.store.putFiles({
+      "finding.json": canonicalJson(derived.finding),
+    });
+    const recorded = await ledger.append({
+      ...base,
+      identity: `finding-derived-${verificationId}`,
+      occurredAt: options.clock().toISOString(),
+      type: "finding-recorded",
+      findingId: derived.finding.findingId,
+      runId: derivedRunId,
+      category: derived.category,
+      derivedFromFindingId: findingId,
+      derivationKind:
+        options.version === undefined
+          ? "latest-version"
+          : "fixed-version-control",
+      artifacts: [{ kind: "finding", digest: derivedArtifact }],
+    });
+    if (recorded.status !== "appended")
+      throw new Error("The derived Finding could not be recorded");
+    verificationFindingId = derived.finding.findingId;
+  }
   const setup = pipeline.setupFor(snapshot);
   const result = await pipeline.verification.verify({
     campaignId,
-    findingId,
+    findingId: verificationFindingId,
     verificationId,
     snapshot,
     basis: {
-      kind: "latest-version",
-      findingSnapshotDigest: finding.snapshotDigest,
+      kind: options.version === undefined ? "latest-version" : "fixed-version",
+      findingSnapshotDigest: snapshot.digest,
     },
     setup,
     campaignLabSetupDigest: canonicalDigest(setup),
     reconstruction: pipeline.reconstructionFor(snapshot),
+    referenceRoute,
   });
   return {
     targetId: target.targetId,
     version: target.version,
     snapshotDigest: snapshot.digest,
+    findingId: verificationFindingId,
     verificationId,
     status: result.status,
   };

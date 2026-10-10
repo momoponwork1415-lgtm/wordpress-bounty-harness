@@ -1,12 +1,12 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.16、2026-10-10。設計決定の正本は [Issue 221 の設計決定comment](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317)。この文書はその決定をモジュール境界・受け渡し契約・最初の縦断スライスへ落としたもの。設計理由は [ADR](adr/) に置く。調査資料6本は旧リポジトリの `research/design-references` ブランチ `docs/knowledge/*-2026-10-08.md`。
+版: v0.18、2026-10-10。設計判断はこの文書と [ADR](adr/) に置く。旧リポジトリの [Issue 221](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317) は経緯の資料であり、現在の探索方針は [ADR 0016](adr/0016-root-plus-three-first-vertical-slice.md) が優先する。現行コードとの差分と実装順は [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md)。TranslatePressでの最小ベンチマークと本番移行は [TRANSLATEPRESS-BENCHMARK.md](TRANSLATEPRESS-BENCHMARK.md)。
 
 ## 1. 目的と指標
 
 - 目的: WordPressプラグインの未知脆弱性をAIで発見し、実行時検証を通ったものだけを人間がWordfence / Patchstackへ提出して報奨を得る。
 - 収益の式: 月に回せる対象数 × 当たり率 × in-scope率 × 平均報奨 − 月費用（約$700）。
-- KPI: `runtime-confirmed` かつ in-scope の $250以上の発見が月2.5件超。
+- 比較指標: 提出先で受理された報奨見込みと実際の報奨を、対象数・探索時間・provider使用量で割って見る。実測前に月間件数を達成条件として固定しない。
 - 設計の優先順位: 大手が公開している設計・結果規則をまず当て、WordPress固有で避けられない部分だけを自作する。
 
 ## 2. 不変条件
@@ -15,14 +15,14 @@
 2. 探索・検証はgVisor（`runsc`）の使い捨て環境でのみ対象を実行する。ホストで対象コードを実行しない。弱い隔離へ暗黙に切り替えない。外向き通信は認証ブローカー経由のprovider APIだけ。
 3. `runtime-confirmed` はHarness所有の決定論的判定器だけが出す。エージェントやrecipeの自己申告は確認にしない。証明はnonce付きcanaryの回収に限り、リバースシェル・永続化・ホストアクセスを使わない。
 4. 検証の失敗（環境・手順・観測・証拠の不足）は `incomplete` であり、`contradicted` にも棄却にもしない。
-5. 判定は、Findingと検証結果が同じTarget Snapshot digestを持つときだけ行う。digest不一致は `incomplete`。
+5. 判定は、Findingと検証結果が同じTarget Snapshot digestを持つときだけ行う。digest不一致は `incomplete`。最新版への再検証では新しいSnapshotに結び付けたFindingを別に記録し、旧Findingへの由来だけを参照する。
 6. 人間の判断点は「提出前のレビュー」と「外部行動の承認」の2つ。対象選定の承認、未検証候補の採否はない。権限・対象範囲の拡張は人間の明示承認を要する。
 7. 外部送信（報告、ベンダー連絡、公開）は、正確なSubmission Candidate・文案の版・送信先へ結び付いた承認なしに行わない。Harnessは送信を実行しない。
 8. 台帳は追記専用。payload、HTTP記録、画面画像、実行ログ、認証情報、未公開の発見はGit外のPrivate Evidenceに置き、台帳はdigest参照だけを持つ。
 
 ## 3. 流れ
 
-機械選定 → Snapshot固定 → Lab供給 → 索引分担した独立Trial（探索runと、必要な場合だけ同じTrial内のLead 1 hop継続） → 独立Verifier → 決定論的判定器 → 台帳 → 人間レビュー（confirmed + incomplete） → scope評価・重複照合・文案 → 外部行動承認 → 提出転帰の記録。評価は台帳を読むだけで、探索へ何も渡さない。
+開発対象のslugと版を指定（運用時は機械選定） → Snapshot固定 → Lab供給 → Root＋最大3 subagentの協調Trial → 独立Verifier → 決定論的判定器 → 最新版で再検証 → 重複・scope照合 → 英語レポートJSON案と再現パッケージ → 人間の手動Lab再現と査読 → 外部行動承認 → 人間が提出し転帰を記録。台帳は全段階を追記する。評価は台帳を読むだけで、探索へ答えを渡さない。
 
 ## 4. モジュール境界
 
@@ -30,17 +30,17 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 | モジュール | 目的 | 公開インターフェース | 所有する記録 | 失敗時 | 出自 |
 | --- | --- | --- | --- | --- | --- |
-| `selection` | 方針に従って対象を機械的に選び、予算内で順序付ける | `select(policy) → TargetSelection[]`、`inspect` | 選定方針（人間が編集）、選定記録、スコア内訳 | WordPress.org / Wordfence観測の unavailable / stale をeligibleにしない | 新規。旧 `target-intelligence/acquisition`、`wordpress-org`、`wordfence-intelligence`、`programme` を移植 |
+| `selection` | 方針に従って対象を機械的に選び、予算内で順序付ける | `select(policy) → TargetSelection[]`、`inspect` | 選定方針（人間が編集）、低権限・高影響の公開履歴、install数、選定記録とスコア内訳 | WordPress.org / Wordfence観測の unavailable / stale をeligibleにしない | 既存の選定器を縦断後に拡張。開発対象はslugと版を直接指定可 |
 | `snapshot` | pluginとWordPress本体のsourceをdigestで固定する | `freeze(selection) → Snapshot`、`verify(digest)` | Target / Dependency Snapshot、canonical manifest | archiveの不正path・symlink・size超過を拒否 | 移植: `canonical-source-tree`、`canonical-json`、`immutable-file`、`private-artifact-store` |
 | `lab` | WordPress + MySQLの使い捨てgVisor環境を供給し、canaryとロール別アカウントを仕込む | `provision(snapshot, setup) → LabHandle`、`seedCanaries`、`teardown` | Lab Setup digest、canary台帳（nonceと配置先）、ロール認証情報（Lab内のみ） | source / image / runsc不一致では起動しない。provision失敗は `incomplete` 用の理由コード | 移植: `human-os` のgVisor候補検証Lab。拡張: discovery用の複数Lab、canary seeding、ロール基準の正常操作記録 |
-| `discovery` | 索引に基づくscopeを独立Trialへ割り当て、探索runと同一Trial内のLead 1 hop継続を回す | `run(campaignInput) → DiscoveryRun`、`campaign(stopRule)`、`PlannedTrial` | Trial id / ordinal、run種別、model profile digest、prompt digest、分担、usage、Finding、Leadのdigest参照 | provider / schema / sandbox失敗はtyped receiptとして残し、`incomplete`。自動retryしない | 新規。移植: `codex-native-agent-runtime`、`agent-runtime-profile`、egress broker、`native-run-receipts` |
+| `discovery` | 固定SnapshotでRoot＋最大3 subagentの協調Trialを回す | `run(campaignInput) → DiscoveryRun`、`campaign(stopRule)` | Trial id、Root / 子の実行記録、model profile digest、prompt digest、usage、FindingとLeadのdigest参照 | provider / schema / sandbox失敗はtyped receiptとして残し、有効な個別成果を失わない。自動retryしない | 現行の単独Trial runtimeを置換。ADR 0016 |
 | `verification` | 独立Verifierで反証を試み、Harnessが捕捉したHTTPとcanaryを判定器で照合する | `verify(finding, snapshot, lab) → VerificationResult` | Verifier run記録、判定器の証拠（HTTP捕捉、canary回収、browser観測、ロール基準との差分）、Lab Setup digest | 前提不一致・observation失敗・cleanup失敗は `incomplete` | 新規。移植: Execution Canary |
 | `ledger` | 全イベントを追記し、funnelを読み取り専用で導く | `append(event)`、`read(query)`、`funnel(campaign)` | LedgerEvent（型付きunion、snapshot digest付き）、添付（Codex findings等）のdigest参照 | 同一identityへの異なる内容はconflict。削除しない | 新規。規則はADR 0024とMantisから |
 | `review` | 人間が検証済みFindingを見て提出判断をする。scope、重複、文案、承認 | `queue() → ReviewItem[]`、`decide`、`assessScope`、`draft`、`authorize` | ReviewDecision、Programme Scope Assessment、Submission Candidate、Submission Draft（版付き）、External Action Authorization | scope評価失敗はscopeだけ `incomplete`、Verified Vulnerabilityを失わない。必要な承認がなければadmitしない | 移植: `human-os` のscope評価・Draft・Authorization。新規: review CLI、ローカルWordfence履歴DB照合 |
-| `evaluation` | 答えの鍵を使って台帳を採点し、ablationを回す | `score(campaign, answerKey)`、`ablate(config[])`、`prospective(campaign, advisory)` | Answer Key（Research外）、採点記録、区間 | 鍵の不備は採点失敗として残す | 新規 |
+| `evaluation` | 開発対象の縦断確認と、本番の費用・提出転帰を台帳から評価する | `readiness(campaign)`、`funnel(campaign)`、必要になった場合のみ `ablate(config[])` / `prospective(campaign, advisory)` | 開発対象の判定記録、費用・転帰、比較を行った場合の区間 | 判定不能・証拠不足を成功にしない | 既存の採点器は任意の研究用として残す |
 | `cli` | 上記を薄く接続する | コマンド | なし | | 移植: `cli.ts` の構成だけ |
 
-持ち込まないもの: `research/` のResearch Campaigns内部とcheckpointによる長期セッション再開、条件付き3試行、Human Candidate Review、Research Grant、Approved Target Batch、旧スキーマ、Grok / Claude Code / GLM / DeepSeek adapter（開発比較が必要になったら移す）。Trial内のLead 1 hop継続とprovider limit後のcampaign再開は、長期セッションの継続とは別に扱う。
+持ち込まないもの: `research/` のResearch Campaigns内部とcheckpointによる長期セッション再開、条件付き3試行、Human Candidate Review、Research Grant、Approved Target Batch、旧スキーマ、Grok / Claude Code / GLM / DeepSeek adapter（開発比較が必要になったら移す）。現行の単独Trialの1 hop Lead継続は主経路から外すが、過去の台帳は読み続ける。
 
 ## 4a. Target Profile（対象固有部分の置き場）
 
@@ -52,10 +52,10 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、canaryの配置先（options、post meta、ファイル、canaryユーザー） |
 | 判定器集合 | 第7節の種別別判定器 |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
-| prompt雛形 | 短い目的prompt（既定 `short-objective-v2`）と版付きの管理指示変種、trust境界宣言の雛形。固定手順やchecklistは書かない |
-| 索引と分担 | 保存先のwrite / readをつなぐ成分、登録入口、coreとの交差、成分を保ったTrial scope |
+| prompt雛形 | 既定 `short-objective-managed-v4` と比較用 `wp2shell-bounty-v2`、過去の版付きprompt、trust境界宣言の雛形。ADR 0017 |
+| source補助 | 保存先のwrite / readをつなぐ索引と登録入口。Rootと子が参照できるが、固定した役割分担の命令にはしない |
 | Lead型 | sourceに根拠があり、影響までの辺が1つ足りないprimitiveの分類と記録 |
-| 答えの鍵の形式 | 入口の表現（hook名、route、action名） |
+| 評価対象の表現 | 開発対象のslug、版、修正版、影響分類。正解表の手入力は初期受入条件にしない |
 
 汎用モジュールはこれらをインターフェース経由で受け取り、WordPressの型やpathをimportしない。2つ目のprofileを作るまでインターフェースは汎用化せず、WordPress版の完成後に共通部分を抽出する。
 
@@ -65,7 +65,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | --- | --- | --- |
 | `TargetSelection v1` | selection → snapshot | plugin slug、version、スコア内訳、方針の版、選定時刻 |
 | `CampaignInput v1` | snapshot → discovery | Target / Dependency Snapshot digest、trust境界宣言（人間が書く、版付き）、Programme Boundary（匿名化）、対象の公開履歴（カタログ情報、`historyCutoff` とdigest付き。渡さないrunは `none`）、model profile digest、prompt digest、Trial単位の停止規則、Lab設定 |
-| `PlannedTrial` | profile → discovery | Trial id / ordinal、探索run、任意のLead継続plan。source索引の成分scopeと、prompt / continuation等のarmを含む |
+| `PlannedTrial` | profile → discovery | Trial id / ordinal、Rootと最大3子の実行枠、固定sourceと索引の参照。旧形式のLead継続planは互換読取のみ |
 | `Finding v1` | discovery → verification / ledger | claim、attacker position（`unauthenticated` / `subscriber` / `customer` のみ）、到達する影響の種別（第8b節の共通分類）、設定前提（`default` / 変更内容）、破られるproperty、入口からeffectまでのtrace（file、function、行）、既存controlへの評価、Lab内で観測した事実、recipe ref（Private）、discovery run id、snapshot digest |
 | `Lead v1` | discovery → ledger / 同一Trial内の継続 | primitive、storage分類、欠けた辺、source trace。本文はPrivate Evidence、台帳はdigestとenumだけ。Verifierへは送らない |
 | `VerificationResult v1` | verification → ledger / review | `runtime-confirmed` / `contradicted` / `incomplete`、判定器の種類、判定器が観測した条件（使ったrole、path / 拡張子の制御、到達role、XSSの発火context、変更したoption、設定前提）、証拠ref、Lab Setup digest、`incomplete` 理由コード、次の手（verifierが書く）、再現パッケージref（confirmedのみ）。台帳にはoptionalな `evidenceCapture` enum |
@@ -79,17 +79,18 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 - 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
 - 対象の公開履歴: ローカルWordfence履歴DBから、snapshotの版より前（評価runではheld-outの公開日より前）に公開された対象プラグインの記録を抽出して渡す。内容は種別、影響版、修正版、公開日、公開記録のタイトル、修正版との差分で変わったファイルの一覧まで。PoC・payload・再現手順は含めない。runの一部にだけ渡す分担にでき、渡した・渡さないを `CampaignInput` に記録する（ADR 0012）。
-- 入力: 版とdigestを記録した短い目的prompt（既定 `short-objective-v2`）、人間が書いたtrust境界宣言、Programme Boundary、保存先索引から作った成分scope、固定したpluginと同じ版のWordPress coreの読み取り専用source pack、Lab HTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB account。管理指示を書くprompt変種はopt-inの本番A/B軸に限り、探索手順・checklist・役割分担・段階は書かない。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
+- 入力: 版とdigestを記録した `short-objective-managed-v4`（既定）または `wp2shell-bounty-v2`（比較用、ADR 0017）、人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、参照用の保存先索引、Lab HTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB account。どちらのpromptでも分担する具体的な問いはRootが決める。WP2Shell変種は多様な仮説の並行探索、複数wave、反証と連鎖の統合もRootへ求める。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
 - 許可する操作: 固定sourceの読み取り、LabへのHTTP、Lab DBのRO accountによる読み取り。探索runにcanaryは渡さず、canaryの発行と確認は検証段階のHarnessが行う。外向き通信は認証ブローカー経由のprovider APIだけ。
-- 出力: `Finding[]`（0件可）、`Lead[]`（0件可）、調べた範囲・調べなかった範囲の短い記述。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。
-- Campaign停止規則: 対象あたりのTrial上限 T_max = 6（選定run予算との小さい方）、新規FindingもLeadもないTrialの連続 k_t = 3 を既定にする。探索runのwall timeは90分。provider limitで新規Trialを止め、同じcampaign IDで未消費分を再開する。日次Trial上限の設定は持たない。
-- 同時実行: 既定はホストあたり2 Trial（上限4）。1 Trialは新しい探索containerを1本持ち、Leadが出た場合だけ同じTrialの新しいcontainerで最大2本の1 hop継続runを行う。継続runのwall timeは既定30分（設定上限120分）。継続runは独立Trial数を増やさない。
-- 記録する項目（runごと）: trialId / trialOrdinal、`runKind`（`explore` / `continue`）、arm、source索引とscopeのdigest、要求model IDとeffort、CLIの正確な版と同梱カタログのdigest、認証方式、cyber access program、service tier、subagentのmodel / effort、usage（providerが返さない項目は `unavailable` のまま）、観測できたcommand件数の下限。継続runは親Leadのdigest参照だけを台帳に持つ。
-- 本番model: `gpt-6.1-sol`（Codex CLI ≥ 0.161）。開発セット: `gpt-6-luna`。
+- 構成: 1 TrialにRoot 1つと最大3つのsubagentを置き、Rootが調べる問いと分担を決める。Harnessは人数上限、隔離、実行時間、証拠保存、停止を管理する。子の有効なFindingとLeadは個別にPrivate Evidenceへ保存し、Rootの最終JSONの整形失敗で消さない。
+- 出力: `Finding[]`（0件可）、`Lead[]`（0件可）、調べた範囲・調べなかった範囲の短い記述。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。候補は生のまま保存し、profileの正規化を通してから受理する。受理できない候補は `candidate-held` として分類とissue pathだけを台帳に残し、保留だけのTrialは停止規則の無成果に数えない（ADR 0018）。Finding / Leadの出力契約はprompt本文ではなくHarnessがschemaから生成する節として渡し、目的文と契約節のdigestを別に記録する（ADR 0019）。
+- Campaign停止規則: provider limitでは新規Trialを止め、同じcampaign IDで未消費分を再開する。WP2Shell変種は優先Findingがなければ少なくとも実時間30分と異なる2 waveを求めるが、現行Harnessは下限を強制しないため実測の早期終了を監視する。協調Trialを同じ版で何回回すか、無成果の連続何回で別対象へ移るかは初回実測後に決める。旧単独Trialの上限6・連続3は協調Trialの既定ではない。
+- 同時実行: 最初は協調Trialを1つずつ回す。Rootと子のprovider要求総数・usage・wallを観測し、安全に増やせることを確かめてから対象間の並列数を決める。
+- 記録する項目（runごと）: trialId / trialOrdinal、Rootまたは子の役割、要求model IDとeffort、CLIの正確な版と同梱カタログのdigest、認証方式、cyber access program、service tier、各agentのusage（providerが返さない項目は `unavailable`）、観測できたsource読取とcommand件数の下限、promptとsourceのdigest。
+- 本番model: Daybreak Blue対応の `gpt-6-sol` 系を使う。正確なmodel IDとsubagentへの継承は実機preflightで固定する。`gpt-6.1-sol`やLunaへ暗黙に切り替えない。
 
 ## 7. Verificationの仕様
 
-- Verifier: 新しいコンテナ。渡すのはFinding、固定source pack、Lab endpoint、低権限account、RO DB accountと、impactに応じてLabが検証時に発行したcanary。探索の会話履歴と作業領域は渡さない。役割はrecipeの環境不備の修正と反証に限り、再探索はしない。
+- Verifier: 新しいコンテナ。渡すのはFinding、固定source pack、Lab endpoint、低権限account、RO DB account、Lab Setup（profileの版付き通常機能シナリオIDを含む、ADR 0020）と、impactに応じてLabが検証時に発行したcanary。Findingの前提はシナリオcatalogueと照合し、不足は `incomplete(precondition)` の次の手に次のシナリオ名を書く。探索の会話履歴と作業領域は渡さない。役割はrecipeの環境不備の修正と反証に限り、再探索はしない。
 - HTTP証拠: Verifierの宛先はLab内のHarness所有reverse proxyへ向け、request / responseをPrivate EvidenceにJSON Linesで捕捉する。判定器は捕捉記録を優先し、request側をdecode後も検査する。捕捉が無い場合だけVerifierの `http.json` を補助資料として読み、台帳のoptionalな `evidenceCapture` は `harness-captured` / `agent-authored` のenumだけを記録する。実行時確認には引き続きnonce canaryの回収を要する。
 - Verifierの出力: `http.json`、`steps.md`、`route.json`、別主体のcookieをLabが検査する `session.json`、`refutation.md`、設定前提。payload、cookie、HTTP本文はPrivate Evidenceに置く。
 - 判定器（Harness所有、決定論的）。作るのは両プログラムで報奨に届く分類だけ。Reflected XSS、CSRF、到達先のないmissing authorization / IDOR、コンテンツ削除は判定器を作らず、探索の目的にも含めない（記録はする）:
@@ -102,16 +103,19 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | options更新 | Labが置いたcanary option、または重大なoption（`users_can_register`、`default_role`、`siteurl`、`admin_email` 等）が低権限主体から変わる | 影響のないoption |
 | 管理者への権限昇格 / 認証回避 / アカウント乗っ取り | 低権限主体が管理者の認証状態または管理者相当の能力を得る（Labのcanaryユーザー、各ロールの正常操作記録との差） | パスワードリセットメールの存在だけ、エラーメッセージの差 |
 | contributor以上への権限昇格 / 非管理者の認証回避 | 低権限主体がcontributor以上の能力または他主体の認証状態を得る | 同上 |
-| Stored XSS（サイト全体） | 低権限主体が置いたnonce付き値が、未認証訪問者が見る前面ページまたは全管理画面でheadless browserにより実行され、Labのcanary受信先へ届く。発火contextを記録 | alertの有無、文字列の存在だけ、特定ページだけの発火 |
+| Stored XSS | 低権限主体が置いたnonce付き値が、影響を受けるページ、またはFindingが宣言する被害者ロールで開いた画面（ADR 0021）をheadless browserで開いたときに実行され、Labのcanary受信先へ届く。発火contextとサイト全体への広がりを分けて記録 | alertの有無、文字列の存在だけ、ブラウザ操作なしの自己申告 |
+| 機微な対象の読み取り（`sensitive-object-access`） | Labが低権限主体の読めない対象に置いたnonce付きcanary文字列が、低権限または未認証の主体への応答に現れる。読めた対象の種類を記録し、scope判定は別段階（ADR 0024） | 文字列の反射、件数・応答長・エラーメッセージの差 |
 
-- 結果: `runtime-confirmed` / `contradicted` / `incomplete`。`incomplete` は理由コード（provision、precondition、recipe、observation、evidence、cleanup、digest-mismatch）と次の手を持つ。
+- 結果: `runtime-confirmed` / `contradicted` / `incomplete`。`incomplete` は理由コード（provision、precondition、recipe、observation、evidence、cleanup、digest-mismatch）と次の手を持つ。再試行は理由ごとに決める: `recipe` と `observation` は同じLab Setupで最大2回自動再試行、`precondition` はシナリオIDが変わったときだけ、`provision` は再供給1回、それ以外は人間へ回す。attempt番号と前のverificationIdを台帳に残す（ADR 0022）。
 - 判定器を定義できない種別は自動確認せず、`incomplete(no-judge)` として人間へ回す。
 - **再現パッケージ（Reproduction Package）**: `runtime-confirmed` になった各Findingについて、判定器が通った経路に限定して、人間が自分の手で再現できる資料を生成する。手順は遠隔攻撃者の視点（HTTPリクエストとブラウザ操作）で書き、WP-CLIやサーバー側だけの操作を成立条件に含めない（Patchstackの提出要件）。内容は (1) 手動手順（前提の設定、使うロールとアカウント、送るリクエスト、期待する観測）、(2) 最小スクリプト（Python、標準ライブラリと `requests` だけで動く）、(3) Labの再構築情報（WordPress版、プラグイン版とdigest、有効化した設定、ロール）、(4) 判定器が取った証拠（HTTP記録、画面画像、canary回収ログ）。置き場はPrivate Evidence（Git外）で、`review` から開く。レポートの査読と提出文案の根拠に使う。Verifierの作業ログをそのまま出さない。
 
 ## 8. 人間レビューとDisclosure
 
 - レビュー列に出すもの: `runtime-confirmed`（証拠refと再現パッケージつき）と、次の手付きの `incomplete`。`contradicted` は件数と抽出だけ。人間は再現パッケージで自分の手で再現してから文案を査読する。
-- 人間が決めること: 影響が意味を持つか、意図された動作ではないか、重複でないか（ローカルWordfence履歴DBで照合）、どのprogrammeへ出すか、文案の承認、外部行動の承認。
+- 人間が決めること: 再現パッケージを使って自分の手でLab上の攻撃を再現し、影響が意味を持つか、意図された動作ではないか、重複でないか、どのprogrammeへ出すか、文案と外部行動を承認する。Labの再構築とプラグイン設定はHarnessが保存したsetup manifestから自動化する。
+- 重複: 検証後・提出前にWordfence Intelligence mirrorの更新と照合を試み、PatchstackとWPScanの公開記録も照合する。照合元と時刻を記録し、staleまたは不明を「重複なし」にしない。候補の同一性は人間が最終判断する。
+- 文案: Harnessは判定器が通したHTTP・canary・必要な画面証拠に基づき、短い英語レポートとWordfence入力用JSONを作る。新しい証拠を文章で創作しない。提出は人間だけが行う。
 - 記録: 判断、理由コード、判断までの時間、開いた証拠。覆し率は監視信号。
 - 提出転帰（triaged / resolved / duplicate / informative / N/A / rejected）を台帳へ戻し、選定方針と判定器の改善材料にする。自分の未公開の発見は公開されるまで探索へ戻さない（公開後はADR 0012の履歴として扱う）。
 
@@ -137,7 +141,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 | 場所 | 手段 | 強さ |
 | --- | --- | --- |
-| `selection` | 対象外資産（作者、配布停止、ベンダー側service）を除外リストで落とす。閾値（500件以上、WordPress.org掲載）を方針ファイルで持つ | 機械的。対象が入らない |
+| `selection` | 対象外資産（作者、配布停止、ベンダー側service）を落とす。初期の探索方針はinstall数1万以上とし、低権限・高影響の公開履歴を強い優先信号にする。プログラムの報奨対象となる下限500件等は別のscope規則として記録する | 機械的。方針と除外理由を残す |
 | `lab` | discoveryとverifierに渡す認証情報を未認証・subscriber・customer（WooCommerce有効時）に限る。contributor以上と管理者の認証情報は渡さない。設定は既定のまま、一般的な利用範囲の初期データ（公開フォーム1つ等）はprofileのsetup manifestで入れ、Lab Setup digestに記録する | 機械的。contributor以上の経路は試せない。設定変更もできない |
 | `discovery` | 目的promptに到達すべき影響の共通分類（下表）と報奨順を書き、trust境界宣言でcontributor以上と管理者の明示設定を信頼側に置く | 誘導。agentは他も報告してよいが、台帳で分類される |
 | `verification` と `review` | 判定器の成功条件をプログラムの受理条件に合わせる（下表）。scope評価はFindingと判定器の観測だけから、方針ファイルの規則で `in-scope` / `out` / `ambiguous` を出す。agentの自己申告は使わない | 機械的。提出候補にならない |
@@ -155,7 +159,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `privesc-to-contributor+` / `auth-bypass-non-admin` | 低権限主体がcontributor以上の能力または他主体の認証状態を得る | その他 ≥500 | 受理（contributor以上が条件） |
 | `sensitive-object-access` | 判定器は後回し（`incomplete(no-judge)` として人間へ） | その他 ≥500（Sensitive Information Disclosure） | 受理（機微な対象が条件） |
 | `content-deletion` | 判定器を作らない。探索の目的に含めない | その他 ≥500 | broken access controlの条件次第 |
-| `stored-xss` | 低権限主体のnonce付き値が、未認証訪問者が見る前面ページまたは全管理画面で実行されcanary受信先へ届く。発火contextを記録 | Common ≥500 | 受理（サイト全体に効くことが条件。それ以外はmVDPのみ） |
+| `stored-xss` | 低権限主体のnonce付き値が、影響を受けるページで実行されcanary受信先へ届く。発火contextと範囲を記録 | Common ≥500。特定ページだけでも候補 | 受理（サイト全体に効くことが条件。それ以外はmVDPのみ） |
 | `reflected-xss` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（JS実行、nonce不要が条件）だが出さない |
 | `csrf-to-write` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（連鎖が条件）だが出さない |
 | `missing-authz` / `idor`（到達先なし） | 判定器を作らない。到達先がある場合はその分類で判定する | 対象外 | 機微な対象以外は対象外 |
@@ -173,28 +177,27 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 10. 評価
 
-主指標は本番から得る。held-outは任意で、回すときは予算で件数と試行を決める。理由は [DESIGN-EVIDENCE.md 第9節・第12節](DESIGN-EVIDENCE.md)。
+まずTranslatePressの公開済み脆弱版・修正版で縦断経路を実証する。主指標はその後の最新版の本番から得る。開始条件、試行上限、保留時の扱いは [TRANSLATEPRESS-BENCHMARK.md](TRANSLATEPRESS-BENCHMARK.md)。多数の公開事例を採点するheld-out評価は初期開発・本番開始の必須条件にしない。
 
 ### 主指標（本番の台帳から、追加費用なし）
 
-- **本番A/B（ablation）**: 同じ対象の独立Trialに、履歴有無・prompt変種・Trial内継続のopt-in軸を `ablation.axes` で割り当てる。armはTrial ordinalから決定論的に決め、版付きpromptのdigestとともに台帳へ残す。比較の分母はLab HTTP到達が `ok` で探索runがcompletedのTrialだけ。継続runは独立Trialに数えない。`eval compare --axis history|prompt|continuation` で区間と費用を読み、区間が重なれば「判定不能」とする。固定手順のprompt、Verifierや隔離を外すablationは行わない。
-- **前向き評価**: 本番Campaignの台帳を、後日公開されたadvisory（自分の提出以外も含む）で採点する。「あったのに見逃した」が分かる唯一の方法。採点はheld-outと同じ `location-overlap` と盲検rubric。
+- **本番A/B（縦断後）**: 旧単独Trial向けの履歴有無・prompt変種・1 hop継続の軸は既に記録可能だが、協調Trialへのそのままの適用はしない。新しい比較は対象、モデル、source、予算、判定器を固定し、独立した協調Trialを分母にする。区間が重なれば「判定不能」とする。隔離と判定器を外すablationは行わない。
+- **前向き評価**: 本番Campaignの台帳を、後日公開されたadvisory（自分の提出以外も含む）と照合する。未発見の経路を後から分析できるが、個別の脆弱性の存在を実行時に知ることはできない。
 - **提出転帰**: triaged / resolved / duplicate / informative / N/A / rejected の率と、報奨額。収益に直結する最終の数字。
-- **funnel**: raw → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・種別別。
+- **funnel**: 最終JSON到達 → 受理 / 保留 → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・arm別・種別別。非cache入力1M tokenあたりとagent wall 1時間あたりの `runtime-confirmed` と、Findingごとの検証attempt数を同じ表で出す（ADR 0023）。
 
 ### 判定器の負の対照（安い。判定器のテストとして回す）
 
-- 修正版pluginで同じ手順を流し、判定器が鳴らないことを確認する。鍵と同じpropertyを主張したFindingだけ `control-false-alarm` と数える。
+- 修正版pluginで**脆弱版で確認した同一の経路と手順**を流し、判定器が鳴らないことを確認する。修正版にも別経路の脆弱性が残る可能性があるため、plugin全体が安全という意味にはしない。
 
-### 答えの鍵（登録は行う。回すかは任意）
+### 初期ベンチマークと追加評価
 
-- Answer Key（Research外に保管）: 入口（hook / route / AJAX action）、破られるproperty、欠けているcheck、攻撃者権限、到達する影響、許容file / function集合、公開日、model cutoff、本人発見 / 補助の区分。
-- 登録する鍵（2026-10-08時点、11件）: 本人発見の公開7件（旧リポジトリIssue 213）＋第三者の補助4件（任意ファイルアップロード / RCE、管理者への権限昇格、乗っ取り）。本人発見のうち2026-04-30（gpt-6.1-sol cutoff）以前の公開は contamination 可能性ありとして区間を分けて表示する。
-- 開発セット: TranslatePress 3.3.1の縦断スライスと、3.2.5の公開2事例を使うprompt×継続の2×2。後者は#73で各cell 3 completed Trialと継続なし150分対照各prompt 3 Trialを採点した。全cellでsource Candidateと完全経路は0/3。初回12試行のうち3件と補充8試行のうち1件はprovider失敗で分母から除き、補充は元の事前登録12試行と分けて記録した。両方0なら安い方という事前登録規則により、既定は短い目的prompt `short-objective-v2` と継続なし。優劣を示した結果ではなく、実wall timeも設定上限より短かった。
-- held-out評価を回す条件: 大きな設計変更（判定器の方式、探索の構造）をしたときに限る。回すときは、cutoff後の補助4件を優先し、試行数は予算で決め（1〜5）、区間の幅をそのまま示す。旧N=40に基づく費用比較は現行のTrial上限6に当てはまらないため、回す件数とTrial数をその都度予算で決める。
-- 採点: 一次は機械の `location-overlap`（必要条件）。二次は人間の盲検rubric（場所、root cause、攻撃者条件、影響の4要素）で `target-hit` / `partial` / `non-target`。実行水準は `target-hit ∧ runtime-confirmed`。
-- 統計: k/n にClopper-Pearson区間。pass@kはunion / 全回 / 試行別の3表示。種別別は件数のまま。重なる区間は「差なし」でなく「判定不能」と書く。
-- held-outの結果を見てpromptを変えたら、そのcaseは開発セットへ移す。
+- 初期対象はTranslatePress 3.2.6のStored XSSと3.3.1のアカウント乗っ取りを**評価側の公開事例**として扱う。3.2.5のReflected XSSは対象外分類の診断用で、本番開始ゲートに数えない。
+- TranslatePress 3.2.6でRoot＋3の協調Trialをまず1回実行する。ゲートが通ればそこでベンチマークを止め、通らなければsource読取、実行時間、provider失敗、停止理由を調べて3.3.1を1回実行する。無条件に試行数を増やさない。具体的Leadは保存するが、Leadだけで本番開始ゲートを満たさない。
+- 探索時の入力に評価対象のadvisory、原因箇所、PoC、payload、修正差分を混ぜない。評価情報はrunner・判定器側に隔離する。旧#73の単独TrialによるTranslatePress 3.2.5の2×2は候補0件で、協調Trialの優劣や当たり率を示さない。
+- 本番探索の開始ゲートは、上記2対象の**少なくとも1件**でsource根拠付きFindingを新しいLabのHarness判定器が `runtime-confirmed` とし、同一経路を修正版で再実行してconfirmedにならず、子の成果と費用・停止理由が欠落なく残ること。これで示せるのは配線と1分類の能力だけで、未知脆弱性の発見率ではない。
+- ゲート通過後は、現行最新版を対象とした少数の本番探索へ進む。対象選定の最小方針・Snapshot固定・隔離が機能していれば、レポートJSONの完全自動化や多数のheld-out事例を待たない。ただし提出候補を人間に渡す条件（最新版での独立確認、重複・scope照合、証拠、手動Lab再現、承認）は第8節のまま守る。
+- 複数手法の比較が必要になった時だけ、同じ対象・model・予算でA/Bまたはpass@kを事前登録する。旧 `eval score --keys` とAnswer Keyは将来の任意の研究用互換機能であり、人間による鍵入力を要求しない。
 
 ## 11. ADR（新リポジトリで最初に書くもの）
 
@@ -210,24 +213,32 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 10. プログラム対象範囲は技術的検証を止めず、reviewで提出先ごとに評価する。authz / IDORは重大な影響へつながる場合だけ対象。
 11. 対象固有のコードはTarget Profileに閉じ込め、汎用モジュールはprofileを型でしか知らない。2つ目のprofileまで汎用化しない。
 12. 既知脆弱性は評価では時点で切り、本番では対象の公開履歴を変種分析の入力として渡す（0001を置き換え）。
-13. 探索promptの管理指示変種は版付きの本番A/B軸とし、短い目的promptを既定にする。
-14. Leadの継続は同一Trial内の1 hopに限り、独立Trial数を増やさない。
+13. 探索promptの版とA/B軸を保持する。既定の選択は0017が置き換える。
+14. 旧単独TrialのLead継続は同一Trial内の1 hopに限る。主経路の既定は0016が置き換える。
 15. 判定器のHTTP証拠はHarnessが捕捉し、Verifierの記録は補助として扱う。
+16. Root＋最大3 subagentを主経路とし、探索から人間の手動再現までを先に実証する。
+17. 短い管理promptとWP2Shell式報奨promptを同条件で比較する。
+18. 探索候補を出力境界で失わず、受理できない候補は保留として理由付きで保持する。
+19. 出力契約はHarnessがschemaから生成し、promptは目的文だけを持つ。
+20. 検証Labの前提はprofileの版付き通常機能シナリオにし、Findingの前提と照合する。
+21. Stored XSS判定器はFindingが宣言する被害者ロールと画面で発火を観測する。
+22. Verifierの `incomplete` は理由ごとの再試行方針で前へ進める。
+23. funnelは最終JSON到達と受理から数え、tokenあたりの `runtime-confirmed` で費用を示す。
+24. `sensitive-object-access` を優先順位に残し、判定器を持つ。
 
 ## 12. 最初の縦断スライスと受入条件
 
-開発セット1件（TranslatePress 3.3.1 ATO。答えを知っていてよい）で、次が一度通ること。目的はHarnessが端から端まで動くことの確認で、当たり率の主張ではない。
+TranslatePressの公開済み開発対象を脆弱版と修正版で固定し、まず探索から判定器までを通す。開発対象は人間がslugと版を指定してよい。これは配線と判定器の実証であり、未知脆弱性の発見率の主張ではない。
 
-1. `selection` が方針からその対象を含む選定を出す（手動pinで可）。
-2. `snapshot` がTarget / Dependency Snapshotをdigestで固定する。
-3. `lab` がgVisor内にWordPress + MySQLを供給し、canaryとロール別アカウントを仕込む。
-4. `discovery` が `gpt-6.1-sol` でrunを回し、Findingを台帳へ記録する。停止規則が働く。1試行でよい。
-5. `verification` がVerifierと判定器で結果を出し、`incomplete` の理由コードが残る。
-6. `review` のCLIがconfirmedとincompleteを表示し、判断を記録する。
-7. `ledger` がfunnelを表示し、`evaluation` が鍵に対して `location-overlap` を出す（鍵は開発セットのもの）。
-8. `pnpm check` が通り、各モジュールの振る舞いテストが公開インターフェースから観測する。
+1. `snapshot` が対象、WordPress core、必要な依存をdigestで固定し、gVisor Labを供給する。
+2. 実機preflightでDaybreak対応model ID、Rootと最大3つの子、broker、Lab到達を確認する。別モデルや単独agentへ自動fallbackしない。
+3. 協調Trialがsourceを読み、Findingまたは具体的Leadを出す。子の成果はRootの最終JSONと独立して保存され、schema失敗は正常な0件にならない。
+4. Findingが出たら新しいLabの独立VerifierとHarness判定器へ渡す。nonce証拠、HTTP記録、失敗時の `incomplete` 理由を保存する。同じ経路の修正版ではconfirmedが出ない。
+5. 上のゲートを満たしたら、最小の選定方針で公開中最新版の少数の本番探索を始める。confirmedなら最新版の同じSnapshotで独立確認し、Wordfenceを含む重複候補とscopeを照合する。最新版で成立しなければ提出候補にしない。
+6. 証拠付きの短い英語レポートJSONと再現パッケージを出し、人間がsetup manifestからLabを立てて自分の手で同じHTTP手順を再現する。レポート生成の完全自動化がまだ無い期間は、既存のdraft登録口を使って証拠から文案を作れる。
+7. 台帳からFinding、Lead、各agentの実行と使用量、検証結果、レビューの段数を読める。`pnpm check` と [テスト戦略](TEST-STRATEGY.md) の実環境ゲートを通す。
 
-受入: 上記が一度通り、台帳から「Finding数、verifier通過数、confirmed / contradicted / incomplete、run数と費用」が読める。提出は行わない。held-outは使わない。
+本番探索への受入は、第10節のTranslatePressゲートと隔離・記録・最小選定方針。最初の外部提出への受入は、最新版の独立確認、重複・scope照合、証拠、英語文案、人間の手動再現と版・送信先を指定した承認まで。ベンチマークで確認した旧版の発見自体は提出しない。
 
 ## 13. 移植一覧（旧リポジトリ → 新モジュール）
 
@@ -259,8 +270,8 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | --- | --- |
 | Target Snapshot | plugin sourceをmanifest digestで固定した読み取り専用の対象 |
 | Lab | 使い捨てのgVisor環境で動くWordPress + MySQL。canaryとロール別アカウントを持つ |
-| Trial | 独立試行の単位。索引から作ったscopeと新しい探索containerを持ち、自分のLeadだけを最大2本・1 hop継続できる |
-| Discovery Run | 探索またはLead継続の短命エージェント実行。継続runは独立Trialを増やさない |
+| Trial | 独立試行の単位。主経路ではRootと最大3つのsubagentが協調する。旧単独Trialも台帳では区別して読む |
+| Discovery Run | モデル実行の記録単位。Rootと子の実行をTrialの中で区別する |
 | Finding | Discovery Runが出した、攻撃者前提・property・traceを持つ主張。確認ではない |
 | Lead | sourceに根拠があるが、影響までの辺が1つ不足するprimitive。Findingでも確認結果でもない |
 | Verifier | 新しいコンテナで反証を試みる独立エージェント。再探索はしない |

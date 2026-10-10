@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   allocateTrialArms,
   CODEX_SANDBOX_MEMORY_MIB,
+  CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   EGRESS_BROKER_LEFTOVER_PATTERNS,
   EGRESS_BROKER_MEMORY_MIB,
 } from "../discovery/index.js";
@@ -80,7 +81,7 @@ import {
   type WordPressReconstruction,
 } from "../profiles/wordpress/verification/reproduction-package.js";
 import type { CliProfile, CliState } from "./index.js";
-import { reverifyOnLatestVersion, runCampaignPipeline } from "./pipeline.js";
+import { reverifyOnSelectedVersion, runCampaignPipeline } from "./pipeline.js";
 
 const text = z.strictObject({
   version: z.string().min(1).max(64),
@@ -115,7 +116,7 @@ export const wordpressCampaignConfigSchema = z
     selectionPolicyPath: z.string().min(1).optional(),
     promptId: z
       .enum(WORDPRESS_DISCOVERY_PROMPT_IDS)
-      .default("short-objective-v2"),
+      .default("short-objective-managed-v4"),
     programmeBoundary: text,
     stopRules: z
       .strictObject({
@@ -153,11 +154,26 @@ export const wordpressCampaignConfigSchema = z
     lab: z.strictObject({
       siteTitle: z.string().min(1).max(120),
       initialPosts: z.array(z.string().min(1).max(120)).max(20),
+      initialApprovedComment: z.boolean().optional(),
       customerRole: z.boolean(),
       databaseAccess: z.enum(["read-only", "none"]).default("read-only"),
+      translatePress: z
+        .strictObject({
+          administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
+        })
+        .optional(),
     }),
   })
   .superRefine((config, context) => {
+    if (
+      config.lab.initialApprovedComment === true &&
+      config.lab.initialPosts.length === 0
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["lab", "initialApprovedComment"],
+        message: "An approved comment requires an initial post",
+      });
     const axes = config.ablation?.axes ?? [];
     if (new Set(axes.map((axis) => axis.axis)).size !== axes.length)
       context.addIssue({
@@ -244,7 +260,13 @@ const reconstructionFor =
   (snapshot: Snapshot): WordPressReconstruction => ({
     wordpressVersion: config.wordpressVersion,
     target: snapshot.target,
-    enabledSettings: [],
+    enabledSettings:
+      config.lab.translatePress === undefined
+        ? []
+        : [
+            `TranslatePress publishes ${config.lab.translatePress.administratorSecondaryLocale} as a secondary language`,
+            `The administrator uses ${config.lab.translatePress.administratorSecondaryLocale} as profile locale`,
+          ],
     roles: [
       "unauthenticated",
       "subscriber",
@@ -373,6 +395,11 @@ export function createWordPressCliProfile(options: {
           : undefined;
       return runCampaignPipeline({
         campaignId: input.campaignId,
+        ...(input.retryIncompleteVerifications === undefined
+          ? {}
+          : {
+              retryIncompleteVerifications: input.retryIncompleteVerifications,
+            }),
         ledger: state.ledger,
         store: state.store,
         clock: state.clock,
@@ -496,7 +523,12 @@ export function createWordPressCliProfile(options: {
               concurrency: Math.min(
                 config.resources.maxConcurrentRuns,
                 Math.floor(
-                  config.resources.memoryBudgetMiB / DISCOVERY_RUN_MEMORY_MIB,
+                  config.resources.memoryBudgetMiB /
+                    (boundaries.runtimeProfile.subagent.modelId ===
+                    "unavailable"
+                      ? DISCOVERY_RUN_MEMORY_MIB
+                      : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB +
+                        EGRESS_BROKER_MEMORY_MIB),
                 ),
               ),
               ...(config.ablation === undefined
@@ -653,25 +685,52 @@ export function createWordPressCliProfile(options: {
     async reverify(state, input) {
       const { config, policy } = await loadConfig(input.configPath);
       const boundaries = await options.boundaries(config, state);
-      return reverifyOnLatestVersion({
+      return reverifyOnSelectedVersion({
         campaignId: input.campaignId,
         findingId: input.findingId,
+        ...(input.version === undefined ? {} : { version: input.version }),
         ledger: state.ledger,
         store: state.store,
         clock: state.clock,
         newId: state.newId,
         pipeline: {
-          async selectLatest({ selectionId }) {
+          deriveFinding({ original, snapshotDigest, runId }) {
+            const recorded = readWordPressFinding(original);
+            const {
+              findingId: _findingId,
+              discoveryRunId: _discoveryRunId,
+              snapshotDigest: _originalSnapshotDigest,
+              recipeRef,
+              historyRecordId: _historyRecordId,
+              ...claim
+            } = recorded;
+            const finding = admitWordPressFinding(claim, {
+              runId,
+              snapshotDigest,
+              reportArtifactDigest: recipeRef.digest,
+            });
+            return { finding, category: finding.impact };
+          },
+          async selectVersion({ selectionId, version }) {
             const slug = /^wporg:([a-z0-9][a-z0-9-]*)@/.exec(selectionId)?.[1];
             if (slug === undefined) return null;
-            // No pin: the observed stable version is the latest one.
-            const latest = await boundaries.selection.select({
-              ...policy,
+            // Rechecking a known Finding does not need the candidate batch's
+            // history ranking.
+            const {
+              historySignals: _historySignals,
+              historySource: _historySource,
+              ...reverifyPolicy
+            } = policy;
+            const selected = await boundaries.selection.select({
+              ...reverifyPolicy,
               candidateSlugs: [slug],
-              pinnedVersions: {},
+              pinnedVersions: version === undefined ? {} : { [slug]: version },
               maximumTargets: 1,
             });
-            return latest[0] ?? null;
+            const target = selected[0] ?? null;
+            if (version !== undefined && target?.version !== version)
+              throw new Error("Pinned verification version mismatch");
+            return target;
           },
           freeze: boundaries.freeze,
           setupFor: setupFor(config),

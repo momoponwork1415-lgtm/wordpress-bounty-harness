@@ -22,7 +22,7 @@
     "requiredObservations": {
       "rce": ["execution-canary"], "php-file-write": ["execution-canary"],
       "arbitrary-php-file-read": ["canary-file-read"], "arbitrary-php-file-delete": ["canary-file-deleted"],
-      "options-update": ["option-canary-changed"], "stored-xss": ["javascript-executed", "site-wide"],
+      "options-update": ["option-canary-changed"], "stored-xss": ["javascript-executed"],
       "sqli": ["canary-row-access"], "content-deletion": ["other-content-deleted"],
       "sensitive-object-access": ["sensitive-canary-access"],
       "arbitrary-file-read": ["canary-file-read"], "arbitrary-file-delete": ["canary-file-deleted"],
@@ -71,6 +71,7 @@
 - 明示的に対象外の種別: Reflected XSS、CSRF、Missing Authorization、IDOR、任意shortcode実行、DoS、限定的なfile upload、基本的な情報露出、gadgetなしPHP object injection、open redirect、SSRF、race condition依存、cache poisoning、API keyの更新 / 読み取り、非公開 / 下書き投稿の閲覧、業務ロジックの欠陥、過度なbrute force依存、管理者が明示的に権限を与える前提のもの。
 - Missing Authorization / IDORは種別としては対象外だが、同じ欠陥が「任意options更新」「任意コンテンツ削除」「権限昇格」「認証回避」「機微情報の漏えい」に到達すれば、その到達先の種別として対象になる。scope評価では到達先で分類する（判断者の方針と一致）。
 - 判定器と Lab 構成に効く却下条件: `wp_magic_quotes` 無効が前提のSQLiは不可（Labは既定設定のまま）。SVG upload経由のXSS、二重拡張子、安全な拡張子内のPHPコードは不可（file upload系はExecution Canaryの実行で証明する）。nonceで守られていて低権限に露出しないactionのmissing authorizationは不可。管理者の誤設定が前提のものは不可（Labの設定は既定または一般的な利用範囲に限る）。
+- Stored XSSは特定ページでだけ発火しても、低権限または未認証の入力が保存され、被害者がそのページを開いたときにJavaScriptが実行されればWordfenceでは候補にする。発火範囲は証拠へ記録する。Patchstackのサイト全体条件とは分けて判定する。
 - 提出前に公式ページで再確認し、差分があれば新しい日付の写しを置く。
 
 ## Patchstack

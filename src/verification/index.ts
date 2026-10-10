@@ -30,6 +30,8 @@ export interface Verifier<Finding, Handle extends LabHandle> {
   attempt(input: {
     readonly finding: Finding;
     readonly lab: Handle;
+    /** Earlier judge-owned route for a same-path version comparison. */
+    readonly referenceRoute?: unknown;
   }): Promise<VerifierAttempt>;
 }
 export type VerifierAttempt =
@@ -127,14 +129,15 @@ export class Verification<
     readonly findingId: string;
     readonly verificationId: string;
     readonly snapshot: { readonly digest: string };
-    /** Re-verify a Finding recorded on an earlier snapshot of the same target. */
+    /** Marks a version comparison; the Finding still belongs to this snapshot. */
     readonly basis?: {
-      readonly kind: "latest-version";
+      readonly kind: "latest-version" | "fixed-version";
       readonly findingSnapshotDigest: string;
     };
     readonly setup: Setup;
     readonly campaignLabSetupDigest: string;
     readonly reconstruction: Reconstruction;
+    readonly referenceRoute?: unknown;
   }): Promise<VerificationResultV1> {
     const campaignId = id.parse(input.campaignId);
     const findingId = id.parse(input.findingId);
@@ -151,8 +154,9 @@ export class Verification<
           "Record the finding with its private claim before verification",
         );
       if (
-        finding.snapshotDigest !==
-        (input.basis?.findingSnapshotDigest ?? snapshotDigest)
+        finding.snapshotDigest !== snapshotDigest ||
+        (input.basis !== undefined &&
+          input.basis.findingSnapshotDigest !== snapshotDigest)
       )
         return incomplete(
           "digest-mismatch",
@@ -182,6 +186,7 @@ export class Verification<
           judge,
           lab,
           input.reconstruction,
+          input.referenceRoute,
           (capture) => {
             evidenceCapture = capture;
           },
@@ -253,6 +258,7 @@ export class Verification<
     judge: Judge<Finding, Handle>,
     lab: Handle,
     reconstruction: Reconstruction,
+    referenceRoute: unknown,
     onCapture: (capture: "harness-captured" | "agent-authored") => void,
   ): Promise<VerificationResultV1> {
     if (lab.snapshotDigest !== snapshotDigest)
@@ -268,7 +274,11 @@ export class Verification<
       );
     let attempt: VerifierAttempt;
     try {
-      attempt = await this.#options.verifier.attempt({ finding, lab });
+      attempt = await this.#options.verifier.attempt({
+        finding,
+        lab,
+        ...(referenceRoute === undefined ? {} : { referenceRoute }),
+      });
     } catch (error) {
       if (error instanceof VerifierTransportIncompleteError)
         return incomplete(

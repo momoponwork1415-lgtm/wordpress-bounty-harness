@@ -20,6 +20,60 @@ const candidate = {
 };
 
 describe("WordPress Finding admission", () => {
+  it("normalizes fixed sandbox source paths and retains a private recipe note", () => {
+    const finding = admitWordPressFinding(
+      {
+        ...candidate,
+        sourceTrace: [
+          {
+            file: "/workspace/main/includes/example.php",
+            function: "f",
+            line: 12,
+          },
+          {
+            file: "/workspace/wordpress/wp-includes/load.php",
+            function: "g",
+            line: 1,
+          },
+          {
+            file: "../wordpress/wp-admin/admin-ajax.php",
+            function: "h",
+            line: 2,
+          },
+        ],
+        privateRecipeReference: "See the sealed report for Lab steps",
+      },
+      { runId: "run-1", snapshotDigest: digest, reportArtifactDigest: digest },
+    );
+    expect(finding.sourceTrace.map((location) => location.file)).toEqual([
+      "includes/example.php",
+      "@wordpress/wp-includes/load.php",
+      "@wordpress/wp-admin/admin-ajax.php",
+    ]);
+    expect(readWordPressFinding(finding)).toEqual(finding);
+    expect(() =>
+      admitWordPressFinding(
+        {
+          ...candidate,
+          sourceTrace: [{ file: "/etc/passwd", function: "f", line: 1 }],
+        },
+        {
+          runId: "run-1",
+          snapshotDigest: digest,
+          reportArtifactDigest: digest,
+        },
+      ),
+    ).toThrow();
+  });
+
+  it("canonicalizes a specific account takeover impact synonym", () => {
+    const finding = admitWordPressFinding(
+      { ...candidate, impact: "account-takeover-to-admin" },
+      { runId: "run-1", snapshotDigest: digest, reportArtifactDigest: digest },
+    );
+    expect(finding.impact).toBe("account-takeover");
+  });
+
   it("binds a low-privilege Finding to its run, snapshot, and private report", () => {
     const finding = admitWordPressFinding(candidate, {
       runId: "run-1",

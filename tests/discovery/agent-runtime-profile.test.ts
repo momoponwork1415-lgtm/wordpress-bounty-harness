@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   admitAgentRuntimeProfile,
+  admitCooperativeRuntimeProfile,
   defineAgentRuntimeProfile,
 } from "../../src/discovery/index.js";
 
@@ -21,6 +22,37 @@ const definition = {
 };
 
 describe("Codex runtime profile", () => {
+  it("admits a pinned Daybreak Blue Root and three matching child slots", () => {
+    const candidate = {
+      ...definition,
+      requestedModelId: "gpt-6-sol" as const,
+      cyberAccessProgram: "daybreak_blue" as const,
+      subagent: { modelId: "gpt-6-sol", effort: "high" },
+    };
+    const profile = defineAgentRuntimeProfile(candidate);
+    expect(admitCooperativeRuntimeProfile(profile, digest)).toEqual({
+      status: "admitted",
+      profile,
+    });
+    expect(
+      admitCooperativeRuntimeProfile(
+        defineAgentRuntimeProfile({
+          ...candidate,
+          subagent: { modelId: "gpt-6-luna", effort: "high" },
+        }),
+        digest,
+      ).status,
+    ).toBe("child-mismatch");
+    expect(
+      admitCooperativeRuntimeProfile(
+        defineAgentRuntimeProfile({
+          ...candidate,
+          cyberAccessProgram: "standard",
+        }),
+        digest,
+      ).status,
+    ).toBe("access-mismatch");
+  });
   it("binds recorded execution fields and the sandbox image", () => {
     const profile = defineAgentRuntimeProfile(definition);
     expect(admitAgentRuntimeProfile(profile, digest).status).toBe("admitted");

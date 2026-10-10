@@ -82,6 +82,7 @@ async function harness(
     readonly history?: boolean;
     /** Provider calls (1-based) that the subscription refuses with a quota limit. */
     readonly limitOnCalls?: readonly number[];
+    readonly failOnCalls?: readonly number[];
     readonly leadsOnCalls?: Readonly<Record<number, readonly unknown[]>>;
     /** Candidate slugs; the first is not pinned. */
     readonly candidates?: readonly string[];
@@ -363,6 +364,19 @@ async function harness(
               completedAt: now,
             }),
           };
+        if (options.failOnCalls?.includes(call) === true)
+          return {
+            receipt: createNativeRunReceipt({
+              runId: run.runId,
+              targetSnapshotDigest: run.targetSnapshotDigest,
+              profile: run.profile,
+              terminal: "incomplete",
+              reason: "sandbox",
+              reasonDetail: "cli-exit:137",
+              startedAt: now,
+              completedAt: now,
+            }),
+          };
         const report = {
           findings:
             call === 1
@@ -605,6 +619,93 @@ const programmeRef = {
 };
 
 describe("harness CLI vertical slice", () => {
+  it("prints only digest references for private keys and blind rubric forms", async () => {
+    const { run, keysPath, root } = await harness();
+    const keys = await run("eval", "keys", "--keys", keysPath);
+    expect(keys.code).toBe(0);
+    expect(JSON.parse(keys.stdout)).toMatchObject({
+      schemaVersion: 1,
+      keys: [
+        { caseId: "synthetic-case", digest: expect.stringMatching(/^sha256:/) },
+      ],
+    });
+    expect(keys.stdout).not.toContain("Synthetic property");
+    expect(keys.stdout).not.toContain("includes/synthetic.php");
+    const manifestPath = join(root, "key-digests.json");
+    await writeFile(manifestPath, keys.stdout);
+    const verified = await run(
+      "eval",
+      "score",
+      "--campaign",
+      "synthetic-campaign",
+      "--keys",
+      keysPath,
+      "--case",
+      "synthetic-case",
+      "--manifest",
+      manifestPath,
+    );
+    expect(verified.code).toBe(0);
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        keys: [
+          { caseId: "synthetic-case", digest: `sha256:${"0".repeat(64)}` },
+        ],
+      }),
+    );
+    const rejected = await run(
+      "eval",
+      "score",
+      "--campaign",
+      "synthetic-campaign",
+      "--keys",
+      keysPath,
+      "--case",
+      "synthetic-case",
+      "--manifest",
+      manifestPath,
+    );
+    expect(rejected.code).toBe(2);
+    expect(rejected.stderr).toContain("digest differs");
+    expect(rejected.stderr).not.toContain("Synthetic property");
+    const invalidKeysPath = join(root, "invalid-keys.json");
+    await writeFile(
+      invalidKeysPath,
+      JSON.stringify([{ privateAnswer: "PRIVATE-SYNTHETIC-ANSWER" }]),
+    );
+    const invalid = await run("eval", "keys", "--keys", invalidKeysPath);
+    expect(invalid.code).toBe(2);
+    expect(invalid.stderr).not.toContain("PRIVATE-SYNTHETIC-ANSWER");
+
+    const rubricPath = join(root, "rubric.json");
+    await writeFile(
+      rubricPath,
+      JSON.stringify([
+        {
+          schemaVersion: 1,
+          caseId: "synthetic-case",
+          findingId: "synthetic-finding",
+          location: { rating: "match" },
+          rootCause: { rating: "partial", note: "Private explanation" },
+          attackerConditions: { rating: "unknown" },
+          impact: { rating: "mismatch" },
+          verdict: "partial",
+          assessedBy: "human",
+          assessedAt: "2026-10-10T00:00:00Z",
+        },
+      ]),
+    );
+    const rubric = await run("eval", "rubric", "--file", rubricPath);
+    expect(rubric.code).toBe(0);
+    expect(JSON.parse(rubric.stdout)).toMatchObject({
+      entries: 1,
+      digest: expect.stringMatching(/^sha256:/),
+    });
+    expect(rubric.stdout).not.toContain("Private explanation");
+  });
+
   it("records read-only DB access without storing its account in the ledger", async () => {
     const { run, configPath, prompts, ledger } = await harness();
     await run(
@@ -1197,6 +1298,32 @@ describe("harness CLI vertical slice", () => {
     expect(again.stdout).not.toContain("  finding ");
   });
 
+  it("keeps an incomplete Trial open and retries its ordinal without counting it as no findings", async () => {
+    const { run, configPath, ledger } = await harness({
+      failOnCalls: [1],
+      config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
+    });
+    const command = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    ];
+    const failed = await run(...command);
+    expect(failed.code).toBe(3);
+    expect(failed.stdout).toContain("runs 1  stopped by incomplete");
+    expect(ledger().read({ type: "discovery-concluded" })).toHaveLength(0);
+
+    const retried = await run(...command);
+    expect(retried.code).toBe(0);
+    expect(retried.stdout).toContain("runs 1  stopped by no-new-finding");
+    expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(2);
+    expect(ledger().read({ type: "discovery-concluded" })).toHaveLength(1);
+  });
+
   it("runs discovery concurrently within the configured count and memory budget", async () => {
     const { run, configPath, maxInFlight } = await harness({
       config: {
@@ -1626,11 +1753,19 @@ describe("harness CLI vertical slice", () => {
     expect(reverified.stderr).toBe("");
     expect(reverified.code).toBe(0);
     expect(reverified.stdout).toMatch(
-      /^reverified finding \S+ on wporg:synthetic-plugin 9\.9\.9  snapshot sha256:[a-f0-9]{64}  verification \S+: runtime-confirmed$/m,
+      /^reverified finding \S+ as \S+ on wporg:synthetic-plugin 9\.9\.9  snapshot sha256:[a-f0-9]{64}  verification \S+: runtime-confirmed$/m,
     );
+    const derived = /^reverified finding \S+ as (\S+) on/m.exec(
+      reverified.stdout,
+    )![1]!;
+    expect(derived).not.toBe(finding);
 
     const after = await run("review", ...campaign);
-    const latest = /verification (\S+)\s+snapshot (\S+)/.exec(after.stdout)!;
+    const derivedAt = after.stdout.indexOf(`finding ${derived}`);
+    expect(derivedAt).toBeGreaterThanOrEqual(0);
+    const latest = /verification (\S+)\s+snapshot (\S+)/.exec(
+      after.stdout.slice(derivedAt),
+    )!;
     // A fresh verification on a fresh snapshot; the old digest is not reused.
     expect(latest[1]).not.toBe(original[1]);
     expect(latest[2]).not.toBe(original[2]);
@@ -1639,10 +1774,46 @@ describe("harness CLI vertical slice", () => {
       "scope",
       ...campaign,
       "--finding",
-      finding,
+      derived,
     );
     expect(scoped.stdout).toMatch(/^wordfence in-scope /m);
     expect(scoped.stdout).toMatch(/^patchstack in-scope /m);
+  });
+
+  it("pins a fixed-version control without treating it as a latest-version scope check", async () => {
+    const { run, configPath, ledger } = await harness();
+    const campaign = ["--campaign", "campaign-1"];
+    await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      (await run("review", ...campaign)).stdout,
+    )![1]!;
+
+    const controlled = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding,
+      "--config",
+      configPath,
+      "--version",
+      "3.3",
+    );
+    expect(controlled.code).toBe(0);
+    expect(controlled.stdout).toContain("wporg:synthetic-plugin 3.3 ");
+    expect(
+      ledger()
+        .read({ campaignId: "campaign-1", type: "verification-finished" })
+        .at(-1)?.event,
+    ).toMatchObject({ basis: { kind: "fixed-version" } });
+    const scoped = await run(
+      "review",
+      "scope",
+      ...campaign,
+      "--finding",
+      finding,
+    );
+    expect(scoped.stdout).toMatch(/^wordfence ambiguous /m);
   });
 
   it("refuses to record a decision for a finding outside the review queue", async () => {
