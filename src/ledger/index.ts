@@ -41,6 +41,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     type: z.literal("lab-provisioned"),
     labId: id,
     status: z.enum(["ready", "failed"]),
+    purpose: z.enum(["discovery", "verification"]).optional(),
+    scenario: z.strictObject({ id, digest }).optional(),
     reachability: z
       .strictObject({
         http: z.enum(["ok", "failed"]),

@@ -564,7 +564,20 @@ describe("CodexVerifier.attempt", () => {
     ).toEqual({
       status: "incomplete",
       reason: "precondition",
-      nextStep: "The synthetic setting is unavailable",
+      nextStep: "catalogue に無い前提",
+    });
+  });
+
+  it("names the next catalogue scenario for a missing translation dictionary", async () => {
+    const f = await fixture([
+      { precondition: "Translation dictionary is empty" },
+    ]);
+    expect(
+      await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+    ).toEqual({
+      status: "incomplete",
+      reason: "precondition",
+      nextStep: "TranslatePress の二次言語・翻訳データ・承認済みコメント",
     });
   });
 

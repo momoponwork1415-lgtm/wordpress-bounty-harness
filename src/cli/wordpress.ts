@@ -58,6 +58,7 @@ import type {
   WordPressLabHandle,
   WordPressLabSetup,
 } from "../profiles/wordpress/lab/index.js";
+import { wordPressScenario } from "../profiles/wordpress/lab/scenarios.js";
 import {
   loadWordPressDiscoveryAsset,
   WORDPRESS_DISCOVERY_PROMPT_IDS,
@@ -166,6 +167,7 @@ export const wordpressCampaignConfigSchema = z
           administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
         })
         .optional(),
+      scenarioId: z.string().optional(),
     }),
   })
   .superRefine((config, context) => {
@@ -177,6 +179,15 @@ export const wordpressCampaignConfigSchema = z
         code: "custom",
         path: ["lab", "initialApprovedComment"],
         message: "An approved comment requires an initial post",
+      });
+    if (
+      config.lab.scenarioId !== undefined &&
+      wordPressScenario(config.lab.scenarioId) === undefined
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["lab", "scenarioId"],
+        message: "Unknown WordPress Lab scenario",
       });
     const axes = config.ablation?.axes ?? [];
     if (new Set(axes.map((axis) => axis.axis)).size !== axes.length)
@@ -253,24 +264,42 @@ async function loadConfig(configPath: string): Promise<{
 
 const setupFor =
   (config: WordPressCampaignConfig) =>
-  (snapshot: Snapshot): WordPressLabSetup => ({
-    schemaVersion: 1,
-    snapshotDigest: snapshot.digest,
-    ...config.lab,
-  });
+  (snapshot: Snapshot): WordPressLabSetup => {
+    const { scenarioId, ...lab } = config.lab;
+    const scenario =
+      scenarioId === undefined ? undefined : wordPressScenario(scenarioId);
+    return {
+      schemaVersion: 1,
+      snapshotDigest: snapshot.digest,
+      ...lab,
+      ...(scenario === undefined
+        ? {}
+        : { scenario: { id: scenario.id, digest: scenario.digest } }),
+    };
+  };
 
 const reconstructionFor =
   (config: WordPressCampaignConfig) =>
   (snapshot: Snapshot): WordPressReconstruction => ({
     wordpressVersion: config.wordpressVersion,
     target: snapshot.target,
-    enabledSettings:
-      config.lab.translatePress === undefined
+    enabledSettings: [
+      ...(config.lab.translatePress === undefined &&
+      config.lab.scenarioId !== "translatepress-translation-data-v1"
         ? []
         : [
-            `TranslatePress publishes ${config.lab.translatePress.administratorSecondaryLocale} as a secondary language`,
-            `The administrator uses ${config.lab.translatePress.administratorSecondaryLocale} as profile locale`,
-          ],
+            `TranslatePress publishes ${config.lab.translatePress?.administratorSecondaryLocale ?? "fr_FR"} as a secondary language`,
+            `The administrator uses ${config.lab.translatePress?.administratorSecondaryLocale ?? "fr_FR"} as profile locale`,
+          ]),
+      ...(config.lab.scenarioId === "translatepress-translation-data-v1"
+        ? ["TranslatePress has one ordinary reviewed translation"]
+        : []),
+      ...(config.lab.initialApprovedComment === true ||
+      config.lab.scenarioId === "approved-comment-v1" ||
+      config.lab.scenarioId === "translatepress-translation-data-v1"
+        ? ["The first published post has one approved comment"]
+        : []),
+    ],
     roles: [
       "unauthenticated",
       "subscriber",

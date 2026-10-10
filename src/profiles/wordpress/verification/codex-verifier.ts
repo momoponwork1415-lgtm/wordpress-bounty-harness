@@ -24,6 +24,7 @@ import {
   type WordPressFinding,
 } from "../discovery/finding.js";
 import type { WordPressLab, WordPressLabHandle } from "../lab/index.js";
+import { nextWordPressScenario } from "../lab/scenarios.js";
 import { loadWordPressVerifierPrompt } from "../prompts/index.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
 
@@ -252,7 +253,8 @@ export class CodexVerifier implements Verifier<
       return {
         status: "incomplete",
         reason: "precondition",
-        nextStep: "Use a recorded Finding and a Lab from its snapshot",
+        nextStep:
+          "catalogue に無い前提: Use a recorded Finding and a Lab from its snapshot",
       };
     const saved = await this.options.store.readFile(
       reference.digest,
@@ -263,7 +265,7 @@ export class CodexVerifier implements Verifier<
       return {
         status: "incomplete",
         reason: "precondition",
-        nextStep: "Restore the private Finding record",
+        nextStep: "catalogue に無い前提: Restore the private Finding record",
       };
     let admitted: WordPressFinding;
     try {
@@ -274,7 +276,8 @@ export class CodexVerifier implements Verifier<
       return {
         status: "incomplete",
         reason: "precondition",
-        nextStep: "Restore the valid private Finding record",
+        nextStep:
+          "catalogue に無い前提: Restore the valid private Finding record",
       };
     }
     if (
@@ -284,7 +287,19 @@ export class CodexVerifier implements Verifier<
       return {
         status: "incomplete",
         reason: "precondition",
-        nextStep: "Use the Finding recorded for this Lab snapshot",
+        nextStep:
+          "catalogue に無い前提: Use the Finding recorded for this Lab snapshot",
+      };
+
+    const requiredScenario = nextWordPressScenario(
+      admitted.configurationPrecondition,
+      lab.scenario?.id,
+    );
+    if (requiredScenario !== "catalogue に無い前提")
+      return {
+        status: "incomplete",
+        reason: "precondition",
+        nextStep: requiredScenario,
       };
 
     const fixed = await loadWordPressVerifierPrompt();
@@ -296,7 +311,8 @@ export class CodexVerifier implements Verifier<
       return {
         status: "incomplete",
         reason: "precondition",
-        nextStep: "Restore the judge-owned route for the version comparison",
+        nextStep:
+          "catalogue に無い前提: Restore the judge-owned route for the version comparison",
       };
     const runId = `verify-${finding.findingId}-${randomUUID()}`;
     const now = this.options.clock();
@@ -312,7 +328,8 @@ export class CodexVerifier implements Verifier<
       return {
         status: "incomplete",
         reason: "precondition",
-        nextStep: "Issue a canary from a fresh Lab and repeat",
+        nextStep:
+          "catalogue に無い前提: Issue a canary from a fresh Lab and repeat",
       };
     const prompt = [
       fixed.text.trim(),
@@ -471,7 +488,10 @@ export class CodexVerifier implements Verifier<
       return {
         status: "incomplete",
         reason: "precondition",
-        nextStep: data.precondition.slice(0, 2000),
+        nextStep: nextWordPressScenario(
+          `${admitted.configurationPrecondition} ${data.precondition}`,
+          lab.scenario?.id,
+        ),
       };
     if (
       typeof data["http.json"] !== "string" ||

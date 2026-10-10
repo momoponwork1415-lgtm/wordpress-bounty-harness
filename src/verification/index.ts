@@ -180,6 +180,22 @@ export class Verification<
       labSetupDigest = lab.setupDigest;
       let result: VerificationResultV1;
       try {
+        const labEvent = await this.#options.ledger.append({
+          schemaVersion: 1,
+          identity: `verification-lab-${verificationId}`,
+          campaignId,
+          snapshotDigest,
+          occurredAt: (
+            this.#options.clock ?? (() => new Date())
+          )().toISOString(),
+          type: "lab-provisioned",
+          labId: lab.id,
+          status: "ready",
+          purpose: "verification",
+          ...(lab.scenario === undefined ? {} : { scenario: lab.scenario }),
+        });
+        if (labEvent.status === "conflict")
+          throw new Error("Verification Lab identity conflict");
         result = await this.#judge(
           finding,
           snapshotDigest,
