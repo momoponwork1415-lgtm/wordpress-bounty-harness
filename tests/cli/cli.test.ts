@@ -883,7 +883,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(queue.stdout).toMatch(/evidence: sha256:[a-f0-9]{64}/);
     expect(queue.stdout).toMatch(/^incomplete .* sensitive-object-access$/m);
-    expect(queue.stdout).toContain("reason: no-judge");
+    expect(queue.stdout).toContain("reason: evidence");
     expect(queue.stdout).toMatch(/next: .+/);
     const confirmedFinding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
       queue.stdout,

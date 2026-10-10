@@ -284,6 +284,49 @@ async function fixture(
 }
 
 describe("WordPress gVisor Lab", () => {
+  it("provisions protected canaries only in a verification Lab", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const discovery = await lab.provision(snapshot, setup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.seedCanaries(discovery.handle)).toMatchObject({
+      status: "seeded",
+    });
+    expect(lab.canaryLedger(discovery.handle)?.sensitiveCanaries).toEqual([]);
+    expect(
+      commands.some((command) =>
+        command.args.includes("--post_status=private"),
+      ),
+    ).toBe(false);
+    await lab.teardown(discovery.handle);
+
+    const verification = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(await lab.seedCanaries(verification.handle)).toMatchObject({
+      status: "seeded",
+    });
+    expect(
+      lab
+        .canaryLedger(verification.handle)
+        ?.sensitiveCanaries.map((item) => item.kind),
+    ).toEqual(["private-post", "other-user-meta"]);
+    expect(
+      commands.some((command) =>
+        command.args.includes("--post_status=private"),
+      ),
+    ).toBe(true);
+    expect(
+      commands.some((command) => command.args.includes("wbh_private_note")),
+    ).toBe(true);
+    expect(JSON.stringify(verification.handle)).not.toContain("wbh-sensitive-");
+    await lab.teardown(verification.handle);
+  });
+
   it("pins ordinary scenarios and seeds translation data with an approved comment", async () => {
     const { lab, snapshot, setup, commands } = await fixture(
       "ready",

@@ -24,7 +24,11 @@ export type LabReachability = {
 };
 
 export interface LabProvisioner<Setup, Handle extends LabHandle> {
-  provision(snapshot: unknown, setup: Setup): Promise<ProvisionResult<Handle>>;
+  provision(
+    snapshot: unknown,
+    setup: Setup,
+    context?: { readonly purpose: "discovery" | "verification" },
+  ): Promise<ProvisionResult<Handle>>;
   probe?(handle: Handle): Promise<LabReachability>;
   seedCanaries(handle: Handle): Promise<
     | { readonly status: "seeded"; readonly digest: string }

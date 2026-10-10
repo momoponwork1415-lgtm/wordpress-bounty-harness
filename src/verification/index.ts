@@ -169,7 +169,7 @@ export class Verification<
           "No Harness judge covers this impact; check it by hand",
         );
       const provisioned = await this.#options.lab
-        .provision(input.snapshot, input.setup)
+        .provision(input.snapshot, input.setup, { purpose: "verification" })
         .catch(() => null);
       if (provisioned === null || provisioned.status !== "ready")
         return incomplete(

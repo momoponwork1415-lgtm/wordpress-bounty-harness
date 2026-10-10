@@ -10,6 +10,27 @@ const target = { activeInstallations: 5_000 };
 const route = { attackerRole: "subscriber", defaultSettings: "true" };
 
 describe("WordPress scope facts from judge conditions", () => {
+  it("keeps a confirmed protected-object read separate from programme sensitivity", async () => {
+    const facts = wordpressScopeFacts({
+      category: "sensitive-object-access",
+      conditions: {
+        observedVia: "sensitive-canary-access",
+        objectKind: "private-post",
+        ...route,
+      },
+      target,
+      latestVersionVerified: true,
+    });
+    expect(facts.observations).toEqual(["sensitive-canary-access"]);
+    expect(
+      assessWordpressScope(await loadWordpressScopePolicy(), facts).map(
+        (item) => [item.status, item.reason],
+      ),
+    ).toEqual([
+      ["ambiguous", "object-sensitivity-needs-review"],
+      ["ambiguous", "object-sensitivity-needs-review"],
+    ]);
+  });
   it("builds scope input only from the judge, the selection record and the latest-version basis", async () => {
     const facts = wordpressScopeFacts({
       category: "account-takeover",
@@ -60,6 +81,12 @@ describe("WordPress scope facts from judge conditions", () => {
   });
 
   it.each([
+    [
+      "sensitive-object-access",
+      { observedVia: "sensitive-canary-access", objectKind: "private-post" },
+      "sensitive-object-access",
+      ["sensitive-canary-access"],
+    ],
     [
       "arbitrary-file-read",
       {

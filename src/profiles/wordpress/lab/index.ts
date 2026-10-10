@@ -198,6 +198,20 @@ export interface WordPressCanaryLedger {
   readonly sqlCanary: { readonly table: string; readonly value: string };
   /** Files outside wp-content at fixed paths; only their values are secret. */
   readonly fileCanaries: readonly WordPressFileCanary[];
+  /** Verification-only protected objects; never mounted into a discovery Lab. */
+  readonly sensitiveCanaries: readonly WordPressSensitiveCanary[];
+}
+
+export const WORDPRESS_SENSITIVE_OBJECT_KINDS_V1 = [
+  "private-post",
+  "other-user-meta",
+] as const;
+export type WordPressSensitiveObjectKind =
+  (typeof WORDPRESS_SENSITIVE_OBJECT_KINDS_V1)[number];
+export interface WordPressSensitiveCanary {
+  readonly kind: WordPressSensitiveObjectKind;
+  readonly objectId: string;
+  readonly value: string;
 }
 
 export interface ScriptCanary {
@@ -288,6 +302,7 @@ export interface WordPressLab extends LabProvisioner<
   observeSessionUser(
     handle: WordPressLabHandle,
     cookie: string,
+    scheme?: "logged_in" | "auth" | "secure_auth",
   ): Promise<WordPressSessionObservation>;
   /** Compares the SQL canary table with the row seeded into it. */
   observeCanaryTable(
@@ -359,6 +374,7 @@ interface Resources {
   readonly executionSalt: string;
   handle?: WordPressLabHandle;
   canaries?: WordPressCanaryLedger;
+  sensitiveCanaries: WordPressSensitiveCanary[];
   /** Option digests taken when canaries were seeded. */
   optionBaseline?: ReadonlyMap<string, string>;
   executionNonces: Set<string>;
@@ -625,6 +641,7 @@ export function openWordPressLab(options: {
     async provision(
       candidateSnapshot,
       candidateSetup,
+      context,
     ): Promise<ProvisionResult<WordPressLabHandle>> {
       let resource: Resources | undefined;
       try {
@@ -741,6 +758,7 @@ export function openWordPressLab(options: {
           executionSalt: randomBytes(16).toString("hex"),
           executionNonces: new Set(),
           scriptNonces: new Set(),
+          sensitiveCanaries: [],
           receiver: `${prefix}-canary`,
           receiverCreated: false,
           networkCreated: false,
@@ -1014,6 +1032,57 @@ export function openWordPressLab(options: {
             `$settings=get_option("trp_settings"); $base=$settings["default-language"] ?? "en_US"; $table=$GLOBALS["wpdb"]->prefix."trp_dictionary_".strtolower($base)."_".strtolower(${JSON.stringify(locale)}); if(!preg_match("/^[a-z0-9_]+$/",$table)) exit(1); $ok=$GLOBALS["wpdb"]->insert($table,["original"=>${original},"translated"=>${translated},"status"=>2,"block_type"=>0]); if($ok!==1) exit(2); $count=$GLOBALS["wpdb"]->get_var($GLOBALS["wpdb"]->prepare("SELECT COUNT(*) FROM ".$table." WHERE original=%s AND translated=%s",${original},${translated})); if((int)$count<1) exit(3);`,
           ]);
         }
+        if (context?.purpose === "verification") {
+          const privateValue = `wbh-sensitive-${randomBytes(24).toString("hex")}`;
+          const privatePost = (
+            await wp(resource, [
+              "post",
+              "create",
+              "--post_status=private",
+              "--post_type=post",
+              "--post_title=Harness private note",
+              `--post_content=${privateValue}`,
+              "--porcelain",
+            ])
+          ).stdout.trim();
+          const personalValue = `wbh-sensitive-${randomBytes(24).toString("hex")}`;
+          const ownerId = (
+            await wp(resource, [
+              "user",
+              "create",
+              `wbh-private-owner-${id.slice(0, 8)}`,
+              `wbh-private-owner-${id.slice(0, 8)}@example.invalid`,
+              "--role=subscriber",
+              `--user_pass=${randomUUID()}`,
+              "--porcelain",
+            ])
+          ).stdout.trim();
+          if (
+            !/^[1-9][0-9]*$/.test(privatePost) ||
+            !/^[1-9][0-9]*$/.test(ownerId)
+          )
+            throw new Error("Sensitive canary object ID unavailable");
+          await wp(resource, [
+            "user",
+            "meta",
+            "add",
+            ownerId,
+            "wbh_private_note",
+            personalValue,
+          ]);
+          resource.sensitiveCanaries.push(
+            {
+              kind: "private-post",
+              objectId: privatePost,
+              value: privateValue,
+            },
+            {
+              kind: "other-user-meta",
+              objectId: ownerId,
+              value: personalValue,
+            },
+          );
+        }
         if (setup.databaseAccess === "read-only") {
           // Only existing tables are visible; the canary table is created later.
           const tables = (
@@ -1205,6 +1274,7 @@ export function openWordPressLab(options: {
           roleBaseline,
           sqlCanary,
           fileCanaries,
+          sensitiveCanaries: resource.sensitiveCanaries,
           option: `wbh_canary_${token}`,
           postId,
           postMeta: `wbh_canary_${token}`,
@@ -1373,7 +1443,7 @@ export function openWordPressLab(options: {
         php: `<?php file_put_contents('${path}', hash('sha256', '${token}' . getenv('WBH_EXECUTION_SALT'))); ?>`,
       };
     },
-    async observeSessionUser(handle, cookie) {
+    async observeSessionUser(handle, cookie, scheme = "logged_in") {
       const resource = active.get(handle.id);
       if (resource?.handle !== handle) return { status: "unavailable" };
       // The value travels as an environment variable, never as PHP source.
@@ -1384,9 +1454,9 @@ export function openWordPressLab(options: {
           resource,
           [
             "eval",
-            '$id = wp_validate_auth_cookie(rawurldecode((string) getenv("WBH_SESSION_COOKIE")), "logged_in"); echo $id ? get_userdata($id)->user_login : "";',
+            '$id = wp_validate_auth_cookie(rawurldecode((string) getenv("WBH_SESSION_COOKIE")), (string) getenv("WBH_SESSION_SCHEME")); echo $id ? get_userdata($id)->user_login : "";',
           ],
-          [`WBH_SESSION_COOKIE=${cookie}`],
+          [`WBH_SESSION_COOKIE=${cookie}`, `WBH_SESSION_SCHEME=${scheme}`],
         );
         const login = result.stdout.trim();
         return login === "" ? { status: "none" } : { status: "user", login };

@@ -48,6 +48,18 @@ export const canaries: WordPressCanaryLedger = {
       value: "e".repeat(32),
     },
   ],
+  sensitiveCanaries: [
+    {
+      kind: "private-post",
+      objectId: "19",
+      value: "wbh-sensitive-private-fixture",
+    },
+    {
+      kind: "other-user-meta",
+      objectId: "23",
+      value: "wbh-sensitive-meta-fixture",
+    },
+  ],
 };
 
 export const finding = (

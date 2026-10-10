@@ -324,6 +324,10 @@ export class CodexVerifier implements Verifier<
       admitted.impact === "auth-bypass-to-admin" ||
       admitted.impact === "account-takeover";
     const canary = this.#canaryFor(admitted, lab);
+    // Protected-object values live in ordinary WordPress tables. The Verifier
+    // must use HTTP only, even when this Lab also has a read-only DB account.
+    const verifierDatabase =
+      admitted.impact === "sensitive-object-access" ? undefined : lab.database;
     if (needsCanary && canary === undefined)
       return {
         status: "incomplete",
@@ -339,14 +343,14 @@ export class CodexVerifier implements Verifier<
       canonicalJson({
         endpoint: lab.endpoint,
         accounts,
-        ...(lab.database === undefined
+        ...(verifierDatabase === undefined
           ? {}
           : {
               database: {
-                host: lab.database.host,
-                port: lab.database.port,
-                name: lab.database.name,
-                readOnlyAccount: lab.database.readOnlyAccount,
+                host: verifierDatabase.host,
+                port: verifierDatabase.port,
+                name: verifierDatabase.name,
+                readOnlyAccount: verifierDatabase.readOnlyAccount,
               },
             }),
         ...(this.options.dependencySource === undefined
@@ -376,12 +380,12 @@ export class CodexVerifier implements Verifier<
         endpoint: lab.endpoint,
         networkName: lab.networkName,
         internalIp: lab.recorderIp,
-        ...(lab.database === undefined
+        ...(verifierDatabase === undefined
           ? {}
           : {
               database: {
-                host: lab.database.host,
-                ipv4: lab.database.ipv4,
+                host: verifierDatabase.host,
+                ipv4: verifierDatabase.ipv4,
               },
             }),
       },
