@@ -203,6 +203,40 @@ describe("WordPress selection public interface", () => {
     });
   });
 
+  it("records catalog history as an explainable selection signal", async () => {
+    const selection = harness({});
+    const ranked = await selection.select({
+      ...basePolicy,
+      historySignals: { popular: 1, exposed: 12 },
+      historySource: { digest: digest("d"), refreshedAt: now },
+      scoreWeights: {
+        ...basePolicy.scoreWeights,
+        installations: 0,
+        history: 10,
+      },
+    });
+    expect(ranked.map((item) => item.slug)).toEqual(["exposed", "popular"]);
+    expect(ranked[0]?.scoreBreakdown.history).toBeGreaterThan(
+      ranked[1]?.scoreBreakdown.history ?? 0,
+    );
+  });
+
+  it("does not select from stale catalog history", async () => {
+    const selection = harness({});
+    const inspected = await selection.inspect({
+      ...basePolicy,
+      historySignals: { popular: 2 },
+      historySource: {
+        digest: digest("d"),
+        refreshedAt: "2026-10-06T00:00:00Z",
+      },
+    });
+    expect(inspected.find((item) => item.slug === "popular")).toMatchObject({
+      status: "ineligible",
+      reasons: expect.arrayContaining(["history-stale"]),
+    });
+  });
+
   it("keeps unavailable, stale, excluded and under-threshold observations in inspect but out of select", async () => {
     const excluded = observation("excluded", ["form"]);
     excluded.observation.author = "Automattic";

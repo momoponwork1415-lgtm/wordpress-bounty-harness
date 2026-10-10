@@ -48,6 +48,18 @@ const bodySchema = z.strictObject({
   subagent: z.strictObject({ modelId: reported, effort: reported }),
   usage,
   observed: observed.optional(),
+  brokerMetrics: z
+    .strictObject({
+      forwardedRequests: count,
+      requestLimitExceeded: count,
+      unauthorizedRequests: count,
+      upstreamSuccess: count.optional(),
+      upstreamClientError: count.optional(),
+      upstreamServerError: count.optional(),
+      relayFailures: count.optional(),
+      responseLimitExceeded: count.optional(),
+    })
+    .optional(),
   sandboxExitCode: z.number().int().optional(),
   diagnosticArtifactDigest: digest.optional(),
   terminal: z.enum(["completed", "incomplete"]),
@@ -117,6 +129,7 @@ export function createNativeRunReceipt(
     readonly completedAt: string;
     readonly usage?: z.infer<typeof usage>;
     readonly observed?: z.infer<typeof observed>;
+    readonly brokerMetrics?: NativeRunReceipt["brokerMetrics"];
     readonly sandboxExitCode?: number;
     readonly diagnosticArtifactDigest?: string;
     readonly grantReceiptDigest?: string;
@@ -145,6 +158,9 @@ export function createNativeRunReceipt(
       reasoningOutputTokens: "unavailable",
     },
     ...(input.observed === undefined ? {} : { observed: input.observed }),
+    ...(input.brokerMetrics === undefined
+      ? {}
+      : { brokerMetrics: input.brokerMetrics }),
     ...(input.sandboxExitCode === undefined
       ? {}
       : { sandboxExitCode: input.sandboxExitCode }),

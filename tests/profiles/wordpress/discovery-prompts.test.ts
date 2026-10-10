@@ -14,7 +14,7 @@ describe("WordPress discovery prompt assets", () => {
   it("pins the Verifier prompt and keeps known answers and attack strings out", async () => {
     const prompt = await loadWordPressVerifierPrompt();
     expect(prompt.digest).toBe(
-      "sha256:a95b104f54d482095c766f91f91e8dd645f7f6c50c54aa11ccdc39d7c6a24161",
+      "sha256:ddff21a73b534fd4c775163195f838e428124cf481fedad8ae9f3948dd1acd1d",
     );
     expect(prompt.text).toContain("http.json");
     expect(prompt.text).toContain("refutation.md");
@@ -31,6 +31,8 @@ describe("WordPress discovery prompt assets", () => {
       "short-objective-v1",
       "wp2shell-derived-v2",
       "short-objective-v2",
+      "short-objective-managed-v1",
+      "short-objective-managed-v2",
       "wp2shell-single-http-v2",
       "trust-boundary-v1",
       "file-assignment-v1",
@@ -40,6 +42,8 @@ describe("WordPress discovery prompt assets", () => {
       "short-objective-v1",
       "wp2shell-derived-v2",
       "short-objective-v2",
+      "short-objective-managed-v1",
+      "short-objective-managed-v2",
       "wp2shell-single-http-v2",
     ]);
 
@@ -59,6 +63,10 @@ describe("WordPress discovery prompt assets", () => {
     const pins = {
       "short-objective-v2":
         "sha256:e6a7a1650f2af3c1e34d73a42c2d378497f4553818967cb804227cbd01436809",
+      "short-objective-managed-v1":
+        "sha256:58460c592c424fe752c8e9fdf0b53b686302ee1e11d72a48a06dc9109a496215",
+      "short-objective-managed-v2":
+        "sha256:05331cbdf24b49b6352020ce6faf84f5d005e275d0665f88287c9ae7c4d54825",
       "wp2shell-derived-v2":
         "sha256:f9d90b8ad1dd955527756bf9ad9869624cff999dd7fab3908a7f050b1cd422be",
       "wp2shell-single-http-v2":

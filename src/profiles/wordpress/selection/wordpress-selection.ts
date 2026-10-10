@@ -85,7 +85,10 @@ function score(
   const highThreat =
     (highThreatSurface(observation, policy) ? 1 : 0) *
     policy.scoreWeights.highThreat;
-  return { installations, recency, surface, highThreat };
+  const history =
+    Math.log2(1 + (policy.historySignals?.[observation.officialSlug] ?? 0)) *
+    (policy.scoreWeights.history ?? 0);
+  return { installations, recency, surface, highThreat, history };
 }
 
 function highThreatSurface(
@@ -113,6 +116,10 @@ export function createWordPressSelection(
     const now = nowDate.getTime();
     if (!Number.isFinite(now)) throw new Error("Selection clock is invalid");
     const policyDigest = canonicalDigestPreservingProperties(policy);
+    const historyAge =
+      policy.historySource === undefined
+        ? undefined
+        : ageDays(policy.historySource.refreshedAt, now);
     const programmeResult = await options.programme
       .inspect({
         kind: "programme-eligibility-inspection",
@@ -142,6 +149,11 @@ export function createWordPressSelection(
       else if (!programmeAcceptsAsset)
         reasons.push("programme-asset-out-of-scope");
       if (policy.excludedSlugs.includes(slug)) reasons.push("excluded-slug");
+      if (
+        policy.historySignals !== undefined &&
+        (historyAge === undefined || historyAge > 1)
+      )
+        reasons.push("history-stale");
       const result = await options.targetSource
         .observe({
           kind: "wordpress-org-target-observe",
@@ -215,7 +227,8 @@ export function createWordPressSelection(
           scoreBreakdown.installations +
           scoreBreakdown.recency +
           scoreBreakdown.surface +
-          scoreBreakdown.highThreat,
+          scoreBreakdown.highThreat +
+          scoreBreakdown.history,
         selectedAt: nowDate.toISOString(),
         policy: { id: policy.id, digest: policyDigest },
         observationRef: result.observationRef,

@@ -79,6 +79,8 @@ export interface CliProfile {
       readonly configPath: string;
       /** A profile target name, or null for every selected target. */
       readonly target: string | null;
+      /** Retry an incomplete independent verification on the same Lab setup. */
+      readonly retryIncompleteVerifications?: boolean;
     },
   ): Promise<CampaignSummary>;
   /** Docker resources a crashed run left behind; removed only when asked. */
@@ -101,13 +103,14 @@ export interface CliProfile {
       readonly image: string;
     }[]
   >;
-  /** Re-verifies one Finding on its target's latest version in a fresh Lab. */
+  /** Re-verifies one Finding on its latest or explicitly pinned version in a fresh Lab. */
   reverify(
     state: CliState,
     input: {
       readonly campaignId: string;
       readonly findingId: string;
       readonly configPath: string;
+      readonly version?: string;
     },
   ): Promise<ReverificationSummary>;
 }
@@ -122,12 +125,12 @@ export type CliEnvironment = {
 const USAGE = [
   "usage: harness [--state <dir>] <command>",
   "  select --config <path>",
-  "  campaign run <slug>|--all --campaign <id> --config <path>",
+  "  campaign run <slug>|--all --campaign <id> --config <path> [--retry-incomplete]",
   "  review [--campaign <id>]",
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>]",
   "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
-  "  review reverify --campaign <id> --finding <id> --config <path>",
+  "  review reverify --campaign <id> --finding <id> --config <path> [--version <fixed-version>]",
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
   "  review authorize --candidate <id> --draft <digest> --to <destination> [--by <name>]",
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
@@ -151,6 +154,7 @@ const options = {
   campaign: { type: "string" },
   config: { type: "string" },
   finding: { type: "string" },
+  version: { type: "string" },
   decision: { type: "string" },
   reason: { type: "string" },
   opened: { type: "string", multiple: true },
@@ -170,6 +174,7 @@ const options = {
   axis: { type: "string" },
   advisories: { type: "string" },
   remove: { type: "boolean" },
+  "retry-incomplete": { type: "boolean" },
 } as const;
 
 class UsageError extends Error {}
@@ -241,7 +246,7 @@ function stages(counts: FunnelCounts): string {
 export function formatFunnel(funnel: CampaignFunnel): string[] {
   const lines = [
     `campaign ${funnel.campaignId}`,
-    `runs ${funnel.runCount} (discovery attempts ${funnel.discoveryAttempts})  cost $${funnel.knownCostUsd.toFixed(2)} known, ${funnel.unpricedRuns} run(s) unavailable  wall time ${(funnel.wallTimeMs / 1000).toFixed(1)}s`,
+    `agent runs ${funnel.runCount} (discovery attempts ${funnel.discoveryAttempts})  cost $${funnel.knownCostUsd.toFixed(2)} known, ${funnel.unpricedRuns} run(s) unavailable  summed agent time ${(funnel.wallTimeMs / 1000).toFixed(1)}s`,
     stages(funnel),
   ];
   const programmes = Object.keys(funnel.inScopeByProgramme).sort();
@@ -442,6 +447,7 @@ export async function runCli(
           campaignId: required(values.campaign, "campaign"),
           configPath: resolve(required(values.config, "config")),
           target,
+          retryIncompleteVerifications: values["retry-incomplete"] === true,
         });
         for (const skipped of summary.skipped)
           io.stderr(
@@ -525,13 +531,20 @@ export async function runCli(
         return 0;
       }
       case "review reverify": {
+        const version = values.version;
+        if (
+          version !== undefined &&
+          !/^[0-9][A-Za-z0-9.+-]{0,31}$/.test(version)
+        )
+          throw new UsageError("--version is invalid");
         const summary = await environment.profile.reverify(state, {
           campaignId: required(values.campaign, "campaign"),
           findingId: required(values.finding, "finding"),
           configPath: resolve(required(values.config, "config")),
+          ...(version === undefined ? {} : { version }),
         });
         io.stdout(
-          `reverified finding ${values.finding} on ${summary.targetId} ${summary.version}  snapshot ${summary.snapshotDigest}  verification ${summary.verificationId}: ${summary.status}`,
+          `reverified finding ${values.finding} as ${summary.findingId} on ${summary.targetId} ${summary.version}  snapshot ${summary.snapshotDigest}  verification ${summary.verificationId}: ${summary.status}`,
         );
         return 0;
       }

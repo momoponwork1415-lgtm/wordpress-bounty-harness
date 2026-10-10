@@ -6,11 +6,11 @@ const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const value = z.string().min(1).max(128);
 const reported = z.union([value, z.literal("unavailable")]);
 const effort = z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]);
-const model = z.enum(["gpt-6.1-sol", "gpt-6-luna"]);
+const model = z.enum(["gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"]);
 
 /** Only Codex is admitted. The digest supplied here is measured from the CLI's bundled catalog. */
 export const codexModelCatalog = {
-  production: "gpt-6.1-sol",
+  production: "gpt-6-sol",
   development: "gpt-6-luna",
   minimumCliVersion: "0.161.0",
 } as const;
@@ -105,4 +105,35 @@ export function admitAgentRuntimeProfile(
   if (imageDigest !== parsed.data.sandboxImageDigest)
     return { status: "image-mismatch" };
   return { status: "admitted", profile: parsed.data };
+}
+
+export type CooperativeRuntimeProfileAdmission =
+  | { readonly status: "admitted"; readonly profile: AgentRuntimeProfile }
+  | {
+      readonly status:
+        | "invalid-profile"
+        | "image-mismatch"
+        | "model-mismatch"
+        | "access-mismatch"
+        | "child-mismatch";
+    };
+
+/** Root and child CLI runs must share the measured model and effort. */
+export function admitCooperativeRuntimeProfile(
+  candidate: unknown,
+  sandboxImage: string,
+): CooperativeRuntimeProfileAdmission {
+  const admitted = admitAgentRuntimeProfile(candidate, sandboxImage);
+  if (admitted.status !== "admitted") return admitted;
+  const profile = admitted.profile;
+  if (profile.requestedModelId !== codexModelCatalog.production)
+    return { status: "model-mismatch" };
+  if (profile.cyberAccessProgram !== "daybreak_blue")
+    return { status: "access-mismatch" };
+  if (
+    profile.subagent.modelId !== profile.requestedModelId ||
+    profile.subagent.effort !== profile.requestedEffort
+  )
+    return { status: "child-mismatch" };
+  return admitted;
 }

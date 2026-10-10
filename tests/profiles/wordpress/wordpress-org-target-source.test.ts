@@ -820,6 +820,43 @@ Version: 2.4.1
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it("chooses the root slug PHP file when an official archive has secondary headers", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wporg-target-main-"));
+    const pluginArchive = archive({
+      "policy-plugin/policy-plugin.php":
+        "<?php\n/* Plugin Name: Policy Plugin\nVersion: 1.0.0\n*/\n",
+      "policy-plugin/secondary.php":
+        "<?php\n/* Plugin Name: Secondary\nVersion: 1.0.0\n*/\n",
+    });
+    try {
+      const source = openWordPressOrgTargetSource({
+        storageDirectory: directory,
+        adapter: fixtureAdapter("policy-plugin", "1.0.0", pluginArchive),
+      });
+      const observed = await source.observe({
+        kind: "wordpress-org-target-observe",
+        schemaVersion: 1,
+        slug: "policy-plugin",
+      });
+      if (observed.status !== "observed")
+        throw new Error("Expected observation");
+      await expect(
+        source.acquire({
+          kind: "wordpress-org-target-acquire",
+          schemaVersion: 1,
+          observationRef: observed.observationRef,
+          requestedVersion: "1.0.0",
+          policy: intakePolicy,
+        }),
+      ).resolves.toMatchObject({
+        status: "ready",
+        intake: { packet: { mainPluginFile: "policy-plugin.php" } },
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 function fixtureAdapter(

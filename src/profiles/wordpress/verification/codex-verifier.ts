@@ -25,6 +25,7 @@ import {
 } from "../discovery/finding.js";
 import type { WordPressLab, WordPressLabHandle } from "../lab/index.js";
 import { loadWordPressVerifierPrompt } from "../prompts/index.js";
+import { wordpressReproductionStepSchema } from "./reproduction-package.js";
 
 const httpSchema = z.looseObject({
   exchanges: z
@@ -53,11 +54,80 @@ const sessionSchema = z.strictObject({
 const routeSchema = z.looseObject({
   role: z.enum(["unauthenticated", "subscriber", "customer"]),
   defaultSettings: z.boolean(),
-  steps: z
-    .array(z.looseObject({ kind: z.string(), path: z.string().optional() }))
-    .max(30)
-    .optional(),
+  steps: z.unknown().optional(),
 });
+const referenceRouteSchema = z.looseObject({
+  role: z.enum(["unauthenticated", "subscriber", "customer"]),
+  defaultSettings: z.boolean(),
+  steps: z.array(wordpressReproductionStepSchema).min(1).max(30),
+});
+const recordedRequestSchema = z.looseObject({
+  method: z.enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]),
+  url: z.string().min(1).max(4096).optional(),
+  path: z.string().min(1).max(4096).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+  body: z.string().optional(),
+});
+
+function routeStepsFromHttp(
+  http: z.infer<typeof httpSchema>,
+  labEndpoint: string,
+): z.infer<typeof wordpressReproductionStepSchema>[] | null {
+  if (http.exchanges.length > 30) return null;
+  const origin = new URL(labEndpoint).origin;
+  const steps: z.infer<typeof wordpressReproductionStepSchema>[] = [];
+  for (const exchange of http.exchanges) {
+    const request = recordedRequestSchema.safeParse(exchange.request);
+    if (!request.success) return null;
+    const address = request.data.url ?? request.data.path;
+    if (address === undefined) return null;
+    let url: URL;
+    try {
+      url = new URL(address, labEndpoint);
+    } catch {
+      return null;
+    }
+    if (url.origin !== origin) return null;
+    const step = wordpressReproductionStepSchema.safeParse({
+      kind: "http",
+      method: request.data.method,
+      path: `${url.pathname}${url.search}`,
+      ...(request.data.headers === undefined
+        ? {}
+        : { headers: request.data.headers }),
+      ...(request.data.body === undefined ? {} : { body: request.data.body }),
+      expected: "Observe the response recorded in http.json",
+    });
+    if (!step.success) return null;
+    steps.push(step.data);
+  }
+  return steps;
+}
+
+/** A reported login cookie is only a candidate; the Lab validates its owner. */
+function sessionFromHttp(http: z.infer<typeof httpSchema>): string | undefined {
+  for (const exchange of http.exchanges) {
+    const response = exchange.response as Record<string, unknown>;
+    const headers = response.headers;
+    if (headers === null || typeof headers !== "object") continue;
+    for (const [name, value] of Object.entries(headers)) {
+      if (name.toLowerCase() !== "set-cookie") continue;
+      for (const line of typeof value === "string"
+        ? [value]
+        : Array.isArray(value)
+          ? value
+          : []) {
+        if (typeof line !== "string") continue;
+        const matched =
+          /(?:^|,\s*)wordpress_logged_in_[A-Za-z0-9_-]+=([^;,\s]+)/i.exec(line);
+        const cookie = matched?.[1];
+        if (cookie !== undefined && sessionSchema.safeParse({ cookie }).success)
+          return canonicalJson({ cookie });
+      }
+    }
+  }
+  return undefined;
+}
 
 type LowPrivilegeAccounts = Readonly<{
   subscriber: Readonly<{ username: string; password: string }>;
@@ -110,7 +180,10 @@ export class CodexVerifier implements Verifier<
       /** Issues the canary a Finding's impact needs; only the Lab can observe it. */
       readonly lab: Pick<
         WordPressLab,
-        "prepareExecutionCanary" | "prepareScriptCanary" | "markCapture"
+        | "prepareExecutionCanary"
+        | "prepareScriptCanary"
+        | "canaryLedger"
+        | "markCapture"
       >;
       readonly clock: () => Date;
       readonly wallTimeMs?: number;
@@ -124,6 +197,7 @@ export class CodexVerifier implements Verifier<
   ):
     | { readonly kind: "execution"; readonly php: string }
     | { readonly kind: "script"; readonly beaconUrl: string }
+    | { readonly kind: "principal"; readonly username: string }
     | undefined {
     switch (finding.impact) {
       case "rce":
@@ -139,6 +213,13 @@ export class CodexVerifier implements Verifier<
           ? undefined
           : { kind: "script", beaconUrl: canary.beaconUrl };
       }
+      case "auth-bypass-to-admin":
+      case "account-takeover": {
+        const canaries = this.options.lab.canaryLedger(lab);
+        return canaries === null
+          ? undefined
+          : { kind: "principal", username: canaries.adminUser };
+      }
       default:
         return undefined;
     }
@@ -147,9 +228,11 @@ export class CodexVerifier implements Verifier<
   async attempt({
     finding,
     lab,
+    referenceRoute,
   }: {
     readonly finding: WordPressFinding;
     readonly lab: WordPressLabHandle;
+    readonly referenceRoute?: unknown;
   }): Promise<VerifierAttempt> {
     const event = this.options.ledger
       .read({
@@ -205,13 +288,25 @@ export class CodexVerifier implements Verifier<
       };
 
     const fixed = await loadWordPressVerifierPrompt();
+    const routeReference =
+      referenceRoute === undefined
+        ? undefined
+        : referenceRouteSchema.safeParse(referenceRoute);
+    if (routeReference !== undefined && !routeReference.success)
+      return {
+        status: "incomplete",
+        reason: "precondition",
+        nextStep: "Restore the judge-owned route for the version comparison",
+      };
     const runId = `verify-${finding.findingId}-${randomUUID()}`;
     const now = this.options.clock();
     const accounts = lowPrivilegeAccounts(lab);
     const needsCanary =
       admitted.impact === "rce" ||
       admitted.impact === "php-file-write" ||
-      admitted.impact === "stored-xss";
+      admitted.impact === "stored-xss" ||
+      admitted.impact === "auth-bypass-to-admin" ||
+      admitted.impact === "account-takeover";
     const canary = this.#canaryFor(admitted, lab);
     if (needsCanary && canary === undefined)
       return {
@@ -242,6 +337,16 @@ export class CodexVerifier implements Verifier<
           : { wordpressCoreSource: "/workspace/wordpress" }),
         ...(canary === undefined ? {} : { canary }),
       }),
+      ...(routeReference?.success
+        ? [
+            "## Earlier confirmed route",
+            canonicalJson({
+              role: routeReference.data.role,
+              defaultSettings: routeReference.data.defaultSettings,
+              steps: routeReference.data.steps,
+            }),
+          ]
+        : []),
     ].join("\n\n");
 
     const run: DiscoveryTransportRun = {
@@ -378,8 +483,9 @@ export class CodexVerifier implements Verifier<
         reason: "recipe",
         nextStep: "Record http.json and steps.md, then repeat",
       };
+    let http: z.infer<typeof httpSchema>;
     try {
-      httpSchema.parse(JSON.parse(data["http.json"]) as unknown);
+      http = httpSchema.parse(JSON.parse(data["http.json"]) as unknown);
     } catch {
       return {
         status: "incomplete",
@@ -395,7 +501,30 @@ export class CodexVerifier implements Verifier<
         );
         if (parsed.role !== admitted.attackerPosition)
           throw new Error("Route role differs from Finding");
-        route = data["route.json"];
+        const suppliedSteps = z
+          .array(wordpressReproductionStepSchema)
+          .min(1)
+          .max(30)
+          .safeParse(parsed.steps);
+        const steps = suppliedSteps.success
+          ? suppliedSteps.data
+          : routeStepsFromHttp(http, lab.endpoint);
+        if (steps === null) throw new Error("Route steps are unavailable");
+        const account =
+          parsed.role === "unauthenticated"
+            ? "none"
+            : lab.attackerAccounts[parsed.role]?.username;
+        if (account === undefined) throw new Error("Route account is missing");
+        const changes = parsed.defaultSettings
+          ? []
+          : (admitted.configurationPrecondition.match(/[\s\S]{1,500}/g) ?? []);
+        route = canonicalJson({
+          role: parsed.role,
+          account,
+          defaultSettings: parsed.defaultSettings,
+          configurationChanges: changes,
+          steps,
+        });
       } catch {
         return {
           status: "incomplete",
@@ -418,6 +547,7 @@ export class CodexVerifier implements Verifier<
         };
       }
     }
+    session ??= sessionFromHttp(http);
     const recipeDigest = await this.options.store.putFiles({
       "http.json": data["http.json"],
       "steps.md": data["steps.md"],
@@ -446,7 +576,7 @@ export class CodexVerifier implements Verifier<
     findingId: string,
     promptDigest: string,
     receipt: NativeRunReceipt,
-    canaryIssued?: "execution" | "script",
+    canaryIssued?: "execution" | "script" | "principal",
   ): Promise<void> {
     const receiptDigest = await this.options.store.putFiles({
       "receipt.json": canonicalJson(receipt),

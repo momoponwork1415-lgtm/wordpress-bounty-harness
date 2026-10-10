@@ -33,6 +33,11 @@ const setupSchema = z.strictObject({
   initialPosts: z.array(z.string().min(1).max(120)).max(20),
   customerRole: z.boolean(),
   databaseAccess: z.enum(["read-only", "none"]).default("none"),
+  translatePress: z
+    .strictObject({
+      administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
+    })
+    .optional(),
 });
 const REACHABILITY_PROBE = `$http = @file_get_contents("http://wordpress/");
 $database = "not-exposed";
@@ -337,6 +342,7 @@ interface Resources {
   readonly databasePassword: string;
   readonly readerPassword: string;
   readonly adminPassword: string;
+  readonly administratorSecondaryLocale?: string;
   /** Only the WordPress container's environment holds this. */
   readonly executionSalt: string;
   handle?: WordPressLabHandle;
@@ -418,7 +424,12 @@ export function openWordPressLab(options: {
     timeoutMs?: number,
   ): Promise<DockerResult> => {
     const result = await docker(args, timeoutMs);
-    if (result.exitCode !== 0) throw new LabDockerFailure(result.stderr);
+    if (result.exitCode !== 0)
+      throw new LabDockerFailure(
+        result.stderr ||
+          result.stdout ||
+          `Docker command exited with status ${result.exitCode}`,
+      );
     return result;
   };
   const wpCommand = (
@@ -625,6 +636,11 @@ export function openWordPressLab(options: {
           throw new Error("Customer role needs WooCommerce");
         if (resolved.target.kind !== "plugin")
           throw new Error("The target must be a plugin");
+        if (
+          setup.translatePress !== undefined &&
+          resolved.target.pluginSlug !== "translatepress-multilingual"
+        )
+          throw new Error("TranslatePress Lab setup requires its plugin");
         const targetDirectory = await verifySource(
           resolved.target,
           snapshot.target.sourceDigest,
@@ -672,6 +688,12 @@ export function openWordPressLab(options: {
           databasePassword: randomUUID(),
           readerPassword: randomBytes(32).toString("hex"),
           adminPassword: randomUUID(),
+          ...(setup.translatePress === undefined
+            ? {}
+            : {
+                administratorSecondaryLocale:
+                  setup.translatePress.administratorSecondaryLocale,
+              }),
           executionSalt: randomBytes(16).toString("hex"),
           executionNonces: new Set(),
           scriptNonces: new Set(),
@@ -882,6 +904,13 @@ export function openWordPressLab(options: {
           ]);
           await wp(resource, ["plugin", "activate", source.slug]);
         }
+        if (setup.translatePress !== undefined) {
+          const locale = setup.translatePress.administratorSecondaryLocale;
+          await wp(resource, [
+            "eval",
+            `$settings=get_option("trp_settings"); if(!is_array($settings)) exit(1); $base=$settings["default-language"] ?? "en_US"; $secondary="${locale}"; $settings["translation-languages"]=array_values(array_unique([$base,$secondary])); $settings["publish-languages"]=array_values(array_unique([$base,$secondary])); $settings["url-slugs"][$secondary]=strtolower(substr($secondary,0,2)); update_option("trp_settings",$settings); TRP_Translate_Press::get_trp_instance()->get_component("query")->check_table($base,$secondary); $admin=get_user_by("login","harness-admin"); if(!$admin) exit(2); update_user_meta($admin->ID,"locale",$secondary); if(get_user_locale($admin->ID)!==$secondary) exit(3);`,
+          ]);
+        }
         await wp(resource, [
           "user",
           "create",
@@ -1045,6 +1074,14 @@ export function openWordPressLab(options: {
           "--role=administrator",
           `--user_pass=${randomUUID()}`,
         ]);
+        if (resource.administratorSecondaryLocale !== undefined) {
+          const user = JSON.stringify(adminUser);
+          const locale = JSON.stringify(resource.administratorSecondaryLocale);
+          await wp(resource, [
+            "eval",
+            `$admin=get_user_by("login",${user}); if(!$admin) exit(1); update_user_meta($admin->ID,"locale",${locale}); if(get_user_locale($admin->ID)!==${locale}) exit(2);`,
+          ]);
+        }
         const sqlCanary = {
           table: SQL_CANARY_TABLE,
           value: randomBytes(16).toString("hex"),

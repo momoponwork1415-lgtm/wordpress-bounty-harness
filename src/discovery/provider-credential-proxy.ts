@@ -67,6 +67,26 @@ function protocolPath(protocol: ProviderApiProtocol): string {
   return protocol === "responses" ? "/v1/responses" : "/v1/chat/completions";
 }
 
+type ProxyCounters = {
+  forwardedRequests: number;
+  requestLimitExceeded: number;
+  unauthorizedRequests: number;
+  upstreamSuccess: number;
+  upstreamClientError: number;
+  upstreamServerError: number;
+  relayFailures: number;
+  responseLimitExceeded: number;
+};
+
+function sendMetrics(response: ServerResponse, counters: ProxyCounters): void {
+  const body = JSON.stringify(counters);
+  response.writeHead(200, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body),
+  });
+  response.end(body);
+}
+
 function sendJson(
   response: ServerResponse,
   status: number,
@@ -241,12 +261,13 @@ function chatgptListener(
   options: OpenProviderCredentialProxyOptions,
   chatgpt: ChatgptProxyCredential,
   clock: () => Date,
+  counters: ProxyCounters,
 ): RequestListener {
   const upstreamOrigin = new URL(options.upstreamOrigin);
-  let forwardedRequests = 0;
   return async (request, response) => {
     try {
       if (!bearerMatches(request.headers.authorization, options.grantToken)) {
+        counters.unauthorizedRequests += 1;
         sendJson(response, 401, "grant-unauthorized");
         return;
       }
@@ -303,11 +324,12 @@ function chatgptListener(
         sendJson(response, 403, "model-not-admitted");
         return;
       }
-      if (forwardedRequests >= options.maxRequests) {
+      if (counters.forwardedRequests >= options.maxRequests) {
+        counters.requestLimitExceeded += 1;
         sendJson(response, 429, "grant-request-limit-exceeded");
         return;
       }
-      forwardedRequests += 1;
+      counters.forwardedRequests += 1;
       const remainingMs =
         new Date(options.expiresAt).getTime() - clock().getTime();
       if (remainingMs <= 0) {
@@ -334,6 +356,9 @@ function chatgptListener(
           signal: AbortSignal.timeout(remainingMs),
         },
       );
+      if (upstream.status >= 500) counters.upstreamServerError += 1;
+      else if (upstream.status >= 400) counters.upstreamClientError += 1;
+      else counters.upstreamSuccess += 1;
       const contentType = upstream.headers.get("content-type");
       response.writeHead(upstream.status, {
         ...(contentType === null ? {} : { "content-type": contentType }),
@@ -344,8 +369,12 @@ function chatgptListener(
         options.maxResponseBytes,
         [chatgpt.accessToken, chatgpt.accountId],
       );
-      if (!complete) response.destroy();
+      if (!complete) {
+        counters.responseLimitExceeded += 1;
+        response.destroy();
+      }
     } catch {
+      counters.relayFailures += 1;
       if (!response.headersSent) {
         sendJson(response, 502, "provider-unavailable");
       } else {
@@ -359,18 +388,18 @@ function apiKeyListener(
   options: OpenProviderCredentialProxyOptions,
   apiKey: string,
   clock: () => Date,
+  counters: ProxyCounters,
 ): RequestListener {
   const path = protocolPath(options.protocol);
   const upstreamOrigin = new URL(options.upstreamOrigin);
-  let forwardedRequests = 0;
   return async (request, response) => {
     try {
       if (request.method === "GET" && request.url === "/healthz") {
-        response.writeHead(200, { "content-length": "0" });
-        response.end();
+        sendMetrics(response, counters);
         return;
       }
       if (!bearerMatches(request.headers.authorization, options.grantToken)) {
+        counters.unauthorizedRequests += 1;
         sendJson(response, 401, "grant-unauthorized");
         return;
       }
@@ -403,11 +432,12 @@ function apiKeyListener(
         sendJson(response, 403, "model-not-admitted");
         return;
       }
-      if (forwardedRequests >= options.maxRequests) {
+      if (counters.forwardedRequests >= options.maxRequests) {
+        counters.requestLimitExceeded += 1;
         sendJson(response, 429, "grant-request-limit-exceeded");
         return;
       }
-      forwardedRequests += 1;
+      counters.forwardedRequests += 1;
       const upstreamUrl = new URL(path, upstreamOrigin.origin);
       const remainingMs =
         new Date(options.expiresAt).getTime() - clock().getTime();
@@ -426,11 +456,15 @@ function apiKeyListener(
         redirect: "error",
         signal: AbortSignal.timeout(remainingMs),
       });
+      if (upstream.status >= 500) counters.upstreamServerError += 1;
+      else if (upstream.status >= 400) counters.upstreamClientError += 1;
+      else counters.upstreamSuccess += 1;
       const upstreamBody = await boundedResponseBody(
         upstream,
         options.maxResponseBytes,
       );
       if (upstreamBody === undefined) {
+        counters.responseLimitExceeded += 1;
         sendJson(response, 502, "response-limit-exceeded");
         return;
       }
@@ -442,6 +476,7 @@ function apiKeyListener(
       });
       response.end(redactedUpstreamBody);
     } catch {
+      counters.relayFailures += 1;
       if (!response.headersSent) {
         sendJson(response, 502, "provider-unavailable");
       } else {
@@ -482,18 +517,31 @@ export async function openProviderCredentialProxy(
 ): Promise<ProviderCredentialProxy> {
   validateOptions(options);
   const clock = options.clock ?? (() => new Date());
+  const counters: ProxyCounters = {
+    forwardedRequests: 0,
+    requestLimitExceeded: 0,
+    unauthorizedRequests: 0,
+    upstreamSuccess: 0,
+    upstreamClientError: 0,
+    upstreamServerError: 0,
+    relayFailures: 0,
+    responseLimitExceeded: 0,
+  };
   if (options.chatgpt === undefined) {
-    const server = createServer(apiKeyListener(options, options.apiKey, clock));
+    const server = createServer(
+      apiKeyListener(options, options.apiKey, clock, counters),
+    );
     const port = await listen(server, options.port, options.listenHost);
     return { server, origin: `http://${options.listenHost}:${port}` };
   }
   const chatgpt = options.chatgpt;
   const health = createServer((request, response) => {
-    response.writeHead(
-      request.method === "GET" && request.url === "/healthz" ? 200 : 404,
-      { "content-length": "0" },
-    );
-    response.end();
+    if (request.method === "GET" && request.url === "/healthz")
+      sendMetrics(response, counters);
+    else {
+      response.writeHead(404, { "content-length": "0" });
+      response.end();
+    }
   });
   const healthPort = await listen(
     health,
@@ -502,7 +550,7 @@ export async function openProviderCredentialProxy(
   );
   const server = createTlsServer(
     { key: chatgpt.tls.keyPem, cert: chatgpt.tls.certPem },
-    chatgptListener(options, chatgpt, clock),
+    chatgptListener(options, chatgpt, clock, counters),
   );
   server.on("close", () => health.close());
   const port = await listen(server, options.port, options.listenHost).catch(

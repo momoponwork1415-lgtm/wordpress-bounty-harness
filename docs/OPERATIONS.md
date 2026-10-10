@@ -5,6 +5,7 @@
 対象読者: このHarnessを一人で回す運用者。正本は [SPEC.md](SPEC.md)。
 
 - `harness` は `pnpm build` が作る `dist/cli/main.js`（`bin.harness`）。実際の境界アダプターを束ねる。
+- Root＋3の実機preflightは `pnpm preflight:root-three --host <Git外host.json> --state <Git外Private Evidence dir>`。固定した無害なtext sourceとrunscのHTTP Labを使い、broker経由でRootと3子のmodel・usage・source読取・Lab到達を測る。`preflight.json` とrolloutはrunごとにGit外へ保存される。これ自体はTranslatePress探索Trialには数えない。
 - コマンド名は `runCli`（`src/cli/index.ts`）が受け付けるもの。
 - host設定は `--host <path>` か `WBH_HOST_CONFIG` で渡す。
 - 台帳とPrivate Evidenceの置き場は `--state <dir>` か `WBH_STATE_DIRECTORY` で選ぶ。既定は `~/.local/state/wordpress-bounty-harness`。
@@ -124,6 +125,34 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 - 更新は既存の正規化器で行う。旧環境で `python3 tools/refresh_wordfence.py --workspace /home/dev/wp-bounty-workspace` を実行する。API keyは `WORDFENCE_INTELLIGENCE_API_KEY` か `~/.config/wordfence/env` に置く。成功後30分以内の再取得は抑止される。
 - 更新後に `harness history status` を見る。照合口と同じ規則で、`fresh` / `stale`（既定24時間超、または前回更新の失敗）/ `unavailable`（stateが読めない、DBとstateが食い違う）を表示する。
 - `stale` / `unavailable` は「重複なし」を意味しない。詳細は [wordfence-history/README.md](../src/profiles/wordpress/wordfence-history/README.md)。
+
+### pilot候補の自動準備
+
+`scripts/prepare-pilot-selection.mjs` は、24時間以内のWordfence公開履歴から低権限・高影響の記録が2件以上あるpluginを候補にし、WordPress.orgのactive install数を観測日時付きのGit外SQLite DBへ保存する。キャッシュは7日以内なら候補準備に再利用する。生成した選定方針はinstall数1万以上の候補、履歴件数、feed digestと更新日時を持つ。`select` / `campaign run` はWordPress.orgを改めて観測し、最新版、install数、更新日、Programme scopeを確認する。キャッシュの古い数字だけで対象を確定しない。
+
+```sh
+node scripts/prepare-pilot-selection.mjs \
+  --history /path/to/intelligence/history.sqlite \
+  --state /path/to/intelligence/state.json \
+  --cache /path/to/private/selection-observations.sqlite \
+  --template examples/translatepress-3.3.1/selection.json \
+  --output /path/to/private/pilot-selection.json
+```
+
+履歴mirrorは更新時にDB全体を入れ替えるため、WordPress.orgの観測キャッシュは別DBに置く。`historySignals` は候補選定の公開カタログ件数であり、未知の脆弱性の証拠ではない。選定済み対象のscore内訳と観測参照はGit外の`target-selection` artifactに記録される。
+
+### 子の最終JSONがschemaで失敗したとき
+
+子のrunが `child-final-message-not-report` で失敗しても、Private Evidenceの不変rolloutに完全なJSONが残っている場合がある。parserを修正・テストした後、同じcampaignの失敗runを次のコマンドで再解釈できる。Rootと子のthread lineage、model、effort、cyber access、Snapshotを照合し、元の失敗eventは残したまま `child-report-recovered` と有効なFinding / Leadを追記する。source traceやrecipe本文は標準出力へ出さない。
+
+```sh
+node scripts/recover-child-reports.mjs \
+  --campaign <id> \
+  --state /path/to/private/state \
+  --attachments /path/to/private/provider-attachments
+```
+
+復旧後は同じcampaign IDで `campaign run` を再開する。`incomplete` のTrialを正常な0件として扱わず、独立Verifierへ渡すのは復旧して台帳へ入ったFindingだけにする。
 
 ### Codex CLI / model catalogの更新
 

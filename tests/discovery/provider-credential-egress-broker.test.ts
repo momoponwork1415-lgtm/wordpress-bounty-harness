@@ -167,11 +167,23 @@ describe("provider credential egress", () => {
           return {
             exitCode: 0,
             stdout:
-              args[0] === "inspect"
-                ? "172.28.0.2\n"
-                : args[0] === "network" && args[1] === "inspect"
-                  ? "true\n"
-                  : "",
+              args[0] === "exec" &&
+              args.at(-1)?.includes("process.stdout.write")
+                ? JSON.stringify({
+                    forwardedRequests: 7,
+                    requestLimitExceeded: 0,
+                    unauthorizedRequests: 2,
+                    upstreamSuccess: 7,
+                    upstreamClientError: 0,
+                    upstreamServerError: 0,
+                    relayFailures: 0,
+                    responseLimitExceeded: 0,
+                  })
+                : args[0] === "inspect"
+                  ? "172.28.0.2\n"
+                  : args[0] === "network" && args[1] === "inspect"
+                    ? "true\n"
+                    : "",
             stderr: "",
           };
         },
@@ -185,6 +197,16 @@ describe("provider credential egress", () => {
       expect(result.operation).toEqual({ status: "completed", value: "done" });
       expect(result.receipt.setup.status).toBe("ready");
       expect(result.receipt.cleanup.status).toBe("completed");
+      expect(result.receipt.metrics).toEqual({
+        forwardedRequests: 7,
+        requestLimitExceeded: 0,
+        unauthorizedRequests: 2,
+        upstreamSuccess: 7,
+        upstreamClientError: 0,
+        upstreamServerError: 0,
+        relayFailures: 0,
+        responseLimitExceeded: 0,
+      });
       expect(result.receipt.isolation).toEqual({
         backend: "gvisor",
         runtime: "runsc",

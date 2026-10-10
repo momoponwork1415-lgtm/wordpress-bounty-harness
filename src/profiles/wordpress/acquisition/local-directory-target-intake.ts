@@ -397,12 +397,27 @@ class LocalDirectoryTargetIntake implements TargetIntake {
         { treeDigest },
       );
     } else if (candidates.length > 1) {
-      return this.#persistDisposition(
-        "deferred",
-        request,
-        ["main-plugin-file-ambiguous"],
-        { treeDigest },
-      );
+      // WordPress.org archives commonly include secondary plugin headers. The
+      // root file named after the official slug is a deterministic identity
+      // signal; operator-provided sources still need an explicit choice.
+      const officialSlug =
+        request.provenance.kind === "wordpress-org" &&
+        request.pluginIdentity.kind === "wporg"
+          ? request.pluginIdentity.slug
+          : undefined;
+      selected =
+        officialSlug === undefined
+          ? undefined
+          : candidates.find(
+              (candidate) => candidate.file.path === `${officialSlug}.php`,
+            );
+      if (selected === undefined)
+        return this.#persistDisposition(
+          "deferred",
+          request,
+          ["main-plugin-file-ambiguous"],
+          { treeDigest },
+        );
     }
     if (selected === undefined) {
       throw new Error(

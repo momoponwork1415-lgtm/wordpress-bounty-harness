@@ -6,6 +6,8 @@ export const WORDPRESS_DISCOVERY_PROMPT_IDS = [
   "short-objective-v1",
   "wp2shell-derived-v2",
   "short-objective-v2",
+  "short-objective-managed-v1",
+  "short-objective-managed-v2",
   "wp2shell-single-http-v2",
 ] as const;
 
@@ -34,6 +36,8 @@ export async function loadWordPressDiscoveryAsset(
     case "short-objective-v1":
     case "wp2shell-derived-v2":
     case "short-objective-v2":
+    case "short-objective-managed-v1":
+    case "short-objective-managed-v2":
     case "wp2shell-single-http-v2":
     case "trust-boundary-v1":
     case "file-assignment-v1":
@@ -58,7 +62,7 @@ export async function loadWordPressVerifierPrompt(): Promise<{
   readonly text: string;
   readonly digest: `sha256:${string}`;
 }> {
-  const bytes = await readFile(new URL("./verifier-v2.md", import.meta.url));
+  const bytes = await readFile(new URL("./verifier-v5.md", import.meta.url));
   return {
     text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
     digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,

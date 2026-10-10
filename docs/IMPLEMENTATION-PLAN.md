@@ -23,14 +23,14 @@ flowchart LR
 
 | 領域 | 現在コードで確認できたこと | 目標までの差分 | 扱い |
 | --- | --- | --- | --- |
-| Snapshot / Lab | source digest、WordPress core pack、gVisor Lab、低権限アカウント、RO DB、canary、HTTP捕捉proxyがある | 実対象の協調Trialと独立Verifierを同じ固定版で通す | 再利用 |
-| Discovery | `features.multi_agent=false`。単独 Trial の分担、最大2件の1 hop Lead継続、A/Bがある。実行profileは `gpt-6.1-sol` / `gpt-6-luna` のみ | Daybreak対応モデルの実機確認、Root＋3、子の成果の耐障害保存、使用量観測 | 最優先で置換 |
-| Prompt / 出力 | 短い目的 prompt `short-objective-v2` と管理指示変種、最終JSON schemaがある | promptは短いままRoot協調で使う。子の有効なFinding/Leadが最終整形失敗で消えないようにする | 保持して補修 |
-| Verification | 複数のnonce判定器と再現パッケージ生成、最新版の再検証口がある | 実Findingで独立Labを通し、修正版の負の対照と人間の手動再現まで証明 | 2番目に仕上げる |
-| Selection | `candidateSlugs` は空。閾値は500件で、install数・更新日・tagを採点する。Wordfence履歴は探索入力と重複照合に使うが、選定の採点には使わない | 1万件以上を初期候補とし、低権限のSQLi・Stored XSS・RCE・乗っ取り等の履歴とinstall数を順位の説明可能な信号にする | 縦断後に修正 |
+| Snapshot / Lab | source digest、WordPress core pack、gVisor Lab、低権限アカウント、RO DB、canary、HTTP捕捉proxyがあり、TranslatePress実機判定を通過した。pilotでは3対象を供給できた | 別のpluginでLab供給に失敗した原因を切り分ける | 再利用 |
+| Discovery | Root＋最大3子を実機で起動し、子ごとのsource読取・wall・usage・成果を台帳へ残す。3対象のpilotは各1 Trialを完了した | 子reportの配列schemaを修正済み。残るRoot未許容eventを診断する | 実測済み |
+| Prompt / 出力 | 既定の短い目的prompt `short-objective-v2` と版付き管理指示変種がある。管理変種v2では出力の許容値を明記した | 管理変種を既定にする前に本番A/Bで測る | 既定を保持 |
+| Verification | TranslatePressのFinding 2件を独立Labでnonce確認し、修正版の同経路を `contradicted` とした。pilotのFinding 2件は `incomplete(no-judge)` | 根拠がある候補に限り安全なnonce判定器を追加する。確認後に最新版の再検証と人間の手動再現へ進む | 実機通過 |
+| Selection | 新鮮なWordfence履歴から低権限・高影響候補を抽出し、WordPress.orgのactive install数をGit外DBへ観測日時付きで保存する。1万件以上・最新版・scopeを実行時に再検査し、履歴件数をscoreに記録する | pilot後に選定実績と既知重複から順位を調整する | 最小方針を実装 |
 | 重複照合 | Wordfenceローカルmirrorの候補検索はある。更新は旧リポジトリのscriptに依存し、staleを未重複と扱わない | 検証後にfeed更新を試し、Wordfenceに加えてPatchstack / WPScanの公開情報を照合する。完全一致の自動断定はしない | 提出前の必須ゲート |
 | Report / 人間Lab | 再現パッケージはある。`review draft --file` で人間が用意した文面を記録できる | 攻撃者視点のHTTP証拠から短い英語レポートと入力用JSONを自動生成し、Lab再構築を1コマンドに近づける | 本番探索は先行可。最初の外部提出前に完成 |
-| 評価 / 実績 | `pnpm check` は63ファイル・533テストで通る。#73の開発セットでは両promptとも公開事例のsource候補0件 | まず実Findingから判定・レポートへ通す。発見率や費用優位はその後に測る | 先に実証 |
+| 評価 / 実績 | `pnpm check` は63ファイル・550テストで通る。TranslatePressの実Finding・修正版対照を通過し、[3対象pilot](PILOT-2026-10-10.md)はFinding 2件、Lead 13件、`runtime-confirmed` 0件と記録した | 未許容eventとno-judgeを次の改善の根拠にする | pilot実行済み |
 
 ## 実装順
 

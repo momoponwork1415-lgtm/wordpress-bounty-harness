@@ -213,9 +213,21 @@ describe("ChatGPT subscription egress proxy", () => {
   });
 
   it("stops forwarding at the grant's request count", async () => {
-    const { responses, received } = await open({ maxRequests: 1 });
+    const { responses, received, proxy } = await open({ maxRequests: 1 });
     expect((await responses("gpt-6-luna")).status).toBe(200);
     expect((await responses("gpt-6-luna")).status).toBe(429);
     expect(received).toHaveLength(1);
+    expect(
+      await (await fetch(`${proxy.healthOrigin ?? ""}/healthz`)).json(),
+    ).toEqual({
+      forwardedRequests: 1,
+      requestLimitExceeded: 1,
+      unauthorizedRequests: 0,
+      upstreamSuccess: 1,
+      upstreamClientError: 0,
+      upstreamServerError: 0,
+      relayFailures: 0,
+      responseLimitExceeded: 0,
+    });
   });
 });

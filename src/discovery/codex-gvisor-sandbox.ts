@@ -1,6 +1,8 @@
 import {
   lstat,
   mkdtemp,
+  readFile,
+  readdir,
   realpath,
   rm,
   stat,
@@ -32,12 +34,47 @@ import type {
 
 /** Memory ceiling of one Codex sandbox container. */
 export const CODEX_SANDBOX_MEMORY_MIB = 2048;
+/** A cooperative Trial keeps the Root and up to three CLI children in one sandbox. */
+export const CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB = 8192;
 
 const imageSchema = z
   .string()
   .regex(/^(?:sha256:[a-f0-9]{64}|[^\s@]+@sha256:[a-f0-9]{64})$/);
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const networkSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
+
+/** Read only bounded CLI session files from this run's throwaway home. */
+async function collectRollouts(home: string): Promise<readonly string[]> {
+  const sessions = join(home, "sessions");
+  if (!(await stat(sessions).catch(() => undefined))?.isDirectory()) return [];
+  const files: string[] = [];
+  const visit = async (directory: string, depth: number): Promise<void> => {
+    if (depth > 5) throw new Error("Codex session tree is too deep");
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.isSymbolicLink())
+        throw new Error("Codex session tree contains a symlink");
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) await visit(path, depth + 1);
+      else if (
+        entry.isFile() &&
+        /^rollout-[A-Za-z0-9_.-]+\.jsonl$/.test(entry.name)
+      )
+        files.push(path);
+      if (files.length > 16) throw new Error("Codex session count exceeded");
+    }
+  };
+  await visit(sessions, 0);
+  const rollouts: string[] = [];
+  let bytes = 0;
+  for (const file of files.sort()) {
+    const size = (await stat(file)).size;
+    bytes += size;
+    if (size > 60 * 1024 * 1024 || bytes > 240 * 1024 * 1024)
+      throw new Error("Codex session evidence limit exceeded");
+    rollouts.push(await readFile(file, "utf8"));
+  }
+  return rollouts;
+}
 
 export interface GvisorCodexSandboxOptions {
   readonly dockerExecutablePath: string;
@@ -47,6 +84,7 @@ export interface GvisorCodexSandboxOptions {
   readonly scratchRootDirectory: string;
   readonly maxOutputBytes: number;
   readonly timeoutMs: number;
+  readonly memoryMiB?: number;
   readonly clock?: () => Date;
   readonly runDocker?: DockerRun;
 }
@@ -122,7 +160,11 @@ export class GvisorCodexSandbox implements CodexSandbox {
       options.maxOutputBytes <= 0 ||
       !Number.isSafeInteger(options.timeoutMs) ||
       options.timeoutMs <= 0 ||
-      options.timeoutMs > 240 * 60_000
+      options.timeoutMs > 240 * 60_000 ||
+      (options.memoryMiB !== undefined &&
+        (!Number.isSafeInteger(options.memoryMiB) ||
+          options.memoryMiB < CODEX_SANDBOX_MEMORY_MIB ||
+          options.memoryMiB > CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB))
     ) {
       throw new Error("Codex sandbox options are invalid");
     }
@@ -223,8 +265,8 @@ export class GvisorCodexSandbox implements CodexSandbox {
       "--read-only",
       "--cap-drop=ALL",
       "--security-opt=no-new-privileges",
-      "--pids-limit=64",
-      `--memory=${CODEX_SANDBOX_MEMORY_MIB}m`,
+      "--pids-limit=256",
+      `--memory=${this.#options.memoryMiB ?? CODEX_SANDBOX_MEMORY_MIB}m`,
       "--cpus=1",
       "--tmpfs=/tmp:rw,nosuid,nodev,size=256m",
     ];
@@ -301,16 +343,13 @@ export class GvisorCodexSandbox implements CodexSandbox {
     )
       throw new Error("Codex scratch root is unavailable");
     const staging = await mkdtemp(join(scratchRoot, "codex-run-"));
-    // A login grant needs a writable CLI home holding the per-run login.
-    const codexHome =
-      tls === undefined
-        ? undefined
-        : await mkdtemp(join(scratchRoot, "codex-home-")).catch(
-            async (error: unknown) => {
-              await rm(staging, { recursive: true, force: true });
-              throw error;
-            },
-          );
+    // The isolated CLI home holds child rollouts until Harness captures them.
+    const codexHome = await mkdtemp(join(scratchRoot, "codex-home-")).catch(
+      async (error: unknown) => {
+        await rm(staging, { recursive: true, force: true });
+        throw error;
+      },
+    );
     const now = this.#options.clock ?? (() => new Date());
     const token = command.grant.authorization.replace(/^Bearer /, "");
     const runDocker = this.#docker(scratchRoot, token);
@@ -321,7 +360,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
         command.supportFiles[0].content,
         { flag: "wx", mode: 0o600 },
       );
-      if (tls !== undefined && codexHome !== undefined) {
+      if (tls !== undefined) {
         await writeFile(join(staging, "grant-ca.pem"), tls.caPem, {
           flag: "wx",
           mode: 0o600,
@@ -356,11 +395,11 @@ export class GvisorCodexSandbox implements CodexSandbox {
         "--workdir=/workspace/main",
         "--env=HOME=/tmp",
         "--env=CODEX_HOME=/tmp/codex",
-        ...(tls === undefined || codexHome === undefined
+        `--mount=type=bind,src=${codexHome},dst=/tmp/codex`,
+        ...(tls === undefined
           ? [`--env=OPENAI_API_KEY=${token}`]
           : [
               `--add-host=${BROKER_TLS_HOSTNAME}:${tls.address}`,
-              `--mount=type=bind,src=${codexHome},dst=/tmp/codex`,
               "--env=CODEX_CA_CERTIFICATE=/opt/codex-support/grant-ca.pem",
             ]),
         "--entrypoint=codex",
@@ -373,21 +412,30 @@ export class GvisorCodexSandbox implements CodexSandbox {
         this.#options.timeoutMs,
       );
       const completedAt = now().toISOString();
+      const collected = await collectRollouts(codexHome).then(
+        (rollouts) => ({ rollouts }),
+        () => ({
+          rollouts: [] as readonly string[],
+          rolloutFailure: "capture-failed" as const,
+        }),
+      );
       return {
         status: result.kind === "exited" ? "exited" : "failed",
         exitCode: result.kind === "exited" ? result.exitCode : -1,
         stdout: result.stdout,
+        stderr: result.stderr,
+        ...(result.kind === "exited" ? {} : { failureKind: result.kind }),
         startedAt,
         completedAt,
         image: this.#options.image,
         cliVersion,
         bundledCatalogDigest,
+        ...collected,
         isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
       };
     } finally {
       await rm(staging, { recursive: true, force: true });
-      if (codexHome !== undefined)
-        await rm(codexHome, { recursive: true, force: true });
+      await rm(codexHome, { recursive: true, force: true });
     }
   }
 }

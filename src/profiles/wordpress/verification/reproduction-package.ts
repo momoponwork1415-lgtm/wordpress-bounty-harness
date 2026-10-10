@@ -21,6 +21,21 @@ const evidencePath = z
       .split("/")
       .every((part) => part !== "" && part !== "." && part !== ".."),
   );
+export const wordpressReproductionStepSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("http"),
+    method: z.enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]),
+    path,
+    headers: z.record(z.string(), z.string()).optional(),
+    body: z.string().optional(),
+    expected: z.string().min(1).max(2000),
+  }),
+  z.strictObject({
+    kind: z.literal("browser"),
+    path,
+    expected: z.string().min(1).max(2000),
+  }),
+]);
 const routeSchema = z.strictObject({
   schemaVersion: z.literal(1),
   snapshotDigest: digest,
@@ -29,26 +44,7 @@ const routeSchema = z.strictObject({
   account: z.string().min(1).max(128),
   defaultSettings: z.boolean(),
   configurationChanges: z.array(z.string().min(1).max(500)).max(30),
-  steps: z
-    .array(
-      z.discriminatedUnion("kind", [
-        z.strictObject({
-          kind: z.literal("http"),
-          method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
-          path,
-          headers: z.record(z.string(), z.string()).optional(),
-          body: z.string().optional(),
-          expected: z.string().min(1).max(2000),
-        }),
-        z.strictObject({
-          kind: z.literal("browser"),
-          path,
-          expected: z.string().min(1).max(2000),
-        }),
-      ]),
-    )
-    .min(1)
-    .max(30),
+  steps: z.array(wordpressReproductionStepSchema).min(1).max(30),
   evidence: z
     .array(
       z.strictObject({
