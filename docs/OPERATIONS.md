@@ -1,5 +1,7 @@
 # 運用手引き（完成後に人間がすること）
 
+この文書のコマンドは2026-10-10時点の単独Trial実装用。Root＋最大3 subagentの主経路は [実装計画](IMPLEMENTATION-PLAN.md) に従って移行中で、実機縦断の受入前に本番稼働したものとみなさない。
+
 対象読者: このHarnessを一人で回す運用者。正本は [SPEC.md](SPEC.md)。
 
 - `harness` は `pnpm build` が作る `dist/cli/main.js`（`bin.harness`）。実際の境界アダプターを束ねる。
