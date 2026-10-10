@@ -128,6 +128,21 @@ async function fixture(fromDiagnostic: boolean) {
         artifacts: [{ kind: "candidate", digest: rawDigest }],
       });
     }
+    // A prior attempt may have stopped after writing the normalization event.
+    const rawDigest = await evidence.putFiles({
+      "candidate.json": canonicalJson(report.findings[0]),
+    });
+    await ledger.append({
+      ...base,
+      identity: "candidate-normalized-run-1-finding-0-wordpress-candidate-v1",
+      type: "candidate-normalized",
+      runId: "run-1",
+      candidateKind: "finding",
+      candidateIndex: 0,
+      parserVersion: "wordpress-candidate-v1",
+      changes: [],
+      artifacts: [{ kind: "candidate", digest: rawDigest }],
+    });
   }
   return { root, ledger, evidence, attachments };
 }

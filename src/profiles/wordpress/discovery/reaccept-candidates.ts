@@ -155,7 +155,7 @@ export async function reacceptWordPressRun(options: {
       : allCandidates.filter(({ kind, index }) =>
           previous.has(`${kind}:${index}`),
         );
-  const processed = new Set(
+  const normalizedBefore = new Set(
     events.flatMap((event) =>
       event.type === "candidate-normalized" &&
       event.runId === runId &&
@@ -164,14 +164,29 @@ export async function reacceptWordPressRun(options: {
         : [],
     ),
   );
+  const heldBefore = new Set(
+    events.flatMap((event) =>
+      event.type === "candidate-held" &&
+      event.runId === runId &&
+      event.parserVersion === parserVersion
+        ? [`${event.candidateKind}:${event.candidateIndex}`]
+        : [],
+    ),
+  );
+  const recordedFindings = new Set(
+    events.flatMap((event) =>
+      event.type === "finding-recorded" ? [event.findingId] : [],
+    ),
+  );
+  const recordedLeads = new Set(
+    events.flatMap((event) =>
+      event.type === "lead-recorded" ? [event.leadId] : [],
+    ),
+  );
   let accepted = 0,
     held = 0,
     alreadyProcessed = 0;
   for (const { kind, index, raw } of selected) {
-    if (processed.has(`${kind}:${index}`)) {
-      alreadyProcessed++;
-      continue;
-    }
     const rawDigest = await evidence.putFiles({
       "candidate.json": canonicalJson(raw),
     });
@@ -203,19 +218,22 @@ export async function reacceptWordPressRun(options: {
       occurredAt: (options.clock ?? (() => new Date()))().toISOString(),
     };
     const key = `${runId}-${kind}-${index}-${parserVersion}`;
-    const recorded = await ledger.append({
-      ...base,
-      identity: `candidate-normalized-${key}`,
-      type: "candidate-normalized",
-      runId,
-      candidateKind: kind,
-      candidateIndex: index,
-      parserVersion,
-      changes: normalized.changes,
-      artifacts: [{ kind: "candidate", digest: rawDigest }],
-    });
-    if (recorded.status === "conflict")
-      throw new Error("Candidate normalization conflict");
+    const wasNormalized = normalizedBefore.has(`${kind}:${index}`);
+    if (!wasNormalized) {
+      const recorded = await ledger.append({
+        ...base,
+        identity: `candidate-normalized-${key}`,
+        type: "candidate-normalized",
+        runId,
+        candidateKind: kind,
+        candidateIndex: index,
+        parserVersion,
+        changes: normalized.changes,
+        artifacts: [{ kind: "candidate", digest: rawDigest }],
+      });
+      if (recorded.status === "conflict")
+        throw new Error("Candidate normalization conflict");
+    }
     try {
       if (kind === "finding") {
         const finding = admitWordPressFinding(normalized.value, {
@@ -223,13 +241,11 @@ export async function reacceptWordPressRun(options: {
           snapshotDigest: started.snapshotDigest,
           reportArtifactDigest: reportDigest,
         });
-        if (
-          !events.some(
-            (event) =>
-              event.type === "finding-recorded" &&
-              event.findingId === finding.findingId,
-          )
-        ) {
+        if (wasNormalized && recordedFindings.has(finding.findingId)) {
+          alreadyProcessed++;
+          continue;
+        }
+        if (!recordedFindings.has(finding.findingId)) {
           const findingDigest = await evidence.putFiles({
             "finding.json": canonicalJson(finding),
           });
@@ -244,6 +260,7 @@ export async function reacceptWordPressRun(options: {
           });
           if (result.status === "conflict")
             throw new Error("Finding identity conflict");
+          recordedFindings.add(finding.findingId);
         }
       } else {
         const lead = admitWordPressLead(normalized.value, {
@@ -252,12 +269,11 @@ export async function reacceptWordPressRun(options: {
           snapshotDigest: started.snapshotDigest,
           reportArtifactDigest: reportDigest,
         });
-        if (
-          !events.some(
-            (event) =>
-              event.type === "lead-recorded" && event.leadId === lead.leadId,
-          )
-        ) {
+        if (wasNormalized && recordedLeads.has(lead.leadId)) {
+          alreadyProcessed++;
+          continue;
+        }
+        if (!recordedLeads.has(lead.leadId)) {
           const leadDigest = await evidence.putFiles({
             "lead.json": canonicalJson(lead),
           });
@@ -275,11 +291,16 @@ export async function reacceptWordPressRun(options: {
           });
           if (result.status === "conflict")
             throw new Error("Lead identity conflict");
+          recordedLeads.add(lead.leadId);
         }
       }
       accepted++;
     } catch (error) {
       if (!(error instanceof z.ZodError)) throw error;
+      if (heldBefore.has(`${kind}:${index}`)) {
+        alreadyProcessed++;
+        continue;
+      }
       const result = await ledger.append({
         ...base,
         identity: `candidate-held-${key}`,
