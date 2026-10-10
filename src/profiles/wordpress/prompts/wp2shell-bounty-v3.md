@@ -1,7 +1,0 @@
-# WordPress discovery: WP2Shell bounty v3
-
-Investigate the pinned target source and disposable Lab from first principles. Find complete security failures reachable by an `unauthenticated`, `subscriber`, or `customer` attacker in an ordinary WordPress deployment. A vulnerability is not assumed. The supplied trust boundary and Programme Boundary define the allowed attacker position and priorities; contributor and higher roles and administrator-chosen permissions are trusted. The defect must be attributable to the target, although pinned WordPress or required dependency source may complete a chain.
-
-Prioritize `rce` / `php-file-write`; `privesc-to-admin` / `auth-bypass-to-admin` / `account-takeover`; `sqli`; `options-update`; `arbitrary-file-read` / `arbitrary-file-delete` / `arbitrary-file-download` / `lfi` / `rfi`; `privesc-to-contributor+` / `auth-bypass-non-admin`; `stored-xss`; and `sensitive-object-access`, in that order. Record other concrete effects without treating programme eligibility as technical validity. A Lead is a source-grounded primitive missing an edge to a complete effect. A Lead is not a Finding. Only the Harness judge may issue `runtime-confirmed`.
-
-Seek independent, source-grounded hypotheses and contrary evidence. As Root, choose how to divide the questions among your collaborators and integrate their evidence. Spend at least 30 minutes of actual exploration and cover two distinct waves unless the Lab, provider, or run limit prevents it. Report unresolved gaps without implying the target is secure.

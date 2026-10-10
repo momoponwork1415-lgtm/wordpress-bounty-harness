@@ -14,13 +14,11 @@ export const WORDPRESS_DISCOVERY_PROMPT_IDS = [
   "wp2shell-single-http-v2",
   "wp2shell-bounty-v1",
   "wp2shell-bounty-v2",
-  "wp2shell-bounty-v3",
 ] as const;
 
 /** Older assets retain their exact historical composition for replay. */
 export const WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS = [
   "short-objective-managed-v5",
-  "wp2shell-bounty-v3",
 ] as const;
 
 export const WORDPRESS_DISCOVERY_ASSET_IDS = [
@@ -55,7 +53,6 @@ export async function loadWordPressDiscoveryAsset(
     case "wp2shell-single-http-v2":
     case "wp2shell-bounty-v1":
     case "wp2shell-bounty-v2":
-    case "wp2shell-bounty-v3":
     case "trust-boundary-v1":
       fileName = `${id}.md`;
       break;

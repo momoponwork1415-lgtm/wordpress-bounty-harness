@@ -45,7 +45,6 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-single-http-v2",
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
-      "wp2shell-bounty-v3",
       "trust-boundary-v1",
     ]);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual([
@@ -61,7 +60,6 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-single-http-v2",
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
-      "wp2shell-bounty-v3",
     ]);
 
     for (const id of WORDPRESS_DISCOVERY_ASSET_IDS) {
@@ -116,8 +114,6 @@ describe("WordPress discovery prompt assets", () => {
     const pins = {
       "short-objective-managed-v5":
         "sha256:972ebe7d10a0173fef24a7603e01defcb17fd81e87810795f705737114f584b4",
-      "wp2shell-bounty-v3":
-        "sha256:4111dd257b44d3e837ce7e83bcd440ed192c2ec2cdb9791c57b90019b980508a",
     } as const;
     for (const id of WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS) {
       const { text, digest } = await loadWordPressDiscoveryAsset(id);
