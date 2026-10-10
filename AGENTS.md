@@ -27,6 +27,7 @@
 - 主経路は Root＋最大3 subagent の協調Trial（ADR 0016）。人数と隔離はHarnessが管理し、分担と仮説はRootが決める。
 - WP2Shell変種の30分下限はRootへの指示であり、Harnessが強制する保証ではない。run wallとcoverageを測り、守られない場合は継続境界を改善する。
 - prompt本文を変えたら版を上げ、旧版を残してdigest pinを更新する。旧promptは過去Trialの再現用として維持する。
+- Finding / Leadの出力契約はprompt本文に書かず、Harnessがschemaから生成する節として渡す（ADR 0019）。候補は出力境界で棄却せず、正規化して受理するか保留する（ADR 0018）。
 
 ## `profiles/wordpress/` の規則（ADR 0011）
 
