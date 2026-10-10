@@ -4,12 +4,14 @@
 
 ```mermaid
 flowchart LR
-  PRE[Daybreak / runsc / broker の実機preflight] --> T1[TranslatePress 3.2.6<br/>Stored XSS: まず1 Trial]
-  PRE --> T2[TranslatePress 3.3.1<br/>アカウント乗っ取り: まず1 Trial]
-  T1 & T2 --> E{どちらかでFindingを<br/>新Labがconfirmed?}
-  E -->|いいえ| DIAG[読取・停止・provider・判定器を診断<br/>修正後に必要分だけ再試行]
-  E -->|はい| NEG[同じ経路を修正版で再実行<br/>confirmedにならない]
-  NEG -->|記録も完全| PILOT[最新版3対象の本番探索パイロット]
+  PRE[Daybreak / runsc / broker の実機preflight] --> T1[TranslatePress 3.2.6<br/>Stored XSS: 1 Trial]
+  T1 --> E{Findingを新Labがconfirmedし<br/>修正版で同経路が不成立?}
+  E -->|はい| PILOT[最新版3対象の本番探索パイロット]
+  E -->|いいえ| DIAG[読取・停止・provider・判定器を診断]
+  DIAG --> T2[TranslatePress 3.3.1<br/>アカウント乗っ取り: 1 Trial]
+  T2 --> E2{同じゲートを通過?}
+  E2 -->|いいえ| FIX[故障箇所を修正し必要分だけ再試行]
+  E2 -->|はい| PILOT
   PILOT -->|実Finding| SUBMIT[最新版の独立確認・重複照合・証拠<br/>人間Lab再現・査読・承認を経て提出]
   PILOT --> REVIEW[3対象後に費用と歩留まりを評価]
 ```
@@ -24,7 +26,7 @@ flowchart LR
 
 TP-SXの修正版はWordfence履歴の修正情報と公開archiveの版を実行前に照合してpinする。同一版に複数のXSS経路があり得る。負の対照は「発見した**その経路**が修正版で成立しない」であり、修正版の全XSSが無いという主張ではない。source、WordPress core、必要な依存、Lab設定、prompt、model、判定器の版とdigestを記録する。
 
-初回は各ゲート候補につき**Root＋3協調Trialを1回**、各Trialのwall上限は90分とする。2 Trialの実測前に追加の公開事例・prompt A/B・pass@kを増やさない。制限時間前の正常終了もそのまま記録する。provider上限やLab失敗は探索0件と数えず、理由を残して再開する。
+初回はTP-SXを**Root＋3協調Trialで1回**試し、ゲートが通ればTP-ATOは回さず本番へ進む。通らなければ失敗した境界を診断してからTP-ATOを1回試す。計画した初回は最大2 Trial、各Trialのwall上限は90分とする。追加の公開事例・prompt A/B・pass@kは増やさない。制限時間前の正常終了もそのまま記録する。provider上限やLab失敗は探索0件と数えず、理由を残して再開する。
 
 ## 2. 入力と採点
 
@@ -38,7 +40,7 @@ TP-SXの修正版はWordfence履歴の修正情報と公開archiveの版を実�
 
 ## 3. 本番探索の開始条件
 
-次の全てを満たしたら、TP-SXとTP-ATOの両方の成功や多数回の再発見を待たず、公開中最新版の**3対象パイロット**へ進む。
+次の全てを満たしたら、残りのTranslatePressケースや多数回の再発見を待たず、公開中最新版の**3対象パイロット**へ進む。
 
 1. どちらか1ケースで、sourceに根拠があるFindingを新しいgVisor LabのHarness判定器が `runtime-confirmed` とした。
 2. 同一の攻撃経路がpinした修正版では `runtime-confirmed` にならず、結果の理由・証拠が残る。
@@ -55,6 +57,6 @@ TP-SXの修正版はWordfence履歴の修正情報と公開archiveの版を実�
 
 ## 5. 停止と次の判断
 
-最初の2 TrialでFindingが0でも、脆弱性が無いという結論にしない。sourceをほぼ読まず数分で終了したか、provider・schema・Labで失敗したか、十分読んで候補が無かったかを分ける。まず失敗した境界を直して同じ条件を再実行し、promptや対象数を同時に変えない。Leadがあれば欠けた一辺を次回の問いにできる。
+計画した最大2 TrialでFindingが0でも、脆弱性が無いという結論にしない。sourceをほぼ読まず数分で終了したか、provider・schema・Labで失敗したか、十分読んで候補が無かったかを分ける。まず失敗した境界を直して同じ条件を再実行し、promptや対象数を同時に変えない。Leadがあれば欠けた一辺を次回の問いにできる。
 
 ゲート達成後はTranslatePressの追加採点を止めて本番へ進む。広域スクリーニング、pass@k、別prompt、別モデル、候補選定の詳細な予測モデルは、3対象の費用・歩留まりから具体的なボトルネックが分かった後に比較する。

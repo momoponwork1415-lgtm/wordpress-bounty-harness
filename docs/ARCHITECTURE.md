@@ -6,7 +6,7 @@
 
 ```mermaid
 flowchart LR
-  START([開始]) --> BENCH[TranslatePress 3.2.6 / 3.3.1<br/>Root＋3を各1 Trial]
+  START([開始]) --> BENCH[TranslatePress 3.2.6から開始<br/>必要なら3.3.1、最大2 Trial]
   BENCH --> GATE{1件を新Labで確認し<br/>修正版で同じ経路が不成立?}
   GATE -->|いいえ| FIX[故障箇所を診断して必要分だけ再試行]
   GATE -->|はい| PILOT[自動選定した最新版3対象<br/>本番探索パイロット]

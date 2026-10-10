@@ -6,9 +6,9 @@
 
 ```mermaid
 flowchart LR
-  A[開始: TranslatePress 3.2.6と3.3.1を固定] --> B[Root＋最大3 subagent<br/>各1協調Trial]
+  A[開始: TranslatePress 3.2.6を固定] --> B[Root＋最大3 subagent<br/>まず1協調Trial]
   B --> C{片方のFindingを新Labで確認し<br/>同じ経路を修正版で否定?}
-  C -->|いいえ| D[理由を診断し必要分だけ再試行]
+  C -->|いいえ| D[理由を診断し3.3.1を1 Trial]
   C -->|はい| E[最小方針で最新版3対象を自動選定]
   E --> F[本番のRoot＋3探索と独立検証]
   F -->|Finding| G[重複・scope照合とHTTP証拠]
@@ -37,7 +37,7 @@ flowchart LR
 ```mermaid
 flowchart TB
   P0[0. 実機preflight<br/>Daybreak対応model・gVisor・broker・subagent] --> P1[1. 協調Trial<br/>Root＋3と成果の保存]
-  P1 --> P2[2. TranslatePress 2ケースを各1 Trial<br/>実Finding・新Lab・修正版対照]
+  P1 --> P2[2. TranslatePressを最大2 Trial<br/>実Finding・新Lab・修正版対照]
   P2 -->|1ケースでゲート通過| P3[3. 最小自動選定で<br/>最新版3対象の本番探索]
   P3 --> P4[4. 実Findingが出たら<br/>重複・証拠・英語文案・人間Lab]
   P3 --> P5[5. 3対象の費用と歩留まりを読む]
@@ -45,7 +45,7 @@ flowchart TB
   P5 -.効果が見えた後.-> O[任意: 安い広域探索 / pass@k / 探索方式切替]
 ```
 
-ユーザーの難しさの順は探索→検証→選定→レポートである。TranslatePressは人間が公開済みのslugと版を指定する。少なくとも1ケースで独立確認と修正版対照が通ったら、最小の自動選定で最新版の本番探索へ進む。提出のための文案・人間Labは実Findingが出た時に完成させる。[ベンチマークの上限と移行条件](TRANSLATEPRESS-BENCHMARK.md) を参照。
+ユーザーの難しさの順は探索→検証→選定→レポートである。TranslatePressは人間が公開済みのslugと版を指定する。3.2.6で独立確認と修正版対照が通ればそこで止め、通らなければ診断後に3.3.1を試す。どちらかでゲートが通ったら、最小の自動選定で最新版の本番探索へ進む。提出のための文案・人間Labは実Findingが出た時に完成させる。[ベンチマークの上限と移行条件](TRANSLATEPRESS-BENCHMARK.md) を参照。
 
 ## 外側のループと費用
 
