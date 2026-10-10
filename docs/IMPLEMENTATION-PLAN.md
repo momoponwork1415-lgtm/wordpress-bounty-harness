@@ -65,7 +65,7 @@ flowchart TB
 | 6 | [#97 自動選定](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/97) | 低権限履歴とinstall数から最新版を選ぶ | 技術上はなし。着手順は#94後 |
 | 7 | [#98 最新版の通し運用](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/98) | 選定から人間レビューまでの1本と費用 | #95、#96、#97 |
 
-既存の [#10 Answer Key登録](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/10) は評価用の別作業として残す。公開sourceのpinは進んだが、私的な鍵の人間記入と補助事例が未完了であり、#92〜#98の発見経路を止めない。
+既存の [#10 Answer Key登録](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/10) は、**任意の評価データ整備**として残す。ここでの「鍵」はAPIキーやパスワードではなく、公開済み事例の入口・原因箇所・権限・影響を後で採点するための正解表。探索へは渡さず、人間による新たな脆弱性探索や再現を要求しない。公開sourceのpinは進んだが、正解表と補助事例は未完了であり、#92〜#98の発見経路を止めない。
 
 ## 減らす判断
 
