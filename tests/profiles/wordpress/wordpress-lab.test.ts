@@ -12,6 +12,10 @@ import {
   type DockerRequest,
 } from "../../../src/profiles/wordpress/lab/index.js";
 import type { Snapshot } from "../../../src/snapshot/index.js";
+import {
+  wordPressScenario,
+  nextWordPressScenario,
+} from "../../../src/profiles/wordpress/lab/scenarios.js";
 
 const directories: string[] = [];
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
@@ -280,6 +284,56 @@ async function fixture(
 }
 
 describe("WordPress gVisor Lab", () => {
+  it("pins ordinary scenarios and seeds translation data with an approved comment", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "translatepress-multilingual",
+    );
+    const scenario = wordPressScenario("translatepress-translation-data-v1")!;
+    const provisioned = await lab.provision(snapshot, {
+      ...setup,
+      initialPosts: ["Welcome", "Sample page for translation"],
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status !== "ready") return;
+    expect(provisioned.handle.scenario).toEqual({
+      id: scenario.id,
+      digest: scenario.digest,
+    });
+    expect(
+      commands.some((command) => command.args.includes("--comment_approved=1")),
+    ).toBe(true);
+    expect(
+      commands.some((command) =>
+        command.args.some((arg) =>
+          arg.includes('"translated"=>"Exemple de page traduite"'),
+        ),
+      ),
+    ).toBe(true);
+    expect(nextWordPressScenario("translation dictionary is empty")).toBe(
+      scenario.name,
+    );
+    expect(
+      nextWordPressScenario("translation dictionary is empty", scenario.id),
+    ).toBe("catalogue に無い前提");
+    await lab.teardown(provisioned.handle);
+  });
+
+  it("rejects a changed scenario digest before provisioning", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: {
+        id: "approved-comment-v1",
+        digest: sha("f"),
+      },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some((command) => command.args[0] === "run")).toBe(false);
+  });
+
   it("seeds an ordinary approved comment on the first published post when requested", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const provisioned = await lab.provision(snapshot, {

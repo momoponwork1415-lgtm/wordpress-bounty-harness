@@ -19,6 +19,7 @@ import type {
   ProvisionResult,
 } from "../../../lab/index.js";
 import { snapshotSchema, type Snapshot } from "../../../snapshot/index.js";
+import { wordPressScenario } from "./scenarios.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const pinnedImage = z.string().regex(/^[^\s@]+@sha256:[a-f0-9]{64}$/);
@@ -40,6 +41,7 @@ const setupSchema = z
         administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
       })
       .optional(),
+    scenario: z.strictObject({ id: z.string(), digest }).optional(),
   })
   .refine(
     (setup) =>
@@ -633,6 +635,31 @@ export function openWordPressLab(options: {
         const setup = setupSchema.parse(candidateSetup);
         if (setup.snapshotDigest !== snapshot.digest)
           throw new Error("Lab setup snapshot mismatch");
+        const scenario =
+          setup.scenario === undefined
+            ? undefined
+            : wordPressScenario(setup.scenario.id);
+        if (
+          setup.scenario !== undefined &&
+          (scenario === undefined || scenario.digest !== setup.scenario.digest)
+        )
+          throw new Error("Unknown or changed Lab scenario");
+        if (scenario?.approvedComment && setup.initialPosts.length === 0)
+          throw new Error("Scenario requires an initial post");
+        if (
+          scenario?.translation !== null &&
+          scenario?.translation !== undefined &&
+          !setup.initialPosts.includes(scenario.translation.original)
+        )
+          throw new Error("Scenario translation requires its published post");
+        if (
+          scenario?.secondaryLocale !== null &&
+          scenario?.secondaryLocale !== undefined &&
+          setup.translatePress !== undefined &&
+          setup.translatePress.administratorSecondaryLocale !==
+            scenario.secondaryLocale
+        )
+          throw new Error("Scenario secondary locale conflicts with setup");
         const resolved = await options.source.resolve(snapshot);
         if (resolved.dependencies.length !== snapshot.dependencies.length)
           throw new Error("Dependency count mismatch");
@@ -646,6 +673,12 @@ export function openWordPressLab(options: {
           throw new Error("Customer role needs WooCommerce");
         if (resolved.target.kind !== "plugin")
           throw new Error("The target must be a plugin");
+        if (
+          scenario?.pluginSlug !== null &&
+          scenario?.pluginSlug !== undefined &&
+          resolved.target.pluginSlug !== scenario.pluginSlug
+        )
+          throw new Error("Lab scenario requires its plugin");
         if (
           setup.translatePress !== undefined &&
           resolved.target.pluginSlug !== "translatepress-multilingual"
@@ -688,6 +721,10 @@ export function openWordPressLab(options: {
               password: randomUUID(),
             }
           : undefined;
+        const secondaryLocale =
+          setup.translatePress?.administratorSecondaryLocale ??
+          scenario?.secondaryLocale ??
+          undefined;
         resource = {
           id,
           network: `${prefix}-net`,
@@ -698,12 +735,9 @@ export function openWordPressLab(options: {
           databasePassword: randomUUID(),
           readerPassword: randomBytes(32).toString("hex"),
           adminPassword: randomUUID(),
-          ...(setup.translatePress === undefined
+          ...(secondaryLocale === undefined
             ? {}
-            : {
-                administratorSecondaryLocale:
-                  setup.translatePress.administratorSecondaryLocale,
-              }),
+            : { administratorSecondaryLocale: secondaryLocale }),
           executionSalt: randomBytes(16).toString("hex"),
           executionNonces: new Set(),
           scriptNonces: new Set(),
@@ -914,8 +948,8 @@ export function openWordPressLab(options: {
           ]);
           await wp(resource, ["plugin", "activate", source.slug]);
         }
-        if (setup.translatePress !== undefined) {
-          const locale = setup.translatePress.administratorSecondaryLocale;
+        if (resource.administratorSecondaryLocale !== undefined) {
+          const locale = resource.administratorSecondaryLocale;
           await wp(resource, [
             "eval",
             `$settings=get_option("trp_settings"); if(!is_array($settings)) exit(1); $base=$settings["default-language"] ?? "en_US"; $secondary="${locale}"; $settings["translation-languages"]=array_values(array_unique([$base,$secondary])); $settings["publish-languages"]=array_values(array_unique([$base,$secondary])); $settings["url-slugs"][$secondary]=strtolower(substr($secondary,0,2)); update_option("trp_settings",$settings); TRP_Translate_Press::get_trp_instance()->get_component("query")->check_table($base,$secondary); $admin=get_user_by("login","harness-admin"); if(!$admin) exit(2); update_user_meta($admin->ID,"locale",$secondary); if(get_user_locale($admin->ID)!==$secondary) exit(3);`,
@@ -944,11 +978,15 @@ export function openWordPressLab(options: {
             "create",
             "--post_status=publish",
             `--post_title=${title}`,
-            ...(index === 0 && setup.initialApprovedComment === true
+            ...(index === 0 &&
+            (setup.initialApprovedComment === true || scenario?.approvedComment)
               ? ["--porcelain"]
               : []),
           ]);
-          if (index === 0 && setup.initialApprovedComment === true) {
+          if (
+            index === 0 &&
+            (setup.initialApprovedComment === true || scenario?.approvedComment)
+          ) {
             const postId = created.stdout.trim();
             if (!/^[1-9][0-9]*$/.test(postId))
               throw new Error("Seed post ID is unavailable");
@@ -963,6 +1001,18 @@ export function openWordPressLab(options: {
               "--comment_approved=1",
             ]);
           }
+        }
+        if (
+          scenario?.translation !== null &&
+          scenario?.translation !== undefined
+        ) {
+          const locale = scenario.secondaryLocale;
+          const original = JSON.stringify(scenario.translation.original);
+          const translated = JSON.stringify(scenario.translation.translated);
+          await wp(resource, [
+            "eval",
+            `$settings=get_option("trp_settings"); $base=$settings["default-language"] ?? "en_US"; $table=$GLOBALS["wpdb"]->prefix."trp_dictionary_".strtolower($base)."_".strtolower(${JSON.stringify(locale)}); if(!preg_match("/^[a-z0-9_]+$/",$table)) exit(1); $ok=$GLOBALS["wpdb"]->insert($table,["original"=>${original},"translated"=>${translated},"status"=>2,"block_type"=>0]); if($ok!==1) exit(2); $count=$GLOBALS["wpdb"]->get_var($GLOBALS["wpdb"]->prepare("SELECT COUNT(*) FROM ".$table." WHERE original=%s AND translated=%s",${original},${translated})); if((int)$count<1) exit(3);`,
+          ]);
         }
         if (setup.databaseAccess === "read-only") {
           // Only existing tables are visible; the canary table is created later.
@@ -1007,6 +1057,7 @@ export function openWordPressLab(options: {
           id,
           snapshotDigest: snapshot.digest,
           setupDigest: canonicalDigest({ setup, images: options.images }),
+          ...(setup.scenario === undefined ? {} : { scenario: setup.scenario }),
           endpoint: "http://wordpress",
           networkName: resource.network,
           internalIp,

@@ -213,6 +213,11 @@ export async function runCampaignPipeline<
         type: "lab-provisioned",
         labId,
         status: ready ? "ready" : "failed",
+        purpose: "discovery",
+        ...(provisioned.status !== "ready" ||
+        provisioned.handle.scenario === undefined
+          ? {}
+          : { scenario: provisioned.handle.scenario }),
         ...(reachability === undefined ? {} : { reachability }),
         ...(failure === undefined ? {} : failure),
         ...(diagnostic === undefined

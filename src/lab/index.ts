@@ -4,6 +4,8 @@ export interface LabHandle {
   readonly snapshotDigest: string;
   readonly setupDigest: string;
   readonly endpoint: string;
+  /** Profile-owned, digest-pinned ordinary Lab scenario, when selected. */
+  readonly scenario?: { readonly id: string; readonly digest: string };
 }
 
 export type ProvisionResult<Handle extends LabHandle> =

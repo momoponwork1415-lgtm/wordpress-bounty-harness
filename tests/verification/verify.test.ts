@@ -41,6 +41,7 @@ async function fixture(
     readonly refute?: boolean;
     /** Attempt a comparison against another frozen snapshot. */
     readonly latestVersion?: boolean;
+    readonly scenario?: { readonly id: string; readonly digest: string };
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-verify-"));
@@ -80,6 +81,7 @@ async function fixture(
     snapshotDigest: options.labSnapshotDigest ?? snapshotDigest,
     setupDigest,
     endpoint: "http://lab",
+    ...(options.scenario === undefined ? {} : { scenario: options.scenario }),
   };
   const lab: LabProvisioner<{ readonly name: string }, LabHandle> = {
     async provision() {
@@ -212,10 +214,24 @@ describe("verification public interface", () => {
       conditions: { attackerRole: "subscriber", reachedRole: "synthetic" },
     });
     expect(calls).toEqual({ provision: 1, verifier: 1, teardown: 1 });
+    expect(ledger.read({ type: "lab-provisioned" })[0]?.event).toMatchObject({
+      purpose: "verification",
+      status: "ready",
+      snapshotDigest,
+    });
     expect(ledger.funnel("campaign-1")).toMatchObject({
       raw: 1,
       verified: 1,
       confirmed: 1,
+    });
+  });
+
+  it("records the digest-pinned scenario on a verification Lab event", async () => {
+    const scenario = { id: "ordinary-v1", digest: setupDigest };
+    const { ledger } = await fixture({ scenario });
+    expect(ledger.read({ type: "lab-provisioned" })[0]?.event).toMatchObject({
+      purpose: "verification",
+      scenario,
     });
   });
 

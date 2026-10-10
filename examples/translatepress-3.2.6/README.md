@@ -18,3 +18,5 @@ node dist/cli/main.js campaign run translatepress-multilingual --campaign <一�
 `campaign-short-managed-v4.json` と `campaign-wp2shell-bounty-v2.json` はADR 0017の新しい比較用設定。二次言語 `fr_FR` を両方のLabで有効にし、prompt以外を揃える。実行前に二次言語の翻訳とXSSの発火先がLabにあることを確認する。両armは別のcampaign IDで実行し、旧Trialの結果を比較分母に含めない。
 
 `*-comment-fixture.json` の2設定は別条件として最初の公開投稿に無害な承認済みコメントを1件追加する。どちらも同じLab条件であり、過去のcommentなしTrialと混ぜて比較しない。
+
+`campaign-short-managed-v4-translation-data.json` は版付きの通常機能シナリオ `translatepress-translation-data-v1` を選び、開発用に最大3 Trialを設定する。二次言語 `fr_FR`、公開投稿、通常の翻訳辞書データ1行、承認済みコメント1件を探索・検証の両 Lab に用意する。シナリオの定義と digest pin は `src/profiles/wordpress/lab/scenarios.ts` にある。既存 campaign をこの設定で再実行すると、同じ snapshot の未完了 Finding を新しい Lab setup digest で再検証できる。
