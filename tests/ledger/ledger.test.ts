@@ -70,6 +70,141 @@ async function evidence(store: PrivateArtifactStore): Promise<string> {
 }
 
 describe("Ledger public interface", () => {
+  it("counts boundary candidates once across rejection and replay, with classified holds and token rates", async () => {
+    const { ledger, artifactStore } = await fixture();
+    const proof = await evidence(artifactStore);
+    await ledger.append({
+      ...common("start"),
+      type: "discovery-run-started",
+      runId: "run-1",
+      labId: "lab-1",
+      history: { mode: "none" },
+      configuration: { promptVariant: "objective-v5", assignmentUnit: "route" },
+    });
+    await ledger.append({
+      ...common("finish"),
+      type: "discovery-run-finished",
+      runId: "run-1",
+      outcome: "completed",
+      costUsd: "unavailable",
+      wallTimeMs: 3_600_000,
+      usage: {
+        inputTokens: 1_250_000,
+        cachedInputTokens: 250_000,
+        outputTokens: 100,
+        reasoningOutputTokens: 10,
+      },
+    });
+    await ledger.append({
+      ...common("old-rejection"),
+      type: "candidate-rejected",
+      runId: "run-1",
+      candidateKind: "finding",
+      candidateIndex: 0,
+      reason: "schema",
+      impact: "access-control",
+    });
+    await ledger.append({
+      ...common("replay-normalized"),
+      type: "candidate-normalized",
+      runId: "run-1",
+      candidateKind: "finding",
+      candidateIndex: 0,
+      changes: [],
+    });
+    await ledger.append({
+      ...common("lead-normalized"),
+      type: "candidate-normalized",
+      runId: "run-1",
+      candidateKind: "lead",
+      candidateIndex: 0,
+      changes: [],
+    });
+    await ledger.append({
+      ...common("lead-held"),
+      type: "candidate-held",
+      runId: "run-1",
+      candidateKind: "lead",
+      candidateIndex: 0,
+      issuePaths: ["sourceTrace"],
+      primitive: "write",
+      missingEdge: "render",
+    });
+    await ledger.append({
+      ...common("finding"),
+      type: "finding-recorded",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "access-control",
+    });
+    await ledger.append({
+      ...common("verified"),
+      type: "verification-finished",
+      verificationId: "verification-1",
+      findingId: "finding-1",
+      labSetupDigest: labSetup,
+      result: {
+        status: "runtime-confirmed",
+        judgeId: "judge",
+        proofKind: "nonce-canary",
+        evidenceDigest: proof,
+        reproductionPackageDigest: proof,
+      },
+    });
+    const funnel = ledger.funnel("campaign-1");
+    expect(funnel).toMatchObject({
+      reached: 2,
+      accepted: 1,
+      held: 1,
+      raw: 1,
+      confirmed: 1,
+      noncachedInputTokens: 1_000_000,
+      confirmedPerMillionInputTokens: 1,
+      confirmedPerAgentWallHour: 1,
+      verificationAttempts: { "finding-1": 1 },
+      byCategory: {
+        "access-control": { reached: 1, accepted: 1, held: 0 },
+        "lead:write/render": { reached: 1, accepted: 0, held: 1 },
+      },
+      byObjective: {
+        "objective-v5": {
+          reached: 2,
+          accepted: 1,
+          held: 1,
+          confirmedPerMillionInputTokens: 1,
+          confirmedPerAgentWallHour: 1,
+        },
+      },
+    });
+  });
+
+  it("counts accepted legacy candidates even when another index was rejected first", async () => {
+    const { ledger } = await fixture();
+    await ledger.append({
+      ...common("rejected"),
+      type: "candidate-rejected",
+      runId: "run-1",
+      candidateKind: "finding",
+      candidateIndex: 0,
+      reason: "schema",
+    });
+    await ledger.append({
+      ...common("accepted"),
+      type: "finding-recorded",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "access-control",
+    });
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      reached: 2,
+      accepted: 1,
+      held: 1,
+      byCategory: {
+        unclassified: { reached: 1, held: 1 },
+        "access-control": { reached: 1, accepted: 1 },
+      },
+    });
+  });
   it("reads discovery events written before upstream broker counters existed", async () => {
     const { ledger } = await fixture();
     await ledger.append({
@@ -527,6 +662,19 @@ describe("Ledger public interface", () => {
       knownCostUsd: 0,
       unpricedRuns: 2,
       wallTimeMs: 1200,
+      noncachedInputTokens: 0,
+      unavailableInputRuns: 1,
+      confirmedPerMillionInputTokens: null,
+      confirmedPerAgentWallHour: 3000,
+      verificationAttempts: {
+        "finding-1": 1,
+        "finding-2": 1,
+        "finding-3": 1,
+        "finding-4": 1,
+      },
+      reached: 4,
+      accepted: 4,
+      held: 0,
       raw: 4,
       verified: 4,
       confirmed: 1,
@@ -537,11 +685,56 @@ describe("Ledger public interface", () => {
       inScopeByProgramme: { "programme-1": 1, "programme-2": 0 },
       outcomesByKind: { triaged: 1 },
       byArm: {},
+      byObjective: {
+        "short-objective": {
+          runs: 1,
+          reached: 4,
+          accepted: 4,
+          held: 0,
+          raw: 4,
+          verified: 4,
+          confirmed: 1,
+          contradicted: 1,
+          incomplete: 2,
+          reviewed: 3,
+          inScope: 1,
+          submitted: 1,
+          outcome: 1,
+          noncachedInputTokens: 0,
+          unavailableInputRuns: 1,
+          wallTimeMs: 1200,
+          confirmedPerMillionInputTokens: null,
+          confirmedPerAgentWallHour: 3000,
+        },
+        "wp2shell-derived": {
+          runs: 1,
+          reached: 0,
+          accepted: 0,
+          held: 0,
+          raw: 0,
+          verified: 0,
+          confirmed: 0,
+          contradicted: 0,
+          incomplete: 0,
+          reviewed: 0,
+          inScope: 0,
+          submitted: 0,
+          outcome: 0,
+          noncachedInputTokens: 0,
+          unavailableInputRuns: 0,
+          wallTimeMs: 0,
+          confirmedPerMillionInputTokens: null,
+          confirmedPerAgentWallHour: null,
+        },
+      },
       rewardUsd: 0,
       submitted: 1,
       outcome: 1,
       byCategory: {
         injection: {
+          reached: 2,
+          accepted: 2,
+          held: 0,
           raw: 2,
           verified: 2,
           confirmed: 1,
@@ -553,6 +746,9 @@ describe("Ledger public interface", () => {
           outcome: 1,
         },
         "access-control": {
+          reached: 2,
+          accepted: 2,
+          held: 0,
           raw: 2,
           verified: 2,
           confirmed: 0,

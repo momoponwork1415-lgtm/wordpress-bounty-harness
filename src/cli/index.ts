@@ -240,14 +240,21 @@ async function openState(
 }
 
 function stages(counts: FunnelCounts): string {
-  return `raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted} → outcome ${counts.outcome}`;
+  return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted} → outcome ${counts.outcome}`;
 }
 
 export function formatFunnel(funnel: CampaignFunnel): string[] {
+  const rate = (value: number | null) =>
+    value === null ? "unavailable" : value.toFixed(2);
+  const cost =
+    funnel.unpricedRuns === funnel.runCount
+      ? "cost unavailable"
+      : `cost $${funnel.knownCostUsd.toFixed(2)} known, ${funnel.unpricedRuns} run(s) unavailable`;
   const lines = [
     `campaign ${funnel.campaignId}`,
-    `agent runs ${funnel.runCount} (discovery attempts ${funnel.discoveryAttempts})  cost $${funnel.knownCostUsd.toFixed(2)} known, ${funnel.unpricedRuns} run(s) unavailable  summed agent time ${(funnel.wallTimeMs / 1000).toFixed(1)}s`,
+    `agent runs ${funnel.runCount} (discovery attempts ${funnel.discoveryAttempts})  ${cost}  summed agent time ${(funnel.wallTimeMs / 1000).toFixed(1)}s`,
     stages(funnel),
+    `noncache input ${funnel.noncachedInputTokens} token(s) (${funnel.unavailableInputRuns} run(s) unavailable)  confirmed / 1M tokens ${rate(funnel.confirmedPerMillionInputTokens)}  confirmed / agent wall hour ${rate(funnel.confirmedPerAgentWallHour)}`,
   ];
   const programmes = Object.keys(funnel.inScopeByProgramme).sort();
   if (programmes.length > 0)
@@ -263,6 +270,18 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
   if (categories.length > 0) lines.push("by category:");
   for (const category of categories)
     lines.push(`  ${category}: ${stages(funnel.byCategory[category]!)}`);
+  const objectives = Object.keys(funnel.byObjective).sort();
+  if (objectives.length > 0) lines.push("by objective version:");
+  for (const name of objectives) {
+    const counts = funnel.byObjective[name]!;
+    lines.push(
+      `  ${name}: runs ${counts.runs}  ${stages(counts)}  noncache input ${counts.noncachedInputTokens} (${counts.unavailableInputRuns} run(s) unavailable)  confirmed / 1M tokens ${rate(counts.confirmedPerMillionInputTokens)}  confirmed / agent wall hour ${rate(counts.confirmedPerAgentWallHour)}`,
+    );
+  }
+  const findings = Object.keys(funnel.verificationAttempts).sort();
+  if (findings.length > 0) lines.push("verification attempts by finding:");
+  for (const finding of findings)
+    lines.push(`  ${finding}: ${funnel.verificationAttempts[finding]}`);
   const arms = Object.keys(funnel.byArm).sort();
   if (arms.length > 0) lines.push("by arm:");
   for (const arm of arms) {

@@ -950,8 +950,9 @@ describe("harness CLI vertical slice", () => {
       "raw 2 → verifier通過 2 → confirmed 1 / contradicted 0 / incomplete 1 → reviewed 1 → in-scope 0 → submitted 0 → outcome 0",
     );
     expect(funnel.stdout).toContain("runs 3 (discovery attempts 3)");
-    expect(funnel.stdout).toContain("3 run(s) unavailable");
-    expect(funnel.stdout).toMatch(/account-takeover: raw 1 .* confirmed 1/);
+    expect(funnel.stdout).toContain("cost unavailable");
+    expect(funnel.stdout).toContain("confirmed / 1M tokens 370.37");
+    expect(funnel.stdout).toMatch(/account-takeover: .*raw 1 .* confirmed 1/);
 
     const score = await run(
       "eval",
