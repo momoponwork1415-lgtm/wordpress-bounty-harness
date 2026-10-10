@@ -605,6 +605,93 @@ const programmeRef = {
 };
 
 describe("harness CLI vertical slice", () => {
+  it("prints only digest references for private keys and blind rubric forms", async () => {
+    const { run, keysPath, root } = await harness();
+    const keys = await run("eval", "keys", "--keys", keysPath);
+    expect(keys.code).toBe(0);
+    expect(JSON.parse(keys.stdout)).toMatchObject({
+      schemaVersion: 1,
+      keys: [
+        { caseId: "synthetic-case", digest: expect.stringMatching(/^sha256:/) },
+      ],
+    });
+    expect(keys.stdout).not.toContain("Synthetic property");
+    expect(keys.stdout).not.toContain("includes/synthetic.php");
+    const manifestPath = join(root, "key-digests.json");
+    await writeFile(manifestPath, keys.stdout);
+    const verified = await run(
+      "eval",
+      "score",
+      "--campaign",
+      "synthetic-campaign",
+      "--keys",
+      keysPath,
+      "--case",
+      "synthetic-case",
+      "--manifest",
+      manifestPath,
+    );
+    expect(verified.code).toBe(0);
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        keys: [
+          { caseId: "synthetic-case", digest: `sha256:${"0".repeat(64)}` },
+        ],
+      }),
+    );
+    const rejected = await run(
+      "eval",
+      "score",
+      "--campaign",
+      "synthetic-campaign",
+      "--keys",
+      keysPath,
+      "--case",
+      "synthetic-case",
+      "--manifest",
+      manifestPath,
+    );
+    expect(rejected.code).toBe(2);
+    expect(rejected.stderr).toContain("digest differs");
+    expect(rejected.stderr).not.toContain("Synthetic property");
+    const invalidKeysPath = join(root, "invalid-keys.json");
+    await writeFile(
+      invalidKeysPath,
+      JSON.stringify([{ privateAnswer: "PRIVATE-SYNTHETIC-ANSWER" }]),
+    );
+    const invalid = await run("eval", "keys", "--keys", invalidKeysPath);
+    expect(invalid.code).toBe(2);
+    expect(invalid.stderr).not.toContain("PRIVATE-SYNTHETIC-ANSWER");
+
+    const rubricPath = join(root, "rubric.json");
+    await writeFile(
+      rubricPath,
+      JSON.stringify([
+        {
+          schemaVersion: 1,
+          caseId: "synthetic-case",
+          findingId: "synthetic-finding",
+          location: { rating: "match" },
+          rootCause: { rating: "partial", note: "Private explanation" },
+          attackerConditions: { rating: "unknown" },
+          impact: { rating: "mismatch" },
+          verdict: "partial",
+          assessedBy: "human",
+          assessedAt: "2026-10-10T00:00:00Z",
+        },
+      ]),
+    );
+    const rubric = await run("eval", "rubric", "--file", rubricPath);
+    expect(rubric.code).toBe(0);
+    expect(JSON.parse(rubric.stdout)).toMatchObject({
+      entries: 1,
+      digest: expect.stringMatching(/^sha256:/),
+    });
+    expect(rubric.stdout).not.toContain("Private explanation");
+  });
+
   it("records read-only DB access without storing its account in the ledger", async () => {
     const { run, configPath, prompts, ledger } = await harness();
     await run(

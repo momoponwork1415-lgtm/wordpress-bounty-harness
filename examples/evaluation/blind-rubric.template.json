@@ -1,0 +1,14 @@
+[
+  {
+    "schemaVersion": 1,
+    "caseId": "replace-with-case-id",
+    "findingId": "replace-with-finding-id",
+    "location": { "rating": "unknown" },
+    "rootCause": { "rating": "unknown" },
+    "attackerConditions": { "rating": "unknown" },
+    "impact": { "rating": "unknown" },
+    "verdict": null,
+    "assessedBy": "",
+    "assessedAt": ""
+  }
+]
