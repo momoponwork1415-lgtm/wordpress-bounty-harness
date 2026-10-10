@@ -4,6 +4,14 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import { summarizeRecordedRuntimes } from "../discovery/index.js";
+import {
+  blindRubricEntriesSchema,
+  type BlindRubricEntry,
+} from "../evaluation/blind-rubric.js";
+import {
+  keyDigestManifestSchema,
+  type KeyDigestManifest,
+} from "../evaluation/key-registry.js";
 import type {
   ArmComparison,
   LocationAnswerKey,
@@ -12,6 +20,10 @@ import type {
   SourceLocation,
 } from "../evaluation/index.js";
 import { Evaluation } from "../evaluation/index.js";
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import {
   Ledger,
@@ -126,7 +138,9 @@ const USAGE = [
   "  history status",
   "  runtime check --config <path>",
   "  lab cleanup --config <path> [--remove]",
-  "  eval score --campaign <id> --keys <path> --case <id>",
+  "  eval score --campaign <id> --keys <path> --case <id> [--manifest <path>]",
+  "  eval keys --keys <path> [--manifest <path>]",
+  "  eval rubric --file <path>",
   "  eval compare [--axis history|prompt|continuation] [--campaign <id>]",
   "  eval prospective --advisories <path> [--campaign <id>]",
 ].join("\n");
@@ -144,6 +158,7 @@ const options = {
   reward: { type: "string" },
   by: { type: "string" },
   keys: { type: "string" },
+  manifest: { type: "string" },
   programme: { type: "string" },
   file: { type: "string" },
   "prepared-by": { type: "string" },
@@ -163,6 +178,35 @@ function required(value: string | undefined, name: string): string {
   if (value === undefined || value.length === 0)
     throw new UsageError(`--${name} is required`);
   return value;
+}
+
+async function readPrivateAnswerKeys(
+  path: string,
+  profile: CliProfile,
+): Promise<readonly LocationAnswerKey[]> {
+  try {
+    const value = JSON.parse(await readFile(resolve(path), "utf8")) as unknown;
+    const keys = profile.answerKeys(value);
+    const seen = new Set<string>();
+    for (const key of keys) {
+      if (seen.has(key.caseId)) throw new Error("Duplicate case ID");
+      seen.add(key.caseId);
+    }
+    return keys;
+  } catch {
+    // Validation errors can echo private field values; keep them out of CLI output.
+    throw new UsageError("Private Answer Key file is invalid or unreadable");
+  }
+}
+
+async function readKeyDigestManifest(path: string) {
+  try {
+    return keyDigestManifestSchema.parse(
+      JSON.parse(await readFile(resolve(path), "utf8")) as unknown,
+    );
+  } catch {
+    throw new UsageError("Answer Key digest manifest is invalid or unreadable");
+  }
 }
 
 async function openState(
@@ -659,14 +703,19 @@ export async function runCli(
         return 0;
       case "eval score": {
         const caseId = required(values.case, "case");
-        const keys = environment.profile.answerKeys(
-          JSON.parse(
-            await readFile(resolve(required(values.keys, "keys")), "utf8"),
-          ) as unknown,
+        const keys = await readPrivateAnswerKeys(
+          required(values.keys, "keys"),
+          environment.profile,
         );
         const answerKey = keys.find((key) => key.caseId === caseId);
         if (answerKey === undefined)
           throw new UsageError("The key file has no such case");
+        if (values.manifest !== undefined) {
+          const manifest = await readKeyDigestManifest(values.manifest);
+          const pinned = manifest.keys.find((key) => key.caseId === caseId);
+          if (pinned?.digest !== canonicalDigest(answerKey))
+            throw new UsageError("Answer Key digest differs from the manifest");
+        }
         const score = await new Evaluation({
           ledger: state.ledger,
           store: state.store,
@@ -692,6 +741,62 @@ export async function runCli(
           for (const leadId of score.leadCandidates.unreadable)
             io.stdout(`  unreadable lead ${leadId}`);
         }
+        return 0;
+      }
+      case "eval keys": {
+        const keys = await readPrivateAnswerKeys(
+          required(values.keys, "keys"),
+          environment.profile,
+        );
+        const digests = keys.map((key) => ({
+          caseId: key.caseId,
+          digest: canonicalDigest(key),
+        }));
+        digests.sort((left, right) => left.caseId.localeCompare(right.caseId));
+        // The output is safe to commit; the private key fields are not printed.
+        let manifest: KeyDigestManifest;
+        try {
+          manifest = keyDigestManifestSchema.parse({
+            schemaVersion: 1,
+            keys: digests,
+          });
+        } catch {
+          throw new UsageError("Private Answer Key case IDs are invalid");
+        }
+        if (values.manifest !== undefined) {
+          const pinned = await readKeyDigestManifest(values.manifest);
+          if (
+            pinned.keys.length !== manifest.keys.length ||
+            pinned.keys.some(
+              (key) =>
+                manifest.keys.find((entry) => entry.caseId === key.caseId)
+                  ?.digest !== key.digest,
+            )
+          )
+            throw new UsageError("Answer Key digests differ from the manifest");
+        }
+        io.stdout(canonicalJson(manifest));
+        return 0;
+      }
+      case "eval rubric": {
+        let rubric: BlindRubricEntry[];
+        try {
+          rubric = blindRubricEntriesSchema.parse(
+            JSON.parse(
+              await readFile(resolve(required(values.file, "file")), "utf8"),
+            ) as unknown,
+          );
+        } catch {
+          throw new UsageError(
+            "Private blind rubric file is invalid or unreadable",
+          );
+        }
+        io.stdout(
+          canonicalJson({
+            entries: rubric.length,
+            digest: canonicalDigest(rubric),
+          }),
+        );
         return 0;
       }
       case "eval prospective": {

@@ -148,7 +148,9 @@ harness lab cleanup --config <path> --remove   # 削除
 ```
 harness eval compare [--axis history|prompt|continuation] [--campaign <id>]   # 本番A/B: Trial別の当たり率（Clopper-Pearson 95%）と費用
 harness eval prospective --advisories <path> [--campaign <id>]    # 後日公開されたadvisoryで本番台帳を再採点
-harness eval score --campaign <id> --keys <path> --case <id>      # 答えの鍵でlocation-overlap。held-outは任意
+harness eval score --campaign <id> --keys <path> --case <id> [--manifest <path>] # 答えの鍵でlocation-overlap。held-outは任意
+harness eval keys --keys <path> [--manifest <path>]                # 私的な鍵を検査し、公開可能なcase IDとdigestだけを出す
+harness eval rubric --file <path>                                 # 私的な盲検rubricを検査し、件数とdigestだけを出す
 ```
 
 - **本番A/B**: 同じ対象の独立Trialへ `ablation.axes` で `history`、`prompt`、`continuation` をopt-in割当する。どのarmが見つけても提出できる。旧 `{"axis":"history","armBFraction":0.5}` も読める。
@@ -161,6 +163,12 @@ harness eval score --campaign <id> --keys <path> --case <id>      # 答えの鍵
   - 結果は `found` / `missed` / `unscorable`（採点失敗）/ `predates-run` / `not-searched` に分かれる。`missed` 以外は見逃しに数えない。
   - `blind rubric pairs:` の (advisory, Finding) 対だけを、armや検証結果を見ずに人間がtarget-hit / partial / non-targetで採点する。
 - **held-out**: 既定では回さない。回すならcutoff後の補助4件を優先し、試行数は予算で決める。held-outの結果を見てpromptを変えたら、そのcaseは開発セットへ移す。
+
+### 評価鍵と盲検rubricの登録
+
+Answer Keyの本文は人間が書き、Git外の権限を絞ったJSONファイルに置く。`eval keys --keys <path>` は形式と重複を検査し、case IDと正規化した鍵のSHA-256 digestだけをJSONで出す。この出力だけをGitのdigest manifestに保存できる。`eval keys --keys <path> --manifest <path>` で全鍵のdigestを照合し、`eval score` にも `--manifest <path>` を付けて採点する鍵のdigestを確認できる。鍵本文や原因箇所は標準出力・台帳に出さない。
+
+人間の盲検採点には [入力テンプレート](../examples/evaluation/blind-rubric.template.json) をGit外へコピーし、caseとFindingの対ごとに場所、root cause、攻撃者条件、影響を `match` / `partial` / `mismatch` / `unknown` で評価する。armと検証結果を見ずに `target-hit` / `partial` / `non-target` を人間が決め、記入者と時刻を残す。`eval rubric --file <path>` は必須欄と重複を検査し、件数とdigestだけを出す。記入済みフォームはPrivate EvidenceとしてGit外に保管する。
 
 ## 7. やらないこと
 
