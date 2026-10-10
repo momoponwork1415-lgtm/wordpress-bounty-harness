@@ -1,146 +1,109 @@
 # アーキテクチャ図
 
-理解用。境界の詳細は [SPEC.md](SPEC.md) 第4節・第5節、流れの説明は [DESIGN-WALKTHROUGH.md](DESIGN-WALKTHROUGH.md)。図はGitHubがそのまま描く（Mermaid）。
+目標構成を示す。実装済みとの差は [実装計画](IMPLEMENTATION-PLAN.md)、規則は [SPEC](SPEC.md) と [ADR 0016](adr/0016-root-plus-three-first-vertical-slice.md)。本番へ進む条件は [TranslatePressベンチマーク](TRANSLATEPRESS-BENCHMARK.md)。
 
-## 図1. 実行時の構成（何がどこで動き、何と通信できるか）
+## 0. 開発から本番への切り替え
+
+```mermaid
+flowchart LR
+  START([開始]) --> BENCH[TranslatePress 3.2.6から開始<br/>必要なら3.3.1、最大2 Trial]
+  BENCH --> GATE{1件を新Labで確認し<br/>修正版で同じ経路が不成立?}
+  GATE -->|いいえ| FIX[故障箇所を診断して必要分だけ再試行]
+  GATE -->|はい| PILOT[自動選定した最新版3対象<br/>本番探索パイロット]
+  PILOT -->|実Finding| SUBMIT[最新版確認・重複照合・証拠<br/>人間Lab再現の後に提出]
+  PILOT --> METRICS[費用と歩留まりから次を決める]
+```
+
+ベンチマークは配線の確認であり、発見率の証明ではない。レポートの完全自動化は本番探索開始の条件ではなく、実Findingが出たら提出前に完成させる。
+
+## 1. どこから始まるか
+
+```mermaid
+flowchart LR
+  START([開始]) --> CHOOSE{対象の種類}
+  CHOOSE -->|開発・検証| PIN[人間が公開済みのslugと版を指定]
+  CHOOSE -->|実運用| SEL[方針と公開データから自動選定]
+  PIN & SEL --> SNAP[plugin・WordPress core・必要な依存を固定]
+  SNAP --> LAB[gVisor Labを起動]
+  LAB --> DISC[Root＋最大3 subagentで探索]
+  DISC -->|Finding| VERIFY[別Labで独立検証]
+  VERIFY -->|confirmed| LATEST[公開中の最新版で再検証]
+  LATEST --> DEDUPE[重複・scope照合]
+  DEDUPE --> REPORT[証拠付き英語レポートJSON]
+  REPORT --> HUMAN[人間がLabで手動再現・査読]
+  HUMAN --> APPROVE[人間が外部送信を承認・実行]
+  DISC -->|Lead| NEXT[次の探索の問いとして保存]
+  VERIFY -->|incomplete| RETRY[理由付きで再検証候補に保存]
+```
+
+開発対象では選定を待たない。報告候補は最新版で成立し、証拠と人間の手動再現を備えたものだけ。
+
+## 2. 1つの協調Trial
 
 ```mermaid
 flowchart TB
-  subgraph HOST[ホスト（WSL2 / Linux）]
-    CLI[cli]
-    SEL[selection]
-    SNAP[snapshot]
-    LED[(ledger<br/>SQLite 追記専用)]
-    PE[(Private Evidence<br/>Git外 content-addressed)]
-    BRK[egress broker<br/>provider認証情報はここだけ]
-    REV[review CLI]
-    EVAL[evaluation]
-  end
-  subgraph RUN1[gVisor: discovery run #n（runごとに使い捨て）]
-    AG1[agent container<br/>Codex CLI + 読み取り専用source<br/>prompt / trust境界 / 担当file / 履歴]
-    LAB1[Lab container<br/>WordPress + MySQL + plugin<br/>canary / subscriber account]
-    AG1 <-->|HTTP（internal networkのみ）| LAB1
-  end
-  subgraph RUN2[gVisor: verification（Findingごとに使い捨て）]
-    VER[Verifier container<br/>Finding + source だけ]
-    LAB2[新しいLab]
-    JUDGE[判定器（Harnessのコード）<br/>canary回収を観測]
-    VER <-->|HTTP| PROXY[Harness HTTP捕捉proxy]
-    PROXY <-->|HTTP| LAB2
-    JUDGE -->|読む| LAB2
-  end
-  WPORG[(WordPress.org)] -->|zip取得| SNAP
-  SEL --> SNAP --> RUN1
-  AG1 -->|API呼び出し（認証なし）| BRK -->|認証付き| OAI[(provider API)]
-  VER --> BRK
-  RUN1 -->|Finding| RUN2
-  RUN1 --> LED
-  RUN2 --> LED
-  RUN1 --> PE
-  RUN2 --> PE
-  LED --> REV
-  PE --> REV
-  LED -.読むだけ.-> EVAL
-  HUMAN((人間)) <--> REV
-  HUMAN -->|手で送信| PROG[(Wordfence / Patchstack)]
-  PROG -.転帰を人間が記録.-> REV
+  INPUT[固定source・短い目的prompt・trust境界・Lab] --> ROOT[Root agent<br/>問いを立て分担し統合]
+  ROOT --> A[subagent 1]
+  ROOT --> B[subagent 2]
+  ROOT --> C[subagent 3]
+  A & B & C --> RESULTS[Finding / Lead / coverageを個別保存]
+  ROOT --> RESULTS
+  RESULTS --> LEDGER[(台帳にはdigestだけ)]
+  RESULTS --> PRIVATE[(Private Evidenceに本文)]
+  ROOT --> FINAL[最終JSON]
+  FINAL -.整形失敗でも個別成果は残す.-> RESULTS
 ```
 
-- agentとLabは同じrunのinternal networkだけで通信する。agentから外へ出られるのはbroker経由のprovider APIだけ。
-- agent / Verifierに渡る認証情報は未認証・subscriber・customerのLabアカウントだけ。管理者とcontributor以上は渡らない。
-- 台帳はdigest参照だけを持ち、payloadや画面画像はPrivate Evidenceに置く。
+Harnessは人数上限、隔離、時間、記録、停止を管理する。Rootが調べ方を決め、Harnessのpromptに固定役割や探索手順を埋め込まない。同じ版の別Trialを回す外側のループは残すが、回数と停止値は実測後に決める。
 
-## 図2. 契約の流れ（モジュール間で渡るもの）
+## 3. 実行境界
 
 ```mermaid
 flowchart LR
-  P[/方針ファイル<br/>人間が編集/] --> SEL[selection]
-  SEL -->|TargetSelection v1| SNAP[snapshot]
-  TB[/trust境界宣言<br/>人間が書く/] --> SNAP
-  HIST[(Wordfence履歴DB<br/>ローカルmirror)] -->|時点で切った履歴| SNAP
-  SNAP -->|CampaignInput v1<br/>digest / 宣言 / 履歴 / prompt digest / 停止規則| DISC[discovery]
-  DISC -->|Finding v1 × 0..n| VERI[verification]
-  VERI -->|VerificationResult v1<br/>confirmed / contradicted / incomplete<br/>+ 再現パッケージref| LED[(ledger)]
-  DISC --> LED
-  LED -->|queue| REV[review]
-  REV -->|ReviewDecision v1| LED
-  REV -->|SubmissionCandidate v1| AUTH[External Action Authorization]
-  AUTH --> LED
-  LED -.read.-> EVAL[evaluation]
-  KEY[/答えの鍵<br/>評価側だけ/] --> EVAL
-```
-
-## 図3. Campaignと探索runの中身
-
-```mermaid
-flowchart TB
-  subgraph CAMPAIGN[Campaign（対象1つ）]
-    direction TB
-    PART[profileが保存先成分の<br/>scopeを作る] --> Q[Trial待ち行列<br/>既定上限6]
-    Q --> R1[Trial 1] & R2[Trial 2]
-    R1 & R2 --> STOP{新規FindingとLeadなしが<br/>3 Trial連続?}
-    STOP -->|いいえ| Q
-    STOP -->|はい| END[停止・台帳へ]
+  subgraph HOST[ホスト]
+    CLI[薄いCLI]
+    BROKER[認証ブローカー]
+    LEDGER[(追記専用台帳)]
+    PRIVATE[(Git外のPrivate Evidence)]
   end
-  subgraph ONERUN[Trial 1つの中（agentの裁量。Harnessは手順を指定しない）]
-    direction TB
-    IN[受け取る: 版付きprompt / trust境界 /<br/>scope / Lab + subscriber認証 / 時点で切った履歴] --> AG[探索エージェントが手順を決める]
-    AG --> OUT[出力: Finding[] / Lead[] + coverage]
-    OUT -->|opt-inで根拠あるLeadがあるとき| CONT[別containerで近傍を1 hop継続<br/>同じTrialに集計]
+  subgraph DISC[gVisor使い捨て探索環境]
+    AGENTS[Root＋最大3 subagent]
+    LAB1[WordPress＋MySQL Lab]
+    SOURCE[読み取り専用source]
+    AGENTS <-->|内部HTTP| LAB1
+    SOURCE --> AGENTS
   end
-  R1 -.-> ONERUN
+  subgraph VERIFY[gVisor使い捨て検証環境]
+    VERIFIER[独立Verifier]
+    PROXY[Harness HTTP捕捉proxy]
+    LAB2[新しいWordPress Labとcanary]
+    VERIFIER --> PROXY --> LAB2
+  end
+  CLI --> DISC
+  CLI --> VERIFY
+  AGENTS -->|認証情報なしのAPI要求| BROKER
+  VERIFIER --> BROKER
+  BROKER --> PROVIDER[(provider API)]
+  DISC & VERIFY --> LEDGER
+  DISC & VERIFY --> PRIVATE
 ```
 
-- Trialは互いを知らない。Leadの継続は同じTrial内の1 hopで、独立試行数を増やさない。
-- 1回で見つかる確率 p のとき、k 回で1度でも見つかる確率は 1 − (1 − p)^k。
+対象コードはホストで実行しない。エージェントに渡すLab資格情報は未認証・subscriber・customerの範囲だけ。provider以外の外向き通信は認めない。
 
-## 図4. 検証: Verifierと判定器の分業
+## 4. 「発見」と「確認」と「提出」
 
 ```mermaid
-flowchart LR
-  F[Finding] --> NL[新しいLab供給<br/>同じsnapshot digest / 既定設定 / canary再配置]
-  NL --> V[Verifier（LLM、新しいコンテナ）<br/>会話履歴なし<br/>役割: 手順を整える・反証する<br/>再探索はしない]
-  V --> EX[手順を実行<br/>subscriber以下の認証だけ]
-  EX --> J[判定器（コード）<br/>分類ごとの成功条件]
-  J -->|nonce回収あり| C[runtime-confirmed<br/>+ 観測した条件<br/>+ 再現パッケージ生成]
-  J -->|手順完走・条件なし・反証あり| X[contradicted]
-  J -->|環境 / 前提 / 観測 / 証拠 / digest不一致 / 判定器なし| I[incomplete<br/>+ 理由コード + 次の手]
-  C & X & I --> LED[(ledger<br/>digest一致時のみ有効)]
+stateDiagram-v2
+  [*] --> Finding: Rootまたは子がsource上の経路を主張
+  Finding --> Incomplete: Lab・手順・証拠・digestの不足
+  Finding --> Contradicted: 手順完走後に反証
+  Finding --> Confirmed: Harness判定器がnonce canaryを回収
+  Incomplete --> Finding: 別Labで再試行
+  Confirmed --> Latest: 公開中の最新版で再検証
+  Latest --> Review: scope・重複・英語文案と証拠
+  Review --> HumanReproduced: 人間がLabで同じ手順を再現
+  HumanReproduced --> Authorized: 版と送信先を指定して承認
+  Authorized --> Submitted: 人間が送信
 ```
 
-## 図5. 対象範囲を効かせる4か所
-
-```mermaid
-flowchart LR
-  S[selection<br/>除外リスト・閾値<br/>機械的] --> L[lab<br/>subscriber以下の認証だけ<br/>既定設定<br/>機械的] --> D[discovery<br/>promptで分類と報奨順を誘導<br/>誘導のみ] --> VJ[verification<br/>判定器の条件=受理条件<br/>機械的] --> RS[review<br/>scope評価は観測と規則から<br/>Wordfence / Patchstack別<br/>機械的]
-```
-
-## 図6. Funnel（台帳から読む）
-
-```mermaid
-flowchart LR
-  A[raw Finding] --> B[verifier通過] --> C{判定}
-  C --> C1[runtime-confirmed]
-  C --> C2[contradicted]
-  C --> C3[incomplete]
-  C1 --> D[人間レビュー済]
-  C3 -->|再検証| C
-  D --> E{scope}
-  E --> E1[Wordfence in-scope]
-  E --> E2[Patchstack in-scope]
-  E --> E3[out / ambiguous]
-  E1 & E2 --> G[submitted] --> H[outcome<br/>triaged / resolved / duplicate / informative / N/A / rejected]
-```
-
-## 図7. 評価は本番の中で行う
-
-```mermaid
-flowchart TB
-  T[本番対象] --> A[独立Trial: arm A]
-  T --> B[独立Trial: arm B]
-  A & B --> V[検証 → 台帳（履歴 / prompt / 継続のopt-in軸を記録）]
-  V --> SUB[どちらが見つけても提出]
-  V --> CMP[対象をまたいで対で集計<br/>当たり率と費用、区間付き]
-  V -.数か月後.-> PRO[前向き評価<br/>公開されたadvisoryで再採点<br/>見逃しを数える]
-  V --> OUT[提出転帰<br/>収益の式の各項]
-```
+`Finding` は主張、`runtime-confirmed` は技術的確認、`Submission Candidate` は提出先の条件を満たした文案付きの候補で、それぞれ別の記録として扱う。
