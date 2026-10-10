@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "selectionPolicyPath": "examples/translatepress-3.2.6/selection.json",
+  "selectionPolicyPath": "examples/translatepress-3.2.6/selection-three-trials.json",
   "promptId": "short-objective-managed-v4",
   "programmeBoundary": {
     "version": "wordfence-2026-10-08",

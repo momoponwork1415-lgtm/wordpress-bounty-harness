@@ -19,4 +19,4 @@ node dist/cli/main.js campaign run translatepress-multilingual --campaign <一�
 
 `*-comment-fixture.json` の2設定は別条件として最初の公開投稿に無害な承認済みコメントを1件追加する。どちらも同じLab条件であり、過去のcommentなしTrialと混ぜて比較しない。
 
-`campaign-short-managed-v4-translation-data.json` は版付きの通常機能シナリオ `translatepress-translation-data-v1` を選び、開発用に最大3 Trialを設定する。二次言語 `fr_FR`、公開投稿、通常の翻訳辞書データ1行、承認済みコメント1件を探索・検証の両 Lab に用意する。シナリオの定義と digest pin は `src/profiles/wordpress/lab/scenarios.ts` にある。既存 campaign をこの設定で再実行すると、同じ snapshot の未完了 Finding を新しい Lab setup digest で再検証できる。
+`campaign-short-managed-v4-translation-data.json` は版付きの通常機能シナリオ `translatepress-translation-data-v1` を選び、`selection-three-trials.json` で開発用の対象予算を3 Trialにする。二次言語 `fr_FR`、公開投稿、通常の翻訳辞書データ1行、承認済みコメント1件を探索・検証の両 Lab に用意する。シナリオの定義と digest pin は `src/profiles/wordpress/lab/scenarios.ts` にある。既存 campaign をこの設定で再実行すると、同じ snapshot の未完了 Finding を新しい Lab setup digest で再検証できる。
