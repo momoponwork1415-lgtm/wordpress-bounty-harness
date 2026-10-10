@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-10",
+  "scope": "public-first-party-plugin-sources-and-common-core",
+  "dependencyStatus": "case-specific-dependencies-and-setup-unverified",
+  "wordpressCore": {
+    "version": "6.8.3",
+    "image": "wordpress@sha256:30bff39330d1693b0ce13d32fc9b7bb67193064f040b7d60d3494e136fa599d4",
+    "sourceDigest": "sha256:e6bacb856fb2f22a1024acbd47997bc08c2b85fda30bbe5147761a72468df4a7",
+    "entries": 3232,
+    "bytes": 74950851
+  },
+  "plugins": [
+    {
+      "slug": "brizy",
+      "version": "2.8.11",
+      "kind": "wordpress-org-zip",
+      "sourceUrl": "https://downloads.wordpress.org/plugin/brizy.2.8.11.zip",
+      "archiveDigest": "sha256:e358ec349bc9bdd48c67cc6d47f388e9c872a084bdef7e9d27e9602ef0407010",
+      "bytes": 18529594
+    },
+    {
+      "slug": "custom-facebook-feed",
+      "version": "4.13.0",
+      "kind": "wordpress-org-zip",
+      "sourceUrl": "https://downloads.wordpress.org/plugin/custom-facebook-feed.4.13.0.zip",
+      "archiveDigest": "sha256:6f792dfe3c7eb6da5dc8148662e31087aa9982dc79b50e3f56803e3277998fc0",
+      "bytes": 4999634
+    },
+    {
+      "slug": "relevanssi",
+      "version": "4.28.3",
+      "kind": "wordpress-org-zip",
+      "sourceUrl": "https://downloads.wordpress.org/plugin/relevanssi.4.28.3.zip",
+      "archiveDigest": "sha256:d4e8c443cbde3964f7912543d0f6e0de994f965c9082a4247b44838278464689",
+      "bytes": 428408
+    },
+    {
+      "slug": "simply-schedule-appointments",
+      "version": "1.6.10.0",
+      "kind": "wordpress-org-zip",
+      "sourceUrl": "https://downloads.wordpress.org/plugin/simply-schedule-appointments.1.6.10.0.zip",
+      "archiveDigest": "sha256:270f432a73a6dbd22b9e986b2f450713147eb3e16bcb2f17778a6adbe0dc0f40",
+      "bytes": 6300394
+    },
+    {
+      "slug": "translatepress-multilingual",
+      "version": "3.2.6",
+      "kind": "wordpress-org-zip",
+      "sourceUrl": "https://downloads.wordpress.org/plugin/translatepress-multilingual.3.2.6.zip",
+      "archiveDigest": "sha256:eb0a76b6cb3364b5984c1afa5d519d14927a88c1bda6c441f03ea266024a741e",
+      "bytes": 8270397
+    },
+    {
+      "slug": "translatepress-multilingual",
+      "version": "3.3.1",
+      "kind": "wordpress-org-zip",
+      "sourceUrl": "https://downloads.wordpress.org/plugin/translatepress-multilingual.3.3.1.zip",
+      "archiveDigest": "sha256:be926435d3c919038e60b45df4fc0d53b1f7e1e8d089599f1a88941c1203b985",
+      "bytes": 8297496
+    },
+    {
+      "slug": "unlimited-elements-for-elementor",
+      "version": "2.0.16",
+      "kind": "wordpress-org-svn-export",
+      "sourceUrl": "https://plugins.svn.wordpress.org/unlimited-elements-for-elementor/trunk/",
+      "revision": 3628543,
+      "sourceTreeDigest": "sha256:5d7e28c494692f4f9efaf000ea94f2e29c2172b0af5ae2a4400bc104ef8882e8",
+      "entries": 1895,
+      "bytes": 19448933
+    }
+  ]
+}
