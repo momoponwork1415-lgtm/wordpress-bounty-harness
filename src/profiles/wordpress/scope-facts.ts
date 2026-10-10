@@ -35,6 +35,8 @@ function observationsOf(
       return ["canary-file-read", ...control];
     case "canary-file-deleted":
       return ["canary-file-deleted", ...control];
+    case "sensitive-canary-access":
+      return ["sensitive-canary-access"];
     case "canary-row-read":
     case "canary-table-write":
       return ["canary-row-access"];

@@ -149,6 +149,13 @@ async function fixture(
               roleBaseline: {},
               sqlCanary: { table: "wbh_canary", value: "fake-value" },
               fileCanaries: [],
+              sensitiveCanaries: [
+                {
+                  kind: "private-post",
+                  objectId: "19",
+                  value: "wbh-sensitive-secret-fixture",
+                },
+              ],
               option: "wbh_canary_fake-nonce",
               postId: "1",
               postMeta: "wbh_canary_fake-nonce",
@@ -186,14 +193,18 @@ async function fixture(
 
 describe("CodexVerifier.attempt", () => {
   it("passes the Lab's read-only database endpoint to the verifier transport", async () => {
-    const f = await fixture([
-      {
-        "http.json": JSON.stringify({
-          exchanges: [{ request: {}, response: { body: "ordinary" } }],
-        }),
-        "steps.md": "Step",
-      },
-    ]);
+    const f = await fixture(
+      [
+        {
+          "http.json": JSON.stringify({
+            exchanges: [{ request: {}, response: { body: "ordinary" } }],
+          }),
+          "steps.md": "Step",
+        },
+      ],
+      undefined,
+      "sqli",
+    );
     Object.assign(f.lab, {
       database: {
         host: "database",
@@ -230,6 +241,30 @@ describe("CodexVerifier.attempt", () => {
     expect(
       JSON.stringify(f.ledger.read({ type: "verifier-run-finished" })),
     ).not.toContain("fixture_only");
+  });
+
+  it("withholds the database and protected canaries from a sensitive-object verifier", async () => {
+    const f = await fixture(
+      [{ precondition: "The synthetic route needs another step" }],
+      undefined,
+      "sensitive-object-access",
+    );
+    Object.assign(f.lab, {
+      database: {
+        host: "database",
+        ipv4: "172.20.0.3",
+        port: 3306,
+        name: "wordpress",
+        readOnlyAccount: {
+          username: "fixture_reader",
+          password: "fixture_only",
+        },
+      },
+    });
+    await f.verifier.attempt({ finding: f.finding, lab: f.lab });
+    expect(f.runs[0]?.lab.database).toBeUndefined();
+    expect(f.runs[0]?.prompt).not.toContain("fixture_reader");
+    expect(f.runs[0]?.prompt).not.toContain("wbh-sensitive-");
   });
 
   it.each([

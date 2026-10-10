@@ -200,6 +200,12 @@ export function assessWordpressScope(
       return result(programmeId, "ambiguous", "category-rule-undefined");
     if (required.some((item) => !parsed.observations.includes(item)))
       return result(programmeId, "ambiguous", "observation-missing");
+    if (parsed.category === "sensitive-object-access")
+      return result(
+        programmeId,
+        "ambiguous",
+        "object-sensitivity-needs-review",
+      );
     return result(programmeId, "in-scope", "policy-conditions-met");
   });
 }

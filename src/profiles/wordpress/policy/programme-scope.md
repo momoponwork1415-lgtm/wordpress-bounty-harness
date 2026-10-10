@@ -92,4 +92,5 @@
 - CSRFはWordfenceでは対象外、Patchstackでは受理種別の書き込み系に連鎖する場合だけ対象。
 - 両プログラムとも「最新版で成立すること」「既定設定または一般的な利用範囲で成立すること」を要する。提出直前に最新版のsnapshotで再検証し、設定前提を再現パッケージに明記する。
 - `runtime-confirmed` と対象範囲は別に記録する。対象外でもVerified Vulnerabilityは残す。
+- `sensitive-canary-access` は保護対象 canary を低権限または未認証のHTTP応答から回収した判定器の観測名。対象の種類は条件に記録し、機微性を確認するまでscopeは `ambiguous` とする。
 - 公開資料間で矛盾する場合は `ambiguous` にして人間へ回す。

@@ -354,6 +354,107 @@ function canaryJudge(
   };
 }
 
+/** Only a captured response to an actual low-privilege HTTP request can prove disclosure. */
+function sensitiveObjectJudge(options: Options) {
+  return canaryJudge(
+    options,
+    "wordpress-sensitive-object-canary",
+    async ({ lab, recipeDigest, canaries, httpEvidence }) => {
+      if (canaries.sensitiveCanaries.length === 0)
+        return {
+          status: "incomplete",
+          reason: "precondition",
+          nextStep: "Provision protected objects in a verification Lab",
+        };
+      if (
+        httpEvidence.capture !== "harness-captured" ||
+        httpEvidence.http === null
+      )
+        return missingHttp;
+      const route = await routeConditions(options.store, recipeDigest);
+      if (route === null) return missingRoute;
+      for (const canary of canaries.sensitiveCanaries) {
+        if (!returnedOnly(httpEvidence.http, canary.value)) continue;
+        for (const exchange of httpEvidence.http.exchanges) {
+          if (!exchange.response.body.includes(canary.value)) continue;
+          const captured = capturedExchangeSchema.safeParse(exchange);
+          if (!captured.success) return missingHttp;
+          const headers = Object.fromEntries(
+            Object.entries(captured.data.request.headers).map(
+              ([name, value]) => [name.toLowerCase(), value],
+            ),
+          );
+          if (
+            Object.keys(headers).some((name) =>
+              /authorization|api.?key|token|nonce/.test(name),
+            )
+          )
+            return {
+              status: "incomplete",
+              reason: "evidence",
+              nextStep: "Repeat without an unverified authentication header",
+            };
+          const cookie = headers.cookie;
+          if (cookie !== undefined && typeof cookie !== "string")
+            return missingHttp;
+          let attackerRole = "unauthenticated";
+          if (typeof cookie === "string") {
+            const logins: string[] = [];
+            for (const part of cookie.split(";").map((value) => value.trim())) {
+              if (
+                /^wordpress_test_cookie=/.test(part) ||
+                /^wp-settings-\d+=/.test(part)
+              )
+                continue;
+              const match =
+                /^(wordpress_logged_in_|wordpress_sec_|wordpress_[a-f0-9]+)([^=]*)=([A-Za-z0-9%|._@+-]+)$/.exec(
+                  part,
+                );
+              if (match === null) return missingHttp;
+              const scheme =
+                match[1] === "wordpress_logged_in_"
+                  ? "logged_in"
+                  : match[1] === "wordpress_sec_"
+                    ? "secure_auth"
+                    : "auth";
+              const session = await options.lab.observeSessionUser(
+                lab,
+                match[3]!,
+                scheme,
+              );
+              if (session.status === "unavailable") return unavailable;
+              if (session.status === "user") logins.push(session.login);
+            }
+            const subscriber = lab.attackerAccounts.subscriber.username;
+            const customer = lab.attackerAccounts.customer?.username;
+            if (
+              logins.length > 0 &&
+              logins.every((login) => login === subscriber)
+            )
+              attackerRole = "subscriber";
+            else if (
+              customer !== undefined &&
+              logins.length > 0 &&
+              logins.every((login) => login === customer)
+            )
+              attackerRole = "customer";
+            else if (logins.length > 0) continue;
+          }
+          return {
+            conditions: {
+              ...route,
+              observedVia: "sensitive-canary-access",
+              objectKind: canary.kind,
+              attackerRole,
+            },
+          };
+        }
+      }
+      return null;
+    },
+  );
+}
+
 function principalJudge(
   options: Options,
   id: string,
@@ -664,6 +765,7 @@ export function createWordPressJudges(
   const fileDelete = fileDeleteJudge(options);
   const option = optionJudge(options);
   const storedScript = storedScriptJudge(options);
+  const sensitiveObject = sensitiveObjectJudge(options);
   return {
     for(finding) {
       switch (finding.impact) {
@@ -689,6 +791,8 @@ export function createWordPressJudges(
           return option;
         case "stored-xss":
           return storedScript;
+        case "sensitive-object-access":
+          return sensitiveObject;
         default:
           return null;
       }
