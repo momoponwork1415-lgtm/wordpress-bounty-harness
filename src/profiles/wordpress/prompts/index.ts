@@ -12,7 +12,6 @@ export const WORDPRESS_DISCOVERY_PROMPT_IDS = [
 export const WORDPRESS_DISCOVERY_ASSET_IDS = [
   ...WORDPRESS_DISCOVERY_PROMPT_IDS,
   "trust-boundary-v1",
-  "file-assignment-v1",
 ] as const;
 
 export type WordPressDiscoveryAssetId =
@@ -36,7 +35,6 @@ export async function loadWordPressDiscoveryAsset(
     case "short-objective-v2":
     case "wp2shell-single-http-v2":
     case "trust-boundary-v1":
-    case "file-assignment-v1":
       fileName = `${id}.md`;
       break;
     default:

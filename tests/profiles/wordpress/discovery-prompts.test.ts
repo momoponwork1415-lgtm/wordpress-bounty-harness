@@ -25,7 +25,7 @@ describe("WordPress discovery prompt assets", () => {
       /\b(?:curl|python|php)\s+-|\/wp-admin\/admin-ajax\.php|<script\b/i,
     );
   });
-  it("publishes versioned prompt variants and the shared boundary and assignment rules", async () => {
+  it("publishes versioned prompt variants and the shared trust boundary", async () => {
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       "wp2shell-derived-v1",
       "short-objective-v1",
@@ -33,7 +33,6 @@ describe("WordPress discovery prompt assets", () => {
       "short-objective-v2",
       "wp2shell-single-http-v2",
       "trust-boundary-v1",
-      "file-assignment-v1",
     ]);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-derived-v1",
@@ -108,18 +107,11 @@ describe("WordPress discovery prompt assets", () => {
     }
   });
 
-  it("defines the human trust boundary and entry-point work units", async () => {
+  it("defines the human trust boundary", async () => {
     const trust = await loadWordPressDiscoveryAsset("trust-boundary-v1");
     expect(trust.text).toContain("human operator reviews and versions");
     expect(trust.text).toContain("contributor");
     expect(trust.text).toContain("administrator");
     expect(trust.text).toContain("unfiltered_html");
-
-    const assignment = await loadWordPressDiscoveryAsset("file-assignment-v1");
-    expect(assignment.text).toContain("hook callback");
-    expect(assignment.text).toContain("registered route");
-    expect(assignment.text).toContain("AJAX action");
-    expect(assignment.text).toContain("shared by several units");
-    expect(assignment.text).toContain("snapshot digest");
   });
 });

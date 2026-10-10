@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import type { ProspectiveAdvisory } from "../../evaluation/index.js";
 import { wordpressAnswerKeySchema } from "./answer-key.js";
-import { intervalContains } from "./wordfence-intelligence/plugin-records.js";
+import { intervalContains } from "./plugin-version.js";
 
 const nonEmpty = z.string().trim().min(1);
 
