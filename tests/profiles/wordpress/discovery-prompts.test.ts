@@ -33,7 +33,9 @@ describe("WordPress discovery prompt assets", () => {
       "short-objective-v2",
       "short-objective-managed-v1",
       "short-objective-managed-v2",
+      "short-objective-managed-v3",
       "wp2shell-single-http-v2",
+      "wp2shell-bounty-v1",
       "trust-boundary-v1",
       "file-assignment-v1",
     ]);
@@ -44,7 +46,9 @@ describe("WordPress discovery prompt assets", () => {
       "short-objective-v2",
       "short-objective-managed-v1",
       "short-objective-managed-v2",
+      "short-objective-managed-v3",
       "wp2shell-single-http-v2",
+      "wp2shell-bounty-v1",
     ]);
 
     for (const id of WORDPRESS_DISCOVERY_ASSET_IDS) {
@@ -67,10 +71,14 @@ describe("WordPress discovery prompt assets", () => {
         "sha256:58460c592c424fe752c8e9fdf0b53b686302ee1e11d72a48a06dc9109a496215",
       "short-objective-managed-v2":
         "sha256:05331cbdf24b49b6352020ce6faf84f5d005e275d0665f88287c9ae7c4d54825",
+      "short-objective-managed-v3":
+        "sha256:989cec70830ff7d145e3c72fd9a984cacd253d181c253851e070f3bff50e6bab",
       "wp2shell-derived-v2":
         "sha256:f9d90b8ad1dd955527756bf9ad9869624cff999dd7fab3908a7f050b1cd422be",
       "wp2shell-single-http-v2":
         "sha256:a466aa5d5abba7ff18b70135d3ae7730880674652c87fd65feaa3534765904fe",
+      "wp2shell-bounty-v1":
+        "sha256:66300d6e0d002986d61340ff3801fbf5356c8b03d6843d59735181c5accf626e",
     } as const;
     for (const [id, digest] of Object.entries(pins)) {
       const asset = await loadWordPressDiscoveryAsset(id as keyof typeof pins);

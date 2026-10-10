@@ -14,3 +14,5 @@ node dist/cli/main.js campaign run translatepress-multilingual --campaign <一�
 固定版対照は `review reverify --campaign <ID> --finding <ID> --config examples/translatepress-3.2.6/campaign.json --version 3.3`。これは `fixed-version` として台帳へ残り、最新版での提出前再確認とは区別される。
 
 `campaign-managed.json` は診断用のopt-in変種。短い目的は維持し、Rootが選ぶ問いを3子へ分担する管理指示と子のJSON出力契約だけを追加した。旧 `short-objective-v2` の本文とdigestは変えず、既定promptにもしていない。短い目的promptで子が動かなかった実測を受けて試す場合、別のキャンペーンIDで条件差を記録する。
+
+`campaign-short-managed-v3.json` と `campaign-wp2shell-bounty.json` はADR 0017の新しい比較用設定。二次言語 `fr_FR` を両方のLabで有効にし、prompt以外を揃える。実行前に二次言語の翻訳とXSSの発火先がLabにあることを確認する。両armは別のcampaign IDで実行し、旧Trialの結果を比較分母に含めない。

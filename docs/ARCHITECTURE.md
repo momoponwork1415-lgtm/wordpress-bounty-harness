@@ -42,7 +42,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-  INPUT[固定source・短い目的prompt・trust境界・Lab] --> ROOT[Root agent<br/>問いを立て分担し統合]
+  INPUT[固定source・WP2Shell報奨prompt・trust境界・Lab] --> ROOT[Root agent<br/>問いを立て分担し統合]
   ROOT --> A[subagent 1]
   ROOT --> B[subagent 2]
   ROOT --> C[subagent 3]

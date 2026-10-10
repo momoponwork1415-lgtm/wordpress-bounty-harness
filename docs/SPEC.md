@@ -52,7 +52,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、canaryの配置先（options、post meta、ファイル、canaryユーザー） |
 | 判定器集合 | 第7節の種別別判定器 |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
-| prompt雛形 | 短い目的prompt（既定 `short-objective-v2`）と版付きの管理指示変種、trust境界宣言の雛形。固定手順やchecklistは書かない |
+| prompt雛形 | 既定 `short-objective-managed-v3` と比較用 `wp2shell-bounty-v1`、過去の版付きprompt、trust境界宣言の雛形。ADR 0017 |
 | source補助 | 保存先のwrite / readをつなぐ索引と登録入口。Rootと子が参照できるが、固定した役割分担の命令にはしない |
 | Lead型 | sourceに根拠があり、影響までの辺が1つ足りないprimitiveの分類と記録 |
 | 評価対象の表現 | 開発対象のslug、版、修正版、影響分類。正解表の手入力は初期受入条件にしない |
@@ -79,11 +79,11 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 - 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
 - 対象の公開履歴: ローカルWordfence履歴DBから、snapshotの版より前（評価runではheld-outの公開日より前）に公開された対象プラグインの記録を抽出して渡す。内容は種別、影響版、修正版、公開日、公開記録のタイトル、修正版との差分で変わったファイルの一覧まで。PoC・payload・再現手順は含めない。runの一部にだけ渡す分担にでき、渡した・渡さないを `CampaignInput` に記録する（ADR 0012）。
-- 入力: 版とdigestを記録した短い目的prompt（既定 `short-objective-v2`）、人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、参照用の保存先索引、Lab HTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB account。管理指示を書くprompt変種はopt-inの本番A/B軸に限り、探索手順・checklist・役割分担・段階は書かない。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
+- 入力: 版とdigestを記録した `short-objective-managed-v3`（既定）または `wp2shell-bounty-v1`（比較用、ADR 0017）、人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、参照用の保存先索引、Lab HTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB account。どちらのpromptでも分担する具体的な問いはRootが決める。WP2Shell変種は多様な仮説の並行探索、複数wave、反証と連鎖の統合もRootへ求める。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
 - 許可する操作: 固定sourceの読み取り、LabへのHTTP、Lab DBのRO accountによる読み取り。探索runにcanaryは渡さず、canaryの発行と確認は検証段階のHarnessが行う。外向き通信は認証ブローカー経由のprovider APIだけ。
 - 構成: 1 TrialにRoot 1つと最大3つのsubagentを置き、Rootが調べる問いと分担を決める。Harnessは人数上限、隔離、実行時間、証拠保存、停止を管理する。子の有効なFindingとLeadは個別にPrivate Evidenceへ保存し、Rootの最終JSONの整形失敗で消さない。
 - 出力: `Finding[]`（0件可）、`Lead[]`（0件可）、調べた範囲・調べなかった範囲の短い記述。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。
-- Campaign停止規則: provider limitでは新規Trialを止め、同じcampaign IDで未消費分を再開する。協調Trialを同じ版で何回回すか、無成果の連続何回で別対象へ移るかは初回実測後に決める。旧単独Trialの上限6・連続3は協調Trialの既定ではない。
+- Campaign停止規則: provider limitでは新規Trialを止め、同じcampaign IDで未消費分を再開する。WP2Shell変種は優先Findingがなければ少なくとも実時間30分と異なる2 waveを求めるが、現行Harnessは下限を強制しないため実測の早期終了を監視する。協調Trialを同じ版で何回回すか、無成果の連続何回で別対象へ移るかは初回実測後に決める。旧単独Trialの上限6・連続3は協調Trialの既定ではない。
 - 同時実行: 最初は協調Trialを1つずつ回す。Rootと子のprovider要求総数・usage・wallを観測し、安全に増やせることを確かめてから対象間の並列数を決める。
 - 記録する項目（runごと）: trialId / trialOrdinal、Rootまたは子の役割、要求model IDとeffort、CLIの正確な版と同梱カタログのdigest、認証方式、cyber access program、service tier、各agentのusage（providerが返さない項目は `unavailable`）、観測できたsource読取とcommand件数の下限、promptとsourceのdigest。
 - 本番model: Daybreak Blue対応の `gpt-6-sol` 系を使う。正確なmodel IDとsubagentへの継承は実機preflightで固定する。`gpt-6.1-sol`やLunaへ暗黙に切り替えない。
@@ -103,7 +103,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | options更新 | Labが置いたcanary option、または重大なoption（`users_can_register`、`default_role`、`siteurl`、`admin_email` 等）が低権限主体から変わる | 影響のないoption |
 | 管理者への権限昇格 / 認証回避 / アカウント乗っ取り | 低権限主体が管理者の認証状態または管理者相当の能力を得る（Labのcanaryユーザー、各ロールの正常操作記録との差） | パスワードリセットメールの存在だけ、エラーメッセージの差 |
 | contributor以上への権限昇格 / 非管理者の認証回避 | 低権限主体がcontributor以上の能力または他主体の認証状態を得る | 同上 |
-| Stored XSS（サイト全体） | 低権限主体が置いたnonce付き値が、未認証訪問者が見る前面ページまたは全管理画面でheadless browserにより実行され、Labのcanary受信先へ届く。発火contextを記録 | alertの有無、文字列の存在だけ、特定ページだけの発火 |
+| Stored XSS | 低権限主体が置いたnonce付き値が、影響を受けるページをheadless browserで開いたときに実行され、Labのcanary受信先へ届く。発火contextとサイト全体への広がりを分けて記録 | alertの有無、文字列の存在だけ、ブラウザ操作なしの自己申告 |
 
 - 結果: `runtime-confirmed` / `contradicted` / `incomplete`。`incomplete` は理由コード（provision、precondition、recipe、observation、evidence、cleanup、digest-mismatch）と次の手を持つ。
 - 判定器を定義できない種別は自動確認せず、`incomplete(no-judge)` として人間へ回す。
@@ -158,7 +158,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `privesc-to-contributor+` / `auth-bypass-non-admin` | 低権限主体がcontributor以上の能力または他主体の認証状態を得る | その他 ≥500 | 受理（contributor以上が条件） |
 | `sensitive-object-access` | 判定器は後回し（`incomplete(no-judge)` として人間へ） | その他 ≥500（Sensitive Information Disclosure） | 受理（機微な対象が条件） |
 | `content-deletion` | 判定器を作らない。探索の目的に含めない | その他 ≥500 | broken access controlの条件次第 |
-| `stored-xss` | 低権限主体のnonce付き値が、未認証訪問者が見る前面ページまたは全管理画面で実行されcanary受信先へ届く。発火contextを記録 | Common ≥500 | 受理（サイト全体に効くことが条件。それ以外はmVDPのみ） |
+| `stored-xss` | 低権限主体のnonce付き値が、影響を受けるページで実行されcanary受信先へ届く。発火contextと範囲を記録 | Common ≥500。特定ページだけでも候補 | 受理（サイト全体に効くことが条件。それ以外はmVDPのみ） |
 | `reflected-xss` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（JS実行、nonce不要が条件）だが出さない |
 | `csrf-to-write` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（連鎖が条件）だが出さない |
 | `missing-authz` / `idor`（到達先なし） | 判定器を作らない。到達先がある場合はその分類で判定する | 対象外 | 機微な対象以外は対象外 |
@@ -212,7 +212,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 10. プログラム対象範囲は技術的検証を止めず、reviewで提出先ごとに評価する。authz / IDORは重大な影響へつながる場合だけ対象。
 11. 対象固有のコードはTarget Profileに閉じ込め、汎用モジュールはprofileを型でしか知らない。2つ目のprofileまで汎用化しない。
 12. 既知脆弱性は評価では時点で切り、本番では対象の公開履歴を変種分析の入力として渡す（0001を置き換え）。
-13. 探索promptの管理指示変種は版付きの本番A/B軸とし、短い目的promptを既定にする。
+13. 探索promptの版とA/B軸を保持する。既定の選択は0017が置き換える。
 14. 旧単独TrialのLead継続は同一Trial内の1 hopに限る。主経路の既定は0016が置き換える。
 15. 判定器のHTTP証拠はHarnessが捕捉し、Verifierの記録は補助として扱う。
 16. Root＋最大3 subagentを主経路とし、探索から人間の手動再現までを先に実証する。

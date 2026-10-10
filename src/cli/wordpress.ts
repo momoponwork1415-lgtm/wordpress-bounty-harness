@@ -116,7 +116,7 @@ export const wordpressCampaignConfigSchema = z
     selectionPolicyPath: z.string().min(1).optional(),
     promptId: z
       .enum(WORDPRESS_DISCOVERY_PROMPT_IDS)
-      .default("short-objective-v2"),
+      .default("short-objective-managed-v3"),
     programmeBoundary: text,
     stopRules: z
       .strictObject({

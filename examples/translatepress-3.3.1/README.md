@@ -6,6 +6,8 @@
 
 `campaign-cooperative.json` は [TranslatePressベンチマーク](../../docs/TRANSLATEPRESS-BENCHMARK.md) のTP-ATO用Root＋3設定。3.2.6で完了した診断用の管理prompt変種を使い、履歴なし・1 Trial・90分上限にする。Labは公開済み二次言語 `fr_FR` と、その言語を使う管理者を設定する。修正版3.3.2は評価側で公式archiveのdigestをGit外にpinし、探索sourceへ渡さない。Findingが独立確認されたときだけ `review reverify --version 3.3.2` で同一経路を試す。
 
+`campaign-short-managed-v3.json` と `campaign-wp2shell-bounty.json` はADR 0017の比較用Root＋3設定。prompt以外の条件を揃え、それぞれ別のcampaign IDで結果を記録する。旧 `campaign-cooperative.json` はmanaged-v1の履歴用に残す。
+
 | ファイル | Git | 中身 | 実行前にすること |
 | --- | --- | --- | --- |
 | `campaign.json` | 管理する | campaign設定。discovery 1run、同時1run、WordPress 6.8.3、Lab初期データ | `wordpressVersion` を、`images.wordpress` に固定したimageのWordPress版と合わせる |

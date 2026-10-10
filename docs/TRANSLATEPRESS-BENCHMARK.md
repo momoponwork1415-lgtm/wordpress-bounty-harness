@@ -63,6 +63,12 @@ TP-SXの修正版はWordfence履歴の修正情報と公開archiveの版を実�
 
 ## 6. 2026-10-10の実測
 
-TP-SX 3.2.6ではsource候補は出たが、判定器に合う証明を得られず `incomplete` だったためゲートに数えなかった。次のTP-ATO 3.3.1の1協調Trialでは3件のFindingを保存し、Rootと子のアカウント乗っ取り候補2件をそれぞれ新しいgVisor Labのnonce判定器が `runtime-confirmed` とした。残る1件は `incomplete` として保持した。修正版3.3.2の別Snapshotで確認済み経路を再実行した負の対照は、証拠付きで `contradicted` となった。隔離・brokerの実機preflight、Snapshot・usage・停止記録も揃い、本番探索開始ゲートを満たした。
+TP-SX 3.2.6の完了Trialで記録されたFinding 2件は保護投稿の翻訳テキストを読む `sensitive-object-access` の主張であり、Stored XSSのFindingはなかった。2件とも対応する判定器がなく `incomplete(no-judge)` となり、XSSのゲートには数えなかった。Labには二次言語の翻訳辞書がなく、XSS経路の実行時判定条件も揃っていなかった。次のTP-ATO 3.3.1の1協調Trialでは3件のFindingを保存し、Rootと子が報告した同一のアカウント乗っ取り経路の候補2件を、それぞれ新しいgVisor Labのnonce判定器が `runtime-confirmed` とした。残る1件は `incomplete` として保持した。修正版3.3.2の別Snapshotで確認済み経路を再実行した負の対照は、証拠付きで `contradicted` となった。隔離・brokerの実機preflight、Snapshot・usage・停止記録も揃い、本番探索開始ゲートを満たした。
 
 この実測は公開済み事例での実行能力を示す。未知脆弱性の発見率は3対象pilotで別に観測する。HTTP本文、recipe、Lab認証情報と未公開の候補はGit外のPrivate Evidenceに置く。
+
+## 7. prompt比較の追加計画（ADR 0017）
+
+第1～6節は当初の本番開始ゲートとその実測の記録である。追加のprompt比較は別campaignとして行い、旧Trialを比較の分母に混ぜない。3.2.6のStored XSSと3.3.1のアカウント乗っ取りを、`short-objective-managed-v3` と `wp2shell-bounty-v1` の両方で試す。各版の2設定はprompt ID以外を同じにする。3.2.6では二次言語を有効にしたLabが動作し、対象の翻訳と発火先があることを事前確認する。既知の原因箇所、PoC、修正差分は探索者へ渡さない。
+
+各armのStored XSSとアカウント乗っ取りのsource候補、独立した `runtime-confirmed`、失われた段階、wall、usage、source coverageを記録する。3.3.1の同じ経路をRootと子が二重に報告しても、脆弱性1件として数える。Stored XSSの判定器は特定ページでのcanary実行も確認し、WordfenceとPatchstackのサイト全体条件をscope段階で分ける。両promptともStored XSSを優先順位の後方に置くため、両方がXSSを見逃した場合はprompt構成の差だけでは説明しない。比較結果が出るまで既定promptは `short-objective-managed-v3` とする。

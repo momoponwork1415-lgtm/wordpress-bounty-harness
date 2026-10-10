@@ -23,10 +23,10 @@
 
 ## 探索promptの規則（SPEC.md 第6節）
 
-- 既定は短い目的prompt `short-objective-v2`。書くのは目的、trust境界、到達すべき影響の分類と報奨順、Finding / Lead の出力形式。探索の手順、checklist、役割分担、段階は書かない。手順はエージェントが決める。
+- 既定はpilotで使ったv2からXSSのサイト全体制限を除いた `short-objective-managed-v3`。`wp2shell-bounty-v1` はADR 0017の比較armとして使う。どちらも脆弱性が必ずあるという前提や固定された攻撃経路は与えない。
 - 主経路は Root＋最大3 subagent の協調Trial（ADR 0016）。人数と隔離はHarnessが管理し、分担と仮説はRootが決める。
-- wp2shell由来の固定手順や役割分担をHarnessに持ち込まない。探索の管理指示だけを書く変種は版付き・digest付きのopt-in本番A/B軸にできる。Harnessが持つのは隔離、分担、停止規則、判定、記録だけ。
-- prompt本文を変えたら版を上げ、旧版を残してdigest pinを更新する。管理指示変種を既定にする前に本番A/Bで測る。#73の開発セットでは両変種とも公開2事例に対してsource候補0件で、短い目的promptを既定に残した。
+- WP2Shell変種の30分下限はRootへの指示であり、Harnessが強制する保証ではない。run wallとcoverageを測り、守られない場合は継続境界を改善する。
+- prompt本文を変えたら版を上げ、旧版を残してdigest pinを更新する。旧promptは過去Trialの再現用として維持する。
 
 ## `profiles/wordpress/` の規則（ADR 0011）
 

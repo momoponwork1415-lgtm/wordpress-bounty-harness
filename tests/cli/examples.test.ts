@@ -24,6 +24,18 @@ const example = async (file: string, version = "3.3.1"): Promise<unknown> =>
   ) as unknown;
 
 describe("TranslatePress 3.3.1 development-set example", () => {
+  it("keeps the two Root + 3 prompt arms identical except for the prompt", async () => {
+    const previous = wordpressCampaignConfigSchema.parse(
+      await example("campaign-short-managed-v3.json"),
+    );
+    const current = wordpressCampaignConfigSchema.parse(
+      await example("campaign-wp2shell-bounty.json"),
+    );
+    expect(current.promptId).toBe("wp2shell-bounty-v1");
+    expect(previous.promptId).toBe("short-objective-managed-v3");
+    expect({ ...current, promptId: previous.promptId }).toEqual(previous);
+  });
+
   it("pins the development target and bounds the trial to one discovery run", async () => {
     const config = wordpressCampaignConfigSchema.parse(
       await example("campaign.json"),
@@ -116,7 +128,7 @@ describe("TranslatePress 3.2.5 A/B development-set example", () => {
         ...config,
         promptId: undefined,
       }).promptId,
-    ).toBe("short-objective-v2");
+    ).toBe("short-objective-managed-v3");
     expect(config.ablation?.axes).toEqual([
       {
         axis: "prompt",
@@ -154,5 +166,22 @@ describe("TranslatePress 3.2.5 A/B development-set example", () => {
           allocateTrialArms(ordinal, config.ablation?.axes ?? []).prompt,
       ),
     ).toEqual(["a", "b", "a", "b", "a", "b"]);
+  });
+});
+
+describe("TranslatePress 3.2.6 Stored XSS prompt comparison", () => {
+  it("pairs both prompts on a secondary-language Lab with identical inputs", async () => {
+    const short = wordpressCampaignConfigSchema.parse(
+      await example("campaign-short-managed-v3.json", "3.2.6"),
+    );
+    const wp2shell = wordpressCampaignConfigSchema.parse(
+      await example("campaign-wp2shell-bounty.json", "3.2.6"),
+    );
+    expect(short.promptId).toBe("short-objective-managed-v3");
+    expect(wp2shell.promptId).toBe("wp2shell-bounty-v1");
+    expect(short.lab.translatePress?.administratorSecondaryLocale).toBe(
+      "fr_FR",
+    );
+    expect({ ...wp2shell, promptId: short.promptId }).toEqual(short);
   });
 });
