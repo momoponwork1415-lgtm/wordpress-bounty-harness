@@ -72,6 +72,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     configuration: z.strictObject({
       promptVariant: id,
       promptDigest: digest.optional(),
+      objectiveDigest: digest.optional(),
+      contractDigest: digest.optional(),
       trustBoundaryVersion: id.optional(),
       sourcePack: z
         .strictObject({ dependency: z.enum(["mounted", "none"]) })

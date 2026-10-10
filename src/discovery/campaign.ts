@@ -205,6 +205,8 @@ export type PlannedDiscoveryRun = {
   readonly configuration: {
     readonly promptVariant: string;
     readonly promptDigest?: string;
+    readonly objectiveDigest?: string;
+    readonly contractDigest?: string;
     readonly trustBoundaryVersion?: string;
     readonly sourcePack?: { readonly dependency: "mounted" | "none" };
     readonly assignmentUnit: string;

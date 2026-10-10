@@ -21,12 +21,14 @@ import {
 } from "../../src/discovery/index.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acquisition/index.js";
+import { wordPressDiscoveryOutputContract } from "../../src/profiles/wordpress/discovery/output-contract.js";
 import {
   openWordPressLab,
   type DockerRequest,
 } from "../../src/profiles/wordpress/lab/index.js";
 import type { ProgrammeIntelligence } from "../../src/profiles/wordpress/programme-intelligence/index.js";
 import { loadWordpressScopePolicy } from "../../src/profiles/wordpress/scope-policy.js";
+import { loadWordPressDiscoveryAsset } from "../../src/profiles/wordpress/prompts/index.js";
 import { createWordPressSelection } from "../../src/profiles/wordpress/selection/index.js";
 import { openSnapshot } from "../../src/snapshot/index.js";
 
@@ -720,13 +722,49 @@ describe("harness CLI vertical slice", () => {
     expect(prompts[0]).toContain(
       "Database (read-only, Lab only): host database port 3306",
     );
+    expect(prompts[0]).not.toContain("## Finding and Lead output contract");
     const started = ledger()
       .read({ type: "discovery-run-started" })
       .at(0)?.event;
     expect(started).toMatchObject({
       configuration: { labAccess: { database: "read-only" } },
     });
+    if (started?.type === "discovery-run-started")
+      expect(started.configuration.contractDigest).toBeUndefined();
     expect(JSON.stringify(started)).not.toContain("wbh_reader");
+  });
+
+  it("adds the schema contract only to objective-only prompts and records separate digests", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      config: { promptId: "short-objective-managed-v5" },
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-contract",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(0);
+    const objective = await loadWordPressDiscoveryAsset(
+      "short-objective-managed-v5",
+    );
+    const contract = wordPressDiscoveryOutputContract();
+    expect(prompts[0]).toContain(objective.text.trim());
+    expect(prompts[0]).toContain(contract.text);
+    const started = ledger()
+      .read({ campaignId: "campaign-contract", type: "discovery-run-started" })
+      .at(0)?.event;
+    expect(started).toMatchObject({
+      configuration: {
+        promptVariant: objective.id,
+        promptDigest: objective.digest,
+        objectiveDigest: objective.digest,
+        contractDigest: contract.digest,
+      },
+    });
   });
 
   it("keeps DB access disabled when the campaign requests none", async () => {
