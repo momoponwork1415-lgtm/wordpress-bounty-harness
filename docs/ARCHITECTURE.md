@@ -1,6 +1,20 @@
 # アーキテクチャ図
 
-目標構成を示す。実装済みとの差は [実装計画](IMPLEMENTATION-PLAN.md)、規則は [SPEC](SPEC.md) と [ADR 0016](adr/0016-root-plus-three-first-vertical-slice.md)。
+目標構成を示す。実装済みとの差は [実装計画](IMPLEMENTATION-PLAN.md)、規則は [SPEC](SPEC.md) と [ADR 0016](adr/0016-root-plus-three-first-vertical-slice.md)。本番へ進む条件は [TranslatePressベンチマーク](TRANSLATEPRESS-BENCHMARK.md)。
+
+## 0. 開発から本番への切り替え
+
+```mermaid
+flowchart LR
+  START([開始]) --> BENCH[TranslatePress 3.2.6 / 3.3.1<br/>Root＋3を各1 Trial]
+  BENCH --> GATE{1件を新Labで確認し<br/>修正版で同じ経路が不成立?}
+  GATE -->|いいえ| FIX[故障箇所を診断して必要分だけ再試行]
+  GATE -->|はい| PILOT[自動選定した最新版3対象<br/>本番探索パイロット]
+  PILOT -->|実Finding| SUBMIT[最新版確認・重複照合・証拠<br/>人間Lab再現の後に提出]
+  PILOT --> METRICS[費用と歩留まりから次を決める]
+```
+
+ベンチマークは配線の確認であり、発見率の証明ではない。レポートの完全自動化は本番探索開始の条件ではなく、実Findingが出たら提出前に完成させる。
 
 ## 1. どこから始まるか
 

@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.17、2026-10-10。設計判断はこの文書と [ADR](adr/) に置く。旧リポジトリの [Issue 221](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317) は経緯の資料であり、現在の探索方針は [ADR 0016](adr/0016-root-plus-three-first-vertical-slice.md) が優先する。現行コードとの差分と実装順は [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md)。
+版: v0.18、2026-10-10。設計判断はこの文書と [ADR](adr/) に置く。旧リポジトリの [Issue 221](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317) は経緯の資料であり、現在の探索方針は [ADR 0016](adr/0016-root-plus-three-first-vertical-slice.md) が優先する。現行コードとの差分と実装順は [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md)。TranslatePressでの最小ベンチマークと本番移行は [TRANSLATEPRESS-BENCHMARK.md](TRANSLATEPRESS-BENCHMARK.md)。
 
 ## 1. 目的と指標
 
@@ -37,7 +37,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `verification` | 独立Verifierで反証を試み、Harnessが捕捉したHTTPとcanaryを判定器で照合する | `verify(finding, snapshot, lab) → VerificationResult` | Verifier run記録、判定器の証拠（HTTP捕捉、canary回収、browser観測、ロール基準との差分）、Lab Setup digest | 前提不一致・observation失敗・cleanup失敗は `incomplete` | 新規。移植: Execution Canary |
 | `ledger` | 全イベントを追記し、funnelを読み取り専用で導く | `append(event)`、`read(query)`、`funnel(campaign)` | LedgerEvent（型付きunion、snapshot digest付き）、添付（Codex findings等）のdigest参照 | 同一identityへの異なる内容はconflict。削除しない | 新規。規則はADR 0024とMantisから |
 | `review` | 人間が検証済みFindingを見て提出判断をする。scope、重複、文案、承認 | `queue() → ReviewItem[]`、`decide`、`assessScope`、`draft`、`authorize` | ReviewDecision、Programme Scope Assessment、Submission Candidate、Submission Draft（版付き）、External Action Authorization | scope評価失敗はscopeだけ `incomplete`、Verified Vulnerabilityを失わない。必要な承認がなければadmitしない | 移植: `human-os` のscope評価・Draft・Authorization。新規: review CLI、ローカルWordfence履歴DB照合 |
-| `evaluation` | 答えの鍵を使って台帳を採点し、ablationを回す | `score(campaign, answerKey)`、`ablate(config[])`、`prospective(campaign, advisory)` | Answer Key（Research外）、採点記録、区間 | 鍵の不備は採点失敗として残す | 新規 |
+| `evaluation` | 開発対象の縦断確認と、本番の費用・提出転帰を台帳から評価する | `readiness(campaign)`、`funnel(campaign)`、必要になった場合のみ `ablate(config[])` / `prospective(campaign, advisory)` | 開発対象の判定記録、費用・転帰、比較を行った場合の区間 | 判定不能・証拠不足を成功にしない | 既存の採点器は任意の研究用として残す |
 | `cli` | 上記を薄く接続する | コマンド | なし | | 移植: `cli.ts` の構成だけ |
 
 持ち込まないもの: `research/` のResearch Campaigns内部とcheckpointによる長期セッション再開、条件付き3試行、Human Candidate Review、Research Grant、Approved Target Batch、旧スキーマ、Grok / Claude Code / GLM / DeepSeek adapter（開発比較が必要になったら移す）。現行の単独Trialの1 hop Lead継続は主経路から外すが、過去の台帳は読み続ける。
@@ -55,7 +55,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | prompt雛形 | 短い目的prompt（既定 `short-objective-v2`）と版付きの管理指示変種、trust境界宣言の雛形。固定手順やchecklistは書かない |
 | source補助 | 保存先のwrite / readをつなぐ索引と登録入口。Rootと子が参照できるが、固定した役割分担の命令にはしない |
 | Lead型 | sourceに根拠があり、影響までの辺が1つ足りないprimitiveの分類と記録 |
-| 答えの鍵の形式 | 入口の表現（hook名、route、action名） |
+| 評価対象の表現 | 開発対象のslug、版、修正版、影響分類。正解表の手入力は初期受入条件にしない |
 
 汎用モジュールはこれらをインターフェース経由で受け取り、WordPressの型やpathをimportしない。2つ目のprofileを作るまでインターフェースは汎用化せず、WordPress版の完成後に共通部分を抽出する。
 
@@ -176,28 +176,27 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 10. 評価
 
-まず公開済み開発対象の脆弱版・修正版で縦断経路を実証する。主指標はその後の本番から得る。held-outは任意で、回すときは予算で件数と試行を決める。理由は [DESIGN-EVIDENCE.md 第9節・第12節](DESIGN-EVIDENCE.md)。
+まずTranslatePressの公開済み脆弱版・修正版で縦断経路を実証する。主指標はその後の最新版の本番から得る。開始条件、試行上限、保留時の扱いは [TRANSLATEPRESS-BENCHMARK.md](TRANSLATEPRESS-BENCHMARK.md)。多数の公開事例を採点するheld-out評価は初期開発・本番開始の必須条件にしない。
 
 ### 主指標（本番の台帳から、追加費用なし）
 
 - **本番A/B（縦断後）**: 旧単独Trial向けの履歴有無・prompt変種・1 hop継続の軸は既に記録可能だが、協調Trialへのそのままの適用はしない。新しい比較は対象、モデル、source、予算、判定器を固定し、独立した協調Trialを分母にする。区間が重なれば「判定不能」とする。隔離と判定器を外すablationは行わない。
-- **前向き評価**: 本番Campaignの台帳を、後日公開されたadvisory（自分の提出以外も含む）で採点する。「あったのに見逃した」が分かる唯一の方法。採点はheld-outと同じ `location-overlap` と盲検rubric。
+- **前向き評価**: 本番Campaignの台帳を、後日公開されたadvisory（自分の提出以外も含む）と照合する。未発見の経路を後から分析できるが、個別の脆弱性の存在を実行時に知ることはできない。
 - **提出転帰**: triaged / resolved / duplicate / informative / N/A / rejected の率と、報奨額。収益に直結する最終の数字。
 - **funnel**: raw → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・種別別。
 
 ### 判定器の負の対照（安い。判定器のテストとして回す）
 
-- 修正版pluginで同じ手順を流し、判定器が鳴らないことを確認する。鍵と同じpropertyを主張したFindingだけ `control-false-alarm` と数える。
+- 修正版pluginで**脆弱版で確認した同一の経路と手順**を流し、判定器が鳴らないことを確認する。修正版にも別経路の脆弱性が残る可能性があるため、plugin全体が安全という意味にはしない。
 
-### 答えの鍵（登録は行う。回すかは任意）
+### 初期ベンチマークと追加評価
 
-- Answer Key（Research外に保管）: 入口（hook / route / AJAX action）、破られるproperty、欠けているcheck、攻撃者権限、到達する影響、許容file / function集合、公開日、model cutoff、本人発見 / 補助の区分。
-- 登録する鍵（2026-10-08時点、11件）: 本人発見の公開7件（旧リポジトリIssue 213）＋第三者の補助4件（任意ファイルアップロード / RCE、管理者への権限昇格、乗っ取り）。本人発見のうち2026-04-30（gpt-6.1-sol cutoff）以前の公開は contamination 可能性ありとして区間を分けて表示する。
-- 開発セット: TranslatePress 3.3.1の縦断スライスと、3.2.5の公開2事例を使うprompt×継続の2×2。後者は#73で各cell 3 completed Trialと継続なし150分対照各prompt 3 Trialを採点した。全cellでsource Candidateと完全経路は0/3。初回12試行のうち3件と補充8試行のうち1件はprovider失敗で分母から除き、補充は元の事前登録12試行と分けて記録した。両方0なら安い方という事前登録規則により、既定は短い目的prompt `short-objective-v2` と継続なし。優劣を示した結果ではなく、実wall timeも設定上限より短かった。
-- held-out評価を回す条件: 縦断スライスと本番の費用を測った後、設計変更の優劣を判断する必要があるとき。cutoff後の補助事例を優先し、試行数は予算で決め、区間の幅をそのまま示す。過去の単独Trialの試行数は協調Trialの予算へ流用しない。
-- 採点: 一次は機械の `location-overlap`（必要条件）。二次は人間の盲検rubric（場所、root cause、攻撃者条件、影響の4要素）で `target-hit` / `partial` / `non-target`。実行水準は `target-hit ∧ runtime-confirmed`。
-- 統計: k/n にClopper-Pearson区間。pass@kはunion / 全回 / 試行別の3表示。種別別は件数のまま。重なる区間は「差なし」でなく「判定不能」と書く。
-- held-outの結果を見てpromptを変えたら、そのcaseは開発セットへ移す。
+- 初期対象はTranslatePress 3.2.6のStored XSSと3.3.1のアカウント乗っ取りを**評価側の公開事例**として扱う。3.2.5のReflected XSSは対象外分類の診断用で、本番開始ゲートに数えない。
+- 各対象でRoot＋3の協調Trialをまず1回だけ実行する。候補が無い場合はsource読取、実行時間、provider失敗、停止理由を調べ、無条件に試行数を増やさない。具体的Leadは保存するが、Leadだけで本番開始ゲートを満たさない。
+- 探索時の入力に評価対象のadvisory、原因箇所、PoC、payload、修正差分を混ぜない。評価情報はrunner・判定器側に隔離する。旧#73の単独TrialによるTranslatePress 3.2.5の2×2は候補0件で、協調Trialの優劣や当たり率を示さない。
+- 本番探索の開始ゲートは、上記2対象の**少なくとも1件**でsource根拠付きFindingを新しいLabのHarness判定器が `runtime-confirmed` とし、同一経路を修正版で再実行してconfirmedにならず、子の成果と費用・停止理由が欠落なく残ること。これで示せるのは配線と1分類の能力だけで、未知脆弱性の発見率ではない。
+- ゲート通過後は、現行最新版を対象とした少数の本番探索へ進む。対象選定の最小方針・Snapshot固定・隔離が機能していれば、レポートJSONの完全自動化や多数のheld-out事例を待たない。ただし提出候補を人間に渡す条件（最新版での独立確認、重複・scope照合、証拠、手動Lab再現、承認）は第8節のまま守る。
+- 複数手法の比較が必要になった時だけ、同じ対象・model・予算でA/Bまたはpass@kを事前登録する。旧 `eval score --keys` とAnswer Keyは将来の任意の研究用互換機能であり、人間による鍵入力を要求しない。
 
 ## 11. ADR（新リポジトリで最初に書くもの）
 
@@ -220,17 +219,17 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 12. 最初の縦断スライスと受入条件
 
-公開済みの開発対象1件を脆弱版と修正版で固定し、次を一度通す。開発対象は人間がslugと版を指定してよい。これは配線と判定器の実証であり、未知脆弱性の発見率の主張ではない。
+TranslatePressの公開済み開発対象を脆弱版と修正版で固定し、まず探索から判定器までを通す。開発対象は人間がslugと版を指定してよい。これは配線と判定器の実証であり、未知脆弱性の発見率の主張ではない。
 
 1. `snapshot` が対象、WordPress core、必要な依存をdigestで固定し、gVisor Labを供給する。
 2. 実機preflightでDaybreak対応model ID、Rootと最大3つの子、broker、Lab到達を確認する。別モデルや単独agentへ自動fallbackしない。
 3. 協調Trialがsourceを読み、Findingまたは具体的Leadを出す。子の成果はRootの最終JSONと独立して保存され、schema失敗は正常な0件にならない。
 4. Findingが出たら新しいLabの独立VerifierとHarness判定器へ渡す。nonce証拠、HTTP記録、失敗時の `incomplete` 理由を保存する。同じ経路の修正版ではconfirmedが出ない。
-5. confirmedなら最新版を新しいSnapshotで再検証し、Wordfenceを含む重複候補とscopeを照合する。最新版で成立しなければ提出候補にしない。
-6. 証拠付きの短い英語レポートJSONと再現パッケージを出し、人間がsetup manifestからLabを立てて自分の手で同じHTTP手順を再現する。
+5. 上のゲートを満たしたら、最小の選定方針で公開中最新版の少数の本番探索を始める。confirmedなら最新版の同じSnapshotで独立確認し、Wordfenceを含む重複候補とscopeを照合する。最新版で成立しなければ提出候補にしない。
+6. 証拠付きの短い英語レポートJSONと再現パッケージを出し、人間がsetup manifestからLabを立てて自分の手で同じHTTP手順を再現する。レポート生成の完全自動化がまだ無い期間は、既存のdraft登録口を使って証拠から文案を作れる。
 7. 台帳からFinding、Lead、各agentの実行と使用量、検証結果、レビューの段数を読める。`pnpm check` と [テスト戦略](TEST-STRATEGY.md) の実環境ゲートを通す。
 
-受入: 少なくとも1つの開発対象について上記の経路を通し、修正版で偽のconfirmedを出さない。外部提出はこのスライスに含めない。held-outの答えは探索へ渡さない。
+本番探索への受入は、第10節のTranslatePressゲートと隔離・記録・最小選定方針。最初の外部提出への受入は、最新版の独立確認、重複・scope照合、証拠、英語文案、人間の手動再現と版・送信先を指定した承認まで。ベンチマークで確認した旧版の発見自体は提出しない。
 
 ## 13. 移植一覧（旧リポジトリ → 新モジュール）
 

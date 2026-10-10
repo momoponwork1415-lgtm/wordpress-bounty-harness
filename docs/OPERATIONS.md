@@ -8,7 +8,7 @@
 - コマンド名は `runCli`（`src/cli/index.ts`）が受け付けるもの。
 - host設定は `--host <path>` か `WBH_HOST_CONFIG` で渡す。
 - 台帳とPrivate Evidenceの置き場は `--state <dir>` か `WBH_STATE_DIRECTORY` で選ぶ。既定は `~/.local/state/wordpress-bounty-harness`。
-- 縦断スライスの設定例は [examples/translatepress-3.3.1/](../examples/translatepress-3.3.1/README.md)、2×2の開発セットは [examples/translatepress-3.2.5/](../examples/translatepress-3.2.5/README.md)。
+- 現行の単独Trialの設定例は [examples/translatepress-3.3.1/](../examples/translatepress-3.3.1/README.md)、過去の2×2開発セットは [examples/translatepress-3.2.5/](../examples/translatepress-3.2.5/README.md)。新しいRoot＋3の本番開始条件は [TranslatePressベンチマーク](TRANSLATEPRESS-BENCHMARK.md)。
 
 ## 1. 一度だけやる準備
 
@@ -24,7 +24,6 @@
 | trust境界宣言 | `src/profiles/wordpress/prompts/trust-boundary-v1.md` をそのまま使う | ほぼ変えない |
 | 対象範囲の方針 | `src/profiles/wordpress/policy/programme-scope.md` を公式ページで見直す | 提出前と月1回 |
 | 履歴mirror | 第5節の手順で更新し、`history status` で鮮度を確かめる | 週1回と提出前 |
-| 答えの鍵 | 評価用。Git外に置く。開発セッションに見せない | 鍵を増やすとき |
 
 ## 2. 週の流れ
 
@@ -145,7 +144,7 @@ harness lab cleanup --config <path> --remove   # 削除
 
 ## 6. 評価
 
-主指標は本番から得る。追加費用はかからない。
+主指標は本番から得る。現在の `eval score --keys` は任意の研究用互換機能で、TranslatePressベンチマークや本番開始には使わない。下記のCLIは現行の単独Trial実装用であり、Root＋3への移行後に更新する。
 
 ```
 harness eval compare [--axis history|prompt|continuation] [--campaign <id>]   # 本番A/B: Trial別の当たり率（Clopper-Pearson 95%）と費用
@@ -164,11 +163,11 @@ harness eval rubric --file <path>                                 # 私的な盲
   - advisoryファイルはGit外に置く私的データ。1件ごとに `{schemaVersion: 1, advisoryId, slug, affectedVersions: [{fromVersion, fromInclusive, toVersion, toInclusive}], publishedAt, impact, allowedLocations: [{file, function?}]}` を書く。`allowedLocations` は公開パッチを読んで人間が書く。
   - 結果は `found` / `missed` / `unscorable`（採点失敗）/ `predates-run` / `not-searched` に分かれる。`missed` 以外は見逃しに数えない。
   - `blind rubric pairs:` の (advisory, Finding) 対だけを、armや検証結果を見ずに人間がtarget-hit / partial / non-targetで採点する。
-- **held-out**: 既定では回さない。回すならcutoff後の補助4件を優先し、試行数は予算で決める。held-outの結果を見てpromptを変えたら、そのcaseは開発セットへ移す。
+- **held-out**: 初期の開発と本番開始には使わない。比較研究が必要になった時だけ予算とcaseを決める。
 
-### 評価鍵と盲検rubricの登録
+### 任意の旧評価鍵と盲検rubric
 
-Answer Keyの本文は人間が書き、Git外の権限を絞ったJSONファイルに置く。`eval keys --keys <path>` は形式と重複を検査し、case IDと正規化した鍵のSHA-256 digestだけをJSONで出す。この出力だけをGitのdigest manifestに保存できる。`eval keys --keys <path> --manifest <path>` で全鍵のdigestを照合し、`eval score` にも `--manifest <path>` を付けて採点する鍵のdigestを確認できる。鍵本文や原因箇所は標準出力・台帳に出さない。
+将来の比較研究で旧採点器を使う場合だけ、Answer Keyの本文をGit外の権限を絞ったJSONファイルに置く。`eval keys --keys <path>` は形式と重複を検査し、case IDと正規化した鍵のSHA-256 digestだけをJSONで出す。この出力だけをGitのdigest manifestに保存できる。`eval keys --keys <path> --manifest <path>` で全鍵のdigestを照合し、`eval score` にも `--manifest <path>` を付けて採点する鍵のdigestを確認できる。鍵本文や原因箇所は標準出力・台帳に出さない。現行計画では人間に鍵の記入を求めない。
 
 人間の盲検採点には [入力テンプレート](../examples/evaluation/blind-rubric.template.json) をGit外へコピーし、caseとFindingの対ごとに場所、root cause、攻撃者条件、影響を `match` / `partial` / `mismatch` / `unknown` で評価する。armと検証結果を見ずに `target-hit` / `partial` / `non-target` を人間が決め、記入者と時刻を残す。`eval rubric --file <path>` は必須欄と重複を検査し、件数とdigestだけを出す。記入済みフォームはPrivate EvidenceとしてGit外に保管する。
 

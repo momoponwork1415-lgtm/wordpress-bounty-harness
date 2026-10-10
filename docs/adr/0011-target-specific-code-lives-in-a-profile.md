@@ -9,4 +9,4 @@ status: accepted
 
 - 2つ目のprofileが存在するまで、profileインターフェースを汎用化しない（先回りした抽象化を作らない）。WordPress版の完成後に、2つ目の対象で初めて共通部分を抽出する。
 - WordPress固有の語（plugin、slug、hook、AJAX action、wp_options）が汎用モジュールに現れたら、それはprofileへ移す合図。
-- 評価の答えの鍵と判定器の成功条件もprofile側に置く。
+- 評価対象の分類と判定器の成功条件もprofile側に置く。任意の旧Answer Key採点器を使う場合、そのWordPress固有の形式もprofile側に置く。
