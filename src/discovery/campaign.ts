@@ -803,6 +803,12 @@ export async function runDiscoveryCampaign(options: {
               await recordReport(childReceipt.runId, child.attachment);
               if (childReceipt.terminal === "completed")
                 childOutcome = "completed";
+              else
+                childFailure = {
+                  reason: "schema",
+                  reasonDetail:
+                    childReceipt.reasonDetail ?? "child-report-unreadable",
+                };
             } catch (error) {
               if (!(error instanceof DiscoveryReportError)) throw error;
               childFailure = {

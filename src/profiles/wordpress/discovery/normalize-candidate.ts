@@ -1,3 +1,6 @@
+import { wordpressFindingClaimSchema } from "./finding.js";
+import { wordpressLeadClaimSchema } from "./lead.js";
+
 /** Syntax repair only. The claim schemas still decide whether a candidate is admissible. */
 export function normalizeWordPressCandidate(candidate: unknown): {
   value: unknown;
@@ -75,9 +78,6 @@ export function normalizeWordPressCandidate(candidate: unknown): {
   }
   return { value: result, changes };
 }
-import { wordpressFindingClaimSchema } from "./finding.js";
-import { wordpressLeadClaimSchema } from "./lead.js";
-
 export function classifyWordPressCandidate(
   candidate: unknown,
   kind: "finding" | "lead",
