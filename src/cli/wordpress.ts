@@ -116,7 +116,7 @@ export const wordpressCampaignConfigSchema = z
     selectionPolicyPath: z.string().min(1).optional(),
     promptId: z
       .enum(WORDPRESS_DISCOVERY_PROMPT_IDS)
-      .default("short-objective-v2"),
+      .default("short-objective-managed-v4"),
     programmeBoundary: text,
     stopRules: z
       .strictObject({
@@ -154,6 +154,7 @@ export const wordpressCampaignConfigSchema = z
     lab: z.strictObject({
       siteTitle: z.string().min(1).max(120),
       initialPosts: z.array(z.string().min(1).max(120)).max(20),
+      initialApprovedComment: z.boolean().optional(),
       customerRole: z.boolean(),
       databaseAccess: z.enum(["read-only", "none"]).default("read-only"),
       translatePress: z
@@ -164,6 +165,15 @@ export const wordpressCampaignConfigSchema = z
     }),
   })
   .superRefine((config, context) => {
+    if (
+      config.lab.initialApprovedComment === true &&
+      config.lab.initialPosts.length === 0
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["lab", "initialApprovedComment"],
+        message: "An approved comment requires an initial post",
+      });
     const axes = config.ablation?.axes ?? [];
     if (new Set(axes.map((axis) => axis.axis)).size !== axes.length)
       context.addIssue({

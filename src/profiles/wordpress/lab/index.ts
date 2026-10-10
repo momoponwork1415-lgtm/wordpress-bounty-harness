@@ -26,19 +26,29 @@ const slug = z
   .string()
   .regex(/^[a-z0-9][a-z0-9-]*$/)
   .max(100);
-const setupSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  snapshotDigest: digest,
-  siteTitle: z.string().min(1).max(120),
-  initialPosts: z.array(z.string().min(1).max(120)).max(20),
-  customerRole: z.boolean(),
-  databaseAccess: z.enum(["read-only", "none"]).default("none"),
-  translatePress: z
-    .strictObject({
-      administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
-    })
-    .optional(),
-});
+const setupSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    snapshotDigest: digest,
+    siteTitle: z.string().min(1).max(120),
+    initialPosts: z.array(z.string().min(1).max(120)).max(20),
+    initialApprovedComment: z.boolean().optional(),
+    customerRole: z.boolean(),
+    databaseAccess: z.enum(["read-only", "none"]).default("none"),
+    translatePress: z
+      .strictObject({
+        administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
+      })
+      .optional(),
+  })
+  .refine(
+    (setup) =>
+      setup.initialApprovedComment !== true || setup.initialPosts.length > 0,
+    {
+      path: ["initialApprovedComment"],
+      message: "An approved comment requires an initial post",
+    },
+  );
 const REACHABILITY_PROBE = `$http = @file_get_contents("http://wordpress/");
 $database = "not-exposed";
 $user = getenv("WBH_DB_USER");
@@ -928,13 +938,32 @@ export function openWordPressLab(options: {
             "--role=customer",
             `--user_pass=${customer.password}`,
           ]);
-        for (const title of setup.initialPosts)
-          await wp(resource, [
+        for (const [index, title] of setup.initialPosts.entries()) {
+          const created = await wp(resource, [
             "post",
             "create",
             "--post_status=publish",
             `--post_title=${title}`,
+            ...(index === 0 && setup.initialApprovedComment === true
+              ? ["--porcelain"]
+              : []),
           ]);
+          if (index === 0 && setup.initialApprovedComment === true) {
+            const postId = created.stdout.trim();
+            if (!/^[1-9][0-9]*$/.test(postId))
+              throw new Error("Seed post ID is unavailable");
+            await wp(resource, [
+              "comment",
+              "create",
+              `--comment_post_ID=${postId}`,
+              "--comment_content=Thanks for the useful post.",
+              "--comment_author=Lab Reader",
+              "--comment_author_email=lab-reader@example.invalid",
+              "--comment_type=comment",
+              "--comment_approved=1",
+            ]);
+          }
+        }
         if (setup.databaseAccess === "read-only") {
           // Only existing tables are visible; the canary table is created later.
           const tables = (

@@ -59,13 +59,16 @@ describe("WordPress stored script judge", () => {
     });
   });
 
-  it("hands a beacon from only some pages to a human without confirming it", async () => {
+  it("confirms a beacon from an affected page and records limited scope", async () => {
     for (const contexts of [["route-page"], ["admin-partial"]] as const) {
       const { observed } = await judge({ status: "observed", contexts });
       expect(observed).toMatchObject({
-        status: "incomplete",
-        reason: "observation",
-        nextStep: expect.stringContaining(contexts[0]),
+        status: "observed",
+        conditions: {
+          observedVia: "canary-beacon",
+          firedContexts: contexts[0],
+          siteWide: "no",
+        },
       });
     }
   });

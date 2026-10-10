@@ -665,6 +665,9 @@ function decodeTranscript(
           "agent_message",
           "command_execution",
           "collab_tool_call",
+          // Notes created inside the disposable agent container do not alter
+          // the pinned read-only source or the independently provisioned Lab.
+          "file_change",
         ].includes(String(item.type))
       ) {
         // A tool not admitted by this transport makes the transcript unusable.
@@ -743,6 +746,27 @@ function providerLimitOf(stdout: string): "rate-limit" | "quota" | undefined {
       limit = "rate-limit";
   }
   return limit;
+}
+
+/** A broker body-size rejection is a Harness bound, not a provider failure. */
+function brokerRequestBytesExceeded(stdout: string): boolean {
+  for (const line of stdout.split("\n")) {
+    let value: unknown;
+    try {
+      value = JSON.parse(line) as unknown;
+    } catch {
+      continue;
+    }
+    const parsed = failureEventSchema.safeParse(value);
+    if (!parsed.success) continue;
+    const message =
+      parsed.data.type === "error"
+        ? parsed.data.message
+        : parsed.data.error.message;
+    if (/\b413\b/.test(message) && message.includes("request-limit-exceeded"))
+      return true;
+  }
+  return false;
 }
 
 export class CodexNativeAgentRuntime {
@@ -825,8 +849,8 @@ export class CodexNativeAgentRuntime {
           runtimeProfileDigest: run.profile.digest,
           model: run.profile.requestedModelId,
           protocol: "responses",
-          maxRequests: cooperative ? 400 : 100,
-          maxRequestBytes: 1024 * 1024,
+          maxRequests: cooperative ? 1600 : 100,
+          maxRequestBytes: cooperative ? 8 * 1024 * 1024 : 1024 * 1024,
           maxResponseBytes: 8 * 1024 * 1024,
           expiresAt: run.expiresAt,
           agentNetworkName: run.lab.networkName,
@@ -1131,6 +1155,14 @@ export class CodexNativeAgentRuntime {
         granted.receipt.digest,
         undefined,
         "broker-request-cap",
+      );
+    if (brokerRequestBytesExceeded(result.stdout))
+      return incomplete(
+        "policy",
+        result.completedAt,
+        granted.receipt.digest,
+        undefined,
+        "broker-request-bytes-cap",
       );
     if (decoded === undefined || "reasonDetail" in decoded) {
       const limit = providerLimitOf(result.stdout);

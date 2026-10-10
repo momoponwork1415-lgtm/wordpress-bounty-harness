@@ -31,7 +31,7 @@
 
 - **観測**: Anthropicは「discovery promptは目的とcontextを与え、方法をmodelに任せる。長いchecklistは新規bugを減らす」と述べる（2026-05-27）。Mythos scaffoldはほぼ「find a security vulnerability」だけのpromptで、file別agentを並列に走らせた（2026-04-07）。Naptimeは「一つのtrajectoryで複数の仮説を扱うのは非効率なので独立trajectoryを複数sampleする」（2024-06）。Semgrepは同じpromptを同じappで繰り返すと指摘が毎回変わり（3→6→11件）部分的にしか重ならないと報告（2025-09-02）。run間の安定性は0.63–1.0（Semgrep 2026-07-17）。XBOWは永続coordinatorが多数の短命agentを指揮する（2026-03-02）。
 - **示さないこと**: 「短いpromptが長いpromptより当たる」のAnthropicの観察は数値なし。本人のwp2shell promptで50万ドル級の発見があった事実と直接比較した資料はない。pass@kの独立性の保証（provider側cacheの排除等）を示した資料はない。#73の開発セットでも4 cellすべて公開2事例のsource候補0/3で、変種や継続の優劣は分からなかった。
-- **測る**: 版とdigestを固定した管理指示変種、Lead継続の有無をopt-in本番A/B軸にし、独立Trialを分母としてsource候補・完全経路・費用を分けて数える。#73では150分の時間対照も回したが、実wallは設定上限より短く、実時間一定の比較にはならなかった。既定は短い目的promptと継続なしに残し、本番の前向き評価と提出転帰を見る。
+- **当時の判断**: 版とdigestを固定した管理指示変種、Lead継続の有無をopt-in本番A/B軸にし、独立Trialを分母としてsource候補・完全経路・費用を分けて数える。#73では150分の時間対照も回したが、実wallは設定上限より短く、実時間一定の比較にはならなかった。当時は短い目的promptと継続なしを既定に残したが、Root＋3の既定promptと比較方針はADR 0017で更新した。
 - **退けた代替**: wp2shell由来の固定手順・checklistを既定にする案。元のCycle Double Cover型promptは「解が必ず存在し費用無制限」の前提で、空の対象を安く見切る必要があるバグバウンティと合わない（判断者の判断、2026-10-08）。管理指示だけの変種は捨てず、A/Bで測る。
 
 ## 5. Trial上限6、k_t = 3、同時2の初期値

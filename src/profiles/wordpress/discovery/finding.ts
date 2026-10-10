@@ -26,7 +26,9 @@ const sourceFile = z
       ? value.slice("/workspace/main/".length)
       : value.startsWith("/workspace/wordpress/")
         ? `@wordpress/${value.slice("/workspace/wordpress/".length)}`
-        : value,
+        : value.startsWith("../wordpress/")
+          ? `@wordpress/${value.slice("../wordpress/".length)}`
+          : value,
   )
   .pipe(relativeFile);
 
