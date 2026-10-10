@@ -82,7 +82,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - 入力: 版とdigestを記録した `short-objective-managed-v4`（既定）または `wp2shell-bounty-v2`（比較用、ADR 0017）、人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、参照用の保存先索引、Lab HTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB account。どちらのpromptでも分担する具体的な問いはRootが決める。WP2Shell変種は多様な仮説の並行探索、複数wave、反証と連鎖の統合もRootへ求める。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
 - 許可する操作: 固定sourceの読み取り、LabへのHTTP、Lab DBのRO accountによる読み取り。探索runにcanaryは渡さず、canaryの発行と確認は検証段階のHarnessが行う。外向き通信は認証ブローカー経由のprovider APIだけ。
 - 構成: 1 TrialにRoot 1つと最大3つのsubagentを置き、Rootが調べる問いと分担を決める。Harnessは人数上限、隔離、実行時間、証拠保存、停止を管理する。子の有効なFindingとLeadは個別にPrivate Evidenceへ保存し、Rootの最終JSONの整形失敗で消さない。
-- 出力: `Finding[]`（0件可）、`Lead[]`（0件可）、調べた範囲・調べなかった範囲の短い記述。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。
+- 出力: `Finding[]`（0件可）、`Lead[]`（0件可）、調べた範囲・調べなかった範囲の短い記述。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。候補は生のまま保存し、profileの正規化を通してから受理する。受理できない候補は `candidate-held` として分類とissue pathだけを台帳に残し、保留だけのTrialは停止規則の無成果に数えない（ADR 0018）。Finding / Leadの出力契約はprompt本文ではなくHarnessがschemaから生成する節として渡し、目的文と契約節のdigestを別に記録する（ADR 0019）。
 - Campaign停止規則: provider limitでは新規Trialを止め、同じcampaign IDで未消費分を再開する。WP2Shell変種は優先Findingがなければ少なくとも実時間30分と異なる2 waveを求めるが、現行Harnessは下限を強制しないため実測の早期終了を監視する。協調Trialを同じ版で何回回すか、無成果の連続何回で別対象へ移るかは初回実測後に決める。旧単独Trialの上限6・連続3は協調Trialの既定ではない。
 - 同時実行: 最初は協調Trialを1つずつ回す。Rootと子のprovider要求総数・usage・wallを観測し、安全に増やせることを確かめてから対象間の並列数を決める。
 - 記録する項目（runごと）: trialId / trialOrdinal、Rootまたは子の役割、要求model IDとeffort、CLIの正確な版と同梱カタログのdigest、認証方式、cyber access program、service tier、各agentのusage（providerが返さない項目は `unavailable`）、観測できたsource読取とcommand件数の下限、promptとsourceのdigest。
@@ -90,7 +90,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 7. Verificationの仕様
 
-- Verifier: 新しいコンテナ。渡すのはFinding、固定source pack、Lab endpoint、低権限account、RO DB accountと、impactに応じてLabが検証時に発行したcanary。探索の会話履歴と作業領域は渡さない。役割はrecipeの環境不備の修正と反証に限り、再探索はしない。
+- Verifier: 新しいコンテナ。渡すのはFinding、固定source pack、Lab endpoint、低権限account、RO DB account、Lab Setup（profileの版付き通常機能シナリオIDを含む、ADR 0020）と、impactに応じてLabが検証時に発行したcanary。Findingの前提はシナリオcatalogueと照合し、不足は `incomplete(precondition)` の次の手に次のシナリオ名を書く。探索の会話履歴と作業領域は渡さない。役割はrecipeの環境不備の修正と反証に限り、再探索はしない。
 - HTTP証拠: Verifierの宛先はLab内のHarness所有reverse proxyへ向け、request / responseをPrivate EvidenceにJSON Linesで捕捉する。判定器は捕捉記録を優先し、request側をdecode後も検査する。捕捉が無い場合だけVerifierの `http.json` を補助資料として読み、台帳のoptionalな `evidenceCapture` は `harness-captured` / `agent-authored` のenumだけを記録する。実行時確認には引き続きnonce canaryの回収を要する。
 - Verifierの出力: `http.json`、`steps.md`、`route.json`、別主体のcookieをLabが検査する `session.json`、`refutation.md`、設定前提。payload、cookie、HTTP本文はPrivate Evidenceに置く。
 - 判定器（Harness所有、決定論的）。作るのは両プログラムで報奨に届く分類だけ。Reflected XSS、CSRF、到達先のないmissing authorization / IDOR、コンテンツ削除は判定器を作らず、探索の目的にも含めない（記録はする）:
@@ -103,9 +103,10 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | options更新 | Labが置いたcanary option、または重大なoption（`users_can_register`、`default_role`、`siteurl`、`admin_email` 等）が低権限主体から変わる | 影響のないoption |
 | 管理者への権限昇格 / 認証回避 / アカウント乗っ取り | 低権限主体が管理者の認証状態または管理者相当の能力を得る（Labのcanaryユーザー、各ロールの正常操作記録との差） | パスワードリセットメールの存在だけ、エラーメッセージの差 |
 | contributor以上への権限昇格 / 非管理者の認証回避 | 低権限主体がcontributor以上の能力または他主体の認証状態を得る | 同上 |
-| Stored XSS | 低権限主体が置いたnonce付き値が、影響を受けるページをheadless browserで開いたときに実行され、Labのcanary受信先へ届く。発火contextとサイト全体への広がりを分けて記録 | alertの有無、文字列の存在だけ、ブラウザ操作なしの自己申告 |
+| Stored XSS | 低権限主体が置いたnonce付き値が、影響を受けるページ、またはFindingが宣言する被害者ロールで開いた画面（ADR 0021）をheadless browserで開いたときに実行され、Labのcanary受信先へ届く。発火contextとサイト全体への広がりを分けて記録 | alertの有無、文字列の存在だけ、ブラウザ操作なしの自己申告 |
+| 機微な対象の読み取り（`sensitive-object-access`） | Labが低権限主体の読めない対象に置いたnonce付きcanary文字列が、低権限または未認証の主体への応答に現れる。読めた対象の種類を記録し、scope判定は別段階（ADR 0024） | 文字列の反射、件数・応答長・エラーメッセージの差 |
 
-- 結果: `runtime-confirmed` / `contradicted` / `incomplete`。`incomplete` は理由コード（provision、precondition、recipe、observation、evidence、cleanup、digest-mismatch）と次の手を持つ。
+- 結果: `runtime-confirmed` / `contradicted` / `incomplete`。`incomplete` は理由コード（provision、precondition、recipe、observation、evidence、cleanup、digest-mismatch）と次の手を持つ。再試行は理由ごとに決める: `recipe` と `observation` は同じLab Setupで最大2回自動再試行、`precondition` はシナリオIDが変わったときだけ、`provision` は再供給1回、それ以外は人間へ回す。attempt番号と前のverificationIdを台帳に残す（ADR 0022）。
 - 判定器を定義できない種別は自動確認せず、`incomplete(no-judge)` として人間へ回す。
 - **再現パッケージ（Reproduction Package）**: `runtime-confirmed` になった各Findingについて、判定器が通った経路に限定して、人間が自分の手で再現できる資料を生成する。手順は遠隔攻撃者の視点（HTTPリクエストとブラウザ操作）で書き、WP-CLIやサーバー側だけの操作を成立条件に含めない（Patchstackの提出要件）。内容は (1) 手動手順（前提の設定、使うロールとアカウント、送るリクエスト、期待する観測）、(2) 最小スクリプト（Python、標準ライブラリと `requests` だけで動く）、(3) Labの再構築情報（WordPress版、プラグイン版とdigest、有効化した設定、ロール）、(4) 判定器が取った証拠（HTTP記録、画面画像、canary回収ログ）。置き場はPrivate Evidence（Git外）で、`review` から開く。レポートの査読と提出文案の根拠に使う。Verifierの作業ログをそのまま出さない。
 
@@ -183,7 +184,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - **本番A/B（縦断後）**: 旧単独Trial向けの履歴有無・prompt変種・1 hop継続の軸は既に記録可能だが、協調Trialへのそのままの適用はしない。新しい比較は対象、モデル、source、予算、判定器を固定し、独立した協調Trialを分母にする。区間が重なれば「判定不能」とする。隔離と判定器を外すablationは行わない。
 - **前向き評価**: 本番Campaignの台帳を、後日公開されたadvisory（自分の提出以外も含む）と照合する。未発見の経路を後から分析できるが、個別の脆弱性の存在を実行時に知ることはできない。
 - **提出転帰**: triaged / resolved / duplicate / informative / N/A / rejected の率と、報奨額。収益に直結する最終の数字。
-- **funnel**: raw → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・種別別。
+- **funnel**: 最終JSON到達 → 受理 / 保留 → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・arm別・種別別。非cache入力1M tokenあたりとagent wall 1時間あたりの `runtime-confirmed` と、Findingごとの検証attempt数を同じ表で出す（ADR 0023）。
 
 ### 判定器の負の対照（安い。判定器のテストとして回す）
 
@@ -216,6 +217,14 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 14. 旧単独TrialのLead継続は同一Trial内の1 hopに限る。主経路の既定は0016が置き換える。
 15. 判定器のHTTP証拠はHarnessが捕捉し、Verifierの記録は補助として扱う。
 16. Root＋最大3 subagentを主経路とし、探索から人間の手動再現までを先に実証する。
+17. 短い管理promptとWP2Shell式報奨promptを同条件で比較する。
+18. 探索候補を出力境界で失わず、受理できない候補は保留として理由付きで保持する。
+19. 出力契約はHarnessがschemaから生成し、promptは目的文だけを持つ。
+20. 検証Labの前提はprofileの版付き通常機能シナリオにし、Findingの前提と照合する。
+21. Stored XSS判定器はFindingが宣言する被害者ロールと画面で発火を観測する。
+22. Verifierの `incomplete` は理由ごとの再試行方針で前へ進める。
+23. funnelは最終JSON到達と受理から数え、tokenあたりの `runtime-confirmed` で費用を示す。
+24. `sensitive-object-access` を優先順位に残し、判定器を持つ。
 
 ## 12. 最初の縦断スライスと受入条件
 
