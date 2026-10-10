@@ -440,6 +440,28 @@ function parseChildFinalMessage(
   return extractCandidateReport(message);
 }
 
+/** Recover a final report from the receipt-bound private Root rollout. */
+export function recoverRootReportFromRollout(raw: string) {
+  let message: string | undefined;
+  for (const line of raw.split("\n")) {
+    try {
+      const event = object(JSON.parse(line) as unknown);
+      const payload = object(event?.payload);
+      if (
+        event?.type === "event_msg" &&
+        payload?.type === "task_complete" &&
+        typeof payload.last_agent_message === "string"
+      )
+        message = payload.last_agent_message;
+    } catch {
+      // The sealed diagnostic can include a process tail after the rollout.
+    }
+  }
+  if (message === undefined)
+    throw new Error("Archived Root final message is missing");
+  return extractCandidateReport(message);
+}
+
 /** Reinterpret an archived child report only when its lineage and runtime match the receipt. */
 export function recoverChildReportFromRollout(
   raw: string,

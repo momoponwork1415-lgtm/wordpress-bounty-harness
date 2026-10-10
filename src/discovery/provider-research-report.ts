@@ -93,4 +93,20 @@ export class ProviderAttachmentStore {
       ? { status: "resolved", bytes: result.bytes }
       : { status: "invalid" };
   }
+
+  /** Resolve an archived attachment by its content digest without trusting a caller-supplied path. */
+  async readByDigest(kindValue: unknown, digestValue: unknown) {
+    const kind = kindSchema.parse(kindValue);
+    const digest = digestSchema.parse(digestValue);
+    const result = await this.#store.readFile(
+      `${kind}-${digest.slice(7)}`,
+      `${kind}.json`,
+      kind === "diagnostic" ? MAX_DIAGNOSTIC_BYTES : MAX_ATTACHMENT_BYTES,
+    );
+    if (result.status !== "resolved") return { status: "unavailable" as const };
+    const actual = `sha256:${createHash("sha256").update(result.bytes).digest("hex")}`;
+    return actual === digest
+      ? { status: "resolved" as const, bytes: result.bytes }
+      : { status: "unavailable" as const };
+  }
 }
