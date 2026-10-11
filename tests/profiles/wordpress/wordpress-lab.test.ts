@@ -17,6 +17,7 @@ import {
   wordPressScenario,
   nextWordPressScenario,
 } from "../../../src/profiles/wordpress/lab/scenarios.js";
+import { downloadManagerOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/download-manager-adapter.js";
 import { userRegistrationOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/user-registration-adapter.js";
 import {
   userRegistrationMembershipEnrollmentScript,
@@ -537,6 +538,72 @@ describe("WordPress gVisor Lab", () => {
     expect(await lab.teardown(verification.handle)).toEqual({
       status: "removed",
     });
+  });
+
+  it("repeats pinned public and subscriber downloads in isolated Labs", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "download-manager",
+    );
+    const scenario = wordPressScenario("public-and-subscriber-downloads-v1")!;
+    expect(scenario).toMatchObject({
+      version: 1,
+      pluginSlug: "download-manager",
+      ordinaryDownloads: true,
+      adapterDigest: canonicalDigest(downloadManagerOrdinarySetupScript()),
+    });
+    const ordinarySetup = {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    };
+    const discovery = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.teardown(discovery.handle)).toEqual({ status: "removed" });
+
+    const verification = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.scenario).toEqual(ordinarySetup.scenario);
+    expect(verification.handle.setupDigest).toBe(discovery.handle.setupDigest);
+
+    const scripts = commands
+      .filter(
+        ({ args }) => args[0] === "exec" && args.includes("--user=www-data"),
+      )
+      .map(({ args }) => args.at(-1) ?? "");
+    expect(scripts).toHaveLength(2);
+    for (const script of scripts) {
+      expect(script).toContain('"access"=>["guest"]');
+      expect(script).toContain('"access"=>["subscriber","administrator"]');
+      expect(script).toContain('is_file(UPLOAD_DIR.".htaccess")');
+      expect(script).toContain('"post_status"=>"publish"');
+      expect(script).toContain("wpdm_package id=");
+    }
+    expect(
+      commands.filter(
+        ({ args }) => args[0] === "exec" && args.includes("www-data:www-data"),
+      ),
+    ).toHaveLength(2);
+    expect(await lab.teardown(verification.handle)).toEqual({
+      status: "removed",
+    });
+  });
+
+  it("rejects the download scenario for another plugin before containers start", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-and-subscriber-downloads-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
   });
 
   it("repeats the pinned public comment setup in discovery and verification Labs", async () => {

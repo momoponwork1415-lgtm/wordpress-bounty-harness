@@ -5,6 +5,10 @@ import type {
 } from "./index.js";
 import { SQL_CANARY_TABLE } from "./canary-placement.js";
 import {
+  DOWNLOAD_MANAGER_SCENARIO_ID,
+  downloadManagerOrdinarySetupScript,
+} from "./download-manager-adapter.js";
+import {
   scenarioContent,
   scenarioTranslationSeedScript,
   translatePressLocaleSetupScript,
@@ -253,6 +257,41 @@ async function seedScenarioMemberPost(
     await input.wp(input.resource, ["eval", wpMembersOrdinarySetupScript()]);
 }
 
+async function seedScenarioDownloads(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id !== DOWNLOAD_MANAGER_SCENARIO_ID) return;
+  const uploads = "/var/www/html/wp-content/uploads";
+  await input.requireDocker([
+    "exec",
+    "--user=root",
+    input.resource.wordpress,
+    "mkdir",
+    "-p",
+    uploads,
+  ]);
+  await input.requireDocker([
+    "exec",
+    "--user=root",
+    input.resource.wordpress,
+    "chown",
+    "-R",
+    "www-data:www-data",
+    uploads,
+  ]);
+  await input.requireDocker(
+    [
+      "exec",
+      "--user=www-data",
+      input.resource.wordpress,
+      "php",
+      "-r",
+      downloadManagerOrdinarySetupScript(),
+    ],
+    120_000,
+  );
+}
+
 /** Initialize the isolated WordPress site after all containers are healthy. */
 export async function initializeWordPress(
   input: WordPressInitialization,
@@ -268,6 +307,7 @@ export async function initializeWordPress(
   await seedScenarioMembership(input);
   await seedScenarioCommentForm(input);
   await seedScenarioMemberPost(input);
+  await seedScenarioDownloads(input);
 }
 
 /** Grant SELECT on the tables present at provision time, before canary placement. */
