@@ -14,6 +14,7 @@ import type {
   WordPressLab,
   WordPressLabHandle,
 } from "../lab/index.js";
+import { wordpressReproductionStepSchema } from "./reproduction-package.js";
 
 type JudgeLab = Pick<
   WordPressLab,
@@ -31,6 +32,9 @@ type Options = { readonly store: PrivateArtifactStore; readonly lab: JudgeLab };
 
 const sessionSchema = z.strictObject({ cookie: z.string().min(1).max(4096) });
 const routeFieldsSchema = z.looseObject({});
+const referenceRouteSchema = z.looseObject({
+  steps: z.array(wordpressReproductionStepSchema).min(1).max(30),
+});
 const routeConditionsSchema = z.looseObject({
   role: z.string().min(1).max(64),
   defaultSettings: z.boolean(),
@@ -70,6 +74,42 @@ type HttpEvidence = {
   readonly http: HttpRecord | null;
   readonly captureBytes?: Buffer;
 };
+
+/** A negative control must replay every HTTP step from the confirmed route. */
+function matchesReferenceRoute(
+  http: HttpRecord,
+  referenceRoute: unknown,
+): boolean {
+  const route = referenceRouteSchema.safeParse(referenceRoute);
+  if (!route.success) return false;
+  const steps = route.data.steps.filter((step) => step.kind === "http");
+  if (steps.length === 0) return false;
+  let matched = 0;
+  for (const exchange of http.exchanges) {
+    const captured = capturedExchangeSchema.safeParse(exchange);
+    if (!captured.success) return false;
+    const step = steps[matched];
+    const headersMatch =
+      step === undefined ||
+      step.headers === undefined ||
+      Object.entries(step.headers).every(([name, value]) => {
+        const sameName = Object.entries(captured.data.request.headers).filter(
+          ([capturedName]) => capturedName.toLowerCase() === name.toLowerCase(),
+        );
+        return sameName.length === 1 && sameName[0]?.[1] === value;
+      });
+    if (
+      step !== undefined &&
+      captured.data.request.method === step.method &&
+      captured.data.request.path === step.path &&
+      headersMatch &&
+      (step.body === undefined || captured.data.request.body === step.body)
+    )
+      matched++;
+    if (matched === steps.length) return true;
+  }
+  return false;
+}
 
 function requestContainsSecret(value: unknown, secret: string): boolean {
   const raw = JSON.stringify(value ?? null);
@@ -319,7 +359,7 @@ function canaryJudge(
 ): Judge<WordPressFinding, WordPressLabHandle> {
   return {
     id,
-    async observe({ lab, recipeDigest }) {
+    async observe({ lab, recipeDigest, referenceRoute }) {
       const canaries = options.lab.canaryLedger(lab);
       if (canaries === null)
         return {
@@ -335,7 +375,39 @@ function canaryJudge(
         canaries,
         httpEvidence,
       });
-      if (decision === null) return { status: "not-observed" };
+      if (decision === null) {
+        if (
+          referenceRoute !== undefined &&
+          (httpEvidence.capture !== "harness-captured" ||
+            httpEvidence.http === null ||
+            !matchesReferenceRoute(httpEvidence.http, referenceRoute))
+        )
+          return {
+            status: "incomplete",
+            reason: "observation",
+            nextStep:
+              "The captured rerun did not match the earlier confirmed HTTP route; repeat the same route",
+          };
+        if (
+          httpEvidence.capture !== "harness-captured" ||
+          httpEvidence.captureBytes === undefined
+        )
+          return { status: "not-observed" };
+        const evidenceDigest = await options.store.putFiles({
+          "proxy-capture.jsonl": httpEvidence.captureBytes,
+          "canary-observation.json": canonicalJson({
+            judgeId: id,
+            status: "not-observed",
+            snapshotDigest: lab.snapshotDigest,
+            labSetupDigest: lab.setupDigest,
+          }),
+        });
+        return {
+          status: "not-observed",
+          evidenceCapture: "harness-captured",
+          evidenceDigest,
+        };
+      }
       if ("status" in decision) return decision;
       const { conditions } = decision;
       const evidenceDigest = await recordEvidence(

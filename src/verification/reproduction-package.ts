@@ -31,6 +31,7 @@ export const verificationResultV1Schema = z.discriminatedUnion("status", [
     status: z.literal("contradicted"),
     judgeId: id,
     evidenceDigest: digest,
+    refutationDigest: digest.optional(),
   }),
   z.strictObject({
     status: z.literal("incomplete"),
@@ -47,6 +48,8 @@ export const verificationResultV1Schema = z.discriminatedUnion("status", [
       "no-judge",
     ]),
     nextStep: z.string().min(1).max(2000),
+    evidenceDigest: digest.optional(),
+    refutationDigest: digest.optional(),
   }),
 ]);
 

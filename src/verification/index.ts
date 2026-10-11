@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { LabHandle, LabProvisioner } from "../lab/index.js";
-import type { Ledger } from "../ledger/index.js";
+import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 import {
   publishReproductionPackage,
   type ReproductionRenderer,
@@ -24,6 +24,8 @@ export interface VerifiableFinding {
   readonly findingId: string;
   readonly snapshotDigest: string;
 }
+
+type FindingRecord = Extract<LedgerEventV1, { type: "finding-recorded" }>;
 
 /** A fresh-container agent that repairs and refutes a recipe. It cannot confirm. */
 export interface Verifier<Finding, Handle extends LabHandle> {
@@ -60,6 +62,7 @@ export interface Judge<Finding, Handle extends LabHandle> {
     readonly finding: Finding;
     readonly lab: Handle;
     readonly recipeDigest: string;
+    readonly referenceRoute?: unknown;
   }): Promise<JudgeObservation>;
 }
 export type JudgeObservation =
@@ -70,7 +73,12 @@ export type JudgeObservation =
       /** Facts the judge observed, e.g. attacker role and reached role. */
       readonly conditions: Readonly<Record<string, string>>;
     }
-  | { readonly status: "not-observed" }
+  | {
+      readonly status: "not-observed";
+      /** Negative evidence must come from a Harness-owned capture. */
+      readonly evidenceCapture?: "harness-captured" | "agent-authored";
+      readonly evidenceDigest?: string;
+    }
   | {
       readonly status: "incomplete";
       readonly reason: "precondition" | "observation" | "evidence";
@@ -85,7 +93,15 @@ type Incomplete = Extract<VerificationResultV1, { status: "incomplete" }>;
 const incomplete = (
   reason: Incomplete["reason"],
   nextStep: string,
-): Incomplete => ({ status: "incomplete", reason, nextStep });
+  refutationDigest?: string,
+  evidenceDigest?: string,
+): Incomplete => ({
+  status: "incomplete",
+  reason,
+  nextStep,
+  ...(refutationDigest === undefined ? {} : { refutationDigest }),
+  ...(evidenceDigest === undefined ? {} : { evidenceDigest }),
+});
 
 export type VerificationOptions<
   Finding extends VerifiableFinding,
@@ -145,14 +161,15 @@ export class Verification<
     const snapshotDigest = digest.parse(input.snapshot.digest);
     let labSetupDigest = digest.parse(input.campaignLabSetupDigest);
     let evidenceCapture: "harness-captured" | "agent-authored" | undefined;
-    const finding = await this.#loadFinding(campaignId, findingId);
+    const loaded = await this.#loadFinding(campaignId, findingId);
 
     const decide = async (): Promise<VerificationResultV1> => {
-      if (finding === null)
+      if (loaded === null)
         return incomplete(
           "precondition",
           "Record the finding with its private claim before verification",
         );
+      const { finding, record } = loaded;
       if (
         finding.snapshotDigest !== snapshotDigest ||
         (input.basis !== undefined &&
@@ -162,6 +179,28 @@ export class Verification<
           "digest-mismatch",
           "Repeat verification against the finding snapshot",
         );
+      if (input.basis?.kind === "fixed-version") {
+        const origin =
+          record.derivedFromFindingId === undefined
+            ? undefined
+            : this.#options.ledger
+                .read({
+                  campaignId,
+                  findingId: record.derivedFromFindingId,
+                  type: "finding-recorded",
+                  limit: 1,
+                })
+                .at(0)?.event;
+        if (
+          record.derivationKind !== "fixed-version-control" ||
+          origin?.type !== "finding-recorded" ||
+          origin.snapshotDigest === snapshotDigest
+        )
+          return incomplete(
+            "precondition",
+            "Record a fixed-version control Finding derived from a different Snapshot",
+          );
+      }
       const judge = this.#options.judges.for(finding);
       if (judge === null)
         return incomplete(
@@ -203,6 +242,7 @@ export class Verification<
           lab,
           input.reconstruction,
           input.referenceRoute,
+          input.basis?.kind,
           (capture) => {
             evidenceCapture = capture;
           },
@@ -275,6 +315,7 @@ export class Verification<
     lab: Handle,
     reconstruction: Reconstruction,
     referenceRoute: unknown,
+    basisKind: "latest-version" | "fixed-version" | undefined,
     onCapture: (capture: "harness-captured" | "agent-authored") => void,
   ): Promise<VerificationResultV1> {
     if (lab.snapshotDigest !== snapshotDigest)
@@ -314,6 +355,7 @@ export class Verification<
         finding,
         lab,
         recipeDigest: attempt.recipeDigest,
+        ...(referenceRoute === undefined ? {} : { referenceRoute }),
       });
     } catch {
       return incomplete(
@@ -322,7 +364,11 @@ export class Verification<
       );
     }
     if (observation.status === "incomplete")
-      return incomplete(observation.reason, observation.nextStep);
+      return incomplete(
+        observation.reason,
+        observation.nextStep,
+        attempt.refutationDigest,
+      );
     if (observation.status === "observed") {
       if (observation.evidenceCapture !== undefined)
         onCapture(observation.evidenceCapture);
@@ -342,26 +388,41 @@ export class Verification<
         reconstruction,
       });
     }
-    if (attempt.refutationDigest !== undefined)
+    if (observation.evidenceCapture !== undefined)
+      onCapture(observation.evidenceCapture);
+    if (
+      basisKind === "fixed-version" &&
+      referenceRoute !== undefined &&
+      observation.evidenceCapture === "harness-captured" &&
+      observation.evidenceDigest !== undefined &&
+      attempt.refutationDigest !== undefined
+    )
       return {
         status: "contradicted",
         judgeId: judge.id,
-        evidenceDigest: attempt.refutationDigest,
+        evidenceDigest: observation.evidenceDigest,
+        refutationDigest: attempt.refutationDigest,
       };
     return incomplete(
       "observation",
-      "The judge saw no canary and the Verifier wrote no refutation; repair the recipe and repeat",
+      "The judge saw no canary without a captured fixed-version negative control; repair the recipe and repeat",
+      attempt.refutationDigest,
+      observation.evidenceCapture === "harness-captured"
+        ? observation.evidenceDigest
+        : undefined,
     );
   }
 
   async #loadFinding(
     campaignId: string,
     findingId: string,
-  ): Promise<Finding | null> {
+  ): Promise<{ finding: Finding; record: FindingRecord } | null> {
     const recorded = this.#options.ledger
       .read({ campaignId, findingId, type: "finding-recorded", limit: 1 })
       .at(0);
-    const reference = recorded?.event.artifacts.find(
+    const record = recorded?.event;
+    if (record?.type !== "finding-recorded") return null;
+    const reference = record.artifacts.find(
       (artifact) => artifact.kind === "finding",
     );
     if (reference === undefined) return null;
@@ -375,7 +436,7 @@ export class Verification<
       const finding = this.#options.readFinding(
         JSON.parse(file.bytes.toString("utf8")) as unknown,
       );
-      return finding.findingId === findingId ? finding : null;
+      return finding.findingId === findingId ? { finding, record } : null;
     } catch {
       return null;
     }

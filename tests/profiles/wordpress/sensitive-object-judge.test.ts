@@ -85,20 +85,25 @@ describe("sensitive object judge", () => {
       capture(userMeta.value, { cookie }),
       "harness-admin",
     );
-    expect(admin.observed).toEqual({ status: "not-observed" });
+    expect(admin.observed).toMatchObject({
+      status: "not-observed",
+      evidenceCapture: "harness-captured",
+    });
   });
 
   it("rejects reflected input and response-shape differences", async () => {
     expect(
       (await observe(capture(privatePost.value, {}, privatePost.value)))
         .observed,
-    ).toEqual({
+    ).toMatchObject({
       status: "not-observed",
+      evidenceCapture: "harness-captured",
     });
     expect(
       (await observe(capture("count=1; length=24; error=denied"))).observed,
-    ).toEqual({
+    ).toMatchObject({
       status: "not-observed",
+      evidenceCapture: "harness-captured",
     });
   });
 

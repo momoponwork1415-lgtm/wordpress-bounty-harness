@@ -541,7 +541,8 @@ export class Ledger {
     let evidenceAvailable = true;
     if (
       parsed.type === "verification-finished" &&
-      "evidenceDigest" in parsed.result
+      "evidenceDigest" in parsed.result &&
+      parsed.result.evidenceDigest !== undefined
     ) {
       const resolution = await this.#artifacts.resolve(
         parsed.result.evidenceDigest,
@@ -558,6 +559,18 @@ export class Ledger {
           packageResolution.artifact.digest ===
             parsed.result.reproductionPackageDigest;
       }
+    }
+    if (
+      parsed.type === "verification-finished" &&
+      "refutationDigest" in parsed.result &&
+      parsed.result.refutationDigest !== undefined
+    ) {
+      const refutation = await this.#artifacts.resolve(
+        parsed.result.refutationDigest,
+      );
+      evidenceAvailable &&=
+        refutation.status === "resolved" &&
+        refutation.artifact.digest === parsed.result.refutationDigest;
     }
 
     this.#db.exec("BEGIN IMMEDIATE");
