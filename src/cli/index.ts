@@ -51,6 +51,24 @@ export type CliState = {
   readonly newId: () => string;
 };
 
+export interface CliSelectionReport {
+  readonly batchId: string | null;
+  readonly selected: readonly {
+    readonly targetId: string;
+    readonly version: string;
+    readonly score: number;
+    readonly scoreBreakdown: Readonly<Record<string, number>>;
+    readonly observedAt: string;
+    readonly sourceUrl?: string;
+  }[];
+  readonly excluded: readonly {
+    readonly targetId: string;
+    readonly reasons: readonly string[];
+    readonly observedAt?: string;
+    readonly sourceUrl?: string;
+  }[];
+}
+
 /** A profile composition: everything target-specific the commands need. */
 export interface CliProfile {
   review(state: CliState): Review;
@@ -65,13 +83,7 @@ export interface CliProfile {
   select(
     state: CliState,
     input: { readonly configPath: string },
-  ): Promise<
-    readonly {
-      readonly targetId: string;
-      readonly version: string;
-      readonly score: number;
-    }[]
-  >;
+  ): Promise<CliSelectionReport>;
   runCampaign(
     state: CliState,
     input: {
@@ -446,14 +458,26 @@ export async function runCli(
     const print = (lines: readonly string[]) => lines.forEach(io.stdout);
     switch (command) {
       case "select": {
-        const selected = await environment.profile.select(state, {
+        const report = await environment.profile.select(state, {
           configPath: resolve(required(values.config, "config")),
         });
-        for (const target of selected)
+        for (const target of report.selected)
           io.stdout(
-            `${target.targetId} ${target.version} score ${target.score.toFixed(2)}`,
+            `${target.targetId} ${target.version} score ${target.score.toFixed(2)}  breakdown ${Object.entries(
+              target.scoreBreakdown,
+            )
+              .map(([part, points]) => `${part}=${points.toFixed(2)}`)
+              .join(
+                " ",
+              )}  observed ${target.observedAt}  source ${target.sourceUrl ?? "unavailable"}  excluded none`,
           );
-        if (selected.length === 0) io.stdout("no targets selected");
+        for (const target of report.excluded)
+          io.stdout(
+            `excluded ${target.targetId}  reasons ${target.reasons.join(",")}  observed ${target.observedAt ?? "unavailable"}  source ${target.sourceUrl ?? "unavailable"}`,
+          );
+        if (report.batchId !== null)
+          io.stdout(`selection batch ${report.batchId}`);
+        if (report.selected.length === 0) io.stdout("no targets selected");
         return 0;
       }
       case "campaign run": {

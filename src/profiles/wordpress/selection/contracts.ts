@@ -1,18 +1,53 @@
 import { z } from "zod";
 
 import type { TargetSelection } from "../../../selection/index.js";
-import type { WordPressOrgTargetObservationRef } from "../acquisition/index.js";
-import type { ProgrammeEligibilitySnapshotRef } from "../programme-intelligence/index.js";
+import {
+  wordPressOrgTargetObservationRefSchema,
+  type WordPressOrgTargetObservationRef,
+} from "../acquisition/index.js";
+import {
+  programmeEligibilitySnapshotRefSchema,
+  type ProgrammeEligibilitySnapshotRef,
+} from "../programme-intelligence/index.js";
+import { wordPressRevisitPolicySchema } from "./ledger-exclusions.js";
 
 const slugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
 
-export const wordPressSelectionPolicySchema = z
+const commonSelectionPolicy = {
+  kind: z.literal("wordpress-selection-policy"),
+  schemaVersion: z.literal(1),
+  id: z.string().min(1).max(128),
+  promptVariant: z.string().min(1).max(128).optional(),
+  revisitPolicy: wordPressRevisitPolicySchema.optional(),
+  minimumActiveInstallations: z.number().int().nonnegative(),
+  maximumObservationAgeDays: z.number().positive(),
+  maximumUpdateAgeDays: z.number().positive(),
+  maximumTargets: z.number().int().positive(),
+  excludedAuthors: z.array(z.string().min(1)),
+  excludedSlugs: z.array(slugSchema),
+  surfaceTagWeights: z.record(z.string(), z.number().nonnegative()),
+  /** Public tags that suggest a High Threat surface (file operations, options, authentication). */
+  highThreatTags: z.array(z.string().min(1)),
+  scoreWeights: z.strictObject({
+    installations: z.number().nonnegative(),
+    recency: z.number().nonnegative(),
+    surface: z.number().nonnegative(),
+    highThreat: z.number().nonnegative(),
+    history: z.number().nonnegative().optional(),
+  }),
+  /** Discovery runs per target: deeper where the expected reward is higher. */
+  runBudget: z.strictObject({
+    default: z.number().int().positive().max(40),
+    highThreat: z.number().int().positive().max(40),
+  }),
+  /** Manual pin: select this version instead of the observed stable version. */
+} as const;
+
+const manualSelectionPolicy = z
   .strictObject({
-    kind: z.literal("wordpress-selection-policy"),
-    schemaVersion: z.literal(1),
-    id: z.string().min(1).max(128),
+    ...commonSelectionPolicy,
     candidateSlugs: z.array(slugSchema),
-    /** Counts of public low-privilege, high-impact catalog records used to nominate candidates. */
+    /** Historical manual nominations remain readable; the current rule is set by ADR 0030. */
     historySignals: z
       .record(slugSchema, z.number().int().nonnegative())
       .optional(),
@@ -22,27 +57,6 @@ export const wordPressSelectionPolicySchema = z
         refreshedAt: z.iso.datetime({ offset: true }),
       })
       .optional(),
-    minimumActiveInstallations: z.number().int().nonnegative(),
-    maximumObservationAgeDays: z.number().positive(),
-    maximumUpdateAgeDays: z.number().positive(),
-    maximumTargets: z.number().int().positive(),
-    excludedAuthors: z.array(z.string().min(1)),
-    excludedSlugs: z.array(slugSchema),
-    surfaceTagWeights: z.record(z.string(), z.number().nonnegative()),
-    /** Public tags that suggest a High Threat surface (file operations, options, authentication). */
-    highThreatTags: z.array(z.string().min(1)),
-    scoreWeights: z.strictObject({
-      installations: z.number().nonnegative(),
-      recency: z.number().nonnegative(),
-      surface: z.number().nonnegative(),
-      highThreat: z.number().nonnegative(),
-      history: z.number().nonnegative().optional(),
-    }),
-    /** Discovery runs per target: deeper where the expected reward is higher. */
-    runBudget: z.strictObject({
-      default: z.number().int().positive().max(40),
-      highThreat: z.number().int().positive().max(40),
-    }),
     /** Manual pin: select this version instead of the observed stable version. */
     pinnedVersions: z
       .record(slugSchema, z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/))
@@ -66,6 +80,30 @@ export const wordPressSelectionPolicySchema = z
       policy.historySignals === undefined || policy.historySource !== undefined,
     { message: "History signals require a source", path: ["historySource"] },
   );
+
+const automaticSelectionPolicy = z.strictObject({
+  ...commonSelectionPolicy,
+  promptVariant: z.string().min(1).max(128),
+  revisitPolicy: wordPressRevisitPolicySchema,
+  maximumTargets: z.number().int().min(3).max(5),
+  /** The core image version pinned when select freezes the chosen targets. */
+  wordpressVersion: z.string().min(1).max(32),
+  candidateSource: z.strictObject({
+    kind: z.literal("wordpress-org"),
+    popularPages: z.number().int().min(1).max(5),
+    tags: z.array(slugSchema).max(8),
+    pagesPerTag: z.number().int().min(1).max(5),
+    perPage: z.number().int().min(1).max(50),
+    maxCandidates: z.number().int().min(5).max(500),
+    maxAgeDays: z.number().positive().max(7),
+  }),
+});
+
+/** A policy nominates candidates manually or from the directory, never both. */
+export const wordPressSelectionPolicySchema = z.union([
+  manualSelectionPolicy,
+  automaticSelectionPolicy,
+]);
 
 export type WordPressSelectionPolicy = z.infer<
   typeof wordPressSelectionPolicySchema
@@ -93,7 +131,7 @@ export interface WordPressTargetSelection extends TargetSelection {
   /** Upper bound on discovery runs for this target; the campaign ceiling still applies. */
   readonly runBudget: number;
   /** The plugin's last update on WordPress.org, standing in for the stable version's release. */
-  readonly versionPublishedAt?: string;
+  readonly versionPublishedAt?: string | undefined;
   readonly scoreBreakdown: {
     readonly installations: number;
     readonly recency: number;
@@ -105,9 +143,45 @@ export interface WordPressTargetSelection extends TargetSelection {
   readonly programmeRef: ProgrammeEligibilitySnapshotRef;
 }
 
+/** Validate a private selection before replaying its reserved snapshot. */
+export const wordPressTargetSelectionSchema: z.ZodType<WordPressTargetSelection> =
+  z.strictObject({
+    targetId: z.string().regex(/^wporg:[a-z0-9][a-z0-9-]*$/),
+    slug: slugSchema,
+    version: z.string().min(1).max(64),
+    score: z.number().finite(),
+    selectedAt: z.iso.datetime({ offset: true }),
+    policy: z.strictObject({
+      id: z.string().min(1).max(128),
+      digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    }),
+    activeInstallations: z.number().int().nonnegative(),
+    highThreatSurface: z.boolean(),
+    runBudget: z.number().int().positive().max(40),
+    versionPublishedAt: z.iso.datetime({ offset: true }).optional(),
+    scoreBreakdown: z.strictObject({
+      installations: z.number().finite(),
+      recency: z.number().finite(),
+      surface: z.number().finite(),
+      highThreat: z.number().finite(),
+      history: z.number().finite(),
+    }),
+    observationRef: wordPressOrgTargetObservationRefSchema,
+    programmeRef: programmeEligibilitySnapshotRefSchema,
+  });
+
 export interface WordPressSelectionInspection {
   readonly slug: string;
   readonly status: "eligible" | "ineligible";
   readonly reasons: readonly SelectionReason[];
   readonly selection?: WordPressTargetSelection;
+  readonly observedAt?: string;
+  readonly enumeration?: {
+    readonly sourceKind: "popular" | "tag";
+    readonly sourceTag?: string;
+    readonly sourcePage: number;
+    readonly sourceUrl: string;
+    readonly observedAt: string;
+    readonly contentDigest: string;
+  };
 }

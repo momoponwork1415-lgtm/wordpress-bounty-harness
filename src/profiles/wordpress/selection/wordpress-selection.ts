@@ -11,6 +11,11 @@ import type {
   ProgrammeIntelligence,
 } from "../programme-intelligence/index.js";
 import {
+  enumerateWordPressOrgCandidates,
+  type EnumerateWordPressOrgCandidatesOptions,
+  type WordPressOrgCandidateEnumeration,
+} from "./wordpress-org-candidate-enumerator.js";
+import {
   wordPressSelectionPolicySchema,
   type WordPressSelectionPolicy,
   type WordPressTargetSelection,
@@ -25,6 +30,10 @@ export interface CreateWordPressSelectionOptions {
   readonly programme: Pick<ProgrammeIntelligence, "inspect">;
   readonly programmeRef: ProgrammeEligibilitySnapshotRef;
   readonly clock?: () => Date;
+  readonly fetch?: typeof fetch;
+  readonly enumerateCandidates?: (
+    options: EnumerateWordPressOrgCandidatesOptions,
+  ) => Promise<WordPressOrgCandidateEnumeration>;
 }
 
 /** WordPress.org dates look like `2026-09-01 12:00am GMT`; ISO strings also parse. */
@@ -85,9 +94,8 @@ function score(
   const highThreat =
     (highThreatSurface(observation, policy) ? 1 : 0) *
     policy.scoreWeights.highThreat;
-  const history =
-    Math.log2(1 + (policy.historySignals?.[observation.officialSlug] ?? 0)) *
-    (policy.scoreWeights.history ?? 0);
+  // Public advisory counts are held for reading old policies, not ranking.
+  const history = 0;
   return { installations, recency, surface, highThreat, history };
 }
 
@@ -116,10 +124,26 @@ export function createWordPressSelection(
     const now = nowDate.getTime();
     if (!Number.isFinite(now)) throw new Error("Selection clock is invalid");
     const policyDigest = canonicalDigestPreservingProperties(policy);
-    const historyAge =
-      policy.historySource === undefined
-        ? undefined
-        : ageDays(policy.historySource.refreshedAt, now);
+    const pinnedVersions =
+      "pinnedVersions" in policy ? policy.pinnedVersions : undefined;
+    const enumeration =
+      "candidateSource" in policy
+        ? await (
+            options.enumerateCandidates ?? enumerateWordPressOrgCandidates
+          )({
+            ...policy.candidateSource,
+            clock,
+            ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+          })
+        : undefined;
+    const candidateSlugs =
+      "candidateSlugs" in policy
+        ? policy.candidateSlugs
+        : (enumeration?.candidates.map((candidate) => candidate.slug) ?? []);
+    const candidateProvenance = new Map(
+      enumeration?.candidates.map((candidate) => [candidate.slug, candidate]) ??
+        [],
+    );
     const programmeResult = await options.programme
       .inspect({
         kind: "programme-eligibility-inspection",
@@ -143,17 +167,13 @@ export function createWordPressSelection(
       );
 
     const results: WordPressSelectionInspection[] = [];
-    for (const slug of [...new Set(policy.candidateSlugs)]) {
+    for (const slug of [...new Set(candidateSlugs)]) {
+      const enumeration = candidateProvenance.get(slug);
       const reasons: SelectionReason[] = [];
       if (!programmeCurrent) reasons.push("programme-stale");
       else if (!programmeAcceptsAsset)
         reasons.push("programme-asset-out-of-scope");
       if (policy.excludedSlugs.includes(slug)) reasons.push("excluded-slug");
-      if (
-        policy.historySignals !== undefined &&
-        (historyAge === undefined || historyAge > 1)
-      )
-        reasons.push("history-stale");
       const result = await options.targetSource
         .observe({
           kind: "wordpress-org-target-observe",
@@ -167,7 +187,12 @@ export function createWordPressSelection(
             ? "distribution-closed"
             : "observation-unavailable",
         );
-        results.push({ slug, status: "ineligible", reasons });
+        results.push({
+          slug,
+          status: "ineligible",
+          reasons,
+          ...(enumeration === undefined ? {} : { enumeration }),
+        });
         continue;
       }
       const observation = result.observation;
@@ -203,11 +228,17 @@ export function createWordPressSelection(
         updateAge === undefined ||
         programmeResult?.status !== "current"
       ) {
-        results.push({ slug, status: "ineligible", reasons });
+        results.push({
+          slug,
+          status: "ineligible",
+          reasons,
+          observedAt: observation.observedAt,
+          ...(enumeration === undefined ? {} : { enumeration }),
+        });
         continue;
       }
       const scoreBreakdown = score(observation, policy, updateAge);
-      const pinnedVersion = policy.pinnedVersions?.[slug];
+      const pinnedVersion = pinnedVersions?.[slug];
       const lastUpdated = parseObservedDate(observation.lastUpdated);
       const selection: WordPressTargetSelection = {
         targetId: observation.pluginIdentity,
@@ -234,7 +265,14 @@ export function createWordPressSelection(
         observationRef: result.observationRef,
         programmeRef: programmeResult.snapshotRef,
       };
-      results.push({ slug, status: "eligible", reasons, selection });
+      results.push({
+        slug,
+        status: "eligible",
+        reasons,
+        selection,
+        observedAt: observation.observedAt,
+        ...(enumeration === undefined ? {} : { enumeration }),
+      });
     }
     return results;
   }
