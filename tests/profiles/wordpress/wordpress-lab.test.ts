@@ -207,7 +207,14 @@ async function fixture(
             ?.slice("WBH_VISIT_PATH=".length);
           if (visit !== undefined && database.firesOn.includes(visit))
             database.beacons.push("/b/fixed-nonce");
-          return { exitCode: 0, stdout: "", stderr: "" };
+          return {
+            exitCode: 0,
+            stdout: Buffer.concat([
+              Buffer.from("89504e470d0a1a0a", "hex"),
+              Buffer.from("synthetic observer output"),
+            ]).toString("base64"),
+            stderr: "",
+          };
         }
         if (
           request.args[0] === "exec" &&
@@ -851,31 +858,43 @@ describe("WordPress gVisor Lab", () => {
     expect(await contexts(["/"])).toEqual({
       status: "observed",
       contexts: ["front"],
+      screenshot: expect.any(Buffer),
     });
     expect(await contexts(["/wp-admin/", "/wp-admin/edit.php"])).toEqual({
       status: "observed",
       contexts: ["admin-all"],
+      screenshot: expect.any(Buffer),
     });
     expect(await contexts(["/wp-admin/"])).toEqual({
       status: "observed",
       contexts: ["admin-partial"],
+      screenshot: expect.any(Buffer),
     });
     expect(await contexts(["/?p=7"])).toEqual({
       status: "observed",
       contexts: ["route-page"],
+      screenshot: expect.any(Buffer),
     });
     expect(
       await contexts(["/wp-admin/admin.php?page=fixture"], {
         role: "administrator",
         paths: ["/wp-admin/admin.php?page=fixture"],
       }),
-    ).toEqual({ status: "observed", contexts: ["victim-route-page"] });
+    ).toEqual({
+      status: "observed",
+      contexts: ["victim-route-page"],
+      screenshot: expect.any(Buffer),
+    });
     expect(
       await contexts(["/?p=8"], {
         role: "subscriber",
         paths: ["/?p=8"],
       }),
-    ).toEqual({ status: "observed", contexts: ["victim-route-page"] });
+    ).toEqual({
+      status: "observed",
+      contexts: ["victim-route-page"],
+      screenshot: expect.any(Buffer),
+    });
     expect(await contexts([])).toEqual({ status: "observed", contexts: [] });
 
     const browsers = commands.filter(

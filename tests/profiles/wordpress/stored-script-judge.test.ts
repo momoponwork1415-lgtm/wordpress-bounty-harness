@@ -13,6 +13,7 @@ const browserRoute = {
     { kind: "browser", path: "/?p=7", expected: "Beacon reaches the receiver" },
   ],
 };
+const observerBytes = Buffer.from("synthetic observer output");
 
 async function judge(
   observation: WordPressStoredScriptObservation,
@@ -50,6 +51,7 @@ describe("WordPress stored script judge", () => {
     const { judgeId, observed, visited } = await judge({
       status: "observed",
       contexts: ["front", "admin-all"],
+      screenshot: observerBytes,
     });
     expect(judgeId).toBe("wordpress-stored-script");
     expect(visited).toEqual([["/?p=7"]]);
@@ -69,7 +71,11 @@ describe("WordPress stored script judge", () => {
 
   it("confirms a beacon from an affected page and records limited scope", async () => {
     for (const contexts of [["route-page"], ["admin-partial"]] as const) {
-      const { observed } = await judge({ status: "observed", contexts });
+      const { observed } = await judge({
+        status: "observed",
+        contexts,
+        screenshot: observerBytes,
+      });
       expect(observed).toMatchObject({
         status: "observed",
         conditions: {
@@ -87,7 +93,11 @@ describe("WordPress stored script judge", () => {
       paths: ["/wp-admin/admin.php?page=fixture"],
     };
     const { observed, victims } = await judge(
-      { status: "observed", contexts: ["victim-route-page"] },
+      {
+        status: "observed",
+        contexts: ["victim-route-page"],
+        screenshot: observerBytes,
+      },
       victim,
     );
     expect(victims).toEqual([victim]);
@@ -103,7 +113,11 @@ describe("WordPress stored script judge", () => {
 
   it("requires a Lab account for a declared customer victim", async () => {
     const { observed } = await judge(
-      { status: "observed", contexts: ["victim-route-page"] },
+      {
+        status: "observed",
+        contexts: ["victim-route-page"],
+        screenshot: observerBytes,
+      },
       { role: "customer", paths: ["/account"] },
     );
     expect(observed).toMatchObject({
@@ -116,6 +130,12 @@ describe("WordPress stored script judge", () => {
     expect(
       (await judge({ status: "observed", contexts: [] })).observed,
     ).toEqual({ status: "not-observed" });
+  });
+
+  it("keeps a fired beacon incomplete when the Lab screenshot is missing", async () => {
+    expect(
+      (await judge({ status: "observed", contexts: ["front"] })).observed,
+    ).toMatchObject({ status: "incomplete", reason: "evidence" });
   });
 
   it("stays incomplete without an issued script canary or a working observer", async () => {
