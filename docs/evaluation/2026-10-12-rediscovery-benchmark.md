@@ -13,9 +13,9 @@ Git 外の manifest は [`rediscovery-catalog-pins.json`](rediscovery-catalog-pi
 | Relevanssi 4.28.3 | あり：通常のコメント索引 | ready | 探索・検証 Lab とも、承認済みコメントの固有語を公開検索すると該当投稿を返した。 |
 | Simply Schedule Appointments 1.6.10.0 | あり：通常の予約種別と公開ページ | ready | 公開ページ、予約 iframe、内部予約アプリが応答した。 |
 | Brizy 2.8.11 | あり：通常の公開ビルダーページ | ready | gVisor Lab で無害なテキスト要素を保存し、匿名の公開ページに Brizy 本文とテキストが表示された。 |
-| TranslatePress 3.3.1 | あり：二次言語と翻訳データ | 測定待ち | 既存の対象固有 setup と他対象を同じ条件として比較しない。 |
-| TranslatePress 3.2.6：記録A | あり：二次言語と承認済みコメント | 測定待ち | 記録Bとは同じ対象版、照合は別。 |
-| TranslatePress 3.2.6：記録B | あり：二次言語と承認済みコメント | 測定待ち | 記録Aとは同じ対象版、照合は別。 |
+| TranslatePress 3.3.1 | あり：二次言語と翻訳データ | ready | 固定 ZIP と gVisor Lab を確認。二次言語、翻訳行、承認済みコメント、公開投稿、管理者 locale を観測。他対象と同じ条件として比較しない。 |
+| TranslatePress 3.2.6：記録A | あり：二次言語と承認済みコメント | ready | 固定 ZIP と gVisor Lab を確認。二次言語、翻訳行、承認済みコメント、公開投稿、管理者 locale を観測。記録Bと同じ source Trial を共有する。 |
+| TranslatePress 3.2.6：記録B | あり：二次言語と承認済みコメント | ready | 記録Aと同じ前提を確認し、公開記録との一致は別に判定する。 |
 | Smash Balloon 4.13.0 | あり：外部 Facebook feed | incomplete（Lab 前提） | 隔離 Lab は起動し、新規 DB の接続済み source・feed・cache は各0件。内部ネットワークから外部 API へ到達できなかった。 |
 | Unlimited Elements 2.0.16 | あり：Elementor 依存 | incomplete（source 取得） | 固定した SVN export を現行 ZIP 専用取得器へ渡せず、Elementor 依存も Snapshot にない。 |
 
