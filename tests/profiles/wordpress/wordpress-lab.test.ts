@@ -673,7 +673,7 @@ describe("WordPress gVisor Lab", () => {
     expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
   });
 
-  it("repeats the pinned public file download in isolated Labs", async () => {
+  it("provisions the pinned public download setup for both Lab purposes", async () => {
     const { lab, snapshot, setup, commands } = await fixture(
       "ready",
       { version: "6.8.3", runningVersion: "6.8.3" },
