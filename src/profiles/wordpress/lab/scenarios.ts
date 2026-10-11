@@ -3,6 +3,10 @@ import {
   USER_REGISTRATION_SCENARIO_ID,
   userRegistrationOrdinarySetupScript,
 } from "./user-registration-adapter.js";
+import {
+  WPDISCUZ_COMMENT_SCENARIO_ID,
+  wpDiscuzOrdinarySetupScript,
+} from "./wpdiscuz-adapter.js";
 
 /** Ordinary site setup only. Scenarios never grant privileged roles. */
 const definitions = [
@@ -70,6 +74,16 @@ const definitions = [
     ordinaryRegistration: true,
     adapterDigest: canonicalDigest(userRegistrationOrdinarySetupScript()),
   },
+  {
+    id: WPDISCUZ_COMMENT_SCENARIO_ID,
+    version: 1,
+    name: "公開コメントフォームと承認済みコメント",
+    pluginSlug: "wpdiscuz",
+    approvedComment: true,
+    secondaryLocale: null,
+    translation: null,
+    adapterDigest: canonicalDigest(wpDiscuzOrdinarySetupScript()),
+  },
 ] as const;
 
 const pins: Record<(typeof definitions)[number]["id"], string> = {
@@ -83,6 +97,8 @@ const pins: Record<(typeof definitions)[number]["id"], string> = {
     "sha256:8699068b8ba01eec99b5675b63d6c27d5ab612118ed4248df38998457e27d147",
   "public-registration-and-account-v1":
     "sha256:95cf63ae1968865ee518478ed35064811bb70698a7f4e9decf7b5adba9bc4477",
+  "public-plugin-comment-v1":
+    "sha256:5051e8b9acb5c18b6c3b5428e8489fb764d158376b21f3ddebebb287cf22bb8c",
 };
 
 export const wordPressScenarioCatalogue = definitions.map((definition) => {
