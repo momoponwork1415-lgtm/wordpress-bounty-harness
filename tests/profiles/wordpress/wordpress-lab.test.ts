@@ -353,6 +353,7 @@ describe("WordPress gVisor Lab", () => {
       id: scenario.id,
       digest: scenario.digest,
     });
+    expect(provisioned.handle.secondaryLocale).toBe("fr_FR");
     expect(
       commands.some((command) => command.args.includes("--comment_approved=1")),
     ).toBe(true);
@@ -364,7 +365,7 @@ describe("WordPress gVisor Lab", () => {
       ),
     ).toBe(true);
     expect(nextWordPressScenario("translation dictionary is empty")).toBe(
-      scenario.name,
+      `${scenario.id}: ${scenario.name}`,
     );
     expect(
       nextWordPressScenario("translation dictionary is empty", scenario.id),
@@ -373,6 +374,77 @@ describe("WordPress gVisor Lab", () => {
       "catalogue に無い前提",
     );
     await lab.teardown(provisioned.handle);
+  });
+
+  it.each([
+    ["private-post-v1", "post", "lab-private-post"],
+    ["private-page-v1", "page", "lab-private-page"],
+  ] as const)(
+    "seeds a digest-pinned ordinary %s without changing privileges",
+    async (id, type, slug) => {
+      const { lab, snapshot, setup, commands } = await fixture();
+      const scenario = wordPressScenario(id)!;
+      const provisioned = await lab.provision(snapshot, {
+        ...setup,
+        scenario: { id: scenario.id, digest: scenario.digest },
+      });
+      expect(provisioned.status).toBe("ready");
+      if (provisioned.status !== "ready") return;
+      expect(provisioned.handle.scenario).toEqual({
+        id,
+        digest: scenario.digest,
+      });
+      expect(
+        commands.some(
+          ({ args }) =>
+            args.includes(`--post_type=${type}`) &&
+            args.includes("--post_status=private") &&
+            args.includes(`--post_name=${slug}`),
+        ),
+      ).toBe(true);
+      expect(
+        commands.some(({ args }) => args.includes("--role=administrator")),
+      ).toBe(false);
+      expect(nextWordPressScenario(`A private ${type} is missing`)).toBe(
+        `${id}: ${scenario.name}`,
+      );
+      expect(nextWordPressScenario(`A private ${type} is missing`, id)).toBe(
+        "catalogue に無い前提",
+      );
+      await lab.teardown(provisioned.handle);
+    },
+  );
+
+  it("does not promise a private-content scenario unless a separate locale prerequisite is met", () => {
+    const privatePost = wordPressScenario("private-post-v1")!;
+    const prerequisite = "A private post and secondary language enabled";
+    expect(nextWordPressScenario(prerequisite)).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario(prerequisite, undefined, {
+        secondaryLocaleConfigured: true,
+      }),
+    ).toBe(`${privatePost.id}: ${privatePost.name}`);
+    expect(
+      nextWordPressScenario(
+        "A private post with translation dictionary",
+        undefined,
+        {
+          secondaryLocaleConfigured: true,
+        },
+      ),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario("A private post with an approved comment"),
+    ).toBe("catalogue に無い前提");
+    expect(nextWordPressScenario("A private post and private page")).toBe(
+      "catalogue に無い前提",
+    );
+    expect(
+      nextWordPressScenario("A private page with translation dictionary"),
+    ).toBe("catalogue に無い前提");
+    expect(nextWordPressScenario("A private post in the default locale")).toBe(
+      `${privatePost.id}: ${privatePost.name}`,
+    );
   });
 
   it("rejects a changed scenario digest before provisioning", async () => {

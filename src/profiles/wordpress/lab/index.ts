@@ -83,6 +83,8 @@ export interface WordPressSourceResolver {
 }
 
 export interface WordPressLabHandle extends LabHandle {
+  /** Non-secret ordinary locale setting for prerequisite matching. */
+  readonly secondaryLocale?: string;
   readonly networkName: string;
   readonly internalIp: string;
   /** Verifier traffic passes through this Lab-local recorder. */

@@ -305,6 +305,9 @@ export function createLabHandle(input: {
     snapshotDigest: snapshot.digest,
     setupDigest: canonicalDigest({ setup, images }),
     ...(setup.scenario === undefined ? {} : { scenario: setup.scenario }),
+    ...(resource.administratorSecondaryLocale === undefined
+      ? {}
+      : { secondaryLocale: resource.administratorSecondaryLocale }),
     endpoint: "http://wordpress",
     networkName: resource.network,
     internalIp,

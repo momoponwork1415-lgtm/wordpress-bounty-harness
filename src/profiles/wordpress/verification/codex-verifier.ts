@@ -316,6 +316,7 @@ export class CodexVerifier implements Verifier<
     const requiredScenario = nextWordPressScenario(
       admitted.configurationPrecondition,
       lab.scenario?.id,
+      { secondaryLocaleConfigured: lab.secondaryLocale !== undefined },
     );
     if (requiredScenario !== "catalogue に無い前提")
       return {
@@ -374,6 +375,10 @@ export class CodexVerifier implements Verifier<
       canonicalJson({
         endpoint: lab.endpoint,
         accounts,
+        ...(lab.scenario === undefined ? {} : { scenario: lab.scenario }),
+        ...(lab.secondaryLocale === undefined
+          ? {}
+          : { secondaryLocale: lab.secondaryLocale }),
         ...(verifierDatabase === undefined
           ? {}
           : {
@@ -529,6 +534,7 @@ export class CodexVerifier implements Verifier<
         nextStep: nextWordPressScenario(
           `${admitted.configurationPrecondition} ${data.precondition}`,
           lab.scenario?.id,
+          { secondaryLocaleConfigured: lab.secondaryLocale !== undefined },
         ),
       };
     if (

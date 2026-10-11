@@ -667,7 +667,8 @@ describe("CodexVerifier.attempt", () => {
     ).toEqual({
       status: "incomplete",
       reason: "precondition",
-      nextStep: "TranslatePress の二次言語・翻訳データ・承認済みコメント",
+      nextStep:
+        "translatepress-translation-data-v1: TranslatePress の二次言語・翻訳データ・承認済みコメント",
     });
   });
 
