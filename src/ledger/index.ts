@@ -113,7 +113,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
   event({
     type: z.literal("discovery-run-finished"),
     runId: id,
-    /** `provider-limited`: the subscription refused the run; it does not spend the target's budget. */
+    /** `provider-limited`: the subscription refused the run; the campaign's Trial policy decides whether the started attempt consumes its budget. */
     outcome: z.enum([
       "completed",
       "failed",

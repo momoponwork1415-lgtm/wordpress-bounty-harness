@@ -1,16 +1,31 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { realpath, stat } from "node:fs/promises";
-import { isIP } from "node:net";
+import { createHash, randomUUID } from "node:crypto";
+import { createWordPressLabObservations } from "./lab-observation.js";
 import { isAbsolute } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
-import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import { startLabContainers } from "./container-startup.js";
 import {
-  verifyCanonicalSourceTree,
-  type ExpectedSourceTree,
-} from "../../../infrastructure/canonical-source-tree.js";
+  placeVerificationCanaries,
+  seedWordPressCanaries,
+} from "./canary-placement.js";
+import {
+  grantReadOnlyDatabaseAccess,
+  initializeWordPress,
+} from "./wordpress-initialization.js";
+import {
+  createLabHandle,
+  createLabResource,
+  databaseIp,
+  prepareWordPressLab,
+  type WordPressLabSetup,
+} from "./provision-input.js";
+export type {
+  WordPressLabSetup,
+  ParsedWordPressLabSetup,
+} from "./provision-input.js";
+export { WORDPRESS_CORE_IDENTITY } from "./provision-input.js";
+import type { ExpectedSourceTree } from "../../../infrastructure/canonical-source-tree.js";
 import { runNativeModelProcess } from "../../../infrastructure/native-model-process.js";
 import type {
   LabHandle,
@@ -18,125 +33,16 @@ import type {
   LabReachability,
   ProvisionResult,
 } from "../../../lab/index.js";
-import { snapshotSchema, type Snapshot } from "../../../snapshot/index.js";
-import { wordPressScenario } from "./scenarios.js";
+import type { Snapshot } from "../../../snapshot/index.js";
 
-const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const pinnedImage = z.string().regex(/^[^\s@]+@sha256:[a-f0-9]{64}$/);
-const slug = z
-  .string()
-  .regex(/^[a-z0-9][a-z0-9-]*$/)
-  .max(100);
-const setupSchema = z
-  .strictObject({
-    schemaVersion: z.literal(1),
-    snapshotDigest: digest,
-    siteTitle: z.string().min(1).max(120),
-    initialPosts: z.array(z.string().min(1).max(120)).max(20),
-    initialApprovedComment: z.boolean().optional(),
-    customerRole: z.boolean(),
-    databaseAccess: z.enum(["read-only", "none"]).default("none"),
-    translatePress: z
-      .strictObject({
-        administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
-      })
-      .optional(),
-    scenario: z.strictObject({ id: z.string(), digest }).optional(),
-  })
-  .refine(
-    (setup) =>
-      setup.initialApprovedComment !== true || setup.initialPosts.length > 0,
-    {
-      path: ["initialApprovedComment"],
-      message: "An approved comment requires an initial post",
-    },
-  );
-const REACHABILITY_PROBE = `$http = @file_get_contents("http://wordpress/");
-$database = "not-exposed";
-$user = getenv("WBH_DB_USER");
-if ($user !== false && $user !== "") {
-  $link = @mysqli_connect(getenv("WBH_DB_HOST"), $user, getenv("WBH_DB_PASSWORD"), getenv("WBH_DB_NAME"));
-  $database = $link !== false && @mysqli_query($link, "SELECT 1") !== false ? "ok" : "failed";
-}
-echo json_encode(["http" => $http !== false ? "ok" : "failed", "database" => $database]);`;
-const SQL_CANARY_TABLE = "wbh_canary";
-const DATABASE_NAME = "wordpress";
-const READ_ONLY_DATABASE_USER = "wbh_reader";
-const BEACON_LOG = "/tmp/wbh-beacons";
-const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
-const PNG_SIGNATURE = Buffer.from("89504e470d0a1a0a", "hex");
-/** Logs only well-formed beacon paths; anything else is ignored. */
-const BEACON_ROUTER = `<?php
-$path = (string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
-if (preg_match('#^/b/[A-Za-z0-9-]{1,100}$#', $path)) file_put_contents('${BEACON_LOG}', $path . "\\n", FILE_APPEND | LOCK_EX);
-header('Access-Control-Allow-Origin: *');
-http_response_code(204);
-`;
-/** One page visit by the Lab's observer; dialogs are dismissed and never count. */
-const BROWSER_VISIT = `const { chromium } = require("playwright");
-(async () => {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
-  const base = "http://wordpress";
-  const user = process.env.WBH_LOGIN_USER;
-  if (user) {
-    await page.goto(base + "/wp-login.php");
-    await page.fill("#user_login", user);
-    await page.fill("#user_pass", process.env.WBH_LOGIN_PASSWORD ?? "");
-    await Promise.all([page.waitForNavigation(), page.click("#wp-submit")]);
-    const cookies = await page.context().cookies(base);
-    if (!cookies.some((cookie) => cookie.name.startsWith("wordpress_logged_in_")))
-      throw new Error("Victim login failed");
-  }
-  await page.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
-  await page.waitForTimeout(3000);
-  const screenshot = await page.screenshot({ type: "png" });
-  if (screenshot.length > ${MAX_SCREENSHOT_BYTES})
-    throw new Error("Browser screenshot exceeds the evidence limit");
-  process.stdout.write(screenshot.toString("base64"));
-  await browser.close();
-})().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});`;
-export const wordpressVisitPathSchema = z
-  .string()
-  .max(2048)
-  .regex(/^\/(?!\/)[^\s\0\\]*$/);
-export const wordpressVictimRouteSchema = z.strictObject({
-  role: z.enum(["administrator", "subscriber", "customer", "unauthenticated"]),
-  paths: z.array(wordpressVisitPathSchema).min(1).max(5),
-});
-export type WordPressVictimRoute = z.infer<typeof wordpressVictimRouteSchema>;
+export {
+  wordpressVisitPathSchema,
+  wordpressVictimRouteSchema,
+} from "./lab-observation.js";
+import type { WordPressVictimRoute } from "./lab-observation.js";
+export type { WordPressVictimRoute } from "./lab-observation.js";
 
-function privateIpv4(output: string): string {
-  const address = output.trim();
-  const octets = address.split(".").map(Number);
-  if (
-    isIP(address) !== 4 ||
-    !(
-      octets[0] === 10 ||
-      (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) ||
-      (octets[0] === 192 && octets[1] === 168)
-    )
-  )
-    throw new Error("Lab internal address is unavailable");
-  return address;
-}
-/** Options whose change alone is a security impact; anything else is not observed. */
-const CRITICAL_OPTIONS = [
-  "users_can_register",
-  "default_role",
-  "siteurl",
-  "home",
-  "admin_email",
-  "active_plugins",
-  "wp_user_roles",
-];
-const snapshotWithDigestSchema = snapshotSchema.safeExtend({ digest });
-export const WORDPRESS_CORE_IDENTITY = "wordpress-core";
-
-export type WordPressLabSetup = z.input<typeof setupSchema>;
 export type DockerRequest = {
   readonly args: readonly string[];
   readonly timeoutMs: number;
@@ -378,7 +284,7 @@ const LAB_LEFTOVERS = {
   volumes: [new RegExp(`^wbh-${labId}-site$`)],
 } as const;
 
-interface Resources {
+export interface Resources {
   readonly id: string;
   readonly network: string;
   readonly volume: string;
@@ -409,12 +315,6 @@ interface Resources {
   databaseCreated: boolean;
   wordpressCreated: boolean;
   recorderCreated: boolean;
-}
-
-function databaseIp(resource: Resources): string {
-  if (resource.databaseIp === undefined)
-    throw new Error("Lab database address is unavailable");
-  return resource.databaseIp;
 }
 
 export function openWordPressLab(options: {
@@ -524,10 +424,6 @@ export function openWordPressLab(options: {
     if (result.exitCode !== 0) throw new Error("Option unreadable");
     return createHash("sha256").update(result.stdout.trim()).digest("hex");
   };
-  const watchedOptions = (canaries: WordPressCanaryLedger) => [
-    canaries.option,
-    ...CRITICAL_OPTIONS,
-  ];
   const cleanup = async (resource: Resources): Promise<boolean> => {
     let okay = true;
     for (const args of [
@@ -587,25 +483,6 @@ export function openWordPressLab(options: {
       return { status: "unavailable" };
     }
   };
-  const verifySource = async (
-    source: WordPressSource,
-    expected: string,
-  ): Promise<string> => {
-    if (source.kind === "plugin") slug.parse(source.pluginSlug);
-    if (
-      !isAbsolute(source.sourceDirectory) ||
-      source.sourceDirectory.includes("\0") ||
-      source.sourceTree.digest !== expected
-    )
-      throw new Error("Source digest mismatch");
-    const directory = await realpath(source.sourceDirectory);
-    if (
-      !(await stat(directory)).isDirectory() ||
-      !(await verifyCanonicalSourceTree(directory, source.sourceTree)).matches
-    )
-      throw new Error("Source tree mismatch");
-    return directory;
-  };
   const preflight = async (): Promise<void> => {
     const runtimes = await docker(
       ["info", "--format", "{{json .Runtimes}}"],
@@ -664,511 +541,48 @@ export function openWordPressLab(options: {
     ): Promise<ProvisionResult<WordPressLabHandle>> {
       let resource: Resources | undefined;
       try {
-        const snapshot = snapshotWithDigestSchema.parse(candidateSnapshot);
-        const { digest: snapshotDigest, ...record } = snapshot;
-        if (canonicalDigest(record) !== snapshotDigest)
-          throw new Error("Snapshot digest mismatch");
-        const setup = setupSchema.parse(candidateSetup);
-        if (setup.snapshotDigest !== snapshot.digest)
-          throw new Error("Lab setup snapshot mismatch");
-        const scenario =
-          setup.scenario === undefined
-            ? undefined
-            : wordPressScenario(setup.scenario.id);
-        if (
-          setup.scenario !== undefined &&
-          (scenario === undefined || scenario.digest !== setup.scenario.digest)
-        )
-          throw new Error("Unknown or changed Lab scenario");
-        if (scenario?.approvedComment && setup.initialPosts.length === 0)
-          throw new Error("Scenario requires an initial post");
-        if (
-          scenario?.translation !== null &&
-          scenario?.translation !== undefined &&
-          !setup.initialPosts.includes(scenario.translation.original)
-        )
-          throw new Error("Scenario translation requires its published post");
-        if (
-          scenario?.secondaryLocale !== null &&
-          scenario?.secondaryLocale !== undefined &&
-          setup.translatePress !== undefined &&
-          setup.translatePress.administratorSecondaryLocale !==
-            scenario.secondaryLocale
-        )
-          throw new Error("Scenario secondary locale conflicts with setup");
-        const resolved = await options.source.resolve(snapshot);
-        if (resolved.dependencies.length !== snapshot.dependencies.length)
-          throw new Error("Dependency count mismatch");
-        if (
-          setup.customerRole &&
-          ![resolved.target, ...resolved.dependencies].some(
-            (source) =>
-              source.kind === "plugin" && source.pluginSlug === "woocommerce",
-          )
-        )
-          throw new Error("Customer role needs WooCommerce");
-        if (resolved.target.kind !== "plugin")
-          throw new Error("The target must be a plugin");
-        if (
-          scenario?.pluginSlug !== null &&
-          scenario?.pluginSlug !== undefined &&
-          resolved.target.pluginSlug !== scenario.pluginSlug
-        )
-          throw new Error("Lab scenario requires its plugin");
-        if (
-          setup.translatePress !== undefined &&
-          resolved.target.pluginSlug !== "translatepress-multilingual"
-        )
-          throw new Error("TranslatePress Lab setup requires its plugin");
-        const targetDirectory = await verifySource(
-          resolved.target,
-          snapshot.target.sourceDigest,
+        const prepared = await prepareWordPressLab(
+          candidateSnapshot,
+          candidateSetup,
+          options.source,
         );
-        const dependencies: { slug: string; directory: string }[] = [];
-        let coreVersion: string | undefined;
-        for (let index = 0; index < resolved.dependencies.length; index++) {
-          const item = resolved.dependencies[index];
-          const expected = snapshot.dependencies[index];
-          if (item === undefined || expected === undefined)
-            throw new Error("Dependency missing");
-          const directory = await verifySource(item, expected.sourceDigest);
-          if (item.kind === "wordpress-core") {
-            if (
-              expected.identity !== WORDPRESS_CORE_IDENTITY ||
-              expected.version !== item.version ||
-              coreVersion !== undefined
-            )
-              throw new Error("WordPress core dependency mismatch");
-            coreVersion = item.version;
-          } else {
-            dependencies.push({ slug: item.pluginSlug, directory });
-          }
-        }
+        const { setup, scenario, target, dependencies, coreVersion } = prepared;
         await preflight();
-        const id = randomUUID();
-        const prefix = `wbh-${id}`;
-        const subscriber = {
-          username: `wbh-subscriber-${id.slice(0, 8)}`,
-          password: randomUUID(),
-        };
-        const customer = setup.customerRole
-          ? {
-              username: `wbh-customer-${id.slice(0, 8)}`,
-              password: randomUUID(),
-            }
-          : undefined;
-        const secondaryLocale =
-          setup.translatePress?.administratorSecondaryLocale ??
-          scenario?.secondaryLocale ??
-          undefined;
-        resource = {
-          id,
-          network: `${prefix}-net`,
-          volume: `${prefix}-site`,
-          database: `${prefix}-db`,
-          wordpress: `${prefix}-wp`,
-          recorder: `${prefix}-proxy`,
-          databasePassword: randomUUID(),
-          readerPassword: randomBytes(32).toString("hex"),
-          adminPassword: randomUUID(),
-          ...(secondaryLocale === undefined
-            ? {}
-            : { administratorSecondaryLocale: secondaryLocale }),
-          executionSalt: randomBytes(16).toString("hex"),
-          executionNonces: new Set(),
-          scriptNonces: new Set(),
-          sensitiveCanaries: [],
-          receiver: `${prefix}-canary`,
-          receiverCreated: false,
-          networkCreated: false,
-          volumeCreated: false,
-          databaseCreated: false,
-          wordpressCreated: false,
-          recorderCreated: false,
-        };
-        await requireDocker([
-          "network",
-          "create",
-          "--internal",
-          resource.network,
-        ]);
-        resource.networkCreated = true;
-        await requireDocker(["volume", "create", resource.volume]);
-        resource.volumeCreated = true;
-        await requireDocker([
-          "run",
-          "--detach",
-          "--name",
-          resource.database,
-          "--runtime=runsc",
-          "--network",
-          resource.network,
-          "--security-opt=no-new-privileges",
-          "--env",
-          `MARIADB_ROOT_PASSWORD=${resource.databasePassword}`,
-          "--env",
-          "MARIADB_DATABASE=wordpress",
-          options.images.database,
-        ]);
-        resource.databaseCreated = true;
-        resource.databaseIp = privateIpv4(
-          (
-            await requireDocker([
-              "inspect",
-              "--format",
-              "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-              resource.database,
-            ])
-          ).stdout,
-        );
-        await requireDocker([
-          "run",
-          "--detach",
-          "--name",
-          resource.wordpress,
-          "--runtime=runsc",
-          "--network",
-          resource.network,
-          "--network-alias",
-          "wordpress",
-          "--security-opt=no-new-privileges",
-          "--volume",
-          `${resource.volume}:/var/www/html`,
-          "--env",
-          `WORDPRESS_DB_HOST=${resource.databaseIp}`,
-          "--env",
-          "WORDPRESS_DB_NAME=wordpress",
-          "--env",
-          "WORDPRESS_DB_USER=root",
-          "--env",
-          `WORDPRESS_DB_PASSWORD=${resource.databasePassword}`,
-          "--env",
-          `WBH_EXECUTION_SALT=${resource.executionSalt}`,
-          options.images.wordpress,
-        ]);
-        resource.wordpressCreated = true;
-        const inspected = await requireDocker([
-          "inspect",
-          "--format",
-          "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-          resource.wordpress,
-        ]);
-        const internalIp = privateIpv4(inspected.stdout);
-        await requireDocker([
-          "run",
-          "--detach",
-          "--name",
-          resource.recorder,
-          "--runtime=runsc",
-          "--network",
-          resource.network,
-          `--add-host=wordpress:${internalIp}`,
-          "--read-only",
-          "--cap-drop=ALL",
-          "--security-opt=no-new-privileges",
-          "--tmpfs=/var/lib/wbh:rw,nosuid,nodev,size=65m",
-          "--env",
-          "WBH_UPSTREAM_HOST=wordpress",
-          "--volume",
-          `${fileURLToPath(new URL("../../../lab-recorder/", import.meta.url))}:/opt/wbh-recorder:ro`,
-          "--entrypoint=node",
-          options.images.recorder,
-          "/opt/wbh-recorder/cli.js",
-        ]);
-        resource.recorderCreated = true;
-        const recorderIp = privateIpv4(
-          (
-            await requireDocker([
-              "inspect",
-              "--format",
-              "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-              resource.recorder,
-            ])
-          ).stdout,
-        );
-        await requireDocker([
-          "run",
-          "--detach",
-          "--name",
-          resource.receiver,
-          "--runtime=runsc",
-          "--network",
-          resource.network,
-          "--network-alias",
-          "canary",
-          "--read-only",
-          "--cap-drop=ALL",
-          "--security-opt=no-new-privileges",
-          "--tmpfs=/tmp:rw,nosuid,nodev,size=16m",
-          "--entrypoint",
-          "sh",
-          options.images.wordpress,
-          "-c",
-          `echo ${Buffer.from(BEACON_ROUTER).toString("base64")} | base64 -d > /tmp/router.php && exec php -S 0.0.0.0:8080 /tmp/router.php`,
-        ]);
-        resource.receiverCreated = true;
-        resource.receiverIp = privateIpv4(
-          (
-            await requireDocker([
-              "inspect",
-              "--format",
-              "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-              resource.receiver,
-            ])
-          ).stdout,
-        );
-        let healthy = false;
-        for (let attempt = 0; attempt < attempts; attempt++) {
-          const [wordpressHealth, databaseHealth] = await Promise.all([
-            docker(
-              [
-                "exec",
-                resource.wordpress,
-                "php",
-                "-r",
-                'exit(is_file("/var/www/html/wp-settings.php") ? 0 : 1);',
-              ],
-              10_000,
-            ),
-            docker(
-              [
-                "exec",
-                resource.database,
-                "mariadb-admin",
-                "ping",
-                "--host=127.0.0.1",
-                "--user=root",
-                `--password=${resource.databasePassword}`,
-                "--silent",
-              ],
-              10_000,
-            ),
-          ]);
-          if (wordpressHealth.exitCode === 0 && databaseHealth.exitCode === 0) {
-            healthy = true;
-            break;
-          }
-          if (attempt + 1 < attempts)
-            await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
-        }
-        if (!healthy) throw new Error("WordPress health check failed");
-        if (coreVersion !== undefined) {
-          const running = await wp(resource, ["core", "version"]);
-          if (running.stdout.trim() !== coreVersion)
-            throw new Error("The Lab image runs another WordPress version");
-        }
-        await wp(resource, [
-          "core",
-          "install",
-          "--url=http://wordpress",
-          `--title=${setup.siteTitle}`,
-          "--admin_user=harness-admin",
-          `--admin_password=${resource.adminPassword}`,
-          "--admin_email=harness-admin@example.invalid",
-          "--skip-email",
-        ]);
-        for (const source of [
-          ...dependencies,
-          { slug: resolved.target.pluginSlug, directory: targetDirectory },
-        ]) {
-          await requireDocker([
-            "exec",
-            resource.wordpress,
-            "mkdir",
-            "-p",
-            `/var/www/html/wp-content/plugins/${source.slug}`,
-          ]);
-          await requireDocker([
-            "cp",
-            `${source.directory}/.`,
-            `${resource.wordpress}:/var/www/html/wp-content/plugins/${source.slug}`,
-          ]);
-          await wp(resource, ["plugin", "activate", source.slug]);
-        }
-        if (resource.administratorSecondaryLocale !== undefined) {
-          const locale = resource.administratorSecondaryLocale;
-          await wp(resource, [
-            "eval",
-            `$settings=get_option("trp_settings"); if(!is_array($settings)) exit(1); $base=$settings["default-language"] ?? "en_US"; $secondary="${locale}"; $settings["translation-languages"]=array_values(array_unique([$base,$secondary])); $settings["publish-languages"]=array_values(array_unique([$base,$secondary])); $settings["url-slugs"][$secondary]=strtolower(substr($secondary,0,2)); update_option("trp_settings",$settings); TRP_Translate_Press::get_trp_instance()->get_component("query")->check_table($base,$secondary); $admin=get_user_by("login","harness-admin"); if(!$admin) exit(2); update_user_meta($admin->ID,"locale",$secondary); if(get_user_locale($admin->ID)!==$secondary) exit(3);`,
-          ]);
-        }
-        await wp(resource, [
-          "user",
-          "create",
-          subscriber.username,
-          `${subscriber.username}@example.invalid`,
-          "--role=subscriber",
-          `--user_pass=${subscriber.password}`,
-        ]);
-        if (customer !== undefined)
-          await wp(resource, [
-            "user",
-            "create",
-            customer.username,
-            `${customer.username}@example.invalid`,
-            "--role=customer",
-            `--user_pass=${customer.password}`,
-          ]);
-        for (const [index, title] of setup.initialPosts.entries()) {
-          const created = await wp(resource, [
-            "post",
-            "create",
-            "--post_status=publish",
-            `--post_title=${title}`,
-            ...(index === 0 &&
-            (setup.initialApprovedComment === true || scenario?.approvedComment)
-              ? ["--porcelain"]
-              : []),
-          ]);
-          if (
-            index === 0 &&
-            (setup.initialApprovedComment === true || scenario?.approvedComment)
-          ) {
-            const postId = created.stdout.trim();
-            if (!/^[1-9][0-9]*$/.test(postId))
-              throw new Error("Seed post ID is unavailable");
-            await wp(resource, [
-              "comment",
-              "create",
-              `--comment_post_ID=${postId}`,
-              "--comment_content=Thanks for the useful post.",
-              "--comment_author=Lab Reader",
-              "--comment_author_email=lab-reader@example.invalid",
-              "--comment_type=comment",
-              "--comment_approved=1",
-            ]);
-          }
-        }
-        if (
-          scenario?.translation !== null &&
-          scenario?.translation !== undefined
-        ) {
-          const locale = scenario.secondaryLocale;
-          const original = JSON.stringify(scenario.translation.original);
-          const translated = JSON.stringify(scenario.translation.translated);
-          await wp(resource, [
-            "eval",
-            `$settings=get_option("trp_settings"); $base=$settings["default-language"] ?? "en_US"; $table=$GLOBALS["wpdb"]->prefix."trp_dictionary_".strtolower($base)."_".strtolower(${JSON.stringify(locale)}); if(!preg_match("/^[a-z0-9_]+$/",$table)) exit(1); $ok=$GLOBALS["wpdb"]->insert($table,["original"=>${original},"translated"=>${translated},"status"=>2,"block_type"=>0]); if($ok!==1) exit(2); $count=$GLOBALS["wpdb"]->get_var($GLOBALS["wpdb"]->prepare("SELECT COUNT(*) FROM ".$table." WHERE original=%s AND translated=%s",${original},${translated})); if((int)$count<1) exit(3);`,
-          ]);
-        }
-        if (context?.purpose === "verification") {
-          const privateValue = `wbh-sensitive-${randomBytes(24).toString("hex")}`;
-          const privatePost = (
-            await wp(resource, [
-              "post",
-              "create",
-              "--post_status=private",
-              "--post_type=post",
-              "--post_title=Harness private note",
-              `--post_content=${privateValue}`,
-              "--porcelain",
-            ])
-          ).stdout.trim();
-          const personalValue = `wbh-sensitive-${randomBytes(24).toString("hex")}`;
-          const ownerId = (
-            await wp(resource, [
-              "user",
-              "create",
-              `wbh-private-owner-${id.slice(0, 8)}`,
-              `wbh-private-owner-${id.slice(0, 8)}@example.invalid`,
-              "--role=subscriber",
-              `--user_pass=${randomUUID()}`,
-              "--porcelain",
-            ])
-          ).stdout.trim();
-          if (
-            !/^[1-9][0-9]*$/.test(privatePost) ||
-            !/^[1-9][0-9]*$/.test(ownerId)
-          )
-            throw new Error("Sensitive canary object ID unavailable");
-          await wp(resource, [
-            "user",
-            "meta",
-            "add",
-            ownerId,
-            "wbh_private_note",
-            personalValue,
-          ]);
-          resource.sensitiveCanaries.push(
-            {
-              kind: "private-post",
-              objectId: privatePost,
-              value: privateValue,
-            },
-            {
-              kind: "other-user-meta",
-              objectId: ownerId,
-              value: personalValue,
-            },
-          );
-        }
-        if (setup.databaseAccess === "read-only") {
-          // Only existing tables are visible; the canary table is created later.
-          const tables = (
-            await requireDocker([
-              "exec",
-              resource.database,
-              "mariadb",
-              "--user=root",
-              `--password=${resource.databasePassword}`,
-              "--skip-column-names",
-              "--batch",
-              "--execute",
-              `SHOW TABLES FROM ${DATABASE_NAME}`,
-            ])
-          ).stdout
-            .split("\n")
-            .map((line) => line.trim())
-            .filter(
-              (line) =>
-                /^[A-Za-z0-9_]{1,64}$/.test(line) && line !== SQL_CANARY_TABLE,
-            );
-          if (tables.length === 0) throw new Error("No tables to expose");
-          await requireDocker([
-            "exec",
-            resource.database,
-            "mariadb",
-            "--user=root",
-            `--password=${resource.databasePassword}`,
-            "--execute",
-            [
-              `CREATE USER '${READ_ONLY_DATABASE_USER}'@'%' IDENTIFIED BY '${resource.readerPassword}'`,
-              ...tables.map(
-                (table) =>
-                  `GRANT SELECT ON ${DATABASE_NAME}.${table} TO '${READ_ONLY_DATABASE_USER}'@'%'`,
-              ),
-              "FLUSH PRIVILEGES",
-            ].join("; "),
-          ]);
-        }
-        const handle: WordPressLabHandle = {
-          id,
-          snapshotDigest: snapshot.digest,
-          setupDigest: canonicalDigest({ setup, images: options.images }),
-          ...(setup.scenario === undefined ? {} : { scenario: setup.scenario }),
-          endpoint: "http://wordpress",
-          networkName: resource.network,
+        const created = createLabResource(prepared);
+        resource = created.resource;
+        const { subscriber, customer } = created;
+        const { id } = resource;
+        const { internalIp, recorderIp } = await startLabContainers(resource, {
+          images: options.images,
+          attempts,
+          docker,
+          requireDocker,
+        });
+        await initializeWordPress({
+          resource,
+          setup,
+          scenario,
+          coreVersion,
+          target,
+          dependencies,
+          subscriber,
+          ...(customer === undefined ? {} : { customer }),
+          wp,
+          requireDocker,
+        });
+        if (context?.purpose === "verification")
+          await placeVerificationCanaries(resource, wp);
+        if (setup.databaseAccess === "read-only")
+          await grantReadOnlyDatabaseAccess(resource, requireDocker);
+        const handle = createLabHandle({
+          prepared,
+          resource,
+          images: options.images,
           internalIp,
           recorderIp,
-          attackerAccounts: {
-            subscriber,
-            ...(customer === undefined ? {} : { customer }),
-          },
-          ...(setup.databaseAccess === "read-only"
-            ? {
-                database: {
-                  host: "database" as const,
-                  ipv4: databaseIp(resource),
-                  port: 3306 as const,
-                  name: DATABASE_NAME,
-                  readOnlyAccount: {
-                    username: READ_ONLY_DATABASE_USER,
-                    password: resource.readerPassword,
-                  },
-                },
-              }
-            : {}),
-        };
+          subscriber,
+          customer,
+        });
         resource.handle = handle;
         active.set(id, resource);
         return { status: "ready", handle };
@@ -1197,114 +611,16 @@ export function openWordPressLab(options: {
           nextStep: "Provision a fresh Lab before seeding canaries",
         };
       try {
-        const token = nonce();
-        if (!/^[A-Za-z0-9-]{1,100}$/.test(token))
-          throw new Error("Invalid nonce");
-        await wp(resource, ["option", "add", `wbh_canary_${token}`, token]);
-        const post = await wp(resource, [
-          "post",
-          "create",
-          "--post_status=publish",
-          `--post_title=wbh-canary-${token}`,
-          "--porcelain",
-        ]);
-        const postId = post.stdout.trim();
-        if (!/^\d+$/.test(postId)) throw new Error("Canary post missing");
-        await wp(resource, [
-          "post",
-          "meta",
-          "add",
-          postId,
-          `wbh_canary_${token}`,
-          token,
-        ]);
-        await requireDocker([
-          "exec",
-          resource.wordpress,
-          "sh",
-          "-c",
-          `printf %s '${token}' > /var/www/html/wp-content/wbh-canary-${token}.txt`,
-        ]);
-        await wp(resource, [
-          "user",
-          "create",
-          `wbh-canary-${token}`,
-          `wbh-canary-${token}@example.invalid`,
-          "--role=subscriber",
-          `--user_pass=${randomUUID()}`,
-        ]);
-        const adminUser = `wbh-canary-admin-${token}`;
-        await wp(resource, [
-          "user",
-          "create",
-          adminUser,
-          `${adminUser}@example.invalid`,
-          "--role=administrator",
-          `--user_pass=${randomUUID()}`,
-        ]);
-        if (resource.administratorSecondaryLocale !== undefined) {
-          const user = JSON.stringify(adminUser);
-          const locale = JSON.stringify(resource.administratorSecondaryLocale);
-          await wp(resource, [
-            "eval",
-            `$admin=get_user_by("login",${user}); if(!$admin) exit(1); update_user_meta($admin->ID,"locale",${locale}); if(get_user_locale($admin->ID)!==${locale}) exit(2);`,
-          ]);
-        }
-        const sqlCanary = {
-          table: SQL_CANARY_TABLE,
-          value: randomBytes(16).toString("hex"),
-        };
-        await wp(resource, [
-          "db",
-          "query",
-          `CREATE TABLE ${sqlCanary.table} (id INT PRIMARY KEY, value CHAR(32) NOT NULL); INSERT INTO ${sqlCanary.table} VALUES (1, '${sqlCanary.value}')`,
-        ]);
-        const fileCanaries: WordPressFileCanary[] = [
-          {
-            kind: "outside-webroot",
-            path: "/etc/wbh-canary",
-            value: randomBytes(16).toString("hex"),
-          },
-          {
-            kind: "php-source",
-            path: "/var/www/html/wbh-canary.php",
-            value: randomBytes(16).toString("hex"),
-          },
-        ];
-        for (const file of fileCanaries)
-          await requireDocker([
-            "exec",
-            resource.wordpress,
-            "sh",
-            "-c",
-            // Served over HTTP the PHP canary runs and prints nothing; only its source holds the value.
-            `printf %s '${file.kind === "php-source" ? `<?php /* ${file.value} */` : file.value}' > ${file.path}`,
-          ]);
-        const roleBaseline: Record<string, readonly string[]> = {};
-        for (const account of Object.values(handle.attackerAccounts)) {
-          const observed = await roles(resource, account.username);
-          if (observed.status !== "roles")
-            throw new Error("Role baseline unavailable");
-          roleBaseline[account.username] = observed.roles;
-        }
-        resource.canaries = {
-          nonce: token,
-          adminUser,
-          roleBaseline,
-          sqlCanary,
-          fileCanaries,
-          sensitiveCanaries: resource.sensitiveCanaries,
-          option: `wbh_canary_${token}`,
-          postId,
-          postMeta: `wbh_canary_${token}`,
-          file: `/var/www/html/wp-content/wbh-canary-${token}.txt`,
-          user: `wbh-canary-${token}`,
-        };
-        const optionBaseline = new Map<string, string>();
-        for (const name of watchedOptions(resource.canaries))
-          optionBaseline.set(name, await optionDigest(resource, name));
-        resource.optionBaseline = optionBaseline;
-        return { status: "seeded", digest: canonicalDigest(resource.canaries) };
+        const seededDigest = await seedWordPressCanaries({
+          resource,
+          handle,
+          nonce,
+          wp,
+          requireDocker,
+          roles,
+          optionDigest,
+        });
+        return { status: "seeded", digest: seededDigest };
       } catch (error: unknown) {
         return {
           status: "incomplete",
@@ -1332,390 +648,14 @@ export function openWordPressLab(options: {
             nextStep: "Inspect and remove remaining Lab resources",
           };
     },
-    async markCapture(handle) {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle) return null;
-      const result = await docker([
-        "exec",
-        resource.recorder,
-        "wc",
-        "-c",
-        "/var/lib/wbh/capture.jsonl",
-      ]);
-      const marker = result.stdout.trim().split(/\s+/)[0];
-      return result.exitCode === 0 &&
-        marker !== undefined &&
-        /^\d+$/.test(marker)
-        ? marker
-        : null;
-    },
-    async readCapture(handle, sinceMarker) {
-      const resource = active.get(handle.id);
-      if (
-        resource?.handle !== handle ||
-        !/^\d+$/.test(sinceMarker) ||
-        !Number.isSafeInteger(Number(sinceMarker)) ||
-        Number(sinceMarker) > 64 * 1024 * 1024
-      )
-        return { status: "unavailable" };
-      const [capture, dropped] = await Promise.all([
-        docker(
-          [
-            "exec",
-            resource.recorder,
-            "tail",
-            "-c",
-            `+${Number(sinceMarker) + 1}`,
-            "/var/lib/wbh/capture.jsonl",
-          ],
-          60_000,
-          64 * 1024 * 1024 + 1024,
-        ),
-        docker([
-          "exec",
-          resource.recorder,
-          "sh",
-          "-c",
-          "cat /var/lib/wbh/dropped 2>/dev/null || printf 0",
-        ]),
-      ]);
-      const count = Number(dropped.stdout.trim());
-      if (
-        capture.exitCode !== 0 ||
-        dropped.exitCode !== 0 ||
-        !Number.isSafeInteger(count) ||
-        count < 0
-      )
-        return { status: "unavailable" };
-      return {
-        status: "captured",
-        bytes: Buffer.from(capture.stdout, "utf8"),
-        dropped: count,
-      };
-    },
-    async probe(handle) {
-      const resource = active.get(handle.id);
-      const database = handle.database;
-      const failed = (): LabReachability => ({
-        http: "failed",
-        database: database === undefined ? "not-exposed" : "failed",
-      });
-      if (resource?.handle !== handle) return failed();
-      try {
-        const result = await docker(
-          [
-            "run",
-            "--rm",
-            "--runtime=runsc",
-            "--network",
-            resource.network,
-            `--add-host=wordpress:${handle.internalIp}`,
-            ...(database === undefined
-              ? []
-              : [
-                  `--add-host=${database.host}:${database.ipv4}`,
-                  "--env",
-                  `WBH_DB_HOST=${database.host}`,
-                  "--env",
-                  `WBH_DB_USER=${database.readOnlyAccount.username}`,
-                  "--env",
-                  `WBH_DB_PASSWORD=${database.readOnlyAccount.password}`,
-                  "--env",
-                  `WBH_DB_NAME=${database.name}`,
-                ]),
-            "--read-only",
-            "--cap-drop=ALL",
-            "--security-opt=no-new-privileges",
-            "--tmpfs=/tmp:rw,nosuid,nodev,size=16m",
-            "--entrypoint=php",
-            options.images.wordpress,
-            "-r",
-            REACHABILITY_PROBE,
-          ],
-          60_000,
-        );
-        if (result.exitCode !== 0) return failed();
-        const parsed = z
-          .strictObject({
-            http: z.enum(["ok", "failed"]),
-            database: z.enum(["ok", "failed", "not-exposed"]),
-          })
-          .safeParse(JSON.parse(result.stdout.trim()) as unknown);
-        return parsed.success ? parsed.data : failed();
-      } catch {
-        return failed();
-      }
-    },
-    canaryLedger(handle) {
-      const resource = active.get(handle.id);
-      return resource?.handle === handle ? (resource.canaries ?? null) : null;
-    },
-    prepareExecutionCanary(handle) {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle) return null;
-      const token = nonce();
-      if (!/^[A-Za-z0-9-]{1,100}$/.test(token)) return null;
-      resource.executionNonces.add(token);
-      const path = `/tmp/wbh-execution-${token}`;
-      return {
-        nonce: token,
-        php: `<?php file_put_contents('${path}', hash('sha256', '${token}' . getenv('WBH_EXECUTION_SALT'))); ?>`,
-      };
-    },
-    async observeSessionUser(handle, cookie, scheme = "logged_in") {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle) return { status: "unavailable" };
-      // The value travels as an environment variable, never as PHP source.
-      if (!/^[A-Za-z0-9%|._@+-]{1,4096}$/.test(cookie))
-        return { status: "none" };
-      try {
-        const result = await wp(
-          resource,
-          [
-            "eval",
-            '$id = wp_validate_auth_cookie(rawurldecode((string) getenv("WBH_SESSION_COOKIE")), (string) getenv("WBH_SESSION_SCHEME")); echo $id ? get_userdata($id)->user_login : "";',
-          ],
-          [`WBH_SESSION_COOKIE=${cookie}`, `WBH_SESSION_SCHEME=${scheme}`],
-        );
-        const login = result.stdout.trim();
-        return login === "" ? { status: "none" } : { status: "user", login };
-      } catch {
-        return { status: "unavailable" };
-      }
-    },
-    async observeCanaryTable(handle) {
-      const resource = active.get(handle.id);
-      const canary = resource?.canaries?.sqlCanary;
-      if (resource?.handle !== handle || canary === undefined)
-        return { status: "unavailable" };
-      try {
-        const present = await wp(resource, [
-          "db",
-          "query",
-          `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '${canary.table}'`,
-          "--skip-column-names",
-        ]);
-        if (present.stdout.trim() === "0") return { status: "changed" };
-        const rows = await wp(resource, [
-          "db",
-          "query",
-          `SELECT id, value FROM ${canary.table} ORDER BY id`,
-          "--skip-column-names",
-        ]);
-        return {
-          status:
-            rows.stdout.trim() === `1\t${canary.value}` ? "intact" : "changed",
-        };
-      } catch {
-        return { status: "unavailable" };
-      }
-    },
-    async observeCanaryFiles(handle) {
-      const resource = active.get(handle.id);
-      const files = resource?.canaries?.fileCanaries;
-      if (resource?.handle !== handle || files === undefined)
-        return { status: "unavailable" };
-      const deleted: WordPressFileCanary["kind"][] = [];
-      for (const file of files) {
-        const result = await docker(
-          ["exec", resource.wordpress, "test", "-e", file.path],
-          10_000,
-        );
-        if (result.exitCode === 1) deleted.push(file.kind);
-        else if (result.exitCode !== 0) return { status: "unavailable" };
-      }
-      return { status: "observed", deleted };
-    },
-    prepareScriptCanary(handle) {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle) return null;
-      const token = nonce();
-      if (!/^[A-Za-z0-9-]{1,100}$/.test(token)) return null;
-      resource.scriptNonces.add(token);
-      return { nonce: token, beaconUrl: `http://canary:8080/b/${token}` };
-    },
-    async observeStoredScript(handle, input) {
-      const resource = active.get(handle.id);
-      const receiverIp = resource?.receiverIp;
-      if (resource?.handle !== handle || receiverIp === undefined)
-        return { status: "unavailable" };
-      if (resource.scriptNonces.size === 0) return { status: "not-prepared" };
-      const routePaths = z
-        .array(wordpressVisitPathSchema)
-        .max(5)
-        .safeParse(input.routePaths);
-      if (!routePaths.success) return { status: "unavailable" };
-      const victim =
-        input.victim === undefined
-          ? undefined
-          : wordpressVictimRouteSchema.safeParse(input.victim);
-      if (victim !== undefined && !victim.success)
-        return { status: "unavailable" };
-      const issued = new Set(
-        [...resource.scriptNonces].map((token) => `/b/${token}`),
-      );
-      const beacons = async (): Promise<number> => {
-        const log = await docker(
-          ["exec", resource.receiver, "cat", BEACON_LOG],
-          10_000,
-        );
-        if (log.exitCode === 1 && log.stdout === "") return 0;
-        if (log.exitCode !== 0) throw new Error("Beacon log unreadable");
-        return log.stdout.split("\n").filter((line) => issued.has(line)).length;
-      };
-      const visit = async (
-        path: string,
-        role: WordPressVictimRoute["role"],
-      ): Promise<{ readonly fired: boolean; readonly screenshot: Buffer }> => {
-        const account =
-          role === "administrator"
-            ? { username: "harness-admin", password: resource.adminPassword }
-            : role === "unauthenticated"
-              ? undefined
-              : handle.attackerAccounts[role];
-        if (role !== "unauthenticated" && account === undefined)
-          throw new Error("Victim role is unavailable");
-        const before = await beacons();
-        const result = await docker(
-          [
-            "run",
-            "--rm",
-            "--runtime=runsc",
-            "--network",
-            resource.network,
-            `--add-host=wordpress:${handle.internalIp}`,
-            `--add-host=canary:${receiverIp}`,
-            "--read-only",
-            "--cap-drop=ALL",
-            "--security-opt=no-new-privileges",
-            "--tmpfs=/tmp:rw,nosuid,nodev,size=512m",
-            "--workdir=/harness",
-            ...(account === undefined
-              ? []
-              : [
-                  "--env",
-                  `WBH_LOGIN_USER=${account.username}`,
-                  "--env",
-                  `WBH_LOGIN_PASSWORD=${account.password}`,
-                ]),
-            "--env",
-            `WBH_VISIT_PATH=${path}`,
-            "--entrypoint=node",
-            options.images.browser,
-            "-e",
-            BROWSER_VISIT,
-          ],
-          120_000,
-          Math.ceil(MAX_SCREENSHOT_BYTES / 3) * 4 + 1024,
-        );
-        if (result.exitCode !== 0) throw new Error("Browser visit failed");
-        const encoded = result.stdout.trim();
-        if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))
-          throw new Error("Browser screenshot is missing");
-        const screenshot = Buffer.from(encoded, "base64");
-        if (
-          screenshot.length === 0 ||
-          screenshot.length > MAX_SCREENSHOT_BYTES ||
-          !screenshot.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE) ||
-          screenshot.toString("base64") !== encoded
-        )
-          throw new Error("Browser screenshot is invalid");
-        return { fired: (await beacons()) > before, screenshot };
-      };
-      try {
-        const contexts: WordPressScriptContext[] = [];
-        let screenshot: Buffer | undefined;
-        const fired = async (
-          path: string,
-          role: WordPressVictimRoute["role"],
-        ): Promise<boolean> => {
-          const observation = await visit(path, role);
-          if (observation.fired) screenshot ??= observation.screenshot;
-          return observation.fired;
-        };
-        if (await fired("/", "unauthenticated")) contexts.push("front");
-        const dashboard = await fired("/wp-admin/", "administrator");
-        const posts = await fired("/wp-admin/edit.php", "administrator");
-        if (dashboard && posts) contexts.push("admin-all");
-        else if (dashboard || posts) contexts.push("admin-partial");
-        let routePage = false;
-        for (const path of routePaths.data)
-          if (await fired(path, "unauthenticated")) routePage = true;
-        if (routePage) contexts.push("route-page");
-        let victimPage = false;
-        if (victim?.success)
-          for (const path of victim.data.paths)
-            if (await fired(path, victim.data.role)) victimPage = true;
-        if (victimPage) contexts.push("victim-route-page");
-        return {
-          status: "observed",
-          contexts,
-          ...(screenshot === undefined ? {} : { screenshot }),
-        };
-      } catch {
-        return { status: "unavailable" };
-      }
-    },
-    async observeOptions(handle) {
-      const resource = active.get(handle.id);
-      const baseline = resource?.optionBaseline;
-      if (resource?.handle !== handle || baseline === undefined)
-        return { status: "unavailable" };
-      try {
-        const changed: string[] = [];
-        for (const [name, digest] of baseline)
-          if ((await optionDigest(resource, name)) !== digest)
-            changed.push(name);
-        return { status: "observed", changed };
-      } catch {
-        return { status: "unavailable" };
-      }
-    },
-    async observeAccountRoles(handle, username) {
-      const resource = active.get(handle.id);
-      return resource?.handle === handle
-        ? roles(resource, username)
-        : { status: "unavailable" };
-    },
-    async observeExecution(handle) {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle) return { status: "unavailable" };
-      if (resource.executionNonces.size === 0)
-        return { status: "not-prepared" };
-      try {
-        for (const token of resource.executionNonces) {
-          const marker = await docker(
-            ["exec", resource.wordpress, "cat", `/tmp/wbh-execution-${token}`],
-            10_000,
-          );
-          const expected = createHash("sha256")
-            .update(`${token}${resource.executionSalt}`)
-            .digest("hex");
-          if (marker.exitCode !== 0 || marker.stdout.trim() !== expected)
-            continue;
-          const found = await docker(
-            [
-              "exec",
-              resource.wordpress,
-              "grep",
-              "-rlF",
-              "--",
-              token,
-              "/var/www/html",
-            ],
-            30_000,
-          );
-          const files = found.stdout
-            .split("\n")
-            .filter((line) => line.startsWith("/var/www/html/"))
-            .slice(0, 5)
-            .map((line) => line.slice("/var/www/html/".length));
-          return { status: "executed", files };
-        }
-        return { status: "not-executed" };
-      } catch {
-        return { status: "unavailable" };
-      }
-    },
+    ...createWordPressLabObservations({
+      active,
+      docker,
+      wp,
+      roles,
+      optionDigest,
+      nonce,
+      images: options.images,
+    }),
   };
 }

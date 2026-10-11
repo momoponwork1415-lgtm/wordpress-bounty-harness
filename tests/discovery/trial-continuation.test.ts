@@ -9,14 +9,10 @@ import {
   defineAgentRuntimeProfile,
   ProviderAttachmentStore,
   runDiscoveryCampaign,
-  type AdmittedLead,
   type PlannedTrial,
 } from "../../src/discovery/index.js";
-import { Evaluation } from "../../src/evaluation/index.js";
-import { canonicalJson } from "../../src/infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
-import { wordpressFindingLocations } from "../../src/profiles/wordpress/answer-key.js";
 import { admitWordPressFinding } from "../../src/profiles/wordpress/discovery/finding.js";
 import {
   admitWordPressLead,
@@ -75,7 +71,6 @@ type Reply = {
 async function trialCampaign(options: {
   readonly replies: Readonly<Record<string, Reply>>;
   readonly trialCount: number;
-  readonly continueTrials: readonly number[];
   readonly noFindingRuns: number;
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-trial-continuation-"));
@@ -126,27 +121,7 @@ async function trialCampaign(options: {
           expiresAt: "2026-10-08T10:00:00Z",
         },
       };
-      return {
-        trialId,
-        trialOrdinal,
-        explore,
-        ...(options.continueTrials.includes(trialOrdinal)
-          ? {
-              continuation: {
-                maxRuns: 2,
-                wallTimeMs: 30 * 60_000,
-                plan: (candidate: AdmittedLead) => ({
-                  configuration: explore.configuration,
-                  run: {
-                    ...explore.run,
-                    runId: `continue-${trialOrdinal}-${candidate.missingEdge}`,
-                    prompt: `Synthetic purpose\n\n## Lead\n${canonicalJson(candidate)}\n\n## Neighbourhood\nSynthetic source facts`,
-                  },
-                }),
-              },
-            }
-          : {}),
-      };
+      return { trialId, trialOrdinal, explore };
     },
   );
   const result = await runDiscoveryCampaign({
@@ -210,58 +185,29 @@ async function trialCampaign(options: {
   return { result, calls, ledger, evidence };
 }
 
-it("selects two Leads in priority order and records parent links", async () => {
+it("records Leads without injecting a Harness continuation", async () => {
   const { result, calls, ledger, evidence } = await trialCampaign({
     trialCount: 1,
-    continueTrials: [0],
     noFindingRuns: 1,
     replies: {
       "trial-0": {
-        leads: [
-          lead("precondition"),
-          { invalid: true },
-          lead("consumer"),
-          lead("auth-use"),
-        ],
+        leads: [lead("precondition"), { invalid: true }, lead("consumer")],
       },
     },
   });
   expect(result).toMatchObject({ runCount: 1, stoppedBy: "max-runs" });
-  expect(calls.map((call) => call.runId)).toEqual([
-    "trial-0",
-    "continue-0-auth-use",
-    "continue-0-consumer",
-  ]);
-  expect(calls[1]?.prompt).toContain("## Lead");
-  expect(calls[1]?.prompt).toContain("## Neighbourhood");
-  expect(calls[1]?.prompt).not.toContain("Synthetic precondition edge");
+  expect(calls.map((call) => call.runId)).toEqual(["trial-0"]);
   const leads = ledger
     .read({ type: "lead-recorded" })
     .map(({ event }) => event);
-  expect(leads).toHaveLength(3);
+  expect(leads).toHaveLength(2);
   expect(JSON.stringify(leads)).not.toContain("synthetic_shared");
   const started = ledger
     .read({ type: "discovery-run-started" })
     .map(({ event }) => event);
-  expect(
-    started.map((event) =>
-      event.type === "discovery-run-started" ? event.runKind : null,
-    ),
-  ).toEqual(["explore", "continue", "continue"]);
-  expect(
-    started
-      .slice(1)
-      .every(
-        (event) =>
-          event.type === "discovery-run-started" &&
-          event.trialId === "trial-0" &&
-          leads.some(
-            (candidate) =>
-              candidate.type === "lead-recorded" &&
-              candidate.leadId === event.continuationOf,
-          ),
-      ),
-  ).toBe(true);
+  expect(started).toHaveLength(1);
+  expect(started[0]).toMatchObject({ runKind: "explore" });
+  expect(started[0]).not.toHaveProperty("continuationOf");
   const reference = leads[0]?.artifacts[0];
   expect(reference?.kind).toBe("lead");
   if (reference !== undefined)
@@ -269,68 +215,18 @@ it("selects two Leads in priority order and records parent links", async () => {
       (await evidence.readFile(reference.digest, "lead.json", 1024 * 1024))
         .status,
     ).toBe("resolved");
-  expect(
-    ledger
-      .read({ type: "discovery-run-finished" })
-      .every(
-        ({ event }) =>
-          event.type === "discovery-run-finished" &&
-          event.outcome === "completed",
-      ),
-  ).toBe(true);
 });
 
-it("does not continue when the optional block is absent", async () => {
-  const { calls } = await trialCampaign({
-    trialCount: 1,
-    continueTrials: [],
-    noFindingRuns: 1,
-    replies: { "trial-0": { leads: [lead("consumer")] } },
-  });
-  expect(calls.map((call) => call.runId)).toEqual(["trial-0"]);
-});
-
-it("credits a continued Finding to its Trial and keeps a failed continuation from failing exploration", async () => {
-  const base = {
-    trialCount: 3,
-    continueTrials: [1],
-    noFindingRuns: 1,
+it("counts a later Finding in its prompt comparison arm", async () => {
+  const { result, calls, ledger } = await trialCampaign({
+    trialCount: 2,
+    noFindingRuns: 2,
     replies: {
       "trial-0": { leads: [lead("consumer")] },
-      "trial-1": { leads: [lead("consumer")] },
-      "continue-1-consumer": { findings: [finding] },
+      "trial-1": { findings: [finding] },
     },
-  };
-  const success = await trialCampaign(base);
-  expect(success.result).toMatchObject({
-    runCount: 3,
-    stoppedBy: "no-new-finding",
   });
-  expect(success.ledger.funnel("campaign-1").byArm["prompt:b"]?.findings).toBe(
-    1,
-  );
-  const comparison = new Evaluation({
-    ledger: success.ledger,
-    store: success.evidence,
-    locationsOf: wordpressFindingLocations,
-  }).compare({ axis: "prompt" });
-  expect(comparison.pooled.b.findings).toBe(1);
-
-  const failed = await trialCampaign({
-    ...base,
-    replies: { ...base.replies, "continue-1-consumer": { fail: true } },
-  });
-  expect(failed.result).toMatchObject({
-    runCount: 2,
-    stoppedBy: "no-new-finding",
-  });
-  const outcomes = failed.ledger
-    .read({ type: "discovery-run-finished" })
-    .map(({ event }) =>
-      event.type === "discovery-run-finished"
-        ? [event.runId, event.outcome]
-        : null,
-    );
-  expect(outcomes).toContainEqual(["trial-1", "completed"]);
-  expect(outcomes).toContainEqual(["continue-1-consumer", "failed"]);
+  expect(result).toMatchObject({ runCount: 2, stoppedBy: "max-runs" });
+  expect(calls.map((call) => call.runId)).toEqual(["trial-0", "trial-1"]);
+  expect(ledger.funnel("campaign-1").byArm["prompt:b"]?.findings).toBe(1);
 });

@@ -35,14 +35,10 @@ import {
   type WordPressEntryAssignment,
 } from "../profiles/wordpress/discovery/entry-points.js";
 import { buildWordPressSourceIndex } from "../profiles/wordpress/discovery/storage-index.js";
-import {
-  canonicalDigest,
-  canonicalJson,
-} from "../infrastructure/canonical-json.js";
+import { canonicalDigest } from "../infrastructure/canonical-json.js";
 import {
   admitWordPressLead,
   readWordPressLead,
-  renderWordPressLeadNeighbourhood,
   wordPressLeadSignature,
 } from "../profiles/wordpress/discovery/lead.js";
 import {
@@ -65,6 +61,7 @@ import {
   loadWordPressDiscoveryAsset,
   WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS,
   WORDPRESS_DISCOVERY_PROMPT_IDS,
+  type WordPressDiscoveryAsset,
 } from "../profiles/wordpress/prompts/index.js";
 import {
   createWordpressScopeEvaluator,
@@ -89,7 +86,11 @@ import {
   type WordPressReconstruction,
 } from "../profiles/wordpress/verification/reproduction-package.js";
 import type { CliProfile, CliState } from "./index.js";
-import { reverifyOnSelectedVersion, runCampaignPipeline } from "./pipeline.js";
+import {
+  reverifyOnSelectedVersion,
+  runCampaignPipeline,
+  type CampaignPipeline,
+} from "./pipeline.js";
 
 const text = z.strictObject({
   version: z.string().min(1).max(64),
@@ -101,78 +102,128 @@ const DISCOVERY_RUN_MEMORY_MIB =
   CODEX_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
 
 const armBFraction = z.number().min(0).max(1);
+const runnablePrompt = z
+  .enum(WORDPRESS_DISCOVERY_PROMPT_IDS)
+  .exclude(["screening-v1"]);
 const ablationAxis = z.discriminatedUnion("axis", [
   z.strictObject({ axis: z.literal("history"), armBFraction }),
   z.strictObject({
     axis: z.literal("prompt"),
     armBFraction,
-    armBPromptId: z.enum(WORDPRESS_DISCOVERY_PROMPT_IDS),
+    armBPromptId: runnablePrompt,
   }),
-  z.strictObject({ axis: z.literal("continuation"), armBFraction }),
 ]);
 const ablation = z
   .union([
-    z.strictObject({ axes: z.array(ablationAxis).min(1).max(3) }),
+    z.strictObject({ axes: z.array(ablationAxis).min(1).max(2) }),
     z.strictObject({ axis: z.literal("history"), armBFraction }),
   ])
   .transform((value) => ("axes" in value ? value : { axes: [value] }));
 
 /** Human-edited, Git-tracked run configuration. It carries no credentials or keys. */
-export const wordpressCampaignConfigSchema = z
-  .strictObject({
-    schemaVersion: z.literal(1),
-    selectionPolicyPath: z.string().min(1).optional(),
-    promptId: z.enum(WORDPRESS_DISCOVERY_PROMPT_IDS).default("screening-v1"),
-    programmeBoundary: text,
-    stopRules: z
-      .strictObject({
-        maxRuns: z.number().int().positive().max(40),
-        noFindingRuns: z.number().int().positive(),
-      })
-      .default({ maxRuns: 6, noFindingRuns: 3 }),
-    runWallTimeMinutes: z.number().positive().max(240).optional(),
-    /** Host bounds: concurrent discovery runs and the memory the Harness may use for them. */
-    resources: z
-      .strictObject({
-        maxConcurrentRuns: z.number().int().min(1).max(4).default(2),
-        memoryBudgetMiB: z.number().int().positive(),
-      })
-      .default({
-        maxConcurrentRuns: 2,
-        memoryBudgetMiB: 4 * DISCOVERY_RUN_MEMORY_MIB,
-      }),
-    /** Splits runs into arm a without history and arm b with the local public history. */
-    ablation: ablation.optional(),
-    continuation: z
-      .strictObject({
-        maxRunsPerTrial: z.number().int().min(1).max(2).default(2),
-        runWallTimeMinutes: z.number().positive().max(120).default(30),
-      })
-      .optional(),
-    /** Fixed-source registration catalogue; false is a recorded experimental control. */
-    entryIndex: z.boolean().default(true),
-    /** Opt-in connected entry scopes; the index is profile-owned and does not constrain exploration. */
-    assignment: z
-      .strictObject({
-        unit: z.literal("entry-point"),
-        entriesPerRun: z.number().int().min(1).max(64).default(8),
-      })
-      .optional(),
-    wordpressVersion: z.string().min(1).max(32),
-    lab: z.strictObject({
-      siteTitle: z.string().min(1).max(120),
-      initialPosts: z.array(z.string().min(1).max(120)).max(20),
-      initialApprovedComment: z.boolean().optional(),
-      customerRole: z.boolean(),
-      databaseAccess: z.enum(["read-only", "none"]).default("read-only"),
-      translatePress: z
-        .strictObject({
-          administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
-        })
-        .optional(),
-      scenarioId: z.string().optional(),
+const commonCampaignFields = {
+  schemaVersion: z.literal(1),
+  selectionPolicyPath: z.string().min(1).optional(),
+  programmeBoundary: text,
+  runWallTimeMinutes: z.number().positive().max(240).optional(),
+  /** Host bounds: concurrent discovery runs and the memory the Harness may use for them. */
+  resources: z
+    .strictObject({
+      maxConcurrentRuns: z.number().int().min(1).max(4).default(2),
+      memoryBudgetMiB: z.number().int().positive(),
+    })
+    .default({
+      maxConcurrentRuns: 2,
+      memoryBudgetMiB: 4 * DISCOVERY_RUN_MEMORY_MIB,
     }),
+  wordpressVersion: z.string().min(1).max(32),
+  lab: z.strictObject({
+    siteTitle: z.string().min(1).max(120),
+    initialPosts: z.array(z.string().min(1).max(120)).max(20),
+    initialApprovedComment: z.boolean().optional(),
+    customerRole: z.boolean(),
+    databaseAccess: z.enum(["read-only", "none"]).default("read-only"),
+    translatePress: z
+      .strictObject({
+        administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
+      })
+      .optional(),
+    scenarioId: z.string().optional(),
+  }),
+};
+const singleTrialStop = z
+  .strictObject({ maxRuns: z.literal(1), noFindingRuns: z.literal(1) })
+  .default({ maxRuns: 1, noFindingRuns: 1 });
+const comparisonStop = z
+  .strictObject({
+    maxRuns: z.number().int().positive().max(40),
+    noFindingRuns: z.number().int().positive(),
   })
+  .default({ maxRuns: 1, noFindingRuns: 1 });
+const assignment = z.strictObject({
+  unit: z.literal("entry-point"),
+  entriesPerRun: z.number().int().min(1).max(64).default(8),
+});
+const campaignModes = z.discriminatedUnion("mode", [
+  z.strictObject({
+    ...commonCampaignFields,
+    mode: z.literal("wp2shell"),
+    runWallTimeMinutes: z.number().positive().max(60).default(60),
+    promptId: z.literal("wp2shell-bounty-v2").default("wp2shell-bounty-v2"),
+    stopRules: singleTrialStop,
+    entryIndex: z.literal(true).default(true),
+  }),
+  z.strictObject({
+    ...commonCampaignFields,
+    mode: z.literal("entry-index-control"),
+    runWallTimeMinutes: z.number().positive().max(60).default(60),
+    promptId: z.literal("wp2shell-bounty-v2").default("wp2shell-bounty-v2"),
+    stopRules: singleTrialStop,
+    entryIndex: z.literal(false),
+  }),
+  z.strictObject({
+    ...commonCampaignFields,
+    mode: z.literal("comparison"),
+    promptId: runnablePrompt,
+    stopRules: comparisonStop,
+    entryIndex: z.boolean().default(true),
+  }),
+  z.strictObject({
+    ...commonCampaignFields,
+    mode: z.literal("ablation"),
+    promptId: runnablePrompt.default("wp2shell-bounty-v2"),
+    stopRules: comparisonStop,
+    entryIndex: z.boolean().default(true),
+    ablation,
+  }),
+  z.strictObject({
+    ...commonCampaignFields,
+    mode: z.literal("assignment"),
+    promptId: runnablePrompt.default("wp2shell-bounty-v2"),
+    stopRules: comparisonStop,
+    entryIndex: z.literal(true).default(true),
+    assignment,
+  }),
+]);
+export const wordpressCampaignConfigSchema = z
+  .preprocess((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+      return value;
+    const config = value as Record<string, unknown>;
+    if (config.mode !== undefined) return value;
+    const mode =
+      config.assignment !== undefined
+        ? "assignment"
+        : config.ablation !== undefined
+          ? "ablation"
+          : config.promptId !== undefined &&
+              config.promptId !== "wp2shell-bounty-v2"
+            ? "comparison"
+            : config.entryIndex === false
+              ? "entry-index-control"
+              : "wp2shell";
+    return { ...config, mode };
+  }, campaignModes)
   .superRefine((config, context) => {
     if (
       config.lab.initialApprovedComment === true &&
@@ -192,21 +243,12 @@ export const wordpressCampaignConfigSchema = z
         path: ["lab", "scenarioId"],
         message: "Unknown WordPress Lab scenario",
       });
-    const axes = config.ablation?.axes ?? [];
+    const axes = config.mode === "ablation" ? config.ablation.axes : [];
     if (new Set(axes.map((axis) => axis.axis)).size !== axes.length)
       context.addIssue({
         code: "custom",
         path: ["ablation", "axes"],
         message: "Ablation axes must be distinct",
-      });
-    if (
-      axes.some((axis) => axis.axis === "continuation") &&
-      config.continuation === undefined
-    )
-      context.addIssue({
-        code: "custom",
-        path: ["continuation"],
-        message: "Continuation axis requires a continuation block",
       });
   });
 export type WordPressCampaignConfig = z.infer<
@@ -331,7 +373,7 @@ function verificationFor(
   });
 }
 
-export function createWordPressCliProfile(options: {
+export type WordPressCliProfileOptions = {
   readonly boundaries: (
     config: WordPressCampaignConfig,
     state: CliState,
@@ -344,14 +386,325 @@ export function createWordPressCliProfile(options: {
     readonly databasePath: string;
     readonly statePath: string;
   };
-}): CliProfile {
+};
+
+type WordPressDiscoveryPipeline = CampaignPipeline<
+  WordPressTargetSelection,
+  WordPressLabSetup,
+  WordPressLabHandle,
+  WordPressFinding,
+  WordPressReconstruction
+>;
+type WordPressDiscoveryInput = Parameters<
+  WordPressDiscoveryPipeline["discovery"]
+>[0];
+type WordPressDiscoveryPlan = Awaited<
+  ReturnType<WordPressDiscoveryPipeline["discovery"]>
+>;
+type WordPressDiscoveryContext = {
+  readonly config: WordPressCampaignConfig;
+  readonly boundaries: WordPressCampaignBoundaries;
+  readonly state: CliState;
+  readonly objective: WordPressDiscoveryAsset;
+  readonly trustBoundary: WordPressDiscoveryAsset;
+  readonly armBObjective?: WordPressDiscoveryAsset;
+  readonly historyFor: (
+    config: WordPressCampaignConfig,
+    target: WordPressTargetSelection,
+  ) => CampaignHistory;
+};
+
+async function planWordPressDiscovery(
+  { target, snapshot, lab }: WordPressDiscoveryInput,
+  context: WordPressDiscoveryContext,
+): Promise<WordPressDiscoveryPlan> {
+  const {
+    config,
+    boundaries,
+    state,
+    objective,
+    trustBoundary,
+    armBObjective,
+    historyFor,
+  } = context;
+  const wallMinutes = config.runWallTimeMinutes ?? 60;
+  const ablationConfig =
+    config.mode === "ablation" ? config.ablation : undefined;
+  const assignmentConfig =
+    config.mode === "assignment" ? config.assignment : undefined;
+  const outputContract = wordPressDiscoveryOutputContract();
+  const objectiveOnly = (id: string) =>
+    WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
+  const source = await boundaries.sourceFor(snapshot);
+  // The campaign ceiling is a safety bound; selection decides depth per target.
+  const maxRuns = Math.min(config.stopRules.maxRuns, target.runBudget);
+  const sourceIndex =
+    !config.entryIndex && assignmentConfig === undefined
+      ? undefined
+      : await buildWordPressSourceIndex(source.directory, target.slug);
+  const entryIndexMetadata =
+    !config.entryIndex || sourceIndex === undefined
+      ? ({ enabled: false } as const)
+      : ({ enabled: true, digest: sourceIndex.digest } as const);
+  let assignments: readonly WordPressEntryAssignment[] = [];
+  if (assignmentConfig !== undefined) {
+    if (sourceIndex === undefined)
+      throw new Error("Source index is unavailable");
+    assignments = planWordPressEntryAssignments(
+      sourceIndex,
+      assignmentConfig.entriesPerRun,
+    );
+  }
+  if (assignmentConfig !== undefined && assignments.length === 0)
+    throw new Error(
+      "Entry-point assignment found no registrations in the source",
+    );
+  const stopRules = {
+    maxRuns,
+    noFindingRuns: Math.min(
+      Math.max(config.stopRules.noFindingRuns, assignments.length),
+      maxRuns,
+    ),
+  };
+  const accounts = Object.entries(lab.attackerAccounts).map(
+    ([role, account]) =>
+      `- ${role}: ${account.username} / ${account.password} (Lab only)`,
+  );
+  // Only low-privilege Lab accounts exist on the handle; nothing else is offered.
+  const promptFor = (
+    assignment: WordPressEntryAssignment | undefined,
+    selectedObjective: typeof objective,
+  ) =>
+    [
+      selectedObjective.text.trim(),
+      ...(objectiveOnly(selectedObjective.id) ? [outputContract.text] : []),
+      "## Trust boundary",
+      trustBoundary.text.trim(),
+      `## Programme Boundary (${config.programmeBoundary.version})`,
+      config.programmeBoundary.text.trim(),
+      "## Lab",
+      `Endpoint: ${lab.endpoint}`,
+      ...accounts,
+      ...(lab.database === undefined
+        ? ["Database: not exposed to this run."]
+        : [
+            `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
+          ]),
+      ...(source.dependency === undefined
+        ? []
+        : [
+            "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
+          ]),
+      ...(assignment === undefined
+        ? ["## Assigned files", "All files under /workspace/main."]
+        : [
+            renderWordPressEntryAssignment(
+              assignment,
+              source.dependency !== undefined,
+            ),
+          ]),
+      ...(config.entryIndex && sourceIndex !== undefined
+        ? [renderWordPressEntryIndex(sourceIndex)]
+        : []),
+    ].join("\n\n");
+  const assignmentMetadata = (assignment: WordPressEntryAssignment) => {
+    if (
+      assignment.indexDigest === undefined ||
+      assignment.componentIds === undefined
+    )
+      throw new Error("Indexed assignment metadata is missing");
+    return {
+      partition: assignment.partition,
+      of: assignment.of,
+      planDigest: assignment.planDigest,
+      indexDigest: assignment.indexDigest,
+      componentDigest: canonicalDigest(assignment.componentIds),
+    };
+  };
+  const now = state.clock().getTime();
+  return {
+    input: {
+      schemaVersion: 1,
+      snapshotDigest: snapshot.digest,
+      trustBoundary: {
+        version: trustBoundary.id,
+        text: trustBoundary.text,
+      },
+      programmeBoundary: config.programmeBoundary,
+      modelProfileDigest: boundaries.runtimeProfile.digest,
+      promptDigest: objective.digest,
+      stopRules,
+      lab: { setupDigest: lab.setupDigest },
+      history: historyFor(config, target),
+      entryIndex: entryIndexMetadata,
+    },
+    historyFraction:
+      ablationConfig?.axes.find((axis) => axis.axis === "history")
+        ?.armBFraction ?? 0,
+    runWallTimeMs: wallMinutes * 60_000,
+    concurrency: Math.min(
+      config.resources.maxConcurrentRuns,
+      Math.floor(
+        config.resources.memoryBudgetMiB /
+          (boundaries.runtimeProfile.subagent.modelId === "unavailable"
+            ? DISCOVERY_RUN_MEMORY_MIB
+            : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB),
+      ),
+    ),
+    ...(ablationConfig === undefined
+      ? {}
+      : { ablation: { axes: ablationConfig.axes } }),
+    plannedTrials: Array.from({ length: maxRuns }, (_, trialOrdinal) => {
+      const trialId = state.newId();
+      const arms = allocateTrialArms(trialOrdinal, ablationConfig?.axes ?? []);
+      const selectedObjective =
+        arms.prompt === "b" && armBObjective !== undefined
+          ? armBObjective
+          : objective;
+      const assignment =
+        assignments.length === 0
+          ? undefined
+          : assignments[trialOrdinal % assignments.length]!;
+      const explore: PlannedDiscoveryRun = {
+        configuration: {
+          promptVariant: selectedObjective.id,
+          promptDigest: selectedObjective.digest,
+          ...(objectiveOnly(selectedObjective.id)
+            ? {
+                objectiveDigest: selectedObjective.digest,
+                contractDigest: outputContract.digest,
+              }
+            : {}),
+          trustBoundaryVersion: trustBoundary.id,
+          sourcePack: {
+            dependency:
+              source.dependency === undefined
+                ? ("none" as const)
+                : ("mounted" as const),
+          },
+          assignmentUnit: assignment === undefined ? "plugin" : "entry-point",
+          entryIndex: entryIndexMetadata,
+          ...(assignment === undefined
+            ? {}
+            : { assignment: assignmentMetadata(assignment) }),
+          labAccess: {
+            database: lab.database === undefined ? "none" : "read-only",
+          },
+        },
+        run: {
+          runId: trialId,
+          targetSnapshotDigest: snapshot.digest,
+          profile: boundaries.runtimeProfile,
+          coordination: "cooperative" as const,
+          prompt: promptFor(assignment, selectedObjective),
+          lab: {
+            endpoint: lab.endpoint,
+            networkName: lab.networkName,
+            internalIp: lab.internalIp,
+            ...(lab.database === undefined
+              ? {}
+              : {
+                  database: {
+                    host: lab.database.host,
+                    ipv4: lab.database.ipv4,
+                  },
+                }),
+          },
+          sourceDirectory: source.directory,
+          sourceTree: source.tree,
+          ...(source.dependency === undefined
+            ? {}
+            : { dependencySource: source.dependency }),
+          expiresAt: new Date(now + wallMinutes * 60_000).toISOString(),
+        },
+      };
+      return {
+        trialId,
+        trialOrdinal,
+        explore,
+      };
+    }),
+    executor: boundaries.executor,
+    attachments: boundaries.attachments,
+    admitFinding: admitWordPressFinding,
+    normalizeCandidate: normalizeWordPressCandidate,
+    classifyCandidate: classifyWordPressCandidate,
+    admitLead: admitWordPressLead,
+    leadSignature: (lead: AdmittedLead) =>
+      wordPressLeadSignature(readWordPressLead(lead)),
+  };
+}
+
+async function runWordPressCampaign(
+  state: CliState,
+  input: Parameters<CliProfile["runCampaign"]>[1],
+  options: WordPressCliProfileOptions,
+  historyFor: (
+    config: WordPressCampaignConfig,
+    target: WordPressTargetSelection,
+  ) => CampaignHistory,
+): ReturnType<CliProfile["runCampaign"]> {
+  const { config, policy } = await loadConfig(input.configPath);
+  const ablationConfig =
+    config.mode === "ablation" ? config.ablation : undefined;
+  const boundaries = await options.boundaries(config, state);
+  const [objective, trustBoundary] = await Promise.all([
+    loadWordPressDiscoveryAsset(config.promptId),
+    loadWordPressDiscoveryAsset("trust-boundary-v1"),
+  ]);
+  const promptAxis = ablationConfig?.axes.find(
+    (axis) => axis.axis === "prompt",
+  );
+  const armBObjective =
+    promptAxis?.axis === "prompt"
+      ? await loadWordPressDiscoveryAsset(promptAxis.armBPromptId)
+      : undefined;
+  return runCampaignPipeline({
+    campaignId: input.campaignId,
+    ...(input.retryIncompleteVerifications === undefined
+      ? {}
+      : {
+          retryIncompleteVerifications: input.retryIncompleteVerifications,
+        }),
+    ledger: state.ledger,
+    store: state.store,
+    clock: state.clock,
+    newId: state.newId,
+    pipeline: {
+      select: async () =>
+        (await boundaries.selection.select(policy)).filter(
+          (target) => input.target === null || target.slug === input.target,
+        ),
+      freeze: boundaries.freeze,
+      lab: boundaries.lab,
+      setupFor: setupFor(config),
+      discovery: (input) =>
+        planWordPressDiscovery(input, {
+          config,
+          boundaries,
+          state,
+          objective,
+          trustBoundary,
+          ...(armBObjective === undefined ? {} : { armBObjective }),
+          historyFor,
+        }),
+      verification: verificationFor(state, boundaries),
+      reconstructionFor: reconstructionFor(config),
+    },
+  });
+}
+
+export function createWordPressCliProfile(
+  options: WordPressCliProfileOptions,
+): CliProfile {
   /** Public records before the stable version's release; none when the cutoff or mirror is missing. */
   const historyFor = (
     config: WordPressCampaignConfig,
     target: WordPressTargetSelection,
   ): CampaignHistory => {
     if (
-      !config.ablation?.axes.some((axis) => axis.axis === "history") ||
+      config.mode !== "ablation" ||
+      !config.ablation.axes.some((axis) => axis.axis === "history") ||
       options.wordfenceHistory === undefined ||
       target.versionPublishedAt === undefined
     )
@@ -415,335 +768,8 @@ export function createWordPressCliProfile(options: {
         score: target.score,
       }));
     },
-    async runCampaign(state, input) {
-      const { config, policy } = await loadConfig(input.configPath);
-      const screening = config.promptId === "screening-v1";
-      if (
-        screening &&
-        (!config.entryIndex ||
-          config.assignment !== undefined ||
-          config.continuation !== undefined ||
-          config.ablation !== undefined ||
-          (config.runWallTimeMinutes !== undefined &&
-            config.runWallTimeMinutes > 30))
-      )
-        throw new Error(
-          "Screening requires an unpartitioned entry index and at most 30 minutes",
-        );
-      const wallMinutes = config.runWallTimeMinutes ?? (screening ? 30 : 90);
-      const boundaries = await options.boundaries(config, state);
-      const [objective, trustBoundary] = await Promise.all([
-        loadWordPressDiscoveryAsset(config.promptId),
-        loadWordPressDiscoveryAsset("trust-boundary-v1"),
-      ]);
-      const promptAxis = config.ablation?.axes.find(
-        (axis) => axis.axis === "prompt",
-      );
-      const armBObjective =
-        promptAxis?.axis === "prompt"
-          ? await loadWordPressDiscoveryAsset(promptAxis.armBPromptId)
-          : undefined;
-      const outputContract = wordPressDiscoveryOutputContract();
-      const objectiveOnly = (id: string) =>
-        WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
-      return runCampaignPipeline({
-        campaignId: input.campaignId,
-        ...(input.retryIncompleteVerifications === undefined
-          ? {}
-          : {
-              retryIncompleteVerifications: input.retryIncompleteVerifications,
-            }),
-        ledger: state.ledger,
-        store: state.store,
-        clock: state.clock,
-        newId: state.newId,
-        pipeline: {
-          select: async () =>
-            (await boundaries.selection.select(policy)).filter(
-              (target) => input.target === null || target.slug === input.target,
-            ),
-          freeze: boundaries.freeze,
-          lab: boundaries.lab,
-          setupFor: setupFor(config),
-          async discovery({ target, snapshot, lab }) {
-            const source = await boundaries.sourceFor(snapshot);
-            // The campaign ceiling is a safety bound; selection decides depth per target.
-            const maxRuns = Math.min(
-              screening ? 1 : config.stopRules.maxRuns,
-              target.runBudget,
-            );
-            const sourceIndex =
-              !config.entryIndex &&
-              config.assignment === undefined &&
-              config.continuation === undefined
-                ? undefined
-                : await buildWordPressSourceIndex(
-                    source.directory,
-                    target.slug,
-                  );
-            const entryIndexMetadata =
-              !config.entryIndex || sourceIndex === undefined
-                ? ({ enabled: false } as const)
-                : ({ enabled: true, digest: sourceIndex.digest } as const);
-            let assignments: readonly WordPressEntryAssignment[] = [];
-            if (config.assignment !== undefined) {
-              if (sourceIndex === undefined)
-                throw new Error("Source index is unavailable");
-              assignments = planWordPressEntryAssignments(
-                sourceIndex,
-                config.assignment.entriesPerRun,
-              );
-            }
-            if (config.assignment !== undefined && assignments.length === 0)
-              throw new Error(
-                "Entry-point assignment found no registrations in the source",
-              );
-            const stopRules = {
-              maxRuns,
-              noFindingRuns: screening
-                ? 1
-                : Math.min(
-                    Math.max(
-                      config.stopRules.noFindingRuns,
-                      assignments.length,
-                    ),
-                    maxRuns,
-                  ),
-            };
-            const accounts = Object.entries(lab.attackerAccounts).map(
-              ([role, account]) =>
-                `- ${role}: ${account.username} / ${account.password} (Lab only)`,
-            );
-            // Only low-privilege Lab accounts exist on the handle; nothing else is offered.
-            const promptFor = (
-              assignment: WordPressEntryAssignment | undefined,
-              selectedObjective: typeof objective,
-            ) =>
-              [
-                selectedObjective.text.trim(),
-                ...(objectiveOnly(selectedObjective.id)
-                  ? [outputContract.text]
-                  : []),
-                "## Trust boundary",
-                trustBoundary.text.trim(),
-                `## Programme Boundary (${config.programmeBoundary.version})`,
-                config.programmeBoundary.text.trim(),
-                "## Lab",
-                `Endpoint: ${lab.endpoint}`,
-                ...accounts,
-                ...(lab.database === undefined
-                  ? ["Database: not exposed to this run."]
-                  : [
-                      `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
-                    ]),
-                ...(source.dependency === undefined
-                  ? []
-                  : [
-                      "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
-                    ]),
-                ...(assignment === undefined
-                  ? ["## Assigned files", "All files under /workspace/main."]
-                  : [
-                      renderWordPressEntryAssignment(
-                        assignment,
-                        source.dependency !== undefined,
-                      ),
-                    ]),
-                ...(config.entryIndex && sourceIndex !== undefined
-                  ? [renderWordPressEntryIndex(sourceIndex)]
-                  : []),
-              ].join("\n\n");
-            const assignmentMetadata = (
-              assignment: WordPressEntryAssignment,
-            ) => {
-              if (
-                assignment.indexDigest === undefined ||
-                assignment.componentIds === undefined
-              )
-                throw new Error("Indexed assignment metadata is missing");
-              return {
-                partition: assignment.partition,
-                of: assignment.of,
-                planDigest: assignment.planDigest,
-                indexDigest: assignment.indexDigest,
-                componentDigest: canonicalDigest(assignment.componentIds),
-              };
-            };
-            const now = state.clock().getTime();
-            return {
-              input: {
-                schemaVersion: 1,
-                snapshotDigest: snapshot.digest,
-                trustBoundary: {
-                  version: trustBoundary.id,
-                  text: trustBoundary.text,
-                },
-                programmeBoundary: config.programmeBoundary,
-                modelProfileDigest: boundaries.runtimeProfile.digest,
-                promptDigest: objective.digest,
-                stopRules,
-                lab: { setupDigest: lab.setupDigest },
-                history: historyFor(config, target),
-                entryIndex: entryIndexMetadata,
-              },
-              historyFraction:
-                config.ablation?.axes.find((axis) => axis.axis === "history")
-                  ?.armBFraction ?? 0,
-              runWallTimeMs: wallMinutes * 60_000,
-              concurrency: screening
-                ? 1
-                : Math.min(
-                    config.resources.maxConcurrentRuns,
-                    Math.floor(
-                      config.resources.memoryBudgetMiB /
-                        (boundaries.runtimeProfile.subagent.modelId ===
-                        "unavailable"
-                          ? DISCOVERY_RUN_MEMORY_MIB
-                          : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB +
-                            EGRESS_BROKER_MEMORY_MIB),
-                    ),
-                  ),
-              ...(config.ablation === undefined
-                ? {}
-                : { ablation: { axes: config.ablation.axes } }),
-              plannedTrials: Array.from(
-                { length: maxRuns },
-                (_, trialOrdinal) => {
-                  const trialId = state.newId();
-                  const arms = allocateTrialArms(
-                    trialOrdinal,
-                    config.ablation?.axes ?? [],
-                  );
-                  const selectedObjective =
-                    arms.prompt === "b" && armBObjective !== undefined
-                      ? armBObjective
-                      : objective;
-                  const assignment =
-                    assignments.length === 0
-                      ? undefined
-                      : assignments[trialOrdinal % assignments.length]!;
-                  const explore: PlannedDiscoveryRun = {
-                    configuration: {
-                      promptVariant: selectedObjective.id,
-                      promptDigest: selectedObjective.digest,
-                      ...(objectiveOnly(selectedObjective.id)
-                        ? {
-                            objectiveDigest: selectedObjective.digest,
-                            contractDigest: outputContract.digest,
-                          }
-                        : {}),
-                      trustBoundaryVersion: trustBoundary.id,
-                      sourcePack: {
-                        dependency:
-                          source.dependency === undefined
-                            ? ("none" as const)
-                            : ("mounted" as const),
-                      },
-                      assignmentUnit:
-                        assignment === undefined ? "plugin" : "entry-point",
-                      entryIndex: entryIndexMetadata,
-                      ...(assignment === undefined
-                        ? {}
-                        : { assignment: assignmentMetadata(assignment) }),
-                      labAccess: {
-                        database:
-                          lab.database === undefined ? "none" : "read-only",
-                      },
-                    },
-                    run: {
-                      runId: trialId,
-                      targetSnapshotDigest: snapshot.digest,
-                      profile: boundaries.runtimeProfile,
-                      ...(screening ? { coordination: "solo" as const } : {}),
-                      prompt: promptFor(assignment, selectedObjective),
-                      lab: {
-                        endpoint: lab.endpoint,
-                        networkName: lab.networkName,
-                        internalIp: lab.internalIp,
-                        ...(lab.database === undefined
-                          ? {}
-                          : {
-                              database: {
-                                host: lab.database.host,
-                                ipv4: lab.database.ipv4,
-                              },
-                            }),
-                      },
-                      sourceDirectory: source.directory,
-                      sourceTree: source.tree,
-                      ...(source.dependency === undefined
-                        ? {}
-                        : { dependencySource: source.dependency }),
-                      expiresAt: new Date(
-                        now + wallMinutes * 60_000,
-                      ).toISOString(),
-                    },
-                  };
-                  const continuationConfig = config.continuation;
-                  if (
-                    continuationConfig === undefined ||
-                    arms.continuation === "a"
-                  )
-                    return {
-                      trialId,
-                      trialOrdinal,
-                      ...(screening ? { stage: "screening" as const } : {}),
-                      explore,
-                    };
-                  if (sourceIndex === undefined)
-                    throw new Error("Continuation index is unavailable");
-                  return {
-                    trialId,
-                    trialOrdinal,
-                    explore,
-                    continuation: {
-                      maxRuns: continuationConfig.maxRunsPerTrial,
-                      wallTimeMs:
-                        continuationConfig.runWallTimeMinutes * 60_000,
-                      plan: (lead: AdmittedLead): PlannedDiscoveryRun => {
-                        const admitted = readWordPressLead(lead);
-                        if (
-                          admitted.trialId !== trialId ||
-                          admitted.snapshotDigest !== snapshot.digest
-                        )
-                          throw new Error("Lead differs from its Trial");
-                        return {
-                          configuration: explore.configuration,
-                          run: {
-                            ...explore.run,
-                            runId: state.newId(),
-                            prompt: [
-                              explore.run.prompt,
-                              "## Lead",
-                              canonicalJson(admitted),
-                              "## Neighbourhood",
-                              renderWordPressLeadNeighbourhood(
-                                admitted,
-                                sourceIndex,
-                              ),
-                            ].join("\n\n"),
-                          },
-                        };
-                      },
-                    },
-                  };
-                },
-              ),
-              executor: boundaries.executor,
-              attachments: boundaries.attachments,
-              admitFinding: admitWordPressFinding,
-              normalizeCandidate: normalizeWordPressCandidate,
-              classifyCandidate: classifyWordPressCandidate,
-              admitLead: admitWordPressLead,
-              leadSignature: (lead: AdmittedLead) =>
-                wordPressLeadSignature(readWordPressLead(lead)),
-            };
-          },
-          verification: verificationFor(state, boundaries),
-          reconstructionFor: reconstructionFor(config),
-        },
-      });
-    },
+    runCampaign: (state, input) =>
+      runWordPressCampaign(state, input, options, historyFor),
     async cleanupLeftovers(state, input) {
       const { config } = await loadConfig(input.configPath);
       const boundaries = await options.boundaries(config, state);

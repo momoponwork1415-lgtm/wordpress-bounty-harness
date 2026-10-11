@@ -1,6 +1,6 @@
 # 運用手引き（完成後に人間がすること）
 
-この文書のコマンドは2026-10-10時点の単独Trial実装用。Root＋最大3 subagentの主経路は [実装計画](IMPLEMENTATION-PLAN.md) に従って移行中で、実機縦断の受入前に本番稼働したものとみなさない。
+2026-10-11の探索主経路は、対象ごとに `wp2shell-bounty-v2` のRoot＋最大3 subagentによる協調Trialを1回行う（[ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md)）。旧単独Trialと二段構えの記録は読めるが、新規探索には使わない。実機縦断の受入前に本番稼働したものとみなさない。
 
 対象読者: このHarnessを一人で回す運用者。正本は [SPEC.md](SPEC.md)。
 
@@ -9,7 +9,7 @@
 - コマンド名は `runCli`（`src/cli/index.ts`）が受け付けるもの。
 - host設定は `--host <path>` か `WBH_HOST_CONFIG` で渡す。
 - 台帳とPrivate Evidenceの置き場は `--state <dir>` か `WBH_STATE_DIRECTORY` で選ぶ。既定は `~/.local/state/wordpress-bounty-harness`。
-- 現行の単独Trialの設定例は [examples/translatepress-3.3.1/](../examples/translatepress-3.3.1/README.md)、過去の2×2開発セットは [examples/translatepress-3.2.5/](../examples/translatepress-3.2.5/README.md)。新しいRoot＋3の本番開始条件は [TranslatePressベンチマーク](TRANSLATEPRESS-BENCHMARK.md)。
+- 過去の単独Trialの設定例は [examples/translatepress-3.3.1/](../examples/translatepress-3.3.1/README.md)、過去の2×2開発セットは [examples/translatepress-3.2.5/](../examples/translatepress-3.2.5/README.md)。Root＋3の本番開始条件は [TranslatePressベンチマーク](TRANSLATEPRESS-BENCHMARK.md)。
 
 ## 1. 一度だけやる準備
 
@@ -20,7 +20,7 @@
 | host設定 | Git外のJSON（`wordpressHostConfigSchema`、雛形は `examples/translatepress-3.3.1/host.example.json`）。docker、作業dir、全imageのdigest固定、Codex runtime profile、認証情報ファイルの**パス**、Programme写しのパス、履歴mirror | 初回とimage更新時 |
 | 認証 | ホストでCodex CLIにChatGPTログインし（`codex login`）、その `auth.json`（0600、本人所有）のパスをhost設定の `credentialFilePath` に、`authenticationMethod` を `chatgpt-oauth-host` にする。読むのはegress brokerだけで、エージェントには渡らない（下記） | 初回とログイン失効時 |
 | Programmeの写し | wordfence.comは自動取得できないので、公式3ページを人間がpage documentへ写す（雛形は `examples/translatepress-3.3.1/wordfence-programme.example.json`）。35日を超えると選定が止まる | 月1回 |
-| campaign設定 | JSONファイル（`wordpressCampaignConfigSchema`）。Programme Boundary、停止規則、Lab、`resources`、任意の `ablation` を書く。認証情報と鍵は書かない | 方針を変えるとき |
+| campaign設定 | JSONファイル（`wordpressCampaignConfigSchema`）。Programme Boundary、停止規則、Lab、`resources` を書く。認証情報と鍵は書かない | 方針を変えるとき |
 | 選定方針 | `src/profiles/wordpress/policy/selection.json`（説明は同じ場所の `selection.md`）。インストール数の下限、更新の鮮度、除外slug、High Threatタグ、run予算 | 月1回程度 |
 | trust境界宣言 | `src/profiles/wordpress/prompts/trust-boundary-v1.md` をそのまま使う | ほぼ変えない |
 | 対象範囲の方針 | `src/profiles/wordpress/policy/programme-scope.md` を公式ページで見直す | 提出前と月1回 |
@@ -48,29 +48,28 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 - エージェントのsandboxには、grant tokenとダミーaccountだけでできた使い捨ての `auth.json`、そのCA、brokerのIPだけが入る。本物のaccess tokenとaccount IDはbrokerだけが持ち、refresh tokenはbrokerにも渡さない。
 - brokerは `responses` のPOSTだけを、bindしたmodel・件数・大きさ・期限の範囲で `chatgpt.com` へ転送する。workspace discoveryはbrokerが自分で答え、それ以外のendpoint（plugins、analyticsなど）は403にする。
-- Root＋3 Trialのbroker上限は1,600 provider要求、単独Trialは100要求。90分のwall上限と別に記録し、上限到達は `incomplete(policy: broker-request-cap)` として扱う。30分探索指示の実測に先立ち、400要求では足りない可能性があったためRoot＋3の上限を拡張した。
-- provider要求本文の上限はRoot＋3で8 MiB、単独Trialで1 MiB。長い協調探索で1 MiBを超えた実測を受けて拡張した。413応答は `incomplete(policy: broker-request-bytes-cap)` として記録し、探索0件として数えない。
+- Root＋3 Trialのbroker上限は1,600 provider要求。既定wall上限60分とは独立に記録し、要求件数の上限到達は `incomplete(policy: broker-request-cap)` として扱う。過去の単独Trialの100要求上限は新主経路に適用しない。
+- provider要求本文の上限はRoot＋3で8 MiB。長い協調探索で1 MiBを超えた実測を受けて拡張した。413応答は `incomplete(policy: broker-request-bytes-cap)` として記録し、探索0件として数えない。
 - tokenの更新はしない。preflightが「1時間以内に失効」を出したら、ホストで `codex login` をやり直す。
 - APIキー（`host-private-bearer`）の経路も残っている。
 
-`campaign run` は無人で回る。既定の一段目は対象ごとに単独 agent の screening Trial を1回、壁時計30分以内で行う。受理された Finding も Lead もなければ `screened-no-candidate` として台帳に残し、対象を `unexplored` と扱う。旧promptを明示した設定では、選定のrun予算と設定の上限（既定6）の小さい方まで走り、新規 Finding がない Trial が続くと止まる。各 Finding は別コンテナの Verifier と判定器を通る。
+`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v2` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessは最低実行時間を強制しない。既存v2本文の30分指示は#143で新しい版にするまで残る。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
 
 固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。
 
-既定promptは `screening-v1`。入口索引は一段目では必須で、`entryIndex: false`、分担、旧継続、A/B 設定は使えない。旧 `short-objective-managed-v4` と比較armの `wp2shell-bounty-v2` は版を明示した設定で再現できる。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで再開する。
+既定promptは `wp2shell-bounty-v2`、入口索引は固定source由来のカタログ入力として既定で有効。索引の全件処理は終了条件にしない。`short-objective-managed-v4` は比較armとして残す。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
 
 - **同時run数**: campaign設定の `resources` で決める。
-  - 既定は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。`stopRules.maxRuns` は Trial 上限（既定 6）、`noFindingRuns` は新規発見のない Trial の連続数（既定 3）、探索 run の wall time は既定 90 分。
+  - 既定の `resources` は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。新主経路は対象ごとに1 Trialで、wall上限は60分。
   - `observed` は完了した command event の文字列から Harness が数える下限の近似。script 内部のファイル読出しや通信は含まない。
-  - 実効の同時数は `min(maxConcurrentRuns, floor(memoryBudgetMiB / 2560))`。2,560 MiBは、Codex sandbox（2 GiB）とrunごとのegress broker（512 MiB）の `--memory` の合計。
+  - 実効の同時数は協調Trialでは `min(maxConcurrentRuns, floor(memoryBudgetMiB / 8704))`。8,704 MiBはRoot＋最大3子のCodex sandbox（8 GiB）とrunごとのegress broker（512 MiB）の合計。旧単独Trialの計算単位は2,560 MiB。
   - ホストが小さいときは `memoryBudgetMiB` を下げる。1run分に満たない値では開始しない。
   - Labのメモリは対象ごとに別に要る。
 - **上限での停止**: provider のrate limit / quotaの応答を受けたとき。
   - 新しいrunを出さず、進行中のrunを記録して止まる。終了コードは3で、台帳に `campaign-stopped` が残る。自動retryはしない。
-  - 同じコマンドをもう一度実行すると再開する。探索を終えた対象は飛ばし、途中の対象は残り回数から続け、未検証のFindingだけを検証する。
+  - 同じコマンドをもう一度実行すると再開する。開始済みTrialは追加せず、未検証のFindingを検証して未消費の対象へ進む。
 - **入口の分担**: campaign の `assignment: {"unit":"entry-point","entriesPerRun":8}` で有効にする。WordPress profile が登録入口、保存先、core 交差、1 hop の include を text 走査し、保存先を共有する入口を同じ scope に置く。索引は事実の列挙で、探索範囲を制限しない。台帳には索引・成分の digest だけを置く。上限（PHP file 20,000、1 file 2 MiB、成分 key 200）を超えた索引は scope に partial と表示する。
-- **A/B の軸**: `ablation.axes` に `history`、`prompt`、`continuation` を最大3本指定する。旧 `ablation: {"axis":"history","armBFraction":...}` も読める。Trial ordinal から arm を決め、台帳 `configuration.arms` に記録する。`prompt` 軸の arm b は `armBPromptId` の版付き prompt を使う。`continuation` 軸は `continuation` ブロックを要する。`eval compare --axis` は各軸の探索 run だけを分母にする。
-- **Lead の継続**: `continuation: {"maxRunsPerTrial":2,"runWallTimeMinutes":30}` を指定すると、completed の探索 run で得た Lead から同じ Trial 内で最大2本、1 hop の継続 run を順に実行する。`continuation` 軸がある場合は arm b だけで実行する。継続には選んだ Lead と source index の近傍だけを渡す。失敗した継続 run は探索 Trial の失敗にしない。Lead の本文は Private Evidence に置き、台帳には digest と分類だけを記録する。`eval score` は Lead の location-overlap を source candidates の別列に表示する。
+- **過去Trialの記録**: 旧 `stage` / `continuationOf` 付きeventと旧ablation armは台帳から読める。旧promptの目的文とdigestで構成を照合するが、旧screeningを現行modeで新規起動しない。新主経路は段やcontinuationを新規に書かず、比較するpromptと入口索引の有無を別armとして明示する。Leadの本文はPrivate Evidenceに置き、台帳にはdigestと分類だけを記録する。
 - **対象ごとの失敗**（取得、探索、検証）: 標準エラーに `skipped <対象> <版> at <段階>: <理由>` と出す。台帳には `target-skipped`（段階だけ）を残し、次の対象へ進む。
 - Lab 準備では使い捨て runsc コンテナから HTTP 到達を確認する。`lab-provisioned.reachability.http = failed` なら探索を始めず、`failureStage` と `reason` を記録する。DB 到達の失敗は記録するが HTTP が通れば続ける。Docker の診断文は Private Evidence に置き、台帳には digest だけを残す。
 - pinned WordPress image の core は `<workDirectory>/wordpress-core` に実行せず取り出し、Dependency Snapshot として固定する。探索と Verifier は `/workspace/wordpress` の read-only mount で同じ版を読む。
@@ -177,20 +176,20 @@ harness lab cleanup --config <path> --remove   # 削除
 
 ## 6. 評価
 
-主指標は本番から得る。現在の `eval score --keys` は任意の研究用互換機能で、TranslatePressベンチマークや本番開始には使わない。下記のCLIは現行の単独Trial実装用であり、Root＋3への移行後に更新する。
+主指標は本番から得る。現在の `eval score --keys` は任意の研究用互換機能で、TranslatePressベンチマークや本番開始には使わない。下記の `eval compare` の旧軸は過去Trialの読取用であり、新主経路へcontinuation軸を適用しない。
 
 ```
-harness eval compare [--axis history|prompt|continuation] [--campaign <id>]   # 本番A/B: Trial別の当たり率（Clopper-Pearson 95%）と費用
+harness eval compare [--axis history|prompt|continuation] [--campaign <id>]   # 旧軸の比較。新主経路のcontinuationは無い
 harness eval prospective --advisories <path> [--campaign <id>]    # 後日公開されたadvisoryで本番台帳を再採点
 harness eval score --campaign <id> --keys <path> --case <id> [--manifest <path>] # 答えの鍵でlocation-overlap。held-outは任意
 harness eval keys --keys <path> [--manifest <path>]                # 私的な鍵を検査し、公開可能なcase IDとdigestだけを出す
 harness eval rubric --file <path>                                 # 私的な盲検rubricを検査し、件数とdigestだけを出す
 ```
 
-- **本番A/B**: 同じ対象の独立Trialへ `ablation.axes` で `history`、`prompt`、`continuation` をopt-in割当する。どのarmが見つけても提出できる。旧 `{"axis":"history","armBFraction":0.5}` も読める。
-  - 旧A/Bの基準は `short-objective-managed-v4` と継続なし。`prompt` 軸のarm bは `armBPromptId` で版付きpromptを指定し、`continuation` 軸のarm bは `continuation` ブロックの上限内で、自分のLeadだけを1 hop継続する。割当とdigestは台帳へ残る。
+- **新主経路の比較**: 同じ対象・model・source・Lab・wall上限で、prompt版や入口索引の有無だけを変えた独立Trialを別armとして記録する。旧段付きTrialを同じ分母に混ぜない。
+- **旧A/Bの読取**: 過去の `ablation.axes` にあった `history`、`prompt`、`continuation` と旧 `{"axis":"history","armBFraction":0.5}` の割当・digestは台帳に残る。旧基準は `short-objective-managed-v4` と継続なしだった。
   - `eval compare --axis` の分母はLab HTTP到達 `ok` のcompleted探索Trial。継続runを別Trialに数えず、provider失敗も分母に入れない。区間が重なれば「判定不能」と出す。
-  - #73のLuna開発セットでは公開2事例に対して全cellでsource候補0/3だった。当時の事前登録の規則で短い目的promptを既定に残したが、優劣の証明ではない。失敗Trialの補充は元の12試行と分けて記録した。150分対照も実wallは設定上限より短かった。現在の既定と比較方針はADR 0017に従う。
+  - #73のLuna開発セットでは公開2事例に対して全cellでsource候補0/3だった。当時の事前登録の規則で短い目的promptを既定に残したが、優劣の証明ではない。失敗Trialの補充は元の12試行と分けて記録した。150分対照も実wallは設定上限より短かった。現在の既定はADR 0029に従う。
   - 履歴を渡せるのは、安定版の公開日時（WordPress.orgの最終更新）より前の公開記録だけ。版を固定した対象やmirrorが使えない対象では、全runがarm aになる。
 - **前向き評価**: 四半期ごとに、公開されたadvisoryで本番台帳を再採点し、見逃しを数える。
   - advisoryファイルはGit外に置く私的データ。1件ごとに `{schemaVersion: 1, advisoryId, slug, affectedVersions: [{fromVersion, fromInclusive, toVersion, toInclusive}], publishedAt, impact, allowedLocations: [{file, function?}]}` を書く。`allowedLocations` は公開パッチを読んで人間が書く。

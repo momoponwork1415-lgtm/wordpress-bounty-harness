@@ -373,6 +373,37 @@ describe("Codex native agent runtime", () => {
           unexamined: "none",
         });
       }
+      for (const [overrides, reasonDetail] of [
+        [{ rollouts: [childRollout] }, "root-rollout-missing"],
+        [
+          { rollouts: [childRollout], rolloutFailure: "capture-failed" },
+          "rollout-capture-failed",
+        ],
+      ] as const) {
+        const withoutRoot = await new CodexNativeAgentRuntime(
+          sandbox(brokenRoot, [], overrides),
+          broker(),
+          attachments,
+          image,
+          () => new Date(now),
+        ).execute({
+          ...run,
+          profile: cooperativeProfile,
+          campaignInput: {
+            ...run.campaignInput,
+            modelProfileDigest: cooperativeProfile.digest,
+          },
+        });
+        expect(withoutRoot.receipt).toMatchObject({
+          terminal: "incomplete",
+          reason: "evidence",
+          reasonDetail,
+        });
+        expect(withoutRoot.agentRuns?.[0]?.receipt).toMatchObject({
+          runId: "child-thread",
+          terminal: "completed",
+        });
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -447,6 +478,31 @@ describe("Codex native agent runtime", () => {
       expect(screening.receipt.terminal).toBe("completed");
       expect(commands[1]?.args).toContain("features.multi_agent=false");
       expect(commands[1]?.args).not.toContain("agents.max_threads=3");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not silently run solo when cooperative was explicitly requested", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-cooperative-profile-"));
+    try {
+      const commands: CodexSandboxCommand[] = [];
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(transcript, commands),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      expect(
+        (await runtime.execute({ ...run, coordination: "cooperative" }))
+          .receipt,
+      ).toMatchObject({
+        terminal: "incomplete",
+        reason: "policy",
+        reasonDetail: "cooperative-profile-unavailable",
+      });
+      expect(commands).toHaveLength(0);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -866,9 +922,11 @@ describe("Codex native agent runtime", () => {
         image,
         () => new Date(now),
       );
-      expect((await unadmitted.execute(run)).receipt.reasonDetail).toBe(
-        "unadmitted-item-type:unknown_tool",
-      );
+      expect((await unadmitted.execute(run)).receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "schema",
+        reasonDetail: "unadmitted-item-type:unknown_tool",
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -906,7 +964,7 @@ describe("Codex native agent runtime", () => {
     }
   });
 
-  it("extracts candidates when an unrelated transcript event is invalid", async () => {
+  it("extracts candidates when an unrelated transcript item type is unadmitted", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
     try {
       const candidate = { claim: "raw candidate" };
@@ -915,7 +973,7 @@ describe("Codex native agent runtime", () => {
         const event = JSON.parse(line) as { item?: { text?: string } };
         if (event.item?.text)
           event.item.text = JSON.stringify({
-            findings: [candidate],
+            findings: [JSON.stringify(candidate)],
             leads: [],
             examined: "source",
             unexamined: "none",
@@ -941,13 +999,15 @@ describe("Codex native agent runtime", () => {
       expect(result.receipt).toMatchObject({
         terminal: "incomplete",
         reason: "schema",
+        reasonDetail: "unadmitted-item-type:unknown_tool",
+        reportArtifactDigest: expect.stringMatching(/^sha256:/),
       });
       const stored =
         result.attachment && (await attachments.read(result.attachment));
       expect(
         stored?.status === "resolved" &&
           JSON.parse(stored.bytes.toString("utf8")),
-      ).toMatchObject({ findings: [candidate] });
+      ).toMatchObject({ findings: [JSON.stringify(candidate)] });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -205,6 +205,51 @@ async function open() {
 }
 
 describe("discovery campaign stop and resume", () => {
+  it("counts a historical stage-tagged exploration while excluding its child", async () => {
+    const { ledger, campaign } = await open();
+    const historical = {
+      schemaVersion: 1 as const,
+      campaignId: "campaign-1",
+      snapshotDigest: digest,
+      occurredAt: "2026-10-08T07:00:00Z",
+      labId: "lab-1",
+      history: { mode: "none" as const },
+      configuration: {
+        promptVariant: "screening-v1",
+        assignmentUnit: "plugin",
+      },
+    };
+    await ledger.append({
+      ...historical,
+      identity: "historical-explore",
+      type: "discovery-run-started",
+      runId: "old-root",
+      stage: "screening",
+    });
+    await ledger.append({
+      ...historical,
+      identity: "historical-child",
+      type: "discovery-run-started",
+      runId: "old-child",
+      runKind: "child",
+      parentRunId: "old-root",
+      stage: "screening",
+    });
+    const result = await campaign({
+      prefix: "new",
+      replies: () => "finding",
+    });
+    // The legacy explore event has no finish. Resume must retain that typed
+    // incomplete state even after all remaining Trial ordinals finish.
+    expect(result).toMatchObject({ runCount: 5, stoppedBy: "incomplete" });
+    expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
+    expect(
+      ledger
+        .read({ type: "discovery-run-started" })
+        .filter(({ event }) => event.type === "discovery-run-started"),
+    ).toHaveLength(7);
+  });
+
   it("concludes a campaign with a maximum-length id", async () => {
     const { campaign, ledger } = await open();
     const campaignId = "c".repeat(128);
@@ -244,17 +289,15 @@ describe("discovery campaign stop and resume", () => {
       prefix: "second",
       replies: () => "empty",
     });
-    // Two runs were already spent; the refused run does not count against the budget.
-    expect(resumed).toMatchObject({ runCount: 4, stoppedBy: "max-runs" });
-    expect(
-      ledger.read({ type: "discovery-concluded" }).map(({ event }) => event),
-    ).toMatchObject([{ stoppedBy: "max-runs" }]);
+    // All three started Trials spent their ordinals, including the refused one.
+    expect(resumed).toMatchObject({ runCount: 3, stoppedBy: "provider-limit" });
+    expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
 
     const again = await campaign({ prefix: "third", replies: () => "empty" });
     expect(again).toEqual({
       runCount: 0,
       findingsRecorded: 0,
-      stoppedBy: "max-runs",
+      stoppedBy: "provider-limit",
     });
   });
 
