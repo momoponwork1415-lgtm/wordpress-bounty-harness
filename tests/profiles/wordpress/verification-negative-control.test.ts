@@ -104,7 +104,14 @@ async function verifyOnce(
             !request.args.some((arg) => arg.startsWith("WBH_LOGIN_USER="))
           )
             beacons.push("/b/fixed-nonce");
-          return { exitCode: 0, stdout: "", stderr: "" };
+          return {
+            exitCode: 0,
+            stdout: Buffer.concat([
+              Buffer.from("89504e470d0a1a0a", "hex"),
+              Buffer.from("synthetic observer output"),
+            ]).toString("base64"),
+            stderr: "",
+          };
         }
         if (request.args[0] === "exec" && request.args[1]?.endsWith("-canary"))
           return {
@@ -262,6 +269,15 @@ async function verifyOnce(
                   path: "/synthetic",
                   expected: "Administrator access obtained",
                 },
+                ...(impact === "stored-xss"
+                  ? [
+                      {
+                        kind: "browser",
+                        path: "/synthetic",
+                        expected: "Issued canary reaches the Lab receiver",
+                      },
+                    ]
+                  : []),
               ],
             }),
             "http.json": JSON.stringify({
@@ -303,8 +319,13 @@ async function verifyOnce(
   const event = ledger
     .read({ campaignId: "campaign-1", type: "verification-finished" })
     .at(0)?.event;
+  const screenshot =
+    result.status === "runtime-confirmed" && impact === "stored-xss"
+      ? await store.readFile(result.evidenceDigest, "victim-screen.png", 1024)
+      : undefined;
   return {
     result,
+    screenshot,
     funnel: ledger.funnel("campaign-1"),
     evidenceCapture:
       event?.type === "verification-finished"
@@ -401,12 +422,13 @@ describe("WordPress verification negative control", () => {
   });
 
   it("confirms stored-xss once the front page sends the issued beacon", async () => {
-    const { result } = await verifyOnce(true, "stored-xss");
+    const { result, screenshot } = await verifyOnce(true, "stored-xss");
     expect(result).toMatchObject({
       status: "runtime-confirmed",
       judgeId: "wordpress-stored-script",
       conditions: { firedContexts: "front", siteWide: "yes" },
     });
+    expect(screenshot).toMatchObject({ status: "resolved" });
   });
 
   it("does not confirm sqli while the canary table is intact and no response carries its row", async () => {

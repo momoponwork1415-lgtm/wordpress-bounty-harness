@@ -63,6 +63,8 @@ const SQL_CANARY_TABLE = "wbh_canary";
 const DATABASE_NAME = "wordpress";
 const READ_ONLY_DATABASE_USER = "wbh_reader";
 const BEACON_LOG = "/tmp/wbh-beacons";
+const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
+const PNG_SIGNATURE = Buffer.from("89504e470d0a1a0a", "hex");
 /** Logs only well-formed beacon paths; anything else is ignored. */
 const BEACON_ROUTER = `<?php
 $path = (string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
@@ -88,6 +90,10 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   }
   await page.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
   await page.waitForTimeout(3000);
+  const screenshot = await page.screenshot({ type: "png" });
+  if (screenshot.length > ${MAX_SCREENSHOT_BYTES})
+    throw new Error("Browser screenshot exceeds the evidence limit");
+  process.stdout.write(screenshot.toString("base64"));
   await browser.close();
 })().catch((error) => {
   console.error(error.message);
@@ -234,6 +240,8 @@ export type WordPressStoredScriptObservation =
   | {
       readonly status: "observed";
       readonly contexts: readonly WordPressScriptContext[];
+      /** First page whose visit delivered an issued canary; stays in Private Evidence. */
+      readonly screenshot?: Buffer;
     }
   | { readonly status: "not-prepared" | "unavailable" };
 
@@ -1558,7 +1566,7 @@ export function openWordPressLab(options: {
       const visit = async (
         path: string,
         role: WordPressVictimRoute["role"],
-      ): Promise<boolean> => {
+      ): Promise<{ readonly fired: boolean; readonly screenshot: Buffer }> => {
         const account =
           role === "administrator"
             ? { username: "harness-admin", password: resource.adminPassword }
@@ -1598,27 +1606,52 @@ export function openWordPressLab(options: {
             BROWSER_VISIT,
           ],
           120_000,
+          Math.ceil(MAX_SCREENSHOT_BYTES / 3) * 4 + 1024,
         );
         if (result.exitCode !== 0) throw new Error("Browser visit failed");
-        return (await beacons()) > before;
+        const encoded = result.stdout.trim();
+        if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))
+          throw new Error("Browser screenshot is missing");
+        const screenshot = Buffer.from(encoded, "base64");
+        if (
+          screenshot.length === 0 ||
+          screenshot.length > MAX_SCREENSHOT_BYTES ||
+          !screenshot.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE) ||
+          screenshot.toString("base64") !== encoded
+        )
+          throw new Error("Browser screenshot is invalid");
+        return { fired: (await beacons()) > before, screenshot };
       };
       try {
         const contexts: WordPressScriptContext[] = [];
-        if (await visit("/", "unauthenticated")) contexts.push("front");
-        const dashboard = await visit("/wp-admin/", "administrator");
-        const posts = await visit("/wp-admin/edit.php", "administrator");
+        let screenshot: Buffer | undefined;
+        const fired = async (
+          path: string,
+          role: WordPressVictimRoute["role"],
+        ): Promise<boolean> => {
+          const observation = await visit(path, role);
+          if (observation.fired) screenshot ??= observation.screenshot;
+          return observation.fired;
+        };
+        if (await fired("/", "unauthenticated")) contexts.push("front");
+        const dashboard = await fired("/wp-admin/", "administrator");
+        const posts = await fired("/wp-admin/edit.php", "administrator");
         if (dashboard && posts) contexts.push("admin-all");
         else if (dashboard || posts) contexts.push("admin-partial");
         let routePage = false;
         for (const path of routePaths.data)
-          if (await visit(path, "unauthenticated")) routePage = true;
+          if (await fired(path, "unauthenticated")) routePage = true;
         if (routePage) contexts.push("route-page");
         let victimPage = false;
         if (victim?.success)
           for (const path of victim.data.paths)
-            if (await visit(path, victim.data.role)) victimPage = true;
+            if (await fired(path, victim.data.role)) victimPage = true;
         if (victimPage) contexts.push("victim-route-page");
-        return { status: "observed", contexts };
+        return {
+          status: "observed",
+          contexts,
+          ...(screenshot === undefined ? {} : { screenshot }),
+        };
       } catch {
         return { status: "unavailable" };
       }

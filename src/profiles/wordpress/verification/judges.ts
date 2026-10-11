@@ -138,7 +138,12 @@ type PrincipalFacts = {
 };
 type Incomplete = Extract<JudgeObservation, { status: "incomplete" }>;
 type Decision =
-  { readonly conditions: Readonly<Record<string, string>> } | null | Incomplete;
+  | {
+      readonly conditions: Readonly<Record<string, string>>;
+      readonly screenshot?: Buffer;
+    }
+  | null
+  | Incomplete;
 type DecideInput = {
   readonly lab: WordPressLabHandle;
   readonly recipeDigest: string;
@@ -264,6 +269,7 @@ async function recordEvidence(
   recipeDigest: string,
   observation: Record<string, unknown>,
   httpEvidence: HttpEvidence,
+  screenshot?: Buffer,
 ): Promise<string | null> {
   const route = routeFieldsSchema.safeParse(
     await readJson(options.store, recipeDigest, "route.json"),
@@ -291,6 +297,9 @@ async function recordEvidence(
             ]
           : [{ kind: "http", path: "http.json", capture: "agent-authored" }]),
         { kind: "canary", path: "canary-observation.json" },
+        ...(screenshot === undefined
+          ? []
+          : [{ kind: "screenshot", path: "victim-screen.png" }]),
       ],
     }),
     "http.json": http.bytes,
@@ -298,6 +307,7 @@ async function recordEvidence(
       ? {}
       : { "proxy-capture.jsonl": httpEvidence.captureBytes }),
     "canary-observation.json": canonicalJson(observation),
+    ...(screenshot === undefined ? {} : { "victim-screen.png": screenshot }),
   });
 }
 
@@ -337,6 +347,7 @@ function canaryJudge(
           ...conditions,
         },
         httpEvidence,
+        decision.screenshot,
       );
       if (evidenceDigest === null)
         return {
@@ -754,10 +765,18 @@ function storedScriptJudge(options: Options) {
           break;
       }
       if (script.contexts.length === 0) return null;
+      if (script.screenshot === undefined)
+        return {
+          status: "incomplete",
+          reason: "evidence",
+          nextStep:
+            "Capture the victim page screenshot with the Lab observer and repeat",
+        };
       const siteWide = script.contexts.some(
         (context) => context === "front" || context === "admin-all",
       );
       return {
+        screenshot: script.screenshot,
         conditions: {
           observedVia: "canary-beacon",
           firedContexts: script.contexts.join(","),
