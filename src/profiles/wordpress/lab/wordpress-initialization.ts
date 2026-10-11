@@ -16,6 +16,14 @@ import {
 import { buildSearchableCommentIndex } from "./relevanssi-search-index.js";
 import { seedSimplyScheduleBooking } from "./simply-schedule-booking.js";
 import { seedBrizyBuilderPage } from "./brizy-builder-page.js";
+import {
+  USER_REGISTRATION_SCENARIO_ID,
+  userRegistrationOrdinarySetupScript,
+} from "./user-registration-adapter.js";
+import {
+  WPDISCUZ_COMMENT_SCENARIO_ID,
+  wpDiscuzOrdinarySetupScript,
+} from "./wpdiscuz-adapter.js";
 
 type WordPressCommand = (
   resource: Resources,
@@ -205,6 +213,23 @@ async function seedScenarioTranslation(
   if (script !== undefined) await input.wp(input.resource, ["eval", script]);
 }
 
+async function seedScenarioRegistration(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id === USER_REGISTRATION_SCENARIO_ID)
+    await input.wp(input.resource, [
+      "eval",
+      userRegistrationOrdinarySetupScript(),
+    ]);
+}
+
+async function seedScenarioCommentForm(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id === WPDISCUZ_COMMENT_SCENARIO_ID)
+    await input.wp(input.resource, ["eval", wpDiscuzOrdinarySetupScript()]);
+}
+
 /** Initialize the isolated WordPress site after all containers are healthy. */
 export async function initializeWordPress(
   input: WordPressInitialization,
@@ -235,6 +260,8 @@ export async function initializeWordPress(
     resource: input.resource,
     wp: input.wp,
   });
+  await seedScenarioRegistration(input);
+  await seedScenarioCommentForm(input);
 }
 
 /** Grant SELECT on the tables present at provision time, before canary placement. */

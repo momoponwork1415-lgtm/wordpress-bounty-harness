@@ -17,6 +17,8 @@ import {
   wordPressScenario,
   nextWordPressScenario,
 } from "../../../src/profiles/wordpress/lab/scenarios.js";
+import { userRegistrationOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/user-registration-adapter.js";
+import { wpDiscuzOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/wpdiscuz-adapter.js";
 
 const directories: string[] = [];
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
@@ -374,6 +376,118 @@ describe("WordPress gVisor Lab", () => {
       "catalogue に無い前提",
     );
     await lab.teardown(provisioned.handle);
+  });
+
+  it("repeats the pinned ordinary registration setup in discovery and verification Labs", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "user-registration",
+    );
+    const scenario = wordPressScenario("public-registration-and-account-v1")!;
+    expect(scenario).toMatchObject({
+      version: 1,
+      pluginSlug: "user-registration",
+      ordinaryRegistration: true,
+      adapterDigest: canonicalDigest(userRegistrationOrdinarySetupScript()),
+    });
+    const ordinarySetup = {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    };
+    const discovery = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.teardown(discovery.handle)).toEqual({ status: "removed" });
+
+    const verification = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.scenario).toEqual(ordinarySetup.scenario);
+    expect(verification.handle.setupDigest).toBe(discovery.handle.setupDigest);
+    const scripts = commands
+      .flatMap(({ args }) => args)
+      .filter((arg) => arg.includes("UR_Install::create_form()"));
+    expect(scripts).toHaveLength(2);
+    for (const script of scripts) {
+      expect(script).toContain("UR_Install::create_pages()");
+      expect(script).toContain('update_option("users_can_register",1)');
+      expect(script).toContain('get_option("default_role") !== "subscriber"');
+    }
+    expect(await lab.teardown(verification.handle)).toEqual({
+      status: "removed",
+    });
+  });
+
+  it("rejects the registration scenario for another plugin before containers start", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-registration-and-account-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
+  it("repeats the pinned public comment setup in discovery and verification Labs", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "wpdiscuz",
+    );
+    const scenario = wordPressScenario("public-plugin-comment-v1")!;
+    expect(scenario).toMatchObject({
+      version: 1,
+      pluginSlug: "wpdiscuz",
+      approvedComment: true,
+      adapterDigest: canonicalDigest(wpDiscuzOrdinarySetupScript()),
+    });
+    const ordinarySetup = {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    };
+    const discovery = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.teardown(discovery.handle)).toEqual({ status: "removed" });
+
+    const verification = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.setupDigest).toBe(discovery.handle.setupDigest);
+    const scripts = commands
+      .flatMap(({ args }) => args)
+      .filter((arg) => arg.includes('do_action("admin_init")'));
+    expect(scripts).toEqual([
+      wpDiscuzOrdinarySetupScript(),
+      wpDiscuzOrdinarySetupScript(),
+    ]);
+    expect(
+      commands.filter(({ args }) => args.includes("--comment_approved=1")),
+    ).toHaveLength(2);
+    expect(await lab.teardown(verification.handle)).toEqual({
+      status: "removed",
+    });
+  });
+
+  it("rejects the public comment scenario for another plugin before containers start", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-plugin-comment-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
   });
 
   it.each([

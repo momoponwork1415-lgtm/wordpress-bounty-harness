@@ -1,6 +1,14 @@
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import {
+  USER_REGISTRATION_SCENARIO_ID,
+  userRegistrationOrdinarySetupScript,
+} from "./user-registration-adapter.js";
+import {
+  WPDISCUZ_COMMENT_SCENARIO_ID,
+  wpDiscuzOrdinarySetupScript,
+} from "./wpdiscuz-adapter.js";
 
-/** Ordinary site content only. A scenario never changes a visitor's privileges. */
+/** Ordinary site setup only. Scenarios never grant privileged roles. */
 const definitions = [
   {
     id: "approved-comment-v1",
@@ -88,6 +96,27 @@ const definitions = [
       body: "Ordinary private page content for an authorized reader.",
     },
   },
+  {
+    id: USER_REGISTRATION_SCENARIO_ID,
+    version: 1,
+    name: "公開の登録・ログイン・アカウント",
+    pluginSlug: "user-registration",
+    approvedComment: false,
+    secondaryLocale: null,
+    translation: null,
+    ordinaryRegistration: true,
+    adapterDigest: canonicalDigest(userRegistrationOrdinarySetupScript()),
+  },
+  {
+    id: WPDISCUZ_COMMENT_SCENARIO_ID,
+    version: 1,
+    name: "公開コメントフォームと承認済みコメント",
+    pluginSlug: "wpdiscuz",
+    approvedComment: true,
+    secondaryLocale: null,
+    translation: null,
+    adapterDigest: canonicalDigest(wpDiscuzOrdinarySetupScript()),
+  },
 ] as const;
 
 const pins: Record<(typeof definitions)[number]["id"], string> = {
@@ -105,6 +134,10 @@ const pins: Record<(typeof definitions)[number]["id"], string> = {
     "sha256:2bcd33b635494333e9337af9a0a08e5336bb82d6be7098f59ba044d4b98ccb26",
   "private-page-v1":
     "sha256:8699068b8ba01eec99b5675b63d6c27d5ab612118ed4248df38998457e27d147",
+  "public-registration-and-account-v1":
+    "sha256:95cf63ae1968865ee518478ed35064811bb70698a7f4e9decf7b5adba9bc4477",
+  "public-plugin-comment-v1":
+    "sha256:5051e8b9acb5c18b6c3b5428e8489fb764d158376b21f3ddebebb287cf22bb8c",
 };
 
 export const wordPressScenarioCatalogue = definitions.map((definition) => {
