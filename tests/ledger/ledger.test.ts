@@ -70,6 +70,58 @@ async function evidence(store: PrivateArtifactStore): Promise<string> {
 }
 
 describe("Ledger public interface", () => {
+  it("records versioned package documents while reading older verification events", async () => {
+    const { ledger, artifactStore } = await fixture();
+    const proof = await evidence(artifactStore);
+    await ledger.append({
+      ...common("finding-template"),
+      type: "finding-recorded",
+      findingId: "finding-template",
+      runId: "run-1",
+      category: "stored-xss",
+    });
+    const oldResult = {
+      status: "runtime-confirmed" as const,
+      judgeId: "judge",
+      proofKind: "nonce-canary" as const,
+      evidenceDigest: proof,
+      reproductionPackageDigest: proof,
+    };
+    const commonVerification = {
+      type: "verification-finished" as const,
+      findingId: "finding-template",
+      labSetupDigest: labSetup,
+    };
+    await ledger.append({
+      ...common("old-verification"),
+      ...commonVerification,
+      verificationId: "old-verification",
+      result: oldResult,
+    });
+    const acceptanceCriteria = {
+      id: "stored-xss-criteria",
+      version: 1,
+      digest: revision,
+    };
+    const reproductionTemplate = {
+      id: "reproduction-template",
+      version: 1,
+      digest: labSetup,
+    };
+    await ledger.append({
+      ...common("new-verification"),
+      ...commonVerification,
+      verificationId: "new-verification",
+      result: { ...oldResult, acceptanceCriteria, reproductionTemplate },
+    });
+    const events = ledger.read({ type: "verification-finished" });
+    expect(events).toHaveLength(2);
+    expect(events[0]?.event).toMatchObject({ result: oldResult });
+    expect(events[1]?.event).toMatchObject({
+      result: { acceptanceCriteria, reproductionTemplate },
+    });
+  });
+
   it("counts boundary candidates once across rejection and replay, with classified holds and token rates", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);

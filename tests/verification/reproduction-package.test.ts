@@ -6,7 +6,10 @@ import { afterEach, expect, it } from "vitest";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { openReproductionPackage } from "../../src/review/reproduction-package.js";
-import { publishReproductionPackage } from "../../src/verification/reproduction-package.js";
+import {
+  publishReproductionPackage,
+  verificationResultV1Schema,
+} from "../../src/verification/reproduction-package.js";
 import { wordpressReproductionRenderer } from "../../src/profiles/wordpress/verification/reproduction-package.js";
 
 const snapshot = `sha256:${"a".repeat(64)}`;
@@ -98,6 +101,7 @@ it("publishes a confirmed judge route to Private Evidence and opens it for revie
   const result = await publishReproductionPackage({
     store,
     renderer: wordpressReproductionRenderer,
+    category: "stored-xss",
     findingSnapshotDigest: snapshot,
     labSnapshotDigest: snapshot,
     labSetupDigest: setup,
@@ -114,14 +118,33 @@ it("publishes a confirmed judge route to Private Evidence and opens it for revie
   const opened = await openReproductionPackage(store, result);
   expect(opened.status).toBe("opened");
   if (opened.status !== "opened") return;
-  expect(opened.manual).toContain("GET /demo?case=1");
-  expect(opened.manual).toContain("subscriber");
-  expect(opened.manual).toContain("Default settings: yes");
-  expect(opened.manual).toContain(
-    "Victim observation: administrator opens /wp-admin/admin.php?page=fixture",
+  const headings = [
+    "## 1. 受理基準の充足",
+    "## 2. 期待する観測と実際の観測",
+    "## 3. 修正版での負の対照",
+    "## 4. 再現手順",
+  ];
+  expect(headings.map((heading) => opened.manual.indexOf(heading))).toEqual(
+    [...headings.map((heading) => opened.manual.indexOf(heading))].sort(
+      (left, right) => left - right,
+    ),
   );
+  for (const heading of headings) expect(opened.manual).toContain(heading);
+  expect(opened.manual).toContain("[agent-authored]");
+  expect(opened.manual).toContain("agent-authored.json");
+  expect(opened.agentAuthored).toMatchObject({
+    role: "subscriber",
+    defaultSettings: true,
+    victim: {
+      role: "administrator",
+      paths: ["/wp-admin/admin.php?page=fixture"],
+    },
+    steps: expect.arrayContaining([
+      expect.objectContaining({ method: "GET", path: "/demo?case=1" }),
+    ]),
+  });
   expect(opened.script).toContain("import requests");
-  expect(opened.script).toContain("/demo?case=1");
+  expect(opened.script).toContain("agent-authored.json");
   expect(opened.reconstruction).toMatchObject({
     wordpressVersion: "6.8",
     labSetupDigest: setup,
@@ -131,6 +154,116 @@ it("publishes a confirmed judge route to Private Evidence and opens it for revie
   });
   expect(result.reproductionPackageDigest).toMatch(/^sha256:/);
   expect(directory).not.toContain("wordpress-bounty-harness");
+});
+
+it("seals template references and a private agent sidecar for the Finding category", async () => {
+  const { store, evidenceDigest } = await fixture(route);
+  const document = {
+    id: "acceptance-stored-xss",
+    version: 1,
+    digest: snapshot,
+  };
+  let renderedCategory: string | undefined;
+  const result = await publishReproductionPackage({
+    store,
+    category: "stored-xss",
+    renderer: {
+      async render(input) {
+        renderedCategory = input.category;
+        return {
+          manual: "Review the criteria before the steps\n",
+          script: "print('reproduce')\n",
+          reconstruction: {},
+          evidence: { judgeEvidenceDigest: input.evidenceDigest },
+          acceptanceCriteria: document,
+          reproductionTemplate: {
+            id: "reproduction-package",
+            version: 1,
+            digest: other,
+          },
+          auxiliaryFiles: {
+            "agent-authored.json": JSON.stringify({
+              steps: [{ expected: "agent observation" }],
+            }),
+          },
+        };
+      },
+    },
+    findingSnapshotDigest: snapshot,
+    labSnapshotDigest: snapshot,
+    labSetupDigest: setup,
+    judgeResult: {
+      status: "runtime-confirmed",
+      judgeId: "canary-judge",
+      proofKind: "nonce-canary",
+      evidenceDigest,
+    },
+    reconstruction,
+  });
+  expect(renderedCategory).toBe("stored-xss");
+  expect(result).toMatchObject({
+    status: "runtime-confirmed",
+    acceptanceCriteria: document,
+    reproductionTemplate: { id: "reproduction-package", version: 1 },
+  });
+  const opened = await openReproductionPackage(store, result);
+  expect(opened).toMatchObject({
+    status: "opened",
+    acceptanceCriteria: document,
+    agentAuthored: { steps: [{ expected: "agent observation" }] },
+  });
+});
+
+it("opens an older four-file package without template metadata or a sidecar", async () => {
+  const { store, evidenceDigest } = await fixture(route);
+  const reproductionPackageDigest = await store.putFiles({
+    "manual.md": "Legacy manual\n",
+    "reproduce.py": "print('legacy')\n",
+    "lab.json": "{}",
+    "evidence.json": JSON.stringify({ judgeEvidenceDigest: evidenceDigest }),
+  });
+  const result = verificationResultV1Schema.parse({
+    status: "runtime-confirmed",
+    judgeId: "canary-judge",
+    proofKind: "nonce-canary",
+    conditions: {},
+    evidenceDigest,
+    reproductionPackageDigest,
+  });
+  expect(await openReproductionPackage(store, result)).toMatchObject({
+    status: "opened",
+    manual: "Legacy manual\n",
+    agentAuthored: null,
+  });
+});
+
+it("leaves confirmation incomplete when a new package has no template reference", async () => {
+  const { store, evidenceDigest } = await fixture(route);
+  const result = await publishReproductionPackage({
+    store,
+    category: "stored-xss",
+    renderer: {
+      async render(input) {
+        return {
+          manual: "Unversioned manual\n",
+          script: "print('unversioned')\n",
+          reconstruction: {},
+          evidence: { judgeEvidenceDigest: input.evidenceDigest },
+        };
+      },
+    },
+    findingSnapshotDigest: snapshot,
+    labSnapshotDigest: snapshot,
+    labSetupDigest: setup,
+    judgeResult: {
+      status: "runtime-confirmed",
+      judgeId: "canary-judge",
+      proofKind: "nonce-canary",
+      evidenceDigest,
+    },
+    reconstruction,
+  });
+  expect(result).toMatchObject({ status: "incomplete", reason: "evidence" });
 });
 
 it("returns incomplete and writes no package for digest mismatch or unconfirmed result", async () => {
@@ -150,6 +283,7 @@ it("returns incomplete and writes no package for digest mismatch or unconfirmed 
     const result = await publishReproductionPackage({
       store,
       renderer: wordpressReproductionRenderer,
+      category: "stored-xss",
       findingSnapshotDigest,
       labSnapshotDigest: snapshot,
       labSetupDigest: setup,
@@ -168,6 +302,7 @@ it("refuses a route with server-side commands or unavailable judge evidence", as
   const result = await publishReproductionPackage({
     store,
     renderer: wordpressReproductionRenderer,
+    category: "stored-xss",
     findingSnapshotDigest: snapshot,
     labSnapshotDigest: snapshot,
     labSetupDigest: setup,
@@ -190,6 +325,7 @@ it("treats a judge route from a different snapshot as incomplete", async () => {
   const result = await publishReproductionPackage({
     store,
     renderer: wordpressReproductionRenderer,
+    category: "stored-xss",
     findingSnapshotDigest: snapshot,
     labSnapshotDigest: snapshot,
     labSetupDigest: setup,

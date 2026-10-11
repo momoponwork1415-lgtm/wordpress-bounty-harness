@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 import type { ReproductionRenderer } from "../../../verification/reproduction-package.js";
+import {
+  loadWordPressAcceptanceCriteria,
+  loadWordPressReproductionTemplate,
+} from "../acceptance/index.js";
 import { wordpressVictimRouteSchema } from "../lab/index.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -71,12 +75,100 @@ const reconstructionSchema = z.strictObject({
 
 export type WordPressReconstruction = z.infer<typeof reconstructionSchema>;
 
+const capturedExchangeSchema = z.strictObject({
+  request: z.looseObject({
+    method: z.enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]),
+    path,
+    truncated: z.literal(false),
+  }),
+  response: z.looseObject({
+    statusCode: z.number().int().min(100).max(599),
+    truncated: z.literal(false),
+  }),
+});
+
+function evidenceOrigin(
+  entry: z.infer<typeof routeSchema>["evidence"][number],
+): "harness-captured" | "agent-authored" {
+  return (
+    entry.capture ??
+    (entry.kind === "http" ? "agent-authored" : "harness-captured")
+  );
+}
+
+function safeInlineJson(value: unknown): string {
+  return JSON.stringify(value).replace(/[&<>]/g, (character) =>
+    character === "&" ? "\\u0026" : character === "<" ? "\\u003c" : "\\u003e",
+  );
+}
+
+/** Only the Lab proxy's recorded method, path and status may enter the main steps. */
+function capturedHttpSequence(bytes: Buffer): string[] {
+  const rows = bytes.toString("utf8").trimEnd().split("\n");
+  if (rows.length > 500) return [];
+  try {
+    return rows.map((row, index) => {
+      const parsed: unknown = JSON.parse(row);
+      const exchange = capturedExchangeSchema.parse(parsed);
+      return `${index + 1}. ${exchange.request.method} ${safeInlineJson(exchange.request.path)} → ${exchange.response.statusCode}`;
+    });
+  } catch {
+    // The raw, digest-bound capture stays available even if its display shape differs.
+    return [];
+  }
+}
+
+function renderScript(): string {
+  return [
+    "#!/usr/bin/env python3",
+    "# Agent-authored route data lives in agent-authored.json; compare with Harness evidence before use.",
+    "import json",
+    "import os",
+    "from pathlib import Path",
+    "from urllib.parse import urljoin",
+    "import requests",
+    "",
+    "ROUTE = json.loads(Path(__file__).with_name('agent-authored.json').read_text(encoding='utf-8'))",
+    "STEPS = ROUTE['steps']",
+    "base_url = os.environ['WBH_BASE_URL'].rstrip('/') + '/'",
+    "username = os.environ.get('WBH_USERNAME', '')",
+    "password = os.environ.get('WBH_PASSWORD', '')",
+    "session = requests.Session()",
+    "if ROUTE['role'] != 'unauthenticated':",
+    "    if not username or not password:",
+    "        raise SystemExit('Set WBH_USERNAME and WBH_PASSWORD for the Lab account')",
+    "    session.post(urljoin(base_url, 'wp-login.php'), data={'log': username, 'pwd': password, 'wp-submit': 'Log In', 'redirect_to': base_url, 'testcookie': '1'}, timeout=30)",
+    "    if not any(cookie.name.startswith('wordpress_logged_in_') for cookie in session.cookies):",
+    "        raise SystemExit('Lab login failed')",
+    "for index, step in enumerate(STEPS, 1):",
+    "    if step['kind'] == 'browser':",
+    "        print(f\"{index}. Open in browser: {urljoin(base_url, step['path'].lstrip('/'))}\")",
+    "        print(f\"   Expected: {step['expected']}\")",
+    "        continue",
+    "    body = step.get('body', '').replace('{{USERNAME}}', username).replace('{{PASSWORD}}', password)",
+    "    response = session.request(step['method'], urljoin(base_url, step['path'].lstrip('/')), headers=step.get('headers'), data=body if 'body' in step else None, timeout=30)",
+    "    print(f\"{index}. {step['method']} {step['path']} -> {response.status_code}\")",
+    "    print(response.text[:1000])",
+    "    print(f\"   Expected: {step['expected']}\")",
+    "",
+  ].join("\n");
+}
+
 /** WordPress owns the HTTP and browser shape; no generic module knows these terms. */
 export const wordpressReproductionRenderer: ReproductionRenderer<WordPressReconstruction> =
   {
     async render(input) {
       const route = routeSchema.parse(input.route);
       const reconstruction = reconstructionSchema.parse(input.reconstruction);
+      const [criteria, template] = await Promise.all([
+        loadWordPressAcceptanceCriteria(input.category),
+        loadWordPressReproductionTemplate(),
+      ]);
+      if (
+        ["stored-xss", "sqli", "account-takeover"].includes(input.category) &&
+        criteria === null
+      )
+        throw new Error("A versioned acceptance criterion is required");
       if (
         route.snapshotDigest !== input.snapshotDigest ||
         route.labSetupDigest !== input.labSetupDigest
@@ -96,106 +188,122 @@ export const wordpressReproductionRenderer: ReproductionRenderer<WordPressRecons
         !route.evidence.some((entry) => entry.kind === "screenshot")
       )
         throw new Error("Browser observation requires a screenshot");
+      const capturedHttp: string[] = [];
       for (const entry of route.evidence) {
         const resolved = await input.store.readFile(
           input.evidenceDigest,
           entry.path,
-          entry.capture === "harness-captured"
+          evidenceOrigin(entry) === "harness-captured"
             ? 64 * 1024 * 1024 + 1024
             : 5 * 1024 * 1024,
         );
         if (resolved.status !== "resolved")
           throw new Error("Judge evidence is unavailable");
+        if (
+          entry.kind === "http" &&
+          evidenceOrigin(entry) === "harness-captured"
+        )
+          capturedHttp.push(...capturedHttpSequence(resolved.bytes));
       }
 
-      const lines = [
+      const lines: string[] = [
         "# Manual reproduction",
         "",
-        `Target: ${reconstruction.target.identity} ${reconstruction.target.version}`,
-        `WordPress: ${reconstruction.wordpressVersion}`,
-        `Snapshot digest: ${route.snapshotDigest}`,
-        `Lab setup digest: ${input.labSetupDigest}`,
-        `Default settings: ${route.defaultSettings ? "yes" : "no"}`,
-        `Configuration changes: ${route.configurationChanges.length ? route.configurationChanges.join("; ") : "none"}`,
-        `Attacker role: ${route.role}`,
-        `Lab account: ${route.account}`,
-        ...(route.victim === undefined
-          ? []
-          : [
-              `Victim observation: ${route.victim.role} opens ${route.victim.paths.join(", ")}`,
-            ]),
+        `Template: ${template.id} v${template.version} ${template.digest} [harness-captured]`,
+        `Acceptance criteria: ${criteria === null ? "not-catalogued" : `${criteria.id} v${criteria.version} ${criteria.digest}`} [harness-captured]`,
+        `Category [agent-authored, Finding impact]: ${safeInlineJson(input.category)}`,
         "",
-        "Use a fresh Lab with the reconstruction data. Set WBH_BASE_URL to its HTTP endpoint. Use only this route's remote HTTP and browser actions.",
-        ...(route.role === "unauthenticated"
-          ? []
-          : [
-              "Sign in as the Lab account through POST /wp-login.php with its Lab-only password before step 1. The Python script reads WBH_USERNAME and WBH_PASSWORD from the environment.",
-            ]),
+        `## 1. ${template.sections[0].heading}`,
+        `Judge criterion [harness-captured]: ${criteria?.judgeSuccessCriterion ?? "No category criterion is catalogued yet."}`,
+        "Wordfence status [harness-captured]: not-assessed",
+        ...(criteria?.programmeCriteria.wordfence.map(
+          (criterion, index) =>
+            `Wordfence condition ${index + 1} [harness-captured]: ${criterion}`,
+        ) ?? []),
+        "Patchstack status [harness-captured]: not-assessed",
+        ...(criteria?.programmeCriteria.patchstack.map(
+          (criterion, index) =>
+            `Patchstack condition ${index + 1} [harness-captured]: ${criterion}`,
+        ) ?? []),
         "",
+        `## 2. ${template.sections[1].heading}`,
+        `Expected [harness-captured]: ${criteria?.judgeSuccessCriterion ?? "See the judge's recorded nonce-canary condition."}`,
+        `Actual [harness-captured]: judge ${safeInlineJson(input.judgeId)} recorded ${safeInlineJson(Object.fromEntries(Object.entries(input.conditions).sort(([left], [right]) => left.localeCompare(right))))}; evidence artifact ${input.evidenceDigest}.`,
+        ...route.evidence.map(
+          (entry) =>
+            `${entry.kind} evidence [${evidenceOrigin(entry)}]: ${entry.path}`,
+        ),
+        "",
+        `## 3. ${template.sections[2].heading}`,
+        "Fixed-version negative control [harness-captured]: not-recorded-in-this-package. Check the separate fixed-snapshot verification before submission; absence here is not a contradicted result.",
+        "",
+        `## 4. ${template.sections[3].heading}`,
+        `Target [harness-captured]: ${safeInlineJson(reconstruction.target.identity)} ${safeInlineJson(reconstruction.target.version)}`,
+        `WordPress [harness-captured]: ${safeInlineJson(reconstruction.wordpressVersion)}`,
+        `Snapshot digest [harness-captured]: ${route.snapshotDigest}`,
+        `Lab setup digest [harness-captured]: ${input.labSetupDigest}`,
+        `Enabled settings [harness-captured]: ${reconstruction.enabledSettings.length ? safeInlineJson(reconstruction.enabledSettings) : "none"}`,
+        `Available Lab roles [harness-captured]: ${safeInlineJson(reconstruction.roles)}`,
+        "Attacker role, Lab account, setup claims and intended route [agent-authored]: agent-authored.json. Verify these against the fresh Lab and captured evidence.",
+        "Set WBH_BASE_URL to the fresh Lab endpoint; the helper script uses WBH_USERNAME and WBH_PASSWORD only from the environment.",
+        ...route.steps.map(
+          (_, index) =>
+            `${index + 1}. Intended step [agent-authored]: agent-authored.json#/steps/${index}`,
+        ),
+        "Captured HTTP exchange order [harness-captured]:",
+        ...(capturedHttp.length === 0
+          ? [
+              "- No Lab proxy sequence was attached; consult the evidence reference and do not treat the intended route as captured.",
+            ]
+          : capturedHttp.map((step) => `- ${step}`)),
       ];
-      for (const [index, step] of route.steps.entries()) {
-        lines.push(
-          `${index + 1}. ${step.kind === "http" ? `${step.method} ${step.path}` : `Open ${step.path} in a browser`}`,
-        );
-        if (step.kind === "http") {
-          if (step.headers !== undefined)
-            lines.push(`   Headers: ${JSON.stringify(step.headers)}`);
-          if (step.body !== undefined)
-            lines.push(`   Body: ${JSON.stringify(step.body)}`);
-        }
-        lines.push(`   Expected observation: ${step.expected}`);
-      }
-      lines.push("", `Judge evidence artifact: ${input.evidenceDigest}`);
-      for (const entry of route.evidence)
-        lines.push(`- ${entry.kind}: ${entry.path}`);
-
-      const script = [
-        "#!/usr/bin/env python3",
-        "import os",
-        "from urllib.parse import urljoin",
-        "import requests",
-        "",
-        `STEPS = ${JSON.stringify(route.steps)}`,
-        "base_url = os.environ['WBH_BASE_URL'].rstrip('/') + '/'",
-        "username = os.environ.get('WBH_USERNAME', '')",
-        "password = os.environ.get('WBH_PASSWORD', '')",
-        "session = requests.Session()",
-        ...(route.role === "unauthenticated"
-          ? []
-          : [
-              "if not username or not password:",
-              "    raise SystemExit('Set WBH_USERNAME and WBH_PASSWORD for the Lab account')",
-              "session.post(urljoin(base_url, 'wp-login.php'), data={'log': username, 'pwd': password, 'wp-submit': 'Log In', 'redirect_to': base_url, 'testcookie': '1'}, timeout=30)",
-              "if not any(cookie.name.startswith('wordpress_logged_in_') for cookie in session.cookies):",
-              "    raise SystemExit('Lab login failed')",
-            ]),
-        "for index, step in enumerate(STEPS, 1):",
-        "    if step['kind'] == 'browser':",
-        "        print(f\"{index}. Open in browser: {urljoin(base_url, step['path'].lstrip('/'))}\")",
-        "        print(f\"   Expected: {step['expected']}\")",
-        "        continue",
-        "    body = step.get('body', '').replace('{{USERNAME}}', username).replace('{{PASSWORD}}', password)",
-        "    response = session.request(step['method'], urljoin(base_url, step['path'].lstrip('/')), headers=step.get('headers'), data=body if 'body' in step else None, timeout=30)",
-        "    print(f\"{index}. {step['method']} {step['path']} -> {response.status_code}\")",
-        "    print(response.text[:1000])",
-        "    print(f\"   Expected: {step['expected']}\")",
-        "",
-      ].join("\n");
       return {
         manual: `${lines.join("\n")}\n`,
-        script,
+        script: renderScript(),
         reconstruction: {
           ...reconstruction,
           labSetupDigest: input.labSetupDigest,
           snapshotDigest: input.snapshotDigest,
-          attackerRole: route.role,
-          labAccount: route.account,
-          defaultSettings: route.defaultSettings,
-          configurationChanges: route.configurationChanges,
+          provenance: {
+            wordpressVersion: "harness-captured",
+            target: "harness-captured",
+            enabledSettings: "harness-captured",
+            roles: "harness-captured",
+            labSetupDigest: "harness-captured",
+            snapshotDigest: "harness-captured",
+          },
         },
         evidence: {
           judgeEvidenceDigest: input.evidenceDigest,
-          entries: route.evidence,
+          entries: route.evidence.map((entry) => ({
+            ...entry,
+            capture: evidenceOrigin(entry),
+          })),
+        },
+        ...(criteria === null
+          ? {}
+          : {
+              acceptanceCriteria: {
+                id: criteria.id,
+                version: criteria.version,
+                digest: criteria.digest,
+              },
+            }),
+        reproductionTemplate: {
+          id: template.id,
+          version: template.version,
+          digest: template.digest,
+        },
+        auxiliaryFiles: {
+          "agent-authored.json": JSON.stringify({
+            provenance: "agent-authored",
+            role: route.role,
+            account: route.account,
+            defaultSettings: route.defaultSettings,
+            configurationChanges: route.configurationChanges,
+            ...(route.victim === undefined ? {} : { victim: route.victim }),
+            steps: route.steps,
+          }),
         },
       };
     },

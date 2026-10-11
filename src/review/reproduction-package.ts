@@ -17,6 +17,16 @@ export async function openReproductionPackage(
       readonly script: string;
       readonly reconstruction: unknown;
       readonly evidence: unknown;
+      /** Null for packages sealed before agent-authored sidecars were added. */
+      readonly agentAuthored: unknown | null;
+      readonly acceptanceCriteria?: Extract<
+        VerificationResultV1,
+        { status: "runtime-confirmed" }
+      >["acceptanceCriteria"];
+      readonly reproductionTemplate?: Extract<
+        VerificationResultV1,
+        { status: "runtime-confirmed" }
+      >["reproductionTemplate"];
     }
 > {
   const result = verificationResultV1Schema.parse(candidate);
@@ -48,12 +58,29 @@ export async function openReproductionPackage(
       evidenceRef.data.judgeEvidenceDigest !== result.evidenceDigest
     )
       return { status: "unavailable" };
+    const sidecar = await store.readFile(
+      result.reproductionPackageDigest,
+      "agent-authored.json",
+      1024 * 1024,
+    );
+    if (sidecar.status !== "resolved" && sidecar.status !== "missing")
+      return { status: "unavailable" };
     return {
       status: "opened",
       manual: manual.bytes.toString("utf8"),
       script: script.bytes.toString("utf8"),
       reconstruction: JSON.parse(lab.bytes.toString("utf8")) as unknown,
       evidence: evidenceRecord,
+      agentAuthored:
+        sidecar.status === "resolved"
+          ? (JSON.parse(sidecar.bytes.toString("utf8")) as unknown)
+          : null,
+      ...(result.acceptanceCriteria === undefined
+        ? {}
+        : { acceptanceCriteria: result.acceptanceCriteria }),
+      ...(result.reproductionTemplate === undefined
+        ? {}
+        : { reproductionTemplate: result.reproductionTemplate }),
     };
   } catch {
     return { status: "unavailable" };

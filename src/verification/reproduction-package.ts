@@ -8,6 +8,15 @@ import type { PrivateArtifactStore } from "../infrastructure/private-artifact-st
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const id = z.string().min(1).max(128);
+const packageDocumentReferenceSchema = z.strictObject({
+  id,
+  version: z.number().int().positive(),
+  digest,
+});
+
+export type PackageDocumentReference = z.infer<
+  typeof packageDocumentReferenceSchema
+>;
 
 /** What the judge itself observed: roles used and reached, configuration, and so on. */
 const conditionsSchema = z
@@ -26,6 +35,9 @@ export const verificationResultV1Schema = z.discriminatedUnion("status", [
     conditions: conditionsSchema,
     evidenceDigest: digest,
     reproductionPackageDigest: digest,
+    /** Absent on packages recorded before the profile introduced templates. */
+    acceptanceCriteria: packageDocumentReferenceSchema.optional(),
+    reproductionTemplate: packageDocumentReferenceSchema.optional(),
   }),
   z.strictObject({
     status: z.literal("contradicted"),
@@ -58,6 +70,8 @@ export type VerificationResultV1 = z.infer<typeof verificationResultV1Schema>;
 const judgeResultSchema = z.discriminatedUnion("status", [
   verificationResultV1Schema.options[0].omit({
     reproductionPackageDigest: true,
+    acceptanceCriteria: true,
+    reproductionTemplate: true,
   }),
   verificationResultV1Schema.options[1],
   verificationResultV1Schema.options[2],
@@ -65,6 +79,10 @@ const judgeResultSchema = z.discriminatedUnion("status", [
 
 export interface ReproductionRenderer<Reconstruction> {
   render(input: {
+    /** Finding classification; its original claim may be agent-authored. */
+    readonly category: string;
+    readonly judgeId: string;
+    readonly conditions: Readonly<Record<string, string>>;
     readonly route: unknown;
     readonly snapshotDigest: string;
     readonly reconstruction: Reconstruction;
@@ -76,6 +94,10 @@ export interface ReproductionRenderer<Reconstruction> {
     readonly script: string;
     readonly reconstruction: unknown;
     readonly evidence: unknown;
+    readonly acceptanceCriteria?: PackageDocumentReference;
+    readonly reproductionTemplate?: PackageDocumentReference;
+    /** Private sidecars. The publisher currently admits only agent-authored.json. */
+    readonly auxiliaryFiles?: Readonly<Record<string, string>>;
   }>;
 }
 
@@ -83,6 +105,7 @@ export interface ReproductionRenderer<Reconstruction> {
 export async function publishReproductionPackage<Reconstruction>(input: {
   readonly store: PrivateArtifactStore;
   readonly renderer: ReproductionRenderer<Reconstruction>;
+  readonly category: string;
   readonly findingSnapshotDigest: string;
   readonly labSnapshotDigest: string;
   readonly labSetupDigest: string;
@@ -145,41 +168,73 @@ export async function publishReproductionPackage<Reconstruction>(input: {
     }
     const rendered = await input.renderer.render({
       route,
+      category: input.category,
+      judgeId: judge.judgeId,
+      conditions: judge.conditions,
       snapshotDigest: input.findingSnapshotDigest,
       reconstruction: input.reconstruction,
       labSetupDigest: input.labSetupDigest,
       evidenceDigest: judge.evidenceDigest,
       store: input.store,
     });
-    staging = await input.store.stage();
+    const auxiliaryFiles = rendered.auxiliaryFiles ?? {};
+    const auxiliaryNames = Object.keys(auxiliaryFiles);
+    if (
+      auxiliaryNames.length > 1 ||
+      auxiliaryNames.some((name) => name !== "agent-authored.json")
+    )
+      throw new Error("Unsupported reproduction package auxiliary file");
+    const acceptanceCriteria =
+      rendered.acceptanceCriteria === undefined
+        ? undefined
+        : packageDocumentReferenceSchema.parse(rendered.acceptanceCriteria);
+    const reproductionTemplate =
+      rendered.reproductionTemplate === undefined
+        ? undefined
+        : packageDocumentReferenceSchema.parse(rendered.reproductionTemplate);
+    if (reproductionTemplate === undefined)
+      throw new Error("A versioned reproduction template is required");
+    const packageStaging = await input.store.stage();
+    staging = packageStaging;
     await Promise.all([
-      writeFile(join(staging.contentDirectory, "manual.md"), rendered.manual, {
-        mode: 0o600,
-      }),
       writeFile(
-        join(staging.contentDirectory, "reproduce.py"),
+        join(packageStaging.contentDirectory, "manual.md"),
+        rendered.manual,
+        {
+          mode: 0o600,
+        },
+      ),
+      writeFile(
+        join(packageStaging.contentDirectory, "reproduce.py"),
         rendered.script,
         { mode: 0o600 },
       ),
       writeFile(
-        join(staging.contentDirectory, "lab.json"),
+        join(packageStaging.contentDirectory, "lab.json"),
         JSON.stringify(rendered.reconstruction),
         { mode: 0o600 },
       ),
       writeFile(
-        join(staging.contentDirectory, "evidence.json"),
+        join(packageStaging.contentDirectory, "evidence.json"),
         JSON.stringify(rendered.evidence),
         { mode: 0o600 },
       ),
+      ...auxiliaryNames.map((name) =>
+        writeFile(
+          join(packageStaging.contentDirectory, name),
+          auxiliaryFiles[name]!,
+          { mode: 0o600 },
+        ),
+      ),
     ]);
     const measured = await measureCanonicalSourceTree(
-      staging.contentDirectory,
+      packageStaging.contentDirectory,
       {
-        maxEntries: 4,
+        maxEntries: 5,
         maxBytes: 1024 * 1024,
       },
     );
-    const committed = await input.store.commit(measured.digest, staging);
+    const committed = await input.store.commit(measured.digest, packageStaging);
     if (committed.status === "conflict")
       throw new Error("Package artifact conflict");
     staging = undefined;
@@ -190,6 +245,8 @@ export async function publishReproductionPackage<Reconstruction>(input: {
       conditions: judge.conditions,
       evidenceDigest: judge.evidenceDigest,
       reproductionPackageDigest: committed.artifact.digest,
+      ...(acceptanceCriteria === undefined ? {} : { acceptanceCriteria }),
+      ...(reproductionTemplate === undefined ? {} : { reproductionTemplate }),
     };
   } catch {
     return {

@@ -126,6 +126,13 @@ async function fixture(
     artifacts: [{ kind: "finding", digest: findingDigest }],
   });
   const calls = { provision: 0, verifier: 0, teardown: 0 };
+  let rendered:
+    | {
+        readonly category: string;
+        readonly judgeId: string;
+        readonly conditions: Readonly<Record<string, string>>;
+      }
+    | undefined;
   const handle: LabHandle = {
     id: "lab-1",
     snapshotDigest: options.labSnapshotDigest ?? findingSnapshotDigest,
@@ -217,12 +224,22 @@ async function fixture(
     },
     readFinding: (value) => value as SyntheticFinding,
     renderer: {
-      async render() {
+      async render(input) {
+        rendered = {
+          category: input.category,
+          judgeId: input.judgeId,
+          conditions: input.conditions,
+        };
         return {
           manual: "Synthetic manual\n",
           script: "print('synthetic')\n",
           reconstruction: {},
           evidence: {},
+          reproductionTemplate: {
+            id: "synthetic-reproduction",
+            version: 1,
+            digest: setupDigest,
+          },
         };
       },
     },
@@ -270,7 +287,7 @@ async function fixture(
         }
       : {}),
   });
-  return { result, calls, ledger, negativeCaptureDigest, store };
+  return { result, calls, ledger, negativeCaptureDigest, store, rendered };
 }
 
 describe("verification public interface", () => {
@@ -283,7 +300,7 @@ describe("verification public interface", () => {
     expect(result).toMatchObject({ status: "incomplete", reason: "sandbox" });
   });
   it("confirms only from the judge observation and records a reproduction package", async () => {
-    const { result, calls, ledger } = await fixture();
+    const { result, calls, ledger, rendered } = await fixture();
     expect(result).toMatchObject({
       status: "runtime-confirmed",
       judgeId: "synthetic-canary",
@@ -291,12 +308,33 @@ describe("verification public interface", () => {
     });
     expect(result).toMatchObject({
       conditions: { attackerRole: "subscriber", reachedRole: "synthetic" },
+      reproductionTemplate: {
+        id: "synthetic-reproduction",
+        version: 1,
+        digest: setupDigest,
+      },
     });
     expect(calls).toEqual({ provision: 1, verifier: 1, teardown: 1 });
+    expect(rendered).toEqual({
+      category: "account-takeover",
+      judgeId: "synthetic-canary",
+      conditions: { attackerRole: "subscriber", reachedRole: "synthetic" },
+    });
     expect(ledger.read({ type: "lab-provisioned" })[0]?.event).toMatchObject({
       purpose: "verification",
       status: "ready",
       snapshotDigest,
+    });
+    expect(
+      ledger.read({ type: "verification-finished" })[0]?.event,
+    ).toMatchObject({
+      result: {
+        reproductionTemplate: {
+          id: "synthetic-reproduction",
+          version: 1,
+          digest: setupDigest,
+        },
+      },
     });
     expect(ledger.funnel("campaign-1")).toMatchObject({
       raw: 1,
