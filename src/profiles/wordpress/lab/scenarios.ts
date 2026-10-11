@@ -169,7 +169,7 @@ const pins: Record<(typeof definitions)[number]["id"], string> = {
   "public-free-membership-v1":
     "sha256:f40f50bb92dba2d4cf1a67bd91481134ba6b420a7a9fc677d9bf3f7b56e3c06b",
   "public-free-membership-v2":
-    "sha256:7dac91f0c02d892fcb5a24a88f14f1134566b2dd39b62f325604a1900e62e433",
+    "sha256:1166ed5494a84ba73d430c0b7f8a71d0a34742d71279f0b5fca237c97ec00423",
   "public-plugin-comment-v1":
     "sha256:5051e8b9acb5c18b6c3b5428e8489fb764d158376b21f3ddebebb287cf22bb8c",
   "public-member-post-v1":

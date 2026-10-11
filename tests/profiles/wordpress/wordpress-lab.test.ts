@@ -547,6 +547,11 @@ describe("WordPress gVisor Lab", () => {
     ).toHaveLength(2);
     expect(
       scripts.filter((arg) =>
+        arg.includes('metadata_exists("user",$subscriber->ID,"ur_form_id")'),
+      ),
+    ).toHaveLength(2);
+    expect(
+      scripts.filter((arg) =>
         arg.includes("create_membership_order_and_subscription"),
       ),
     ).toHaveLength(0);

@@ -51,6 +51,7 @@ export function userRegistrationMembershipUnjoinedScript(
     'if (!$page || $page->post_status!=="publish" || !has_shortcode($page->post_content,"user_registration_form")) throw new RuntimeException("Public membership form is unavailable");',
     `$subscriber=get_user_by("login",${username});`,
     'if (!$subscriber || !in_array("subscriber",$subscriber->roles,true)) throw new RuntimeException("Lab subscriber is unavailable");',
+    'if (get_user_meta($subscriber->ID,"ur_form_id",true)!=="" || metadata_exists("user",$subscriber->ID,"ur_form_id")) throw new RuntimeException("Existing WordPress subscriber state is unavailable");',
     "$subscription=(new WPEverest\\URMembership\\Admin\\Repositories\\MembersSubscriptionRepository())->get_subscription_data_by_member_and_membership_id($subscriber->ID,$plan->ID);",
     'if ($subscription) throw new RuntimeException("Lab subscriber is already enrolled");',
   ].join(" ");
