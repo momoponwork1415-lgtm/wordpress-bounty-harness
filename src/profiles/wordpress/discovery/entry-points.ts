@@ -452,6 +452,19 @@ export function renderWordPressEntryAssignment(
   ].join("\n");
 }
 
+/** Fixed-source catalogue for an unpartitioned Trial; the agent chooses what to inspect. */
+export function renderWordPressEntryIndex(index: WordPressSourceIndex): string {
+  return [
+    "## Entry points",
+    `Index digest: ${index.digest}`,
+    `Index: ${index.incomplete ? "partial (limit reached)" : "complete"}`,
+    ...index.entries.map(
+      (entry) =>
+        `- ${entry.kind} \`${entry.name}\` — ${entry.file}:${entry.line}`,
+    ),
+  ].join("\n");
+}
+
 /** Stable text of the whole plan, for the operator and for tests. */
 export function describeWordPressEntryPlan(
   assignments: readonly WordPressEntryAssignment[],

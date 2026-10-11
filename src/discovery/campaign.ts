@@ -86,6 +86,12 @@ export const campaignInputV1Schema = z.strictObject({
   }),
   lab: z.strictObject({ setupDigest: digest }),
   history: campaignHistorySchema,
+  entryIndex: z
+    .union([
+      z.strictObject({ enabled: z.literal(true), digest }),
+      z.strictObject({ enabled: z.literal(false) }),
+    ])
+    .optional(),
 });
 export type CampaignInputV1 = z.infer<typeof campaignInputV1Schema>;
 
@@ -210,6 +216,9 @@ export type PlannedDiscoveryRun = {
     readonly trustBoundaryVersion?: string;
     readonly sourcePack?: { readonly dependency: "mounted" | "none" };
     readonly assignmentUnit: string;
+    readonly entryIndex?:
+      | { readonly enabled: true; readonly digest: string }
+      | { readonly enabled: false };
     readonly assignment?: {
       readonly partition: number;
       readonly of: number;
@@ -459,7 +468,14 @@ export async function runDiscoveryCampaign(options: {
         );
       if (
         run.targetSnapshotDigest !== input.snapshotDigest ||
-        run.profile.digest !== input.modelProfileDigest
+        run.profile.digest !== input.modelProfileDigest ||
+        (input.entryIndex === undefined
+          ? planned.configuration.entryIndex !== undefined
+          : input.entryIndex.enabled
+            ? planned.configuration.entryIndex?.enabled !== true ||
+              planned.configuration.entryIndex.digest !==
+                input.entryIndex.digest
+            : planned.configuration.entryIndex?.enabled !== false)
       )
         throw new Error("Planned run differs from the CampaignInput");
       const base = {

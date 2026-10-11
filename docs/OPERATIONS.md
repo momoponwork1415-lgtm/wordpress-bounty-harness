@@ -55,6 +55,8 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 `campaign run` は無人で回る。1対象あたりの Trial は、選定のrun予算（既定20、High Threat面は40）と設定の上限（既定6）の小さい方まで。新規 Finding も Lead もない Trial が続いたら（既定3回）止まる。各 Finding は別コンテナの Verifier と判定器を通り、`runtime-confirmed` / `contradicted` / `incomplete` として台帳に入る。
 
+固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。
+
 既定promptは `short-objective-managed-v4`。比較armの `wp2shell-bounty-v2` は優先Findingがない場合にRootへ30分以上と複数waveを指示するが、現行Harnessは下限を強制しない。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。版を明示した設定はその版で再現できる。Trial数には対象ごとの上限があり、日次上限の設定はない。provider limitで停止したcampaignは自動retryせず、同じIDで再開する。
 
 - **同時run数**: campaign設定の `resources` で決める。
