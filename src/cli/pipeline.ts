@@ -398,8 +398,8 @@ export type ReverificationSummary = {
 };
 
 /**
- * Freezes the selected version and binds a derived Finding to that snapshot
- * before verification. The original Finding remains on its own snapshot.
+ * Freezes the selected version. A new Snapshot gets a derived Finding; an
+ * unconfirmed Finding can be retried only on its original Snapshot.
  */
 export async function reverifyOnSelectedVersion<
   Target extends TargetSelection,
@@ -457,21 +457,24 @@ export async function reverifyOnSelectedVersion<
         event.result.status === "runtime-confirmed",
     )
     .at(-1);
+  if (confirmed === undefined && options.version !== undefined)
+    throw new Error(
+      "A confirmed route is required for fixed-version comparison",
+    );
+  let referenceRoute: unknown;
   if (
-    confirmed?.type !== "verification-finished" ||
-    confirmed.result.status !== "runtime-confirmed"
-  )
-    throw new Error("A confirmed route is required for version comparison");
-  const routeFile = await options.store.readFile(
-    confirmed.result.evidenceDigest,
-    "confirmed-route.json",
-    64 * 1024,
-  );
-  if (routeFile.status !== "resolved")
-    throw new Error("The confirmed route is unavailable in Private Evidence");
-  const referenceRoute = JSON.parse(
-    routeFile.bytes.toString("utf8"),
-  ) as unknown;
+    confirmed?.type === "verification-finished" &&
+    confirmed.result.status === "runtime-confirmed"
+  ) {
+    const routeFile = await options.store.readFile(
+      confirmed.result.evidenceDigest,
+      "confirmed-route.json",
+      64 * 1024,
+    );
+    if (routeFile.status !== "resolved")
+      throw new Error("The confirmed route is unavailable in Private Evidence");
+    referenceRoute = JSON.parse(routeFile.bytes.toString("utf8")) as unknown;
+  }
   const target = await pipeline.selectVersion({
     selectionId: selected.selectionId,
     ...(options.version === undefined ? {} : { version: options.version }),
@@ -479,6 +482,10 @@ export async function reverifyOnSelectedVersion<
   if (target === null)
     throw new Error("The selected target version is not available now");
   const snapshot = await pipeline.freeze(target);
+  if (confirmed === undefined && snapshot.digest !== finding.snapshotDigest)
+    throw new Error(
+      "An unconfirmed Finding can only be retried on its original Snapshot",
+    );
   if (
     options.version !== undefined &&
     snapshot.digest === finding.snapshotDigest
