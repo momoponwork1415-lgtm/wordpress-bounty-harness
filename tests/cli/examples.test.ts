@@ -128,7 +128,7 @@ describe("TranslatePress 3.2.5 A/B development-set example", () => {
         ...config,
         promptId: undefined,
       }).promptId,
-    ).toBe("short-objective-managed-v4");
+    ).toBe("screening-v1");
     expect(config.ablation?.axes).toEqual([
       {
         axis: "prompt",

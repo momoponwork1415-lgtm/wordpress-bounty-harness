@@ -177,6 +177,8 @@ export interface DiscoveryTransportRun {
   readonly targetSnapshotDigest: string;
   readonly profile: AgentRuntimeProfile;
   readonly prompt: string;
+  /** Screening uses one agent even when the runtime profile permits children. */
+  readonly coordination?: "solo" | "cooperative";
   /** Verification uses the same isolated transport with a different sealed report. */
   readonly outputKind?: "verification";
   readonly lab: {
@@ -210,6 +212,7 @@ const discoveryTransportRunSchema = z.strictObject({
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
+  coordination: z.enum(["solo", "cooperative"]).optional(),
   outputKind: z.literal("verification").optional(),
   lab: z.strictObject({
     endpoint: z.url(),
@@ -843,6 +846,7 @@ export class CodexNativeAgentRuntime {
     let rootObserved: Observed | undefined;
     let brokerMetrics: NativeRunReceipt["brokerMetrics"];
     const cooperative =
+      run.coordination !== "solo" &&
       run.outputKind !== "verification" &&
       (run.profile.subagent.modelId !== "unavailable" ||
         run.profile.subagent.effort !== "unavailable");

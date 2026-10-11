@@ -87,6 +87,7 @@ async function harness(
     readonly limitOnCalls?: readonly number[];
     readonly failOnCalls?: readonly number[];
     readonly leadsOnCalls?: Readonly<Record<number, readonly unknown[]>>;
+    readonly zeroFindings?: boolean;
     /** Candidate slugs; the first is not pinned. */
     readonly candidates?: readonly string[];
     /** A slug whose snapshot cannot be frozen. */
@@ -324,6 +325,9 @@ async function harness(
   const entryIndexes: DiscoveryTransportRun["campaignInput"]["entryIndex"][] =
     [];
   const histories: string[] = [];
+  const coordinations: (DiscoveryTransportRun["coordination"] | undefined)[] =
+    [];
+  const expirations: string[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
   const boundaries: WordPressCampaignBoundaries = {
@@ -354,6 +358,8 @@ async function harness(
         promptDigests.push(run.campaignInput.promptDigest);
         entryIndexes.push(run.campaignInput.entryIndex);
         histories.push(run.campaignInput.history.mode);
+        coordinations.push(run.coordination);
+        expirations.push(run.expiresAt);
         maxInFlight = Math.max(maxInFlight, ++inFlight);
         await new Promise((resolve) => setTimeout(resolve, 5));
         inFlight--;
@@ -385,7 +391,7 @@ async function harness(
           };
         const report = {
           findings:
-            call === 1
+            call === 1 && !options.zeroFindings
               ? [
                   claim("account-takeover", "includes/synthetic.php"),
                   claim("sensitive-object-access", "synthetic-plugin.php"),
@@ -499,6 +505,8 @@ async function harness(
     JSON.stringify({
       schemaVersion: 1,
       selectionPolicyPath: policyPath,
+      // Legacy campaign fixtures exercise the historical multi-Trial path.
+      promptId: "short-objective-managed-v4",
       programmeBoundary: {
         version: "v1",
         text: "Synthetic programme boundary",
@@ -557,6 +565,8 @@ async function harness(
     promptDigests,
     entryIndexes,
     histories,
+    coordinations,
+    expirations,
     docker,
     root,
     ledger: () => state.ledger,
@@ -1074,6 +1084,67 @@ describe("harness CLI vertical slice", () => {
     expect(started[0]?.event).toMatchObject({
       configuration: { entryIndex: { enabled: true, digest: expected.digest } },
     });
+  });
+
+  it("runs the default screening once and records a zero-candidate target as unexplored", async () => {
+    const { run, configPath, prompts, coordinations, expirations, ledger } =
+      await harness({
+        entryPoints: true,
+        zeroFindings: true,
+        config: { promptId: undefined },
+      });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-screening",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(campaign.stdout).toContain("stopped by screened-no-candidate");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("WordPress discovery: screening v1");
+    expect(prompts[0]).toContain("## Entry points");
+    expect(prompts[0]).toContain("Finding and Lead output contract");
+    expect(coordinations).toEqual(["solo"]);
+    expect(expirations).toEqual(["2026-10-08T00:30:00.000Z"]);
+    expect(
+      ledger().read({
+        campaignId: "campaign-screening",
+        type: "discovery-run-started",
+      })[0]?.event,
+    ).toMatchObject({ stage: "screening", trialOrdinal: 0 });
+    expect(
+      ledger().read({
+        campaignId: "campaign-screening",
+        type: "campaign-stopped",
+      })[0]?.event,
+    ).toMatchObject({ reason: "screened-no-candidate" });
+    expect(
+      ledger().read({
+        campaignId: "campaign-screening",
+        type: "verification-finished",
+      }),
+    ).toHaveLength(0);
+    const resumed = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-screening",
+      "--config",
+      configPath,
+    );
+    expect(resumed.code).toBe(0);
+    expect(prompts).toHaveLength(1);
+    expect(
+      ledger().read({
+        campaignId: "campaign-screening",
+        type: "campaign-stopped",
+      }),
+    ).toHaveLength(1);
   });
 
   it("records the entry-index control when one config field disables the catalogue", async () => {

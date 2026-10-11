@@ -189,7 +189,9 @@ export async function createWordPressHostProfile(options: {
       bundledCatalogPath: host.codex.bundledCatalogPath,
       scratchRootDirectory: directories.codexScratch,
       maxOutputBytes: 16 * 1024 * 1024,
-      timeoutMs: config.runWallTimeMinutes * 60_000,
+      timeoutMs:
+        (config.runWallTimeMinutes ??
+          (config.promptId === "screening-v1" ? 30 : 90)) * 60_000,
       ...(runtimeProfile.subagent.modelId === "unavailable"
         ? {}
         : { memoryMiB: CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB }),

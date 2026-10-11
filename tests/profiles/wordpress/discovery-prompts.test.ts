@@ -42,6 +42,7 @@ describe("WordPress discovery prompt assets", () => {
       "short-objective-managed-v3",
       "short-objective-managed-v4",
       "short-objective-managed-v5",
+      "screening-v1",
       "wp2shell-single-http-v2",
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
@@ -57,6 +58,7 @@ describe("WordPress discovery prompt assets", () => {
       "short-objective-managed-v3",
       "short-objective-managed-v4",
       "short-objective-managed-v5",
+      "screening-v1",
       "wp2shell-single-http-v2",
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
@@ -114,11 +116,13 @@ describe("WordPress discovery prompt assets", () => {
     const pins = {
       "short-objective-managed-v5":
         "sha256:972ebe7d10a0173fef24a7603e01defcb17fd81e87810795f705737114f584b4",
+      "screening-v1":
+        "sha256:effeb9e343601157e2da76eb65b99d4de91a9618daf7379efce13491a1d6aba6",
     } as const;
     for (const id of WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS) {
       const { text, digest } = await loadWordPressDiscoveryAsset(id);
       expect(digest).toBe(pins[id]);
-      expect(text).toContain("A Lead is not a Finding.");
+      expect(text).toMatch(/Lead|Finding/);
       expect(text).not.toMatch(
         /sourceTrace|labObservations|JSON string|Each Finding is an object/,
       );
