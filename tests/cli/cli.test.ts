@@ -2386,6 +2386,11 @@ describe("harness CLI vertical slice", () => {
       pinned: false,
       firstVerifierIncomplete: true,
     });
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      lab: Record<string, unknown>;
+    };
+    config.lab.scenarioId = "approved-comment-v1";
+    await writeFile(configPath, JSON.stringify(config));
     const campaign = ["--campaign", "campaign-1"];
     expect(
       (
@@ -2420,11 +2425,25 @@ describe("harness CLI vertical slice", () => {
     expect(before[0]).toMatchObject({
       result: { status: "incomplete", reason: "precondition" },
     });
+    const beforeRetryEvents = ledger().read({
+      campaignId: "campaign-1",
+    }).length;
+    const repeated = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding.findingId,
+      "--config",
+      configPath,
+    );
+    expect(repeated.code).not.toBe(0);
+    expect(repeated.stderr).toContain("different Lab scenario");
+    expect(ledger().read({ campaignId: "campaign-1" })).toHaveLength(
+      beforeRetryEvents,
+    );
 
-    const config = JSON.parse(await readFile(configPath, "utf8")) as {
-      lab: Record<string, unknown>;
-    };
-    config.lab.scenarioId = "approved-comment-v1";
+    config.lab.scenarioId = "private-page-v1";
     await writeFile(configPath, JSON.stringify(config));
     const retried = await run(
       "review",
@@ -2476,7 +2495,7 @@ describe("harness CLI vertical slice", () => {
             event.type === "lab-provisioned" &&
             event.identity === `verification-lab-${retryVerificationId}`,
         ),
-    ).toMatchObject({ scenario: { id: "approved-comment-v1" } });
+    ).toMatchObject({ scenario: { id: "private-page-v1" } });
   });
 
   it("rejects unconfirmed version changes and fixed-version controls before starting a Lab", async () => {

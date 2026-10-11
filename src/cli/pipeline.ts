@@ -403,7 +403,10 @@ export type ReverificationSummary = {
  */
 export async function reverifyOnSelectedVersion<
   Target extends TargetSelection,
-  Setup,
+  Setup extends {
+    readonly scenario?:
+      { readonly id: string; readonly digest: string } | undefined;
+  },
   Handle extends LabHandle,
   Finding extends VerifiableFinding,
   Reconstruction,
@@ -486,6 +489,50 @@ export async function reverifyOnSelectedVersion<
     throw new Error(
       "An unconfirmed Finding can only be retried on its original Snapshot",
     );
+  const setup = pipeline.setupFor(snapshot);
+  if (confirmed === undefined) {
+    const previous = ledger
+      .read({
+        campaignId,
+        findingId,
+        type: "verification-finished",
+        limit: 1000,
+      })
+      .map(({ event }) => event)
+      .filter(
+        (event) =>
+          event.type === "verification-finished" &&
+          event.snapshotDigest === finding.snapshotDigest,
+      )
+      .at(-1);
+    if (
+      previous?.type !== "verification-finished" ||
+      previous.result.status !== "incomplete" ||
+      previous.result.reason !== "precondition"
+    )
+      throw new Error(
+        "A prior incomplete(precondition) verification is required for scenario retry",
+      );
+    const previousLab = ledger
+      .read({ campaignId, type: "lab-provisioned", limit: 1000 })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "lab-provisioned" &&
+          event.identity === `verification-lab-${previous.verificationId}`,
+      );
+    if (previousLab?.type !== "lab-provisioned")
+      throw new Error(
+        "A prior verification Lab is required for scenario retry",
+      );
+    if (
+      setup.scenario === undefined ||
+      setup.scenario.id === previousLab.scenario?.id
+    )
+      throw new Error(
+        "An unconfirmed Finding requires a different Lab scenario for retry",
+      );
+  }
   if (
     options.version !== undefined &&
     snapshot.digest === finding.snapshotDigest
@@ -575,7 +622,6 @@ export async function reverifyOnSelectedVersion<
       throw new Error("The derived Finding could not be recorded");
     verificationFindingId = derived.finding.findingId;
   }
-  const setup = pipeline.setupFor(snapshot);
   const result = await pipeline.verification.verify({
     campaignId,
     findingId: verificationFindingId,
