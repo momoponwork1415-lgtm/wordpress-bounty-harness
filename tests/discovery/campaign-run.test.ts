@@ -51,6 +51,10 @@ async function campaign(
     readonly rootTranscriptInvalid?: boolean;
     readonly indexed?: boolean;
     readonly leadOnly?: boolean;
+    readonly rootChildCounts?: {
+      readonly observed: number;
+      readonly admitted: number;
+    };
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-campaign-"));
@@ -161,6 +165,12 @@ async function campaign(
               reasonDetail: "invalid-event-shape",
               startedAt: "2026-10-08T07:00:00Z",
               completedAt: "2026-10-08T07:00:01Z",
+              ...(options.rootChildCounts === undefined
+                ? {}
+                : {
+                    childThreadsObserved: options.rootChildCounts.observed,
+                    childThreadsAdmitted: options.rootChildCounts.admitted,
+                  }),
               reportArtifactDigest: attachment.digest,
             }),
           };
@@ -249,6 +259,12 @@ async function campaign(
             reason: "unavailable",
             startedAt: "2026-10-08T07:00:00Z",
             completedAt: "2026-10-08T07:00:01Z",
+            ...(options.rootChildCounts === undefined
+              ? {}
+              : {
+                  childThreadsObserved: options.rootChildCounts.observed,
+                  childThreadsAdmitted: options.rootChildCounts.admitted,
+                }),
             reportArtifactDigest: attachment.digest,
           }),
         };
@@ -328,6 +344,24 @@ it("admits an extracted Root candidate without treating the transcript as comple
   });
   expect(ledger.read({ type: "finding-recorded" })).toHaveLength(1);
   expect(ledger.read({ type: "candidate-normalized" })).toHaveLength(1);
+});
+
+it("records child thread counts on both completed and incomplete Root runs", async () => {
+  for (const rootTranscriptInvalid of [false, true]) {
+    const { ledger } = await campaign([], {
+      indexed: true,
+      rootTranscriptInvalid,
+      rootChildCounts: { observed: 4, admitted: 3 },
+    });
+    expect(
+      ledger.read({ type: "discovery-run-finished" })[0]?.event,
+    ).toMatchObject({
+      runId: "run-0",
+      outcome: rootTranscriptInvalid ? "failed" : "completed",
+      childThreadsObserved: 4,
+      childThreadsAdmitted: 3,
+    });
+  }
 });
 
 it("keeps raw held candidates and stops at the output boundary", async () => {

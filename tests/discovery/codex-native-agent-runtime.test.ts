@@ -176,6 +176,172 @@ function sandbox(
 }
 
 describe("Codex native agent runtime", () => {
+  it("keeps Root and the first three unique children when a later wave creates another thread", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-child-overrun-"));
+    try {
+      const cooperativeProfile = defineAgentRuntimeProfile({
+        id: "cooperative-overrun",
+        transportKind: "codex-native/v1",
+        sandboxImageDigest: digest,
+        requestedModelId: "gpt-6-sol",
+        requestedEffort: "high",
+        codexCliVersion: "0.161.0",
+        bundledCatalogDigest: digest,
+        authenticationMethod: "host-private-bearer",
+        cyberAccessProgram: "daybreak_blue",
+        serviceTier: "priority",
+        subagent: { modelId: "gpt-6-sol", effort: "high" },
+      });
+      const parentThreadId = "parent-overrun";
+      const stdout = transcript.replace(
+        /"thread_id":"[^"]+"/,
+        `"thread_id":"${parentThreadId}"`,
+      );
+      const rootRollout = JSON.stringify({
+        timestamp: now,
+        type: "session_meta",
+        payload: { id: parentThreadId, source: "exec" },
+      });
+      const childRollout = (ordinal: number, model = "gpt-6-sol") =>
+        [
+          {
+            timestamp: new Date(Date.parse(now) + ordinal * 1000).toISOString(),
+            type: "session_meta",
+            payload: {
+              id: `child-${ordinal}`,
+              source: {
+                subagent: {
+                  thread_spawn: {
+                    parent_thread_id: parentThreadId,
+                    depth: 1,
+                    agent_path: `/root/child-${ordinal}`,
+                  },
+                },
+              },
+            },
+          },
+          {
+            type: "turn_context",
+            payload: {
+              model,
+              effort: "high",
+              cyber_access_program: "daybreak_blue",
+            },
+          },
+          {
+            type: "event_msg",
+            payload: {
+              type: "task_complete",
+              last_agent_message: JSON.stringify({
+                findings: [{ claim: `child-${ordinal}` }],
+                leads: [],
+                examined: "source",
+                unexamined: "none",
+              }),
+            },
+          },
+        ]
+          .map((value) => JSON.stringify(value))
+          .join("\n");
+      const attachments = new ProviderAttachmentStore(root);
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(stdout, [], {
+          // Session file ordering is not guaranteed to be spawn ordering.
+          rollouts: [
+            rootRollout,
+            childRollout(4, "other-model"),
+            childRollout(2),
+            childRollout(1),
+            childRollout(3),
+            childRollout(2),
+          ],
+        }),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const result = await runtime.execute({
+        ...run,
+        profile: cooperativeProfile,
+        coordination: "cooperative",
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(result.receipt).toMatchObject({
+        terminal: "completed",
+        childThreadsObserved: 4,
+        childThreadsAdmitted: 3,
+      });
+      expect(result.attachment?.kind).toBe("findings");
+      expect(result.agentRuns?.map((child) => child.receipt.runId)).toEqual([
+        "child-1",
+        "child-2",
+        "child-3",
+      ]);
+      expect(
+        result.agentRuns?.every(
+          (child) => child.receipt.terminal === "completed",
+        ),
+      ).toBe(true);
+      for (const child of result.agentRuns ?? []) {
+        if (child.attachment === undefined)
+          throw new Error("Missing child report");
+        expect((await attachments.read(child.attachment)).status).toBe(
+          "resolved",
+        );
+      }
+      expect(
+        await attachments.readByDigest(
+          "findings",
+          canonicalDigest({
+            findings: [{ claim: "child-4" }],
+            leads: [],
+            examined: "source",
+            unexamined: "none",
+          }),
+        ),
+      ).toEqual({ status: "unavailable" });
+
+      const mismatched = await new CodexNativeAgentRuntime(
+        sandbox(stdout, [], {
+          rollouts: [
+            rootRollout,
+            childRollout(1, "other-model"),
+            childRollout(2),
+            childRollout(3),
+            childRollout(4),
+          ],
+        }),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      ).execute({
+        ...run,
+        profile: cooperativeProfile,
+        coordination: "cooperative",
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(mismatched.receipt.terminal).toBe("completed");
+      expect(mismatched.agentRuns?.[0]?.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "policy",
+        reasonDetail: "child-profile-mismatch",
+      });
+      expect(mismatched.agentRuns?.map((child) => child.receipt.runId)).toEqual(
+        ["child-1", "child-2", "child-3"],
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a child report when the Root final JSON is malformed", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-child-salvage-"));
     try {
