@@ -76,7 +76,7 @@ type HttpEvidence = {
 };
 
 /** A negative control must replay every HTTP step from the confirmed route. */
-function matchesReferenceRoute(
+export function matchesReferenceRoute(
   http: HttpRecord,
   referenceRoute: unknown,
 ): boolean {

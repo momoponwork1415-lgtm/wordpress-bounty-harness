@@ -28,6 +28,21 @@
 
 ## 2. 週の流れ
 
+### 実 Lab の週次 smoke（週1回、CI 外）
+
+`runsc`、固定 image、provider 認証を使えるホストで、既に `runtime-confirmed` となった TranslatePress 3.3.1 の ATO Finding を指定する。元 campaign の 3.3.1 と 3.3.2 の Snapshot と materialized source を保持しておく。Finding ID は台帳から、host 設定と Private Evidence は Git 外から読む。`pnpm build` の後、リポジトリのルートで実行する。
+
+```sh
+node scripts/smoke-real-lab.mjs \
+  --host /path/to/private/host.json \
+  --state /path/to/private/state \
+  --config examples/translatepress-3.3.1/campaign-real-lab-smoke.json \
+  --source-campaign <known-ato-campaign> \
+  --finding <confirmed-ato-finding-id>
+```
+
+script は別の `smoke-real-lab-...` campaign を作り、既知の確認済み route を参照して新しい gVisor Lab で 3.3.1 を再検証し、続けて別 Snapshot の 3.3.2 で同じ経路の負の対照を取る。`recipe` / `observation` 不足だけは新 Lab で各 2 回まで再試行する。陽性の Harness 捕捉が既知 route と完全一致し、`runtime-confirmed` と `contradicted` の両方が台帳に記録された場合だけ終了コード 0。失敗時は段階と `incomplete` の理由を表示し、残った smoke campaign を `harness ledger funnel --campaign <id>` で調べる。再実行には新しい campaign ID を使い、本番 funnel と混ぜない。Stored XSS の経路は判定器修正後に追加する。
+
 ```
 harness history status                                   # 履歴mirrorの鮮度。fresh以外は終了コード1
 harness runtime check --config <path>                    # 起動時検査の全項目とCodex image / runtime profileの一致。欠ければ終了コード1

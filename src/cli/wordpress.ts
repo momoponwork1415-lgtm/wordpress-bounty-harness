@@ -263,6 +263,7 @@ export interface WordPressCampaignBoundaries {
     unknown
   >;
   readonly freeze: (target: WordPressTargetSelection) => Promise<Snapshot>;
+  readonly loadSnapshot: (digest: string) => Promise<Snapshot>;
   readonly lab: WordPressLab;
   readonly sourceFor: (snapshot: Snapshot) => Promise<{
     readonly directory: string;
@@ -801,6 +802,12 @@ export function createWordPressCliProfile(
       return reverifyOnSelectedVersion({
         campaignId: input.campaignId,
         findingId: input.findingId,
+        ...(input.referenceCampaignId === undefined
+          ? {}
+          : { referenceCampaignId: input.referenceCampaignId }),
+        ...(input.snapshotCampaignId === undefined
+          ? {}
+          : { snapshotCampaignId: input.snapshotCampaignId }),
         ...(input.version === undefined ? {} : { version: input.version }),
         ledger: state.ledger,
         store: state.store,
@@ -846,6 +853,7 @@ export function createWordPressCliProfile(
             return target;
           },
           freeze: boundaries.freeze,
+          loadSnapshot: boundaries.loadSnapshot,
           setupFor: setupFor(config),
           verification: verificationFor(state, boundaries),
           reconstructionFor: reconstructionFor(config),

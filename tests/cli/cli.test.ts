@@ -320,6 +320,10 @@ async function harness(
     },
   });
   await mkdir(join(root, "snapshots"));
+  const frozen = new Map<
+    string,
+    Awaited<ReturnType<typeof snapshots.freeze>>
+  >();
 
   const attachments = new ProviderAttachmentStore(join(root, "provider"));
   const prompts: string[] = [];
@@ -337,7 +341,15 @@ async function harness(
     freeze: async (target) => {
       if (target.slug === options.failFreeze)
         throw new Error("Synthetic download failure");
-      return snapshots.freeze(target);
+      const snapshot = await snapshots.freeze(target);
+      frozen.set(snapshot.digest, snapshot);
+      return snapshot;
+    },
+    loadSnapshot: async (digest) => {
+      const snapshot = frozen.get(digest);
+      if (snapshot === undefined)
+        throw new Error("Synthetic Snapshot is absent");
+      return snapshot;
     },
     lab,
     sourceFor: async () => ({
@@ -609,6 +621,8 @@ async function harness(
     docker,
     root,
     ledger: () => state.ledger,
+    state: () => state,
+    profile: environment.profile,
     maxInFlight: () => maxInFlight,
   };
 }
@@ -2217,6 +2231,76 @@ describe("harness CLI vertical slice", () => {
       finding,
     );
     expect(scoped.stdout).toMatch(/^wordfence ambiguous /m);
+  });
+
+  it("replays a confirmed route into a separate campaign without adding a verdict to the source campaign", async () => {
+    const { run, configPath, ledger, state, profile } = await harness();
+    await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "source-campaign",
+      "--config",
+      configPath,
+    );
+    const source = ledger().read({
+      campaignId: "source-campaign",
+      limit: 1000,
+    });
+    const finding = source.find(
+      ({ event }) =>
+        event.type === "finding-recorded" &&
+        event.category === "account-takeover",
+    )?.event;
+    if (finding?.type !== "finding-recorded")
+      throw new Error("Missing synthetic confirmed Finding");
+    const seed = source
+      .map(({ event }) => event)
+      .filter(
+        (event) =>
+          event.snapshotDigest === finding.snapshotDigest &&
+          (event.type === "target-selected" ||
+            event.type === "snapshot-frozen" ||
+            (event.type === "finding-recorded" &&
+              event.findingId === finding.findingId)),
+      );
+    for (const event of seed)
+      expect(
+        await ledger().append({
+          ...event,
+          identity: `smoke-seed-${event.type}`,
+          campaignId: "smoke-campaign",
+        }),
+      ).toMatchObject({ status: "appended" });
+
+    const replayed = await profile.reverify(state(), {
+      campaignId: "smoke-campaign",
+      findingId: finding.findingId,
+      referenceCampaignId: "source-campaign",
+      snapshotCampaignId: "source-campaign",
+      configPath,
+    });
+    expect(replayed.status).toBe("runtime-confirmed");
+    expect(
+      ledger().read({ campaignId: "source-campaign", limit: 1000 }),
+    ).toHaveLength(source.length);
+    const verification = ledger()
+      .read({ campaignId: "smoke-campaign", type: "verification-finished" })
+      .at(-1)?.event;
+    expect(verification).toMatchObject({
+      result: { status: "runtime-confirmed" },
+    });
+    expect(verification).not.toHaveProperty("basis");
+
+    await expect(
+      profile.reverify(state(), {
+        campaignId: "smoke-campaign",
+        findingId: finding.findingId,
+        referenceCampaignId: "absent-campaign",
+        configPath,
+      }),
+    ).rejects.toThrow("reference route belongs to a different Finding");
   });
 
   it("refuses to record a decision for a finding outside the review queue", async () => {

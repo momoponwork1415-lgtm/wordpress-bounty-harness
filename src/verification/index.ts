@@ -32,6 +32,7 @@ type FindingRecord = Extract<LedgerEventV1, { type: "finding-recorded" }>;
 /** A fresh-container agent that repairs and refutes a recipe. It cannot confirm. */
 export interface Verifier<Finding, Handle extends LabHandle> {
   attempt(input: {
+    readonly campaignId: string;
     readonly finding: Finding;
     readonly lab: Handle;
     /** Earlier judge-owned route for a same-path version comparison. */
@@ -238,6 +239,7 @@ export class Verification<
         if (labEvent.status === "conflict")
           throw new Error("Verification Lab identity conflict");
         result = await this.#judge(
+          campaignId,
           finding,
           snapshotDigest,
           judge,
@@ -311,6 +313,7 @@ export class Verification<
 
   /** `snapshotDigest` is the snapshot under test: the Finding's own, or its target's latest. */
   async #judge(
+    campaignId: string,
     finding: Finding,
     snapshotDigest: string,
     judge: Judge<Finding, Handle>,
@@ -334,6 +337,7 @@ export class Verification<
     let attempt: VerifierAttempt;
     try {
       attempt = await this.#options.verifier.attempt({
+        campaignId,
         finding,
         lab,
         ...(referenceRoute === undefined ? {} : { referenceRoute }),

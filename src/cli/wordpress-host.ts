@@ -20,7 +20,11 @@ import {
   runNativeModelProcess,
   type NativeModelProcessResult,
 } from "../infrastructure/native-model-process.js";
-import { openSnapshot, type Snapshot } from "../snapshot/index.js";
+import {
+  openSnapshot,
+  snapshotSchema,
+  type Snapshot,
+} from "../snapshot/index.js";
 import type { Verifier } from "../verification/index.js";
 import {
   createWordPressOrgFetchAdapter,
@@ -317,7 +321,7 @@ export async function createWordPressHostProfile(options: {
 
     const frozen = new Map<string, Snapshot>();
     const verifier: Verifier<WordPressFinding, WordPressLabHandle> = {
-      async attempt({ finding, lab: handle, referenceRoute }) {
+      async attempt({ campaignId, finding, lab: handle, referenceRoute }) {
         const snapshot = frozen.get(handle.snapshotDigest);
         const source =
           snapshot === undefined
@@ -344,6 +348,7 @@ export async function createWordPressHostProfile(options: {
           lab,
           clock: state.clock,
         }).attempt({
+          campaignId,
           finding,
           lab: handle,
           ...(referenceRoute === undefined ? {} : { referenceRoute }),
@@ -367,6 +372,22 @@ export async function createWordPressHostProfile(options: {
           policy: intakePolicy,
         });
         frozen.set(snapshot.digest, snapshot);
+        return snapshot;
+      },
+      async loadSnapshot(digest) {
+        if (!(await snapshotStore.verify(digest)))
+          throw new Error("Pinned Snapshot artifact is unavailable");
+        const record = snapshotSchema.parse(
+          JSON.parse(
+            await readFile(
+              join(directories.snapshots, `${digest.slice(7)}.json`),
+              "utf8",
+            ),
+          ) as unknown,
+        );
+        const snapshot = { ...record, digest };
+        await sources.resolve(snapshot);
+        frozen.set(digest, snapshot);
         return snapshot;
       },
       lab,
