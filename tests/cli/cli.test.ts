@@ -31,6 +31,7 @@ import type { ProgrammeIntelligence } from "../../src/profiles/wordpress/program
 import { loadWordpressScopePolicy } from "../../src/profiles/wordpress/scope-policy.js";
 import { loadWordPressDiscoveryAsset } from "../../src/profiles/wordpress/prompts/index.js";
 import { createWordPressSelection } from "../../src/profiles/wordpress/selection/index.js";
+import type { WordPressOrgListingObservation } from "../../src/profiles/wordpress/selection/wordpress-org-candidate-enumerator.js";
 import { openSnapshot } from "../../src/snapshot/index.js";
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
@@ -92,6 +93,7 @@ async function harness(
     readonly zeroFindings?: boolean;
     /** Candidate slugs; the first is not pinned. */
     readonly candidates?: readonly string[];
+    readonly listingObservations?: readonly WordPressOrgListingObservation[];
     /** A slug whose snapshot cannot be frozen. */
     readonly failFreeze?: string;
     /** Extra campaign config fields. */
@@ -304,6 +306,18 @@ async function harness(
     } as unknown as ProgrammeIntelligence,
     programmeRef,
     clock: () => new Date(now),
+    enumerateCandidates: async () => ({
+      status: "available",
+      candidates: (options.candidates ?? ["synthetic-plugin"]).map((slug) => ({
+        slug,
+        sourceKind: "popular" as const,
+        sourcePage: 1,
+        sourceUrl: "https://api.wordpress.org/plugins/info/1.2/",
+        observedAt: now,
+        contentDigest: sha("b"),
+      })),
+      listings: options.listingObservations ?? [],
+    }),
   });
   const snapshots = openSnapshot({
     storageDirectory: join(root, "snapshots"),
@@ -526,6 +540,10 @@ async function harness(
         state = opened;
         return boundaries;
       },
+      selectionBoundaries: async (opened) => {
+        state = opened;
+        return boundaries;
+      },
     }),
   };
   const policyPath = join(root, "selection.json");
@@ -623,6 +641,7 @@ async function harness(
     ledger: () => state.ledger,
     state: () => state,
     profile: environment.profile,
+    store: () => state.store,
     maxInFlight: () => maxInFlight,
   };
 }
@@ -1982,6 +2001,186 @@ describe("harness CLI vertical slice", () => {
     );
     expect(all.code).toBe(0);
     expect(all.stdout).toContain("wporg:synthetic-plugin 3.3.1");
+  });
+
+  it("enumerates without nominated slugs, reserves the next ranked batch, and runs that batch", async () => {
+    const candidates = [
+      "item-a",
+      "item-b",
+      "item-c",
+      "item-d",
+      "item-e",
+      "item-f",
+      "item-g",
+      "item-h",
+      "item-i",
+    ];
+    const listingObservations = [
+      {
+        kind: "popular" as const,
+        page: 1,
+        sourceUrl:
+          "https://api.wordpress.org/plugins/info/1.2/?request%5Bbrowse%5D=popular",
+        checkedAt: now,
+        status: "available" as const,
+        observedAt: now,
+        contentDigest: sha("b"),
+      },
+      {
+        kind: "tag" as const,
+        tag: "login",
+        page: 1,
+        sourceUrl:
+          "https://api.wordpress.org/plugins/info/1.2/?request%5Btag%5D=login",
+        checkedAt: now,
+        status: "unavailable" as const,
+        reason: "http-error" as const,
+      },
+    ];
+    const { run, configPath, root, ledger, store } = await harness({
+      candidates,
+      listingObservations,
+    });
+    const policyPath = join(root, "selection.json");
+    const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete manual.candidateSlugs;
+    delete manual.pinnedVersions;
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...manual,
+        promptVariant: "short-objective-managed-v4",
+        revisitPolicy: { kind: "never" },
+        wordpressVersion: "6.8",
+        maximumTargets: 3,
+        candidateSource: {
+          kind: "wordpress-org",
+          popularPages: 1,
+          tags: [],
+          pagesPerTag: 1,
+          perPage: 20,
+          maxCandidates: 20,
+          maxAgeDays: 1,
+        },
+      }),
+    );
+    const first = await run("select", "--config", policyPath);
+    expect(first.code).toBe(0);
+    expect(first.stdout).toContain("wporg:item-a 9.9.9 score");
+    expect(first.stdout).toContain("wporg:item-c 9.9.9 score");
+    expect(first.stdout).toContain("breakdown installations=");
+    expect(first.stdout).toContain(
+      "excluded wporg:item-d  reasons below-rank-cutoff",
+    );
+    const second = await run("select", "--config", policyPath);
+    expect(second.code).toBe(0);
+    expect(second.stdout).not.toContain("wporg:item-a 9.9.9 score");
+    expect(second.stdout).toContain(
+      "excluded wporg:item-a  reasons previously-selected",
+    );
+    expect(second.stdout).toContain("wporg:item-d 9.9.9 score");
+    expect(second.stdout).toContain("wporg:item-f 9.9.9 score");
+    const reservations = ledger()
+      .read({ type: "target-selected", limit: 100 })
+      .filter(({ event }) => event.campaignId.startsWith("selection-"));
+    expect(reservations).toHaveLength(6);
+    expect(
+      reservations.every(({ event }) =>
+        event.artifacts.some(
+          (artifact) => artifact.kind === "selection-report",
+        ),
+      ),
+    ).toBe(true);
+    const reportRef = reservations[0]?.event.artifacts.find(
+      (artifact) => artifact.kind === "selection-report",
+    );
+    expect(reportRef).toBeDefined();
+    const reportFile = await store().readFile(
+      reportRef!.digest,
+      "selection-report.json",
+      2 * 1024 * 1024,
+    );
+    expect(reportFile.status).toBe("resolved");
+    if (reportFile.status !== "resolved") return;
+    expect(JSON.parse(reportFile.bytes.toString("utf8"))).toMatchObject({
+      sourceStatus: "available",
+      sourceListings: listingObservations,
+    });
+    const campaignConfig = JSON.parse(
+      await readFile(configPath, "utf8"),
+    ) as Record<string, unknown>;
+    await writeFile(
+      configPath,
+      JSON.stringify({ ...campaignConfig, promptId: "short-objective-v2" }),
+    );
+    const mismatched = await run(
+      "campaign",
+      "run",
+      "item-d",
+      "--campaign",
+      "campaign-mismatched",
+      "--config",
+      configPath,
+    );
+    expect(mismatched.code).toBe(1);
+    expect(mismatched.stderr).toContain("prompt variants differ");
+    await writeFile(configPath, JSON.stringify(campaignConfig));
+    const campaign = await run(
+      "campaign",
+      "run",
+      "item-d",
+      "--campaign",
+      "campaign-reserved",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(campaign.stdout).toContain("wporg:item-d 9.9.9");
+    const bound = ledger().read({
+      campaignId: "campaign-reserved",
+      type: "selection-batch-bound",
+    });
+    expect(bound).toHaveLength(1);
+    expect(bound[0]?.event).toMatchObject({
+      type: "selection-batch-bound",
+      selectionBatchId: reservations[3]?.event.campaignId,
+      selectionIds: ["wporg:item-d@9.9.9"],
+    });
+
+    const third = await run("select", "--config", policyPath);
+    expect(third.code).toBe(0);
+    expect(third.stdout).toContain("wporg:item-g 9.9.9 score");
+    const resumed = await run(
+      "campaign",
+      "run",
+      "item-d",
+      "--campaign",
+      "campaign-reserved",
+      "--config",
+      configPath,
+    );
+    expect(resumed.code).toBe(0);
+    expect(resumed.stdout).toContain("wporg:item-d 9.9.9");
+    expect(
+      ledger().read({
+        campaignId: "campaign-reserved",
+        type: "selection-batch-bound",
+      }),
+    ).toHaveLength(1);
+    const changedTarget = await run(
+      "campaign",
+      "run",
+      "item-g",
+      "--campaign",
+      "campaign-reserved",
+      "--config",
+      configPath,
+    );
+    expect(changedTarget.code).toBe(1);
+    expect(changedTarget.stderr).toContain("target set differs");
   });
 
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {

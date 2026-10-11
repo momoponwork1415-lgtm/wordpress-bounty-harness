@@ -47,12 +47,12 @@ script は別の `smoke-real-lab-...` campaign を作る。`--binding-campaign` 
 ```
 harness history status                                   # 履歴mirrorの鮮度。fresh以外は終了コード1
 harness runtime check --config <path>                    # 起動時検査の全項目とCodex image / runtime profileの一致。欠ければ終了コード1
-harness select --config <path>                           # 方針から今週の対象を出す。承認は不要
-harness campaign run --all --campaign <id> --config <path>   # 選定済み対象を順に: snapshot → lab → discovery → verification → ledger
+harness select --config src/profiles/wordpress/policy/selection.json   # WordPress.org から3〜5対象を選び Snapshot 固定。承認は不要
+harness campaign run --all --campaign <id> --config <campaign.json>    # campaign 設定は同じ選定方針を参照する。最新の選定バッチから Lab → discovery → verification
 harness review [--campaign <id>]                         # 検証済みの列を見る
 ```
 
-**起動時検査**: 境界を使うコマンド（`select`、`campaign run`、`runtime check`、`lab cleanup`、`review reverify`）は、境界を組む前に次を全部確かめる。1つでも欠ければ何も起動せず、runc・通常Docker・ホストプロセスへ切り替えずに止まる。
+**起動時検査**: `campaign run`、`runtime check`、`lab cleanup`、`review reverify` は、境界を組む前に次を全部確かめる。1つでも欠ければ何も起動せず、runc・通常Docker・ホストプロセスへ切り替えずに止まる。`select` は公開情報と固定sourceだけを扱い、provider credential と Lab は起動しない。programme写しの鮮度、WordPress.org観測、固定core image と source の取得を検査し、満たさない候補を選ばない。
 
 - dockerが応答し、`runsc` が登録されている。
 - host設定の全imageが、digest固定のまま手元にある。
@@ -74,6 +74,8 @@ harness review [--campaign <id>]                         # 検証済みの列を
 固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。
 
 既定promptは `wp2shell-bounty-v2`、入口索引は固定source由来のカタログ入力として既定で有効。索引の全件処理は終了条件にしない。`short-objective-managed-v4` は比較armとして残す。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
+
+自動選定の campaign は初回起動時に `selection-batch-bound` を追記し、選定バッチと対象集合を固定する。再開時はこの記録のバッチを読み、途中で `select` を再実行しても新しいバッチに切り替えない。公開一覧の取得元・確認日時・available/stale/unavailable と失敗理由は Private Evidence の選定レポートに記録する。
 
 - **同時run数**: campaign設定の `resources` で決める。
   - 既定の `resources` は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。新主経路は対象ごとに1 Trialで、wall上限は60分。
@@ -135,7 +137,7 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 | raw Findingが少ない | 本番A/B（第6節）、分担単位 |
 | verifier通過が少ない | 判定器の成功条件、Lab構成（`incomplete` の理由コードを見る） |
 | in-scopeが少ない | 選定方針（対象外になりやすい種別・tierを避ける） |
-| duplicateが多い | 選定方針（公開履歴の多いpluginを避ける）、履歴mirrorの鮮度 |
+| duplicateが多い | Finding 後の重複照合と履歴mirrorの鮮度。公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030） |
 
 ## 5. 保守
 
@@ -145,20 +147,13 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 - 更新後に `harness history status` を見る。照合口と同じ規則で、`fresh` / `stale`（既定24時間超、または前回更新の失敗）/ `unavailable`（stateが読めない、DBとstateが食い違う）を表示する。
 - `stale` / `unavailable` は「重複なし」を意味しない。詳細は [wordfence-history/README.md](../src/profiles/wordpress/wordfence-history/README.md)。
 
-### pilot候補の自動準備
+### 対象の自動選定
 
-`scripts/prepare-pilot-selection.mjs` は、24時間以内のWordfence公開履歴から低権限・高影響の記録が2件以上あるpluginを候補にし、WordPress.orgのactive install数を観測日時付きのGit外SQLite DBへ保存する。キャッシュは7日以内なら候補準備に再利用する。生成した選定方針はinstall数1万以上の候補、履歴件数、feed digestと更新日時を持つ。`select` / `campaign run` はWordPress.orgを改めて観測し、最新版、install数、更新日、Programme scopeを確認する。キャッシュの古い数字だけで対象を確定しない。
+`select` は [選定方針 JSON](../src/profiles/wordpress/policy/selection.json) を直接読み、WordPress.org の人気順・タグ順を列挙する。install下限もこの JSON が正本。台帳の過去選定と Finding を照合し、適格な次点候補で補充して3〜5対象を返す。版またはprompt版が変わったときの再訪は `revisitPolicy` で決める。未公開 Finding を持つ対象は、提出済みでも公開を確認できないため除外する。
 
-```sh
-node scripts/prepare-pilot-selection.mjs \
-  --history /path/to/intelligence/history.sqlite \
-  --state /path/to/intelligence/state.json \
-  --cache /path/to/private/selection-observations.sqlite \
-  --template examples/translatepress-3.3.1/selection.json \
-  --output /path/to/private/pilot-selection.json
-```
+旧 `scripts/prepare-pilot-selection.mjs` は `harness select` の薄い呼び出しとして残す。`--host`、`--state`、`--config` を受け取り、候補と順位は作らない。
 
-履歴mirrorは更新時にDB全体を入れ替えるため、WordPress.orgの観測キャッシュは別DBに置く。`historySignals` は候補選定の公開カタログ件数であり、未知の脆弱性の証拠ではない。選定済み対象のscore内訳と観測参照はGit外の`target-selection` artifactに記録される。
+スコア内訳、除外理由、候補一覧の取得元と観測時刻は標準出力と Git 外の `selection-report` に残る。`target-selected` は固定済み Snapshot digest と `target-selection` の Private Evidence を参照する。次の `campaign run --all` は同じ方針 digest の最新バッチを使い、Snapshot が変われば止まる。公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030）。
 
 ### 子の最終JSONがschemaで失敗したとき
 

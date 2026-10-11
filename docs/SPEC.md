@@ -30,7 +30,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 | モジュール | 目的 | 公開インターフェース | 所有する記録 | 失敗時 | 出自 |
 | --- | --- | --- | --- | --- | --- |
-| `selection` | 方針に従って対象を機械的に選び、予算内で順序付ける | `select(policy) → TargetSelection[]`、`inspect` | 選定方針（人間が編集）、低権限・高影響の公開履歴、install数、選定記録とスコア内訳 | WordPress.org / Wordfence観測の unavailable / stale をeligibleにしない | 既存の選定器を縦断後に拡張。開発対象はslugと版を直接指定可 |
+| `selection` | 方針に従って対象を機械的に選び、予算内で順序付ける | `select(policy) → TargetSelection[]`、`inspect` | 選定方針（人間が編集）、WordPress.org の観測、台帳の過去選定、選定記録とスコア内訳 | WordPress.org / Programme観測の unavailable / stale をeligibleにしない | 開発対象はslugと版を直接指定可。公開履歴の扱いは ADR 0030 |
 | `snapshot` | pluginとWordPress本体のsourceをdigestで固定する | `freeze(selection) → Snapshot`、`verify(digest)` | Target / Dependency Snapshot、canonical manifest | archiveの不正path・symlink・size超過を拒否 | 移植: `canonical-source-tree`、`canonical-json`、`immutable-file`、`private-artifact-store` |
 | `lab` | WordPress + MySQLの使い捨てgVisor環境を供給し、canaryとロール別アカウントを仕込む | `provision(snapshot, setup) → LabHandle`、`seedCanaries`、`teardown` | Lab Setup digest、canary台帳（nonceと配置先）、ロール認証情報（Lab内のみ） | source / image / runsc不一致では起動しない。provision失敗は `incomplete` 用の理由コード | 移植: `human-os` のgVisor候補検証Lab。拡張: discovery用の複数Lab、canary seeding、ロール基準の正常操作記録 |
 | `discovery` | 固定Snapshotで対象ごとにRoot＋最大3子の協調Trialを1回回す | `run(campaignInput) → DiscoveryRun`、`campaign(stopRule)` | Trial id、Root / 子の実行記録、model profile digest、prompt digest、usage、FindingとLeadのdigest参照 | provider / schema / sandbox失敗はtyped receiptとして残し、有効な個別成果を失わない。自動retryしない | ADR 0029。旧単独Trialと二段構えの記録は読み続ける |
@@ -141,7 +141,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 | 場所 | 手段 | 強さ |
 | --- | --- | --- |
-| `selection` | 対象外資産（作者、配布停止、ベンダー側service）を落とす。初期の探索方針はinstall数1万以上とし、低権限・高影響の公開履歴を強い優先信号にする。プログラムの報奨対象となる下限500件等は別のscope規則として記録する | 機械的。方針と除外理由を残す |
+| `selection` | 対象外資産（作者、配布停止、ベンダー側service）を落とす。install下限は[選定方針 JSON](../src/profiles/wordpress/policy/selection.json)を正本とし、プログラムの報奨対象下限は別のscope規則として記録する。公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030） | 機械的。方針と除外理由を残す |
 | `lab` | discoveryとverifierに渡す認証情報を未認証・subscriber・customer（WooCommerce有効時）に限る。contributor以上と管理者の認証情報は渡さない。設定は既定のまま、一般的な利用範囲の初期データ（公開フォーム1つ等）はprofileのsetup manifestで入れ、Lab Setup digestに記録する | 機械的。contributor以上の経路は試せない。設定変更もできない |
 | `discovery` | 目的promptに到達すべき影響の共通分類（下表）と報奨順を書き、trust境界宣言でcontributor以上と管理者の明示設定を信頼側に置く | 誘導。agentは他も報告してよいが、台帳で分類される |
 | `verification` と `review` | 判定器の成功条件をプログラムの受理条件に合わせる（下表）。scope評価はFindingと判定器の観測だけから、方針ファイルの規則で `in-scope` / `out` / `ambiguous` を出す。agentの自己申告は使わない | 機械的。提出候補にならない |
@@ -168,7 +168,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 9. 台帳
 
-- イベント例: `target-selected`、`snapshot-frozen`、`lab-provisioned`、`discovery-run-started / finished`、`lead-recorded`、`finding-recorded`、`verification-finished`、`review-decided`、`scope-assessed`、`draft-saved`、`external-action-authorized`、`submission-outcome`。
+- イベント例: `target-selected`、`selection-batch-bound`（自動選定したcampaignのバッチと対象集合を固定）、`snapshot-frozen`、`lab-provisioned`、`discovery-run-started / finished`、`lead-recorded`、`finding-recorded`、`verification-finished`、`review-decided`、`scope-assessed`、`draft-saved`、`external-action-authorized`、`submission-outcome`。
 - 規則: 追記のみ。全イベントにsnapshot digest。判定系イベントはdigest一致時のみ有効。setup失敗はdiscovery試行に数えない。
 - funnel view: raw findings → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・種別別に読み取り専用で導く。
 - 添付: Codex `findings.json` / `coverage.json` 等はPrivate Evidenceにdigest付きで保存し、台帳からは参照だけ。

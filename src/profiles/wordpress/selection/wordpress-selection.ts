@@ -11,6 +11,11 @@ import type {
   ProgrammeIntelligence,
 } from "../programme-intelligence/index.js";
 import {
+  enumerateWordPressOrgCandidates,
+  type EnumerateWordPressOrgCandidatesOptions,
+  type WordPressOrgCandidateEnumeration,
+} from "./wordpress-org-candidate-enumerator.js";
+import {
   wordPressSelectionPolicySchema,
   type WordPressSelectionPolicy,
   type WordPressTargetSelection,
@@ -25,7 +30,28 @@ export interface CreateWordPressSelectionOptions {
   readonly programme: Pick<ProgrammeIntelligence, "inspect">;
   readonly programmeRef: ProgrammeEligibilitySnapshotRef;
   readonly clock?: () => Date;
+  readonly fetch?: typeof fetch;
+  readonly enumerateCandidates?: (
+    options: EnumerateWordPressOrgCandidatesOptions,
+  ) => Promise<WordPressOrgCandidateEnumeration>;
 }
+
+export interface WordPressSelectionBatchInspection {
+  readonly inspections: readonly WordPressSelectionInspection[];
+  readonly sourceStatus: "manual" | WordPressOrgCandidateEnumeration["status"];
+  readonly sourceListings: WordPressOrgCandidateEnumeration["listings"];
+}
+
+export type WordPressSelectionWithBatchInspection = Selection<
+  WordPressSelectionPolicy,
+  WordPressTargetSelection,
+  WordPressSelectionInspection
+> & {
+  /** Older injected Selection adapters may only implement inspect. */
+  readonly inspectBatch?: (
+    policy: WordPressSelectionPolicy,
+  ) => Promise<WordPressSelectionBatchInspection>;
+};
 
 /** WordPress.org dates look like `2026-09-01 12:00am GMT`; ISO strings also parse. */
 function parseObservedDate(date: string): number | undefined {
@@ -85,9 +111,8 @@ function score(
   const highThreat =
     (highThreatSurface(observation, policy) ? 1 : 0) *
     policy.scoreWeights.highThreat;
-  const history =
-    Math.log2(1 + (policy.historySignals?.[observation.officialSlug] ?? 0)) *
-    (policy.scoreWeights.history ?? 0);
+  // 公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030）。
+  const history = 0;
   return { installations, recency, surface, highThreat, history };
 }
 
@@ -101,25 +126,37 @@ function highThreatSurface(
 
 export function createWordPressSelection(
   options: CreateWordPressSelectionOptions,
-): Selection<
-  WordPressSelectionPolicy,
-  WordPressTargetSelection,
-  WordPressSelectionInspection
-> {
+): WordPressSelectionWithBatchInspection {
   const clock = options.clock ?? (() => new Date());
 
-  async function inspect(
+  async function inspectBatch(
     policyInput: WordPressSelectionPolicy,
-  ): Promise<readonly WordPressSelectionInspection[]> {
+  ): Promise<WordPressSelectionBatchInspection> {
     const policy = wordPressSelectionPolicySchema.parse(policyInput);
     const nowDate = clock();
     const now = nowDate.getTime();
     if (!Number.isFinite(now)) throw new Error("Selection clock is invalid");
     const policyDigest = canonicalDigestPreservingProperties(policy);
-    const historyAge =
-      policy.historySource === undefined
-        ? undefined
-        : ageDays(policy.historySource.refreshedAt, now);
+    const pinnedVersions =
+      "pinnedVersions" in policy ? policy.pinnedVersions : undefined;
+    const enumeration =
+      "candidateSource" in policy
+        ? await (
+            options.enumerateCandidates ?? enumerateWordPressOrgCandidates
+          )({
+            ...policy.candidateSource,
+            clock,
+            ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+          })
+        : undefined;
+    const candidateSlugs =
+      "candidateSlugs" in policy
+        ? policy.candidateSlugs
+        : (enumeration?.candidates.map((candidate) => candidate.slug) ?? []);
+    const candidateProvenance = new Map(
+      enumeration?.candidates.map((candidate) => [candidate.slug, candidate]) ??
+        [],
+    );
     const programmeResult = await options.programme
       .inspect({
         kind: "programme-eligibility-inspection",
@@ -143,17 +180,13 @@ export function createWordPressSelection(
       );
 
     const results: WordPressSelectionInspection[] = [];
-    for (const slug of [...new Set(policy.candidateSlugs)]) {
+    for (const slug of [...new Set(candidateSlugs)]) {
+      const enumeration = candidateProvenance.get(slug);
       const reasons: SelectionReason[] = [];
       if (!programmeCurrent) reasons.push("programme-stale");
       else if (!programmeAcceptsAsset)
         reasons.push("programme-asset-out-of-scope");
       if (policy.excludedSlugs.includes(slug)) reasons.push("excluded-slug");
-      if (
-        policy.historySignals !== undefined &&
-        (historyAge === undefined || historyAge > 1)
-      )
-        reasons.push("history-stale");
       const result = await options.targetSource
         .observe({
           kind: "wordpress-org-target-observe",
@@ -167,7 +200,12 @@ export function createWordPressSelection(
             ? "distribution-closed"
             : "observation-unavailable",
         );
-        results.push({ slug, status: "ineligible", reasons });
+        results.push({
+          slug,
+          status: "ineligible",
+          reasons,
+          ...(enumeration === undefined ? {} : { enumeration }),
+        });
         continue;
       }
       const observation = result.observation;
@@ -203,11 +241,17 @@ export function createWordPressSelection(
         updateAge === undefined ||
         programmeResult?.status !== "current"
       ) {
-        results.push({ slug, status: "ineligible", reasons });
+        results.push({
+          slug,
+          status: "ineligible",
+          reasons,
+          observedAt: observation.observedAt,
+          ...(enumeration === undefined ? {} : { enumeration }),
+        });
         continue;
       }
       const scoreBreakdown = score(observation, policy, updateAge);
-      const pinnedVersion = policy.pinnedVersions?.[slug];
+      const pinnedVersion = pinnedVersions?.[slug];
       const lastUpdated = parseObservedDate(observation.lastUpdated);
       const selection: WordPressTargetSelection = {
         targetId: observation.pluginIdentity,
@@ -234,16 +278,29 @@ export function createWordPressSelection(
         observationRef: result.observationRef,
         programmeRef: programmeResult.snapshotRef,
       };
-      results.push({ slug, status: "eligible", reasons, selection });
+      results.push({
+        slug,
+        status: "eligible",
+        reasons,
+        selection,
+        observedAt: observation.observedAt,
+        ...(enumeration === undefined ? {} : { enumeration }),
+      });
     }
-    return results;
+    return {
+      inspections: results,
+      sourceStatus: enumeration?.status ?? "manual",
+      sourceListings: enumeration?.listings ?? [],
+    };
   }
 
   return {
-    inspect,
+    inspectBatch,
+    inspect: async (policyInput) =>
+      (await inspectBatch(policyInput)).inspections,
     async select(policyInput) {
       const policy = wordPressSelectionPolicySchema.parse(policyInput);
-      const inspected = await inspect(policy);
+      const { inspections: inspected } = await inspectBatch(policy);
       return inspected
         .flatMap((item) =>
           item.selection === undefined ? [] : [item.selection],

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createWordPressSelection,
   loadWordPressSelectionPolicy,
+  wordPressSelectionPolicySchema,
 } from "../../../src/profiles/wordpress/selection/index.js";
 import type { WordPressOrgTargetSource } from "../../../src/profiles/wordpress/acquisition/index.js";
 import type { ProgrammeIntelligence } from "../../../src/profiles/wordpress/programme-intelligence/index.js";
@@ -159,9 +160,12 @@ describe("WordPress selection public interface", () => {
     expect(second[0]?.policy.digest).not.toBe(first[0]?.policy.digest);
   });
 
-  it("ships a policy that parses, keeps the 500-install threshold and excludes out-of-scope authors", async () => {
+  it("ships an automatic policy with the canonical 10000-install threshold and excludes out-of-scope authors", async () => {
     const policy = await loadWordPressSelectionPolicy();
-    expect(policy.minimumActiveInstallations).toBe(500);
+    expect(policy.minimumActiveInstallations).toBe(10_000);
+    expect("candidateSource" in policy && policy.candidateSource.kind).toBe(
+      "wordpress-org",
+    );
     expect(policy.excludedAuthors).toEqual(
       expect.arrayContaining([
         "Automattic",
@@ -172,6 +176,15 @@ describe("WordPress selection public interface", () => {
       ]),
     );
     expect(policy.scoreWeights.highThreat).toBeGreaterThan(0);
+    if (!("candidateSource" in policy))
+      throw new Error("Expected automatic policy");
+    for (const maximumTargets of [2, 6])
+      expect(
+        wordPressSelectionPolicySchema.safeParse({
+          ...policy,
+          maximumTargets,
+        }).success,
+      ).toBe(false);
   });
 
   it("weights High Threat attack surfaces as their own score component", async () => {
@@ -203,7 +216,7 @@ describe("WordPress selection public interface", () => {
     });
   });
 
-  it("records catalog history as an explainable selection signal", async () => {
+  it("does not rank candidates by historical advisory counts", async () => {
     const selection = harness({});
     const ranked = await selection.select({
       ...basePolicy,
@@ -216,12 +229,12 @@ describe("WordPress selection public interface", () => {
       },
     });
     expect(ranked.map((item) => item.slug)).toEqual(["exposed", "popular"]);
-    expect(ranked[0]?.scoreBreakdown.history).toBeGreaterThan(
-      ranked[1]?.scoreBreakdown.history ?? 0,
+    expect(ranked.every((item) => item.scoreBreakdown.history === 0)).toBe(
+      true,
     );
   });
 
-  it("does not select from stale catalog history", async () => {
+  it("does not let stale legacy history change current selection", async () => {
     const selection = harness({});
     const inspected = await selection.inspect({
       ...basePolicy,
@@ -232,8 +245,8 @@ describe("WordPress selection public interface", () => {
       },
     });
     expect(inspected.find((item) => item.slug === "popular")).toMatchObject({
-      status: "ineligible",
-      reasons: expect.arrayContaining(["history-stale"]),
+      status: "eligible",
+      reasons: [],
     });
   });
 
