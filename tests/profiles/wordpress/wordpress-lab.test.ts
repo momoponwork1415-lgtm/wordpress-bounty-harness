@@ -22,6 +22,7 @@ import { userRegistrationOrdinarySetupScript } from "../../../src/profiles/wordp
 import {
   userRegistrationMembershipEnrollmentScript,
   userRegistrationMembershipInstallScript,
+  userRegistrationMembershipUnjoinedScript,
 } from "../../../src/profiles/wordpress/lab/user-registration-membership-adapter.js";
 import { wpDiscuzOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/wpdiscuz-adapter.js";
 import { wpMembersOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/wp-members-adapter.js";
@@ -489,6 +490,66 @@ describe("WordPress gVisor Lab", () => {
         arg.includes("create_membership_order_and_subscription"),
       ),
     ).toHaveLength(2);
+    expect(await lab.teardown(verification.handle)).toEqual({
+      status: "removed",
+    });
+  });
+
+  it("leaves the existing subscriber unjoined in the versioned free membership setup", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "user-registration",
+    );
+    const scenario = wordPressScenario("public-free-membership-v2")!;
+    expect(scenario).toMatchObject({
+      version: 2,
+      pluginSlug: "user-registration",
+      ordinaryRegistration: true,
+      freeMembership: true,
+      adapterDigest: canonicalDigest({
+        registration: userRegistrationOrdinarySetupScript(),
+        install: userRegistrationMembershipInstallScript(),
+        unjoined: userRegistrationMembershipUnjoinedScript("{subscriber}"),
+      }),
+    });
+    const membershipSetup = {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    };
+    const discovery = await lab.provision(snapshot, membershipSetup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.teardown(discovery.handle)).toEqual({ status: "removed" });
+
+    const verification = await lab.provision(snapshot, membershipSetup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.setupDigest).toBe(discovery.handle.setupDigest);
+    expect(verification.handle.scenario).toEqual(membershipSetup.scenario);
+    const scripts = commands.flatMap(({ args }) => args);
+    expect(
+      scripts.filter((arg) => arg.includes("UR_Install::create_form()")),
+    ).toHaveLength(2);
+    expect(
+      scripts.filter((arg) =>
+        arg.includes("ur_membership_install_required_pages()"),
+      ),
+    ).toHaveLength(2);
+    expect(
+      scripts.filter((arg) =>
+        arg.includes("Lab subscriber is already enrolled"),
+      ),
+    ).toHaveLength(2);
+    expect(
+      scripts.filter((arg) =>
+        arg.includes("create_membership_order_and_subscription"),
+      ),
+    ).toHaveLength(0);
     expect(await lab.teardown(verification.handle)).toEqual({
       status: "removed",
     });

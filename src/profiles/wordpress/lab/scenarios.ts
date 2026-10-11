@@ -9,8 +9,10 @@ import {
 } from "./user-registration-adapter.js";
 import {
   USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID,
+  USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID,
   userRegistrationMembershipEnrollmentScript,
   userRegistrationMembershipInstallScript,
+  userRegistrationMembershipUnjoinedScript,
 } from "./user-registration-membership-adapter.js";
 import {
   WPDISCUZ_COMMENT_SCENARIO_ID,
@@ -104,6 +106,22 @@ const definitions = [
     }),
   },
   {
+    id: USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID,
+    version: 2,
+    name: "既存購読者と公開の無料会員プラン",
+    pluginSlug: "user-registration",
+    approvedComment: false,
+    secondaryLocale: null,
+    translation: null,
+    ordinaryRegistration: true,
+    freeMembership: true,
+    adapterDigest: canonicalDigest({
+      registration: userRegistrationOrdinarySetupScript(),
+      install: userRegistrationMembershipInstallScript(),
+      unjoined: userRegistrationMembershipUnjoinedScript("{subscriber}"),
+    }),
+  },
+  {
     id: WPDISCUZ_COMMENT_SCENARIO_ID,
     version: 1,
     name: "公開コメントフォームと承認済みコメント",
@@ -150,6 +168,8 @@ const pins: Record<(typeof definitions)[number]["id"], string> = {
     "sha256:95cf63ae1968865ee518478ed35064811bb70698a7f4e9decf7b5adba9bc4477",
   "public-free-membership-v1":
     "sha256:f40f50bb92dba2d4cf1a67bd91481134ba6b420a7a9fc677d9bf3f7b56e3c06b",
+  "public-free-membership-v2":
+    "sha256:7dac91f0c02d892fcb5a24a88f14f1134566b2dd39b62f325604a1900e62e433",
   "public-plugin-comment-v1":
     "sha256:5051e8b9acb5c18b6c3b5428e8489fb764d158376b21f3ddebebb287cf22bb8c",
   "public-member-post-v1":
