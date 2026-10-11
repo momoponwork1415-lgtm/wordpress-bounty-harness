@@ -15,6 +15,11 @@ import {
   userRegistrationOrdinarySetupScript,
 } from "./user-registration-adapter.js";
 import {
+  USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID,
+  userRegistrationMembershipEnrollmentScript,
+  userRegistrationMembershipInstallScript,
+} from "./user-registration-membership-adapter.js";
+import {
   WPDISCUZ_COMMENT_SCENARIO_ID,
   wpDiscuzOrdinarySetupScript,
 } from "./wpdiscuz-adapter.js";
@@ -205,11 +210,29 @@ async function seedScenarioTranslation(
 async function seedScenarioRegistration(
   input: WordPressInitialization,
 ): Promise<void> {
-  if (input.scenario?.id === USER_REGISTRATION_SCENARIO_ID)
+  if (
+    input.scenario?.id === USER_REGISTRATION_SCENARIO_ID ||
+    input.scenario?.id === USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID
+  )
     await input.wp(input.resource, [
       "eval",
       userRegistrationOrdinarySetupScript(),
     ]);
+}
+
+async function seedScenarioMembership(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id !== USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID) return;
+  await input.wp(input.resource, [
+    "eval",
+    userRegistrationMembershipInstallScript(),
+  ]);
+  // Module classes are loaded at bootstrap, after the installer's option write.
+  await input.wp(input.resource, [
+    "eval",
+    userRegistrationMembershipEnrollmentScript(input.subscriber.username),
+  ]);
 }
 
 async function seedScenarioCommentForm(
@@ -231,6 +254,7 @@ export async function initializeWordPress(
   await seedScenarioContent(input);
   await seedScenarioTranslation(input);
   await seedScenarioRegistration(input);
+  await seedScenarioMembership(input);
   await seedScenarioCommentForm(input);
 }
 
