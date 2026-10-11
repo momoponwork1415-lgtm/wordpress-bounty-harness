@@ -170,6 +170,7 @@ describe("WordPress principal judges", () => {
     const published = await publishReproductionPackage({
       store,
       renderer: wordpressReproductionRenderer,
+      category: "account-takeover",
       findingSnapshotDigest: snapshotDigest,
       labSnapshotDigest: snapshotDigest,
       labSetupDigest: setupDigest,

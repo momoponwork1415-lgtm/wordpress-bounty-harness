@@ -23,6 +23,8 @@ const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export interface VerifiableFinding {
   readonly findingId: string;
   readonly snapshotDigest: string;
+  /** Profile classification, used only to select a reproduction template. */
+  readonly impact?: string;
 }
 
 type FindingRecord = Extract<LedgerEventV1, { type: "finding-recorded" }>;
@@ -375,6 +377,7 @@ export class Verification<
       return publishReproductionPackage({
         store: this.#options.store,
         renderer: this.#options.renderer,
+        category: finding.impact ?? "unclassified",
         findingSnapshotDigest: snapshotDigest,
         labSnapshotDigest: lab.snapshotDigest,
         labSetupDigest: lab.setupDigest,
