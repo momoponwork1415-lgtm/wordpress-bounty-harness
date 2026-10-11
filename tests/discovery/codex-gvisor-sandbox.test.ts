@@ -74,7 +74,7 @@ describe("gVisor Codex sandbox", () => {
             await mkdir(sessionDirectory, { recursive: true });
             await writeFile(
               join(sessionDirectory, "rollout-child.jsonl"),
-              '{"type":"session_meta","payload":{"id":"child"}}\n',
+              '{"type":"session_meta","payload":{"id":"child","source":"exec"}}\n',
             );
           }
           const output = args.includes("--version")
@@ -139,7 +139,7 @@ describe("gVisor Codex sandbox", () => {
         },
       });
       expect(result.rollouts).toEqual([
-        '{"type":"session_meta","payload":{"id":"child"}}\n',
+        '{"type":"session_meta","payload":{"id":"child","source":"exec"}}\n',
       ]);
       // The login lives only for the run.
       await expect(stat(codexHome)).rejects.toThrow();
@@ -149,6 +149,124 @@ describe("gVisor Codex sandbox", () => {
           grant: { ...command.grant, baseUrl: "https://chatgpt.com:8080" },
         }),
       ).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("captures Root and the earliest three children when more than sixteen sessions exist", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
+    try {
+      const source = join(root, "source");
+      await mkdir(source);
+      await writeFile(join(source, "main.txt"), "fixed source");
+      const expectedTree = await measureCanonicalSourceTree(source, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      const sandbox = new GvisorCodexSandbox({
+        dockerExecutablePath: "/usr/bin/docker",
+        image: `node@${digest}`,
+        bundledCatalogPath: "/opt/codex/model-catalog.json",
+        scratchRootDirectory: root,
+        maxOutputBytes: 1024 * 1024,
+        timeoutMs: 60_000,
+        runDocker: async (args) => {
+          if (args.includes("--network=internal-run")) {
+            const mount = args.find((arg) => arg.endsWith(",dst=/tmp/codex"));
+            const codexHome =
+              /^--mount=type=bind,src=(.+),dst=\/tmp\/codex$/.exec(
+                mount ?? "",
+              )?.[1];
+            if (codexHome === undefined)
+              throw new Error("Codex home is missing");
+            const sessions = join(codexHome, "sessions", "2026", "10", "08");
+            await mkdir(sessions, { recursive: true });
+            await writeFile(
+              join(sessions, "rollout-zz-root.jsonl"),
+              `${JSON.stringify({
+                timestamp: "2026-10-08T07:00:00Z",
+                type: "session_meta",
+                payload: { id: "root", source: "exec" },
+              })}\nROOT_REPORT\n`,
+            );
+            for (let child = 0; child < 20; child++) {
+              const minute = child === 0 ? 4 : child === 3 ? 1 : child;
+              await writeFile(
+                join(
+                  sessions,
+                  `rollout-${String(child).padStart(2, "0")}.jsonl`,
+                ),
+                `${JSON.stringify({
+                  timestamp: `2026-10-08T07:${String(minute).padStart(2, "0")}:00Z`,
+                  type: "session_meta",
+                  payload: {
+                    id: `child-${child}`,
+                    source: {
+                      subagent: {
+                        thread_spawn: {
+                          parent_thread_id: "root",
+                          depth: 1,
+                          agent_path: `/root/child_${child}`,
+                        },
+                      },
+                    },
+                  },
+                })}\nCHILD_REPORT_${child}\n`,
+              );
+            }
+          }
+          return {
+            kind: "exited" as const,
+            exitCode: 0,
+            stdout: args.includes("--version")
+              ? "codex-cli 0.161.0\n"
+              : args.includes("--entrypoint=sha256sum")
+                ? `${"b".repeat(64)}  /opt/codex/model-catalog.json\n`
+                : "{}\n",
+            stderr: "",
+          };
+        },
+      });
+      const result = await sandbox.execute({
+        executable: "codex",
+        args: ["exec", "--json"],
+        stdin: "Inspect the source.",
+        supportFiles: [
+          { path: "/opt/codex-support/report-schema.json", content: "{}" },
+        ],
+        grant: {
+          baseUrl: "http://172.28.0.2:8080",
+          authorization: `Bearer ${randomBytes(32).toString("hex")}`,
+          dockerNetworkName: "internal-run",
+          model: "gpt-6.1-sol",
+          protocol: "responses",
+          expiresAt: "2026-10-08T07:30:00Z",
+        },
+        sourceMount: {
+          directory: source,
+          path: "/workspace/main",
+          mode: "ro",
+          expectedTree,
+        },
+        labHost: { name: "wordpress", ipv4: "172.20.0.2" },
+      });
+      expect(result.rolloutFailure).toBeUndefined();
+      expect(result.rollouts).toHaveLength(21);
+      expect(result.rollouts?.some((raw) => raw.includes("ROOT_REPORT"))).toBe(
+        true,
+      );
+      const completeChildren = result.rollouts
+        ?.filter((raw) => raw.includes("CHILD_REPORT_"))
+        .map((raw) => /CHILD_REPORT_(\d+)/.exec(raw)?.[1]);
+      expect(completeChildren).toEqual(["1", "2", "3"]);
+      const metadataOnly = result.rollouts?.filter(
+        (raw) => !raw.includes("ROOT_REPORT") && !raw.includes("CHILD_REPORT_"),
+      );
+      expect(metadataOnly).toHaveLength(17);
+      expect(
+        metadataOnly?.every((raw) => raw.trimEnd().split("\n").length === 1),
+      ).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

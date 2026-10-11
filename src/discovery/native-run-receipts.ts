@@ -48,6 +48,10 @@ const bodySchema = z.strictObject({
   subagent: z.strictObject({ modelId: reported, effort: reported }),
   usage,
   observed: observed.optional(),
+  /** Unique direct child threads seen in the Root rollout. */
+  childThreadsObserved: count.optional(),
+  /** Direct child threads selected for capture, at most three. */
+  childThreadsAdmitted: count.optional(),
   brokerMetrics: z
     .strictObject({
       forwardedRequests: count,
@@ -110,6 +114,26 @@ export const nativeRunReceiptSchema = bodySchema
         message: "Terminal and reason mismatch",
       });
     }
+    if (
+      (receipt.childThreadsObserved === undefined) !==
+      (receipt.childThreadsAdmitted === undefined)
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["childThreadsAdmitted"],
+        message: "Child counts must be recorded together",
+      });
+    if (
+      receipt.childThreadsAdmitted !== undefined &&
+      (receipt.childThreadsAdmitted > 3 ||
+        (receipt.childThreadsObserved !== undefined &&
+          receipt.childThreadsAdmitted > receipt.childThreadsObserved))
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["childThreadsAdmitted"],
+        message: "Admitted child count exceeds observed count or limit",
+      });
   });
 export type NativeRunReceipt = z.infer<typeof nativeRunReceiptSchema>;
 
@@ -129,6 +153,8 @@ export function createNativeRunReceipt(
     readonly completedAt: string;
     readonly usage?: z.infer<typeof usage>;
     readonly observed?: z.infer<typeof observed>;
+    readonly childThreadsObserved?: number;
+    readonly childThreadsAdmitted?: number;
     readonly brokerMetrics?: NativeRunReceipt["brokerMetrics"];
     readonly sandboxExitCode?: number;
     readonly diagnosticArtifactDigest?: string;
@@ -158,6 +184,12 @@ export function createNativeRunReceipt(
       reasoningOutputTokens: "unavailable",
     },
     ...(input.observed === undefined ? {} : { observed: input.observed }),
+    ...(input.childThreadsObserved === undefined
+      ? {}
+      : { childThreadsObserved: input.childThreadsObserved }),
+    ...(input.childThreadsAdmitted === undefined
+      ? {}
+      : { childThreadsAdmitted: input.childThreadsAdmitted }),
     ...(input.brokerMetrics === undefined
       ? {}
       : { brokerMetrics: input.brokerMetrics }),

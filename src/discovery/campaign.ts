@@ -488,6 +488,8 @@ export async function runDiscoveryCampaign(options: {
       let wallTimeMs = 0;
       let usage: NativeRunReceipt["usage"] | undefined;
       let observed: NativeRunReceipt["observed"] | undefined;
+      let childThreadsObserved: number | undefined;
+      let childThreadsAdmitted: number | undefined;
       let brokerMetrics: NativeRunReceipt["brokerMetrics"];
       let sandboxExitCode: number | undefined;
       let diagnosticArtifactDigest: string | undefined;
@@ -522,6 +524,8 @@ export async function runDiscoveryCampaign(options: {
         );
         usage = receipt.usage;
         observed = receipt.observed;
+        childThreadsObserved = receipt.childThreadsObserved;
+        childThreadsAdmitted = receipt.childThreadsAdmitted;
         brokerMetrics = receipt.brokerMetrics;
         sandboxExitCode = receipt.sandboxExitCode;
         diagnosticArtifactDigest = receipt.diagnosticArtifactDigest;
@@ -582,6 +586,8 @@ export async function runDiscoveryCampaign(options: {
         wallTimeMs,
         ...(usage === undefined ? {} : { usage }),
         ...(observed === undefined ? {} : { observed }),
+        ...(childThreadsObserved === undefined ? {} : { childThreadsObserved }),
+        ...(childThreadsAdmitted === undefined ? {} : { childThreadsAdmitted }),
         ...(brokerMetrics === undefined ? {} : { brokerMetrics }),
         ...(sandboxExitCode === undefined ? {} : { sandboxExitCode }),
         ...(diagnosticArtifactDigest === undefined

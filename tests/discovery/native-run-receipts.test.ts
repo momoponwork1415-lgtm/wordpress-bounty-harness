@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { defineAgentRuntimeProfile } from "../../src/discovery/index.js";
 import {
   createNativeRunReceipt,
+  nativeRunReceiptSchema,
   NativeRunReceiptStore,
 } from "../../src/discovery/index.js";
 
@@ -48,6 +49,8 @@ describe("native run receipts", () => {
         status: "missing",
       });
       expect(receipt.usage.inputTokens).toBe("unavailable");
+      expect(receipt.childThreadsObserved).toBeUndefined();
+      expect(receipt.childThreadsAdmitted).toBeUndefined();
       await expect(
         store.finalize(
           identity,
@@ -63,5 +66,43 @@ describe("native run receipts", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("binds observed and admitted child counts without changing legacy receipts", () => {
+    const counted = createNativeRunReceipt({
+      ...identity,
+      terminal: "completed",
+      reason: "unavailable",
+      startedAt: "2026-10-08T00:00:00Z",
+      completedAt: "2026-10-08T00:00:01Z",
+      childThreadsObserved: 4,
+      childThreadsAdmitted: 3,
+    });
+    expect(nativeRunReceiptSchema.parse(counted)).toMatchObject({
+      childThreadsObserved: 4,
+      childThreadsAdmitted: 3,
+    });
+    expect(nativeRunReceiptSchema.parse(receipt)).toEqual(receipt);
+    expect(() =>
+      createNativeRunReceipt({
+        ...identity,
+        terminal: "completed",
+        reason: "unavailable",
+        startedAt: "2026-10-08T00:00:00Z",
+        completedAt: "2026-10-08T00:00:01Z",
+        childThreadsObserved: 4,
+        childThreadsAdmitted: 4,
+      }),
+    ).toThrow();
+    expect(() =>
+      createNativeRunReceipt({
+        ...identity,
+        terminal: "completed",
+        reason: "unavailable",
+        startedAt: "2026-10-08T00:00:00Z",
+        completedAt: "2026-10-08T00:00:01Z",
+        childThreadsAdmitted: 4,
+      }),
+    ).toThrow();
   });
 });

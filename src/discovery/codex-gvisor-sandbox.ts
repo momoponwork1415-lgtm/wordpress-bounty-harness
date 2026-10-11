@@ -1,13 +1,14 @@
 import {
   lstat,
   mkdtemp,
-  readFile,
+  open,
   readdir,
   realpath,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
+import { constants } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { isIP } from "node:net";
 
@@ -43,10 +44,137 @@ const imageSchema = z
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const networkSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
 
-/** Read only bounded CLI session files from this run's throwaway home. */
+const MAX_SESSION_FILES = 256;
+const MAX_SESSION_HEADER_BYTES = 64 * 1024;
+const MAX_SESSION_BYTES = 60 * 1024 * 1024;
+const MAX_CAPTURE_BYTES = 240 * 1024 * 1024;
+
+type SessionHeader = {
+  readonly file: string;
+  readonly order: number;
+  readonly threadId: string;
+  readonly startedAt: string;
+  readonly kind: "root" | "child";
+  readonly parentThreadId?: string;
+  readonly agentPath?: string;
+};
+
+/** A positional read bounds memory even if a session file changes after stat. */
+async function readSessionFile(
+  file: string,
+  maxBytes: number,
+  requireWholeFile: boolean,
+): Promise<string> {
+  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const entry = await handle.stat();
+    if (!entry.isFile() || entry.nlink !== 1)
+      throw new Error("Codex session file is unsafe");
+    if (requireWholeFile && entry.size > maxBytes)
+      throw new Error("Codex session evidence limit exceeded");
+    const length = Math.min(entry.size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const read = await handle.read(buffer, offset, length - offset, offset);
+      if (read.bytesRead === 0) break;
+      offset += read.bytesRead;
+    }
+    if (requireWholeFile && offset !== length)
+      throw new Error("Codex session file changed during capture");
+    return buffer.toString("utf8", 0, offset);
+  } finally {
+    await handle.close();
+  }
+}
+
+function sessionHeader(
+  raw: string,
+  file: string,
+  order: number,
+): SessionHeader | undefined {
+  for (const line of raw.split("\n")) {
+    let event: unknown;
+    try {
+      event = JSON.parse(line) as unknown;
+    } catch {
+      continue;
+    }
+    if (typeof event !== "object" || event === null || Array.isArray(event))
+      continue;
+    const record = event as Record<string, unknown>;
+    if (record.type !== "session_meta") continue;
+    const payload = record.payload;
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      Array.isArray(payload)
+    )
+      return undefined;
+    const meta = payload as Record<string, unknown>;
+    if (typeof meta.id !== "string") return undefined;
+    const startedAt =
+      typeof record.timestamp === "string"
+        ? record.timestamp
+        : new Date(0).toISOString();
+    if (meta.source === "exec")
+      return { file, order, threadId: meta.id, startedAt, kind: "root" };
+    const source = meta.source;
+    if (typeof source !== "object" || source === null || Array.isArray(source))
+      return undefined;
+    const subagent = (source as Record<string, unknown>).subagent;
+    if (
+      typeof subagent !== "object" ||
+      subagent === null ||
+      Array.isArray(subagent)
+    )
+      return undefined;
+    const spawn = (subagent as Record<string, unknown>).thread_spawn;
+    if (typeof spawn !== "object" || spawn === null || Array.isArray(spawn))
+      return undefined;
+    const child = spawn as Record<string, unknown>;
+    if (
+      typeof child.parent_thread_id !== "string" ||
+      child.depth !== 1 ||
+      typeof child.agent_path !== "string"
+    )
+      return undefined;
+    return {
+      file,
+      order,
+      threadId: meta.id,
+      startedAt,
+      kind: "child",
+      parentThreadId: child.parent_thread_id,
+      agentPath: child.agent_path,
+    };
+  }
+  return undefined;
+}
+
+function childMetadataOnly(header: SessionHeader): string {
+  return `${JSON.stringify({
+    timestamp: header.startedAt,
+    type: "session_meta",
+    payload: {
+      id: header.threadId,
+      source: {
+        subagent: {
+          thread_spawn: {
+            parent_thread_id: header.parentThreadId,
+            depth: 1,
+            agent_path: header.agentPath,
+          },
+        },
+      },
+    },
+  })}\n`;
+}
+
+/** Capture Root and the first three direct children, counting later children by metadata. */
 async function collectRollouts(home: string): Promise<readonly string[]> {
   const sessions = join(home, "sessions");
-  if (!(await stat(sessions).catch(() => undefined))?.isDirectory()) return [];
+  if (!(await lstat(sessions).catch(() => undefined))?.isDirectory()) return [];
   const files: string[] = [];
   const visit = async (directory: string, depth: number): Promise<void> => {
     if (depth > 5) throw new Error("Codex session tree is too deep");
@@ -60,18 +188,62 @@ async function collectRollouts(home: string): Promise<readonly string[]> {
         /^rollout-[A-Za-z0-9_.-]+\.jsonl$/.test(entry.name)
       )
         files.push(path);
-      if (files.length > 16) throw new Error("Codex session count exceeded");
+      if (files.length > MAX_SESSION_FILES)
+        throw new Error("Codex session count exceeded");
     }
   };
   await visit(sessions, 0);
+  const headers: SessionHeader[] = [];
+  for (const [order, file] of files.sort().entries()) {
+    const header = sessionHeader(
+      await readSessionFile(file, MAX_SESSION_HEADER_BYTES, false),
+      file,
+      order,
+    );
+    if (header !== undefined) headers.push(header);
+  }
+  const roots = headers.filter((header) => header.kind === "root");
+  const rootIds = new Set(roots.map((header) => header.threadId));
+  const children = headers
+    .filter(
+      (header) =>
+        header.kind === "child" &&
+        header.parentThreadId !== undefined &&
+        rootIds.has(header.parentThreadId),
+    )
+    .sort(
+      (left, right) =>
+        left.startedAt.localeCompare(right.startedAt) ||
+        left.order - right.order,
+    );
+  const admitted = new Set(roots.map((header) => header.file));
+  const admittedIds = new Set<string>();
+  const capturedChildIds = new Set<string>();
+  for (const child of children) {
+    if (admittedIds.has(child.threadId)) continue;
+    admittedIds.add(child.threadId);
+    if (admittedIds.size <= 3) {
+      admitted.add(child.file);
+      capturedChildIds.add(child.threadId);
+    }
+  }
   const rollouts: string[] = [];
   let bytes = 0;
-  for (const file of files.sort()) {
-    const size = (await stat(file)).size;
+  for (const header of headers) {
+    if (!admitted.has(header.file)) {
+      if (
+        header.kind === "child" &&
+        rootIds.has(header.parentThreadId ?? "") &&
+        !capturedChildIds.has(header.threadId)
+      )
+        rollouts.push(childMetadataOnly(header));
+      continue;
+    }
+    const size = (await stat(header.file)).size;
     bytes += size;
-    if (size > 60 * 1024 * 1024 || bytes > 240 * 1024 * 1024)
+    if (size > MAX_SESSION_BYTES || bytes > MAX_CAPTURE_BYTES)
       throw new Error("Codex session evidence limit exceeded");
-    rollouts.push(await readFile(file, "utf8"));
+    rollouts.push(await readSessionFile(header.file, MAX_SESSION_BYTES, true));
   }
   return rollouts;
 }

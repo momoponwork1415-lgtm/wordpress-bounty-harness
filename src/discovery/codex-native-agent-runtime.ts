@@ -839,6 +839,8 @@ type ExecutionState = {
   readonly startedAt: string;
   readonly cooperative: boolean;
   agentRuns: readonly AgentRun[];
+  childThreadsObserved: number | undefined;
+  childThreadsAdmitted: number | undefined;
   rootDiagnosticArtifactDigest: string | undefined;
   rootUsage: NativeRunReceipt["usage"] | undefined;
   rootObserved: Observed | undefined;
@@ -875,6 +877,12 @@ function incompleteExecution(
       ...(state.rootObserved === undefined
         ? {}
         : { observed: state.rootObserved }),
+      ...(state.childThreadsObserved === undefined
+        ? {}
+        : { childThreadsObserved: state.childThreadsObserved }),
+      ...(state.childThreadsAdmitted === undefined
+        ? {}
+        : { childThreadsAdmitted: state.childThreadsAdmitted }),
       ...(state.brokerMetrics === undefined
         ? {}
         : { brokerMetrics: state.brokerMetrics }),
@@ -1099,6 +1107,8 @@ export class CodexNativeAgentRuntime {
       startedAt: this.clock().toISOString(),
       cooperative: cooperativeRun(run),
       agentRuns: [],
+      childThreadsObserved: undefined,
+      childThreadsAdmitted: undefined,
       rootDiagnosticArtifactDigest: undefined,
       rootUsage: undefined,
       rootObserved: undefined,
@@ -1206,13 +1216,17 @@ export class CodexNativeAgentRuntime {
     grantReceiptDigest: string,
   ): Promise<{ reason: IncompleteReason; reasonDetail: string } | undefined> {
     const parentThreadId = rootThreadId(result.stdout);
-    if (parentThreadId !== undefined)
-      state.agentRuns = await this.#captureChildren(
+    if (parentThreadId !== undefined) {
+      const children = await this.#captureChildren(
         state.run,
         result.rollouts ?? [],
         parentThreadId,
         grantReceiptDigest,
       );
+      state.agentRuns = children.agentRuns;
+      state.childThreadsObserved = children.observed;
+      state.childThreadsAdmitted = children.admitted;
+    }
     if (result.rolloutFailure !== undefined)
       return { reason: "evidence", reasonDetail: "rollout-capture-failed" };
     if (parentThreadId === undefined)
@@ -1227,8 +1241,6 @@ export class CodexNativeAgentRuntime {
     } catch {
       return { reason: "evidence", reasonDetail: "root-rollout-unavailable" };
     }
-    if (state.agentRuns.length > 3)
-      return { reason: "policy", reasonDetail: "child-count-exceeded" };
     return undefined;
   }
 
@@ -1262,18 +1274,30 @@ export class CodexNativeAgentRuntime {
     rollouts: readonly string[],
     parentThreadId: string,
     grantReceiptDigest: string,
-  ): Promise<AgentRun[]> {
+  ): Promise<{
+    agentRuns: AgentRun[];
+    observed: number;
+    admitted: number;
+  }> {
     const seen = new Set<string>();
-    const children: AgentRun[] = [];
-    for (const raw of rollouts) {
+    const children: { child: ChildRollout; raw: string; order: number }[] = [];
+    for (const [order, raw] of rollouts.entries()) {
       const child = decodeChildRollout(raw, parentThreadId);
       if (child === undefined || seen.has(child.threadId)) continue;
       seen.add(child.threadId);
-      children.push(
+      children.push({ child, raw, order });
+    }
+    children.sort((left, right) => {
+      const byStart = left.child.startedAt.localeCompare(right.child.startedAt);
+      return byStart || left.order - right.order;
+    });
+    const admitted = children.slice(0, 3);
+    const agentRuns: AgentRun[] = [];
+    for (const { child, raw } of admitted)
+      agentRuns.push(
         await this.#captureChild(run, child, raw, grantReceiptDigest),
       );
-    }
-    return children;
+    return { agentRuns, observed: children.length, admitted: admitted.length };
   }
 
   async #captureChild(
@@ -1501,6 +1525,12 @@ export class CodexNativeAgentRuntime {
         completedAt: result.completedAt,
         usage: state.rootUsage ?? decoded.usage,
         observed: state.rootObserved ?? decoded.observed,
+        ...(state.childThreadsObserved === undefined
+          ? {}
+          : { childThreadsObserved: state.childThreadsObserved }),
+        ...(state.childThreadsAdmitted === undefined
+          ? {}
+          : { childThreadsAdmitted: state.childThreadsAdmitted }),
         ...(state.brokerMetrics === undefined
           ? {}
           : { brokerMetrics: state.brokerMetrics }),
