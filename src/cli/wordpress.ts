@@ -31,6 +31,7 @@ import {
 import {
   planWordPressEntryAssignments,
   renderWordPressEntryAssignment,
+  renderWordPressEntryIndex,
   type WordPressEntryAssignment,
 } from "../profiles/wordpress/discovery/entry-points.js";
 import { buildWordPressSourceIndex } from "../profiles/wordpress/discovery/storage-index.js";
@@ -150,6 +151,8 @@ export const wordpressCampaignConfigSchema = z
         runWallTimeMinutes: z.number().positive().max(120).default(30),
       })
       .optional(),
+    /** Fixed-source registration catalogue; false is a recorded experimental control. */
+    entryIndex: z.boolean().default(true),
     /** Opt-in connected entry scopes; the index is profile-owned and does not constrain exploration. */
     assignment: z
       .strictObject({
@@ -458,6 +461,7 @@ export function createWordPressCliProfile(options: {
               target.runBudget,
             );
             const sourceIndex =
+              !config.entryIndex &&
               config.assignment === undefined &&
               config.continuation === undefined
                 ? undefined
@@ -465,6 +469,10 @@ export function createWordPressCliProfile(options: {
                     source.directory,
                     target.slug,
                   );
+            const entryIndexMetadata =
+              !config.entryIndex || sourceIndex === undefined
+                ? ({ enabled: false } as const)
+                : ({ enabled: true, digest: sourceIndex.digest } as const);
             let assignments: readonly WordPressEntryAssignment[] = [];
             if (config.assignment !== undefined) {
               if (sourceIndex === undefined)
@@ -524,6 +532,9 @@ export function createWordPressCliProfile(options: {
                         source.dependency !== undefined,
                       ),
                     ]),
+                ...(config.entryIndex && sourceIndex !== undefined
+                  ? [renderWordPressEntryIndex(sourceIndex)]
+                  : []),
               ].join("\n\n");
             const assignmentMetadata = (
               assignment: WordPressEntryAssignment,
@@ -556,6 +567,7 @@ export function createWordPressCliProfile(options: {
                 stopRules,
                 lab: { setupDigest: lab.setupDigest },
                 history: historyFor(config, target),
+                entryIndex: entryIndexMetadata,
               },
               historyFraction:
                 config.ablation?.axes.find((axis) => axis.axis === "history")
@@ -610,6 +622,7 @@ export function createWordPressCliProfile(options: {
                       },
                       assignmentUnit:
                         assignment === undefined ? "plugin" : "entry-point",
+                      entryIndex: entryIndexMetadata,
                       ...(assignment === undefined
                         ? {}
                         : { assignment: assignmentMetadata(assignment) }),

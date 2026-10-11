@@ -22,6 +22,7 @@ import {
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acquisition/index.js";
 import { wordPressDiscoveryOutputContract } from "../../src/profiles/wordpress/discovery/output-contract.js";
+import { buildWordPressSourceIndex } from "../../src/profiles/wordpress/discovery/storage-index.js";
 import {
   openWordPressLab,
   type DockerRequest,
@@ -320,6 +321,8 @@ async function harness(
   const attachments = new ProviderAttachmentStore(join(root, "provider"));
   const prompts: string[] = [];
   const promptDigests: string[] = [];
+  const entryIndexes: DiscoveryTransportRun["campaignInput"]["entryIndex"][] =
+    [];
   const histories: string[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
@@ -349,6 +352,7 @@ async function harness(
       async execute(run: DiscoveryTransportRun) {
         const call = prompts.push(run.prompt);
         promptDigests.push(run.campaignInput.promptDigest);
+        entryIndexes.push(run.campaignInput.entryIndex);
         histories.push(run.campaignInput.history.mode);
         maxInFlight = Math.max(maxInFlight, ++inFlight);
         await new Promise((resolve) => setTimeout(resolve, 5));
@@ -551,6 +555,7 @@ async function harness(
     keysPath,
     prompts,
     promptDigests,
+    entryIndexes,
     histories,
     docker,
     root,
@@ -1034,6 +1039,69 @@ describe("harness CLI vertical slice", () => {
       );
       expect(JSON.stringify(event)).not.toContain("synthetic_plugin_shared");
     }
+  });
+
+  it("sends the full entry catalogue by default and pins its digest in input and ledger", async () => {
+    const { run, configPath, prompts, entryIndexes, ledger, root } =
+      await harness({
+        entryPoints: true,
+        config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
+      });
+    const expected = await buildWordPressSourceIndex(
+      join(root, "source"),
+      "synthetic-plugin",
+    );
+    const campaign = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-index-default",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("## Entry points");
+    expect(prompts[0]).toContain(`Index digest: ${expected.digest}`);
+    expect(prompts[0]).toContain("wp_ajax_nopriv_synthetic_save");
+    expect(prompts[0]).not.toContain("partition");
+    expect(entryIndexes).toEqual([{ enabled: true, digest: expected.digest }]);
+    const started = ledger().read({
+      campaignId: "campaign-index-default",
+      type: "discovery-run-started",
+    });
+    expect(started[0]?.event).toMatchObject({
+      configuration: { entryIndex: { enabled: true, digest: expected.digest } },
+    });
+  });
+
+  it("records the entry-index control when one config field disables the catalogue", async () => {
+    const { run, configPath, prompts, entryIndexes, ledger } = await harness({
+      entryPoints: true,
+      config: {
+        entryIndex: false,
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-index-off",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(prompts[0]).not.toContain("## Entry points");
+    expect(entryIndexes).toEqual([{ enabled: false }]);
+    expect(
+      ledger().read({
+        campaignId: "campaign-index-off",
+        type: "discovery-run-started",
+      })[0]?.event,
+    ).toMatchObject({ configuration: { entryIndex: { enabled: false } } });
   });
 
   it("splits runs into history arms and reads runs and Findings per arm from the ledger", async () => {
