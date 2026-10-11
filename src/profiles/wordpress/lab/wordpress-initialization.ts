@@ -10,6 +10,10 @@ import {
   translatePressLocaleSetupScript,
   type WordPressScenario,
 } from "./scenarios.js";
+import {
+  USER_REGISTRATION_SCENARIO_ID,
+  userRegistrationOrdinarySetupScript,
+} from "./user-registration-adapter.js";
 
 type WordPressCommand = (
   resource: Resources,
@@ -194,6 +198,16 @@ async function seedScenarioTranslation(
   if (script !== undefined) await input.wp(input.resource, ["eval", script]);
 }
 
+async function seedScenarioRegistration(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id === USER_REGISTRATION_SCENARIO_ID)
+    await input.wp(input.resource, [
+      "eval",
+      userRegistrationOrdinarySetupScript(),
+    ]);
+}
+
 /** Initialize the isolated WordPress site after all containers are healthy. */
 export async function initializeWordPress(
   input: WordPressInitialization,
@@ -205,6 +219,7 @@ export async function initializeWordPress(
   await seedInitialPosts(input);
   await seedScenarioContent(input);
   await seedScenarioTranslation(input);
+  await seedScenarioRegistration(input);
 }
 
 /** Grant SELECT on the tables present at provision time, before canary placement. */
