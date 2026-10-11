@@ -14,6 +14,11 @@ import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-
 import { Ledger } from "../../src/ledger/index.js";
 import { admitWordPressFinding } from "../../src/profiles/wordpress/discovery/finding.js";
 import {
+  admitWordPressLead,
+  readWordPressLead,
+  wordPressLeadSignature,
+} from "../../src/profiles/wordpress/discovery/lead.js";
+import {
   classifyWordPressCandidate,
   normalizeWordPressCandidate,
 } from "../../src/profiles/wordpress/discovery/normalize-candidate.js";
@@ -44,6 +49,8 @@ async function campaign(
     readonly childSurvivesBrokenRoot?: boolean;
     readonly heldOnly?: boolean;
     readonly rootTranscriptInvalid?: boolean;
+    readonly screening?: boolean;
+    readonly leadOnly?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-campaign-"));
@@ -86,9 +93,14 @@ async function campaign(
     programmeBoundary: { version: "v1", text: "Synthetic boundary" },
     modelProfileDigest: profile.digest,
     promptDigest: digest,
-    stopRules: { maxRuns: 6, noFindingRuns: 2 },
+    stopRules: options.screening
+      ? { maxRuns: 1, noFindingRuns: 1 }
+      : { maxRuns: 6, noFindingRuns: 2 },
     lab: { setupDigest: digest },
     history,
+    ...(options.screening
+      ? { entryIndex: { enabled: true as const, digest } }
+      : {}),
   };
   const claim = {
     claim: "Synthetic account state change",
@@ -100,7 +112,7 @@ async function campaign(
       { file: "includes/example.php", function: "fixture", line: 12 },
     ],
     existingControls: "Capability check elsewhere",
-    labObservations: "Canary user changed",
+    labObservations: options.screening ? "none" : "Canary user changed",
   };
   let calls = 0;
   const result = await runDiscoveryCampaign({
@@ -108,17 +120,27 @@ async function campaign(
     labId: "lab-1",
     input,
     historyFraction: 0.5,
-    runWallTimeMs: 90 * 60_000,
-    ablation: { axes: [{ axis: "history", armBFraction: 0.5 }] },
+    runWallTimeMs: (options.screening ? 30 : 90) * 60_000,
+    ...(options.screening
+      ? {}
+      : {
+          ablation: { axes: [{ axis: "history" as const, armBFraction: 0.5 }] },
+        }),
     ledger,
     attachments,
     evidence,
     admitFinding: admitWordPressFinding,
+    admitLead: admitWordPressLead,
+    leadSignature: (lead) => wordPressLeadSignature(readWordPressLead(lead)),
     normalizeCandidate: normalizeWordPressCandidate,
     classifyCandidate: classifyWordPressCandidate,
     executor: {
       async execute(run) {
-        expect(run.expiresAt).toBe("2026-10-08T08:30:00.000Z");
+        expect(run.expiresAt).toBe(
+          options.screening
+            ? "2026-10-08T07:30:00.000Z"
+            : "2026-10-08T08:30:00.000Z",
+        );
         const ordinal = calls++;
         if (ordinal === 0 && options.rootTranscriptInvalid) {
           const attachment = await attachments.put(
@@ -195,6 +217,25 @@ async function campaign(
               : findingRuns.includes(ordinal)
                 ? [claim]
                 : [],
+          leads: options.leadOnly
+            ? [
+                {
+                  summary: "Synthetic reachable route with an unresolved edge",
+                  attackerPosition: "subscriber",
+                  primitive: "read",
+                  storage: null,
+                  missingEdge: "reachability",
+                  sourceTrace: [
+                    {
+                      file: "includes/example.php",
+                      function: "fixture",
+                      line: 12,
+                    },
+                  ],
+                  labObservations: "none",
+                },
+              ]
+            : [],
           examined: "source",
           unexamined: "none",
         };
@@ -217,30 +258,42 @@ async function campaign(
         };
       },
     },
-    plannedTrials: Array.from({ length: 6 }, (_, index) => ({
-      trialId: `run-${index}`,
-      trialOrdinal: index,
-      explore: {
-        configuration: {
-          promptVariant: index % 2 ? "wp2shell-derived" : "short-objective",
-          assignmentUnit: "route",
-        },
-        run: {
-          runId: `run-${index}`,
-          targetSnapshotDigest: digest,
-          profile,
-          prompt: "Synthetic objective",
-          sourceDirectory: "/private/source",
-          sourceTree: { digest, entries: 1, bytes: 1 },
-          lab: {
-            endpoint: "http://wordpress",
-            networkName: "lab-internal",
-            internalIp: "172.20.0.2",
+    plannedTrials: Array.from(
+      { length: options.screening ? 1 : 6 },
+      (_, index) => ({
+        trialId: `run-${index}`,
+        trialOrdinal: index,
+        ...(options.screening ? { stage: "screening" as const } : {}),
+        explore: {
+          configuration: {
+            promptVariant: options.screening
+              ? "screening-v1"
+              : index % 2
+                ? "wp2shell-derived"
+                : "short-objective",
+            assignmentUnit: "route",
+            ...(options.screening
+              ? { entryIndex: { enabled: true as const, digest } }
+              : {}),
           },
-          expiresAt: "2026-10-08T07:30:00Z",
+          run: {
+            runId: `run-${index}`,
+            targetSnapshotDigest: digest,
+            profile,
+            ...(options.screening ? { coordination: "solo" as const } : {}),
+            prompt: "Synthetic objective",
+            sourceDirectory: "/private/source",
+            sourceTree: { digest, entries: 1, bytes: 1 },
+            lab: {
+              endpoint: "http://wordpress",
+              networkName: "lab-internal",
+              internalIp: "172.20.0.2",
+            },
+            expiresAt: "2026-10-08T07:30:00Z",
+          },
         },
-      },
-    })),
+      }),
+    ),
     clock: () => new Date("2026-10-08T07:00:00Z"),
   });
   return { result, calls, ledger, evidence };
@@ -300,6 +353,40 @@ it("keeps raw held candidates and stops at the output boundary", async () => {
     ref &&
       (await evidence.readFile(ref.digest, "candidate.json", 100_000)).status,
   ).toBe("resolved");
+});
+
+it("records one indexed screening Trial and leaves zero candidates unexplored", async () => {
+  const { result, calls, ledger } = await campaign([], { screening: true });
+  expect(result).toEqual({
+    runCount: 1,
+    findingsRecorded: 0,
+    stoppedBy: "screened-no-candidate",
+  });
+  expect(calls).toBe(1);
+  expect(
+    ledger.read({ type: "discovery-run-started" })[0]?.event,
+  ).toMatchObject({
+    stage: "screening",
+    trialId: "run-0",
+    configuration: {
+      promptVariant: "screening-v1",
+      entryIndex: { enabled: true, digest },
+    },
+  });
+  expect(ledger.read({ type: "discovery-concluded" })[0]?.event).toMatchObject({
+    stoppedBy: "screened-no-candidate",
+  });
+});
+
+it("does not treat a screening Lead or held candidate as a negative result", async () => {
+  const finding = await campaign([0], { screening: true });
+  expect(finding.result.stoppedBy).toBe("max-runs");
+  expect(finding.ledger.read({ type: "finding-recorded" })).toHaveLength(1);
+  const lead = await campaign([], { screening: true, leadOnly: true });
+  expect(lead.result.stoppedBy).toBe("max-runs");
+  expect(lead.ledger.read({ type: "lead-recorded" })).toHaveLength(1);
+  const held = await campaign([], { screening: true, heldOnly: true });
+  expect(held.result.stoppedBy).toBe("output-boundary");
 });
 
 it("stops after consecutive completed runs without a new Finding and records each run configuration", async () => {

@@ -122,9 +122,7 @@ export const wordpressCampaignConfigSchema = z
   .strictObject({
     schemaVersion: z.literal(1),
     selectionPolicyPath: z.string().min(1).optional(),
-    promptId: z
-      .enum(WORDPRESS_DISCOVERY_PROMPT_IDS)
-      .default("short-objective-managed-v4"),
+    promptId: z.enum(WORDPRESS_DISCOVERY_PROMPT_IDS).default("screening-v1"),
     programmeBoundary: text,
     stopRules: z
       .strictObject({
@@ -132,7 +130,7 @@ export const wordpressCampaignConfigSchema = z
         noFindingRuns: z.number().int().positive(),
       })
       .default({ maxRuns: 6, noFindingRuns: 3 }),
-    runWallTimeMinutes: z.number().positive().max(240).default(90),
+    runWallTimeMinutes: z.number().positive().max(240).optional(),
     /** Host bounds: concurrent discovery runs and the memory the Harness may use for them. */
     resources: z
       .strictObject({
@@ -419,6 +417,20 @@ export function createWordPressCliProfile(options: {
     },
     async runCampaign(state, input) {
       const { config, policy } = await loadConfig(input.configPath);
+      const screening = config.promptId === "screening-v1";
+      if (
+        screening &&
+        (!config.entryIndex ||
+          config.assignment !== undefined ||
+          config.continuation !== undefined ||
+          config.ablation !== undefined ||
+          (config.runWallTimeMinutes !== undefined &&
+            config.runWallTimeMinutes > 30))
+      )
+        throw new Error(
+          "Screening requires an unpartitioned entry index and at most 30 minutes",
+        );
+      const wallMinutes = config.runWallTimeMinutes ?? (screening ? 30 : 90);
       const boundaries = await options.boundaries(config, state);
       const [objective, trustBoundary] = await Promise.all([
         loadWordPressDiscoveryAsset(config.promptId),
@@ -457,7 +469,7 @@ export function createWordPressCliProfile(options: {
             const source = await boundaries.sourceFor(snapshot);
             // The campaign ceiling is a safety bound; selection decides depth per target.
             const maxRuns = Math.min(
-              config.stopRules.maxRuns,
+              screening ? 1 : config.stopRules.maxRuns,
               target.runBudget,
             );
             const sourceIndex =
@@ -488,10 +500,15 @@ export function createWordPressCliProfile(options: {
               );
             const stopRules = {
               maxRuns,
-              noFindingRuns: Math.min(
-                Math.max(config.stopRules.noFindingRuns, assignments.length),
-                maxRuns,
-              ),
+              noFindingRuns: screening
+                ? 1
+                : Math.min(
+                    Math.max(
+                      config.stopRules.noFindingRuns,
+                      assignments.length,
+                    ),
+                    maxRuns,
+                  ),
             };
             const accounts = Object.entries(lab.attackerAccounts).map(
               ([role, account]) =>
@@ -572,18 +589,20 @@ export function createWordPressCliProfile(options: {
               historyFraction:
                 config.ablation?.axes.find((axis) => axis.axis === "history")
                   ?.armBFraction ?? 0,
-              runWallTimeMs: config.runWallTimeMinutes * 60_000,
-              concurrency: Math.min(
-                config.resources.maxConcurrentRuns,
-                Math.floor(
-                  config.resources.memoryBudgetMiB /
-                    (boundaries.runtimeProfile.subagent.modelId ===
-                    "unavailable"
-                      ? DISCOVERY_RUN_MEMORY_MIB
-                      : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB +
-                        EGRESS_BROKER_MEMORY_MIB),
-                ),
-              ),
+              runWallTimeMs: wallMinutes * 60_000,
+              concurrency: screening
+                ? 1
+                : Math.min(
+                    config.resources.maxConcurrentRuns,
+                    Math.floor(
+                      config.resources.memoryBudgetMiB /
+                        (boundaries.runtimeProfile.subagent.modelId ===
+                        "unavailable"
+                          ? DISCOVERY_RUN_MEMORY_MIB
+                          : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB +
+                            EGRESS_BROKER_MEMORY_MIB),
+                    ),
+                  ),
               ...(config.ablation === undefined
                 ? {}
                 : { ablation: { axes: config.ablation.axes } }),
@@ -635,6 +654,7 @@ export function createWordPressCliProfile(options: {
                       runId: trialId,
                       targetSnapshotDigest: snapshot.digest,
                       profile: boundaries.runtimeProfile,
+                      ...(screening ? { coordination: "solo" as const } : {}),
                       prompt: promptFor(assignment, selectedObjective),
                       lab: {
                         endpoint: lab.endpoint,
@@ -655,7 +675,7 @@ export function createWordPressCliProfile(options: {
                         ? {}
                         : { dependencySource: source.dependency }),
                       expiresAt: new Date(
-                        now + config.runWallTimeMinutes * 60_000,
+                        now + wallMinutes * 60_000,
                       ).toISOString(),
                     },
                   };
@@ -664,7 +684,12 @@ export function createWordPressCliProfile(options: {
                     continuationConfig === undefined ||
                     arms.continuation === "a"
                   )
-                    return { trialId, trialOrdinal, explore };
+                    return {
+                      trialId,
+                      trialOrdinal,
+                      ...(screening ? { stage: "screening" as const } : {}),
+                      explore,
+                    };
                   if (sourceIndex === undefined)
                     throw new Error("Continuation index is unavailable");
                   return {

@@ -58,6 +58,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     labId: id,
     trialId: id.optional(),
     trialOrdinal: z.number().int().nonnegative().optional(),
+    stage: z.enum(["screening", "deep-dive"]).optional(),
     runKind: z.enum(["explore", "continue", "child"]).optional(),
     continuationOf: id.optional(),
     parentRunId: id.optional(),
@@ -166,6 +167,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
   event({
     type: z.literal("discovery-concluded"),
     stoppedBy: z.enum([
+      "screened-no-candidate",
       "no-new-finding",
       "output-boundary",
       "max-runs",
@@ -176,7 +178,12 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
   event({
     type: z.literal("campaign-stopped"),
     /** Keep the historical cap reason readable; an incomplete attempt remains resumable. */
-    reason: z.enum(["provider-limit", "incomplete", "daily-run-cap"]),
+    reason: z.enum([
+      "provider-limit",
+      "incomplete",
+      "daily-run-cap",
+      "screened-no-candidate",
+    ]),
   }),
   /**
    * A target was left behind by an error. Before a snapshot exists, the

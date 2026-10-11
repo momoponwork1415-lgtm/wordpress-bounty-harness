@@ -289,6 +289,17 @@ export async function runCampaignPipeline<
         targets.push({ ...summary, verifications: [] });
         break;
       }
+      if (discovered.stoppedBy === "screened-no-candidate") {
+        await appendOnce({
+          ...base,
+          identity: `campaign-screened-no-candidate-${snapshot.digest}`,
+          occurredAt: at(),
+          type: "campaign-stopped",
+          reason: "screened-no-candidate",
+        });
+        targets.push({ ...summary, verifications: [] });
+        continue;
+      }
 
       stage = "verification";
       const latestOriginalVerification = new Map<

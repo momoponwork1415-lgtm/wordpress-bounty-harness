@@ -246,6 +246,8 @@ export type AdmittedLead = {
 export type PlannedTrial = {
   readonly trialId: string;
   readonly trialOrdinal: number;
+  /** Older Trials omit this field; screening is a single bounded pass. */
+  readonly stage?: "screening" | "deep-dive";
   readonly explore: PlannedDiscoveryRun;
   readonly continuation?: {
     readonly maxRuns: number;
@@ -264,6 +266,7 @@ const providerReportSchema = z.object({
 class DiscoveryReportError extends Error {}
 
 export type DiscoveryStop =
+  | "screened-no-candidate"
   | "no-new-finding"
   | "output-boundary"
   | "max-runs"
@@ -386,6 +389,7 @@ export async function runDiscoveryCampaign(options: {
   let runCount = 0;
   let findingsRecorded = 0;
   let stopped:
+    | "screened-no-candidate"
     | "no-new-finding"
     | "output-boundary"
     | "provider-limit"
@@ -399,6 +403,21 @@ export async function runDiscoveryCampaign(options: {
   )
     throw new Error("Invalid exploration wall time");
   const limit = Math.min(input.stopRules.maxRuns, options.plannedTrials.length);
+  if (options.plannedTrials.some((trial) => trial.stage === "screening")) {
+    if (
+      options.plannedTrials.length !== 1 ||
+      input.stopRules.maxRuns !== 1 ||
+      concurrency !== 1 ||
+      options.runWallTimeMs === undefined ||
+      options.runWallTimeMs > 30 * 60_000 ||
+      input.entryIndex?.enabled !== true ||
+      options.plannedTrials[0]?.continuation !== undefined ||
+      options.plannedTrials[0]?.explore.run.coordination !== "solo"
+    )
+      throw new Error(
+        "Screening must be one solo indexed Trial of at most 30 minutes",
+      );
+  }
   let next = spent;
   const runOne = async (index: number) => {
     const trial = options.plannedTrials[index]!;
@@ -491,6 +510,7 @@ export async function runDiscoveryCampaign(options: {
         runId: run.runId,
         trialId: trial.trialId,
         trialOrdinal: trial.trialOrdinal,
+        ...(trial.stage === undefined ? {} : { stage: trial.stage }),
         runKind,
         ...(continuationOf === undefined ? {} : { continuationOf }),
         labId: options.labId,
@@ -789,6 +809,7 @@ export async function runDiscoveryCampaign(options: {
             runId: childReceipt.runId,
             trialId: trial.trialId,
             trialOrdinal: trial.trialOrdinal,
+            ...(trial.stage === undefined ? {} : { stage: trial.stage }),
             runKind: "child",
             parentRunId: run.runId,
             labId: options.labId,
@@ -981,6 +1002,13 @@ export async function runDiscoveryCampaign(options: {
     // Stop rules are evaluated once per Trial; in-flight Trials still finish.
     if (explore.outcome === "provider-limited") stopped ??= "provider-limit";
     if (explore.outcome === "failed") stopped ??= "incomplete";
+    if (trial.stage === "screening" && explore.outcome === "completed") {
+      if (trialHeldBoundary && !trialFoundNew && explore.leads.length === 0)
+        stopped ??= "output-boundary";
+      else if (!trialFoundNew && explore.leads.length === 0)
+        stopped ??= "screened-no-candidate";
+      return;
+    }
     if (explore.outcome === "completed") {
       if (trialHeldBoundary && !trialFoundNew) stopped ??= "output-boundary";
       else noNewFindings = trialFoundNew ? 0 : noNewFindings + 1;
