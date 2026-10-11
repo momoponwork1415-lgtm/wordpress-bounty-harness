@@ -180,4 +180,18 @@ describe("WordPress scope facts from judge conditions", () => {
       }),
     ).toThrow();
   });
+
+  it("carries the Lab-observed victim identity into scope facts", () => {
+    const facts = wordpressScopeFacts({
+      category: "stored-xss",
+      conditions: {
+        ...route,
+        observedVia: "canary-beacon",
+        victimRole: "self",
+      },
+      target,
+      latestVersionVerified: true,
+    });
+    expect(facts.victimRole).toBe("self");
+  });
 });

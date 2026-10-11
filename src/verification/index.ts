@@ -85,6 +85,7 @@ export type JudgeObservation =
       readonly status: "incomplete";
       readonly reason: "precondition" | "observation" | "evidence";
       readonly nextStep: string;
+      readonly evidenceDigest?: string;
     };
 
 export interface JudgeSet<Finding, Handle extends LabHandle> {
@@ -370,6 +371,7 @@ export class Verification<
         observation.reason,
         observation.nextStep,
         attempt.refutationDigest,
+        observation.evidenceDigest,
       );
     if (observation.status === "observed") {
       if (observation.evidenceCapture !== undefined)

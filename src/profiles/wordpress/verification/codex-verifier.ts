@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { z } from "zod";
 
@@ -75,6 +75,12 @@ const recordedRequestSchema = z.looseObject({
   headers: z.record(z.string(), z.string()).optional(),
   body: z.string().optional(),
 });
+
+const STORED_SCRIPT_INSTRUCTIONS = [
+  "## Harness victim operation contract",
+  'If a stored script fires only after a victim UI action, describe that action in route.json victim.paths as {path, actions}, instead of a path string. The Lab browser supports at most three actions per path: {kind: "click", selector: "CSS selector"} or {kind: "click-text", text: "visible text", exact: false}. Use a uniquely identifiable visible element. The Harness performs these actions as the declared victim in a fresh browser; do not request victim credentials or include executable browser code.',
+  "Use canary.javascript for a direct nonce-bound POST. If the injection surface truncates long code, canary.loaderJavascript loads a short module that sends the same POST. Loading the module URL as an image or stylesheet does not record a beacon.",
+] as const;
 
 function routeStepsFromHttp(
   http: z.infer<typeof httpSchema>,
@@ -203,7 +209,12 @@ export class CodexVerifier implements Verifier<
     lab: WordPressLabHandle,
   ):
     | { readonly kind: "execution"; readonly php: string }
-    | { readonly kind: "script"; readonly beaconUrl: string }
+    | {
+        readonly kind: "script";
+        readonly beaconUrl: string;
+        readonly javascript: string;
+        readonly loaderJavascript: string;
+      }
     | { readonly kind: "principal"; readonly username: string }
     | undefined {
     switch (finding.impact) {
@@ -218,7 +229,12 @@ export class CodexVerifier implements Verifier<
         const canary = this.options.lab.prepareScriptCanary(lab);
         return canary === null
           ? undefined
-          : { kind: "script", beaconUrl: canary.beaconUrl };
+          : {
+              kind: "script",
+              beaconUrl: canary.beaconUrl,
+              javascript: canary.javascript,
+              loaderJavascript: canary.loaderJavascript,
+            };
       }
       case "auth-bypass-to-admin":
       case "account-takeover": {
@@ -300,6 +316,7 @@ export class CodexVerifier implements Verifier<
     const requiredScenario = nextWordPressScenario(
       admitted.configurationPrecondition,
       lab.scenario?.id,
+      { secondaryLocaleConfigured: lab.secondaryLocale !== undefined },
     );
     if (requiredScenario !== "catalogue に無い前提")
       return {
@@ -341,14 +358,27 @@ export class CodexVerifier implements Verifier<
         nextStep:
           "catalogue に無い前提: Issue a canary from a fresh Lab and repeat",
       };
-    const prompt = [
+    const fixedInstructions = [
       fixed.text.trim(),
+      ...(admitted.impact === "stored-xss" ? STORED_SCRIPT_INSTRUCTIONS : []),
+    ].join("\n\n");
+    // The versioned .md digest alone would hide changes to this fixed contract.
+    const promptDigest =
+      admitted.impact === "stored-xss"
+        ? `sha256:${createHash("sha256").update(fixedInstructions).digest("hex")}`
+        : fixed.digest;
+    const prompt = [
+      fixedInstructions,
       "## Finding",
       canonicalJson(admitted),
       "## Lab",
       canonicalJson({
         endpoint: lab.endpoint,
         accounts,
+        ...(lab.scenario === undefined ? {} : { scenario: lab.scenario }),
+        ...(lab.secondaryLocale === undefined
+          ? {}
+          : { secondaryLocale: lab.secondaryLocale }),
         ...(verifierDatabase === undefined
           ? {}
           : {
@@ -410,7 +440,7 @@ export class CodexVerifier implements Verifier<
           text: "Existing Finding only",
         },
         modelProfileDigest: this.options.profile.digest,
-        promptDigest: fixed.digest,
+        promptDigest,
         stopRules: { maxRuns: 1, noFindingRuns: 1 },
         lab: { setupDigest: lab.setupDigest },
         history: { mode: "none" },
@@ -449,7 +479,7 @@ export class CodexVerifier implements Verifier<
     await this.#recordRun(
       event.campaignId,
       finding.findingId,
-      fixed.digest,
+      promptDigest,
       receipt,
       canary?.kind,
     );
@@ -504,6 +534,7 @@ export class CodexVerifier implements Verifier<
         nextStep: nextWordPressScenario(
           `${admitted.configurationPrecondition} ${data.precondition}`,
           lab.scenario?.id,
+          { secondaryLocaleConfigured: lab.secondaryLocale !== undefined },
         ),
       };
     if (

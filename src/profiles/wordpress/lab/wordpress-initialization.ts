@@ -5,10 +5,15 @@ import type {
 } from "./index.js";
 import { SQL_CANARY_TABLE } from "./canary-placement.js";
 import {
+  scenarioContent,
   scenarioTranslationSeedScript,
   translatePressLocaleSetupScript,
   type WordPressScenario,
 } from "./scenarios.js";
+import {
+  USER_REGISTRATION_SCENARIO_ID,
+  userRegistrationOrdinarySetupScript,
+} from "./user-registration-adapter.js";
 
 type WordPressCommand = (
   resource: Resources,
@@ -36,6 +41,8 @@ export interface WordPressInitialization {
   }[];
   readonly subscriber: Account;
   readonly customer?: Account;
+  readonly victimSubscriber?: Account;
+  readonly victimCustomer?: Account;
   readonly wp: WordPressCommand;
   readonly requireDocker: RequireDocker;
 }
@@ -90,7 +97,14 @@ async function configureSecondaryLocale(
 }
 
 async function createAccounts(input: WordPressInitialization): Promise<void> {
-  const { resource, wp, subscriber, customer } = input;
+  const {
+    resource,
+    wp,
+    subscriber,
+    customer,
+    victimSubscriber,
+    victimCustomer,
+  } = input;
   await wp(resource, [
     "user",
     "create",
@@ -107,6 +121,24 @@ async function createAccounts(input: WordPressInitialization): Promise<void> {
       `${customer.username}@example.invalid`,
       "--role=customer",
       `--user_pass=${customer.password}`,
+    ]);
+  if (victimSubscriber !== undefined)
+    await wp(resource, [
+      "user",
+      "create",
+      victimSubscriber.username,
+      `${victimSubscriber.username}@example.invalid`,
+      "--role=subscriber",
+      `--user_pass=${victimSubscriber.password}`,
+    ]);
+  if (victimCustomer !== undefined)
+    await wp(resource, [
+      "user",
+      "create",
+      victimCustomer.username,
+      `${victimCustomer.username}@example.invalid`,
+      "--role=customer",
+      `--user_pass=${victimCustomer.password}`,
     ]);
 }
 
@@ -140,11 +172,40 @@ async function seedInitialPosts(input: WordPressInitialization): Promise<void> {
   }
 }
 
+async function seedScenarioContent(
+  input: WordPressInitialization,
+): Promise<void> {
+  const content = scenarioContent(input.scenario);
+  if (content === undefined) return;
+  const created = await input.wp(input.resource, [
+    "post",
+    "create",
+    `--post_type=${content.type}`,
+    `--post_status=${content.status}`,
+    `--post_name=${content.slug}`,
+    `--post_title=${content.title}`,
+    `--post_content=${content.body}`,
+    "--porcelain",
+  ]);
+  if (!/^[1-9][0-9]*$/.test(created.stdout.trim()))
+    throw new Error("Scenario content ID is unavailable");
+}
+
 async function seedScenarioTranslation(
   input: WordPressInitialization,
 ): Promise<void> {
   const script = scenarioTranslationSeedScript(input.scenario);
   if (script !== undefined) await input.wp(input.resource, ["eval", script]);
+}
+
+async function seedScenarioRegistration(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id === USER_REGISTRATION_SCENARIO_ID)
+    await input.wp(input.resource, [
+      "eval",
+      userRegistrationOrdinarySetupScript(),
+    ]);
 }
 
 /** Initialize the isolated WordPress site after all containers are healthy. */
@@ -156,7 +217,9 @@ export async function initializeWordPress(
   await configureSecondaryLocale(input);
   await createAccounts(input);
   await seedInitialPosts(input);
+  await seedScenarioContent(input);
   await seedScenarioTranslation(input);
+  await seedScenarioRegistration(input);
 }
 
 /** Grant SELECT on the tables present at provision time, before canary placement. */

@@ -83,6 +83,8 @@ export interface WordPressSourceResolver {
 }
 
 export interface WordPressLabHandle extends LabHandle {
+  /** Non-secret ordinary locale setting for prerequisite matching. */
+  readonly secondaryLocale?: string;
   readonly networkName: string;
   readonly internalIp: string;
   /** Verifier traffic passes through this Lab-local recorder. */
@@ -137,6 +139,10 @@ export interface WordPressSensitiveCanary {
 export interface ScriptCanary {
   readonly nonce: string;
   readonly beaconUrl: string;
+  /** Exact browser code for the nonce-bound POST; stays in Private Evidence. */
+  readonly javascript: string;
+  /** Short code for constrained surfaces; the module sends the same POST. */
+  readonly loaderJavascript: string;
 }
 
 export type WordPressScriptContext =
@@ -146,6 +152,13 @@ export type WordPressStoredScriptObservation =
   | {
       readonly status: "observed";
       readonly contexts: readonly WordPressScriptContext[];
+      /** Actual Lab browser principal when a declared victim page fired. */
+      readonly victimRole?:
+        | "administrator"
+        | "subscriber"
+        | "customer"
+        | "unauthenticated"
+        | "self";
       /** First page whose visit delivered an issued canary; stays in Private Evidence. */
       readonly screenshot?: Buffer;
     }
@@ -294,6 +307,11 @@ export interface Resources {
   readonly databasePassword: string;
   readonly readerPassword: string;
   readonly adminPassword: string;
+  /** Verification-only browser accounts, never included in the attacker handle. */
+  readonly victimAccounts: Readonly<{
+    subscriber?: { readonly username: string; readonly password: string };
+    customer?: { readonly username: string; readonly password: string };
+  }>;
   readonly administratorSecondaryLocale?: string;
   /** Only the WordPress container's environment holds this. */
   readonly executionSalt: string;
@@ -548,9 +566,13 @@ export function openWordPressLab(options: {
         );
         const { setup, scenario, target, dependencies, coreVersion } = prepared;
         await preflight();
-        const created = createLabResource(prepared);
+        const created = createLabResource(
+          prepared,
+          context?.purpose === "verification",
+        );
         resource = created.resource;
-        const { subscriber, customer } = created;
+        const { subscriber, customer, victimSubscriber, victimCustomer } =
+          created;
         const { id } = resource;
         const { internalIp, recorderIp } = await startLabContainers(resource, {
           images: options.images,
@@ -567,6 +589,8 @@ export function openWordPressLab(options: {
           dependencies,
           subscriber,
           ...(customer === undefined ? {} : { customer }),
+          ...(victimSubscriber === undefined ? {} : { victimSubscriber }),
+          ...(victimCustomer === undefined ? {} : { victimCustomer }),
           wp,
           requireDocker,
         });

@@ -96,6 +96,7 @@ describe("WordPress stored script judge", () => {
       {
         status: "observed",
         contexts: ["victim-route-page"],
+        victimRole: "administrator",
         screenshot: observerBytes,
       },
       victim,
@@ -106,8 +107,76 @@ describe("WordPress stored script judge", () => {
       conditions: {
         firedContexts: "victim-route-page",
         victimRole: "administrator",
+        victimPrincipal: "separate",
         siteWide: "no",
       },
+    });
+  });
+
+  it("does not confirm a script observed in the attacker's own account", async () => {
+    const { observed, store } = await judge(
+      {
+        status: "observed",
+        contexts: ["victim-route-page"],
+        victimRole: "self",
+        screenshot: observerBytes,
+      },
+      { role: "subscriber", paths: ["/account"] },
+    );
+    expect(observed).toMatchObject({
+      status: "incomplete",
+      reason: "precondition",
+      nextStep: expect.stringContaining("victimRole: self"),
+      evidenceDigest: expect.stringMatching(/^sha256:/),
+    });
+    if (observed?.status !== "incomplete" || !observed.evidenceDigest)
+      throw new Error("Expected private self-observation evidence");
+    const evidence = await store.readFile(
+      observed.evidenceDigest,
+      "canary-observation.json",
+      1024 * 1024,
+    );
+    expect(evidence.status).toBe("resolved");
+    if (evidence.status === "resolved")
+      expect(JSON.parse(evidence.bytes.toString("utf8"))).toMatchObject({
+        status: "self-observed",
+        victimRole: "self",
+      });
+  });
+
+  it("keeps a separate front-page observation when a self page also fires", async () => {
+    const { observed } = await judge(
+      {
+        status: "observed",
+        contexts: ["front", "victim-route-page"],
+        victimRole: "self",
+        screenshot: observerBytes,
+      },
+      { role: "subscriber", paths: ["/account"] },
+    );
+    expect(observed).toMatchObject({
+      status: "observed",
+      conditions: {
+        firedContexts: "front",
+        siteWide: "yes",
+      },
+    });
+    if (observed?.status === "observed")
+      expect(observed.conditions.victimRole).toBeUndefined();
+  });
+
+  it("requires the Lab to identify the victim principal", async () => {
+    const { observed } = await judge(
+      {
+        status: "observed",
+        contexts: ["victim-route-page"],
+        screenshot: observerBytes,
+      },
+      { role: "administrator", paths: ["/wp-admin/"] },
+    );
+    expect(observed).toMatchObject({
+      status: "incomplete",
+      reason: "evidence",
     });
   });
 
