@@ -23,6 +23,7 @@ import {
   userRegistrationMembershipInstallScript,
 } from "../../../src/profiles/wordpress/lab/user-registration-membership-adapter.js";
 import { wpDiscuzOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/wpdiscuz-adapter.js";
+import { wpMembersOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/wp-members-adapter.js";
 
 const directories: string[] = [];
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
@@ -487,6 +488,52 @@ describe("WordPress gVisor Lab", () => {
         arg.includes("create_membership_order_and_subscription"),
       ),
     ).toHaveLength(2);
+    expect(await lab.teardown(verification.handle)).toEqual({
+      status: "removed",
+    });
+  });
+
+  it("repeats the pinned ordinary member post setup in discovery and verification Labs", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "wp-members",
+    );
+    const scenario = wordPressScenario("public-member-post-v1")!;
+    expect(scenario).toMatchObject({
+      version: 1,
+      pluginSlug: "wp-members",
+      ordinaryMemberPost: true,
+      adapterDigest: canonicalDigest(wpMembersOrdinarySetupScript()),
+    });
+    const ordinarySetup = {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    };
+    const discovery = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.teardown(discovery.handle)).toEqual({ status: "removed" });
+
+    const verification = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.scenario).toEqual(ordinarySetup.scenario);
+    expect(verification.handle.setupDigest).toBe(discovery.handle.setupDigest);
+    const scripts = commands
+      .flatMap(({ args }) => args)
+      .filter((arg) => arg.includes('"lab-member-post"'));
+    expect(scripts).toHaveLength(2);
+    for (const script of scripts) {
+      expect(script).toContain("[wpmem_form register]");
+      expect(script).toContain("[wpmem_form login]");
+      expect(script).toContain("<!--more-->");
+      expect(script).toContain('update_option("rss_use_excerpt",1)');
+    }
     expect(await lab.teardown(verification.handle)).toEqual({
       status: "removed",
     });
