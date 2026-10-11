@@ -57,6 +57,12 @@ describe("ordinary builder-page Lab adapter", () => {
     expect(args[1]).toContain(
       "$editor->set_template(Brizy_Config::BRIZY_BLANK_TEMPLATE_FILE_NAME)",
     );
+    expect(args[1]).toContain("$editor->getCompiledSectionManager()");
+    expect(args[1]).toContain(
+      "$editor->setCompiledSections($manager->asJson())",
+    );
+    expect(args[1]).toContain("An ordinary page created for the Lab.");
+    expect(args[1]).toContain("$editor->set_needs_compile(false)");
     expect(args[1]).toContain("$editor->saveStorage()");
     expect(args[1]).toContain("Brizy_Editor_Entity::isBrizyEnabled($id)");
   });

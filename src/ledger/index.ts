@@ -210,7 +210,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     stage: z.enum(["freeze", "discovery", "verification"]),
   }),
   event({
-    /** A measured benchmark prerequisite stopped a case before provider work. */
+    /** Before a Snapshot exists, snapshotDigest is the immutable selection record's digest. */
     type: z.literal("evaluation-case-blocked"),
     caseId: id,
     stage: z.enum(["source", "dependency", "lab"]),

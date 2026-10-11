@@ -16,4 +16,4 @@ coreは開発セットで使ったdigest固定の公式WordPress imageから、�
 
 この集計は campaign 内の観測であり、個別の公開記録との経路一致を判定しない。`publicRecordMatch: unassessed` のまま既知事例の再発見に数えず、評価時に公開記録ごとに人間が照合する。source 読取数は Root と全 agent の下限を別々に出し、子だけが読んだ case を「読まずに終了」と扱わない。
 
-provider 起動前に通常利用の前提が成立しない case は、実測後に `harness eval case-blocked --campaign <id> --case <id> --snapshot <source または Snapshot digest> --stage source|dependency|lab --reason <code>` で台帳へ追記する。source 取得不能、依存 Snapshot 不在、外部サービス不通などの理由コードだけを記録し、private な調査本文は含めない。
+provider 起動前に通常利用の前提が成立しない case は、実測後に `harness eval case-blocked --campaign <id> --case <id> --snapshot <Snapshot または選定記録の digest> --stage source|dependency|lab --reason <code>` で台帳へ追記する。Snapshot 前は既存の `target-skipped` と同じく固定した選定記録の digest を使う。source 取得不能、依存 Snapshot 不在、外部サービス不通などの理由コードだけを記録し、private な調査本文は含めない。
