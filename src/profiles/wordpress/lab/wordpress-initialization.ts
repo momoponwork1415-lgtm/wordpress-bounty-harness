@@ -36,6 +36,8 @@ export interface WordPressInitialization {
   }[];
   readonly subscriber: Account;
   readonly customer?: Account;
+  readonly victimSubscriber?: Account;
+  readonly victimCustomer?: Account;
   readonly wp: WordPressCommand;
   readonly requireDocker: RequireDocker;
 }
@@ -90,7 +92,14 @@ async function configureSecondaryLocale(
 }
 
 async function createAccounts(input: WordPressInitialization): Promise<void> {
-  const { resource, wp, subscriber, customer } = input;
+  const {
+    resource,
+    wp,
+    subscriber,
+    customer,
+    victimSubscriber,
+    victimCustomer,
+  } = input;
   await wp(resource, [
     "user",
     "create",
@@ -107,6 +116,24 @@ async function createAccounts(input: WordPressInitialization): Promise<void> {
       `${customer.username}@example.invalid`,
       "--role=customer",
       `--user_pass=${customer.password}`,
+    ]);
+  if (victimSubscriber !== undefined)
+    await wp(resource, [
+      "user",
+      "create",
+      victimSubscriber.username,
+      `${victimSubscriber.username}@example.invalid`,
+      "--role=subscriber",
+      `--user_pass=${victimSubscriber.password}`,
+    ]);
+  if (victimCustomer !== undefined)
+    await wp(resource, [
+      "user",
+      "create",
+      victimCustomer.username,
+      `${victimCustomer.username}@example.invalid`,
+      "--role=customer",
+      `--user_pass=${victimCustomer.password}`,
     ]);
 }
 

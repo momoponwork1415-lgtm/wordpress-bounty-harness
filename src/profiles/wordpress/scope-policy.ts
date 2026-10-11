@@ -66,6 +66,9 @@ export type WordpressScopeInput = {
   readonly premium?: boolean;
   readonly latestVersionVerified?: boolean;
   readonly defaultOrCommonSettings?: boolean;
+  readonly victimRole?:
+    "administrator" | "subscriber" | "customer" | "unauthenticated" | "self";
+  readonly victimPrincipal?: "separate";
   readonly cvssScore?: number;
   readonly observations: readonly string[];
 };
@@ -114,6 +117,16 @@ export function assessWordpressScope(
       premium: z.boolean().optional(),
       latestVersionVerified: z.boolean().optional(),
       defaultOrCommonSettings: z.boolean().optional(),
+      victimRole: z
+        .enum([
+          "administrator",
+          "subscriber",
+          "customer",
+          "unauthenticated",
+          "self",
+        ])
+        .optional(),
+      victimPrincipal: z.literal("separate").optional(),
       cvssScore: z.number().min(0).max(10).optional(),
       observations: z.array(z.string().min(1)),
     })
@@ -129,6 +142,14 @@ export function assessWordpressScope(
     policyObservedAt: value.observedAt,
   });
   return value.programmes.map((programmeId) => {
+    if (parsed.category === "stored-xss" && parsed.victimRole === "self")
+      return result(programmeId, "out-of-scope", "self-xss");
+    if (
+      parsed.category === "stored-xss" &&
+      parsed.victimRole !== undefined &&
+      parsed.victimPrincipal !== "separate"
+    )
+      return result(programmeId, "ambiguous", "victim-principal-unverified");
     if (parsed.attacker === "contributor-or-higher")
       return result(programmeId, "out-of-scope", "attacker-role");
     if (
