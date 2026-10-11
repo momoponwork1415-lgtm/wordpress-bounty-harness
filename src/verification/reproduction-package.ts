@@ -75,6 +75,8 @@ export const verificationResultV1Schema = z.discriminatedUnion("status", [
       "no-judge",
     ]),
     nextStep: z.string().min(1).max(2000),
+    /** A profile found an ordinary Lab scenario to try before human review. */
+    nextScenarioId: id.optional(),
     evidenceDigest: digest.optional(),
     refutationDigest: digest.optional(),
   }),

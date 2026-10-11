@@ -272,6 +272,8 @@ export class Review<TFacts = unknown> {
           result.reason === "evidence" ||
           result.reason === "cleanup" ||
           result.reason === "digest-mismatch" ||
+          (result.reason === "precondition" &&
+            result.nextScenarioId === undefined) ||
           ((result.reason === "recipe" || result.reason === "observation") &&
             attemptCount >= 3) ||
           (result.reason === "provision" && attemptCount >= 2);
@@ -280,7 +282,9 @@ export class Review<TFacts = unknown> {
         if (
           result.reason === "evidence" ||
           result.reason === "cleanup" ||
-          result.reason === "digest-mismatch"
+          result.reason === "digest-mismatch" ||
+          (result.reason === "precondition" &&
+            result.nextScenarioId === undefined)
         )
           items.push({
             status: result.status,

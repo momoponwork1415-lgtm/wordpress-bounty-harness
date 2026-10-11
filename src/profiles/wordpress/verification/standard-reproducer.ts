@@ -11,6 +11,7 @@ import type {
 import type { WordPressFinding } from "../discovery/finding.js";
 import type { WordPressLab, WordPressLabHandle } from "../lab/index.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
+import { requestContainsSecret } from "./request-secret.js";
 import {
   STANDARD_REPRODUCER_ID,
   STANDARD_REPRODUCER_SCRIPT,
@@ -76,28 +77,6 @@ function expectedCanaries(
       // an arbitrary response string, even when the script reports success.
       return [];
   }
-}
-
-function submittedSecret(value: unknown, secret: string): boolean {
-  const raw = JSON.stringify(value ?? null);
-  if (raw.includes(secret)) return true;
-  const decoded = raw.replace(/(?:%[0-9a-fA-F]{2})+/g, (part) => {
-    try {
-      return decodeURIComponent(part);
-    } catch {
-      return part;
-    }
-  });
-  if (decoded.includes(secret)) return true;
-  for (const source of [raw, decoded]) {
-    for (const token of source.match(/[A-Za-z0-9+/]{16,}={0,2}/g) ?? [])
-      if (Buffer.from(token, "base64").toString("utf8").includes(secret))
-        return true;
-    for (const token of source.match(/[a-fA-F0-9]{16,}/g) ?? [])
-      if (Buffer.from(token, "hex").toString("utf8").includes(secret))
-        return true;
-  }
-  return false;
 }
 
 const incomplete = (
@@ -233,7 +212,7 @@ export function createWordPressStandardReproducer(options: {
             (canary) =>
               response.includes(canary) &&
               !exchanges.some((exchange) =>
-                submittedSecret(exchange.request, canary),
+                requestContainsSecret(exchange.request, canary),
               ),
           )
         );

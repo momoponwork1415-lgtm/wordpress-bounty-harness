@@ -576,6 +576,47 @@ describe("review queue and decisions", () => {
     );
   });
 
+  it("shows a precondition with no next scenario while keeping a known scenario pending", async () => {
+    const { review, ledger } = await queueFixture();
+    for (const [findingId, nextScenarioId] of [
+      ["finding-2", undefined],
+      ["finding-4", "private-post-v1"],
+    ] as const)
+      await ledger.append({
+        schemaVersion: 1,
+        identity: `precondition-${findingId}`,
+        campaignId: ref.campaignId,
+        snapshotDigest: ref.snapshotDigest,
+        occurredAt: "2026-10-08T00:05:00Z",
+        type: "verification-finished",
+        findingId,
+        verificationId: `precondition-${findingId}`,
+        labSetupDigest: labSetup,
+        result: {
+          status: "incomplete",
+          reason: "precondition",
+          nextStep:
+            nextScenarioId === undefined
+              ? "No ordinary Lab scenario covers this prerequisite"
+              : "Try the private post scenario",
+          ...(nextScenarioId === undefined ? {} : { nextScenarioId }),
+        },
+      });
+    const queue = review.queue({ campaignId: ref.campaignId });
+    expect(queue.incompleteByReason).toEqual({ precondition: 1 });
+    expect(queue.retryPendingByReason).toEqual({ precondition: 1 });
+    expect(queue.items).toContainEqual(
+      expect.objectContaining({
+        status: "incomplete",
+        reason: "precondition",
+        ref: expect.objectContaining({ findingId: "finding-2" }),
+      }),
+    );
+    expect(queue.items.some((item) => item.ref.findingId === "finding-4")).toBe(
+      false,
+    );
+  });
+
   it("records a decision with reason, opened evidence, duplicate result and elapsed time", async () => {
     const { review, ledger, artifactStore } = await queueFixture();
     const [confirmed] = review.queue({ campaignId: "campaign-1" }).items;

@@ -49,6 +49,7 @@ export type VerifierAttempt =
       readonly status: "incomplete";
       readonly reason: "precondition" | "recipe";
       readonly nextStep: string;
+      readonly nextScenarioId?: string;
     };
 
 /** A transport receipt already recorded the failure; Verification preserves its cause. */
@@ -121,6 +122,24 @@ export type ReproducerObservation =
     };
 
 type Incomplete = Extract<VerificationResultV1, { status: "incomplete" }>;
+type VerificationRun<
+  Finding extends VerifiableFinding,
+  Setup,
+  Handle extends LabHandle,
+  Reconstruction,
+> = {
+  readonly campaignId: string;
+  readonly verificationId: string;
+  readonly finding: Finding;
+  readonly snapshotDigest: string;
+  readonly lab: Handle;
+  readonly reconstruction: Reconstruction;
+  readonly setup: Setup;
+  readonly snapshot: { readonly digest: string };
+  readonly referenceRoute: unknown;
+  readonly basisKind: "latest-version" | "fixed-version" | undefined;
+  readonly onCapture: (capture: "harness-captured" | "agent-authored") => void;
+};
 const incomplete = (
   reason: Incomplete["reason"],
   nextStep: string,
@@ -267,19 +286,22 @@ export class Verification<
         if (labEvent.status === "conflict")
           throw new Error("Verification Lab identity conflict");
         result = await this.#judge(
-          campaignId,
-          finding,
-          snapshotDigest,
-          judge,
-          lab,
-          input.reconstruction,
-          input.setup,
-          input.snapshot,
-          input.referenceRoute,
-          input.basis?.kind,
-          (capture) => {
-            evidenceCapture = capture;
+          {
+            campaignId,
+            verificationId,
+            finding,
+            snapshotDigest,
+            lab,
+            reconstruction: input.reconstruction,
+            setup: input.setup,
+            snapshot: input.snapshot,
+            referenceRoute: input.referenceRoute,
+            basisKind: input.basis?.kind,
+            onCapture: (capture) => {
+              evidenceCapture = capture;
+            },
           },
+          judge,
         );
       } catch {
         result = incomplete(
@@ -343,18 +365,20 @@ export class Verification<
 
   /** `snapshotDigest` is the snapshot under test: the Finding's own, or its target's latest. */
   async #judge(
-    campaignId: string,
-    finding: Finding,
-    snapshotDigest: string,
+    run: VerificationRun<Finding, Setup, Handle, Reconstruction>,
     judge: Judge<Finding, Handle> | null,
-    lab: Handle,
-    reconstruction: Reconstruction,
-    setup: Setup,
-    snapshot: { readonly digest: string },
-    referenceRoute: unknown,
-    basisKind: "latest-version" | "fixed-version" | undefined,
-    onCapture: (capture: "harness-captured" | "agent-authored") => void,
   ): Promise<VerificationResultV1> {
+    const {
+      finding,
+      snapshotDigest,
+      lab,
+      reconstruction,
+      setup,
+      snapshot,
+      referenceRoute,
+      basisKind,
+      onCapture,
+    } = run;
     if (lab.snapshotDigest !== snapshotDigest)
       return incomplete(
         "digest-mismatch",
@@ -385,21 +409,13 @@ export class Verification<
       );
     }
     if (attempt.status === "incomplete")
-      return incomplete(attempt.reason, attempt.nextStep);
-    if (judge === null)
-      return this.#reproduce(
-        campaignId,
-        finding,
-        snapshotDigest,
-        lab,
-        reconstruction,
-        setup,
-        snapshot,
-        attempt,
-        referenceRoute,
-        basisKind,
-        onCapture,
-      );
+      return {
+        ...incomplete(attempt.reason, attempt.nextStep),
+        ...(attempt.nextScenarioId === undefined
+          ? {}
+          : { nextScenarioId: attempt.nextScenarioId }),
+      };
+    if (judge === null) return this.#replayInFreshLab(run, attempt);
     let observation: JudgeObservation;
     try {
       observation = await judge.observe({
@@ -419,24 +435,7 @@ export class Verification<
         observation.reason === "observation" &&
         this.#options.judges.reproducer !== undefined
       ) {
-        const reproduced = await this.#reproduce(
-          campaignId,
-          finding,
-          snapshotDigest,
-          lab,
-          reconstruction,
-          setup,
-          snapshot,
-          attempt,
-          referenceRoute,
-          basisKind,
-          onCapture,
-        );
-        if (
-          reproduced.status === "reproduced" ||
-          reproduced.status === "contradicted"
-        )
-          return reproduced;
+        return this.#replayInFreshLab(run, attempt);
       }
       return incomplete(
         observation.reason,
@@ -492,19 +491,111 @@ export class Verification<
     );
   }
 
-  async #reproduce(
-    campaignId: string,
-    finding: Finding,
-    snapshotDigest: string,
-    lab: Handle,
-    reconstruction: Reconstruction,
-    setup: Setup,
-    snapshot: { readonly digest: string },
+  /** The Verifier can modify its Lab; only a separately provisioned Lab may reproduce. */
+  async #replayInFreshLab(
+    run: VerificationRun<Finding, Setup, Handle, Reconstruction>,
     attempt: Extract<VerifierAttempt, { status: "attempted" }>,
-    referenceRoute: unknown,
-    basisKind: "latest-version" | "fixed-version" | undefined,
-    onCapture: (capture: "harness-captured" | "agent-authored") => void,
   ): Promise<VerificationResultV1> {
+    const provisioned = await this.#options.lab
+      .provision(run.snapshot, run.setup, { purpose: "verification" })
+      .catch(() => null);
+    if (provisioned === null || provisioned.status !== "ready")
+      return incomplete(
+        "provision",
+        provisioned?.nextStep ??
+          "Provision a fresh reproduction Lab and repeat",
+      );
+    const replayLab = provisioned.handle;
+    // A provider returning the agent's Lab has not supplied an independent run.
+    if (replayLab.id === run.lab.id)
+      return incomplete(
+        "provision",
+        "Provision a distinct reproduction Lab before replaying the route",
+      );
+    let result: VerificationResultV1 = incomplete(
+      "evidence",
+      "The fresh reproduction Lab stopped unexpectedly; repeat",
+    );
+    try {
+      result = await this.#observeFreshLab(run, attempt, replayLab);
+    } catch {
+      result = incomplete(
+        "evidence",
+        "The fresh reproduction Lab stopped unexpectedly; repeat",
+      );
+    } finally {
+      const removed = await this.#options.lab
+        .teardown(replayLab)
+        .catch(() => null);
+      if (removed?.status !== "removed")
+        result = incomplete(
+          "cleanup",
+          removed?.nextStep ?? "Inspect and remove the reproduction Lab",
+        );
+    }
+    return result;
+  }
+
+  async #observeFreshLab(
+    run: VerificationRun<Finding, Setup, Handle, Reconstruction>,
+    attempt: Extract<VerifierAttempt, { status: "attempted" }>,
+    replayLab: Handle,
+  ): Promise<VerificationResultV1> {
+    if (
+      replayLab.snapshotDigest !== run.snapshotDigest ||
+      replayLab.setupDigest !== run.lab.setupDigest ||
+      canonicalJson(replayLab.scenario ?? null) !==
+        canonicalJson(run.lab.scenario ?? null)
+    )
+      return incomplete(
+        "digest-mismatch",
+        "Recreate the reproduction Lab from the same Snapshot and setup",
+      );
+    const appended = await this.#options.ledger.append({
+      schemaVersion: 1,
+      identity: `verification-replay-lab-${run.verificationId}`,
+      campaignId: run.campaignId,
+      snapshotDigest: run.snapshotDigest,
+      occurredAt: (this.#options.clock ?? (() => new Date()))().toISOString(),
+      type: "lab-provisioned",
+      labId: replayLab.id,
+      status: "ready",
+      purpose: "verification",
+      ...(replayLab.scenario === undefined
+        ? {}
+        : { scenario: replayLab.scenario }),
+    });
+    if (appended.status === "conflict")
+      return incomplete(
+        "evidence",
+        "The reproduction Lab ledger identity conflicts",
+      );
+    const seeded = await this.#options.lab
+      .seedCanaries(replayLab)
+      .catch(() => null);
+    if (seeded?.status !== "seeded")
+      return incomplete(
+        "provision",
+        seeded?.nextStep ?? "Seed canaries in a fresh reproduction Lab",
+      );
+    return this.#reproduce({ ...run, lab: replayLab }, attempt);
+  }
+
+  async #reproduce(
+    run: VerificationRun<Finding, Setup, Handle, Reconstruction>,
+    attempt: Extract<VerifierAttempt, { status: "attempted" }>,
+  ): Promise<VerificationResultV1> {
+    const {
+      finding,
+      snapshotDigest,
+      lab,
+      reconstruction,
+      setup,
+      snapshot,
+      referenceRoute,
+      basisKind,
+      onCapture,
+    } = run;
     const reproducer = this.#options.judges.reproducer;
     if (reproducer === undefined)
       return incomplete(
@@ -529,81 +620,9 @@ export class Verification<
       return incomplete(observation.reason, observation.nextStep);
     onCapture("harness-captured");
     if (observation.status === "not-observed") {
-      if (basisKind === "fixed-version" && referenceRoute !== undefined) {
-        const fixedFinding = this.#options.ledger.read({
-          campaignId,
-          findingId: finding.findingId,
-          type: "finding-recorded",
-          limit: 1,
-        })[0]?.event;
-        const originId =
-          fixedFinding?.type === "finding-recorded" &&
-          fixedFinding.derivationKind === "fixed-version-control"
-            ? fixedFinding.derivedFromFindingId
-            : undefined;
-        const origin =
-          originId === undefined
-            ? undefined
-            : this.#options.ledger
-                .read({
-                  campaignId,
-                  findingId: originId,
-                  type: "verification-finished",
-                  limit: 1000,
-                })
-                .map(({ event }) => event)
-                .filter(
-                  (event) =>
-                    event.type === "verification-finished" &&
-                    event.snapshotDigest !== snapshotDigest &&
-                    (event.result.status === "runtime-confirmed" ||
-                      event.result.status === "reproduced"),
-                )
-                .at(-1);
-        if (
-          origin?.type !== "verification-finished" ||
-          (origin.result.status !== "runtime-confirmed" &&
-            origin.result.status !== "reproduced")
-        )
-          return incomplete(
-            "precondition",
-            "Observe the original Finding before recording a fixed-version negative control",
-          );
-        const sealedRoute = await this.#options.store.readFile(
-          origin.result.evidenceDigest,
-          origin.result.status === "runtime-confirmed"
-            ? "confirmed-route.json"
-            : "reproduced-route.json",
-          64 * 1024,
-        );
-        if (sealedRoute.status !== "resolved")
-          return incomplete("evidence", "Restore the original observed route");
-        try {
-          if (
-            canonicalJson(
-              JSON.parse(sealedRoute.bytes.toString("utf8")) as unknown,
-            ) !== canonicalJson(referenceRoute)
-          )
-            return incomplete(
-              "observation",
-              "The fixed control differs from the original observed route",
-            );
-        } catch {
-          return incomplete(
-            "evidence",
-            "The original observed route is unreadable",
-          );
-        }
-        return {
-          status: "contradicted",
-          judgeId: reproducer.id,
-          evidenceDigest: observation.evidenceDigest,
-          refutationDigest: observation.evidenceDigest,
-        };
-      }
       return incomplete(
         "observation",
-        "The captured standard script did not reach the expected observation",
+        "The captured standard script did not reach the expected observation; a nonce judge is required to contradict the fixed-version claim",
         attempt.refutationDigest,
         observation.evidenceDigest,
       );

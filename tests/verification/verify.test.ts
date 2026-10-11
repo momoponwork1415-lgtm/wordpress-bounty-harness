@@ -50,6 +50,9 @@ async function fixture(
     readonly verifier?: Verifier<SyntheticFinding, LabHandle>["attempt"];
     readonly judge?: "observed" | "not-observed" | "incomplete" | "throws";
     readonly reproducer?: "observed" | "incomplete" | "not-observed";
+    /** A false effect visible only in the Lab changed by the agent. */
+    readonly agentOnlyEffect?: boolean;
+    readonly replaySetupMismatch?: boolean;
     readonly teardown?: "removed" | "incomplete";
     readonly refute?: boolean;
     /** A Finding rebound to a separately frozen version for a negative control. */
@@ -166,6 +169,8 @@ async function fixture(
     artifacts: [{ kind: "finding", digest: findingDigest }],
   });
   const calls = { provision: 0, verifier: 0, teardown: 0 };
+  const agentTouched = new Set<string>();
+  const replayedLabIds: string[] = [];
   let rendered:
     | {
         readonly category: string;
@@ -183,9 +188,17 @@ async function fixture(
   const lab: LabProvisioner<{ readonly name: string }, LabHandle> = {
     async provision() {
       calls.provision++;
+      const fresh = {
+        ...handle,
+        id: `lab-${calls.provision}`,
+        setupDigest:
+          options.replaySetupMismatch === true && calls.provision > 1
+            ? otherDigest
+            : handle.setupDigest,
+      };
       return options.provision === "incomplete"
         ? { status: "incomplete", reason: "provision", nextStep: "Retry" }
-        : { status: "ready", handle };
+        : { status: "ready", handle: fresh };
     },
     async seedCanaries() {
       return { status: "seeded", digest: setupDigest };
@@ -200,6 +213,7 @@ async function fixture(
   const verifier: Verifier<SyntheticFinding, LabHandle> = {
     async attempt(input) {
       calls.verifier++;
+      if (options.agentOnlyEffect === true) agentTouched.add(input.lab.id);
       if (options.verifier !== undefined) return options.verifier(input);
       return {
         status: "attempted",
@@ -272,7 +286,8 @@ async function fixture(
         : {
             reproducer: {
               id: "synthetic-standard-v1",
-              async observe() {
+              async observe({ lab: replayLab }) {
+                replayedLabIds.push(replayLab.id);
                 if (options.reproducer === "incomplete")
                   return {
                     status: "incomplete" as const,
@@ -287,13 +302,20 @@ async function fixture(
                   "proxy-capture.jsonl": "synthetic captured response\n",
                   "structured-output.json": "{}",
                 });
-                return options.reproducer === "observed"
+                return options.agentOnlyEffect === true &&
+                  !agentTouched.has(replayLab.id)
                   ? {
-                      status: "observed" as const,
-                      evidenceDigest,
-                      conditions: { observedVia: "synthetic" },
+                      status: "incomplete" as const,
+                      reason: "observation" as const,
+                      nextStep: "The effect was present only in the agent Lab",
                     }
-                  : { status: "not-observed" as const, evidenceDigest };
+                  : options.reproducer === "observed"
+                    ? {
+                        status: "observed" as const,
+                        evidenceDigest,
+                        conditions: { observedVia: "synthetic" },
+                      }
+                    : { status: "not-observed" as const, evidenceDigest };
               },
             },
           }),
@@ -352,7 +374,15 @@ async function fixture(
         }
       : {}),
   });
-  return { result, calls, ledger, negativeCaptureDigest, store, rendered };
+  return {
+    result,
+    calls,
+    ledger,
+    negativeCaptureDigest,
+    store,
+    rendered,
+    replayedLabIds,
+  };
 }
 
 describe("verification public interface", () => {
@@ -554,7 +584,7 @@ describe("verification public interface", () => {
   });
 
   it("records reproduced separately from a judge confirmation", async () => {
-    const { result, calls, ledger } = await fixture({
+    const { result, calls, ledger, replayedLabIds } = await fixture({
       impact: "other",
       reproducer: "observed",
     });
@@ -564,11 +594,42 @@ describe("verification public interface", () => {
       proofKind: "captured-script-observation",
       negativeControl: "pending-fixed-version",
     });
-    expect(calls).toEqual({ provision: 1, verifier: 1, teardown: 1 });
+    expect(calls).toEqual({ provision: 2, verifier: 1, teardown: 2 });
+    expect(replayedLabIds).toEqual(["lab-2"]);
+    expect(ledger.read({ type: "lab-provisioned" })).toHaveLength(2);
     expect(ledger.funnel("campaign-1")).toMatchObject({
       confirmed: 0,
       reproduced: 1,
     });
+  });
+
+  it("cannot reproduce an effect left by the agent in its own Lab", async () => {
+    const { result, calls, replayedLabIds, ledger } = await fixture({
+      impact: "other",
+      reproducer: "observed",
+      agentOnlyEffect: true,
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+    });
+    expect(calls).toEqual({ provision: 2, verifier: 1, teardown: 2 });
+    expect(replayedLabIds).toEqual(["lab-2"]);
+    expect(ledger.funnel("campaign-1")).toMatchObject({ reproduced: 0 });
+  });
+
+  it("rejects a replay Lab with a different setup digest and tears it down", async () => {
+    const { result, calls, replayedLabIds } = await fixture({
+      impact: "other",
+      reproducer: "observed",
+      replaySetupMismatch: true,
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "digest-mismatch",
+    });
+    expect(calls).toEqual({ provision: 2, verifier: 1, teardown: 2 });
+    expect(replayedLabIds).toEqual([]);
   });
 
   it("does not promote an incomplete standard observation", async () => {
@@ -582,31 +643,31 @@ describe("verification public interface", () => {
     });
   });
 
-  it("records a missing effect as contradicted only on a captured fixed-version control", async () => {
+  it("does not contradict a fixed-version control without a nonce judge", async () => {
     const { result } = await fixture({
       impact: "other",
       reproducer: "not-observed",
       fixedVersion: true,
     });
     expect(result).toMatchObject({
-      status: "contradicted",
-      judgeId: "synthetic-standard-v1",
+      status: "incomplete",
+      reason: "observation",
     });
   });
 
-  it("uses a captured fixed control after the nonce judge cannot observe the effect", async () => {
+  it("does not use script absence to contradict after the nonce judge is incomplete", async () => {
     const { result } = await fixture({
       judge: "incomplete",
       reproducer: "not-observed",
       fixedVersion: true,
     });
     expect(result).toMatchObject({
-      status: "contradicted",
-      judgeId: "synthetic-standard-v1",
+      status: "incomplete",
+      reason: "observation",
     });
   });
 
-  it("does not contradict a fixed snapshot without an observed original route", async () => {
+  it("keeps a fixed snapshot incomplete even without an observed original route", async () => {
     const { result } = await fixture({
       impact: "other",
       reproducer: "not-observed",
@@ -615,7 +676,7 @@ describe("verification public interface", () => {
     });
     expect(result).toMatchObject({
       status: "incomplete",
-      reason: "precondition",
+      reason: "observation",
     });
   });
 
@@ -647,6 +708,27 @@ describe("verification public interface", () => {
       status: "incomplete",
       reason: "precondition",
       nextStep: "Enable the synthetic setting",
+    });
+  });
+
+  it("records a known next scenario for the retry queue", async () => {
+    const { result, ledger } = await fixture({
+      verifier: async () => ({
+        status: "incomplete",
+        reason: "precondition",
+        nextStep: "Try the ordinary private post scenario",
+        nextScenarioId: "private-post-v1",
+      }),
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "precondition",
+      nextScenarioId: "private-post-v1",
+    });
+    expect(
+      ledger.read({ type: "verification-finished" })[0]?.event,
+    ).toMatchObject({
+      result,
     });
   });
 
