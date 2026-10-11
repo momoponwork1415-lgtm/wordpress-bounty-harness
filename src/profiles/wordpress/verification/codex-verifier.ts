@@ -81,6 +81,8 @@ const STORED_SCRIPT_INSTRUCTIONS = [
   'If a stored script fires only after a victim UI action, describe that action in route.json victim.paths as {path, actions}, instead of a path string. The Lab browser supports at most three actions per path: {kind: "click", selector: "CSS selector"} or {kind: "click-text", text: "visible text", exact: false}. Use a uniquely identifiable visible element. The Harness performs these actions as the declared victim in a fresh browser; do not request victim credentials or include executable browser code.',
   "Use canary.javascript for a direct nonce-bound POST. If the injection surface truncates long code, canary.loaderJavascript loads a short module that sends the same POST. Loading the module URL as an image or stylesheet does not record a beacon.",
 ] as const;
+const SQL_CANARY_INSTRUCTIONS =
+  "## Harness SQL canary target\nFor SQL injection, canary.table is the Lab-owned table to target through the reported low-privilege HTTP route. Its row value is withheld. A response containing that row or a table change is assessed by the Harness judge; do not report either as proof yourself. The supplied database account is read only.";
 
 function routeStepsFromHttp(
   http: z.infer<typeof httpSchema>,
@@ -216,6 +218,7 @@ export class CodexVerifier implements Verifier<
         readonly loaderJavascript: string;
       }
     | { readonly kind: "principal"; readonly username: string }
+    | { readonly kind: "sql"; readonly table: string }
     | undefined {
     switch (finding.impact) {
       case "rce":
@@ -242,6 +245,12 @@ export class CodexVerifier implements Verifier<
         return canaries === null
           ? undefined
           : { kind: "principal", username: canaries.adminUser };
+      }
+      case "sqli": {
+        const canaries = this.options.lab.canaryLedger(lab);
+        return canaries === null || canaries.sqlCanary.table.length === 0
+          ? undefined
+          : { kind: "sql", table: canaries.sqlCanary.table };
       }
       default:
         return undefined;
@@ -345,7 +354,8 @@ export class CodexVerifier implements Verifier<
       admitted.impact === "php-file-write" ||
       admitted.impact === "stored-xss" ||
       admitted.impact === "auth-bypass-to-admin" ||
-      admitted.impact === "account-takeover";
+      admitted.impact === "account-takeover" ||
+      admitted.impact === "sqli";
     const canary = this.#canaryFor(admitted, lab);
     // Protected-object values live in ordinary WordPress tables. The Verifier
     // must use HTTP only, even when this Lab also has a read-only DB account.
@@ -361,10 +371,11 @@ export class CodexVerifier implements Verifier<
     const fixedInstructions = [
       fixed.text.trim(),
       ...(admitted.impact === "stored-xss" ? STORED_SCRIPT_INSTRUCTIONS : []),
+      ...(admitted.impact === "sqli" ? [SQL_CANARY_INSTRUCTIONS] : []),
     ].join("\n\n");
     // The versioned .md digest alone would hide changes to this fixed contract.
     const promptDigest =
-      admitted.impact === "stored-xss"
+      admitted.impact === "stored-xss" || admitted.impact === "sqli"
         ? `sha256:${createHash("sha256").update(fixedInstructions).digest("hex")}`
         : fixed.digest;
     const prompt = [
@@ -641,7 +652,7 @@ export class CodexVerifier implements Verifier<
     findingId: string,
     promptDigest: string,
     receipt: NativeRunReceipt,
-    canaryIssued?: "execution" | "script" | "principal",
+    canaryIssued?: "execution" | "script" | "principal" | "sql",
   ): Promise<void> {
     const receiptDigest = await this.options.store.putFiles({
       "receipt.json": canonicalJson(receipt),

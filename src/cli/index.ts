@@ -139,6 +139,7 @@ const USAGE = [
   "  select --config <path>",
   "  campaign run <slug>|--all --campaign <id> --config <path> [--retry-incomplete]",
   "  review [--campaign <id>]",
+  "  review inspect --campaign <id> --finding <id>",
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>]",
   "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
@@ -154,6 +155,7 @@ const USAGE = [
   "  runtime check --config <path>",
   "  lab cleanup --config <path> [--remove]",
   "  eval score --campaign <id> --keys <path> --case <id> [--manifest <path>]",
+  "  eval case-blocked --campaign <id> --case <id> --snapshot <digest> --stage source|dependency|lab --reason <code>",
   "  eval keys --keys <path> [--manifest <path>]",
   "  eval rubric --file <path>",
   "  eval compare [--axis history|prompt|continuation] [--campaign <id>]",
@@ -183,6 +185,8 @@ const options = {
   to: { type: "string" },
   outcome: { type: "string" },
   case: { type: "string" },
+  snapshot: { type: "string" },
+  stage: { type: "string" },
   axis: { type: "string" },
   advisories: { type: "string" },
   remove: { type: "boolean" },
@@ -535,6 +539,35 @@ export async function runCli(
           ),
         );
         return 0;
+      case "review inspect": {
+        const review = environment.profile.review(state);
+        const item = queued(review, values);
+        const view = await review.inspect({
+          campaignId: item.ref.campaignId,
+          findingId: item.ref.findingId,
+        });
+        io.stdout(
+          JSON.stringify({
+            status: item.status,
+            category: item.category,
+            ref: item.ref,
+            view,
+          }),
+        );
+        const opened = await state.ledger.append({
+          schemaVersion: 1,
+          identity: `review-open:${randomUUID()}`,
+          campaignId: item.ref.campaignId,
+          snapshotDigest: item.ref.snapshotDigest,
+          occurredAt: state.clock().toISOString(),
+          type: "review-item-opened",
+          findingId: item.ref.findingId,
+          verificationId: item.ref.verificationId,
+        });
+        if (opened.status === "conflict")
+          throw new Error("Review open ledger conflict");
+        return 0;
+      }
       case "review decide": {
         const review = environment.profile.review(state);
         const item = queued(review, values);
@@ -757,6 +790,42 @@ export async function runCli(
           ),
         );
         return 0;
+      case "eval case-blocked": {
+        const campaignId = required(values.campaign, "campaign");
+        const caseId = required(values.case, "case");
+        const snapshotDigest = required(values.snapshot, "snapshot");
+        const stage = required(values.stage, "stage");
+        const reason = required(values.reason, "reason");
+        if (
+          !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(caseId) ||
+          !/^sha256:[a-f0-9]{64}$/.test(snapshotDigest) ||
+          !(
+            (stage === "source" &&
+              reason === "source-acquisition-unavailable") ||
+            (stage === "dependency" &&
+              reason === "dependency-snapshot-unavailable") ||
+            (stage === "lab" &&
+              (reason === "external-service-unavailable" ||
+                reason === "normal-use-setup-unavailable"))
+          )
+        )
+          throw new UsageError("Invalid evaluation case block");
+        const recorded = await state.ledger.append({
+          schemaVersion: 1,
+          identity: `evaluation-block:${randomUUID()}`,
+          campaignId,
+          snapshotDigest,
+          occurredAt: state.clock().toISOString(),
+          type: "evaluation-case-blocked",
+          caseId,
+          stage,
+          reason,
+        });
+        if (recorded.status === "conflict")
+          throw new Error("Evaluation case block ledger conflict");
+        io.stdout(`${caseId} blocked at ${stage}: ${reason}`);
+        return 0;
+      }
       case "eval score": {
         const caseId = required(values.case, "case");
         const keys = await readPrivateAnswerKeys(

@@ -415,6 +415,151 @@ describe("WordPress gVisor Lab", () => {
     },
   );
 
+  it.each(["discovery", "verification"] as const)(
+    "builds a normal searchable approved comment index in a %s Lab",
+    async (purpose) => {
+      const { lab, snapshot, setup, commands } = await fixture(
+        "ready",
+        undefined,
+        "relevanssi",
+      );
+      const scenario = wordPressScenario("approved-comment-searchable-v1")!;
+      const provisioned = await lab.provision(
+        snapshot,
+        {
+          ...setup,
+          scenario: { id: scenario.id, digest: scenario.digest },
+        },
+        { purpose },
+      );
+      expect(provisioned.status).toBe("ready");
+      if (provisioned.status !== "ready") return;
+      const commentIndex = commands.findIndex(({ args }) =>
+        args.includes(
+          "--comment_content=A reader noticed the ordinary orchardlantern detail.",
+        ),
+      );
+      const settingIndex = commands.findIndex(({ args }) =>
+        args.includes("relevanssi_index_comments"),
+      );
+      const buildIndex = commands.findIndex(({ args }) =>
+        args.some((arg) => arg.includes("relevanssi_build_index()")),
+      );
+      expect(commentIndex).toBeGreaterThanOrEqual(0);
+      expect(settingIndex).toBeGreaterThan(commentIndex);
+      expect(buildIndex).toBeGreaterThan(settingIndex);
+      expect(commands[settingIndex]?.args).toContain("normal");
+      expect(commands[buildIndex]?.args.join(" ")).toContain(
+        "term=%s AND comment>0",
+      );
+      expect(
+        nextWordPressScenario("approved comment searchable in the index"),
+      ).toBe(`${scenario.id}: ${scenario.name}`);
+      expect(
+        nextWordPressScenario(
+          "approved comment searchable in the index",
+          scenario.id,
+        ),
+      ).toBe("catalogue に無い前提");
+      expect(
+        nextWordPressScenario(
+          "approved comment searchable in the index",
+          "approved-comment-v1",
+        ),
+      ).toBe(`${scenario.id}: ${scenario.name}`);
+      await lab.teardown(provisioned.handle);
+    },
+  );
+
+  it("rejects a searchable comment when no target adapter exists", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("approved-comment-searchable-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
+  it.each(["discovery", "verification"] as const)(
+    "seeds a normal public booking page in a %s Lab",
+    async (purpose) => {
+      const { lab, snapshot, setup, commands } = await fixture(
+        "ready",
+        undefined,
+        "simply-schedule-appointments",
+      );
+      const scenario = wordPressScenario("public-booking-page-v1")!;
+      const result = await lab.provision(
+        snapshot,
+        { ...setup, scenario: { id: scenario.id, digest: scenario.digest } },
+        { purpose },
+      );
+      expect(result.status).toBe("ready");
+      if (result.status !== "ready") return;
+      expect(
+        commands.some(({ args }) =>
+          args.some((arg) => arg.includes('"post_content"=>"[ssa_booking]"')),
+        ),
+      ).toBe(true);
+      expect(nextWordPressScenario("Public booking page is missing")).toBe(
+        `${scenario.id}: ${scenario.name}`,
+      );
+      await lab.teardown(result.handle);
+    },
+  );
+
+  it("rejects a booking page when no target adapter exists", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-booking-page-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
+  it.each(["discovery", "verification"] as const)(
+    "seeds a normal public builder page in a %s Lab",
+    async (purpose) => {
+      const { lab, snapshot, setup, commands } = await fixture(
+        "ready",
+        undefined,
+        "brizy",
+      );
+      const scenario = wordPressScenario("public-builder-page-v1")!;
+      const result = await lab.provision(
+        snapshot,
+        { ...setup, scenario: { id: scenario.id, digest: scenario.digest } },
+        { purpose },
+      );
+      expect(result.status).toBe("ready");
+      if (result.status !== "ready") return;
+      expect(
+        commands.some(({ args }) =>
+          args.some((arg) => arg.includes("$editor->enable_editor()")),
+        ),
+      ).toBe(true);
+      expect(nextWordPressScenario("Public builder page is missing")).toBe(
+        `${scenario.id}: ${scenario.name}`,
+      );
+      await lab.teardown(result.handle);
+    },
+  );
+
+  it("rejects a builder page when no target adapter exists", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-builder-page-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
   it("does not promise a private-content scenario unless a separate locale prerequisite is met", () => {
     const privatePost = wordPressScenario("private-post-v1")!;
     const translation = wordPressScenario(

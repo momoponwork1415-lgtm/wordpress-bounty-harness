@@ -694,6 +694,38 @@ const programmeRef = {
 };
 
 describe("harness CLI vertical slice", () => {
+  it("records a measured evaluation block with a bounded reason code", async () => {
+    const { run, ledger, configPath } = await harness();
+    expect((await run("select", "--config", configPath)).code).toBe(0);
+    const args = [
+      "eval",
+      "case-blocked",
+      "--campaign",
+      "benchmark-case",
+      "--case",
+      "case-a",
+      "--snapshot",
+      sha("a"),
+      "--stage",
+      "lab",
+      "--reason",
+      "external-service-unavailable",
+    ];
+    expect((await run(...args)).code).toBe(0);
+    expect(ledger().read({ type: "evaluation-case-blocked" })).toMatchObject([
+      {
+        event: {
+          campaignId: "benchmark-case",
+          caseId: "case-a",
+          stage: "lab",
+          reason: "external-service-unavailable",
+        },
+      },
+    ]);
+    expect((await run(...args.slice(0, -1), "arbitrary text")).code).toBe(2);
+    expect(ledger().read({ type: "evaluation-case-blocked" })).toHaveLength(1);
+  });
+
   it("prints only digest references for private keys and blind rubric forms", async () => {
     const { run, keysPath, root } = await harness();
     const keys = await run("eval", "keys", "--keys", keysPath);
@@ -953,7 +985,8 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("runs a pinned campaign end to end and exposes review, funnel and location-overlap", async () => {
-    const { run, configPath, keysPath, prompts, docker } = await harness();
+    const { run, configPath, keysPath, prompts, docker, ledger } =
+      await harness();
 
     const campaign = await run(
       "campaign",
@@ -1000,6 +1033,39 @@ describe("harness CLI vertical slice", () => {
       queue.stdout,
     )?.[1];
     expect(confirmedFinding).toBeDefined();
+    expect(ledger().read({ type: "review-item-opened" })).toHaveLength(0);
+    const inspected = await run(
+      "review",
+      "inspect",
+      "--campaign",
+      "campaign-1",
+      "--finding",
+      confirmedFinding!,
+    );
+    expect(inspected.code).toBe(0);
+    expect(JSON.parse(inspected.stdout)).toMatchObject({
+      status: "runtime-confirmed",
+      ref: { findingId: confirmedFinding },
+      view: { verificationStatus: "runtime-confirmed" },
+    });
+    expect(ledger().read({ type: "review-item-opened" })).toMatchObject([
+      {
+        event: {
+          type: "review-item-opened",
+          findingId: confirmedFinding,
+        },
+      },
+    ]);
+    const missingOpen = await run(
+      "review",
+      "inspect",
+      "--campaign",
+      "campaign-1",
+      "--finding",
+      "unknown-finding",
+    );
+    expect(missingOpen.code).not.toBe(0);
+    expect(ledger().read({ type: "review-item-opened" })).toHaveLength(1);
 
     const decided = await run(
       "review",

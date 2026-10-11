@@ -210,6 +210,18 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     stage: z.enum(["freeze", "discovery", "verification"]),
   }),
   event({
+    /** A measured benchmark prerequisite stopped a case before provider work. */
+    type: z.literal("evaluation-case-blocked"),
+    caseId: id,
+    stage: z.enum(["source", "dependency", "lab"]),
+    reason: z.enum([
+      "source-acquisition-unavailable",
+      "dependency-snapshot-unavailable",
+      "external-service-unavailable",
+      "normal-use-setup-unavailable",
+    ]),
+  }),
+  event({
     type: z.literal("candidate-rejected"),
     runId: id,
     candidateKind: z.enum(["finding", "lead"]),
@@ -286,7 +298,9 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     promptDigest: digest,
     receiptDigest: digest,
     terminal: z.enum(["completed", "incomplete"]),
-    canaryIssued: z.enum(["execution", "script", "principal"]).optional(),
+    canaryIssued: z
+      .enum(["execution", "script", "principal", "sql"])
+      .optional(),
   }),
   event({
     type: z.literal("verification-finished"),
@@ -302,6 +316,12 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       .optional(),
     result: verificationResultV1Schema,
     evidenceCapture: z.enum(["harness-captured", "agent-authored"]).optional(),
+  }),
+  event({
+    /** A person explicitly opened one review item; listing the queue does not count. */
+    type: z.literal("review-item-opened"),
+    findingId: id,
+    verificationId: id,
   }),
   event({
     type: z.literal("review-decided"),
@@ -444,6 +464,7 @@ const querySchema = z.strictObject({
       "discovery-concluded",
       "campaign-stopped",
       "target-skipped",
+      "evaluation-case-blocked",
       "candidate-rejected",
       "candidate-normalized",
       "candidate-held",
@@ -453,6 +474,7 @@ const querySchema = z.strictObject({
       "discovery-report-recovered",
       "verifier-run-finished",
       "verification-finished",
+      "review-item-opened",
       "review-decided",
       "scope-assessed",
       "draft-saved",

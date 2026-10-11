@@ -12,6 +12,39 @@ const definitions = [
     translation: null,
   },
   {
+    id: "approved-comment-searchable-v1",
+    version: 1,
+    name: "検索可能な承認済みコメント",
+    pluginSlug: null,
+    approvedComment: true,
+    secondaryLocale: null,
+    translation: null,
+    searchableComment: {
+      body: "A reader noticed the ordinary orchardlantern detail.",
+      searchTerm: "orchardlantern",
+    },
+  },
+  {
+    id: "public-booking-page-v1",
+    version: 1,
+    name: "公開予約ページ",
+    pluginSlug: null,
+    approvedComment: false,
+    secondaryLocale: null,
+    translation: null,
+    bookingPage: true,
+  },
+  {
+    id: "public-builder-page-v1",
+    version: 1,
+    name: "公開ビルダーページ",
+    pluginSlug: null,
+    approvedComment: false,
+    secondaryLocale: null,
+    translation: null,
+    builderPage: true,
+  },
+  {
     id: "translatepress-translation-data-v1",
     version: 1,
     name: "TranslatePress の二次言語・翻訳データ・承認済みコメント",
@@ -60,6 +93,12 @@ const definitions = [
 const pins: Record<(typeof definitions)[number]["id"], string> = {
   "approved-comment-v1":
     "sha256:a9c59e0011d96d800a5b44657f6d608eb914af00c6d2a16bad85dfc31d960ebe",
+  "approved-comment-searchable-v1":
+    "sha256:9d3da1e037c7b986f9b6ae3b6300bda900af1ccd330e355936d094643490a3c6",
+  "public-booking-page-v1":
+    "sha256:2eee266e20d5f3fd97691d3fca7e6a6b29c31c27bca89f24e91a270c3c9b2a19",
+  "public-builder-page-v1":
+    "sha256:eb3935f5d09cbce5598408d9f9e01ec167e11f9ad7153d06a6987edf237d81a7",
   "translatepress-translation-data-v1":
     "sha256:111ae6445c8290ae49494ebf4ae116994262722f74114994ed4115ad5930bffc",
   "private-post-v1":
@@ -122,6 +161,30 @@ export function scenarioContent(scenario: WordPressScenario | undefined):
     : undefined;
 }
 
+export function scenarioSearchableComment(
+  scenario: WordPressScenario | undefined,
+): { readonly body: string; readonly searchTerm: string } | undefined {
+  return scenario !== undefined && "searchableComment" in scenario
+    ? scenario.searchableComment
+    : undefined;
+}
+
+export function scenarioBookingPage(
+  scenario: WordPressScenario | undefined,
+): boolean {
+  return (
+    scenario !== undefined && "bookingPage" in scenario && scenario.bookingPage
+  );
+}
+
+export function scenarioBuilderPage(
+  scenario: WordPressScenario | undefined,
+): boolean {
+  return (
+    scenario !== undefined && "builderPage" in scenario && scenario.builderPage
+  );
+}
+
 /** Match stated prerequisites, never the claimed impact or a recipe. */
 export function nextWordPressScenario(
   precondition: string,
@@ -138,6 +201,18 @@ export function nextWordPressScenario(
   const comment = /approved comment|comment fixture|承認済みコメント/.test(
     text,
   );
+  const searchableComment =
+    /(?:comment.{0,50}(?:search|index)|(?:search|index).{0,50}comment|コメント.{0,20}(?:検索|索引)|(?:検索|索引).{0,20}コメント)/.test(
+      text,
+    );
+  const bookingPage =
+    /booking (?:page|form)|appointment (?:page|form)|予約(?:ページ|フォーム)/.test(
+      text,
+    );
+  const builderPage =
+    /builder (?:page|post)|(?:page|post) (?:built|created) (?:with|in) (?:the )?builder|ビルダー.{0,8}(?:ページ|投稿)/.test(
+      text,
+    );
   const privateContent = privatePost || privatePage;
   const needsTranslationData =
     /dictionary|translated|translation|翻訳|辞書/.test(text);
@@ -152,6 +227,9 @@ export function nextWordPressScenario(
     privateContent &&
     ((privatePost && privatePage) ||
       comment ||
+      searchableComment ||
+      bookingPage ||
+      builderPage ||
       needsTranslationData ||
       needsLocalizedPrivateContent ||
       (needsSecondaryLocale && context?.secondaryLocaleConfigured !== true))
@@ -163,9 +241,15 @@ export function nextWordPressScenario(
       ? "private-page-v1"
       : translation
         ? "translatepress-translation-data-v1"
-        : comment
-          ? "approved-comment-v1"
-          : undefined;
+        : bookingPage
+          ? "public-booking-page-v1"
+          : builderPage
+            ? "public-builder-page-v1"
+            : searchableComment
+              ? "approved-comment-searchable-v1"
+              : comment
+                ? "approved-comment-v1"
+                : undefined;
   const scenario = id === undefined ? undefined : wordPressScenario(id);
   const current =
     currentId === undefined ? undefined : wordPressScenario(currentId);

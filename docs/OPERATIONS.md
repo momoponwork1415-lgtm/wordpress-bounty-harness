@@ -92,6 +92,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 ```
 harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>]
+harness review inspect --campaign <id> --finding <id>        # 1件の参照情報を開き、台帳へ記録する
 harness review dedupe --campaign <id> --finding <id>          # ローカルWordfence履歴mirrorと照合
 harness review scope --campaign <id> --finding <id>           # Wordfence / Patchstack ごとに in-scope / out-of-scope / ambiguous
 harness review reverify --campaign <id> --finding <id> --config <path>   # 最新版を新しいLabで検証し直す

@@ -245,9 +245,24 @@ describe("CodexVerifier.attempt", () => {
     });
     expect(f.runs[0]?.lab.internalIp).toBe("172.20.0.4");
     expect(f.runs[0]?.prompt).toContain("fixture_reader");
+    const run = f.runs[0];
+    expect(run).toBeDefined();
+    const labInput = JSON.parse(run!.prompt.split("\n\n## Lab\n")[1]!) as {
+      canary: unknown;
+    };
+    expect(labInput.canary).toEqual({ kind: "sql", table: "wbh_canary" });
+    expect(run!.prompt).toContain("## Harness SQL canary target");
+    expect(JSON.stringify(run)).not.toContain("fake-value");
+    const staticInstructions = run!.prompt.split("\n\n## Finding")[0]!;
+    const expectedDigest = `sha256:${createHash("sha256").update(staticInstructions).digest("hex")}`;
+    expect(run!.campaignInput.promptDigest).toBe(expectedDigest);
     expect(
       JSON.stringify(f.ledger.read({ type: "verifier-run-finished" })),
-    ).not.toContain("fixture_only");
+    ).not.toMatch(/fixture_only|fake-value/);
+    expect(f.ledger.read({ type: "verifier-run-finished" })).toMatchObject([
+      { event: { canaryIssued: "sql" } },
+    ]);
+    expect(f.ledger.read({ type: "verification-finished" })).toHaveLength(0);
   });
 
   it("withholds the database and protected canaries from a sensitive-object verifier", async () => {
@@ -375,13 +390,16 @@ describe("CodexVerifier.attempt", () => {
     expect(f.runs[0]?.prompt).toContain("/same-route");
   });
 
-  it("returns incomplete before starting a run when the Lab cannot issue a required canary", async () => {
-    const f = await fixture([], undefined, "rce", false);
-    expect(
-      await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
-    ).toMatchObject({ status: "incomplete", reason: "precondition" });
-    expect(f.runs).toHaveLength(0);
-  });
+  it.each(["rce", "sqli"] as const)(
+    "returns incomplete before starting a %s run when the Lab cannot issue a required canary",
+    async (impact) => {
+      const f = await fixture([], undefined, impact, false);
+      expect(
+        await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+      ).toMatchObject({ status: "incomplete", reason: "precondition" });
+      expect(f.runs).toHaveLength(0);
+    },
+  );
 
   it("keeps a valid session in private evidence and rejects a malformed cookie", async () => {
     const report = (cookie: string) => ({
