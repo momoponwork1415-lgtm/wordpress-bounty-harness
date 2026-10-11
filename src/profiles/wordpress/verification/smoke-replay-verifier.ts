@@ -35,27 +35,45 @@ const captureSchema = z
   .min(1)
   .max(100);
 
-function sessionCookie(capture: z.infer<typeof captureSchema>): string | null {
+export function capturedSessionCookie(
+  capture: z.infer<typeof captureSchema>,
+):
+  | { readonly status: "none" }
+  | { readonly status: "unique"; readonly cookie: string }
+  | { readonly status: "ambiguous" } {
+  const candidates = new Set<string>();
   for (const exchange of capture) {
     const headers = Object.entries(exchange.response.headers);
     for (const [name, value] of headers) {
       if (name.toLowerCase() !== "set-cookie") continue;
-      for (const line of typeof value === "string"
-        ? [value]
-        : Array.isArray(value)
-          ? value
-          : []) {
-        if (typeof line !== "string") continue;
-        const cookie =
-          /(?:^|,\s*)wordpress_logged_in_[A-Za-z0-9_-]+=([^;,\s]+)/i.exec(
-            line,
-          )?.[1];
-        if (cookie !== undefined && /^[A-Za-z0-9%|._@+-]{1,4096}$/.test(cookie))
-          return cookie;
+      const lines = typeof value === "string" ? [value] : value;
+      if (!Array.isArray(lines)) return { status: "ambiguous" };
+      for (const line of lines) {
+        if (typeof line !== "string") return { status: "ambiguous" };
+        const matches = [
+          ...line.matchAll(
+            /(?:^|,\s*)wordpress_logged_in_[A-Za-z0-9_-]+=([^;,\s]+)/gi,
+          ),
+        ];
+        if (/wordpress_logged_in_/i.test(line) && matches.length === 0)
+          return { status: "ambiguous" };
+        for (const match of matches) {
+          const cookie = match[1];
+          if (
+            cookie === undefined ||
+            !/^[A-Za-z0-9%|._@+-]{1,4096}$/.test(cookie)
+          )
+            return { status: "ambiguous" };
+          candidates.add(cookie);
+          if (candidates.size > 1) return { status: "ambiguous" };
+        }
       }
     }
   }
-  return null;
+  const cookie = candidates.values().next().value;
+  return cookie === undefined
+    ? { status: "none" }
+    : { status: "unique", cookie };
 }
 
 /** A bounded, private replay used only by the weekly known Finding smoke. */
@@ -151,7 +169,9 @@ export class SmokeReplayVerifier implements Verifier<
         })
       : null;
     const route = bound === null ? input.referenceRoute : bound;
-    const cookie = valid.success ? sessionCookie(valid.data) : null;
+    const cookie = valid.success
+      ? capturedSessionCookie(valid.data)
+      : { status: "ambiguous" as const };
     const files: Record<string, string | Buffer> = {
       "capture-marker.json": canonicalJson({ marker }),
       // The judge reads the recorder via capture-marker. An empty authored
@@ -171,9 +191,11 @@ export class SmokeReplayVerifier implements Verifier<
         ...(replay.status === "incomplete"
           ? { replayReason: replay.reason }
           : {}),
-        bound: bound !== null,
+        bound: bound !== null && cookie.status !== "ambiguous",
       }),
-      ...(cookie === null ? {} : { "session.json": canonicalJson({ cookie }) }),
+      ...(cookie.status === "unique"
+        ? { "session.json": canonicalJson({ cookie: cookie.cookie }) }
+        : {}),
     };
     const recipeDigest = await this.options.store.putFiles(files);
     const refutationDigest = await this.options.store.putFiles({
