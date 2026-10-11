@@ -38,10 +38,11 @@ node scripts/smoke-real-lab.mjs \
   --state /path/to/private/state \
   --config examples/translatepress-3.3.1/campaign-real-lab-smoke.json \
   --source-campaign <known-ato-campaign> \
+  --binding-campaign <independent-positive-campaign> \
   --finding <confirmed-ato-finding-id>
 ```
 
-script は別の `smoke-real-lab-...` campaign を作り、既知の確認済み route を参照して新しい gVisor Lab で 3.3.1 を再検証し、続けて別 Snapshot の 3.3.2 で同じ経路の負の対照を取る。`recipe` / `observation` 不足だけは新 Lab で各 2 回まで再試行する。陽性の Harness 捕捉が既知 route と完全一致し、`runtime-confirmed` と `contradicted` の両方が台帳に記録された場合だけ終了コード 0。失敗時は段階と `incomplete` の理由を表示し、残った smoke campaign を `harness ledger funnel --campaign <id>` で調べる。再実行には新しい campaign ID を使い、本番 funnel と混ぜない。Stored XSS の経路は判定器修正後に追加する。
+script は別の `smoke-real-lab-...` campaign を作る。`--binding-campaign` は同じ Finding と3.3.1 Snapshotについて独立に陽性が確認された campaign を指す。2つの陽性 Harness 捕捉を照合し、Lab canary 名、security 値、reset key の型付き束縛を Private Evidence に保存する。新しい gVisor Lab で固定の8 HTTP手順を再生し、3.3.1 の陽性、続いて別 Snapshot の 3.3.2 の負の対照を取る。`recipe` / `observation` 不足だけは新 Lab で各 2 回まで再試行する。判定器は再生8手順と束縛後の同一路径を Harness 捕捉で照合する。応答から値を取得できない、8手順が揃わない、または同一路径でない場合は捕捉を Private Evidence に残して `incomplete(observation)` とし、終了コード1にする。`runtime-confirmed` と `contradicted` の両方が台帳に記録され、陽性の束縛後経路も元の route と一致した場合だけ終了コード0。失敗時は段階と `incomplete` の理由を表示し、残った smoke campaign を `harness ledger funnel --campaign <id>` で調べる。再実行には新しい campaign ID を使い、本番 funnel と混ぜない。Stored XSS の経路は判定器修正後に追加する。
 
 ```
 harness history status                                   # 履歴mirrorの鮮度。fresh以外は終了コード1

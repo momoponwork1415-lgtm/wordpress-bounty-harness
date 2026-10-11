@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { canonicalJson } from "../../../infrastructure/canonical-json.js";
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../../../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
 import type {
   Judge,
@@ -15,6 +18,10 @@ import type {
   WordPressLabHandle,
 } from "../lab/index.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
+import {
+  bindSmokeReferenceRoute,
+  smokeReplayRecipeSchema,
+} from "./smoke-replay-recipe.js";
 
 type JudgeLab = Pick<
   WordPressLab,
@@ -157,8 +164,9 @@ async function readJson(
   store: PrivateArtifactStore,
   digest: string,
   name: string,
+  maxBytes = 1024 * 1024,
 ): Promise<unknown> {
-  const file = await store.readFile(digest, name, 1024 * 1024);
+  const file = await store.readFile(digest, name, maxBytes);
   if (file.status !== "resolved") return undefined;
   try {
     return JSON.parse(file.bytes.toString("utf8")) as unknown;
@@ -369,6 +377,103 @@ function canaryJudge(
         };
       const httpEvidence = await readHttpEvidence(options, lab, recipeDigest);
       if ("status" in httpEvidence) return httpEvidence;
+      const smokeBindingFile = await options.store.readFile(
+        recipeDigest,
+        "smoke-binding.json",
+        8192,
+      );
+      let strictRoute = referenceRoute;
+      if (smokeBindingFile.status === "resolved") {
+        const binding = z
+          .strictObject({
+            recipeDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+            sourceRouteDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+            replayStatus: z.enum(["completed", "incomplete", "unavailable"]),
+            completedSteps: z.number().int().nonnegative(),
+            replayReason: z
+              .enum([
+                "invalid-input",
+                "missing-binding",
+                "ambiguous-binding",
+                "binding-pattern",
+                "request-failed",
+                "response-too-large",
+              ])
+              .optional(),
+            bound: z.boolean(),
+          })
+          .safeParse(
+            await readJson(options.store, recipeDigest, "smoke-binding.json"),
+          );
+        const privateRecipe = binding.success
+          ? smokeReplayRecipeSchema.safeParse(
+              await readJson(
+                options.store,
+                binding.data.recipeDigest,
+                "replay-recipe.json",
+                12 * 1024 * 1024,
+              ),
+            )
+          : null;
+        const bound =
+          binding?.success &&
+          privateRecipe?.success &&
+          referenceRoute !== undefined &&
+          httpEvidence.capture === "harness-captured" &&
+          httpEvidence.http !== null &&
+          canonicalDigest(referenceRoute) === binding.data.sourceRouteDigest &&
+          privateRecipe.data.sourceRouteDigest ===
+            binding.data.sourceRouteDigest &&
+          binding.data.replayStatus === "completed" &&
+          binding.data.completedSteps === 8 &&
+          binding.data.bound
+            ? bindSmokeReferenceRoute({
+                recipe: privateRecipe.data,
+                sourceRoute: referenceRoute,
+                capture: httpEvidence.http.exchanges,
+                adminUser: canaries.adminUser,
+              })
+            : null;
+        if (
+          bound === null ||
+          httpEvidence.http === null ||
+          !matchesReferenceRoute(httpEvidence.http, bound)
+        ) {
+          const evidenceDigest =
+            httpEvidence.captureBytes === undefined
+              ? undefined
+              : await options.store.putFiles({
+                  "proxy-capture.jsonl": httpEvidence.captureBytes,
+                  "route-observation.json": canonicalJson({
+                    judgeId: id,
+                    status: "incomplete",
+                    reason: "smoke-route-mismatch",
+                    snapshotDigest: lab.snapshotDigest,
+                    labSetupDigest: lab.setupDigest,
+                    recipeDigest,
+                    completedSteps: binding.success
+                      ? binding.data.completedSteps
+                      : null,
+                    replayReason: binding.success
+                      ? (binding.data.replayReason ?? null)
+                      : null,
+                  }),
+                });
+          return {
+            status: "incomplete",
+            reason: "observation",
+            nextStep:
+              "The bounded replay did not complete the same eight captured HTTP steps",
+            ...(evidenceDigest === undefined
+              ? {}
+              : {
+                  evidenceCapture: "harness-captured" as const,
+                  evidenceDigest,
+                }),
+          };
+        }
+        strictRoute = bound;
+      }
       const decision = await decide({
         lab,
         recipeDigest,
@@ -377,17 +482,37 @@ function canaryJudge(
       });
       if (decision === null) {
         if (
-          referenceRoute !== undefined &&
+          strictRoute !== undefined &&
           (httpEvidence.capture !== "harness-captured" ||
             httpEvidence.http === null ||
-            !matchesReferenceRoute(httpEvidence.http, referenceRoute))
-        )
+            !matchesReferenceRoute(httpEvidence.http, strictRoute))
+        ) {
+          const evidenceDigest =
+            httpEvidence.captureBytes === undefined
+              ? undefined
+              : await options.store.putFiles({
+                  "proxy-capture.jsonl": httpEvidence.captureBytes,
+                  "route-observation.json": canonicalJson({
+                    judgeId: id,
+                    status: "incomplete",
+                    reason: "route-mismatch",
+                    snapshotDigest: lab.snapshotDigest,
+                    labSetupDigest: lab.setupDigest,
+                  }),
+                });
           return {
             status: "incomplete",
             reason: "observation",
             nextStep:
               "The captured rerun did not match the earlier confirmed HTTP route; repeat the same route",
+            ...(evidenceDigest === undefined
+              ? {}
+              : {
+                  evidenceCapture: "harness-captured" as const,
+                  evidenceDigest,
+                }),
           };
+        }
         if (
           httpEvidence.capture !== "harness-captured" ||
           httpEvidence.captureBytes === undefined

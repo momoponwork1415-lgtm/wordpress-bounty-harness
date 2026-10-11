@@ -270,7 +270,7 @@ export async function createWordPressHostProfile(options: {
               run: async (request) => {
                 const result = await runDocker(
                   request.args,
-                  undefined,
+                  request.stdin,
                   request.timeoutMs,
                 );
                 return result.kind === "exited"

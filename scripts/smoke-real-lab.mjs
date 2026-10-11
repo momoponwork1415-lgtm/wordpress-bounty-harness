@@ -9,7 +9,7 @@ const workspace = await realpath(
   resolve(fileURLToPath(new URL("../", import.meta.url))),
 );
 const usage =
-  "usage: pnpm build && node scripts/smoke-real-lab.mjs --host <private-host.json> --state <private-state-dir> --config <campaign.json> --source-campaign <id> --finding <id> [--campaign <new-id>]";
+  "usage: pnpm build && node scripts/smoke-real-lab.mjs --host <private-host.json> --state <private-state-dir> --config <campaign.json> --source-campaign <id> --binding-campaign <independent-positive-id> --finding <id> [--campaign <new-id>]";
 const digest = /^sha256:[a-f0-9]{64}$/;
 const id = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const knownTarget = "wporg:translatepress-multilingual@3.3.1";
@@ -52,6 +52,43 @@ function verificationReason(ledger, campaignId, verificationId) {
     : "unavailable";
 }
 
+async function capturedFailureDetail(
+  ledger,
+  store,
+  campaignId,
+  verificationId,
+) {
+  const event = ledger
+    .read({ campaignId, type: "verification-finished", limit: 1000 })
+    .map((row) => row.event)
+    .find(
+      (candidate) =>
+        candidate.type === "verification-finished" &&
+        candidate.verificationId === verificationId,
+    );
+  const evidenceDigest = event?.result?.evidenceDigest;
+  if (!digest.test(evidenceDigest ?? "")) return "no captured route evidence";
+  const record = await store.readFile(
+    evidenceDigest,
+    "route-observation.json",
+    8192,
+  );
+  if (record.status !== "resolved") return `evidence ${evidenceDigest}`;
+  try {
+    const observation = JSON.parse(record.bytes.toString("utf8"));
+    const count = observation.completedSteps;
+    const reason = observation.replayReason;
+    return Number.isInteger(count) &&
+      count >= 0 &&
+      count <= 8 &&
+      (reason === null || /^[a-z-]{1,40}$/.test(reason))
+      ? `replayed ${count}/8, ${reason ?? "route-mismatch"}, evidence ${evidenceDigest}`
+      : `evidence ${evidenceDigest}`;
+  } catch {
+    return `evidence ${evidenceDigest}`;
+  }
+}
+
 let stage = "arguments";
 try {
   const { values } = parseArgs({
@@ -60,6 +97,7 @@ try {
       state: { type: "string" },
       config: { type: "string" },
       "source-campaign": { type: "string" },
+      "binding-campaign": { type: "string" },
       finding: { type: "string" },
       campaign: { type: "string" },
     },
@@ -75,14 +113,21 @@ try {
     "source-campaign",
   );
   const findingId = required(values.finding, "finding");
+  const bindingCampaignId = required(
+    values["binding-campaign"],
+    "binding-campaign",
+  );
   const campaignId =
     values.campaign ??
     `smoke-real-lab-${new Date().toISOString().slice(0, 10)}-${randomUUID().slice(0, 8)}`;
   if (
     !id.test(sourceCampaignId) ||
+    !id.test(bindingCampaignId) ||
     !id.test(campaignId) ||
     !digest.test(findingId) ||
-    sourceCampaignId === campaignId
+    sourceCampaignId === campaignId ||
+    bindingCampaignId === campaignId ||
+    bindingCampaignId === sourceCampaignId
   )
     throw new SmokeFailure("invalid or reused campaign/Finding identity");
   if (
@@ -237,6 +282,88 @@ try {
       "the source confirmed route does not match its Harness capture",
     );
 
+  stage = "typed-bindings";
+  const comparison = ledger
+    .read({
+      campaignId: bindingCampaignId,
+      findingId,
+      type: "verification-finished",
+      limit: 1000,
+    })
+    .map((row) => row.event)
+    .filter(
+      (event) =>
+        event.type === "verification-finished" &&
+        event.snapshotDigest === finding.snapshotDigest &&
+        event.result.status === "runtime-confirmed",
+    )
+    .at(-1);
+  if (
+    comparison?.type !== "verification-finished" ||
+    comparison.result.status !== "runtime-confirmed"
+  )
+    throw new SmokeFailure(
+      "an independent positive Harness capture is required",
+    );
+  const [comparisonRouteFile, comparisonCaptureFile] = await Promise.all([
+    store.readFile(
+      comparison.result.evidenceDigest,
+      "confirmed-route.json",
+      64 * 1024,
+    ),
+    store.readFile(
+      comparison.result.evidenceDigest,
+      "proxy-capture.jsonl",
+      64 * 1024 * 1024 + 1024,
+    ),
+  ]);
+  if (
+    comparisonRouteFile.status !== "resolved" ||
+    comparisonCaptureFile.status !== "resolved"
+  )
+    throw new SmokeFailure(
+      "the independent positive route and capture are unavailable",
+    );
+  let comparisonRoute;
+  let comparisonCapture;
+  try {
+    comparisonRoute = JSON.parse(comparisonRouteFile.bytes.toString("utf8"));
+    comparisonCapture = comparisonCaptureFile.bytes
+      .toString("utf8")
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+  } catch {
+    throw new SmokeFailure(
+      "the independent positive route or capture is unreadable",
+    );
+  }
+  if (!matchesReferenceRoute({ exchanges: comparisonCapture }, comparisonRoute))
+    throw new SmokeFailure(
+      "the independent positive route lacks exact Harness capture",
+    );
+  const { createSmokeReplayRecipe } =
+    await import("../dist/profiles/wordpress/verification/smoke-replay-recipe.js");
+  const { canonicalJson } =
+    await import("../dist/infrastructure/canonical-json.js");
+  let replayRecipe;
+  try {
+    replayRecipe = createSmokeReplayRecipe({
+      sourceRoute: recordedRoute,
+      sourceCapture: captured,
+      comparisonRoute,
+      comparisonCapture,
+      findingSnapshotDigest: finding.snapshotDigest,
+    });
+  } catch {
+    throw new SmokeFailure(
+      "the two positive captures do not prove typed replay bindings",
+    );
+  }
+  const smokeReplayDigest = await store.putFiles({
+    "replay-recipe.json": canonicalJson(replayRecipe),
+  });
+
   stage = "runtime-preflight";
   const { createWordPressHostProfile, loadWordPressHostConfig } =
     await import("../dist/cli/wordpress-host.js");
@@ -281,6 +408,7 @@ try {
       configPath,
       referenceCampaignId: sourceCampaignId,
       snapshotCampaignId: sourceCampaignId,
+      smokeReplayDigest,
     });
     process.stdout.write(
       `${positive.version} attempt ${attempt}: ${positive.status} (verification ${positive.verificationId})\n`,
@@ -345,13 +473,39 @@ try {
   } catch {
     throw new SmokeFailure("the positive Harness capture is unreadable");
   }
+  let positiveRoute;
+  try {
+    const route = await store.readFile(
+      positiveRecord.result.evidenceDigest,
+      "confirmed-route.json",
+      64 * 1024,
+    );
+    if (route.status !== "resolved") throw new Error("route missing");
+    positiveRoute = JSON.parse(route.bytes.toString("utf8"));
+  } catch {
+    throw new SmokeFailure("the positive bound route is unavailable");
+  }
+  let positiveBindingProven = false;
+  try {
+    createSmokeReplayRecipe({
+      sourceRoute: recordedRoute,
+      sourceCapture: captured,
+      comparisonRoute: positiveRoute,
+      comparisonCapture: positiveCaptured,
+      findingSnapshotDigest: finding.snapshotDigest,
+    });
+    positiveBindingProven = true;
+  } catch {
+    /* Fail closed below without printing private capture. */
+  }
   if (
     positiveCaptured.some(
       (entry) =>
         entry.request?.truncated !== false ||
         entry.response?.truncated !== false,
     ) ||
-    !matchesReferenceRoute({ exchanges: positiveCaptured }, recordedRoute)
+    !matchesReferenceRoute({ exchanges: positiveCaptured }, positiveRoute) ||
+    !positiveBindingProven
   )
     throw new SmokeFailure(
       "the positive judge confirmed ATO, but the known route was not replayed",
@@ -364,7 +518,9 @@ try {
       findingId,
       configPath,
       version: "3.3.2",
+      referenceCampaignId: sourceCampaignId,
       snapshotCampaignId: sourceCampaignId,
+      smokeReplayDigest,
     });
     process.stdout.write(
       `${negative.version} attempt ${attempt}: ${negative.status} (verification ${negative.verificationId})\n`,
@@ -383,7 +539,7 @@ try {
       (reason !== "recipe" && reason !== "observation")
     )
       throw new SmokeFailure(
-        `fixed-version check failed: ${negative.status}, reason ${reason}`,
+        `fixed-version check failed: ${negative.status}, reason ${reason}, ${await capturedFailureDetail(ledger, store, campaignId, negative.verificationId)}`,
       );
   }
   process.stdout.write(`smoke passed: campaign ${campaignId}\n`);
