@@ -139,18 +139,21 @@ export function nextWordPressScenario(
     text,
   );
   const privateContent = privatePost || privatePage;
-  const needsDictionary =
-    /dictionary|translated data|machine translation|翻訳辞書|翻訳済み/.test(
-      text,
-    );
-  const needsSecondaryLocale = /secondary (?:language|locale)|二次言語/.test(
+  const needsTranslationData =
+    /dictionary|translated|translation|翻訳|辞書/.test(text);
+  const needsSecondaryLocale = /secondary[ -](?:language|locale)|二次言語/.test(
     text,
   );
+  const needsLocalizedPrivateContent =
+    /(?:in|for) the secondary[ -](?:language|locale)|二次言語.{0,8}(?:内|向け)/.test(
+      text,
+    );
   if (
     privateContent &&
     ((privatePost && privatePage) ||
       comment ||
-      needsDictionary ||
+      needsTranslationData ||
+      needsLocalizedPrivateContent ||
       (needsSecondaryLocale && context?.secondaryLocaleConfigured !== true))
   )
     return "catalogue に無い前提";

@@ -417,6 +417,9 @@ describe("WordPress gVisor Lab", () => {
 
   it("does not promise a private-content scenario unless a separate locale prerequisite is met", () => {
     const privatePost = wordPressScenario("private-post-v1")!;
+    const translation = wordPressScenario(
+      "translatepress-translation-data-v1",
+    )!;
     const prerequisite = "A private post and secondary language enabled";
     expect(nextWordPressScenario(prerequisite)).toBe("catalogue に無い前提");
     expect(
@@ -425,6 +428,26 @@ describe("WordPress gVisor Lab", () => {
       }),
     ).toBe(`${privatePost.id}: ${privatePost.name}`);
     expect(
+      nextWordPressScenario("A private post in the secondary locale"),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario(
+        "A private post in the secondary locale",
+        undefined,
+        { secondaryLocaleConfigured: true },
+      ),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario("A private page in the secondary locale"),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario(
+        "A private page in the secondary locale",
+        undefined,
+        { secondaryLocaleConfigured: true },
+      ),
+    ).toBe("catalogue に無い前提");
+    expect(
       nextWordPressScenario(
         "A private post with translation dictionary",
         undefined,
@@ -432,6 +455,16 @@ describe("WordPress gVisor Lab", () => {
           secondaryLocaleConfigured: true,
         },
       ),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario("A translated private post", undefined, {
+        secondaryLocaleConfigured: true,
+      }),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario("A private page with translation", undefined, {
+        secondaryLocaleConfigured: true,
+      }),
     ).toBe("catalogue に無い前提");
     expect(
       nextWordPressScenario("A private post with an approved comment"),
@@ -444,6 +477,12 @@ describe("WordPress gVisor Lab", () => {
     ).toBe("catalogue に無い前提");
     expect(nextWordPressScenario("A private post in the default locale")).toBe(
       `${privatePost.id}: ${privatePost.name}`,
+    );
+    expect(nextWordPressScenario("secondary language enabled")).toBe(
+      `${translation.id}: ${translation.name}`,
+    );
+    expect(nextWordPressScenario("secondary locale enabled")).toBe(
+      "catalogue に無い前提",
     );
   });
 
