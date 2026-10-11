@@ -1036,6 +1036,11 @@ export function createWordPressCliProfile(
           : await options.selectionBoundaries(state, wordpressVersion);
       if (boundaries === undefined)
         throw new Error("Direct policy selection is unavailable on this host");
+      if (
+        "candidateSource" in policy &&
+        boundaries.selection.inspectBatch === undefined
+      )
+        throw new Error("Automatic selection requires listing observations");
       const inspectedBatch = await boundaries.selection.inspectBatch?.(policy);
       const inspected: readonly WordPressSelectionInspection[] =
         inspectedBatch?.inspections ??

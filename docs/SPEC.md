@@ -168,7 +168,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 9. 台帳
 
-- イベント例: `target-selected`、`snapshot-frozen`、`lab-provisioned`、`discovery-run-started / finished`、`lead-recorded`、`finding-recorded`、`verification-finished`、`review-decided`、`scope-assessed`、`draft-saved`、`external-action-authorized`、`submission-outcome`。
+- イベント例: `target-selected`、`selection-batch-bound`（自動選定したcampaignのバッチと対象集合を固定）、`snapshot-frozen`、`lab-provisioned`、`discovery-run-started / finished`、`lead-recorded`、`finding-recorded`、`verification-finished`、`review-decided`、`scope-assessed`、`draft-saved`、`external-action-authorized`、`submission-outcome`。
 - 規則: 追記のみ。全イベントにsnapshot digest。判定系イベントはdigest一致時のみ有効。setup失敗はdiscovery試行に数えない。
 - funnel view: raw findings → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・種別別に読み取り専用で導く。
 - 添付: Codex `findings.json` / `coverage.json` 等はPrivate Evidenceにdigest付きで保存し、台帳からは参照だけ。
