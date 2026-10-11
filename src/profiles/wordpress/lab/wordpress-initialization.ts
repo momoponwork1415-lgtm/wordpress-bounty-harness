@@ -23,6 +23,10 @@ import {
   WPDISCUZ_COMMENT_SCENARIO_ID,
   wpDiscuzOrdinarySetupScript,
 } from "./wpdiscuz-adapter.js";
+import {
+  WP_MEMBERS_SCENARIO_ID,
+  wpMembersOrdinarySetupScript,
+} from "./wp-members-adapter.js";
 
 type WordPressCommand = (
   resource: Resources,
@@ -242,6 +246,13 @@ async function seedScenarioCommentForm(
     await input.wp(input.resource, ["eval", wpDiscuzOrdinarySetupScript()]);
 }
 
+async function seedScenarioMemberPost(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id === WP_MEMBERS_SCENARIO_ID)
+    await input.wp(input.resource, ["eval", wpMembersOrdinarySetupScript()]);
+}
+
 /** Initialize the isolated WordPress site after all containers are healthy. */
 export async function initializeWordPress(
   input: WordPressInitialization,
@@ -256,6 +267,7 @@ export async function initializeWordPress(
   await seedScenarioRegistration(input);
   await seedScenarioMembership(input);
   await seedScenarioCommentForm(input);
+  await seedScenarioMemberPost(input);
 }
 
 /** Grant SELECT on the tables present at provision time, before canary placement. */
