@@ -5,6 +5,10 @@ import type {
 } from "./index.js";
 import { SQL_CANARY_TABLE } from "./canary-placement.js";
 import {
+  DOWNLOAD_MONITOR_SCENARIO_ID,
+  downloadMonitorOrdinarySetupScript,
+} from "./download-monitor-adapter.js";
+import {
   DOWNLOAD_MANAGER_SCENARIO_ID,
   downloadManagerOrdinarySetupScript,
 } from "./download-manager-adapter.js";
@@ -301,6 +305,23 @@ async function seedScenarioDownloads(
   );
 }
 
+async function seedScenarioPublicDownload(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id !== DOWNLOAD_MONITOR_SCENARIO_ID) return;
+  await input.requireDocker(
+    [
+      "exec",
+      "--user=www-data",
+      input.resource.wordpress,
+      "php",
+      "-r",
+      downloadMonitorOrdinarySetupScript(),
+    ],
+    120_000,
+  );
+}
+
 /** Initialize the isolated WordPress site after all containers are healthy. */
 export async function initializeWordPress(
   input: WordPressInitialization,
@@ -317,6 +338,7 @@ export async function initializeWordPress(
   await seedScenarioCommentForm(input);
   await seedScenarioMemberPost(input);
   await seedScenarioDownloads(input);
+  await seedScenarioPublicDownload(input);
 }
 
 /** Grant SELECT on the tables present at provision time, before canary placement. */
