@@ -75,6 +75,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       promptDigest: digest.optional(),
       objectiveDigest: digest.optional(),
       contractDigest: digest.optional(),
+      continuationPromptDigest: digest.optional(),
       trustBoundaryVersion: id.optional(),
       sourcePack: z
         .strictObject({ dependency: z.enum(["mounted", "none"]) })
@@ -122,6 +123,24 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     ]),
     costUsd: z.union([z.number().nonnegative(), z.literal("unavailable")]),
     wallTimeMs: z.number().int().nonnegative(),
+    continuation: z
+      .strictObject({
+        injected: z.boolean(),
+        mode: z.literal("thread-resume"),
+        reason: z.enum([
+          "coverage-incomplete",
+          "coverage-complete",
+          "wall-floor-reached",
+          "deadline-reached",
+          "already-injected",
+          "report-unavailable",
+          "thread-unavailable",
+          "resume-unavailable",
+        ]),
+        remainingMinutes: z.number().nonnegative(),
+        entriesHandedBack: z.number().int().nonnegative(),
+      })
+      .optional(),
     reason: z
       .enum(["provider", "schema", "sandbox", "policy", "evidence"])
       .optional(),
@@ -234,6 +253,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     runId: id,
     category: id,
     historyRecordId: id.optional(),
+    continuationOrdinal: z.literal(1).optional(),
     /** A fresh-snapshot hypothesis derived from an earlier Finding. */
     derivedFromFindingId: id.optional(),
     derivationKind: z
@@ -248,6 +268,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     missingEdge: id,
     primitive: id,
     storageKind: id,
+    continuationOrdinal: z.literal(1).optional(),
   }),
   /** A schema-only child failure was reinterpreted from its immutable private rollout. */
   event({

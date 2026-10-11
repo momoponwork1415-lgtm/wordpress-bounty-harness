@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { isIP } from "node:net";
+import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
 
@@ -30,6 +31,8 @@ import type {
   CodexSandbox,
   CodexSandboxCommand,
   CodexSandboxResult,
+  CodexSandboxResumeRequest,
+  CodexSandboxSessionResult,
 } from "./codex-native-agent-runtime.js";
 
 /** Memory ceiling of one Codex sandbox container. */
@@ -437,5 +440,242 @@ export class GvisorCodexSandbox implements CodexSandbox {
       await rm(staging, { recursive: true, force: true });
       await rm(codexHome, { recursive: true, force: true });
     }
+  }
+
+  /** Holds one runsc container and CLI home across the first report and one resume. */
+  async executeWithResume(
+    command: CodexSandboxCommand,
+    decide: (
+      initial: CodexSandboxResult,
+    ) => Promise<CodexSandboxResumeRequest | undefined>,
+  ): Promise<CodexSandboxSessionResult> {
+    networkSchema.parse(command.grant.dockerNetworkName);
+    const tls = command.grant.tls;
+    if (
+      tls === undefined
+        ? !/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(command.grant.baseUrl)
+        : tls.hostname !== BROKER_TLS_HOSTNAME ||
+          command.grant.baseUrl !== `https://${BROKER_TLS_HOSTNAME}:8080` ||
+          isIP(tls.address) !== 4 ||
+          !/^-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]+-----END CERTIFICATE-----\n$/.test(
+            tls.caPem,
+          )
+    )
+      throw new Error("Provider broker address is invalid");
+    if (!/^Bearer [A-Za-z0-9_-]{32,}$/.test(command.grant.authorization))
+      throw new Error("Provider grant is invalid");
+    if (
+      command.executable !== "codex" ||
+      !/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.labHost.name) ||
+      isIP(command.labHost.ipv4) !== 4 ||
+      (command.databaseHost !== undefined &&
+        (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.databaseHost.name) ||
+          command.databaseHost.name === command.labHost.name ||
+          isIP(command.databaseHost.ipv4) !== 4)) ||
+      command.sourceMount.mode !== "ro" ||
+      command.sourceMount.path !== "/workspace/main" ||
+      !isAbsolute(command.sourceMount.directory) ||
+      (command.dependencyMount !== undefined &&
+        (command.dependencyMount.mode !== "ro" ||
+          command.dependencyMount.path !== "/workspace/wordpress" ||
+          !isAbsolute(command.dependencyMount.directory))) ||
+      command.supportFiles.length !== 1 ||
+      command.supportFiles[0]?.path !== "/opt/codex-support/report-schema.json"
+    )
+      throw new Error("Codex sandbox command is not admitted");
+    const mountOf = async (mount: {
+      readonly directory: string;
+      readonly expectedTree: ExpectedSourceTree;
+    }): Promise<string> => {
+      const directory = await realpath(mount.directory);
+      const entry = await lstat(mount.directory);
+      if (
+        /[,:\n\0]/.test(directory) ||
+        entry.isSymbolicLink() ||
+        !(await stat(directory)).isDirectory()
+      )
+        throw new Error("Codex source mount is unavailable");
+      const verified = await verifyCanonicalSourceTree(
+        directory,
+        mount.expectedTree,
+      );
+      if (!verified.matches)
+        throw new Error("Codex source differs from the fixed snapshot tree");
+      return directory;
+    };
+    const source = await mountOf(command.sourceMount);
+    const dependency =
+      command.dependencyMount === undefined
+        ? undefined
+        : await mountOf(command.dependencyMount);
+    const scratchRoot = await realpath(this.#options.scratchRootDirectory);
+    if (
+      /[,:\n\0]/.test(scratchRoot) ||
+      !(await stat(scratchRoot)).isDirectory()
+    )
+      throw new Error("Codex scratch root is unavailable");
+    const staging = await mkdtemp(join(scratchRoot, "codex-run-"));
+    const codexHome = await mkdtemp(join(scratchRoot, "codex-home-"));
+    const now = this.#options.clock ?? (() => new Date());
+    const token = command.grant.authorization.replace(/^Bearer /, "");
+    const runDocker = this.#docker(scratchRoot, token);
+    const name = `wbh-codex-session-${randomUUID()}`;
+    let containerStarted = false;
+    let session: CodexSandboxSessionResult | undefined;
+    let cleanupFailed = false;
+    const capture = async (
+      process: NativeModelProcessResult,
+      startedAt: string,
+    ): Promise<CodexSandboxResult> => {
+      const collected = await collectRollouts(codexHome).then(
+        (rollouts) => ({ rollouts }),
+        () => ({
+          rollouts: [] as readonly string[],
+          rolloutFailure: "capture-failed" as const,
+        }),
+      );
+      return {
+        status: process.kind === "exited" ? "exited" : "failed",
+        exitCode: process.kind === "exited" ? process.exitCode : -1,
+        stdout: process.stdout,
+        stderr: process.stderr,
+        ...(process.kind === "exited" ? {} : { failureKind: process.kind }),
+        startedAt,
+        completedAt: now().toISOString(),
+        image: this.#options.image,
+        cliVersion,
+        bundledCatalogDigest,
+        ...collected,
+        isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
+      };
+    };
+    let cliVersion: string;
+    let bundledCatalogDigest: string;
+    try {
+      await writeFile(
+        join(staging, "report-schema.json"),
+        command.supportFiles[0].content,
+        {
+          flag: "wx",
+          mode: 0o600,
+        },
+      );
+      if (tls !== undefined) {
+        await writeFile(join(staging, "grant-ca.pem"), tls.caPem, {
+          flag: "wx",
+          mode: 0o600,
+        });
+        await writeFile(
+          join(codexHome, "auth.json"),
+          grantLogin(token, now(), command.grant.expiresAt),
+          { flag: "wx", mode: 0o600 },
+        );
+      }
+      ({ cliVersion, bundledCatalogDigest } = await this.#probe(runDocker));
+      const start = await runDocker(
+        [
+          ...this.#base(),
+          "-d",
+          `--name=${name}`,
+          `--network=${command.grant.dockerNetworkName}`,
+          `--add-host=${command.labHost.name}:${command.labHost.ipv4}`,
+          ...(command.databaseHost === undefined
+            ? []
+            : [
+                `--add-host=${command.databaseHost.name}:${command.databaseHost.ipv4}`,
+              ]),
+          `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
+          ...(dependency === undefined
+            ? []
+            : [
+                `--mount=type=bind,src=${dependency},dst=/workspace/wordpress,readonly`,
+              ]),
+          `--mount=type=bind,src=${staging},dst=/opt/codex-support,readonly`,
+          "--workdir=/workspace/main",
+          "--env=HOME=/tmp",
+          "--env=CODEX_HOME=/tmp/codex",
+          `--mount=type=bind,src=${codexHome},dst=/tmp/codex`,
+          ...(tls === undefined
+            ? [`--env=OPENAI_API_KEY=${token}`]
+            : [
+                `--add-host=${BROKER_TLS_HOSTNAME}:${tls.address}`,
+                "--env=CODEX_CA_CERTIFICATE=/opt/codex-support/grant-ca.pem",
+              ]),
+          "--entrypoint=sh",
+          this.#options.image,
+          "-c",
+          "sleep 15000",
+        ],
+        undefined,
+        30_000,
+      );
+      if (start.kind !== "exited" || start.exitCode !== 0)
+        throw new Error("Codex continuation container did not start");
+      containerStarted = true;
+      const inspected = await runDocker(
+        ["inspect", "--format", "{{.HostConfig.Runtime}}", name],
+        undefined,
+        10_000,
+      );
+      if (inspected.kind !== "exited" || inspected.stdout.trim() !== "runsc")
+        throw new Error("Codex continuation container is not runsc");
+      const initialStartedAt = now().toISOString();
+      const initial = await capture(
+        await runDocker(
+          ["exec", "-i", name, "codex", ...command.args],
+          command.stdin,
+          this.#options.timeoutMs,
+        ),
+        initialStartedAt,
+      );
+      const request = await decide(initial);
+      if (request === undefined) session = { initial };
+      else {
+        if (
+          !/^[a-f0-9-]{36}$/.test(request.threadId) ||
+          request.args[0] !== "exec" ||
+          request.args[1] !== "resume" ||
+          request.prompt.length === 0 ||
+          !Number.isSafeInteger(request.remainingMs) ||
+          request.remainingMs < 1
+        )
+          throw new Error("Codex continuation request is invalid");
+        const resumedStartedAt = now().toISOString();
+        const resumed = await capture(
+          await runDocker(
+            ["exec", "-i", name, "codex", ...request.args],
+            request.prompt,
+            Math.min(this.#options.timeoutMs, request.remainingMs),
+          ),
+          resumedStartedAt,
+        );
+        session = { initial, resumed };
+      }
+    } finally {
+      if (containerStarted) {
+        try {
+          const stopped = await runDocker(
+            ["rm", "-f", name],
+            undefined,
+            30_000,
+          );
+          if (stopped.kind !== "exited" || stopped.exitCode !== 0)
+            cleanupFailed = true;
+        } catch {
+          cleanupFailed = true;
+        }
+      }
+      try {
+        await rm(staging, { recursive: true, force: true });
+        await rm(codexHome, { recursive: true, force: true });
+      } catch {
+        cleanupFailed = true;
+      }
+      if (cleanupFailed && session === undefined)
+        throw new Error("Codex continuation container cleanup failed");
+    }
+    if (session === undefined)
+      throw new Error("Codex session did not complete");
+    return cleanupFailed ? { ...session, cleanupFailed: true } : session;
   }
 }

@@ -30,6 +30,7 @@ import {
 } from "../profiles/wordpress/answer-key.js";
 import {
   planWordPressEntryAssignments,
+  renderedEntryKey,
   renderWordPressEntryAssignment,
   renderWordPressEntryIndex,
   type WordPressEntryAssignment,
@@ -436,6 +437,9 @@ export function createWordPressCliProfile(options: {
         loadWordPressDiscoveryAsset(config.promptId),
         loadWordPressDiscoveryAsset("trust-boundary-v1"),
       ]);
+      const coverageMessage = screening
+        ? await loadWordPressDiscoveryAsset("coverage-continuation-v1")
+        : undefined;
       const promptAxis = config.ablation?.axes.find(
         (axis) => axis.axis === "prompt",
       );
@@ -626,6 +630,9 @@ export function createWordPressCliProfile(options: {
                     configuration: {
                       promptVariant: selectedObjective.id,
                       promptDigest: selectedObjective.digest,
+                      ...(coverageMessage === undefined
+                        ? {}
+                        : { continuationPromptDigest: coverageMessage.digest }),
                       ...(objectiveOnly(selectedObjective.id)
                         ? {
                             objectiveDigest: selectedObjective.digest,
@@ -655,6 +662,18 @@ export function createWordPressCliProfile(options: {
                       targetSnapshotDigest: snapshot.digest,
                       profile: boundaries.runtimeProfile,
                       ...(screening ? { coordination: "solo" as const } : {}),
+                      ...(coverageMessage === undefined ||
+                      sourceIndex === undefined
+                        ? {}
+                        : {
+                            coverageContinuation: {
+                              entries:
+                                sourceIndex.entries.map(renderedEntryKey),
+                              template: coverageMessage.text,
+                              templateDigest: coverageMessage.digest,
+                              minimumMs: 30 * 60_000,
+                            },
+                          }),
                       prompt: promptFor(assignment, selectedObjective),
                       lab: {
                         endpoint: lab.endpoint,

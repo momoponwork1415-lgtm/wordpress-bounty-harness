@@ -1,9 +1,15 @@
 import { z } from "zod";
 import { isAbsolute, posix } from "node:path";
+import { createHash } from "node:crypto";
 
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import { campaignInputV1Schema, type CampaignInputV1 } from "./campaign.js";
+import {
+  decideCoverageContinuation,
+  renderCoverageContinuation,
+  type CoverageContinuationDecision,
+} from "./coverage-continuation.js";
 import {
   admitAgentRuntimeProfile,
   admitCooperativeRuntimeProfile,
@@ -35,17 +41,19 @@ const claimTextSchema = z.string().transform((text, context) => {
   context.addIssue({ code: "custom", message: "Claim is not a JSON object" });
   return z.NEVER;
 });
+// A continuation may enumerate the entire fixed entry index in one field.
+const COVERAGE_TEXT_LIMIT = 128 * 1024;
 const reportSchema = z.strictObject({
   findings: z.array(claimTextSchema),
   leads: z.array(claimTextSchema),
-  examined: z.string().max(16_384),
-  unexamined: z.string().max(16_384),
+  examined: z.string().max(COVERAGE_TEXT_LIMIT),
+  unexamined: z.string().max(COVERAGE_TEXT_LIMIT),
 });
 /** Children are not constrained by Root's --output-schema; admit both object and encoded claims. */
 const childCoverageSchema = z
   .union([z.string(), z.array(z.string())])
   .transform((value) => (Array.isArray(value) ? value.join("\n") : value))
-  .pipe(z.string().max(16_384));
+  .pipe(z.string().max(COVERAGE_TEXT_LIMIT));
 const childReportSchema = z.strictObject({
   findings: z.array(z.unknown()),
   leads: z.array(z.unknown()),
@@ -94,6 +102,37 @@ function childClaim(value: unknown): unknown {
   } catch {
     return value;
   }
+}
+function distinctAdditionalClaims(
+  initial: readonly unknown[],
+  resumed: readonly unknown[],
+): unknown[] {
+  const seen = new Set(
+    initial.map((claim) => canonicalJson(childClaim(claim))),
+  );
+  return resumed.filter((claim) => {
+    const key = canonicalJson(childClaim(claim));
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function combineCandidateReports(
+  initial: z.infer<typeof candidateReportSchema>,
+  resumed: z.infer<typeof candidateReportSchema>,
+): z.infer<typeof candidateReportSchema> {
+  return {
+    findings: [
+      ...initial.findings,
+      ...distinctAdditionalClaims(initial.findings, resumed.findings),
+    ],
+    leads: [
+      ...initial.leads,
+      ...distinctAdditionalClaims(initial.leads, resumed.leads),
+    ],
+    examined: `${initial.examined}\n${resumed.examined}`,
+    unexamined: `${initial.unexamined}\n${resumed.unexamined}`,
+  };
 }
 /**
  * Structured outputs require every object to be closed with all keys
@@ -168,9 +207,27 @@ export interface CodexSandboxResult {
     readonly fallbackUsed: false;
   };
 }
+export interface CodexSandboxResumeRequest {
+  readonly threadId: string;
+  readonly args: readonly string[];
+  readonly prompt: string;
+  readonly remainingMs: number;
+}
+export interface CodexSandboxSessionResult {
+  readonly initial: CodexSandboxResult;
+  readonly resumed?: CodexSandboxResult;
+  /** Teardown failed after capture; the reports are still available. */
+  readonly cleanupFailed?: true;
+}
 /** The Lab module supplies this executor. This adapter has no host execution fallback. */
 export interface CodexSandbox {
   execute(command: CodexSandboxCommand): Promise<CodexSandboxResult>;
+  executeWithResume?(
+    command: CodexSandboxCommand,
+    decide: (
+      initial: CodexSandboxResult,
+    ) => Promise<CodexSandboxResumeRequest | undefined>,
+  ): Promise<CodexSandboxSessionResult>;
 }
 export interface DiscoveryTransportRun {
   readonly runId: string;
@@ -179,6 +236,12 @@ export interface DiscoveryTransportRun {
   readonly prompt: string;
   /** Screening uses one agent even when the runtime profile permits children. */
   readonly coordination?: "solo" | "cooperative";
+  readonly coverageContinuation?: {
+    readonly entries: readonly string[];
+    readonly template: string;
+    readonly templateDigest: `sha256:${string}`;
+    readonly minimumMs: number;
+  };
   /** Verification uses the same isolated transport with a different sealed report. */
   readonly outputKind?: "verification";
   readonly lab: {
@@ -199,11 +262,24 @@ export interface DiscoveryTransportRun {
 export interface DiscoveryTransportResult {
   readonly receipt: NativeRunReceipt;
   readonly attachment?: ProviderAttachmentRef;
+  /** A captured report may survive a failed resume or missing rollout. */
+  readonly salvagedReport?: true;
+  readonly salvagedInitialReport?: true;
+  readonly continuation?: Omit<
+    CoverageContinuationDecision,
+    "remainingEntries"
+  > & {
+    readonly initialFindingCount: number;
+    readonly initialLeadCount: number;
+  };
   /** Each child is independent of the Root's final report and receipt. */
   readonly agentRuns?: readonly {
     readonly agentPath: string;
     readonly receipt: NativeRunReceipt;
     readonly attachment?: ProviderAttachmentRef;
+    readonly continuationOrdinal?: 1;
+    readonly initialFindingCount?: number;
+    readonly initialLeadCount?: number;
   }[];
 }
 
@@ -213,6 +289,18 @@ const discoveryTransportRunSchema = z.strictObject({
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
   coordination: z.enum(["solo", "cooperative"]).optional(),
+  coverageContinuation: z
+    .strictObject({
+      entries: z.array(z.string().min(1).max(512)).max(2_000),
+      template: z.string().min(1).max(16_384),
+      templateDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+      minimumMs: z
+        .number()
+        .int()
+        .positive()
+        .max(240 * 60_000),
+    })
+    .optional(),
   outputKind: z.literal("verification").optional(),
   lab: z.strictObject({
     endpoint: z.url(),
@@ -598,6 +686,24 @@ function observedFromRollout(raw: string): Observed {
   return observedFromCommands(commands);
 }
 
+/** Both rollout reads may contain the same history. Component maxima are a safe lower bound. */
+function observedAcrossRollouts(first: string, second: string): Observed {
+  const initial = observedFromRollout(first);
+  const resumed = observedFromRollout(second);
+  return {
+    toolCalls: Math.max(initial.toolCalls, resumed.toolCalls),
+    filesRead: Math.max(initial.filesRead, resumed.filesRead),
+    uniqueFilesRead: Math.max(initial.uniqueFilesRead, resumed.uniqueFilesRead),
+    labRequests: Math.max(initial.labRequests, resumed.labRequests),
+    dbQueries: Math.max(initial.dbQueries, resumed.dbQueries),
+  };
+}
+
+/** Preserve both raw captures, including repeated lines, in Private Evidence. */
+function continuedRolloutDiagnostic(first: string, second: string): string {
+  return `--- initial rollout ---\n${first}\n--- resumed rollout ---\n${second}`;
+}
+
 function usageFromTranscript(
   stdout: string,
 ): NativeRunReceipt["usage"] | undefined {
@@ -618,6 +724,27 @@ function usageFromTranscript(
     cachedInputTokens: usage.cached_input_tokens ?? "unavailable",
     outputTokens: usage.output_tokens,
     reasoningOutputTokens: usage.reasoning_output_tokens ?? "unavailable",
+  };
+}
+function addUsage(
+  first: NativeRunReceipt["usage"] | undefined,
+  second: NativeRunReceipt["usage"] | undefined,
+): NativeRunReceipt["usage"] | undefined {
+  if (first === undefined) return second;
+  if (second === undefined) return first;
+  const add = (
+    a: number | "unavailable",
+    b: number | "unavailable",
+  ): number | "unavailable" =>
+    typeof a === "number" && typeof b === "number" ? a + b : "unavailable";
+  return {
+    inputTokens: add(first.inputTokens, second.inputTokens),
+    cachedInputTokens: add(first.cachedInputTokens, second.cachedInputTokens),
+    outputTokens: add(first.outputTokens, second.outputTokens),
+    reasoningOutputTokens: add(
+      first.reasoningOutputTokens,
+      second.reasoningOutputTokens,
+    ),
   };
 }
 function usageFromRollout(raw: string): NativeRunReceipt["usage"] | undefined {
@@ -840,11 +967,23 @@ export class CodexNativeAgentRuntime {
 
   async execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult> {
     const startedAt = this.clock().toISOString();
+    let continuation: DiscoveryTransportResult["continuation"];
+    let initialReport: z.infer<typeof candidateReportSchema> | undefined;
+    let initialAttachment: ProviderAttachmentRef | undefined;
     let agentRuns: NonNullable<DiscoveryTransportResult["agentRuns"]> = [];
     let rootDiagnosticArtifactDigest: string | undefined;
     let rootUsage: NativeRunReceipt["usage"] | undefined;
     let rootObserved: Observed | undefined;
     let brokerMetrics: NativeRunReceipt["brokerMetrics"];
+    const markResumeUnavailable = (): void => {
+      if (continuation?.injected)
+        continuation = {
+          ...continuation,
+          injected: false,
+          reason: "resume-unavailable",
+          entriesHandedBack: 0,
+        };
+    };
     const cooperative =
       run.coordination !== "solo" &&
       run.outputKind !== "verification" &&
@@ -880,8 +1019,37 @@ export class CodexNativeAgentRuntime {
           : { reportArtifactDigest: attachment.digest }),
       }),
       ...(attachment === undefined ? {} : { attachment }),
+      ...(attachment === undefined ? {} : { salvagedReport: true as const }),
+      ...(attachment !== undefined &&
+      initialAttachment !== undefined &&
+      attachment.digest === initialAttachment.digest
+        ? { salvagedInitialReport: true as const }
+        : {}),
+      ...(continuation === undefined ? {} : { continuation }),
       ...(cooperative ? { agentRuns } : {}),
     });
+    const saveCapturedReport = async (
+      result: CodexSandboxResult,
+      resumed: boolean,
+    ): Promise<ProviderAttachmentRef | undefined> => {
+      try {
+        const captured = extractRootCandidateReport(result.stdout);
+        const report =
+          resumed && initialReport !== undefined
+            ? captured === undefined
+              ? initialReport
+              : combineCandidateReports(initialReport, captured)
+            : captured;
+        return report === undefined
+          ? initialAttachment
+          : await this.attachments.put(
+              "findings",
+              Buffer.from(canonicalJson(report)),
+            );
+      } catch {
+        return initialAttachment;
+      }
+    };
     if (
       !discoveryTransportRunSchema.safeParse(run).success ||
       run.campaignInput.snapshotDigest !== run.targetSnapshotDigest ||
@@ -897,7 +1065,13 @@ export class CodexNativeAgentRuntime {
       ) ||
       (cooperative &&
         admitCooperativeRuntimeProfile(run.profile, this.sandboxImage)
-          .status !== "admitted")
+          .status !== "admitted") ||
+      (run.coverageContinuation !== undefined &&
+        (run.outputKind === "verification" ||
+          this.sandbox.executeWithResume === undefined ||
+          run.campaignInput.entryIndex?.enabled !== true ||
+          `sha256:${createHash("sha256").update(run.coverageContinuation.template).digest("hex")}` !==
+            run.coverageContinuation.templateDigest))
     )
       return incomplete("policy");
     const labEndpoint = new URL(run.lab.endpoint);
@@ -935,7 +1109,7 @@ export class CodexNativeAgentRuntime {
           ) {
             throw new Error("Provider broker address is invalid");
           }
-          return this.sandbox.execute({
+          const command: CodexSandboxCommand = {
             executable: "codex",
             args: [
               "exec",
@@ -944,7 +1118,9 @@ export class CodexNativeAgentRuntime {
               "--sandbox",
               "danger-full-access",
               "--skip-git-repo-check",
-              ...(cooperative ? [] : ["--ephemeral"]),
+              ...(cooperative || run.coverageContinuation !== undefined
+                ? []
+                : ["--ephemeral"]),
               "-c",
               'approval_policy="never"',
               ...(run.profile.cyberAccessProgram === "unavailable"
@@ -984,8 +1160,9 @@ export class CodexNativeAgentRuntime {
               ...(run.profile.serviceTier === "unavailable"
                 ? []
                 : ["-c", `service_tier="${run.profile.serviceTier}"`]),
-              "-c",
-              'history.persistence="none"',
+              ...(run.coverageContinuation === undefined
+                ? ["-c", 'history.persistence="none"']
+                : []),
               "--output-schema",
               "/opt/codex-support/report-schema.json",
               "--json",
@@ -1031,38 +1208,222 @@ export class CodexNativeAgentRuntime {
                     ipv4: run.lab.database.ipv4,
                   },
                 }),
+          };
+          if (run.coverageContinuation === undefined)
+            return this.sandbox.execute(command);
+          return this.sandbox.executeWithResume!(command, async (initial) => {
+            const remainingMs = Math.max(
+              0,
+              Date.parse(run.expiresAt) - Date.parse(initial.completedAt),
+            );
+            const remainingMinutes = Math.floor(remainingMs / 6_000) / 10;
+            const decoded =
+              initial.status === "exited" &&
+              initial.exitCode === 0 &&
+              initial.isolation.backend === "gvisor" &&
+              initial.isolation.runtime === "runsc" &&
+              initial.isolation.fallbackUsed === false &&
+              initial.image === this.sandboxImage &&
+              initial.cliVersion === run.profile.codexCliVersion &&
+              initial.bundledCatalogDigest === run.profile.bundledCatalogDigest
+                ? decodeTranscript(initial.stdout)
+                : undefined;
+            if (decoded === undefined || "reasonDetail" in decoded) {
+              continuation = {
+                injected: false,
+                mode: "thread-resume",
+                reason: "report-unavailable",
+                remainingMinutes,
+                entriesHandedBack: 0,
+                initialFindingCount: 0,
+                initialLeadCount: 0,
+              };
+              return undefined;
+            }
+            const report =
+              extractRootCandidateReport(initial.stdout) ??
+              reportSchema.parse(decoded.report);
+            initialReport = report;
+            const decision = decideCoverageContinuation({
+              entries: run.coverageContinuation!.entries,
+              examined: report.examined,
+              unexamined: report.unexamined,
+              elapsedMs: Math.max(
+                0,
+                Date.parse(initial.completedAt) - Date.parse(startedAt),
+              ),
+              remainingMs,
+              minimumMs: run.coverageContinuation!.minimumMs,
+              injectionsSoFar: 0,
+            });
+            const threadId = rootThreadId(initial.stdout);
+            const resolved =
+              decision.injected && threadId === undefined
+                ? {
+                    ...decision,
+                    injected: false,
+                    reason: "thread-unavailable" as const,
+                    entriesHandedBack: 0,
+                  }
+                : decision;
+            const { remainingEntries: _remainingEntries, ...metadata } =
+              resolved;
+            continuation = {
+              ...metadata,
+              initialFindingCount: report.findings.length,
+              initialLeadCount: report.leads.length,
+            };
+            if (!resolved.injected || threadId === undefined) return undefined;
+            initialAttachment = await this.attachments.put(
+              "findings",
+              Buffer.from(canonicalJson(initialReport)),
+            );
+            return {
+              threadId,
+              remainingMs,
+              prompt: renderCoverageContinuation(
+                run.coverageContinuation!.template,
+                decision,
+              ),
+              args: [
+                "exec",
+                "resume",
+                "--model",
+                run.profile.requestedModelId,
+                "--skip-git-repo-check",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "-c",
+                'approval_policy="never"',
+                ...(run.profile.cyberAccessProgram === "unavailable"
+                  ? []
+                  : ["--cyber-access-program", run.profile.cyberAccessProgram]),
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--disable",
+                "apps",
+                "--disable",
+                "remote_plugin",
+                "--disable",
+                "unified_exec",
+                "-c",
+                'web_search="disabled"',
+                ...(cooperative
+                  ? [
+                      "--enable",
+                      "multi_agent",
+                      "-c",
+                      "agents.max_threads=3",
+                      "-c",
+                      "agents.max_depth=1",
+                    ]
+                  : ["-c", "features.multi_agent=false"]),
+                "-c",
+                `model_reasoning_effort="${run.profile.requestedEffort}"`,
+                ...(login
+                  ? [
+                      "-c",
+                      `chatgpt_base_url="${grant.baseUrl}/backend-api/"`,
+                      "--disable",
+                      "enable_request_compression",
+                    ]
+                  : ["-c", `openai_base_url="${grant.baseUrl}/v1"`]),
+                ...(run.profile.serviceTier === "unavailable"
+                  ? []
+                  : ["-c", `service_tier="${run.profile.serviceTier}"`]),
+                "--output-schema",
+                "/opt/codex-support/report-schema.json",
+                "--json",
+                threadId,
+                "-",
+              ],
+            };
           });
         },
       )
       .catch(() => undefined);
-    if (granted === undefined) return incomplete("provider");
+    if (granted === undefined) {
+      markResumeUnavailable();
+      return incomplete(
+        "provider",
+        this.clock().toISOString(),
+        undefined,
+        undefined,
+        "session-unavailable",
+        initialAttachment,
+      );
+    }
     brokerMetrics = granted.receipt.metrics;
     if (
       granted.receipt.setup.status !== "ready" ||
       granted.receipt.cleanup.status !== "completed" ||
       granted.operation.status !== "completed"
-    )
+    ) {
+      markResumeUnavailable();
       return incomplete(
         "provider",
         this.clock().toISOString(),
         granted.receipt.digest,
+        undefined,
+        "broker-operation-incomplete",
+        initialAttachment,
       );
-    const result = granted.operation.value;
+    }
+    const operationValue = granted.operation.value;
+    const session = "initial" in operationValue ? operationValue : undefined;
+    if (continuation?.injected && session?.resumed === undefined) {
+      markResumeUnavailable();
+      return incomplete(
+        "sandbox",
+        session?.initial.completedAt ?? this.clock().toISOString(),
+        granted.receipt.digest,
+        undefined,
+        "resume-unavailable",
+        initialAttachment,
+      );
+    }
+    const result: CodexSandboxResult =
+      "initial" in operationValue
+        ? (operationValue.resumed ?? operationValue.initial)
+        : operationValue;
+    const initial = session?.initial;
     sandboxExitCode = result.exitCode;
-    rootUsage = usageFromTranscript(result.stdout);
+    rootUsage =
+      session?.resumed === undefined
+        ? usageFromTranscript(result.stdout)
+        : addUsage(
+            usageFromTranscript(session.initial.stdout),
+            usageFromTranscript(result.stdout),
+          );
     if (
       result.isolation.backend !== "gvisor" ||
       result.isolation.runtime !== "runsc" ||
       result.isolation.fallbackUsed !== false
     )
-      return incomplete("sandbox", result.completedAt, granted.receipt.digest);
+      return incomplete(
+        "sandbox",
+        result.completedAt,
+        granted.receipt.digest,
+        undefined,
+        undefined,
+        initialAttachment,
+      );
     if (
       result.image !== this.sandboxImage ||
       result.cliVersion !== run.profile.codexCliVersion ||
       result.bundledCatalogDigest !== run.profile.bundledCatalogDigest
     )
-      return incomplete("policy", result.completedAt, granted.receipt.digest);
-    if (cooperative && run.outputKind !== "verification") {
+      return incomplete(
+        "policy",
+        result.completedAt,
+        granted.receipt.digest,
+        undefined,
+        undefined,
+        initialAttachment,
+      );
+    if (
+      (cooperative || run.coverageContinuation !== undefined) &&
+      run.outputKind !== "verification"
+    ) {
       if (result.rolloutFailure !== undefined)
         return incomplete(
           "evidence",
@@ -1070,6 +1431,7 @@ export class CodexNativeAgentRuntime {
           granted.receipt.digest,
           undefined,
           "rollout-capture-failed",
+          await saveCapturedReport(result, session?.resumed !== undefined),
         );
       const parentThreadId = rootThreadId(result.stdout);
       if (parentThreadId === undefined)
@@ -1079,6 +1441,7 @@ export class CodexNativeAgentRuntime {
           granted.receipt.digest,
           undefined,
           "missing-root-thread-id",
+          await saveCapturedReport(result, session?.resumed !== undefined),
         );
       const rootRollout = (result.rollouts ?? []).find((raw) =>
         isRootRollout(raw, parentThreadId),
@@ -1090,11 +1453,22 @@ export class CodexNativeAgentRuntime {
           granted.receipt.digest,
           undefined,
           "root-rollout-missing",
+          await saveCapturedReport(result, session?.resumed !== undefined),
         );
       try {
+        const firstRootRollout =
+          session?.resumed === undefined
+            ? undefined
+            : (session.initial.rollouts ?? []).find((raw) =>
+                isRootRollout(raw, parentThreadId),
+              );
+        const rootDiagnostic =
+          firstRootRollout === undefined
+            ? rootRollout
+            : continuedRolloutDiagnostic(firstRootRollout, rootRollout);
         const processDiagnostic =
           result.status === "failed" || result.exitCode !== 0
-            ? `${rootRollout}\n${JSON.stringify({
+            ? `${rootDiagnostic}\n${JSON.stringify({
                 type: "sandbox_process_diagnostic",
                 payload: {
                   status: result.status,
@@ -1104,14 +1478,17 @@ export class CodexNativeAgentRuntime {
                   stdoutTail: result.stdout.slice(-64 * 1024),
                 },
               })}`
-            : rootRollout;
+            : rootDiagnostic;
         rootDiagnosticArtifactDigest = (
           await this.attachments.put(
             "diagnostic",
             Buffer.from(processDiagnostic),
           )
         ).digest;
-        rootObserved = observedFromRollout(rootRollout);
+        rootObserved =
+          firstRootRollout === undefined
+            ? observedFromRollout(rootRollout)
+            : observedAcrossRollouts(firstRootRollout, rootRollout);
         rootUsage ??= usageFromRollout(rootRollout);
       } catch {
         return incomplete(
@@ -1120,40 +1497,80 @@ export class CodexNativeAgentRuntime {
           granted.receipt.digest,
           undefined,
           "root-rollout-unavailable",
+          await saveCapturedReport(result, session?.resumed !== undefined),
         );
       }
+      const firstChildren = new Map<
+        string,
+        { readonly child: ChildRollout; readonly raw: string }
+      >();
+      if (session?.resumed !== undefined)
+        for (const raw of session.initial.rollouts ?? []) {
+          const child = decodeChildRollout(raw, parentThreadId);
+          if (child !== undefined)
+            firstChildren.set(child.threadId, { child, raw });
+        }
       const seen = new Set<string>();
       const children: NonNullable<
         DiscoveryTransportResult["agentRuns"]
       >[number][] = [];
-      for (const raw of result.rollouts ?? []) {
+      for (const raw of [
+        ...(result.rollouts ?? []),
+        ...(session?.resumed === undefined
+          ? []
+          : (session.initial.rollouts ?? [])),
+      ]) {
         const child = decodeChildRollout(raw, parentThreadId);
         if (child === undefined || seen.has(child.threadId)) continue;
         seen.add(child.threadId);
+        const first = firstChildren.get(child.threadId);
+        const firstChild = first?.child;
         let reason: "policy" | "schema" | "evidence" | undefined;
         let reasonDetail: string | undefined;
         if (
           child.modelId !== run.profile.subagent.modelId ||
           child.effort !== run.profile.subagent.effort ||
           child.cyberAccessProgram !== run.profile.cyberAccessProgram ||
-          !/^\/root\/[a-z0-9_-]+$/.test(child.agentPath)
+          !/^\/root\/[a-z0-9_-]+$/.test(child.agentPath) ||
+          (firstChild !== undefined &&
+            (firstChild.agentPath !== child.agentPath ||
+              firstChild.modelId !== run.profile.subagent.modelId ||
+              firstChild.effort !== run.profile.subagent.effort ||
+              firstChild.cyberAccessProgram !== run.profile.cyberAccessProgram))
         ) {
           reason = "policy";
           reasonDetail = "child-profile-mismatch";
         }
         let diagnosticArtifactDigest: string | undefined;
         try {
+          const diagnostic =
+            first !== undefined && raw !== first.raw
+              ? continuedRolloutDiagnostic(first.raw, raw)
+              : raw;
           diagnosticArtifactDigest = (
-            await this.attachments.put("diagnostic", Buffer.from(raw))
+            await this.attachments.put("diagnostic", Buffer.from(diagnostic))
           ).digest;
         } catch {
           reason = "evidence";
           reasonDetail = "child-rollout-unavailable";
         }
         let attachment: ProviderAttachmentRef | undefined;
+        let firstReport: z.infer<typeof candidateReportSchema> | undefined;
+        if (reason === undefined && firstChild?.finalMessage !== undefined)
+          try {
+            firstReport = parseChildFinalMessage(firstChild.finalMessage);
+          } catch {
+            // A later valid child report can still be admitted independently.
+          }
         if (reason === undefined) {
           try {
-            const report = parseChildFinalMessage(child.finalMessage ?? "");
+            const currentReport = parseChildFinalMessage(
+              child.finalMessage ?? "",
+            );
+            const report =
+              firstReport === undefined
+                ? currentReport
+                : combineCandidateReports(firstReport, currentReport);
             attachment = await this.attachments.put(
               "findings",
               Buffer.from(canonicalJson(report)),
@@ -1161,6 +1578,16 @@ export class CodexNativeAgentRuntime {
           } catch {
             reason = "schema";
             reasonDetail = "child-final-message-not-report";
+            if (firstReport !== undefined)
+              try {
+                attachment = await this.attachments.put(
+                  "findings",
+                  Buffer.from(canonicalJson(firstReport)),
+                );
+              } catch {
+                reason = "evidence";
+                reasonDetail = "child-report-unavailable";
+              }
           }
         }
         const receipt = createNativeRunReceipt({
@@ -1192,6 +1619,17 @@ export class CodexNativeAgentRuntime {
           agentPath: child.agentPath,
           receipt,
           ...(attachment === undefined ? {} : { attachment }),
+          ...(session?.resumed === undefined
+            ? {}
+            : firstReport !== undefined
+              ? {
+                  initialFindingCount: firstReport.findings.length,
+                  initialLeadCount: firstReport.leads.length,
+                }
+              : Date.parse(child.completedAt) >=
+                  Date.parse(session.initial.completedAt)
+                ? { continuationOrdinal: 1 as const }
+                : {}),
         });
       }
       agentRuns = children;
@@ -1202,6 +1640,7 @@ export class CodexNativeAgentRuntime {
           granted.receipt.digest,
           undefined,
           "child-count-exceeded",
+          initialAttachment,
         );
     }
     const decoded =
@@ -1215,17 +1654,27 @@ export class CodexNativeAgentRuntime {
         granted.receipt.digest,
         undefined,
         "broker-request-cap",
+        await saveCapturedReport(result, session?.resumed !== undefined),
       );
-    if (brokerRequestBytesExceeded(result.stdout))
+    if (
+      brokerRequestBytesExceeded(result.stdout) ||
+      (session?.resumed !== undefined &&
+        brokerRequestBytesExceeded(session.initial.stdout))
+    )
       return incomplete(
         "policy",
         result.completedAt,
         granted.receipt.digest,
         undefined,
         "broker-request-bytes-cap",
+        await saveCapturedReport(result, session?.resumed !== undefined),
       );
     if (decoded === undefined || "reasonDetail" in decoded) {
-      const limit = providerLimitOf(result.stdout);
+      const limit =
+        providerLimitOf(result.stdout) ??
+        (session?.resumed === undefined
+          ? undefined
+          : providerLimitOf(session.initial.stdout));
       if (limit !== undefined)
         return incomplete(
           "provider",
@@ -1235,6 +1684,7 @@ export class CodexNativeAgentRuntime {
           decoded === undefined
             ? `cli-exit:${result.exitCode}`
             : decoded.reasonDetail,
+          await saveCapturedReport(result, session?.resumed !== undefined),
         );
     }
     if (result.status !== "exited" || result.exitCode !== 0)
@@ -1246,6 +1696,7 @@ export class CodexNativeAgentRuntime {
         granted.receipt.digest,
         undefined,
         result.failureKind ?? `cli-exit:${result.exitCode}`,
+        await saveCapturedReport(result, session?.resumed !== undefined),
       );
     if (decoded === undefined || "reasonDetail" in decoded) {
       if (run.outputKind === "verification")
@@ -1256,9 +1707,15 @@ export class CodexNativeAgentRuntime {
           undefined,
           decoded?.reasonDetail ?? "missing-transcript",
         );
-      let attachment: ProviderAttachmentRef | undefined;
+      let attachment: ProviderAttachmentRef | undefined = initialAttachment;
       try {
-        const report = extractRootCandidateReport(result.stdout);
+        const resumedReport = extractRootCandidateReport(result.stdout);
+        const report =
+          initialReport === undefined
+            ? resumedReport
+            : resumedReport === undefined
+              ? initialReport
+              : combineCandidateReports(initialReport, resumedReport);
         if (report !== undefined)
           attachment = await this.attachments.put(
             "findings",
@@ -1278,27 +1735,50 @@ export class CodexNativeAgentRuntime {
     }
     let attachment: ProviderAttachmentRef;
     try {
+      const finalReport =
+        run.outputKind === "verification"
+          ? decoded.report
+          : (extractRootCandidateReport(result.stdout) ??
+            reportSchema.parse(decoded.report));
+      const report =
+        session?.resumed !== undefined && initialReport !== undefined
+          ? combineCandidateReports(
+              initialReport,
+              reportSchema.parse(finalReport),
+            )
+          : finalReport;
       attachment = await this.attachments.put(
         run.outputKind === "verification" ? "verification" : "findings",
-        Buffer.from(
-          canonicalJson(
-            run.outputKind === "verification"
-              ? decoded.report
-              : (extractRootCandidateReport(result.stdout) ?? decoded.report),
-          ),
-        ),
+        Buffer.from(canonicalJson(report)),
       );
     } catch {
-      return incomplete("evidence", result.completedAt, granted.receipt.digest);
+      return incomplete(
+        "evidence",
+        result.completedAt,
+        granted.receipt.digest,
+        undefined,
+        "combined-report-unavailable",
+        initialAttachment,
+      );
     }
+    if (session?.cleanupFailed)
+      return incomplete(
+        "sandbox",
+        result.completedAt,
+        granted.receipt.digest,
+        undefined,
+        "cleanup-failed",
+        attachment,
+      );
     return {
       attachment,
+      ...(continuation === undefined ? {} : { continuation }),
       ...(cooperative ? { agentRuns } : {}),
       receipt: createNativeRunReceipt({
         ...run,
         terminal: "completed",
         reason: "unavailable",
-        startedAt: result.startedAt,
+        startedAt: initial?.startedAt ?? result.startedAt,
         completedAt: result.completedAt,
         usage: rootUsage ?? decoded.usage,
         observed: rootObserved ?? decoded.observed,

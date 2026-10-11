@@ -248,6 +248,11 @@ export function entryKey(entry: WordPressEntryPoint): string {
   return `${entry.kind} ${entry.name} ${entry.file}:${entry.line}`;
 }
 
+/** The exact fixed-source identifier shown to the discovery agent. */
+export function renderedEntryKey(entry: WordPressEntryPoint): string {
+  return `${entry.kind} \`${entry.name}\` — ${entry.file}:${entry.line}`;
+}
+
 /** Packs connected entry components before splitting by key at the width limit. */
 export function planWordPressEntryAssignments(
   index: WordPressSourceIndex,
@@ -458,10 +463,7 @@ export function renderWordPressEntryIndex(index: WordPressSourceIndex): string {
     "## Entry points",
     `Index digest: ${index.digest}`,
     `Index: ${index.incomplete ? "partial (limit reached)" : "complete"}`,
-    ...index.entries.map(
-      (entry) =>
-        `- ${entry.kind} \`${entry.name}\` — ${entry.file}:${entry.line}`,
-    ),
+    ...index.entries.map((entry) => `- ${renderedEntryKey(entry)}`),
   ].join("\n");
 }
 

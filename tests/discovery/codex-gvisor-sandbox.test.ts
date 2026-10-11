@@ -357,4 +357,113 @@ describe("gVisor Codex sandbox", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("runs one resume in the same runsc container and removes it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-resume-"));
+    try {
+      const source = join(root, "source");
+      await mkdir(source);
+      await writeFile(join(source, "main.txt"), "fixed source");
+      const expectedTree = await measureCanonicalSourceTree(source, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      const calls: { args: readonly string[]; stdin?: string }[] = [];
+      let failCleanup = false;
+      const sandbox = new GvisorCodexSandbox({
+        dockerExecutablePath: "/usr/bin/docker",
+        image: `node@${digest}`,
+        bundledCatalogPath: "/opt/codex/model-catalog.json",
+        scratchRootDirectory: root,
+        maxOutputBytes: 1024 * 1024,
+        timeoutMs: 60_000,
+        runDocker: async (args, stdin) => {
+          calls.push({ args, ...(stdin === undefined ? {} : { stdin }) });
+          if (args[0] === "rm" && failCleanup)
+            return { kind: "exited", exitCode: 1, stdout: "", stderr: "" };
+          const stdout = args.includes("--version")
+            ? "codex-cli 0.161.0\n"
+            : args.includes("--entrypoint=sha256sum")
+              ? `${"b".repeat(64)}  /opt/codex/model-catalog.json\n`
+              : args[0] === "inspect"
+                ? "runsc\n"
+                : args[0] === "exec"
+                  ? args.includes("resume")
+                    ? "second\n"
+                    : "first\n"
+                  : "container-id\n";
+          return { kind: "exited", exitCode: 0, stdout, stderr: "" };
+        },
+      });
+      const command = {
+        executable: "codex" as const,
+        args: ["exec", "--json", "-"],
+        stdin: "first prompt",
+        supportFiles: [
+          { path: "/opt/codex-support/report-schema.json", content: "{}" },
+        ],
+        grant: {
+          baseUrl: "http://172.28.0.2:8080",
+          authorization: `Bearer ${randomBytes(32).toString("hex")}`,
+          dockerNetworkName: "internal-run",
+          model: "gpt-6.1-sol",
+          protocol: "responses" as const,
+          expiresAt: "2026-10-08T07:30:00Z",
+        },
+        sourceMount: {
+          directory: source,
+          path: "/workspace/main" as const,
+          mode: "ro" as const,
+          expectedTree,
+        },
+        labHost: { name: "wordpress", ipv4: "172.20.0.2" },
+      };
+      const session = await sandbox.executeWithResume(
+        command,
+        async (initial) => {
+          expect(initial.stdout).toBe("first\n");
+          return {
+            threadId: "00000000-0000-4000-8000-000000000001",
+            args: ["exec", "resume", "--json"],
+            prompt: "second prompt",
+            remainingMs: 30_000,
+          };
+        },
+      );
+      expect(session.resumed?.stdout).toBe("second\n");
+      const started = calls.find(({ args }) =>
+        args.includes("--entrypoint=sh"),
+      );
+      expect(started?.args).toContain("--runtime=runsc");
+      expect(started?.args).toContain(
+        `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
+      );
+      const name = started?.args
+        .find((arg) => arg.startsWith("--name="))
+        ?.slice(7);
+      expect(name).toBeTruthy();
+      const execs = calls.filter(({ args }) => args[0] === "exec");
+      expect(execs).toHaveLength(2);
+      expect(execs.every(({ args }) => args[2] === name)).toBe(true);
+      expect(execs.map(({ stdin }) => stdin)).toEqual([
+        "first prompt",
+        "second prompt",
+      ]);
+      expect(calls.at(-1)?.args).toEqual(["rm", "-f", name]);
+      failCleanup = true;
+      const retained = await sandbox.executeWithResume(command, async () => ({
+        threadId: "00000000-0000-4000-8000-000000000001",
+        args: ["exec", "resume", "--json"],
+        prompt: "second prompt",
+        remainingMs: 30_000,
+      }));
+      expect(retained).toMatchObject({
+        cleanupFailed: true,
+        initial: { stdout: "first\n" },
+        resumed: { stdout: "second\n" },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

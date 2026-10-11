@@ -47,6 +47,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
       "trust-boundary-v1",
+      "coverage-continuation-v1",
     ]);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-derived-v1",
@@ -74,6 +75,16 @@ describe("WordPress discovery prompt assets", () => {
       );
       expect(asset.text.length).toBeGreaterThan(100);
     }
+  });
+
+  it("pins the generic continuation message without target-specific directions", async () => {
+    const asset = await loadWordPressDiscoveryAsset("coverage-continuation-v1");
+    expect(asset.digest).toBe(
+      "sha256:5c32fa8bad26e4336f4a96fde845dcc4d60bda36401bbeb7ff727fb861ac65bd",
+    );
+    expect(asset.text).toContain("{remainingMinutes}");
+    expect(asset.text).toContain("{entriesNotCovered}");
+    expect(asset.text).not.toMatch(/\/wp-|<script|CVE-|payload|option_name/i);
   });
 
   it("states the structured source trace contract in both comparison arms", async () => {

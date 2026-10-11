@@ -213,6 +213,7 @@ export type PlannedDiscoveryRun = {
     readonly promptDigest?: string;
     readonly objectiveDigest?: string;
     readonly contractDigest?: string;
+    readonly continuationPromptDigest?: string;
     readonly trustBoundaryVersion?: string;
     readonly sourcePack?: { readonly dependency: "mounted" | "none" };
     readonly assignmentUnit: string;
@@ -543,6 +544,12 @@ export async function runDiscoveryCampaign(options: {
       let sandboxExitCode: number | undefined;
       let diagnosticArtifactDigest: string | undefined;
       let receiptDigest: string | undefined;
+      let resultContinuation:
+        | Omit<
+            NonNullable<DiscoveryTransportResult["continuation"]>,
+            "initialFindingCount" | "initialLeadCount"
+          >
+        | undefined;
       let failure:
         | {
             readonly reason: Exclude<NativeRunReceipt["reason"], "unavailable">;
@@ -614,6 +621,10 @@ export async function runDiscoveryCampaign(options: {
       const recordReport = async (
         ownerRunId: string,
         attachment: NonNullable<DiscoveryTransportResult["attachment"]>,
+        continued?: {
+          readonly initialFindingCount: number;
+          readonly initialLeadCount: number;
+        },
       ): Promise<void> => {
         const stored = await options.attachments.read(attachment);
         if (stored.status !== "resolved")
@@ -678,6 +689,10 @@ export async function runDiscoveryCampaign(options: {
             findingId: finding.findingId,
             runId: ownerRunId,
             category: finding.impact,
+            ...(continued !== undefined &&
+            index >= continued.initialFindingCount
+              ? { continuationOrdinal: 1 as const }
+              : {}),
             ...(finding.historyRecordId === undefined
               ? {}
               : { historyRecordId: finding.historyRecordId }),
@@ -753,6 +768,9 @@ export async function runDiscoveryCampaign(options: {
             missingEdge: lead.missingEdge,
             primitive: lead.primitive,
             storageKind: lead.storage?.kind ?? "none",
+            ...(continued !== undefined && index >= continued.initialLeadCount
+              ? { continuationOrdinal: 1 as const }
+              : {}),
           });
           if (appended.status === "conflict")
             throw new Error("Lead identity conflict");
@@ -772,6 +790,14 @@ export async function runDiscoveryCampaign(options: {
             history,
           },
         });
+        if (result.continuation !== undefined) {
+          const {
+            initialFindingCount: _initialFindingCount,
+            initialLeadCount: _initialLeadCount,
+            ...metadata
+          } = result.continuation;
+          resultContinuation = metadata;
+        }
         const receipt = nativeRunReceiptSchema.parse(result.receipt);
         wallTimeMs = Math.max(
           0,
@@ -839,7 +865,19 @@ export async function runDiscoveryCampaign(options: {
             childReceipt.reportArtifactDigest === child.attachment.digest
           ) {
             try {
-              await recordReport(childReceipt.runId, child.attachment);
+              await recordReport(
+                childReceipt.runId,
+                child.attachment,
+                child.initialFindingCount !== undefined &&
+                  child.initialLeadCount !== undefined
+                  ? {
+                      initialFindingCount: child.initialFindingCount,
+                      initialLeadCount: child.initialLeadCount,
+                    }
+                  : child.continuationOrdinal === 1
+                    ? { initialFindingCount: 0, initialLeadCount: 0 }
+                    : undefined,
+              );
               if (childReceipt.terminal === "completed")
                 childOutcome = "completed";
               else
@@ -902,7 +940,9 @@ export async function runDiscoveryCampaign(options: {
         if (
           (receipt.terminal === "completed" ||
             (receipt.terminal === "incomplete" &&
-              receipt.reason === "schema")) &&
+              (receipt.reason === "schema" ||
+                result.salvagedReport === true ||
+                result.salvagedInitialReport === true))) &&
           receipt.runId === run.runId &&
           receipt.targetSnapshotDigest === input.snapshotDigest &&
           receipt.runtimeProfileDigest === run.profile.digest &&
@@ -910,7 +950,11 @@ export async function runDiscoveryCampaign(options: {
           receipt.reportArtifactDigest === attachment.digest
         ) {
           try {
-            await recordReport(run.runId, attachment);
+            await recordReport(
+              run.runId,
+              attachment,
+              result.continuation?.injected ? result.continuation : undefined,
+            );
             if (receipt.terminal === "completed") outcome = "completed";
           } catch (error) {
             if (!(error instanceof DiscoveryReportError)) throw error;
@@ -931,6 +975,9 @@ export async function runDiscoveryCampaign(options: {
         outcome,
         costUsd: "unavailable",
         wallTimeMs,
+        ...(resultContinuation === undefined
+          ? {}
+          : { continuation: resultContinuation }),
         ...(usage === undefined ? {} : { usage }),
         ...(observed === undefined ? {} : { observed }),
         ...(brokerMetrics === undefined ? {} : { brokerMetrics }),

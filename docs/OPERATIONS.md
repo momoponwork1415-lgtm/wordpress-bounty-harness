@@ -59,6 +59,8 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 既定promptは `screening-v1`。入口索引は一段目では必須で、`entryIndex: false`、分担、旧継続、A/B 設定は使えない。旧 `short-objective-managed-v4` と比較armの `wp2shell-bounty-v2` は版を明示した設定で再現できる。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで再開する。
 
+一段目の `screening-v1` は報告の `examined` / `unexamined` と入口索引の完全な識別子を照合する。未記載の入口があり、経過時間が30分未満なら、Harness が同じ gVisor コンテナの Codex thread に残りの入口を1回だけ差し戻す。`discovery-run-finished.continuation` に発火、理由、残り時間、差し戻した入口数を残し、追加の Finding / Lead には `continuationOrdinal: 1` を付ける。`unexamined` は入口ごとの理由を伴う場合だけ消化済みと数える。自由記述からの照合なので、入口を実際に読んでも識別子を書かなければ未記載として差し戻される。
+
 - **同時run数**: campaign設定の `resources` で決める。
   - 既定は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。`stopRules.maxRuns` は Trial 上限（既定 6）、`noFindingRuns` は新規発見のない Trial の連続数（既定 3）、探索 run の wall time は既定 90 分。
   - `observed` は完了した command event の文字列から Harness が数える下限の近似。script 内部のファイル読出しや通信は含まない。

@@ -51,6 +51,11 @@ async function campaign(
     readonly rootTranscriptInvalid?: boolean;
     readonly screening?: boolean;
     readonly leadOnly?: boolean;
+    readonly coverageContinuation?: boolean;
+    readonly salvagedInitial?: boolean;
+    readonly salvagedReport?: boolean;
+    readonly continuedChild?: boolean;
+    readonly reusedChild?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-campaign-"));
@@ -174,7 +179,9 @@ async function campaign(
             "findings",
             Buffer.from(
               JSON.stringify({
-                findings: [{ broken: true }, claim],
+                findings: options.reusedChild
+                  ? [claim, { ...claim, claim: "Second child claim" }]
+                  : [{ broken: true }, claim],
                 leads: [],
                 examined: "child examined source",
                 unexamined: "none",
@@ -196,6 +203,12 @@ async function campaign(
               {
                 agentPath: "/root/child-1",
                 attachment: childAttachment,
+                ...(options.reusedChild
+                  ? { initialFindingCount: 1, initialLeadCount: 0 }
+                  : {}),
+                ...(options.continuedChild
+                  ? { continuationOrdinal: 1 as const }
+                  : {}),
                 receipt: createNativeRunReceipt({
                   runId: "child-1",
                   targetSnapshotDigest: run.targetSnapshotDigest,
@@ -245,12 +258,35 @@ async function campaign(
         );
         return {
           attachment,
+          ...(options.salvagedInitial
+            ? { salvagedInitialReport: true as const }
+            : {}),
+          ...(options.salvagedReport ? { salvagedReport: true as const } : {}),
+          ...(options.coverageContinuation
+            ? {
+                continuation: {
+                  injected: true,
+                  mode: "thread-resume" as const,
+                  reason: "coverage-incomplete" as const,
+                  remainingMinutes: 29,
+                  entriesHandedBack: 1,
+                  initialFindingCount: 0,
+                  initialLeadCount: 0,
+                },
+              }
+            : {}),
           receipt: createNativeRunReceipt({
             runId: run.runId,
             targetSnapshotDigest: run.targetSnapshotDigest,
             profile: run.profile,
-            terminal: "completed",
-            reason: "unavailable",
+            terminal:
+              options.salvagedInitial || options.salvagedReport
+                ? "incomplete"
+                : "completed",
+            reason:
+              options.salvagedInitial || options.salvagedReport
+                ? "evidence"
+                : "unavailable",
             startedAt: "2026-10-08T07:00:00Z",
             completedAt: "2026-10-08T07:00:01Z",
             reportArtifactDigest: attachment.digest,
@@ -327,6 +363,61 @@ it("records valid child claims even when Root formatting and a sibling claim fai
   ).toBe("resolved");
 });
 
+it("marks candidates from a child started after the resume boundary", async () => {
+  const { ledger } = await campaign([], {
+    childSurvivesBrokenRoot: true,
+    continuedChild: true,
+  });
+  expect(ledger.read({ type: "finding-recorded" })[0]?.event).toMatchObject({
+    continuationOrdinal: 1,
+  });
+});
+
+it("marks only the new candidate when an existing child is followed up", async () => {
+  const { ledger } = await campaign([], {
+    childSurvivesBrokenRoot: true,
+    reusedChild: true,
+  });
+  const findings = ledger.read({ type: "finding-recorded" });
+  expect(findings).toHaveLength(2);
+  expect(findings[0]?.event).not.toHaveProperty("continuationOrdinal");
+  expect(findings[1]?.event).toMatchObject({ continuationOrdinal: 1 });
+});
+
+it("keeps initial candidates when a resumed run loses rollout evidence", async () => {
+  const { ledger } = await campaign([], {
+    screening: true,
+    leadOnly: true,
+    salvagedInitial: true,
+  });
+  expect(ledger.read({ type: "lead-recorded" })).toHaveLength(1);
+  expect(
+    ledger.read({ type: "discovery-run-finished" })[0]?.event,
+  ).toMatchObject({
+    outcome: "failed",
+    reason: "evidence",
+  });
+});
+
+it("records candidates recovered from stdout when rollout capture fails", async () => {
+  const { ledger } = await campaign([], {
+    screening: true,
+    leadOnly: true,
+    coverageContinuation: true,
+    salvagedReport: true,
+  });
+  expect(ledger.read({ type: "lead-recorded" })[0]?.event).toMatchObject({
+    continuationOrdinal: 1,
+  });
+  expect(
+    ledger.read({ type: "discovery-run-finished" })[0]?.event,
+  ).toMatchObject({
+    outcome: "failed",
+    reason: "evidence",
+    continuation: { injected: true },
+  });
+});
+
 it("admits an extracted Root candidate without treating the transcript as completed", async () => {
   const { result, ledger } = await campaign([], {
     rootTranscriptInvalid: true,
@@ -387,6 +478,33 @@ it("does not treat a screening Lead or held candidate as a negative result", asy
   expect(lead.ledger.read({ type: "lead-recorded" })).toHaveLength(1);
   const held = await campaign([], { screening: true, heldOnly: true });
   expect(held.result.stoppedBy).toBe("output-boundary");
+});
+
+it("records the continuation decision and marks candidates added after resume", async () => {
+  const finding = await campaign([0], {
+    screening: true,
+    coverageContinuation: true,
+  });
+  expect(
+    finding.ledger.read({ type: "discovery-run-finished" })[0]?.event,
+  ).toMatchObject({
+    continuation: {
+      injected: true,
+      mode: "thread-resume",
+      entriesHandedBack: 1,
+    },
+  });
+  expect(
+    finding.ledger.read({ type: "finding-recorded" })[0]?.event,
+  ).toMatchObject({ continuationOrdinal: 1 });
+  const lead = await campaign([], {
+    screening: true,
+    leadOnly: true,
+    coverageContinuation: true,
+  });
+  expect(lead.ledger.read({ type: "lead-recorded" })[0]?.event).toMatchObject({
+    continuationOrdinal: 1,
+  });
 });
 
 it("stops after consecutive completed runs without a new Finding and records each run configuration", async () => {

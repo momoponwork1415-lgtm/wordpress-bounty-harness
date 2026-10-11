@@ -8,6 +8,8 @@ import {
   enumerateWordPressEntryPoints,
   entryKey,
   planWordPressEntryAssignments,
+  renderedEntryKey,
+  renderWordPressEntryIndex,
   renderWordPressEntryAssignment,
   partitionWordPressEntryPoints,
 } from "../../../src/profiles/wordpress/discovery/entry-points.js";
@@ -25,6 +27,12 @@ describe("WordPress source index", () => {
   it("connects producers and consumers, retains dynamic keys outside components, and scans one include hop", async () => {
     const index = await buildWordPressSourceIndex(fixture, "plugin");
     expect(index.incomplete).toBe(false);
+    const shown = renderWordPressEntryIndex(index);
+    expect(
+      index.entries.every((entry) =>
+        shown.includes(`- ${renderedEntryKey(entry)}`),
+      ),
+    ).toBe(true);
     const pair = index.components.find((component) =>
       component.keys.includes("option:plugin_shared"),
     );

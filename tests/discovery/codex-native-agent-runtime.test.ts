@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -176,6 +176,699 @@ function sandbox(
 }
 
 describe("Codex native agent runtime", () => {
+  it("resumes solo and cooperative reports in one sandbox session and combines candidates", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-coverage-resume-"));
+    try {
+      const threadId = "00000000-0000-4000-8000-000000000001";
+      const events = (report: unknown) =>
+        [
+          { type: "thread.started", thread_id: threadId },
+          { type: "turn.started" },
+          {
+            type: "item.completed",
+            item: { type: "agent_message", text: JSON.stringify(report) },
+          },
+          {
+            type: "turn.completed",
+            usage: { input_tokens: 10, output_tokens: 4 },
+          },
+        ]
+          .map((event) => JSON.stringify(event))
+          .join("\n");
+      const rootHeader = JSON.stringify({
+        timestamp: now,
+        type: "session_meta",
+        payload: { id: threadId, source: "exec" },
+      });
+      const commandEvent = (timestamp: string, path: string) =>
+        JSON.stringify({
+          timestamp,
+          type: "event_msg",
+          payload: {
+            type: "item_completed",
+            item: {
+              type: "CommandExecution",
+              command: [`cat /workspace/main/${path}`],
+              cwd: "/workspace/main",
+              parsed_cmd: [{ type: "read", path }],
+            },
+          },
+        });
+      const firstCommand = commandEvent(
+        "2026-10-08T07:00:30.000Z",
+        "first.php",
+      );
+      const secondCommand = commandEvent(
+        "2026-10-08T07:01:30.000Z",
+        "second.php",
+      );
+      const initialRootRollout = `${rootHeader}\n${firstCommand}`;
+      const deltaRootRollout = `${rootHeader}\n${secondCommand}`;
+      const initial = {
+        status: "exited" as const,
+        exitCode: 0,
+        stdout: events({
+          findings: [],
+          leads: [JSON.stringify({ summary: "existing candidate" })],
+          examined: "entry one",
+          unexamined: "",
+        }),
+        startedAt: now,
+        completedAt: "2026-10-08T07:01:00.000Z",
+        image,
+        cliVersion: "0.161.0",
+        bundledCatalogDigest: digest,
+        rollouts: [initialRootRollout],
+        isolation: {
+          backend: "gvisor" as const,
+          runtime: "runsc" as const,
+          fallbackUsed: false as const,
+        },
+      };
+      const resumed = {
+        ...initial,
+        stdout: events({
+          findings: [],
+          leads: [
+            JSON.stringify({ summary: "existing candidate" }),
+            JSON.stringify({ summary: "new candidate" }),
+          ],
+          examined: `entry two\n${"covered ".repeat(2_100)}`,
+          unexamined: "",
+        }),
+        startedAt: "2026-10-08T07:01:00.000Z",
+        completedAt: "2026-10-08T07:02:00.000Z",
+        rollouts: [deltaRootRollout],
+      };
+      const template = "{remainingMinutes} minutes\n{entriesNotCovered}";
+      const coverageContinuation = {
+        entries: ["entry one", "entry two"],
+        template,
+        templateDigest:
+          `sha256:${createHash("sha256").update(template).digest("hex")}` as const,
+        minimumMs: 30 * 60_000,
+      };
+      const resumedChild = [
+        {
+          timestamp: "2026-10-08T07:01:30.000Z",
+          type: "session_meta",
+          payload: {
+            id: "child-after-resume",
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: threadId,
+                  depth: 1,
+                  agent_path: "/root/child-after",
+                },
+              },
+            },
+          },
+        },
+        {
+          timestamp: "2026-10-08T07:01:30.000Z",
+          type: "turn_context",
+          payload: {
+            model: "gpt-6-sol",
+            effort: "high",
+            cyber_access_program: "daybreak_blue",
+          },
+        },
+        {
+          timestamp: "2026-10-08T07:01:40.000Z",
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            last_agent_message: JSON.stringify({
+              findings: [],
+              leads: [{ summary: "new child candidate" }],
+              examined: "child source",
+              unexamined: "none",
+            }),
+          },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+      const reusableChild = (followup: boolean) =>
+        [
+          {
+            timestamp: "2026-10-08T07:00:15.000Z",
+            type: "session_meta",
+            payload: {
+              id: "child-reused",
+              source: {
+                subagent: {
+                  thread_spawn: {
+                    parent_thread_id: threadId,
+                    depth: 1,
+                    agent_path: "/root/child-reused",
+                  },
+                },
+              },
+            },
+          },
+          {
+            timestamp: "2026-10-08T07:00:15.000Z",
+            type: "turn_context",
+            payload: {
+              model: "gpt-6-sol",
+              effort: "high",
+              cyber_access_program: "daybreak_blue",
+            },
+          },
+          {
+            timestamp: "2026-10-08T07:00:30.000Z",
+            type: "event_msg",
+            payload: {
+              type: "task_complete",
+              last_agent_message: JSON.stringify({
+                findings: [],
+                leads: [{ summary: "first child lead" }],
+                examined: "child source",
+                unexamined: "none",
+              }),
+            },
+          },
+          ...(followup
+            ? [
+                {
+                  timestamp: "2026-10-08T07:01:40.000Z",
+                  type: "event_msg",
+                  payload: {
+                    type: "task_complete",
+                    last_agent_message: JSON.stringify({
+                      findings: [],
+                      leads: [{ summary: "followup child lead" }],
+                      examined: "more child source",
+                      unexamined: "none",
+                    }),
+                  },
+                },
+              ]
+            : []),
+        ]
+          .map((event) => JSON.stringify(event))
+          .join("\n");
+      const resumedReusedChild = reusableChild(true)
+        .split("\n")
+        .filter(
+          (line) =>
+            (JSON.parse(line) as { timestamp: string }).timestamp !==
+            "2026-10-08T07:00:30.000Z",
+        )
+        .join("\n");
+      const attachments = new ProviderAttachmentStore(root);
+      const runtime = new CodexNativeAgentRuntime(
+        {
+          async execute() {
+            throw new Error("one-shot execution is forbidden");
+          },
+          async executeWithResume(command, decide) {
+            expect(command.args).not.toContain("--ephemeral");
+            expect(command.args).not.toContain('history.persistence="none"');
+            const isCooperative = command.args.includes("multi_agent");
+            const first = isCooperative
+              ? {
+                  ...initial,
+                  rollouts: [...(initial.rollouts ?? []), reusableChild(false)],
+                }
+              : initial;
+            const request = await decide(first);
+            expect(request).toMatchObject({
+              threadId,
+              prompt: "29 minutes\nentry two",
+            });
+            expect(request?.args).toContain("resume");
+            if (isCooperative) expect(request?.args).toContain("multi_agent");
+            return {
+              initial: first,
+              resumed: isCooperative
+                ? {
+                    ...resumed,
+                    rollouts: [
+                      ...(resumed.rollouts ?? []),
+                      resumedChild,
+                      resumedReusedChild,
+                    ],
+                  }
+                : resumed,
+            };
+          },
+        },
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const result = await runtime.execute({
+        ...run,
+        campaignInput: {
+          ...run.campaignInput,
+          entryIndex: { enabled: true, digest },
+        },
+        coverageContinuation,
+      });
+      expect(result.receipt.terminal).toBe("completed");
+      expect(result.continuation).toMatchObject({
+        injected: true,
+        mode: "thread-resume",
+        entriesHandedBack: 1,
+        initialFindingCount: 0,
+        initialLeadCount: 1,
+      });
+      expect(result.receipt.usage?.inputTokens).toBe(20);
+      expect(result.receipt.observed).toEqual({
+        toolCalls: 1,
+        filesRead: 1,
+        uniqueFilesRead: 1,
+        labRequests: 0,
+        dbQueries: 0,
+      });
+      const rootDiagnosticDigest = result.receipt.diagnosticArtifactDigest;
+      if (rootDiagnosticDigest === undefined)
+        throw new Error("Root diagnostic was not retained");
+      const rootDiagnostic = await attachments.readByDigest(
+        "diagnostic",
+        rootDiagnosticDigest,
+      );
+      if (rootDiagnostic.status !== "resolved")
+        throw new Error("Root diagnostic could not be read");
+      const rootDiagnosticText = rootDiagnostic.bytes.toString();
+      expect(rootDiagnosticText).toContain(
+        `--- initial rollout ---\n${initialRootRollout}`,
+      );
+      expect(rootDiagnosticText).toContain(
+        `--- resumed rollout ---\n${deltaRootRollout}`,
+      );
+      expect(rootDiagnosticText.split(rootHeader)).toHaveLength(3);
+      const stored =
+        result.attachment && (await attachments.read(result.attachment));
+      expect(stored?.status).toBe("resolved");
+      if (stored?.status === "resolved") {
+        const report = JSON.parse(stored.bytes.toString()) as {
+          leads: unknown[];
+        };
+        expect(report.leads).toHaveLength(2);
+      }
+      const fullHistory = new CodexNativeAgentRuntime(
+        {
+          async execute() {
+            throw new Error("one-shot execution is forbidden");
+          },
+          async executeWithResume(_command, decide) {
+            expect(await decide(initial)).toBeDefined();
+            return {
+              initial,
+              resumed: {
+                ...resumed,
+                rollouts: [`${initialRootRollout}\n${secondCommand}`],
+              },
+            };
+          },
+        },
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const fullHistoryResult = await fullHistory.execute({
+        ...run,
+        runId: "full-history-resume",
+        campaignInput: {
+          ...run.campaignInput,
+          entryIndex: { enabled: true, digest },
+        },
+        coverageContinuation,
+      });
+      expect(fullHistoryResult.receipt.terminal).toBe("completed");
+      expect(fullHistoryResult.receipt.observed).toEqual({
+        toolCalls: 2,
+        filesRead: 2,
+        uniqueFilesRead: 2,
+        labRequests: 0,
+        dbQueries: 0,
+      });
+      const fullHistoryDigest =
+        fullHistoryResult.receipt.diagnosticArtifactDigest;
+      if (fullHistoryDigest === undefined)
+        throw new Error("Full-history diagnostic was not retained");
+      const fullHistoryDiagnostic = await attachments.readByDigest(
+        "diagnostic",
+        fullHistoryDigest,
+      );
+      if (fullHistoryDiagnostic.status !== "resolved")
+        throw new Error("Full-history diagnostic could not be read");
+      expect(
+        fullHistoryDiagnostic.bytes.toString().split(firstCommand),
+      ).toHaveLength(3);
+      const cooperativeProfile = defineAgentRuntimeProfile({
+        id: profile.id,
+        transportKind: profile.transportKind,
+        sandboxImageDigest: profile.sandboxImageDigest,
+        requestedModelId: "gpt-6-sol",
+        requestedEffort: profile.requestedEffort,
+        codexCliVersion: profile.codexCliVersion,
+        bundledCatalogDigest: profile.bundledCatalogDigest,
+        authenticationMethod: profile.authenticationMethod,
+        cyberAccessProgram: "daybreak_blue",
+        serviceTier: profile.serviceTier,
+        subagent: { modelId: "gpt-6-sol", effort: "high" },
+      });
+      const cooperative = await runtime.execute({
+        ...run,
+        runId: "deep-dive-run",
+        profile: cooperativeProfile,
+        coordination: "cooperative",
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+          entryIndex: { enabled: true, digest },
+        },
+        coverageContinuation,
+      });
+      expect(cooperative.receipt.terminal).toBe("completed");
+      expect(cooperative.continuation?.injected).toBe(true);
+      expect(cooperative.agentRuns?.[0]).toMatchObject({
+        continuationOrdinal: 1,
+      });
+      const reused = cooperative.agentRuns?.find(
+        (child) => child.agentPath === "/root/child-reused",
+      );
+      expect(reused).toMatchObject({
+        initialFindingCount: 0,
+        initialLeadCount: 1,
+      });
+      const reusedStored =
+        reused?.attachment && (await attachments.read(reused.attachment));
+      if (reusedStored?.status === "resolved")
+        expect(JSON.parse(reusedStored.bytes.toString()).leads).toHaveLength(2);
+      else throw new Error("Reused child report was not retained");
+      const diagnosticDigest = reused?.receipt.diagnosticArtifactDigest;
+      if (diagnosticDigest === undefined)
+        throw new Error("Reused child diagnostic was not retained");
+      const reusedDiagnostic = await attachments.readByDigest(
+        "diagnostic",
+        diagnosticDigest,
+      );
+      expect(reusedDiagnostic.status).toBe("resolved");
+      if (reusedDiagnostic.status === "resolved") {
+        expect(reusedDiagnostic.bytes.toString()).toContain("first child lead");
+        expect(reusedDiagnostic.bytes.toString()).toContain(
+          "followup child lead",
+        );
+      }
+      const broken = new CodexNativeAgentRuntime(
+        {
+          async execute() {
+            throw new Error("one-shot execution is forbidden");
+          },
+          async executeWithResume(_command, decide) {
+            expect(await decide(initial)).toBeDefined();
+            return {
+              initial,
+              resumed: {
+                ...resumed,
+                rolloutFailure: "capture-failed" as const,
+              },
+            };
+          },
+        },
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const salvaged = await broken.execute({
+        ...run,
+        runId: "failed-resume",
+        campaignInput: {
+          ...run.campaignInput,
+          entryIndex: { enabled: true, digest },
+        },
+        coverageContinuation,
+      });
+      expect(salvaged.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "evidence",
+        reasonDetail: "rollout-capture-failed",
+      });
+      expect(salvaged.salvagedReport).toBe(true);
+      const initialStored =
+        salvaged.attachment && (await attachments.read(salvaged.attachment));
+      expect(initialStored?.status).toBe("resolved");
+      if (initialStored?.status === "resolved")
+        expect(JSON.parse(initialStored.bytes.toString()).leads).toHaveLength(
+          2,
+        );
+      const missingRootThread = resumed.stdout
+        .split("\n")
+        .filter(
+          (line) =>
+            (JSON.parse(line) as { type: string }).type !== "thread.started",
+        )
+        .join("\n");
+      for (const failure of [
+        {
+          runId: "resume-missing-root-thread",
+          reasonDetail: "missing-root-thread-id",
+          resumed: { ...resumed, stdout: missingRootThread },
+        },
+        {
+          runId: "resume-missing-root-rollout",
+          reasonDetail: "root-rollout-missing",
+          resumed: { ...resumed, rollouts: [] },
+        },
+      ]) {
+        const runtimeWithMissingRollout = new CodexNativeAgentRuntime(
+          {
+            async execute() {
+              throw new Error("one-shot execution is forbidden");
+            },
+            async executeWithResume(_command, decide) {
+              expect(await decide(initial)).toBeDefined();
+              return { initial, resumed: failure.resumed };
+            },
+          },
+          broker(),
+          attachments,
+          image,
+          () => new Date(now),
+        );
+        const recovered = await runtimeWithMissingRollout.execute({
+          ...run,
+          runId: failure.runId,
+          campaignInput: {
+            ...run.campaignInput,
+            entryIndex: { enabled: true, digest },
+          },
+          coverageContinuation,
+        });
+        expect(recovered).toMatchObject({
+          salvagedReport: true,
+          receipt: {
+            terminal: "incomplete",
+            reasonDetail: failure.reasonDetail,
+          },
+        });
+        const recoveredStored =
+          recovered.attachment &&
+          (await attachments.read(recovered.attachment));
+        if (recoveredStored?.status === "resolved")
+          expect(
+            (
+              JSON.parse(recoveredStored.bytes.toString()) as {
+                leads: unknown[];
+              }
+            ).leads,
+          ).toHaveLength(2);
+        else throw new Error("Resumed report was not retained");
+      }
+      const noResume = new CodexNativeAgentRuntime(
+        {
+          async execute() {
+            throw new Error("one-shot execution is forbidden");
+          },
+          async executeWithResume(_command, decide) {
+            expect(await decide(initial)).toBeUndefined();
+            return {
+              initial: {
+                ...initial,
+                rolloutFailure: "capture-failed" as const,
+              },
+            };
+          },
+        },
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const noResumeResult = await noResume.execute({
+        ...run,
+        runId: "complete-coverage-rollout-failed",
+        campaignInput: {
+          ...run.campaignInput,
+          entryIndex: { enabled: true, digest },
+        },
+        coverageContinuation: {
+          ...coverageContinuation,
+          entries: ["entry one"],
+        },
+      });
+      expect(noResumeResult).toMatchObject({
+        salvagedReport: true,
+        continuation: { injected: false, reason: "coverage-complete" },
+        receipt: { terminal: "incomplete", reason: "evidence" },
+      });
+      const noResumeStored =
+        noResumeResult.attachment &&
+        (await attachments.read(noResumeResult.attachment));
+      if (noResumeStored?.status === "resolved")
+        expect(JSON.parse(noResumeStored.bytes.toString()).leads).toHaveLength(
+          1,
+        );
+      else throw new Error("Initial report was not retained");
+      const cleanupFailure = new CodexNativeAgentRuntime(
+        {
+          async execute() {
+            throw new Error("one-shot execution is forbidden");
+          },
+          async executeWithResume(_command, decide) {
+            expect(await decide(initial)).toBeDefined();
+            return { initial, resumed, cleanupFailed: true };
+          },
+        },
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const cleanupResult = await cleanupFailure.execute({
+        ...run,
+        runId: "cleanup-after-resume-failed",
+        campaignInput: {
+          ...run.campaignInput,
+          entryIndex: { enabled: true, digest },
+        },
+        coverageContinuation,
+      });
+      expect(cleanupResult).toMatchObject({
+        salvagedReport: true,
+        continuation: { injected: true, entriesHandedBack: 1 },
+        receipt: {
+          terminal: "incomplete",
+          reason: "sandbox",
+          reasonDetail: "cleanup-failed",
+        },
+      });
+      const cleanupDiagnosticDigest =
+        cleanupResult.receipt.diagnosticArtifactDigest;
+      if (cleanupDiagnosticDigest === undefined)
+        throw new Error("Cleanup-failed diagnostic was not retained");
+      const cleanupDiagnostic = await attachments.readByDigest(
+        "diagnostic",
+        cleanupDiagnosticDigest,
+      );
+      if (cleanupDiagnostic.status !== "resolved")
+        throw new Error("Cleanup-failed diagnostic could not be read");
+      expect(cleanupDiagnostic.bytes.toString()).toContain(initialRootRollout);
+      expect(cleanupDiagnostic.bytes.toString()).toContain(deltaRootRollout);
+      const cleanupStored =
+        cleanupResult.attachment &&
+        (await attachments.read(cleanupResult.attachment));
+      if (cleanupStored?.status === "resolved")
+        expect(JSON.parse(cleanupStored.bytes.toString()).leads).toHaveLength(
+          2,
+        );
+      else throw new Error("Captured report was not retained");
+      const malformedResume = new CodexNativeAgentRuntime(
+        {
+          async execute() {
+            throw new Error("one-shot execution is forbidden");
+          },
+          async executeWithResume(_command, decide) {
+            expect(await decide(initial)).toBeDefined();
+            return {
+              initial,
+              resumed: {
+                ...resumed,
+                stdout: [
+                  JSON.stringify({ type: "error", message: "diagnostic" }),
+                  events({
+                    findings: [],
+                    leads: [JSON.stringify({ summary: "resumed candidate" })],
+                    examined: "entry two",
+                    unexamined: "",
+                  }),
+                ].join("\n"),
+              },
+            };
+          },
+        },
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const malformed = await malformedResume.execute({
+        ...run,
+        runId: "malformed-resume",
+        campaignInput: {
+          ...run.campaignInput,
+          entryIndex: { enabled: true, digest },
+        },
+        coverageContinuation,
+      });
+      expect(malformed.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "schema",
+      });
+      const combined =
+        malformed.attachment && (await attachments.read(malformed.attachment));
+      expect(combined?.status).toBe("resolved");
+      if (combined?.status === "resolved")
+        expect(
+          (JSON.parse(combined.bytes.toString()) as { leads: unknown[] }).leads,
+        ).toHaveLength(2);
+      const failedLaunch = new CodexNativeAgentRuntime(
+        {
+          async execute() {
+            throw new Error("one-shot execution is forbidden");
+          },
+          async executeWithResume(_command, decide) {
+            expect(await decide(initial)).toBeDefined();
+            throw new Error("resume did not launch");
+          },
+        },
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const unavailable = await failedLaunch.execute({
+        ...run,
+        runId: "resume-launch-failed",
+        campaignInput: {
+          ...run.campaignInput,
+          entryIndex: { enabled: true, digest },
+        },
+        coverageContinuation,
+      });
+      expect(unavailable.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "provider",
+      });
+      expect(unavailable.salvagedInitialReport).toBe(true);
+      expect(unavailable.continuation).toMatchObject({
+        injected: false,
+        reason: "resume-unavailable",
+        entriesHandedBack: 0,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("keeps a child report when the Root final JSON is malformed", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-child-salvage-"));
     try {
