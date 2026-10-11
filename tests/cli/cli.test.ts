@@ -1966,6 +1966,22 @@ describe("harness CLI vertical slice", () => {
       (await run("review", ...campaign)).stdout,
     )![1]!;
 
+    const sameVersion = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding,
+      "--config",
+      configPath,
+      "--version",
+      "3.3.1",
+    );
+    expect(sameVersion.code).not.toBe(0);
+    expect(sameVersion.stderr).toContain(
+      "A fixed-version control requires a different Snapshot",
+    );
+
     const controlled = await run(
       "review",
       "reverify",

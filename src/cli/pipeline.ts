@@ -482,6 +482,13 @@ export async function reverifyOnSelectedVersion<
   if (target === null)
     throw new Error("The selected target version is not available now");
   const snapshot = await pipeline.freeze(target);
+  if (
+    options.version !== undefined &&
+    snapshot.digest === finding.snapshotDigest
+  )
+    throw new Error(
+      "A fixed-version control requires a different Snapshot from the original Finding",
+    );
   const verificationId = options.newId();
   const base = {
     schemaVersion: 1 as const,

@@ -39,6 +39,14 @@ async function fixture(
     readonly judge?: "observed" | "not-observed" | "throws";
     readonly teardown?: "removed" | "incomplete";
     readonly refute?: boolean;
+    /** A Finding rebound to a separately frozen version for a negative control. */
+    readonly fixedVersion?: boolean;
+    /** Claim a fixed-version basis with an ordinary Finding. */
+    readonly omitFixedLineage?: boolean;
+    /** Exercise a malformed fixed-version control without the earlier route. */
+    readonly omitReferenceRoute?: boolean;
+    /** The Harness recorder captured the rerun even though the canary did not fire. */
+    readonly negativeCapture?: boolean;
     /** Attempt a comparison against another frozen snapshot. */
     readonly latestVersion?: boolean;
     readonly scenario?: { readonly id: string; readonly digest: string };
@@ -55,30 +63,72 @@ async function fixture(
     databasePath: join(root, "ledger.sqlite"),
     artifactStore: store,
   });
+  if (options.latestVersion === true || options.fixedVersion === true)
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "comparison-frozen",
+      campaignId: "campaign-1",
+      snapshotDigest: otherDigest,
+      occurredAt: "2026-10-08T00:30:00Z",
+      type: "snapshot-frozen",
+      sourceDigest: otherDigest,
+    });
+  const derivedFixedVersion =
+    options.fixedVersion === true && options.omitFixedLineage !== true;
+  const findingSnapshotDigest =
+    options.fixedVersion === true ? otherDigest : snapshotDigest;
   const finding: SyntheticFinding = {
-    findingId: "finding-1",
-    snapshotDigest,
+    findingId: derivedFixedVersion ? "finding-fixed" : "finding-1",
+    snapshotDigest: findingSnapshotDigest,
     impact: options.impact ?? "account-takeover",
   };
+  if (derivedFixedVersion) {
+    const original: SyntheticFinding = {
+      ...finding,
+      findingId: "finding-1",
+      snapshotDigest,
+    };
+    const originalDigest = await store.putFiles({
+      "finding.json": canonicalJson(original),
+    });
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "finding-1",
+      campaignId: "campaign-1",
+      snapshotDigest,
+      occurredAt: "2026-10-08T00:00:00Z",
+      type: "finding-recorded",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: original.impact,
+      artifacts: [{ kind: "finding", digest: originalDigest }],
+    });
+  }
   const findingDigest = await store.putFiles({
     "finding.json": canonicalJson(finding),
   });
   await ledger.append({
     schemaVersion: 1,
-    identity: "finding-1",
+    identity: finding.findingId,
     campaignId: "campaign-1",
-    snapshotDigest,
+    snapshotDigest: findingSnapshotDigest,
     occurredAt: "2026-10-08T00:00:00Z",
     type: "finding-recorded",
-    findingId: "finding-1",
+    findingId: finding.findingId,
     runId: "run-1",
     category: finding.impact,
+    ...(derivedFixedVersion
+      ? {
+          derivedFromFindingId: "finding-1",
+          derivationKind: "fixed-version-control" as const,
+        }
+      : {}),
     artifacts: [{ kind: "finding", digest: findingDigest }],
   });
   const calls = { provision: 0, verifier: 0, teardown: 0 };
   const handle: LabHandle = {
     id: "lab-1",
-    snapshotDigest: options.labSnapshotDigest ?? snapshotDigest,
+    snapshotDigest: options.labSnapshotDigest ?? findingSnapshotDigest,
     setupDigest,
     endpoint: "http://lab",
     ...(options.scenario === undefined ? {} : { scenario: options.scenario }),
@@ -117,11 +167,27 @@ async function fixture(
       };
     },
   };
+  const negativeCaptureDigest =
+    options.negativeCapture === true
+      ? await store.putFiles({
+          "proxy-capture.jsonl": `${canonicalJson({
+            request: { method: "GET", path: "/same-route" },
+            response: { status: 200, body: "Canary absent" },
+          })}\n`,
+        })
+      : undefined;
   const judge: Judge<SyntheticFinding, LabHandle> = {
     id: "synthetic-canary",
     async observe({ lab: observed }) {
       if (options.judge === "throws") throw new Error("Lab unreachable");
-      if (options.judge === "not-observed") return { status: "not-observed" };
+      if (options.judge === "not-observed")
+        return negativeCaptureDigest === undefined
+          ? { status: "not-observed" }
+          : {
+              status: "not-observed",
+              evidenceCapture: "harness-captured",
+              evidenceDigest: negativeCaptureDigest,
+            };
       return {
         status: "observed",
         conditions: { attackerRole: "subscriber", reachedRole: "synthetic" },
@@ -162,36 +228,49 @@ async function fixture(
     },
     clock: () => new Date("2026-10-08T01:00:00Z"),
   });
-  if (options.latestVersion === true)
-    await ledger.append({
-      schemaVersion: 1,
-      identity: "latest-frozen",
-      campaignId: "campaign-1",
-      snapshotDigest: otherDigest,
-      occurredAt: "2026-10-08T00:30:00Z",
-      type: "snapshot-frozen",
-      sourceDigest: otherDigest,
-    });
+  const basisKind =
+    options.fixedVersion === true
+      ? ("fixed-version" as const)
+      : ("latest-version" as const);
   const result = await verification.verify({
     campaignId: "campaign-1",
-    findingId: "finding-1",
+    findingId: finding.findingId,
     verificationId: "verification-1",
     snapshot: {
-      digest: options.latestVersion === true ? otherDigest : snapshotDigest,
+      digest:
+        options.latestVersion === true || options.fixedVersion === true
+          ? otherDigest
+          : snapshotDigest,
     },
-    ...(options.latestVersion === true
+    ...(options.latestVersion === true || options.fixedVersion === true
       ? {
           basis: {
-            kind: "latest-version" as const,
-            findingSnapshotDigest: snapshotDigest,
+            kind: basisKind,
+            findingSnapshotDigest,
           },
         }
       : {}),
     setup: { name: "synthetic" },
     campaignLabSetupDigest: setupDigest,
     reconstruction: { note: "synthetic" },
+    ...(options.fixedVersion === true && options.omitReferenceRoute !== true
+      ? {
+          referenceRoute: {
+            role: "subscriber",
+            defaultSettings: true,
+            steps: [
+              {
+                kind: "http",
+                method: "GET",
+                path: "/same-route",
+                expected: "The canary fires",
+              },
+            ],
+          },
+        }
+      : {}),
   });
-  return { result, calls, ledger };
+  return { result, calls, ledger, negativeCaptureDigest, store };
 }
 
 describe("verification public interface", () => {
@@ -243,11 +322,120 @@ describe("verification public interface", () => {
     });
   });
 
-  it("records contradicted only when the Verifier refutes and the judge sees no canary", async () => {
-    const { result } = await fixture({ judge: "not-observed", refute: true });
+  it.each([false, true])(
+    "keeps an original Finding incomplete when the Verifier refutes without a canary (captured: %s)",
+    async (negativeCapture) => {
+      const { result, ledger, negativeCaptureDigest } = await fixture({
+        judge: "not-observed",
+        refute: true,
+        negativeCapture,
+      });
+      expect(result).toMatchObject({
+        status: "incomplete",
+        reason: "observation",
+        refutationDigest: expect.stringMatching(/^sha256:/),
+        ...(negativeCapture ? { evidenceDigest: negativeCaptureDigest } : {}),
+      });
+      expect(
+        ledger.read({ type: "verification-finished" })[0]?.event,
+      ).toMatchObject({
+        result,
+        ...(negativeCapture ? { evidenceCapture: "harness-captured" } : {}),
+      });
+    },
+  );
+
+  it("rejects a self-declared fixed-version basis on an ordinary Finding", async () => {
+    const { result, calls, ledger } = await fixture({
+      fixedVersion: true,
+      omitFixedLineage: true,
+      judge: "not-observed",
+      refute: true,
+      negativeCapture: true,
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "precondition",
+    });
+    expect(calls).toEqual({ provision: 0, verifier: 0, teardown: 0 });
+    expect(
+      ledger.read({ type: "verification-finished" })[0]?.event,
+    ).toMatchObject({ basis: { kind: "fixed-version" }, result });
+  });
+
+  it("contradicts a fixed-version control only with a Harness-captured negative rerun", async () => {
+    const { result, ledger, negativeCaptureDigest, store } = await fixture({
+      fixedVersion: true,
+      judge: "not-observed",
+      refute: true,
+      negativeCapture: true,
+    });
     expect(result).toMatchObject({
       status: "contradicted",
       judgeId: "synthetic-canary",
+      evidenceDigest: negativeCaptureDigest,
+    });
+    if (negativeCaptureDigest === undefined)
+      throw new Error("The fixture did not store its negative capture");
+    expect(
+      await store.readFile(negativeCaptureDigest, "proxy-capture.jsonl", 1024),
+    ).toMatchObject({ status: "resolved" });
+    expect(
+      ledger.read({ type: "verification-finished" })[0]?.event,
+    ).toMatchObject({
+      basis: { kind: "fixed-version", findingSnapshotDigest: otherDigest },
+      evidenceCapture: "harness-captured",
+      result,
+    });
+    expect(
+      ledger.read({ type: "finding-recorded", findingId: "finding-fixed" })[0]
+        ?.event,
+    ).toMatchObject({
+      snapshotDigest: otherDigest,
+      derivedFromFindingId: "finding-1",
+      derivationKind: "fixed-version-control",
+    });
+  });
+
+  it("keeps a fixed-version control incomplete when its negative rerun was not captured", async () => {
+    const { result, ledger } = await fixture({
+      fixedVersion: true,
+      judge: "not-observed",
+      refute: true,
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+      refutationDigest: expect.stringMatching(/^sha256:/),
+    });
+    expect(
+      ledger.read({ type: "verification-finished" })[0]?.event,
+    ).toMatchObject({
+      basis: { kind: "fixed-version" },
+      result,
+    });
+  });
+
+  it("keeps a captured fixed-version control incomplete without the earlier confirmed route", async () => {
+    const { result, ledger, negativeCaptureDigest } = await fixture({
+      fixedVersion: true,
+      omitReferenceRoute: true,
+      judge: "not-observed",
+      refute: true,
+      negativeCapture: true,
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+      evidenceDigest: negativeCaptureDigest,
+      refutationDigest: expect.stringMatching(/^sha256:/),
+    });
+    expect(
+      ledger.read({ type: "verification-finished" })[0]?.event,
+    ).toMatchObject({
+      basis: { kind: "fixed-version" },
+      evidenceCapture: "harness-captured",
+      result,
     });
   });
 
