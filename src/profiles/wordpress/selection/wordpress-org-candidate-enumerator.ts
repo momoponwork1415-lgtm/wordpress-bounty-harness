@@ -192,8 +192,9 @@ async function observeListing(
     !Number.isFinite(fetchedAt) ||
     !Number.isFinite(ageSeconds) ||
     ageSeconds < 0 ||
-    !Number.isFinite(observed) ||
-    observed > fetchedAt + 300_000
+    !Number.isFinite(dateObserved) ||
+    dateObserved > fetchedAt + 300_000 ||
+    !Number.isFinite(observed)
   ) {
     return { listing: unavailable(request, "invalid-response"), slugs: [] };
   }

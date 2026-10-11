@@ -99,6 +99,19 @@ describe("WordPress.org public candidate enumeration", () => {
     });
   });
 
+  it("rejects a listing whose Date header is far in the future", async () => {
+    const result = await enumerateWordPressOrgCandidates({
+      tags: [],
+      clock,
+      fetch: async () => listing(["future-plugin"], "2026-10-12T01:00:00.000Z"),
+    });
+    expect(result).toMatchObject({
+      status: "unavailable",
+      candidates: [],
+      listings: [{ status: "unavailable", reason: "invalid-response" }],
+    });
+  });
+
   it("draws from both listing types when the candidate cap is small", async () => {
     const result = await enumerateWordPressOrgCandidates({
       tags: ["login"],
