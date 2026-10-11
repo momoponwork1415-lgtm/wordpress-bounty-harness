@@ -46,6 +46,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-single-http-v2",
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
+      "wp2shell-bounty-v3",
       "trust-boundary-v1",
     ]);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual([
@@ -62,6 +63,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-single-http-v2",
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
+      "wp2shell-bounty-v3",
     ]);
 
     for (const id of WORDPRESS_DISCOVERY_ASSET_IDS) {
@@ -118,6 +120,8 @@ describe("WordPress discovery prompt assets", () => {
         "sha256:972ebe7d10a0173fef24a7603e01defcb17fd81e87810795f705737114f584b4",
       "screening-v1":
         "sha256:effeb9e343601157e2da76eb65b99d4de91a9618daf7379efce13491a1d6aba6",
+      "wp2shell-bounty-v3":
+        "sha256:a97b4b3c1101470cec743dd51af1d2169f15d4d5ee1a2797997be05edef72c9b",
     } as const;
     for (const id of WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS) {
       const { text, digest } = await loadWordPressDiscoveryAsset(id);
@@ -127,6 +131,31 @@ describe("WordPress discovery prompt assets", () => {
         /sourceTrace|labObservations|JSON string|Each Finding is an object/,
       );
     }
+  });
+
+  it("keeps the v2 method in v3 without an effort floor or handwritten output contract", async () => {
+    const { text } = await loadWordPressDiscoveryAsset("wp2shell-bounty-v3");
+    expect(text).toContain(
+      "three subagents with genuinely different questions",
+    );
+    expect(text).toContain("When agents converge on one family");
+    expect(text).toContain(
+      "After each wave, synthesize the children's evidence",
+    );
+    expect(text).toContain("test attacker control, reachability");
+    expect(text).toContain(
+      "Combine partial routes only when every connecting edge",
+    );
+    expect(text).toContain("two consecutive waves add no new approach family");
+    expect(text).not.toMatch(
+      /at least\s+\d+\s+(?:minutes?|hours?)|effort floor/i,
+    );
+    expect(text).not.toMatch(
+      /sourceTrace|labObservations|JSON string|Each Finding is an object|Each Lead is an object/,
+    );
+    expect(text).not.toMatch(
+      /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|\b(?:PoC|CVE|advisory)\b/i,
+    );
   });
 
   it("pins the v2 bytes and excludes answer clues and scripted commands", async () => {

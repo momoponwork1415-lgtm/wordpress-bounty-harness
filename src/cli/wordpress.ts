@@ -175,7 +175,9 @@ const campaignModes = z.discriminatedUnion("mode", [
     ...commonCampaignFields,
     mode: z.literal("wp2shell"),
     runWallTimeMinutes: z.number().positive().max(60).default(60),
-    promptId: z.literal("wp2shell-bounty-v2").default("wp2shell-bounty-v2"),
+    promptId: z
+      .enum(["wp2shell-bounty-v2", "wp2shell-bounty-v3"])
+      .default("wp2shell-bounty-v3"),
     stopRules: singleTrialStop,
     entryIndex: z.literal(true).default(true),
   }),
@@ -183,7 +185,9 @@ const campaignModes = z.discriminatedUnion("mode", [
     ...commonCampaignFields,
     mode: z.literal("entry-index-control"),
     runWallTimeMinutes: z.number().positive().max(60).default(60),
-    promptId: z.literal("wp2shell-bounty-v2").default("wp2shell-bounty-v2"),
+    promptId: z
+      .enum(["wp2shell-bounty-v2", "wp2shell-bounty-v3"])
+      .default("wp2shell-bounty-v3"),
     stopRules: singleTrialStop,
     entryIndex: z.literal(false),
   }),
@@ -197,7 +201,7 @@ const campaignModes = z.discriminatedUnion("mode", [
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("ablation"),
-    promptId: runnablePrompt.default("wp2shell-bounty-v2"),
+    promptId: runnablePrompt.default("wp2shell-bounty-v3"),
     stopRules: comparisonStop,
     entryIndex: z.boolean().default(true),
     ablation,
@@ -205,7 +209,7 @@ const campaignModes = z.discriminatedUnion("mode", [
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("assignment"),
-    promptId: runnablePrompt.default("wp2shell-bounty-v2"),
+    promptId: runnablePrompt.default("wp2shell-bounty-v3"),
     stopRules: comparisonStop,
     entryIndex: z.literal(true).default(true),
     assignment,
@@ -223,7 +227,8 @@ export const wordpressCampaignConfigSchema = z
         : config.ablation !== undefined
           ? "ablation"
           : config.promptId !== undefined &&
-              config.promptId !== "wp2shell-bounty-v2"
+              config.promptId !== "wp2shell-bounty-v2" &&
+              config.promptId !== "wp2shell-bounty-v3"
             ? "comparison"
             : config.entryIndex === false
               ? "entry-index-control"
@@ -1055,7 +1060,7 @@ export function createWordPressCliProfile(
         ledger: state.ledger,
         candidates: eligible.map(({ slug, version }) => ({ slug, version })),
         currentPromptVariant:
-          policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v2",
+          policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v3",
         revisitPolicy: policy.revisitPolicy ?? { kind: "never" },
       });
       const ledgerReasons = new Map(
@@ -1119,7 +1124,7 @@ export function createWordPressCliProfile(
           type: "target-selected",
           selectionId: `${target.targetId}@${target.version}`,
           promptVariant:
-            policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v2",
+            policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v3",
           artifacts: [
             { kind: "target-selection", digest: selectionDigest },
             { kind: "selection-report", digest: reportDigest },
