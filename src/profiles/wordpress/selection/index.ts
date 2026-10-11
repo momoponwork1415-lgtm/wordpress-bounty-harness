@@ -2,6 +2,10 @@ export {
   createWordPressSelection,
   loadWordPressSelectionPolicy,
 } from "./wordpress-selection.js";
+export type {
+  WordPressSelectionBatchInspection,
+  WordPressSelectionWithBatchInspection,
+} from "./wordpress-selection.js";
 export {
   wordPressSelectionPolicySchema,
   wordPressTargetSelectionSchema,

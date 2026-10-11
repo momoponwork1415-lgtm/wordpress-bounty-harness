@@ -31,8 +31,9 @@ interface ListingIdentity {
 type UnavailableReason =
   "http-error" | "network-failure" | "invalid-response" | "too-large";
 
-export type WordPressOrgListingObservation = ListingIdentity &
-  (
+export type WordPressOrgListingObservation = ListingIdentity & {
+  readonly checkedAt: string;
+} & (
     | {
         readonly status: "available";
         readonly observedAt: string;
@@ -154,8 +155,9 @@ async function readBounded(response: Response): Promise<Uint8Array> {
 function unavailable(
   request: ListingRequest,
   reason: UnavailableReason,
+  checkedAt: string,
 ): WordPressOrgListingObservation {
-  return { ...request, status: "unavailable", reason };
+  return { ...request, checkedAt, status: "unavailable", reason };
 }
 
 async function observeListing(
@@ -167,6 +169,7 @@ async function observeListing(
   listing: WordPressOrgListingObservation;
   slugs: readonly string[];
 }> {
+  const checkedAt = clock().toISOString();
   let response: Response;
   try {
     response = await fetcher(request.sourceUrl, {
@@ -176,10 +179,16 @@ async function observeListing(
       headers: { Accept: "application/json" },
     });
   } catch {
-    return { listing: unavailable(request, "network-failure"), slugs: [] };
+    return {
+      listing: unavailable(request, "network-failure", checkedAt),
+      slugs: [],
+    };
   }
   if (!response.ok)
-    return { listing: unavailable(request, "http-error"), slugs: [] };
+    return {
+      listing: unavailable(request, "http-error", checkedAt),
+      slugs: [],
+    };
 
   const fetchedAt = clock().getTime();
   const responseDate = response.headers.get("date");
@@ -196,12 +205,16 @@ async function observeListing(
     dateObserved > fetchedAt + 300_000 ||
     !Number.isFinite(observed)
   ) {
-    return { listing: unavailable(request, "invalid-response"), slugs: [] };
+    return {
+      listing: unavailable(request, "invalid-response", checkedAt),
+      slugs: [],
+    };
   }
   if (fetchedAt - observed > maxAgeDays * dayMilliseconds) {
     return {
       listing: {
         ...request,
+        checkedAt,
         status: "stale",
         observedAt: new Date(observed).toISOString(),
         reason: "old-response",
@@ -220,6 +233,7 @@ async function observeListing(
         error instanceof Error && error.message === "too-large"
           ? "too-large"
           : "network-failure",
+        checkedAt,
       ),
       slugs: [],
     };
@@ -229,12 +243,16 @@ async function observeListing(
       JSON.parse(Buffer.from(bytes).toString("utf8")),
     );
     if (parsed.info.page !== request.page) {
-      return { listing: unavailable(request, "invalid-response"), slugs: [] };
+      return {
+        listing: unavailable(request, "invalid-response", checkedAt),
+        slugs: [],
+      };
     }
     const contentDigest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
     return {
       listing: {
         ...request,
+        checkedAt,
         status: "available",
         observedAt: new Date(observed).toISOString(),
         contentDigest,
@@ -242,7 +260,10 @@ async function observeListing(
       slugs: parsed.plugins.map((plugin) => plugin.slug),
     };
   } catch {
-    return { listing: unavailable(request, "invalid-response"), slugs: [] };
+    return {
+      listing: unavailable(request, "invalid-response", checkedAt),
+      slugs: [],
+    };
   }
 }
 

@@ -74,7 +74,7 @@ describe("WordPress.org public candidate enumeration", () => {
     expect(result).toMatchObject({
       status: "stale",
       candidates: [],
-      listings: [{ status: "stale", reason: "old-response" }],
+      listings: [{ status: "stale", checkedAt: now, reason: "old-response" }],
     });
   });
 
@@ -108,7 +108,9 @@ describe("WordPress.org public candidate enumeration", () => {
     expect(result).toMatchObject({
       status: "unavailable",
       candidates: [],
-      listings: [{ status: "unavailable", reason: "invalid-response" }],
+      listings: [
+        { status: "unavailable", checkedAt: now, reason: "invalid-response" },
+      ],
     });
   });
 

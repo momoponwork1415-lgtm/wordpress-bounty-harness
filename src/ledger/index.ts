@@ -38,6 +38,13 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     promptVariant: id.optional(),
   }),
   event({
+    /** Bind a campaign to one immutable automatic selection before its first target. */
+    type: z.literal("selection-batch-bound"),
+    selectionBatchId: id,
+    policyDigest: digest,
+    selectionIds: z.array(id).min(1).max(5),
+  }),
+  event({
     type: z.literal("snapshot-frozen"),
     sourceDigest: digest,
     dependencyDigests: z.array(digest).optional(),
@@ -429,6 +436,7 @@ const querySchema = z.strictObject({
   type: z
     .enum([
       "target-selected",
+      "selection-batch-bound",
       "snapshot-frozen",
       "lab-provisioned",
       "discovery-run-started",

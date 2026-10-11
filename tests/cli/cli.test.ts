@@ -31,6 +31,7 @@ import type { ProgrammeIntelligence } from "../../src/profiles/wordpress/program
 import { loadWordpressScopePolicy } from "../../src/profiles/wordpress/scope-policy.js";
 import { loadWordPressDiscoveryAsset } from "../../src/profiles/wordpress/prompts/index.js";
 import { createWordPressSelection } from "../../src/profiles/wordpress/selection/index.js";
+import type { WordPressOrgListingObservation } from "../../src/profiles/wordpress/selection/wordpress-org-candidate-enumerator.js";
 import { openSnapshot } from "../../src/snapshot/index.js";
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
@@ -92,6 +93,7 @@ async function harness(
     readonly zeroFindings?: boolean;
     /** Candidate slugs; the first is not pinned. */
     readonly candidates?: readonly string[];
+    readonly listingObservations?: readonly WordPressOrgListingObservation[];
     /** A slug whose snapshot cannot be frozen. */
     readonly failFreeze?: string;
     /** Extra campaign config fields. */
@@ -314,7 +316,7 @@ async function harness(
         observedAt: now,
         contentDigest: sha("b"),
       })),
-      listings: [],
+      listings: options.listingObservations ?? [],
     }),
   });
   const snapshots = openSnapshot({
@@ -625,6 +627,7 @@ async function harness(
     docker,
     root,
     ledger: () => state.ledger,
+    store: () => state.store,
     maxInFlight: () => maxInFlight,
   };
 }
@@ -1995,8 +1998,35 @@ describe("harness CLI vertical slice", () => {
       "item-e",
       "item-f",
       "item-g",
+      "item-h",
+      "item-i",
     ];
-    const { run, configPath, root, ledger } = await harness({ candidates });
+    const listingObservations = [
+      {
+        kind: "popular" as const,
+        page: 1,
+        sourceUrl:
+          "https://api.wordpress.org/plugins/info/1.2/?request%5Bbrowse%5D=popular",
+        checkedAt: now,
+        status: "available" as const,
+        observedAt: now,
+        contentDigest: sha("b"),
+      },
+      {
+        kind: "tag" as const,
+        tag: "login",
+        page: 1,
+        sourceUrl:
+          "https://api.wordpress.org/plugins/info/1.2/?request%5Btag%5D=login",
+        checkedAt: now,
+        status: "unavailable" as const,
+        reason: "http-error" as const,
+      },
+    ];
+    const { run, configPath, root, ledger, store } = await harness({
+      candidates,
+      listingObservations,
+    });
     const policyPath = join(root, "selection.json");
     const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
       string,
@@ -2050,6 +2080,21 @@ describe("harness CLI vertical slice", () => {
         ),
       ),
     ).toBe(true);
+    const reportRef = reservations[0]?.event.artifacts.find(
+      (artifact) => artifact.kind === "selection-report",
+    );
+    expect(reportRef).toBeDefined();
+    const reportFile = await store().readFile(
+      reportRef!.digest,
+      "selection-report.json",
+      2 * 1024 * 1024,
+    );
+    expect(reportFile.status).toBe("resolved");
+    if (reportFile.status !== "resolved") return;
+    expect(JSON.parse(reportFile.bytes.toString("utf8"))).toMatchObject({
+      sourceStatus: "available",
+      sourceListings: listingObservations,
+    });
     const campaignConfig = JSON.parse(
       await readFile(configPath, "utf8"),
     ) as Record<string, unknown>;
@@ -2080,6 +2125,48 @@ describe("harness CLI vertical slice", () => {
     );
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("wporg:item-d 9.9.9");
+    const bound = ledger().read({
+      campaignId: "campaign-reserved",
+      type: "selection-batch-bound",
+    });
+    expect(bound).toHaveLength(1);
+    expect(bound[0]?.event).toMatchObject({
+      type: "selection-batch-bound",
+      selectionBatchId: reservations[3]?.event.campaignId,
+      selectionIds: ["wporg:item-d@9.9.9"],
+    });
+
+    const third = await run("select", "--config", policyPath);
+    expect(third.code).toBe(0);
+    expect(third.stdout).toContain("wporg:item-g 9.9.9 score");
+    const resumed = await run(
+      "campaign",
+      "run",
+      "item-d",
+      "--campaign",
+      "campaign-reserved",
+      "--config",
+      configPath,
+    );
+    expect(resumed.code).toBe(0);
+    expect(resumed.stdout).toContain("wporg:item-d 9.9.9");
+    expect(
+      ledger().read({
+        campaignId: "campaign-reserved",
+        type: "selection-batch-bound",
+      }),
+    ).toHaveLength(1);
+    const changedTarget = await run(
+      "campaign",
+      "run",
+      "item-g",
+      "--campaign",
+      "campaign-reserved",
+      "--config",
+      configPath,
+    );
+    expect(changedTarget.code).toBe(1);
+    expect(changedTarget.stderr).toContain("target set differs");
   });
 
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {

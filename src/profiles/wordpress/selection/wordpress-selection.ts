@@ -36,6 +36,23 @@ export interface CreateWordPressSelectionOptions {
   ) => Promise<WordPressOrgCandidateEnumeration>;
 }
 
+export interface WordPressSelectionBatchInspection {
+  readonly inspections: readonly WordPressSelectionInspection[];
+  readonly sourceStatus: "manual" | WordPressOrgCandidateEnumeration["status"];
+  readonly sourceListings: WordPressOrgCandidateEnumeration["listings"];
+}
+
+export type WordPressSelectionWithBatchInspection = Selection<
+  WordPressSelectionPolicy,
+  WordPressTargetSelection,
+  WordPressSelectionInspection
+> & {
+  /** Older injected Selection adapters may only implement inspect. */
+  readonly inspectBatch?: (
+    policy: WordPressSelectionPolicy,
+  ) => Promise<WordPressSelectionBatchInspection>;
+};
+
 /** WordPress.org dates look like `2026-09-01 12:00am GMT`; ISO strings also parse. */
 function parseObservedDate(date: string): number | undefined {
   const wpTimestamp =
@@ -109,16 +126,12 @@ function highThreatSurface(
 
 export function createWordPressSelection(
   options: CreateWordPressSelectionOptions,
-): Selection<
-  WordPressSelectionPolicy,
-  WordPressTargetSelection,
-  WordPressSelectionInspection
-> {
+): WordPressSelectionWithBatchInspection {
   const clock = options.clock ?? (() => new Date());
 
-  async function inspect(
+  async function inspectBatch(
     policyInput: WordPressSelectionPolicy,
-  ): Promise<readonly WordPressSelectionInspection[]> {
+  ): Promise<WordPressSelectionBatchInspection> {
     const policy = wordPressSelectionPolicySchema.parse(policyInput);
     const nowDate = clock();
     const now = nowDate.getTime();
@@ -274,14 +287,20 @@ export function createWordPressSelection(
         ...(enumeration === undefined ? {} : { enumeration }),
       });
     }
-    return results;
+    return {
+      inspections: results,
+      sourceStatus: enumeration?.status ?? "manual",
+      sourceListings: enumeration?.listings ?? [],
+    };
   }
 
   return {
-    inspect,
+    inspectBatch,
+    inspect: async (policyInput) =>
+      (await inspectBatch(policyInput)).inspections,
     async select(policyInput) {
       const policy = wordPressSelectionPolicySchema.parse(policyInput);
-      const inspected = await inspect(policy);
+      const { inspections: inspected } = await inspectBatch(policy);
       return inspected
         .flatMap((item) =>
           item.selection === undefined ? [] : [item.selection],
