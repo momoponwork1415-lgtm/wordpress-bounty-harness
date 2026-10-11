@@ -4,11 +4,38 @@ import { fileURLToPath } from "node:url";
 import type { DockerResult, Resources } from "./index.js";
 
 export const BEACON_LOG = "/tmp/wbh-beacons";
-/** Logs only well-formed beacon paths; anything else is ignored. */
-const BEACON_ROUTER = `<?php
+/** Only a browser script can send the nonce-bound custom header on a POST. */
+export const BEACON_ROUTER = `<?php
 $path = (string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
-if (preg_match('#^/b/[A-Za-z0-9-]{1,100}$#', $path)) file_put_contents('${BEACON_LOG}', $path . "\\n", FILE_APPEND | LOCK_EX);
-header('Access-Control-Allow-Origin: *');
+$origin = (string) ($_SERVER['HTTP_ORIGIN'] ?? '');
+$method = (string) ($_SERVER['REQUEST_METHOD'] ?? '');
+if ($origin !== 'http://wordpress' || !preg_match('#^/(b|c)/([A-Za-z0-9-]{1,100})$#', $path, $match)) {
+  http_response_code(403);
+  return;
+}
+header('Access-Control-Allow-Origin: http://wordpress');
+header('Vary: Origin');
+if ($match[1] === 'c') {
+  if ($method !== 'GET') {
+    http_response_code(403);
+    return;
+  }
+  header('Content-Type: application/javascript; charset=utf-8');
+  http_response_code(200);
+  echo 'fetch("http://canary:8080/b/' . $match[2] . '",{method:"POST",headers:{"X-WBH-Script-Canary":"' . $match[2] . '"}});';
+  return;
+}
+if ($method === 'OPTIONS') {
+  header('Access-Control-Allow-Methods: POST, OPTIONS');
+  header('Access-Control-Allow-Headers: X-WBH-Script-Canary');
+  http_response_code(204);
+  return;
+}
+if ($method !== 'POST' || !hash_equals($match[2], (string) ($_SERVER['HTTP_X_WBH_SCRIPT_CANARY'] ?? ''))) {
+  http_response_code(403);
+  return;
+}
+file_put_contents('${BEACON_LOG}', $path . "\\n", FILE_APPEND | LOCK_EX);
 http_response_code(204);
 `;
 

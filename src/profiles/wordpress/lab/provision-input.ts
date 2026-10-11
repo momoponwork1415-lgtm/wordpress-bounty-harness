@@ -200,10 +200,15 @@ export async function prepareWordPressLab(
   };
 }
 
-export function createLabResource(prepared: PreparedWordPressLab): {
+export function createLabResource(
+  prepared: PreparedWordPressLab,
+  forVerification: boolean,
+): {
   readonly resource: Resources;
   readonly subscriber: Account;
   readonly customer: Account | undefined;
+  readonly victimSubscriber: Account | undefined;
+  readonly victimCustomer: Account | undefined;
 } {
   const id = randomUUID();
   const prefix = `wbh-${id}`;
@@ -217,6 +222,19 @@ export function createLabResource(prepared: PreparedWordPressLab): {
         password: randomUUID(),
       }
     : undefined;
+  const victimSubscriber = forVerification
+    ? {
+        username: `wbh-victim-subscriber-${id.slice(0, 8)}`,
+        password: randomUUID(),
+      }
+    : undefined;
+  const victimCustomer =
+    forVerification && prepared.setup.customerRole
+      ? {
+          username: `wbh-victim-customer-${id.slice(0, 8)}`,
+          password: randomUUID(),
+        }
+      : undefined;
   const secondaryLocale =
     prepared.setup.translatePress?.administratorSecondaryLocale ??
     prepared.scenario?.secondaryLocale ??
@@ -232,6 +250,12 @@ export function createLabResource(prepared: PreparedWordPressLab): {
     databasePassword: randomUUID(),
     readerPassword: randomBytes(32).toString("hex"),
     adminPassword: randomUUID(),
+    victimAccounts: {
+      ...(victimSubscriber === undefined
+        ? {}
+        : { subscriber: victimSubscriber }),
+      ...(victimCustomer === undefined ? {} : { customer: victimCustomer }),
+    },
     ...(secondaryLocale === undefined
       ? {}
       : {
@@ -248,7 +272,7 @@ export function createLabResource(prepared: PreparedWordPressLab): {
     wordpressCreated: false,
     recorderCreated: false,
   };
-  return { resource, subscriber, customer };
+  return { resource, subscriber, customer, victimSubscriber, victimCustomer };
 }
 
 export function databaseIp(resource: Resources): string {

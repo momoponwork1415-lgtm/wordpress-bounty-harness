@@ -78,6 +78,36 @@ describe("WordPress programme scope policy", () => {
     ).toBe("ambiguous");
   });
 
+  it("excludes self XSS and leaves unverified victim identity ambiguous", () => {
+    const stored = {
+      ...base,
+      category: "stored-xss" as const,
+      observations: ["javascript-executed", "site-wide"],
+    };
+    expect(
+      assessWordpressScope(policy, {
+        ...stored,
+        victimRole: "self",
+      }).map(({ status, reason }) => [status, reason]),
+    ).toEqual([
+      ["out-of-scope", "self-xss"],
+      ["out-of-scope", "self-xss"],
+    ]);
+    expect(
+      assessWordpressScope(policy, {
+        ...stored,
+        victimRole: "subscriber",
+      }).map(({ status }) => status),
+    ).toEqual(["ambiguous", "ambiguous"]);
+    expect(
+      assessWordpressScope(policy, {
+        ...stored,
+        victimRole: "subscriber",
+        victimPrincipal: "separate",
+      }).map(({ status }) => status),
+    ).toEqual(["in-scope", "in-scope"]);
+  });
+
   it("applies installation and CVSS gates without promoting unknown facts", () => {
     expect(
       assessWordpressScope(policy, {
