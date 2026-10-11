@@ -182,7 +182,7 @@ async function visitStoredScriptPage(input: {
   };
 }
 
-export function createWordPressLabObservations(runtime: {
+type ObservationRuntime = {
   readonly active: Map<string, Resources>;
   readonly docker: RunDocker;
   readonly wp: WordPressCommand;
@@ -193,9 +193,12 @@ export function createWordPressLabObservations(runtime: {
   readonly optionDigest: (resource: Resources, name: string) => Promise<string>;
   readonly nonce: () => string;
   readonly images: { readonly wordpress: string; readonly browser: string };
-}): ObservationMethods {
-  const { active, docker, wp, roles, optionDigest, nonce } = runtime;
-  const options = { images: runtime.images };
+};
+
+function createCaptureObservations(
+  runtime: ObservationRuntime,
+): Pick<ObservationMethods, "markCapture" | "readCapture"> {
+  const { active, docker } = runtime;
   return {
     async markCapture(handle) {
       const resource = active.get(handle.id);
@@ -258,6 +261,15 @@ export function createWordPressLabObservations(runtime: {
         dropped: count,
       };
     },
+  };
+}
+
+function createProbeObservation(
+  runtime: ObservationRuntime,
+): Pick<ObservationMethods, "probe"> {
+  const { active, docker } = runtime;
+  const options = { images: runtime.images };
+  return {
     async probe(handle) {
       const resource = active.get(handle.id);
       const database = handle.database;
@@ -311,6 +323,17 @@ export function createWordPressLabObservations(runtime: {
         return failed();
       }
     },
+  };
+}
+
+function createCanarySetupObservations(
+  runtime: ObservationRuntime,
+): Pick<
+  ObservationMethods,
+  "canaryLedger" | "prepareExecutionCanary" | "observeSessionUser"
+> {
+  const { active, nonce, wp } = runtime;
+  return {
     canaryLedger(handle) {
       const resource = active.get(handle.id);
       return resource?.handle === handle ? (resource.canaries ?? null) : null;
@@ -348,6 +371,17 @@ export function createWordPressLabObservations(runtime: {
         return { status: "unavailable" };
       }
     },
+  };
+}
+
+function createCanaryInspectionObservations(
+  runtime: ObservationRuntime,
+): Pick<
+  ObservationMethods,
+  "observeCanaryTable" | "observeCanaryFiles" | "prepareScriptCanary"
+> {
+  const { active, wp, docker, nonce } = runtime;
+  return {
     async observeCanaryTable(handle) {
       const resource = active.get(handle.id);
       const canary = resource?.canaries?.sqlCanary;
@@ -399,6 +433,15 @@ export function createWordPressLabObservations(runtime: {
       resource.scriptNonces.add(token);
       return { nonce: token, beaconUrl: `http://canary:8080/b/${token}` };
     },
+  };
+}
+
+function createStoredScriptObservation(
+  runtime: ObservationRuntime,
+): Pick<ObservationMethods, "observeStoredScript"> {
+  const { active, docker } = runtime;
+  const options = { images: runtime.images };
+  return {
     async observeStoredScript(handle, input) {
       const resource = active.get(handle.id);
       const receiverIp = resource?.receiverIp;
@@ -464,6 +507,17 @@ export function createWordPressLabObservations(runtime: {
         return { status: "unavailable" };
       }
     },
+  };
+}
+
+function createFinalObservations(
+  runtime: ObservationRuntime,
+): Pick<
+  ObservationMethods,
+  "observeOptions" | "observeAccountRoles" | "observeExecution"
+> {
+  const { active, optionDigest, roles, docker } = runtime;
+  return {
     async observeOptions(handle) {
       const resource = active.get(handle.id);
       const baseline = resource?.optionBaseline;
@@ -525,5 +579,19 @@ export function createWordPressLabObservations(runtime: {
         return { status: "unavailable" };
       }
     },
+  };
+}
+
+/** The Lab observer keeps the same method contracts across the smaller groups. */
+export function createWordPressLabObservations(
+  runtime: ObservationRuntime,
+): ObservationMethods {
+  return {
+    ...createCaptureObservations(runtime),
+    ...createProbeObservation(runtime),
+    ...createCanarySetupObservations(runtime),
+    ...createCanaryInspectionObservations(runtime),
+    ...createStoredScriptObservation(runtime),
+    ...createFinalObservations(runtime),
   };
 }

@@ -30,31 +30,47 @@ type RecoveryContext = {
   ) => Promise<void>;
 };
 
+type ChildRecoveryOptions = RecoveryContext & {
+  readonly ledger: Ledger;
+  readonly evidence: PrivateArtifactStore;
+  readonly base: {
+    readonly schemaVersion: 1;
+    readonly campaignId: string;
+    readonly snapshotDigest: string;
+    readonly occurredAt: string;
+  };
+  readonly trialId: string;
+  readonly trialOrdinal: number;
+  readonly labId: string;
+  readonly history:
+    | { readonly mode: "none" }
+    | {
+        readonly mode: "catalog";
+        readonly digest: string;
+        readonly recordIds: string[];
+      };
+  readonly configuration: PlannedDiscoveryRun["configuration"];
+  readonly promptDigest: string;
+  readonly trustBoundaryVersion: string;
+};
+
+type ChildAgentRun = NonNullable<DiscoveryTransportResult["agentRuns"]>[number];
+
+function childConfiguration(
+  options: ChildRecoveryOptions,
+  child: ChildAgentRun,
+) {
+  return {
+    ...options.configuration,
+    promptDigest: options.configuration.promptDigest ?? options.promptDigest,
+    trustBoundaryVersion: options.trustBoundaryVersion,
+    agentPath: child.agentPath,
+  };
+}
+
 /** A malformed Root receipt cannot suppress already captured child reports. */
 export async function recoverChildAgentReports(
-  options: RecoveryContext & {
-    readonly ledger: Ledger;
-    readonly evidence: PrivateArtifactStore;
-    readonly base: {
-      readonly schemaVersion: 1;
-      readonly campaignId: string;
-      readonly snapshotDigest: string;
-      readonly occurredAt: string;
-    };
-    readonly trialId: string;
-    readonly trialOrdinal: number;
-    readonly labId: string;
-    readonly history:
-      | { readonly mode: "none" }
-      | {
-          readonly mode: "catalog";
-          readonly digest: string;
-          readonly recordIds: string[];
-        };
-    readonly configuration: PlannedDiscoveryRun["configuration"];
-    readonly promptDigest: string;
-    readonly trustBoundaryVersion: string;
-  },
+  options: ChildRecoveryOptions,
 ): Promise<void> {
   for (const child of options.result.agentRuns ?? []) {
     const receipt = nativeRunReceiptSchema.parse(child.receipt);
@@ -69,13 +85,7 @@ export async function recoverChildAgentReports(
       parentRunId: options.run.runId,
       labId: options.labId,
       history: options.history,
-      configuration: {
-        ...options.configuration,
-        promptDigest:
-          options.configuration.promptDigest ?? options.promptDigest,
-        trustBoundaryVersion: options.trustBoundaryVersion,
-        agentPath: child.agentPath,
-      },
+      configuration: childConfiguration(options, child),
     });
     if (started.status === "conflict")
       throw new Error("Child start identity conflict");

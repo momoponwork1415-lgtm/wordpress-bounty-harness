@@ -66,70 +66,222 @@ type RecorderOptions = {
   readonly leadSignature?: (lead: AdmittedLead) => string;
 };
 
+async function holdCandidate(
+  options: RecorderOptions,
+  ownerRunId: string,
+  candidateKind: "finding" | "lead",
+  candidateIndex: number,
+  candidate: unknown,
+  rawDigest: string,
+  error: unknown,
+) {
+  options.state.heldBoundary = true;
+  const issuePaths =
+    error instanceof z.ZodError
+      ? error.issues.map((issue) => issue.path.join("."))
+      : [
+          error instanceof Error &&
+          error.message === "Candidate identity mismatch"
+            ? "identity"
+            : "admission",
+        ];
+  const classification =
+    options.classifyCandidate?.(candidate, candidateKind) ?? {};
+  const appended = await options.ledger.append({
+    ...options.base,
+    identity: `candidate-held-${ownerRunId}-${candidateKind}-${candidateIndex}`,
+    type: "candidate-held",
+    runId: ownerRunId,
+    candidateKind,
+    candidateIndex,
+    issuePaths,
+    ...classification,
+    artifacts: [{ kind: "candidate", digest: rawDigest }],
+  });
+  if (appended.status === "conflict")
+    throw new Error("Candidate hold identity conflict");
+}
+
+async function prepareCandidate(
+  options: RecorderOptions,
+  ownerRunId: string,
+  kind: "finding" | "lead",
+  index: number,
+  raw: unknown,
+) {
+  const rawDigest = await options.evidence.putFiles({
+    "candidate.json": canonicalJson(raw),
+  });
+  const normalized = options.normalizeCandidate?.(raw) ?? {
+    value: raw,
+    changes: [],
+  };
+  const appended = await options.ledger.append({
+    ...options.base,
+    identity: `candidate-normalized-${ownerRunId}-${kind}-${index}`,
+    type: "candidate-normalized",
+    runId: ownerRunId,
+    candidateKind: kind,
+    candidateIndex: index,
+    changes: normalized.changes,
+    artifacts: [{ kind: "candidate", digest: rawDigest }],
+  });
+  if (appended.status === "conflict")
+    throw new Error("Candidate normalization identity conflict");
+  return { ...normalized, rawDigest };
+}
+
+async function recordFindingCandidate(
+  options: RecorderOptions,
+  ownerRunId: string,
+  attachmentDigest: string,
+  index: number,
+  candidate: unknown,
+): Promise<void> {
+  const prepared = await prepareCandidate(
+    options,
+    ownerRunId,
+    "finding",
+    index,
+    candidate,
+  );
+  let finding: AdmittedFinding;
+  try {
+    finding = options.admitFinding(prepared.value, {
+      runId: ownerRunId,
+      snapshotDigest: options.snapshotDigest,
+      reportArtifactDigest: attachmentDigest,
+    });
+  } catch (error) {
+    await holdCandidate(
+      options,
+      ownerRunId,
+      "finding",
+      index,
+      prepared.value,
+      prepared.rawDigest,
+      error,
+    );
+    return;
+  }
+  if (
+    finding.discoveryRunId !== ownerRunId ||
+    finding.snapshotDigest !== options.snapshotDigest
+  ) {
+    await holdCandidate(
+      options,
+      ownerRunId,
+      "finding",
+      index,
+      prepared.value,
+      prepared.rawDigest,
+      new Error("Candidate identity mismatch"),
+    );
+    return;
+  }
+  const findingDigest = await options.evidence.putFiles({
+    "finding.json": canonicalJson(finding),
+  });
+  const appended = await options.ledger.append({
+    ...options.base,
+    artifacts: [{ kind: "finding", digest: findingDigest }],
+    identity: `discovery-finding-${finding.findingId}`,
+    type: "finding-recorded",
+    findingId: finding.findingId,
+    runId: ownerRunId,
+    category: finding.impact,
+    ...(finding.historyRecordId === undefined
+      ? {}
+      : { historyRecordId: finding.historyRecordId }),
+  });
+  if (appended.status === "conflict")
+    throw new Error("Finding identity conflict");
+  options.onFindingRecorded(appended.status === "appended" ? 1 : 0);
+  const signature = canonicalDigest({
+    claim: finding.claim,
+    impact: finding.impact,
+    sourceTrace: finding.sourceTrace,
+  });
+  if (!options.seen.has(signature)) options.state.foundNew = true;
+  options.seen.add(signature);
+}
+
+async function recordLeadCandidate(
+  options: RecorderOptions,
+  ownerRunId: string,
+  attachmentDigest: string,
+  index: number,
+  candidate: unknown,
+): Promise<void> {
+  const prepared = await prepareCandidate(
+    options,
+    ownerRunId,
+    "lead",
+    index,
+    candidate,
+  );
+  let lead: AdmittedLead;
+  try {
+    if (options.admitLead === undefined || options.leadSignature === undefined)
+      throw new Error("Lead admission is unavailable");
+    lead = options.admitLead(prepared.value, {
+      runId: ownerRunId,
+      trialId: options.trialId,
+      snapshotDigest: options.snapshotDigest,
+      reportArtifactDigest: attachmentDigest,
+    });
+  } catch (error) {
+    await holdCandidate(
+      options,
+      ownerRunId,
+      "lead",
+      index,
+      prepared.value,
+      prepared.rawDigest,
+      error,
+    );
+    return;
+  }
+  if (
+    lead.discoveryRunId !== ownerRunId ||
+    lead.trialId !== options.trialId ||
+    lead.snapshotDigest !== options.snapshotDigest
+  ) {
+    await holdCandidate(
+      options,
+      ownerRunId,
+      "lead",
+      index,
+      prepared.value,
+      prepared.rawDigest,
+      new Error("Candidate identity mismatch"),
+    );
+    return;
+  }
+  const leadDigest = await options.evidence.putFiles({
+    "lead.json": canonicalJson(lead),
+  });
+  const appended = await options.ledger.append({
+    ...options.base,
+    artifacts: [{ kind: "lead", digest: leadDigest }],
+    identity: `discovery-lead-${lead.leadId}`,
+    type: "lead-recorded",
+    leadId: lead.leadId,
+    runId: ownerRunId,
+    trialId: options.trialId,
+    missingEdge: lead.missingEdge,
+    primitive: lead.primitive,
+    storageKind: lead.storage?.kind ?? "none",
+  });
+  if (appended.status === "conflict") throw new Error("Lead identity conflict");
+  const signature = digest.parse(options.leadSignature!(lead));
+  if (!options.seen.has(signature)) options.state.foundNew = true;
+  options.seen.add(signature);
+}
+
 /** Preserve every individual candidate, including malformed and held output. */
 export function createReportRecorder(options: RecorderOptions) {
-  const holdCandidate = async (
-    ownerRunId: string,
-    candidateKind: "finding" | "lead",
-    candidateIndex: number,
-    candidate: unknown,
-    rawDigest: string,
-    error: unknown,
-  ) => {
-    options.state.heldBoundary = true;
-    const issuePaths =
-      error instanceof z.ZodError
-        ? error.issues.map((issue) => issue.path.join("."))
-        : [
-            error instanceof Error &&
-            error.message === "Candidate identity mismatch"
-              ? "identity"
-              : "admission",
-          ];
-    const classification =
-      options.classifyCandidate?.(candidate, candidateKind) ?? {};
-    const appended = await options.ledger.append({
-      ...options.base,
-      identity: `candidate-held-${ownerRunId}-${candidateKind}-${candidateIndex}`,
-      type: "candidate-held",
-      runId: ownerRunId,
-      candidateKind,
-      candidateIndex,
-      issuePaths,
-      ...classification,
-      artifacts: [{ kind: "candidate", digest: rawDigest }],
-    });
-    if (appended.status === "conflict")
-      throw new Error("Candidate hold identity conflict");
-  };
-  const prepareCandidate = async (
-    ownerRunId: string,
-    kind: "finding" | "lead",
-    index: number,
-    raw: unknown,
-  ) => {
-    const rawDigest = await options.evidence.putFiles({
-      "candidate.json": canonicalJson(raw),
-    });
-    const normalized = options.normalizeCandidate?.(raw) ?? {
-      value: raw,
-      changes: [],
-    };
-    const appended = await options.ledger.append({
-      ...options.base,
-      identity: `candidate-normalized-${ownerRunId}-${kind}-${index}`,
-      type: "candidate-normalized",
-      runId: ownerRunId,
-      candidateKind: kind,
-      candidateIndex: index,
-      changes: normalized.changes,
-      artifacts: [{ kind: "candidate", digest: rawDigest }],
-    });
-    if (appended.status === "conflict")
-      throw new Error("Candidate normalization identity conflict");
-    return { ...normalized, rawDigest };
-  };
-  const recordReport = async (
+  return async (
     ownerRunId: string,
     attachment: NonNullable<DiscoveryTransportResult["attachment"]>,
   ): Promise<void> => {
@@ -146,138 +298,21 @@ export function createReportRecorder(options: RecorderOptions) {
     } catch {
       throw new DiscoveryReportError("Discovery report is malformed");
     }
-    for (const [index, candidate] of report.findings.entries()) {
-      const prepared = await prepareCandidate(
+    for (const [index, candidate] of report.findings.entries())
+      await recordFindingCandidate(
+        options,
         ownerRunId,
-        "finding",
+        attachment.digest,
         index,
         candidate,
       );
-      let finding: AdmittedFinding;
-      try {
-        finding = options.admitFinding(prepared.value, {
-          runId: ownerRunId,
-          snapshotDigest: options.snapshotDigest,
-          reportArtifactDigest: attachment.digest,
-        });
-      } catch (error) {
-        await holdCandidate(
-          ownerRunId,
-          "finding",
-          index,
-          prepared.value,
-          prepared.rawDigest,
-          error,
-        );
-        continue;
-      }
-      if (
-        finding.discoveryRunId !== ownerRunId ||
-        finding.snapshotDigest !== options.snapshotDigest
-      ) {
-        await holdCandidate(
-          ownerRunId,
-          "finding",
-          index,
-          prepared.value,
-          prepared.rawDigest,
-          new Error("Candidate identity mismatch"),
-        );
-        continue;
-      }
-      const findingDigest = await options.evidence.putFiles({
-        "finding.json": canonicalJson(finding),
-      });
-      const appended = await options.ledger.append({
-        ...options.base,
-        artifacts: [{ kind: "finding", digest: findingDigest }],
-        identity: `discovery-finding-${finding.findingId}`,
-        type: "finding-recorded",
-        findingId: finding.findingId,
-        runId: ownerRunId,
-        category: finding.impact,
-        ...(finding.historyRecordId === undefined
-          ? {}
-          : { historyRecordId: finding.historyRecordId }),
-      });
-      if (appended.status === "conflict")
-        throw new Error("Finding identity conflict");
-      options.onFindingRecorded(appended.status === "appended" ? 1 : 0);
-      const signature = canonicalDigest({
-        claim: finding.claim,
-        impact: finding.impact,
-        sourceTrace: finding.sourceTrace,
-      });
-      if (!options.seen.has(signature)) options.state.foundNew = true;
-      options.seen.add(signature);
-    }
-    for (const [index, candidate] of report.leads.entries()) {
-      const prepared = await prepareCandidate(
+    for (const [index, candidate] of report.leads.entries())
+      await recordLeadCandidate(
+        options,
         ownerRunId,
-        "lead",
+        attachment.digest,
         index,
         candidate,
       );
-      let lead: AdmittedLead;
-      try {
-        if (
-          options.admitLead === undefined ||
-          options.leadSignature === undefined
-        )
-          throw new Error("Lead admission is unavailable");
-        lead = options.admitLead(prepared.value, {
-          runId: ownerRunId,
-          trialId: options.trialId,
-          snapshotDigest: options.snapshotDigest,
-          reportArtifactDigest: attachment.digest,
-        });
-      } catch (error) {
-        await holdCandidate(
-          ownerRunId,
-          "lead",
-          index,
-          prepared.value,
-          prepared.rawDigest,
-          error,
-        );
-        continue;
-      }
-      if (
-        lead.discoveryRunId !== ownerRunId ||
-        lead.trialId !== options.trialId ||
-        lead.snapshotDigest !== options.snapshotDigest
-      ) {
-        await holdCandidate(
-          ownerRunId,
-          "lead",
-          index,
-          prepared.value,
-          prepared.rawDigest,
-          new Error("Candidate identity mismatch"),
-        );
-        continue;
-      }
-      const leadDigest = await options.evidence.putFiles({
-        "lead.json": canonicalJson(lead),
-      });
-      const appended = await options.ledger.append({
-        ...options.base,
-        artifacts: [{ kind: "lead", digest: leadDigest }],
-        identity: `discovery-lead-${lead.leadId}`,
-        type: "lead-recorded",
-        leadId: lead.leadId,
-        runId: ownerRunId,
-        trialId: options.trialId,
-        missingEdge: lead.missingEdge,
-        primitive: lead.primitive,
-        storageKind: lead.storage?.kind ?? "none",
-      });
-      if (appended.status === "conflict")
-        throw new Error("Lead identity conflict");
-      const signature = digest.parse(options.leadSignature!(lead));
-      if (!options.seen.has(signature)) options.state.foundNew = true;
-      options.seen.add(signature);
-    }
   };
-  return recordReport;
 }
