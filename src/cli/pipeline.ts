@@ -450,32 +450,36 @@ export async function reverifyOnSelectedVersion<
     );
   if (selected?.type !== "target-selected")
     throw new Error("The finding's target selection is not recorded");
-  const confirmed = ledger
+  const observed = ledger
     .read({ campaignId, findingId, type: "verification-finished", limit: 1000 })
     .map(({ event }) => event)
     .filter(
       (event) =>
         event.type === "verification-finished" &&
         event.snapshotDigest === finding.snapshotDigest &&
-        event.result.status === "runtime-confirmed",
+        (event.result.status === "runtime-confirmed" ||
+          event.result.status === "reproduced"),
     )
     .at(-1);
-  if (confirmed === undefined && options.version !== undefined)
+  if (observed === undefined && options.version !== undefined)
     throw new Error(
-      "A confirmed route is required for fixed-version comparison",
+      "An evidence-backed route is required for fixed-version comparison",
     );
   let referenceRoute: unknown;
   if (
-    confirmed?.type === "verification-finished" &&
-    confirmed.result.status === "runtime-confirmed"
+    observed?.type === "verification-finished" &&
+    (observed.result.status === "runtime-confirmed" ||
+      observed.result.status === "reproduced")
   ) {
     const routeFile = await options.store.readFile(
-      confirmed.result.evidenceDigest,
-      "confirmed-route.json",
+      observed.result.evidenceDigest,
+      observed.result.status === "runtime-confirmed"
+        ? "confirmed-route.json"
+        : "reproduced-route.json",
       64 * 1024,
     );
     if (routeFile.status !== "resolved")
-      throw new Error("The confirmed route is unavailable in Private Evidence");
+      throw new Error("The observed route is unavailable in Private Evidence");
     referenceRoute = JSON.parse(routeFile.bytes.toString("utf8")) as unknown;
   }
   const target = await pipeline.selectVersion({
@@ -485,12 +489,12 @@ export async function reverifyOnSelectedVersion<
   if (target === null)
     throw new Error("The selected target version is not available now");
   const snapshot = await pipeline.freeze(target);
-  if (confirmed === undefined && snapshot.digest !== finding.snapshotDigest)
+  if (observed === undefined && snapshot.digest !== finding.snapshotDigest)
     throw new Error(
       "An unconfirmed Finding can only be retried on its original Snapshot",
     );
   const setup = pipeline.setupFor(snapshot);
-  if (confirmed === undefined) {
+  if (observed === undefined) {
     const previous = ledger
       .read({
         campaignId,

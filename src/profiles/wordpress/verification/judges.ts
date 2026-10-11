@@ -15,6 +15,7 @@ import type {
   WordPressLabHandle,
 } from "../lab/index.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
+import { createWordPressStandardReproducer } from "./standard-reproducer.js";
 
 type JudgeLab = Pick<
   WordPressLab,
@@ -28,7 +29,11 @@ type JudgeLab = Pick<
   | "observeStoredScript"
   | "readCapture"
 >;
-type Options = { readonly store: PrivateArtifactStore; readonly lab: JudgeLab };
+type Options = {
+  readonly store: PrivateArtifactStore;
+  readonly lab: JudgeLab &
+    Partial<Pick<WordPressLab, "markCapture" | "runStandardScript">>;
+};
 
 const sessionSchema = z.strictObject({ cookie: z.string().min(1).max(4096) });
 const routeFieldsSchema = z.looseObject({});
@@ -916,6 +921,20 @@ export function createWordPressJudges(
   const storedScript = storedScriptJudge(options);
   const sensitiveObject = sensitiveObjectJudge(options);
   return {
+    ...(options.lab.markCapture === undefined ||
+    options.lab.runStandardScript === undefined
+      ? {}
+      : {
+          reproducer: createWordPressStandardReproducer({
+            store: options.store,
+            lab: {
+              canaryLedger: options.lab.canaryLedger,
+              readCapture: options.lab.readCapture,
+              markCapture: options.lab.markCapture,
+              runStandardScript: options.lab.runStandardScript,
+            },
+          }),
+        }),
     for(finding) {
       switch (finding.impact) {
         case "privesc-to-admin":

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import {
@@ -66,7 +67,7 @@ const duplicateSchema = z.discriminatedUnion("status", [
 const reviewDecisionV1Schema = z.strictObject({
   schemaVersion: z.literal(1),
   ref: refSchema,
-  verificationStatus: z.enum(["runtime-confirmed", "incomplete"]),
+  verificationStatus: z.enum(["runtime-confirmed", "reproduced", "incomplete"]),
   decision: z.enum(["accept", "reject", "defer"]),
   reasonCode: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
   duplicate: duplicateSchema,
@@ -81,7 +82,7 @@ export type ReviewDecisionV1 = z.infer<typeof reviewDecisionV1Schema>;
 type Decision = ReviewDecisionV1["decision"];
 export type ReviewItem =
   | {
-      readonly status: "runtime-confirmed";
+      readonly status: "runtime-confirmed" | "reproduced";
       readonly ref: ReviewRef;
       readonly category: string;
       readonly judgeId: string;
@@ -103,12 +104,18 @@ export type ReviewQueue = {
   readonly items: readonly ReviewItem[];
   readonly contradicted: number;
   readonly unverified: number;
+  readonly incompleteByReason: Readonly<Record<string, number>>;
+  readonly retryPendingByReason: Readonly<Record<string, number>>;
 };
 export type ScopeAssessment = z.infer<typeof assessmentSchema>;
 export type SubmissionDraftRef = Omit<z.infer<typeof draftSchema>, "content">;
 export type ReviewView = {
   readonly verificationStatus:
-    "runtime-confirmed" | "contradicted" | "incomplete" | "missing";
+    | "runtime-confirmed"
+    | "reproduced"
+    | "contradicted"
+    | "incomplete"
+    | "missing";
   readonly scopeAssessments: readonly ScopeAssessment[];
   readonly drafts: readonly SubmissionDraftRef[];
   readonly privateEvidenceDigests: readonly string[];
@@ -186,7 +193,7 @@ export class Review<TFacts = unknown> {
     digest.parse(options.scopeEvaluator.policyDigest);
   }
 
-  /** confirmed and incomplete need a human; contradicted is only counted. */
+  /** Evidence-backed results and exhausted incomplete work reach a human. */
   queue(input: { readonly campaignId?: string } = {}): ReviewQueue {
     const campaignId =
       input.campaignId === undefined ? undefined : id.parse(input.campaignId);
@@ -201,9 +208,12 @@ export class Review<TFacts = unknown> {
         event: Extract<LedgerEventV1, { type: "verification-finished" }>;
       }
     >();
+    const attempts = new Map<string, number>();
     for (const { sequence, event } of this.#readAll("verification-finished"))
-      if (event.type === "verification-finished" && inCampaign(event))
+      if (event.type === "verification-finished" && inCampaign(event)) {
         latestVerification.set(key(event), { sequence, event });
+        attempts.set(key(event), (attempts.get(key(event)) ?? 0) + 1);
+      }
     const latestDecision = new Map<
       string,
       { sequence: number; decision: Decision }
@@ -213,6 +223,8 @@ export class Review<TFacts = unknown> {
         latestDecision.set(key(event), { sequence, decision: event.decision });
 
     const items: ReviewItem[] = [];
+    const incompleteByReason: Record<string, number> = Object.create(null);
+    const retryPendingByReason: Record<string, number> = Object.create(null);
     let contradicted = 0;
     let unverified = 0;
     for (const { event: finding } of this.#readAll("finding-recorded")) {
@@ -237,28 +249,56 @@ export class Review<TFacts = unknown> {
           : null;
       const result = event.result;
       if (result.status === "contradicted") contradicted++;
-      else if (result.status === "runtime-confirmed")
+      else if (
+        result.status === "runtime-confirmed" ||
+        result.status === "reproduced"
+      )
         items.push({
           status: result.status,
           ref,
           category: finding.category,
-          judgeId: result.judgeId,
+          judgeId:
+            result.status === "runtime-confirmed"
+              ? result.judgeId
+              : result.reproducerId,
           conditions: result.conditions,
           evidenceDigest: result.evidenceDigest,
           reproductionPackageDigest: result.reproductionPackageDigest,
           decision,
         });
-      else
-        items.push({
-          status: result.status,
-          ref,
-          category: finding.category,
-          reason: result.reason,
-          nextStep: result.nextStep,
-          decision,
-        });
+      else {
+        const attemptCount = attempts.get(key(finding)) ?? 0;
+        const exhausted =
+          result.reason === "evidence" ||
+          result.reason === "cleanup" ||
+          result.reason === "digest-mismatch" ||
+          ((result.reason === "recipe" || result.reason === "observation") &&
+            attemptCount >= 3) ||
+          (result.reason === "provision" && attemptCount >= 2);
+        const counts = exhausted ? incompleteByReason : retryPendingByReason;
+        counts[result.reason] = (counts[result.reason] ?? 0) + 1;
+        if (
+          result.reason === "evidence" ||
+          result.reason === "cleanup" ||
+          result.reason === "digest-mismatch"
+        )
+          items.push({
+            status: result.status,
+            ref,
+            category: finding.category,
+            reason: result.reason,
+            nextStep: result.nextStep,
+            decision,
+          });
+      }
     }
-    return { items, contradicted, unverified };
+    return {
+      items,
+      contradicted,
+      unverified,
+      incompleteByReason,
+      retryPendingByReason,
+    };
   }
 
   async decide(input: {
@@ -283,7 +323,18 @@ export class Review<TFacts = unknown> {
       verification.result.status === "contradicted"
     )
       throw new Error(
-        "Only runtime-confirmed or incomplete verifications are reviewed",
+        "Only evidence-backed or incomplete verifications are reviewed",
+      );
+    if (
+      verification.result.status === "incomplete" &&
+      !this.queue({ campaignId: ref.campaignId }).items.some(
+        (item) =>
+          item.ref.findingId === ref.findingId &&
+          item.ref.verificationId === ref.verificationId,
+      )
+    )
+      throw new Error(
+        "This incomplete verification needs Harness retry or aggregate review",
       );
     const decidedAt = this.#clock();
     const record = reviewDecisionV1Schema.parse({
@@ -443,6 +494,28 @@ export class Review<TFacts = unknown> {
       assessment.policyDigest !== this.#scopeEvaluator.policyDigest
     )
       throw new Error("An in-scope assessment is required");
+    const verification = this.#requireConfirmed(assessment.ref);
+    if (verification.result.status === "reproduced") {
+      const packageDigest = verification.result.reproductionPackageDigest;
+      const manual = this.#readAll("human-reproduction-recorded")
+        .map(({ event }) => event)
+        .filter(
+          (event) =>
+            event.type === "human-reproduction-recorded" &&
+            event.campaignId === assessment.ref.campaignId &&
+            event.findingId === assessment.ref.findingId &&
+            event.verificationId === assessment.ref.verificationId &&
+            event.reproductionPackageDigest === packageDigest,
+        )
+        .at(-1);
+      if (
+        manual?.type !== "human-reproduction-recorded" ||
+        manual.result !== "match"
+      )
+        throw new Error(
+          "A matching manual reproduction is required before drafting a reproduced candidate",
+        );
+    }
     const prior = (await this.#allDrafts()).filter(
       (item) => item.assessmentId === assessmentId,
     );
@@ -660,6 +733,90 @@ export class Review<TFacts = unknown> {
       throw new Error("Outcome ledger conflict");
   }
 
+  /** One append-only receipt for work the owner actually completed. */
+  async recordHumanEffort(input: {
+    readonly campaignId?: string;
+    readonly findingId?: string;
+    readonly candidateId?: string;
+    readonly action: "read" | "reproduce" | "submit" | "outcome";
+    readonly minutes: number;
+  }): Promise<void> {
+    const minutes = z
+      .number()
+      .finite()
+      .nonnegative()
+      .max(1440)
+      .parse(input.minutes);
+    const candidateEvent =
+      input.candidateId === undefined
+        ? undefined
+        : this.#readAll("submission-recorded").find(
+            ({ event }) =>
+              event.type === "submission-recorded" &&
+              event.candidateId === input.candidateId,
+          )?.event;
+    const candidate =
+      candidateEvent?.type === "submission-recorded"
+        ? candidateEvent
+        : undefined;
+    const campaignId = candidate?.campaignId ?? id.parse(input.campaignId);
+    const findingId = candidate?.findingId ?? input.findingId;
+    const finding =
+      findingId === undefined
+        ? undefined
+        : this.#readAll("finding-recorded").find(
+            ({ event }) =>
+              event.type === "finding-recorded" &&
+              event.campaignId === campaignId &&
+              event.findingId === findingId,
+          )?.event;
+    if (findingId !== undefined && finding?.type !== "finding-recorded")
+      throw new Error("Human effort must refer to a recorded Finding");
+    const snapshotDigest = finding?.snapshotDigest ?? candidate?.snapshotDigest;
+    if (snapshotDigest === undefined)
+      throw new Error("Human effort needs a recorded Snapshot");
+    const appended = await this.#ledger.append({
+      schemaVersion: 1,
+      identity: `human-effort:${randomUUID()}`,
+      campaignId,
+      snapshotDigest,
+      occurredAt: this.#clock().toISOString(),
+      type: "human-effort-recorded",
+      ...(findingId === undefined ? {} : { findingId }),
+      action: input.action,
+      minutes,
+    });
+    if (appended.status !== "appended")
+      throw new Error("Human effort ledger conflict");
+  }
+
+  async recordHumanReproduction(input: {
+    readonly ref: ReviewRef;
+    readonly result: "match" | "mismatch" | "unavailable";
+  }): Promise<void> {
+    const ref = refSchema.parse(input.ref);
+    const verification = this.#requireConfirmed(ref);
+    if (
+      verification.result.status !== "runtime-confirmed" &&
+      verification.result.status !== "reproduced"
+    )
+      throw new Error("A matching evidence-backed verification is required");
+    const appended = await this.#ledger.append({
+      schemaVersion: 1,
+      identity: `human-reproduction:${randomUUID()}`,
+      campaignId: ref.campaignId,
+      snapshotDigest: ref.snapshotDigest,
+      occurredAt: this.#clock().toISOString(),
+      type: "human-reproduction-recorded",
+      findingId: ref.findingId,
+      verificationId: ref.verificationId,
+      reproductionPackageDigest: verification.result.reproductionPackageDigest,
+      result: input.result,
+    });
+    if (appended.status !== "appended")
+      throw new Error("Human reproduction ledger conflict");
+  }
+
   async inspectDuplicate(input: {
     readonly campaignId: string;
     readonly findingId: string;
@@ -739,7 +896,8 @@ export class Review<TFacts = unknown> {
       privateEvidenceDigests,
       reproductionPackageDigest:
         verification?.event.type === "verification-finished" &&
-        verification.event.result.status === "runtime-confirmed"
+        (verification.event.result.status === "runtime-confirmed" ||
+          verification.event.result.status === "reproduced")
           ? verification.event.result.reproductionPackageDigest
           : null,
     };
@@ -758,9 +916,10 @@ export class Review<TFacts = unknown> {
     if (
       verification?.event.type !== "verification-finished" ||
       verification.event.snapshotDigest !== ref.snapshotDigest ||
-      verification.event.result.status !== "runtime-confirmed"
+      (verification.event.result.status !== "runtime-confirmed" &&
+        verification.event.result.status !== "reproduced")
     ) {
-      throw new Error("A matching runtime-confirmed verification is required");
+      throw new Error("A matching evidence-backed verification is required");
     }
     return verification.event;
   }

@@ -1,11 +1,14 @@
 import { z } from "zod";
 
+import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
 import type { ReproductionRenderer } from "../../../verification/reproduction-package.js";
+import { snapshotSchema } from "../../../snapshot/index.js";
 import {
   loadWordPressAcceptanceCriteria,
   loadWordPressReproductionTemplate,
 } from "../acceptance/index.js";
 import { wordpressVictimRouteSchema } from "../lab/index.js";
+import { setupSchema } from "../lab/provision-input.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const path = z
@@ -54,7 +57,7 @@ const routeSchema = z.strictObject({
   evidence: z
     .array(
       z.strictObject({
-        kind: z.enum(["http", "screenshot", "canary"]),
+        kind: z.enum(["http", "screenshot", "canary", "structured-output"]),
         path: evidencePath,
         capture: z.enum(["harness-captured", "agent-authored"]).optional(),
       }),
@@ -72,6 +75,7 @@ const reconstructionSchema = z.strictObject({
   enabledSettings: z.array(z.string().min(1).max(500)).max(100),
   roles: z.array(z.string().min(1).max(100)).min(1).max(30),
 });
+const snapshotWithDigestSchema = snapshotSchema.safeExtend({ digest });
 
 export type WordPressReconstruction = z.infer<typeof reconstructionSchema>;
 
@@ -160,6 +164,29 @@ export const wordpressReproductionRenderer: ReproductionRenderer<WordPressRecons
     async render(input) {
       const route = routeSchema.parse(input.route);
       const reconstruction = reconstructionSchema.parse(input.reconstruction);
+      const setup =
+        input.setup === undefined ? null : setupSchema.parse(input.setup);
+      const snapshot =
+        input.snapshot === undefined
+          ? null
+          : snapshotWithDigestSchema.parse(input.snapshot);
+      const snapshotBody =
+        snapshot === null
+          ? null
+          : {
+              kind: snapshot.kind,
+              schemaVersion: snapshot.schemaVersion,
+              target: snapshot.target,
+              dependencies: snapshot.dependencies,
+            };
+      if (
+        (setup !== null && setup.snapshotDigest !== input.snapshotDigest) ||
+        (snapshot !== null &&
+          (snapshot.digest !== input.snapshotDigest ||
+            canonicalDigest(snapshotSchema.parse(snapshotBody)) !==
+              snapshot.digest))
+      )
+        throw new Error("Lab reconstruction does not match the Snapshot");
       const [criteria, template] = await Promise.all([
         loadWordPressAcceptanceCriteria(input.category),
         loadWordPressReproductionTemplate(),
@@ -178,11 +205,18 @@ export const wordpressReproductionRenderer: ReproductionRenderer<WordPressRecons
         throw new Error("Default settings conflict with configuration changes");
       if (!reconstruction.roles.includes(route.role))
         throw new Error("Required role is absent from Lab reconstruction");
+      if (!route.evidence.some((entry) => entry.kind === "http"))
+        throw new Error("Harness HTTP evidence is required");
       if (
-        !route.evidence.some((entry) => entry.kind === "http") ||
+        input.proofKind === "nonce-canary" &&
         !route.evidence.some((entry) => entry.kind === "canary")
       )
-        throw new Error("HTTP and nonce canary evidence are required");
+        throw new Error("Nonce canary evidence is required");
+      if (
+        input.proofKind === "captured-script-observation" &&
+        !route.evidence.some((entry) => entry.kind === "structured-output")
+      )
+        throw new Error("Structured reproduction output is required");
       if (
         route.steps.some((step) => step.kind === "browser") &&
         !route.evidence.some((entry) => entry.kind === "screenshot")
@@ -228,14 +262,16 @@ export const wordpressReproductionRenderer: ReproductionRenderer<WordPressRecons
         "",
         `## 2. ${template.sections[1].heading}`,
         `Expected [harness-captured]: ${criteria?.judgeSuccessCriterion ?? "See the judge's recorded nonce-canary condition."}`,
-        `Actual [harness-captured]: judge ${safeInlineJson(input.judgeId)} recorded ${safeInlineJson(Object.fromEntries(Object.entries(input.conditions).sort(([left], [right]) => left.localeCompare(right))))}; evidence artifact ${input.evidenceDigest}.`,
+        `Actual [harness-captured]: ${safeInlineJson(input.judgeId)} recorded ${safeInlineJson(Object.fromEntries(Object.entries(input.conditions).sort(([left], [right]) => left.localeCompare(right))))}; evidence artifact ${input.evidenceDigest}.`,
         ...route.evidence.map(
           (entry) =>
             `${entry.kind} evidence [${evidenceOrigin(entry)}]: ${entry.path}`,
         ),
         "",
         `## 3. ${template.sections[2].heading}`,
-        "Fixed-version negative control [harness-captured]: not-recorded-in-this-package. Check the separate fixed-snapshot verification before submission; absence here is not a contradicted result.",
+        input.negativeControl === "unavailable-no-fixed-release"
+          ? "Fixed-version negative control [harness-captured]: unavailable (no fixed release). This is not a contradicted result."
+          : "Fixed-version negative control [harness-captured]: not-recorded-in-this-package. Check the separate fixed-snapshot verification before submission; absence here is not a contradicted result.",
         "",
         `## 4. ${template.sections[3].heading}`,
         `Target [harness-captured]: ${safeInlineJson(reconstruction.target.identity)} ${safeInlineJson(reconstruction.target.version)}`,
@@ -245,7 +281,9 @@ export const wordpressReproductionRenderer: ReproductionRenderer<WordPressRecons
         `Enabled settings [harness-captured]: ${reconstruction.enabledSettings.length ? safeInlineJson(reconstruction.enabledSettings) : "none"}`,
         `Available Lab roles [harness-captured]: ${safeInlineJson(reconstruction.roles)}`,
         "Attacker role, Lab account, setup claims and intended route [agent-authored]: agent-authored.json. Verify these against the fresh Lab and captured evidence.",
-        "Set WBH_BASE_URL to the fresh Lab endpoint; the helper script uses WBH_USERNAME and WBH_PASSWORD only from the environment.",
+        input.proofKind === "captured-script-observation"
+          ? "The attached standard script is the exact Harness-executed script; its /run/wbh-reproduction/input.json is generated inside the automated Lab. For manual reproduction, use the fresh review Lab and follow the captured route and agent-authored steps."
+          : "Set WBH_BASE_URL to the fresh Lab endpoint; the helper script uses WBH_USERNAME and WBH_PASSWORD only from the environment.",
         ...route.steps.map(
           (_, index) =>
             `${index + 1}. Intended step [agent-authored]: agent-authored.json#/steps/${index}`,
@@ -257,11 +295,29 @@ export const wordpressReproductionRenderer: ReproductionRenderer<WordPressRecons
             ]
           : capturedHttp.map((step) => `- ${step}`)),
       ];
+      const executedScript =
+        input.proofKind === "captured-script-observation"
+          ? await input.store.readFile(
+              input.evidenceDigest,
+              "standard-reproduce.py",
+              64 * 1024,
+            )
+          : null;
+      if (
+        input.proofKind === "captured-script-observation" &&
+        executedScript?.status !== "resolved"
+      )
+        throw new Error("Executed standard script is unavailable");
       return {
         manual: `${lines.join("\n")}\n`,
-        script: renderScript(),
+        script:
+          executedScript?.status === "resolved"
+            ? executedScript.bytes.toString("utf8")
+            : renderScript(),
         reconstruction: {
           ...reconstruction,
+          ...(setup === null ? {} : { setup }),
+          ...(snapshot === null ? {} : { snapshot }),
           labSetupDigest: input.labSetupDigest,
           snapshotDigest: input.snapshotDigest,
           provenance: {
@@ -271,6 +327,8 @@ export const wordpressReproductionRenderer: ReproductionRenderer<WordPressRecons
             roles: "harness-captured",
             labSetupDigest: "harness-captured",
             snapshotDigest: "harness-captured",
+            ...(setup === null ? {} : { setup: "harness-captured" }),
+            ...(snapshot === null ? {} : { snapshot: "harness-captured" }),
           },
         },
         evidence: {

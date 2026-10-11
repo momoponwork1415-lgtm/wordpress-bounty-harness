@@ -4,12 +4,14 @@ import { join } from "node:path";
 
 import { afterEach, expect, it } from "vitest";
 
+import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import {
   loadWordPressAcceptanceCriteria,
   loadWordPressReproductionTemplate,
 } from "../../../src/profiles/wordpress/acceptance/index.js";
 import { wordpressReproductionRenderer } from "../../../src/profiles/wordpress/verification/reproduction-package.js";
+import { STANDARD_REPRODUCER_SCRIPT } from "../../../src/profiles/wordpress/verification/standard-script.js";
 import { openReproductionPackage } from "../../../src/review/reproduction-package.js";
 import { publishReproductionPackage } from "../../../src/verification/reproduction-package.js";
 
@@ -187,3 +189,114 @@ for (const testCase of cases) {
     expect(directory).not.toContain("wordpress-bounty-harness-issue-140");
   });
 }
+
+it("seals a reproduced package with the exact executed script and one-command Lab setup", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "wbh-reproduced-package-"));
+  directories.push(directory);
+  const store = new PrivateArtifactStore({
+    rootDirectory: join(directory, "private-evidence"),
+    maxEntries: 10,
+    maxBytes: 100_000,
+  });
+  const snapshotBody = {
+    kind: "source-snapshot" as const,
+    schemaVersion: 1 as const,
+    target: {
+      identity: "example",
+      version: "1.0",
+      sourceDigest: snapshotDigest,
+    },
+    dependencies: [],
+  };
+  const sealedSnapshot = {
+    ...snapshotBody,
+    digest: canonicalDigest(snapshotBody),
+  };
+  const labSetup = {
+    schemaVersion: 1 as const,
+    snapshotDigest: sealedSnapshot.digest,
+    siteTitle: "Synthetic test",
+    initialPosts: [],
+    customerRole: false,
+  };
+  const capture = `${JSON.stringify({
+    request: { method: "GET", path: "/synthetic", truncated: false },
+    response: { statusCode: 200, truncated: false },
+  })}\n`;
+  const evidenceDigest = await store.putFiles({
+    "reproduced-route.json": JSON.stringify({
+      schemaVersion: 1,
+      snapshotDigest: sealedSnapshot.digest,
+      labSetupDigest: setupDigest,
+      role: "unauthenticated",
+      account: "none",
+      defaultSettings: true,
+      configurationChanges: [],
+      steps: [
+        {
+          kind: "http",
+          method: "GET",
+          path: "/synthetic",
+          expected: "Synthetic canary",
+        },
+      ],
+      evidence: [
+        {
+          kind: "http",
+          path: "proxy-capture.jsonl",
+          capture: "harness-captured",
+        },
+        {
+          kind: "structured-output",
+          path: "structured-output.json",
+          capture: "harness-captured",
+        },
+      ],
+    }),
+    "proxy-capture.jsonl": capture,
+    "structured-output.json": "{}",
+    "standard-reproduce.py": STANDARD_REPRODUCER_SCRIPT,
+  });
+  const result = await publishReproductionPackage({
+    store,
+    renderer: wordpressReproductionRenderer,
+    category: "sqli",
+    findingSnapshotDigest: sealedSnapshot.digest,
+    labSnapshotDigest: sealedSnapshot.digest,
+    labSetupDigest: setupDigest,
+    judgeResult: {
+      status: "reproduced",
+      reproducerId: "standard-python-v1",
+      proofKind: "captured-script-observation",
+      conditions: { observedVia: "canary-row-read" },
+      evidenceDigest,
+    },
+    reconstruction: {
+      wordpressVersion: "6.8",
+      target: snapshotBody.target,
+      enabledSettings: [],
+      roles: ["unauthenticated"],
+    },
+    setup: labSetup,
+    snapshot: sealedSnapshot,
+    negativeControl: "pending-fixed-version",
+  });
+  expect(result.status).toBe("reproduced");
+  if (result.status !== "reproduced") return;
+  const opened = await openReproductionPackage(store, result);
+  expect(opened).toMatchObject({
+    status: "opened",
+    script: STANDARD_REPRODUCER_SCRIPT,
+  });
+  const lab = await store.readFile(
+    result.reproductionPackageDigest,
+    "lab.json",
+    100_000,
+  );
+  expect(lab.status).toBe("resolved");
+  if (lab.status !== "resolved") return;
+  expect(JSON.parse(lab.bytes.toString("utf8"))).toMatchObject({
+    setup: labSetup,
+    snapshot: sealedSnapshot,
+  });
+});

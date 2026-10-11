@@ -1,16 +1,32 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 
 import { runCli, type CliIo } from "./index.js";
 import {
   createWordPressHostProfile,
   loadWordPressHostConfig,
 } from "./wordpress-host.js";
+import { openWordPressReviewLab } from "../profiles/wordpress/lab/review-lab.js";
 
 const io: CliIo = {
   stdout: (line) => process.stdout.write(`${line}\n`),
   stderr: (line) => process.stderr.write(`${line}\n`),
+  async askMinutes(action) {
+    const terminal = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    try {
+      const answer = await terminal.question(`${action} に使った分数: `);
+      if (!/^\d+(?:\.\d{1,2})?$/.test(answer) || Number(answer) > 1440)
+        throw new Error("分数は 0〜1440、少数第2位までで入力してください");
+      return Number(answer);
+    } finally {
+      terminal.close();
+    }
+  },
 };
 
 /** `harness [--host <path>] [--state <dir>] <command>`; the host file stays outside Git. */
@@ -28,9 +44,15 @@ async function main(argv: readonly string[]): Promise<number> {
     );
     return 2;
   }
-  const profile = await createWordPressHostProfile({
-    host: await loadWordPressHostConfig(resolve(hostPath)),
-  });
+  const host = await loadWordPressHostConfig(resolve(hostPath));
+  const baseProfile = await createWordPressHostProfile({ host });
+  const profile = {
+    ...baseProfile,
+    reviewLab: (
+      state: Parameters<NonNullable<typeof baseProfile.reviewLab>>[0],
+      input: { readonly packageDigest: string; readonly category: string },
+    ) => openWordPressReviewLab({ host, store: state.store, ...input }),
+  };
   return runCli(
     args,
     {
