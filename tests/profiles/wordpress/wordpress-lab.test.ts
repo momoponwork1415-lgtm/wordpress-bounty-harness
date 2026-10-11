@@ -18,6 +18,7 @@ import {
   nextWordPressScenario,
 } from "../../../src/profiles/wordpress/lab/scenarios.js";
 import { downloadManagerOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/download-manager-adapter.js";
+import { downloadMonitorOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/download-monitor-adapter.js";
 import { userRegistrationOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/user-registration-adapter.js";
 import {
   userRegistrationMembershipEnrollmentScript,
@@ -664,6 +665,66 @@ describe("WordPress gVisor Lab", () => {
   it("rejects the download scenario for another plugin before containers start", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const scenario = wordPressScenario("public-and-subscriber-downloads-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
+  it("provisions the pinned public download setup for both Lab purposes", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      { version: "6.8.3", runningVersion: "6.8.3" },
+      "download-monitor",
+    );
+    const scenario = wordPressScenario("public-file-download-v1")!;
+    expect(scenario).toMatchObject({
+      version: 1,
+      pluginSlug: "download-monitor",
+      roles: ["unauthenticated", "subscriber"],
+      expectedObservations: ["public-page-link", "public-download-fixture"],
+      adapterDigest: canonicalDigest(downloadMonitorOrdinarySetupScript()),
+    });
+    const ordinarySetup = {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    };
+    const discovery = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.teardown(discovery.handle)).toEqual({ status: "removed" });
+
+    const verification = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.scenario).toEqual(ordinarySetup.scenario);
+    expect(verification.handle.setupDigest).toBe(discovery.handle.setupDigest);
+    const scripts = commands
+      .filter(
+        ({ args }) => args[0] === "exec" && args.includes("--user=www-data"),
+      )
+      .map(({ args }) => args.at(-1) ?? "");
+    expect(scripts).toEqual([
+      downloadMonitorOrdinarySetupScript(),
+      downloadMonitorOrdinarySetupScript(),
+    ]);
+    expect(scripts[0]).toContain('"post_type"=>"dlm_download_version"');
+    expect(scripts[0]).toContain('"post_content"=>$shortcode');
+    expect(scripts[0]).toContain("get_mirrors()");
+    expect(await lab.teardown(verification.handle)).toEqual({
+      status: "removed",
+    });
+  });
+
+  it("rejects the public file download scenario for another plugin", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-file-download-v1")!;
     const result = await lab.provision(snapshot, {
       ...setup,
       scenario: { id: scenario.id, digest: scenario.digest },
