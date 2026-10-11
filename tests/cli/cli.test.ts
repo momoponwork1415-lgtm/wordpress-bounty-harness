@@ -85,6 +85,8 @@ async function harness(
     readonly history?: boolean;
     /** Provider calls (1-based) that the subscription refuses with a quota limit. */
     readonly limitOnCalls?: readonly number[];
+    /** A completed child report survives a provider-limited Root Trial. */
+    readonly childFindingOnLimitedCall?: boolean;
     readonly failOnCalls?: readonly number[];
     readonly leadsOnCalls?: Readonly<Record<number, readonly unknown[]>>;
     readonly zeroFindings?: boolean;
@@ -363,7 +365,23 @@ async function harness(
         maxInFlight = Math.max(maxInFlight, ++inFlight);
         await new Promise((resolve) => setTimeout(resolve, 5));
         inFlight--;
-        if (options.limitOnCalls?.includes(call) === true)
+        if (options.limitOnCalls?.includes(call) === true) {
+          const childAttachment =
+            options.childFindingOnLimitedCall === true
+              ? await attachments.put(
+                  "findings",
+                  Buffer.from(
+                    JSON.stringify({
+                      findings: [
+                        claim("account-takeover", "includes/synthetic.php"),
+                      ],
+                      leads: [],
+                      examined: "child source",
+                      unexamined: "none",
+                    }),
+                  ),
+                )
+              : undefined;
           return {
             receipt: createNativeRunReceipt({
               runId: run.runId,
@@ -375,7 +393,28 @@ async function harness(
               startedAt: now,
               completedAt: now,
             }),
+            ...(childAttachment === undefined
+              ? {}
+              : {
+                  agentRuns: [
+                    {
+                      agentPath: "/root/child-1",
+                      attachment: childAttachment,
+                      receipt: createNativeRunReceipt({
+                        runId: `${run.runId}-child`,
+                        targetSnapshotDigest: run.targetSnapshotDigest,
+                        profile: run.profile,
+                        terminal: "completed",
+                        reason: "unavailable",
+                        startedAt: now,
+                        completedAt: now,
+                        reportArtifactDigest: childAttachment.digest,
+                      }),
+                    },
+                  ],
+                }),
           };
+        }
         if (options.failOnCalls?.includes(call) === true)
           return {
             receipt: createNativeRunReceipt({
@@ -1086,45 +1125,48 @@ describe("harness CLI vertical slice", () => {
     });
   });
 
-  it("runs the default screening once and records a zero-candidate target as unexplored", async () => {
+  it("runs one indexed WP2Shell Trial by default and records a zero-candidate conclusion", async () => {
     const { run, configPath, prompts, coordinations, expirations, ledger } =
       await harness({
         entryPoints: true,
         zeroFindings: true,
-        config: { promptId: undefined },
+        config: {
+          promptId: undefined,
+          stopRules: { maxRuns: 1, noFindingRuns: 1 },
+        },
       });
     const campaign = await run(
       "campaign",
       "run",
       "synthetic-plugin",
       "--campaign",
-      "campaign-screening",
+      "campaign-wp2shell-default",
       "--config",
       configPath,
     );
     expect(campaign.code).toBe(0);
-    expect(campaign.stdout).toContain("stopped by screened-no-candidate");
+    expect(campaign.stdout).toContain("stopped by no-new-finding");
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("WordPress discovery: screening v1");
+    expect(prompts[0]).toContain("WordPress discovery: WP2Shell bounty v2");
     expect(prompts[0]).toContain("## Entry points");
-    expect(prompts[0]).toContain("Finding and Lead output contract");
-    expect(coordinations).toEqual(["solo"]);
-    expect(expirations).toEqual(["2026-10-08T00:30:00.000Z"]);
+    expect(coordinations).toEqual(["cooperative"]);
+    expect(expirations).toEqual(["2026-10-08T01:00:00.000Z"]);
+    const started = ledger().read({
+      campaignId: "campaign-wp2shell-default",
+      type: "discovery-run-started",
+    })[0]?.event;
+    expect(started).toMatchObject({ runKind: "explore", trialOrdinal: 0 });
+    expect(started).not.toHaveProperty("stage");
+    expect(started).not.toHaveProperty("continuationOf");
     expect(
       ledger().read({
-        campaignId: "campaign-screening",
-        type: "discovery-run-started",
-      })[0]?.event,
-    ).toMatchObject({ stage: "screening", trialOrdinal: 0 });
-    expect(
-      ledger().read({
-        campaignId: "campaign-screening",
+        campaignId: "campaign-wp2shell-default",
         type: "campaign-stopped",
-      })[0]?.event,
-    ).toMatchObject({ reason: "screened-no-candidate" });
+      }),
+    ).toHaveLength(0);
     expect(
       ledger().read({
-        campaignId: "campaign-screening",
+        campaignId: "campaign-wp2shell-default",
         type: "verification-finished",
       }),
     ).toHaveLength(0);
@@ -1133,7 +1175,7 @@ describe("harness CLI vertical slice", () => {
       "run",
       "synthetic-plugin",
       "--campaign",
-      "campaign-screening",
+      "campaign-wp2shell-default",
       "--config",
       configPath,
     );
@@ -1141,16 +1183,48 @@ describe("harness CLI vertical slice", () => {
     expect(prompts).toHaveLength(1);
     expect(
       ledger().read({
-        campaignId: "campaign-screening",
-        type: "campaign-stopped",
+        campaignId: "campaign-wp2shell-default",
+        type: "discovery-concluded",
       }),
     ).toHaveLength(1);
+  });
+
+  it("reads historical stage and continuation references without writing them on new Trials", async () => {
+    const { run, configPath, ledger } = await harness();
+    expect((await run("select", "--config", configPath)).code).toBe(0);
+    await ledger().append({
+      schemaVersion: 1,
+      identity: "historical-discovery-start",
+      campaignId: "historical-campaign",
+      snapshotDigest: sha("a"),
+      occurredAt: now,
+      type: "discovery-run-started",
+      runId: "historical-run",
+      trialId: "historical-trial",
+      trialOrdinal: 0,
+      stage: "screening",
+      runKind: "continue",
+      continuationOf: "historical-lead",
+      labId: "historical-lab",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "screening-v1",
+        assignmentUnit: "plugin",
+      },
+    });
+    expect(
+      ledger().read({
+        campaignId: "historical-campaign",
+        type: "discovery-run-started",
+      })[0]?.event,
+    ).toMatchObject({ stage: "screening", continuationOf: "historical-lead" });
   });
 
   it("records the entry-index control when one config field disables the catalogue", async () => {
     const { run, configPath, prompts, entryIndexes, ledger } = await harness({
       entryPoints: true,
       config: {
+        promptId: undefined,
         entryIndex: false,
         stopRules: { maxRuns: 1, noFindingRuns: 1 },
       },
@@ -1210,26 +1284,92 @@ describe("harness CLI vertical slice", () => {
     ]);
   });
 
-  it("normalizes old history configuration and records four prompt-continuation cells", async () => {
+  it("uses disjoint campaign modes and retains the short objective comparison arm", () => {
     const base = {
       schemaVersion: 1 as const,
       programmeBoundary: { version: "v1", text: "Synthetic" },
       wordpressVersion: "6.8",
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
     };
-    expect(
-      wordpressCampaignConfigSchema.parse({
-        ...base,
-        ablation: { axis: "history", armBFraction: 0.5 },
-      }).ablation?.axes,
-    ).toEqual([{ axis: "history", armBFraction: 0.5 }]);
+    const production = wordpressCampaignConfigSchema.parse({
+      ...base,
+      mode: "wp2shell",
+    });
+    expect(production).toMatchObject({
+      mode: "wp2shell",
+      promptId: "wp2shell-bounty-v2",
+      entryIndex: true,
+      runWallTimeMinutes: 60,
+      stopRules: { maxRuns: 1, noFindingRuns: 1 },
+    });
+    for (const forbidden of [
+      { assignment: { unit: "entry-point" } },
+      { ablation: { axis: "history", armBFraction: 0.5 } },
+      { continuation: {} },
+    ])
+      expect(
+        wordpressCampaignConfigSchema.safeParse({
+          ...base,
+          mode: "wp2shell",
+          ...forbidden,
+        }).success,
+      ).toBe(false);
+    const comparison = wordpressCampaignConfigSchema.parse({
+      ...base,
+      mode: "comparison",
+      promptId: "short-objective-managed-v4",
+      stopRules: { maxRuns: 3, noFindingRuns: 3 },
+    });
+    expect(comparison).toMatchObject({
+      mode: "comparison",
+      promptId: "short-objective-managed-v4",
+      stopRules: { maxRuns: 3, noFindingRuns: 3 },
+    });
+  });
+
+  it("normalizes old history configuration, rejects continuation, and records prompt-history cells", async () => {
+    const base = {
+      schemaVersion: 1 as const,
+      programmeBoundary: { version: "v1", text: "Synthetic" },
+      wordpressVersion: "6.8",
+      lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
+    };
+    const normalized = wordpressCampaignConfigSchema.parse({
+      ...base,
+      ablation: { axis: "history", armBFraction: 0.5 },
+    });
+    if (normalized.mode !== "ablation") throw new Error("Expected ablation");
+    expect(normalized.ablation.axes).toEqual([
+      { axis: "history", armBFraction: 0.5 },
+    ]);
     expect(() =>
       wordpressCampaignConfigSchema.parse({
         ...base,
         ablation: { axes: [{ axis: "continuation", armBFraction: 0.5 }] },
       }),
     ).toThrow();
+    expect(
+      wordpressCampaignConfigSchema.safeParse({ ...base, continuation: {} })
+        .success,
+    ).toBe(false);
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...base,
+        mode: "ablation",
+        ablation: {
+          axes: [
+            {
+              axis: "prompt",
+              armBFraction: 0.5,
+              armBPromptId: "screening-v1",
+            },
+          ],
+        },
+      }).success,
+    ).toBe(false);
     const { run, configPath, prompts, promptDigests, ledger } = await harness({
+      history: true,
+      pinned: false,
       config: {
         promptId: "short-objective-v2",
         stopRules: { maxRuns: 4, noFindingRuns: 4 },
@@ -1240,10 +1380,9 @@ describe("harness CLI vertical slice", () => {
               armBFraction: 0.5,
               armBPromptId: "wp2shell-single-http-v2",
             },
-            { axis: "continuation", armBFraction: 0.5 },
+            { axis: "history", armBFraction: 0.5 },
           ],
         },
-        continuation: {},
       },
     });
     const result = await run(
@@ -1273,10 +1412,10 @@ describe("harness CLI vertical slice", () => {
           : null,
       ),
     ).toEqual([
-      { prompt: "a", continuation: "a" },
-      { prompt: "b", continuation: "a" },
-      { prompt: "a", continuation: "b" },
-      { prompt: "b", continuation: "b" },
+      { prompt: "a", history: "a" },
+      { prompt: "b", history: "a" },
+      { prompt: "a", history: "b" },
+      { prompt: "b", history: "b" },
     ]);
     expect(
       started.map((event) =>
@@ -1286,8 +1425,8 @@ describe("harness CLI vertical slice", () => {
       ),
     ).toEqual(promptDigests);
     const funnel = ledger().funnel("campaign-multi-axis");
-    expect(funnel.byArm["prompt:b+continuation:a"]?.runs).toBe(1);
-    expect(funnel.byArm["prompt:a"]?.runs).toBe(2);
+    expect(funnel.byArm["history:a+prompt:b"]?.runs).toBe(1);
+    expect(funnel.byArm["history:b+prompt:a"]?.runs).toBe(1);
     const comparison = await run(
       "eval",
       "compare",
@@ -1300,7 +1439,7 @@ describe("harness CLI vertical slice", () => {
     expect(comparison.stdout).toContain("compare prompt");
   });
 
-  it("builds a one-hop continuation prompt from one Lead and source-index facts", async () => {
+  it("records Leads and source-index facts without starting a Harness continuation", async () => {
     const makeLead = (summary: string, missingEdge: string) => ({
       summary,
       attackerPosition: "subscriber",
@@ -1322,7 +1461,6 @@ describe("harness CLI vertical slice", () => {
       },
       config: {
         stopRules: { maxRuns: 1, noFindingRuns: 1 },
-        continuation: { maxRunsPerTrial: 1, runWallTimeMinutes: 30 },
       },
     });
     const result = await run(
@@ -1335,24 +1473,22 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(result.code).toBe(0);
-    expect(prompts).toHaveLength(2);
-    expect(prompts[1]).toContain("## Lead");
-    expect(prompts[1]).toContain("## Neighbourhood");
-    expect(prompts[1]).toContain("Selected Lead");
-    expect(prompts[1]).toContain("synthetic_save");
-    expect(prompts[1]).not.toContain("Other Lead");
-    expect(prompts[1]).not.toContain("Synthetic account-takeover claim");
-    expect(prompts[1]).not.toContain("transcript");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("## Entry points");
+    expect(prompts[0]).not.toContain("## Lead");
+    expect(prompts[0]).not.toContain("Selected Lead");
     const started = ledger()
       .read({ campaignId: "campaign-lead", type: "discovery-run-started" })
       .map(({ event }) => event);
-    expect(started).toHaveLength(2);
-    expect(started[1]).toMatchObject({
+    expect(started).toHaveLength(1);
+    expect(started[0]).toMatchObject({
       type: "discovery-run-started",
-      runKind: "continue",
-      trialId:
-        started[0]?.type === "discovery-run-started" ? started[0].runId : "",
+      runKind: "explore",
     });
+    expect(started[0]).not.toHaveProperty("continuationOf");
+    expect(
+      ledger().read({ campaignId: "campaign-lead", type: "lead-recorded" }),
+    ).toHaveLength(2);
     const scored = await run(
       "eval",
       "score",
@@ -1444,7 +1580,10 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("stops the campaign on a provider limit and resumes it with the same command", async () => {
-    const { run, configPath } = await harness({ limitOnCalls: [2] });
+    const { run, configPath } = await harness({
+      limitOnCalls: [2],
+      config: { stopRules: { maxRuns: 4, noFindingRuns: 2 } },
+    });
     const command = [
       "campaign",
       "run",
@@ -1464,19 +1603,20 @@ describe("harness CLI vertical slice", () => {
     expect(stopped.stdout).toContain("raw 2 → verifier通過 0");
 
     const resumed = await run(...command);
-    expect(resumed.code).toBe(0);
-    // One completed run was spent; two more without new Findings meet the stop rule.
-    expect(resumed.stdout).toContain("runs 2  stopped by no-new-finding");
-    expect(resumed.stdout.match(/^  finding /gm)).toHaveLength(2);
-    expect(resumed.stdout).toContain("raw 2 → verifier通過 2 → confirmed 1");
+    expect(resumed.code).toBe(3);
+    // The limited Trial spent its ordinal; later completed Trials do not
+    // change its recorded provider-limit outcome.
+    expect(resumed.stdout).toContain("runs 2  stopped by provider-limit");
+    expect(resumed.stdout).not.toContain("  finding ");
 
     const again = await run(...command);
     expect(again.code).toBe(0);
-    expect(again.stdout).toContain("runs 0  stopped by no-new-finding");
-    expect(again.stdout).not.toContain("  finding ");
+    expect(again.stdout).toContain("runs 0  stopped by provider-limit");
+    expect(again.stdout.match(/^  finding /gm)).toHaveLength(2);
+    expect(again.stdout).toContain("raw 2 → verifier通過 2 → confirmed 1");
   });
 
-  it("keeps an incomplete Trial open and retries its ordinal without counting it as no findings", async () => {
+  it("does not replace an incomplete Trial when the campaign resumes", async () => {
     const { run, configPath, ledger } = await harness({
       failOnCalls: [1],
       config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
@@ -1497,9 +1637,78 @@ describe("harness CLI vertical slice", () => {
 
     const retried = await run(...command);
     expect(retried.code).toBe(0);
-    expect(retried.stdout).toContain("runs 1  stopped by no-new-finding");
-    expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(2);
-    expect(ledger().read({ type: "discovery-concluded" })).toHaveLength(1);
+    expect(retried.stdout).toContain("runs 0  stopped by incomplete");
+    expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(1);
+    expect(ledger().read({ type: "discovery-concluded" })).toHaveLength(0);
+  });
+
+  it("continues to an unspent target after an earlier target failed", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      candidates: ["synthetic-plugin", "zz-next-plugin"],
+      failOnCalls: [1],
+      config: {
+        promptId: undefined,
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    });
+    const command = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-two-targets",
+      "--config",
+      configPath,
+    ];
+    const stopped = await run(...command);
+    expect(stopped.code).toBe(3);
+    expect(prompts).toHaveLength(1);
+    const resumed = await run(...command);
+    expect(resumed.code).toBe(0);
+    expect(resumed.stdout).toContain("runs 0  stopped by incomplete");
+    expect(resumed.stdout).toMatch(
+      /^wporg:zz-next-plugin 9\.9\.9 .*runs 1  stopped by /m,
+    );
+    expect(prompts).toHaveLength(2);
+    expect(
+      ledger()
+        .read({ type: "discovery-run-started" })
+        .filter(
+          ({ event }) =>
+            event.type === "discovery-run-started" &&
+            event.runKind === "explore",
+        ),
+    ).toHaveLength(2);
+  });
+
+  it("verifies a child Finding on resume without starting a replacement Trial", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      limitOnCalls: [1],
+      childFindingOnLimitedCall: true,
+      config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
+    });
+    const command = [
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-child-resume",
+      "--config",
+      configPath,
+    ];
+    const limited = await run(...command);
+    expect(limited.code).toBe(3);
+    expect(prompts).toHaveLength(1);
+    expect(ledger().read({ type: "finding-recorded" })).toHaveLength(1);
+    expect(ledger().read({ type: "verification-finished" })).toHaveLength(0);
+
+    const resumed = await run(...command);
+    expect(resumed.code).toBe(0);
+    expect(resumed.stdout).toContain("runs 0  stopped by provider-limit");
+    expect(prompts).toHaveLength(1);
+    expect(ledger().read({ type: "finding-recorded" })).toHaveLength(1);
+    expect(ledger().read({ type: "verification-finished" })).toHaveLength(1);
+    expect(ledger().read({ type: "discovery-concluded" })).toHaveLength(0);
   });
 
   it("runs discovery concurrently within the configured count and memory budget", async () => {

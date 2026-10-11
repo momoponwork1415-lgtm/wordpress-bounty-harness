@@ -1,0 +1,202 @@
+import type {
+  DockerResult,
+  ParsedWordPressLabSetup,
+  Resources,
+} from "./index.js";
+import { SQL_CANARY_TABLE } from "./canary-placement.js";
+import {
+  scenarioTranslationSeedScript,
+  translatePressLocaleSetupScript,
+  type WordPressScenario,
+} from "./scenarios.js";
+
+type WordPressCommand = (
+  resource: Resources,
+  args: readonly string[],
+  environment?: readonly string[],
+) => Promise<DockerResult>;
+type RequireDocker = (
+  args: readonly string[],
+  timeoutMs?: number,
+) => Promise<DockerResult>;
+
+export const DATABASE_NAME = "wordpress";
+export const READ_ONLY_DATABASE_USER = "wbh_reader";
+
+type Account = { readonly username: string; readonly password: string };
+export interface WordPressInitialization {
+  readonly resource: Resources;
+  readonly setup: ParsedWordPressLabSetup;
+  readonly scenario: WordPressScenario | undefined;
+  readonly coreVersion: string | undefined;
+  readonly target: { readonly slug: string; readonly directory: string };
+  readonly dependencies: readonly {
+    readonly slug: string;
+    readonly directory: string;
+  }[];
+  readonly subscriber: Account;
+  readonly customer?: Account;
+  readonly wp: WordPressCommand;
+  readonly requireDocker: RequireDocker;
+}
+
+async function installCore(input: WordPressInitialization): Promise<void> {
+  const { resource, wp, setup, coreVersion } = input;
+  if (coreVersion !== undefined) {
+    const running = await wp(resource, ["core", "version"]);
+    if (running.stdout.trim() !== coreVersion)
+      throw new Error("The Lab image runs another WordPress version");
+  }
+  await wp(resource, [
+    "core",
+    "install",
+    "--url=http://wordpress",
+    `--title=${setup.siteTitle}`,
+    "--admin_user=harness-admin",
+    `--admin_password=${resource.adminPassword}`,
+    "--admin_email=harness-admin@example.invalid",
+    "--skip-email",
+  ]);
+}
+
+async function installPlugins(input: WordPressInitialization): Promise<void> {
+  const { resource, wp, requireDocker, dependencies, target } = input;
+  for (const source of [...dependencies, target]) {
+    await requireDocker([
+      "exec",
+      resource.wordpress,
+      "mkdir",
+      "-p",
+      `/var/www/html/wp-content/plugins/${source.slug}`,
+    ]);
+    await requireDocker([
+      "cp",
+      `${source.directory}/.`,
+      `${resource.wordpress}:/var/www/html/wp-content/plugins/${source.slug}`,
+    ]);
+    await wp(resource, ["plugin", "activate", source.slug]);
+  }
+}
+
+async function configureSecondaryLocale(
+  input: WordPressInitialization,
+): Promise<void> {
+  const locale = input.resource.administratorSecondaryLocale;
+  if (locale !== undefined)
+    await input.wp(input.resource, [
+      "eval",
+      translatePressLocaleSetupScript(locale),
+    ]);
+}
+
+async function createAccounts(input: WordPressInitialization): Promise<void> {
+  const { resource, wp, subscriber, customer } = input;
+  await wp(resource, [
+    "user",
+    "create",
+    subscriber.username,
+    `${subscriber.username}@example.invalid`,
+    "--role=subscriber",
+    `--user_pass=${subscriber.password}`,
+  ]);
+  if (customer !== undefined)
+    await wp(resource, [
+      "user",
+      "create",
+      customer.username,
+      `${customer.username}@example.invalid`,
+      "--role=customer",
+      `--user_pass=${customer.password}`,
+    ]);
+}
+
+async function seedInitialPosts(input: WordPressInitialization): Promise<void> {
+  const { resource, wp, setup, scenario } = input;
+  for (const [index, title] of setup.initialPosts.entries()) {
+    const approvedComment =
+      index === 0 &&
+      (setup.initialApprovedComment === true || scenario?.approvedComment);
+    const created = await wp(resource, [
+      "post",
+      "create",
+      "--post_status=publish",
+      `--post_title=${title}`,
+      ...(approvedComment ? ["--porcelain"] : []),
+    ]);
+    if (!approvedComment) continue;
+    const postId = created.stdout.trim();
+    if (!/^[1-9][0-9]*$/.test(postId))
+      throw new Error("Seed post ID is unavailable");
+    await wp(resource, [
+      "comment",
+      "create",
+      `--comment_post_ID=${postId}`,
+      "--comment_content=Thanks for the useful post.",
+      "--comment_author=Lab Reader",
+      "--comment_author_email=lab-reader@example.invalid",
+      "--comment_type=comment",
+      "--comment_approved=1",
+    ]);
+  }
+}
+
+async function seedScenarioTranslation(
+  input: WordPressInitialization,
+): Promise<void> {
+  const script = scenarioTranslationSeedScript(input.scenario);
+  if (script !== undefined) await input.wp(input.resource, ["eval", script]);
+}
+
+/** Initialize the isolated WordPress site after all containers are healthy. */
+export async function initializeWordPress(
+  input: WordPressInitialization,
+): Promise<void> {
+  await installCore(input);
+  await installPlugins(input);
+  await configureSecondaryLocale(input);
+  await createAccounts(input);
+  await seedInitialPosts(input);
+  await seedScenarioTranslation(input);
+}
+
+/** Grant SELECT on the tables present at provision time, before canary placement. */
+export async function grantReadOnlyDatabaseAccess(
+  resource: Resources,
+  requireDocker: RequireDocker,
+): Promise<void> {
+  const tables = (
+    await requireDocker([
+      "exec",
+      resource.database,
+      "mariadb",
+      "--user=root",
+      `--password=${resource.databasePassword}`,
+      "--skip-column-names",
+      "--batch",
+      "--execute",
+      `SHOW TABLES FROM ${DATABASE_NAME}`,
+    ])
+  ).stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(
+      (line) => /^[A-Za-z0-9_]{1,64}$/.test(line) && line !== SQL_CANARY_TABLE,
+    );
+  if (tables.length === 0) throw new Error("No tables to expose");
+  await requireDocker([
+    "exec",
+    resource.database,
+    "mariadb",
+    "--user=root",
+    `--password=${resource.databasePassword}`,
+    "--execute",
+    [
+      `CREATE USER '${READ_ONLY_DATABASE_USER}'@'%' IDENTIFIED BY '${resource.readerPassword}'`,
+      ...tables.map(
+        (table) =>
+          `GRANT SELECT ON ${DATABASE_NAME}.${table} TO '${READ_ONLY_DATABASE_USER}'@'%'`,
+      ),
+      "FLUSH PRIVILEGES",
+    ].join("; "),
+  ]);
+}

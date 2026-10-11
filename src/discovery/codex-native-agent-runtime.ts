@@ -17,6 +17,7 @@ import {
 import type {
   ProviderCredentialEgressBroker,
   ProviderCredentialEgressGrant,
+  ProviderCredentialEgressResult,
 } from "./provider-credential-egress-broker.js";
 import {
   ProviderAttachmentStore,
@@ -829,6 +830,260 @@ function brokerRequestBytesExceeded(stdout: string): boolean {
   return false;
 }
 
+type AgentRun = NonNullable<DiscoveryTransportResult["agentRuns"]>[number];
+type IncompleteReason =
+  "provider" | "schema" | "sandbox" | "policy" | "evidence";
+type GrantedSandboxRun = ProviderCredentialEgressResult<CodexSandboxResult>;
+type ExecutionState = {
+  readonly run: DiscoveryTransportRun;
+  readonly startedAt: string;
+  readonly cooperative: boolean;
+  agentRuns: readonly AgentRun[];
+  rootDiagnosticArtifactDigest: string | undefined;
+  rootUsage: NativeRunReceipt["usage"] | undefined;
+  rootObserved: Observed | undefined;
+  brokerMetrics: NativeRunReceipt["brokerMetrics"] | undefined;
+  sandboxExitCode: number | undefined;
+};
+
+function incompleteExecution(
+  state: ExecutionState,
+  reason: IncompleteReason,
+  completedAt: string,
+  grantReceiptDigest?: string,
+  providerLimit?: "rate-limit" | "quota",
+  reasonDetail?: string,
+  attachment?: ProviderAttachmentRef,
+): DiscoveryTransportResult {
+  return {
+    receipt: createNativeRunReceipt({
+      ...state.run,
+      terminal: "incomplete",
+      reason,
+      ...(reasonDetail === undefined ? {} : { reasonDetail }),
+      ...(providerLimit === undefined ? {} : { providerLimit }),
+      startedAt: state.startedAt,
+      completedAt,
+      ...(grantReceiptDigest === undefined ? {} : { grantReceiptDigest }),
+      ...(state.sandboxExitCode === undefined
+        ? {}
+        : { sandboxExitCode: state.sandboxExitCode }),
+      ...(state.rootDiagnosticArtifactDigest === undefined
+        ? {}
+        : { diagnosticArtifactDigest: state.rootDiagnosticArtifactDigest }),
+      ...(state.rootUsage === undefined ? {} : { usage: state.rootUsage }),
+      ...(state.rootObserved === undefined
+        ? {}
+        : { observed: state.rootObserved }),
+      ...(state.brokerMetrics === undefined
+        ? {}
+        : { brokerMetrics: state.brokerMetrics }),
+      ...(attachment === undefined
+        ? {}
+        : { reportArtifactDigest: attachment.digest }),
+    }),
+    ...(attachment === undefined ? {} : { attachment }),
+    ...(state.cooperative ? { agentRuns: state.agentRuns } : {}),
+  };
+}
+
+function cooperativeRun(run: DiscoveryTransportRun): boolean {
+  return (
+    run.coordination !== "solo" &&
+    run.outputKind !== "verification" &&
+    (run.profile.subagent.modelId !== "unavailable" ||
+      run.profile.subagent.effort !== "unavailable")
+  );
+}
+
+function admittedRun(
+  run: DiscoveryTransportRun,
+  sandboxImage: string,
+  cooperative: boolean,
+): boolean {
+  return (
+    discoveryTransportRunSchema.safeParse(run).success &&
+    run.campaignInput.snapshotDigest === run.targetSnapshotDigest &&
+    run.campaignInput.modelProfileDigest === run.profile.digest &&
+    admitAgentRuntimeProfile(run.profile, sandboxImage).status === "admitted" &&
+    run.prompt.length > 0 &&
+    isAbsolute(run.sourceDirectory) &&
+    (run.dependencySource === undefined ||
+      isAbsolute(run.dependencySource.directory)) &&
+    CODEX_AUTHENTICATION_METHODS.includes(run.profile.authenticationMethod) &&
+    (!cooperative ||
+      admitCooperativeRuntimeProfile(run.profile, sandboxImage).status ===
+        "admitted")
+  );
+}
+
+function admittedLabEndpoint(run: DiscoveryTransportRun): URL | undefined {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(run.lab.endpoint);
+  } catch {
+    return undefined;
+  }
+  return endpoint.protocol === "http:" &&
+    /^[a-z0-9][a-z0-9-]{0,62}$/.test(endpoint.hostname) &&
+    endpoint.username === "" &&
+    endpoint.password === ""
+    ? endpoint
+    : undefined;
+}
+
+function sandboxAdmissionFailure(
+  result: CodexSandboxResult,
+  run: DiscoveryTransportRun,
+  sandboxImage: string,
+): "sandbox" | "policy" | undefined {
+  if (
+    result.isolation.backend !== "gvisor" ||
+    result.isolation.runtime !== "runsc" ||
+    result.isolation.fallbackUsed !== false
+  )
+    return "sandbox";
+  if (
+    result.image !== sandboxImage ||
+    result.cliVersion !== run.profile.codexCliVersion ||
+    result.bundledCatalogDigest !== run.profile.bundledCatalogDigest
+  )
+    return "policy";
+  return undefined;
+}
+
+function assertBrokerAddress(
+  grant: ProviderCredentialEgressGrant,
+  run: DiscoveryTransportRun,
+): boolean {
+  if (grant.dockerNetworkName !== run.lab.networkName)
+    throw new Error("Provider grant is not on the Lab network");
+  const login = run.profile.authenticationMethod === "chatgpt-oauth-host";
+  if (
+    login
+      ? grant.tls === undefined ||
+        grant.baseUrl !== `https://${grant.tls.hostname}:8080`
+      : grant.tls !== undefined ||
+        !/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(grant.baseUrl)
+  )
+    throw new Error("Provider broker address is invalid");
+  return login;
+}
+
+function codexArgs(
+  run: DiscoveryTransportRun,
+  grant: ProviderCredentialEgressGrant,
+  cooperative: boolean,
+  login: boolean,
+): string[] {
+  return [
+    "exec",
+    "--model",
+    run.profile.requestedModelId,
+    "--sandbox",
+    "danger-full-access",
+    "--skip-git-repo-check",
+    ...(cooperative ? [] : ["--ephemeral"]),
+    "-c",
+    'approval_policy="never"',
+    ...(run.profile.cyberAccessProgram === "unavailable"
+      ? []
+      : ["--cyber-access-program", run.profile.cyberAccessProgram]),
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--disable",
+    "apps",
+    "--disable",
+    "remote_plugin",
+    "--disable",
+    "unified_exec",
+    "-c",
+    'web_search="disabled"',
+    ...(cooperative
+      ? [
+          "--enable",
+          "multi_agent",
+          "-c",
+          "agents.max_threads=3",
+          "-c",
+          "agents.max_depth=1",
+        ]
+      : ["-c", "features.multi_agent=false"]),
+    "-c",
+    `model_reasoning_effort="${run.profile.requestedEffort}"`,
+    ...(login
+      ? [
+          "-c",
+          `chatgpt_base_url="${grant.baseUrl}/backend-api/"`,
+          "--disable",
+          "enable_request_compression",
+        ]
+      : ["-c", `openai_base_url="${grant.baseUrl}/v1"`]),
+    ...(run.profile.serviceTier === "unavailable"
+      ? []
+      : ["-c", `service_tier="${run.profile.serviceTier}"`]),
+    "-c",
+    'history.persistence="none"',
+    "--output-schema",
+    "/opt/codex-support/report-schema.json",
+    "--json",
+    "-",
+  ];
+}
+
+function sandboxCommand(
+  run: DiscoveryTransportRun,
+  grant: ProviderCredentialEgressGrant,
+  cooperative: boolean,
+  labEndpoint: URL,
+  login: boolean,
+): CodexSandboxCommand {
+  return {
+    executable: "codex",
+    args: codexArgs(run, grant, cooperative, login),
+    stdin:
+      run.campaignInput.history.mode === "catalog"
+        ? `${run.prompt}\n\nPublic history catalog (records strictly before the cutoff):\n${canonicalJson(run.campaignInput.history)}`
+        : run.prompt,
+    supportFiles: [
+      {
+        path: "/opt/codex-support/report-schema.json",
+        content: JSON.stringify(
+          run.outputKind === "verification"
+            ? verificationReportJsonSchema
+            : reportJsonSchema,
+        ),
+      },
+    ],
+    grant,
+    sourceMount: {
+      directory: run.sourceDirectory,
+      path: "/workspace/main",
+      mode: "ro",
+      expectedTree: run.sourceTree,
+    },
+    ...(run.dependencySource === undefined
+      ? {}
+      : {
+          dependencyMount: {
+            directory: run.dependencySource.directory,
+            path: "/workspace/wordpress" as const,
+            mode: "ro" as const,
+            expectedTree: run.dependencySource.tree,
+          },
+        }),
+    labHost: { name: labEndpoint.hostname, ipv4: run.lab.internalIp },
+    ...(run.lab.database === undefined
+      ? {}
+      : {
+          databaseHost: {
+            name: run.lab.database.host,
+            ipv4: run.lab.database.ipv4,
+          },
+        }),
+  };
+}
+
 export class CodexNativeAgentRuntime {
   constructor(
     readonly sandbox: CodexSandbox,
@@ -839,76 +1094,90 @@ export class CodexNativeAgentRuntime {
   ) {}
 
   async execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult> {
-    const startedAt = this.clock().toISOString();
-    let agentRuns: NonNullable<DiscoveryTransportResult["agentRuns"]> = [];
-    let rootDiagnosticArtifactDigest: string | undefined;
-    let rootUsage: NativeRunReceipt["usage"] | undefined;
-    let rootObserved: Observed | undefined;
-    let brokerMetrics: NativeRunReceipt["brokerMetrics"];
-    const cooperative =
-      run.coordination !== "solo" &&
-      run.outputKind !== "verification" &&
-      (run.profile.subagent.modelId !== "unavailable" ||
-        run.profile.subagent.effort !== "unavailable");
-    let sandboxExitCode: number | undefined;
-    const incomplete = (
-      reason: "provider" | "schema" | "sandbox" | "policy" | "evidence",
-      completedAt = this.clock().toISOString(),
-      grantReceiptDigest?: string,
-      providerLimit?: "rate-limit" | "quota",
-      reasonDetail?: string,
-      attachment?: ProviderAttachmentRef,
-    ): DiscoveryTransportResult => ({
-      receipt: createNativeRunReceipt({
-        ...run,
-        terminal: "incomplete",
-        reason,
-        ...(reasonDetail === undefined ? {} : { reasonDetail }),
-        ...(providerLimit === undefined ? {} : { providerLimit }),
-        startedAt,
-        completedAt,
-        ...(grantReceiptDigest === undefined ? {} : { grantReceiptDigest }),
-        ...(sandboxExitCode === undefined ? {} : { sandboxExitCode }),
-        ...(rootDiagnosticArtifactDigest === undefined
-          ? {}
-          : { diagnosticArtifactDigest: rootDiagnosticArtifactDigest }),
-        ...(rootUsage === undefined ? {} : { usage: rootUsage }),
-        ...(rootObserved === undefined ? {} : { observed: rootObserved }),
-        ...(brokerMetrics === undefined ? {} : { brokerMetrics }),
-        ...(attachment === undefined
-          ? {}
-          : { reportArtifactDigest: attachment.digest }),
-      }),
-      ...(attachment === undefined ? {} : { attachment }),
-      ...(cooperative ? { agentRuns } : {}),
-    });
+    const state: ExecutionState = {
+      run,
+      startedAt: this.clock().toISOString(),
+      cooperative: cooperativeRun(run),
+      agentRuns: [],
+      rootDiagnosticArtifactDigest: undefined,
+      rootUsage: undefined,
+      rootObserved: undefined,
+      brokerMetrics: undefined,
+      sandboxExitCode: undefined,
+    };
+    if (run.coordination === "cooperative" && !state.cooperative)
+      return incompleteExecution(
+        state,
+        "policy",
+        this.clock().toISOString(),
+        undefined,
+        undefined,
+        "cooperative-profile-unavailable",
+      );
+    if (!admittedRun(run, this.sandboxImage, state.cooperative))
+      return incompleteExecution(state, "policy", this.clock().toISOString());
+    const labEndpoint = admittedLabEndpoint(run);
+    if (labEndpoint === undefined)
+      return incompleteExecution(state, "policy", this.clock().toISOString());
+    const granted = await this.#runWithBroker(
+      run,
+      state.cooperative,
+      labEndpoint,
+    );
+    if (granted === undefined)
+      return incompleteExecution(state, "provider", this.clock().toISOString());
+    state.brokerMetrics = granted.receipt.metrics;
     if (
-      !discoveryTransportRunSchema.safeParse(run).success ||
-      run.campaignInput.snapshotDigest !== run.targetSnapshotDigest ||
-      run.campaignInput.modelProfileDigest !== run.profile.digest ||
-      admitAgentRuntimeProfile(run.profile, this.sandboxImage).status !==
-        "admitted" ||
-      run.prompt.length === 0 ||
-      !isAbsolute(run.sourceDirectory) ||
-      (run.dependencySource !== undefined &&
-        !isAbsolute(run.dependencySource.directory)) ||
-      !CODEX_AUTHENTICATION_METHODS.includes(
-        run.profile.authenticationMethod,
-      ) ||
-      (cooperative &&
-        admitCooperativeRuntimeProfile(run.profile, this.sandboxImage)
-          .status !== "admitted")
+      granted.receipt.setup.status !== "ready" ||
+      granted.receipt.cleanup.status !== "completed" ||
+      granted.operation.status !== "completed"
     )
-      return incomplete("policy");
-    const labEndpoint = new URL(run.lab.endpoint);
-    if (
-      labEndpoint.protocol !== "http:" ||
-      !/^[a-z0-9][a-z0-9-]{0,62}$/.test(labEndpoint.hostname) ||
-      labEndpoint.username !== "" ||
-      labEndpoint.password !== ""
-    )
-      return incomplete("policy");
-    const granted = await this.broker
+      return incompleteExecution(
+        state,
+        "provider",
+        this.clock().toISOString(),
+        granted.receipt.digest,
+      );
+    const result = granted.operation.value;
+    state.sandboxExitCode = result.exitCode;
+    state.rootUsage = usageFromTranscript(result.stdout);
+    const admissionFailure = sandboxAdmissionFailure(
+      result,
+      run,
+      this.sandboxImage,
+    );
+    if (admissionFailure !== undefined)
+      return incompleteExecution(
+        state,
+        admissionFailure,
+        result.completedAt,
+        granted.receipt.digest,
+      );
+    if (state.cooperative) {
+      const failure = await this.#collectCooperativeEvidence(
+        state,
+        result,
+        granted.receipt.digest,
+      );
+      if (failure !== undefined)
+        return incompleteExecution(
+          state,
+          failure.reason,
+          result.completedAt,
+          granted.receipt.digest,
+          undefined,
+          failure.reasonDetail,
+        );
+    }
+    return this.#resolveReport(state, result, granted.receipt.digest);
+  }
+
+  async #runWithBroker(
+    run: DiscoveryTransportRun,
+    cooperative: boolean,
+    labEndpoint: URL,
+  ): Promise<GrantedSandboxRun | undefined> {
+    return this.broker
       .withGrant(
         {
           schemaVersion: 1,
@@ -922,315 +1191,219 @@ export class CodexNativeAgentRuntime {
           agentNetworkName: run.lab.networkName,
         },
         async (grant) => {
-          if (grant.dockerNetworkName !== run.lab.networkName)
-            throw new Error("Provider grant is not on the Lab network");
-          const login =
-            run.profile.authenticationMethod === "chatgpt-oauth-host";
-          if (
-            login
-              ? grant.tls === undefined ||
-                grant.baseUrl !== `https://${grant.tls.hostname}:8080`
-              : grant.tls !== undefined ||
-                !/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(grant.baseUrl)
-          ) {
-            throw new Error("Provider broker address is invalid");
-          }
-          return this.sandbox.execute({
-            executable: "codex",
-            args: [
-              "exec",
-              "--model",
-              run.profile.requestedModelId,
-              "--sandbox",
-              "danger-full-access",
-              "--skip-git-repo-check",
-              ...(cooperative ? [] : ["--ephemeral"]),
-              "-c",
-              'approval_policy="never"',
-              ...(run.profile.cyberAccessProgram === "unavailable"
-                ? []
-                : ["--cyber-access-program", run.profile.cyberAccessProgram]),
-              "--ignore-user-config",
-              "--ignore-rules",
-              "--disable",
-              "apps",
-              "--disable",
-              "remote_plugin",
-              "--disable",
-              "unified_exec",
-              "-c",
-              'web_search="disabled"',
-              ...(cooperative
-                ? [
-                    "--enable",
-                    "multi_agent",
-                    "-c",
-                    "agents.max_threads=3",
-                    "-c",
-                    "agents.max_depth=1",
-                  ]
-                : ["-c", "features.multi_agent=false"]),
-              "-c",
-              `model_reasoning_effort="${run.profile.requestedEffort}"`,
-              ...(login
-                ? [
-                    "-c",
-                    `chatgpt_base_url="${grant.baseUrl}/backend-api/"`,
-                    // The broker reads the model from the body before forwarding.
-                    "--disable",
-                    "enable_request_compression",
-                  ]
-                : ["-c", `openai_base_url="${grant.baseUrl}/v1"`]),
-              ...(run.profile.serviceTier === "unavailable"
-                ? []
-                : ["-c", `service_tier="${run.profile.serviceTier}"`]),
-              "-c",
-              'history.persistence="none"',
-              "--output-schema",
-              "/opt/codex-support/report-schema.json",
-              "--json",
-              "-",
-            ],
-            stdin:
-              run.campaignInput.history.mode === "catalog"
-                ? `${run.prompt}\n\nPublic history catalog (records strictly before the cutoff):\n${canonicalJson(run.campaignInput.history)}`
-                : run.prompt,
-            supportFiles: [
-              {
-                path: "/opt/codex-support/report-schema.json",
-                content: JSON.stringify(
-                  run.outputKind === "verification"
-                    ? verificationReportJsonSchema
-                    : reportJsonSchema,
-                ),
-              },
-            ],
-            grant,
-            sourceMount: {
-              directory: run.sourceDirectory,
-              path: "/workspace/main",
-              mode: "ro",
-              expectedTree: run.sourceTree,
-            },
-            ...(run.dependencySource === undefined
-              ? {}
-              : {
-                  dependencyMount: {
-                    directory: run.dependencySource.directory,
-                    path: "/workspace/wordpress" as const,
-                    mode: "ro" as const,
-                    expectedTree: run.dependencySource.tree,
-                  },
-                }),
-            labHost: { name: labEndpoint.hostname, ipv4: run.lab.internalIp },
-            ...(run.lab.database === undefined
-              ? {}
-              : {
-                  databaseHost: {
-                    name: run.lab.database.host,
-                    ipv4: run.lab.database.ipv4,
-                  },
-                }),
-          });
+          const login = assertBrokerAddress(grant, run);
+          return this.sandbox.execute(
+            sandboxCommand(run, grant, cooperative, labEndpoint, login),
+          );
         },
       )
       .catch(() => undefined);
-    if (granted === undefined) return incomplete("provider");
-    brokerMetrics = granted.receipt.metrics;
-    if (
-      granted.receipt.setup.status !== "ready" ||
-      granted.receipt.cleanup.status !== "completed" ||
-      granted.operation.status !== "completed"
-    )
-      return incomplete(
-        "provider",
-        this.clock().toISOString(),
-        granted.receipt.digest,
+  }
+
+  async #collectCooperativeEvidence(
+    state: ExecutionState,
+    result: CodexSandboxResult,
+    grantReceiptDigest: string,
+  ): Promise<{ reason: IncompleteReason; reasonDetail: string } | undefined> {
+    const parentThreadId = rootThreadId(result.stdout);
+    if (parentThreadId !== undefined)
+      state.agentRuns = await this.#captureChildren(
+        state.run,
+        result.rollouts ?? [],
+        parentThreadId,
+        grantReceiptDigest,
       );
-    const result = granted.operation.value;
-    sandboxExitCode = result.exitCode;
-    rootUsage = usageFromTranscript(result.stdout);
-    if (
-      result.isolation.backend !== "gvisor" ||
-      result.isolation.runtime !== "runsc" ||
-      result.isolation.fallbackUsed !== false
-    )
-      return incomplete("sandbox", result.completedAt, granted.receipt.digest);
-    if (
-      result.image !== this.sandboxImage ||
-      result.cliVersion !== run.profile.codexCliVersion ||
-      result.bundledCatalogDigest !== run.profile.bundledCatalogDigest
-    )
-      return incomplete("policy", result.completedAt, granted.receipt.digest);
-    if (cooperative && run.outputKind !== "verification") {
-      if (result.rolloutFailure !== undefined)
-        return incomplete(
-          "evidence",
-          result.completedAt,
-          granted.receipt.digest,
-          undefined,
-          "rollout-capture-failed",
-        );
-      const parentThreadId = rootThreadId(result.stdout);
-      if (parentThreadId === undefined)
-        return incomplete(
-          "schema",
-          result.completedAt,
-          granted.receipt.digest,
-          undefined,
-          "missing-root-thread-id",
-        );
-      const rootRollout = (result.rollouts ?? []).find((raw) =>
-        isRootRollout(raw, parentThreadId),
-      );
-      if (rootRollout === undefined)
-        return incomplete(
-          "evidence",
-          result.completedAt,
-          granted.receipt.digest,
-          undefined,
-          "root-rollout-missing",
-        );
-      try {
-        const processDiagnostic =
-          result.status === "failed" || result.exitCode !== 0
-            ? `${rootRollout}\n${JSON.stringify({
-                type: "sandbox_process_diagnostic",
-                payload: {
-                  status: result.status,
-                  exitCode: result.exitCode,
-                  failureKind: result.failureKind ?? null,
-                  stderrTail: result.stderr?.slice(-64 * 1024) ?? "",
-                  stdoutTail: result.stdout.slice(-64 * 1024),
-                },
-              })}`
-            : rootRollout;
-        rootDiagnosticArtifactDigest = (
-          await this.attachments.put(
-            "diagnostic",
-            Buffer.from(processDiagnostic),
-          )
-        ).digest;
-        rootObserved = observedFromRollout(rootRollout);
-        rootUsage ??= usageFromRollout(rootRollout);
-      } catch {
-        return incomplete(
-          "evidence",
-          result.completedAt,
-          granted.receipt.digest,
-          undefined,
-          "root-rollout-unavailable",
-        );
-      }
-      const seen = new Set<string>();
-      const children: NonNullable<
-        DiscoveryTransportResult["agentRuns"]
-      >[number][] = [];
-      for (const raw of result.rollouts ?? []) {
-        const child = decodeChildRollout(raw, parentThreadId);
-        if (child === undefined || seen.has(child.threadId)) continue;
-        seen.add(child.threadId);
-        let reason: "policy" | "schema" | "evidence" | undefined;
-        let reasonDetail: string | undefined;
-        if (
-          child.modelId !== run.profile.subagent.modelId ||
-          child.effort !== run.profile.subagent.effort ||
-          child.cyberAccessProgram !== run.profile.cyberAccessProgram ||
-          !/^\/root\/[a-z0-9_-]+$/.test(child.agentPath)
-        ) {
-          reason = "policy";
-          reasonDetail = "child-profile-mismatch";
-        }
-        let diagnosticArtifactDigest: string | undefined;
-        try {
-          diagnosticArtifactDigest = (
-            await this.attachments.put("diagnostic", Buffer.from(raw))
-          ).digest;
-        } catch {
-          reason = "evidence";
-          reasonDetail = "child-rollout-unavailable";
-        }
-        let attachment: ProviderAttachmentRef | undefined;
-        if (reason === undefined) {
-          try {
-            const report = parseChildFinalMessage(child.finalMessage ?? "");
-            attachment = await this.attachments.put(
-              "findings",
-              Buffer.from(canonicalJson(report)),
-            );
-          } catch {
-            reason = "schema";
-            reasonDetail = "child-final-message-not-report";
-          }
-        }
-        const receipt = createNativeRunReceipt({
-          ...run,
-          runId: child.threadId,
-          terminal: reason === undefined ? "completed" : "incomplete",
-          reason: reason ?? "unavailable",
-          ...(reasonDetail === undefined ? {} : { reasonDetail }),
-          startedAt: child.startedAt,
-          completedAt: child.completedAt,
-          usage: {
-            inputTokens: child.usage?.input_tokens ?? "unavailable",
-            cachedInputTokens:
-              child.usage?.cached_input_tokens ?? "unavailable",
-            outputTokens: child.usage?.output_tokens ?? "unavailable",
-            reasoningOutputTokens:
-              child.usage?.reasoning_output_tokens ?? "unavailable",
-          },
-          observed: child.observed,
-          grantReceiptDigest: granted.receipt.digest,
-          ...(diagnosticArtifactDigest === undefined
-            ? {}
-            : { diagnosticArtifactDigest }),
-          ...(attachment === undefined
-            ? {}
-            : { reportArtifactDigest: attachment.digest }),
-        });
-        children.push({
-          agentPath: child.agentPath,
-          receipt,
-          ...(attachment === undefined ? {} : { attachment }),
-        });
-      }
-      agentRuns = children;
-      if (children.length > 3)
-        return incomplete(
-          "policy",
-          result.completedAt,
-          granted.receipt.digest,
-          undefined,
-          "child-count-exceeded",
-        );
+    if (result.rolloutFailure !== undefined)
+      return { reason: "evidence", reasonDetail: "rollout-capture-failed" };
+    if (parentThreadId === undefined)
+      return { reason: "schema", reasonDetail: "missing-root-thread-id" };
+    const rootRollout = (result.rollouts ?? []).find((raw) =>
+      isRootRollout(raw, parentThreadId),
+    );
+    if (rootRollout === undefined)
+      return { reason: "evidence", reasonDetail: "root-rollout-missing" };
+    try {
+      await this.#captureRootRollout(state, result, rootRollout);
+    } catch {
+      return { reason: "evidence", reasonDetail: "root-rollout-unavailable" };
     }
+    if (state.agentRuns.length > 3)
+      return { reason: "policy", reasonDetail: "child-count-exceeded" };
+    return undefined;
+  }
+
+  async #captureRootRollout(
+    state: ExecutionState,
+    result: CodexSandboxResult,
+    rootRollout: string,
+  ): Promise<void> {
+    const processDiagnostic =
+      result.status === "failed" || result.exitCode !== 0
+        ? `${rootRollout}\n${JSON.stringify({
+            type: "sandbox_process_diagnostic",
+            payload: {
+              status: result.status,
+              exitCode: result.exitCode,
+              failureKind: result.failureKind ?? null,
+              stderrTail: result.stderr?.slice(-64 * 1024) ?? "",
+              stdoutTail: result.stdout.slice(-64 * 1024),
+            },
+          })}`
+        : rootRollout;
+    state.rootDiagnosticArtifactDigest = (
+      await this.attachments.put("diagnostic", Buffer.from(processDiagnostic))
+    ).digest;
+    state.rootObserved = observedFromRollout(rootRollout);
+    state.rootUsage ??= usageFromRollout(rootRollout);
+  }
+
+  async #captureChildren(
+    run: DiscoveryTransportRun,
+    rollouts: readonly string[],
+    parentThreadId: string,
+    grantReceiptDigest: string,
+  ): Promise<AgentRun[]> {
+    const seen = new Set<string>();
+    const children: AgentRun[] = [];
+    for (const raw of rollouts) {
+      const child = decodeChildRollout(raw, parentThreadId);
+      if (child === undefined || seen.has(child.threadId)) continue;
+      seen.add(child.threadId);
+      children.push(
+        await this.#captureChild(run, child, raw, grantReceiptDigest),
+      );
+    }
+    return children;
+  }
+
+  async #captureChild(
+    run: DiscoveryTransportRun,
+    child: ChildRollout,
+    raw: string,
+    grantReceiptDigest: string,
+  ): Promise<AgentRun> {
+    let reason: "policy" | "schema" | "evidence" | undefined;
+    let reasonDetail: string | undefined;
+    if (
+      child.modelId !== run.profile.subagent.modelId ||
+      child.effort !== run.profile.subagent.effort ||
+      child.cyberAccessProgram !== run.profile.cyberAccessProgram ||
+      !/^\/root\/[a-z0-9_-]+$/.test(child.agentPath)
+    ) {
+      reason = "policy";
+      reasonDetail = "child-profile-mismatch";
+    }
+    let diagnosticArtifactDigest: string | undefined;
+    try {
+      diagnosticArtifactDigest = (
+        await this.attachments.put("diagnostic", Buffer.from(raw))
+      ).digest;
+    } catch {
+      reason = "evidence";
+      reasonDetail = "child-rollout-unavailable";
+    }
+    let attachment: ProviderAttachmentRef | undefined;
+    if (reason === undefined) {
+      try {
+        const report = parseChildFinalMessage(child.finalMessage ?? "");
+        attachment = await this.attachments.put(
+          "findings",
+          Buffer.from(canonicalJson(report)),
+        );
+      } catch {
+        reason = "schema";
+        reasonDetail = "child-final-message-not-report";
+      }
+    }
+    const receipt = createNativeRunReceipt({
+      ...run,
+      runId: child.threadId,
+      terminal: reason === undefined ? "completed" : "incomplete",
+      reason: reason ?? "unavailable",
+      ...(reasonDetail === undefined ? {} : { reasonDetail }),
+      startedAt: child.startedAt,
+      completedAt: child.completedAt,
+      usage: {
+        inputTokens: child.usage?.input_tokens ?? "unavailable",
+        cachedInputTokens: child.usage?.cached_input_tokens ?? "unavailable",
+        outputTokens: child.usage?.output_tokens ?? "unavailable",
+        reasoningOutputTokens:
+          child.usage?.reasoning_output_tokens ?? "unavailable",
+      },
+      observed: child.observed,
+      grantReceiptDigest,
+      ...(diagnosticArtifactDigest === undefined
+        ? {}
+        : { diagnosticArtifactDigest }),
+      ...(attachment === undefined
+        ? {}
+        : { reportArtifactDigest: attachment.digest }),
+    });
+    return {
+      agentPath: child.agentPath,
+      receipt,
+      ...(attachment === undefined ? {} : { attachment }),
+    };
+  }
+
+  async #resolveReport(
+    state: ExecutionState,
+    result: CodexSandboxResult,
+    grantReceiptDigest: string,
+  ): Promise<DiscoveryTransportResult> {
     const decoded =
       result.status === "exited" && result.exitCode === 0
-        ? decodeTranscript(result.stdout, run.outputKind)
+        ? decodeTranscript(result.stdout, state.run.outputKind)
         : undefined;
-    if ((brokerMetrics?.requestLimitExceeded ?? 0) > 0)
-      return incomplete(
+    const failure = this.#executionFailure(
+      state,
+      result,
+      grantReceiptDigest,
+      decoded,
+    );
+    if (failure !== undefined) return failure;
+    if (decoded === undefined || "reasonDetail" in decoded)
+      return this.#salvageRootReport(
+        state,
+        result,
+        grantReceiptDigest,
+        decoded?.reasonDetail ?? "missing-transcript",
+      );
+    return this.#completeReport(state, result, grantReceiptDigest, decoded);
+  }
+
+  #executionFailure(
+    state: ExecutionState,
+    result: CodexSandboxResult,
+    grantReceiptDigest: string,
+    decoded: ReturnType<typeof decodeTranscript> | undefined,
+  ): DiscoveryTransportResult | undefined {
+    if ((state.brokerMetrics?.requestLimitExceeded ?? 0) > 0)
+      return incompleteExecution(
+        state,
         "policy",
         result.completedAt,
-        granted.receipt.digest,
+        grantReceiptDigest,
         undefined,
         "broker-request-cap",
       );
     if (brokerRequestBytesExceeded(result.stdout))
-      return incomplete(
+      return incompleteExecution(
+        state,
         "policy",
         result.completedAt,
-        granted.receipt.digest,
+        grantReceiptDigest,
         undefined,
         "broker-request-bytes-cap",
       );
     if (decoded === undefined || "reasonDetail" in decoded) {
       const limit = providerLimitOf(result.stdout);
       if (limit !== undefined)
-        return incomplete(
+        return incompleteExecution(
+          state,
           "provider",
           result.completedAt,
-          granted.receipt.digest,
+          grantReceiptDigest,
           limit,
           decoded === undefined
             ? `cli-exit:${result.exitCode}`
@@ -1238,76 +1411,104 @@ export class CodexNativeAgentRuntime {
         );
     }
     if (result.status !== "exited" || result.exitCode !== 0)
-      return incomplete(
+      return incompleteExecution(
+        state,
         result.status === "failed" || result.exitCode === 137
           ? "sandbox"
           : "provider",
         result.completedAt,
-        granted.receipt.digest,
+        grantReceiptDigest,
         undefined,
         result.failureKind ?? `cli-exit:${result.exitCode}`,
       );
-    if (decoded === undefined || "reasonDetail" in decoded) {
-      if (run.outputKind === "verification")
-        return incomplete(
-          "schema",
-          result.completedAt,
-          granted.receipt.digest,
-          undefined,
-          decoded?.reasonDetail ?? "missing-transcript",
-        );
-      let attachment: ProviderAttachmentRef | undefined;
-      try {
-        const report = extractRootCandidateReport(result.stdout);
-        if (report !== undefined)
-          attachment = await this.attachments.put(
-            "findings",
-            Buffer.from(canonicalJson(report)),
-          );
-      } catch {
-        // Keep the original transcript failure when no candidate report can be extracted.
-      }
-      return incomplete(
+    return undefined;
+  }
+
+  async #salvageRootReport(
+    state: ExecutionState,
+    result: CodexSandboxResult,
+    grantReceiptDigest: string,
+    reasonDetail: string,
+  ): Promise<DiscoveryTransportResult> {
+    if (state.run.outputKind === "verification")
+      return incompleteExecution(
+        state,
         "schema",
         result.completedAt,
-        granted.receipt.digest,
+        grantReceiptDigest,
         undefined,
-        decoded?.reasonDetail ?? "missing-transcript",
-        attachment,
+        reasonDetail,
       );
+    let attachment: ProviderAttachmentRef | undefined;
+    try {
+      const report = extractRootCandidateReport(result.stdout);
+      if (report !== undefined)
+        attachment = await this.attachments.put(
+          "findings",
+          Buffer.from(canonicalJson(report)),
+        );
+    } catch {
+      // Keep the original transcript failure when no candidate report can be extracted.
     }
+    return incompleteExecution(
+      state,
+      "schema",
+      result.completedAt,
+      grantReceiptDigest,
+      undefined,
+      reasonDetail,
+      attachment,
+    );
+  }
+
+  async #completeReport(
+    state: ExecutionState,
+    result: CodexSandboxResult,
+    grantReceiptDigest: string,
+    decoded: Exclude<
+      ReturnType<typeof decodeTranscript>,
+      { reasonDetail: string }
+    >,
+  ): Promise<DiscoveryTransportResult> {
     let attachment: ProviderAttachmentRef;
     try {
       attachment = await this.attachments.put(
-        run.outputKind === "verification" ? "verification" : "findings",
+        state.run.outputKind === "verification" ? "verification" : "findings",
         Buffer.from(
           canonicalJson(
-            run.outputKind === "verification"
+            state.run.outputKind === "verification"
               ? decoded.report
               : (extractRootCandidateReport(result.stdout) ?? decoded.report),
           ),
         ),
       );
     } catch {
-      return incomplete("evidence", result.completedAt, granted.receipt.digest);
+      return incompleteExecution(
+        state,
+        "evidence",
+        result.completedAt,
+        grantReceiptDigest,
+      );
     }
     return {
       attachment,
-      ...(cooperative ? { agentRuns } : {}),
+      ...(state.cooperative ? { agentRuns: state.agentRuns } : {}),
       receipt: createNativeRunReceipt({
-        ...run,
+        ...state.run,
         terminal: "completed",
         reason: "unavailable",
         startedAt: result.startedAt,
         completedAt: result.completedAt,
-        usage: rootUsage ?? decoded.usage,
-        observed: rootObserved ?? decoded.observed,
-        ...(brokerMetrics === undefined ? {} : { brokerMetrics }),
-        sandboxExitCode: result.exitCode,
-        ...(rootDiagnosticArtifactDigest === undefined
+        usage: state.rootUsage ?? decoded.usage,
+        observed: state.rootObserved ?? decoded.observed,
+        ...(state.brokerMetrics === undefined
           ? {}
-          : { diagnosticArtifactDigest: rootDiagnosticArtifactDigest }),
-        grantReceiptDigest: granted.receipt.digest,
+          : { brokerMetrics: state.brokerMetrics }),
+        sandboxExitCode: result.exitCode,
+        ...(state.rootDiagnosticArtifactDigest === undefined
+          ? {}
+          : { diagnosticArtifactDigest: state.rootDiagnosticArtifactDigest }),
+        grantReceiptDigest,
         reportArtifactDigest: attachment.digest,
       }),
     };

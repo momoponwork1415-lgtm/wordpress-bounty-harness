@@ -1,6 +1,6 @@
 # 開発セット: TranslatePress 3.3.1（SPEC 第12節の縦断スライス）
 
-現行の単独Trial runtimeを使う設定例。新しいRoot＋3の[TranslatePressベンチマーク](../../docs/TRANSLATEPRESS-BENCHMARK.md)にはそのまま使えない。当たり率の主張には使わず、この公開旧版を提出しない。
+`campaign-production-v1.json` がWP2Shell協調Trialの新しい既定経路を使う開発セット設定。旧 `campaign.json` は過去の単独Trialの構成照合用。この公開旧版を提出しない。
 
 このディレクトリには、鍵、認証情報、答えの鍵、PoC、payloadを置かない。
 
@@ -11,6 +11,7 @@
 | ファイル | Git | 中身 | 実行前にすること |
 | --- | --- | --- | --- |
 | `campaign.json` | 管理する | campaign設定。discovery 1run、同時1run、WordPress 6.8.3、Lab初期データ | `wordpressVersion` を、`images.wordpress` に固定したimageのWordPress版と合わせる |
+| `campaign-production-v1.json` | 管理する | WP2Shell v2、入口索引あり、Root＋最大3子、1 Trial、wall上限60分 | 協調subagentを使えるhost profileと固定imageを用意する |
 | `selection.json` | 管理する | 選定方針。`translatepress-multilingual` だけを候補にし、3.3.1を手動pinする | なし |
 | `campaign-luna-40.json` / `selection-luna-40.json` | 管理する | 同じ固定版で、`gpt-6-luna` の40 run試行。同時4run、新規Findingなし4回で停止 | host設定のruntime profileを `gpt-6-luna` にする |
 | `host.example.json` | 雛形だけ | host設定の形。`<...>` はすべて埋める前提で、このままでは起動しない | Git外へ複製して埋める |
@@ -25,26 +26,26 @@
 
 ## 実行コマンド
 
-以下は旧単独Trialを調査するときのコマンド。Root＋3の受入試験として扱わない。リポジトリのルートから実行する（`selectionPolicyPath` はルートからの相対パス）。
+以下は新しい協調Trialの開発セット用コマンド。リポジトリのルートから実行する（`selectionPolicyPath` はルートからの相対パス）。各反復には別のcampaign IDを使う。
 
 ```bash
 pnpm install && pnpm build
 ```
 
 ```bash
-export WBH_HOST_CONFIG="$HOME/.config/wordpress-bounty-harness/host.json"
+export WBH_HOST_CONFIG="$HOME/.config/wordpress-bounty-harness/host-prompt-comparison.json"
 ```
 
 ```bash
-node dist/cli/main.js runtime check --config examples/translatepress-3.3.1/campaign.json
+node dist/cli/main.js runtime check --config examples/translatepress-3.3.1/campaign-production-v1.json
 ```
 
 ```bash
-node dist/cli/main.js select --config examples/translatepress-3.3.1/campaign.json
+node dist/cli/main.js select --config examples/translatepress-3.3.1/campaign-production-v1.json
 ```
 
 ```bash
-node dist/cli/main.js campaign run translatepress-multilingual --campaign dev-translatepress-331-001 --config examples/translatepress-3.3.1/campaign.json
+node dist/cli/main.js campaign run translatepress-multilingual --campaign dev-translatepress-331-001 --config examples/translatepress-3.3.1/campaign-production-v1.json
 ```
 
 ```bash

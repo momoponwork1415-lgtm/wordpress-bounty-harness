@@ -15,6 +15,12 @@ import {
   type NativeRunReceipt,
 } from "./native-run-receipts.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
+import { createReportRecorder } from "./record-discovery-report.js";
+import {
+  recoverChildAgentReports,
+  recoverRootAgentReport,
+  type ReportFailure,
+} from "./recover-agent-reports.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const publishedAt = z.iso.datetime({ offset: true });
@@ -160,7 +166,7 @@ export function allocateArm(ordinal: number, armBFraction: number): "a" | "b" {
 }
 
 export type AblationAxis = {
-  readonly axis: "history" | "prompt" | "continuation";
+  readonly axis: "history" | "prompt";
   readonly armBFraction: number;
 };
 export type TrialArms = Partial<Record<AblationAxis["axis"], "a" | "b">>;
@@ -196,7 +202,7 @@ export function historyForRun(
   return arm === "b" ? admitted : { mode: "none" };
 }
 
-type AdmittedFinding = {
+export type AdmittedFinding = {
   readonly findingId: string;
   readonly discoveryRunId: string;
   readonly snapshotDigest: string;
@@ -246,26 +252,11 @@ export type AdmittedLead = {
 export type PlannedTrial = {
   readonly trialId: string;
   readonly trialOrdinal: number;
-  /** Older Trials omit this field; screening is a single bounded pass. */
-  readonly stage?: "screening" | "deep-dive";
   readonly explore: PlannedDiscoveryRun;
-  readonly continuation?: {
-    readonly maxRuns: number;
-    readonly wallTimeMs: number;
-    readonly plan: (lead: AdmittedLead) => PlannedDiscoveryRun;
-  };
 };
 
-const providerReportSchema = z.object({
-  findings: z.array(z.unknown()),
-  leads: z.array(z.unknown()).default([]),
-  examined: z.string().default(""),
-  unexamined: z.string().default(""),
-});
-
-class DiscoveryReportError extends Error {}
-
 export type DiscoveryStop =
+  /** Legacy concluded events remain readable; new campaigns do not emit this. */
   | "screened-no-candidate"
   | "no-new-finding"
   | "output-boundary"
@@ -274,7 +265,7 @@ export type DiscoveryStop =
   | "provider-limit"
   | "incomplete";
 
-/** Run independent provider calls, record only admitted claims, and stop on no new findings. */
+/** Run planned Trials, preserve admitted claims, and apply campaign stop rules. */
 export async function runDiscoveryCampaign(options: {
   readonly campaignId: string;
   readonly labId: string;
@@ -354,7 +345,10 @@ export async function runDiscoveryCampaign(options: {
   ).at(0);
   if (concluded?.type === "discovery-concluded")
     return { runCount: 0, findingsRecorded: 0, stoppedBy: concluded.stoppedBy };
-  const startedRuns = new Map<string, "explore" | "continue" | "child">();
+  // Starting a Trial consumes its ordinal, even when the transport later
+  // records an incomplete or provider-limited receipt. A resumed campaign may
+  // verify already recorded claims, but never starts a replacement Trial.
+  const startedExplorations = new Set<string>();
   let startAfterSequence = 0;
   for (;;) {
     const page = options.ledger.read({
@@ -364,32 +358,22 @@ export async function runDiscoveryCampaign(options: {
       limit: 1000,
     });
     for (const { event } of page)
-      if (event.type === "discovery-run-started")
-        startedRuns.set(event.runId, event.runKind ?? "explore");
+      if (
+        event.type === "discovery-run-started" &&
+        event.snapshotDigest === input.snapshotDigest &&
+        // Historical events had no runKind and each represented exploration.
+        (event.runKind ?? "explore") === "explore"
+      )
+        startedExplorations.add(event.runId);
     if (page.length < 1000) break;
     startAfterSequence = page[page.length - 1]!.sequence;
   }
-  const spent = ofTarget(
-    options.ledger
-      .read({
-        campaignId: options.campaignId,
-        type: "discovery-run-finished",
-        limit: 1000,
-      })
-      .map(({ event }) => event),
-  ).filter(
-    (event) =>
-      event.type === "discovery-run-finished" &&
-      // Old events precede runKind and each represented one exploration.
-      (startedRuns.get(event.runId) ?? "explore") === "explore" &&
-      event.outcome === "completed",
-  ).length;
+  const spent = startedExplorations.size;
   const seen = new Set<string>();
   let noNewFindings = 0;
   let runCount = 0;
   let findingsRecorded = 0;
   let stopped:
-    | "screened-no-candidate"
     | "no-new-finding"
     | "output-boundary"
     | "provider-limit"
@@ -403,21 +387,6 @@ export async function runDiscoveryCampaign(options: {
   )
     throw new Error("Invalid exploration wall time");
   const limit = Math.min(input.stopRules.maxRuns, options.plannedTrials.length);
-  if (options.plannedTrials.some((trial) => trial.stage === "screening")) {
-    if (
-      options.plannedTrials.length !== 1 ||
-      input.stopRules.maxRuns !== 1 ||
-      concurrency !== 1 ||
-      options.runWallTimeMs === undefined ||
-      options.runWallTimeMs > 30 * 60_000 ||
-      input.entryIndex?.enabled !== true ||
-      options.plannedTrials[0]?.continuation !== undefined ||
-      options.plannedTrials[0]?.explore.run.coordination !== "solo"
-    )
-      throw new Error(
-        "Screening must be one solo indexed Trial of at most 30 minutes",
-      );
-  }
   let next = spent;
   const runOne = async (index: number) => {
     const trial = options.plannedTrials[index]!;
@@ -454,14 +423,11 @@ export async function runDiscoveryCampaign(options: {
         : { mode: "none" as const };
     const executePlanned = async (
       planned: PlannedDiscoveryRun,
-      runKind: "explore" | "continue",
-      continuationOf?: string,
       runWallTimeMs = options.runWallTimeMs,
     ): Promise<{
       outcome: "completed" | "failed" | "provider-limited";
       foundNew: boolean;
       heldBoundary: boolean;
-      leads: AdmittedLead[];
     }> => {
       const run =
         runWallTimeMs === undefined
@@ -472,19 +438,6 @@ export async function runDiscoveryCampaign(options: {
                 clock().getTime() + runWallTimeMs,
               ).toISOString(),
             };
-      if (
-        runKind === "continue" &&
-        (continuationOf === undefined ||
-          run.runId === trial.trialId ||
-          run.sourceDirectory !== trial.explore.run.sourceDirectory ||
-          run.sourceTree.digest !== trial.explore.run.sourceTree.digest ||
-          run.dependencySource?.tree.digest !==
-            trial.explore.run.dependencySource?.tree.digest ||
-          canonicalDigest(run.lab) !== canonicalDigest(trial.explore.run.lab))
-      )
-        throw new Error(
-          "Continuation differs from its Trial source pack or Lab",
-        );
       if (
         run.targetSnapshotDigest !== input.snapshotDigest ||
         run.profile.digest !== input.modelProfileDigest ||
@@ -510,9 +463,7 @@ export async function runDiscoveryCampaign(options: {
         runId: run.runId,
         trialId: trial.trialId,
         trialOrdinal: trial.trialOrdinal,
-        ...(trial.stage === undefined ? {} : { stage: trial.stage }),
-        runKind,
-        ...(continuationOf === undefined ? {} : { continuationOf }),
+        runKind: "explore",
         labId: options.labId,
         history: historyMetadata,
         configuration: {
@@ -531,237 +482,29 @@ export async function runDiscoveryCampaign(options: {
       });
       if (started.status === "conflict")
         throw new Error("Discovery run identity conflict");
-      if (runKind === "explore") runCount++;
+      startedExplorations.add(run.runId);
+      runCount++;
       let outcome: "completed" | "failed" | "provider-limited" = "failed";
       let wallTimeMs = 0;
-      let foundNew = false;
-      let heldBoundary = false;
-      const admittedLeads: AdmittedLead[] = [];
       let usage: NativeRunReceipt["usage"] | undefined;
       let observed: NativeRunReceipt["observed"] | undefined;
       let brokerMetrics: NativeRunReceipt["brokerMetrics"];
       let sandboxExitCode: number | undefined;
       let diagnosticArtifactDigest: string | undefined;
       let receiptDigest: string | undefined;
-      let failure:
-        | {
-            readonly reason: Exclude<NativeRunReceipt["reason"], "unavailable">;
-            readonly reasonDetail?: string;
-            readonly providerLimit?: "rate-limit" | "quota";
-          }
-        | undefined;
-      const holdCandidate = async (
-        ownerRunId: string,
-        candidateKind: "finding" | "lead",
-        candidateIndex: number,
-        candidate: unknown,
-        rawDigest: string,
-        error: unknown,
-      ) => {
-        heldBoundary = true;
-        const issuePaths =
-          error instanceof z.ZodError
-            ? error.issues.map((issue) => issue.path.join("."))
-            : [
-                error instanceof Error &&
-                error.message === "Candidate identity mismatch"
-                  ? "identity"
-                  : "admission",
-              ];
-        const classification =
-          options.classifyCandidate?.(candidate, candidateKind) ?? {};
-        const appended = await options.ledger.append({
-          ...base,
-          identity: `candidate-held-${ownerRunId}-${candidateKind}-${candidateIndex}`,
-          type: "candidate-held",
-          runId: ownerRunId,
-          candidateKind,
-          candidateIndex,
-          issuePaths,
-          ...classification,
-          artifacts: [{ kind: "candidate", digest: rawDigest }],
-        });
-        if (appended.status === "conflict")
-          throw new Error("Candidate hold identity conflict");
-      };
-      const prepareCandidate = async (
-        ownerRunId: string,
-        kind: "finding" | "lead",
-        index: number,
-        raw: unknown,
-      ) => {
-        const rawDigest = await options.evidence.putFiles({
-          "candidate.json": canonicalJson(raw),
-        });
-        const normalized = options.normalizeCandidate?.(raw) ?? {
-          value: raw,
-          changes: [],
-        };
-        const appended = await options.ledger.append({
-          ...base,
-          identity: `candidate-normalized-${ownerRunId}-${kind}-${index}`,
-          type: "candidate-normalized",
-          runId: ownerRunId,
-          candidateKind: kind,
-          candidateIndex: index,
-          changes: normalized.changes,
-          artifacts: [{ kind: "candidate", digest: rawDigest }],
-        });
-        if (appended.status === "conflict")
-          throw new Error("Candidate normalization identity conflict");
-        return { ...normalized, rawDigest };
-      };
-      const recordReport = async (
-        ownerRunId: string,
-        attachment: NonNullable<DiscoveryTransportResult["attachment"]>,
-      ): Promise<void> => {
-        const stored = await options.attachments.read(attachment);
-        if (stored.status !== "resolved")
-          throw new DiscoveryReportError(
-            "Discovery report attachment is unavailable",
-          );
-        let report: z.infer<typeof providerReportSchema>;
-        try {
-          report = providerReportSchema.parse(
-            JSON.parse(stored.bytes.toString("utf8")) as unknown,
-          );
-        } catch {
-          throw new DiscoveryReportError("Discovery report is malformed");
-        }
-        for (const [index, candidate] of report.findings.entries()) {
-          const prepared = await prepareCandidate(
-            ownerRunId,
-            "finding",
-            index,
-            candidate,
-          );
-          let finding: AdmittedFinding;
-          try {
-            finding = options.admitFinding(prepared.value, {
-              runId: ownerRunId,
-              snapshotDigest: input.snapshotDigest,
-              reportArtifactDigest: attachment.digest,
-            });
-          } catch (error) {
-            await holdCandidate(
-              ownerRunId,
-              "finding",
-              index,
-              prepared.value,
-              prepared.rawDigest,
-              error,
-            );
-            continue;
-          }
-          if (
-            finding.discoveryRunId !== ownerRunId ||
-            finding.snapshotDigest !== input.snapshotDigest
-          ) {
-            await holdCandidate(
-              ownerRunId,
-              "finding",
-              index,
-              prepared.value,
-              prepared.rawDigest,
-              new Error("Candidate identity mismatch"),
-            );
-            continue;
-          }
-          const findingDigest = await options.evidence.putFiles({
-            "finding.json": canonicalJson(finding),
-          });
-          const appended = await options.ledger.append({
-            ...base,
-            artifacts: [{ kind: "finding", digest: findingDigest }],
-            identity: `discovery-finding-${finding.findingId}`,
-            type: "finding-recorded",
-            findingId: finding.findingId,
-            runId: ownerRunId,
-            category: finding.impact,
-            ...(finding.historyRecordId === undefined
-              ? {}
-              : { historyRecordId: finding.historyRecordId }),
-          });
-          if (appended.status === "conflict")
-            throw new Error("Finding identity conflict");
-          findingsRecorded += appended.status === "appended" ? 1 : 0;
-          const signature = canonicalDigest({
-            claim: finding.claim,
-            impact: finding.impact,
-            sourceTrace: finding.sourceTrace,
-          });
-          if (!seen.has(signature)) foundNew = true;
-          seen.add(signature);
-        }
-        for (const [index, candidate] of report.leads.entries()) {
-          const prepared = await prepareCandidate(
-            ownerRunId,
-            "lead",
-            index,
-            candidate,
-          );
-          let lead: AdmittedLead;
-          try {
-            if (
-              options.admitLead === undefined ||
-              options.leadSignature === undefined
-            )
-              throw new Error("Lead admission is unavailable");
-            lead = options.admitLead(prepared.value, {
-              runId: ownerRunId,
-              trialId: trial.trialId,
-              snapshotDigest: input.snapshotDigest,
-              reportArtifactDigest: attachment.digest,
-            });
-          } catch (error) {
-            await holdCandidate(
-              ownerRunId,
-              "lead",
-              index,
-              prepared.value,
-              prepared.rawDigest,
-              error,
-            );
-            continue;
-          }
-          if (
-            lead.discoveryRunId !== ownerRunId ||
-            lead.trialId !== trial.trialId ||
-            lead.snapshotDigest !== input.snapshotDigest
-          ) {
-            await holdCandidate(
-              ownerRunId,
-              "lead",
-              index,
-              prepared.value,
-              prepared.rawDigest,
-              new Error("Candidate identity mismatch"),
-            );
-            continue;
-          }
-          const leadDigest = await options.evidence.putFiles({
-            "lead.json": canonicalJson(lead),
-          });
-          const appended = await options.ledger.append({
-            ...base,
-            artifacts: [{ kind: "lead", digest: leadDigest }],
-            identity: `discovery-lead-${lead.leadId}`,
-            type: "lead-recorded",
-            leadId: lead.leadId,
-            runId: ownerRunId,
-            trialId: trial.trialId,
-            missingEdge: lead.missingEdge,
-            primitive: lead.primitive,
-            storageKind: lead.storage?.kind ?? "none",
-          });
-          if (appended.status === "conflict")
-            throw new Error("Lead identity conflict");
-          admittedLeads.push(lead);
-          const signature = digest.parse(options.leadSignature!(lead));
-          if (!seen.has(signature)) foundNew = true;
-          seen.add(signature);
-        }
-      };
+      let failure: ReportFailure | undefined;
+      const reportState = { foundNew: false, heldBoundary: false };
+      const recordReport = createReportRecorder({
+        ...options,
+        base,
+        snapshotDigest: input.snapshotDigest,
+        trialId: trial.trialId,
+        seen,
+        state: reportState,
+        onFindingRecorded: (count) => {
+          findingsRecorded += count;
+        },
+      });
       try {
         const result = await options.executor.execute({
           ...run,
@@ -800,126 +543,32 @@ export async function runDiscoveryCampaign(options: {
               ? {}
               : { providerLimit: receipt.providerLimit }),
           };
-        for (const child of result.agentRuns ?? []) {
-          const childReceipt = nativeRunReceiptSchema.parse(child.receipt);
-          const childStart = await options.ledger.append({
-            ...base,
-            identity: `discovery-start-${childReceipt.runId}`,
-            type: "discovery-run-started",
-            runId: childReceipt.runId,
-            trialId: trial.trialId,
-            trialOrdinal: trial.trialOrdinal,
-            ...(trial.stage === undefined ? {} : { stage: trial.stage }),
-            runKind: "child",
-            parentRunId: run.runId,
-            labId: options.labId,
-            history: historyMetadata,
-            configuration: {
-              ...planned.configuration,
-              promptDigest:
-                planned.configuration.promptDigest ?? input.promptDigest,
-              trustBoundaryVersion: input.trustBoundary.version,
-              agentPath: child.agentPath,
-            },
-          });
-          if (childStart.status === "conflict")
-            throw new Error("Child start identity conflict");
-          const childReceiptDigest = await options.evidence.putFiles({
-            "receipt.json": canonicalJson(childReceipt),
-          });
-          let childOutcome: "completed" | "failed" = "failed";
-          let childFailure: typeof failure;
-          if (
-            (childReceipt.terminal === "completed" ||
-              (childReceipt.terminal === "incomplete" &&
-                childReceipt.reason === "schema")) &&
-            childReceipt.targetSnapshotDigest === input.snapshotDigest &&
-            childReceipt.runtimeProfileDigest === run.profile.digest &&
-            child.attachment !== undefined &&
-            childReceipt.reportArtifactDigest === child.attachment.digest
-          ) {
-            try {
-              await recordReport(childReceipt.runId, child.attachment);
-              if (childReceipt.terminal === "completed")
-                childOutcome = "completed";
-              else
-                childFailure = {
-                  reason: "schema",
-                  reasonDetail:
-                    childReceipt.reasonDetail ?? "child-report-unreadable",
-                };
-            } catch (error) {
-              if (!(error instanceof DiscoveryReportError)) throw error;
-              childFailure = {
-                reason: "schema",
-                reasonDetail: "child-report-unreadable",
-              };
-            }
-          } else {
-            childFailure = {
-              reason:
-                childReceipt.reason === "unavailable"
-                  ? "policy"
-                  : childReceipt.reason,
-              reasonDetail:
-                childReceipt.reasonDetail ?? "child-receipt-invalid",
-            };
-          }
-          const childFinished = await options.ledger.append({
-            ...base,
-            identity: `discovery-finish-${childReceipt.runId}`,
-            type: "discovery-run-finished",
-            runId: childReceipt.runId,
-            outcome: childOutcome,
-            costUsd: "unavailable",
-            wallTimeMs: Math.max(
-              0,
-              Date.parse(childReceipt.completedAt) -
-                Date.parse(childReceipt.startedAt),
-            ),
-            usage: childReceipt.usage,
-            ...(childReceipt.observed === undefined
-              ? {}
-              : { observed: childReceipt.observed }),
-            ...(childReceipt.sandboxExitCode === undefined
-              ? {}
-              : { sandboxExitCode: childReceipt.sandboxExitCode }),
-            ...(childReceipt.diagnosticArtifactDigest === undefined
-              ? {}
-              : {
-                  diagnosticArtifactDigest:
-                    childReceipt.diagnosticArtifactDigest,
-                }),
-            ...(childFailure === undefined ? {} : childFailure),
-            artifacts: [
-              { kind: "native-run-receipt", digest: childReceiptDigest },
-            ],
-          });
-          if (childFinished.status === "conflict")
-            throw new Error("Child finish identity conflict");
-        }
-        const attachment = result.attachment;
-        if (
-          (receipt.terminal === "completed" ||
-            (receipt.terminal === "incomplete" &&
-              receipt.reason === "schema")) &&
-          receipt.runId === run.runId &&
-          receipt.targetSnapshotDigest === input.snapshotDigest &&
-          receipt.runtimeProfileDigest === run.profile.digest &&
-          attachment !== undefined &&
-          receipt.reportArtifactDigest === attachment.digest
-        ) {
-          try {
-            await recordReport(run.runId, attachment);
-            if (receipt.terminal === "completed") outcome = "completed";
-          } catch (error) {
-            if (!(error instanceof DiscoveryReportError)) throw error;
-            failure = {
-              reason: "schema",
-              reasonDetail: "root-report-unreadable",
-            };
-          }
-        }
+        await recoverChildAgentReports({
+          result,
+          run,
+          snapshotDigest: input.snapshotDigest,
+          recordReport,
+          ledger: options.ledger,
+          evidence: options.evidence,
+          base,
+          trialId: trial.trialId,
+          trialOrdinal: trial.trialOrdinal,
+          labId: options.labId,
+          history: historyMetadata,
+          configuration: planned.configuration,
+          promptDigest: input.promptDigest,
+          trustBoundaryVersion: input.trustBoundary.version,
+        });
+        const recoveredRoot = await recoverRootAgentReport({
+          result,
+          receipt,
+          run,
+          snapshotDigest: input.snapshotDigest,
+          recordReport,
+        });
+        if (recoveredRoot.recovered) outcome = "completed";
+        if (recoveredRoot.failure !== undefined)
+          failure = recoveredRoot.failure;
       } catch {
         outcome = "failed";
       }
@@ -949,69 +598,16 @@ export async function runDiscoveryCampaign(options: {
       });
       if (finished.status === "conflict")
         throw new Error("Discovery finish identity conflict");
-      return { outcome, foundNew, heldBoundary, leads: admittedLeads };
+      return { outcome, ...reportState };
     };
-    const explore = await executePlanned(trial.explore, "explore");
-    let trialFoundNew = explore.foundNew;
-    let trialHeldBoundary = explore.heldBoundary;
-    if (
-      explore.outcome === "completed" &&
-      trial.continuation !== undefined &&
-      explore.leads.length > 0
-    ) {
-      if (
-        !Number.isSafeInteger(trial.continuation.maxRuns) ||
-        trial.continuation.maxRuns < 1 ||
-        trial.continuation.maxRuns > 2 ||
-        !Number.isSafeInteger(trial.continuation.wallTimeMs) ||
-        trial.continuation.wallTimeMs < 1 ||
-        trial.continuation.wallTimeMs > 120 * 60_000
-      )
-        throw new Error("Invalid Trial continuation bounds");
-      const edgeOrder = [
-        "auth-use",
-        "consumer",
-        "producer",
-        "reachability",
-        "precondition",
-      ] as const;
-      const ranked = [...explore.leads].sort(
-        (a, b) =>
-          edgeOrder.indexOf(a.missingEdge) - edgeOrder.indexOf(b.missingEdge) ||
-          (a.sourceTrace[0]?.file ?? "").localeCompare(
-            b.sourceTrace[0]?.file ?? "",
-          ) ||
-          a.leadId.localeCompare(b.leadId),
-      );
-      for (const lead of ranked.slice(0, trial.continuation.maxRuns)) {
-        const followUp = trial.continuation.plan(lead);
-        const continued = await executePlanned(
-          followUp,
-          "continue",
-          lead.leadId,
-          trial.continuation.wallTimeMs,
-        );
-        trialFoundNew ||= continued.foundNew;
-        trialHeldBoundary ||= continued.heldBoundary;
-        if (continued.outcome === "provider-limited") {
-          stopped ??= "provider-limit";
-          break;
-        }
-      }
-    }
+    const explore = await executePlanned(trial.explore);
     // Stop rules are evaluated once per Trial; in-flight Trials still finish.
     if (explore.outcome === "provider-limited") stopped ??= "provider-limit";
     if (explore.outcome === "failed") stopped ??= "incomplete";
-    if (trial.stage === "screening" && explore.outcome === "completed") {
-      if (trialHeldBoundary && !trialFoundNew && explore.leads.length === 0)
-        stopped ??= "output-boundary";
-      else if (!trialFoundNew && explore.leads.length === 0)
-        stopped ??= "screened-no-candidate";
-      return;
-    }
     if (explore.outcome === "completed") {
-      if (trialHeldBoundary && !trialFoundNew) stopped ??= "output-boundary";
-      else noNewFindings = trialFoundNew ? 0 : noNewFindings + 1;
+      if (explore.heldBoundary && !explore.foundNew)
+        stopped ??= "output-boundary";
+      else noNewFindings = explore.foundNew ? 0 : noNewFindings + 1;
     }
     if (noNewFindings >= input.stopRules.noFindingRuns)
       stopped ??= "no-new-finding";
@@ -1022,12 +618,44 @@ export async function runDiscoveryCampaign(options: {
     }
   };
   await Promise.all(Array.from({ length: concurrency }, worker));
+  const outcomes = new Map<
+    string,
+    "completed" | "failed" | "provider-limited" | "setup-failed"
+  >();
+  let finishAfterSequence = 0;
+  for (;;) {
+    const page = options.ledger.read({
+      campaignId: options.campaignId,
+      type: "discovery-run-finished",
+      afterSequence: finishAfterSequence,
+      limit: 1000,
+    });
+    for (const { event } of page)
+      if (
+        event.type === "discovery-run-finished" &&
+        event.snapshotDigest === input.snapshotDigest &&
+        startedExplorations.has(event.runId)
+      )
+        outcomes.set(event.runId, event.outcome);
+    if (page.length < 1000) break;
+    finishAfterSequence = page[page.length - 1]!.sequence;
+  }
+  const recordedFailure = [...startedExplorations].some(
+    (runId) => outcomes.get(runId) === "provider-limited",
+  )
+    ? "provider-limit"
+    : [...startedExplorations].some(
+          (runId) => outcomes.get(runId) !== "completed",
+        )
+      ? "incomplete"
+      : undefined;
   const stoppedBy =
+    recordedFailure ??
     stopped ??
     (options.plannedTrials.length >= input.stopRules.maxRuns
       ? "max-runs"
       : "plans-exhausted");
-  // An incomplete attempt or provider limit leaves the target open for a fresh Trial.
+  // A started Trial remains spent on resume, including incomplete attempts.
   if (stoppedBy !== "provider-limit" && stoppedBy !== "incomplete") {
     const recorded = await options.ledger.append({
       schemaVersion: 1,

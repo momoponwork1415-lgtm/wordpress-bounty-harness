@@ -4,7 +4,7 @@
 
 ## 読む順
 
-1. [docs/SPEC.md](docs/SPEC.md) — 目的、不変条件、モジュール境界、受け渡し契約、二段構えの主経路と最初の縦断スライス。
+1. [docs/SPEC.md](docs/SPEC.md) — 目的、不変条件、モジュール境界、受け渡し契約、単一協調Trialの主経路と最初の縦断スライス。
 2. [docs/adr/](docs/adr/) — 番号順。設計の理由と、採らなかった選択肢。
 3. [docs/DESIGN-WALKTHROUGH.md](docs/DESIGN-WALKTHROUGH.md) — 全体を1つの流れで理解したいときだけ。規則は増やさない。
 
@@ -21,12 +21,12 @@
 7. 外部送信（報告、ベンダー連絡、公開）は、正確な Submission Candidate、文案の版、送信先へ結び付いた承認があるときだけ。Harness 自身は送信を実行しない。
 8. 台帳は追記専用で、持つのは digest 参照だけ。payload、HTTP 記録、画面画像、実行ログ、認証情報、未公開の発見は Git 外の Private Evidence に置く。
 
-## 二段構えの探索（SPEC.md 第6節、ADR 0025〜0027）
+## 単一協調Trialの探索（SPEC.md 第6節、ADR 0029）
 
-- 主経路は対象ごとに入口索引付きの単独agent `screening-v1` を1 Trial（wall上限30分）。受理されたFindingか具体的Leadがあるときだけ、同じSnapshotでRoot＋最大3子の `deep-dive-v1` を回す（wall上限90分）。一段目の0件は `unexplored` として再訪可能に記録する。初期予算配分は7:3。
-- 報告時に入口が未処理で経過wallが30分未満なら、Harnessが同じ使い捨てコンテナへ1回だけ続行を差し込む。継続方式と結果は台帳へ記録する。新promptに30分下限やwave数の命令を置かない。
-- `short-objective-managed-v4` と `wp2shell-bounty-v2` は旧版と比較armとして保持する。どの版も脆弱性が必ずあるという前提や固定された攻撃経路を与えない。
-- prompt本文を変えたら版を上げ、旧版を残してdigest pinを更新する。旧promptは過去Trialの再現用として維持する。
+- 主経路は対象ごとに `wp2shell-bounty-v2` を既定とするRoot＋最大3子の協調Trialを1回。wall上限は60分。Rootが早く報告すれば終了し、Harnessは最低実行時間を強制しない。既存v2本文の30分指示は#143で新しい版にするまで残る。wall・provider・broker・schema等の失敗は理由付き `incomplete` とし、正常な候補0件に数えない。
+- 固定source由来の入口索引を既定でカタログとして渡す。索引は経路や分担を指示せず、全入口の処理は終了条件でない。Harnessの続行差し込み、screeningから条件付きdeep-diveへの分岐は行わない。子の有効なFindingとLeadはRoot報告と独立して保存する。
+- `short-objective-managed-v4` は比較arm、`screening-v1` は過去Trialの構成照合用に保持する。旧screeningを現行modeで新規起動しない。索引あり・なしや旧段付きTrialを同じ比較分母に混ぜない。どの版も脆弱性が必ずあるという前提や固定された攻撃経路を与えない。
+- prompt本文を変えたら版を上げ、旧版を残してdigest pinを更新する。旧promptは過去Trialの目的文とdigestを照合するために維持する。台帳の旧 `stage` / `continuationOf` 付きeventも読み続け、既存eventを消さない。
 - Finding / Leadの出力契約はprompt本文に書かず、Harnessがschemaから生成する節として渡す（ADR 0019）。候補は出力境界で棄却せず、正規化して受理するか保留する（ADR 0018）。
 - contributor以上と管理者が意図して付与する権限はtrust境界の内側に置く。公開済み7件の再発見は配線と判定器の確認であり、未知の発見率を示さない。promptとscenarioに対象固有の関数名、option名、URL、画面名を入れない。
 

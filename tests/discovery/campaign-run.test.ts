@@ -49,7 +49,7 @@ async function campaign(
     readonly childSurvivesBrokenRoot?: boolean;
     readonly heldOnly?: boolean;
     readonly rootTranscriptInvalid?: boolean;
-    readonly screening?: boolean;
+    readonly indexed?: boolean;
     readonly leadOnly?: boolean;
   } = {},
 ) {
@@ -93,12 +93,12 @@ async function campaign(
     programmeBoundary: { version: "v1", text: "Synthetic boundary" },
     modelProfileDigest: profile.digest,
     promptDigest: digest,
-    stopRules: options.screening
+    stopRules: options.indexed
       ? { maxRuns: 1, noFindingRuns: 1 }
       : { maxRuns: 6, noFindingRuns: 2 },
     lab: { setupDigest: digest },
     history,
-    ...(options.screening
+    ...(options.indexed
       ? { entryIndex: { enabled: true as const, digest } }
       : {}),
   };
@@ -112,7 +112,7 @@ async function campaign(
       { file: "includes/example.php", function: "fixture", line: 12 },
     ],
     existingControls: "Capability check elsewhere",
-    labObservations: options.screening ? "none" : "Canary user changed",
+    labObservations: options.indexed ? "none" : "Canary user changed",
   };
   let calls = 0;
   const result = await runDiscoveryCampaign({
@@ -120,8 +120,8 @@ async function campaign(
     labId: "lab-1",
     input,
     historyFraction: 0.5,
-    runWallTimeMs: (options.screening ? 30 : 90) * 60_000,
-    ...(options.screening
+    runWallTimeMs: 60 * 60_000,
+    ...(options.indexed
       ? {}
       : {
           ablation: { axes: [{ axis: "history" as const, armBFraction: 0.5 }] },
@@ -136,11 +136,7 @@ async function campaign(
     classifyCandidate: classifyWordPressCandidate,
     executor: {
       async execute(run) {
-        expect(run.expiresAt).toBe(
-          options.screening
-            ? "2026-10-08T07:30:00.000Z"
-            : "2026-10-08T08:30:00.000Z",
-        );
+        expect(run.expiresAt).toBe("2026-10-08T08:00:00.000Z");
         const ordinal = calls++;
         if (ordinal === 0 && options.rootTranscriptInvalid) {
           const attachment = await attachments.put(
@@ -259,20 +255,15 @@ async function campaign(
       },
     },
     plannedTrials: Array.from(
-      { length: options.screening ? 1 : 6 },
+      { length: options.indexed ? 1 : 6 },
       (_, index) => ({
         trialId: `run-${index}`,
         trialOrdinal: index,
-        ...(options.screening ? { stage: "screening" as const } : {}),
         explore: {
           configuration: {
-            promptVariant: options.screening
-              ? "screening-v1"
-              : index % 2
-                ? "wp2shell-derived"
-                : "short-objective",
+            promptVariant: index % 2 ? "wp2shell-derived" : "short-objective",
             assignmentUnit: "route",
-            ...(options.screening
+            ...(options.indexed
               ? { entryIndex: { enabled: true as const, digest } }
               : {}),
           },
@@ -280,7 +271,6 @@ async function campaign(
             runId: `run-${index}`,
             targetSnapshotDigest: digest,
             profile,
-            ...(options.screening ? { coordination: "solo" as const } : {}),
             prompt: "Synthetic objective",
             sourceDirectory: "/private/source",
             sourceTree: { digest, entries: 1, bytes: 1 },
@@ -355,38 +345,25 @@ it("keeps raw held candidates and stops at the output boundary", async () => {
   ).toBe("resolved");
 });
 
-it("records one indexed screening Trial and leaves zero candidates unexplored", async () => {
-  const { result, calls, ledger } = await campaign([], { screening: true });
+it("passes the fixed source entry index to one cooperative Trial without a stage", async () => {
+  const { result, calls, ledger } = await campaign([], { indexed: true });
   expect(result).toEqual({
     runCount: 1,
     findingsRecorded: 0,
-    stoppedBy: "screened-no-candidate",
+    stoppedBy: "no-new-finding",
   });
   expect(calls).toBe(1);
-  expect(
-    ledger.read({ type: "discovery-run-started" })[0]?.event,
-  ).toMatchObject({
-    stage: "screening",
+  const started = ledger.read({ type: "discovery-run-started" })[0]?.event;
+  expect(started).toMatchObject({
     trialId: "run-0",
+    runKind: "explore",
     configuration: {
-      promptVariant: "screening-v1",
+      promptVariant: "short-objective",
       entryIndex: { enabled: true, digest },
     },
   });
-  expect(ledger.read({ type: "discovery-concluded" })[0]?.event).toMatchObject({
-    stoppedBy: "screened-no-candidate",
-  });
-});
-
-it("does not treat a screening Lead or held candidate as a negative result", async () => {
-  const finding = await campaign([0], { screening: true });
-  expect(finding.result.stoppedBy).toBe("max-runs");
-  expect(finding.ledger.read({ type: "finding-recorded" })).toHaveLength(1);
-  const lead = await campaign([], { screening: true, leadOnly: true });
-  expect(lead.result.stoppedBy).toBe("max-runs");
-  expect(lead.ledger.read({ type: "lead-recorded" })).toHaveLength(1);
-  const held = await campaign([], { screening: true, heldOnly: true });
-  expect(held.result.stoppedBy).toBe("output-boundary");
+  expect(started).not.toHaveProperty("stage");
+  expect(started).not.toHaveProperty("continuationOf");
 });
 
 it("stops after consecutive completed runs without a new Finding and records each run configuration", async () => {

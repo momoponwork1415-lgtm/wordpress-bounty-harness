@@ -277,7 +277,10 @@ export async function runCampaignPipeline<
         stoppedBy: discovered.stoppedBy,
       };
       // The Verifier draws on the same subscription, so nothing else runs after a stop.
-      if (discovered.stoppedBy === "provider-limit") {
+      if (
+        discovered.stoppedBy === "provider-limit" &&
+        discovered.runCount > 0
+      ) {
         stopped = discovered.stoppedBy;
         await append({
           ...base,
@@ -289,18 +292,6 @@ export async function runCampaignPipeline<
         targets.push({ ...summary, verifications: [] });
         break;
       }
-      if (discovered.stoppedBy === "screened-no-candidate") {
-        await appendOnce({
-          ...base,
-          identity: `campaign-screened-no-candidate-${snapshot.digest}`,
-          occurredAt: at(),
-          type: "campaign-stopped",
-          reason: "screened-no-candidate",
-        });
-        targets.push({ ...summary, verifications: [] });
-        continue;
-      }
-
       stage = "verification";
       const latestOriginalVerification = new Map<
         string,
@@ -352,14 +343,20 @@ export async function runCampaignPipeline<
         });
       }
       targets.push({ ...summary, verifications });
-      if (discovered.stoppedBy === "incomplete") {
-        stopped = "incomplete";
+      if (
+        discovered.stoppedBy === "incomplete" ||
+        discovered.stoppedBy === "provider-limit"
+      ) {
+        // A resumed target has already spent its one Trial. Keep its typed
+        // failure and verify any captured child findings, then move on.
+        if (discovered.runCount === 0) continue;
+        stopped = discovered.stoppedBy;
         await append({
           ...base,
           identity: `campaign-stopped-${options.newId()}`,
           occurredAt: at(),
           type: "campaign-stopped",
-          reason: "incomplete",
+          reason: discovered.stoppedBy,
         });
         break;
       }

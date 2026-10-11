@@ -114,17 +114,17 @@ describe("CampaignInput public boundary", () => {
   it("cycles through all four cells for two half-fraction axes", () => {
     const axes = [
       { axis: "prompt" as const, armBFraction: 0.5 },
-      { axis: "continuation" as const, armBFraction: 0.5 },
+      { axis: "history" as const, armBFraction: 0.5 },
     ];
     expect(
       Array.from({ length: 4 }, (_, ordinal) =>
         allocateTrialArms(ordinal, axes),
       ),
     ).toEqual([
-      { prompt: "a", continuation: "a" },
-      { prompt: "b", continuation: "a" },
-      { prompt: "a", continuation: "b" },
-      { prompt: "b", continuation: "b" },
+      { prompt: "a", history: "a" },
+      { prompt: "b", history: "a" },
+      { prompt: "a", history: "b" },
+      { prompt: "b", history: "b" },
     ]);
     expect(
       Array.from({ length: 4 }, (_, ordinal) =>

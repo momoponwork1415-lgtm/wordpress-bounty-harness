@@ -23,17 +23,47 @@ const example = async (file: string, version = "3.3.1"): Promise<unknown> =>
     ),
   ) as unknown;
 
+it.each(["3.3.1", "3.2.6"])(
+  "runs the pinned %s production example as one indexed 60-minute WP2Shell Trial",
+  async (version) => {
+    const source = (await example(
+      "campaign-production-v1.json",
+      version,
+    )) as Record<string, unknown>;
+    expect(source).not.toHaveProperty("promptId");
+    const config = wordpressCampaignConfigSchema.parse(source);
+    expect(config).toMatchObject({
+      mode: "wp2shell",
+      promptId: "wp2shell-bounty-v2",
+      entryIndex: true,
+      runWallTimeMinutes: 60,
+      stopRules: { maxRuns: 1, noFindingRuns: 1 },
+    });
+  },
+);
+
 describe("TranslatePress 3.3.1 development-set example", () => {
-  it("keeps the two Root + 3 prompt arms identical except for the prompt", async () => {
+  it("keeps the short prompt comparison arm and bounds the cooperative default at 60 minutes", async () => {
     const previous = wordpressCampaignConfigSchema.parse(
       await example("campaign-short-managed-v4.json"),
     );
-    const current = wordpressCampaignConfigSchema.parse(
-      await example("campaign-wp2shell-bounty-v2.json"),
-    );
+    const archivedCurrent = (await example(
+      "campaign-wp2shell-bounty-v2.json",
+    )) as Record<string, unknown>;
+    expect(
+      wordpressCampaignConfigSchema.safeParse(archivedCurrent).success,
+    ).toBe(false);
+    const current = wordpressCampaignConfigSchema.parse({
+      ...archivedCurrent,
+      runWallTimeMinutes: 60,
+    });
+    expect(current.mode).toBe("wp2shell");
+    expect(previous.mode).toBe("comparison");
     expect(current.promptId).toBe("wp2shell-bounty-v2");
     expect(previous.promptId).toBe("short-objective-managed-v4");
-    expect({ ...current, promptId: previous.promptId }).toEqual(previous);
+    expect(current.stopRules).toEqual(previous.stopRules);
+    expect(current.programmeBoundary).toEqual(previous.programmeBoundary);
+    expect(current.lab).toEqual(previous.lab);
   });
 
   it("pins the development target and bounds the trial to one discovery run", async () => {
@@ -88,7 +118,11 @@ describe("TranslatePress 3.3.1 development-set example", () => {
 
 describe("TranslatePress 3.2.5 A/B development-set example", () => {
   it("rejects the removed daily run cap setting", async () => {
-    const config = await example("campaign-luna-ab.json", "3.2.5");
+    const config = (await example(
+      "campaign-luna-ab-time-control.json",
+      "3.2.5",
+    )) as Record<string, unknown>;
+    delete config.assignment;
     expect(
       wordpressCampaignConfigSchema.safeParse({
         ...wordpressCampaignConfigSchema.parse(config),
@@ -97,10 +131,21 @@ describe("TranslatePress 3.2.5 A/B development-set example", () => {
     ).toBe(false);
   });
 
-  it("pins one source and balances prompt and continuation across twelve Trials", async () => {
-    const config = wordpressCampaignConfigSchema.parse(
-      await example("campaign-luna-ab.json", "3.2.5"),
+  it("keeps the archived continuation example for reference and projects a prompt-only comparison", async () => {
+    const archived = (await example(
+      "campaign-luna-ab.json",
+      "3.2.5",
+    )) as Record<string, unknown>;
+    expect(wordpressCampaignConfigSchema.safeParse(archived).success).toBe(
+      false,
     );
+    const withoutRemovedModes = { ...archived };
+    delete withoutRemovedModes.continuation;
+    delete withoutRemovedModes.assignment;
+    const config = wordpressCampaignConfigSchema.parse({
+      ...withoutRemovedModes,
+      ablation: { axes: [(archived.ablation as { axes: unknown[] }).axes[0]] },
+    });
     const policy = wordPressSelectionPolicySchema.parse(
       await example("selection-luna-40.json", "3.2.5"),
     );
@@ -114,45 +159,40 @@ describe("TranslatePress 3.2.5 A/B development-set example", () => {
     expect(config.runWallTimeMinutes).toBe(90);
     expect(config.resources.maxConcurrentRuns).toBe(2);
     expect(config.lab.databaseAccess).toBe("read-only");
-    expect(config.assignment).toEqual({
-      unit: "entry-point",
-      entriesPerRun: 8,
-    });
-    expect(config.continuation).toEqual({
-      maxRunsPerTrial: 2,
-      runWallTimeMinutes: 30,
-    });
+    expect(config.mode).toBe("ablation");
+    if (config.mode !== "ablation") throw new Error("Expected ablation mode");
     expect(config.promptId).toBe("short-objective-v2");
-    expect(
-      wordpressCampaignConfigSchema.parse({
-        ...config,
-        promptId: undefined,
-      }).promptId,
-    ).toBe("screening-v1");
-    expect(config.ablation?.axes).toEqual([
+    expect(config.ablation.axes).toEqual([
       {
         axis: "prompt",
         armBFraction: 0.5,
         armBPromptId: "wp2shell-single-http-v2",
       },
-      { axis: "continuation", armBFraction: 0.5 },
     ]);
     const cells = Array.from({ length: 12 }, (_, ordinal) =>
-      JSON.stringify(allocateTrialArms(ordinal, config.ablation?.axes ?? [])),
+      JSON.stringify(allocateTrialArms(ordinal, config.ablation.axes)),
     );
-    expect(new Set(cells).size).toBe(4);
+    expect(new Set(cells).size).toBe(2);
     for (const cell of new Set(cells))
-      expect(cells.filter((candidate) => candidate === cell)).toHaveLength(3);
+      expect(cells.filter((candidate) => candidate === cell)).toHaveLength(6);
   });
 
-  it("sets a separate 150-minute no-continuation control with three Trials per prompt", async () => {
-    const config = wordpressCampaignConfigSchema.parse(
-      await example("campaign-luna-ab-time-control.json", "3.2.5"),
+  it("retains the archived 150-minute prompt control as an opt-in ablation", async () => {
+    const archived = (await example(
+      "campaign-luna-ab-time-control.json",
+      "3.2.5",
+    )) as Record<string, unknown>;
+    expect(wordpressCampaignConfigSchema.safeParse(archived).success).toBe(
+      false,
     );
+    const promptOnly = { ...archived };
+    delete promptOnly.assignment;
+    const config = wordpressCampaignConfigSchema.parse(promptOnly);
     expect(config.stopRules).toEqual({ maxRuns: 6, noFindingRuns: 6 });
     expect(config.runWallTimeMinutes).toBe(150);
-    expect(config.continuation).toBeUndefined();
-    expect(config.ablation?.axes).toEqual([
+    expect(config.mode).toBe("ablation");
+    if (config.mode !== "ablation") throw new Error("Expected ablation mode");
+    expect(config.ablation.axes).toEqual([
       {
         axis: "prompt",
         armBFraction: 0.5,
@@ -162,8 +202,7 @@ describe("TranslatePress 3.2.5 A/B development-set example", () => {
     expect(
       Array.from(
         { length: 6 },
-        (_, ordinal) =>
-          allocateTrialArms(ordinal, config.ablation?.axes ?? []).prompt,
+        (_, ordinal) => allocateTrialArms(ordinal, config.ablation.axes).prompt,
       ),
     ).toEqual(["a", "b", "a", "b", "a", "b"]);
   });
@@ -174,29 +213,46 @@ describe("TranslatePress 3.2.6 Stored XSS prompt comparison", () => {
     const short = wordpressCampaignConfigSchema.parse(
       await example("campaign-short-managed-v4.json", "3.2.6"),
     );
-    const wp2shell = wordpressCampaignConfigSchema.parse(
-      await example("campaign-wp2shell-bounty-v2.json", "3.2.6"),
+    const archived = (await example(
+      "campaign-wp2shell-bounty-v2.json",
+      "3.2.6",
+    )) as Record<string, unknown>;
+    expect(wordpressCampaignConfigSchema.safeParse(archived).success).toBe(
+      false,
     );
+    const wp2shell = wordpressCampaignConfigSchema.parse({
+      ...archived,
+      runWallTimeMinutes: 60,
+    });
     expect(short.promptId).toBe("short-objective-managed-v4");
     expect(wp2shell.promptId).toBe("wp2shell-bounty-v2");
     expect(short.lab.translatePress?.administratorSecondaryLocale).toBe(
       "fr_FR",
     );
-    expect({ ...wp2shell, promptId: short.promptId }).toEqual(short);
+    expect(wp2shell.mode).toBe("wp2shell");
+    expect(short.mode).toBe("comparison");
+    expect(wp2shell.lab).toEqual(short.lab);
+    expect(wp2shell.programmeBoundary).toEqual(short.programmeBoundary);
   });
 
   it("pairs both prompts with the same approved-comment Lab fixture", async () => {
     const short = wordpressCampaignConfigSchema.parse(
       await example("campaign-short-managed-v4-comment-fixture.json", "3.2.6"),
     );
-    const wp2shell = wordpressCampaignConfigSchema.parse(
-      await example(
-        "campaign-wp2shell-bounty-v2-comment-fixture.json",
-        "3.2.6",
-      ),
+    const archived = (await example(
+      "campaign-wp2shell-bounty-v2-comment-fixture.json",
+      "3.2.6",
+    )) as Record<string, unknown>;
+    expect(wordpressCampaignConfigSchema.safeParse(archived).success).toBe(
+      false,
     );
+    const wp2shell = wordpressCampaignConfigSchema.parse({
+      ...archived,
+      runWallTimeMinutes: 60,
+    });
     expect(short.lab.initialApprovedComment).toBe(true);
-    expect({ ...wp2shell, promptId: short.promptId }).toEqual(short);
+    expect(wp2shell.lab).toEqual(short.lab);
+    expect(wp2shell.programmeBoundary).toEqual(short.programmeBoundary);
     expect(
       wordpressCampaignConfigSchema.safeParse({
         ...short,
