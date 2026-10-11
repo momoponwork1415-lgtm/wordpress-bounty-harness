@@ -94,7 +94,7 @@ function score(
   const highThreat =
     (highThreatSurface(observation, policy) ? 1 : 0) *
     policy.scoreWeights.highThreat;
-  // Public advisory counts are held for reading old policies, not ranking.
+  // 公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030）。
   const history = 0;
   return { installations, recency, surface, highThreat, history };
 }
