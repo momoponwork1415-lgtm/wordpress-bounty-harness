@@ -6,7 +6,10 @@ import { z } from "zod";
 
 import { wordpressFindingClaimSchema } from "../../../src/profiles/wordpress/discovery/finding.js";
 import { wordpressLeadClaimSchema } from "../../../src/profiles/wordpress/discovery/lead.js";
-import { wordPressDiscoveryOutputContract } from "../../../src/profiles/wordpress/discovery/output-contract.js";
+import {
+  wordPressDiscoveryOutputContract,
+  wordPressDiscoveryOutputContractV2,
+} from "../../../src/profiles/wordpress/discovery/output-contract.js";
 
 import {
   loadWordPressDiscoveryAsset,
@@ -111,6 +114,22 @@ describe("WordPress discovery prompt assets", () => {
     );
     expect(contract.digest).toBe(
       "sha256:f4acb2d480739f0e89d2f01c14c7ae15b62c340a77ee01d34778f04821c07e41",
+    );
+  });
+
+  it("keeps the archived contract and directs Root to request a final JSON report after child follow-ups", () => {
+    const archived = wordPressDiscoveryOutputContract();
+    const current = wordPressDiscoveryOutputContractV2();
+    expect(archived.id).toBe("wordpress-discovery-contract-v1");
+    expect(current.id).toBe("wordpress-discovery-contract-v2");
+    expect(archived.text).not.toContain("every child spawn assignment");
+    expect(current.text).toContain("every child spawn assignment");
+    expect(current.text).toContain("every follow-up to a child");
+    expect(current.text).toContain("even when there are no claims");
+    expect(current.text).toContain("Finding schema:");
+    expect(current.text).toContain("Lead schema:");
+    expect(current.digest).toBe(
+      "sha256:a74a93951d790aec174c3506a6df9ae2cd391bc44bdedea7fdf8ff74d503db3d",
     );
   });
 

@@ -21,7 +21,10 @@ import {
 } from "../../src/discovery/index.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acquisition/index.js";
-import { wordPressDiscoveryOutputContract } from "../../src/profiles/wordpress/discovery/output-contract.js";
+import {
+  wordPressDiscoveryOutputContract,
+  wordPressDiscoveryOutputContractV2,
+} from "../../src/profiles/wordpress/discovery/output-contract.js";
 import { buildWordPressSourceIndex } from "../../src/profiles/wordpress/discovery/storage-index.js";
 import {
   openWordPressLab,
@@ -837,7 +840,10 @@ describe("harness CLI vertical slice", () => {
       );
       expect(result.code).toBe(0);
       const objective = await loadWordPressDiscoveryAsset(promptId);
-      const contract = wordPressDiscoveryOutputContract();
+      const contract =
+        promptId === "wp2shell-bounty-v3"
+          ? wordPressDiscoveryOutputContractV2()
+          : wordPressDiscoveryOutputContract();
       expect(prompts[0]).toContain(objective.text.trim());
       expect(prompts[0]).toContain(contract.text);
       expect(prompts[0]?.split(contract.text)).toHaveLength(2);

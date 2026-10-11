@@ -52,7 +52,10 @@ import {
   normalizeWordPressCandidate,
   classifyWordPressCandidate,
 } from "../profiles/wordpress/discovery/normalize-candidate.js";
-import { wordPressDiscoveryOutputContract } from "../profiles/wordpress/discovery/output-contract.js";
+import {
+  wordPressDiscoveryOutputContract,
+  wordPressDiscoveryOutputContractV2,
+} from "../profiles/wordpress/discovery/output-contract.js";
 import type {
   WordPressLab,
   WordPressLabHandle,
@@ -663,7 +666,10 @@ async function planWordPressDiscovery(
     config.mode === "ablation" ? config.ablation : undefined;
   const assignmentConfig =
     config.mode === "assignment" ? config.assignment : undefined;
-  const outputContract = wordPressDiscoveryOutputContract();
+  const outputContractV1 = wordPressDiscoveryOutputContract();
+  const outputContractV2 = wordPressDiscoveryOutputContractV2();
+  const outputContractFor = (id: string) =>
+    id === "wp2shell-bounty-v3" ? outputContractV2 : outputContractV1;
   const objectiveOnly = (id: string) =>
     WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
   const source = await boundaries.sourceFor(snapshot);
@@ -708,7 +714,9 @@ async function planWordPressDiscovery(
   ) =>
     [
       selectedObjective.text.trim(),
-      ...(objectiveOnly(selectedObjective.id) ? [outputContract.text] : []),
+      ...(objectiveOnly(selectedObjective.id)
+        ? [outputContractFor(selectedObjective.id).text]
+        : []),
       "## Trust boundary",
       trustBoundary.text.trim(),
       `## Programme Boundary (${config.programmeBoundary.version})`,
@@ -803,7 +811,7 @@ async function planWordPressDiscovery(
           ...(objectiveOnly(selectedObjective.id)
             ? {
                 objectiveDigest: selectedObjective.digest,
-                contractDigest: outputContract.digest,
+                contractDigest: outputContractFor(selectedObjective.id).digest,
               }
             : {}),
           trustBoundaryVersion: trustBoundary.id,
