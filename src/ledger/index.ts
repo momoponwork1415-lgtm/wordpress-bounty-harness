@@ -31,7 +31,19 @@ const event = <T extends z.ZodRawShape>(shape: T) =>
 
 /** LedgerEvent v1 carries only routing metadata and private artifact digests. */
 export const ledgerEventV1Schema = z.discriminatedUnion("type", [
-  event({ type: z.literal("target-selected"), selectionId: id }),
+  event({
+    type: z.literal("target-selected"),
+    selectionId: id,
+    /** Absent in historical events; a new selection may record its planned prompt. */
+    promptVariant: id.optional(),
+  }),
+  event({
+    /** Bind a campaign to one immutable automatic selection before its first target. */
+    type: z.literal("selection-batch-bound"),
+    selectionBatchId: id,
+    policyDigest: digest,
+    selectionIds: z.array(id).min(1).max(5),
+  }),
   event({
     type: z.literal("snapshot-frozen"),
     sourceDigest: digest,
@@ -424,6 +436,7 @@ const querySchema = z.strictObject({
   type: z
     .enum([
       "target-selected",
+      "selection-batch-bound",
       "snapshot-frozen",
       "lab-provisioned",
       "discovery-run-started",

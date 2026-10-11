@@ -177,6 +177,72 @@ export async function createWordPressHostProfile(options: {
     sandboxImageDigest: digestOf(host.images.codex),
   });
 
+  // Public selection and source freezing need no provider credential or Lab.
+  const selectionBoundaries = async (
+    state: CliState,
+    wordpressVersion: string,
+  ): Promise<Pick<WordPressCampaignBoundaries, "selection" | "freeze">> => {
+    for (const directory of [
+      directories.wordpressOrg,
+      directories.sources,
+      directories.wordpressCore,
+      directories.snapshots,
+      directories.programme,
+    ])
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+    const targetSource = openWordPressOrgTargetSource({
+      storageDirectory: directories.wordpressOrg,
+      adapter: createWordPressOrgFetchAdapter(
+        options.fetch === undefined ? {} : { fetch: options.fetch },
+      ),
+      clock: state.clock,
+    });
+    const sources = openMaterializedSources({
+      rootDirectory: directories.sources,
+    });
+    const coreSource = openWordPressCoreSource({
+      dockerExecutablePath: host.dockerExecutablePath,
+      image: host.images.wordpress,
+      stagingDirectory: directories.wordpressCore,
+      expectedVersion: wordpressVersion,
+      runDocker: (args, timeoutMs) => runDocker(args, undefined, timeoutMs),
+    });
+    const snapshotStore = openSnapshot({
+      storageDirectory: directories.snapshots,
+      source: sources.acquisition(
+        openWordPressOrgSnapshotSource({
+          targetSource,
+          storageDirectory: directories.wordpressOrg,
+          dependencies: coreSource,
+        }),
+      ),
+    });
+    const { programme, programmeRef } = await openTranscribedWordfenceProgramme(
+      {
+        transcriptionPath: host.wordfenceProgrammeTranscriptionPath,
+        storageDirectory: directories.programme,
+        clock: state.clock,
+      },
+    );
+    return {
+      selection: createWordPressSelection({
+        targetSource,
+        programme,
+        programmeRef,
+        clock: state.clock,
+        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      }),
+      freeze: async (target) =>
+        snapshotStore.freeze({
+          kind: "wordpress-org-target-acquire",
+          schemaVersion: 1,
+          observationRef: target.observationRef,
+          requestedVersion: target.version,
+          policy: intakePolicy,
+        }),
+    };
+  };
+
   const boundaries = async (
     config: WordPressCampaignConfig,
     state: CliState,
@@ -311,6 +377,7 @@ export async function createWordPressHostProfile(options: {
         programme,
         programmeRef,
         clock: state.clock,
+        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       });
       return selection;
     };
@@ -389,6 +456,7 @@ export async function createWordPressHostProfile(options: {
 
   return createWordPressCliProfile({
     boundaries,
+    selectionBoundaries,
     scopePolicy: await loadWordpressScopePolicy(
       ...(host.scopePolicyPath === undefined ? [] : [host.scopePolicyPath]),
     ),

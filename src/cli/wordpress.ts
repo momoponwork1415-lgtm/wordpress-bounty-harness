@@ -20,7 +20,6 @@ import type {
 } from "../discovery/index.js";
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import { Review, type ScopeFactsProvider } from "../review/index.js";
-import type { Selection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
 import { Verification, type Verifier } from "../verification/index.js";
 import { parseWordPressAdvisories } from "../profiles/wordpress/advisory.js";
@@ -35,7 +34,10 @@ import {
   type WordPressEntryAssignment,
 } from "../profiles/wordpress/discovery/entry-points.js";
 import { buildWordPressSourceIndex } from "../profiles/wordpress/discovery/storage-index.js";
-import { canonicalDigest } from "../infrastructure/canonical-json.js";
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../infrastructure/canonical-json.js";
 import {
   admitWordPressLead,
   readWordPressLead,
@@ -71,9 +73,13 @@ import {
 import {
   loadWordPressSelectionPolicy,
   wordPressSelectionPolicySchema,
+  wordPressTargetSelectionSchema,
   type WordPressSelectionPolicy,
+  type WordPressSelectionInspection,
+  type WordPressSelectionWithBatchInspection,
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
+import { inspectWordPressLedgerExclusions } from "../profiles/wordpress/selection/ledger-exclusions.js";
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import {
@@ -257,11 +263,7 @@ export type WordPressCampaignConfig = z.infer<
 
 /** System-boundary adapters: WordPress.org, Docker/runsc and the provider CLI. */
 export interface WordPressCampaignBoundaries {
-  readonly selection: Selection<
-    WordPressSelectionPolicy,
-    WordPressTargetSelection,
-    unknown
-  >;
+  readonly selection: WordPressSelectionWithBatchInspection;
   readonly freeze: (target: WordPressTargetSelection) => Promise<Snapshot>;
   readonly lab: WordPressLab;
   readonly sourceFor: (snapshot: Snapshot) => Promise<{
@@ -305,6 +307,225 @@ async function loadConfig(configPath: string): Promise<{
           ) as unknown,
         );
   return { config, policy };
+}
+
+async function loadSelectInput(configPath: string): Promise<{
+  readonly policy: WordPressSelectionPolicy;
+  readonly wordpressVersion: string;
+  readonly config?: WordPressCampaignConfig;
+}> {
+  const value = JSON.parse(await readFile(configPath, "utf8")) as unknown;
+  const directPolicy = wordPressSelectionPolicySchema.safeParse(value);
+  if (directPolicy.success) {
+    if (!("wordpressVersion" in directPolicy.data))
+      throw new Error(
+        "Direct selection policy requires wordpressVersion to freeze selections",
+      );
+    return {
+      policy: directPolicy.data,
+      wordpressVersion: directPolicy.data.wordpressVersion,
+    };
+  }
+  const { config, policy } = await loadConfig(configPath);
+  if (
+    "wordpressVersion" in policy &&
+    policy.wordpressVersion !== config.wordpressVersion
+  )
+    throw new Error("Selection and campaign WordPress versions differ");
+  if ("candidateSource" in policy && policy.promptVariant !== config.promptId)
+    throw new Error("Selection and campaign prompt variants differ");
+  return { config, policy, wordpressVersion: config.wordpressVersion };
+}
+
+type ReservedSelection = {
+  readonly target: WordPressTargetSelection;
+  readonly snapshotDigest: string;
+};
+
+type ReservedSelectionBatch = {
+  readonly id: string;
+  readonly reportDigest: string;
+  readonly selections: readonly ReservedSelection[];
+};
+
+/** The most recent complete batch with this exact policy feeds campaign run. */
+async function reservedSelectionBatch(
+  state: CliState,
+  policy: WordPressSelectionPolicy,
+  selectionBatchId?: string,
+): Promise<ReservedSelectionBatch> {
+  const all: ReturnType<CliState["ledger"]["read"]>[number][] = [];
+  let afterSequence = 0;
+  for (;;) {
+    const page = state.ledger.read({
+      type: "target-selected",
+      afterSequence,
+      limit: 1000,
+    });
+    all.push(...page);
+    if (page.length < 1000) break;
+    afterSequence = page.at(-1)!.sequence;
+  }
+  const batches = new Map<string, typeof all>();
+  for (const record of all) {
+    const event = record.event;
+    if (
+      event.type !== "target-selected" ||
+      !event.campaignId.startsWith("selection-") ||
+      !event.artifacts.some((artifact) => artifact.kind === "selection-report")
+    )
+      continue;
+    const batch = batches.get(event.campaignId) ?? [];
+    batch.push(record);
+    batches.set(event.campaignId, batch);
+  }
+  const sortedBatches = [...batches.values()].sort(
+    (left, right) =>
+      (right.at(-1)?.sequence ?? 0) - (left.at(-1)?.sequence ?? 0),
+  );
+  const digest = canonicalDigest(policy);
+  const batchSchema = z.object({
+    schemaVersion: z.literal(1),
+    policyDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    selectedSnapshotDigests: z.array(z.string().regex(/^sha256:[a-f0-9]{64}$/)),
+  });
+  for (const batch of sortedBatches) {
+    if (
+      selectionBatchId !== undefined &&
+      batch[0]?.event.campaignId !== selectionBatchId
+    )
+      continue;
+    const reportRef = batch[0]?.event.artifacts.find(
+      (artifact) => artifact.kind === "selection-report",
+    );
+    if (reportRef === undefined) continue;
+    const file = await state.store.readFile(
+      reportRef.digest,
+      "selection-report.json",
+      2 * 1024 * 1024,
+    );
+    if (file.status !== "resolved")
+      throw new Error("Reserved selection report is unavailable");
+    const report = batchSchema.parse(JSON.parse(file.bytes.toString("utf8")));
+    if (report.policyDigest !== digest) continue;
+    if (
+      batch.length !== report.selectedSnapshotDigests.length ||
+      batch.some(
+        ({ event }, index) =>
+          event.snapshotDigest !== report.selectedSnapshotDigests[index],
+      )
+    )
+      throw new Error("Reserved selection batch is incomplete");
+    const result: ReservedSelection[] = [];
+    for (const { event } of batch) {
+      if (event.type !== "target-selected")
+        throw new Error("Invalid reserved selection event");
+      const targetRef = event.artifacts.find(
+        (artifact) => artifact.kind === "target-selection",
+      );
+      if (targetRef === undefined)
+        throw new Error("Reserved target selection is unavailable");
+      const targetFile = await state.store.readFile(
+        targetRef.digest,
+        "target-selection.json",
+        1024 * 1024,
+      );
+      if (targetFile.status !== "resolved")
+        throw new Error("Reserved target selection is unavailable");
+      const target = wordPressTargetSelectionSchema.parse(
+        JSON.parse(targetFile.bytes.toString("utf8")),
+      );
+      if (
+        target.policy.digest !== digest ||
+        `${target.targetId}@${target.version}` !== event.selectionId
+      )
+        throw new Error("Reserved target selection does not match the ledger");
+      result.push({ target, snapshotDigest: event.snapshotDigest });
+    }
+    return {
+      id: batch[0]!.event.campaignId,
+      reportDigest: reportRef.digest,
+      selections: result,
+    };
+  }
+  throw new Error(
+    selectionBatchId === undefined
+      ? "No reserved selection batch matches this policy; run select first"
+      : "The campaign's reserved selection batch is unavailable or does not match this policy",
+  );
+}
+
+/** A resumed campaign may use only the batch and target set bound on first run. */
+async function bindCampaignSelectionBatch(
+  state: CliState,
+  policy: WordPressSelectionPolicy,
+  campaignId: string,
+  targetSlug: string | null,
+): Promise<readonly ReservedSelection[]> {
+  const bound = state.ledger.read({
+    campaignId,
+    type: "selection-batch-bound",
+    limit: 2,
+  });
+  if (bound.length > 1)
+    throw new Error("Campaign has conflicting selection batch bindings");
+  const binding = bound[0]?.event;
+  if (binding !== undefined && binding.type !== "selection-batch-bound")
+    throw new Error("Invalid selection batch binding");
+  if (binding === undefined) {
+    const priorSelection = state.ledger.read({
+      campaignId,
+      type: "target-selected",
+      limit: 1,
+    });
+    if (priorSelection.length > 0)
+      throw new Error(
+        "Campaign already has targets but no selection batch binding",
+      );
+  }
+  const batch = await reservedSelectionBatch(
+    state,
+    policy,
+    binding?.selectionBatchId,
+  );
+  if (binding !== undefined) {
+    if (
+      binding.policyDigest !== canonicalDigest(policy) ||
+      binding.artifacts.find((artifact) => artifact.kind === "selection-report")
+        ?.digest !== batch.reportDigest ||
+      binding.snapshotDigest !== batch.selections[0]?.snapshotDigest
+    )
+      throw new Error(
+        "Campaign selection batch binding does not match its report",
+      );
+  }
+  const selected = batch.selections.filter(
+    ({ target }) => targetSlug === null || target.slug === targetSlug,
+  );
+  const selectionIds = selected.map(
+    ({ target }) => `${target.targetId}@${target.version}`,
+  );
+  if (binding !== undefined) {
+    if (canonicalJson(binding.selectionIds) !== canonicalJson(selectionIds))
+      throw new Error("Campaign target set differs from its bound selection");
+    return selected;
+  }
+  if (selected.length === 0) return selected;
+  const appended = await state.ledger.append({
+    schemaVersion: 1,
+    identity: `selection-batch-${canonicalDigest(campaignId).slice(7, 39)}`,
+    campaignId,
+    snapshotDigest: batch.selections[0]!.snapshotDigest,
+    occurredAt: state.clock().toISOString(),
+    type: "selection-batch-bound",
+    selectionBatchId: batch.id,
+    policyDigest: canonicalDigest(policy),
+    selectionIds,
+    artifacts: [{ kind: "selection-report", digest: batch.reportDigest }],
+  });
+  if (appended.status !== "appended")
+    throw new Error("Campaign selection batch binding conflicted");
+  return selected;
 }
 
 const setupFor =
@@ -378,6 +599,11 @@ export type WordPressCliProfileOptions = {
     config: WordPressCampaignConfig,
     state: CliState,
   ) => Promise<WordPressCampaignBoundaries>;
+  /** Selection can inspect and freeze public sources without booting a Lab. */
+  readonly selectionBoundaries?: (
+    state: CliState,
+    wordpressVersion: string,
+  ) => Promise<Pick<WordPressCampaignBoundaries, "selection" | "freeze">>;
   readonly scopePolicy: WordpressScopePolicy;
   /** Overrides the scope facts read from judge evidence and the selection record. */
   readonly scopeFacts?: ScopeFactsProvider<WordpressScopeInput>;
@@ -645,6 +871,28 @@ async function runWordPressCampaign(
   ) => CampaignHistory,
 ): ReturnType<CliProfile["runCampaign"]> {
   const { config, policy } = await loadConfig(input.configPath);
+  if (
+    "wordpressVersion" in policy &&
+    policy.wordpressVersion !== config.wordpressVersion
+  )
+    throw new Error("Selection and campaign WordPress versions differ");
+  if ("candidateSource" in policy && policy.promptVariant !== config.promptId)
+    throw new Error("Selection and campaign prompt variants differ");
+  const reservedSelections =
+    "candidateSource" in policy
+      ? await bindCampaignSelectionBatch(
+          state,
+          policy,
+          input.campaignId,
+          input.target,
+        )
+      : undefined;
+  const reservedDigests = new Map(
+    reservedSelections?.map(({ target, snapshotDigest }) => [
+      `${target.targetId}@${target.version}`,
+      snapshotDigest,
+    ]) ?? [],
+  );
   const ablationConfig =
     config.mode === "ablation" ? config.ablation : undefined;
   const boundaries = await options.boundaries(config, state);
@@ -672,10 +920,27 @@ async function runWordPressCampaign(
     newId: state.newId,
     pipeline: {
       select: async () =>
-        (await boundaries.selection.select(policy)).filter(
-          (target) => input.target === null || target.slug === input.target,
+        (reservedSelections === undefined
+          ? await boundaries.selection.select(policy)
+          : reservedSelections.map(({ target }) => target)
+        ).filter(
+          (target) =>
+            reservedSelections !== undefined ||
+            input.target === null ||
+            target.slug === input.target,
         ),
-      freeze: boundaries.freeze,
+      freeze: async (target) => {
+        const snapshot = await boundaries.freeze(target);
+        const reservedDigest = reservedDigests.get(
+          `${target.targetId}@${target.version}`,
+        );
+        if (
+          reservedSelections !== undefined &&
+          snapshot.digest !== reservedDigest
+        )
+          throw new Error("Reserved selection Snapshot changed");
+        return snapshot;
+      },
       lab: boundaries.lab,
       setupFor: setupFor(config),
       discovery: (input) =>
@@ -760,13 +1025,139 @@ export function createWordPressCliProfile(
     advisories: parseWordPressAdvisories,
     locationsOf: wordpressFindingLocations,
     async select(state, input) {
-      const { config, policy } = await loadConfig(input.configPath);
-      const boundaries = await options.boundaries(config, state);
-      return (await boundaries.selection.select(policy)).map((target) => ({
-        targetId: target.targetId,
-        version: target.version,
-        score: target.score,
-      }));
+      const { config, policy, wordpressVersion } = await loadSelectInput(
+        input.configPath,
+      );
+      const boundaries =
+        options.selectionBoundaries === undefined
+          ? config === undefined
+            ? undefined
+            : await options.boundaries(config, state)
+          : await options.selectionBoundaries(state, wordpressVersion);
+      if (boundaries === undefined)
+        throw new Error("Direct policy selection is unavailable on this host");
+      if (
+        "candidateSource" in policy &&
+        boundaries.selection.inspectBatch === undefined
+      )
+        throw new Error("Automatic selection requires listing observations");
+      const inspectedBatch = await boundaries.selection.inspectBatch?.(policy);
+      const inspected: readonly WordPressSelectionInspection[] =
+        inspectedBatch?.inspections ??
+        (await boundaries.selection.inspect(policy));
+      const inspectionBySlug = new Map(
+        inspected.map((item) => [item.slug, item]),
+      );
+      const eligible = inspected.flatMap((item) =>
+        item.selection === undefined ? [] : [item.selection],
+      );
+      const excludedByLedger = inspectWordPressLedgerExclusions({
+        ledger: state.ledger,
+        candidates: eligible.map(({ slug, version }) => ({ slug, version })),
+        currentPromptVariant:
+          policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v2",
+        revisitPolicy: policy.revisitPolicy ?? { kind: "never" },
+      });
+      const ledgerReasons = new Map(
+        excludedByLedger.map(({ slug, reasons }) => [slug, reasons]),
+      );
+      const reasons = new Map<string, string[]>(
+        inspected.map((item) => [
+          item.slug,
+          [...item.reasons, ...(ledgerReasons.get(item.slug) ?? [])],
+        ]),
+      );
+      const rankable = eligible
+        .filter((target) => (reasons.get(target.slug) ?? []).length === 0)
+        .sort(
+          (left, right) =>
+            right.score - left.score || left.slug.localeCompare(right.slug),
+        );
+      const chosen: { target: WordPressTargetSelection; snapshot: Snapshot }[] =
+        [];
+      for (const target of rankable) {
+        if (chosen.length >= policy.maximumTargets) {
+          reasons.get(target.slug)?.push("below-rank-cutoff");
+          continue;
+        }
+        try {
+          chosen.push({ target, snapshot: await boundaries.freeze(target) });
+        } catch {
+          reasons.get(target.slug)?.push("snapshot-unavailable");
+        }
+      }
+      const report = {
+        schemaVersion: 1,
+        policyDigest: canonicalDigest(policy),
+        inspectedAt: state.clock().toISOString(),
+        sourceStatus: inspectedBatch?.sourceStatus ?? "manual",
+        sourceListings: inspectedBatch?.sourceListings ?? [],
+        inspections: inspected.map((item) => ({
+          ...item,
+          reasons: reasons.get(item.slug) ?? [],
+        })),
+        selectedSnapshotDigests: chosen.map(({ snapshot }) => snapshot.digest),
+      };
+      const reportDigest = await state.store.putFiles({
+        "selection-report.json": canonicalJson(report),
+      });
+      if ("candidateSource" in policy && chosen.length < 3)
+        throw new Error(
+          `Selection found ${chosen.length} eligible frozen targets; at least 3 are required (report ${reportDigest})`,
+        );
+      const batchId = chosen.length === 0 ? null : `selection-${state.newId()}`;
+      for (const { target, snapshot } of chosen) {
+        const selectionDigest = await state.store.putFiles({
+          "target-selection.json": canonicalJson(target),
+        });
+        const appended = await state.ledger.append({
+          schemaVersion: 1,
+          identity: `selected-${state.newId()}`,
+          campaignId: batchId!,
+          snapshotDigest: snapshot.digest,
+          occurredAt: target.selectedAt,
+          type: "target-selected",
+          selectionId: `${target.targetId}@${target.version}`,
+          promptVariant:
+            policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v2",
+          artifacts: [
+            { kind: "target-selection", digest: selectionDigest },
+            { kind: "selection-report", digest: reportDigest },
+          ],
+        });
+        if (appended.status !== "appended")
+          throw new Error("Selection ledger append conflicted");
+      }
+      const chosenSlugs = new Set(chosen.map(({ target }) => target.slug));
+      return {
+        batchId,
+        selected: chosen.map(({ target }) => ({
+          targetId: target.targetId,
+          version: target.version,
+          score: target.score,
+          scoreBreakdown: target.scoreBreakdown,
+          observedAt:
+            inspectionBySlug.get(target.slug)?.observedAt ?? target.selectedAt,
+          ...(inspectionBySlug.get(target.slug)?.enumeration === undefined
+            ? {}
+            : {
+                sourceUrl: inspectionBySlug.get(target.slug)!.enumeration!
+                  .sourceUrl,
+              }),
+        })),
+        excluded: inspected
+          .filter((item) => !chosenSlugs.has(item.slug))
+          .map((item) => ({
+            targetId: `wporg:${item.slug}`,
+            reasons: reasons.get(item.slug) ?? [],
+            ...(item.observedAt === undefined
+              ? {}
+              : { observedAt: item.observedAt }),
+            ...(item.enumeration === undefined
+              ? {}
+              : { sourceUrl: item.enumeration.sourceUrl }),
+          })),
+      };
     },
     runCampaign: (state, input) =>
       runWordPressCampaign(state, input, options, historyFor),
@@ -829,11 +1220,16 @@ export function createWordPressCliProfile(
             if (slug === undefined) return null;
             // Rechecking a known Finding does not need the candidate batch's
             // history ranking.
-            const {
-              historySignals: _historySignals,
-              historySource: _historySource,
-              ...reverifyPolicy
-            } = policy;
+            const reverifyPolicy =
+              "candidateSource" in policy
+                ? (({ candidateSource: _candidateSource, ...rest }) => rest)(
+                    policy,
+                  )
+                : (({
+                    historySignals: _historySignals,
+                    historySource: _historySource,
+                    ...rest
+                  }) => rest)(policy);
             const selected = await boundaries.selection.select({
               ...reverifyPolicy,
               candidateSlugs: [slug],

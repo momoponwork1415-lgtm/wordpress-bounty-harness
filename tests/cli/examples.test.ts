@@ -73,6 +73,8 @@ describe("TranslatePress 3.3.1 development-set example", () => {
     const policy = wordPressSelectionPolicySchema.parse(
       await example("selection.json"),
     );
+    if (!("candidateSlugs" in policy))
+      throw new Error("Expected manual policy");
     expect(config.stopRules.maxRuns).toBe(1);
     expect(config.resources.maxConcurrentRuns).toBe(1);
     expect(config.selectionPolicyPath).toBe(
@@ -91,6 +93,8 @@ describe("TranslatePress 3.3.1 development-set example", () => {
     const policy = wordPressSelectionPolicySchema.parse(
       await example("selection-luna-40.json"),
     );
+    if (!("candidateSlugs" in policy))
+      throw new Error("Expected manual policy");
     expect(config.stopRules).toEqual({ maxRuns: 40, noFindingRuns: 4 });
     expect(config.resources).toEqual({
       maxConcurrentRuns: 4,
@@ -149,6 +153,8 @@ describe("TranslatePress 3.2.5 A/B development-set example", () => {
     const policy = wordPressSelectionPolicySchema.parse(
       await example("selection-luna-40.json", "3.2.5"),
     );
+    if (!("candidateSlugs" in policy))
+      throw new Error("Expected manual policy");
     expect(policy.pinnedVersions).toEqual({
       "translatepress-multilingual": "3.2.5",
     });
