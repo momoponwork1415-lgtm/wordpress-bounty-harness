@@ -1474,9 +1474,14 @@ export class CodexNativeAgentRuntime {
     } catch {
       // Keep the original transcript failure when no candidate report can be extracted.
     }
+    // A failed broker relay explains the CLI error without invalidating the
+    // separately captured candidate report.
     return incompleteExecution(
       state,
-      "schema",
+      reasonDetail === "unadmitted-event-type:error" &&
+        (state.brokerMetrics?.relayFailures ?? 0) > 0
+        ? "provider"
+        : "schema",
       result.completedAt,
       grantReceiptDigest,
       undefined,

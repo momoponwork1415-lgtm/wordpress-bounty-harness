@@ -1179,6 +1179,75 @@ describe("Codex native agent runtime", () => {
     }
   });
 
+  it("attributes a recovered provider error to transport while preserving Root candidates", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-provider-error-"));
+    try {
+      const candidate = JSON.stringify({ claim: "source-backed candidate" });
+      const events = transcript.split("\n").map((line) => {
+        const event = JSON.parse(line) as { item?: { text?: string } };
+        if (event.item?.text)
+          event.item.text = JSON.stringify({
+            findings: [candidate],
+            leads: [],
+            examined: "source",
+            unexamined: "none",
+          });
+        return JSON.stringify(event);
+      });
+      events.splice(
+        2,
+        0,
+        JSON.stringify({ type: "error", message: "stream disconnected" }),
+      );
+      const attachments = new ProviderAttachmentStore(root);
+      const result = await new CodexNativeAgentRuntime(
+        sandbox(events.join("\n"), []),
+        broker(
+          {},
+          {
+            forwardedRequests: 2,
+            requestLimitExceeded: 0,
+            unauthorizedRequests: 0,
+            upstreamSuccess: 1,
+            upstreamClientError: 0,
+            upstreamServerError: 0,
+            relayFailures: 1,
+            responseLimitExceeded: 0,
+          },
+        ),
+        attachments,
+        image,
+        () => new Date(now),
+      ).execute(run);
+      expect(result.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "provider",
+        reasonDetail: "unadmitted-event-type:error",
+        reportArtifactDigest: expect.stringMatching(/^sha256:/),
+      });
+      const stored =
+        result.attachment && (await attachments.read(result.attachment));
+      expect(
+        stored?.status === "resolved" &&
+          JSON.parse(stored.bytes.toString("utf8")),
+      ).toMatchObject({ findings: [candidate] });
+      const withoutRelayEvidence = await new CodexNativeAgentRuntime(
+        sandbox(events.join("\n"), []),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      ).execute(run);
+      expect(withoutRelayEvidence.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "schema",
+        reasonDetail: "unadmitted-event-type:error",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("asks the provider for a strict report and turns each Finding text back into an object", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
     try {
