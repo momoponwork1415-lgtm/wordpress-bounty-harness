@@ -372,8 +372,8 @@ describe("Codex native agent runtime", () => {
       const childReport = JSON.stringify({
         findings: [{ claim: "source-backed candidate" }],
         leads: [],
-        examined: ["source path", "Lab route"],
-        unexamined: ["none"],
+        examined: ["source path", { route: "Lab route", scope: "public" }],
+        unexamined: [{ reason: "none" }],
       });
       const childRollout = [
         {
@@ -483,8 +483,8 @@ describe("Codex native agent runtime", () => {
         cyberAccessProgram: "daybreak_blue",
       });
       expect(recovered).toMatchObject({
-        examined: "source path\nLab route",
-        unexamined: "none",
+        examined: 'source path\n{"route":"Lab route","scope":"public"}',
+        unexamined: '{"reason":"none"}',
       });
       expect(() =>
         recoverChildReportFromRollout(childRollout, {
@@ -535,8 +535,9 @@ describe("Codex native agent runtime", () => {
         if (stored.status !== "resolved")
           throw new Error("Expected child report");
         expect(JSON.parse(stored.bytes.toString("utf8"))).toMatchObject({
-          examined: "source path\nLab route",
-          unexamined: "none",
+          findings: [{ claim: "source-backed candidate" }],
+          examined: 'source path\n{"route":"Lab route","scope":"public"}',
+          unexamined: '{"reason":"none"}',
         });
       }
       for (const [overrides, reasonDetail] of [
@@ -573,6 +574,73 @@ describe("Codex native agent runtime", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+  it("keeps child coverage normalization narrow and bounded", () => {
+    const childRollout = (report: unknown) =>
+      [
+        {
+          type: "session_meta",
+          payload: {
+            id: "child-coverage",
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: "parent-coverage",
+                  depth: 1,
+                  agent_path: "/root/child-coverage",
+                },
+              },
+            },
+          },
+        },
+        {
+          type: "turn_context",
+          payload: {
+            model: "gpt-6-sol",
+            effort: "high",
+            cyber_access_program: "daybreak_blue",
+          },
+        },
+        {
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            last_agent_message: JSON.stringify(report),
+          },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+    const expected = {
+      parentThreadId: "parent-coverage",
+      childThreadId: "child-coverage",
+      agentPath: "/root/child-coverage",
+      modelId: "gpt-6-sol",
+      effort: "high",
+      cyberAccessProgram: "daybreak_blue",
+    };
+    const report = (examined: unknown) => ({
+      findings: [{ claim: "synthetic candidate" }],
+      leads: [],
+      examined,
+      unexamined: "none",
+    });
+    expect(
+      recoverChildReportFromRollout(
+        childRollout(report(["source path", "Lab route"])),
+        expected,
+      ),
+    ).toMatchObject({ examined: "source path\nLab route" });
+    for (const invalid of [null, 42, true, [null], ["source path", 42]])
+      expect(() =>
+        recoverChildReportFromRollout(childRollout(report(invalid)), expected),
+      ).toThrow();
+    expect(() =>
+      recoverChildReportFromRollout(
+        childRollout(report([{ text: "x".repeat(16_385) }])),
+        expected,
+      ),
+    ).toThrow();
   });
   it("starts a bounded cooperative Root without an ephemeral thread store", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-cooperative-"));
@@ -1254,7 +1322,11 @@ describe("Codex native agent runtime", () => {
       const commands: CodexSandboxCommand[] = [];
       const attachments = new ProviderAttachmentStore(root);
       const finding = { claim: "synthetic", sourceTrace: [{ line: 1 }] };
-      const withFindings = (findings: unknown[], leads: unknown[] = []) =>
+      const withFindings = (
+        findings: unknown[],
+        leads: unknown[] = [],
+        examined: unknown = "source",
+      ) =>
         transcript.replace(
           JSON.stringify(
             JSON.stringify({
@@ -1268,7 +1340,7 @@ describe("Codex native agent runtime", () => {
             JSON.stringify({
               findings,
               leads,
-              examined: "source",
+              examined,
               unexamined: "none",
             }),
           ),
@@ -1330,6 +1402,14 @@ describe("Codex native agent runtime", () => {
           (await runtime(withFindings([malformed])).execute(run)).receipt
             .reason,
         ).toBe("schema");
+      expect(
+        (await runtime(withFindings([], [], [{ area: "source" }])).execute(run))
+          .receipt,
+      ).toMatchObject({
+        terminal: "incomplete",
+        reason: "schema",
+        reasonDetail: "final-message-not-report",
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
