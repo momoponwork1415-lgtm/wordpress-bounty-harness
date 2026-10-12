@@ -51,6 +51,8 @@ const routeSchema = z.strictObject({
   configurationChanges: z.array(z.string().min(1).max(500)).max(30),
   steps: z.array(wordpressReproductionStepSchema).min(1).max(30),
   victim: wordpressVictimRouteSchema.optional(),
+  /** Private fixed-version binding; the human reproduction package does not use it. */
+  capturedRoute: z.unknown().nullable().optional(),
   evidence: z
     .array(
       z.strictObject({

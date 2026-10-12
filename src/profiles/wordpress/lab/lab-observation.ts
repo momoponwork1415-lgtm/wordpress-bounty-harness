@@ -156,6 +156,7 @@ type ObservationMethods = Pick<
   | "observeCanaryTable"
   | "observeCanaryFiles"
   | "prepareScriptCanary"
+  | "issuedScriptNonces"
   | "observeStoredScript"
   | "observeOptions"
   | "observeAccountRoles"
@@ -455,7 +456,10 @@ function createCanaryInspectionObservations(
   runtime: ObservationRuntime,
 ): Pick<
   ObservationMethods,
-  "observeCanaryTable" | "observeCanaryFiles" | "prepareScriptCanary"
+  | "observeCanaryTable"
+  | "observeCanaryFiles"
+  | "prepareScriptCanary"
+  | "issuedScriptNonces"
 > {
   const { active, wp, docker, nonce } = runtime;
   return {
@@ -515,6 +519,10 @@ function createCanaryInspectionObservations(
         javascript: `fetch(${JSON.stringify(beaconUrl)}, { method: "POST", headers: { "X-WBH-Script-Canary": ${JSON.stringify(token)} } });`,
         loaderJavascript: `import("//canary:8080/c/${token}")`,
       };
+    },
+    issuedScriptNonces(handle) {
+      const resource = active.get(handle.id);
+      return resource?.handle === handle ? [...resource.scriptNonces] : null;
     },
   };
 }

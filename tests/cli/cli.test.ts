@@ -2721,7 +2721,7 @@ describe("harness CLI vertical slice", () => {
     );
   });
 
-  it("pins a fixed-version control without treating it as a latest-version scope check", async () => {
+  it("reconfirms a legacy route on the same Snapshot before a fixed-version control", async () => {
     const { run, configPath, ledger } = await harness();
     const campaign = ["--campaign", "campaign-1"];
     await run("campaign", "run", "--all", ...campaign, "--config", configPath);
@@ -2740,10 +2740,15 @@ describe("harness CLI vertical slice", () => {
       "--version",
       "3.3.1",
     );
-    expect(sameVersion.code).not.toBe(0);
-    expect(sameVersion.stderr).toContain(
-      "A fixed-version control requires a different Snapshot",
+    expect(sameVersion.code).toBe(0);
+    expect(sameVersion.stdout).toContain(
+      `reverified finding ${finding} as ${finding} on wporg:synthetic-plugin 3.3.1`,
     );
+    expect(
+      ledger()
+        .read({ campaignId: "campaign-1", type: "verification-finished" })
+        .at(-1)?.event,
+    ).not.toHaveProperty("basis");
 
     const controlled = await run(
       "review",

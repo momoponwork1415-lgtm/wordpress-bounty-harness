@@ -265,6 +265,8 @@ export interface WordPressLab extends LabProvisioner<
   ): Promise<WordPressCanaryFilesObservation>;
   /** Issues a nonce whose beacon URL a stored script would request from inside the Lab. */
   prepareScriptCanary(handle: WordPressLabHandle): ScriptCanary | null;
+  /** Harness-owned issued script nonces for comparing a captured route across Labs. */
+  issuedScriptNonces(handle: WordPressLabHandle): readonly string[] | null;
   /**
    * Opens the front page, two admin screens and the route's pages in fresh
    * browsers; a context counts only when the receiver logged an issued nonce.

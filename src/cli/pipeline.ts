@@ -461,6 +461,7 @@ export async function reverifyOnSelectedVersion<
     )
     .at(-1);
   let referenceRoute: unknown;
+  let hasCapturedRouteBinding = false;
   if (
     confirmed?.type === "verification-finished" &&
     confirmed.result.status === "runtime-confirmed"
@@ -472,7 +473,44 @@ export async function reverifyOnSelectedVersion<
     );
     if (routeFile.status !== "resolved")
       throw new Error("The confirmed route is unavailable in Private Evidence");
-    referenceRoute = JSON.parse(routeFile.bytes.toString("utf8")) as unknown;
+    const route = JSON.parse(routeFile.bytes.toString("utf8")) as unknown;
+    const observationFile = await options.store.readFile(
+      confirmed.result.evidenceDigest,
+      "canary-observation.json",
+      64 * 1024,
+    );
+    if (observationFile.status === "resolved") {
+      try {
+        const observation = JSON.parse(
+          observationFile.bytes.toString("utf8"),
+        ) as unknown;
+        if (
+          route !== null &&
+          typeof route === "object" &&
+          !Array.isArray(route) &&
+          observation !== null &&
+          typeof observation === "object" &&
+          !Array.isArray(observation) &&
+          "capturedRoute" in route &&
+          route.capturedRoute !== null &&
+          "capturedRouteDigest" in observation &&
+          typeof observation.capturedRouteDigest === "string"
+        )
+          hasCapturedRouteBinding =
+            canonicalDigest(route.capturedRoute) ===
+            observation.capturedRouteDigest;
+      } catch {
+        // Older evidence has no Harness-bound route; only a fresh confirmation
+        // can supply a reliable baseline for a fixed-version comparison.
+      }
+    }
+    referenceRoute =
+      !hasCapturedRouteBinding &&
+      route !== null &&
+      typeof route === "object" &&
+      !Array.isArray(route)
+        ? { ...route, capturedRoute: null }
+        : route;
   }
   const target = await pipeline.selectVersion({
     selectionId: selected.selectionId,
@@ -553,8 +591,8 @@ export async function reverifyOnSelectedVersion<
     if (
       originalSnapshot &&
       (confirmedLab?.type !== "lab-provisioned" ||
-        setup.scenario === undefined ||
-        sameScenario)
+        (setup.scenario === undefined && hasCapturedRouteBinding) ||
+        (sameScenario && hasCapturedRouteBinding))
     )
       throw new Error(
         "A fixed-version control requires a different Snapshot from the original Finding, or a changed Lab scenario for same-Snapshot recheck",
@@ -663,7 +701,13 @@ export async function reverifyOnSelectedVersion<
     setup,
     campaignLabSetupDigest: canonicalDigest(setup),
     reconstruction: pipeline.reconstructionFor(snapshot),
-    referenceRoute: originalSnapshot ? undefined : referenceRoute,
+    referenceRoute:
+      originalSnapshot ||
+      referenceRoute === null ||
+      typeof referenceRoute !== "object" ||
+      Array.isArray(referenceRoute)
+        ? undefined
+        : { ...referenceRoute, comparisonKind: basisKind },
   });
   return {
     targetId: target.targetId,
