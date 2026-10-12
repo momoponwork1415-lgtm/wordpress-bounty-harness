@@ -12,7 +12,7 @@ export type ProvisionResult<Handle extends LabHandle> =
   | { readonly status: "ready"; readonly handle: Handle }
   | {
       readonly status: "incomplete";
-      readonly reason: "provision";
+      readonly reason: "provision" | "precondition";
       readonly nextStep: string;
       /** Private diagnostic data; callers store it outside the ledger. */
       readonly diagnostic?: string;

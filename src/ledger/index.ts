@@ -62,7 +62,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       })
       .optional(),
     failureStage: z.enum(["provision", "seed", "probe"]).optional(),
-    reason: z.enum(["provision", "reachability"]).optional(),
+    reason: z.enum(["provision", "precondition", "reachability"]).optional(),
   }),
   event({
     type: z.literal("discovery-run-started"),
