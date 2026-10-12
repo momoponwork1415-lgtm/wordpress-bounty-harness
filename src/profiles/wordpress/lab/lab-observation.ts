@@ -29,8 +29,16 @@ const PNG_SIGNATURE = Buffer.from("89504e470d0a1a0a", "hex");
 const BROWSER_VISIT = `const { chromium } = require("playwright");
 (async () => {
   const browser = await chromium.launch({ headless: true });
+  try {
   const page = await browser.newPage();
-  page.on("dialog", (dialog) => { void dialog.dismiss(); });
+  const dismissDialogs = (tab) => tab.on("dialog", (dialog) => { void dialog.dismiss(); });
+  dismissDialogs(page);
+  const openedPages = new Set();
+  const observedPages = new Set([page]);
+  page.context().on("page", (tab) => {
+    dismissDialogs(tab);
+    openedPages.add(tab);
+  });
   const base = "http://wordpress";
   const user = process.env.WBH_LOGIN_USER;
   if (user) {
@@ -42,27 +50,47 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
     if (!cookies.some((cookie) => cookie.name.startsWith("wordpress_logged_in_")))
       throw new Error("Victim login failed");
   }
-  await page.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
-  if (new URL(page.url()).origin !== base)
+  let visiblePage = page;
+  await visiblePage.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
+  if (new URL(visiblePage.url()).origin !== base)
     throw new Error("Victim navigation left the Lab origin");
   const actions = JSON.parse(process.env.WBH_VISIT_ACTIONS ?? "[]");
   for (const action of actions) {
     const target = action.kind === "click-text"
-      ? page.getByText(action.text, { exact: action.exact })
-      : page.locator(action.selector);
+      ? visiblePage.getByText(action.text, { exact: action.exact })
+      : visiblePage.locator(action.selector);
     await target.waitFor({ state: "visible", timeout: 10000 });
     if (await target.count() !== 1)
       throw new Error("Victim action did not identify one visible element");
+    const expectsPopup = await target.evaluate((element) =>
+      element.closest('a')?.getAttribute('target')?.toLowerCase() === '_blank'
+    );
+    const popup = visiblePage.waitForEvent("popup", { timeout: expectsPopup ? 10000 : 1500 })
+      .then((tab) => tab, () => null);
     await target.click({ timeout: 10000 });
-    if (new URL(page.url()).origin !== base)
+    const opened = await popup;
+    if (expectsPopup && opened === null)
+      throw new Error("Expected victim popup did not open");
+    if (opened !== null) {
+      observedPages.add(opened);
+      visiblePage = opened;
+    }
+    await visiblePage.waitForLoadState("load", { timeout: 10000 });
+    if (new URL(visiblePage.url()).origin !== base)
       throw new Error("Victim action left the Lab origin");
   }
-  await page.waitForTimeout(3000);
-  const screenshot = await page.screenshot({ type: "png" });
+  await visiblePage.waitForTimeout(3000);
+  if ([...openedPages].some((tab) => !observedPages.has(tab)))
+    throw new Error("Unobserved victim popup opened");
+  if (new URL(visiblePage.url()).origin !== base)
+    throw new Error("Victim observation left the Lab origin");
+  const screenshot = await visiblePage.screenshot({ type: "png" });
   if (screenshot.length > ${MAX_SCREENSHOT_BYTES})
     throw new Error("Browser screenshot exceeds the evidence limit");
   process.stdout.write(screenshot.toString("base64"));
-  await browser.close();
+  } finally {
+    await browser.close();
+  }
 })().catch((error) => {
   console.error(error.message);
   process.exitCode = 1;

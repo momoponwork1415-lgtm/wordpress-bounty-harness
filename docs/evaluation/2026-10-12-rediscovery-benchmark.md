@@ -46,6 +46,6 @@ Relevanssi と Simply Schedule Appointments の探索は履歴なし、対象版
 
 Brizy も履歴なしの1 Trialで、Root の broker relay 失敗1件と CLI の top-level `error` event が重なり、Root は完了に数えない。有効な最終 report と子3件の候補は保存された。Discovery 側の同じエラーは今後 `incomplete(provider)` と分類するよう修正したが、当時の台帳の失敗理由は追記専用のまま残す。公開記録と source 経路が一致する未認証 Stored XSS 候補は得た。元の公開ビルダーページ scenario にはフォームがなく、最初の Verifier は `incomplete(precondition)` だったため、添付欄付きフォームを通常機能 scenario として追加した。同一 Finding の後日再検証は、修正版と同じ scenario digest で `runtime-confirmed` を得た。脆弱版の Verifier 試行は合計5回で、途中の `incomplete(recipe)` も消していない。残り6件の Verifier queue は運用者が停止し、未実施の結果を補っていない。
 
-2.8.12 の修正版対照は2回とも `incomplete(observation)` で、陰性には数えない。2回目は Harness 所有ブラウザの被害者ページ訪問段階で止まった。現行対照器は確認済み route の HTTP body の完全一致も要求するため、Lab ごとに変わる値の扱いを含めて同等経路の条件を確認する必要がある。台帳の派生 Finding 2件は同一元 Finding に対する別試行であり、独立した再発見2件ではない。
+2.8.12 の修正版対照は2回とも `incomplete(observation)` で、陰性には数えない。2回目は Harness 所有ブラウザの被害者ページ訪問段階で止まった。後続の無害な Lab 診断では、修正版の管理画面で旧 selector が見つからず、添付リンクは別タブを開くと分かった。観測器を別タブへ追従させた後、無害な添付では最後まで `observed, contexts=[]` と確認したが、攻撃入力の修正版判定ではない。現行対照器は確認済み route の HTTP body の完全一致も要求するため、Lab ごとに変わる script canary を Harness 発行値に限定して照合する記録が必要である。台帳の派生 Finding 2件は同一元 Finding に対する別試行であり、独立した再発見2件ではない。
 
 Simply Schedule Appointments は対象記録の公開日が使用 model の cutoff より前であり、contamination の可能性がある区間として他の事例と分けて扱う。非 TranslatePress の Stored XSS は脆弱版で実行時確認したが修正版の負の対照は未成立。対象記録と一致する SQLi とその修正版対照も未達である。
