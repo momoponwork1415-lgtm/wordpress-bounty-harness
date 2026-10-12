@@ -496,6 +496,14 @@ export class CodexVerifier implements Verifier<
     );
 
     if (receipt.terminal === "incomplete") {
+      // A CLI error event plus a failed broker relay is a transport failure,
+      // even when the CLI exits zero and the transcript decoder reports schema.
+      if (
+        receipt.reason === "schema" &&
+        receipt.reasonDetail === "unadmitted-event-type:error" &&
+        (receipt.brokerMetrics?.relayFailures ?? 0) > 0
+      )
+        throw new VerifierTransportIncompleteError("provider");
       if (receipt.reason === "provider" || receipt.reason === "sandbox")
         throw new VerifierTransportIncompleteError(receipt.reason);
       return {

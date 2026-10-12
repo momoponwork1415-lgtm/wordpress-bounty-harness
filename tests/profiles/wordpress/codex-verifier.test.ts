@@ -10,6 +10,7 @@ import {
   createNativeRunReceipt,
   ProviderAttachmentStore,
   type DiscoveryTransportRun,
+  type NativeRunReceipt,
 } from "../../../src/discovery/index.js";
 import { canonicalJson } from "../../../src/infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
@@ -43,7 +44,14 @@ afterEach(async () => {
 
 async function fixture(
   reports: readonly Record<string, unknown>[],
-  failure?: "provider" | "sandbox",
+  failure?:
+    | "provider"
+    | "sandbox"
+    | {
+        readonly reason: "schema";
+        readonly reasonDetail: string;
+        readonly brokerMetrics?: NativeRunReceipt["brokerMetrics"];
+      },
   impact: WordPressFinding["impact"] = "sensitive-object-access",
   issueCanary = true,
 ) {
@@ -101,7 +109,15 @@ async function fixture(
           receipt: createNativeRunReceipt({
             ...run,
             terminal: "incomplete",
-            reason: failure,
+            reason: typeof failure === "string" ? failure : failure.reason,
+            ...(typeof failure === "string"
+              ? {}
+              : {
+                  reasonDetail: failure.reasonDetail,
+                  ...(failure.brokerMetrics === undefined
+                    ? {}
+                    : { brokerMetrics: failure.brokerMetrics }),
+                }),
             startedAt: "2026-10-08T00:00:00Z",
             completedAt: "2026-10-08T00:01:00Z",
           }),
@@ -747,5 +763,49 @@ describe("CodexVerifier.attempt", () => {
       type: "verifier-run-finished",
       terminal: "incomplete",
     });
+  });
+
+  it("attributes a CLI error with a failed broker relay to provider transport", async () => {
+    const f = await fixture([], {
+      reason: "schema",
+      reasonDetail: "unadmitted-event-type:error",
+      brokerMetrics: {
+        forwardedRequests: 2,
+        requestLimitExceeded: 0,
+        unauthorizedRequests: 0,
+        relayFailures: 1,
+      },
+    });
+    await expect(
+      f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+    ).rejects.toMatchObject({ reason: "provider" });
+    const event = f.ledger.read({ type: "verifier-run-finished" }).at(0)?.event;
+    expect(event).toMatchObject({
+      type: "verifier-run-finished",
+      terminal: "incomplete",
+    });
+    if (event?.type !== "verifier-run-finished") throw new Error("Missing run");
+    const saved = await f.store.readFile(
+      event.receiptDigest,
+      "receipt.json",
+      4096,
+    );
+    expect(saved.status).toBe("resolved");
+    if (saved.status !== "resolved") throw new Error("Missing receipt");
+    expect(JSON.parse(saved.bytes.toString("utf8"))).toMatchObject({
+      reason: "schema",
+      reasonDetail: "unadmitted-event-type:error",
+      brokerMetrics: { relayFailures: 1 },
+    });
+  });
+
+  it("keeps an unadmitted CLI error without broker relay evidence incomplete as recipe", async () => {
+    const f = await fixture([], {
+      reason: "schema",
+      reasonDetail: "unadmitted-event-type:error",
+    });
+    await expect(
+      f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+    ).resolves.toMatchObject({ status: "incomplete", reason: "recipe" });
   });
 });
