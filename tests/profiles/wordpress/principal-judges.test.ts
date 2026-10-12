@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import type { WordPressFinding } from "../../../src/profiles/wordpress/discovery/finding.js";
 import type {
@@ -16,8 +17,26 @@ import { wordpressReproductionRenderer } from "../../../src/profiles/wordpress/v
 import { publishReproductionPackage } from "../../../src/verification/index.js";
 import { canaries } from "./judge-fixture.js";
 
-const snapshotDigest = `sha256:${"a".repeat(64)}`;
-const setupDigest = `sha256:${"b".repeat(64)}`;
+const sourceDigest = `sha256:${"a".repeat(64)}`;
+const snapshotBody = {
+  kind: "source-snapshot" as const,
+  schemaVersion: 1 as const,
+  target: { identity: "example", version: "1.0", sourceDigest },
+  dependencies: [],
+};
+const snapshot = {
+  ...snapshotBody,
+  digest: canonicalDigest(snapshotBody),
+};
+const snapshotDigest = snapshot.digest;
+const setup = {
+  schemaVersion: 1 as const,
+  snapshotDigest,
+  siteTitle: "Synthetic principal judge test",
+  initialPosts: [],
+  customerRole: false,
+};
+const setupDigest = canonicalDigest(setup);
 const directories: string[] = [];
 afterEach(async () => {
   for (const directory of directories.splice(0))
@@ -183,16 +202,27 @@ describe("WordPress principal judges", () => {
       },
       reconstruction: {
         wordpressVersion: "6.8",
-        target: {
-          identity: "example",
-          version: "1.0",
-          sourceDigest: snapshotDigest,
-        },
+        target: snapshotBody.target,
         enabledSettings: [],
         roles: ["subscriber"],
       },
+      setup,
+      snapshot,
     });
     expect(published.status).toBe("runtime-confirmed");
+    if (published.status === "runtime-confirmed") {
+      const lab = await store.readFile(
+        published.reproductionPackageDigest,
+        "lab.json",
+        100_000,
+      );
+      expect(lab.status).toBe("resolved");
+      if (lab.status === "resolved")
+        expect(JSON.parse(lab.bytes.toString("utf8"))).toMatchObject({
+          setup,
+          snapshot,
+        });
+    }
     const notes = await store.readFile(
       observed.evidenceDigest,
       "notes.md",

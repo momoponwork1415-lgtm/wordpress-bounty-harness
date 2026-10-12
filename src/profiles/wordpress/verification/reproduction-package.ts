@@ -129,31 +129,47 @@ function renderScript(): string {
     "import json",
     "import os",
     "from pathlib import Path",
-    "from urllib.parse import urljoin",
-    "import requests",
+    "from urllib.parse import urljoin, urlsplit",
     "",
     "ROUTE = json.loads(Path(__file__).with_name('agent-authored.json').read_text(encoding='utf-8'))",
     "STEPS = ROUTE['steps']",
+    "for index, step in enumerate(STEPS, 1):",
+    "    if step['kind'] == 'http' and step['method'] in ('POST', 'PUT', 'PATCH', 'DELETE') and 'body' not in step:",
+    "        raise SystemExit(f'Step {index} has no request body. Use the manual steps and captured Private Evidence; no request was sent.')",
+    "import requests",
     "base_url = os.environ['WBH_BASE_URL'].rstrip('/') + '/'",
+    "origin = urlsplit(base_url)",
+    "if origin.scheme not in ('http', 'https') or not origin.hostname:",
+    "    raise SystemExit('WBH_BASE_URL must be an HTTP Lab origin')",
+    "def lab_url(path):",
+    "    target = urljoin(base_url, path)",
+    "    parsed = urlsplit(target)",
+    "    if (parsed.scheme, parsed.netloc) != (origin.scheme, origin.netloc):",
+    "        raise SystemExit('Route leaves the Lab origin; no request was sent')",
+    "    return target",
+    "for step in STEPS:",
+    "    lab_url(step['path'])",
     "username = os.environ.get('WBH_USERNAME', '')",
     "password = os.environ.get('WBH_PASSWORD', '')",
     "session = requests.Session()",
+    "session.trust_env = False",
     "if ROUTE['role'] != 'unauthenticated':",
     "    if not username or not password:",
     "        raise SystemExit('Set WBH_USERNAME and WBH_PASSWORD for the Lab account')",
-    "    session.post(urljoin(base_url, 'wp-login.php'), data={'log': username, 'pwd': password, 'wp-submit': 'Log In', 'redirect_to': base_url, 'testcookie': '1'}, timeout=30)",
+    "    session.post(lab_url('/wp-login.php'), data={'log': username, 'pwd': password, 'wp-submit': 'Log In', 'redirect_to': base_url, 'testcookie': '1'}, timeout=30, allow_redirects=False)",
     "    if not any(cookie.name.startswith('wordpress_logged_in_') for cookie in session.cookies):",
     "        raise SystemExit('Lab login failed')",
     "for index, step in enumerate(STEPS, 1):",
     "    if step['kind'] == 'browser':",
-    "        print(f\"{index}. Open in browser: {urljoin(base_url, step['path'].lstrip('/'))}\")",
+    "        print(f\"{index}. Open in browser: {lab_url(step['path'])}\")",
     "        print(f\"   Expected: {step['expected']}\")",
     "        continue",
     "    body = step.get('body', '').replace('{{USERNAME}}', username).replace('{{PASSWORD}}', password)",
-    "    response = session.request(step['method'], urljoin(base_url, step['path'].lstrip('/')), headers=step.get('headers'), data=body if 'body' in step else None, timeout=30)",
+    "    response = session.request(step['method'], lab_url(step['path']), headers=step.get('headers'), data=body if 'body' in step else None, timeout=30, allow_redirects=False)",
     "    print(f\"{index}. {step['method']} {step['path']} -> {response.status_code}\")",
     "    print(response.text[:1000])",
     "    print(f\"   Expected: {step['expected']}\")",
+    "print('HTTP responses alone do not prove reproduction; confirm the fresh Lab canary and victim observation.')",
     "",
   ].join("\n");
 }
@@ -164,27 +180,18 @@ export const wordpressReproductionRenderer: ReproductionRenderer<WordPressRecons
     async render(input) {
       const route = routeSchema.parse(input.route);
       const reconstruction = reconstructionSchema.parse(input.reconstruction);
-      const setup =
-        input.setup === undefined ? null : setupSchema.parse(input.setup);
-      const snapshot =
-        input.snapshot === undefined
-          ? null
-          : snapshotWithDigestSchema.parse(input.snapshot);
-      const snapshotBody =
-        snapshot === null
-          ? null
-          : {
-              kind: snapshot.kind,
-              schemaVersion: snapshot.schemaVersion,
-              target: snapshot.target,
-              dependencies: snapshot.dependencies,
-            };
+      const setup = setupSchema.parse(input.setup);
+      const snapshot = snapshotWithDigestSchema.parse(input.snapshot);
+      const snapshotBody = {
+        kind: snapshot.kind,
+        schemaVersion: snapshot.schemaVersion,
+        target: snapshot.target,
+        dependencies: snapshot.dependencies,
+      };
       if (
-        (setup !== null && setup.snapshotDigest !== input.snapshotDigest) ||
-        (snapshot !== null &&
-          (snapshot.digest !== input.snapshotDigest ||
-            canonicalDigest(snapshotSchema.parse(snapshotBody)) !==
-              snapshot.digest))
+        setup.snapshotDigest !== input.snapshotDigest ||
+        snapshot.digest !== input.snapshotDigest ||
+        canonicalDigest(snapshotSchema.parse(snapshotBody)) !== snapshot.digest
       )
         throw new Error("Lab reconstruction does not match the Snapshot");
       const [criteria, template] = await Promise.all([
@@ -316,8 +323,8 @@ export const wordpressReproductionRenderer: ReproductionRenderer<WordPressRecons
             : renderScript(),
         reconstruction: {
           ...reconstruction,
-          ...(setup === null ? {} : { setup }),
-          ...(snapshot === null ? {} : { snapshot }),
+          setup,
+          snapshot,
           labSetupDigest: input.labSetupDigest,
           snapshotDigest: input.snapshotDigest,
           provenance: {
@@ -327,8 +334,8 @@ export const wordpressReproductionRenderer: ReproductionRenderer<WordPressRecons
             roles: "harness-captured",
             labSetupDigest: "harness-captured",
             snapshotDigest: "harness-captured",
-            ...(setup === null ? {} : { setup: "harness-captured" }),
-            ...(snapshot === null ? {} : { snapshot: "harness-captured" }),
+            setup: "harness-captured",
+            snapshot: "harness-captured",
           },
         },
         evidence: {

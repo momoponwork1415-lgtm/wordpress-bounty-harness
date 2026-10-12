@@ -2561,7 +2561,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(fixedVersion.code).not.toBe(0);
     expect(fixedVersion.stderr).toContain(
-      "confirmed route is required for fixed-version comparison",
+      "An evidence-backed route is required for fixed-version comparison",
     );
     expect(labStarts()).toBe(beforeLabStarts);
     expect(ledger().read({ campaignId: "campaign-1" })).toHaveLength(
