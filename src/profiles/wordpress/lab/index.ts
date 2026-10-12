@@ -239,6 +239,8 @@ export interface WordPressLab extends LabProvisioner<
   reviewAdministrator(
     handle: WordPressLabHandle,
   ): { readonly username: "harness-admin"; readonly password: string } | null;
+  /** Review-only receiver address for a human-operated browser in the Lab network. */
+  reviewReceiverIp(handle: WordPressLabHandle): string | null;
   canaryLedger(handle: WordPressLabHandle): WordPressCanaryLedger | null;
   prepareExecutionCanary(handle: WordPressLabHandle): ExecutionCanary | null;
   /**
@@ -728,6 +730,10 @@ export function openWordPressLab(options: {
       return resource?.handle === handle
         ? { username: "harness-admin", password: resource.adminPassword }
         : null;
+    },
+    reviewReceiverIp(handle) {
+      const resource = active.get(handle.id);
+      return resource?.handle === handle ? (resource.receiverIp ?? null) : null;
     },
     async teardown(handle) {
       const resource = active.get(handle.id);

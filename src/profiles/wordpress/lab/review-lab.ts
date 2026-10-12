@@ -25,6 +25,7 @@ export interface WordPressReviewLabSession {
   readonly endpoint: string;
   readonly networkName: string;
   readonly recorderIp: string;
+  readonly receiverIp: string;
   readonly attackerAccounts: Readonly<{
     subscriber: { readonly username: string; readonly password: string };
     customer?: { readonly username: string; readonly password: string };
@@ -116,6 +117,9 @@ export async function openWordPressReviewLab(input: {
     const administrator = lab.reviewAdministrator(handle);
     if (administrator === null)
       throw new Error("Review administrator is unavailable");
+    const receiverIp = lab.reviewReceiverIp(handle);
+    if (receiverIp === null)
+      throw new Error("Review canary receiver is unavailable");
     const canaries = lab.canaryLedger(handle);
     const script =
       input.category === "stored-xss" ? lab.prepareScriptCanary(handle) : null;
@@ -123,6 +127,7 @@ export async function openWordPressReviewLab(input: {
       endpoint: handle.endpoint,
       networkName: handle.networkName,
       recorderIp: handle.recorderIp,
+      receiverIp,
       attackerAccounts: handle.attackerAccounts,
       administrator,
       canaries: {

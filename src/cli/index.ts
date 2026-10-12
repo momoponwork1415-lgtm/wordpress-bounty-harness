@@ -84,6 +84,7 @@ export interface CliProfile {
     readonly endpoint: string;
     readonly networkName: string;
     readonly recorderIp: string;
+    readonly receiverIp: string;
     readonly attackerAccounts: unknown;
     readonly administrator: unknown;
     readonly canaries: unknown;
@@ -868,7 +869,7 @@ export async function runCli(
           const shellQuote = (value: string) =>
             `'${value.replaceAll("'", "'\\''")}'`;
           io.stdout(
-            `manual client: docker run --rm -it --runtime=runsc --network ${shellQuote(session.networkName)} --add-host ${shellQuote(`wordpress:${session.recorderIp}`)} --entrypoint sh ${shellQuote(session.browserImage)}`,
+            `manual client: docker run --rm -it --runtime=runsc --network ${shellQuote(session.networkName)} --add-host ${shellQuote(`wordpress:${session.recorderIp}`)} --add-host ${shellQuote(`canary:${session.receiverIp}`)} --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs=/tmp:rw,nosuid,nodev,size=512m --entrypoint sh ${shellQuote(session.browserImage)}`,
           );
           io.stdout(
             "Run the package's manual HTTP or browser steps in that client; interrupt this command to remove the Lab.",
