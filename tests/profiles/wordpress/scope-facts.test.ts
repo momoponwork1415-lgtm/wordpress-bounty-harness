@@ -20,6 +20,7 @@ describe("WordPress scope facts from judge conditions", () => {
       },
       target,
       latestVersionVerified: true,
+      ordinaryScenarioVerified: true,
     });
     expect(facts.observations).toEqual(["sensitive-canary-access"]);
     expect(
@@ -31,7 +32,7 @@ describe("WordPress scope facts from judge conditions", () => {
       ["ambiguous", "object-sensitivity-needs-review"],
     ]);
   });
-  it("builds scope input only from the judge, the selection record and the latest-version basis", async () => {
+  it("builds scope input from the judge, selection, version basis and verified ordinary setup", async () => {
     const facts = wordpressScopeFacts({
       category: "account-takeover",
       conditions: {
@@ -41,6 +42,7 @@ describe("WordPress scope facts from judge conditions", () => {
       },
       target,
       latestVersionVerified: true,
+      ordinaryScenarioVerified: true,
     });
     expect(facts).toEqual({
       category: "account-takeover",
@@ -62,12 +64,65 @@ describe("WordPress scope facts from judge conditions", () => {
     ]);
   });
 
+  it("keeps a narrow stored XSS eligible for Wordfence on a verified ordinary setup", async () => {
+    const facts = wordpressScopeFacts({
+      category: "stored-xss",
+      conditions: {
+        attackerRole: "subscriber",
+        defaultSettings: "false",
+        observedVia: "canary-beacon",
+        siteWide: "no",
+        victimRole: "administrator",
+        victimPrincipal: "separate",
+      },
+      target,
+      latestVersionVerified: true,
+      ordinaryScenarioVerified: true,
+    });
+    expect(facts.defaultOrCommonSettings).toBe(true);
+    expect(
+      assessWordpressScope(await loadWordpressScopePolicy(), facts).map(
+        (item) => [item.programme, item.status, item.reason],
+      ),
+    ).toEqual([
+      ["wordfence", "in-scope", "policy-conditions-met"],
+      ["patchstack", "ambiguous", "observation-missing"],
+    ]);
+  });
+
+  it.each(["true", "false"])(
+    "does not use the Verifier's defaultSettings=%s claim without an ordinary Lab record",
+    async (defaultSettings) => {
+      const facts = wordpressScopeFacts({
+        category: "sqli",
+        conditions: {
+          attackerRole: "subscriber",
+          defaultSettings,
+          observedVia: "canary-row-read",
+        },
+        target,
+        latestVersionVerified: true,
+        ordinaryScenarioVerified: false,
+      });
+      expect(facts.defaultOrCommonSettings).toBeUndefined();
+      expect(
+        assessWordpressScope(await loadWordpressScopePolicy(), facts).map(
+          (item) => [item.status, item.reason],
+        ),
+      ).toEqual([
+        ["ambiguous", "version-or-configuration-unknown"],
+        ["ambiguous", "version-or-configuration-unknown"],
+      ]);
+    },
+  );
+
   it("leaves the version unknown until a latest-version re-verification confirms it", async () => {
     const facts = wordpressScopeFacts({
       category: "sqli",
       conditions: { observedVia: "canary-row-read", ...route },
       target,
       latestVersionVerified: false,
+      ordinaryScenarioVerified: true,
     });
     expect(facts.latestVersionVerified).toBeUndefined();
     expect(
@@ -164,6 +219,7 @@ describe("WordPress scope facts from judge conditions", () => {
         conditions: { ...conditions, ...route },
         target,
         latestVersionVerified: false,
+        ordinaryScenarioVerified: true,
       });
       expect(facts.category).toBe(expectedCategory);
       expect(facts.observations).toEqual(observations);
@@ -177,6 +233,7 @@ describe("WordPress scope facts from judge conditions", () => {
         conditions: { observedVia: "canary-row-read" },
         target,
         latestVersionVerified: false,
+        ordinaryScenarioVerified: true,
       }),
     ).toThrow();
   });
@@ -191,6 +248,7 @@ describe("WordPress scope facts from judge conditions", () => {
       },
       target,
       latestVersionVerified: true,
+      ordinaryScenarioVerified: true,
     });
     expect(facts.victimRole).toBe("self");
   });

@@ -2334,6 +2334,11 @@ describe("harness CLI vertical slice", () => {
 
   it("re-verifies a finding on the target's latest version and only then treats the version as verified", async () => {
     const { run, configPath } = await harness();
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      lab: Record<string, unknown>;
+    };
+    config.lab.scenarioId = "approved-comment-v1";
+    await writeFile(configPath, JSON.stringify(config));
     const campaign = ["--campaign", "campaign-1"];
     await run("campaign", "run", "--all", ...campaign, "--config", configPath);
     const queue = await run("review", ...campaign);

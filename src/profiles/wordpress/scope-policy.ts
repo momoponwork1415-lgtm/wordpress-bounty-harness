@@ -237,7 +237,10 @@ export function createWordpressScopeEvaluator(
 ): ProgrammeScopeEvaluator<WordpressScopeInput> {
   return {
     programmeIds: policy.programmes,
-    policyDigest: canonicalDigest(policy),
+    policyDigest: canonicalDigest({
+      policy,
+      evaluatorVersion: "ordinary-lab-scenario-v2",
+    }),
     async assess({ facts }) {
       return assessWordpressScope(policy, facts).map((assessment) => ({
         programmeId: assessment.programme,
