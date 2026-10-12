@@ -310,6 +310,31 @@ async function fixture(
 }
 
 describe("WordPress gVisor Lab", () => {
+  it("runs WP-CLI as the Apache volume owner when activating plugins", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    for (const purpose of ["discovery", "verification"] as const) {
+      const result = await lab.provision(snapshot, setup, { purpose });
+      expect(result.status).toBe("ready");
+      if (result.status === "ready") await lab.teardown(result.handle);
+    }
+
+    const cliRuns = commands.filter(
+      ({ args }) =>
+        args[0] === "run" && args.includes(`wordpress-cli@${sha("3")}`),
+    );
+    expect(cliRuns.length).toBeGreaterThan(0);
+    expect(
+      cliRuns.filter(
+        ({ args }) => args.includes("plugin") && args.includes("activate"),
+      ),
+    ).toHaveLength(2);
+    for (const { args } of cliRuns) {
+      expect(args).toContain("--runtime=runsc");
+      expect(args).toContain("--user=33:33");
+      expect(args).not.toContain("--allow-root");
+    }
+  });
+
   it("provisions protected canaries only in a verification Lab", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const discovery = await lab.provision(snapshot, setup, {

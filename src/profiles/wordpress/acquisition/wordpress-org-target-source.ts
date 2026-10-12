@@ -34,6 +34,7 @@ const metadataSchema = z.object({
   slug: z.string(),
   name: z.string().min(1).max(256),
   version: z.string().min(1).max(64),
+  requires: z.string().max(32).nullable().optional(),
   active_installs: z.number().int().nonnegative(),
   last_updated: z.string().min(1).max(128),
   author: z.string().min(1).max(1024).optional(),
@@ -308,6 +309,11 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
       officialSlug: request.slug,
       displayName: metadata.name,
       stableVersion: metadata.version,
+      ...(metadata.requires !== undefined &&
+      metadata.requires !== null &&
+      /^[0-9]+(?:\.[0-9]+){1,3}$/.test(metadata.requires.trim())
+        ? { minimumWordPressVersion: metadata.requires.trim() }
+        : {}),
       activeInstallations: metadata.active_installs,
       lastUpdated: metadata.last_updated,
       ...(metadata.author === undefined

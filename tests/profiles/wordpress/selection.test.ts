@@ -17,7 +17,12 @@ const programmeRef = {
   digest: digest("a"),
 };
 
-function observation(slug: string, tags: string[], installations = 5000) {
+function observation(
+  slug: string,
+  tags: string[],
+  installations = 5000,
+  minimumWordPressVersion: string | null = "6.0",
+) {
   return {
     status: "observed" as const,
     observation: {
@@ -27,6 +32,7 @@ function observation(slug: string, tags: string[], installations = 5000) {
       officialSlug: slug,
       displayName: slug,
       stableVersion: "1.2.3",
+      ...(minimumWordPressVersion === null ? {} : { minimumWordPressVersion }),
       activeInstallations: installations,
       lastUpdated: "2026-09-01 12:00am GMT",
       observedAt: now,
@@ -279,6 +285,61 @@ describe("WordPress selection public interface", () => {
     expect((await selection.select(policy)).map((item) => item.slug)).toEqual([
       "recent",
     ]);
+  });
+
+  it("excludes plugins whose minimum core exceeds the pinned version or is unknown", async () => {
+    const selection = harness({
+      observations: {
+        equal: observation("equal", [], 5000, "6.8.3"),
+        older: observation("older", [], 5000, "6.8"),
+        newer: observation("newer", [], 5000, "7.1"),
+        unknown: observation("unknown", [], 5000, null),
+      },
+    });
+    const policy = {
+      ...basePolicy,
+      candidateSlugs: ["equal", "older", "newer", "unknown"],
+      wordpressVersion: "6.8.3",
+    };
+    expect(
+      (await selection.inspect(policy)).map((item) => [
+        item.slug,
+        item.status,
+        item.reasons,
+      ]),
+    ).toEqual([
+      ["equal", "eligible", []],
+      ["older", "eligible", []],
+      ["newer", "ineligible", ["core-version-incompatible"]],
+      ["unknown", "ineligible", ["core-requirement-unavailable"]],
+    ]);
+    expect((await selection.select(policy)).map((item) => item.slug)).toEqual([
+      "equal",
+      "older",
+    ]);
+  });
+
+  it("does not apply the stable release's core requirement to a historical pin", async () => {
+    const selection = harness({
+      observations: {
+        legacy: observation("legacy", [], 5000, "7.1"),
+      },
+    });
+    const stablePolicy = {
+      ...basePolicy,
+      candidateSlugs: ["legacy"],
+      wordpressVersion: "6.8.3",
+    };
+    expect((await selection.inspect(stablePolicy))[0]).toMatchObject({
+      status: "ineligible",
+      reasons: ["core-version-incompatible"],
+    });
+
+    const historical = await selection.select({
+      ...stablePolicy,
+      pinnedVersions: { legacy: "1.0.0" },
+    });
+    expect(historical).toMatchObject([{ slug: "legacy", version: "1.0.0" }]);
   });
 
   it("never makes stale programme or target observations eligible", async () => {

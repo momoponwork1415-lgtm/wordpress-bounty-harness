@@ -276,6 +276,7 @@ async function harness(
           officialSlug: slug,
           displayName: slug,
           stableVersion: "9.9.9",
+          minimumWordPressVersion: "6.0",
           activeInstallations: 5000,
           lastUpdated: "2026-09-01 12:00am GMT",
           observedAt: now,

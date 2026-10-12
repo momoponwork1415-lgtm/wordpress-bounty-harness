@@ -325,7 +325,7 @@ async function loadSelectInput(configPath: string): Promise<{
   const value = JSON.parse(await readFile(configPath, "utf8")) as unknown;
   const directPolicy = wordPressSelectionPolicySchema.safeParse(value);
   if (directPolicy.success) {
-    if (!("wordpressVersion" in directPolicy.data))
+    if (directPolicy.data.wordpressVersion === undefined)
       throw new Error(
         "Direct selection policy requires wordpressVersion to freeze selections",
       );
