@@ -21,7 +21,10 @@ import {
 } from "../../src/discovery/index.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acquisition/index.js";
-import { wordPressDiscoveryOutputContract } from "../../src/profiles/wordpress/discovery/output-contract.js";
+import {
+  wordPressDiscoveryOutputContract,
+  wordPressDiscoveryOutputContractV2,
+} from "../../src/profiles/wordpress/discovery/output-contract.js";
 import { buildWordPressSourceIndex } from "../../src/profiles/wordpress/discovery/storage-index.js";
 import {
   openWordPressLab,
@@ -830,37 +833,92 @@ describe("harness CLI vertical slice", () => {
     expect(JSON.stringify(started)).not.toContain("wbh_reader");
   });
 
-  it("adds the schema contract only to objective-only prompts and records separate digests", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
+  it.each([
+    {
+      promptId: "short-objective-managed-v5",
       config: { promptId: "short-objective-managed-v5" },
+    },
+    {
+      promptId: "wp2shell-bounty-v3",
+      config: {
+        mode: "wp2shell",
+        promptId: "wp2shell-bounty-v3",
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    },
+  ] as const)(
+    "adds the generated contract to $promptId and records separate digests",
+    async ({ promptId, config }) => {
+      const { run, configPath, prompts, ledger } = await harness({
+        config,
+      });
+      const result = await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "campaign-contract",
+        "--config",
+        configPath,
+      );
+      expect(result.code).toBe(0);
+      const objective = await loadWordPressDiscoveryAsset(promptId);
+      const contract =
+        promptId === "wp2shell-bounty-v3"
+          ? wordPressDiscoveryOutputContractV2()
+          : wordPressDiscoveryOutputContract();
+      expect(prompts[0]).toContain(objective.text.trim());
+      expect(prompts[0]).toContain(contract.text);
+      expect(prompts[0]?.split(contract.text)).toHaveLength(2);
+      const started = ledger()
+        .read({
+          campaignId: "campaign-contract",
+          type: "discovery-run-started",
+        })
+        .at(0)?.event;
+      expect(started).toMatchObject({
+        configuration: {
+          promptVariant: objective.id,
+          promptDigest: objective.digest,
+          objectiveDigest: objective.digest,
+          contractDigest: contract.digest,
+        },
+      });
+    },
+  );
+
+  it("keeps explicit v2 on its archived prompt contract", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      config: {
+        mode: "wp2shell",
+        promptId: "wp2shell-bounty-v2",
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
     });
     const result = await run(
       "campaign",
       "run",
       "synthetic-plugin",
       "--campaign",
-      "campaign-contract",
+      "campaign-v2-compat",
       "--config",
       configPath,
     );
     expect(result.code).toBe(0);
-    const objective = await loadWordPressDiscoveryAsset(
-      "short-objective-managed-v5",
-    );
-    const contract = wordPressDiscoveryOutputContract();
+    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v2");
     expect(prompts[0]).toContain(objective.text.trim());
-    expect(prompts[0]).toContain(contract.text);
+    expect(prompts[0]).not.toContain(wordPressDiscoveryOutputContract().text);
     const started = ledger()
-      .read({ campaignId: "campaign-contract", type: "discovery-run-started" })
+      .read({ campaignId: "campaign-v2-compat", type: "discovery-run-started" })
       .at(0)?.event;
     expect(started).toMatchObject({
       configuration: {
         promptVariant: objective.id,
         promptDigest: objective.digest,
-        objectiveDigest: objective.digest,
-        contractDigest: contract.digest,
       },
     });
+    if (started?.type === "discovery-run-started")
+      expect(started.configuration.contractDigest).toBeUndefined();
   });
 
   it("keeps DB access disabled when the campaign requests none", async () => {
@@ -1214,7 +1272,7 @@ describe("harness CLI vertical slice", () => {
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("stopped by no-new-finding");
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("WordPress discovery: WP2Shell bounty v2");
+    expect(prompts[0]).toContain("WordPress discovery: WP2Shell bounty v3");
     expect(prompts[0]).toContain("## Entry points");
     expect(coordinations).toEqual(["cooperative"]);
     expect(expirations).toEqual(["2026-10-08T01:00:00.000Z"]);
@@ -1364,7 +1422,7 @@ describe("harness CLI vertical slice", () => {
     });
     expect(production).toMatchObject({
       mode: "wp2shell",
-      promptId: "wp2shell-bounty-v2",
+      promptId: "wp2shell-bounty-v3",
       entryIndex: true,
       runWallTimeMinutes: 60,
       stopRules: { maxRuns: 1, noFindingRuns: 1 },
