@@ -40,7 +40,8 @@ afterEach(async () => {
 });
 
 async function fixture(
-  preflight: "ready" | "no-runsc" | "missing-image" = "ready",
+  preflight:
+    "ready" | "no-runsc" | "missing-image" | "missing-extension" = "ready",
   core?: { readonly version: string; readonly runningVersion: string },
   pluginSlug = "example",
 ) {
@@ -139,6 +140,13 @@ async function fixture(
           };
         if (request.args[0] === "image" && preflight === "missing-image")
           return { exitCode: 1, stdout: "", stderr: "unavailable" };
+        if (
+          preflight === "missing-extension" &&
+          request.args[0] === "exec" &&
+          request.args[2] === "php" &&
+          request.args[4]?.includes('extension_loaded("pdo_mysql")')
+        )
+          return { exitCode: 43, stdout: "", stderr: "" };
         if (request.args[0] === "inspect")
           return {
             exitCode: 0,
@@ -1548,4 +1556,34 @@ describe("WordPress gVisor Lab", () => {
       expect(commands.some((command) => command.args[0] === "run")).toBe(false);
     },
   );
+
+  it("marks a missing PDO MySQL extension as a precondition before installing the target", async () => {
+    const { lab, snapshot, setup, commands } =
+      await fixture("missing-extension");
+    expect(await lab.provision(snapshot, setup)).toMatchObject({
+      status: "incomplete",
+      reason: "precondition",
+    });
+    expect(commands.some((command) => command.args.includes("activate"))).toBe(
+      false,
+    );
+    expect(
+      commands.some(
+        (command) =>
+          command.args[0] === "run" &&
+          !command.args.includes("--runtime=runsc"),
+      ),
+    ).toBe(false);
+    expect(commands.some((command) => command.args[0] === "rm")).toBe(true);
+    expect(
+      commands.some(
+        (command) => command.args[0] === "volume" && command.args[1] === "rm",
+      ),
+    ).toBe(true);
+    expect(
+      commands.some(
+        (command) => command.args[0] === "network" && command.args[1] === "rm",
+      ),
+    ).toBe(true);
+  });
 });

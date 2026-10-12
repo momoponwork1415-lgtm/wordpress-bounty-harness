@@ -106,6 +106,7 @@ async function harness(
     };
     readonly labProbeHttp?: "ok" | "failed";
     readonly labProvisionFailure?: boolean;
+    readonly labMissingExtension?: boolean;
     readonly labSeedFailure?: boolean;
     /** The first Finding lacks a runnable recipe until a new Lab scenario is selected. */
     readonly firstVerifierIncomplete?: boolean;
@@ -204,6 +205,13 @@ async function harness(
           };
         if (request.args[0] === "info")
           return { exitCode: 0, stdout: '{"runsc":{}}', stderr: "" };
+        if (
+          options.labMissingExtension === true &&
+          request.args[0] === "exec" &&
+          request.args[2] === "php" &&
+          request.args[4]?.includes('extension_loaded("pdo_mysql")')
+        )
+          return { exitCode: 43, stdout: "", stderr: "" };
         if (
           options.labProvisionFailure === true &&
           request.args[0] === "network" &&
@@ -940,6 +948,31 @@ describe("harness CLI vertical slice", () => {
       ],
     });
     expect(JSON.stringify(event)).not.toContain("fixture docker error");
+  });
+
+  it("records a missing PHP extension as an incomplete precondition without starting discovery", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      labMissingExtension: true,
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-missing-extension",
+      "--config",
+      configPath,
+    );
+    expect(result.stdout).toContain("stopped by incomplete(precondition)");
+    expect(prompts).toHaveLength(0);
+    expect(
+      ledger().read({ type: "lab-provisioned" }).at(0)?.event,
+    ).toMatchObject({
+      status: "failed",
+      failureStage: "provision",
+      reason: "precondition",
+    });
+    expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(0);
   });
 
   it("records a failed Lab probe before starting discovery", async () => {

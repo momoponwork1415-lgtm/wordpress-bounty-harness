@@ -242,7 +242,11 @@ export async function runCampaignPipeline<
           snapshotDigest: snapshot.digest,
           lab: "failed",
           runCount: 0,
-          stoppedBy: "setup-failed",
+          stoppedBy:
+            provisioned.status === "incomplete" &&
+            provisioned.reason === "precondition"
+              ? "incomplete(precondition)"
+              : "setup-failed",
           verifications: [],
         });
         continue;
