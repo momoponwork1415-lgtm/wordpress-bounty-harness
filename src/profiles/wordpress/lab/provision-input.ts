@@ -16,12 +16,14 @@ import type {
 import {
   scenarioBookingPage,
   scenarioBuilderPage,
+  scenarioFileAttachmentForm,
   wordPressScenario,
   type WordPressScenario,
 } from "./scenarios.js";
 import { assertSearchableCommentTarget } from "./relevanssi-search-index.js";
 import { assertSimplyScheduleBookingTarget } from "./simply-schedule-booking.js";
 import { assertBrizyBuilderPageTarget } from "./brizy-builder-page.js";
+import { assertBrizyFileAttachmentFormTarget } from "./brizy-file-attachment-form.js";
 import {
   DATABASE_NAME,
   READ_ONLY_DATABASE_USER,
@@ -192,6 +194,10 @@ export async function prepareWordPressLab(
   );
   assertBrizyBuilderPageTarget(
     scenarioBuilderPage(scenario),
+    resolved.target.pluginSlug,
+  );
+  assertBrizyFileAttachmentFormTarget(
+    scenarioFileAttachmentForm(scenario),
     resolved.target.pluginSlug,
   );
   if (

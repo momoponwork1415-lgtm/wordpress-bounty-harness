@@ -15,6 +15,7 @@ import {
 import {
   scenarioBookingPage,
   scenarioBuilderPage,
+  scenarioFileAttachmentForm,
   scenarioContent,
   scenarioSearchableComment,
   scenarioTranslationSeedScript,
@@ -24,6 +25,7 @@ import {
 import { buildSearchableCommentIndex } from "./relevanssi-search-index.js";
 import { seedSimplyScheduleBooking } from "./simply-schedule-booking.js";
 import { seedBrizyBuilderPage } from "./brizy-builder-page.js";
+import { seedBrizyFileAttachmentForm } from "./brizy-file-attachment-form.js";
 import {
   USER_REGISTRATION_SCENARIO_ID,
   userRegistrationOrdinarySetupScript,
@@ -359,6 +361,12 @@ export async function initializeWordPress(
   });
   await seedBrizyBuilderPage({
     builderPage: scenarioBuilderPage(input.scenario),
+    targetSlug: input.target.slug,
+    resource: input.resource,
+    wp: input.wp,
+  });
+  await seedBrizyFileAttachmentForm({
+    fileAttachmentForm: scenarioFileAttachmentForm(input.scenario),
     targetSlug: input.target.slug,
     resource: input.resource,
     wp: input.wp,

@@ -2569,6 +2569,92 @@ describe("harness CLI vertical slice", () => {
     ).toMatchObject({ scenario: { id: "private-page-v1" } });
   });
 
+  it("retries a pinned older Snapshot after a scenario change without creating a fixed-version control", async () => {
+    const { run, configPath, ledger, verifierReferenceRoutes } = await harness({
+      firstVerifierIncomplete: true,
+    });
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      lab: Record<string, unknown>;
+    };
+    config.lab.scenarioId = "approved-comment-v1";
+    await writeFile(configPath, JSON.stringify(config));
+    const campaign = ["--campaign", "campaign-1"];
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "--all",
+          ...campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const finding = ledger()
+      .read({ campaignId: "campaign-1", type: "finding-recorded" })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "finding-recorded" &&
+          event.category === "account-takeover",
+      );
+    expect(finding?.type).toBe("finding-recorded");
+    if (finding?.type !== "finding-recorded") return;
+    const before = ledger()
+      .read({
+        campaignId: "campaign-1",
+        findingId: finding.findingId,
+        type: "verification-finished",
+      })
+      .map(({ event }) => event);
+    expect(before).toHaveLength(1);
+    expect(before[0]).toMatchObject({
+      result: { status: "incomplete", reason: "precondition" },
+    });
+    const findingsBefore = ledger().read({
+      campaignId: "campaign-1",
+      type: "finding-recorded",
+    });
+
+    config.lab.scenarioId = "private-page-v1";
+    await writeFile(configPath, JSON.stringify(config));
+    const retried = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding.findingId,
+      "--config",
+      configPath,
+      "--version",
+      "3.3.1",
+    );
+    expect(retried.code).toBe(0);
+    expect(retried.stdout).toContain(
+      `reverified finding ${finding.findingId} as ${finding.findingId} on wporg:synthetic-plugin 3.3.1`,
+    );
+    expect(verifierReferenceRoutes.at(-1)).toBeUndefined();
+    const after = ledger()
+      .read({
+        campaignId: "campaign-1",
+        findingId: finding.findingId,
+        type: "verification-finished",
+      })
+      .map(({ event }) => event);
+    expect(after).toHaveLength(2);
+    expect(after[0]).toEqual(before[0]);
+    expect(after[1]).toMatchObject({
+      findingId: finding.findingId,
+      snapshotDigest: finding.snapshotDigest,
+      result: { status: "runtime-confirmed" },
+    });
+    expect(after[1]).not.toHaveProperty("basis");
+    expect(
+      ledger().read({ campaignId: "campaign-1", type: "finding-recorded" }),
+    ).toEqual(findingsBefore);
+  });
+
   it("rejects unconfirmed version changes and fixed-version controls before starting a Lab", async () => {
     const { run, configPath, ledger, docker } = await harness({
       firstVerifierIncomplete: true,

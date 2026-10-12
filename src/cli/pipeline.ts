@@ -460,10 +460,6 @@ export async function reverifyOnSelectedVersion<
         event.result.status === "runtime-confirmed",
     )
     .at(-1);
-  if (confirmed === undefined && options.version !== undefined)
-    throw new Error(
-      "A confirmed route is required for fixed-version comparison",
-    );
   let referenceRoute: unknown;
   if (
     confirmed?.type === "verification-finished" &&
@@ -485,9 +481,12 @@ export async function reverifyOnSelectedVersion<
   if (target === null)
     throw new Error("The selected target version is not available now");
   const snapshot = await pipeline.freeze(target);
-  if (confirmed === undefined && snapshot.digest !== finding.snapshotDigest)
+  const originalSnapshot = snapshot.digest === finding.snapshotDigest;
+  if (confirmed === undefined && !originalSnapshot)
     throw new Error(
-      "An unconfirmed Finding can only be retried on its original Snapshot",
+      options.version === undefined
+        ? "An unconfirmed Finding can only be retried on its original Snapshot"
+        : "A confirmed route is required for fixed-version comparison",
     );
   const setup = pipeline.setupFor(snapshot);
   if (confirmed === undefined) {
@@ -534,8 +533,9 @@ export async function reverifyOnSelectedVersion<
       );
   }
   if (
+    confirmed !== undefined &&
     options.version !== undefined &&
-    snapshot.digest === finding.snapshotDigest
+    originalSnapshot
   )
     throw new Error(
       "A fixed-version control requires a different Snapshot from the original Finding",
@@ -576,7 +576,7 @@ export async function reverifyOnSelectedVersion<
     if ((await ledger.append(event)).status === "conflict")
       throw new Error(`Ledger conflict: ${event.identity}`);
   let verificationFindingId = findingId;
-  if (snapshot.digest !== finding.snapshotDigest) {
+  if (!originalSnapshot) {
     const reference = finding.artifacts.find(
       (artifact) => artifact.kind === "finding",
     );
@@ -622,15 +622,20 @@ export async function reverifyOnSelectedVersion<
       throw new Error("The derived Finding could not be recorded");
     verificationFindingId = derived.finding.findingId;
   }
+  const basisKind =
+    options.version === undefined
+      ? "latest-version"
+      : originalSnapshot
+        ? undefined
+        : "fixed-version";
   const result = await pipeline.verification.verify({
     campaignId,
     findingId: verificationFindingId,
     verificationId,
     snapshot,
-    basis: {
-      kind: options.version === undefined ? "latest-version" : "fixed-version",
-      findingSnapshotDigest: snapshot.digest,
-    },
+    ...(basisKind === undefined
+      ? {}
+      : { basis: { kind: basisKind, findingSnapshotDigest: snapshot.digest } }),
     setup,
     campaignLabSetupDigest: canonicalDigest(setup),
     reconstruction: pipeline.reconstructionFor(snapshot),

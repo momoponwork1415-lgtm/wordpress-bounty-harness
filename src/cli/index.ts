@@ -143,7 +143,7 @@ const USAGE = [
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>]",
   "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
-  "  review reverify --campaign <id> --finding <id> --config <path> [--version <fixed-version>]",
+  "  review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>]",
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
   "  review authorize --candidate <id> --draft <digest> --to <destination> [--by <name>]",
   "  review submitted --candidate <id> --draft <digest> --to <destination>",

@@ -1,4 +1,6 @@
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import { brizyBuilderPageSetupScript } from "./brizy-builder-page.js";
+import { brizyFileAttachmentFormSetupScript } from "./brizy-file-attachment-form.js";
 import {
   DOWNLOAD_MONITOR_SCENARIO_ID,
   downloadMonitorOrdinarySetupScript,
@@ -26,6 +28,11 @@ import {
   WP_MEMBERS_SCENARIO_ID,
   wpMembersOrdinarySetupScript,
 } from "./wp-members-adapter.js";
+
+const fileAttachmentFormAdapterDigest = canonicalDigest({
+  builderPage: brizyBuilderPageSetupScript(),
+  fileAttachmentForm: brizyFileAttachmentFormSetupScript(),
+});
 
 /** Ordinary site setup only. Scenarios never grant privileged roles. */
 const definitions = [
@@ -70,6 +77,18 @@ const definitions = [
     secondaryLocale: null,
     translation: null,
     builderPage: true,
+  },
+  {
+    id: "public-file-attachment-form-v1",
+    version: 1,
+    name: "公開のファイル添付フォーム",
+    pluginSlug: null,
+    approvedComment: false,
+    secondaryLocale: null,
+    translation: null,
+    builderPage: true,
+    fileAttachmentForm: true,
+    adapterDigest: fileAttachmentFormAdapterDigest,
   },
   {
     id: "translatepress-translation-data-v1",
@@ -213,6 +232,8 @@ const pins: Record<(typeof definitions)[number]["id"], string> = {
     "sha256:2eee266e20d5f3fd97691d3fca7e6a6b29c31c27bca89f24e91a270c3c9b2a19",
   "public-builder-page-v1":
     "sha256:eb3935f5d09cbce5598408d9f9e01ec167e11f9ad7153d06a6987edf237d81a7",
+  "public-file-attachment-form-v1":
+    "sha256:74e511ab2d7f35e0249cd42efcb82bfc9f4bf569820435742db3b3ad80a5dc58",
   "translatepress-translation-data-v1":
     "sha256:111ae6445c8290ae49494ebf4ae116994262722f74114994ed4115ad5930bffc",
   "private-post-v1":
@@ -313,6 +334,16 @@ export function scenarioBuilderPage(
   );
 }
 
+export function scenarioFileAttachmentForm(
+  scenario: WordPressScenario | undefined,
+): boolean {
+  return (
+    scenario !== undefined &&
+    "fileAttachmentForm" in scenario &&
+    scenario.fileAttachmentForm
+  );
+}
+
 /** Match stated prerequisites, never the claimed impact or a recipe. */
 export function nextWordPressScenario(
   precondition: string,
@@ -341,6 +372,10 @@ export function nextWordPressScenario(
     /builder (?:page|post)|(?:page|post) (?:built|created) (?:with|in) (?:the )?builder|ビルダー.{0,8}(?:ページ|投稿)/.test(
       text,
     );
+  const fileAttachmentForm =
+    /(?:file[ -]attachment|file[ -]upload).{0,40}form|form.{0,40}(?:file[ -]attachment|file[ -]upload)|ファイル添付.{0,20}フォーム|フォーム.{0,20}ファイル添付/.test(
+      text,
+    );
   const privateContent = privatePost || privatePage;
   const needsTranslationData =
     /dictionary|translated|translation|翻訳|辞書/.test(text);
@@ -358,6 +393,7 @@ export function nextWordPressScenario(
       searchableComment ||
       bookingPage ||
       builderPage ||
+      fileAttachmentForm ||
       needsTranslationData ||
       needsLocalizedPrivateContent ||
       (needsSecondaryLocale && context?.secondaryLocaleConfigured !== true))
@@ -371,13 +407,15 @@ export function nextWordPressScenario(
         ? "translatepress-translation-data-v1"
         : bookingPage
           ? "public-booking-page-v1"
-          : builderPage
-            ? "public-builder-page-v1"
-            : searchableComment
-              ? "approved-comment-searchable-v1"
-              : comment
-                ? "approved-comment-v1"
-                : undefined;
+          : fileAttachmentForm
+            ? "public-file-attachment-form-v1"
+            : builderPage
+              ? "public-builder-page-v1"
+              : searchableComment
+                ? "approved-comment-searchable-v1"
+                : comment
+                  ? "approved-comment-v1"
+                  : undefined;
   const scenario = id === undefined ? undefined : wordPressScenario(id);
   const current =
     currentId === undefined ? undefined : wordPressScenario(currentId);
@@ -385,7 +423,9 @@ export function nextWordPressScenario(
     scenario !== undefined &&
     (scenario.id === currentId ||
       (scenario.id === "approved-comment-v1" &&
-        current?.approvedComment === true));
+        current?.approvedComment === true) ||
+      (scenario.id === "public-builder-page-v1" &&
+        scenarioBuilderPage(current)));
   return scenario === undefined || alreadyPresent
     ? "catalogue に無い前提"
     : `${scenario.id}: ${scenario.name}`;

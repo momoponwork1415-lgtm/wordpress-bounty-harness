@@ -16,19 +16,11 @@ export function assertBrizyBuilderPageTarget(
     throw new Error("No builder-page Lab adapter for this target");
 }
 
-/** Publish a harmless page and enable the plugin's ordinary page editor. */
-export async function seedBrizyBuilderPage(input: {
-  readonly builderPage: boolean;
-  readonly targetSlug: string;
-  readonly resource: Resources;
-  readonly wp: WordPressCommand;
-}): Promise<void> {
-  if (!input.builderPage) return;
-  assertBrizyBuilderPageTarget(input.builderPage, input.targetSlug);
-
+/** The ordinary page seed is pinned by scenarios that depend on it. */
+export function brizyBuilderPageSetupScript(): string {
   // This follows the pinned plugin's normal "Edit with Brizy" enable flow,
   // then saves one harmless text section through its compiled-section API.
-  const script = [
+  return [
     'if(!class_exists("Brizy_Editor_Post") || !class_exists("Brizy_Editor_Entity") || !class_exists("Brizy_Config") || !defined("BRIZY_VERSION")) exit(1);',
     '$admin=get_user_by("login","harness-admin"); if(!$admin) exit(2); wp_set_current_user($admin->ID);',
     '$id=wp_insert_post(["post_type"=>"page","post_status"=>"publish","post_name"=>"lab-builder-page","post_title"=>"Lab builder page","post_content"=>"<div class=\\"brz-root__container\\"></div>"],true);',
@@ -39,5 +31,16 @@ export async function seedBrizyBuilderPage(input: {
     "$manager=$editor->getCompiledSectionManager(); $manager->merge($sections); $editor->setCompiledSections($manager->asJson()); $editor->set_compiler_version(BRIZY_EDITOR_VERSION); $editor->set_needs_compile(false); $editor->set_compiler(Brizy_Editor_Entity::COMPILER_BROWSER); $editor->saveStorage();",
     '$page=get_post($id); if(!$page || $page->post_type!=="page" || $page->post_status!=="publish" || !Brizy_Editor_Entity::isBrizyEnabled($id) || get_post_meta($id,"_wp_page_template",true)!==Brizy_Config::BRIZY_BLANK_TEMPLATE_FILE_NAME || strpos($page->post_content,"brz-root__container")===false || strpos($editor->getCompiledHtml(),$text)===false) exit(4);',
   ].join(" ");
-  await input.wp(input.resource, ["eval", script]);
+}
+
+/** Publish a harmless page and enable the plugin's ordinary page editor. */
+export async function seedBrizyBuilderPage(input: {
+  readonly builderPage: boolean;
+  readonly targetSlug: string;
+  readonly resource: Resources;
+  readonly wp: WordPressCommand;
+}): Promise<void> {
+  if (!input.builderPage) return;
+  assertBrizyBuilderPageTarget(input.builderPage, input.targetSlug);
+  await input.wp(input.resource, ["eval", brizyBuilderPageSetupScript()]);
 }

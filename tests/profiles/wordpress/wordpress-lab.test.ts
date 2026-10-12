@@ -973,6 +973,78 @@ describe("WordPress gVisor Lab", () => {
     expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
   });
 
+  it("catalogues an ordinary public form with a file attachment independently of the builder page", () => {
+    const form = wordPressScenario("public-file-attachment-form-v1");
+    const builder = wordPressScenario("public-builder-page-v1");
+    expect(form?.name).toBe("公開のファイル添付フォーム");
+    expect(
+      form && "adapterDigest" in form ? form.adapterDigest : undefined,
+    ).toBe(
+      "sha256:e67915bcb506678e170e1801d2e91fb6b1e5ef4865f4bb87a76aae133d817272",
+    );
+    expect(form?.digest).toBe(
+      "sha256:74e511ab2d7f35e0249cd42efcb82bfc9f4bf569820435742db3b3ad80a5dc58",
+    );
+    expect(builder?.digest).toBe(
+      "sha256:eb3935f5d09cbce5598408d9f9e01ec167e11f9ad7153d06a6987edf237d81a7",
+    );
+    expect(
+      nextWordPressScenario("A public form with a file attachment is missing"),
+    ).toBe("public-file-attachment-form-v1: 公開のファイル添付フォーム");
+    expect(
+      nextWordPressScenario(
+        "A public form with a file attachment is missing",
+        "public-file-attachment-form-v1",
+      ),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario(
+        "A public builder page is missing",
+        "public-file-attachment-form-v1",
+      ),
+    ).toBe("catalogue に無い前提");
+  });
+
+  it.each(["discovery", "verification"] as const)(
+    "seeds an ordinary public attachment form in a %s Lab",
+    async (purpose) => {
+      const { lab, snapshot, setup, commands } = await fixture(
+        "ready",
+        undefined,
+        "brizy",
+      );
+      const scenario = wordPressScenario("public-file-attachment-form-v1")!;
+      const result = await lab.provision(
+        snapshot,
+        { ...setup, scenario: { id: scenario.id, digest: scenario.digest } },
+        { purpose },
+      );
+      expect(result.status).toBe("ready");
+      if (result.status !== "ready") return;
+      expect(result.handle.scenario).toEqual({
+        id: scenario.id,
+        digest: scenario.digest,
+      });
+      expect(
+        commands.some(({ args }) =>
+          args.some((arg) => arg.includes("Brizy_Editor_Forms_FormManager")),
+        ),
+      ).toBe(true);
+      await lab.teardown(result.handle);
+    },
+  );
+
+  it("rejects a public attachment form before starting containers when no target adapter exists", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-file-attachment-form-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
   it("does not promise a private-content scenario unless a separate locale prerequisite is met", () => {
     const privatePost = wordPressScenario("private-post-v1")!;
     const translation = wordPressScenario(
