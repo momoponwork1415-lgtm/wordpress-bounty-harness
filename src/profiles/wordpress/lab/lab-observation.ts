@@ -62,9 +62,15 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
     await target.waitFor({ state: "visible", timeout: 10000 });
     if (await target.count() !== 1)
       throw new Error("Victim action did not identify one visible element");
-    const expectsPopup = await target.evaluate((element) =>
-      element.closest('a')?.getAttribute('target')?.toLowerCase() === '_blank'
-    );
+    const expectsPopup = await target.evaluate((element) => {
+      const carriers = [
+        element.closest('a[target],form[target]'),
+        element.querySelector('a[target="_blank"],form[target="_blank"]'),
+      ];
+      return carriers.some((carrier) =>
+        carrier?.getAttribute('target')?.toLowerCase() === '_blank'
+      );
+    });
     const popup = visiblePage.waitForEvent("popup", { timeout: expectsPopup ? 10000 : 1500 })
       .then((tab) => tab, () => null);
     await target.click({ timeout: 10000 });
@@ -82,8 +88,9 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   await visiblePage.waitForTimeout(3000);
   if ([...openedPages].some((tab) => !observedPages.has(tab)))
     throw new Error("Unobserved victim popup opened");
-  if (new URL(visiblePage.url()).origin !== base)
-    throw new Error("Victim observation left the Lab origin");
+  for (const tab of observedPages)
+    if (!tab.isClosed() && new URL(tab.url()).origin !== base)
+      throw new Error("Victim observation left the Lab origin");
   const screenshot = await visiblePage.screenshot({ type: "png" });
   if (screenshot.length > ${MAX_SCREENSHOT_BYTES})
     throw new Error("Browser screenshot exceeds the evidence limit");
