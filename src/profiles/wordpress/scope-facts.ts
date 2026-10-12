@@ -3,11 +3,13 @@ import { z } from "zod";
 import type { PrivateArtifactStore } from "../../infrastructure/private-artifact-store.js";
 import type { Ledger } from "../../ledger/index.js";
 import type { ScopeFactsProvider } from "../../review/index.js";
+import { wordPressScenario } from "./lab/scenarios.js";
 import type { WordpressScopeInput } from "./scope-policy.js";
 
 const attackerRole = z.enum(["unauthenticated", "subscriber", "customer"]);
 const selectionRecordSchema = z.looseObject({
   activeInstallations: z.number().int().nonnegative(),
+  slug: z.string().optional(),
 });
 
 const listed = (value: string | undefined): readonly string[] =>
@@ -84,16 +86,16 @@ function categoryOf(
 
 /**
  * Scope input from Harness-owned records only: the judge's conditions, the
- * selection record and whether this verification ran on the latest version.
+ * selection record, the verified Lab scenario and the version comparison.
  */
 export function wordpressScopeFacts(input: {
   readonly category: string;
   readonly conditions: Readonly<Record<string, string>>;
   readonly target: { readonly activeInstallations: number };
   readonly latestVersionVerified: boolean;
+  readonly ordinaryScenarioVerified: boolean;
 }): WordpressScopeInput {
   const attacker = attackerRole.parse(input.conditions.attackerRole);
-  const defaultSettings = input.conditions.defaultSettings;
   const victimRole = input.conditions.victimRole;
   const victimPrincipal = input.conditions.victimPrincipal;
   return {
@@ -107,9 +109,11 @@ export function wordpressScopeFacts(input: {
     wordpressOrgListed: true,
     premium: false,
     ...(input.latestVersionVerified ? { latestVersionVerified: true } : {}),
-    ...(defaultSettings === undefined
-      ? {}
-      : { defaultOrCommonSettings: defaultSettings === "true" }),
+    // The Verifier's defaultSettings field is agent-authored. A digest-pinned
+    // ordinary Lab setup is the trusted evidence for common configuration.
+    ...(input.ordinaryScenarioVerified
+      ? { defaultOrCommonSettings: true }
+      : {}),
     ...(victimRole === undefined
       ? {}
       : {
@@ -143,6 +147,23 @@ export function createWordPressScopeFacts(options: {
         .at(0)?.event;
       if (finding?.type !== "finding-recorded")
         throw new Error("Finding record is missing");
+      const lab = options.ledger
+        .read({
+          campaignId: ref.campaignId,
+          type: "lab-provisioned",
+          limit: 1000,
+        })
+        .map(({ event }) => event)
+        .find(
+          (event) =>
+            event.type === "lab-provisioned" &&
+            event.identity ===
+              `verification-lab-${verification.verificationId}`,
+        );
+      const pinnedScenario =
+        lab?.type === "lab-provisioned" && lab.scenario !== undefined
+          ? wordPressScenario(lab.scenario.id)
+          : undefined;
       const selected = options.ledger
         .read({
           campaignId: ref.campaignId,
@@ -165,13 +186,24 @@ export function createWordPressScopeFacts(options: {
       );
       if (file.status !== "resolved")
         throw new Error("Target selection record is unreadable");
+      const target = selectionRecordSchema.parse(
+        JSON.parse(file.bytes.toString("utf8")) as unknown,
+      );
+      const ordinaryScenarioVerified =
+        lab?.type === "lab-provisioned" &&
+        lab.status === "ready" &&
+        lab.purpose === "verification" &&
+        lab.snapshotDigest === verification.snapshotDigest &&
+        lab.scenario !== undefined &&
+        pinnedScenario?.digest === lab.scenario.digest &&
+        (pinnedScenario.pluginSlug === null ||
+          pinnedScenario.pluginSlug === target.slug);
       return wordpressScopeFacts({
         category: finding.category,
         conditions: verification.result.conditions,
-        target: selectionRecordSchema.parse(
-          JSON.parse(file.bytes.toString("utf8")) as unknown,
-        ),
+        target,
         latestVersionVerified: verification.basis?.kind === "latest-version",
+        ordinaryScenarioVerified,
       });
     },
   };

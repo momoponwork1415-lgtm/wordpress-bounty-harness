@@ -17,8 +17,16 @@ import {
   wordPressScenario,
   nextWordPressScenario,
 } from "../../../src/profiles/wordpress/lab/scenarios.js";
+import { downloadManagerOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/download-manager-adapter.js";
+import { downloadMonitorOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/download-monitor-adapter.js";
 import { userRegistrationOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/user-registration-adapter.js";
+import {
+  userRegistrationMembershipEnrollmentScript,
+  userRegistrationMembershipInstallScript,
+  userRegistrationMembershipUnjoinedScript,
+} from "../../../src/profiles/wordpress/lab/user-registration-membership-adapter.js";
 import { wpDiscuzOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/wpdiscuz-adapter.js";
+import { wpMembersOrdinarySetupScript } from "../../../src/profiles/wordpress/lab/wp-members-adapter.js";
 
 const directories: string[] = [];
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
@@ -426,6 +434,297 @@ describe("WordPress gVisor Lab", () => {
   it("rejects the registration scenario for another plugin before containers start", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const scenario = wordPressScenario("public-registration-and-account-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
+  it("pins the free membership setup across independent Lab purposes", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "user-registration",
+    );
+    const scenario = wordPressScenario("public-free-membership-v1")!;
+    expect(scenario).toMatchObject({
+      version: 1,
+      pluginSlug: "user-registration",
+      ordinaryRegistration: true,
+      freeMembership: true,
+      adapterDigest: canonicalDigest({
+        registration: userRegistrationOrdinarySetupScript(),
+        install: userRegistrationMembershipInstallScript(),
+        enrollment: userRegistrationMembershipEnrollmentScript("{subscriber}"),
+      }),
+    });
+    const membershipSetup = {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    };
+    const discovery = await lab.provision(snapshot, membershipSetup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.teardown(discovery.handle)).toEqual({ status: "removed" });
+    const verification = await lab.provision(snapshot, membershipSetup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.setupDigest).toBe(discovery.handle.setupDigest);
+    expect(verification.handle.scenario).toEqual(membershipSetup.scenario);
+    const scripts = commands.flatMap(({ args }) => args);
+    expect(
+      scripts.filter((arg) => arg.includes("UR_Install::create_form()")),
+    ).toHaveLength(2);
+    expect(
+      scripts.filter((arg) =>
+        arg.includes("ur_membership_install_required_pages()"),
+      ),
+    ).toHaveLength(2);
+    expect(
+      scripts.filter((arg) =>
+        arg.includes("create_membership_order_and_subscription"),
+      ),
+    ).toHaveLength(2);
+    expect(await lab.teardown(verification.handle)).toEqual({
+      status: "removed",
+    });
+  });
+
+  it("leaves the existing subscriber unjoined in the versioned free membership setup", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "user-registration",
+    );
+    const scenario = wordPressScenario("public-free-membership-v2")!;
+    expect(scenario).toMatchObject({
+      version: 2,
+      pluginSlug: "user-registration",
+      ordinaryRegistration: true,
+      freeMembership: true,
+      adapterDigest: canonicalDigest({
+        registration: userRegistrationOrdinarySetupScript(),
+        install: userRegistrationMembershipInstallScript(),
+        unjoined: userRegistrationMembershipUnjoinedScript("{subscriber}"),
+      }),
+    });
+    const membershipSetup = {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    };
+    const discovery = await lab.provision(snapshot, membershipSetup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.teardown(discovery.handle)).toEqual({ status: "removed" });
+
+    const verification = await lab.provision(snapshot, membershipSetup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.setupDigest).toBe(discovery.handle.setupDigest);
+    expect(verification.handle.scenario).toEqual(membershipSetup.scenario);
+    const scripts = commands.flatMap(({ args }) => args);
+    expect(
+      scripts.filter((arg) => arg.includes("UR_Install::create_form()")),
+    ).toHaveLength(2);
+    expect(
+      scripts.filter((arg) =>
+        arg.includes("ur_membership_install_required_pages()"),
+      ),
+    ).toHaveLength(2);
+    expect(
+      scripts.filter((arg) =>
+        arg.includes("Lab subscriber is already enrolled"),
+      ),
+    ).toHaveLength(2);
+    expect(
+      scripts.filter((arg) =>
+        arg.includes('metadata_exists("user",$subscriber->ID,"ur_form_id")'),
+      ),
+    ).toHaveLength(2);
+    expect(
+      scripts.filter((arg) =>
+        arg.includes("create_membership_order_and_subscription"),
+      ),
+    ).toHaveLength(0);
+    expect(await lab.teardown(verification.handle)).toEqual({
+      status: "removed",
+    });
+  });
+
+  it("repeats the pinned ordinary member post setup in discovery and verification Labs", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "wp-members",
+    );
+    const scenario = wordPressScenario("public-member-post-v1")!;
+    expect(scenario).toMatchObject({
+      version: 1,
+      pluginSlug: "wp-members",
+      ordinaryMemberPost: true,
+      adapterDigest: canonicalDigest(wpMembersOrdinarySetupScript()),
+    });
+    const ordinarySetup = {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    };
+    const discovery = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.teardown(discovery.handle)).toEqual({ status: "removed" });
+
+    const verification = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.scenario).toEqual(ordinarySetup.scenario);
+    expect(verification.handle.setupDigest).toBe(discovery.handle.setupDigest);
+    const scripts = commands
+      .flatMap(({ args }) => args)
+      .filter((arg) => arg.includes('"lab-member-post"'));
+    expect(scripts).toHaveLength(2);
+    for (const script of scripts) {
+      expect(script).toContain("[wpmem_form register]");
+      expect(script).toContain("[wpmem_form login]");
+      expect(script).toContain("<!--more-->");
+      expect(script).toContain('update_option("rss_use_excerpt",1)');
+    }
+    expect(await lab.teardown(verification.handle)).toEqual({
+      status: "removed",
+    });
+  });
+
+  it("repeats pinned public and subscriber downloads in isolated Labs", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "download-manager",
+    );
+    const scenario = wordPressScenario("public-and-subscriber-downloads-v1")!;
+    expect(scenario).toMatchObject({
+      version: 1,
+      pluginSlug: "download-manager",
+      ordinaryDownloads: true,
+      adapterDigest: canonicalDigest(downloadManagerOrdinarySetupScript()),
+    });
+    const ordinarySetup = {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    };
+    const discovery = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.teardown(discovery.handle)).toEqual({ status: "removed" });
+
+    const verification = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.scenario).toEqual(ordinarySetup.scenario);
+    expect(verification.handle.setupDigest).toBe(discovery.handle.setupDigest);
+
+    const scripts = commands
+      .filter(
+        ({ args }) => args[0] === "exec" && args.includes("--user=www-data"),
+      )
+      .map(({ args }) => args.at(-1) ?? "");
+    expect(scripts).toHaveLength(2);
+    for (const script of scripts) {
+      expect(script).toContain('"access"=>["guest"]');
+      expect(script).toContain('"access"=>["subscriber","administrator"]');
+      expect(script).toContain('is_file(UPLOAD_DIR.".htaccess")');
+      expect(script).toContain('"post_status"=>"publish"');
+      expect(script).toContain("wpdm_package id=");
+    }
+    expect(
+      commands.filter(
+        ({ args }) => args[0] === "exec" && args.includes("www-data:www-data"),
+      ),
+    ).toHaveLength(2);
+    expect(await lab.teardown(verification.handle)).toEqual({
+      status: "removed",
+    });
+  });
+
+  it("rejects the download scenario for another plugin before containers start", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-and-subscriber-downloads-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
+  it("provisions the pinned public download setup for both Lab purposes", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      { version: "6.8.3", runningVersion: "6.8.3" },
+      "download-monitor",
+    );
+    const scenario = wordPressScenario("public-file-download-v1")!;
+    expect(scenario).toMatchObject({
+      version: 1,
+      pluginSlug: "download-monitor",
+      roles: ["unauthenticated", "subscriber"],
+      expectedObservations: ["public-page-link", "public-download-fixture"],
+      adapterDigest: canonicalDigest(downloadMonitorOrdinarySetupScript()),
+    });
+    const ordinarySetup = {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    };
+    const discovery = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "discovery",
+    });
+    expect(discovery.status).toBe("ready");
+    if (discovery.status !== "ready") return;
+    expect(await lab.teardown(discovery.handle)).toEqual({ status: "removed" });
+
+    const verification = await lab.provision(snapshot, ordinarySetup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.scenario).toEqual(ordinarySetup.scenario);
+    expect(verification.handle.setupDigest).toBe(discovery.handle.setupDigest);
+    const scripts = commands
+      .filter(
+        ({ args }) => args[0] === "exec" && args.includes("--user=www-data"),
+      )
+      .map(({ args }) => args.at(-1) ?? "");
+    expect(scripts).toEqual([
+      downloadMonitorOrdinarySetupScript(),
+      downloadMonitorOrdinarySetupScript(),
+    ]);
+    expect(scripts[0]).toContain('"post_type"=>"dlm_download_version"');
+    expect(scripts[0]).toContain('"post_content"=>$shortcode');
+    expect(scripts[0]).toContain("get_mirrors()");
+    expect(await lab.teardown(verification.handle)).toEqual({
+      status: "removed",
+    });
+  });
+
+  it("rejects the public file download scenario for another plugin", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-file-download-v1")!;
     const result = await lab.provision(snapshot, {
       ...setup,
       scenario: { id: scenario.id, digest: scenario.digest },
