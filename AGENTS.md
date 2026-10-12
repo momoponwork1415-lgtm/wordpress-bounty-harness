@@ -21,7 +21,7 @@
 7. 外部送信（報告、ベンダー連絡、公開）は、正確な Submission Candidate、文案の版、送信先へ結び付いた承認があるときだけ。Harness 自身は送信を実行しない。
 8. 台帳は追記専用で、持つのは digest 参照だけ。payload、HTTP 記録、画面画像、実行ログ、認証情報、未公開の発見は Git 外の Private Evidence に置く。
 
-## 単一協調Trialの探索（SPEC.md 第6節、ADR 0029・0031）
+## 単一協調Trialの探索（SPEC.md 第6節、ADR 0029）
 
 - 主経路は対象ごとに `wp2shell-bounty-v3` を既定とするRoot＋最大3子の協調Trialを1回。wall上限は60分。Rootが早く報告すれば終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` とし、正常な候補0件に数えない。
 - 固定source由来の入口索引を既定でカタログとして渡す。索引は経路や分担を指示せず、全入口の処理は終了条件でない。Harnessの続行差し込み、screeningから条件付きdeep-diveへの分岐は行わない。子の有効なFindingとLeadはRoot報告と独立して保存する。

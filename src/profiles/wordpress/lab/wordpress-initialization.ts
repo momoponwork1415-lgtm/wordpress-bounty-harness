@@ -5,6 +5,14 @@ import type {
 } from "./index.js";
 import { SQL_CANARY_TABLE } from "./canary-placement.js";
 import {
+  DOWNLOAD_MONITOR_SCENARIO_ID,
+  downloadMonitorOrdinarySetupScript,
+} from "./download-monitor-adapter.js";
+import {
+  DOWNLOAD_MANAGER_SCENARIO_ID,
+  downloadManagerOrdinarySetupScript,
+} from "./download-manager-adapter.js";
+import {
   scenarioContent,
   scenarioTranslationSeedScript,
   translatePressLocaleSetupScript,
@@ -16,8 +24,10 @@ import {
 } from "./user-registration-adapter.js";
 import {
   USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID,
+  USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID,
   userRegistrationMembershipEnrollmentScript,
   userRegistrationMembershipInstallScript,
+  userRegistrationMembershipUnjoinedScript,
 } from "./user-registration-membership-adapter.js";
 import {
   WPDISCUZ_COMMENT_SCENARIO_ID,
@@ -216,7 +226,8 @@ async function seedScenarioRegistration(
 ): Promise<void> {
   if (
     input.scenario?.id === USER_REGISTRATION_SCENARIO_ID ||
-    input.scenario?.id === USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID
+    input.scenario?.id === USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID ||
+    input.scenario?.id === USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID
   )
     await input.wp(input.resource, [
       "eval",
@@ -227,7 +238,11 @@ async function seedScenarioRegistration(
 async function seedScenarioMembership(
   input: WordPressInitialization,
 ): Promise<void> {
-  if (input.scenario?.id !== USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID) return;
+  if (
+    input.scenario?.id !== USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID &&
+    input.scenario?.id !== USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID
+  )
+    return;
   await input.wp(input.resource, [
     "eval",
     userRegistrationMembershipInstallScript(),
@@ -235,7 +250,9 @@ async function seedScenarioMembership(
   // Module classes are loaded at bootstrap, after the installer's option write.
   await input.wp(input.resource, [
     "eval",
-    userRegistrationMembershipEnrollmentScript(input.subscriber.username),
+    input.scenario.id === USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID
+      ? userRegistrationMembershipEnrollmentScript(input.subscriber.username)
+      : userRegistrationMembershipUnjoinedScript(input.subscriber.username),
   ]);
 }
 
@@ -253,6 +270,58 @@ async function seedScenarioMemberPost(
     await input.wp(input.resource, ["eval", wpMembersOrdinarySetupScript()]);
 }
 
+async function seedScenarioDownloads(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id !== DOWNLOAD_MANAGER_SCENARIO_ID) return;
+  const uploads = "/var/www/html/wp-content/uploads";
+  await input.requireDocker([
+    "exec",
+    "--user=root",
+    input.resource.wordpress,
+    "mkdir",
+    "-p",
+    uploads,
+  ]);
+  await input.requireDocker([
+    "exec",
+    "--user=root",
+    input.resource.wordpress,
+    "chown",
+    "-R",
+    "www-data:www-data",
+    uploads,
+  ]);
+  await input.requireDocker(
+    [
+      "exec",
+      "--user=www-data",
+      input.resource.wordpress,
+      "php",
+      "-r",
+      downloadManagerOrdinarySetupScript(),
+    ],
+    120_000,
+  );
+}
+
+async function seedScenarioPublicDownload(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id !== DOWNLOAD_MONITOR_SCENARIO_ID) return;
+  await input.requireDocker(
+    [
+      "exec",
+      "--user=www-data",
+      input.resource.wordpress,
+      "php",
+      "-r",
+      downloadMonitorOrdinarySetupScript(),
+    ],
+    120_000,
+  );
+}
+
 /** Initialize the isolated WordPress site after all containers are healthy. */
 export async function initializeWordPress(
   input: WordPressInitialization,
@@ -268,6 +337,8 @@ export async function initializeWordPress(
   await seedScenarioMembership(input);
   await seedScenarioCommentForm(input);
   await seedScenarioMemberPost(input);
+  await seedScenarioDownloads(input);
+  await seedScenarioPublicDownload(input);
 }
 
 /** Grant SELECT on the tables present at provision time, before canary placement. */

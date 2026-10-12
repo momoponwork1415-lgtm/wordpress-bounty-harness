@@ -242,7 +242,11 @@ export async function runCampaignPipeline<
           snapshotDigest: snapshot.digest,
           lab: "failed",
           runCount: 0,
-          stoppedBy: "setup-failed",
+          stoppedBy:
+            provisioned.status === "incomplete" &&
+            provisioned.reason === "precondition"
+              ? "incomplete(precondition)"
+              : "setup-failed",
           verifications: [],
         });
         continue;
@@ -398,12 +402,15 @@ export type ReverificationSummary = {
 };
 
 /**
- * Freezes the selected version and binds a derived Finding to that snapshot
- * before verification. The original Finding remains on its own snapshot.
+ * Freezes the selected version. A new Snapshot gets a derived Finding; an
+ * unconfirmed Finding can be retried only on its original Snapshot.
  */
 export async function reverifyOnSelectedVersion<
   Target extends TargetSelection,
-  Setup,
+  Setup extends {
+    readonly scenario?:
+      { readonly id: string; readonly digest: string } | undefined;
+  },
   Handle extends LabHandle,
   Finding extends VerifiableFinding,
   Reconstruction,
@@ -457,21 +464,24 @@ export async function reverifyOnSelectedVersion<
         event.result.status === "runtime-confirmed",
     )
     .at(-1);
+  if (confirmed === undefined && options.version !== undefined)
+    throw new Error(
+      "A confirmed route is required for fixed-version comparison",
+    );
+  let referenceRoute: unknown;
   if (
-    confirmed?.type !== "verification-finished" ||
-    confirmed.result.status !== "runtime-confirmed"
-  )
-    throw new Error("A confirmed route is required for version comparison");
-  const routeFile = await options.store.readFile(
-    confirmed.result.evidenceDigest,
-    "confirmed-route.json",
-    64 * 1024,
-  );
-  if (routeFile.status !== "resolved")
-    throw new Error("The confirmed route is unavailable in Private Evidence");
-  const referenceRoute = JSON.parse(
-    routeFile.bytes.toString("utf8"),
-  ) as unknown;
+    confirmed?.type === "verification-finished" &&
+    confirmed.result.status === "runtime-confirmed"
+  ) {
+    const routeFile = await options.store.readFile(
+      confirmed.result.evidenceDigest,
+      "confirmed-route.json",
+      64 * 1024,
+    );
+    if (routeFile.status !== "resolved")
+      throw new Error("The confirmed route is unavailable in Private Evidence");
+    referenceRoute = JSON.parse(routeFile.bytes.toString("utf8")) as unknown;
+  }
   const target = await pipeline.selectVersion({
     selectionId: selected.selectionId,
     ...(options.version === undefined ? {} : { version: options.version }),
@@ -479,6 +489,54 @@ export async function reverifyOnSelectedVersion<
   if (target === null)
     throw new Error("The selected target version is not available now");
   const snapshot = await pipeline.freeze(target);
+  if (confirmed === undefined && snapshot.digest !== finding.snapshotDigest)
+    throw new Error(
+      "An unconfirmed Finding can only be retried on its original Snapshot",
+    );
+  const setup = pipeline.setupFor(snapshot);
+  if (confirmed === undefined) {
+    const previous = ledger
+      .read({
+        campaignId,
+        findingId,
+        type: "verification-finished",
+        limit: 1000,
+      })
+      .map(({ event }) => event)
+      .filter(
+        (event) =>
+          event.type === "verification-finished" &&
+          event.snapshotDigest === finding.snapshotDigest,
+      )
+      .at(-1);
+    if (
+      previous?.type !== "verification-finished" ||
+      previous.result.status !== "incomplete" ||
+      previous.result.reason !== "precondition"
+    )
+      throw new Error(
+        "A prior incomplete(precondition) verification is required for scenario retry",
+      );
+    const previousLab = ledger
+      .read({ campaignId, type: "lab-provisioned", limit: 1000 })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "lab-provisioned" &&
+          event.identity === `verification-lab-${previous.verificationId}`,
+      );
+    if (previousLab?.type !== "lab-provisioned")
+      throw new Error(
+        "A prior verification Lab is required for scenario retry",
+      );
+    if (
+      setup.scenario === undefined ||
+      setup.scenario.id === previousLab.scenario?.id
+    )
+      throw new Error(
+        "An unconfirmed Finding requires a different Lab scenario for retry",
+      );
+  }
   if (
     options.version !== undefined &&
     snapshot.digest === finding.snapshotDigest
@@ -568,7 +626,6 @@ export async function reverifyOnSelectedVersion<
       throw new Error("The derived Finding could not be recorded");
     verificationFindingId = derived.finding.findingId;
   }
-  const setup = pipeline.setupFor(snapshot);
   const result = await pipeline.verification.verify({
     campaignId,
     findingId: verificationFindingId,

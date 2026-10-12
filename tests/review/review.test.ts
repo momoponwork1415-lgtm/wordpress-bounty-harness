@@ -150,6 +150,64 @@ describe("review public interface", () => {
       reproductionPackageDigest: expect.stringMatching(/^sha256:/),
     });
   });
+  it("inspects the latest verification after retrying the same Finding", async () => {
+    const { review, ledger } = await fixture();
+    const original = ledger.read({
+      campaignId: ref.campaignId,
+      findingId: ref.findingId,
+      type: "verification-finished",
+    })[0]?.event;
+    if (original?.type !== "verification-finished")
+      throw new Error("missing original verification");
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: ref.campaignId,
+      snapshotDigest: snapshot,
+      labSetupDigest: labSetup,
+      findingId: ref.findingId,
+      type: "verification-finished" as const,
+    };
+    await ledger.append({
+      ...base,
+      identity: "verification-retry-incomplete",
+      verificationId: "verification-retry-incomplete",
+      occurredAt: "2026-10-08T00:00:01Z",
+      result: {
+        status: "incomplete",
+        reason: "precondition",
+        nextStep: "Use a different Lab scenario",
+      },
+    });
+    expect(
+      await review.inspect({
+        campaignId: ref.campaignId,
+        findingId: ref.findingId,
+      }),
+    ).toMatchObject({
+      verificationStatus: "incomplete",
+      reproductionPackageDigest: null,
+    });
+    await ledger.append({
+      ...base,
+      identity: "verification-retry-confirmed",
+      verificationId: "verification-retry-confirmed",
+      occurredAt: "2026-10-08T00:00:02Z",
+      result: original.result,
+    });
+    expect(
+      await review.inspect({
+        campaignId: ref.campaignId,
+        findingId: ref.findingId,
+      }),
+    ).toMatchObject({
+      verificationStatus: "runtime-confirmed",
+      reproductionPackageDigest:
+        original.result.status === "runtime-confirmed"
+          ? original.result.reproductionPackageDigest
+          : null,
+    });
+  });
+
   it("evaluates each configured programme once and retains a confirmed finding when scope fails", async () => {
     const { review, ledger } = await fixture();
     const assessments = await review.assessScope({ ref });
