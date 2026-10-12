@@ -8,8 +8,9 @@ aligned with the selection policy.
 To update the image:
 
 1. Set the desired WordPress/PHP base digest in `Dockerfile` and make sure that
-   exact image is present locally.
-2. Build with `docker build --network=none -t <registry>/wbh-wordpress-lab:<version> containers/wordpress-lab`.
+   exact image is present locally. For a different core version, pass its
+   pinned base with `--build-arg WORDPRESS_BASE=<image>@sha256:<digest>`.
+2. Build with `docker build --network=none -t <registry>/wbh-wordpress-lab:<version> containers/wordpress-lab` (and the build arg when needed).
 3. Run `docker run --rm --runtime=runsc --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --entrypoint=php <tag> -r 'echo json_encode(["php"=>PHP_VERSION,"pdo"=>extension_loaded("pdo"),"pdo_mysql"=>extension_loaded("pdo_mysql"),"mysqli"=>extension_loaded("mysqli")]);'` and require `pdo_mysql=true`.
 4. Push the tag to the selected registry and read its `RepoDigests` with
    `docker image inspect <tag> --format '{{json .RepoDigests}}'`. Set
