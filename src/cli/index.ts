@@ -147,6 +147,15 @@ export interface CliProfile {
   ): Promise<ReverificationSummary>;
 }
 
+type ReviewLabSession = Awaited<
+  ReturnType<NonNullable<CliProfile["reviewLab"]>>
+>;
+
+interface ReviewSignalSource {
+  on(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
+  off(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
+}
+
 export type CliEnvironment = {
   readonly stateDirectory: string;
   readonly profile: CliProfile;
@@ -493,6 +502,53 @@ function exactDraft(values: Values) {
     draftDigest: required(values.draft, "draft"),
     destination: required(values.to, "to"),
   };
+}
+
+/** Holds startup signals until the new Lab session can be closed safely. */
+export async function runForegroundReviewLab(
+  launch: () => Promise<ReviewLabSession>,
+  io: CliIo,
+  signals: ReviewSignalSource = process,
+): Promise<void> {
+  let interrupted = false;
+  const interrupt = () => {
+    interrupted = true;
+  };
+  signals.on("SIGINT", interrupt);
+  signals.on("SIGTERM", interrupt);
+  try {
+    const session = await launch();
+    try {
+      if (!interrupted) {
+        io.stdout(
+          `review Lab ready on ${session.endpoint} (network ${session.networkName}, recorder ${session.recorderIp})`,
+        );
+        io.stdout(
+          `attacker accounts: ${JSON.stringify(session.attackerAccounts)}`,
+        );
+        io.stdout(
+          `review administrator: ${JSON.stringify(session.administrator)}`,
+        );
+        io.stdout(`fresh canaries: ${JSON.stringify(session.canaries)}`);
+        const shellQuote = (value: string) =>
+          `'${value.replaceAll("'", "'\\''")}'`;
+        io.stdout(
+          `manual client: docker run --rm -it --runtime=runsc --network ${shellQuote(session.networkName)} --add-host ${shellQuote(`wordpress:${session.recorderIp}`)} --add-host ${shellQuote(`canary:${session.receiverIp}`)} --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs=/tmp:rw,nosuid,nodev,size=512m --entrypoint sh ${shellQuote(session.browserImage)}`,
+        );
+        io.stdout(
+          "Run the package's manual HTTP or browser steps in that client; interrupt this command to remove the Lab.",
+        );
+        // There is no await between this check and wait() installing its handlers.
+        if (!interrupted) await session.wait();
+      }
+    } finally {
+      await session.close();
+    }
+    io.stdout("review Lab removed");
+  } finally {
+    signals.off("SIGINT", interrupt);
+    signals.off("SIGTERM", interrupt);
+  }
 }
 
 export async function runCli(
@@ -851,34 +907,14 @@ export async function runCli(
           throw new UsageError(
             "A reproduction package is required for review Lab setup",
           );
-        const session = await launch(state, {
-          packageDigest: item.reproductionPackageDigest,
-          category: item.category,
-        });
-        try {
-          io.stdout(
-            `review Lab ready on ${session.endpoint} (network ${session.networkName}, recorder ${session.recorderIp})`,
-          );
-          io.stdout(
-            `attacker accounts: ${JSON.stringify(session.attackerAccounts)}`,
-          );
-          io.stdout(
-            `review administrator: ${JSON.stringify(session.administrator)}`,
-          );
-          io.stdout(`fresh canaries: ${JSON.stringify(session.canaries)}`);
-          const shellQuote = (value: string) =>
-            `'${value.replaceAll("'", "'\\''")}'`;
-          io.stdout(
-            `manual client: docker run --rm -it --runtime=runsc --network ${shellQuote(session.networkName)} --add-host ${shellQuote(`wordpress:${session.recorderIp}`)} --add-host ${shellQuote(`canary:${session.receiverIp}`)} --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs=/tmp:rw,nosuid,nodev,size=512m --entrypoint sh ${shellQuote(session.browserImage)}`,
-          );
-          io.stdout(
-            "Run the package's manual HTTP or browser steps in that client; interrupt this command to remove the Lab.",
-          );
-          await session.wait();
-        } finally {
-          await session.close();
-        }
-        io.stdout("review Lab removed");
+        await runForegroundReviewLab(
+          () =>
+            launch(state, {
+              packageDigest: item.reproductionPackageDigest,
+              category: item.category,
+            }),
+          io,
+        );
         return 0;
       }
       case "runtime check": {

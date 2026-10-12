@@ -12,6 +12,7 @@ import { snapshotSchema } from "../../../snapshot/index.js";
 import { openMaterializedSources } from "../acquisition/materialized-sources.js";
 import { openWordPressLab } from "./index.js";
 import { setupSchema } from "./provision-input.js";
+import { createReviewLabWaiter } from "./review-lab-wait.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const manifestSchema = z.looseObject({
@@ -123,6 +124,9 @@ export async function openWordPressReviewLab(input: {
     const canaries = lab.canaryLedger(handle);
     const script =
       input.category === "stored-xss" ? lab.prepareScriptCanary(handle) : null;
+    if (input.category === "stored-xss" && script === null)
+      throw new Error("Review script canary is unavailable");
+    const waiter = createReviewLabWaiter();
     return {
       endpoint: handle.endpoint,
       networkName: handle.networkName,
@@ -136,21 +140,14 @@ export async function openWordPressReviewLab(input: {
       },
       browserImage: input.host.images.browser,
       async close() {
+        waiter.release();
         if (!live) return;
         const removed = await lab.teardown(handle);
         if (removed.status !== "removed") throw new Error(removed.nextStep);
         live = false;
       },
       wait() {
-        return new Promise<void>((resolve) => {
-          const done = () => {
-            process.off("SIGINT", done);
-            process.off("SIGTERM", done);
-            resolve();
-          };
-          process.once("SIGINT", done);
-          process.once("SIGTERM", done);
-        });
+        return waiter.wait();
       },
     };
   } catch (error) {
