@@ -825,7 +825,16 @@ function storedScriptJudge(options: Options) {
       });
       switch (script.status) {
         case "unavailable":
-          return unavailable;
+          return script.phase === undefined
+            ? unavailable
+            : {
+                status: "incomplete",
+                reason: "observation",
+                nextStep:
+                  script.phase === "victim-page"
+                    ? "Stored-script observation failed at victim-page; inspect the saved victim route/actions in Private Evidence and repeat"
+                    : `Stored-script observation failed at ${script.phase}; inspect the Lab observer and repeat`,
+              };
         case "not-prepared":
           return {
             status: "incomplete",

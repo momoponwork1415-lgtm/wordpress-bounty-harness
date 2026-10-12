@@ -95,6 +95,7 @@ async function fixture(
     /** Paths whose visit makes the stored script reach the beacon receiver. */
     firesOn: [] as string[],
     beacons: [] as string[],
+    browserFailureAt: null as string | null,
   };
   const salts = new Map<string, string>();
   let seededRow = "";
@@ -215,6 +216,12 @@ async function fixture(
           const visit = request.args
             .find((arg) => arg.startsWith("WBH_VISIT_PATH="))
             ?.slice("WBH_VISIT_PATH=".length);
+          if (visit === database.browserFailureAt)
+            return {
+              exitCode: 1,
+              stdout: "",
+              stderr: "private-debug-marker",
+            };
           if (visit !== undefined && database.firesOn.includes(visit))
             database.beacons.push("/b/fixed-nonce");
           return {
@@ -1652,6 +1659,21 @@ describe("WordPress gVisor Lab", () => {
     });
     expect(await contexts([])).toEqual({ status: "observed", contexts: [] });
 
+    database.browserFailureAt = "/wp-admin/admin.php?page=fixture";
+    const failedVictimVisit = await contexts([], {
+      role: "administrator",
+      paths: ["/wp-admin/admin.php?page=fixture"],
+    });
+    expect(failedVictimVisit).toEqual({
+      status: "unavailable",
+      phase: "victim-page",
+    });
+    expect(JSON.stringify(failedVictimVisit)).not.toContain(
+      "private-debug-marker",
+    );
+    expect(JSON.stringify(failedVictimVisit)).not.toContain("page=fixture");
+    database.browserFailureAt = null;
+
     const browsers = commands.filter(
       (command) =>
         command.args[0] === "run" &&
@@ -1713,13 +1735,13 @@ describe("WordPress gVisor Lab", () => {
     ).toBe(true);
     expect(
       await lab.observeStoredScript(handle, { routePaths: ["no-slash"] }),
-    ).toEqual({ status: "unavailable" });
+    ).toEqual({ status: "unavailable", phase: "route-input" });
     expect(
       await lab.observeStoredScript(handle, {
         routePaths: [],
         victim: { role: "administrator", paths: ["/\\outside.invalid"] },
       }),
-    ).toEqual({ status: "unavailable" });
+    ).toEqual({ status: "unavailable", phase: "victim-input" });
     expect(
       await lab.observeStoredScript(handle, {
         routePaths: [],
@@ -1733,7 +1755,7 @@ describe("WordPress gVisor Lab", () => {
           ],
         } as unknown as WordPressVictimRoute,
       }),
-    ).toEqual({ status: "unavailable" });
+    ).toEqual({ status: "unavailable", phase: "victim-input" });
     expect(await lab.teardown(handle)).toEqual({ status: "removed" });
     expect(
       commands.some(

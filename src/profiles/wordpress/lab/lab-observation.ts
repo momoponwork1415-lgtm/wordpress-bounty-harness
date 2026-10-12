@@ -12,6 +12,7 @@ import type {
   WordPressLabHandle,
   WordPressRoleObservation,
   WordPressScriptContext,
+  WordPressStoredScriptFailurePhase,
 } from "./index.js";
 
 const REACHABILITY_PROBE = `$http = @file_get_contents("http://wordpress/");
@@ -493,19 +494,20 @@ function createStoredScriptObservation(
       const resource = active.get(handle.id);
       const receiverIp = resource?.receiverIp;
       if (resource?.handle !== handle || receiverIp === undefined)
-        return { status: "unavailable" };
+        return { status: "unavailable", phase: "lab" };
       if (resource.scriptNonces.size === 0) return { status: "not-prepared" };
       const routePaths = z
         .array(wordpressVisitPathSchema)
         .max(5)
         .safeParse(input.routePaths);
-      if (!routePaths.success) return { status: "unavailable" };
+      if (!routePaths.success)
+        return { status: "unavailable", phase: "route-input" };
       const victim =
         input.victim === undefined
           ? undefined
           : wordpressVictimRouteSchema.safeParse(input.victim);
       if (victim !== undefined && !victim.success)
-        return { status: "unavailable" };
+        return { status: "unavailable", phase: "victim-input" };
       const issued = new Set(
         [...resource.scriptNonces].map((token) => `/b/${token}`),
       );
@@ -525,6 +527,7 @@ function createStoredScriptObservation(
           browserImage: options.images.browser,
           docker,
         });
+      let phase: WordPressStoredScriptFailurePhase = "front";
       try {
         const contexts: WordPressScriptContext[] = [];
         let screenshot: Buffer | undefined;
@@ -538,22 +541,27 @@ function createStoredScriptObservation(
           return observation.fired;
         };
         if (await fired("/", "unauthenticated")) contexts.push("front");
+        phase = "dashboard";
         const dashboard = await fired("/wp-admin/", "administrator");
+        phase = "posts";
         const posts = await fired("/wp-admin/edit.php", "administrator");
         if (dashboard && posts) contexts.push("admin-all");
         else if (dashboard || posts) contexts.push("admin-partial");
         let routePage = false;
+        phase = "route-page";
         for (const path of routePaths.data)
           if (await fired(path, "unauthenticated")) routePage = true;
         if (routePage) contexts.push("route-page");
         let victimPage = false;
-        if (victim?.success)
+        if (victim?.success) {
+          phase = "victim-page";
           for (const visit of victim.data.paths) {
             const path = typeof visit === "string" ? visit : visit.path;
             const actions =
               typeof visit === "string" ? undefined : visit.actions;
             if (await fired(path, victim.data.role, actions)) victimPage = true;
           }
+        }
         if (victimPage) contexts.push("victim-route-page");
         const victimRole =
           victim?.success && victimPage ? victim.data.role : undefined;
@@ -570,7 +578,7 @@ function createStoredScriptObservation(
           ...(screenshot === undefined ? {} : { screenshot }),
         };
       } catch {
-        return { status: "unavailable" };
+        return { status: "unavailable", phase };
       }
     },
   };

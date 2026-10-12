@@ -2773,6 +2773,127 @@ describe("harness CLI vertical slice", () => {
     expect(scoped.stdout).toMatch(/^wordfence ambiguous /m);
   });
 
+  it("rechecks a confirmed Finding on its original Snapshot after the Lab scenario changes", async () => {
+    const { run, configPath, ledger, verifierReferenceRoutes } =
+      await harness();
+    const campaign = ["--campaign", "campaign-1"];
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "--all",
+          ...campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      (await run("review", ...campaign)).stdout,
+    )![1]!;
+    const before = ledger().read({
+      campaignId: "campaign-1",
+      findingId: finding,
+      type: "verification-finished",
+    });
+    const findingsBefore = ledger().read({
+      campaignId: "campaign-1",
+      type: "finding-recorded",
+    });
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      lab: Record<string, unknown>;
+    };
+    config.lab.scenarioId = "approved-comment-v1";
+    await writeFile(configPath, JSON.stringify(config));
+
+    const beforeMismatchEvents = ledger().read({
+      campaignId: "campaign-1",
+    }).length;
+    const mismatchedControl = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding,
+      "--config",
+      configPath,
+      "--version",
+      "3.3",
+    );
+    expect(mismatchedControl.code).not.toBe(0);
+    expect(mismatchedControl.stderr).toContain(
+      "requires the confirmed Finding's Lab scenario",
+    );
+    expect(ledger().read({ campaignId: "campaign-1" })).toHaveLength(
+      beforeMismatchEvents,
+    );
+
+    const retried = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding,
+      "--config",
+      configPath,
+      "--version",
+      "3.3.1",
+    );
+    expect(retried.code).toBe(0);
+    expect(retried.stdout).toContain(
+      `reverified finding ${finding} as ${finding} on wporg:synthetic-plugin 3.3.1`,
+    );
+    expect(retried.stdout).toContain(": runtime-confirmed");
+    expect(verifierReferenceRoutes.at(-1)).toBeUndefined();
+    expect(
+      ledger().read({ campaignId: "campaign-1", type: "finding-recorded" }),
+    ).toEqual(findingsBefore);
+    const after = ledger().read({
+      campaignId: "campaign-1",
+      findingId: finding,
+      type: "verification-finished",
+    });
+    expect(after).toHaveLength(before.length + 1);
+    expect(after.at(-1)?.event).toMatchObject({
+      findingId: finding,
+      result: { status: "runtime-confirmed" },
+    });
+    expect(after.at(-1)?.event).not.toHaveProperty("basis");
+    const latest = after.at(-1)?.event;
+    expect(latest?.type).toBe("verification-finished");
+    if (latest?.type !== "verification-finished") return;
+    expect(
+      ledger()
+        .read({ campaignId: "campaign-1", type: "lab-provisioned" })
+        .map(({ event }) => event)
+        .find(
+          (event) =>
+            event.type === "lab-provisioned" &&
+            event.identity === `verification-lab-${latest.verificationId}`,
+        ),
+    ).toMatchObject({ scenario: { id: "approved-comment-v1" } });
+
+    const controlled = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding,
+      "--config",
+      configPath,
+      "--version",
+      "3.3",
+    );
+    expect(controlled.code).toBe(0);
+    expect(verifierReferenceRoutes.at(-1)).toBeDefined();
+    expect(
+      ledger()
+        .read({ campaignId: "campaign-1", type: "verification-finished" })
+        .at(-1)?.event,
+    ).toMatchObject({ basis: { kind: "fixed-version" } });
+  });
+
   it("refuses to record a decision for a finding outside the review queue", async () => {
     const { run } = await harness();
     const result = await run(

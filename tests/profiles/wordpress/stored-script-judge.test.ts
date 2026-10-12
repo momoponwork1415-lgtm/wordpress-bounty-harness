@@ -217,4 +217,19 @@ describe("WordPress stored script judge", () => {
       reason: "observation",
     });
   });
+
+  it("keeps a victim browser failure incomplete with a bounded diagnostic", async () => {
+    const { observed } = await judge(
+      { status: "unavailable", phase: "victim-page" },
+      { role: "administrator", paths: ["/wp-admin/admin.php?page=fixture"] },
+    );
+    expect(observed).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+      nextStep: expect.stringContaining(
+        "inspect the saved victim route/actions",
+      ),
+    });
+    expect(JSON.stringify(observed)).not.toContain("page=fixture");
+  });
 });

@@ -533,13 +533,37 @@ export async function reverifyOnSelectedVersion<
       );
   }
   if (
-    confirmed !== undefined &&
-    options.version !== undefined &&
-    originalSnapshot
-  )
-    throw new Error(
-      "A fixed-version control requires a different Snapshot from the original Finding",
-    );
+    confirmed?.type === "verification-finished" &&
+    options.version !== undefined
+  ) {
+    const confirmedLab = ledger
+      .read({ campaignId, type: "lab-provisioned", limit: 1000 })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "lab-provisioned" &&
+          event.identity === `verification-lab-${confirmed.verificationId}`,
+      );
+    const sameScenario =
+      confirmedLab?.type === "lab-provisioned" &&
+      (setup.scenario === undefined
+        ? confirmedLab.scenario === undefined
+        : setup.scenario.id === confirmedLab.scenario?.id &&
+          setup.scenario.digest === confirmedLab.scenario.digest);
+    if (
+      originalSnapshot &&
+      (confirmedLab?.type !== "lab-provisioned" ||
+        setup.scenario === undefined ||
+        sameScenario)
+    )
+      throw new Error(
+        "A fixed-version control requires a different Snapshot from the original Finding, or a changed Lab scenario for same-Snapshot recheck",
+      );
+    if (!originalSnapshot && !sameScenario)
+      throw new Error(
+        "A fixed-version control requires the confirmed Finding's Lab scenario",
+      );
+  }
   const verificationId = options.newId();
   const base = {
     schemaVersion: 1 as const,
@@ -639,7 +663,7 @@ export async function reverifyOnSelectedVersion<
     setup,
     campaignLabSetupDigest: canonicalDigest(setup),
     reconstruction: pipeline.reconstructionFor(snapshot),
-    referenceRoute,
+    referenceRoute: originalSnapshot ? undefined : referenceRoute,
   });
   return {
     targetId: target.targetId,
