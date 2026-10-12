@@ -54,6 +54,8 @@ export {
   openWordPressOrgTargetSource,
 } from "./wordpress-org-target-source.js";
 export { openWordPressOrgSnapshotSource } from "./snapshot-source.js";
+export { acquiredSourceFromIntakePacket } from "./intake-packet-source.js";
+export { acquirePinnedWordPressOrgSvnSource } from "./pinned-svn-source.js";
 export { openMaterializedSources } from "./materialized-sources.js";
 export {
   openWordPressCoreSource,

@@ -21,6 +21,12 @@ Git 外の manifest は [`rediscovery-catalog-pins.json`](rediscovery-catalog-pi
 
 Smash Balloon と Unlimited Elements は条件が成立するまで provider Trial を起動しない。各 case の停止段階と理由コードは `evaluation-case-blocked` として別々の台帳に追記した。これらの incomplete は脆弱性の不存在や判定器の陰性を意味しない。
 
+### Unlimited Elements の静的 source・依存 preflight（後続測定）
+
+WordPress.org SVN trunk `r3628543` を再 export し、Unlimited Elements 2.0.16 の canonical tree `sha256:5d7e28c494692f4f9efaf000ea94f2e29c2172b0af5ae2a4400bc104ef8882e8`（1,895ファイル、19,448,933バイト）と一致した。公式 Elementor 4.2.0 ZIP `sha256:687eaa1e41178bd8bc049dfc5bbefea46941f335c806fc2bd090ea79639308e0` も version header と展開後 tree `sha256:d6222b048514de746214e96d8d2279d671eca4960173426746f942afddf06406`（3,020ファイル、90,078,492バイト）を照合した。WordPress Core 6.8.3 と3 source を同じ Snapshot `sha256:cdd9ac8c299527b9c81f267f00451be5184cb3d2359a26a1e1f7e639150ea2c2` に固定し、Lab 供給前の source・依存照合を通した。上表の `evaluation-case-blocked` は当時の記録として残す。
+
+この preflight は対象コードを起動していない。現行 campaign CLI は ZIP 対象だけを `freeze` し、探索 sandbox へ渡す補助 source も WordPress Core 1件のため、この Snapshot を使う Lab 起動・探索 Trial・判定器・修正版対照は未測定である。Trial 0、completed 0、Finding 0、Lead 0、wall 中央値は未定義。静的結果を SQLi の再発見に数えない。
+
 ## Trial と判定
 
 各 campaign の Root・子エージェントの source 読取数、候補が出た段階、Verifier の理由コード、修正版対照、人間が個別に開いた Finding 数を `scripts/report-rediscovery-cases.mjs` で台帳から集計する。集計の `publicRecordMatch: unassessed` は特定の公開記録との経路一致を証明しない。公開記録との一致は探索後に別途照合し、一致しない確認を再発見に数えない。

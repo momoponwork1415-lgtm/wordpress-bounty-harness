@@ -6,6 +6,8 @@
 
 coreは開発セットで使ったdigest固定の公式WordPress imageから、未起動containerを通じて取り出した。`wp-includes/version.php` は6.8.3で、`sourceDigest` はDependency Snapshot用のcanonical manifest digest。各caseでのpluginの起動、追加依存、設定、core 6.8.3との互換性はこの旧資料だけでは確認できない。#127の実行可否と結果は下記カタログと日付付き評価に記録する。
 
+Unlimited Elements 2.0.16 だけは 2026-10-12 の後続確認で `pluginDependencies` に Elementor 4.2.0 の公式版付き ZIP と展開後の tree digest を追加した。全体の `observedAt` は旧資料の観測日で、この依存の観測日は項目内に記録した。対象のヘッダーは Elementor 4.2.0 までを tested up to と記し、Elementor 側のヘッダーは WordPress 6.8 以上を要求する。`pnpm build && node scripts/preflight-unlimited-elements-sources.mjs --state <Git外の絶対パス> --host <host.jsonの絶対パス>` は公式 SVN の指定 revision を export し、対象・Elementor・Core の pin を照合して同じ Snapshot に固定する。これは対象を起動しない静的 preflight であり、Lab の動作・探索・既知経路の再発見は証明しない。
+
 ## #127 再発見カタログ
 
 [`rediscovery-catalog-pins.json`](rediscovery-catalog-pins.json) には、Git 外のmanifestのSHA-256と各caseの脆弱版・修正版だけを置く。7つの対象版に対して8件の公開記録を別々に照合する。修正版ZIPのbytesとdigest、公開記録IDと日付はGit外のmanifestにあり、探索入力には使わない。

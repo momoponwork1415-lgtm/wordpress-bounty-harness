@@ -25,7 +25,9 @@ import {
 interface LocalDirectoryTargetIntakeOptions {
   readonly storageDirectory: string;
   readonly sourceCaptureKind?:
-    "captured-local-directory" | "captured-wordpress-org-archive";
+    | "captured-local-directory"
+    | "captured-wordpress-org-archive"
+    | "captured-wordpress-org-svn-export";
 }
 
 interface CapturedFile {
@@ -307,7 +309,9 @@ async function persistBytes(path: string, bytes: Uint8Array): Promise<void> {
 class LocalDirectoryTargetIntake implements TargetIntake {
   readonly #storageDirectory: string;
   readonly #sourceCaptureKind:
-    "captured-local-directory" | "captured-wordpress-org-archive";
+    | "captured-local-directory"
+    | "captured-wordpress-org-archive"
+    | "captured-wordpress-org-svn-export";
 
   constructor(options: LocalDirectoryTargetIntakeOptions) {
     this.#storageDirectory = options.storageDirectory;
@@ -401,7 +405,8 @@ class LocalDirectoryTargetIntake implements TargetIntake {
       // root file named after the official slug is a deterministic identity
       // signal; operator-provided sources still need an explicit choice.
       const officialSlug =
-        request.provenance.kind === "wordpress-org" &&
+        (request.provenance.kind === "wordpress-org" ||
+          request.provenance.kind === "wordpress-org-svn") &&
         request.pluginIdentity.kind === "wporg"
           ? request.pluginIdentity.slug
           : undefined;

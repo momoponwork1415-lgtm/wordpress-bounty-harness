@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "observedAt": "2026-10-10",
   "scope": "public-first-party-plugin-sources-and-common-core",
-  "dependencyStatus": "case-specific-dependencies-and-setup-unverified",
+  "dependencyStatus": "case-specific-dependencies-partially-verified-setup-unverified",
   "wordpressCore": {
     "version": "6.8.3",
     "image": "wordpress@sha256:30bff39330d1693b0ce13d32fc9b7bb67193064f040b7d60d3494e136fa599d4",
@@ -68,6 +68,22 @@
       "sourceTreeDigest": "sha256:5d7e28c494692f4f9efaf000ea94f2e29c2172b0af5ae2a4400bc104ef8882e8",
       "entries": 1895,
       "bytes": 19448933
+    }
+  ],
+  "pluginDependencies": [
+    {
+      "forSlug": "unlimited-elements-for-elementor",
+      "forVersion": "2.0.16",
+      "slug": "elementor",
+      "version": "4.2.0",
+      "observedAt": "2026-10-12",
+      "kind": "wordpress-org-zip",
+      "sourceUrl": "https://downloads.wordpress.org/plugin/elementor.4.2.0.zip",
+      "archiveDigest": "sha256:687eaa1e41178bd8bc049dfc5bbefea46941f335c806fc2bd090ea79639308e0",
+      "archiveBytes": 23759145,
+      "sourceTreeDigest": "sha256:d6222b048514de746214e96d8d2279d671eca4960173426746f942afddf06406",
+      "entries": 3020,
+      "sourceBytes": 90078492
     }
   ]
 }
