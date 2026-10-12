@@ -107,6 +107,8 @@ async function harness(
     readonly labProbeHttp?: "ok" | "failed";
     readonly labProvisionFailure?: boolean;
     readonly labSeedFailure?: boolean;
+    /** The first Finding lacks a runnable recipe until a new Lab scenario is selected. */
+    readonly firstVerifierIncomplete?: boolean;
     readonly coreSource?: boolean;
     readonly databaseAccess?: "read-only" | "none";
   } = {},
@@ -348,6 +350,8 @@ async function harness(
   const coordinations: (DiscoveryTransportRun["coordination"] | undefined)[] =
     [];
   const expirations: string[] = [];
+  const verifierReferenceRoutes: unknown[] = [];
+  let verifierAttempts = 0;
   let inFlight = 0;
   let maxInFlight = 0;
   const boundaries: WordPressCampaignBoundaries = {
@@ -493,7 +497,17 @@ async function harness(
     },
     verifier: {
       // A fresh-container Verifier; it hands back a recipe, never a verdict.
-      async attempt() {
+      async attempt(input) {
+        verifierReferenceRoutes.push(input.referenceRoute);
+        if (
+          ++verifierAttempts === 1 &&
+          options.firstVerifierIncomplete === true
+        )
+          return {
+            status: "incomplete",
+            reason: "precondition",
+            nextStep: "Repeat with another ordinary Lab scenario",
+          };
         return {
           status: "attempted",
           recipeDigest: await state.store.putFiles({
@@ -636,6 +650,7 @@ async function harness(
     histories,
     coordinations,
     expirations,
+    verifierReferenceRoutes,
     docker,
     root,
     ledger: () => state.ledger,
@@ -2333,6 +2348,11 @@ describe("harness CLI vertical slice", () => {
 
   it("re-verifies a finding on the target's latest version and only then treats the version as verified", async () => {
     const { run, configPath } = await harness();
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      lab: Record<string, unknown>;
+    };
+    config.lab.scenarioId = "approved-comment-v1";
+    await writeFile(configPath, JSON.stringify(config));
     const campaign = ["--campaign", "campaign-1"];
     await run("campaign", "run", "--all", ...campaign, "--config", configPath);
     const queue = await run("review", ...campaign);
@@ -2378,6 +2398,189 @@ describe("harness CLI vertical slice", () => {
     );
     expect(scoped.stdout).toMatch(/^wordfence in-scope /m);
     expect(scoped.stdout).toMatch(/^patchstack in-scope /m);
+  });
+
+  it("retries an incomplete Finding on its original Snapshot with a fresh scenario and verification event", async () => {
+    const { run, configPath, ledger, verifierReferenceRoutes } = await harness({
+      pinned: false,
+      firstVerifierIncomplete: true,
+    });
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      lab: Record<string, unknown>;
+    };
+    config.lab.scenarioId = "approved-comment-v1";
+    await writeFile(configPath, JSON.stringify(config));
+    const campaign = ["--campaign", "campaign-1"];
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "--all",
+          ...campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const finding = ledger()
+      .read({ campaignId: "campaign-1", type: "finding-recorded" })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "finding-recorded" &&
+          event.category === "account-takeover",
+      );
+    expect(finding?.type).toBe("finding-recorded");
+    if (finding?.type !== "finding-recorded") return;
+    const before = ledger()
+      .read({
+        campaignId: "campaign-1",
+        findingId: finding.findingId,
+        type: "verification-finished",
+      })
+      .map(({ event }) => event);
+    expect(before).toHaveLength(1);
+    expect(before[0]).toMatchObject({
+      result: { status: "incomplete", reason: "precondition" },
+    });
+    const beforeRetryEvents = ledger().read({
+      campaignId: "campaign-1",
+    }).length;
+    const repeated = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding.findingId,
+      "--config",
+      configPath,
+    );
+    expect(repeated.code).not.toBe(0);
+    expect(repeated.stderr).toContain("different Lab scenario");
+    expect(ledger().read({ campaignId: "campaign-1" })).toHaveLength(
+      beforeRetryEvents,
+    );
+
+    config.lab.scenarioId = "private-page-v1";
+    await writeFile(configPath, JSON.stringify(config));
+    const retried = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding.findingId,
+      "--config",
+      configPath,
+    );
+    expect(retried.code).toBe(0);
+    expect(retried.stdout).toContain(
+      `reverified finding ${finding.findingId} as ${finding.findingId}`,
+    );
+    expect(retried.stdout).toContain(": runtime-confirmed");
+    expect(verifierReferenceRoutes.at(-1)).toBeUndefined();
+    const after = ledger()
+      .read({
+        campaignId: "campaign-1",
+        findingId: finding.findingId,
+        type: "verification-finished",
+      })
+      .map(({ event }) => event);
+    expect(after).toHaveLength(2);
+    expect(after[0]).toEqual(before[0]);
+    expect(after[1]).toMatchObject({
+      findingId: finding.findingId,
+      snapshotDigest: finding.snapshotDigest,
+      result: { status: "runtime-confirmed" },
+      basis: {
+        kind: "latest-version",
+        findingSnapshotDigest: finding.snapshotDigest,
+      },
+    });
+    if (
+      after[0]?.type !== "verification-finished" ||
+      after[1]?.type !== "verification-finished"
+    )
+      return;
+    expect(after[1].verificationId).not.toBe(after[0].verificationId);
+    expect(after[1].labSetupDigest).not.toBe(after[0].labSetupDigest);
+    const retryVerificationId = after[1].verificationId;
+    expect(
+      ledger()
+        .read({ campaignId: "campaign-1", type: "lab-provisioned" })
+        .map(({ event }) => event)
+        .find(
+          (event) =>
+            event.type === "lab-provisioned" &&
+            event.identity === `verification-lab-${retryVerificationId}`,
+        ),
+    ).toMatchObject({ scenario: { id: "private-page-v1" } });
+  });
+
+  it("rejects unconfirmed version changes and fixed-version controls before starting a Lab", async () => {
+    const { run, configPath, ledger, docker } = await harness({
+      firstVerifierIncomplete: true,
+    });
+    const campaign = ["--campaign", "campaign-1"];
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "--all",
+          ...campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const finding = ledger()
+      .read({ campaignId: "campaign-1", type: "finding-recorded" })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "finding-recorded" &&
+          event.category === "account-takeover",
+      );
+    expect(finding?.type).toBe("finding-recorded");
+    if (finding?.type !== "finding-recorded") return;
+    const labStarts = () =>
+      docker.filter(
+        (request) =>
+          request.args[0] === "network" && request.args[1] === "create",
+      ).length;
+    const beforeLabStarts = labStarts();
+    const beforeEvents = ledger().read({ campaignId: "campaign-1" }).length;
+    const changedSnapshot = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding.findingId,
+      "--config",
+      configPath,
+    );
+    expect(changedSnapshot.code).not.toBe(0);
+    expect(changedSnapshot.stderr).toContain("original Snapshot");
+    const fixedVersion = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding.findingId,
+      "--config",
+      configPath,
+      "--version",
+      "3.3",
+    );
+    expect(fixedVersion.code).not.toBe(0);
+    expect(fixedVersion.stderr).toContain(
+      "confirmed route is required for fixed-version comparison",
+    );
+    expect(labStarts()).toBe(beforeLabStarts);
+    expect(ledger().read({ campaignId: "campaign-1" })).toHaveLength(
+      beforeEvents,
+    );
   });
 
   it("pins a fixed-version control without treating it as a latest-version scope check", async () => {

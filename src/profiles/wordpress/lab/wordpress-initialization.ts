@@ -5,10 +5,38 @@ import type {
 } from "./index.js";
 import { SQL_CANARY_TABLE } from "./canary-placement.js";
 import {
+  DOWNLOAD_MONITOR_SCENARIO_ID,
+  downloadMonitorOrdinarySetupScript,
+} from "./download-monitor-adapter.js";
+import {
+  DOWNLOAD_MANAGER_SCENARIO_ID,
+  downloadManagerOrdinarySetupScript,
+} from "./download-manager-adapter.js";
+import {
+  scenarioContent,
   scenarioTranslationSeedScript,
   translatePressLocaleSetupScript,
   type WordPressScenario,
 } from "./scenarios.js";
+import {
+  USER_REGISTRATION_SCENARIO_ID,
+  userRegistrationOrdinarySetupScript,
+} from "./user-registration-adapter.js";
+import {
+  USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID,
+  USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID,
+  userRegistrationMembershipEnrollmentScript,
+  userRegistrationMembershipInstallScript,
+  userRegistrationMembershipUnjoinedScript,
+} from "./user-registration-membership-adapter.js";
+import {
+  WPDISCUZ_COMMENT_SCENARIO_ID,
+  wpDiscuzOrdinarySetupScript,
+} from "./wpdiscuz-adapter.js";
+import {
+  WP_MEMBERS_SCENARIO_ID,
+  wpMembersOrdinarySetupScript,
+} from "./wp-members-adapter.js";
 
 type WordPressCommand = (
   resource: Resources,
@@ -36,6 +64,8 @@ export interface WordPressInitialization {
   }[];
   readonly subscriber: Account;
   readonly customer?: Account;
+  readonly victimSubscriber?: Account;
+  readonly victimCustomer?: Account;
   readonly wp: WordPressCommand;
   readonly requireDocker: RequireDocker;
 }
@@ -90,7 +120,14 @@ async function configureSecondaryLocale(
 }
 
 async function createAccounts(input: WordPressInitialization): Promise<void> {
-  const { resource, wp, subscriber, customer } = input;
+  const {
+    resource,
+    wp,
+    subscriber,
+    customer,
+    victimSubscriber,
+    victimCustomer,
+  } = input;
   await wp(resource, [
     "user",
     "create",
@@ -107,6 +144,24 @@ async function createAccounts(input: WordPressInitialization): Promise<void> {
       `${customer.username}@example.invalid`,
       "--role=customer",
       `--user_pass=${customer.password}`,
+    ]);
+  if (victimSubscriber !== undefined)
+    await wp(resource, [
+      "user",
+      "create",
+      victimSubscriber.username,
+      `${victimSubscriber.username}@example.invalid`,
+      "--role=subscriber",
+      `--user_pass=${victimSubscriber.password}`,
+    ]);
+  if (victimCustomer !== undefined)
+    await wp(resource, [
+      "user",
+      "create",
+      victimCustomer.username,
+      `${victimCustomer.username}@example.invalid`,
+      "--role=customer",
+      `--user_pass=${victimCustomer.password}`,
     ]);
 }
 
@@ -140,11 +195,131 @@ async function seedInitialPosts(input: WordPressInitialization): Promise<void> {
   }
 }
 
+async function seedScenarioContent(
+  input: WordPressInitialization,
+): Promise<void> {
+  const content = scenarioContent(input.scenario);
+  if (content === undefined) return;
+  const created = await input.wp(input.resource, [
+    "post",
+    "create",
+    `--post_type=${content.type}`,
+    `--post_status=${content.status}`,
+    `--post_name=${content.slug}`,
+    `--post_title=${content.title}`,
+    `--post_content=${content.body}`,
+    "--porcelain",
+  ]);
+  if (!/^[1-9][0-9]*$/.test(created.stdout.trim()))
+    throw new Error("Scenario content ID is unavailable");
+}
+
 async function seedScenarioTranslation(
   input: WordPressInitialization,
 ): Promise<void> {
   const script = scenarioTranslationSeedScript(input.scenario);
   if (script !== undefined) await input.wp(input.resource, ["eval", script]);
+}
+
+async function seedScenarioRegistration(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (
+    input.scenario?.id === USER_REGISTRATION_SCENARIO_ID ||
+    input.scenario?.id === USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID ||
+    input.scenario?.id === USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID
+  )
+    await input.wp(input.resource, [
+      "eval",
+      userRegistrationOrdinarySetupScript(),
+    ]);
+}
+
+async function seedScenarioMembership(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (
+    input.scenario?.id !== USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID &&
+    input.scenario?.id !== USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID
+  )
+    return;
+  await input.wp(input.resource, [
+    "eval",
+    userRegistrationMembershipInstallScript(),
+  ]);
+  // Module classes are loaded at bootstrap, after the installer's option write.
+  await input.wp(input.resource, [
+    "eval",
+    input.scenario.id === USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID
+      ? userRegistrationMembershipEnrollmentScript(input.subscriber.username)
+      : userRegistrationMembershipUnjoinedScript(input.subscriber.username),
+  ]);
+}
+
+async function seedScenarioCommentForm(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id === WPDISCUZ_COMMENT_SCENARIO_ID)
+    await input.wp(input.resource, ["eval", wpDiscuzOrdinarySetupScript()]);
+}
+
+async function seedScenarioMemberPost(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id === WP_MEMBERS_SCENARIO_ID)
+    await input.wp(input.resource, ["eval", wpMembersOrdinarySetupScript()]);
+}
+
+async function seedScenarioDownloads(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id !== DOWNLOAD_MANAGER_SCENARIO_ID) return;
+  const uploads = "/var/www/html/wp-content/uploads";
+  await input.requireDocker([
+    "exec",
+    "--user=root",
+    input.resource.wordpress,
+    "mkdir",
+    "-p",
+    uploads,
+  ]);
+  await input.requireDocker([
+    "exec",
+    "--user=root",
+    input.resource.wordpress,
+    "chown",
+    "-R",
+    "www-data:www-data",
+    uploads,
+  ]);
+  await input.requireDocker(
+    [
+      "exec",
+      "--user=www-data",
+      input.resource.wordpress,
+      "php",
+      "-r",
+      downloadManagerOrdinarySetupScript(),
+    ],
+    120_000,
+  );
+}
+
+async function seedScenarioPublicDownload(
+  input: WordPressInitialization,
+): Promise<void> {
+  if (input.scenario?.id !== DOWNLOAD_MONITOR_SCENARIO_ID) return;
+  await input.requireDocker(
+    [
+      "exec",
+      "--user=www-data",
+      input.resource.wordpress,
+      "php",
+      "-r",
+      downloadMonitorOrdinarySetupScript(),
+    ],
+    120_000,
+  );
 }
 
 /** Initialize the isolated WordPress site after all containers are healthy. */
@@ -156,7 +331,14 @@ export async function initializeWordPress(
   await configureSecondaryLocale(input);
   await createAccounts(input);
   await seedInitialPosts(input);
+  await seedScenarioContent(input);
   await seedScenarioTranslation(input);
+  await seedScenarioRegistration(input);
+  await seedScenarioMembership(input);
+  await seedScenarioCommentForm(input);
+  await seedScenarioMemberPost(input);
+  await seedScenarioDownloads(input);
+  await seedScenarioPublicDownload(input);
 }
 
 /** Grant SELECT on the tables present at provision time, before canary placement. */

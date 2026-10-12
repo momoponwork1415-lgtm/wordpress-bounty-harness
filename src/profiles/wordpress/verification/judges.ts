@@ -961,7 +961,46 @@ function storedScriptJudge(options: Options) {
         case "observed":
           break;
       }
-      if (script.contexts.length === 0) return null;
+      const independentContexts = script.contexts.filter(
+        (context) => context !== "victim-route-page",
+      );
+      const victimContextVerified =
+        script.contexts.includes("victim-route-page") &&
+        script.victimRole !== undefined &&
+        script.victimRole !== "self";
+      const qualifyingContexts = [
+        ...independentContexts,
+        ...(victimContextVerified ? (["victim-route-page"] as const) : []),
+      ];
+      if (qualifyingContexts.length === 0) {
+        if (script.victimRole === "self") {
+          const evidenceDigest = await options.store.putFiles({
+            "canary-observation.json": canonicalJson({
+              judgeId: "wordpress-stored-script",
+              status: "self-observed",
+              victimRole: "self",
+              contexts: script.contexts,
+              snapshotDigest: lab.snapshotDigest,
+              labSetupDigest: lab.setupDigest,
+            }),
+          });
+          return {
+            status: "incomplete",
+            reason: "precondition",
+            nextStep:
+              "victimRole: self; repeat with a separate Lab victim account",
+            evidenceDigest,
+          };
+        }
+        if (script.contexts.includes("victim-route-page"))
+          return {
+            status: "incomplete",
+            reason: "evidence",
+            nextStep:
+              "Record the Lab browser principal for the victim page and repeat",
+          };
+        return null;
+      }
       if (script.screenshot === undefined)
         return {
           status: "incomplete",
@@ -969,16 +1008,18 @@ function storedScriptJudge(options: Options) {
           nextStep:
             "Capture the victim page screenshot with the Lab observer and repeat",
         };
-      const siteWide = script.contexts.some(
+      const siteWide = qualifyingContexts.some(
         (context) => context === "front" || context === "admin-all",
       );
       return {
         screenshot: script.screenshot,
         conditions: {
           observedVia: "canary-beacon",
-          firedContexts: script.contexts.join(","),
+          firedContexts: qualifyingContexts.join(","),
           siteWide: siteWide ? "yes" : "no",
-          ...(victim === undefined ? {} : { victimRole: victim.role }),
+          ...(!victimContextVerified
+            ? {}
+            : { victimRole: script.victimRole, victimPrincipal: "separate" }),
           ...route,
         },
       };

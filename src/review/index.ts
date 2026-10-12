@@ -683,12 +683,14 @@ export class Review<TFacts = unknown> {
     const query = z
       .strictObject({ campaignId: id, findingId: id })
       .parse(input);
-    const verification = this.#readAll("verification-finished").find(
-      ({ event }) =>
-        event.type === "verification-finished" &&
-        event.campaignId === query.campaignId &&
-        event.findingId === query.findingId,
-    );
+    const verification = this.#readAll("verification-finished")
+      .filter(
+        ({ event }) =>
+          event.type === "verification-finished" &&
+          event.campaignId === query.campaignId &&
+          event.findingId === query.findingId,
+      )
+      .at(-1);
     const assessments = (await this.#allAssessments()).filter(
       (item) =>
         item.ref.campaignId === query.campaignId &&

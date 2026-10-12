@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -139,7 +140,13 @@ async function fixture(
           : null,
       prepareScriptCanary: () =>
         issueCanary
-          ? { nonce: "fake-nonce", beaconUrl: "http://wordpress/fake-beacon" }
+          ? {
+              nonce: "fake-nonce",
+              beaconUrl: "http://wordpress/fake-beacon",
+              javascript:
+                'fetch("http://wordpress/fake-beacon", { method: "POST", headers: { "X-WBH-Script-Canary": "fake-nonce" } });',
+              loaderJavascript: 'import("//wordpress/fake-module")',
+            }
           : null,
       canaryLedger: () =>
         issueCanary
@@ -342,6 +349,22 @@ describe("CodexVerifier.attempt", () => {
       expect(attempt.status).toBe("attempted");
       expect(f.runs).toHaveLength(1);
       expect(f.runs[0]?.prompt).toContain(value);
+      if (impact === "stored-xss") {
+        expect(f.runs[0]?.prompt).toContain('"javascript"');
+        expect(f.runs[0]?.prompt).toContain('"loaderJavascript"');
+        expect(f.runs[0]?.prompt).toContain("X-WBH-Script-Canary");
+        expect(f.runs[0]?.prompt).toContain(
+          "## Harness victim operation contract",
+        );
+        expect(f.runs[0]?.prompt).toContain('kind: "click-text"');
+        const staticInstructions = f.runs[0]?.prompt.split("\n\n## Finding")[0];
+        expect(staticInstructions).toBeDefined();
+        const expectedDigest = `sha256:${createHash("sha256").update(staticInstructions!).digest("hex")}`;
+        expect(f.runs[0]?.campaignInput.promptDigest).toBe(expectedDigest);
+        expect(
+          f.ledger.read({ type: "verifier-run-finished" }).at(0)?.event,
+        ).toMatchObject({ promptDigest: expectedDigest });
+      }
       expect(
         f.ledger.read({ type: "verifier-run-finished" }).at(0)?.event,
       ).toMatchObject({ canaryIssued: kind });
@@ -725,7 +748,8 @@ describe("CodexVerifier.attempt", () => {
     ).toEqual({
       status: "incomplete",
       reason: "precondition",
-      nextStep: "TranslatePress の二次言語・翻訳データ・承認済みコメント",
+      nextStep:
+        "translatepress-translation-data-v1: TranslatePress の二次言語・翻訳データ・承認済みコメント",
     });
   });
 

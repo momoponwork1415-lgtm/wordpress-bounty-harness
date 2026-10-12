@@ -29,6 +29,7 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
 (async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  page.on("dialog", (dialog) => { void dialog.dismiss(); });
   const base = "http://wordpress";
   const user = process.env.WBH_LOGIN_USER;
   if (user) {
@@ -41,6 +42,20 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
       throw new Error("Victim login failed");
   }
   await page.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
+  if (new URL(page.url()).origin !== base)
+    throw new Error("Victim navigation left the Lab origin");
+  const actions = JSON.parse(process.env.WBH_VISIT_ACTIONS ?? "[]");
+  for (const action of actions) {
+    const target = action.kind === "click-text"
+      ? page.getByText(action.text, { exact: action.exact })
+      : page.locator(action.selector);
+    await target.waitFor({ state: "visible", timeout: 10000 });
+    if (await target.count() !== 1)
+      throw new Error("Victim action did not identify one visible element");
+    await target.click({ timeout: 10000 });
+    if (new URL(page.url()).origin !== base)
+      throw new Error("Victim action left the Lab origin");
+  }
   await page.waitForTimeout(3000);
   const screenshot = await page.screenshot({ type: "png" });
   if (screenshot.length > ${MAX_SCREENSHOT_BYTES})
@@ -55,9 +70,31 @@ export const wordpressVisitPathSchema = z
   .string()
   .max(2048)
   .regex(/^\/(?!\/)[^\s\0\\]*$/);
+export const wordpressVictimActionSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("click"),
+    selector: z
+      .string()
+      .min(1)
+      .max(200)
+      .regex(/^[#.a-zA-Z0-9_ \[\]="'():>+~*,-]+$/),
+  }),
+  z.strictObject({
+    kind: z.literal("click-text"),
+    text: z.string().min(1).max(120),
+    exact: z.boolean(),
+  }),
+]);
+const victimVisitSchema = z.union([
+  wordpressVisitPathSchema,
+  z.strictObject({
+    path: wordpressVisitPathSchema,
+    actions: z.array(wordpressVictimActionSchema).min(1).max(3),
+  }),
+]);
 export const wordpressVictimRouteSchema = z.strictObject({
   role: z.enum(["administrator", "subscriber", "customer", "unauthenticated"]),
-  paths: z.array(wordpressVisitPathSchema).min(1).max(5),
+  paths: z.array(victimVisitSchema).min(1).max(5),
 });
 export type WordPressVictimRoute = z.infer<typeof wordpressVictimRouteSchema>;
 
@@ -110,6 +147,7 @@ async function visitStoredScriptPage(input: {
   readonly issued: ReadonlySet<string>;
   readonly path: string;
   readonly role: WordPressVictimRoute["role"];
+  readonly actions?: readonly z.infer<typeof wordpressVictimActionSchema>[];
   readonly browserImage: string;
   readonly docker: RunDocker;
 }): Promise<{ readonly fired: boolean; readonly screenshot: Buffer }> {
@@ -120,6 +158,7 @@ async function visitStoredScriptPage(input: {
     issued,
     path,
     role,
+    actions,
     browserImage,
     docker,
   } = input;
@@ -128,7 +167,7 @@ async function visitStoredScriptPage(input: {
       ? { username: "harness-admin", password: resource.adminPassword }
       : role === "unauthenticated"
         ? undefined
-        : handle.attackerAccounts[role];
+        : resource.victimAccounts[role];
   if (role !== "unauthenticated" && account === undefined)
     throw new Error("Victim role is unavailable");
   const before = await readBeaconCount(resource, issued, docker);
@@ -156,6 +195,8 @@ async function visitStoredScriptPage(input: {
           ]),
       "--env",
       `WBH_VISIT_PATH=${path}`,
+      "--env",
+      `WBH_VISIT_ACTIONS=${JSON.stringify(actions ?? [])}`,
       "--entrypoint=node",
       browserImage,
       "-e",
@@ -431,7 +472,13 @@ function createCanaryInspectionObservations(
       const token = nonce();
       if (!/^[A-Za-z0-9-]{1,100}$/.test(token)) return null;
       resource.scriptNonces.add(token);
-      return { nonce: token, beaconUrl: `http://canary:8080/b/${token}` };
+      const beaconUrl = `http://canary:8080/b/${token}`;
+      return {
+        nonce: token,
+        beaconUrl,
+        javascript: `fetch(${JSON.stringify(beaconUrl)}, { method: "POST", headers: { "X-WBH-Script-Canary": ${JSON.stringify(token)} } });`,
+        loaderJavascript: `import("//canary:8080/c/${token}")`,
+      };
     },
   };
 }
@@ -462,7 +509,11 @@ function createStoredScriptObservation(
       const issued = new Set(
         [...resource.scriptNonces].map((token) => `/b/${token}`),
       );
-      const visit = (path: string, role: WordPressVictimRoute["role"]) =>
+      const visit = (
+        path: string,
+        role: WordPressVictimRoute["role"],
+        actions?: readonly z.infer<typeof wordpressVictimActionSchema>[],
+      ) =>
         visitStoredScriptPage({
           resource,
           handle,
@@ -470,6 +521,7 @@ function createStoredScriptObservation(
           issued,
           path,
           role,
+          ...(actions === undefined ? {} : { actions }),
           browserImage: options.images.browser,
           docker,
         });
@@ -479,8 +531,9 @@ function createStoredScriptObservation(
         const fired = async (
           path: string,
           role: WordPressVictimRoute["role"],
+          actions?: readonly z.infer<typeof wordpressVictimActionSchema>[],
         ): Promise<boolean> => {
-          const observation = await visit(path, role);
+          const observation = await visit(path, role, actions);
           if (observation.fired) screenshot ??= observation.screenshot;
           return observation.fired;
         };
@@ -495,12 +548,25 @@ function createStoredScriptObservation(
         if (routePage) contexts.push("route-page");
         let victimPage = false;
         if (victim?.success)
-          for (const path of victim.data.paths)
-            if (await fired(path, victim.data.role)) victimPage = true;
+          for (const visit of victim.data.paths) {
+            const path = typeof visit === "string" ? visit : visit.path;
+            const actions =
+              typeof visit === "string" ? undefined : visit.actions;
+            if (await fired(path, victim.data.role, actions)) victimPage = true;
+          }
         if (victimPage) contexts.push("victim-route-page");
+        const victimRole =
+          victim?.success && victimPage ? victim.data.role : undefined;
+        const sameAccount =
+          (victimRole === "subscriber" || victimRole === "customer") &&
+          resource.victimAccounts[victimRole]?.username ===
+            handle.attackerAccounts[victimRole]?.username;
         return {
           status: "observed",
           contexts,
+          ...(victimRole === undefined
+            ? {}
+            : { victimRole: sameAccount ? ("self" as const) : victimRole }),
           ...(screenshot === undefined ? {} : { screenshot }),
         };
       } catch {
