@@ -338,6 +338,20 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       .optional(),
     result: verificationResultV1Schema,
     evidenceCapture: z.enum(["harness-captured", "agent-authored"]).optional(),
+    /**
+     * Before / after Lab state diff around the Verifier run (#186). `captured`
+     * points at `lab-state-before` / `lab-state-after` / `lab-state-diff`
+     * artifacts; `missing` keeps the reason. Absent on older events.
+     */
+    labStateDiff: z
+      .discriminatedUnion("status", [
+        z.strictObject({ status: z.literal("captured") }),
+        z.strictObject({
+          status: z.literal("missing"),
+          reason: z.enum(["before-capture", "after-capture", "store"]),
+        }),
+      ])
+      .optional(),
   }),
   event({
     /** A person explicitly opened one review item; listing the queue does not count. */
@@ -349,6 +363,12 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     type: z.literal("review-decided"),
     findingId: id,
     decision: z.enum(["accept", "reject", "defer"]),
+    /** Seconds the human spent on this item, as the skill or CLI caller reported (ADR 0032 Q22). */
+    humanElapsedSeconds: z.number().int().nonnegative().max(604_800).optional(),
+    /** Traceability back to the exact verification, discovery run and prompt (ADR 0032 Q22). */
+    verificationId: id.optional(),
+    runId: id.optional(),
+    promptDigest: digest.optional(),
   }),
   event({
     type: z.literal("scope-assessed"),

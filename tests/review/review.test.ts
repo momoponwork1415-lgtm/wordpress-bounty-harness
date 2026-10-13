@@ -723,3 +723,68 @@ describe("review submission records", () => {
     );
   });
 });
+
+describe("review decision traceability (ADR 0032 Q22)", () => {
+  it("records the human's elapsed seconds and traces the decision to the run and prompt", async () => {
+    const { review, ledger } = await fixture();
+    const promptDigest = `sha256:${"e".repeat(64)}`;
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "run-1-started",
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-07T23:00:00Z",
+      type: "discovery-run-started",
+      runId: "run-1",
+      labId: "lab-1",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "wp2shell-bounty-v3",
+        promptDigest,
+        assignmentUnit: "whole",
+      },
+    });
+    const decision = await review.decide({
+      ref,
+      decision: "defer",
+      reasonCode: "needs-manual-check",
+      openedEvidence: [],
+      decidedBy: "operator",
+      humanElapsedSeconds: 420,
+    });
+    expect(decision).toMatchObject({
+      humanElapsedSeconds: 420,
+      trace: { runId: "run-1", promptDigest },
+    });
+    const event = ledger.read({ type: "review-decided" })[0]?.event;
+    if (event?.type !== "review-decided") throw new Error("missing event");
+    expect(event).toMatchObject({
+      findingId: "finding-1",
+      decision: "defer",
+      humanElapsedSeconds: 420,
+      verificationId: "verification-1",
+      runId: "run-1",
+      promptDigest,
+    });
+  });
+
+  it("leaves the optional fields out when the caller supplies no elapsed time and no run is known", async () => {
+    const { review, ledger } = await fixture();
+    const decision = await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "reproduced-by-hand",
+      openedEvidence: [],
+      decidedBy: "operator",
+    });
+    expect("humanElapsedSeconds" in decision).toBe(false);
+    // The Finding's run id is known from finding-recorded even without a run-started event.
+    expect(decision.trace).toEqual({ runId: "run-1" });
+    const event = ledger.read({ type: "review-decided" })[0]?.event;
+    if (event?.type !== "review-decided") throw new Error("missing event");
+    expect("humanElapsedSeconds" in event).toBe(false);
+    expect("promptDigest" in event).toBe(false);
+    expect(event.runId).toBe("run-1");
+    expect(event.verificationId).toBe("verification-1");
+  });
+});

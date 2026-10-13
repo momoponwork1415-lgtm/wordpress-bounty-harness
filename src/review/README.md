@@ -18,3 +18,10 @@
 scope 評価の事実は、判定器の観測条件、選定記録（`target-selection.json`）、最新版での再検証の有無、検証 Lab と版固定された通常利用 scenario の一致から作る。Verifier の `defaultSettings` 自己申告は設定範囲の判定に使わない。scenario の記録が欠ける・一致しない場合は設定範囲を `ambiguous` とし、確認済みの技術的記録を変更しない。scope 評価自体の障害は scope の `incomplete` である。候補と文案は `in-scope` の評価からだけ作る。後で文案を改訂した場合、旧版の承認では新しい候補を admit しない。
 
 `review open`、`review reproduced`、提出・転帰記録では終了時に実作業の分数を尋ねる。`ledger funnel --campaign <id>` は台帳に追記された分数、開いた Finding 数、手動再現の一致率を campaign と分類ごとに集計する。分母がない指標は `unavailable` と表示する。
+
+## `review export`（#186）
+
+Claude Code の skill が読むのは `review export --campaign <id> --finding <id>` の JSON 1 本（`schema: review-export/v1`、`src/review/export.ts`）だけで、台帳の event schema には依存しない（ADR 0031）。中身は Finding の claim / attackerPosition / brokenProperty / impact、HTTP の method / path / status 行、反証メモ、検証 Lab の実行前後差分の要約、探索した版と台帳が知る最新版、install 数、Private Evidence の path。候補本文、payload、HTTP 本文、設定値は path と digest でだけ参照する。
+
+実行前後差分は `Verification` の `LabStateObserver` が Verifier の実行前後に取り、before / after / diff を Private Evidence に置いて `verification-finished` の `artifacts`（`lab-state-before` / `lab-state-after` / `lab-state-diff`）と `labStateDiff` に digest で残す。取得失敗は `labStateDiff: { status: "missing", reason }` として記録し、検証結果は変えない。差分は Verifier にも判定器にも渡さない。profile が差分ファイルを汎用の `StateDiffSummary`（settings / principals / tables）に要約して export に渡す。
+

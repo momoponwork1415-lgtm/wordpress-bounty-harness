@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import { z } from "zod";
 
@@ -93,11 +94,16 @@ import {
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import { SmokeReplayVerifier } from "../profiles/wordpress/verification/smoke-replay-verifier.js";
 import {
+  createWordPressLabStateObserver,
+  createWordPressStateDiffReader,
+} from "../profiles/wordpress/verification/lab-state-diff.js";
+import {
   wordpressReproductionRenderer,
   type WordPressReconstruction,
 } from "../profiles/wordpress/verification/reproduction-package.js";
-import type { CliProfile, CliState } from "./index.js";
+import type { CliProfile, CliState, LabUpSummary } from "./index.js";
 import {
+  provisionFindingLab,
   reverifyOnSelectedVersion,
   runCampaignPipeline,
   type CampaignPipeline,
@@ -605,8 +611,150 @@ function verificationFor(
     judges: createWordPressJudges({ store: state.store, lab: boundaries.lab }),
     readFinding: readWordPressFinding,
     renderer: wordpressReproductionRenderer,
+    // Whole-site before / after diff around the Verifier run; review material, not proof (#186).
+    stateObserver: createWordPressLabStateObserver({
+      store: state.store,
+      lab: boundaries.lab,
+    }),
     clock: state.clock,
   });
+}
+
+/** The one Lab `lab up` keeps between invocations; `lab down` reads and removes it. */
+const labUpRecordSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  labId: z.string().regex(/^[0-9a-f-]{36}$/),
+  campaignId: z.string().min(1).max(128),
+  findingId: z.string().min(1).max(128),
+  configPath: z.string().min(1),
+  startedAt: z.iso.datetime(),
+});
+const labUpRecordPath = (state: CliState) =>
+  join(state.stateDirectory, "lab-up.json");
+
+async function readLabUpRecord(
+  state: CliState,
+): Promise<z.infer<typeof labUpRecordSchema> | null> {
+  try {
+    return labUpRecordSchema.parse(
+      JSON.parse(await readFile(labUpRecordPath(state), "utf8")) as unknown,
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function wordPressLabUp(
+  state: CliState,
+  input: Parameters<CliProfile["labUp"]>[1],
+  options: WordPressCliProfileOptions,
+): Promise<LabUpSummary> {
+  if ((await readLabUpRecord(state)) !== null)
+    throw new Error("A lab is already up; run lab down first");
+  const { config } = await loadConfig(input.configPath);
+  const boundaries = await options.boundaries(config, state);
+  const lab = await provisionFindingLab({
+    campaignId: input.campaignId,
+    findingId: input.findingId,
+    ledger: state.ledger,
+    store: state.store,
+    pipeline: {
+      freeze: boundaries.freeze,
+      setupFor: setupFor(config),
+      lab: boundaries.lab,
+    },
+    readTarget: (value) => wordPressTargetSelectionSchema.parse(value),
+  });
+  const handle = lab.handle;
+  const exposed = await boundaries.lab.exposeToHost(handle, {
+    httpPort: input.httpPort,
+    ...(handle.database === undefined
+      ? {}
+      : { databasePort: input.databasePort }),
+  });
+  if (exposed.status !== "exposed") {
+    await boundaries.lab.cleanupLeftovers({ remove: true, labId: handle.id });
+    throw new Error(
+      `The Lab could not be published on the host: ${exposed.diagnostic}`,
+    );
+  }
+  await writeFile(
+    labUpRecordPath(state),
+    canonicalJson({
+      schemaVersion: 1,
+      labId: handle.id,
+      campaignId: input.campaignId,
+      findingId: input.findingId,
+      configPath: input.configPath,
+      startedAt: state.clock().toISOString(),
+    }),
+    { mode: 0o600 },
+  );
+  return {
+    labId: handle.id,
+    campaignId: input.campaignId,
+    findingId: input.findingId,
+    snapshotDigest: lab.snapshot.digest,
+    scenario: handle.scenario ?? null,
+    setupDigest: handle.setupDigest,
+    matchesVerification:
+      lab.verification === null
+        ? null
+        : {
+            verificationId: lab.verification.verificationId,
+            same: lab.verification.labSetupDigest === handle.setupDigest,
+          },
+    http: { port: exposed.httpPort, hostHeader: new URL(handle.endpoint).host },
+    database:
+      handle.database === undefined || exposed.databasePort === null
+        ? null
+        : {
+            port: exposed.databasePort,
+            name: handle.database.name,
+            username: handle.database.readOnlyAccount.username,
+            password: handle.database.readOnlyAccount.password,
+          },
+    attackerAccounts: Object.entries(handle.attackerAccounts).map(
+      ([role, account]) => ({
+        role,
+        username: account.username,
+        password: account.password,
+      }),
+    ),
+  };
+}
+
+async function wordPressLabDown(
+  state: CliState,
+  input: Parameters<CliProfile["labDown"]>[1],
+  options: WordPressCliProfileOptions,
+): ReturnType<CliProfile["labDown"]> {
+  const record = await readLabUpRecord(state);
+  // Nothing recorded by lab up: nothing to remove here (`lab cleanup` handles orphans).
+  if (record === null)
+    return {
+      labId: null,
+      removed: { containers: [], networks: [], volumes: [] },
+      remaining: { containers: [], networks: [], volumes: [] },
+    };
+  const { config } = await loadConfig(input.configPath ?? record.configPath);
+  const boundaries = await options.boundaries(config, state);
+  // Only this Lab's resources; a concurrent campaign's Labs are never named.
+  const removed = await boundaries.lab.cleanupLeftovers({
+    remove: true,
+    labId: record.labId,
+  });
+  const remaining = await boundaries.lab.cleanupLeftovers({
+    remove: false,
+    labId: record.labId,
+  });
+  if (
+    remaining.containers.length === 0 &&
+    remaining.networks.length === 0 &&
+    remaining.volumes.length === 0
+  )
+    await rm(labUpRecordPath(state), { force: true });
+  return { labId: record.labId, removed, remaining };
 }
 
 export type WordPressCliProfileOptions = {
@@ -1185,6 +1333,10 @@ export function createWordPressCliProfile(
     },
     runCampaign: (state, input) =>
       runWordPressCampaign(state, input, options, historyFor),
+    stateDiffReader: (state) =>
+      createWordPressStateDiffReader({ store: state.store }),
+    labUp: (state, input) => wordPressLabUp(state, input, options),
+    labDown: (state, input) => wordPressLabDown(state, input, options),
     async cleanupLeftovers(state, input) {
       const { config } = await loadConfig(input.configPath);
       const boundaries = await options.boundaries(config, state);

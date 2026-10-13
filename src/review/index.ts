@@ -9,6 +9,16 @@ import type { PrivateArtifactStore } from "../infrastructure/private-artifact-st
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 import { openReproductionPackage } from "./reproduction-package.js";
 
+export {
+  exportReviewBundle,
+  REVIEW_EXPORT_SCHEMA_ID,
+  reviewExportV1Schema,
+  stateDiffSummarySchema,
+  type ReviewExportV1,
+  type StateDiffReader,
+  type StateDiffSummary,
+} from "./export.js";
+
 const id = z.string().min(1).max(128);
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const refSchema = z.strictObject({
@@ -75,6 +85,15 @@ const reviewDecisionV1Schema = z.strictObject({
   decidedBy: id,
   decidedAt: z.iso.datetime(),
   elapsedMs: z.number().int().nonnegative(),
+  /** Seconds the human reported spending on this item (ADR 0032 Q22); absent on older records. */
+  humanElapsedSeconds: z.number().int().nonnegative().max(604_800).optional(),
+  /** Discovery run and prompt the Finding came from, so a submission can be traced back (Q22). */
+  trace: z
+    .strictObject({
+      runId: id.optional(),
+      promptDigest: digest.optional(),
+    })
+    .optional(),
 });
 
 export type ReviewRef = z.infer<typeof refSchema>;
@@ -312,6 +331,8 @@ export class Review<TFacts = unknown> {
     readonly openedEvidence: readonly string[];
     readonly duplicate?: DuplicateLookupResult;
     readonly decidedBy: string;
+    /** Seconds the human spent, reported by the skill or CLI caller (ADR 0032 Q22). */
+    readonly humanElapsedSeconds?: number;
   }): Promise<ReviewDecisionV1> {
     const ref = refSchema.parse(input.ref);
     const verification = this.#readAll("verification-finished").find(
@@ -340,6 +361,7 @@ export class Review<TFacts = unknown> {
       throw new Error(
         "This incomplete verification needs Harness retry or aggregate review",
       );
+    const trace = this.#traceOf(ref.campaignId, ref.findingId);
     const decidedAt = this.#clock();
     const record = reviewDecisionV1Schema.parse({
       schemaVersion: 1,
@@ -355,6 +377,10 @@ export class Review<TFacts = unknown> {
         0,
         decidedAt.getTime() - Date.parse(verification.occurredAt),
       ),
+      ...(input.humanElapsedSeconds === undefined
+        ? {}
+        : { humanElapsedSeconds: input.humanElapsedSeconds }),
+      ...(trace === undefined ? {} : { trace }),
     });
     const artifactDigest = await this.#storeRecord(record);
     const appended = await this.#ledger.append({
@@ -366,6 +392,14 @@ export class Review<TFacts = unknown> {
       type: "review-decided",
       findingId: ref.findingId,
       decision: record.decision,
+      verificationId: ref.verificationId,
+      ...(record.humanElapsedSeconds === undefined
+        ? {}
+        : { humanElapsedSeconds: record.humanElapsedSeconds }),
+      ...(trace?.runId === undefined ? {} : { runId: trace.runId }),
+      ...(trace?.promptDigest === undefined
+        ? {}
+        : { promptDigest: trace.promptDigest }),
       artifacts: [{ kind: "review-decision", digest: artifactDigest }],
     });
     if (appended.status === "conflict")
@@ -926,6 +960,31 @@ export class Review<TFacts = unknown> {
       throw new Error("A matching evidence-backed verification is required");
     }
     return verification.event;
+  }
+
+  /** The discovery run that produced the Finding and the prompt digest it ran with. */
+  #traceOf(
+    campaignId: string,
+    findingId: string,
+  ): { runId?: string; promptDigest?: string } | undefined {
+    const finding = this.#ledger
+      .read({ campaignId, findingId, type: "finding-recorded", limit: 1 })
+      .at(0)?.event;
+    if (finding?.type !== "finding-recorded") return undefined;
+    const run = this.#readAll("discovery-run-started").find(
+      ({ event }) =>
+        event.type === "discovery-run-started" &&
+        event.campaignId === campaignId &&
+        event.runId === finding.runId,
+    )?.event;
+    const promptDigest =
+      run?.type === "discovery-run-started"
+        ? run.configuration.promptDigest
+        : undefined;
+    return {
+      runId: finding.runId,
+      ...(promptDigest === undefined ? {} : { promptDigest }),
+    };
   }
 
   #readAll(type: LedgerEventV1["type"]) {

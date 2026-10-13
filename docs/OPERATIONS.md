@@ -110,8 +110,9 @@ harness review [--campaign <id>]                         # 検証済みの列を
 ## 3. 提出までの操作
 
 ```
-harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>]
-harness review inspect --campaign <id> --finding <id>        # 1件の参照情報を開き、台帳へ記録する
+harness review inspect --campaign <id> --finding <id>        # 1件の参照情報を開き、台帳へ記録する（review-item-opened）
+harness review export --campaign <id> --finding <id>         # 1画面のレビュー材料をJSON 1本（schema review-export/v1）で出す。台帳には書かない。skillはこれだけを読む
+harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--minutes <n>]
 harness review dedupe --campaign <id> --finding <id>          # ローカルWordfence履歴mirrorと照合
 harness review scope --campaign <id> --finding <id>           # Wordfence / Patchstack ごとに in-scope / out-of-scope / ambiguous
 harness review reverify --campaign <id> --finding <id> --config <path>   # 最新版を新しいLabで検証し直す
@@ -122,6 +123,8 @@ harness review submitted --candidate <id> --draft <digest> --to <destination>
 harness review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]
 ```
 
+- `export` は Finding（claim / attackerPosition / brokenProperty / impact）、HTTP の method / path / status 行、反証メモ、検証 Lab の実行前後差分の要約（option 名と digest、ユーザーの役割、テーブル件数と checksum）、探索した版と台帳が知る最新版、install 数、Private Evidence の path を 1 本の JSON にまとめる。候補本文、payload、HTTP 本文、option 値は path と digest でだけ参照し、stdout に値を出さない。
+- `decide --minutes` は人間がその項目に使った時間を `human-effort-recorded` に分で、`review-decided` に `humanElapsedSeconds` として残す。決定は検証 ID、探索 run ID、prompt digest に結び付いて記録され、提出から run と prompt まで辿れる。
 - `scope` は判定器の証拠と選定記録から事実を読む。最新版での確認が要るプログラムは、`reverify` が `runtime-confirmed` を返した後でだけ満たされる。
 - 確認済みrouteのないFindingは、前回が`incomplete(precondition)`でLab記録があり、`--version`なしで選定されたSnapshotが元のFindingと同じ場合だけ、前回と異なるscenario IDのLabで独立再検証できる。Snapshotが異なる場合と`--version`付きの修正版比較はLab起動前に拒否する。元のverification eventは残り、再試行は新しいverificationIdとsetup digestを記録する。
 - `authorize` は「この文案のこの版を、この送信先へ出す」ことの記録で、送信はしない。送信は人間がWordfence / Patchstackの画面で行い、`submitted` で記録する。
@@ -181,6 +184,17 @@ node scripts/recover-child-reports.mjs \
 3. runtime profile（CLI版、カタログdigest、image digest）を新しい値に更新し、`runtime check` が `ok` になることを確かめる。
 4. 次のcampaignの後で `harness ledger runtime` を見る。新しい組が現れ、更新前のrunと分かれて数えられていれば記録は正しい。
 
+### 手で確かめるためのLab
+
+```
+harness lab up --campaign <id> --finding <id> --config <campaign.json> [--port 8080] [--db-port 3307]
+harness lab down [--config <path>]
+```
+
+- `lab up` は検証と同じ Lab 供給（runsc、同じ scenario、依存 plugin、固定 Snapshot）を立て、runsc の gateway container で `127.0.0.1:<port>` に WordPress を、Lab が DB を公開する設定なら `127.0.0.1:<db-port>` に read-only DB を出す。攻撃者用アカウントと DB 接続情報を表示し、台帳には何も書かない。Snapshot が Finding と違えば Lab を起動せずに止まる。
+- 画面出力の `setup` 行で、検証時の Lab setup digest と同じかが分かる。
+- `lab down` は `lab up` が記録した 1 つの Lab の container / network / volume だけを削除し、残存が 0 でなければ終了コード 1 で残りを列挙する。同時に動く campaign の Lab には触らない。
+
 ### Lab / brokerの残骸
 
 ```
@@ -188,7 +202,7 @@ harness lab cleanup --config <path>            # 一覧だけ
 harness lab cleanup --config <path> --remove   # 削除
 ```
 
-- 対象は、Labが付ける `wbh-<uuid>-{db,wp,canary,proxy,net,site}` と、brokerが付ける `provider-egress-broker-<id>` / `provider-egress-<id>` の名前に一致するものだけ。
+- 対象は、Labが付ける `wbh-<uuid>-{db,wp,canary,proxy,host,net,site}` と、brokerが付ける `provider-egress-broker-<id>` / `provider-egress-<id>` の名前に一致するものだけ。
 - **実行中のcampaignがないときに使う。**
 
 ## 6. 評価
