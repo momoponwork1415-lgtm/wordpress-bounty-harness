@@ -531,7 +531,9 @@ export function formatQueue(
   )
     lines.push("review queue is empty");
   lines.push(`incomplete by reason: ${counts(queue.incompleteByReason)}`);
-  lines.push(`retry pending by reason: ${counts(queue.retryPendingByReason)}`);
+  lines.push(
+    `retry candidates by reason: ${counts(queue.retryPendingByReason)}`,
+  );
   lines.push(
     `contradicted: ${queue.contradicted} (count only)  unverified: ${queue.unverified}`,
   );

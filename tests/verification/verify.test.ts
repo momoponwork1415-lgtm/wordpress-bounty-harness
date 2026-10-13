@@ -48,6 +48,7 @@ async function fixture(
     readonly attempt?: number;
     readonly retryOf?: string;
     readonly promptVersion?: string;
+    readonly preexistingVerifications?: number;
     readonly impact?: string;
     readonly labSnapshotDigest?: string;
     readonly provision?: "ready" | "incomplete";
@@ -181,6 +182,19 @@ async function fixture(
       : {}),
     artifacts: [{ kind: "finding", digest: findingDigest }],
   });
+  for (let i = 0; i < (options.preexistingVerifications ?? 0); i++)
+    await ledger.append({
+      schemaVersion: 1,
+      identity: `old-verification-${i}`,
+      campaignId: "campaign-1",
+      snapshotDigest: findingSnapshotDigest,
+      occurredAt: "2026-10-08T00:15:00Z",
+      type: "verification-finished",
+      findingId: finding.findingId,
+      verificationId: `old-verification-${i}`,
+      labSetupDigest: setupDigest,
+      result: { status: "incomplete", reason: "evidence", nextStep: "Inspect" },
+    });
   const calls = { provision: 0, verifier: 0, teardown: 0 };
   const agentTouched = new Set<string>();
   const replayedLabIds: string[] = [];
@@ -419,6 +433,11 @@ async function fixture(
 }
 
 describe("verification public interface", () => {
+  it("returns the newly recorded verdict after more than 1,000 older attempts", async () => {
+    const { result } = await fixture({ preexistingVerifications: 1000 });
+    expect(result.status).toBe("runtime-confirmed");
+  }, 15_000);
+
   it("records retry lineage while returning the incomplete reason to its caller", async () => {
     const { result, ledger } = await fixture({
       attempt: 2,

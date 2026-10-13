@@ -124,6 +124,7 @@ export type ReviewQueue = {
   readonly contradicted: number;
   readonly unverified: number;
   readonly incompleteByReason: Readonly<Record<string, number>>;
+  /** Preliminary reason-based retry candidates; the pipeline also checks setup, scenario, and prompt. */
   readonly retryPendingByReason: Readonly<Record<string, number>>;
 };
 export type ScopeAssessment = z.infer<typeof assessmentSchema>;
@@ -212,7 +213,7 @@ export class Review<TFacts = unknown> {
     digest.parse(options.scopeEvaluator.policyDigest);
   }
 
-  /** Evidence-backed results and exhausted incomplete work reach a human. */
+  /** Evidence-backed results and every incomplete verification reach a human. */
   queue(input: { readonly campaignId?: string } = {}): ReviewQueue {
     const campaignId =
       input.campaignId === undefined ? undefined : id.parse(input.campaignId);
@@ -231,7 +232,10 @@ export class Review<TFacts = unknown> {
     for (const { sequence, event } of this.#readAll("verification-finished"))
       if (event.type === "verification-finished" && inCampaign(event)) {
         latestVerification.set(key(event), { sequence, event });
-        attempts.set(key(event), (attempts.get(key(event)) ?? 0) + 1);
+        if (event.result.status === "incomplete") {
+          const attemptKey = `${key(event)}\u0000${event.labSetupDigest}\u0000${event.result.reason}`;
+          attempts.set(attemptKey, (attempts.get(attemptKey) ?? 0) + 1);
+        }
       }
     const latestDecision = new Map<
       string,
@@ -286,11 +290,17 @@ export class Review<TFacts = unknown> {
           decision,
         });
       else {
-        const attemptCount = attempts.get(key(finding)) ?? 0;
+        const attemptCount =
+          attempts.get(
+            `${key(event)}\u0000${event.labSetupDigest}\u0000${result.reason}`,
+          ) ?? 0;
         const exhausted =
           result.reason === "evidence" ||
           result.reason === "cleanup" ||
           result.reason === "digest-mismatch" ||
+          result.reason === "no-judge" ||
+          result.reason === "provider" ||
+          result.reason === "sandbox" ||
           (result.reason === "precondition" &&
             result.nextScenarioId === undefined) ||
           ((result.reason === "recipe" || result.reason === "observation") &&
@@ -298,21 +308,14 @@ export class Review<TFacts = unknown> {
           (result.reason === "provision" && attemptCount >= 2);
         const counts = exhausted ? incompleteByReason : retryPendingByReason;
         counts[result.reason] = (counts[result.reason] ?? 0) + 1;
-        if (
-          result.reason === "evidence" ||
-          result.reason === "cleanup" ||
-          result.reason === "digest-mismatch" ||
-          (result.reason === "precondition" &&
-            result.nextScenarioId === undefined)
-        )
-          items.push({
-            status: result.status,
-            ref,
-            category: finding.category,
-            reason: result.reason,
-            nextStep: result.nextStep,
-            decision,
-          });
+        items.push({
+          status: result.status,
+          ref,
+          category: finding.category,
+          reason: result.reason,
+          nextStep: result.nextStep,
+          decision,
+        });
       }
     }
     return {
@@ -359,7 +362,7 @@ export class Review<TFacts = unknown> {
       )
     )
       throw new Error(
-        "This incomplete verification needs Harness retry or aggregate review",
+        "This incomplete verification is not the current review item",
       );
     const trace = this.#traceOf(ref.campaignId, ref.findingId);
     const decidedAt = this.#clock();
