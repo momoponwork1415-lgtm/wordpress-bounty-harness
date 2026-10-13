@@ -160,9 +160,9 @@ describe("WordPress selection public interface", () => {
     expect(second[0]?.policy.digest).not.toBe(first[0]?.policy.digest);
   });
 
-  it("ships an automatic policy with the canonical 10000-install threshold and excludes out-of-scope authors", async () => {
+  it("ships an automatic policy with the 100000-install floor, data-derived tags and no tag weights (ADR 0032)", async () => {
     const policy = await loadWordPressSelectionPolicy();
-    expect(policy.minimumActiveInstallations).toBe(10_000);
+    expect(policy.minimumActiveInstallations).toBe(100_000);
     expect("candidateSource" in policy && policy.candidateSource.kind).toBe(
       "wordpress-org",
     );
@@ -175,9 +175,15 @@ describe("WordPress selection public interface", () => {
         "Yoast",
       ]),
     );
-    expect(policy.scoreWeights.highThreat).toBeGreaterThan(0);
+    expect(policy.scoreWeights.highThreat).toBeUndefined();
+    expect(policy.scoreWeights.surface).toBeUndefined();
+    expect(policy.highThreatTags).toBeUndefined();
+    expect(policy.surfaceTagWeights).toBeUndefined();
+    expect(policy.runBudget).toBeUndefined();
     if (!("candidateSource" in policy))
       throw new Error("Expected automatic policy");
+    expect(policy.candidateSource.tags.length).toBeGreaterThanOrEqual(6);
+    expect(policy.wordpressVersion).toBe("7.1.3");
     for (const maximumTargets of [2, 6])
       expect(
         wordPressSelectionPolicySchema.safeParse({
@@ -187,7 +193,33 @@ describe("WordPress selection public interface", () => {
       ).toBe(false);
   });
 
-  it("weights High Threat attack surfaces as their own score component", async () => {
+  it("omits run budgets and treats every surface alike when a policy carries no legacy weights", async () => {
+    const selection = harness({
+      observations: {
+        popular: observation("popular", [], 100_000),
+        files: observation("files", ["File Manager"], 1_000),
+      },
+    });
+    const { surfaceTagWeights, highThreatTags, runBudget, ...rest } =
+      basePolicy;
+    void surfaceTagWeights;
+    void highThreatTags;
+    void runBudget;
+    const plain = await selection.select({
+      ...rest,
+      candidateSlugs: ["popular", "files"],
+      scoreWeights: { installations: 10, recency: 0 },
+    });
+    expect(plain.map((item) => item.slug)).toEqual(["popular", "files"]);
+    for (const item of plain) {
+      expect(item.runBudget).toBeUndefined();
+      expect(item.highThreatSurface).toBe(false);
+      expect(item.scoreBreakdown.surface).toBe(0);
+      expect(item.scoreBreakdown.highThreat).toBe(0);
+    }
+  });
+
+  it("still honours legacy High Threat weights and run budgets for old policies", async () => {
     const selection = harness({
       observations: {
         popular: observation("popular", [], 100_000),
