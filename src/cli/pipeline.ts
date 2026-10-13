@@ -110,6 +110,8 @@ export async function runCampaignPipeline<
   >;
   readonly clock: () => Date;
   readonly newId: () => string;
+  /** Targets in flight at once; discovery run concurrency remains per target. */
+  readonly maxConcurrentTargets?: number;
   /** An explicit operator retry after repairing the Verifier protocol. */
   readonly retryIncompleteVerifications?: boolean;
 }): Promise<CampaignSummary> {
@@ -123,15 +125,95 @@ export async function runCampaignPipeline<
   const appendOnce = async (event: Parameters<Ledger["append"]>[0]) => {
     await ledger.append(event);
   };
-  const targets: CampaignSummary["targets"][number][] = [];
-  const skipped: CampaignSummary["skipped"][number][] = [];
+  const maxConcurrentTargets = options.maxConcurrentTargets ?? 1;
+  if (!Number.isSafeInteger(maxConcurrentTargets) || maxConcurrentTargets < 1)
+    throw new Error("Invalid target concurrency");
+  type TargetSummary = CampaignSummary["targets"][number];
+  type SkippedSummary = CampaignSummary["skipped"][number];
+  type TargetResult = {
+    target?: TargetSummary;
+    skipped?: SkippedSummary;
+  };
   let stopped: CampaignSummary["stopped"];
-  for (const target of await pipeline.select()) {
+  const requestStop = (reason: NonNullable<CampaignSummary["stopped"]>) => {
+    if (reason === "provider-limit" || stopped === undefined) stopped = reason;
+  };
+
+  const selectedSnapshots = new Map<string, string>();
+  for (const { event } of ledger.read({
+    campaignId,
+    type: "target-selected",
+    limit: 1000,
+  }))
+    if (event.type === "target-selected")
+      selectedSnapshots.set(event.selectionId, event.snapshotDigest);
+  const concludedSnapshots = new Set(
+    ledger
+      .read({ campaignId, type: "discovery-concluded", limit: 1000 })
+      .map(({ event }) => event.snapshotDigest),
+  );
+  const findingsBySnapshot = new Map<string, string[]>();
+  for (const { event } of ledger.read({
+    campaignId,
+    type: "finding-recorded",
+    limit: 1000,
+  })) {
+    if (event.type !== "finding-recorded") continue;
+    const findings = findingsBySnapshot.get(event.snapshotDigest) ?? [];
+    findings.push(event.findingId);
+    findingsBySnapshot.set(event.snapshotDigest, findings);
+  }
+  const latestVerification = new Map<string, VerificationResultV1["status"]>();
+  for (const { event } of ledger.read({
+    campaignId,
+    type: "verification-finished",
+    limit: 1000,
+  }))
+    if (event.type === "verification-finished" && event.basis === undefined)
+      latestVerification.set(
+        `${event.snapshotDigest}\0${event.findingId}`,
+        event.result.status,
+      );
+  const isCompleted = (target: Target): boolean => {
+    const snapshotDigest = selectedSnapshots.get(
+      `${target.targetId}@${target.version}`,
+    );
+    if (snapshotDigest === undefined || !concludedSnapshots.has(snapshotDigest))
+      return false;
+    return (findingsBySnapshot.get(snapshotDigest) ?? []).every((findingId) => {
+      const status = latestVerification.get(`${snapshotDigest}\0${findingId}`);
+      return status !== undefined && status !== "incomplete";
+    });
+  };
+
+  const processTarget = async (target: Target): Promise<TargetResult> => {
     const selectionId = `${target.targetId}@${target.version}`;
     let stage: SkipStage = "freeze";
     // Before a snapshot exists, the selection record stands in for its digest.
     let snapshotDigest = canonicalDigest(target);
-    try {
+    let handle: Handle | undefined;
+    let result: TargetResult = {};
+    const skip = async (error: unknown): Promise<void> => {
+      // The failure text may hold paths; it goes to the operator, not the ledger.
+      await append({
+        schemaVersion: 1,
+        campaignId,
+        snapshotDigest,
+        identity: `target-skipped-${options.newId()}`,
+        occurredAt: at(),
+        type: "target-skipped",
+        selectionId,
+        stage,
+      });
+      delete result.target;
+      result.skipped = {
+        targetId: target.targetId,
+        version: target.version,
+        stage,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    };
+    const run = async (): Promise<void> => {
       const snapshot = await pipeline.freeze(target);
       snapshotDigest = snapshot.digest;
       const base = {
@@ -169,6 +251,7 @@ export async function runCampaignPipeline<
       stage = "discovery";
       const setup = pipeline.setupFor(snapshot);
       const provisioned = await pipeline.lab.provision(snapshot, setup);
+      if (provisioned.status === "ready") handle = provisioned.handle;
       const seeded =
         provisioned.status === "ready"
           ? await pipeline.lab.seedCanaries(provisioned.handle)
@@ -237,9 +320,7 @@ export async function runCampaignPipeline<
             }),
       });
       if (!ready || provisioned.status !== "ready") {
-        if (provisioned.status === "ready")
-          await pipeline.lab.teardown(provisioned.handle);
-        targets.push({
+        result.target = {
           targetId: target.targetId,
           version: target.version,
           snapshotDigest: snapshot.digest,
@@ -251,30 +332,24 @@ export async function runCampaignPipeline<
               ? "incomplete(precondition)"
               : "setup-failed",
           verifications: [],
-        });
-        continue;
+        };
+        return;
       }
 
-      let discovered: Awaited<ReturnType<typeof runDiscoveryCampaign>>;
-      let campaignInput: CampaignInputV1;
-      try {
-        const prepared = await pipeline.discovery({
-          target,
-          snapshot,
-          lab: provisioned.handle,
-        });
-        campaignInput = prepared.input;
-        discovered = await runDiscoveryCampaign({
-          campaignId,
-          labId,
-          ledger,
-          evidence: options.store,
-          clock,
-          ...prepared,
-        });
-      } finally {
-        await pipeline.lab.teardown(provisioned.handle);
-      }
+      const prepared = await pipeline.discovery({
+        target,
+        snapshot,
+        lab: provisioned.handle,
+      });
+      const campaignInput = prepared.input;
+      const discovered = await runDiscoveryCampaign({
+        campaignId,
+        labId,
+        ledger,
+        evidence: options.store,
+        clock,
+        ...prepared,
+      });
       const summary = {
         targetId: target.targetId,
         version: target.version,
@@ -283,12 +358,13 @@ export async function runCampaignPipeline<
         runCount: discovered.runCount,
         stoppedBy: discovered.stoppedBy,
       };
-      // The Verifier draws on the same subscription, so nothing else runs after a stop.
+      // The Verifier draws on the same subscription, so this target does not
+      // start verification after a new provider stop. Other in-flight targets finish.
       if (
         discovered.stoppedBy === "provider-limit" &&
         discovered.runCount > 0
       ) {
-        stopped = discovered.stoppedBy;
+        requestStop(discovered.stoppedBy);
         await append({
           ...base,
           identity: `campaign-stopped-${options.newId()}`,
@@ -296,8 +372,8 @@ export async function runCampaignPipeline<
           type: "campaign-stopped",
           reason: discovered.stoppedBy,
         });
-        targets.push({ ...summary, verifications: [] });
-        break;
+        result.target = { ...summary, verifications: [] };
+        return;
       }
       stage = "verification";
       const latestOriginalVerification = new Map<
@@ -349,15 +425,15 @@ export async function runCampaignPipeline<
           status: result.status,
         });
       }
-      targets.push({ ...summary, verifications });
+      result.target = { ...summary, verifications };
       if (
         discovered.stoppedBy === "incomplete" ||
         discovered.stoppedBy === "provider-limit"
       ) {
         // A resumed target has already spent its one Trial. Keep its typed
         // failure and verify any captured child findings, then move on.
-        if (discovered.runCount === 0) continue;
-        stopped = discovered.stoppedBy;
+        if (discovered.runCount === 0) return;
+        requestStop(discovered.stoppedBy);
         await append({
           ...base,
           identity: `campaign-stopped-${options.newId()}`,
@@ -365,28 +441,52 @@ export async function runCampaignPipeline<
           type: "campaign-stopped",
           reason: discovered.stoppedBy,
         });
-        break;
       }
+    };
+    try {
+      await run();
     } catch (error: unknown) {
-      // The failure text may hold paths; it goes to the operator, not the ledger.
-      await append({
-        schemaVersion: 1,
-        campaignId,
-        snapshotDigest,
-        identity: `target-skipped-${options.newId()}`,
-        occurredAt: at(),
-        type: "target-skipped",
-        selectionId,
-        stage,
-      });
-      skipped.push({
-        targetId: target.targetId,
-        version: target.version,
-        stage,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      await skip(error);
+    } finally {
+      if (handle !== undefined) {
+        const removed = await pipeline.lab.teardown(handle).catch(() => null);
+        if (removed?.status !== "removed" && result.skipped === undefined)
+          await skip(
+            new Error(
+              removed?.nextStep ??
+                "Inspect and remove remaining Lab resources before retry",
+            ),
+          );
+      }
     }
-  }
+    return result;
+  };
+
+  const selected = (await pipeline.select()).filter(
+    (target) => !isCompleted(target),
+  );
+  const results: (TargetResult | undefined)[] = Array(selected.length);
+  let next = 0;
+  const worker = async () => {
+    while (stopped === undefined) {
+      const index = next++;
+      const target = selected[index];
+      if (target === undefined) return;
+      results[index] = await processTarget(target);
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(maxConcurrentTargets, selected.length) },
+      worker,
+    ),
+  );
+  const targets = results.flatMap((result) =>
+    result?.target === undefined ? [] : [result.target],
+  );
+  const skipped = results.flatMap((result) =>
+    result?.skipped === undefined ? [] : [result.skipped],
+  );
   return {
     campaignId,
     targets,

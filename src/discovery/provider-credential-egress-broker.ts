@@ -20,11 +20,17 @@ import {
   readPrivateProviderCredential,
 } from "./provider-private-credential.js";
 
-/** Names of the per-run broker container and the network it creates when none is given. */
-export const EGRESS_BROKER_LEFTOVER_PATTERNS = {
-  containers: [/^provider-egress-broker-[A-Za-z0-9_.-]+$/],
+/** Names of disposable discovery resources that may survive a killed host process. */
+export const DISCOVERY_LEFTOVER_PATTERNS = {
+  containers: [
+    /^provider-egress-broker-[A-Za-z0-9_.-]+$/,
+    /^codex-agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+  ],
   networks: [/^provider-egress-(?!broker-)[A-Za-z0-9_.-]+$/],
 } as const;
+
+/** @deprecated Use the complete discovery resource patterns. */
+export const EGRESS_BROKER_LEFTOVER_PATTERNS = DISCOVERY_LEFTOVER_PATTERNS;
 
 /** Memory ceiling of one per-run broker container. */
 export const EGRESS_BROKER_MEMORY_MIB = 512;

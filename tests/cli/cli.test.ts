@@ -112,6 +112,7 @@ async function harness(
     readonly labProvisionFailure?: boolean;
     readonly labMissingExtension?: boolean;
     readonly labSeedFailure?: boolean;
+    readonly labSeedThrows?: boolean;
     /** The first Finding lacks a runnable recipe until a new Lab scenario is selected. */
     readonly firstVerifierIncomplete?: boolean;
     readonly coreSource?: boolean;
@@ -165,7 +166,8 @@ async function harness(
     const names = (from: number) =>
       args.slice(from).filter((arg) => !arg.startsWith("-"));
     if (args[0] === "run" || args[0] === "create") {
-      const name = args[args.indexOf("--name") + 1];
+      const nameIndex = args.indexOf("--name");
+      const name = nameIndex < 0 ? undefined : args[nameIndex + 1];
       if (name !== undefined) live.containers.add(name);
     } else if (args[0] === "rm")
       for (const name of names(1)) live.containers.delete(name);
@@ -226,6 +228,7 @@ async function harness(
               `wbh-${uuid}-wp`,
               `wbh-${uuid}-proxy`,
               `provider-egress-broker-${uuid}`,
+              `codex-agent-${uuid}`,
               "operator-postgres",
               "wbh-notes",
               ...live.containers,
@@ -413,6 +416,7 @@ async function harness(
     [];
   const expirations: string[] = [];
   const verifierReferenceRoutes: unknown[] = [];
+  const labIdsDuringVerification: string[][] = [];
   let inFlight = 0;
   let maxInFlight = 0;
   const boundaries: WordPressCampaignBoundaries = {
@@ -430,7 +434,15 @@ async function harness(
         throw new Error("Synthetic Snapshot is absent");
       return snapshot;
     },
-    lab,
+    lab:
+      options.labSeedThrows === true
+        ? {
+            ...lab,
+            seedCanaries: async () => {
+              throw new Error("Synthetic seed exception");
+            },
+          }
+        : lab,
     sourceFor: async () => ({
       directory: sourceDirectory,
       tree,
@@ -560,6 +572,12 @@ async function harness(
       // A fresh-container Verifier; it hands back a recipe, never a verdict.
       async attempt(input) {
         verifierReferenceRoutes.push(input.referenceRoute);
+        labIdsDuringVerification.push(
+          [...live.containers].flatMap((name) => {
+            const id = /^wbh-([0-9a-f-]{36})-wp$/.exec(name)?.[1];
+            return id === undefined ? [] : [id];
+          }),
+        );
         if (
           ++verifierAttempts === 1 &&
           options.firstVerifierIncomplete === true
@@ -712,6 +730,7 @@ async function harness(
     coordinations,
     expirations,
     verifierReferenceRoutes,
+    labIdsDuringVerification,
     docker,
     live,
     root,
@@ -1872,6 +1891,148 @@ describe("harness CLI vertical slice", () => {
     expect(again.stdout).toContain("raw 2 → verifier通過 2 → confirmed 1");
   });
 
+  it("finishes in-flight targets after a provider limit, then resumes only unfinished targets", async () => {
+    const { run, configPath, prompts, ledger, maxInFlight, live, docker } =
+      await harness({
+        candidates: ["synthetic-plugin", "second-plugin", "third-plugin"],
+        limitOnCalls: [1],
+        zeroFindings: true,
+        config: {
+          promptId: undefined,
+          stopRules: { maxRuns: 1, noFindingRuns: 1 },
+          resources: {
+            maxConcurrentRuns: 1,
+            maxConcurrentTargets: 2,
+            memoryBudgetMiB: 10_240,
+          },
+        },
+      });
+    const command = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-parallel-stop",
+      "--config",
+      configPath,
+    ];
+
+    const stopped = await run(...command);
+    expect(stopped.code).toBe(3);
+    expect(prompts).toHaveLength(2);
+    expect(maxInFlight()).toBe(2);
+    expect(
+      ledger().read({
+        campaignId: "campaign-parallel-stop",
+        type: "discovery-run-started",
+      }),
+    ).toHaveLength(2);
+    expect(live.containers.size).toBe(0);
+    expect(live.networks.size).toBe(0);
+    expect(live.volumes.size).toBe(0);
+    expect(docker.some(({ args }) => args[0] === "ps")).toBe(false);
+
+    const resumed = await run(...command);
+    expect(resumed.code).toBe(0);
+    expect(prompts).toHaveLength(3);
+    expect(
+      ledger().read({
+        campaignId: "campaign-parallel-stop",
+        type: "discovery-run-started",
+      }),
+    ).toHaveLength(3);
+    // Two Labs on the first invocation, then the provider-limited target and
+    // the never-started target. The completed in-flight target is skipped.
+    expect(
+      ledger()
+        .read({
+          campaignId: "campaign-parallel-stop",
+          type: "lab-provisioned",
+        })
+        .filter(
+          ({ event }) =>
+            event.type === "lab-provisioned" && event.purpose === "discovery",
+        ),
+    ).toHaveLength(4);
+    expect(live.containers.size).toBe(0);
+    expect(live.networks.size).toBe(0);
+    expect(live.volumes.size).toBe(0);
+  });
+
+  it("tears down each parallel target Lab when setup throws without global cleanup", async () => {
+    const { run, configPath, live, docker, ledger } = await harness({
+      candidates: ["synthetic-plugin", "second-plugin"],
+      labSeedThrows: true,
+      config: {
+        promptId: undefined,
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+        resources: {
+          maxConcurrentRuns: 1,
+          maxConcurrentTargets: 2,
+          memoryBudgetMiB: 10_240,
+        },
+      },
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-parallel-cleanup",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(0);
+    expect(
+      ledger().read({
+        campaignId: "campaign-parallel-cleanup",
+        type: "target-skipped",
+      }),
+    ).toHaveLength(2);
+    expect(live.containers.size).toBe(0);
+    expect(live.networks.size).toBe(0);
+    expect(live.volumes.size).toBe(0);
+    expect(docker.some(({ args }) => args[0] === "ps")).toBe(false);
+    const targetRemovals = docker
+      .map(({ args }) => args)
+      .filter(
+        (args) =>
+          args[0] === "rm" &&
+          args.slice(2).some((name) => name.startsWith("wbh-")),
+      );
+    expect(targetRemovals).toHaveLength(2);
+    for (const removal of targetRemovals) {
+      const ids = new Set(
+        removal.slice(2).map((name) => /^wbh-([0-9a-f-]{36})-/.exec(name)?.[1]),
+      );
+      expect(ids.size).toBe(1);
+      expect(ids.has(undefined)).toBe(false);
+    }
+  });
+
+  it("keeps a target Lab until its verification finishes, then removes it", async () => {
+    const { run, configPath, labIdsDuringVerification, live, docker } =
+      await harness({
+        config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
+      });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-target-lifecycle",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(0);
+    expect(labIdsDuringVerification[0]).toHaveLength(2);
+    expect(new Set(labIdsDuringVerification[0]).size).toBe(2);
+    expect(live.containers.size).toBe(0);
+    expect(live.networks.size).toBe(0);
+    expect(live.volumes.size).toBe(0);
+    expect(docker.some(({ args }) => args[0] === "ps")).toBe(false);
+  });
+
   it("does not replace an incomplete Trial when the campaign resumes", async () => {
     const { run, configPath, ledger } = await harness({
       failOnCalls: [1],
@@ -2167,11 +2328,17 @@ describe("harness CLI vertical slice", () => {
     const listed = await run("lab", "cleanup", "--config", configPath);
     expect(listed.code).toBe(0);
     expect(listed.stdout.split("\n")).toEqual([
-      `leftover containers 4: wbh-${uuid}-db, wbh-${uuid}-wp, wbh-${uuid}-proxy, provider-egress-broker-${uuid}`,
+      `leftover containers 5: wbh-${uuid}-db, wbh-${uuid}-wp, wbh-${uuid}-proxy, provider-egress-broker-${uuid}, codex-agent-${uuid}`,
       `leftover networks 2: wbh-${uuid}-net, provider-egress-${uuid}`,
       `leftover volumes 1: wbh-${uuid}-site`,
       "nothing removed; run again with --remove when no campaign is running",
     ]);
+    expect(
+      docker.some(
+        ({ args }) =>
+          args[0] === "ps" && args[1] === "-a" && args.includes("{{.Names}}"),
+      ),
+    ).toBe(true);
     expect(docker.some(({ args }) => args[0] === "rm")).toBe(false);
 
     const removed = await run(
@@ -2183,7 +2350,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(removed.code).toBe(0);
     expect(removed.stdout).toContain(
-      "removed 4 containers, 2 networks, 1 volumes",
+      "removed 5 containers, 2 networks, 1 volumes",
     );
     const removals = docker
       .map(({ args }) => args)
@@ -2200,6 +2367,7 @@ describe("harness CLI vertical slice", () => {
         `wbh-${uuid}-wp`,
         `wbh-${uuid}-proxy`,
         `provider-egress-broker-${uuid}`,
+        `codex-agent-${uuid}`,
       ],
       ["network", "rm", `wbh-${uuid}-net`, `provider-egress-${uuid}`],
       ["volume", "rm", `wbh-${uuid}-site`],
