@@ -333,6 +333,12 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     verificationId: id,
     findingId: id,
     labSetupDigest: digest,
+    /** One-based verification attempt; absent in historical events. */
+    attempt: z.number().int().positive().optional(),
+    /** Previous verificationId when this is a retry. */
+    retryOf: id.optional(),
+    /** Pinned Verifier instruction version; absent in historical events. */
+    promptVersion: id.optional(),
     /** Present for a version comparison using a Finding bound to this snapshot. */
     basis: z
       .strictObject({
@@ -486,6 +492,7 @@ export type CampaignFunnel = FunnelCounts & {
   readonly unavailableInputRuns: number;
   readonly confirmedPerMillionInputTokens: number | null;
   readonly confirmedPerAgentWallHour: number | null;
+  /** Number of recorded verification events per Finding, including historical events. */
   readonly verificationAttempts: Readonly<Record<string, number>>;
   /** Reviewed, non-contradicted findings judged in-scope, per assessed programme. */
   readonly inScopeByProgramme: Readonly<Record<string, number>>;

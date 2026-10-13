@@ -45,6 +45,9 @@ type SyntheticFinding = {
 
 async function fixture(
   options: {
+    readonly attempt?: number;
+    readonly retryOf?: string;
+    readonly promptVersion?: string;
     readonly impact?: string;
     readonly labSnapshotDigest?: string;
     readonly provision?: "ready" | "incomplete";
@@ -300,6 +303,9 @@ async function fixture(
     store,
     lab,
     verifier,
+    ...(options.promptVersion === undefined
+      ? {}
+      : { promptVersion: options.promptVersion }),
     judges: {
       for: (candidate) =>
         candidate.impact === "account-takeover" ? judge : null,
@@ -376,6 +382,8 @@ async function fixture(
     campaignId: "campaign-1",
     findingId: finding.findingId,
     verificationId: "verification-1",
+    ...(options.attempt === undefined ? {} : { attempt: options.attempt }),
+    ...(options.retryOf === undefined ? {} : { retryOf: options.retryOf }),
     snapshot: {
       digest:
         options.latestVersion === true || options.fixedVersion === true
@@ -411,6 +419,33 @@ async function fixture(
 }
 
 describe("verification public interface", () => {
+  it("records retry lineage while returning the incomplete reason to its caller", async () => {
+    const { result, ledger } = await fixture({
+      attempt: 2,
+      retryOf: "verification-previous",
+      promptVersion: "verifier-v7",
+      verifier: async () => ({
+        status: "incomplete",
+        reason: "recipe",
+        nextStep: "Repair the route",
+      }),
+    });
+    expect(result).toEqual({
+      status: "incomplete",
+      reason: "recipe",
+      nextStep: "Repair the route",
+    });
+    expect(
+      ledger.read({ type: "verification-finished" })[0]?.event,
+    ).toMatchObject({
+      verificationId: "verification-1",
+      attempt: 2,
+      retryOf: "verification-previous",
+      promptVersion: "verifier-v7",
+      result: { status: "incomplete", reason: "recipe" },
+    });
+  });
+
   it("keeps a sandbox transport failure incomplete with its own reason", async () => {
     const { result } = await fixture({
       verifier: async () => {

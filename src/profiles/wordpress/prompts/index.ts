@@ -80,8 +80,9 @@ export async function loadWordPressDiscoveryAsset(
 }
 
 /** Fixed Verifier instructions; the caller records this exact byte digest. */
+export const WORDPRESS_VERIFIER_PROMPT_ID = "verifier-v7" as const;
 export async function loadWordPressVerifierPrompt(
-  id: "verifier-v6" | "verifier-v7" = "verifier-v7",
+  id: "verifier-v6" | "verifier-v7" = WORDPRESS_VERIFIER_PROMPT_ID,
 ): Promise<{
   readonly id: "verifier-v6" | "verifier-v7";
   readonly text: string;

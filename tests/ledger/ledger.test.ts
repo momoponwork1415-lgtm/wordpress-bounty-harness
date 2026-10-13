@@ -1173,3 +1173,62 @@ describe("Ledger optional fields added for review material (#186)", () => {
     expect(ledger.read({ type: "review-decided" })).toHaveLength(2);
   });
 });
+
+describe("verification attempt metadata (#107)", () => {
+  it("reads legacy events, records retry links, and counts attempts without changing verdict counts", async () => {
+    const { ledger } = await fixture();
+    for (const findingId of ["finding-a", "finding-b"])
+      await ledger.append({
+        ...common(`record-${findingId}`),
+        type: "finding-recorded",
+        findingId,
+        runId: "run-1",
+        category: "sqli",
+      });
+    for (const [verificationId, findingId, metadata] of [
+      ["a1", "finding-a", {}],
+      [
+        "a2",
+        "finding-a",
+        { attempt: 2, retryOf: "a1", promptVersion: "verifier-v7" },
+      ],
+      ["b1", "finding-b", { attempt: 1 }],
+    ] as const)
+      await ledger.append({
+        ...common(verificationId),
+        type: "verification-finished",
+        verificationId,
+        findingId,
+        labSetupDigest: labSetup,
+        ...metadata,
+        result: { status: "incomplete", reason: "recipe", nextStep: "Retry" },
+      });
+    const events = ledger.read({ type: "verification-finished" });
+    expect(events[0]?.event).not.toHaveProperty("attempt");
+    expect(events[0]?.event).not.toHaveProperty("retryOf");
+    expect(events[0]?.event).not.toHaveProperty("promptVersion");
+    expect(events[1]?.event).toMatchObject({
+      verificationId: "a2",
+      attempt: 2,
+      retryOf: "a1",
+      promptVersion: "verifier-v7",
+    });
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      verificationAttempts: { "finding-a": 2, "finding-b": 1 },
+      raw: 2,
+      verified: 2,
+      incomplete: 2,
+    });
+    await expect(
+      ledger.append({
+        ...common("zero-attempt"),
+        type: "verification-finished",
+        verificationId: "verification-zero",
+        findingId: "finding-a",
+        labSetupDigest: labSetup,
+        attempt: 0,
+        result: { status: "incomplete", reason: "recipe", nextStep: "Retry" },
+      }),
+    ).rejects.toThrow();
+  });
+});
