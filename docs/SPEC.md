@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.19、2026-10-11。設計判断はこの文書と [ADR](adr/) に置く。旧リポジトリの [Issue 221](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317) は経緯の資料であり、現在の探索主経路は [ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) に従う。現行コードとの差分と実装順は [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md)。TranslatePressでの最小ベンチマークと本番移行は [TRANSLATEPRESS-BENCHMARK.md](TRANSLATEPRESS-BENCHMARK.md)。
+版: v0.20、2026-10-13。設計判断はこの文書と [ADR](adr/) に置く。旧リポジトリの [Issue 221](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317) は経緯の資料であり、現在の探索主経路は [ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) に従う。現行コードとの差分と実装順は [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md)。TranslatePressでの最小ベンチマークと本番移行は [TRANSLATEPRESS-BENCHMARK.md](TRANSLATEPRESS-BENCHMARK.md)。
 
 ## 1. 目的と指標
 
@@ -52,7 +52,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、canaryの配置先（options、post meta、ファイル、canaryユーザー） |
 | 判定器集合 | 第7節の種別別判定器 |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
-| prompt雛形 | 既定 `wp2shell-bounty-v3`、比較用 `wp2shell-bounty-v2` と `short-objective-managed-v4`、過去の `screening-v1` を含む版付きprompt、trust境界宣言の雛形。ADR 0017、0019、0029 |
+| prompt雛形 | 既定 `wp2shell-bounty-v4`、比較・履歴照合用 `wp2shell-bounty-v3`、`wp2shell-bounty-v2` と `short-objective-managed-v4`、過去の `screening-v1` を含む版付きprompt、trust境界宣言の雛形。ADR 0017、0019、0029、0032 |
 | source補助 | 保存先のwrite / readをつなぐ索引と登録入口。Rootと子が参照できるが、固定した役割分担の命令にはしない |
 | Lead型 | sourceに根拠があり、影響までの辺が1つ足りないprimitiveの分類と記録 |
 | 評価対象の表現 | 開発対象のslug、版、修正版、影響分類。正解表の手入力は初期受入条件にしない |
@@ -79,11 +79,11 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 - 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
 - 対象の公開履歴: ローカルWordfence履歴DBから、snapshotの版より前（評価runではheld-outの公開日より前）に公開された対象プラグインの記録を抽出して渡す。内容は種別、影響版、修正版、公開日、公開記録のタイトル、修正版との差分で変わったファイルの一覧まで。PoC・payload・再現手順は含めない。渡した・渡さないを `CampaignInput` に記録する（ADR 0012）。
-- 入力: 版・digest付きの目的prompt `wp2shell-bounty-v3` を既定にし、`wp2shell-bounty-v2` と `short-objective-managed-v4` を比較armとして保持する。`screening-v1` 等の旧版は過去Trialの目的文とdigestの照合用に残し、旧screeningを現行modeで新規起動しない。人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、固定sourceから生成した入口索引、Lab HTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB accountを渡す。入口索引は入口の所在だけを示すカタログであり、経路や分担を指示しない。索引なしの比較Trialは別armとして記録し、同じ比較分母に混ぜない。分担と仮説はRootが決める。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
+- 入力: 版・digest付きの目的prompt `wp2shell-bounty-v4` を既定にし、`wp2shell-bounty-v3`、`wp2shell-bounty-v2` と `short-objective-managed-v4` を比較・履歴照合用に保持する。`screening-v1` 等の旧版は過去Trialの目的文とdigestの照合用に残し、旧screeningを現行modeで新規起動しない。人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、固定sourceから生成した入口索引、Lab HTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB accountを渡す。入口索引は入口の所在だけを示すカタログであり、経路や分担を指示しない。索引なしの比較Trialは別armとして記録し、同じ比較分母に混ぜない。分担と仮説はRootが決める。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
 - 許可する操作: 固定sourceの読み取り、LabへのHTTP、Lab DBのRO accountによる読み取り。探索runにcanaryは渡さず、canaryの発行と確認は検証段階のHarnessが行う。外向き通信は認証ブローカー経由のprovider APIだけ。
 - 構成: 対象ごとにRoot＋最大3子の協調Trialを1回行う。Harnessは人数上限、隔離、wall、証拠保存、停止を管理し、子の有効なFindingとLeadはRootの最終JSONと独立して保存する。開発セットの3回反復は独立したTrialとして測り、本番の対象ごと1回という既定を変えない（ADR 0029）。
 - 出力: `Finding[]`（0件可）、`Lead[]`（0件可）、観測できた入口索引の `examined` / `unexamined` と理由を記録する。入口索引の網羅は正常終了条件にしない。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。候補は生のまま保存し、profileの正規化を通してから受理する。受理できない候補は `candidate-held` として分類とissue pathだけを台帳に残し、保留だけのTrialは無成果に数えない（ADR 0018）。Finding / Leadの出力契約はprompt本文ではなくHarnessがschemaから生成する節として渡し、目的文と契約節のdigestを別に記録する（ADR 0019）。
-- 停止規則: 1 Trialの既定wall上限は60分。Rootの最終報告が早く返ればそこで正常終了し、Harnessは最低時間を強制しない。既定の `wp2shell-bounty-v3` 本文にも最低探索時間を置かない。履歴照合用のv2本文は変更しない。wall到達、provider上限、broker制限、実行・schema失敗は理由付きの `incomplete` とし、既に保存した子の成果を失わない。最終JSONに到達しなかったTrialを候補0件の正常完了にしない。Harnessによる続行差し込みや同一対象の自動追加Trialはしない。provider上限では新規Trialを止め、同じcampaign IDで未消費の対象を再開する。正常完了の0件も脆弱性なしを意味せず、source読取とwallから早期終了と探索後の0件を分ける。
+- 停止規則: 1 Trialの既定wall上限は60分。Rootの最終報告が早く返ればそこで正常終了し、Harnessは最低時間を強制しない。既定の `wp2shell-bounty-v4` 本文にも最低探索時間を置かない。履歴照合用のv2・v3本文は変更しない。wall到達、provider上限、broker制限、実行・schema失敗は理由付きの `incomplete` とし、既に保存した子の成果を失わない。最終JSONに到達しなかったTrialを候補0件の正常完了にしない。Harnessによる続行差し込みや同一対象の自動追加Trialはしない。provider上限では新規Trialを止め、同じcampaign IDで未消費の対象を再開する。正常完了の0件も脆弱性なしを意味せず、source読取とwallから早期終了と探索後の0件を分ける。
 - 同時実行: 最初はTrialを1つずつ回す。provider要求総数・usage・wallを観測し、安全に増やせることを確かめてから対象間の並列数を決める。
 - 記録する項目（runごと）: trialId / trialOrdinal、Root・子の役割、要求model IDとeffort、CLIの正確な版と同梱カタログのdigest、認証方式、cyber access program、service tier、各agentのusage（providerが返さない項目は `unavailable`）、観測できたsource読取とcommand件数の下限、入口索引・prompt・sourceのdigest、wallと停止理由。過去の段・継続付きrunは別形式として読めるようにする。
 - 本番model: Daybreak Blue対応の `gpt-6-sol` 系を使う。正確なmodel IDとsubagentへの継承は実機preflightで固定する。`gpt-6.1-sol`やLunaへ暗黙に切り替えない。
@@ -135,6 +135,12 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - 両プログラムとも最新版・既定設定での成立を要する。提出直前に最新版のsnapshotで再検証し、再現パッケージは遠隔攻撃者の視点の手順（HTTPリクエスト、画面画像）で書き、WP-CLIなどサーバー側だけの手順を含めない。
 - 公開資料間で矛盾するときは `in-scope` にせず `ambiguous` として人間へ回す。
 
+### 所有者の探索目標（2026-10-13）
+
+所有者が提示したCritical／Highの例は、今後の探索で重視する**効果**の基準であり、Programme Boundaryの受理条件やHarnessの検証結果とは別である。未認証またはsubscriber／customerから到達するコード実行、任意ファイルの読み取り・削除、コード実行につながるアップロード、SQL injection、Stored XSS、重大なデータの読み取り・改変に加え、未認証からの権限昇格と管理者への認証回避、subscriber／customerから管理者への権限昇格を狙う。`options-update` と `sensitive-object-access` は分類だけで一律に除外せず、具体的に到達した影響を人間が判断する。分類名や判定器のcanary成功だけでCritical／Highと断定しない。
+
+[Wordfenceの公式方針](https://www.wordfence.com/threat-intel/bug-bounty-program/)は、任意options更新をHigh Threatに含める一方、保護記事へのアクセスや基本的な情報露出を対象外に挙げている（2026-10-13確認）。所有者の探索目標と公式のscope・tier・install閾値を混同せず、提出前に最新方針を確認する。低価値と思われる仮説でも、検証が`incomplete`なら成立しないという結論にしない。
+
 ## 8b. 対象範囲の守らせ方
 
 対象範囲は4か所で、それぞれ違う強さで効かせる。promptだけに頼らない。
@@ -143,7 +149,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | --- | --- | --- |
 | `selection` | 対象外資産（作者、配布停止、ベンダー側service）を落とす。install下限は[選定方針 JSON](../src/profiles/wordpress/policy/selection.json)を正本とし、プログラムの報奨対象下限は別のscope規則として記録する。公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030） | 機械的。方針と除外理由を残す |
 | `lab` | discoveryとverifierに渡す認証情報を未認証・subscriber・customer（WooCommerce有効時）に限る。contributor以上と管理者の認証情報は渡さない。設定は既定のまま、一般的な利用範囲の初期データ（公開フォーム1つ等）はprofileのsetup manifestで入れ、Lab Setup digestに記録する | 機械的。contributor以上の経路は試せない。設定変更もできない |
-| `discovery` | 目的promptに到達すべき影響の共通分類（下表）と報奨順を書き、trust境界宣言でcontributor以上と管理者の明示設定を信頼側に置く | 誘導。agentは他も報告してよいが、台帳で分類される |
+| `discovery` | 版・digest付きのv4目的promptは上記の重大な効果を重視する。trust境界宣言でcontributor以上と管理者の明示設定を信頼側に置き、Finding / Leadの分類契約はHarnessがschemaから生成する | 誘導。低価値候補が出なくなる保証はなく、台帳で分類される |
 | `verification` と `review` | 判定器の成功条件をプログラムの受理条件に合わせる（下表）。scope評価はFindingと判定器の観測だけから、方針ファイルの規則で `in-scope` / `out` / `ambiguous` を出す。agentの自己申告は使わない | 機械的。提出候補にならない |
 
 影響の共通分類（両プログラムの受理条件を1つの語彙にしたもの。判定器とscope評価が共有する）:
@@ -163,6 +169,8 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `reflected-xss` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（JS実行、nonce不要が条件）だが出さない |
 | `csrf-to-write` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（連鎖が条件）だが出さない |
 | `missing-authz` / `idor`（到達先なし） | 判定器を作らない。到達先がある場合はその分類で判定する | 対象外 | 機微な対象以外は対象外 |
+
+この表の分類は所有者のCritical／High判定ではない。`options-update` は何が変わりどの被害に至るか、`sensitive-object-access` は何が誰に読めるかを確認する。現時点で証明できないFindingも従来の受理・検証・review経路に残す。影響の強さと提出価値は人間レビューで判定し、`incomplete` は陰性や低重大度の証明に使わない。
 
 分類に入らない主張（DoS、open redirect、SSRF、情報列挙等）は `other` として台帳に残し、探索の目的にも提出候補にもしない。
 

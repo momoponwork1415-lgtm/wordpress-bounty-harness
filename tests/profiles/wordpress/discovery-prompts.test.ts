@@ -99,6 +99,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
       "wp2shell-bounty-v3",
+      "wp2shell-bounty-v4",
       "wp2shell-whitebox-v1.7",
       "trust-boundary-v1",
     ]);
@@ -117,6 +118,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
       "wp2shell-bounty-v3",
+      "wp2shell-bounty-v4",
       "wp2shell-whitebox-v1.7",
     ]);
 
@@ -192,6 +194,8 @@ describe("WordPress discovery prompt assets", () => {
         "sha256:effeb9e343601157e2da76eb65b99d4de91a9618daf7379efce13491a1d6aba6",
       "wp2shell-bounty-v3":
         "sha256:a97b4b3c1101470cec743dd51af1d2169f15d4d5ee1a2797997be05edef72c9b",
+      "wp2shell-bounty-v4":
+        "sha256:6c823fe2ddb8a9af27ea743927f5d4a8203ec29ef4bca7dbadf3135c1739ab62",
       "wp2shell-whitebox-v1.7":
         "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",
     } as const;
@@ -226,6 +230,48 @@ describe("WordPress discovery prompt assets", () => {
       /sourceTrace|labObservations|JSON string|Each Finding is an object|Each Lead is an object/,
     );
     expect(text).not.toMatch(
+      /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|\b(?:PoC|CVE|advisory)\b/i,
+    );
+  });
+
+  it("makes Critical and High examples the v4 objective without making an impact label a verdict", async () => {
+    const archived = await loadWordPressDiscoveryAsset("wp2shell-bounty-v3");
+    const current = await loadWordPressDiscoveryAsset("wp2shell-bounty-v4");
+    expect(archived.digest).toBe(
+      "sha256:a97b4b3c1101470cec743dd51af1d2169f15d4d5ee1a2797997be05edef72c9b",
+    );
+    expect(current.text).toContain(
+      "Finding targets are these Critical examples for an unauthenticated attacker",
+    );
+    expect(current.text).toContain(
+      "Finding targets are these High examples for a subscriber or customer attacker",
+    );
+    for (const effect of [
+      "arbitrary file deletion",
+      "arbitrary file read",
+      "arbitrary file upload leading to remote code execution",
+      "remote code execution",
+      "privilege escalation",
+      "SQL injection",
+      "stored XSS",
+      "missing authorization causing critical data alteration or read",
+      "authentication bypass to administrator",
+    ])
+      expect(current.text).toContain(effect);
+    expect(current.text).toContain("no extra exploit prerequisites");
+    expect(current.text).toContain("beyond the ordinary feature flow");
+    expect(current.text).toContain(
+      "Report a Finding only for a complete route",
+    );
+    expect(current.text).toContain("Keep concrete unresolved chains as Leads");
+    expect(current.text).toContain("An impact label alone");
+    expect(current.text).toContain("`options-update`");
+    expect(current.text).toContain("`sensitive-object-access`");
+    expect(current.text).not.toContain("Prioritize `rce`");
+    expect(current.text).not.toMatch(
+      /sourceTrace|labObservations|JSON string|Each Finding is an object|Each Lead is an object/,
+    );
+    expect(current.text).not.toMatch(
       /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|\b(?:PoC|CVE|advisory)\b/i,
     );
   });
