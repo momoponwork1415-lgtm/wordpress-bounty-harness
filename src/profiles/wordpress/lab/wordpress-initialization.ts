@@ -13,11 +13,19 @@ import {
   downloadManagerOrdinarySetupScript,
 } from "./download-manager-adapter.js";
 import {
+  scenarioBookingPage,
+  scenarioBuilderPage,
+  scenarioFileAttachmentForm,
   scenarioContent,
+  scenarioSearchableComment,
   scenarioTranslationSeedScript,
   translatePressLocaleSetupScript,
   type WordPressScenario,
 } from "./scenarios.js";
+import { buildSearchableCommentIndex } from "./relevanssi-search-index.js";
+import { seedSimplyScheduleBooking } from "./simply-schedule-booking.js";
+import { seedBrizyBuilderPage } from "./brizy-builder-page.js";
+import { seedBrizyFileAttachmentForm } from "./brizy-file-attachment-form.js";
 import {
   USER_REGISTRATION_SCENARIO_ID,
   userRegistrationOrdinarySetupScript,
@@ -165,8 +173,11 @@ async function createAccounts(input: WordPressInitialization): Promise<void> {
     ]);
 }
 
-async function seedInitialPosts(input: WordPressInitialization): Promise<void> {
+async function seedInitialPosts(
+  input: WordPressInitialization,
+): Promise<string | undefined> {
   const { resource, wp, setup, scenario } = input;
+  let approvedCommentPostId: string | undefined;
   for (const [index, title] of setup.initialPosts.entries()) {
     const approvedComment =
       index === 0 &&
@@ -182,17 +193,19 @@ async function seedInitialPosts(input: WordPressInitialization): Promise<void> {
     const postId = created.stdout.trim();
     if (!/^[1-9][0-9]*$/.test(postId))
       throw new Error("Seed post ID is unavailable");
+    approvedCommentPostId = postId;
     await wp(resource, [
       "comment",
       "create",
       `--comment_post_ID=${postId}`,
-      "--comment_content=Thanks for the useful post.",
+      `--comment_content=${scenarioSearchableComment(scenario)?.body ?? "Thanks for the useful post."}`,
       "--comment_author=Lab Reader",
       "--comment_author_email=lab-reader@example.invalid",
       "--comment_type=comment",
       "--comment_approved=1",
     ]);
   }
+  return approvedCommentPostId;
 }
 
 async function seedScenarioContent(
@@ -330,9 +343,34 @@ export async function initializeWordPress(
   await installPlugins(input);
   await configureSecondaryLocale(input);
   await createAccounts(input);
-  await seedInitialPosts(input);
+  const approvedCommentPostId = await seedInitialPosts(input);
   await seedScenarioContent(input);
   await seedScenarioTranslation(input);
+  await buildSearchableCommentIndex({
+    scenario: input.scenario,
+    targetSlug: input.target.slug,
+    postId: approvedCommentPostId,
+    resource: input.resource,
+    wp: input.wp,
+  });
+  await seedSimplyScheduleBooking({
+    bookingPage: scenarioBookingPage(input.scenario),
+    targetSlug: input.target.slug,
+    resource: input.resource,
+    wp: input.wp,
+  });
+  await seedBrizyBuilderPage({
+    builderPage: scenarioBuilderPage(input.scenario),
+    targetSlug: input.target.slug,
+    resource: input.resource,
+    wp: input.wp,
+  });
+  await seedBrizyFileAttachmentForm({
+    fileAttachmentForm: scenarioFileAttachmentForm(input.scenario),
+    targetSlug: input.target.slug,
+    resource: input.resource,
+    wp: input.wp,
+  });
   await seedScenarioRegistration(input);
   await seedScenarioMembership(input);
   await seedScenarioCommentForm(input);

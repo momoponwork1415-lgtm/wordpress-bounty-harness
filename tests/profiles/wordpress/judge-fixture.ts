@@ -103,6 +103,7 @@ export function quietLab(overrides: Partial<JudgeLab> = {}): JudgeLab {
       return { status: "unavailable" };
     },
     canaryLedger: () => canaries,
+    issuedScriptNonces: () => [],
     async observeSessionUser() {
       return { status: "none" };
     },
@@ -139,6 +140,7 @@ export async function judgeOnce(options: {
   readonly impact: WordPressFinding["impact"];
   readonly lab: JudgeLab;
   readonly files: Readonly<Record<string, string>>;
+  readonly finding?: WordPressFinding;
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-judge-"));
   directories.push(root);
@@ -147,8 +149,9 @@ export async function judgeOnce(options: {
     maxEntries: 10,
     maxBytes: 1024 * 1024,
   });
+  const candidate = options.finding ?? finding(options.impact);
   const judge = createWordPressJudges({ store, lab: options.lab }).for(
-    finding(options.impact),
+    candidate,
   );
   if (judge === null) return { judgeId: null, store, observed: null };
   const recipeDigest = await store.putFiles(options.files);
@@ -156,7 +159,7 @@ export async function judgeOnce(options: {
     judgeId: judge.id,
     store,
     observed: await judge.observe({
-      finding: finding(options.impact),
+      finding: candidate,
       lab: handle,
       recipeDigest,
     }),

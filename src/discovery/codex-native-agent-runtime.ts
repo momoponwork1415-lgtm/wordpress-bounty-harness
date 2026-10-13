@@ -42,10 +42,21 @@ const reportSchema = z.strictObject({
   examined: z.string().max(16_384),
   unexamined: z.string().max(16_384),
 });
-/** Children are not constrained by Root's --output-schema; admit both object and encoded claims. */
+/** Children are not constrained by Root's --output-schema; preserve structured coverage as text. */
 const childCoverageSchema = z
-  .union([z.string(), z.array(z.string())])
-  .transform((value) => (Array.isArray(value) ? value.join("\n") : value))
+  .union([
+    z.string(),
+    z.array(z.union([z.string(), z.record(z.string(), z.json())])),
+  ])
+  .transform((value) =>
+    Array.isArray(value)
+      ? value
+          .map((entry) =>
+            typeof entry === "string" ? entry : canonicalJson(entry),
+          )
+          .join("\n")
+      : value,
+  )
   .pipe(z.string().max(16_384));
 const childReportSchema = z.strictObject({
   findings: z.array(z.unknown()),
@@ -1474,9 +1485,14 @@ export class CodexNativeAgentRuntime {
     } catch {
       // Keep the original transcript failure when no candidate report can be extracted.
     }
+    // A failed broker relay explains the CLI error without invalidating the
+    // separately captured candidate report.
     return incompleteExecution(
       state,
-      "schema",
+      reasonDetail === "unadmitted-event-type:error" &&
+        (state.brokerMetrics?.relayFailures ?? 0) > 0
+        ? "provider"
+        : "schema",
       result.completedAt,
       grantReceiptDigest,
       undefined,

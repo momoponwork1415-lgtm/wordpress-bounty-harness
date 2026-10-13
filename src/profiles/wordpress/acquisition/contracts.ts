@@ -62,6 +62,12 @@ const targetProvenanceSchema = z.discriminatedUnion("kind", [
     sourceUrl: z.url(),
     acquisitionRef: immutableArtifactRefSchema,
   }),
+  z.strictObject({
+    kind: z.literal("wordpress-org-svn"),
+    sourceUrl: z.url(),
+    revision: z.number().int().positive(),
+    acquisitionRef: immutableArtifactRefSchema,
+  }),
 ]);
 
 export const manualTargetIntakeRequestSchema = z.strictObject({
@@ -137,6 +143,11 @@ export const targetIntakePacketSchema = z.strictObject({
     }),
     z.strictObject({
       kind: z.literal("captured-wordpress-org-archive"),
+      digest: digestSchema,
+      files: z.array(sourceFileEntrySchema).min(1),
+    }),
+    z.strictObject({
+      kind: z.literal("captured-wordpress-org-svn-export"),
       digest: digestSchema,
       files: z.array(sourceFileEntrySchema).min(1),
     }),

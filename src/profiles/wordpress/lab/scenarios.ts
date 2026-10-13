@@ -1,4 +1,6 @@
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import { brizyBuilderPageSetupScript } from "./brizy-builder-page.js";
+import { brizyFileAttachmentFormSetupScript } from "./brizy-file-attachment-form.js";
 import {
   DOWNLOAD_MONITOR_SCENARIO_ID,
   downloadMonitorOrdinarySetupScript,
@@ -27,6 +29,11 @@ import {
   wpMembersOrdinarySetupScript,
 } from "./wp-members-adapter.js";
 
+const fileAttachmentFormAdapterDigest = canonicalDigest({
+  builderPage: brizyBuilderPageSetupScript(),
+  fileAttachmentForm: brizyFileAttachmentFormSetupScript(),
+});
+
 /** Ordinary site setup only. Scenarios never grant privileged roles. */
 const definitions = [
   {
@@ -37,6 +44,51 @@ const definitions = [
     approvedComment: true,
     secondaryLocale: null,
     translation: null,
+  },
+  {
+    id: "approved-comment-searchable-v1",
+    version: 1,
+    name: "検索可能な承認済みコメント",
+    pluginSlug: null,
+    approvedComment: true,
+    secondaryLocale: null,
+    translation: null,
+    searchableComment: {
+      body: "A reader noticed the ordinary orchardlantern detail.",
+      searchTerm: "orchardlantern",
+    },
+  },
+  {
+    id: "public-booking-page-v1",
+    version: 1,
+    name: "公開予約ページ",
+    pluginSlug: null,
+    approvedComment: false,
+    secondaryLocale: null,
+    translation: null,
+    bookingPage: true,
+  },
+  {
+    id: "public-builder-page-v1",
+    version: 1,
+    name: "公開ビルダーページ",
+    pluginSlug: null,
+    approvedComment: false,
+    secondaryLocale: null,
+    translation: null,
+    builderPage: true,
+  },
+  {
+    id: "public-file-attachment-form-v1",
+    version: 1,
+    name: "公開のファイル添付フォーム",
+    pluginSlug: null,
+    approvedComment: false,
+    secondaryLocale: null,
+    translation: null,
+    builderPage: true,
+    fileAttachmentForm: true,
+    adapterDigest: fileAttachmentFormAdapterDigest,
   },
   {
     id: "translatepress-translation-data-v1",
@@ -174,6 +226,14 @@ const definitions = [
 const pins: Record<(typeof definitions)[number]["id"], string> = {
   "approved-comment-v1":
     "sha256:a9c59e0011d96d800a5b44657f6d608eb914af00c6d2a16bad85dfc31d960ebe",
+  "approved-comment-searchable-v1":
+    "sha256:9d3da1e037c7b986f9b6ae3b6300bda900af1ccd330e355936d094643490a3c6",
+  "public-booking-page-v1":
+    "sha256:2eee266e20d5f3fd97691d3fca7e6a6b29c31c27bca89f24e91a270c3c9b2a19",
+  "public-builder-page-v1":
+    "sha256:eb3935f5d09cbce5598408d9f9e01ec167e11f9ad7153d06a6987edf237d81a7",
+  "public-file-attachment-form-v1":
+    "sha256:74e511ab2d7f35e0249cd42efcb82bfc9f4bf569820435742db3b3ad80a5dc58",
   "translatepress-translation-data-v1":
     "sha256:111ae6445c8290ae49494ebf4ae116994262722f74114994ed4115ad5930bffc",
   "private-post-v1":
@@ -250,6 +310,40 @@ export function scenarioContent(scenario: WordPressScenario | undefined):
     : undefined;
 }
 
+export function scenarioSearchableComment(
+  scenario: WordPressScenario | undefined,
+): { readonly body: string; readonly searchTerm: string } | undefined {
+  return scenario !== undefined && "searchableComment" in scenario
+    ? scenario.searchableComment
+    : undefined;
+}
+
+export function scenarioBookingPage(
+  scenario: WordPressScenario | undefined,
+): boolean {
+  return (
+    scenario !== undefined && "bookingPage" in scenario && scenario.bookingPage
+  );
+}
+
+export function scenarioBuilderPage(
+  scenario: WordPressScenario | undefined,
+): boolean {
+  return (
+    scenario !== undefined && "builderPage" in scenario && scenario.builderPage
+  );
+}
+
+export function scenarioFileAttachmentForm(
+  scenario: WordPressScenario | undefined,
+): boolean {
+  return (
+    scenario !== undefined &&
+    "fileAttachmentForm" in scenario &&
+    scenario.fileAttachmentForm
+  );
+}
+
 /** Match stated prerequisites, never the claimed impact or a recipe. */
 export function nextWordPressScenario(
   precondition: string,
@@ -266,6 +360,22 @@ export function nextWordPressScenario(
   const comment = /approved comment|comment fixture|承認済みコメント/.test(
     text,
   );
+  const searchableComment =
+    /(?:comment.{0,50}(?:search|index)|(?:search|index).{0,50}comment|コメント.{0,20}(?:検索|索引)|(?:検索|索引).{0,20}コメント)/.test(
+      text,
+    );
+  const bookingPage =
+    /booking (?:page|form)|appointment (?:page|form)|予約(?:ページ|フォーム)/.test(
+      text,
+    );
+  const builderPage =
+    /builder (?:page|post)|(?:page|post) (?:built|created) (?:with|in) (?:the )?builder|ビルダー.{0,8}(?:ページ|投稿)/.test(
+      text,
+    );
+  const fileAttachmentForm =
+    /(?:file[ -]attachment|file[ -]upload).{0,40}form|form.{0,40}(?:file[ -]attachment|file[ -]upload)|ファイル添付.{0,20}フォーム|フォーム.{0,20}ファイル添付/.test(
+      text,
+    );
   const privateContent = privatePost || privatePage;
   const needsTranslationData =
     /dictionary|translated|translation|翻訳|辞書/.test(text);
@@ -280,6 +390,10 @@ export function nextWordPressScenario(
     privateContent &&
     ((privatePost && privatePage) ||
       comment ||
+      searchableComment ||
+      bookingPage ||
+      builderPage ||
+      fileAttachmentForm ||
       needsTranslationData ||
       needsLocalizedPrivateContent ||
       (needsSecondaryLocale && context?.secondaryLocaleConfigured !== true))
@@ -291,9 +405,17 @@ export function nextWordPressScenario(
       ? "private-page-v1"
       : translation
         ? "translatepress-translation-data-v1"
-        : comment
-          ? "approved-comment-v1"
-          : undefined;
+        : bookingPage
+          ? "public-booking-page-v1"
+          : fileAttachmentForm
+            ? "public-file-attachment-form-v1"
+            : builderPage
+              ? "public-builder-page-v1"
+              : searchableComment
+                ? "approved-comment-searchable-v1"
+                : comment
+                  ? "approved-comment-v1"
+                  : undefined;
   const scenario = id === undefined ? undefined : wordPressScenario(id);
   const current =
     currentId === undefined ? undefined : wordPressScenario(currentId);
@@ -301,7 +423,9 @@ export function nextWordPressScenario(
     scenario !== undefined &&
     (scenario.id === currentId ||
       (scenario.id === "approved-comment-v1" &&
-        current?.approvedComment === true));
+        current?.approvedComment === true) ||
+      (scenario.id === "public-builder-page-v1" &&
+        scenarioBuilderPage(current)));
   return scenario === undefined || alreadyPresent
     ? "catalogue に無い前提"
     : `${scenario.id}: ${scenario.name}`;

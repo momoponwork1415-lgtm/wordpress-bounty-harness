@@ -105,6 +105,7 @@ async function fixture(options: {
         return { status: "unavailable" };
       },
       canaryLedger: () => (options.seeded === false ? null : canaries),
+      issuedScriptNonces: () => [],
       async observeSessionUser(_lab, cookie) {
         presented.push(cookie);
         if (options.session === "unavailable") return { status: "unavailable" };

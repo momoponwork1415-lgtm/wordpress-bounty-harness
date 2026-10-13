@@ -96,6 +96,7 @@ async function fixture(
     /** Paths whose visit makes the stored script reach the beacon receiver. */
     firesOn: [] as string[],
     beacons: [] as string[],
+    browserFailureAt: null as string | null,
   };
   const salts = new Map<string, string>();
   let seededRow = "";
@@ -231,6 +232,12 @@ async function fixture(
           const visit = request.args
             .find((arg) => arg.startsWith("WBH_VISIT_PATH="))
             ?.slice("WBH_VISIT_PATH=".length);
+          if (visit === database.browserFailureAt)
+            return {
+              exitCode: 1,
+              stdout: "",
+              stderr: "private-debug-marker",
+            };
           if (visit !== undefined && database.firesOn.includes(visit))
             database.beacons.push("/b/fixed-nonce");
           return {
@@ -890,6 +897,223 @@ describe("WordPress gVisor Lab", () => {
     },
   );
 
+  it.each(["discovery", "verification"] as const)(
+    "builds a normal searchable approved comment index in a %s Lab",
+    async (purpose) => {
+      const { lab, snapshot, setup, commands } = await fixture(
+        "ready",
+        undefined,
+        "relevanssi",
+      );
+      const scenario = wordPressScenario("approved-comment-searchable-v1")!;
+      const provisioned = await lab.provision(
+        snapshot,
+        {
+          ...setup,
+          scenario: { id: scenario.id, digest: scenario.digest },
+        },
+        { purpose },
+      );
+      expect(provisioned.status).toBe("ready");
+      if (provisioned.status !== "ready") return;
+      const commentIndex = commands.findIndex(({ args }) =>
+        args.includes(
+          "--comment_content=A reader noticed the ordinary orchardlantern detail.",
+        ),
+      );
+      const settingIndex = commands.findIndex(({ args }) =>
+        args.includes("relevanssi_index_comments"),
+      );
+      const buildIndex = commands.findIndex(({ args }) =>
+        args.some((arg) => arg.includes("relevanssi_build_index()")),
+      );
+      expect(commentIndex).toBeGreaterThanOrEqual(0);
+      expect(settingIndex).toBeGreaterThan(commentIndex);
+      expect(buildIndex).toBeGreaterThan(settingIndex);
+      expect(commands[settingIndex]?.args).toContain("normal");
+      expect(commands[buildIndex]?.args.join(" ")).toContain(
+        "term=%s AND comment>0",
+      );
+      expect(
+        nextWordPressScenario("approved comment searchable in the index"),
+      ).toBe(`${scenario.id}: ${scenario.name}`);
+      expect(
+        nextWordPressScenario(
+          "approved comment searchable in the index",
+          scenario.id,
+        ),
+      ).toBe("catalogue に無い前提");
+      expect(
+        nextWordPressScenario(
+          "approved comment searchable in the index",
+          "approved-comment-v1",
+        ),
+      ).toBe(`${scenario.id}: ${scenario.name}`);
+      await lab.teardown(provisioned.handle);
+    },
+  );
+
+  it("rejects a searchable comment when no target adapter exists", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("approved-comment-searchable-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
+  it.each(["discovery", "verification"] as const)(
+    "seeds a normal public booking page in a %s Lab",
+    async (purpose) => {
+      const { lab, snapshot, setup, commands } = await fixture(
+        "ready",
+        undefined,
+        "simply-schedule-appointments",
+      );
+      const scenario = wordPressScenario("public-booking-page-v1")!;
+      const result = await lab.provision(
+        snapshot,
+        { ...setup, scenario: { id: scenario.id, digest: scenario.digest } },
+        { purpose },
+      );
+      expect(result.status).toBe("ready");
+      if (result.status !== "ready") return;
+      expect(
+        commands.some(({ args }) =>
+          args.some((arg) => arg.includes('"post_content"=>"[ssa_booking]"')),
+        ),
+      ).toBe(true);
+      expect(nextWordPressScenario("Public booking page is missing")).toBe(
+        `${scenario.id}: ${scenario.name}`,
+      );
+      await lab.teardown(result.handle);
+    },
+  );
+
+  it("rejects a booking page when no target adapter exists", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-booking-page-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
+  it.each(["discovery", "verification"] as const)(
+    "seeds a normal public builder page in a %s Lab",
+    async (purpose) => {
+      const { lab, snapshot, setup, commands } = await fixture(
+        "ready",
+        undefined,
+        "brizy",
+      );
+      const scenario = wordPressScenario("public-builder-page-v1")!;
+      const result = await lab.provision(
+        snapshot,
+        { ...setup, scenario: { id: scenario.id, digest: scenario.digest } },
+        { purpose },
+      );
+      expect(result.status).toBe("ready");
+      if (result.status !== "ready") return;
+      expect(
+        commands.some(({ args }) =>
+          args.some((arg) => arg.includes("$editor->enable_editor()")),
+        ),
+      ).toBe(true);
+      expect(nextWordPressScenario("Public builder page is missing")).toBe(
+        `${scenario.id}: ${scenario.name}`,
+      );
+      await lab.teardown(result.handle);
+    },
+  );
+
+  it("rejects a builder page when no target adapter exists", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-builder-page-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
+  it("catalogues an ordinary public form with a file attachment independently of the builder page", () => {
+    const form = wordPressScenario("public-file-attachment-form-v1");
+    const builder = wordPressScenario("public-builder-page-v1");
+    expect(form?.name).toBe("公開のファイル添付フォーム");
+    expect(
+      form && "adapterDigest" in form ? form.adapterDigest : undefined,
+    ).toBe(
+      "sha256:e67915bcb506678e170e1801d2e91fb6b1e5ef4865f4bb87a76aae133d817272",
+    );
+    expect(form?.digest).toBe(
+      "sha256:74e511ab2d7f35e0249cd42efcb82bfc9f4bf569820435742db3b3ad80a5dc58",
+    );
+    expect(builder?.digest).toBe(
+      "sha256:eb3935f5d09cbce5598408d9f9e01ec167e11f9ad7153d06a6987edf237d81a7",
+    );
+    expect(
+      nextWordPressScenario("A public form with a file attachment is missing"),
+    ).toBe("public-file-attachment-form-v1: 公開のファイル添付フォーム");
+    expect(
+      nextWordPressScenario(
+        "A public form with a file attachment is missing",
+        "public-file-attachment-form-v1",
+      ),
+    ).toBe("catalogue に無い前提");
+    expect(
+      nextWordPressScenario(
+        "A public builder page is missing",
+        "public-file-attachment-form-v1",
+      ),
+    ).toBe("catalogue に無い前提");
+  });
+
+  it.each(["discovery", "verification"] as const)(
+    "seeds an ordinary public attachment form in a %s Lab",
+    async (purpose) => {
+      const { lab, snapshot, setup, commands } = await fixture(
+        "ready",
+        undefined,
+        "brizy",
+      );
+      const scenario = wordPressScenario("public-file-attachment-form-v1")!;
+      const result = await lab.provision(
+        snapshot,
+        { ...setup, scenario: { id: scenario.id, digest: scenario.digest } },
+        { purpose },
+      );
+      expect(result.status).toBe("ready");
+      if (result.status !== "ready") return;
+      expect(result.handle.scenario).toEqual({
+        id: scenario.id,
+        digest: scenario.digest,
+      });
+      expect(
+        commands.some(({ args }) =>
+          args.some((arg) => arg.includes("Brizy_Editor_Forms_FormManager")),
+        ),
+      ).toBe(true);
+      await lab.teardown(result.handle);
+    },
+  );
+
+  it("rejects a public attachment form before starting containers when no target adapter exists", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const scenario = wordPressScenario("public-file-attachment-form-v1")!;
+    const result = await lab.provision(snapshot, {
+      ...setup,
+      scenario: { id: scenario.id, digest: scenario.digest },
+    });
+    expect(result.status).toBe("incomplete");
+    expect(commands.some(({ args }) => args[0] === "run")).toBe(false);
+  });
+
   it("does not promise a private-content scenario unless a separate locale prerequisite is met", () => {
     const privatePost = wordPressScenario("private-post-v1")!;
     const translation = wordPressScenario(
@@ -1519,6 +1743,21 @@ describe("WordPress gVisor Lab", () => {
     });
     expect(await contexts([])).toEqual({ status: "observed", contexts: [] });
 
+    database.browserFailureAt = "/wp-admin/admin.php?page=fixture";
+    const failedVictimVisit = await contexts([], {
+      role: "administrator",
+      paths: ["/wp-admin/admin.php?page=fixture"],
+    });
+    expect(failedVictimVisit).toEqual({
+      status: "unavailable",
+      phase: "victim-page",
+    });
+    expect(JSON.stringify(failedVictimVisit)).not.toContain(
+      "private-debug-marker",
+    );
+    expect(JSON.stringify(failedVictimVisit)).not.toContain("page=fixture");
+    database.browserFailureAt = null;
+
     const browsers = commands.filter(
       (command) =>
         command.args[0] === "run" &&
@@ -1580,13 +1819,13 @@ describe("WordPress gVisor Lab", () => {
     ).toBe(true);
     expect(
       await lab.observeStoredScript(handle, { routePaths: ["no-slash"] }),
-    ).toEqual({ status: "unavailable" });
+    ).toEqual({ status: "unavailable", phase: "route-input" });
     expect(
       await lab.observeStoredScript(handle, {
         routePaths: [],
         victim: { role: "administrator", paths: ["/\\outside.invalid"] },
       }),
-    ).toEqual({ status: "unavailable" });
+    ).toEqual({ status: "unavailable", phase: "victim-input" });
     expect(
       await lab.observeStoredScript(handle, {
         routePaths: [],
@@ -1600,7 +1839,7 @@ describe("WordPress gVisor Lab", () => {
           ],
         } as unknown as WordPressVictimRoute,
       }),
-    ).toEqual({ status: "unavailable" });
+    ).toEqual({ status: "unavailable", phase: "victim-input" });
     expect(await lab.teardown(handle)).toEqual({ status: "removed" });
     expect(
       commands.some(

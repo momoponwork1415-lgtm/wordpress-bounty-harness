@@ -36,6 +36,7 @@ type JudgeLab = Pick<
   | "observeOptions"
   | "observeStoredScript"
   | "readCapture"
+  | "issuedScriptNonces"
 >;
 type Options = {
   readonly store: PrivateArtifactStore;
@@ -45,8 +46,34 @@ type Options = {
 
 const sessionSchema = z.strictObject({ cookie: z.string().min(1).max(4096) });
 const routeFieldsSchema = z.looseObject({});
-const referenceRouteSchema = z.looseObject({
+const scriptNonceSchema = z.string().regex(/^[A-Za-z0-9-]{1,100}$/);
+const routeDefinitionSchema = z.looseObject({
+  role: z.enum(["unauthenticated", "subscriber", "customer"]),
+  account: z.string().min(1).max(128),
+  defaultSettings: z.boolean(),
+  configurationChanges: z.array(z.string()).max(30),
   steps: z.array(wordpressReproductionStepSchema).min(1).max(30),
+  victim: wordpressVictimRouteSchema.optional(),
+});
+const capturedRequestSchema = z.strictObject({
+  method: z.string(),
+  path: z.string(),
+  body: z.string(),
+  headers: z.record(z.string(), z.string()),
+  statusCode: z.number().int().min(200).max(299),
+});
+const capturedRouteSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  scenario: z
+    .strictObject({ id: z.string().min(1), digest: z.string().min(1) })
+    .nullable(),
+  issuedScriptNonces: z.array(scriptNonceSchema).max(10),
+  requests: z.array(capturedRequestSchema).min(1).max(30),
+});
+const referenceRouteSchema = z.looseObject({
+  ...routeDefinitionSchema.shape,
+  capturedRoute: capturedRouteSchema,
+  comparisonKind: z.enum(["latest-version", "fixed-version"]).optional(),
 });
 const routeConditionsSchema = z.looseObject({
   role: z.string().min(1).max(64),
@@ -88,8 +115,234 @@ type HttpEvidence = {
   readonly captureBytes?: Buffer;
 };
 
-/** A negative control must replay every HTTP step from the confirmed route. */
-export function matchesReferenceRoute(
+type CapturedRequest = z.infer<typeof capturedRequestSchema>;
+const authenticationHeader = /(?:cookie|auth|token|nonce|api.?key|session)/i;
+
+function headerValue(
+  headers: Record<string, unknown>,
+  name: string,
+): string | null {
+  const matches = Object.entries(headers).filter(
+    ([candidate]) => candidate.toLowerCase() === name.toLowerCase(),
+  );
+  return matches.length === 1 && typeof matches[0]?.[1] === "string"
+    ? matches[0][1]
+    : null;
+}
+
+/** Captured body bytes must be representable without loss before comparison. */
+function capturedRequest(
+  exchange: unknown,
+): z.infer<typeof capturedExchangeSchema>["request"] | null {
+  const parsed = capturedExchangeSchema.safeParse(exchange);
+  if (!parsed.success || parsed.data.request.truncated) return null;
+  const { body, bodyBase64 } = parsed.data.request;
+  if (Buffer.from(body, "utf8").toString("base64") !== bodyBase64) return null;
+  return parsed.data.request;
+}
+
+/** An HTTP 200 response can still be an explicit application rejection. */
+function explicitApplicationFailure(body: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    return (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      "success" in parsed &&
+      parsed.success === false
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Every captured exchange must be declared and return 2xx. */
+function capturedAttackRequests(
+  http: HttpRecord,
+  steps: z.infer<typeof wordpressReproductionStepSchema>[],
+): CapturedRequest[] | null {
+  const httpSteps = steps.filter((step) => step.kind === "http");
+  if (httpSteps.length === 0 || httpSteps.length !== http.exchanges.length)
+    return null;
+  const requests: CapturedRequest[] = [];
+  for (const [index, step] of httpSteps.entries()) {
+    const exchange = http.exchanges[index];
+    const parsed = capturedExchangeSchema.safeParse(exchange);
+    const request = capturedRequest(exchange);
+    if (!parsed.success || request === null) return null;
+    if (
+      request.method !== step.method ||
+      request.path !== step.path ||
+      request.body !== (step.body ?? "") ||
+      parsed.data.response.statusCode < 200 ||
+      parsed.data.response.statusCode >= 300 ||
+      explicitApplicationFailure(parsed.data.response.body)
+    )
+      return null;
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(request.headers)) {
+      const key = name.toLowerCase();
+      if (
+        authenticationHeader.test(key) ||
+        Object.hasOwn(headers, key) ||
+        typeof value !== "string"
+      )
+        return null;
+      headers[key] = value;
+    }
+    for (const [name, value] of Object.entries(step.headers ?? {}))
+      if (headerValue(request.headers, name) !== value) return null;
+    requests.push({
+      method: request.method,
+      path: request.path,
+      body: request.body,
+      headers,
+      statusCode: parsed.data.response.statusCode,
+    });
+  }
+  return requests;
+}
+
+/** Only Lab-issued tokens may change between otherwise identical attack bytes. */
+function withFreshScriptNonces(
+  value: string,
+  oldNonces: readonly string[],
+  freshNonces: readonly string[],
+): string | null {
+  if (oldNonces.length !== freshNonces.length) return null;
+  let translated = value;
+  for (let index = 0; index < oldNonces.length; index++) {
+    const oldNonce = oldNonces[index];
+    const freshNonce = freshNonces[index];
+    if (
+      oldNonce === undefined ||
+      freshNonce === undefined ||
+      !scriptNonceSchema.safeParse(oldNonce).success ||
+      !scriptNonceSchema.safeParse(freshNonce).success
+    )
+      return null;
+    if (oldNonce !== freshNonce && oldNonce.length < 16) return null;
+    // URL-encoded form fields may escape some nonce bytes (including hyphens).
+    // Preserve exactly which bytes were escaped; do not decode and reserialize
+    // the surrounding attack body.
+    if (oldNonce.length === freshNonce.length) {
+      const pattern = [...oldNonce]
+        .map((character) => {
+          const literal = character.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+          const hex = character.charCodeAt(0).toString(16).padStart(2, "0");
+          return `(?:${literal}|%${hex}|%${hex.toUpperCase()})`;
+        })
+        .join("");
+      translated = translated.replace(new RegExp(pattern, "g"), (match) => {
+        const units = match.match(/%[0-9a-fA-F]{2}|./g) ?? [];
+        return units
+          .map((unit, position) => {
+            const next = freshNonce[position];
+            if (next === undefined) return unit;
+            if (!unit.startsWith("%")) return next;
+            const hex = next.charCodeAt(0).toString(16).padStart(2, "0");
+            return `%${/[A-F]/.test(unit) ? hex.toUpperCase() : hex}`;
+          })
+          .join("");
+      });
+    } else {
+      translated = translated.replaceAll(oldNonce, freshNonce);
+    }
+  }
+  return translated;
+}
+
+function sameRouteSteps(
+  oldSteps: z.infer<typeof wordpressReproductionStepSchema>[],
+  newSteps: z.infer<typeof wordpressReproductionStepSchema>[],
+  oldNonces: readonly string[],
+  freshNonces: readonly string[],
+): boolean {
+  if (oldSteps.length !== newSteps.length) return false;
+  const comparable = (
+    step: z.infer<typeof wordpressReproductionStepSchema>,
+  ) => {
+    const { expected: _expected, ...rest } = step;
+    return rest;
+  };
+  for (let index = 0; index < oldSteps.length; index++) {
+    const oldStep = oldSteps[index];
+    const newStep = newSteps[index];
+    if (oldStep === undefined || newStep === undefined) return false;
+    const translated = withFreshScriptNonces(
+      canonicalJson(comparable(oldStep)),
+      oldNonces,
+      freshNonces,
+    );
+    if (
+      translated === null ||
+      translated !== canonicalJson(comparable(newStep))
+    )
+      return false;
+  }
+  return true;
+}
+
+/** A negative control needs a bound prior capture, the same setup, and the same attack. */
+function matchesReferenceRoute(
+  http: HttpRecord,
+  currentRoute: unknown,
+  referenceRoute: unknown,
+  lab: WordPressLabHandle,
+  freshNonces: readonly string[] | null,
+): boolean {
+  const reference = referenceRouteSchema.safeParse(referenceRoute);
+  const current = routeDefinitionSchema.safeParse(currentRoute);
+  if (!reference.success || !current.success || freshNonces === null)
+    return false;
+  const baseline = reference.data.capturedRoute;
+  const oldNonces = baseline.issuedScriptNonces;
+  if (
+    canonicalJson(baseline.scenario) !== canonicalJson(lab.scenario ?? null) ||
+    reference.data.role !== "unauthenticated" ||
+    reference.data.role !== current.data.role ||
+    reference.data.account !== current.data.account ||
+    reference.data.defaultSettings !== current.data.defaultSettings ||
+    canonicalJson(reference.data.configurationChanges) !==
+      canonicalJson(current.data.configurationChanges) ||
+    canonicalJson(reference.data.victim ?? null) !==
+      canonicalJson(current.data.victim ?? null) ||
+    !sameRouteSteps(
+      reference.data.steps,
+      current.data.steps,
+      oldNonces,
+      freshNonces,
+    )
+  )
+    return false;
+  const replay = capturedAttackRequests(http, current.data.steps);
+  if (replay === null || replay.length !== baseline.requests.length)
+    return false;
+  return baseline.requests.every((oldRequest, index) => {
+    const freshRequest = replay[index];
+    if (freshRequest === undefined) return false;
+    return (
+      (["method", "path", "body"] as const).every((field) => {
+        const oldValue = oldRequest[field];
+        const freshValue = freshRequest[field];
+        return (
+          withFreshScriptNonces(oldValue, oldNonces, freshNonces) === freshValue
+        );
+      }) &&
+      Object.keys(oldRequest.headers).length ===
+        Object.keys(freshRequest.headers).length &&
+      Object.entries(oldRequest.headers).every(
+        ([name, value]) =>
+          withFreshScriptNonces(value, oldNonces, freshNonces) ===
+          freshRequest.headers[name],
+      )
+    );
+  });
+}
+
+/** Routes without a Harness-bound capture: every HTTP step must appear in order. */
+function matchesReferenceRouteSteps(
   http: HttpRecord,
   referenceRoute: unknown,
 ): boolean {
@@ -298,6 +551,7 @@ async function observePrincipals(
 async function recordEvidence(
   options: Options,
   lab: WordPressLabHandle,
+  finding: WordPressFinding,
   recipeDigest: string,
   observation: Record<string, unknown>,
   httpEvidence: HttpEvidence,
@@ -312,9 +566,30 @@ async function recordEvidence(
     5 * 1024 * 1024,
   );
   if (!route.success || http.status !== "resolved") return null;
+  const definition = routeDefinitionSchema.safeParse(route.data);
+  const issuedScriptNonces = options.lab.issuedScriptNonces(lab);
+  const requests =
+    httpEvidence.capture === "harness-captured" &&
+    httpEvidence.http !== null &&
+    definition.success &&
+    definition.data.role === finding.attackerPosition &&
+    definition.data.role === "unauthenticated"
+      ? capturedAttackRequests(httpEvidence.http, definition.data.steps)
+      : null;
+  const capturedRoute =
+    requests === null || issuedScriptNonces === null
+      ? null
+      : {
+          schemaVersion: 1 as const,
+          scenario: lab.scenario ?? null,
+          issuedScriptNonces,
+          requests,
+        };
   return options.store.putFiles({
     "confirmed-route.json": canonicalJson({
       ...route.data,
+      // Always overwrite a Verifier-supplied field: only the Lab may bind it.
+      capturedRoute,
       schemaVersion: 1,
       snapshotDigest: lab.snapshotDigest,
       labSetupDigest: lab.setupDigest,
@@ -338,7 +613,11 @@ async function recordEvidence(
     ...(httpEvidence.captureBytes === undefined
       ? {}
       : { "proxy-capture.jsonl": httpEvidence.captureBytes }),
-    "canary-observation.json": canonicalJson(observation),
+    "canary-observation.json": canonicalJson({
+      ...observation,
+      capturedRouteDigest:
+        capturedRoute === null ? null : canonicalDigest(capturedRoute),
+    }),
     ...(screenshot === undefined ? {} : { "victim-screen.png": screenshot }),
   });
 }
@@ -351,7 +630,7 @@ function canaryJudge(
 ): Judge<WordPressFinding, WordPressLabHandle> {
   return {
     id,
-    async observe({ lab, recipeDigest, referenceRoute }) {
+    async observe({ finding, lab, recipeDigest, referenceRoute }) {
       const canaries = options.lab.canaryLedger(lab);
       if (canaries === null)
         return {
@@ -421,7 +700,7 @@ function canaryJudge(
         if (
           bound === null ||
           httpEvidence.http === null ||
-          !matchesReferenceRoute(httpEvidence.http, bound)
+          !matchesReferenceRouteSteps(httpEvidence.http, bound)
         ) {
           const evidenceDigest =
             httpEvidence.captureBytes === undefined
@@ -458,6 +737,33 @@ function canaryJudge(
         }
         strictRoute = bound;
       }
+      const boundReference = referenceRouteSchema.safeParse(referenceRoute);
+      // Harness-bound reference routes (#127) are compared byte-for-byte. A route
+      // without a bound capture counts as matched only through a verified smoke
+      // binding (#126); any other unbound route stays incomplete.
+      const routeMatched =
+        referenceRoute === undefined ||
+        (httpEvidence.capture === "harness-captured" &&
+          httpEvidence.http !== null &&
+          (boundReference.success
+            ? matchesReferenceRoute(
+                httpEvidence.http,
+                await readJson(options.store, recipeDigest, "route.json"),
+                referenceRoute,
+                lab,
+                options.lab.issuedScriptNonces(lab),
+              )
+            : strictRoute !== referenceRoute));
+      const fixedVersion = z
+        .looseObject({ comparisonKind: z.literal("fixed-version") })
+        .safeParse(referenceRoute).success;
+      if (fixedVersion && !routeMatched)
+        return {
+          status: "incomplete",
+          reason: "observation",
+          nextStep:
+            "The captured rerun did not match the earlier confirmed HTTP route; repeat the same route",
+        };
       const decision = await decide({
         lab,
         recipeDigest,
@@ -465,12 +771,7 @@ function canaryJudge(
         httpEvidence,
       });
       if (decision === null) {
-        if (
-          strictRoute !== undefined &&
-          (httpEvidence.capture !== "harness-captured" ||
-            httpEvidence.http === null ||
-            !matchesReferenceRoute(httpEvidence.http, strictRoute))
-        ) {
+        if (!routeMatched) {
           const evidenceDigest =
             httpEvidence.captureBytes === undefined
               ? undefined
@@ -502,15 +803,44 @@ function canaryJudge(
           httpEvidence.captureBytes === undefined
         )
           return { status: "not-observed" };
+        // A matching captured route cannot show that the application accepted it.
+        const processingUnproven = boundReference.success;
         const evidenceDigest = await options.store.putFiles({
           "proxy-capture.jsonl": httpEvidence.captureBytes,
           "canary-observation.json": canonicalJson({
             judgeId: id,
-            status: "not-observed",
+            status: processingUnproven ? "incomplete" : "not-observed",
+            ...(processingUnproven
+              ? {
+                  canaryObserved: false,
+                  processingWitness: "unavailable",
+                }
+              : {}),
             snapshotDigest: lab.snapshotDigest,
             labSetupDigest: lab.setupDigest,
+            ...(boundReference.success && httpEvidence.http !== null
+              ? {
+                  referenceResponseStatuses:
+                    boundReference.data.capturedRoute.requests.map(
+                      (request) => request.statusCode,
+                    ),
+                  capturedResponseStatuses: httpEvidence.http.exchanges.map(
+                    (exchange) =>
+                      capturedExchangeSchema.parse(exchange).response
+                        .statusCode,
+                  ),
+                }
+              : {}),
           }),
         });
+        if (processingUnproven)
+          return {
+            status: "incomplete",
+            reason: "observation",
+            nextStep:
+              "The fixed route returned no canary, but the Lab has no independent witness that the application processed it; verify processing before treating this as a negative control",
+            evidenceDigest,
+          };
         return {
           status: "not-observed",
           evidenceCapture: "harness-captured",
@@ -522,6 +852,7 @@ function canaryJudge(
       const evidenceDigest = await recordEvidence(
         options,
         lab,
+        finding,
         recipeDigest,
         {
           judgeId: id,
@@ -934,7 +1265,16 @@ function storedScriptJudge(options: Options) {
       });
       switch (script.status) {
         case "unavailable":
-          return unavailable;
+          return script.phase === undefined
+            ? unavailable
+            : {
+                status: "incomplete",
+                reason: "observation",
+                nextStep:
+                  script.phase === "victim-page"
+                    ? "Stored-script observation failed at victim-page; inspect the saved victim route/actions in Private Evidence and repeat"
+                    : `Stored-script observation failed at ${script.phase}; inspect the Lab observer and repeat`,
+              };
         case "not-prepared":
           return {
             status: "incomplete",

@@ -157,6 +157,17 @@ export interface ScriptCanary {
 export type WordPressScriptContext =
   "front" | "admin-all" | "admin-partial" | "route-page" | "victim-route-page";
 
+/** Bounded observer diagnostic; never includes a visited path or browser output. */
+export type WordPressStoredScriptFailurePhase =
+  | "lab"
+  | "route-input"
+  | "victim-input"
+  | "front"
+  | "dashboard"
+  | "posts"
+  | "route-page"
+  | "victim-page";
+
 export type WordPressStoredScriptObservation =
   | {
       readonly status: "observed";
@@ -171,7 +182,12 @@ export type WordPressStoredScriptObservation =
       /** First page whose visit delivered an issued canary; stays in Private Evidence. */
       readonly screenshot?: Buffer;
     }
-  | { readonly status: "not-prepared" | "unavailable" };
+  | { readonly status: "not-prepared" }
+  | {
+      readonly status: "unavailable";
+      /** Optional for callers created before phase diagnostics were added. */
+      readonly phase?: WordPressStoredScriptFailurePhase;
+    };
 
 export type WordPressOptionsObservation =
   | { readonly status: "observed"; readonly changed: readonly string[] }
@@ -309,6 +325,8 @@ export interface WordPressLab extends LabProvisioner<
   ): Promise<WordPressCanaryFilesObservation>;
   /** Issues a nonce whose beacon URL a stored script would request from inside the Lab. */
   prepareScriptCanary(handle: WordPressLabHandle): ScriptCanary | null;
+  /** Harness-owned issued script nonces for comparing a captured route across Labs. */
+  issuedScriptNonces(handle: WordPressLabHandle): readonly string[] | null;
   /**
    * Opens the front page, two admin screens and the route's pages in fresh
    * browsers; a context counts only when the receiver logged an issued nonce.

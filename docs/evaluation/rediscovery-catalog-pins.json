@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "manifestDigest": "sha256:8859127f2c6f9b1cf1ab889da2966149632af0cfa34246ea64a8400c1d231892",
+  "cases": [
+    {
+      "caseId": "brizy-2-8-11",
+      "slug": "brizy",
+      "vulnerableVersion": "2.8.11",
+      "fixedVersion": "2.8.12"
+    },
+    {
+      "caseId": "relevanssi-4-28-3",
+      "slug": "relevanssi",
+      "vulnerableVersion": "4.28.3",
+      "fixedVersion": "4.28.4"
+    },
+    {
+      "caseId": "simply-schedule-1-6-10-0",
+      "slug": "simply-schedule-appointments",
+      "vulnerableVersion": "1.6.10.0",
+      "fixedVersion": "1.6.10.2"
+    },
+    {
+      "caseId": "smash-balloon-4-13-0",
+      "slug": "custom-facebook-feed",
+      "vulnerableVersion": "4.13.0",
+      "fixedVersion": "4.14.0"
+    },
+    {
+      "caseId": "translatepress-3-2-6-a",
+      "slug": "translatepress-multilingual",
+      "vulnerableVersion": "3.2.6",
+      "fixedVersion": "3.3"
+    },
+    {
+      "caseId": "translatepress-3-2-6-b",
+      "slug": "translatepress-multilingual",
+      "vulnerableVersion": "3.2.6",
+      "fixedVersion": "3.3"
+    },
+    {
+      "caseId": "translatepress-3-3-1",
+      "slug": "translatepress-multilingual",
+      "vulnerableVersion": "3.3.1",
+      "fixedVersion": "3.3.2"
+    },
+    {
+      "caseId": "unlimited-elements-2-0-16",
+      "slug": "unlimited-elements-for-elementor",
+      "vulnerableVersion": "2.0.16",
+      "fixedVersion": "2.0.21"
+    }
+  ]
+}

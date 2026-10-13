@@ -13,7 +13,17 @@ import type {
   WordPressSource,
   WordPressSourceResolver,
 } from "./index.js";
-import { wordPressScenario, type WordPressScenario } from "./scenarios.js";
+import {
+  scenarioBookingPage,
+  scenarioBuilderPage,
+  scenarioFileAttachmentForm,
+  wordPressScenario,
+  type WordPressScenario,
+} from "./scenarios.js";
+import { assertSearchableCommentTarget } from "./relevanssi-search-index.js";
+import { assertSimplyScheduleBookingTarget } from "./simply-schedule-booking.js";
+import { assertBrizyBuilderPageTarget } from "./brizy-builder-page.js";
+import { assertBrizyFileAttachmentFormTarget } from "./brizy-file-attachment-form.js";
 import {
   DATABASE_NAME,
   READ_ONLY_DATABASE_USER,
@@ -177,6 +187,19 @@ export async function prepareWordPressLab(
     resolved.target.pluginSlug !== scenario.pluginSlug
   )
     throw new Error("Lab scenario requires its plugin");
+  assertSearchableCommentTarget(scenario, resolved.target.pluginSlug);
+  assertSimplyScheduleBookingTarget(
+    scenarioBookingPage(scenario),
+    resolved.target.pluginSlug,
+  );
+  assertBrizyBuilderPageTarget(
+    scenarioBuilderPage(scenario),
+    resolved.target.pluginSlug,
+  );
+  assertBrizyFileAttachmentFormTarget(
+    scenarioFileAttachmentForm(scenario),
+    resolved.target.pluginSlug,
+  );
   if (
     setup.translatePress !== undefined &&
     resolved.target.pluginSlug !== "translatepress-multilingual"
