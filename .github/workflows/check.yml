@@ -2,12 +2,19 @@ name: check
 
 on:
   pull_request:
+    # labeled / unlabeled を含めないと、owner-approved を付けても adr-guard が再実行されない
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   push:
     branches: [main]
+
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -19,12 +26,52 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      # 配布物（dist/ と prompt / policy / recorder の複製）が壊れていないか。typecheck は noEmit なので別に要る。
+      - run: pnpm build
 
-  adr-guard:
-    # docs/adr/ と docs/SPEC.md、および agent に渡る文章（prompt、skill、出力契約、victim 契約）を変える PR は
-    # 所有者の owner-approved ラベルが要る（docs/DEVELOPMENT.md 第 5 節・第 6 節）
+  private-guard:
+    # SPEC.md 第 2 節 8: payload、HTTP 記録、画面画像、実行ログ、認証情報、未公開の発見は Git 外の Private Evidence に置く。
+    # 提出 package の構成物（report / fill / poc / evidence）や記録・画像・大きな binary が PR に入ったら止める。
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reject private evidence and submission artefacts
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          # base との二点 diff だと、PR branch が古い main から分岐している間に main 側へ入った変更が逆向きに見える。merge-base からの三点 diff にする。
+          added=$(git diff --name-only --diff-filter=AMR "$(git merge-base "$BASE" "$HEAD")" "$HEAD")
+          bad=$(printf '%s\n' "$added" | grep -Ei \
+            '(^|/)(\.private|evidence|poc|attachments|private-evidence)(/|$)|(^|/)(wordfence-fill|submission-package|human-verification|verification-package)[^/]*\.json$|\.(har|sqlite|sqlite3|db|png|jpe?g|gif|webp|mp4|mov|webm|zip|tar|gz|7z|pcap|pem|key)$' \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "Private Evidence か提出 package の構成物に見える path があります（SPEC.md 第 2 節 8、docs/DEVELOPMENT.md 第 5 節）:"
+            echo "$bad"
+            exit 1
+          fi
+          big=$(printf '%s\n' "$added" | while read -r f; do
+            [ -f "$f" ] && [ "$(wc -c < "$f")" -gt 524288 ] && echo "$f ($(wc -c < "$f") bytes)" || true
+          done)
+          if [ -n "$big" ]; then
+            echo "512 KiB を超えるファイルが追加されています。記録や複製は Git 外に置く:"
+            echo "$big"
+            exit 1
+          fi
+          echo "private-guard: ok"
+
+  adr-guard:
+    # docs/adr/ と docs/SPEC.md、agent に渡る文章（prompt、skill、出力契約、victim 契約）、
+    # および所有者が決めた方針そのもの（policy/、Programme Boundary の impact 分類）を変える PR は
+    # 所有者の owner-approved ラベルが要る（docs/DEVELOPMENT.md 第 5 節・第 6 節、ADR 0032）
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,19 +83,21 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           has_label() { printf '%s' "$LABELS" | tr ',' '\n' | grep -qx 'owner-approved'; }
+          BASE=$(git merge-base "$BASE" "$HEAD")  # 三点 diff（private-guard と同じ理由）
           adr=$(git diff --name-only "$BASE" "$HEAD" -- docs/adr/ docs/SPEC.md | wc -l)
           text=$(git diff --name-only "$BASE" "$HEAD" -- \
             src/profiles/wordpress/prompts/ \
             .claude/skills/ \
             src/profiles/wordpress/discovery/output-contract.ts \
             src/profiles/wordpress/verification/codex-verifier.ts \
-            src/profiles/wordpress/policy/campaign.json | wc -l)
+            src/profiles/wordpress/discovery/programme-impacts.ts \
+            src/profiles/wordpress/policy/ | wc -l)
           if [ "$adr" -gt 0 ] && ! has_label; then
             echo "docs/adr/ または docs/SPEC.md に差分があります。所有者が owner-approved ラベルを付けるまで merge できません。"
             exit 1
           fi
           if [ "$text" -gt 0 ] && ! has_label; then
-            echo "agent に渡る文章（prompt、skill、出力契約、victim 契約、Programme Boundary）に差分があります。所有者が全文を読んで owner-approved ラベルを付けるまで merge できません。"
+            echo "agent に渡る文章（prompt、skill、出力契約、victim 契約）か所有者の方針（policy/、Programme Boundary）に差分があります。所有者が全文を読んで owner-approved ラベルを付けるまで merge できません。"
             exit 1
           fi
           echo "adr-guard: ok"
