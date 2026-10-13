@@ -40,6 +40,21 @@ export const verificationResultV1Schema = z.discriminatedUnion("status", [
     reproductionTemplate: packageDocumentReferenceSchema.optional(),
   }),
   z.strictObject({
+    status: z.literal("reproduced"),
+    reproducerId: id,
+    proofKind: z.literal("captured-script-observation"),
+    conditions: conditionsSchema,
+    evidenceDigest: digest,
+    reproductionPackageDigest: digest,
+    /** A fixed release does not exist for a current, unpatched target. */
+    negativeControl: z.enum([
+      "unavailable-no-fixed-release",
+      "pending-fixed-version",
+    ]),
+    acceptanceCriteria: packageDocumentReferenceSchema.optional(),
+    reproductionTemplate: packageDocumentReferenceSchema.optional(),
+  }),
+  z.strictObject({
     status: z.literal("contradicted"),
     judgeId: id,
     evidenceDigest: digest,
@@ -60,6 +75,8 @@ export const verificationResultV1Schema = z.discriminatedUnion("status", [
       "no-judge",
     ]),
     nextStep: z.string().min(1).max(2000),
+    /** A profile found an ordinary Lab scenario to try before human review. */
+    nextScenarioId: id.optional(),
     evidenceDigest: digest.optional(),
     refutationDigest: digest.optional(),
   }),
@@ -73,8 +90,14 @@ const judgeResultSchema = z.discriminatedUnion("status", [
     acceptanceCriteria: true,
     reproductionTemplate: true,
   }),
-  verificationResultV1Schema.options[1],
+  verificationResultV1Schema.options[1].omit({
+    reproductionPackageDigest: true,
+    negativeControl: true,
+    acceptanceCriteria: true,
+    reproductionTemplate: true,
+  }),
   verificationResultV1Schema.options[2],
+  verificationResultV1Schema.options[3],
 ]);
 
 export interface ReproductionRenderer<Reconstruction> {
@@ -82,6 +105,7 @@ export interface ReproductionRenderer<Reconstruction> {
     /** Finding classification; its original claim may be agent-authored. */
     readonly category: string;
     readonly judgeId: string;
+    readonly proofKind: "nonce-canary" | "captured-script-observation";
     readonly conditions: Readonly<Record<string, string>>;
     readonly route: unknown;
     readonly snapshotDigest: string;
@@ -89,6 +113,10 @@ export interface ReproductionRenderer<Reconstruction> {
     readonly labSetupDigest: string;
     readonly evidenceDigest: string;
     readonly store: PrivateArtifactStore;
+    readonly setup?: unknown;
+    readonly snapshot?: unknown;
+    readonly negativeControl?:
+      "unavailable-no-fixed-release" | "pending-fixed-version";
   }): Promise<{
     readonly manual: string;
     readonly script: string;
@@ -111,6 +139,10 @@ export async function publishReproductionPackage<Reconstruction>(input: {
   readonly labSetupDigest: string;
   readonly judgeResult: unknown;
   readonly reconstruction: Reconstruction;
+  readonly negativeControl?:
+    "unavailable-no-fixed-release" | "pending-fixed-version";
+  readonly setup?: unknown;
+  readonly snapshot?: unknown;
 }): Promise<VerificationResultV1> {
   const judge = judgeResultSchema.parse(input.judgeResult);
   if (
@@ -125,17 +157,18 @@ export async function publishReproductionPackage<Reconstruction>(input: {
       nextStep: "Repeat verification against the finding snapshot",
     };
   }
-  if (judge.status !== "runtime-confirmed") {
+  if (judge.status !== "runtime-confirmed" && judge.status !== "reproduced") {
     return {
       status: "incomplete",
       reason: "precondition",
-      nextStep:
-        "A Harness judge must confirm the nonce canary before packaging",
+      nextStep: "A Harness observation is required before packaging",
     };
   }
   const routeFile = await input.store.readFile(
     judge.evidenceDigest,
-    "confirmed-route.json",
+    judge.status === "runtime-confirmed"
+      ? "confirmed-route.json"
+      : "reproduced-route.json",
     64 * 1024,
   );
   if (routeFile.status !== "resolved") {
@@ -169,13 +202,22 @@ export async function publishReproductionPackage<Reconstruction>(input: {
     const rendered = await input.renderer.render({
       route,
       category: input.category,
-      judgeId: judge.judgeId,
+      judgeId:
+        judge.status === "runtime-confirmed"
+          ? judge.judgeId
+          : judge.reproducerId,
+      proofKind: judge.proofKind,
       conditions: judge.conditions,
       snapshotDigest: input.findingSnapshotDigest,
       reconstruction: input.reconstruction,
       labSetupDigest: input.labSetupDigest,
       evidenceDigest: judge.evidenceDigest,
       store: input.store,
+      ...(input.setup === undefined ? {} : { setup: input.setup }),
+      ...(input.snapshot === undefined ? {} : { snapshot: input.snapshot }),
+      ...(input.negativeControl === undefined
+        ? {}
+        : { negativeControl: input.negativeControl }),
     });
     const auxiliaryFiles = rendered.auxiliaryFiles ?? {};
     const auxiliaryNames = Object.keys(auxiliaryFiles);
@@ -238,16 +280,27 @@ export async function publishReproductionPackage<Reconstruction>(input: {
     if (committed.status === "conflict")
       throw new Error("Package artifact conflict");
     staging = undefined;
-    return {
-      status: "runtime-confirmed",
-      judgeId: judge.judgeId,
-      proofKind: judge.proofKind,
+    const packaged = {
       conditions: judge.conditions,
       evidenceDigest: judge.evidenceDigest,
       reproductionPackageDigest: committed.artifact.digest,
       ...(acceptanceCriteria === undefined ? {} : { acceptanceCriteria }),
       ...(reproductionTemplate === undefined ? {} : { reproductionTemplate }),
     };
+    return judge.status === "runtime-confirmed"
+      ? {
+          ...packaged,
+          status: "runtime-confirmed",
+          judgeId: judge.judgeId,
+          proofKind: judge.proofKind,
+        }
+      : {
+          ...packaged,
+          status: "reproduced",
+          reproducerId: judge.reproducerId,
+          proofKind: judge.proofKind,
+          negativeControl: input.negativeControl ?? "pending-fixed-version",
+        };
   } catch {
     return {
       status: "incomplete",

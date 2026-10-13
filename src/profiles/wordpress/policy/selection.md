@@ -10,6 +10,6 @@
 - `maximumTargets` は週の対象数。`select` が台帳の過去選定と Finding を除いた候補をスコア順に補充して返す。`revisitPolicy` は版上昇・prompt 版変更時の再訪を指定するが、未公開 Finding がある対象は再訪しない。次の campaign は最新の選定バッチに固定された対象と Snapshot を使う。
 - `maximumObservationAgeDays` と `maximumUpdateAgeDays` は別々の鮮度制限。Wordfence programme 方針の観測も `current` である必要がある。
 - `surfaceTagWeights` は、WordPress.org の公開タグを攻撃面の弱い代理指標として採点する。タグがなければ 0 点。公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030）。
-- `highThreatTags` のいずれかを持つ対象は High Threat の攻撃面（未認証で届くファイル操作、option更新、認証処理）を持つとみなす。`scoreWeights.highThreat` を1回だけ加点し、`highThreatSurface` に記録する。Wordfence では、これらの種別が25件以上で報奨対象になる。
-- `scoreWeights` を変えると、install 数、更新の新しさ、公開タグ、High Threat の寄与が変わる。スコア内訳、方針 digest、観測 ref は `TargetSelection` に残る。
-- `runBudget` は対象ごとの discovery run の上限。High Threat の攻撃面を持つ対象は `highThreat`、それ以外は `default` を使う。campaign 設定の `stopRules.maxRuns` は安全上の上限で、実際の上限は2つの小さいほう。
+- `highThreatTags`、`surfaceTagWeights`、`scoreWeights.surface / highThreat` は旧方針の互換のためだけに読める。現行方針には無く、順位は install 数と更新の新しさだけで決める（ADR 0032 Q5）。候補タグは Wordfence ミラーと WordPress.org のタグから機械的に出した族で、採点には使わない（ADR 0032 Q3、docs/reviews/2026-10-13-selection-data.md）。
+- `scoreWeights` を変えると、install 数と更新の新しさの寄与が変わる。スコア内訳、方針 digest、観測 ref は `TargetSelection` に残る。
+- `runBudget` は旧方針の互換のためだけに読める。本番の run 数は campaign 設定の `stopRules.maxRuns` が決める（ADR 0032 Q6）。選ばれた対象を指名したタグは `candidateTag` に残り、半年後にタグ別の有償率を測る材料になる。

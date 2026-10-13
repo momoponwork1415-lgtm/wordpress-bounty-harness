@@ -215,6 +215,50 @@ async function fixture(
 }
 
 describe("CodexVerifier.attempt", () => {
+  it("records a replay in its own campaign when the same Finding exists in an earlier campaign", async () => {
+    const f = await fixture([
+      {
+        "http.json": JSON.stringify({
+          exchanges: [{ request: {}, response: { body: "ordinary" } }],
+        }),
+        "steps.md": "Step",
+      },
+    ]);
+    const original = f.ledger.read({
+      campaignId: "campaign-1",
+      type: "finding-recorded",
+      limit: 1,
+    })[0]?.event;
+    if (original?.type !== "finding-recorded")
+      throw new Error("Synthetic Finding is missing");
+    expect(
+      await f.ledger.append({
+        ...original,
+        identity: "smoke-finding",
+        campaignId: "smoke-campaign",
+      }),
+    ).toMatchObject({ status: "appended" });
+
+    const attempt = await f.verifier.attempt({
+      campaignId: "smoke-campaign",
+      finding: f.finding,
+      lab: f.lab,
+    });
+    expect(attempt.status).toBe("attempted");
+    expect(
+      f.ledger.read({
+        campaignId: "campaign-1",
+        type: "verifier-run-finished",
+      }),
+    ).toHaveLength(0);
+    expect(
+      f.ledger.read({
+        campaignId: "smoke-campaign",
+        type: "verifier-run-finished",
+      }),
+    ).toHaveLength(1);
+  });
+
   it("passes the Lab's read-only database endpoint to the verifier transport", async () => {
     const f = await fixture(
       [
@@ -241,6 +285,7 @@ describe("CodexVerifier.attempt", () => {
       },
     });
     const attempt = await f.verifier.attempt({
+      campaignId: "campaign-1",
       finding: f.finding,
       lab: f.lab,
     });
@@ -299,7 +344,11 @@ describe("CodexVerifier.attempt", () => {
         },
       },
     });
-    await f.verifier.attempt({ finding: f.finding, lab: f.lab });
+    await f.verifier.attempt({
+      campaignId: "campaign-1",
+      finding: f.finding,
+      lab: f.lab,
+    });
     expect(f.runs[0]?.lab.database).toBeUndefined();
     expect(f.runs[0]?.prompt).not.toContain("fixture_reader");
     expect(f.runs[0]?.prompt).not.toContain("wbh-sensitive-");
@@ -324,6 +373,7 @@ describe("CodexVerifier.attempt", () => {
         impact,
       );
       const attempt = await f.verifier.attempt({
+        campaignId: "campaign-1",
         finding: f.finding,
         lab: f.lab,
       });
@@ -366,7 +416,11 @@ describe("CodexVerifier.attempt", () => {
       "account-takeover",
     );
     expect(
-      await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+      await f.verifier.attempt({
+        campaignId: "campaign-1",
+        finding: f.finding,
+        lab: f.lab,
+      }),
     ).toMatchObject({ status: "attempted" });
     expect(f.runs[0]?.prompt).toContain("wbh-canary-admin-fake-nonce");
     expect(
@@ -397,6 +451,7 @@ describe("CodexVerifier.attempt", () => {
     };
     expect(
       await f.verifier.attempt({
+        campaignId: "campaign-1",
         finding: f.finding,
         lab: f.lab,
         referenceRoute,
@@ -411,7 +466,11 @@ describe("CodexVerifier.attempt", () => {
     async (impact) => {
       const f = await fixture([], undefined, impact, false);
       expect(
-        await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+        await f.verifier.attempt({
+          campaignId: "campaign-1",
+          finding: f.finding,
+          lab: f.lab,
+        }),
       ).toMatchObject({ status: "incomplete", reason: "precondition" });
       expect(f.runs).toHaveLength(0);
     },
@@ -427,6 +486,7 @@ describe("CodexVerifier.attempt", () => {
     });
     const valid = await fixture([report("wordpress_logged_in%7Cfake")]);
     const attempted = await valid.verifier.attempt({
+      campaignId: "campaign-1",
       finding: valid.finding,
       lab: valid.lab,
     });
@@ -442,6 +502,7 @@ describe("CodexVerifier.attempt", () => {
     const invalid = await fixture([report("invalid cookie with spaces")]);
     expect(
       await invalid.verifier.attempt({
+        campaignId: "campaign-1",
         finding: invalid.finding,
         lab: invalid.lab,
       }),
@@ -470,6 +531,7 @@ describe("CodexVerifier.attempt", () => {
       },
     ]);
     const attempt = await f.verifier.attempt({
+      campaignId: "campaign-1",
       finding: f.finding,
       lab: f.lab,
     });
@@ -499,6 +561,7 @@ describe("CodexVerifier.attempt", () => {
       { "http.json": JSON.stringify(http), "steps.md": "Synthetic steps" },
     ]);
     const attempt = await f.verifier.attempt({
+      campaignId: "campaign-1",
       finding: f.finding,
       lab: f.lab,
     });
@@ -561,6 +624,7 @@ describe("CodexVerifier.attempt", () => {
       },
     ]);
     const attempt = await f.verifier.attempt({
+      campaignId: "campaign-1",
       finding: f.finding,
       lab: f.lab,
     });
@@ -619,7 +683,11 @@ describe("CodexVerifier.attempt", () => {
       },
     ]);
     expect(
-      await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+      await f.verifier.attempt({
+        campaignId: "campaign-1",
+        finding: f.finding,
+        lab: f.lab,
+      }),
     ).toMatchObject({ status: "incomplete", reason: "recipe" });
   });
 
@@ -643,7 +711,11 @@ describe("CodexVerifier.attempt", () => {
       },
     ]);
     expect(
-      await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+      await f.verifier.attempt({
+        campaignId: "campaign-1",
+        finding: f.finding,
+        lab: f.lab,
+      }),
     ).toMatchObject({ status: "incomplete", reason: "recipe" });
   });
 
@@ -659,6 +731,7 @@ describe("CodexVerifier.attempt", () => {
       },
     ]);
     const attempt = await f.verifier.attempt({
+      campaignId: "campaign-1",
       finding: f.finding,
       lab: f.lab,
     });
@@ -684,7 +757,11 @@ describe("CodexVerifier.attempt", () => {
       },
     ]);
     expect(
-      await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+      await f.verifier.attempt({
+        campaignId: "campaign-1",
+        finding: f.finding,
+        lab: f.lab,
+      }),
     ).toEqual({
       status: "incomplete",
       reason: "precondition",
@@ -697,12 +774,17 @@ describe("CodexVerifier.attempt", () => {
       { precondition: "Translation dictionary is empty" },
     ]);
     expect(
-      await f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+      await f.verifier.attempt({
+        campaignId: "campaign-1",
+        finding: f.finding,
+        lab: f.lab,
+      }),
     ).toEqual({
       status: "incomplete",
       reason: "precondition",
       nextStep:
         "translatepress-translation-data-v1: TranslatePress の二次言語・翻訳データ・承認済みコメント",
+      nextScenarioId: "translatepress-translation-data-v1",
     });
   });
 
@@ -713,6 +795,7 @@ describe("CodexVerifier.attempt", () => {
     ]) {
       const f = await fixture([report]);
       const attempt = await f.verifier.attempt({
+        campaignId: "campaign-1",
         finding: f.finding,
         lab: f.lab,
       });
@@ -728,8 +811,16 @@ describe("CodexVerifier.attempt", () => {
       "steps.md": "Step",
     };
     const f = await fixture([report, report]);
-    await f.verifier.attempt({ finding: f.finding, lab: f.lab });
-    await f.verifier.attempt({ finding: f.finding, lab: f.lab });
+    await f.verifier.attempt({
+      campaignId: "campaign-1",
+      finding: f.finding,
+      lab: f.lab,
+    });
+    await f.verifier.attempt({
+      campaignId: "campaign-1",
+      finding: f.finding,
+      lab: f.lab,
+    });
     expect(f.runs).toHaveLength(2);
     expect(f.runs[0]?.runId).not.toBe(f.runs[1]?.runId);
     for (const run of f.runs) {
@@ -756,7 +847,11 @@ describe("CodexVerifier.attempt", () => {
   it("preserves a transport failure receipt and does not relabel it as a recipe error", async () => {
     const f = await fixture([], "sandbox");
     await expect(
-      f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+      f.verifier.attempt({
+        campaignId: "campaign-1",
+        finding: f.finding,
+        lab: f.lab,
+      }),
     ).rejects.toMatchObject({ reason: "sandbox" });
     const event = f.ledger.read({ type: "verifier-run-finished" }).at(0)?.event;
     expect(event).toMatchObject({
@@ -777,7 +872,11 @@ describe("CodexVerifier.attempt", () => {
       },
     });
     await expect(
-      f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+      f.verifier.attempt({
+        campaignId: "campaign-1",
+        finding: f.finding,
+        lab: f.lab,
+      }),
     ).rejects.toMatchObject({ reason: "provider" });
     const event = f.ledger.read({ type: "verifier-run-finished" }).at(0)?.event;
     expect(event).toMatchObject({
@@ -805,7 +904,11 @@ describe("CodexVerifier.attempt", () => {
       reasonDetail: "unadmitted-event-type:error",
     });
     await expect(
-      f.verifier.attempt({ finding: f.finding, lab: f.lab }),
+      f.verifier.attempt({
+        campaignId: "campaign-1",
+        finding: f.finding,
+        lab: f.lab,
+      }),
     ).resolves.toMatchObject({ status: "incomplete", reason: "recipe" });
   });
 });

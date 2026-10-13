@@ -62,7 +62,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       })
       .optional(),
     failureStage: z.enum(["provision", "seed", "probe"]).optional(),
-    reason: z.enum(["provision", "reachability"]).optional(),
+    reason: z.enum(["provision", "precondition", "reachability"]).optional(),
   }),
   event({
     type: z.literal("discovery-run-started"),
@@ -87,6 +87,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       promptDigest: digest.optional(),
       objectiveDigest: digest.optional(),
       contractDigest: digest.optional(),
+      /** Legacy Trial field; retained so append-only ledgers remain readable. */
+      continuationPromptDigest: digest.optional(),
       trustBoundaryVersion: id.optional(),
       sourcePack: z
         .strictObject({ dependency: z.enum(["mounted", "none"]) })
@@ -142,6 +144,16 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       .regex(/^[a-z0-9][a-z0-9:_-]{0,127}$/)
       .optional(),
     providerLimit: z.enum(["rate-limit", "quota"]).optional(),
+    /** Legacy within-Trial continuation receipt. */
+    continuation: z
+      .strictObject({
+        mode: z.literal("thread-resume"),
+        injected: z.boolean(),
+        entriesHandedBack: z.number().int().nonnegative(),
+        remainingMinutes: z.number().nonnegative(),
+        reason: z.enum(["coverage-incomplete", "report-unavailable"]),
+      })
+      .optional(),
     /** Lower-bound counts inferred from completed command events, not agent claims. */
     observed: z
       .strictObject({
@@ -260,12 +272,21 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     findingId: id,
     runId: id,
     category: id,
+    continuationOrdinal: z.number().int().nonnegative().optional(),
     historyRecordId: id.optional(),
     /** A fresh-snapshot hypothesis derived from an earlier Finding. */
     derivedFromFindingId: id.optional(),
     derivationKind: z
       .enum(["latest-version", "fixed-version-control"])
       .optional(),
+  }),
+  /** A Finding whose impact lies outside the Programme Boundary; kept, never verified (#185). */
+  event({
+    type: z.literal("finding-parked"),
+    findingId: id,
+    runId: id,
+    category: id,
+    reason: z.literal("outside-programme-boundary"),
   }),
   event({
     type: z.literal("lead-recorded"),
@@ -275,6 +296,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     missingEdge: id,
     primitive: id,
     storageKind: id,
+    continuationOrdinal: z.number().int().nonnegative().optional(),
   }),
   /** A schema-only child failure was reinterpreted from its immutable private rollout. */
   event({
@@ -366,6 +388,19 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     /** Bounty paid in USD, when the programme reported one. */
     rewardUsd: z.number().nonnegative().max(1_000_000).optional(),
   }),
+  event({
+    type: z.literal("human-effort-recorded"),
+    findingId: id.optional(),
+    action: z.enum(["read", "reproduce", "submit", "outcome"]),
+    minutes: z.number().finite().nonnegative().max(1440),
+  }),
+  event({
+    type: z.literal("human-reproduction-recorded"),
+    findingId: id,
+    verificationId: id,
+    reproductionPackageDigest: digest,
+    result: z.enum(["match", "mismatch", "unavailable"]),
+  }),
 ]);
 
 export type LedgerEventV1 = z.infer<typeof ledgerEventV1Schema>;
@@ -385,9 +420,12 @@ export type FunnelCounts = {
   readonly reached: number;
   readonly accepted: number;
   readonly held: number;
+  /** Findings outside the Programme Boundary; not in accepted or raw (#185). */
+  readonly parked: number;
   readonly raw: number;
   readonly verified: number;
   readonly confirmed: number;
+  readonly reproduced: number;
   readonly contradicted: number;
   readonly incomplete: number;
   readonly reviewed: number;
@@ -431,6 +469,23 @@ export type CampaignFunnel = FunnelCounts & {
   readonly outcomesByKind: Readonly<Record<string, number>>;
   /** Sum of each candidate's latest reported reward. */
   readonly rewardUsd: number;
+  /** Null until a submission supplies the denominator. */
+  readonly ownerMinutesPerSubmission: number | null;
+  readonly openedFindingsPerSubmission: number | null;
+  readonly manualReproductionAgreement: number | null;
+  readonly humanMinutesByAction: Readonly<
+    Record<"read" | "reproduce" | "submit" | "outcome", number>
+  >;
+  readonly humanByCategory: Readonly<
+    Record<
+      string,
+      {
+        readonly ownerMinutesPerSubmission: number | null;
+        readonly openedFindingsPerSubmission: number | null;
+        readonly manualReproductionAgreement: number | null;
+      }
+    >
+  >;
   readonly byCategory: Readonly<Record<string, FunnelCounts>>;
   /** Runs and their Findings per ablation arm, keyed `<axis>:<arm>`. */
   readonly byArm: Readonly<Record<string, ArmCounts>>;
@@ -469,6 +524,7 @@ const querySchema = z.strictObject({
       "candidate-normalized",
       "candidate-held",
       "finding-recorded",
+      "finding-parked",
       "lead-recorded",
       "child-report-recovered",
       "discovery-report-recovered",
@@ -481,6 +537,8 @@ const querySchema = z.strictObject({
       "external-action-authorized",
       "submission-recorded",
       "submission-outcome",
+      "human-effort-recorded",
+      "human-reproduction-recorded",
     ])
     .optional(),
   findingId: id.optional(),
@@ -502,9 +560,11 @@ function emptyCounts(): Counts {
     reached: 0,
     accepted: 0,
     held: 0,
+    parked: 0,
     raw: 0,
     verified: 0,
     confirmed: 0,
+    reproduced: 0,
     contradicted: 0,
     incomplete: 0,
     reviewed: 0,
@@ -515,7 +575,7 @@ function emptyCounts(): Counts {
 }
 
 function findingIdOf(value: LedgerEventV1): string | null {
-  return "findingId" in value ? value.findingId : null;
+  return "findingId" in value ? (value.findingId ?? null) : null;
 }
 
 /** The only operations on a ledger are append, read and a derived funnel view. */
@@ -588,7 +648,10 @@ export class Ledger {
       evidenceAvailable =
         resolution.status === "resolved" &&
         resolution.artifact.digest === parsed.result.evidenceDigest;
-      if (parsed.result.status === "runtime-confirmed") {
+      if (
+        parsed.result.status === "runtime-confirmed" ||
+        parsed.result.status === "reproduced"
+      ) {
         const packageResolution = await this.#artifacts.resolve(
           parsed.result.reproductionPackageDigest,
         );
@@ -947,6 +1010,10 @@ export class Ledger {
       string,
       Extract<LedgerEventV1, { type: "finding-recorded" }>
     >();
+    const parkedFindings = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "finding-parked" }>
+    >();
     const verifications = new Map<
       string,
       Extract<LedgerEventV1, { type: "verification-finished" }>
@@ -954,10 +1021,26 @@ export class Ledger {
     const reviews = new Set<string>();
     const scopes = new Map<string, Map<string, string>>();
     const submissions = new Map<string, string>();
+    const submittedFindingsByCandidate = new Map<string, string>();
     const outcomes = new Set<string>();
     const latestOutcome = new Map<
       string,
       Extract<LedgerEventV1, { type: "submission-outcome" }>
+    >();
+    const humanMinutesByAction = {
+      read: 0,
+      reproduce: 0,
+      submit: 0,
+      outcome: 0,
+    };
+    const humanEffortEvents: Extract<
+      LedgerEventV1,
+      { type: "human-effort-recorded" }
+    >[] = [];
+    const openedFindings = new Set<string>();
+    const manualReproductions = new Map<
+      string,
+      "match" | "mismatch" | "unavailable"
     >();
 
     for (const current of events) {
@@ -1044,6 +1127,10 @@ export class Ledger {
           if (!findings.has(current.findingId))
             findings.set(current.findingId, current);
           break;
+        case "finding-parked":
+          if (!parkedFindings.has(current.findingId))
+            parkedFindings.set(current.findingId, current);
+          break;
         case "lead-recorded":
           if (!normalizationSeen.has(`${current.runId}\0lead`))
             legacyReached.push({
@@ -1068,10 +1155,23 @@ export class Ledger {
         }
         case "submission-recorded":
           submissions.set(current.findingId, current.candidateId);
+          submittedFindingsByCandidate.set(
+            current.candidateId,
+            current.findingId,
+          );
           break;
         case "submission-outcome":
           outcomes.add(current.candidateId);
           latestOutcome.set(current.candidateId, current);
+          break;
+        case "human-effort-recorded":
+          humanEffortEvents.push(current);
+          humanMinutesByAction[current.action] += current.minutes;
+          if (current.action === "read" && current.findingId !== undefined)
+            openedFindings.add(current.findingId);
+          break;
+        case "human-reproduction-recorded":
+          manualReproductions.set(current.findingId, current.result);
           break;
       }
     }
@@ -1159,6 +1259,7 @@ export class Ledger {
         count.verified++;
         const status = verification.result.status;
         if (status === "runtime-confirmed") count.confirmed++;
+        else if (status === "reproduced") count.reproduced++;
         else if (status === "contradicted") count.contradicted++;
         else count.incomplete++;
         if (status === "contradicted" || !reviews.has(finding.findingId))
@@ -1191,13 +1292,24 @@ export class Ledger {
       ])
         count.accepted++;
     }
+    for (const parked of parkedFindings.values()) {
+      for (const count of [
+        totals,
+        (byCategory[parked.category] ??= emptyCounts()),
+        objective(parked.runId),
+      ])
+        count.parked++;
+    }
     for (const counts of [
       totals,
       ...Object.values(byCategory),
       ...Object.values(byObjective),
     ]) {
-      // A normalized candidate may have no later admission or hold event.
-      counts.reached = Math.max(counts.reached, counts.accepted + counts.held);
+      // A normalized candidate may have no later admission, hold or parking event.
+      counts.reached = Math.max(
+        counts.reached,
+        counts.accepted + counts.held + counts.parked,
+      );
     }
     const classifiedReached = Object.values(byCategory).reduce(
       (sum, counts) => sum + counts.reached,
@@ -1271,6 +1383,61 @@ export class Ledger {
         readyLabs.has(labId) &&
         !setupFailedRuns.has(runId),
     ).length;
+    const agreement = (
+      values: readonly ("match" | "mismatch" | "unavailable")[],
+    ) => {
+      const comparable = values.filter((value) => value !== "unavailable");
+      return comparable.length === 0
+        ? null
+        : comparable.filter((value) => value === "match").length /
+            comparable.length;
+    };
+    const humanByCategory = Object.fromEntries(
+      Object.keys(byCategory).map((category) => {
+        const inCategory = (findingId: string) =>
+          findings.get(findingId)?.category === category;
+        const submissionCount = [
+          ...submittedFindingsByCandidate.values(),
+        ].filter(inCategory).length;
+        const minutes = events.reduce(
+          (sum, event) =>
+            event.type === "human-effort-recorded" &&
+            event.findingId !== undefined &&
+            inCategory(event.findingId)
+              ? sum + event.minutes
+              : sum,
+          0,
+        );
+        const effortCount = humanEffortEvents.filter(
+          (event) =>
+            event.findingId !== undefined && inCategory(event.findingId),
+        ).length;
+        const readCount = humanEffortEvents.filter(
+          (event) =>
+            event.action === "read" &&
+            event.findingId !== undefined &&
+            inCategory(event.findingId),
+        ).length;
+        const opened = [...openedFindings].filter(inCategory).length;
+        const manual = [...manualReproductions.entries()]
+          .filter(([findingId]) => inCategory(findingId))
+          .map(([, result]) => result);
+        return [
+          category,
+          {
+            ownerMinutesPerSubmission:
+              submissionCount === 0 || effortCount === 0
+                ? null
+                : minutes / submissionCount,
+            openedFindingsPerSubmission:
+              submissionCount === 0 || readCount === 0
+                ? null
+                : opened / submissionCount,
+            manualReproductionAgreement: agreement(manual),
+          },
+        ];
+      }),
+    );
     return {
       campaignId: campaign,
       discoveryAttempts,
@@ -1287,6 +1454,22 @@ export class Ledger {
       inScopeByProgramme: { ...inScopeByProgramme },
       outcomesByKind,
       rewardUsd,
+      ownerMinutesPerSubmission:
+        submittedFindingsByCandidate.size === 0 ||
+        humanEffortEvents.length === 0
+          ? null
+          : Object.values(humanMinutesByAction).reduce(
+              (sum, minutes) => sum + minutes,
+              0,
+            ) / submittedFindingsByCandidate.size,
+      openedFindingsPerSubmission:
+        submittedFindingsByCandidate.size === 0 ||
+        !humanEffortEvents.some((event) => event.action === "read")
+          ? null
+          : openedFindings.size / submittedFindingsByCandidate.size,
+      manualReproductionAgreement: agreement([...manualReproductions.values()]),
+      humanMinutesByAction,
+      humanByCategory,
       byCategory,
       byArm: { ...byArm },
       byObjective: { ...byObjective },

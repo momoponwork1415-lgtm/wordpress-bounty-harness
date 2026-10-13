@@ -341,6 +341,60 @@ describe("review public interface", () => {
     ).rejects.toThrow("in-scope");
   });
 
+  it("requires a matching human reproduction of the current reproduced package before drafting", async () => {
+    const { review, ledger } = await fixture();
+    const original = ledger.read({ type: "verification-finished" })[0]?.event;
+    if (
+      original?.type !== "verification-finished" ||
+      original.result.status !== "runtime-confirmed"
+    )
+      throw new Error("missing fixture verification");
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "verification-2",
+      campaignId: ref.campaignId,
+      snapshotDigest: ref.snapshotDigest,
+      occurredAt: "2026-10-08T00:30:00Z",
+      type: "verification-finished",
+      findingId: ref.findingId,
+      verificationId: "verification-2",
+      labSetupDigest: labSetup,
+      result: {
+        status: "reproduced",
+        reproducerId: "standard-python-v1",
+        proofKind: "captured-script-observation",
+        conditions: { observedVia: "canary-row-read" },
+        evidenceDigest: original.result.evidenceDigest,
+        reproductionPackageDigest: original.result.reproductionPackageDigest,
+        negativeControl: "pending-fixed-version",
+      },
+      evidenceCapture: "harness-captured",
+    });
+    const reproducedRef = { ...ref, verificationId: "verification-2" };
+    const [assessment] = await review.assessScope({ ref: reproducedRef });
+    if (assessment === undefined) throw new Error("missing assessment");
+    const draft = () =>
+      review.saveDraft({
+        assessmentId: assessment.id,
+        content: "Synthetic report",
+        preparedBy: "ai",
+      });
+    await expect(draft()).rejects.toThrow("manual reproduction");
+    await review.recordHumanReproduction({
+      ref: reproducedRef,
+      result: "mismatch",
+    });
+    await expect(draft()).rejects.toThrow("manual reproduction");
+    await review.recordHumanReproduction({
+      ref: reproducedRef,
+      result: "match",
+    });
+    await expect(draft()).resolves.toMatchObject({ revision: 1 });
+    expect(ledger.read({ type: "human-reproduction-recorded" })).toHaveLength(
+      2,
+    );
+  });
+
   it("marks malformed programme coverage incomplete without changing verification", async () => {
     const { review, ledger } = await fixture({
       programmeIds: ["wordfence", "patchstack"],
@@ -474,11 +528,13 @@ async function queueFixture() {
 }
 
 describe("review queue and decisions", () => {
-  it("lists confirmed items with evidence and incomplete items with next steps, and counts contradicted", async () => {
+  it("lists evidence-backed items while keeping a first observation failure in retry counts", async () => {
     const { review } = await queueFixture();
     const queue = review.queue({ campaignId: "campaign-1" });
     expect(queue.contradicted).toBe(1);
     expect(queue.unverified).toBe(1);
+    expect(queue.incompleteByReason).toEqual({});
+    expect(queue.retryPendingByReason).toEqual({ observation: 1 });
     expect(queue.items).toEqual([
       expect.objectContaining({
         status: "runtime-confirmed",
@@ -490,14 +546,75 @@ describe("review queue and decisions", () => {
         reproductionPackageDigest: expect.stringMatching(/^sha256:/),
         decision: null,
       }),
+    ]);
+  });
+
+  it("shows exhausted observation failures only as a reason count", async () => {
+    const { review, ledger } = await queueFixture();
+    for (const attempt of [2, 3])
+      await ledger.append({
+        schemaVersion: 1,
+        identity: `observation-retry-${attempt}`,
+        campaignId: ref.campaignId,
+        snapshotDigest: ref.snapshotDigest,
+        occurredAt: `2026-10-08T00:0${attempt}:00Z`,
+        type: "verification-finished",
+        findingId: "finding-2",
+        verificationId: `verification-2-${attempt}`,
+        labSetupDigest: labSetup,
+        result: {
+          status: "incomplete",
+          reason: "observation",
+          nextStep: "Capture the effect",
+        },
+      });
+    const queue = review.queue({ campaignId: ref.campaignId });
+    expect(queue.incompleteByReason).toEqual({ observation: 1 });
+    expect(queue.retryPendingByReason).toEqual({});
+    expect(queue.items.some((item) => item.ref.findingId === "finding-2")).toBe(
+      false,
+    );
+  });
+
+  it("shows a precondition with no next scenario while keeping a known scenario pending", async () => {
+    const { review, ledger } = await queueFixture();
+    for (const [findingId, nextScenarioId] of [
+      ["finding-2", undefined],
+      ["finding-4", "private-post-v1"],
+    ] as const)
+      await ledger.append({
+        schemaVersion: 1,
+        identity: `precondition-${findingId}`,
+        campaignId: ref.campaignId,
+        snapshotDigest: ref.snapshotDigest,
+        occurredAt: "2026-10-08T00:05:00Z",
+        type: "verification-finished",
+        findingId,
+        verificationId: `precondition-${findingId}`,
+        labSetupDigest: labSetup,
+        result: {
+          status: "incomplete",
+          reason: "precondition",
+          nextStep:
+            nextScenarioId === undefined
+              ? "No ordinary Lab scenario covers this prerequisite"
+              : "Try the private post scenario",
+          ...(nextScenarioId === undefined ? {} : { nextScenarioId }),
+        },
+      });
+    const queue = review.queue({ campaignId: ref.campaignId });
+    expect(queue.incompleteByReason).toEqual({ precondition: 1 });
+    expect(queue.retryPendingByReason).toEqual({ precondition: 1 });
+    expect(queue.items).toContainEqual(
       expect.objectContaining({
         status: "incomplete",
-        category: "account-takeover",
-        reason: "observation",
-        nextStep: "Repair the recipe and repeat",
-        decision: null,
+        reason: "precondition",
+        ref: expect.objectContaining({ findingId: "finding-2" }),
       }),
-    ]);
+    );
+    expect(queue.items.some((item) => item.ref.findingId === "finding-4")).toBe(
+      false,
+    );
   });
 
   it("records a decision with reason, opened evidence, duplicate result and elapsed time", async () => {

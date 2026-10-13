@@ -16,6 +16,10 @@ const identifierSchema = z
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const slugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
 const versionSchema = z.string().min(1).max(64);
+const coreVersionSchema = z
+  .string()
+  .max(32)
+  .regex(/^[0-9]+(?:\.[0-9]+){1,3}$/);
 
 export const wordPressOrgTargetObservationRefSchema = z.strictObject({
   kind: z.literal("wordpress-org-target-observation-ref"),
@@ -31,6 +35,8 @@ export const wordPressOrgTargetObservationSchema = z.strictObject({
   officialSlug: slugSchema,
   displayName: z.string().min(1).max(256),
   stableVersion: versionSchema,
+  /** WordPress.org's `requires` field for the observed stable release. */
+  minimumWordPressVersion: coreVersionSchema.optional(),
   activeInstallations: z.number().int().nonnegative(),
   lastUpdated: z.string().min(1).max(128),
   author: z.string().min(1).max(256).optional(),

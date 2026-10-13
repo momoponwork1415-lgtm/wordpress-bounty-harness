@@ -70,6 +70,137 @@ async function evidence(store: PrivateArtifactStore): Promise<string> {
 }
 
 describe("Ledger public interface", () => {
+  it("measures owner time and opened findings per distinct submission across categories", async () => {
+    const { ledger } = await fixture();
+    for (const [findingId, category] of [
+      ["finding-a", "sqli"],
+      ["finding-b", "stored-xss"],
+    ] as const)
+      await ledger.append({
+        ...common(`record-${findingId}`),
+        type: "finding-recorded",
+        findingId,
+        runId: "run-1",
+        category,
+      });
+    for (const [identity, findingId, action, minutes] of [
+      ["read-a", "finding-a", "read", 10],
+      ["reproduce-a", "finding-a", "reproduce", 20],
+      ["read-b", "finding-b", "read", 5],
+    ] as const)
+      await ledger.append({
+        ...common(identity),
+        type: "human-effort-recorded",
+        findingId,
+        action,
+        minutes,
+      });
+    for (const [identity, findingId, result] of [
+      ["manual-a", "finding-a", "match"],
+      ["manual-b", "finding-b", "mismatch"],
+    ] as const)
+      await ledger.append({
+        ...common(identity),
+        type: "human-reproduction-recorded",
+        findingId,
+        verificationId: "verification-1",
+        reproductionPackageDigest: revision,
+        result,
+      });
+    for (const candidateId of ["candidate-a1", "candidate-a2"])
+      await ledger.append({
+        ...common(`submission-${candidateId}`),
+        type: "submission-recorded",
+        findingId: "finding-a",
+        candidateId,
+      });
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      ownerMinutesPerSubmission: 17.5,
+      openedFindingsPerSubmission: 1,
+      manualReproductionAgreement: 0.5,
+      humanByCategory: {
+        sqli: {
+          ownerMinutesPerSubmission: 15,
+          openedFindingsPerSubmission: 0.5,
+          manualReproductionAgreement: 1,
+        },
+        "stored-xss": {
+          ownerMinutesPerSubmission: null,
+          openedFindingsPerSubmission: null,
+          manualReproductionAgreement: 0,
+        },
+      },
+    });
+  });
+
+  it("reads a legacy discovery event with a continuation prompt digest", async () => {
+    const { ledger, artifactStore } = await fixture();
+    const proof = await evidence(artifactStore);
+    await ledger.append({
+      ...common("legacy-discovery-start"),
+      type: "discovery-run-started",
+      runId: "run-legacy",
+      labId: "lab-legacy",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "objective-v5",
+        assignmentUnit: "route",
+        continuationPromptDigest: revision,
+      },
+    });
+    await ledger.append({
+      ...common("legacy-discovery-finish"),
+      type: "discovery-run-finished",
+      runId: "run-legacy",
+      outcome: "completed",
+      costUsd: "unavailable",
+      wallTimeMs: 1,
+      continuation: {
+        mode: "thread-resume",
+        injected: true,
+        entriesHandedBack: 3,
+        remainingMinutes: 26.5,
+        reason: "coverage-incomplete",
+      },
+    });
+    await ledger.append({
+      ...common("legacy-finding"),
+      type: "finding-recorded",
+      findingId: "legacy-finding",
+      runId: "run-legacy",
+      category: "stored-xss",
+      continuationOrdinal: 1,
+    });
+    await ledger.append({
+      ...common("legacy-lead"),
+      type: "lead-recorded",
+      leadId: "legacy-lead",
+      runId: "run-legacy",
+      trialId: "trial-legacy",
+      missingEdge: "consumer",
+      primitive: "write",
+      storageKind: "option",
+      continuationOrdinal: 1,
+      artifacts: [{ kind: "lead", digest: proof }],
+    });
+    expect(ledger.read({ type: "discovery-run-started" })).toMatchObject([
+      {
+        event: {
+          configuration: { continuationPromptDigest: revision },
+        },
+      },
+    ]);
+    expect(ledger.read({ type: "discovery-run-finished" })).toMatchObject([
+      { event: { continuation: { mode: "thread-resume" } } },
+    ]);
+    expect(ledger.read({ type: "finding-recorded" })).toMatchObject([
+      { event: { continuationOrdinal: 1 } },
+    ]);
+    expect(ledger.read({ type: "lead-recorded" })).toMatchObject([
+      { event: { continuationOrdinal: 1 } },
+    ]);
+  });
+
   it("records versioned package documents while reading older verification events", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);
@@ -228,6 +359,48 @@ describe("Ledger public interface", () => {
         },
       },
     });
+  });
+
+  it("counts a parked Finding outside the Programme Boundary apart from raw and accepted (#185)", async () => {
+    const { ledger } = await fixture();
+    const snapshot = `sha256:${"a".repeat(64)}`;
+    const common = (identity: string) => ({
+      schemaVersion: 1 as const,
+      identity,
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-13T00:00:00Z",
+      artifacts: [],
+    });
+    await ledger.append({
+      ...common("normalized"),
+      type: "candidate-normalized",
+      runId: "run-1",
+      candidateKind: "finding",
+      candidateIndex: 0,
+      changes: [],
+    });
+    await ledger.append({
+      ...common("parked"),
+      type: "finding-parked",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "other",
+      reason: "outside-programme-boundary",
+    });
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      reached: 1,
+      accepted: 0,
+      held: 0,
+      parked: 1,
+      raw: 0,
+      verified: 0,
+    });
+    expect(ledger.funnel("campaign-1").byCategory["other"]).toMatchObject({
+      parked: 1,
+      raw: 0,
+    });
+    expect(ledger.read({ type: "finding-parked" })).toHaveLength(1);
   });
 
   it("counts accepted legacy candidates even when another index was rejected first", async () => {
@@ -727,9 +900,11 @@ describe("Ledger public interface", () => {
       reached: 4,
       accepted: 4,
       held: 0,
+      parked: 0,
       raw: 4,
       verified: 4,
       confirmed: 1,
+      reproduced: 0,
       contradicted: 1,
       incomplete: 2,
       reviewed: 3,
@@ -743,9 +918,11 @@ describe("Ledger public interface", () => {
           reached: 4,
           accepted: 4,
           held: 0,
+          parked: 0,
           raw: 4,
           verified: 4,
           confirmed: 1,
+          reproduced: 0,
           contradicted: 1,
           incomplete: 2,
           reviewed: 3,
@@ -763,9 +940,11 @@ describe("Ledger public interface", () => {
           reached: 0,
           accepted: 0,
           held: 0,
+          parked: 0,
           raw: 0,
           verified: 0,
           confirmed: 0,
+          reproduced: 0,
           contradicted: 0,
           incomplete: 0,
           reviewed: 0,
@@ -780,6 +959,22 @@ describe("Ledger public interface", () => {
         },
       },
       rewardUsd: 0,
+      ownerMinutesPerSubmission: null,
+      openedFindingsPerSubmission: null,
+      manualReproductionAgreement: null,
+      humanMinutesByAction: { read: 0, reproduce: 0, submit: 0, outcome: 0 },
+      humanByCategory: {
+        injection: {
+          ownerMinutesPerSubmission: null,
+          openedFindingsPerSubmission: null,
+          manualReproductionAgreement: null,
+        },
+        "access-control": {
+          ownerMinutesPerSubmission: null,
+          openedFindingsPerSubmission: null,
+          manualReproductionAgreement: null,
+        },
+      },
       submitted: 1,
       outcome: 1,
       byCategory: {
@@ -787,9 +982,11 @@ describe("Ledger public interface", () => {
           reached: 2,
           accepted: 2,
           held: 0,
+          parked: 0,
           raw: 2,
           verified: 2,
           confirmed: 1,
+          reproduced: 0,
           contradicted: 1,
           incomplete: 0,
           reviewed: 1,
@@ -801,9 +998,11 @@ describe("Ledger public interface", () => {
           reached: 2,
           accepted: 2,
           held: 0,
+          parked: 0,
           raw: 2,
           verified: 2,
           confirmed: 0,
+          reproduced: 0,
           contradicted: 0,
           incomplete: 2,
           reviewed: 2,

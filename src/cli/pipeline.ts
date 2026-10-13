@@ -47,6 +47,9 @@ export interface CampaignPipeline<
     readonly executor: DiscoveryOptions["executor"];
     readonly attachments: DiscoveryOptions["attachments"];
     readonly admitFinding: DiscoveryOptions["admitFinding"];
+    readonly isProgrammeImpact?: NonNullable<
+      DiscoveryOptions["isProgrammeImpact"]
+    >;
     readonly normalizeCandidate?: NonNullable<
       DiscoveryOptions["normalizeCandidate"]
     >;
@@ -242,7 +245,11 @@ export async function runCampaignPipeline<
           snapshotDigest: snapshot.digest,
           lab: "failed",
           runCount: 0,
-          stoppedBy: "setup-failed",
+          stoppedBy:
+            provisioned.status === "incomplete" &&
+            provisioned.reason === "precondition"
+              ? "incomplete(precondition)"
+              : "setup-failed",
           verifications: [],
         });
         continue;
@@ -413,6 +420,10 @@ export async function reverifyOnSelectedVersion<
 >(options: {
   readonly campaignId: string;
   readonly findingId: string;
+  /** A separate read-only campaign may supply an already confirmed route. */
+  readonly referenceCampaignId?: string;
+  /** Reuse a separately recorded, immutable Snapshot for a real Lab smoke. */
+  readonly snapshotCampaignId?: string;
   readonly version?: string;
   readonly ledger: Ledger;
   readonly store: PrivateArtifactStore;
@@ -425,6 +436,7 @@ export async function reverifyOnSelectedVersion<
       readonly selectionId: string;
       readonly version?: string;
     }) => Promise<Target | null>;
+    readonly loadSnapshot?: (digest: string) => Promise<Snapshot>;
     readonly deriveFinding: (input: {
       readonly original: unknown;
       readonly snapshotDigest: string;
@@ -450,84 +462,184 @@ export async function reverifyOnSelectedVersion<
     );
   if (selected?.type !== "target-selected")
     throw new Error("The finding's target selection is not recorded");
-  const confirmed = ledger
-    .read({ campaignId, findingId, type: "verification-finished", limit: 1000 })
+  const referenceCampaignId = options.referenceCampaignId ?? campaignId;
+  if (referenceCampaignId !== campaignId) {
+    const referenceFinding = ledger
+      .read({
+        campaignId: referenceCampaignId,
+        findingId,
+        type: "finding-recorded",
+        limit: 1,
+      })
+      .at(0)?.event;
+    if (
+      referenceFinding?.type !== "finding-recorded" ||
+      referenceFinding.snapshotDigest !== finding.snapshotDigest ||
+      referenceFinding.artifacts.find((artifact) => artifact.kind === "finding")
+        ?.digest !==
+        finding.artifacts.find((artifact) => artifact.kind === "finding")
+          ?.digest
+    )
+      throw new Error("The reference route belongs to a different Finding");
+  }
+  const observed = ledger
+    .read({
+      campaignId: referenceCampaignId,
+      findingId,
+      type: "verification-finished",
+      limit: 1000,
+    })
     .map(({ event }) => event)
     .filter(
       (event) =>
         event.type === "verification-finished" &&
         event.snapshotDigest === finding.snapshotDigest &&
-        event.result.status === "runtime-confirmed",
+        (event.result.status === "runtime-confirmed" ||
+          event.result.status === "reproduced"),
     )
     .at(-1);
+  if (observed === undefined && options.snapshotCampaignId !== undefined)
+    throw new Error("A confirmed route is required for pinned smoke replay");
   let referenceRoute: unknown;
   let hasCapturedRouteBinding = false;
   if (
-    confirmed?.type === "verification-finished" &&
-    confirmed.result.status === "runtime-confirmed"
+    observed?.type === "verification-finished" &&
+    (observed.result.status === "runtime-confirmed" ||
+      observed.result.status === "reproduced")
   ) {
     const routeFile = await options.store.readFile(
-      confirmed.result.evidenceDigest,
-      "confirmed-route.json",
+      observed.result.evidenceDigest,
+      observed.result.status === "runtime-confirmed"
+        ? "confirmed-route.json"
+        : "reproduced-route.json",
       64 * 1024,
     );
     if (routeFile.status !== "resolved")
-      throw new Error("The confirmed route is unavailable in Private Evidence");
+      throw new Error("The observed route is unavailable in Private Evidence");
     const route = JSON.parse(routeFile.bytes.toString("utf8")) as unknown;
-    const observationFile = await options.store.readFile(
-      confirmed.result.evidenceDigest,
-      "canary-observation.json",
-      64 * 1024,
-    );
-    if (observationFile.status === "resolved") {
-      try {
-        const observation = JSON.parse(
-          observationFile.bytes.toString("utf8"),
-        ) as unknown;
-        if (
-          route !== null &&
-          typeof route === "object" &&
-          !Array.isArray(route) &&
-          observation !== null &&
-          typeof observation === "object" &&
-          !Array.isArray(observation) &&
-          "capturedRoute" in route &&
-          route.capturedRoute !== null &&
-          "capturedRouteDigest" in observation &&
-          typeof observation.capturedRouteDigest === "string"
-        )
-          hasCapturedRouteBinding =
-            canonicalDigest(route.capturedRoute) ===
-            observation.capturedRouteDigest;
-      } catch {
-        // Older evidence has no Harness-bound route; only a fresh confirmation
-        // can supply a reliable baseline for a fixed-version comparison.
+    if (observed.result.status === "runtime-confirmed") {
+      const observationFile = await options.store.readFile(
+        observed.result.evidenceDigest,
+        "canary-observation.json",
+        64 * 1024,
+      );
+      if (observationFile.status === "resolved") {
+        try {
+          const observation = JSON.parse(
+            observationFile.bytes.toString("utf8"),
+          ) as unknown;
+          if (
+            route !== null &&
+            typeof route === "object" &&
+            !Array.isArray(route) &&
+            observation !== null &&
+            typeof observation === "object" &&
+            !Array.isArray(observation) &&
+            "capturedRoute" in route &&
+            route.capturedRoute !== null &&
+            "capturedRouteDigest" in observation &&
+            typeof observation.capturedRouteDigest === "string"
+          )
+            hasCapturedRouteBinding =
+              canonicalDigest(route.capturedRoute) ===
+              observation.capturedRouteDigest;
+        } catch {
+          // Older evidence has no Harness-bound route; only a fresh confirmation
+          // can supply a reliable baseline for a fixed-version comparison.
+        }
       }
     }
+    // A bound route whose binding cannot be verified is demoted to an unbound
+    // one. Routes that never carried a binding (reproduced, smoke) are kept as is.
     referenceRoute =
       !hasCapturedRouteBinding &&
       route !== null &&
       typeof route === "object" &&
-      !Array.isArray(route)
+      !Array.isArray(route) &&
+      "capturedRoute" in route
         ? { ...route, capturedRoute: null }
         : route;
   }
+  let originalVersion: string | undefined;
+  if (
+    options.snapshotCampaignId !== undefined &&
+    options.version === undefined
+  ) {
+    const frozen = ledger
+      .read({
+        campaignId: options.snapshotCampaignId,
+        type: "snapshot-frozen",
+        limit: 1000,
+      })
+      .some(
+        ({ event }) =>
+          event.type === "snapshot-frozen" &&
+          event.snapshotDigest === finding.snapshotDigest,
+      );
+    if (!frozen || pipeline.loadSnapshot === undefined)
+      throw new Error("The original pinned Snapshot is unavailable");
+    originalVersion = (await pipeline.loadSnapshot(finding.snapshotDigest))
+      .target.version;
+  }
+  const requestedVersion = options.version ?? originalVersion;
   const target = await pipeline.selectVersion({
     selectionId: selected.selectionId,
-    ...(options.version === undefined ? {} : { version: options.version }),
+    ...(requestedVersion === undefined ? {} : { version: requestedVersion }),
   });
   if (target === null)
     throw new Error("The selected target version is not available now");
-  const snapshot = await pipeline.freeze(target);
+  let snapshot: Snapshot;
+  if (options.snapshotCampaignId === undefined) {
+    snapshot = await pipeline.freeze(target);
+  } else {
+    const recordedSelection = ledger
+      .read({
+        campaignId: options.snapshotCampaignId,
+        type: "target-selected",
+        limit: 1000,
+      })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "target-selected" &&
+          event.selectionId === `${target.targetId}@${target.version}`,
+      );
+    if (recordedSelection?.type !== "target-selected")
+      throw new Error("The pinned reference Snapshot is not recorded");
+    const frozen = ledger
+      .read({
+        campaignId: options.snapshotCampaignId,
+        type: "snapshot-frozen",
+        limit: 1000,
+      })
+      .some(
+        ({ event }) =>
+          event.type === "snapshot-frozen" &&
+          event.snapshotDigest === recordedSelection.snapshotDigest,
+      );
+    if (!frozen || pipeline.loadSnapshot === undefined)
+      throw new Error("The pinned reference Snapshot is unavailable");
+    snapshot = await pipeline.loadSnapshot(recordedSelection.snapshotDigest);
+    if (
+      snapshot.digest !== recordedSelection.snapshotDigest ||
+      snapshot.target.identity !== target.targetId ||
+      snapshot.target.version !== target.version
+    )
+      throw new Error(
+        "The pinned reference Snapshot does not match the target",
+      );
+  }
   const originalSnapshot = snapshot.digest === finding.snapshotDigest;
-  if (confirmed === undefined && !originalSnapshot)
+  // An unconfirmed Finding may be rechecked on its own Snapshot (also when the
+  // version is spelled out); any other Snapshot needs an evidence-backed route.
+  if (observed === undefined && !originalSnapshot)
     throw new Error(
       options.version === undefined
         ? "An unconfirmed Finding can only be retried on its original Snapshot"
-        : "A confirmed route is required for fixed-version comparison",
+        : "An evidence-backed route is required for fixed-version comparison",
     );
   const setup = pipeline.setupFor(snapshot);
-  if (confirmed === undefined) {
+  if (observed === undefined) {
     const previous = ledger
       .read({
         campaignId,
@@ -571,26 +683,30 @@ export async function reverifyOnSelectedVersion<
       );
   }
   if (
-    confirmed?.type === "verification-finished" &&
+    observed?.type === "verification-finished" &&
     options.version !== undefined
   ) {
-    const confirmedLab = ledger
-      .read({ campaignId, type: "lab-provisioned", limit: 1000 })
+    const observedLab = ledger
+      .read({
+        campaignId: referenceCampaignId,
+        type: "lab-provisioned",
+        limit: 1000,
+      })
       .map(({ event }) => event)
       .find(
         (event) =>
           event.type === "lab-provisioned" &&
-          event.identity === `verification-lab-${confirmed.verificationId}`,
+          event.identity === `verification-lab-${observed.verificationId}`,
       );
     const sameScenario =
-      confirmedLab?.type === "lab-provisioned" &&
+      observedLab?.type === "lab-provisioned" &&
       (setup.scenario === undefined
-        ? confirmedLab.scenario === undefined
-        : setup.scenario.id === confirmedLab.scenario?.id &&
-          setup.scenario.digest === confirmedLab.scenario.digest);
+        ? observedLab.scenario === undefined
+        : setup.scenario.id === observedLab.scenario?.id &&
+          setup.scenario.digest === observedLab.scenario.digest);
     if (
       originalSnapshot &&
-      (confirmedLab?.type !== "lab-provisioned" ||
+      (observedLab?.type !== "lab-provisioned" ||
         (setup.scenario === undefined && hasCapturedRouteBinding) ||
         (sameScenario && hasCapturedRouteBinding))
     )
@@ -684,28 +800,34 @@ export async function reverifyOnSelectedVersion<
       throw new Error("The derived Finding could not be recorded");
     verificationFindingId = derived.finding.findingId;
   }
+  // A same-Snapshot recheck after a scenario change has no version basis; a
+  // pinned smoke replay on the original Snapshot has none either.
   const basisKind =
     options.version === undefined
       ? "latest-version"
       : originalSnapshot
         ? undefined
         : "fixed-version";
+  const pinnedReplay =
+    options.snapshotCampaignId !== undefined && originalSnapshot;
   const result = await pipeline.verification.verify({
     campaignId,
     findingId: verificationFindingId,
     verificationId,
     snapshot,
-    ...(basisKind === undefined
+    ...(basisKind === undefined || pinnedReplay
       ? {}
       : { basis: { kind: basisKind, findingSnapshotDigest: snapshot.digest } }),
     setup,
     campaignLabSetupDigest: canonicalDigest(setup),
     reconstruction: pipeline.reconstructionFor(snapshot),
-    referenceRoute:
-      originalSnapshot ||
-      referenceRoute === null ||
-      typeof referenceRoute !== "object" ||
-      Array.isArray(referenceRoute)
+    // The smoke replay compares the route digest, so it is passed untouched.
+    referenceRoute: pinnedReplay
+      ? referenceRoute
+      : originalSnapshot ||
+          referenceRoute === null ||
+          typeof referenceRoute !== "object" ||
+          Array.isArray(referenceRoute)
         ? undefined
         : { ...referenceRoute, comparisonKind: basisKind },
   });

@@ -1,6 +1,6 @@
 # 運用手引き（完成後に人間がすること）
 
-2026-10-11の探索主経路は、対象ごとに `wp2shell-bounty-v2` のRoot＋最大3 subagentによる協調Trialを1回行う（[ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md)）。旧単独Trialと二段構えの記録は読めるが、新規探索には使わない。実機縦断の受入前に本番稼働したものとみなさない。
+探索主経路は、対象ごとに `wp2shell-bounty-v3` のRoot＋最大3 subagentによる協調Trialを1回行う（[ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) のTrial構成、[ADR 0019](adr/0019-harness-generated-output-contract.md) の生成出力契約）。旧単独Trialと二段構えの記録は読めるが、新規探索には使わない。実機縦断の受入前に本番稼働したものとみなさない。
 
 対象読者: このHarnessを一人で回す運用者。正本は [SPEC.md](SPEC.md)。
 
@@ -28,6 +28,22 @@
 
 ## 2. 週の流れ
 
+### 実 Lab の週次 smoke（週1回、CI 外）
+
+`runsc`、固定 image、provider 認証を使えるホストで、既に `runtime-confirmed` となった TranslatePress 3.3.1 の ATO Finding を指定する。元 campaign の 3.3.1 と 3.3.2 の Snapshot と materialized source を保持しておく。Finding ID は台帳から、host 設定と Private Evidence は Git 外から読む。`pnpm build` の後、リポジトリのルートで実行する。
+
+```sh
+node scripts/smoke-real-lab.mjs \
+  --host /path/to/private/host.json \
+  --state /path/to/private/state \
+  --config examples/translatepress-3.3.1/campaign-real-lab-smoke.json \
+  --source-campaign <known-ato-campaign> \
+  --binding-campaign <independent-positive-campaign> \
+  --finding <confirmed-ato-finding-id>
+```
+
+script は別の `smoke-real-lab-...` campaign を作る。`--binding-campaign` は同じ Finding と3.3.1 Snapshotについて独立に陽性が確認された campaign を指す。2つの陽性 Harness 捕捉を照合し、Lab canary 名、security 値、reset key の型付き束縛を Private Evidence に保存する。新しい gVisor Lab で固定の8 HTTP手順を再生し、3.3.1 の陽性、続いて別 Snapshot の 3.3.2 の負の対照を取る。`recipe` / `observation` 不足だけは新 Lab で各 2 回まで再試行する。判定器は再生8手順と束縛後の同一路径を Harness 捕捉で照合する。応答から値を取得できない、8手順が揃わない、または同一路径でない場合は捕捉を Private Evidence に残して `incomplete(observation)` とし、終了コード1にする。`runtime-confirmed` と `contradicted` の両方が台帳に記録され、陽性の束縛後経路も元の route と一致した場合だけ終了コード0。失敗時は段階と `incomplete` の理由を表示し、残った smoke campaign を `harness ledger funnel --campaign <id>` で調べる。再実行には新しい campaign ID を使い、本番 funnel と混ぜない。Stored XSS の経路は判定器修正後に追加する。
+
 ```
 harness history status                                   # 履歴mirrorの鮮度。fresh以外は終了コード1
 harness runtime check --config <path>                    # 起動時検査の全項目とCodex image / runtime profileの一致。欠ければ終了コード1
@@ -53,11 +69,11 @@ harness review [--campaign <id>]                         # 検証済みの列を
 - tokenの更新はしない。preflightが「1時間以内に失効」を出したら、ホストで `codex login` をやり直す。
 - APIキー（`host-private-bearer`）の経路も残っている。
 
-`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v2` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessは最低実行時間を強制しない。既存v2本文の30分指示は#143で新しい版にするまで残る。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
+`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v3` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
 
 固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。
 
-既定promptは `wp2shell-bounty-v2`、入口索引は固定source由来のカタログ入力として既定で有効。索引の全件処理は終了条件にしない。`short-objective-managed-v4` は比較armとして残す。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
+既定promptは `wp2shell-bounty-v3`、入口索引は固定source由来のカタログ入力として既定で有効。索引の全件処理は終了条件にしない。`wp2shell-bounty-v2` と `short-objective-managed-v4` は比較armとして残す。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
 
 自動選定の campaign は初回起動時に `selection-batch-bound` を追記し、選定バッチと対象集合を固定する。再開時はこの記録のバッチを読み、途中で `select` を再実行しても新しいバッチに切り替えない。公開一覧の取得元・確認日時・available/stale/unavailable と失敗理由は Private Evidence の選定レポートに記録する。
 

@@ -40,7 +40,8 @@ afterEach(async () => {
 });
 
 async function fixture(
-  preflight: "ready" | "no-runsc" | "missing-image" = "ready",
+  preflight:
+    "ready" | "no-runsc" | "missing-image" | "missing-extension" = "ready",
   core?: { readonly version: string; readonly runningVersion: string },
   pluginSlug = "example",
 ) {
@@ -140,6 +141,13 @@ async function fixture(
           };
         if (request.args[0] === "image" && preflight === "missing-image")
           return { exitCode: 1, stdout: "", stderr: "unavailable" };
+        if (
+          preflight === "missing-extension" &&
+          request.args[0] === "exec" &&
+          request.args[2] === "php" &&
+          request.args[4]?.includes('extension_loaded("pdo_mysql")')
+        )
+          return { exitCode: 43, stdout: "", stderr: "" };
         if (request.args[0] === "inspect")
           return {
             exitCode: 0,
@@ -147,7 +155,15 @@ async function fixture(
               ? "172.20.0.3"
               : request.args.at(-1)?.endsWith("-proxy")
                 ? "172.20.0.4"
-                : "172.20.0.2",
+                : request.args.at(-1)?.endsWith("-canary")
+                  ? "172.20.0.5"
+                  : "172.20.0.2",
+            stderr: "",
+          };
+        if (request.args[0] === "exec" && request.args[1] === "-i")
+          return {
+            exitCode: 0,
+            stdout: '{"status":"completed","completedSteps":1}',
             stderr: "",
           };
         if (request.args[0] === "exec" && request.args[1]?.endsWith("-proxy")) {
@@ -309,6 +325,52 @@ async function fixture(
 }
 
 describe("WordPress gVisor Lab", () => {
+  it("passes a private replay request to the runsc recorder over stdin", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup);
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status !== "ready") return;
+    const secret = "private-replay-value";
+    expect(
+      await lab.replayHttp(provisioned.handle, {
+        initialBindings: { value: secret },
+        steps: [{ method: "GET", path: "/{{value}}" }],
+      }),
+    ).toEqual({ status: "completed", completedSteps: 1 });
+    const replay = commands.find(
+      (command) => command.args[0] === "exec" && command.args[1] === "-i",
+    );
+    expect(replay?.args).toContain(`wbh-${provisioned.handle.id}-proxy`);
+    expect(JSON.stringify(replay?.args)).not.toContain(secret);
+    expect(replay?.stdin).toContain(secret);
+    await lab.teardown(provisioned.handle);
+  });
+
+  it("runs WP-CLI as the Apache volume owner when activating plugins", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    for (const purpose of ["discovery", "verification"] as const) {
+      const result = await lab.provision(snapshot, setup, { purpose });
+      expect(result.status).toBe("ready");
+      if (result.status === "ready") await lab.teardown(result.handle);
+    }
+
+    const cliRuns = commands.filter(
+      ({ args }) =>
+        args[0] === "run" && args.includes(`wordpress-cli@${sha("3")}`),
+    );
+    expect(cliRuns.length).toBeGreaterThan(0);
+    expect(
+      cliRuns.filter(
+        ({ args }) => args.includes("plugin") && args.includes("activate"),
+      ),
+    ).toHaveLength(2);
+    for (const { args } of cliRuns) {
+      expect(args).toContain("--runtime=runsc");
+      expect(args).toContain("--user=33:33");
+      expect(args).not.toContain("--allow-root");
+    }
+  });
+
   it("provisions protected canaries only in a verification Lab", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const discovery = await lab.provision(snapshot, setup, {
@@ -1574,6 +1636,28 @@ describe("WordPress gVisor Lab", () => {
     });
   });
 
+  it("exposes the active review Lab receiver address only to its owned handle", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const { handle } = provisioned;
+
+    expect(lab.reviewReceiverIp(handle)).toBe("172.20.0.5");
+    expect(
+      commands.some(
+        (command) =>
+          command.args[0] === "inspect" &&
+          command.args.at(-1)?.endsWith("-canary"),
+      ),
+    ).toBe(true);
+    expect(lab.reviewReceiverIp({ ...handle })).toBeNull();
+
+    expect(await lab.teardown(handle)).toEqual({ status: "removed" });
+    expect(lab.reviewReceiverIp(handle)).toBeNull();
+  });
+
   it("runs a beacon receiver and reports which page contexts made an issued script canary reach it", async () => {
     const { lab, snapshot, setup, commands, database } = await fixture();
     const provisioned = await lab.provision(snapshot, setup, {
@@ -1682,7 +1766,7 @@ describe("WordPress gVisor Lab", () => {
     expect(browsers.length).toBeGreaterThan(0);
     for (const browser of browsers) {
       expect(browser.args).toContain("--runtime=runsc");
-      expect(browser.args).toContain("--add-host=canary:172.20.0.2");
+      expect(browser.args).toContain("--add-host=canary:172.20.0.5");
     }
     // Only the admin visits log in, and only the Lab's own browser sees that account.
     expect(
@@ -1787,4 +1871,34 @@ describe("WordPress gVisor Lab", () => {
       expect(commands.some((command) => command.args[0] === "run")).toBe(false);
     },
   );
+
+  it("marks a missing PDO MySQL extension as a precondition before installing the target", async () => {
+    const { lab, snapshot, setup, commands } =
+      await fixture("missing-extension");
+    expect(await lab.provision(snapshot, setup)).toMatchObject({
+      status: "incomplete",
+      reason: "precondition",
+    });
+    expect(commands.some((command) => command.args.includes("activate"))).toBe(
+      false,
+    );
+    expect(
+      commands.some(
+        (command) =>
+          command.args[0] === "run" &&
+          !command.args.includes("--runtime=runsc"),
+      ),
+    ).toBe(false);
+    expect(commands.some((command) => command.args[0] === "rm")).toBe(true);
+    expect(
+      commands.some(
+        (command) => command.args[0] === "volume" && command.args[1] === "rm",
+      ),
+    ).toBe(true);
+    expect(
+      commands.some(
+        (command) => command.args[0] === "network" && command.args[1] === "rm",
+      ),
+    ).toBe(true);
+  });
 });

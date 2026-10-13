@@ -30,7 +30,8 @@ export async function openReproductionPackage(
     }
 > {
   const result = verificationResultV1Schema.parse(candidate);
-  if (result.status !== "runtime-confirmed") return { status: "unavailable" };
+  if (result.status !== "runtime-confirmed" && result.status !== "reproduced")
+    return { status: "unavailable" };
   const files = await Promise.all(
     ["manual.md", "reproduce.py", "lab.json", "evidence.json"].map((name) =>
       store.readFile(result.reproductionPackageDigest, name, 1024 * 1024),

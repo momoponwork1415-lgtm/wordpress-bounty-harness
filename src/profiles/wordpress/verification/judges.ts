@@ -18,6 +18,12 @@ import type {
   WordPressLabHandle,
 } from "../lab/index.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
+import { createWordPressStandardReproducer } from "./standard-reproducer.js";
+import { requestContainsSecret } from "./request-secret.js";
+import {
+  bindSmokeReferenceRoute,
+  smokeReplayRecipeSchema,
+} from "./smoke-replay-recipe.js";
 
 type JudgeLab = Pick<
   WordPressLab,
@@ -32,7 +38,11 @@ type JudgeLab = Pick<
   | "readCapture"
   | "issuedScriptNonces"
 >;
-type Options = { readonly store: PrivateArtifactStore; readonly lab: JudgeLab };
+type Options = {
+  readonly store: PrivateArtifactStore;
+  readonly lab: JudgeLab &
+    Partial<Pick<WordPressLab, "markCapture" | "runStandardScript">>;
+};
 
 const sessionSchema = z.strictObject({ cookie: z.string().min(1).max(4096) });
 const routeFieldsSchema = z.looseObject({});
@@ -331,24 +341,38 @@ function matchesReferenceRoute(
   });
 }
 
-function requestContainsSecret(value: unknown, secret: string): boolean {
-  const raw = JSON.stringify(value ?? null);
-  if (raw.includes(secret)) return true;
-  const decoded = raw.replace(/(?:%[0-9a-fA-F]{2})+/g, (part) => {
-    try {
-      return decodeURIComponent(part);
-    } catch {
-      return part;
-    }
-  });
-  if (decoded.includes(secret)) return true;
-  for (const source of [raw, decoded]) {
-    for (const token of source.match(/[A-Za-z0-9+/]{16,}={0,2}/g) ?? [])
-      if (Buffer.from(token, "base64").toString("utf8").includes(secret))
-        return true;
-    for (const token of source.match(/[a-fA-F0-9]{16,}/g) ?? [])
-      if (Buffer.from(token, "hex").toString("utf8").includes(secret))
-        return true;
+/** Routes without a Harness-bound capture: every HTTP step must appear in order. */
+function matchesReferenceRouteSteps(
+  http: HttpRecord,
+  referenceRoute: unknown,
+): boolean {
+  const route = referenceRouteSchema.safeParse(referenceRoute);
+  if (!route.success) return false;
+  const steps = route.data.steps.filter((step) => step.kind === "http");
+  if (steps.length === 0) return false;
+  let matched = 0;
+  for (const exchange of http.exchanges) {
+    const captured = capturedExchangeSchema.safeParse(exchange);
+    if (!captured.success) return false;
+    const step = steps[matched];
+    const headersMatch =
+      step === undefined ||
+      step.headers === undefined ||
+      Object.entries(step.headers).every(([name, value]) => {
+        const sameName = Object.entries(captured.data.request.headers).filter(
+          ([capturedName]) => capturedName.toLowerCase() === name.toLowerCase(),
+        );
+        return sameName.length === 1 && sameName[0]?.[1] === value;
+      });
+    if (
+      step !== undefined &&
+      captured.data.request.method === step.method &&
+      captured.data.request.path === step.path &&
+      headersMatch &&
+      (step.body === undefined || captured.data.request.body === step.body)
+    )
+      matched++;
+    if (matched === steps.length) return true;
   }
   return false;
 }
@@ -377,8 +401,9 @@ async function readJson(
   store: PrivateArtifactStore,
   digest: string,
   name: string,
+  maxBytes = 1024 * 1024,
 ): Promise<unknown> {
-  const file = await store.readFile(digest, name, 1024 * 1024);
+  const file = await store.readFile(digest, name, maxBytes);
   if (file.status !== "resolved") return undefined;
   try {
     return JSON.parse(file.bytes.toString("utf8")) as unknown;
@@ -615,18 +640,120 @@ function canaryJudge(
         };
       const httpEvidence = await readHttpEvidence(options, lab, recipeDigest);
       if ("status" in httpEvidence) return httpEvidence;
+      const smokeBindingFile = await options.store.readFile(
+        recipeDigest,
+        "smoke-binding.json",
+        8192,
+      );
+      let strictRoute = referenceRoute;
+      if (smokeBindingFile.status === "resolved") {
+        const binding = z
+          .strictObject({
+            recipeDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+            sourceRouteDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+            replayStatus: z.enum(["completed", "incomplete", "unavailable"]),
+            completedSteps: z.number().int().nonnegative(),
+            replayReason: z
+              .enum([
+                "invalid-input",
+                "missing-binding",
+                "ambiguous-binding",
+                "binding-pattern",
+                "request-failed",
+                "response-too-large",
+              ])
+              .optional(),
+            bound: z.boolean(),
+          })
+          .safeParse(
+            await readJson(options.store, recipeDigest, "smoke-binding.json"),
+          );
+        const privateRecipe = binding.success
+          ? smokeReplayRecipeSchema.safeParse(
+              await readJson(
+                options.store,
+                binding.data.recipeDigest,
+                "replay-recipe.json",
+                12 * 1024 * 1024,
+              ),
+            )
+          : null;
+        const bound =
+          binding?.success &&
+          privateRecipe?.success &&
+          referenceRoute !== undefined &&
+          httpEvidence.capture === "harness-captured" &&
+          httpEvidence.http !== null &&
+          canonicalDigest(referenceRoute) === binding.data.sourceRouteDigest &&
+          privateRecipe.data.sourceRouteDigest ===
+            binding.data.sourceRouteDigest &&
+          binding.data.replayStatus === "completed" &&
+          binding.data.completedSteps === 8 &&
+          binding.data.bound
+            ? bindSmokeReferenceRoute({
+                recipe: privateRecipe.data,
+                sourceRoute: referenceRoute,
+                capture: httpEvidence.http.exchanges,
+                adminUser: canaries.adminUser,
+              })
+            : null;
+        if (
+          bound === null ||
+          httpEvidence.http === null ||
+          !matchesReferenceRouteSteps(httpEvidence.http, bound)
+        ) {
+          const evidenceDigest =
+            httpEvidence.captureBytes === undefined
+              ? undefined
+              : await options.store.putFiles({
+                  "proxy-capture.jsonl": httpEvidence.captureBytes,
+                  "route-observation.json": canonicalJson({
+                    judgeId: id,
+                    status: "incomplete",
+                    reason: "smoke-route-mismatch",
+                    snapshotDigest: lab.snapshotDigest,
+                    labSetupDigest: lab.setupDigest,
+                    recipeDigest,
+                    completedSteps: binding.success
+                      ? binding.data.completedSteps
+                      : null,
+                    replayReason: binding.success
+                      ? (binding.data.replayReason ?? null)
+                      : null,
+                  }),
+                });
+          return {
+            status: "incomplete",
+            reason: "observation",
+            nextStep:
+              "The bounded replay did not complete the same eight captured HTTP steps",
+            ...(evidenceDigest === undefined
+              ? {}
+              : {
+                  evidenceCapture: "harness-captured" as const,
+                  evidenceDigest,
+                }),
+          };
+        }
+        strictRoute = bound;
+      }
       const boundReference = referenceRouteSchema.safeParse(referenceRoute);
+      // Harness-bound reference routes (#127) are compared byte-for-byte. A route
+      // without a bound capture counts as matched only through a verified smoke
+      // binding (#126); any other unbound route stays incomplete.
       const routeMatched =
         referenceRoute === undefined ||
         (httpEvidence.capture === "harness-captured" &&
           httpEvidence.http !== null &&
-          matchesReferenceRoute(
-            httpEvidence.http,
-            await readJson(options.store, recipeDigest, "route.json"),
-            referenceRoute,
-            lab,
-            options.lab.issuedScriptNonces(lab),
-          ));
+          (boundReference.success
+            ? matchesReferenceRoute(
+                httpEvidence.http,
+                await readJson(options.store, recipeDigest, "route.json"),
+                referenceRoute,
+                lab,
+                options.lab.issuedScriptNonces(lab),
+              )
+            : strictRoute !== referenceRoute));
       const fixedVersion = z
         .looseObject({ comparisonKind: z.literal("fixed-version") })
         .safeParse(referenceRoute).success;
@@ -644,13 +771,33 @@ function canaryJudge(
         httpEvidence,
       });
       if (decision === null) {
-        if (!routeMatched)
+        if (!routeMatched) {
+          const evidenceDigest =
+            httpEvidence.captureBytes === undefined
+              ? undefined
+              : await options.store.putFiles({
+                  "proxy-capture.jsonl": httpEvidence.captureBytes,
+                  "route-observation.json": canonicalJson({
+                    judgeId: id,
+                    status: "incomplete",
+                    reason: "route-mismatch",
+                    snapshotDigest: lab.snapshotDigest,
+                    labSetupDigest: lab.setupDigest,
+                  }),
+                });
           return {
             status: "incomplete",
             reason: "observation",
             nextStep:
               "The captured rerun did not match the earlier confirmed HTTP route; repeat the same route",
+            ...(evidenceDigest === undefined
+              ? {}
+              : {
+                  evidenceCapture: "harness-captured" as const,
+                  evidenceDigest,
+                }),
           };
+        }
         if (
           httpEvidence.capture !== "harness-captured" ||
           httpEvidence.captureBytes === undefined
@@ -1218,6 +1365,20 @@ export function createWordPressJudges(
   const storedScript = storedScriptJudge(options);
   const sensitiveObject = sensitiveObjectJudge(options);
   return {
+    ...(options.lab.markCapture === undefined ||
+    options.lab.runStandardScript === undefined
+      ? {}
+      : {
+          reproducer: createWordPressStandardReproducer({
+            store: options.store,
+            lab: {
+              canaryLedger: options.lab.canaryLedger,
+              readCapture: options.lab.readCapture,
+              markCapture: options.lab.markCapture,
+              runStandardScript: options.lab.runStandardScript,
+            },
+          }),
+        }),
     for(finding) {
       switch (finding.impact) {
         case "privesc-to-admin":

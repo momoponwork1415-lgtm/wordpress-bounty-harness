@@ -18,6 +18,18 @@ import {
 const snapshotDigest = `sha256:${"a".repeat(64)}`;
 const otherDigest = `sha256:${"c".repeat(64)}`;
 const setupDigest = `sha256:${"b".repeat(64)}`;
+const fixedReferenceRoute = {
+  role: "subscriber",
+  defaultSettings: true,
+  steps: [
+    {
+      kind: "http",
+      method: "GET",
+      path: "/same-route",
+      expected: "The canary fires",
+    },
+  ],
+};
 const directories: string[] = [];
 afterEach(async () => {
   for (const directory of directories.splice(0))
@@ -36,7 +48,16 @@ async function fixture(
     readonly labSnapshotDigest?: string;
     readonly provision?: "ready" | "incomplete";
     readonly verifier?: Verifier<SyntheticFinding, LabHandle>["attempt"];
-    readonly judge?: "observed" | "not-observed" | "throws";
+    readonly judge?:
+      | "observed"
+      | "not-observed"
+      | "incomplete"
+      | "incomplete-captured"
+      | "throws";
+    readonly reproducer?: "observed" | "incomplete" | "not-observed";
+    /** A false effect visible only in the Lab changed by the agent. */
+    readonly agentOnlyEffect?: boolean;
+    readonly replaySetupMismatch?: boolean;
     readonly teardown?: "removed" | "incomplete";
     readonly refute?: boolean;
     /** A Finding rebound to a separately frozen version for a negative control. */
@@ -45,6 +66,7 @@ async function fixture(
     readonly omitFixedLineage?: boolean;
     /** Exercise a malformed fixed-version control without the earlier route. */
     readonly omitReferenceRoute?: boolean;
+    readonly omitOriginObserved?: boolean;
     /** The Harness recorder captured the rerun even though the canary did not fire. */
     readonly negativeCapture?: boolean;
     /** Attempt a comparison against another frozen snapshot. */
@@ -103,6 +125,32 @@ async function fixture(
       category: original.impact,
       artifacts: [{ kind: "finding", digest: originalDigest }],
     });
+    if (
+      options.reproducer === "not-observed" &&
+      options.omitOriginObserved !== true
+    ) {
+      const observedRouteDigest = await store.putFiles({
+        "confirmed-route.json": canonicalJson(fixedReferenceRoute),
+      });
+      await ledger.append({
+        schemaVersion: 1,
+        identity: "verification-origin",
+        campaignId: "campaign-1",
+        snapshotDigest,
+        occurredAt: "2026-10-08T00:15:00Z",
+        type: "verification-finished",
+        findingId: "finding-1",
+        verificationId: "verification-origin",
+        labSetupDigest: setupDigest,
+        result: {
+          status: "runtime-confirmed",
+          judgeId: "synthetic-canary",
+          proofKind: "nonce-canary",
+          evidenceDigest: observedRouteDigest,
+          reproductionPackageDigest: observedRouteDigest,
+        },
+      });
+    }
   }
   const findingDigest = await store.putFiles({
     "finding.json": canonicalJson(finding),
@@ -126,6 +174,8 @@ async function fixture(
     artifacts: [{ kind: "finding", digest: findingDigest }],
   });
   const calls = { provision: 0, verifier: 0, teardown: 0 };
+  const agentTouched = new Set<string>();
+  const replayedLabIds: string[] = [];
   let rendered:
     | {
         readonly category: string;
@@ -143,9 +193,17 @@ async function fixture(
   const lab: LabProvisioner<{ readonly name: string }, LabHandle> = {
     async provision() {
       calls.provision++;
+      const fresh = {
+        ...handle,
+        id: `lab-${calls.provision}`,
+        setupDigest:
+          options.replaySetupMismatch === true && calls.provision > 1
+            ? otherDigest
+            : handle.setupDigest,
+      };
       return options.provision === "incomplete"
         ? { status: "incomplete", reason: "provision", nextStep: "Retry" }
-        : { status: "ready", handle };
+        : { status: "ready", handle: fresh };
     },
     async seedCanaries() {
       return { status: "seeded", digest: setupDigest };
@@ -160,6 +218,7 @@ async function fixture(
   const verifier: Verifier<SyntheticFinding, LabHandle> = {
     async attempt(input) {
       calls.verifier++;
+      if (options.agentOnlyEffect === true) agentTouched.add(input.lab.id);
       if (options.verifier !== undefined) return options.verifier(input);
       return {
         status: "attempted",
@@ -187,6 +246,24 @@ async function fixture(
     id: "synthetic-canary",
     async observe({ lab: observed }) {
       if (options.judge === "throws") throw new Error("Lab unreachable");
+      if (options.judge === "incomplete")
+        return {
+          status: "incomplete",
+          reason: "observation",
+          nextStep: "No canary was observed",
+        };
+      if (options.judge === "incomplete-captured")
+        return {
+          status: "incomplete",
+          reason: "observation",
+          nextStep: "Replay every step on the fixed version",
+          ...(negativeCaptureDigest === undefined
+            ? {}
+            : {
+                evidenceCapture: "harness-captured" as const,
+                evidenceDigest: negativeCaptureDigest,
+              }),
+        };
       if (options.judge === "not-observed")
         return negativeCaptureDigest === undefined
           ? { status: "not-observed" }
@@ -221,6 +298,44 @@ async function fixture(
     judges: {
       for: (candidate) =>
         candidate.impact === "account-takeover" ? judge : null,
+      ...(options.reproducer === undefined
+        ? {}
+        : {
+            reproducer: {
+              id: "synthetic-standard-v1",
+              async observe({ lab: replayLab }) {
+                replayedLabIds.push(replayLab.id);
+                if (options.reproducer === "incomplete")
+                  return {
+                    status: "incomplete" as const,
+                    reason: "observation" as const,
+                    nextStep: "Capture the effect",
+                  };
+                const evidenceDigest = await store.putFiles({
+                  "reproduced-route.json": canonicalJson({
+                    snapshotDigest: findingSnapshotDigest,
+                    labSetupDigest: setupDigest,
+                  }),
+                  "proxy-capture.jsonl": "synthetic captured response\n",
+                  "structured-output.json": "{}",
+                });
+                return options.agentOnlyEffect === true &&
+                  !agentTouched.has(replayLab.id)
+                  ? {
+                      status: "incomplete" as const,
+                      reason: "observation" as const,
+                      nextStep: "The effect was present only in the agent Lab",
+                    }
+                  : options.reproducer === "observed"
+                    ? {
+                        status: "observed" as const,
+                        evidenceDigest,
+                        conditions: { observedVia: "synthetic" },
+                      }
+                    : { status: "not-observed" as const, evidenceDigest };
+              },
+            },
+          }),
     },
     readFinding: (value) => value as SyntheticFinding,
     renderer: {
@@ -272,22 +387,19 @@ async function fixture(
     reconstruction: { note: "synthetic" },
     ...(options.fixedVersion === true && options.omitReferenceRoute !== true
       ? {
-          referenceRoute: {
-            role: "subscriber",
-            defaultSettings: true,
-            steps: [
-              {
-                kind: "http",
-                method: "GET",
-                path: "/same-route",
-                expected: "The canary fires",
-              },
-            ],
-          },
+          referenceRoute: fixedReferenceRoute,
         }
       : {}),
   });
-  return { result, calls, ledger, negativeCaptureDigest, store, rendered };
+  return {
+    result,
+    calls,
+    ledger,
+    negativeCaptureDigest,
+    store,
+    rendered,
+    replayedLabIds,
+  };
 }
 
 describe("verification public interface", () => {
@@ -454,6 +566,32 @@ describe("verification public interface", () => {
     });
   });
 
+  it("keeps a partial fixed-version replay incomplete and records its capture digest", async () => {
+    const { result, ledger, store, negativeCaptureDigest } = await fixture({
+      fixedVersion: true,
+      judge: "incomplete-captured",
+      refute: true,
+      negativeCapture: true,
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+      evidenceDigest: negativeCaptureDigest,
+      refutationDigest: expect.stringMatching(/^sha256:/),
+    });
+    if (negativeCaptureDigest === undefined)
+      throw new Error("The fixture did not store its captured prefix");
+    expect(
+      await store.readFile(negativeCaptureDigest, "proxy-capture.jsonl", 1024),
+    ).toMatchObject({ status: "resolved" });
+    expect(
+      ledger.read({ type: "verification-finished" })[0]?.event,
+    ).toMatchObject({
+      result,
+      evidenceCapture: "harness-captured",
+    });
+  });
+
   it("keeps a captured fixed-version control incomplete without the earlier confirmed route", async () => {
     const { result, ledger, negativeCaptureDigest } = await fixture({
       fixedVersion: true,
@@ -482,10 +620,107 @@ describe("verification public interface", () => {
     expect(result.status).toBe("runtime-confirmed");
   });
 
-  it("returns no-judge without provisioning a Lab or calling the Verifier", async () => {
+  it("returns incomplete recipe when no standard reproducer is configured", async () => {
     const { result, calls } = await fixture({ impact: "other" });
-    expect(result).toMatchObject({ status: "incomplete", reason: "no-judge" });
+    expect(result).toMatchObject({ status: "incomplete", reason: "recipe" });
     expect(calls).toEqual({ provision: 0, verifier: 0, teardown: 0 });
+  });
+
+  it("records reproduced separately from a judge confirmation", async () => {
+    const { result, calls, ledger, replayedLabIds } = await fixture({
+      impact: "other",
+      reproducer: "observed",
+    });
+    expect(result).toMatchObject({
+      status: "reproduced",
+      reproducerId: "synthetic-standard-v1",
+      proofKind: "captured-script-observation",
+      negativeControl: "pending-fixed-version",
+    });
+    expect(calls).toEqual({ provision: 2, verifier: 1, teardown: 2 });
+    expect(replayedLabIds).toEqual(["lab-2"]);
+    expect(ledger.read({ type: "lab-provisioned" })).toHaveLength(2);
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      confirmed: 0,
+      reproduced: 1,
+    });
+  });
+
+  it("cannot reproduce an effect left by the agent in its own Lab", async () => {
+    const { result, calls, replayedLabIds, ledger } = await fixture({
+      impact: "other",
+      reproducer: "observed",
+      agentOnlyEffect: true,
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+    });
+    expect(calls).toEqual({ provision: 2, verifier: 1, teardown: 2 });
+    expect(replayedLabIds).toEqual(["lab-2"]);
+    expect(ledger.funnel("campaign-1")).toMatchObject({ reproduced: 0 });
+  });
+
+  it("rejects a replay Lab with a different setup digest and tears it down", async () => {
+    const { result, calls, replayedLabIds } = await fixture({
+      impact: "other",
+      reproducer: "observed",
+      replaySetupMismatch: true,
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "digest-mismatch",
+    });
+    expect(calls).toEqual({ provision: 2, verifier: 1, teardown: 2 });
+    expect(replayedLabIds).toEqual([]);
+  });
+
+  it("does not promote an incomplete standard observation", async () => {
+    const { result } = await fixture({
+      impact: "other",
+      reproducer: "incomplete",
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+    });
+  });
+
+  it("does not contradict a fixed-version control without a nonce judge", async () => {
+    const { result } = await fixture({
+      impact: "other",
+      reproducer: "not-observed",
+      fixedVersion: true,
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+    });
+  });
+
+  it("does not use script absence to contradict after the nonce judge is incomplete", async () => {
+    const { result } = await fixture({
+      judge: "incomplete",
+      reproducer: "not-observed",
+      fixedVersion: true,
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+    });
+  });
+
+  it("keeps a fixed snapshot incomplete even without an observed original route", async () => {
+    const { result } = await fixture({
+      impact: "other",
+      reproducer: "not-observed",
+      fixedVersion: true,
+      omitOriginObserved: true,
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+    });
   });
 
   it("maps provision failure to incomplete provision", async () => {
@@ -516,6 +751,27 @@ describe("verification public interface", () => {
       status: "incomplete",
       reason: "precondition",
       nextStep: "Enable the synthetic setting",
+    });
+  });
+
+  it("records a known next scenario for the retry queue", async () => {
+    const { result, ledger } = await fixture({
+      verifier: async () => ({
+        status: "incomplete",
+        reason: "precondition",
+        nextStep: "Try the ordinary private post scenario",
+        nextScenarioId: "private-post-v1",
+      }),
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "precondition",
+      nextScenarioId: "private-post-v1",
+    });
+    expect(
+      ledger.read({ type: "verification-finished" })[0]?.event,
+    ).toMatchObject({
+      result,
     });
   });
 

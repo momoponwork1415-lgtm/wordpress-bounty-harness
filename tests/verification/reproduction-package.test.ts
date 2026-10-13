@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
+import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { openReproductionPackage } from "../../src/review/reproduction-package.js";
@@ -12,9 +13,27 @@ import {
 } from "../../src/verification/reproduction-package.js";
 import { wordpressReproductionRenderer } from "../../src/profiles/wordpress/verification/reproduction-package.js";
 
-const snapshot = `sha256:${"a".repeat(64)}`;
+const sourceDigest = `sha256:${"a".repeat(64)}`;
+const snapshotBody = {
+  kind: "source-snapshot" as const,
+  schemaVersion: 1 as const,
+  target: { identity: "example", version: "1.0", sourceDigest },
+  dependencies: [],
+};
+const sealedSnapshot = {
+  ...snapshotBody,
+  digest: canonicalDigest(snapshotBody),
+};
+const snapshot = sealedSnapshot.digest;
 const other = `sha256:${"b".repeat(64)}`;
-const setup = `sha256:${"c".repeat(64)}`;
+const setupManifest = {
+  schemaVersion: 1 as const,
+  snapshotDigest: snapshot,
+  siteTitle: "Synthetic package test",
+  initialPosts: [],
+  customerRole: false,
+};
+const setup = canonicalDigest(setupManifest);
 const directories: string[] = [];
 afterEach(async () => {
   await Promise.all(
@@ -91,7 +110,7 @@ const route = {
 };
 const reconstruction = {
   wordpressVersion: "6.8",
-  target: { identity: "example", version: "1.0", sourceDigest: snapshot },
+  target: snapshotBody.target,
   enabledSettings: [],
   roles: ["subscriber"],
 };
@@ -112,6 +131,8 @@ it("publishes a confirmed judge route to Private Evidence and opens it for revie
       evidenceDigest,
     },
     reconstruction,
+    setup: setupManifest,
+    snapshot: sealedSnapshot,
   });
   expect(result.status).toBe("runtime-confirmed");
   if (result.status !== "runtime-confirmed") return;
@@ -148,6 +169,8 @@ it("publishes a confirmed judge route to Private Evidence and opens it for revie
   expect(opened.reconstruction).toMatchObject({
     wordpressVersion: "6.8",
     labSetupDigest: setup,
+    setup: setupManifest,
+    snapshot: sealedSnapshot,
   });
   expect(opened.evidence).toMatchObject({
     judgeEvidenceDigest: evidenceDigest,

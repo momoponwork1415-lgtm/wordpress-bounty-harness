@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createWordPressLabObservations } from "./lab-observation.js";
-import { isAbsolute } from "node:path";
+import { STANDARD_REPRODUCER_SCRIPT } from "../verification/standard-script.js";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 
 import { z } from "zod";
 
@@ -45,6 +48,7 @@ export type { WordPressVictimRoute } from "./lab-observation.js";
 
 export type DockerRequest = {
   readonly args: readonly string[];
+  readonly stdin?: string;
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
 };
@@ -56,6 +60,11 @@ export type DockerResult = {
 class LabDockerFailure extends Error {
   constructor(readonly diagnostic: string) {
     super("gVisor Lab command failed");
+  }
+}
+class MissingWordPressExtension extends Error {
+  constructor() {
+    super("The WordPress Lab image is missing pdo_mysql");
   }
 }
 export interface DockerRunner {
@@ -223,6 +232,39 @@ export interface ExecutionCanary {
   readonly php: string;
 }
 
+/** Private requests are passed over stdin to a short-lived runner in the Lab recorder. */
+export type ReplayHttpInput = {
+  readonly steps: readonly {
+    readonly method: string;
+    readonly path: string;
+    readonly headers?: Readonly<Record<string, string>>;
+    readonly body?: string;
+    readonly bindingsAfter?: readonly {
+      readonly name: string;
+      readonly left: string;
+      readonly right: string;
+      readonly pattern?: string;
+      readonly occurrence?: "unique" | "last";
+    }[];
+  }[];
+  readonly initialBindings: Readonly<Record<string, string>>;
+};
+
+export type ReplayHttpResult =
+  | { readonly status: "completed"; readonly completedSteps: number }
+  | {
+      readonly status: "incomplete";
+      readonly completedSteps: number;
+      readonly reason:
+        | "invalid-input"
+        | "missing-binding"
+        | "ambiguous-binding"
+        | "binding-pattern"
+        | "request-failed"
+        | "response-too-large";
+    }
+  | { readonly status: "unavailable" };
+
 export interface WordPressLab extends LabProvisioner<
   WordPressLabSetup,
   WordPressLabHandle
@@ -240,6 +282,24 @@ export interface WordPressLab extends LabProvisioner<
       }
     | { readonly status: "unavailable" }
   >;
+  /** Executes only the Harness-owned standard script in an isolated Lab peer. */
+  runStandardScript(
+    handle: WordPressLabHandle,
+    input: string,
+  ): Promise<
+    | { readonly status: "completed"; readonly output: string }
+    | { readonly status: "unavailable" }
+  >;
+  /** Review-only credential, never part of the attacker/Verifier handle. */
+  reviewAdministrator(
+    handle: WordPressLabHandle,
+  ): { readonly username: "harness-admin"; readonly password: string } | null;
+  /** Review-only receiver address for a human-operated browser in the Lab network. */
+  reviewReceiverIp(handle: WordPressLabHandle): string | null;
+  replayHttp(
+    handle: WordPressLabHandle,
+    input: ReplayHttpInput,
+  ): Promise<ReplayHttpResult>;
   canaryLedger(handle: WordPressLabHandle): WordPressCanaryLedger | null;
   prepareExecutionCanary(handle: WordPressLabHandle): ExecutionCanary | null;
   /**
@@ -380,6 +440,7 @@ export function openWordPressLab(options: {
       const result = await runNativeModelProcess({
         executablePath: options.dockerExecutablePath,
         args: request.args,
+        ...(request.stdin === undefined ? {} : { stdin: request.stdin }),
         workingDirectory: "/",
         environment: {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -401,7 +462,14 @@ export function openWordPressLab(options: {
     args: readonly string[],
     timeoutMs = 60_000,
     maxOutputBytes = 64 * 1024,
-  ): Promise<DockerResult> => runner.run({ args, timeoutMs, maxOutputBytes });
+    stdin?: string,
+  ): Promise<DockerResult> =>
+    runner.run({
+      args,
+      timeoutMs,
+      maxOutputBytes,
+      ...(stdin === undefined ? {} : { stdin }),
+    });
   const requireDocker = async (
     args: readonly string[],
     timeoutMs?: number,
@@ -426,6 +494,9 @@ export function openWordPressLab(options: {
     "--network",
     resource.network,
     "--security-opt=no-new-privileges",
+    // The Apache image owns the shared WordPress volume as UID/GID 33;
+    // the CLI image's www-data is UID/GID 82 and cannot create uploads.
+    "--user=33:33",
     ...environment.flatMap((entry) => ["--env", entry]),
     "--env",
     `WORDPRESS_DB_HOST=${databaseIp(resource)}`,
@@ -440,7 +511,6 @@ export function openWordPressLab(options: {
     options.images.wordpressCli,
     "wp",
     ...args,
-    "--allow-root",
   ];
   const wp = (
     resource: Resources,
@@ -537,6 +607,59 @@ export function openWordPressLab(options: {
       await requireDocker(["image", "inspect", image], 30_000);
   };
   return {
+    async replayHttp(handle, input) {
+      const resource = active.get(handle.id);
+      if (resource?.handle !== handle) return { status: "unavailable" };
+      const serialized = JSON.stringify(input);
+      if (Buffer.byteLength(serialized) > 12 * 1024 * 1024)
+        return { status: "unavailable" };
+      const result = await docker(
+        [
+          "exec",
+          "-i",
+          resource.recorder,
+          "node",
+          "/opt/wbh-recorder/replay-cli.js",
+        ],
+        180_000,
+        4096,
+        serialized,
+      );
+      if (result.exitCode !== 0 && result.exitCode !== 1)
+        return { status: "unavailable" };
+      let output: unknown;
+      try {
+        output = JSON.parse(result.stdout) as unknown;
+      } catch {
+        return { status: "unavailable" };
+      }
+      const parsed = z
+        .discriminatedUnion("status", [
+          z.strictObject({
+            status: z.literal("completed"),
+            completedSteps: z.number().int().nonnegative(),
+          }),
+          z.strictObject({
+            status: z.literal("incomplete"),
+            completedSteps: z.number().int().nonnegative(),
+            reason: z.enum([
+              "invalid-input",
+              "missing-binding",
+              "ambiguous-binding",
+              "binding-pattern",
+              "request-failed",
+              "response-too-large",
+            ]),
+          }),
+        ])
+        .safeParse(output);
+      if (
+        !parsed.success ||
+        (result.exitCode === 0) !== (parsed.data.status === "completed")
+      )
+        return { status: "unavailable" };
+      return parsed.data;
+    },
     async cleanupLeftovers({ remove, patterns = {} }) {
       const kinds = [
         ["containers", ["ps", "-a", "--format", "{{.Names}}"], ["rm", "-f"]],
@@ -598,6 +721,20 @@ export function openWordPressLab(options: {
           docker,
           requireDocker,
         });
+        // Probe the running runsc image before installing the target plugin.
+        // PHP exits 43 only when the required extension is absent.
+        const extension = await docker([
+          "exec",
+          resource.wordpress,
+          "php",
+          "-r",
+          'exit(extension_loaded("pdo_mysql") ? 0 : 43);',
+        ]);
+        if (extension.exitCode === 43) throw new MissingWordPressExtension();
+        if (extension.exitCode !== 0)
+          throw new LabDockerFailure(
+            extension.stderr || "WordPress PHP extension probe failed",
+          );
         await initializeWordPress({
           resource,
           setup,
@@ -632,10 +769,14 @@ export function openWordPressLab(options: {
         if (resource !== undefined) await cleanup(resource);
         return {
           status: "incomplete",
-          reason: "provision",
+          reason:
+            error instanceof MissingWordPressExtension
+              ? "precondition"
+              : "provision",
           nextStep:
-            error instanceof Error &&
-            error.message === "The Lab image runs another WordPress version"
+            error instanceof MissingWordPressExtension ||
+            (error instanceof Error &&
+              error.message === "The Lab image runs another WordPress version")
               ? error.message
               : "Check source, pinned images, runsc, and Lab initialization; then provision a fresh Lab",
           ...(error instanceof LabDockerFailure && error.diagnostic
@@ -673,6 +814,68 @@ export function openWordPressLab(options: {
             : {}),
         };
       }
+    },
+    async runStandardScript(handle, input) {
+      const resource = active.get(handle.id);
+      if (
+        resource?.handle !== handle ||
+        Buffer.byteLength(STANDARD_REPRODUCER_SCRIPT) > 64 * 1024 ||
+        Buffer.byteLength(input) > 128 * 1024
+      )
+        return { status: "unavailable" };
+      const directory = await mkdtemp(join(tmpdir(), "wbh-reproduction-"));
+      try {
+        await Promise.all([
+          writeFile(
+            join(directory, "standard-reproduce.py"),
+            STANDARD_REPRODUCER_SCRIPT,
+            {
+              mode: 0o600,
+            },
+          ),
+          writeFile(join(directory, "input.json"), input, { mode: 0o600 }),
+        ]);
+        const result = await docker(
+          [
+            "run",
+            "--rm",
+            "--runtime=runsc",
+            "--network",
+            resource.network,
+            "--add-host",
+            `wordpress:${handle.recorderIp}`,
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--pids-limit=64",
+            "--memory=256m",
+            "--mount",
+            `type=bind,src=${directory},dst=/run/wbh-reproduction,readonly`,
+            options.images.browser,
+            "python3",
+            "/run/wbh-reproduction/standard-reproduce.py",
+          ],
+          90_000,
+          128 * 1024,
+        );
+        return result.exitCode === 0
+          ? { status: "completed", output: result.stdout }
+          : { status: "unavailable" };
+      } catch {
+        return { status: "unavailable" };
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+    reviewAdministrator(handle) {
+      const resource = active.get(handle.id);
+      return resource?.handle === handle
+        ? { username: "harness-admin", password: resource.adminPassword }
+        : null;
+    },
+    reviewReceiverIp(handle) {
+      const resource = active.get(handle.id);
+      return resource?.handle === handle ? (resource.receiverIp ?? null) : null;
     },
     async teardown(handle) {
       const resource = active.get(handle.id);
