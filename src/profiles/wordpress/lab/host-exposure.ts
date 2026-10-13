@@ -3,8 +3,10 @@ import type { DockerResult, Resources, WordPressLabHandle } from "./index.js";
 /**
  * A Harness-owned TCP forwarder that publishes the Lab's WordPress and, when
  * the Lab exposes it, the read-only database on the host loopback (#186,
- * `lab up`). It joins the internal Lab network only after Docker bound the
- * host ports on the bridge, because an internal network publishes nothing.
+ * `lab up`). The container is created on the bridge (an internal network
+ * publishes nothing), connected to the Lab network, and only then started:
+ * gVisor configures its interfaces at boot and ignores networks connected to
+ * a running sandbox.
  */
 export const HOST_GATEWAY_SCRIPT = `const net = require("net");
 const forward = (listenPort, host, port) =>
@@ -61,8 +63,7 @@ export async function exposeWordPressLabToHost(input: {
   const container = hostGatewayName(resource.id);
   try {
     await requireDocker([
-      "run",
-      "--detach",
+      "create",
       "--name",
       container,
       "--runtime=runsc",
@@ -85,6 +86,7 @@ export async function exposeWordPressLabToHost(input: {
       HOST_GATEWAY_SCRIPT,
     ]);
     await requireDocker(["network", "connect", resource.network, container]);
+    await requireDocker(["start", container]);
   } catch (error: unknown) {
     return {
       status: "unavailable",

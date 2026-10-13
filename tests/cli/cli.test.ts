@@ -164,7 +164,7 @@ async function harness(
   const track = (args: readonly string[]) => {
     const names = (from: number) =>
       args.slice(from).filter((arg) => !arg.startsWith("-"));
-    if (args[0] === "run") {
+    if (args[0] === "run" || args[0] === "create") {
       const name = args[args.indexOf("--name") + 1];
       if (name !== undefined) live.containers.add(name);
     } else if (args[0] === "rm")
@@ -3367,14 +3367,17 @@ describe("harness CLI vertical slice", () => {
     const since = docker.slice(dockerBefore).map(({ args }) => args);
     expect(
       since.every(
-        (args) => args[0] !== "run" || args.includes("--runtime=runsc"),
+        (args) =>
+          (args[0] !== "run" && args[0] !== "create") ||
+          args.includes("--runtime=runsc"),
       ),
     ).toBe(true);
     const gateway = since.find(
       (args) =>
-        args[0] === "run" &&
+        args[0] === "create" &&
         args[args.indexOf("--name") + 1] === `wbh-${labId}-host`,
     );
+    expect(since).toContainEqual(["start", `wbh-${labId}-host`]);
     expect(gateway).toContain("127.0.0.1:8080:80");
     expect(gateway).toContain("127.0.0.1:3307:3306");
     expect(
@@ -3416,6 +3419,13 @@ describe("harness CLI vertical slice", () => {
     expect(down.stdout).toMatch(/containers [1-9]\d* removed, 0 remaining$/m);
     expect(down.stdout).toMatch(/networks 1 removed, 0 remaining$/m);
     expect(down.stdout).toMatch(/volumes 1 removed, 0 remaining$/m);
+    // Listing thousands of host volumes must not hit the 64 KiB default output cap.
+    expect(
+      docker
+        .slice(removalsBefore)
+        .filter(({ args }) => args[0] === "ps" || args[1] === "ls")
+        .every((request) => request.maxOutputBytes >= 8 * 1024 * 1024),
+    ).toBe(true);
     const removed = docker
       .slice(removalsBefore)
       .map(({ args }) => args)

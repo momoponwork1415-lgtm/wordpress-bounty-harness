@@ -456,7 +456,7 @@ describe("WordPress Lab state observer", () => {
 });
 
 describe("WordPress Lab host exposure", () => {
-  it("publishes the Lab through a runsc gateway on loopback and joins the internal network", async () => {
+  it("creates a runsc gateway on loopback, joins the internal network before start, then starts it", async () => {
     const calls: string[][] = [];
     const handle = {
       id: resource.id,
@@ -480,21 +480,27 @@ describe("WordPress Lab host exposure", () => {
       httpPort: 8080,
       databasePort: 3307,
     });
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     const run = calls[0]!;
-    expect(run.slice(0, 2)).toEqual(["run", "--detach"]);
+    expect(run.slice(0, 3)).toEqual([
+      "create",
+      "--name",
+      hostGatewayName(resource.id),
+    ]);
     expect(run).toContain("--runtime=runsc");
     expect(run).toContain("127.0.0.1:8080:80");
     expect(run).toContain("127.0.0.1:3307:3306");
     expect(run).toContain("WBH_WP_IP=172.20.0.3");
     expect(run).toContain("WBH_DB_IP=172.20.0.2");
     expect(run).toContain("node-recorder@sha256:abc");
+    // gVisor only sees networks attached before start, so connect precedes start.
     expect(calls[1]).toEqual([
       "network",
       "connect",
       resource.network,
       hostGatewayName(resource.id),
     ]);
+    expect(calls[2]).toEqual(["start", hostGatewayName(resource.id)]);
   });
 
   it("stays unavailable on bad ports or a failing gateway start", async () => {

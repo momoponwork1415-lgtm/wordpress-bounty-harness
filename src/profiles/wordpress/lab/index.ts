@@ -723,7 +723,14 @@ export function openWordPressLab(options: {
       };
       for (const [kind, list] of kinds) {
         const matching = [...owned[kind], ...(patterns[kind] ?? [])];
-        found[kind] = (await requireDocker(list)).stdout
+        // A host with thousands of anonymous volumes lists far more than the 64 KiB default.
+        const listing = await docker(list, 60_000, 8 * 1024 * 1024);
+        if (listing.exitCode !== 0)
+          throw new LabDockerFailure(
+            listing.stderr ||
+              `Docker command exited with status ${listing.exitCode}`,
+          );
+        found[kind] = listing.stdout
           .split("\n")
           .map((name) => name.trim())
           .filter((name) => matching.some((pattern) => pattern.test(name)));
