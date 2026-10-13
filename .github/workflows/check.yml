@@ -28,6 +28,14 @@ jobs:
       - run: pnpm check
       # 配布物（dist/ と prompt / policy / recorder の複製）が壊れていないか。typecheck は noEmit なので別に要る。
       - run: pnpm build
+      # dist が起動し、複製した prompt / policy を読める位置にあること（import 解決と copy-assets の確認）
+      - name: Smoke the built CLI
+        run: |
+          set -eu
+          test -f dist/profiles/wordpress/prompts/wp2shell-bounty-v3.md
+          test -f dist/profiles/wordpress/policy/campaign.json
+          test -f dist/profiles/wordpress/policy/selection.json
+          node dist/cli/main.js 2>&1 | grep -q "host configuration is required"
 
   private-guard:
     # SPEC.md 第 2 節 8: payload、HTTP 記録、画面画像、実行ログ、認証情報、未公開の発見は Git 外の Private Evidence に置く。
@@ -61,6 +69,16 @@ jobs:
           if [ -n "$big" ]; then
             echo "512 KiB を超えるファイルが追加されています。記録や複製は Git 外に置く:"
             echo "$big"
+            exit 1
+          fi
+          # 内容走査: 文書・設定・script に Lab の canary token、HTTP 捕捉の行、秘密鍵が貼られていないか。
+          # src/ と tests/ は fixture が同じ語を使うので対象外（path guard のみ）。
+          content=$(git diff -U0 "$(git merge-base "$BASE" "$HEAD")" "$HEAD" -- docs/ examples/ scripts/ containers/ '*.md' ':!src/**' ':!tests/**' ':!.github/workflows/check.yml' \
+            | grep -E '^\+' | grep -vE '^\+\+\+' \
+            | grep -nE 'wbh-canary-[A-Za-z0-9-]{8,}|\{"request":\s*\{"method":|BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY|wordpress_logged_in_[0-9a-f]{32}=' || true)
+          if [ -n "$content" ]; then
+            echo "Private Evidence に見える内容（canary token、HTTP 捕捉、秘密鍵、session cookie）が文書に貼られています:"
+            echo "$content" | cut -c1-120
             exit 1
           fi
           echo "private-guard: ok"

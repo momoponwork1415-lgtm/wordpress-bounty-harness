@@ -48,7 +48,7 @@ Step 1 の作業順: #185（Finding / Lead の境界と review queue）→ `revi
 - 実験軸（分担、継続、prompt 変種など）は opt-in の設定ブロック 1 つと profile の file 1 つに閉じ、台帳の run 記録に軸を残す。消し方を PR に書く。
 - agent に渡る文章（`src/profiles/wordpress/prompts/` の本文、`.claude/skills/` の本文、Harness が生成して渡す節の雛形: 出力契約、Lab・入口・Programme Boundary の節、Verifier の victim 契約）を変える PR は、変更後の全文と日本語訳を PR 本文か `docs/reviews/` の文書に貼る。所有者が全文を読んで `owner-approved` ラベルを付けるまで merge しない。AI は所有者が出典付きで採った要素だけを書き、要素を足さない。
 - 1 PR は差分 500 行以内を目安にする。超えるなら問いを分ける。
-- CI の `pnpm check` と `pnpm build` が通る。`private-guard`（Private Evidence・提出 package の構成物・記録や画像・512 KiB 超のファイルを止める）と `adr-guard` も通る。
+- CI の `pnpm check` と `pnpm build` が通る。`private-guard`（Private Evidence・提出 package の構成物・記録や画像・512 KiB 超のファイルを止め、文書に貼られた canary token・HTTP 捕捉・秘密鍵・session cookie も見る）と `adr-guard` も通る。
 
 ## 6. 正本の改訂
 
