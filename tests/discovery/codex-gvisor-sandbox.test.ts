@@ -284,6 +284,9 @@ describe("gVisor Codex sandbox", () => {
       });
       const calls: { args: readonly string[]; stdin: string | undefined }[] =
         [];
+      let researchContents: string | Buffer = "# Registry\n";
+      let researchDirectory = "";
+      const researchDirectories: string[] = [];
       const sandbox = new GvisorCodexSandbox({
         dockerExecutablePath: "/usr/bin/docker",
         image: `node@${digest}`,
@@ -294,6 +297,22 @@ describe("gVisor Codex sandbox", () => {
         clock: () => new Date("2026-10-08T07:00:00Z"),
         runDocker: async (args, stdin) => {
           calls.push({ args, stdin });
+          if (args.includes("--network=internal-run")) {
+            const researchMount = args.find((arg) =>
+              arg.endsWith(",dst=/workspace/research"),
+            );
+            researchDirectory =
+              /^--mount=type=bind,src=(.+),dst=\/workspace\/research$/.exec(
+                researchMount ?? "",
+              )?.[1] ?? "";
+            if (researchDirectory.length > 0) {
+              researchDirectories.push(researchDirectory);
+              await writeFile(
+                join(researchDirectory, "REGISTRY.md"),
+                researchContents,
+              );
+            }
+          }
           const output = args.includes("--version")
             ? "codex-cli 0.161.0\n"
             : args.includes("--entrypoint=sha256sum")
@@ -324,6 +343,10 @@ describe("gVisor Codex sandbox", () => {
           mode: "ro" as const,
           expectedTree,
         },
+        researchMount: {
+          path: "/workspace/research" as const,
+          mode: "rw" as const,
+        },
         labHost: { name: "wordpress", ipv4: "172.20.0.2" },
       };
       const result = await sandbox.execute(command);
@@ -347,6 +370,27 @@ describe("gVisor Codex sandbox", () => {
       expect(calls[2]?.args).toContain(
         `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
       );
+      expect(
+        calls[2]?.args.some((arg) =>
+          /^--mount=type=bind,src=.+,dst=\/workspace\/research$/.test(arg),
+        ),
+      ).toBe(true);
+      expect(result.research?.truncated).toBe(false);
+      expect(
+        result.research && JSON.parse(result.research.archive.toString("utf8")),
+      ).toMatchObject({
+        kind: "research-directory-archive",
+        truncated: false,
+        collectedBytes: Buffer.byteLength("# Registry\n"),
+        entries: [
+          {
+            path: "REGISTRY.md",
+            type: "file",
+            contentBase64: Buffer.from("# Registry\n").toString("base64"),
+          },
+        ],
+      });
+      await expect(stat(researchDirectory)).rejects.toThrow();
       expect(calls[2]?.stdin).toBe(command.stdin);
       // Without --interactive, docker run never hands stdin to the CLI.
       expect(calls[2]?.args).toContain("--interactive");
@@ -373,11 +417,14 @@ describe("gVisor Codex sandbox", () => {
           ),
         ).toEqual([]);
       }
-      // Writable mounts are only the tmpfs; the source and support files are read-only.
+      // Only the Trial notes and isolated CLI home are writable bind mounts.
       expect(
         calls[2]?.args.filter((arg) => arg.startsWith("--mount=")),
       ).toEqual([
         `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
+        expect.stringMatching(
+          /^--mount=type=bind,src=.+,dst=\/workspace\/research$/,
+        ),
         expect.stringMatching(
           /^--mount=type=bind,src=.+,dst=\/opt\/codex-support,readonly$/,
         ),
@@ -431,7 +478,19 @@ describe("gVisor Codex sandbox", () => {
           databaseHost: { name: "wordpress", ipv4: "172.20.0.3" },
         }),
       ).rejects.toThrow();
-      expect(calls).toHaveLength(9);
+      researchContents = Buffer.alloc(8 * 1024 * 1024 + 1, 0x61);
+      const truncated = await sandbox.execute(command);
+      expect(truncated.research?.truncated).toBe(true);
+      expect(
+        truncated.research &&
+          JSON.parse(truncated.research.archive.toString("utf8")),
+      ).toMatchObject({
+        truncated: true,
+        collectedBytes: 8 * 1024 * 1024,
+        entries: [{ path: "REGISTRY.md", truncated: true }],
+      });
+      expect(calls).toHaveLength(12);
+      expect(new Set(researchDirectories).size).toBe(4);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

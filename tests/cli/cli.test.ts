@@ -943,6 +943,13 @@ describe("harness CLI vertical slice", () => {
         stopRules: { maxRuns: 1, noFindingRuns: 1 },
       },
     },
+    {
+      promptId: "wp2shell-whitebox-v1.7",
+      config: {
+        promptId: "wp2shell-whitebox-v1.7",
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    },
   ] as const)(
     "adds the generated contract to $promptId and records separate digests",
     async ({ promptId, config }) => {
@@ -961,9 +968,9 @@ describe("harness CLI vertical slice", () => {
       expect(result.code).toBe(0);
       const objective = await loadWordPressDiscoveryAsset(promptId);
       const contract =
-        promptId === "wp2shell-bounty-v3"
-          ? wordPressDiscoveryOutputContractV2()
-          : wordPressDiscoveryOutputContract();
+        promptId === "short-objective-managed-v5"
+          ? wordPressDiscoveryOutputContract()
+          : wordPressDiscoveryOutputContractV2();
       expect(prompts[0]).toContain(objective.text.trim());
       expect(prompts[0]).toContain(contract.text);
       expect(prompts[0]?.split(contract.text)).toHaveLength(2);
@@ -1053,6 +1060,39 @@ describe("harness CLI vertical slice", () => {
     expect(prompts[0]).toContain(
       "WordPress core source (read-only): /workspace/wordpress",
     );
+  });
+
+  it("mentions the writable research directory only for objective-only prompts", async () => {
+    const whitebox = await harness({
+      config: {
+        promptId: "wp2shell-whitebox-v1.7",
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    });
+    await whitebox.run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-research-notes",
+      "--config",
+      whitebox.configPath,
+    );
+    expect(whitebox.prompts[0]).toContain(
+      "Writable notes directory: /workspace/research.",
+    );
+
+    const legacy = await harness();
+    await legacy.run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-without-research-notes",
+      "--config",
+      legacy.configPath,
+    );
+    expect(legacy.prompts[0]).not.toContain("/workspace/research");
   });
 
   it("records the seed stage when canary setup fails", async () => {
@@ -1557,6 +1597,25 @@ describe("harness CLI vertical slice", () => {
       entryIndex: true,
       runWallTimeMinutes: 60,
       stopRules: { maxRuns: 1, noFindingRuns: 1 },
+    });
+    expect(
+      wordpressCampaignConfigSchema.parse({
+        ...base,
+        promptId: "wp2shell-whitebox-v1.7",
+      }),
+    ).toMatchObject({
+      mode: "wp2shell",
+      promptId: "wp2shell-whitebox-v1.7",
+    });
+    expect(
+      wordpressCampaignConfigSchema.parse({
+        ...base,
+        promptId: "wp2shell-whitebox-v1.7",
+        entryIndex: false,
+      }),
+    ).toMatchObject({
+      mode: "entry-index-control",
+      promptId: "wp2shell-whitebox-v1.7",
     });
     for (const forbidden of [
       { assignment: { unit: "entry-point" } },

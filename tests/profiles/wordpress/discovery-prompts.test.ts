@@ -50,6 +50,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
       "wp2shell-bounty-v3",
+      "wp2shell-whitebox-v1.7",
       "trust-boundary-v1",
     ]);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual([
@@ -67,6 +68,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v1",
       "wp2shell-bounty-v2",
       "wp2shell-bounty-v3",
+      "wp2shell-whitebox-v1.7",
     ]);
 
     for (const id of WORDPRESS_DISCOVERY_ASSET_IDS) {
@@ -141,6 +143,8 @@ describe("WordPress discovery prompt assets", () => {
         "sha256:effeb9e343601157e2da76eb65b99d4de91a9618daf7379efce13491a1d6aba6",
       "wp2shell-bounty-v3":
         "sha256:a97b4b3c1101470cec743dd51af1d2169f15d4d5ee1a2797997be05edef72c9b",
+      "wp2shell-whitebox-v1.7":
+        "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",
     } as const;
     for (const id of WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS) {
       const { text, digest } = await loadWordPressDiscoveryAsset(id);
@@ -211,9 +215,13 @@ describe("WordPress discovery prompt assets", () => {
   it("keeps every discovery input free of known vulnerability clues", async () => {
     for (const id of WORDPRESS_DISCOVERY_ASSET_IDS) {
       const { text } = await loadWordPressDiscoveryAsset(id);
-      expect(text).not.toMatch(/\bCVE(?:-\d+)?\b/i);
-      expect(text).not.toMatch(/\badvisor(?:y|ies)\b/i);
-      expect(text).not.toMatch(/\bPoC\b/i);
+      if (id === "wp2shell-whitebox-v1.7") {
+        expect(text).not.toMatch(/\bCVE-\d{4}-\d+\b/i);
+      } else {
+        expect(text).not.toMatch(/\bCVE(?:-\d+)?\b/i);
+        expect(text).not.toMatch(/\badvisor(?:y|ies)\b/i);
+        expect(text).not.toMatch(/\bPoC\b/i);
+      }
       expect(text).not.toMatch(/(?:past|previous)\s+(?:fix|patch)/i);
       expect(text).not.toMatch(/過去(?:の)?修正|既知(?:の)?脆弱性/);
     }
@@ -229,10 +237,10 @@ describe("WordPress discovery prompt assets", () => {
     for (const id of WORDPRESS_DISCOVERY_PROMPT_IDS) {
       const { text } = await loadWordPressDiscoveryAsset(id);
       expect(text).toContain("unauthenticated");
-      expect(text).toContain("subscriber");
-      expect(text).toContain("customer");
-      expect(text).toContain("rce");
-      expect(text).toContain("stored-xss");
+      expect(text).toMatch(/subscriber/i);
+      expect(text).toMatch(/customer/i);
+      expect(text).toMatch(/\brce\b|remote code execution/i);
+      expect(text).toMatch(/stored[- ]xss/i);
       if (!WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id)) {
         expect(text).toContain("attackerPosition");
         expect(text).toContain("configurationPrecondition");

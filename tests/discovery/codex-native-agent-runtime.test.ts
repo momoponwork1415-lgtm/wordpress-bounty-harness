@@ -168,6 +168,22 @@ function sandbox(
         image,
         cliVersion: "0.161.0",
         bundledCatalogDigest: digest,
+        ...(command.researchMount === undefined
+          ? {}
+          : {
+              research: {
+                archive: Buffer.from(
+                  JSON.stringify({
+                    kind: "research-directory-archive",
+                    schemaVersion: 1,
+                    truncated: false,
+                    collectedBytes: 0,
+                    entries: [],
+                  }),
+                ),
+                truncated: false,
+              },
+            }),
         isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
         ...overrides,
       };
@@ -519,6 +535,13 @@ describe("Codex native agent runtime", () => {
         observed: { toolCalls: 2, filesRead: 1, labRequests: 1 },
       });
       expect(result.receipt.diagnosticArtifactDigest).toMatch(/^sha256:/);
+      expect(result.researchArtifact).toMatchObject({
+        attachment: {
+          kind: "research",
+          digest: expect.stringMatching(/^sha256:/),
+        },
+        truncated: false,
+      });
       expect(result.agentRuns).toHaveLength(1);
       expect(result.agentRuns?.[0]?.receipt).toMatchObject({
         runId: "child-thread",
@@ -696,6 +719,10 @@ describe("Codex native agent runtime", () => {
       expect(commands[0]?.args).toContain("multi_agent");
       expect(commands[0]?.args).toContain("agents.max_threads=3");
       expect(commands[0]?.args).toContain("agents.max_depth=1");
+      expect(commands[0]?.researchMount).toEqual({
+        path: "/workspace/research",
+        mode: "rw",
+      });
       expect(commands[0]?.args).toContain("apps");
       expect(commands[0]?.args).toContain("remote_plugin");
       expect(commands[0]?.args).not.toContain("--ephemeral");
@@ -712,6 +739,20 @@ describe("Codex native agent runtime", () => {
       expect(screening.receipt.terminal).toBe("completed");
       expect(commands[1]?.args).toContain("features.multi_agent=false");
       expect(commands[1]?.args).not.toContain("agents.max_threads=3");
+      expect(commands[1]?.researchMount).toBeUndefined();
+      expect(result.researchArtifact).toMatchObject({
+        attachment: {
+          kind: "research",
+          digest: expect.stringMatching(/^sha256:/),
+        },
+        truncated: false,
+      });
+      if (result.researchArtifact === undefined)
+        throw new Error("Missing research artifact");
+      const research = await runtime.attachments.read(
+        result.researchArtifact.attachment,
+      );
+      expect(research.status).toBe("resolved");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

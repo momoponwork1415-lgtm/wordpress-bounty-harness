@@ -187,7 +187,11 @@ const campaignModes = z.discriminatedUnion("mode", [
     mode: z.literal("wp2shell"),
     runWallTimeMinutes: z.number().positive().max(60).default(60),
     promptId: z
-      .enum(["wp2shell-bounty-v2", "wp2shell-bounty-v3"])
+      .enum([
+        "wp2shell-bounty-v2",
+        "wp2shell-bounty-v3",
+        "wp2shell-whitebox-v1.7",
+      ])
       .default("wp2shell-bounty-v3"),
     stopRules: singleTrialStop,
     entryIndex: z.literal(true).default(true),
@@ -197,7 +201,11 @@ const campaignModes = z.discriminatedUnion("mode", [
     mode: z.literal("entry-index-control"),
     runWallTimeMinutes: z.number().positive().max(60).default(60),
     promptId: z
-      .enum(["wp2shell-bounty-v2", "wp2shell-bounty-v3"])
+      .enum([
+        "wp2shell-bounty-v2",
+        "wp2shell-bounty-v3",
+        "wp2shell-whitebox-v1.7",
+      ])
       .default("wp2shell-bounty-v3"),
     stopRules: singleTrialStop,
     entryIndex: z.literal(false),
@@ -239,7 +247,8 @@ export const wordpressCampaignConfigSchema = z
           ? "ablation"
           : config.promptId !== undefined &&
               config.promptId !== "wp2shell-bounty-v2" &&
-              config.promptId !== "wp2shell-bounty-v3"
+              config.promptId !== "wp2shell-bounty-v3" &&
+              config.promptId !== "wp2shell-whitebox-v1.7"
             ? "comparison"
             : config.entryIndex === false
               ? "entry-index-control"
@@ -824,7 +833,9 @@ async function planWordPressDiscovery(
   const outputContractV1 = wordPressDiscoveryOutputContract();
   const outputContractV2 = wordPressDiscoveryOutputContractV2();
   const outputContractFor = (id: string) =>
-    id === "wp2shell-bounty-v3" ? outputContractV2 : outputContractV1;
+    id === "wp2shell-bounty-v3" || id === "wp2shell-whitebox-v1.7"
+      ? outputContractV2
+      : outputContractV1;
   const objectiveOnly = (id: string) =>
     WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
   const source = await boundaries.sourceFor(snapshot);
@@ -892,6 +903,9 @@ async function planWordPressDiscovery(
         : [
             "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
           ]),
+      ...(objectiveOnly(selectedObjective.id)
+        ? ["Writable notes directory: /workspace/research."]
+        : []),
       ...(assignment === undefined
         ? ["## Assigned files", "All files under /workspace/main."]
         : [
