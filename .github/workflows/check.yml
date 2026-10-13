@@ -45,7 +45,8 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -eu
-          added=$(git diff --name-only --diff-filter=AMR "$BASE" "$HEAD")
+          # base との二点 diff だと、PR branch が古い main から分岐している間に main 側へ入った変更が逆向きに見える。merge-base からの三点 diff にする。
+          added=$(git diff --name-only --diff-filter=AMR "$(git merge-base "$BASE" "$HEAD")" "$HEAD")
           bad=$(printf '%s\n' "$added" | grep -Ei \
             '(^|/)(\.private|evidence|poc|attachments|private-evidence)(/|$)|(^|/)(wordfence-fill|submission-package|human-verification|verification-package)[^/]*\.json$|\.(har|sqlite|sqlite3|db|png|jpe?g|gif|webp|mp4|mov|webm|zip|tar|gz|7z|pcap|pem|key)$' \
             || true)
@@ -82,6 +83,7 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           has_label() { printf '%s' "$LABELS" | tr ',' '\n' | grep -qx 'owner-approved'; }
+          BASE=$(git merge-base "$BASE" "$HEAD")  # 三点 diff（private-guard と同じ理由）
           adr=$(git diff --name-only "$BASE" "$HEAD" -- docs/adr/ docs/SPEC.md | wc -l)
           text=$(git diff --name-only "$BASE" "$HEAD" -- \
             src/profiles/wordpress/prompts/ \
