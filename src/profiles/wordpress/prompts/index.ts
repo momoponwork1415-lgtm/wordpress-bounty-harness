@@ -80,12 +80,24 @@ export async function loadWordPressDiscoveryAsset(
 }
 
 /** Fixed Verifier instructions; the caller records this exact byte digest. */
-export async function loadWordPressVerifierPrompt(): Promise<{
+export async function loadWordPressVerifierPrompt(
+  id: "verifier-v6" | "verifier-v7" = "verifier-v7",
+): Promise<{
+  readonly id: "verifier-v6" | "verifier-v7";
   readonly text: string;
   readonly digest: `sha256:${string}`;
 }> {
-  const bytes = await readFile(new URL("./verifier-v6.md", import.meta.url));
+  const fileName =
+    id === "verifier-v6"
+      ? "verifier-v6.md"
+      : id === "verifier-v7"
+        ? "verifier-v7.md"
+        : undefined;
+  if (fileName === undefined)
+    throw new Error("Unknown WordPress Verifier prompt");
+  const bytes = await readFile(new URL(`./${fileName}`, import.meta.url));
   return {
+    id,
     text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
     digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
   };

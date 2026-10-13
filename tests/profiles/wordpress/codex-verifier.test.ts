@@ -577,7 +577,7 @@ describe("CodexVerifier.attempt", () => {
     expect(event?.type).toBe("verifier-run-finished");
     if (event?.type !== "verifier-run-finished") return;
     expect(event.promptDigest).toBe(
-      "sha256:f548a5a3121fc8eb1d761042577944c3fbf5899bd481884ed690753cf3400d58",
+      "sha256:df5ed497912146fd4ceaeacbf923d3cee3337c477afad8645044fca460bd3b18",
     );
     const storedReceipt = await f.store.readFile(
       event.receiptDigest,

@@ -20,10 +20,22 @@ import {
 } from "../../../src/profiles/wordpress/prompts/index.js";
 
 describe("WordPress discovery prompt assets", () => {
-  it("pins the Verifier prompt and keeps known answers and attack strings out", async () => {
+  it("pins the current Verifier prompt to its file bytes and keeps answer strings out", async () => {
     const prompt = await loadWordPressVerifierPrompt();
+    const bytes = await readFile(
+      new URL(
+        "../../../src/profiles/wordpress/prompts/verifier-v7.md",
+        import.meta.url,
+      ),
+    );
+    expect(bytes.byteLength).toBeLessThan(4_000);
+    expect(prompt.id).toBe("verifier-v7");
+    expect(prompt.text).toBe(bytes.toString("utf8"));
     expect(prompt.digest).toBe(
-      "sha256:f548a5a3121fc8eb1d761042577944c3fbf5899bd481884ed690753cf3400d58",
+      "sha256:df5ed497912146fd4ceaeacbf923d3cee3337c477afad8645044fca460bd3b18",
+    );
+    expect(prompt.digest).toBe(
+      `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
     );
     expect(prompt.text).toContain("http.json");
     expect(prompt.text).toContain("refutation.md");
@@ -34,6 +46,43 @@ describe("WordPress discovery prompt assets", () => {
       /\b(?:curl|python|php)\s+-|\/wp-admin\/admin-ajax\.php|<script\b/i,
     );
   });
+
+  it("keeps the archived v6 Verifier prompt loadable", async () => {
+    const prompt = await loadWordPressVerifierPrompt("verifier-v6");
+    expect(prompt.id).toBe("verifier-v6");
+    expect(prompt.digest).toBe(
+      "sha256:f548a5a3121fc8eb1d761042577944c3fbf5899bd481884ed690753cf3400d58",
+    );
+    expect(prompt.text).toContain("# WordPress Verifier v6");
+    expect(prompt.text).toContain("try to refute the Finding");
+  });
+
+  it("changes only the approved v6 lines in v7", async () => {
+    const oldPrompt = await loadWordPressVerifierPrompt("verifier-v6");
+    const current = await loadWordPressVerifierPrompt();
+    const replacements = [
+      ["# WordPress Verifier v6", "# WordPress Verifier v7"],
+      [
+        "Turn the Finding's reproduction clue into steps that work in this Lab, and try to refute the Finding.",
+        "Reproduce the effect the Finding claims, from the supplied attacker position, in this Lab.",
+      ],
+      [
+        "If the route does not support the claimed effect, explain the contrary evidence in `refutation.md`.",
+        "If the effect does not reproduce, record what actually happened in `refutation.md`.",
+      ],
+      [
+        "If the same route now fails, record the actual responses and explain the blocking observation in `refutation.md`.",
+        "If the same route now fails, record the actual responses and what actually happened in `refutation.md`.",
+      ],
+    ] as const;
+    let expected = oldPrompt.text;
+    for (const [before, after] of replacements) {
+      expect(expected.split(before)).toHaveLength(2);
+      expected = expected.replace(before, after);
+    }
+    expect(current.text).toBe(expected);
+  });
+
   it("publishes versioned prompt variants and the shared trust boundary", async () => {
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       "wp2shell-derived-v1",
