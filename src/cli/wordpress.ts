@@ -91,6 +91,7 @@ import {
   inspectHistoryMirror,
 } from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
+import { SmokeReplayVerifier } from "../profiles/wordpress/verification/smoke-replay-verifier.js";
 import {
   wordpressReproductionRenderer,
   type WordPressReconstruction,
@@ -274,6 +275,7 @@ export type WordPressCampaignConfig = z.infer<
 export interface WordPressCampaignBoundaries {
   readonly selection: WordPressSelectionWithBatchInspection;
   readonly freeze: (target: WordPressTargetSelection) => Promise<Snapshot>;
+  readonly loadSnapshot: (digest: string) => Promise<Snapshot>;
   readonly lab: WordPressLab;
   readonly sourceFor: (snapshot: Snapshot) => Promise<{
     readonly directory: string;
@@ -585,6 +587,10 @@ const reconstructionFor =
 function verificationFor(
   state: CliState,
   boundaries: WordPressCampaignBoundaries,
+  verifier: Verifier<
+    WordPressFinding,
+    WordPressLabHandle
+  > = boundaries.verifier,
 ) {
   return new Verification<
     WordPressFinding,
@@ -595,7 +601,7 @@ function verificationFor(
     ledger: state.ledger,
     store: state.store,
     lab: boundaries.lab,
-    verifier: boundaries.verifier,
+    verifier,
     judges: createWordPressJudges({ store: state.store, lab: boundaries.lab }),
     readFinding: readWordPressFinding,
     renderer: wordpressReproductionRenderer,
@@ -1207,9 +1213,23 @@ export function createWordPressCliProfile(
     async reverify(state, input) {
       const { config, policy } = await loadConfig(input.configPath);
       const boundaries = await options.boundaries(config, state);
+      const verifier =
+        input.smokeReplayDigest === undefined
+          ? boundaries.verifier
+          : new SmokeReplayVerifier({
+              lab: boundaries.lab,
+              store: state.store,
+              recipeDigest: input.smokeReplayDigest,
+            });
       return reverifyOnSelectedVersion({
         campaignId: input.campaignId,
         findingId: input.findingId,
+        ...(input.referenceCampaignId === undefined
+          ? {}
+          : { referenceCampaignId: input.referenceCampaignId }),
+        ...(input.snapshotCampaignId === undefined
+          ? {}
+          : { snapshotCampaignId: input.snapshotCampaignId }),
         ...(input.version === undefined ? {} : { version: input.version }),
         ledger: state.ledger,
         store: state.store,
@@ -1260,8 +1280,9 @@ export function createWordPressCliProfile(
             return target;
           },
           freeze: boundaries.freeze,
+          loadSnapshot: boundaries.loadSnapshot,
           setupFor: setupFor(config),
-          verification: verificationFor(state, boundaries),
+          verification: verificationFor(state, boundaries, verifier),
           reconstructionFor: reconstructionFor(config),
         },
       });

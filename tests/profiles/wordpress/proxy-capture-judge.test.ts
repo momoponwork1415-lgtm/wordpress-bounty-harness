@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import { createWordPressJudges } from "../../../src/profiles/wordpress/verification/judges.js";
+import type { JudgeObservation } from "../../../src/verification/index.js";
 import {
   canaries,
   finding,
@@ -87,6 +88,10 @@ async function observe(
 async function observeReference(
   referenceRoute: unknown,
   capture: Buffer | null,
+  inspect?: (
+    observation: JudgeObservation,
+    store: PrivateArtifactStore,
+  ) => Promise<void>,
 ) {
   const directory = await mkdtemp(join(tmpdir(), "wbh-route-control-"));
   try {
@@ -111,12 +116,14 @@ async function observeReference(
         exchanges: [{ request: {}, response: { body: "No canary" } }],
       }),
     });
-    return await judge.observe({
+    const observation = await judge.observe({
       finding: finding("sqli"),
       lab: handle,
       recipeDigest,
       referenceRoute,
     });
+    await inspect?.(observation, store);
+    return observation;
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -301,6 +308,62 @@ describe("WordPress judges with proxy capture", () => {
     });
   });
 
+  it("keeps a three-of-eight replay incomplete and retains the captured prefix privately", async () => {
+    const steps = Array.from({ length: 8 }, (_, index) => ({
+      kind: "http",
+      method: "GET",
+      path: `/step-${index + 1}`,
+      expected: "Observed response",
+    }));
+    const capture = capturedRequests(
+      steps.slice(0, 3).map((step) => ({
+        method: step.method,
+        path: step.path,
+      })),
+    );
+    const observed = await observeReference(
+      { steps },
+      capture,
+      async (result, store) => {
+        if (
+          result.status !== "incomplete" ||
+          result.evidenceDigest === undefined
+        )
+          throw new Error("The incomplete replay has no captured evidence");
+        expect(
+          await evidenceFile(
+            store,
+            result.evidenceDigest,
+            "proxy-capture.jsonl",
+          ),
+        ).toEqual(capture);
+        expect(
+          JSON.parse(
+            (
+              await evidenceFile(
+                store,
+                result.evidenceDigest,
+                "route-observation.json",
+              )
+            ).toString("utf8"),
+          ) as unknown,
+        ).toMatchObject({
+          judgeId: "wordpress-sql-canary",
+          status: "incomplete",
+          reason: "route-mismatch",
+          snapshotDigest,
+          labSetupDigest: setupDigest,
+        });
+      },
+    );
+    expect(observed).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+      evidenceCapture: "harness-captured",
+      evidenceDigest: expect.stringMatching(/^sha256:/),
+    });
+  });
+
   it("keeps a route without HTTP steps or without proxy capture incomplete", async () => {
     const noHttp = await observeReference(
       { steps: [{ kind: "browser", path: "/view", expected: "View" }] },
@@ -311,9 +374,11 @@ describe("WordPress judges with proxy capture", () => {
       reason: "observation",
     });
     const noCapture = await observeReference(replayRoute, null);
-    expect(noCapture).toMatchObject({
+    expect(noCapture).toEqual({
       status: "incomplete",
       reason: "observation",
+      nextStep:
+        "The captured rerun did not match the earlier confirmed HTTP route; repeat the same route",
     });
   });
 });

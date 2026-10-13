@@ -249,16 +249,19 @@ export class CodexVerifier implements Verifier<
   }
 
   async attempt({
+    campaignId,
     finding,
     lab,
     referenceRoute,
   }: {
+    readonly campaignId: string;
     readonly finding: WordPressFinding;
     readonly lab: WordPressLabHandle;
     readonly referenceRoute?: unknown;
   }): Promise<VerifierAttempt> {
     const event = this.options.ledger
       .read({
+        campaignId,
         findingId: finding.findingId,
         type: "finding-recorded",
         limit: 1,

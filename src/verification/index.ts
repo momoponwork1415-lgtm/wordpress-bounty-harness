@@ -33,6 +33,7 @@ type FindingRecord = Extract<LedgerEventV1, { type: "finding-recorded" }>;
 /** A fresh-container agent that repairs and refutes a recipe. It cannot confirm. */
 export interface Verifier<Finding, Handle extends LabHandle> {
   attempt(input: {
+    readonly campaignId: string;
     readonly finding: Finding;
     readonly lab: Handle;
     /** Earlier judge-owned route for a same-path version comparison. */
@@ -87,6 +88,7 @@ export type JudgeObservation =
       readonly status: "incomplete";
       readonly reason: "precondition" | "observation" | "evidence";
       readonly nextStep: string;
+      readonly evidenceCapture?: "harness-captured" | "agent-authored";
       readonly evidenceDigest?: string;
     };
 
@@ -372,6 +374,7 @@ export class Verification<
     judge: Judge<Finding, Handle> | null,
   ): Promise<VerificationResultV1> {
     const {
+      campaignId,
       finding,
       snapshotDigest,
       lab,
@@ -396,6 +399,7 @@ export class Verification<
     let attempt: VerifierAttempt;
     try {
       attempt = await this.#options.verifier.attempt({
+        campaignId,
         finding,
         lab,
         ...(referenceRoute === undefined ? {} : { referenceRoute }),
@@ -440,6 +444,8 @@ export class Verification<
       ) {
         return this.#replayInFreshLab(run, attempt);
       }
+      if (observation.evidenceCapture !== undefined)
+        onCapture(observation.evidenceCapture);
       return incomplete(
         observation.reason,
         observation.nextStep,
