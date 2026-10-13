@@ -15,7 +15,9 @@
 
 「探索は AI、確認は独立した fresh session、提出は人間、外部送信は実装しない」は 4 世代とも同じ。これが所有者の一貫した要求。
 
-## 2. 報酬が出た版（9 月）が持っていて、今の版に無いもの
+## 2. 9 月版（wordpress-harness）が持っていて、今の版に無いもの
+
+訂正（2026-10-13 夕）: 有償 7 件は wordpress-harness の prompt では発見されていない。発見時点の prompt は whitebox-harness `963d3bb` の `bounded-wp2shell/v1.7`（Custom Facebook Feed）と 7 月末の private contract（TranslatePress 3.2.6、Unlimited Elements）。根拠は [2026-10-13-prompt-source-comparison.md](2026-10-13-prompt-source-comparison.md) 第 0 節。以下は 9 月版の仕組みの比較で、「報酬が出た版」ではない。
 
 1. **受理時の scope gate。** `candidateAdmission` の allowlist に合わない候補は run ごと不採用、対象外の手掛かりは Parked Programme Lead。今は全受理で、本番 14 Finding のうち 9 件が `other`。#185 がこれを戻す。
 2. **条件付き追加 Trial。** 初回 Trial が候補を 1 件以上返した対象だけ、残り 2 Trial を独立に並列起動。TranslatePress 3.2.5 では独立 3 試行の和集合で既知 8 件中 4 件を再発見（`docs/knowledge/deepseek-wp2shell-v7-translatepress-known-cve-evaluation-2026-09-20.md`）。今は全対象 1 Trial。
