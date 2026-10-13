@@ -16,3 +16,4 @@ Step 1（[DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節）の完了まで着手し�
 | 2026-10-13 | 文書の整理（docs/reviews/2026-10-12-consolidation-and-production-first.md 第 4 節） | Step 1 完了後 |
 | 2026-10-13 | 既知 7 件の再発見ベンチマークの残り（Smash Balloon、Unlimited Elements、TranslatePress 3.2.6） | Step 2 で判定器を触るとき |
 | 2026-10-13 | 修正版の負の対照と `contradicted` の自動化 | Step 2 |
+| 2026-10-13 | review CLI の多機能（decide / scope / draft / authorize / dedupe の人間向け表示）を skill 側へ寄せ、CLI を機械向けの最小集合に整理する | Step 2。skill 3 本が 10 件回って出力が安定したとき（ADR 0032 Q27） |

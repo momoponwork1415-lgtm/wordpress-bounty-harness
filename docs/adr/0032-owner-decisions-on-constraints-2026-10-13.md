@@ -63,6 +63,7 @@ amends: 0030（タグ単位の履歴利用）, 0022（自動再試行の範囲�
 | Q24 | 未 push の worktree | 中身を確認し、要るものだけ push |
 | Q25 | 提出パッケージ | 37 件で回った 4 ファイル構成と human_only 9 項目を #188 の契約にする。Fill-Only 拡張と guard-lock は skill の assets |
 | Q26 | Patchstack の形式 | 保留 |
+| Q27 | CLI の位置づけ | CLI は AI（skill と Harness の自動処理）が呼ぶ機械向けの interface とし、所有者は Claude Code の skill から操作する。CLI の機能は増やさず、人間向けの表示や対話は skill に置く。既存の多機能は削除せず拡張を止め、整理は Step 2（所有者 2026-10-13） |
 
 ## ADR 0030 への修正
 
