@@ -3,8 +3,10 @@
 | 用語 | 意味 |
 | --- | --- |
 | Target Snapshot | 調べる対象と必要な依存 source を版と digest で固定したもの。 |
+| 探索対象 | WordPress plugin slug で識別する対象。版や Target Snapshot が変わっても同じ slug なら同じ探索対象として扱う。 |
 | Campaign | 1つの Target Snapshot に対する探索、検証、記録のまとまり。 |
 | Trial | Campaign 内の独立した探索試行。目標構成では Root と最大3つの subagent が1つの Trial を構成する。 |
+| 追加探索Trial | 同じ探索対象に先行する独立探索Trialがある状態で、新たに始める独立探索Trial。開始済みTrialの再開やFindingの検証・再検証を含まない。 |
 | Discovery run | モデル実行の記録単位。Trial の中で何回モデルを呼んだかと区別する。 |
 | Finding | 攻撃者の立場、入口から影響までの source 上の経路、観測を持つ未確認の主張。 |
 | Lead | source に根拠があり、影響までに未解決の辺が残る手がかり。Finding や検証結果ではない。 |

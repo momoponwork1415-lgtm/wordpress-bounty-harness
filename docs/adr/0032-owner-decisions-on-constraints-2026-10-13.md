@@ -1,7 +1,7 @@
 ---
 status: proposed (owner-approved ラベルで accepted にする)
 date: 2026-10-13
-amends: 0030（タグ単位の履歴利用）, 0022（自動再試行の範囲）
+amends: 0030（タグ単位の履歴利用）, 0022（自動再試行の範囲）, 0002（追加探索の判断点）, 0029（開発セットの反復）
 ---
 
 # 2026-10-13 のグリルで所有者が決めた制約と、出典不明の制約の扱い
@@ -27,9 +27,15 @@ amends: 0030（タグ単位の履歴利用）, 0022（自動再試行の範囲�
 | Q3 | 候補タグ | 所有者が列挙しない。Wordfence ミラーと WordPress.org のタグから「低権限・報奨対象の記録 / plugin」を機械的に出し、上位の族を既定にする（[2026-10-13-selection-data.md](../reviews/2026-10-13-selection-data.md) 第 3 節）。タグの出典を `target-selected` に残し、半年後に有償率で測る |
 | Q4 | install 下限 | 100,000。公式の帯別平均と所有者の 2026-08 実績（Gate 1）による |
 | Q5 | High Threat タグ 21 個と重み、攻撃面タグ重み | 削除。順位は installs と鮮度だけ |
-| Q6 | runBudget 20 / 40 | 削除。#189 の「初回で scope 内 Finding があれば +2 Trial」に置き換える |
+| Q6 | runBudget 20 / 40、#189 の自動 +2 Trial | 削除。同じ plugin slug の独立した2回目以降の探索 Trial は、初回の Finding・Lead・検証結果と `incomplete` の理由を見て所有者が事前承認する。初回結果から自動で +2 Trial を起動しない |
 | Q9 | 採点式 log10(1+installs)×10 + 鮮度×5 | 維持 |
 | 確認 | 除外作者 5 社 | 維持（Wordfence 公式） |
+
+Q6 は所有者の 2026-10-13 の追加判断で上書きした。対象の同一性は WordPress plugin slug で判断し、版・Target Snapshot digest・campaign ID・state・Lab 設定・prompt 版を変えても同じ slug の既往探索 Trial があれば2回目以降に当たる。異なる plugin slug の初回 Trial は機械選定でまとめて進める。人間がその結果の Finding・Lead・検証結果と `incomplete` の理由をまとめてレビューし、追加探索する slug を選ぶ。初回が正常な候補0件でも `incomplete` でも、新たな独立探索 Trial を始めるには対象・目的・費用を示し、**1 Trial ごとに**事前承認を得る。開始済み Trial の再開と、既存 Finding の独立検証・再検証は追加探索 Trial に数えない。既往Trialの横断照合を現行CLIが保証するわけではなく、Git外のPrivate Evidenceにしかslugがない記録もある。自動強制が整うまでは運用者が既知の探索履歴を確認し、初回と確認できない同一slugの追加探索を勝手に始めない。
+
+この決定より前に開始した Trial は履歴として測定に残す。決定後に始める追加 Trial には新しい承認を要し、過去の測定を承認済みと読み替えない。
+
+この判断は ADR 0002 の提出前レビュー・外部行動承認に、追加探索の費用を決める事前判断点を加える。未検証候補の提出採否を前倒しするものではなく、ADR 0006 の初回対象選定の自動化は維持する。ADR 0029 の対象ごと1 Trialという既定と3 Trial測定の区別は維持し、同一slugの無承認の反復を開発上の必要件数で正当化しない。
 
 ### Lab と runtime
 

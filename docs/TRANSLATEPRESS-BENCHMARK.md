@@ -47,7 +47,7 @@ TP-SXの修正版はWordfence履歴の修正情報と公開archiveの版を実�
 3. Rootと子の成果、Snapshot digest、wall、usage、provider / schema / Lab失敗が欠落なく記録される。隔離とbrokerの実機試験も通る。
 4. 最小の自動選定方針で現行最新版、install数1万以上、低権限・高影響の履歴、対象範囲、データ鮮度を確認できる。選定理由を台帳に残し、人間の対象ごとの承認は置かない。
 
-3対象は各1協調Trialから始める。具体的LeadやFindingに次のsource上の問いがある場合だけ、同じSnapshotで追加Trialを検討する。pilotで成果0件でも、その対象の探索結果は正常に記録し、報告を作らない。3対象後に対象数、使用量・wall、source読取、Lead、Finding、`runtime-confirmed` / `incomplete`、既知重複、人間の再現時間、提出転帰を見て、次の費用を探索・検証・選定のどこに使うか決める。3対象という数は効果の統計推定ではなく、運用上の初回観測単位。
+3対象は各1協調Trialから始める。3対象の初回結果を人間がまとめてレビューし、具体的LeadやFindingに次のsource上の問いがある場合だけ、同じpluginの追加探索を1 Trialずつ事前承認する。pilotで成果0件でも、その対象の探索結果は正常に記録し、報告を作らない。3対象後に対象数、使用量・wall、source読取、Lead、Finding、`runtime-confirmed` / `incomplete`、既知重複、人間の再現時間、提出転帰を見て、次の費用を探索・検証・選定のどこに使うか決める。3対象という数は効果の統計推定ではなく、運用上の初回観測単位。
 
 ## 4. 本番探索と外部提出を分ける
 

@@ -12,13 +12,13 @@
 
 | Step | 内容 | 完了条件・引き金 |
 | --- | --- | --- |
-| 1 | 選定 → Snapshot → Lab → 探索 → 検証の自律ループ。scope 内 Finding を全件人間に届ける。人間レビュー・報告書・重複照合は skill（ADR 0031） | ループが quota 1 週分を人手介入 0 で回り切る。Programme Boundary 内の Finding が全件 `review export` に届く。所有者が skill で 1 回のレビュー batch を完了し所要時間を記録する。期日 2026-10-24 |
+| 1 | 選定 → Snapshot → Lab → 対象ごとの初回探索 → 検証の自律ループ。scope 内 Finding を全件人間に届ける。追加探索は ADR 0032 Q6 の事前承認を要する。人間レビュー・報告書・重複照合は skill（ADR 0031） | 初回ループが quota 1 週分を人手介入 0 で回り切る。Programme Boundary 内の Finding が全件 `review export` に届く。所有者が skill で 1 回のレビュー batch を完了し所要時間を記録する。期日 2026-10-24 |
 | 2 | レビュー側と検証側の作り込み | 週のレビュー batch が 6 時間超、または scope 内候補が週 15 件超。同じ手動作業を 3 回したら、その種類だけ道具化 |
 | 3 | 候補: Claude 系 runtime、Patchstack、報告書の自動化 | Step 2 の後。[PARKING.md](PARKING.md) |
 
 Step 1 の間に凍結するもの: 不変条件、モジュール境界（ADR 0031 の後）、判定器の集合、選定方針の構造（数値は変えてよい）、探索 prompt（所有者が明示した v4 への 1 回の改訂を除く）。agent に渡る文章はすべて所有者が全文を読む（第 5 節）。それ以外の案は [PARKING.md](PARKING.md) に 1 行で書き、ADR にも Issue の milestone にもしない。
 
-設計は 2026-10-13 に所有者が確定した。確定した流れ・境界・不変条件の図は [DESIGN-DIAGRAMS.md](DESIGN-DIAGRAMS.md)。Step 1 の完了条件が満たされるまで SPEC 第 2〜4 節と既存 ADR の内容は変えず、ここから先の PR は実装と測定だけを行う。
+設計は 2026-10-13 に所有者が確定した。確定した流れ・境界・不変条件の図は [DESIGN-DIAGRAMS.md](DESIGN-DIAGRAMS.md)。同日の追加判断として、同じ plugin slug の独立した2回目以降の探索には事前承認を要する（ADR 0032 Q6）。それ以外は Step 1 の完了条件が満たされるまで SPEC 第 2〜4 節と既存 ADR の内容を変えず、ここから先の PR は実装と測定だけを行う。
 
 Step 1 の週の問い（第 3 節の単位）:
 
@@ -46,7 +46,7 @@ Step 1 の作業順: #185（Finding / Lead の境界と review queue）→ `revi
 ## 5. PR の規則
 
 - テンプレートの 5 項目（問い、変えたこと、変えなかったこと、測った数字、消し方）を日本語で埋める。AI が書いてよいが、所有者が分からない行があれば merge しない。書き直しを依頼する。
-- 探索に触る PR は、開発セットで最低 3 Trial 回した結果を貼る: Trial 数、completed 数、Finding と Lead の数、wall の中央値、失敗理由の内訳。数字のない探索変更は merge しない。
+- 探索に触る PR は、開発セットで最低 3 Trial 回した結果を貼る: Trial 数、completed 数、Finding と Lead の数、wall の中央値、失敗理由の内訳。異なる plugin slug の初回Trialをまとめて測り、人間が結果をまとめてレビューした後、必要な同じslugの追加Trialだけを **1 Trial ごとに**事前承認して満たす。承認なく同じslugを繰り返して件数を埋めない。3 Trialに届かない場合は実測値と制限を記録してPRを保留し、数字のない探索変更も merge しない。
 - 実験軸（分担、継続、prompt 変種など）は opt-in の設定ブロック 1 つと profile の file 1 つに閉じ、台帳の run 記録に軸を残す。消し方を PR に書く。
 - agent に渡る文章（`src/profiles/wordpress/prompts/` の本文、`.claude/skills/` の本文、Harness が生成して渡す節の雛形: 出力契約、Lab・入口・Programme Boundary の節、Verifier の victim 契約）を変える PR は、変更後の全文と日本語訳を PR 本文か `docs/reviews/` の文書に貼る。2026-10-13 に所有者は、出典対照表の採否と `owner-approved` の付与を AI に委任した（「採用するかどうかはあなたの方で決めてもらって構いません」「よしなにやってください」）。AI はラベルを付けるとき、委任を明記した PR comment を残す。出典に無い要素を足さない規則は変わらない。所有者が全文を読んで `owner-approved` ラベルを付けるまで merge しない。AI は所有者が出典付きで採った要素だけを書き、要素を足さない。
 - 1 PR は差分 500 行以内を目安にする。超えるなら問いを分ける。

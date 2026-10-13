@@ -71,6 +71,10 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 `campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v3` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
 
+異なる plugin slug の初回探索は無人でまとめて進める。人間はその Finding・Lead と検証結果、`incomplete` の理由をまとめてレビューし、追加探索する対象を選ぶ。同じ plugin slug の2回目以降の独立した探索Trialは、版・Snapshot digest・prompt・campaign ID・state・Lab設定を変えても、追加目的と費用を示して **1 Trial ごとに**事前承認を得る。初回に Finding があるだけで自動で +2 Trial を起動しない。開始済みTrialの再開、子の同一Trial内の作業、既存 Finding の検証・再検証は追加探索Trialではない（ADR 0032 Q6）。
+
+現行CLIは campaign や state をまたぐ既往Trialの完全な照合を保証しない。plugin slug が Private Evidence にしか残らない記録もある。機械強制が整うまでは、運用者が起動前に選定バッチと既知の台帳・Git外の探索履歴を照合する。同じslugの追加探索を承認された場合は、slug、Snapshot digest、prompt digest、campaign ID、次の Trial ordinal、目的、承認者と時刻をGit外のPrivate Evidenceに記録し、その **1 Trial だけ**実行する。次の追加Trialには改めて承認を得る。既往があるか確認できない対象を初回と断定して追加探索を始めない。承認が無い対象は止め、異なる対象の初回探索を進める。
+
 固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。
 
 既定promptは `wp2shell-bounty-v3`、入口索引は固定source由来のカタログ入力として既定で有効。索引の全件処理は終了条件にしない。`wp2shell-bounty-v2` と `short-objective-managed-v4` は比較armとして残す。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
@@ -98,7 +102,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
 - VerifierのHTTPはLab内のrunsc捕捉proxyへ向ける。判定器はHarness捕捉のrequest / responseを優先し、捕捉がないときだけVerifierの `http.json` を `agent-authored` として読む。HTTP本文はPrivate Evidence、台帳にはoptionalな `verification-finished.evidenceCapture` enumだけを残す。`runtime-confirmed` には引き続きcanary回収が要る。
 - 失敗した探索 run は `discovery-run-finished.reason`、`reasonDetail`、`providerLimit` で区別する。`reasonDetail` は検査名などの短いコードで、実行記録や HTTP 本文は含まない。
 
-人間が触るのは `review` だけ。並ぶのは次の2種類。
+人間は初回結果を見て同じpluginの追加探索を承認するか判断し、提出前の `review` を行う。`review` に並ぶのは次の2種類。
 
 | 種類 | 付いてくるもの | 人間がすること |
 | --- | --- | --- |
@@ -158,7 +162,7 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 
 ### 対象の自動選定
 
-`select` は [選定方針 JSON](../src/profiles/wordpress/policy/selection.json) を直接読み、WordPress.org の人気順・タグ順を列挙する。install下限もこの JSON が正本。台帳の過去選定と Finding を照合し、適格な次点候補で補充して3〜5対象を返す。版またはprompt版が変わったときの再訪は `revisitPolicy` で決める。未公開 Finding を持つ対象は、提出済みでも公開を確認できないため除外する。
+`select` は [選定方針 JSON](../src/profiles/wordpress/policy/selection.json) を直接読み、WordPress.org の人気順・タグ順を列挙する。install下限もこの JSON が正本。台帳の過去選定と Finding を照合し、適格な次点候補で補充して3〜5対象を返す。現行の `revisitPolicy: version-or-prompt-changed` は版またはprompt版変更による再選定を許すが、それは追加探索の承認を意味しない。再選定された同じpluginの2回目以降の探索は上記の人間レビューと事前承認まで始めない。未公開 Finding を持つ対象は、提出済みでも公開を確認できないため除外する。
 
 旧 `scripts/prepare-pilot-selection.mjs` は `harness select` の薄い呼び出しとして残す。`--host`、`--state`、`--config` を受け取り、候補と順位は作らない。
 
@@ -236,7 +240,7 @@ harness eval rubric --file <path>                                 # 私的な盲
 
 ## 7. やらないこと
 
-- 対象の承認、未検証候補の採否。
+- 初回対象選定の承認、未検証候補の提出採否。
 - 探索エージェントへのPoC・payload・再現手順の提供。評価runへのheld-out公開日以降の記録の提供。
 - Harnessからの外部送信。
 - payload、HTTP記録、画面画像、未公開の発見のGitへのコミット。

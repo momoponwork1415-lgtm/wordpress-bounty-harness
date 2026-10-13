@@ -18,13 +18,14 @@
 3. `runtime-confirmed` は Harness 所有の決定論的判定器だけが出す。証明は nonce 付き canary の回収に限る。エージェントや recipe の自己申告、リバースシェル、永続化、ホストアクセスは証明にしない。
 4. 検証の失敗（環境、手順、観測、証拠の不足）は `incomplete`。`contradicted` にも棄却にもしない。
 5. 判定は Finding と検証結果が同じ Target Snapshot digest を持つときだけ行う。digest 不一致は `incomplete`。
-6. 人間の判断点は「提出前のレビュー」と「外部行動の承認」の2つ。対象選定の承認と未検証候補の採否は置かない。権限・対象範囲の拡張は人間の明示承認を要する。
+6. 人間の判断点は「初回探索をまとめてレビューした後、同じ plugin slug の独立した2回目以降の探索 Trial を1回ずつ事前承認」「提出前のレビュー」「外部行動の承認」。初回の対象選定の承認と未検証候補の提出採否は置かない。追加探索は初回の Finding・Lead・検証結果と `incomplete` の理由を見て決める（ADR 0032 Q6）。権限・対象範囲の拡張は人間の明示承認を要する。
 7. 外部送信（報告、ベンダー連絡、公開）は、正確な Submission Candidate、文案の版、送信先へ結び付いた承認があるときだけ。Harness 自身は送信を実行しない。
 8. 台帳は追記専用で、持つのは digest 参照だけ。payload、HTTP 記録、画面画像、実行ログ、認証情報、未公開の発見は Git 外の Private Evidence に置く。
 
 ## 単一協調Trialの探索（SPEC.md 第6節、ADR 0029）
 
 - 主経路は対象ごとに `wp2shell-bounty-v3` を既定とするRoot＋最大3子の協調Trialを1回。wall上限は60分。Rootが早く報告すれば終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` とし、正常な候補0件に数えない。
+- 同じ plugin slug の独立した探索Trialは、版・Snapshot・prompt・campaignを変えても2回目以降に各Trialごとの人間の事前承認を要する。異なるpluginの初回はまとめて続行してよい。初回結果を人間がまとめてレビューしてから、追加する対象を選ぶ。開始済みTrialの再開とFindingの検証・再検証は新しい探索Trialではない。初回Findingを見ずに自動で+2 Trialを起動しない（ADR 0032 Q6）。
 - 固定source由来の入口索引を既定でカタログとして渡す。索引は経路や分担を指示せず、全入口の処理は終了条件でない。Harnessの続行差し込み、screeningから条件付きdeep-diveへの分岐は行わない。子の有効なFindingとLeadはRoot報告と独立して保存する。
 - `wp2shell-bounty-v2` と `short-objective-managed-v4` は比較arm、`screening-v1` は過去Trialの構成照合用に保持する。旧screeningを現行modeで新規起動しない。索引あり・なしや旧段付きTrialを同じ比較分母に混ぜない。どの版も脆弱性が必ずあるという前提や固定された攻撃経路を与えない。
 - agentに渡る文章（prompt本文、skill本文、Harness生成の節の雛形）は `owner-approved` ラベルが付くまでmergeしない。2026-10-13以降、採否とラベル付与は所有者がAIに委任しており、AIは委任を明記したPR commentを残す（DEVELOPMENT.md 第5節）。AIは出典対照表にある要素だけを書き、要素を足さない。
@@ -53,7 +54,7 @@ profile のインターフェースは、2つ目の profile ができるまで�
 ## 開発の流れ（docs/DEVELOPMENT.md）
 
 - 変更は「今週の問い」1 つに答える PR 1 本。PR テンプレートの 5 項目（問い、変えたこと、変えなかったこと、測った数字、消し方）を日本語で埋める。
-- 探索に触る PR は開発セットで最低 3 Trial の結果を貼る。数字のない探索変更は merge されない。
+- 探索に触る PR は開発セットで最低 3 Trial の結果を貼る。異なるpluginの初回または承認済みの追加探索で満たし、必要件数だけを理由に同じpluginを無承認で再探索しない。届かなければ実測と制限を記録してPRを保留する。
 - 「調べて報告」の成果物は `docs/reviews/` に日付付きで置く。正本ではない。
 
 ## Agent skills

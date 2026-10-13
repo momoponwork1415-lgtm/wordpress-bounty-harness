@@ -1,12 +1,12 @@
 # 全体設計の図解（2026-10-13 確定版）
 
-正本は [SPEC.md](SPEC.md) と [adr/](adr/)。この図はその要約で、食い違えば正本が勝つ。所有者は 2026-10-13 にこの設計を確定し、Step 1 の完了条件（[DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節）が満たされるまで変えない。設計を動かしたい案は [PARKING.md](PARKING.md) に 1 行で書く。
+正本は [SPEC.md](SPEC.md) と [adr/](adr/)。この図はその要約で、食い違えば正本が勝つ。所有者は 2026-10-13 にこの設計を確定し、同日の追加判断で同じpluginの2回目以降の独立探索に事前承認を加えた（ADR 0032 Q6）。それ以外は Step 1 の完了条件（[DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節）が満たされるまで変えない。設計を動かしたい案は [PARKING.md](PARKING.md) に 1 行で書く。
 
 閲覧用の描画版: <https://claude.ai/artifact/VmjM8Th7cWSeGzB6zR7UWt>（所有者の非公開 Artifact。この文書の Mermaid 原稿が正）。
 
 ## 1. 1 周の流れ（campaign 1 周 = 対象 N 件）
 
-Harness が人手なしで進めるのは「選定 → 固定 → Lab → 探索 → 検証 → 台帳」まで。人間が入るのは最後の 2 点だけ（不変条件 6）。
+Harness が人手なしで進めるのは「選定 → 固定 → Lab → 異なるpluginの初回探索をまとめて実行 → 検証 → 台帳」まで。人間が初回結果をまとめてレビューし、同じpluginの追加探索は1 Trialごとに事前承認する（不変条件 6、ADR 0032 Q6）。
 
 ```mermaid
 flowchart LR
@@ -30,7 +30,10 @@ flowchart LR
     VF -.-> D["Lab 前後差分<br/>wp_options・users・tables<br/>（材料、判定ではない）"]
   end
   V -->|confirmed / reproduced / incomplete / contradicted| LG["ledger（追記専用）<br/>digest 参照だけ"]
+  LG -->|Lead・停止理由| H0{{"人間 判断点<br/>初回バッチをレビューし追加探索を承認"}}
+  H0 -.->|承認した1 Trialだけ| DISC
   LG --> RV["review export<br/>1 件 1 本の JSON"]
+  RV -->|Finding・検証結果| H0
   RV --> SK["Claude Code skill<br/>人間が読む・順位付け・文案"]
   SK --> H1{{"人間 判断点 1<br/>提出前レビュー"}}
   H1 --> H2{{"人間 判断点 2<br/>外部行動の承認"}}
@@ -104,7 +107,7 @@ flowchart LR
 | 3   | `runtime-confirmed` は Harness 所有の決定論的判定器だけ、証明は nonce 付き canary の回収                       | `profiles/wordpress/verification/judges.ts`、負の対照テスト                        |
 | 4   | 検証の失敗（環境・手順・観測・証拠不足）は `incomplete`。`contradicted` にも棄却にもしない                     | `verification/index.ts` の結果型、`incomplete(reason)`                             |
 | 5   | Finding と検証結果が同じ Snapshot digest を持つときだけ判定する                                                | 同上の digest-mismatch 判定                                                        |
-| 6   | 人間の判断点は提出前レビューと外部行動承認の 2 つ。対象選定の承認と未検証候補の採否は置かない                  | review の `decide` / `authorize`                                                   |
+| 6   | 同じpluginの2回目以降の独立探索は事前承認。提出前レビューと外部行動承認も人間が判断。初回対象選定の承認と未検証候補の提出採否は置かない | 運用者の既往Trial確認と追加探索承認、review の `decide` / `authorize` |
 | 7   | 外部送信は正確な候補・文案の版・送信先に結び付いた承認があるときだけ。Harness 自身は送らない                   | `external-action-authorized` event、送信は人間                                     |
 | 8   | 台帳は追記専用で digest 参照だけ。本体は Git 外の Private Evidence                                              | ledger の append-only、CI `private-guard`（path・大きさ・内容走査）                |
 
@@ -126,12 +129,12 @@ flowchart LR
 
 | 領域               | 確定内容                                                                                                                                                                 | 根拠                                          |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
-| 流れ               | 選定 → Snapshot → Lab → 協調 Trial 1 回 → Verifier + 判定器 + 前後差分 → 台帳 → review export → skill → 人間 2 判断点 → 人間が提出                                       | SPEC 第 3 節、ADR 0029 / 0031                 |
+| 流れ               | 選定 → Snapshot → Lab → 協調 Trial 1 回 → Verifier + 判定器 + 前後差分 → 台帳 → review export → skill → 人間が提出。同じpluginの追加探索だけ事前承認                                       | SPEC 第 3 節、ADR 0029 / 0031 / 0032 Q6                 |
 | 探索               | Root + 子 3、wall 60 分、既定 prompt `wp2shell-bounty-v3`（v4 は所有者が要素を採って版を上げる）。脆弱性が必ずあるという前提と固定経路は与えない                        | SPEC 第 6 節、ADR 0029、ADR 0032              |
 | 検証               | 判定器は増やさない。Verifier は「発火したか」を見る。失敗は incomplete。再試行は recipe 2 / observation 1                                                               | ADR 0022（0032 で修正）、所有者決定 2026-10-13 |
 | 人間レビュー       | scope 内の Finding は判定結果に関係なく人間に届く。順位付け・要約・文案は skill が担い、Harness は材料（review export）だけ出す                                         | #185 / #186、ADR 0031                         |
 | 選定               | install 下限 100,000、候補タグはミラー由来の 8 族、plugin 別の順位付けに公開履歴を使わない。6 か月後に `candidateTag` で効果を測る                                      | ADR 0030 / 0032 Q3〜Q6                        |
 | Programme Boundary | content-deletion は scope 内、reflected XSS は scope 外（Wordfence 公開 page 2026-10-13 確認）                                                                           | ADR 0032 Q1、D15 / D16                        |
-| 統治               | agent に渡る文章は所有者が全文を読んでから merge。CLI は AI 向け。設計の新案は PARKING へ置き、Step 1 完了まで SPEC 第 2〜4 節と ADR を変えない                         | DEVELOPMENT.md 第 2 節・第 5 節、ADR 0032 Q27 |
+| 統治               | agent に渡る文章は所有者が全文を読んでから merge。CLI は AI 向け。追加探索承認の所有者判断以外の設計の新案は PARKING へ置き、Step 1 完了まで SPEC 第 2〜4 節と ADR を変えない | DEVELOPMENT.md 第 2 節・第 5 節、ADR 0032 Q6 / Q27 |
 
 ここから先の変更は「実装」と「測定」だけ。設計を動かしたくなったら PARKING に書き、Step 1 の数字（本番 4 周の review 件数、人間が 1 件を読む分数、提出 1 件）が出てから判断する。
