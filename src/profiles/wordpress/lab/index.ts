@@ -413,6 +413,9 @@ export function openWordPressLab(options: {
     "--network",
     resource.network,
     "--security-opt=no-new-privileges",
+    // The Apache image owns the shared WordPress volume as UID/GID 33;
+    // the CLI image's www-data is UID/GID 82 and cannot create uploads.
+    "--user=33:33",
     ...environment.flatMap((entry) => ["--env", entry]),
     "--env",
     `WORDPRESS_DB_HOST=${databaseIp(resource)}`,
@@ -427,7 +430,6 @@ export function openWordPressLab(options: {
     options.images.wordpressCli,
     "wp",
     ...args,
-    "--allow-root",
   ];
   const wp = (
     resource: Resources,

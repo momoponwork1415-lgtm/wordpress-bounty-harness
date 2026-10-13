@@ -10,6 +10,7 @@ import type {
   ProgrammeEligibilitySnapshotRef,
   ProgrammeIntelligence,
 } from "../programme-intelligence/index.js";
+import { compareVersions } from "../plugin-version.js";
 import {
   enumerateWordPressOrgCandidates,
   type EnumerateWordPressOrgCandidatesOptions,
@@ -237,6 +238,23 @@ export function createWordPressSelection(
       if (observation.activeInstallations < policy.minimumActiveInstallations) {
         reasons.push("below-installation-threshold");
       }
+      const pinnedVersion = pinnedVersions?.[slug];
+      // Directory `requires` describes the observed stable release, not a historical pin.
+      if (
+        policy.wordpressVersion !== undefined &&
+        (pinnedVersion ?? observation.stableVersion) ===
+          observation.stableVersion
+      ) {
+        if (observation.minimumWordPressVersion === undefined)
+          reasons.push("core-requirement-unavailable");
+        else if (
+          compareVersions(
+            observation.minimumWordPressVersion,
+            policy.wordpressVersion,
+          ) > 0
+        )
+          reasons.push("core-version-incompatible");
+      }
       if (
         reasons.length > 0 ||
         updateAge === undefined ||
@@ -252,7 +270,6 @@ export function createWordPressSelection(
         continue;
       }
       const scoreBreakdown = score(observation, policy, updateAge);
-      const pinnedVersion = pinnedVersions?.[slug];
       const lastUpdated = parseObservedDate(observation.lastUpdated);
       const selection: WordPressTargetSelection = {
         targetId: observation.pluginIdentity,

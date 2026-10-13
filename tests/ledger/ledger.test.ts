@@ -70,6 +70,74 @@ async function evidence(store: PrivateArtifactStore): Promise<string> {
 }
 
 describe("Ledger public interface", () => {
+  it("reads a legacy discovery event with a continuation prompt digest", async () => {
+    const { ledger, artifactStore } = await fixture();
+    const proof = await evidence(artifactStore);
+    await ledger.append({
+      ...common("legacy-discovery-start"),
+      type: "discovery-run-started",
+      runId: "run-legacy",
+      labId: "lab-legacy",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "objective-v5",
+        assignmentUnit: "route",
+        continuationPromptDigest: revision,
+      },
+    });
+    await ledger.append({
+      ...common("legacy-discovery-finish"),
+      type: "discovery-run-finished",
+      runId: "run-legacy",
+      outcome: "completed",
+      costUsd: "unavailable",
+      wallTimeMs: 1,
+      continuation: {
+        mode: "thread-resume",
+        injected: true,
+        entriesHandedBack: 3,
+        remainingMinutes: 26.5,
+        reason: "coverage-incomplete",
+      },
+    });
+    await ledger.append({
+      ...common("legacy-finding"),
+      type: "finding-recorded",
+      findingId: "legacy-finding",
+      runId: "run-legacy",
+      category: "stored-xss",
+      continuationOrdinal: 1,
+    });
+    await ledger.append({
+      ...common("legacy-lead"),
+      type: "lead-recorded",
+      leadId: "legacy-lead",
+      runId: "run-legacy",
+      trialId: "trial-legacy",
+      missingEdge: "consumer",
+      primitive: "write",
+      storageKind: "option",
+      continuationOrdinal: 1,
+      artifacts: [{ kind: "lead", digest: proof }],
+    });
+    expect(ledger.read({ type: "discovery-run-started" })).toMatchObject([
+      {
+        event: {
+          configuration: { continuationPromptDigest: revision },
+        },
+      },
+    ]);
+    expect(ledger.read({ type: "discovery-run-finished" })).toMatchObject([
+      { event: { continuation: { mode: "thread-resume" } } },
+    ]);
+    expect(ledger.read({ type: "finding-recorded" })).toMatchObject([
+      { event: { continuationOrdinal: 1 } },
+    ]);
+    expect(ledger.read({ type: "lead-recorded" })).toMatchObject([
+      { event: { continuationOrdinal: 1 } },
+    ]);
+  });
+
   it("records versioned package documents while reading older verification events", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);
