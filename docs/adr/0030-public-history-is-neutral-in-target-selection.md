@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-10-13; #144 merged)
 date: 2026-10-12
 supersedes: selection history ranking in SPEC section 8b
 ---

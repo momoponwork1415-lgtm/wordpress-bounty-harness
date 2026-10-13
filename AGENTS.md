@@ -7,6 +7,7 @@
 1. [docs/SPEC.md](docs/SPEC.md) — 目的、不変条件、モジュール境界、受け渡し契約、単一協調Trialの主経路と最初の縦断スライス。
 2. [docs/adr/](docs/adr/) — 番号順。設計の理由と、採らなかった選択肢。
 3. [docs/DESIGN-WALKTHROUGH.md](docs/DESIGN-WALKTHROUGH.md) — 全体を1つの流れで理解したいときだけ。規則は増やさない。
+4. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 第 2 節 — 今の Step、完了条件、凍結しているもの。[docs/LESSONS.md](docs/LESSONS.md) — 過去 4 世代の教訓。新しい設計案はこの 2 つに反していないかを先に見る。止めてある案は [docs/PARKING.md](docs/PARKING.md)。
 
 ## 不変条件（SPEC.md 第2節）
 

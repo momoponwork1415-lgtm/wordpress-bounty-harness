@@ -19,3 +19,24 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+
+  adr-guard:
+    # docs/adr/ を変える PR は所有者の owner-approved ラベルが要る（docs/DEVELOPMENT.md 第 6 節）
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require owner-approved label for ADR changes
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed=$(git diff --name-only "$BASE" "$HEAD" -- docs/adr/ docs/SPEC.md | wc -l)
+          if [ "$changed" -gt 0 ] && ! printf '%s' "$LABELS" | tr ',' '\n' | grep -qx 'owner-approved'; then
+            echo "docs/adr/ または docs/SPEC.md に差分があります。所有者が owner-approved ラベルを付けるまで merge できません。"
+            exit 1
+          fi
+          echo "adr-guard: ok"
