@@ -12,11 +12,17 @@ import {
 import { wordPressRevisitPolicySchema } from "./ledger-exclusions.js";
 
 const slugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
+const coreVersionSchema = z
+  .string()
+  .max(32)
+  .regex(/^[0-9]+(?:\.[0-9]+){1,3}$/);
 
 const commonSelectionPolicy = {
   kind: z.literal("wordpress-selection-policy"),
   schemaVersion: z.literal(1),
   id: z.string().min(1).max(128),
+  /** The core image version used when the selected plugin is provisioned. */
+  wordpressVersion: coreVersionSchema.optional(),
   promptVariant: z.string().min(1).max(128).optional(),
   revisitPolicy: wordPressRevisitPolicySchema.optional(),
   minimumActiveInstallations: z.number().int().nonnegative(),
@@ -90,7 +96,7 @@ const automaticSelectionPolicy = z.strictObject({
   revisitPolicy: wordPressRevisitPolicySchema,
   maximumTargets: z.number().int().min(3).max(5),
   /** The core image version pinned when select freezes the chosen targets. */
-  wordpressVersion: z.string().min(1).max(32),
+  wordpressVersion: coreVersionSchema,
   candidateSource: z.strictObject({
     kind: z.literal("wordpress-org"),
     popularPages: z.number().int().min(1).max(5),
@@ -122,6 +128,8 @@ export type SelectionReason =
   | "excluded-author"
   | "excluded-slug"
   | "below-installation-threshold"
+  | "core-requirement-unavailable"
+  | "core-version-incompatible"
   | "programme-asset-out-of-scope"
   | "programme-stale"
   | "history-stale";

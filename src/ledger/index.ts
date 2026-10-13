@@ -87,6 +87,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       promptDigest: digest.optional(),
       objectiveDigest: digest.optional(),
       contractDigest: digest.optional(),
+      /** Legacy Trial field; retained so append-only ledgers remain readable. */
+      continuationPromptDigest: digest.optional(),
       trustBoundaryVersion: id.optional(),
       sourcePack: z
         .strictObject({ dependency: z.enum(["mounted", "none"]) })
@@ -142,6 +144,16 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       .regex(/^[a-z0-9][a-z0-9:_-]{0,127}$/)
       .optional(),
     providerLimit: z.enum(["rate-limit", "quota"]).optional(),
+    /** Legacy within-Trial continuation receipt. */
+    continuation: z
+      .strictObject({
+        mode: z.literal("thread-resume"),
+        injected: z.boolean(),
+        entriesHandedBack: z.number().int().nonnegative(),
+        remainingMinutes: z.number().nonnegative(),
+        reason: z.enum(["coverage-incomplete", "report-unavailable"]),
+      })
+      .optional(),
     /** Lower-bound counts inferred from completed command events, not agent claims. */
     observed: z
       .strictObject({
@@ -248,6 +260,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     findingId: id,
     runId: id,
     category: id,
+    continuationOrdinal: z.number().int().nonnegative().optional(),
     historyRecordId: id.optional(),
     /** A fresh-snapshot hypothesis derived from an earlier Finding. */
     derivedFromFindingId: id.optional(),
@@ -271,6 +284,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     missingEdge: id,
     primitive: id,
     storageKind: id,
+    continuationOrdinal: z.number().int().nonnegative().optional(),
   }),
   /** A schema-only child failure was reinterpreted from its immutable private rollout. */
   event({
