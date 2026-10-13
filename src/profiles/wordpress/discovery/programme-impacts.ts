@@ -2,6 +2,7 @@
  * Programme Boundary を impact ラベルで引く。
  *
  * Wordfence の対象範囲（campaign.json の programmeBoundary.text）に無い効果は、
+ * （content-deletion は Wordfence が明示的に対象内なので除外しない。ADR 0032 Q1）
  * Finding としては記録せず `finding-parked` に置く（#185、ADR 0031、LESSONS 6・11）。
  * 列挙は Finding schema の enum を正本とし、ここでは対象外のラベルだけを持つ。
  */
@@ -16,7 +17,6 @@ export const WORDPRESS_PROGRAMME_EXCLUDED_IMPACTS: readonly string[] = [
   "missing-authz",
   "idor",
   "reflected-xss",
-  "content-deletion",
 ];
 
 const impactProperty = z
