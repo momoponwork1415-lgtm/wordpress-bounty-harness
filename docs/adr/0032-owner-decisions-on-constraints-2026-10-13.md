@@ -1,0 +1,78 @@
+---
+status: proposed (owner-approved ラベルで accepted にする)
+date: 2026-10-13
+amends: 0030（タグ単位の履歴利用）, 0022（自動再試行の範囲）
+---
+
+# 2026-10-13 のグリルで所有者が決めた制約と、出典不明の制約の扱い
+
+## 背景
+
+[docs/reviews/2026-10-13-design-features-constraints.md](../reviews/2026-10-13-design-features-constraints.md) で、制約のうち所有者の決定と文書で確認できるものは 5 群だけで、数値の大半は AI の既定値だと分かった。所有者は 2026-10-13 に 26 問のグリルに答え、「Q3 と Q4 は data で決める。他は推奨どおり」とした。この ADR はその答えの正本で、以後は変えた行だけ更新する。
+
+## 決定
+
+### 対象範囲と分類
+
+| # | 項目 | 決定 |
+| --- | --- | --- |
+| Q1 | `content-deletion` | #185 の除外から外す。判定器は作らず `incomplete(no-judge)` で人間レビューへ |
+| Q2 | Reflected XSS | Wordfence は対象外。Patchstack 向けにも出さない。半年後に見直す |
+| Q13 | Trail of Bits の文言 | 採らない（CC BY-SA 4.0） |
+
+### 選定
+
+| # | 項目 | 決定 |
+| --- | --- | --- |
+| Q3 | 候補タグ | 所有者が列挙しない。Wordfence ミラーと WordPress.org のタグから「低権限・報奨対象の記録 / plugin」を機械的に出し、上位の族を既定にする（[2026-10-13-selection-data.md](../reviews/2026-10-13-selection-data.md) 第 3 節）。タグの出典を `target-selected` に残し、半年後に有償率で測る |
+| Q4 | install 下限 | 100,000。公式の帯別平均と所有者の 2026-08 実績（Gate 1）による |
+| Q5 | High Threat タグ 21 個と重み、攻撃面タグ重み | 削除。順位は installs と鮮度だけ |
+| Q6 | runBudget 20 / 40 | 削除。#189 の「初回で scope 内 Finding があれば +2 Trial」に置き換える |
+| Q9 | 採点式 log10(1+installs)×10 + 鮮度×5 | 維持 |
+| 確認 | 除外作者 5 社 | 維持（Wordfence 公式） |
+
+### Lab と runtime
+
+| # | 項目 | 決定 |
+| --- | --- | --- |
+| Q7 | 重大 option 7 個の固定監視 | #186 の実行前後の差分観測器で option 全体を見る。固定 7 個は「重大」ラベルだけ |
+| 確認 | core 版 / sandbox CPU / 並列 | 7.1.3 / 6 / 3（Opus 併用時 2） |
+| Q8 | 根拠の無い小さな数値（Verifier wall 30 分、Finding 文字数、Snapshot 取り込み上限、Lab timeout、broker 上限） | AI の既定値として維持。変えるときは計測を付ける。台帳 read 1,000 件だけは頁送りに直す |
+
+### prompt
+
+| # | 項目 | 決定 |
+| --- | --- | --- |
+| Q10 | 探索 v4 の骨格 | whitebox `bounded-wp2shell/v1.7` を骨格にし、class 列挙は Harness 生成の節へ移して本文 7,000 bytes 以内 |
+| Q11 | class 列挙の内容 | v1.7 の 3 群（accepted / weaker / dropped） |
+| Q12 | v3 固有の要素 | 「それ以外の具体的効果も記録」は外す。順位は v1.7 の 3 群。停止条件は「2 波連続で増分なし」。子は 3 |
+| Q14 | Verifier v7 | 探索と別に対照表を作る（Anthropic の検証 4 手順、Visa の oracle 判定、現行 v6 の 6 field） |
+| 確認 | Verifier の向き | 反証ではなく発火の確認 |
+
+### 知識と運用
+
+| # | 項目 | 決定 |
+| --- | --- | --- |
+| Q15 / Q20 / Q21 | 知識の集約 | `docs/knowledge/` に索引と provenance 付きの写し。案件固有の値と件別の成績は Git 外、集計と schema だけ入れる |
+| Q16 | 実験の重複防止 | Issue と PR の template に「`docs/knowledge/experiments.md` を検索した」を 1 行 |
+| Q17 | 記録の形 | この ADR 1 本。以後は変えた行だけ更新 |
+| Q18 | cron 2 本 | 止める（whitebox の queue tick、wordpress-harness の quota tick） |
+| Q19 | Wordfence ミラー | 本リポの `profiles/wordpress/wordfence-history` に移し、`wp-bounty-workspace` から独立させる |
+| Q22 | 追跡性 | `review-decided` に所要時間、提出記録から run / prompt digest を辿れる参照を足す（#186） |
+| Q23 | ディスク | 第 4 周の後に Docker を prune。ディレクトリは Q19 / Q20 の後に消す |
+| Q24 | 未 push の worktree | 中身を確認し、要るものだけ push |
+| Q25 | 提出パッケージ | 37 件で回った 4 ファイル構成と human_only 9 項目を #188 の契約にする。Fill-Only 拡張と guard-lock は skill の assets |
+| Q26 | Patchstack の形式 | 保留 |
+
+## ADR 0030 への修正
+
+0030 の「公開履歴の件数・内容は選定候補の列挙・除外・採点に使わない」は plugin 単位の規則として維持する。タグ単位の yield（タグに属する plugin 群の低権限・報奨対象の記録数 / plugin 数）は候補タグの列挙にだけ使い、個々の plugin の順位・除外・採点には使わない。
+
+## ADR 0022 への修正
+
+自動再試行は recipe 2 回、observation 1 回、precondition は再試行しない（#107）。provision の再試行は行わない。
+
+## 採らなかった選択肢
+
+- 制約ごとに ADR を書く: 週 1 本の規則に収まらない。
+- 所有者がタグを手で列挙する: 所有者が 2026-10-13 に退けた。
