@@ -1,6 +1,6 @@
 # #188 skill 出典対照表（wbh-review / wbh-dedupe / wbh-report）
 
-調べて報告。正本ではない。この文書は skill 本文を書かない。所有者が 採否 列を埋める。
+調べて報告。正本ではない。この文書は skill 本文を書かない。採否は所有者の委任（2026-10-13「採用するかどうかはあなたの方で決めてもらって構いません」）により AI が決め、末尾の「採否の決定」に行番号で記した。表の 採否 列は空のまま残す。
 
 対象 Issue: #188。出典に無い要素は入れない（LESSONS 12）。1 行 1 要素、引用は 12 語以内。`v3 相当` は `src/cli/index.ts`、`src/review/`、`docs/OPERATIONS.md` 第 3 節で確認した現状。
 
@@ -134,3 +134,39 @@
 - `prepare-wordfence-submission`「Every submission is filled with this extension」（live form の操作）、`vendor-programmes.md` の vendor 直送先 email — 不変条件 7。
 - `wordpress-target-selection` の CVSS 閾値・install 帯の選定 gate、`wordfence-report-antipatterns.md` §5 の prior180 — 不変条件ではないが ADR 0030（公開履歴は選定で中立）と食い違う。
 - 出典が参照する `tools/*.py`（vendor_gate、past_pocs、report_check、make_submission_package 等）と `contracts/verification-package.schema.json` は本リポに無い。
+
+## 採否の決定（AI、所有者委任 2026-10-13）
+
+採った行だけで `.claude/skills/{wbh-review,wbh-dedupe,wbh-report}/SKILL.md` を組んだ。出典に無い要素は入れていない。否の理由は 1 行ずつ。
+
+### 表 1 wbh-review
+
+採: 1〜27 のすべて。11（単一観測で結論しない）は 10 と 12 に含めて書き、20（観測を書き verdict を先に書かない）は要約の形として採った。run 主体が AI のときは `review decide --by wbh-review` と記録する。
+
+### 表 2 wbh-dedupe
+
+採: 1、4、5、6、7、8、14、16、17、19、20。18（提出直前の再確認）は wbh-report の「書く前の確認」へ移した。
+
+否:
+
+- 2（公開履歴の集約値）: 選定側の要素。ADR 0012 / 0030 で Harness が担う。
+- 3（個別 advisory を探索へ渡さない）: 不変条件 1 で既に禁止。skill には「渡さない」の 1 行だけ残す。
+- 9（混雑は統計）: ADR 0030 と重なり、dedupe の判断に使わないので文言として「使わない」だけ残す。
+- 10、11、12、13、15（vendor 自身の bounty programme の 3 層確認、VDP の扱い、signal の狭さ、公開 directory）: #188 の範囲外。選定の除外著者（14 で再確認）で担保する。
+
+### 表 3 wbh-report
+
+採: 1、2、3、4、7、8、9、10、11、12、13、14、15、17、18、19、20、21、22、25、26、27、30、32（Submit を自動化しない部分）、33、34、35、36、および表 2 の 18。
+
+否:
+
+- 5（Description を corpus から読み取る）: ローカル mirror は dedupe 用の metadata で、本文の corpus を持たない。
+- 6（class 別の定型文 `report-classes.json`）: 本リポに無い。
+- 16（class 別の step 数固定）: 根拠の asset が本リポに無く、手順は人間の再現記録に従う。
+- 23、24（添付 script の verdict と PASS/FAIL）: PoC は手順文で出す。script は任意で、この skill では作らない。
+- 28（Grouping）: 本リポは 1 Finding 1 下書き。
+- 29（必要設定が UI から到達できることの実証）: wbh-review 13 と `lab up --for-review` の範囲。
+- 31（checker tool）: 本リポに無い。語数・字数・placeholder を数えて確認する行で代替。
+- 32 の extension 部分（fill-only extension）: 本リポに無い。送信は人間（不変条件 7）。
+- 37（Patchstack 提出条件）: #188 は Wordfence 向けのみ。
+- 38（vendor 直送 form）: 対象外。
