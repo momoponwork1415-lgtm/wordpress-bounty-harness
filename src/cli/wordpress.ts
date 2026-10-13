@@ -48,11 +48,15 @@ import {
   readWordPressFinding,
   type WordPressFinding,
 } from "../profiles/wordpress/discovery/finding.js";
+import { isWordPressProgrammeImpact } from "../profiles/wordpress/discovery/programme-impacts.js";
 import {
   normalizeWordPressCandidate,
   classifyWordPressCandidate,
 } from "../profiles/wordpress/discovery/normalize-candidate.js";
-import { wordPressDiscoveryOutputContract } from "../profiles/wordpress/discovery/output-contract.js";
+import {
+  wordPressDiscoveryOutputContract,
+  wordPressDiscoveryOutputContractV2,
+} from "../profiles/wordpress/discovery/output-contract.js";
 import type {
   WordPressLab,
   WordPressLabHandle,
@@ -176,7 +180,9 @@ const campaignModes = z.discriminatedUnion("mode", [
     ...commonCampaignFields,
     mode: z.literal("wp2shell"),
     runWallTimeMinutes: z.number().positive().max(60).default(60),
-    promptId: z.literal("wp2shell-bounty-v2").default("wp2shell-bounty-v2"),
+    promptId: z
+      .enum(["wp2shell-bounty-v2", "wp2shell-bounty-v3"])
+      .default("wp2shell-bounty-v3"),
     stopRules: singleTrialStop,
     entryIndex: z.literal(true).default(true),
   }),
@@ -184,7 +190,9 @@ const campaignModes = z.discriminatedUnion("mode", [
     ...commonCampaignFields,
     mode: z.literal("entry-index-control"),
     runWallTimeMinutes: z.number().positive().max(60).default(60),
-    promptId: z.literal("wp2shell-bounty-v2").default("wp2shell-bounty-v2"),
+    promptId: z
+      .enum(["wp2shell-bounty-v2", "wp2shell-bounty-v3"])
+      .default("wp2shell-bounty-v3"),
     stopRules: singleTrialStop,
     entryIndex: z.literal(false),
   }),
@@ -198,7 +206,7 @@ const campaignModes = z.discriminatedUnion("mode", [
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("ablation"),
-    promptId: runnablePrompt.default("wp2shell-bounty-v2"),
+    promptId: runnablePrompt.default("wp2shell-bounty-v3"),
     stopRules: comparisonStop,
     entryIndex: z.boolean().default(true),
     ablation,
@@ -206,7 +214,7 @@ const campaignModes = z.discriminatedUnion("mode", [
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("assignment"),
-    promptId: runnablePrompt.default("wp2shell-bounty-v2"),
+    promptId: runnablePrompt.default("wp2shell-bounty-v3"),
     stopRules: comparisonStop,
     entryIndex: z.literal(true).default(true),
     assignment,
@@ -224,7 +232,8 @@ export const wordpressCampaignConfigSchema = z
         : config.ablation !== undefined
           ? "ablation"
           : config.promptId !== undefined &&
-              config.promptId !== "wp2shell-bounty-v2"
+              config.promptId !== "wp2shell-bounty-v2" &&
+              config.promptId !== "wp2shell-bounty-v3"
             ? "comparison"
             : config.entryIndex === false
               ? "entry-index-control"
@@ -664,12 +673,18 @@ async function planWordPressDiscovery(
     config.mode === "ablation" ? config.ablation : undefined;
   const assignmentConfig =
     config.mode === "assignment" ? config.assignment : undefined;
-  const outputContract = wordPressDiscoveryOutputContract();
+  const outputContractV1 = wordPressDiscoveryOutputContract();
+  const outputContractV2 = wordPressDiscoveryOutputContractV2();
+  const outputContractFor = (id: string) =>
+    id === "wp2shell-bounty-v3" ? outputContractV2 : outputContractV1;
   const objectiveOnly = (id: string) =>
     WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
   const source = await boundaries.sourceFor(snapshot);
-  // The campaign ceiling is a safety bound; selection decides depth per target.
-  const maxRuns = Math.min(config.stopRules.maxRuns, target.runBudget);
+  // The campaign stop rule decides depth; legacy per-target budgets only lower it (ADR 0032 Q6).
+  const maxRuns = Math.min(
+    config.stopRules.maxRuns,
+    target.runBudget ?? config.stopRules.maxRuns,
+  );
   const sourceIndex =
     !config.entryIndex && assignmentConfig === undefined
       ? undefined
@@ -709,7 +724,9 @@ async function planWordPressDiscovery(
   ) =>
     [
       selectedObjective.text.trim(),
-      ...(objectiveOnly(selectedObjective.id) ? [outputContract.text] : []),
+      ...(objectiveOnly(selectedObjective.id)
+        ? [outputContractFor(selectedObjective.id).text]
+        : []),
       "## Trust boundary",
       trustBoundary.text.trim(),
       `## Programme Boundary (${config.programmeBoundary.version})`,
@@ -804,7 +821,7 @@ async function planWordPressDiscovery(
           ...(objectiveOnly(selectedObjective.id)
             ? {
                 objectiveDigest: selectedObjective.digest,
-                contractDigest: outputContract.digest,
+                contractDigest: outputContractFor(selectedObjective.id).digest,
               }
             : {}),
           trustBoundaryVersion: trustBoundary.id,
@@ -859,6 +876,7 @@ async function planWordPressDiscovery(
     executor: boundaries.executor,
     attachments: boundaries.attachments,
     admitFinding: admitWordPressFinding,
+    isProgrammeImpact: isWordPressProgrammeImpact,
     normalizeCandidate: normalizeWordPressCandidate,
     classifyCandidate: classifyWordPressCandidate,
     admitLead: admitWordPressLead,
@@ -1061,7 +1079,7 @@ export function createWordPressCliProfile(
         ledger: state.ledger,
         candidates: eligible.map(({ slug, version }) => ({ slug, version })),
         currentPromptVariant:
-          policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v2",
+          policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v3",
         revisitPolicy: policy.revisitPolicy ?? { kind: "never" },
       });
       const ledgerReasons = new Map(
@@ -1125,7 +1143,7 @@ export function createWordPressCliProfile(
           type: "target-selected",
           selectionId: `${target.targetId}@${target.version}`,
           promptVariant:
-            policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v2",
+            policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v3",
           artifacts: [
             { kind: "target-selection", digest: selectionDigest },
             { kind: "selection-report", digest: reportDigest },

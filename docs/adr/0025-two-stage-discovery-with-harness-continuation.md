@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by 0029 for the default discovery route
 supersedes: 0016 for the default discovery route; 0014 for continuation
 ---
 

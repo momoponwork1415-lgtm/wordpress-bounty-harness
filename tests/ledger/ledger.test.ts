@@ -230,6 +230,48 @@ describe("Ledger public interface", () => {
     });
   });
 
+  it("counts a parked Finding outside the Programme Boundary apart from raw and accepted (#185)", async () => {
+    const { ledger } = await fixture();
+    const snapshot = `sha256:${"a".repeat(64)}`;
+    const common = (identity: string) => ({
+      schemaVersion: 1 as const,
+      identity,
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-13T00:00:00Z",
+      artifacts: [],
+    });
+    await ledger.append({
+      ...common("normalized"),
+      type: "candidate-normalized",
+      runId: "run-1",
+      candidateKind: "finding",
+      candidateIndex: 0,
+      changes: [],
+    });
+    await ledger.append({
+      ...common("parked"),
+      type: "finding-parked",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "other",
+      reason: "outside-programme-boundary",
+    });
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      reached: 1,
+      accepted: 0,
+      held: 0,
+      parked: 1,
+      raw: 0,
+      verified: 0,
+    });
+    expect(ledger.funnel("campaign-1").byCategory["other"]).toMatchObject({
+      parked: 1,
+      raw: 0,
+    });
+    expect(ledger.read({ type: "finding-parked" })).toHaveLength(1);
+  });
+
   it("counts accepted legacy candidates even when another index was rejected first", async () => {
     const { ledger } = await fixture();
     await ledger.append({
@@ -727,6 +769,7 @@ describe("Ledger public interface", () => {
       reached: 4,
       accepted: 4,
       held: 0,
+      parked: 0,
       raw: 4,
       verified: 4,
       confirmed: 1,
@@ -743,6 +786,7 @@ describe("Ledger public interface", () => {
           reached: 4,
           accepted: 4,
           held: 0,
+          parked: 0,
           raw: 4,
           verified: 4,
           confirmed: 1,
@@ -763,6 +807,7 @@ describe("Ledger public interface", () => {
           reached: 0,
           accepted: 0,
           held: 0,
+          parked: 0,
           raw: 0,
           verified: 0,
           confirmed: 0,
@@ -787,6 +832,7 @@ describe("Ledger public interface", () => {
           reached: 2,
           accepted: 2,
           held: 0,
+          parked: 0,
           raw: 2,
           verified: 2,
           confirmed: 1,
@@ -801,6 +847,7 @@ describe("Ledger public interface", () => {
           reached: 2,
           accepted: 2,
           held: 0,
+          parked: 0,
           raw: 2,
           verified: 2,
           confirmed: 0,

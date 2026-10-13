@@ -2,7 +2,7 @@
 
 ## 問い
 
-この PR が答える「今週の問い」（Issue 番号）。
+この PR が答える「今週の問い」（Issue 番号）。docs/knowledge/experiments.md に同じ問いが無いことを確認した、または該当行。
 
 ## 変えたこと
 

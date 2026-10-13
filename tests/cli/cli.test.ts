@@ -21,7 +21,10 @@ import {
 } from "../../src/discovery/index.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acquisition/index.js";
-import { wordPressDiscoveryOutputContract } from "../../src/profiles/wordpress/discovery/output-contract.js";
+import {
+  wordPressDiscoveryOutputContract,
+  wordPressDiscoveryOutputContractV2,
+} from "../../src/profiles/wordpress/discovery/output-contract.js";
 import { buildWordPressSourceIndex } from "../../src/profiles/wordpress/discovery/storage-index.js";
 import {
   openWordPressLab,
@@ -106,6 +109,7 @@ async function harness(
     };
     readonly labProbeHttp?: "ok" | "failed";
     readonly labProvisionFailure?: boolean;
+    readonly labMissingExtension?: boolean;
     readonly labSeedFailure?: boolean;
     /** The first Finding lacks a runnable recipe until a new Lab scenario is selected. */
     readonly firstVerifierIncomplete?: boolean;
@@ -204,6 +208,13 @@ async function harness(
           };
         if (request.args[0] === "info")
           return { exitCode: 0, stdout: '{"runsc":{}}', stderr: "" };
+        if (
+          options.labMissingExtension === true &&
+          request.args[0] === "exec" &&
+          request.args[2] === "php" &&
+          request.args[4]?.includes('extension_loaded("pdo_mysql")')
+        )
+          return { exitCode: 43, stdout: "", stderr: "" };
         if (
           options.labProvisionFailure === true &&
           request.args[0] === "network" &&
@@ -836,37 +847,92 @@ describe("harness CLI vertical slice", () => {
     expect(JSON.stringify(started)).not.toContain("wbh_reader");
   });
 
-  it("adds the schema contract only to objective-only prompts and records separate digests", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
+  it.each([
+    {
+      promptId: "short-objective-managed-v5",
       config: { promptId: "short-objective-managed-v5" },
+    },
+    {
+      promptId: "wp2shell-bounty-v3",
+      config: {
+        mode: "wp2shell",
+        promptId: "wp2shell-bounty-v3",
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    },
+  ] as const)(
+    "adds the generated contract to $promptId and records separate digests",
+    async ({ promptId, config }) => {
+      const { run, configPath, prompts, ledger } = await harness({
+        config,
+      });
+      const result = await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "campaign-contract",
+        "--config",
+        configPath,
+      );
+      expect(result.code).toBe(0);
+      const objective = await loadWordPressDiscoveryAsset(promptId);
+      const contract =
+        promptId === "wp2shell-bounty-v3"
+          ? wordPressDiscoveryOutputContractV2()
+          : wordPressDiscoveryOutputContract();
+      expect(prompts[0]).toContain(objective.text.trim());
+      expect(prompts[0]).toContain(contract.text);
+      expect(prompts[0]?.split(contract.text)).toHaveLength(2);
+      const started = ledger()
+        .read({
+          campaignId: "campaign-contract",
+          type: "discovery-run-started",
+        })
+        .at(0)?.event;
+      expect(started).toMatchObject({
+        configuration: {
+          promptVariant: objective.id,
+          promptDigest: objective.digest,
+          objectiveDigest: objective.digest,
+          contractDigest: contract.digest,
+        },
+      });
+    },
+  );
+
+  it("keeps explicit v2 on its archived prompt contract", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      config: {
+        mode: "wp2shell",
+        promptId: "wp2shell-bounty-v2",
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
     });
     const result = await run(
       "campaign",
       "run",
       "synthetic-plugin",
       "--campaign",
-      "campaign-contract",
+      "campaign-v2-compat",
       "--config",
       configPath,
     );
     expect(result.code).toBe(0);
-    const objective = await loadWordPressDiscoveryAsset(
-      "short-objective-managed-v5",
-    );
-    const contract = wordPressDiscoveryOutputContract();
+    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v2");
     expect(prompts[0]).toContain(objective.text.trim());
-    expect(prompts[0]).toContain(contract.text);
+    expect(prompts[0]).not.toContain(wordPressDiscoveryOutputContract().text);
     const started = ledger()
-      .read({ campaignId: "campaign-contract", type: "discovery-run-started" })
+      .read({ campaignId: "campaign-v2-compat", type: "discovery-run-started" })
       .at(0)?.event;
     expect(started).toMatchObject({
       configuration: {
         promptVariant: objective.id,
         promptDigest: objective.digest,
-        objectiveDigest: objective.digest,
-        contractDigest: contract.digest,
       },
     });
+    if (started?.type === "discovery-run-started")
+      expect(started.configuration.contractDigest).toBeUndefined();
   });
 
   it("keeps DB access disabled when the campaign requests none", async () => {
@@ -954,6 +1020,31 @@ describe("harness CLI vertical slice", () => {
       ],
     });
     expect(JSON.stringify(event)).not.toContain("fixture docker error");
+  });
+
+  it("records a missing PHP extension as an incomplete precondition without starting discovery", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      labMissingExtension: true,
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-missing-extension",
+      "--config",
+      configPath,
+    );
+    expect(result.stdout).toContain("stopped by incomplete(precondition)");
+    expect(prompts).toHaveLength(0);
+    expect(
+      ledger().read({ type: "lab-provisioned" }).at(0)?.event,
+    ).toMatchObject({
+      status: "failed",
+      failureStage: "provision",
+      reason: "precondition",
+    });
+    expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(0);
   });
 
   it("records a failed Lab probe before starting discovery", async () => {
@@ -1195,7 +1286,7 @@ describe("harness CLI vertical slice", () => {
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("stopped by no-new-finding");
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("WordPress discovery: WP2Shell bounty v2");
+    expect(prompts[0]).toContain("WordPress discovery: WP2Shell bounty v3");
     expect(prompts[0]).toContain("## Entry points");
     expect(coordinations).toEqual(["cooperative"]);
     expect(expirations).toEqual(["2026-10-08T01:00:00.000Z"]);
@@ -1345,7 +1436,7 @@ describe("harness CLI vertical slice", () => {
     });
     expect(production).toMatchObject({
       mode: "wp2shell",
-      promptId: "wp2shell-bounty-v2",
+      promptId: "wp2shell-bounty-v3",
       entryIndex: true,
       runWallTimeMinutes: 60,
       stopRules: { maxRuns: 1, noFindingRuns: 1 },
@@ -1727,6 +1818,66 @@ describe("harness CLI vertical slice", () => {
             event.runKind === "explore",
         ),
     ).toHaveLength(2);
+  });
+
+  it("lists parked Findings by one-line property and says when there are none (#185)", async () => {
+    const { run, ledger, store, configPath } = await harness();
+    // Opening the state needs one real command; the campaign records only in-scope Findings.
+    const warm = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-warm",
+      "--config",
+      configPath,
+    );
+    expect(warm.code).toBe(0);
+    const empty = await run(
+      "review",
+      "parked",
+      "--campaign",
+      "campaign-parked",
+    );
+    expect(empty.code).toBe(0);
+    expect(empty.stdout).toContain("no parked findings");
+    const snapshot = `sha256:${"b".repeat(64)}`;
+    const digest = await store().putFiles({
+      "finding.json": Buffer.from(
+        JSON.stringify({
+          brokenProperty: "Throttle trusts a forwarded header",
+        }),
+      ),
+    });
+    await ledger().append({
+      schemaVersion: 1,
+      identity: "parked-1",
+      campaignId: "campaign-parked",
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-13T00:00:00Z",
+      type: "finding-parked",
+      findingId: "finding-parked-1",
+      runId: "run-1",
+      category: "other",
+      reason: "outside-programme-boundary",
+      artifacts: [{ kind: "finding", digest }],
+    });
+    const listed = await run(
+      "review",
+      "parked",
+      "--campaign",
+      "campaign-parked",
+    );
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toContain(
+      "parked  other  finding-parked-1  Throttle trusts a forwarded header",
+    );
+    expect(
+      ledger().read({
+        campaignId: "campaign-parked",
+        type: "finding-recorded",
+      }),
+    ).toHaveLength(0);
   });
 
   it("verifies a child Finding on resume without starting a replacement Trial", async () => {

@@ -59,6 +59,11 @@ class LabDockerFailure extends Error {
     super("gVisor Lab command failed");
   }
 }
+class MissingWordPressExtension extends Error {
+  constructor() {
+    super("The WordPress Lab image is missing pdo_mysql");
+  }
+}
 export interface DockerRunner {
   run(request: DockerRequest): Promise<DockerResult>;
 }
@@ -679,6 +684,20 @@ export function openWordPressLab(options: {
           docker,
           requireDocker,
         });
+        // Probe the running runsc image before installing the target plugin.
+        // PHP exits 43 only when the required extension is absent.
+        const extension = await docker([
+          "exec",
+          resource.wordpress,
+          "php",
+          "-r",
+          'exit(extension_loaded("pdo_mysql") ? 0 : 43);',
+        ]);
+        if (extension.exitCode === 43) throw new MissingWordPressExtension();
+        if (extension.exitCode !== 0)
+          throw new LabDockerFailure(
+            extension.stderr || "WordPress PHP extension probe failed",
+          );
         await initializeWordPress({
           resource,
           setup,
@@ -713,10 +732,14 @@ export function openWordPressLab(options: {
         if (resource !== undefined) await cleanup(resource);
         return {
           status: "incomplete",
-          reason: "provision",
+          reason:
+            error instanceof MissingWordPressExtension
+              ? "precondition"
+              : "provision",
           nextStep:
-            error instanceof Error &&
-            error.message === "The Lab image runs another WordPress version"
+            error instanceof MissingWordPressExtension ||
+            (error instanceof Error &&
+              error.message === "The Lab image runs another WordPress version")
               ? error.message
               : "Check source, pinned images, runsc, and Lab initialization; then provision a fresh Lab",
           ...(error instanceof LabDockerFailure && error.diagnostic
