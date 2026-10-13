@@ -138,7 +138,7 @@
 
 分類別（有償 18 件）: Stored XSS 5 件 1,083、SQLi 4 件 1,301、ATO 1 件 975、**Reflected XSS 7 件 667**、価格操作 1 件 50。却下は IDOR、対象外は missing authorization と Subscriber+ のコンテンツ操作で、#185 の除外 6 ラベルと一致する。
 
-注意: Reflected XSS は所有者の有償件数の 7 / 18 を占めるが、本リポの Wordfence 転記（2026-10-08）では「Explicitly Out of Scope」にある。最後に有償になった reflected XSS の提出は 2026-08-30 なので、規則は 08-30〜10-08 の間に変わったとみられる。live page は bot 対策で取得できず（HTTP 202、本文なし）、Wayback も取得できなかったため、変更日は未確認。Patchstack は JS 実行を伴う reflected XSS を受理する。
+注意: Reflected XSS は所有者の有償件数の 7 / 18 を占めるが、Wordfence の live page（所有者が 2026-10-13 に貼付、2026-10-08 の写しと差分なし）では「Explicitly Out of Scope」。最後に有償になった reflected XSS の提出は 2026-08-30 なので、規則は 08-30〜10-08 の間に変わったとみられる（変更日は未確認。Harness からは HTTP 202 で本文を取れない）。Patchstack は JS 実行を伴う reflected XSS を受理する。
 
 ## 7. 確定できなかったこと
 

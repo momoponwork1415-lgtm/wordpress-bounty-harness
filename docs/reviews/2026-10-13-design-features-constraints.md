@@ -270,7 +270,8 @@ AI が決めた値のうち、結果に効くものだけ。番号は依頼の�
 | D12 | Verifier wall 30 分 | | 維持。#187 の計測で再考 | 根拠がないが、変える根拠もまだない |
 | D13 | Finding の文字数上限 | claim 4000 など | 維持 | 保留の原因になった記録はない |
 | D14 | 台帳 read 1000 件 | 頁送りなし | pipeline.ts の 19 箇所を頁送りに直す（小 PR） | 本番周回が増えると黙って切れる |
-| D15 | Reflected XSS の扱い | Wordfence 対象外（転記 2026-10-08）、Patchstack 向けにも出さない（所有者 2026-10-08） | Wordfence の live page で除外を再確認する。Patchstack 向けに出すかを決める。出すなら #185 の除外から外し、判定器なしのまま人間レビューへ | 所有者の有償 18 件のうち 7 件が reflected XSS（2026-08-30 まで有償）。規則変更の日付は未確認 |
+| D15 | Reflected XSS の扱い | Wordfence 対象外、Patchstack 向けにも出さない（所有者 2026-10-08） | Wordfence 向けは除外のまま。Patchstack 向けに出すかだけ決める。出すなら #185 の除外から外し、判定器なしのまま人間レビューへ | 所有者の有償 18 件のうち 7 件が reflected XSS（2026-08-30 まで有償）。live page（所有者貼付 2026-10-13）で「Explicitly Out of Scope」を確認。変更日は未確認 |
+| D16 | `content-deletion` を #185 で parked にするか | 除外（SPEC §8b「探索の目的に含めない」、出典は AI） | 除外から外す。判定器が無いので `incomplete(no-judge)` として人間レビューへ届く | Wordfence の live page は「Arbitrary Content Deletion」を Explicitly In-Scope に挙げ、1337 tier は ≥500 install で報奨対象。programme-scope.md も Wordfence 側で受理に分類している。偽陰性を避ける所有者方針と合わない |
 
 ## 6. 未確認の仮定
 
