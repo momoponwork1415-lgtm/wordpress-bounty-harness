@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
@@ -9,6 +10,7 @@ import {
   loadWordPressHostConfig,
 } from "./wordpress-host.js";
 import { openWordPressReviewLab } from "../profiles/wordpress/lab/review-lab.js";
+import { SqliteRepeatTrialGate } from "../profiles/wordpress/discovery/repeat-trial-gate.js";
 
 const io: CliIo = {
   stdout: (line) => process.stdout.write(`${line}\n`),
@@ -32,11 +34,42 @@ const io: CliIo = {
 /** `harness [--host <path>] [--state <dir>] <command>`; the host file stays outside Git. */
 async function main(argv: readonly string[]): Promise<number> {
   const args = [...argv];
+  // This path is deliberately independent of --state / WBH_STATE_DIRECTORY.
+  // Every host CLI process must share one Trial index.
+  const repeatTrialGate = new SqliteRepeatTrialGate(
+    join(
+      homedir(),
+      ".local",
+      "state",
+      "wordpress-bounty-harness",
+      "repeat-trials.sqlite",
+    ),
+  );
   let hostPath = process.env.WBH_HOST_CONFIG;
   const at = args.indexOf("--host");
   if (at >= 0) {
     hostPath = args[at + 1];
     args.splice(at, 2);
+  }
+  if (
+    args[0] === "trial" &&
+    (args[1] === "bootstrap" || args[1] === "approve")
+  ) {
+    if (args.length !== 4 || args[2] !== "--file" || args[3] === undefined)
+      throw new Error(
+        "Use trial bootstrap|approve --file <Git-outside JSON path>",
+      );
+    const value: unknown = JSON.parse(await readFile(resolve(args[3]), "utf8"));
+    if (args[1] === "bootstrap") {
+      const result = repeatTrialGate.bootstrap(value);
+      io.stdout(
+        `Trial gate initialized; imported ${result.importedTrials} prior starts`,
+      );
+    } else {
+      repeatTrialGate.approve(value);
+      io.stdout("One exact additional Trial approved; no discovery started");
+    }
+    return 0;
   }
   if (hostPath === undefined || hostPath.length === 0) {
     io.stderr(
@@ -45,7 +78,10 @@ async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
   const host = await loadWordPressHostConfig(resolve(hostPath));
-  const baseProfile = await createWordPressHostProfile({ host });
+  const baseProfile = await createWordPressHostProfile({
+    host,
+    repeatTrialGate,
+  });
   const profile = {
     ...baseProfile,
     reviewLab: (

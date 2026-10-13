@@ -45,6 +45,7 @@ export interface CampaignPipeline<
   }) => Promise<{
     readonly input: CampaignInputV1;
     readonly plannedTrials: readonly PlannedTrial[];
+    readonly beforeTrialStart?: DiscoveryOptions["beforeTrialStart"];
     readonly historyFraction: number;
     readonly ablation?: NonNullable<DiscoveryOptions["ablation"]>;
     readonly concurrency?: number;
@@ -163,6 +164,11 @@ export async function runCampaignPipeline<
   >;
   readonly clock: () => Date;
   readonly newId: () => string;
+  /** An optional profile-owned, read-only gate before an expensive Lab starts. */
+  readonly beforeLab?: (input: {
+    readonly target: Target;
+    readonly snapshot: Snapshot;
+  }) => void | Promise<void>;
   /** Targets in flight at once; discovery run concurrency remains per target. */
   readonly maxConcurrentTargets?: number;
   /** An explicit operator retry after repairing the Verifier protocol. */
@@ -268,6 +274,8 @@ export async function runCampaignPipeline<
     const run = async (): Promise<void> => {
       const snapshot = await pipeline.freeze(target);
       snapshotDigest = snapshot.digest;
+      stage = "discovery";
+      await options.beforeLab?.({ target, snapshot });
       const base = {
         schemaVersion: 1 as const,
         campaignId,

@@ -278,6 +278,15 @@ export async function runDiscoveryCampaign(options: {
   /** Records each run's arm on the history axis: a without history, b with it. */
   readonly ablation?: { readonly axes: readonly AblationAxis[] };
   readonly plannedTrials: readonly PlannedTrial[];
+  /** Profile-owned authorization, immediately before an independent Trial is recorded. */
+  readonly beforeTrialStart?:
+    | ((trial: {
+        readonly campaignId: string;
+        readonly snapshotDigest: string;
+        readonly promptDigest: string;
+        readonly trialOrdinal: number;
+      }) => string | undefined | Promise<string | undefined>)
+    | undefined;
   readonly executor: {
     execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
   };
@@ -458,10 +467,17 @@ export async function runDiscoveryCampaign(options: {
         snapshotDigest: input.snapshotDigest,
         occurredAt: clock().toISOString(),
       };
+      const approvalDigest = await options.beforeTrialStart?.({
+        campaignId: options.campaignId,
+        snapshotDigest: input.snapshotDigest,
+        promptDigest: planned.configuration.promptDigest ?? input.promptDigest,
+        trialOrdinal: trial.trialOrdinal,
+      });
       const started = await options.ledger.append({
         ...base,
         identity: `discovery-start-${run.runId}`,
         type: "discovery-run-started",
+        ...(approvalDigest === undefined ? {} : { approvalDigest }),
         runId: run.runId,
         trialId: trial.trialId,
         trialOrdinal: trial.trialOrdinal,

@@ -31,7 +31,7 @@ amends: 0030（タグ単位の履歴利用）, 0022（自動再試行の範囲�
 | Q9 | 採点式 log10(1+installs)×10 + 鮮度×5 | 維持 |
 | 確認 | 除外作者 5 社 | 維持（Wordfence 公式） |
 
-Q6 は所有者の 2026-10-13 の追加判断で上書きした。対象の同一性は WordPress plugin slug で判断し、版・Target Snapshot digest・campaign ID・state・Lab 設定・prompt 版を変えても同じ slug の既往探索 Trial があれば2回目以降に当たる。異なる plugin slug の初回 Trial は機械選定でまとめて進める。人間がその結果の Finding・Lead・検証結果と `incomplete` の理由をまとめてレビューし、追加探索する slug を選ぶ。初回が正常な候補0件でも `incomplete` でも、新たな独立探索 Trial を始めるには対象・目的・費用を示し、**1 Trial ごとに**事前承認を得る。開始済み Trial の再開と、既存 Finding の独立検証・再検証は追加探索 Trial に数えない。既往Trialの横断照合を現行CLIが保証するわけではなく、Git外のPrivate Evidenceにしかslugがない記録もある。自動強制が整うまでは運用者が既知の探索履歴を確認し、初回と確認できない同一slugの追加探索を勝手に始めない。
+Q6 は所有者の 2026-10-13 の追加判断で上書きした。対象の同一性は WordPress plugin slug で判断し、版・Target Snapshot digest・campaign ID・state・Lab 設定・prompt 版を変えても同じ slug の既往探索 Trial があれば2回目以降に当たる。異なる plugin slug の初回 Trial は機械選定でまとめて進める。人間がその結果の Finding・Lead・検証結果と `incomplete` の理由をまとめてレビューし、追加探索する slug を選ぶ。初回が正常な候補0件でも `incomplete` でも、新たな独立探索 Trial を始めるには対象・目的・費用を示し、**1 Trial ごとに**事前承認を得る。開始済み Trial の再開と、既存 Finding の独立検証・再検証は追加探索 Trial に数えない。CLI はホスト共通の Trial registry に既知の state 台帳を取り込み、同じ slug の追加 Trial ごとに対象・Snapshot・prompt・campaign・ordinal に結び付いた承認を開始直前に消費する。最初に既知の全 state を列挙する責任は運用者にあり、inventory から漏れた過去の state の探索は自動発見できない。slug を復元できない記録は取り込みを拒否し、初回と断定して探索を始めない。
 
 この決定より前に開始した Trial は履歴として測定に残す。決定後に始める追加 Trial には新しい承認を要し、過去の測定を承認済みと読み替えない。
 

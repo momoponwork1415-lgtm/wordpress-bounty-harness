@@ -68,6 +68,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     type: z.literal("discovery-run-started"),
     runId: id,
     labId: id,
+    /** Exact human approval for a repeated Trial; private contents stay outside this ledger. */
+    approvalDigest: digest.optional(),
     trialId: id.optional(),
     trialOrdinal: z.number().int().nonnegative().optional(),
     stage: z.enum(["screening", "deep-dive"]).optional(),

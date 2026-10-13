@@ -51,6 +51,7 @@ async function campaign(
     readonly heldOnly?: boolean;
     readonly rootTranscriptInvalid?: boolean;
     readonly indexed?: boolean;
+    readonly approvalDigest?: string;
     readonly leadOnly?: boolean;
     /** Report a Finding whose impact lies outside the Programme Boundary (#185). */
     readonly parkedImpact?: boolean;
@@ -127,6 +128,9 @@ async function campaign(
     campaignId: "campaign-1",
     labId: "lab-1",
     input,
+    ...(options.approvalDigest === undefined
+      ? {}
+      : { beforeTrialStart: () => options.approvalDigest }),
     historyFraction: 0.5,
     runWallTimeMs: 60 * 60_000,
     ...(options.indexed
@@ -452,6 +456,15 @@ it("passes the fixed source entry index to one cooperative Trial without a stage
   });
   expect(started).not.toHaveProperty("stage");
   expect(started).not.toHaveProperty("continuationOf");
+});
+
+it("records only the approval digest on an authorized Trial start", async () => {
+  const approvalDigest = `sha256:${"b".repeat(64)}`;
+  const { ledger } = await campaign([], { indexed: true, approvalDigest });
+  const started = ledger.read({ type: "discovery-run-started" })[0]?.event;
+  expect(started).toMatchObject({ approvalDigest });
+  expect(JSON.stringify(started)).not.toContain("approvedBy");
+  expect(JSON.stringify(started)).not.toContain("purpose");
 });
 
 it("stops after consecutive completed runs without a new Finding and records each run configuration", async () => {

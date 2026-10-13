@@ -132,6 +132,13 @@ async function setup(
   };
   const profile = await createWordPressHostProfile({
     host,
+    repeatTrialGate: {
+      ensureReady: () => {},
+      assertMayStart: () => {},
+      reserve: () => {},
+      bootstrap: () => ({ importedTrials: 0 }),
+      approve: () => {},
+    },
     runDocker,
     proxyBundleDirectory,
     fetch: () => Promise.reject(new Error("no network in tests")),

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -367,8 +368,19 @@ try {
   stage = "runtime-preflight";
   const { createWordPressHostProfile, loadWordPressHostConfig } =
     await import("../dist/cli/wordpress-host.js");
+  const { SqliteRepeatTrialGate } =
+    await import("../dist/profiles/wordpress/discovery/repeat-trial-gate.js");
   const profile = await createWordPressHostProfile({
     host: await loadWordPressHostConfig(hostPath),
+    repeatTrialGate: new SqliteRepeatTrialGate(
+      join(
+        homedir(),
+        ".local",
+        "state",
+        "wordpress-bounty-harness",
+        "repeat-trials.sqlite",
+      ),
+    ),
   });
   const state = {
     ledger,

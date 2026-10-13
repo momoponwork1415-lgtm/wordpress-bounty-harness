@@ -34,6 +34,7 @@ import {
   openWordPressOrgTargetSource,
 } from "../profiles/wordpress/acquisition/index.js";
 import type { WordPressFinding } from "../profiles/wordpress/discovery/finding.js";
+import type { RepeatTrialGate } from "../profiles/wordpress/discovery/repeat-trial-gate.js";
 import {
   openWordPressLab,
   type WordPressLabHandle,
@@ -139,6 +140,7 @@ export async function loadWordPressHostConfig(
  */
 export async function createWordPressHostProfile(options: {
   readonly host: WordPressHostConfig;
+  readonly repeatTrialGate: RepeatTrialGate;
   readonly runDocker?: HostDockerRun;
   readonly fetch?: typeof fetch;
   /** Compiled credential proxy; defaults to the built `discovery` directory. */
@@ -476,6 +478,7 @@ export async function createWordPressHostProfile(options: {
   };
 
   return createWordPressCliProfile({
+    repeatTrialGate: options.repeatTrialGate,
     boundaries,
     selectionBoundaries,
     scopePolicy: await loadWordpressScopePolicy(

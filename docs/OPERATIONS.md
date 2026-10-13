@@ -71,9 +71,15 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 `campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v3` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
 
+### 同じ plugin の追加探索 Trial の承認
+
 異なる plugin slug の初回探索は無人でまとめて進める。人間はその Finding・Lead と検証結果、`incomplete` の理由をまとめてレビューし、追加探索する対象を選ぶ。同じ plugin slug の2回目以降の独立した探索Trialは、版・Snapshot digest・prompt・campaign ID・state・Lab設定を変えても、追加目的と費用を示して **1 Trial ごとに**事前承認を得る。初回に Finding があるだけで自動で +2 Trial を起動しない。開始済みTrialの再開、子の同一Trial内の作業、既存 Finding の検証・再検証は追加探索Trialではない（ADR 0032 Q6）。
 
-現行CLIは campaign や state をまたぐ既往Trialの完全な照合を保証しない。plugin slug が Private Evidence にしか残らない記録もある。機械強制が整うまでは、運用者が起動前に選定バッチと既知の台帳・Git外の探索履歴を照合する。同じslugの追加探索を承認された場合は、slug、Snapshot digest、prompt digest、campaign ID、次の Trial ordinal、目的、承認者と時刻をGit外のPrivate Evidenceに記録し、その **1 Trial だけ**実行する。次の追加Trialには改めて承認を得る。既往があるか確認できない対象を初回と断定して追加探索を始めない。承認が無い対象は止め、異なる対象の初回探索を進める。
+`campaign run` は初回でも、ホスト共通の `~/.local/state/wordpress-bounty-harness/repeat-trials.sqlite` が初期化されるまで探索を開始しない。この台帳は `--state` と独立している。最初に既知の全 `--state` ディレクトリを列挙した Git 外の JSON を作り、`node dist/cli/main.js trial bootstrap --file <inventory.json>` で取り込む。形式は `{"schemaVersion":1,"stateDirectories":["/absolute/state/path"],"inventoriedBy":"<operator>","inventoriedAt":"<ISO-8601>"}`。過去の `discovery-run-started` と `target-selected` から plugin slug を一意に復元できない state は取り込みに失敗し、探索を止める。新しい `--state` は初回使用時に自動で取り込む。既知の過去 state を inventory から漏らすと、その履歴は自動発見できないため、初期化時に全履歴を確認する。
+
+各追加 Trial の開始前に人間が Finding・Lead・検証結果と `incomplete` 理由を読み、追加目的と費用を承認する。承認後に Git 外の JSON を作り、`node dist/cli/main.js trial approve --file <approval.json>` で記録する。形式は `{"schemaVersion":1,"stateDirectory":"/absolute/state/path","slug":"plugin-slug","snapshotDigest":"sha256:...","promptDigest":"sha256:...","campaignId":"campaign-id","trialOrdinal":0,"approvedBy":"<operator>","approvedAt":"<ISO-8601>","purpose":"<追加目的>"}`。承認はこれらの値に結び付き、**1 Trial だけ**に使われる。値が分からなければ `campaign run` の承認不足エラーに表示される値を使う。欠けた承認では Lab 起動前に止まり、比較 mode など同一 campaign の2回目以降も開始直前に再確認する。
+
+承認済みの `discovery-run-started` は承認 JSON の digest だけを追記専用台帳に記録し、承認者・目的の本文はホスト共通の Git 外 registry に保持する。承認コマンドは人間の判断を記録するが、CLI 自体は実行者の身元を証明できない。AI は所有者の明示承認なしに承認 JSON を作成・登録しない。Trial 開始の予約後にホスト障害で台帳への書き込みが失敗した場合は、予約を自動解除せず、運用者が履歴を調べる。
 
 固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。
 
@@ -84,7 +90,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
 - **同時run数**: campaign設定の `resources` で決める。
   - 既定の `resources` は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。新主経路は対象ごとに1 Trialで、wall上限は60分。
   - `observed` は完了した command event の文字列から Harness が数える下限の近似。script 内部のファイル読出しや通信は含まない。
-  - 実効の同時数は協調Trialでは `min(maxConcurrentRuns, floor(memoryBudgetMiB / 8704))`。8,704 MiBはRoot＋最大3子のCodex sandbox（8 GiB）とrunごとのegress broker（512 MiB）の合計。旧単独Trialの計算単位は2,560 MiB。
+  - 同一対象の独立 Trial は承認順を守るため逐次実行する。8,704 MiBはRoot＋最大3子のCodex sandbox（8 GiB）とrunごとのegress broker（512 MiB）の合計。旧単独Trialの計算単位は2,560 MiB。異なる対象間の同時数は `maxConcurrentTargets` で制限する。
   - ホストが小さいときは `memoryBudgetMiB` を下げる。1run分に満たない値では開始しない。
   - Labのメモリは対象ごとに別に要る。
 - **上限での停止**: provider のrate limit / quotaの応答を受けたとき。

@@ -65,6 +65,7 @@ import type {
   WordPressLabSetup,
 } from "../profiles/wordpress/lab/index.js";
 import { wordPressScenario } from "../profiles/wordpress/lab/scenarios.js";
+import type { RepeatTrialGate } from "../profiles/wordpress/discovery/repeat-trial-gate.js";
 import {
   loadWordPressDiscoveryAsset,
   WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS,
@@ -771,6 +772,8 @@ async function wordPressLabDown(
 }
 
 export type WordPressCliProfileOptions = {
+  /** Host-common gate; production uses one registry across every --state. */
+  readonly repeatTrialGate: RepeatTrialGate;
   readonly boundaries: (
     config: WordPressCampaignConfig,
     state: CliState,
@@ -804,6 +807,8 @@ type WordPressDiscoveryPlan = Awaited<
   ReturnType<WordPressDiscoveryPipeline["discovery"]>
 >;
 type WordPressDiscoveryContext = {
+  readonly campaignId: string;
+  readonly repeatTrialGate: RepeatTrialGate;
   readonly config: WordPressCampaignConfig;
   readonly boundaries: WordPressCampaignBoundaries;
   readonly state: CliState;
@@ -828,6 +833,8 @@ async function planWordPressDiscovery(
     trustBoundary,
     armBObjective,
     historyFor,
+    campaignId,
+    repeatTrialGate,
   } = context;
   const wallMinutes = config.runWallTimeMinutes ?? 60;
   const ablationConfig =
@@ -938,6 +945,15 @@ async function planWordPressDiscovery(
   };
   const now = state.clock().getTime();
   return {
+    beforeTrialStart: ({ snapshotDigest, promptDigest, trialOrdinal }) =>
+      repeatTrialGate.reserve({
+        stateDirectory: state.stateDirectory,
+        slug: target.slug,
+        snapshotDigest,
+        promptDigest,
+        campaignId,
+        trialOrdinal,
+      }),
     input: {
       schemaVersion: 1,
       snapshotDigest: snapshot.digest,
@@ -957,15 +973,21 @@ async function planWordPressDiscovery(
       ablationConfig?.axes.find((axis) => axis.axis === "history")
         ?.armBFraction ?? 0,
     runWallTimeMs: wallMinutes * 60_000,
-    concurrency: Math.min(
-      config.resources.maxConcurrentRuns,
-      Math.floor(
-        config.resources.memoryBudgetMiB /
-          (boundaries.runtimeProfile.subagent.modelId === "unavailable"
-            ? DISCOVERY_RUN_MEMORY_MIB
-            : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB),
-      ),
-    ),
+    // A comparison may plan several independent Trials on one slug. Its next
+    // approval is decided after the previous Trial, so those run serially.
+    concurrency:
+      maxRuns > 1
+        ? 1
+        : Math.min(
+            config.resources.maxConcurrentRuns,
+            Math.floor(
+              config.resources.memoryBudgetMiB /
+                (boundaries.runtimeProfile.subagent.modelId === "unavailable"
+                  ? DISCOVERY_RUN_MEMORY_MIB
+                  : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB +
+                    EGRESS_BROKER_MEMORY_MIB),
+            ),
+          ),
     ...(ablationConfig === undefined
       ? {}
       : { ablation: { axes: ablationConfig.axes } }),
@@ -1060,6 +1082,7 @@ async function runWordPressCampaign(
     target: WordPressTargetSelection,
   ) => CampaignHistory,
 ): ReturnType<CliProfile["runCampaign"]> {
+  options.repeatTrialGate.ensureReady(state.stateDirectory);
   const { config, policy } = await loadConfig(input.configPath);
   if (
     "wordpressVersion" in policy &&
@@ -1109,6 +1132,63 @@ async function runWordPressCampaign(
     store: state.store,
     clock: state.clock,
     newId: state.newId,
+    beforeLab: ({ target, snapshot }) => {
+      let concluded = false;
+      let conclusionAfter = 0;
+      for (;;) {
+        const page = state.ledger.read({
+          campaignId: input.campaignId,
+          type: "discovery-concluded",
+          afterSequence: conclusionAfter,
+          limit: 1000,
+        });
+        if (
+          page.some(({ event }) => event.snapshotDigest === snapshot.digest)
+        ) {
+          concluded = true;
+          break;
+        }
+        if (page.length < 1000) break;
+        conclusionAfter = page.at(-1)!.sequence;
+      }
+      if (concluded) return;
+      let afterSequence = 0;
+      let spent = 0;
+      for (;;) {
+        const page = state.ledger.read({
+          campaignId: input.campaignId,
+          type: "discovery-run-started",
+          afterSequence,
+          limit: 1000,
+        });
+        spent += page.filter(
+          ({ event }) =>
+            event.type === "discovery-run-started" &&
+            event.snapshotDigest === snapshot.digest &&
+            (event.runKind ?? "explore") === "explore",
+        ).length;
+        if (page.length < 1000) break;
+        afterSequence = page.at(-1)!.sequence;
+      }
+      const maxRuns = Math.min(
+        config.stopRules.maxRuns,
+        target.runBudget ?? config.stopRules.maxRuns,
+      );
+      if (spent >= maxRuns) return;
+      const arms = allocateTrialArms(spent, ablationConfig?.axes ?? []);
+      const selectedObjective =
+        arms.prompt === "b" && armBObjective !== undefined
+          ? armBObjective
+          : objective;
+      options.repeatTrialGate.assertMayStart({
+        stateDirectory: state.stateDirectory,
+        slug: target.slug,
+        snapshotDigest: snapshot.digest,
+        promptDigest: selectedObjective.digest,
+        campaignId: input.campaignId,
+        trialOrdinal: spent,
+      });
+    },
     pipeline: {
       select: async () =>
         (reservedSelections === undefined
@@ -1134,11 +1214,13 @@ async function runWordPressCampaign(
       },
       lab: boundaries.lab,
       setupFor: setupFor(config),
-      discovery: (input) =>
-        planWordPressDiscovery(input, {
+      discovery: (discoveryInput) =>
+        planWordPressDiscovery(discoveryInput, {
           config,
           boundaries,
           state,
+          campaignId: input.campaignId,
+          repeatTrialGate: options.repeatTrialGate,
           objective,
           trustBoundary,
           ...(armBObjective === undefined ? {} : { armBObjective }),

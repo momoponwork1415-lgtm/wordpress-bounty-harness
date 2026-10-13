@@ -34,6 +34,7 @@ import {
 import type { ProgrammeIntelligence } from "../../src/profiles/wordpress/programme-intelligence/index.js";
 import { loadWordpressScopePolicy } from "../../src/profiles/wordpress/scope-policy.js";
 import { loadWordPressDiscoveryAsset } from "../../src/profiles/wordpress/prompts/index.js";
+import type { RepeatTrialGate } from "../../src/profiles/wordpress/discovery/repeat-trial-gate.js";
 import { createWordPressSelection } from "../../src/profiles/wordpress/selection/index.js";
 import type { WordPressOrgListingObservation } from "../../src/profiles/wordpress/selection/wordpress-org-candidate-enumerator.js";
 import { openSnapshot } from "../../src/snapshot/index.js";
@@ -41,6 +42,13 @@ import { openSnapshot } from "../../src/snapshot/index.js";
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
 const uuid = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
 const now = "2026-10-08T00:00:00.000Z";
+const syntheticTrialGate: RepeatTrialGate = {
+  ensureReady: () => {},
+  assertMayStart: () => {},
+  reserve: () => {},
+  bootstrap: () => ({ importedTrials: 0 }),
+  approve: () => {},
+};
 const directories: string[] = [];
 afterEach(async () => {
   for (const directory of directories.splice(0))
@@ -641,6 +649,7 @@ async function harness(
     clock: () => new Date(now),
     newId: () => `id-${++ids}`,
     profile: createWordPressCliProfile({
+      repeatTrialGate: syntheticTrialGate,
       scopePolicy: await loadWordpressScopePolicy(),
       ...(options.scopeFacts === undefined
         ? {}
@@ -2443,7 +2452,7 @@ describe("harness CLI vertical slice", () => {
     expect(ledger().read({ type: "discovery-concluded" })).toHaveLength(0);
   });
 
-  it("runs discovery concurrently within the configured count and memory budget", async () => {
+  it("runs independent Trials on one plugin sequentially even with spare memory", async () => {
     const { run, configPath, maxInFlight } = await harness({
       config: {
         stopRules: { maxRuns: 4, noFindingRuns: 4 },
@@ -2462,7 +2471,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("runs 4  stopped by max-runs");
-    expect(maxInFlight()).toBe(2);
+    expect(maxInFlight()).toBe(1);
   });
 
   it("refuses a memory budget below one run", async () => {
