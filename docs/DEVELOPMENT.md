@@ -30,6 +30,7 @@ Step 1 の作業順: #185（Finding / Lead の境界と review queue）→ `revi
 - 1 週間に答える問いを 1 つ決め、GitHub Issue に「問い」と「答えが分かる数字」を書く。例: 「`gpt-6-luna` は 90 分のうち何分使うか。prompt を変えると変わるか」「答えは台帳の run wall 中央値と `observed.filesRead`」。
 - PR はその Issue を参照する。問いに関係ない変更は別の問いにする。
 - 問いが決まっていない間は、PR を作らない。報告（第4節）だけを依頼する。
+- 問いを決める前に [docs/knowledge/experiments.md](knowledge/experiments.md) を見る。過去の世代が同じ問いに答えていれば、その答えから始め、実験を繰り返さない。答えが出たら 1 行足す。
 
 ## 4. AI への依頼は 2 種類
 
