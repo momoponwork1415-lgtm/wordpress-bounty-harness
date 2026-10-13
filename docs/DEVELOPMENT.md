@@ -16,7 +16,7 @@
 | 2 | レビュー側と検証側の作り込み | 週のレビュー batch が 6 時間超、または scope 内候補が週 15 件超。同じ手動作業を 3 回したら、その種類だけ道具化 |
 | 3 | 候補: Claude 系 runtime、Patchstack、報告書の自動化 | Step 2 の後。[PARKING.md](PARKING.md) |
 
-Step 1 の間に凍結するもの: 不変条件、モジュール境界（ADR 0031 の後）、判定器の集合、選定方針の構造（数値は変えてよい）、探索 prompt（所有者が明示した v4 への 1 回の改訂を除く）。それ以外の案は [PARKING.md](PARKING.md) に 1 行で書き、ADR にも Issue の milestone にもしない。
+Step 1 の間に凍結するもの: 不変条件、モジュール境界（ADR 0031 の後）、判定器の集合、選定方針の構造（数値は変えてよい）、探索 prompt（所有者が明示した v4 への 1 回の改訂を除く）。agent に渡る文章はすべて所有者が全文を読む（第 5 節）。それ以外の案は [PARKING.md](PARKING.md) に 1 行で書き、ADR にも Issue の milestone にもしない。
 
 Step 1 の週の問い（第 3 節の単位）:
 
@@ -45,12 +45,13 @@ Step 1 の作業順: #185（Finding / Lead の境界と review queue）→ `revi
 - テンプレートの 5 項目（問い、変えたこと、変えなかったこと、測った数字、消し方）を日本語で埋める。AI が書いてよいが、所有者が分からない行があれば merge しない。書き直しを依頼する。
 - 探索に触る PR は、開発セットで最低 3 Trial 回した結果を貼る: Trial 数、completed 数、Finding と Lead の数、wall の中央値、失敗理由の内訳。数字のない探索変更は merge しない。
 - 実験軸（分担、継続、prompt 変種など）は opt-in の設定ブロック 1 つと profile の file 1 つに閉じ、台帳の run 記録に軸を残す。消し方を PR に書く。
+- agent に渡る文章（`src/profiles/wordpress/prompts/` の本文、`.claude/skills/` の本文、Harness が生成して渡す節の雛形: 出力契約、Lab・入口・Programme Boundary の節、Verifier の victim 契約）を変える PR は、変更後の全文と日本語訳を PR 本文か `docs/reviews/` の文書に貼る。所有者が全文を読んで `owner-approved` ラベルを付けるまで merge しない。AI は所有者が出典付きで採った要素だけを書き、要素を足さない。
 - 1 PR は差分 500 行以内を目安にする。超えるなら問いを分ける。
 - CI の `pnpm check` が通る。
 
 ## 6. 正本の改訂
 
-- ADR を書くのは「不変条件かモジュール境界が変わる」か「実測が既存の ADR と矛盾した」ときだけ。週 1 本まで。それ以外の案は [PARKING.md](PARKING.md)。`docs/adr/` を変える PR は所有者の `owner-approved` ラベルが無いと CI で落ちる。
+- ADR を書くのは「不変条件かモジュール境界が変わる」か「実測が既存の ADR と矛盾した」ときだけ。週 1 本まで。それ以外の案は [PARKING.md](PARKING.md)。`docs/adr/` を変える PR は所有者の `owner-approved` ラベルが無いと CI で落ちる。agent に渡る文章を変える PR も同じ（第 5 節）。
 - SPEC や ADR と実態が食い違ったら、コードより先に ADR 1 本で改訂する。未コミットの変更を溜めない。
 - 大きな設計変更（判定器の方式、探索の構造）は、報告 → 所有者の決定 → ADR → PR の順。ADR のない大きな変更は merge しない。
 

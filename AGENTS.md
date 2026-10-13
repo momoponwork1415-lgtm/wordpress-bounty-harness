@@ -27,6 +27,7 @@
 - 主経路は対象ごとに `wp2shell-bounty-v3` を既定とするRoot＋最大3子の協調Trialを1回。wall上限は60分。Rootが早く報告すれば終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` とし、正常な候補0件に数えない。
 - 固定source由来の入口索引を既定でカタログとして渡す。索引は経路や分担を指示せず、全入口の処理は終了条件でない。Harnessの続行差し込み、screeningから条件付きdeep-diveへの分岐は行わない。子の有効なFindingとLeadはRoot報告と独立して保存する。
 - `wp2shell-bounty-v2` と `short-objective-managed-v4` は比較arm、`screening-v1` は過去Trialの構成照合用に保持する。旧screeningを現行modeで新規起動しない。索引あり・なしや旧段付きTrialを同じ比較分母に混ぜない。どの版も脆弱性が必ずあるという前提や固定された攻撃経路を与えない。
+- agentに渡る文章（prompt本文、skill本文、Harness生成の節の雛形）は所有者が全文を読んで承認するまでmergeしない。AIは所有者が採った要素だけを書き、要素を足さない。
 - prompt本文を変えたら版を上げ、旧版を残してdigest pinを更新する。旧promptは過去Trialの目的文とdigestを照合するために維持する。台帳の旧 `stage` / `continuationOf` 付きeventも読み続け、既存eventを消さない。
 - Finding / Leadの出力契約はprompt本文に書かず、Harnessがschemaから生成する節として渡す（ADR 0019）。候補は出力境界で棄却せず、正規化して受理するか保留する（ADR 0018）。
 - contributor以上と管理者が意図して付与する権限はtrust境界の内側に置く。公開済み7件の再発見は配線と判定器の確認であり、未知の発見率を示さない。promptとscenarioに対象固有の関数名、option名、URL、画面名を入れない。
