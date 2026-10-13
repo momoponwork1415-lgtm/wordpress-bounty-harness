@@ -133,6 +133,74 @@ describe("Ledger public interface", () => {
     });
   });
 
+  it("reads a legacy discovery event with a continuation prompt digest", async () => {
+    const { ledger, artifactStore } = await fixture();
+    const proof = await evidence(artifactStore);
+    await ledger.append({
+      ...common("legacy-discovery-start"),
+      type: "discovery-run-started",
+      runId: "run-legacy",
+      labId: "lab-legacy",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "objective-v5",
+        assignmentUnit: "route",
+        continuationPromptDigest: revision,
+      },
+    });
+    await ledger.append({
+      ...common("legacy-discovery-finish"),
+      type: "discovery-run-finished",
+      runId: "run-legacy",
+      outcome: "completed",
+      costUsd: "unavailable",
+      wallTimeMs: 1,
+      continuation: {
+        mode: "thread-resume",
+        injected: true,
+        entriesHandedBack: 3,
+        remainingMinutes: 26.5,
+        reason: "coverage-incomplete",
+      },
+    });
+    await ledger.append({
+      ...common("legacy-finding"),
+      type: "finding-recorded",
+      findingId: "legacy-finding",
+      runId: "run-legacy",
+      category: "stored-xss",
+      continuationOrdinal: 1,
+    });
+    await ledger.append({
+      ...common("legacy-lead"),
+      type: "lead-recorded",
+      leadId: "legacy-lead",
+      runId: "run-legacy",
+      trialId: "trial-legacy",
+      missingEdge: "consumer",
+      primitive: "write",
+      storageKind: "option",
+      continuationOrdinal: 1,
+      artifacts: [{ kind: "lead", digest: proof }],
+    });
+    expect(ledger.read({ type: "discovery-run-started" })).toMatchObject([
+      {
+        event: {
+          configuration: { continuationPromptDigest: revision },
+        },
+      },
+    ]);
+    expect(ledger.read({ type: "discovery-run-finished" })).toMatchObject([
+      { event: { continuation: { mode: "thread-resume" } } },
+    ]);
+    expect(ledger.read({ type: "finding-recorded" })).toMatchObject([
+      { event: { continuationOrdinal: 1 } },
+    ]);
+    expect(ledger.read({ type: "lead-recorded" })).toMatchObject([
+      { event: { continuationOrdinal: 1 } },
+    ]);
+  });
+
   it("records versioned package documents while reading older verification events", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);
@@ -291,6 +359,48 @@ describe("Ledger public interface", () => {
         },
       },
     });
+  });
+
+  it("counts a parked Finding outside the Programme Boundary apart from raw and accepted (#185)", async () => {
+    const { ledger } = await fixture();
+    const snapshot = `sha256:${"a".repeat(64)}`;
+    const common = (identity: string) => ({
+      schemaVersion: 1 as const,
+      identity,
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-13T00:00:00Z",
+      artifacts: [],
+    });
+    await ledger.append({
+      ...common("normalized"),
+      type: "candidate-normalized",
+      runId: "run-1",
+      candidateKind: "finding",
+      candidateIndex: 0,
+      changes: [],
+    });
+    await ledger.append({
+      ...common("parked"),
+      type: "finding-parked",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "other",
+      reason: "outside-programme-boundary",
+    });
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      reached: 1,
+      accepted: 0,
+      held: 0,
+      parked: 1,
+      raw: 0,
+      verified: 0,
+    });
+    expect(ledger.funnel("campaign-1").byCategory["other"]).toMatchObject({
+      parked: 1,
+      raw: 0,
+    });
+    expect(ledger.read({ type: "finding-parked" })).toHaveLength(1);
   });
 
   it("counts accepted legacy candidates even when another index was rejected first", async () => {
@@ -790,6 +900,7 @@ describe("Ledger public interface", () => {
       reached: 4,
       accepted: 4,
       held: 0,
+      parked: 0,
       raw: 4,
       verified: 4,
       confirmed: 1,
@@ -807,6 +918,7 @@ describe("Ledger public interface", () => {
           reached: 4,
           accepted: 4,
           held: 0,
+          parked: 0,
           raw: 4,
           verified: 4,
           confirmed: 1,
@@ -828,6 +940,7 @@ describe("Ledger public interface", () => {
           reached: 0,
           accepted: 0,
           held: 0,
+          parked: 0,
           raw: 0,
           verified: 0,
           confirmed: 0,
@@ -869,6 +982,7 @@ describe("Ledger public interface", () => {
           reached: 2,
           accepted: 2,
           held: 0,
+          parked: 0,
           raw: 2,
           verified: 2,
           confirmed: 1,
@@ -884,6 +998,7 @@ describe("Ledger public interface", () => {
           reached: 2,
           accepted: 2,
           held: 0,
+          parked: 0,
           raw: 2,
           verified: 2,
           confirmed: 0,

@@ -62,7 +62,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       })
       .optional(),
     failureStage: z.enum(["provision", "seed", "probe"]).optional(),
-    reason: z.enum(["provision", "reachability"]).optional(),
+    reason: z.enum(["provision", "precondition", "reachability"]).optional(),
   }),
   event({
     type: z.literal("discovery-run-started"),
@@ -87,6 +87,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       promptDigest: digest.optional(),
       objectiveDigest: digest.optional(),
       contractDigest: digest.optional(),
+      /** Legacy Trial field; retained so append-only ledgers remain readable. */
+      continuationPromptDigest: digest.optional(),
       trustBoundaryVersion: id.optional(),
       sourcePack: z
         .strictObject({ dependency: z.enum(["mounted", "none"]) })
@@ -142,6 +144,16 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       .regex(/^[a-z0-9][a-z0-9:_-]{0,127}$/)
       .optional(),
     providerLimit: z.enum(["rate-limit", "quota"]).optional(),
+    /** Legacy within-Trial continuation receipt. */
+    continuation: z
+      .strictObject({
+        mode: z.literal("thread-resume"),
+        injected: z.boolean(),
+        entriesHandedBack: z.number().int().nonnegative(),
+        remainingMinutes: z.number().nonnegative(),
+        reason: z.enum(["coverage-incomplete", "report-unavailable"]),
+      })
+      .optional(),
     /** Lower-bound counts inferred from completed command events, not agent claims. */
     observed: z
       .strictObject({
@@ -248,12 +260,21 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     findingId: id,
     runId: id,
     category: id,
+    continuationOrdinal: z.number().int().nonnegative().optional(),
     historyRecordId: id.optional(),
     /** A fresh-snapshot hypothesis derived from an earlier Finding. */
     derivedFromFindingId: id.optional(),
     derivationKind: z
       .enum(["latest-version", "fixed-version-control"])
       .optional(),
+  }),
+  /** A Finding whose impact lies outside the Programme Boundary; kept, never verified (#185). */
+  event({
+    type: z.literal("finding-parked"),
+    findingId: id,
+    runId: id,
+    category: id,
+    reason: z.literal("outside-programme-boundary"),
   }),
   event({
     type: z.literal("lead-recorded"),
@@ -263,6 +284,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     missingEdge: id,
     primitive: id,
     storageKind: id,
+    continuationOrdinal: z.number().int().nonnegative().optional(),
   }),
   /** A schema-only child failure was reinterpreted from its immutable private rollout. */
   event({
@@ -378,6 +400,8 @@ export type FunnelCounts = {
   readonly reached: number;
   readonly accepted: number;
   readonly held: number;
+  /** Findings outside the Programme Boundary; not in accepted or raw (#185). */
+  readonly parked: number;
   readonly raw: number;
   readonly verified: number;
   readonly confirmed: number;
@@ -479,6 +503,7 @@ const querySchema = z.strictObject({
       "candidate-normalized",
       "candidate-held",
       "finding-recorded",
+      "finding-parked",
       "lead-recorded",
       "child-report-recovered",
       "discovery-report-recovered",
@@ -513,6 +538,7 @@ function emptyCounts(): Counts {
     reached: 0,
     accepted: 0,
     held: 0,
+    parked: 0,
     raw: 0,
     verified: 0,
     confirmed: 0,
@@ -962,6 +988,10 @@ export class Ledger {
       string,
       Extract<LedgerEventV1, { type: "finding-recorded" }>
     >();
+    const parkedFindings = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "finding-parked" }>
+    >();
     const verifications = new Map<
       string,
       Extract<LedgerEventV1, { type: "verification-finished" }>
@@ -1074,6 +1104,10 @@ export class Ledger {
             });
           if (!findings.has(current.findingId))
             findings.set(current.findingId, current);
+          break;
+        case "finding-parked":
+          if (!parkedFindings.has(current.findingId))
+            parkedFindings.set(current.findingId, current);
           break;
         case "lead-recorded":
           if (!normalizationSeen.has(`${current.runId}\0lead`))
@@ -1236,13 +1270,24 @@ export class Ledger {
       ])
         count.accepted++;
     }
+    for (const parked of parkedFindings.values()) {
+      for (const count of [
+        totals,
+        (byCategory[parked.category] ??= emptyCounts()),
+        objective(parked.runId),
+      ])
+        count.parked++;
+    }
     for (const counts of [
       totals,
       ...Object.values(byCategory),
       ...Object.values(byObjective),
     ]) {
-      // A normalized candidate may have no later admission or hold event.
-      counts.reached = Math.max(counts.reached, counts.accepted + counts.held);
+      // A normalized candidate may have no later admission, hold or parking event.
+      counts.reached = Math.max(
+        counts.reached,
+        counts.accepted + counts.held + counts.parked,
+      );
     }
     const classifiedReached = Object.values(byCategory).reduce(
       (sum, counts) => sum + counts.reached,

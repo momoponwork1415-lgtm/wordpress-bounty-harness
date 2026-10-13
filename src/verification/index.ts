@@ -262,7 +262,10 @@ export class Verification<
         .catch(() => null);
       if (provisioned === null || provisioned.status !== "ready")
         return incomplete(
-          "provision",
+          provisioned?.status === "incomplete" &&
+            provisioned.reason === "precondition"
+            ? "precondition"
+            : "provision",
           provisioned?.nextStep ?? "Provision a fresh Lab and repeat",
         );
       const lab = provisioned.handle;

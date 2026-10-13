@@ -47,6 +47,9 @@ export interface CampaignPipeline<
     readonly executor: DiscoveryOptions["executor"];
     readonly attachments: DiscoveryOptions["attachments"];
     readonly admitFinding: DiscoveryOptions["admitFinding"];
+    readonly isProgrammeImpact?: NonNullable<
+      DiscoveryOptions["isProgrammeImpact"]
+    >;
     readonly normalizeCandidate?: NonNullable<
       DiscoveryOptions["normalizeCandidate"]
     >;
@@ -242,7 +245,11 @@ export async function runCampaignPipeline<
           snapshotDigest: snapshot.digest,
           lab: "failed",
           runCount: 0,
-          stoppedBy: "setup-failed",
+          stoppedBy:
+            provisioned.status === "incomplete" &&
+            provisioned.reason === "precondition"
+              ? "incomplete(precondition)"
+              : "setup-failed",
           verifications: [],
         });
         continue;

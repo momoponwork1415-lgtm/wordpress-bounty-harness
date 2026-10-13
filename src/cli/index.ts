@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -168,6 +170,7 @@ const USAGE = [
   "  select --config <path>",
   "  campaign run <slug>|--all --campaign <id> --config <path> [--retry-incomplete]",
   "  review [--campaign <id>]",
+  "  review parked --campaign <id>",
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>]",
   "  review open --campaign <id> --finding <id> [--minutes <n>]",
   "  review reproduced --campaign <id> --finding <id> --result match|mismatch|unavailable [--minutes <n>]",
@@ -303,7 +306,7 @@ async function openState(
 }
 
 function stages(counts: FunnelCounts): string {
-  return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / reproduced ${counts.reproduced} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted} → outcome ${counts.outcome}`;
+  return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held} / parked ${counts.parked} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / reproduced ${counts.reproduced} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted} → outcome ${counts.outcome}`;
 }
 
 export function formatFunnel(funnel: CampaignFunnel): string[] {
@@ -649,6 +652,39 @@ export async function runCli(
           ),
         );
         return 0;
+      case "review parked": {
+        // Programme Boundary 外に置いた Finding の 1 行一覧。ラベル付けミスの安全網（#185）。
+        const campaignId = required(values.campaign, "campaign");
+        const parked = state.ledger.read({
+          campaignId,
+          type: "finding-parked",
+          limit: 1000,
+        });
+        if (parked.length === 0) print(["no parked findings"]);
+        for (const { event } of parked) {
+          if (event.type !== "finding-parked") continue;
+          const reference = event.artifacts.find(
+            (artifact) => artifact.kind === "finding",
+          );
+          let property = "(finding.json unavailable)";
+          if (reference !== undefined) {
+            const stored = await state.store.readFile(
+              reference.digest,
+              "finding.json",
+              1024 * 1024,
+            );
+            if (stored.status === "resolved") {
+              const parsedFinding = z
+                .object({ brokenProperty: z.string() })
+                .safeParse(JSON.parse(stored.bytes.toString("utf8")));
+              if (parsedFinding.success)
+                property = parsedFinding.data.brokenProperty;
+            }
+          }
+          print([`parked  ${event.category}  ${event.findingId}  ${property}`]);
+        }
+        return 0;
+      }
       case "review decide": {
         const review = environment.profile.review(state);
         const item = queued(review, values);

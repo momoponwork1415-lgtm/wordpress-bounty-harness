@@ -12,11 +12,17 @@ import {
 import { wordPressRevisitPolicySchema } from "./ledger-exclusions.js";
 
 const slugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
+const coreVersionSchema = z
+  .string()
+  .max(32)
+  .regex(/^[0-9]+(?:\.[0-9]+){1,3}$/);
 
 const commonSelectionPolicy = {
   kind: z.literal("wordpress-selection-policy"),
   schemaVersion: z.literal(1),
   id: z.string().min(1).max(128),
+  /** The core image version used when the selected plugin is provisioned. */
+  wordpressVersion: coreVersionSchema.optional(),
   promptVariant: z.string().min(1).max(128).optional(),
   revisitPolicy: wordPressRevisitPolicySchema.optional(),
   minimumActiveInstallations: z.number().int().nonnegative(),
@@ -25,21 +31,24 @@ const commonSelectionPolicy = {
   maximumTargets: z.number().int().positive(),
   excludedAuthors: z.array(z.string().min(1)),
   excludedSlugs: z.array(slugSchema),
-  surfaceTagWeights: z.record(z.string(), z.number().nonnegative()),
-  /** Public tags that suggest a High Threat surface (file operations, options, authentication). */
-  highThreatTags: z.array(z.string().min(1)),
+  /** Legacy (ADR 0032 Q5): tag weights are readable for old policies but no longer used by the current one. */
+  surfaceTagWeights: z.record(z.string(), z.number().nonnegative()).optional(),
+  /** Legacy (ADR 0032 Q5): High Threat tag lists are readable for old policies but no longer used by the current one. */
+  highThreatTags: z.array(z.string().min(1)).optional(),
   scoreWeights: z.strictObject({
     installations: z.number().nonnegative(),
     recency: z.number().nonnegative(),
-    surface: z.number().nonnegative(),
-    highThreat: z.number().nonnegative(),
+    surface: z.number().nonnegative().optional(),
+    highThreat: z.number().nonnegative().optional(),
     history: z.number().nonnegative().optional(),
   }),
-  /** Discovery runs per target: deeper where the expected reward is higher. */
-  runBudget: z.strictObject({
-    default: z.number().int().positive().max(40),
-    highThreat: z.number().int().positive().max(40),
-  }),
+  /** Legacy (ADR 0032 Q6): per-target run budgets were never effective in production; the campaign stop rule decides. */
+  runBudget: z
+    .strictObject({
+      default: z.number().int().positive().max(40),
+      highThreat: z.number().int().positive().max(40),
+    })
+    .optional(),
   /** Manual pin: select this version instead of the observed stable version. */
 } as const;
 
@@ -87,7 +96,7 @@ const automaticSelectionPolicy = z.strictObject({
   revisitPolicy: wordPressRevisitPolicySchema,
   maximumTargets: z.number().int().min(3).max(5),
   /** The core image version pinned when select freezes the chosen targets. */
-  wordpressVersion: z.string().min(1).max(32),
+  wordpressVersion: coreVersionSchema,
   candidateSource: z.strictObject({
     kind: z.literal("wordpress-org"),
     popularPages: z.number().int().min(1).max(5),
@@ -119,6 +128,8 @@ export type SelectionReason =
   | "excluded-author"
   | "excluded-slug"
   | "below-installation-threshold"
+  | "core-requirement-unavailable"
+  | "core-version-incompatible"
   | "programme-asset-out-of-scope"
   | "programme-stale"
   | "history-stale";
@@ -128,8 +139,10 @@ export interface WordPressTargetSelection extends TargetSelection {
   readonly activeInstallations: number;
   /** A public tag matched the policy's High Threat surface list. */
   readonly highThreatSurface: boolean;
-  /** Upper bound on discovery runs for this target; the campaign ceiling still applies. */
-  readonly runBudget: number;
+  /** Legacy upper bound on discovery runs; absent for policies written after ADR 0032. */
+  readonly runBudget?: number | undefined;
+  /** The WordPress.org tag listing that nominated this target (ADR 0032 Q3), absent for popular or manual nominations. */
+  readonly candidateTag?: string | undefined;
   /** The plugin's last update on WordPress.org, standing in for the stable version's release. */
   readonly versionPublishedAt?: string | undefined;
   readonly scoreBreakdown: {
@@ -157,7 +170,8 @@ export const wordPressTargetSelectionSchema: z.ZodType<WordPressTargetSelection>
     }),
     activeInstallations: z.number().int().nonnegative(),
     highThreatSurface: z.boolean(),
-    runBudget: z.number().int().positive().max(40),
+    runBudget: z.number().int().positive().max(40).optional(),
+    candidateTag: slugSchema.optional(),
     versionPublishedAt: z.iso.datetime({ offset: true }).optional(),
     scoreBreakdown: z.strictObject({
       installations: z.number().finite(),

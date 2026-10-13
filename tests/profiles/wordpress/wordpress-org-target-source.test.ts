@@ -151,6 +151,7 @@ Version: 2.4.1
                 slug: "example-security",
                 name: "Example Security",
                 version: "2.4.1",
+                requires: "6.8",
                 active_installs: 80_000,
                 last_updated: "2026-09-04T12:00:00Z",
                 author:
@@ -192,6 +193,7 @@ Version: 2.4.1
           officialSlug: "example-security",
           displayName: "Example Security",
           stableVersion: "2.4.1",
+          minimumWordPressVersion: "6.8",
           activeInstallations: 80_000,
           lastUpdated: "2026-09-04T12:00:00Z",
           author: "Independent Author",

@@ -17,7 +17,12 @@ const programmeRef = {
   digest: digest("a"),
 };
 
-function observation(slug: string, tags: string[], installations = 5000) {
+function observation(
+  slug: string,
+  tags: string[],
+  installations = 5000,
+  minimumWordPressVersion: string | null = "6.0",
+) {
   return {
     status: "observed" as const,
     observation: {
@@ -27,6 +32,7 @@ function observation(slug: string, tags: string[], installations = 5000) {
       officialSlug: slug,
       displayName: slug,
       stableVersion: "1.2.3",
+      ...(minimumWordPressVersion === null ? {} : { minimumWordPressVersion }),
       activeInstallations: installations,
       lastUpdated: "2026-09-01 12:00am GMT",
       observedAt: now,
@@ -160,9 +166,9 @@ describe("WordPress selection public interface", () => {
     expect(second[0]?.policy.digest).not.toBe(first[0]?.policy.digest);
   });
 
-  it("ships an automatic policy with the canonical 10000-install threshold and excludes out-of-scope authors", async () => {
+  it("ships an automatic policy with the 100000-install floor, data-derived tags and no tag weights (ADR 0032)", async () => {
     const policy = await loadWordPressSelectionPolicy();
-    expect(policy.minimumActiveInstallations).toBe(10_000);
+    expect(policy.minimumActiveInstallations).toBe(100_000);
     expect("candidateSource" in policy && policy.candidateSource.kind).toBe(
       "wordpress-org",
     );
@@ -175,9 +181,15 @@ describe("WordPress selection public interface", () => {
         "Yoast",
       ]),
     );
-    expect(policy.scoreWeights.highThreat).toBeGreaterThan(0);
+    expect(policy.scoreWeights.highThreat).toBeUndefined();
+    expect(policy.scoreWeights.surface).toBeUndefined();
+    expect(policy.highThreatTags).toBeUndefined();
+    expect(policy.surfaceTagWeights).toBeUndefined();
+    expect(policy.runBudget).toBeUndefined();
     if (!("candidateSource" in policy))
       throw new Error("Expected automatic policy");
+    expect(policy.candidateSource.tags.length).toBeGreaterThanOrEqual(6);
+    expect(policy.wordpressVersion).toBe("7.1.3");
     for (const maximumTargets of [2, 6])
       expect(
         wordPressSelectionPolicySchema.safeParse({
@@ -187,7 +199,33 @@ describe("WordPress selection public interface", () => {
       ).toBe(false);
   });
 
-  it("weights High Threat attack surfaces as their own score component", async () => {
+  it("omits run budgets and treats every surface alike when a policy carries no legacy weights", async () => {
+    const selection = harness({
+      observations: {
+        popular: observation("popular", [], 100_000),
+        files: observation("files", ["File Manager"], 1_000),
+      },
+    });
+    const { surfaceTagWeights, highThreatTags, runBudget, ...rest } =
+      basePolicy;
+    void surfaceTagWeights;
+    void highThreatTags;
+    void runBudget;
+    const plain = await selection.select({
+      ...rest,
+      candidateSlugs: ["popular", "files"],
+      scoreWeights: { installations: 10, recency: 0 },
+    });
+    expect(plain.map((item) => item.slug)).toEqual(["popular", "files"]);
+    for (const item of plain) {
+      expect(item.runBudget).toBeUndefined();
+      expect(item.highThreatSurface).toBe(false);
+      expect(item.scoreBreakdown.surface).toBe(0);
+      expect(item.scoreBreakdown.highThreat).toBe(0);
+    }
+  });
+
+  it("still honours legacy High Threat weights and run budgets for old policies", async () => {
     const selection = harness({
       observations: {
         popular: observation("popular", [], 100_000),
@@ -279,6 +317,61 @@ describe("WordPress selection public interface", () => {
     expect((await selection.select(policy)).map((item) => item.slug)).toEqual([
       "recent",
     ]);
+  });
+
+  it("excludes plugins whose minimum core exceeds the pinned version or is unknown", async () => {
+    const selection = harness({
+      observations: {
+        equal: observation("equal", [], 5000, "6.8.3"),
+        older: observation("older", [], 5000, "6.8"),
+        newer: observation("newer", [], 5000, "7.1"),
+        unknown: observation("unknown", [], 5000, null),
+      },
+    });
+    const policy = {
+      ...basePolicy,
+      candidateSlugs: ["equal", "older", "newer", "unknown"],
+      wordpressVersion: "6.8.3",
+    };
+    expect(
+      (await selection.inspect(policy)).map((item) => [
+        item.slug,
+        item.status,
+        item.reasons,
+      ]),
+    ).toEqual([
+      ["equal", "eligible", []],
+      ["older", "eligible", []],
+      ["newer", "ineligible", ["core-version-incompatible"]],
+      ["unknown", "ineligible", ["core-requirement-unavailable"]],
+    ]);
+    expect((await selection.select(policy)).map((item) => item.slug)).toEqual([
+      "equal",
+      "older",
+    ]);
+  });
+
+  it("does not apply the stable release's core requirement to a historical pin", async () => {
+    const selection = harness({
+      observations: {
+        legacy: observation("legacy", [], 5000, "7.1"),
+      },
+    });
+    const stablePolicy = {
+      ...basePolicy,
+      candidateSlugs: ["legacy"],
+      wordpressVersion: "6.8.3",
+    };
+    expect((await selection.inspect(stablePolicy))[0]).toMatchObject({
+      status: "ineligible",
+      reasons: ["core-version-incompatible"],
+    });
+
+    const historical = await selection.select({
+      ...stablePolicy,
+      pinnedVersions: { legacy: "1.0.0" },
+    });
+    expect(historical).toMatchObject([{ slug: "legacy", version: "1.0.0" }]);
   });
 
   it("never makes stale programme or target observations eligible", async () => {
