@@ -33,6 +33,7 @@ jobs:
         run: |
           set -eu
           test -f dist/profiles/wordpress/prompts/wp2shell-bounty-v3.md
+          test -f dist/profiles/wordpress/prompts/wp2shell-bounty-v4.md
           test -f dist/profiles/wordpress/policy/campaign.json
           test -f dist/profiles/wordpress/policy/selection.json
           node dist/cli/main.js 2>&1 | grep -q "host configuration is required"
@@ -86,7 +87,7 @@ jobs:
   adr-guard:
     # docs/adr/ と docs/SPEC.md、agent に渡る文章（prompt、skill、出力契約、victim 契約）、
     # および所有者が決めた方針そのもの（policy/、Programme Boundary の impact 分類）を変える PR は
-    # 所有者の owner-approved ラベルが要る（docs/DEVELOPMENT.md 第 5 節・第 6 節、ADR 0032）
+    # owner-approved ラベルが要る。2026-10-13 以降の委任は docs/DEVELOPMENT.md 第 5 節。
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -111,11 +112,11 @@ jobs:
             src/profiles/wordpress/discovery/programme-impacts.ts \
             src/profiles/wordpress/policy/ | wc -l)
           if [ "$adr" -gt 0 ] && ! has_label; then
-            echo "docs/adr/ または docs/SPEC.md に差分があります。所有者が owner-approved ラベルを付けるまで merge できません。"
+            echo "docs/adr/ または docs/SPEC.md に差分があります。owner-approved ラベルを付けるまで merge できません。"
             exit 1
           fi
           if [ "$text" -gt 0 ] && ! has_label; then
-            echo "agent に渡る文章（prompt、skill、出力契約、victim 契約）か所有者の方針（policy/、Programme Boundary）に差分があります。所有者が全文を読んで owner-approved ラベルを付けるまで merge できません。"
+            echo "agent に渡る文章（prompt、skill、出力契約、victim 契約）か所有者の方針（policy/、Programme Boundary）に差分があります。全文と出典対照表を確認して owner-approved ラベルを付けるまで merge できません。"
             exit 1
           fi
           echo "adr-guard: ok"

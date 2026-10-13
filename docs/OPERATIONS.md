@@ -1,6 +1,6 @@
 # 運用手引き（完成後に人間がすること）
 
-探索主経路は、対象ごとに `wp2shell-bounty-v3` のRoot＋最大3 subagentによる協調Trialを1回行う（[ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) のTrial構成、[ADR 0019](adr/0019-harness-generated-output-contract.md) の生成出力契約）。旧単独Trialと二段構えの記録は読めるが、新規探索には使わない。実機縦断の受入前に本番稼働したものとみなさない。
+探索主経路は、対象ごとに `wp2shell-bounty-v4` のRoot＋最大3 subagentによる協調Trialを1回行う（[ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) のTrial構成、[ADR 0019](adr/0019-harness-generated-output-contract.md) の生成出力契約）。旧単独Trialと二段構えの記録は読めるが、新規探索には使わない。実機縦断の受入前に本番稼働したものとみなさない。
 
 対象読者: このHarnessを一人で回す運用者。正本は [SPEC.md](SPEC.md)。
 
@@ -72,7 +72,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
 - tokenの更新はしない。preflightが「1時間以内に失効」を出したら、ホストで `codex login` をやり直す。
 - APIキー（`host-private-bearer`）の経路も残っている。
 
-`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v3` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
+`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v4` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
 
 ### 同じ plugin の追加探索 Trial の承認
 
@@ -92,7 +92,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。
 
-既定promptは `wp2shell-bounty-v3`、入口索引は固定source由来のカタログ入力として既定で有効。索引の全件処理は終了条件にしない。`wp2shell-bounty-v2` と `short-objective-managed-v4` は比較armとして残す。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
+既定promptは `wp2shell-bounty-v4`、入口索引は固定source由来のカタログ入力として既定で有効。索引の全件処理は終了条件にしない。`wp2shell-bounty-v3`、`wp2shell-bounty-v2` と `short-objective-managed-v4` は比較・履歴照合用に残す。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
 
 自動選定の campaign は初回起動時に `selection-batch-bound` を追記し、選定バッチと対象集合を固定する。再開時はこの記録のバッチを読み、途中で `select` を再実行しても新しいバッチに切り替えない。公開一覧の取得元・確認日時・available/stale/unavailable と失敗理由は Private Evidence の選定レポートに記録する。
 
