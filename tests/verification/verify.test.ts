@@ -663,9 +663,9 @@ describe("verification public interface", () => {
     expect(result.status).toBe("runtime-confirmed");
   });
 
-  it("returns incomplete recipe when no standard reproducer is configured", async () => {
+  it("returns incomplete no-judge when no runner exists", async () => {
     const { result, calls } = await fixture({ impact: "other" });
-    expect(result).toMatchObject({ status: "incomplete", reason: "recipe" });
+    expect(result).toMatchObject({ status: "incomplete", reason: "no-judge" });
     expect(calls).toEqual({ provision: 0, verifier: 0, teardown: 0 });
   });
 

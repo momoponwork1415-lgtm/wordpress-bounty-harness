@@ -23,6 +23,7 @@ import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree
 import { Review, type ScopeFactsProvider } from "../review/index.js";
 import type { Snapshot } from "../snapshot/index.js";
 import { Verification, type Verifier } from "../verification/index.js";
+import { WORDPRESS_VERIFIER_PROMPT_ID } from "../profiles/wordpress/prompts/index.js";
 import { parseWordPressAdvisories } from "../profiles/wordpress/advisory.js";
 import {
   parseWordPressAnswerKeys,
@@ -622,6 +623,7 @@ function verificationFor(
     judges: createWordPressJudges({ store: state.store, lab: boundaries.lab }),
     readFinding: readWordPressFinding,
     renderer: wordpressReproductionRenderer,
+    promptVersion: WORDPRESS_VERIFIER_PROMPT_ID,
     // Whole-site before / after diff around the Verifier run; review material, not proof (#186).
     stateObserver: createWordPressLabStateObserver({
       store: state.store,

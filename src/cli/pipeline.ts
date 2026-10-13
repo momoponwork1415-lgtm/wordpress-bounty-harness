@@ -10,7 +10,12 @@ import type {
   LabProvisioner,
   LabReachability,
 } from "../lab/index.js";
-import type { Ledger } from "../ledger/index.js";
+import type {
+  Ledger,
+  LedgerEventV1,
+  LedgerReadQuery,
+  LedgerRecord,
+} from "../ledger/index.js";
 import type { TargetSelection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
 import type {
@@ -64,6 +69,54 @@ export interface CampaignPipeline<
 }
 
 type SkipStage = "freeze" | "discovery" | "verification";
+type FinishedVerification = Extract<
+  LedgerEventV1,
+  { type: "verification-finished" }
+>;
+type IncompleteReason = Extract<
+  VerificationResultV1,
+  { status: "incomplete" }
+>["reason"];
+
+function readAll(
+  ledger: Ledger,
+  query: Omit<LedgerReadQuery, "limit" | "afterSequence">,
+): LedgerRecord[] {
+  const records: LedgerRecord[] = [];
+  let afterSequence = 0;
+  for (;;) {
+    const page = ledger.read({ ...query, afterSequence, limit: 1000 });
+    records.push(...page);
+    if (page.length < 1000) return records;
+    afterSequence = page[page.length - 1]!.sequence;
+  }
+}
+
+/** ADR 0022: counts include the attempt that produced the current reason. */
+export function shouldAutomaticallyRetryVerification(input: {
+  readonly reason: IncompleteReason;
+  readonly attemptsForReason: number;
+  readonly sameLabSetup: boolean;
+  /** null is a recorded default scenario; undefined means no scenario record. */
+  readonly previousScenarioId?: string | null | undefined;
+  readonly currentScenarioId?: string | null | undefined;
+}): boolean {
+  switch (input.reason) {
+    case "recipe":
+    case "observation":
+      return input.sameLabSetup && input.attemptsForReason < 3;
+    case "provision":
+      return input.sameLabSetup && input.attemptsForReason < 2;
+    case "precondition":
+      return (
+        input.previousScenarioId !== undefined &&
+        input.currentScenarioId !== undefined &&
+        input.previousScenarioId !== input.currentScenarioId
+      );
+    default:
+      return false;
+  }
+}
 
 export type CampaignSummary = {
   readonly campaignId: string;
@@ -114,6 +167,8 @@ export async function runCampaignPipeline<
   readonly maxConcurrentTargets?: number;
   /** An explicit operator retry after repairing the Verifier protocol. */
   readonly retryIncompleteVerifications?: boolean;
+  /** Disable ADR 0022 automatic retries to restore the prior single-attempt behavior. */
+  readonly automaticVerificationRetries?: boolean;
 }): Promise<CampaignSummary> {
   const { campaignId, ledger, pipeline, clock } = options;
   const at = () => clock().toISOString();
@@ -140,23 +195,21 @@ export async function runCampaignPipeline<
   };
 
   const selectedSnapshots = new Map<string, string>();
-  for (const { event } of ledger.read({
+  for (const { event } of readAll(ledger, {
     campaignId,
     type: "target-selected",
-    limit: 1000,
   }))
     if (event.type === "target-selected")
       selectedSnapshots.set(event.selectionId, event.snapshotDigest);
   const concludedSnapshots = new Set(
-    ledger
-      .read({ campaignId, type: "discovery-concluded", limit: 1000 })
-      .map(({ event }) => event.snapshotDigest),
+    readAll(ledger, { campaignId, type: "discovery-concluded" }).map(
+      ({ event }) => event.snapshotDigest,
+    ),
   );
   const findingsBySnapshot = new Map<string, string[]>();
-  for (const { event } of ledger.read({
+  for (const { event } of readAll(ledger, {
     campaignId,
     type: "finding-recorded",
-    limit: 1000,
   })) {
     if (event.type !== "finding-recorded") continue;
     const findings = findingsBySnapshot.get(event.snapshotDigest) ?? [];
@@ -164,10 +217,9 @@ export async function runCampaignPipeline<
     findingsBySnapshot.set(event.snapshotDigest, findings);
   }
   const latestVerification = new Map<string, VerificationResultV1["status"]>();
-  for (const { event } of ledger.read({
+  for (const { event } of readAll(ledger, {
     campaignId,
     type: "verification-finished",
-    limit: 1000,
   }))
     if (event.type === "verification-finished" && event.basis === undefined)
       latestVerification.set(
@@ -376,54 +428,135 @@ export async function runCampaignPipeline<
         return;
       }
       stage = "verification";
-      const latestOriginalVerification = new Map<
-        string,
-        { labSetupDigest: string; status: VerificationResultV1["status"] }
-      >();
-      for (const { event } of ledger.read({
+      const earlier = readAll(ledger, {
         campaignId,
         type: "verification-finished",
-        limit: 1000,
-      }))
-        if (
-          event.type === "verification-finished" &&
-          event.basis === undefined &&
-          event.snapshotDigest === snapshot.digest
-        )
-          latestOriginalVerification.set(event.findingId, {
-            labSetupDigest: event.labSetupDigest,
-            status: event.result.status,
-          });
+      });
+      const labs = readAll(ledger, { campaignId, type: "lab-provisioned" });
+      const scenarioFor = (previous: {
+        sequence: number;
+        event: FinishedVerification;
+      }): string | null | undefined => {
+        const verificationLab = labs.find(
+          ({ event }) =>
+            event.identity ===
+            `verification-lab-${previous.event.verificationId}`,
+        );
+        if (verificationLab?.event.type === "lab-provisioned")
+          return verificationLab.event.scenario?.id ?? null;
+        // A precondition can fail before a verification Lab exists. Its
+        // discovery Lab records the selected scenario before that attempt.
+        const discoveryLab = labs
+          .filter(
+            ({ sequence, event }) =>
+              sequence < previous.sequence &&
+              event.type === "lab-provisioned" &&
+              event.snapshotDigest === snapshot.digest &&
+              event.purpose === "discovery",
+          )
+          .at(-1);
+        return discoveryLab?.event.type === "lab-provisioned"
+          ? (discoveryLab.event.scenario?.id ?? null)
+          : undefined;
+      };
       const verifications: {
         findingId: string;
         status: VerificationResultV1["status"];
       }[] = [];
-      const findings = ledger
-        .read({ campaignId, type: "finding-recorded", limit: 1000 })
-        .filter(({ event }) => event.snapshotDigest === snapshot.digest);
+      const findings = readAll(ledger, {
+        campaignId,
+        type: "finding-recorded",
+      }).filter(({ event }) => event.snapshotDigest === snapshot.digest);
       for (const { event } of findings) {
-        // A changed Lab setup can repair an earlier incomplete precondition.
         if (event.type !== "finding-recorded") continue;
-        const previous = latestOriginalVerification.get(event.findingId);
-        if (
-          previous?.labSetupDigest === campaignInput.lab.setupDigest &&
-          (!options.retryIncompleteVerifications ||
-            previous.status !== "incomplete")
-        )
-          continue;
-        const result = await pipeline.verification.verify({
-          campaignId,
-          findingId: event.findingId,
-          verificationId: options.newId(),
-          snapshot,
-          setup,
-          campaignLabSetupDigest: campaignInput.lab.setupDigest,
-          reconstruction: pipeline.reconstructionFor(snapshot),
-        });
-        verifications.push({
-          findingId: event.findingId,
-          status: result.status,
-        });
+        const history = earlier.filter(
+          (
+            record,
+          ): record is { sequence: number; event: FinishedVerification } =>
+            record.event.type === "verification-finished" &&
+            record.event.basis === undefined &&
+            record.event.snapshotDigest === snapshot.digest &&
+            record.event.findingId === event.findingId,
+        );
+        const shouldRetry = (allowManualOverride: boolean): boolean => {
+          const previous = history.at(-1);
+          if (previous === undefined) return true;
+          if (previous.event.result.status !== "incomplete") return false;
+          if (options.automaticVerificationRetries === false)
+            return (
+              previous.event.labSetupDigest !== campaignInput.lab.setupDigest ||
+              options.retryIncompleteVerifications === true
+            );
+          if (
+            allowManualOverride &&
+            options.retryIncompleteVerifications === true
+          )
+            return true;
+          if (
+            previous.event.promptVersion === undefined ||
+            previous.event.promptVersion !== pipeline.verification.promptVersion
+          )
+            return false;
+          const reason = previous.event.result.reason;
+          const attemptsForReason = history.filter(({ event: prior }) => {
+            if (
+              prior.labSetupDigest !== campaignInput.lab.setupDigest ||
+              prior.promptVersion !== previous.event.promptVersion ||
+              prior.result.status !== "incomplete"
+            )
+              return false;
+            return prior.result.reason === reason;
+          }).length;
+          return shouldAutomaticallyRetryVerification({
+            reason,
+            attemptsForReason,
+            sameLabSetup:
+              previous.event.labSetupDigest === campaignInput.lab.setupDigest,
+            previousScenarioId: scenarioFor(previous),
+            currentScenarioId: handle?.scenario?.id ?? null,
+          });
+        };
+        if (!shouldRetry(true)) continue;
+        do {
+          const previous = history.at(-1)?.event;
+          const verificationId = options.newId();
+          const result = await pipeline.verification.verify({
+            campaignId,
+            findingId: event.findingId,
+            verificationId,
+            attempt: Math.max(history.length + 1, (previous?.attempt ?? 0) + 1),
+            ...(previous === undefined
+              ? {}
+              : { retryOf: previous.verificationId }),
+            snapshot,
+            setup,
+            campaignLabSetupDigest: campaignInput.lab.setupDigest,
+            reconstruction: pipeline.reconstructionFor(snapshot),
+          });
+          const recorded = readAll(ledger, {
+            campaignId,
+            findingId: event.findingId,
+            type: "verification-finished",
+          }).at(-1);
+          if (
+            recorded?.event.type !== "verification-finished" ||
+            recorded.event.verificationId !== verificationId
+          )
+            throw new Error("Verification result was not recorded");
+          history.push({ sequence: recorded.sequence, event: recorded.event });
+          verifications.push({
+            findingId: event.findingId,
+            status: result.status,
+          });
+          if (options.automaticVerificationRetries === false) break;
+          // The operator override applies to the first attempt only.
+          if (
+            result.status !== "incomplete" ||
+            result.reason === "precondition" ||
+            !shouldRetry(false)
+          )
+            break;
+        } while (true);
       }
       result.target = { ...summary, verifications };
       if (
