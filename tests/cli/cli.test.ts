@@ -115,6 +115,8 @@ async function harness(
     readonly labSeedThrows?: boolean;
     /** The first Finding lacks a runnable recipe until a new Lab scenario is selected. */
     readonly firstVerifierIncomplete?: boolean;
+    readonly verifierRecipeFailures?: number;
+    readonly verifierLabProvisionFailures?: number;
     readonly coreSource?: boolean;
     readonly databaseAccess?: "read-only" | "none";
   } = {},
@@ -419,6 +421,7 @@ async function harness(
   const labIdsDuringVerification: string[][] = [];
   let inFlight = 0;
   let maxInFlight = 0;
+  let verificationProvisionAttempts = 0;
   const boundaries: WordPressCampaignBoundaries = {
     selection,
     freeze: async (target) => {
@@ -434,15 +437,27 @@ async function harness(
         throw new Error("Synthetic Snapshot is absent");
       return snapshot;
     },
-    lab:
-      options.labSeedThrows === true
+    lab: {
+      ...lab,
+      ...(options.labSeedThrows === true
         ? {
-            ...lab,
             seedCanaries: async () => {
               throw new Error("Synthetic seed exception");
             },
           }
-        : lab,
+        : {}),
+      provision: async (...args: Parameters<typeof lab.provision>) => {
+        if (args[2]?.purpose === "verification") {
+          verificationProvisionAttempts++;
+          if (
+            verificationProvisionAttempts <=
+            (options.verifierLabProvisionFailures ?? 0)
+          )
+            throw new Error("Synthetic verification Lab provision failure");
+        }
+        return lab.provision(...args);
+      },
+    },
     sourceFor: async () => ({
       directory: sourceDirectory,
       tree,
@@ -578,10 +593,14 @@ async function harness(
             return id === undefined ? [] : [id];
           }),
         );
-        if (
-          ++verifierAttempts === 1 &&
-          options.firstVerifierIncomplete === true
-        )
+        const attempt = ++verifierAttempts;
+        if (attempt <= (options.verifierRecipeFailures ?? 0))
+          return {
+            status: "incomplete",
+            reason: "recipe",
+            nextStep: "Repeat the synthetic recipe",
+          };
+        if (attempt === 1 && options.firstVerifierIncomplete === true)
           return {
             status: "incomplete",
             reason: "precondition",
@@ -739,6 +758,7 @@ async function harness(
     profile: environment.profile,
     store: () => state.store,
     maxInFlight: () => maxInFlight,
+    verificationProvisionAttempts: () => verificationProvisionAttempts,
   };
 }
 
@@ -1212,6 +1232,182 @@ describe("harness CLI vertical slice", () => {
       failureStage: "probe",
       reason: "reachability",
     });
+  });
+
+  it("automatically retries a recipe twice with fresh Labs and keeps a manual override", async () => {
+    const { run, configPath, ledger, labIdsDuringVerification, live } =
+      await harness({ verifierRecipeFailures: 3 });
+    const args = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "retry-campaign",
+      "--config",
+      configPath,
+    ];
+    expect((await run(...args)).code).toBe(0);
+    const events = ledger()
+      .read({ campaignId: "retry-campaign", type: "verification-finished" })
+      .map(({ event }) => event)
+      .filter((event) => event.type === "verification-finished");
+    const first = events.filter(
+      (event) => event.findingId === events[0]?.findingId,
+    );
+    expect(first).toHaveLength(3);
+    const findingId = first[0]!.findingId;
+    expect(first.map((event) => event.result)).toEqual(
+      Array.from({ length: 3 }, () =>
+        expect.objectContaining({ status: "incomplete", reason: "recipe" }),
+      ),
+    );
+    expect(first.map((event) => event.attempt)).toEqual([1, 2, 3]);
+    expect(first.map((event) => event.promptVersion)).toEqual(
+      Array.from({ length: 3 }, () => "verifier-v7"),
+    );
+    expect(first.map((event) => event.retryOf)).toEqual([
+      undefined,
+      first[0]?.verificationId,
+      first[1]?.verificationId,
+    ]);
+    const verifierLabs = labIdsDuringVerification
+      .slice(0, 3)
+      .map((ids) => ids.at(-1));
+    expect(new Set(verifierLabs).size).toBe(3);
+    for (const [index, ids] of labIdsDuringVerification.slice(0, 3).entries()) {
+      expect(ids).toHaveLength(2); // Discovery Lab and one fresh verification Lab.
+      if (index > 0) expect(ids).not.toContain(verifierLabs[index - 1]);
+    }
+    expect(live.containers.size).toBe(0);
+    expect(live.networks.size).toBe(0);
+    expect(live.volumes.size).toBe(0);
+    expect((await run(...args)).code).toBe(0);
+    expect(
+      ledger().read({
+        campaignId: "retry-campaign",
+        findingId,
+        type: "verification-finished",
+      }),
+    ).toHaveLength(3);
+    expect((await run(...args, "--retry-incomplete")).code).toBe(0);
+    expect(
+      ledger()
+        .read({
+          campaignId: "retry-campaign",
+          findingId,
+          type: "verification-finished",
+        })
+        .at(-1)?.event,
+    ).toMatchObject({
+      attempt: 4,
+      retryOf: first[2]?.verificationId,
+    });
+  });
+
+  it("bounds verification Lab provision failures to two attempts", async () => {
+    const { run, configPath, ledger, verificationProvisionAttempts } =
+      await harness({ verifierLabProvisionFailures: 2 });
+    const args = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "provision-retry",
+      "--config",
+      configPath,
+    ];
+    expect((await run(...args)).code).toBe(0);
+    const events = ledger()
+      .read({ campaignId: "provision-retry", type: "verification-finished" })
+      .map(({ event }) => event)
+      .filter((event) => event.type === "verification-finished");
+    const first = events.filter(
+      (event) => event.findingId === events[0]?.findingId,
+    );
+    expect(first.map((event) => event.attempt)).toEqual([1, 2]);
+    expect(first.map((event) => event.result)).toEqual([
+      expect.objectContaining({ status: "incomplete", reason: "provision" }),
+      expect.objectContaining({ status: "incomplete", reason: "provision" }),
+    ]);
+    expect(first[1]?.retryOf).toBe(first[0]?.verificationId);
+    expect(verificationProvisionAttempts()).toBe(events.length);
+  });
+
+  it("retries a precondition only after a default Lab changes to a named scenario", async () => {
+    const { run, configPath, ledger } = await harness({
+      firstVerifierIncomplete: true,
+    });
+    const args = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "scenario-retry",
+      "--config",
+      configPath,
+    ];
+    expect((await run(...args)).code).toBe(0);
+    const first = ledger()
+      .read({ campaignId: "scenario-retry", type: "verification-finished" })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "verification-finished" &&
+          event.result.status === "incomplete" &&
+          event.result.reason === "precondition",
+      );
+    expect(first).toMatchObject({
+      attempt: 1,
+      result: { status: "incomplete", reason: "precondition" },
+    });
+    if (first?.type !== "verification-finished") return;
+    expect((await run(...args)).code).toBe(0);
+    expect(
+      ledger().read({
+        campaignId: "scenario-retry",
+        findingId: first.findingId,
+        type: "verification-finished",
+      }),
+    ).toHaveLength(1);
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      lab: Record<string, unknown>;
+    };
+    config.lab.scenarioId = "private-page-v1";
+    await writeFile(configPath, JSON.stringify(config));
+    expect((await run(...args)).code).toBe(0);
+    const after = ledger()
+      .read({
+        campaignId: "scenario-retry",
+        findingId: first.findingId,
+        type: "verification-finished",
+      })
+      .map(({ event }) => event);
+    expect(after).toHaveLength(2);
+    expect(after[1]).toMatchObject({
+      attempt: 2,
+      retryOf: first.verificationId,
+      result: { status: "runtime-confirmed" },
+    });
+    const labsBefore = ledger().read({
+      campaignId: "scenario-retry",
+      type: "lab-provisioned",
+    }).length;
+    config.lab.scenarioId = "approved-comment-v1";
+    await writeFile(configPath, JSON.stringify(config));
+    expect((await run(...args)).code).toBe(0);
+    expect(
+      ledger().read({ campaignId: "scenario-retry", type: "lab-provisioned" })
+        .length,
+    ).toBeGreaterThan(labsBefore);
+    expect(
+      ledger()
+        .read({
+          campaignId: "scenario-retry",
+          findingId: first.findingId,
+          type: "verification-finished",
+        })
+        .map(({ event }) => event),
+    ).toEqual(after);
   });
 
   it("runs a pinned campaign end to end and exposes review, funnel and location-overlap", async () => {

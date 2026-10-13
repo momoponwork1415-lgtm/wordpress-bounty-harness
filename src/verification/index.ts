@@ -312,7 +312,7 @@ export class Verification<
       const judge = this.#options.judges.for(finding);
       if (judge === null && this.#options.judges.reproducer === undefined)
         return incomplete(
-          "recipe",
+          "no-judge",
           "No standard reproduction runner is configured for this impact",
         );
       const provisioned = await this.#options.lab
@@ -711,7 +711,7 @@ export class Verification<
     const reproducer = this.#options.judges.reproducer;
     if (reproducer === undefined)
       return incomplete(
-        "recipe",
+        "no-judge",
         "No standard reproduction runner is configured",
       );
     let observation: ReproducerObservation;
