@@ -342,6 +342,33 @@ function isRootRollout(raw: string, threadId: string): boolean {
   return false;
 }
 
+/** Keep provider refusal details typed without copying private error text to the ledger. */
+function providerPolicyDetail(result: CodexSandboxResult): string | undefined {
+  if (result.status === "exited" && result.exitCode === 0) return undefined;
+  const threadId = rootThreadId(result.stdout);
+  const rollout = result.rollouts?.find(
+    (raw) => threadId !== undefined && isRootRollout(raw, threadId),
+  );
+  if (rollout === undefined) return undefined;
+  let lastTaskCode: string | undefined;
+  for (const line of rollout.split("\n")) {
+    try {
+      const event = object(JSON.parse(line) as unknown);
+      const payload = object(event?.payload);
+      if (event?.type !== "event_msg" || payload?.type !== "task_complete")
+        continue;
+      const error = object(payload.error);
+      lastTaskCode =
+        error?.codex_error_info === "cyber_policy"
+          ? "provider-cyber-policy"
+          : undefined;
+    } catch {
+      // An unrelated malformed rollout line cannot create a policy verdict.
+    }
+  }
+  return lastTaskCode;
+}
+
 /** The Root's immutable rollout identifies the parent of archived child reports. */
 export function rootThreadIdFromRollout(raw: string): string {
   const ids = new Set<string>();
@@ -1478,6 +1505,16 @@ export class CodexNativeAgentRuntime {
         grantReceiptDigest,
         undefined,
         "broker-request-bytes-cap",
+      );
+    const policyDetail = providerPolicyDetail(result);
+    if (policyDetail !== undefined)
+      return incompleteExecution(
+        state,
+        "provider",
+        result.completedAt,
+        grantReceiptDigest,
+        undefined,
+        policyDetail,
       );
     if (decoded === undefined || "reasonDetail" in decoded) {
       const limit = providerLimitOf(result.stdout);
