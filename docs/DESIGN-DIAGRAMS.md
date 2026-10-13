@@ -18,7 +18,7 @@ flowchart LR
   SN --> DISC
   LAB --> DISC
   subgraph DISC["discovery（協調 Trial 1 回・wall 60 分）"]
-    R["Root（wp2shell-bounty-v3）"] --- C1["子 1"]
+    R["Root（wp2shell-bounty-v3）<br/>wave を繰り返し、2 wave 続けて新しい仮説・証拠が出なければ報告"] --- C1["子 1"]
     R --- C2["子 2"]
     R --- C3["子 3"]
   end
