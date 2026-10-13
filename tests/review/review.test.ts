@@ -528,7 +528,7 @@ async function queueFixture() {
 }
 
 describe("review queue and decisions", () => {
-  it("lists evidence-backed items while keeping a first observation failure in retry counts", async () => {
+  it("lists evidence-backed and pending incomplete items", async () => {
     const { review } = await queueFixture();
     const queue = review.queue({ campaignId: "campaign-1" });
     expect(queue.contradicted).toBe(1);
@@ -546,10 +546,15 @@ describe("review queue and decisions", () => {
         reproductionPackageDigest: expect.stringMatching(/^sha256:/),
         decision: null,
       }),
+      expect.objectContaining({
+        status: "incomplete",
+        reason: "observation",
+        ref: expect.objectContaining({ findingId: "finding-2" }),
+      }),
     ]);
   });
 
-  it("shows exhausted observation failures only as a reason count", async () => {
+  it("lists exhausted observation failures for human review", async () => {
     const { review, ledger } = await queueFixture();
     for (const attempt of [2, 3])
       await ledger.append({
@@ -571,8 +576,79 @@ describe("review queue and decisions", () => {
     const queue = review.queue({ campaignId: ref.campaignId });
     expect(queue.incompleteByReason).toEqual({ observation: 1 });
     expect(queue.retryPendingByReason).toEqual({});
-    expect(queue.items.some((item) => item.ref.findingId === "finding-2")).toBe(
-      false,
+    expect(queue.items).toContainEqual(
+      expect.objectContaining({
+        status: "incomplete",
+        reason: "observation",
+        ref: expect.objectContaining({ findingId: "finding-2" }),
+      }),
+    );
+  });
+
+  it.each([
+    { reason: "recipe", additional: 3 },
+    { reason: "provision", additional: 2 },
+    { reason: "no-judge", additional: 1 },
+    { reason: "provider", additional: 1 },
+    { reason: "sandbox", additional: 1 },
+  ] as const)(
+    "lists $reason after its retry budget",
+    async ({ reason, additional }) => {
+      const { review, ledger } = await queueFixture();
+      const first = ledger.read({
+        findingId: "finding-2",
+        type: "verification-finished",
+      })[0]?.event;
+      if (first?.type !== "verification-finished") throw new Error("missing");
+      for (let attempt = 1; attempt <= additional; attempt++)
+        await ledger.append({
+          ...first,
+          identity: `${reason}-${attempt}`,
+          verificationId: `${reason}-${attempt}`,
+          result: { status: "incomplete", reason, nextStep: "Retry" },
+        });
+      const queue = review.queue({ campaignId: ref.campaignId });
+      expect(queue.incompleteByReason).toEqual({ [reason]: 1 });
+      expect(queue.retryPendingByReason).toEqual({});
+      expect(queue.items).toContainEqual(
+        expect.objectContaining({ status: "incomplete", reason }),
+      );
+    },
+  );
+
+  it("keeps separate reason and Lab Setup retry budgets", async () => {
+    const { review, ledger } = await queueFixture();
+    const first = ledger.read({
+      findingId: "finding-2",
+      type: "verification-finished",
+    })[0]?.event;
+    if (first?.type !== "verification-finished") throw new Error("missing");
+    for (const [name, reason, setup] of [
+      ["recipe-1", "recipe", labSetup],
+      ["recipe-2", "recipe", labSetup],
+      ["recipe-new-lab", "recipe", `sha256:${"c".repeat(64)}`],
+    ] as const) {
+      await ledger.append({
+        ...first,
+        identity: name,
+        verificationId: name,
+        labSetupDigest: setup,
+        result: { status: "incomplete", reason, nextStep: "Retry" },
+      });
+      if (name === "recipe-2")
+        expect(
+          review.queue({ campaignId: ref.campaignId }).retryPendingByReason,
+        ).toEqual({ recipe: 1 });
+    }
+    const queue = review.queue({ campaignId: ref.campaignId });
+    expect(queue.incompleteByReason).toEqual({});
+    expect(queue.retryPendingByReason).toEqual({ recipe: 1 });
+    expect(queue.items).toContainEqual(
+      expect.objectContaining({
+        status: "incomplete",
+        reason: "recipe",
+        ref: expect.objectContaining({ verificationId: "recipe-new-lab" }),
+      }),
     );
   });
 
@@ -612,8 +688,12 @@ describe("review queue and decisions", () => {
         ref: expect.objectContaining({ findingId: "finding-2" }),
       }),
     );
-    expect(queue.items.some((item) => item.ref.findingId === "finding-4")).toBe(
-      false,
+    expect(queue.items).toContainEqual(
+      expect.objectContaining({
+        status: "incomplete",
+        reason: "precondition",
+        ref: expect.objectContaining({ findingId: "finding-4" }),
+      }),
     );
   });
 

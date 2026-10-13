@@ -20,6 +20,7 @@ import {
   type WordPressFinding,
 } from "../../../src/profiles/wordpress/discovery/finding.js";
 import type { WordPressLabHandle } from "../../../src/profiles/wordpress/lab/index.js";
+import { loadWordPressVerifierPrompt } from "../../../src/profiles/wordpress/prompts/index.js";
 import { CodexVerifier } from "../../../src/profiles/wordpress/verification/codex-verifier.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
@@ -803,7 +804,7 @@ describe("CodexVerifier.attempt", () => {
     }
   });
 
-  it("passes only low-privilege credentials and starts a fresh run each time", async () => {
+  it("passes only low-privilege credentials and starts a fresh v7 run in each Lab", async () => {
     const report = {
       "http.json": JSON.stringify({
         exchanges: [{ request: {}, response: { body: "ordinary" } }],
@@ -811,6 +812,7 @@ describe("CodexVerifier.attempt", () => {
       "steps.md": "Step",
     };
     const f = await fixture([report, report]);
+    const retryLab = { ...f.lab, id: "lab-2" };
     await f.verifier.attempt({
       campaignId: "campaign-1",
       finding: f.finding,
@@ -819,11 +821,18 @@ describe("CodexVerifier.attempt", () => {
     await f.verifier.attempt({
       campaignId: "campaign-1",
       finding: f.finding,
-      lab: f.lab,
+      lab: retryLab,
     });
+    expect(retryLab.id).not.toBe(f.lab.id);
+    const fixed = await loadWordPressVerifierPrompt();
+    expect(fixed.id).toBe("verifier-v7");
     expect(f.runs).toHaveLength(2);
     expect(f.runs[0]?.runId).not.toBe(f.runs[1]?.runId);
     for (const run of f.runs) {
+      expect(run.campaignInput.promptDigest).toBe(fixed.digest);
+      expect(run.prompt.startsWith(fixed.text.trim())).toBe(true);
+      expect(run.targetSnapshotDigest).toBe(f.finding.snapshotDigest);
+      expect(run.campaignInput.lab.setupDigest).toBe(f.lab.setupDigest);
       expect(run.prompt).toContain("subscriber-secret");
       expect(run.prompt).toContain("sensitive-object-access");
       expect(run.prompt).toContain("labObservations");
@@ -836,6 +845,16 @@ describe("CodexVerifier.attempt", () => {
       expect(run.sourceDirectory).toBe("/private/synthetic-source");
       expect(run.outputKind).toBe("verification");
     }
+    const receipts = f.ledger
+      .read({ type: "verifier-run-finished" })
+      .map(({ event }) => {
+        if (event.type !== "verifier-run-finished")
+          throw new Error("Missing receipt");
+        expect(event.promptDigest).toBe(fixed.digest);
+        return event.receiptDigest;
+      });
+    expect(receipts).toHaveLength(2);
+    expect(new Set(receipts).size).toBe(2);
     const accounts: WordPressLabHandle["attackerAccounts"] = {
       subscriber: { username: "subscriber", password: "secret" },
       // @ts-expect-error Elevated account credentials are not part of the Lab handle contract.

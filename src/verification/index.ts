@@ -432,18 +432,24 @@ export class Verification<
     if (appended.status === "conflict")
       throw new Error("Verification identity conflict");
     // The ledger may downgrade the result (digest or evidence); report what it kept.
-    const recorded = this.#options.ledger
-      .read({
+    let afterSequence = 0;
+    let recorded: ReturnType<Ledger["read"]>[number] | undefined;
+    while (recorded === undefined) {
+      const page = this.#options.ledger.read({
         campaignId,
         findingId,
         type: "verification-finished",
+        afterSequence,
         limit: 1000,
-      })
-      .find(
+      });
+      recorded = page.find(
         ({ event }) =>
           event.type === "verification-finished" &&
           event.verificationId === verificationId,
       );
+      if (page.length < 1000) break;
+      afterSequence = page.at(-1)!.sequence;
+    }
     if (recorded?.event.type !== "verification-finished")
       throw new Error("Verification was not recorded");
     return recorded.event.result;
