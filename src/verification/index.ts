@@ -205,6 +205,8 @@ export type VerificationOptions<
   /** Profile parser for the private Finding record. */
   readonly readFinding: (value: unknown) => Finding;
   readonly renderer: ReproductionRenderer<Reconstruction>;
+  /** Opaque, immutable Verifier instruction version for retry compatibility. */
+  readonly promptVersion?: string;
   /** Optional before / after Lab state diff; absent, the event carries no diff field. */
   readonly stateObserver?: LabStateObserver<Handle>;
   readonly clock?: () => Date;
@@ -216,6 +218,7 @@ export class Verification<
   Handle extends LabHandle,
   Reconstruction,
 > {
+  readonly promptVersion: string | undefined;
   readonly #options: VerificationOptions<
     Finding,
     Setup,
@@ -227,6 +230,10 @@ export class Verification<
     options: VerificationOptions<Finding, Setup, Handle, Reconstruction>,
   ) {
     this.#options = options;
+    this.promptVersion =
+      options.promptVersion === undefined
+        ? undefined
+        : id.parse(options.promptVersion);
   }
 
   /** Failures stay incomplete; judges alone confirm, while captured scripts may reproduce. */
@@ -234,6 +241,10 @@ export class Verification<
     readonly campaignId: string;
     readonly findingId: string;
     readonly verificationId: string;
+    /** One-based attempt number recorded with the verdict; absent for older callers. */
+    readonly attempt?: number;
+    /** Verification ID immediately preceding this attempt. */
+    readonly retryOf?: string;
     readonly snapshot: { readonly digest: string };
     /** Marks a version comparison; the Finding still belongs to this snapshot. */
     readonly basis?: {
@@ -248,6 +259,12 @@ export class Verification<
     const campaignId = id.parse(input.campaignId);
     const findingId = id.parse(input.findingId);
     const verificationId = id.parse(input.verificationId);
+    const attempt =
+      input.attempt === undefined
+        ? undefined
+        : z.number().int().positive().parse(input.attempt);
+    const retryOf =
+      input.retryOf === undefined ? undefined : id.parse(input.retryOf);
     const snapshotDigest = digest.parse(input.snapshot.digest);
     let labSetupDigest = digest.parse(input.campaignLabSetupDigest);
     let evidenceCapture: "harness-captured" | "agent-authored" | undefined;
@@ -377,6 +394,11 @@ export class Verification<
       verificationId,
       findingId,
       labSetupDigest,
+      ...(attempt === undefined ? {} : { attempt }),
+      ...(retryOf === undefined ? {} : { retryOf }),
+      ...(this.promptVersion === undefined
+        ? {}
+        : { promptVersion: this.promptVersion }),
       ...(input.basis === undefined
         ? {}
         : {
