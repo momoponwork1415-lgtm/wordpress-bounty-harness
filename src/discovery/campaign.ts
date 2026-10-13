@@ -292,6 +292,8 @@ export async function runDiscoveryCampaign(options: {
       reportArtifactDigest: string;
     },
   ) => AdmittedFinding;
+  /** Programme Boundary 外の impact を `finding-parked` に落とす（#185）。 */
+  readonly isProgrammeImpact?: (impact: string) => boolean;
   readonly normalizeCandidate?: (candidate: unknown) => {
     value: unknown;
     changes: { path: string; operation: string }[];

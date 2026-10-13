@@ -48,6 +48,7 @@ import {
   readWordPressFinding,
   type WordPressFinding,
 } from "../profiles/wordpress/discovery/finding.js";
+import { isWordPressProgrammeImpact } from "../profiles/wordpress/discovery/programme-impacts.js";
 import {
   normalizeWordPressCandidate,
   classifyWordPressCandidate,
@@ -866,6 +867,7 @@ async function planWordPressDiscovery(
     executor: boundaries.executor,
     attachments: boundaries.attachments,
     admitFinding: admitWordPressFinding,
+    isProgrammeImpact: isWordPressProgrammeImpact,
     normalizeCandidate: normalizeWordPressCandidate,
     classifyCandidate: classifyWordPressCandidate,
     admitLead: admitWordPressLead,

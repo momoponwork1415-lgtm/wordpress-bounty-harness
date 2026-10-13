@@ -8,6 +8,7 @@ import { nativeRunReceiptSchema } from "../../../discovery/native-run-receipts.j
 import type { ProviderAttachmentStore } from "../../../discovery/provider-research-report.js";
 import { admitWordPressFinding } from "./finding.js";
 import { admitWordPressLead } from "./lead.js";
+import { isWordPressProgrammeImpact } from "./programme-impacts.js";
 import {
   classifyWordPressCandidate,
   normalizeWordPressCandidate,
@@ -249,15 +250,26 @@ export async function reacceptWordPressRun(options: {
           const findingDigest = await evidence.putFiles({
             "finding.json": canonicalJson(finding),
           });
-          const result = await ledger.append({
-            ...base,
-            identity: `discovery-finding-${finding.findingId}`,
-            type: "finding-recorded",
-            runId,
-            findingId: finding.findingId,
-            category: finding.impact,
-            artifacts: [{ kind: "finding", digest: findingDigest }],
-          });
+          const result = isWordPressProgrammeImpact(finding.impact)
+            ? await ledger.append({
+                ...base,
+                identity: `discovery-finding-${finding.findingId}`,
+                type: "finding-recorded",
+                runId,
+                findingId: finding.findingId,
+                category: finding.impact,
+                artifacts: [{ kind: "finding", digest: findingDigest }],
+              })
+            : await ledger.append({
+                ...base,
+                identity: `discovery-finding-parked-${finding.findingId}`,
+                type: "finding-parked",
+                runId,
+                findingId: finding.findingId,
+                category: finding.impact,
+                reason: "outside-programme-boundary",
+                artifacts: [{ kind: "finding", digest: findingDigest }],
+              });
           if (result.status === "conflict")
             throw new Error("Finding identity conflict");
           recordedFindings.add(finding.findingId);
