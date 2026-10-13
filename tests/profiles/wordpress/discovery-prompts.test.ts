@@ -237,6 +237,7 @@ describe("WordPress discovery prompt assets", () => {
   it("makes Critical and High examples the v4 objective without making an impact label a verdict", async () => {
     const archived = await loadWordPressDiscoveryAsset("wp2shell-bounty-v3");
     const current = await loadWordPressDiscoveryAsset("wp2shell-bounty-v4");
+    expect(Buffer.byteLength(current.text, "utf8")).toBeLessThan(4_000);
     expect(archived.digest).toBe(
       "sha256:a97b4b3c1101470cec743dd51af1d2169f15d4d5ee1a2797997be05edef72c9b",
     );
