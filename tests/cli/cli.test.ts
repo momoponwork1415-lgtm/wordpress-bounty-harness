@@ -25,6 +25,7 @@ import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acqu
 import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
+  wordPressDiscoveryOutputContractV3,
 } from "../../src/profiles/wordpress/discovery/output-contract.js";
 import { buildWordPressSourceIndex } from "../../src/profiles/wordpress/discovery/storage-index.js";
 import {
@@ -1017,7 +1018,9 @@ describe("harness CLI vertical slice", () => {
       const contract =
         promptId === "short-objective-managed-v5"
           ? wordPressDiscoveryOutputContract()
-          : wordPressDiscoveryOutputContractV2();
+          : promptId === "wp2shell-bounty-v4"
+            ? wordPressDiscoveryOutputContractV3()
+            : wordPressDiscoveryOutputContractV2();
       expect(prompts[0]).toContain(objective.text.trim());
       expect(prompts[0]).toContain(contract.text);
       expect(prompts[0]?.split(contract.text)).toHaveLength(2);

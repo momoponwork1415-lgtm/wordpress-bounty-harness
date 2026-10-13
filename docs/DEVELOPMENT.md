@@ -12,7 +12,7 @@
 
 | Step | 内容 | 完了条件・引き金 |
 | --- | --- | --- |
-| 1 | 選定 → Snapshot → Lab → 探索 → 検証の自律ループ。scope 内 Finding を全件人間に届ける。人間レビュー・報告書・重複照合は skill（ADR 0031） | ループが quota 1 週分を人手介入 0 で回り切る。Programme Boundary 内の Finding が全件 `review export` に届く。所有者が skill で 1 回のレビュー batch を完了し所要時間を記録する。期日 2026-10-24 |
+| 1 | 選定 → Snapshot → Lab → 探索 → 検証の自律ループ。scope 内で所有者が明示的に低価値とした効果を除き、Finding を人間に届ける。人間レビュー・報告書・重複照合は skill（ADR 0031） | ループが quota 1 週分を人手介入 0 で回り切る。Programme Boundary 内で優先度 gate を通過した Finding が全件 `review export` に届く。parked は検証・通常レビューへ流れない。所有者が skill で 1 回のレビュー batch を完了し所要時間を記録する。期日 2026-10-24 |
 | 2 | レビュー側と検証側の作り込み | 週のレビュー batch が 6 時間超、または scope 内候補が週 15 件超。同じ手動作業を 3 回したら、その種類だけ道具化 |
 | 3 | 候補: Claude 系 runtime、Patchstack、報告書の自動化 | Step 2 の後。[PARKING.md](PARKING.md) |
 

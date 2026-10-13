@@ -294,6 +294,8 @@ export async function runDiscoveryCampaign(options: {
   ) => AdmittedFinding;
   /** Programme Boundary 外の impact を `finding-parked` に落とす（#185）。 */
   readonly isProgrammeImpact?: (impact: string) => boolean;
+  /** Profile-owned pre-verification priority gate; uncertain claims remain admitted. */
+  readonly parkFinding?: (finding: AdmittedFinding) => boolean;
   readonly normalizeCandidate?: (candidate: unknown) => {
     value: unknown;
     changes: { path: string; operation: string }[];

@@ -69,7 +69,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
 - tokenの更新はしない。preflightが「1時間以内に失効」を出したら、ホストで `codex login` をやり直す。
 - APIキー（`host-private-bearer`）の経路も残っている。
 
-`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v4` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
+`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v4` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。Programme Boundary 外と、所有者が明示した軽微な効果だけの Finding は `finding-parked` に残し、Verifierと通常レビューには送らない。分類が欠ける・混在する・重大な効果を主張する Finding は従来どおり別コンテナの Verifier と判定器を通り、判定結果にかかわらず人間レビューへ進む。parked は `review parked --campaign <id>` で監査できる。
 
 固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。
 

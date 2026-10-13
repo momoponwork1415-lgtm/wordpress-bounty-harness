@@ -290,7 +290,10 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     findingId: id,
     runId: id,
     category: id,
-    reason: z.literal("outside-programme-boundary"),
+    reason: z.enum([
+      "outside-programme-boundary",
+      "below-owner-impact-threshold",
+    ]),
   }),
   event({
     type: z.literal("lead-recorded"),

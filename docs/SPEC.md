@@ -149,7 +149,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | --- | --- | --- |
 | `selection` | 対象外資産（作者、配布停止、ベンダー側service）を落とす。install下限は[選定方針 JSON](../src/profiles/wordpress/policy/selection.json)を正本とし、プログラムの報奨対象下限は別のscope規則として記録する。公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030） | 機械的。方針と除外理由を残す |
 | `lab` | discoveryとverifierに渡す認証情報を未認証・subscriber・customer（WooCommerce有効時）に限る。contributor以上と管理者の認証情報は渡さない。設定は既定のまま、一般的な利用範囲の初期データ（公開フォーム1つ等）はprofileのsetup manifestで入れ、Lab Setup digestに記録する | 機械的。contributor以上の経路は試せない。設定変更もできない |
-| `discovery` | 版・digest付きのv4目的promptは上記の重大な効果を重視する。trust境界宣言でcontributor以上と管理者の明示設定を信頼側に置き、Finding / Leadの分類契約はHarnessがschemaから生成する | 誘導。低価値候補が出なくなる保証はなく、台帳で分類される |
+| `discovery` | 版・digest付きのv4目的promptは上記の重大な効果を重視する。trust境界宣言でcontributor以上と管理者の明示設定を信頼側に置き、Finding / Leadの分類契約はHarnessがschemaから生成する。受理した具体的な低価値効果だけを `finding-parked` に置く | 目的文は誘導。効果分類は候補の主張に基づくため、混合・不明は保留せず通常経路へ送る |
 | `verification` と `review` | 判定器の成功条件をプログラムの受理条件に合わせる（下表）。scope評価はFindingと判定器の観測だけから、方針ファイルの規則で `in-scope` / `out` / `ambiguous` を出す。agentの自己申告は使わない | 機械的。提出候補にならない |
 
 影響の共通分類（両プログラムの受理条件を1つの語彙にしたもの。判定器とscope評価が共有する）:
@@ -170,7 +170,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `csrf-to-write` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（連鎖が条件）だが出さない |
 | `missing-authz` / `idor`（到達先なし） | 判定器を作らない。到達先がある場合はその分類で判定する | 対象外 | 機微な対象以外は対象外 |
 
-この表の分類は所有者のCritical／High判定ではない。`options-update` は何が変わりどの被害に至るか、`sensitive-object-access` は何が誰に読めるかを確認する。現時点で証明できないFindingも従来の受理・検証・review経路に残す。影響の強さと提出価値は人間レビューで判定し、`incomplete` は陰性や低重大度の証明に使わない。
+この表の分類は所有者のCritical／High判定ではない。`options-update` は何が変わりどの被害に至るか、`sensitive-object-access` は何が誰に読めるかを確認する。v4の生成出力契約は、主張された到達効果を `impactScope` で明示させる。軽微な表示設定だけの `options-update`、または非機微な列挙だけ・保護記事の内容や記事パスワードだけ・私有メディアのURLやメタデータだけの `sensitive-object-access` は、受理後に `finding-parked(below-owner-impact-threshold)` として Private Evidence と台帳に残し、検証・通常レビュー・funnelのrawへ送らない。混合効果、重大な読み取り・改変、分類の欠落や不明は従来の受理・検証・review経路に残す。この一次分類はエージェントの未検証の主張であり、重大性の判定や判定器の結果ではない。`incomplete` は陰性や低重大度の証明に使わない。既存の追記専用eventは変更しない。
 
 分類に入らない主張（DoS、open redirect、SSRF、情報列挙等）は `other` として台帳に残し、探索の目的にも提出候補にもしない。
 

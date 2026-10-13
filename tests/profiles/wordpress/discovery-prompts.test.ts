@@ -4,11 +4,12 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { wordpressFindingClaimSchema } from "../../../src/profiles/wordpress/discovery/finding.js";
+import { wordpressFindingLegacyClaimSchema } from "../../../src/profiles/wordpress/discovery/finding.js";
 import { wordpressLeadClaimSchema } from "../../../src/profiles/wordpress/discovery/lead.js";
 import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
+  wordPressDiscoveryOutputContractV3,
 } from "../../../src/profiles/wordpress/discovery/output-contract.js";
 
 import {
@@ -153,7 +154,7 @@ describe("WordPress discovery prompt assets", () => {
     const schemaLine = (label: string) =>
       JSON.parse(contract.text.split(`${label} schema: `)[1]!.split("\n")[0]!);
     expect(schemaLine("Finding")).toEqual(
-      z.toJSONSchema(wordpressFindingClaimSchema, { io: "output" }),
+      z.toJSONSchema(wordpressFindingLegacyClaimSchema, { io: "output" }),
     );
     expect(schemaLine("Lead")).toEqual(
       z.toJSONSchema(wordpressLeadClaimSchema, { io: "output" }),
@@ -184,6 +185,25 @@ describe("WordPress discovery prompt assets", () => {
     expect(current.digest).toBe(
       "sha256:a74a93951d790aec174c3506a6df9ae2cd391bc44bdedea7fdf8ff74d503db3d",
     );
+  });
+
+  it("keeps old contract digests and requires concrete effect scope only in v3", () => {
+    const older = wordPressDiscoveryOutputContractV2();
+    const current = wordPressDiscoveryOutputContractV3();
+    expect(older.digest).toBe(
+      "sha256:a74a93951d790aec174c3506a6df9ae2cd391bc44bdedea7fdf8ff74d503db3d",
+    );
+    expect(older.text).not.toContain("impactScope");
+    expect(current.id).toBe("wordpress-discovery-contract-v3");
+    expect(current.digest).toBe(
+      "sha256:15415c1738e0d7ec21ae87f44f9730e7290c8907c05d9486e64230429a6dbae1",
+    );
+    expect(current.text).toContain("`impactScope`");
+    expect(current.text).toContain("other-or-uncertain");
+    const schema = JSON.parse(
+      current.text.split("Finding schema: ")[1]!.split("\n")[0]!,
+    ) as { required: string[] };
+    expect(schema.required).toContain("impactScope");
   });
 
   it("keeps the new objective assets free of the claim contract", async () => {

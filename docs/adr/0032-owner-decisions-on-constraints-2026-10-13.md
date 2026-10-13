@@ -53,7 +53,7 @@ amends: 0030（タグ単位の履歴利用）, 0022（自動再試行の範囲�
 
 所有者は実対象Trialの候補を見て、今後は自ら提示したCritical／Highの例に相当する**効果**を探索目的にすると決めた。未認証またはsubscriber／customerからのコード実行、任意ファイルの読み取り・削除、コード実行に至るアップロード、SQL injection、Stored XSS、重大なデータの読み取り・改変に加え、未認証からの権限昇格と管理者への認証回避、subscriber／customerから管理者への権限昇格が対象である。`options-update` と `sensitive-object-access` を分類名だけで一律に除外する案は採らない。重大な効果への具体的経路があるFindingは、検証が`incomplete`でも通常レビューへ進め、影響と提出価値は人間が判断する。`runtime-confirmed`は従来どおりHarnessの判定器だけが出す。これはWordfence / Patchstackの公式Programme Boundaryを書き換える判断ではない。
 
-目的文は新しい`wp2shell-bounty-v4`として版とdigestを固定し、v3本文とdigestを履歴照合用に残す。Finding / Lead契約はHarness生成の節に置き続ける（ADR 0019）。新しい目的に誘導しても低価値候補が出なくなる保証はないため、分類による一律のparkはせず、Programme Boundary内のFindingは従来どおり判定器の結果によらずレビューへ届ける。`incomplete`を脆弱性の不存在や低重大度の証明にはしない。実測と今回の9件の扱いは[日付付きレビュー](../reviews/2026-10-13-owner-impact-priority.md)に記録する。
+目的文は新しい`wp2shell-bounty-v4`として版とdigestを固定し、v3本文とdigestを履歴照合用に残す。Finding / Lead契約はHarness生成の節に置き続ける（ADR 0019）。新しい目的に誘導しても低価値候補が出なくなる保証はない。所有者はその後、今回の実対象で見えた軽微な表示設定、非機微な列挙、保護記事の内容・記事パスワード、私有メディアのURL・メタデータだけの主張は、検証と人間レビューの前で止めると決めた。v4の生成契約で `impactScope` を求め、該当する具体的な効果だけを `finding-parked(below-owner-impact-threshold)` として保持する。`options-update` と `sensitive-object-access` のラベル自体は除外しない。混合効果・不明・重大なデータの読み取りや改変の主張は従来どおり検証し、判定器の結果によらず人間へ届ける。`incomplete`を脆弱性の不存在や低重大度の証明にはしない。実測と今回の9件の扱いは[日付付きレビュー](../reviews/2026-10-13-owner-impact-priority.md)に記録する。
 
 ### 知識と運用
 

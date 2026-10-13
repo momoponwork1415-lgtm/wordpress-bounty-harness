@@ -69,6 +69,8 @@ type RecorderOptions = {
    * として残し、検証 queue と review queue には入れない（#185）。省略時は全件 Finding。
    */
   readonly isProgrammeImpact?: (impact: string) => boolean;
+  /** Explicit low-value effect only; true keeps the candidate outside both queues. */
+  readonly parkFinding?: (finding: AdmittedFinding) => boolean;
 };
 
 async function holdCandidate(
@@ -187,11 +189,13 @@ async function recordFindingCandidate(
   const findingDigest = await options.evidence.putFiles({
     "finding.json": canonicalJson(finding),
   });
-  if (
+  const outsideProgramme =
     options.isProgrammeImpact !== undefined &&
-    !options.isProgrammeImpact(finding.impact)
-  ) {
-    // 対象範囲外の効果は候補として残すが、Finding には数えず検証にも回さない。
+    !options.isProgrammeImpact(finding.impact);
+  const belowOwnerPriority =
+    !outsideProgramme && options.parkFinding?.(finding);
+  if (outsideProgramme || belowOwnerPriority) {
+    // 候補は Private Evidence に残すが、検証・通常レビューには回さない。
     const parked = await options.ledger.append({
       ...options.base,
       artifacts: [{ kind: "finding", digest: findingDigest }],
@@ -200,7 +204,9 @@ async function recordFindingCandidate(
       findingId: finding.findingId,
       runId: ownerRunId,
       category: finding.impact,
-      reason: "outside-programme-boundary",
+      reason: outsideProgramme
+        ? "outside-programme-boundary"
+        : "below-owner-impact-threshold",
     });
     if (parked.status === "conflict")
       throw new Error("Parked finding identity conflict");

@@ -55,6 +55,7 @@ export interface CampaignPipeline<
     readonly isProgrammeImpact?: NonNullable<
       DiscoveryOptions["isProgrammeImpact"]
     >;
+    readonly parkFinding?: NonNullable<DiscoveryOptions["parkFinding"]>;
     readonly normalizeCandidate?: NonNullable<
       DiscoveryOptions["normalizeCandidate"]
     >;

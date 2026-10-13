@@ -39,7 +39,10 @@ const claim = {
   labObservations: ["Changed", "Observed"],
 };
 
-async function fixture(fromDiagnostic: boolean) {
+async function fixture(
+  fromDiagnostic: boolean,
+  claimOverrides: Record<string, unknown> = {},
+) {
   const root = await mkdtemp(join(tmpdir(), "wbh-reaccept-"));
   const evidence = new PrivateArtifactStore({
     rootDirectory: join(root, "evidence"),
@@ -52,7 +55,10 @@ async function fixture(fromDiagnostic: boolean) {
     artifactStore: evidence,
   });
   const report = {
-    findings: [claim, { ...claim, sourceTrace: ["unparseable"] }],
+    findings: [
+      { ...claim, ...claimOverrides },
+      { ...claim, ...claimOverrides, sourceTrace: ["unparseable"] },
+    ],
     leads: [],
     examined: "source",
     unexamined: "none",
@@ -188,3 +194,35 @@ it.each([false, true])(
     }
   },
 );
+
+it("keeps a recovered low-value Finding out of the verification and review queues", async () => {
+  const setup = await fixture(false, {
+    impact: "options-update",
+    impactScope: "minor-ui-setting-only",
+  });
+  try {
+    await reacceptWordPressRun({
+      ...setup,
+      campaignId: "campaign-1",
+      runId: "run-1",
+      clock: () => new Date("2026-10-11T00:00:00Z"),
+    });
+    expect(setup.ledger.read({ type: "finding-recorded" })).toHaveLength(0);
+    expect(
+      setup.ledger.read({ type: "finding-parked" })[0]?.event,
+    ).toMatchObject({
+      reason: "below-owner-impact-threshold",
+      category: "options-update",
+    });
+    expect(
+      await reacceptWordPressRun({
+        ...setup,
+        campaignId: "campaign-1",
+        runId: "run-1",
+        clock: () => new Date("2026-10-11T00:00:00Z"),
+      }),
+    ).toMatchObject({ accepted: 0, alreadyProcessed: 2 });
+  } finally {
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});

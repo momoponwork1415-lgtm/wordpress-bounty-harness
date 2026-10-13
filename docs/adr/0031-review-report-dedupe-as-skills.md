@@ -18,7 +18,7 @@ supersedes: 0028 (withdrawn); SPEC 第 8 節のうち review モジュールの�
 
 - 本番 3 周で人間が開いた Finding は 0 件で、review CLI の機能数は多いが使われていない。所有者は 2026-10-13 に「人間レビューは許容する。問題は件数。判断が要る工程は skill、決定論の部分とループは Harness」と決めた。
 - 2026-08 の whitebox-harness と wpb は同じ結論（判断は fresh session の skill、Harness は運び屋）に到達している（[docs/LESSONS.md](../LESSONS.md) 4、5）。
-- 判定器を分類ごとに揃える代わりに、Programme Boundary 内の Finding を判定結果に関係なく人間へ届ける（#185）。偽陰性は報酬を失うので、判定器が確認できない候補を落とさない。
+- 判定器を分類ごとに揃える代わりに、Programme Boundary 内の Finding を判定結果に関係なく人間へ届ける（#185）。偽陰性は報酬を失うので、判定器が確認できない候補を落とさない。2026-10-13 の所有者追加判断による、具体的な低価値効果だけの事前 park は ADR 0032 の例外とする。混合・不明な効果はこの通常経路へ送る。
 
 ## 採らなかった選択肢
 

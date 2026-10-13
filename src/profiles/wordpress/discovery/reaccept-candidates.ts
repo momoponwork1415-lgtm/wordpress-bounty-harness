@@ -9,6 +9,7 @@ import type { ProviderAttachmentStore } from "../../../discovery/provider-resear
 import { admitWordPressFinding } from "./finding.js";
 import { admitWordPressLead } from "./lead.js";
 import { isWordPressProgrammeImpact } from "./programme-impacts.js";
+import { isWordPressOwnerPriorityFinding } from "./owner-impact-priority.js";
 import {
   classifyWordPressCandidate,
   normalizeWordPressCandidate,
@@ -176,7 +177,9 @@ export async function reacceptWordPressRun(options: {
   );
   const recordedFindings = new Set(
     events.flatMap((event) =>
-      event.type === "finding-recorded" ? [event.findingId] : [],
+      event.type === "finding-recorded" || event.type === "finding-parked"
+        ? [event.findingId]
+        : [],
     ),
   );
   const recordedLeads = new Set(
@@ -250,26 +253,32 @@ export async function reacceptWordPressRun(options: {
           const findingDigest = await evidence.putFiles({
             "finding.json": canonicalJson(finding),
           });
-          const result = isWordPressProgrammeImpact(finding.impact)
-            ? await ledger.append({
-                ...base,
-                identity: `discovery-finding-${finding.findingId}`,
-                type: "finding-recorded",
-                runId,
-                findingId: finding.findingId,
-                category: finding.impact,
-                artifacts: [{ kind: "finding", digest: findingDigest }],
-              })
-            : await ledger.append({
-                ...base,
-                identity: `discovery-finding-parked-${finding.findingId}`,
-                type: "finding-parked",
-                runId,
-                findingId: finding.findingId,
-                category: finding.impact,
-                reason: "outside-programme-boundary",
-                artifacts: [{ kind: "finding", digest: findingDigest }],
-              });
+          const outsideProgramme = !isWordPressProgrammeImpact(finding.impact);
+          const belowOwnerPriority =
+            !outsideProgramme && !isWordPressOwnerPriorityFinding(finding);
+          const result =
+            !outsideProgramme && !belowOwnerPriority
+              ? await ledger.append({
+                  ...base,
+                  identity: `discovery-finding-${finding.findingId}`,
+                  type: "finding-recorded",
+                  runId,
+                  findingId: finding.findingId,
+                  category: finding.impact,
+                  artifacts: [{ kind: "finding", digest: findingDigest }],
+                })
+              : await ledger.append({
+                  ...base,
+                  identity: `discovery-finding-parked-${finding.findingId}`,
+                  type: "finding-parked",
+                  runId,
+                  findingId: finding.findingId,
+                  category: finding.impact,
+                  reason: outsideProgramme
+                    ? "outside-programme-boundary"
+                    : "below-owner-impact-threshold",
+                  artifacts: [{ kind: "finding", digest: findingDigest }],
+                });
           if (result.status === "conflict")
             throw new Error("Finding identity conflict");
           recordedFindings.add(finding.findingId);

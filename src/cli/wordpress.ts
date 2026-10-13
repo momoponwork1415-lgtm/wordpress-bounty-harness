@@ -51,6 +51,7 @@ import {
   type WordPressFinding,
 } from "../profiles/wordpress/discovery/finding.js";
 import { isWordPressProgrammeImpact } from "../profiles/wordpress/discovery/programme-impacts.js";
+import { isWordPressOwnerPriorityFinding } from "../profiles/wordpress/discovery/owner-impact-priority.js";
 import {
   normalizeWordPressCandidate,
   classifyWordPressCandidate,
@@ -58,6 +59,7 @@ import {
 import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
+  wordPressDiscoveryOutputContractV3,
 } from "../profiles/wordpress/discovery/output-contract.js";
 import type {
   WordPressLab,
@@ -839,12 +841,13 @@ async function planWordPressDiscovery(
     config.mode === "assignment" ? config.assignment : undefined;
   const outputContractV1 = wordPressDiscoveryOutputContract();
   const outputContractV2 = wordPressDiscoveryOutputContractV2();
+  const outputContractV3 = wordPressDiscoveryOutputContractV3();
   const outputContractFor = (id: string) =>
-    id === "wp2shell-bounty-v3" ||
-    id === "wp2shell-bounty-v4" ||
-    id === "wp2shell-whitebox-v1.7"
-      ? outputContractV2
-      : outputContractV1;
+    id === "wp2shell-bounty-v4"
+      ? outputContractV3
+      : id === "wp2shell-bounty-v3" || id === "wp2shell-whitebox-v1.7"
+        ? outputContractV2
+        : outputContractV1;
   const objectiveOnly = (id: string) =>
     WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
   const source = await boundaries.sourceFor(snapshot);
@@ -1048,6 +1051,8 @@ async function planWordPressDiscovery(
     attachments: boundaries.attachments,
     admitFinding: admitWordPressFinding,
     isProgrammeImpact: isWordPressProgrammeImpact,
+    parkFinding: (finding) =>
+      !isWordPressOwnerPriorityFinding(readWordPressFinding(finding)),
     normalizeCandidate: normalizeWordPressCandidate,
     classifyCandidate: classifyWordPressCandidate,
     admitLead: admitWordPressLead,

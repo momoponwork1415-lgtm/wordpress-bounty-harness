@@ -32,7 +32,7 @@ const sourceFile = z
   )
   .pipe(relativeFile);
 
-export const wordpressFindingClaimSchema = z.strictObject({
+export const wordpressFindingLegacyClaimSchema = z.strictObject({
   claim: z.string().min(1).max(4000),
   attackerPosition: z.enum(["unauthenticated", "subscriber", "customer"]),
   impact: z.preprocess(
@@ -80,6 +80,27 @@ export const wordpressFindingClaimSchema = z.strictObject({
   privateRecipeReference: z.string().min(1).max(4000).optional(),
   historyRecordId: id.optional(),
 });
+
+/** Concrete effect claimed by the agent, used only to park explicit low-value cases. */
+export const wordpressImpactScopeSchema = z.enum([
+  "minor-ui-setting-only",
+  "non-sensitive-enumeration-only",
+  "protected-content-only",
+  "private-media-reference-only",
+  "other-or-uncertain",
+]);
+
+/** Old private Findings remain readable when the current contract gains a field. */
+export const wordpressFindingClaimSchema =
+  wordpressFindingLegacyClaimSchema.extend({
+    impactScope: wordpressImpactScopeSchema.optional(),
+  });
+
+/** Required only in the new agent-facing output contract. */
+export const wordpressFindingCurrentContractSchema =
+  wordpressFindingLegacyClaimSchema.extend({
+    impactScope: wordpressImpactScopeSchema,
+  });
 
 const contextSchema = z.strictObject({
   runId: id,

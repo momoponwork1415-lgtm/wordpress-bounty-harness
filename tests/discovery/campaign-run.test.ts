@@ -12,7 +12,12 @@ import {
 } from "../../src/discovery/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
-import { admitWordPressFinding } from "../../src/profiles/wordpress/discovery/finding.js";
+import {
+  admitWordPressFinding,
+  readWordPressFinding,
+  type WordPressFinding,
+} from "../../src/profiles/wordpress/discovery/finding.js";
+import { isWordPressOwnerPriorityFinding } from "../../src/profiles/wordpress/discovery/owner-impact-priority.js";
 import { isWordPressProgrammeImpact } from "../../src/profiles/wordpress/discovery/programme-impacts.js";
 import {
   admitWordPressLead,
@@ -54,6 +59,8 @@ async function campaign(
     readonly leadOnly?: boolean;
     /** Report a Finding whose impact lies outside the Programme Boundary (#185). */
     readonly parkedImpact?: boolean;
+    readonly impact?: WordPressFinding["impact"];
+    readonly impactScope?: WordPressFinding["impactScope"];
     readonly rootChildCounts?: {
       readonly observed: number;
       readonly admitted: number;
@@ -113,7 +120,11 @@ async function campaign(
   const claim = {
     claim: "Synthetic account state change",
     attackerPosition: "subscriber",
-    impact: options.parkedImpact ? "other" : "account-takeover",
+    impact:
+      options.impact ?? (options.parkedImpact ? "other" : "account-takeover"),
+    ...(options.impactScope === undefined
+      ? {}
+      : { impactScope: options.impactScope }),
     configurationPrecondition: "default",
     brokenProperty: "Account ownership",
     sourceTrace: [
@@ -139,6 +150,8 @@ async function campaign(
     evidence,
     admitFinding: admitWordPressFinding,
     isProgrammeImpact: isWordPressProgrammeImpact,
+    parkFinding: (finding) =>
+      !isWordPressOwnerPriorityFinding(readWordPressFinding(finding)),
     admitLead: admitWordPressLead,
     leadSignature: (lead) => wordPressLeadSignature(readWordPressLead(lead)),
     normalizeCandidate: normalizeWordPressCandidate,
@@ -452,6 +465,28 @@ it("passes the fixed source entry index to one cooperative Trial without a stage
   });
   expect(started).not.toHaveProperty("stage");
   expect(started).not.toHaveProperty("continuationOf");
+});
+
+it("parks explicit low-value effects before the Finding queue while preserving ambiguous broad labels", async () => {
+  const low = await campaign([0], {
+    indexed: true,
+    impact: "options-update",
+    impactScope: "minor-ui-setting-only",
+  });
+  expect(low.ledger.read({ type: "finding-recorded" })).toHaveLength(0);
+  expect(low.ledger.read({ type: "finding-parked" })[0]?.event).toMatchObject({
+    reason: "below-owner-impact-threshold",
+    category: "options-update",
+  });
+  expect(low.ledger.read({ type: "candidate-normalized" })).toHaveLength(1);
+
+  const uncertain = await campaign([0], {
+    indexed: true,
+    impact: "sensitive-object-access",
+    impactScope: "other-or-uncertain",
+  });
+  expect(uncertain.ledger.read({ type: "finding-recorded" })).toHaveLength(1);
+  expect(uncertain.ledger.read({ type: "finding-parked" })).toHaveLength(0);
 });
 
 it("stops after consecutive completed runs without a new Finding and records each run configuration", async () => {
