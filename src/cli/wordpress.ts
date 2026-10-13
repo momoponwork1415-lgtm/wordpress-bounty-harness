@@ -7,7 +7,7 @@ import {
   allocateTrialArms,
   CODEX_SANDBOX_MEMORY_MIB,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
-  EGRESS_BROKER_LEFTOVER_PATTERNS,
+  DISCOVERY_LEFTOVER_PATTERNS,
   EGRESS_BROKER_MEMORY_MIB,
 } from "../discovery/index.js";
 import type {
@@ -143,14 +143,16 @@ const commonCampaignFields = {
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
   runWallTimeMinutes: z.number().positive().max(240).optional(),
-  /** Host bounds: concurrent discovery runs and the memory the Harness may use for them. */
+  /** Host bounds: targets, per-target discovery runs and their memory budget. */
   resources: z
     .strictObject({
       maxConcurrentRuns: z.number().int().min(1).max(4).default(2),
+      maxConcurrentTargets: z.number().int().min(1).max(4).default(1),
       memoryBudgetMiB: z.number().int().positive(),
     })
     .default({
       maxConcurrentRuns: 2,
+      maxConcurrentTargets: 1,
       memoryBudgetMiB: 4 * DISCOVERY_RUN_MEMORY_MIB,
     }),
   wordpressVersion: z.string().min(1).max(32),
@@ -1095,6 +1097,7 @@ async function runWordPressCampaign(
       : undefined;
   return runCampaignPipeline({
     campaignId: input.campaignId,
+    maxConcurrentTargets: config.resources.maxConcurrentTargets,
     ...(input.retryIncompleteVerifications === undefined
       ? {}
       : {
@@ -1356,7 +1359,7 @@ export function createWordPressCliProfile(
       const boundaries = await options.boundaries(config, state);
       return boundaries.lab.cleanupLeftovers({
         remove: input.remove,
-        patterns: EGRESS_BROKER_LEFTOVER_PATTERNS,
+        patterns: DISCOVERY_LEFTOVER_PATTERNS,
       });
     },
     async checkRuntime(state, input) {

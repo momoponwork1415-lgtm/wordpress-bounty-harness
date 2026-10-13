@@ -23,6 +23,28 @@ const example = async (file: string, version = "3.3.1"): Promise<unknown> =>
     ),
   ) as unknown;
 
+it("starts the checked-in campaign with two targets on WordPress 7.1.3", async () => {
+  const config = wordpressCampaignConfigSchema.parse(
+    JSON.parse(
+      await readFile(
+        join(
+          import.meta.dirname,
+          "..",
+          "..",
+          "src",
+          "profiles",
+          "wordpress",
+          "policy",
+          "campaign.json",
+        ),
+        "utf8",
+      ),
+    ) as unknown,
+  );
+  expect(config.resources.maxConcurrentTargets).toBe(2);
+  expect(config.wordpressVersion).toBe("7.1.3");
+});
+
 it.each(["3.3.1", "3.2.6"])(
   "runs the pinned %s production example as one indexed 60-minute WP2Shell Trial",
   async (version) => {
@@ -125,6 +147,7 @@ describe("TranslatePress 3.3.1 development-set example", () => {
     expect(config.stopRules).toEqual({ maxRuns: 40, noFindingRuns: 4 });
     expect(config.resources).toEqual({
       maxConcurrentRuns: 4,
+      maxConcurrentTargets: 1,
       memoryBudgetMiB: 10240,
     });
     expect(config.selectionPolicyPath).toBe(

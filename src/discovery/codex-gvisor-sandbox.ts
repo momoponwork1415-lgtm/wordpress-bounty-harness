@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   lstat,
   mkdtemp,
@@ -44,6 +45,9 @@ const imageSchema = z
   .regex(/^(?:sha256:[a-f0-9]{64}|[^\s@]+@sha256:[a-f0-9]{64})$/);
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const networkSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
+const uuidSchema = z
+  .string()
+  .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 
 const MAX_SESSION_FILES = 256;
 const MAX_SESSION_HEADER_BYTES = 64 * 1024;
@@ -384,6 +388,7 @@ export interface GvisorCodexSandboxOptions {
   readonly memoryMiB?: number;
   readonly clock?: () => Date;
   readonly runDocker?: DockerRun;
+  readonly randomUuid?: () => string;
 }
 
 type DockerRun = (
@@ -661,6 +666,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
             },
           );
     const now = this.#options.clock ?? (() => new Date());
+    const containerName = `codex-agent-${uuidSchema.parse(
+      (this.#options.randomUuid ?? randomUUID)(),
+    )}`;
+    networkSchema.parse(containerName);
     const token = command.grant.authorization.replace(/^Bearer /, "");
     const runDocker = this.#docker(scratchRoot, token);
     const base = this.#base();
@@ -685,6 +694,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
       const startedAt = now().toISOString();
       const args = [
         ...base,
+        `--name=${containerName}`,
         // The prompt arrives on stdin.
         "--interactive",
         `--network=${command.grant.dockerNetworkName}`,
@@ -721,11 +731,18 @@ export class GvisorCodexSandbox implements CodexSandbox {
         this.#options.image,
         ...command.args,
       ];
-      const result = await runDocker(
-        args,
-        command.stdin,
-        this.#options.timeoutMs,
-      );
+      let result: NativeModelProcessResult;
+      try {
+        result = await runDocker(args, command.stdin, this.#options.timeoutMs);
+      } finally {
+        // `--rm` is not sufficient when the Docker client is killed on timeout:
+        // runsc may leave a stopped container behind (#176).
+        await runDocker(
+          ["rm", "--force", containerName],
+          undefined,
+          20_000,
+        ).catch(() => undefined);
+      }
       const completedAt = now().toISOString();
       const collected = await collectRollouts(codexHome).then(
         (rollouts) => ({ rollouts }),
