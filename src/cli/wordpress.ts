@@ -48,6 +48,7 @@ import {
   readWordPressFinding,
   type WordPressFinding,
 } from "../profiles/wordpress/discovery/finding.js";
+import { isWordPressProgrammeImpact } from "../profiles/wordpress/discovery/programme-impacts.js";
 import {
   normalizeWordPressCandidate,
   classifyWordPressCandidate,
@@ -673,8 +674,11 @@ async function planWordPressDiscovery(
   const objectiveOnly = (id: string) =>
     WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
   const source = await boundaries.sourceFor(snapshot);
-  // The campaign ceiling is a safety bound; selection decides depth per target.
-  const maxRuns = Math.min(config.stopRules.maxRuns, target.runBudget);
+  // The campaign stop rule decides depth; legacy per-target budgets only lower it (ADR 0032 Q6).
+  const maxRuns = Math.min(
+    config.stopRules.maxRuns,
+    target.runBudget ?? config.stopRules.maxRuns,
+  );
   const sourceIndex =
     !config.entryIndex && assignmentConfig === undefined
       ? undefined
@@ -866,6 +870,7 @@ async function planWordPressDiscovery(
     executor: boundaries.executor,
     attachments: boundaries.attachments,
     admitFinding: admitWordPressFinding,
+    isProgrammeImpact: isWordPressProgrammeImpact,
     normalizeCandidate: normalizeWordPressCandidate,
     classifyCandidate: classifyWordPressCandidate,
     admitLead: admitWordPressLead,

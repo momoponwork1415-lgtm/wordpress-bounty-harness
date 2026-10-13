@@ -13,6 +13,7 @@ import {
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
 import { admitWordPressFinding } from "../../src/profiles/wordpress/discovery/finding.js";
+import { isWordPressProgrammeImpact } from "../../src/profiles/wordpress/discovery/programme-impacts.js";
 import {
   admitWordPressLead,
   readWordPressLead,
@@ -51,6 +52,8 @@ async function campaign(
     readonly rootTranscriptInvalid?: boolean;
     readonly indexed?: boolean;
     readonly leadOnly?: boolean;
+    /** Report a Finding whose impact lies outside the Programme Boundary (#185). */
+    readonly parkedImpact?: boolean;
     readonly rootChildCounts?: {
       readonly observed: number;
       readonly admitted: number;
@@ -109,7 +112,7 @@ async function campaign(
   const claim = {
     claim: "Synthetic account state change",
     attackerPosition: "subscriber",
-    impact: "account-takeover",
+    impact: options.parkedImpact ? "other" : "account-takeover",
     configurationPrecondition: "default",
     brokenProperty: "Account ownership",
     sourceTrace: [
@@ -134,6 +137,7 @@ async function campaign(
     attachments,
     evidence,
     admitFinding: admitWordPressFinding,
+    isProgrammeImpact: isWordPressProgrammeImpact,
     admitLead: admitWordPressLead,
     leadSignature: (lead) => wordPressLeadSignature(readWordPressLead(lead)),
     normalizeCandidate: normalizeWordPressCandidate,
@@ -495,4 +499,30 @@ it("keeps the admitted Finding trace in Private Evidence and references it from 
   expect(finding.sourceTrace).toEqual([
     { file: "includes/example.php", function: "fixture", line: 12 },
   ]);
+});
+
+it("parks a Finding outside the Programme Boundary without verifying or counting it (#185)", async () => {
+  const { result, ledger, evidence } = await campaign([0], {
+    parkedImpact: true,
+  });
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(0);
+  const parked = ledger.read({ type: "finding-parked" });
+  expect(parked).toHaveLength(1);
+  expect(parked[0]?.event).toMatchObject({
+    category: "other",
+    reason: "outside-programme-boundary",
+  });
+  const reference = parked[0]?.event.artifacts[0];
+  expect(reference?.kind).toBe("finding");
+  expect(
+    reference &&
+      (await evidence.readFile(reference.digest, "finding.json", 100_000))
+        .status,
+  ).toBe("resolved");
+  expect(result.findingsRecorded).toBe(0);
+  expect(ledger.funnel("campaign-1")).toMatchObject({
+    parked: 1,
+    raw: 0,
+    accepted: 0,
+  });
 });

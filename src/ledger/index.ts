@@ -268,6 +268,14 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       .enum(["latest-version", "fixed-version-control"])
       .optional(),
   }),
+  /** A Finding whose impact lies outside the Programme Boundary; kept, never verified (#185). */
+  event({
+    type: z.literal("finding-parked"),
+    findingId: id,
+    runId: id,
+    category: id,
+    reason: z.literal("outside-programme-boundary"),
+  }),
   event({
     type: z.literal("lead-recorded"),
     leadId: id,
@@ -379,6 +387,8 @@ export type FunnelCounts = {
   readonly reached: number;
   readonly accepted: number;
   readonly held: number;
+  /** Findings outside the Programme Boundary; not in accepted or raw (#185). */
+  readonly parked: number;
   readonly raw: number;
   readonly verified: number;
   readonly confirmed: number;
@@ -462,6 +472,7 @@ const querySchema = z.strictObject({
       "candidate-normalized",
       "candidate-held",
       "finding-recorded",
+      "finding-parked",
       "lead-recorded",
       "child-report-recovered",
       "discovery-report-recovered",
@@ -494,6 +505,7 @@ function emptyCounts(): Counts {
     reached: 0,
     accepted: 0,
     held: 0,
+    parked: 0,
     raw: 0,
     verified: 0,
     confirmed: 0,
@@ -939,6 +951,10 @@ export class Ledger {
       string,
       Extract<LedgerEventV1, { type: "finding-recorded" }>
     >();
+    const parkedFindings = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "finding-parked" }>
+    >();
     const verifications = new Map<
       string,
       Extract<LedgerEventV1, { type: "verification-finished" }>
@@ -1035,6 +1051,10 @@ export class Ledger {
             });
           if (!findings.has(current.findingId))
             findings.set(current.findingId, current);
+          break;
+        case "finding-parked":
+          if (!parkedFindings.has(current.findingId))
+            parkedFindings.set(current.findingId, current);
           break;
         case "lead-recorded":
           if (!normalizationSeen.has(`${current.runId}\0lead`))
@@ -1183,13 +1203,24 @@ export class Ledger {
       ])
         count.accepted++;
     }
+    for (const parked of parkedFindings.values()) {
+      for (const count of [
+        totals,
+        (byCategory[parked.category] ??= emptyCounts()),
+        objective(parked.runId),
+      ])
+        count.parked++;
+    }
     for (const counts of [
       totals,
       ...Object.values(byCategory),
       ...Object.values(byObjective),
     ]) {
-      // A normalized candidate may have no later admission or hold event.
-      counts.reached = Math.max(counts.reached, counts.accepted + counts.held);
+      // A normalized candidate may have no later admission, hold or parking event.
+      counts.reached = Math.max(
+        counts.reached,
+        counts.accepted + counts.held + counts.parked,
+      );
     }
     const classifiedReached = Object.values(byCategory).reduce(
       (sum, counts) => sum + counts.reached,

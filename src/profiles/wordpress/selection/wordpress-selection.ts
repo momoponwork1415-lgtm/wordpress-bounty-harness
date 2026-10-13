@@ -105,13 +105,14 @@ function score(
     Math.max(0, 1 - updateAgeDays / policy.maximumUpdateAgeDays) *
     policy.scoreWeights.recency;
   const surfacePoints = (observation.tags ?? []).reduce(
-    (total, tag) => total + (policy.surfaceTagWeights[normalizeName(tag)] ?? 0),
+    (total, tag) =>
+      total + (policy.surfaceTagWeights?.[normalizeName(tag)] ?? 0),
     0,
   );
-  const surface = surfacePoints * policy.scoreWeights.surface;
+  const surface = surfacePoints * (policy.scoreWeights.surface ?? 0);
   const highThreat =
     (highThreatSurface(observation, policy) ? 1 : 0) *
-    policy.scoreWeights.highThreat;
+    (policy.scoreWeights.highThreat ?? 0);
   // 公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030）。
   const history = 0;
   return { installations, recency, surface, highThreat, history };
@@ -121,7 +122,7 @@ function highThreatSurface(
   observation: WordPressOrgTargetObservation,
   policy: WordPressSelectionPolicy,
 ): boolean {
-  const tags = new Set(policy.highThreatTags.map(normalizeName));
+  const tags = new Set((policy.highThreatTags ?? []).map(normalizeName));
   return (observation.tags ?? []).some((tag) => tags.has(normalizeName(tag)));
 }
 
@@ -280,9 +281,16 @@ export function createWordPressSelection(
           : {}),
         activeInstallations: observation.activeInstallations,
         highThreatSurface: highThreatSurface(observation, policy),
-        runBudget: highThreatSurface(observation, policy)
-          ? policy.runBudget.highThreat
-          : policy.runBudget.default,
+        ...(policy.runBudget === undefined
+          ? {}
+          : {
+              runBudget: highThreatSurface(observation, policy)
+                ? policy.runBudget.highThreat
+                : policy.runBudget.default,
+            }),
+        ...(enumeration?.sourceTag === undefined
+          ? {}
+          : { candidateTag: enumeration.sourceTag }),
         scoreBreakdown,
         score:
           scoreBreakdown.installations +

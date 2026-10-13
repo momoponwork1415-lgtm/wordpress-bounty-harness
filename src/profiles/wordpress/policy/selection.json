@@ -1,20 +1,31 @@
 {
   "kind": "wordpress-selection-policy",
   "schemaVersion": 1,
-  "id": "wordpress-selection-2026-10-12",
+  "id": "wordpress-selection-2026-10-13",
   "promptVariant": "wp2shell-bounty-v3",
-  "revisitPolicy": { "kind": "version-or-prompt-changed" },
-  "wordpressVersion": "6.8.3",
+  "revisitPolicy": {
+    "kind": "version-or-prompt-changed"
+  },
+  "wordpressVersion": "7.1.3",
   "candidateSource": {
     "kind": "wordpress-org",
-    "popularPages": 1,
-    "tags": ["upload", "login"],
-    "pagesPerTag": 1,
-    "perPage": 20,
-    "maxCandidates": 40,
+    "popularPages": 2,
+    "tags": [
+      "forms",
+      "contact-form",
+      "membership",
+      "page-builder",
+      "elementor-addons",
+      "multilingual",
+      "backup",
+      "booking"
+    ],
+    "pagesPerTag": 2,
+    "perPage": 50,
+    "maxCandidates": 500,
     "maxAgeDays": 1
   },
-  "minimumActiveInstallations": 10000,
+  "minimumActiveInstallations": 100000,
   "maximumObservationAgeDays": 2,
   "maximumUpdateAgeDays": 365,
   "maximumTargets": 5,
@@ -26,46 +37,8 @@
     "Yoast"
   ],
   "excludedSlugs": [],
-  "surfaceTagWeights": {
-    "form": 4,
-    "forms": 4,
-    "upload": 4,
-    "api": 3,
-    "user": 2,
-    "login": 2,
-    "ecommerce": 2
-  },
-  "highThreatTags": [
-    "file manager",
-    "file upload",
-    "upload",
-    "import",
-    "export",
-    "backup",
-    "migration",
-    "login",
-    "authentication",
-    "registration",
-    "user registration",
-    "social login",
-    "2fa",
-    "two-factor",
-    "password",
-    "membership",
-    "user role",
-    "roles",
-    "capabilities",
-    "settings",
-    "options"
-  ],
   "scoreWeights": {
     "installations": 10,
-    "recency": 5,
-    "surface": 1,
-    "highThreat": 15
-  },
-  "runBudget": {
-    "default": 20,
-    "highThreat": 40
+    "recency": 5
   }
 }

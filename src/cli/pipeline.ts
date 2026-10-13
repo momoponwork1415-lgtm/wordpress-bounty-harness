@@ -47,6 +47,9 @@ export interface CampaignPipeline<
     readonly executor: DiscoveryOptions["executor"];
     readonly attachments: DiscoveryOptions["attachments"];
     readonly admitFinding: DiscoveryOptions["admitFinding"];
+    readonly isProgrammeImpact?: NonNullable<
+      DiscoveryOptions["isProgrammeImpact"]
+    >;
     readonly normalizeCandidate?: NonNullable<
       DiscoveryOptions["normalizeCandidate"]
     >;

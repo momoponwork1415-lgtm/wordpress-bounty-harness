@@ -64,6 +64,11 @@ type RecorderOptions = {
     },
   ) => AdmittedLead;
   readonly leadSignature?: (lead: AdmittedLead) => string;
+  /**
+   * Programme Boundary を impact で判定する。false の Finding は `finding-parked`
+   * として残し、検証 queue と review queue には入れない（#185）。省略時は全件 Finding。
+   */
+  readonly isProgrammeImpact?: (impact: string) => boolean;
 };
 
 async function holdCandidate(
@@ -182,6 +187,25 @@ async function recordFindingCandidate(
   const findingDigest = await options.evidence.putFiles({
     "finding.json": canonicalJson(finding),
   });
+  if (
+    options.isProgrammeImpact !== undefined &&
+    !options.isProgrammeImpact(finding.impact)
+  ) {
+    // 対象範囲外の効果は候補として残すが、Finding には数えず検証にも回さない。
+    const parked = await options.ledger.append({
+      ...options.base,
+      artifacts: [{ kind: "finding", digest: findingDigest }],
+      identity: `discovery-finding-parked-${finding.findingId}`,
+      type: "finding-parked",
+      findingId: finding.findingId,
+      runId: ownerRunId,
+      category: finding.impact,
+      reason: "outside-programme-boundary",
+    });
+    if (parked.status === "conflict")
+      throw new Error("Parked finding identity conflict");
+    return;
+  }
   const appended = await options.ledger.append({
     ...options.base,
     artifacts: [{ kind: "finding", digest: findingDigest }],
