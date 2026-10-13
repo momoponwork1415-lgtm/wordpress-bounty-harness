@@ -1806,6 +1806,66 @@ describe("harness CLI vertical slice", () => {
     ).toHaveLength(2);
   });
 
+  it("lists parked Findings by one-line property and says when there are none (#185)", async () => {
+    const { run, ledger, store, configPath } = await harness();
+    // Opening the state needs one real command; the campaign records only in-scope Findings.
+    const warm = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-warm",
+      "--config",
+      configPath,
+    );
+    expect(warm.code).toBe(0);
+    const empty = await run(
+      "review",
+      "parked",
+      "--campaign",
+      "campaign-parked",
+    );
+    expect(empty.code).toBe(0);
+    expect(empty.stdout).toContain("no parked findings");
+    const snapshot = `sha256:${"b".repeat(64)}`;
+    const digest = await store().putFiles({
+      "finding.json": Buffer.from(
+        JSON.stringify({
+          brokenProperty: "Throttle trusts a forwarded header",
+        }),
+      ),
+    });
+    await ledger().append({
+      schemaVersion: 1,
+      identity: "parked-1",
+      campaignId: "campaign-parked",
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-13T00:00:00Z",
+      type: "finding-parked",
+      findingId: "finding-parked-1",
+      runId: "run-1",
+      category: "other",
+      reason: "outside-programme-boundary",
+      artifacts: [{ kind: "finding", digest }],
+    });
+    const listed = await run(
+      "review",
+      "parked",
+      "--campaign",
+      "campaign-parked",
+    );
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toContain(
+      "parked  other  finding-parked-1  Throttle trusts a forwarded header",
+    );
+    expect(
+      ledger().read({
+        campaignId: "campaign-parked",
+        type: "finding-recorded",
+      }),
+    ).toHaveLength(0);
+  });
+
   it("verifies a child Finding on resume without starting a replacement Trial", async () => {
     const { run, configPath, prompts, ledger } = await harness({
       limitOnCalls: [1],
