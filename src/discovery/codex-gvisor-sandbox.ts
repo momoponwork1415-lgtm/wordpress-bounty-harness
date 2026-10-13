@@ -19,6 +19,7 @@ import {
   verifyCanonicalSourceTree,
   type ExpectedSourceTree,
 } from "../infrastructure/canonical-source-tree.js";
+import { canonicalJson } from "../infrastructure/canonical-json.js";
 
 import {
   runNativeModelProcess,
@@ -52,6 +53,10 @@ const MAX_SESSION_FILES = 256;
 const MAX_SESSION_HEADER_BYTES = 64 * 1024;
 const MAX_SESSION_BYTES = 60 * 1024 * 1024;
 const MAX_CAPTURE_BYTES = 240 * 1024 * 1024;
+const MAX_RESEARCH_BYTES = 8 * 1024 * 1024;
+const MAX_RESEARCH_ENTRIES = 256;
+const MAX_RESEARCH_DEPTH = 16;
+const MAX_RESEARCH_PATH_BYTES = 1024;
 
 type SessionHeader = {
   readonly file: string;
@@ -250,6 +255,126 @@ async function collectRollouts(home: string): Promise<readonly string[]> {
     rollouts.push(await readSessionFile(header.file, MAX_SESSION_BYTES, true));
   }
   return rollouts;
+}
+
+type ResearchArchiveEntry =
+  | { readonly path: string; readonly type: "directory" }
+  | {
+      readonly path: string;
+      readonly type: "file";
+      readonly contentBase64: string;
+      readonly truncated?: true;
+    };
+
+/** Copy a bounded, non-following view of the writable Trial notes into one canonical archive. */
+async function collectResearchArchive(directory: string): Promise<{
+  readonly archive: Buffer;
+  readonly truncated: boolean;
+}> {
+  const entries: ResearchArchiveEntry[] = [];
+  let collectedBytes = 0;
+  let truncated = false;
+  const visit = async (
+    currentDirectory: string,
+    relativeDirectory: string,
+    depth: number,
+  ): Promise<void> => {
+    if (depth > MAX_RESEARCH_DEPTH) {
+      truncated = true;
+      return;
+    }
+    const children = await readdir(currentDirectory, { withFileTypes: true });
+    children.sort((left, right) => left.name.localeCompare(right.name));
+    for (const child of children) {
+      if (entries.length >= MAX_RESEARCH_ENTRIES) {
+        truncated = true;
+        return;
+      }
+      const relativePath =
+        relativeDirectory.length === 0
+          ? child.name
+          : `${relativeDirectory}/${child.name}`;
+      if (Buffer.byteLength(relativePath) > MAX_RESEARCH_PATH_BYTES) {
+        truncated = true;
+        continue;
+      }
+      const path = join(currentDirectory, child.name);
+      const entry = await lstat(path);
+      if (entry.isSymbolicLink()) {
+        truncated = true;
+        continue;
+      }
+      if (entry.isDirectory()) {
+        entries.push({ path: relativePath, type: "directory" });
+        await visit(path, relativePath, depth + 1);
+        continue;
+      }
+      if (!entry.isFile() || entry.nlink !== 1) {
+        truncated = true;
+        continue;
+      }
+      const handle = await open(
+        path,
+        constants.O_RDONLY | constants.O_NOFOLLOW,
+      );
+      try {
+        const before = await handle.stat();
+        if (!before.isFile() || before.nlink !== 1) {
+          truncated = true;
+          continue;
+        }
+        const remaining = Math.max(0, MAX_RESEARCH_BYTES - collectedBytes);
+        const length = Math.min(before.size, remaining);
+        const buffer = Buffer.alloc(length);
+        let offset = 0;
+        while (offset < length) {
+          const read = await handle.read(
+            buffer,
+            offset,
+            length - offset,
+            offset,
+          );
+          if (read.bytesRead === 0) break;
+          offset += read.bytesRead;
+        }
+        const after = await handle.stat();
+        if (
+          before.dev !== after.dev ||
+          before.ino !== after.ino ||
+          before.size !== after.size ||
+          before.mtimeMs !== after.mtimeMs ||
+          before.ctimeMs !== after.ctimeMs
+        ) {
+          truncated = true;
+          continue;
+        }
+        const complete = offset === before.size;
+        collectedBytes += offset;
+        entries.push({
+          path: relativePath,
+          type: "file",
+          contentBase64: buffer.subarray(0, offset).toString("base64"),
+          ...(complete ? {} : { truncated: true as const }),
+        });
+        if (!complete) truncated = true;
+      } finally {
+        await handle.close();
+      }
+    }
+  };
+  await visit(directory, "", 0);
+  return {
+    archive: Buffer.from(
+      canonicalJson({
+        kind: "research-directory-archive",
+        schemaVersion: 1,
+        truncated,
+        collectedBytes,
+        entries,
+      }),
+    ),
+    truncated,
+  };
 }
 
 export interface GvisorCodexSandboxOptions {
@@ -482,6 +607,9 @@ export class GvisorCodexSandbox implements CodexSandbox {
         (command.dependencyMount.mode !== "ro" ||
           command.dependencyMount.path !== "/workspace/wordpress" ||
           !isAbsolute(command.dependencyMount.directory))) ||
+      (command.researchMount !== undefined &&
+        (command.researchMount.mode !== "rw" ||
+          command.researchMount.path !== "/workspace/research")) ||
       command.supportFiles.length !== 1 ||
       command.supportFiles[0]?.path !== "/opt/codex-support/report-schema.json"
     ) {
@@ -527,6 +655,16 @@ export class GvisorCodexSandbox implements CodexSandbox {
         throw error;
       },
     );
+    const researchDirectory =
+      command.researchMount === undefined
+        ? undefined
+        : await mkdtemp(join(scratchRoot, "codex-research-")).catch(
+            async (error: unknown) => {
+              await rm(staging, { recursive: true, force: true });
+              await rm(codexHome, { recursive: true, force: true });
+              throw error;
+            },
+          );
     const now = this.#options.clock ?? (() => new Date());
     const containerName = `codex-agent-${uuidSchema.parse(
       (this.#options.randomUuid ?? randomUUID)(),
@@ -572,6 +710,11 @@ export class GvisorCodexSandbox implements CodexSandbox {
           : [
               `--mount=type=bind,src=${dependency},dst=/workspace/wordpress,readonly`,
             ]),
+        ...(researchDirectory === undefined
+          ? []
+          : [
+              `--mount=type=bind,src=${researchDirectory},dst=/workspace/research`,
+            ]),
 
         `--mount=type=bind,src=${staging},dst=/opt/codex-support,readonly`,
         "--workdir=/workspace/main",
@@ -608,6 +751,13 @@ export class GvisorCodexSandbox implements CodexSandbox {
           rolloutFailure: "capture-failed" as const,
         }),
       );
+      const researchCollected =
+        researchDirectory === undefined
+          ? {}
+          : await collectResearchArchive(researchDirectory).then(
+              (research) => ({ research }),
+              () => ({ researchFailure: "capture-failed" as const }),
+            );
       return {
         status: result.kind === "exited" ? "exited" : "failed",
         exitCode: result.kind === "exited" ? result.exitCode : -1,
@@ -620,11 +770,14 @@ export class GvisorCodexSandbox implements CodexSandbox {
         cliVersion,
         bundledCatalogDigest,
         ...collected,
+        ...researchCollected,
         isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
       };
     } finally {
       await rm(staging, { recursive: true, force: true });
       await rm(codexHome, { recursive: true, force: true });
+      if (researchDirectory !== undefined)
+        await rm(researchDirectory, { recursive: true, force: true });
     }
   }
 }

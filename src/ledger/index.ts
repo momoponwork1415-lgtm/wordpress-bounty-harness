@@ -181,6 +181,10 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       .optional(),
     sandboxExitCode: z.number().int().optional(),
     diagnosticArtifactDigest: digest.optional(),
+    /** Trial-local notes are Private Evidence; the ledger retains only their archive digest. */
+    researchArtifact: z
+      .strictObject({ digest, truncated: z.boolean() })
+      .optional(),
     /** Provider-reported tokens; absent when the transport returned no receipt. */
     usage: z
       .strictObject({

@@ -88,6 +88,33 @@ describe("TranslatePress 3.3.1 development-set example", () => {
     expect(current.lab).toEqual(previous.lab);
   });
 
+  it("keeps the whitebox v1.7 arm identical to the archived WP2Shell arm except for promptId", async () => {
+    const archived = (await example(
+      "campaign-wp2shell-bounty-v2.json",
+    )) as Record<string, unknown>;
+    const whitebox = (await example("campaign-whitebox-v1.7.json")) as Record<
+      string,
+      unknown
+    >;
+    expect(whitebox).toEqual({
+      ...archived,
+      promptId: "wp2shell-whitebox-v1.7",
+    });
+    expect(wordpressCampaignConfigSchema.safeParse(whitebox).success).toBe(
+      false,
+    );
+    expect(
+      wordpressCampaignConfigSchema.parse({
+        ...whitebox,
+        runWallTimeMinutes: 60,
+      }),
+    ).toMatchObject({
+      mode: "wp2shell",
+      promptId: "wp2shell-whitebox-v1.7",
+      entryIndex: true,
+    });
+  });
+
   it("pins the development target and bounds the trial to one discovery run", async () => {
     const config = wordpressCampaignConfigSchema.parse(
       await example("campaign.json"),
