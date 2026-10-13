@@ -840,3 +840,106 @@ export async function reverifyOnSelectedVersion<
     status: result.status,
   };
 }
+
+export type FindingLab<Target, Handle extends LabHandle> = {
+  readonly target: Target;
+  readonly snapshot: Snapshot;
+  readonly handle: Handle;
+  /** The latest verification of this Finding, to compare Lab setups with. */
+  readonly verification: {
+    readonly verificationId: string;
+    readonly labSetupDigest: string;
+  } | null;
+};
+
+/**
+ * `lab up --finding`: the same Lab supply verification used (frozen snapshot,
+ * profile setup, verification purpose, seeded canaries), for a human's own
+ * reproduction. Nothing is appended to the ledger; the Lab is not evidence.
+ */
+export async function provisionFindingLab<
+  Target extends TargetSelection,
+  Setup,
+  Handle extends LabHandle,
+>(options: {
+  readonly campaignId: string;
+  readonly findingId: string;
+  readonly ledger: Ledger;
+  readonly store: PrivateArtifactStore;
+  readonly pipeline: {
+    readonly freeze: (target: Target) => Promise<Snapshot>;
+    readonly setupFor: (snapshot: Snapshot) => Setup;
+    readonly lab: LabProvisioner<Setup, Handle>;
+  };
+  /** Profile parser for the private selection record. */
+  readonly readTarget: (value: unknown) => Target;
+}): Promise<FindingLab<Target, Handle>> {
+  const { campaignId, findingId, ledger, pipeline } = options;
+  const finding = ledger
+    .read({ campaignId, findingId, type: "finding-recorded", limit: 1 })
+    .at(0)?.event;
+  if (finding?.type !== "finding-recorded")
+    throw new Error("The finding is not recorded in this campaign");
+  const selected = ledger
+    .read({ campaignId, type: "target-selected", limit: 1000 })
+    .map(({ event }) => event)
+    .find(
+      (event) =>
+        event.type === "target-selected" &&
+        event.snapshotDigest === finding.snapshotDigest,
+    );
+  const reference = selected?.artifacts.find(
+    (artifact) => artifact.kind === "target-selection",
+  );
+  if (reference === undefined)
+    throw new Error("The finding's target selection is not recorded");
+  const file = await options.store.readFile(
+    reference.digest,
+    "target-selection.json",
+    1024 * 1024,
+  );
+  if (file.status !== "resolved")
+    throw new Error("The target selection record is unavailable");
+  const target = options.readTarget(
+    JSON.parse(file.bytes.toString("utf8")) as unknown,
+  );
+  const snapshot = await pipeline.freeze(target);
+  if (snapshot.digest !== finding.snapshotDigest)
+    throw new Error(
+      "The frozen source differs from the finding snapshot; the Lab was not started",
+    );
+  const verification = ledger
+    .read({ campaignId, findingId, type: "verification-finished", limit: 1000 })
+    .map(({ event }) => event)
+    .filter(
+      (event) =>
+        event.type === "verification-finished" &&
+        event.snapshotDigest === finding.snapshotDigest,
+    )
+    .at(-1);
+  const setup = pipeline.setupFor(snapshot);
+  const provisioned = await pipeline.lab.provision(snapshot, setup, {
+    purpose: "verification",
+  });
+  if (provisioned.status !== "ready")
+    throw new Error(
+      `Lab provision failed (${provisioned.reason}): ${provisioned.nextStep}`,
+    );
+  const seeded = await pipeline.lab.seedCanaries(provisioned.handle);
+  if (seeded.status !== "seeded") {
+    await pipeline.lab.teardown(provisioned.handle);
+    throw new Error(`Canary seeding failed: ${seeded.nextStep}`);
+  }
+  return {
+    target,
+    snapshot,
+    handle: provisioned.handle,
+    verification:
+      verification?.type === "verification-finished"
+        ? {
+            verificationId: verification.verificationId,
+            labSetupDigest: verification.labSetupDigest,
+          }
+        : null,
+  };
+}

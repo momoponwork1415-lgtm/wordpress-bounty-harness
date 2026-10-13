@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../../src/cli/index.js";
+import { reviewExportV1Schema } from "../../src/review/index.js";
 import {
   createWordPressCliProfile,
   wordpressCampaignConfigSchema,
@@ -154,6 +155,45 @@ async function harness(
   };
 
   const docker: DockerRequest[] = [];
+  // Docker resources the fake has created and not yet removed, so `lab down` sees real leftovers.
+  const live = {
+    containers: new Set<string>(),
+    networks: new Set<string>(),
+    volumes: new Set<string>(),
+  };
+  const track = (args: readonly string[]) => {
+    const names = (from: number) =>
+      args.slice(from).filter((arg) => !arg.startsWith("-"));
+    if (args[0] === "run") {
+      const name = args[args.indexOf("--name") + 1];
+      if (name !== undefined) live.containers.add(name);
+    } else if (args[0] === "rm")
+      for (const name of names(1)) live.containers.delete(name);
+    else if (args[0] === "network" || args[0] === "volume") {
+      const kind = args[0] === "network" ? live.networks : live.volumes;
+      if (args[1] === "create") kind.add(args.at(-1) ?? "");
+      if (args[1] === "rm") for (const name of names(2)) kind.delete(name);
+    }
+  };
+  // Whole-site state the capture reads around the Verifier run (#186); one option changes once the Verifier ran.
+  let verifierAttempts = 0;
+  const labState = (sql: string) => {
+    if (sql === "SHOW TABLES") return "wp_options\nwp_users\nwp_usermeta\n";
+    if (sql.startsWith("SELECT option_name"))
+      return `blogname\tSynthetic\tyes\nsynthetic_plugin_shared\t${
+        verifierAttempts === 0 ? "untouched" : `written-${verifierAttempts}`
+      }\tno\n`;
+    if (sql.startsWith("SELECT u.ID"))
+      return (
+        "1\tharness-admin\tadmin@lab.invalid\t2026-10-08 00:00:00\t" +
+        `${"a".repeat(64)}\ta:1:{s:13:"administrator";b:1;}\n`
+      );
+    if (sql.startsWith("SELECT 'wp_"))
+      return "wp_options\t2\nwp_users\t1\nwp_usermeta\t3\n";
+    if (sql.startsWith("CHECKSUM TABLE"))
+      return "wordpress.wp_options\t1\nwordpress.wp_users\t2\nwordpress.wp_usermeta\t3\n";
+    return undefined;
+  };
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
     images: {
@@ -177,6 +217,7 @@ async function harness(
     runner: {
       async run(request) {
         docker.push(request);
+        track(request.args);
         if (request.args[0] === "ps")
           return {
             exitCode: 0,
@@ -187,6 +228,7 @@ async function harness(
               `provider-egress-broker-${uuid}`,
               "operator-postgres",
               "wbh-notes",
+              ...live.containers,
             ].join("\n"),
             stderr: "",
           };
@@ -197,15 +239,23 @@ async function harness(
               `wbh-${uuid}-net`,
               `provider-egress-${uuid}`,
               "bridge",
+              ...live.networks,
             ].join("\n"),
             stderr: "",
           };
         if (request.args[0] === "volume" && request.args[1] === "ls")
           return {
             exitCode: 0,
-            stdout: [`wbh-${uuid}-site`, "operator-data"].join("\n"),
+            stdout: [`wbh-${uuid}-site`, "operator-data", ...live.volumes].join(
+              "\n",
+            ),
             stderr: "",
           };
+        if (request.args[0] === "exec" && request.args[2] === "mariadb") {
+          const sql = request.args[request.args.indexOf("--execute") + 1];
+          const stdout = sql === undefined ? undefined : labState(sql);
+          if (stdout !== undefined) return { exitCode: 0, stdout, stderr: "" };
+        }
         if (request.args[0] === "info")
           return { exitCode: 0, stdout: '{"runsc":{}}', stderr: "" };
         if (
@@ -363,7 +413,6 @@ async function harness(
     [];
   const expirations: string[] = [];
   const verifierReferenceRoutes: unknown[] = [];
-  let verifierAttempts = 0;
   let inFlight = 0;
   let maxInFlight = 0;
   const boundaries: WordPressCampaignBoundaries = {
@@ -664,6 +713,7 @@ async function harness(
     expirations,
     verifierReferenceRoutes,
     docker,
+    live,
     root,
     ledger: () => state.ledger,
     state: () => state,
@@ -3151,5 +3201,240 @@ describe("harness CLI vertical slice", () => {
     );
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("not in the review queue");
+  });
+
+  it("exports one-screen review material with Private Evidence paths and brings the verification Lab up and down (#186)", async () => {
+    const { run, configPath, docker, live, ledger, root } = await harness();
+    const campaign = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-1",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    const queue = await run("review", "--campaign", "campaign-1");
+    const confirmedFinding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      queue.stdout,
+    )?.[1];
+    expect(confirmedFinding).toBeDefined();
+
+    // The observer captured the option the Verifier wrote; the verdict is the judge's alone.
+    const verification = ledger().read({
+      campaignId: "campaign-1",
+      findingId: confirmedFinding!,
+      type: "verification-finished",
+    })[0]?.event;
+    expect(verification).toMatchObject({
+      result: { status: "runtime-confirmed" },
+      labStateDiff: { status: "captured" },
+    });
+
+    const exported = await run(
+      "review",
+      "export",
+      "--campaign",
+      "campaign-1",
+      "--finding",
+      confirmedFinding!,
+    );
+    expect(exported.stderr).toBe("");
+    expect(exported.code).toBe(0);
+    const bundle = reviewExportV1Schema.parse(JSON.parse(exported.stdout));
+    expect(bundle.schema).toBe("review-export/v1");
+    expect(bundle.finding).toMatchObject({
+      claim: "Synthetic account-takeover claim",
+      attackerPosition: "subscriber",
+      impact: "account-takeover",
+      brokenProperty: "Synthetic property",
+      promptVariant: "short-objective-managed-v4",
+      promptDigest: expect.stringMatching(/^sha256:/),
+    });
+    expect(bundle.target).toMatchObject({
+      selectionId: "wporg:synthetic-plugin@3.3.1",
+      activeInstallations: 5000,
+      versions: {
+        explored: "3.3.1",
+        latestKnown: "3.3.1",
+        sameAsExplored: true,
+      },
+    });
+    expect(bundle.verification).toMatchObject({
+      status: "runtime-confirmed",
+      evidenceCapture: "agent-authored",
+    });
+    // The fixture Verifier's http.json is not in the exchanges shape, so no rows are summarized.
+    expect(bundle.http).toEqual({
+      source: "unavailable",
+      path: null,
+      exchanges: [],
+      truncated: false,
+    });
+    expect(bundle.labStateDiff).toMatchObject({
+      status: "captured",
+      summary: {
+        settings: { changed: [{ key: "synthetic_plugin_shared" }] },
+        principals: { added: [], removed: [], changed: [] },
+      },
+    });
+    // Values stay in Private Evidence; the bundle carries names, digests and paths.
+    expect(exported.stdout).not.toContain("untouched");
+    expect(exported.stdout).not.toContain("written-");
+    expect(exported.stdout).not.toContain("synthetic-victim-session");
+    expect(exported.stdout).not.toContain("labObservations");
+    expect(exported.stdout).not.toContain("admin@lab.invalid");
+    const evidenceDirectory = join(root, "state", "private-evidence");
+    expect(bundle.privateEvidence.directory).toBe(evidenceDirectory);
+    expect(bundle.privateEvidence.artifacts.length).toBeGreaterThan(3);
+    for (const artifact of bundle.privateEvidence.artifacts)
+      expect(artifact.path).toBe(
+        join(evidenceDirectory, artifact.digest, "content"),
+      );
+    if (bundle.labStateDiff.status !== "captured")
+      throw new Error("unreachable");
+    expect(
+      JSON.parse(
+        await readFile(
+          join(bundle.labStateDiff.path, "lab-state-diff.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({
+      schema: "wordpress-lab-state-diff/v1",
+      summary: { optionsChanged: 1, usersChanged: 0 },
+    });
+
+    const decided = await run(
+      "review",
+      "decide",
+      "--campaign",
+      "campaign-1",
+      "--finding",
+      confirmedFinding!,
+      "--decision",
+      "accept",
+      "--reason",
+      "reproduced-by-hand",
+      "--minutes",
+      "5",
+    );
+    expect(decided.stderr).toBe("");
+    expect(decided.code).toBe(0);
+    expect(
+      ledger().read({
+        campaignId: "campaign-1",
+        findingId: confirmedFinding!,
+        type: "review-decided",
+      })[0]?.event,
+    ).toMatchObject({
+      humanElapsedSeconds: 300,
+      verificationId: expect.any(String),
+      runId: expect.any(String),
+      promptDigest: bundle.finding.promptDigest,
+    });
+
+    // lab up re-creates the verification Lab and publishes it on loopback; no ledger event is written.
+    const dockerBefore = docker.length;
+    const eventsBefore = ledger().read({ type: "lab-provisioned" }).length;
+    const up = await run(
+      "lab",
+      "up",
+      "--campaign",
+      "campaign-1",
+      "--finding",
+      confirmedFinding!,
+      "--config",
+      configPath,
+    );
+    expect(up.stderr).toBe("");
+    expect(up.code).toBe(0);
+    const labId = /^lab ([0-9a-f-]{36}) up for finding /.exec(up.stdout)?.[1];
+    expect(labId).toBeDefined();
+    expect(up.stdout).toContain(`snapshot ${bundle.snapshotDigest}`);
+    expect(up.stdout).toMatch(/same as verification \S+/);
+    expect(up.stdout).toContain("http: http://127.0.0.1:8080/");
+    expect(up.stdout).toMatch(
+      /attacker subscriber: wbh-subscriber-\S+ \/ \S+ \(Lab only\)/,
+    );
+    expect(up.stdout).toContain(
+      "database (read-only): mysql -h 127.0.0.1 -P 3307 -u wbh_reader",
+    );
+    expect(ledger().read({ type: "lab-provisioned" })).toHaveLength(
+      eventsBefore,
+    );
+    const since = docker.slice(dockerBefore).map(({ args }) => args);
+    expect(
+      since.every(
+        (args) => args[0] !== "run" || args.includes("--runtime=runsc"),
+      ),
+    ).toBe(true);
+    const gateway = since.find(
+      (args) =>
+        args[0] === "run" &&
+        args[args.indexOf("--name") + 1] === `wbh-${labId}-host`,
+    );
+    expect(gateway).toContain("127.0.0.1:8080:80");
+    expect(gateway).toContain("127.0.0.1:3307:3306");
+    expect(
+      since.some(
+        (args) =>
+          args[0] === "network" &&
+          args[1] === "connect" &&
+          args[2] === `wbh-${labId}-net`,
+      ),
+    ).toBe(true);
+    expect(
+      [...live.containers].filter((name) => name.includes(labId!)),
+    ).toEqual(
+      expect.arrayContaining([
+        `wbh-${labId}-db`,
+        `wbh-${labId}-wp`,
+        `wbh-${labId}-host`,
+      ]),
+    );
+    const again = await run(
+      "lab",
+      "up",
+      "--campaign",
+      "campaign-1",
+      "--finding",
+      confirmedFinding!,
+      "--config",
+      configPath,
+    );
+    expect(again.code).not.toBe(0);
+    expect(again.stderr).toContain("already up");
+
+    // lab down removes exactly this Lab's containers, network and volume; nothing of it remains.
+    const removalsBefore = docker.length;
+    const down = await run("lab", "down");
+    expect(down.stderr).toBe("");
+    expect(down.code).toBe(0);
+    expect(down.stdout.split("\n")[0]).toBe(`lab ${labId} down`);
+    expect(down.stdout).toMatch(/containers [1-9]\d* removed, 0 remaining$/m);
+    expect(down.stdout).toMatch(/networks 1 removed, 0 remaining$/m);
+    expect(down.stdout).toMatch(/volumes 1 removed, 0 remaining$/m);
+    const removed = docker
+      .slice(removalsBefore)
+      .map(({ args }) => args)
+      .filter(
+        (args) =>
+          args[0] === "rm" ||
+          ((args[0] === "network" || args[0] === "volume") && args[1] === "rm"),
+      )
+      .flatMap((args) =>
+        args
+          .slice(args.indexOf("rm") + 1)
+          .filter((arg) => !arg.startsWith("-")),
+      );
+    expect(removed.length).toBeGreaterThanOrEqual(4);
+    expect(removed.every((name) => name.includes(labId!))).toBe(true);
+    for (const names of Object.values(live))
+      expect([...names].filter((name) => name.includes(labId!))).toEqual([]);
+    const nothing = await run("lab", "down");
+    expect(nothing.code).toBe(0);
+    expect(nothing.stdout).toContain("no lab recorded by lab up");
   });
 });

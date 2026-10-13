@@ -32,10 +32,12 @@ import {
   type CampaignFunnel,
   type FunnelCounts,
 } from "../ledger/index.js";
-import type {
-  DuplicateLookupResult,
-  Review,
-  ReviewQueue,
+import {
+  exportReviewBundle,
+  type DuplicateLookupResult,
+  type Review,
+  type ReviewQueue,
+  type StateDiffReader,
 } from "../review/index.js";
 import type { CampaignSummary, ReverificationSummary } from "./pipeline.js";
 
@@ -53,8 +55,51 @@ export type CliState = {
   readonly store: PrivateArtifactStore;
   /** Where Private Evidence artifacts live on this host (outside Git). */
   readonly evidenceDirectory: string;
+  /** The state root; `lab up` keeps its one record file here. */
+  readonly stateDirectory: string;
   readonly clock: () => Date;
   readonly newId: () => string;
+};
+
+/** What `lab up --finding` started; Lab-only credentials are printed on purpose (#186). */
+export type LabUpSummary = {
+  readonly labId: string;
+  readonly campaignId: string;
+  readonly findingId: string;
+  readonly snapshotDigest: string;
+  readonly scenario: { readonly id: string; readonly digest: string } | null;
+  readonly setupDigest: string;
+  /** Null when the Finding has no verification to compare with. */
+  readonly matchesVerification: {
+    readonly verificationId: string;
+    readonly same: boolean;
+  } | null;
+  readonly http: { readonly port: number; readonly hostHeader: string };
+  readonly database: {
+    readonly port: number;
+    readonly name: string;
+    readonly username: string;
+    readonly password: string;
+  } | null;
+  readonly attackerAccounts: readonly {
+    readonly role: string;
+    readonly username: string;
+    readonly password: string;
+  }[];
+};
+
+export type LabDownSummary = {
+  readonly labId: string | null;
+  readonly removed: {
+    readonly containers: readonly string[];
+    readonly networks: readonly string[];
+    readonly volumes: readonly string[];
+  };
+  readonly remaining: {
+    readonly containers: readonly string[];
+    readonly networks: readonly string[];
+    readonly volumes: readonly string[];
+  };
 };
 
 export interface CliSelectionReport {
@@ -153,6 +198,24 @@ export interface CliProfile {
       readonly smokeReplayDigest?: string;
     },
   ): Promise<ReverificationSummary>;
+  /** Summarizes the profile's Lab state diff artifact for `review export` (#186). */
+  stateDiffReader(state: CliState): StateDiffReader;
+  /** Starts the verification Lab of one Finding and publishes it on host loopback ports. */
+  labUp(
+    state: CliState,
+    input: {
+      readonly campaignId: string;
+      readonly findingId: string;
+      readonly configPath: string;
+      readonly httpPort: number;
+      readonly databasePort: number;
+    },
+  ): Promise<LabUpSummary>;
+  /** Removes the Lab `lab up` started; containers, networks and volumes. */
+  labDown(
+    state: CliState,
+    input: { readonly configPath: string | null },
+  ): Promise<LabDownSummary>;
 }
 
 type ReviewLabSession = Awaited<
@@ -178,7 +241,8 @@ const USAGE = [
   "  review [--campaign <id>]",
   "  review inspect --campaign <id> --finding <id>",
   "  review parked --campaign <id>",
-  "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>]",
+  "  review export --campaign <id> --finding <id>",
+  "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>] [--minutes <n>]",
   "  review open --campaign <id> --finding <id> [--minutes <n>]",
   "  review reproduced --campaign <id> --finding <id> --result match|mismatch|unavailable [--minutes <n>]",
   "  review dedupe --campaign <id> --finding <id>",
@@ -195,6 +259,8 @@ const USAGE = [
   "  runtime check --config <path>",
   "  lab cleanup --config <path> [--remove]",
   "  lab up --for-review --campaign <id> --finding <id>",
+  "  lab up --campaign <id> --finding <id> --config <path> [--port <n>] [--db-port <n>]",
+  "  lab down [--config <path>]",
   "  eval score --campaign <id> --keys <path> --case <id> [--manifest <path>]",
   "  eval case-blocked --campaign <id> --case <id> --snapshot <digest> --stage source|dependency|lab --reason <code>",
   "  eval keys --keys <path> [--manifest <path>]",
@@ -235,6 +301,8 @@ const options = {
   remove: { type: "boolean" },
   "for-review": { type: "boolean" },
   "retry-incomplete": { type: "boolean" },
+  port: { type: "string" },
+  "db-port": { type: "string" },
 } as const;
 
 class UsageError extends Error {}
@@ -306,6 +374,7 @@ async function openState(
   return {
     store,
     evidenceDirectory,
+    stateDirectory: root,
     ledger: new Ledger({
       databasePath: join(root, "ledger.sqlite"),
       artifactStore: store,
@@ -564,6 +633,59 @@ export async function runForegroundReviewLab(
   }
 }
 
+function integerOption(
+  value: string | undefined,
+  name: string,
+  fallback: number,
+  max: number,
+): number {
+  if (value === undefined) return fallback;
+  if (!/^\d{1,7}$/.test(value) || Number(value) > max)
+    throw new UsageError(`--${name} must be an integer up to ${max}`);
+  return Number(value);
+}
+
+export function formatLabUp(summary: LabUpSummary): string[] {
+  const lines = [
+    `lab ${summary.labId} up for finding ${summary.findingId} (campaign ${summary.campaignId})`,
+    `  snapshot ${summary.snapshotDigest}`,
+    `  scenario ${summary.scenario === null ? "none" : `${summary.scenario.id} ${summary.scenario.digest}`}`,
+    `  setup ${summary.setupDigest}  ${
+      summary.matchesVerification === null
+        ? "no verification to compare"
+        : summary.matchesVerification.same
+          ? `same as verification ${summary.matchesVerification.verificationId}`
+          : `DIFFERS from verification ${summary.matchesVerification.verificationId}`
+    }`,
+    `  http: http://127.0.0.1:${summary.http.port}/  (send Host: ${summary.http.hostHeader}; e.g. curl --resolve ${summary.http.hostHeader}:${summary.http.port}:127.0.0.1 http://${summary.http.hostHeader}:${summary.http.port}/)`,
+    `  browser: map ${summary.http.hostHeader} to 127.0.0.1 in /etc/hosts and start with --port 80, because the site URL is http://${summary.http.hostHeader}`,
+  ];
+  for (const account of summary.attackerAccounts)
+    lines.push(
+      `  attacker ${account.role}: ${account.username} / ${account.password} (Lab only)`,
+    );
+  lines.push(
+    summary.database === null
+      ? "  database: not exposed by this Lab setup"
+      : `  database (read-only): mysql -h 127.0.0.1 -P ${summary.database.port} -u ${summary.database.username} -p'${summary.database.password}' ${summary.database.name}`,
+    "  finish with: lab down",
+  );
+  return lines;
+}
+
+export function formatLabDown(summary: LabDownSummary): string[] {
+  const count = (kind: "containers" | "networks" | "volumes") =>
+    `${kind} ${summary.removed[kind].length} removed, ${summary.remaining[kind].length} remaining${summary.remaining[kind].length === 0 ? "" : `: ${summary.remaining[kind].join(", ")}`}`;
+  return [
+    summary.labId === null
+      ? "no lab recorded by lab up"
+      : `lab ${summary.labId} down`,
+    `  ${count("containers")}`,
+    `  ${count("networks")}`,
+    `  ${count("volumes")}`,
+  ];
+}
+
 export async function runCli(
   argv: readonly string[],
   environment: CliEnvironment,
@@ -724,6 +846,20 @@ export async function runCli(
         }
         return 0;
       }
+      case "review export": {
+        // The one read interface for the skills (ADR 0031). Bodies and payloads stay behind paths.
+        const bundle = await exportReviewBundle({
+          ledger: state.ledger,
+          store: state.store,
+          evidenceDirectory: state.evidenceDirectory,
+          campaignId: required(values.campaign, "campaign"),
+          findingId: required(values.finding, "finding"),
+          stateDiff: environment.profile.stateDiffReader(state),
+          clock: state.clock,
+        });
+        io.stdout(canonicalJson(bundle));
+        return 0;
+      }
       case "review decide": {
         const review = environment.profile.review(state);
         const item = queued(review, values);
@@ -735,6 +871,8 @@ export async function runCli(
           decision !== "defer"
         )
           throw new UsageError("--decision must be accept, reject or defer");
+        // One caller input: the minutes land on the decision (ADR 0032 Q22) and on the effort record.
+        const minutes = await humanMinutes(values.minutes, io, "read");
         const recorded = await review.decide({
           ref: item.ref,
           decision,
@@ -742,11 +880,13 @@ export async function runCli(
           openedEvidence: values.opened ?? [],
           duplicate: parseDuplicate(values.duplicate),
           decidedBy: values.by ?? "operator",
+          ...(minutes === null
+            ? {}
+            : { humanElapsedSeconds: Math.round(minutes * 60) }),
         });
         io.stdout(
           `recorded ${recorded.decision} (${recorded.reasonCode}) for finding ${findingId} at ${recorded.decidedAt}`,
         );
-        const minutes = await humanMinutes(values.minutes, io, "read");
         if (minutes !== null)
           await review.recordHumanEffort({
             campaignId: item.ref.campaignId,
@@ -972,25 +1112,51 @@ export async function runCli(
         return 0;
       }
       case "lab up": {
-        if (values["for-review"] !== true)
-          throw new UsageError("lab up requires --for-review");
-        const launch = environment.profile.reviewLab;
-        if (launch === undefined)
-          throw new UsageError("This profile has no review Lab provisioner");
-        const item = queued(environment.profile.review(state), values);
-        if (item.status === "incomplete")
-          throw new UsageError(
-            "A reproduction package is required for review Lab setup",
+        if (values["for-review"] === true) {
+          const launch = environment.profile.reviewLab;
+          if (launch === undefined)
+            throw new UsageError("This profile has no review Lab provisioner");
+          const item = queued(environment.profile.review(state), values);
+          if (item.status === "incomplete")
+            throw new UsageError(
+              "A reproduction package is required for review Lab setup",
+            );
+          await runForegroundReviewLab(
+            () =>
+              launch(state, {
+                packageDigest: item.reproductionPackageDigest,
+                category: item.category,
+              }),
+            io,
           );
-        await runForegroundReviewLab(
-          () =>
-            launch(state, {
-              packageDigest: item.reproductionPackageDigest,
-              category: item.category,
-            }),
-          io,
-        );
+          return 0;
+        }
+        const summary = await environment.profile.labUp(state, {
+          campaignId: required(values.campaign, "campaign"),
+          findingId: required(values.finding, "finding"),
+          configPath: resolve(required(values.config, "config")),
+          httpPort: integerOption(values.port, "port", 8080, 65535),
+          databasePort: integerOption(
+            values["db-port"],
+            "db-port",
+            3307,
+            65535,
+          ),
+        });
+        print(formatLabUp(summary));
         return 0;
+      }
+      case "lab down": {
+        const summary = await environment.profile.labDown(state, {
+          configPath:
+            values.config === undefined ? null : resolve(values.config),
+        });
+        print(formatLabDown(summary));
+        const remaining =
+          summary.remaining.containers.length +
+          summary.remaining.networks.length +
+          summary.remaining.volumes.length;
+        return remaining === 0 ? 0 : 1;
       }
       case "runtime check": {
         const items = await environment.profile.checkRuntime(state, {

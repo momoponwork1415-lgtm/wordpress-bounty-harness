@@ -12,6 +12,7 @@ import {
   Verification,
   VerifierTransportIncompleteError,
   type Judge,
+  type LabStateObserver,
   type Verifier,
 } from "../../src/verification/index.js";
 
@@ -72,6 +73,10 @@ async function fixture(
     /** Attempt a comparison against another frozen snapshot. */
     readonly latestVersion?: boolean;
     readonly scenario?: { readonly id: string; readonly digest: string };
+    /** Whole-Lab before / after capture around the Verifier run (#186); receives the fixture's store. */
+    readonly stateObserver?: (
+      store: PrivateArtifactStore,
+    ) => LabStateObserver<LabHandle>;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-verify-"));
@@ -359,6 +364,9 @@ async function fixture(
       },
     },
     clock: () => new Date("2026-10-08T01:00:00Z"),
+    ...(options.stateObserver === undefined
+      ? {}
+      : { stateObserver: options.stateObserver(store) }),
   });
   const basisKind =
     options.fixedVersion === true
@@ -816,5 +824,141 @@ describe("verification public interface", () => {
     });
     expect(calls.verifier).toBe(0);
     expect(calls.teardown).toBe(1);
+  });
+});
+
+describe("Lab state observer around the Verifier run", () => {
+  const beforeDigest = `sha256:${"d".repeat(64)}`;
+
+  it("captures before and after the Verifier, never hands the capture to the Verifier, and records digests by kind", async () => {
+    const order: string[] = [];
+    const verifierInputs: unknown[] = [];
+    const digests: string[] = [];
+    let store!: PrivateArtifactStore;
+    const { result, ledger } = await fixture({
+      stateObserver: (fixtureStore) => ({
+        async before(lab) {
+          store = fixtureStore;
+          order.push(`before:${lab.id}`);
+          digests.push(await store.putFiles({ "lab-state.json": '{"n":1}' }));
+          return { digest: digests[0]!, state: { n: 1 } };
+        },
+        async after(lab, before) {
+          order.push(`after:${lab.id}:${before.digest}`);
+          digests.push(await store.putFiles({ "lab-state.json": '{"n":2}' }));
+          digests.push(await store.putFiles({ "lab-state-diff.json": "{}" }));
+          return {
+            status: "captured",
+            artifacts: [
+              { kind: "lab-state-before", digest: before.digest },
+              { kind: "lab-state-after", digest: digests[1]! },
+              { kind: "lab-state-diff", digest: digests[2]! },
+            ],
+          };
+        },
+      }),
+      verifier: async (input) => {
+        order.push("verifier");
+        verifierInputs.push(input);
+        return {
+          status: "attempted",
+          recipeDigest: await store.putFiles({ "recipe.json": "{}" }),
+        };
+      },
+    });
+    expect(result.status).toBe("runtime-confirmed");
+    expect(order).toEqual([
+      "before:lab-1",
+      "verifier",
+      `after:lab-1:${digests[0]}`,
+    ]);
+    // The Verifier sees the campaign, the Finding and the Lab handle only.
+    expect(Object.keys(verifierInputs[0] as object).sort()).toEqual([
+      "campaignId",
+      "finding",
+      "lab",
+    ]);
+    expect(JSON.stringify(verifierInputs[0])).not.toContain(digests[0]);
+    const finished = ledger.read({ type: "verification-finished" })[0]?.event;
+    if (finished?.type !== "verification-finished")
+      throw new Error("missing event");
+    expect(finished.labStateDiff).toEqual({ status: "captured" });
+    expect(
+      finished.artifacts.filter((a) => a.kind.startsWith("lab-state-")),
+    ).toEqual([
+      { kind: "lab-state-before", digest: digests[0] },
+      { kind: "lab-state-after", digest: digests[1] },
+      { kind: "lab-state-diff", digest: digests[2] },
+    ]);
+  });
+
+  it("downgrades a failed capture to a missing artifact with its stage and leaves the verdict alone", async () => {
+    const first = await fixture({
+      stateObserver: () => ({
+        async before() {
+          throw new Error("database unreachable");
+        },
+        async after() {
+          throw new Error("unreachable");
+        },
+      }),
+    });
+    expect(first.result.status).toBe("runtime-confirmed");
+    const event = first.ledger.read({ type: "verification-finished" })[0]
+      ?.event;
+    if (event?.type !== "verification-finished") throw new Error("missing");
+    expect(event.labStateDiff).toEqual({
+      status: "missing",
+      reason: "before-capture",
+    });
+    expect(event.artifacts.some((a) => a.kind.startsWith("lab-state"))).toBe(
+      false,
+    );
+
+    const second = await fixture({
+      stateObserver: () => ({
+        async before() {
+          return { digest: beforeDigest, state: {} };
+        },
+        async after() {
+          throw new Error("database unreachable");
+        },
+      }),
+    });
+    expect(second.result.status).toBe("runtime-confirmed");
+    const other = second.ledger.read({ type: "verification-finished" })[0]
+      ?.event;
+    if (other?.type !== "verification-finished") throw new Error("missing");
+    expect(other.labStateDiff).toEqual({
+      status: "missing",
+      reason: "after-capture",
+    });
+
+    // An observer that reports no capture at all leaves the event as before #186.
+    const third = await fixture();
+    const plain = third.ledger.read({ type: "verification-finished" })[0]
+      ?.event;
+    if (plain?.type !== "verification-finished") throw new Error("missing");
+    expect(plain.labStateDiff).toBeUndefined();
+  });
+
+  it("captures the after state even when the Verifier throws", async () => {
+    let afterCalls = 0;
+    const { result } = await fixture({
+      stateObserver: () => ({
+        async before() {
+          return { digest: beforeDigest, state: {} };
+        },
+        async after() {
+          afterCalls++;
+          return { status: "missing", reason: "after-capture" };
+        },
+      }),
+      verifier: async () => {
+        throw new VerifierTransportIncompleteError("sandbox");
+      },
+    });
+    expect(result).toMatchObject({ status: "incomplete", reason: "sandbox" });
+    expect(afterCalls).toBe(1);
   });
 });

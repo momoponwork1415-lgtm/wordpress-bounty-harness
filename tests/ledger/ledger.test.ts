@@ -1079,3 +1079,91 @@ describe("Ledger public interface", () => {
     ).toEqual({ status: "conflict" });
   });
 });
+
+describe("Ledger optional fields added for review material (#186)", () => {
+  it("accepts verification events with and without a Lab state diff and decisions with Q22 fields", async () => {
+    const { ledger, artifactStore } = await fixture();
+    const proof = await evidence(artifactStore);
+    const result = {
+      status: "incomplete" as const,
+      reason: "observation" as const,
+      nextStep: "Review the diff",
+    };
+    await ledger.append({
+      ...common("verification-old"),
+      type: "verification-finished",
+      verificationId: "verification-old",
+      findingId: "finding-1",
+      labSetupDigest: labSetup,
+      result,
+    });
+    await ledger.append({
+      ...common("verification-captured"),
+      type: "verification-finished",
+      verificationId: "verification-captured",
+      findingId: "finding-1",
+      labSetupDigest: labSetup,
+      result,
+      labStateDiff: { status: "captured" },
+      artifacts: [{ kind: "lab-state-diff", digest: proof }],
+    });
+    await ledger.append({
+      ...common("verification-missing"),
+      type: "verification-finished",
+      verificationId: "verification-missing",
+      findingId: "finding-1",
+      labSetupDigest: labSetup,
+      result,
+      labStateDiff: { status: "missing", reason: "before-capture" },
+    });
+    // A digest the store does not hold is still refused, whatever the kind.
+    await expect(
+      ledger.append({
+        ...common("verification-dangling"),
+        type: "verification-finished",
+        verificationId: "verification-dangling",
+        findingId: "finding-1",
+        labSetupDigest: labSetup,
+        result,
+        labStateDiff: { status: "captured" },
+        artifacts: [{ kind: "lab-state-diff", digest: revision }],
+      }),
+    ).rejects.toThrow();
+    await ledger.append({
+      ...common("decision-old"),
+      type: "review-decided",
+      findingId: "finding-1",
+      decision: "defer",
+    });
+    await ledger.append({
+      ...common("decision-traced"),
+      type: "review-decided",
+      findingId: "finding-1",
+      decision: "accept",
+      humanElapsedSeconds: 600,
+      verificationId: "verification-captured",
+      runId: "run-1",
+      promptDigest: revision,
+    });
+    await expect(
+      ledger.append({
+        ...common("decision-too-long"),
+        type: "review-decided",
+        findingId: "finding-1",
+        decision: "accept",
+        humanElapsedSeconds: 604_801,
+      }),
+    ).rejects.toThrow();
+    const events = ledger
+      .read({ type: "verification-finished" })
+      .map(({ event }) =>
+        event.type === "verification-finished" ? event.labStateDiff : null,
+      );
+    expect(events).toEqual([
+      undefined,
+      { status: "captured" },
+      { status: "missing", reason: "before-capture" },
+    ]);
+    expect(ledger.read({ type: "review-decided" })).toHaveLength(2);
+  });
+});

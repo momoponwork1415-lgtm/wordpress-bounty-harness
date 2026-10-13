@@ -123,6 +123,40 @@ export type ReproducerObservation =
       readonly nextStep: string;
     };
 
+/** An opaque Lab state the observer took before the Verifier ran; only its digest is generic. */
+export type LabStateCapture = {
+  readonly digest: string;
+  readonly state: unknown;
+};
+
+/**
+ * Where the before / after states and their diff went. A missing capture is a
+ * missing artifact with a reason; it never changes the verification result.
+ */
+export type LabStateDiffRecord =
+  | {
+      readonly status: "captured";
+      readonly artifacts: readonly {
+        readonly kind:
+          "lab-state-before" | "lab-state-after" | "lab-state-diff";
+        readonly digest: string;
+      }[];
+    }
+  | {
+      readonly status: "missing";
+      readonly reason: "before-capture" | "after-capture" | "store";
+    };
+
+/**
+ * Harness-owned deterministic observation of the whole Lab state around the
+ * Verifier run (#186). The Verifier never receives it, and no judge reads it:
+ * it is review material, not proof.
+ */
+export interface LabStateObserver<Handle extends LabHandle> {
+  before(lab: Handle): Promise<LabStateCapture | null>;
+  after(lab: Handle, before: LabStateCapture): Promise<LabStateDiffRecord>;
+}
+
 type Incomplete = Extract<VerificationResultV1, { status: "incomplete" }>;
 type VerificationRun<
   Finding extends VerifiableFinding,
@@ -141,6 +175,8 @@ type VerificationRun<
   readonly referenceRoute: unknown;
   readonly basisKind: "latest-version" | "fixed-version" | undefined;
   readonly onCapture: (capture: "harness-captured" | "agent-authored") => void;
+  /** Receives where the before / after Lab state diff went (#186). */
+  readonly onStateDiff: (record: LabStateDiffRecord) => void;
 };
 const incomplete = (
   reason: Incomplete["reason"],
@@ -169,6 +205,8 @@ export type VerificationOptions<
   /** Profile parser for the private Finding record. */
   readonly readFinding: (value: unknown) => Finding;
   readonly renderer: ReproductionRenderer<Reconstruction>;
+  /** Optional before / after Lab state diff; absent, the event carries no diff field. */
+  readonly stateObserver?: LabStateObserver<Handle>;
   readonly clock?: () => Date;
 };
 
@@ -213,6 +251,7 @@ export class Verification<
     const snapshotDigest = digest.parse(input.snapshot.digest);
     let labSetupDigest = digest.parse(input.campaignLabSetupDigest);
     let evidenceCapture: "harness-captured" | "agent-authored" | undefined;
+    let labStateDiff: LabStateDiffRecord | undefined;
     const loaded = await this.#loadFinding(campaignId, findingId);
 
     const decide = async (): Promise<VerificationResultV1> => {
@@ -305,6 +344,9 @@ export class Verification<
             onCapture: (capture) => {
               evidenceCapture = capture;
             },
+            onStateDiff: (record) => {
+              labStateDiff = record;
+            },
           },
           judge,
         );
@@ -347,6 +389,23 @@ export class Verification<
           }),
       result: decided,
       ...(evidenceCapture === undefined ? {} : { evidenceCapture }),
+      // The diff is review material by digest; a failed capture is recorded, never a verdict.
+      ...(labStateDiff === undefined
+        ? {}
+        : labStateDiff.status === "captured"
+          ? {
+              labStateDiff: { status: "captured" as const },
+              artifacts: labStateDiff.artifacts.map((artifact) => ({
+                kind: artifact.kind,
+                digest: artifact.digest,
+              })),
+            }
+          : {
+              labStateDiff: {
+                status: "missing" as const,
+                reason: labStateDiff.reason,
+              },
+            }),
     });
     if (appended.status === "conflict")
       throw new Error("Verification identity conflict");
@@ -384,6 +443,7 @@ export class Verification<
       referenceRoute,
       basisKind,
       onCapture,
+      onStateDiff,
     } = run;
     if (lab.snapshotDigest !== snapshotDigest)
       return incomplete(
@@ -396,6 +456,25 @@ export class Verification<
         "provision",
         seeded?.nextStep ?? "Seed canaries in a fresh Lab",
       );
+    // The observer sees the Lab before and after the Verifier; the Verifier sees neither capture.
+    const observer = this.#options.stateObserver;
+    const before =
+      observer === undefined
+        ? undefined
+        : await observer.before(lab).catch(() => null);
+    const observeAfter = async (): Promise<void> => {
+      if (observer === undefined) return;
+      if (before === null || before === undefined) {
+        onStateDiff({ status: "missing", reason: "before-capture" });
+        return;
+      }
+      onStateDiff(
+        await observer.after(lab, before).catch((): LabStateDiffRecord => ({
+          status: "missing",
+          reason: "after-capture",
+        })),
+      );
+    };
     let attempt: VerifierAttempt;
     try {
       attempt = await this.#options.verifier.attempt({
@@ -405,6 +484,7 @@ export class Verification<
         ...(referenceRoute === undefined ? {} : { referenceRoute }),
       });
     } catch (error) {
+      await observeAfter();
       if (error instanceof VerifierTransportIncompleteError)
         return incomplete(
           error.reason,
@@ -415,6 +495,7 @@ export class Verification<
         "The Verifier did not finish; repeat with a fresh Verifier",
       );
     }
+    await observeAfter();
     if (attempt.status === "incomplete")
       return {
         ...incomplete(attempt.reason, attempt.nextStep),

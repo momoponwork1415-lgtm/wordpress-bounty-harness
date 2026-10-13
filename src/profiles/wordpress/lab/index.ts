@@ -9,6 +9,24 @@ import { z } from "zod";
 
 import { startLabContainers } from "./container-startup.js";
 import {
+  exposeWordPressLabToHost,
+  type HostExposure,
+} from "./host-exposure.js";
+import {
+  captureWordPressLabState,
+  type WordPressLabState,
+} from "./state-capture.js";
+export type {
+  WordPressLabState,
+  WordPressLabStateDiff,
+} from "./state-capture.js";
+export {
+  diffWordPressLabState,
+  wordpressLabStateDiffSchema,
+  wordpressLabStateSchema,
+} from "./state-capture.js";
+export { hostGatewayName, type HostExposure } from "./host-exposure.js";
+import {
   placeVerificationCanaries,
   seedWordPressCanaries,
 } from "./canary-placement.js";
@@ -348,12 +366,29 @@ export interface WordPressLab extends LabProvisioner<
     username: string,
   ): Promise<WordPressRoleObservation>;
   /**
+   * Reads the whole site state (options, users with roles, per-table row counts
+   * and checksums) from the Lab's own database (#186). Review material only.
+   */
+  captureState(
+    handle: WordPressLabHandle,
+  ): Promise<
+    | { readonly status: "captured"; readonly state: WordPressLabState }
+    | { readonly status: "unavailable" }
+  >;
+  /** Publishes the Lab on host loopback ports for a human's browser and curl (`lab up`). */
+  exposeToHost(
+    handle: WordPressLabHandle,
+    input: { readonly httpPort: number; readonly databasePort?: number },
+  ): Promise<HostExposure>;
+  /**
    * Lists Docker resources a crashed run left behind: Lab names and the given
    * patterns only. Removes them when asked; use only while no campaign runs.
+   * With `labId`, only that Lab's resources (and its host gateway) are named.
    */
   cleanupLeftovers(input: {
     readonly remove: boolean;
     readonly patterns?: LeftoverPatterns;
+    readonly labId?: string;
   }): Promise<Leftovers>;
 }
 
@@ -369,11 +404,14 @@ export type Leftovers = {
 };
 
 const labId = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const LAB_LEFTOVERS = {
-  containers: [new RegExp(`^wbh-${labId}-(?:db|wp|canary|proxy)$`)],
-  networks: [new RegExp(`^wbh-${labId}-net$`)],
-  volumes: [new RegExp(`^wbh-${labId}-site$`)],
-} as const;
+const labLeftoverPatterns = (id: string) =>
+  ({
+    containers: [new RegExp(`^wbh-${id}-(?:db|wp|canary|proxy|host)$`)],
+    networks: [new RegExp(`^wbh-${id}-net$`)],
+    volumes: [new RegExp(`^wbh-${id}-site$`)],
+  }) as const;
+const LAB_LEFTOVERS = labLeftoverPatterns(labId);
+const exactLabId = new RegExp(`^${labId}$`);
 
 export interface Resources {
   readonly id: string;
@@ -660,7 +698,11 @@ export function openWordPressLab(options: {
         return { status: "unavailable" };
       return parsed.data;
     },
-    async cleanupLeftovers({ remove, patterns = {} }) {
+    async cleanupLeftovers({ remove, patterns = {}, labId: onlyLab }) {
+      if (onlyLab !== undefined && !exactLabId.test(onlyLab))
+        throw new Error("Lab id is invalid");
+      const owned =
+        onlyLab === undefined ? LAB_LEFTOVERS : labLeftoverPatterns(onlyLab);
       const kinds = [
         ["containers", ["ps", "-a", "--format", "{{.Names}}"], ["rm", "-f"]],
         [
@@ -680,11 +722,11 @@ export function openWordPressLab(options: {
         volumes: [],
       };
       for (const [kind, list] of kinds) {
-        const owned = [...LAB_LEFTOVERS[kind], ...(patterns[kind] ?? [])];
+        const matching = [...owned[kind], ...(patterns[kind] ?? [])];
         found[kind] = (await requireDocker(list)).stdout
           .split("\n")
           .map((name) => name.trim())
-          .filter((name) => owned.some((pattern) => pattern.test(name)));
+          .filter((name) => matching.some((pattern) => pattern.test(name)));
       }
       // Containers go first so their networks and volumes are no longer in use.
       if (remove)
@@ -892,6 +934,40 @@ export function openWordPressLab(options: {
             reason: "cleanup",
             nextStep: "Inspect and remove remaining Lab resources",
           };
+    },
+    async captureState(handle) {
+      const resource = active.get(handle.id);
+      if (resource?.handle !== handle) return { status: "unavailable" };
+      try {
+        return {
+          status: "captured",
+          state: await captureWordPressLabState({
+            resource,
+            docker,
+            now: () => new Date(),
+          }),
+        };
+      } catch {
+        return { status: "unavailable" };
+      }
+    },
+    async exposeToHost(handle, input) {
+      const resource = active.get(handle.id);
+      if (resource?.handle !== handle)
+        return {
+          status: "unavailable",
+          diagnostic: "The Lab is not active in this process",
+        };
+      return exposeWordPressLabToHost({
+        resource,
+        handle,
+        image: options.images.recorder,
+        httpPort: input.httpPort,
+        ...(input.databasePort === undefined
+          ? {}
+          : { databasePort: input.databasePort }),
+        requireDocker,
+      });
     },
     ...createWordPressLabObservations({
       active,
