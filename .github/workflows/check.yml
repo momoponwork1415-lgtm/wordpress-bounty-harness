@@ -2,6 +2,8 @@ name: check
 
 on:
   pull_request:
+    # labeled / unlabeled を含めないと、owner-approved を付けても adr-guard が再実行されない
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   push:
     branches: [main]
 
