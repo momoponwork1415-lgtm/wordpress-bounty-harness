@@ -20,8 +20,88 @@ import {
 } from "../../src/discovery/index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
+const sandboxUuid = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
 
 describe("gVisor Codex sandbox", () => {
+  it("names and explicitly removes a stopped agent container (#176)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
+    try {
+      const source = join(root, "source");
+      await mkdir(source);
+      await writeFile(join(source, "main.txt"), "fixed source");
+      const expectedTree = await measureCanonicalSourceTree(source, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      const calls: (readonly string[])[] = [];
+      const sandbox = new GvisorCodexSandbox({
+        dockerExecutablePath: "/usr/bin/docker",
+        image: `node@${digest}`,
+        bundledCatalogPath: "/opt/codex/model-catalog.json",
+        scratchRootDirectory: root,
+        maxOutputBytes: 1024 * 1024,
+        timeoutMs: 60_000,
+        randomUuid: () => sandboxUuid,
+        runDocker: async (args) => {
+          calls.push(args);
+          if (args.includes("--network=internal-run"))
+            return {
+              kind: "timed-out" as const,
+              stdout: "",
+              stderr: "synthetic timeout",
+            };
+          return {
+            kind: "exited" as const,
+            exitCode: 0,
+            stdout: args.includes("--version")
+              ? "codex-cli 0.161.0\n"
+              : args.includes("--entrypoint=sha256sum")
+                ? `${"b".repeat(64)}  /opt/codex/model-catalog.json\n`
+                : "",
+            stderr: "",
+          };
+        },
+      });
+      const result = await sandbox.execute({
+        executable: "codex",
+        args: ["exec", "--json"],
+        stdin: "Inspect the source.",
+        supportFiles: [
+          { path: "/opt/codex-support/report-schema.json", content: "{}" },
+        ],
+        grant: {
+          baseUrl: "http://172.28.0.2:8080",
+          authorization: `Bearer ${randomBytes(32).toString("hex")}`,
+          dockerNetworkName: "internal-run",
+          model: "gpt-6.1-sol",
+          protocol: "responses",
+          expiresAt: "2026-10-08T07:30:00Z",
+        },
+        sourceMount: {
+          directory: source,
+          path: "/workspace/main",
+          mode: "ro",
+          expectedTree,
+        },
+        labHost: { name: "wordpress", ipv4: "172.20.0.2" },
+      });
+      expect(result).toMatchObject({
+        status: "failed",
+        failureKind: "timed-out",
+      });
+      expect(
+        calls.find((args) => args.includes("--network=internal-run")),
+      ).toContain(`--name=codex-agent-${sandboxUuid}`);
+      expect(calls.at(-1)).toEqual([
+        "rm",
+        "--force",
+        `codex-agent-${sandboxUuid}`,
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("logs the CLI in with only the grant token and trusts only the grant's CA for a ChatGPT login grant", async () => {
     const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
     try {
@@ -333,13 +413,15 @@ describe("gVisor Codex sandbox", () => {
         bundledCatalogDigest: `sha256:${"b".repeat(64)}`,
         isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
       });
-      expect(calls).toHaveLength(3);
-      expect(calls.every(({ args }) => args.includes("--runtime=runsc"))).toBe(
-        true,
-      );
-      expect(calls.every(({ args }) => args.includes("--pids-limit=256"))).toBe(
-        true,
-      );
+      expect(calls).toHaveLength(4);
+      const containerRuns = calls.filter(({ args }) => args[0] === "run");
+      expect(containerRuns).toHaveLength(3);
+      expect(
+        containerRuns.every(({ args }) => args.includes("--runtime=runsc")),
+      ).toBe(true);
+      expect(
+        containerRuns.every(({ args }) => args.includes("--pids-limit=256")),
+      ).toBe(true);
       expect(calls[0]?.args).toContain("--network=none");
       expect(calls[1]?.args).toContain("--network=none");
       expect(calls[2]?.args).toContain("--network=internal-run");
@@ -351,7 +433,7 @@ describe("gVisor Codex sandbox", () => {
       // Without --interactive, docker run never hands stdin to the CLI.
       expect(calls[2]?.args).toContain("--interactive");
       // The CLI's own sandbox is off, so these outer controls are the boundary.
-      for (const { args } of calls) {
+      for (const { args } of containerRuns) {
         expect(args).toEqual(
           expect.arrayContaining([
             "--runtime=runsc",
@@ -400,7 +482,9 @@ describe("gVisor Codex sandbox", () => {
         expectedTree: coreTree,
       };
       await sandbox.execute({ ...command, dependencyMount });
-      expect(calls.at(-1)?.args).toContain(
+      expect(
+        calls.filter(({ args }) => args[0] === "run").at(-1)?.args,
+      ).toContain(
         `--mount=type=bind,src=${core},dst=/workspace/wordpress,readonly`,
       );
       await writeFile(join(core, "version.php"), "changed core");
@@ -424,14 +508,16 @@ describe("gVisor Codex sandbox", () => {
         ...command,
         databaseHost: { name: "database", ipv4: "172.20.0.3" },
       });
-      expect(calls.at(-1)?.args).toContain("--add-host=database:172.20.0.3");
+      expect(
+        calls.filter(({ args }) => args[0] === "run").at(-1)?.args,
+      ).toContain("--add-host=database:172.20.0.3");
       await expect(
         sandbox.execute({
           ...command,
           databaseHost: { name: "wordpress", ipv4: "172.20.0.3" },
         }),
       ).rejects.toThrow();
-      expect(calls).toHaveLength(9);
+      expect(calls).toHaveLength(12);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
