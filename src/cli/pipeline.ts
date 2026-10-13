@@ -420,6 +420,10 @@ export async function reverifyOnSelectedVersion<
 >(options: {
   readonly campaignId: string;
   readonly findingId: string;
+  /** A separate read-only campaign may supply an already confirmed route. */
+  readonly referenceCampaignId?: string;
+  /** Reuse a separately recorded, immutable Snapshot for a real Lab smoke. */
+  readonly snapshotCampaignId?: string;
   readonly version?: string;
   readonly ledger: Ledger;
   readonly store: PrivateArtifactStore;
@@ -432,6 +436,7 @@ export async function reverifyOnSelectedVersion<
       readonly selectionId: string;
       readonly version?: string;
     }) => Promise<Target | null>;
+    readonly loadSnapshot?: (digest: string) => Promise<Snapshot>;
     readonly deriveFinding: (input: {
       readonly original: unknown;
       readonly snapshotDigest: string;
@@ -457,8 +462,33 @@ export async function reverifyOnSelectedVersion<
     );
   if (selected?.type !== "target-selected")
     throw new Error("The finding's target selection is not recorded");
+  const referenceCampaignId = options.referenceCampaignId ?? campaignId;
+  if (referenceCampaignId !== campaignId) {
+    const referenceFinding = ledger
+      .read({
+        campaignId: referenceCampaignId,
+        findingId,
+        type: "finding-recorded",
+        limit: 1,
+      })
+      .at(0)?.event;
+    if (
+      referenceFinding?.type !== "finding-recorded" ||
+      referenceFinding.snapshotDigest !== finding.snapshotDigest ||
+      referenceFinding.artifacts.find((artifact) => artifact.kind === "finding")
+        ?.digest !==
+        finding.artifacts.find((artifact) => artifact.kind === "finding")
+          ?.digest
+    )
+      throw new Error("The reference route belongs to a different Finding");
+  }
   const confirmed = ledger
-    .read({ campaignId, findingId, type: "verification-finished", limit: 1000 })
+    .read({
+      campaignId: referenceCampaignId,
+      findingId,
+      type: "verification-finished",
+      limit: 1000,
+    })
     .map(({ event }) => event)
     .filter(
       (event) =>
@@ -471,6 +501,8 @@ export async function reverifyOnSelectedVersion<
     throw new Error(
       "A confirmed route is required for fixed-version comparison",
     );
+  if (confirmed === undefined && options.snapshotCampaignId !== undefined)
+    throw new Error("A confirmed route is required for pinned smoke replay");
   let referenceRoute: unknown;
   if (
     confirmed?.type === "verification-finished" &&
@@ -485,13 +517,75 @@ export async function reverifyOnSelectedVersion<
       throw new Error("The confirmed route is unavailable in Private Evidence");
     referenceRoute = JSON.parse(routeFile.bytes.toString("utf8")) as unknown;
   }
+  let originalVersion: string | undefined;
+  if (
+    options.snapshotCampaignId !== undefined &&
+    options.version === undefined
+  ) {
+    const frozen = ledger
+      .read({
+        campaignId: options.snapshotCampaignId,
+        type: "snapshot-frozen",
+        limit: 1000,
+      })
+      .some(
+        ({ event }) =>
+          event.type === "snapshot-frozen" &&
+          event.snapshotDigest === finding.snapshotDigest,
+      );
+    if (!frozen || pipeline.loadSnapshot === undefined)
+      throw new Error("The original pinned Snapshot is unavailable");
+    originalVersion = (await pipeline.loadSnapshot(finding.snapshotDigest))
+      .target.version;
+  }
+  const requestedVersion = options.version ?? originalVersion;
   const target = await pipeline.selectVersion({
     selectionId: selected.selectionId,
-    ...(options.version === undefined ? {} : { version: options.version }),
+    ...(requestedVersion === undefined ? {} : { version: requestedVersion }),
   });
   if (target === null)
     throw new Error("The selected target version is not available now");
-  const snapshot = await pipeline.freeze(target);
+  let snapshot: Snapshot;
+  if (options.snapshotCampaignId === undefined) {
+    snapshot = await pipeline.freeze(target);
+  } else {
+    const recordedSelection = ledger
+      .read({
+        campaignId: options.snapshotCampaignId,
+        type: "target-selected",
+        limit: 1000,
+      })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "target-selected" &&
+          event.selectionId === `${target.targetId}@${target.version}`,
+      );
+    if (recordedSelection?.type !== "target-selected")
+      throw new Error("The pinned reference Snapshot is not recorded");
+    const frozen = ledger
+      .read({
+        campaignId: options.snapshotCampaignId,
+        type: "snapshot-frozen",
+        limit: 1000,
+      })
+      .some(
+        ({ event }) =>
+          event.type === "snapshot-frozen" &&
+          event.snapshotDigest === recordedSelection.snapshotDigest,
+      );
+    if (!frozen || pipeline.loadSnapshot === undefined)
+      throw new Error("The pinned reference Snapshot is unavailable");
+    snapshot = await pipeline.loadSnapshot(recordedSelection.snapshotDigest);
+    if (
+      snapshot.digest !== recordedSelection.snapshotDigest ||
+      snapshot.target.identity !== target.targetId ||
+      snapshot.target.version !== target.version
+    )
+      throw new Error(
+        "The pinned reference Snapshot does not match the target",
+      );
+  }
   if (confirmed === undefined && snapshot.digest !== finding.snapshotDigest)
     throw new Error(
       "An unconfirmed Finding can only be retried on its original Snapshot",
@@ -634,10 +728,18 @@ export async function reverifyOnSelectedVersion<
     findingId: verificationFindingId,
     verificationId,
     snapshot,
-    basis: {
-      kind: options.version === undefined ? "latest-version" : "fixed-version",
-      findingSnapshotDigest: snapshot.digest,
-    },
+    ...(options.snapshotCampaignId !== undefined &&
+    snapshot.digest === finding.snapshotDigest
+      ? {}
+      : {
+          basis: {
+            kind:
+              options.version === undefined
+                ? "latest-version"
+                : "fixed-version",
+            findingSnapshotDigest: snapshot.digest,
+          },
+        }),
     setup,
     campaignLabSetupDigest: canonicalDigest(setup),
     reconstruction: pipeline.reconstructionFor(snapshot),

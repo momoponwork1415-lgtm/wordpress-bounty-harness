@@ -32,6 +32,7 @@ type FindingRecord = Extract<LedgerEventV1, { type: "finding-recorded" }>;
 /** A fresh-container agent that repairs and refutes a recipe. It cannot confirm. */
 export interface Verifier<Finding, Handle extends LabHandle> {
   attempt(input: {
+    readonly campaignId: string;
     readonly finding: Finding;
     readonly lab: Handle;
     /** Earlier judge-owned route for a same-path version comparison. */
@@ -85,6 +86,7 @@ export type JudgeObservation =
       readonly status: "incomplete";
       readonly reason: "precondition" | "observation" | "evidence";
       readonly nextStep: string;
+      readonly evidenceCapture?: "harness-captured" | "agent-authored";
       readonly evidenceDigest?: string;
     };
 
@@ -242,6 +244,7 @@ export class Verification<
         if (labEvent.status === "conflict")
           throw new Error("Verification Lab identity conflict");
         result = await this.#judge(
+          campaignId,
           finding,
           snapshotDigest,
           judge,
@@ -315,6 +318,7 @@ export class Verification<
 
   /** `snapshotDigest` is the snapshot under test: the Finding's own, or its target's latest. */
   async #judge(
+    campaignId: string,
     finding: Finding,
     snapshotDigest: string,
     judge: Judge<Finding, Handle>,
@@ -338,6 +342,7 @@ export class Verification<
     let attempt: VerifierAttempt;
     try {
       attempt = await this.#options.verifier.attempt({
+        campaignId,
         finding,
         lab,
         ...(referenceRoute === undefined ? {} : { referenceRoute }),
@@ -369,13 +374,16 @@ export class Verification<
         "The judge could not observe the Lab; repeat in a fresh Lab",
       );
     }
-    if (observation.status === "incomplete")
+    if (observation.status === "incomplete") {
+      if (observation.evidenceCapture !== undefined)
+        onCapture(observation.evidenceCapture);
       return incomplete(
         observation.reason,
         observation.nextStep,
         attempt.refutationDigest,
         observation.evidenceDigest,
       );
+    }
     if (observation.status === "observed") {
       if (observation.evidenceCapture !== undefined)
         onCapture(observation.evidenceCapture);

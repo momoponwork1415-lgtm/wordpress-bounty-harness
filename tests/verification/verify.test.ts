@@ -36,7 +36,8 @@ async function fixture(
     readonly labSnapshotDigest?: string;
     readonly provision?: "ready" | "incomplete";
     readonly verifier?: Verifier<SyntheticFinding, LabHandle>["attempt"];
-    readonly judge?: "observed" | "not-observed" | "throws";
+    readonly judge?:
+      "observed" | "not-observed" | "incomplete-captured" | "throws";
     readonly teardown?: "removed" | "incomplete";
     readonly refute?: boolean;
     /** A Finding rebound to a separately frozen version for a negative control. */
@@ -187,6 +188,18 @@ async function fixture(
     id: "synthetic-canary",
     async observe({ lab: observed }) {
       if (options.judge === "throws") throw new Error("Lab unreachable");
+      if (options.judge === "incomplete-captured")
+        return {
+          status: "incomplete",
+          reason: "observation",
+          nextStep: "Replay every step on the fixed version",
+          ...(negativeCaptureDigest === undefined
+            ? {}
+            : {
+                evidenceCapture: "harness-captured" as const,
+                evidenceDigest: negativeCaptureDigest,
+              }),
+        };
       if (options.judge === "not-observed")
         return negativeCaptureDigest === undefined
           ? { status: "not-observed" }
@@ -451,6 +464,32 @@ describe("verification public interface", () => {
     ).toMatchObject({
       basis: { kind: "fixed-version" },
       result,
+    });
+  });
+
+  it("keeps a partial fixed-version replay incomplete and records its capture digest", async () => {
+    const { result, ledger, store, negativeCaptureDigest } = await fixture({
+      fixedVersion: true,
+      judge: "incomplete-captured",
+      refute: true,
+      negativeCapture: true,
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+      evidenceDigest: negativeCaptureDigest,
+      refutationDigest: expect.stringMatching(/^sha256:/),
+    });
+    if (negativeCaptureDigest === undefined)
+      throw new Error("The fixture did not store its captured prefix");
+    expect(
+      await store.readFile(negativeCaptureDigest, "proxy-capture.jsonl", 1024),
+    ).toMatchObject({ status: "resolved" });
+    expect(
+      ledger.read({ type: "verification-finished" })[0]?.event,
+    ).toMatchObject({
+      result,
+      evidenceCapture: "harness-captured",
     });
   });
 

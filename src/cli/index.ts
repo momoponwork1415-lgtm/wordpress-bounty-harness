@@ -125,6 +125,12 @@ export interface CliProfile {
       readonly findingId: string;
       readonly configPath: string;
       readonly version?: string;
+      /** Read a confirmed route from a separate campaign without writing to it. */
+      readonly referenceCampaignId?: string;
+      /** Use a separately recorded, immutable Snapshot for this version. */
+      readonly snapshotCampaignId?: string;
+      /** WordPress profile only: private bounded replay for the weekly smoke. */
+      readonly smokeReplayDigest?: string;
     },
   ): Promise<ReverificationSummary>;
 }
