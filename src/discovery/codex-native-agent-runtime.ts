@@ -157,6 +157,10 @@ export interface CodexSandboxCommand {
     readonly mode: "ro";
     readonly expectedTree: ExpectedSourceTree;
   };
+  readonly researchMount?: {
+    readonly path: "/workspace/research";
+    readonly mode: "rw";
+  };
   readonly labHost: { readonly name: string; readonly ipv4: string };
   readonly databaseHost?: { readonly name: string; readonly ipv4: string };
 }
@@ -174,6 +178,9 @@ export interface CodexSandboxResult {
   /** Private CLI session records, including child threads omitted from --json stdout. */
   readonly rollouts?: readonly string[];
   readonly rolloutFailure?: "capture-failed";
+  /** Canonical JSON archive of the Trial-local writable notes directory. */
+  readonly research?: { readonly archive: Buffer; readonly truncated: boolean };
+  readonly researchFailure?: "capture-failed";
   readonly isolation: {
     readonly backend: "gvisor";
     readonly runtime: "runsc";
@@ -211,6 +218,10 @@ export interface DiscoveryTransportRun {
 export interface DiscoveryTransportResult {
   readonly receipt: NativeRunReceipt;
   readonly attachment?: ProviderAttachmentRef;
+  readonly researchArtifact?: {
+    readonly attachment: ProviderAttachmentRef;
+    readonly truncated: boolean;
+  };
   /** Each child is independent of the Root's final report and receipt. */
   readonly agentRuns?: readonly {
     readonly agentPath: string;
@@ -857,6 +868,12 @@ type ExecutionState = {
   rootObserved: Observed | undefined;
   brokerMetrics: NativeRunReceipt["brokerMetrics"] | undefined;
   sandboxExitCode: number | undefined;
+  researchArtifact:
+    | {
+        readonly attachment: ProviderAttachmentRef;
+        readonly truncated: boolean;
+      }
+    | undefined;
 };
 
 function incompleteExecution(
@@ -902,6 +919,9 @@ function incompleteExecution(
         : { reportArtifactDigest: attachment.digest }),
     }),
     ...(attachment === undefined ? {} : { attachment }),
+    ...(state.researchArtifact === undefined
+      ? {}
+      : { researchArtifact: state.researchArtifact }),
     ...(state.cooperative ? { agentRuns: state.agentRuns } : {}),
   };
 }
@@ -1091,6 +1111,14 @@ function sandboxCommand(
             expectedTree: run.dependencySource.tree,
           },
         }),
+    ...(cooperative
+      ? {
+          researchMount: {
+            path: "/workspace/research" as const,
+            mode: "rw" as const,
+          },
+        }
+      : {}),
     labHost: { name: labEndpoint.hostname, ipv4: run.lab.internalIp },
     ...(run.lab.database === undefined
       ? {}
@@ -1125,6 +1153,7 @@ export class CodexNativeAgentRuntime {
       rootObserved: undefined,
       brokerMetrics: undefined,
       sandboxExitCode: undefined,
+      researchArtifact: undefined,
     };
     if (run.coordination === "cooperative" && !state.cooperative)
       return incompleteExecution(
@@ -1150,7 +1179,6 @@ export class CodexNativeAgentRuntime {
     state.brokerMetrics = granted.receipt.metrics;
     if (
       granted.receipt.setup.status !== "ready" ||
-      granted.receipt.cleanup.status !== "completed" ||
       granted.operation.status !== "completed"
     )
       return incompleteExecution(
@@ -1190,6 +1218,13 @@ export class CodexNativeAgentRuntime {
           failure.reasonDetail,
         );
     }
+    if (granted.receipt.cleanup.status !== "completed")
+      return incompleteExecution(
+        state,
+        "provider",
+        result.completedAt,
+        granted.receipt.digest,
+      );
     return this.#resolveReport(state, result, granted.receipt.digest);
   }
 
@@ -1226,6 +1261,19 @@ export class CodexNativeAgentRuntime {
     result: CodexSandboxResult,
     grantReceiptDigest: string,
   ): Promise<{ reason: IncompleteReason; reasonDetail: string } | undefined> {
+    if (result.researchFailure !== undefined || result.research === undefined)
+      return { reason: "evidence", reasonDetail: "research-capture-failed" };
+    try {
+      state.researchArtifact = {
+        attachment: await this.attachments.put(
+          "research",
+          result.research.archive,
+        ),
+        truncated: result.research.truncated,
+      };
+    } catch {
+      return { reason: "evidence", reasonDetail: "research-capture-failed" };
+    }
     const parentThreadId = rootThreadId(result.stdout);
     if (parentThreadId !== undefined) {
       const children = await this.#captureChildren(
@@ -1532,6 +1580,9 @@ export class CodexNativeAgentRuntime {
     }
     return {
       attachment,
+      ...(state.researchArtifact === undefined
+        ? {}
+        : { researchArtifact: state.researchArtifact }),
       ...(state.cooperative ? { agentRuns: state.agentRuns } : {}),
       receipt: createNativeRunReceipt({
         ...state.run,

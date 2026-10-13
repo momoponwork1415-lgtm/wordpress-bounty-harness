@@ -495,6 +495,8 @@ export async function runDiscoveryCampaign(options: {
       let brokerMetrics: NativeRunReceipt["brokerMetrics"];
       let sandboxExitCode: number | undefined;
       let diagnosticArtifactDigest: string | undefined;
+      let researchArtifact:
+        { readonly digest: string; readonly truncated: boolean } | undefined;
       let receiptDigest: string | undefined;
       let failure: ReportFailure | undefined;
       const reportState = { foundNew: false, heldBoundary: false };
@@ -519,6 +521,14 @@ export async function runDiscoveryCampaign(options: {
             history,
           },
         });
+        if (result.researchArtifact !== undefined) {
+          if (result.researchArtifact.attachment.kind !== "research")
+            throw new Error("Discovery research artifact kind is invalid");
+          researchArtifact = {
+            digest: result.researchArtifact.attachment.digest,
+            truncated: result.researchArtifact.truncated,
+          };
+        }
         const receipt = nativeRunReceiptSchema.parse(result.receipt);
         wallTimeMs = Math.max(
           0,
@@ -595,6 +605,7 @@ export async function runDiscoveryCampaign(options: {
         ...(diagnosticArtifactDigest === undefined
           ? {}
           : { diagnosticArtifactDigest }),
+        ...(researchArtifact === undefined ? {} : { researchArtifact }),
         ...(outcome === "completed" || failure === undefined ? {} : failure),
         ...(receiptDigest === undefined
           ? {}

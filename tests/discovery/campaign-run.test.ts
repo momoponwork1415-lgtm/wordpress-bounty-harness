@@ -58,6 +58,7 @@ async function campaign(
       readonly observed: number;
       readonly admitted: number;
     };
+    readonly research?: { readonly truncated: boolean };
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-campaign-"));
@@ -146,6 +147,21 @@ async function campaign(
       async execute(run) {
         expect(run.expiresAt).toBe("2026-10-08T08:00:00.000Z");
         const ordinal = calls++;
+        const researchArtifact =
+          options.research === undefined
+            ? undefined
+            : {
+                attachment: await attachments.put(
+                  "research",
+                  Buffer.from(
+                    JSON.stringify({
+                      kind: "research-directory-archive",
+                      entries: [{ path: "REGISTRY.md" }],
+                    }),
+                  ),
+                ),
+                truncated: options.research.truncated,
+              };
         if (ordinal === 0 && options.rootTranscriptInvalid) {
           const attachment = await attachments.put(
             "findings",
@@ -160,6 +176,7 @@ async function campaign(
           );
           return {
             attachment,
+            ...(researchArtifact === undefined ? {} : { researchArtifact }),
             receipt: createNativeRunReceipt({
               runId: run.runId,
               targetSnapshotDigest: run.targetSnapshotDigest,
@@ -192,6 +209,7 @@ async function campaign(
             ),
           );
           return {
+            ...(researchArtifact === undefined ? {} : { researchArtifact }),
             receipt: createNativeRunReceipt({
               runId: run.runId,
               targetSnapshotDigest: run.targetSnapshotDigest,
@@ -255,6 +273,7 @@ async function campaign(
         );
         return {
           attachment,
+          ...(researchArtifact === undefined ? {} : { researchArtifact }),
           receipt: createNativeRunReceipt({
             runId: run.runId,
             targetSnapshotDigest: run.targetSnapshotDigest,
@@ -306,7 +325,7 @@ async function campaign(
     ),
     clock: () => new Date("2026-10-08T07:00:00Z"),
   });
-  return { result, calls, ledger, evidence };
+  return { result, calls, ledger, evidence, attachments };
 }
 
 it("records valid child claims even when Root formatting and a sibling claim fail", async () => {
@@ -365,6 +384,37 @@ it("records child thread counts on both completed and incomplete Root runs", asy
       childThreadsObserved: 4,
       childThreadsAdmitted: 3,
     });
+  }
+});
+
+it("references bounded Trial research evidence from completed and failed Root runs", async () => {
+  for (const rootTranscriptInvalid of [false, true]) {
+    const { ledger, attachments } = await campaign([], {
+      indexed: true,
+      rootTranscriptInvalid,
+      research: { truncated: true },
+    });
+    const finished = ledger.read({ type: "discovery-run-finished" })[0]?.event;
+    expect(finished).toMatchObject({
+      runId: "run-0",
+      outcome: rootTranscriptInvalid ? "failed" : "completed",
+      researchArtifact: {
+        digest: expect.stringMatching(/^sha256:/),
+        truncated: true,
+      },
+    });
+    if (
+      finished?.type !== "discovery-run-finished" ||
+      finished.researchArtifact === undefined
+    )
+      throw new Error("Missing research artifact reference");
+    expect(
+      await attachments.readByDigest(
+        "research",
+        finished.researchArtifact.digest,
+      ),
+    ).toMatchObject({ status: "resolved" });
+    expect(JSON.stringify(finished)).not.toContain("REGISTRY.md");
   }
 });
 

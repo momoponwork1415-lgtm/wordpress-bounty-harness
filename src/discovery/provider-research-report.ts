@@ -11,10 +11,12 @@ import {
 
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024 * 1024;
+const MAX_RESEARCH_ARCHIVE_BYTES = 12 * 1024 * 1024;
 const kindSchema = z.enum([
   "findings",
   "coverage",
   "diagnostic",
+  "research",
   "verification",
 ]);
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -45,7 +47,11 @@ export class ProviderAttachmentStore {
   async put(kindValue: unknown, bytes: Buffer): Promise<ProviderAttachmentRef> {
     const kind = kindSchema.parse(kindValue);
     const limit =
-      kind === "diagnostic" ? MAX_DIAGNOSTIC_BYTES : MAX_ATTACHMENT_BYTES;
+      kind === "diagnostic"
+        ? MAX_DIAGNOSTIC_BYTES
+        : kind === "research"
+          ? MAX_RESEARCH_ARCHIVE_BYTES
+          : MAX_ATTACHMENT_BYTES;
     if (bytes.byteLength === 0 || bytes.byteLength > limit)
       throw new Error("Provider attachment size is invalid");
     const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -84,7 +90,9 @@ export class ProviderAttachmentStore {
       `${parsed.data.kind}.json`,
       parsed.data.kind === "diagnostic"
         ? MAX_DIAGNOSTIC_BYTES
-        : MAX_ATTACHMENT_BYTES,
+        : parsed.data.kind === "research"
+          ? MAX_RESEARCH_ARCHIVE_BYTES
+          : MAX_ATTACHMENT_BYTES,
     );
     if (result.status === "missing") return { status: "missing" };
     if (result.status !== "resolved") return { status: "invalid" };
@@ -101,7 +109,11 @@ export class ProviderAttachmentStore {
     const result = await this.#store.readFile(
       `${kind}-${digest.slice(7)}`,
       `${kind}.json`,
-      kind === "diagnostic" ? MAX_DIAGNOSTIC_BYTES : MAX_ATTACHMENT_BYTES,
+      kind === "diagnostic"
+        ? MAX_DIAGNOSTIC_BYTES
+        : kind === "research"
+          ? MAX_RESEARCH_ARCHIVE_BYTES
+          : MAX_ATTACHMENT_BYTES,
     );
     if (result.status !== "resolved") return { status: "unavailable" as const };
     const actual = `sha256:${createHash("sha256").update(result.bytes).digest("hex")}`;

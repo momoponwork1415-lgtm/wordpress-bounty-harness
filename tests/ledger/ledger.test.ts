@@ -155,6 +155,7 @@ describe("Ledger public interface", () => {
       outcome: "completed",
       costUsd: "unavailable",
       wallTimeMs: 1,
+      researchArtifact: { digest: proof, truncated: true },
       continuation: {
         mode: "thread-resume",
         injected: true,
@@ -191,7 +192,12 @@ describe("Ledger public interface", () => {
       },
     ]);
     expect(ledger.read({ type: "discovery-run-finished" })).toMatchObject([
-      { event: { continuation: { mode: "thread-resume" } } },
+      {
+        event: {
+          continuation: { mode: "thread-resume" },
+          researchArtifact: { digest: proof, truncated: true },
+        },
+      },
     ]);
     expect(ledger.read({ type: "finding-recorded" })).toMatchObject([
       { event: { continuationOrdinal: 1 } },
