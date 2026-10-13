@@ -6,7 +6,8 @@
 
 ## 0. 先に結論
 
-1. **有償 7 件は wordpress-harness の prompt v1〜v9 では発見されていない。** 7 件のうち 2 件（SSA、Brizy）は 2026-03 の harness 以前、2 件（TranslatePress 3.2.6、Unlimited Elements）は 2026-07-29 / 07-31 の「source-only coordinator contract」（private）、1 件（Custom Facebook Feed）は 2026-08-31〜09-01 の **whitebox-harness `bounded-wp2shell/v1.7`**（`963d3bb:skills/discover-wordpress-target/PROMPT.md`、12,116 B）。TranslatePress 3.3.1（08-11）と Relevanssi は元 run を特定できない。wordpress-harness（09-01〜10-08）は 7 件を既知 CVE の再発見評価に使った側で、未知の発見実績は無い。
+1. **有償の発見は wordpress-harness の prompt v1〜v9 では 1 件も出ていない。** 所有者の Wordfence 提出履歴（21 件、有償 18 件、2026-10-13 に所有者が貼付）を harness の世代に重ねると、提出は 2026-03（6 件有償）、07-25〜08-11（9 件有償）、08-30〜09-01（3 件有償）に集中し、wordpress-harness の期間（09-01〜10-08）の提出は 0 件。benchmark 7 件の内訳: SSA と Brizy は 03 月の harness 以前、TranslatePress 3.2.6 と Unlimited Elements 2.0.16 と Relevanssi は 07-29〜08-01 の「source-only coordinator contract」（private）の時期、TranslatePress 3.3.1 は 08-11（whitebox `dd2e55c` の `discover-wordpress-target` 時期、元 run 未復元）、Custom Facebook Feed は 08-31〜09-01 提出で **whitebox-harness `bounded-wp2shell/v1.7`**（`963d3bb:skills/discover-wordpress-target/PROMPT.md`、12,116 B）。wordpress-harness は 7 件を既知 CVE の再発見評価に使った側。
+
 2. したがって **「実績のある prompt」の第一候補は whitebox v1.7**、第二候補は whitebox `382c139:skills/discover-wordpress-leads/assets/DISCOVERY.md`（2026-08-01、7 月末 2 件の contract に最も近い committed 形）。wordpress-harness v7 は「短縮・契約分離」の現行形として参考にする。
 3. **公開 harness で本リポの不変条件と同型のもの**: 探索と検証の分離、Verifier に finder の結論を渡さない（A・C・D・F）、検証失敗に severity を付けず棄却もしない（A `CANNOT_VERIFY`、B `not_attempted`、C `needs_validation`）、snapshot sentinel（B）、nonce 付き untrusted block / minted markers（A・F）。
 4. **本リポの規則と正面衝突する文言**: Anthropic A の「assume there *are* vulnerabilities」「Do Not Stop Until Done」、WP2Shell 記事原文の「vulnerability that can be exploited… to RCE」「Spend at least 6 hours」。所有者は 2026-10-13 に「脆弱性が必ずある / RCE 前提を見直す」と決めている。whitebox v1.7 は既にこの前提を外している（「paid-class vulnerability sweep」「Reporting zero leads… is a normal ending」）。
@@ -21,7 +22,7 @@
 | W0 | `/home/dev/wp2shell/toolkit/PROMPT.article.template.txt`（記事原文） | 2026-08-19 / 3,024 | WP2Shell 記事の RCE 発見。本リポの目的とは前提が異なる |
 | W1 | 同 `PROMPT.template.txt`（所有者の改良: 80 tool call 上限、research/ file、2 波停止、3 時間） | 2026-08-19 / 3,961 | — |
 | P1 | whitebox-harness `963d3bb` `PROMPT.md` = `bounded-wp2shell/v1.7` | 2026-08-31 / 12,116 | **Custom Facebook Feed 4.13.0（CVE-2026-93756）の発見時点の prompt** |
-| P2 | whitebox-harness `382c139` `DISCOVERY.md` | 2026-08-01 / 13,419 | 7 月末 2 件（TP 3.2.6、UE 2.0.16）の private contract に最も近い committed 形。byte 一致はしない |
+| P2 | whitebox-harness `382c139` `DISCOVERY.md` | 2026-08-01 / 13,419 | 07-29〜08-01 の 3 件（TP 3.2.6、UE 2.0.16、Relevanssi）の private contract に最も近い committed 形。byte 一致はしない |
 | H7 | wordpress-harness `prompts/wordpress-plugin-research-v7.md` | 2026-09-19 / 6,927 | 既知 CVE 再発見評価のみ。未知発見なし |
 | V3 | 本リポ `wp2shell-bounty-v3.md` + 出力契約 v2 + trust-boundary-v1 | 2026-10 | 本番 4 周、scope 内 Finding 11、confirmed 0 |
 
@@ -124,9 +125,24 @@
 4. **Trail of Bits の文言を採るか。** 採るなら prompt は CC BY-SA 4.0 で公開する義務が出る。本リポは private なので配布しなければ問題は無いが、記録に残す。
 5. **Verifier v7（#187）への流用。** A の 4 手順と F の「oracle が判定、自分の入力の反射は証拠でない」は Verifier 側の候補。探索 v4 とは別に表を作るか。
 
-## 6. 確定できなかったこと
+## 6. 提出履歴と harness 世代（所有者の Wordfence 履歴、2026-10-13 貼付）
+
+件別の金額は Git に置かない。期間と分類の合計だけを書く。
+
+| 期間 | 使っていたもの | 提出 | 有償 | 合計 USD |
+| --- | --- | --- | --- | --- |
+| 2026-03-03〜03-21 | harness 以前 | 8 | 6（却下 1、対象外 2） | 859 |
+| 2026-07-25〜08-11 | bug-bountgy-harness → whitebox 初期（source-only contract、`382c139` 系） | 9 | 9 | 2,854 |
+| 2026-08-30〜09-01 | whitebox `bounded-wp2shell/v1.7` | 3 | 3 | 371 |
+| 2026-09-02〜10-13 | wordpress-harness、wp-bounty-verification、本リポ | 0 | 0 | 0 |
+
+分類別（有償 18 件）: Stored XSS 5 件 1,083、SQLi 4 件 1,301、ATO 1 件 975、**Reflected XSS 7 件 667**、価格操作 1 件 50。却下は IDOR、対象外は missing authorization と Subscriber+ のコンテンツ操作で、#185 の除外 6 ラベルと一致する。
+
+注意: Reflected XSS は所有者の有償件数の 7 / 18 を占めるが、本リポの Wordfence 転記（2026-10-08）では「Explicitly Out of Scope」にある。最後に有償になった reflected XSS の提出は 2026-08-30 なので、規則は 08-30〜10-08 の間に変わったとみられる。live page は bot 対策で取得できず（HTTP 202、本文なし）、Wayback も取得できなかったため、変更日は未確認。Patchstack は JS 実行を伴う reflected XSS を受理する。
+
+## 7. 確定できなかったこと
 
 - 7 月末 2 件の prompt 本文は private hash のみで、tracked file に byte 一致するものは無い。
-- TranslatePress 3.3.1（08-11）と Relevanssi の元 run・prompt は特定できない。
+- TranslatePress 3.3.1（08-11 提出）の元 run・prompt は特定できない。Relevanssi は 08-01 提出なので P2 の時期と確定した。
 - Anthropic の red.anthropic.com にある技術文書、Clearwing の sourcehunt モード、`VulnHunter-White` は未調査。
 - 公開 harness の文言は 2026-10-13 に取得したもの。版が進めば変わる。
