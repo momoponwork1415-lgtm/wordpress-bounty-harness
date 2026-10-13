@@ -135,8 +135,11 @@ export function createWordPressScopeFacts(options: {
 }): ScopeFactsProvider<WordpressScopeInput> {
   return {
     async load({ ref, verification }) {
-      if (verification.result.status !== "runtime-confirmed")
-        throw new Error("Scope facts need a runtime-confirmed verification");
+      if (
+        verification.result.status !== "runtime-confirmed" &&
+        verification.result.status !== "reproduced"
+      )
+        throw new Error("Scope facts need an evidence-backed verification");
       const finding = options.ledger
         .read({
           campaignId: ref.campaignId,

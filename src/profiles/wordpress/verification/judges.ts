@@ -18,6 +18,8 @@ import type {
   WordPressLabHandle,
 } from "../lab/index.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
+import { createWordPressStandardReproducer } from "./standard-reproducer.js";
+import { requestContainsSecret } from "./request-secret.js";
 import {
   bindSmokeReferenceRoute,
   smokeReplayRecipeSchema,
@@ -35,7 +37,11 @@ type JudgeLab = Pick<
   | "observeStoredScript"
   | "readCapture"
 >;
-type Options = { readonly store: PrivateArtifactStore; readonly lab: JudgeLab };
+type Options = {
+  readonly store: PrivateArtifactStore;
+  readonly lab: JudgeLab &
+    Partial<Pick<WordPressLab, "markCapture" | "runStandardScript">>;
+};
 
 const sessionSchema = z.strictObject({ cookie: z.string().min(1).max(4096) });
 const routeFieldsSchema = z.looseObject({});
@@ -114,28 +120,6 @@ export function matchesReferenceRoute(
     )
       matched++;
     if (matched === steps.length) return true;
-  }
-  return false;
-}
-
-function requestContainsSecret(value: unknown, secret: string): boolean {
-  const raw = JSON.stringify(value ?? null);
-  if (raw.includes(secret)) return true;
-  const decoded = raw.replace(/(?:%[0-9a-fA-F]{2})+/g, (part) => {
-    try {
-      return decodeURIComponent(part);
-    } catch {
-      return part;
-    }
-  });
-  if (decoded.includes(secret)) return true;
-  for (const source of [raw, decoded]) {
-    for (const token of source.match(/[A-Za-z0-9+/]{16,}={0,2}/g) ?? [])
-      if (Buffer.from(token, "base64").toString("utf8").includes(secret))
-        return true;
-    for (const token of source.match(/[a-fA-F0-9]{16,}/g) ?? [])
-      if (Buffer.from(token, "hex").toString("utf8").includes(secret))
-        return true;
   }
   return false;
 }
@@ -1041,6 +1025,20 @@ export function createWordPressJudges(
   const storedScript = storedScriptJudge(options);
   const sensitiveObject = sensitiveObjectJudge(options);
   return {
+    ...(options.lab.markCapture === undefined ||
+    options.lab.runStandardScript === undefined
+      ? {}
+      : {
+          reproducer: createWordPressStandardReproducer({
+            store: options.store,
+            lab: {
+              canaryLedger: options.lab.canaryLedger,
+              readCapture: options.lab.readCapture,
+              markCapture: options.lab.markCapture,
+              runStandardScript: options.lab.runStandardScript,
+            },
+          }),
+        }),
     for(finding) {
       switch (finding.impact) {
         case "privesc-to-admin":

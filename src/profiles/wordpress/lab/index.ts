@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createWordPressLabObservations } from "./lab-observation.js";
-import { isAbsolute } from "node:path";
+import { STANDARD_REPRODUCER_SCRIPT } from "../verification/standard-script.js";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 
 import { z } from "zod";
 
@@ -263,6 +266,20 @@ export interface WordPressLab extends LabProvisioner<
       }
     | { readonly status: "unavailable" }
   >;
+  /** Executes only the Harness-owned standard script in an isolated Lab peer. */
+  runStandardScript(
+    handle: WordPressLabHandle,
+    input: string,
+  ): Promise<
+    | { readonly status: "completed"; readonly output: string }
+    | { readonly status: "unavailable" }
+  >;
+  /** Review-only credential, never part of the attacker/Verifier handle. */
+  reviewAdministrator(
+    handle: WordPressLabHandle,
+  ): { readonly username: "harness-admin"; readonly password: string } | null;
+  /** Review-only receiver address for a human-operated browser in the Lab network. */
+  reviewReceiverIp(handle: WordPressLabHandle): string | null;
   replayHttp(
     handle: WordPressLabHandle,
     input: ReplayHttpInput,
@@ -779,6 +796,68 @@ export function openWordPressLab(options: {
             : {}),
         };
       }
+    },
+    async runStandardScript(handle, input) {
+      const resource = active.get(handle.id);
+      if (
+        resource?.handle !== handle ||
+        Buffer.byteLength(STANDARD_REPRODUCER_SCRIPT) > 64 * 1024 ||
+        Buffer.byteLength(input) > 128 * 1024
+      )
+        return { status: "unavailable" };
+      const directory = await mkdtemp(join(tmpdir(), "wbh-reproduction-"));
+      try {
+        await Promise.all([
+          writeFile(
+            join(directory, "standard-reproduce.py"),
+            STANDARD_REPRODUCER_SCRIPT,
+            {
+              mode: 0o600,
+            },
+          ),
+          writeFile(join(directory, "input.json"), input, { mode: 0o600 }),
+        ]);
+        const result = await docker(
+          [
+            "run",
+            "--rm",
+            "--runtime=runsc",
+            "--network",
+            resource.network,
+            "--add-host",
+            `wordpress:${handle.recorderIp}`,
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--pids-limit=64",
+            "--memory=256m",
+            "--mount",
+            `type=bind,src=${directory},dst=/run/wbh-reproduction,readonly`,
+            options.images.browser,
+            "python3",
+            "/run/wbh-reproduction/standard-reproduce.py",
+          ],
+          90_000,
+          128 * 1024,
+        );
+        return result.exitCode === 0
+          ? { status: "completed", output: result.stdout }
+          : { status: "unavailable" };
+      } catch {
+        return { status: "unavailable" };
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+    reviewAdministrator(handle) {
+      const resource = active.get(handle.id);
+      return resource?.handle === handle
+        ? { username: "harness-admin", password: resource.adminPassword }
+        : null;
+    },
+    reviewReceiverIp(handle) {
+      const resource = active.get(handle.id);
+      return resource?.handle === handle ? (resource.receiverIp ?? null) : null;
     },
     async teardown(handle) {
       const resource = active.get(handle.id);

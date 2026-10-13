@@ -70,6 +70,69 @@ async function evidence(store: PrivateArtifactStore): Promise<string> {
 }
 
 describe("Ledger public interface", () => {
+  it("measures owner time and opened findings per distinct submission across categories", async () => {
+    const { ledger } = await fixture();
+    for (const [findingId, category] of [
+      ["finding-a", "sqli"],
+      ["finding-b", "stored-xss"],
+    ] as const)
+      await ledger.append({
+        ...common(`record-${findingId}`),
+        type: "finding-recorded",
+        findingId,
+        runId: "run-1",
+        category,
+      });
+    for (const [identity, findingId, action, minutes] of [
+      ["read-a", "finding-a", "read", 10],
+      ["reproduce-a", "finding-a", "reproduce", 20],
+      ["read-b", "finding-b", "read", 5],
+    ] as const)
+      await ledger.append({
+        ...common(identity),
+        type: "human-effort-recorded",
+        findingId,
+        action,
+        minutes,
+      });
+    for (const [identity, findingId, result] of [
+      ["manual-a", "finding-a", "match"],
+      ["manual-b", "finding-b", "mismatch"],
+    ] as const)
+      await ledger.append({
+        ...common(identity),
+        type: "human-reproduction-recorded",
+        findingId,
+        verificationId: "verification-1",
+        reproductionPackageDigest: revision,
+        result,
+      });
+    for (const candidateId of ["candidate-a1", "candidate-a2"])
+      await ledger.append({
+        ...common(`submission-${candidateId}`),
+        type: "submission-recorded",
+        findingId: "finding-a",
+        candidateId,
+      });
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      ownerMinutesPerSubmission: 17.5,
+      openedFindingsPerSubmission: 1,
+      manualReproductionAgreement: 0.5,
+      humanByCategory: {
+        sqli: {
+          ownerMinutesPerSubmission: 15,
+          openedFindingsPerSubmission: 0.5,
+          manualReproductionAgreement: 1,
+        },
+        "stored-xss": {
+          ownerMinutesPerSubmission: null,
+          openedFindingsPerSubmission: null,
+          manualReproductionAgreement: 0,
+        },
+      },
+    });
+  });
+
   it("reads a legacy discovery event with a continuation prompt digest", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);
@@ -841,6 +904,7 @@ describe("Ledger public interface", () => {
       raw: 4,
       verified: 4,
       confirmed: 1,
+      reproduced: 0,
       contradicted: 1,
       incomplete: 2,
       reviewed: 3,
@@ -858,6 +922,7 @@ describe("Ledger public interface", () => {
           raw: 4,
           verified: 4,
           confirmed: 1,
+          reproduced: 0,
           contradicted: 1,
           incomplete: 2,
           reviewed: 3,
@@ -879,6 +944,7 @@ describe("Ledger public interface", () => {
           raw: 0,
           verified: 0,
           confirmed: 0,
+          reproduced: 0,
           contradicted: 0,
           incomplete: 0,
           reviewed: 0,
@@ -893,6 +959,22 @@ describe("Ledger public interface", () => {
         },
       },
       rewardUsd: 0,
+      ownerMinutesPerSubmission: null,
+      openedFindingsPerSubmission: null,
+      manualReproductionAgreement: null,
+      humanMinutesByAction: { read: 0, reproduce: 0, submit: 0, outcome: 0 },
+      humanByCategory: {
+        injection: {
+          ownerMinutesPerSubmission: null,
+          openedFindingsPerSubmission: null,
+          manualReproductionAgreement: null,
+        },
+        "access-control": {
+          ownerMinutesPerSubmission: null,
+          openedFindingsPerSubmission: null,
+          manualReproductionAgreement: null,
+        },
+      },
       submitted: 1,
       outcome: 1,
       byCategory: {
@@ -904,6 +986,7 @@ describe("Ledger public interface", () => {
           raw: 2,
           verified: 2,
           confirmed: 1,
+          reproduced: 0,
           contradicted: 1,
           incomplete: 0,
           reviewed: 1,
@@ -919,6 +1002,7 @@ describe("Ledger public interface", () => {
           raw: 2,
           verified: 2,
           confirmed: 0,
+          reproduced: 0,
           contradicted: 0,
           incomplete: 2,
           reviewed: 2,

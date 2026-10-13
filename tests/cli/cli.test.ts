@@ -1141,7 +1141,7 @@ describe("harness CLI vertical slice", () => {
 
     const funnel = await run("ledger", "funnel", "--campaign", "campaign-1");
     expect(funnel.stdout).toContain(
-      "raw 2 → verifier通過 2 → confirmed 1 / contradicted 0 / incomplete 1 → reviewed 1 → in-scope 0 → submitted 0 → outcome 0",
+      "raw 2 → verifier通過 2 → confirmed 1 / reproduced 0 / contradicted 0 / incomplete 1 → reviewed 1 → in-scope 0 → submitted 0 → outcome 0",
     );
     expect(funnel.stdout).toContain("runs 3 (discovery attempts 3)");
     expect(funnel.stdout).toContain("cost unavailable");
@@ -2727,7 +2727,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(fixedVersion.code).not.toBe(0);
     expect(fixedVersion.stderr).toContain(
-      "confirmed route is required for fixed-version comparison",
+      "An evidence-backed route is required for fixed-version comparison",
     );
     expect(labStarts()).toBe(beforeLabStarts);
     expect(ledger().read({ campaignId: "campaign-1" })).toHaveLength(

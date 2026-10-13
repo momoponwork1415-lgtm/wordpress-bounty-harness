@@ -42,6 +42,10 @@ import type { CampaignSummary, ReverificationSummary } from "./pipeline.js";
 export interface CliIo {
   stdout(line: string): void;
   stderr(line: string): void;
+  /** Interactive hosts ask only after a successful human-facing command. */
+  askMinutes?(
+    action: "read" | "reproduce" | "submit" | "outcome",
+  ): Promise<number>;
 }
 
 export type CliState = {
@@ -74,6 +78,22 @@ export interface CliSelectionReport {
 /** A profile composition: everything target-specific the commands need. */
 export interface CliProfile {
   review(state: CliState): Review;
+  /** A profile may provide a fresh, foreground Lab for human reproduction. */
+  reviewLab?(
+    state: CliState,
+    input: { readonly packageDigest: string; readonly category: string },
+  ): Promise<{
+    readonly endpoint: string;
+    readonly networkName: string;
+    readonly recorderIp: string;
+    readonly receiverIp: string;
+    readonly attackerAccounts: unknown;
+    readonly administrator: unknown;
+    readonly canaries: unknown;
+    readonly browserImage: string;
+    close(): Promise<void>;
+    wait(): Promise<void>;
+  }>;
   answerKeys(value: unknown): readonly LocationAnswerKey[];
   /** Lines describing the public history mirror, and whether it is fresh; null when none is configured. */
   historyStatus(
@@ -135,6 +155,15 @@ export interface CliProfile {
   ): Promise<ReverificationSummary>;
 }
 
+type ReviewLabSession = Awaited<
+  ReturnType<NonNullable<CliProfile["reviewLab"]>>
+>;
+
+interface ReviewSignalSource {
+  on(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
+  off(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
+}
+
 export type CliEnvironment = {
   readonly stateDirectory: string;
   readonly profile: CliProfile;
@@ -149,6 +178,8 @@ const USAGE = [
   "  review [--campaign <id>]",
   "  review parked --campaign <id>",
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>]",
+  "  review open --campaign <id> --finding <id> [--minutes <n>]",
+  "  review reproduced --campaign <id> --finding <id> --result match|mismatch|unavailable [--minutes <n>]",
   "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
   "  review reverify --campaign <id> --finding <id> --config <path> [--version <fixed-version>]",
@@ -162,6 +193,7 @@ const USAGE = [
   "  history status",
   "  runtime check --config <path>",
   "  lab cleanup --config <path> [--remove]",
+  "  lab up --for-review --campaign <id> --finding <id>",
   "  eval score --campaign <id> --keys <path> --case <id> [--manifest <path>]",
   "  eval keys --keys <path> [--manifest <path>]",
   "  eval rubric --file <path>",
@@ -181,6 +213,8 @@ const options = {
   opened: { type: "string", multiple: true },
   duplicate: { type: "string" },
   reward: { type: "string" },
+  minutes: { type: "string" },
+  result: { type: "string" },
   by: { type: "string" },
   keys: { type: "string" },
   manifest: { type: "string" },
@@ -195,6 +229,7 @@ const options = {
   axis: { type: "string" },
   advisories: { type: "string" },
   remove: { type: "boolean" },
+  "for-review": { type: "boolean" },
   "retry-incomplete": { type: "boolean" },
 } as const;
 
@@ -204,6 +239,22 @@ function required(value: string | undefined, name: string): string {
   if (value === undefined || value.length === 0)
     throw new UsageError(`--${name} is required`);
   return value;
+}
+
+async function humanMinutes(
+  value: string | undefined,
+  io: CliIo,
+  action: "read" | "reproduce" | "submit" | "outcome",
+): Promise<number | null> {
+  if (value === undefined) return io.askMinutes?.(action) ?? null;
+  if (!/^\d+(?:\.\d{1,2})?$/.test(value))
+    throw new UsageError(
+      "--minutes must be a non-negative number with at most two decimals",
+    );
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes > 1440)
+    throw new UsageError("--minutes must be between 0 and 1440");
+  return minutes;
 }
 
 async function readPrivateAnswerKeys(
@@ -261,7 +312,7 @@ async function openState(
 }
 
 function stages(counts: FunnelCounts): string {
-  return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held} / parked ${counts.parked} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted} → outcome ${counts.outcome}`;
+  return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held} / parked ${counts.parked} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / reproduced ${counts.reproduced} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted} → outcome ${counts.outcome}`;
 }
 
 export function formatFunnel(funnel: CampaignFunnel): string[] {
@@ -276,6 +327,7 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
     `agent runs ${funnel.runCount} (discovery attempts ${funnel.discoveryAttempts})  ${cost}  summed agent time ${(funnel.wallTimeMs / 1000).toFixed(1)}s`,
     stages(funnel),
     `noncache input ${funnel.noncachedInputTokens} token(s) (${funnel.unavailableInputRuns} run(s) unavailable)  confirmed / 1M tokens ${rate(funnel.confirmedPerMillionInputTokens)}  confirmed / agent wall hour ${rate(funnel.confirmedPerAgentWallHour)}`,
+    `owner minutes / submission ${rate(funnel.ownerMinutesPerSubmission)}  opened findings / submission ${rate(funnel.openedFindingsPerSubmission)}  manual reproduction agreement ${funnel.manualReproductionAgreement === null ? "unavailable" : `${(funnel.manualReproductionAgreement * 100).toFixed(1)}%`}`,
   ];
   const programmes = Object.keys(funnel.inScopeByProgramme).sort();
   if (programmes.length > 0)
@@ -289,8 +341,14 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
     );
   const categories = Object.keys(funnel.byCategory).sort();
   if (categories.length > 0) lines.push("by category:");
-  for (const category of categories)
+  for (const category of categories) {
+    const human = funnel.humanByCategory[category];
     lines.push(`  ${category}: ${stages(funnel.byCategory[category]!)}`);
+    if (human !== undefined)
+      lines.push(
+        `    owner minutes / submission ${rate(human.ownerMinutesPerSubmission)}  opened findings / submission ${rate(human.openedFindingsPerSubmission)}  manual reproduction agreement ${human.manualReproductionAgreement === null ? "unavailable" : `${(human.manualReproductionAgreement * 100).toFixed(1)}%`}`,
+      );
+  }
   const objectives = Object.keys(funnel.byObjective).sort();
   if (objectives.length > 0) lines.push("by objective version:");
   for (const name of objectives) {
@@ -365,11 +423,11 @@ export function formatQueue(
     const head = `${item.status}  ${item.ref.campaignId}  finding ${item.ref.findingId}  ${item.category}`;
     const decision = `  decision: ${item.decision ?? "none"}`;
     const verification = `  verification ${item.ref.verificationId}  snapshot ${item.ref.snapshotDigest}`;
-    if (item.status === "runtime-confirmed")
+    if (item.status !== "incomplete")
       lines.push(
         head,
         verification,
-        `  judge: ${item.judgeId}`,
+        `  observer: ${item.judgeId}`,
         `  observed: ${
           Object.entries(item.conditions)
             .sort(([left], [right]) => left.localeCompare(right))
@@ -389,7 +447,18 @@ export function formatQueue(
         decision,
       );
   }
-  if (queue.items.length === 0) lines.push("review queue is empty");
+  const counts = (byReason: Readonly<Record<string, number>>) =>
+    Object.entries(byReason)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([reason, count]) => `${reason} ${count}`)
+      .join(", ") || "none";
+  if (
+    queue.items.length === 0 &&
+    Object.keys(queue.incompleteByReason).length === 0
+  )
+    lines.push("review queue is empty");
+  lines.push(`incomplete by reason: ${counts(queue.incompleteByReason)}`);
+  lines.push(`retry pending by reason: ${counts(queue.retryPendingByReason)}`);
   lines.push(
     `contradicted: ${queue.contradicted} (count only)  unverified: ${queue.unverified}`,
   );
@@ -424,7 +493,7 @@ type Values = {
   readonly to?: string | undefined;
 };
 
-/** Only runtime-confirmed and incomplete findings are reviewable. */
+/** Evidence-backed and exhausted incomplete findings are reviewable. */
 function queued(review: Review, values: Values) {
   const campaignId = required(values.campaign, "campaign");
   const findingId = required(values.finding, "finding");
@@ -432,9 +501,7 @@ function queued(review: Review, values: Values) {
     .queue({ campaignId })
     .items.find((candidate) => candidate.ref.findingId === findingId);
   if (item === undefined)
-    throw new UsageError(
-      "The finding is not in the review queue (only runtime-confirmed and incomplete are reviewed)",
-    );
+    throw new UsageError("The finding is not in the review queue");
   return item;
 }
 
@@ -444,6 +511,53 @@ function exactDraft(values: Values) {
     draftDigest: required(values.draft, "draft"),
     destination: required(values.to, "to"),
   };
+}
+
+/** Holds startup signals until the new Lab session can be closed safely. */
+export async function runForegroundReviewLab(
+  launch: () => Promise<ReviewLabSession>,
+  io: CliIo,
+  signals: ReviewSignalSource = process,
+): Promise<void> {
+  let interrupted = false;
+  const interrupt = () => {
+    interrupted = true;
+  };
+  signals.on("SIGINT", interrupt);
+  signals.on("SIGTERM", interrupt);
+  try {
+    const session = await launch();
+    try {
+      if (!interrupted) {
+        io.stdout(
+          `review Lab ready on ${session.endpoint} (network ${session.networkName}, recorder ${session.recorderIp})`,
+        );
+        io.stdout(
+          `attacker accounts: ${JSON.stringify(session.attackerAccounts)}`,
+        );
+        io.stdout(
+          `review administrator: ${JSON.stringify(session.administrator)}`,
+        );
+        io.stdout(`fresh canaries: ${JSON.stringify(session.canaries)}`);
+        const shellQuote = (value: string) =>
+          `'${value.replaceAll("'", "'\\''")}'`;
+        io.stdout(
+          `manual client: docker run --rm -it --runtime=runsc --network ${shellQuote(session.networkName)} --add-host ${shellQuote(`wordpress:${session.recorderIp}`)} --add-host ${shellQuote(`canary:${session.receiverIp}`)} --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs=/tmp:rw,nosuid,nodev,size=512m --entrypoint sh ${shellQuote(session.browserImage)}`,
+        );
+        io.stdout(
+          "Run the package's manual HTTP or browser steps in that client; interrupt this command to remove the Lab.",
+        );
+        // There is no await between this check and wait() installing its handlers.
+        if (!interrupted) await session.wait();
+      }
+    } finally {
+      await session.close();
+    }
+    io.stdout("review Lab removed");
+  } finally {
+    signals.off("SIGINT", interrupt);
+    signals.off("SIGTERM", interrupt);
+  }
 }
 
 export async function runCli(
@@ -599,6 +713,63 @@ export async function runCli(
         io.stdout(
           `recorded ${recorded.decision} (${recorded.reasonCode}) for finding ${findingId} at ${recorded.decidedAt}`,
         );
+        const minutes = await humanMinutes(values.minutes, io, "read");
+        if (minutes !== null)
+          await review.recordHumanEffort({
+            campaignId: item.ref.campaignId,
+            findingId,
+            action: "read",
+            minutes,
+          });
+        return 0;
+      }
+      case "review open": {
+        const review = environment.profile.review(state);
+        const item = queued(review, values);
+        if (item.status === "incomplete")
+          throw new UsageError("Only an evidence-backed package can be opened");
+        const opened = await review.openReproductionPackage({ ref: item.ref });
+        if (opened.status !== "opened")
+          throw new UsageError("Reproduction package is unavailable");
+        io.stdout(opened.manual);
+        const minutes = await humanMinutes(values.minutes, io, "read");
+        if (minutes !== null)
+          await review.recordHumanEffort({
+            campaignId: item.ref.campaignId,
+            findingId: item.ref.findingId,
+            action: "read",
+            minutes,
+          });
+        return 0;
+      }
+      case "review reproduced": {
+        const review = environment.profile.review(state);
+        const item = queued(review, values);
+        if (item.status === "incomplete")
+          throw new UsageError(
+            "Only an evidence-backed package can be reproduced",
+          );
+        const result = required(values.result, "result");
+        if (
+          result !== "match" &&
+          result !== "mismatch" &&
+          result !== "unavailable"
+        )
+          throw new UsageError(
+            "--result must be match, mismatch or unavailable",
+          );
+        await review.recordHumanReproduction({ ref: item.ref, result });
+        const minutes = await humanMinutes(values.minutes, io, "reproduce");
+        if (minutes !== null)
+          await review.recordHumanEffort({
+            campaignId: item.ref.campaignId,
+            findingId: item.ref.findingId,
+            action: "reproduce",
+            minutes,
+          });
+        io.stdout(
+          `manual reproduction ${result} recorded for finding ${item.ref.findingId}`,
+        );
         return 0;
       }
       case "review dedupe": {
@@ -636,9 +807,9 @@ export async function runCli(
       case "review scope": {
         const review = environment.profile.review(state);
         const item = queued(review, values);
-        if (item.status !== "runtime-confirmed")
+        if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
           throw new UsageError(
-            "Scope is assessed only for runtime-confirmed findings",
+            "Scope is assessed only for evidence-backed findings",
           );
         for (const assessment of await review.assessScope({ ref: item.ref }))
           io.stdout(
@@ -691,6 +862,15 @@ export async function runCli(
         await environment.profile
           .review(state)
           .recordSubmission(exactDraft(values));
+        {
+          const minutes = await humanMinutes(values.minutes, io, "submit");
+          if (minutes !== null)
+            await environment.profile.review(state).recordHumanEffort({
+              candidateId: required(values.candidate, "candidate"),
+              action: "submit",
+              minutes,
+            });
+        }
         io.stdout("submission recorded");
         return 0;
       case "review outcome": {
@@ -712,6 +892,13 @@ export async function runCli(
           outcome: outcome as (typeof OUTCOMES)[number],
           ...(reward === undefined ? {} : { rewardUsd: reward }),
         });
+        const minutes = await humanMinutes(values.minutes, io, "outcome");
+        if (minutes !== null)
+          await environment.profile.review(state).recordHumanEffort({
+            candidateId: required(values.candidate, "candidate"),
+            action: "outcome",
+            minutes,
+          });
         io.stdout(
           reward === undefined
             ? `outcome ${outcome} recorded`
@@ -748,6 +935,27 @@ export async function runCli(
           remove
             ? `removed ${leftovers.containers.length} containers, ${leftovers.networks.length} networks, ${leftovers.volumes.length} volumes`
             : "nothing removed; run again with --remove when no campaign is running",
+        );
+        return 0;
+      }
+      case "lab up": {
+        if (values["for-review"] !== true)
+          throw new UsageError("lab up requires --for-review");
+        const launch = environment.profile.reviewLab;
+        if (launch === undefined)
+          throw new UsageError("This profile has no review Lab provisioner");
+        const item = queued(environment.profile.review(state), values);
+        if (item.status === "incomplete")
+          throw new UsageError(
+            "A reproduction package is required for review Lab setup",
+          );
+        await runForegroundReviewLab(
+          () =>
+            launch(state, {
+              packageDigest: item.reproductionPackageDigest,
+              category: item.category,
+            }),
+          io,
         );
         return 0;
       }

@@ -750,6 +750,7 @@ describe("CodexVerifier.attempt", () => {
       reason: "precondition",
       nextStep:
         "translatepress-translation-data-v1: TranslatePress の二次言語・翻訳データ・承認済みコメント",
+      nextScenarioId: "translatepress-translation-data-v1",
     });
   });
 

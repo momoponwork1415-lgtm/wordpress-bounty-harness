@@ -154,7 +154,9 @@ async function fixture(
               ? "172.20.0.3"
               : request.args.at(-1)?.endsWith("-proxy")
                 ? "172.20.0.4"
-                : "172.20.0.2",
+                : request.args.at(-1)?.endsWith("-canary")
+                  ? "172.20.0.5"
+                  : "172.20.0.2",
             stderr: "",
           };
         if (request.args[0] === "exec" && request.args[1] === "-i")
@@ -1410,6 +1412,28 @@ describe("WordPress gVisor Lab", () => {
     });
   });
 
+  it("exposes the active review Lab receiver address only to its owned handle", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const { handle } = provisioned;
+
+    expect(lab.reviewReceiverIp(handle)).toBe("172.20.0.5");
+    expect(
+      commands.some(
+        (command) =>
+          command.args[0] === "inspect" &&
+          command.args.at(-1)?.endsWith("-canary"),
+      ),
+    ).toBe(true);
+    expect(lab.reviewReceiverIp({ ...handle })).toBeNull();
+
+    expect(await lab.teardown(handle)).toEqual({ status: "removed" });
+    expect(lab.reviewReceiverIp(handle)).toBeNull();
+  });
+
   it("runs a beacon receiver and reports which page contexts made an issued script canary reach it", async () => {
     const { lab, snapshot, setup, commands, database } = await fixture();
     const provisioned = await lab.provision(snapshot, setup, {
@@ -1503,7 +1527,7 @@ describe("WordPress gVisor Lab", () => {
     expect(browsers.length).toBeGreaterThan(0);
     for (const browser of browsers) {
       expect(browser.args).toContain("--runtime=runsc");
-      expect(browser.args).toContain("--add-host=canary:172.20.0.2");
+      expect(browser.args).toContain("--add-host=canary:172.20.0.5");
     }
     // Only the admin visits log in, and only the Lab's own browser sees that account.
     expect(

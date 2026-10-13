@@ -326,6 +326,7 @@ export class CodexVerifier implements Verifier<
         status: "incomplete",
         reason: "precondition",
         nextStep: requiredScenario,
+        nextScenarioId: requiredScenario.split(":", 1)[0]!,
       };
 
     const fixed = await loadWordPressVerifierPrompt();
@@ -530,16 +531,21 @@ export class CodexVerifier implements Verifier<
     if (
       typeof data.precondition === "string" &&
       data.precondition.trim().length > 0
-    )
+    ) {
+      const requiredScenario = nextWordPressScenario(
+        `${admitted.configurationPrecondition} ${data.precondition}`,
+        lab.scenario?.id,
+        { secondaryLocaleConfigured: lab.secondaryLocale !== undefined },
+      );
       return {
         status: "incomplete",
         reason: "precondition",
-        nextStep: nextWordPressScenario(
-          `${admitted.configurationPrecondition} ${data.precondition}`,
-          lab.scenario?.id,
-          { secondaryLocaleConfigured: lab.secondaryLocale !== undefined },
-        ),
+        nextStep: requiredScenario,
+        ...(requiredScenario === "catalogue に無い前提"
+          ? {}
+          : { nextScenarioId: requiredScenario.split(":", 1)[0]! }),
       };
+    }
     if (
       typeof data["http.json"] !== "string" ||
       typeof data["steps.md"] !== "string" ||
