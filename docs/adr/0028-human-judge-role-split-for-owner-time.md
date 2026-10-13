@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: withdrawn (2026-10-13, superseded by 0031)
 date: 2026-10-11
 supersedes: 0002 for what the human queue shows; 0022 for when incomplete reaches a human; 0004 is unchanged but gains a sibling status
 ---
