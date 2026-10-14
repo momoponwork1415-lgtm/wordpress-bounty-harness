@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { CampaignSummary } from "../../src/cli/pipeline.js";
+import { LabCleanupFailure } from "../../src/cli/pipeline.js";
 import {
   continuousPaths,
   createContinuousRunner,
@@ -185,9 +186,9 @@ describe("continuous runner", () => {
         minutes.map(String),
       );
       expect(new Set(t.calls.map((call) => call.campaignId)).size).toBe(1);
-      expect(
-        t.calls.slice(1).every((call) => call.retryIncompleteVerifications),
-      ).toBe(true);
+      expect(t.calls.every((call) => !call.retryIncompleteVerifications)).toBe(
+        true,
+      );
     },
   );
 
@@ -319,7 +320,7 @@ describe("continuous runner", () => {
     );
     expect(t.calls[0]).toMatchObject({
       campaignId: "prod-20261019-4",
-      retryIncompleteVerifications: true,
+      retryIncompleteVerifications: false,
     });
   });
 
@@ -363,7 +364,61 @@ describe("continuous runner", () => {
     await t.runner.run();
     expect(t.calls[0]).toMatchObject({
       campaignId: "prod-20261019-4",
-      retryIncompleteVerifications: true,
+      retryIncompleteVerifications: false,
+    });
+  });
+
+  it("stops immediately on a campaign Lab cleanup failure and keeps its id", async () => {
+    const t = await setup([
+      () => {
+        throw new LabCleanupFailure("remove the remaining Lab");
+      },
+    ]);
+    expect(await t.runner.run()).toBe("lab-cleanup");
+    expect(t.calls).toHaveLength(1);
+    expect(t.runner.memo()).toMatchObject({
+      campaignId: t.calls[0]!.campaignId,
+      state: "stopped",
+      detail: { reason: "lab-cleanup" },
+    });
+    expect(await readFile(continuousPaths(t.root).memo, "utf8")).toContain(
+      t.calls[0]!.campaignId,
+    );
+  });
+
+  it("stops on a failed post-batch Lab inspection without discarding the campaign", async () => {
+    let inspections = 0;
+    const t = await setup([async () => ({})], {
+      cleanupLeftovers: async () => {
+        if (++inspections === 2)
+          throw new Error("Lab remnants need inspection");
+        return 0;
+      },
+    });
+    expect(await t.runner.run()).toBe("lab-cleanup");
+    expect(inspections).toBe(2);
+    expect(t.calls).toHaveLength(1);
+    expect(t.runner.memo()).toMatchObject({
+      campaignId: t.calls[0]!.campaignId,
+      lastError: "Lab remnants need inspection",
+    });
+  });
+
+  it("does not resume a saved campaign when startup Lab inspection fails", async () => {
+    const t = await setup([async () => ({})], {
+      cleanupLeftovers: async () => {
+        throw new Error("Lab listing unavailable");
+      },
+    });
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify({ campaignId: "prod-20261019-4", target: null }),
+    );
+    expect(await t.runner.run()).toBe("lab-cleanup");
+    expect(t.calls).toHaveLength(0);
+    expect(t.runner.memo()).toMatchObject({
+      campaignId: "prod-20261019-4",
+      lastError: "Lab listing unavailable",
     });
   });
 

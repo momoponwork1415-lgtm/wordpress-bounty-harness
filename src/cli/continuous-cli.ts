@@ -236,16 +236,23 @@ export async function continuousCommand(
         selectionPolicyPath: selectionPath,
       }),
     async cleanupLeftovers() {
-      if (await reviewLabLive(state.stateDirectory)) return 0;
-      const removed = await profile.cleanupLeftovers(state, {
+      if (await reviewLabLive(state.stateDirectory))
+        throw new Error(
+          "A review Lab is active; stop it before continuous run",
+        );
+      const remaining = await profile.cleanupLeftovers(state, {
         configPath,
-        remove: true,
+        remove: false,
       });
-      return (
-        removed.containers.length +
-        removed.networks.length +
-        removed.volumes.length
-      );
+      const count =
+        remaining.containers.length +
+        remaining.networks.length +
+        remaining.volumes.length;
+      if (count > 0)
+        throw new Error(
+          `${count} Lab resources remain; inspect them with lab cleanup before continuous run`,
+        );
+      return 0;
     },
     async preflight() {
       const items = await profile.checkRuntime(state, { configPath });

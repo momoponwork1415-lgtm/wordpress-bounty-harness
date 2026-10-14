@@ -105,6 +105,7 @@ import {
 } from "../profiles/wordpress/verification/reproduction-package.js";
 import type { CliProfile, CliState, LabUpSummary } from "./index.js";
 import {
+  LabCleanupFailure,
   provisionFindingLab,
   reverifyOnSelectedVersion,
   runCampaignPipeline,
@@ -1121,17 +1122,20 @@ async function runWordPressCampaign(
     afterSequence = page.at(-1)!.sequence;
   }
   for (const labId of cleanupLabIds) {
-    const remaining = await boundaries.lab.cleanupLeftovers({
-      remove: false,
-      labId,
-    });
+    const remaining = await boundaries.lab
+      .cleanupLeftovers({ remove: false, labId })
+      .catch(() => {
+        throw new LabCleanupFailure(
+          `Cannot inspect Lab ${labId} resources; repair Docker before resuming`,
+        );
+      });
     if (
       remaining.containers.length +
         remaining.networks.length +
         remaining.volumes.length >
       0
     )
-      throw new Error(
+      throw new LabCleanupFailure(
         `Lab ${labId} cleanup is incomplete; inspect and remove its resources before resuming`,
       );
   }

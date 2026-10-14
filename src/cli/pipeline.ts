@@ -173,6 +173,14 @@ export type CampaignSummary = {
   }[];
 };
 
+/** A failed Lab teardown requires operator inspection before any batch resumes. */
+export class LabCleanupFailure extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LabCleanupFailure";
+  }
+}
+
 /** Wiring only: each step is a module's public interface; rules stay in the modules. */
 export async function runCampaignPipeline<
   Target extends TargetSelection,
@@ -664,7 +672,7 @@ export async function runCampaignPipeline<
             status: result.status,
           });
           if (result.status === "incomplete" && result.reason === "cleanup") {
-            fatalError ??= new Error(result.nextStep);
+            fatalError ??= new LabCleanupFailure(result.nextStep);
             verificationCleanupFailed = true;
             requestStop("incomplete");
             const cleanupLabIds =
@@ -752,7 +760,7 @@ export async function runCampaignPipeline<
       if (handle !== undefined) {
         const removed = await pipeline.lab.teardown(handle).catch(() => null);
         if (removed?.status !== "removed") {
-          const cleanupFailure = new Error(
+          const cleanupFailure = new LabCleanupFailure(
             removed?.nextStep ??
               "Inspect and remove remaining Lab resources before retry",
           );

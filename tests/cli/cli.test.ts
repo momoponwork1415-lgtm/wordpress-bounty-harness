@@ -3510,6 +3510,12 @@ describe("harness CLI vertical slice", () => {
       loginMarginMinutes: 60,
     };
     (profile as { hostStatus?: unknown }).hostStatus = async () => host;
+    // This fixture's Docker listing includes static Lab names for cleanup tests.
+    profile.cleanupLeftovers = async () => ({
+      containers: [],
+      networks: [],
+      volumes: [],
+    });
     const command = [
       "--config",
       configPath,
@@ -3591,6 +3597,69 @@ describe("harness CLI vertical slice", () => {
         )
       ).code,
     ).not.toBe(0);
+  });
+
+  it("inspects Lab leftovers without deleting them before continuous selection", async () => {
+    const { run, root, profile, configPath } = await harness();
+    const { wordpressVersion } = JSON.parse(
+      await readFile(configPath, "utf8"),
+    ) as { wordpressVersion: string };
+    const policy = JSON.parse(
+      await readFile(join(root, "selection.json"), "utf8"),
+    ) as object;
+    await mkdir(join(root, "policies"));
+    for (const name of ["selection", "selection.50000", "selection.30000"])
+      await writeFile(
+        join(root, "policies", `${name}.json`),
+        JSON.stringify({ ...policy, wordpressVersion }),
+      );
+    profile.hostStatus = async () => ({
+      loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
+      programmeObservedAt: new Date(now),
+      freeBytes: 100 * 1024 ** 3,
+      legacyHistoryAvailable: true,
+      loginMarginMinutes: 60,
+    });
+    const removeCalls: boolean[] = [];
+    profile.cleanupLeftovers = async (_state, input) => {
+      removeCalls.push(input.remove);
+      return {
+        containers: [`wbh-${uuid}-wordpress`],
+        networks: [],
+        volumes: [],
+      };
+    };
+    let selections = 0;
+    profile.select = async () => {
+      selections++;
+      throw new Error("selection must not run while Lab remnants exist");
+    };
+    const result = await run(
+      "continuous",
+      "run",
+      "--config",
+      configPath,
+      "--selection",
+      join(root, "policies", "selection.json"),
+    );
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain("stopped reason=lab-cleanup");
+    expect(removeCalls).toEqual([false]);
+    expect(selections).toBe(0);
+    await writeFile(join(root, "state", "lab-up.json"), "{}");
+    const withReviewLab = await run(
+      "continuous",
+      "run",
+      "--config",
+      configPath,
+      "--selection",
+      join(root, "policies", "selection.json"),
+    );
+    expect(withReviewLab.code).toBe(1);
+    expect((await run("continuous", "status")).stdout).toContain(
+      "state stopped  reason lab-cleanup",
+    );
+    expect(removeCalls).toEqual([false]);
   });
 
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {

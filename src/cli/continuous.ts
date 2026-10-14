@@ -8,7 +8,7 @@ import type {
   LedgerEventV1,
   LedgerReadQuery,
 } from "../ledger/index.js";
-import type { CampaignSummary } from "./pipeline.js";
+import { LabCleanupFailure, type CampaignSummary } from "./pipeline.js";
 
 // Final design P6. Constants, not settings.
 export const BACKOFF_RATE_LIMIT_MINUTES = [5, 10, 20, 40, 60] as const;
@@ -32,6 +32,7 @@ export const PROGRAMME_WARN_DAYS = 7;
 const STOP_REASONS = [
   "operator",
   "errors",
+  "lab-cleanup",
   "no-progress",
   "programme-stale",
   "exhausted",
@@ -84,7 +85,7 @@ export interface ContinuousDeps {
     readonly retryIncompleteVerifications: boolean;
     readonly stop: () => boolean;
   }): Promise<CampaignSummary>;
-  /** Removes crashed Lab leftovers (not review Labs); returns how many. */
+  /** Read-only check of Lab leftovers; throws until remnants are inspected. */
   cleanupLeftovers(): Promise<number>;
   /** The same host check as `runtime check`; throws on failure. */
   preflight(): Promise<void>;
@@ -328,6 +329,12 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     await enter("stopped", { reason });
     return reason;
   };
+  const stopForCleanup = async (error: unknown) => {
+    memo.lastError = (
+      error instanceof Error ? error.message : String(error)
+    ).slice(0, 200);
+    return stop("lab-cleanup");
+  };
 
   const run = async (
     options: { readonly resume?: boolean } = {},
@@ -367,7 +374,11 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       if (stopRequested()) return stop("operator");
       await deps.preflight();
       if (stopRequested()) return stop("operator");
-      await deps.cleanupLeftovers();
+      try {
+        await deps.cleanupLeftovers();
+      } catch (error) {
+        return stopForCleanup(error);
+      }
       return await loop();
     } finally {
       deps.signals.off("SIGINT", onSignal);
@@ -383,12 +394,10 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       (memo.campaignId && {
         campaignId: memo.campaignId,
         target: memo.target ?? null,
-        retry: true,
       }) ||
       (unboundBatch(deps) && {
         campaignId: nextCampaignId(deps),
         target: null,
-        retry: false,
       }) ||
       undefined;
     for (;;) {
@@ -433,7 +442,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         current = {
           campaignId: nextCampaignId(deps),
           target: memo.probe ? (selected.targets[0] ?? null) : null,
-          retry: false,
         };
       }
       memo.campaignId = current.campaignId;
@@ -446,7 +454,8 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         summary = await deps.runCampaign({
           campaignId: current.campaignId,
           target: current.target,
-          retryIncompleteVerifications: current.retry,
+          // Only an explicit human --retry-incomplete may override ADR 0022.
+          retryIncompleteVerifications: false,
           stop: stopRequested,
         });
         memo.consecutiveErrorBatches = 0;
@@ -454,6 +463,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         memo.lastError = (
           error instanceof Error ? error.message : String(error)
         ).slice(0, 200);
+        if (error instanceof LabCleanupFailure) return stop("lab-cleanup");
         memo.consecutiveErrorBatches++;
         delete memo.campaignId;
         current = undefined;
@@ -464,13 +474,17 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       }
       if (stopRequested() || summary.stopped === "operator")
         return stop("operator");
-      const removed = await deps.cleanupLeftovers();
+      let removed: number;
+      try {
+        removed = await deps.cleanupLeftovers();
+      } catch (error) {
+        return stopForCleanup(error);
+      }
       deps.io.log(
         `${deps.clock().toISOString()} batch ${current.campaignId} stopped=${summary.stopped ?? "none"} skipped=${summary.skipped.length} leftovers=${removed}`,
       );
       if (stopRequested()) return stop("operator");
       if (summary.stopped === "incomplete") {
-        current.retry = true;
         continue;
       }
       if (summary.stopped === "provider-limit") {
@@ -482,7 +496,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
                 Math.min(step, BACKOFF_RATE_LIMIT_MINUTES.length - 1)
               ]!
             : (BACKOFF_QUOTA_MINUTES[step] ?? QUOTA_LONG_SLEEP_HOURS * 60);
-        current.retry = true;
         await hold("backoff", minutes * MINUTE, {
           step: String(step + 1),
           minutes: String(minutes),
