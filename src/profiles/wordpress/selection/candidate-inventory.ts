@@ -653,3 +653,51 @@ export async function readWordPressInventorySourcePool(options: {
     );
   return pool;
 }
+
+/** Resume only a verified page of the same sealed, still-fresh source pool. */
+export async function readWordPressCandidateInventoryCursor(options: {
+  readonly digest: string;
+  readonly policy: WordPressSelectionPolicy;
+  readonly store: Pick<PrivateArtifactStore, "readFile">;
+  readonly clock: () => Date;
+}): Promise<WordPressOrgCandidateCursor> {
+  const inventory = await readWordPressCandidateInventory(options);
+  const traversal = inventory.source.traversal;
+  const cursor = traversal?.nextCursor;
+  const recordedPool = inventory.source.pool;
+  if (
+    traversal === undefined ||
+    cursor === undefined ||
+    recordedPool === undefined ||
+    cursor.sourcePoolDigest !== recordedPool.digest ||
+    inventory.source.status !== "available" ||
+    inventory.source.requestedListingCoverage !== "all-observed"
+  )
+    throw new Error("Candidate inventory has no verified next page");
+  const policy = wordPressSelectionPolicySchema.parse(options.policy);
+  if (!("candidateSource" in policy))
+    throw new Error("Candidate inventory requires automatic selection");
+  const pool = await readSourcePool(recordedPool.digest, policy, options.store);
+  const replay = await enumerateWordPressOrgCandidates({
+    ...policy.candidateSource,
+    sourcePool: pool,
+    cursor: { ...cursor, nextIndex: traversal.offset },
+    clock: options.clock,
+  });
+  if (
+    poolExpiresAt(pool, policy.candidateSource.maxAgeDays) !==
+      recordedPool.expiresAt ||
+    pool.listings.length !== inventory.source.listings.available ||
+    inventory.source.listings.stale !== 0 ||
+    inventory.source.listings.unavailable !== 0 ||
+    inventory.source.listings.missing !== 0 ||
+    replay.traversal.listingSetDigest !== traversal.listingSetDigest ||
+    replay.traversal.observedUniqueCandidates !==
+      traversal.observedUniqueCandidates ||
+    replay.candidates.length !== inventory.observedCandidates ||
+    replay.traversal.nextCursor === undefined ||
+    canonicalJson(replay.traversal.nextCursor) !== canonicalJson(cursor)
+  )
+    throw new Error("Candidate inventory does not match its source pool");
+  return cursor;
+}

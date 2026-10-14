@@ -113,6 +113,8 @@ async function harness(
     /** Candidate slugs; the first is not pinned. */
     readonly candidates?: readonly string[];
     readonly listingObservations?: readonly WordPressOrgListingObservation[];
+    /** Use the real bounded listing enumerator for inventory CLI tests. */
+    readonly inventoryFetch?: typeof fetch;
     /** A slug whose snapshot cannot be frozen. */
     readonly failFreeze?: string;
     /** Extra campaign config fields. */
@@ -399,25 +401,32 @@ async function harness(
     } as unknown as ProgrammeIntelligence,
     programmeRef,
     clock: () => new Date(now),
-    enumerateCandidates: async () => ({
-      status: "available",
-      candidates: (options.candidates ?? ["synthetic-plugin"]).map((slug) => ({
-        slug,
-        sourceKind: "popular" as const,
-        sourcePage: 1,
-        sourceUrl: "https://api.wordpress.org/plugins/info/1.2/",
-        observedAt: now,
-        contentDigest: sha("b"),
-      })),
-      listings: options.listingObservations ?? [],
-      traversal: {
-        listingSetDigest: sha("b"),
-        offset: 0,
-        observedUniqueCandidates: (options.candidates ?? ["synthetic-plugin"])
-          .length,
-        complete: true,
-      },
-    }),
+    ...(options.inventoryFetch === undefined
+      ? {
+          enumerateCandidates: async () => ({
+            status: "available" as const,
+            candidates: (options.candidates ?? ["synthetic-plugin"]).map(
+              (slug) => ({
+                slug,
+                sourceKind: "popular" as const,
+                sourcePage: 1,
+                sourceUrl: "https://api.wordpress.org/plugins/info/1.2/",
+                observedAt: now,
+                contentDigest: sha("b"),
+              }),
+            ),
+            listings: options.listingObservations ?? [],
+            traversal: {
+              listingSetDigest: sha("b"),
+              offset: 0,
+              observedUniqueCandidates: (
+                options.candidates ?? ["synthetic-plugin"]
+              ).length,
+              complete: true,
+            },
+          }),
+        }
+      : { fetch: options.inventoryFetch }),
   });
   const snapshots = openSnapshot({
     storageDirectory: join(root, "snapshots"),
@@ -2955,6 +2964,144 @@ describe("harness CLI vertical slice", () => {
     );
     expect(all.code).toBe(0);
     expect(all.stdout).toContain("wporg:synthetic-plugin 3.3.1");
+  });
+
+  it("collects resumable inventory pages without reserving targets or running Trials", async () => {
+    let listingFetches = 0;
+    const inventoryFetch: typeof fetch = async () => {
+      listingFetches++;
+      return new Response(
+        JSON.stringify({
+          info: { page: 1 },
+          plugins: [
+            "item-a",
+            "item-b",
+            "item-c",
+            "item-d",
+            "item-e",
+            "item-f",
+          ].map((slug) => ({ slug })),
+        }),
+        { status: 200, headers: { Date: new Date(now).toUTCString() } },
+      );
+    };
+    const { run, root, store, ledger, prompts } = await harness({
+      inventoryFetch,
+    });
+    const policyPath = join(root, "selection.json");
+    const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete manual.candidateSlugs;
+    delete manual.pinnedVersions;
+    const automatic = {
+      ...manual,
+      promptVariant: "short-objective-managed-v4",
+      revisitPolicy: { kind: "never" },
+      wordpressVersion: "6.8",
+      maximumTargets: 3,
+      excludedSlugs: ["item-e"],
+      candidateSource: {
+        kind: "wordpress-org",
+        popularPages: 1,
+        tags: [],
+        pagesPerTag: 1,
+        perPage: 6,
+        maxCandidates: 5,
+        maxAgeDays: 1,
+      },
+    };
+    await writeFile(policyPath, JSON.stringify(automatic));
+
+    const first = await run("inventory", "collect", "--config", policyPath);
+    expect(first.code).toBe(0);
+    const firstReport = JSON.parse(first.stdout) as {
+      inventoryDigest: string;
+      candidates: number;
+      observedCandidates: number;
+      ineligibleByReason: Record<string, number>;
+      source: { status: string; requestedListingCoverage: string };
+      traversal: {
+        offset: number;
+        observedUniqueCandidates: number;
+        complete: boolean;
+        nextPageAvailable: boolean;
+      };
+    };
+    expect(firstReport).toMatchObject({
+      inventoryDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      candidates: 4,
+      observedCandidates: 5,
+      ineligibleByReason: { "excluded-slug": 1 },
+      source: { status: "available", requestedListingCoverage: "all-observed" },
+      traversal: {
+        offset: 0,
+        observedUniqueCandidates: 6,
+        complete: false,
+        nextPageAvailable: true,
+      },
+    });
+    const file = await store().readFile(
+      firstReport.inventoryDigest,
+      "candidate-inventory.json",
+      2 * 1024 * 1024,
+    );
+    expect(file.status).toBe("resolved");
+
+    const second = await run(
+      "inventory",
+      "collect",
+      "--config",
+      policyPath,
+      "--after",
+      firstReport.inventoryDigest,
+    );
+    expect(second.code).toBe(0);
+    const secondReport = JSON.parse(second.stdout) as typeof firstReport;
+    expect(secondReport).toMatchObject({
+      candidates: 1,
+      observedCandidates: 1,
+      ineligibleByReason: {},
+      traversal: {
+        offset: 5,
+        observedUniqueCandidates: 6,
+        complete: true,
+        nextPageAvailable: false,
+      },
+    });
+    expect(listingFetches).toBe(1);
+    expect(prompts).toHaveLength(0);
+    expect(ledger().read({ type: "target-selected", limit: 100 })).toHaveLength(
+      0,
+    );
+
+    const exhausted = await run(
+      "inventory",
+      "collect",
+      "--config",
+      policyPath,
+      "--after",
+      secondReport.inventoryDigest,
+    );
+    expect(exhausted.code).toBe(1);
+    expect(exhausted.stderr).toContain("no verified next page");
+    await writeFile(
+      policyPath,
+      JSON.stringify({ ...automatic, minimumActiveInstallations: 10_000 }),
+    );
+    const changedPolicy = await run(
+      "inventory",
+      "collect",
+      "--config",
+      policyPath,
+      "--after",
+      firstReport.inventoryDigest,
+    );
+    expect(changedPolicy.code).toBe(1);
+    expect(changedPolicy.stderr).toContain(
+      "does not match its selection policy",
+    );
   });
 
   it("enumerates without nominated slugs, reserves the next ranked batch, and runs that batch", async () => {

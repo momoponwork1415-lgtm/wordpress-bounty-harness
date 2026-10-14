@@ -120,6 +120,24 @@ export interface CliSelectionReport {
   }[];
 }
 
+export interface CliInventoryReport {
+  readonly inventoryDigest: string;
+  readonly candidates: number;
+  readonly observedCandidates: number;
+  readonly ineligibleByReason: Readonly<Record<string, number>>;
+  readonly source: {
+    readonly status: "available" | "stale" | "unavailable";
+    readonly requestedListingCoverage:
+      "all-observed" | "partial" | "none-observed";
+  };
+  readonly traversal: {
+    readonly offset: number;
+    readonly observedUniqueCandidates: number;
+    readonly complete: boolean;
+    readonly nextPageAvailable: boolean;
+  };
+}
+
 /** A profile composition: everything target-specific the commands need. */
 export interface CliProfile {
   review(state: CliState): Review;
@@ -151,6 +169,10 @@ export interface CliProfile {
     state: CliState,
     input: { readonly configPath: string },
   ): Promise<CliSelectionReport>;
+  collectInventory(
+    state: CliState,
+    input: { readonly configPath: string; readonly afterDigest?: string },
+  ): Promise<CliInventoryReport>;
   runCampaign(
     state: CliState,
     input: {
@@ -243,6 +265,7 @@ export type CliEnvironment = {
 const USAGE = [
   "usage: harness [--state <dir>] <command>",
   "  select --config <path>",
+  "  inventory collect --config <path> [--after <inventory digest>]",
   "  campaign run <slug>|--all --campaign <id> --config <path> [--retry-incomplete]",
   "  review [--campaign <id>]",
   "  review inspect --campaign <id> --finding <id>",
@@ -280,6 +303,7 @@ const options = {
   all: { type: "boolean" },
   campaign: { type: "string" },
   config: { type: "string" },
+  after: { type: "string" },
   finding: { type: "string" },
   version: { type: "string" },
   decision: { type: "string" },
@@ -714,6 +738,16 @@ export async function runCli(
     const command = [group, sub].filter((part) => part !== undefined).join(" ");
     const print = (lines: readonly string[]) => lines.forEach(io.stdout);
     switch (command) {
+      case "inventory collect": {
+        if (rest.length > 0)
+          throw new UsageError("inventory collect takes no positional target");
+        const report = await environment.profile.collectInventory(state, {
+          configPath: resolve(required(values.config, "config")),
+          ...(values.after === undefined ? {} : { afterDigest: values.after }),
+        });
+        io.stdout(canonicalJson(report));
+        return 0;
+      }
       case "select": {
         const report = await environment.profile.select(state, {
           configPath: resolve(required(values.config, "config")),

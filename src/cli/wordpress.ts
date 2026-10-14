@@ -80,7 +80,9 @@ import {
   type WordpressScopePolicy,
 } from "../profiles/wordpress/scope-policy.js";
 import {
+  collectWordPressCandidateInventory,
   loadWordPressSelectionPolicy,
+  readWordPressCandidateInventoryCursor,
   wordPressSelectionPolicySchema,
   wordPressTargetSelectionSchema,
   type WordPressSelectionPolicy,
@@ -1405,6 +1407,62 @@ export function createWordPressCliProfile(
     },
     advisories: parseWordPressAdvisories,
     locationsOf: wordpressFindingLocations,
+    async collectInventory(state, input) {
+      const { policy, wordpressVersion } = await loadSelectInput(
+        input.configPath,
+      );
+      if (!("candidateSource" in policy))
+        throw new Error("Candidate inventory requires automatic selection");
+      if (options.selectionBoundaries === undefined)
+        throw new Error("Candidate inventory requires selection boundaries");
+      const boundaries = await options.selectionBoundaries(
+        state,
+        wordpressVersion,
+      );
+      const inspectBatch = boundaries.selection.inspectBatch;
+      if (inspectBatch === undefined)
+        throw new Error("Candidate inventory requires listing observations");
+      const cursor =
+        input.afterDigest === undefined
+          ? undefined
+          : await readWordPressCandidateInventoryCursor({
+              digest: input.afterDigest,
+              policy,
+              store: state.store,
+              clock: state.clock,
+            });
+      const { digest, inventory } = await collectWordPressCandidateInventory({
+        policy,
+        inspectBatch: (value, after, pool) => inspectBatch(value, after, pool),
+        ...(cursor === undefined ? {} : { cursor }),
+        store: state.store,
+        clock: state.clock,
+      });
+      if (
+        cursor !== undefined &&
+        inventory.source.pool?.digest !== cursor.sourcePoolDigest
+      )
+        throw new Error("Candidate inventory changed source pool");
+      const traversal = inventory.source.traversal;
+      if (traversal === undefined)
+        throw new Error("Candidate inventory has no traversal record");
+      return {
+        inventoryDigest: digest,
+        candidates: inventory.candidates.length,
+        observedCandidates: inventory.observedCandidates,
+        ineligibleByReason: inventory.ineligibleByReason,
+        source: {
+          status: inventory.source.status,
+          requestedListingCoverage: inventory.source.requestedListingCoverage,
+        },
+        traversal: {
+          offset: traversal.offset,
+          observedUniqueCandidates: traversal.observedUniqueCandidates,
+          complete: traversal.complete,
+          nextPageAvailable: traversal.nextCursor !== undefined,
+        },
+      };
+    },
     async select(state, input) {
       const { config, policy, wordpressVersion } = await loadSelectInput(
         input.configPath,
