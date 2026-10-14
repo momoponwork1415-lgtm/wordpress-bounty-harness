@@ -105,6 +105,16 @@ export type LabDownSummary = {
 
 export interface CliSelectionReport {
   readonly batchId: string | null;
+  /** Whether the earlier generations' history took part in exclusion. */
+  readonly legacyHistory?:
+    | { readonly status: "unavailable" }
+    | {
+        readonly status: "available";
+        readonly digest: string;
+        readonly started: number;
+        readonly ambiguous: number;
+        readonly reconsider: number;
+      };
   readonly selected: readonly {
     readonly targetId: string;
     readonly version: string;
@@ -150,7 +160,11 @@ export interface CliProfile {
   locationsOf(finding: unknown): readonly SourceLocation[];
   select(
     state: CliState,
-    input: { readonly configPath: string },
+    input: {
+      readonly configPath: string;
+      /** Fewest frozen targets that make a batch; fewer selects nothing. */
+      readonly minimum?: number;
+    },
   ): Promise<CliSelectionReport>;
   runCampaign(
     state: CliState,
@@ -239,7 +253,7 @@ export type CliEnvironment = {
 
 const USAGE = [
   "usage: harness [--state <dir>] <command>",
-  "  select --config <path>",
+  "  select --config <path> [--minimum <n>]",
   "  campaign run <slug>|--all --campaign <id> --config <path> [--retry-incomplete]",
   "  review [--campaign <id>]",
   "  review inspect --campaign <id> --finding <id>",
@@ -308,6 +322,7 @@ const options = {
   port: { type: "string" },
   "db-port": { type: "string" },
   since: { type: "string" },
+  minimum: { type: "string" },
 } as const;
 
 class UsageError extends Error {}
@@ -747,9 +762,24 @@ export async function runCli(
     const print = (lines: readonly string[]) => lines.forEach(io.stdout);
     switch (command) {
       case "select": {
+        const minimum =
+          values.minimum === undefined ? undefined : Number(values.minimum);
+        if (
+          minimum !== undefined &&
+          (!Number.isSafeInteger(minimum) || minimum < 1 || minimum > 5)
+        )
+          throw new UsageError("--minimum must be an integer from 1 to 5");
         const report = await environment.profile.select(state, {
           configPath: resolve(required(values.config, "config")),
+          ...(minimum === undefined ? {} : { minimum }),
         });
+        const legacy = report.legacyHistory;
+        if (legacy !== undefined)
+          io.stdout(
+            legacy.status === "unavailable"
+              ? "legacy history unavailable"
+              : `legacy history ${legacy.digest}  started ${legacy.started}  ambiguous ${legacy.ambiguous}  reconsider ${legacy.reconsider}`,
+          );
         for (const target of report.selected)
           io.stdout(
             `${target.targetId} ${target.version} score ${target.score.toFixed(2)}  breakdown ${Object.entries(

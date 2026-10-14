@@ -2902,9 +2902,9 @@ describe("harness CLI vertical slice", () => {
       });
   });
 
-  it("keeps a shortage selection report reachable after a freeze failure", async () => {
+  it("returns an empty selection with reasons below the floor, and a batch at --minimum 1", async () => {
     const { run, root, ledger, store } = await harness({
-      candidates: ["broken-plugin", "item-b", "item-c"],
+      candidates: ["broken-plugin", "item-b"],
       failFreeze: "broken-plugin",
     });
     const policyPath = join(root, "selection.json");
@@ -2921,6 +2921,7 @@ describe("harness CLI vertical slice", () => {
         promptVariant: "short-objective-managed-v4",
         revisitPolicy: { kind: "never" },
         wordpressVersion: "6.8",
+        maximumTargets: 3,
         candidateSource: {
           kind: "wordpress-org",
           popularPages: 1,
@@ -2933,8 +2934,13 @@ describe("harness CLI vertical slice", () => {
       }),
     );
     const selected = await run("select", "--config", policyPath);
-    expect(selected.code).toBe(1);
-    expect(selected.stderr).toContain("at least 3 are required");
+    // Below the floor of 3: no batch, a reason per target, and no throw.
+    expect(selected.code).toBe(0);
+    expect(selected.stdout).toContain("legacy history unavailable");
+    expect(selected.stdout).toContain("no targets selected");
+    expect(selected.stdout).toContain(
+      "excluded wporg:item-b  reasons below-minimum",
+    );
     expect(ledger().read({ type: "target-selected" })).toHaveLength(0);
     const skipped = ledger().read({ type: "target-skipped" })[0]?.event;
     const reportRef = skipped?.artifacts.find(
@@ -2948,9 +2954,19 @@ describe("harness CLI vertical slice", () => {
     );
     expect(report.status).toBe("resolved");
     if (report.status === "resolved")
-      expect(
-        JSON.parse(report.bytes.toString("utf8")).freezeFailures,
-      ).toHaveLength(1);
+      expect(JSON.parse(report.bytes.toString("utf8"))).toMatchObject({
+        freezeFailures: [{ selectionId: "wporg:broken-plugin@9.9.9" }],
+        legacyHistory: { status: "unavailable" },
+        minimum: 3,
+      });
+    // The runner's floor of 1 makes a batch of the one eligible target.
+    const one = await run("select", "--config", policyPath, "--minimum", "1");
+    expect(one.code).toBe(0);
+    expect(one.stdout).toMatch(/^selection batch selection-/m);
+    expect(ledger().read({ type: "target-selected" })).toHaveLength(1);
+    expect(
+      (await run("select", "--config", policyPath, "--minimum", "0")).code,
+    ).toBe(2);
   });
 
   it("classifies a source mismatch in the ledger and keeps its detail private", async () => {
@@ -3036,7 +3052,7 @@ describe("harness CLI vertical slice", () => {
     expect(all.stdout).toContain("wporg:synthetic-plugin 3.3.1");
   });
 
-  it("enumerates without nominated slugs, reserves the next ranked batch, and runs that batch", async () => {
+  it("enumerates without nominated slugs, skips started slugs in the next batch, and runs that batch", async () => {
     const candidates = [
       "item-a",
       "item-b",
@@ -3109,11 +3125,22 @@ describe("harness CLI vertical slice", () => {
     expect(first.stdout).toContain(
       "excluded wporg:item-d  reasons below-rank-cutoff",
     );
+    // A reservation alone excludes nothing; the started Trials do.
+    const firstBatch = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-first",
+      "--config",
+      configPath,
+    );
+    expect(firstBatch.code).toBe(0);
     const second = await run("select", "--config", policyPath);
     expect(second.code).toBe(0);
     expect(second.stdout).not.toContain("wporg:item-a 9.9.9 score");
     expect(second.stdout).toContain(
-      "excluded wporg:item-a  reasons previously-selected",
+      "excluded wporg:item-b  reasons previously-selected",
     );
     expect(second.stdout).toContain("wporg:item-d 9.9.9 score");
     expect(second.stdout).toContain("wporg:item-f 9.9.9 score");
@@ -3198,7 +3225,8 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(resumed.code).toBe(0);
-    expect(resumed.stdout).toContain("wporg:item-d 9.9.9");
+    // item-d already finished; the resume stays on its bound batch.
+    expect(resumed.stdout).not.toContain("item-g");
     expect(
       ledger().read({
         campaignId: "campaign-reserved",

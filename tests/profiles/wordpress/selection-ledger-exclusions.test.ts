@@ -56,6 +56,20 @@ function started(
   });
 }
 
+/** A selection whose exploration Trial started. */
+function trial(
+  slug: string,
+  version: string,
+  campaignId = "campaign-1",
+  snapshotDigest = digest("a"),
+  promptVariant = "wp2shell-bounty-v2",
+) {
+  return [
+    selected(slug, version, campaignId, snapshotDigest),
+    started(promptVariant, campaignId, snapshotDigest),
+  ];
+}
+
 function finding(
   findingId: string,
   campaignId = "campaign-1",
@@ -129,7 +143,7 @@ function inspect(
 
 describe("WordPress ledger exclusions", () => {
   it("keeps untouched candidates and excludes the same slug in later selections", () => {
-    const ledger = reader([selected("seen", "1.2.0")]);
+    const ledger = reader(trial("seen", "1.2.0"));
     expect(
       inspect(ledger, [
         { slug: "seen", version: "1.2.0" },
@@ -143,8 +157,8 @@ describe("WordPress ledger exclusions", () => {
 
   it("revisits only a genuinely higher plugin version when that policy is chosen", () => {
     const ledger = reader([
-      selected("seen", "1.9.0", "campaign-1", digest("a")),
-      selected("seen", "1.10.0", "campaign-2", digest("b")),
+      ...trial("seen", "1.9.0", "campaign-1", digest("a")),
+      ...trial("seen", "1.10.0", "campaign-2", digest("b")),
     ]);
     expect(
       inspect(
@@ -170,7 +184,7 @@ describe("WordPress ledger exclusions", () => {
   });
 
   it("keeps a Finding private even after a version increase", () => {
-    const ledger = reader([selected("seen", "1.2.0"), finding("finding-1")]);
+    const ledger = reader([...trial("seen", "1.2.0"), finding("finding-1")]);
     expect(
       inspect(
         ledger,
@@ -228,40 +242,20 @@ describe("WordPress ledger exclusions", () => {
         "wp2shell-bounty-v2",
       )[0]?.reasons,
     ).toEqual(["previously-selected"]);
-    expect(
-      inspect(
-        reader([selected("legacy", "1.0.0")]),
-        [{ slug: "legacy", version: "1.0.0" }],
-        "prompt-version-changed",
-        "wp2shell-bounty-v4",
-      )[0]?.reasons,
-    ).toEqual(["previously-selected"]);
   });
 
-  it("uses the planned prompt on a selection reservation before discovery starts", () => {
+  it("does not exclude a selection whose Trial never started", () => {
     const reservation = ledgerEventV1Schema.parse({
       ...base("campaign-1", digest("c"), "selection-reservation"),
       type: "target-selected",
       selectionId: "wporg:reserved@1.0.0",
       promptVariant: "wp2shell-bounty-v2",
     });
-    const ledger = reader([reservation]);
     expect(
-      inspect(
-        ledger,
-        [{ slug: "reserved", version: "1.0.0" }],
-        "prompt-version-changed",
-        "wp2shell-bounty-v3",
-      )[0]?.reasons,
+      inspect(reader([reservation]), [
+        { slug: "reserved", version: "1.0.0" },
+      ])[0]?.reasons,
     ).toEqual([]);
-    expect(
-      inspect(
-        ledger,
-        [{ slug: "reserved", version: "1.0.0" }],
-        "prompt-version-changed",
-        "wp2shell-bounty-v2",
-      )[0]?.reasons,
-    ).toEqual(["previously-selected"]);
   });
 
   it("uses either configured change without accepting equal or older versions", () => {
@@ -292,10 +286,99 @@ describe("WordPress ledger exclusions", () => {
     );
     const ledger = reader([
       ...earlier,
-      selected("seen", "1.0.0", "last", digest("b")),
+      ...trial("seen", "1.0.0", "last", digest("b")),
     ]);
     expect(
       inspect(ledger, [{ slug: "seen", version: "1.0.0" }])[0]?.reasons,
+    ).toEqual(["previously-selected"]);
+  });
+
+  it("excludes legacy slugs with a reason unless the owner reconsiders them", () => {
+    const legacyHistory = {
+      started: new Set(["old-started", "back"]),
+      ambiguous: new Set(["old-ambiguous"]),
+      reconsider: new Set(["back", "retried"]),
+      digest: digest("f"),
+    };
+    const result = inspectWordPressLedgerExclusions({
+      ledger: reader(trial("retried", "1.0.0")),
+      candidates: [
+        "old-started",
+        "old-ambiguous",
+        "back",
+        "retried",
+        "new",
+      ].map((slug) => ({ slug, version: "1.0.0" })),
+      revisitPolicy: { kind: "never" },
+      currentPromptVariant: "wp2shell-bounty-v2",
+      legacyHistory,
+    });
+    expect(result.map(({ slug, reasons }) => [slug, reasons])).toEqual([
+      ["old-started", ["legacy-started"]],
+      ["old-ambiguous", ["legacy-ambiguous"]],
+      ["back", []],
+      ["retried", []],
+      ["new", []],
+    ]);
+  });
+
+  it("does not count a run that read nothing and started no child as a Trial", () => {
+    const finished = (
+      runId: string,
+      snapshotDigest: string,
+      fields: Record<string, unknown>,
+    ) =>
+      ledgerEventV1Schema.parse({
+        ...base("campaign-1", snapshotDigest, `finish-${runId}`),
+        type: "discovery-run-finished",
+        runId,
+        costUsd: "unavailable",
+        wallTimeMs: 1000,
+        ...fields,
+      });
+    const observed = (filesRead: number) => ({
+      toolCalls: 0,
+      filesRead,
+      uniqueFilesRead: filesRead,
+      labRequests: 0,
+      dbQueries: 0,
+    });
+    const ledger = reader([
+      // Refused at once: no source read, no child, one forwarded request.
+      ...trial("refused", "1.0.0", "campaign-1", digest("a")),
+      finished("run-campaign-1-wp2shell-bounty-v2", digest("a"), {
+        outcome: "failed",
+        reason: "provider",
+        observed: observed(0),
+        childThreadsObserved: 0,
+        brokerMetrics: {
+          forwardedRequests: 1,
+          requestLimitExceeded: 0,
+          unauthorizedRequests: 0,
+        },
+      }),
+      // Ran partway into a quota: it is a Trial.
+      ...trial("limited", "1.0.0", "campaign-1", digest("b"), "v3"),
+      finished("run-campaign-1-v3", digest("b"), {
+        outcome: "provider-limited",
+        reason: "provider",
+        providerLimit: "quota",
+        observed: observed(12),
+      }),
+    ]);
+    expect(
+      inspect(ledger, [
+        { slug: "refused", version: "1.0.0" },
+        { slug: "limited", version: "1.0.0" },
+      ]).map(({ reasons }) => reasons),
+    ).toEqual([[], ["previously-selected"]]);
+  });
+
+  it("never revisits a started slug, even on a higher version", () => {
+    expect(
+      inspect(reader(trial("seen", "1.0.0")), [
+        { slug: "seen", version: "9.0.0" },
+      ])[0]?.reasons,
     ).toEqual(["previously-selected"]);
   });
 

@@ -91,6 +91,8 @@ export const wordpressHostConfigSchema = z.strictObject({
   wordfenceHistory: z
     .strictObject({ databasePath: absolutePath, statePath: absolutePath })
     .optional(),
+  /** Earlier generations' started / ambiguous slugs (D2); `continuous run` requires it. */
+  legacyHistory: z.strictObject({ file: absolutePath }).optional(),
 });
 export type WordPressHostConfig = z.infer<typeof wordpressHostConfigSchema>;
 
@@ -488,6 +490,9 @@ export async function createWordPressHostProfile(options: {
     ...(host.wordfenceHistory === undefined
       ? {}
       : { wordfenceHistory: host.wordfenceHistory }),
+    ...(host.legacyHistory === undefined
+      ? {}
+      : { legacyHistoryFile: host.legacyHistory.file }),
   });
 }
 

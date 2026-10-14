@@ -86,6 +86,7 @@ import {
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
 import { inspectWordPressLedgerExclusions } from "../profiles/wordpress/selection/ledger-exclusions.js";
+import { loadWordPressLegacyHistory } from "../profiles/wordpress/selection/legacy-history.js";
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import {
@@ -785,6 +786,8 @@ export type WordPressCliProfileOptions = {
     wordpressVersion: string,
   ) => Promise<Pick<WordPressCampaignBoundaries, "selection" | "freeze">>;
   readonly scopePolicy: WordpressScopePolicy;
+  /** Git-outside legacy history JSON, read on every selection (D2). */
+  readonly legacyHistoryFile?: string;
   /** Overrides the scope facts read from judge evidence and the selection record. */
   readonly scopeFacts?: ScopeFactsProvider<WordpressScopeInput>;
   /** Local Wordfence history mirror; absent, duplicate lookup is unavailable. */
@@ -1265,8 +1268,12 @@ export function createWordPressCliProfile(
       const eligible = inspected.flatMap((item) =>
         item.selection === undefined ? [] : [item.selection],
       );
+      const legacy = await loadWordPressLegacyHistory(
+        options.legacyHistoryFile,
+      );
       const excludedByLedger = inspectWordPressLedgerExclusions({
         ledger: state.ledger,
+        legacyHistory: legacy.history,
         candidates: eligible.map(({ slug, version }) => ({ slug, version })),
         currentPromptVariant:
           policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v3",
@@ -1289,6 +1296,8 @@ export function createWordPressCliProfile(
         );
       const chosen: { target: WordPressTargetSelection; snapshot: Snapshot }[] =
         [];
+      // Automatic batches keep the historical floor of 3 unless the caller lowers it.
+      const minimum = input.minimum ?? ("candidateSource" in policy ? 3 : 1);
       const selectionAttemptId = `selection-${state.newId()}`;
       const freezeFailures: {
         selectionId: string;
@@ -1323,6 +1332,10 @@ export function createWordPressCliProfile(
           });
         }
       }
+      // Too few: write no selection, and say why for each frozen target.
+      if (chosen.length < minimum)
+        for (const { target } of chosen.splice(0))
+          reasons.get(target.slug)?.push("below-minimum");
       const report = {
         schemaVersion: 1,
         policyDigest: canonicalDigest(policy),
@@ -1335,6 +1348,8 @@ export function createWordPressCliProfile(
         })),
         selectedSnapshotDigests: chosen.map(({ snapshot }) => snapshot.digest),
         freezeFailures,
+        legacyHistory: legacy.report,
+        minimum,
       };
       const reportDigest = await state.store.putFiles({
         "selection-report.json": canonicalJson(report),
@@ -1365,10 +1380,6 @@ export function createWordPressCliProfile(
         if (appended.status !== "appended")
           throw new Error("Selection skip ledger append conflicted");
       }
-      if ("candidateSource" in policy && chosen.length < 3)
-        throw new Error(
-          `Selection found ${chosen.length} eligible frozen targets; at least 3 are required (report ${reportDigest})`,
-        );
       const batchId = chosen.length === 0 ? null : selectionAttemptId;
       for (const { target, snapshot } of chosen) {
         const selectionDigest = await state.store.putFiles({
@@ -1395,6 +1406,7 @@ export function createWordPressCliProfile(
       const chosenSlugs = new Set(chosen.map(({ target }) => target.slug));
       return {
         batchId,
+        legacyHistory: legacy.report,
         selected: chosen.map(({ target }) => ({
           targetId: target.targetId,
           version: target.version,

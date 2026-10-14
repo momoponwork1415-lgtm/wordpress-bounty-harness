@@ -20,7 +20,21 @@ export type WordPressRevisitPolicy = z.infer<
 >;
 
 export type WordPressLedgerExclusionReason =
-  "previously-selected" | "unpublished-finding";
+  | "previously-selected"
+  | "unpublished-finding"
+  | "legacy-started"
+  | "legacy-ambiguous";
+
+/** Earlier generations' history, exported once outside Git (D2). */
+export type WordPressLegacyHistory =
+  | {
+      readonly started: ReadonlySet<string>;
+      readonly ambiguous: ReadonlySet<string>;
+      /** Slugs the owner hands back; they ignore legacy and earlier Trials. */
+      readonly reconsider: ReadonlySet<string>;
+      readonly digest: string;
+    }
+  | "unavailable";
 
 export interface WordPressLedgerExclusion {
   readonly slug: string;
@@ -87,8 +101,25 @@ function promptChanged(
 }
 
 /**
- * Inspect the entire append-only ledger, including older campaigns. A selected
- * target remains excluded until the policy's explicit revisit condition holds.
+ * A run that read no source, started no child and forwarded at most one
+ * provider request is not a Trial (SPEC §6). A run without a receipt counts.
+ */
+function countsAsTrial(
+  finished:
+    Extract<LedgerEventV1, { type: "discovery-run-finished" }> | undefined,
+): boolean {
+  if (finished?.observed === undefined) return true;
+  return (
+    finished.observed.filesRead > 0 ||
+    (finished.childThreadsObserved ?? 0) > 0 ||
+    (finished.brokerMetrics?.forwardedRequests ?? 0) > 1
+  );
+}
+
+/**
+ * Inspect the entire append-only ledger, including older campaigns. A target
+ * whose exploration Trial started remains excluded until the policy's explicit
+ * revisit condition holds. A selection whose Trial never started is not.
  */
 export function inspectWordPressLedgerExclusions(input: {
   readonly ledger: Pick<Ledger, "read">;
@@ -98,11 +129,13 @@ export function inspectWordPressLedgerExclusions(input: {
   }[];
   readonly currentPromptVariant: string;
   readonly revisitPolicy: WordPressRevisitPolicy;
+  readonly legacyHistory?: WordPressLegacyHistory;
 }): readonly WordPressLedgerExclusion[] {
   const revisitPolicy = wordPressRevisitPolicySchema.parse(input.revisitPolicy);
   const promptVersions = new Map<string, Set<string>>();
   const selectedBySlug = new Map<string, EarlierSelection[]>();
   const selectedBySnapshot = new Map<string, string>();
+  const versionBySnapshot = new Map<string, string>();
   const recordPrompt = (key: string, promptVariant: string): void => {
     const versions = promptVersions.get(key) ?? new Set<string>();
     versions.add(promptVariant);
@@ -114,17 +147,34 @@ export function inspectWordPressLedgerExclusions(input: {
     const identity = selectionIdentity(event.selectionId);
     if (identity === null) continue;
     const key = snapshotKey(event);
-    const earlier = selectedBySlug.get(identity.slug) ?? [];
-    earlier.push({ version: identity.version, snapshotKey: key });
-    selectedBySlug.set(identity.slug, earlier);
     selectedBySnapshot.set(key, identity.slug);
+    versionBySnapshot.set(key, identity.version);
     if ("promptVariant" in event && typeof event.promptVariant === "string")
       recordPrompt(key, event.promptVariant);
   }
 
+  const finishedRuns = new Map<
+    string,
+    Extract<LedgerEventV1, { type: "discovery-run-finished" }>
+  >();
+  for (const event of ledgerEvents(input.ledger, "discovery-run-finished"))
+    if (event.type === "discovery-run-finished")
+      finishedRuns.set(`${event.campaignId}\0${event.runId}`, event);
   for (const event of ledgerEvents(input.ledger, "discovery-run-started")) {
     if (event.type !== "discovery-run-started") continue;
-    recordPrompt(snapshotKey(event), event.configuration.promptVariant);
+    const key = snapshotKey(event);
+    recordPrompt(key, event.configuration.promptVariant);
+    // Historical events had no runKind and each represented exploration.
+    if ((event.runKind ?? "explore") !== "explore") continue;
+    if (!countsAsTrial(finishedRuns.get(`${event.campaignId}\0${event.runId}`)))
+      continue;
+    const slug = selectedBySnapshot.get(key);
+    const version = versionBySnapshot.get(key);
+    if (slug === undefined || version === undefined) continue;
+    const earlier = selectedBySlug.get(slug) ?? [];
+    if (!earlier.some((item) => item.snapshotKey === key))
+      earlier.push({ version, snapshotKey: key });
+    selectedBySlug.set(slug, earlier);
   }
 
   // A submission receipt records a human action, not public disclosure.
@@ -140,11 +190,18 @@ export function inspectWordPressLedgerExclusions(input: {
     unpublishedFindingSlugs.add(slug);
   }
 
+  const legacy = input.legacyHistory ?? "unavailable";
   return input.candidates.map(({ slug, version }) => {
     const reasons: WordPressLedgerExclusionReason[] = [];
     if (unpublishedFindingSlugs.has(slug)) reasons.push("unpublished-finding");
+    const reconsidered =
+      legacy !== "unavailable" && legacy.reconsider.has(slug);
+    if (legacy !== "unavailable" && !reconsidered) {
+      if (legacy.started.has(slug)) reasons.push("legacy-started");
+      else if (legacy.ambiguous.has(slug)) reasons.push("legacy-ambiguous");
+    }
     const earlier = selectedBySlug.get(slug) ?? [];
-    if (earlier.length > 0) {
+    if (earlier.length > 0 && !reconsidered) {
       const versionIncreased = earlier.every(
         (selected) => compareVersions(version, selected.version) > 0,
       );
