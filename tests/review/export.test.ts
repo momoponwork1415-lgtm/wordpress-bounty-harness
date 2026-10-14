@@ -15,6 +15,7 @@ import {
   type StateDiffSummary,
 } from "../../src/review/index.js";
 
+const sha = (hex: string) => `sha256:${hex.repeat(64)}`;
 const snapshot = `sha256:${"a".repeat(64)}`;
 const labSetup = `sha256:${"b".repeat(64)}`;
 const promptDigest = `sha256:${"c".repeat(64)}`;
@@ -284,6 +285,7 @@ describe("review export", () => {
         latestKnown: "1.3",
         latestKnownAt: "2026-10-12T00:00:00Z",
         sameAsExplored: false,
+        latestObserved: null,
       },
     });
     expect(bundle.finding).toMatchObject({
@@ -360,7 +362,24 @@ describe("review export", () => {
           humanElapsedSeconds: 540,
         },
       ],
-      scopeAssessments: [{ programmeId: "wordfence", status: "in-scope" }],
+      scopeAssessments: [
+        {
+          assessmentId: "scope-1",
+          programmeId: "wordfence",
+          status: "in-scope",
+        },
+      ],
+      // A decision event without its private record keeps the codes null.
+      decision: {
+        decision: "defer",
+        reasonCode: null,
+        duplicate: null,
+        decidedAt: "2026-10-08T02:00:00Z",
+      },
+      humanReproduction: null,
+      latestReverification: null,
+      latestDraft: null,
+      labSetup: { digest: labSetup, ordinaryActivationDefaults: null },
     });
     expect(bundle.privateEvidence.directory).toBe(evidenceDirectory);
     expect(bundle.privateEvidence.artifacts.map((a) => a.kind).sort()).toEqual([
@@ -436,7 +455,15 @@ describe("review export", () => {
     });
     expect(bundle.refutation).toBeNull();
     expect(bundle.labStateDiff).toEqual({ status: "unavailable" });
-    expect(bundle.review).toEqual({ decisions: [], scopeAssessments: [] });
+    expect(bundle.review).toEqual({
+      decisions: [],
+      scopeAssessments: [],
+      decision: null,
+      humanReproduction: null,
+      latestReverification: null,
+      latestDraft: null,
+      labSetup: null,
+    });
   });
 
   it("carries the judge conditions and reproduction package reference for a confirmed Finding", async () => {
@@ -472,5 +499,150 @@ describe("review export", () => {
         findingId: "finding-9",
       }),
     ).rejects.toThrow("The finding is not recorded in this campaign");
+  });
+
+  it("fills the decision, reproduction, reverification, draft and newest release", async () => {
+    const { ledger, store, evidenceDirectory } = await fixture({
+      verification: "confirmed",
+    });
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot,
+    };
+    const record = (value: object) =>
+      store.putFiles({ "record.json": canonicalJson(value) });
+    const latest = `sha256:${"f".repeat(64)}`;
+    for (const event of [
+      {
+        ...base,
+        identity: "decision-2",
+        occurredAt: "2026-10-09T00:00:00Z",
+        type: "review-decided" as const,
+        findingId: "finding-1",
+        decision: "accept" as const,
+        artifacts: [
+          {
+            kind: "review-decision",
+            digest: await record({
+              reasonCode: "accepted",
+              duplicate: { status: "possible-match", ref: "CVE-1" },
+            }),
+          },
+        ],
+      },
+      {
+        ...base,
+        identity: "effort-1",
+        occurredAt: "2026-10-09T01:00:00Z",
+        type: "human-effort-recorded" as const,
+        findingId: "finding-1",
+        action: "reproduce" as const,
+        minutes: 35,
+      },
+      {
+        ...base,
+        identity: "reproduced-1",
+        occurredAt: "2026-10-09T01:00:00Z",
+        type: "human-reproduction-recorded" as const,
+        findingId: "finding-1",
+        verificationId: "verification-1",
+        reproductionPackageDigest: sha("9"),
+        result: "match" as const,
+      },
+      {
+        ...base,
+        snapshotDigest: latest,
+        identity: "finding-2",
+        occurredAt: "2026-10-10T00:00:00Z",
+        type: "finding-recorded" as const,
+        findingId: "finding-2",
+        runId: "run-1",
+        category: "options-update",
+        derivedFromFindingId: "finding-1",
+        derivationKind: "latest-version" as const,
+      },
+      {
+        ...base,
+        snapshotDigest: latest,
+        identity: "verification-2",
+        occurredAt: "2026-10-10T01:00:00Z",
+        type: "verification-finished" as const,
+        verificationId: "verification-2",
+        findingId: "finding-2",
+        labSetupDigest: labSetup,
+        basis: {
+          kind: "latest-version" as const,
+          findingSnapshotDigest: snapshot,
+        },
+        result: {
+          status: "incomplete" as const,
+          reason: "recipe" as const,
+          nextStep: "Repeat",
+        },
+      },
+      {
+        ...base,
+        identity: "draft-1",
+        occurredAt: "2026-10-11T00:00:00Z",
+        type: "draft-saved" as const,
+        findingId: "finding-1",
+        candidateId: "candidate-1",
+        revisionDigest: sha("8"),
+        artifacts: [
+          {
+            kind: "review-draft",
+            digest: await record({
+              revision: 2,
+              preparedBy: "ai",
+              destination: "wordfence",
+            }),
+          },
+        ],
+      },
+    ])
+      expect((await ledger.append(event)).status).toBe("appended");
+    const exported = (observe: () => Promise<never | object>) =>
+      exportReviewBundle({
+        ledger,
+        store,
+        evidenceDirectory,
+        campaignId: "campaign-1",
+        findingId: "finding-1",
+        observeLatestVersion: observe as never,
+      });
+    const bundle = await exported(async () => ({
+      version: "1.4",
+      observedAt: "2026-10-14T00:00:00Z",
+    }));
+    expect(bundle.target.versions.latestObserved).toEqual({
+      version: "1.4",
+      observedAt: "2026-10-14T00:00:00Z",
+    });
+    expect(bundle.review).toMatchObject({
+      decision: {
+        decision: "accept",
+        reasonCode: "accepted",
+        duplicate: "possible-match:CVE-1",
+      },
+      humanReproduction: { result: "match", minutes: 35 },
+      latestReverification: {
+        verificationId: "verification-2",
+        findingId: "finding-2",
+        status: "incomplete",
+        basis: "latest-version",
+      },
+      latestDraft: {
+        digest: sha("8"),
+        revision: 2,
+        preparedBy: "ai",
+        programme: "wordfence",
+      },
+    });
+    // A failed observation is null, not an error.
+    const failed = await exported(async () => {
+      throw new Error("offline");
+    });
+    expect(failed.target.versions.latestObserved).toBeNull();
   });
 });
