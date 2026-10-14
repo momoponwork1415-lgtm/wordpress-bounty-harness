@@ -535,6 +535,16 @@ describe("continuous control", () => {
             reason: "review-export-unchecked",
             reviewExportChecked: false,
             reviewExportsReady: null,
+            targets: [
+              {
+                snapshotDigest: digest("d"),
+                state: null,
+                reason: "review-export-unchecked",
+                trialsStarted: 1,
+                trialsFinished: 1,
+                reviewExportsReady: null,
+              },
+            ],
           },
         ],
       });
@@ -559,11 +569,158 @@ describe("continuous control", () => {
             reviewExportsReady: 2,
             reviewExportChecked: true,
             lastLedgerSequence: 9,
+            targets: [
+              {
+                snapshotDigest: digest("d"),
+                state: "complete",
+                reason: "complete",
+                findings: 2,
+                verificationComplete: 1,
+                verificationIncomplete: 1,
+                reviewExportsReady: 2,
+              },
+            ],
           },
         ],
       });
       expect(lines.at(-1)).not.toContain("private evidence");
       expect(lines.at(-1)).not.toContain("finding-1");
+    } finally {
+      journal.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("shows a spent quota Trial and an untouched target even without export evidence", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "wbh-continuous-quota-status-"),
+    );
+    const journal = new SqliteContinuousRunJournal(
+      join(directory, "runs.sqlite"),
+    );
+    try {
+      let run = journal.create({
+        parentRunId: "parent-quota-progress",
+        stateDirectory: directory,
+        configDigest: digest("a"),
+        policyDigest: digest("b"),
+        inventoryDigest: digest("c"),
+      });
+      run = journal.reserveChild(run.parentRunId, run.revision);
+      run = journal.bindChild(run.parentRunId, run.revision, 0, {
+        selectionBatchId: "selection-quota",
+        snapshotDigests: [digest("d"), digest("e")],
+      });
+      run = journal.transition(run.parentRunId, run.revision, {
+        state: "WAIT_QUOTA",
+        reason: "quota",
+        nextCheckAt: "2026-10-14T00:05:00.000Z",
+      });
+      const campaignId = run.children[0]!.campaignId;
+      const base = {
+        schemaVersion: 1 as const,
+        campaignId,
+        snapshotDigest: digest("d"),
+        occurredAt: "2026-10-14T00:00:00Z",
+        artifacts: [],
+      };
+      const events: LedgerEventInput[] = [
+        {
+          ...base,
+          type: "target-selected",
+          identity: "quota-selected",
+          selectionId: "wporg:synthetic@1.0",
+        },
+        {
+          ...base,
+          type: "snapshot-frozen",
+          identity: "quota-frozen",
+          sourceDigest: digest("f"),
+        },
+        {
+          ...base,
+          type: "discovery-run-started",
+          identity: "quota-started",
+          runId: "quota-run",
+          labId: "quota-lab",
+          history: { mode: "none" },
+          configuration: {
+            promptVariant: "synthetic",
+            assignmentUnit: "target",
+          },
+        },
+        {
+          ...base,
+          type: "finding-recorded",
+          identity: "quota-finding",
+          findingId: "private-finding-id",
+          runId: "quota-run",
+          category: "synthetic",
+        },
+        {
+          ...base,
+          type: "discovery-run-finished",
+          identity: "quota-finished",
+          runId: "quota-run",
+          outcome: "provider-limited",
+          reason: "provider",
+          providerLimit: "quota",
+          costUsd: "unavailable",
+          wallTimeMs: 1000,
+        },
+      ];
+      const records: LedgerRecord[] = events.map((event, index) => ({
+        sequence: index + 1,
+        event: ledgerEventV1Schema.parse(event),
+      }));
+      const output: string[] = [];
+      await runContinuousControl(
+        ["continuous", "status", "--run", run.parentRunId],
+        journal,
+        { stdout: (line) => output.push(line) },
+        {
+          ledger: {
+            read: (query = {}) =>
+              records
+                .filter(
+                  ({ sequence, event }) =>
+                    sequence > (query.afterSequence ?? 0) &&
+                    (query.campaignId === undefined ||
+                      query.campaignId === event.campaignId),
+                )
+                .slice(0, query.limit ?? 100),
+          },
+        },
+      );
+      expect(JSON.parse(output[0]!)).toMatchObject({
+        state: "WAIT_QUOTA",
+        children: [
+          {
+            state: "wait-quota",
+            reason: "quota",
+            reviewExportsReady: null,
+            targets: [
+              {
+                snapshotDigest: digest("d"),
+                state: "wait-quota",
+                reason: "quota",
+                trialsStarted: 1,
+                trialsFinished: 1,
+                findings: 1,
+                reviewExportsReady: null,
+              },
+              {
+                snapshotDigest: digest("e"),
+                state: "pending",
+                reason: "not-started",
+                trialsStarted: 0,
+                trialsFinished: 0,
+              },
+            ],
+          },
+        ],
+      });
+      expect(output[0]).not.toContain("private-finding-id");
     } finally {
       journal.close();
       await rm(directory, { recursive: true, force: true });

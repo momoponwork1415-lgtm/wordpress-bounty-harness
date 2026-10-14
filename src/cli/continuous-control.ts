@@ -84,19 +84,13 @@ export async function runContinuousControl(
       ...(assessment === null
         ? {}
         : {
-            // Without the Private Evidence check, a Finding's export state is
-            // unknown. Do not report a settled child as needing review merely
-            // because status was invoked without a review reader.
+            // Missing export evidence only obscures export readiness. A
+            // higher-priority quota or failed-run hold must remain visible.
             state:
-              assessmentInputs.reviewExportReady === undefined &&
-              assessment.progress.findings > 0
+              assessment.reason === "review-export-unchecked"
                 ? null
                 : assessment.nextState,
-            reason:
-              assessmentInputs.reviewExportReady === undefined &&
-              assessment.progress.findings > 0
-                ? "review-export-unchecked"
-                : assessment.reason,
+            reason: assessment.reason,
             reviewExportChecked:
               assessmentInputs.reviewExportReady !== undefined,
             lastLedgerSequence: assessment.lastLedgerSequence,
@@ -111,6 +105,28 @@ export async function runContinuousControl(
               assessment.progress.findings > 0
                 ? null
                 : assessment.progress.reviewExportsReady,
+            // The bound Snapshot digest is already in the journal. Per-target
+            // receipt states show which attempts are spent and which have not
+            // started, without exposing Finding text or Private Evidence.
+            targets: assessment.targets.map((target) => ({
+              snapshotDigest: target.snapshotDigest,
+              state:
+                target.reason === "review-export-unchecked"
+                  ? null
+                  : target.nextState,
+              reason: target.reason,
+              trialsStarted: target.trialsStarted,
+              trialsFinished: target.trialsFinished,
+              findings: target.findings,
+              verificationCovered: target.verificationCovered,
+              verificationComplete: target.verificationComplete,
+              verificationIncomplete: target.verificationIncomplete,
+              reviewExportsReady:
+                assessmentInputs.reviewExportReady === undefined &&
+                target.findings > 0
+                  ? null
+                  : target.reviewExportsReady,
+            })),
           }),
     });
   }
