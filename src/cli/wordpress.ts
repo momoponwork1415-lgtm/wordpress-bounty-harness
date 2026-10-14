@@ -1302,9 +1302,10 @@ export function createWordPressCliProfile(
       const reportDigest = await state.store.putFiles({
         "selection-report.json": canonicalJson(report),
       });
-      if ("candidateSource" in policy && chosen.length < 3)
+      const minimumTargets = Math.min(3, policy.maximumTargets);
+      if ("candidateSource" in policy && chosen.length < minimumTargets)
         throw new Error(
-          `Selection found ${chosen.length} eligible frozen targets; at least 3 are required (report ${reportDigest})`,
+          `Selection found ${chosen.length} eligible frozen targets; at least ${minimumTargets} are required (report ${reportDigest})`,
         );
       const batchId = chosen.length === 0 ? null : `selection-${state.newId()}`;
       for (const { target, snapshot } of chosen) {

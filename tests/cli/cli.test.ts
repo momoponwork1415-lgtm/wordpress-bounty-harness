@@ -2897,6 +2897,110 @@ describe("harness CLI vertical slice", () => {
     expect(changedTarget.stderr).toContain("target set differs");
   });
 
+  it("reserves one automatic target only when explicitly configured and binds its exact policy", async () => {
+    const { run, configPath, root, ledger, prompts } = await harness({
+      candidates: ["item-a"],
+    });
+    const policyPath = join(root, "selection.json");
+    const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete policy.candidateSlugs;
+    delete policy.pinnedVersions;
+    const automatic = {
+      ...policy,
+      id: "automatic-default-minimum",
+      promptVariant: "short-objective-managed-v4",
+      revisitPolicy: { kind: "never" },
+      wordpressVersion: "6.8",
+      maximumTargets: 3,
+      candidateSource: {
+        kind: "wordpress-org",
+        popularPages: 1,
+        tags: [],
+        pagesPerTag: 1,
+        perPage: 20,
+        maxCandidates: 20,
+        maxAgeDays: 1,
+      },
+    };
+    await writeFile(policyPath, JSON.stringify(automatic));
+    const defaultMinimum = await run("select", "--config", configPath);
+    expect(defaultMinimum.code).toBe(1);
+    expect(defaultMinimum.stderr).toContain(
+      "Selection found 1 eligible frozen targets; at least 3 are required",
+    );
+    expect(ledger().read({ type: "target-selected" })).toHaveLength(0);
+
+    const singleton = {
+      ...automatic,
+      id: "automatic-singleton",
+      maximumTargets: 1,
+    };
+    await writeFile(policyPath, JSON.stringify(singleton));
+    const selected = await run("select", "--config", configPath);
+    expect(selected.code).toBe(0);
+    const reservations = ledger().read({ type: "target-selected" });
+    expect(reservations).toHaveLength(1);
+    expect(reservations[0]?.event).toMatchObject({
+      selectionId: "wporg:item-a@9.9.9",
+    });
+
+    await writeFile(
+      policyPath,
+      JSON.stringify({ ...singleton, id: "different-policy" }),
+    );
+    const mismatched = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-mismatched-singleton",
+      "--config",
+      configPath,
+    );
+    expect(mismatched.code).toBe(1);
+    expect(mismatched.stderr).toContain(
+      "No reserved selection batch matches this policy",
+    );
+    expect(prompts).toHaveLength(0);
+
+    await writeFile(policyPath, JSON.stringify(singleton));
+    const campaign = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-singleton",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(campaign.stdout).toContain("wporg:item-a 9.9.9");
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(
+      ledger().read({
+        campaignId: "campaign-singleton",
+        type: "selection-batch-bound",
+      })[0]?.event,
+    ).toMatchObject({
+      selectionBatchId: reservations[0]?.event.campaignId,
+      selectionIds: ["wporg:item-a@9.9.9"],
+    });
+
+    const revisited = await run("select", "--config", configPath);
+    expect(revisited.code).toBe(1);
+    expect(revisited.stderr).toContain(
+      "Selection found 0 eligible frozen targets; at least 1",
+    );
+    expect(
+      ledger()
+        .read({ type: "target-selected" })
+        .filter(({ event }) => event.campaignId.startsWith("selection-")),
+    ).toHaveLength(1);
+  });
+
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {
     const { run, configPath, root } = await harness({
       scopeFacts: {
