@@ -62,7 +62,11 @@ const report = {
   examined: "source",
   unexamined: "none",
 };
-const transcript = (root: unknown) =>
+const transcript = (
+  root: unknown,
+  childFinal = JSON.stringify(report),
+  childTranscript = "{}",
+) =>
   [
     { type: "harness.child-start", ordinal: 1 },
     { type: "harness.child-id", agentId: "child-1" },
@@ -75,8 +79,8 @@ const transcript = (root: unknown) =>
     {
       type: "harness.child-transcript",
       agentId: "child-1",
-      transcript: "{}",
-      finalMessage: JSON.stringify(report),
+      transcript: childTranscript,
+      finalMessage: childFinal,
     },
     {
       type: "result",
@@ -101,7 +105,11 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
-async function setup(rootOutput: unknown) {
+async function setup(
+  rootOutput: unknown,
+  childFinal?: string,
+  childTranscript?: string,
+) {
   const root = await mkdtemp(join(tmpdir(), "wbh-claude-test-"));
   roots.push(root);
   const attachments = new ProviderAttachmentStore(root);
@@ -120,7 +128,7 @@ async function setup(rootOutput: unknown) {
       return {
         kind: "exited" as const,
         exitCode: 0,
-        stdout: transcript(rootOutput),
+        stdout: transcript(rootOutput, childFinal, childTranscript),
         stderr: "",
         cliVersion: "2.1.278",
         image,
@@ -206,6 +214,18 @@ describe("Claude single cooperative Trial", () => {
       terminal: "incomplete",
       reason: "schema",
     });
+    expect(result.agentRuns?.[0]?.receipt.terminal).toBe("completed");
+    expect(result.agentRuns?.[0]?.attachment).toBeDefined();
+  });
+
+  it("recovers a valid child report from its transcript after a prose final reply", async () => {
+    const earlier = JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "text", text: JSON.stringify(report) }] },
+    });
+    const fixture = await setup(report, "Done", earlier);
+    const result = await fixture.runtime.execute(run);
+    expect(result.receipt.terminal).toBe("completed");
     expect(result.agentRuns?.[0]?.receipt.terminal).toBe("completed");
     expect(result.agentRuns?.[0]?.attachment).toBeDefined();
   });

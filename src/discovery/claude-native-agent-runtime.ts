@@ -128,6 +128,35 @@ function childCandidate(message: string) {
     leads: parsed.leads.map(claim),
   };
 }
+function childCandidateFromEvent(event: Event | undefined) {
+  if (event === undefined) throw new Error("Child evidence is unavailable");
+  const messages = [String(event.finalMessage ?? "")];
+  if (typeof event.transcript === "string") {
+    const texts: string[] = [];
+    for (const line of event.transcript.split("\n")) {
+      try {
+        const record = object(JSON.parse(line) as unknown);
+        const content = object(record?.message)?.content;
+        if (record?.type === "assistant" && Array.isArray(content))
+          for (const block of content) {
+            const text = object(block)?.text;
+            if (typeof text === "string") texts.push(text);
+          }
+      } catch {
+        /* A malformed transcript line does not erase earlier reports. */
+      }
+    }
+    messages.push(...texts.reverse());
+  }
+  for (const message of messages) {
+    try {
+      return childCandidate(message);
+    } catch {
+      /* Try an earlier report from the same child. */
+    }
+  }
+  throw new Error("Child report is unreadable");
+}
 function rootCandidate(item: Event) {
   const value =
     item.structured_output ??
@@ -364,9 +393,7 @@ export class ClaudeNativeAgentRuntime {
         try {
           attachment = await this.attachments.put(
             "findings",
-            Buffer.from(
-              canonicalJson(childCandidate(String(child?.finalMessage ?? ""))),
-            ),
+            Buffer.from(canonicalJson(childCandidateFromEvent(child))),
           );
         } catch {
           /* Child remains incomplete. */
