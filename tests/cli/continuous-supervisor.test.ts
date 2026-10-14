@@ -271,6 +271,71 @@ describe("continuous supervisor wake", () => {
     },
   );
 
+  it.each(["stop", "review"] as const)(
+    "keeps a dead-owner %s race safe after the recovery claim is acquired",
+    async (transition) => {
+      const test = await fixture();
+      try {
+        const parentRunId = test.parentRunId;
+        const oldClaim = test.owner.tryAcquire(parentRunId, 100);
+        expect(oldClaim.status).toBe("acquired");
+        const run = test.journal.get(parentRunId)!;
+        const racingOwner = {
+          tryAcquire: () => {
+            const acquired = test.owner.tryAcquire(parentRunId);
+            expect(acquired).toMatchObject({
+              status: "acquired",
+              recoveryRequired: true,
+            });
+            if (transition === "stop") test.journal.requestStop(parentRunId);
+            else
+              test.journal.transition(parentRunId, run.revision, {
+                state: "WAIT_REVIEW",
+                reason: "manual-review",
+                nextCheckAt: null,
+              });
+            return acquired;
+          },
+          assertReady: (handle: Parameters<typeof test.owner.assertReady>[0]) =>
+            test.owner.assertReady(handle),
+          markReconciled: (
+            handle: Parameters<typeof test.owner.markReconciled>[0],
+            digest: string,
+          ) => test.owner.markReconciled(handle, digest),
+          release: (handle: Parameters<typeof test.owner.release>[0]) =>
+            test.owner.release(handle),
+        } as unknown as SqliteContinuousRunOwner;
+        const state = {
+          stateDirectory: test.directory,
+          clock: () => new Date(),
+          store: { putFiles: async () => digest("e") },
+          ledger: { read: () => [] },
+        } as unknown as CliState;
+        const result = await runContinuousParent({
+          ...test.request,
+          state,
+          owner: racingOwner,
+          supervisorExpectedRevision: run.revision,
+        });
+        expect(result).toMatchObject({
+          state: transition === "stop" ? "STOPPED" : "WAIT_REVIEW",
+          reason: transition === "stop" ? "operator-stop" : "manual-review",
+          stopRequested: transition === "stop",
+        });
+        expect(result.children).toHaveLength(0);
+        expect(test.campaigns()).toBe(0);
+        if (transition === "stop")
+          expect(
+            observeContinuousRunOwner(test.ownerPath, parentRunId),
+          ).toMatchObject({
+            pidLiveness: "no-claim",
+          });
+      } finally {
+        await test.close();
+      }
+    },
+  );
+
   it("reconciles a dead parent into a new worker without starting an unapproved Trial", async () => {
     const test = await fixture();
     try {

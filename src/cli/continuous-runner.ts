@@ -165,8 +165,15 @@ export async function runContinuousParent(input: {
   };
   try {
     // The owner claim is the concurrency gate, but a stop/review transition
-    // can race its acquisition. A supervised wake must never reopen that hold.
-    if (!supervisorStillEligible()) return current();
+    // can race its acquisition. A supervised wake must never reopen a review
+    // hold. A stop that races a dead-owner takeover must still pass through
+    // the recovery and stop reconciliation below; returning here would leave
+    // a recovery-required owner claim that idle stop cannot release.
+    if (
+      !supervisorStillEligible() &&
+      !(acquisition.recoveryRequired && current().stopRequested)
+    )
+      return current();
     if (acquisition.recoveryRequired) {
       const firstDecision = await inspect(
         initial.stopRequested,
