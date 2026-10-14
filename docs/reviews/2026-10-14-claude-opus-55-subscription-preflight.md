@@ -19,11 +19,12 @@
 - 実 token・対象 source を使わない gVisor 内の内部 network probe で、Claude Code 2.1.296 が Trial 限定の偽 Bearer token を付けて `POST /v1/messages?beta=true` を送り、model `claude-opus-5-5` と `oauth-2025-04-20` を含む `anthropic-beta` を送ることを観測した。偽 upstream は 401 を返した。この probe 単独では実 provider の応答を測っていない。
 - 所有者が発行した `setup-token` を本人所有・0600 の Git 外ファイルから broker だけが読み、対象 source を与えない無害な gVisor CLI smoke を2回行った。1回目は upstream への送信前に CLI が終了した。2回目は Opus 5.5 への1要求が成功し、upstream の4xx・5xxは0、CLI は正常終了した。これは認証経路とモデル応答の確認であり、購読への実際の計上、rate limit、対象 Trial の成功を示さない。token の値は記録・表示していない。
 - 過去・現行 Codex の公開 slug 833件を Git 外の Opus 選定方針で除外し、独立 state で既定の100,000インストール下限・候補500件を検査した。適格候補は1件だったが、最初の Opus host 設定に WordPress 6.8.3 の core image が残り、宣言された7.1.3と不一致だったため Snapshot 固定は0件で終了した。host image を本番の7.1.3へ揃え、同版の core source を取得できることを確認した。台帳の `target-selected` は0件で、対象 Trial は起動していない。
+- 所有者の明示承認後、既定8タグのページ深度を2→5にした新しい Git 外 policy ID・digest で再選定した。100,000インストール下限、候補上限500、作者・既往 slug 除外は維持した。固定可能な新規対象は1件で、自動選定契約が要求する3件に届かず失敗した。台帳の `target-selected` は引き続き0件。`maximumTargets` は自動選定 schema で3〜5、CLI も3件未満を失敗とするため、1対象 Trial に設定値だけで切り替えられない。
 - `pnpm check` は89ファイル・678テストに合格した。mock は grant の照合、OAuth capability、host token の upstream 差し替え、応答の secret redaction、runsc 側の grant のみの受け渡しを検査する。
 
 ## 実 Trial 前に残る条件
 
-1. 独立した Git 外 state と ledger を使い、現 Codex と過去の開発 Trial に含まれない fresh slug を3件固定する。既定の候補500件では適格1件だった。既定8タグのページ深度2→5は選定方針の数値範囲内だが、対象群が広がるため人間の明示承認を確認する。自動承認審査はその確認が無い状態での変更を拒否した。
+1. 独立した Git 外 state と ledger を使い、現 Codex と過去の開発 Trial に含まれない fresh slug を3件固定する。既定のページ深度2と、所有者が承認したページ深度5の双方で適格候補は1件だった。追加の候補源調整または選定契約の変更は今回の実測には含めない。
 2. Codex 側の別 campaign 検知 guard と、選定した slug の非重複を確認する。
 3. Opus の最初の対象を1件で実行し、provider の応答、要求数、usage、wall、CPU・RAM、Lab、broker の失敗理由を観測する。成功・失敗にかかわらず `incomplete` を陰性に数えない。
 4. その実測を踏まえ `resources.maxConcurrentTargets: 2` に上げる。`maxConcurrentRuns` は対象間の並列レバーではなく、`memoryBudgetMiB` も全 campaign の予約ではない。Opus 2＋Codex 2の同時負荷は外側で監視する。
