@@ -1104,6 +1104,7 @@ async function runWordPressCampaign(
   return runCampaignPipeline({
     campaignId: input.campaignId,
     maxConcurrentTargets: config.resources.maxConcurrentTargets,
+    ...(input.stop === undefined ? {} : { stop: input.stop }),
     ...(input.retryIncompleteVerifications === undefined
       ? {}
       : {

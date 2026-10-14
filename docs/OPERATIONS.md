@@ -89,7 +89,9 @@ provider の構造化エラー `cyber_policy` は `incomplete(provider: provider
 - **上限での停止と再開**: provider のrate limit / quotaの応答を受けたとき。
   - 新しいrunを出さず、進行中のrunを記録して止まる。終了コードは3で、台帳に `campaign-stopped(provider-limit)` が残る。
   - 手で回すときは同じコマンドをもう一度実行すると再開する。`continuous run` の下では runner が backoff（quota は 30 → 60 分、rate-limit は 5 → 60 分、2 回連続なら 6 時間）の後に同じ campaign ID で再開する。ADR 0032 Q18 で止めたのは外側 cron の quota tick であり、runner の in-process の待機は別物。開始済みTrialは追加せず、未検証のFindingを検証して未消費の対象へ進む。
-  - 拒否（`provider-cyber-policy`）、wall、schema、CLI 終了などの対象単位の失敗は campaign を止めず、その対象を `target-skipped` にして次へ進む。
+  - 拒否（`provider-cyber-policy`）、wall、schema、CLI 終了などの対象単位の失敗は campaign を止めず、その対象を `target-skipped`（理由 `provider-refused` / `run-failed`）にして次へ進む。同じ campaign の再実行ではその対象を再開しない。
+  - Verifier が provider の上限を受けたときも同じく `campaign-stopped(provider-limit)` で止める。再開時はその検証を同じ Lab Setup で 1 回だけ自動再試行する。
+  - operator の stop は対象の境界で効く。進行中の対象は終わらせ、新しい対象を始めず、台帳に `campaign-stopped(operator)` が残る。
 - **入口の分担**: campaign の `assignment: {"unit":"entry-point","entriesPerRun":8}` で有効にする。WordPress profile が登録入口、保存先、core 交差、1 hop の include を text 走査し、保存先を共有する入口を同じ scope に置く。索引は事実の列挙で、探索範囲を制限しない。台帳には索引・成分の digest だけを置く。上限（PHP file 20,000、1 file 2 MiB、成分 key 200）を超えた索引は scope に partial と表示する。
 - **過去Trialの記録**: 旧 `stage` / `continuationOf` 付きeventと旧ablation armは台帳から読める。旧promptの目的文とdigestで構成を照合するが、旧screeningを現行modeで新規起動しない。新主経路は段やcontinuationを新規に書かず、比較するpromptと入口索引の有無を別armとして明示する。Leadの本文はPrivate Evidenceに置き、台帳にはdigestと分類だけを記録する。
 - **対象ごとの失敗**（取得、探索、検証）: 標準エラーに `skipped <対象> <版> at <段階>: <理由>` と出す。台帳の `target-skipped` には段階、短い理由コード、Private Evidence に置いた `target-skip-diagnostic.json` の digest を残し、次の対象へ進む。DNS、接続タイムアウト、HTTP 応答、source 検査不一致を区別する。WordPress.org への取得は Node 同梱の `fetch` に `AbortSignal.timeout`（metadata 30 秒、archive 5 分）を付ける。取得失敗を探索の正常な候補0件に数えない。

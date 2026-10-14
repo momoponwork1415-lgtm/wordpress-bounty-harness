@@ -67,11 +67,11 @@ describe("verification retry policy on campaign resume", () => {
     check("precondition", false, { currentScenarioId: "b" });
   });
 
-  it("retries provisioning once", () => {
-    check("provision", true);
-    check("provision", true, { attemptsForReason: 0 });
-    check("provision", false, { attemptsForReason: 2 });
-    check("provision", false, { sameLabSetup: false });
+  it.each(["provision", "provider"] as const)("retries %s once", (reason) => {
+    check(reason, true);
+    check(reason, true, { attemptsForReason: 0 });
+    check(reason, false, { attemptsForReason: 2 });
+    check(reason, false, { sameLabSetup: false });
   });
 
   it.each([
@@ -79,7 +79,6 @@ describe("verification retry policy on campaign resume", () => {
     "cleanup",
     "digest-mismatch",
     "no-judge",
-    "provider",
     "sandbox",
   ] as const)("does not automatically retry %s", (reason) =>
     check(reason, false),

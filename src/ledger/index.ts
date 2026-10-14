@@ -214,6 +214,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       "incomplete",
       "daily-run-cap",
       "screened-no-candidate",
+      /** An operator asked the campaign to drain at the next target boundary. */
+      "operator",
     ]),
   }),
   /**
@@ -236,6 +238,10 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         "quota-exceeded",
         "invalid-archive",
         "deferred",
+        /** The provider refused the Trial without a usage limit (e.g. cyber_policy). */
+        "provider-refused",
+        /** The Trial failed on wall, schema, CLI exit or broker policy. */
+        "run-failed",
         "other",
       ])
       .optional(),
@@ -342,6 +348,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     canaryIssued: z
       .enum(["execution", "script", "principal", "sql"])
       .optional(),
+    /** The provider's usage limit that ended this Verifier run, if any. */
+    providerLimit: z.enum(["rate-limit", "quota"]).optional(),
   }),
   event({
     type: z.literal("verification-finished"),

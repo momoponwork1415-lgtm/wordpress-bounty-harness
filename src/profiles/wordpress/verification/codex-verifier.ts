@@ -687,6 +687,9 @@ export class CodexVerifier implements Verifier<
       receiptDigest,
       terminal: receipt.terminal,
       ...(canaryIssued === undefined ? {} : { canaryIssued }),
+      ...(receipt.providerLimit === undefined
+        ? {}
+        : { providerLimit: receipt.providerLimit }),
       artifacts: [{ kind: "native-run-receipt", digest: receiptDigest }],
     });
     if (appended.status === "conflict")

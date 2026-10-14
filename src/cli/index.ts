@@ -161,6 +161,8 @@ export interface CliProfile {
       readonly target: string | null;
       /** Retry an incomplete independent verification on the same Lab setup. */
       readonly retryIncompleteVerifications?: boolean;
+      /** Checked before each next target; true drains the campaign as `operator`. */
+      readonly stop?: () => boolean;
     },
   ): Promise<CampaignSummary>;
   /** Docker resources a crashed run left behind; removed only when asked. */

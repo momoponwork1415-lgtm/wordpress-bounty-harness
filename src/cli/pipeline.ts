@@ -107,6 +107,7 @@ export function shouldAutomaticallyRetryVerification(input: {
     case "observation":
       return input.sameLabSetup && input.attemptsForReason < 3;
     case "provision":
+    case "provider":
       return input.sameLabSetup && input.attemptsForReason < 2;
     case "precondition":
       return (
@@ -129,7 +130,7 @@ export type CampaignSummary = {
     readonly message: string;
   }[];
   /** Set when the campaign stopped early and can be resumed with the same id. */
-  readonly stopped?: "provider-limit" | "incomplete";
+  readonly stopped?: "provider-limit" | "incomplete" | "operator";
   readonly targets: readonly {
     readonly targetId: string;
     readonly version: string;
@@ -170,6 +171,8 @@ export async function runCampaignPipeline<
   readonly retryIncompleteVerifications?: boolean;
   /** Disable ADR 0022 automatic retries to restore the prior single-attempt behavior. */
   readonly automaticVerificationRetries?: boolean;
+  /** Checked before each next target. True drains in-flight targets and stops as `operator`. */
+  readonly stop?: () => boolean;
 }): Promise<CampaignSummary> {
   const { campaignId, ledger, pipeline, clock } = options;
   const at = () => clock().toISOString();
@@ -207,6 +210,17 @@ export async function runCampaignPipeline<
       ({ event }) => event.snapshotDigest,
     ),
   );
+  // A refused or failed Trial is skipped for this campaign; it is not resumed.
+  for (const { event } of readAll(ledger, {
+    campaignId,
+    type: "target-skipped",
+  }))
+    if (
+      event.type === "target-skipped" &&
+      event.stage === "discovery" &&
+      (event.reason === "provider-refused" || event.reason === "run-failed")
+    )
+      concludedSnapshots.add(event.snapshotDigest);
   const findingsBySnapshot = new Map<string, string[]>();
   for (const { event } of readAll(ledger, {
     campaignId,
@@ -237,6 +251,27 @@ export async function runCampaignPipeline<
       const status = latestVerification.get(`${snapshotDigest}\0${findingId}`);
       return status !== undefined && status !== "incomplete";
     });
+  };
+
+  /** A refusal is a provider failure without a usage limit (e.g. cyber_policy). */
+  const refusedTrial = (snapshotDigest: string): boolean => {
+    const finished = readAll(ledger, {
+      campaignId,
+      type: "discovery-run-finished",
+    })
+      .map(({ event }) => event)
+      .filter(
+        (event) =>
+          event.type === "discovery-run-finished" &&
+          event.snapshotDigest === snapshotDigest &&
+          event.outcome === "failed",
+      )
+      .at(-1);
+    return (
+      finished?.type === "discovery-run-finished" &&
+      finished.reason === "provider" &&
+      finished.providerLimit === undefined
+    );
   };
 
   const processTarget = async (target: Target): Promise<TargetResult> => {
@@ -474,8 +509,21 @@ export async function runCampaignPipeline<
         campaignId,
         type: "finding-recorded",
       }).filter(({ event }) => event.snapshotDigest === snapshot.digest);
+      const providerLimited = (findingId: string): boolean => {
+        const run = readAll(ledger, {
+          campaignId,
+          findingId,
+          type: "verifier-run-finished",
+        }).at(-1)?.event;
+        return (
+          run?.type === "verifier-run-finished" &&
+          run.providerLimit !== undefined
+        );
+      };
       for (const { event } of findings) {
         if (event.type !== "finding-recorded") continue;
+        // The Verifier shares the subscription; a usage limit stops the campaign.
+        if (stopped === "provider-limit") break;
         const history = earlier.filter(
           (
             record,
@@ -555,6 +603,21 @@ export async function runCampaignPipeline<
             findingId: event.findingId,
             status: result.status,
           });
+          if (
+            result.status === "incomplete" &&
+            result.reason === "provider" &&
+            providerLimited(event.findingId)
+          ) {
+            requestStop("provider-limit");
+            await append({
+              ...base,
+              identity: `campaign-stopped-${options.newId()}`,
+              occurredAt: at(),
+              type: "campaign-stopped",
+              reason: "provider-limit",
+            });
+            break;
+          }
           if (options.automaticVerificationRetries === false) break;
           // The operator override applies to the first attempt only.
           if (
@@ -566,13 +629,10 @@ export async function runCampaignPipeline<
         } while (true);
       }
       result.target = { ...summary, verifications };
-      if (
-        discovered.stoppedBy === "incomplete" ||
-        discovered.stoppedBy === "provider-limit"
-      ) {
-        // A resumed target has already spent its one Trial. Keep its typed
-        // failure and verify any captured child findings, then move on.
-        if (discovered.runCount === 0) return;
+      // A resumed target has already spent its one Trial. Keep its typed
+      // failure and verify any captured child findings, then move on.
+      if (discovered.runCount === 0) return;
+      if (discovered.stoppedBy === "provider-limit") {
         requestStop(discovered.stoppedBy);
         await append({
           ...base,
@@ -580,6 +640,19 @@ export async function runCampaignPipeline<
           occurredAt: at(),
           type: "campaign-stopped",
           reason: discovered.stoppedBy,
+        });
+      } else if (discovered.stoppedBy === "incomplete") {
+        // A refusal or a failed run leaves this target; the campaign goes on.
+        await append({
+          ...base,
+          identity: `target-skipped-${options.newId()}`,
+          occurredAt: at(),
+          type: "target-skipped",
+          selectionId,
+          stage: "discovery",
+          reason: refusedTrial(snapshot.digest)
+            ? "provider-refused"
+            : "run-failed",
         });
       }
     };
@@ -609,9 +682,25 @@ export async function runCampaignPipeline<
   let next = 0;
   const worker = async () => {
     while (stopped === undefined) {
-      const index = next++;
-      const target = selected[index];
+      const target = selected[next];
       if (target === undefined) return;
+      // The operator stop point: in-flight targets finish, no new target starts.
+      if (options.stop?.() === true) {
+        if (stopped === undefined) {
+          stopped = "operator";
+          await append({
+            schemaVersion: 1,
+            campaignId,
+            snapshotDigest: canonicalDigest(target),
+            identity: `campaign-stopped-${options.newId()}`,
+            occurredAt: at(),
+            type: "campaign-stopped",
+            reason: "operator",
+          });
+        }
+        return;
+      }
+      const index = next++;
       results[index] = await processTarget(target);
     }
   };
