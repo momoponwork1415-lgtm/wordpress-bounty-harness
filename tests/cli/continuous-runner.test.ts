@@ -2,9 +2,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runContinuousParent } from "../../src/cli/continuous-runner.js";
+import { runContinuousControl } from "../../src/cli/continuous-control.js";
+import { settleIdleContinuousStop } from "../../src/cli/continuous-stop.js";
 import type { CampaignSummary } from "../../src/cli/pipeline.js";
 import type { CliProfile, CliState } from "../../src/cli/index.js";
 import { SqliteContinuousRunJournal } from "../../src/infrastructure/continuous-run-journal.js";
@@ -346,7 +348,7 @@ async function setup(
     policyDigest,
     inventoryDigest,
   });
-  const run = () =>
+  const run = (expectedResumeRevision?: number) =>
     runContinuousParent({
       parentRunId,
       configPath: join(directory, "synthetic-config.json"),
@@ -358,11 +360,15 @@ async function setup(
       claims,
       io: { stdout: () => {} },
       stopPollMs: 10,
+      ...(expectedResumeRevision === undefined
+        ? {}
+        : { expectedResumeRevision }),
     });
   return {
     journal,
     owner,
     claims,
+    ledger,
     read,
     run,
     preparedOrdinals,
@@ -394,6 +400,134 @@ describe("continuous parent runner", () => {
       fixture.journal.close();
       fixture.owner.close();
       fixture.claims.close();
+    }
+  });
+
+  it("drains a stop that saw the owner busy just before a review wait returned", async () => {
+    const fixture = await setup();
+    const release = fixture.owner.release.bind(fixture.owner);
+    let stopCommand: Promise<number> | undefined;
+    let observedBusy = false;
+    let intercepted = false;
+    const releaseSpy = vi
+      .spyOn(fixture.owner, "release")
+      .mockImplementation((handle) => {
+        if (!intercepted) {
+          intercepted = true;
+          stopCommand = runContinuousControl(
+            ["continuous", "stop", "--run", parentRunId],
+            fixture.journal,
+            { stdout: () => {} },
+            {
+              settleStop: (requested) =>
+                settleIdleContinuousStop({
+                  parentRunId: requested.parentRunId,
+                  journal: fixture.journal,
+                  ledger: fixture.ledger,
+                  claims: fixture.claims,
+                  owner: fixture.owner,
+                  reviewExportReady: async () => false,
+                }),
+            },
+          );
+          observedBusy =
+            fixture.owner.tryAcquire(parentRunId).status === "busy";
+          expect(fixture.journal.get(parentRunId)).toMatchObject({
+            state: "STOPPING",
+            stopRequested: true,
+          });
+        }
+        release(handle);
+      });
+    try {
+      await fixture.run();
+      await stopCommand;
+      expect(observedBusy).toBe(true);
+      expect(fixture.journal.get(parentRunId)).toMatchObject({
+        state: "STOPPED",
+        reason: "operator-stop",
+        stopRequested: true,
+      });
+    } finally {
+      releaseSpy.mockRestore();
+      fixture.claims.close();
+      fixture.owner.close();
+      fixture.journal.close();
+    }
+  });
+
+  it("does not clear a newer stop from an earlier resume intent", async () => {
+    const fixture = await setup();
+    try {
+      const observed = fixture.journal.get(parentRunId)!;
+      const requested = fixture.journal.requestStop(parentRunId);
+      const stopped = fixture.journal.transition(
+        parentRunId,
+        requested.revision,
+        {
+          state: "STOPPED",
+          reason: "operator-stop",
+          nextCheckAt: null,
+        },
+      );
+      const result = await fixture.run(observed.revision);
+      expect(result).toEqual(stopped);
+      expect(fixture.campaignCalls).toHaveLength(0);
+    } finally {
+      fixture.claims.close();
+      fixture.owner.close();
+      fixture.journal.close();
+    }
+  });
+
+  it("settles an operator stop that invalidates child reservation CAS", async () => {
+    const fixture = await setup();
+    try {
+      const reserve = fixture.journal.reserveChild.bind(fixture.journal);
+      let stopped = false;
+      fixture.journal.reserveChild = (...args) => {
+        if (!stopped) {
+          stopped = true;
+          fixture.journal.requestStop(parentRunId);
+        }
+        return reserve(...args);
+      };
+      const result = await fixture.run();
+      expect(result).toMatchObject({
+        state: "STOPPED",
+        reason: "operator-stop",
+        stopRequested: true,
+      });
+      expect(result.children).toHaveLength(0);
+      expect(fixture.campaignCalls).toHaveLength(0);
+    } finally {
+      fixture.claims.close();
+      fixture.owner.close();
+      fixture.journal.close();
+    }
+  });
+
+  it("settles an operator stop that invalidates child settlement CAS", async () => {
+    const fixture = await setup();
+    try {
+      const settle = fixture.journal.settleChild.bind(fixture.journal);
+      let stopped = false;
+      fixture.journal.settleChild = (...args) => {
+        if (!stopped) {
+          stopped = true;
+          fixture.journal.requestStop(parentRunId);
+        }
+        return settle(...args);
+      };
+      const result = await fixture.run();
+      expect(result).toMatchObject({ state: "STOPPED", stopRequested: true });
+      expect(result.children).toHaveLength(1);
+      expect(fixture.read({ type: "discovery-run-started" })).toHaveLength(3);
+      expect(fixture.campaignCalls).toHaveLength(1);
+    } finally {
+      fixture.claims.close();
+      fixture.owner.close();
+      fixture.journal.close();
     }
   });
 
@@ -523,7 +657,7 @@ describe("continuous parent runner", () => {
         }),
       ).toHaveLength(1);
 
-      const resumed = await fixture.run();
+      const resumed = await fixture.run(stopped.revision);
       expect(resumed).toMatchObject({
         state: "WAIT_REVIEW",
         reason: "candidate-exhausted",

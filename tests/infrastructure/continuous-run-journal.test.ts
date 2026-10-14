@@ -200,6 +200,32 @@ describe("continuous run journal", () => {
     }
   });
 
+  it("preserves an existing recovery error when a stop is requested", async () => {
+    const { path, clock } = await setup();
+    const journal = new SqliteContinuousRunJournal(path, clock);
+    try {
+      const created = journal.create(input);
+      const recovering = journal.transition(
+        input.parentRunId,
+        created.revision,
+        {
+          state: "RECOVERING",
+          reason: "runner-error",
+          nextCheckAt: null,
+        },
+      );
+      const stopped = journal.requestStop(input.parentRunId);
+      expect(stopped).toMatchObject({
+        state: "RECOVERING",
+        reason: "runner-error",
+        stopRequested: true,
+      });
+      expect(stopped.revision).toBe(recovering.revision + 1);
+    } finally {
+      journal.close();
+    }
+  });
+
   it("retains a reserved child across an explicitly reconciled stop and resume", async () => {
     const { path, clock } = await setup();
     const journal = new SqliteContinuousRunJournal(path, clock);

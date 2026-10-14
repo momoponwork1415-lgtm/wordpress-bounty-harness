@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  openExistingHostResourceClaims,
   RECOVERY_SETTLE_MS,
   SqliteHostResourceClaims,
 } from "../../src/infrastructure/host-resource-claims.js";
@@ -57,6 +58,24 @@ async function open(
 }
 
 describe("host-common resource claims", () => {
+  it("reopens persisted limits for a stop command without host configuration", async () => {
+    const fixture = await open();
+    try {
+      const reopened = openExistingHostResourceClaims(fixture.path);
+      try {
+        expect(reopened.status()).toMatchObject({
+          maxTargets: 2,
+          providers: { codex: { limit: 1 }, opus: { limit: 2 } },
+        });
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      fixture.first.close();
+      fixture.second.close();
+    }
+  });
+
   it("atomically excludes the same target and counts global and provider slots", async () => {
     const { first, second, request } = await open();
     try {

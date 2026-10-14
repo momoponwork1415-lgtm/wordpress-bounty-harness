@@ -259,7 +259,10 @@ describe("continuous parent quota wait", () => {
         expect(stopped.children[0]?.campaignId).toBe(childId);
         expect(stopped.revision).toBeGreaterThan(waiting.revision);
 
-        const resumed = await runContinuousParent(request);
+        const resumed = await runContinuousParent({
+          ...request,
+          expectedResumeRevision: stopped.revision,
+        });
         expect(resumed).toMatchObject({
           state: waitState,
           reason: expected,

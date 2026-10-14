@@ -18,6 +18,25 @@ export const hostResourceLimitsSchema = z.strictObject({
   providers: z.record(providerKey, z.number().int().min(1).max(64)),
 });
 
+/** Open the existing host-wide claim table with its persisted limits. */
+export function openExistingHostResourceClaims(
+  databasePath: string,
+): SqliteHostResourceClaims {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  let limits: unknown;
+  try {
+    const row = database
+      .prepare("SELECT value FROM host_resource_meta WHERE key = 'limits'")
+      .get() as { value: string } | undefined;
+    if (row === undefined)
+      throw new Error("Host resource limits are unavailable");
+    limits = JSON.parse(row.value) as unknown;
+  } finally {
+    database.close();
+  }
+  return new SqliteHostResourceClaims(databasePath, limits);
+}
+
 const requestSchema = z.strictObject({
   targetKey: key,
   ownerKey: key,
