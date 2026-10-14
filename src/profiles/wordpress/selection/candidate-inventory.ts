@@ -69,6 +69,8 @@ const candidateInventorySchema = z.strictObject({
   schemaVersion: z.literal(1),
   policy: z.strictObject({ id: z.string().min(1), digest: digestSchema }),
   collectedAt: z.iso.datetime({ offset: true }),
+  /** Absent for the first page and older artifacts without chain linkage. */
+  previousInventoryDigest: digestSchema.optional(),
   source: z.strictObject({
     status: z.enum(["available", "stale", "unavailable"]),
     requestedListingCoverage: z.enum([
@@ -204,6 +206,8 @@ function validateInventory(
     inventory.candidates.some(
       (candidate) => candidate.targetId !== `wporg:${candidate.slug}`,
     ) ||
+    (inventory.previousInventoryDigest !== undefined &&
+      (traversal === undefined || traversal.offset === 0)) ||
     new Set(inventory.candidates.map((candidate) => candidate.slug)).size !==
       inventory.candidates.length ||
     (traversal !== undefined &&
@@ -273,6 +277,8 @@ export async function collectWordPressCandidateInventory(options: {
     sourcePool?: WordPressOrgCandidateSourcePool,
   ) => Promise<WordPressSelectionBatchInspection>;
   readonly cursor?: WordPressOrgCandidateCursor;
+  /** Link a resumed page to the artifact that supplied its verified cursor. */
+  readonly previousInventoryDigest?: string;
   readonly store: Pick<PrivateArtifactStore, "putFiles" | "readFile">;
   readonly clock: () => Date;
 }): Promise<{
@@ -284,6 +290,18 @@ export async function collectWordPressCandidateInventory(options: {
     throw new Error(
       "Candidate inventory requires an automatic selection policy",
     );
+  if (options.previousInventoryDigest !== undefined) {
+    if (options.cursor === undefined)
+      throw new Error("Previous inventory requires a continuation cursor");
+    const verifiedCursor = await readWordPressCandidateInventoryCursor({
+      digest: options.previousInventoryDigest,
+      policy,
+      store: options.store,
+      clock: options.clock,
+    });
+    if (canonicalJson(verifiedCursor) !== canonicalJson(options.cursor))
+      throw new Error("Continuation cursor does not match previous inventory");
+  }
   const priorPoolDigest = options.cursor?.sourcePoolDigest;
   const priorPool =
     priorPoolDigest === undefined
@@ -442,6 +460,9 @@ export async function collectWordPressCandidateInventory(options: {
         digest: canonicalDigestPreservingProperties(policy),
       },
       collectedAt: options.clock().toISOString(),
+      ...(options.previousInventoryDigest === undefined
+        ? {}
+        : { previousInventoryDigest: options.previousInventoryDigest }),
       source: {
         status: batch.sourceStatus,
         requestedListingCoverage,
@@ -579,6 +600,50 @@ export async function hasVerifiedWordPressCandidateSourceCoverage(options: {
   } catch {
     return false;
   }
+}
+
+/** Resolve a linked inventory chain before using complete traversal as source coverage. */
+export async function hasVerifiedWordPressCandidateInventoryChainCoverage(options: {
+  readonly digest: string;
+  readonly policy: WordPressSelectionPolicy;
+  readonly store: Pick<PrivateArtifactStore, "readFile">;
+  readonly clock: () => Date;
+}): Promise<boolean> {
+  const policy = wordPressSelectionPolicySchema.parse(options.policy);
+  if (!("candidateSource" in policy)) return false;
+  const reverseChain: WordPressCandidateInventory[] = [];
+  const seen = new Set<string>();
+  let digest = options.digest;
+  try {
+    // The pool holds at most 2,250 candidates; policy pages have size at least five.
+    for (let page = 0; page < 450; page++) {
+      if (seen.has(digest)) return false;
+      seen.add(digest);
+      const inventory = await readWordPressCandidateInventory({
+        digest,
+        policy,
+        store: options.store,
+      });
+      const traversal = inventory.source.traversal;
+      if (traversal === undefined) return false;
+      if (page === 0 && !traversal.complete) return false;
+      reverseChain.push(inventory);
+      if (traversal.offset === 0) {
+        if (inventory.previousInventoryDigest !== undefined) return false;
+        return await hasVerifiedWordPressCandidateSourceCoverage({
+          inventories: reverseChain.reverse(),
+          policy,
+          store: options.store,
+          clock: options.clock,
+        });
+      }
+      if (inventory.previousInventoryDigest === undefined) return false;
+      digest = inventory.previousInventoryDigest;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 /** Resume a stored proposal by digest. An unavailable source is never read as exhaustion. */

@@ -124,6 +124,8 @@ export interface CliInventoryReport {
   readonly inventoryDigest: string;
   readonly candidates: number;
   readonly observedCandidates: number;
+  /** A verified complete listing chain, not proof that no untried slug remains. */
+  readonly sourceCoverageVerified: boolean;
   readonly ineligibleByReason: Readonly<Record<string, number>>;
   readonly source: {
     readonly status: "available" | "stale" | "unavailable";

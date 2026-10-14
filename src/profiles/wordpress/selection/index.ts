@@ -19,6 +19,7 @@ export type {
 export {
   collectWordPressCandidateInventory,
   hasTraversedWordPressCandidateSource,
+  hasVerifiedWordPressCandidateInventoryChainCoverage,
   hasVerifiedWordPressCandidateSourceCoverage,
   readWordPressCandidateInventory,
   readWordPressCandidateInventoryCursor,

@@ -10,6 +10,7 @@ import {
   collectWordPressCandidateInventory,
   createWordPressSelection,
   hasTraversedWordPressCandidateSource,
+  hasVerifiedWordPressCandidateInventoryChainCoverage,
   hasVerifiedWordPressCandidateSourceCoverage,
   loadWordPressSelectionPolicy,
   readWordPressCandidateInventory,
@@ -262,9 +263,22 @@ describe("WordPress candidate inventory", () => {
         policy,
         inspectBatch: selection.inspectBatch,
         cursor,
+        previousInventoryDigest: first.digest,
         store,
         clock: () => new Date(currentTime),
       });
+      expect(uncertainSecond.inventory.source.traversal?.complete).toBe(true);
+      expect(uncertainSecond.inventory.ineligibleByReason).toMatchObject({
+        "observation-unavailable": 1,
+      });
+      expect(
+        await hasVerifiedWordPressCandidateInventoryChainCoverage({
+          digest: uncertainSecond.digest,
+          policy,
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).toBe(false);
       expect(
         await hasVerifiedWordPressCandidateSourceCoverage({
           inventories: [first.inventory, uncertainSecond.inventory],
@@ -277,12 +291,34 @@ describe("WordPress candidate inventory", () => {
         policy,
         inspectBatch: selection.inspectBatch,
         cursor,
+        previousInventoryDigest: first.digest,
         store,
         clock: () => new Date(currentTime),
       });
       expect(fetcher).toHaveBeenCalledTimes(observedFetches);
       expect(second.inventory.candidates).toHaveLength(400);
       expect(second.inventory.source.traversal?.complete).toBe(true);
+      expect(
+        await hasVerifiedWordPressCandidateInventoryChainCoverage({
+          digest: second.digest,
+          policy,
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).toBe(true);
+      expect(
+        await hasVerifiedWordPressCandidateInventoryChainCoverage({
+          digest: second.digest,
+          policy,
+          store: {
+            readFile: (digest, name, maxBytes) =>
+              digest === first.digest && name === "candidate-inventory.json"
+                ? Promise.resolve({ status: "missing" as const })
+                : store.readFile(digest, name, maxBytes),
+          },
+          clock: () => new Date(currentTime),
+        }),
+      ).toBe(false);
       await expect(
         readWordPressCandidateInventoryCursor({
           digest: second.digest,

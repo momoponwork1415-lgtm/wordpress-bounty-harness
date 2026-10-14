@@ -79,6 +79,7 @@ import {
 } from "../profiles/wordpress/scope-policy.js";
 import {
   collectWordPressCandidateInventory,
+  hasVerifiedWordPressCandidateInventoryChainCoverage,
   loadWordPressSelectionPolicy,
   readWordPressCandidateInventoryCursor,
   wordPressSelectionPolicySchema,
@@ -1327,6 +1328,9 @@ export function createWordPressCliProfile(
         policy,
         inspectBatch: (value, after, pool) => inspectBatch(value, after, pool),
         ...(cursor === undefined ? {} : { cursor }),
+        ...(input.afterDigest === undefined
+          ? {}
+          : { previousInventoryDigest: input.afterDigest }),
         store: state.store,
         clock: state.clock,
       });
@@ -1342,6 +1346,13 @@ export function createWordPressCliProfile(
         inventoryDigest: digest,
         candidates: inventory.candidates.length,
         observedCandidates: inventory.observedCandidates,
+        sourceCoverageVerified:
+          await hasVerifiedWordPressCandidateInventoryChainCoverage({
+            digest,
+            policy,
+            store: state.store,
+            clock: state.clock,
+          }),
         ineligibleByReason: inventory.ineligibleByReason,
         source: {
           status: inventory.source.status,
