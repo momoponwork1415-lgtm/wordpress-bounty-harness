@@ -63,7 +63,7 @@ async function fixture(
     /** A false effect visible only in the Lab changed by the agent. */
     readonly agentOnlyEffect?: boolean;
     readonly replaySetupMismatch?: boolean;
-    readonly teardown?: "removed" | "incomplete";
+    readonly teardown?: "removed" | "incomplete" | "replay-incomplete";
     readonly refute?: boolean;
     /** A Finding rebound to a separately frozen version for a negative control. */
     readonly fixedVersion?: boolean;
@@ -232,7 +232,8 @@ async function fixture(
     },
     async teardown() {
       calls.teardown++;
-      return options.teardown === "incomplete"
+      return options.teardown === "incomplete" ||
+        (options.teardown === "replay-incomplete" && calls.teardown === 1)
         ? { status: "incomplete", reason: "cleanup", nextStep: "Remove" }
         : { status: "removed" };
     },
@@ -847,7 +848,40 @@ describe("verification public interface", () => {
 
   it("does not confirm when the Lab is not removed", async () => {
     const { result } = await fixture({ teardown: "incomplete" });
-    expect(result).toMatchObject({ status: "incomplete", reason: "cleanup" });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "cleanup",
+      cleanupLabIds: ["lab-1"],
+    });
+  });
+
+  it("keeps the reproduction Lab id when only its cleanup fails", async () => {
+    const { result, ledger } = await fixture({
+      impact: "other",
+      reproducer: "observed",
+      teardown: "replay-incomplete",
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "cleanup",
+      cleanupLabIds: ["lab-2"],
+    });
+    expect(
+      ledger.read({ type: "verification-finished" })[0]?.event,
+    ).toMatchObject({ result });
+  });
+
+  it("keeps both Lab ids when reproduction and primary cleanup fail", async () => {
+    const { result } = await fixture({
+      impact: "other",
+      reproducer: "observed",
+      teardown: "incomplete",
+    });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "cleanup",
+      cleanupLabIds: ["lab-2", "lab-1"],
+    });
   });
 
   it("rejects a cross-snapshot verdict even when a version basis is declared", async () => {

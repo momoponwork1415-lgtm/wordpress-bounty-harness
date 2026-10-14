@@ -133,6 +133,8 @@ async function harness(
     readonly labMissingExtension?: boolean;
     readonly labSeedFailure?: boolean;
     readonly labSeedThrows?: boolean;
+    readonly labTeardownFails?: boolean;
+    readonly verifierLabTeardownFails?: boolean;
     /** The first Finding lacks a runnable recipe until a new Lab scenario is selected. */
     readonly firstVerifierIncomplete?: boolean;
     readonly verifierRecipeFailures?: number;
@@ -451,6 +453,8 @@ async function harness(
   let inFlight = 0;
   let maxInFlight = 0;
   let verificationProvisionAttempts = 0;
+  let teardownCalls = 0;
+  const verificationLabIds = new Set<string>();
   const boundaries: WordPressCampaignBoundaries = {
     selection,
     freeze: async (target) => {
@@ -475,6 +479,20 @@ async function harness(
     },
     lab: {
       ...lab,
+      teardown: async (...args: Parameters<typeof lab.teardown>) => {
+        teardownCalls++;
+        if (
+          options.labTeardownFails === true ||
+          (options.verifierLabTeardownFails === true &&
+            verificationLabIds.has(args[0].id))
+        )
+          return {
+            status: "incomplete" as const,
+            reason: "cleanup" as const,
+            nextStep: "Synthetic Lab cleanup needs operator repair",
+          };
+        return lab.teardown(...args);
+      },
       ...(options.labSeedThrows === true
         ? {
             seedCanaries: async () => {
@@ -491,7 +509,13 @@ async function harness(
           )
             throw new Error("Synthetic verification Lab provision failure");
         }
-        return lab.provision(...args);
+        const provisioned = await lab.provision(...args);
+        if (
+          args[2]?.purpose === "verification" &&
+          provisioned.status === "ready"
+        )
+          verificationLabIds.add(provisioned.handle.id);
+        return provisioned;
       },
     },
     sourceFor: async () => ({
@@ -826,6 +850,7 @@ async function harness(
     store: () => state.store,
     maxInFlight: () => maxInFlight,
     verificationProvisionAttempts: () => verificationProvisionAttempts,
+    teardownCalls: () => teardownCalls,
   };
 }
 
@@ -2344,6 +2369,136 @@ describe("harness CLI vertical slice", () => {
       expect(ids.size).toBe(1);
       expect(ids.has(undefined)).toBe(false);
     }
+  });
+
+  it("stops after a discovery Lab cleanup failure and gates same-campaign resume", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      candidates: ["synthetic-plugin", "zz-next-plugin"],
+      zeroFindings: true,
+      labTeardownFails: true,
+      config: {
+        promptId: undefined,
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    });
+    const command = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-cleanup-incomplete",
+      "--config",
+      configPath,
+    ];
+    const first = await run(...command);
+    expect(first.code).toBe(1);
+    expect(first.stderr).toContain(
+      "Synthetic Lab cleanup needs operator repair",
+    );
+    expect(prompts).toHaveLength(1);
+    expect(ledger().read({ type: "target-skipped" })).toHaveLength(1);
+    expect(ledger().read({ type: "campaign-stopped" })).toMatchObject([
+      { event: { reason: "incomplete", cleanupLabIds: [expect.any(String)] } },
+    ]);
+    const second = await run(...command);
+    expect(second.code).toBe(1);
+    expect(second.stderr).toContain("cleanup is incomplete");
+    expect(prompts).toHaveLength(1);
+  });
+
+  it("drains in-flight Labs before returning a cleanup failure", async () => {
+    const { run, configPath, prompts, teardownCalls } = await harness({
+      candidates: ["synthetic-plugin", "second-plugin", "zz-next-plugin"],
+      zeroFindings: true,
+      labTeardownFails: true,
+      config: {
+        promptId: undefined,
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+        resources: {
+          maxConcurrentRuns: 1,
+          maxConcurrentTargets: 2,
+          memoryBudgetMiB: 10_240,
+        },
+      },
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-drain",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(1);
+    expect(prompts).toHaveLength(2);
+    expect(teardownCalls()).toBe(2);
+  });
+
+  it("stops on Verifier Lab cleanup failure without losing its review item", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      candidates: ["synthetic-plugin", "zz-next-plugin"],
+      verifierLabTeardownFails: true,
+      config: {
+        promptId: undefined,
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    });
+    const command = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-verifier-cleanup",
+      "--config",
+      configPath,
+    ];
+    const first = await run(...command);
+    expect(first.code).toBe(1);
+    expect(prompts).toHaveLength(1);
+    expect(ledger().read({ type: "verification-finished" })).toMatchObject([
+      { event: { result: { status: "incomplete", reason: "cleanup" } } },
+    ]);
+    expect(ledger().read({ type: "campaign-stopped" })).toMatchObject([
+      { event: { reason: "incomplete", cleanupLabIds: [expect.any(String)] } },
+    ]);
+    const review = await run(
+      "review",
+      "--campaign",
+      "campaign-verifier-cleanup",
+    );
+    expect(review.stdout).toContain("incomplete");
+    expect(review.stdout).toContain("reason: cleanup");
+    const second = await run(...command);
+    expect(second.code).toBe(1);
+    expect(prompts).toHaveLength(1);
+  });
+
+  it("checks every recorded cleanup Lab id before resuming", async () => {
+    const { run, configPath, prompts, ledger } = await harness();
+    expect((await run("select", "--config", configPath)).code).toBe(0);
+    await ledger().append({
+      schemaVersion: 1,
+      identity: "replay-cleanup-stop",
+      campaignId: "campaign-replay-cleanup",
+      snapshotDigest: sha("a"),
+      occurredAt: now,
+      type: "campaign-stopped",
+      reason: "incomplete",
+      cleanupLabIds: ["11111111-1111-4111-8111-111111111111", uuid],
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-replay-cleanup",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(`Lab ${uuid} cleanup is incomplete`);
+    expect(prompts).toHaveLength(0);
   });
 
   it("keeps a target Lab until its verification finishes, then removes it", async () => {
