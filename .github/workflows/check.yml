@@ -102,20 +102,27 @@ jobs:
         run: |
           has_label() { printf '%s' "$LABELS" | tr ',' '\n' | grep -qx 'owner-approved'; }
           BASE=$(git merge-base "$BASE" "$HEAD")  # 三点 diff（private-guard と同じ理由）
-          adr=$(git diff --name-only "$BASE" "$HEAD" -- docs/adr/ docs/SPEC.md | wc -l)
+          # 所有者本人のラベルが要る path（docs/DEVELOPMENT.md 第 5 節、2026-10-14）
+          adr=$(git diff --name-only "$BASE" "$HEAD" -- \
+            docs/adr/ docs/SPEC.md \
+            src/profiles/wordpress/prompts/trust-boundary-v1.md \
+            src/profiles/wordpress/policy/campaign.json \
+            src/profiles/wordpress/policy/programme-scope.md \
+            src/profiles/wordpress/discovery/programme-impacts.ts \
+            src/profiles/wordpress/verification/judges.ts | wc -l)
+          # 委任済みの AI が出典対照表と委任 comment 付きでラベルを付ける path
           text=$(git diff --name-only "$BASE" "$HEAD" -- \
             src/profiles/wordpress/prompts/ \
             .claude/skills/ \
             src/profiles/wordpress/discovery/output-contract.ts \
             src/profiles/wordpress/verification/codex-verifier.ts \
-            src/profiles/wordpress/discovery/programme-impacts.ts \
-            src/profiles/wordpress/policy/ | wc -l)
+            src/profiles/wordpress/policy/selection.json | wc -l)
           if [ "$adr" -gt 0 ] && ! has_label; then
-            echo "docs/adr/ または docs/SPEC.md に差分があります。所有者が owner-approved ラベルを付けるまで merge できません。"
+            echo "docs/adr/、docs/SPEC.md、trust 境界宣言、Programme Boundary、policy の方針、判定器の成功条件に差分があります。所有者本人が owner-approved ラベルを付けるまで merge できません。"
             exit 1
           fi
           if [ "$text" -gt 0 ] && ! has_label; then
-            echo "agent に渡る文章（prompt、skill、出力契約、victim 契約）か所有者の方針（policy/、Programme Boundary）に差分があります。所有者が全文を読んで owner-approved ラベルを付けるまで merge できません。"
+            echo "agent に渡る文章（prompt、skill、出力契約、victim 契約）か selection.json に差分があります。委任済みの AI が出典対照表と委任 comment を付け、owner-approved ラベルを付けるまで merge できません。"
             exit 1
           fi
           echo "adr-guard: ok"
