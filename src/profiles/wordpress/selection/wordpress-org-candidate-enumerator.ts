@@ -6,6 +6,13 @@ const endpoint = "https://api.wordpress.org/plugins/info/1.2/";
 const maximumResponseBytes = 1_000_000;
 const dayMilliseconds = 86_400_000;
 const slugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
+const candidateCursorSchema = z.strictObject({
+  kind: z.literal("wordpress-org-candidate-cursor"),
+  schemaVersion: z.literal(1),
+  listingSetDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  nextIndex: z.number().int().nonnegative(),
+});
+export type WordPressOrgCandidateCursor = z.infer<typeof candidateCursorSchema>;
 const listingSchema = z.object({
   info: z.object({ page: z.number().int().positive() }),
   plugins: z.array(z.object({ slug: slugSchema })).max(50),
@@ -51,6 +58,13 @@ export interface WordPressOrgCandidateEnumeration {
   readonly status: "available" | "unavailable" | "stale";
   readonly candidates: readonly WordPressOrgCandidate[];
   readonly listings: readonly WordPressOrgListingObservation[];
+  readonly traversal: {
+    readonly listingSetDigest: string;
+    readonly offset: number;
+    readonly observedUniqueCandidates: number;
+    readonly complete: boolean;
+    readonly nextCursor?: WordPressOrgCandidateCursor;
+  };
 }
 
 export interface EnumerateWordPressOrgCandidatesOptions {
@@ -60,6 +74,8 @@ export interface EnumerateWordPressOrgCandidatesOptions {
   readonly popularPages?: number;
   readonly pagesPerTag?: number;
   readonly perPage?: number;
+  /** Continue only if the same bounded listing set is still observed. */
+  readonly cursor?: WordPressOrgCandidateCursor;
   readonly fetch?: typeof fetch;
   readonly clock?: () => Date;
 }
@@ -307,7 +323,7 @@ export async function enumerateWordPressOrgCandidates(
   const fetcher = options.fetch ?? fetch;
   const clock = options.clock ?? (() => new Date());
   const listings: WordPressOrgListingObservation[] = [];
-  const candidates: WordPressOrgCandidate[] = [];
+  const observedCandidates: WordPressOrgCandidate[] = [];
   const seen = new Set<string>();
   const availableGroups: Array<{
     listing: Extract<WordPressOrgListingObservation, { status: "available" }>;
@@ -329,21 +345,12 @@ export async function enumerateWordPressOrgCandidates(
     0,
     ...availableGroups.map((group) => group.slugs.length),
   );
-  for (
-    let position = 0;
-    position < longestPage && candidates.length < maxCandidates;
-    position++
-  ) {
+  for (let position = 0; position < longestPage; position++) {
     for (const group of availableGroups) {
       const slug = group.slugs[position];
-      if (
-        slug === undefined ||
-        seen.has(slug) ||
-        candidates.length >= maxCandidates
-      )
-        continue;
+      if (slug === undefined || seen.has(slug)) continue;
       seen.add(slug);
-      candidates.push({
+      observedCandidates.push({
         slug,
         sourceKind: group.listing.kind,
         ...(group.listing.tag === undefined
@@ -356,10 +363,55 @@ export async function enumerateWordPressOrgCandidates(
       });
     }
   }
+  // checkedAt and observedAt vary between identical responses; the identity,
+  // outcome, and response bytes must match before reusing a position.
+  const listingSetDigest = `sha256:${createHash("sha256")
+    .update(
+      JSON.stringify(
+        listings.map((listing) => ({
+          sourceUrl: listing.sourceUrl,
+          status: listing.status,
+          ...(listing.status === "available"
+            ? { contentDigest: listing.contentDigest }
+            : { reason: listing.reason }),
+        })),
+      ),
+    )
+    .digest("hex")}`;
+  const cursor =
+    options.cursor === undefined
+      ? undefined
+      : candidateCursorSchema.parse(options.cursor);
+  if (cursor !== undefined && cursor.listingSetDigest !== listingSetDigest)
+    throw new Error(
+      "Candidate cursor listing set changed; restart enumeration",
+    );
+  const offset = cursor?.nextIndex ?? 0;
+  if (offset > observedCandidates.length)
+    throw new Error("Candidate cursor exceeds the observed listing set");
+  const candidates = observedCandidates.slice(offset, offset + maxCandidates);
+  const nextIndex = offset + candidates.length;
+  const complete = nextIndex === observedCandidates.length;
+  const traversal = {
+    listingSetDigest,
+    offset,
+    observedUniqueCandidates: observedCandidates.length,
+    complete,
+    ...(complete
+      ? {}
+      : {
+          nextCursor: {
+            kind: "wordpress-org-candidate-cursor" as const,
+            schemaVersion: 1 as const,
+            listingSetDigest,
+            nextIndex,
+          },
+        }),
+  };
   const status = listings.some((listing) => listing.status === "available")
     ? "available"
     : listings.some((listing) => listing.status === "stale")
       ? "stale"
       : "unavailable";
-  return { status, candidates, listings };
+  return { status, candidates, listings, traversal };
 }
