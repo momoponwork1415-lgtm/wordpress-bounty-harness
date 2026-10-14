@@ -41,6 +41,7 @@ import {
   openSnapshot,
   SourceAcquisitionError,
 } from "../../src/snapshot/index.js";
+import { VerifierTransportIncompleteError } from "../../src/verification/index.js";
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
 const uuid = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
@@ -97,6 +98,10 @@ async function harness(
     /** A completed child report survives a provider-limited Root Trial. */
     readonly childFindingOnLimitedCall?: boolean;
     readonly failOnCalls?: readonly number[];
+    /** Provider calls (1-based) the provider refuses without a usage limit. */
+    readonly refuseOnCalls?: readonly number[];
+    /** Verifier attempts (1-based) that end on a provider quota. */
+    readonly verifierQuotaOnAttempts?: readonly number[];
     readonly leadsOnCalls?: Readonly<Record<number, readonly unknown[]>>;
     readonly zeroFindings?: boolean;
     /** Candidate slugs; the first is not pinned. */
@@ -557,6 +562,19 @@ async function harness(
                 }),
           };
         }
+        if (options.refuseOnCalls?.includes(call) === true)
+          return {
+            receipt: createNativeRunReceipt({
+              runId: run.runId,
+              targetSnapshotDigest: run.targetSnapshotDigest,
+              profile: run.profile,
+              terminal: "incomplete",
+              reason: "provider",
+              reasonDetail: "provider-cyber-policy",
+              startedAt: now,
+              completedAt: now,
+            }),
+          };
         if (options.failOnCalls?.includes(call) === true)
           return {
             receipt: createNativeRunReceipt({
@@ -618,6 +636,24 @@ async function harness(
           }),
         );
         const attempt = ++verifierAttempts;
+        if (options.verifierQuotaOnAttempts?.includes(attempt) === true) {
+          // As the Codex Verifier does: record the limited run, then fail transport.
+          await state.ledger.append({
+            schemaVersion: 1,
+            identity: `verifier-quota-${attempt}`,
+            campaignId: input.campaignId,
+            snapshotDigest: input.finding.snapshotDigest,
+            occurredAt: now,
+            type: "verifier-run-finished",
+            findingId: input.finding.findingId,
+            runId: `verifier-run-${attempt}`,
+            promptDigest: `sha256:${"e".repeat(64)}`,
+            receiptDigest: `sha256:${"e".repeat(64)}`,
+            terminal: "incomplete",
+            providerLimit: "quota",
+          });
+          throw new VerifierTransportIncompleteError("provider");
+        }
         if (attempt <= (options.verifierRecipeFailures ?? 0))
           return {
             status: "incomplete",
@@ -2312,9 +2348,93 @@ describe("harness CLI vertical slice", () => {
     expect(docker.some(({ args }) => args[0] === "ps")).toBe(false);
   });
 
-  it("does not replace an incomplete Trial when the campaign resumes", async () => {
+  it.each([
+    { failure: "refuseOnCalls", reason: "provider-refused" },
+    { failure: "failOnCalls", reason: "run-failed" },
+  ] as const)(
+    "skips a target whose Trial hits $reason and starts the next target",
+    async ({ failure, reason }) => {
+      const { run, configPath, prompts, ledger } = await harness({
+        candidates: ["synthetic-plugin", "zz-next-plugin"],
+        [failure]: [1],
+        config: {
+          promptId: undefined,
+          stopRules: { maxRuns: 1, noFindingRuns: 1 },
+        },
+      });
+      const command = [
+        "campaign",
+        "run",
+        "--all",
+        "--campaign",
+        "campaign-two-targets",
+        "--config",
+        configPath,
+      ];
+      const first = await run(...command);
+      expect(first.code).toBe(0);
+      expect(first.stdout).not.toContain("campaign stopped by");
+      expect(first.stdout).toMatch(
+        /^wporg:zz-next-plugin 9\.9\.9 .*runs 1  stopped by /m,
+      );
+      expect(prompts).toHaveLength(2);
+      expect(
+        ledger()
+          .read({ type: "target-skipped" })
+          .map(({ event }) => event),
+      ).toMatchObject([
+        {
+          selectionId: "wporg:synthetic-plugin@3.3.1",
+          stage: "discovery",
+          reason,
+        },
+      ]);
+      expect(ledger().read({ type: "campaign-stopped" })).toHaveLength(0);
+      // The skipped target is not resumed and its Trial is not replaced.
+      const again = await run(...command);
+      expect(again.code).toBe(0);
+      expect(prompts).toHaveLength(2);
+      expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(2);
+    },
+  );
+
+  it("drains at the next target boundary when the operator stops, then resumes", async () => {
+    const { run, profile, state, configPath, prompts, ledger } = await harness({
+      candidates: ["synthetic-plugin", "second-plugin", "third-plugin"],
+      zeroFindings: true,
+      config: {
+        promptId: undefined,
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    });
+    const command = ["--campaign", "campaign-operator", "--config", configPath];
+    // One target first, so the state the profile uses exists.
+    expect(
+      (await run("campaign", "run", "synthetic-plugin", ...command)).code,
+    ).toBe(0);
+    let checks = 0;
+    const stopped = await profile.runCampaign(state(), {
+      campaignId: "campaign-operator",
+      configPath,
+      target: null,
+      stop: () => ++checks > 1,
+    });
+    expect(stopped.stopped).toBe("operator");
+    expect(prompts).toHaveLength(2);
+    expect(
+      ledger()
+        .read({ campaignId: "campaign-operator", type: "campaign-stopped" })
+        .map(({ event }) => event),
+    ).toMatchObject([{ reason: "operator" }]);
+    const resumed = await run("campaign", "run", "--all", ...command);
+    expect(resumed.code).toBe(0);
+    expect(prompts).toHaveLength(3);
+    expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(3);
+  });
+
+  it("stops the campaign on a Verifier quota and retries that verification once on resume", async () => {
     const { run, configPath, ledger } = await harness({
-      failOnCalls: [1],
+      verifierQuotaOnAttempts: [1],
       config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
     });
     const command = [
@@ -2322,59 +2442,32 @@ describe("harness CLI vertical slice", () => {
       "run",
       "--all",
       "--campaign",
-      "campaign-1",
-      "--config",
-      configPath,
-    ];
-    const failed = await run(...command);
-    expect(failed.code).toBe(3);
-    expect(failed.stdout).toContain("runs 1  stopped by incomplete");
-    expect(ledger().read({ type: "discovery-concluded" })).toHaveLength(0);
-
-    const retried = await run(...command);
-    expect(retried.code).toBe(0);
-    expect(retried.stdout).toContain("runs 0  stopped by incomplete");
-    expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(1);
-    expect(ledger().read({ type: "discovery-concluded" })).toHaveLength(0);
-  });
-
-  it("continues to an unspent target after an earlier target failed", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
-      candidates: ["synthetic-plugin", "zz-next-plugin"],
-      failOnCalls: [1],
-      config: {
-        promptId: undefined,
-        stopRules: { maxRuns: 1, noFindingRuns: 1 },
-      },
-    });
-    const command = [
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "campaign-two-targets",
+      "campaign-verifier-quota",
       "--config",
       configPath,
     ];
     const stopped = await run(...command);
     expect(stopped.code).toBe(3);
-    expect(prompts).toHaveLength(1);
+    expect(stopped.stdout).toContain(
+      "campaign stopped by provider-limit; run the same command again to resume",
+    );
+    const verified = () =>
+      ledger()
+        .read({ type: "verification-finished" })
+        .map(({ event }) =>
+          event.type === "verification-finished" ? event.result : null,
+        );
+    // The second Finding is not verified after the limit.
+    expect(verified()).toMatchObject([
+      { status: "incomplete", reason: "provider" },
+    ]);
     const resumed = await run(...command);
     expect(resumed.code).toBe(0);
-    expect(resumed.stdout).toContain("runs 0  stopped by incomplete");
-    expect(resumed.stdout).toMatch(
-      /^wporg:zz-next-plugin 9\.9\.9 .*runs 1  stopped by /m,
+    expect(verified()).toHaveLength(3);
+    expect(verified().slice(1)).not.toContainEqual(
+      expect.objectContaining({ reason: "provider" }),
     );
-    expect(prompts).toHaveLength(2);
-    expect(
-      ledger()
-        .read({ type: "discovery-run-started" })
-        .filter(
-          ({ event }) =>
-            event.type === "discovery-run-started" &&
-            event.runKind === "explore",
-        ),
-    ).toHaveLength(2);
+    expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(1);
   });
 
   it("lists parked Findings by one-line property and says when there are none (#185)", async () => {
