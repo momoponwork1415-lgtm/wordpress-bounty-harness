@@ -151,8 +151,16 @@ export async function runContinuousParent(input: {
       const decision = await inspect(
         initial.stopRequested,
         initial.state === "RECOVERING" && !initial.stopRequested,
+        initial.state === "WAIT_REVIEW" && !initial.stopRequested,
       );
-      if (decision.action !== "hold" || decision.reason !== "owner-not-ready") {
+      const assessedWaitSafe =
+        decision.action === "hold" &&
+        decision.ownerReconciliationSafe &&
+        (decision.reason === "quota" || decision.reason === "review-required");
+      if (
+        !assessedWaitSafe &&
+        (decision.action !== "hold" || decision.reason !== "owner-not-ready")
+      ) {
         const run = current();
         return transition(run, {
           state: "RECOVERING",
@@ -177,6 +185,16 @@ export async function runContinuousParent(input: {
         }),
       });
       owner.markReconciled(handle, evidenceDigest);
+      if (
+        assessedWaitSafe &&
+        current().state === "RECOVERING" &&
+        !current().stopRequested
+      )
+        transition(current(), {
+          state: "RUNNING",
+          reason: null,
+          nextCheckAt: null,
+        });
     }
     const changed = await holdChangedInputs();
     if (changed !== null) return changed;
