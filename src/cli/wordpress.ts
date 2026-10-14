@@ -109,6 +109,10 @@ import {
   runCampaignPipeline,
   type CampaignPipeline,
 } from "./pipeline.js";
+import {
+  storeTargetSkipDiagnostic,
+  type TargetSkipReason,
+} from "./skip-diagnostic.js";
 
 const text = z.strictObject({
   version: z.string().min(1).max(64),
@@ -1266,6 +1270,14 @@ export function createWordPressCliProfile(
         );
       const chosen: { target: WordPressTargetSelection; snapshot: Snapshot }[] =
         [];
+      const selectionAttemptId = `selection-${state.newId()}`;
+      const freezeFailures: {
+        selectionId: string;
+        snapshotDigest: string;
+        reason: TargetSkipReason;
+        diagnosticDigest: string;
+        selectionArtifactDigest: string;
+      }[] = [];
       for (const target of rankable) {
         if (chosen.length >= policy.maximumTargets) {
           reasons.get(target.slug)?.push("below-rank-cutoff");
@@ -1273,8 +1285,23 @@ export function createWordPressCliProfile(
         }
         try {
           chosen.push({ target, snapshot: await boundaries.freeze(target) });
-        } catch {
+        } catch (error) {
           reasons.get(target.slug)?.push("snapshot-unavailable");
+          const { reason, digest } = await storeTargetSkipDiagnostic(
+            state.store,
+            error,
+          );
+          const selectionId = `${target.targetId}@${target.version}`;
+          const selectionArtifactDigest = await state.store.putFiles({
+            "target-selection.json": canonicalJson(target),
+          });
+          freezeFailures.push({
+            selectionId,
+            snapshotDigest: canonicalDigest(target),
+            reason,
+            diagnosticDigest: digest,
+            selectionArtifactDigest,
+          });
         }
       }
       const report = {
@@ -1288,15 +1315,42 @@ export function createWordPressCliProfile(
           reasons: reasons.get(item.slug) ?? [],
         })),
         selectedSnapshotDigests: chosen.map(({ snapshot }) => snapshot.digest),
+        freezeFailures,
       };
       const reportDigest = await state.store.putFiles({
         "selection-report.json": canonicalJson(report),
       });
+      for (const failure of freezeFailures) {
+        const appended = await state.ledger.append({
+          schemaVersion: 1,
+          identity: `target-skipped-${state.newId()}`,
+          campaignId: selectionAttemptId,
+          snapshotDigest: failure.snapshotDigest,
+          occurredAt: state.clock().toISOString(),
+          type: "target-skipped",
+          selectionId: failure.selectionId,
+          stage: "freeze",
+          reason: failure.reason,
+          artifacts: [
+            {
+              kind: "target-selection",
+              digest: failure.selectionArtifactDigest,
+            },
+            {
+              kind: "target-skip-diagnostic",
+              digest: failure.diagnosticDigest,
+            },
+            { kind: "selection-report", digest: reportDigest },
+          ],
+        });
+        if (appended.status !== "appended")
+          throw new Error("Selection skip ledger append conflicted");
+      }
       if ("candidateSource" in policy && chosen.length < 3)
         throw new Error(
           `Selection found ${chosen.length} eligible frozen targets; at least 3 are required (report ${reportDigest})`,
         );
-      const batchId = chosen.length === 0 ? null : `selection-${state.newId()}`;
+      const batchId = chosen.length === 0 ? null : selectionAttemptId;
       for (const { target, snapshot } of chosen) {
         const selectionDigest = await state.store.putFiles({
           "target-selection.json": canonicalJson(target),

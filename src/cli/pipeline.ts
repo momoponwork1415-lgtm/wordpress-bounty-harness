@@ -18,6 +18,7 @@ import type {
 } from "../ledger/index.js";
 import type { TargetSelection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
+import { storeTargetSkipDiagnostic } from "./skip-diagnostic.js";
 import type {
   VerifiableFinding,
   Verification,
@@ -246,7 +247,9 @@ export async function runCampaignPipeline<
     let handle: Handle | undefined;
     let result: TargetResult = {};
     const skip = async (error: unknown): Promise<void> => {
-      // The failure text may hold paths; it goes to the operator, not the ledger.
+      // The ledger gets only a fixed reason and a digest. Raw diagnostics stay private.
+      const { reason, digest: diagnosticDigest } =
+        await storeTargetSkipDiagnostic(options.store, error);
       await append({
         schemaVersion: 1,
         campaignId,
@@ -256,6 +259,10 @@ export async function runCampaignPipeline<
         type: "target-skipped",
         selectionId,
         stage,
+        reason,
+        artifacts: [
+          { kind: "target-skip-diagnostic", digest: diagnosticDigest },
+        ],
       });
       delete result.target;
       result.skipped = {

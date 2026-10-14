@@ -39,6 +39,34 @@ export const sourceManifestSchema = z.strictObject({
 });
 
 export type SourceManifest = z.infer<typeof sourceManifestSchema>;
+export const sourceAcquisitionFailureKindSchema = z.enum([
+  "dns",
+  "connect-timeout",
+  "request-timeout",
+  "network",
+  "http-response",
+  "source-mismatch",
+  "quota-exceeded",
+  "invalid-archive",
+  "deferred",
+]);
+
+export type SourceAcquisitionFailureKind = z.infer<
+  typeof sourceAcquisitionFailureKindSchema
+>;
+
+/** A safe failure kind travels with a private diagnostic through the pipeline. */
+export class SourceAcquisitionError extends Error {
+  readonly kind: SourceAcquisitionFailureKind;
+  readonly diagnostic: unknown;
+
+  constructor(kind: SourceAcquisitionFailureKind, diagnostic: unknown) {
+    super(`Source acquisition did not complete: ${kind}`);
+    this.name = "SourceAcquisitionError";
+    this.kind = kind;
+    this.diagnostic = diagnostic;
+  }
+}
 
 export interface AcquiredSource {
   readonly identity: string;
