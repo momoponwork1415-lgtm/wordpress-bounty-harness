@@ -68,6 +68,7 @@ async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
     });
   };
   const calls: Parameters<Step>[0][] = [];
+  const slept: number[] = [];
   const log: string[] = [];
   const notified: string[] = [];
   const deps: ContinuousDeps = {
@@ -98,8 +99,14 @@ async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
     },
     cleanupLeftovers: async () => 0,
     preflight: async () => undefined,
+    legacyHistoryAvailable: async () => true,
+    floorPolicyAvailable: async () => true,
+    readAuth: async () => ({ expiresAt: new Date(now + 30 * 86_400_000) }),
+    programmeObservedAt: async () => new Date(now - 86_400_000),
+    statfs: async () => ({ freeBytes: 100 * 1024 ** 3 }),
+    loginMarginMinutes: 600,
     clock: () => new Date(now),
-    sleep: async (ms) => void (now += ms),
+    sleep: async (ms) => void (slept.push(ms), (now += ms)),
     signals: { on: () => process, off: () => process } as never,
     pidAlive: () => false,
     pid: 4242,
@@ -110,7 +117,20 @@ async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
     ...overrides,
   };
   const runner = createContinuousRunner(deps);
-  return { root, runner, calls, log, notified, trial, deps };
+  const hours = () => slept.reduce((a, b) => a + b, 0) / 3_600_000;
+  const states = () => log.map((line) => line.split(" ")[1] ?? "");
+  return {
+    root,
+    runner,
+    calls,
+    log,
+    notified,
+    trial,
+    deps,
+    hours,
+    states,
+    append,
+  };
 }
 
 const limited =
@@ -219,5 +239,126 @@ describe("continuous runner", () => {
     expect(await t.runner.run()).toBe("errors");
     expect(t.runner.memo().lastError).toHaveLength(200);
     expect(new Set(t.calls.map((call) => call.campaignId)).size).toBe(3);
+  });
+
+  it("holds after a batch whose every target was refused, then probes one target", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    steps.push(async ({ campaignId }) => {
+      await t.trial(campaignId, { outcome: "failed", reason: "provider" });
+      await t.append(campaignId, {
+        type: "target-skipped",
+        selectionId: "wporg:a@1.0.0",
+        stage: "discovery",
+        reason: "provider-refused",
+      });
+      return {};
+    });
+    steps.push(async ({ campaignId }) => {
+      await t.trial(campaignId, { outcome: "completed" });
+      return {};
+    });
+    expect(await t.runner.run()).toBe("operator");
+    expect(t.states()).toContain("holding-refusals");
+    expect(t.calls.map((call) => call.target)).toEqual([null, "a", null]);
+  });
+
+  it("holds after two batches without a completed Trial and stops at the third", async () => {
+    let preflights = 0;
+    const steps: Step[] = [];
+    const t = await setup(steps, { preflight: async () => void preflights++ });
+    const failed: Step = async ({ campaignId }) => {
+      await t.trial(campaignId, { outcome: "failed", reason: "sandbox" });
+      return {};
+    };
+    steps.push(failed, failed, failed);
+    expect(await t.runner.run()).toBe("no-progress");
+    expect(t.states().filter((state) => state.startsWith("holding"))).toEqual([
+      "holding-no-progress",
+    ]);
+    // Once at start, once more before the hold.
+    expect(preflights).toBe(2);
+  });
+
+  it("sleeps a day on an empty pool, retries a failed listing hourly, and stops exhausted on the third empty day", async () => {
+    const results = ["unavailable", "available", "available", "available"];
+    const t = await setup([], {
+      select: async () => ({
+        batchId: null,
+        targets: [],
+        sourceStatus: results.shift()!,
+      }),
+    });
+    expect(await t.runner.run()).toBe("exhausted");
+    expect(
+      t.log.filter((line) => line.includes("reason=listing-unavailable")),
+    ).toHaveLength(1);
+    expect(t.hours()).toBe(1 + 2 * 24);
+  });
+
+  it("waits for a renewed login without exiting", async () => {
+    const t = await setup([]);
+    const start = t.deps.clock().getTime();
+    const renewedAt = start + 25 * 60_000;
+    t.deps.readAuth = async () => ({
+      expiresAt: new Date(
+        t.deps.clock().getTime() >= renewedAt
+          ? renewedAt + 86_400_000
+          : start + 60_000,
+      ),
+    });
+    expect(await createContinuousRunner(t.deps).run()).toBe("operator");
+    expect(
+      t.states().filter((state) => state === "waiting-login"),
+    ).toHaveLength(1);
+    expect(t.hours()).toBe(0.5);
+  });
+
+  it("holds hourly while the disk is low", async () => {
+    let checks = 0;
+    const t = await setup([], {
+      statfs: async () => ({
+        freeBytes: checks++ < 2 ? 1024 ** 3 : 100 * 1024 ** 3,
+      }),
+    });
+    expect(await t.runner.run()).toBe("operator");
+    expect(
+      t.states().filter((state) => state === "holding-disk-low"),
+    ).toHaveLength(1);
+    expect(t.hours()).toBe(2);
+  });
+
+  it.each([
+    [
+      "programme-stale",
+      { programmeObservedAt: async () => new Date("2026-09-01T00:00:00Z") },
+    ],
+    ["legacy-history-missing", { legacyHistoryAvailable: async () => false }],
+    ["missing-floor-policy", { floorPolicyAvailable: async () => false }],
+  ] as const)("stops as %s before any campaign", async (reason, override) => {
+    const t = await setup([], override);
+    expect(await t.runner.run()).toBe(reason);
+    expect(t.calls).toHaveLength(0);
+    expect(t.notified.at(-1)).toContain(`reason=${reason}`);
+  });
+
+  it("runs an unbound batch left by a crash before selecting again", async () => {
+    let selects = 0;
+    const t = await setup([async () => ({})], {
+      select: async () => (
+        selects++,
+        { batchId: "selection-9", targets: ["a"] }
+      ),
+    });
+    await t.append("selection-1", {
+      type: "target-selected",
+      selectionId: "wporg:a@1.0.0",
+    });
+    await t.runner.run();
+    expect(t.calls[0]).toMatchObject({
+      campaignId: "prod-20261020-1",
+      retryIncompleteVerifications: false,
+    });
+    expect(selects).toBe(1);
   });
 });
