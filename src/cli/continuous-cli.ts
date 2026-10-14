@@ -7,6 +7,7 @@ import {
   clearContinuousStop,
   continuousPaths,
   createContinuousRunner,
+  readContinuousMemo,
   readContinuousStopReason,
   requestContinuousStop,
   type ContinuousMemo,
@@ -137,6 +138,23 @@ export async function continuousCommand(
     const pid = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
     if (pid > 0 && pidAlive(pid))
       throw new Error(`continuous run is still running as pid ${pid}`);
+    let memo: ContinuousMemo | null;
+    try {
+      memo = await readContinuousMemo(state.stateDirectory);
+    } catch {
+      throw new Error("continuous.json is invalid; recover it before resume");
+    }
+    if (
+      memo === null &&
+      (await stat(paths.initialized).then(
+        () => true,
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return false;
+          throw error;
+        },
+      ))
+    )
+      throw new Error("continuous.json is missing; recover it before resume");
     const cleared = await clearContinuousStop(state.stateDirectory);
     io.stdout(
       cleared
@@ -155,20 +173,34 @@ export async function continuousCommand(
   if (sub === "status") {
     if (context.resume)
       throw new Error("--resume is only valid with continuous run");
-    const memo = JSON.parse(
-      await readFile(paths.memo, "utf8").catch(() => "null"),
-    ) as ContinuousMemo | null;
+    let memo: ContinuousMemo | null = null;
+    let invalidMemo = false;
+    try {
+      memo = await readContinuousMemo(state.stateDirectory);
+    } catch {
+      invalidMemo = true;
+    }
     const pid = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
     const livePid = pid > 0 && pidAlive(pid) ? pid : null;
     const stopReason = await readContinuousStopReason(state.stateDirectory);
+    const initialized = await stat(paths.initialized).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return false;
+        throw error;
+      },
+    );
+    const missingMemo = memo === null && initialized;
     const displayState =
       stopReason !== null
         ? livePid === null
           ? "stopped"
           : "stopping"
-        : memo !== null && memo.state !== "stopped" && livePid === null
-          ? "stale"
-          : (memo?.state ?? "never-started");
+        : invalidMemo || missingMemo
+          ? "invalid-memo"
+          : memo !== null && memo.state !== "stopped" && livePid === null
+            ? "stale"
+            : (memo?.state ?? "never-started");
     const displayDetail =
       stopReason !== null ? { reason: stopReason } : (memo?.detail ?? {});
     io.stdout(
@@ -176,6 +208,8 @@ export async function continuousCommand(
         .map(([key, value]) => `  ${key} ${value}`)
         .join("")}  pid ${livePid ?? "none"}`,
     );
+    if (invalidMemo || missingMemo)
+      io.stdout("memo invalid or missing; manual recovery required");
     if (memo?.lastError !== undefined)
       io.stdout(`last error ${memo.lastError}`);
     const now = state.clock();
@@ -192,7 +226,11 @@ export async function continuousCommand(
         `${label}  trials ${c.started}  completed ${c.completed}  provider-limited ${c.providerLimited}  provider-refused ${c.providerRefused}  run-failed ${c.runFailed}  lab-failed ${c.labFailed}  unsettled ${c.unsettled}  findings queue ${c.queue} + parked ${c.parked}`,
       );
     }
-    return ["stopped", "stopping", "stale"].includes(displayState) ? 1 : 0;
+    return ["stopped", "stopping", "stale", "invalid-memo"].includes(
+      displayState,
+    )
+      ? 1
+      : 0;
   }
   if (sub !== "run") return 2;
   const configPath = context.configPath;

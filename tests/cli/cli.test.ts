@@ -3323,13 +3323,25 @@ describe("harness CLI vertical slice", () => {
       "reason legacy-history-missing",
     );
     expect((await run("continuous", "resume")).code).toBe(0);
+    const priorMemo = JSON.parse(
+      await readFile(join(state, "continuous.json"), "utf8"),
+    ) as Record<string, unknown>;
     await writeFile(
       join(state, "continuous.json"),
-      JSON.stringify({ state: "running", detail: { campaignId: "crashed" } }),
+      JSON.stringify({
+        ...priorMemo,
+        state: "running",
+        detail: { campaignId: "crashed" },
+      }),
     );
     const stale = await run("continuous", "status");
     expect(stale.code).toBe(1);
     expect(stale.stdout).toContain("state stale");
+    await writeFile(join(state, "continuous.json"), "{broken");
+    const invalid = await run("continuous", "status");
+    expect(invalid.code).toBe(1);
+    expect(invalid.stdout).toContain("state invalid-memo");
+    expect(invalid.stdout).toContain("manual recovery required");
     await run("continuous", "stop");
     const stoppedAfterCrash = await run("continuous", "status");
     expect(stoppedAfterCrash.code).toBe(1);
@@ -3344,6 +3356,11 @@ describe("harness CLI vertical slice", () => {
     expect(liveResume.code).toBe(1);
     expect(liveResume.stderr).toContain("still running as pid");
     await rm(join(state, "continuous.pid"));
+    const damagedResume = await run("continuous", "resume");
+    expect(damagedResume.code).toBe(1);
+    expect(damagedResume.stderr).toContain("recover it before resume");
+    await expect(stat(join(state, "continuous.stop"))).resolves.toBeDefined();
+    await writeFile(join(state, "continuous.json"), JSON.stringify(priorMemo));
     expect((await run("continuous", "resume")).code).toBe(0);
     await expect(stat(join(state, "continuous.stop"))).rejects.toThrow();
     expect(

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
@@ -50,7 +50,7 @@ const HOLD_STATES = new Set([
 
 export type ContinuousStopReason = (typeof STOP_REASONS)[number];
 
-/** The runner's working memo. The ledger stays the record; this file may be deleted. */
+/** Working state needed for safe restart; the ledger remains the event record. */
 export type ContinuousMemo = {
   state: string;
   detail: Record<string, string>;
@@ -114,10 +114,89 @@ const DAY = 24 * 60 * MINUTE;
 export function continuousPaths(stateDirectory: string) {
   return {
     memo: join(stateDirectory, "continuous.json"),
+    initialized: join(stateDirectory, "continuous.initialized"),
     pid: join(stateDirectory, "continuous.pid"),
     stop: join(stateDirectory, "continuous.stop"),
     log: join(stateDirectory, "continuous.log"),
   };
+}
+
+/** Sync contents before publishing the new file, then sync the directory entry. */
+async function writeStateFile(
+  stateDirectory: string,
+  path: string,
+  contents: string,
+): Promise<void> {
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    const file = await open(temporary, "wx", 0o600);
+    try {
+      await file.writeFile(contents, "utf8");
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await rename(temporary, path);
+    const directory = await open(stateDirectory, "r");
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+/** Never repair a partial memo by filling defaults: doing so can lose a campaign. */
+export async function readContinuousMemo(
+  stateDirectory: string,
+): Promise<ContinuousMemo | null> {
+  const raw = await readFile(
+    continuousPaths(stateDirectory).memo,
+    "utf8",
+  ).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (raw === null) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error("continuous.json is invalid");
+  }
+  const row = value as Record<string, unknown> | null;
+  const count = (key: string) =>
+    Number.isSafeInteger(row?.[key]) && (row?.[key] as number) >= 0;
+  if (
+    row === null ||
+    typeof row !== "object" ||
+    Array.isArray(row) ||
+    typeof row.state !== "string" ||
+    (!["starting", "running", "stopped"].includes(row.state) &&
+      !HOLD_STATES.has(row.state)) ||
+    row.detail === null ||
+    typeof row.detail !== "object" ||
+    Array.isArray(row.detail) ||
+    !Object.values(row.detail).every((item) => typeof item === "string") ||
+    !count("backoffStep") ||
+    !count("consecutiveErrorBatches") ||
+    !count("consecutiveRefusalBatches") ||
+    !count("consecutiveNoProgressBatches") ||
+    !count("consecutiveEmptyDays") ||
+    typeof row.probe !== "boolean" ||
+    typeof row.updatedAt !== "string" ||
+    !Number.isFinite(Date.parse(row.updatedAt)) ||
+    (row.campaignId !== undefined &&
+      (typeof row.campaignId !== "string" || row.campaignId.length === 0)) ||
+    (row.target !== undefined &&
+      row.target !== null &&
+      typeof row.target !== "string") ||
+    (row.lastError !== undefined && typeof row.lastError !== "string")
+  )
+    throw new Error("continuous.json is invalid");
+  return row as ContinuousMemo;
 }
 
 /** Atomically publish a terminal stop, including from a signal handler. */
@@ -270,9 +349,11 @@ export function createContinuousRunner(deps: ContinuousDeps) {
   const stopRequested = () => signalled || existsSync(paths.stop);
   const save = async () => {
     memo.updatedAt = deps.clock().toISOString();
-    await writeFile(paths.memo, `${JSON.stringify(memo, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    await writeStateFile(
+      deps.stateDirectory,
+      paths.memo,
+      `${JSON.stringify(memo, null, 2)}\n`,
+    );
   };
   /** A state change writes one line to the log and to --notify. */
   const enter = async (state: string, detail: Record<string, string> = {}) => {
@@ -328,6 +409,14 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     await enter("stopped", { reason });
     return reason;
   };
+  const stopForMemo = async (code: "missing" | "invalid") => {
+    // Preserve the damaged file for inspection; do not synthesize campaign state.
+    requestContinuousStop(deps.stateDirectory, "errors");
+    const line = `${deps.clock().toISOString()} stopped reason=errors memo=${code}`;
+    deps.io.log(line);
+    await deps.io.notify?.(line).catch(() => undefined);
+    return "errors" as const;
+  };
 
   const run = async (
     options: { readonly resume?: boolean } = {},
@@ -337,9 +426,25 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     const previous = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
     if (previous > 0 && previous !== deps.pid && deps.pidAlive(previous))
       throw new Error(`continuous run is already running as pid ${previous}`);
-    const saved = await readFile(paths.memo, "utf8").catch(() => "{}");
-    memo = { ...memo, ...(JSON.parse(saved) as Partial<ContinuousMemo>) };
+    let saved: ContinuousMemo | null;
+    try {
+      saved = await readContinuousMemo(deps.stateDirectory);
+    } catch {
+      return stopForMemo("invalid");
+    }
     const heldReason = await readContinuousStopReason(deps.stateDirectory);
+    if (saved === null) {
+      if (
+        existsSync(paths.initialized) ||
+        existsSync(paths.pid) ||
+        existsSync(paths.log)
+      )
+        return stopForMemo("missing");
+      if (heldReason !== null && !options.resume) return heldReason;
+      await save();
+    } else memo = saved;
+    if (!existsSync(paths.initialized))
+      await writeStateFile(deps.stateDirectory, paths.initialized, "1\n");
     if (heldReason !== null) {
       if (!options.resume) {
         // Preserve the marker and unfinished campaign across service restarts.
