@@ -37,6 +37,8 @@ describe("provider credential egress", () => {
         "// fixture",
       );
       const commands: string[][] = [];
+      const environments: (NodeJS.ProcessEnv | undefined)[] = [];
+      const grantToken = "g".repeat(43);
       const broker = createProviderCredentialEgressBroker({
         dockerExecutablePath: "/usr/bin/docker",
         brokerImage: `node@${digest}`,
@@ -45,9 +47,11 @@ describe("provider credential egress", () => {
         scratchRootDirectory: root,
         proxyBundleDirectory,
         clock,
+        randomGrantToken: () => grantToken,
         resolveProviderAddresses: async () => ["203.0.113.10"],
-        runDocker: async (args) => {
+        runDocker: async (args, _timeoutMs, hostEnvironment) => {
           commands.push([...args]);
+          environments.push(hostEnvironment);
           return {
             exitCode: 0,
             stdout: args[0] === "inspect" ? "172.28.0.2\n" : "",
@@ -72,8 +76,14 @@ describe("provider credential egress", () => {
       expect(result.receipt.setup.status).toBe("ready");
       expect(JSON.stringify(result.receipt)).not.toContain(secret);
       expect(JSON.stringify(commands)).not.toContain(secret);
-      const create = commands.find((args) => args[0] === "create");
+      expect(JSON.stringify(commands)).not.toContain(grantToken);
+      const createIndex = commands.findIndex((args) => args[0] === "create");
+      const create = commands[createIndex];
       expect(create).toContain("--runtime=runsc");
+      expect(create).toContain("PROVIDER_GRANT_TOKEN");
+      expect(environments[createIndex]).toEqual({
+        PROVIDER_GRANT_TOKEN: grantToken,
+      });
       expect(create).toContain(
         "PROVIDER_AUTHENTICATION=anthropic-subscription-token",
       );

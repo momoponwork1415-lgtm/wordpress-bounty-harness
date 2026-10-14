@@ -252,6 +252,7 @@ export interface ProviderCredentialEgressBrokerOptions {
   readonly runDocker?: (
     args: readonly string[],
     timeoutMs: number,
+    hostEnvironment?: NodeJS.ProcessEnv,
   ) => Promise<DockerCommandResult>;
 }
 
@@ -300,6 +301,7 @@ async function defaultDockerCommand(
   args: readonly string[],
   timeoutMs: number,
   secrets: readonly string[],
+  hostEnvironment?: NodeJS.ProcessEnv,
 ): Promise<DockerCommandResult> {
   const result = await runNativeModelProcess({
     executablePath,
@@ -310,6 +312,7 @@ async function defaultDockerCommand(
       LANG: "C",
       LC_ALL: "C",
       TZ: "UTC",
+      ...hostEnvironment,
     },
     timeoutMs,
     maxOutputBytes: 64 * 1024,
@@ -520,6 +523,7 @@ export function createProviderCredentialEgressBroker(
         | ((
             args: readonly string[],
             timeoutMs: number,
+            hostEnvironment?: NodeJS.ProcessEnv,
           ) => Promise<DockerCommandResult>)
         | undefined;
       try {
@@ -547,8 +551,8 @@ export function createProviderCredentialEgressBroker(
               `${apiKey}\n`,
           };
         }
-        const grantSecrets = secrets;
-        runDocker = async (args, timeoutMs) => {
+        const grantSecrets = [...secrets, grantToken];
+        runDocker = async (args, timeoutMs, hostEnvironment) => {
           const result =
             options.runDocker === undefined
               ? await defaultDockerCommand(
@@ -556,8 +560,9 @@ export function createProviderCredentialEgressBroker(
                   args,
                   timeoutMs,
                   grantSecrets,
+                  hostEnvironment,
                 )
-              : await options.runDocker(args, timeoutMs);
+              : await options.runDocker(args, timeoutMs, hostEnvironment);
           return {
             exitCode: result.exitCode,
             stdout: redactSecret(result.stdout, ...grantSecrets),
@@ -671,8 +676,10 @@ export function createProviderCredentialEgressBroker(
               ...secretMounts,
               "--env",
               `PROVIDER_AUTHENTICATION=${chatgpt ? "chatgpt" : subscription ? "anthropic-subscription-token" : anthropic ? "anthropic-api-key" : "api-key"}`,
+              // Docker reads the grant from this child process's environment.
+              // The value stays out of host argv and ordinary command logs.
               "--env",
-              `PROVIDER_GRANT_TOKEN=${grantToken}`,
+              "PROVIDER_GRANT_TOKEN",
               "--env",
               `PROVIDER_MODEL=${request.model}`,
               "--env",
@@ -690,6 +697,7 @@ export function createProviderCredentialEgressBroker(
               "/opt/provider-egress/provider-credential-proxy-cli.js",
             ],
             20_000,
+            { PROVIDER_GRANT_TOKEN: grantToken },
           );
           if (!dockerSucceeded(broker)) {
             setup = {

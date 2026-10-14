@@ -80,6 +80,7 @@ export interface GvisorClaudeSandboxOptions {
     args: readonly string[],
     stdin: string | undefined,
     timeoutMs: number,
+    hostEnvironment?: NodeJS.ProcessEnv,
   ) => Promise<NativeModelProcessResult>;
 }
 
@@ -138,6 +139,7 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         args: readonly string[],
         stdin: string | undefined,
         timeoutMs: number,
+        hostEnvironment?: NodeJS.ProcessEnv,
       ) =>
         runNativeModelProcess({
           executablePath: this.#options.dockerExecutablePath,
@@ -149,6 +151,7 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
             LANG: "C",
             LC_ALL: "C",
             TZ: "UTC",
+            ...hostEnvironment,
           },
           timeoutMs,
           maxOutputBytes: this.#options.maxOutputBytes,
@@ -224,6 +227,10 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       throw new Error("Claude scratch root is unavailable");
     const cliVersion = (await this.probe()).cliVersion;
     const token = command.grant.authorization.slice("Bearer ".length);
+    const credentialName =
+      command.grant.anthropicAuthentication === "subscription-token"
+        ? "ANTHROPIC_AUTH_TOKEN"
+        : "ANTHROPIC_API_KEY";
     const runDocker = this.#docker(token);
     const clock = this.#options.clock ?? (() => new Date());
     const containerName = `claude-agent-${randomUUID()}`;
@@ -265,12 +272,12 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
             // Claude's nested bubblewrap cannot run under runsc. Only the
             // trial-scoped broker grant, never the provider secret, enters here.
             "--env=CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0",
+            // Docker reads this value from its own environment; the grant
+            // does not appear in the host process arguments or normal logs.
+            `--env=${credentialName}`,
             ...(command.grant.anthropicAuthentication === "subscription-token"
-              ? [
-                  `--env=ANTHROPIC_AUTH_TOKEN=${token}`,
-                  `--env=ANTHROPIC_BETAS=${ANTHROPIC_SUBSCRIPTION_BETA}`,
-                ]
-              : [`--env=ANTHROPIC_API_KEY=${token}`]),
+              ? [`--env=ANTHROPIC_BETAS=${ANTHROPIC_SUBSCRIPTION_BETA}`]
+              : []),
             `--env=ANTHROPIC_BASE_URL=${command.grant.baseUrl}`,
             "--entrypoint=node",
             this.#options.image,
@@ -283,6 +290,7 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
             outputSchema: command.outputSchema,
           }),
           timeoutMs,
+          { [credentialName]: token },
         );
       } finally {
         await runDocker(

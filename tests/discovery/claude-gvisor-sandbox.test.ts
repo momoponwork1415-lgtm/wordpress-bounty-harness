@@ -53,15 +53,18 @@ describe("Claude cooperative gVisor resource admission", () => {
         maxEntries: 10,
         maxBytes: 1024,
       });
-      const calls: string[][] = [];
+      const calls: {
+        args: string[];
+        hostEnvironment: NodeJS.ProcessEnv | undefined;
+      }[] = [];
       const sandbox = new GvisorClaudeSandbox({
         dockerExecutablePath: "/usr/bin/docker",
         image: `sha256:${"a".repeat(64)}`,
         scratchRootDirectory: root,
         maxOutputBytes: 1024 * 1024,
         timeoutMs: 60_000,
-        runDocker: async (args) => {
-          calls.push([...args]);
+        runDocker: async (args, _stdin, _timeoutMs, hostEnvironment) => {
+          calls.push({ args: [...args], hostEnvironment });
           return {
             kind: "exited",
             exitCode: 0,
@@ -89,14 +92,17 @@ describe("Claude cooperative gVisor resource admission", () => {
         labHost: { name: "wordpress", ipv4: "172.20.0.2" },
         deadline: new Date(Date.now() + 60_000).toISOString(),
       });
-      const agentArgs = calls.find((args) =>
+      const agent = calls.find(({ args }) =>
         args.includes("--network=trial-internal"),
       );
-      expect(agentArgs).toContain(`--env=ANTHROPIC_AUTH_TOKEN=${grantToken}`);
-      expect(agentArgs).toContain("--env=ANTHROPIC_BETAS=oauth-2025-04-20");
-      expect(agentArgs).toContain("--env=CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0");
-      expect(agentArgs).not.toContain(`--env=ANTHROPIC_API_KEY=${grantToken}`);
-      expect(agentArgs).toContain("--runtime=runsc");
+      expect(agent?.args).toContain("--env=ANTHROPIC_AUTH_TOKEN");
+      expect(agent?.args).toContain("--env=ANTHROPIC_BETAS=oauth-2025-04-20");
+      expect(agent?.args).toContain("--env=CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0");
+      expect(JSON.stringify(agent?.args)).not.toContain(grantToken);
+      expect(agent?.hostEnvironment).toEqual({
+        ANTHROPIC_AUTH_TOKEN: grantToken,
+      });
+      expect(agent?.args).toContain("--runtime=runsc");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

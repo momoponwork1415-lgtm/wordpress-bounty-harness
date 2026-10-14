@@ -18,15 +18,28 @@
 - Claude Code 2.1.296 と Agent SDK 0.3.296 の新 image を build し、`runsc` で `claude --version` が 2.1.296 を返すことを確認した。image digest は `sha256:bc75a5852e2507501adadace5aeb80030eed8dff98d6a061c37644b348f17f92`。
 - 実 token・対象 source を使わない gVisor 内の内部 network probe で、Claude Code 2.1.296 が Trial 限定の偽 Bearer token を付けて `POST /v1/messages?beta=true` を送り、model `claude-opus-5-5` と `oauth-2025-04-20` を含む `anthropic-beta` を送ることを観測した。偽 upstream は 401 を返した。この probe 単独では実 provider の応答を測っていない。
 - 所有者が発行した `setup-token` を本人所有・0600 の Git 外ファイルから broker だけが読み、対象 source を与えない無害な gVisor CLI smoke を2回行った。1回目は upstream への送信前に CLI が終了した。2回目は Opus 5.5 への1要求が成功し、upstream の4xx・5xxは0、CLI は正常終了した。これは認証経路とモデル応答の確認であり、購読への実際の計上、rate limit、対象 Trial の成功を示さない。token の値は記録・表示していない。
-- 過去・現行 Codex の公開 slug 833件を Git 外の Opus 選定方針で除外し、独立 state で既定の100,000インストール下限・候補500件を検査した。適格候補は1件だったが、最初の Opus host 設定に WordPress 6.8.3 の core image が残り、宣言された7.1.3と不一致だったため Snapshot 固定は0件で終了した。host image を本番の7.1.3へ揃え、同版の core source を取得できることを確認した。台帳の `target-selected` は0件で、対象 Trial は起動していない。
-- 所有者の明示承認後、既定8タグのページ深度を2→5にした新しい Git 外 policy ID・digest で再選定した。100,000インストール下限、候補上限500、作者・既往 slug 除外は維持した。固定可能な新規対象は1件で、自動選定契約が要求する3件に届かず失敗した。台帳の `target-selected` は引き続き0件。`maximumTargets` は自動選定 schema で3〜5、CLI も3件未満を失敗とするため、1対象 Trial に設定値だけで切り替えられない。
-- `pnpm check` は89ファイル・678テストに合格した。mock は grant の照合、OAuth capability、host token の upstream 差し替え、応答の secret redaction、runsc 側の grant のみの受け渡しを検査する。
+- Codex 側から受け取った公開 slug 833件の除外集合を Git 外の Opus 選定方針に置き、独立 state で既定の100,000インストール下限・候補500件を検査した。適格候補は1件だったが、最初の Opus host 設定に WordPress 6.8.3 の core image が残り、宣言された7.1.3と不一致だったため Snapshot 固定は0件で終了した。host image を本番の7.1.3へ揃え、同版の core source を取得できることを確認した。この時点の台帳の `target-selected` は0件。
+- 所有者の明示承認後、既定8タグのページ深度を2→5にした新しい Git 外 policy ID・digest で再選定した。100,000インストール下限、候補上限500、作者・既往 slug 除外は維持した。固定可能な新規対象は1件で、当時の自動選定契約が要求する3件に届かず失敗した。その後、所有者が明示した場合だけ `maximumTargets: 1` を許す変更を承認し、通常の3件下限を維持したまま、この1件をSnapshot固定・選定バッチに予約した。Codexの選定対象との重複は0件。
+- 833件の除外集合を台帳と照合すると、多数の slug に現行台帳の `target-selected` が見つからなかった。ただし先行監査の776件は、旧Target Snapshot、旧queue、private campaign、研究、archiveなどの保守的な和集合に由来する。全件を「探索完了」とも「未探索」とも扱わず、除外は維持する。現行Codexの追加5件も別の除外集合に反映済み。
+- Opus専用の50,000インストール下限を別の Git 外 policy（`wordpress-selection-2026-10-14-opus-55-50k-v6`、digest `sha256:3c9a7ad2b810990c7d1189e92436a4001913b901df283c755d05b42e82bbb708`）で検査した。候補500件のうち固定可能な新規対象は0件で、選定イベントは増えていない。続いて所有者が許可した30,000下限を別policy（`wordpress-selection-2026-10-14-opus-55-30k-v7`、digest `sha256:eb4414f8a6c240043bb9eec500d6fd1e0b75789293b0645c655de0df0795e401`）で検査し、500候補から新規3件のSnapshotを固定した。Codex側の当時の予約839件との重複は0件。3件のslugはGit外に保管し、台帳にはdigest参照のみを残す。30,000下限の対象ではWordfenceの報奨適格性を効果ごとに判断する。
+- `pnpm check` は89ファイル・679テストに合格した。追加テストは1件選定の明示設定、通常の3件下限、再訪除外、policy digest 不一致時の停止、campaign batch 結合を検査する。
 
-## 実 Trial 前に残る条件
+## 初回実対象 Trial
 
-1. 独立した Git 外 state と ledger を使い、現 Codex と過去の開発 Trial に含まれない fresh slug を3件固定する。既定のページ深度2と、所有者が承認したページ深度5の双方で適格候補は1件だった。追加の候補源調整または選定契約の変更は今回の実測には含めない。
-2. Codex 側の別 campaign 検知 guard と、選定した slug の非重複を確認する。
-3. Opus の最初の対象を1件で実行し、provider の応答、要求数、usage、wall、CPU・RAM、Lab、broker の失敗理由を観測する。成功・失敗にかかわらず `incomplete` を陰性に数えない。
-4. その実測を踏まえ `resources.maxConcurrentTargets: 2` に上げる。`maxConcurrentRuns` は対象間の並列レバーではなく、`memoryBudgetMiB` も全 campaign の予約ではない。Opus 2＋Codex 2の同時負荷は外側で監視する。
+100,000インストール以上の新規1対象について、同じ選定バッチに結び付けた初回 Trial を起動した。Snapshot固定・Lab供給・discovery run 開始までは成功したが、sandbox は約2.6秒で exit 1となり、`incomplete(sandbox)` で停止した。broker転送は0件、Rootと子の有効な報告は0件。候補0件の正常終了には数えない。診断 artifact は Git 外の Private Evidence に保存した。
 
-現在の実対象 Trial は0件。3 Trial の開発ゲートと実効最大並列の判定は未達で、PR は Draft のままにする。
+Claude Code 2.1.296 が subprocess環境保護のために `bubblewrap` を要求することが原因だった。imageに追加した隔離probeでは、`runsc` 内のmount操作が `Operation not permitted` で失敗した。実購読tokenはhostのbrokerから出していない。所有者がOpusのgVisor内に限り `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0` を明示承認したため、その設定を適用した。子プロセスはTrial限定grantを読めるが、実購読tokenは引き続きhost側のbrokerだけが持ち、gVisorとbrokerの宛先・model・期限・要求数・byte数制限は維持する。`pnpm check`（89ファイル・679テスト）と`pnpm build`に合格した。集計と受入条件は [#224](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/224) に記録した。
+
+## 修正後の新規対象 Trial と追加診断
+
+30,000インストール下限の選定バッチから新規1対象を別campaignで実行した。Root＋3子は約14分動作し、brokerはOpus 5.5への143要求を転送して、upstream成功143、4xx・5xx・relay失敗0だった。子3 runは `completed` で、Lead 1件を独立記録した。RootのCLIも正常終了したが、brokerの `unauthorizedRequests: 1` を保守的に `incomplete(policy, broker-grant-unauthorized)` とした。Findingは0件、候補保留1件。Rootの記録上の非cache入力は6,630 token、cache入力は8,875,279 token、出力は102,049 tokenで、子ごとのusageは取得できていない。CLIの成功と有効な子成果を保持しながら、Trial全体を正常0件に数えない。この1要求の発信元は現行の集計だけでは特定できないため、原因を確認するまでは新規Trialを増やさない。Opusが使った探索・brokerコンテナは終了時に削除され、Trial grantは利用できなくなった。以前から存在するCodex側のbrokerコンテナには触れていない。
+
+同じ運用監視で、Trial限定grantが探索コンテナの `docker run` とbrokerの `docker create` の引数に載ることを確認した。実OAuth tokenは引数に出ていない。両起動でDocker子プロセスの環境からgrantを渡し、引数・通常ログから値を除く修正を実装した。関連する6テストと`pnpm check`（89ファイル・679テスト）、`pnpm build`に合格した。この修正は上記の実Trialが終了した後にbuildしたため、そのTrialの実測には含めない。
+
+## 次に残る条件
+
+1. brokerの無認証要求1件を分類し、`incomplete(policy)` の原因を診断する。保留候補とLeadはPrivate Evidenceに維持する。
+2. 保守的な既往除外と現行Codex予約を維持する。30,000下限の別cohortと100,000下限のcohortは分母を分け、Programme Boundaryの適格性を効果ごとに照合する。既往slugの新版本を検討するときは旧Snapshotの版、公式stable、source digest、未公開Findingの有無を個別に照合する。
+3. broker診断後に残る新規2対象の初回Trialを測る。実測を踏まえ `resources.maxConcurrentTargets: 2` の可否を判断する。`maxConcurrentRuns` は対象間の並列レバーではなく、`memoryBudgetMiB` も全campaignの予約ではない。Opus 2＋Codex 2の同時負荷は外側で監視する。
+
+現在の実対象Trialは2件開始・completed 0件・incomplete 2件。修正後の1件では3子が完了し、Lead 1件が残った。3 Trialの開発ゲートと実効最大並列の判定は未達で、PRはDraftのままにする。
