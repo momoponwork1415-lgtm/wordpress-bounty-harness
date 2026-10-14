@@ -405,6 +405,13 @@ async function harness(
         contentDigest: sha("b"),
       })),
       listings: options.listingObservations ?? [],
+      traversal: {
+        listingSetDigest: sha("b"),
+        offset: 0,
+        observedUniqueCandidates: (options.candidates ?? ["synthetic-plugin"])
+          .length,
+        complete: true,
+      },
     }),
   });
   const snapshots = openSnapshot({

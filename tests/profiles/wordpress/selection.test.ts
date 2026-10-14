@@ -91,6 +91,9 @@ function harness(options: {
   clock?: string;
   /** The clock moves on by this much each time it is read, as a real one does. */
   advanceMsPerRead?: number;
+  enumerateCandidates?: NonNullable<
+    Parameters<typeof createWordPressSelection>[0]["enumerateCandidates"]
+  >;
 }) {
   const observations = options.observations ?? {
     popular: observation("popular", [], 100_000),
@@ -132,6 +135,9 @@ function harness(options: {
     targetSource,
     programme,
     programmeRef,
+    ...(options.enumerateCandidates === undefined
+      ? {}
+      : { enumerateCandidates: options.enumerateCandidates }),
     clock: (() => {
       let reads = 0;
       return () =>
@@ -144,6 +150,55 @@ function harness(options: {
 }
 
 describe("WordPress selection public interface", () => {
+  it("passes a stored listing cursor through batch inspection", async () => {
+    const policy = await loadWordPressSelectionPolicy();
+    if (!("candidateSource" in policy))
+      throw new Error("Expected automatic policy");
+    const cursor = {
+      kind: "wordpress-org-candidate-cursor" as const,
+      schemaVersion: 1 as const,
+      listingSetDigest: digest("d"),
+      nextIndex: 500,
+    };
+    const enumerateCandidates = vi.fn(async () => ({
+      status: "available" as const,
+      candidates: [
+        {
+          slug: "next",
+          sourceKind: "popular" as const,
+          sourcePage: 1,
+          sourceUrl: "https://api.wordpress.org/plugins/info/1.2/",
+          observedAt: now,
+          contentDigest: digest("e"),
+        },
+      ],
+      listings: [],
+      traversal: {
+        listingSetDigest: cursor.listingSetDigest,
+        offset: 500,
+        observedUniqueCandidates: 501,
+        complete: true,
+      },
+    }));
+    const selection = harness({
+      observations: { next: observation("next", [], 100_000) },
+      enumerateCandidates,
+    });
+    if (selection.inspectBatch === undefined)
+      throw new Error("Expected batch inspection");
+    const batch = await selection.inspectBatch(policy, cursor);
+    expect(enumerateCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ cursor }),
+    );
+    expect(batch.inspections.map((item) => item.slug)).toEqual(["next"]);
+    expect(batch.sourceTraversal).toEqual({
+      listingSetDigest: cursor.listingSetDigest,
+      offset: 500,
+      observedUniqueCandidates: 501,
+      complete: true,
+    });
+  });
+
   it("changes order when the policy changes and records the score breakdown", async () => {
     const selection = harness({});
     const first = await selection.select(basePolicy);

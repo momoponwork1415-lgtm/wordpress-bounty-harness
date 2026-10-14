@@ -5,10 +5,10 @@ import { enumerateWordPressOrgCandidates } from "../../../src/profiles/wordpress
 const now = "2026-10-12T00:00:00.000Z";
 const clock = () => new Date(now);
 
-function listing(slugs: readonly string[], date = now): Response {
+function listing(slugs: readonly string[], date = now, page = 1): Response {
   return new Response(
     JSON.stringify({
-      info: { page: 1, pages: 1, results: slugs.length },
+      info: { page, pages: 1, results: slugs.length },
       plugins: slugs.map((slug) => ({ slug })),
     }),
     { status: 200, headers: { Date: new Date(date).toUTCString() } },
@@ -149,6 +149,70 @@ describe("WordPress.org public candidate enumeration", () => {
       "unavailable",
       "available",
     ]);
+  });
+
+  it("continues beyond 500 distinct listing slugs with a listing-bound cursor", async () => {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      const page = Number(url.searchParams.get("request[page]"));
+      const group = url.searchParams.get("request[tag]") ?? "popular";
+      const slugs = Array.from(
+        { length: 50 },
+        (_, index) => `${group}-${page}-${index}`,
+      );
+      return listing(slugs, now, page);
+    };
+    const options = {
+      tags: ["login", "forms"],
+      popularPages: 5,
+      pagesPerTag: 5,
+      perPage: 50,
+      maxCandidates: 500,
+      clock,
+      fetch: fetcher,
+    };
+    const first = await enumerateWordPressOrgCandidates(options);
+    expect(first.candidates).toHaveLength(500);
+    expect(first.traversal).toMatchObject({
+      offset: 0,
+      observedUniqueCandidates: 750,
+      complete: false,
+      nextCursor: { nextIndex: 500 },
+    });
+    const cursor = first.traversal.nextCursor;
+    if (cursor === undefined) throw new Error("Expected continuation cursor");
+    const second = await enumerateWordPressOrgCandidates({
+      ...options,
+      cursor,
+    });
+    expect(second.candidates).toHaveLength(250);
+    expect(second.traversal).toMatchObject({
+      offset: 500,
+      observedUniqueCandidates: 750,
+      complete: true,
+    });
+    expect(second.traversal.nextCursor).toBeUndefined();
+    expect(
+      new Set(
+        [...first.candidates, ...second.candidates].map((item) => item.slug),
+      ).size,
+    ).toBe(750);
+    await expect(
+      enumerateWordPressOrgCandidates({
+        ...options,
+        cursor,
+        fetch: async (input) => {
+          const response = await fetcher(input);
+          if (String(input).includes("request%5Bbrowse%5D=popular"))
+            return listing(
+              ["changed"],
+              now,
+              Number(new URL(String(input)).searchParams.get("request[page]")),
+            );
+          return response;
+        },
+      }),
+    ).rejects.toThrow("listing set changed");
   });
 
   it("rejects malformed listings and bounds request counts", async () => {

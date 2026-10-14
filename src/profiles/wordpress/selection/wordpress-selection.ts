@@ -14,6 +14,7 @@ import { compareVersions } from "../plugin-version.js";
 import {
   enumerateWordPressOrgCandidates,
   type EnumerateWordPressOrgCandidatesOptions,
+  type WordPressOrgCandidateCursor,
   type WordPressOrgCandidateEnumeration,
 } from "./wordpress-org-candidate-enumerator.js";
 import {
@@ -41,6 +42,7 @@ export interface WordPressSelectionBatchInspection {
   readonly inspections: readonly WordPressSelectionInspection[];
   readonly sourceStatus: "manual" | WordPressOrgCandidateEnumeration["status"];
   readonly sourceListings: WordPressOrgCandidateEnumeration["listings"];
+  readonly sourceTraversal?: WordPressOrgCandidateEnumeration["traversal"];
 }
 
 export type WordPressSelectionWithBatchInspection = Selection<
@@ -51,6 +53,7 @@ export type WordPressSelectionWithBatchInspection = Selection<
   /** Older injected Selection adapters may only implement inspect. */
   readonly inspectBatch?: (
     policy: WordPressSelectionPolicy,
+    cursor?: WordPressOrgCandidateCursor,
   ) => Promise<WordPressSelectionBatchInspection>;
 };
 
@@ -133,6 +136,7 @@ export function createWordPressSelection(
 
   async function inspectBatch(
     policyInput: WordPressSelectionPolicy,
+    cursor?: WordPressOrgCandidateCursor,
   ): Promise<WordPressSelectionBatchInspection> {
     const policy = wordPressSelectionPolicySchema.parse(policyInput);
     const nowDate = clock();
@@ -147,6 +151,7 @@ export function createWordPressSelection(
             options.enumerateCandidates ?? enumerateWordPressOrgCandidates
           )({
             ...policy.candidateSource,
+            ...(cursor === undefined ? {} : { cursor }),
             clock,
             ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
           })
@@ -316,6 +321,9 @@ export function createWordPressSelection(
       inspections: results,
       sourceStatus: enumeration?.status ?? "manual",
       sourceListings: enumeration?.listings ?? [],
+      ...(enumeration === undefined
+        ? {}
+        : { sourceTraversal: enumeration.traversal }),
     };
   }
 
