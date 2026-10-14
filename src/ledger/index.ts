@@ -224,6 +224,21 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     type: z.literal("target-skipped"),
     selectionId: id,
     stage: z.enum(["freeze", "discovery", "verification"]),
+    /** Optional so historical skip events remain readable. */
+    reason: z
+      .enum([
+        "dns",
+        "connect-timeout",
+        "request-timeout",
+        "network",
+        "http-response",
+        "source-mismatch",
+        "quota-exceeded",
+        "invalid-archive",
+        "deferred",
+        "other",
+      ])
+      .optional(),
   }),
   event({
     /** Before a Snapshot exists, snapshotDigest is the immutable selection record's digest. */
