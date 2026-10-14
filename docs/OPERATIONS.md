@@ -184,6 +184,21 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 
 旧世代の既往は host 設定の `legacyHistory: {"file": "/abs/legacy-slugs.json"}` で渡す。`select` のたびに読み、`started` を `legacy-started`、`ambiguous` を `legacy-ambiguous` として除外し、`reconsider` の slug は既往と過去の Trial を無視して戻す。file が無ければ `legacy history unavailable` と表示して進む（`continuous run` は起動しない）。digest と件数は選定レポートに残る。`select --minimum <n>`（既定 3、runner は 1）未満しか固定できないときは、台帳に `target-selected` を書かず、各対象に `below-minimum` を付けて空の選定を返す。
 
+列挙は人気順 10 頁と方針のタグ 8 個を各 1 頁、1 頁 50 件、候補 1,000 件まで読む（schema の上限は `popularPages` 20、`maxCandidates` 2,000）。`revisitPolicy` は `never` で、版や prompt 版が変わっても探索を始めた slug は戻らない。下限だけを変えた写し `selection.50000.json` と `selection.30000.json` を同じ場所に置き、起動時に所有者が選ぶ。方針 file を差し替えると policy digest が変わり束縛済みの batch を再開できないので、batch の境界で入れ替える。
+
+legacy JSON は起動前に 1 回作る。旧研究 DB の slug を返す SQL は実物の schema を見て書く。
+
+```sh
+node scripts/export-legacy-slugs.mjs \
+  --db /abs/old-research.sqlite \
+  --db-started-sql "SELECT ... AS slug FROM ..." \
+  --db-ambiguous-sql "SELECT ... AS slug FROM ..." \
+  --state /abs/old-state-1 --state /abs/old-state-2 \
+  --report /abs/selection-report.json > /abs/legacy-slugs.json
+```
+
+旧 `--state` の台帳では探索開始のある slug を `started` に畳み込む。`--report` には下限 30,000 の方針で別の state に `select` した選定レポートを渡す。標準エラーに下限 100,000 / 50,000 / 30,000 ごとの列挙可能数と残り候補数が出る。本番の台帳には触れない。
+
 旧 `scripts/prepare-pilot-selection.mjs` は `harness select` の薄い呼び出しとして残す。`--host`、`--state`、`--config` を受け取り、候補と順位は作らない。
 
 スコア内訳、除外理由、候補一覧の取得元と観測時刻は標準出力と Git 外の `selection-report` に残る。最初の Snapshot 固定に失敗した候補は `snapshot-unavailable` として除外し、`target-skipped` から対象選定記録・選定レポート・Private Evidence の診断を digest 参照できるようにする。台帳の理由は短い定型コードだけにする。`target-selected` は固定済み Snapshot digest と `target-selection` の Private Evidence を参照する。次の `campaign run --all` は同じ方針 digest の最新バッチを使い、Snapshot が変われば止まる。公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030）。

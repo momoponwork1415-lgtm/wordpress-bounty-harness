@@ -64,6 +64,39 @@ describe("WordPress.org public candidate enumeration", () => {
     expect(requests[1]?.searchParams.get("request[per_page]")).toBe("5");
   });
 
+  it("reads ten popular pages and one page per tag without the cap cutting them", async () => {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      const page = url.searchParams.get("request[page]");
+      const tag = url.searchParams.get("request[tag]") ?? "popular";
+      const plugins = Array.from({ length: 50 }, (_, index) => ({
+        slug: `${tag}-${page}-${index}`,
+      }));
+      return new Response(
+        JSON.stringify({
+          info: { page: Number(page), pages: 20, results: 1000 },
+          plugins,
+        }),
+        { status: 200, headers: { Date: new Date(now).toUTCString() } },
+      );
+    };
+    const tags = ["forms", "backup"];
+    const result = await enumerateWordPressOrgCandidates({
+      tags,
+      popularPages: 10,
+      pagesPerTag: 1,
+      perPage: 50,
+      maxCandidates: 1000,
+      clock,
+      fetch: fetcher,
+    });
+    expect(result.listings).toHaveLength(12);
+    expect(result.candidates).toHaveLength(600);
+    expect(
+      result.candidates.filter((item) => item.sourceKind === "popular"),
+    ).toHaveLength(500);
+  });
+
   it("never nominates a candidate from a stale listing", async () => {
     const result = await enumerateWordPressOrgCandidates({
       tags: [],
@@ -162,7 +195,7 @@ describe("WordPress.org public candidate enumeration", () => {
       listings: [{ status: "unavailable", reason: "invalid-response" }],
     });
     await expect(
-      enumerateWordPressOrgCandidates({ popularPages: 6 }),
+      enumerateWordPressOrgCandidates({ popularPages: 21 }),
     ).rejects.toThrow("popularPages");
     await expect(
       enumerateWordPressOrgCandidates({
