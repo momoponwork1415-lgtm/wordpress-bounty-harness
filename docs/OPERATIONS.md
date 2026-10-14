@@ -131,6 +131,23 @@ harness continuous status --state <dir>
 
 ## 3. 提出までの操作
 
+1 件のレビューは次の順で進める。skill は提案と文案だけを出し、台帳に書くコマンドは所有者が打つ。
+
+| 順 | 誰が | 何を |
+| --- | --- | --- |
+| 1 | 所有者 | `harness review export --campaign <id> --finding <id>` |
+| 2 | skill | `wbh-review`（要約と accept / reject / defer の提案。`verification.status` が `incomplete` なら 3〜8 を飛ばし `defer` の提案で終える） |
+| 3 | skill | `wbh-dedupe`（重複の 3 値と根拠） |
+| 4 | 所有者 | WordPress.org の plugin 頁で最新版を確認（export に `target.versions.latestObserved` があればそれを使う） |
+| 5 | 所有者 | `harness review reverify --campaign <id> --finding <id> --config <path> --version <最新版>` |
+| 6 | 所有者 | `harness review scope --campaign <id> --finding <id>`（`wordfence in-scope` のものだけ先へ） |
+| 7 | 所有者 | `harness lab up --for-review --campaign <id> --finding <id>` で手で再現し、`harness review reproduced --campaign <id> --finding <id> --result match --minutes <n>` |
+| 8 | 所有者 | `harness review decide ...`（skill が示したコマンドを確かめて打つ） |
+| 9 | skill | `wbh-report`（英語の下書きを Private Evidence に書き、`review draft` で digest を記録） |
+| 10 | 所有者 | `harness review authorize --to wordfence` → 送信 → `harness review submitted` → `harness review outcome` |
+
+1 件あたりの見積りは reverify 30 分、手での再現 40 分、skill 30 分。1 回の batch は 3 件までにし、超える分は `defer` にする。RAM 16 GiB 未満の host では batch の前に `continuous stop`、後に `continuous run` を打つ（人手に数えない保守）。runner を起動し直す前に `lab down` で review 用の Lab を消す。
+
 ```
 harness review inspect --campaign <id> --finding <id>        # 1件の参照情報を開き、台帳へ記録する（review-item-opened）
 harness review export --campaign <id> --finding <id>         # 1画面のレビュー材料をJSON 1本（schema review-export/v1）で出す。台帳には書かない。skillはこれだけを読む
