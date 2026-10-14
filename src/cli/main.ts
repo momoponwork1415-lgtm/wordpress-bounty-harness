@@ -13,7 +13,10 @@ import {
 import { openWordPressReviewLab } from "../profiles/wordpress/lab/review-lab.js";
 import { wordPressReviewFindingReady } from "../profiles/wordpress/review-finding-readiness.js";
 import { SqliteRepeatTrialGate } from "../profiles/wordpress/discovery/repeat-trial-gate.js";
-import { SqliteHostResourceClaims } from "../infrastructure/host-resource-claims.js";
+import {
+  openExistingHostResourceClaims,
+  SqliteHostResourceClaims,
+} from "../infrastructure/host-resource-claims.js";
 import {
   assertContinuousStateDirectory,
   SqliteContinuousRunJournal,
@@ -25,6 +28,7 @@ import { recoverHostClaim } from "./resource-recovery.js";
 import { runContinuousControl } from "./continuous-control.js";
 import { continuousReviewExportCheck } from "./continuous-review-readiness.js";
 import { runContinuousParent } from "./continuous-runner.js";
+import { settleIdleContinuousStop } from "./continuous-stop.js";
 import { assertInitialContinuousInventory } from "./continuous-preflight.js";
 
 const io: CliIo = {
@@ -119,7 +123,51 @@ async function main(argv: readonly string[]): Promise<number> {
       // A stop request must reach the host-common journal even if the selected
       // campaign state or Private Evidence cannot currently be opened.
       if (args[1] === "stop")
-        return await runContinuousControl(args, journal, io);
+        return await runContinuousControl(args, journal, io, {
+          settleStop: async (requested) => {
+            if (requested.state !== "STOPPING") return requested;
+            const physicalStateDirectory = await realpath(
+              requested.stateDirectory,
+            );
+            assertContinuousStateDirectory(requested, physicalStateDirectory);
+            const state = await openState(physicalStateDirectory, {});
+            const claims = openExistingHostResourceClaims(
+              join(
+                homedir(),
+                ".local",
+                "state",
+                "wordpress-bounty-harness",
+                "host-resources.sqlite",
+              ),
+            );
+            const owner = new SqliteContinuousRunOwner(
+              join(
+                homedir(),
+                ".local",
+                "state",
+                "wordpress-bounty-harness",
+                "continuous-owners.sqlite",
+              ),
+            );
+            try {
+              return await settleIdleContinuousStop({
+                parentRunId: requested.parentRunId,
+                journal,
+                ledger: state.ledger,
+                claims,
+                owner,
+                reviewExportReady: continuousReviewExportCheck(
+                  state,
+                  undefined,
+                  (request) => wordPressReviewFindingReady(state, request),
+                ),
+              });
+            } finally {
+              owner.close();
+              claims.close();
+            }
+          },
+        });
       if (args.length !== 4 || args[2] !== "--run" || !args[3])
         throw new Error("Use continuous status --run <parent run id>");
       const parent = journal.get(args[3]);
@@ -260,9 +308,11 @@ async function main(argv: readonly string[]): Promise<number> {
         if (action === "start")
           await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
         const physicalStateDirectory = await realpath(stateDirectory);
+        let expectedResumeRevision: number | undefined;
         if (action === "resume") {
           const parent = journal.get(parentRunId);
           if (parent === null) throw new Error("Continuous run not found");
+          expectedResumeRevision = parent.revision;
           assertContinuousStateDirectory(parent, physicalStateDirectory);
           if (parent.configDigest !== configDigest)
             throw new Error("Continuous parent campaign config changed");
@@ -317,18 +367,24 @@ async function main(argv: readonly string[]): Promise<number> {
           owner,
           claims: resourceClaims,
           io,
+          ...(expectedResumeRevision === undefined
+            ? {}
+            : { expectedResumeRevision }),
           findingRecordReady: (request) =>
             wordPressReviewFindingReady(state, request),
         });
+        // The runner may settle a stop that raced its owner release after its
+        // return value was chosen. Report the durable journal state.
+        const latest = journal.get(parentRunId) ?? result;
         io.stdout(
           JSON.stringify({
             parentRunId,
-            state: result.state,
-            reason: result.reason,
-            children: result.children.length,
+            state: latest.state,
+            reason: latest.reason,
+            children: latest.children.length,
           }),
         );
-        return result.state === "RECOVERING" ? 1 : 0;
+        return latest.state === "RECOVERING" ? 1 : 0;
       } finally {
         owner.close();
         journal.close();

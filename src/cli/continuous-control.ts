@@ -3,17 +3,24 @@ import {
   assessContinuousChildCampaign,
   type ReviewExportCheck,
 } from "../discovery/continuous-child-assessment.js";
-import type { SqliteContinuousRunJournal } from "../infrastructure/continuous-run-journal.js";
+import type {
+  ContinuousRunRecord,
+  SqliteContinuousRunJournal,
+} from "../infrastructure/continuous-run-journal.js";
 import type { Ledger } from "../ledger/index.js";
 
 /** Host-common control plane; these commands never start or repeat a Trial. */
 export async function runContinuousControl(
   args: readonly string[],
   journal: Pick<SqliteContinuousRunJournal, "get" | "requestStop">,
-  io: Pick<CliIo, "stdout">,
+  io: Pick<CliIo, "stdout"> & Partial<Pick<CliIo, "stderr">>,
   assessmentInputs: {
     readonly ledger?: Pick<Ledger, "read">;
     readonly reviewExportReady?: ReviewExportCheck;
+    /** Stop intent is already durable when this optional idle drain runs. */
+    readonly settleStop?: (
+      requested: ContinuousRunRecord,
+    ) => Promise<ContinuousRunRecord | null>;
   } = {},
 ): Promise<number> {
   const [group, action, flag, parentRunId] = args;
@@ -26,11 +33,33 @@ export async function runContinuousControl(
   )
     throw new Error("Use continuous status|stop --run <parent run id>");
 
-  const run =
+  const previous = action === "stop" ? journal.get(parentRunId) : null;
+  let run =
     action === "status"
       ? journal.get(parentRunId)
       : journal.requestStop(parentRunId);
   if (run === null) throw new Error("Continuous run not found");
+  if (
+    action === "stop" &&
+    (previous?.state === "WAIT_REVIEW" ||
+      previous?.state === "WAIT_QUOTA" ||
+      previous?.state === "STOPPING") &&
+    assessmentInputs.settleStop !== undefined
+  ) {
+    try {
+      run =
+        (await assessmentInputs.settleStop(run)) ??
+        journal.get(parentRunId) ??
+        run;
+    } catch (error) {
+      // The stop flag is already persisted. Leave an uncertain drain visible
+      // instead of turning a stop command into a failed request.
+      run = journal.get(parentRunId) ?? run;
+      io.stderr?.(
+        `Stop requested; reconciliation pending: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   const children = [];
   for (const child of run.children) {
     const assessment =

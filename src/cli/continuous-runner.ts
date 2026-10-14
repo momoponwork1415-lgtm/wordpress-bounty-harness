@@ -3,9 +3,10 @@ import {
   canonicalDigest,
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
-import type {
-  ContinuousRunRecord,
-  SqliteContinuousRunJournal,
+import {
+  ContinuousRunRevisionConflictError,
+  type ContinuousRunRecord,
+  type SqliteContinuousRunJournal,
 } from "../infrastructure/continuous-run-journal.js";
 import type { SqliteContinuousRunOwner } from "../infrastructure/continuous-run-owner.js";
 import type { SqliteHostResourceClaims } from "../infrastructure/host-resource-claims.js";
@@ -13,6 +14,10 @@ import { reconcileContinuousRestart } from "../discovery/continuous-restart-reco
 import type { CliIo, CliProfile, CliState } from "./index.js";
 import { continuousReviewExportCheck } from "./continuous-review-readiness.js";
 import type { ReviewExportCheck } from "../discovery/continuous-child-assessment.js";
+import {
+  settleContinuousStop,
+  settleIdleContinuousStop,
+} from "./continuous-stop.js";
 
 const QUOTA_RECHECK_MS = 5 * 60_000;
 
@@ -32,6 +37,8 @@ export async function runContinuousParent(input: {
   readonly io: Pick<CliIo, "stdout">;
   readonly stopPollMs?: number;
   readonly findingRecordReady?: ReviewExportCheck;
+  /** The explicit resume command's pre-launch journal revision. */
+  readonly expectedResumeRevision?: number;
 }): Promise<ContinuousRunRecord> {
   const { parentRunId, journal, owner, claims, state, profile } = input;
   if (
@@ -111,33 +118,26 @@ export async function runContinuousParent(input: {
       readonly lastLedgerSequence?: number;
     },
   ) => journal.transition(parentRunId, run.revision, value);
-  const stopIfRequested = (): ContinuousRunRecord | null => {
+  const stopIfRequested = async (): Promise<ContinuousRunRecord | null> => {
     const run = current();
     if (!run.stopRequested) return null;
-    if (
-      claims
-        .status()
-        .claims.some((claim) =>
-          run.children.some((child) => child.campaignId === claim.campaignId),
-        )
-    )
-      return transition(run, {
-        state: "RECOVERING",
-        reason: "resource-claim-after-stop",
-        nextCheckAt: null,
-      });
-    return run.state === "STOPPED"
-      ? run
-      : transition(run, {
-          state: "STOPPED",
-          reason: "operator-stop",
-          nextCheckAt: null,
-        });
+    return settleContinuousStop({
+      parentRunId,
+      journal,
+      ledger: state.ledger,
+      claims,
+      owner,
+      ownerHandle: handle,
+      reviewExportReady,
+    });
   };
   const holdChangedInputs = async (): Promise<ContinuousRunRecord | null> => {
+    if (current().stopRequested && current().state !== "STOPPED")
+      return stopIfRequested();
     if (await pinnedInputsReady()) return null;
     const run = current();
-    if (run.stopRequested) return stopIfRequested() ?? run;
+    if (run.stopRequested && run.state !== "STOPPED")
+      return (await stopIfRequested()) ?? run;
     if (run.state !== "RUNNING" && run.state !== "WAIT_QUOTA") return run;
     return transition(run, {
       state: "WAIT_REVIEW",
@@ -179,24 +179,8 @@ export async function runContinuousParent(input: {
     }
     const changed = await holdChangedInputs();
     if (changed !== null) return changed;
-    if (current().stopRequested && current().state !== "STOPPED") {
-      const decision = await inspect(true);
-      // A drained child may still need provider capacity or human review.
-      // Neither wait keeps the operator's stop request in STOPPING.
-      if (
-        decision.action === "hold" &&
-        decision.reason !== "quota" &&
-        decision.reason !== "review-required"
-      )
-        return current().state === "RECOVERING"
-          ? current()
-          : transition(current(), {
-              state: "RECOVERING",
-              reason: `stop-${decision.reason}`,
-              nextCheckAt: null,
-            });
-      return stopIfRequested() ?? current();
-    }
+    if (current().stopRequested && current().state !== "STOPPED")
+      return (await stopIfRequested()) ?? current();
     if (current().state === "RECOVERING" && !current().stopRequested) {
       // Recovery is explicit. Reconcile ledger, resource claims, and the owner
       // before clearing the hold; a spent Trial remains the same child.
@@ -209,6 +193,14 @@ export async function runContinuousParent(input: {
       });
     }
     if (current().state === "STOPPED") {
+      // An idle stop finalizer can settle a stop while a process is still
+      // launching. Only a resume that observed this exact stopped revision may
+      // clear it; an earlier start/resume intent cannot cancel the new stop.
+      if (
+        input.expectedResumeRevision !== initial.revision ||
+        current().revision !== initial.revision
+      )
+        return current();
       const decision = await inspect(true);
       // Explicit resume clears the stop request for an assessed wait. The
       // normal loop immediately restores WAIT_QUOTA or WAIT_REVIEW, without
@@ -250,7 +242,7 @@ export async function runContinuousParent(input: {
     }
     if (current().state === "WAIT_QUOTA") {
       const run = current();
-      if (run.stopRequested) return stopIfRequested() ?? run;
+      if (run.stopRequested) return (await stopIfRequested()) ?? run;
       if (
         run.nextCheckAt !== null &&
         Date.parse(run.nextCheckAt) > state.clock().getTime()
@@ -268,7 +260,7 @@ export async function runContinuousParent(input: {
     if (current().state !== "RUNNING") return current();
 
     for (;;) {
-      const stopped = stopIfRequested();
+      const stopped = await stopIfRequested();
       if (stopped !== null) return stopped;
       const changed = await holdChangedInputs();
       if (changed !== null) return changed;
@@ -454,6 +446,19 @@ export async function runContinuousParent(input: {
       }
     }
   } catch (error) {
+    let failure = error;
+    if (
+      error instanceof ContinuousRunRevisionConflictError &&
+      current().stopRequested
+    ) {
+      try {
+        // A stop intentionally invalidates an in-flight journal CAS. Recheck
+        // all child evidence and claims before deciding it was a clean stop.
+        return (await stopIfRequested()) ?? current();
+      } catch (reconciliationError) {
+        failure = reconciliationError;
+      }
+    }
     const run = current();
     // An operator stop may race a real ledger, Lab, or verification failure.
     // Keep the error visible and require recovery instead of reporting a
@@ -464,12 +469,34 @@ export async function runContinuousParent(input: {
         reason: "runner-error",
         nextCheckAt: null,
       });
-    throw error;
+    throw failure;
   } finally {
+    let released = false;
     try {
       owner.release(handle);
+      released = true;
     } catch {
       // A recovery-required owner remains claimed for explicit reconciliation.
+    }
+    if (released) {
+      try {
+        // A stop command can observe this owner as busy after the runner has
+        // decided to return a wait, but immediately before releasing it. Once
+        // released, one of these two processes must take the owner and drain
+        // the durable stop through the same ledger/claim preflight.
+        const pending = current();
+        if (pending.stopRequested && pending.state === "STOPPING")
+          await settleIdleContinuousStop({
+            parentRunId,
+            journal,
+            ledger: state.ledger,
+            claims,
+            owner,
+            reviewExportReady,
+          });
+      } catch {
+        // The stop intent stays durable for a later explicit reconciliation.
+      }
     }
   }
 }

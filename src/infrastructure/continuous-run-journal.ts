@@ -103,6 +103,14 @@ export type ContinuousRunRecord = {
   readonly children: readonly ContinuousChild[];
 };
 
+/** A stale journal revision may be the expected result of an operator stop. */
+export class ContinuousRunRevisionConflictError extends Error {
+  constructor() {
+    super("Continuous run revision conflict");
+    this.name = "ContinuousRunRevisionConflictError";
+  }
+}
+
 /** Fail closed before opening another campaign state or reading its ledger. */
 export function assertContinuousStateDirectory(
   run: Pick<ContinuousRunRecord, "stateDirectory">,
@@ -253,7 +261,7 @@ export class SqliteContinuousRunJournal {
     const current = this.get(parentRunId);
     if (current === null) throw new Error("Continuous run not found");
     if (current.revision !== expectedRevision)
-      throw new Error("Continuous run revision conflict");
+      throw new ContinuousRunRevisionConflictError();
     return current;
   }
 
@@ -328,8 +336,10 @@ export class SqliteContinuousRunJournal {
           "UPDATE continuous_runs SET stop_requested = 1, state = ?, reason = ?, next_check_at = NULL, revision = revision + 1, updated_at = ? WHERE parent_id = ?",
         )
         .run(
-          current.state === "STOPPED" ? "STOPPED" : "STOPPING",
-          stopReason,
+          current.state === "STOPPED" || current.state === "RECOVERING"
+            ? current.state
+            : "STOPPING",
+          current.state === "RECOVERING" ? current.reason : stopReason,
           this.#clock().toISOString(),
           parentRunId,
         );

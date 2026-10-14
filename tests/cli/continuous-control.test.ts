@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { runContinuousControl } from "../../src/cli/continuous-control.js";
+import { settleIdleContinuousStop } from "../../src/cli/continuous-stop.js";
 import { SqliteContinuousRunJournal } from "../../src/infrastructure/continuous-run-journal.js";
+import { SqliteContinuousRunOwner } from "../../src/infrastructure/continuous-run-owner.js";
+import { SqliteHostResourceClaims } from "../../src/infrastructure/host-resource-claims.js";
 import {
   ledgerEventV1Schema,
   type Ledger,
@@ -16,6 +19,224 @@ import {
 const digest = (letter: string) => `sha256:${letter.repeat(64)}`;
 
 describe("continuous control", () => {
+  it("settles an idle review wait after taking ownership and checking ledger and claims", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wbh-idle-stop-"));
+    const journal = new SqliteContinuousRunJournal(
+      join(directory, "runs.sqlite"),
+    );
+    const owner = new SqliteContinuousRunOwner(
+      join(directory, "owners.sqlite"),
+    );
+    const claims = new SqliteHostResourceClaims(
+      join(directory, "claims.sqlite"),
+      { maxTargets: 1, providers: { codex: 1 } },
+    );
+    const lines: string[] = [];
+    try {
+      const created = journal.create({
+        parentRunId: "idle-parent",
+        stateDirectory: directory,
+        configDigest: digest("a"),
+        policyDigest: digest("b"),
+        inventoryDigest: digest("c"),
+      });
+      journal.transition(created.parentRunId, created.revision, {
+        state: "WAIT_REVIEW",
+        reason: "candidate-exhausted",
+        nextCheckAt: null,
+      });
+      const ledger = { read: () => [] } as unknown as Ledger;
+      await runContinuousControl(
+        ["continuous", "stop", "--run", "idle-parent"],
+        journal,
+        { stdout: (line) => lines.push(line) },
+        {
+          settleStop: (requested) =>
+            settleIdleContinuousStop({
+              parentRunId: requested.parentRunId,
+              journal,
+              owner,
+              claims,
+              ledger,
+              reviewExportReady: async () => false,
+            }),
+        },
+      );
+      expect(JSON.parse(lines.at(-1)!)).toMatchObject({
+        state: "STOPPED",
+        stopRequested: true,
+      });
+      const acquired = owner.tryAcquire("idle-parent");
+      expect(acquired.status).toBe("acquired");
+      if (acquired.status === "acquired") owner.release(acquired.handle);
+    } finally {
+      claims.close();
+      owner.close();
+      journal.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a stop request when idle reconciliation cannot open state", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wbh-idle-stop-fail-"));
+    const journal = new SqliteContinuousRunJournal(
+      join(directory, "runs.sqlite"),
+    );
+    const lines: string[] = [];
+    try {
+      const created = journal.create({
+        parentRunId: "idle-parent-fail",
+        stateDirectory: directory,
+        configDigest: digest("a"),
+        policyDigest: digest("b"),
+        inventoryDigest: digest("c"),
+      });
+      journal.transition(created.parentRunId, created.revision, {
+        state: "WAIT_REVIEW",
+        reason: "inventory-unavailable",
+        nextCheckAt: null,
+      });
+      expect(
+        await runContinuousControl(
+          ["continuous", "stop", "--run", "idle-parent-fail"],
+          journal,
+          { stdout: (line) => lines.push(line) },
+          {
+            settleStop: async () => {
+              throw new Error("state unavailable");
+            },
+          },
+        ),
+      ).toBe(0);
+      expect(JSON.parse(lines.at(-1)!)).toMatchObject({
+        state: "STOPPING",
+        stopRequested: true,
+      });
+    } finally {
+      journal.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves the stop pending while another process owns the parent", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wbh-owned-stop-"));
+    const journal = new SqliteContinuousRunJournal(
+      join(directory, "runs.sqlite"),
+    );
+    const owner = new SqliteContinuousRunOwner(
+      join(directory, "owners.sqlite"),
+    );
+    const claims = new SqliteHostResourceClaims(
+      join(directory, "claims.sqlite"),
+      { maxTargets: 1, providers: { codex: 1 } },
+    );
+    try {
+      const created = journal.create({
+        parentRunId: "owned-parent",
+        stateDirectory: directory,
+        configDigest: digest("a"),
+        policyDigest: digest("b"),
+        inventoryDigest: digest("c"),
+      });
+      journal.transition(created.parentRunId, created.revision, {
+        state: "WAIT_REVIEW",
+        reason: "candidate-exhausted",
+        nextCheckAt: null,
+      });
+      const active = owner.tryAcquire("owned-parent");
+      if (active.status !== "acquired") throw new Error("Owner setup failed");
+      try {
+        const lines: string[] = [];
+        await runContinuousControl(
+          ["continuous", "stop", "--run", "owned-parent"],
+          journal,
+          { stdout: (line) => lines.push(line) },
+          {
+            settleStop: (requested) =>
+              settleIdleContinuousStop({
+                parentRunId: requested.parentRunId,
+                journal,
+                owner,
+                claims,
+                ledger: { read: () => [] } as unknown as Ledger,
+                reviewExportReady: async () => false,
+              }),
+          },
+        );
+        expect(JSON.parse(lines.at(-1)!)).toMatchObject({
+          state: "STOPPING",
+          stopRequested: true,
+        });
+      } finally {
+        owner.release(active.handle);
+      }
+    } finally {
+      claims.close();
+      owner.close();
+      journal.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not claim a clean stop after a prior owner died", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wbh-dead-owner-stop-"));
+    const journal = new SqliteContinuousRunJournal(
+      join(directory, "runs.sqlite"),
+    );
+    const owner = new SqliteContinuousRunOwner(
+      join(directory, "owners.sqlite"),
+      { pidLiveness: (pid) => (pid === 999999 ? "dead" : "alive") },
+    );
+    const claims = new SqliteHostResourceClaims(
+      join(directory, "claims.sqlite"),
+      { maxTargets: 1, providers: { codex: 1 } },
+    );
+    try {
+      const created = journal.create({
+        parentRunId: "dead-owner-parent",
+        stateDirectory: directory,
+        configDigest: digest("a"),
+        policyDigest: digest("b"),
+        inventoryDigest: digest("c"),
+      });
+      journal.transition(created.parentRunId, created.revision, {
+        state: "WAIT_QUOTA",
+        reason: "quota",
+        nextCheckAt: "2026-10-14T01:00:00.000Z",
+      });
+      expect(owner.tryAcquire("dead-owner-parent", 999999).status).toBe(
+        "acquired",
+      );
+      const lines: string[] = [];
+      await runContinuousControl(
+        ["continuous", "stop", "--run", "dead-owner-parent"],
+        journal,
+        { stdout: (line) => lines.push(line) },
+        {
+          settleStop: (requested) =>
+            settleIdleContinuousStop({
+              parentRunId: requested.parentRunId,
+              journal,
+              owner,
+              claims,
+              ledger: { read: () => [] } as unknown as Ledger,
+              reviewExportReady: async () => false,
+            }),
+        },
+      );
+      expect(JSON.parse(lines.at(-1)!)).toMatchObject({
+        state: "STOPPING",
+        stopRequested: true,
+      });
+      expect(owner.tryAcquire("dead-owner-parent").status).toBe("busy");
+    } finally {
+      claims.close();
+      owner.close();
+      journal.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("shows durable progress and lets an operator stop new dispatch", async () => {
     const directory = await mkdtemp(join(tmpdir(), "wbh-continuous-control-"));
     const journal = new SqliteContinuousRunJournal(
