@@ -23,7 +23,7 @@ AI セッションの逐次判断なしで、未探索候補の複数 batch を�
 - 型検査、書式、`pnpm check`（102ファイル成功・1ファイルskip、814テスト成功・1件skip）、`pnpm build`、`git diff --check` は #228 上の専用ブランチで通過した。
 - 実 provider を使う Step 1 の 3 Trial 測定は未実施。候補数、completed、Finding、Lead、wall 中央値、usage、失敗理由について本番値はまだない。したがってこの差分は探索 PR の merge 条件を満たさない。
 - quota の時刻到来だけでは回復を証明できない。現在は `WAIT_QUOTA` の後、読み取り専用 readiness がなければ `WAIT_REVIEW(quota-readiness-unverified)` に止める。別 provider への継続、回復後の無人再開、総 token 利用枠の硬い停止は未実装。
-- 親 worker を再起動する host supervisor は未実装。status の owner 生存観測は異常停止の発見に使えるが、`continuous resume` は現時点で明示操作が必要である。
+- `continuous supervise` は、host の定期起動から呼べる死亡親 worker の起床経路を追加した。読み取り専用で親状態・owner・資源 claim を選別してから、既存 runner の owner 排他・台帳照合へ渡す。起床前後の stop / review race と重複起床は保留し、開始済み Trial は再投入しない。外部 host scheduler の設置と実機での長時間試験は未実施。
 - 硬い総 token 枠は、現行の事後 usage と broker の byte / request 上限からは保証できない。[実装可能性と必要契約](2026-10-14-issue-229-hard-usage-cap-feasibility.md)を決定待ちとして分離した。
 - readiness probe だけを足しても再開は完成しない。現行 child assessment は既存の provider-limited receipt を毎回 `wait-quota` と判定する。回復確認を receipt sequence / provider / account に結び付けて永続化し、消費済み `incomplete` Trial と未開始 target を別々に扱う必要がある。現行 receipt には provider key がなく、broker は rate-limit 読取を転送しない。認証 token の期限切れも quota と区別する必要がある。
 - Codex app-server の `account/rateLimits/read` を読み取り専用で実測した。`ordinaryUsageAllowed` は account 全体の通常利用可否で、要求 model / effort の開始可否や Opus の枠を証明しない。実運転への接続には broker が使う credential と account ID の一致、SPEC の broker 経由外向き通信境界との整合が必要。reset 時刻や残率から回復を推定しない。
@@ -33,4 +33,4 @@ AI セッションの逐次判断なしで、未探索候補の複数 batch を�
 
 ## 運転判定
 
-現時点で Harness 単体の「停止まで無人運転」は未達。ローカルの複数 batch 経路と安全な停止・再開の主要条件は検証済みだが、quota 復帰、外側の起床、総利用枠、実 Trial 測定が残る。Codex heartbeat は状態変化の通知には使えるが、Harness の判定器と再開規則の代替にはしない。
+現時点で Harness 単体の「停止まで無人運転」は未達。ローカルの複数 batch 経路と安全な停止・再開の主要条件は検証済みだが、host scheduler の設置・実機受入、quota 復帰、総利用枠、実 Trial 測定が残る。Codex heartbeat は状態変化の通知には使えるが、Harness の判定器と再開規則の代替にはしない。

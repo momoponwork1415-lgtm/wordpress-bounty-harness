@@ -40,6 +40,8 @@ export async function runContinuousParent(input: {
   readonly findingRecordReady?: ReviewExportCheck;
   /** The explicit resume command's pre-launch journal revision. */
   readonly expectedResumeRevision?: number;
+  /** A scheduler may wake only the RUNNING revision it observed. */
+  readonly supervisorExpectedRevision?: number;
 }): Promise<ContinuousRunRecord> {
   const { parentRunId, journal, owner, claims, state, profile } = input;
   if (
@@ -56,6 +58,16 @@ export async function runContinuousParent(input: {
     return run;
   };
   const initial = current();
+  const supervisorStillEligible = () => {
+    const run = current();
+    return (
+      input.supervisorExpectedRevision === undefined ||
+      (run.revision === input.supervisorExpectedRevision &&
+        run.state === "RUNNING" &&
+        !run.stopRequested)
+    );
+  };
+  if (!supervisorStillEligible()) return current();
   if (
     initial.stateDirectory.length === 0 ||
     initial.stateDirectory !== (await realpath(state.stateDirectory))
@@ -79,6 +91,11 @@ export async function runContinuousParent(input: {
     }
   };
   const acquisition = owner.tryAcquire(parentRunId);
+  if (
+    acquisition.status === "busy" &&
+    input.supervisorExpectedRevision !== undefined
+  )
+    return current();
   if (acquisition.status === "busy")
     throw new Error(`Continuous parent has ${acquisition.reason}`);
   const handle = acquisition.handle;
@@ -147,6 +164,9 @@ export async function runContinuousParent(input: {
     });
   };
   try {
+    // The owner claim is the concurrency gate, but a stop/review transition
+    // can race its acquisition. A supervised wake must never reopen that hold.
+    if (!supervisorStillEligible()) return current();
     if (acquisition.recoveryRequired) {
       const decision = await inspect(
         initial.stopRequested,

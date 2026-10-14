@@ -33,6 +33,7 @@ import { continuousReviewExportCheck } from "./continuous-review-readiness.js";
 import { runContinuousParent } from "./continuous-runner.js";
 import { settleIdleContinuousStop } from "./continuous-stop.js";
 import { assertInitialContinuousInventory } from "./continuous-preflight.js";
+import { assessContinuousSupervisorWake } from "./continuous-supervisor.js";
 
 const io: CliIo = {
   stdout: (line) => process.stdout.write(`${line}\n`),
@@ -286,7 +287,7 @@ async function main(argv: readonly string[]): Promise<number> {
         args;
       if (
         group !== "continuous" ||
-        (action !== "start" && action !== "resume") ||
+        (action !== "start" && action !== "resume" && action !== "supervise") ||
         runFlag !== "--run" ||
         parentRunId === undefined ||
         configFlag !== "--config" ||
@@ -294,7 +295,7 @@ async function main(argv: readonly string[]): Promise<number> {
         args.length !== 6
       )
         throw new Error(
-          "Use continuous start|resume --run <parent id> --config <campaign path>",
+          "Use continuous start|resume|supervise --run <parent id> --config <campaign path>",
         );
       const selectedConfigPath = resolve(configPath);
       const configDigest = canonicalDigest(
@@ -309,6 +310,37 @@ async function main(argv: readonly string[]): Promise<number> {
           "continuous-runs.sqlite",
         ),
       );
+      let supervisorExpectedRevision: number | undefined;
+      if (action === "supervise") {
+        const parent = journal.get(parentRunId);
+        if (parent === null) throw new Error("Continuous run not found");
+        const wake = assessContinuousSupervisorWake({
+          run: parent,
+          owner: observeContinuousRunOwner(
+            join(
+              homedir(),
+              ".local",
+              "state",
+              "wordpress-bounty-harness",
+              "continuous-owners.sqlite",
+            ),
+            parentRunId,
+          ),
+          claims: resourceClaims,
+        });
+        if (wake.action === "hold") {
+          io.stdout(
+            JSON.stringify({
+              parentRunId,
+              action: "hold",
+              reason: wake.reason,
+            }),
+          );
+          journal.close();
+          return 0;
+        }
+        supervisorExpectedRevision = wake.expectedRevision;
+      }
       const owner = new SqliteContinuousRunOwner(
         join(
           homedir(),
@@ -323,7 +355,7 @@ async function main(argv: readonly string[]): Promise<number> {
           await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
         const physicalStateDirectory = await realpath(stateDirectory);
         let expectedResumeRevision: number | undefined;
-        if (action === "resume") {
+        if (action !== "start") {
           const parent = journal.get(parentRunId);
           if (parent === null) throw new Error("Continuous run not found");
           expectedResumeRevision = parent.revision;
@@ -384,6 +416,9 @@ async function main(argv: readonly string[]): Promise<number> {
           ...(expectedResumeRevision === undefined
             ? {}
             : { expectedResumeRevision }),
+          ...(supervisorExpectedRevision === undefined
+            ? {}
+            : { supervisorExpectedRevision }),
           findingRecordReady: (request) =>
             wordPressReviewFindingReady(state, request),
         });
