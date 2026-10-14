@@ -271,8 +271,8 @@ flowchart LR
 
 - 決定（P7）: skill 3 本の参照フィールド名を export に合わせる（`evidence.*` → `privateEvidence.*`、`stateDiff.settings` → `labStateDiff.summary.settings`、約 10 行）。skill は提案だけを出し、`decide` は所有者が自分で打つ（不変条件 6）。`wbh-dedupe` の手順に「提出直前に `history status` を打ち、stale なら旧環境で更新」を 1 行足す。OPERATIONS §3 の冒頭に skill の起動順と所有者が打つコマンドの表（約 20 行）と、1 件あたりの所要分の見積り（reverify 30、手再現 40、skill 30）、batch の上限（3 件。超える分は defer）。`.claude/skills/` は adr-guard の対象なので、変更後の全文と日本語訳と出典対照表を貼り、委任 comment 付きで AI がラベルを付ける。
 - 決定（P8）: `review export` の `review` 節に nullable で互換追加する: `humanReproduction: {result, minutes, recordedAt} | null`、`latestReverification: {verificationId, status, basis, recordedAt} | null`（`derivedFromFindingId` が同じ `finding-recorded` と `verification-finished` の join）、`latestDraft: {digest, revision, preparedBy, programme} | null`、`decision: {decision, reasonCode, duplicate, decidedAt} | null`、`scopeAssessments: [{assessmentId, programme, verdict}]`、`labSetup: {digest, ordinaryActivationDefaults}`。review-decision / draft / scope の artifact は store から読む。literal は `review-export/v1` のまま。src 約 110 ＋ test 約 70。
-- 手動再現: SPEC §8 / §12、ADR 0016 / 0028 は「人間が自分の手で再現してから査読」を 2026-10-11 の所有者決定として記録しており、ADR 0031 もこれを反転していない。本設計では変えない。`review reproduced --result match` は必須のまま、`wbh-report` の前提も変えない。所有者が第 14 節 6 に yes と答えたときだけ P12 を出す。
-- `no-judge` の提出経路: 現行の `review reproduced` / `scope` / `draft` は `incomplete` の Finding を拒む（`src/cli/index.ts:920-926, 982-989, 995-1012`）。判定器の無い分類（`content-deletion`、`rfi`）は人間が手で再現しても提出に辿れない。所有者が第 14 節 7 に yes なら、P12 で「`incomplete(no-judge)` かつ人間再現が `match` の Finding を scope / draft が受理し、人間再現を evidence basis にする」口を足す（約 60 行、SPEC §8 の 1 文、ADR 0032 に 1 行）。no なら、初提出は判定器のある分類に限ると第 2 節に書く。
+- 手動再現: SPEC §8 / §12、ADR 0016 / 0028 は「人間が自分の手で再現してから査読」を 2026-10-11 の所有者決定として記録していたが、所有者は 2026-10-14 に「判定器が確認し、最新版の reverify が緑の Finding は証拠を読むだけでよい。`no-judge` は手で再現する」に変えた（第 14 節 6）。P12 で SPEC §8 / §12、ADR 0016 / 0032、OPERATIONS §3、`wbh-report` の前提を書き換える。
+- `no-judge` の提出経路: 現行の `review reproduced` / `scope` / `draft` は `incomplete` の Finding を拒む（`src/cli/index.ts:920-926, 982-989, 995-1012`）。判定器の無い分類（`content-deletion`、`rfi`）は人間が手で再現しても提出に辿れない。所有者の決定（第 14 節 7）により、P12 で「`incomplete(no-judge)` かつ人間再現が `match` の Finding を scope / draft が受理し、人間再現を evidence basis にする」口を足す（約 60 行、SPEC §8 の 1 文、ADR 0032 に 1 行）。
 - 重複照合: Harness 側はローカル Wordfence mirror のみ。#231（日次更新）は Step 1 では作らない。
 - `incomplete` だけの batch でも、所有者が decide まで打てば Step 1 の「1 回の batch」とみなす。
 
@@ -302,7 +302,7 @@ Step 1 合格後に消す（P13、3 本、削除行は 500 行の目安に数え
 | 週の問い 1 つ・PR 1 本 | 10-14〜11-04 の 3 週だけ、問いは 1 つのまま PR を複数本（各 500 行以内、削除行は数えない）出してよい、と DEVELOPMENT に 1 行書く | DEVELOPMENT §3 / §5 |
 | 同じ slug の追加 Trial は自動 +2 | 1 Trial ごとに所有者が事前承認。形式は 2 回目を求めるときに決める | ADR 0032 Q6 |
 
-所有者の答え待ち（本設計では変えない。第 14 節）: 再試行回数の正本（実装か ADR 0032 か）、手動再現の省略、`no-judge` の提出経路、Reflected XSS の見直し時期。Reflected XSS の引き金を変えるなら「runner が異なる slug の初回 Trial を 20 本以上回した後の連続 4 週で、Programme Boundary 内の提出候補（accept）が週 1 件未満」とし、出口となる Patchstack 第 2 送信先の PARKING 行と同時に判断する。
+所有者の決定（第 14 節）: 再試行回数は実装どおり（ADR 0032 の行を直す）、手動再現の省略は採用、`no-judge` の提出経路は作る、Reflected XSS の見直し時期は「半年後」のまま。
 
 緩めない: 攻撃者位置、`runtime-confirmed` の出し手、gVisor 必須、Harness は送信しない、台帳は digest のみ、install 下限の無人変更なし、週の問い 1 つ。
 
@@ -340,7 +340,7 @@ Step 1 合格後に消す（P13、3 本、削除行は 500 行の目安に数え
 - SPEC §4 discovery 行「自動 retry しない」→「provider 上限は campaign を止め、runner が backoff 後に同じ campaign ID で再開する。対象単位の失敗は `target-skipped` で次の対象へ進む」。
 - SPEC §6 停止規則: 同じ内容に書き換え、「Root が source を 1 件も読まず、子を起動せず、broker 転送 1 以下で終わった run は Trial に数えず、その対象は次の選定で戻る」を足す。「同一対象の自動追加 Trial はしない」は残す。同時実行「最初は 1 つずつ」はそのまま。
 - ADR 0029: 同じ 1 文を「帰結」に足す。ADR 0022: 「Verifier の `provider` 上限は同じ Lab Setup で 1 回自動再試行」を 1 行足す。
-- ADR 0032: Q6 行を「runBudget と #189 の自動 +2 Trial を削除。同じ slug の 2 回目以降は 1 Trial ごとに所有者が事前承認する。承認の形式は所有者が 2 回目を求めるときに決める」に。「ADR 0022 への修正」の行は第 14 節 5 の答えに従う。status を accepted にする。
+- ADR 0032: Q6 行を「runBudget と #189 の自動 +2 Trial を削除。同じ slug の 2 回目以降は 1 Trial ごとに所有者が事前承認する。承認の形式は所有者が 2 回目を求めるときに決める」に。「ADR 0022 への修正」の行を実装どおり（recipe 2、observation 2、provision 1、precondition は scenario 変更時）に直す（第 14 節 5）。Q2 は触らない。status を accepted にする。
 - DEVELOPMENT §2: 期日「2026-10-24」→「runner 起動＋8 日」。「Step 1 完了まで既存 ADR を変えない」に「ADR 0016 / 0020 / 0022 / 0026 / 0029 / 0032 の該当行は本設計のために所有者が解除した」と 1 行。§3 / §5: 10-14〜11-04 の 3 週は問い 1 つで PR 複数本（各 500 行以内、削除行は数えない）を認める 1 行。§5: 3 Trial の二段の規則、`owner-approved` の path 列挙、agent に渡る文章の全文＋日本語訳＋出典対照表。§7: `eval score --keys` の行を消す。
 - OPERATIONS §1: 保守として人手に数えないもの（第 8.2 節）。§2: 「上限での停止」を runner の再開に書き換え（cron の quota tick と in-process backoff の区別を 1 行）。「複数 batch の継続運転」節を P6 の仕様に差し替え。「同じ plugin の追加探索 Trial の承認」節を「所有者が 2 回目を求めたときに設計する」1 行に。単一 host・単一運用者・本番 state 1 つ・硬い総 token 枠は置かない・未 merge branch の Trial は本番の分母に混ぜない、の前提を書く。週次 smoke を「既知 Finding に `review reverify` を 1 回（campaign ID は `smoke-<YYYYMMDD>`）」に。systemd unit の雛形（第 7.1 節 8）。
 - PARKING: Opus の再開条件を D1 の数値に。#227 / #228 / #229 / #215 / #126 / #230 の扱いと再開条件。`eval score / keys / rubric / compare`、replay Verifier、`assignment`、examples、`review open` の凍結。
@@ -378,7 +378,6 @@ campaign-stopped        reason=provider-limit                      count=2
 - Verifier の `verification-finished` が `incomplete(provider)` かつ `providerLimit` ありのときも `requestStop("provider-limit")` で campaign を止める。再開時の検証ループで `reason = provider` は `sameLabSetup && attemptsForReason < 2` で 1 回自動再試行（`shouldAutomaticallyRetryVerification` に 1 分岐）。
 - `target-skipped.reason` の enum（P2 (a) で拡張済み）に `provider-refused`、`run-failed` を足す。
 - pipeline の対象ループに stop 検査点を 1 箇所足す（+15 行。P6 の drain に使う）。
-- 第 14 節 5 で (b) を選んだときは、ここで `pipeline.ts:105-109` の自動再検証を observation 1 / provision 0 に直す。
 - 受入試験（故障注入、TEST-STRATEGY）: (1) 拒否 1 対象 → skip して次の対象の Trial が始まる。(2) wall 到達 → skip。(3) quota → campaign 停止、`stopped = provider-limit`、未消費の対象が残る。(4) 再実行で未消費から再開し二重登録しない。(5) stop 検査点で対象境界に止まる。(6) Verifier の quota → campaign 停止、再開時に 1 回だけ再検証。
 - 測る数字: `ledger stops` の `provider-refused` / `run-failed` の件数。
 
@@ -442,10 +441,10 @@ harness continuous status --state <dir>
 - 測る数字: precondition 理由の件数の前後比（`scripts/report-wordpress-preconditions.mjs`）、判定器が結論を出した件数、異なる slug の初回 3 Trial と再発見 case の 3 Trial（Trial 数、completed、Finding・Lead、wall 中央値、失敗内訳）。
 - 設計時の確認: `is_admin()` 依存の plugin 1 件で `admin_init` が既定値を登録することを Lab で 1 回確かめてから書く。
 
-### P12 手動再現の省略と `no-judge` の口（所有者が第 14 節 6 / 7 に yes のとき）
+### P12 手動再現の省略と `no-judge` の口（所有者が第 14 節 6 / 7 に yes。実施する）
 
-- 6 が yes: 新しい記録は要らない。Harness の再実行の事実は既存の `verification-finished`（最新版 `reverify`、`runtime-confirmed`）に残っており、P8 の `latestReverification` が export に出す。SPEC §8 の 1 文と §12 の 2 文、ADR 0016 の帰結の 1 文、ADR 0032 に 1 行、OPERATIONS §3 の表の 1 行、`wbh-report` の前提と PoC の出典（「人間の手順、または reverify の Harness 捕捉 HTTP と再現パッケージ」）の 2 行（約 30 行、`owner-approved` は所有者本人）。
-- 7 が yes: `review reproduced` / `scope` / `draft` が `incomplete(no-judge)` かつ人間再現 `match` の Finding を受理し、人間再現を evidence basis にする（`src/cli/index.ts` と `src/review/index.ts`、約 60 行 ＋ test）。SPEC §8 の 1 文、ADR 0032 に 1 行。
+- 手動再現の省略: 新しい記録は要らない。Harness の再実行の事実は既存の `verification-finished`（最新版 `reverify`、`runtime-confirmed`）に残っており、P8 の `latestReverification` が export に出す。SPEC §8 の 1 文と §12 の 2 文、ADR 0016 の帰結の 1 文、ADR 0032 に 1 行、OPERATIONS §3 の表の 1 行、`wbh-report` の前提と PoC の出典（「人間の手順、または reverify の Harness 捕捉 HTTP と再現パッケージ」）の 2 行（約 30 行、`owner-approved` は所有者本人）。
+- `no-judge` の口: `review reproduced` / `scope` / `draft` が `incomplete(no-judge)` かつ人間再現 `match` の Finding を受理し、人間再現を evidence basis にする（`src/cli/index.ts` と `src/review/index.ts`、約 60 行 ＋ test）。SPEC §8 の 1 文、ADR 0032 に 1 行。
 - `review reproduced` は `no-judge` の種別で使い続ける。
 
 ### P13 整理（3 本、Step 1 合格後）
@@ -553,26 +552,35 @@ Step 1 の「人手介入 0」の判定で、次は介入に数えない: 1 日 
 - 第 2 の journal、owner lease、host 共通 claim、crash 復旧の自動化（実機で 2 回止まるまで）。新しい台帳 event 型。
 - 硬い総 token 枠（契約上保証できない。`2026-10-14-issue-229-hard-usage-cap-feasibility.md`）。
 - 無人運転の週に arm 比較を回す、新しい判定器、Patchstack 第 2 送信先、plugin 固有 adapter、`low-value-impact-gate`、install 下限の無人変更。
-- #231 の日次更新、L2 の承認経路、Reflected XSS の見直し（所有者の答えまで）。
+- #231 の日次更新、L2 の承認経路、Reflected XSS の見直し（半年後まで）。
 - Codex の quota を開発作業に使うこと。
 - 文書の大整理（Step 2）。
 
-## 14. 所有者に残る判断
+## 14. 所有者の決定（2026-10-14、10 個すべて回答済み）
 
-この文書で決め切ったので、残るのは次の 10 個だけ。すべて yes / no（5 だけ 2 択）で答えられる。
+所有者は 2026-10-14 に次のとおり答えた。この文書はこの時点で有効になり、以後は変えた行だけを更新する。
 
-1. この文書を「決定」として採用する（期日を「起動＋8 日」に置き換えることを含む）。
-2. 「Root が source を 1 件も読まず、子を起動せず、broker 転送 1 以下で終わった run は Trial に数えない」を SPEC §6 と ADR 0029 に足す（その slug は承認なしに再選定できる）。
-3. legacy JSON を 10-16 までに作る（旧 DB と既知の旧 `--state` 台帳から。AI に実行を許可するか、所有者が自分で行う）。無ければ runner は起動しない。起動前の交差件数がどの下限でも 35 件未満なら、`ambiguous` を保留し続けるか（#215 どおり）、未探索として扱うかを所有者が決める。
-4. P0 / P9 / P10 / P12 の文言変更に所有者本人が `owner-approved` を付け、DEVELOPMENT §2 の ADR 凍結を ADR 0016 / 0020 / 0022 / 0026 / 0029 / 0032 の該当行に限って解除する。prompt 目的文・`selection.json`・skill は委任済みの AI がラベルを付ける。
-5. 再試行回数の正本: (a) 実装どおり（recipe 2、observation 2、provision 1、precondition は scenario 変更時）にして ADR 0032 の行を直す、または (b) ADR 0032 どおり（observation 1、provision 0）に実装を直す。
-6. 2026-10-11 の「手動再現は全件必須」を「判定器が確認し最新版の reverify が緑の Finding は証拠を読むだけでよい（`no-judge` は手で）」に変えるか。yes なら P12。
-7. `incomplete(no-judge)` の Finding を所有者が手で再現したとき、`review reproduced --result match` を受理し、人間再現を scope / draft の evidence basis として認めるか。yes なら P12。no なら初提出は判定器のある分類に限る。
-8. #220 の受入条件 2「同じ構成で未実施対象を自動消費しない」を「拒否は記録して次対象へ進む」に改定する comment を Issue に残す。拒否が続いた週の Step 1 判定を「拒否を除く対象で回り切った」と読み替える。
-9. #201 の A/B 事前登録（再発見 case 5 × 2 arm）を Step 1 の間は中止する。
-10. Reflected XSS の見直し時期（ADR 0032 Q2「半年後」）を D8 の引き金に変えるか。変えるなら Patchstack 第 2 送信先の PARKING 行と同時に判断する。
+| # | 問い | 答え | 設計への反映 |
+| --- | --- | --- | --- |
+| 1 | この文書を決定として採用し、期日を「起動＋8 日」に置き換える | **yes** | 全体 |
+| 2 | 「source を読まず、子を起動せず、broker 転送 1 以下の run は Trial に数えない」を SPEC §6 と ADR 0029 に足す | **yes** | D2 / D4、P0 |
+| 3 | legacy JSON を 10-16 までに作る。誰が作るか | **yes、AI が作る**（所有者は旧環境の path を渡し、件数を確認する） | D2、P5、7.1 の 5 |
+| 4 | P0 / P9 / P10 / P12 に所有者本人が `owner-approved` を付け、ADR 凍結を該当行に限って解除する | **yes** | P0 |
+| 5 | 再試行回数の正本 | **(a) 実装どおり**。ADR 0032 の行を直す。code は触らない | P0（P4 の observation / provision の変更は不要） |
+| 6 | 手動再現の省略（判定器確認済みは reverify の緑で代える、`no-judge` は手で） | **yes** | D6、P12 |
+| 7 | `no-judge` の Finding を人間再現で提出に進める口を作る | **yes** | D6、P12（約 60 行） |
+| 8 | #220 の受入条件 2 を改定する comment を残し、拒否が続いた週は「拒否を除く対象で回り切った」と読む | **yes** | D1、第 10 節 |
+| 9 | #201 の A/B 事前登録を Step 1 の間は中止 | **yes** | D7、PARKING |
+| 10 | Reflected XSS の見直し時期を変えるか | **no（半年後のまま）** | ADR 0032 Q2 は触らない。D8 の「答え待ち」行を閉じる |
 
-それ以外は AI が進め、週の問いの数字で報告する。
+決定を受けて確定した点: P12 は実施する（文言 約 30 行 ＋ `no-judge` の口 約 60 行、`owner-approved` は所有者本人）。ADR 0032 の再試行行は実装（recipe 2、observation 2、provision 1、precondition は scenario 変更時）に合わせて直し、status を accepted にする。legacy JSON の作成は AI の作業として P5 に含める（旧研究 DB と旧 `--state` ディレクトリの絶対 path を所有者が渡す）。
+
+### 14.1 次の作業（この順）
+
+1. 親 Issue と子 Issue 8 本を作り、#227 / #228 / #229 / #215 / #126 / #230 / #224 を PARKING の理由付きで閉じ、#107 / #118 / #185 / #186 / #188 を完了として閉じる。
+2. P0（正本の文言）の PR を出す。所有者が読んで `owner-approved` を付ける（1 時間）。
+3. P1〜P9 を依存順に出す。所有者が旧環境の path を渡し、AI が legacy JSON を作る。
+4. P6 merge の翌営業日に起動。起動＋8 日に第 10 節の判定。
 
 ## 15. 機能の棚卸しと処置（file 単位）
 
