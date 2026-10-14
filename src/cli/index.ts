@@ -131,6 +131,8 @@ export interface CliInventoryReport {
   readonly observedCandidates: number;
   /** A verified complete listing chain, not proof that no untried slug remains. */
   readonly sourceCoverageVerified: boolean;
+  /** Source pool is sealed to the listing set used by the cursor chain. */
+  readonly sourcePoolSealed: boolean;
   readonly ineligibleByReason: Readonly<Record<string, number>>;
   readonly source: {
     readonly status: "available" | "stale" | "unavailable";
@@ -157,6 +159,11 @@ export type CliContinuousBatchPreparation =
       readonly reason: "insufficient-eligible-candidates";
       readonly inspected: number;
       readonly frozen: number;
+    }
+  | {
+      readonly status: "hold";
+      readonly reason: "candidate-source-pool-expired";
+      readonly selectionPrefixLength: number;
     };
 
 /** A profile composition: everything target-specific the commands need. */
@@ -194,6 +201,11 @@ export interface CliProfile {
     state: CliState,
     input: { readonly configPath: string; readonly afterDigest?: string },
   ): Promise<CliInventoryReport>;
+  /** Re-read a sealed inventory without fetching or advancing its cursor. */
+  inspectInventory?(
+    state: CliState,
+    input: { readonly configPath: string; readonly digest: string },
+  ): Promise<CliInventoryReport>;
   /** Digest of the automatic selection policy used by a continuous parent. */
   continuousPolicyDigest?(
     state: CliState,
@@ -224,6 +236,8 @@ export interface CliProfile {
       readonly snapshotDigests?: readonly string[];
       /** Stop admission of new targets while draining an active Trial. */
       readonly stopSignal?: AbortSignal;
+      /** Refresh the host-common stop request at Trial admission. */
+      readonly checkStop?: () => void;
     },
   ): Promise<CampaignSummary>;
   /** Docker resources a crashed run left behind; removed only when asked. */
@@ -424,9 +438,9 @@ async function readKeyDigestManifest(path: string) {
   }
 }
 
-async function openState(
+export async function openState(
   directory: string,
-  environment: CliEnvironment,
+  environment: Pick<CliEnvironment, "clock" | "newId"> = {},
 ): Promise<CliState> {
   const root = resolve(directory);
   await mkdir(root, { recursive: true, mode: 0o700 });

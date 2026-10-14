@@ -175,6 +175,7 @@ async function setup() {
   }[] = [];
   let record = journal.create({
     parentRunId,
+    stateDirectory: directory,
     configDigest: digest("f"),
     policyDigest,
     inventoryDigest: digest("1"),
@@ -210,6 +211,9 @@ async function setup() {
       events: readonly LedgerEventInput[],
       reviewExportReady?: () => boolean,
       allowStoppedResume = false,
+      allowRecoveringResume = false,
+      allowReviewResume = false,
+      auditPriorSettled = false,
     ) {
       return reconcileContinuousRestart({
         parentRunId,
@@ -224,6 +228,9 @@ async function setup() {
         ownerHandle,
         ...(reviewExportReady === undefined ? {} : { reviewExportReady }),
         ...(allowStoppedResume ? { allowStoppedResume } : {}),
+        ...(allowRecoveringResume ? { allowRecoveringResume } : {}),
+        ...(allowReviewResume ? { allowReviewResume } : {}),
+        ...(auditPriorSettled ? { auditPriorSettled } : {}),
       });
     },
   };
@@ -239,6 +246,108 @@ const completed = [
 ];
 
 describe("continuous restart reconciliation", () => {
+  it("audits settled predecessor evidence before advancing a later child", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      state.bind();
+      state.settle(8);
+      const next = state.journal.get(parentRunId)!;
+      state.journal.reserveChild(parentRunId, next.revision);
+      const past = [...completed, finding(), incompleteVerification()];
+      expect(
+        await state.inspect(past, () => false, false, false, false, true),
+      ).toMatchObject({
+        action: "hold",
+        reason: "settled-child-incomplete",
+        campaignId,
+      });
+      expect(
+        await state.inspect(past, () => true, false, false, false, true),
+      ).toMatchObject({
+        action: "resume-child",
+        campaignId: continuousChildCampaignId(parentRunId, 1),
+      });
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("rechecks the assessed child before reopening an operational review hold", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      state.bind();
+      state.journal.transition(parentRunId, state.record.revision, {
+        state: "WAIT_REVIEW",
+        reason: "config-or-policy-changed",
+        nextCheckAt: null,
+      });
+      const failed = [
+        batchBound(),
+        selected(),
+        frozen(),
+        started(),
+        finished({ outcome: "provider-limited", providerLimit: "quota" }),
+      ];
+      expect(
+        await state.inspect(failed, undefined, false, false, true),
+      ).toMatchObject({ action: "hold", reason: "quota" });
+      expect(
+        await state.inspect([batchBound(), selected(), frozen()]),
+      ).toMatchObject({
+        action: "hold",
+        reason: "parent-not-running",
+      });
+      expect(
+        await state.inspect(
+          [batchBound(), selected(), frozen()],
+          undefined,
+          false,
+          false,
+          true,
+        ),
+      ).toMatchObject({ action: "resume-child", campaignId });
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("allows an explicit recovery recheck only after the claim clears", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      state.bind();
+      state.setClaims([
+        { campaignId, snapshotDigest: snapshot, status: "recovery-needed" },
+      ]);
+      state.journal.transition(parentRunId, state.record.revision, {
+        state: "RECOVERING",
+        reason: "resource-recovery-needed",
+        nextCheckAt: null,
+      });
+      expect(
+        await state.inspect(completed, undefined, false, true),
+      ).toMatchObject({
+        action: "hold",
+        reason: "resource-recovery-needed",
+      });
+      state.setClaims([]);
+      expect(await state.inspect(completed)).toMatchObject({
+        action: "hold",
+        reason: "parent-not-running",
+      });
+      expect(
+        await state.inspect(completed, undefined, false, true),
+      ).toMatchObject({
+        action: "settle-child",
+        ordinal: 0,
+      });
+    } finally {
+      state.journal.close();
+    }
+  });
+
   it("requires explicit stopped-parent inspection before resuming its reserved child", async () => {
     const state = await setup();
     try {

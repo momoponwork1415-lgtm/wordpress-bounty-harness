@@ -1,5 +1,5 @@
 import { chmodSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { z } from "zod";
@@ -22,6 +22,10 @@ export type ContinuousRunState = z.infer<typeof continuousRunStateSchema>;
 
 const creationSchema = z.strictObject({
   parentRunId: id,
+  stateDirectory: z
+    .string()
+    .min(1)
+    .refine(isAbsolute, "State directory must be absolute"),
   configDigest: digest,
   policyDigest: digest,
   inventoryDigest: digest,
@@ -41,6 +45,7 @@ const bindingSchema = z.strictObject({
 
 const runRowSchema = z.object({
   parent_id: id,
+  state_directory: z.string(),
   config_digest: digest,
   policy_digest: digest,
   initial_inventory_digest: digest,
@@ -81,6 +86,8 @@ export type ContinuousChild = {
 
 export type ContinuousRunRecord = {
   readonly parentRunId: string;
+  /** Canonical physical directory; an empty value means a pre-pin legacy row. */
+  readonly stateDirectory: string;
   readonly configDigest: string;
   readonly policyDigest: string;
   readonly initialInventoryDigest: string;
@@ -95,6 +102,17 @@ export type ContinuousRunRecord = {
   readonly updatedAt: string;
   readonly children: readonly ContinuousChild[];
 };
+
+/** Fail closed before opening another campaign state or reading its ledger. */
+export function assertContinuousStateDirectory(
+  run: Pick<ContinuousRunRecord, "stateDirectory">,
+  selectedDirectory: string,
+): void {
+  if (run.stateDirectory.length === 0)
+    throw new Error("Continuous parent predates the state directory pin");
+  if (run.stateDirectory !== selectedDirectory)
+    throw new Error("Continuous parent belongs to a different state directory");
+}
 
 /** A stable child identity can be recovered after a crash before any Trial starts. */
 export function continuousChildCampaignId(
@@ -121,6 +139,7 @@ export class SqliteContinuousRunJournal {
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS continuous_runs (
         parent_id TEXT PRIMARY KEY,
+        state_directory TEXT NOT NULL,
         config_digest TEXT NOT NULL,
         policy_digest TEXT NOT NULL,
         initial_inventory_digest TEXT NOT NULL,
@@ -147,6 +166,16 @@ export class SqliteContinuousRunJournal {
         PRIMARY KEY (parent_id, ordinal)
       );
     `);
+    // Local development databases may predate the state identity column.
+    // They remain readable, but an unpinned parent cannot be resumed or read
+    // against an arbitrary campaign state by the CLI.
+    const columns = this.#db
+      .prepare("PRAGMA table_info(continuous_runs)")
+      .all();
+    if (!columns.some((column) => column.name === "state_directory"))
+      this.#db.exec(
+        "ALTER TABLE continuous_runs ADD COLUMN state_directory TEXT NOT NULL DEFAULT ''",
+      );
   }
 
   close(): void {
@@ -203,6 +232,7 @@ export class SqliteContinuousRunJournal {
       });
     return {
       parentRunId: row.parent_id,
+      stateDirectory: row.state_directory,
       configDigest: row.config_digest,
       policyDigest: row.policy_digest,
       initialInventoryDigest: row.initial_inventory_digest,
@@ -233,10 +263,11 @@ export class SqliteContinuousRunJournal {
       const now = this.#clock().toISOString();
       this.#db
         .prepare(
-          "INSERT INTO continuous_runs (parent_id, config_digest, policy_digest, initial_inventory_digest, inventory_digest, state, reason, next_check_at, stop_requested, last_ledger_sequence, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'RUNNING', NULL, NULL, 0, 0, 0, ?, ?)",
+          "INSERT INTO continuous_runs (parent_id, state_directory, config_digest, policy_digest, initial_inventory_digest, inventory_digest, state, reason, next_check_at, stop_requested, last_ledger_sequence, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'RUNNING', NULL, NULL, 0, 0, 0, ?, ?)",
         )
         .run(
           input.parentRunId,
+          input.stateDirectory,
           input.configDigest,
           input.policyDigest,
           input.inventoryDigest,
@@ -420,6 +451,8 @@ export class SqliteContinuousRunJournal {
     return this.#transaction(() => {
       const current = this.#current(parentRunId, expectedRevision);
       const child = current.children[ordinal];
+      if (current.state !== "RUNNING" || current.stopRequested)
+        throw new Error("Continuous run is not accepting child binding");
       if (child === undefined || child.status !== "reserved")
         throw new Error("Child reservation is not active");
       if (child.binding !== null) {

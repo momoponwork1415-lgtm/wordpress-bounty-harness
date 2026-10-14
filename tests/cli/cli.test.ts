@@ -3042,6 +3042,7 @@ describe("harness CLI vertical slice", () => {
       candidates: number;
       observedCandidates: number;
       sourceCoverageVerified: boolean;
+      sourcePoolSealed: boolean;
       ineligibleByReason: Record<string, number>;
       source: { status: string; requestedListingCoverage: string };
       traversal: {
@@ -3056,6 +3057,7 @@ describe("harness CLI vertical slice", () => {
       candidates: 4,
       observedCandidates: 5,
       sourceCoverageVerified: false,
+      sourcePoolSealed: true,
       ineligibleByReason: { "excluded-slug": 1 },
       source: { status: "available", requestedListingCoverage: "all-observed" },
       traversal: {
@@ -3108,6 +3110,7 @@ describe("harness CLI vertical slice", () => {
       candidates: 1,
       observedCandidates: 1,
       sourceCoverageVerified: true,
+      sourcePoolSealed: true,
       traversal: {
         offset: 10,
         observedUniqueCandidates: 11,
@@ -3281,6 +3284,7 @@ describe("harness CLI vertical slice", () => {
     try {
       const created = journal.create({
         parentRunId: "adapter-parent",
+        stateDirectory: state().stateDirectory,
         configDigest: sha("e"),
         policyDigest,
         inventoryDigest: inventory.inventoryDigest,
@@ -3298,20 +3302,18 @@ describe("harness CLI vertical slice", () => {
         },
         configPath,
       };
-      const held = await profile.prepareContinuousBatch!(state(), preparation);
-      expect(held).toMatchObject({
-        status: "hold",
-        reason: "insufficient-eligible-candidates",
-        frozen: 2,
-      });
-      expect(ledger().read({ type: "target-selected" })).toHaveLength(0);
+      const final = await profile.prepareContinuousBatch!(state(), preparation);
+      expect(final).toMatchObject({ status: "ready" });
+      if (final.status !== "ready") throw new Error("Expected final batch");
+      expect(final.snapshotDigests).toHaveLength(2);
+      expect(ledger().read({ type: "target-selected" })).toHaveLength(2);
       holdOne = false;
       const result = await profile.prepareContinuousBatch!(
         state(),
         preparation,
       );
-      expect(result.status).toBe("ready");
-      expect(ledger().read({ type: "target-selected" })).toHaveLength(3);
+      expect(result).toEqual(final);
+      expect(ledger().read({ type: "target-selected" })).toHaveLength(2);
       expect(gateChecks).toContain("item-a");
       expect(gateChecks).toContain("item-b");
       expect(readyDirectories).toHaveLength(gateChecks.length);

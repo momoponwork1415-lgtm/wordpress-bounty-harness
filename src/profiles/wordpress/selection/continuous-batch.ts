@@ -41,9 +41,9 @@ const existingReportSchema = z.object({
   policyDigest: digest,
   inventoryDigest: digest,
   sourcePoolDigest: digest,
-  selectedSnapshotDigests: z.array(digest).min(3).max(5),
+  selectedSnapshotDigests: z.array(digest).min(1).max(5),
   /** Added after the first implementation; old fully appended reports omit it. */
-  selectionPlan: z.array(plannedSelectionSchema).min(3).max(5).optional(),
+  selectionPlan: z.array(plannedSelectionSchema).min(1).max(5).optional(),
 });
 const batchIdFor = (parentRunId: string, ordinal: number) =>
   `selection-${canonicalDigest({ parentRunId, ordinal }).slice(7, 39)}`;
@@ -82,6 +82,12 @@ export type ContinuousBatchPreparation =
       readonly reason: "insufficient-eligible-candidates";
       readonly inspected: number;
       readonly frozen: number;
+    }
+  | {
+      readonly status: "hold";
+      readonly reason: "candidate-source-pool-expired";
+      /** A partial selection plan must remain on its original inventory. */
+      readonly selectionPrefixLength: number;
     };
 
 /**
@@ -134,6 +140,14 @@ export async function prepareWordPressContinuousBatch(options: {
     throw new Error("Nominated automatic re-observation is unavailable");
 
   const batchId = batchIdFor(options.parent.parentRunId, child.ordinal);
+  let sourceExpiryMs: number | null = null;
+  const poolExpired = () =>
+    sourceExpiryMs !== null && options.clock().getTime() > sourceExpiryMs;
+  const expiredHold = (selectionPrefixLength: number) => ({
+    status: "hold" as const,
+    reason: "candidate-source-pool-expired" as const,
+    selectionPrefixLength,
+  });
   const existing = options.ledger.read({
     campaignId: batchId,
     limit: 6,
@@ -155,7 +169,7 @@ export async function prepareWordPressContinuousBatch(options: {
       target.selectedAt !== planned.selectedAt ||
       target.policy.id !== policy.id ||
       target.policy.digest !== canonicalDigest(policy) ||
-      !inventory.candidates.some(
+      !eligibleCandidates.some(
         (candidate) =>
           candidate.slug === target.slug &&
           candidate.targetId === target.targetId &&
@@ -196,6 +210,7 @@ export async function prepareWordPressContinuousBatch(options: {
     prefixLength: number,
   ) => {
     for (let index = prefixLength; index < plan.length; index++) {
+      if (poolExpired()) return index;
       options.owner.assertReady(options.ownerHandle);
       const result = await options.ledger.append(
         selectionEvent(
@@ -209,10 +224,12 @@ export async function prepareWordPressContinuousBatch(options: {
       if (result.status === "conflict")
         throw new Error("Continuous child selection batch conflicted");
     }
+    if (poolExpired()) return plan.length;
     const complete = options.ledger.read({ campaignId: batchId, limit: 6 });
     if (complete.length !== plan.length)
       throw new Error("Continuous child selection batch is incomplete");
     assertExactPrefix(complete, plan, reportDigest);
+    return null;
   };
 
   const consumedSlugs = new Set<string>();
@@ -247,12 +264,77 @@ export async function prepareWordPressContinuousBatch(options: {
     policy,
     store: options.store,
   });
+  // Expiry is an expected inventory lifecycle state, not a failed campaign.
+  // Preserve an appended prefix so the parent cannot silently replace its
+  // source page with new observations before the selection is reconciled.
+  const sourceExpiry = inventory.source.pool?.expiresAt;
+  const sourceClock = options.clock();
+  sourceExpiryMs = sourceExpiry === undefined ? null : Date.parse(sourceExpiry);
+  if (
+    sourceExpiry !== undefined &&
+    sourceClock.getTime() > Date.parse(sourceExpiry)
+  )
+    return expiredHold(existing.length);
   const pool = await readWordPressInventorySourcePool({
     inventory,
     policy,
     store: options.store,
-    clock: options.clock,
+    clock: () => sourceClock,
   });
+  const sealedPoolDigest = inventory.source.pool?.digest;
+  if (sealedPoolDigest === undefined)
+    throw new Error("Continuous inventory has no sealed source pool");
+  // A candidate page can hold fewer than three eligible slugs even when the
+  // sealed listing set has enough across pages. Resolve only the exact linked
+  // prefix of this same pool, then nominate from the union. A broken or
+  // substituted link is an abnormal inventory failure, never exhaustion.
+  const pages = [inventory];
+  const seenDigests = new Set([child.inventoryDigest]);
+  let newest = inventory;
+  for (let page = 0; newest.previousInventoryDigest !== undefined; page++) {
+    if (page >= 450 || seenDigests.has(newest.previousInventoryDigest))
+      throw new Error("Continuous inventory page chain is invalid");
+    const previousDigest = newest.previousInventoryDigest;
+    seenDigests.add(previousDigest);
+    const previous = await readWordPressCandidateInventory({
+      digest: previousDigest,
+      policy,
+      store: options.store,
+    });
+    const previousTraversal = previous.source.traversal;
+    const newestTraversal = newest.source.traversal;
+    if (
+      previous.source.pool?.digest !== sealedPoolDigest ||
+      previous.source.pool.expiresAt !== sourceExpiry ||
+      previousTraversal?.complete !== false ||
+      previousTraversal.nextCursor?.sourcePoolDigest !== sealedPoolDigest ||
+      previousTraversal.nextCursor?.listingSetDigest !==
+        newestTraversal?.listingSetDigest ||
+      previousTraversal.nextCursor?.nextIndex !== newestTraversal.offset ||
+      previousTraversal.offset + previous.observedCandidates !==
+        newestTraversal.offset ||
+      previousTraversal.observedUniqueCandidates !==
+        newestTraversal.observedUniqueCandidates
+    )
+      throw new Error("Continuous inventory page chain changed source pool");
+    await readWordPressInventorySourcePool({
+      inventory: previous,
+      policy,
+      store: options.store,
+      clock: () => sourceClock,
+    });
+    pages.unshift(previous);
+    newest = previous;
+  }
+  if (pages[0]?.source.traversal?.offset !== 0)
+    throw new Error("Continuous inventory page chain has no first page");
+  if (poolExpired()) return expiredHold(existing.length);
+  const eligibleCandidates = pages.flatMap((page) => page.candidates);
+  if (
+    new Set(eligibleCandidates.map((candidate) => candidate.slug)).size !==
+    eligibleCandidates.length
+  )
+    throw new Error("Continuous inventory page chain repeats a slug");
   if (existing.length > 0) {
     const reportDigests = existing.map(
       ({ event }) =>
@@ -319,6 +401,7 @@ export async function prepareWordPressContinuousBatch(options: {
       throw new Error("Existing child selection plan is inconsistent");
     assertExactPrefix(existing, plan, reportDigest);
     for (const planned of plan) {
+      if (poolExpired()) return expiredHold(existing.length);
       const target = await readPlannedTarget(planned);
       const slug = target.slug;
       if ((await options.preFreezeEligibility(slug)) !== "eligible")
@@ -345,8 +428,14 @@ export async function prepareWordPressContinuousBatch(options: {
       if (snapshot.digest !== planned.snapshotDigest)
         throw new Error("Existing child Snapshot changed");
     }
+    if (poolExpired()) return expiredHold(existing.length);
     options.owner.assertReady(options.ownerHandle);
-    await appendRemainder(plan, reportDigest, existing.length);
+    const expiredPrefix = await appendRemainder(
+      plan,
+      reportDigest,
+      existing.length,
+    );
+    if (expiredPrefix !== null) return expiredHold(expiredPrefix);
     return {
       status: "ready",
       selectionBatchId: batchId,
@@ -354,7 +443,7 @@ export async function prepareWordPressContinuousBatch(options: {
       reportDigest,
     };
   }
-  const nominees = inventory.candidates
+  const nominees = eligibleCandidates
     .filter((candidate) => !consumedSlugs.has(candidate.slug))
     .sort(
       (left, right) =>
@@ -366,9 +455,11 @@ export async function prepareWordPressContinuousBatch(options: {
   }[] = [];
   let inspected = 0;
   for (const nominee of nominees) {
+    if (poolExpired()) return expiredHold(0);
     if (chosen.length === policy.maximumTargets) break;
     if ((await options.preFreezeEligibility(nominee.slug)) !== "eligible")
       continue;
+    if (poolExpired()) return expiredHold(0);
     const observations = await options.selection.inspectNominated(
       policy,
       pool,
@@ -404,12 +495,19 @@ export async function prepareWordPressContinuousBatch(options: {
     // A freeze failure is an abnormal snapshot/source failure. Only an
     // explicit ineligible observation or history decision skips a nominee.
     const snapshot = await options.freeze(target);
+    if (poolExpired()) return expiredHold(0);
     chosen.push({
       target,
       snapshotDigest: digest.parse(snapshot.digest),
     });
   }
-  if (chosen.length < 3)
+  // A sealed listing set may end with one or two untouched slugs. Run those
+  // only after its final page is proven; an intermediate page must keep
+  // refilling until the normal batch size can be reached.
+  if (
+    chosen.length === 0 ||
+    (chosen.length < 3 && inventory.source.traversal?.complete !== true)
+  )
     return {
       status: "hold",
       reason: "insufficient-eligible-candidates",
@@ -418,6 +516,7 @@ export async function prepareWordPressContinuousBatch(options: {
     };
   if (new Set(chosen.map((item) => item.snapshotDigest)).size !== chosen.length)
     throw new Error("Continuous child selection repeats a Snapshot");
+  if (poolExpired()) return expiredHold(0);
   options.owner.assertReady(options.ownerHandle);
 
   // Persist the complete immutable event plan before appending its first
@@ -425,6 +524,7 @@ export async function prepareWordPressContinuousBatch(options: {
   // discoverable and exactly resumable after a crash.
   const selectionPlan: PlannedSelection[] = [];
   for (const { target, snapshotDigest } of chosen) {
+    if (poolExpired()) return expiredHold(0);
     const targetSelectionDigest = await options.store.putFiles({
       "target-selection.json": canonicalJson(target),
     });
@@ -449,7 +549,8 @@ export async function prepareWordPressContinuousBatch(options: {
   const reportDigest = await options.store.putFiles({
     "selection-report.json": canonicalJson(report),
   });
-  await appendRemainder(selectionPlan, reportDigest, 0);
+  const expiredPrefix = await appendRemainder(selectionPlan, reportDigest, 0);
+  if (expiredPrefix !== null) return expiredHold(expiredPrefix);
   return {
     status: "ready",
     selectionBatchId: batchId,

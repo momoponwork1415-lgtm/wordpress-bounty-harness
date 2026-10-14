@@ -84,6 +84,7 @@ import {
   hasVerifiedWordPressCandidateInventoryChainCoverage,
   loadWordPressSelectionPolicy,
   prepareWordPressContinuousBatch,
+  readWordPressCandidateInventory,
   readWordPressCandidateInventoryCursor,
   wordPressSelectionPolicySchema,
   wordPressTargetSelectionSchema,
@@ -91,6 +92,7 @@ import {
   type WordPressSelectionInspection,
   type WordPressSelectionWithBatchInspection,
   type WordPressTargetSelection,
+  type WordPressCandidateInventory,
 } from "../profiles/wordpress/selection/index.js";
 import { inspectWordPressLedgerExclusions } from "../profiles/wordpress/selection/ledger-exclusions.js";
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
@@ -109,7 +111,12 @@ import {
   wordpressReproductionRenderer,
   type WordPressReconstruction,
 } from "../profiles/wordpress/verification/reproduction-package.js";
-import type { CliProfile, CliState, LabUpSummary } from "./index.js";
+import type {
+  CliInventoryReport,
+  CliProfile,
+  CliState,
+  LabUpSummary,
+} from "./index.js";
 import {
   provisionFindingLab,
   reverifyOnSelectedVersion,
@@ -383,6 +390,41 @@ async function loadContinuousSelectInput(configPath: string) {
   if (!("candidateSource" in selected.policy))
     throw new Error("Continuous run requires automatic selection policy");
   return selected;
+}
+
+async function inventoryReport(
+  state: CliState,
+  policy: WordPressSelectionPolicy,
+  digest: string,
+  inventory: WordPressCandidateInventory,
+): Promise<CliInventoryReport> {
+  const traversal = inventory.source.traversal;
+  if (traversal === undefined)
+    throw new Error("Candidate inventory has no traversal record");
+  return {
+    inventoryDigest: digest,
+    candidates: inventory.candidates.length,
+    observedCandidates: inventory.observedCandidates,
+    sourceCoverageVerified:
+      await hasVerifiedWordPressCandidateInventoryChainCoverage({
+        digest,
+        policy,
+        store: state.store,
+        clock: state.clock,
+      }),
+    sourcePoolSealed: inventory.source.pool?.digest !== undefined,
+    ineligibleByReason: inventory.ineligibleByReason,
+    source: {
+      status: inventory.source.status,
+      requestedListingCoverage: inventory.source.requestedListingCoverage,
+    },
+    traversal: {
+      offset: traversal.offset,
+      observedUniqueCandidates: traversal.observedUniqueCandidates,
+      complete: traversal.complete,
+      nextPageAvailable: traversal.nextCursor !== undefined,
+    },
+  };
 }
 
 type ReservedSelection = {
@@ -850,6 +892,7 @@ type WordPressDiscoveryPlan = Awaited<
 type WordPressDiscoveryContext = {
   readonly campaignId: string;
   readonly repeatTrialGate: RepeatTrialGate;
+  readonly checkStop?: () => void;
   readonly config: WordPressCampaignConfig;
   readonly boundaries: WordPressCampaignBoundaries;
   readonly state: CliState;
@@ -988,6 +1031,9 @@ async function planWordPressDiscovery(
   };
   const now = state.clock().getTime();
   return {
+    ...(context.checkStop === undefined
+      ? {}
+      : { beforeTrialAppend: context.checkStop }),
     beforeTrialStart: ({ snapshotDigest, promptDigest, trialOrdinal }) =>
       repeatTrialGate.reserve({
         stateDirectory: state.stateDirectory,
@@ -1342,6 +1388,9 @@ async function runWordPressCampaign(
           state,
           campaignId: input.campaignId,
           repeatTrialGate: options.repeatTrialGate,
+          ...(input.checkStop === undefined
+            ? {}
+            : { checkStop: input.checkStop }),
           objective,
           trustBoundary,
           ...(armBObjective === undefined ? {} : { armBObjective }),
@@ -1457,32 +1506,16 @@ export function createWordPressCliProfile(
         inventory.source.pool?.digest !== cursor.sourcePoolDigest
       )
         throw new Error("Candidate inventory changed source pool");
-      const traversal = inventory.source.traversal;
-      if (traversal === undefined)
-        throw new Error("Candidate inventory has no traversal record");
-      return {
-        inventoryDigest: digest,
-        candidates: inventory.candidates.length,
-        observedCandidates: inventory.observedCandidates,
-        sourceCoverageVerified:
-          await hasVerifiedWordPressCandidateInventoryChainCoverage({
-            digest,
-            policy,
-            store: state.store,
-            clock: state.clock,
-          }),
-        ineligibleByReason: inventory.ineligibleByReason,
-        source: {
-          status: inventory.source.status,
-          requestedListingCoverage: inventory.source.requestedListingCoverage,
-        },
-        traversal: {
-          offset: traversal.offset,
-          observedUniqueCandidates: traversal.observedUniqueCandidates,
-          complete: traversal.complete,
-          nextPageAvailable: traversal.nextCursor !== undefined,
-        },
-      };
+      return inventoryReport(state, policy, digest, inventory);
+    },
+    async inspectInventory(state, input) {
+      const { policy } = await loadContinuousSelectInput(input.configPath);
+      const inventory = await readWordPressCandidateInventory({
+        digest: input.digest,
+        policy,
+        store: state.store,
+      });
+      return inventoryReport(state, policy, input.digest, inventory);
     },
     async continuousPolicyDigest(_state, input) {
       const { policy } = await loadContinuousSelectInput(input.configPath);

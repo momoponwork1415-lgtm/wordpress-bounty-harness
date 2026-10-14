@@ -135,18 +135,25 @@ export async function reconcileContinuousRestart(input: {
   readonly owner: OwnerReader;
   readonly ownerHandle: ContinuousRunOwnerHandle;
   readonly reviewExportReady?: ReviewExportCheck;
+  /** Recheck evidence for settled predecessors after process recovery. */
+  readonly auditPriorSettled?: boolean;
   readonly allowStoppedResume?: boolean;
+  /** Explicit operator resume after a non-running recovery hold. */
+  readonly allowRecoveringResume?: boolean;
+  /** Explicit retry of a repaired operational review hold. */
+  readonly allowReviewResume?: boolean;
 }): Promise<ContinuousRestartDecision> {
   const hold = (
     reason: Extract<ContinuousRestartDecision, { action: "hold" }>["reason"],
     run: ContinuousRunRecord | null = null,
     assessment: ChildCampaignAssessment | null = null,
+    campaignId: string | null = run?.children.at(-1)?.campaignId ?? null,
   ): ContinuousRestartDecision => ({
     action: "hold",
     parentRunId: input.parentRunId,
     reason,
     expectedRevision: run?.revision ?? null,
-    campaignId: run?.children.at(-1)?.campaignId ?? null,
+    campaignId,
     assessment,
   });
 
@@ -207,6 +214,27 @@ export async function reconcileContinuousRestart(input: {
   try {
     if (campaignRows(input.ledger, nextCampaignId).length > 0)
       return hold("orphan-child-ledger", run);
+    if (input.auditPriorSettled) {
+      for (const prior of run.children.slice(0, -1)) {
+        if (prior.binding === null)
+          return hold("journal-mismatch", run, null, prior.campaignId);
+        const priorAssessment = await assessContinuousChildCampaign({
+          campaignId: prior.campaignId,
+          snapshotDigests: prior.binding.snapshotDigests,
+          ledger: input.ledger,
+          ...(input.reviewExportReady === undefined
+            ? {}
+            : { reviewExportReady: input.reviewExportReady }),
+        });
+        if (priorAssessment.nextState !== "complete")
+          return hold(
+            "settled-child-incomplete",
+            run,
+            priorAssessment,
+            prior.campaignId,
+          );
+      }
+    }
     if (last !== undefined) {
       const rows = campaignRows(input.ledger, last.campaignId);
       if (last.binding === null) {
@@ -300,11 +328,26 @@ export async function reconcileContinuousRestart(input: {
 
   const stoppedResume =
     input.allowStoppedResume === true &&
-    run.state === "STOPPED" &&
+    (run.state === "STOPPED" ||
+      run.state === "STOPPING" ||
+      run.state === "RECOVERING") &&
     run.stopRequested;
+  const recoveringResume =
+    input.allowRecoveringResume === true &&
+    run.state === "RECOVERING" &&
+    !run.stopRequested;
+  const reviewResume =
+    input.allowReviewResume === true &&
+    run.state === "WAIT_REVIEW" &&
+    !run.stopRequested;
   if (run.stopRequested && !stoppedResume)
     return hold("stop-requested", run, assessment);
-  if (run.state !== "RUNNING" && !stoppedResume)
+  if (
+    run.state !== "RUNNING" &&
+    !stoppedResume &&
+    !recoveringResume &&
+    !reviewResume
+  )
     return hold("parent-not-running", run, assessment);
   if (last?.status === "settled") {
     if (
