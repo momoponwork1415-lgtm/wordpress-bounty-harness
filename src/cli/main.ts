@@ -12,8 +12,10 @@ import {
 import { openWordPressReviewLab } from "../profiles/wordpress/lab/review-lab.js";
 import { SqliteRepeatTrialGate } from "../profiles/wordpress/discovery/repeat-trial-gate.js";
 import { SqliteHostResourceClaims } from "../infrastructure/host-resource-claims.js";
+import { SqliteContinuousRunJournal } from "../infrastructure/continuous-run-journal.js";
 import { runNativeModelProcess } from "../infrastructure/native-model-process.js";
 import { recoverHostClaim } from "./resource-recovery.js";
+import { runContinuousControl } from "./continuous-control.js";
 
 const io: CliIo = {
   stdout: (line) => process.stdout.write(`${line}\n`),
@@ -73,6 +75,22 @@ async function main(argv: readonly string[]): Promise<number> {
       io.stdout("One exact additional Trial approved; no discovery started");
     }
     return 0;
+  }
+  if (args[0] === "continuous") {
+    const journal = new SqliteContinuousRunJournal(
+      join(
+        homedir(),
+        ".local",
+        "state",
+        "wordpress-bounty-harness",
+        "continuous-runs.sqlite",
+      ),
+    );
+    try {
+      return runContinuousControl(args, journal, io);
+    } finally {
+      journal.close();
+    }
   }
   if (hostPath === undefined || hostPath.length === 0) {
     io.stderr(
