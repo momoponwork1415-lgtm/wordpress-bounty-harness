@@ -8,6 +8,7 @@ import { canonicalDigestPreservingProperties } from "../../../src/infrastructure
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import {
   collectWordPressCandidateInventory,
+  hasTraversedWordPressCandidateSource,
   loadWordPressSelectionPolicy,
   readWordPressCandidateInventory,
   type WordPressSelectionBatchInspection,
@@ -39,6 +40,25 @@ const unavailableListing = (page: number) => ({
   status: "unavailable" as const,
   reason: "network-failure" as const,
 });
+const traversal = (total: number, offset = 0, limit = 500) => {
+  const nextIndex = Math.min(total, offset + limit);
+  return {
+    listingSetDigest: digest("d"),
+    offset,
+    observedUniqueCandidates: total,
+    complete: nextIndex === total,
+    ...(nextIndex === total
+      ? {}
+      : {
+          nextCursor: {
+            kind: "wordpress-org-candidate-cursor" as const,
+            schemaVersion: 1 as const,
+            listingSetDigest: digest("d"),
+            nextIndex,
+          },
+        }),
+  };
+};
 
 function candidate(
   number: number,
@@ -119,6 +139,7 @@ describe("WordPress candidate inventory", () => {
             },
           ],
           sourceStatus: "available",
+          sourceTraversal: traversal(301),
           sourceListings: [
             ...Array.from(
               { length: policy.candidateSource.popularPages },
@@ -145,6 +166,9 @@ describe("WordPress candidate inventory", () => {
       expect(stored.inventory.candidates[0]?.score).toBe(299);
       expect(stored.inventory.source.requestedListingCoverage).toBe(
         "all-observed",
+      );
+      expect(hasTraversedWordPressCandidateSource([stored.inventory])).toBe(
+        true,
       );
       expect(stored.inventory.candidates[0]).not.toHaveProperty(
         "observationRef",
@@ -179,6 +203,7 @@ describe("WordPress candidate inventory", () => {
         inspectBatch: async () => ({
           inspections: [],
           sourceStatus: "unavailable",
+          sourceTraversal: traversal(0),
           sourceListings: [unavailableListing(1)],
         }),
         store,
@@ -189,7 +214,11 @@ describe("WordPress candidate inventory", () => {
         status: "unavailable",
         requestedListingCoverage: "none-observed",
         listings: { available: 0, stale: 0, unavailable: 1, missing: 17 },
+        traversal: traversal(0),
       });
+      expect(hasTraversedWordPressCandidateSource([stored.inventory])).toBe(
+        false,
+      );
     });
   });
 
@@ -201,6 +230,7 @@ describe("WordPress candidate inventory", () => {
         inspectBatch: async () => ({
           inspections: [],
           sourceStatus: "available",
+          sourceTraversal: traversal(0),
           sourceListings: [
             availableListing("popular", 1),
             unavailableListing(2),
@@ -211,7 +241,176 @@ describe("WordPress candidate inventory", () => {
       });
       expect(stored.inventory.candidates).toHaveLength(0);
       expect(stored.inventory.source.requestedListingCoverage).toBe("partial");
+      expect(hasTraversedWordPressCandidateSource([stored.inventory])).toBe(
+        false,
+      );
       expect(stored.inventory.source.listings.missing).toBe(16);
+    });
+  });
+
+  it("recognizes a genuinely empty fully observed source only after every listing succeeds", async () => {
+    await withStore(async (store) => {
+      const policy = await loadWordPressSelectionPolicy();
+      if (!("candidateSource" in policy))
+        throw new Error("Expected automatic policy");
+      const sourceListings = [
+        ...Array.from(
+          { length: policy.candidateSource.popularPages },
+          (_, page) => availableListing("popular", page + 1),
+        ),
+        ...policy.candidateSource.tags.flatMap((tag) =>
+          Array.from(
+            { length: policy.candidateSource.pagesPerTag },
+            (_, page) => availableListing("tag", page + 1, tag),
+          ),
+        ),
+      ];
+      const stored = await collectWordPressCandidateInventory({
+        policy,
+        inspectBatch: async () => ({
+          inspections: [],
+          sourceStatus: "available",
+          sourceTraversal: traversal(0),
+          sourceListings,
+        }),
+        store,
+        clock: () => new Date(now),
+      });
+      expect(stored.inventory.candidates).toEqual([]);
+      expect(hasTraversedWordPressCandidateSource([stored.inventory])).toBe(
+        true,
+      );
+      const uncertain = await collectWordPressCandidateInventory({
+        policy,
+        inspectBatch: async () => ({
+          inspections: [
+            {
+              slug: "temporarily-unavailable",
+              status: "ineligible",
+              reasons: ["observation-unavailable"],
+            },
+          ],
+          sourceStatus: "available",
+          sourceTraversal: traversal(1),
+          sourceListings,
+        }),
+        store,
+        clock: () => new Date(now),
+      });
+      expect(hasTraversedWordPressCandidateSource([uncertain.inventory])).toBe(
+        false,
+      );
+    });
+  });
+
+  it("persists a continuation page after the 500-candidate cap without declaring exhaustion", async () => {
+    await withStore(async (store) => {
+      const policy = await loadWordPressSelectionPolicy();
+      if (!("candidateSource" in policy))
+        throw new Error("Expected automatic policy");
+      const inspectBatch = vi.fn(
+        async (
+          _policy: WordPressSelectionPolicy,
+          cursor?: { nextIndex: number },
+        ) => {
+          const offset = cursor?.nextIndex ?? 0;
+          const limit = policy.candidateSource.maxCandidates;
+          return {
+            inspections: Array.from(
+              { length: Math.min(limit, 550 - offset) },
+              (_, index) => ({
+                slug: candidate(offset + index, policy).slug,
+                status: "eligible" as const,
+                reasons: [],
+                selection: candidate(offset + index, policy),
+              }),
+            ),
+            sourceStatus: "available" as const,
+            sourceTraversal: traversal(550, offset, limit),
+            sourceListings: [
+              ...Array.from(
+                { length: policy.candidateSource.popularPages },
+                (_, page) => availableListing("popular", page + 1),
+              ),
+              ...policy.candidateSource.tags.flatMap((tag) =>
+                Array.from(
+                  { length: policy.candidateSource.pagesPerTag },
+                  (_, page) => availableListing("tag", page + 1, tag),
+                ),
+              ),
+            ],
+          };
+        },
+      );
+      const first = await collectWordPressCandidateInventory({
+        policy,
+        inspectBatch,
+        store,
+        clock: () => new Date(now),
+      });
+      expect(first.inventory.candidates).toHaveLength(500);
+      expect(first.inventory.source.requestedListingCoverage).toBe(
+        "all-observed",
+      );
+      expect(hasTraversedWordPressCandidateSource([first.inventory])).toBe(
+        false,
+      );
+      const replayed = await readWordPressCandidateInventory({
+        digest: first.digest,
+        policy,
+        store,
+      });
+      const cursor = replayed.source.traversal?.nextCursor;
+      expect(cursor?.nextIndex).toBe(500);
+      if (cursor === undefined) throw new Error("Expected continuation cursor");
+      const second = await collectWordPressCandidateInventory({
+        policy,
+        inspectBatch,
+        cursor,
+        store,
+        clock: () => new Date(now),
+      });
+      expect(second.inventory.candidates).toHaveLength(50);
+      expect(hasTraversedWordPressCandidateSource([second.inventory])).toBe(
+        false,
+      );
+      expect(
+        hasTraversedWordPressCandidateSource([replayed, second.inventory]),
+      ).toBe(true);
+      expect(
+        hasTraversedWordPressCandidateSource([second.inventory, replayed]),
+      ).toBe(false);
+      expect(
+        hasTraversedWordPressCandidateSource([
+          replayed,
+          {
+            ...second.inventory,
+            source: {
+              ...second.inventory.source,
+              traversal: {
+                ...second.inventory.source.traversal!,
+                listingSetDigest: digest("e"),
+              },
+            },
+          },
+        ]),
+      ).toBe(false);
+      expect(
+        new Set([
+          ...first.inventory.candidates.map((item) => item.slug),
+          ...second.inventory.candidates.map((item) => item.slug),
+        ]).size,
+      ).toBe(550);
+      expect(
+        (
+          await readWordPressCandidateInventory({
+            digest: first.digest,
+            policy,
+            store,
+          })
+        ).source.traversal?.nextCursor,
+      ).toEqual(cursor);
+      expect(inspectBatch).toHaveBeenCalledTimes(2);
     });
   });
 });
