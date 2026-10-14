@@ -191,6 +191,119 @@ async function setup() {
 }
 
 describe("nominated automatic continuous selection", () => {
+  it.each([1, 2])(
+    "resumes an exact %i-event selection prefix after an append failure",
+    async (prefixLength) => {
+      const state = await setup();
+      try {
+        state.reserve();
+        let appended = 0;
+        const interruptedLedger = {
+          read: state.ledger.read.bind(state.ledger),
+          append: async (event: Parameters<typeof state.ledger.append>[0]) => {
+            if (appended === prefixLength)
+              throw new Error("simulated append interruption");
+            appended++;
+            return state.ledger.append(event);
+          },
+        };
+        await expect(
+          prepareWordPressContinuousBatch({
+            ...state.input(),
+            ledger: interruptedLedger,
+          }),
+        ).rejects.toThrow("simulated append interruption");
+        const prefix = state.ledger.read({ type: "target-selected" });
+        expect(prefix).toHaveLength(prefixLength);
+        const reportDigest = prefix[0]?.event.artifacts.find(
+          (artifact) => artifact.kind === "selection-report",
+        )?.digest;
+        expect(reportDigest).toBeDefined();
+        const reportFile = await state.store.readFile(
+          reportDigest!,
+          "selection-report.json",
+          2 * 1024 * 1024,
+        );
+        expect(reportFile.status).toBe("resolved");
+        if (reportFile.status !== "resolved") return;
+        const plan = JSON.parse(reportFile.bytes.toString("utf8")) as {
+          selectionPlan: { selectionId: string; snapshotDigest: string }[];
+        };
+        expect(plan.selectionPlan).toHaveLength(3);
+        const resumed = await prepareWordPressContinuousBatch(state.input());
+        expect(resumed).toMatchObject({
+          status: "ready",
+          reportDigest,
+          snapshotDigests: [digest("1"), digest("2"), digest("3")],
+        });
+        expect(
+          state.ledger
+            .read({ type: "target-selected" })
+            .map(({ event }) =>
+              event.type === "target-selected" ? event.selectionId : null,
+            ),
+        ).toEqual(plan.selectionPlan.map((item) => item.selectionId));
+        if (resumed.status === "ready") state.bindAndSettle(resumed);
+      } finally {
+        state.journal.close();
+      }
+    },
+  );
+
+  it("holds an event that is not the report's exact prefix", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      let appended = false;
+      const interruptedLedger = {
+        read: state.ledger.read.bind(state.ledger),
+        append: async (event: Parameters<typeof state.ledger.append>[0]) => {
+          if (appended) throw new Error("simulated append interruption");
+          appended = true;
+          return state.ledger.append(event);
+        },
+      };
+      await expect(
+        prepareWordPressContinuousBatch({
+          ...state.input(),
+          ledger: interruptedLedger,
+        }),
+      ).rejects.toThrow("simulated append interruption");
+      const first = state.ledger.read({ type: "target-selected" })[0]?.event;
+      expect(first?.type).toBe("target-selected");
+      if (first?.type !== "target-selected") return;
+      expect(
+        await state.ledger.append({
+          ...first,
+          identity: "selected-tampered",
+          selectionId: "wporg:plugin-2@9.9.9",
+        }),
+      ).toEqual({ status: "appended" });
+      await expect(
+        prepareWordPressContinuousBatch(state.input()),
+      ).rejects.toThrow("not an exact plan prefix");
+      expect(state.ledger.read({ type: "target-selected" })).toHaveLength(2);
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("propagates freeze failures instead of reporting candidate exhaustion", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      state.freeze.mockImplementationOnce(async () => {
+        throw new Error("Snapshot source unavailable");
+      });
+      await expect(
+        prepareWordPressContinuousBatch(state.input()),
+      ).rejects.toThrow("Snapshot source unavailable");
+      expect(state.ledger.read({ type: "target-selected" })).toHaveLength(0);
+    } finally {
+      state.journal.close();
+    }
+  });
+
   it("fixes distinct batches from the same inventory page and never reuses the first three slugs", async () => {
     const state = await setup();
     try {

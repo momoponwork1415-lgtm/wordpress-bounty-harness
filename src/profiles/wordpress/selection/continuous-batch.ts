@@ -21,6 +21,7 @@ import {
 } from "./candidate-inventory.js";
 import {
   wordPressSelectionPolicySchema,
+  wordPressTargetSelectionSchema,
   type WordPressSelectionPolicy,
   type WordPressTargetSelection,
 } from "./contracts.js";
@@ -28,17 +29,46 @@ import { inspectWordPressLedgerExclusions } from "./ledger-exclusions.js";
 import type { WordPressSelectionWithBatchInspection } from "./wordpress-selection.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const plannedSelectionSchema = z.strictObject({
+  selectionId: z.string().min(1).max(128),
+  snapshotDigest: digest,
+  targetSelectionDigest: digest,
+  selectedAt: z.iso.datetime({ offset: true }),
+});
+type PlannedSelection = z.infer<typeof plannedSelectionSchema>;
 const existingReportSchema = z.object({
   schemaVersion: z.literal(1),
   policyDigest: digest,
   inventoryDigest: digest,
   sourcePoolDigest: digest,
   selectedSnapshotDigests: z.array(digest).min(3).max(5),
+  /** Added after the first implementation; old fully appended reports omit it. */
+  selectionPlan: z.array(plannedSelectionSchema).min(3).max(5).optional(),
 });
 const batchIdFor = (parentRunId: string, ordinal: number) =>
   `selection-${canonicalDigest({ parentRunId, ordinal }).slice(7, 39)}`;
 const selectedSlug = (selectionId: string) =>
   /^wporg:([a-z0-9][a-z0-9-]*)@[^@]+$/u.exec(selectionId)?.[1] ?? null;
+const selectionEvent = (
+  batchId: string,
+  index: number,
+  planned: PlannedSelection,
+  promptVariant: string,
+  reportDigest: string,
+) => ({
+  schemaVersion: 1 as const,
+  identity: `selected-${canonicalDigest({ batchId, index }).slice(7, 39)}`,
+  campaignId: batchId,
+  snapshotDigest: planned.snapshotDigest,
+  occurredAt: planned.selectedAt,
+  type: "target-selected" as const,
+  selectionId: planned.selectionId,
+  promptVariant,
+  artifacts: [
+    { kind: "target-selection", digest: planned.targetSelectionDigest },
+    { kind: "selection-report", digest: reportDigest },
+  ],
+});
 
 export type ContinuousBatchPreparation =
   | {
@@ -106,9 +136,84 @@ export async function prepareWordPressContinuousBatch(options: {
   const batchId = batchIdFor(options.parent.parentRunId, child.ordinal);
   const existing = options.ledger.read({
     campaignId: batchId,
-    type: "target-selected",
     limit: 6,
   });
+
+  const readPlannedTarget = async (planned: PlannedSelection) => {
+    const file = await options.store.readFile(
+      planned.targetSelectionDigest,
+      "target-selection.json",
+      2 * 1024 * 1024,
+    );
+    if (file.status !== "resolved")
+      throw new Error("Planned child target selection is unavailable");
+    const target = wordPressTargetSelectionSchema.parse(
+      JSON.parse(file.bytes.toString("utf8")) as unknown,
+    );
+    if (
+      `${target.targetId}@${target.version}` !== planned.selectionId ||
+      target.selectedAt !== planned.selectedAt ||
+      target.policy.id !== policy.id ||
+      target.policy.digest !== canonicalDigest(policy) ||
+      !inventory.candidates.some(
+        (candidate) =>
+          candidate.slug === target.slug &&
+          candidate.targetId === target.targetId &&
+          !consumedSlugs.has(candidate.slug),
+      )
+    )
+      throw new Error("Planned child target selection is inconsistent");
+    return target;
+  };
+
+  const assertExactPrefix = (
+    records: typeof existing,
+    plan: readonly PlannedSelection[],
+    reportDigest: string,
+  ) => {
+    if (
+      records.length > plan.length ||
+      records.some(
+        ({ event }, index) =>
+          canonicalJson(event) !==
+          canonicalJson(
+            selectionEvent(
+              batchId,
+              index,
+              plan[index]!,
+              policy.promptVariant,
+              reportDigest,
+            ),
+          ),
+      )
+    )
+      throw new Error("Existing child selection is not an exact plan prefix");
+  };
+
+  const appendRemainder = async (
+    plan: readonly PlannedSelection[],
+    reportDigest: string,
+    prefixLength: number,
+  ) => {
+    for (let index = prefixLength; index < plan.length; index++) {
+      options.owner.assertReady(options.ownerHandle);
+      const result = await options.ledger.append(
+        selectionEvent(
+          batchId,
+          index,
+          plan[index]!,
+          policy.promptVariant,
+          reportDigest,
+        ),
+      );
+      if (result.status === "conflict")
+        throw new Error("Continuous child selection batch conflicted");
+    }
+    const complete = options.ledger.read({ campaignId: batchId, limit: 6 });
+    if (complete.length !== plan.length)
+      throw new Error("Continuous child selection batch is incomplete");
+    assertExactPrefix(complete, plan, reportDigest);
+  };
 
   const consumedSlugs = new Set<string>();
   for (const prior of options.parent.children.slice(0, -1)) {
@@ -159,16 +264,7 @@ export async function prepareWordPressContinuousBatch(options: {
       reportDigest === undefined ||
       existing.length > policy.maximumTargets ||
       reportDigests.some((value) => value !== reportDigest) ||
-      existing.some(
-        ({ event }) =>
-          event.type !== "target-selected" ||
-          event.promptVariant !== policy.promptVariant ||
-          !inventory.candidates.some(
-            (candidate) =>
-              selectedSlug(event.selectionId) === candidate.slug &&
-              !consumedSlugs.has(candidate.slug),
-          ),
-      )
+      existing.some(({ event }) => event.type !== "target-selected")
     )
       throw new Error("Existing child selection batch is inconsistent");
     const file = await options.store.readFile(
@@ -185,45 +281,76 @@ export async function prepareWordPressContinuousBatch(options: {
       report.policyDigest !== canonicalDigest(policy) ||
       report.inventoryDigest !== child.inventoryDigest ||
       report.sourcePoolDigest !== inventory.source.pool?.digest ||
-      canonicalJson(existing.map(({ event }) => event.snapshotDigest)) !==
-        canonicalJson(report.selectedSnapshotDigests)
+      report.selectedSnapshotDigests.length > policy.maximumTargets
     )
       throw new Error("Existing child selection report does not match ledger");
-    for (const { event } of existing) {
-      if (event.type !== "target-selected")
-        throw new Error("Existing child selection event is invalid");
-      const slug = selectedSlug(event.selectionId);
-      if (
-        slug === null ||
-        (await options.preFreezeEligibility(slug)) !== "eligible"
-      )
+    // Older reports predate the saved plan. They are replayable only when all
+    // selections were already appended; a partial old report cannot prove the
+    // intended missing target-selection artifact or timestamp.
+    const plan =
+      report.selectionPlan ??
+      (() => {
+        if (existing.length !== report.selectedSnapshotDigests.length)
+          throw new Error("Legacy partial child selection cannot be resumed");
+        return existing.map(({ event }) => {
+          if (event.type !== "target-selected")
+            throw new Error("Existing child selection event is invalid");
+          const targetSelectionDigest = event.artifacts.find(
+            (artifact) => artifact.kind === "target-selection",
+          )?.digest;
+          if (targetSelectionDigest === undefined)
+            throw new Error("Existing child target selection is unavailable");
+          return {
+            selectionId: event.selectionId,
+            snapshotDigest: event.snapshotDigest,
+            targetSelectionDigest,
+            selectedAt: event.occurredAt,
+          };
+        });
+      })();
+    if (
+      plan.length !== report.selectedSnapshotDigests.length ||
+      canonicalJson(plan.map((item) => item.snapshotDigest)) !==
+        canonicalJson(report.selectedSnapshotDigests) ||
+      new Set(plan.map((item) => item.snapshotDigest)).size !== plan.length ||
+      new Set(plan.map((item) => selectedSlug(item.selectionId))).size !==
+        plan.length
+    )
+      throw new Error("Existing child selection plan is inconsistent");
+    assertExactPrefix(existing, plan, reportDigest);
+    for (const planned of plan) {
+      const target = await readPlannedTarget(planned);
+      const slug = target.slug;
+      if ((await options.preFreezeEligibility(slug)) !== "eligible")
         throw new Error("Existing child slug is no longer eligible");
       const observations = await options.selection.inspectNominated(
         policy,
         pool,
         [slug],
       );
-      const target = observations[0]?.selection;
+      const observedTarget = observations[0]?.selection;
       if (
         observations.length !== 1 ||
         observations[0]?.status !== "eligible" ||
-        target === undefined ||
-        `${target.targetId}@${target.version}` !== event.selectionId
+        observedTarget === undefined ||
+        `${observedTarget.targetId}@${observedTarget.version}` !==
+          planned.selectionId
       )
         throw new Error("Existing child target no longer matches policy");
       if ((await options.preFreezeEligibility(slug)) !== "eligible")
         throw new Error(
           "Existing child slug changed eligibility before freeze",
         );
-      const snapshot = await options.freeze(target);
-      if (snapshot.digest !== event.snapshotDigest)
+      const snapshot = await options.freeze(observedTarget);
+      if (snapshot.digest !== planned.snapshotDigest)
         throw new Error("Existing child Snapshot changed");
     }
     options.owner.assertReady(options.ownerHandle);
+    await appendRemainder(plan, reportDigest, existing.length);
     return {
       status: "ready",
       selectionBatchId: batchId,
-      snapshotDigests: report.selectedSnapshotDigests,
+      snapshotDigests: plan.map((item) => item.snapshotDigest),
       reportDigest,
     };
   }
@@ -274,12 +401,9 @@ export async function prepareWordPressContinuousBatch(options: {
     // still atomically reserve this slug before Lab on actual campaign run.
     if ((await options.preFreezeEligibility(nominee.slug)) !== "eligible")
       continue;
-    let snapshot: Pick<Snapshot, "digest">;
-    try {
-      snapshot = await options.freeze(target);
-    } catch {
-      continue;
-    }
+    // A freeze failure is an abnormal snapshot/source failure. Only an
+    // explicit ineligible observation or history decision skips a nominee.
+    const snapshot = await options.freeze(target);
     chosen.push({
       target,
       snapshotDigest: digest.parse(snapshot.digest),
@@ -296,6 +420,22 @@ export async function prepareWordPressContinuousBatch(options: {
     throw new Error("Continuous child selection repeats a Snapshot");
   options.owner.assertReady(options.ownerHandle);
 
+  // Persist the complete immutable event plan before appending its first
+  // event. Once one event exists, its report digest makes a partial batch
+  // discoverable and exactly resumable after a crash.
+  const selectionPlan: PlannedSelection[] = [];
+  for (const { target, snapshotDigest } of chosen) {
+    const targetSelectionDigest = await options.store.putFiles({
+      "target-selection.json": canonicalJson(target),
+    });
+    selectionPlan.push({
+      selectionId: `${target.targetId}@${target.version}`,
+      snapshotDigest,
+      targetSelectionDigest,
+      selectedAt: target.selectedAt,
+    });
+  }
+
   const report = {
     schemaVersion: 1,
     policyDigest: canonicalDigest(policy),
@@ -304,35 +444,16 @@ export async function prepareWordPressContinuousBatch(options: {
     inspectedAt: options.clock().toISOString(),
     sourceStatus: inventory.source.status,
     selectedSnapshotDigests: chosen.map((item) => item.snapshotDigest),
+    selectionPlan,
   };
   const reportDigest = await options.store.putFiles({
     "selection-report.json": canonicalJson(report),
   });
-  for (const [index, { target, snapshotDigest }] of chosen.entries()) {
-    const selectionDigest = await options.store.putFiles({
-      "target-selection.json": canonicalJson(target),
-    });
-    const result = await options.ledger.append({
-      schemaVersion: 1,
-      identity: `selected-${canonicalDigest({ batchId, index }).slice(7, 39)}`,
-      campaignId: batchId,
-      snapshotDigest,
-      occurredAt: target.selectedAt,
-      type: "target-selected",
-      selectionId: `${target.targetId}@${target.version}`,
-      promptVariant: policy.promptVariant,
-      artifacts: [
-        { kind: "target-selection", digest: selectionDigest },
-        { kind: "selection-report", digest: reportDigest },
-      ],
-    });
-    if (result.status !== "appended")
-      throw new Error("Continuous child selection batch conflicted");
-  }
+  await appendRemainder(selectionPlan, reportDigest, 0);
   return {
     status: "ready",
     selectionBatchId: batchId,
-    snapshotDigests: chosen.map((item) => item.snapshotDigest),
+    snapshotDigests: selectionPlan.map((item) => item.snapshotDigest),
     reportDigest,
   };
 }
