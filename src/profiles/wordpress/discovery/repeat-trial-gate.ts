@@ -658,7 +658,10 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
           registered.prompt_digest !== start.promptDigest
         )
           unexpected.push(start);
-        else if (registered.source === "live")
+        else if (
+          registered.source === "live" &&
+          registered.ledger_status !== "observed"
+        )
           this.#db
             .prepare(
               "INSERT INTO trial_gate_start_state (start_key, status) VALUES (?, 'observed') ON CONFLICT(start_key) DO UPDATE SET status = 'observed'",
