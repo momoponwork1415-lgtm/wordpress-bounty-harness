@@ -1,6 +1,6 @@
 # 運用手引き（完成後に人間がすること）
 
-探索主経路は、対象ごとに `wp2shell-bounty-v3` のRoot＋最大3 subagentによる協調Trialを1回行う（[ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) のTrial構成、[ADR 0019](adr/0019-harness-generated-output-contract.md) の生成出力契約）。旧単独Trialと二段構えの記録は読めるが、新規探索には使わない。実機縦断の受入前に本番稼働したものとみなさない。
+探索主経路は、対象ごとに `wp2shell-bounty-v4` のRoot＋最大3 subagentによる協調Trialを1回行う（[ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) のTrial構成、[ADR 0019](adr/0019-harness-generated-output-contract.md) の生成出力契約）。旧単独Trialと二段構えの記録は読めるが、新規探索には使わない。実機縦断の受入前に本番稼働したものとみなさない。
 
 対象読者: このHarnessを一人で回す運用者。正本は [SPEC.md](SPEC.md)。
 
@@ -72,11 +72,11 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 provider の構造化エラー `cyber_policy` は `incomplete(provider: provider-cyber-policy)` と記録する。これは broker の要求上限や認証期限切れ、正常な候補0件とは別の停止理由。詳細な診断は Git 外 Private Evidence の receipt に結び付けて保持し、台帳へエラー本文を写さない。拒否された対象は `target-skipped(provider-refused)` として Trial に数えず、次の対象へ進む。同じ対象は次の選定で自然に戻る。拒否を避ける目的で prompt を言い換えない。件数は `ledger stops` で見る。
 
-`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v3` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
+`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v4` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
 
 固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。
 
-既定promptは `wp2shell-bounty-v3`、入口索引は固定source由来のカタログ入力として既定で有効。索引の全件処理は終了条件にしない。`wp2shell-bounty-v2` と `short-objective-managed-v4` は比較armとして残す。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
+既定promptは `wp2shell-bounty-v4`、入口索引は固定source由来のカタログ入力として既定で有効。索引の全件処理は終了条件にしない。`wp2shell-bounty-v3`、`wp2shell-bounty-v2` と `short-objective-managed-v4` は比較・履歴照合用に残す。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
 
 自動選定の campaign は初回起動時に `selection-batch-bound` を追記し、選定バッチと対象集合を固定する。再開時はこの記録のバッチを読み、途中で `select` を再実行しても新しいバッチに切り替えない。選定時に固定した Snapshot と materialized source は digest を再検査して使い、campaign 開始時に同じ ZIP を再取得しない。公開一覧の取得元・確認日時・available/stale/unavailable と失敗理由は Private Evidence の選定レポートに記録する。
 
