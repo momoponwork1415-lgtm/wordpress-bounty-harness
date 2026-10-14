@@ -58,17 +58,24 @@ async function main(argv: readonly string[]): Promise<number> {
   }
   if (
     args[0] === "trial" &&
-    (args[1] === "bootstrap" || args[1] === "approve")
+    (args[1] === "bootstrap" ||
+      args[1] === "approve" ||
+      args[1] === "coverage-import")
   ) {
     if (args.length !== 4 || args[2] !== "--file" || args[3] === undefined)
       throw new Error(
-        "Use trial bootstrap|approve --file <Git-outside JSON path>",
+        "Use trial bootstrap|approve|coverage-import --file <Git-outside JSON path>",
       );
     const value: unknown = JSON.parse(await readFile(resolve(args[3]), "utf8"));
     if (args[1] === "bootstrap") {
       const result = repeatTrialGate.bootstrap(value);
       io.stdout(
         `Trial gate initialized; imported ${result.importedTrials} prior starts`,
+      );
+    } else if (args[1] === "coverage-import") {
+      const coverageDigest = repeatTrialGate.importCoverage(value);
+      io.stdout(
+        `Legacy coverage imported: ${coverageDigest}; no discovery started`,
       );
     } else {
       repeatTrialGate.approve(value);
