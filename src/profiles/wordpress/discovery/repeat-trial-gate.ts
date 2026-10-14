@@ -151,7 +151,7 @@ class CoverageSourceUncertain extends Error {
     readonly code: CoverageAnomalyCode,
     readonly starts: readonly PriorTrial[] = [],
   ) {
-    super(`Unregistered state requires a new legacy coverage audit (${code})`);
+    super(`State history requires a new legacy coverage audit (${code})`);
   }
 }
 
@@ -420,6 +420,10 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
           .get() !== undefined
       )
         throw new Error("Coverage has already been imported");
+      // The manifest cannot release initial Trials if a bootstrapped state
+      // acquired an unregistered start after its inventory was captured.
+      for (const directory of this.#registeredStateDirectories())
+        this.#recheckRegisteredState(directory);
       for (const entry of manifest.legacyStarts)
         this.#db
           .prepare(
@@ -458,7 +462,7 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
   #readHistoricalState(directory: string): readonly PriorTrial[] {
     const path = join(directory, "ledger.sqlite");
     if (!existsSync(path)) return [];
-    const ledger = new DatabaseSync(path, { readOnly: true });
+    const ledger = new DatabaseSync(path, { readOnly: true, timeout: 5_000 });
     try {
       const rows = ledger
         .prepare(
@@ -595,6 +599,73 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
     return starts.length;
   }
 
+  #registeredStateDirectories(): readonly string[] {
+    return this.#db
+      .prepare(
+        "SELECT state_directory FROM trial_gate_states ORDER BY state_directory",
+      )
+      .all()
+      .map(
+        (row) =>
+          z.object({ state_directory: z.string() }).parse(row).state_directory,
+      );
+  }
+
+  /** A live reservation may precede its ledger event; an imported start may not disappear. */
+  #recheckRegisteredState(directory: string): void {
+    try {
+      if (!statSync(directory).isDirectory())
+        throw new CoverageSourceUncertain("missing-ledger");
+      const recorded = this.#db
+        .prepare(
+          "SELECT start_key, slug, prompt_digest, source FROM trial_gate_starts WHERE state_directory = ?",
+        )
+        .all(directory)
+        .map((row) =>
+          z
+            .object({
+              start_key: digest,
+              slug,
+              prompt_digest: z.string(),
+              source: z.enum(["import", "live"]),
+            })
+            .parse(row),
+        );
+      const byKey = new Map(recorded.map((row) => [row.start_key, row]));
+      const observed = this.#readHistoricalState(directory);
+      const observedKeys = new Set<string>();
+      const unexpected: PriorTrial[] = [];
+      for (const start of observed) {
+        const key = canonicalDigest({
+          stateDirectory: directory,
+          campaignId: start.campaignId,
+          snapshotDigest: start.snapshotDigest,
+          trialOrdinal: start.trialOrdinal,
+        });
+        const registered = byKey.get(key);
+        if (
+          observedKeys.has(key) ||
+          registered === undefined ||
+          registered.slug !== start.slug ||
+          registered.prompt_digest !== start.promptDigest
+        )
+          unexpected.push(start);
+        observedKeys.add(key);
+      }
+      if (unexpected.length > 0)
+        throw new CoverageSourceUncertain("unregistered-starts", unexpected);
+      if (
+        recorded.some(
+          (row) => row.source === "import" && !observedKeys.has(row.start_key),
+        )
+      )
+        throw new CoverageSourceUncertain("missing-ledger");
+    } catch (error) {
+      if (error instanceof CoverageSourceUncertain) throw error;
+      throw new CoverageSourceUncertain("unreadable-or-malformed-ledger");
+    }
+  }
+
   #recordCoverageInvalidation(
     directory: string,
     failure: CoverageSourceUncertain,
@@ -661,8 +732,22 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
     this.#db.exec("BEGIN IMMEDIATE");
     let coverageFailure: CoverageSourceUncertain | undefined;
     try {
+      const covered =
+        this.#db
+          .prepare("SELECT 1 FROM trial_gate_meta WHERE key = 'coverage'")
+          .get() !== undefined;
+      for (const registeredDirectory of this.#registeredStateDirectories()) {
+        try {
+          this.#recheckRegisteredState(registeredDirectory);
+        } catch (error) {
+          if (!(error instanceof CoverageSourceUncertain) || !covered)
+            throw error;
+          this.#recordCoverageInvalidation(registeredDirectory, error);
+          coverageFailure ??= error;
+        }
+      }
       try {
-        this.#importState(directory);
+        if (coverageFailure === undefined) this.#importState(directory);
       } catch (error) {
         if (!(error instanceof CoverageSourceUncertain)) throw error;
         this.#recordCoverageInvalidation(directory, error);

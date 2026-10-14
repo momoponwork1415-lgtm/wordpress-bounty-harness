@@ -115,14 +115,14 @@ async function writeStartedTrial(
   await ledger.append({
     ...base,
     type: "target-selected",
-    identity: "selected-first",
+    identity: `selected-${start.campaignId}`,
     selectionId: `wporg:${start.slug}@1.0.0`,
   });
   await ledger.append({
     ...base,
     type: "discovery-run-started",
-    identity: "started-first",
-    runId: "run-first",
+    identity: `started-${start.campaignId}`,
+    runId: `run-${start.campaignId}`,
     labId: "lab-one",
     history: { mode: "none" },
     configuration: {
@@ -547,5 +547,168 @@ it("invalidates coverage when a started Trial has no uniquely mapped slug", asyn
   expect(gate.inspectInitialSlug("new-plugin")).toEqual({
     status: "coverage-incomplete",
     reason: "coverage-invalidated",
+  });
+});
+
+it("rechecks registered states before another state may start a first Trial", async () => {
+  const { gate, gatePath, stateA, stateB, start, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  gate.importCoverage(completeCoverage(inventory, stateA));
+  await writeStartedTrial(stateA, {
+    ...start,
+    slug: "late-plugin",
+    campaignId: "external-campaign",
+  });
+
+  expect(() =>
+    gate.reserve({
+      ...start,
+      stateDirectory: stateB,
+      slug: "fresh-plugin",
+      campaignId: "fresh-campaign",
+    }),
+  ).toThrow("unregistered-starts");
+  const secondProcess = new SqliteRepeatTrialGate(gatePath);
+  expect(secondProcess.inspectInitialSlug("late-plugin")).toEqual({
+    status: "prior-start",
+    startedTrials: 1,
+  });
+  expect(secondProcess.inspectInitialSlug("fresh-plugin")).toEqual({
+    status: "coverage-incomplete",
+    reason: "coverage-invalidated",
+  });
+});
+
+it("accepts a gate-owned reservation after its matching start is appended", async () => {
+  const { gate, stateA, stateB, start, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  gate.importCoverage(completeCoverage(inventory, stateA));
+  const reserved = { ...start, slug: "reserved-plugin" };
+  expect(gate.reserve(reserved)).toBeUndefined();
+  await writeStartedTrial(stateA, reserved);
+
+  expect(
+    gate.reserve({
+      ...start,
+      stateDirectory: stateB,
+      slug: "fresh-plugin",
+      campaignId: "fresh-campaign",
+    }),
+  ).toBeUndefined();
+  expect(gate.inspectInitialSlug("reserved-plugin")).toEqual({
+    status: "prior-start",
+    startedTrials: 1,
+  });
+});
+
+it("keeps an unchanged registered historical state usable", async () => {
+  const { gate, stateA, stateB, start, inventory } = await fixture();
+  await writeStartedTrial(stateA, start);
+  gate.bootstrap(inventory);
+  gate.importCoverage(completeCoverage(inventory, stateA));
+
+  expect(
+    gate.reserve({
+      ...start,
+      stateDirectory: stateB,
+      slug: "fresh-plugin",
+      campaignId: "fresh-campaign",
+    }),
+  ).toBeUndefined();
+});
+
+it("rejects an observed start that reuses a reservation with a different prompt", async () => {
+  const { gate, stateA, stateB, start, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  gate.importCoverage(completeCoverage(inventory, stateA));
+  const reserved = { ...start, slug: "reserved-plugin" };
+  gate.reserve(reserved);
+  await writeStartedTrial(stateA, { ...reserved, promptDigest: hash("d") });
+
+  expect(() =>
+    gate.reserve({
+      ...start,
+      stateDirectory: stateB,
+      slug: "fresh-plugin",
+      campaignId: "fresh-campaign",
+    }),
+  ).toThrow("unregistered-starts");
+});
+
+it("holds new Trials when a registered state gains an unmapped or unreadable start", async () => {
+  const { gate, stateA, stateB, start, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  gate.importCoverage(completeCoverage(inventory, stateA));
+  const ledger = new Ledger({
+    databasePath: join(stateA, "ledger.sqlite"),
+    artifactStore: new PrivateArtifactStore({
+      rootDirectory: join(stateA, "private-evidence"),
+      maxEntries: 8,
+      maxBytes: 1024 * 1024,
+    }),
+  });
+  await ledger.append({
+    schemaVersion: 1,
+    campaignId: "unmapped-campaign",
+    snapshotDigest: hash("a"),
+    occurredAt,
+    type: "discovery-run-started",
+    identity: "unmapped-start",
+    runId: "run-unmapped",
+    labId: "lab-one",
+    history: { mode: "none" },
+    configuration: {
+      promptVariant: "wp2shell-bounty-v3",
+      assignmentUnit: "plugin",
+    },
+  });
+  expect(() =>
+    gate.reserve({
+      ...start,
+      stateDirectory: stateB,
+      slug: "fresh-plugin",
+      campaignId: "fresh-campaign",
+    }),
+  ).toThrow("unreadable-or-malformed-ledger");
+  expect(gate.inspectInitialSlug("fresh-plugin")).toEqual({
+    status: "coverage-incomplete",
+    reason: "coverage-invalidated",
+  });
+});
+
+it("holds new Trials when a registered ledger becomes malformed", async () => {
+  const { gate, stateA, stateB, start, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  gate.importCoverage(completeCoverage(inventory, stateA));
+  await writeFile(join(stateA, "ledger.sqlite"), "not a sqlite database");
+
+  expect(() =>
+    gate.reserve({
+      ...start,
+      stateDirectory: stateB,
+      slug: "fresh-plugin",
+      campaignId: "fresh-campaign",
+    }),
+  ).toThrow("unreadable-or-malformed-ledger");
+  expect(gate.inspectInitialSlug("fresh-plugin")).toEqual({
+    status: "coverage-incomplete",
+    reason: "coverage-invalidated",
+  });
+});
+
+it("does not release a coverage manifest after an unregistered start in a registered state", async () => {
+  const { gate, stateA, start, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  await writeStartedTrial(stateA, {
+    ...start,
+    slug: "late-plugin",
+    campaignId: "external-campaign",
+  });
+  expect(() =>
+    gate.importCoverage(completeCoverage(inventory, stateA)),
+  ).toThrow("unregistered-starts");
+  expect(gate.inspectInitialSlug("fresh-plugin")).toEqual({
+    status: "coverage-incomplete",
+    reason: "legacy-history-unverified",
   });
 });
