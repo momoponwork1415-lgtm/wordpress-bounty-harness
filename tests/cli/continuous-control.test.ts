@@ -19,6 +19,57 @@ import {
 const digest = (letter: string) => `sha256:${letter.repeat(64)}`;
 
 describe("continuous control", () => {
+  it("settles a RUNNING parent that crashed before taking ownership", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wbh-unowned-stop-"));
+    const journal = new SqliteContinuousRunJournal(
+      join(directory, "runs.sqlite"),
+    );
+    const owner = new SqliteContinuousRunOwner(
+      join(directory, "owners.sqlite"),
+    );
+    const claims = new SqliteHostResourceClaims(
+      join(directory, "claims.sqlite"),
+      { maxTargets: 1, providers: { codex: 1 } },
+    );
+    const lines: string[] = [];
+    try {
+      journal.create({
+        parentRunId: "unowned-parent",
+        stateDirectory: directory,
+        configDigest: digest("a"),
+        policyDigest: digest("b"),
+        inventoryDigest: digest("c"),
+      });
+      await runContinuousControl(
+        ["continuous", "stop", "--run", "unowned-parent"],
+        journal,
+        { stdout: (line) => lines.push(line) },
+        {
+          settleStop: (requested) =>
+            settleIdleContinuousStop({
+              parentRunId: requested.parentRunId,
+              journal,
+              owner,
+              claims,
+              ledger: { read: () => [] } as unknown as Ledger,
+              reviewExportReady: async () => false,
+            }),
+        },
+      );
+      expect(JSON.parse(lines.at(-1)!)).toMatchObject({
+        state: "STOPPED",
+        reason: "operator-stop",
+        stopRequested: true,
+      });
+      expect(owner.tryAcquire("unowned-parent").status).toBe("acquired");
+    } finally {
+      claims.close();
+      owner.close();
+      journal.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("settles an idle review wait after taking ownership and checking ledger and claims", async () => {
     const directory = await mkdtemp(join(tmpdir(), "wbh-idle-stop-"));
     const journal = new SqliteContinuousRunJournal(
@@ -118,61 +169,105 @@ describe("continuous control", () => {
     }
   });
 
-  it("leaves the stop pending while another process owns the parent", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "wbh-owned-stop-"));
+  it.each(["WAIT_REVIEW", "RUNNING"] as const)(
+    "leaves a %s stop pending while another process owns the parent",
+    async (priorState) => {
+      const directory = await mkdtemp(join(tmpdir(), "wbh-owned-stop-"));
+      const journal = new SqliteContinuousRunJournal(
+        join(directory, "runs.sqlite"),
+      );
+      const owner = new SqliteContinuousRunOwner(
+        join(directory, "owners.sqlite"),
+      );
+      const claims = new SqliteHostResourceClaims(
+        join(directory, "claims.sqlite"),
+        { maxTargets: 1, providers: { codex: 1 } },
+      );
+      try {
+        const created = journal.create({
+          parentRunId: "owned-parent",
+          stateDirectory: directory,
+          configDigest: digest("a"),
+          policyDigest: digest("b"),
+          inventoryDigest: digest("c"),
+        });
+        if (priorState === "WAIT_REVIEW")
+          journal.transition(created.parentRunId, created.revision, {
+            state: "WAIT_REVIEW",
+            reason: "candidate-exhausted",
+            nextCheckAt: null,
+          });
+        const active = owner.tryAcquire("owned-parent");
+        if (active.status !== "acquired") throw new Error("Owner setup failed");
+        try {
+          const lines: string[] = [];
+          await runContinuousControl(
+            ["continuous", "stop", "--run", "owned-parent"],
+            journal,
+            { stdout: (line) => lines.push(line) },
+            {
+              settleStop: (requested) =>
+                settleIdleContinuousStop({
+                  parentRunId: requested.parentRunId,
+                  journal,
+                  owner,
+                  claims,
+                  ledger: { read: () => [] } as unknown as Ledger,
+                  reviewExportReady: async () => false,
+                }),
+            },
+          );
+          expect(JSON.parse(lines.at(-1)!)).toMatchObject({
+            state: "STOPPING",
+            stopRequested: true,
+          });
+        } finally {
+          owner.release(active.handle);
+        }
+      } finally {
+        claims.close();
+        owner.close();
+        journal.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("retains a real RECOVERING error when stop is requested", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wbh-error-stop-"));
     const journal = new SqliteContinuousRunJournal(
       join(directory, "runs.sqlite"),
     );
-    const owner = new SqliteContinuousRunOwner(
-      join(directory, "owners.sqlite"),
-    );
-    const claims = new SqliteHostResourceClaims(
-      join(directory, "claims.sqlite"),
-      { maxTargets: 1, providers: { codex: 1 } },
-    );
     try {
       const created = journal.create({
-        parentRunId: "owned-parent",
+        parentRunId: "error-parent",
         stateDirectory: directory,
         configDigest: digest("a"),
         policyDigest: digest("b"),
         inventoryDigest: digest("c"),
       });
       journal.transition(created.parentRunId, created.revision, {
-        state: "WAIT_REVIEW",
-        reason: "candidate-exhausted",
+        state: "RECOVERING",
+        reason: "runner-error",
         nextCheckAt: null,
       });
-      const active = owner.tryAcquire("owned-parent");
-      if (active.status !== "acquired") throw new Error("Owner setup failed");
-      try {
-        const lines: string[] = [];
-        await runContinuousControl(
-          ["continuous", "stop", "--run", "owned-parent"],
-          journal,
-          { stdout: (line) => lines.push(line) },
-          {
-            settleStop: (requested) =>
-              settleIdleContinuousStop({
-                parentRunId: requested.parentRunId,
-                journal,
-                owner,
-                claims,
-                ledger: { read: () => [] } as unknown as Ledger,
-                reviewExportReady: async () => false,
-              }),
+      const lines: string[] = [];
+      await runContinuousControl(
+        ["continuous", "stop", "--run", "error-parent"],
+        journal,
+        { stdout: (line) => lines.push(line) },
+        {
+          settleStop: async () => {
+            throw new Error("A recovery hold must not be finalized");
           },
-        );
-        expect(JSON.parse(lines.at(-1)!)).toMatchObject({
-          state: "STOPPING",
-          stopRequested: true,
-        });
-      } finally {
-        owner.release(active.handle);
-      }
+        },
+      );
+      expect(JSON.parse(lines.at(-1)!)).toMatchObject({
+        state: "RECOVERING",
+        reason: "runner-error",
+        stopRequested: true,
+      });
     } finally {
-      claims.close();
-      owner.close();
       journal.close();
       await rm(directory, { recursive: true, force: true });
     }
