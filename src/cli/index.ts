@@ -162,6 +162,11 @@ export type CliContinuousBatchPreparation =
     }
   | {
       readonly status: "hold";
+      readonly reason:
+        "candidate-history-unverified" | "candidate-observation-unverified";
+    }
+  | {
+      readonly status: "hold";
       readonly reason: "candidate-source-pool-expired";
       readonly selectionPrefixLength: number;
     };

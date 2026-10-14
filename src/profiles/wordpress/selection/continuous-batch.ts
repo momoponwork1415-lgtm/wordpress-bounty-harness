@@ -22,6 +22,7 @@ import {
 import {
   wordPressSelectionPolicySchema,
   wordPressTargetSelectionSchema,
+  type SelectionReason,
   type WordPressSelectionPolicy,
   type WordPressTargetSelection,
 } from "./contracts.js";
@@ -49,6 +50,14 @@ const batchIdFor = (parentRunId: string, ordinal: number) =>
   `selection-${canonicalDigest({ parentRunId, ordinal }).slice(7, 39)}`;
 const selectedSlug = (selectionId: string) =>
   /^wporg:([a-z0-9][a-z0-9-]*)@[^@]+$/u.exec(selectionId)?.[1] ?? null;
+const definitiveIneligibilityReasons = new Set<SelectionReason>([
+  "distribution-closed",
+  "update-stale",
+  "excluded-author",
+  "excluded-slug",
+  "below-installation-threshold",
+  "core-version-incompatible",
+]);
 const selectionEvent = (
   batchId: string,
   index: number,
@@ -82,6 +91,11 @@ export type ContinuousBatchPreparation =
       readonly reason: "insufficient-eligible-candidates";
       readonly inspected: number;
       readonly frozen: number;
+    }
+  | {
+      readonly status: "hold";
+      readonly reason:
+        "candidate-history-unverified" | "candidate-observation-unverified";
     }
   | {
       readonly status: "hold";
@@ -457,8 +471,10 @@ export async function prepareWordPressContinuousBatch(options: {
   for (const nominee of nominees) {
     if (poolExpired()) return expiredHold(0);
     if (chosen.length === policy.maximumTargets) break;
-    if ((await options.preFreezeEligibility(nominee.slug)) !== "eligible")
-      continue;
+    const initialEligibility = await options.preFreezeEligibility(nominee.slug);
+    if (initialEligibility === "hold")
+      return { status: "hold", reason: "candidate-history-unverified" };
+    if (initialEligibility === "already-started") continue;
     if (poolExpired()) return expiredHold(0);
     const observations = await options.selection.inspectNominated(
       policy,
@@ -467,13 +483,19 @@ export async function prepareWordPressContinuousBatch(options: {
     );
     inspected++;
     const observed = observations[0];
-    if (
-      observations.length !== 1 ||
-      observed?.slug !== nominee.slug ||
-      observed.status !== "eligible" ||
-      observed.selection === undefined
-    )
-      continue;
+    if (observations.length !== 1 || observed?.slug !== nominee.slug)
+      throw new Error("Nominated inspection did not return its exact slug");
+    if (observed.status !== "eligible" || observed.selection === undefined) {
+      if (
+        observed.status === "ineligible" &&
+        observed.reasons.length > 0 &&
+        observed.reasons.every((reason) =>
+          definitiveIneligibilityReasons.has(reason),
+        )
+      )
+        continue;
+      return { status: "hold", reason: "candidate-observation-unverified" };
+    }
     const target = observed.selection;
     if (
       target.targetId !== nominee.targetId ||
@@ -490,8 +512,12 @@ export async function prepareWordPressContinuousBatch(options: {
     if (ledgerReasons[0]?.reasons.length !== 0) continue;
     // The callback is repeated immediately before freeze. The Trial gate must
     // still atomically reserve this slug before Lab on actual campaign run.
-    if ((await options.preFreezeEligibility(nominee.slug)) !== "eligible")
-      continue;
+    const beforeFreezeEligibility = await options.preFreezeEligibility(
+      nominee.slug,
+    );
+    if (beforeFreezeEligibility === "hold")
+      return { status: "hold", reason: "candidate-history-unverified" };
+    if (beforeFreezeEligibility === "already-started") continue;
     // A freeze failure is an abnormal snapshot/source failure. Only an
     // explicit ineligible observation or history decision skips a nominee.
     const snapshot = await options.freeze(target);

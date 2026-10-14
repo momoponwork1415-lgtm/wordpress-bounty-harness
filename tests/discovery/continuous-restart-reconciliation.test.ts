@@ -70,6 +70,7 @@ function started(
     type: "discovery-run-started",
     identity: `started-${runId}`,
     runId,
+    trialId: "trial-one",
     labId: "lab-one",
     trialOrdinal,
     history: { mode: "none" },
@@ -267,6 +268,71 @@ describe("continuous restart reconciliation", () => {
       ).toMatchObject({
         action: "resume-child",
         campaignId: continuousChildCampaignId(parentRunId, 1),
+      });
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("holds a settled predecessor if an appended finished child has different lineage", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      state.bind();
+      state.settle(completed.length);
+      const next = state.journal.get(parentRunId)!;
+      state.journal.reserveChild(parentRunId, next.revision);
+      const child = {
+        ...started("child-one"),
+        runKind: "child" as const,
+        parentRunId: "run-one",
+      };
+      const pastWith = (childStart: typeof child): LedgerEventInput[] => [
+        ...completed,
+        childStart,
+        finished({ runId: "child-one" }),
+      ];
+      expect(
+        await state.inspect(
+          pastWith(child),
+          undefined,
+          false,
+          false,
+          false,
+          true,
+        ),
+      ).toMatchObject({
+        action: "resume-child",
+        campaignId: continuousChildCampaignId(parentRunId, 1),
+      });
+      expect(
+        await state.inspect(
+          pastWith({ ...child, parentRunId: "another-root" }),
+          undefined,
+          false,
+          false,
+          false,
+          true,
+        ),
+      ).toMatchObject({
+        action: "hold",
+        reason: "ledger-mismatch",
+        campaignId,
+        ownerReconciliationSafe: false,
+      });
+      expect(
+        await state.inspect(
+          pastWith({ ...child, trialId: "another-trial" }),
+          undefined,
+          false,
+          false,
+          false,
+          true,
+        ),
+      ).toMatchObject({
+        action: "hold",
+        reason: "ledger-mismatch",
+        campaignId,
       });
     } finally {
       state.journal.close();
@@ -716,6 +782,44 @@ describe("continuous restart reconciliation", () => {
           finished(),
           concluded(),
         ]),
+      ).toMatchObject({ action: "hold", reason: "ledger-mismatch" });
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("settles a matched child but holds finished children from another Root or Trial", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      state.bind();
+      const child = {
+        ...started("child-one"),
+        runKind: "child" as const,
+        parentRunId: "run-one",
+      };
+      const eventsFor = (childStart: typeof child): LedgerEventInput[] => [
+        batchBound(),
+        selected(),
+        frozen(),
+        started(),
+        childStart,
+        finished({ runId: "child-one" }),
+        finished(),
+        concluded(),
+      ];
+      expect(await state.inspect(eventsFor(child))).toMatchObject({
+        action: "settle-child",
+        ordinal: 0,
+        lastLedgerSequence: 8,
+      });
+      expect(
+        await state.inspect(
+          eventsFor({ ...child, parentRunId: "another-root" }),
+        ),
+      ).toMatchObject({ action: "hold", reason: "ledger-mismatch" });
+      expect(
+        await state.inspect(eventsFor({ ...child, trialId: "another-trial" })),
       ).toMatchObject({ action: "hold", reason: "ledger-mismatch" });
     } finally {
       state.journal.close();

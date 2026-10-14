@@ -174,6 +174,18 @@ function targetState(input: {
     )
   )
     return { nextState: "wait-review", reason: "run-failed" };
+  // A completed Root report does not turn a failed subagent into a successful
+  // Trial. Child receipts are preserved independently, so check their outcomes
+  // before allowing this batch to settle and the parent to admit another one.
+  const childOutcomes = input.starts
+    .filter((start) => start.runKind === "child")
+    .map((start) => input.finishes.get(start.runId));
+  if (
+    childOutcomes.some(
+      (finish) => finish !== undefined && finish.outcome !== "completed",
+    )
+  )
+    return { nextState: "wait-review", reason: "run-failed" };
   if (outcomes.some((finish) => finish === undefined) || input.unmatchedChild)
     return { nextState: "unsettled", reason: "trial-unsettled" };
   if (

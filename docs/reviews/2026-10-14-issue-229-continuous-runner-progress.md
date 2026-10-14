@@ -12,10 +12,12 @@ AI セッションの逐次判断なしで、未探索候補の複数 batch を�
 - 再開時は台帳、claim、owner、検証完了、review export を照合する。過去の settled child の証拠もプロセス再開時に監査する。status は各 child の Trial・Finding・検証・export 到達数を読む。WordPress Finding は Private Evidence の厳格 schema と ID / run / Snapshot を再検査し、export の代替文字列を成功と数えない。
 - `provider-cyber-policy` は quota と区別し `WAIT_REVIEW` に送る。候補取得失敗も枯渇に数えない。config 等の一時的な運用 hold からの明示再開では child 判定を再実行し、判定自体が review を要する場合は解除しない。
 - 自動在庫から固定した対象は、資源 claim の取得後、Lab / Trial の前に WordPress.org の安定版と Programme 適格性を再観測する。版・対象範囲が変化または確認不能なら claim を解放して `WAIT_REVIEW` に置き、固定済み child binding と Snapshot は維持する。手動 pin はこの鮮度条件の対象外。
+- 完了済みの子 run が失敗していれば Root の成功だけで batch を完了扱いにしない。再開時は直近と過去の確定済み batch の Root / 子 Trial 系譜を照合し、不一致は保留する。
+- 旧履歴が未照合の slug と再観測が不確かな slug は候補枯渇に数えず、それぞれ `candidate-history-unverified` と `candidate-observation-unverified` で保留する。
 
 ## 実測と限界
 
-- 型検査、書式、`pnpm check`（800 tests 成功、1 test skip）、`pnpm build`、`git diff --check` は #228 上の専用ブランチで通過した。
+- 型検査、書式、`pnpm check`（807 tests 成功、1 test skip）、`pnpm build`、`git diff --check` は #228 上の専用ブランチで通過した。
 - 実 provider を使う Step 1 の 3 Trial 測定は未実施。候補数、completed、Finding、Lead、wall 中央値、usage、失敗理由について本番値はまだない。したがってこの差分は探索 PR の merge 条件を満たさない。
 - quota の時刻到来だけでは回復を証明できない。現在は `WAIT_QUOTA` の後、読み取り専用 readiness がなければ `WAIT_REVIEW(quota-readiness-unverified)` に止める。別 provider への継続、回復後の無人再開、総 token 利用枠の硬い停止は未実装。
 - 硬い総 token 枠は、現行の事後 usage と broker の byte / request 上限からは保証できない。[実装可能性と必要契約](2026-10-14-issue-229-hard-usage-cap-feasibility.md)を決定待ちとして分離した。

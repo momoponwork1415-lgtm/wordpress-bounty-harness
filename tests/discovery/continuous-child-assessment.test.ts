@@ -202,6 +202,38 @@ describe("read-only child campaign assessment", () => {
     expect(result.progress.trialsFinished).toBe(0);
   });
 
+  it("holds a completed Root Trial when a child run failed", async () => {
+    const rootAndChild = [
+      selected(),
+      frozen(),
+      started(),
+      finished(),
+      {
+        ...started(snapshot, "child-1"),
+        runKind: "child" as const,
+        parentRunId: "run-1",
+        trialId: "run-1",
+        trialOrdinal: 0,
+      },
+    ];
+    const failed = await assess([
+      ...rootAndChild,
+      finished({ runId: "child-1", outcome: "failed", reason: "schema" }),
+      concluded(),
+    ]);
+    expect(failed.allRunsSettled).toBe(true);
+    expect(failed.progress.trialsFinished).toBe(1);
+    expect(failed.nextState).toBe("wait-review");
+    expect(failed.reason).toBe("run-failed");
+
+    const completed = await assess([
+      ...rootAndChild,
+      finished({ runId: "child-1" }),
+      concluded(),
+    ]);
+    expect(completed.nextState).toBe("complete");
+  });
+
   it("waits for exact snapshot verification and materializable review export", async () => {
     const trial = [
       selected(),
