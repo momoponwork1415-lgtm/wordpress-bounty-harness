@@ -15,6 +15,7 @@ import {
 } from "../infrastructure/native-model-process.js";
 import { collectResearchArchive } from "./codex-gvisor-sandbox.js";
 import type { ProviderCredentialEgressGrant } from "./provider-credential-egress-broker.js";
+import { ANTHROPIC_SUBSCRIPTION_BETA } from "./provider-credential-proxy.js";
 
 export const CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB = 8192;
 const pinnedImage = z
@@ -193,6 +194,8 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
     if (
       command.grant.protocol !== "anthropic-messages" ||
       command.grant.model !== command.model ||
+      (command.grant.anthropicAuthentication !== "api-key" &&
+        command.grant.anthropicAuthentication !== "subscription-token") ||
       command.grant.tls !== undefined ||
       !/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(command.grant.baseUrl) ||
       !/^Bearer [A-Za-z0-9_-]{32,}$/.test(command.grant.authorization)
@@ -260,7 +263,12 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
             "--env=DISABLE_ERROR_REPORTING=1",
             "--env=DISABLE_AUTOUPDATER=1",
             "--env=CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
-            `--env=ANTHROPIC_API_KEY=${token}`,
+            ...(command.grant.anthropicAuthentication === "subscription-token"
+              ? [
+                  `--env=ANTHROPIC_AUTH_TOKEN=${token}`,
+                  `--env=ANTHROPIC_BETAS=${ANTHROPIC_SUBSCRIPTION_BETA}`,
+                ]
+              : [`--env=ANTHROPIC_API_KEY=${token}`]),
             `--env=ANTHROPIC_BASE_URL=${command.grant.baseUrl}`,
             "--entrypoint=node",
             this.#options.image,

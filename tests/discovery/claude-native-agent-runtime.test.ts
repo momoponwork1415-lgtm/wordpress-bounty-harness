@@ -20,7 +20,7 @@ const profile = defineClaudeRuntimeProfile(
     id: "claude-opus-55",
     requestedModelId: "claude-opus-5-5",
     requestedEffort: "high",
-    claudeCliVersion: "2.1.278",
+    claudeCliVersion: "2.1.296",
     authenticationMethod: "anthropic-api-key-host",
     cyberAccessProgram: "unavailable",
     serviceTier: "default",
@@ -54,6 +54,7 @@ const grant = {
   dockerNetworkName: "lab-internal",
   model: "claude-opus-5-5",
   protocol: "anthropic-messages" as const,
+  anthropicAuthentication: "api-key" as const,
   expiresAt: run.expiresAt,
 };
 const report = {
@@ -118,7 +119,7 @@ async function setup(
   const sandbox = {
     async probe() {
       return {
-        cliVersion: "2.1.278",
+        cliVersion: "2.1.296",
         bundledCatalogDigest: "unavailable" as const,
       };
     },
@@ -130,7 +131,7 @@ async function setup(
         exitCode: 0,
         stdout: transcript(rootOutput, childFinal, childTranscript),
         stderr: "",
-        cliVersion: "2.1.278",
+        cliVersion: "2.1.296",
         image,
         startedAt: now,
         completedAt: now,

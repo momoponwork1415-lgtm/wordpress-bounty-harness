@@ -341,7 +341,7 @@ export async function createWordPressHostProfile(options: {
         credential.uid !== owner
       )
         throw new Error(
-          "Claude API credential must be a nonempty host-owned 0600 file",
+          "Claude credential must be a nonempty host-owned 0600 file",
         );
       const measured = await claudeSandbox.probe().catch(() => undefined);
       if (measured?.cliVersion !== claudeProfile!.claudeCliVersion)
@@ -440,7 +440,11 @@ export async function createWordPressHostProfile(options: {
             dockerExecutablePath: host.dockerExecutablePath,
             brokerImage: host.images.broker,
             credentialFilePath: host.claude!.credentialFilePath,
-            credentialKind: "anthropic-api-key",
+            credentialKind:
+              claudeProfile!.authenticationMethod ===
+              "anthropic-subscription-host"
+                ? "anthropic-subscription-token"
+                : "anthropic-api-key",
             scratchRootDirectory: directories.brokerScratch,
             proxyBundleDirectory,
             clock: state.clock,

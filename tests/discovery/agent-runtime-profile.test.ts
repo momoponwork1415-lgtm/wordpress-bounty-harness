@@ -104,7 +104,7 @@ describe("Claude runtime profile", () => {
       id: "opus-55",
       requestedModelId: "claude-opus-5-5" as const,
       requestedEffort: "high" as const,
-      claudeCliVersion: "2.1.278",
+      claudeCliVersion: "2.1.296",
       authenticationMethod: "anthropic-api-key-host" as const,
       cyberAccessProgram: "unavailable" as const,
       serviceTier: "default" as const,

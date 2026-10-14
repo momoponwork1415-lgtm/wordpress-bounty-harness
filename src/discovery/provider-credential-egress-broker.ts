@@ -93,6 +93,7 @@ export interface ProviderCredentialEgressGrant {
   readonly dockerNetworkName: string;
   readonly model: string;
   readonly protocol: ProviderApiProtocol;
+  readonly anthropicAuthentication?: "api-key" | "subscription-token";
   readonly expiresAt: string;
 }
 
@@ -233,8 +234,12 @@ export interface ProviderCredentialEgressBrokerOptions {
   readonly dockerExecutablePath: string;
   readonly brokerImage: string;
   readonly credentialFilePath: string;
-  /** An API key file (the default) or a Codex CLI ChatGPT `auth.json`. */
-  readonly credentialKind?: "api-key" | "chatgpt-login" | "anthropic-api-key";
+  /** The host-private provider credential format; never mounted into an agent. */
+  readonly credentialKind?:
+    | "api-key"
+    | "chatgpt-login"
+    | "anthropic-api-key"
+    | "anthropic-subscription-token";
   readonly scratchRootDirectory: string;
   readonly proxyBundleDirectory: string;
   readonly providerNetworkName?: string;
@@ -425,7 +430,10 @@ export function createProviderCredentialEgressBroker(
   const providerNetworkName = options.providerNetworkName ?? "bridge";
   const containerUser = nonRootHostUser();
   const chatgpt = options.credentialKind === "chatgpt-login";
-  const anthropic = options.credentialKind === "anthropic-api-key";
+  const subscription =
+    options.credentialKind === "anthropic-subscription-token";
+  const anthropic =
+    options.credentialKind === "anthropic-api-key" || subscription;
   const upstreamOrigin = chatgpt
     ? CHATGPT_UPSTREAM_ORIGIN
     : anthropic
@@ -534,7 +542,10 @@ export function createProviderCredentialEgressBroker(
             options.credentialFilePath,
           );
           secrets = [apiKey];
-          stagedFiles = { "provider-api-key": `${apiKey}\n` };
+          stagedFiles = {
+            [subscription ? "provider-subscription-token" : "provider-api-key"]:
+              `${apiKey}\n`,
+          };
         }
         const grantSecrets = secrets;
         runDocker = async (args, timeoutMs) => {
@@ -659,7 +670,7 @@ export function createProviderCredentialEgressBroker(
               `${proxyBundle}:/opt/provider-egress:ro`,
               ...secretMounts,
               "--env",
-              `PROVIDER_AUTHENTICATION=${chatgpt ? "chatgpt" : anthropic ? "anthropic-api-key" : "api-key"}`,
+              `PROVIDER_AUTHENTICATION=${chatgpt ? "chatgpt" : subscription ? "anthropic-subscription-token" : anthropic ? "anthropic-api-key" : "api-key"}`,
               "--env",
               `PROVIDER_GRANT_TOKEN=${grantToken}`,
               "--env",
@@ -778,6 +789,13 @@ export function createProviderCredentialEgressBroker(
                         dockerNetworkName: networkName,
                         model: request.model,
                         protocol: request.protocol,
+                        ...(anthropic
+                          ? {
+                              anthropicAuthentication: subscription
+                                ? ("subscription-token" as const)
+                                : ("api-key" as const),
+                            }
+                          : {}),
                         expiresAt: request.expiresAt,
                       });
                       operationResult = { status: "completed", value };

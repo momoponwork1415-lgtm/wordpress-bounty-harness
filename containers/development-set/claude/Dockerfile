@@ -4,6 +4,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git jq mariadb-client php-cli python3 ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install --prefix /opt/claude-sdk --no-audit --no-fund @anthropic-ai/claude-agent-sdk@0.3.272
-RUN npm install --global --no-audit --no-fund @anthropic-ai/claude-code@2.1.278
+RUN npm install --prefix /opt/claude-sdk --no-audit --no-fund @anthropic-ai/claude-agent-sdk@0.3.296
+RUN npm install --global --no-audit --no-fund @anthropic-ai/claude-code@2.1.296
 COPY runner.mjs /opt/claude-sdk/runner.mjs

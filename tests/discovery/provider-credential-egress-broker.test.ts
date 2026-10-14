@@ -24,6 +24,69 @@ const request = {
 };
 
 describe("provider credential egress", () => {
+  it("stages a subscription token only in the gVisor broker sidecar", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-subscription-"));
+    try {
+      const secret = "private-subscription-token";
+      const credentialFilePath = join(root, "subscription-token");
+      const proxyBundleDirectory = join(root, "bundle");
+      await writeFile(credentialFilePath, secret, { mode: 0o600 });
+      await mkdir(proxyBundleDirectory);
+      await writeFile(
+        join(proxyBundleDirectory, "provider-credential-proxy-cli.js"),
+        "// fixture",
+      );
+      const commands: string[][] = [];
+      const broker = createProviderCredentialEgressBroker({
+        dockerExecutablePath: "/usr/bin/docker",
+        brokerImage: `node@${digest}`,
+        credentialFilePath,
+        credentialKind: "anthropic-subscription-token",
+        scratchRootDirectory: root,
+        proxyBundleDirectory,
+        clock,
+        resolveProviderAddresses: async () => ["203.0.113.10"],
+        runDocker: async (args) => {
+          commands.push([...args]);
+          return {
+            exitCode: 0,
+            stdout: args[0] === "inspect" ? "172.28.0.2\n" : "",
+            stderr: "",
+          };
+        },
+      });
+      const result = await broker.withGrant(
+        {
+          ...request,
+          model: "claude-opus-5-5",
+          protocol: "anthropic-messages",
+        },
+        async (grant) => {
+          expect(grant.anthropicAuthentication).toBe("subscription-token");
+          expect(grant.authorization).toMatch(/^Bearer /);
+          expect(JSON.stringify(grant)).not.toContain(secret);
+          return "done";
+        },
+      );
+      expect(result.operation).toEqual({ status: "completed", value: "done" });
+      expect(result.receipt.setup.status).toBe("ready");
+      expect(JSON.stringify(result.receipt)).not.toContain(secret);
+      expect(JSON.stringify(commands)).not.toContain(secret);
+      const create = commands.find((args) => args[0] === "create");
+      expect(create).toContain("--runtime=runsc");
+      expect(create).toContain(
+        "PROVIDER_AUTHENTICATION=anthropic-subscription-token",
+      );
+      expect(
+        create?.some((arg) =>
+          arg.includes("/run/secrets/provider-subscription-token:ro"),
+        ),
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("limits proxy requests to the bound path, model, count, and deadline", async () => {
     const credential = randomBytes(32).toString("hex");
     const grant = randomBytes(32).toString("hex");

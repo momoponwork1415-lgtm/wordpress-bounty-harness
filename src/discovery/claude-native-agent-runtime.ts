@@ -281,7 +281,11 @@ export class ClaudeNativeAgentRuntime {
           if (
             grant.dockerNetworkName !== run.lab.networkName ||
             grant.model !== profile.requestedModelId ||
-            grant.protocol !== "anthropic-messages"
+            grant.protocol !== "anthropic-messages" ||
+            grant.anthropicAuthentication !==
+              (profile.authenticationMethod === "anthropic-subscription-host"
+                ? "subscription-token"
+                : "api-key")
           )
             throw new Error("Claude broker grant mismatch");
           return this.sandbox.execute({

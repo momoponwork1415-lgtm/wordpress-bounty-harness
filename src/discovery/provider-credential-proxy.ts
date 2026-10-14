@@ -10,6 +10,8 @@ import type { Server as NetServer } from "node:net";
 
 export const PROVIDER_UPSTREAM_ORIGIN = "https://api.openai.com/v1";
 export const ANTHROPIC_UPSTREAM_ORIGIN = "https://api.anthropic.com";
+/** The OAuth capability Claude Code forwards through a subscription gateway. */
+export const ANTHROPIC_SUBSCRIPTION_BETA = "oauth-2025-04-20";
 /** Codex subscription backend; only its responses endpoint is ever forwarded. */
 export const CHATGPT_UPSTREAM_ORIGIN = "https://chatgpt.com";
 /** The name the sandbox resolves to the broker and the grant certificate names. */
@@ -54,8 +56,21 @@ export type OpenProviderCredentialProxyOptions = {
   readonly expiresAt: string;
   readonly clock?: () => Date;
 } & (
-  | { readonly apiKey: string; readonly chatgpt?: never }
-  | { readonly chatgpt: ChatgptProxyCredential; readonly apiKey?: never }
+  | {
+      readonly apiKey: string;
+      readonly chatgpt?: never;
+      readonly anthropicSubscriptionToken?: never;
+    }
+  | {
+      readonly anthropicSubscriptionToken: string;
+      readonly apiKey?: never;
+      readonly chatgpt?: never;
+    }
+  | {
+      readonly chatgpt: ChatgptProxyCredential;
+      readonly apiKey?: never;
+      readonly anthropicSubscriptionToken?: never;
+    }
 );
 
 export interface ProviderCredentialProxy {
@@ -176,7 +191,8 @@ function validateOptions(options: OpenProviderCredentialProxyOptions): void {
     options.port < 0 ||
     options.port > 65_535 ||
     (options.chatgpt === undefined
-      ? (options.apiKey ?? "").length === 0
+      ? (options.anthropicSubscriptionToken ?? options.apiKey ?? "").length ===
+        0
       : options.chatgpt.accessToken.length < 8 ||
         options.chatgpt.accountId.length === 0 ||
         !Number.isInteger(options.chatgpt.healthPort) ||
@@ -190,7 +206,10 @@ function validateOptions(options: OpenProviderCredentialProxyOptions): void {
     options.maxRequestBytes <= 0 ||
     !Number.isSafeInteger(options.maxResponseBytes) ||
     options.maxResponseBytes <= 0 ||
-    !Number.isFinite(expiresAt.getTime())
+    !Number.isFinite(expiresAt.getTime()) ||
+    (options.anthropicSubscriptionToken !== undefined &&
+      (options.protocol !== "anthropic-messages" ||
+        options.upstreamOrigin !== ANTHROPIC_UPSTREAM_ORIGIN))
   ) {
     throw new Error("Invalid Provider credential proxy options");
   }
@@ -393,9 +412,9 @@ function chatgptListener(
   };
 }
 
-function apiKeyListener(
+function providerCredentialListener(
   options: OpenProviderCredentialProxyOptions,
-  apiKey: string,
+  credential: string,
   clock: () => Date,
   counters: ProxyCounters,
 ): RequestListener {
@@ -407,8 +426,9 @@ function apiKeyListener(
         sendMetrics(response, counters);
         return;
       }
+      const subscription = options.anthropicSubscriptionToken !== undefined;
       const grantAuthenticated =
-        options.protocol === "anthropic-messages"
+        options.protocol === "anthropic-messages" && !subscription
           ? tokenMatches(
               typeof request.headers["x-api-key"] === "string"
                 ? request.headers["x-api-key"]
@@ -425,7 +445,11 @@ function apiKeyListener(
         sendJson(response, 401, "grant-expired");
         return;
       }
-      if (request.method !== "POST" || request.url !== path) {
+      const admittedPath =
+        request.url === path ||
+        (options.protocol === "anthropic-messages" &&
+          request.url === `${path}?beta=true`);
+      if (request.method !== "POST" || !admittedPath) {
         sendJson(response, 404, "protocol-not-admitted");
         return;
       }
@@ -455,8 +479,7 @@ function apiKeyListener(
         sendJson(response, 429, "grant-request-limit-exceeded");
         return;
       }
-      counters.forwardedRequests += 1;
-      const upstreamUrl = new URL(path, upstreamOrigin.origin);
+      const upstreamUrl = new URL(request.url ?? path, upstreamOrigin.origin);
       const remainingMs =
         new Date(options.expiresAt).getTime() - clock().getTime();
       if (remainingMs <= 0) {
@@ -469,18 +492,32 @@ function apiKeyListener(
         sendJson(response, 400, "anthropic-version-required");
         return;
       }
+      const anthropicBeta = request.headers["anthropic-beta"];
+      if (
+        subscription &&
+        (typeof anthropicBeta !== "string" ||
+          !anthropicBeta
+            .split(",")
+            .some((value) => value.trim() === ANTHROPIC_SUBSCRIPTION_BETA))
+      ) {
+        sendJson(response, 400, "subscription-capability-required");
+        return;
+      }
+      counters.forwardedRequests += 1;
       const upstream = await fetch(upstreamUrl, {
         method: "POST",
         headers: {
           ...(anthropic
             ? {
-                "x-api-key": apiKey,
+                ...(subscription
+                  ? { authorization: `Bearer ${credential}` }
+                  : { "x-api-key": credential }),
                 "anthropic-version": anthropicVersion as string,
                 ...(typeof request.headers["anthropic-beta"] === "string"
                   ? { "anthropic-beta": request.headers["anthropic-beta"] }
                   : {}),
               }
-            : { authorization: `Bearer ${apiKey}` }),
+            : { authorization: `Bearer ${credential}` }),
           "content-type": "application/json",
           accept: request.headers.accept ?? "application/json",
         },
@@ -492,11 +529,25 @@ function apiKeyListener(
       else if (upstream.status >= 400) counters.upstreamClientError += 1;
       else counters.upstreamSuccess += 1;
       const contentType = upstream.headers.get("content-type");
+      const forwardHeaders: Record<string, string> = {};
+      if (anthropic) {
+        for (const [name, value] of upstream.headers) {
+          if (
+            name === "retry-after" ||
+            name === "x-should-retry" ||
+            name.startsWith("anthropic-ratelimit-unified-")
+          )
+            forwardHeaders[name] = value;
+        }
+      }
       if (anthropic && contentType?.startsWith("text/event-stream")) {
-        response.writeHead(upstream.status, { "content-type": contentType });
+        response.writeHead(upstream.status, {
+          "content-type": contentType,
+          ...forwardHeaders,
+        });
         if (
           !(await streamRedacted(upstream, response, options.maxResponseBytes, [
-            apiKey,
+            credential,
           ]))
         ) {
           counters.responseLimitExceeded += 1;
@@ -513,9 +564,10 @@ function apiKeyListener(
         sendJson(response, 502, "response-limit-exceeded");
         return;
       }
-      const redactedUpstreamBody = redactSecret(upstreamBody, apiKey);
+      const redactedUpstreamBody = redactSecret(upstreamBody, credential);
       response.writeHead(upstream.status, {
         ...(contentType === null ? {} : { "content-type": contentType }),
+        ...forwardHeaders,
         "content-length": redactedUpstreamBody.length,
       });
       response.end(redactedUpstreamBody);
@@ -572,8 +624,9 @@ export async function openProviderCredentialProxy(
     responseLimitExceeded: 0,
   };
   if (options.chatgpt === undefined) {
+    const credential = options.anthropicSubscriptionToken ?? options.apiKey;
     const server = createServer(
-      apiKeyListener(options, options.apiKey, clock, counters),
+      providerCredentialListener(options, credential, clock, counters),
     );
     const port = await listen(server, options.port, options.listenHost);
     return { server, origin: `http://${options.listenHost}:${port}` };

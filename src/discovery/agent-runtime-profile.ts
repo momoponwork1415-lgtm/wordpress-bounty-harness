@@ -4,6 +4,16 @@ import { canonicalDigest } from "../infrastructure/canonical-json.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const value = z.string().min(1).max(128);
+const opus55CliVersion = value.refine((version) => {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  if (match === null) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  return (
+    major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 280)))
+  );
+}, "Claude Code 2.1.280 or later is required for Opus 5.5");
 const reported = z.union([value, z.literal("unavailable")]);
 const effort = z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]);
 const model = z.enum(["gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"]);
@@ -45,9 +55,12 @@ const claudeBodySchema = z.strictObject({
   requestedModelId: z.literal("claude-opus-5-5"),
   requestedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]),
   codexCliVersion: z.literal("unavailable"),
-  claudeCliVersion: value,
+  claudeCliVersion: opus55CliVersion,
   bundledCatalogDigest: z.literal("unavailable"),
-  authenticationMethod: z.literal("anthropic-api-key-host"),
+  authenticationMethod: z.enum([
+    "anthropic-api-key-host",
+    "anthropic-subscription-host",
+  ]),
   cyberAccessProgram: z.enum(["defense_access", "unavailable"]),
   serviceTier: z.enum(["default", "unavailable"]),
   subagent: z.strictObject({

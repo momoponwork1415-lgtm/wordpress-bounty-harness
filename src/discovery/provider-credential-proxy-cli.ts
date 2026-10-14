@@ -40,6 +40,7 @@ function protocol(): ProviderApiProtocol {
 /** The credential half of the proxy options, chosen by the broker. */
 async function credential(): Promise<
   | { upstreamOrigin: string; apiKey: string }
+  | { upstreamOrigin: string; anthropicSubscriptionToken: string }
   | {
       upstreamOrigin: string;
       chatgpt: NonNullable<OpenProviderCredentialProxyOptions["chatgpt"]>;
@@ -55,6 +56,13 @@ async function credential(): Promise<
     return {
       upstreamOrigin: ANTHROPIC_UPSTREAM_ORIGIN,
       apiKey: (await readFile("/run/secrets/provider-api-key", "utf8")).trim(),
+    };
+  if (authentication === "anthropic-subscription-token")
+    return {
+      upstreamOrigin: ANTHROPIC_UPSTREAM_ORIGIN,
+      anthropicSubscriptionToken: (
+        await readFile("/run/secrets/provider-subscription-token", "utf8")
+      ).trim(),
     };
   if (authentication !== "chatgpt")
     throw new Error("Provider credential proxy authentication is invalid");
