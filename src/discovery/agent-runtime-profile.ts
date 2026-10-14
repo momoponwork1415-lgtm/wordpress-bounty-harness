@@ -36,14 +36,42 @@ const bodySchema = z.strictObject({
   subagent: z.strictObject({ modelId: reported, effort: reported }),
 });
 
+const claudeBodySchema = z.strictObject({
+  kind: z.literal("agent-runtime-profile"),
+  schemaVersion: z.literal(3),
+  id: value,
+  transportKind: z.literal("claude-code/v1"),
+  sandboxImageDigest: digest,
+  requestedModelId: z.literal("claude-opus-5-5"),
+  requestedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]),
+  codexCliVersion: z.literal("unavailable"),
+  claudeCliVersion: value,
+  bundledCatalogDigest: z.literal("unavailable"),
+  authenticationMethod: z.literal("anthropic-api-key-host"),
+  cyberAccessProgram: z.enum(["defense_access", "unavailable"]),
+  serviceTier: z.enum(["default", "unavailable"]),
+  subagent: z.strictObject({
+    modelId: z.literal("claude-opus-5-5"),
+    effort: z.enum(["low", "medium", "high", "xhigh", "max"]),
+  }),
+});
+
 /** What a human writes; the kind, schema version and digest are derived. */
 export const agentRuntimeProfileDefinitionSchema = bodySchema.omit({
   kind: true,
   schemaVersion: true,
 });
+export const claudeRuntimeProfileDefinitionSchema = claudeBodySchema.omit({
+  kind: true,
+  schemaVersion: true,
+  transportKind: true,
+  sandboxImageDigest: true,
+  codexCliVersion: true,
+  bundledCatalogDigest: true,
+});
 
-export const agentRuntimeProfileSchema = bodySchema
-  .extend({ digest })
+export const agentRuntimeProfileSchema = z
+  .union([bodySchema.extend({ digest }), claudeBodySchema.extend({ digest })])
   .superRefine((profile, context) => {
     const { digest: actual, ...body } = profile;
     if (actual !== canonicalDigest(body)) {
@@ -52,6 +80,15 @@ export const agentRuntimeProfileSchema = bodySchema
         path: ["digest"],
         message: "Profile digest mismatch",
       });
+    }
+    if (profile.transportKind === "claude-code/v1") {
+      if (profile.subagent.effort !== profile.requestedEffort)
+        context.addIssue({
+          code: "custom",
+          path: ["subagent"],
+          message: "Claude child effort must match Root",
+        });
+      return;
     }
     const match = /^(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z0-9.-]+))?$/.exec(
       profile.codexCliVersion,
@@ -72,14 +109,24 @@ export const agentRuntimeProfileSchema = bodySchema
   });
 
 export type AgentRuntimeProfile = z.infer<typeof agentRuntimeProfileSchema>;
-export type AgentRuntimeProfileDefinition = Omit<
+export type CodexAgentRuntimeProfile = Extract<
   AgentRuntimeProfile,
-  "kind" | "schemaVersion" | "digest"
+  { transportKind: "codex-native/v1" }
+>;
+export type ClaudeAgentRuntimeProfile = Extract<
+  AgentRuntimeProfile,
+  { transportKind: "claude-code/v1" }
+>;
+export type AgentRuntimeProfileDefinition = z.infer<
+  typeof agentRuntimeProfileDefinitionSchema
+>;
+export type ClaudeRuntimeProfileDefinition = z.infer<
+  typeof claudeRuntimeProfileDefinitionSchema
 >;
 
 export function defineAgentRuntimeProfile(
   definition: AgentRuntimeProfileDefinition,
-): AgentRuntimeProfile {
+): CodexAgentRuntimeProfile {
   const body = bodySchema.parse({
     kind: "agent-runtime-profile",
     schemaVersion: 2,
@@ -88,7 +135,26 @@ export function defineAgentRuntimeProfile(
   return agentRuntimeProfileSchema.parse({
     ...body,
     digest: canonicalDigest(body),
+  }) as CodexAgentRuntimeProfile;
+}
+
+export function defineClaudeRuntimeProfile(
+  definition: ClaudeRuntimeProfileDefinition,
+  sandboxImageDigest: string,
+): ClaudeAgentRuntimeProfile {
+  const body = claudeBodySchema.parse({
+    kind: "agent-runtime-profile",
+    schemaVersion: 3,
+    transportKind: "claude-code/v1",
+    sandboxImageDigest,
+    codexCliVersion: "unavailable",
+    bundledCatalogDigest: "unavailable",
+    ...definition,
   });
+  return agentRuntimeProfileSchema.parse({
+    ...body,
+    digest: canonicalDigest(body),
+  }) as ClaudeAgentRuntimeProfile;
 }
 
 export type AgentRuntimeProfileAdmission =
@@ -126,10 +192,29 @@ export function admitCooperativeRuntimeProfile(
   const admitted = admitAgentRuntimeProfile(candidate, sandboxImage);
   if (admitted.status !== "admitted") return admitted;
   const profile = admitted.profile;
+  if (profile.transportKind !== "codex-native/v1")
+    return { status: "model-mismatch" };
   if (profile.requestedModelId !== codexModelCatalog.production)
     return { status: "model-mismatch" };
   if (profile.cyberAccessProgram !== "daybreak_blue")
     return { status: "access-mismatch" };
+  if (
+    profile.subagent.modelId !== profile.requestedModelId ||
+    profile.subagent.effort !== profile.requestedEffort
+  )
+    return { status: "child-mismatch" };
+  return admitted;
+}
+
+export function admitClaudeCooperativeRuntimeProfile(
+  candidate: unknown,
+  sandboxImage: string,
+): CooperativeRuntimeProfileAdmission {
+  const admitted = admitAgentRuntimeProfile(candidate, sandboxImage);
+  if (admitted.status !== "admitted") return admitted;
+  const profile = admitted.profile;
+  if (profile.transportKind !== "claude-code/v1")
+    return { status: "model-mismatch" };
   if (
     profile.subagent.modelId !== profile.requestedModelId ||
     profile.subagent.effort !== profile.requestedEffort

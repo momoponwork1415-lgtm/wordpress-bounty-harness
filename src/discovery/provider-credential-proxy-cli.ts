@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import {
+  ANTHROPIC_UPSTREAM_ORIGIN,
   CHATGPT_UPSTREAM_ORIGIN,
   PROVIDER_UPSTREAM_ORIGIN,
   openProviderCredentialProxy,
@@ -26,7 +27,11 @@ function positiveInteger(name: string): number {
 
 function protocol(): ProviderApiProtocol {
   const value = requiredEnvironment("PROVIDER_PROTOCOL");
-  if (value !== "responses" && value !== "chat-completions") {
+  if (
+    value !== "responses" &&
+    value !== "chat-completions" &&
+    value !== "anthropic-messages"
+  ) {
     throw new Error("Provider credential proxy protocol is invalid");
   }
   return value;
@@ -44,6 +49,11 @@ async function credential(): Promise<
   if (authentication === "api-key")
     return {
       upstreamOrigin: PROVIDER_UPSTREAM_ORIGIN,
+      apiKey: (await readFile("/run/secrets/provider-api-key", "utf8")).trim(),
+    };
+  if (authentication === "anthropic-api-key")
+    return {
+      upstreamOrigin: ANTHROPIC_UPSTREAM_ORIGIN,
       apiKey: (await readFile("/run/secrets/provider-api-key", "utf8")).trim(),
     };
   if (authentication !== "chatgpt")

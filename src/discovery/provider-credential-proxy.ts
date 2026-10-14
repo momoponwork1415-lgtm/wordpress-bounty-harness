@@ -9,6 +9,7 @@ import { createServer as createTlsServer } from "node:https";
 import type { Server as NetServer } from "node:net";
 
 export const PROVIDER_UPSTREAM_ORIGIN = "https://api.openai.com/v1";
+export const ANTHROPIC_UPSTREAM_ORIGIN = "https://api.anthropic.com";
 /** Codex subscription backend; only its responses endpoint is ever forwarded. */
 export const CHATGPT_UPSTREAM_ORIGIN = "https://chatgpt.com";
 /** The name the sandbox resolves to the broker and the grant certificate names. */
@@ -28,7 +29,8 @@ const CHATGPT_FORWARDED_HEADERS = [
   "x-client-request-id",
 ] as const;
 
-export type ProviderApiProtocol = "responses" | "chat-completions";
+export type ProviderApiProtocol =
+  "responses" | "chat-completions" | "anthropic-messages";
 
 /** The ChatGPT login the CLI would use, held by the broker only. */
 export interface ChatgptProxyCredential {
@@ -64,7 +66,9 @@ export interface ProviderCredentialProxy {
 }
 
 function protocolPath(protocol: ProviderApiProtocol): string {
-  return protocol === "responses" ? "/v1/responses" : "/v1/chat/completions";
+  if (protocol === "responses") return "/v1/responses";
+  if (protocol === "anthropic-messages") return "/v1/messages";
+  return "/v1/chat/completions";
 }
 
 type ProxyCounters = {
@@ -102,7 +106,12 @@ function sendJson(
 
 function bearerMatches(header: string | undefined, token: string): boolean {
   if (header === undefined || !header.startsWith("Bearer ")) return false;
-  const supplied = Buffer.from(header.slice("Bearer ".length));
+  return tokenMatches(header.slice("Bearer ".length), token);
+}
+
+function tokenMatches(value: string | undefined, token: string): boolean {
+  if (value === undefined) return false;
+  const supplied = Buffer.from(value);
   const expected = Buffer.from(token);
   return (
     supplied.length === expected.length && timingSafeEqual(supplied, expected)
@@ -398,7 +407,16 @@ function apiKeyListener(
         sendMetrics(response, counters);
         return;
       }
-      if (!bearerMatches(request.headers.authorization, options.grantToken)) {
+      const grantAuthenticated =
+        options.protocol === "anthropic-messages"
+          ? tokenMatches(
+              typeof request.headers["x-api-key"] === "string"
+                ? request.headers["x-api-key"]
+                : undefined,
+              options.grantToken,
+            )
+          : bearerMatches(request.headers.authorization, options.grantToken);
+      if (!grantAuthenticated) {
         counters.unauthorizedRequests += 1;
         sendJson(response, 401, "grant-unauthorized");
         return;
@@ -445,10 +463,24 @@ function apiKeyListener(
         sendJson(response, 401, "grant-expired");
         return;
       }
+      const anthropic = options.protocol === "anthropic-messages";
+      const anthropicVersion = request.headers["anthropic-version"];
+      if (anthropic && typeof anthropicVersion !== "string") {
+        sendJson(response, 400, "anthropic-version-required");
+        return;
+      }
       const upstream = await fetch(upstreamUrl, {
         method: "POST",
         headers: {
-          authorization: `Bearer ${apiKey}`,
+          ...(anthropic
+            ? {
+                "x-api-key": apiKey,
+                "anthropic-version": anthropicVersion as string,
+                ...(typeof request.headers["anthropic-beta"] === "string"
+                  ? { "anthropic-beta": request.headers["anthropic-beta"] }
+                  : {}),
+              }
+            : { authorization: `Bearer ${apiKey}` }),
           "content-type": "application/json",
           accept: request.headers.accept ?? "application/json",
         },
@@ -459,6 +491,19 @@ function apiKeyListener(
       if (upstream.status >= 500) counters.upstreamServerError += 1;
       else if (upstream.status >= 400) counters.upstreamClientError += 1;
       else counters.upstreamSuccess += 1;
+      const contentType = upstream.headers.get("content-type");
+      if (anthropic && contentType?.startsWith("text/event-stream")) {
+        response.writeHead(upstream.status, { "content-type": contentType });
+        if (
+          !(await streamRedacted(upstream, response, options.maxResponseBytes, [
+            apiKey,
+          ]))
+        ) {
+          counters.responseLimitExceeded += 1;
+          response.destroy();
+        }
+        return;
+      }
       const upstreamBody = await boundedResponseBody(
         upstream,
         options.maxResponseBytes,
@@ -469,7 +514,6 @@ function apiKeyListener(
         return;
       }
       const redactedUpstreamBody = redactSecret(upstreamBody, apiKey);
-      const contentType = upstream.headers.get("content-type");
       response.writeHead(upstream.status, {
         ...(contentType === null ? {} : { "content-type": contentType }),
         "content-length": redactedUpstreamBody.length,

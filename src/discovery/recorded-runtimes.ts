@@ -10,6 +10,7 @@ export type RecordedRuntime = Pick<
   | "requestedModelId"
   | "requestedEffort"
   | "codexCliVersion"
+  | "claudeCliVersion"
   | "bundledCatalogDigest"
   | "serviceTier"
   | "cyberAccessProgram"
@@ -66,6 +67,9 @@ export async function summarizeRecordedRuntimes(options: {
         requestedModelId: receipt.requestedModelId,
         requestedEffort: receipt.requestedEffort,
         codexCliVersion: receipt.codexCliVersion,
+        ...(receipt.claudeCliVersion === undefined
+          ? {}
+          : { claudeCliVersion: receipt.claudeCliVersion }),
         bundledCatalogDigest: receipt.bundledCatalogDigest,
         serviceTier: receipt.serviceTier,
         cyberAccessProgram: receipt.cyberAccessProgram,

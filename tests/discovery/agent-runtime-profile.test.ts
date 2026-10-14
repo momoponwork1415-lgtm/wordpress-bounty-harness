@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   admitAgentRuntimeProfile,
   admitCooperativeRuntimeProfile,
+  admitClaudeCooperativeRuntimeProfile,
   defineAgentRuntimeProfile,
+  defineClaudeRuntimeProfile,
 } from "../../src/discovery/index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
@@ -92,6 +94,44 @@ describe("Codex runtime profile", () => {
         ...definition,
         requestedModelId: "gpt-daybreak-blue-latest" as never,
       }),
+    ).toThrow();
+  });
+});
+
+describe("Claude runtime profile", () => {
+  it("pins the Opus Root and child to one image, model and effort", () => {
+    const definition = {
+      id: "opus-55",
+      requestedModelId: "claude-opus-5-5" as const,
+      requestedEffort: "high" as const,
+      claudeCliVersion: "2.1.278",
+      authenticationMethod: "anthropic-api-key-host" as const,
+      cyberAccessProgram: "unavailable" as const,
+      serviceTier: "default" as const,
+      subagent: {
+        modelId: "claude-opus-5-5" as const,
+        effort: "high" as const,
+      },
+    };
+    const profile = defineClaudeRuntimeProfile(definition, digest);
+    expect(admitClaudeCooperativeRuntimeProfile(profile, digest).status).toBe(
+      "admitted",
+    );
+    expect(
+      admitClaudeCooperativeRuntimeProfile(profile, `sha256:${"b".repeat(64)}`)
+        .status,
+    ).toBe("image-mismatch");
+    expect(() =>
+      defineClaudeRuntimeProfile(
+        {
+          ...definition,
+          subagent: {
+            modelId: "claude-opus-5-5",
+            effort: "low",
+          },
+        },
+        digest,
+      ),
     ).toThrow();
   });
 });

@@ -6,10 +6,14 @@ import { z } from "zod";
 
 import {
   agentRuntimeProfileDefinitionSchema,
+  claudeRuntimeProfileDefinitionSchema,
+  ClaudeNativeAgentRuntime,
   CodexNativeAgentRuntime,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   createProviderCredentialEgressBroker,
   defineAgentRuntimeProfile,
+  defineClaudeRuntimeProfile,
+  GvisorClaudeSandbox,
   GvisorCodexSandbox,
   ProviderAttachmentStore,
   readPrivateChatgptLogin,
@@ -74,6 +78,7 @@ export const wordpressHostConfigSchema = z.strictObject({
     wordpressCli: pinnedImage,
     browser: pinnedImage,
     codex: pinnedImage,
+    claude: pinnedImage.optional(),
     broker: pinnedImage,
   }),
   codex: z.strictObject({
@@ -85,6 +90,12 @@ export const wordpressHostConfigSchema = z.strictObject({
       sandboxImageDigest: true,
     }),
   }),
+  claude: z
+    .strictObject({
+      credentialFilePath: absolutePath,
+      runtimeProfile: claudeRuntimeProfileDefinitionSchema,
+    })
+    .optional(),
   wordfenceProgrammeTranscriptionPath: absolutePath,
   scopePolicyPath: absolutePath.optional(),
   wordfenceHistory: z
@@ -172,6 +183,7 @@ export async function createWordPressHostProfile(options: {
     wordpressCore: join(host.workDirectory, "wordpress-core"),
     programme: join(host.workDirectory, "programme"),
     codexScratch: join(host.workDirectory, "codex-scratch"),
+    claudeScratch: join(host.workDirectory, "claude-scratch"),
     brokerScratch: join(host.workDirectory, "broker-scratch"),
     attachments: join(host.workDirectory, "provider-attachments"),
   };
@@ -180,7 +192,6 @@ export async function createWordPressHostProfile(options: {
     transportKind: "codex-native/v1",
     sandboxImageDigest: digestOf(host.images.codex),
   });
-
   // Public selection and source freezing need no provider credential or Lab.
   const selectionBoundaries = async (
     state: CliState,
@@ -251,6 +262,25 @@ export async function createWordPressHostProfile(options: {
     config: WordPressCampaignConfig,
     state: CliState,
   ): Promise<WordPressCampaignBoundaries> => {
+    const claudeSelected = config.discoveryProvider === "claude-opus-5-5";
+    const claudeProfile =
+      claudeSelected &&
+      host.claude !== undefined &&
+      host.images.claude !== undefined
+        ? defineClaudeRuntimeProfile(
+            host.claude.runtimeProfile,
+            digestOf(host.images.claude),
+          )
+        : undefined;
+    if (
+      claudeSelected &&
+      (host.claude === undefined ||
+        host.images.claude === undefined ||
+        claudeProfile === undefined)
+    )
+      throw new Error(
+        "Claude Opus 5.5 host image and credential configuration are required",
+      );
     for (const directory of Object.values(directories))
       await mkdir(directory, { recursive: true, mode: 0o700 });
     const sandbox = new GvisorCodexSandbox({
@@ -275,12 +305,50 @@ export async function createWordPressHostProfile(options: {
         proxyBundleDirectory,
         runtimeProfile,
         probe: () => sandbox.probe(),
+        checkClaudeImage: claudeSelected,
       })
     ).filter((item) => !item.ok);
     if (failed.length > 0)
       throw new Error(
         `Host preflight failed; nothing was started:\n${failed.map((item) => `  ${item.item}: ${item.detail}`).join("\n")}`,
       );
+    let claudeSandbox: GvisorClaudeSandbox | undefined;
+    if (claudeSelected) {
+      const claudeHost = host.claude!;
+      claudeSandbox = new GvisorClaudeSandbox({
+        dockerExecutablePath: host.dockerExecutablePath,
+        image: host.images.claude!,
+        scratchRootDirectory: directories.claudeScratch,
+        maxOutputBytes: 64 * 1024 * 1024,
+        timeoutMs: (config.runWallTimeMinutes ?? 60) * 60_000,
+        clock: state.clock,
+        ...(options.runDocker === undefined
+          ? {}
+          : { runDocker: options.runDocker }),
+      });
+      const credential = await lstat(claudeHost.credentialFilePath).catch(
+        () => undefined,
+      );
+      const owner =
+        typeof process.getuid === "function" ? process.getuid() : undefined;
+      if (
+        credential === undefined ||
+        !credential.isFile() ||
+        credential.size === 0 ||
+        credential.size > 16_384 ||
+        credential.nlink !== 1 ||
+        (credential.mode & 0o077) !== 0 ||
+        credential.uid !== owner
+      )
+        throw new Error(
+          "Claude API credential must be a nonempty host-owned 0600 file",
+        );
+      const measured = await claudeSandbox.probe().catch(() => undefined);
+      if (measured?.cliVersion !== claudeProfile!.claudeCliVersion)
+        throw new Error(
+          "Claude image CLI version differs from the pinned runtime profile",
+        );
+    }
 
     const targetSource = openWordPressOrgTargetSource({
       storageDirectory: directories.wordpressOrg,
@@ -365,6 +433,23 @@ export async function createWordPressHostProfile(options: {
       host.images.codex,
       state.clock,
     );
+    const discoveryRuntime = claudeSelected
+      ? new ClaudeNativeAgentRuntime(
+          claudeSandbox!,
+          createProviderCredentialEgressBroker({
+            dockerExecutablePath: host.dockerExecutablePath,
+            brokerImage: host.images.broker,
+            credentialFilePath: host.claude!.credentialFilePath,
+            credentialKind: "anthropic-api-key",
+            scratchRootDirectory: directories.brokerScratch,
+            proxyBundleDirectory,
+            clock: state.clock,
+          }),
+          attachments,
+          host.images.claude!,
+          state.clock,
+        )
+      : runtime;
 
     // Selection needs the programme transcription; commands that never select do not.
     let selection: ReturnType<typeof createWordPressSelection> | undefined;
@@ -467,9 +552,10 @@ export async function createWordPressHostProfile(options: {
           ...(core === undefined ? {} : { dependency: core }),
         };
       },
-      runtimeProfile,
-      probeRuntime: () => sandbox.probe(),
-      executor: runtime,
+      runtimeProfile: claudeSelected ? claudeProfile! : runtimeProfile,
+      probeRuntime: () =>
+        claudeSelected ? claudeSandbox!.probe() : sandbox.probe(),
+      executor: discoveryRuntime,
       attachments,
       verifier,
     };
@@ -505,6 +591,7 @@ async function preflight(options: {
     readonly cliVersion: string;
     readonly bundledCatalogDigest: string;
   }>;
+  readonly checkClaudeImage?: boolean;
 }): Promise<readonly HostPreflightItem[]> {
   const items: HostPreflightItem[] = [];
   const check = (item: string, ok: boolean, detail: string) =>
@@ -545,6 +632,8 @@ async function preflight(options: {
   );
 
   for (const [role, image] of Object.entries(options.host.images)) {
+    if (role === "claude" && !options.checkClaudeImage) continue;
+    if (image === undefined) continue;
     const present =
       (await docker(["image", "inspect", "--format", "{{.Id}}", image])) !==
       undefined;

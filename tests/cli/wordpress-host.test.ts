@@ -46,6 +46,7 @@ const chatgptLogin = (exp: Date) =>
 async function setup(
   docker: Docker = {},
   login?: { readonly expiresAt: Date },
+  discoveryProvider?: "codex" | "claude-opus-5-5",
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-host-"));
   directories.push(root);
@@ -69,6 +70,7 @@ async function setup(
     configPath,
     JSON.stringify({
       schemaVersion: 1,
+      ...(discoveryProvider === undefined ? {} : { discoveryProvider }),
       programmeBoundary: { version: "v1", text: "Synthetic boundary" },
       wordpressVersion: "6.8.3",
       lab: { siteTitle: "Lab", initialPosts: [], customerRole: false },
@@ -157,6 +159,15 @@ const startedContainers = (calls: readonly (readonly string[])[]) =>
   calls.filter((args) => args[0] === "run" && !args.includes("--network=none"));
 
 describe("WordPress host entry", () => {
+  it("rejects Claude selection without a separately pinned image and API credential", async () => {
+    const { run, calls } = await setup({}, undefined, "claude-opus-5-5");
+    const result = await run();
+    expect(result.code).toBe(1);
+    expect(result.stderr.join("\n")).toContain(
+      "Claude Opus 5.5 host image and credential configuration are required",
+    );
+    expect(startedContainers(calls)).toEqual([]);
+  });
   it("checks the host, then compares the probed Codex image with the runtime profile", async () => {
     const { run, calls } = await setup();
     const result = await run();

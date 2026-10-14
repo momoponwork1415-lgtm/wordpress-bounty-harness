@@ -141,6 +141,7 @@ const ablation = z
 /** Human-edited, Git-tracked run configuration. It carries no credentials or keys. */
 const commonCampaignFields = {
   schemaVersion: z.literal(1),
+  discoveryProvider: z.enum(["codex", "claude-opus-5-5"]).default("codex"),
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
   runWallTimeMinutes: z.number().positive().max(240).optional(),
@@ -1375,8 +1376,14 @@ export function createWordPressCliProfile(
       const measured = await boundaries.probeRuntime();
       return [
         {
-          item: "codex-cli",
-          profile: boundaries.runtimeProfile.codexCliVersion,
+          item:
+            boundaries.runtimeProfile.transportKind === "claude-code/v1"
+              ? "claude-cli"
+              : "codex-cli",
+          profile:
+            boundaries.runtimeProfile.transportKind === "claude-code/v1"
+              ? boundaries.runtimeProfile.claudeCliVersion
+              : boundaries.runtimeProfile.codexCliVersion,
           image: measured.cliVersion,
         },
         {
