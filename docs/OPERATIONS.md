@@ -85,7 +85,7 @@ node dist/cli/main.js continuous stop --run <parent-id>
 node dist/cli/main.js --host <同じGit外host.json> --state <同じGit外state> continuous resume --run <parent-id> --config <同じcampaign.json>
 ```
 
-`stop` は host 設定や campaign state を開けなくても host 共通 journal に要求を記録する。進行中の Trial は中断せず drain する。`status` では親・child の状態と、Trial、Finding、検証、review export の到達数を確認する。`WAIT_REVIEW` と `RECOVERING` の理由を調べ、原因を解消してから明示的に `resume` する。候補が尽きたときも同じ slug の追加 Trial を自動投入しない。
+`stop` は host 設定や campaign state を開けなくても host 共通 journal に要求を記録する。進行中の Trial は中断せず drain する。`status` では親・child の状態と、Trial、Finding、検証、review export の到達数を確認する。`ownerObservation` は journal の `state` とは別の読み取り専用観測で、`pidLiveness` が `dead` または `no-claim` なら `RUNNING` 表示だけで worker の稼働を判断しない。PID の生存だけで安全な復旧も証明できない。`WAIT_REVIEW` と `RECOVERING` の理由を調べ、原因を解消してから明示的に `resume` する。親 worker の自動再起動は未実装。候補が尽きたときも同じ slug の追加 Trial を自動投入しない。
 
 現時点では実 provider での3 Trial測定、旧履歴の全数監査と coverage 取込、quota 回復後の自動再開、別 provider への継続、総 token 上限の強制停止が未完了。したがって長時間の無人本番運転はまだ受入前である。実装と未達の内訳は [#229 の進捗レビュー](reviews/2026-10-14-issue-229-continuous-runner-progress.md) に記録する。
 
