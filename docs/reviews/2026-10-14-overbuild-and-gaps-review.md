@@ -10,6 +10,8 @@
 - **作り込み過ぎは「本番ループで使われていない経路」に集中している。** 探索 prompt 15 版、評価モジュール（Answer Key 採点、blind rubric、arm 比較、前向き照合）、週次 smoke 専用の replay Verifier、plugin 固有の Lab adapter 8 本、二段構え時代の `assignment` mode、旧 arm の campaign 設定 27 本。合計でおよそ 4,500 行がいまの収益の式のどの項にも効いていない。削除は所有者が Step 2 と決めているので、ここでは「凍結して新規に足さない線」を明示することを勧める。
 - **数字で見ると、失われているのは候補ではなく転換率と周回数である。** 本番第 3 周は Finding 8 件がすべて `incomplete`、人間が開いた Finding は 0 件、未知の `runtime-confirmed` は 0 件。再発見では Stored XSS（Brizy）と SQLi（SSA、別経路）の 2 分類で判定器が鳴っている。つまり判定器は動くが、本番の候補が判定器に届く前の段（Lab 前提、provider 方針、source 取得）で止まっている。
 
+所有者が「最新」と示した `c5d0ef3` は `main` ではなく branch `codex/issue-229-batch-pin` の先端で、継続運転の実装を含む。その branch での自律運転の到達度は第 6 節、既存ライブラリの採用余地は第 7 節に追記した。**第 6 節の結論を先に書く: 自律運転はまだ成立していない。実 provider が実対象で `cyber_policy` 拒否を返して探索が始まらず（#220）、新しく入った既往 gate が旧世代の履歴監査を取り込むまで初回 Trial も止め、quota 後の再開に人間の `resume` が要る。**
+
 `pnpm check` はこの環境では 16 件が落ちるが、全件が「root ユーザーでは Codex sandbox を起動しない」という意図した拒否（`src/discovery/codex-gvisor-sandbox.ts:446`）によるもので、コードの欠陥ではない。非 root の CI では通る前提で以下を書く。
 
 ## 1. 現状の数字
@@ -128,8 +130,62 @@ Step 1 第 1 週の問い「ループは quota 1 週分を人手 0 で回るか�
 
 R4、R5、R7、R8 は所有者の判断を要しない小さな手直しで、agent に渡る文章も ADR も触らない。R1〜R3、R6、R9 は所有者が決める。
 
-## 5. 未確認の仮定
+## 6. 追記: `c5d0ef3`（branch `codex/issue-229-batch-pin`）での自律運転の到達度
 
+所有者が「最新」と示した `c5d0ef3` は `main` には無く、`codex/issue-229-batch-pin` の先端である（`main` から 40 commit、`src/` +7,092 行、`tests/` +8,019 行、未 merge）。#227 / #228 の branch は含まれず、同じ内容が別 commit として入っている。この branch を含めて「バグバウンティを自律的に回せる状態か」を段ごとに見る。
+
+### 6.1 段ごとの判定
+
+| 段 | 無人で回るか | 止める要因（`c5d0ef3` 時点） |
+| --- | --- | --- |
+| 選定・在庫 | 回る | `candidate-inventory.ts`（768 行）が WordPress.org の封印 pool を頁送りし、未探索 slug を補充する |
+| Snapshot | 回る | #222（umask）、#223（ZIP 取得失敗）は別 branch で修正済み、未 merge |
+| Lab | 回る | 実機 1/1 成功。長時間連続は未測定 |
+| **探索の開始** | **回らない** | `repeat-trial-gate.ts`（841 行）が、旧世代の DB・アーカイブの全数監査 manifest を取り込むまで、**新しい slug の初回 Trial も** `coverage-incomplete` で保留する（`wordpress.ts:1616`、OPERATIONS「現時点で実監査 manifest は未作成・未取込のため初回 slug の保留は続く」）。manifest は人間が Git 外で作り、所有者が承認し、`trial coverage-import` で 1 回だけ取り込む。AI は作らない |
+| **探索の実行** | **回らない** | #220: 実 provider（Codex）が実対象で `cyber_policy` refusal を返し、約 15 秒で `incomplete(provider)`。runner はこれを `WAIT_REVIEW` に送る。つまり**いまの provider はこの仕事を実行しない** |
+| 検証・判定 | 回る | 有界の自動再検証（#209）あり |
+| review export | 回る | skill が読む 1 件分の束を出す |
+| **外側のループ** | **半分** | `continuous start / resume / status / stop` は実装された。しかし quota 到達は `WAIT_QUOTA` → 5 分後の確認 → `WAIT_REVIEW(quota-readiness-unverified)` で止まり、**人間の `resume` が要る**。provider 拒否、候補枯渇、版・Programme・設定の変化もすべて `WAIT_REVIEW` |
+
+結論: **自律運転はまだ成立していない。** しかも止まる理由の 2 つ（初回 slug の保留、quota 後の再開）は、`c5d0ef3` で新しく入った設計が自分で作った停止点である。所有者の ADR 0032 Q6 は「同じ slug の 2 回目以降は 1 Trial ずつ事前承認」であり、「旧世代の履歴を全数監査するまで初回も止める」とは言っていない。この拡大解釈が、Step 1 の完了条件「初回ループが quota 1 週分を人手 0 で」と正面から衝突している。
+
+### 6.2 この branch の作り込み
+
+- 1 branch で +15,000 行。DEVELOPMENT §5「1 PR 500 行以内」の 30 倍で、実 provider での 3 Trial 測定は未実施。merge 条件を満たさないことは branch 内の進捗レビュー自身が書いている。
+- 耐久 workflow エンジンを自作している: 親 run の journal（525 行）、owner lease（212 行）、host 共通 resource claim（564 行）、crash 後の reconciliation（446 行）、child assessment（446 行）。これらは SPEC §4 の「単一の追記専用台帳」とは別の第 2 の状態記録で、sqlite driver も `node:sqlite` と `better-sqlite3` の 2 系統になった。LESSONS 8「先回りで作らない。同じ手動作業を 3 回してから道具にする」に対し、連続運転を 1 回も実機で回す前に crash 復旧と競合制御を書いている。
+- 一方、硬い総 token 枠を「現行契約では保証できない」と調べて止めた判断（`2026-10-14-issue-229-hard-usage-cap-feasibility.md`）は正しい。
+
+### 6.3 自律運転に最短で届く順
+
+1. **#220 を最初に解く。** provider が仕事を拒否する限り、在庫も runner も意味を持たない。選択肢は (a) Codex の cyber access program の適用状況を確認する、(b) Opus runtime（#224、branch `codex/opus-55-discovery` に 2,718 行の試作あり）を第 2 arm として前倒しする。これは所有者が決める。PARKING の「Step 1 完了後」は、Step 1 自体が provider で止まっている現状に合わない。
+2. **初回 slug の保留を外す。** 既往の判定を「この repo の全 `--state` の台帳にある `discovery-run-started`」だけに限り、旧世代の履歴は照合しない、と所有者が決めれば `repeat-trial-gate.ts` の大半は要らない。旧世代と重なる slug を再探索する費用は quota だけで、報奨を失うことはない。
+3. **quota 後の再開を自動にする。** 「5 分後に readiness が確認できなければ人間待ち」ではなく、「次の Trial を 1 本だけ試し、再び quota なら待つ」で足りる。provider の rate-limit 応答は typed receipt で既に区別されている。
+4. **branch を割る。** 在庫（#227）、claim（#228）、runner の最小形（start / stop / status）を別 PR にし、journal・owner・reconciliation・recovery は「実機で 2 回止まってから」に送る。
+5. 上の 1〜3 が通ってから、実 provider で 3 Trial を測る。
+
+## 7. 既存ライブラリ・フレームワークの採用余地
+
+前提: 依存は `zod` と `better-sqlite3` の 2 つだけで、他は Node 標準 API（ADR 0008）。credential を扱う broker と対象 source を展開する経路で供給網の面を増やさない方針は妥当で、以下は「置き換えると薄くなる」箇所だけを挙げる。採否は所有者が決め、agent に渡る文章が変わるものは対照表と 3 Trial の規則に従う。
+
+| 自作している箇所 | 行数 | 候補 | 判断 |
+| --- | ---: | --- | --- |
+| 探索 runtime: Codex CLI の transcript / rollout を解析して Root と子を観測 | 1,613 | 第 2 provider（#224）は **Claude Agent SDK** で組む。subagent、tool 権限、hook、構造化出力が SDK 側にあり、CLI の event 解析を再び 1,600 行書かなくてよい | 採る価値が高い。ChatGPT 購読を使う都合で Codex 側は CLI 経路のままで良い |
+| 入口索引: PHP source を正規表現で走査（`add_action`、`wp_ajax_*`、REST、shortcode） | 994 | **Semgrep**（WordPress ruleset あり）または **Psalm の taint analysis** を sandbox 内で走らせ、決定論的な入口 / sink の一覧を catalog として渡す | Root に渡す入力が変わるので、agent 入力の変更として扱う（対照表、3 Trial）。索引は「所在のカタログ」の範囲を超えない形にする。Mantis の code graph に相当する最小形 |
+| 連続運転の journal / owner / claim / reconciliation | 2,193 | **Temporal** が正統だが、一人・一台の運用には重すぎる。推奨は library ではなく設計: 第 2 の journal を持たず、追記専用台帳から状態を導く（funnel と同じ読み方） | 採らない。6.3 の 4 で薄くする |
+| X.509 / DER を手で encode して broker の一回限り CA を作る | 164 | `openssl req -x509` を broker container 内で呼ぶ（依存ゼロ）、または `@peculiar/x509` | 動いていて test があるなら現状維持。拡張するときに差し替える |
+| ZIP の展開（central directory を自前で読み `inflateRawSync`） | 364 | `yauzl`（zip64、壊れた archive の扱いが堅い） | path traversal / symlink / size の拒否は自作側の価値なので、差し替えても検査は残す。優先度低 |
+| 正準 JSON | 88 | `canonicalize`（RFC 8785） | 現状で十分 |
+| sqlite driver が 2 系統（`node:sqlite` と `better-sqlite3`） | — | `node:sqlite` に寄せると native build（`onlyBuiltDependencies`）が消える | 小 PR で統一できる |
+| 重複照合: ローカル Wordfence mirror のみ | 466 | **WPScan Vulnerability API**、**Patchstack API** を skill 側（`wbh-dedupe`）から呼ぶ。ADR 0031 の分担どおり Harness には入れない | skill の実装時に |
+| Lab の headless browser | — | Playwright 固定 image。妥当 | 現状維持 |
+| 隔離 | — | gVisor。Firecracker / E2B / Modal は一人運用で利点が無い | 現状維持 |
+| CLI 引数 | — | `node:util` の `parseArgs`。`commander` / `citty` にする利点は help 生成だけ | 現状維持（CLI は機械向け、ADR 0032 Q27） |
+
+公開ハーネス（Google Mantis、Visa VVAH、Anthropic defending-code-reference-harness、Cloudflare security-audit-skill）は「framework として組み込む」対象ではなく、Claude Code 向けの skill と prompt の集合である。Opus arm を作るなら、これらの skill 本文は出典対照表の候補になる（所有者の採否規則どおり要素を足さない）。比較は `2026-10-13-public-harness-update-and-maturity.md` にある。
+
+## 8. 未確認の仮定
+
+- `c5d0ef3` の branch は読んだだけで、`pnpm check` や実機は動かしていない。branch 内の進捗レビューが書く「802 tests 成功」は検証していない。
 - 本番の台帳と Private Evidence は読んでいないため、第 3 周の `no-judge` 5 件の impact 内訳と、#185 以降の周回で何件が `finding-parked` になったかは分からない。
 - `pnpm check` の 16 件の失敗は root ユーザー起因と判断したが、非 root 環境での再実行はしていない。
 - 「使われていない」は「`campaign run` の経路から呼ばれない」の意味で、所有者が手で呼んでいる可能性は排除できない。
