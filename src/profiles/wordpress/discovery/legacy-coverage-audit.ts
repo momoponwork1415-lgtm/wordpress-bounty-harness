@@ -5,7 +5,7 @@ import { lstat, open } from "node:fs/promises";
 import { z } from "zod";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
-import { privateExistingAuditPath } from "../../../infrastructure/private-audit-path.js";
+import { privateExistingAuditFile } from "../../../infrastructure/private-audit-path.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const slug = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
@@ -88,7 +88,10 @@ function unchanged(before: BigIntStats, after: BigIntStats): boolean {
   );
 }
 
-async function stableFile(path: string): Promise<{
+export async function readStableAuditFile(
+  path: string,
+  expectedIdentity: string,
+): Promise<{
   readonly bytes: Buffer;
   readonly digest: string;
   readonly identity: string;
@@ -98,6 +101,8 @@ async function stableFile(path: string): Promise<{
     const before = await handle.stat({ bigint: true });
     if (!before.isFile())
       throw new Error("Audit source or evidence is not a regular file");
+    if (`${before.dev}:${before.ino}` !== expectedIdentity)
+      throw new Error("Audit input changed after validation");
     const bytes = await handle.readFile();
     const after = await handle.stat({ bigint: true });
     const atPath = await lstat(path, { bigint: true });
@@ -113,7 +118,10 @@ async function stableFile(path: string): Promise<{
   }
 }
 
-async function stableFileDigest(path: string): Promise<{
+async function stableFileDigest(
+  path: string,
+  expectedIdentity: string,
+): Promise<{
   readonly digest: string;
   readonly identity: string;
 }> {
@@ -122,6 +130,8 @@ async function stableFileDigest(path: string): Promise<{
     const before = await handle.stat({ bigint: true });
     if (!before.isFile())
       throw new Error("Audit source or evidence is not a regular file");
+    if (`${before.dev}:${before.ino}` !== expectedIdentity)
+      throw new Error("Audit input changed after validation");
     const hash = createHash("sha256");
     for await (const chunk of handle.createReadStream({ autoClose: false }))
       hash.update(chunk);
@@ -179,11 +189,16 @@ export async function auditLegacyCoveragePlan(value: unknown) {
     a.sourceClass.localeCompare(b.sourceClass),
   )) {
     const entries = [];
-    for (const entry of group.entries)
+    for (const entry of group.entries) {
+      const sourceFile = await privateExistingAuditFile(entry.path);
+      const evidenceFile = await privateExistingAuditFile(entry.evidencePath);
       entries.push({
-        path: await privateExistingAuditPath(entry.path),
-        evidencePath: await privateExistingAuditPath(entry.evidencePath),
+        path: sourceFile.path,
+        sourceIdentity: sourceFile.identity,
+        evidencePath: evidenceFile.path,
+        evidenceIdentity: evidenceFile.identity,
       });
+    }
     entries.sort((a, b) => a.path.localeCompare(b.path));
     const content: { path: string; digest: string }[] = [];
     const evidence: { path: string; digest: string }[] = [];
@@ -196,11 +211,17 @@ export async function auditLegacyCoveragePlan(value: unknown) {
         if (paths.has(path)) throw new Error("Audit plan repeats a file path");
         paths.add(path);
       }
-      const sourceFile = await stableFileDigest(entry.path);
+      const sourceFile = await stableFileDigest(
+        entry.path,
+        entry.sourceIdentity,
+      );
       if (identities.has(sourceFile.identity))
         throw new Error("Audit plan repeats a file identity");
       identities.add(sourceFile.identity);
-      const evidenceFile = await stableFile(entry.evidencePath);
+      const evidenceFile = await readStableAuditFile(
+        entry.evidencePath,
+        entry.evidenceIdentity,
+      );
       if (identities.has(evidenceFile.identity))
         throw new Error("Audit plan repeats a file identity");
       identities.add(evidenceFile.identity);
@@ -217,7 +238,10 @@ export async function auditLegacyCoveragePlan(value: unknown) {
       }
       if (metadata.sourceDigest !== sourceFile.digest)
         throw new Error("Audit evidence refers to different source content");
-      const afterEvidence = await stableFileDigest(entry.path);
+      const afterEvidence = await stableFileDigest(
+        entry.path,
+        entry.sourceIdentity,
+      );
       if (
         afterEvidence.identity !== sourceFile.identity ||
         afterEvidence.digest !== sourceFile.digest

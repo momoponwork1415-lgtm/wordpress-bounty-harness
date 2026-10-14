@@ -5,6 +5,7 @@ import {
   mkdtemp,
   open,
   readFile,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -20,10 +21,13 @@ import {
 } from "../../../src/cli/coverage-audit.js";
 import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import {
-  privateExistingAuditPath,
+  privateExistingAuditFile,
   privateNewAuditPath,
 } from "../../../src/infrastructure/private-audit-path.js";
-import { auditLegacyCoveragePlan } from "../../../src/profiles/wordpress/discovery/legacy-coverage-audit.js";
+import {
+  auditLegacyCoveragePlan,
+  readStableAuditFile,
+} from "../../../src/profiles/wordpress/discovery/legacy-coverage-audit.js";
 import { repeatTrialCoverageManifestSchema } from "../../../src/profiles/wordpress/discovery/repeat-trial-gate.js";
 
 const roots: string[] = [];
@@ -235,7 +239,7 @@ it("keeps plan, source, evidence, and output outside Git and rejects symlink inp
   await mkdir(join(gitRoot, ".git"), { recursive: true });
   const inside = join(gitRoot, "evidence.json");
   await writeFile(inside, "synthetic metadata");
-  await expect(privateExistingAuditPath(inside)).rejects.toThrow("outside Git");
+  await expect(privateExistingAuditFile(inside)).rejects.toThrow("outside Git");
   await expect(
     privateNewAuditPath(join(gitRoot, "candidate.json")),
   ).rejects.toThrow("outside Git");
@@ -263,9 +267,27 @@ it("keeps plan, source, evidence, and output outside Git and rejects symlink inp
   );
   const evidenceLink = join(dirname(source), "evidence-link.json");
   await symlink(evidencePath, evidenceLink);
-  await expect(privateExistingAuditPath(evidenceLink)).rejects.toThrow(
+  await expect(privateExistingAuditFile(evidenceLink)).rejects.toThrow(
     "regular file",
   );
+});
+
+it("rejects a valid plan substituted after path validation", async () => {
+  const { plan, source } = await fixture();
+  const root = dirname(source);
+  const planPath = join(root, "plan.json");
+  await writeFile(planPath, JSON.stringify(plan));
+  const inspected = await privateExistingAuditFile(planPath);
+  await rename(planPath, join(root, "original-plan.json"));
+  await writeFile(planPath, JSON.stringify({ ...plan, schemaVersion: 1 }));
+  await expect(
+    readStableAuditFile(inspected.path, inspected.identity),
+  ).rejects.toThrow("changed after validation");
+  await rm(planPath);
+  await symlink(join(root, "original-plan.json"), planPath);
+  await expect(
+    readStableAuditFile(inspected.path, inspected.identity),
+  ).rejects.toThrow();
 });
 
 it("keeps malformed plan and evidence fragments out of CLI stderr", async () => {

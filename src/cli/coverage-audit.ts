@@ -1,12 +1,13 @@
-import { open, readFile, unlink } from "node:fs/promises";
+import { open, unlink } from "node:fs/promises";
 
 import {
-  privateExistingAuditPath,
+  privateExistingAuditFile,
   privateNewAuditPath,
 } from "../infrastructure/private-audit-path.js";
 import {
   auditLegacyCoveragePlan,
   parseLegacyCoverageAuditJson,
+  readStableAuditFile,
 } from "../profiles/wordpress/discovery/legacy-coverage-audit.js";
 
 type AuditIo = {
@@ -61,12 +62,14 @@ export async function runCoverageAuditCli(
     return 2;
   }
   try {
-    const planPath = await privateExistingAuditPath(args[1]);
+    const plan = await privateExistingAuditFile(args[1]);
     const outputPath = await privateNewAuditPath(args[3]);
-    if (planPath === outputPath)
+    if (plan.path === outputPath)
       throw new Error("Audit output must differ from the input plan");
     const value = parseLegacyCoverageAuditJson(
-      await readFile(planPath, "utf8"),
+      (await readStableAuditFile(plan.path, plan.identity)).bytes.toString(
+        "utf8",
+      ),
       "plan",
     );
     const result = await auditLegacyCoveragePlan(value);

@@ -18,15 +18,24 @@ async function assertOutsideGit(directory: string): Promise<void> {
   }
 }
 
-export async function privateExistingAuditPath(value: string): Promise<string> {
+export async function privateExistingAuditFile(
+  value: string,
+): Promise<{ readonly path: string; readonly identity: string }> {
   if (!isAbsolute(value))
     throw new Error("Coverage audit paths must be absolute");
-  const original = await lstat(value);
+  const original = await lstat(value, { bigint: true });
   if (!original.isFile() || original.isSymbolicLink())
     throw new Error("Coverage audit input is not a regular file");
   const path = await realpath(value);
   await assertOutsideGit(dirname(path));
-  return path;
+  const current = await lstat(path, { bigint: true });
+  if (
+    !current.isFile() ||
+    current.dev !== original.dev ||
+    current.ino !== original.ino
+  )
+    throw new Error("Coverage audit input changed while validating");
+  return { path, identity: `${original.dev}:${original.ino}` };
 }
 
 export async function privateNewAuditPath(value: string): Promise<string> {
