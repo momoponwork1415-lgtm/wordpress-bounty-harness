@@ -15,8 +15,27 @@ export const BACKOFF_QUOTA_MINUTES = [30, 60] as const;
 export const QUOTA_LONG_SLEEP_HOURS = 6;
 export const MAX_CONSECUTIVE_ERROR_BATCHES = 3;
 export const ERROR_GAP_MINUTES = 10;
+export const REFUSAL_HOLD_MINUTES = 60;
+export const MAX_CONSECUTIVE_REFUSAL_BATCHES = 1;
+export const MAX_CONSECUTIVE_NO_PROGRESS_BATCHES = 2;
+export const NO_PROGRESS_HOLD_MINUTES = 60;
+export const EMPTY_SLEEP_HOURS = 24;
+export const EMPTY_DAYS_BEFORE_EXHAUSTED = 3;
+export const LISTING_UNAVAILABLE_RETRY_MINUTES = 60;
+export const LOGIN_POLL_MINUTES = 10;
+export const MIN_FREE_GIB = 10;
+export const DISK_RECHECK_MINUTES = 60;
+export const PROGRAMME_STALE_DAYS = 35;
+export const PROGRAMME_WARN_DAYS = 7;
 
-export type ContinuousStopReason = "operator" | "errors" | "exhausted";
+export type ContinuousStopReason =
+  | "operator"
+  | "errors"
+  | "no-progress"
+  | "programme-stale"
+  | "exhausted"
+  | "legacy-history-missing"
+  | "missing-floor-policy";
 
 /** The runner's working memo. The ledger stays the record; this file may be deleted. */
 export type ContinuousMemo = {
@@ -26,6 +45,11 @@ export type ContinuousMemo = {
   target?: string | null;
   backoffStep: number;
   consecutiveErrorBatches: number;
+  consecutiveRefusalBatches: number;
+  consecutiveNoProgressBatches: number;
+  consecutiveEmptyDays: number;
+  /** After a refused batch, the next batch runs one target. */
+  probe: boolean;
   lastError?: string;
   updatedAt: string;
 };
@@ -51,6 +75,15 @@ export interface ContinuousDeps {
   cleanupLeftovers(): Promise<number>;
   /** The same host check as `runtime check`; throws on failure. */
   preflight(): Promise<void>;
+  legacyHistoryAvailable(): Promise<boolean>;
+  floorPolicyAvailable(): Promise<boolean>;
+  /** The provider login's expiry, re-read from its file; null when unreadable. */
+  readAuth(): Promise<{ readonly expiresAt: Date } | null>;
+  /** When the Programme scope copy was transcribed. */
+  programmeObservedAt(): Promise<Date>;
+  statfs(): Promise<{ readonly freeBytes: number }>;
+  /** maximumTargets × (runWallTimeMinutes + 30 × 3 + 15). */
+  readonly loginMarginMinutes: number;
   clock(): Date;
   sleep(ms: number): Promise<void>;
   readonly signals: Pick<NodeJS.Process, "on" | "off">;
@@ -63,6 +96,7 @@ export interface ContinuousDeps {
 }
 
 const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
 
 export function continuousPaths(stateDirectory: string) {
   return {
@@ -114,6 +148,50 @@ function providerLimitOf(deps: ContinuousDeps, campaignId: string) {
   return limits.at(-1) === "rate-limit" ? "rate-limit" : "quota";
 }
 
+/** The latest automatic batch that no campaign has bound yet. */
+function unboundBatch(deps: ContinuousDeps): string | undefined {
+  const bound = new Set(
+    readAll(deps.ledger, { type: "selection-batch-bound" }).flatMap((event) =>
+      event.type === "selection-batch-bound" ? [event.selectionBatchId] : [],
+    ),
+  );
+  const latest = readAll(deps.ledger, { type: "target-selected" })
+    .filter((event) => event.campaignId.startsWith("selection-"))
+    .at(-1)?.campaignId;
+  return latest === undefined || bound.has(latest) ? undefined : latest;
+}
+
+/** Completed explore Trials, and whether every skipped target was refused. */
+function batchFacts(deps: ContinuousDeps, campaignId: string) {
+  const explore = new Set(
+    readAll(deps.ledger, { campaignId, type: "discovery-run-started" }).flatMap(
+      (event) =>
+        event.type === "discovery-run-started" &&
+        (event.runKind ?? "explore") === "explore"
+          ? [event.runId]
+          : [],
+    ),
+  );
+  const completed = readAll(deps.ledger, {
+    campaignId,
+    type: "discovery-run-finished",
+  }).filter(
+    (event) =>
+      event.type === "discovery-run-finished" &&
+      explore.has(event.runId) &&
+      event.outcome === "completed",
+  ).length;
+  const skips = readAll(deps.ledger, { campaignId, type: "target-skipped" });
+  const refusedAll =
+    completed === 0 &&
+    skips.length > 0 &&
+    skips.every(
+      (event) =>
+        event.type === "target-skipped" && event.reason === "provider-refused",
+    );
+  return { completed, refusedAll };
+}
+
 /** One host, one operator, one production state (OPERATIONS §2). */
 export function createContinuousRunner(deps: ContinuousDeps) {
   const paths = continuousPaths(deps.stateDirectory);
@@ -122,6 +200,10 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     detail: {},
     backoffStep: 0,
     consecutiveErrorBatches: 0,
+    consecutiveRefusalBatches: 0,
+    consecutiveNoProgressBatches: 0,
+    consecutiveEmptyDays: 0,
+    probe: false,
     updatedAt: deps.clock().toISOString(),
   };
   let signalled = false;
@@ -176,6 +258,10 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     if (previous > 0 && previous !== deps.pid && deps.pidAlive(previous))
       throw new Error(`continuous run is already running as pid ${previous}`);
     await rm(paths.stop, { force: true });
+    if (!(await deps.legacyHistoryAvailable()))
+      return stop("legacy-history-missing");
+    if (!(await deps.floorPolicyAvailable()))
+      return stop("missing-floor-policy");
     const saved = await readFile(paths.memo, "utf8").catch(() => "{}");
     memo = { ...memo, ...(JSON.parse(saved) as Partial<ContinuousMemo>) };
     await deps.preflight();
@@ -197,20 +283,59 @@ export function createContinuousRunner(deps: ContinuousDeps) {
 
   const loop = async (): Promise<ContinuousStopReason> => {
     // An unfinished campaign resumes under its id.
-    let current = memo.campaignId && {
-      campaignId: memo.campaignId,
-      target: memo.target ?? null,
-      retry: true,
-    };
+    // An unbound batch from a crash runs before any new selection.
+    let current =
+      (memo.campaignId && {
+        campaignId: memo.campaignId,
+        target: memo.target ?? null,
+        retry: true,
+      }) ||
+      (unboundBatch(deps) && {
+        campaignId: nextCampaignId(deps),
+        target: null,
+        retry: false,
+      }) ||
+      undefined;
     for (;;) {
       if (stopRequested()) return stop("operator");
+      const now = deps.clock();
+      const age = now.getTime() - (await deps.programmeObservedAt()).getTime();
+      if (age >= PROGRAMME_STALE_DAYS * DAY) return stop("programme-stale");
+      if (age >= (PROGRAMME_STALE_DAYS - PROGRAMME_WARN_DAYS) * DAY)
+        deps.io.log(`${now.toISOString()} warning programme-copy-ageing`);
+      if ((await deps.statfs()).freeBytes < MIN_FREE_GIB * 1024 ** 3) {
+        await hold("holding-disk-low", DISK_RECHECK_MINUTES * MINUTE);
+        continue;
+      }
+      const auth = await deps.readAuth();
+      const margin = deps.loginMarginMinutes * MINUTE;
+      if (auth === null || auth.expiresAt.getTime() - now.getTime() < margin) {
+        await hold("waiting-login", LOGIN_POLL_MINUTES * MINUTE, {
+          expiredAt: auth?.expiresAt.toISOString() ?? "unavailable",
+        });
+        continue;
+      }
       if (!current) {
         const selected = await deps.select();
-        // Holds for an empty pool or a failed listing come with P6 (b).
-        if (selected.batchId === null) return stop("exhausted");
+        if (selected.batchId === null) {
+          // A failed listing is not an empty pool.
+          if (["unavailable", "stale"].includes(selected.sourceStatus ?? "")) {
+            await hold("sleeping", LISTING_UNAVAILABLE_RETRY_MINUTES * MINUTE, {
+              reason: "listing-unavailable",
+            });
+            continue;
+          }
+          if (++memo.consecutiveEmptyDays >= EMPTY_DAYS_BEFORE_EXHAUSTED)
+            return stop("exhausted");
+          await hold("sleeping", EMPTY_SLEEP_HOURS * 60 * MINUTE, {
+            reason: "empty",
+          });
+          continue;
+        }
+        memo.consecutiveEmptyDays = 0;
         current = {
           campaignId: nextCampaignId(deps),
-          target: null,
+          target: memo.probe ? (selected.targets[0] ?? null) : null,
           retry: false,
         };
       }
@@ -266,9 +391,33 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       }
       // The campaign finished: the next batch gets a new id.
       memo.backoffStep = 0;
+      const facts = batchFacts(deps, current.campaignId);
       delete memo.campaignId;
       delete memo.target;
       current = undefined;
+      if (facts.refusedAll) {
+        // Refused runs are not Trials, so the same slugs come back on top.
+        if (
+          ++memo.consecutiveRefusalBatches >= MAX_CONSECUTIVE_REFUSAL_BATCHES
+        ) {
+          memo.probe = true;
+          await hold("holding-refusals", REFUSAL_HOLD_MINUTES * MINUTE);
+        }
+        continue;
+      }
+      memo.consecutiveRefusalBatches = 0;
+      if (facts.completed > 0) {
+        memo.probe = false;
+        memo.consecutiveNoProgressBatches = 0;
+        continue;
+      }
+      const stalled = ++memo.consecutiveNoProgressBatches;
+      if (stalled > MAX_CONSECUTIVE_NO_PROGRESS_BATCHES)
+        return stop("no-progress");
+      if (stalled === MAX_CONSECUTIVE_NO_PROGRESS_BATCHES) {
+        await deps.preflight();
+        await hold("holding-no-progress", NO_PROGRESS_HOLD_MINUTES * MINUTE);
+      }
     }
   };
 
