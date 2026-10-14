@@ -5,7 +5,10 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { SqliteHostResourceClaims } from "../../src/infrastructure/host-resource-claims.js";
+import {
+  RECOVERY_SETTLE_MS,
+  SqliteHostResourceClaims,
+} from "../../src/infrastructure/host-resource-claims.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -27,9 +30,14 @@ async function open(
     targetKey: string,
     providerKeys: string[],
     ownerKey = `run:${targetKey}`,
+    ownerPid = process.pid,
   ) => ({
     targetKey,
     ownerKey,
+    ownerPid,
+    stateDirectory: directory,
+    campaignId: "campaign-test",
+    snapshotDigest: `sha256:${"a".repeat(64)}`,
     providerKeys,
     leaseDurationMs: 60 * 60_000,
   });
@@ -38,8 +46,12 @@ async function open(
     first,
     second,
     request,
+    clock,
     advance: () => {
       now = new Date("2026-10-14T02:00:00Z");
+    },
+    advanceBy: (milliseconds: number) => {
+      now = new Date(now.getTime() + milliseconds);
     },
   };
 }
@@ -85,10 +97,16 @@ describe("host-common resource claims", () => {
   });
 
   it("never frees an expired claim until ledger and Lab/broker reconciliation succeeds", async () => {
-    const { path, first, second, request, advance } = await open();
+    const { path, first, second, request, clock, advance, advanceBy } =
+      await open();
     try {
       const acquired = first.tryAcquire(
-        request("wordpress:plugin:a", ["opus"]),
+        request(
+          "wordpress:plugin:a",
+          ["opus"],
+          "run:dead-owner",
+          2_147_483_647,
+        ),
       );
       expect(acquired.status).toBe("acquired");
       if (acquired.status !== "acquired") return;
@@ -111,7 +129,7 @@ describe("host-common resource claims", () => {
           maxTargets: 2,
           providers: { codex: 1, opus: 2 },
         },
-        () => new Date("2026-10-14T02:00:00Z"),
+        clock,
       );
       try {
         expect(restarted.status().claims[0]).toMatchObject({
@@ -122,8 +140,9 @@ describe("host-common resource claims", () => {
           await restarted.reconcileAbsent(
             acquired.handle.claimId,
             async () => ({
-              ledgerHasActiveTrial: true,
-              labHasResources: false,
+              ledgerInspected: true,
+              unresolvedRunIds: [],
+              labHasResources: true,
               brokerHasResources: false,
               evidenceDigest: `sha256:${"a".repeat(64)}`,
             }),
@@ -134,10 +153,27 @@ describe("host-common resource claims", () => {
           await restarted.reconcileAbsent(
             acquired.handle.claimId,
             async () => ({
-              ledgerHasActiveTrial: false,
+              ledgerInspected: true,
+              unresolvedRunIds: ["run-a"],
               labHasResources: false,
               brokerHasResources: false,
               evidenceDigest: `sha256:${"b".repeat(64)}`,
+            }),
+          ),
+        ).toBe(false);
+        expect(restarted.status().claims[0]?.recoveryEligibleAt).toBe(
+          new Date(clock().getTime() + RECOVERY_SETTLE_MS).toISOString(),
+        );
+        advanceBy(RECOVERY_SETTLE_MS);
+        expect(
+          await restarted.reconcileAbsent(
+            acquired.handle.claimId,
+            async () => ({
+              ledgerInspected: true,
+              unresolvedRunIds: ["run-a"],
+              labHasResources: false,
+              brokerHasResources: false,
+              evidenceDigest: `sha256:${"c".repeat(64)}`,
             }),
           ),
         ).toBe(true);
@@ -153,21 +189,25 @@ describe("host-common resource claims", () => {
   it("rejects inconsistent host limits and tunes them only while idle", async () => {
     const { path, first, second, request } = await open();
     try {
+      const claim = first.tryAcquire(request("wordpress:plugin:a", ["codex"]));
+      expect(claim.status).toBe("acquired");
+      if (claim.status !== "acquired") return;
       expect(
         () =>
           new SqliteHostResourceClaims(path, {
             maxTargets: 3,
             providers: { codex: 2, opus: 2 },
           }),
-      ).toThrow("differ from the shared configuration");
-      const claim = first.tryAcquire(request("wordpress:plugin:a", ["codex"]));
-      expect(claim.status).toBe("acquired");
-      if (claim.status !== "acquired") return;
+      ).toThrow("differ while claims are active");
       expect(() =>
         second.setLimits({ maxTargets: 3, providers: { codex: 2, opus: 2 } }),
       ).toThrow("while claims are active");
       first.release(claim.handle);
-      second.setLimits({ maxTargets: 3, providers: { codex: 2, opus: 2 } });
+      const tuned = new SqliteHostResourceClaims(path, {
+        maxTargets: 3,
+        providers: { codex: 2, opus: 2 },
+      });
+      tuned.close();
       expect(first.status()).toMatchObject({
         maxTargets: 3,
         providers: { codex: { limit: 2 } },

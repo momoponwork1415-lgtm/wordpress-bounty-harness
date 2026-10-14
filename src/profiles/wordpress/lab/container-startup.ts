@@ -49,6 +49,20 @@ type RequireDocker = (
   timeoutMs?: number,
 ) => Promise<DockerResult>;
 
+async function createResource(
+  resource: Resources,
+  requireDocker: RequireDocker,
+  args: readonly string[],
+): Promise<void> {
+  try {
+    await requireDocker(args);
+  } catch (error) {
+    // The daemon may finish a timed-out create after our cleanup attempt.
+    resource.creationUncertain = true;
+    throw error;
+  }
+}
+
 export interface ContainerStartup {
   readonly images: {
     readonly database: string;
@@ -80,11 +94,23 @@ async function startNetworkAndDatabase(
   startup: ContainerStartup,
 ): Promise<void> {
   const { requireDocker, images } = startup;
-  await requireDocker(["network", "create", "--internal", resource.network]);
+  // A Docker client timeout does not prove the daemon did not create the
+  // resource. Record the attempted name before issuing each create command.
   resource.networkCreated = true;
-  await requireDocker(["volume", "create", resource.volume]);
+  await createResource(resource, requireDocker, [
+    "network",
+    "create",
+    "--internal",
+    resource.network,
+  ]);
   resource.volumeCreated = true;
-  await requireDocker([
+  await createResource(resource, requireDocker, [
+    "volume",
+    "create",
+    resource.volume,
+  ]);
+  resource.databaseCreated = true;
+  await createResource(resource, requireDocker, [
     "run",
     "--detach",
     "--name",
@@ -99,7 +125,6 @@ async function startNetworkAndDatabase(
     "MARIADB_DATABASE=wordpress",
     images.database,
   ]);
-  resource.databaseCreated = true;
   resource.databaseIp = privateIpv4(
     (
       await requireDocker([
@@ -117,7 +142,8 @@ async function startWordPress(
   startup: ContainerStartup,
 ): Promise<string> {
   const { requireDocker, images } = startup;
-  await requireDocker([
+  resource.wordpressCreated = true;
+  await createResource(resource, requireDocker, [
     "run",
     "--detach",
     "--name",
@@ -142,7 +168,6 @@ async function startWordPress(
     `WBH_EXECUTION_SALT=${resource.executionSalt}`,
     images.wordpress,
   ]);
-  resource.wordpressCreated = true;
   return privateIpv4(
     (
       await requireDocker([
@@ -161,7 +186,8 @@ async function startRecorder(
   internalIp: string,
 ): Promise<string> {
   const { requireDocker, images } = startup;
-  await requireDocker([
+  resource.recorderCreated = true;
+  await createResource(resource, requireDocker, [
     "run",
     "--detach",
     "--name",
@@ -182,7 +208,6 @@ async function startRecorder(
     images.recorder,
     "/opt/wbh-recorder/cli.js",
   ]);
-  resource.recorderCreated = true;
   return privateIpv4(
     (
       await requireDocker([
@@ -200,7 +225,8 @@ async function startReceiver(
   startup: ContainerStartup,
 ): Promise<void> {
   const { requireDocker, images } = startup;
-  await requireDocker([
+  resource.receiverCreated = true;
+  await createResource(resource, requireDocker, [
     "run",
     "--detach",
     "--name",
@@ -220,7 +246,6 @@ async function startReceiver(
     "-c",
     `echo ${Buffer.from(BEACON_ROUTER).toString("base64")} | base64 -d > /tmp/router.php && exec php -S 0.0.0.0:8080 /tmp/router.php`,
   ]);
-  resource.receiverCreated = true;
   resource.receiverIp = privateIpv4(
     (
       await requireDocker([

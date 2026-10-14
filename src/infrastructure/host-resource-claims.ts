@@ -10,6 +10,8 @@ import { canonicalJson } from "./canonical-json.js";
 const key = z.string().regex(/^[a-z0-9][a-z0-9:._/-]{0,255}$/);
 const providerKey = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const absolutePath = z.string().regex(/^\/[^\0]+$/);
+export const RECOVERY_SETTLE_MS = 120_000;
 
 export const hostResourceLimitsSchema = z.strictObject({
   maxTargets: z.number().int().min(1).max(64),
@@ -19,6 +21,10 @@ export const hostResourceLimitsSchema = z.strictObject({
 const requestSchema = z.strictObject({
   targetKey: key,
   ownerKey: key,
+  ownerPid: z.number().int().positive(),
+  stateDirectory: absolutePath,
+  campaignId: z.string().min(1).max(128),
+  snapshotDigest: digest,
   providerKeys: z.array(providerKey).min(1).max(8),
   /** Starts when the claim is acquired, so a capacity wait cannot expire it. */
   leaseDurationMs: z
@@ -32,10 +38,15 @@ const rowSchema = z.object({
   claim_id: z.string().uuid(),
   target_key: key,
   owner_key: key,
+  owner_pid: z.number().int().positive(),
+  state_directory: absolutePath,
+  campaign_id: z.string().min(1).max(128),
+  snapshot_digest: digest,
   provider_keys_json: z.string(),
   deadline_at: z.iso.datetime({ offset: true }),
   status: z.enum(["active", "recovery-needed", "released"]),
   acquired_at: z.iso.datetime({ offset: true }),
+  first_absent_at: z.iso.datetime({ offset: true }).nullable(),
 });
 const activeRowSchema = rowSchema.extend({
   status: z.enum(["active", "recovery-needed"]),
@@ -58,6 +69,20 @@ export type HostResourceClaimResult =
 
 type ClaimRow = z.infer<typeof rowSchema>;
 type ActiveClaimRow = z.infer<typeof activeRowSchema>;
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // Uncertain errors, including EPERM, must retain the claim.
+    return !(
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ESRCH"
+    );
+  }
+}
 
 /** A host-common SQLite claim table. A deadline is an alarm, never permission to reuse a slot. */
 export class SqliteHostResourceClaims {
@@ -84,13 +109,18 @@ export class SqliteHostResourceClaims {
         claim_id TEXT PRIMARY KEY,
         target_key TEXT NOT NULL,
         owner_key TEXT NOT NULL,
+        owner_pid INTEGER NOT NULL,
+        state_directory TEXT NOT NULL,
+        campaign_id TEXT NOT NULL,
+        snapshot_digest TEXT NOT NULL,
         provider_keys_json TEXT NOT NULL,
         token_digest TEXT NOT NULL,
         deadline_at TEXT NOT NULL,
         status TEXT NOT NULL CHECK(status IN ('active', 'recovery-needed', 'released')),
         acquired_at TEXT NOT NULL,
         released_at TEXT,
-        reconciliation_digest TEXT
+        reconciliation_digest TEXT,
+        first_absent_at TEXT
       );
       CREATE UNIQUE INDEX IF NOT EXISTS host_resource_active_target
         ON host_resource_claims (target_key)
@@ -104,10 +134,17 @@ export class SqliteHostResourceClaims {
         )
         .run(canonicalJson(parsedLimits));
       const current = this.#readLimits();
-      if (canonicalJson(current) !== canonicalJson(parsedLimits))
-        throw new Error(
-          "Host resource limits differ from the shared configuration",
-        );
+      if (canonicalJson(current) !== canonicalJson(parsedLimits)) {
+        if (this.#activeRows().length !== 0)
+          throw new Error(
+            "Host resource limits differ while claims are active",
+          );
+        this.#db
+          .prepare(
+            "UPDATE host_resource_meta SET value = ? WHERE key = 'limits'",
+          )
+          .run(canonicalJson(parsedLimits));
+      }
       this.#db.exec("COMMIT");
     } catch (error) {
       this.#db.exec("ROLLBACK");
@@ -153,7 +190,7 @@ export class SqliteHostResourceClaims {
   #activeRows(): ActiveClaimRow[] {
     return this.#db
       .prepare(
-        "SELECT claim_id, target_key, owner_key, provider_keys_json, deadline_at, status, acquired_at FROM host_resource_claims WHERE status != 'released' ORDER BY acquired_at, claim_id",
+        "SELECT claim_id, target_key, owner_key, owner_pid, state_directory, campaign_id, snapshot_digest, provider_keys_json, deadline_at, status, acquired_at, first_absent_at FROM host_resource_claims WHERE status != 'released' ORDER BY acquired_at, claim_id",
       )
       .all()
       .map((row) => activeRowSchema.parse(row));
@@ -207,12 +244,16 @@ export class SqliteHostResourceClaims {
       ).toISOString();
       this.#db
         .prepare(
-          "INSERT INTO host_resource_claims (claim_id, target_key, owner_key, provider_keys_json, token_digest, deadline_at, status, acquired_at) VALUES (?, ?, ?, ?, ?, ?, 'active', ?)",
+          "INSERT INTO host_resource_claims (claim_id, target_key, owner_key, owner_pid, state_directory, campaign_id, snapshot_digest, provider_keys_json, token_digest, deadline_at, status, acquired_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
         )
         .run(
           claimId,
           request.targetKey,
           request.ownerKey,
+          request.ownerPid,
+          request.stateDirectory,
+          request.campaignId,
+          request.snapshotDigest,
           JSON.stringify(providers),
           createHash("sha256").update(token).digest("hex"),
           deadlineAt,
@@ -264,7 +305,7 @@ export class SqliteHostResourceClaims {
   #owned(handle: HostResourceClaimHandle): ClaimRow {
     const row = this.#db
       .prepare(
-        "SELECT claim_id, target_key, owner_key, provider_keys_json, deadline_at, status, acquired_at, token_digest FROM host_resource_claims WHERE claim_id = ?",
+        "SELECT claim_id, target_key, owner_key, owner_pid, state_directory, campaign_id, snapshot_digest, provider_keys_json, deadline_at, status, acquired_at, first_absent_at, token_digest FROM host_resource_claims WHERE claim_id = ?",
       )
       .get(handle.claimId);
     const owned = rowSchema.extend({ token_digest: z.string() }).parse(row);
@@ -320,7 +361,8 @@ export class SqliteHostResourceClaims {
       );
       const overdue =
         row?.status === "active" &&
-        Date.parse(row.deadline_at) <= this.#clock().getTime();
+        Date.parse(row.deadline_at) <= this.#clock().getTime() &&
+        !processIsAlive(row.owner_pid);
       if (overdue)
         this.#db
           .prepare(
@@ -335,15 +377,19 @@ export class SqliteHostResourceClaims {
     }
   }
 
-  /** Only a fresh ledger and Lab/broker inspection can clear an orphaned claim. */
+  /** A dead owner's claim is reusable only after a fresh ledger and Docker inspection. */
   async reconcileAbsent(
     claimId: string,
     inspect: (claim: {
       readonly targetKey: string;
       readonly ownerKey: string;
+      readonly stateDirectory: string;
+      readonly campaignId: string;
+      readonly snapshotDigest: string;
       readonly deadlineAt: string;
     }) => Promise<{
-      readonly ledgerHasActiveTrial: boolean;
+      readonly ledgerInspected: true;
+      readonly unresolvedRunIds: readonly string[];
       readonly labHasResources: boolean;
       readonly brokerHasResources: boolean;
       readonly evidenceDigest: string;
@@ -351,27 +397,77 @@ export class SqliteHostResourceClaims {
   ): Promise<boolean> {
     z.string().uuid().parse(claimId);
     const claim = this.#activeRows().find((row) => row.claim_id === claimId);
-    if (claim?.status !== "recovery-needed")
-      throw new Error("Claim is not awaiting reconciliation");
+    if (claim === undefined) throw new Error("No active claim has that id");
+    if (processIsAlive(claim.owner_pid))
+      throw new Error("Claim owner process is still alive");
+    if (claim.status === "active") {
+      this.#db.exec("BEGIN IMMEDIATE");
+      try {
+        this.#db
+          .prepare(
+            "UPDATE host_resource_claims SET status = 'recovery-needed' WHERE claim_id = ? AND status = 'active'",
+          )
+          .run(claimId);
+        this.#db.exec("COMMIT");
+      } catch (error) {
+        this.#db.exec("ROLLBACK");
+        throw error;
+      }
+    }
     const observed = await inspect({
       targetKey: claim.target_key,
       ownerKey: claim.owner_key,
+      stateDirectory: claim.state_directory,
+      campaignId: claim.campaign_id,
+      snapshotDigest: claim.snapshot_digest,
       deadlineAt: claim.deadline_at,
     });
     digest.parse(observed.evidenceDigest);
-    if (
-      observed.ledgerHasActiveTrial ||
-      observed.labHasResources ||
-      observed.brokerHasResources
-    )
-      return false;
+    // Unfinished ledger starts remain visible and the repeat-Trial gate still
+    // counts them. They do not prove a live Trial after the owner and every
+    // disposable runtime resource are absent.
+    if (processIsAlive(claim.owner_pid))
+      throw new Error("Claim owner process became live during reconciliation");
     this.#db.exec("BEGIN IMMEDIATE");
     try {
+      const current = this.#activeRows().find(
+        (row) => row.claim_id === claimId,
+      );
+      if (current?.status !== "recovery-needed")
+        throw new Error("Claim is not awaiting reconciliation");
+      if (observed.labHasResources || observed.brokerHasResources) {
+        this.#db
+          .prepare(
+            "UPDATE host_resource_claims SET first_absent_at = NULL WHERE claim_id = ?",
+          )
+          .run(claimId);
+        this.#db.exec("COMMIT");
+        return false;
+      }
+      const now = this.#clock();
+      if (current.first_absent_at === null) {
+        this.#db
+          .prepare(
+            "UPDATE host_resource_claims SET first_absent_at = ? WHERE claim_id = ?",
+          )
+          .run(now.toISOString(), claimId);
+        this.#db.exec("COMMIT");
+        return false;
+      }
+      // A Docker create already in flight when its owner died may finish
+      // after the first empty listing. Require a fresh second observation.
+      if (
+        now.getTime() - Date.parse(current.first_absent_at) <
+        RECOVERY_SETTLE_MS
+      ) {
+        this.#db.exec("COMMIT");
+        return false;
+      }
       const changed = this.#db
         .prepare(
           "UPDATE host_resource_claims SET status = 'released', released_at = ?, reconciliation_digest = ? WHERE claim_id = ? AND status = 'recovery-needed'",
         )
-        .run(this.#clock().toISOString(), observed.evidenceDigest, claimId);
+        .run(now.toISOString(), observed.evidenceDigest, claimId);
       if (Number(changed.changes) !== 1)
         throw new Error("Claim is not awaiting reconciliation");
       this.#db.exec("COMMIT");
@@ -392,9 +488,16 @@ export class SqliteHostResourceClaims {
       readonly claimId: string;
       readonly targetKey: string;
       readonly ownerKey: string;
+      readonly ownerPid: number;
+      readonly ownerAlive: boolean;
+      readonly stateDirectory: string;
+      readonly campaignId: string;
+      readonly snapshotDigest: string;
       readonly status: "active" | "recovery-needed";
       readonly deadlineAt: string;
       readonly overdue: boolean;
+      readonly firstAbsentAt: string | null;
+      readonly recoveryEligibleAt: string | null;
     }[];
   } {
     const rows = this.#activeRows();
@@ -421,9 +524,21 @@ export class SqliteHostResourceClaims {
         claimId: row.claim_id,
         targetKey: row.target_key,
         ownerKey: row.owner_key,
+        ownerPid: row.owner_pid,
+        ownerAlive: processIsAlive(row.owner_pid),
+        stateDirectory: row.state_directory,
+        campaignId: row.campaign_id,
+        snapshotDigest: row.snapshot_digest,
         status: row.status,
         deadlineAt: row.deadline_at,
         overdue: Date.parse(row.deadline_at) <= this.#clock().getTime(),
+        firstAbsentAt: row.first_absent_at,
+        recoveryEligibleAt:
+          row.first_absent_at === null
+            ? null
+            : new Date(
+                Date.parse(row.first_absent_at) + RECOVERY_SETTLE_MS,
+              ).toISOString(),
       })),
     };
   }

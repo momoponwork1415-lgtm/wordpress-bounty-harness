@@ -389,6 +389,7 @@ export interface GvisorCodexSandboxOptions {
   readonly clock?: () => Date;
   readonly runDocker?: DockerRun;
   readonly randomUuid?: () => string;
+  readonly onCleanupUncertain?: () => void;
 }
 
 type DockerRun = (
@@ -737,11 +738,18 @@ export class GvisorCodexSandbox implements CodexSandbox {
       } finally {
         // `--rm` is not sufficient when the Docker client is killed on timeout:
         // runsc may leave a stopped container behind (#176).
-        await runDocker(
+        const removed = await runDocker(
           ["rm", "--force", containerName],
           undefined,
           20_000,
         ).catch(() => undefined);
+        if (
+          removed === undefined ||
+          removed.kind !== "exited" ||
+          (removed.exitCode !== 0 &&
+            !/No such (?:container|object)/i.test(removed.stderr))
+        )
+          this.#options.onCleanupUncertain?.();
       }
       const completedAt = now().toISOString();
       const collected = await collectRollouts(codexHome).then(

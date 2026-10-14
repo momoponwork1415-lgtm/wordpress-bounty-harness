@@ -294,6 +294,7 @@ export function createLabResource(
     databaseCreated: false,
     wordpressCreated: false,
     recorderCreated: false,
+    creationUncertain: false,
   };
   return { resource, subscriber, customer, victimSubscriber, victimCustomer };
 }

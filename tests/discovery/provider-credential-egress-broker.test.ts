@@ -273,4 +273,82 @@ describe("provider credential egress", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("retains the resource claim when a named Docker create has an unknown outcome", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-egress-uncertain-"));
+    try {
+      const credentialFilePath = join(root, "credential");
+      const proxyBundleDirectory = join(root, "bundle");
+      await writeFile(credentialFilePath, randomBytes(32).toString("hex"), {
+        mode: 0o600,
+      });
+      await chmod(credentialFilePath, 0o600);
+      await mkdir(proxyBundleDirectory);
+      await writeFile(
+        join(proxyBundleDirectory, "provider-credential-proxy-cli.js"),
+        "// fixture",
+      );
+
+      for (const failedCreate of ["network", "broker"] as const) {
+        const commands: string[][] = [];
+        let claimHolds = 0;
+        let operationCalls = 0;
+        const broker = createProviderCredentialEgressBroker({
+          dockerExecutablePath: "/usr/bin/docker",
+          brokerImage: `node@${digest}`,
+          credentialFilePath,
+          scratchRootDirectory: root,
+          proxyBundleDirectory,
+          clock,
+          randomUuid: () => `timeout-${failedCreate}`,
+          resolveProviderAddresses: async () => ["203.0.113.10"],
+          onCleanupUncertain: () => {
+            claimHolds += 1;
+          },
+          runDocker: async (args) => {
+            commands.push([...args]);
+            if (
+              failedCreate === "network" &&
+              args[0] === "network" &&
+              args[1] === "create"
+            ) {
+              // The client timed out; the daemon may still create the network.
+              return { exitCode: -1, stdout: "", stderr: "timed out" };
+            }
+            if (failedCreate === "broker" && args[0] === "create") {
+              // A thrown client error also leaves the daemon outcome unknown.
+              throw new Error("Docker client connection lost");
+            }
+            return { exitCode: 0, stdout: "", stderr: "" };
+          },
+        });
+        const result = await broker.withGrant(request, async () => {
+          operationCalls += 1;
+          return "unexpected";
+        });
+
+        expect(operationCalls).toBe(0);
+        expect(result.operation.status).toBe("not-started");
+        expect(result.receipt.setup).toMatchObject({
+          status: "failed",
+          stage: failedCreate === "network" ? "network-create" : "broker-start",
+        });
+        expect(result.receipt.cleanup).toMatchObject({
+          status: "failed",
+          failedSteps: [],
+          uncertainCreations: [
+            failedCreate === "network" ? "network-create" : "broker-create",
+          ],
+        });
+        expect(claimHolds).toBe(1);
+        expect(commands).toContainEqual(
+          failedCreate === "network"
+            ? ["network", "rm", "provider-egress-timeout-network"]
+            : ["rm", "--force", "provider-egress-broker-timeout-broker"],
+        );
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

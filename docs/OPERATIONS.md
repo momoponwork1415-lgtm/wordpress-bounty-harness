@@ -9,6 +9,9 @@
 - コマンド名は `runCli`（`src/cli/index.ts`）が受け付けるもの。
 - host設定は `--host <path>` か `WBH_HOST_CONFIG` で渡す。
 - 台帳とPrivate Evidenceの置き場は `--state <dir>` か `WBH_STATE_DIRECTORY` で選ぶ。既定は `~/.local/state/wordpress-bounty-harness`。
+- 複数campaignを起動する場合、host設定の `resourceLimits` がPC全体とprovider別の対象枠を決める。既定は対象1件・Codex 1件。campaign内の並列設定も別に適用される。Opus経路はそのproviderの実装を接続してから枠を設定する。
+- `harness resources status` は共有枠と所有runを表示する。実行中の `campaign run` は枠待ちの理由をstderrへ表示する。対象claimの期限は警報であり、自動解放の時刻ではない。
+- プロセスが異常終了してclaimが残ったら、まず `harness resources status` と `harness lab cleanup --config <campaign.json>` で状態を確認する。残存Lab・brokerは稼働中campaignを止めてから掃除し、`harness resources recover --claim <claim-id>` で元の台帳と全WBH Docker資源を再照合する。所有プロセスが生存中、台帳が読めない、資源が残る場合は解放しない。資源ゼロを初めて確認してから2分以上空け、もう一度資源ゼロを確認したときだけ解放する。再確認可能な時刻は `recoveryEligibleAt` に出る。この回収はDocker作成処理が2分を超えて遅延完了しないことを証明しない。Docker daemonが不安定な間は回収を実行せず、正常化後に残骸を再確認する。未完了Trialの開始記録は保持し、再探索には #215 の追加承認が必要。
 - 過去の単独Trialの設定例は [examples/translatepress-3.3.1/](../examples/translatepress-3.3.1/README.md)、過去の2×2開発セットは [examples/translatepress-3.2.5/](../examples/translatepress-3.2.5/README.md)。Root＋3の本番開始条件は [TranslatePressベンチマーク](TRANSLATEPRESS-BENCHMARK.md)。
 
 ## 1. 一度だけやる準備

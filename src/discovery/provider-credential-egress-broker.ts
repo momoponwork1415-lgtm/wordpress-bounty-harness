@@ -129,6 +129,9 @@ const providerCredentialEgressCleanupSchema = z.discriminatedUnion("status", [
     failedSteps: z.array(
       z.enum(["broker-remove", "network-remove", "credential-staging-remove"]),
     ),
+    uncertainCreations: z
+      .array(z.enum(["broker-create", "network-create"]))
+      .optional(),
   }),
 ]);
 
@@ -237,6 +240,7 @@ export interface ProviderCredentialEgressBrokerOptions {
     args: readonly string[],
     timeoutMs: number,
   ) => Promise<DockerCommandResult>;
+  readonly onCleanupUncertain?: () => void;
 }
 
 const BROKER_ALIAS = "provider-egress";
@@ -447,8 +451,11 @@ export function createProviderCredentialEgressBroker(
       let operationResult: ProviderCredentialEgressOperation<T> = {
         status: "not-started",
       };
-      let networkCreated = false;
       let brokerCreated = false;
+      let networkCreationAttempted = false;
+      let brokerCreationAttempted = false;
+      let networkCreationUncertain = false;
+      let brokerCreationUncertain = false;
       let proxyMetrics: ProviderCredentialEgressReceipt["metrics"];
       let stagingDirectory: string | undefined;
       let secrets: readonly string[] = [];
@@ -596,12 +603,22 @@ export function createProviderCredentialEgressBroker(
                 reason: "agent-network-not-internal",
               };
         const executeDocker = runDocker;
-        const network = await executeDocker(
-          request.agentNetworkName === undefined
-            ? ["network", "create", "--internal", networkName]
-            : ["network", "inspect", "--format", "{{.Internal}}", networkName],
-          20_000,
-        );
+        let network: DockerCommandResult;
+        if (request.agentNetworkName === undefined) {
+          // Docker may create a named resource before its client times out.
+          networkCreationAttempted = true;
+          networkCreationUncertain = true;
+          network = await executeDocker(
+            ["network", "create", "--internal", networkName],
+            20_000,
+          );
+          if (dockerSucceeded(network)) networkCreationUncertain = false;
+        } else {
+          network = await executeDocker(
+            ["network", "inspect", "--format", "{{.Internal}}", networkName],
+            20_000,
+          );
+        }
         if (
           !dockerSucceeded(network) ||
           (request.agentNetworkName !== undefined &&
@@ -609,12 +626,13 @@ export function createProviderCredentialEgressBroker(
         ) {
           setup = pendingSetupFailure;
         } else {
-          networkCreated = request.agentNetworkName === undefined;
           pendingSetupFailure = {
             status: "failed",
             stage: "broker-start",
             reason: "broker-container-unavailable",
           };
+          brokerCreationAttempted = true;
+          brokerCreationUncertain = true;
           const broker = await executeDocker(
             [
               "create",
@@ -661,6 +679,7 @@ export function createProviderCredentialEgressBroker(
             ],
             20_000,
           );
+          if (dockerSucceeded(broker)) brokerCreationUncertain = false;
           if (!dockerSucceeded(broker)) {
             setup = {
               status: "failed",
@@ -777,26 +796,28 @@ export function createProviderCredentialEgressBroker(
         const failedSteps: (
           "broker-remove" | "network-remove" | "credential-staging-remove"
         )[] = [];
-        if (brokerCreated && runDocker !== undefined) {
-          try {
-            const metrics = await runDocker(
-              [
-                "exec",
-                containerName,
-                "node",
-                "--input-type=module",
-                "-e",
-                `const r=await fetch('http://127.0.0.1:${chatgpt ? BROKER_TLS_HEALTH_PORT : BROKER_PORT}/healthz');if(!r.ok)process.exit(1);process.stdout.write(await r.text())`,
-              ],
-              5_000,
-            );
-            if (dockerSucceeded(metrics))
-              proxyMetrics =
-                providerCredentialEgressReceiptBodySchema.shape.metrics
-                  .unwrap()
-                  .parse(JSON.parse(metrics.stdout) as unknown);
-          } catch {
-            // A missing broker metric never changes the operation's outcome.
+        if (brokerCreationAttempted && runDocker !== undefined) {
+          if (brokerCreated) {
+            try {
+              const metrics = await runDocker(
+                [
+                  "exec",
+                  containerName,
+                  "node",
+                  "--input-type=module",
+                  "-e",
+                  `const r=await fetch('http://127.0.0.1:${chatgpt ? BROKER_TLS_HEALTH_PORT : BROKER_PORT}/healthz');if(!r.ok)process.exit(1);process.stdout.write(await r.text())`,
+                ],
+                5_000,
+              );
+              if (dockerSucceeded(metrics))
+                proxyMetrics =
+                  providerCredentialEgressReceiptBodySchema.shape.metrics
+                    .unwrap()
+                    .parse(JSON.parse(metrics.stdout) as unknown);
+            } catch {
+              // A missing broker metric never changes the operation's outcome.
+            }
           }
           try {
             const stopped = await runDocker(
@@ -808,7 +829,7 @@ export function createProviderCredentialEgressBroker(
             failedSteps.push("broker-remove");
           }
         }
-        if (networkCreated && runDocker !== undefined) {
+        if (networkCreationAttempted && runDocker !== undefined) {
           try {
             const removed = await runDocker(
               ["network", "rm", networkName],
@@ -826,12 +847,28 @@ export function createProviderCredentialEgressBroker(
             failedSteps.push("credential-staging-remove");
           }
         }
-        if (brokerCreated || networkCreated || stagingDirectory !== undefined) {
+        // A timed-out create can still finish in the daemon after an rm has
+        // returned. Keep the claim for operator reconciliation in that case.
+        const uncertainCreations: ("broker-create" | "network-create")[] = [];
+        if (brokerCreationUncertain) uncertainCreations.push("broker-create");
+        if (networkCreationUncertain) uncertainCreations.push("network-create");
+        if (
+          brokerCreationAttempted ||
+          networkCreationAttempted ||
+          stagingDirectory !== undefined
+        ) {
           cleanup =
-            failedSteps.length === 0
+            failedSteps.length === 0 && uncertainCreations.length === 0
               ? { status: "completed" }
-              : { status: "failed", failedSteps };
+              : {
+                  status: "failed",
+                  failedSteps,
+                  ...(uncertainCreations.length === 0
+                    ? {}
+                    : { uncertainCreations }),
+                };
         }
+        if (cleanup.status === "failed") options.onCleanupUncertain?.();
         secrets = [];
       }
 
