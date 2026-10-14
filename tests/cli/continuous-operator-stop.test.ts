@@ -22,7 +22,7 @@ const target = {
 };
 
 describe("continuous operator stop", () => {
-  it.each(["before selection", "during freeze"])(
+  it.each(["before selection", "during scope wait", "during freeze"])(
     "stops %s without starting or skipping a target",
     async (timing) => {
       const directory = await mkdtemp(join(tmpdir(), "wbh-operator-stop-"));
@@ -62,6 +62,15 @@ describe("continuous operator stop", () => {
           clock: () => new Date("2026-10-14T00:00:00.000Z"),
           newId: () => "unused",
           stopSignal: controller.signal,
+          ...(timing === "during scope wait"
+            ? {
+                withTargetScope: async <T>(operation: () => Promise<T>) => {
+                  await Promise.resolve();
+                  controller.abort();
+                  return operation();
+                },
+              }
+            : {}),
           beforeLab: () => {
             admitted++;
           },
@@ -71,7 +80,7 @@ describe("continuous operator stop", () => {
           targets: [],
           skipped: [],
         });
-        expect(frozen).toBe(timing === "before selection" ? 0 : 1);
+        expect(frozen).toBe(timing === "during freeze" ? 1 : 0);
         expect(admitted).toBe(0);
         expect(ledger.read({ campaignId: "child-one", limit: 10 })).toEqual([]);
       } finally {

@@ -127,6 +127,8 @@ async function open() {
     readonly concurrency?: number;
     readonly profile?: AgentRuntimeProfile;
     readonly campaignId?: string;
+    readonly stopSignal?: AbortSignal;
+    readonly beforeTrialStart?: () => Promise<undefined>;
   }) =>
     runDiscoveryCampaign({
       campaignId: options.campaignId ?? "campaign-1",
@@ -136,6 +138,12 @@ async function open() {
         modelProfileDigest: (options.profile ?? profile).digest,
       },
       historyFraction: 0,
+      ...(options.stopSignal === undefined
+        ? {}
+        : { stopSignal: options.stopSignal }),
+      ...(options.beforeTrialStart === undefined
+        ? {}
+        : { beforeTrialStart: options.beforeTrialStart }),
       ...(options.concurrency === undefined
         ? {}
         : { concurrency: options.concurrency }),
@@ -259,6 +267,57 @@ async function open() {
 }
 
 describe("discovery campaign stop and resume", () => {
+  it("does not start a Trial when stopped during admission", async () => {
+    const { ledger, campaign, finished } = await open();
+    const controller = new AbortController();
+    let enterAdmission!: () => void;
+    let releaseAdmission!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enterAdmission = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    const running = campaign({
+      prefix: "operator-before-start",
+      replies: () => "empty",
+      stopSignal: controller.signal,
+      beforeTrialStart: async () => {
+        enterAdmission();
+        await held;
+        return undefined;
+      },
+    });
+    await entered;
+    controller.abort();
+    releaseAdmission();
+    expect(await running).toMatchObject({ runCount: 0, stoppedBy: "operator" });
+    expect(ledger.read({ type: "discovery-run-started" })).toEqual([]);
+    expect(finished()).toEqual([]);
+    expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
+  });
+
+  it("drains a started Trial after operator stop without admitting another", async () => {
+    const { ledger, campaign, finished } = await open();
+    const controller = new AbortController();
+    const result = await campaign({
+      prefix: "operator-after-start",
+      replies: () => {
+        controller.abort();
+        return "finding";
+      },
+      stopSignal: controller.signal,
+    });
+    expect(result).toMatchObject({
+      runCount: 1,
+      findingsRecorded: 1,
+      stoppedBy: "operator",
+    });
+    expect(ledger.read({ type: "discovery-run-started" })).toHaveLength(1);
+    expect(finished()).toHaveLength(1);
+    expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
+  });
+
   it("counts a historical stage-tagged exploration while excluding its child", async () => {
     const { ledger, campaign } = await open();
     const historical = {
