@@ -10,6 +10,7 @@
 - #262（既往・旧履歴）、#263→#264（P4 検証再開・Lab cleanup）、#265→#266→#267（P6 停止・待機復元）は Draft で、main には未統合です。P4/P6 を接続した remote branch `codex/issue-240-p4p6-integration` は HEAD `68736432529e5f9461c7cca9d5dc3fe0f1463073` で公開済みですが、merge 済みではありません。branch 内の `docs/reviews/2026-10-15-p4-p6-preflight-integration.md` の出自表とコードを照合してください。
 - #268 は P6 `continuous.json` の原子的保存・破損停止を加える別 Draft で、base は #267 の branch です。P4/P6 統合 branch には入っていません。#268 が未解決とする複数 runner の排他、台帳に対する memo の完全な再照合を P0 候補として検査し、#268 と統合 branch の併用時の競合を確認してください。
 - P9 の #260 は v4 目的文・既定 prompt の未 merge PR です。#217 の目的文と開発 3 Trial を移植したという主張を出典対照表、prompt digest、campaign/selection 方針、Trial 記録と照合してください。作成時点で #260 に `owner-approved` ラベルはなく、`adr-guard` check は失敗しています。`DEVELOPMENT.md` §5 と ADR 0032 の本人承認 path と AI 委任 path を分けて、P9 の gate を判定してください。
+- 運用 host の `systemctl --user` の一時観測（2026-10-15 02:05 JST）では、Opus の選定 driver 1 unit は active、Codex 24h の 3 unit と別の Opus 1 unit は failed でした。ログ本文は未読で原因は未確認です。cloud から実機を見られなければ、その限界を明記し、unit の状態だけで故障原因や Harness の実機完成度を断定しないでください。
 
 重点は次の通りです。
 
