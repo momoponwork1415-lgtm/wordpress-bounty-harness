@@ -552,6 +552,18 @@ Version: 2.4.1
         status: "failed",
         reason: "metadata-archive-mismatch",
       });
+      await expect(
+        openWordPressOrgSnapshotSource({
+          targetSource: source,
+          storageDirectory: directory,
+        }).acquire({
+          kind: "wordpress-org-target-acquire",
+          schemaVersion: 1,
+          observationRef: observed.observationRef,
+          requestedVersion: "2.8.0",
+          policy: intakePolicy,
+        }),
+      ).rejects.toMatchObject({ kind: "source-mismatch" });
       // A version that cannot be an archive name is refused before any download.
       await expect(acquire("2.9.0/../../x")).resolves.toEqual({
         status: "failed",
@@ -561,6 +573,7 @@ Version: 2.4.1
       });
       expect(archiveUrls).toEqual([
         "https://downloads.wordpress.org/plugin/versioned-plugin.2.9.0.zip",
+        "https://downloads.wordpress.org/plugin/versioned-plugin.2.8.0.zip",
         "https://downloads.wordpress.org/plugin/versioned-plugin.2.8.0.zip",
       ]);
     } finally {
@@ -654,6 +667,69 @@ Version: 2.4.1
           operation: "acquire",
           reason,
           pluginIdentity: "wporg:archive-http-plugin",
+          diagnostic: { kind: "http-response", status },
+        });
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    { code: "ETIMEDOUT", kind: "connect-timeout" },
+    { code: "EAI_AGAIN", kind: "dns" },
+  ] as const)(
+    "preserves a nested $code failure through the Snapshot boundary",
+    async ({ code, kind }) => {
+      const directory = await mkdtemp(join(tmpdir(), "wporg-archive-error-"));
+      try {
+        const base = fixtureAdapter(
+          "network-plugin",
+          "1.0.0",
+          new Uint8Array(),
+        );
+        const source = openWordPressOrgTargetSource({
+          storageDirectory: directory,
+          adapter: {
+            retrieve: (request) =>
+              request.kind === "metadata"
+                ? base.retrieve(request)
+                : Promise.reject(
+                    new TypeError("fetch failed", {
+                      cause: Object.assign(new Error("connection failed"), {
+                        code,
+                      }),
+                    }),
+                  ),
+          },
+        });
+        const observed = await source.observe({
+          kind: "wordpress-org-target-observe",
+          schemaVersion: 1,
+          slug: "network-plugin",
+        });
+        if (observed.status !== "observed")
+          throw new Error("Expected an observation");
+        const request = {
+          kind: "wordpress-org-target-acquire" as const,
+          schemaVersion: 1 as const,
+          observationRef: observed.observationRef,
+          requestedVersion: "1.0.0",
+          policy: intakePolicy,
+        };
+        await expect(source.acquire(request)).resolves.toMatchObject({
+          status: "failed",
+          reason: "network-failure",
+          diagnostic: { kind, code },
+        });
+        await expect(
+          openWordPressOrgSnapshotSource({
+            targetSource: source,
+            storageDirectory: directory,
+          }).acquire(request),
+        ).rejects.toMatchObject({
+          name: "SourceAcquisitionError",
+          kind,
         });
       } finally {
         await rm(directory, { recursive: true, force: true });

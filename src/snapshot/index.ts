@@ -110,26 +110,56 @@ async function seal(source: AcquiredSource): Promise<{
   sourceDigest: string;
 }> {
   if (source.identity.length === 0 || source.version.length === 0) {
-    throw new Error("Source identity and version are required");
+    throw new SourceAcquisitionError("source-mismatch", {
+      reason: "source-identity-or-version-missing",
+    });
   }
-  const manifest = sourceManifestSchema.parse(source.manifest);
+  const parsed = sourceManifestSchema.safeParse(source.manifest);
+  if (!parsed.success)
+    throw new SourceAcquisitionError("source-mismatch", {
+      reason: "invalid-manifest",
+      detail: parsed.error.message,
+    });
+  const manifest = parsed.data;
   const paths = new Set<string>();
   const collisionKeys = new Set<string>();
   let previousPath = "";
   for (const entry of manifest.entries) {
     if (entry.path <= previousPath)
-      throw new Error("Source manifest is not ordered");
+      throw new SourceAcquisitionError("source-mismatch", {
+        reason: "manifest-order",
+        path: entry.path,
+      });
     previousPath = entry.path;
     const key = entry.path.normalize("NFC").toLowerCase();
     if (paths.has(entry.path) || collisionKeys.has(key)) {
-      throw new Error("Source manifest has a path collision");
+      throw new SourceAcquisitionError("source-mismatch", {
+        reason: "manifest-path-collision",
+        path: entry.path,
+      });
     }
     paths.add(entry.path);
     collisionKeys.add(key);
-    const bytes = await source.readFile(entry.path);
+    let bytes: Uint8Array;
+    try {
+      bytes = await source.readFile(entry.path);
+    } catch (error) {
+      throw new SourceAcquisitionError("source-mismatch", {
+        reason: "manifest-file-unavailable",
+        path: entry.path,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
     const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
     if (bytes.byteLength !== entry.size || digest !== entry.digest) {
-      throw new Error("Source differs from its manifest");
+      throw new SourceAcquisitionError("source-mismatch", {
+        reason: "manifest-content",
+        path: entry.path,
+        expectedSize: entry.size,
+        actualSize: bytes.byteLength,
+        expectedDigest: entry.digest,
+        actualDigest: digest,
+      });
     }
   }
   return {
@@ -162,7 +192,10 @@ export function openSnapshot<Selection>(options: {
           Buffer.from(canonicalJson(record)),
         )) !== "stored"
       ) {
-        throw new Error("Snapshot artifact conflict");
+        throw new SourceAcquisitionError("source-mismatch", {
+          reason: "snapshot-artifact-conflict",
+          digest,
+        });
       }
       return { ...record, digest };
     },

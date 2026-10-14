@@ -128,6 +128,14 @@ export interface ObservedWordPressOrgTarget {
   readonly observationRef: WordPressOrgTargetObservationRef;
 }
 
+export interface WordPressOrgAcquisitionDiagnostic {
+  readonly kind:
+    "dns" | "connect-timeout" | "request-timeout" | "network" | "http-response";
+  readonly code?: string;
+  readonly status?: number;
+  readonly message?: string;
+}
+
 interface WordPressOrgSourceFailureBase {
   readonly status: "failed";
   readonly pluginIdentity: string;
@@ -153,6 +161,8 @@ export interface WordPressOrgAcquisitionFailure extends WordPressOrgSourceFailur
     | "quota-exceeded"
     | "requested-version-mismatch"
     | "metadata-archive-mismatch";
+  /** Internal detail; callers write this only to Private Evidence. */
+  readonly diagnostic?: WordPressOrgAcquisitionDiagnostic;
 }
 
 export type WordPressOrgObservationResult =
