@@ -112,6 +112,17 @@ async function installPlugins(input: WordPressInitialization): Promise<void> {
       `${source.directory}/.`,
       `${resource.wordpress}:/var/www/html/wp-content/plugins/${source.slug}`,
     ]);
+    // Docker cp preserves modes from the host tree. A restrictive host umask
+    // can leave the public plugin unreadable to WP-CLI's UID 33.
+    await requireDocker([
+      "exec",
+      "--user=root",
+      resource.wordpress,
+      "chmod",
+      "-R",
+      "a+rX",
+      `/var/www/html/wp-content/plugins/${source.slug}`,
+    ]);
     await wp(resource, ["plugin", "activate", source.slug]);
   }
 }
