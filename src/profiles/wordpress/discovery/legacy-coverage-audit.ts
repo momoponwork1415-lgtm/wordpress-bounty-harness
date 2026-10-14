@@ -56,6 +56,17 @@ export const legacyCoverageAuditEvidenceSchema = z.strictObject({
   ),
 });
 
+export function parseLegacyCoverageAuditJson(
+  text: string,
+  context: "plan" | "evidence",
+): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error(`Invalid coverage audit ${context} JSON`);
+  }
+}
+
 type ClassifiedRecord = z.infer<
   typeof legacyCoverageAuditEvidenceSchema
 >["records"][number];
@@ -142,7 +153,12 @@ function addReference(
  * completeness, source freeze, auditor identity, and owner approval are external facts.
  */
 export async function auditLegacyCoveragePlan(value: unknown) {
-  const plan = legacyCoverageAuditPlanSchema.parse(value);
+  let plan: z.infer<typeof legacyCoverageAuditPlanSchema>;
+  try {
+    plan = legacyCoverageAuditPlanSchema.parse(value);
+  } catch {
+    throw new Error("Invalid coverage audit plan metadata");
+  }
   const classes = plan.sources.map((entry) => entry.sourceClass);
   if (classes.length !== 4 || new Set(classes).size !== 4)
     throw new Error(
@@ -188,9 +204,17 @@ export async function auditLegacyCoveragePlan(value: unknown) {
       if (identities.has(evidenceFile.identity))
         throw new Error("Audit plan repeats a file identity");
       identities.add(evidenceFile.identity);
-      const metadata = legacyCoverageAuditEvidenceSchema.parse(
-        JSON.parse(evidenceFile.bytes.toString("utf8")) as unknown,
-      );
+      let metadata: z.infer<typeof legacyCoverageAuditEvidenceSchema>;
+      try {
+        metadata = legacyCoverageAuditEvidenceSchema.parse(
+          parseLegacyCoverageAuditJson(
+            evidenceFile.bytes.toString("utf8"),
+            "evidence",
+          ),
+        );
+      } catch {
+        throw new Error("Invalid coverage audit evidence JSON or metadata");
+      }
       if (metadata.sourceDigest !== sourceFile.digest)
         throw new Error("Audit evidence refers to different source content");
       const afterEvidence = await stableFileDigest(entry.path);

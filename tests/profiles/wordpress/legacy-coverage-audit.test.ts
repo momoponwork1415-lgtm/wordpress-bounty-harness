@@ -1,10 +1,23 @@
 import { createHash } from "node:crypto";
-import { link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  link,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { afterEach, expect, it } from "vitest";
 
+import {
+  runCoverageAuditCli,
+  writePrivateAuditCandidate,
+} from "../../../src/cli/coverage-audit.js";
 import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import {
   privateExistingAuditPath,
@@ -253,4 +266,106 @@ it("keeps plan, source, evidence, and output outside Git and rejects symlink inp
   await expect(privateExistingAuditPath(evidenceLink)).rejects.toThrow(
     "regular file",
   );
+});
+
+it("keeps malformed plan and evidence fragments out of CLI stderr", async () => {
+  const { plan, source, evidencePath } = await fixture();
+  const root = dirname(source);
+  const planPath = join(root, "plan.json");
+  const outputPath = join(root, "candidate.json");
+  const marker = "PRIVATE_SYNTHETIC_MARKER_58291";
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const io = {
+    stdout: (line: string) => stdout.push(line),
+    stderr: (line: string) => stderr.push(line),
+  };
+  const run = () =>
+    runCoverageAuditCli(["--file", planPath, "--out", outputPath], io);
+
+  await writeFile(planPath, `{"secret":"${marker}"x`);
+  expect(await run()).toBe(1);
+  expect(stderr.join(" ")).not.toContain(marker);
+  expect(stderr.join(" ")).not.toContain(planPath);
+  expect(stdout).toEqual([]);
+
+  stderr.length = 0;
+  await writeFile(planPath, JSON.stringify({ ...plan, [marker]: true }));
+  expect(await run()).toBe(1);
+  expect(stderr.join(" ")).not.toContain(marker);
+
+  stderr.length = 0;
+  await writeFile(planPath, JSON.stringify(plan));
+  await writeFile(evidencePath, `{"secret":"${marker}"x`);
+  expect(await run()).toBe(1);
+  expect(stderr.join(" ")).not.toContain(marker);
+  expect(stderr.join(" ")).not.toContain(evidencePath);
+
+  stderr.length = 0;
+  await writeFile(
+    evidencePath,
+    JSON.stringify({
+      schemaVersion: 1,
+      sourceDigest: hash("synthetic source without private payload"),
+      records: [
+        { recordId: "one", classification: "confirmed-start", slug: marker },
+      ],
+    }),
+  );
+  expect(await run()).toBe(1);
+  expect(stderr.join(" ")).not.toContain(marker);
+  await expect(readFile(outputPath)).rejects.toThrow();
+});
+
+it("does not remove a pre-existing candidate when exclusive creation fails", async () => {
+  const { plan, source } = await fixture();
+  const root = dirname(source);
+  const planPath = join(root, "plan.json");
+  const outputPath = join(root, "candidate.json");
+  await writeFile(planPath, JSON.stringify(plan));
+  await writeFile(outputPath, "existing private result");
+  const stderr: string[] = [];
+  expect(
+    await runCoverageAuditCli(["--file", planPath, "--out", outputPath], {
+      stdout: () => {},
+      stderr: (line) => stderr.push(line),
+    }),
+  ).toBe(1);
+  expect(await readFile(outputPath, "utf8")).toBe("existing private result");
+  expect(stderr.join(" ")).not.toContain(outputPath);
+});
+
+it("removes only a newly opened partial candidate after write or sync failure", async () => {
+  const { source } = await fixture();
+  const root = dirname(source);
+  for (const failedStep of ["write", "sync"] as const) {
+    const outputPath = join(root, `${failedStep}-candidate.json`);
+    await expect(
+      writePrivateAuditCandidate(
+        outputPath,
+        { importable: false },
+        async () => {
+          const handle = await open(outputPath, "wx", 0o600);
+          return {
+            writeFile: async (value: string) => {
+              await handle.writeFile(value);
+              if (failedStep === "write")
+                throw new Error("synthetic write failure");
+            },
+            sync: async () => {
+              if (failedStep === "sync")
+                throw new Error("synthetic sync failure");
+              await handle.sync();
+            },
+            close: () => handle.close(),
+          };
+        },
+      ),
+    ).rejects.toThrow(`synthetic ${failedStep} failure`);
+    await expect(readFile(outputPath)).rejects.toThrow();
+    await writePrivateAuditCandidate(outputPath, { importable: false });
+    expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual({
+      importable: false,
+    });
+  }
 });
