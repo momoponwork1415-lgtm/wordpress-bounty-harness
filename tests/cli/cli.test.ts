@@ -1348,7 +1348,14 @@ describe("harness CLI vertical slice", () => {
     expect(live.containers.size).toBe(0);
     expect(live.networks.size).toBe(0);
     expect(live.volumes.size).toBe(0);
+    const labsBeforeExhaustedRecipeResume = ledger().read({
+      campaignId: "retry-campaign",
+      type: "lab-provisioned",
+    }).length;
     expect((await run(...args)).code).toBe(0);
+    expect(
+      ledger().read({ campaignId: "retry-campaign", type: "lab-provisioned" }),
+    ).toHaveLength(labsBeforeExhaustedRecipeResume);
     expect(
       ledger().read({
         campaignId: "retry-campaign",
@@ -1428,7 +1435,14 @@ describe("harness CLI vertical slice", () => {
       result: { status: "incomplete", reason: "precondition" },
     });
     if (first?.type !== "verification-finished") return;
+    const labsBeforeUnchangedResume = ledger().read({
+      campaignId: "scenario-retry",
+      type: "lab-provisioned",
+    }).length;
     expect((await run(...args)).code).toBe(0);
+    expect(
+      ledger().read({ campaignId: "scenario-retry", type: "lab-provisioned" }),
+    ).toHaveLength(labsBeforeUnchangedResume);
     expect(
       ledger().read({
         campaignId: "scenario-retry",
@@ -1465,7 +1479,7 @@ describe("harness CLI vertical slice", () => {
     expect(
       ledger().read({ campaignId: "scenario-retry", type: "lab-provisioned" })
         .length,
-    ).toBeGreaterThan(labsBefore);
+    ).toBe(labsBefore);
     expect(
       ledger()
         .read({
@@ -2477,6 +2491,60 @@ describe("harness CLI vertical slice", () => {
     expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(1);
   });
 
+  it("does not provision a Lab after the Verifier quota retry is exhausted", async () => {
+    const { run, configPath, ledger, prompts } = await harness({
+      verifierQuotaOnAttempts: [1, 2],
+      config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
+    });
+    const command = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-quota-exhausted",
+      "--config",
+      configPath,
+    ];
+    expect((await run(...command)).code).toBe(3);
+    expect((await run(...command)).code).toBe(3);
+    const first = ledger().read({
+      campaignId: "campaign-quota-exhausted",
+      type: "verification-finished",
+    })[0]?.event;
+    if (first?.type !== "verification-finished")
+      throw new Error("Missing quota verification");
+    // One other Finding was pending when quota stopped the first two runs.
+    expect((await run(...command)).code).toBe(0);
+    const labsAfterPendingFinding = ledger().read({
+      campaignId: "campaign-quota-exhausted",
+      type: "lab-provisioned",
+    }).length;
+    expect((await run(...command)).code).toBe(0);
+    expect(
+      ledger().read({
+        campaignId: "campaign-quota-exhausted",
+        type: "lab-provisioned",
+      }),
+    ).toHaveLength(labsAfterPendingFinding);
+    expect(prompts).toHaveLength(1);
+    const review = await run(
+      "review",
+      "--campaign",
+      "campaign-quota-exhausted",
+    );
+    expect(review.code).toBe(0);
+    expect(review.stdout).toContain(`finding ${first.findingId}`);
+    expect(review.stdout).toContain("incomplete");
+    expect((await run(...command, "--retry-incomplete")).code).toBe(0);
+    expect(
+      ledger().read({
+        campaignId: "campaign-quota-exhausted",
+        findingId: first.findingId,
+        type: "verification-finished",
+      }),
+    ).toHaveLength(3);
+  });
+
   it("lists parked Findings by one-line property and says when there are none (#185)", async () => {
     const { run, ledger, store, configPath } = await harness();
     // Opening the state needs one real command; the campaign records only in-scope Findings.
@@ -3222,6 +3290,10 @@ describe("harness CLI vertical slice", () => {
     const third = await run("select", "--config", policyPath);
     expect(third.code).toBe(0);
     expect(third.stdout).toContain("wporg:item-g 9.9.9 score");
+    const labsBeforeCompletedResume = ledger().read({
+      campaignId: "campaign-reserved",
+      type: "lab-provisioned",
+    }).length;
     const resumed = await run(
       "campaign",
       "run",
@@ -3234,6 +3306,13 @@ describe("harness CLI vertical slice", () => {
     expect(resumed.code).toBe(0);
     // item-d already finished; the resume stays on its bound batch.
     expect(resumed.stdout).not.toContain("item-g");
+    expect(resumed.stdout).toContain("no selected target matched item-d");
+    expect(
+      ledger().read({
+        campaignId: "campaign-reserved",
+        type: "lab-provisioned",
+      }),
+    ).toHaveLength(labsBeforeCompletedResume);
     expect(
       ledger().read({
         campaignId: "campaign-reserved",
