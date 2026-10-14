@@ -377,7 +377,7 @@ describe("read-only child campaign assessment", () => {
     );
   });
 
-  it("reports bounded per-target progress and holds a partially started second target", async () => {
+  it("reports bounded progress and leaves a selected but unstarted target pending", async () => {
     const result = await assess(
       [
         selected(),
@@ -394,9 +394,9 @@ describe("read-only child campaign assessment", () => {
     expect(result.progress.targetsComplete).toBe(1);
     expect(result.targets.map(({ nextState }) => nextState)).toEqual([
       "complete",
-      "unsettled",
+      "pending",
     ]);
-    expect(result.nextState).toBe("unsettled");
+    expect(result.nextState).toBe("pending");
     expect(result.lastLedgerSequence).toBe(7);
   });
 

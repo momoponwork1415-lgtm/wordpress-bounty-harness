@@ -188,6 +188,8 @@ export interface CliProfile {
       readonly selectionBatchId?: string;
       /** Ordered Snapshot digests of the entire reserved batch. */
       readonly snapshotDigests?: readonly string[];
+      /** Stop admission of new targets while draining an active Trial. */
+      readonly stopSignal?: AbortSignal;
     },
   ): Promise<CampaignSummary>;
   /** Docker resources a crashed run left behind; removed only when asked. */

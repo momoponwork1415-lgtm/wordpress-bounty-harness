@@ -183,10 +183,10 @@ function targetState(input: {
     )
   )
     return { nextState: "wait-quota", reason: "quota" };
+  // Selection, Snapshot freeze and even a drained Lab do not spend a Trial.
+  // A target with no discovery-run-started event can resume in this child.
   if (roots.length === 0)
-    return input.selected || input.frozen
-      ? { nextState: "unsettled", reason: "trial-unsettled" }
-      : { nextState: "pending", reason: "not-started" };
+    return { nextState: "pending", reason: "not-started" };
   if (!input.concluded)
     return { nextState: "unsettled", reason: "no-conclusion" };
   if (input.verificationCovered < input.findings)
