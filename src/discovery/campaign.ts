@@ -290,6 +290,8 @@ export async function runDiscoveryCampaign(options: {
         readonly trialOrdinal: number;
       }) => string | undefined | Promise<string | undefined>)
     | undefined;
+  /** Final host-common stop check immediately before the start receipt. */
+  readonly beforeTrialAppend?: (() => void) | undefined;
   readonly executor: {
     execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
   };
@@ -478,6 +480,8 @@ export async function runDiscoveryCampaign(options: {
         promptDigest: planned.configuration.promptDigest ?? input.promptDigest,
         trialOrdinal: trial.trialOrdinal,
       });
+      options.stopSignal?.throwIfAborted();
+      options.beforeTrialAppend?.();
       options.stopSignal?.throwIfAborted();
       const started = await options.ledger.append({
         ...base,

@@ -23,7 +23,12 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 
-async function setup() {
+async function setup(
+  options: {
+    readonly slugCount?: number;
+    readonly pageSize?: number;
+  } = {},
+) {
   const directory = await mkdtemp(join(tmpdir(), "wbh-continuous-batch-"));
   directories.push(directory);
   const store = new PrivateArtifactStore({
@@ -43,12 +48,15 @@ async function setup() {
       popularPages: 1,
       tags: [],
       pagesPerTag: 1,
-      perPage: 7,
-      maxCandidates: 7,
+      perPage: options.slugCount ?? 7,
+      maxCandidates: options.pageSize ?? 7,
       maxAgeDays: 1,
     },
   };
-  const slugs = Array.from({ length: 7 }, (_, i) => `plugin-${i + 1}`);
+  const slugs = Array.from(
+    { length: options.slugCount ?? 7 },
+    (_, i) => `plugin-${i + 1}`,
+  );
   const targetSource = {
     observe: vi.fn(async ({ slug }: { slug: string }) => ({
       status: "observed" as const,
@@ -123,6 +131,7 @@ async function setup() {
   );
   let run = journal.create({
     parentRunId: "parent-one",
+    stateDirectory: directory,
     configDigest: digest("c"),
     policyDigest: collected.inventory.policy.digest,
     inventoryDigest: collected.digest,
@@ -170,6 +179,14 @@ async function setup() {
     },
     reserve() {
       run = journal.reserveChild(run.parentRunId, run.revision);
+    },
+    advanceInventory(inventoryDigest: string) {
+      run = journal.advanceUnboundChildInventory(
+        run.parentRunId,
+        run.revision,
+        run.children.length - 1,
+        inventoryDigest,
+      );
     },
     bindAndSettle(batch: {
       readonly selectionBatchId: string;
@@ -352,12 +369,20 @@ describe("nominated automatic continuous selection", () => {
       state.bindAndSettle(second);
 
       state.reserve();
+      const final = await prepareWordPressContinuousBatch(state.input());
+      expect(final).toMatchObject({
+        status: "ready",
+        snapshotDigests: [digest("7")],
+      });
+      if (final.status !== "ready") return;
+      state.bindAndSettle(final);
+      state.reserve();
       expect(
         await prepareWordPressContinuousBatch(state.input()),
       ).toMatchObject({
         status: "hold",
         reason: "insufficient-eligible-candidates",
-        frozen: 1,
+        frozen: 0,
       });
       expect(state.fetcher).toHaveBeenCalledTimes(1);
       expect(state.targetSource.observe).toHaveBeenCalledTimes(17);
@@ -366,7 +391,7 @@ describe("nominated automatic continuous selection", () => {
     }
   });
 
-  it("requires the injected pre-freeze history decision and leaves a short batch unbound", async () => {
+  it("runs a final short batch only from slugs cleared by the injected history decision", async () => {
     const state = await setup();
     try {
       state.reserve();
@@ -378,18 +403,17 @@ describe("nominated automatic continuous selection", () => {
       expect(
         await prepareWordPressContinuousBatch(state.input()),
       ).toMatchObject({
-        status: "hold",
-        reason: "insufficient-eligible-candidates",
-        frozen: 2,
+        status: "ready",
+        snapshotDigests: [digest("1"), digest("2")],
       });
       expect(state.freeze).toHaveBeenCalledTimes(2);
-      expect(state.ledger.read({ type: "target-selected" })).toHaveLength(0);
+      expect(state.ledger.read({ type: "target-selected" })).toHaveLength(2);
     } finally {
       state.journal.close();
     }
   });
 
-  it("holds changed policies, expired pools and unlisted nominees before freeze", async () => {
+  it("holds changed policies and unlisted nominees before freeze", async () => {
     const state = await setup();
     try {
       state.reserve();
@@ -404,12 +428,6 @@ describe("nominated automatic continuous selection", () => {
           policy: { ...state.policy, minimumActiveInstallations: 200_000 },
         }),
       ).rejects.toThrow("A single unbound reserved child is required");
-      await expect(
-        prepareWordPressContinuousBatch({
-          ...state.input(),
-          clock: () => new Date("2026-10-16T00:00:00Z"),
-        }),
-      ).rejects.toThrow("expired");
       const inventory = state.collected.inventory;
       const forged = {
         ...inventory,
@@ -431,6 +449,7 @@ describe("nominated automatic continuous selection", () => {
       try {
         let run = otherJournal.create({
           parentRunId: "forged-parent",
+          stateDirectory: directories.at(-1)!,
           configDigest: digest("c"),
           policyDigest: inventory.policy.digest,
           inventoryDigest: forgedDigest,
@@ -443,6 +462,209 @@ describe("nominated automatic continuous selection", () => {
         otherJournal.close();
       }
       expect(state.freeze).not.toHaveBeenCalled();
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("returns a typed hold for an expired sealed source pool without freezing or appending", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      const observed = state.targetSource.observe.mock.calls.length;
+      expect(
+        await prepareWordPressContinuousBatch({
+          ...state.input(),
+          clock: () => new Date("2026-10-16T00:00:00Z"),
+        }),
+      ).toEqual({
+        status: "hold",
+        reason: "candidate-source-pool-expired",
+        selectionPrefixLength: 0,
+      });
+      expect(state.freeze).not.toHaveBeenCalled();
+      expect(state.targetSource.observe).toHaveBeenCalledTimes(observed);
+      expect(state.ledger.read({ type: "target-selected" })).toHaveLength(0);
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("holds when the sealed pool expires during nominated freeze", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      let currentTime = new Date(now);
+      const result = await prepareWordPressContinuousBatch({
+        ...state.input(),
+        clock: () => currentTime,
+        freeze: async (target) => {
+          const snapshot = await state.freeze(target);
+          currentTime = new Date("2026-10-16T00:00:00Z");
+          return snapshot;
+        },
+      });
+      expect(result).toEqual({
+        status: "hold",
+        reason: "candidate-source-pool-expired",
+        selectionPrefixLength: 0,
+      });
+      expect(state.freeze).toHaveBeenCalledTimes(1);
+      expect(state.ledger.read({ type: "target-selected" })).toEqual([]);
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("holds the exact selection prefix when the pool expires during append", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      let currentTime = new Date(now);
+      let appended = 0;
+      const result = await prepareWordPressContinuousBatch({
+        ...state.input(),
+        clock: () => currentTime,
+        ledger: {
+          read: state.ledger.read.bind(state.ledger),
+          append: async (event) => {
+            const result = await state.ledger.append(event);
+            if (++appended === 1)
+              currentTime = new Date("2026-10-16T00:00:00Z");
+            return result;
+          },
+        },
+      });
+      expect(result).toEqual({
+        status: "hold",
+        reason: "candidate-source-pool-expired",
+        selectionPrefixLength: 1,
+      });
+      expect(state.ledger.read({ type: "target-selected" })).toHaveLength(1);
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("keeps an appended selection prefix bound to its expired source pool", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      let appended = false;
+      const interruptedLedger = {
+        read: state.ledger.read.bind(state.ledger),
+        append: async (event: Parameters<typeof state.ledger.append>[0]) => {
+          if (appended) throw new Error("simulated append interruption");
+          appended = true;
+          return state.ledger.append(event);
+        },
+      };
+      await expect(
+        prepareWordPressContinuousBatch({
+          ...state.input(),
+          ledger: interruptedLedger,
+        }),
+      ).rejects.toThrow("simulated append interruption");
+      const prefix = state.ledger.read({ type: "target-selected" });
+      expect(prefix).toHaveLength(1);
+      const frozen = state.freeze.mock.calls.length;
+      expect(
+        await prepareWordPressContinuousBatch({
+          ...state.input(),
+          clock: () => new Date("2026-10-16T00:00:00Z"),
+        }),
+      ).toEqual({
+        status: "hold",
+        reason: "candidate-source-pool-expired",
+        selectionPrefixLength: 1,
+      });
+      expect(state.freeze).toHaveBeenCalledTimes(frozen);
+      expect(state.ledger.read({ type: "target-selected" })).toEqual(prefix);
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("builds one child batch from eligible slugs across linked pages of the same sealed pool", async () => {
+    const state = await setup({ slugCount: 10, pageSize: 5 });
+    try {
+      state.reserve();
+      state.preFreezeEligibility.mockImplementation(async (slug) =>
+        ["plugin-1", "plugin-2", "plugin-6", "plugin-7"].includes(slug)
+          ? "eligible"
+          : "already-started",
+      );
+      expect(
+        await prepareWordPressContinuousBatch(state.input()),
+      ).toMatchObject({
+        status: "hold",
+        reason: "insufficient-eligible-candidates",
+        frozen: 2,
+      });
+      const cursor = state.collected.inventory.source.traversal?.nextCursor;
+      if (cursor === undefined) throw new Error("Expected next inventory page");
+      if (state.selection.inspectBatch === undefined)
+        throw new Error("Expected batch inspector");
+      const second = await collectWordPressCandidateInventory({
+        policy: state.policy,
+        inspectBatch: state.selection.inspectBatch,
+        cursor,
+        previousInventoryDigest: state.collected.digest,
+        store: state.store,
+        clock: () => new Date(now),
+      });
+      state.advanceInventory(second.digest);
+      const prepared = await prepareWordPressContinuousBatch(state.input());
+      expect(prepared).toMatchObject({
+        status: "ready",
+        snapshotDigests: [digest("1"), digest("2"), digest("6")],
+      });
+      if (prepared.status !== "ready") return;
+      expect(
+        state.ledger
+          .read({ campaignId: prepared.selectionBatchId })
+          .map(({ event }) =>
+            event.type === "target-selected" ? event.selectionId : null,
+          ),
+      ).toEqual([
+        "wporg:plugin-1@1.0.0",
+        "wporg:plugin-2@1.0.0",
+        "wporg:plugin-6@1.0.0",
+      ]);
+      expect(state.fetcher).toHaveBeenCalledTimes(1);
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("rejects a continuation page whose previous inventory cannot be proven", async () => {
+    const state = await setup({ slugCount: 10, pageSize: 5 });
+    try {
+      state.reserve();
+      const cursor = state.collected.inventory.source.traversal?.nextCursor;
+      if (cursor === undefined) throw new Error("Expected next inventory page");
+      if (state.selection.inspectBatch === undefined)
+        throw new Error("Expected batch inspector");
+      const second = await collectWordPressCandidateInventory({
+        policy: state.policy,
+        inspectBatch: state.selection.inspectBatch,
+        cursor,
+        previousInventoryDigest: state.collected.digest,
+        store: state.store,
+        clock: () => new Date(now),
+      });
+      const forgedDigest = await state.store.putFiles({
+        "candidate-inventory.json": JSON.stringify({
+          ...second.inventory,
+          previousInventoryDigest: digest("f"),
+        }),
+      });
+      state.advanceInventory(forgedDigest);
+      await expect(
+        prepareWordPressContinuousBatch(state.input()),
+      ).rejects.toThrow("Candidate inventory is missing");
+      expect(state.freeze).not.toHaveBeenCalled();
+      expect(state.ledger.read({ type: "target-selected" })).toHaveLength(0);
     } finally {
       state.journal.close();
     }

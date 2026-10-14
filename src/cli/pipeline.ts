@@ -46,6 +46,7 @@ export interface CampaignPipeline<
     readonly input: CampaignInputV1;
     readonly plannedTrials: readonly PlannedTrial[];
     readonly beforeTrialStart?: DiscoveryOptions["beforeTrialStart"];
+    readonly beforeTrialAppend?: DiscoveryOptions["beforeTrialAppend"];
     readonly historyFraction: number;
     readonly ablation?: NonNullable<DiscoveryOptions["ablation"]>;
     readonly concurrency?: number;

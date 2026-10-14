@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  assertContinuousStateDirectory,
   SqliteContinuousRunJournal,
   continuousChildCampaignId,
 } from "../../src/infrastructure/continuous-run-journal.js";
@@ -36,12 +37,32 @@ async function setup() {
 
 const input = {
   parentRunId: "week-one",
+  stateDirectory: join(tmpdir(), "wbh-pinned-state"),
   configDigest: a,
   policyDigest: b,
   inventoryDigest: c,
 };
 
 describe("continuous run journal", () => {
+  it("requires an absolute state identity and rejects unpinned legacy rows", async () => {
+    const { path } = await setup();
+    const journal = new SqliteContinuousRunJournal(path);
+    try {
+      expect(() =>
+        journal.create({ ...input, stateDirectory: "relative-state" }),
+      ).toThrow();
+      expect(() =>
+        assertContinuousStateDirectory(
+          { stateDirectory: "" },
+          input.stateDirectory,
+        ),
+      ).toThrow("predates the state directory pin");
+      expect(journal.get(input.parentRunId)).toBeNull();
+    } finally {
+      journal.close();
+    }
+  });
+
   it("pins each child before execution and recovers the same reservation after restart", async () => {
     const { path, clock, advance } = await setup();
     const first = new SqliteContinuousRunJournal(path, clock);
@@ -49,6 +70,7 @@ describe("continuous run journal", () => {
     expect(created).toMatchObject({
       state: "RUNNING",
       revision: 0,
+      stateDirectory: input.stateDirectory,
       configDigest: a,
       policyDigest: b,
       inventoryDigest: c,
@@ -69,6 +91,15 @@ describe("continuous run journal", () => {
     try {
       const recovered = restarted.get(input.parentRunId)!;
       expect(recovered.children).toEqual([original]);
+      expect(() =>
+        assertContinuousStateDirectory(
+          recovered,
+          join(tmpdir(), "other-state"),
+        ),
+      ).toThrow("different state directory");
+      expect(() =>
+        assertContinuousStateDirectory(recovered, input.stateDirectory),
+      ).not.toThrow();
       expect(
         restarted.reserveChild(input.parentRunId, recovered.revision),
       ).toEqual(recovered);
@@ -179,6 +210,12 @@ describe("continuous run journal", () => {
         created.revision,
       );
       const stopped = journal.requestStop(input.parentRunId);
+      expect(() =>
+        journal.bindChild(input.parentRunId, stopped.revision, 0, {
+          selectionBatchId: "batch-one",
+          snapshotDigests: [a],
+        }),
+      ).toThrow("not accepting child binding");
       const drained = journal.transition(input.parentRunId, stopped.revision, {
         state: "STOPPED",
         reason: "operator-stop",

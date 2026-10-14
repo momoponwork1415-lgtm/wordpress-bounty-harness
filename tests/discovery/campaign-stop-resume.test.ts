@@ -129,6 +129,7 @@ async function open() {
     readonly campaignId?: string;
     readonly stopSignal?: AbortSignal;
     readonly beforeTrialStart?: () => Promise<undefined>;
+    readonly beforeTrialAppend?: () => void;
   }) =>
     runDiscoveryCampaign({
       campaignId: options.campaignId ?? "campaign-1",
@@ -144,6 +145,9 @@ async function open() {
       ...(options.beforeTrialStart === undefined
         ? {}
         : { beforeTrialStart: options.beforeTrialStart }),
+      ...(options.beforeTrialAppend === undefined
+        ? {}
+        : { beforeTrialAppend: options.beforeTrialAppend }),
       ...(options.concurrency === undefined
         ? {}
         : { concurrency: options.concurrency }),
@@ -295,6 +299,20 @@ describe("discovery campaign stop and resume", () => {
     expect(ledger.read({ type: "discovery-run-started" })).toEqual([]);
     expect(finished()).toEqual([]);
     expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
+  });
+
+  it("checks the host stop request immediately before the Trial start receipt", async () => {
+    const { ledger, campaign, finished } = await open();
+    const controller = new AbortController();
+    const result = await campaign({
+      prefix: "operator-final-admission",
+      replies: () => "empty",
+      stopSignal: controller.signal,
+      beforeTrialAppend: () => controller.abort(),
+    });
+    expect(result).toMatchObject({ runCount: 0, stoppedBy: "operator" });
+    expect(ledger.read({ type: "discovery-run-started" })).toEqual([]);
+    expect(finished()).toEqual([]);
   });
 
   it("drains a started Trial after operator stop without admitting another", async () => {
