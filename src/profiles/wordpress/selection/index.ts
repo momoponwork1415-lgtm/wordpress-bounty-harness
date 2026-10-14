@@ -21,7 +21,10 @@ export {
   hasTraversedWordPressCandidateSource,
   hasVerifiedWordPressCandidateSourceCoverage,
   readWordPressCandidateInventory,
+  readWordPressInventorySourcePool,
 } from "./candidate-inventory.js";
+export { prepareWordPressContinuousBatch } from "./continuous-batch.js";
+export type { ContinuousBatchPreparation } from "./continuous-batch.js";
 export type {
   WordPressCandidateInventory,
   WordPressInventoryCandidate,

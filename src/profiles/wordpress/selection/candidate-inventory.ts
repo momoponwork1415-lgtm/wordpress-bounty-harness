@@ -597,3 +597,59 @@ export async function readWordPressCandidateInventory(options: {
     throw new Error(`Candidate inventory is ${file.status}`);
   return validateInventory(JSON.parse(file.bytes.toString("utf8")), policy);
 }
+
+/** Resolve a page's sealed listing provenance before nominating any slug. */
+export async function readWordPressInventorySourcePool(options: {
+  readonly inventory: WordPressCandidateInventory;
+  readonly policy: WordPressSelectionPolicy;
+  readonly store: Pick<PrivateArtifactStore, "readFile">;
+  readonly clock: () => Date;
+}): Promise<WordPressOrgCandidateSourcePool> {
+  const policy = wordPressSelectionPolicySchema.parse(options.policy);
+  if (!("candidateSource" in policy))
+    throw new Error("Source pool requires automatic selection policy");
+  const inventory = validateInventory(options.inventory, policy);
+  const ref = inventory.source.pool;
+  if (
+    ref === undefined ||
+    inventory.source.status !== "available" ||
+    inventory.source.requestedListingCoverage !== "all-observed" ||
+    inventory.source.traversal === undefined ||
+    options.clock().getTime() > Date.parse(ref.expiresAt)
+  )
+    throw new Error("Candidate source pool is unavailable or expired");
+  const pool = await readSourcePool(ref.digest, policy, options.store);
+  const verified = await enumerateWordPressOrgCandidates({
+    ...policy.candidateSource,
+    sourcePool: pool,
+    cursor: {
+      kind: "wordpress-org-candidate-cursor",
+      schemaVersion: 1,
+      listingSetDigest: pool.listingSetDigest,
+      nextIndex: inventory.source.traversal.offset,
+    },
+    clock: options.clock,
+  });
+  const expectedExpiry = poolExpiresAt(pool, policy.candidateSource.maxAgeDays);
+  const fromPage = new Map(
+    verified.candidates.map((candidate) => [candidate.slug, candidate]),
+  );
+  if (
+    pool.listingSetDigest !== inventory.source.traversal.listingSetDigest ||
+    expectedExpiry !== ref.expiresAt ||
+    verified.status !== "available" ||
+    verified.traversal.observedUniqueCandidates !==
+      inventory.source.traversal.observedUniqueCandidates ||
+    verified.candidates.length !== inventory.observedCandidates ||
+    inventory.candidates.some((candidate) => {
+      const original = fromPage.get(candidate.slug);
+      return (
+        original === undefined || original.sourceTag !== candidate.candidateTag
+      );
+    })
+  )
+    throw new Error(
+      "Candidate inventory does not match its sealed source pool",
+    );
+  return pool;
+}
