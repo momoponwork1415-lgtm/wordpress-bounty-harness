@@ -709,6 +709,7 @@ export async function readWordPressCandidateInventoryCursor(options: {
   )
     throw new Error("Candidate inventory does not match its source pool");
   return cursor;
+}
 
 /** Resolve a page's sealed listing provenance before nominating any slug. */
 export async function readWordPressInventorySourcePool(options: {
