@@ -13,6 +13,7 @@ import {
   type ContinuousMemo,
   type ContinuousStopReason,
 } from "../../src/cli/continuous.js";
+import { acquireContinuousLock } from "../../src/cli/continuous-lock.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger, type LedgerEventInput } from "../../src/ledger/index.js";
 
@@ -125,7 +126,6 @@ async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
     clock: () => new Date(now),
     sleep: async (ms) => void (slept.push(ms), (now += ms)),
     signals: { on: () => process, off: () => process } as never,
-    pidAlive: () => false,
     pid: 4242,
     io: {
       log: (line) => log.push(line),
@@ -350,21 +350,30 @@ describe("continuous runner", () => {
     ]);
   });
 
-  it("refuses to resume while another runner pid is live", async () => {
-    const t = await setup([], { pidAlive: (pid) => pid === 7 });
+  it("refuses to resume while another runner holds the state lock", async () => {
+    let cleanups = 0;
+    const t = await setup([], {
+      cleanupLeftovers: async () => ++cleanups,
+    });
+    const lock = await acquireContinuousLock(t.root);
     await writeFile(continuousPaths(t.root).pid, "7");
     await writeFile(continuousPaths(t.root).stop, "");
-    await expect(t.runner.run({ resume: true })).rejects.toThrow(
-      "already running as pid 7",
-    );
+    try {
+      await expect(t.runner.run({ resume: true })).rejects.toThrow(
+        "state lock",
+      );
+    } finally {
+      await lock.release();
+    }
     expect(existsSync(continuousPaths(t.root).stop)).toBe(true);
+    expect(existsSync(continuousPaths(t.root).memo)).toBe(false);
+    expect(cleanups).toBe(0);
   });
 
   it("keeps a stop marker after a dead pid until explicit resume", async () => {
     let selects = 0;
     let cleanups = 0;
     const t = await setup([async () => ({})], {
-      pidAlive: () => false,
       select: async () => (
         selects++,
         { batchId: "selection-1", targets: ["a"] }

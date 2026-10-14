@@ -12,6 +12,7 @@ import {
   requestContinuousStop,
   type ContinuousMemo,
 } from "./continuous.js";
+import { acquireContinuousLock } from "./continuous-lock.js";
 import type { CliIo, CliProfile, CliState } from "./index.js";
 
 export type ContinuousHostStatus = {
@@ -135,33 +136,35 @@ export async function continuousCommand(
   if (sub === "resume") {
     if (context.resume)
       throw new Error("--resume is only valid with continuous run");
-    const pid = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
-    if (pid > 0 && pidAlive(pid))
-      throw new Error(`continuous run is still running as pid ${pid}`);
-    let memo: ContinuousMemo | null;
+    const lock = await acquireContinuousLock(state.stateDirectory);
     try {
-      memo = await readContinuousMemo(state.stateDirectory);
-    } catch {
-      throw new Error("continuous.json is invalid; recover it before resume");
+      let memo: ContinuousMemo | null;
+      try {
+        memo = await readContinuousMemo(state.stateDirectory);
+      } catch {
+        throw new Error("continuous.json is invalid; recover it before resume");
+      }
+      if (
+        memo === null &&
+        (await stat(paths.initialized).then(
+          () => true,
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return false;
+            throw error;
+          },
+        ))
+      )
+        throw new Error("continuous.json is missing; recover it before resume");
+      const cleared = await clearContinuousStop(state.stateDirectory);
+      io.stdout(
+        cleared
+          ? "stop request cleared; start continuous run to resume"
+          : "no stop request to clear",
+      );
+      return 0;
+    } finally {
+      await lock.release();
     }
-    if (
-      memo === null &&
-      (await stat(paths.initialized).then(
-        () => true,
-        (error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return false;
-          throw error;
-        },
-      ))
-    )
-      throw new Error("continuous.json is missing; recover it before resume");
-    const cleared = await clearContinuousStop(state.stateDirectory);
-    io.stdout(
-      cleared
-        ? "stop request cleared; start continuous run to resume"
-        : "no stop request to clear",
-    );
-    return 0;
   }
   if (sub === "stop") {
     if (context.resume)
@@ -312,7 +315,6 @@ export async function continuousCommand(
     clock: state.clock,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     signals: process,
-    pidAlive,
     pid: process.pid,
     io: {
       log(line) {
