@@ -95,6 +95,9 @@ for (const item of started) ambiguous.delete(item);
 const reconsider = new Set(
   values.reconsider.map((item) => slug(item, "--reconsider")),
 );
+for (const item of reconsider)
+  if (!ambiguous.has(item) || started.has(item))
+    fail(`--reconsider requires an ambiguous, unstarted slug: ${item}`);
 const sorted = (set) => [...set].sort();
 process.stdout.write(
   `${JSON.stringify(
@@ -129,7 +132,7 @@ if (values.report.length > 0) {
     const eligible = [...installs].filter(([, count]) => count >= floor);
     const remaining = eligible.filter(
       ([item]) =>
-        reconsider.has(item) || !(started.has(item) || ambiguous.has(item)),
+        !started.has(item) && (!ambiguous.has(item) || reconsider.has(item)),
     );
     process.stderr.write(
       `floor ${floor}  enumerable ${eligible.length}  legacy ${eligible.length - remaining.length}  remaining ${remaining.length}\n`,

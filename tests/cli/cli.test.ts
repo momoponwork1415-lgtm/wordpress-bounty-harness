@@ -139,10 +139,25 @@ async function harness(
     readonly verifierLabProvisionFailures?: number;
     readonly coreSource?: boolean;
     readonly databaseAccess?: "read-only" | "none";
+    readonly legacyHistoryUnavailable?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
   directories.push(root);
+  const legacyHistoryFile = join(root, "legacy-history.json");
+  if (!options.legacyHistoryUnavailable)
+    await writeFile(
+      legacyHistoryFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        sourceDigest: sha("a"),
+        exportedAt: now,
+        sources: ["synthetic"],
+        started: [],
+        ambiguous: [],
+        reconsider: [],
+      }),
+    );
   const sourceDirectory = join(root, "source");
   await mkdir(join(sourceDirectory, "includes"), { recursive: true });
   await writeFile(
@@ -709,6 +724,7 @@ async function harness(
     newId: () => `id-${++ids}`,
     profile: createWordPressCliProfile({
       scopePolicy: await loadWordpressScopePolicy(),
+      legacyHistoryFile,
       ...(options.scopeFacts === undefined
         ? {}
         : { scopeFacts: options.scopeFacts }),
@@ -820,6 +836,7 @@ async function harness(
     docker,
     live,
     root,
+    legacyHistoryFile,
     ledger: () => state.ledger,
     state: () => state,
     profile: environment.profile,
@@ -2913,6 +2930,7 @@ describe("harness CLI vertical slice", () => {
     const { run, root, ledger, store } = await harness({
       candidates: ["broken-plugin", "item-b"],
       failFreeze: "broken-plugin",
+      legacyHistoryUnavailable: true,
     });
     const policyPath = join(root, "selection.json");
     const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
@@ -3093,11 +3111,12 @@ describe("harness CLI vertical slice", () => {
         reason: "http-error" as const,
       },
     ];
-    const { run, configPath, root, ledger, store } = await harness({
-      candidates,
-      listingObservations,
-      failRepeatedFreeze: true,
-    });
+    const { run, configPath, root, ledger, store, legacyHistoryFile } =
+      await harness({
+        candidates,
+        listingObservations,
+        failRepeatedFreeze: true,
+      });
     const policyPath = join(root, "selection.json");
     const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
       string,
@@ -3129,6 +3148,28 @@ describe("harness CLI vertical slice", () => {
     expect(first.stdout).toContain("wporg:item-a 9.9.9 score");
     expect(first.stdout).toContain("wporg:item-c 9.9.9 score");
     expect(first.stdout).toContain("breakdown installations=");
+    const originalHistory = await readFile(legacyHistoryFile, "utf8");
+    await writeFile(
+      legacyHistoryFile,
+      JSON.stringify({
+        ...JSON.parse(originalHistory),
+        ambiguous: ["item-h"],
+      }),
+    );
+    const changedHistory = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-changed-history",
+      "--config",
+      configPath,
+    );
+    expect(changedHistory.stderr).toContain("legacy-history-changed");
+    expect(
+      ledger().read({ campaignId: "campaign-changed-history" }),
+    ).toHaveLength(0);
+    await writeFile(legacyHistoryFile, originalHistory);
     expect(first.stdout).toContain(
       "excluded wporg:item-d  reasons below-rank-cutoff",
     );
@@ -3251,6 +3292,26 @@ describe("harness CLI vertical slice", () => {
     );
     expect(changedTarget.code).toBe(1);
     expect(changedTarget.stderr).toContain("target set differs");
+    const replayPolicy = JSON.parse(await readFile(policyPath, "utf8"));
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...replayPolicy,
+        revisitPolicy: { kind: "version-or-prompt-changed" },
+      }),
+    );
+    const replay = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-replay",
+      "--config",
+      configPath,
+    );
+    expect(replay.code).toBe(1);
+    expect(replay.stderr).toContain("requires revisitPolicy: never");
+    expect(ledger().read({ campaignId: "campaign-replay" })).toHaveLength(0);
   });
 
   it("runs the continuous runner on the host status, stops it, and reports it", async () => {

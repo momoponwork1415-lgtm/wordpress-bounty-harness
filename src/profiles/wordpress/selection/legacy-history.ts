@@ -8,15 +8,30 @@ import type { WordPressLegacyHistory } from "./ledger-exclusions.js";
 const slug = z.string().regex(/^[a-z0-9][a-z0-9-]{0,199}$/);
 
 /** The Git-outside JSON that `scripts/export-legacy-slugs.mjs` writes (D2). */
-export const wordPressLegacyHistorySchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  sourceDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
-  exportedAt: z.iso.datetime({ offset: true }),
-  sources: z.array(z.string().min(1)).max(1000),
-  started: z.array(slug),
-  ambiguous: z.array(slug),
-  reconsider: z.array(slug).default([]),
-});
+export const wordPressLegacyHistorySchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    sourceDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    exportedAt: z.iso.datetime({ offset: true }),
+    sources: z.array(z.string().min(1)).max(1000),
+    started: z.array(slug),
+    ambiguous: z.array(slug),
+    reconsider: z.array(slug).default([]),
+  })
+  .refine(
+    ({ started, ambiguous, reconsider }) => {
+      const startedSlugs = new Set(started);
+      const ambiguousSlugs = new Set(ambiguous);
+      return (
+        startedSlugs.size === started.length &&
+        ambiguousSlugs.size === ambiguous.length &&
+        new Set(reconsider).size === reconsider.length &&
+        started.every((item) => !ambiguousSlugs.has(item)) &&
+        reconsider.every((item) => ambiguousSlugs.has(item))
+      );
+    },
+    { message: "Legacy history has duplicate or conflicting slugs" },
+  );
 
 export type WordPressLegacyHistoryReport =
   | { readonly status: "unavailable" }

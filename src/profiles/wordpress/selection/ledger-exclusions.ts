@@ -30,7 +30,7 @@ export type WordPressLegacyHistory =
   | {
       readonly started: ReadonlySet<string>;
       readonly ambiguous: ReadonlySet<string>;
-      /** Slugs the owner hands back; they ignore legacy and earlier Trials. */
+      /** Ambiguous slugs confirmed as first Trials; never bypasses started runs. */
       readonly reconsider: ReadonlySet<string>;
       readonly digest: string;
     }
@@ -101,25 +101,9 @@ function promptChanged(
 }
 
 /**
- * A run that read no source, started no child and forwarded at most one
- * provider request is not a Trial (SPEC §6). A run without a receipt counts.
- */
-function countsAsTrial(
-  finished:
-    Extract<LedgerEventV1, { type: "discovery-run-finished" }> | undefined,
-): boolean {
-  if (finished?.observed === undefined) return true;
-  return (
-    finished.observed.filesRead > 0 ||
-    (finished.childThreadsObserved ?? 0) > 0 ||
-    (finished.brokerMetrics?.forwardedRequests ?? 0) > 1
-  );
-}
-
-/**
  * Inspect the entire append-only ledger, including older campaigns. A target
- * whose exploration Trial started remains excluded until the policy's explicit
- * revisit condition holds. A selection whose Trial never started is not.
+ * with a recorded run start remains excluded. Observed zero activity is only
+ * a lower bound and does not prove that an earlier run was not a Trial.
  */
 export function inspectWordPressLedgerExclusions(input: {
   readonly ledger: Pick<Ledger, "read">;
@@ -147,30 +131,31 @@ export function inspectWordPressLedgerExclusions(input: {
     const identity = selectionIdentity(event.selectionId);
     if (identity === null) continue;
     const key = snapshotKey(event);
+    const priorSlug = selectedBySnapshot.get(key);
+    const priorVersion = versionBySnapshot.get(key);
+    if (
+      priorSlug !== undefined &&
+      (priorSlug !== identity.slug || priorVersion !== identity.version)
+    )
+      throw new Error(
+        "Cannot select: conflicting target selections for a Snapshot",
+      );
     selectedBySnapshot.set(key, identity.slug);
     versionBySnapshot.set(key, identity.version);
     if ("promptVariant" in event && typeof event.promptVariant === "string")
       recordPrompt(key, event.promptVariant);
   }
 
-  const finishedRuns = new Map<
-    string,
-    Extract<LedgerEventV1, { type: "discovery-run-finished" }>
-  >();
-  for (const event of ledgerEvents(input.ledger, "discovery-run-finished"))
-    if (event.type === "discovery-run-finished")
-      finishedRuns.set(`${event.campaignId}\0${event.runId}`, event);
   for (const event of ledgerEvents(input.ledger, "discovery-run-started")) {
     if (event.type !== "discovery-run-started") continue;
     const key = snapshotKey(event);
     recordPrompt(key, event.configuration.promptVariant);
-    // Historical events had no runKind and each represented exploration.
-    if ((event.runKind ?? "explore") !== "explore") continue;
-    if (!countsAsTrial(finishedRuns.get(`${event.campaignId}\0${event.runId}`)))
-      continue;
     const slug = selectedBySnapshot.get(key);
     const version = versionBySnapshot.get(key);
-    if (slug === undefined || version === undefined) continue;
+    if (slug === undefined || version === undefined)
+      throw new Error(
+        "Cannot select: a started run has no matching WordPress target selection",
+      );
     const earlier = selectedBySlug.get(slug) ?? [];
     if (!earlier.some((item) => item.snapshotKey === key))
       earlier.push({ version, snapshotKey: key });
@@ -194,14 +179,13 @@ export function inspectWordPressLedgerExclusions(input: {
   return input.candidates.map(({ slug, version }) => {
     const reasons: WordPressLedgerExclusionReason[] = [];
     if (unpublishedFindingSlugs.has(slug)) reasons.push("unpublished-finding");
-    const reconsidered =
-      legacy !== "unavailable" && legacy.reconsider.has(slug);
-    if (legacy !== "unavailable" && !reconsidered) {
+    if (legacy !== "unavailable") {
       if (legacy.started.has(slug)) reasons.push("legacy-started");
-      else if (legacy.ambiguous.has(slug)) reasons.push("legacy-ambiguous");
+      else if (legacy.ambiguous.has(slug) && !legacy.reconsider.has(slug))
+        reasons.push("legacy-ambiguous");
     }
     const earlier = selectedBySlug.get(slug) ?? [];
-    if (earlier.length > 0 && !reconsidered) {
+    if (earlier.length > 0) {
       const versionIncreased = earlier.every(
         (selected) => compareVersions(version, selected.version) > 0,
       );

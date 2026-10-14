@@ -293,11 +293,11 @@ describe("WordPress ledger exclusions", () => {
     ).toEqual(["previously-selected"]);
   });
 
-  it("excludes legacy slugs with a reason unless the owner reconsiders them", () => {
+  it("only reconsiders ambiguous legacy slugs and preserves current Trial exclusions", () => {
     const legacyHistory = {
       started: new Set(["old-started", "back"]),
-      ambiguous: new Set(["old-ambiguous"]),
-      reconsider: new Set(["back", "retried"]),
+      ambiguous: new Set(["old-ambiguous", "held"]),
+      reconsider: new Set(["held", "retried"]),
       digest: digest("f"),
     };
     const result = inspectWordPressLedgerExclusions({
@@ -306,6 +306,7 @@ describe("WordPress ledger exclusions", () => {
         "old-started",
         "old-ambiguous",
         "back",
+        "held",
         "retried",
         "new",
       ].map((slug) => ({ slug, version: "1.0.0" })),
@@ -316,13 +317,14 @@ describe("WordPress ledger exclusions", () => {
     expect(result.map(({ slug, reasons }) => [slug, reasons])).toEqual([
       ["old-started", ["legacy-started"]],
       ["old-ambiguous", ["legacy-ambiguous"]],
-      ["back", []],
-      ["retried", []],
+      ["back", ["legacy-started"]],
+      ["held", []],
+      ["retried", ["previously-selected"]],
       ["new", []],
     ]);
   });
 
-  it("does not count a run that read nothing and started no child as a Trial", () => {
+  it("holds a started refusal when zero observed activity cannot prove non-Trial", () => {
     const finished = (
       runId: string,
       snapshotDigest: string,
@@ -344,7 +346,7 @@ describe("WordPress ledger exclusions", () => {
       dbQueries: 0,
     });
     const ledger = reader([
-      // Refused at once: no source read, no child, one forwarded request.
+      // Zero observed source and child activity is only a lower bound.
       ...trial("refused", "1.0.0", "campaign-1", digest("a")),
       finished("run-campaign-1-wp2shell-bounty-v2", digest("a"), {
         outcome: "failed",
@@ -371,7 +373,7 @@ describe("WordPress ledger exclusions", () => {
         { slug: "refused", version: "1.0.0" },
         { slug: "limited", version: "1.0.0" },
       ]).map(({ reasons }) => reasons),
-    ).toEqual([[], ["previously-selected"]]);
+    ).toEqual([["previously-selected"], ["previously-selected"]]);
   });
 
   it("never revisits a started slug, even on a higher version", () => {

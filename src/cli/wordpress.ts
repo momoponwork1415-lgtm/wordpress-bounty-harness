@@ -386,6 +386,7 @@ type ReservedSelection = {
 type ReservedSelectionBatch = {
   readonly id: string;
   readonly reportDigest: string;
+  readonly legacyHistoryDigest: string | null;
   readonly selections: readonly ReservedSelection[];
 };
 
@@ -428,6 +429,15 @@ async function reservedSelectionBatch(
   const batchSchema = z.object({
     schemaVersion: z.literal(1),
     policyDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    legacyHistory: z
+      .union([
+        z.object({
+          status: z.literal("available"),
+          digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+        }),
+        z.object({ status: z.literal("unavailable") }),
+      ])
+      .optional(),
     selectedSnapshotDigests: z.array(z.string().regex(/^sha256:[a-f0-9]{64}$/)),
   });
   for (const batch of sortedBatches) {
@@ -486,6 +496,10 @@ async function reservedSelectionBatch(
     return {
       id: batch[0]!.event.campaignId,
       reportDigest: reportRef.digest,
+      legacyHistoryDigest:
+        report.legacyHistory?.status === "available"
+          ? report.legacyHistory.digest
+          : null,
       selections: result,
     };
   }
@@ -502,6 +516,7 @@ async function bindCampaignSelectionBatch(
   policy: WordPressSelectionPolicy,
   campaignId: string,
   targetSlug: string | null,
+  legacyHistoryDigest: string,
 ): Promise<readonly ReservedSelection[]> {
   const bound = state.ledger.read({
     campaignId,
@@ -529,6 +544,10 @@ async function bindCampaignSelectionBatch(
     policy,
     binding?.selectionBatchId,
   );
+  if (batch.legacyHistoryDigest !== legacyHistoryDigest)
+    throw new Error(
+      "legacy-history-changed: reserved selection used different old Trial history; run select again",
+    );
   if (binding !== undefined) {
     if (
       binding.policyDigest !== canonicalDigest(policy) ||
@@ -1085,6 +1104,19 @@ async function runWordPressCampaign(
     throw new Error("Selection and campaign WordPress versions differ");
   if ("candidateSource" in policy && policy.promptVariant !== config.promptId)
     throw new Error("Selection and campaign prompt variants differ");
+  if ("candidateSource" in policy && policy.revisitPolicy.kind !== "never")
+    throw new Error(
+      "Automatic Trial requires revisitPolicy: never until repeat-Trial approval is implemented",
+    );
+  let legacyHistoryDigest: string | undefined;
+  if ("candidateSource" in policy) {
+    const legacy = await loadWordPressLegacyHistory(options.legacyHistoryFile);
+    if (legacy.report.status !== "available")
+      throw new Error(
+        "legacy-history-missing: automatic campaign cannot start",
+      );
+    legacyHistoryDigest = legacy.report.digest;
+  }
   const reservedSelections =
     "candidateSource" in policy
       ? await bindCampaignSelectionBatch(
@@ -1092,6 +1124,7 @@ async function runWordPressCampaign(
           policy,
           input.campaignId,
           input.target,
+          legacyHistoryDigest!,
         )
       : undefined;
   const reservedDigests = new Map(
