@@ -3218,7 +3218,17 @@ describe("harness CLI vertical slice", () => {
         reason: "http-error" as const,
       },
     ];
-    const { run, configPath, root, ledger, store } = await harness({
+    const {
+      run,
+      configPath,
+      root,
+      ledger,
+      store,
+      profile,
+      state,
+      docker,
+      prompts,
+    } = await harness({
       candidates,
       listingObservations,
     });
@@ -3268,6 +3278,40 @@ describe("harness CLI vertical slice", () => {
       .read({ type: "target-selected", limit: 100 })
       .filter(({ event }) => event.campaignId.startsWith("selection-"));
     expect(reservations).toHaveLength(6);
+    const firstBatchId = reservations[0]!.event.campaignId;
+    const firstDigests = reservations
+      .slice(0, 3)
+      .map(({ event }) => event.snapshotDigest);
+    const secondDigests = reservations
+      .slice(3)
+      .map(({ event }) => event.snapshotDigest);
+    const dockerBeforeRejectedPin = docker.length;
+    await expect(
+      profile.runCampaign(state(), {
+        campaignId: "campaign-wrong-pin",
+        configPath,
+        target: "item-a",
+        selectionBatchId: firstBatchId,
+        snapshotDigests: secondDigests,
+      }),
+    ).rejects.toThrow("Snapshots differ from requested pin");
+    expect(docker).toHaveLength(dockerBeforeRejectedPin);
+    expect(prompts).toHaveLength(0);
+    expect(
+      ledger().read({ campaignId: "campaign-wrong-pin", limit: 10 }),
+    ).toHaveLength(0);
+    expect(new Set(firstDigests).size).toBe(3);
+    await expect(
+      profile.runCampaign(state(), {
+        campaignId: "campaign-wrong-order",
+        configPath,
+        target: "item-a",
+        selectionBatchId: firstBatchId,
+        snapshotDigests: [...firstDigests].reverse(),
+      }),
+    ).rejects.toThrow("Snapshots differ from requested pin");
+    expect(docker).toHaveLength(dockerBeforeRejectedPin);
+
     expect(
       reservations.every(({ event }) =>
         event.artifacts.some(
@@ -3330,6 +3374,17 @@ describe("harness CLI vertical slice", () => {
       selectionBatchId: reservations[3]?.event.campaignId,
       selectionIds: ["wporg:item-d@9.9.9"],
     });
+    const dockerBeforeConflictingPin = docker.length;
+    await expect(
+      profile.runCampaign(state(), {
+        campaignId: "campaign-reserved",
+        configPath,
+        target: "item-d",
+        selectionBatchId: firstBatchId,
+        snapshotDigests: firstDigests,
+      }),
+    ).rejects.toThrow("selection batch differs from its requested pin");
+    expect(docker).toHaveLength(dockerBeforeConflictingPin);
 
     const third = await run("select", "--config", policyPath);
     expect(third.code).toBe(0);
@@ -3362,6 +3417,26 @@ describe("harness CLI vertical slice", () => {
     );
     expect(changedTarget.code).toBe(1);
     expect(changedTarget.stderr).toContain("target set differs");
+
+    const pinned = await profile.runCampaign(state(), {
+      campaignId: "campaign-pinned-first",
+      configPath,
+      target: "item-a",
+      selectionBatchId: firstBatchId,
+      snapshotDigests: firstDigests,
+    });
+    expect(pinned.targets.map(({ targetId }) => targetId)).toEqual([
+      "wporg:item-a",
+    ]);
+    expect(
+      ledger().read({
+        campaignId: "campaign-pinned-first",
+        type: "selection-batch-bound",
+      })[0]?.event,
+    ).toMatchObject({
+      selectionBatchId: firstBatchId,
+      selectionIds: ["wporg:item-a@9.9.9"],
+    });
   });
 
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {

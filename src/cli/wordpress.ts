@@ -496,6 +496,10 @@ async function bindCampaignSelectionBatch(
   policy: WordPressSelectionPolicy,
   campaignId: string,
   targetSlug: string | null,
+  expected?: {
+    readonly selectionBatchId: string;
+    readonly snapshotDigests: readonly string[];
+  },
 ): Promise<readonly ReservedSelection[]> {
   const bound = state.ledger.read({
     campaignId,
@@ -507,6 +511,12 @@ async function bindCampaignSelectionBatch(
   const binding = bound[0]?.event;
   if (binding !== undefined && binding.type !== "selection-batch-bound")
     throw new Error("Invalid selection batch binding");
+  if (
+    binding !== undefined &&
+    expected !== undefined &&
+    binding.selectionBatchId !== expected.selectionBatchId
+  )
+    throw new Error("Campaign selection batch differs from its requested pin");
   if (binding === undefined) {
     const priorSelection = state.ledger.read({
       campaignId,
@@ -521,8 +531,15 @@ async function bindCampaignSelectionBatch(
   const batch = await reservedSelectionBatch(
     state,
     policy,
-    binding?.selectionBatchId,
+    binding?.selectionBatchId ?? expected?.selectionBatchId,
   );
+  if (
+    expected !== undefined &&
+    canonicalJson(
+      batch.selections.map(({ snapshotDigest }) => snapshotDigest),
+    ) !== canonicalJson(expected.snapshotDigests)
+  )
+    throw new Error("Reserved selection Snapshots differ from requested pin");
   if (binding !== undefined) {
     if (
       binding.policyDigest !== canonicalDigest(policy) ||
@@ -1102,6 +1119,28 @@ async function runWordPressCampaign(
     throw new Error("Selection and campaign WordPress versions differ");
   if ("candidateSource" in policy && policy.promptVariant !== config.promptId)
     throw new Error("Selection and campaign prompt variants differ");
+  if (
+    (input.selectionBatchId === undefined) !==
+    (input.snapshotDigests === undefined)
+  )
+    throw new Error("Selection batch pin requires both ID and Snapshots");
+  if (
+    input.selectionBatchId !== undefined &&
+    (!("candidateSource" in policy) ||
+      input.snapshotDigests === undefined ||
+      input.snapshotDigests.length === 0 ||
+      input.snapshotDigests.some(
+        (digest) => !/^sha256:[a-f0-9]{64}$/.test(digest),
+      ))
+  )
+    throw new Error("Invalid reserved selection batch pin");
+  const requestedBatch =
+    input.selectionBatchId === undefined || input.snapshotDigests === undefined
+      ? undefined
+      : {
+          selectionBatchId: input.selectionBatchId,
+          snapshotDigests: input.snapshotDigests,
+        };
   const reservedSelections =
     "candidateSource" in policy
       ? await bindCampaignSelectionBatch(
@@ -1109,6 +1148,7 @@ async function runWordPressCampaign(
           policy,
           input.campaignId,
           input.target,
+          requestedBatch,
         )
       : undefined;
   const reservedDigests = new Map(
