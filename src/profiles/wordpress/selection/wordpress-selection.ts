@@ -17,6 +17,7 @@ import {
   type WordPressOrgCandidateCursor,
   type WordPressOrgCandidateEnumeration,
   type WordPressOrgCandidateSourcePool,
+  type WordPressOrgCandidate,
 } from "./wordpress-org-candidate-enumerator.js";
 import {
   wordPressSelectionPolicySchema,
@@ -58,6 +59,12 @@ export type WordPressSelectionWithBatchInspection = Selection<
     cursor?: WordPressOrgCandidateCursor,
     sourcePool?: WordPressOrgCandidateSourcePool,
   ) => Promise<WordPressSelectionBatchInspection>;
+  /** Re-observe nominated slugs from a fresh sealed automatic source pool. */
+  readonly inspectNominated?: (
+    policy: WordPressSelectionPolicy,
+    sourcePool: WordPressOrgCandidateSourcePool,
+    slugs: readonly string[],
+  ) => Promise<readonly WordPressSelectionInspection[]>;
 };
 
 /** WordPress.org dates look like `2026-09-01 12:00am GMT`; ISO strings also parse. */
@@ -141,6 +148,7 @@ export function createWordPressSelection(
     policyInput: WordPressSelectionPolicy,
     cursor?: WordPressOrgCandidateCursor,
     sourcePool?: WordPressOrgCandidateSourcePool,
+    nominatedCandidates?: readonly WordPressOrgCandidate[],
   ): Promise<WordPressSelectionBatchInspection> {
     const policy = wordPressSelectionPolicySchema.parse(policyInput);
     const nowDate = clock();
@@ -150,7 +158,7 @@ export function createWordPressSelection(
     const pinnedVersions =
       "pinnedVersions" in policy ? policy.pinnedVersions : undefined;
     const enumeration =
-      "candidateSource" in policy
+      "candidateSource" in policy && nominatedCandidates === undefined
         ? await (
             options.enumerateCandidates ?? enumerateWordPressOrgCandidates
           )({
@@ -162,12 +170,15 @@ export function createWordPressSelection(
           })
         : undefined;
     const candidateSlugs =
-      "candidateSlugs" in policy
-        ? policy.candidateSlugs
-        : (enumeration?.candidates.map((candidate) => candidate.slug) ?? []);
+      nominatedCandidates !== undefined
+        ? nominatedCandidates.map((candidate) => candidate.slug)
+        : "candidateSlugs" in policy
+          ? policy.candidateSlugs
+          : (enumeration?.candidates.map((candidate) => candidate.slug) ?? []);
     const candidateProvenance = new Map(
-      enumeration?.candidates.map((candidate) => [candidate.slug, candidate]) ??
-        [],
+      (nominatedCandidates ?? enumeration?.candidates ?? []).map(
+        (candidate) => [candidate.slug, candidate],
+      ),
     );
     const programmeResult = await options.programme
       .inspect({
@@ -324,7 +335,10 @@ export function createWordPressSelection(
     }
     return {
       inspections: results,
-      sourceStatus: enumeration?.status ?? "manual",
+      sourceStatus:
+        nominatedCandidates === undefined
+          ? (enumeration?.status ?? "manual")
+          : "available",
       sourceListings: enumeration?.listings ?? [],
       ...(enumeration === undefined
         ? {}
@@ -339,6 +353,40 @@ export function createWordPressSelection(
 
   return {
     inspectBatch,
+    async inspectNominated(policyInput, sourcePool, slugs) {
+      const policy = wordPressSelectionPolicySchema.parse(policyInput);
+      if (!("candidateSource" in policy))
+        throw new Error("Nominated inspection requires automatic policy");
+      if (new Set(slugs).size !== slugs.length || slugs.length === 0)
+        throw new Error("Nominated slugs must be unique and nonempty");
+      const verified = await enumerateWordPressOrgCandidates({
+        ...policy.candidateSource,
+        sourcePool,
+        cursor: {
+          kind: "wordpress-org-candidate-cursor",
+          schemaVersion: 1,
+          listingSetDigest: sourcePool.listingSetDigest,
+          nextIndex: 0,
+        },
+        clock,
+      });
+      const candidates = new Map(
+        sourcePool.candidates.map((candidate) => [candidate.slug, candidate]),
+      );
+      if (
+        verified.status !== "available" ||
+        slugs.some((slug) => !candidates.has(slug))
+      )
+        throw new Error("Nominated slug is outside the fresh source pool");
+      return (
+        await inspectBatch(
+          policy,
+          undefined,
+          undefined,
+          slugs.map((slug) => candidates.get(slug)!),
+        )
+      ).inspections;
+    },
     inspect: async (policyInput) =>
       (await inspectBatch(policyInput)).inspections,
     async select(policyInput) {
