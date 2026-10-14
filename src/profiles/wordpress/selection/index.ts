@@ -16,3 +16,11 @@ export type {
   WordPressSelectionInspection,
   SelectionReason,
 } from "./contracts.js";
+export {
+  collectWordPressCandidateInventory,
+  readWordPressCandidateInventory,
+} from "./candidate-inventory.js";
+export type {
+  WordPressCandidateInventory,
+  WordPressInventoryCandidate,
+} from "./candidate-inventory.js";
