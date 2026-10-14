@@ -263,6 +263,7 @@ export type DiscoveryStop =
   | "max-runs"
   | "plans-exhausted"
   | "provider-limit"
+  | "operator"
   | "incomplete";
 
 /** Run planned Trials, preserve admitted claims, and apply campaign stop rules. */
@@ -278,6 +279,8 @@ export async function runDiscoveryCampaign(options: {
   /** Records each run's arm on the history axis: a without history, b with it. */
   readonly ablation?: { readonly axes: readonly AblationAxis[] };
   readonly plannedTrials: readonly PlannedTrial[];
+  /** Stops admission of new Trials; already recorded Trials drain. */
+  readonly stopSignal?: AbortSignal;
   /** Profile-owned authorization, immediately before an independent Trial is recorded. */
   readonly beforeTrialStart?:
     | ((trial: {
@@ -388,6 +391,7 @@ export async function runDiscoveryCampaign(options: {
     | "no-new-finding"
     | "output-boundary"
     | "provider-limit"
+    | "operator"
     | "incomplete"
     | undefined;
   if (
@@ -467,12 +471,14 @@ export async function runDiscoveryCampaign(options: {
         snapshotDigest: input.snapshotDigest,
         occurredAt: clock().toISOString(),
       };
+      options.stopSignal?.throwIfAborted();
       const approvalDigest = await options.beforeTrialStart?.({
         campaignId: options.campaignId,
         snapshotDigest: input.snapshotDigest,
         promptDigest: planned.configuration.promptDigest ?? input.promptDigest,
         trialOrdinal: trial.trialOrdinal,
       });
+      options.stopSignal?.throwIfAborted();
       const started = await options.ledger.append({
         ...base,
         identity: `discovery-start-${run.runId}`,
@@ -649,10 +655,22 @@ export async function runDiscoveryCampaign(options: {
   };
   const worker = async () => {
     while (stopped === undefined && next < limit) {
-      await runOne(next++);
+      try {
+        await runOne(next++);
+      } catch (error) {
+        if (
+          options.stopSignal?.aborted &&
+          error === options.stopSignal.reason
+        ) {
+          stopped ??= "operator";
+          return;
+        }
+        throw error;
+      }
     }
   };
   await Promise.all(Array.from({ length: concurrency }, worker));
+  if (options.stopSignal?.aborted) stopped ??= "operator";
   const outcomes = new Map<
     string,
     "completed" | "failed" | "provider-limited" | "setup-failed"
@@ -691,7 +709,11 @@ export async function runDiscoveryCampaign(options: {
       ? "max-runs"
       : "plans-exhausted");
   // A started Trial remains spent on resume, including incomplete attempts.
-  if (stoppedBy !== "provider-limit" && stoppedBy !== "incomplete") {
+  if (
+    stoppedBy !== "provider-limit" &&
+    stoppedBy !== "incomplete" &&
+    stoppedBy !== "operator"
+  ) {
     const recorded = await options.ledger.append({
       schemaVersion: 1,
       campaignId: options.campaignId,

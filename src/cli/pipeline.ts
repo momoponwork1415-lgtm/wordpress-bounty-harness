@@ -333,6 +333,7 @@ export async function runCampaignPipeline<
       };
     };
     const run = async (): Promise<void> => {
+      stopController.signal.throwIfAborted();
       const snapshot = await pipeline.freeze(target);
       snapshotDigest = snapshot.digest;
       stage = "discovery";
@@ -484,7 +485,21 @@ export async function runCampaignPipeline<
         evidence: options.store,
         clock,
         ...prepared,
+        stopSignal: stopController.signal,
       });
+      if (
+        discovered.stoppedBy === "operator" &&
+        !readAll(ledger, {
+          campaignId,
+          type: "discovery-run-started",
+        }).some(
+          ({ event }) =>
+            event.type === "discovery-run-started" &&
+            event.snapshotDigest === snapshot.digest &&
+            (event.runKind ?? "explore") === "explore",
+        )
+      )
+        return;
       const summary = {
         targetId: target.targetId,
         version: target.version,
@@ -662,11 +677,7 @@ export async function runCampaignPipeline<
     try {
       await run();
     } catch (error: unknown) {
-      if (
-        error !== stopController.signal.reason ||
-        stopped !== "operator" ||
-        labAttempted
-      )
+      if (error !== stopController.signal.reason || stopped !== "operator")
         await skip(error);
     } finally {
       // An incomplete provision result means the adapter finished its own
@@ -716,7 +727,10 @@ export async function runCampaignPipeline<
         results[index] =
           options.withTargetScope === undefined
             ? await processTarget(target)
-            : await options.withTargetScope(() => processTarget(target));
+            : await options.withTargetScope(() => {
+                if (stopController.signal.aborted) return Promise.resolve({});
+                return processTarget(target);
+              });
       }
     };
     await Promise.all(
