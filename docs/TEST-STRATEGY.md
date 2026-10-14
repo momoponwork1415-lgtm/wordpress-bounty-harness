@@ -11,6 +11,7 @@
 | `verify` とHarness判定器 | 新しいLabのnonce canaryだけが `runtime-confirmed` を出す。修正版・異なるSnapshot・証拠欠落は正しい結果型になる | 実際の提出先が受理するか |
 | `review` とPrivate Evidence | 最新版の確認、重複の鮮度、英語レポートJSON、HTTP/画像/canary証拠、人間Lab手順が揃うまでSubmission Candidateを提出可能にしない | 人間が再現できる説明か |
 | `select` | 低権限・高影響履歴、install数、対象範囲を根拠付きで順位付けし、feedが古い時は明示する | 将来の当たり率 |
+| `continuous run` と `continuous.json` | 注入した stopped 列から backoff・hold・停止理由が台帳と status に正しく出る（`createContinuousRunner` に clock・sleep・ledger などを注入） | 実機の quota の戻り方、ログイン失効の頻度 |
 
 ## 4段の品質ゲート
 

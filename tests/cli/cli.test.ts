@@ -1,7 +1,14 @@
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -3244,6 +3251,76 @@ describe("harness CLI vertical slice", () => {
     );
     expect(changedTarget.code).toBe(1);
     expect(changedTarget.stderr).toContain("target set differs");
+  });
+
+  it("runs the continuous runner on the host status, stops it, and reports it", async () => {
+    const { run, root, profile, configPath, ledger } = await harness();
+    const state = join(root, "state");
+    const { wordpressVersion } = JSON.parse(
+      await readFile(configPath, "utf8"),
+    ) as { wordpressVersion: string };
+    const policy = JSON.parse(
+      await readFile(join(root, "selection.json"), "utf8"),
+    ) as object;
+    await mkdir(join(root, "policies"));
+    for (const name of ["selection", "selection.50000", "selection.30000"])
+      await writeFile(
+        join(root, "policies", `${name}.json`),
+        JSON.stringify({ ...policy, wordpressVersion }),
+      );
+    const host = {
+      loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
+      programmeObservedAt: new Date(now),
+      freeBytes: 100 * 1024 ** 3,
+      legacyHistoryAvailable: true,
+      loginMarginMinutes: 60,
+    };
+    (profile as { hostStatus?: unknown }).hostStatus = async () => host;
+    const command = [
+      "--config",
+      configPath,
+      "--selection",
+      join(root, "policies", "selection.json"),
+    ];
+    // The first state change asks the runner to stop before any target.
+    const stopped = await run(
+      "continuous",
+      "run",
+      ...command,
+      "--notify",
+      `touch '${join(state, "continuous.stop")}'`,
+    );
+    expect(stopped.code).toBe(0);
+    expect(stopped.stdout).toMatch(/ running campaignId=prod-\d{8}-1/);
+    expect(stopped.stdout).toMatch(/ stopped reason=operator$/m);
+    expect(
+      ledger()
+        .read({ type: "campaign-stopped" })
+        .map(({ event }) => event),
+    ).toMatchObject([{ reason: "operator" }]);
+    const status = await run("continuous", "status");
+    expect(status.code).toBe(1);
+    expect(status.stdout).toContain("state stopped  reason operator");
+    expect(status.stdout).toMatch(/^week  trials 0  completed 0 /m);
+    expect((await run("continuous", "stop")).code).toBe(0);
+    await expect(stat(join(state, "continuous.stop"))).resolves.toBeDefined();
+
+    host.legacyHistoryAvailable = false;
+    expect((await run("continuous", "run", ...command)).code).toBe(1);
+    expect((await run("continuous", "status")).stdout).toContain(
+      "reason legacy-history-missing",
+    );
+    expect(
+      (
+        await run(
+          "continuous",
+          "run",
+          ...command,
+          "--campaign-prefix",
+          "selection-x",
+        )
+      ).code,
+    ).not.toBe(0);
   });
 
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {
