@@ -18,6 +18,7 @@ AI セッションの逐次判断なしで、未探索候補の複数 batch を�
 - 型検査、書式、`pnpm check`（783 tests 成功、1 test skip）、`pnpm build`、`git diff --check` はローカル作業ツリーで通過した。
 - 実 provider を使う Step 1 の 3 Trial 測定は未実施。候補数、completed、Finding、Lead、wall 中央値、usage、失敗理由について本番値はまだない。したがってこの差分は探索 PR の merge 条件を満たさない。
 - quota の時刻到来だけでは回復を証明できない。現在は `WAIT_QUOTA` の後、読み取り専用 readiness がなければ `WAIT_REVIEW(quota-readiness-unverified)` に止める。別 provider への継続、回復後の無人再開、総 token 利用枠の硬い停止は未実装。
+- 硬い総 token 枠は、現行の事後 usage と broker の byte / request 上限からは保証できない。[実装可能性と必要契約](2026-10-14-issue-229-hard-usage-cap-feasibility.md)を決定待ちとして分離した。
 - readiness probe だけを足しても再開は完成しない。現行 child assessment は既存の provider-limited receipt を毎回 `wait-quota` と判定する。回復確認を receipt sequence / provider / account に結び付けて永続化し、消費済み `incomplete` Trial と未開始 target を別々に扱う必要がある。現行 receipt には provider key がなく、broker は rate-limit 読取を転送しない。認証 token の期限切れも quota と区別する必要がある。
 - Codex app-server の `account/rateLimits/read` を読み取り専用で実測した。`ordinaryUsageAllowed` は account 全体の通常利用可否で、要求 model / effort の開始可否や Opus の枠を証明しない。実運転への接続には broker が使う credential と account ID の一致、SPEC の broker 経由外向き通信境界との整合が必要。reset 時刻や残率から回復を推定しない。
 - プール期限後に選定 event の一部または全部が残った未 binding child は `WAIT_REVIEW(expired-pool-with-selection-prefix)` とする。旧候補を無言で新プールへ差し替えないためで、無人復旧手順は未実装。
