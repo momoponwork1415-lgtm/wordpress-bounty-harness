@@ -116,15 +116,15 @@ review export（scope 内 Finding 全件、判定結果に関係なく）
 
 - 決定: `src/cli/continuous.ts` を新規に書き、`continuous run | stop | status` を足す。中身は第 3 節だけ。`select` と `campaign run --all` は in-process で呼ぶ（exit code は戻り値で受ける）。
 - `c5d0ef3` 系（journal 525、owner 212、reconcile 446、stop 84、control 133、claims 564、scope 21、recovery 131、gate 841 の src 約 2,960 行と test 約 3,100 行、#227 の在庫 768 行と child-assessment 446 行、#228 の Lab 側変更）は merge も rebase もしない。branch から cherry-pick するのは #222、#223、拒否の記録の 3 commit だけで、その際も `policy/campaign.json`、`policy/selection.json`、`prompts/wp2shell-bounty-v4.md` の変更は除外する（v4 は P9 で独立に扱う）。
-- 候補の補充は `select` の既存の仕組み。`selection.json` の `popularPages` と `pagesPerTag` を 2 → 5 に上げ、`maxCandidates: 500` は据え置く。在庫 cursor は持たない（毎回先頭から列挙し、台帳の既往と legacy JSON で飛ばす）。
-- 候補が尽きるときの規則: `select` の適格数が 3 日連続で 3 件未満なら、runner は `minimumActiveInstallations` を 100,000 → 50,000 → 30,000 と 1 段ずつ下げた選定方針の写し（`selection.50000.json`、`selection.30000.json`。同じ構造で数値だけ違う）に切り替える。数値の変更は選定方針の構造を変えないので ADR も `owner-approved` も要らない（DEVELOPMENT §2「数値は変えてよい」）。切り替えた日と値は選定レポートと `continuous status` に残す。30,000 でも 3 日続けば `exhausted` で止まる。
+- 候補の補充は `select` の既存の仕組み。`selection.json` の `popularPages` と `pagesPerTag` を 2 → 5 に上げる。列挙は `maxCandidates`（`contracts.ts:106`、`enumerator.ts:277` の 500）で切られるので、同時に 1,500 に上げる（頁数だけ上げても pool は増えない）。`select` の所要時間（HTTP 回数が 3 倍）は初日に測る。在庫 cursor は持たない（毎回先頭から列挙し、台帳の既往と legacy JSON で飛ばす）。
+- 候補が尽きるときの規則: `select` の適格数が 3 日連続で 3 件未満なら、runner は `minimumActiveInstallations` を 100,000 → 50,000 → 30,000 と 1 段ずつ下げた選定方針の写し（`selection.50000.json`、`selection.30000.json`。同じ構造で数値だけ違う）に切り替える。切り替えは `select --config` と `campaign run --selection <path>`（P6 で足す上書き）で行い、下げる前に最新 batch が `selection-batch-bound` されていることを確認する。数値の変更は選定方針の構造を変えないので ADR も `owner-approved` も要らない（DEVELOPMENT §2「数値は変えてよい」）。切り替えた日と値は選定レポートと `continuous status` に残す。30,000 でも 3 日続けば `exhausted` で止まる。
 - 停止: `continuous stop` は state dir に `continuous.stop` を書く。runner は各周回の前と `campaign run` の戻りで marker を見る。進行中の campaign には既存の stopSignal を渡し、Trial 単位で drain する（子の成果は保存される。ADR 0029）。campaign 側は `campaign-stopped(operator)` を台帳に残すので「台帳が状態源」と整合する。SIGINT / SIGTERM も同じ経路。終了時に pid file を消す。
 - crash 後: 終了記録のない Trial と Lab の Docker 資源は、runner 起動時の `lab cleanup --remove` と `status` の unsettled 件数で見る。自動復旧は実機で 2 回止まるまで作らない（LESSONS 8）。
 - 理由: 3 branch が `main.ts` / `wordpress.ts` / `pipeline.ts` を同時に変えており、割って rebase するより `main` の `select` と `campaign run --all`（同じ ID で再開、provider 上限は exit 3。`src/cli/index.ts:769-772`）を呼ぶ方が小さい。第 2 の journal は SPEC §4「単一の追記専用台帳」と二重になる。
 
 ### D4 quota、rate-limit、その他の失敗
 
-- 決定: `campaign run` が exit 3 で返ったら、runner は直近の `discovery-run-finished.providerLimit` を読む。`quota` なら 30 → 60 分、`rate-limit` なら 5 → 10 → 20 → 40 → 60 分の backoff で同じ campaign ID を再実行する。60 分に達した後は 60 分ごと。上限回数は置かない。人間は呼ばない。
+- 決定: `campaign run` が `provider-limit` で止まったら、runner は直近の `discovery-run-finished.providerLimit` を読む。`quota` なら 30 → 60 分、`rate-limit` なら 5 → 10 → 20 → 40 → 60 分の backoff で同じ campaign ID を再実行する。60 分に達した後は 60 分ごと。`provider-limit` で終わった実行が 2 回連続なら、次の再実行まで 6 時間（定数）眠り、焼いた Trial 数を `status` に出す。上限回数は置かない。人間は呼ばない。
 - provider 上限で止まった Trial の対象は、campaign 内では消費済み（`campaign.ts:353-370` の再開ロジックは変えない）。その slug は D2 の規則で次の `select` に再選定され、新しい campaign で初回として扱う。SPEC §4 discovery 行の「自動 retry しない」と §6「provider 上限では新規 Trial を止め…未消費の対象を再開する」は、「runner が backoff 後に同じ campaign ID で再開し、成立しなかった Trial の対象は再選定で戻る」に P0 で書き換える。
 - 対象単位の失敗（Lab provision、Snapshot 取得、run 失敗、拒否）は P4 以降すべて `target-skipped` で次の対象へ進む。版の変化では skip しない（固定 Snapshot で探索を続け、提出直前の `review reverify --version` で吸収する。SPEC §8）。
 - runner 全体を止めるのは、stop、`login-expiring`、`programme-stale`（35 日超は選定全体を止める系統的事象）、`exhausted`、exit 1 が 3 batch 連続（`errors`）の 5 つだけ。
@@ -251,9 +251,9 @@ lab-provisioned         status=failed    failureStage=setup                  cou
 
 ### P5 選定除外: 既往の基準、legacy JSON、`revisitPolicy: never`、再選定、候補頁 5（約 260 行）
 
-- (a) `ledger-exclusions.ts`（+90）: 既往の基準を `discovery-run-started` に。除外理由の union に `legacy-started`、`legacy-ambiguous`、`provider-failed-retry-exhausted` を足す。入力に `legacyHistory?: {started: Set<string>; ambiguous: Set<string>; digest: string} | "unavailable"`。成立しなかった Trial しか持たない slug は、その Trial が 2 本未満なら `previously-selected` を付けない。`target-selected` だけで探索開始の無い slug は再選定可（同じ 2 本の上限）。
-- (b) `wordpress-host.ts`（+15）: `legacyHistory: {file}` を optional で読み、digest を取る。
-- (c) `selection.json`: `revisitPolicy: {"kind":"never"}`、`popularPages: 5`、`pagesPerTag: 5`、`id: wordpress-selection-2026-10-20`。`selection.50000.json` と `selection.30000.json` は下限だけ違う写し。
+- (a) `ledger-exclusions.ts`（+90〜120）: 既往の基準を `discovery-run-started`（`runKind: explore`）に。除外理由の union に `legacy-started`、`legacy-ambiguous`、`provider-failed-retry-exhausted` を足す。入力に `legacyHistory?: {started: Set<string>; ambiguous: Set<string>; digest: string} | "unavailable"`。規則: `attempts` ＝ その slug の Snapshot に属する explore の `discovery-run-started` 件数。`attempts < 2` かつ `discovery-run-finished.outcome = completed` が 0 かつ `finding-recorded` / `lead-recorded` が 0 なら `previously-selected` を付けない。`attempts = 0`（選定だけ、未開始）は常に再選定可。
+- (b) `wordpress-host.ts`（+15）と `wordpress.ts`（+30）: host 設定の `legacyHistory: {file}` を `select` のたびに読み（起動時ではなく）、`schemaVersion` と slug の形式を zod で検査し、digest を選定レポートに載せる。
+- (c) `selection.json`: `revisitPolicy: {"kind":"never"}`、`popularPages: 5`、`pagesPerTag: 5`、`maxCandidates: 1500`（`contracts.ts` と enumerator の上限定数も 1,500 に）、`id: wordpress-selection-2026-10-20`。`selection.50000.json` と `selection.30000.json` は下限だけ違う写し。policy の変更なので `owner-approved`（AI 委任）を付ける。P5 全体は src 約 230 ＋ test 約 180 で 500 以内。
 - (d) `scripts/export-legacy-slugs.mjs`（約 80 行）: 旧研究 DB（sqlite）のパスを引数に取り、Trial 開始の記録がある slug を `started`、選定だけで判別できない slug を `ambiguous` に分け、JSON を標準出力に書く。repo 内の台帳には触れない。
 - (e) 選定レポートに `legacyHistory: {digest, started, ambiguous}` または `unavailable`。
 - 受入試験: (1) legacy の slug が理由付きで除外される。(2) JSON 無しで `select` が進み、レポートに `unavailable`。(3) provider 失敗 1 本の slug は再選定され、2 本目の失敗で除外される。(4) Finding 1 件以上の slug は再選定されない。(5) Lab 失敗で開始しなかった slug は再選定される。(6) 版が上がっても `never` で再選定されない。
@@ -261,7 +261,13 @@ lab-provisioned         status=failed    failureStage=setup                  cou
 
 ### P6 最小 runner `continuous run | stop | status`（約 450 行、test 込み）
 
-- 新規 `src/cli/continuous.ts`（約 200 行）。配線 `src/cli/index.ts`（+25）。test 約 200 行。
+- 新規 `src/cli/continuous.ts`（約 220 行）。配線 `src/cli/index.ts`（+25）、`campaign run --selection <path>`（index.ts +6、wordpress.ts +10）、`select` の下限未満 throw（`wordpress.ts:1295-1298`）を「`target-selected` を書かず `selected: []` と全 `excluded` を返す」に変える（約 8 行）。test 約 200 行。
+- runner は `runCli` を繰り返し呼ばない（呼ぶたびに台帳の DB を開いて閉じない）。1 つの `state` を作り `environment.profile.select` と `profile.runCampaign` を直接呼び、`CampaignSummary.stopped` で分岐する: `provider-limit` → backoff、`incomplete` → 即再実行、`undefined` → 次 batch。exit code は人間向けに残す。
+- campaign の完了を示す台帳 event は無い。runner は「同じ ID で再実行して `targets` と `skipped` が空なら完了」という `campaign run` の冪等性に依存する。`status` の unsettled は同じ判定で数える。
+- 起動時に、最新の `selection-*` batch が `selection-batch-bound` されていなければ `select` をやり直さず、その batch を新しい campaign ID で束縛して走らせる（crash や exit 1 の後に未束縛 batch が孤児化し、その slug が `never` で永久除外されるのを防ぐ）。
+- campaign ID の prefix は `selection-` で始まってはならない（選定 batch の見分けに使われる）。`--campaign-prefix` を検査する。
+- `sleep`、`clock`、`signals`、`pidAlive` は引数で注入し、受入試験はそれで書く。
+- `select` の結果は 3 つに分ける: `selected` が空で `excluded[].reasons` が全件 `programme-stale` → `programme-stale` 停止。`below-installation-threshold` が多数 → 下限引き下げの候補。listing が `unavailable`（WordPress.org 側の失敗）→ 候補 0 とは別に数え、1 時間後に再試行。
 - CLI:
 
 ```
@@ -288,7 +294,7 @@ harness continuous status --state <dir>
 
 ### P8 `review export` の互換追加（約 160 行）
 
-- `src/review/export.ts` の `review` 節に nullable で足す: `humanReproduction: {result, minutes, recordedAt} | null`、`latestHarnessReproduction: {verificationId, status, recordedAt} | null`、`latestDraft: {digest, revision, preparedBy, programme} | null`、`decision: {decision, reasonCode, duplicate, decidedAt} | null`、`scopeAssessments: [{assessmentId, programme, verdict}]`。artifact は store から読む。literal は `review-export/v1` のまま。
+- `src/review/export.ts` の `review` 節に nullable で足す: `humanReproduction: {result, minutes, recordedAt} | null`、`latestReverification: {verificationId, status, basis, recordedAt} | null`（`derivedFromFindingId` が同じ `finding-recorded` と `verification-finished` の join）、`latestDraft: {digest, revision, preparedBy, programme} | null`、`decision: {decision, reasonCode, duplicate, decidedAt} | null`、`scopeAssessments: [{assessmentId, programme, verdict}]`。review-decision / draft / scope の artifact は store から読む。literal は `review-export/v1` のまま。src 約 100 ＋ test 約 70。
 - 受入試験: 既存の export fixture がそのまま通る（互換）。各項目が台帳 event と artifact から埋まる。artifact 欠落は `null`。
 
 ### P9 既定 prompt を v4 に切り替える（約 60 行、無人運転の週の後）
@@ -307,10 +313,10 @@ harness continuous status --state <dir>
 - 測る数字: precondition 理由の件数の前後比（`scripts/report-wordpress-preconditions.mjs`）、判定器が結論を出した件数、runner が流した異なる slug の初回 3 Trial（Trial 数、completed、Finding・Lead、wall 中央値、失敗内訳）。
 - 設計時の確認: `is_admin()` 依存の plugin 1 件で `admin_init` が既定値を登録することを Lab で 1 回確かめてから書く。
 
-### P12 `review reproduced --via-reverify`（約 140 行、所有者が第 14 節 5 に yes のとき）
+### P12 手動再現の省略（文言だけ、約 20 行、所有者が第 14 節 5 に yes のとき）
 
-- `review reproduced --result match --via-reverify <verificationId>`: 指定の reverify が同じ Finding・同じ Snapshot digest・`runtime-confirmed` のときだけ記録し、`human-reproduction-recorded` に `via: "reverify"`（既存 event の optional 項目）。`no-judge` は不可。SPEC §8 の 1 文と ADR 0032 に 1 行（`owner-approved`）。
-- 受入試験: 別 Finding、`incomplete`、digest 不一致、`no-judge` はすべて拒否。
+- 新しい記録は要らない。Harness の再実行の事実は既存の `verification-finished`（最新版 `reverify`、`runtime-confirmed`）に残っており、P8 の `latestReverification` が export に出す。したがって P12 は SPEC §8 の 1 文（「判定器が確認し、最新版の reverify が緑の Finding は、人間は証拠を読んで査読する。`no-judge` は手で再現する」）、ADR 0032 に 1 行、OPERATIONS §3 の表の 1 行、`wbh-report` の前提の 1 行（全文貼付）だけ。`owner-approved`。
+- `review reproduced` は `no-judge` の種別で使い続ける。
 
 ### P13 整理（3 本、Step 1 完了後）
 
@@ -395,9 +401,13 @@ Step 1 の「人手介入 0」の判定で、次は介入に数えない: ChatGP
 - 無人運転の週に Verifier が quota に当たると、Finding の検証が次の周回まで遅れる。
 - 行数と所要時間はすべて見積りで、実測ではない。
 
-## 12. 確定案向け検証の結果（追記欄）
+## 12. 確定案向け検証の結果
 
-規則・code・完全性・候補供給量の 4 本の検証結果が揃ったら、ここに「変えた行」と「候補供給量の実測」を書く。
+code lens（2026-10-14 13:00）: 決定 D1〜D10 は維持。実装の正確さに関する 8 点を本文に反映した（runner は `profile.select` / `runCampaign` を直接呼ぶ、`maxCandidates` の上限も上げる、下限変更は `--selection` の上書き、`select` の下限未満 throw を空の選定に変える、provider 上限 2 回連続で 6 時間眠る、未束縛 batch の束縛し直し、`via-reverify` の新記録は不要、拒否率の分母は `runKind: explore`）。
+
+残る 3 本（規則 lens、完全性 critic、候補供給量の実測）は走行中。結果が届いたら「変えた行」をここに足し、供給量の実測（下限 100,000 / 50,000 / 30,000 の適格 slug 数と、1 日 5 対象での持ち週数）を第 11 節のリスク評価に転記する。決定を覆す指摘が無ければ本文は変えない。
+
+runbook への追記（code lens から）: `select` は選んだ対象を全件 freeze するので、走らなかった batch でも Snapshot と materialized source が `workDirectory` に残る。7.1 のディスク確認は `workDirectory/snapshots` と `sources` も見る。systemd で動かすときは `KillMode=mixed` と `TimeoutStopSec` を batch 1 本の見込み時間（対象数 × 60 分）にし、drain を待つ。
 
 ## 13. やらないこと
 
