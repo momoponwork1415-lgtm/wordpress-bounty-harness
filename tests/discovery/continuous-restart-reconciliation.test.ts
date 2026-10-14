@@ -290,7 +290,7 @@ describe("continuous restart reconciliation", () => {
     }
   });
 
-  it("holds typed quota, an unfinished Trial, and a completed Trial without conclusion", async () => {
+  it("holds quota and unfinished Trials, then resumes a drained Trial without conclusion", async () => {
     const state = await setup();
     try {
       state.reserve();
@@ -302,13 +302,38 @@ describe("continuous restart reconciliation", () => {
           finished({ outcome: "provider-limited", providerLimit: "quota" }),
         ]),
       ).toMatchObject({ action: "hold", reason: "quota" });
+      expect(
+        await state.inspect([
+          ...prefix,
+          finished({ outcome: "provider-limited" }),
+        ]),
+      ).toMatchObject({ action: "hold", reason: "review-required" });
       expect(await state.inspect(prefix)).toMatchObject({
         action: "hold",
         reason: "trial-unsettled",
       });
+      expect(
+        await state.inspect([
+          ...prefix,
+          { ...started("child-one"), runKind: "child", parentRunId: "run-one" },
+          finished(),
+        ]),
+      ).toMatchObject({ action: "hold", reason: "trial-unsettled" });
+      expect(await state.inspect([...prefix, finished()])).toMatchObject({
+        action: "resume-child",
+        campaignId,
+        ordinal: 0,
+        assessment: {
+          reason: "no-conclusion",
+          progress: { trialsStarted: 1, trialsFinished: 1 },
+        },
+      });
+      state.setClaims([
+        { campaignId, snapshotDigest: snapshot, status: "recovery-needed" },
+      ]);
       expect(await state.inspect([...prefix, finished()])).toMatchObject({
         action: "hold",
-        reason: "trial-unsettled",
+        reason: "resource-recovery-needed",
       });
     } finally {
       state.journal.close();

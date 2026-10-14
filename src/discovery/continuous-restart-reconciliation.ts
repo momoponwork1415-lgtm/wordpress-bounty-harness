@@ -103,6 +103,22 @@ function campaignRows(
   return rows;
 }
 
+/** A drained Trial is spent; only unfinished child work may resume. */
+function canResumeStartedChild(assessment: ChildCampaignAssessment): boolean {
+  return (
+    assessment.progress.trialsStarted > 0 &&
+    assessment.progress.trialsStarted === assessment.progress.trialsFinished &&
+    assessment.targets.every(
+      (target) =>
+        target.trialsStarted === target.trialsFinished &&
+        (target.nextState === "pending" ||
+          target.nextState === "complete" ||
+          (target.nextState === "unsettled" &&
+            target.reason === "no-conclusion")),
+    )
+  );
+}
+
 /**
  * Read-only restart preflight. The caller must acquire the parent owner claim,
  * apply the returned journal operation with expectedRevision, and run this
@@ -294,7 +310,8 @@ export async function reconcileContinuousRestart(input: {
     return hold("review-required", run, assessment);
   } else if (
     assessment?.nextState === "unsettled" &&
-    assessment.progress.trialsStarted > 0
+    assessment.progress.trialsStarted > 0 &&
+    !canResumeStartedChild(assessment)
   ) {
     return hold("trial-unsettled", run, assessment);
   }
@@ -327,7 +344,11 @@ export async function reconcileContinuousRestart(input: {
       lastLedgerSequence: assessment.lastLedgerSequence,
       assessment,
     };
-  if (assessment !== null && assessment.progress.trialsStarted > 0)
+  if (
+    assessment !== null &&
+    assessment.progress.trialsStarted > 0 &&
+    !canResumeStartedChild(assessment)
+  )
     return hold("trial-unsettled", run, assessment);
   return {
     action: "resume-child",
