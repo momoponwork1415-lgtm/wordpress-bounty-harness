@@ -109,6 +109,7 @@ import {
   runCampaignPipeline,
   type CampaignPipeline,
 } from "./pipeline.js";
+import { storeTargetSkipDiagnostic } from "./skip-diagnostic.js";
 
 const text = z.strictObject({
   version: z.string().min(1).max(64),
@@ -1121,13 +1122,22 @@ async function runWordPressCampaign(
             target.slug === input.target,
         ),
       freeze: async (target) => {
-        const snapshot = await boundaries.freeze(target);
         const reservedDigest = reservedDigests.get(
           `${target.targetId}@${target.version}`,
         );
+        if (reservedSelections !== undefined && reservedDigest === undefined)
+          throw new Error("Reserved selection Snapshot is unavailable");
+        // Selection already froze this source. Reuse the pinned Snapshot so a
+        // second WordPress.org download cannot replace or block the campaign.
+        const snapshot =
+          reservedDigest === undefined
+            ? await boundaries.freeze(target)
+            : await boundaries.loadSnapshot(reservedDigest);
         if (
           reservedSelections !== undefined &&
-          snapshot.digest !== reservedDigest
+          (snapshot.digest !== reservedDigest ||
+            snapshot.target.identity !== target.targetId ||
+            snapshot.target.version !== target.version)
         )
           throw new Error("Reserved selection Snapshot changed");
         return snapshot;
@@ -1266,6 +1276,12 @@ export function createWordPressCliProfile(
         );
       const chosen: { target: WordPressTargetSelection; snapshot: Snapshot }[] =
         [];
+      const selectionAttemptId = `selection-${state.newId()}`;
+      const freezeFailures: {
+        selectionId: string;
+        reason: string;
+        diagnosticDigest: string;
+      }[] = [];
       for (const target of rankable) {
         if (chosen.length >= policy.maximumTargets) {
           reasons.get(target.slug)?.push("below-rank-cutoff");
@@ -1273,8 +1289,32 @@ export function createWordPressCliProfile(
         }
         try {
           chosen.push({ target, snapshot: await boundaries.freeze(target) });
-        } catch {
+        } catch (error) {
           reasons.get(target.slug)?.push("snapshot-unavailable");
+          const { reason, digest } = await storeTargetSkipDiagnostic(
+            state.store,
+            error,
+          );
+          const selectionId = `${target.targetId}@${target.version}`;
+          freezeFailures.push({
+            selectionId,
+            reason,
+            diagnosticDigest: digest,
+          });
+          const appended = await state.ledger.append({
+            schemaVersion: 1,
+            identity: `target-skipped-${state.newId()}`,
+            campaignId: selectionAttemptId,
+            snapshotDigest: canonicalDigest(target),
+            occurredAt: state.clock().toISOString(),
+            type: "target-skipped",
+            selectionId,
+            stage: "freeze",
+            reason,
+            artifacts: [{ kind: "target-skip-diagnostic", digest }],
+          });
+          if (appended.status !== "appended")
+            throw new Error("Selection skip ledger append conflicted");
         }
       }
       const report = {
@@ -1288,6 +1328,7 @@ export function createWordPressCliProfile(
           reasons: reasons.get(item.slug) ?? [],
         })),
         selectedSnapshotDigests: chosen.map(({ snapshot }) => snapshot.digest),
+        freezeFailures,
       };
       const reportDigest = await state.store.putFiles({
         "selection-report.json": canonicalJson(report),
@@ -1296,7 +1337,7 @@ export function createWordPressCliProfile(
         throw new Error(
           `Selection found ${chosen.length} eligible frozen targets; at least 3 are required (report ${reportDigest})`,
         );
-      const batchId = chosen.length === 0 ? null : `selection-${state.newId()}`;
+      const batchId = chosen.length === 0 ? null : selectionAttemptId;
       for (const { target, snapshot } of chosen) {
         const selectionDigest = await state.store.putFiles({
           "target-selection.json": canonicalJson(target),

@@ -36,7 +36,10 @@ import { loadWordpressScopePolicy } from "../../src/profiles/wordpress/scope-pol
 import { loadWordPressDiscoveryAsset } from "../../src/profiles/wordpress/prompts/index.js";
 import { createWordPressSelection } from "../../src/profiles/wordpress/selection/index.js";
 import type { WordPressOrgListingObservation } from "../../src/profiles/wordpress/selection/wordpress-org-candidate-enumerator.js";
-import { openSnapshot } from "../../src/snapshot/index.js";
+import {
+  openSnapshot,
+  SourceAcquisitionError,
+} from "../../src/snapshot/index.js";
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
 const uuid = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
@@ -100,6 +103,8 @@ async function harness(
     readonly listingObservations?: readonly WordPressOrgListingObservation[];
     /** A slug whose snapshot cannot be frozen. */
     readonly failFreeze?: string;
+    /** Simulates an archive connection failing after the selection freeze succeeded. */
+    readonly failRepeatedFreeze?: boolean;
     /** Extra campaign config fields. */
     readonly config?: Readonly<Record<string, unknown>>;
     readonly entryPoints?: boolean;
@@ -407,6 +412,7 @@ async function harness(
     string,
     Awaited<ReturnType<typeof snapshots.freeze>>
   >();
+  const freezeCounts = new Map<string, number>();
 
   const attachments = new ProviderAttachmentStore(join(root, "provider"));
   const prompts: string[] = [];
@@ -426,7 +432,14 @@ async function harness(
     selection,
     freeze: async (target) => {
       if (target.slug === options.failFreeze)
-        throw new Error("Synthetic download failure");
+        throw new SourceAcquisitionError("connect-timeout", {
+          code: "ETIMEDOUT",
+          detail: "Synthetic download failure",
+        });
+      const attempts = freezeCounts.get(target.slug) ?? 0;
+      freezeCounts.set(target.slug, attempts + 1);
+      if (options.failRepeatedFreeze === true && attempts > 0)
+        throw new Error("Synthetic second archive connection timed out");
       const snapshot = await snapshots.freeze(target);
       frozen.set(snapshot.digest, snapshot);
       return snapshot;
@@ -2630,7 +2643,7 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("skips a target that fails, records the stage and continues with the rest", async () => {
-    const { run, configPath, ledger } = await harness({
+    const { run, configPath, ledger, store } = await harness({
       candidates: ["broken-plugin", "synthetic-plugin"],
       failFreeze: "broken-plugin",
     });
@@ -2645,7 +2658,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(campaign.code).toBe(0);
     expect(campaign.stderr).toContain(
-      "skipped wporg:broken-plugin 9.9.9 at freeze: Synthetic download failure",
+      "skipped wporg:broken-plugin 9.9.9 at freeze: Source acquisition did not complete: connect-timeout",
     );
     expect(campaign.stdout).toMatch(
       /^wporg:synthetic-plugin 3\.3\.1 .*stopped by no-new-finding$/m,
@@ -2658,10 +2671,86 @@ describe("harness CLI vertical slice", () => {
         type: "target-skipped",
         selectionId: "wporg:broken-plugin@9.9.9",
         stage: "freeze",
+        reason: "connect-timeout",
       },
     ]);
-    // The failure text stays out of the ledger.
+    // Only a digest appears in the ledger; the diagnostic is private.
     expect(JSON.stringify(skipped)).not.toContain("Synthetic download failure");
+    const diagnosticRef = skipped[0]?.artifacts.find(
+      (artifact) => artifact.kind === "target-skip-diagnostic",
+    );
+    expect(diagnosticRef).toBeDefined();
+    const diagnosticFile = await store().readFile(
+      diagnosticRef!.digest,
+      "target-skip-diagnostic.json",
+      10_000,
+    );
+    expect(diagnosticFile.status).toBe("resolved");
+    if (diagnosticFile.status === "resolved")
+      expect(diagnosticFile.bytes.toString("utf8")).toContain(
+        "Synthetic download failure",
+      );
+  });
+
+  it("records a source freeze failure during selection without leaking diagnostics", async () => {
+    const { run, configPath, ledger, store } = await harness({
+      candidates: ["broken-plugin", "synthetic-plugin"],
+      failFreeze: "broken-plugin",
+    });
+    const selected = await run("select", "--config", configPath);
+    expect(selected.code).toBe(0);
+    expect(selected.stdout).toContain(
+      "excluded wporg:broken-plugin  reasons snapshot-unavailable",
+    );
+    expect(selected.stdout).toContain("wporg:synthetic-plugin 3.3.1 score");
+    const skips = ledger()
+      .read({ type: "target-skipped" })
+      .map(({ event }) => event);
+    expect(skips).toMatchObject([
+      {
+        type: "target-skipped",
+        selectionId: "wporg:broken-plugin@9.9.9",
+        stage: "freeze",
+        reason: "connect-timeout",
+      },
+    ]);
+    expect(skips[0]?.campaignId).toMatch(/^selection-/);
+    expect(JSON.stringify(skips)).not.toContain("Synthetic download failure");
+    const diagnosticRef = skips[0]?.artifacts.find(
+      (artifact) => artifact.kind === "target-skip-diagnostic",
+    );
+    expect(diagnosticRef).toBeDefined();
+    const diagnosticFile = await store().readFile(
+      diagnosticRef!.digest,
+      "target-skip-diagnostic.json",
+      10_000,
+    );
+    expect(diagnosticFile.status).toBe("resolved");
+    if (diagnosticFile.status === "resolved")
+      expect(diagnosticFile.bytes.toString("utf8")).toContain(
+        "Synthetic download failure",
+      );
+    const selectedRecord = ledger().read({ type: "target-selected" })[0];
+    const reportRef = selectedRecord?.event.artifacts.find(
+      (artifact) => artifact.kind === "selection-report",
+    );
+    expect(reportRef).toBeDefined();
+    const reportFile = await store().readFile(
+      reportRef!.digest,
+      "selection-report.json",
+      10_000,
+    );
+    expect(reportFile.status).toBe("resolved");
+    if (reportFile.status === "resolved")
+      expect(JSON.parse(reportFile.bytes.toString("utf8"))).toMatchObject({
+        freezeFailures: [
+          {
+            selectionId: "wporg:broken-plugin@9.9.9",
+            reason: "connect-timeout",
+            diagnosticDigest: diagnosticRef!.digest,
+          },
+        ],
+      });
   });
 
   it("lists the policy selection and runs only the named target or --all", async () => {
@@ -2746,6 +2835,7 @@ describe("harness CLI vertical slice", () => {
     const { run, configPath, root, ledger, store } = await harness({
       candidates,
       listingObservations,
+      failRepeatedFreeze: true,
     });
     const policyPath = join(root, "selection.json");
     const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
@@ -2845,6 +2935,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("wporg:item-d 9.9.9");
+    expect(campaign.stderr).not.toContain("skipped");
     const bound = ledger().read({
       campaignId: "campaign-reserved",
       type: "selection-batch-bound",

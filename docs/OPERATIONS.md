@@ -75,7 +75,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 既定promptは `wp2shell-bounty-v3`、入口索引は固定source由来のカタログ入力として既定で有効。索引の全件処理は終了条件にしない。`wp2shell-bounty-v2` と `short-objective-managed-v4` は比較armとして残す。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
 
-自動選定の campaign は初回起動時に `selection-batch-bound` を追記し、選定バッチと対象集合を固定する。再開時はこの記録のバッチを読み、途中で `select` を再実行しても新しいバッチに切り替えない。公開一覧の取得元・確認日時・available/stale/unavailable と失敗理由は Private Evidence の選定レポートに記録する。
+自動選定の campaign は初回起動時に `selection-batch-bound` を追記し、選定バッチと対象集合を固定する。再開時はこの記録のバッチを読み、途中で `select` を再実行しても新しいバッチに切り替えない。選定時に固定した Snapshot と materialized source は digest を再検査して使い、campaign 開始時に同じ ZIP を再取得しない。公開一覧の取得元・確認日時・available/stale/unavailable と失敗理由は Private Evidence の選定レポートに記録する。
 
 - **同時run数**: campaign設定の `resources` で決める。
   - 既定の `resources` は `{"maxConcurrentRuns": 2, "memoryBudgetMiB": 10240}`。新主経路は対象ごとに1 Trialで、wall上限は60分。
@@ -88,7 +88,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
   - 同じコマンドをもう一度実行すると再開する。開始済みTrialは追加せず、未検証のFindingを検証して未消費の対象へ進む。
 - **入口の分担**: campaign の `assignment: {"unit":"entry-point","entriesPerRun":8}` で有効にする。WordPress profile が登録入口、保存先、core 交差、1 hop の include を text 走査し、保存先を共有する入口を同じ scope に置く。索引は事実の列挙で、探索範囲を制限しない。台帳には索引・成分の digest だけを置く。上限（PHP file 20,000、1 file 2 MiB、成分 key 200）を超えた索引は scope に partial と表示する。
 - **過去Trialの記録**: 旧 `stage` / `continuationOf` 付きeventと旧ablation armは台帳から読める。旧promptの目的文とdigestで構成を照合するが、旧screeningを現行modeで新規起動しない。新主経路は段やcontinuationを新規に書かず、比較するpromptと入口索引の有無を別armとして明示する。Leadの本文はPrivate Evidenceに置き、台帳にはdigestと分類だけを記録する。
-- **対象ごとの失敗**（取得、探索、検証）: 標準エラーに `skipped <対象> <版> at <段階>: <理由>` と出す。台帳には `target-skipped`（段階だけ）を残し、次の対象へ進む。
+- **対象ごとの失敗**（取得、探索、検証）: 標準エラーに `skipped <対象> <版> at <段階>: <理由>` と出す。台帳の `target-skipped` には段階、短い理由コード、Private Evidence に置いた `target-skip-diagnostic.json` の digest を残し、次の対象へ進む。DNS、接続タイムアウト、HTTP 応答、source 検査不一致を区別する。取得失敗を探索の正常な候補0件に数えない。
 - Lab 準備では使い捨て runsc コンテナから HTTP 到達を確認する。`lab-provisioned.reachability.http = failed` なら探索を始めず、`failureStage` と `reason` を記録する。DB 到達の失敗は記録するが HTTP が通れば続ける。Docker の診断文は Private Evidence に置き、台帳には digest だけを残す。
 - pinned WordPress image の core は `<workDirectory>/wordpress-core` に実行せず取り出し、Dependency Snapshot として固定する。探索と Verifier は `/workspace/wordpress` の read-only mount で同じ版を読む。
 - campaign の `lab.databaseAccess` は既定で `read-only`、Lab 単体の既定は `none`。reader は provision 時点で存在する table にだけ SELECT 権限を持ち、後で作る canary table は読めない。`configuration.labAccess` と `lab-provisioned.reachability.database` を併せて見る。Codex image に MySQL client があるかは実 run で未確認で、無い場合は image に `mariadb-client` が要る。
@@ -162,7 +162,7 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 
 旧 `scripts/prepare-pilot-selection.mjs` は `harness select` の薄い呼び出しとして残す。`--host`、`--state`、`--config` を受け取り、候補と順位は作らない。
 
-スコア内訳、除外理由、候補一覧の取得元と観測時刻は標準出力と Git 外の `selection-report` に残る。`target-selected` は固定済み Snapshot digest と `target-selection` の Private Evidence を参照する。次の `campaign run --all` は同じ方針 digest の最新バッチを使い、Snapshot が変われば止まる。公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030）。
+スコア内訳、除外理由、候補一覧の取得元と観測時刻は標準出力と Git 外の `selection-report` に残る。最初の Snapshot 固定に失敗した候補は `snapshot-unavailable` として除外し、短い理由コードと Private Evidence の診断 digest を選定レポートと `target-skipped` に残す。`target-selected` は固定済み Snapshot digest と `target-selection` の Private Evidence を参照する。次の `campaign run --all` は同じ方針 digest の最新バッチを使い、Snapshot が変われば止まる。公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030）。
 
 ### 子の最終JSONがschemaで失敗したとき
 
