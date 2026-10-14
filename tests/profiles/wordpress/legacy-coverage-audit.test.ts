@@ -1,11 +1,15 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, expect, it } from "vitest";
 
 import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
+import {
+  privateExistingAuditPath,
+  privateNewAuditPath,
+} from "../../../src/infrastructure/private-audit-path.js";
 import { auditLegacyCoveragePlan } from "../../../src/profiles/wordpress/discovery/legacy-coverage-audit.js";
 import { repeatTrialCoverageManifestSchema } from "../../../src/profiles/wordpress/discovery/repeat-trial-gate.js";
 
@@ -154,4 +158,99 @@ it("fails closed on missing sources, changed content, malformed metadata, and un
   );
   await rm(evidencePath);
   await expect(auditLegacyCoveragePlan(plan)).rejects.toThrow();
+});
+
+it("rejects hard-linked source and evidence aliases across the whole roster", async () => {
+  const { plan, source, evidencePath } = await fixture();
+  const root = dirname(source);
+  const sourceAlias = join(root, "source-alias.sqlite");
+  const evidenceCopy = join(root, "evidence-copy.json");
+  await link(source, sourceAlias);
+  await writeFile(
+    evidenceCopy,
+    JSON.stringify({
+      schemaVersion: 1,
+      sourceDigest: hash("synthetic source without private payload"),
+      records: [],
+    }),
+  );
+  const withSourceAlias = {
+    ...plan,
+    sources: plan.sources.map((group) =>
+      group.sourceClass === "state-ledgers"
+        ? {
+            ...group,
+            entries: [
+              ...group.entries,
+              { path: sourceAlias, evidencePath: evidenceCopy },
+            ],
+          }
+        : group,
+    ),
+  };
+  await expect(auditLegacyCoveragePlan(withSourceAlias)).rejects.toThrow(
+    "repeats a file identity",
+  );
+
+  await rm(sourceAlias);
+  const evidenceAlias = join(root, "evidence-alias.json");
+  const secondSource = join(root, "second-source.sqlite");
+  await link(evidencePath, evidenceAlias);
+  await writeFile(secondSource, "synthetic source without private payload");
+  const withEvidenceAlias = {
+    ...plan,
+    sources: plan.sources.map((group) =>
+      group.sourceClass === "state-ledgers"
+        ? {
+            ...group,
+            entries: [
+              ...group.entries,
+              { path: secondSource, evidencePath: evidenceAlias },
+            ],
+          }
+        : group,
+    ),
+  };
+  await expect(auditLegacyCoveragePlan(withEvidenceAlias)).rejects.toThrow(
+    "repeats a file identity",
+  );
+});
+
+it("keeps plan, source, evidence, and output outside Git and rejects symlink inputs", async () => {
+  const { plan, source, evidencePath } = await fixture();
+  const gitRoot = join(dirname(source), "checkout");
+  await mkdir(join(gitRoot, ".git"), { recursive: true });
+  const inside = join(gitRoot, "evidence.json");
+  await writeFile(inside, "synthetic metadata");
+  await expect(privateExistingAuditPath(inside)).rejects.toThrow("outside Git");
+  await expect(
+    privateNewAuditPath(join(gitRoot, "candidate.json")),
+  ).rejects.toThrow("outside Git");
+  const withInsideEvidence = {
+    ...plan,
+    sources: plan.sources.map((group) =>
+      group.sourceClass === "state-ledgers"
+        ? { ...group, entries: [{ path: source, evidencePath: inside }] }
+        : group,
+    ),
+  };
+  await expect(auditLegacyCoveragePlan(withInsideEvidence)).rejects.toThrow(
+    "outside Git",
+  );
+  const withInsideSource = {
+    ...plan,
+    sources: plan.sources.map((group) =>
+      group.sourceClass === "state-ledgers"
+        ? { ...group, entries: [{ path: inside, evidencePath }] }
+        : group,
+    ),
+  };
+  await expect(auditLegacyCoveragePlan(withInsideSource)).rejects.toThrow(
+    "outside Git",
+  );
+  const evidenceLink = join(dirname(source), "evidence-link.json");
+  await symlink(evidencePath, evidenceLink);
+  await expect(privateExistingAuditPath(evidenceLink)).rejects.toThrow(
+    "regular file",
+  );
 });

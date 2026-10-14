@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { lstat, readFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { constants, type BigIntStats } from "node:fs";
+import { lstat, open } from "node:fs/promises";
 
 import { z } from "zod";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import { privateExistingAuditPath } from "../../../infrastructure/private-audit-path.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const slug = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
@@ -67,51 +67,64 @@ type RecordReference = {
   readonly classification: ClassifiedRecord["classification"];
 };
 
-function absolutePath(value: string): string {
-  if (!isAbsolute(value)) throw new Error("Audit paths must be absolute");
-  return resolve(value);
-}
-
-function unchanged(
-  before: Awaited<ReturnType<typeof lstat>>,
-  after: Awaited<ReturnType<typeof lstat>>,
-): boolean {
+function unchanged(before: BigIntStats, after: BigIntStats): boolean {
   return (
     before.dev === after.dev &&
     before.ino === after.ino &&
     before.size === after.size &&
-    before.mtimeMs === after.mtimeMs &&
-    before.ctimeMs === after.ctimeMs
+    before.mtimeNs === after.mtimeNs &&
+    before.ctimeNs === after.ctimeNs
   );
 }
 
 async function stableFile(path: string): Promise<{
   readonly bytes: Buffer;
   readonly digest: string;
+  readonly identity: string;
 }> {
-  const before = await lstat(path);
-  if (!before.isFile() || before.isSymbolicLink())
-    throw new Error("Audit source or evidence is not a regular file");
-  const bytes = await readFile(path);
-  const after = await lstat(path);
-  if (!unchanged(before, after))
-    throw new Error("Audit source or evidence changed while reading");
-  return {
-    bytes,
-    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
-  };
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile())
+      throw new Error("Audit source or evidence is not a regular file");
+    const bytes = await handle.readFile();
+    const after = await handle.stat({ bigint: true });
+    const atPath = await lstat(path, { bigint: true });
+    if (!unchanged(before, after) || !unchanged(before, atPath))
+      throw new Error("Audit source or evidence changed while reading");
+    return {
+      bytes,
+      digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+      identity: `${before.dev}:${before.ino}`,
+    };
+  } finally {
+    await handle.close();
+  }
 }
 
-async function stableFileDigest(path: string): Promise<string> {
-  const before = await lstat(path);
-  if (!before.isFile() || before.isSymbolicLink())
-    throw new Error("Audit source or evidence is not a regular file");
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(path)) hash.update(chunk);
-  const after = await lstat(path);
-  if (!unchanged(before, after))
-    throw new Error("Audit source or evidence changed while reading");
-  return `sha256:${hash.digest("hex")}`;
+async function stableFileDigest(path: string): Promise<{
+  readonly digest: string;
+  readonly identity: string;
+}> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile())
+      throw new Error("Audit source or evidence is not a regular file");
+    const hash = createHash("sha256");
+    for await (const chunk of handle.createReadStream({ autoClose: false }))
+      hash.update(chunk);
+    const after = await handle.stat({ bigint: true });
+    const atPath = await lstat(path, { bigint: true });
+    if (!unchanged(before, after) || !unchanged(before, atPath))
+      throw new Error("Audit source or evidence changed while reading");
+    return {
+      digest: `sha256:${hash.digest("hex")}`,
+      identity: `${before.dev}:${before.ino}`,
+    };
+  } finally {
+    await handle.close();
+  }
 }
 
 function addReference(
@@ -137,6 +150,7 @@ export async function auditLegacyCoveragePlan(value: unknown) {
     );
 
   const paths = new Set<string>();
+  const identities = new Set<string>();
   const starts = new Map<string, RecordReference[]>();
   const possible = new Map<string, RecordReference[]>();
   let unknownSlugStarts = 0;
@@ -148,12 +162,13 @@ export async function auditLegacyCoveragePlan(value: unknown) {
   for (const group of [...plan.sources].sort((a, b) =>
     a.sourceClass.localeCompare(b.sourceClass),
   )) {
-    const entries = [...group.entries]
-      .map((entry) => ({
-        path: absolutePath(entry.path),
-        evidencePath: absolutePath(entry.evidencePath),
-      }))
-      .sort((a, b) => a.path.localeCompare(b.path));
+    const entries = [];
+    for (const entry of group.entries)
+      entries.push({
+        path: await privateExistingAuditPath(entry.path),
+        evidencePath: await privateExistingAuditPath(entry.evidencePath),
+      });
+    entries.sort((a, b) => a.path.localeCompare(b.path));
     const content: { path: string; digest: string }[] = [];
     const evidence: { path: string; digest: string }[] = [];
     let classUnknownSlugStarts = 0;
@@ -165,14 +180,24 @@ export async function auditLegacyCoveragePlan(value: unknown) {
         if (paths.has(path)) throw new Error("Audit plan repeats a file path");
         paths.add(path);
       }
-      const sourceDigest = await stableFileDigest(entry.path);
+      const sourceFile = await stableFileDigest(entry.path);
+      if (identities.has(sourceFile.identity))
+        throw new Error("Audit plan repeats a file identity");
+      identities.add(sourceFile.identity);
       const evidenceFile = await stableFile(entry.evidencePath);
+      if (identities.has(evidenceFile.identity))
+        throw new Error("Audit plan repeats a file identity");
+      identities.add(evidenceFile.identity);
       const metadata = legacyCoverageAuditEvidenceSchema.parse(
         JSON.parse(evidenceFile.bytes.toString("utf8")) as unknown,
       );
-      if (metadata.sourceDigest !== sourceDigest)
+      if (metadata.sourceDigest !== sourceFile.digest)
         throw new Error("Audit evidence refers to different source content");
-      if ((await stableFileDigest(entry.path)) !== sourceDigest)
+      const afterEvidence = await stableFileDigest(entry.path);
+      if (
+        afterEvidence.identity !== sourceFile.identity ||
+        afterEvidence.digest !== sourceFile.digest
+      )
         throw new Error("Audit source changed after reading its evidence");
       const recordIds = new Set<string>();
       for (const record of metadata.records) {
@@ -180,7 +205,7 @@ export async function auditLegacyCoveragePlan(value: unknown) {
           throw new Error("Audit evidence repeats a record ID");
         recordIds.add(record.recordId);
         const reference = {
-          sourceDigest,
+          sourceDigest: sourceFile.digest,
           evidenceDigest: evidenceFile.digest,
           recordId: record.recordId,
           classification: record.classification,
@@ -199,7 +224,7 @@ export async function auditLegacyCoveragePlan(value: unknown) {
           } else addReference(possible, record.slug, reference);
         } else notStartRecords += 1;
       }
-      content.push({ path: entry.path, digest: sourceDigest });
+      content.push({ path: entry.path, digest: sourceFile.digest });
       evidence.push({ path: entry.evidencePath, digest: evidenceFile.digest });
     }
     sources.push({
