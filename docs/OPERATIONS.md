@@ -74,6 +74,21 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 `campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v3` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
 
+### 複数 batch の継続運転（#229、実機受入前）
+
+`continuous start` は親 run を固定し、未探索 slug の在庫から child campaign を複数作る。固定の24時間期限はなく、停止要求、候補枯渇、判定不能、quota、設定・資源の異常で状態を残して止まる。`continuous resume` は同じ親 run・設定・state の履歴を照合して再開する。別の campaign 設定や state に差し替えない。
+
+```sh
+node dist/cli/main.js --host <Git外host.json> --state <Git外state> continuous start --run <parent-id> --config <campaign.json>
+node dist/cli/main.js --state <同じGit外state> continuous status --run <parent-id>
+node dist/cli/main.js continuous stop --run <parent-id>
+node dist/cli/main.js --host <同じGit外host.json> --state <同じGit外state> continuous resume --run <parent-id> --config <同じcampaign.json>
+```
+
+`stop` は host 設定や campaign state を開けなくても host 共通 journal に要求を記録する。進行中の Trial は中断せず drain する。`status` では親・child の状態と、Trial、Finding、検証、review export の到達数を確認する。`WAIT_REVIEW` と `RECOVERING` の理由を調べ、原因を解消してから明示的に `resume` する。候補が尽きたときも同じ slug の追加 Trial を自動投入しない。
+
+現時点では実 provider での3 Trial測定、旧履歴の全数監査と coverage 取込、quota 回復後の自動再開、別 provider への継続、総 token 上限の強制停止が未完了。したがって長時間の無人本番運転はまだ受入前である。実装と未達の内訳は [#229 の進捗レビュー](reviews/2026-10-14-issue-229-continuous-runner-progress.md) に記録する。
+
 ### 同じ plugin の追加探索 Trial の承認
 
 異なる plugin slug の初回探索は無人でまとめて進める。人間はその Finding・Lead と検証結果、`incomplete` の理由をまとめてレビューし、追加探索する対象を選ぶ。同じ plugin slug の2回目以降の独立した探索Trialは、版・Snapshot digest・prompt・campaign ID・state・Lab設定を変えても、追加目的と費用を示して **1 Trial ごとに**事前承認を得る。初回に Finding があるだけで自動で +2 Trial を起動しない。開始済みTrialの再開、子の同一Trial内の作業、既存 Finding の検証・再検証は追加探索Trialではない（ADR 0032 Q6）。
