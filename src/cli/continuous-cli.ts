@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
-import { appendFileSync } from "node:fs";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { appendFileSync, existsSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
+  clearContinuousStop,
   continuousPaths,
   createContinuousRunner,
+  requestContinuousStop,
   type ContinuousMemo,
 } from "./continuous.js";
 import type { CliIo, CliProfile, CliState } from "./index.js";
@@ -121,26 +123,55 @@ export async function continuousCommand(
     readonly selectionPath: string | undefined;
     readonly campaignPrefix: string;
     readonly notify: string | undefined;
+    readonly resume: boolean;
   },
 ): Promise<number> {
   const { state, profile, io } = context;
   const paths = continuousPaths(state.stateDirectory);
+  if (sub === "resume") {
+    if (context.resume)
+      throw new Error("--resume is only valid with continuous run");
+    const pid = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
+    if (pid > 0 && pidAlive(pid))
+      throw new Error(`continuous run is still running as pid ${pid}`);
+    const cleared = await clearContinuousStop(state.stateDirectory);
+    io.stdout(
+      cleared
+        ? "stop request cleared; start continuous run to resume"
+        : "no stop request to clear",
+    );
+    return 0;
+  }
   if (sub === "stop") {
-    await writeFile(paths.stop, "", { mode: 0o600 });
+    if (context.resume)
+      throw new Error("--resume is only valid with continuous run");
+    requestContinuousStop(state.stateDirectory);
     io.stdout("stop requested; the runner drains at the next target boundary");
     return 0;
   }
   if (sub === "status") {
+    if (context.resume)
+      throw new Error("--resume is only valid with continuous run");
     const memo = JSON.parse(
       await readFile(paths.memo, "utf8").catch(() => "null"),
     ) as ContinuousMemo | null;
     const pid = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
+    const livePid = pid > 0 && pidAlive(pid) ? pid : null;
+    const stopMarker = existsSync(paths.stop);
+    const displayState = stopMarker
+      ? livePid === null
+        ? "stopped"
+        : "stopping"
+      : memo !== null && memo.state !== "stopped" && livePid === null
+        ? "stale"
+        : (memo?.state ?? "never-started");
+    const displayDetail = stopMarker
+      ? { reason: "operator" }
+      : (memo?.detail ?? {});
     io.stdout(
-      `state ${memo?.state ?? "never-started"}${Object.entries(
-        memo?.detail ?? {},
-      )
+      `state ${displayState}${Object.entries(displayDetail)
         .map(([key, value]) => `  ${key} ${value}`)
-        .join("")}  pid ${pid > 0 && pidAlive(pid) ? pid : "none"}`,
+        .join("")}  pid ${livePid ?? "none"}`,
     );
     if (memo?.lastError !== undefined)
       io.stdout(`last error ${memo.lastError}`);
@@ -158,7 +189,7 @@ export async function continuousCommand(
         `${label}  trials ${c.started}  completed ${c.completed}  provider-limited ${c.providerLimited}  provider-refused ${c.providerRefused}  run-failed ${c.runFailed}  lab-failed ${c.labFailed}  unsettled ${c.unsettled}  findings queue ${c.queue} + parked ${c.parked}`,
       );
     }
-    return memo?.state === "stopped" ? 1 : 0;
+    return ["stopped", "stopping", "stale"].includes(displayState) ? 1 : 0;
   }
   if (sub !== "run") return 2;
   const configPath = context.configPath;
@@ -252,6 +283,6 @@ export async function continuousCommand(
         : { notify: (line: string) => notify(context.notify!, line) }),
     },
   });
-  const reason = await runner.run();
+  const reason = await runner.run({ resume: context.resume });
   return reason === "operator" ? 0 : 1;
 }

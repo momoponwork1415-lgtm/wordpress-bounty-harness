@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { existsSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
@@ -105,6 +106,34 @@ export function continuousPaths(stateDirectory: string) {
     stop: join(stateDirectory, "continuous.stop"),
     log: join(stateDirectory, "continuous.log"),
   };
+}
+
+/** Atomically publish operator intent, including from a signal handler. */
+export function requestContinuousStop(stateDirectory: string): void {
+  const path = continuousPaths(stateDirectory).stop;
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, "", { mode: 0o600, flag: "wx" });
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+/** Consume only the marker that existed at this instant. Later stop requests remain. */
+export async function clearContinuousStop(
+  stateDirectory: string,
+): Promise<boolean> {
+  const path = continuousPaths(stateDirectory).stop;
+  const consumed = `${path}.resume-${process.pid}-${randomUUID()}`;
+  try {
+    await rename(path, consumed);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  await rm(consumed, { force: true });
+  return true;
 }
 
 function readAll(
@@ -248,31 +277,48 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       );
   };
   const stop = async (reason: ContinuousStopReason) => {
+    if (reason === "operator" && !existsSync(paths.stop))
+      requestContinuousStop(deps.stateDirectory);
     await enter("stopped", { reason });
     return reason;
   };
 
-  const run = async (): Promise<ContinuousStopReason> => {
+  const run = async (
+    options: { readonly resume?: boolean } = {},
+  ): Promise<ContinuousStopReason> => {
+    signalled = false;
     await mkdir(deps.stateDirectory, { recursive: true, mode: 0o700 });
     const previous = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
     if (previous > 0 && previous !== deps.pid && deps.pidAlive(previous))
       throw new Error(`continuous run is already running as pid ${previous}`);
-    await rm(paths.stop, { force: true });
-    if (!(await deps.legacyHistoryAvailable()))
-      return stop("legacy-history-missing");
-    if (!(await deps.floorPolicyAvailable()))
-      return stop("missing-floor-policy");
     const saved = await readFile(paths.memo, "utf8").catch(() => "{}");
     memo = { ...memo, ...(JSON.parse(saved) as Partial<ContinuousMemo>) };
-    await deps.preflight();
-    await deps.cleanupLeftovers();
+    if (existsSync(paths.stop)) {
+      if (!options.resume) {
+        // Preserve the marker and unfinished campaign across service restarts.
+        await enter("stopped", { reason: "operator" });
+        return "operator";
+      }
+      await clearContinuousStop(deps.stateDirectory);
+    }
     await writeFile(paths.pid, String(deps.pid), { mode: 0o600 });
     const onSignal = () => {
       signalled = true;
+      requestContinuousStop(deps.stateDirectory);
     };
     deps.signals.on("SIGINT", onSignal);
     deps.signals.on("SIGTERM", onSignal);
     try {
+      if (stopRequested()) return stop("operator");
+      if (!(await deps.legacyHistoryAvailable()))
+        return stop("legacy-history-missing");
+      if (stopRequested()) return stop("operator");
+      if (!(await deps.floorPolicyAvailable()))
+        return stop("missing-floor-policy");
+      if (stopRequested()) return stop("operator");
+      await deps.preflight();
+      if (stopRequested()) return stop("operator");
+      await deps.cleanupLeftovers();
       return await loop();
     } finally {
       deps.signals.off("SIGINT", onSignal);
@@ -316,7 +362,9 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         continue;
       }
       if (!current) {
+        if (stopRequested()) return stop("operator");
         const selected = await deps.select();
+        if (stopRequested()) return stop("operator");
         if (selected.batchId === null) {
           // A failed listing is not an empty pool.
           if (["unavailable", "stale"].includes(selected.sourceStatus ?? "")) {
@@ -341,7 +389,9 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       }
       memo.campaignId = current.campaignId;
       memo.target = current.target;
+      if (stopRequested()) return stop("operator");
       await enter("running", { campaignId: current.campaignId });
+      if (stopRequested()) return stop("operator");
       let summary: CampaignSummary;
       try {
         summary = await deps.runCampaign({
@@ -363,11 +413,13 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         await hold("holding-error", ERROR_GAP_MINUTES * MINUTE);
         continue;
       }
+      if (stopRequested() || summary.stopped === "operator")
+        return stop("operator");
       const removed = await deps.cleanupLeftovers();
       deps.io.log(
         `${deps.clock().toISOString()} batch ${current.campaignId} stopped=${summary.stopped ?? "none"} skipped=${summary.skipped.length} leftovers=${removed}`,
       );
-      if (summary.stopped === "operator") return stop("operator");
+      if (stopRequested()) return stop("operator");
       if (summary.stopped === "incomplete") {
         current.retry = true;
         continue;

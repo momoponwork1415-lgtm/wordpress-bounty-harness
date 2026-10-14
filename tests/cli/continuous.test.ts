@@ -185,19 +185,89 @@ describe("continuous runner", () => {
     ]);
   });
 
-  it("refuses a live pid and clears a dead pid and a stale stop marker", async () => {
+  it("refuses to resume while another runner pid is live", async () => {
     const t = await setup([], { pidAlive: (pid) => pid === 7 });
     await writeFile(continuousPaths(t.root).pid, "7");
-    await expect(t.runner.run()).rejects.toThrow("already running as pid 7");
+    await writeFile(continuousPaths(t.root).stop, "");
+    await expect(t.runner.run({ resume: true })).rejects.toThrow(
+      "already running as pid 7",
+    );
+    expect(existsSync(continuousPaths(t.root).stop)).toBe(true);
+  });
+
+  it("keeps a stop marker after a dead pid until explicit resume", async () => {
+    let selects = 0;
+    let cleanups = 0;
+    const t = await setup([async () => ({})], {
+      pidAlive: () => false,
+      select: async () => (
+        selects++,
+        { batchId: "selection-1", targets: ["a"] }
+      ),
+      cleanupLeftovers: async () => ++cleanups,
+    });
     await writeFile(continuousPaths(t.root).pid, "8");
     await writeFile(continuousPaths(t.root).stop, "");
-    const steps: Step[] = [async () => ({})];
-    const fresh = await setup(steps, {
-      stateDirectory: t.root,
-      pidAlive: (pid) => pid === 7,
+    expect(await t.runner.run()).toBe("operator");
+    expect({ selects, cleanups, campaigns: t.calls.length }).toEqual({
+      selects: 0,
+      cleanups: 0,
+      campaigns: 0,
     });
-    await fresh.runner.run();
-    expect(fresh.calls).toHaveLength(2);
+    expect(existsSync(continuousPaths(t.root).stop)).toBe(true);
+    expect(await t.runner.run({ resume: true })).toBe("operator");
+    expect(t.calls).toHaveLength(2);
+    expect(cleanups).toBe(2);
+    expect(existsSync(continuousPaths(t.root).stop)).toBe(true);
+  });
+
+  it("does not resume a crashed campaign until the owner clears its marker", async () => {
+    const t = await setup([async () => ({})]);
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify({ campaignId: "prod-20261019-4", target: null }),
+    );
+    await writeFile(continuousPaths(t.root).pid, "8");
+    await writeFile(continuousPaths(t.root).stop, "");
+    expect(await t.runner.run()).toBe("operator");
+    expect(t.calls).toHaveLength(0);
+    expect(await createContinuousRunner(t.deps).run({ resume: true })).toBe(
+      "operator",
+    );
+    expect(t.calls[0]).toMatchObject({
+      campaignId: "prod-20261019-4",
+      retryIncompleteVerifications: true,
+    });
+  });
+
+  it("does not start a cleanup after the operator stops an active campaign", async () => {
+    let cleanups = 0;
+    const steps: Step[] = [];
+    const t = await setup(steps, {
+      cleanupLeftovers: async () => ++cleanups,
+    });
+    steps.push(async () => {
+      await writeFile(continuousPaths(t.root).stop, "");
+      return {};
+    });
+    expect(await t.runner.run()).toBe("operator");
+    expect(cleanups).toBe(1); // Startup sweep only.
+    expect(t.calls).toHaveLength(1);
+  });
+
+  it("persists a signal as an operator stop before draining the campaign", async () => {
+    let term: () => void = () => undefined;
+    const t = await setup([() => (term(), {})], {
+      signals: {
+        on(signal: string, listener: () => void) {
+          if (signal === "SIGTERM") term = listener;
+          return process;
+        },
+        off: () => process,
+      } as never,
+    });
+    expect(await t.runner.run()).toBe("operator");
+    expect(existsSync(continuousPaths(t.root).stop)).toBe(true);
   });
 
   it("resumes the unfinished campaign under its id", async () => {

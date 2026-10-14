@@ -268,8 +268,9 @@ const USAGE = [
   "usage: harness [--state <dir>] <command>",
   "  select --config <path> [--minimum <n>]",
   "  campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--retry-incomplete]",
-  "  continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--notify <command>]",
+  "  continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--notify <command>] [--resume]",
   "  continuous stop",
+  "  continuous resume",
   "  continuous status",
   "  review [--campaign <id>]",
   "  review inspect --campaign <id> --finding <id>",
@@ -341,6 +342,7 @@ const options = {
   selection: { type: "string" },
   "campaign-prefix": { type: "string" },
   notify: { type: "string" },
+  resume: { type: "boolean" },
   minimum: { type: "string" },
 } as const;
 
@@ -782,6 +784,7 @@ export async function runCli(
     switch (command) {
       case "continuous run":
       case "continuous stop":
+      case "continuous resume":
       case "continuous status":
         return await continuousCommand(sub!, {
           state,
@@ -795,6 +798,7 @@ export async function runCli(
               : resolve(values.selection),
           campaignPrefix: values["campaign-prefix"] ?? "prod",
           notify: values.notify,
+          resume: values.resume ?? false,
         });
       case "select": {
         const minimum =
