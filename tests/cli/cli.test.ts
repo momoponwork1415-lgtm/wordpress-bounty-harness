@@ -50,6 +50,7 @@ const syntheticTrialGate: RepeatTrialGate = {
   }),
   assertMayStart: () => {},
   reserve: () => {},
+  confirmStarted: () => {},
   bootstrap: () => ({ importedTrials: 0 }),
   importCoverage: () => sha("0"),
   approve: () => {},

@@ -127,6 +127,7 @@ async function open() {
     readonly concurrency?: number;
     readonly profile?: AgentRuntimeProfile;
     readonly campaignId?: string;
+    readonly afterTrialStart?: () => void;
   }) =>
     runDiscoveryCampaign({
       campaignId: options.campaignId ?? "campaign-1",
@@ -136,6 +137,9 @@ async function open() {
         modelProfileDigest: (options.profile ?? profile).digest,
       },
       historyFraction: 0,
+      ...(options.afterTrialStart === undefined
+        ? {}
+        : { afterTrialStart: options.afterTrialStart }),
       ...(options.concurrency === undefined
         ? {}
         : { concurrency: options.concurrency }),
@@ -259,6 +263,23 @@ async function open() {
 }
 
 describe("discovery campaign stop and resume", () => {
+  it("confirms the ledger start before invoking the provider", async () => {
+    const { ledger, campaign, maxInFlight } = await open();
+    await expect(
+      campaign({
+        prefix: "confirmation-fails",
+        replies: () => "empty",
+        afterTrialStart: () => {
+          expect(ledger.read({ type: "discovery-run-started" })).toHaveLength(
+            1,
+          );
+          throw new Error("Start confirmation failed");
+        },
+      }),
+    ).rejects.toThrow("Start confirmation failed");
+    expect(maxInFlight()).toBe(0);
+  });
+
   it("counts a historical stage-tagged exploration while excluding its child", async () => {
     const { ledger, campaign } = await open();
     const historical = {

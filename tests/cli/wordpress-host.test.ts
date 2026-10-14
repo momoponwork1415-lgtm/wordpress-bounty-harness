@@ -140,6 +140,7 @@ async function setup(
       }),
       assertMayStart: () => {},
       reserve: () => {},
+      confirmStarted: () => {},
       bootstrap: () => ({ importedTrials: 0 }),
       importCoverage: () => `sha256:${"0".repeat(64)}`,
       approve: () => {},

@@ -954,6 +954,15 @@ async function planWordPressDiscovery(
         campaignId,
         trialOrdinal,
       }),
+    afterTrialStart: ({ snapshotDigest, promptDigest, trialOrdinal }) =>
+      repeatTrialGate.confirmStarted({
+        stateDirectory: state.stateDirectory,
+        slug: target.slug,
+        snapshotDigest,
+        promptDigest,
+        campaignId,
+        trialOrdinal,
+      }),
     input: {
       schemaVersion: 1,
       snapshotDigest: snapshot.digest,

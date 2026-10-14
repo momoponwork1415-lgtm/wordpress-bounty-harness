@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 
 import { afterEach, expect, it } from "vitest";
 
@@ -192,7 +193,10 @@ it("holds new initial Trials while legacy coverage is unverified and gates known
   expect(() => gate.assertMayStart(repeat)).toThrow("human approval");
   const approvalDigest = approve(repeat);
   expect(gate.reserve(repeat)).toBe(approvalDigest);
-  expect(gate.reserve(repeat)).toBe(approvalDigest); // exact started Trial resume
+  expect(() => gate.reserve(repeat)).toThrow("Pending Trial reservation");
+  await writeStartedTrial(stateB, repeat);
+  gate.confirmStarted(repeat);
+  expect(gate.reserve(repeat)).toBe(approvalDigest); // exact recorded Trial resume
 
   expect(() => gate.reserve({ ...repeat, promptDigest: hash("e") })).toThrow(
     "differs from its prior start",
@@ -379,7 +383,46 @@ it("serializes two connections on the same initially eligible slug", async () =>
   const second = { ...first, campaignId: "another-campaign" };
   expect(gate.reserve(first)).toBeUndefined();
   expect(() => secondProcess.reserve(second)).toThrow("human approval");
+  expect(() => secondProcess.reserve(first)).toThrow(
+    "Pending Trial reservation",
+  );
+  await writeStartedTrial(stateA, first);
+  gate.confirmStarted(first);
   expect(secondProcess.reserve(first)).toBeUndefined();
+});
+
+it("waits for another host connection's short write lock", async () => {
+  const { gate, gatePath, stateA, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  const secondProcess = new SqliteRepeatTrialGate(gatePath);
+  const worker = new Worker(
+    `
+      const { DatabaseSync } = require("node:sqlite");
+      const { parentPort, workerData } = require("node:worker_threads");
+      const database = new DatabaseSync(workerData);
+      database.exec("BEGIN IMMEDIATE");
+      parentPort.postMessage("locked");
+      setTimeout(() => {
+        database.exec("COMMIT");
+        database.close();
+      }, 400);
+    `,
+    { eval: true, workerData: gatePath },
+  );
+  try {
+    await new Promise<void>((resolve, reject) => {
+      worker.once("message", (value: unknown) => {
+        if (value === "locked") resolve();
+        else reject(new Error("Worker failed to lock the gate database"));
+      });
+      worker.once("error", reject);
+    });
+    const startedAt = performance.now();
+    expect(() => secondProcess.ensureReady(stateA)).not.toThrow();
+    expect(performance.now() - startedAt).toBeGreaterThan(50);
+  } finally {
+    await worker.terminate();
+  }
 });
 
 it("rejects partial, conflicting, or stale coverage without releasing initial Trials", async () => {
@@ -586,6 +629,7 @@ it("accepts a gate-owned reservation after its matching start is appended", asyn
   const reserved = { ...start, slug: "reserved-plugin" };
   expect(gate.reserve(reserved)).toBeUndefined();
   await writeStartedTrial(stateA, reserved);
+  gate.confirmStarted(reserved);
 
   expect(
     gate.reserve({
@@ -599,6 +643,52 @@ it("accepts a gate-owned reservation after its matching start is appended", asyn
     status: "prior-start",
     startedTrials: 1,
   });
+});
+
+it("fails closed when a confirmed live start disappears from a recreated ledger", async () => {
+  const { gate, gatePath, stateA, stateB, start, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  gate.importCoverage(completeCoverage(inventory, stateA));
+  const confirmed = { ...start, slug: "started-plugin" };
+  gate.reserve(confirmed);
+  await writeStartedTrial(stateA, confirmed);
+  gate.confirmStarted(confirmed);
+  await rm(join(stateA, "ledger.sqlite"));
+  new Ledger({
+    databasePath: join(stateA, "ledger.sqlite"),
+    artifactStore: new PrivateArtifactStore({
+      rootDirectory: join(stateA, "private-evidence"),
+      maxEntries: 8,
+      maxBytes: 1024 * 1024,
+    }),
+  });
+
+  expect(() => gate.reserve(confirmed)).toThrow("missing-ledger");
+  expect(() =>
+    gate.assertMayStart({
+      ...start,
+      stateDirectory: stateB,
+      slug: "fresh-plugin",
+      campaignId: "fresh-campaign",
+    }),
+  ).toThrow("missing-ledger");
+  expect(
+    new SqliteRepeatTrialGate(gatePath).inspectInitialSlug("fresh-plugin"),
+  ).toEqual({
+    status: "coverage-incomplete",
+    reason: "coverage-invalidated",
+  });
+});
+
+it("does not confirm a pending reservation without its ledger start", async () => {
+  const { gate, stateA, start, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  gate.importCoverage(completeCoverage(inventory, stateA));
+  gate.reserve(start);
+  expect(() => gate.confirmStarted(start)).toThrow("not recorded");
+  // A crash before append needs explicit recovery; another process cannot
+  // take this reservation while the first process may still be running.
+  expect(() => gate.reserve(start)).toThrow("Pending Trial reservation");
 });
 
 it("keeps an unchanged registered historical state usable", async () => {

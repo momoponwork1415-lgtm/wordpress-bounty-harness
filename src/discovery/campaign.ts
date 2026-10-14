@@ -287,6 +287,15 @@ export async function runDiscoveryCampaign(options: {
         readonly trialOrdinal: number;
       }) => string | undefined | Promise<string | undefined>)
     | undefined;
+  /** Profile-owned confirmation after the ledger start and before provider execution. */
+  readonly afterTrialStart?:
+    | ((trial: {
+        readonly campaignId: string;
+        readonly snapshotDigest: string;
+        readonly promptDigest: string;
+        readonly trialOrdinal: number;
+      }) => void | Promise<void>)
+    | undefined;
   readonly executor: {
     execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
   };
@@ -467,12 +476,13 @@ export async function runDiscoveryCampaign(options: {
         snapshotDigest: input.snapshotDigest,
         occurredAt: clock().toISOString(),
       };
-      const approvalDigest = await options.beforeTrialStart?.({
+      const trialStart = {
         campaignId: options.campaignId,
         snapshotDigest: input.snapshotDigest,
         promptDigest: planned.configuration.promptDigest ?? input.promptDigest,
         trialOrdinal: trial.trialOrdinal,
-      });
+      };
+      const approvalDigest = await options.beforeTrialStart?.(trialStart);
       const started = await options.ledger.append({
         ...base,
         identity: `discovery-start-${run.runId}`,
@@ -500,6 +510,7 @@ export async function runDiscoveryCampaign(options: {
       });
       if (started.status === "conflict")
         throw new Error("Discovery run identity conflict");
+      await options.afterTrialStart?.(trialStart);
       startedExplorations.add(run.runId);
       runCount++;
       let outcome: "completed" | "failed" | "provider-limited" = "failed";

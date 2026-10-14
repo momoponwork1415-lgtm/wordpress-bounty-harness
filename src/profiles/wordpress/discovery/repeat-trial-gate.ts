@@ -127,6 +127,7 @@ export interface RepeatTrialGate {
   ): InitialSlugEligibility;
   assertMayStart(start: RepeatTrialStart): void;
   reserve(start: RepeatTrialStart): string | undefined;
+  confirmStarted(start: RepeatTrialStart): void;
   bootstrap(inventory: unknown): { readonly importedTrials: number };
   importCoverage(manifest: unknown): string;
   approve(approval: unknown): void;
@@ -159,6 +160,8 @@ const historicalRow = z.object({ event_json: z.string() });
 const registeredStart = z.object({
   slug: z.string(),
   prompt_digest: z.string(),
+  source: z.enum(["import", "live"]),
+  ledger_status: z.enum(["pending", "observed"]).nullable(),
 });
 const slugOfSelection = (selectionId: string): string | null =>
   /^wporg:([a-z0-9][a-z0-9-]*)@/u.exec(selectionId)?.[1] ?? null;
@@ -199,7 +202,7 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
 
   constructor(databasePath: string) {
     mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 });
-    this.#db = new DatabaseSync(databasePath);
+    this.#db = new DatabaseSync(databasePath, { timeout: 5_000 });
     chmodSync(databasePath, 0o600);
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS trial_gate_meta (
@@ -221,6 +224,10 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
       );
       CREATE INDEX IF NOT EXISTS trial_gate_starts_slug
         ON trial_gate_starts (slug);
+      CREATE TABLE IF NOT EXISTS trial_gate_start_state (
+        start_key TEXT PRIMARY KEY,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'observed'))
+      );
       CREATE TABLE IF NOT EXISTS trial_gate_approvals (
         approval_key TEXT PRIMARY KEY,
         approval_digest TEXT NOT NULL,
@@ -618,7 +625,7 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
         throw new CoverageSourceUncertain("missing-ledger");
       const recorded = this.#db
         .prepare(
-          "SELECT start_key, slug, prompt_digest, source FROM trial_gate_starts WHERE state_directory = ?",
+          "SELECT s.start_key, s.slug, s.prompt_digest, s.source, m.status AS ledger_status FROM trial_gate_starts s LEFT JOIN trial_gate_start_state m ON m.start_key = s.start_key WHERE s.state_directory = ?",
         )
         .all(directory)
         .map((row) =>
@@ -628,6 +635,7 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
               slug,
               prompt_digest: z.string(),
               source: z.enum(["import", "live"]),
+              ledger_status: z.enum(["pending", "observed"]).nullable(),
             })
             .parse(row),
         );
@@ -650,13 +658,21 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
           registered.prompt_digest !== start.promptDigest
         )
           unexpected.push(start);
+        else if (registered.source === "live")
+          this.#db
+            .prepare(
+              "INSERT INTO trial_gate_start_state (start_key, status) VALUES (?, 'observed') ON CONFLICT(start_key) DO UPDATE SET status = 'observed'",
+            )
+            .run(key);
         observedKeys.add(key);
       }
       if (unexpected.length > 0)
         throw new CoverageSourceUncertain("unregistered-starts", unexpected);
       if (
         recorded.some(
-          (row) => row.source === "import" && !observedKeys.has(row.start_key),
+          (row) =>
+            !observedKeys.has(row.start_key) &&
+            (row.source === "import" || row.ledger_status !== "pending"),
         )
       )
         throw new CoverageSourceUncertain("missing-ledger");
@@ -789,7 +805,7 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
   #assertMayStart(start: RepeatTrialStart): void {
     const existing = this.#db
       .prepare(
-        "SELECT slug, prompt_digest FROM trial_gate_starts WHERE start_key = ?",
+        "SELECT s.slug, s.prompt_digest, s.source, m.status AS ledger_status FROM trial_gate_starts s LEFT JOIN trial_gate_start_state m ON m.start_key = s.start_key WHERE s.start_key = ?",
       )
       .get(startKey(start));
     if (existing !== undefined) {
@@ -799,6 +815,10 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
         recorded.prompt_digest !== start.promptDigest
       )
         throw new Error("Reserved Trial identity differs from its prior start");
+      if (recorded.source === "live" && recorded.ledger_status !== "observed")
+        throw new Error(
+          "Pending Trial reservation requires explicit recovery before replay",
+        );
       return;
     }
     if (!this.#hasPriorSlug(start.slug)) {
@@ -865,6 +885,11 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
             start.trialOrdinal,
             stateDirectory(start.stateDirectory),
           );
+        this.#db
+          .prepare(
+            "INSERT INTO trial_gate_start_state (start_key, status) VALUES (?, 'pending')",
+          )
+          .run(key);
       }
       this.#db.exec("COMMIT");
       const approval = this.#db
@@ -878,6 +903,38 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
             z.object({ approval_digest: z.string() }).parse(approval)
               .approval_digest,
           );
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /** Called after the append-only start event is committed and before provider execution. */
+  confirmStarted(value: RepeatTrialStart): void {
+    const start = this.#validateStart(value);
+    this.ensureReady(start.stateDirectory);
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const key = startKey(start);
+      const recorded = this.#db
+        .prepare(
+          "SELECT s.slug, s.prompt_digest, m.status FROM trial_gate_starts s LEFT JOIN trial_gate_start_state m ON m.start_key = s.start_key WHERE s.start_key = ?",
+        )
+        .get(key);
+      const row = z
+        .object({
+          slug,
+          prompt_digest: z.string(),
+          status: z.enum(["pending", "observed"]).nullable(),
+        })
+        .parse(recorded);
+      if (
+        row.slug !== start.slug ||
+        row.prompt_digest !== start.promptDigest ||
+        row.status !== "observed"
+      )
+        throw new Error("Discovery Trial start is not recorded in its ledger");
+      this.#db.exec("COMMIT");
     } catch (error) {
       this.#db.exec("ROLLBACK");
       throw error;
