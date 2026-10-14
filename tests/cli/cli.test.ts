@@ -3573,18 +3573,24 @@ describe("harness CLI vertical slice", () => {
         },
         configPath,
       };
+      const held = await profile.prepareContinuousBatch!(state(), preparation);
+      expect(held).toEqual({
+        status: "hold",
+        reason: "candidate-history-unverified",
+      });
+      expect(ledger().read({ type: "target-selected" })).toHaveLength(0);
+      holdOne = false;
       const final = await profile.prepareContinuousBatch!(state(), preparation);
       expect(final).toMatchObject({ status: "ready" });
       if (final.status !== "ready") throw new Error("Expected final batch");
-      expect(final.snapshotDigests).toHaveLength(2);
-      expect(ledger().read({ type: "target-selected" })).toHaveLength(2);
-      holdOne = false;
+      expect(final.snapshotDigests).toHaveLength(3);
+      expect(ledger().read({ type: "target-selected" })).toHaveLength(3);
       const result = await profile.prepareContinuousBatch!(
         state(),
         preparation,
       );
       expect(result).toEqual(final);
-      expect(ledger().read({ type: "target-selected" })).toHaveLength(2);
+      expect(ledger().read({ type: "target-selected" })).toHaveLength(3);
       expect(gateChecks).toContain("item-a");
       expect(gateChecks).toContain("item-b");
       expect(readyDirectories).toHaveLength(gateChecks.length);

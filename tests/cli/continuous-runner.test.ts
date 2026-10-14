@@ -49,6 +49,8 @@ async function setup(
     readonly expiredFirstInventory?: boolean;
     readonly changeConfigAfterPrepare?: boolean;
     readonly holdFirstCampaign?: boolean;
+    readonly holdFirstPreparation?:
+      "candidate-history-unverified" | "candidate-observation-unverified";
     readonly pinMismatchAtCampaign?: "config" | "policy";
   } = {},
 ) {
@@ -118,6 +120,11 @@ async function setup(
       const child = input.parent?.children.at(-1);
       if (child === undefined) throw new Error("Missing reserved child");
       preparedOrdinals.push(child.ordinal);
+      if (options.holdFirstPreparation && preparedOrdinals.length === 1)
+        return {
+          status: "hold" as const,
+          reason: options.holdFirstPreparation,
+        };
       if (
         options.expiredFirstInventory &&
         child.inventoryDigest === inventoryDigest
@@ -432,6 +439,7 @@ function seedDrainedAssessedHold(
     identity: "started-before-crash",
     type: "discovery-run-started",
     runId: "trial-plugin-1",
+    trialId: "cooperative-trial-plugin-1",
     labId: "lab-plugin-1",
     trialOrdinal: 0,
     history: { mode: "none" },
@@ -553,6 +561,7 @@ describe("continuous parent runner", () => {
     const fixture = await setup();
     try {
       const childId = seedDrainedAssessedHold(fixture, "cyber-policy");
+      // Child recovery copies the Root Trial ID; missing lineage is a mismatch.
       fixture.append({
         schemaVersion: 1,
         campaignId: childId,
@@ -561,6 +570,7 @@ describe("continuous parent runner", () => {
         identity: "child-started-before-crash",
         type: "discovery-run-started",
         runId: "child-plugin-1",
+        trialId: "cooperative-trial-plugin-1",
         runKind: "child",
         parentRunId: "trial-plugin-1",
         labId: "lab-plugin-1",
@@ -773,6 +783,38 @@ describe("continuous parent runner", () => {
       fixture.journal.close();
     }
   });
+
+  it.each([
+    "candidate-history-unverified",
+    "candidate-observation-unverified",
+  ] as const)(
+    "holds %s without claiming exhaustion and resumes after repair",
+    async (reason) => {
+      const fixture = await setup({ holdFirstPreparation: reason });
+      try {
+        const held = await fixture.run();
+        expect(held).toMatchObject({ state: "WAIT_REVIEW", reason });
+        expect(held.children).toHaveLength(1);
+        expect(held.children[0]?.binding).toBeNull();
+        expect(fixture.campaignCalls).toHaveLength(0);
+        expect(fixture.read({ type: "discovery-run-started" })).toHaveLength(0);
+
+        const resumed = await fixture.run();
+        expect(resumed).toMatchObject({
+          state: "WAIT_REVIEW",
+          reason: "candidate-exhausted",
+        });
+        expect(resumed.children[0]?.campaignId).toBe(
+          held.children[0]?.campaignId,
+        );
+        expect(fixture.read({ type: "discovery-run-started" })).toHaveLength(6);
+      } finally {
+        fixture.claims.close();
+        fixture.owner.close();
+        fixture.journal.close();
+      }
+    },
+  );
 
   it("holds a changed campaign config before binding or starting a Trial", async () => {
     const fixture = await setup({ changeConfigAfterPrepare: true });

@@ -14,6 +14,10 @@ type JournalReader = {
   get(parentRunId: string): ContinuousRunRecord | null;
 };
 type LedgerReader = Pick<Ledger, "read">;
+type DiscoveryStart = Extract<
+  LedgerRecord["event"],
+  { type: "discovery-run-started" }
+>;
 type ClaimReader = {
   status(): {
     readonly claims: readonly {
@@ -103,6 +107,60 @@ function campaignRows(
       "Ledger reader returned a different campaign or event type",
     );
   return rows;
+}
+
+/** Validate the single Root and its child receipts for every Snapshot. */
+function cooperativeTrialLineageMatches(
+  ledger: LedgerReader,
+  campaignId: string,
+): boolean {
+  // A child campaign binds at most five targets, each with one Root and three
+  // children. A 21st start means this bounded view cannot establish lineage.
+  const starts = ledger.read({
+    campaignId,
+    type: "discovery-run-started",
+    limit: 21,
+  });
+  if (starts.length > 20) return false;
+  const rootsBySnapshot = new Map<string, DiscoveryStart>();
+  const childrenBySnapshot = new Map<string, DiscoveryStart[]>();
+  for (const { event } of starts) {
+    if (
+      event.campaignId !== campaignId ||
+      event.type !== "discovery-run-started" ||
+      event.runKind === "continue" ||
+      (event.trialOrdinal ?? 0) !== 0 ||
+      event.stage !== undefined ||
+      event.continuationOf !== undefined ||
+      event.configuration.arm !== undefined ||
+      event.configuration.arms !== undefined ||
+      event.configuration.axis !== undefined
+    )
+      return false;
+    if ((event.runKind ?? "explore") === "explore") {
+      if (rootsBySnapshot.has(event.snapshotDigest)) return false;
+      rootsBySnapshot.set(event.snapshotDigest, event);
+    } else {
+      childrenBySnapshot.set(event.snapshotDigest, [
+        ...(childrenBySnapshot.get(event.snapshotDigest) ?? []),
+        event,
+      ]);
+    }
+  }
+  // A finished child is still part of the same cooperative Trial only when
+  // both its parent and Trial identity match this Snapshot's sole Root.
+  return [...childrenBySnapshot].every(([snapshotDigest, children]) => {
+    const root = rootsBySnapshot.get(snapshotDigest);
+    return (
+      root !== undefined &&
+      root.trialId !== undefined &&
+      children.length <= 3 &&
+      children.every(
+        (child) =>
+          child.parentRunId === root.runId && child.trialId === root.trialId,
+      )
+    );
+  });
 }
 
 /** A drained Trial is spent; only unfinished child work may resume. */
@@ -240,6 +298,8 @@ export async function reconcileContinuousRestart(input: {
       for (const prior of run.children.slice(0, -1)) {
         if (prior.binding === null)
           return hold("journal-mismatch", run, null, prior.campaignId);
+        if (!cooperativeTrialLineageMatches(input.ledger, prior.campaignId))
+          return hold("ledger-mismatch", run, null, prior.campaignId);
         const priorAssessment = await assessContinuousChildCampaign({
           campaignId: prior.campaignId,
           snapshotDigests: prior.binding.snapshotDigests,
@@ -274,43 +334,10 @@ export async function reconcileContinuousRestart(input: {
           "target-selected",
           6,
         );
-        // A child is a single cooperative Trial per target. A comparison or
-        // legacy continuation must not be mistaken for completed parent work.
-        const starts = input.ledger.read({
-          campaignId: last.campaignId,
-          type: "discovery-run-started",
-          limit: 21,
-        });
         const expectedSelectionIds =
           bindings[0]?.event.type === "selection-batch-bound"
             ? bindings[0].event.selectionIds
             : [];
-        const rootsBySnapshot = new Map<string, number>();
-        const childrenBySnapshot = new Map<string, number>();
-        for (const { event } of starts) {
-          if (
-            event.campaignId !== last.campaignId ||
-            event.type !== "discovery-run-started" ||
-            event.runKind === "continue" ||
-            (event.trialOrdinal ?? 0) !== 0 ||
-            event.stage !== undefined ||
-            event.continuationOf !== undefined ||
-            event.configuration.arm !== undefined ||
-            event.configuration.arms !== undefined ||
-            event.configuration.axis !== undefined
-          )
-            return hold("ledger-mismatch", run);
-          if ((event.runKind ?? "explore") === "explore")
-            rootsBySnapshot.set(
-              event.snapshotDigest,
-              (rootsBySnapshot.get(event.snapshotDigest) ?? 0) + 1,
-            );
-          else
-            childrenBySnapshot.set(
-              event.snapshotDigest,
-              (childrenBySnapshot.get(event.snapshotDigest) ?? 0) + 1,
-            );
-        }
         if (
           (rows.length > 0 && bindings.length !== 1) ||
           bindings.some(
@@ -329,9 +356,7 @@ export async function reconcileContinuousRestart(input: {
               event.type !== "target-selected" ||
               event.selectionId !== expectedSelectionIds[index],
           ) ||
-          starts.length > 20 ||
-          [...rootsBySnapshot.values()].some((count) => count > 1) ||
-          [...childrenBySnapshot.values()].some((count) => count > 3)
+          !cooperativeTrialLineageMatches(input.ledger, last.campaignId)
         )
           return hold("ledger-mismatch", run);
         assessment = await assessContinuousChildCampaign({

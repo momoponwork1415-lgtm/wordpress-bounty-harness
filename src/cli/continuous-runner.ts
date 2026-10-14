@@ -244,7 +244,9 @@ export async function runContinuousParent(input: {
       if (
         run.reason !== "config-or-policy-changed" &&
         run.reason !== "inventory-unavailable" &&
-        run.reason !== "candidate-source-refresh-unavailable"
+        run.reason !== "candidate-source-refresh-unavailable" &&
+        run.reason !== "candidate-history-unverified" &&
+        run.reason !== "candidate-observation-unverified"
       )
         return run;
       // The initial pinned-input check has passed. Preflight validates the
@@ -334,6 +336,15 @@ export async function runContinuousParent(input: {
           });
           continue;
         }
+        if (
+          prepared.reason === "candidate-history-unverified" ||
+          prepared.reason === "candidate-observation-unverified"
+        )
+          return transition(current(), {
+            state: "WAIT_REVIEW",
+            reason: prepared.reason,
+            nextCheckAt: null,
+          });
         if (prepared.reason === "candidate-source-pool-expired") {
           if (prepared.selectionPrefixLength > 0)
             return transition(current(), {

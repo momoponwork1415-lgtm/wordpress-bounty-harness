@@ -413,6 +413,40 @@ describe("nominated automatic continuous selection", () => {
     }
   });
 
+  it("holds an uncertain historical slug instead of treating it as exhausted", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      state.preFreezeEligibility.mockResolvedValueOnce("hold");
+      expect(await prepareWordPressContinuousBatch(state.input())).toEqual({
+        status: "hold",
+        reason: "candidate-history-unverified",
+      });
+      expect(state.freeze).not.toHaveBeenCalled();
+      expect(state.ledger.read({ type: "target-selected" })).toHaveLength(0);
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("holds a transiently unavailable nominated observation instead of treating it as exhausted", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      state.targetSource.observe.mockRejectedValueOnce(
+        new Error("temporarily unavailable"),
+      );
+      expect(await prepareWordPressContinuousBatch(state.input())).toEqual({
+        status: "hold",
+        reason: "candidate-observation-unverified",
+      });
+      expect(state.freeze).not.toHaveBeenCalled();
+      expect(state.ledger.read({ type: "target-selected" })).toHaveLength(0);
+    } finally {
+      state.journal.close();
+    }
+  });
+
   it("holds changed policies and unlisted nominees before freeze", async () => {
     const state = await setup();
     try {
