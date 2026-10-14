@@ -1,5 +1,5 @@
 ---
-status: proposed (owner-approved ラベルで accepted にする)
+status: accepted (2026-10-14、所有者の決定で確定)
 date: 2026-10-13
 amends: 0030（タグ単位の履歴利用）, 0022（自動再試行の範囲）
 ---
@@ -27,7 +27,7 @@ amends: 0030（タグ単位の履歴利用）, 0022（自動再試行の範囲�
 | Q3 | 候補タグ | 所有者が列挙しない。Wordfence ミラーと WordPress.org のタグから「低権限・報奨対象の記録 / plugin」を機械的に出し、上位の族を既定にする（[2026-10-13-selection-data.md](../reviews/2026-10-13-selection-data.md) 第 3 節）。タグの出典を `target-selected` に残し、半年後に有償率で測る |
 | Q4 | install 下限 | 100,000。公式の帯別平均と所有者の 2026-08 実績（Gate 1）による |
 | Q5 | High Threat タグ 21 個と重み、攻撃面タグ重み | 削除。順位は installs と鮮度だけ |
-| Q6 | runBudget 20 / 40 | 削除。#189 の「初回で scope 内 Finding があれば +2 Trial」に置き換える |
+| Q6 | runBudget 20 / 40 | 削除。#189 の自動 +2 Trial も削除。同じ plugin slug の 2 回目以降の独立 Trial は 1 Trial ごとに所有者が事前承認する。承認の形式は所有者が 2 回目を求めるときに決める（2026-10-14） |
 | Q9 | 採点式 log10(1+installs)×10 + 鮮度×5 | 維持 |
 | 確認 | 除外作者 5 社 | 維持（Wordfence 公式） |
 
@@ -71,9 +71,24 @@ amends: 0030（タグ単位の履歴利用）, 0022（自動再試行の範囲�
 
 ## ADR 0022 への修正
 
-自動再試行は recipe 2 回、observation 1 回、precondition は再試行しない（#107）。provision の再試行は行わない。
+自動再試行は実装どおり recipe 2 回、observation 2 回、provision 1 回、precondition は scenario ID が変わったときだけ（2026-10-14、所有者が実装を正本と決めた。#107、#209）。Verifier の provider 上限は 1 回（ADR 0022 の 2026-10-14 追記）。
 
 ## 採らなかった選択肢
 
 - 制約ごとに ADR を書く: 週 1 本の規則に収まらない。
 - 所有者がタグを手で列挙する: 所有者が 2026-10-13 に退けた。
+
+## 2026-10-14 の所有者決定（最終設計 docs/reviews/2026-10-14-final-design.md 第 14 節）
+
+| # | 項目 | 決定 |
+| --- | --- | --- |
+| 1 | 最終設計の採用 | 採用。Step 1 の期日は「runner 起動＋8 日」 |
+| 2 | Trial に数えない run | Root が source を 1 件も読まず、子を起動せず、broker 転送 1 以下で終わった run は Trial に数えない（SPEC §6、ADR 0029） |
+| 3 | 旧世代の既往照合 | 旧研究 DB と旧 `--state` 台帳から Git 外 JSON（started / ambiguous / reconsider）を 1 回作る。AI が作る。無ければ runner は起動しない |
+| 4 | ラベルと凍結 | P0 / P9 / P10 / P12 は所有者本人が `owner-approved`。DEVELOPMENT §2 の ADR 凍結を ADR 0016 / 0020 / 0022 / 0026 / 0029 / 0032 の該当行に限って解除 |
+| 5 | 再試行回数 | 実装どおり（上記） |
+| 6 | 手動再現 | 判定器が確認し最新版の reverify が緑の Finding は証拠を読むだけでよい。`no-judge` は手で再現する（2026-10-11 の「全件必須」を変更。SPEC §8 / §12、ADR 0016 は P12 で書き換え） |
+| 7 | `no-judge` の提出 | 人間再現が `match` なら scope / draft が受理する口を作る（P12） |
+| 8 | #220 の受入条件 2 | 「拒否は記録して次対象へ進む」に改定。拒否が続いた週の Step 1 判定は「拒否を除く対象で回り切った」と読む |
+| 9 | A/B 事前登録（#201） | Step 1 の間は中止 |
+| 10 | Q2（Reflected XSS） | 半年後の見直しのまま |

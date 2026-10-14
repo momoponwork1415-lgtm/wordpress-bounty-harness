@@ -35,3 +35,4 @@ supersedes: 0025 for the default discovery route; 0017 for the default prompt
 - `screening-v1` を含む過去の prompt `.md` と digest pin、過去 Trial の `stage` / `continuationOf` 付き台帳 event は残して構成を照合できるようにする。旧screeningを現行modeで新規起動しない。新しい書き込み経路から段・continuation を外しても、追記専用台帳の既存 event を変更しない。
 - 探索に渡すもの、安全境界、Harness 所有の判定器、同一 Snapshot digest、提出前の人間判断と外部行動の承認、Private Evidence の配置は SPEC 第2節の不変条件8項目のまま。目的 prompt の本文を変えるときは旧版を残して新 ID と digest を登録する。
 - 開発セットの各変更は、独立した3 Trial の completed、Finding、Lead、wall 中央値、失敗理由、usage と検証結果を報告する。既存の二段構え Trial と新主経路 Trial は同じ比較の分母に混ぜない。
+- 2026-10-14 追記（所有者決定）: Root が source を 1 件も読まず、子を起動せず、broker 転送が 1 以下で終わった run は Trial に数えず、その対象は次の選定で戻る。「同一対象の自動追加 Trial はしない」は途中まで走った Trial に適用し、未開始の run には適用しない。provider 上限と対象単位の失敗の扱いは SPEC §6 のとおり runner が再開・skip する。

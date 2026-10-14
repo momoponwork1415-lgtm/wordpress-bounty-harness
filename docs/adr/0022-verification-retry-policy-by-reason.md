@@ -13,6 +13,7 @@ status: accepted
 | `recipe`、`observation` | 同じ Lab Setup で最大 2 回まで自動再試行する。上限到達で `incomplete` のまま人間へ回す |
 | `precondition` | シナリオ ID（ADR 0020）が変わったときだけ再試行する |
 | `provision` | Lab の再供給を 1 回試す |
+| `provider`（Verifier の provider 上限） | campaign を `provider-limit` で止め、runner の再開時に同じ Lab Setup で 1 回だけ自動再試行する（2026-10-14 追記） |
 | `evidence`、`cleanup`、`digest-mismatch`、`no-judge` | 自動再試行しない。人間へ回す |
 
 - 自動再試行は同じ Finding、同じ Snapshot digest、同じ Verifier prompt 版で行い、attempt ごとに新しい Lab を立てる。
