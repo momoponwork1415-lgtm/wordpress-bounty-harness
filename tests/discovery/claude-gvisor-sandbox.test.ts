@@ -94,6 +94,7 @@ describe("Claude cooperative gVisor resource admission", () => {
       );
       expect(agentArgs).toContain(`--env=ANTHROPIC_AUTH_TOKEN=${grantToken}`);
       expect(agentArgs).toContain("--env=ANTHROPIC_BETAS=oauth-2025-04-20");
+      expect(agentArgs).toContain("--env=CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0");
       expect(agentArgs).not.toContain(`--env=ANTHROPIC_API_KEY=${grantToken}`);
       expect(agentArgs).toContain("--runtime=runsc");
     } finally {

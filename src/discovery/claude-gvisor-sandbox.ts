@@ -262,7 +262,9 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
             "--env=DISABLE_TELEMETRY=1",
             "--env=DISABLE_ERROR_REPORTING=1",
             "--env=DISABLE_AUTOUPDATER=1",
-            "--env=CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
+            // Claude's nested bubblewrap cannot run under runsc. Only the
+            // trial-scoped broker grant, never the provider secret, enters here.
+            "--env=CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0",
             ...(command.grant.anthropicAuthentication === "subscription-token"
               ? [
                   `--env=ANTHROPIC_AUTH_TOKEN=${token}`,
