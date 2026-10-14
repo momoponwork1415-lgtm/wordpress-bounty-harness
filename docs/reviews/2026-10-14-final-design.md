@@ -573,3 +573,160 @@ Step 1 の「人手介入 0」の判定で、次は介入に数えない: 1 日 
 10. Reflected XSS の見直し時期（ADR 0032 Q2「半年後」）を D8 の引き金に変えるか。変えるなら Patchstack 第 2 送信先の PARKING 行と同時に判断する。
 
 それ以外は AI が進め、週の問いの数字で報告する。
+
+## 15. 機能の棚卸しと処置（file 単位）
+
+いまある機能を src のディレクトリ単位で並べ、本設計での処置を付ける。行数は 2026-10-14 の `wc -l`。処置は 4 種: **残す**（本番ループが使う）、**変更**（P0〜P13 で手を入れる）、**凍結**（足さない。Step 1 合格後に消す）、**消す**（P13 で削除）。**新規** は本設計で作るもの。
+
+| 領域 | file（行数） | 何をしているか | 処置 |
+| --- | --- | --- | --- |
+| 選定 | `profiles/wordpress/selection/wordpress-selection.ts`（348）、`wordpress-org-candidate-enumerator.ts`（365）、`ledger-exclusions.ts`（168）、`contracts.ts`（201） | WordPress.org の人気順・タグ順を列挙し、install 数・鮮度・除外作者・台帳の既往で絞り、Snapshot を固定して `target-selected` を書く | **変更**（P5: 既往の基準、legacy JSON、`never`、列挙の深さ、`--minimum`） |
+| Snapshot | `snapshot/index.ts`（157）、`acquisition/wordpress-org-target-source.ts`（545）、`zip-archive.ts`（364）、`wordpress-core-source.ts`（181）、`pinned-svn-source.ts`（108）、`materialized-sources.ts`（145）、`local-directory-target-intake.ts`（547）、`infrastructure/canonical-source-tree.ts`（180）、`private-artifact-store.ts`（434） | plugin ZIP と core を取得し、path / symlink / size を検査して digest 固定。Private Evidence は content-addressed | **残す**。`local-directory-target-intake`（開発セット用）は**凍結**。#223 の timeout 修正は**変更**（P2） |
+| Lab | `profiles/wordpress/lab/index.ts`（989）、`lab-observation.ts`（714）、`wordpress-initialization.ts`（422）、`scenarios.ts`（432）、`state-capture.ts`（361）、`provision-input.ts`（357）、`container-startup.ts`（285）、`canary-placement.ts`（247）、`review-lab.ts`（158）、`host-exposure.ts` | runsc で WordPress ＋ MariaDB ＋ recorder ＋ browser を立て、canary と低権限 account を配置、HTTP 到達を検査、前後の状態差分を取る | **残す**。`cleanupLeftovers` にレビュー用 Lab の除外を**変更**（P6）。activation defaults は**新規**（P11、条件付き） |
+| Lab の plugin 固有 adapter | `brizy-*.ts`、`relevanssi-search-index.ts`、`simply-schedule-booking.ts`、`user-registration*.ts`、`wp-members-adapter.ts`、`wpdiscuz-adapter.ts`、`download-*.ts`（計 748） | 再発見 case と本番 3 周で対象ごとに手書きした通常利用の状態 | **凍結**（足さない。既存 scenario の digest は変えない） |
+| 探索 runtime | `discovery/codex-native-agent-runtime.ts`（1,613）、`codex-gvisor-sandbox.ts`（783）、`native-run-receipts.ts`（294）、`agent-runtime-profile.ts`（139）、`infrastructure/native-model-process.ts`（130） | Codex CLI を runsc 内で Root＋3 として起動し、transcript / rollout から usage・source 読取・失敗理由を receipt にする | **残す**。拒否の分類を**変更**（P3） |
+| broker | `discovery/provider-credential-egress-broker.ts`（841）、`provider-credential-proxy.ts`（567）、`grant-tls.ts`（164）、`provider-private-credential.ts`（113） | run ごとの CA と grant token で sandbox と provider の間に入り、`POST /responses` だけを転送、件数と byte に上限 | **残す** |
+| campaign / pipeline | `discovery/campaign.ts`（695）、`cli/pipeline.ts`（1,178）、`cli/wordpress.ts`（1,462）、`cli/wordpress-host.ts`（638）、`cli/index.ts`（1,409） | 選定 batch の束縛、freeze → Lab → Trial → 検証の対象ループ、provider 上限での停止と同じ ID の再開、有界の自動再検証、host preflight、CLI 配線 | **変更**（P4: 拒否・run 失敗の skip、Verifier 上限、stop 引数、`operator`。P6: `--selection`、`hostStatus`） |
+| 候補の受理 | `profiles/wordpress/discovery/finding.ts`（135）、`lead.ts`（180）、`normalize-candidate.ts`（110）、`output-contract.ts`（42）、`programme-impacts.ts`（41）、`discovery/record-discovery-report.ts`（342） | 最終 JSON を schema で検査し、正規化して受理 / 保留 / parked に分ける。出力契約は schema から生成 | **残す** |
+| 入口索引 | `profiles/wordpress/discovery/entry-points.ts`（479）、`storage-index.ts`（515） | 固定 source から登録入口と保存先を正規表現で列挙し、カタログとして Root に渡す | **残す**（カタログ部分）。分担計画（`assignment`）は**消す**（P13） |
+| 候補の救済 | `discovery/reaccept-candidates.ts`（334）、`reaccept-cli.ts`（51）、`recover-agent-reports.ts`（176）、`scripts/recover-child-reports.mjs` | schema 失敗で落ちた候補を後から再受理する運用 script | **凍結** |
+| 検証 | `verification/index.ts`（800）、`reproduction-package.ts`（314）、`profiles/wordpress/verification/judges.ts`（1,413）、`codex-verifier.ts`（695）、`reproduction-package.ts`（377）、`standard-reproducer.ts`（305）、`lab-state-diff.ts`（133） | 新しい Lab で Verifier を回し、recorder の捕捉と canary 回収を判定器が照合、再現パッケージを作る | **残す**。provider 理由の再試行を**変更**（P4） |
+| 週次 smoke | `smoke-replay-recipe.ts`（455）、`smoke-replay-verifier.ts`（207）、`scripts/smoke-real-lab.mjs`（564） | 既知 Finding の 8 手順を再生する第 2 の検証経路 | **消す**（P13。`review reverify` 1 回で代える） |
+| 台帳 | `ledger/index.ts`（1,509） | sqlite の追記専用 event、funnel / usage / runtime の集計 | **変更**（P3: `stops`、`--since`。P4: `campaign-stopped.reason` に `operator`） |
+| review | `review/index.ts`（1,051）、`review/export.ts`（630） | queue、export、inspect / open / reproduced / decide / dedupe / scope / reverify / draft / authorize / submitted / outcome | **残す**。export は**変更**（P8）。`open` は**凍結** |
+| 評価 | `evaluation/index.ts`（446）、`profiles/wordpress/advisory.ts`（174） | `prospective`（後日公開の advisory と照合）、`readiness`、funnel、Answer Key 採点、rubric、arm 比較 | `prospective` / `readiness` / funnel は**残す**。`score / keys / rubric / compare` と `advisory.ts` は**消す**（P13） |
+| Wordfence 側 | `profiles/wordpress/wordfence-history/`（466）、`programme-intelligence/`（484）、`wordfence-programme/`（328）、`scope-policy.ts`（253）、`scope-facts.ts`（213） | 履歴 mirror の照合、Programme 写しの鮮度、scope 評価 | **残す** |
+| prompt | 探索 15 版、Verifier 7 版、`trust-boundary-v1.md` | 版と digest を固定した目的文 | 起動可能は 5 版（v4、v3、v2、short-v4、whitebox-v1.7）、他 10 版は archive に**凍結**。Verifier は v7 のみ起動 |
+| skill | `.claude/skills/wbh-review|wbh-dedupe|wbh-report` | 所有者が Claude Code で使うレビュー・照合・報告書 | **変更**（P7） |
+| scripts | `preflight-root-three.mjs`、`report-wordpress-preconditions.mjs`、`copy-assets.mjs` | 実機 preflight、precondition 集計、build | **残す** |
+| | `build-rediscovery-catalog.mjs`、`report-rediscovery-cases.mjs` | 再発見ベンチマーク | **凍結** |
+| | `prepare-pilot-selection.mjs`、`preflight-unlimited-elements-sources.mjs` | 旧 pilot と個別 case の preflight | **消す**（P13） |
+| examples | 28 本 | 旧 arm の campaign / selection 設定 | 6 本**残す**、22 本**消す**（P13） |
+| 新規 | `cli/continuous.ts`（約 300）、`scripts/export-legacy-slugs.mjs`（約 120）、`lab/ordinary-activation-defaults.ts`（約 140、条件付き） | 外側ループ、旧世代の既往 JSON、通常の有効化設定 | **新規**（P6、P5、P11） |
+
+本設計が足す code は約 1,100 行、変更は約 900 行、凍結は約 5,000 行、Step 1 合格後に消すのは約 3,000 行。`c5d0ef3` 系の約 15,000 行は merge しない。
+
+### 15.1 配置図（実名）
+
+```mermaid
+flowchart TB
+  subgraph host["Host（Linux、Docker ＋ gVisor runsc、RAM 16 GiB）"]
+    direction TB
+    subgraph proc["プロセス: node dist/cli/main.js continuous run（P6 で新規）"]
+      SEL["profile.select()<br/>WordPress.org 一覧 → 既往・legacy・下限で除外<br/>→ target-selected / selection-batch-bound"]
+      RC["profile.runCampaign()<br/>対象ごとに freeze → Lab → Trial → verify"]
+      JUDGE["判定器（judges.ts、決定論）<br/>recorder の捕捉 ＋ canary 回収 → verification-finished"]
+      RV["review export / decide / draft / authorize / submitted / outcome"]
+    end
+    subgraph state["state dir（--state、本番は 1 つ）"]
+      LEDGER[("ledger.sqlite<br/>追記専用、digest 参照のみ")]
+      PE[("private-evidence/<br/>候補本文・HTTP 捕捉・画像・再現パッケージ")]
+      CJ["continuous.json / .pid / .stop / .log（P6）"]
+    end
+    subgraph work["workDirectory"]
+      SNAP["snapshots/ sources/ wordpress-core/<br/>codex-scratch/ broker-scratch/ provider-attachments/"]
+    end
+    subgraph gitout["Git 外の設定"]
+      HOST["host.json（image digest、runtime profile、path）"]
+      AUTH["~/.codex/auth.json（ChatGPT ログイン、0600）"]
+      PROG["wordfence-programme.json（35 日で stale）"]
+      LEG["legacy-slugs.json（P5 で新規）"]
+      MIR[("Wordfence 履歴 mirror DB")]
+    end
+  end
+  subgraph trial["Trial ごとの runsc コンテナ（探索。Verifier も同じ形）"]
+    CODEX["Codex sandbox（image codex）<br/>mount: /workspace/main = plugin source RO<br/>/workspace/wordpress = core RO<br/>/workspace/research = 作業域 RW<br/>auth.json は grant token のみ<br/>network: internal、broker IP と Lab IP だけ"]
+    BROKER["egress broker（image broker、node）<br/>provider-egress.internal、run ごとの CA<br/>実 access token を保持<br/>POST /responses だけを chatgpt.com へ<br/>上限 1,600 要求 / 8 MiB"]
+  end
+  subgraph lab["対象ごとの Lab（runsc、network wbh-id-net）"]
+    SITE["wbh-id-site（image wordpress ＋ plugin）<br/>canary option / post / file / user を配置<br/>subscriber・customer の低権限 account"]
+    DB[("MariaDB（image database）<br/>RO account は provision 時点の table のみ")]
+    REC["wbh-recorder（dist/lab-recorder）<br/>Verifier の HTTP を捕捉 → JSONL<br/>beacon 受信 /b/nonce"]
+    BR["browser（image playwright）<br/>Harness 所有の観測器<br/>被害者ロールで画面を開く"]
+    CLI["WP-CLI（image wordpressCli）<br/>初期化、scenario、activation defaults（P11）"]
+  end
+  subgraph ext["外部"]
+    WPORG["api.wordpress.org（公開一覧、plugin ZIP）"]
+    OAI["chatgpt.com（provider API）"]
+    WF["Wordfence（人間が画面で送信）"]
+  end
+  subgraph human["所有者（週末）"]
+    CC["Claude Code の skill<br/>wbh-review → wbh-dedupe → wbh-report<br/>review export の JSON だけを読む"]
+  end
+  SEL --> WPORG
+  SEL --> LEG
+  SEL --> LEDGER
+  RC --> SNAP
+  RC --> LEDGER
+  RC --> PE
+  RC -. 起動 .-> CODEX
+  RC -. 起動 .-> BROKER
+  RC -. 供給 .-> SITE
+  CODEX -- HTTPS（grant） --> BROKER
+  BROKER -- 実 token --> OAI
+  AUTH -. broker だけが読む .-> BROKER
+  CODEX -- HTTP --> SITE
+  CODEX -- RO SQL --> DB
+  SITE --> DB
+  CODEX -. Verifier のときは recorder 経由 .-> REC
+  REC --> SITE
+  BR --> SITE
+  REC --> PE
+  JUDGE --> PE
+  JUDGE --> LEDGER
+  RV --> LEDGER
+  RV --> MIR
+  CC --> RV
+  CC --> WF
+  HOST -.-> RC
+  PROG -.-> SEL
+```
+
+### 15.2 1 対象のシーケンス（呼ぶ関数と台帳 event）
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant R as continuous run
+  participant S as select
+  participant C as campaign run
+  participant L as Lab（runsc）
+  participant A as Codex sandbox ＋ broker
+  participant V as Verifier sandbox
+  participant J as 判定器
+  participant G as 台帳
+  participant H as 所有者（skill）
+  R->>S: profile.select(policy, minimum 1)
+  S->>G: target-selected ×5、selection-batch-bound
+  R->>C: profile.runCampaign(campaignId, batch)
+  loop 対象ごと（maxConcurrentTargets 1）
+    C->>G: snapshot-frozen（plugin ＋ core の digest）
+    C->>L: provision（WordPress ＋ MariaDB ＋ recorder ＋ canary ＋ 低権限 account）
+    C->>G: lab-provisioned（reachability.http ok）
+    C->>A: Root ＋ 最大 3 子を起動（source RO、入口索引、trust 境界、Lab endpoint）
+    A->>G: discovery-run-started ×4
+    A-->>A: source を読む、Lab へ HTTP、broker 経由で provider
+    A->>G: discovery-run-finished ×4（outcome、reason、usage）
+    alt 拒否 / run 失敗（P4）
+      C->>G: target-skipped(provider-refused | run-failed) → 次の対象
+    else provider 上限
+      C->>G: campaign-stopped(provider-limit) → runner が backoff で再実行
+    else 完了
+      C->>G: finding-recorded / lead-recorded / candidate-held / finding-parked、discovery-concluded
+      C->>L: 新しい Lab を供給（検証用、canary 発行）
+      C->>V: Finding ＋ source ＋ Lab endpoint（recorder 経由）
+      V-->>L: 再現手順を HTTP で実行（recorder が捕捉）
+      C->>J: 捕捉 ＋ canary 観測 ＋ browser 観測
+      J->>G: verification-finished（runtime-confirmed / contradicted / incomplete、attempt、retryOf）
+      opt incomplete(recipe | observation)
+        C->>V: 同じ Lab Setup で再試行（recipe 2、observation 2）
+      end
+    end
+    C->>L: teardown
+  end
+  C-->>R: CampaignSummary.stopped（undefined / provider-limit / incomplete）
+  R->>R: 次の batch、または backoff / hold / waiting-login
+  H->>G: review export（scope 内 Finding 全件）
+  H-->>H: wbh-review → wbh-dedupe → reverify --version → 手で再現 → wbh-report
+  H->>G: review reproduced / decide / draft / authorize / submitted / outcome
+```
