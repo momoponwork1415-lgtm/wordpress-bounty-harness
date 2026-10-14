@@ -9,7 +9,7 @@ description: Finding 1 件について、ローカル Wordfence 履歴 mirror �
 
 ## 読む入力
 
-`harness review export --campaign <id> --finding <id>` の JSON から、`target.targetId`（slug）、`versions.explored`、`versions.latestKnown`、`finding.impact`、`finding.attackerPosition`、`finding.claim` の 1 文。それ以外の Private Evidence は読まなくてよい。台帳の sqlite を直接読まない。
+`harness review export --campaign <id> --finding <id>` の JSON から、`target.targetId`（slug）、`target.versions.explored`、`target.versions.latestKnown`、`finding.impact`、`finding.attackerPosition`、`finding.claim` の 1 文。それ以外の Private Evidence は読まなくてよい。台帳の sqlite を直接読まない。
 
 ## 手順
 
@@ -17,17 +17,18 @@ description: Finding 1 件について、ローカル Wordfence 履歴 mirror �
 2. **ローカル mirror。** `harness review dedupe --campaign <id> --finding <id>` を実行する。結果は `unavailable` / `no-match` / `possible-match:<ref>` の 3 値。mirror が stale なら `harness history status` を見て、その事実を根拠に書く。
 3. **公開情報。** Patchstack の脆弱性 database と WPScan の database を、slug と版、そして種別（`finding.impact` に対応する種別名）で検索する。見つかった記録は、公開日、影響版、修正版、種別、攻撃者位置だけを書く。記録の本文、PoC、原因箇所は読んでも写さない。
 4. **除外 vendor。** 対象の作者が Wordfence の除外一覧（WordPress Core、Automattic、Facebook、Google、SiteGround、Yoast）に当たらないかを確認する。選定で除外済みのはずだが、ここで再確認する。
-5. **一致の判断。** 同じ slug、影響版に `versions.explored` を含み、同じ種別と攻撃者位置の公開記録があれば `possible-match` とし、`<ref>` に公開記録の ID（CVE か各 database の ID）を置く。似ているが種別や攻撃者位置が違うなら `no-match` とし、違いを 1〜3 文で書く。これが報告書の差別化段落の元になる。
+5. **一致の判断。** 同じ slug、影響版に `target.versions.explored` を含み、同じ種別と攻撃者位置の公開記録があれば `possible-match` とし、`<ref>` に公開記録の ID（CVE か各 database の ID）を置く。似ているが種別や攻撃者位置が違うなら `no-match` とし、違いを 1〜3 文で書く。これが報告書の差別化段落の元になる。
 6. **推測しない。** 他の研究者の pending な報告は知り得ない。公開されていないものを理由に `possible-match` にしない。検索ができなかった、database が応答しなかったときは `unavailable` とし、理由を書く。
 7. **事実として扱う。** 確認できた重複は事実であり、risk や確率として重み付けしない。直近の公開件数（混雑）は統計であって gate ではないので、判断に使わない。
 8. **どちらでも記録する。** 一致があっても無くても、見た database、検索語、時刻、結果を書く。
+9. **提出の直前。** 提出の直前にもう一度 `harness history status` を打ち、stale なら旧環境で mirror を更新してから 2 をやり直すよう所有者に伝える。
 
 ## 出力
 
 1. 3 値 1 つ: `possible-match:<ref>` / `no-match` / `unavailable`。
 2. 根拠: 見た database と検索語、該当した公開記録の ID・公開日・影響版・修正版・種別、`no-match` のときは差別化の 1〜3 文。
 3. 記録は wbh-review の `harness review decide ... --duplicate <3 値>` に渡す。この skill は台帳に直接書かない。
-4. 非公開 note を Private Evidence の Finding ディレクトリ（export の `evidence.directory`）に Markdown 1 本で置く。公開情報だけを書く。
+4. 非公開 note を Private Evidence の Finding ディレクトリ（export の `privateEvidence.directory`）に Markdown 1 本で置く。公開情報だけを書く。
 
 ## しないこと
 
