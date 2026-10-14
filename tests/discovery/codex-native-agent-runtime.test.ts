@@ -665,6 +665,70 @@ describe("Codex native agent runtime", () => {
       ),
     ).toThrow();
   });
+  it("records a structured provider policy refusal without exposing its message", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-policy-refusal-"));
+    try {
+      const cooperativeProfile = defineAgentRuntimeProfile({
+        id: "policy-refusal",
+        transportKind: profile.transportKind,
+        sandboxImageDigest: profile.sandboxImageDigest,
+        requestedModelId: "gpt-6-sol",
+        requestedEffort: "high",
+        codexCliVersion: profile.codexCliVersion,
+        bundledCatalogDigest: profile.bundledCatalogDigest,
+        authenticationMethod: profile.authenticationMethod,
+        cyberAccessProgram: "daybreak_blue",
+        serviceTier: profile.serviceTier,
+        subagent: { modelId: "gpt-6-sol", effort: "high" },
+      });
+      const threadId = "policy-refusal-root";
+      const stdout = [
+        { type: "thread.started", thread_id: threadId },
+        { type: "turn.started" },
+        { type: "turn.failed", error: { message: "synthetic refusal" } },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+      const rootRollout = [
+        { type: "session_meta", payload: { id: threadId, source: "exec" } },
+        {
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            error: {
+              message: "synthetic refusal",
+              codex_error_info: "cyber_policy",
+            },
+          },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+      const result = await new CodexNativeAgentRuntime(
+        sandbox(stdout, [], { exitCode: 1, rollouts: [rootRollout] }),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      ).execute({
+        ...run,
+        profile: cooperativeProfile,
+        coordination: "cooperative",
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(result.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "provider",
+        reasonDetail: "provider-cyber-policy",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("starts a bounded cooperative Root without an ephemeral thread store", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-cooperative-"));
     try {

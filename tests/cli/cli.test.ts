@@ -2435,6 +2435,36 @@ describe("harness CLI vertical slice", () => {
         type: "finding-recorded",
       }),
     ).toHaveLength(0);
+    // --since lists parked Findings across campaigns from an instant on.
+    const recent = await run(
+      "review",
+      "parked",
+      "--since",
+      "2026-10-12T00:00:00Z",
+    );
+    expect(recent.stdout).toContain("finding-parked-1");
+    const later = await run(
+      "review",
+      "parked",
+      "--since",
+      "2026-10-14T00:00:00Z",
+    );
+    expect(later.stdout).toContain("no parked findings");
+    const neither = await run("review", "parked");
+    expect(neither.code).not.toBe(0);
+    const badSince = await run("ledger", "stops", "--since", "yesterday");
+    expect(badSince.code).not.toBe(0);
+    const stops = await run("ledger", "stops", "--campaign", "campaign-parked");
+    expect(stops.code).toBe(0);
+    expect(stops.stdout).toContain("no stops recorded");
+    const funnel = await run(
+      "ledger",
+      "funnel",
+      "--since",
+      "2026-10-12T00:00:00Z",
+    );
+    expect(funnel.code).toBe(0);
+    expect(funnel.stdout).toContain("campaign *");
   });
 
   it("verifies a child Finding on resume without starting a replacement Trial", async () => {

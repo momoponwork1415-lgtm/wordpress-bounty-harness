@@ -456,6 +456,21 @@ export type LedgerReadQuery = {
   readonly findingId?: string;
   readonly afterSequence?: number;
   readonly limit?: number;
+  /** Events at or after this instant (ISO 8601). */
+  readonly since?: string;
+};
+/** One group of `ledger stops`: an event type, its grouping fields and how many. */
+export type StopRow = {
+  readonly type:
+    | "discovery-run-finished"
+    | "target-skipped"
+    | "lab-provisioned"
+    | "campaign-stopped";
+  readonly fields: Readonly<Record<string, string>>;
+  readonly count: number;
+  /** discovery-run-finished only: runs started as explore, and runs that ended within 60 s. */
+  readonly explore?: number;
+  readonly within60s?: number;
 };
 export type LedgerRecord = {
   readonly sequence: number;
@@ -590,7 +605,28 @@ const querySchema = z.strictObject({
   findingId: id.optional(),
   afterSequence: z.number().int().nonnegative().optional(),
   limit: z.number().int().min(1).max(1000).optional(),
+  since: z.iso.datetime({ offset: true }).optional(),
 });
+
+const SINCE_CLAUSE =
+  "julianday(json_extract(event_json, '$.occurredAt')) >= julianday(?)";
+
+function scopeClauses(query: {
+  readonly campaignId?: string | undefined;
+  readonly since?: string | undefined;
+}): { clauses: string[]; params: string[] } {
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (query.campaignId !== undefined) {
+    clauses.push("campaign_id = ?");
+    params.push(id.parse(query.campaignId));
+  }
+  if (query.since !== undefined) {
+    clauses.push(SINCE_CLAUSE);
+    params.push(z.iso.datetime({ offset: true }).parse(query.since));
+  }
+  return { clauses, params };
+}
 
 const storedRow = z.strictObject({
   sequence: z.number().int().positive(),
@@ -938,6 +974,10 @@ export class Ledger {
       clauses.push("finding_id = ?");
       params.push(parsed.findingId);
     }
+    if (parsed.since !== undefined) {
+      clauses.push(SINCE_CLAUSE);
+      params.push(parsed.since);
+    }
     const rows = this.#db
       .prepare(
         `SELECT sequence, identity, input_digest, event_json FROM ledger_events WHERE ${clauses.join(" AND ")} ORDER BY sequence LIMIT ?`,
@@ -1022,13 +1062,118 @@ export class Ledger {
     );
   }
 
-  funnel(campaignId: string): CampaignFunnel {
-    const campaign = id.parse(campaignId);
+  /** Groups the reasons runs, targets, Labs and campaigns stopped, from existing fields only. */
+  stops(
+    query: { readonly campaignId?: string; readonly since?: string } = {},
+  ): readonly StopRow[] {
+    const { clauses, params } = scopeClauses(query);
     const rows = this.#db
       .prepare(
-        "SELECT sequence, identity, input_digest, event_json FROM ledger_events WHERE campaign_id = ? ORDER BY sequence",
+        `SELECT event_json FROM ledger_events WHERE event_type IN ('discovery-run-started', 'discovery-run-finished', 'target-skipped', 'lab-provisioned', 'campaign-stopped')${clauses.map((clause) => ` AND ${clause}`).join("")} ORDER BY sequence`,
       )
-      .all(campaign);
+      .all(...params);
+    const runKinds = new Map<string, string | undefined>();
+    const groups = new Map<
+      string,
+      {
+        type: StopRow["type"];
+        fields: Record<string, string>;
+        count: number;
+        explore: number;
+        within60s: number;
+      }
+    >();
+    const add = (
+      type: StopRow["type"],
+      fields: Record<string, string | undefined>,
+      explore = false,
+      within60s = false,
+    ): void => {
+      const kept = Object.fromEntries(
+        Object.entries(fields).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        ),
+      );
+      const key = `${type} ${JSON.stringify(kept)}`;
+      const group = groups.get(key) ?? {
+        type,
+        fields: kept,
+        count: 0,
+        explore: 0,
+        within60s: 0,
+      };
+      groups.set(key, group);
+      group.count++;
+      if (explore) group.explore++;
+      if (within60s) group.within60s++;
+    };
+    for (const row of rows) {
+      const event = ledgerEventV1Schema.parse(
+        JSON.parse(
+          z.object({ event_json: z.string() }).parse(row).event_json,
+        ) as unknown,
+      );
+      switch (event.type) {
+        case "discovery-run-started":
+          runKinds.set(`${event.campaignId} ${event.runId}`, event.runKind);
+          break;
+        case "discovery-run-finished":
+          if (event.outcome === "completed") break;
+          add(
+            event.type,
+            {
+              outcome: event.outcome,
+              reason: event.reason,
+              reasonDetail: event.reasonDetail,
+              providerLimit: event.providerLimit,
+            },
+            runKinds.get(`${event.campaignId} ${event.runId}`) === "explore",
+            event.wallTimeMs <= 60_000,
+          );
+          break;
+        case "target-skipped":
+          add(event.type, {
+            stage: event.stage,
+            reason: event.reason ?? "unrecorded",
+          });
+          break;
+        case "lab-provisioned":
+          if (event.status !== "failed") break;
+          add(event.type, {
+            status: event.status,
+            failureStage: event.failureStage,
+            reason: event.reason,
+          });
+          break;
+        case "campaign-stopped":
+          add(event.type, { reason: event.reason });
+          break;
+      }
+    }
+    return [...groups.values()].map((group) =>
+      group.type === "discovery-run-finished"
+        ? group
+        : { type: group.type, fields: group.fields, count: group.count },
+    );
+  }
+
+  /** One campaign's funnel, or every campaign's events since an instant. */
+  funnel(
+    campaignId: string | undefined,
+    query: { readonly since?: string } = {},
+  ): CampaignFunnel {
+    if (campaignId === undefined && query.since === undefined)
+      throw new Error("A funnel needs a campaign or a since instant");
+    const campaign = campaignId === undefined ? "*" : id.parse(campaignId);
+    const { clauses, params } = scopeClauses({
+      campaignId,
+      since: query.since,
+    });
+    const rows = this.#db
+      .prepare(
+        `SELECT sequence, identity, input_digest, event_json FROM ledger_events${clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`} ORDER BY sequence`,
+      )
+      .all(...params);
     const events = rows.map((row) =>
       ledgerEventV1Schema.parse(
         JSON.parse(storedRow.parse(row).event_json) as unknown,
