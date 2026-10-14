@@ -1,0 +1,10 @@
+[Unit]
+Description=WordPress bounty harness continuous parent supervisor
+Documentation=file:@REPOSITORY_ABS@/examples/continuous-systemd/README.md
+
+[Service]
+Type=exec
+WorkingDirectory=@REPOSITORY_ABS@
+UMask=0077
+Restart=no
+ExecStart=@NODE_ABS@ @REPOSITORY_ABS@/dist/cli/main.js --host @HOST_CONFIG_ABS@ --state @STATE_DIRECTORY_ABS@ continuous supervise --run @PARENT_RUN_ID@ --config @CAMPAIGN_CONFIG_ABS@

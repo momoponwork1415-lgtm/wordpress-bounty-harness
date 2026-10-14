@@ -1,0 +1,11 @@
+[Unit]
+Description=Wake one WordPress bounty harness continuous parent
+
+[Timer]
+Unit=wbh-continuous-supervise.service
+OnStartupSec=1min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

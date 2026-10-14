@@ -90,6 +90,8 @@ node dist/cli/main.js --host <同じGit外host.json> --state <同じGit外state>
 
 `supervise` は host 側の定期起動から呼ぶ一回の起床判定である。親が `RUNNING` で停止要求がなく、owner が確実に死亡または不在で、その親の資源 claim が残っていないときにだけ既存 runner へ渡す。runner は owner を排他的に取得し、journal・ledger・claim を再照合する。同時に二つの起床が来ても片方は owner 競合として戻る。`supervise` 自体は定期実行サービスを設置せず、起床後に長時間の親 worker として動く場合がある。外側の host scheduler の設定と実機受入は別途必要である。`STOPPED`、`WAIT_REVIEW`、`WAIT_QUOTA`、`RECOVERING`、不確かな owner、資源 claim は自動解除しない。`WAIT_REVIEW` と `RECOVERING` の理由を調べ、原因を解消してから明示的に `resume` する。候補が尽きたときも同じ slug の追加 Trial を自動投入しない。
 
+無効状態の systemd user timer / service 雛形は [examples/continuous-systemd/](../examples/continuous-systemd/README.md) に置く。親 ID と固定した host / state / campaign 設定を埋めた後にだけ登録できる。現時点で timer は設置・起動していない。
+
 現時点では実 provider での3 Trial測定、旧履歴の全数監査と coverage 取込、quota 回復後の自動再開、別 provider への継続、総 token 上限の強制停止が未完了。したがって長時間の無人本番運転はまだ受入前である。実装と未達の内訳は [#229 の進捗レビュー](reviews/2026-10-14-issue-229-continuous-runner-progress.md) に記録する。
 
 ### 同じ plugin の追加探索 Trial の承認
