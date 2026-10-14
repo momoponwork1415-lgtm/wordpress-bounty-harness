@@ -496,6 +496,28 @@ export async function createWordPressHostProfile(options: {
   });
   return {
     ...profile,
+    /** One WordPress.org observation for `review export`; failures are null. */
+    async latestVersion(state, targetId) {
+      const slug = /^wporg:([a-z0-9][a-z0-9-]*)$/.exec(targetId)?.[1];
+      if (slug === undefined) return null;
+      const observed = await openWordPressOrgTargetSource({
+        storageDirectory: join(host.workDirectory, "wordpress-org"),
+        adapter: createWordPressOrgFetchAdapter(
+          options.fetch === undefined ? {} : { fetch: options.fetch },
+        ),
+        clock: state.clock,
+      }).observe({
+        kind: "wordpress-org-target-observe",
+        schemaVersion: 1,
+        slug,
+      });
+      return observed.status === "observed"
+        ? {
+            version: observed.observation.stableVersion,
+            observedAt: observed.observation.observedAt,
+          }
+        : null;
+    },
     /** What `continuous run` checks before each batch (final design P6). */
     async hostStatus(state, input) {
       const json = async (path: string) =>

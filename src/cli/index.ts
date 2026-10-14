@@ -187,6 +187,11 @@ export interface CliProfile {
       readonly selectionPolicyPath?: string;
     },
   ): Promise<CampaignSummary>;
+  /** The target's newest public version, observed once; absent without a host. */
+  latestVersion?(
+    state: CliState,
+    targetId: string,
+  ): Promise<{ version: string; observedAt: string } | null>;
   /** Host facts `continuous run` checks before each batch; absent without a host. */
   hostStatus?(
     state: CliState,
@@ -963,6 +968,12 @@ export async function runCli(
           findingId: required(values.finding, "finding"),
           stateDiff: environment.profile.stateDiffReader(state),
           clock: state.clock,
+          ...(environment.profile.latestVersion === undefined
+            ? {}
+            : {
+                observeLatestVersion: (targetId: string) =>
+                  environment.profile.latestVersion!(state, targetId),
+              }),
         });
         io.stdout(canonicalJson(bundle));
         return 0;
