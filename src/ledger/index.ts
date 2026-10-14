@@ -367,7 +367,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     /** A person explicitly opened one review item; listing the queue does not count. */
     type: z.literal("review-item-opened"),
     findingId: id,
-    verificationId: id,
+    /** Absent when the Finding has not yet been verified. */
+    verificationId: id.optional(),
   }),
   event({
     type: z.literal("review-decided"),

@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runCli } from "../../src/cli/index.js";
+import { formatQueue, runCli } from "../../src/cli/index.js";
 import { reviewExportV1Schema } from "../../src/review/index.js";
 import {
   createWordPressCliProfile,
@@ -2405,6 +2405,19 @@ describe("harness CLI vertical slice", () => {
     expect(listed.stdout).toContain(
       "parked  other  finding-parked-1  Throttle trusts a forwarded header",
     );
+    const normalQueue = await run("review", "--campaign", "campaign-parked");
+    expect(normalQueue.code).toBe(0);
+    expect(normalQueue.stdout).toContain("review queue is empty");
+    const exported = await run(
+      "review",
+      "export",
+      "--campaign",
+      "campaign-parked",
+      "--finding",
+      "finding-parked-1",
+    );
+    expect(exported.code).not.toBe(0);
+    expect(ledger().funnel("campaign-parked").raw).toBe(0);
     expect(
       ledger().read({
         campaignId: "campaign-parked",
@@ -3624,6 +3637,123 @@ describe("harness CLI vertical slice", () => {
     );
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("not in the review queue");
+  });
+
+  it("shows unverified and contradicted Findings without implying a reproduction package", () => {
+    const lines = formatQueue(
+      {
+        items: [
+          {
+            status: "unverified",
+            ref: {
+              campaignId: "campaign-1",
+              findingId: "pending",
+              snapshotDigest: sha("a"),
+            },
+            category: "content-deletion",
+            decision: null,
+          },
+          {
+            status: "contradicted",
+            ref: {
+              campaignId: "campaign-1",
+              findingId: "refuted",
+              verificationId: "verification-1",
+              snapshotDigest: sha("a"),
+            },
+            category: "sqli",
+            judgeId: "sqli-canary",
+            evidenceDigest: sha("b"),
+            decision: null,
+          },
+        ],
+        contradicted: 1,
+        unverified: 1,
+        incompleteByReason: {},
+        retryPendingByReason: {},
+      },
+      "/private",
+    ).join("\n");
+    expect(lines).toContain("unverified  campaign-1  finding pending");
+    expect(lines).toContain("verification: pending");
+    expect(lines).toContain("contradicted  campaign-1  finding refuted");
+    expect(lines).toContain("evidence: sha256:");
+    expect(lines).not.toContain("reproduction package:");
+    expect(lines).toContain("contradicted: 1  unverified: 1");
+  });
+
+  it("allows inspection but rejects decisions and review Lab setup for an unverified Finding", async () => {
+    const { run, configPath, ledger, docker } = await harness();
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "synthetic-plugin",
+          "--campaign",
+          "campaign-warm",
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    await ledger().append({
+      schemaVersion: 1,
+      identity: "pending-finding",
+      campaignId: "campaign-pending",
+      snapshotDigest: sha("a"),
+      occurredAt: now,
+      type: "finding-recorded",
+      findingId: "pending-finding",
+      runId: "pending-run",
+      category: "content-deletion",
+    });
+    const target = [
+      "--campaign",
+      "campaign-pending",
+      "--finding",
+      "pending-finding",
+    ];
+    const queue = await run("review", "--campaign", "campaign-pending");
+    expect(queue.code).toBe(0);
+    expect(queue.stdout).toContain(
+      "unverified  campaign-pending  finding pending-finding",
+    );
+    const inspected = await run("review", "inspect", ...target);
+    expect(inspected.code).toBe(0);
+    expect(JSON.parse(inspected.stdout)).toMatchObject({
+      status: "unverified",
+      view: { verificationStatus: "missing" },
+    });
+    const opened = ledger().read({
+      campaignId: "campaign-pending",
+      type: "review-item-opened",
+    })[0]?.event;
+    expect(opened).toMatchObject({
+      type: "review-item-opened",
+      findingId: "pending-finding",
+    });
+    expect(opened).not.toHaveProperty("verificationId");
+    const decided = await run(
+      "review",
+      "decide",
+      ...target,
+      "--decision",
+      "accept",
+      "--reason",
+      "manual",
+    );
+    expect(decided.code).toBe(2);
+    expect(decided.stderr).toContain(
+      "Only evidence-backed or incomplete verifications can be decided",
+    );
+    const beforeLab = docker.length;
+    const lab = await run("lab", "up", "--for-review", ...target);
+    expect(lab.code).toBe(2);
+    expect(lab.stderr).toContain(
+      "A reproduction package is required for review Lab setup",
+    );
+    expect(docker).toHaveLength(beforeLab);
   });
 
   it("exports one-screen review material with Private Evidence paths and brings the verification Lab up and down (#186)", async () => {

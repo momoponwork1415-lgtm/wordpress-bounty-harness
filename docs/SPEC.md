@@ -112,7 +112,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 8. 人間レビューとDisclosure
 
-- レビュー列に出すもの: `runtime-confirmed`（証拠refと再現パッケージつき）と、次の手付きの `incomplete`。`contradicted` は件数と抽出だけ。人間は再現パッケージで自分の手で再現してから文案を査読する。
+- レビュー列に出すもの: Programme Boundary内の通常Findingは、`runtime-confirmed`、`reproduced`、全理由の`incomplete`、`contradicted`、未検証のいずれでも個別に列挙し、`review export`から1件分の材料を読める（ADR 0031、#185）。`fixed-version-control`由来の評価用記録は通常列から除き、評価結果に残す。未検証・`contradicted`は採否を記録しない。人間は再現パッケージで自分の手で再現してから文案を査読する。
 - 人間が決めること: 再現パッケージを使って自分の手でLab上の攻撃を再現し、影響が意味を持つか、意図された動作ではないか、重複でないか、どのprogrammeへ出すか、文案と外部行動を承認する。Labの再構築とプラグイン設定はHarnessが保存したsetup manifestから自動化する。
 - 重複: 検証後・提出前にWordfence Intelligence mirrorの更新と照合を試み、PatchstackとWPScanの公開記録も照合する。照合元と時刻を記録し、staleまたは不明を「重複なし」にしない。候補の同一性は人間が最終判断する。
 - 文案: Harnessは判定器が通したHTTP・canary・必要な画面証拠に基づき、短い英語レポートとWordfence入力用JSONを作る。新しい証拠を文章で創作しない。提出は人間だけが行う。

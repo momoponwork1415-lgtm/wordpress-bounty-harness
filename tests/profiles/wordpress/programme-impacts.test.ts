@@ -12,7 +12,12 @@ describe("Programme Boundary impact labels (#185)", () => {
   });
 
   it("keeps the labels the Programme Boundary pays for", () => {
-    for (const impact of ["account-takeover", "sqli", "stored-xss"])
+    for (const impact of [
+      "account-takeover",
+      "sqli",
+      "stored-xss",
+      "content-deletion",
+    ])
       expect(isWordPressProgrammeImpact(impact)).toBe(true);
   });
 

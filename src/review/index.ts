@@ -99,6 +99,7 @@ const reviewDecisionV1Schema = z.strictObject({
 export type ReviewRef = z.infer<typeof refSchema>;
 export type ReviewDecisionV1 = z.infer<typeof reviewDecisionV1Schema>;
 type Decision = ReviewDecisionV1["decision"];
+type UnverifiedReviewRef = Omit<ReviewRef, "verificationId">;
 export type ReviewItem =
   | {
       readonly status: "runtime-confirmed" | "reproduced";
@@ -118,6 +119,21 @@ export type ReviewItem =
       readonly reason: string;
       readonly nextStep: string;
       readonly decision: Decision | null;
+    }
+  | {
+      readonly status: "contradicted";
+      readonly ref: ReviewRef;
+      readonly category: string;
+      readonly judgeId: string;
+      readonly evidenceDigest: string;
+      readonly refutationDigest?: string;
+      readonly decision: null;
+    }
+  | {
+      readonly status: "unverified";
+      readonly ref: UnverifiedReviewRef;
+      readonly category: string;
+      readonly decision: null;
     };
 export type ReviewQueue = {
   readonly items: readonly ReviewItem[];
@@ -213,7 +229,7 @@ export class Review<TFacts = unknown> {
     digest.parse(options.scopeEvaluator.policyDigest);
   }
 
-  /** Evidence-backed results and every incomplete verification reach a human. */
+  /** Every production Finding reaches a human, regardless of verification status. */
   queue(input: { readonly campaignId?: string } = {}): ReviewQueue {
     const campaignId =
       input.campaignId === undefined ? undefined : id.parse(input.campaignId);
@@ -256,6 +272,16 @@ export class Review<TFacts = unknown> {
       const verified = latestVerification.get(key(finding));
       if (verified === undefined) {
         unverified++;
+        items.push({
+          status: "unverified",
+          ref: {
+            campaignId: finding.campaignId,
+            findingId: finding.findingId,
+            snapshotDigest: finding.snapshotDigest,
+          },
+          category: finding.category,
+          decision: null,
+        });
         continue;
       }
       const { event, sequence } = verified;
@@ -271,8 +297,20 @@ export class Review<TFacts = unknown> {
           ? decided.decision
           : null;
       const result = event.result;
-      if (result.status === "contradicted") contradicted++;
-      else if (
+      if (result.status === "contradicted") {
+        contradicted++;
+        items.push({
+          status: "contradicted",
+          ref,
+          category: finding.category,
+          judgeId: result.judgeId,
+          evidenceDigest: result.evidenceDigest,
+          ...(result.refutationDigest === undefined
+            ? {}
+            : { refutationDigest: result.refutationDigest }),
+          decision: null,
+        });
+      } else if (
         result.status === "runtime-confirmed" ||
         result.status === "reproduced"
       )
@@ -357,6 +395,7 @@ export class Review<TFacts = unknown> {
       verification.result.status === "incomplete" &&
       !this.queue({ campaignId: ref.campaignId }).items.some(
         (item) =>
+          item.status !== "unverified" &&
           item.ref.findingId === ref.findingId &&
           item.ref.verificationId === ref.verificationId,
       )

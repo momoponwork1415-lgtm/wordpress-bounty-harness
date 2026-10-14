@@ -495,8 +495,11 @@ export function formatQueue(
   for (const item of queue.items) {
     const head = `${item.status}  ${item.ref.campaignId}  finding ${item.ref.findingId}  ${item.category}`;
     const decision = `  decision: ${item.decision ?? "none"}`;
-    const verification = `  verification ${item.ref.verificationId}  snapshot ${item.ref.snapshotDigest}`;
-    if (item.status !== "incomplete")
+    const verification =
+      item.status === "unverified"
+        ? `  verification: pending  snapshot ${item.ref.snapshotDigest}`
+        : `  verification ${item.ref.verificationId}  snapshot ${item.ref.snapshotDigest}`;
+    if (item.status === "runtime-confirmed" || item.status === "reproduced")
       lines.push(
         head,
         verification,
@@ -511,13 +514,30 @@ export function formatQueue(
         `  reproduction package: ${item.reproductionPackageDigest} (${join(evidenceDirectory, item.reproductionPackageDigest)})`,
         decision,
       );
-    else
+    else if (item.status === "incomplete")
       lines.push(
         head,
         verification,
         `  reason: ${item.reason}`,
         `  next: ${item.nextStep}`,
         decision,
+      );
+    else if (item.status === "contradicted")
+      lines.push(
+        head,
+        verification,
+        `  observer: ${item.judgeId}`,
+        `  evidence: ${item.evidenceDigest}`,
+        ...(item.refutationDigest === undefined
+          ? []
+          : [`  refutation: ${item.refutationDigest}`]),
+        "  decision: unavailable",
+      );
+    else
+      lines.push(
+        head,
+        verification,
+        "  decision: unavailable until verification",
       );
   }
   const counts = (byReason: Readonly<Record<string, number>>) =>
@@ -535,7 +555,7 @@ export function formatQueue(
     `retry candidates by reason: ${counts(queue.retryPendingByReason)}`,
   );
   lines.push(
-    `contradicted: ${queue.contradicted} (count only)  unverified: ${queue.unverified}`,
+    `contradicted: ${queue.contradicted}  unverified: ${queue.unverified}`,
   );
   return lines;
 }
@@ -568,7 +588,7 @@ type Values = {
   readonly to?: string | undefined;
 };
 
-/** Evidence-backed and exhausted incomplete findings are reviewable. */
+/** A normal Finding is inspectable even when verification has not finished. */
 function queued(review: Review, values: Values) {
   const campaignId = required(values.campaign, "campaign");
   const findingId = required(values.finding, "finding");
@@ -809,7 +829,9 @@ export async function runCli(
           occurredAt: state.clock().toISOString(),
           type: "review-item-opened",
           findingId: item.ref.findingId,
-          verificationId: item.ref.verificationId,
+          ...(item.status === "unverified"
+            ? {}
+            : { verificationId: item.ref.verificationId }),
         });
         if (opened.status === "conflict")
           throw new Error("Review open ledger conflict");
@@ -865,6 +887,10 @@ export async function runCli(
       case "review decide": {
         const review = environment.profile.review(state);
         const item = queued(review, values);
+        if (item.status === "unverified" || item.status === "contradicted")
+          throw new UsageError(
+            "Only evidence-backed or incomplete verifications can be decided",
+          );
         const findingId = item.ref.findingId;
         const decision = required(values.decision, "decision");
         if (
@@ -901,7 +927,7 @@ export async function runCli(
       case "review open": {
         const review = environment.profile.review(state);
         const item = queued(review, values);
-        if (item.status === "incomplete")
+        if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
           throw new UsageError("Only an evidence-backed package can be opened");
         const opened = await review.openReproductionPackage({ ref: item.ref });
         if (opened.status !== "opened")
@@ -920,7 +946,7 @@ export async function runCli(
       case "review reproduced": {
         const review = environment.profile.review(state);
         const item = queued(review, values);
-        if (item.status === "incomplete")
+        if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
           throw new UsageError(
             "Only an evidence-backed package can be reproduced",
           );
@@ -1115,14 +1141,17 @@ export async function runCli(
       }
       case "lab up": {
         if (values["for-review"] === true) {
-          const launch = environment.profile.reviewLab;
-          if (launch === undefined)
-            throw new UsageError("This profile has no review Lab provisioner");
           const item = queued(environment.profile.review(state), values);
-          if (item.status === "incomplete")
+          if (
+            item.status !== "runtime-confirmed" &&
+            item.status !== "reproduced"
+          )
             throw new UsageError(
               "A reproduction package is required for review Lab setup",
             );
+          const launch = environment.profile.reviewLab;
+          if (launch === undefined)
+            throw new UsageError("This profile has no review Lab provisioner");
           await runForegroundReviewLab(
             () =>
               launch(state, {

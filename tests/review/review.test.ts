@@ -485,7 +485,7 @@ async function queueFixture() {
   for (const [findingId, category] of [
     ["finding-2", "account-takeover"],
     ["finding-3", "stored-xss"],
-    ["finding-4", "other"],
+    ["finding-4", "content-deletion"],
   ] as const)
     await context.ledger.append({
       ...base,
@@ -528,7 +528,7 @@ async function queueFixture() {
 }
 
 describe("review queue and decisions", () => {
-  it("lists evidence-backed and pending incomplete items", async () => {
+  it("lists every production Finding regardless of verification status", async () => {
     const { review } = await queueFixture();
     const queue = review.queue({ campaignId: "campaign-1" });
     expect(queue.contradicted).toBe(1);
@@ -551,7 +551,59 @@ describe("review queue and decisions", () => {
         reason: "observation",
         ref: expect.objectContaining({ findingId: "finding-2" }),
       }),
+      expect.objectContaining({
+        status: "contradicted",
+        category: "stored-xss",
+        ref: expect.objectContaining({
+          findingId: "finding-3",
+          verificationId: "verification-3",
+        }),
+        judgeId: "synthetic",
+        evidenceDigest: expect.stringMatching(/^sha256:/),
+        decision: null,
+      }),
+      expect.objectContaining({
+        status: "unverified",
+        category: "content-deletion",
+        ref: {
+          campaignId: "campaign-1",
+          findingId: "finding-4",
+          snapshotDigest: snapshot,
+        },
+        decision: null,
+      }),
     ]);
+  });
+
+  it("excludes only records explicitly marked as calibration controls", async () => {
+    const { review, ledger } = await queueFixture();
+    const fixedSnapshot = `sha256:${"c".repeat(64)}`;
+    for (const [findingId, control] of [
+      ["normal-fixed-version", false],
+      ["calibration-control", true],
+    ] as const)
+      await ledger.append({
+        schemaVersion: 1,
+        identity: findingId,
+        campaignId: "campaign-1",
+        snapshotDigest: fixedSnapshot,
+        occurredAt: "2026-10-08T00:00:00Z",
+        type: "finding-recorded",
+        findingId,
+        runId: "run-1",
+        category: "sqli",
+        ...(control
+          ? {
+              derivedFromFindingId: "finding-1",
+              derivationKind: "fixed-version-control" as const,
+            }
+          : {}),
+      });
+    const ids = review
+      .queue({ campaignId: "campaign-1" })
+      .items.map((item) => item.ref.findingId);
+    expect(ids).toContain("normal-fixed-version");
+    expect(ids).not.toContain("calibration-control");
   });
 
   it("lists exhausted observation failures for human review", async () => {
