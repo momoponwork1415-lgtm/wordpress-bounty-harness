@@ -30,6 +30,7 @@ import { PrivateArtifactStore } from "../infrastructure/private-artifact-store.j
 import {
   Ledger,
   type CampaignFunnel,
+  type StopRow,
   type FunnelCounts,
 } from "../ledger/index.js";
 import {
@@ -240,7 +241,7 @@ const USAGE = [
   "  campaign run <slug>|--all --campaign <id> --config <path> [--retry-incomplete]",
   "  review [--campaign <id>]",
   "  review inspect --campaign <id> --finding <id>",
-  "  review parked --campaign <id>",
+  "  review parked --campaign <id> | --since <ISO>",
   "  review export --campaign <id> --finding <id>",
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>] [--minutes <n>]",
   "  review open --campaign <id> --finding <id> [--minutes <n>]",
@@ -252,7 +253,8 @@ const USAGE = [
   "  review authorize --candidate <id> --draft <digest> --to <destination> [--by <name>]",
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
   "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
-  "  ledger funnel --campaign <id>",
+  "  ledger funnel --campaign <id> | --since <ISO>",
+  "  ledger stops [--campaign <id>] [--since <ISO>]",
   "  ledger usage [--campaign <id>]",
   "  ledger runtime [--campaign <id>]",
   "  history status",
@@ -303,9 +305,32 @@ const options = {
   "retry-incomplete": { type: "boolean" },
   port: { type: "string" },
   "db-port": { type: "string" },
+  since: { type: "string" },
 } as const;
 
 class UsageError extends Error {}
+
+/** `--since` takes an ISO 8601 instant with an offset, e.g. 2026-10-20T00:00:00Z. */
+function since(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (!z.iso.datetime({ offset: true }).safeParse(value).success)
+    throw new UsageError("--since must be an ISO 8601 instant");
+  return value;
+}
+
+/** At least one of --campaign and --since narrows a read. */
+function campaignOrSince(values: {
+  readonly campaign?: string | undefined;
+  readonly since?: string | undefined;
+}): { campaignId?: string; since?: string } {
+  const instant = since(values.since);
+  if (values.campaign === undefined && instant === undefined)
+    throw new UsageError("--campaign or --since is required");
+  return {
+    ...(values.campaign === undefined ? {} : { campaignId: values.campaign }),
+    ...(instant === undefined ? {} : { since: instant }),
+  };
+}
 
 function required(value: string | undefined, name: string): string {
   if (value === undefined || value.length === 0)
@@ -386,6 +411,17 @@ async function openState(
 
 function stages(counts: FunnelCounts): string {
   return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held} / parked ${counts.parked} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / reproduced ${counts.reproduced} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted} → outcome ${counts.outcome}`;
+}
+
+export function formatStopRow(row: StopRow): string {
+  const fields = Object.entries(row.fields).map(
+    ([name, value]) => `${name}=${value}`,
+  );
+  const extra =
+    row.explore === undefined
+      ? []
+      : [`explore=${row.explore}`, `within60s=${row.within60s ?? 0}`];
+  return [row.type, ...fields, `count=${row.count}`, ...extra].join("  ");
 }
 
 export function formatFunnel(funnel: CampaignFunnel): string[] {
@@ -817,9 +853,8 @@ export async function runCli(
       }
       case "review parked": {
         // Programme Boundary 外に置いた Finding の 1 行一覧。ラベル付けミスの安全網（#185）。
-        const campaignId = required(values.campaign, "campaign");
         const parked = state.ledger.read({
-          campaignId,
+          ...campaignOrSince(values),
           type: "finding-parked",
           limit: 1000,
         });
@@ -1201,13 +1236,30 @@ export async function runCli(
         }
         return 0;
       }
-      case "ledger funnel":
+      case "ledger funnel": {
+        const scope = campaignOrSince(values);
         print(
           formatFunnel(
-            state.ledger.funnel(required(values.campaign, "campaign")),
+            state.ledger.funnel(
+              scope.campaignId,
+              scope.since === undefined ? {} : { since: scope.since },
+            ),
           ),
         );
         return 0;
+      }
+      case "ledger stops": {
+        const instant = since(values.since);
+        const rows = state.ledger.stops({
+          ...(values.campaign === undefined
+            ? {}
+            : { campaignId: values.campaign }),
+          ...(instant === undefined ? {} : { since: instant }),
+        });
+        if (rows.length === 0) print(["no stops recorded"]);
+        print(rows.map(formatStopRow));
+        return 0;
+      }
       case "eval case-blocked": {
         const campaignId = required(values.campaign, "campaign");
         const caseId = required(values.case, "case");
