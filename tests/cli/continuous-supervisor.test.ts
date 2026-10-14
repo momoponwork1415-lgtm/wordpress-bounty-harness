@@ -336,6 +336,96 @@ describe("continuous supervisor wake", () => {
     },
   );
 
+  it.each(["manual-review", "inventory-unavailable"] as const)(
+    "preserves an external %s hold written during the first recovery inspection",
+    async (reason) => {
+      const test = await fixture();
+      try {
+        const parentRunId = test.parentRunId;
+        const oldClaim = test.owner.tryAcquire(parentRunId, 100);
+        expect(oldClaim.status).toBe("acquired");
+        const run = test.journal.get(parentRunId)!;
+        let getCalls = 0;
+        let injected = false;
+        const racingJournal = {
+          get: (value: string) => {
+            getCalls++;
+            // Initial read, pre-acquisition check, post-acquisition check,
+            // then the read inside the first asynchronous reconciliation.
+            if (getCalls === 4) {
+              test.journal.transition(parentRunId, run.revision, {
+                state: "WAIT_REVIEW",
+                reason,
+                nextCheckAt: null,
+              });
+              injected = true;
+            }
+            return test.journal.get(value);
+          },
+          transition: test.journal.transition.bind(test.journal),
+        } as unknown as SqliteContinuousRunJournal;
+        const state = {
+          stateDirectory: test.directory,
+          ledger: { read: () => [] },
+        } as unknown as CliState;
+        const result = await runContinuousParent({
+          ...test.request,
+          journal: racingJournal,
+          state,
+          supervisorExpectedRevision: run.revision,
+        });
+        expect(injected).toBe(true);
+        expect(result).toMatchObject({
+          state: "WAIT_REVIEW",
+          reason,
+          revision: run.revision + 1,
+          stopRequested: false,
+        });
+        expect(test.journal.get(parentRunId)).toMatchObject({
+          state: "WAIT_REVIEW",
+          reason,
+        });
+        expect(test.campaigns()).toBe(0);
+      } finally {
+        await test.close();
+      }
+    },
+  );
+
+  it("preserves an external review hold during pinned-input validation", async () => {
+    const test = await fixture();
+    try {
+      const run = test.journal.get(test.parentRunId)!;
+      const profile = {
+        ...test.request.profile,
+        continuousPolicyDigest: async () => {
+          test.journal.transition(test.parentRunId, run.revision, {
+            state: "WAIT_REVIEW",
+            reason: "inventory-unavailable",
+            nextCheckAt: null,
+          });
+          return run.policyDigest;
+        },
+      } as CliProfile;
+      const result = await runContinuousParent({
+        ...test.request,
+        profile,
+        supervisorExpectedRevision: run.revision,
+      });
+      expect(result).toMatchObject({
+        state: "WAIT_REVIEW",
+        reason: "inventory-unavailable",
+        revision: run.revision + 1,
+      });
+      expect(test.campaigns()).toBe(0);
+      expect(
+        observeContinuousRunOwner(test.ownerPath, test.parentRunId),
+      ).toMatchObject({ pidLiveness: "no-claim" });
+    } finally {
+      await test.close();
+    }
+  });
+
   it("reconciles a dead parent into a new worker without starting an unapproved Trial", async () => {
     const test = await fixture();
     try {

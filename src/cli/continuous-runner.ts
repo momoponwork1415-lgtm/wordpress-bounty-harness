@@ -58,6 +58,18 @@ export async function runContinuousParent(input: {
     return run;
   };
   const initial = current();
+  // The supervisor starts from an observed revision. Advance this fence only
+  // after a journal write made by this worker, so an external review hold is
+  // never mistaken for the result of our own asynchronous work.
+  let supervisorRevision = input.supervisorExpectedRevision;
+  const externalSupervisorChange = (): ContinuousRunRecord | null => {
+    const run = current();
+    return supervisorRevision !== undefined &&
+      run.revision !== supervisorRevision &&
+      !run.stopRequested
+      ? run
+      : null;
+  };
   const supervisorStillEligible = () => {
     const run = current();
     return (
@@ -135,7 +147,26 @@ export async function runContinuousParent(input: {
       readonly nextCheckAt: string | null;
       readonly lastLedgerSequence?: number;
     },
-  ) => journal.transition(parentRunId, run.revision, value);
+  ) => {
+    if (supervisorRevision !== undefined && run.revision !== supervisorRevision)
+      throw new ContinuousRunRevisionConflictError();
+    const next = journal.transition(parentRunId, run.revision, value);
+    if (supervisorRevision !== undefined) supervisorRevision = next.revision;
+    return next;
+  };
+  const journalMutation = (
+    expectedRevision: number,
+    mutate: () => ContinuousRunRecord,
+  ): ContinuousRunRecord => {
+    if (
+      supervisorRevision !== undefined &&
+      expectedRevision !== supervisorRevision
+    )
+      throw new ContinuousRunRevisionConflictError();
+    const next = mutate();
+    if (supervisorRevision !== undefined) supervisorRevision = next.revision;
+    return next;
+  };
   const stopIfRequested = async (): Promise<ContinuousRunRecord | null> => {
     const run = current();
     if (!run.stopRequested) return null;
@@ -150,9 +181,14 @@ export async function runContinuousParent(input: {
     });
   };
   const holdChangedInputs = async (): Promise<ContinuousRunRecord | null> => {
+    const externalBefore = externalSupervisorChange();
+    if (externalBefore !== null) return externalBefore;
     if (current().stopRequested && current().state !== "STOPPED")
       return stopIfRequested();
-    if (await pinnedInputsReady()) return null;
+    const inputsReady = await pinnedInputsReady();
+    const externalAfter = externalSupervisorChange();
+    if (externalAfter !== null) return externalAfter;
+    if (inputsReady) return null;
     const run = current();
     if (run.stopRequested && run.state !== "STOPPED")
       return (await stopIfRequested()) ?? run;
@@ -191,6 +227,8 @@ export async function runContinuousParent(input: {
         current().stopRequested
           ? await inspect(true)
           : firstDecision;
+      const externalAfterInspect = externalSupervisorChange();
+      if (externalAfterInspect !== null) return externalAfterInspect;
       const assessedWaitSafe =
         decision.action === "hold" &&
         decision.ownerReconciliationSafe &&
@@ -222,6 +260,8 @@ export async function runContinuousParent(input: {
           observedAt: state.clock().toISOString(),
         }),
       });
+      const externalAfterEvidence = externalSupervisorChange();
+      if (externalAfterEvidence !== null) return externalAfterEvidence;
       owner.markReconciled(handle, evidenceDigest);
       if (current().stopRequested && current().state !== "STOPPED")
         return (await stopIfRequested()) ?? current();
@@ -238,12 +278,17 @@ export async function runContinuousParent(input: {
     }
     const changed = await holdChangedInputs();
     if (changed !== null) return changed;
+    const externalAfterInputs = externalSupervisorChange();
+    if (externalAfterInputs !== null) return externalAfterInputs;
     if (current().stopRequested && current().state !== "STOPPED")
       return (await stopIfRequested()) ?? current();
     if (current().state === "RECOVERING" && !current().stopRequested) {
       // Recovery is explicit. Reconcile ledger, resource claims, and the owner
       // before clearing the hold; a spent Trial remains the same child.
       const decision = await inspect(false, true);
+      const externalAfterRecoveryInspect = externalSupervisorChange();
+      if (externalAfterRecoveryInspect !== null)
+        return externalAfterRecoveryInspect;
       if (decision.action === "hold") return current();
       transition(current(), {
         state: "RUNNING",
@@ -261,6 +306,9 @@ export async function runContinuousParent(input: {
       )
         return current();
       const decision = await inspect(true);
+      const externalAfterStoppedInspect = externalSupervisorChange();
+      if (externalAfterStoppedInspect !== null)
+        return externalAfterStoppedInspect;
       // Explicit resume clears the stop request for an assessed wait. The
       // normal loop immediately restores WAIT_QUOTA or WAIT_REVIEW, without
       // replacing or replaying the bound child.
@@ -272,12 +320,15 @@ export async function runContinuousParent(input: {
         return current();
       if (decision.action === "hold") owner.assertReady(handle);
       const run = current();
-      if (decision.expectedRevision === null) return run;
-      journal.resume(parentRunId, decision.expectedRevision, {
-        ...(run.children.at(-1)?.status === "reserved"
-          ? { reservedChildReconciled: true as const }
-          : {}),
-      });
+      const expectedRevision = decision.expectedRevision;
+      if (expectedRevision === null) return run;
+      journalMutation(expectedRevision, () =>
+        journal.resume(parentRunId, expectedRevision, {
+          ...(run.children.at(-1)?.status === "reserved"
+            ? { reservedChildReconciled: true as const }
+            : {}),
+        }),
+      );
     }
     if (current().state === "WAIT_REVIEW") {
       const run = current();
@@ -293,6 +344,9 @@ export async function runContinuousParent(input: {
       // existing child, claims, and ledger before reopening this operational
       // hold. An assessed review hold, including cyber-policy, stays held.
       const decision = await inspect(false, false, true);
+      const externalAfterReviewInspect = externalSupervisorChange();
+      if (externalAfterReviewInspect !== null)
+        return externalAfterReviewInspect;
       if (decision.action === "hold") return run;
       owner.assertReady(handle);
       transition(run, {
@@ -326,6 +380,8 @@ export async function runContinuousParent(input: {
       const changed = await holdChangedInputs();
       if (changed !== null) return changed;
       const decision = await inspect();
+      const externalAfterChildInspect = externalSupervisorChange();
+      if (externalAfterChildInspect !== null) return externalAfterChildInspect;
       if (decision.action === "hold") {
         const run = current();
         if (run.stopRequested) continue;
@@ -342,16 +398,20 @@ export async function runContinuousParent(input: {
         });
       }
       if (decision.action === "settle-child") {
-        journal.settleChild(
-          parentRunId,
-          decision.expectedRevision,
-          decision.ordinal,
-          decision.lastLedgerSequence,
+        journalMutation(decision.expectedRevision, () =>
+          journal.settleChild(
+            parentRunId,
+            decision.expectedRevision,
+            decision.ordinal,
+            decision.lastLedgerSequence,
+          ),
         );
         continue;
       }
       if (decision.action === "reserve-next-child") {
-        journal.reserveChild(parentRunId, decision.expectedRevision);
+        journalMutation(decision.expectedRevision, () =>
+          journal.reserveChild(parentRunId, decision.expectedRevision),
+        );
         continue;
       }
       const run = current();
@@ -370,10 +430,12 @@ export async function runContinuousParent(input: {
         if (prepared.status === "ready") {
           const latest = current();
           if (latest.stopRequested) continue;
-          journal.bindChild(parentRunId, latest.revision, child.ordinal, {
-            selectionBatchId: prepared.selectionBatchId,
-            snapshotDigests: prepared.snapshotDigests,
-          });
+          journalMutation(latest.revision, () =>
+            journal.bindChild(parentRunId, latest.revision, child.ordinal, {
+              selectionBatchId: prepared.selectionBatchId,
+              snapshotDigests: prepared.snapshotDigests,
+            }),
+          );
           continue;
         }
         if (
@@ -411,11 +473,14 @@ export async function runContinuousParent(input: {
               reason: "candidate-source-refresh-unavailable",
               nextCheckAt: null,
             });
-          journal.advanceUnboundChildInventory(
-            parentRunId,
-            current().revision,
-            child.ordinal,
-            fresh.inventoryDigest,
+          const expectedRevision = current().revision;
+          journalMutation(expectedRevision, () =>
+            journal.advanceUnboundChildInventory(
+              parentRunId,
+              expectedRevision,
+              child.ordinal,
+              fresh.inventoryDigest,
+            ),
           );
           continue;
         }
@@ -456,11 +521,14 @@ export async function runContinuousParent(input: {
             reason: "inventory-unavailable",
             nextCheckAt: null,
           });
-        journal.advanceUnboundChildInventory(
-          parentRunId,
-          current().revision,
-          child.ordinal,
-          inventory.inventoryDigest,
+        const expectedRevision = current().revision;
+        journalMutation(expectedRevision, () =>
+          journal.advanceUnboundChildInventory(
+            parentRunId,
+            expectedRevision,
+            child.ordinal,
+            inventory.inventoryDigest,
+          ),
         );
         continue;
       }
@@ -518,6 +586,11 @@ export async function runContinuousParent(input: {
       }
     }
   } catch (error) {
+    if (
+      error instanceof ContinuousRunRevisionConflictError &&
+      externalSupervisorChange() !== null
+    )
+      return current();
     if (error instanceof ContinuousInputPinMismatchError) {
       // WordPress checks the exact data it loaded before binding or starting
       // the child. A mismatch is an operational hold, not a spent Trial.
