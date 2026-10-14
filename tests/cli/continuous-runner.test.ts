@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runContinuousParent } from "../../src/cli/continuous-runner.js";
 import { runContinuousControl } from "../../src/cli/continuous-control.js";
+import { ContinuousInputPinMismatchError } from "../../src/cli/continuous-input-pin.js";
 import { settleIdleContinuousStop } from "../../src/cli/continuous-stop.js";
 import type { CampaignSummary } from "../../src/cli/pipeline.js";
 import type { CliProfile, CliState } from "../../src/cli/index.js";
@@ -48,6 +49,7 @@ async function setup(
     readonly expiredFirstInventory?: boolean;
     readonly changeConfigAfterPrepare?: boolean;
     readonly holdFirstCampaign?: boolean;
+    readonly pinMismatchAtCampaign?: "config" | "policy";
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "wbh-continuous-runner-"));
@@ -231,8 +233,14 @@ async function setup(
         readonly campaignId: string;
         readonly selectionBatchId?: string;
         readonly snapshotDigests?: readonly string[];
+        readonly expectedConfigDigest?: string;
+        readonly expectedPolicyDigest?: string;
       },
     ): Promise<CampaignSummary> => {
+      if (options.pinMismatchAtCampaign !== undefined)
+        throw new ContinuousInputPinMismatchError(
+          options.pinMismatchAtCampaign,
+        );
       campaignCalls.push(input.campaignId);
       const child = journal
         .get(parentRunId)
@@ -242,7 +250,9 @@ async function setup(
         child.binding === null ||
         child.binding.selectionBatchId !== input.selectionBatchId ||
         child.binding.snapshotDigests.join(",") !==
-          input.snapshotDigests?.join(",")
+          input.snapshotDigests?.join(",") ||
+        input.expectedConfigDigest !== configDigest ||
+        input.expectedPolicyDigest !== policyDigest
       )
         throw new Error("Runner did not dispatch the reserved batch");
       if (options.holdFirstCampaign && campaignCalls.length === 1)
@@ -377,6 +387,23 @@ async function setup(
 }
 
 describe("continuous parent runner", () => {
+  it("holds when the child loaded inputs differ from the parent pin", async () => {
+    const fixture = await setup({ pinMismatchAtCampaign: "policy" });
+    try {
+      const held = await fixture.run();
+      expect(held).toMatchObject({
+        state: "WAIT_REVIEW",
+        reason: "config-or-policy-changed",
+        children: [{ status: "reserved" }],
+      });
+      expect(fixture.read({ type: "discovery-run-started" })).toHaveLength(0);
+    } finally {
+      fixture.claims.close();
+      fixture.owner.close();
+      fixture.journal.close();
+    }
+  });
+
   it("keeps a typed pre-Lab freshness hold on the same bound child", async () => {
     const fixture = await setup({ holdFirstCampaign: true });
     try {

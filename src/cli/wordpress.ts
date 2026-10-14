@@ -117,6 +117,7 @@ import type {
   CliState,
   LabUpSummary,
 } from "./index.js";
+import { ContinuousInputPinMismatchError } from "./continuous-input-pin.js";
 import {
   provisionFindingLab,
   reverifyOnSelectedVersion,
@@ -334,10 +335,11 @@ export interface WordPressCampaignBoundaries {
 async function loadConfig(configPath: string): Promise<{
   readonly config: WordPressCampaignConfig;
   readonly policy: WordPressSelectionPolicy;
+  readonly configDigest: string;
+  readonly policyDigest: string;
 }> {
-  const config = wordpressCampaignConfigSchema.parse(
-    JSON.parse(await readFile(configPath, "utf8")) as unknown,
-  );
+  const rawConfig = JSON.parse(await readFile(configPath, "utf8")) as unknown;
+  const config = wordpressCampaignConfigSchema.parse(rawConfig);
   if (config.resources.memoryBudgetMiB < DISCOVERY_RUN_MEMORY_MIB)
     throw new Error(
       `The memory budget is below one discovery run (${DISCOVERY_RUN_MEMORY_MIB} MiB)`,
@@ -350,7 +352,12 @@ async function loadConfig(configPath: string): Promise<{
             await readFile(config.selectionPolicyPath, "utf8"),
           ) as unknown,
         );
-  return { config, policy };
+  return {
+    config,
+    policy,
+    configDigest: canonicalDigest(rawConfig),
+    policyDigest: canonicalDigest(policy),
+  };
 }
 
 async function loadSelectInput(configPath: string): Promise<{
@@ -1168,7 +1175,22 @@ async function runWordPressCampaign(
   ) => CampaignHistory,
 ): ReturnType<CliProfile["runCampaign"]> {
   options.repeatTrialGate.ensureReady(state.stateDirectory);
-  const { config, policy } = await loadConfig(input.configPath);
+  const { config, policy, configDigest, policyDigest } = await loadConfig(
+    input.configPath,
+  );
+  // The runner's earlier file check is not an admission pin: either file may
+  // change before this profile reads it. These checks precede every side
+  // effect of a newly dispatched child campaign.
+  if (
+    input.expectedConfigDigest !== undefined &&
+    configDigest !== input.expectedConfigDigest
+  )
+    throw new ContinuousInputPinMismatchError("config");
+  if (
+    input.expectedPolicyDigest !== undefined &&
+    policyDigest !== input.expectedPolicyDigest
+  )
+    throw new ContinuousInputPinMismatchError("policy");
   if (
     "wordpressVersion" in policy &&
     policy.wordpressVersion !== config.wordpressVersion
