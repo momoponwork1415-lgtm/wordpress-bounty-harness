@@ -198,7 +198,7 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 
 ### 対象の自動選定
 
-`select` は [選定方針 JSON](../src/profiles/wordpress/policy/selection.json) を直接読み、WordPress.org の人気順・タグ順を列挙する。install下限もこの JSON が正本。台帳の探索開始（`runKind: explore` の `discovery-run-started`）と Finding を照合し、適格な次点候補で補充して3〜5対象を返す。選定されただけで Trial が始まらなかった対象（Lab や Snapshot の失敗）と、source を 1 件も読まず子を起動せず broker 転送 1 以下で終わった run しか持たない対象は除外しない。版またはprompt版が変わったときの再訪は `revisitPolicy` で決める。未公開 Finding を持つ対象は、提出済みでも公開を確認できないため除外する。
+`select` は [選定方針 JSON](../src/profiles/wordpress/policy/selection.json) を直接読み、WordPress.org の人気順・タグ順を列挙する。install下限もこの JSON が正本。台帳の探索開始（`runKind: explore` の `discovery-run-started`）と Finding を照合し、適格な次点候補で補充して3〜5対象を返す。選定だけで Trial が始まらなかった対象（Lab や Snapshot の失敗）は除外しない。開始済み run の source 読取・子起動・broker 転送の観測値は下界値なので、ゼロでも非 Trial と証明できず保留する。自動候補源の `revisitPolicy` は `never` に固定し、版または prompt 版が変わっても開始済み slug を戻さない。未公開 Finding を持つ対象は、提出済みでも公開を確認できないため除外する。
 
 旧世代の既往は host 設定の `legacyHistory: {"file": "/abs/legacy-slugs.json"}` で渡す。`select` のたびに読み、`started` を `legacy-started`、`ambiguous` を `legacy-ambiguous` として除外する。`reconsider` は旧記録照合で初回と確認した `ambiguous` の slug だけに使え、`started` や現行台帳の開始済み run は解除できない。file が無ければ `select` は `legacy history unavailable` と表示し、候補源による `campaign run` と `continuous run` は起動しない。選定レポートの旧履歴 digest と実行時の digest が違えば止まる。`select --minimum <n>`（既定 3、runner は 1）未満しか固定できないときは、台帳に `target-selected` を書かず、各対象に `below-minimum` を付けて空の選定を返す。
 
