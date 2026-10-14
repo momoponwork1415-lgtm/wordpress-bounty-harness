@@ -45,6 +45,7 @@ async function setup(
     readonly failAfterStop?: boolean;
     readonly expiredFirstInventory?: boolean;
     readonly changeConfigAfterPrepare?: boolean;
+    readonly holdFirstCampaign?: boolean;
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "wbh-continuous-runner-"));
@@ -242,6 +243,20 @@ async function setup(
           input.snapshotDigests?.join(",")
       )
         throw new Error("Runner did not dispatch the reserved batch");
+      if (options.holdFirstCampaign && campaignCalls.length === 1)
+        return {
+          campaignId: input.campaignId,
+          skipped: [],
+          targets: [],
+          held: [
+            {
+              targetId: "wporg:plugin-1",
+              version: "1.0.0",
+              snapshotDigest: input.snapshotDigests[0]!,
+              reason: "target-version-changed",
+            },
+          ],
+        };
       const targets: CampaignSummary["targets"][number][] = [];
       for (const snapshotDigest of input.snapshotDigests ?? []) {
         const candidate = candidates.find(
@@ -356,6 +371,32 @@ async function setup(
 }
 
 describe("continuous parent runner", () => {
+  it("keeps a typed pre-Lab freshness hold on the same bound child", async () => {
+    const fixture = await setup({ holdFirstCampaign: true });
+    try {
+      const held = await fixture.run();
+      expect(held).toMatchObject({
+        state: "WAIT_REVIEW",
+        reason: "target-version-changed",
+        children: [
+          { status: "reserved", binding: { selectionBatchId: "selection-0" } },
+        ],
+      });
+      expect(
+        fixture.read({
+          campaignId: held.children[0]!.campaignId,
+          type: "discovery-run-started",
+        }),
+      ).toHaveLength(0);
+      expect((await fixture.run()).revision).toBe(held.revision);
+      expect(fixture.campaignCalls).toHaveLength(1);
+    } finally {
+      fixture.journal.close();
+      fixture.owner.close();
+      fixture.claims.close();
+    }
+  });
+
   it("preserves a campaign error that races an operator stop", async () => {
     const fixture = await setup({ failAfterStop: true });
     try {

@@ -65,6 +65,11 @@ export type WordPressSelectionWithBatchInspection = Selection<
     sourcePool: WordPressOrgCandidateSourcePool,
     slugs: readonly string[],
   ) => Promise<readonly WordPressSelectionInspection[]>;
+  /** Re-observe one slug and Programme at admission without replaying a listing pool. */
+  readonly inspectCurrent?: (
+    policy: WordPressSelectionPolicy,
+    slug: string,
+  ) => Promise<WordPressSelectionInspection>;
 };
 
 /** WordPress.org dates look like `2026-09-01 12:00am GMT`; ISO strings also parse. */
@@ -149,6 +154,7 @@ export function createWordPressSelection(
     cursor?: WordPressOrgCandidateCursor,
     sourcePool?: WordPressOrgCandidateSourcePool,
     nominatedCandidates?: readonly WordPressOrgCandidate[],
+    nominatedSlugs?: readonly string[],
   ): Promise<WordPressSelectionBatchInspection> {
     const policy = wordPressSelectionPolicySchema.parse(policyInput);
     const nowDate = clock();
@@ -158,7 +164,9 @@ export function createWordPressSelection(
     const pinnedVersions =
       "pinnedVersions" in policy ? policy.pinnedVersions : undefined;
     const enumeration =
-      "candidateSource" in policy && nominatedCandidates === undefined
+      "candidateSource" in policy &&
+      nominatedCandidates === undefined &&
+      nominatedSlugs === undefined
         ? await (
             options.enumerateCandidates ?? enumerateWordPressOrgCandidates
           )({
@@ -170,11 +178,14 @@ export function createWordPressSelection(
           })
         : undefined;
     const candidateSlugs =
-      nominatedCandidates !== undefined
-        ? nominatedCandidates.map((candidate) => candidate.slug)
-        : "candidateSlugs" in policy
-          ? policy.candidateSlugs
-          : (enumeration?.candidates.map((candidate) => candidate.slug) ?? []);
+      nominatedSlugs !== undefined
+        ? nominatedSlugs
+        : nominatedCandidates !== undefined
+          ? nominatedCandidates.map((candidate) => candidate.slug)
+          : "candidateSlugs" in policy
+            ? policy.candidateSlugs
+            : (enumeration?.candidates.map((candidate) => candidate.slug) ??
+              []);
     const candidateProvenance = new Map(
       (nominatedCandidates ?? enumeration?.candidates ?? []).map(
         (candidate) => [candidate.slug, candidate],
@@ -336,7 +347,7 @@ export function createWordPressSelection(
     return {
       inspections: results,
       sourceStatus:
-        nominatedCandidates === undefined
+        nominatedCandidates === undefined && nominatedSlugs === undefined
           ? (enumeration?.status ?? "manual")
           : "available",
       sourceListings: enumeration?.listings ?? [],
@@ -353,6 +364,26 @@ export function createWordPressSelection(
 
   return {
     inspectBatch,
+    async inspectCurrent(policyInput, slug) {
+      const policy = wordPressSelectionPolicySchema.parse(policyInput);
+      if (!("candidateSource" in policy))
+        throw new Error("Current-slug inspection requires automatic policy");
+      if (!/^[a-z0-9][a-z0-9-]*$/u.test(slug))
+        throw new Error("Invalid current-slug inspection target");
+      const result = await inspectBatch(
+        policy,
+        undefined,
+        undefined,
+        undefined,
+        [slug],
+      );
+      if (
+        result.inspections.length !== 1 ||
+        result.inspections[0]?.slug !== slug
+      )
+        throw new Error("Current-slug inspection returned another target");
+      return result.inspections[0];
+    },
     async inspectNominated(policyInput, sourcePool, slugs) {
       const policy = wordPressSelectionPolicySchema.parse(policyInput);
       if (!("candidateSource" in policy))

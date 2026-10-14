@@ -122,6 +122,13 @@ export function shouldAutomaticallyRetryVerification(input: {
 
 export type CampaignSummary = {
   readonly campaignId: string;
+  /** Admission stopped before Lab and before an independent Trial was spent. */
+  readonly held?: readonly {
+    readonly targetId: string;
+    readonly version: string;
+    readonly snapshotDigest: string;
+    readonly reason: TargetAdmissionHoldReason;
+  }[];
   /** Targets left behind by an error; the next target still runs. */
   readonly skipped: readonly {
     readonly targetId: string;
@@ -143,6 +150,21 @@ export type CampaignSummary = {
       readonly status: VerificationResultV1["status"];
     }[];
   }[];
+};
+
+export type TargetAdmissionHoldReason =
+  | "target-version-changed"
+  | "target-eligibility-changed"
+  | "target-observation-unavailable";
+
+type TargetLabPermit = {
+  readonly finish: (
+    state: "clean" | "recovery-needed",
+  ) => "clean" | "recovery-needed" | Promise<"clean" | "recovery-needed">;
+};
+
+type TargetAdmissionHold = {
+  readonly hold: TargetAdmissionHoldReason;
 };
 
 /** Wiring only: each step is a module's public interface; rules stay in the modules. */
@@ -175,16 +197,9 @@ export async function runCampaignPipeline<
     readonly signal: AbortSignal;
   }) =>
     | void
-    | {
-        readonly finish: (
-          state: "clean" | "recovery-needed",
-        ) => "clean" | "recovery-needed" | Promise<"clean" | "recovery-needed">;
-      }
-    | Promise<void | {
-        readonly finish: (
-          state: "clean" | "recovery-needed",
-        ) => "clean" | "recovery-needed" | Promise<"clean" | "recovery-needed">;
-      }>;
+    | TargetLabPermit
+    | TargetAdmissionHold
+    | Promise<void | TargetLabPermit | TargetAdmissionHold>;
   /** Targets in flight at once; discovery run concurrency remains per target. */
   readonly maxConcurrentTargets?: number;
   /** An explicit operator retry after repairing the Verifier protocol. */
@@ -212,6 +227,7 @@ export async function runCampaignPipeline<
   type TargetResult = {
     target?: TargetSummary;
     skipped?: SkippedSummary;
+    held?: NonNullable<CampaignSummary["held"]>[number];
   };
   let stopped: CampaignSummary["stopped"];
   const stopController = new AbortController();
@@ -302,14 +318,7 @@ export async function runCampaignPipeline<
     // Before a snapshot exists, the selection record stands in for its digest.
     let snapshotDigest = canonicalDigest(target);
     let handle: Handle | undefined;
-    let permit:
-      | {
-          readonly finish: (
-            state: "clean" | "recovery-needed",
-          ) =>
-            "clean" | "recovery-needed" | Promise<"clean" | "recovery-needed">;
-        }
-      | undefined;
+    let permit: TargetLabPermit | undefined;
     let labAttempted = false;
     let labProvisionSettled = false;
     let result: TargetResult = {};
@@ -339,12 +348,21 @@ export async function runCampaignPipeline<
       snapshotDigest = snapshot.digest;
       stage = "discovery";
       stopController.signal.throwIfAborted();
-      permit =
-        (await options.beforeLab?.({
-          target,
-          snapshot,
-          signal: stopController.signal,
-        })) ?? undefined;
+      const admission = await options.beforeLab?.({
+        target,
+        snapshot,
+        signal: stopController.signal,
+      });
+      if (admission !== undefined && "hold" in admission) {
+        result.held = {
+          targetId: target.targetId,
+          version: target.version,
+          snapshotDigest: snapshot.digest,
+          reason: admission.hold,
+        };
+        return;
+      }
+      permit = admission ?? undefined;
       if (stopController.signal.aborted) return;
       if (isSnapshotCompleteNow(snapshot.digest)) return;
       const base = {
@@ -746,10 +764,14 @@ export async function runCampaignPipeline<
     const skipped = results.flatMap((result) =>
       result?.skipped === undefined ? [] : [result.skipped],
     );
+    const held = results.flatMap((result) =>
+      result?.held === undefined ? [] : [result.held],
+    );
     return {
       campaignId,
       targets,
       skipped,
+      ...(held.length === 0 ? {} : { held }),
       ...(stopped === undefined ? {} : { stopped }),
     };
   } finally {
