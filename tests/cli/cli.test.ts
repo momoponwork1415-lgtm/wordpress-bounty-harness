@@ -44,6 +44,10 @@ const uuid = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
 const now = "2026-10-08T00:00:00.000Z";
 const syntheticTrialGate: RepeatTrialGate = {
   ensureReady: () => {},
+  inspectInitialSlug: () => ({
+    status: "coverage-incomplete",
+    reason: "legacy-history-unverified",
+  }),
   assertMayStart: () => {},
   reserve: () => {},
   bootstrap: () => ({ importedTrials: 0 }),
