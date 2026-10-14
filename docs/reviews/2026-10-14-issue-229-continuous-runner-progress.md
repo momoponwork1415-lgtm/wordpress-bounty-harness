@@ -12,10 +12,12 @@ AI セッションの逐次判断なしで、未探索候補の複数 batch を�
 - 再開時は台帳、claim、owner、検証完了、review export を照合する。過去の settled child の証拠もプロセス再開時に監査する。status は各 child の Trial・Finding・検証・export 到達数を読む。WordPress Finding は Private Evidence の厳格 schema と ID / run / Snapshot を再検査し、export の代替文字列を成功と数えない。
 - `provider-cyber-policy` は quota と区別し `WAIT_REVIEW` に送る。候補取得失敗も枯渇に数えない。config 等の一時的な運用 hold からの明示再開では child 判定を再実行し、判定自体が review を要する場合は解除しない。
 - 自動在庫から固定した対象は、資源 claim の取得後、Lab / Trial の前に WordPress.org の安定版と Programme 適格性を再観測する。版・対象範囲が変化または確認不能なら claim を解放して `WAIT_REVIEW` に置き、固定済み child binding と Snapshot は維持する。手動 pin はこの鮮度条件の対象外。
+- 親が確認した config / policy digest を child campaign に渡し、WordPress profile が実際に読み込んだ値と Lab / Trial 前に照合する。途中変更は `WAIT_REVIEW(config-or-policy-changed)` に止め、未開始 Trial を消費しない。
+- owner プロセスが落ちた後は、root / child の全開始に対応する終了記録があり、Finding の検証と review export が揃い、資源 claim が残っていない typed quota / cyber policy hold だけを復旧する。未終了 Trial、欠損証拠、曖昧な失敗は `RECOVERING` に残す。
 
 ## 実測と限界
 
-- 型検査、書式、`pnpm check`（783 tests 成功、1 test skip）、`pnpm build`、`git diff --check` はローカル作業ツリーで通過した。
+- 型検査、書式、`pnpm check`（802 tests 成功、1 test skip）、`pnpm build`、`git diff --check` はローカル作業ツリーで通過した（統合 commit `05775ee` 時点）。
 - 実 provider を使う Step 1 の 3 Trial 測定は未実施。候補数、completed、Finding、Lead、wall 中央値、usage、失敗理由について本番値はまだない。したがってこの差分は探索 PR の merge 条件を満たさない。
 - quota の時刻到来だけでは回復を証明できない。現在は `WAIT_QUOTA` の後、読み取り専用 readiness がなければ `WAIT_REVIEW(quota-readiness-unverified)` に止める。別 provider への継続、回復後の無人再開、総 token 利用枠の硬い停止は未実装。
 - 硬い総 token 枠は、現行の事後 usage と broker の byte / request 上限からは保証できない。[実装可能性と必要契約](2026-10-14-issue-229-hard-usage-cap-feasibility.md)を決定待ちとして分離した。
@@ -23,6 +25,7 @@ AI セッションの逐次判断なしで、未探索候補の複数 batch を�
 - Codex app-server の `account/rateLimits/read` を読み取り専用で実測した。`ordinaryUsageAllowed` は account 全体の通常利用可否で、要求 model / effort の開始可否や Opus の枠を証明しない。実運転への接続には broker が使う credential と account ID の一致、SPEC の broker 経由外向き通信境界との整合が必要。reset 時刻や残率から回復を推定しない。
 - プール期限後に選定 event の一部または全部が残った未 binding child は `WAIT_REVIEW(expired-pool-with-selection-prefix)` とする。旧候補を無言で新プールへ差し替えないためで、無人復旧手順は未実装。
 - resource claim 待ちの後の最新版と Programme 適格性は再観測する。固定済み child の古い Snapshot を自動で新しい版へ差し替える経路はないため、変化時は人間の確認を要する。
+- crash 復旧は型付き quota / cyber policy の待機に限る。任意の `WAIT_REVIEW` 理由を無条件で解除する自動復旧はしない。
 
 ## 運転判定
 
