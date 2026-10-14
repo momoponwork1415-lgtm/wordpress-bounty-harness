@@ -1,5 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, existsSync, mkdirSync, realpathSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { z } from "zod";
@@ -97,7 +104,9 @@ export type InitialSlugEligibility =
   | {
       readonly status: "coverage-incomplete";
       readonly reason:
-        "state-inventory-uninitialized" | "legacy-history-unverified";
+        | "state-inventory-uninitialized"
+        | "legacy-history-unverified"
+        | "coverage-invalidated";
     }
   | { readonly status: "eligible"; readonly coverageDigest: string };
 
@@ -130,6 +139,21 @@ type PriorTrial = {
   readonly campaignId: string;
   readonly trialOrdinal: number;
 };
+
+type CoverageAnomalyCode =
+  | "unregistered-starts"
+  | "unreadable-or-malformed-ledger"
+  | "missing-ledger"
+  | "precut-ledger";
+
+class CoverageSourceUncertain extends Error {
+  constructor(
+    readonly code: CoverageAnomalyCode,
+    readonly starts: readonly PriorTrial[] = [],
+  ) {
+    super(`Unregistered state requires a new legacy coverage audit (${code})`);
+  }
+}
 
 const historicalRow = z.object({ event_json: z.string() });
 const registeredStart = z.object({
@@ -212,6 +236,16 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
         slug TEXT PRIMARY KEY,
         evidence_digest TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS trial_gate_coverage_anomalies (
+        state_directory TEXT PRIMARY KEY,
+        reason TEXT NOT NULL,
+        evidence_digest TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS trial_gate_unexpected_starts (
+        slug TEXT PRIMARY KEY,
+        minimum_started_trials INTEGER NOT NULL,
+        evidence_digest TEXT NOT NULL
+      );
     `);
   }
 
@@ -275,11 +309,30 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
         : z
             .object({ minimum_started_trials: z.number().int().positive() })
             .parse(legacy).minimum_started_trials;
-    if (startedTrials > 0 || legacyCount > 0)
+    const unexpected = this.#db
+      .prepare(
+        "SELECT minimum_started_trials FROM trial_gate_unexpected_starts WHERE slug = ?",
+      )
+      .get(candidate);
+    const unexpectedCount =
+      unexpected === undefined
+        ? 0
+        : z
+            .object({ minimum_started_trials: z.number().int().positive() })
+            .parse(unexpected).minimum_started_trials;
+    if (startedTrials > 0 || legacyCount > 0 || unexpectedCount > 0)
       return {
         status: "prior-start",
-        startedTrials: Math.max(startedTrials, legacyCount),
+        startedTrials: Math.max(startedTrials, legacyCount, unexpectedCount),
       };
+    if (
+      this.#db
+        .prepare(
+          "SELECT 1 FROM trial_gate_meta WHERE key = 'coverage-invalidated'",
+        )
+        .get() !== undefined
+    )
+      return { status: "coverage-incomplete", reason: "coverage-invalidated" };
     const coverage = this.#db
       .prepare("SELECT value FROM trial_gate_meta WHERE key = 'coverage'")
       .get();
@@ -389,6 +442,11 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
           "INSERT INTO trial_gate_meta (key, value) VALUES ('coverage-audit', ?)",
         )
         .run(manifest.auditDigest);
+      this.#db
+        .prepare(
+          "INSERT INTO trial_gate_meta (key, value) VALUES ('coverage-cutoff', ?)",
+        )
+        .run(manifest.cutoffAt);
       this.#db.exec("COMMIT");
       return coverageDigest;
     } catch (error) {
@@ -466,16 +524,50 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
       .prepare("SELECT 1 FROM trial_gate_states WHERE state_directory = ?")
       .get(directory);
     if (registered !== undefined) return 0;
-    const starts = this.#readHistoricalState(directory);
-    if (
-      starts.length > 0 &&
+    const covered =
       this.#db
         .prepare("SELECT 1 FROM trial_gate_meta WHERE key = 'coverage'")
-        .get() !== undefined
-    )
-      throw new Error(
-        "A previously unregistered state has Trial starts; coverage must be reviewed again",
-      );
+        .get() !== undefined;
+    let precutLedger = false;
+    if (covered) {
+      const cutoff = z
+        .object({ value: z.string() })
+        .parse(
+          this.#db
+            .prepare(
+              "SELECT value FROM trial_gate_meta WHERE key = 'coverage-cutoff'",
+            )
+            .get(),
+        ).value;
+      const ledgerPath = join(directory, "ledger.sqlite");
+      try {
+        if (!existsSync(ledgerPath)) {
+          // A fresh, unused directory is normal. A populated directory with
+          // no ledger could be an unexamined legacy state.
+          if (
+            statSync(directory).birthtimeMs <= Date.parse(cutoff) ||
+            readdirSync(directory).length > 0
+          )
+            throw new CoverageSourceUncertain("missing-ledger");
+        } else
+          precutLedger = statSync(ledgerPath).birthtimeMs <= Date.parse(cutoff);
+      } catch (error) {
+        if (error instanceof CoverageSourceUncertain) throw error;
+        throw new CoverageSourceUncertain("unreadable-or-malformed-ledger");
+      }
+    }
+    let starts: readonly PriorTrial[];
+    try {
+      starts = this.#readHistoricalState(directory);
+    } catch (error) {
+      if (covered)
+        throw new CoverageSourceUncertain("unreadable-or-malformed-ledger");
+      throw error;
+    }
+    if (precutLedger)
+      throw new CoverageSourceUncertain("precut-ledger", starts);
+    if (covered && starts.length > 0)
+      throw new CoverageSourceUncertain("unregistered-starts", starts);
     for (const start of starts) {
       const key = canonicalDigest({
         stateDirectory: directory,
@@ -501,6 +593,36 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
       .prepare("INSERT INTO trial_gate_states (state_directory) VALUES (?)")
       .run(directory);
     return starts.length;
+  }
+
+  #recordCoverageInvalidation(
+    directory: string,
+    failure: CoverageSourceUncertain,
+  ): void {
+    const evidenceDigest = canonicalDigest({
+      stateDirectory: directory,
+      reason: failure.code,
+      starts: failure.starts,
+    });
+    this.#db
+      .prepare(
+        "INSERT OR IGNORE INTO trial_gate_coverage_anomalies (state_directory, reason, evidence_digest) VALUES (?, ?, ?)",
+      )
+      .run(directory, failure.code, evidenceDigest);
+    this.#db
+      .prepare(
+        "INSERT OR IGNORE INTO trial_gate_meta (key, value) VALUES ('coverage-invalidated', ?)",
+      )
+      .run(evidenceDigest);
+    const counts = new Map<string, number>();
+    for (const start of failure.starts)
+      counts.set(start.slug, (counts.get(start.slug) ?? 0) + 1);
+    for (const [candidate, count] of counts)
+      this.#db
+        .prepare(
+          "INSERT INTO trial_gate_unexpected_starts (slug, minimum_started_trials, evidence_digest) VALUES (?, ?, ?) ON CONFLICT(slug) DO UPDATE SET minimum_started_trials = MAX(minimum_started_trials, excluded.minimum_started_trials)",
+        )
+        .run(candidate, count, evidenceDigest);
   }
 
   bootstrap(value: unknown): { readonly importedTrials: number } {
@@ -537,13 +659,21 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
       );
     const directory = stateDirectory(path);
     this.#db.exec("BEGIN IMMEDIATE");
+    let coverageFailure: CoverageSourceUncertain | undefined;
     try {
-      this.#importState(directory);
+      try {
+        this.#importState(directory);
+      } catch (error) {
+        if (!(error instanceof CoverageSourceUncertain)) throw error;
+        this.#recordCoverageInvalidation(directory, error);
+        coverageFailure = error;
+      }
       this.#db.exec("COMMIT");
     } catch (error) {
       this.#db.exec("ROLLBACK");
       throw error;
     }
+    if (coverageFailure !== undefined) throw coverageFailure;
   }
 
   #validateStart(value: RepeatTrialStart): RepeatTrialStart {
@@ -564,6 +694,9 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
         .get(candidate) !== undefined ||
       this.#db
         .prepare("SELECT 1 FROM trial_gate_legacy_starts WHERE slug = ?")
+        .get(candidate) !== undefined ||
+      this.#db
+        .prepare("SELECT 1 FROM trial_gate_unexpected_starts WHERE slug = ?")
         .get(candidate) !== undefined
     );
   }

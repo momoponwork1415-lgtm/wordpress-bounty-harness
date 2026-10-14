@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -448,7 +448,104 @@ it("rejects partial, conflicting, or stale coverage without releasing initial Tr
     stateDirectory: stateB,
     slug: "omitted-plugin",
   });
-  expect(() => gate.ensureReady(stateB)).toThrow(
-    "coverage must be reviewed again",
+  expect(() => gate.ensureReady(stateB)).toThrow("new legacy coverage audit");
+  expect(gate.inspectInitialSlug("omitted-plugin")).toEqual({
+    status: "prior-start",
+    startedTrials: 1,
+  });
+  expect(() =>
+    gate.reserve({
+      ...start,
+      slug: "omitted-plugin",
+      campaignId: "new-campaign",
+    }),
+  ).toThrow("human approval");
+  expect(gate.inspectInitialSlug("unrelated-fresh-plugin")).toEqual({
+    status: "coverage-incomplete",
+    reason: "coverage-invalidated",
+  });
+  expect(() =>
+    gate.reserve({ ...start, slug: "unrelated-fresh-plugin" }),
+  ).toThrow("historical coverage");
+});
+
+it("keeps a legitimately new empty state usable after coverage", async () => {
+  const { gate, stateA, stateB, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  const coverageDigest = gate.importCoverage(
+    completeCoverage(inventory, stateA),
   );
+  expect(() => gate.ensureReady(stateB)).not.toThrow();
+  expect(gate.inspectInitialSlug("new-plugin")).toEqual({
+    status: "eligible",
+    coverageDigest,
+  });
+});
+
+it("durably invalidates coverage for an unregistered missing ledger", async () => {
+  const { gate, gatePath, stateA, stateB, start, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  gate.importCoverage(completeCoverage(inventory, stateA));
+  await writeFile(join(stateB, "stale-marker"), "metadata-only");
+  expect(() => gate.ensureReady(stateB)).toThrow("missing-ledger");
+  const secondProcess = new SqliteRepeatTrialGate(gatePath);
+  expect(secondProcess.inspectInitialSlug("new-plugin")).toEqual({
+    status: "coverage-incomplete",
+    reason: "coverage-invalidated",
+  });
+  expect(() => secondProcess.reserve({ ...start, slug: "new-plugin" })).toThrow(
+    "historical coverage",
+  );
+});
+
+it("invalidates coverage when an unregistered ledger cannot be parsed", async () => {
+  const { gate, gatePath, stateA, stateB, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  gate.importCoverage(completeCoverage(inventory, stateA));
+  await writeFile(join(stateB, "ledger.sqlite"), "not a sqlite database");
+  expect(() => gate.ensureReady(stateB)).toThrow(
+    "unreadable-or-malformed-ledger",
+  );
+  expect(
+    new SqliteRepeatTrialGate(gatePath).inspectInitialSlug("new-plugin"),
+  ).toEqual({
+    status: "coverage-incomplete",
+    reason: "coverage-invalidated",
+  });
+});
+
+it("invalidates coverage when a started Trial has no uniquely mapped slug", async () => {
+  const { gate, stateA, stateB, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  gate.importCoverage(completeCoverage(inventory, stateA));
+  const ledger = new Ledger({
+    databasePath: join(stateB, "ledger.sqlite"),
+    artifactStore: new PrivateArtifactStore({
+      rootDirectory: join(stateB, "private-evidence"),
+      maxEntries: 8,
+      maxBytes: 1024 * 1024,
+    }),
+  });
+  await ledger.append({
+    schemaVersion: 1,
+    campaignId: "unmapped-campaign",
+    snapshotDigest: hash("a"),
+    occurredAt,
+    type: "discovery-run-started",
+    identity: "unmapped-start",
+    runId: "run-unmapped",
+    labId: "lab-one",
+    history: { mode: "none" },
+    configuration: {
+      promptVariant: "wp2shell-bounty-v3",
+      assignmentUnit: "plugin",
+    },
+  });
+  expect(() => gate.ensureReady(stateB)).toThrow(
+    "unreadable-or-malformed-ledger",
+  );
+  expect(gate.inspectInitialSlug("new-plugin")).toEqual({
+    status: "coverage-incomplete",
+    reason: "coverage-invalidated",
+  });
 });
