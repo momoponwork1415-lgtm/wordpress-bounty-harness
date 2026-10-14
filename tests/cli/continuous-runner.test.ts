@@ -64,6 +64,7 @@ async function setup(
   );
   const owner = new SqliteContinuousRunOwner(join(directory, "owner.sqlite"), {
     clock: now,
+    pidLiveness: (pid) => (pid === 2147483647 ? "dead" : "alive"),
   });
   const claims = new SqliteHostResourceClaims(
     join(directory, "claims.sqlite"),
@@ -379,11 +380,80 @@ async function setup(
     owner,
     claims,
     ledger,
+    append,
     read,
     run,
     preparedOrdinals,
     campaignCalls,
   };
+}
+
+function seedDrainedAssessedHold(
+  fixture: Awaited<ReturnType<typeof setup>>,
+  outcome: "quota" | "cyber-policy",
+): string {
+  const created = fixture.journal.get(parentRunId)!;
+  const reserved = fixture.journal.reserveChild(parentRunId, created.revision);
+  const child = fixture.journal.bindChild(parentRunId, reserved.revision, 0, {
+    selectionBatchId: "selection-0",
+    snapshotDigests: candidates.slice(0, 3).map((item) => item.snapshotDigest),
+  }).children[0]!;
+  const eventBase = (snapshotDigest: string) => ({
+    schemaVersion: 1 as const,
+    campaignId: child.campaignId,
+    snapshotDigest,
+    occurredAt: now().toISOString(),
+    artifacts: [],
+  });
+  fixture.append({
+    ...eventBase(candidates[0]!.snapshotDigest),
+    identity: "batch-before-crash",
+    type: "selection-batch-bound",
+    selectionBatchId: "selection-0",
+    policyDigest,
+    selectionIds: candidates.slice(0, 3).map((item) => item.selectionId),
+  });
+  for (const candidate of candidates.slice(0, 3)) {
+    fixture.append({
+      ...eventBase(candidate.snapshotDigest),
+      identity: `selected-before-crash-${candidate.slug}`,
+      type: "target-selected",
+      selectionId: candidate.selectionId,
+    });
+    fixture.append({
+      ...eventBase(candidate.snapshotDigest),
+      identity: `frozen-before-crash-${candidate.slug}`,
+      type: "snapshot-frozen",
+      sourceDigest,
+    });
+  }
+  fixture.append({
+    ...eventBase(candidates[0]!.snapshotDigest),
+    identity: "started-before-crash",
+    type: "discovery-run-started",
+    runId: "trial-plugin-1",
+    labId: "lab-plugin-1",
+    trialOrdinal: 0,
+    history: { mode: "none" },
+    configuration: { promptVariant: "synthetic", assignmentUnit: "target" },
+  });
+  fixture.append({
+    ...eventBase(candidates[0]!.snapshotDigest),
+    identity: "finished-before-crash",
+    type: "discovery-run-finished",
+    runId: "trial-plugin-1",
+    outcome: outcome === "quota" ? "provider-limited" : "failed",
+    reason: "provider",
+    ...(outcome === "quota"
+      ? { providerLimit: "quota" as const }
+      : { reasonDetail: "cyber_policy" }),
+    costUsd: "unavailable",
+    wallTimeMs: 1000,
+  });
+  expect(fixture.owner.tryAcquire(parentRunId, 2147483647)).toMatchObject({
+    status: "acquired",
+  });
+  return child.campaignId;
 }
 
 describe("continuous parent runner", () => {
@@ -404,6 +474,116 @@ describe("continuous parent runner", () => {
     }
   });
 
+  it.each([
+    ["quota", "WAIT_QUOTA"],
+    ["cyber-policy", "WAIT_REVIEW"],
+  ] as const)(
+    "reconciles a crashed owner into the assessed %s hold without another Trial",
+    async (outcome, expectedState) => {
+      const fixture = await setup();
+      try {
+        const childId = seedDrainedAssessedHold(fixture, outcome);
+        if (outcome === "cyber-policy") {
+          const before = fixture.journal.get(parentRunId)!;
+          fixture.journal.transition(parentRunId, before.revision, {
+            state: "RECOVERING",
+            reason: "crash-review-required",
+            nextCheckAt: null,
+          });
+        }
+        const held = await fixture.run();
+        expect(held).toMatchObject({
+          state: expectedState,
+          reason: outcome === "quota" ? "quota" : "review-required",
+          children: [{ campaignId: childId, status: "reserved" }],
+        });
+        expect(fixture.campaignCalls).toHaveLength(0);
+        expect(
+          fixture.read({ campaignId: childId, type: "discovery-run-started" }),
+        ).toHaveLength(1);
+        const reacquired = fixture.owner.tryAcquire(parentRunId);
+        expect(reacquired).toMatchObject({
+          status: "acquired",
+          recoveryRequired: false,
+        });
+        if (reacquired.status === "acquired")
+          fixture.owner.release(reacquired.handle);
+      } finally {
+        fixture.journal.close();
+        fixture.owner.close();
+        fixture.claims.close();
+      }
+    },
+  );
+
+  it("releases a crashed owner after an operational review transition", async () => {
+    const fixture = await setup();
+    try {
+      const before = fixture.journal.get(parentRunId)!;
+      fixture.journal.transition(parentRunId, before.revision, {
+        state: "WAIT_REVIEW",
+        reason: "candidate-exhausted",
+        nextCheckAt: null,
+      });
+      expect(fixture.owner.tryAcquire(parentRunId, 2147483647)).toMatchObject({
+        status: "acquired",
+      });
+      const held = await fixture.run();
+      expect(held).toMatchObject({
+        state: "WAIT_REVIEW",
+        reason: "candidate-exhausted",
+        children: [],
+      });
+      expect(fixture.campaignCalls).toHaveLength(0);
+      const reacquired = fixture.owner.tryAcquire(parentRunId);
+      expect(reacquired).toMatchObject({
+        status: "acquired",
+        recoveryRequired: false,
+      });
+      if (reacquired.status === "acquired")
+        fixture.owner.release(reacquired.handle);
+    } finally {
+      fixture.journal.close();
+      fixture.owner.close();
+      fixture.claims.close();
+    }
+  });
+
+  it("keeps a crashed owner in recovery when a child run has no finish", async () => {
+    const fixture = await setup();
+    try {
+      const childId = seedDrainedAssessedHold(fixture, "cyber-policy");
+      fixture.append({
+        schemaVersion: 1,
+        campaignId: childId,
+        snapshotDigest: candidates[0]!.snapshotDigest,
+        occurredAt: now().toISOString(),
+        identity: "child-started-before-crash",
+        type: "discovery-run-started",
+        runId: "child-plugin-1",
+        runKind: "child",
+        parentRunId: "trial-plugin-1",
+        labId: "lab-plugin-1",
+        trialOrdinal: 0,
+        history: { mode: "none" },
+        configuration: { promptVariant: "synthetic", assignmentUnit: "target" },
+      });
+      const held = await fixture.run();
+      expect(held).toMatchObject({
+        state: "RECOVERING",
+        reason: "crash-review-required",
+        children: [{ campaignId: childId, status: "reserved" }],
+      });
+      expect(fixture.campaignCalls).toHaveLength(0);
+      expect(
+        fixture.read({ campaignId: childId, type: "discovery-run-started" }),
+      ).toHaveLength(2);
+    } finally {
+      fixture.journal.close();
+      fixture.owner.close();
+      fixture.claims.close();
+    }
+  });
   it("keeps a typed pre-Lab freshness hold on the same bound child", async () => {
     const fixture = await setup({ holdFirstCampaign: true });
     try {

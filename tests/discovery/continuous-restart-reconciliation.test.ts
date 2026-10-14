@@ -483,6 +483,91 @@ describe("continuous restart reconciliation", () => {
     }
   });
 
+  it("reconciles only assessed waits whose root and child runs all finished", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      state.bind();
+      state.setOwnerReady(false);
+      const prefix = [batchBound(), selected(), frozen(), started()];
+      const quota = [
+        ...prefix,
+        finished({ outcome: "provider-limited", providerLimit: "quota" }),
+      ];
+      expect(await state.inspect(quota)).toMatchObject({
+        action: "hold",
+        reason: "quota",
+        ownerReconciliationSafe: true,
+        assessment: { allRunsSettled: true, progress: { trialsStarted: 1 } },
+      });
+      const policyRefusal: LedgerEventInput[] = [
+        ...prefix,
+        {
+          ...base(),
+          type: "discovery-run-finished",
+          identity: "finished-policy-refusal",
+          runId: "run-one",
+          outcome: "failed",
+          reason: "provider",
+          reasonDetail: "cyber_policy",
+          costUsd: "unavailable",
+          wallTimeMs: 1000,
+        },
+      ];
+      expect(await state.inspect(policyRefusal)).toMatchObject({
+        action: "hold",
+        reason: "review-required",
+        ownerReconciliationSafe: true,
+      });
+      expect(
+        await state.inspect([
+          ...prefix,
+          finished({ outcome: "provider-limited" }),
+        ]),
+      ).toMatchObject({
+        action: "hold",
+        reason: "review-required",
+        ownerReconciliationSafe: false,
+      });
+      expect(await state.inspect([...policyRefusal, finding()])).toMatchObject({
+        action: "hold",
+        reason: "review-required",
+        ownerReconciliationSafe: false,
+      });
+      expect(
+        await state.inspect([
+          ...policyRefusal,
+          { ...started("child-one"), runKind: "child", parentRunId: "run-one" },
+        ]),
+      ).toMatchObject({
+        action: "hold",
+        ownerReconciliationSafe: false,
+        assessment: { allRunsSettled: false },
+      });
+      expect(
+        await state.inspect([
+          ...completed,
+          finding(),
+          incompleteVerification(),
+        ]),
+      ).toMatchObject({
+        action: "hold",
+        reason: "review-required",
+        ownerReconciliationSafe: false,
+      });
+      state.setClaims([
+        { campaignId, snapshotDigest: snapshot, status: "recovery-needed" },
+      ]);
+      expect(await state.inspect(quota)).toMatchObject({
+        action: "hold",
+        reason: "resource-recovery-needed",
+        ownerReconciliationSafe: false,
+      });
+    } finally {
+      state.journal.close();
+    }
+  });
+
   it("resumes only the same reserved child before any Trial starts", async () => {
     const state = await setup();
     try {

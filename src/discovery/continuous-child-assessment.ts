@@ -42,6 +42,8 @@ export type ChildCampaignAssessment = {
   readonly campaignId: string;
   readonly nextState: ChildNextState;
   readonly reason: ChildStateReason;
+  /** Every root and child start has one matching finish, with no orphan or truncated ledger rows. */
+  readonly allRunsSettled: boolean;
   /** Global ledger sequence, usable as an observation cursor, not a completion claim. */
   readonly lastLedgerSequence: number;
   readonly progress: {
@@ -402,6 +404,11 @@ export async function assessContinuousChildCampaign(input: {
     campaignId: input.campaignId,
     nextState: next.nextState,
     reason: next.reason,
+    allRunsSettled:
+      !limitReached &&
+      !unboundEvent &&
+      !orphanFinish &&
+      [...ownerByRun.keys()].every((runId) => finishes.has(runId)),
     lastLedgerSequence: lastSequence,
     progress: {
       targetsTotal: targets.length,

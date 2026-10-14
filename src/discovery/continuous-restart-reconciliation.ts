@@ -54,6 +54,8 @@ export type ContinuousRestartDecision =
   | {
       readonly action: "hold";
       readonly parentRunId: string;
+      /** A drained, assessed wait may release a dead owner's recovery claim. */
+      readonly ownerReconciliationSafe: boolean;
       readonly reason:
         | "parent-missing"
         | "journal-unavailable"
@@ -119,6 +121,24 @@ function canResumeStartedChild(assessment: ChildCampaignAssessment): boolean {
   );
 }
 
+/** Only typed, fully drained outcomes can clear a crashed parent's owner claim. */
+function safelyAssessedWait(assessment: ChildCampaignAssessment): boolean {
+  if (!assessment.allRunsSettled) return false;
+  return assessment.targets.every((target) => {
+    if (
+      target.verificationCovered < target.findings ||
+      target.reviewExportsReady < target.findings
+    )
+      return false;
+    if (
+      target.nextState === "complete" ||
+      (target.nextState === "pending" && target.reason === "not-started")
+    )
+      return true;
+    return target.reason === "quota" || target.reason === "cyber-policy";
+  });
+}
+
 /**
  * Read-only restart preflight. The caller must acquire the parent owner claim,
  * apply the returned journal operation with expectedRevision, and run this
@@ -148,9 +168,11 @@ export async function reconcileContinuousRestart(input: {
     run: ContinuousRunRecord | null = null,
     assessment: ChildCampaignAssessment | null = null,
     campaignId: string | null = run?.children.at(-1)?.campaignId ?? null,
+    ownerReconciliationSafe = false,
   ): ContinuousRestartDecision => ({
     action: "hold",
     parentRunId: input.parentRunId,
+    ownerReconciliationSafe,
     reason,
     expectedRevision: run?.revision ?? null,
     campaignId,
@@ -356,9 +378,21 @@ export async function reconcileContinuousRestart(input: {
     )
       return hold("settled-child-incomplete", run, assessment);
   } else if (assessment?.nextState === "wait-quota") {
-    return hold("quota", run, assessment);
+    return hold(
+      "quota",
+      run,
+      assessment,
+      last?.campaignId ?? null,
+      safelyAssessedWait(assessment),
+    );
   } else if (assessment?.nextState === "wait-review") {
-    return hold("review-required", run, assessment);
+    return hold(
+      "review-required",
+      run,
+      assessment,
+      last?.campaignId ?? null,
+      safelyAssessedWait(assessment),
+    );
   } else if (
     assessment?.nextState === "unsettled" &&
     assessment.progress.trialsStarted > 0 &&
