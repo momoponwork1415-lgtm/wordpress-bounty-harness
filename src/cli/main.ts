@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
-import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { lstat, open, readFile, realpath } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import { runCli, type CliIo } from "./index.js";
@@ -11,6 +11,28 @@ import {
 } from "./wordpress-host.js";
 import { openWordPressReviewLab } from "../profiles/wordpress/lab/review-lab.js";
 import { SqliteRepeatTrialGate } from "../profiles/wordpress/discovery/repeat-trial-gate.js";
+import { auditLegacyCoveragePlan } from "../profiles/wordpress/discovery/legacy-coverage-audit.js";
+
+async function outsideGitCheckout(path: string): Promise<string> {
+  if (!isAbsolute(path))
+    throw new Error("Coverage audit paths must be absolute");
+  const parent = await realpath(dirname(path));
+  for (let directory = parent; ; directory = dirname(directory)) {
+    try {
+      await lstat(join(directory, ".git"));
+      throw new Error("Coverage audit plan and output must stay outside Git");
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !Reflect.has(error, "code") ||
+        Reflect.get(error, "code") !== "ENOENT"
+      )
+        throw error;
+    }
+    if (directory === dirname(directory)) break;
+  }
+  return join(parent, basename(path));
+}
 
 const io: CliIo = {
   stdout: (line) => process.stdout.write(`${line}\n`),
@@ -34,6 +56,33 @@ const io: CliIo = {
 /** `harness [--host <path>] [--state <dir>] <command>`; the host file stays outside Git. */
 async function main(argv: readonly string[]): Promise<number> {
   const args = [...argv];
+  if (args[0] === "trial" && args[1] === "coverage-audit") {
+    if (
+      args.length !== 6 ||
+      args[2] !== "--file" ||
+      args[3] === undefined ||
+      args[4] !== "--out" ||
+      args[5] === undefined
+    )
+      throw new Error(
+        "Use trial coverage-audit --file <Git-outside plan.json> --out <Git-outside candidate.json>",
+      );
+    const planPath = await outsideGitCheckout(args[3]);
+    const outputPath = await outsideGitCheckout(args[5]);
+    if (planPath === outputPath)
+      throw new Error("Audit output must differ from the input plan");
+    const value: unknown = JSON.parse(await readFile(planPath, "utf8"));
+    const result = await auditLegacyCoveragePlan(value);
+    const output = await open(outputPath, "wx", 0o600);
+    try {
+      await output.writeFile(`${JSON.stringify(result.candidate, null, 2)}\n`);
+      await output.sync();
+    } finally {
+      await output.close();
+    }
+    io.stdout(JSON.stringify(result.publicSummary));
+    return 0;
+  }
   // This path is deliberately independent of --state / WBH_STATE_DIRECTORY.
   // Every host CLI process must share one Trial index.
   const repeatTrialGate = new SqliteRepeatTrialGate(
