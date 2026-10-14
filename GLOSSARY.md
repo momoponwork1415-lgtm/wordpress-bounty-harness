@@ -4,6 +4,7 @@
 | --- | --- |
 | Target Snapshot | 調べる対象と必要な依存 source を版と digest で固定したもの。 |
 | 探索対象 | WordPress plugin slug で識別する対象。版や Target Snapshot が変わっても同じ slug なら同じ探索対象として扱う。 |
+| 候補在庫（Candidate Inventory） | 公開メタデータから選んだ未凍結の対象候補と取得時刻・方針 digest を Private Evidence に保存したもの。Trial 開始の許可や既往なしの証明にはならない。 |
 | Campaign | 1つの Target Snapshot に対する探索、検証、記録のまとまり。 |
 | Trial | Campaign 内の独立した探索試行。目標構成では Root と最大3つの subagent が1つの Trial を構成する。 |
 | 追加探索Trial | 同じ探索対象に先行する独立探索Trialがある状態で、新たに始める独立探索Trial。開始済みTrialの再開やFindingの検証・再検証を含まない。 |
