@@ -234,6 +234,9 @@ export interface CliProfile {
       readonly selectionBatchId?: string;
       /** Ordered Snapshot digests of the entire reserved batch. */
       readonly snapshotDigests?: readonly string[];
+      /** Parent pins checked against the bytes loaded by this child. */
+      readonly expectedConfigDigest?: string;
+      readonly expectedPolicyDigest?: string;
       /** Stop admission of new targets while draining an active Trial. */
       readonly stopSignal?: AbortSignal;
       /** Refresh the host-common stop request at Trial admission. */

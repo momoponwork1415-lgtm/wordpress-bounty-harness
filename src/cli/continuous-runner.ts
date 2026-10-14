@@ -12,6 +12,7 @@ import type { SqliteContinuousRunOwner } from "../infrastructure/continuous-run-
 import type { SqliteHostResourceClaims } from "../infrastructure/host-resource-claims.js";
 import { reconcileContinuousRestart } from "../discovery/continuous-restart-reconciliation.js";
 import type { CliIo, CliProfile, CliState } from "./index.js";
+import { ContinuousInputPinMismatchError } from "./continuous-input-pin.js";
 import { continuousReviewExportCheck } from "./continuous-review-readiness.js";
 import type { ReviewExportCheck } from "../discovery/continuous-child-assessment.js";
 import {
@@ -412,6 +413,8 @@ export async function runContinuousParent(input: {
         const summary = await profile.runCampaign(state, {
           campaignId: child.campaignId,
           configPath: input.configPath,
+          expectedConfigDigest: initial.configDigest,
+          expectedPolicyDigest: initial.policyDigest,
           target: null,
           selectionBatchId: child.binding.selectionBatchId,
           snapshotDigests: child.binding.snapshotDigests,
@@ -424,7 +427,7 @@ export async function runContinuousParent(input: {
         if (changed !== null) return changed;
         if (monitorError !== undefined) throw monitorError;
         if (summary.held !== undefined && summary.held.length > 0) {
-          const stopped = stopIfRequested();
+          const stopped = await stopIfRequested();
           if (stopped !== null) return stopped;
           return transition(current(), {
             state: "WAIT_REVIEW",
@@ -446,6 +449,17 @@ export async function runContinuousParent(input: {
       }
     }
   } catch (error) {
+    if (error instanceof ContinuousInputPinMismatchError) {
+      // WordPress checks the exact data it loaded before binding or starting
+      // the child. A mismatch is an operational hold, not a spent Trial.
+      const run = current();
+      if (run.stopRequested) return (await stopIfRequested()) ?? current();
+      return transition(run, {
+        state: "WAIT_REVIEW",
+        reason: "config-or-policy-changed",
+        nextCheckAt: null,
+      });
+    }
     let failure = error;
     if (
       error instanceof ContinuousRunRevisionConflictError &&

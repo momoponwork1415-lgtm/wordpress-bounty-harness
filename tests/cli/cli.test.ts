@@ -3702,6 +3702,33 @@ describe("harness CLI vertical slice", () => {
     const dockerBeforeRejectedPin = docker.length;
     await expect(
       profile.runCampaign(state(), {
+        campaignId: "campaign-changed-config-pin",
+        configPath,
+        target: "item-a",
+        selectionBatchId: firstBatchId,
+        snapshotDigests: firstDigests,
+        expectedConfigDigest: sha("f"),
+      }),
+    ).rejects.toThrow("Continuous parent config digest changed");
+    await expect(
+      profile.runCampaign(state(), {
+        campaignId: "campaign-changed-policy-pin",
+        configPath,
+        target: "item-a",
+        selectionBatchId: firstBatchId,
+        snapshotDigests: firstDigests,
+        expectedPolicyDigest: sha("f"),
+      }),
+    ).rejects.toThrow("Continuous parent policy digest changed");
+    expect(
+      ledger().read({ campaignId: "campaign-changed-config-pin" }),
+    ).toHaveLength(0);
+    expect(
+      ledger().read({ campaignId: "campaign-changed-policy-pin" }),
+    ).toHaveLength(0);
+    expect(docker).toHaveLength(dockerBeforeRejectedPin);
+    await expect(
+      profile.runCampaign(state(), {
         campaignId: "campaign-wrong-pin",
         configPath,
         target: "item-a",
