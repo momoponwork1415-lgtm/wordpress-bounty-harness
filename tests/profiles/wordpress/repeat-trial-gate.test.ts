@@ -56,6 +56,43 @@ async function fixture() {
   return { gate, gatePath, stateA, stateB, start, inventory, approve };
 }
 
+function completeCoverage(inventory: object, stateA: string) {
+  return {
+    schemaVersion: 1,
+    stateInventoryDigest: canonicalDigest({ inventory, directories: [stateA] }),
+    auditDigest: hash("9"),
+    auditedBy: "independent-operator",
+    approvedBy: "owner",
+    cutoffAt: "2026-10-13T00:00:00.000Z",
+    auditedAt: "2026-10-14T00:00:00.000Z",
+    approvedAt: "2026-10-14T01:00:00.000Z",
+    legacyWritersStoppedAt: "2026-10-12T23:00:00.000Z",
+    sourceFreezeEvidenceDigest: hash("6"),
+    sources: [
+      "state-ledgers",
+      "legacy-research-databases",
+      "legacy-queues",
+      "archives",
+    ].map((sourceClass) => ({
+      sourceClass,
+      rosterDigest: hash("1"),
+      contentDigest: hash("2"),
+      evidenceDigest: hash("3"),
+      sourceCount: 1,
+      complete: true,
+      unknownSlugStarts: 0,
+    })),
+    legacyStarts: [
+      {
+        slug: "old-plugin",
+        minimumStartedTrials: 1,
+        evidenceDigest: hash("4"),
+      },
+    ],
+    heldSlugs: [{ slug: "uncertain-plugin", evidenceDigest: hash("5") }],
+  };
+}
+
 async function writeStartedTrial(
   stateDirectory: string,
   start: RepeatTrialStart,
@@ -289,4 +326,129 @@ it("holds an unseen slug from both independent gate connections", async () => {
     }
   });
   expect(outcomes).toEqual(["blocked", "blocked"]);
+});
+
+it("imports a complete audited cut atomically and separates old slug starts from exact resumes", async () => {
+  const { gate, stateA, start, inventory, approve } = await fixture();
+  gate.bootstrap(inventory);
+  const manifest = completeCoverage(inventory, stateA);
+  const coverageDigest = gate.importCoverage(manifest);
+  expect(coverageDigest).toBe(canonicalDigest(manifest));
+  expect(gate.inspectInitialSlug("fresh-plugin")).toEqual({
+    status: "eligible",
+    coverageDigest,
+  });
+  expect(gate.inspectInitialSlug("old-plugin")).toEqual({
+    status: "prior-start",
+    startedTrials: 1,
+  });
+  expect(gate.inspectInitialSlug("uncertain-plugin")).toEqual({
+    status: "hold-ambiguous",
+    auditDigest: hash("9"),
+  });
+  expect(() => gate.reserve({ ...start, slug: "old-plugin" })).toThrow(
+    "human approval",
+  );
+  expect(() => approve({ ...start, slug: "old-plugin" })).not.toThrow();
+  expect(gate.reserve({ ...start, slug: "old-plugin" })).toBeDefined();
+  expect(() =>
+    gate.reserve({
+      ...start,
+      slug: "uncertain-plugin",
+      campaignId: "uncertain-campaign",
+    }),
+  ).toThrow("historical coverage");
+  expect(
+    gate.reserve({
+      ...start,
+      slug: "fresh-plugin",
+      campaignId: "fresh-campaign",
+    }),
+  ).toBeUndefined();
+  expect(() =>
+    gate.reserve({ ...start, slug: "fresh-plugin", campaignId: "another" }),
+  ).toThrow("human approval");
+});
+
+it("serializes two connections on the same initially eligible slug", async () => {
+  const { gate, gatePath, stateA, start, inventory } = await fixture();
+  gate.bootstrap(inventory);
+  gate.importCoverage(completeCoverage(inventory, stateA));
+  const secondProcess = new SqliteRepeatTrialGate(gatePath);
+  const first = { ...start, slug: "fresh-plugin" };
+  const second = { ...first, campaignId: "another-campaign" };
+  expect(gate.reserve(first)).toBeUndefined();
+  expect(() => secondProcess.reserve(second)).toThrow("human approval");
+  expect(secondProcess.reserve(first)).toBeUndefined();
+});
+
+it("rejects partial, conflicting, or stale coverage without releasing initial Trials", async () => {
+  const { gate, stateA, stateB, start, inventory } = await fixture();
+  const manifest = completeCoverage(inventory, stateA);
+  expect(() => gate.importCoverage(manifest)).toThrow("bootstrapped");
+  gate.bootstrap(inventory);
+  expect(() =>
+    gate.importCoverage({ ...manifest, sources: manifest.sources.slice(1) }),
+  ).toThrow();
+  expect(() =>
+    gate.importCoverage({
+      ...manifest,
+      sources: manifest.sources.map((source, index) =>
+        index === 1 ? { ...source, sourceClass: "state-ledgers" } : source,
+      ),
+    }),
+  ).toThrow("one complete cut");
+  expect(() =>
+    gate.importCoverage({
+      ...manifest,
+      sources: manifest.sources.map((source, index) =>
+        index === 1 ? { ...source, unknownSlugStarts: 1 } : source,
+      ),
+    }),
+  ).toThrow();
+  expect(() =>
+    gate.importCoverage({ ...manifest, stateInventoryDigest: hash("8") }),
+  ).toThrow("different state inventory");
+  expect(() =>
+    gate.importCoverage({ ...manifest, auditedAt: "2026-10-12T00:00:00.000Z" }),
+  ).toThrow("predates");
+  expect(() =>
+    gate.importCoverage({
+      ...manifest,
+      legacyWritersStoppedAt: "2026-10-13T01:00:00.000Z",
+    }),
+  ).toThrow("not frozen");
+  expect(() =>
+    gate.importCoverage({
+      ...manifest,
+      approvedAt: "2026-10-13T23:00:00.000Z",
+    }),
+  ).toThrow("approval predates");
+  expect(() =>
+    gate.importCoverage({ ...manifest, approvedBy: undefined }),
+  ).toThrow();
+  expect(() =>
+    gate.importCoverage({
+      ...manifest,
+      heldSlugs: [{ slug: "old-plugin", evidenceDigest: hash("5") }],
+    }),
+  ).toThrow("repeats a slug");
+  expect(gate.inspectInitialSlug("fresh-plugin")).toEqual({
+    status: "coverage-incomplete",
+    reason: "legacy-history-unverified",
+  });
+  expect(() => gate.reserve({ ...start, slug: "fresh-plugin" })).toThrow(
+    "historical coverage",
+  );
+
+  gate.importCoverage(manifest);
+  expect(() => gate.importCoverage(manifest)).toThrow("already been imported");
+  await writeStartedTrial(stateB, {
+    ...start,
+    stateDirectory: stateB,
+    slug: "omitted-plugin",
+  });
+  expect(() => gate.ensureReady(stateB)).toThrow(
+    "coverage must be reviewed again",
+  );
 });

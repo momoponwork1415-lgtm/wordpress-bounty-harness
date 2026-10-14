@@ -51,6 +51,7 @@ const syntheticTrialGate: RepeatTrialGate = {
   assertMayStart: () => {},
   reserve: () => {},
   bootstrap: () => ({ importedTrials: 0 }),
+  importCoverage: () => sha("0"),
   approve: () => {},
 };
 const directories: string[] = [];
