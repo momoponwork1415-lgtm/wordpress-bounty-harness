@@ -21,6 +21,7 @@ import {
   type DiscoveryTransportRun,
 } from "../../src/discovery/index.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
+import { SqliteContinuousRunJournal } from "../../src/infrastructure/continuous-run-journal.js";
 import { SqliteHostResourceClaims } from "../../src/infrastructure/host-resource-claims.js";
 import { TargetResourceScope } from "../../src/infrastructure/target-resource-scope.js";
 import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acquisition/index.js";
@@ -93,6 +94,7 @@ async function harness(
     readonly scopeFacts?: Parameters<
       typeof createWordPressCliProfile
     >[0]["scopeFacts"];
+    readonly repeatTrialGate?: RepeatTrialGate;
     readonly runBudget?: {
       readonly default: number;
       readonly highThreat: number;
@@ -699,7 +701,7 @@ async function harness(
     clock: () => new Date(now),
     newId: () => `id-${++ids}`,
     profile: createWordPressCliProfile({
-      repeatTrialGate: syntheticTrialGate,
+      repeatTrialGate: options.repeatTrialGate ?? syntheticTrialGate,
       ...(resourceClaims === undefined ? {} : { resourceClaims }),
       ...(cleanupScope === undefined ? {} : { cleanupScope }),
       scopePolicy: await loadWordpressScopePolicy(),
@@ -3182,6 +3184,137 @@ describe("harness CLI vertical slice", () => {
       },
       traversal: { complete: true },
     });
+  });
+
+  it("prepares a continuous child through the host trial gate without starting a Trial", async () => {
+    const slugs = ["item-a", "item-b", "item-c", "item-d"];
+    let holdOne = true;
+    const gateChecks: string[] = [];
+    const readyDirectories: string[] = [];
+    const gate: RepeatTrialGate = {
+      ...syntheticTrialGate,
+      ensureReady: (directory) => readyDirectories.push(directory),
+      inspectInitialSlug: (slug) => {
+        gateChecks.push(slug);
+        return slug === "item-a"
+          ? { status: "prior-start", startedTrials: 1 }
+          : slug === "item-b" && holdOne
+            ? {
+                status: "coverage-incomplete",
+                reason: "legacy-history-unverified",
+              }
+            : { status: "eligible", coverageDigest: sha("f") };
+      },
+    };
+    const { configPath, root, run, state, profile, ledger, prompts, docker } =
+      await harness({
+        candidates: slugs,
+        repeatTrialGate: gate,
+        inventoryFetch: async () =>
+          new Response(
+            JSON.stringify({
+              info: { page: 1 },
+              plugins: slugs.map((slug) => ({ slug })),
+            }),
+            {
+              status: 200,
+              headers: { Date: new Date(now).toUTCString() },
+            },
+          ),
+      });
+    const policyPath = join(root, "selection.json");
+    const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete manual.candidateSlugs;
+    delete manual.pinnedVersions;
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...manual,
+        promptVariant: "short-objective-managed-v4",
+        revisitPolicy: { kind: "never" },
+        wordpressVersion: "6.8",
+        maximumTargets: 3,
+        candidateSource: {
+          kind: "wordpress-org",
+          popularPages: 1,
+          tags: [],
+          pagesPerTag: 1,
+          perPage: 4,
+          maxCandidates: 5,
+          maxAgeDays: 1,
+        },
+      }),
+    );
+    await expect(
+      profile.continuousPolicyDigest!(state(), { configPath: policyPath }),
+    ).rejects.toThrow("campaign config");
+    const policyDigest = await profile.continuousPolicyDigest!(state(), {
+      configPath,
+    });
+    const inventoryResult = await run(
+      "inventory",
+      "collect",
+      "--config",
+      configPath,
+    );
+    expect(inventoryResult.code).toBe(0);
+    const inventory = JSON.parse(inventoryResult.stdout) as {
+      inventoryDigest: string;
+      sourceCoverageVerified: boolean;
+    };
+    expect(inventory.sourceCoverageVerified).toBe(true);
+    const journal = new SqliteContinuousRunJournal(
+      join(root, "continuous-adapter.sqlite"),
+      () => new Date(now),
+    );
+    try {
+      const created = journal.create({
+        parentRunId: "adapter-parent",
+        configDigest: sha("e"),
+        policyDigest,
+        inventoryDigest: inventory.inventoryDigest,
+      });
+      const parent = journal.reserveChild(
+        created.parentRunId,
+        created.revision,
+      );
+      const preparation = {
+        parent,
+        owner: { assertReady: () => {} },
+        ownerHandle: {
+          parentRunId: parent.parentRunId,
+          token: "a".repeat(64),
+        },
+        configPath,
+      };
+      const held = await profile.prepareContinuousBatch!(state(), preparation);
+      expect(held).toMatchObject({
+        status: "hold",
+        reason: "insufficient-eligible-candidates",
+        frozen: 2,
+      });
+      expect(ledger().read({ type: "target-selected" })).toHaveLength(0);
+      holdOne = false;
+      const result = await profile.prepareContinuousBatch!(
+        state(),
+        preparation,
+      );
+      expect(result.status).toBe("ready");
+      expect(ledger().read({ type: "target-selected" })).toHaveLength(3);
+      expect(gateChecks).toContain("item-a");
+      expect(gateChecks).toContain("item-b");
+      expect(readyDirectories).toHaveLength(gateChecks.length);
+      expect(readyDirectories).toEqual(
+        Array(gateChecks.length).fill(state().stateDirectory),
+      );
+      expect(prompts).toHaveLength(0);
+      expect(docker).toHaveLength(0);
+    } finally {
+      journal.close();
+    }
   });
 
   it("enumerates without nominated slugs, reserves the next ranked batch, and runs that batch", async () => {
