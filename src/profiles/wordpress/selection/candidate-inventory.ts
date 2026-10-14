@@ -5,6 +5,7 @@ import {
   canonicalJson,
 } from "../../../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
+import type { WordPressOrgCandidateCursor } from "./wordpress-org-candidate-enumerator.js";
 import {
   wordPressSelectionPolicySchema,
   wordPressTargetSelectionSchema,
@@ -16,6 +17,27 @@ import type { WordPressSelectionBatchInspection } from "./wordpress-selection.js
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const countSchema = z.number().int().nonnegative();
 const slugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
+const cursorSchema = z.strictObject({
+  kind: z.literal("wordpress-org-candidate-cursor"),
+  schemaVersion: z.literal(1),
+  listingSetDigest: digestSchema,
+  nextIndex: countSchema,
+});
+const traversalSchema = z.strictObject({
+  listingSetDigest: digestSchema,
+  offset: countSchema,
+  observedUniqueCandidates: countSchema,
+  complete: z.boolean(),
+  nextCursor: cursorSchema.optional(),
+});
+const definitiveIneligibilityReasons = new Set([
+  "distribution-closed",
+  "update-stale",
+  "excluded-author",
+  "excluded-slug",
+  "below-installation-threshold",
+  "core-version-incompatible",
+]);
 /** Deliberately omits the observation/programme refs required by freeze(). */
 const inventoryCandidateSchema = z.strictObject({
   targetId: z.string().regex(/^wporg:[a-z0-9][a-z0-9-]*$/),
@@ -54,6 +76,8 @@ const candidateInventorySchema = z.strictObject({
       unavailable: countSchema,
       missing: countSchema,
     }),
+    /** Missing only in inventory artifacts written before cursor support. */
+    traversal: traversalSchema.optional(),
   }),
   observedCandidates: countSchema,
   ineligibleByReason: z.record(z.string(), countSchema),
@@ -72,19 +96,36 @@ function validateInventory(
   policy: WordPressSelectionPolicy,
 ): WordPressCandidateInventory {
   const inventory = candidateInventorySchema.parse(value);
+  const traversal = inventory.source.traversal;
+  const maxCandidates =
+    "candidateSource" in policy ? policy.candidateSource.maxCandidates : 0;
+  const inspectedThrough =
+    (traversal?.offset ?? 0) + inventory.observedCandidates;
   if (
     inventory.policy.id !== policy.id ||
     inventory.policy.digest !== canonicalDigestPreservingProperties(policy) ||
-    inventory.candidates.length >
-      ("candidateSource" in policy
-        ? policy.candidateSource.maxCandidates
-        : 0) ||
+    inventory.candidates.length > maxCandidates ||
     inventory.observedCandidates < inventory.candidates.length ||
     inventory.candidates.some(
       (candidate) => candidate.targetId !== `wporg:${candidate.slug}`,
     ) ||
     new Set(inventory.candidates.map((candidate) => candidate.slug)).size !==
-      inventory.candidates.length
+      inventory.candidates.length ||
+    (traversal !== undefined &&
+      (inspectedThrough > traversal.observedUniqueCandidates ||
+        inventory.observedCandidates !==
+          Math.min(
+            maxCandidates,
+            traversal.observedUniqueCandidates - traversal.offset,
+          ) ||
+        traversal.complete !==
+          (inspectedThrough === traversal.observedUniqueCandidates) ||
+        (traversal.complete
+          ? traversal.nextCursor !== undefined
+          : traversal.nextCursor === undefined ||
+            traversal.nextCursor.nextIndex !== inspectedThrough ||
+            traversal.nextCursor.listingSetDigest !==
+              traversal.listingSetDigest)))
   )
     throw new Error("Candidate inventory does not match its selection policy");
   return inventory;
@@ -116,7 +157,8 @@ function publicCandidate(
 }
 
 /**
- * Save all eligible public metadata, without acquiring source or freezing a Snapshot.
+ * Save one bounded page of eligible public metadata, without acquiring source
+ * or freezing a Snapshot. The cursor preserves the observed listing set.
  * The result is a proposal only: a start must re-observe eligibility and pass
  * the global Trial-history and active-claim gates (#215, #228).
  */
@@ -124,7 +166,9 @@ export async function collectWordPressCandidateInventory(options: {
   readonly policy: WordPressSelectionPolicy;
   readonly inspectBatch: (
     policy: WordPressSelectionPolicy,
+    cursor?: WordPressOrgCandidateCursor,
   ) => Promise<WordPressSelectionBatchInspection>;
+  readonly cursor?: WordPressOrgCandidateCursor;
   readonly store: Pick<PrivateArtifactStore, "putFiles">;
   readonly clock: () => Date;
 }): Promise<{
@@ -136,9 +180,20 @@ export async function collectWordPressCandidateInventory(options: {
     throw new Error(
       "Candidate inventory requires an automatic selection policy",
     );
-  const batch = await options.inspectBatch(policy);
+  const batch = await options.inspectBatch(policy, options.cursor);
   if (
     batch.sourceStatus === "manual" ||
+    batch.sourceTraversal === undefined ||
+    (options.cursor !== undefined &&
+      (batch.sourceTraversal.offset !== options.cursor.nextIndex ||
+        batch.sourceTraversal.listingSetDigest !==
+          options.cursor.listingSetDigest)) ||
+    batch.inspections.length !==
+      Math.min(
+        policy.candidateSource.maxCandidates,
+        batch.sourceTraversal.observedUniqueCandidates -
+          batch.sourceTraversal.offset,
+      ) ||
     batch.inspections.length > policy.candidateSource.maxCandidates
   )
     throw new Error("Candidate enumeration does not match its policy");
@@ -204,6 +259,7 @@ export async function collectWordPressCandidateInventory(options: {
         status: batch.sourceStatus,
         requestedListingCoverage,
         listings,
+        traversal: batch.sourceTraversal,
       },
       observedCandidates: batch.inspections.length,
       ineligibleByReason,
@@ -215,6 +271,62 @@ export async function collectWordPressCandidateInventory(options: {
     [fileName]: canonicalJson(inventory),
   });
   return { digest, inventory };
+}
+
+/** Prove source traversal from page zero, with no failed listing or uncertain inspection.
+ * This does not decide whether eligible slugs remain unstarted (#215).
+ */
+export function hasTraversedWordPressCandidateSource(
+  inventories: readonly WordPressCandidateInventory[],
+): boolean {
+  if (inventories.length === 0) return false;
+  const policyDigest = inventories[0]?.policy.digest;
+  const listingSetDigest = inventories[0]?.source.traversal?.listingSetDigest;
+  if (listingSetDigest === undefined) return false;
+  const first = inventories[0];
+  if (first === undefined) return false;
+  const expectedListings =
+    first.source.listings.available +
+    first.source.listings.stale +
+    first.source.listings.unavailable +
+    first.source.listings.missing;
+  if (expectedListings === 0) return false;
+  const observedUniqueCandidates =
+    first.source.traversal?.observedUniqueCandidates;
+  let nextIndex = 0;
+  for (const [index, inventory] of inventories.entries()) {
+    const traversal = inventory.source.traversal;
+    if (
+      inventory.policy.digest !== policyDigest ||
+      inventory.source.status !== "available" ||
+      inventory.source.requestedListingCoverage !== "all-observed" ||
+      inventory.source.listings.available !== expectedListings ||
+      inventory.source.listings.stale !== 0 ||
+      inventory.source.listings.unavailable !== 0 ||
+      inventory.source.listings.missing !== 0 ||
+      Object.entries(inventory.ineligibleByReason).some(
+        ([reason, count]) =>
+          count > 0 && !definitiveIneligibilityReasons.has(reason),
+      ) ||
+      traversal?.listingSetDigest !== listingSetDigest ||
+      traversal.observedUniqueCandidates !== observedUniqueCandidates ||
+      traversal.offset !== nextIndex
+    )
+      return false;
+    nextIndex += inventory.observedCandidates;
+    if (traversal.complete)
+      return (
+        nextIndex === observedUniqueCandidates &&
+        index === inventories.length - 1
+      );
+    if (
+      nextIndex >= traversal.observedUniqueCandidates ||
+      traversal.nextCursor?.nextIndex !== nextIndex ||
+      traversal.nextCursor.listingSetDigest !== listingSetDigest
+    )
+      return false;
+  }
+  return false;
 }
 
 /** Resume a stored proposal by digest. An unavailable source is never read as exhaustion. */

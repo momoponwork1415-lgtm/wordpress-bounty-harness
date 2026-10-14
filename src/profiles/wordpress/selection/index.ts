@@ -18,9 +18,11 @@ export type {
 } from "./contracts.js";
 export {
   collectWordPressCandidateInventory,
+  hasTraversedWordPressCandidateSource,
   readWordPressCandidateInventory,
 } from "./candidate-inventory.js";
 export type {
   WordPressCandidateInventory,
   WordPressInventoryCandidate,
 } from "./candidate-inventory.js";
+export type { WordPressOrgCandidateCursor } from "./wordpress-org-candidate-enumerator.js";
