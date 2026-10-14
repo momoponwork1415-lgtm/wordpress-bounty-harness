@@ -26,6 +26,11 @@ import {
   canonicalDigest,
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
+import type { ContinuousRunRecord } from "../infrastructure/continuous-run-journal.js";
+import type {
+  ContinuousRunOwnerHandle,
+  SqliteContinuousRunOwner,
+} from "../infrastructure/continuous-run-owner.js";
 import { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import {
   Ledger,
@@ -140,6 +145,20 @@ export interface CliInventoryReport {
   };
 }
 
+export type CliContinuousBatchPreparation =
+  | {
+      readonly status: "ready";
+      readonly selectionBatchId: string;
+      readonly snapshotDigests: readonly string[];
+      readonly reportDigest: string;
+    }
+  | {
+      readonly status: "hold";
+      readonly reason: "insufficient-eligible-candidates";
+      readonly inspected: number;
+      readonly frozen: number;
+    };
+
 /** A profile composition: everything target-specific the commands need. */
 export interface CliProfile {
   review(state: CliState): Review;
@@ -175,6 +194,21 @@ export interface CliProfile {
     state: CliState,
     input: { readonly configPath: string; readonly afterDigest?: string },
   ): Promise<CliInventoryReport>;
+  /** Digest of the automatic selection policy used by a continuous parent. */
+  continuousPolicyDigest?(
+    state: CliState,
+    input: { readonly configPath: string },
+  ): Promise<string>;
+  /** Freeze one reserved child batch without starting any Trial. */
+  prepareContinuousBatch?(
+    state: CliState,
+    input: {
+      readonly parent: ContinuousRunRecord;
+      readonly owner: Pick<SqliteContinuousRunOwner, "assertReady">;
+      readonly ownerHandle: ContinuousRunOwnerHandle;
+      readonly configPath: string;
+    },
+  ): Promise<CliContinuousBatchPreparation>;
   runCampaign(
     state: CliState,
     input: {

@@ -83,6 +83,7 @@ import {
   collectWordPressCandidateInventory,
   hasVerifiedWordPressCandidateInventoryChainCoverage,
   loadWordPressSelectionPolicy,
+  prepareWordPressContinuousBatch,
   readWordPressCandidateInventoryCursor,
   wordPressSelectionPolicySchema,
   wordPressTargetSelectionSchema,
@@ -373,6 +374,15 @@ async function loadSelectInput(configPath: string): Promise<{
   if ("candidateSource" in policy && policy.promptVariant !== config.promptId)
     throw new Error("Selection and campaign prompt variants differ");
   return { config, policy, wordpressVersion: config.wordpressVersion };
+}
+
+async function loadContinuousSelectInput(configPath: string) {
+  const selected = await loadSelectInput(configPath);
+  if (selected.config === undefined)
+    throw new Error("Continuous run requires a campaign config");
+  if (!("candidateSource" in selected.policy))
+    throw new Error("Continuous run requires automatic selection policy");
+  return selected;
 }
 
 type ReservedSelection = {
@@ -1473,6 +1483,39 @@ export function createWordPressCliProfile(
           nextPageAvailable: traversal.nextCursor !== undefined,
         },
       };
+    },
+    async continuousPolicyDigest(_state, input) {
+      const { policy } = await loadContinuousSelectInput(input.configPath);
+      return canonicalDigest(policy);
+    },
+    async prepareContinuousBatch(state, input) {
+      const { policy, wordpressVersion } = await loadContinuousSelectInput(
+        input.configPath,
+      );
+      if (options.selectionBoundaries === undefined)
+        throw new Error("Continuous selection requires selection boundaries");
+      const boundaries = await options.selectionBoundaries(
+        state,
+        wordpressVersion,
+      );
+      return prepareWordPressContinuousBatch({
+        parent: input.parent,
+        owner: input.owner,
+        ownerHandle: input.ownerHandle,
+        policy,
+        store: state.store,
+        ledger: state.ledger,
+        selection: boundaries.selection,
+        freeze: boundaries.freeze,
+        preFreezeEligibility: async (slug) => {
+          options.repeatTrialGate.ensureReady(state.stateDirectory);
+          const inspected = options.repeatTrialGate.inspectInitialSlug(slug);
+          if (inspected.status === "eligible") return "eligible";
+          if (inspected.status === "prior-start") return "already-started";
+          return "hold";
+        },
+        clock: state.clock,
+      });
     },
     async select(state, input) {
       const { config, policy, wordpressVersion } = await loadSelectInput(
