@@ -141,7 +141,11 @@ async function setup(
   }));
   const preFreezeEligibility = vi.fn(
     async (_slug: string) =>
-      "eligible" as "eligible" | "already-started" | "hold",
+      "eligible" as
+        | "eligible"
+        | "already-started"
+        | "hold-ambiguous"
+        | "coverage-incomplete",
   );
   let ownerReady = true;
   const owner = {
@@ -345,7 +349,9 @@ describe("nominated automatic continuous selection", () => {
         "wporg:plugin-3@1.0.0",
       ]);
       const freezeCount = state.freeze.mock.calls.length;
-      state.preFreezeEligibility.mockImplementationOnce(async () => "hold");
+      state.preFreezeEligibility.mockImplementationOnce(
+        async () => "hold-ambiguous",
+      );
       await expect(
         prepareWordPressContinuousBatch(state.input()),
       ).rejects.toThrow("no longer eligible");
@@ -413,11 +419,110 @@ describe("nominated automatic continuous selection", () => {
     }
   });
 
-  it("holds an uncertain historical slug instead of treating it as exhausted", async () => {
+  it("skips a held slug and builds a batch from later eligible slugs", async () => {
     const state = await setup();
     try {
       state.reserve();
-      state.preFreezeEligibility.mockResolvedValueOnce("hold");
+      state.preFreezeEligibility.mockImplementation(async (slug) =>
+        slug === "plugin-1" ? "hold-ambiguous" : "eligible",
+      );
+      const prepared = await prepareWordPressContinuousBatch(state.input());
+      expect(prepared).toMatchObject({
+        status: "ready",
+        snapshotDigests: [digest("2"), digest("3"), digest("4")],
+      });
+      expect(state.freeze.mock.calls.map(([target]) => target.slug)).toEqual([
+        "plugin-2",
+        "plugin-3",
+        "plugin-4",
+      ]);
+      expect(
+        state.ledger
+          .read({ type: "target-selected" })
+          .map(({ event }) =>
+            event.type === "target-selected" ? event.selectionId : null,
+          ),
+      ).toEqual([
+        "wporg:plugin-2@1.0.0",
+        "wporg:plugin-3@1.0.0",
+        "wporg:plugin-4@1.0.0",
+      ]);
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("continues to a linked page when the current page contains only held slugs", async () => {
+    const state = await setup({ slugCount: 8, pageSize: 5 });
+    try {
+      state.reserve();
+      state.preFreezeEligibility.mockImplementation(async (slug) =>
+        Number(slug.slice("plugin-".length)) <= 5
+          ? "hold-ambiguous"
+          : "eligible",
+      );
+      expect(
+        await prepareWordPressContinuousBatch(state.input()),
+      ).toMatchObject({
+        status: "hold",
+        reason: "insufficient-eligible-candidates",
+        frozen: 0,
+      });
+      const cursor = state.collected.inventory.source.traversal?.nextCursor;
+      if (cursor === undefined) throw new Error("Expected next inventory page");
+      if (state.selection.inspectBatch === undefined)
+        throw new Error("Expected batch inspector");
+      const next = await collectWordPressCandidateInventory({
+        policy: state.policy,
+        inspectBatch: state.selection.inspectBatch,
+        cursor,
+        previousInventoryDigest: state.collected.digest,
+        store: state.store,
+        clock: () => new Date(now),
+      });
+      state.advanceInventory(next.digest);
+      expect(
+        await prepareWordPressContinuousBatch(state.input()),
+      ).toMatchObject({
+        status: "ready",
+        snapshotDigests: [digest("6"), digest("7"), digest("8")],
+      });
+      expect(state.freeze.mock.calls.map(([target]) => target.slug)).toEqual([
+        "plugin-6",
+        "plugin-7",
+        "plugin-8",
+      ]);
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("holds globally incomplete history after skipping an ambiguous slug", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      state.preFreezeEligibility.mockImplementation(async (slug) =>
+        slug === "plugin-1" ? "hold-ambiguous" : "coverage-incomplete",
+      );
+      expect(await prepareWordPressContinuousBatch(state.input())).toEqual({
+        status: "hold",
+        reason: "candidate-history-unverified",
+      });
+      expect(
+        state.preFreezeEligibility.mock.calls.map(([slug]) => slug),
+      ).toEqual(["plugin-1", "plugin-2"]);
+      expect(state.freeze).not.toHaveBeenCalled();
+      expect(state.ledger.read({ type: "target-selected" })).toHaveLength(0);
+    } finally {
+      state.journal.close();
+    }
+  });
+
+  it("does not claim exhaustion when every available slug has an ambiguous history", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      state.preFreezeEligibility.mockResolvedValue("hold-ambiguous");
       expect(await prepareWordPressContinuousBatch(state.input())).toEqual({
         status: "hold",
         reason: "candidate-history-unverified",

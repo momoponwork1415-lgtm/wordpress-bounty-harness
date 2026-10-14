@@ -127,7 +127,9 @@ export async function prepareWordPressContinuousBatch(options: {
   ) => Promise<Pick<Snapshot, "digest">>;
   readonly preFreezeEligibility: (
     slug: string,
-  ) => Promise<"eligible" | "already-started" | "hold">;
+  ) => Promise<
+    "eligible" | "already-started" | "hold-ambiguous" | "coverage-incomplete"
+  >;
   readonly clock: () => Date;
 }): Promise<ContinuousBatchPreparation> {
   const policy = wordPressSelectionPolicySchema.parse(options.policy);
@@ -468,12 +470,17 @@ export async function prepareWordPressContinuousBatch(options: {
     readonly snapshotDigest: string;
   }[] = [];
   let inspected = 0;
+  let heldAmbiguousSlug = false;
   for (const nominee of nominees) {
     if (poolExpired()) return expiredHold(0);
     if (chosen.length === policy.maximumTargets) break;
     const initialEligibility = await options.preFreezeEligibility(nominee.slug);
-    if (initialEligibility === "hold")
+    if (initialEligibility === "coverage-incomplete")
       return { status: "hold", reason: "candidate-history-unverified" };
+    if (initialEligibility === "hold-ambiguous") {
+      heldAmbiguousSlug = true;
+      continue;
+    }
     if (initialEligibility === "already-started") continue;
     if (poolExpired()) return expiredHold(0);
     const observations = await options.selection.inspectNominated(
@@ -515,8 +522,12 @@ export async function prepareWordPressContinuousBatch(options: {
     const beforeFreezeEligibility = await options.preFreezeEligibility(
       nominee.slug,
     );
-    if (beforeFreezeEligibility === "hold")
+    if (beforeFreezeEligibility === "coverage-incomplete")
       return { status: "hold", reason: "candidate-history-unverified" };
+    if (beforeFreezeEligibility === "hold-ambiguous") {
+      heldAmbiguousSlug = true;
+      continue;
+    }
     if (beforeFreezeEligibility === "already-started") continue;
     // A freeze failure is an abnormal snapshot/source failure. Only an
     // explicit ineligible observation or history decision skips a nominee.
@@ -530,6 +541,14 @@ export async function prepareWordPressContinuousBatch(options: {
   // A sealed listing set may end with one or two untouched slugs. Run those
   // only after its final page is proven; an intermediate page must keep
   // refilling until the normal batch size can be reached.
+  // A slug-specific history hold can be skipped while searching the sealed
+  // pool, but must remain visible when no other slug can be selected.
+  if (
+    chosen.length === 0 &&
+    heldAmbiguousSlug &&
+    inventory.source.traversal?.complete === true
+  )
+    return { status: "hold", reason: "candidate-history-unverified" };
   if (
     chosen.length === 0 ||
     (chosen.length < 3 && inventory.source.traversal?.complete !== true)

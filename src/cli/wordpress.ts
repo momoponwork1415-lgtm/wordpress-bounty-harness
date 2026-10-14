@@ -1611,7 +1611,8 @@ export function createWordPressCliProfile(
           const inspected = options.repeatTrialGate.inspectInitialSlug(slug);
           if (inspected.status === "eligible") return "eligible";
           if (inspected.status === "prior-start") return "already-started";
-          return "hold";
+          if (inspected.status === "hold-ambiguous") return "hold-ambiguous";
+          return "coverage-incomplete";
         },
         clock: state.clock,
       });
