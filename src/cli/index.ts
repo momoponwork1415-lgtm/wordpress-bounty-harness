@@ -160,6 +160,10 @@ export interface CliProfile {
       readonly target: string | null;
       /** Retry an incomplete independent verification on the same Lab setup. */
       readonly retryIncompleteVerifications?: boolean;
+      /** A continuous child campaign must use this exact reserved selection batch. */
+      readonly selectionBatchId?: string;
+      /** Ordered Snapshot digests of the entire reserved batch. */
+      readonly snapshotDigests?: readonly string[];
     },
   ): Promise<CampaignSummary>;
   /** Docker resources a crashed run left behind; removed only when asked. */
