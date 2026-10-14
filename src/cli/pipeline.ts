@@ -129,7 +129,7 @@ export type CampaignSummary = {
     readonly message: string;
   }[];
   /** Set when the campaign stopped early and can be resumed with the same id. */
-  readonly stopped?: "provider-limit" | "incomplete";
+  readonly stopped?: "provider-limit" | "incomplete" | "operator";
   readonly targets: readonly {
     readonly targetId: string;
     readonly version: string;
@@ -190,6 +190,8 @@ export async function runCampaignPipeline<
   readonly retryIncompleteVerifications?: boolean;
   /** Disable ADR 0022 automatic retries to restore the prior single-attempt behavior. */
   readonly automaticVerificationRetries?: boolean;
+  /** Stop new targets while allowing a Trial already past Lab admission to drain. */
+  readonly stopSignal?: AbortSignal;
 }): Promise<CampaignSummary> {
   const { campaignId, ledger, pipeline, clock } = options;
   const at = () => clock().toISOString();
@@ -465,11 +467,15 @@ export async function runCampaignPipeline<
         return;
       }
 
+      // Admission ended before a Trial start: drain this Lab and leave the
+      // selected target pending for the same child campaign on resume.
+      if (stopController.signal.aborted) return;
       const prepared = await pipeline.discovery({
         target,
         snapshot,
         lab: provisioned.handle,
       });
+      if (stopController.signal.aborted) return;
       const campaignInput = prepared.input;
       const discovered = await runDiscoveryCampaign({
         campaignId,
@@ -656,7 +662,12 @@ export async function runCampaignPipeline<
     try {
       await run();
     } catch (error: unknown) {
-      await skip(error);
+      if (
+        error !== stopController.signal.reason ||
+        stopped !== "operator" ||
+        labAttempted
+      )
+        await skip(error);
     } finally {
       // An incomplete provision result means the adapter finished its own
       // cleanup. A thrown provision has no such guarantee.
@@ -685,40 +696,50 @@ export async function runCampaignPipeline<
     return result;
   };
 
-  const selected = (await pipeline.select()).filter(
-    (target) => !isCompleted(target),
-  );
-  const results: (TargetResult | undefined)[] = Array(selected.length);
-  let next = 0;
-  const worker = async () => {
-    while (stopped === undefined) {
-      const index = next++;
-      const target = selected[index];
-      if (target === undefined) return;
-      results[index] =
-        options.withTargetScope === undefined
-          ? await processTarget(target)
-          : await options.withTargetScope(() => processTarget(target));
-    }
-  };
-  await Promise.all(
-    Array.from(
-      { length: Math.min(maxConcurrentTargets, selected.length) },
-      worker,
-    ),
-  );
-  const targets = results.flatMap((result) =>
-    result?.target === undefined ? [] : [result.target],
-  );
-  const skipped = results.flatMap((result) =>
-    result?.skipped === undefined ? [] : [result.skipped],
-  );
-  return {
-    campaignId,
-    targets,
-    skipped,
-    ...(stopped === undefined ? {} : { stopped }),
-  };
+  const onOperatorStop = () => requestStop("operator");
+  if (options.stopSignal?.aborted) onOperatorStop();
+  else
+    options.stopSignal?.addEventListener("abort", onOperatorStop, {
+      once: true,
+    });
+  try {
+    const selected = (await pipeline.select()).filter(
+      (target) => !isCompleted(target),
+    );
+    const results: (TargetResult | undefined)[] = Array(selected.length);
+    let next = 0;
+    const worker = async () => {
+      while (stopped === undefined) {
+        const index = next++;
+        const target = selected[index];
+        if (target === undefined) return;
+        results[index] =
+          options.withTargetScope === undefined
+            ? await processTarget(target)
+            : await options.withTargetScope(() => processTarget(target));
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(maxConcurrentTargets, selected.length) },
+        worker,
+      ),
+    );
+    const targets = results.flatMap((result) =>
+      result?.target === undefined ? [] : [result.target],
+    );
+    const skipped = results.flatMap((result) =>
+      result?.skipped === undefined ? [] : [result.skipped],
+    );
+    return {
+      campaignId,
+      targets,
+      skipped,
+      ...(stopped === undefined ? {} : { stopped }),
+    };
+  } finally {
+    options.stopSignal?.removeEventListener("abort", onOperatorStop);
+  }
 }
 
 export type ReverificationSummary = {
