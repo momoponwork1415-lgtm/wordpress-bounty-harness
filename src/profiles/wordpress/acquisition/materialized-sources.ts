@@ -7,10 +7,12 @@ import {
   measureCanonicalSourceTree,
   type ExpectedSourceTree,
 } from "../../../infrastructure/canonical-source-tree.js";
-import type {
-  AcquiredSource,
-  Snapshot,
-  SourceAcquisition,
+import {
+  SourceAcquisitionError,
+  sourceManifestSchema,
+  type AcquiredSource,
+  type Snapshot,
+  type SourceAcquisition,
 } from "../../../snapshot/index.js";
 import type { WordPressSource, WordPressSourceResolver } from "../lab/index.js";
 import { WORDPRESS_CORE_IDENTITY } from "./wordpress-core-source.js";
@@ -25,7 +27,10 @@ const sourceKind = (
   if (identity === WORDPRESS_CORE_IDENTITY) return { kind: "wordpress-core" };
   const slug = /^wporg:([a-z0-9][a-z0-9-]*)$/.exec(identity)?.[1];
   if (slug === undefined)
-    throw new Error("Materialized source needs a WordPress.org identity");
+    throw new SourceAcquisitionError("source-mismatch", {
+      reason: "materialized-source-identity",
+      identity,
+    });
   return { kind: "plugin", slug };
 };
 
@@ -57,18 +62,32 @@ export function openMaterializedSources(options: {
   ): Promise<{ directory: string; tree: ExpectedSourceTree }> => {
     const directory = directoryFor(sourceDigest);
     if (!(await exists(directory)))
-      throw new Error("Materialized source is unavailable");
+      throw new SourceAcquisitionError("source-mismatch", {
+        reason: "materialized-source-unavailable",
+        sourceDigest,
+      });
     const tree = await measureCanonicalSourceTree(
       directory,
       MEASURE_LIMITS,
     ).catch(() => undefined);
     if (tree?.digest !== sourceDigest)
-      throw new Error("Materialized source differs from its snapshot");
+      throw new SourceAcquisitionError("source-mismatch", {
+        reason: "materialized-source-digest",
+        expectedDigest: sourceDigest,
+        actualDigest: tree?.digest ?? null,
+      });
     return { directory, tree };
   };
 
   const materialize = async (source: AcquiredSource): Promise<void> => {
-    const sourceDigest = canonicalDigest(source.manifest);
+    const parsed = sourceManifestSchema.safeParse(source.manifest);
+    if (!parsed.success)
+      throw new SourceAcquisitionError("source-mismatch", {
+        reason: "invalid-manifest",
+        detail: parsed.error.message,
+      });
+    const manifest = parsed.data;
+    const sourceDigest = canonicalDigest(manifest);
     if (await exists(directoryFor(sourceDigest))) {
       await verified(sourceDigest);
       return;
@@ -76,11 +95,27 @@ export function openMaterializedSources(options: {
     await mkdir(options.rootDirectory, { recursive: true, mode: 0o700 });
     const staging = join(options.rootDirectory, `.staging-${randomUUID()}`);
     try {
-      for (const entry of source.manifest.entries) {
-        const bytes = await source.readFile(entry.path);
+      for (const entry of manifest.entries) {
+        let bytes: Uint8Array;
+        try {
+          bytes = await source.readFile(entry.path);
+        } catch (error) {
+          throw new SourceAcquisitionError("source-mismatch", {
+            reason: "manifest-file-unavailable",
+            path: entry.path,
+            detail: error instanceof Error ? error.message : String(error),
+          });
+        }
         const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
         if (bytes.byteLength !== entry.size || digest !== entry.digest)
-          throw new Error("Source differs from its manifest");
+          throw new SourceAcquisitionError("source-mismatch", {
+            reason: "manifest-content",
+            path: entry.path,
+            expectedSize: entry.size,
+            actualSize: bytes.byteLength,
+            expectedDigest: entry.digest,
+            actualDigest: digest,
+          });
         const path = join(staging, entry.path);
         await mkdir(dirname(path), { recursive: true });
         await writeFile(path, bytes, { flag: "wx", mode: 0o444 });
@@ -90,8 +125,7 @@ export function openMaterializedSources(options: {
       await rm(staging, { recursive: true, force: true });
       // Another freeze may have laid out the same digest first.
       if (
-        error instanceof Error &&
-        error.message !== "Source differs from its manifest" &&
+        !(error instanceof SourceAcquisitionError) &&
         (await exists(directoryFor(sourceDigest)))
       ) {
         await verified(sourceDigest);

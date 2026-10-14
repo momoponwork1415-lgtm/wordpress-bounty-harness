@@ -21,7 +21,7 @@ import type {
 } from "../discovery/index.js";
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import { Review, type ScopeFactsProvider } from "../review/index.js";
-import type { Snapshot } from "../snapshot/index.js";
+import { SourceAcquisitionError, type Snapshot } from "../snapshot/index.js";
 import { Verification, type Verifier } from "../verification/index.js";
 import { WORDPRESS_VERIFIER_PROMPT_ID } from "../profiles/wordpress/prompts/index.js";
 import { parseWordPressAdvisories } from "../profiles/wordpress/advisory.js";
@@ -109,7 +109,10 @@ import {
   runCampaignPipeline,
   type CampaignPipeline,
 } from "./pipeline.js";
-import { storeTargetSkipDiagnostic } from "./skip-diagnostic.js";
+import {
+  storeTargetSkipDiagnostic,
+  type TargetSkipReason,
+} from "./skip-diagnostic.js";
 
 const text = z.strictObject({
   version: z.string().min(1).max(64),
@@ -1126,7 +1129,10 @@ async function runWordPressCampaign(
           `${target.targetId}@${target.version}`,
         );
         if (reservedSelections !== undefined && reservedDigest === undefined)
-          throw new Error("Reserved selection Snapshot is unavailable");
+          throw new SourceAcquisitionError("source-mismatch", {
+            reason: "reserved-snapshot-unavailable",
+            selectionId: `${target.targetId}@${target.version}`,
+          });
         // Selection already froze this source. Reuse the pinned Snapshot so a
         // second WordPress.org download cannot replace or block the campaign.
         const snapshot =
@@ -1139,7 +1145,13 @@ async function runWordPressCampaign(
             snapshot.target.identity !== target.targetId ||
             snapshot.target.version !== target.version)
         )
-          throw new Error("Reserved selection Snapshot changed");
+          throw new SourceAcquisitionError("source-mismatch", {
+            reason: "reserved-snapshot-changed",
+            expectedDigest: reservedDigest,
+            actualDigest: snapshot.digest,
+            expectedTarget: `${target.targetId}@${target.version}`,
+            actualTarget: `${snapshot.target.identity}@${snapshot.target.version}`,
+          });
         return snapshot;
       },
       lab: boundaries.lab,
@@ -1279,8 +1291,10 @@ export function createWordPressCliProfile(
       const selectionAttemptId = `selection-${state.newId()}`;
       const freezeFailures: {
         selectionId: string;
-        reason: string;
+        snapshotDigest: string;
+        reason: TargetSkipReason;
         diagnosticDigest: string;
+        selectionArtifactDigest: string;
       }[] = [];
       for (const target of rankable) {
         if (chosen.length >= policy.maximumTargets) {
@@ -1296,25 +1310,16 @@ export function createWordPressCliProfile(
             error,
           );
           const selectionId = `${target.targetId}@${target.version}`;
+          const selectionArtifactDigest = await state.store.putFiles({
+            "target-selection.json": canonicalJson(target),
+          });
           freezeFailures.push({
             selectionId,
+            snapshotDigest: canonicalDigest(target),
             reason,
             diagnosticDigest: digest,
+            selectionArtifactDigest,
           });
-          const appended = await state.ledger.append({
-            schemaVersion: 1,
-            identity: `target-skipped-${state.newId()}`,
-            campaignId: selectionAttemptId,
-            snapshotDigest: canonicalDigest(target),
-            occurredAt: state.clock().toISOString(),
-            type: "target-skipped",
-            selectionId,
-            stage: "freeze",
-            reason,
-            artifacts: [{ kind: "target-skip-diagnostic", digest }],
-          });
-          if (appended.status !== "appended")
-            throw new Error("Selection skip ledger append conflicted");
         }
       }
       const report = {
@@ -1333,6 +1338,32 @@ export function createWordPressCliProfile(
       const reportDigest = await state.store.putFiles({
         "selection-report.json": canonicalJson(report),
       });
+      for (const failure of freezeFailures) {
+        const appended = await state.ledger.append({
+          schemaVersion: 1,
+          identity: `target-skipped-${state.newId()}`,
+          campaignId: selectionAttemptId,
+          snapshotDigest: failure.snapshotDigest,
+          occurredAt: state.clock().toISOString(),
+          type: "target-skipped",
+          selectionId: failure.selectionId,
+          stage: "freeze",
+          reason: failure.reason,
+          artifacts: [
+            {
+              kind: "target-selection",
+              digest: failure.selectionArtifactDigest,
+            },
+            {
+              kind: "target-skip-diagnostic",
+              digest: failure.diagnosticDigest,
+            },
+            { kind: "selection-report", digest: reportDigest },
+          ],
+        });
+        if (appended.status !== "appended")
+          throw new Error("Selection skip ledger append conflicted");
+      }
       if ("candidateSource" in policy && chosen.length < 3)
         throw new Error(
           `Selection found ${chosen.length} eligible frozen targets; at least 3 are required (report ${reportDigest})`,

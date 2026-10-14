@@ -21,6 +21,7 @@ import {
   type DiscoveryTransportRun,
 } from "../../src/discovery/index.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
+import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
 import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acquisition/index.js";
 import {
   wordPressDiscoveryOutputContract,
@@ -103,6 +104,8 @@ async function harness(
     readonly listingObservations?: readonly WordPressOrgListingObservation[];
     /** A slug whose snapshot cannot be frozen. */
     readonly failFreeze?: string;
+    /** A slug whose acquired bytes disagree with its manifest. */
+    readonly corruptSourceManifest?: string;
     /** Simulates an archive connection failing after the selection freeze succeeded. */
     readonly failRepeatedFreeze?: boolean;
     /** Extra campaign config fields. */
@@ -400,7 +403,15 @@ async function harness(
         target: {
           identity: target.targetId,
           version: target.version,
-          manifest,
+          manifest:
+            target.targetId === `wporg:${options.corruptSourceManifest}`
+              ? {
+                  ...manifest,
+                  entries: manifest.entries.map((entry, index) =>
+                    index === 0 ? { ...entry, size: entry.size + 1 } : entry,
+                  ),
+                }
+              : manifest,
           readFile: (path: string) => readFile(join(sourceDirectory, path)),
         },
         dependencies: [],
@@ -2730,11 +2741,26 @@ describe("harness CLI vertical slice", () => {
       expect(diagnosticFile.bytes.toString("utf8")).toContain(
         "Synthetic download failure",
       );
+    const selectionRef = skips[0]?.artifacts.find(
+      (artifact) => artifact.kind === "target-selection",
+    );
+    expect(selectionRef).toBeDefined();
+    const selectionFile = await store().readFile(
+      selectionRef!.digest,
+      "target-selection.json",
+      10_000,
+    );
+    expect(selectionFile.status).toBe("resolved");
+    if (selectionFile.status === "resolved")
+      expect(
+        canonicalDigest(JSON.parse(selectionFile.bytes.toString("utf8"))),
+      ).toBe(skips[0]?.snapshotDigest);
     const selectedRecord = ledger().read({ type: "target-selected" })[0];
     const reportRef = selectedRecord?.event.artifacts.find(
       (artifact) => artifact.kind === "selection-report",
     );
     expect(reportRef).toBeDefined();
+    expect(skips[0]?.artifacts).toContainEqual(reportRef);
     const reportFile = await store().readFile(
       reportRef!.digest,
       "selection-report.json",
@@ -2751,6 +2777,95 @@ describe("harness CLI vertical slice", () => {
           },
         ],
       });
+  });
+
+  it("keeps a shortage selection report reachable after a freeze failure", async () => {
+    const { run, root, ledger, store } = await harness({
+      candidates: ["broken-plugin", "item-b", "item-c"],
+      failFreeze: "broken-plugin",
+    });
+    const policyPath = join(root, "selection.json");
+    const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete policy.candidateSlugs;
+    delete policy.pinnedVersions;
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...policy,
+        promptVariant: "short-objective-managed-v4",
+        revisitPolicy: { kind: "never" },
+        wordpressVersion: "6.8",
+        candidateSource: {
+          kind: "wordpress-org",
+          popularPages: 1,
+          tags: [],
+          pagesPerTag: 1,
+          perPage: 20,
+          maxCandidates: 20,
+          maxAgeDays: 1,
+        },
+      }),
+    );
+    const selected = await run("select", "--config", policyPath);
+    expect(selected.code).toBe(1);
+    expect(selected.stderr).toContain("at least 3 are required");
+    expect(ledger().read({ type: "target-selected" })).toHaveLength(0);
+    const skipped = ledger().read({ type: "target-skipped" })[0]?.event;
+    const reportRef = skipped?.artifacts.find(
+      (artifact) => artifact.kind === "selection-report",
+    );
+    expect(reportRef).toBeDefined();
+    const report = await store().readFile(
+      reportRef!.digest,
+      "selection-report.json",
+      2 * 1024 * 1024,
+    );
+    expect(report.status).toBe("resolved");
+    if (report.status === "resolved")
+      expect(
+        JSON.parse(report.bytes.toString("utf8")).freezeFailures,
+      ).toHaveLength(1);
+  });
+
+  it("classifies a source mismatch in the ledger and keeps its detail private", async () => {
+    const { run, configPath, ledger, store } = await harness({
+      candidates: ["broken-plugin", "synthetic-plugin"],
+      corruptSourceManifest: "broken-plugin",
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-mismatch",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    const skipped = ledger().read({
+      campaignId: "campaign-mismatch",
+      type: "target-skipped",
+    })[0]?.event;
+    expect(skipped).toMatchObject({
+      reason: "source-mismatch",
+      stage: "freeze",
+    });
+    expect(JSON.stringify(skipped)).not.toContain("manifest-content");
+    const diagnosticRef = skipped?.artifacts.find(
+      (artifact) => artifact.kind === "target-skip-diagnostic",
+    );
+    expect(diagnosticRef).toBeDefined();
+    const diagnostic = await store().readFile(
+      diagnosticRef!.digest,
+      "target-skip-diagnostic.json",
+      10_000,
+    );
+    expect(diagnostic.status).toBe("resolved");
+    if (diagnostic.status === "resolved")
+      expect(diagnostic.bytes.toString("utf8")).toContain("manifest-content");
   });
 
   it("lists the policy selection and runs only the named target or --all", async () => {
