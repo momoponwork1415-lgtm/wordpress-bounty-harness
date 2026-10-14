@@ -23,7 +23,7 @@ const digest = `sha256:${"a".repeat(64)}`;
 const sandboxUuid = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
 
 describe("gVisor Codex sandbox", () => {
-  it("names and explicitly removes a stopped agent container (#176)", async () => {
+  it("holds cleanup uncertainty when removal of a stopped agent fails (#176)", async () => {
     const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
     try {
       const source = join(root, "source");
@@ -34,6 +34,7 @@ describe("gVisor Codex sandbox", () => {
         maxBytes: 1024,
       });
       const calls: (readonly string[])[] = [];
+      let cleanupUncertain = 0;
       const sandbox = new GvisorCodexSandbox({
         dockerExecutablePath: "/usr/bin/docker",
         image: `node@${digest}`,
@@ -42,8 +43,16 @@ describe("gVisor Codex sandbox", () => {
         maxOutputBytes: 1024 * 1024,
         timeoutMs: 60_000,
         randomUuid: () => sandboxUuid,
+        onCleanupUncertain: () => cleanupUncertain++,
         runDocker: async (args) => {
           calls.push(args);
+          if (args[0] === "rm")
+            return {
+              kind: "exited" as const,
+              exitCode: 1,
+              stdout: "",
+              stderr: "daemon unavailable",
+            };
           if (args.includes("--network=internal-run"))
             return {
               kind: "timed-out" as const,
@@ -97,6 +106,7 @@ describe("gVisor Codex sandbox", () => {
         "--force",
         `codex-agent-${sandboxUuid}`,
       ]);
+      expect(cleanupUncertain).toBe(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

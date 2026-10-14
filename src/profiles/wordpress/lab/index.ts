@@ -413,6 +413,50 @@ const labLeftoverPatterns = (id: string) =>
 const LAB_LEFTOVERS = labLeftoverPatterns(labId);
 const exactLabId = new RegExp(`^${labId}$`);
 
+/** Read-only host inspection shared by Lab cleanup and orphan-claim recovery. */
+export async function listWordPressLeftovers(
+  runner: DockerRunner,
+  input: {
+    readonly patterns?: LeftoverPatterns;
+    readonly labId?: string;
+  } = {},
+): Promise<Leftovers> {
+  if (input.labId !== undefined && !exactLabId.test(input.labId))
+    throw new Error("Lab id is invalid");
+  const owned =
+    input.labId === undefined
+      ? LAB_LEFTOVERS
+      : labLeftoverPatterns(input.labId);
+  const kinds = [
+    ["containers", ["ps", "-a", "--format", "{{.Names}}"]],
+    ["networks", ["network", "ls", "--format", "{{.Name}}"]],
+    ["volumes", ["volume", "ls", "--format", "{{.Name}}"]],
+  ] as const;
+  const found: Record<keyof Leftovers, string[]> = {
+    containers: [],
+    networks: [],
+    volumes: [],
+  };
+  for (const [kind, args] of kinds) {
+    const listing = await runner.run({
+      args,
+      timeoutMs: 60_000,
+      maxOutputBytes: 8 * 1024 * 1024,
+    });
+    if (listing.exitCode !== 0)
+      throw new LabDockerFailure(
+        listing.stderr ||
+          `Docker command exited with status ${listing.exitCode}`,
+      );
+    const matching = [...owned[kind], ...(input.patterns?.[kind] ?? [])];
+    found[kind] = listing.stdout
+      .split("\n")
+      .map((name) => name.trim())
+      .filter((name) => matching.some((pattern) => pattern.test(name)));
+  }
+  return found;
+}
+
 export interface Resources {
   readonly id: string;
   readonly network: string;
@@ -449,6 +493,8 @@ export interface Resources {
   databaseCreated: boolean;
   wordpressCreated: boolean;
   recorderCreated: boolean;
+  /** A failed create can still finish in Docker after an immediate removal. */
+  creationUncertain: boolean;
 }
 
 export function openWordPressLab(options: {
@@ -465,6 +511,7 @@ export function openWordPressLab(options: {
   readonly runner?: DockerRunner;
   readonly nonce?: () => string;
   readonly healthAttempts?: number;
+  readonly onCleanupUncertain?: () => void;
 }): WordPressLab {
   if (!isAbsolute(options.dockerExecutablePath))
     throw new Error("Docker executable path must be absolute");
@@ -571,35 +618,34 @@ export function openWordPressLab(options: {
   const cleanup = async (resource: Resources): Promise<boolean> => {
     let okay = true;
     for (const args of [
-      ...(resource.wordpressCreated ||
-      resource.databaseCreated ||
-      resource.receiverCreated ||
-      resource.recorderCreated
-        ? [
-            [
-              "rm",
-              "--force",
-              ...[
-                resource.wordpressCreated ? resource.wordpress : undefined,
-                resource.databaseCreated ? resource.database : undefined,
-                resource.receiverCreated ? resource.receiver : undefined,
-                resource.recorderCreated ? resource.recorder : undefined,
-              ].filter((value): value is string => value !== undefined),
-            ],
-          ]
-        : []),
+      ...[
+        resource.wordpressCreated ? resource.wordpress : undefined,
+        resource.databaseCreated ? resource.database : undefined,
+        resource.receiverCreated ? resource.receiver : undefined,
+        resource.recorderCreated ? resource.recorder : undefined,
+      ]
+        .filter((value): value is string => value !== undefined)
+        .map((name) => ["rm", "--force", name]),
       ...(resource.volumeCreated
         ? [["volume", "rm", "--force", resource.volume]]
         : []),
       ...(resource.networkCreated ? [["network", "rm", resource.network]] : []),
     ]) {
       try {
-        if ((await docker(args)).exitCode !== 0) okay = false;
+        const result = await docker(args);
+        // These names were marked before create. A confirmed absence proves
+        // there is nothing left to remove after a failed/ambiguous create.
+        const absent =
+          /(?:No such (?:container|object|volume|network)|(?:container|volume|network) .* not found)/i.test(
+            result.stderr,
+          );
+        if (result.exitCode !== 0 && !absent) okay = false;
       } catch {
         okay = false;
       }
     }
     if (okay) active.delete(resource.id);
+    if (!okay || resource.creationUncertain) options.onCleanupUncertain?.();
     return okay;
   };
   const roles = async (
@@ -699,47 +745,21 @@ export function openWordPressLab(options: {
       return parsed.data;
     },
     async cleanupLeftovers({ remove, patterns = {}, labId: onlyLab }) {
-      if (onlyLab !== undefined && !exactLabId.test(onlyLab))
-        throw new Error("Lab id is invalid");
-      const owned =
-        onlyLab === undefined ? LAB_LEFTOVERS : labLeftoverPatterns(onlyLab);
-      const kinds = [
-        ["containers", ["ps", "-a", "--format", "{{.Names}}"], ["rm", "-f"]],
-        [
-          "networks",
-          ["network", "ls", "--format", "{{.Name}}"],
-          ["network", "rm"],
-        ],
-        [
-          "volumes",
-          ["volume", "ls", "--format", "{{.Name}}"],
-          ["volume", "rm"],
-        ],
-      ] as const;
-      const found: Record<(typeof kinds)[number][0], string[]> = {
-        containers: [],
-        networks: [],
-        volumes: [],
-      };
-      for (const [kind, list] of kinds) {
-        const matching = [...owned[kind], ...(patterns[kind] ?? [])];
-        // A host with thousands of anonymous volumes lists far more than the 64 KiB default.
-        const listing = await docker(list, 60_000, 8 * 1024 * 1024);
-        if (listing.exitCode !== 0)
-          throw new LabDockerFailure(
-            listing.stderr ||
-              `Docker command exited with status ${listing.exitCode}`,
-          );
-        found[kind] = listing.stdout
-          .split("\n")
-          .map((name) => name.trim())
-          .filter((name) => matching.some((pattern) => pattern.test(name)));
-      }
+      const found = await listWordPressLeftovers(runner, {
+        patterns,
+        ...(onlyLab === undefined ? {} : { labId: onlyLab }),
+      });
       // Containers go first so their networks and volumes are no longer in use.
-      if (remove)
-        for (const [kind, , removal] of kinds)
+      if (remove) {
+        const removals = [
+          ["containers", ["rm", "-f"]],
+          ["networks", ["network", "rm"]],
+          ["volumes", ["volume", "rm"]],
+        ] as const;
+        for (const [kind, removal] of removals)
           if (found[kind].length > 0)
             await requireDocker([...removal, ...found[kind]]);
+      }
       return found;
     },
     async provision(
@@ -815,7 +835,8 @@ export function openWordPressLab(options: {
         active.set(id, resource);
         return { status: "ready", handle };
       } catch (error: unknown) {
-        if (resource !== undefined) await cleanup(resource);
+        if (resource !== undefined)
+          await cleanup(resource).catch(() => options.onCleanupUncertain?.());
         return {
           status: "incomplete",
           reason:
@@ -928,12 +949,14 @@ export function openWordPressLab(options: {
     },
     async teardown(handle) {
       const resource = active.get(handle.id);
-      if (resource === undefined || resource.handle !== handle)
+      if (resource === undefined || resource.handle !== handle) {
+        options.onCleanupUncertain?.();
         return {
           status: "incomplete",
           reason: "cleanup",
           nextStep: "Inspect Lab resources and remove them before retry",
         };
+      }
       return (await cleanup(resource))
         ? { status: "removed" }
         : {

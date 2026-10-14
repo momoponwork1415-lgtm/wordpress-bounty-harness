@@ -164,11 +164,26 @@ export async function runCampaignPipeline<
   >;
   readonly clock: () => Date;
   readonly newId: () => string;
-  /** An optional profile-owned, read-only gate before an expensive Lab starts. */
+  /** Keep profile resource observations isolated for each concurrent target. */
+  readonly withTargetScope?: <T>(operation: () => Promise<T>) => Promise<T>;
+  /** Optional profile-owned admission and claim before an expensive Lab starts. */
   readonly beforeLab?: (input: {
     readonly target: Target;
     readonly snapshot: Snapshot;
-  }) => void | Promise<void>;
+    /** Cancel targets still waiting for a host slot after campaign stop. */
+    readonly signal: AbortSignal;
+  }) =>
+    | void
+    | {
+        readonly finish: (
+          state: "clean" | "recovery-needed",
+        ) => "clean" | "recovery-needed" | Promise<"clean" | "recovery-needed">;
+      }
+    | Promise<void | {
+        readonly finish: (
+          state: "clean" | "recovery-needed",
+        ) => "clean" | "recovery-needed" | Promise<"clean" | "recovery-needed">;
+      }>;
   /** Targets in flight at once; discovery run concurrency remains per target. */
   readonly maxConcurrentTargets?: number;
   /** An explicit operator retry after repairing the Verifier protocol. */
@@ -196,8 +211,11 @@ export async function runCampaignPipeline<
     skipped?: SkippedSummary;
   };
   let stopped: CampaignSummary["stopped"];
+  const stopController = new AbortController();
   const requestStop = (reason: NonNullable<CampaignSummary["stopped"]>) => {
     if (reason === "provider-limit" || stopped === undefined) stopped = reason;
+    if (!stopController.signal.aborted)
+      stopController.abort(new Error(`Campaign stopped: ${reason}`));
   };
 
   const selectedSnapshots = new Map<string, string>();
@@ -244,12 +262,53 @@ export async function runCampaignPipeline<
     });
   };
 
+  const isSnapshotCompleteNow = (digest: string): boolean => {
+    const concluded = readAll(ledger, {
+      campaignId,
+      type: "discovery-concluded",
+    }).some(({ event }) => event.snapshotDigest === digest);
+    if (!concluded) return false;
+    const findingIds = readAll(ledger, {
+      campaignId,
+      type: "finding-recorded",
+    }).flatMap(({ event }) =>
+      event.type === "finding-recorded" && event.snapshotDigest === digest
+        ? [event.findingId]
+        : [],
+    );
+    const latest = new Map<string, VerificationResultV1["status"]>();
+    for (const { event } of readAll(ledger, {
+      campaignId,
+      type: "verification-finished",
+    }))
+      if (
+        event.type === "verification-finished" &&
+        event.basis === undefined &&
+        event.snapshotDigest === digest
+      )
+        latest.set(event.findingId, event.result.status);
+    return findingIds.every((findingId) => {
+      const status = latest.get(findingId);
+      return status !== undefined && status !== "incomplete";
+    });
+  };
+
   const processTarget = async (target: Target): Promise<TargetResult> => {
     const selectionId = `${target.targetId}@${target.version}`;
     let stage: SkipStage = "freeze";
     // Before a snapshot exists, the selection record stands in for its digest.
     let snapshotDigest = canonicalDigest(target);
     let handle: Handle | undefined;
+    let permit:
+      | {
+          readonly finish: (
+            state: "clean" | "recovery-needed",
+          ) =>
+            "clean" | "recovery-needed" | Promise<"clean" | "recovery-needed">;
+        }
+      | undefined;
+    let labAttempted = false;
+    let labProvisionSettled = false;
     let result: TargetResult = {};
     const skip = async (error: unknown): Promise<void> => {
       // The failure text may hold paths; it goes to the operator, not the ledger.
@@ -275,7 +334,15 @@ export async function runCampaignPipeline<
       const snapshot = await pipeline.freeze(target);
       snapshotDigest = snapshot.digest;
       stage = "discovery";
-      await options.beforeLab?.({ target, snapshot });
+      stopController.signal.throwIfAborted();
+      permit =
+        (await options.beforeLab?.({
+          target,
+          snapshot,
+          signal: stopController.signal,
+        })) ?? undefined;
+      if (stopController.signal.aborted) return;
+      if (isSnapshotCompleteNow(snapshot.digest)) return;
       const base = {
         schemaVersion: 1 as const,
         campaignId,
@@ -310,7 +377,9 @@ export async function runCampaignPipeline<
 
       stage = "discovery";
       const setup = pipeline.setupFor(snapshot);
+      labAttempted = true;
       const provisioned = await pipeline.lab.provision(snapshot, setup);
+      labProvisionSettled = true;
       if (provisioned.status === "ready") handle = provisioned.handle;
       const seeded =
         provisioned.status === "ready"
@@ -589,15 +658,28 @@ export async function runCampaignPipeline<
     } catch (error: unknown) {
       await skip(error);
     } finally {
-      if (handle !== undefined) {
-        const removed = await pipeline.lab.teardown(handle).catch(() => null);
-        if (removed?.status !== "removed" && result.skipped === undefined)
-          await skip(
-            new Error(
-              removed?.nextStep ??
-                "Inspect and remove remaining Lab resources before retry",
-            ),
-          );
+      // An incomplete provision result means the adapter finished its own
+      // cleanup. A thrown provision has no such guarantee.
+      let clean =
+        !labAttempted || (labProvisionSettled && handle === undefined);
+      try {
+        if (handle !== undefined) {
+          const removed = await pipeline.lab.teardown(handle).catch(() => null);
+          clean = removed?.status === "removed";
+          if (!clean && result.skipped === undefined)
+            await skip(
+              new Error(
+                removed?.status === "incomplete"
+                  ? removed.nextStep
+                  : "Inspect and remove remaining Lab resources before retry",
+              ),
+            );
+        }
+      } finally {
+        const outcome =
+          (await permit?.finish(clean ? "clean" : "recovery-needed")) ??
+          (clean ? "clean" : "recovery-needed");
+        if (outcome === "recovery-needed") requestStop("incomplete");
       }
     }
     return result;
@@ -613,7 +695,10 @@ export async function runCampaignPipeline<
       const index = next++;
       const target = selected[index];
       if (target === undefined) return;
-      results[index] = await processTarget(target);
+      results[index] =
+        options.withTargetScope === undefined
+          ? await processTarget(target)
+          : await options.withTargetScope(() => processTarget(target));
     }
   };
   await Promise.all(

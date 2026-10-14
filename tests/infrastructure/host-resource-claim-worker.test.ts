@@ -29,6 +29,10 @@ it.skipIf(process.env.WBH_RESOURCE_RACE_DB === undefined)(
       const result = claims.tryAcquire({
         targetKey: "wordpress:plugin:shared",
         ownerKey: owner,
+        ownerPid: process.pid,
+        stateDirectory: "/tmp/worker-state",
+        campaignId: "worker-campaign",
+        snapshotDigest: `sha256:${"a".repeat(64)}`,
         providerKeys: ["codex"],
         leaseDurationMs: 60_000,
       });

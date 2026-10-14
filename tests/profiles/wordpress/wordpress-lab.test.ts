@@ -10,6 +10,7 @@ import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import {
   openWordPressLab,
   type DockerRequest,
+  type DockerResult,
   type WordPressVictimRoute,
 } from "../../../src/profiles/wordpress/lab/index.js";
 import type { Snapshot } from "../../../src/snapshot/index.js";
@@ -44,6 +45,12 @@ async function fixture(
     "ready" | "no-runsc" | "missing-image" | "missing-extension" = "ready",
   core?: { readonly version: string; readonly runningVersion: string },
   pluginSlug = "example",
+  hooks?: {
+    readonly onDockerRequest?: (
+      request: DockerRequest,
+    ) => DockerResult | undefined;
+    readonly onCleanupUncertain?: () => void;
+  },
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-lab-"));
   directories.push(root);
@@ -133,6 +140,8 @@ async function fixture(
     runner: {
       async run(request) {
         commands.push(request);
+        const override = hooks?.onDockerRequest?.(request);
+        if (override !== undefined) return override;
         if (request.args[0] === "info")
           return {
             exitCode: 0,
@@ -313,6 +322,9 @@ async function fixture(
     },
     nonce: () => "fixed-nonce",
     healthAttempts: 1,
+    ...(hooks?.onCleanupUncertain === undefined
+      ? {}
+      : { onCleanupUncertain: hooks.onCleanupUncertain }),
   });
   const setup = {
     schemaVersion: 1 as const,
@@ -1901,4 +1913,40 @@ describe("WordPress gVisor Lab", () => {
       ),
     ).toBe(true);
   });
+
+  it.each(["absent", "failed"] as const)(
+    "holds cleanup uncertainty after verification network create timeout and %s removal",
+    async (removal) => {
+      let uncertain = 0;
+      const { lab, snapshot, setup, commands } = await fixture(
+        "ready",
+        undefined,
+        "example",
+        {
+          onCleanupUncertain: () => uncertain++,
+          onDockerRequest: ({ args }) => {
+            if (args[0] === "network" && args[1] === "create")
+              return { exitCode: -1, stdout: "", stderr: "client timed out" };
+            if (args[0] === "network" && args[1] === "rm")
+              return {
+                exitCode: 1,
+                stdout: "",
+                stderr:
+                  removal === "absent"
+                    ? "Error response from daemon: network missing not found"
+                    : "daemon unavailable",
+              };
+            return undefined;
+          },
+        },
+      );
+      expect(
+        await lab.provision(snapshot, setup, { purpose: "verification" }),
+      ).toMatchObject({ status: "incomplete", reason: "provision" });
+      expect(
+        commands.some(({ args }) => args[0] === "network" && args[1] === "rm"),
+      ).toBe(true);
+      expect(uncertain).toBe(1);
+    },
+  );
 });

@@ -20,6 +20,8 @@ import type {
   ProviderAttachmentStore,
 } from "../discovery/index.js";
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
+import type { SqliteHostResourceClaims } from "../infrastructure/host-resource-claims.js";
+import type { TargetResourceScope } from "../infrastructure/target-resource-scope.js";
 import { Review, type ScopeFactsProvider } from "../review/index.js";
 import type { Snapshot } from "../snapshot/index.js";
 import { Verification, type Verifier } from "../verification/index.js";
@@ -774,6 +776,12 @@ async function wordPressLabDown(
 export type WordPressCliProfileOptions = {
   /** Host-common gate; production uses one registry across every --state. */
   readonly repeatTrialGate: RepeatTrialGate;
+  /** Host-common claim held from before Lab provision through teardown. */
+  readonly resourceClaims?: SqliteHostResourceClaims;
+  /** Reserve all providers this target may use, including its verifier. */
+  readonly resourceProviderKeys?: readonly string[];
+  readonly cleanupScope?: TargetResourceScope;
+  readonly onResourceWait?: (reason: string) => void;
   readonly boundaries: (
     config: WordPressCampaignConfig,
     state: CliState,
@@ -1132,62 +1140,116 @@ async function runWordPressCampaign(
     store: state.store,
     clock: state.clock,
     newId: state.newId,
-    beforeLab: ({ target, snapshot }) => {
-      let concluded = false;
-      let conclusionAfter = 0;
-      for (;;) {
-        const page = state.ledger.read({
-          campaignId: input.campaignId,
-          type: "discovery-concluded",
-          afterSequence: conclusionAfter,
-          limit: 1000,
-        });
-        if (
-          page.some(({ event }) => event.snapshotDigest === snapshot.digest)
-        ) {
-          concluded = true;
-          break;
+    ...(options.cleanupScope === undefined
+      ? {}
+      : {
+          withTargetScope: <T>(operation: () => Promise<T>) =>
+            options.cleanupScope!.run(operation),
+        }),
+    beforeLab: async ({ target, snapshot, signal }) => {
+      signal.throwIfAborted();
+      const assertPendingTrial = () => {
+        let concluded = false;
+        let conclusionAfter = 0;
+        for (;;) {
+          const page = state.ledger.read({
+            campaignId: input.campaignId,
+            type: "discovery-concluded",
+            afterSequence: conclusionAfter,
+            limit: 1000,
+          });
+          if (
+            page.some(({ event }) => event.snapshotDigest === snapshot.digest)
+          ) {
+            concluded = true;
+            break;
+          }
+          if (page.length < 1000) break;
+          conclusionAfter = page.at(-1)!.sequence;
         }
-        if (page.length < 1000) break;
-        conclusionAfter = page.at(-1)!.sequence;
-      }
-      if (concluded) return;
-      let afterSequence = 0;
-      let spent = 0;
-      for (;;) {
-        const page = state.ledger.read({
+        if (concluded) return;
+        let afterSequence = 0;
+        let spent = 0;
+        for (;;) {
+          const page = state.ledger.read({
+            campaignId: input.campaignId,
+            type: "discovery-run-started",
+            afterSequence,
+            limit: 1000,
+          });
+          spent += page.filter(
+            ({ event }) =>
+              event.type === "discovery-run-started" &&
+              event.snapshotDigest === snapshot.digest &&
+              (event.runKind ?? "explore") === "explore",
+          ).length;
+          if (page.length < 1000) break;
+          afterSequence = page.at(-1)!.sequence;
+        }
+        const maxRuns = Math.min(
+          config.stopRules.maxRuns,
+          target.runBudget ?? config.stopRules.maxRuns,
+        );
+        if (spent >= maxRuns) return;
+        const arms = allocateTrialArms(spent, ablationConfig?.axes ?? []);
+        const selectedObjective =
+          arms.prompt === "b" && armBObjective !== undefined
+            ? armBObjective
+            : objective;
+        options.repeatTrialGate.assertMayStart({
+          stateDirectory: state.stateDirectory,
+          slug: target.slug,
+          snapshotDigest: snapshot.digest,
+          promptDigest: selectedObjective.digest,
           campaignId: input.campaignId,
-          type: "discovery-run-started",
-          afterSequence,
-          limit: 1000,
+          trialOrdinal: spent,
         });
-        spent += page.filter(
-          ({ event }) =>
-            event.type === "discovery-run-started" &&
-            event.snapshotDigest === snapshot.digest &&
-            (event.runKind ?? "explore") === "explore",
-        ).length;
-        if (page.length < 1000) break;
-        afterSequence = page.at(-1)!.sequence;
-      }
-      const maxRuns = Math.min(
-        config.stopRules.maxRuns,
-        target.runBudget ?? config.stopRules.maxRuns,
+      };
+      assertPendingTrial();
+      if (options.resourceClaims === undefined) return;
+      let previousWait = "";
+      const handle = await options.resourceClaims.waitForClaim(
+        {
+          targetKey: `wordpress:plugin:${target.slug}`,
+          ownerKey: `run:${state.newId()}`,
+          ownerPid: process.pid,
+          stateDirectory: state.stateDirectory,
+          campaignId: input.campaignId,
+          snapshotDigest: snapshot.digest,
+          providerKeys: [...(options.resourceProviderKeys ?? ["codex"])],
+          leaseDurationMs: 3 * 60 * 60_000,
+        },
+        {
+          signal,
+          onWait: (waiting) => {
+            const reason =
+              waiting.reason === "provider-capacity"
+                ? `${waiting.reason}:${waiting.providerKey}`
+                : waiting.reason;
+            if (reason !== previousWait) options.onResourceWait?.(reason);
+            previousWait = reason;
+          },
+        },
       );
-      if (spent >= maxRuns) return;
-      const arms = allocateTrialArms(spent, ablationConfig?.axes ?? []);
-      const selectedObjective =
-        arms.prompt === "b" && armBObjective !== undefined
-          ? armBObjective
-          : objective;
-      options.repeatTrialGate.assertMayStart({
-        stateDirectory: state.stateDirectory,
-        slug: target.slug,
-        snapshotDigest: snapshot.digest,
-        promptDigest: selectedObjective.digest,
-        campaignId: input.campaignId,
-        trialOrdinal: spent,
-      });
+      try {
+        // A different process may have started a Trial while this one waited.
+        assertPendingTrial();
+      } catch (error) {
+        options.resourceClaims.release(handle);
+        throw error;
+      }
+      return {
+        finish: (status: "clean" | "recovery-needed") => {
+          const finalStatus =
+            status === "recovery-needed" ||
+            options.cleanupScope?.isCleanupUncertain() === true
+              ? "recovery-needed"
+              : "clean";
+          if (finalStatus === "clean") options.resourceClaims!.release(handle);
+          else options.resourceClaims!.requireRecovery(handle);
+          return finalStatus;
+        },
+      };
     },
     pipeline: {
       select: async () =>

@@ -21,6 +21,8 @@ import {
   type DiscoveryTransportRun,
 } from "../../src/discovery/index.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
+import { SqliteHostResourceClaims } from "../../src/infrastructure/host-resource-claims.js";
+import { TargetResourceScope } from "../../src/infrastructure/target-resource-scope.js";
 import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acquisition/index.js";
 import {
   wordPressDiscoveryOutputContract,
@@ -121,6 +123,8 @@ async function harness(
     readonly labMissingExtension?: boolean;
     readonly labSeedFailure?: boolean;
     readonly labSeedThrows?: boolean;
+    readonly withResourceClaims?: boolean;
+    readonly markCleanupUncertainOnCall?: number;
     /** The first Finding lacks a runnable recipe until a new Lab scenario is selected. */
     readonly firstVerifierIncomplete?: boolean;
     readonly verifierRecipeFailures?: number;
@@ -131,6 +135,8 @@ async function harness(
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
   directories.push(root);
+  const cleanupScope =
+    options.withResourceClaims === true ? new TargetResourceScope() : undefined;
   const sourceDirectory = join(root, "source");
   await mkdir(join(sourceDirectory, "includes"), { recursive: true });
   await writeFile(
@@ -326,6 +332,11 @@ async function harness(
     },
     nonce: () => "fixed-nonce",
     healthAttempts: 1,
+    ...(cleanupScope === undefined
+      ? {}
+      : {
+          onCleanupUncertain: () => cleanupScope.markCleanupUncertain(),
+        }),
   });
 
   const selection = createWordPressSelection({
@@ -483,6 +494,8 @@ async function harness(
     executor: {
       async execute(run: DiscoveryTransportRun) {
         const call = prompts.push(run.prompt);
+        if (options.markCleanupUncertainOnCall === call)
+          cleanupScope?.markCleanupUncertain();
         promptDigests.push(run.campaignInput.promptDigest);
         entryIndexes.push(run.campaignInput.entryIndex);
         histories.push(run.campaignInput.history.mode);
@@ -644,12 +657,21 @@ async function harness(
     Parameters<typeof createWordPressCliProfile>[0]["boundaries"]
   >[1];
   let ids = 0;
+  const resourceClaims = options.withResourceClaims
+    ? new SqliteHostResourceClaims(
+        join(root, "host-resources.sqlite"),
+        { maxTargets: 1, providers: { codex: 1 } },
+        () => new Date(now),
+      )
+    : undefined;
   const environment = {
     stateDirectory: join(root, "state"),
     clock: () => new Date(now),
     newId: () => `id-${++ids}`,
     profile: createWordPressCliProfile({
       repeatTrialGate: syntheticTrialGate,
+      ...(resourceClaims === undefined ? {} : { resourceClaims }),
+      ...(cleanupScope === undefined ? {} : { cleanupScope }),
       scopePolicy: await loadWordpressScopePolicy(),
       ...(options.scopeFacts === undefined
         ? {}
@@ -768,6 +790,7 @@ async function harness(
     store: () => state.store,
     maxInFlight: () => maxInFlight,
     verificationProvisionAttempts: () => verificationProvisionAttempts,
+    resourceClaims,
   };
 }
 
@@ -833,6 +856,198 @@ const programmeRef = {
 };
 
 describe("harness CLI vertical slice", () => {
+  it("serializes concurrent runs of the same campaign target and releases a clean claim", async () => {
+    const { run, configPath, ledger, resourceClaims } = await harness({
+      withResourceClaims: true,
+      zeroFindings: true,
+      config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
+    });
+    if (resourceClaims === undefined) throw new Error("missing claims");
+    try {
+      const args = [
+        "campaign",
+        "run",
+        "--all",
+        "--campaign",
+        "shared-target",
+        "--config",
+        configPath,
+      ];
+      const outcomes = await Promise.all([run(...args), run(...args)]);
+      expect(outcomes.map((outcome) => outcome.code)).toEqual([0, 0]);
+      expect(
+        ledger().read({
+          campaignId: "shared-target",
+          type: "discovery-run-started",
+        }),
+      ).toHaveLength(1);
+      expect(resourceClaims.status().usedTargets).toBe(0);
+    } finally {
+      resourceClaims.close();
+    }
+  });
+
+  it("holds an uncertain Lab provision claim for recovery", async () => {
+    const { run, configPath, resourceClaims } = await harness({
+      withResourceClaims: true,
+      labProvisionFailure: true,
+    });
+    if (resourceClaims === undefined) throw new Error("missing claims");
+    try {
+      const result = await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "uncertain-lab",
+        "--config",
+        configPath,
+      );
+      expect(result.code).toBe(3);
+      expect(resourceClaims.status().claims).toMatchObject([
+        {
+          targetKey: "wordpress:plugin:synthetic-plugin",
+          status: "recovery-needed",
+        },
+      ]);
+    } finally {
+      resourceClaims.close();
+    }
+  });
+
+  it("releases a claim after an incomplete Lab provision that cleaned up", async () => {
+    const { run, configPath, resourceClaims } = await harness({
+      withResourceClaims: true,
+      labMissingExtension: true,
+    });
+    if (resourceClaims === undefined) throw new Error("missing claims");
+    try {
+      const result = await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "clean-incomplete-lab",
+        "--config",
+        configPath,
+      );
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("incomplete(precondition)");
+      expect(resourceClaims.status().usedTargets).toBe(0);
+    } finally {
+      resourceClaims.close();
+    }
+  });
+
+  it("stops slot waiters after uncertain Lab cleanup instead of waiting on its own claim", async () => {
+    const { run, configPath, resourceClaims, ledger } = await harness({
+      withResourceClaims: true,
+      candidates: ["synthetic-plugin", "second-plugin"],
+      labProvisionFailure: true,
+      config: {
+        resources: {
+          maxConcurrentRuns: 1,
+          maxConcurrentTargets: 2,
+          memoryBudgetMiB: 10_240,
+        },
+      },
+    });
+    if (resourceClaims === undefined) throw new Error("missing claims");
+    try {
+      const result = await run(
+        "campaign",
+        "run",
+        "--all",
+        "--campaign",
+        "failed-lab-two-targets",
+        "--config",
+        configPath,
+      );
+      expect(result.code).toBe(3);
+      expect(resourceClaims.status().usedTargets).toBe(1);
+      expect(
+        ledger().read({
+          campaignId: "failed-lab-two-targets",
+          type: "discovery-run-started",
+        }),
+      ).toHaveLength(0);
+    } finally {
+      resourceClaims.close();
+    }
+  }, 10_000);
+
+  it("cancels a waiting target when another target hits the provider limit", async () => {
+    const { run, configPath, resourceClaims, ledger } = await harness({
+      withResourceClaims: true,
+      candidates: ["synthetic-plugin", "second-plugin"],
+      limitOnCalls: [1],
+      zeroFindings: true,
+      config: {
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+        resources: {
+          maxConcurrentRuns: 1,
+          maxConcurrentTargets: 2,
+          memoryBudgetMiB: 10_240,
+        },
+      },
+    });
+    if (resourceClaims === undefined) throw new Error("missing claims");
+    try {
+      const result = await run(
+        "campaign",
+        "run",
+        "--all",
+        "--campaign",
+        "provider-stop-two-targets",
+        "--config",
+        configPath,
+      );
+      expect(result.code).toBe(3);
+      expect(resourceClaims.status().usedTargets).toBe(0);
+      expect(
+        ledger().read({
+          campaignId: "provider-stop-two-targets",
+          type: "discovery-run-started",
+        }),
+      ).toHaveLength(1);
+    } finally {
+      resourceClaims.close();
+    }
+  }, 10_000);
+
+  it("retains a claim when auxiliary cleanup is uncertain even if the campaign Lab was removed", async () => {
+    const { run, configPath, resourceClaims, ledger } = await harness({
+      withResourceClaims: true,
+      markCleanupUncertainOnCall: 1,
+      zeroFindings: true,
+      config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
+    });
+    if (resourceClaims === undefined) throw new Error("missing claims");
+    try {
+      const result = await run(
+        "campaign",
+        "run",
+        "--all",
+        "--campaign",
+        "auxiliary-cleanup",
+        "--config",
+        configPath,
+      );
+      expect(result.code).toBe(3);
+      expect(
+        ledger().read({
+          campaignId: "auxiliary-cleanup",
+          type: "discovery-run-started",
+        }),
+      ).toHaveLength(1);
+      expect(resourceClaims.status().claims).toMatchObject([
+        { status: "recovery-needed" },
+      ]);
+    } finally {
+      resourceClaims.close();
+    }
+  });
+
   it("records a measured evaluation block with a bounded reason code", async () => {
     const { run, ledger, configPath } = await harness();
     expect((await run("select", "--config", configPath)).code).toBe(0);
@@ -2264,14 +2479,18 @@ describe("harness CLI vertical slice", () => {
           args[0] === "rm" &&
           args.slice(2).some((name) => name.startsWith("wbh-")),
       );
-    expect(targetRemovals).toHaveLength(2);
+    expect(targetRemovals).toHaveLength(8);
+    const removedTargetIds = new Set<string>();
     for (const removal of targetRemovals) {
+      expect(removal).toHaveLength(3);
       const ids = new Set(
         removal.slice(2).map((name) => /^wbh-([0-9a-f-]{36})-/.exec(name)?.[1]),
       );
       expect(ids.size).toBe(1);
       expect(ids.has(undefined)).toBe(false);
+      removedTargetIds.add([...ids][0]!);
     }
+    expect(removedTargetIds.size).toBe(2);
   });
 
   it("keeps a target Lab until its verification finishes, then removes it", async () => {

@@ -27,6 +27,11 @@ import {
 } from "../snapshot/index.js";
 import type { Verifier } from "../verification/index.js";
 import {
+  hostResourceLimitsSchema,
+  type SqliteHostResourceClaims,
+} from "../infrastructure/host-resource-claims.js";
+import { TargetResourceScope } from "../infrastructure/target-resource-scope.js";
+import {
   createWordPressOrgFetchAdapter,
   openMaterializedSources,
   openWordPressCoreSource,
@@ -91,6 +96,7 @@ export const wordpressHostConfigSchema = z.strictObject({
   wordfenceHistory: z
     .strictObject({ databasePath: absolutePath, statePath: absolutePath })
     .optional(),
+  resourceLimits: hostResourceLimitsSchema.optional(),
 });
 export type WordPressHostConfig = z.infer<typeof wordpressHostConfigSchema>;
 
@@ -141,12 +147,18 @@ export async function loadWordPressHostConfig(
 export async function createWordPressHostProfile(options: {
   readonly host: WordPressHostConfig;
   readonly repeatTrialGate: RepeatTrialGate;
+  readonly resourceClaims?: SqliteHostResourceClaims;
+  readonly onResourceWait?: (reason: string) => void;
   readonly runDocker?: HostDockerRun;
   readonly fetch?: typeof fetch;
   /** Compiled credential proxy; defaults to the built `discovery` directory. */
   readonly proxyBundleDirectory?: string;
 }): Promise<CliProfile> {
   const host = options.host;
+  const cleanupScope =
+    options.resourceClaims === undefined
+      ? undefined
+      : new TargetResourceScope();
   const proxyBundleDirectory =
     options.proxyBundleDirectory ??
     fileURLToPath(new URL("../discovery/", import.meta.url));
@@ -266,6 +278,11 @@ export async function createWordPressHostProfile(options: {
         ? {}
         : { memoryMiB: CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB }),
       clock: state.clock,
+      ...(cleanupScope === undefined
+        ? {}
+        : {
+            onCleanupUncertain: () => cleanupScope.markCleanupUncertain(),
+          }),
       ...(options.runDocker === undefined
         ? {}
         : { runDocker: options.runDocker }),
@@ -331,6 +348,11 @@ export async function createWordPressHostProfile(options: {
         recorder: host.images.broker,
       },
       source: sources,
+      ...(cleanupScope === undefined
+        ? {}
+        : {
+            onCleanupUncertain: () => cleanupScope.markCleanupUncertain(),
+          }),
       ...(options.runDocker === undefined
         ? {}
         : {
@@ -362,6 +384,11 @@ export async function createWordPressHostProfile(options: {
         scratchRootDirectory: directories.brokerScratch,
         proxyBundleDirectory,
         clock: state.clock,
+        ...(cleanupScope === undefined
+          ? {}
+          : {
+              onCleanupUncertain: () => cleanupScope.markCleanupUncertain(),
+            }),
       }),
       attachments,
       host.images.codex,
@@ -479,6 +506,13 @@ export async function createWordPressHostProfile(options: {
 
   return createWordPressCliProfile({
     repeatTrialGate: options.repeatTrialGate,
+    ...(options.resourceClaims === undefined
+      ? {}
+      : { resourceClaims: options.resourceClaims }),
+    ...(cleanupScope === undefined ? {} : { cleanupScope }),
+    ...(options.onResourceWait === undefined
+      ? {}
+      : { onResourceWait: options.onResourceWait }),
     boundaries,
     selectionBoundaries,
     scopePolicy: await loadWordpressScopePolicy(
