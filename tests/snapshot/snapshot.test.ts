@@ -50,6 +50,45 @@ describe("snapshot", () => {
     }
   });
 
+  it("classifies malformed manifests, size changes, and digest changes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "snapshot-"));
+    try {
+      for (const entry of [
+        { path: "../source.txt", digest, size: bytes.length },
+        { path: "source.txt", digest, size: bytes.length + 1 },
+        {
+          path: "source.txt",
+          digest: `sha256:${"0".repeat(64)}`,
+          size: bytes.length,
+        },
+      ]) {
+        const snapshot = openSnapshot({
+          storageDirectory: directory,
+          source: {
+            async acquire() {
+              return {
+                target: {
+                  ...source(async () => bytes),
+                  manifest: {
+                    kind: "canonical-file-manifest" as const,
+                    schemaVersion: 1 as const,
+                    entries: [entry],
+                  },
+                },
+                dependencies: [],
+              };
+            },
+          },
+        });
+        await expect(snapshot.freeze(undefined)).rejects.toMatchObject({
+          kind: "source-mismatch",
+        });
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("rejects source bytes that differ from the manifest", async () => {
     const directory = await mkdtemp(join(tmpdir(), "snapshot-"));
     try {
@@ -64,9 +103,9 @@ describe("snapshot", () => {
           },
         },
       });
-      await expect(snapshot.freeze(undefined)).rejects.toThrow(
-        "Source differs",
-      );
+      await expect(snapshot.freeze(undefined)).rejects.toMatchObject({
+        kind: "source-mismatch",
+      });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

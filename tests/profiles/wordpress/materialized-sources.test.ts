@@ -133,12 +133,12 @@ describe("materialized snapshot sources", () => {
     await chmod(file, 0o644);
     await writeFile(file, "<?php // changed");
 
-    await expect(sources.resolve(snapshot)).rejects.toThrow(
-      "Materialized source differs from its snapshot",
-    );
-    await expect(snapshots.freeze("example-plugin")).rejects.toThrow(
-      "Materialized source differs from its snapshot",
-    );
+    await expect(sources.resolve(snapshot)).rejects.toMatchObject({
+      kind: "source-mismatch",
+    });
+    await expect(snapshots.freeze("example-plugin")).rejects.toMatchObject({
+      kind: "source-mismatch",
+    });
   });
 
   it("refuses a snapshot whose source was never materialized", async () => {
@@ -158,7 +158,25 @@ describe("materialized snapshot sources", () => {
         dependencies: [],
         digest: `sha256:${"c".repeat(64)}`,
       }),
-    ).rejects.toThrow("Materialized source is unavailable");
+    ).rejects.toMatchObject({ kind: "source-mismatch" });
+  });
+
+  it("rejects an invalid manifest before materializing it", async () => {
+    const target = source("wporg:example-plugin", { "a.php": "a" });
+    const { snapshots } = await setup({
+      target: {
+        ...target,
+        manifest: {
+          ...target.manifest,
+          entries: [{ ...target.manifest.entries[0]!, path: "../escape.php" }],
+        },
+      },
+      dependencies: [],
+    });
+    await expect(snapshots.freeze("example-plugin")).rejects.toMatchObject({
+      kind: "source-mismatch",
+      diagnostic: { reason: "invalid-manifest" },
+    });
   });
 
   it("refuses a manifest whose bytes differ before writing anything", async () => {
@@ -167,8 +185,8 @@ describe("materialized snapshot sources", () => {
       target: { ...target, readFile: async () => Buffer.from("tampered") },
       dependencies: [],
     });
-    await expect(snapshots.freeze("example-plugin")).rejects.toThrow(
-      "Source differs from its manifest",
-    );
+    await expect(snapshots.freeze("example-plugin")).rejects.toMatchObject({
+      kind: "source-mismatch",
+    });
   });
 });

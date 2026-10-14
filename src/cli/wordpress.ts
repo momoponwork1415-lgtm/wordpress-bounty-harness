@@ -21,7 +21,7 @@ import type {
 } from "../discovery/index.js";
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import { Review, type ScopeFactsProvider } from "../review/index.js";
-import type { Snapshot } from "../snapshot/index.js";
+import { SourceAcquisitionError, type Snapshot } from "../snapshot/index.js";
 import { Verification, type Verifier } from "../verification/index.js";
 import { WORDPRESS_VERIFIER_PROMPT_ID } from "../profiles/wordpress/prompts/index.js";
 import { parseWordPressAdvisories } from "../profiles/wordpress/advisory.js";
@@ -1125,15 +1125,33 @@ async function runWordPressCampaign(
             target.slug === input.target,
         ),
       freeze: async (target) => {
-        const snapshot = await boundaries.freeze(target);
         const reservedDigest = reservedDigests.get(
           `${target.targetId}@${target.version}`,
         );
+        if (reservedSelections !== undefined && reservedDigest === undefined)
+          throw new SourceAcquisitionError("source-mismatch", {
+            reason: "reserved-snapshot-unavailable",
+            selectionId: `${target.targetId}@${target.version}`,
+          });
+        // Selection already froze this source. Reuse the pinned Snapshot so a
+        // second WordPress.org download cannot replace or block the campaign.
+        const snapshot =
+          reservedDigest === undefined
+            ? await boundaries.freeze(target)
+            : await boundaries.loadSnapshot(reservedDigest);
         if (
           reservedSelections !== undefined &&
-          snapshot.digest !== reservedDigest
+          (snapshot.digest !== reservedDigest ||
+            snapshot.target.identity !== target.targetId ||
+            snapshot.target.version !== target.version)
         )
-          throw new Error("Reserved selection Snapshot changed");
+          throw new SourceAcquisitionError("source-mismatch", {
+            reason: "reserved-snapshot-changed",
+            expectedDigest: reservedDigest,
+            actualDigest: snapshot.digest,
+            expectedTarget: `${target.targetId}@${target.version}`,
+            actualTarget: `${snapshot.target.identity}@${snapshot.target.version}`,
+          });
         return snapshot;
       },
       lab: boundaries.lab,

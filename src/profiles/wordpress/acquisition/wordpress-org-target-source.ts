@@ -15,6 +15,7 @@ import {
   wordPressOrgTargetObservationSchema,
   type OpenWordPressOrgTargetSourceOptions,
   type WordPressOrgAcquisitionFailure,
+  type WordPressOrgAcquisitionDiagnostic,
   type WordPressOrgFetchAdapterOptions,
   type WordPressOrgAcquireRequest,
   type WordPressOrgAcquisitionResult,
@@ -46,6 +47,8 @@ const metadataSchema = z.object({
 });
 
 const DEFAULT_METADATA_MAXIMUM_BYTES = 1_000_000;
+const METADATA_TIMEOUT_MS = 30_000;
+const ARCHIVE_TIMEOUT_MS = 5 * 60_000;
 
 class ResponseTooLargeError extends Error {
   constructor() {
@@ -102,8 +105,62 @@ function observationFailure(
 function acquisitionFailure(
   reason: WordPressOrgAcquisitionFailure["reason"],
   pluginIdentity: string,
+  diagnostic?: WordPressOrgAcquisitionDiagnostic,
 ): WordPressOrgAcquisitionFailure {
-  return { status: "failed", operation: "acquire", reason, pluginIdentity };
+  return {
+    status: "failed",
+    operation: "acquire",
+    reason,
+    pluginIdentity,
+    ...(diagnostic === undefined ? {} : { diagnostic }),
+  };
+}
+
+function transportDiagnostic(
+  error: unknown,
+): WordPressOrgAcquisitionDiagnostic {
+  const pending: unknown[] = [error];
+  const seen = new Set<unknown>();
+  const codes: string[] = [];
+  const names: string[] = [];
+  const messages: string[] = [];
+  while (pending.length > 0 && seen.size < 8) {
+    const current = pending.shift();
+    if (typeof current !== "object" || current === null || seen.has(current))
+      continue;
+    seen.add(current);
+    const value = current as {
+      code?: unknown;
+      name?: unknown;
+      message?: unknown;
+      cause?: unknown;
+      errors?: unknown;
+    };
+    if (typeof value.code === "string") codes.push(value.code);
+    if (typeof value.name === "string") names.push(value.name);
+    if (typeof value.message === "string")
+      messages.push(
+        `${typeof value.name === "string" ? value.name : "Error"}: ${value.message}`,
+      );
+    if (value.cause !== undefined) pending.push(value.cause);
+    if (Array.isArray(value.errors)) pending.push(...value.errors);
+  }
+  const kind = codes.some(
+    (code) => code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT",
+  )
+    ? "connect-timeout"
+    : names.includes("TimeoutError")
+      ? "request-timeout"
+      : codes.some((code) => code === "ENOTFOUND" || code === "EAI_AGAIN")
+        ? "dns"
+        : "network";
+  return {
+    kind,
+    ...(codes[0] === undefined ? {} : { code: codes[0] }),
+    ...(messages.length === 0
+      ? {}
+      : { message: messages.join(" | ").slice(0, 2048) }),
+  };
 }
 
 function responseFailureReason(
@@ -197,10 +254,18 @@ async function boundedResponseBytes(
 }
 
 class FetchWordPressOrgSourceAdapter implements WordPressOrgSourceAdapter {
-  readonly #fetch: typeof fetch;
+  readonly #fetch: (
+    url: string,
+    init: {
+      method: "GET";
+      redirect: "follow";
+      headers: { accept: string };
+      signal: AbortSignal;
+    },
+  ) => Promise<Response>;
 
   constructor(fetchImplementation: typeof fetch) {
-    this.#fetch = fetchImplementation;
+    this.#fetch = (url, init) => fetchImplementation(url, init);
   }
 
   async retrieve(
@@ -213,6 +278,9 @@ class FetchWordPressOrgSourceAdapter implements WordPressOrgSourceAdapter {
         accept:
           request.kind === "metadata" ? "application/json" : "application/zip",
       },
+      signal: AbortSignal.timeout(
+        request.kind === "metadata" ? METADATA_TIMEOUT_MS : ARCHIVE_TIMEOUT_MS,
+      ),
     });
     const bytes = await boundedResponseBytes(response, request.maximumBytes);
     return {
@@ -367,6 +435,9 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
           ? "quota-exceeded"
           : "network-failure",
         observation.pluginIdentity,
+        error instanceof ResponseTooLargeError
+          ? undefined
+          : transportDiagnostic(error),
       );
     }
     if (response.bytes.byteLength > request.policy.limits.maxTotalBytes) {
@@ -374,7 +445,10 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
     }
     const failureReason = responseFailureReason(response.status);
     if (failureReason !== undefined) {
-      return acquisitionFailure(failureReason, observation.pluginIdentity);
+      return acquisitionFailure(failureReason, observation.pluginIdentity, {
+        kind: "http-response",
+        status: response.status,
+      });
     }
     if (response.sourceUrl !== archiveUrl) {
       return acquisitionFailure(

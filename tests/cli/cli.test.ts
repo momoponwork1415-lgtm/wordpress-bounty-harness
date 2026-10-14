@@ -104,6 +104,10 @@ async function harness(
     readonly listingObservations?: readonly WordPressOrgListingObservation[];
     /** A slug whose snapshot cannot be frozen. */
     readonly failFreeze?: string;
+    /** A slug whose acquired bytes disagree with its manifest. */
+    readonly corruptSourceManifest?: string;
+    /** Simulates an archive connection failing after the selection freeze succeeded. */
+    readonly failRepeatedFreeze?: boolean;
     /** Extra campaign config fields. */
     readonly config?: Readonly<Record<string, unknown>>;
     readonly entryPoints?: boolean;
@@ -399,7 +403,15 @@ async function harness(
         target: {
           identity: target.targetId,
           version: target.version,
-          manifest,
+          manifest:
+            target.targetId === `wporg:${options.corruptSourceManifest}`
+              ? {
+                  ...manifest,
+                  entries: manifest.entries.map((entry, index) =>
+                    index === 0 ? { ...entry, size: entry.size + 1 } : entry,
+                  ),
+                }
+              : manifest,
           readFile: (path: string) => readFile(join(sourceDirectory, path)),
         },
         dependencies: [],
@@ -411,6 +423,7 @@ async function harness(
     string,
     Awaited<ReturnType<typeof snapshots.freeze>>
   >();
+  const freezeCounts = new Map<string, number>();
 
   const attachments = new ProviderAttachmentStore(join(root, "provider"));
   const prompts: string[] = [];
@@ -434,6 +447,10 @@ async function harness(
           code: "ETIMEDOUT",
           detail: "Synthetic download failure",
         });
+      const attempts = freezeCounts.get(target.slug) ?? 0;
+      freezeCounts.set(target.slug, attempts + 1);
+      if (options.failRepeatedFreeze === true && attempts > 0)
+        throw new Error("Synthetic second archive connection timed out");
       const snapshot = await snapshots.freeze(target);
       frozen.set(snapshot.digest, snapshot);
       return snapshot;
@@ -2813,6 +2830,44 @@ describe("harness CLI vertical slice", () => {
       ).toHaveLength(1);
   });
 
+  it("classifies a source mismatch in the ledger and keeps its detail private", async () => {
+    const { run, configPath, ledger, store } = await harness({
+      candidates: ["broken-plugin", "synthetic-plugin"],
+      corruptSourceManifest: "broken-plugin",
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-mismatch",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    const skipped = ledger().read({
+      campaignId: "campaign-mismatch",
+      type: "target-skipped",
+    })[0]?.event;
+    expect(skipped).toMatchObject({
+      reason: "source-mismatch",
+      stage: "freeze",
+    });
+    expect(JSON.stringify(skipped)).not.toContain("manifest-content");
+    const diagnosticRef = skipped?.artifacts.find(
+      (artifact) => artifact.kind === "target-skip-diagnostic",
+    );
+    expect(diagnosticRef).toBeDefined();
+    const diagnostic = await store().readFile(
+      diagnosticRef!.digest,
+      "target-skip-diagnostic.json",
+      10_000,
+    );
+    expect(diagnostic.status).toBe("resolved");
+    if (diagnostic.status === "resolved")
+      expect(diagnostic.bytes.toString("utf8")).toContain("manifest-content");
+  });
+
   it("lists the policy selection and runs only the named target or --all", async () => {
     const { run, configPath, prompts } = await harness();
     const selected = await run("select", "--config", configPath);
@@ -2895,6 +2950,7 @@ describe("harness CLI vertical slice", () => {
     const { run, configPath, root, ledger, store } = await harness({
       candidates,
       listingObservations,
+      failRepeatedFreeze: true,
     });
     const policyPath = join(root, "selection.json");
     const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
@@ -2994,6 +3050,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("wporg:item-d 9.9.9");
+    expect(campaign.stderr).not.toContain("skipped");
     const bound = ledger().read({
       campaignId: "campaign-reserved",
       type: "selection-batch-bound",

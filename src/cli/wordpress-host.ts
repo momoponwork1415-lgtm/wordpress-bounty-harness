@@ -23,6 +23,7 @@ import {
 import {
   openSnapshot,
   snapshotSchema,
+  SourceAcquisitionError,
   type Snapshot,
 } from "../snapshot/index.js";
 import type { Verifier } from "../verification/index.js";
@@ -443,7 +444,10 @@ export async function createWordPressHostProfile(options: {
       },
       async loadSnapshot(digest) {
         if (!(await snapshotStore.verify(digest)))
-          throw new Error("Pinned Snapshot artifact is unavailable");
+          throw new SourceAcquisitionError("source-mismatch", {
+            reason: "snapshot-artifact-unavailable",
+            digest,
+          });
         const record = snapshotSchema.parse(
           JSON.parse(
             await readFile(
