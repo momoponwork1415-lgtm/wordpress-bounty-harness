@@ -90,12 +90,31 @@ type ProxyCounters = {
   forwardedRequests: number;
   requestLimitExceeded: number;
   unauthorizedRequests: number;
+  unauthorizedMissingCredentialRequests: number;
+  unauthorizedMismatchedCredentialRequests: number;
+  unauthorizedMessagesEndpointRequests: number;
+  unauthorizedOtherEndpointRequests: number;
+  rejectedConnectivityProbes: number;
   upstreamSuccess: number;
   upstreamClientError: number;
   upstreamServerError: number;
   relayFailures: number;
   responseLimitExceeded: number;
 };
+
+function recordUnauthorizedRequest(
+  counters: ProxyCounters,
+  request: IncomingMessage,
+  credential: string | undefined,
+): void {
+  counters.unauthorizedRequests += 1;
+  if (credential === undefined || credential.length === 0)
+    counters.unauthorizedMissingCredentialRequests += 1;
+  else counters.unauthorizedMismatchedCredentialRequests += 1;
+  if ((request.url ?? "").split("?")[0] === "/v1/messages")
+    counters.unauthorizedMessagesEndpointRequests += 1;
+  else counters.unauthorizedOtherEndpointRequests += 1;
+}
 
 function sendMetrics(response: ServerResponse, counters: ProxyCounters): void {
   const body = JSON.stringify(counters);
@@ -295,7 +314,11 @@ function chatgptListener(
   return async (request, response) => {
     try {
       if (!bearerMatches(request.headers.authorization, options.grantToken)) {
-        counters.unauthorizedRequests += 1;
+        recordUnauthorizedRequest(
+          counters,
+          request,
+          request.headers.authorization,
+        );
         sendJson(response, 401, "grant-unauthorized");
         return;
       }
@@ -426,18 +449,31 @@ function providerCredentialListener(
         sendMetrics(response, counters);
         return;
       }
+      // Claude Code sends this unauthenticated, best-effort gateway probe.
+      // Reject it locally without treating it as a failed Trial grant.
+      if (
+        options.protocol === "anthropic-messages" &&
+        request.method === "HEAD" &&
+        request.url === "/api/hello"
+      ) {
+        counters.rejectedConnectivityProbes += 1;
+        response.writeHead(404, { "content-length": "0" });
+        response.end();
+        return;
+      }
       const subscription = options.anthropicSubscriptionToken !== undefined;
+      const suppliedCredential =
+        options.protocol === "anthropic-messages" && !subscription
+          ? typeof request.headers["x-api-key"] === "string"
+            ? request.headers["x-api-key"]
+            : undefined
+          : request.headers.authorization;
       const grantAuthenticated =
         options.protocol === "anthropic-messages" && !subscription
-          ? tokenMatches(
-              typeof request.headers["x-api-key"] === "string"
-                ? request.headers["x-api-key"]
-                : undefined,
-              options.grantToken,
-            )
-          : bearerMatches(request.headers.authorization, options.grantToken);
+          ? tokenMatches(suppliedCredential, options.grantToken)
+          : bearerMatches(suppliedCredential, options.grantToken);
       if (!grantAuthenticated) {
-        counters.unauthorizedRequests += 1;
+        recordUnauthorizedRequest(counters, request, suppliedCredential);
         sendJson(response, 401, "grant-unauthorized");
         return;
       }
@@ -617,6 +653,11 @@ export async function openProviderCredentialProxy(
     forwardedRequests: 0,
     requestLimitExceeded: 0,
     unauthorizedRequests: 0,
+    unauthorizedMissingCredentialRequests: 0,
+    unauthorizedMismatchedCredentialRequests: 0,
+    unauthorizedMessagesEndpointRequests: 0,
+    unauthorizedOtherEndpointRequests: 0,
+    rejectedConnectivityProbes: 0,
     upstreamSuccess: 0,
     upstreamClientError: 0,
     upstreamServerError: 0,

@@ -173,6 +173,27 @@ const providerCredentialEgressReceiptBodySchema = z.strictObject({
       forwardedRequests: z.number().int().nonnegative(),
       requestLimitExceeded: z.number().int().nonnegative(),
       unauthorizedRequests: z.number().int().nonnegative(),
+      unauthorizedMissingCredentialRequests: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional(),
+      unauthorizedMismatchedCredentialRequests: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional(),
+      unauthorizedMessagesEndpointRequests: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional(),
+      unauthorizedOtherEndpointRequests: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional(),
+      rejectedConnectivityProbes: z.number().int().nonnegative().optional(),
       upstreamSuccess: z.number().int().nonnegative().optional(),
       upstreamClientError: z.number().int().nonnegative().optional(),
       upstreamServerError: z.number().int().nonnegative().optional(),

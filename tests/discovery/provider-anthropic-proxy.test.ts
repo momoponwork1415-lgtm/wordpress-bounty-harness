@@ -11,6 +11,44 @@ afterEach(async () => {
 });
 
 describe("Anthropic Messages broker endpoint", () => {
+  it("rejects the exact Claude connectivity probe without treating it as a grant failure", async () => {
+    const proxy = await openProviderCredentialProxy({
+      listenHost: "127.0.0.1",
+      port: 0,
+      upstreamOrigin: "https://api.anthropic.com",
+      anthropicSubscriptionToken: "private-subscription-token",
+      grantToken: "trial-only-bearer-grant",
+      model: "claude-opus-5-5",
+      protocol: "anthropic-messages",
+      maxRequests: 2,
+      maxRequestBytes: 4096,
+      maxResponseBytes: 4096,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    closers.push(
+      () => new Promise<void>((resolve) => proxy.server.close(() => resolve())),
+    );
+    expect(
+      (await fetch(new URL("/api/hello", proxy.origin), { method: "HEAD" }))
+        .status,
+    ).toBe(404);
+    expect((await fetch(new URL("/api/hello", proxy.origin))).status).toBe(401);
+    expect(
+      (
+        await fetch(new URL("/api/hello?extra=1", proxy.origin), {
+          method: "HEAD",
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      await (await fetch(new URL("/healthz", proxy.origin))).json(),
+    ).toMatchObject({
+      forwardedRequests: 0,
+      unauthorizedRequests: 2,
+      rejectedConnectivityProbes: 1,
+    });
+  });
+
   it("admits only the grant token, pinned model, and Messages path", async () => {
     const key = "private-anthropic-key";
     const grant = "trial-only-token";
@@ -179,6 +217,21 @@ describe("Anthropic Messages broker endpoint", () => {
     const allowed = await send(grant);
     expect(allowed.status).toBe(200);
     expect(await allowed.text()).not.toContain(subscriptionToken);
+    const missingGrant = await fetch(new URL("/v1/models", proxy.origin), {
+      method: "GET",
+    });
+    expect(missingGrant.status).toBe(401);
+    const metrics = (await (
+      await fetch(new URL("/healthz", proxy.origin))
+    ).json()) as Record<string, number>;
+    expect(metrics).toMatchObject({
+      unauthorizedRequests: 2,
+      unauthorizedMissingCredentialRequests: 1,
+      unauthorizedMismatchedCredentialRequests: 1,
+      unauthorizedMessagesEndpointRequests: 1,
+      unauthorizedOtherEndpointRequests: 1,
+      rejectedConnectivityProbes: 0,
+    });
     expect(received).toEqual([
       {
         authorization: `Bearer ${subscriptionToken}`,
