@@ -124,6 +124,8 @@ function canResumeStartedChild(assessment: ChildCampaignAssessment): boolean {
  * apply the returned journal operation with expectedRevision, and run this
  * preflight again before reserving another child. A returned decision is never
  * permission to start an additional Trial within the same child campaign.
+ * A stopped parent may be inspected for explicit resume only; the caller must
+ * then clear its stop request with the same journal revision.
  */
 export async function reconcileContinuousRestart(input: {
   readonly parentRunId: string;
@@ -133,6 +135,7 @@ export async function reconcileContinuousRestart(input: {
   readonly owner: OwnerReader;
   readonly ownerHandle: ContinuousRunOwnerHandle;
   readonly reviewExportReady?: ReviewExportCheck;
+  readonly allowStoppedResume?: boolean;
 }): Promise<ContinuousRestartDecision> {
   const hold = (
     reason: Extract<ContinuousRestartDecision, { action: "hold" }>["reason"],
@@ -295,8 +298,13 @@ export async function reconcileContinuousRestart(input: {
     return hold("ledger-unavailable", run);
   }
 
-  if (run.stopRequested) return hold("stop-requested", run, assessment);
-  if (run.state !== "RUNNING")
+  const stoppedResume =
+    input.allowStoppedResume === true &&
+    run.state === "STOPPED" &&
+    run.stopRequested;
+  if (run.stopRequested && !stoppedResume)
+    return hold("stop-requested", run, assessment);
+  if (run.state !== "RUNNING" && !stoppedResume)
     return hold("parent-not-running", run, assessment);
   if (last?.status === "settled") {
     if (

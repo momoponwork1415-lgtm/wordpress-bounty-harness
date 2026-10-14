@@ -209,6 +209,7 @@ async function setup() {
     inspect(
       events: readonly LedgerEventInput[],
       reviewExportReady?: () => boolean,
+      allowStoppedResume = false,
     ) {
       return reconcileContinuousRestart({
         parentRunId,
@@ -222,6 +223,7 @@ async function setup() {
         },
         ownerHandle,
         ...(reviewExportReady === undefined ? {} : { reviewExportReady }),
+        ...(allowStoppedResume ? { allowStoppedResume } : {}),
       });
     },
   };
@@ -237,6 +239,38 @@ const completed = [
 ];
 
 describe("continuous restart reconciliation", () => {
+  it("requires explicit stopped-parent inspection before resuming its reserved child", async () => {
+    const state = await setup();
+    try {
+      state.reserve();
+      state.bind();
+      const stopping = state.journal.requestStop(parentRunId);
+      state.journal.transition(parentRunId, stopping.revision, {
+        state: "STOPPED",
+        reason: "operator-stop",
+        nextCheckAt: null,
+      });
+      const drained = [...completed.slice(0, -1)];
+      expect(await state.inspect(drained)).toMatchObject({
+        action: "hold",
+        reason: "stop-requested",
+      });
+      expect(await state.inspect(drained, undefined, true)).toMatchObject({
+        action: "resume-child",
+        campaignId,
+      });
+      state.setClaims([
+        { campaignId, snapshotDigest: snapshot, status: "recovery-needed" },
+      ]);
+      expect(await state.inspect(drained, undefined, true)).toMatchObject({
+        action: "hold",
+        reason: "resource-recovery-needed",
+      });
+    } finally {
+      state.journal.close();
+    }
+  });
+
   it("requires settlement and a fresh recheck before reserving the next child", async () => {
     const state = await setup();
     try {

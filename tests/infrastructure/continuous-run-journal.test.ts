@@ -169,6 +169,80 @@ describe("continuous run journal", () => {
     }
   });
 
+  it("retains a reserved child across an explicitly reconciled stop and resume", async () => {
+    const { path, clock } = await setup();
+    const journal = new SqliteContinuousRunJournal(path, clock);
+    try {
+      const created = journal.create(input);
+      const reserved = journal.reserveChild(
+        input.parentRunId,
+        created.revision,
+      );
+      const stopped = journal.requestStop(input.parentRunId);
+      const drained = journal.transition(input.parentRunId, stopped.revision, {
+        state: "STOPPED",
+        reason: "operator-stop",
+        nextCheckAt: null,
+      });
+      expect(() => journal.resume(input.parentRunId, drained.revision)).toThrow(
+        "Reconcile the reserved child",
+      );
+      const resumed = journal.resume(input.parentRunId, drained.revision, {
+        reservedChildReconciled: true,
+      });
+      expect(resumed).toMatchObject({
+        state: "RUNNING",
+        stopRequested: false,
+        children: [{ campaignId: reserved.children[0]?.campaignId }],
+      });
+      expect(resumed.children[0]?.status).toBe("reserved");
+    } finally {
+      journal.close();
+    }
+  });
+
+  it("advances only the active unbound child's inventory", async () => {
+    const { path, clock } = await setup();
+    const journal = new SqliteContinuousRunJournal(path, clock);
+    try {
+      const created = journal.create(input);
+      const reserved = journal.reserveChild(
+        input.parentRunId,
+        created.revision,
+      );
+      const advanced = journal.advanceUnboundChildInventory(
+        input.parentRunId,
+        reserved.revision,
+        0,
+        a,
+      );
+      expect(advanced.inventoryDigest).toBe(a);
+      expect(advanced.children[0]?.inventoryDigest).toBe(a);
+      expect(() =>
+        journal.advanceUnboundChildInventory(
+          input.parentRunId,
+          reserved.revision,
+          0,
+          b,
+        ),
+      ).toThrow("revision conflict");
+      const bound = journal.bindChild(input.parentRunId, advanced.revision, 0, {
+        selectionBatchId: "batch-one",
+        snapshotDigests: [a],
+      });
+      expect(() =>
+        journal.advanceUnboundChildInventory(
+          input.parentRunId,
+          bound.revision,
+          0,
+          b,
+        ),
+      ).toThrow("Only the active unbound child");
+    } finally {
+      journal.close();
+    }
+  });
+
   it("retains quota and progress conditions across restart", async () => {
     const { path, clock } = await setup();
     const first = new SqliteContinuousRunJournal(path, clock);

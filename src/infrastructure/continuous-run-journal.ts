@@ -306,13 +306,24 @@ export class SqliteContinuousRunJournal {
     });
   }
 
-  /** An operator may start a stopped parent again after checking its children. */
-  resume(parentRunId: string, expectedRevision: number): ContinuousRunRecord {
+  /**
+   * An operator may start a stopped parent again after checking its children.
+   * A reserved child requires an external ledger/claim/owner reconciliation;
+   * its identity must be retained so a stopped Trial is never replaced.
+   */
+  resume(
+    parentRunId: string,
+    expectedRevision: number,
+    options: { readonly reservedChildReconciled?: true } = {},
+  ): ContinuousRunRecord {
     return this.#transaction(() => {
       const current = this.#current(parentRunId, expectedRevision);
       if (current.state !== "STOPPED")
         throw new Error("Only a stopped continuous run can resume");
-      if (current.children.some((child) => child.status === "reserved"))
+      if (
+        current.children.some((child) => child.status === "reserved") &&
+        options.reservedChildReconciled !== true
+      )
         throw new Error("Reconcile the reserved child before resuming");
       this.#db
         .prepare(
@@ -350,6 +361,46 @@ export class SqliteContinuousRunJournal {
           "UPDATE continuous_runs SET revision = revision + 1, updated_at = ? WHERE parent_id = ?",
         )
         .run(this.#clock().toISOString(), parentRunId);
+      return this.get(parentRunId)!;
+    });
+  }
+
+  /**
+   * Refill an unbound child from the next verified inventory page. The caller
+   * must first prove that this child has no selection ledger events; a bound
+   * child always keeps its original inventory and Snapshot set.
+   */
+  advanceUnboundChildInventory(
+    parentRunId: string,
+    expectedRevision: number,
+    ordinal: number,
+    inventoryDigest: string,
+  ): ContinuousRunRecord {
+    const nextDigest = digest.parse(inventoryDigest);
+    return this.#transaction(() => {
+      const current = this.#current(parentRunId, expectedRevision);
+      const child = current.children[ordinal];
+      if (
+        current.state !== "RUNNING" ||
+        current.stopRequested ||
+        child === undefined ||
+        child.status !== "reserved" ||
+        child.binding !== null ||
+        ordinal !== current.children.length - 1
+      )
+        throw new Error("Only the active unbound child may advance inventory");
+      if (nextDigest === current.inventoryDigest)
+        throw new Error("Continuous inventory did not advance");
+      this.#db
+        .prepare(
+          "UPDATE continuous_children SET inventory_digest = ? WHERE parent_id = ? AND ordinal = ?",
+        )
+        .run(nextDigest, parentRunId, ordinal);
+      this.#db
+        .prepare(
+          "UPDATE continuous_runs SET inventory_digest = ?, revision = revision + 1, updated_at = ? WHERE parent_id = ?",
+        )
+        .run(nextDigest, this.#clock().toISOString(), parentRunId);
       return this.get(parentRunId)!;
     });
   }
