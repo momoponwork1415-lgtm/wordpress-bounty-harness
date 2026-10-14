@@ -2927,7 +2927,7 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("returns an empty selection with reasons below the floor, and a batch at --minimum 1", async () => {
-    const { run, root, ledger, store } = await harness({
+    const { run, root, ledger, store, configPath } = await harness({
       candidates: ["broken-plugin", "item-b"],
       failFreeze: "broken-plugin",
       legacyHistoryUnavailable: true,
@@ -2989,9 +2989,37 @@ describe("harness CLI vertical slice", () => {
     expect(one.code).toBe(0);
     expect(one.stdout).toMatch(/^selection batch selection-/m);
     expect(ledger().read({ type: "target-selected" })).toHaveLength(1);
+    const automatic = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-no-legacy",
+      "--config",
+      configPath,
+    );
+    expect(automatic.code).toBe(1);
+    expect(automatic.stderr).toContain("legacy-history-missing");
+    expect(ledger().read({ campaignId: "campaign-no-legacy" })).toHaveLength(0);
     expect(
       (await run("select", "--config", policyPath, "--minimum", "0")).code,
     ).toBe(2);
+  });
+
+  it("keeps the directly pinned development campaign available without legacy history", async () => {
+    const { run, configPath } = await harness({
+      legacyHistoryUnavailable: true,
+    });
+    const manual = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "manual-no-legacy",
+      "--config",
+      configPath,
+    );
+    expect(manual.code).toBe(0);
   });
 
   it("classifies a source mismatch in the ledger and keeps its detail private", async () => {
