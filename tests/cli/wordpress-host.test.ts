@@ -134,6 +134,10 @@ async function setup(
     host,
     repeatTrialGate: {
       ensureReady: () => {},
+      inspectInitialSlug: () => ({
+        status: "coverage-incomplete",
+        reason: "legacy-history-unverified",
+      }),
       assertMayStart: () => {},
       reserve: () => {},
       bootstrap: () => ({ importedTrials: 0 }),

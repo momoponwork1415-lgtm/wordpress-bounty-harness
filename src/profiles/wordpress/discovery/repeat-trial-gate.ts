@@ -33,6 +33,28 @@ export const repeatTrialApprovalSchema = z.strictObject({
   purpose: z.string().min(1).max(500),
 });
 
+/**
+ * A partial, metadata-only legacy audit may identify slugs that must be held.
+ * Its digest refers to audit evidence outside Git; it never certifies that all
+ * historical sources have been searched.
+ */
+export const repeatTrialAmbiguityManifestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  auditDigest: digest,
+  ambiguousSlugs: z.array(slug),
+});
+
+export type InitialSlugEligibility =
+  | { readonly status: "prior-start"; readonly startedTrials: number }
+  | { readonly status: "hold-ambiguous"; readonly auditDigest: string }
+  | {
+      readonly status: "coverage-incomplete";
+      readonly reason:
+        "state-inventory-uninitialized" | "legacy-history-unverified";
+    }
+  /** Reserved for a future verified, complete coverage import. Never emitted today. */
+  | { readonly status: "eligible"; readonly coverageDigest: string };
+
 export type RepeatTrialStart = {
   readonly stateDirectory: string;
   readonly slug: string;
@@ -44,6 +66,10 @@ export type RepeatTrialStart = {
 
 export interface RepeatTrialGate {
   ensureReady(stateDirectory: string): void;
+  inspectInitialSlug(
+    slug: string,
+    ambiguityManifest?: unknown,
+  ): InitialSlugEligibility;
   assertMayStart(start: RepeatTrialStart): void;
   reserve(start: RepeatTrialStart): string | undefined;
   bootstrap(inventory: unknown): { readonly importedTrials: number };
@@ -139,6 +165,41 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
         .prepare("SELECT value FROM trial_gate_meta WHERE key = 'inventory'")
         .get() !== undefined
     );
+  }
+
+  /**
+   * Read-only pre-freeze assessment for an automated initial-Trial inventory.
+   * This registry imports known state ledgers but cannot prove that old research
+   * databases and archives were exhaustively inventoried. Until a separate
+   * complete coverage import exists, an unseen slug is never declared eligible.
+   */
+  inspectInitialSlug(
+    value: string,
+    ambiguityManifest?: unknown,
+  ): InitialSlugEligibility {
+    const candidate = slug.parse(value);
+    const manifest =
+      ambiguityManifest === undefined
+        ? undefined
+        : repeatTrialAmbiguityManifestSchema.parse(ambiguityManifest);
+    if (!this.#initialized())
+      return {
+        status: "coverage-incomplete",
+        reason: "state-inventory-uninitialized",
+      };
+    const started = this.#db
+      .prepare("SELECT COUNT(*) AS count FROM trial_gate_starts WHERE slug = ?")
+      .get(candidate);
+    const startedTrials = z
+      .object({ count: z.number().int().nonnegative() })
+      .parse(started).count;
+    if (startedTrials > 0) return { status: "prior-start", startedTrials };
+    if (manifest?.ambiguousSlugs.includes(candidate))
+      return { status: "hold-ambiguous", auditDigest: manifest.auditDigest };
+    return {
+      status: "coverage-incomplete",
+      reason: "legacy-history-unverified",
+    };
   }
 
   #readHistoricalState(directory: string): readonly PriorTrial[] {
@@ -310,7 +371,13 @@ export class SqliteRepeatTrialGate implements RepeatTrialGate {
     const prior = this.#db
       .prepare("SELECT 1 FROM trial_gate_starts WHERE slug = ? LIMIT 1")
       .get(start.slug);
-    if (prior === undefined) return;
+    if (prior === undefined) {
+      if (this.inspectInitialSlug(start.slug).status !== "eligible")
+        throw new Error(
+          "Initial discovery Trial is held until historical coverage is verified",
+        );
+      return;
+    }
     const approval = this.#db
       .prepare(
         "SELECT 1 FROM trial_gate_approvals WHERE approval_key = ? AND consumed_by IS NULL",

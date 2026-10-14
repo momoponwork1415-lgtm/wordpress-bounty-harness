@@ -56,15 +56,94 @@ async function fixture() {
   return { gate, gatePath, stateA, stateB, start, inventory, approve };
 }
 
-it("fails closed before explicit inventory and gates the same slug across states, versions and prompts", async () => {
-  const { gate, stateB, start, inventory, approve } = await fixture();
+async function writeStartedTrial(
+  stateDirectory: string,
+  start: RepeatTrialStart,
+): Promise<void> {
+  const store = new PrivateArtifactStore({
+    rootDirectory: join(stateDirectory, "private-evidence"),
+    maxEntries: 8,
+    maxBytes: 1024 * 1024,
+  });
+  const ledger = new Ledger({
+    databasePath: join(stateDirectory, "ledger.sqlite"),
+    artifactStore: store,
+  });
+  const base = {
+    schemaVersion: 1 as const,
+    campaignId: start.campaignId,
+    snapshotDigest: start.snapshotDigest,
+    occurredAt,
+  };
+  await ledger.append({
+    ...base,
+    type: "target-selected",
+    identity: "selected-first",
+    selectionId: `wporg:${start.slug}@1.0.0`,
+  });
+  await ledger.append({
+    ...base,
+    type: "discovery-run-started",
+    identity: "started-first",
+    runId: "run-first",
+    labId: "lab-one",
+    history: { mode: "none" },
+    configuration: {
+      promptVariant: "wp2shell-bounty-v3",
+      promptDigest: start.promptDigest,
+      assignmentUnit: "plugin",
+    },
+  });
+}
+
+it("reports only proven prior starts and explicit legacy holds without declaring an unseen slug eligible", async () => {
+  const { gate, stateA, start, inventory } = await fixture();
+  const ambiguity = {
+    schemaVersion: 1,
+    auditDigest: hash("f"),
+    ambiguousSlugs: ["uncertain-plugin"],
+  };
+  expect(gate.inspectInitialSlug(start.slug)).toEqual({
+    status: "coverage-incomplete",
+    reason: "state-inventory-uninitialized",
+  });
+  await writeStartedTrial(stateA, start);
+  gate.bootstrap(inventory);
+  expect(gate.inspectInitialSlug(start.slug, ambiguity)).toEqual({
+    status: "prior-start",
+    startedTrials: 1,
+  });
+  expect(gate.inspectInitialSlug("uncertain-plugin", ambiguity)).toEqual({
+    status: "hold-ambiguous",
+    auditDigest: ambiguity.auditDigest,
+  });
+  expect(gate.inspectInitialSlug("selection-only", ambiguity)).toEqual({
+    status: "coverage-incomplete",
+    reason: "legacy-history-unverified",
+  });
+  expect(() =>
+    gate.assertMayStart({
+      ...start,
+      slug: "selection-only",
+      campaignId: "selection-only-campaign",
+    }),
+  ).toThrow("historical coverage");
+  expect(() => gate.inspectInitialSlug("../bad-slug", ambiguity)).toThrow();
+  expect(() =>
+    gate.inspectInitialSlug("uncertain-plugin", {
+      ...ambiguity,
+      auditDigest: "not-a-digest",
+    }),
+  ).toThrow();
+});
+
+it("holds new initial Trials while legacy coverage is unverified and gates known slugs across versions and prompts", async () => {
+  const { gate, stateA, stateB, start, inventory, approve } = await fixture();
   expect(() => gate.reserve(start)).toThrow("uninitialized");
-  expect(gate.bootstrap(inventory).importedTrials).toBe(0);
-  expect(() => approve({ ...start, trialOrdinal: 1 })).toThrow(
-    "before the first",
-  );
-  gate.assertMayStart(start);
-  gate.reserve(start);
+  await writeStartedTrial(stateA, start);
+  expect(gate.bootstrap(inventory).importedTrials).toBe(1);
+  expect(() => approve(start)).toThrow("already started");
+  expect(gate.reserve(start)).toBeUndefined(); // imported exact Trial resumes
 
   const repeat = {
     ...start,
@@ -90,11 +169,12 @@ it("fails closed before explicit inventory and gates the same slug across states
       slug: "second-plugin",
       campaignId: "campaign-c",
     }),
-  ).not.toThrow(); // a different plugin's first Trial stays autonomous
+  ).toThrow("historical coverage");
 });
 
 it("checks each ordinal even within one campaign and consumes each approval once", async () => {
-  const { gate, start, inventory, approve } = await fixture();
+  const { gate, stateA, start, inventory, approve } = await fixture();
+  await writeStartedTrial(stateA, start);
   gate.bootstrap(inventory);
   gate.reserve(start);
   const second = { ...start, trialOrdinal: 1 };
@@ -108,12 +188,20 @@ it("checks each ordinal even within one campaign and consumes each approval once
 });
 
 it("does not spend a Trial during preflight or a Lab failure before start", async () => {
-  const { gate, stateB, start, inventory } = await fixture();
+  const { gate, stateA, stateB, start, inventory, approve } = await fixture();
+  await writeStartedTrial(stateA, start);
   gate.bootstrap(inventory);
-  gate.assertMayStart(start); // Lab can still fail; no reservation exists yet.
-  const otherState = { ...start, stateDirectory: stateB };
+  const otherState = {
+    ...start,
+    stateDirectory: stateB,
+    campaignId: "next-campaign",
+  };
+  approve(otherState);
+  gate.assertMayStart(otherState); // Lab can still fail; approval remains unspent.
   gate.reserve(otherState);
-  expect(() => gate.reserve(start)).toThrow("human approval");
+  expect(() => gate.reserve({ ...otherState, campaignId: "third" })).toThrow(
+    "human approval",
+  );
 });
 
 it("imports prior started Trials with stable resume keys and rejects missing slug mappings", async () => {
@@ -184,7 +272,7 @@ it("imports prior started Trials with stable resume keys and rejects missing slu
   expect(() => gate.ensureReady(stateB)).toThrow("cannot identify");
 });
 
-it("serializes independent gate connections so only one unapproved first start wins", async () => {
+it("holds an unseen slug from both independent gate connections", async () => {
   const { gate, gatePath, stateB, start, inventory } = await fixture();
   gate.bootstrap(inventory);
   const secondProcess = new SqliteRepeatTrialGate(gatePath);
@@ -200,5 +288,5 @@ it("serializes independent gate connections so only one unapproved first start w
       return "blocked";
     }
   });
-  expect(outcomes).toEqual(["started", "blocked"]);
+  expect(outcomes).toEqual(["blocked", "blocked"]);
 });
