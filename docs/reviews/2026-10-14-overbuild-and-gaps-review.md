@@ -183,7 +183,52 @@ R4、R5、R7、R8 は所有者の判断を要しない小さな手直しで、ag
 
 公開ハーネス（Google Mantis、Visa VVAH、Anthropic defending-code-reference-harness、Cloudflare security-audit-skill）は「framework として組み込む」対象ではなく、Claude Code 向けの skill と prompt の集合である。Opus arm を作るなら、これらの skill 本文は出典対照表の候補になる（所有者の採否規則どおり要素を足さない）。比較は `2026-10-13-public-harness-update-and-maturity.md` にある。
 
-## 8. 未確認の仮定
+## 9. 追記: 削る機能と緩める制約の候補（所有者の 2026-10-14 の反応を受けて）
+
+所有者の反応は「方向性はよい。いらない機能が入っている。制約が厳しすぎる所がある」。それぞれを、所有者が yes / no で答えられる単位に割る。不変条件 8 項目（SPEC §2）は触らない。
+
+### 9.1 削る機能
+
+| # | 機能 | どこにあるか | 今すぐ消す / 凍結 | 理由 |
+| --- | --- | --- | --- | --- |
+| C1 | 旧世代の履歴監査で初回 Trial を止める gate、`trial bootstrap` / `coverage-import` / `trial approve` の host 共通 registry | `c5d0ef3` の `repeat-trial-gate.ts`（841 行）と OPERATIONS の該当節 | **消す**（merge 前なので branch から外すだけ） | 所有者の Q6 は「同じ slug の 2 回目以降は承認」で、初回の保留と旧世代監査は含まない。再探索の費用は quota だけで、報奨は失わない |
+| C2 | 継続運転の journal / owner lease / crash reconciliation / recovery | `c5d0ef3` の `continuous-run-journal.ts`、`continuous-run-owner.ts`、`continuous-restart-reconciliation.ts`、`resource-recovery.ts`（約 1,300 行） | **消す**。runner は `start / stop / status` の最小形だけ残し、状態は追記専用台帳から導く | 実機で 1 回も連続運転していない段階の crash 復旧。LESSONS 8 |
+| C3 | campaign・provider をまたぐ host 共通 resource claim（#228） | `host-resource-claims.ts`（564 行）、`resources status / recover` | **凍結**。1 台・1 provider の間は campaign 内の `maxConcurrentTargets` で足りる | 第 2 provider が実際に動いてから |
+| C4 | 評価モジュール（`eval score / keys / rubric / compare / prospective`）と `advisory.ts` | `src/evaluation/`、CLI | **凍結**、DEVELOPMENT §7 から行を消す | 本番ループで呼ばれない。第 2 節 2.1 |
+| C5 | 週次 smoke 専用の replay Verifier | `smoke-replay-*.ts`、`scripts/smoke-real-lab.mjs`（1,226 行） | **消す**。週次 smoke は既知 Finding に `review reverify` を 1 回打つ | 第 2 の検証経路を保守する理由がない |
+| C6 | 二段構え時代の `assignment` mode | `wordpress.ts:183-248` | **消す** | ADR 0025 は置き換え済み |
+| C7 | 起動可能な探索 prompt 12 本 | `prompts/index.ts` | **凍結**。起動できるのは v4、v3、whitebox-v1.7 の 3 本に限り、残りは digest 照合専用の archive | 第 2 節 2.2 |
+| C8 | 旧 arm の campaign 設定 24 本 | `examples/translatepress-*/` | **消す**。本番用 3 本だけ残す | 運用者の目に入る雑音 |
+| C9 | plugin 固有 Lab adapter 8 本 | `lab/*-adapter.ts` 等 | **凍結**。新規追加を止め、9.2 の L1 で代える | ADR 0026 と逆方向 |
+| C10 | `review` の 13 subcommand のうち `scope`、`dedupe`、`open`、`reproduced` | `src/review/index.ts` | **凍結**（ADR 0032 Q27 どおり Step 2 で消す） | skill と重複 |
+
+C1、C2、C5、C6、C8 を消すと、`main` 比で約 2,500 行、`c5d0ef3` 比で約 4,700 行が減る。
+
+### 9.2 緩める制約
+
+| # | 今の制約 | どこに書いてあるか | 緩め方 | 誰が決めるか |
+| --- | --- | --- | --- | --- |
+| L1 | Lab は「既定設定のまま」。plugin の設定を管理者が入れた状態を作らない | SPEC §8b `lab` 行「設定は既定のまま」、ADR 0026 | 「plugin の通常の有効化設定（管理画面で管理者が普通に行う初期設定）は Harness 所有の setup が入れてよい。権限付与と危険設定は不可」に変える。Wordfence が却下するのは「管理者の**誤**設定前提」であり、通常設定ではない | 所有者（SPEC §8b は owner-approved 要）。これが `incomplete(precondition)` の壁を正面から外す |
+| L2 | 同じ slug の 2 回目以降は、Snapshot digest・prompt digest・campaign ID・trialOrdinal を結び付けた承認 JSON を Git 外に作り registry へ登録 | `c5d0ef3` OPERATIONS「追加探索 Trial の承認」 | 承認は campaign 設定の `approvedRepeatSlugs: ["slug"]` 1 行、または `campaign run --approve-repeat <slug>` の flag にする。台帳に `repeat-approved` を 1 event 残せば追跡性は足りる | 所有者。Q6 の趣旨（無駄な反復を止める）は保てる |
+| L3 | quota 到達後 5 分で `WAIT_REVIEW` に落ち、人間の `resume` が要る | `continuous-runner.ts:23, 262-275` | 「次の Trial を 1 本だけ試し、再び quota なら待つ」を上限回数なしで繰り返す。人間を呼ぶのは operator stop と provider の方針拒否が N 回連続したときだけ | AI の既定値なので所有者判断不要。Step 1 完了条件に直結 |
+| L4 | 版・Programme・config digest・pool 期限の変化をすべて親 run の `WAIT_REVIEW` にする | `c5d0ef3` runner | その対象を `target-skipped` にして次へ進む。親は止めない | AI の既定値。所有者判断不要 |
+| L5 | 探索に触る PR は開発セット 3 Trial 必須、同じ slug の反復は承認必須、provider は拒否 | DEVELOPMENT §5 ＋ Q6 ＋ #220 | 3 つが重なると prompt の変更が永久に merge できない。provider が動くまでは「異なる slug の初回 3 Trial」を数字とし、Opus arm で測ってもよいと明記する | 所有者 |
+| L6 | agent に渡る文章・ADR・policy の変更は `owner-approved` ラベルが無いと CI で落ちる。一方、採否とラベル付与は AI に委任済み | DEVELOPMENT §5、§6、`check.yml` | AI が自分の PR にラベルを付ける形になっており、ゲートとして働いていない。所有者が読むのは不変条件・Programme Boundary・判定器の変更だけに絞り、prompt と policy は「対照表を PR に貼る」だけで通す | 所有者 |
+| L7 | 提出前に人間が「自分の手で Lab 上の攻撃を再現」する | SPEC §8、§12-6 | 判定器が同じ Snapshot で nonce を回収し、再現パッケージの script を新しい Lab で Harness が再実行して緑なら、人間は証拠を読むだけでよい。手で打つのは判定器のない種別（`no-judge`）だけ | 所有者。不変条件 6（提出前レビューは残す）とは矛盾しない。所有者の作業時間を直接減らす |
+| L8 | ADR は週 1 本、PR は 500 行以内、問いは週 1 つ | DEVELOPMENT §3、§5、§6 | 規則自体は妥当だが、`c5d0ef3` が 1 branch 15,000 行である事実が示すとおり守られていない。規則を緩めるのではなく、守れない branch は割る | 所有者（運用） |
+| L9 | Reflected XSS は Patchstack 向けにも出さない | ADR 0032 Q2 | 所有者の有償 18 件中 7 件が reflected XSS だった事実がある。半年後見直しの予定を「提出候補が週 1 件を下回ったら」に前倒しする | 所有者（金額に直結） |
+
+緩めない方がよいもの: 攻撃者位置を未認証と subscriber / customer に限る（両プログラムの受理条件）、`runtime-confirmed` は判定器だけ、gVisor 以外へ落ちない、Harness は送信しない、台帳は digest のみ。これらは報奨の受理条件と安全境界で、緩めても収益は増えない。
+
+### 9.3 順番
+
+1. `c5d0ef3` を割る: C1 と C2 を外し、L3 と L4 を入れた最小 runner ＋ 在庫（#227）を 1 PR にする。
+2. #220 の対応（Codex の access program 確認、または Opus arm）。
+3. L1 を SPEC §8b に 1 行入れ、C9 の adapter 追加を止める。
+4. L2、L5、L6 を DEVELOPMENT と OPERATIONS に反映。
+5. C4〜C8 は Step 2 の整理 PR 1 本。
+
+## 10. 未確認の仮定
 
 - `c5d0ef3` の branch は読んだだけで、`pnpm check` や実機は動かしていない。branch 内の進捗レビューが書く「802 tests 成功」は検証していない。
 - 本番の台帳と Private Evidence は読んでいないため、第 3 周の `no-judge` 5 件の impact 内訳と、#185 以降の周回で何件が `finding-parked` になったかは分からない。
