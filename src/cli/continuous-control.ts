@@ -41,7 +41,8 @@ export async function runContinuousControl(
   if (run === null) throw new Error("Continuous run not found");
   if (
     action === "stop" &&
-    (previous?.state === "WAIT_REVIEW" ||
+    (previous?.state === "RUNNING" ||
+      previous?.state === "WAIT_REVIEW" ||
       previous?.state === "WAIT_QUOTA" ||
       previous?.state === "STOPPING") &&
     assessmentInputs.settleStop !== undefined
