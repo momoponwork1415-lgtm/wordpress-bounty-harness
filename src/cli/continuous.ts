@@ -38,6 +38,15 @@ const STOP_REASONS = [
   "legacy-history-missing",
   "missing-floor-policy",
 ] as const;
+const HOLD_STATES = new Set([
+  "backoff",
+  "holding-disk-low",
+  "holding-error",
+  "holding-no-progress",
+  "holding-refusals",
+  "sleeping",
+  "waiting-login",
+]);
 
 export type ContinuousStopReason = (typeof STOP_REASONS)[number];
 
@@ -286,6 +295,12 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     await deps.io.notify?.(line).catch(() => undefined);
   };
   /** Sleeps in one-minute steps so a stop request is never late by more. */
+  const sleepUntil = async (until: Date) => {
+    while (!stopRequested() && deps.clock() < until)
+      await deps.sleep(
+        Math.min(MINUTE, until.getTime() - deps.clock().getTime()),
+      );
+  };
   const hold = async (
     state: string,
     ms: number,
@@ -293,10 +308,19 @@ export function createContinuousRunner(deps: ContinuousDeps) {
   ) => {
     const until = new Date(deps.clock().getTime() + ms);
     await enter(state, { until: until.toISOString(), ...detail });
-    while (!stopRequested() && deps.clock() < until)
-      await deps.sleep(
-        Math.min(MINUTE, until.getTime() - deps.clock().getTime()),
-      );
+    await sleepUntil(until);
+  };
+  /** A crash must not reset or bypass a saved quota, refusal, or empty-pool hold. */
+  const restoreHold = async (): Promise<boolean> => {
+    if (!HOLD_STATES.has(memo.state)) return true;
+    const deadline = Date.parse(memo.detail.until ?? "");
+    if (!Number.isFinite(deadline)) {
+      memo.lastError = `invalid saved ${memo.state} deadline`;
+      await stop("errors");
+      return false;
+    }
+    await sleepUntil(new Date(deadline));
+    return true;
   };
   const stop = async (reason: ContinuousStopReason) => {
     if (!existsSync(paths.stop))
@@ -338,6 +362,8 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       if (stopRequested()) return stop("operator");
       if (!(await deps.floorPolicyAvailable()))
         return stop("missing-floor-policy");
+      if (stopRequested()) return stop("operator");
+      if (!(await restoreHold())) return "errors";
       if (stopRequested()) return stop("operator");
       await deps.preflight();
       if (stopRequested()) return stop("operator");

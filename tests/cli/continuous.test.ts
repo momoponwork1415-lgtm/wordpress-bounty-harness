@@ -191,6 +191,67 @@ describe("continuous runner", () => {
     },
   );
 
+  it("restores the original quota deadline after a crash during backoff", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    const startedAt = t.deps.clock().getTime();
+    const campaignTimes: number[] = [];
+    const cleanupTimes: number[] = [];
+    t.deps.cleanupLeftovers = async () => (
+      cleanupTimes.push(t.deps.clock().getTime()),
+      0
+    );
+    steps.push(limited("quota", t));
+    steps.push(() => (campaignTimes.push(t.deps.clock().getTime()), {}));
+    const regularSleep = t.deps.sleep;
+    let minutesSlept = 0;
+    t.deps.sleep = async (ms) => {
+      await regularSleep(ms);
+      if (++minutesSlept === 7) throw new Error("synthetic crash");
+    };
+
+    await expect(t.runner.run()).rejects.toThrow("synthetic crash");
+    const saved = JSON.parse(
+      await readFile(continuousPaths(t.root).memo, "utf8"),
+    ) as { state: string; detail: { until: string } };
+    expect(saved.state).toBe("backoff");
+    expect(saved.detail.until).toBe(
+      new Date(startedAt + 30 * 60_000).toISOString(),
+    );
+    expect(existsSync(continuousPaths(t.root).stop)).toBe(false);
+
+    t.deps.sleep = regularSleep;
+    expect(await createContinuousRunner(t.deps).run()).toBe("operator");
+    expect(t.hours()).toBe(0.5);
+    expect(campaignTimes).toEqual([startedAt + 30 * 60_000]);
+    expect(cleanupTimes.at(-1)).toBeGreaterThanOrEqual(startedAt + 30 * 60_000);
+    expect(t.calls[1]?.campaignId).toBe(t.calls[0]?.campaignId);
+  });
+
+  it("stops for review when a saved hold has no valid deadline", async () => {
+    let cleanups = 0;
+    let selects = 0;
+    const t = await setup([], {
+      cleanupLeftovers: async () => ++cleanups,
+      select: async () => (
+        selects++,
+        { batchId: "selection-1", targets: ["a"] }
+      ),
+    });
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify({ state: "backoff", detail: { until: "broken" } }),
+    );
+    expect(await t.runner.run()).toBe("errors");
+    expect({ cleanups, selects, campaigns: t.calls.length }).toEqual({
+      cleanups: 0,
+      selects: 0,
+      campaigns: 0,
+    });
+    expect(t.runner.memo().lastError).toBe("invalid saved backoff deadline");
+    await expectLatchedStop(t, "errors");
+  });
+
   it("starts a new campaign id after a finished one, numbered from the ledger", async () => {
     const steps: Step[] = [];
     const t = await setup(steps);
