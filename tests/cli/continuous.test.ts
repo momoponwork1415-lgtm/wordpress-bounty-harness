@@ -10,6 +10,7 @@ import {
   continuousPaths,
   createContinuousRunner,
   type ContinuousDeps,
+  type ContinuousStopReason,
 } from "../../src/cli/continuous.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger, type LedgerEventInput } from "../../src/ledger/index.js";
@@ -146,6 +147,27 @@ const limited =
     });
     return { stopped: "provider-limit" };
   };
+
+async function expectLatchedStop(
+  t: Awaited<ReturnType<typeof setup>>,
+  reason: ContinuousStopReason,
+) {
+  expect(await readFile(continuousPaths(t.root).stop, "utf8")).toBe(
+    `${reason}\n`,
+  );
+  const campaigns = t.calls.length;
+  const forbidden = async () => {
+    throw new Error("a stopped restart must do no work");
+  };
+  t.deps.legacyHistoryAvailable = forbidden;
+  t.deps.floorPolicyAvailable = forbidden;
+  t.deps.preflight = forbidden;
+  t.deps.cleanupLeftovers = forbidden;
+  t.deps.select = forbidden;
+  t.deps.runCampaign = forbidden;
+  expect(await createContinuousRunner(t.deps).run()).toBe(reason);
+  expect(t.calls).toHaveLength(campaigns);
+}
 
 describe("continuous runner", () => {
   it.each([
@@ -309,6 +331,7 @@ describe("continuous runner", () => {
     expect(await t.runner.run()).toBe("errors");
     expect(t.runner.memo().lastError).toHaveLength(200);
     expect(new Set(t.calls.map((call) => call.campaignId)).size).toBe(3);
+    await expectLatchedStop(t, "errors");
   });
 
   it("holds after a batch whose every target was refused, then probes one target", async () => {
@@ -348,6 +371,7 @@ describe("continuous runner", () => {
     ]);
     // Once at start, once more before the hold.
     expect(preflights).toBe(2);
+    await expectLatchedStop(t, "no-progress");
   });
 
   it("sleeps a day on an empty pool, retries a failed listing hourly, and stops exhausted on the third empty day", async () => {
@@ -364,6 +388,7 @@ describe("continuous runner", () => {
       t.log.filter((line) => line.includes("reason=listing-unavailable")),
     ).toHaveLength(1);
     expect(t.hours()).toBe(1 + 2 * 24);
+    await expectLatchedStop(t, "exhausted");
   });
 
   it("waits for a renewed login without exiting", async () => {
@@ -410,6 +435,7 @@ describe("continuous runner", () => {
     expect(await t.runner.run()).toBe(reason);
     expect(t.calls).toHaveLength(0);
     expect(t.notified.at(-1)).toContain(`reason=${reason}`);
+    await expectLatchedStop(t, reason);
   });
 
   it("runs an unbound batch left by a crash before selecting again", async () => {

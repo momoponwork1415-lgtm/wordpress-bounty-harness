@@ -29,14 +29,17 @@ export const DISK_RECHECK_MINUTES = 60;
 export const PROGRAMME_STALE_DAYS = 35;
 export const PROGRAMME_WARN_DAYS = 7;
 
-export type ContinuousStopReason =
-  | "operator"
-  | "errors"
-  | "no-progress"
-  | "programme-stale"
-  | "exhausted"
-  | "legacy-history-missing"
-  | "missing-floor-policy";
+const STOP_REASONS = [
+  "operator",
+  "errors",
+  "no-progress",
+  "programme-stale",
+  "exhausted",
+  "legacy-history-missing",
+  "missing-floor-policy",
+] as const;
+
+export type ContinuousStopReason = (typeof STOP_REASONS)[number];
 
 /** The runner's working memo. The ledger stays the record; this file may be deleted. */
 export type ContinuousMemo = {
@@ -108,16 +111,35 @@ export function continuousPaths(stateDirectory: string) {
   };
 }
 
-/** Atomically publish operator intent, including from a signal handler. */
-export function requestContinuousStop(stateDirectory: string): void {
+/** Atomically publish a terminal stop, including from a signal handler. */
+export function requestContinuousStop(
+  stateDirectory: string,
+  reason: ContinuousStopReason = "operator",
+): void {
   const path = continuousPaths(stateDirectory).stop;
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    writeFileSync(temporary, "", { mode: 0o600, flag: "wx" });
+    writeFileSync(temporary, `${reason}\n`, { mode: 0o600, flag: "wx" });
     renameSync(temporary, path);
   } finally {
     rmSync(temporary, { force: true });
   }
+}
+
+/** Empty legacy markers still mean operator stop; unknown contents fail closed. */
+export async function readContinuousStopReason(
+  stateDirectory: string,
+): Promise<ContinuousStopReason | null> {
+  const raw = await readFile(
+    continuousPaths(stateDirectory).stop,
+    "utf8",
+  ).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  return raw === null
+    ? null
+    : (STOP_REASONS.find((reason) => reason === raw.trim()) ?? "operator");
 }
 
 /** Consume only the marker that existed at this instant. Later stop requests remain. */
@@ -277,8 +299,8 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       );
   };
   const stop = async (reason: ContinuousStopReason) => {
-    if (reason === "operator" && !existsSync(paths.stop))
-      requestContinuousStop(deps.stateDirectory);
+    if (!existsSync(paths.stop))
+      requestContinuousStop(deps.stateDirectory, reason);
     await enter("stopped", { reason });
     return reason;
   };
@@ -293,11 +315,12 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       throw new Error(`continuous run is already running as pid ${previous}`);
     const saved = await readFile(paths.memo, "utf8").catch(() => "{}");
     memo = { ...memo, ...(JSON.parse(saved) as Partial<ContinuousMemo>) };
-    if (existsSync(paths.stop)) {
+    const heldReason = await readContinuousStopReason(deps.stateDirectory);
+    if (heldReason !== null) {
       if (!options.resume) {
         // Preserve the marker and unfinished campaign across service restarts.
-        await enter("stopped", { reason: "operator" });
-        return "operator";
+        await enter("stopped", { reason: heldReason });
+        return heldReason;
       }
       await clearContinuousStop(deps.stateDirectory);
     }

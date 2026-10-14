@@ -3313,11 +3313,16 @@ describe("harness CLI vertical slice", () => {
     );
     await expect(stat(join(state, "continuous.stop"))).resolves.toBeDefined();
     expect((await run("continuous", "run", ...command, "--resume")).code).toBe(
-      1,
+      0,
     );
     expect((await run("continuous", "status")).stdout).toContain(
       "reason legacy-history-missing",
     );
+    expect((await run("continuous", "run", ...command)).code).toBe(0);
+    expect((await run("continuous", "status")).stdout).toContain(
+      "reason legacy-history-missing",
+    );
+    expect((await run("continuous", "resume")).code).toBe(0);
     await writeFile(
       join(state, "continuous.json"),
       JSON.stringify({ state: "running", detail: { campaignId: "crashed" } }),
