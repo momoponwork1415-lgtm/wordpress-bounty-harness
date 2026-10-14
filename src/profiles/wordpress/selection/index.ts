@@ -19,6 +19,7 @@ export type {
 export {
   collectWordPressCandidateInventory,
   hasTraversedWordPressCandidateSource,
+  hasVerifiedWordPressCandidateSourceCoverage,
   readWordPressCandidateInventory,
 } from "./candidate-inventory.js";
 export type {

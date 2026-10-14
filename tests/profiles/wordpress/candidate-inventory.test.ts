@@ -8,7 +8,9 @@ import { canonicalDigestPreservingProperties } from "../../../src/infrastructure
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import {
   collectWordPressCandidateInventory,
+  createWordPressSelection,
   hasTraversedWordPressCandidateSource,
+  hasVerifiedWordPressCandidateSourceCoverage,
   loadWordPressSelectionPolicy,
   readWordPressCandidateInventory,
   type WordPressSelectionBatchInspection,
@@ -117,6 +119,230 @@ async function withStore(
 }
 
 describe("WordPress candidate inventory", () => {
+  it("keeps a bounded private listing pool across mutable pages while rechecking targets and programme", async () => {
+    await withStore(async (store) => {
+      const policy = await loadWordPressSelectionPolicy();
+      if (!("candidateSource" in policy))
+        throw new Error("Expected automatic policy");
+      let currentTime = now;
+      let listingChanged = false;
+      let failNextObservation = false;
+      const fetcher = vi.fn<typeof fetch>(async (input) => {
+        const url = new URL(String(input));
+        const page = Number(url.searchParams.get("request[page]"));
+        const group = url.searchParams.get("request[tag]") ?? "popular";
+        const slugs = Array.from(
+          { length: 50 },
+          (_, index) => `${group}-${page}-${index}`,
+        );
+        return new Response(
+          JSON.stringify({
+            info: { page },
+            plugins: (listingChanged ? ["changed-plugin"] : slugs).map(
+              (slug) => ({ slug }),
+            ),
+          }),
+          { status: 200, headers: { Date: new Date(now).toUTCString() } },
+        );
+      });
+      const programmeRef = {
+        kind: "programme-eligibility-snapshot-ref" as const,
+        schemaVersion: 1 as const,
+        id: "wordfence-policy",
+        digest: digest("b"),
+      };
+      const targetSource = {
+        observe: vi.fn(async ({ slug }: { slug: string }) => {
+          if (failNextObservation) {
+            failNextObservation = false;
+            return {
+              status: "failed" as const,
+              operation: "observe" as const,
+              reason: "not-found" as const,
+              pluginIdentity: `wporg:${slug}`,
+            };
+          }
+          return {
+            status: "observed" as const,
+            observation: {
+              pluginIdentity: `wporg:${slug}`,
+              stableVersion: "1.2.3",
+              activeInstallations: 100_000,
+              lastUpdated: "2026-10-13 12:00am GMT",
+              observedAt: currentTime,
+              author: "Independent Author",
+              tags: [],
+              minimumWordPressVersion: "6.0",
+            },
+            observationRef: {
+              kind: "wordpress-org-target-observation-ref" as const,
+              schemaVersion: 1 as const,
+              id: `observation-${slug}`,
+              digest: digest("a"),
+            },
+          };
+        }),
+      };
+      const programme = {
+        inspect: vi.fn(async () => ({
+          status: "current" as const,
+          snapshotRef: programmeRef,
+          snapshot: {
+            programmeIdentity: "programme:wordfence",
+            policy: {
+              programmeOpportunityBand: "high-impact-only",
+              eligibility: {
+                assets: [
+                  { kind: "wordpress-plugin", scope: "publicly-distributed" },
+                ],
+              },
+            },
+          },
+        })),
+      };
+      const selection = createWordPressSelection({
+        targetSource: targetSource as never,
+        programme: programme as never,
+        programmeRef,
+        clock: () => new Date(currentTime),
+        fetch: fetcher,
+      });
+      if (selection.inspectBatch === undefined)
+        throw new Error("Expected batch inspector");
+      const first = await collectWordPressCandidateInventory({
+        policy,
+        inspectBatch: selection.inspectBatch,
+        store,
+        clock: () => new Date(currentTime),
+      });
+      expect(first.inventory.source.traversal?.observedUniqueCandidates).toBe(
+        900,
+      );
+      expect(first.inventory.candidates).toHaveLength(500);
+      expect(first.inventory.source.pool?.digest).toMatch(
+        /^sha256:[a-f0-9]{64}$/,
+      );
+      const cursor = first.inventory.source.traversal?.nextCursor;
+      if (cursor === undefined) throw new Error("Expected pool cursor");
+      expect(cursor.sourcePoolDigest).toBe(first.inventory.source.pool?.digest);
+      const observedFetches = fetcher.mock.calls.length;
+      listingChanged = true;
+      failNextObservation = true;
+      const uncertainSecond = await collectWordPressCandidateInventory({
+        policy,
+        inspectBatch: selection.inspectBatch,
+        cursor,
+        store,
+        clock: () => new Date(currentTime),
+      });
+      expect(
+        await hasVerifiedWordPressCandidateSourceCoverage({
+          inventories: [first.inventory, uncertainSecond.inventory],
+          policy,
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).toBe(false);
+      const second = await collectWordPressCandidateInventory({
+        policy,
+        inspectBatch: selection.inspectBatch,
+        cursor,
+        store,
+        clock: () => new Date(currentTime),
+      });
+      expect(fetcher).toHaveBeenCalledTimes(observedFetches);
+      expect(second.inventory.candidates).toHaveLength(400);
+      expect(second.inventory.source.traversal?.complete).toBe(true);
+      expect(targetSource.observe).toHaveBeenCalledTimes(1_300);
+      expect(programme.inspect).toHaveBeenCalledTimes(3);
+      expect(
+        hasTraversedWordPressCandidateSource(
+          [first.inventory, second.inventory],
+          () => new Date(currentTime),
+        ),
+      ).toBe(true);
+      expect(
+        await hasVerifiedWordPressCandidateSourceCoverage({
+          inventories: [first.inventory, second.inventory],
+          policy,
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).toBe(true);
+      expect(
+        await hasVerifiedWordPressCandidateSourceCoverage({
+          inventories: [first.inventory, second.inventory],
+          policy: { ...policy, minimumActiveInstallations: 200_000 },
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).toBe(false);
+      expect(
+        await hasVerifiedWordPressCandidateSourceCoverage({
+          inventories: [
+            first.inventory,
+            {
+              ...second.inventory,
+              source: {
+                ...second.inventory.source,
+                traversal: {
+                  ...second.inventory.source.traversal!,
+                  listingSetDigest: digest("e"),
+                },
+              },
+            },
+          ],
+          policy,
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).toBe(false);
+      expect(
+        await hasVerifiedWordPressCandidateSourceCoverage({
+          inventories: [first.inventory, second.inventory],
+          policy,
+          store: { readFile: async () => ({ status: "missing" }) },
+          clock: () => new Date(currentTime),
+        }),
+      ).toBe(false);
+      await expect(
+        collectWordPressCandidateInventory({
+          policy: { ...policy, minimumActiveInstallations: 200_000 },
+          inspectBatch: selection.inspectBatch,
+          cursor,
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).rejects.toThrow("does not match its selection policy");
+      currentTime = "2026-10-16T00:00:00.000Z";
+      expect(
+        hasTraversedWordPressCandidateSource(
+          [first.inventory, second.inventory],
+          () => new Date(currentTime),
+        ),
+      ).toBe(false);
+      expect(
+        await hasVerifiedWordPressCandidateSourceCoverage({
+          inventories: [first.inventory, second.inventory],
+          policy,
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).toBe(false);
+      await expect(
+        collectWordPressCandidateInventory({
+          policy,
+          inspectBatch: selection.inspectBatch,
+          cursor,
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).rejects.toThrow("source pool is stale");
+      expect(fetcher).toHaveBeenCalledTimes(observedFetches);
+      expect(targetSource.observe).toHaveBeenCalledTimes(1_300);
+    });
+  });
+
   it("preserves a large ranked candidate pool without the five-target selection cutoff and resumes by digest", async () => {
     await withStore(async (store) => {
       const policy = await loadWordPressSelectionPolicy();
@@ -168,7 +394,7 @@ describe("WordPress candidate inventory", () => {
         "all-observed",
       );
       expect(hasTraversedWordPressCandidateSource([stored.inventory])).toBe(
-        true,
+        false,
       );
       expect(stored.inventory.candidates[0]).not.toHaveProperty(
         "observationRef",
@@ -248,7 +474,7 @@ describe("WordPress candidate inventory", () => {
     });
   });
 
-  it("recognizes a genuinely empty fully observed source only after every listing succeeds", async () => {
+  it("does not certify an unsealed empty listing batch as exhaustion", async () => {
     await withStore(async (store) => {
       const policy = await loadWordPressSelectionPolicy();
       if (!("candidateSource" in policy))
@@ -278,7 +504,7 @@ describe("WordPress candidate inventory", () => {
       });
       expect(stored.inventory.candidates).toEqual([]);
       expect(hasTraversedWordPressCandidateSource([stored.inventory])).toBe(
-        true,
+        false,
       );
       const uncertain = await collectWordPressCandidateInventory({
         policy,
@@ -376,7 +602,7 @@ describe("WordPress candidate inventory", () => {
       );
       expect(
         hasTraversedWordPressCandidateSource([replayed, second.inventory]),
-      ).toBe(true);
+      ).toBe(false);
       expect(
         hasTraversedWordPressCandidateSource([second.inventory, replayed]),
       ).toBe(false);
