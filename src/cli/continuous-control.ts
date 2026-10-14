@@ -7,6 +7,7 @@ import type {
   ContinuousRunRecord,
   SqliteContinuousRunJournal,
 } from "../infrastructure/continuous-run-journal.js";
+import type { ContinuousRunOwnerObservation } from "../infrastructure/continuous-run-owner.js";
 import type { Ledger } from "../ledger/index.js";
 
 /** Host-common control plane; these commands never start or repeat a Trial. */
@@ -17,6 +18,9 @@ export async function runContinuousControl(
   assessmentInputs: {
     readonly ledger?: Pick<Ledger, "read">;
     readonly reviewExportReady?: ReviewExportCheck;
+    readonly ownerObservation?: (
+      parentRunId: string,
+    ) => ContinuousRunOwnerObservation;
     /** Stop intent is already durable when this optional idle drain runs. */
     readonly settleStop?: (
       requested: ContinuousRunRecord,
@@ -39,6 +43,15 @@ export async function runContinuousControl(
       ? journal.get(parentRunId)
       : journal.requestStop(parentRunId);
   if (run === null) throw new Error("Continuous run not found");
+  const ownerObservation =
+    action === "status"
+      ? (assessmentInputs.ownerObservation?.(parentRunId) ?? {
+          pidLiveness: "unknown" as const,
+          claimStatus: null,
+          ownerPid: null,
+          reason: "owner-not-checked" as const,
+        })
+      : null;
   if (
     action === "stop" &&
     (previous?.state === "RUNNING" ||
@@ -142,6 +155,7 @@ export async function runContinuousControl(
       stopRequested: run.stopRequested,
       lastLedgerSequence: run.lastLedgerSequence,
       revision: run.revision,
+      ...(ownerObservation === null ? {} : { ownerObservation }),
       children,
     }),
   );

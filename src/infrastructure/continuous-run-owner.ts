@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -18,10 +18,28 @@ const ownerRow = z.object({
   acquired_at: instant,
   reconciliation_digest: digest.nullable(),
 });
+const observationRow = ownerRow.pick({ owner_pid: true, status: true });
 const handleSchema = z.strictObject({ parentRunId: parentId, token });
 
 export type ContinuousRunOwnerHandle = z.infer<typeof handleSchema>;
 export type PidLiveness = "alive" | "dead" | "unknown";
+export type ContinuousRunOwnerObservation =
+  | {
+      readonly pidLiveness: "no-claim";
+      readonly claimStatus: null;
+      readonly ownerPid: null;
+    }
+  | {
+      readonly pidLiveness: "unknown";
+      readonly claimStatus: null;
+      readonly ownerPid: null;
+      readonly reason: "owner-store-unavailable";
+    }
+  | {
+      readonly pidLiveness: PidLiveness;
+      readonly claimStatus: "active" | "recovery-required";
+      readonly ownerPid: number;
+    };
 export type ContinuousRunOwnerResult =
   | {
       readonly status: "acquired";
@@ -43,6 +61,63 @@ function pidLiveness(pid: number): PidLiveness {
       ? "dead"
       : "unknown";
   }
+}
+
+/** A point-in-time observation only. PID presence never proves a live worker
+ * or authorizes recovery; the owner claim and external state still need the
+ * normal reconciliation path. This never creates or updates the owner DB. */
+export function observeContinuousRunOwner(
+  databasePath: string,
+  value: string,
+  options: { readonly pidLiveness?: (pid: number) => PidLiveness } = {},
+): ContinuousRunOwnerObservation {
+  const id = parentId.parse(value);
+  try {
+    statSync(databasePath);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return { pidLiveness: "no-claim", claimStatus: null, ownerPid: null };
+    return {
+      pidLiveness: "unknown",
+      claimStatus: null,
+      ownerPid: null,
+      reason: "owner-store-unavailable",
+    };
+  }
+
+  let row: z.infer<typeof observationRow> | null;
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(databasePath, { readOnly: true });
+    const result = db
+      .prepare(
+        "SELECT owner_pid, status FROM continuous_run_owners WHERE parent_id = ?",
+      )
+      .get(id);
+    row = result === undefined ? null : observationRow.parse(result);
+  } catch {
+    return {
+      pidLiveness: "unknown",
+      claimStatus: null,
+      ownerPid: null,
+      reason: "owner-store-unavailable",
+    };
+  } finally {
+    db?.close();
+  }
+  if (row === null)
+    return { pidLiveness: "no-claim", claimStatus: null, ownerPid: null };
+  let liveness: PidLiveness;
+  try {
+    liveness = (options.pidLiveness ?? pidLiveness)(row.owner_pid);
+  } catch {
+    liveness = "unknown";
+  }
+  return {
+    pidLiveness: liveness,
+    claimStatus: row.status,
+    ownerPid: row.owner_pid,
+  };
 }
 
 function tokenDigest(value: string): Buffer {

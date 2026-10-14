@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 import { runContinuousControl } from "../../src/cli/continuous-control.js";
 import { settleIdleContinuousStop } from "../../src/cli/continuous-stop.js";
 import { SqliteContinuousRunJournal } from "../../src/infrastructure/continuous-run-journal.js";
-import { SqliteContinuousRunOwner } from "../../src/infrastructure/continuous-run-owner.js";
+import {
+  observeContinuousRunOwner,
+  SqliteContinuousRunOwner,
+} from "../../src/infrastructure/continuous-run-owner.js";
 import { SqliteHostResourceClaims } from "../../src/infrastructure/host-resource-claims.js";
 import {
   ledgerEventV1Schema,
@@ -19,6 +22,62 @@ import {
 const digest = (letter: string) => `sha256:${letter.repeat(64)}`;
 
 describe("continuous control", () => {
+  it.each([
+    [
+      "dead owner",
+      { pidLiveness: "dead", claimStatus: "active", ownerPid: 101 },
+    ],
+    [
+      "no claim",
+      { pidLiveness: "no-claim", claimStatus: null, ownerPid: null },
+    ],
+  ] as const)(
+    "exposes a RUNNING parent with %s without changing its state",
+    async (label, observation) => {
+      const directory = await mkdtemp(join(tmpdir(), "wbh-status-liveness-"));
+      const journal = new SqliteContinuousRunJournal(
+        join(directory, "runs.sqlite"),
+      );
+      const ownerPath = join(directory, "owners.sqlite");
+      const owner =
+        label === "dead owner" ? new SqliteContinuousRunOwner(ownerPath) : null;
+      const lines: string[] = [];
+      try {
+        const created = journal.create({
+          parentRunId: "parent-liveness",
+          stateDirectory: directory,
+          configDigest: digest("a"),
+          policyDigest: digest("b"),
+          inventoryDigest: digest("c"),
+        });
+        if (owner !== null)
+          expect(owner.tryAcquire(created.parentRunId, 101).status).toBe(
+            "acquired",
+          );
+        await runContinuousControl(
+          ["continuous", "status", "--run", created.parentRunId],
+          journal,
+          { stdout: (line) => lines.push(line) },
+          {
+            ownerObservation: (id) =>
+              observeContinuousRunOwner(ownerPath, id, {
+                pidLiveness: () => "dead",
+              }),
+          },
+        );
+        expect(JSON.parse(lines[0]!)).toMatchObject({
+          state: "RUNNING",
+          ownerObservation: observation,
+        });
+        expect(journal.get(created.parentRunId)).toEqual(created);
+      } finally {
+        owner?.close();
+        journal.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("settles a RUNNING parent that crashed before taking ownership", async () => {
     const directory = await mkdtemp(join(tmpdir(), "wbh-unowned-stop-"));
     const journal = new SqliteContinuousRunJournal(

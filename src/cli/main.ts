@@ -21,7 +21,10 @@ import {
   assertContinuousStateDirectory,
   SqliteContinuousRunJournal,
 } from "../infrastructure/continuous-run-journal.js";
-import { SqliteContinuousRunOwner } from "../infrastructure/continuous-run-owner.js";
+import {
+  observeContinuousRunOwner,
+  SqliteContinuousRunOwner,
+} from "../infrastructure/continuous-run-owner.js";
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
 import { runNativeModelProcess } from "../infrastructure/native-model-process.js";
 import { recoverHostClaim } from "./resource-recovery.js";
@@ -177,6 +180,17 @@ async function main(argv: readonly string[]): Promise<number> {
       const state = await openState(physicalStateDirectory, {});
       return await runContinuousControl(args, journal, io, {
         ledger: state.ledger,
+        ownerObservation: (parentRunId) =>
+          observeContinuousRunOwner(
+            join(
+              homedir(),
+              ".local",
+              "state",
+              "wordpress-bounty-harness",
+              "continuous-owners.sqlite",
+            ),
+            parentRunId,
+          ),
         reviewExportReady: continuousReviewExportCheck(
           state,
           undefined,

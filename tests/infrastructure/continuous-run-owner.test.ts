@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  observeContinuousRunOwner,
   SqliteContinuousRunOwner,
   type PidLiveness,
 } from "../../src/infrastructure/continuous-run-owner.js";
@@ -38,6 +39,53 @@ async function setup() {
 }
 
 describe("host-common continuous-run ownership", () => {
+  it("observes absent, live, dead, and uncertain claims without opening the store for writes", async () => {
+    const { path, liveness, options } = await setup();
+    expect(observeContinuousRunOwner(path, "parent-one", options)).toEqual({
+      pidLiveness: "no-claim",
+      claimStatus: null,
+      ownerPid: null,
+    });
+    await expect(stat(path)).rejects.toMatchObject({ code: "ENOENT" });
+
+    liveness.set(101, "alive");
+    const owner = new SqliteContinuousRunOwner(path, options);
+    try {
+      const claim = owner.tryAcquire("parent-one", 101);
+      expect(claim.status).toBe("acquired");
+      if (claim.status !== "acquired") return;
+      expect(observeContinuousRunOwner(path, "parent-one", options)).toEqual({
+        pidLiveness: "alive",
+        claimStatus: "active",
+        ownerPid: 101,
+      });
+      liveness.set(101, "dead");
+      expect(observeContinuousRunOwner(path, "parent-one", options)).toEqual({
+        pidLiveness: "dead",
+        claimStatus: "active",
+        ownerPid: 101,
+      });
+      liveness.set(101, "unknown");
+      expect(
+        observeContinuousRunOwner(path, "parent-one", options),
+      ).toMatchObject({
+        pidLiveness: "unknown",
+        claimStatus: "active",
+        ownerPid: 101,
+      });
+      expect(
+        observeContinuousRunOwner(path, "another-parent", options),
+      ).toEqual({
+        pidLiveness: "no-claim",
+        claimStatus: null,
+        ownerPid: null,
+      });
+      owner.assertReady(claim.handle);
+    } finally {
+      owner.close();
+    }
+  });
+
   it("excludes a live owner regardless of age, and uses a private SQLite file", async () => {
     const { path, liveness, options, advanceWeek } = await setup();
     liveness.set(101, "alive");
