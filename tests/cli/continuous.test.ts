@@ -229,6 +229,35 @@ describe("continuous runner", () => {
     expect(t.calls[1]?.campaignId).toBe(t.calls[0]?.campaignId);
   });
 
+  it("preserves the quota wait and campaign id when cleanup fails after restart", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    steps.push(limited("quota", t), () => {
+      throw new LabCleanupFailure("remove the remaining Lab");
+    });
+    const regularSleep = t.deps.sleep;
+    let ticks = 0;
+    t.deps.sleep = async (ms) => {
+      await regularSleep(ms);
+      if (++ticks === 5) throw new Error("synthetic crash");
+    };
+    await expect(t.runner.run()).rejects.toThrow("synthetic crash");
+    const campaignId = t.calls[0]!.campaignId;
+    t.deps.sleep = regularSleep;
+    t.deps.select = async () => {
+      throw new Error("restart must reuse the saved campaign");
+    };
+
+    expect(await createContinuousRunner(t.deps).run()).toBe("lab-cleanup");
+    expect(t.hours()).toBe(0.5);
+    expect(t.calls).toHaveLength(2);
+    expect(t.calls[1]).toMatchObject({
+      campaignId,
+      retryIncompleteVerifications: false,
+    });
+    await expectLatchedStop(t, "lab-cleanup");
+  });
+
   it("stops for review when a saved hold has no valid deadline", async () => {
     let cleanups = 0;
     let selects = 0;
@@ -384,6 +413,7 @@ describe("continuous runner", () => {
     expect(await readFile(continuousPaths(t.root).memo, "utf8")).toContain(
       t.calls[0]!.campaignId,
     );
+    await expectLatchedStop(t, "lab-cleanup");
   });
 
   it("stops on a failed post-batch Lab inspection without discarding the campaign", async () => {

@@ -294,6 +294,6 @@ export async function continuousCommand(
     },
   });
   await runner.run({ resume: context.resume });
-  // All seven named stops are intentional. Restart=on-failure is for crashes.
+  // All named stops are intentional. Restart=on-failure is for crashes.
   return 0;
 }

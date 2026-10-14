@@ -3642,7 +3642,7 @@ describe("harness CLI vertical slice", () => {
       "--selection",
       join(root, "policies", "selection.json"),
     );
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(0);
     expect(result.stdout).toContain("stopped reason=lab-cleanup");
     expect(removeCalls).toEqual([false]);
     expect(selections).toBe(0);
@@ -3655,7 +3655,7 @@ describe("harness CLI vertical slice", () => {
       "--selection",
       join(root, "policies", "selection.json"),
     );
-    expect(withReviewLab.code).toBe(1);
+    expect(withReviewLab.code).toBe(0);
     expect((await run("continuous", "status")).stdout).toContain(
       "state stopped  reason lab-cleanup",
     );
