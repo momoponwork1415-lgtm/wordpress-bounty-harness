@@ -13,6 +13,7 @@ import {
   hasVerifiedWordPressCandidateSourceCoverage,
   loadWordPressSelectionPolicy,
   readWordPressCandidateInventory,
+  readWordPressCandidateInventoryCursor,
   type WordPressSelectionBatchInspection,
   type WordPressSelectionPolicy,
   type WordPressTargetSelection,
@@ -225,6 +226,35 @@ describe("WordPress candidate inventory", () => {
       const cursor = first.inventory.source.traversal?.nextCursor;
       if (cursor === undefined) throw new Error("Expected pool cursor");
       expect(cursor.sourcePoolDigest).toBe(first.inventory.source.pool?.digest);
+      expect(
+        await readWordPressCandidateInventoryCursor({
+          digest: first.digest,
+          policy,
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).toEqual(cursor);
+      await expect(
+        readWordPressCandidateInventoryCursor({
+          digest: first.digest,
+          policy: { ...policy, minimumActiveInstallations: 200_000 },
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).rejects.toThrow("does not match its selection policy");
+      await expect(
+        readWordPressCandidateInventoryCursor({
+          digest: first.digest,
+          policy,
+          store: {
+            readFile: (digest, name, maxBytes) =>
+              name === "candidate-source-pool.json"
+                ? Promise.resolve({ status: "missing" as const })
+                : store.readFile(digest, name, maxBytes),
+          },
+          clock: () => new Date(currentTime),
+        }),
+      ).rejects.toThrow("Candidate source pool is missing");
       const observedFetches = fetcher.mock.calls.length;
       listingChanged = true;
       failNextObservation = true;
@@ -253,6 +283,14 @@ describe("WordPress candidate inventory", () => {
       expect(fetcher).toHaveBeenCalledTimes(observedFetches);
       expect(second.inventory.candidates).toHaveLength(400);
       expect(second.inventory.source.traversal?.complete).toBe(true);
+      await expect(
+        readWordPressCandidateInventoryCursor({
+          digest: second.digest,
+          policy,
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).rejects.toThrow("no verified next page");
       expect(targetSource.observe).toHaveBeenCalledTimes(1_300);
       expect(programme.inspect).toHaveBeenCalledTimes(3);
       expect(
@@ -315,6 +353,14 @@ describe("WordPress candidate inventory", () => {
         }),
       ).rejects.toThrow("does not match its selection policy");
       currentTime = "2026-10-16T00:00:00.000Z";
+      await expect(
+        readWordPressCandidateInventoryCursor({
+          digest: first.digest,
+          policy,
+          store,
+          clock: () => new Date(currentTime),
+        }),
+      ).rejects.toThrow("source pool is stale");
       expect(
         hasTraversedWordPressCandidateSource(
           [first.inventory, second.inventory],

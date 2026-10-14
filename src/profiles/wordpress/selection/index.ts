@@ -21,6 +21,7 @@ export {
   hasTraversedWordPressCandidateSource,
   hasVerifiedWordPressCandidateSourceCoverage,
   readWordPressCandidateInventory,
+  readWordPressCandidateInventoryCursor,
 } from "./candidate-inventory.js";
 export type {
   WordPressCandidateInventory,
