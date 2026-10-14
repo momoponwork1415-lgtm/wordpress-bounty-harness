@@ -118,6 +118,10 @@ async function harness(
     /** Use the real bounded listing enumerator for inventory CLI tests. */
     readonly inventoryFetch?: typeof fetch;
     readonly inventoryObservationFails?: (slug: string) => boolean;
+    readonly currentStableVersion?: (slug: string) => string;
+    readonly programmeAvailable?: () => boolean;
+    readonly programmeEligible?: () => boolean;
+    readonly onResourceWait?: (reason: string) => void;
     /** A slug whose snapshot cannot be frozen. */
     readonly failFreeze?: string;
     /** Extra campaign config fields. */
@@ -367,7 +371,7 @@ async function harness(
                 pluginIdentity: `wporg:${slug}`,
                 officialSlug: slug,
                 displayName: slug,
-                stableVersion: "9.9.9",
+                stableVersion: options.currentStableVersion?.(slug) ?? "9.9.9",
                 minimumWordPressVersion: "6.0",
                 activeInstallations: 5000,
                 lastUpdated: "2026-09-01 12:00am GMT",
@@ -382,7 +386,7 @@ async function harness(
                   parserVersion: "wordpress-org-plugin-information-v1",
                 },
                 downloadProvenance: {
-                  sourceUrl: `https://downloads.wordpress.org/plugin/${slug}.9.9.9.zip`,
+                  sourceUrl: `https://downloads.wordpress.org/plugin/${slug}.${options.currentStableVersion?.(slug) ?? "9.9.9"}.zip`,
                 },
               },
               observationRef: {
@@ -394,21 +398,30 @@ async function harness(
             },
     } as unknown as WordPressOrgTargetSource,
     programme: {
-      inspect: async () => ({
-        status: "current",
-        snapshotRef: programmeRef,
-        snapshot: {
-          programmeIdentity: "programme:wordfence",
-          policy: {
-            programmeOpportunityBand: "high-impact-only",
-            eligibility: {
-              assets: [
-                { kind: "wordpress-plugin", scope: "publicly-distributed" },
-              ],
+      inspect: async () =>
+        options.programmeAvailable?.() === false
+          ? { status: "stale", reason: "snapshot-expired" }
+          : {
+              status: "current",
+              snapshotRef: programmeRef,
+              snapshot: {
+                programmeIdentity: "programme:wordfence",
+                policy: {
+                  programmeOpportunityBand:
+                    options.programmeEligible?.() === false
+                      ? "research-only"
+                      : "high-impact-only",
+                  eligibility: {
+                    assets: [
+                      {
+                        kind: "wordpress-plugin",
+                        scope: "publicly-distributed",
+                      },
+                    ],
+                  },
+                },
+              },
             },
-          },
-        },
-      }),
     } as unknown as ProgrammeIntelligence,
     programmeRef,
     clock: () => new Date(now),
@@ -703,6 +716,9 @@ async function harness(
     profile: createWordPressCliProfile({
       repeatTrialGate: options.repeatTrialGate ?? syntheticTrialGate,
       ...(resourceClaims === undefined ? {} : { resourceClaims }),
+      ...(options.onResourceWait === undefined
+        ? {}
+        : { onResourceWait: options.onResourceWait }),
       ...(cleanupScope === undefined ? {} : { cleanupScope }),
       scopePolicy: await loadWordpressScopePolicy(),
       ...(options.scopeFacts === undefined
@@ -888,6 +904,261 @@ const programmeRef = {
 };
 
 describe("harness CLI vertical slice", () => {
+  it("holds a pinned automatic target when its stable version changes during a claim wait", async () => {
+    let stableVersion = "9.9.9";
+    let releaseBlocker = () => {};
+    const {
+      run,
+      configPath,
+      root,
+      state,
+      ledger,
+      resourceClaims,
+      docker,
+      prompts,
+    } = await harness({
+      candidates: ["synthetic-plugin", "second-plugin", "third-plugin"],
+      withResourceClaims: true,
+      currentStableVersion: () => stableVersion,
+      onResourceWait: () => {
+        stableVersion = "10.0.0";
+        releaseBlocker();
+      },
+    });
+    if (resourceClaims === undefined) throw new Error("Missing claims");
+    try {
+      const policyPath = join(root, "selection.json");
+      const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      delete manual.candidateSlugs;
+      delete manual.pinnedVersions;
+      await writeFile(
+        policyPath,
+        JSON.stringify({
+          ...manual,
+          promptVariant: "short-objective-managed-v4",
+          revisitPolicy: { kind: "never" },
+          wordpressVersion: "6.8",
+          maximumTargets: 3,
+          candidateSource: {
+            kind: "wordpress-org",
+            popularPages: 1,
+            tags: [],
+            pagesPerTag: 1,
+            perPage: 3,
+            maxCandidates: 5,
+            maxAgeDays: 1,
+          },
+        }),
+      );
+      expect((await run("select", "--config", policyPath)).code).toBe(0);
+      const selectionBatch = ledger()
+        .read({ type: "target-selected", limit: 10 })
+        .filter(({ event }) => event.campaignId.startsWith("selection-"));
+      const reserved = selectionBatch.find(
+        ({ event }) =>
+          event.campaignId.startsWith("selection-") &&
+          event.type === "target-selected" &&
+          event.selectionId === "wporg:synthetic-plugin@9.9.9",
+      );
+      expect(reserved).toBeDefined();
+      const blocker = resourceClaims.tryAcquire({
+        targetKey: "wordpress:plugin:synthetic-plugin",
+        ownerKey: "run:synthetic-blocker",
+        ownerPid: process.pid,
+        stateDirectory: state().stateDirectory,
+        campaignId: "other-campaign",
+        snapshotDigest: sha("f"),
+        providerKeys: ["codex"],
+        leaseDurationMs: 60_000,
+      });
+      if (blocker.status !== "acquired") throw new Error("Missing blocker");
+      releaseBlocker = () => resourceClaims.release(blocker.handle);
+      const result = await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "freshness-child",
+        "--config",
+        configPath,
+      );
+      expect(result.code).toBe(3);
+      expect(result.stderr).toContain("target-version-changed");
+      expect(result.stderr).toContain("held wporg:synthetic-plugin 9.9.9");
+      expect(resourceClaims.status().usedTargets).toBe(0);
+      expect(docker).toHaveLength(0);
+      expect(prompts).toHaveLength(0);
+      expect(
+        ledger().read({
+          campaignId: "freshness-child",
+          type: "lab-provisioned",
+        }),
+      ).toHaveLength(0);
+      expect(
+        ledger().read({
+          campaignId: "freshness-child",
+          type: "discovery-run-started",
+        }),
+      ).toHaveLength(0);
+      expect(
+        ledger().read({
+          campaignId: "freshness-child",
+          type: "target-skipped",
+        }),
+      ).toHaveLength(0);
+      expect(
+        ledger().read({
+          campaignId: "freshness-child",
+          type: "selection-batch-bound",
+        })[0]?.event,
+      ).toMatchObject({
+        selectionIds: ["wporg:synthetic-plugin@9.9.9"],
+        snapshotDigest: selectionBatch[0]?.event.snapshotDigest,
+      });
+      expect(
+        ledger()
+          .read({
+            campaignId: reserved!.event.campaignId,
+            type: "target-selected",
+          })
+          .find(
+            ({ event }) =>
+              event.type === "target-selected" &&
+              event.selectionId === "wporg:synthetic-plugin@9.9.9",
+          )?.event.snapshotDigest,
+      ).toBe(reserved?.event.snapshotDigest);
+    } finally {
+      resourceClaims.close();
+    }
+  }, 10_000);
+
+  it("releases the claim on unavailable Programme and can resume the same pinned batch", async () => {
+    let programmeAvailable = true;
+    let programmeEligible = true;
+    const { run, configPath, root, ledger, resourceClaims, docker, prompts } =
+      await harness({
+        candidates: ["synthetic-plugin", "second-plugin", "third-plugin"],
+        withResourceClaims: true,
+        zeroFindings: true,
+        programmeAvailable: () => programmeAvailable,
+        programmeEligible: () => programmeEligible,
+        config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
+      });
+    if (resourceClaims === undefined) throw new Error("Missing claims");
+    try {
+      const policyPath = join(root, "selection.json");
+      const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      delete manual.candidateSlugs;
+      delete manual.pinnedVersions;
+      await writeFile(
+        policyPath,
+        JSON.stringify({
+          ...manual,
+          promptVariant: "short-objective-managed-v4",
+          revisitPolicy: { kind: "never" },
+          wordpressVersion: "6.8",
+          maximumTargets: 3,
+          candidateSource: {
+            kind: "wordpress-org",
+            popularPages: 1,
+            tags: [],
+            pagesPerTag: 1,
+            perPage: 3,
+            maxCandidates: 5,
+            maxAgeDays: 1,
+          },
+        }),
+      );
+      expect((await run("select", "--config", policyPath)).code).toBe(0);
+      programmeAvailable = false;
+      const held = await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "programme-child",
+        "--config",
+        configPath,
+      );
+      expect(held.code).toBe(3);
+      expect(held.stderr).toContain("target-observation-unavailable");
+      expect(resourceClaims.status().usedTargets).toBe(0);
+      expect(docker).toHaveLength(0);
+      expect(prompts).toHaveLength(0);
+      programmeAvailable = true;
+      programmeEligible = false;
+      const ineligible = await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "programme-child",
+        "--config",
+        configPath,
+      );
+      expect(ineligible.code).toBe(3);
+      expect(ineligible.stderr).toContain("target-eligibility-changed");
+      expect(resourceClaims.status().usedTargets).toBe(0);
+      expect(docker).toHaveLength(0);
+      programmeEligible = true;
+      const resumed = await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "programme-child",
+        "--config",
+        configPath,
+      );
+      expect(resumed.code).toBe(0);
+      expect(prompts).toHaveLength(1);
+      expect(resourceClaims.status().usedTargets).toBe(0);
+      expect(
+        ledger().read({
+          campaignId: "programme-child",
+          type: "selection-batch-bound",
+        }),
+      ).toHaveLength(1);
+    } finally {
+      resourceClaims.close();
+    }
+  });
+
+  it("allows an intentionally pinned manual release after the public stable version changes", async () => {
+    let stableVersion = "9.9.9";
+    const { run, configPath, resourceClaims, prompts } = await harness({
+      withResourceClaims: true,
+      zeroFindings: true,
+      currentStableVersion: () => stableVersion,
+      config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
+    });
+    if (resourceClaims === undefined) throw new Error("Missing claims");
+    try {
+      expect((await run("select", "--config", configPath)).code).toBe(0);
+      stableVersion = "10.0.0";
+      const result = await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "manual-pin-child",
+        "--config",
+        configPath,
+      );
+      expect(result.code).toBe(0);
+      expect(result.stderr).not.toContain("target-version-changed");
+      expect(prompts).toHaveLength(1);
+    } finally {
+      resourceClaims.close();
+    }
+  });
+
   it("serializes concurrent runs of the same campaign target and releases a clean claim", async () => {
     const { run, configPath, ledger, resourceClaims } = await harness({
       withResourceClaims: true,

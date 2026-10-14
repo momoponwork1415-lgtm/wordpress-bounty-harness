@@ -837,7 +837,15 @@ export async function runCli(
           io.stderr(
             `skipped ${skipped.targetId} ${skipped.version} at ${skipped.stage}: ${skipped.message}`,
           );
-        if (summary.targets.length === 0 && summary.skipped.length === 0) {
+        for (const held of summary.held ?? [])
+          io.stderr(
+            `held ${held.targetId} ${held.version} before Lab: ${held.reason}; snapshot ${held.snapshotDigest}`,
+          );
+        if (
+          summary.targets.length === 0 &&
+          summary.skipped.length === 0 &&
+          (summary.held?.length ?? 0) === 0
+        ) {
           io.stdout(
             target === null
               ? "no targets selected"
@@ -860,7 +868,9 @@ export async function runCli(
           );
         print(formatFunnel(state.ledger.funnel(summary.campaignId)));
         // A distinct exit code lets an unattended schedule tell a resumable stop apart.
-        return summary.stopped === undefined ? 0 : 3;
+        return summary.stopped === undefined && summary.held === undefined
+          ? 0
+          : 3;
       }
       case "review":
         print(

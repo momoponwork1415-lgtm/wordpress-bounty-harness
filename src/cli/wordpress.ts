@@ -122,6 +122,7 @@ import {
   reverifyOnSelectedVersion,
   runCampaignPipeline,
   type CampaignPipeline,
+  type TargetAdmissionHoldReason,
 } from "./pipeline.js";
 
 const text = z.strictObject({
@@ -1213,6 +1214,43 @@ async function runWordPressCampaign(
       snapshotDigest,
     ]) ?? [],
   );
+  const inspectAdmissionFreshness = async (
+    target: WordPressTargetSelection,
+  ): Promise<TargetAdmissionHoldReason | null> => {
+    // Manual pins intentionally target an older release. Only the automatic
+    // inventory-bound path requires the current stable version at admission.
+    if (!("candidateSource" in policy) || reservedSelections === undefined)
+      return null;
+    const current = await options
+      .selectionBoundaries?.(state, config.wordpressVersion)
+      .catch(() => undefined);
+    if (current?.selection.inspectCurrent === undefined)
+      return "target-observation-unavailable";
+    const observed = await current.selection
+      .inspectCurrent(policy, target.slug)
+      .catch(() => undefined);
+    if (observed === undefined || observed.slug !== target.slug)
+      return "target-observation-unavailable";
+    if (observed.status !== "eligible" || observed.selection === undefined) {
+      return observed.reasons.some((reason) =>
+        [
+          "observation-unavailable",
+          "observation-stale",
+          "programme-stale",
+        ].includes(reason),
+      )
+        ? "target-observation-unavailable"
+        : "target-eligibility-changed";
+    }
+    if (
+      observed.selection.targetId !== target.targetId ||
+      observed.selection.policy.digest !== target.policy.digest
+    )
+      return "target-eligibility-changed";
+    return observed.selection.version === target.version
+      ? null
+      : "target-version-changed";
+  };
   const ablationConfig =
     config.mode === "ablation" ? config.ablation : undefined;
   const boundaries = await options.boundaries(config, state);
@@ -1306,7 +1344,10 @@ async function runWordPressCampaign(
         });
       };
       assertPendingTrial();
-      if (options.resourceClaims === undefined) return;
+      if (options.resourceClaims === undefined) {
+        const hold = await inspectAdmissionFreshness(target);
+        return hold === null ? undefined : { hold };
+      }
       let previousWait = "";
       const handle = await options.resourceClaims.waitForClaim(
         {
@@ -1331,12 +1372,20 @@ async function runWordPressCampaign(
           },
         },
       );
+      let hold: TargetAdmissionHoldReason | null;
       try {
         // A different process may have started a Trial while this one waited.
         assertPendingTrial();
+        signal.throwIfAborted();
+        hold = await inspectAdmissionFreshness(target);
+        signal.throwIfAborted();
       } catch (error) {
         options.resourceClaims.release(handle);
         throw error;
+      }
+      if (hold !== null) {
+        options.resourceClaims.release(handle);
+        return { hold };
       }
       return {
         finish: (status: "clean" | "recovery-needed") => {

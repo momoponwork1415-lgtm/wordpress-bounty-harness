@@ -431,6 +431,15 @@ export async function runContinuousParent(input: {
         const changed = await holdChangedInputs();
         if (changed !== null) return changed;
         if (monitorError !== undefined) throw monitorError;
+        if (summary.held !== undefined && summary.held.length > 0) {
+          const stopped = stopIfRequested();
+          if (stopped !== null) return stopped;
+          return transition(current(), {
+            state: "WAIT_REVIEW",
+            reason: summary.held[0]!.reason,
+            nextCheckAt: null,
+          });
+        }
         input.io.stdout(
           canonicalJson({
             parentRunId,

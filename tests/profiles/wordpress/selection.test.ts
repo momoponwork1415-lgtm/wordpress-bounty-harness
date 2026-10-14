@@ -150,6 +150,33 @@ function harness(options: {
 }
 
 describe("WordPress selection public interface", () => {
+  it("reobserves one automatic slug without replaying its listing pool", async () => {
+    const policy = await loadWordPressSelectionPolicy();
+    const enumerateCandidates = vi.fn(async () => {
+      throw new Error("Listings must not be fetched for admission");
+    });
+    const selection = harness({
+      observations: { popular: observation("popular", [], 100_000) },
+      enumerateCandidates,
+    });
+    const inspected = await selection.inspectCurrent?.(policy, "popular");
+    expect(inspected).toMatchObject({
+      slug: "popular",
+      status: "eligible",
+      selection: { version: "1.2.3" },
+    });
+    expect(enumerateCandidates).not.toHaveBeenCalled();
+    const stale = harness({
+      observations: { popular: observation("popular", [], 100_000) },
+      programmeStatus: "stale",
+      enumerateCandidates,
+    });
+    expect(await stale.inspectCurrent?.(policy, "popular")).toMatchObject({
+      status: "ineligible",
+      reasons: ["programme-stale"],
+    });
+  });
+
   it("passes a stored listing cursor through batch inspection", async () => {
     const policy = await loadWordPressSelectionPolicy();
     if (!("candidateSource" in policy))
