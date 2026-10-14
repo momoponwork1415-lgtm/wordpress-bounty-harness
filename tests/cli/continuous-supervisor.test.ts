@@ -330,6 +330,59 @@ describe("continuous supervisor wake", () => {
     }
   });
 
+  it.each([
+    { stopAtClaimRead: 1, label: "during first recovery inspection" },
+    { stopAtClaimRead: 2, label: "during reconciliation evidence capture" },
+  ])(
+    "settles a late stop $label without replaying a Trial",
+    async ({ stopAtClaimRead }) => {
+      const test = await fixture();
+      try {
+        const parentRunId = test.parentRunId;
+        const oldClaim = test.owner.tryAcquire(parentRunId, 100);
+        expect(oldClaim.status).toBe("acquired");
+        const run = test.journal.get(parentRunId)!;
+        let claimReads = 0;
+        const racingClaims = {
+          status: () => {
+            claimReads++;
+            if (
+              claimReads === stopAtClaimRead ||
+              (stopAtClaimRead === 1 && claimReads === 2)
+            )
+              test.journal.requestStop(parentRunId);
+            return test.claims.status();
+          },
+        } as SqliteHostResourceClaims;
+        const state = {
+          stateDirectory: test.directory,
+          clock: () => new Date(),
+          store: { putFiles: async () => digest("e") },
+          ledger: { read: () => [] },
+        } as unknown as CliState;
+        const result = await runContinuousParent({
+          ...test.request,
+          state,
+          claims: racingClaims,
+          supervisorExpectedRevision: run.revision,
+        });
+        expect(result).toMatchObject({
+          state: "STOPPED",
+          stopRequested: true,
+          reason: "operator-stop",
+          revision: run.revision + 2,
+        });
+        expect(result.children).toHaveLength(0);
+        expect(test.campaigns()).toBe(0);
+        expect(
+          observeContinuousRunOwner(test.ownerPath, parentRunId),
+        ).toMatchObject({ pidLiveness: "no-claim" });
+      } finally {
+        await test.close();
+      }
+    },
+  );
+
   it("holds a started but unfinished Trial after a dead owner instead of replaying it", async () => {
     const test = await fixture();
     try {

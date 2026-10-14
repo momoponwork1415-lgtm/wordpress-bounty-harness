@@ -168,11 +168,22 @@ export async function runContinuousParent(input: {
     // can race its acquisition. A supervised wake must never reopen that hold.
     if (!supervisorStillEligible()) return current();
     if (acquisition.recoveryRequired) {
-      const decision = await inspect(
+      const firstDecision = await inspect(
         initial.stopRequested,
         initial.state === "RECOVERING" && !initial.stopRequested,
         initial.state === "WAIT_REVIEW" && !initial.stopRequested,
       );
+      // A stop can be recorded after the supervised wake's revision check,
+      // while the first recovery inspection is reading claims or the ledger.
+      // Re-run the same read-only assessment with the durable stop intent;
+      // otherwise the stale stop-requested hold strands a safe parent in
+      // RECOVERING with a recovery-required owner claim.
+      const decision =
+        firstDecision.action === "hold" &&
+        firstDecision.reason === "stop-requested" &&
+        current().stopRequested
+          ? await inspect(true)
+          : firstDecision;
       const assessedWaitSafe =
         decision.action === "hold" &&
         decision.ownerReconciliationSafe &&
@@ -205,6 +216,8 @@ export async function runContinuousParent(input: {
         }),
       });
       owner.markReconciled(handle, evidenceDigest);
+      if (current().stopRequested && current().state !== "STOPPED")
+        return (await stopIfRequested()) ?? current();
       if (
         assessedWaitSafe &&
         current().state === "RECOVERING" &&
