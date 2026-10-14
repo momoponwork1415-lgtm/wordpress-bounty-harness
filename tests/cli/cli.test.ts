@@ -115,6 +115,7 @@ async function harness(
     readonly listingObservations?: readonly WordPressOrgListingObservation[];
     /** Use the real bounded listing enumerator for inventory CLI tests. */
     readonly inventoryFetch?: typeof fetch;
+    readonly inventoryObservationFails?: (slug: string) => boolean;
     /** A slug whose snapshot cannot be frozen. */
     readonly failFreeze?: string;
     /** Extra campaign config fields. */
@@ -348,39 +349,47 @@ async function harness(
 
   const selection = createWordPressSelection({
     targetSource: {
-      observe: async ({ slug }: { slug: string }) => ({
-        status: "observed",
-        observation: {
-          kind: "wordpress-org-target-observation",
-          schemaVersion: 1,
-          pluginIdentity: `wporg:${slug}`,
-          officialSlug: slug,
-          displayName: slug,
-          stableVersion: "9.9.9",
-          minimumWordPressVersion: "6.0",
-          activeInstallations: 5000,
-          lastUpdated: "2026-09-01 12:00am GMT",
-          observedAt: now,
-          author: "Independent Author",
-          tags: [],
-          intelligenceSource: {
-            kind: "wordpress-org-plugin-directory",
-            sourceUrl: "https://api.wordpress.org/plugins/info/1.2/",
-            retrievedAt: now,
-            contentDigest: sha("b"),
-            parserVersion: "wordpress-org-plugin-information-v1",
-          },
-          downloadProvenance: {
-            sourceUrl: `https://downloads.wordpress.org/plugin/${slug}.9.9.9.zip`,
-          },
-        },
-        observationRef: {
-          kind: "wordpress-org-target-observation-ref",
-          schemaVersion: 1,
-          id: `observation-${slug}`,
-          digest: sha("c"),
-        },
-      }),
+      observe: async ({ slug }: { slug: string }) =>
+        options.inventoryObservationFails?.(slug) === true
+          ? {
+              status: "failed" as const,
+              operation: "observe" as const,
+              reason: "not-found" as const,
+              pluginIdentity: `wporg:${slug}`,
+            }
+          : {
+              status: "observed",
+              observation: {
+                kind: "wordpress-org-target-observation",
+                schemaVersion: 1,
+                pluginIdentity: `wporg:${slug}`,
+                officialSlug: slug,
+                displayName: slug,
+                stableVersion: "9.9.9",
+                minimumWordPressVersion: "6.0",
+                activeInstallations: 5000,
+                lastUpdated: "2026-09-01 12:00am GMT",
+                observedAt: now,
+                author: "Independent Author",
+                tags: [],
+                intelligenceSource: {
+                  kind: "wordpress-org-plugin-directory",
+                  sourceUrl: "https://api.wordpress.org/plugins/info/1.2/",
+                  retrievedAt: now,
+                  contentDigest: sha("b"),
+                  parserVersion: "wordpress-org-plugin-information-v1",
+                },
+                downloadProvenance: {
+                  sourceUrl: `https://downloads.wordpress.org/plugin/${slug}.9.9.9.zip`,
+                },
+              },
+              observationRef: {
+                kind: "wordpress-org-target-observation-ref",
+                schemaVersion: 1,
+                id: `observation-${slug}`,
+                digest: sha("c"),
+              },
+            },
     } as unknown as WordPressOrgTargetSource,
     programme: {
       inspect: async () => ({
@@ -2968,8 +2977,11 @@ describe("harness CLI vertical slice", () => {
 
   it("collects resumable inventory pages without reserving targets or running Trials", async () => {
     let listingFetches = 0;
+    let listingFails = false;
+    let observationFails = false;
     const inventoryFetch: typeof fetch = async () => {
       listingFetches++;
+      if (listingFails) return new Response("", { status: 503 });
       return new Response(
         JSON.stringify({
           info: { page: 1 },
@@ -2980,6 +2992,11 @@ describe("harness CLI vertical slice", () => {
             "item-d",
             "item-e",
             "item-f",
+            "item-g",
+            "item-h",
+            "item-i",
+            "item-j",
+            "item-k",
           ].map((slug) => ({ slug })),
         }),
         { status: 200, headers: { Date: new Date(now).toUTCString() } },
@@ -2987,6 +3004,8 @@ describe("harness CLI vertical slice", () => {
     };
     const { run, root, store, ledger, prompts } = await harness({
       inventoryFetch,
+      inventoryObservationFails: (slug) =>
+        observationFails && slug === "item-a",
     });
     const policyPath = join(root, "selection.json");
     const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
@@ -3007,7 +3026,7 @@ describe("harness CLI vertical slice", () => {
         popularPages: 1,
         tags: [],
         pagesPerTag: 1,
-        perPage: 6,
+        perPage: 11,
         maxCandidates: 5,
         maxAgeDays: 1,
       },
@@ -3020,6 +3039,7 @@ describe("harness CLI vertical slice", () => {
       inventoryDigest: string;
       candidates: number;
       observedCandidates: number;
+      sourceCoverageVerified: boolean;
       ineligibleByReason: Record<string, number>;
       source: { status: string; requestedListingCoverage: string };
       traversal: {
@@ -3033,11 +3053,12 @@ describe("harness CLI vertical slice", () => {
       inventoryDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       candidates: 4,
       observedCandidates: 5,
+      sourceCoverageVerified: false,
       ineligibleByReason: { "excluded-slug": 1 },
       source: { status: "available", requestedListingCoverage: "all-observed" },
       traversal: {
         offset: 0,
-        observedUniqueCandidates: 6,
+        observedUniqueCandidates: 11,
         complete: false,
         nextPageAvailable: true,
       },
@@ -3060,12 +3081,34 @@ describe("harness CLI vertical slice", () => {
     expect(second.code).toBe(0);
     const secondReport = JSON.parse(second.stdout) as typeof firstReport;
     expect(secondReport).toMatchObject({
-      candidates: 1,
-      observedCandidates: 1,
+      candidates: 5,
+      observedCandidates: 5,
+      sourceCoverageVerified: false,
       ineligibleByReason: {},
       traversal: {
         offset: 5,
-        observedUniqueCandidates: 6,
+        observedUniqueCandidates: 11,
+        complete: false,
+        nextPageAvailable: true,
+      },
+    });
+    const third = await run(
+      "inventory",
+      "collect",
+      "--config",
+      policyPath,
+      "--after",
+      secondReport.inventoryDigest,
+    );
+    expect(third.code).toBe(0);
+    const thirdReport = JSON.parse(third.stdout) as typeof firstReport;
+    expect(thirdReport).toMatchObject({
+      candidates: 1,
+      observedCandidates: 1,
+      sourceCoverageVerified: true,
+      traversal: {
+        offset: 10,
+        observedUniqueCandidates: 11,
         complete: true,
         nextPageAvailable: false,
       },
@@ -3082,7 +3125,7 @@ describe("harness CLI vertical slice", () => {
       "--config",
       policyPath,
       "--after",
-      secondReport.inventoryDigest,
+      thirdReport.inventoryDigest,
     );
     expect(exhausted.code).toBe(1);
     expect(exhausted.stderr).toContain("no verified next page");
@@ -3102,6 +3145,51 @@ describe("harness CLI vertical slice", () => {
     expect(changedPolicy.stderr).toContain(
       "does not match its selection policy",
     );
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...automatic,
+        candidateSource: { ...automatic.candidateSource, maxCandidates: 11 },
+      }),
+    );
+    const singlePage = await run(
+      "inventory",
+      "collect",
+      "--config",
+      policyPath,
+    );
+    expect(singlePage.code).toBe(0);
+    expect(JSON.parse(singlePage.stdout)).toMatchObject({
+      sourceCoverageVerified: true,
+      traversal: { offset: 0, complete: true },
+    });
+    observationFails = true;
+    const uncertain = await run("inventory", "collect", "--config", policyPath);
+    expect(uncertain.code).toBe(0);
+    expect(JSON.parse(uncertain.stdout)).toMatchObject({
+      ineligibleByReason: { "observation-unavailable": 1 },
+      sourceCoverageVerified: false,
+      source: { status: "available", requestedListingCoverage: "all-observed" },
+      traversal: { offset: 0, complete: true },
+    });
+    listingFails = true;
+    await writeFile(policyPath, JSON.stringify(automatic));
+    const unavailable = await run(
+      "inventory",
+      "collect",
+      "--config",
+      policyPath,
+    );
+    expect(unavailable.code).toBe(0);
+    expect(JSON.parse(unavailable.stdout)).toMatchObject({
+      candidates: 0,
+      sourceCoverageVerified: false,
+      source: {
+        status: "unavailable",
+        requestedListingCoverage: "none-observed",
+      },
+      traversal: { complete: true },
+    });
   });
 
   it("enumerates without nominated slugs, reserves the next ranked batch, and runs that batch", async () => {
