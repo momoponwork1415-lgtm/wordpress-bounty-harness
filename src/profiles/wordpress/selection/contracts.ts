@@ -192,7 +192,7 @@ export interface WordPressSelectionInspection {
   readonly observedAt?: string;
   readonly enumeration?: {
     readonly sourceKind: "popular" | "tag";
-    readonly sourceTag?: string;
+    readonly sourceTag?: string | undefined;
     readonly sourcePage: number;
     readonly sourceUrl: string;
     readonly observedAt: string;

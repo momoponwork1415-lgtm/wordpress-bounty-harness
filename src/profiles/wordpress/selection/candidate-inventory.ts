@@ -5,7 +5,12 @@ import {
   canonicalJson,
 } from "../../../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
-import type { WordPressOrgCandidateCursor } from "./wordpress-org-candidate-enumerator.js";
+import {
+  enumerateWordPressOrgCandidates,
+  parseWordPressOrgCandidateSourcePool,
+  type WordPressOrgCandidateCursor,
+  type WordPressOrgCandidateSourcePool,
+} from "./wordpress-org-candidate-enumerator.js";
 import {
   wordPressSelectionPolicySchema,
   wordPressTargetSelectionSchema,
@@ -22,6 +27,7 @@ const cursorSchema = z.strictObject({
   schemaVersion: z.literal(1),
   listingSetDigest: digestSchema,
   nextIndex: countSchema,
+  sourcePoolDigest: digestSchema.optional(),
 });
 const traversalSchema = z.strictObject({
   listingSetDigest: digestSchema,
@@ -76,6 +82,13 @@ const candidateInventorySchema = z.strictObject({
       unavailable: countSchema,
       missing: countSchema,
     }),
+    /** The sealed listing observation; this is not a Snapshot. */
+    pool: z
+      .strictObject({
+        digest: digestSchema,
+        expiresAt: z.iso.datetime({ offset: true }),
+      })
+      .optional(),
     /** Missing only in inventory artifacts written before cursor support. */
     traversal: traversalSchema.optional(),
   }),
@@ -89,7 +102,89 @@ export type WordPressCandidateInventory = z.infer<
 >;
 
 const fileName = "candidate-inventory.json";
+const sourcePoolFileName = "candidate-source-pool.json";
 const maximumFileBytes = 2 * 1024 * 1024;
+const dayMilliseconds = 86_400_000;
+const sourcePoolArtifactSchema = z.strictObject({
+  kind: z.literal("wordpress-candidate-source-pool"),
+  schemaVersion: z.literal(1),
+  policy: z.strictObject({ id: z.string().min(1), digest: digestSchema }),
+  sourcePool: z.unknown(),
+});
+
+async function readSourcePool(
+  digest: string,
+  policy: WordPressSelectionPolicy,
+  store: Pick<PrivateArtifactStore, "readFile">,
+): Promise<WordPressOrgCandidateSourcePool> {
+  const file = await store.readFile(
+    digestSchema.parse(digest),
+    sourcePoolFileName,
+    maximumFileBytes,
+  );
+  if (file.status !== "resolved")
+    throw new Error(
+      `Candidate source pool is ${file.status}; collect a fresh pool`,
+    );
+  const artifact = sourcePoolArtifactSchema.parse(
+    JSON.parse(file.bytes.toString("utf8")) as unknown,
+  );
+  if (
+    artifact.policy.id !== policy.id ||
+    artifact.policy.digest !== canonicalDigestPreservingProperties(policy)
+  )
+    throw new Error(
+      "Candidate source pool does not match its selection policy",
+    );
+  return parseWordPressOrgCandidateSourcePool(artifact.sourcePool);
+}
+
+function poolExpiresAt(
+  pool: WordPressOrgCandidateSourcePool,
+  maxAgeDays: number,
+): string {
+  const oldest = Math.min(
+    ...pool.listings.map((listing) => Date.parse(listing.observedAt)),
+  );
+  if (!Number.isFinite(oldest))
+    throw new Error("Candidate source pool has no observed listing");
+  return new Date(oldest + maxAgeDays * dayMilliseconds).toISOString();
+}
+
+async function assertSourcePoolPage(
+  pool: WordPressOrgCandidateSourcePool,
+  policy: Extract<WordPressSelectionPolicy, { candidateSource: unknown }>,
+  batch: WordPressSelectionBatchInspection,
+  cursor: WordPressOrgCandidateCursor | undefined,
+  clock: () => Date,
+): Promise<void> {
+  const expected = await enumerateWordPressOrgCandidates({
+    ...policy.candidateSource,
+    sourcePool: pool,
+    cursor: cursor ?? {
+      kind: "wordpress-org-candidate-cursor",
+      schemaVersion: 1,
+      listingSetDigest: pool.listingSetDigest,
+      nextIndex: 0,
+    },
+    clock,
+  });
+  if (
+    batch.sourceStatus !== expected.status ||
+    canonicalJson(batch.sourceListings) !== canonicalJson(expected.listings) ||
+    batch.sourceTraversal?.listingSetDigest !==
+      expected.traversal.listingSetDigest ||
+    batch.sourceTraversal.offset !== expected.traversal.offset ||
+    batch.sourceTraversal.observedUniqueCandidates !==
+      expected.traversal.observedUniqueCandidates ||
+    batch.sourceTraversal.complete !== expected.traversal.complete ||
+    canonicalJson(batch.inspections.map((item) => item.slug)) !==
+      canonicalJson(expected.candidates.map((item) => item.slug))
+  )
+    throw new Error(
+      "Candidate source pool page does not match batch inspection",
+    );
+}
 
 function validateInventory(
   value: unknown,
@@ -125,7 +220,15 @@ function validateInventory(
           : traversal.nextCursor === undefined ||
             traversal.nextCursor.nextIndex !== inspectedThrough ||
             traversal.nextCursor.listingSetDigest !==
-              traversal.listingSetDigest)))
+              traversal.listingSetDigest))) ||
+    (inventory.source.pool !== undefined &&
+      (inventory.source.status !== "available" ||
+        inventory.source.requestedListingCoverage !== "all-observed" ||
+        (!traversal?.complete &&
+          traversal?.nextCursor?.sourcePoolDigest !==
+            inventory.source.pool.digest))) ||
+    (inventory.source.pool === undefined &&
+      traversal?.nextCursor?.sourcePoolDigest !== undefined)
   )
     throw new Error("Candidate inventory does not match its selection policy");
   return inventory;
@@ -167,9 +270,10 @@ export async function collectWordPressCandidateInventory(options: {
   readonly inspectBatch: (
     policy: WordPressSelectionPolicy,
     cursor?: WordPressOrgCandidateCursor,
+    sourcePool?: WordPressOrgCandidateSourcePool,
   ) => Promise<WordPressSelectionBatchInspection>;
   readonly cursor?: WordPressOrgCandidateCursor;
-  readonly store: Pick<PrivateArtifactStore, "putFiles">;
+  readonly store: Pick<PrivateArtifactStore, "putFiles" | "readFile">;
   readonly clock: () => Date;
 }): Promise<{
   readonly digest: string;
@@ -180,7 +284,12 @@ export async function collectWordPressCandidateInventory(options: {
     throw new Error(
       "Candidate inventory requires an automatic selection policy",
     );
-  const batch = await options.inspectBatch(policy, options.cursor);
+  const priorPoolDigest = options.cursor?.sourcePoolDigest;
+  const priorPool =
+    priorPoolDigest === undefined
+      ? undefined
+      : await readSourcePool(priorPoolDigest, policy, options.store);
+  const batch = await options.inspectBatch(policy, options.cursor, priorPool);
   if (
     batch.sourceStatus === "manual" ||
     batch.sourceTraversal === undefined ||
@@ -246,6 +355,84 @@ export async function collectWordPressCandidateInventory(options: {
       : listings.stale + listings.unavailable + listings.missing > 0
         ? "partial"
         : "all-observed";
+  let sourcePoolDigest = priorPoolDigest;
+  let sourcePool = priorPool;
+  if (
+    sourcePool === undefined &&
+    options.cursor === undefined &&
+    requestedListingCoverage === "all-observed" &&
+    batch.sourcePool !== undefined
+  ) {
+    sourcePool = parseWordPressOrgCandidateSourcePool(batch.sourcePool);
+    if (
+      sourcePool.listingSetDigest !== batch.sourceTraversal.listingSetDigest ||
+      sourcePool.candidates.length !==
+        batch.sourceTraversal.observedUniqueCandidates ||
+      canonicalJson(sourcePool.listings) !== canonicalJson(batch.sourceListings)
+    )
+      throw new Error(
+        "Candidate source pool does not match its listing observation",
+      );
+    await assertSourcePoolPage(
+      sourcePool,
+      policy,
+      batch,
+      options.cursor,
+      options.clock,
+    );
+    sourcePoolDigest = await options.store.putFiles({
+      [sourcePoolFileName]: canonicalJson({
+        kind: "wordpress-candidate-source-pool",
+        schemaVersion: 1,
+        policy: {
+          id: policy.id,
+          digest: canonicalDigestPreservingProperties(policy),
+        },
+        sourcePool,
+      }),
+    });
+  }
+  if (
+    sourcePool !== undefined &&
+    (requestedListingCoverage !== "all-observed" ||
+      sourcePool.listingSetDigest !== batch.sourceTraversal.listingSetDigest ||
+      sourcePool.candidates.length !==
+        batch.sourceTraversal.observedUniqueCandidates ||
+      canonicalJson(sourcePool.listings) !==
+        canonicalJson(batch.sourceListings))
+  )
+    throw new Error(
+      "Candidate source pool replay does not match its listing observation",
+    );
+  if (sourcePool !== undefined && priorPool !== undefined)
+    await assertSourcePoolPage(
+      sourcePool,
+      policy,
+      batch,
+      options.cursor,
+      options.clock,
+    );
+  const pool =
+    sourcePool === undefined || sourcePoolDigest === undefined
+      ? undefined
+      : {
+          digest: sourcePoolDigest,
+          expiresAt: poolExpiresAt(
+            sourcePool,
+            policy.candidateSource.maxAgeDays,
+          ),
+        };
+  const sourceTraversal = {
+    ...batch.sourceTraversal,
+    ...(pool === undefined || batch.sourceTraversal.nextCursor === undefined
+      ? {}
+      : {
+          nextCursor: {
+            ...batch.sourceTraversal.nextCursor,
+            sourcePoolDigest: pool.digest,
+          },
+        }),
+  };
   const inventory = validateInventory(
     {
       kind: "wordpress-candidate-inventory",
@@ -259,7 +446,8 @@ export async function collectWordPressCandidateInventory(options: {
         status: batch.sourceStatus,
         requestedListingCoverage,
         listings,
-        traversal: batch.sourceTraversal,
+        ...(pool === undefined ? {} : { pool }),
+        traversal: sourceTraversal,
       },
       observedCandidates: batch.inspections.length,
       ineligibleByReason,
@@ -273,11 +461,14 @@ export async function collectWordPressCandidateInventory(options: {
   return { digest, inventory };
 }
 
-/** Prove source traversal from page zero, with no failed listing or uncertain inspection.
- * This does not decide whether eligible slugs remain unstarted (#215).
+/** Check inventory metadata for a complete, fresh sealed traversal.
+ * Use hasVerifiedWordPressCandidateSourceCoverage before an exhaustion decision:
+ * this synchronous check cannot detect a private artifact deleted after collection.
+ * Neither check decides whether eligible slugs remain unstarted (#215).
  */
 export function hasTraversedWordPressCandidateSource(
   inventories: readonly WordPressCandidateInventory[],
+  clock: () => Date = () => new Date(),
 ): boolean {
   if (inventories.length === 0) return false;
   const policyDigest = inventories[0]?.policy.digest;
@@ -285,6 +476,14 @@ export function hasTraversedWordPressCandidateSource(
   if (listingSetDigest === undefined) return false;
   const first = inventories[0];
   if (first === undefined) return false;
+  const pool = first.source.pool;
+  const now = clock().getTime();
+  if (
+    pool === undefined ||
+    !Number.isFinite(now) ||
+    now > Date.parse(pool.expiresAt)
+  )
+    return false;
   const expectedListings =
     first.source.listings.available +
     first.source.listings.stale +
@@ -304,6 +503,8 @@ export function hasTraversedWordPressCandidateSource(
       inventory.source.listings.stale !== 0 ||
       inventory.source.listings.unavailable !== 0 ||
       inventory.source.listings.missing !== 0 ||
+      inventory.source.pool?.digest !== pool.digest ||
+      inventory.source.pool.expiresAt !== pool.expiresAt ||
       Object.entries(inventory.ineligibleByReason).some(
         ([reason, count]) =>
           count > 0 && !definitiveIneligibilityReasons.has(reason),
@@ -322,11 +523,62 @@ export function hasTraversedWordPressCandidateSource(
     if (
       nextIndex >= traversal.observedUniqueCandidates ||
       traversal.nextCursor?.nextIndex !== nextIndex ||
-      traversal.nextCursor.listingSetDigest !== listingSetDigest
+      traversal.nextCursor.listingSetDigest !== listingSetDigest ||
+      traversal.nextCursor.sourcePoolDigest !== pool.digest
     )
       return false;
   }
   return false;
+}
+
+/** Re-resolve the private source pool before treating complete traversal as exhaustion evidence. */
+export async function hasVerifiedWordPressCandidateSourceCoverage(options: {
+  readonly inventories: readonly WordPressCandidateInventory[];
+  readonly policy: WordPressSelectionPolicy;
+  readonly store: Pick<PrivateArtifactStore, "readFile">;
+  readonly clock: () => Date;
+}): Promise<boolean> {
+  if (!hasTraversedWordPressCandidateSource(options.inventories, options.clock))
+    return false;
+  const policy = wordPressSelectionPolicySchema.parse(options.policy);
+  const first = options.inventories[0];
+  if (
+    !("candidateSource" in policy) ||
+    first?.source.pool === undefined ||
+    first.policy.id !== policy.id ||
+    first.policy.digest !== canonicalDigestPreservingProperties(policy)
+  )
+    return false;
+  try {
+    const pool = await readSourcePool(
+      first.source.pool.digest,
+      policy,
+      options.store,
+    );
+    const replay = await enumerateWordPressOrgCandidates({
+      ...policy.candidateSource,
+      cursor: {
+        kind: "wordpress-org-candidate-cursor",
+        schemaVersion: 1,
+        listingSetDigest: pool.listingSetDigest,
+        nextIndex: 0,
+      },
+      sourcePool: pool,
+      clock: options.clock,
+    });
+    return (
+      poolExpiresAt(pool, policy.candidateSource.maxAgeDays) ===
+        first.source.pool.expiresAt &&
+      replay.listings.length === first.source.listings.available &&
+      replay.traversal.listingSetDigest ===
+        first.source.traversal?.listingSetDigest &&
+      replay.traversal.observedUniqueCandidates ===
+        first.source.traversal.observedUniqueCandidates &&
+      canonicalJson(replay.listings) === canonicalJson(pool.listings)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Resume a stored proposal by digest. An unavailable source is never read as exhaustion. */

@@ -215,6 +215,63 @@ describe("WordPress.org public candidate enumeration", () => {
     ).rejects.toThrow("listing set changed");
   });
 
+  it("replays a sealed listing set when live pages have changed, and rejects it after expiry", async () => {
+    let fetches = 0;
+    const fetcher: typeof fetch = async (input) => {
+      fetches++;
+      const url = new URL(String(input));
+      const page = Number(url.searchParams.get("request[page]"));
+      const group = url.searchParams.get("request[tag]") ?? "popular";
+      return listing(
+        Array.from({ length: 50 }, (_, index) => `${group}-${page}-${index}`),
+        now,
+        page,
+      );
+    };
+    const options = {
+      tags: ["login", "forms"],
+      popularPages: 5,
+      pagesPerTag: 5,
+      perPage: 50,
+      maxCandidates: 500,
+      maxAgeDays: 1,
+      clock,
+      fetch: fetcher,
+    };
+    const first = await enumerateWordPressOrgCandidates(options);
+    expect(first.sourcePool?.candidates).toHaveLength(750);
+    const cursor = first.traversal.nextCursor;
+    if (cursor === undefined || first.sourcePool === undefined)
+      throw new Error("Expected source pool and continuation cursor");
+    const observedFetches = fetches;
+    const second = await enumerateWordPressOrgCandidates({
+      ...options,
+      cursor,
+      sourcePool: first.sourcePool,
+      fetch: async () => {
+        throw new Error(
+          "Mutable listing must not be fetched during pool replay",
+        );
+      },
+    });
+    expect(fetches).toBe(observedFetches);
+    expect(second.candidates).toHaveLength(250);
+    expect(second.traversal.complete).toBe(true);
+    expect(
+      new Set(
+        [...first.candidates, ...second.candidates].map((item) => item.slug),
+      ).size,
+    ).toBe(750);
+    await expect(
+      enumerateWordPressOrgCandidates({
+        ...options,
+        cursor,
+        sourcePool: first.sourcePool,
+        clock: () => new Date("2026-10-14T00:00:00.000Z"),
+      }),
+    ).rejects.toThrow("source pool is stale");
+  });
+
   it("rejects malformed listings and bounds request counts", async () => {
     const invalid = await enumerateWordPressOrgCandidates({
       clock,

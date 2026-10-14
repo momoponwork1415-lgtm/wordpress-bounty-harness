@@ -16,6 +16,7 @@ import {
   type EnumerateWordPressOrgCandidatesOptions,
   type WordPressOrgCandidateCursor,
   type WordPressOrgCandidateEnumeration,
+  type WordPressOrgCandidateSourcePool,
 } from "./wordpress-org-candidate-enumerator.js";
 import {
   wordPressSelectionPolicySchema,
@@ -43,6 +44,7 @@ export interface WordPressSelectionBatchInspection {
   readonly sourceStatus: "manual" | WordPressOrgCandidateEnumeration["status"];
   readonly sourceListings: WordPressOrgCandidateEnumeration["listings"];
   readonly sourceTraversal?: WordPressOrgCandidateEnumeration["traversal"];
+  readonly sourcePool?: WordPressOrgCandidateSourcePool;
 }
 
 export type WordPressSelectionWithBatchInspection = Selection<
@@ -54,6 +56,7 @@ export type WordPressSelectionWithBatchInspection = Selection<
   readonly inspectBatch?: (
     policy: WordPressSelectionPolicy,
     cursor?: WordPressOrgCandidateCursor,
+    sourcePool?: WordPressOrgCandidateSourcePool,
   ) => Promise<WordPressSelectionBatchInspection>;
 };
 
@@ -137,6 +140,7 @@ export function createWordPressSelection(
   async function inspectBatch(
     policyInput: WordPressSelectionPolicy,
     cursor?: WordPressOrgCandidateCursor,
+    sourcePool?: WordPressOrgCandidateSourcePool,
   ): Promise<WordPressSelectionBatchInspection> {
     const policy = wordPressSelectionPolicySchema.parse(policyInput);
     const nowDate = clock();
@@ -152,6 +156,7 @@ export function createWordPressSelection(
           )({
             ...policy.candidateSource,
             ...(cursor === undefined ? {} : { cursor }),
+            ...(sourcePool === undefined ? {} : { sourcePool }),
             clock,
             ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
           })
@@ -323,7 +328,12 @@ export function createWordPressSelection(
       sourceListings: enumeration?.listings ?? [],
       ...(enumeration === undefined
         ? {}
-        : { sourceTraversal: enumeration.traversal }),
+        : {
+            sourceTraversal: enumeration.traversal,
+            ...(enumeration.sourcePool === undefined
+              ? {}
+              : { sourcePool: enumeration.sourcePool }),
+          }),
     };
   }
 

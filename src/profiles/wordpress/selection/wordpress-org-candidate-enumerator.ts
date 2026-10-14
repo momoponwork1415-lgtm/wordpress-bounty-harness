@@ -11,6 +11,11 @@ const candidateCursorSchema = z.strictObject({
   schemaVersion: z.literal(1),
   listingSetDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   nextIndex: z.number().int().nonnegative(),
+  /** Present after the complete listing observation is sealed in Private Evidence. */
+  sourcePoolDigest: z
+    .string()
+    .regex(/^sha256:[a-f0-9]{64}$/)
+    .optional(),
 });
 export type WordPressOrgCandidateCursor = z.infer<typeof candidateCursorSchema>;
 const listingSchema = z.object({
@@ -21,16 +26,26 @@ const listingSchema = z.object({
 export interface WordPressOrgCandidate {
   readonly slug: string;
   readonly sourceKind: "popular" | "tag";
-  readonly sourceTag?: string;
+  readonly sourceTag?: string | undefined;
   readonly sourcePage: number;
   readonly sourceUrl: string;
   readonly observedAt: string;
   readonly contentDigest: string;
 }
 
+const candidateSchema = z.strictObject({
+  slug: slugSchema,
+  sourceKind: z.enum(["popular", "tag"]),
+  sourceTag: slugSchema.optional(),
+  sourcePage: z.number().int().positive().max(5),
+  sourceUrl: z.url(),
+  observedAt: z.iso.datetime({ offset: true }),
+  contentDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+});
+
 interface ListingIdentity {
   readonly kind: "popular" | "tag";
-  readonly tag?: string;
+  readonly tag?: string | undefined;
   readonly page: number;
   readonly sourceUrl: string;
 }
@@ -54,10 +69,39 @@ export type WordPressOrgListingObservation = ListingIdentity & {
     | { readonly status: "unavailable"; readonly reason: UnavailableReason }
   );
 
+const availableListingSchema = z.strictObject({
+  kind: z.enum(["popular", "tag"]),
+  tag: slugSchema.optional(),
+  page: z.number().int().positive().max(5),
+  sourceUrl: z.url(),
+  checkedAt: z.iso.datetime({ offset: true }),
+  status: z.literal("available"),
+  observedAt: z.iso.datetime({ offset: true }),
+  contentDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+});
+
+/** A bounded observation of the requested listings, not a target Snapshot. */
+const sourcePoolSchema = z.strictObject({
+  kind: z.literal("wordpress-org-candidate-source-pool"),
+  schemaVersion: z.literal(1),
+  listingSetDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  listings: z.array(availableListingSchema).max(45),
+  candidates: z.array(candidateSchema).max(2_250),
+});
+export type WordPressOrgCandidateSourcePool = z.infer<typeof sourcePoolSchema>;
+
+export function parseWordPressOrgCandidateSourcePool(
+  value: unknown,
+): WordPressOrgCandidateSourcePool {
+  return sourcePoolSchema.parse(value);
+}
+
 export interface WordPressOrgCandidateEnumeration {
   readonly status: "available" | "unavailable" | "stale";
   readonly candidates: readonly WordPressOrgCandidate[];
   readonly listings: readonly WordPressOrgListingObservation[];
+  /** Available only when every requested listing was observed. */
+  readonly sourcePool?: WordPressOrgCandidateSourcePool;
   readonly traversal: {
     readonly listingSetDigest: string;
     readonly offset: number;
@@ -76,8 +120,76 @@ export interface EnumerateWordPressOrgCandidatesOptions {
   readonly perPage?: number;
   /** Continue only if the same bounded listing set is still observed. */
   readonly cursor?: WordPressOrgCandidateCursor;
+  /** Replays a sealed listing observation without re-fetching mutable listing pages. */
+  readonly sourcePool?: WordPressOrgCandidateSourcePool;
   readonly fetch?: typeof fetch;
   readonly clock?: () => Date;
+}
+
+function digestListings(
+  listings: readonly WordPressOrgListingObservation[],
+): string {
+  return `sha256:${createHash("sha256")
+    .update(
+      JSON.stringify(
+        listings.map((listing) => ({
+          sourceUrl: listing.sourceUrl,
+          status: listing.status,
+          ...(listing.status === "available"
+            ? { contentDigest: listing.contentDigest }
+            : { reason: listing.reason }),
+        })),
+      ),
+    )
+    .digest("hex")}`;
+}
+
+function validateSourcePool(
+  value: unknown,
+  requests: readonly ListingRequest[],
+  maxAgeDays: number,
+  now: Date,
+): WordPressOrgCandidateSourcePool {
+  const pool = sourcePoolSchema.parse(value);
+  const nowMs = now.getTime();
+  if (
+    !Number.isFinite(nowMs) ||
+    pool.listings.length !== requests.length ||
+    pool.listingSetDigest !== digestListings(pool.listings) ||
+    pool.candidates.length > requests.length * 50 ||
+    pool.listings.some((listing, index) => {
+      const request = requests[index];
+      const observed = Date.parse(listing.observedAt);
+      return (
+        request === undefined ||
+        listing.kind !== request.kind ||
+        listing.tag !== request.tag ||
+        listing.page !== request.page ||
+        listing.sourceUrl !== request.sourceUrl ||
+        observed > nowMs + 300_000 ||
+        nowMs - observed > maxAgeDays * dayMilliseconds
+      );
+    }) ||
+    new Set(pool.candidates.map((candidate) => candidate.slug)).size !==
+      pool.candidates.length ||
+    pool.candidates.some(
+      (candidate) =>
+        !pool.listings.some(
+          (listing) =>
+            candidate.sourceKind === listing.kind &&
+            candidate.sourceTag === listing.tag &&
+            candidate.sourcePage === listing.page &&
+            candidate.sourceUrl === listing.sourceUrl &&
+            candidate.observedAt === listing.observedAt &&
+            candidate.contentDigest === listing.contentDigest,
+        ),
+    )
+  ) {
+    throw new Error(
+      "Candidate source pool is stale or does not match its listing policy; collect a fresh pool",
+    );
+  }
+  return pool;
 }
 
 type ListingRequest = ListingIdentity;
@@ -322,6 +434,52 @@ export async function enumerateWordPressOrgCandidates(
   }
   const fetcher = options.fetch ?? fetch;
   const clock = options.clock ?? (() => new Date());
+  const requests = listingRequests(tags, popularPages, pagesPerTag, perPage);
+  const cursor =
+    options.cursor === undefined
+      ? undefined
+      : candidateCursorSchema.parse(options.cursor);
+  if (options.sourcePool !== undefined) {
+    const pool = validateSourcePool(
+      options.sourcePool,
+      requests,
+      maxAgeDays,
+      clock(),
+    );
+    if (cursor?.listingSetDigest !== pool.listingSetDigest)
+      throw new Error("Candidate cursor does not match the source pool");
+    const offset = cursor.nextIndex;
+    if (offset > pool.candidates.length)
+      throw new Error("Candidate cursor exceeds the source pool");
+    const candidates = pool.candidates.slice(offset, offset + maxCandidates);
+    const nextIndex = offset + candidates.length;
+    const complete = nextIndex === pool.candidates.length;
+    return {
+      status: "available",
+      candidates,
+      listings: pool.listings,
+      sourcePool: pool,
+      traversal: {
+        listingSetDigest: pool.listingSetDigest,
+        offset,
+        observedUniqueCandidates: pool.candidates.length,
+        complete,
+        ...(complete
+          ? {}
+          : {
+              nextCursor: {
+                kind: "wordpress-org-candidate-cursor",
+                schemaVersion: 1,
+                listingSetDigest: pool.listingSetDigest,
+                nextIndex,
+                ...(cursor.sourcePoolDigest === undefined
+                  ? {}
+                  : { sourcePoolDigest: cursor.sourcePoolDigest }),
+              } as const,
+            }),
+      },
+    };
+  }
   const listings: WordPressOrgListingObservation[] = [];
   const observedCandidates: WordPressOrgCandidate[] = [];
   const seen = new Set<string>();
@@ -329,12 +487,7 @@ export async function enumerateWordPressOrgCandidates(
     listing: Extract<WordPressOrgListingObservation, { status: "available" }>;
     slugs: readonly string[];
   }> = [];
-  for (const request of listingRequests(
-    tags,
-    popularPages,
-    pagesPerTag,
-    perPage,
-  )) {
+  for (const request of requests) {
     const result = await observeListing(request, fetcher, clock, maxAgeDays);
     listings.push(result.listing);
     if (result.listing.status === "available") {
@@ -365,23 +518,7 @@ export async function enumerateWordPressOrgCandidates(
   }
   // checkedAt and observedAt vary between identical responses; the identity,
   // outcome, and response bytes must match before reusing a position.
-  const listingSetDigest = `sha256:${createHash("sha256")
-    .update(
-      JSON.stringify(
-        listings.map((listing) => ({
-          sourceUrl: listing.sourceUrl,
-          status: listing.status,
-          ...(listing.status === "available"
-            ? { contentDigest: listing.contentDigest }
-            : { reason: listing.reason }),
-        })),
-      ),
-    )
-    .digest("hex")}`;
-  const cursor =
-    options.cursor === undefined
-      ? undefined
-      : candidateCursorSchema.parse(options.cursor);
+  const listingSetDigest = digestListings(listings);
   if (cursor !== undefined && cursor.listingSetDigest !== listingSetDigest)
     throw new Error(
       "Candidate cursor listing set changed; restart enumeration",
@@ -413,5 +550,25 @@ export async function enumerateWordPressOrgCandidates(
     : listings.some((listing) => listing.status === "stale")
       ? "stale"
       : "unavailable";
-  return { status, candidates, listings, traversal };
+  const sourcePool =
+    listings.length === requests.length &&
+    listings.every((listing) => listing.status === "available")
+      ? {
+          kind: "wordpress-org-candidate-source-pool" as const,
+          schemaVersion: 1 as const,
+          listingSetDigest,
+          listings: listings as Extract<
+            WordPressOrgListingObservation,
+            { status: "available" }
+          >[],
+          candidates: observedCandidates,
+        }
+      : undefined;
+  return {
+    status,
+    candidates,
+    listings,
+    traversal,
+    ...(sourcePool === undefined ? {} : { sourcePool }),
+  };
 }
