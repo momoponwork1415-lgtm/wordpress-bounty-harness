@@ -16,7 +16,7 @@ import {
 import { collectResearchArchive } from "./codex-gvisor-sandbox.js";
 import type { ProviderCredentialEgressGrant } from "./provider-credential-egress-broker.js";
 
-export const CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB = 2048;
+export const CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB = 8192;
 const pinnedImage = z
   .string()
   .regex(/^(?:sha256:[a-f0-9]{64}|[^\s@]+@sha256:[a-f0-9]{64})$/);
@@ -123,9 +123,9 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       "--read-only",
       "--cap-drop=ALL",
       "--security-opt=no-new-privileges",
-      "--pids-limit=128",
+      "--pids-limit=256",
       `--memory=${CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB}m`,
-      "--cpus=1",
+      "--cpus=6",
       "--tmpfs=/tmp:rw,nosuid,nodev,size=256m",
     ];
   }

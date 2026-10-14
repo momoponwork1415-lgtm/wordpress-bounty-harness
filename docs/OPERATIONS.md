@@ -94,6 +94,8 @@ harness review [--campaign <id>]                         # 検証済みの列を
 
 上の JSON は既存 host 設定に追加するフィールドの例。campaign 設定に `"discoveryProvider": "claude-opus-5-5"` を追加すると探索だけが Claude に切り替わる。省略時は従来の Codex。Codex image と認証は Verifier のため引き続き必要。`harness runtime check --config <campaign.json>` は Codex と Claude の pinned image、CLI 版、key ファイルの権限を検査する。実際の model 権限は provider 応答で判明し、拒否なら Trial を `incomplete(provider)` にする。Claude の Root と最大3子は一つの Agent SDK query の中で動き、同じ子への後続 wave は `SendMessage` を使う。broker は `POST /v1/messages` と pinned model だけを中継する。
 
+Claude sandbox は Root と子で CPU 6・8 GiB を共有し、broker の上限は別に 512 MiB。Lab の使用量も対象ごとに加算する。対象間の並列数は campaign の `resources` と実際の sandbox＋broker のメモリ予算で決まるが、別 campaign 間の全ホスト共通 semaphore はない。Codex の対象 Trial が1件動いている間は、Opus campaign を `maxConcurrentRuns: 1` にして、ADR 0032 の併用時合計2対象を守る。新 provider の初回は SPEC 第6節に従い1対象ずつ usage・wall・broker応答を測ってから増やす。
+
 `campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v4` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
 
 固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。

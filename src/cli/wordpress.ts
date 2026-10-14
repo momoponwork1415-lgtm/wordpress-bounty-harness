@@ -7,6 +7,7 @@ import {
   allocateTrialArms,
   CODEX_SANDBOX_MEMORY_MIB,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
+  CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
   DISCOVERY_LEFTOVER_PATTERNS,
   EGRESS_BROKER_MEMORY_MIB,
 } from "../discovery/index.js";
@@ -969,7 +970,10 @@ async function planWordPressDiscovery(
         config.resources.memoryBudgetMiB /
           (boundaries.runtimeProfile.subagent.modelId === "unavailable"
             ? DISCOVERY_RUN_MEMORY_MIB
-            : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB),
+            : (boundaries.runtimeProfile.transportKind === "claude-code/v1"
+                ? CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB
+                : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB) +
+              EGRESS_BROKER_MEMORY_MIB),
       ),
     ),
     ...(ablationConfig === undefined
