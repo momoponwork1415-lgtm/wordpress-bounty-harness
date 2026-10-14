@@ -321,13 +321,20 @@ export interface WordPressCampaignBoundaries {
   readonly verifier: Verifier<WordPressFinding, WordPressLabHandle>;
 }
 
-async function loadConfig(configPath: string): Promise<{
+async function loadConfig(
+  configPath: string,
+  selectionPolicyPath?: string,
+): Promise<{
   readonly config: WordPressCampaignConfig;
   readonly policy: WordPressSelectionPolicy;
 }> {
-  const config = wordpressCampaignConfigSchema.parse(
+  const parsed = wordpressCampaignConfigSchema.parse(
     JSON.parse(await readFile(configPath, "utf8")) as unknown,
   );
+  const config =
+    selectionPolicyPath === undefined
+      ? parsed
+      : { ...parsed, selectionPolicyPath };
   if (config.resources.memoryBudgetMiB < DISCOVERY_RUN_MEMORY_MIB)
     throw new Error(
       `The memory budget is below one discovery run (${DISCOVERY_RUN_MEMORY_MIB} MiB)`,
@@ -1067,7 +1074,10 @@ async function runWordPressCampaign(
     target: WordPressTargetSelection,
   ) => CampaignHistory,
 ): ReturnType<CliProfile["runCampaign"]> {
-  const { config, policy } = await loadConfig(input.configPath);
+  const { config, policy } = await loadConfig(
+    input.configPath,
+    input.selectionPolicyPath,
+  );
   if (
     "wordpressVersion" in policy &&
     policy.wordpressVersion !== config.wordpressVersion
@@ -1406,6 +1416,7 @@ export function createWordPressCliProfile(
       const chosenSlugs = new Set(chosen.map(({ target }) => target.slug));
       return {
         batchId,
+        sourceStatus: inspectedBatch?.sourceStatus ?? "manual",
         legacyHistory: legacy.report,
         selected: chosen.map(({ target }) => ({
           targetId: target.targetId,

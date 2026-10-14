@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -41,6 +41,10 @@ import {
   type StateDiffReader,
 } from "../review/index.js";
 import type { CampaignSummary, ReverificationSummary } from "./pipeline.js";
+import {
+  continuousCommand,
+  type ContinuousHostStatus,
+} from "./continuous-cli.js";
 
 export interface CliIo {
   stdout(line: string): void;
@@ -105,6 +109,8 @@ export type LabDownSummary = {
 
 export interface CliSelectionReport {
   readonly batchId: string | null;
+  /** available, stale or unavailable public listings; manual for named slugs. */
+  readonly sourceStatus?: string;
   /** Whether the earlier generations' history took part in exclusion. */
   readonly legacyHistory?:
     | { readonly status: "unavailable" }
@@ -177,8 +183,15 @@ export interface CliProfile {
       readonly retryIncompleteVerifications?: boolean;
       /** Checked before each next target; true drains the campaign as `operator`. */
       readonly stop?: () => boolean;
+      /** Replaces the campaign config's selection policy path in process. */
+      readonly selectionPolicyPath?: string;
     },
   ): Promise<CampaignSummary>;
+  /** Host facts `continuous run` checks before each batch; absent without a host. */
+  hostStatus?(
+    state: CliState,
+    input: { readonly configPath: string; readonly selectionPath: string },
+  ): Promise<ContinuousHostStatus>;
   /** Docker resources a crashed run left behind; removed only when asked. */
   cleanupLeftovers(
     state: CliState,
@@ -254,7 +267,10 @@ export type CliEnvironment = {
 const USAGE = [
   "usage: harness [--state <dir>] <command>",
   "  select --config <path> [--minimum <n>]",
-  "  campaign run <slug>|--all --campaign <id> --config <path> [--retry-incomplete]",
+  "  campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--retry-incomplete]",
+  "  continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--notify <command>]",
+  "  continuous stop",
+  "  continuous status",
   "  review [--campaign <id>]",
   "  review inspect --campaign <id> --finding <id>",
   "  review parked --campaign <id> | --since <ISO>",
@@ -322,6 +338,9 @@ const options = {
   port: { type: "string" },
   "db-port": { type: "string" },
   since: { type: "string" },
+  selection: { type: "string" },
+  "campaign-prefix": { type: "string" },
+  notify: { type: "string" },
   minimum: { type: "string" },
 } as const;
 
@@ -761,6 +780,22 @@ export async function runCli(
     const command = [group, sub].filter((part) => part !== undefined).join(" ");
     const print = (lines: readonly string[]) => lines.forEach(io.stdout);
     switch (command) {
+      case "continuous run":
+      case "continuous stop":
+      case "continuous status":
+        return await continuousCommand(sub!, {
+          state,
+          profile: environment.profile,
+          io,
+          configPath:
+            values.config === undefined ? undefined : resolve(values.config),
+          selectionPath:
+            values.selection === undefined
+              ? undefined
+              : resolve(values.selection),
+          campaignPrefix: values["campaign-prefix"] ?? "prod",
+          notify: values.notify,
+        });
       case "select": {
         const minimum =
           values.minimum === undefined ? undefined : Number(values.minimum);
@@ -810,6 +845,9 @@ export async function runCli(
           configPath: resolve(required(values.config, "config")),
           target,
           retryIncompleteVerifications: values["retry-incomplete"] === true,
+          ...(values.selection === undefined
+            ? {}
+            : { selectionPolicyPath: resolve(values.selection) }),
         });
         for (const skipped of summary.skipped)
           io.stderr(
@@ -1190,14 +1228,21 @@ export async function runCli(
             throw new UsageError(
               "A reproduction package is required for review Lab setup",
             );
-          await runForegroundReviewLab(
-            () =>
-              launch(state, {
-                packageDigest: item.reproductionPackageDigest,
-                category: item.category,
-              }),
-            io,
-          );
+          // `continuous run` skips its Lab sweep while this pid lives.
+          const marker = join(state.stateDirectory, "review-lab.pid");
+          await writeFile(marker, String(process.pid), { mode: 0o600 });
+          try {
+            await runForegroundReviewLab(
+              () =>
+                launch(state, {
+                  packageDigest: item.reproductionPackageDigest,
+                  category: item.category,
+                }),
+              io,
+            );
+          } finally {
+            await rm(marker, { force: true });
+          }
           return 0;
         }
         const summary = await environment.profile.labUp(state, {

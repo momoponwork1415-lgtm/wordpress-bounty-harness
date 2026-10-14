@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, stat } from "node:fs/promises";
+import { lstat, mkdir, readFile, stat, statfs } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -481,7 +481,7 @@ export async function createWordPressHostProfile(options: {
     };
   };
 
-  return createWordPressCliProfile({
+  const profile = createWordPressCliProfile({
     boundaries,
     selectionBoundaries,
     scopePolicy: await loadWordpressScopePolicy(
@@ -494,6 +494,46 @@ export async function createWordPressHostProfile(options: {
       ? {}
       : { legacyHistoryFile: host.legacyHistory.file }),
   });
+  return {
+    ...profile,
+    /** What `continuous run` checks before each batch (final design P6). */
+    async hostStatus(state, input) {
+      const json = async (path: string) =>
+        JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+      const free = async (path: string) => {
+        const fs = await statfs(path);
+        return fs.bavail * fs.bsize;
+      };
+      const login =
+        host.codex.runtimeProfile.authenticationMethod === "chatgpt-oauth-host"
+          ? await readPrivateChatgptLogin(host.credentialFilePath, new Date(0))
+              .then(({ expiresAt }) => expiresAt)
+              .catch(() => null)
+          : new Date(8.64e15);
+      const transcription = await json(
+        host.wordfenceProgrammeTranscriptionPath,
+      );
+      const config = await json(input.configPath);
+      const selection = await json(input.selectionPath);
+      const wall = Number(config.runWallTimeMinutes ?? 60);
+      return {
+        loginExpiresAt: login,
+        programmeObservedAt: new Date(String(transcription.transcribedAt)),
+        freeBytes: Math.min(
+          await free(host.workDirectory),
+          await free(state.stateDirectory),
+        ),
+        legacyHistoryAvailable:
+          host.legacyHistory !== undefined &&
+          (await stat(host.legacyHistory.file).then(
+            () => true,
+            () => false,
+          )),
+        loginMarginMinutes:
+          Number(selection.maximumTargets ?? 5) * (wall + 30 * 3 + 15),
+      };
+    },
+  };
 }
 
 /**
