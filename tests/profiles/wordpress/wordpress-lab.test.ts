@@ -44,6 +44,7 @@ async function fixture(
     "ready" | "no-runsc" | "missing-image" | "missing-extension" = "ready",
   core?: { readonly version: string; readonly runningVersion: string },
   pluginSlug = "example",
+  strictSourceMode = false,
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-lab-"));
   directories.push(root);
@@ -100,6 +101,7 @@ async function fixture(
   };
   const salts = new Map<string, string>();
   let seededRow = "";
+  let pluginReadableByCli = false;
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
     images: {
@@ -141,6 +143,24 @@ async function fixture(
           };
         if (request.args[0] === "image" && preflight === "missing-image")
           return { exitCode: 1, stdout: "", stderr: "unavailable" };
+        if (
+          request.args[0] === "exec" &&
+          request.args.includes("chmod") &&
+          request.args.includes("a+rX")
+        )
+          pluginReadableByCli = true;
+        if (
+          strictSourceMode &&
+          request.args[0] === "run" &&
+          request.args.includes("plugin") &&
+          request.args.includes("activate") &&
+          !pluginReadableByCli
+        )
+          return {
+            exitCode: 1,
+            stdout: "",
+            stderr: "The 'example' plugin could not be found",
+          };
         if (
           preflight === "missing-extension" &&
           request.args[0] === "exec" &&
@@ -325,6 +345,21 @@ async function fixture(
 }
 
 describe("WordPress gVisor Lab", () => {
+  it("activates a copied plugin even when the frozen source has strict modes", async () => {
+    const { lab, snapshot, setup } = await fixture(
+      "ready",
+      undefined,
+      "example",
+      true,
+    );
+    const provisioned = await lab.provision(snapshot, setup);
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status === "ready")
+      expect(await lab.teardown(provisioned.handle)).toEqual({
+        status: "removed",
+      });
+  });
+
   it("passes a private replay request to the runsc recorder over stdin", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const provisioned = await lab.provision(snapshot, setup);
