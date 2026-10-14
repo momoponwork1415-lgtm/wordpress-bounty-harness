@@ -274,12 +274,12 @@ export async function enumerateWordPressOrgCandidates(
   const maxCandidates = boundedInteger(
     options.maxCandidates ?? 100,
     "maxCandidates",
-    500,
+    2000,
   );
   const popularPages = boundedInteger(
     options.popularPages ?? 1,
     "popularPages",
-    5,
+    20,
   );
   const pagesPerTag = boundedInteger(
     options.pagesPerTag ?? 1,

@@ -99,11 +99,11 @@ const automaticSelectionPolicy = z.strictObject({
   wordpressVersion: coreVersionSchema,
   candidateSource: z.strictObject({
     kind: z.literal("wordpress-org"),
-    popularPages: z.number().int().min(1).max(5),
+    popularPages: z.number().int().min(1).max(20),
     tags: z.array(slugSchema).max(8),
     pagesPerTag: z.number().int().min(1).max(5),
     perPage: z.number().int().min(1).max(50),
-    maxCandidates: z.number().int().min(5).max(500),
+    maxCandidates: z.number().int().min(5).max(2000),
     maxAgeDays: z.number().positive().max(7),
   }),
 });
