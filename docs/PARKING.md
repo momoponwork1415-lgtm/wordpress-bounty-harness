@@ -23,3 +23,4 @@ Step 1（[DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節）の完了まで着手し�
 | 2026-10-14 | install 下限を方針版で変える仕組み（#230） | `--selection` で下限別の方針 file を選ぶ運用で代える。運用で足りなくなったとき |
 | 2026-10-14 | 探索 prompt の A/B 事前登録（#201、再発見 case 5 × 2 arm） | Step 1 合格後 |
 | 2026-10-14 | Wordfence mirror の日次更新（#231） | 提出候補が週 1 件を超えたとき |
+| 2026-10-15 | 運転ログから週 1 件の変更案を数字付きで出す skill `wbh-tune`（提案のみ。Harness を変えない。meta-harness の人間ゲート版、[報告](reviews/2026-10-15-software-factory-and-meta-harness.md)） | `continuous run` が 1 週回り、Trial 開始 10 件以上と review batch 1 回の `decide --minutes` が台帳にあるとき。1 週に 1 変更 |
