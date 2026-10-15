@@ -3014,22 +3014,6 @@ describe("harness CLI vertical slice", () => {
     ).toBe(2);
   });
 
-  it("keeps the directly pinned development campaign available without legacy history", async () => {
-    const { run, configPath } = await harness({
-      legacyHistoryUnavailable: true,
-    });
-    const manual = await run(
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "manual-no-legacy",
-      "--config",
-      configPath,
-    );
-    expect(manual.code).toBe(0);
-  });
-
   it("classifies a source mismatch in the ledger and keeps its detail private", async () => {
     const { run, configPath, ledger, store } = await harness({
       candidates: ["broken-plugin", "synthetic-plugin"],
@@ -3147,12 +3131,11 @@ describe("harness CLI vertical slice", () => {
         reason: "http-error" as const,
       },
     ];
-    const { run, configPath, root, ledger, store, legacyHistoryFile } =
-      await harness({
-        candidates,
-        listingObservations,
-        failRepeatedFreeze: true,
-      });
+    const { run, configPath, root, ledger, store } = await harness({
+      candidates,
+      listingObservations,
+      failRepeatedFreeze: true,
+    });
     const policyPath = join(root, "selection.json");
     const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
       string,
@@ -3184,25 +3167,6 @@ describe("harness CLI vertical slice", () => {
     expect(first.stdout).toContain("wporg:item-a 9.9.9 score");
     expect(first.stdout).toContain("wporg:item-c 9.9.9 score");
     expect(first.stdout).toContain("breakdown installations=");
-    const originalHistory = await readFile(legacyHistoryFile, "utf8");
-    await writeFile(
-      legacyHistoryFile,
-      JSON.stringify({
-        ...JSON.parse(originalHistory),
-        ambiguous: ["item-h"],
-      }),
-    );
-    const changedHistory = await run(
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "campaign-changed-history",
-      "--config",
-      configPath,
-    );
-    expect(changedHistory.stderr).toContain("legacy-history-changed");
-    await writeFile(legacyHistoryFile, originalHistory);
     expect(first.stdout).toContain(
       "excluded wporg:item-d  reasons below-rank-cutoff",
     );

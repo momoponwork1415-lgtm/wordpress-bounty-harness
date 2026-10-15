@@ -1,5 +1,13 @@
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 
+type FinishedEvent = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
+type TrialObservation = {
+  readonly observed?: FinishedEvent["observed"] | undefined;
+  readonly childThreadsObserved?:
+    FinishedEvent["childThreadsObserved"] | undefined;
+  readonly brokerMetrics?: FinishedEvent["brokerMetrics"] | undefined;
+};
+
 /** Persisted child starts and candidate records prove work before a root finish. */
 export function recordedTrialActivity(
   ledger: Pick<Ledger, "read">,
@@ -33,8 +41,7 @@ export function recordedTrialActivity(
 
 /** SPEC §6: an observed bootstrap with no source, child or further broker use is not a Trial. */
 export function countsAsTrial(
-  finished:
-    Extract<LedgerEventV1, { type: "discovery-run-finished" }> | undefined,
+  finished: TrialObservation | undefined,
   hasRecordedActivity = false,
 ): boolean {
   if (hasRecordedActivity) return true;

@@ -350,26 +350,29 @@ export async function runDiscoveryCampaign(options: {
     return { runCount: 0, findingsRecorded: 0, stoppedBy: concluded.stoppedBy };
   // A start with no finish or receipt may reuse its ordinal on resume. A
   // partial Trial with a receipt still consumes its ordinal.
-  const finishedRuns = new Map<
-    string,
-    Extract<LedgerEventV1, { type: "discovery-run-finished" }>
-  >();
-  for (let afterSequence = 0; ;) {
-    const page = options.ledger.read({
-      campaignId: options.campaignId,
-      type: "discovery-run-finished",
-      afterSequence,
-      limit: 1000,
-    });
-    for (const { event } of page)
-      if (
-        event.type === "discovery-run-finished" &&
-        event.snapshotDigest === input.snapshotDigest
-      )
-        finishedRuns.set(event.runId, event);
-    if (page.length < 1000) break;
-    afterSequence = page[page.length - 1]!.sequence;
-  }
+  const readFinishes = () => {
+    const finishes = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "discovery-run-finished" }>
+    >();
+    for (let afterSequence = 0; ;) {
+      const page = options.ledger.read({
+        campaignId: options.campaignId,
+        type: "discovery-run-finished",
+        afterSequence,
+        limit: 1000,
+      });
+      for (const { event } of page)
+        if (
+          event.type === "discovery-run-finished" &&
+          event.snapshotDigest === input.snapshotDigest
+        )
+          finishes.set(event.runId, event);
+      if (page.length < 1000) return finishes;
+      afterSequence = page[page.length - 1]!.sequence;
+    }
+  };
+  const finishedRuns = readFinishes();
   const activeRuns = recordedTrialActivity(options.ledger, options.campaignId);
   const startedExplorations = new Set<string>();
   const spentOrdinals = new Set<number>();
@@ -461,6 +464,7 @@ export async function runDiscoveryCampaign(options: {
       runWallTimeMs = options.runWallTimeMs,
     ): Promise<{
       outcome: "completed" | "failed" | "provider-limited";
+      counted: boolean;
       foundNew: boolean;
       heldBoundary: boolean;
     }> => {
@@ -621,6 +625,15 @@ export async function runDiscoveryCampaign(options: {
       } catch {
         outcome = "failed";
       }
+      const counted = countsAsTrial({
+        observed,
+        childThreadsObserved,
+        brokerMetrics,
+      });
+      if (!counted && outcome === "completed") {
+        outcome = "failed";
+        failure = { reason: "evidence", reasonDetail: "no-work" };
+      }
       const finished = await options.ledger.append({
         ...base,
         identity: `discovery-finish-${run.runId}`,
@@ -650,9 +663,16 @@ export async function runDiscoveryCampaign(options: {
       });
       if (finished.status === "conflict")
         throw new Error("Discovery finish identity conflict");
-      return { outcome, ...reportState };
+      return { outcome, counted, ...reportState };
     };
     const explore = await executePlanned(trial.explore);
+    if (!explore.counted) {
+      stopped ??=
+        explore.outcome === "provider-limited"
+          ? "provider-limit"
+          : "incomplete";
+      return;
+    }
     // Stop rules are evaluated once per Trial; in-flight Trials still finish.
     if (explore.outcome === "provider-limited") stopped ??= "provider-limit";
     if (explore.outcome === "failed") stopped ??= "incomplete";
@@ -671,35 +691,19 @@ export async function runDiscoveryCampaign(options: {
     }
   };
   await Promise.all(Array.from({ length: concurrency }, worker));
-  const outcomes = new Map<
-    string,
-    "completed" | "failed" | "provider-limited" | "setup-failed"
-  >();
-  let finishAfterSequence = 0;
-  for (;;) {
-    const page = options.ledger.read({
-      campaignId: options.campaignId,
-      type: "discovery-run-finished",
-      afterSequence: finishAfterSequence,
-      limit: 1000,
-    });
-    for (const { event } of page)
-      if (
-        event.type === "discovery-run-finished" &&
-        event.snapshotDigest === input.snapshotDigest &&
-        startedExplorations.has(event.runId)
-      )
-        outcomes.set(event.runId, event.outcome);
-    if (page.length < 1000) break;
-    finishAfterSequence = page[page.length - 1]!.sequence;
-  }
-  const recordedFailure = [...startedExplorations].some(
-    (runId) => outcomes.get(runId) === "provider-limited",
+  const outcomes = readFinishes();
+  const activeAfter = recordedTrialActivity(options.ledger, options.campaignId);
+  const countedRuns = [...startedExplorations].filter((runId) =>
+    countsAsTrial(
+      outcomes.get(runId),
+      activeAfter.has(`${options.campaignId}\0${runId}`),
+    ),
+  );
+  const recordedFailure = countedRuns.some(
+    (runId) => outcomes.get(runId)?.outcome === "provider-limited",
   )
     ? "provider-limit"
-    : [...startedExplorations].some(
-          (runId) => outcomes.get(runId) !== "completed",
-        )
+    : countedRuns.some((runId) => outcomes.get(runId)?.outcome !== "completed")
       ? "incomplete"
       : undefined;
   const stoppedBy =
