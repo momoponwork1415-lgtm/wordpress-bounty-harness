@@ -16,6 +16,7 @@ export const WORDPRESS_DISCOVERY_PROMPT_IDS = [
   "wp2shell-bounty-v1",
   "wp2shell-bounty-v2",
   "wp2shell-bounty-v3",
+  "wp2shell-bounty-v4",
   "wp2shell-whitebox-v1.7",
 ] as const;
 
@@ -24,6 +25,7 @@ export const WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS = [
   "short-objective-managed-v5",
   "screening-v1",
   "wp2shell-bounty-v3",
+  "wp2shell-bounty-v4",
   "wp2shell-whitebox-v1.7",
 ] as const;
 
@@ -61,6 +63,7 @@ export async function loadWordPressDiscoveryAsset(
     case "wp2shell-bounty-v1":
     case "wp2shell-bounty-v2":
     case "wp2shell-bounty-v3":
+    case "wp2shell-bounty-v4":
     case "wp2shell-whitebox-v1.7":
     case "trust-boundary-v1":
       fileName = `${id}.md`;

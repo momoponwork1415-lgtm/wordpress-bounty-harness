@@ -1,0 +1,236 @@
+# バグバウンティ Harness としての作り込み過ぎと不足（2026-10-14）
+
+調べて報告。正本ではなく、食い違えば [SPEC](../SPEC.md) と [ADR](../adr/) が勝つ。対象は `main` HEAD `d214de0`（PR #210 まで）。読んだのは SPEC、ADR 0029 / 0031 / 0032、DEVELOPMENT、LESSONS、PARKING、OPERATIONS、評価記録 3 本、過去のレビュー 4 本、`src/` と `tests/` の構成、open Issue 32 件。Private Evidence、本番の台帳、Git 外の host 設定は読んでいない。対象の実行、runsc、provider 呼び出しはしていない。
+
+所有者の問い: 「バグバウンティ Harness としてどこが作り込み過ぎで、どの機能が足りないか」。
+
+## 0. 結論
+
+- **土台（隔離、broker、Snapshot digest、追記台帳、判定器 9 種、Private Evidence）は完成している。** 一方、Step 1 の完了条件「quota 1 週分を人手 0 で回す」に対して、**外側のループ（選定の補充、quota 待ち、再開）がまだ無い**。これが今いちばん足りない機能で、open Issue #227 / #228 / #229 がそれにあたる。
+- **作り込み過ぎは「本番ループで使われていない経路」に集中している。** 探索 prompt 15 版、評価モジュール（Answer Key 採点、blind rubric、arm 比較、前向き照合）、週次 smoke 専用の replay Verifier、plugin 固有の Lab adapter 8 本、二段構え時代の `assignment` mode、旧 arm の campaign 設定 27 本。合計でおよそ 4,500 行がいまの収益の式のどの項にも効いていない。削除は所有者が Step 2 と決めているので、ここでは「凍結して新規に足さない線」を明示することを勧める。
+- **数字で見ると、失われているのは候補ではなく転換率と周回数である。** 本番第 3 周は Finding 8 件がすべて `incomplete`、人間が開いた Finding は 0 件、未知の `runtime-confirmed` は 0 件。再発見では Stored XSS（Brizy）と SQLi（SSA、別経路）の 2 分類で判定器が鳴っている。つまり判定器は動くが、本番の候補が判定器に届く前の段（Lab 前提、provider 方針、source 取得）で止まっている。
+
+所有者が「最新」と示した `c5d0ef3` は `main` ではなく branch `codex/issue-229-batch-pin` の先端で、継続運転の実装を含む。その branch での自律運転の到達度は第 6 節、既存ライブラリの採用余地は第 7 節に追記した。**第 6 節の結論を先に書く: 自律運転はまだ成立していない。実 provider が実対象で `cyber_policy` 拒否を返して探索が始まらず（#220）、新しく入った既往 gate が旧世代の履歴監査を取り込むまで初回 Trial も止め、quota 後の再開に人間の `resume` が要る。**
+
+`pnpm check` はこの環境では 16 件が落ちるが、全件が「root ユーザーでは Codex sandbox を起動しない」という意図した拒否（`src/discovery/codex-gvisor-sandbox.ts:446`）によるもので、コードの欠陥ではない。非 root の CI では通る前提で以下を書く。
+
+## 1. 現状の数字
+
+| 項目 | 数 | 出典 |
+| --- | --- | ---: |
+| `src/` 行数 / ファイル数 | 33,439 / 113 | `wc -l` |
+| `tests/` 行数 / ファイル数 | 28,812 / 87 | 同上 |
+| ADR / reviews / evaluation 文書 | 32 / 30 / 5 | `docs/` |
+| 探索 prompt 版 / Verifier prompt 版 | 15 / 7 | `src/profiles/wordpress/prompts/index.ts:4-19`、`verifier-v1..v7.md` |
+| 現行経路が起動する prompt | 探索 1（`wp2shell-bounty-v3`）＋比較 arm 2、Verifier 1（v7） | `campaign.json`、`index.ts:88` |
+| CLI subcommand | 約 30（うち `review` 13、`eval` 6） | `src/cli/index.ts:711-1371` |
+| 判定器を持つ impact | 15 / 17 の対象内 impact（`content-deletion`、`rfi` は no-judge） | `judges.ts:1355-1413`、`finding.ts:40-64` |
+| Lab scenario / plugin 固有 adapter | 8 / 8 | `lab/scenarios.ts`、`lab/*-adapter.ts` 等 |
+| open Issue | 32 | GitHub |
+| 本番第 3 周: Finding → confirmed | 8 → 0（no-judge 5、observation 2、precondition 1） | `docs/evaluation/2026-10-12-production-v3-cycle-03.md` |
+| 再発見で confirmed | Brizy Stored XSS 1、SSA SQLi 1（公開記録と別経路） | `docs/evaluation/2026-10-12-rediscovery-benchmark.md` |
+| 人間が開いた Finding / 提出 / 報奨 | 0 / 0 / 0 | 同上、ADR 0031 |
+
+## 2. 作り込み過ぎ
+
+優先順は「いま所有者と AI の読み込み・保守コストを食っている順」。削除は Step 2（ADR 0032 Q27、PARKING）なので、ここでの推奨は「凍結の線を引く」こと。
+
+### 2.1 本番ループに乗っていないコード（約 4,500 行）
+
+| 箇所 | 行数 | 事実 | 推奨 |
+| --- | ---: | --- | --- |
+| 評価モジュール `src/evaluation/` ＋ `profiles/wordpress/advisory.ts`、`eval score / keys / rubric / compare / prospective / case-blocked` | 620 ＋ CLI 分 ＋ test 5 本 | SPEC §4 で「任意の研究用」。本番 campaign で呼ぶ場所がない。DEVELOPMENT §7「週末に見る数字」に `eval score --keys` が残り、Answer Key を要求しないという SPEC §10 と文書内で食い違う | DEVELOPMENT §7 から `eval score` 行を消す。`eval case-blocked` だけ残し、他 5 つは Step 2 の削除候補に札を付ける |
+| 週次 smoke 専用の replay Verifier `smoke-replay-recipe.ts`、`smoke-replay-verifier.ts`、`scripts/smoke-real-lab.mjs` | 1,226 | #126 の週次 smoke（「受入未達」）のためだけに、8 手順の HTTP 再生と型付き束縛を持つ第 2 の検証経路を作っている。本番の Verifier と判定器は別経路で、ここが緑でも本番の転換率は上がらない | 週次 smoke は既知 Finding に `review reverify` を 1 回打つ運用に置き換えられる。replay 経路は凍結し、Step 2 で消す |
+| 二段構え時代の `assignment` mode（入口分担、`entriesPerRun`） | `wordpress.ts:183-248`、`storage-index.ts` の分担部分 | ADR 0025 は 0029 で置き換えられたが、campaign 設定の schema と OPERATIONS §2「入口の分担」に残っている。現行経路は索引をカタログとして渡すだけで、分担は Root が決める | `assignment` を設定 schema から外す小 PR。索引（entry-points / storage-index）は残す |
+| 旧 arm の campaign 設定 `examples/translatepress-*/` | 27 JSON | luna-ab、short-managed v3 / v4、comment-fixture 等、ADR 0029 以降は起動しない arm。`tests/cli/examples.test.ts` が読むので消せない構造になっている | 本番用 2 本（`campaign-production-v1.json`、`host.example.json`、`wordfence-programme.example.json`）だけ `examples/` に残し、他は `docs/knowledge/` に写すか削除。test は本番用だけを読む |
+| plugin 固有 Lab adapter 8 本 ＋ `wordpress-initialization.ts` | 748 | ADR 0026「plugin 非依存を優先」と逆方向。`wordpress-initialization.ts` は直近 40 commit で 10 回変更され、`src/` で最も churn が高い。対象 1 件ごとに手で足している | 新規追加を止める。`incomplete(precondition)` の理由集計（`scripts/report-wordpress-preconditions.mjs`）で 3 回出た前提だけを汎用 scenario にする、という SPEC §7 の規則を運用で守る。第 3 節 3.3 も見る |
+
+### 2.2 prompt 版の増殖
+
+探索 15 版のうち現行経路で起動できるのは `wp2shell-bounty-v3`、比較 arm `wp2shell-whitebox-v1.7` と `short-objective-managed-v4` の 3 本。残り 12 本は台帳の digest 照合用（ADR 0029）だが、`loadWordPressDiscoveryAsset` は 15 本すべてを同じ経路で読め、新規起動を型で止めていない（`prompts/index.ts:43-70`）。
+
+- 2026-10-12 の整理案（「v3 を既定にして止める。比較 arm は v4 1 本」）の翌日に v1.7 arm（#205）と A/B 事前登録（#201）が入った。これは ADR 0032 Q10 の所有者決定なので矛盾ではないが、**開発セットの `runtime-confirmed` が全 PR で 0 のまま**なので、arm 比較は「判定不能」で終わる可能性が高い（SPEC §10「区間が重なれば判定不能」）。A/B に Trial を使う前に、第 3 節 3.3 の壁を外さないと信号が出ない。
+- 推奨: `WORDPRESS_DISCOVERY_PROMPT_IDS` を「起動可能 3 本」と「照合専用 archive」に分け、campaign 設定の `promptId` は前者だけを受ける。消さずに起動不能にする。
+
+### 2.3 review CLI の多機能
+
+`review` は 13 subcommand、`src/review/index.ts` 1,051 行 ＋ `export.ts` 630 行。人間が開いた Finding は 0 件。ADR 0031 / 0032 Q27 で「CLI は機械向け、人間向けは skill、整理は Step 2」と決まっているので、ここは凍結済みとして扱う。`review scope` と `review dedupe` は skill `wbh-dedupe` / `wbh-review` と役割が重なるので、Step 2 の削除候補に札だけ付ける。
+
+### 2.4 文書
+
+正本 2 つ（SPEC、ADR）に対し、`docs/` 直下に 13 本、reviews 30 本、knowledge 配下に過去 4 世代の写し。SPEC §11（ADR 一覧の重複）、§13（移植一覧）、§14（spike 未確認事項、すべて決着）は役目を終えている。`IMPLEMENTATION-PLAN.md` は 10-10 時点の棚卸しで ADR 0016 を正本と書く。README は読む順を 10 本挙げる。所有者は 10-12 に「整理は本番が回ってから」と決めているので着手は勧めないが、agent が毎回 1,500 行超を読む費用は Step 1 の間も発生している。最小の手当てとして、AGENTS.md の読む順を SPEC §1〜§8b と DEVELOPMENT §2 に限定する 1 行だけを勧める。
+
+### 2.5 テスト
+
+`tests/` 28,812 行は `src/` の 86%。`tests/cli/cli.test.ts` 3,873 行、`wordpress-lab.test.ts` 1,904 行で、実装の変更ごとに同じファイルが膨らんでいる（直近 40 commit で 15 回と 13 回）。TEST-STRATEGY の「内部をなぞるテストを増やさない」と反対の勾配。直す必要はまだ無いが、Step 2 で CLI test を公開 seam ごとに分割する札を付ける。
+
+## 3. 足りない機能
+
+優先順は「Step 1 の完了条件と収益の式に効く順」。
+
+### 3.1 外側のループが無い（最優先、Step 1 の完了条件そのもの）
+
+- `campaign run --all` は選定 batch 1 つ（`maximumTargets: 5`）を 1 回流して終わる。quota 到達は exit 3 で止まり、人間が同じコマンドを再実行して再開する（OPERATIONS §2）。**「quota 1 週分を人手 0 で」は、この構造では満たせない。**
+- 候補在庫が無い。`select` は毎回 WordPress.org を観測して 5 件を切るだけで、未探索の pool を持たない（#227）。`revisitPolicy: version-or-prompt-changed` はあるが、在庫から次を取る側がない。
+- ADR 0032 Q18 で cron 2 本を止めたので、待機と再開は Harness 自身が持つ必要がある（#229）。
+- 推奨: `select → campaign run → quota 待ち → 再開 → 次 batch` を 1 つの script に閉じ、停止条件を「quota 枯渇 / provider 方針拒否 N 回連続 / 人間の stop file」の 3 つに限る。新しい設定ブロック 1 つで足り、ADR は要らない。#227 / #228 / #229 は 1 本に畳める。
+
+### 3.2 探索 provider が 1 本で、provider 側の方針で丸ごと止まる
+
+- 探索 runtime は Codex 専用（`codex-native-agent-runtime.ts` 1,613 行、broker は ChatGPT OAuth 前提）。#220「実対象の協調 Trial が provider の cyber_policy 応答で開始直後に incomplete」が open で、これが本番の対象で起きると周回数がそのまま削れる。
+- Opus runtime（#224、#226）は PARKING の「Step 1 完了後」。だが PARKING の再開条件は Step 完了に結び付いていて、「provider 拒否が本番を止めている」という事象に結び付いていない。
+- 推奨: まず #220 の発生率を台帳の `discovery-run-finished.reasonDetail` で 1 週間分数える。対象の何割が開始直後に落ちるかで、Opus を第 2 arm として前倒しするかを所有者が決める。不変条件 2「暗黙に切り替えない」は守り、arm として明示する。
+
+### 3.3 Lab の「通常利用の状態」を作る手段が、手書き adapter しかない
+
+- 第 3 周の `incomplete(precondition)` の理由は「管理者による対象固有の設定状態」で、plugin 非依存の scenario では埋められないと記録されている。多くの plugin は管理者が初期設定をしないと攻撃面が出ない。
+- いまの解は対象ごとに adapter を書くこと（第 2 節 2.1）で、対象 5 件 / 周のループでは追いつかない。ADR 0026 は Verifier にブラウザと管理者セッションを渡さないと決めており、これは正しい。
+- 足りないのは、**Harness 所有の setup 側**が plugin の初期設定を既定値で通す汎用の手段。候補は (a) plugin の activation hook と `register_setting` の既定値を Lab 供給時に WP-CLI で適用する、(b) plugin が持つ「セットアップウィザード」相当を Lab 観測器（Harness 所有、型付き手順）で 1 回だけ踏む、(c) 諦めて `incomplete(precondition)` のまま review queue に載せ、人間が skill で見る（#185 で既にそうなっている）。
+- 推奨: まず (c) が実際に人間に届いているかを第 2 週の問いで確認する。(a) は小さく試せる。(b) は Verifier にブラウザを渡さない線を保ったまま可能だが、plugin ごとの差が大きいので 3 回同じ前提が出てから。
+
+### 3.4 今週の問いを止めている open bug
+
+Step 1 第 1 週の問い「ループは quota 1 週分を人手 0 で回るか。止まった理由は何か」に直結する open Issue。これらは新機能ではなく、ループが 1 周目で止まる原因。
+
+| Issue | 段 | 内容 |
+| --- | --- | --- |
+| #222 | Lab | 厳しい umask で固定した plugin source を WP-CLI が読めない |
+| #223 | Snapshot | Node の接続タイムアウトを理由付きで記録し取得可能な ZIP へ到達する |
+| #220 | 探索 | provider の cyber_policy 応答で開始直後に incomplete |
+| #213 | 検証 | Lab scenario の通常機能前提が不足し実対象検証が停止する |
+| #211 | 検証 | Verifier の任意セッション欄の空値で非セッション検証が recipe 未完了になる |
+| #183 | 探索 | `unadmitted-event-type:error` の原因未特定（Brizy の Root が completed に数えられなかった原因） |
+
+### 3.5 小さいが提出に効く不足
+
+- **提出直前の鮮度**: 重複照合は Harness 内ではローカル Wordfence mirror だけで、Patchstack / WPScan は skill の Web 検索に委ねている（ADR 0031 どおり）。mirror の日次更新と鮮度表示は #231 が open。LESSONS 13 のとおり、提出が止まっている間に crowded になった対象は duplicate で落ちるので、mirror の鮮度は funnel の `duplicate` に直結する。
+- **人間への通知が無い**: review queue に新しい項目が入っても、人間が `review` を打つまで見えない（`src/` に通知経路なし）。skill 運用なら「Claude Code を開いたときに `review` を打つ」で足りるが、LESSONS 5「人間に見えない成果は無いのと同じ」の線で、週次 batch の開始時に件数だけ出す 1 行があるとよい。
+- **quota の消費率**: usage は token と wall で出るが、「1 Trial で週 quota の何分の 1 を使ったか」は出ない。1 週 N 対象の計画が立てられない。`ledger usage` に provider の rate-limit ヘッダ由来の残量を 1 列足せるかは provider 側の応答次第。
+- **Step 2 送り（妥当）**: 修正版の負の対照の自動化、最新版再検証の自動化、Patchstack 第 2 送信先。いずれも提出候補が 1 件出てから必要になる。
+
+### 3.6 閉じてよい Issue
+
+- #118「Stored XSS 判定器の screenshot 要求で incomplete(evidence)」: Lab 観測器が screenshot を返し（`lab-observation.ts:94-97, 190-252`）、判定器がそれを証拠に載せる経路が入っている（`judges.ts:607-621`）。再発見で Brizy の Stored XSS が `runtime-confirmed` に到達した記録がその証明。Issue は閉じられる。
+- #107「Verifier の incomplete を理由ごとに自動再試行」: #209 で有界の自動再検証が入った。閉じられるが、**実装は ADR 0022 の原文（recipe 2 回、observation 2 回、provision 1 回、precondition は scenario が変わったとき）に従い、ADR 0032 の修正（recipe 2 回、observation 1 回、provision 0 回、precondition 0 回）とは一致していない**（`src/cli/pipeline.ts:96-120`）。SPEC §7 も原文のまま。どちらを正本にするかを所有者が決め、合わない側を 1 行直す。ADR 0032 は `proposed` のままなので、accepted にする前にここを揃えるのが安い。
+- #185 / #186 / #188: それぞれ #191 系、#197、#204 で merge 済み。閉じられる。
+
+## 4. 推奨の要約（所有者が決めること）
+
+| # | 項目 | 推奨 | 根拠 |
+| --- | --- | --- | --- |
+| R1 | 外側ループ（#227 / #228 / #229） | 1 本の PR に畳み、Step 1 第 1 週の問いの前提として最優先 | 3.1 |
+| R2 | provider 拒否（#220） | 1 週間の発生率を数え、Opus 第 2 arm の前倒しを決める | 3.2 |
+| R3 | plugin 固有 adapter | 新規追加を止め、(a) 既定値適用を小さく試す | 2.1、3.3 |
+| R4 | 起動可能 prompt の限定 | 3 本以外は archive として起動不能にする小 PR | 2.2 |
+| R5 | `assignment` mode | 設定 schema から外す小 PR | 2.1 |
+| R6 | 評価モジュール、replay Verifier、旧 examples | 凍結の札を PARKING に 3 行足す。削除は Step 2 | 2.1 |
+| R7 | Issue 整理 | #118 / #107 / #185 / #186 / #188 を閉じる | 3.6 |
+| R8 | DEVELOPMENT §7 | `eval score --keys` の行を消す | 2.1 |
+| R9 | 再試行回数の正本 | ADR 0032 の修正と `pipeline.ts` のどちらに揃えるかを決め、合わない側を直す | 3.6 |
+
+R4、R5、R7、R8 は所有者の判断を要しない小さな手直しで、agent に渡る文章も ADR も触らない。R1〜R3、R6、R9 は所有者が決める。
+
+## 6. 追記: `c5d0ef3`（branch `codex/issue-229-batch-pin`）での自律運転の到達度
+
+所有者が「最新」と示した `c5d0ef3` は `main` には無く、`codex/issue-229-batch-pin` の先端である（`main` から 40 commit、`src/` +7,092 行、`tests/` +8,019 行、未 merge）。#227 / #228 の branch は含まれず、同じ内容が別 commit として入っている。この branch を含めて「バグバウンティを自律的に回せる状態か」を段ごとに見る。
+
+### 6.1 段ごとの判定
+
+| 段 | 無人で回るか | 止める要因（`c5d0ef3` 時点） |
+| --- | --- | --- |
+| 選定・在庫 | 回る | `candidate-inventory.ts`（768 行）が WordPress.org の封印 pool を頁送りし、未探索 slug を補充する |
+| Snapshot | 回る | #222（umask）、#223（ZIP 取得失敗）は別 branch で修正済み、未 merge |
+| Lab | 回る | 実機 1/1 成功。長時間連続は未測定 |
+| **探索の開始** | **回らない** | `repeat-trial-gate.ts`（841 行）が、旧世代の DB・アーカイブの全数監査 manifest を取り込むまで、**新しい slug の初回 Trial も** `coverage-incomplete` で保留する（`wordpress.ts:1616`、OPERATIONS「現時点で実監査 manifest は未作成・未取込のため初回 slug の保留は続く」）。manifest は人間が Git 外で作り、所有者が承認し、`trial coverage-import` で 1 回だけ取り込む。AI は作らない |
+| **探索の実行** | **回らない** | #220: 実 provider（Codex）が実対象で `cyber_policy` refusal を返し、約 15 秒で `incomplete(provider)`。runner はこれを `WAIT_REVIEW` に送る。つまり**いまの provider はこの仕事を実行しない** |
+| 検証・判定 | 回る | 有界の自動再検証（#209）あり |
+| review export | 回る | skill が読む 1 件分の束を出す |
+| **外側のループ** | **半分** | `continuous start / resume / status / stop` は実装された。しかし quota 到達は `WAIT_QUOTA` → 5 分後の確認 → `WAIT_REVIEW(quota-readiness-unverified)` で止まり、**人間の `resume` が要る**。provider 拒否、候補枯渇、版・Programme・設定の変化もすべて `WAIT_REVIEW` |
+
+結論: **自律運転はまだ成立していない。** しかも止まる理由の 2 つ（初回 slug の保留、quota 後の再開）は、`c5d0ef3` で新しく入った設計が自分で作った停止点である。所有者の ADR 0032 Q6 は「同じ slug の 2 回目以降は 1 Trial ずつ事前承認」であり、「旧世代の履歴を全数監査するまで初回も止める」とは言っていない。この拡大解釈が、Step 1 の完了条件「初回ループが quota 1 週分を人手 0 で」と正面から衝突している。
+
+### 6.2 この branch の作り込み
+
+- 1 branch で +15,000 行。DEVELOPMENT §5「1 PR 500 行以内」の 30 倍で、実 provider での 3 Trial 測定は未実施。merge 条件を満たさないことは branch 内の進捗レビュー自身が書いている。
+- 耐久 workflow エンジンを自作している: 親 run の journal（525 行）、owner lease（212 行）、host 共通 resource claim（564 行）、crash 後の reconciliation（446 行）、child assessment（446 行）。これらは SPEC §4 の「単一の追記専用台帳」とは別の第 2 の状態記録で、sqlite driver も `node:sqlite` と `better-sqlite3` の 2 系統になった。LESSONS 8「先回りで作らない。同じ手動作業を 3 回してから道具にする」に対し、連続運転を 1 回も実機で回す前に crash 復旧と競合制御を書いている。
+- 一方、硬い総 token 枠を「現行契約では保証できない」と調べて止めた判断（`2026-10-14-issue-229-hard-usage-cap-feasibility.md`）は正しい。
+
+### 6.3 自律運転に最短で届く順
+
+1. **#220 を最初に解く。** provider が仕事を拒否する限り、在庫も runner も意味を持たない。選択肢は (a) Codex の cyber access program の適用状況を確認する、(b) Opus runtime（#224、branch `codex/opus-55-discovery` に 2,718 行の試作あり）を第 2 arm として前倒しする。これは所有者が決める。PARKING の「Step 1 完了後」は、Step 1 自体が provider で止まっている現状に合わない。
+2. **初回 slug の保留を外す。** 既往の判定を「この repo の全 `--state` の台帳にある `discovery-run-started`」だけに限り、旧世代の履歴は照合しない、と所有者が決めれば `repeat-trial-gate.ts` の大半は要らない。旧世代と重なる slug を再探索する費用は quota だけで、報奨を失うことはない。
+3. **quota 後の再開を自動にする。** 「5 分後に readiness が確認できなければ人間待ち」ではなく、「次の Trial を 1 本だけ試し、再び quota なら待つ」で足りる。provider の rate-limit 応答は typed receipt で既に区別されている。
+4. **branch を割る。** 在庫（#227）、claim（#228）、runner の最小形（start / stop / status）を別 PR にし、journal・owner・reconciliation・recovery は「実機で 2 回止まってから」に送る。
+5. 上の 1〜3 が通ってから、実 provider で 3 Trial を測る。
+
+## 7. 既存ライブラリ・フレームワークの採用余地
+
+前提: 依存は `zod` と `better-sqlite3` の 2 つだけで、他は Node 標準 API（ADR 0008）。credential を扱う broker と対象 source を展開する経路で供給網の面を増やさない方針は妥当で、以下は「置き換えると薄くなる」箇所だけを挙げる。採否は所有者が決め、agent に渡る文章が変わるものは対照表と 3 Trial の規則に従う。
+
+| 自作している箇所 | 行数 | 候補 | 判断 |
+| --- | ---: | --- | --- |
+| 探索 runtime: Codex CLI の transcript / rollout を解析して Root と子を観測 | 1,613 | 第 2 provider（#224）は **Claude Agent SDK** で組む。subagent、tool 権限、hook、構造化出力が SDK 側にあり、CLI の event 解析を再び 1,600 行書かなくてよい | 採る価値が高い。ChatGPT 購読を使う都合で Codex 側は CLI 経路のままで良い |
+| 入口索引: PHP source を正規表現で走査（`add_action`、`wp_ajax_*`、REST、shortcode） | 994 | **Semgrep**（WordPress ruleset あり）または **Psalm の taint analysis** を sandbox 内で走らせ、決定論的な入口 / sink の一覧を catalog として渡す | Root に渡す入力が変わるので、agent 入力の変更として扱う（対照表、3 Trial）。索引は「所在のカタログ」の範囲を超えない形にする。Mantis の code graph に相当する最小形 |
+| 連続運転の journal / owner / claim / reconciliation | 2,193 | **Temporal** が正統だが、一人・一台の運用には重すぎる。推奨は library ではなく設計: 第 2 の journal を持たず、追記専用台帳から状態を導く（funnel と同じ読み方） | 採らない。6.3 の 4 で薄くする |
+| X.509 / DER を手で encode して broker の一回限り CA を作る | 164 | `openssl req -x509` を broker container 内で呼ぶ（依存ゼロ）、または `@peculiar/x509` | 動いていて test があるなら現状維持。拡張するときに差し替える |
+| ZIP の展開（central directory を自前で読み `inflateRawSync`） | 364 | `yauzl`（zip64、壊れた archive の扱いが堅い） | path traversal / symlink / size の拒否は自作側の価値なので、差し替えても検査は残す。優先度低 |
+| 正準 JSON | 88 | `canonicalize`（RFC 8785） | 現状で十分 |
+| sqlite driver が 2 系統（`node:sqlite` と `better-sqlite3`） | — | `node:sqlite` に寄せると native build（`onlyBuiltDependencies`）が消える | 小 PR で統一できる |
+| 重複照合: ローカル Wordfence mirror のみ | 466 | **WPScan Vulnerability API**、**Patchstack API** を skill 側（`wbh-dedupe`）から呼ぶ。ADR 0031 の分担どおり Harness には入れない | skill の実装時に |
+| Lab の headless browser | — | Playwright 固定 image。妥当 | 現状維持 |
+| 隔離 | — | gVisor。Firecracker / E2B / Modal は一人運用で利点が無い | 現状維持 |
+| CLI 引数 | — | `node:util` の `parseArgs`。`commander` / `citty` にする利点は help 生成だけ | 現状維持（CLI は機械向け、ADR 0032 Q27） |
+
+公開ハーネス（Google Mantis、Visa VVAH、Anthropic defending-code-reference-harness、Cloudflare security-audit-skill）は「framework として組み込む」対象ではなく、Claude Code 向けの skill と prompt の集合である。Opus arm を作るなら、これらの skill 本文は出典対照表の候補になる（所有者の採否規則どおり要素を足さない）。比較は `2026-10-13-public-harness-update-and-maturity.md` にある。
+
+## 9. 追記: 削る機能と緩める制約の候補（所有者の 2026-10-14 の反応を受けて）
+
+所有者の反応は「方向性はよい。いらない機能が入っている。制約が厳しすぎる所がある」。それぞれを、所有者が yes / no で答えられる単位に割る。不変条件 8 項目（SPEC §2）は触らない。
+
+### 9.1 削る機能
+
+| # | 機能 | どこにあるか | 今すぐ消す / 凍結 | 理由 |
+| --- | --- | --- | --- | --- |
+| C1 | 旧世代の履歴監査で初回 Trial を止める gate、`trial bootstrap` / `coverage-import` / `trial approve` の host 共通 registry | `c5d0ef3` の `repeat-trial-gate.ts`（841 行）と OPERATIONS の該当節 | **消す**（merge 前なので branch から外すだけ） | 所有者の Q6 は「同じ slug の 2 回目以降は承認」で、初回の保留と旧世代監査は含まない。再探索の費用は quota だけで、報奨は失わない |
+| C2 | 継続運転の journal / owner lease / crash reconciliation / recovery | `c5d0ef3` の `continuous-run-journal.ts`、`continuous-run-owner.ts`、`continuous-restart-reconciliation.ts`、`resource-recovery.ts`（約 1,300 行） | **消す**。runner は `start / stop / status` の最小形だけ残し、状態は追記専用台帳から導く | 実機で 1 回も連続運転していない段階の crash 復旧。LESSONS 8 |
+| C3 | campaign・provider をまたぐ host 共通 resource claim（#228） | `host-resource-claims.ts`（564 行）、`resources status / recover` | **凍結**。1 台・1 provider の間は campaign 内の `maxConcurrentTargets` で足りる | 第 2 provider が実際に動いてから |
+| C4 | 評価モジュール（`eval score / keys / rubric / compare / prospective`）と `advisory.ts` | `src/evaluation/`、CLI | **凍結**、DEVELOPMENT §7 から行を消す | 本番ループで呼ばれない。第 2 節 2.1 |
+| C5 | 週次 smoke 専用の replay Verifier | `smoke-replay-*.ts`、`scripts/smoke-real-lab.mjs`（1,226 行） | **消す**。週次 smoke は既知 Finding に `review reverify` を 1 回打つ | 第 2 の検証経路を保守する理由がない |
+| C6 | 二段構え時代の `assignment` mode | `wordpress.ts:183-248` | **消す** | ADR 0025 は置き換え済み |
+| C7 | 起動可能な探索 prompt 12 本 | `prompts/index.ts` | **凍結**。起動できるのは v4、v3、whitebox-v1.7 の 3 本に限り、残りは digest 照合専用の archive | 第 2 節 2.2 |
+| C8 | 旧 arm の campaign 設定 24 本 | `examples/translatepress-*/` | **消す**。本番用 3 本だけ残す | 運用者の目に入る雑音 |
+| C9 | plugin 固有 Lab adapter 8 本 | `lab/*-adapter.ts` 等 | **凍結**。新規追加を止め、9.2 の L1 で代える | ADR 0026 と逆方向 |
+| C10 | `review` の 13 subcommand のうち `scope`、`dedupe`、`open`、`reproduced` | `src/review/index.ts` | **凍結**（ADR 0032 Q27 どおり Step 2 で消す） | skill と重複 |
+
+C1、C2、C5、C6、C8 を消すと、`main` 比で約 2,500 行、`c5d0ef3` 比で約 4,700 行が減る。
+
+### 9.2 緩める制約
+
+| # | 今の制約 | どこに書いてあるか | 緩め方 | 誰が決めるか |
+| --- | --- | --- | --- | --- |
+| L1 | Lab は「既定設定のまま」。plugin の設定を管理者が入れた状態を作らない | SPEC §8b `lab` 行「設定は既定のまま」、ADR 0026 | 「plugin の通常の有効化設定（管理画面で管理者が普通に行う初期設定）は Harness 所有の setup が入れてよい。権限付与と危険設定は不可」に変える。Wordfence が却下するのは「管理者の**誤**設定前提」であり、通常設定ではない | 所有者（SPEC §8b は owner-approved 要）。これが `incomplete(precondition)` の壁を正面から外す |
+| L2 | 同じ slug の 2 回目以降は、Snapshot digest・prompt digest・campaign ID・trialOrdinal を結び付けた承認 JSON を Git 外に作り registry へ登録 | `c5d0ef3` OPERATIONS「追加探索 Trial の承認」 | 承認は campaign 設定の `approvedRepeatSlugs: ["slug"]` 1 行、または `campaign run --approve-repeat <slug>` の flag にする。台帳に `repeat-approved` を 1 event 残せば追跡性は足りる | 所有者。Q6 の趣旨（無駄な反復を止める）は保てる |
+| L3 | quota 到達後 5 分で `WAIT_REVIEW` に落ち、人間の `resume` が要る | `continuous-runner.ts:23, 262-275` | 「次の Trial を 1 本だけ試し、再び quota なら待つ」を上限回数なしで繰り返す。人間を呼ぶのは operator stop と provider の方針拒否が N 回連続したときだけ | AI の既定値なので所有者判断不要。Step 1 完了条件に直結 |
+| L4 | 版・Programme・config digest・pool 期限の変化をすべて親 run の `WAIT_REVIEW` にする | `c5d0ef3` runner | その対象を `target-skipped` にして次へ進む。親は止めない | AI の既定値。所有者判断不要 |
+| L5 | 探索に触る PR は開発セット 3 Trial 必須、同じ slug の反復は承認必須、provider は拒否 | DEVELOPMENT §5 ＋ Q6 ＋ #220 | 3 つが重なると prompt の変更が永久に merge できない。provider が動くまでは「異なる slug の初回 3 Trial」を数字とし、Opus arm で測ってもよいと明記する | 所有者 |
+| L6 | agent に渡る文章・ADR・policy の変更は `owner-approved` ラベルが無いと CI で落ちる。一方、採否とラベル付与は AI に委任済み | DEVELOPMENT §5、§6、`check.yml` | AI が自分の PR にラベルを付ける形になっており、ゲートとして働いていない。所有者が読むのは不変条件・Programme Boundary・判定器の変更だけに絞り、prompt と policy は「対照表を PR に貼る」だけで通す | 所有者 |
+| L7 | 提出前に人間が「自分の手で Lab 上の攻撃を再現」する | SPEC §8、§12-6 | 判定器が同じ Snapshot で nonce を回収し、再現パッケージの script を新しい Lab で Harness が再実行して緑なら、人間は証拠を読むだけでよい。手で打つのは判定器のない種別（`no-judge`）だけ | 所有者。不変条件 6（提出前レビューは残す）とは矛盾しない。所有者の作業時間を直接減らす |
+| L8 | ADR は週 1 本、PR は 500 行以内、問いは週 1 つ | DEVELOPMENT §3、§5、§6 | 規則自体は妥当だが、`c5d0ef3` が 1 branch 15,000 行である事実が示すとおり守られていない。規則を緩めるのではなく、守れない branch は割る | 所有者（運用） |
+| L9 | Reflected XSS は Patchstack 向けにも出さない | ADR 0032 Q2 | 所有者の有償 18 件中 7 件が reflected XSS だった事実がある。半年後見直しの予定を「提出候補が週 1 件を下回ったら」に前倒しする | 所有者（金額に直結） |
+
+緩めない方がよいもの: 攻撃者位置を未認証と subscriber / customer に限る（両プログラムの受理条件）、`runtime-confirmed` は判定器だけ、gVisor 以外へ落ちない、Harness は送信しない、台帳は digest のみ。これらは報奨の受理条件と安全境界で、緩めても収益は増えない。
+
+### 9.3 順番
+
+1. `c5d0ef3` を割る: C1 と C2 を外し、L3 と L4 を入れた最小 runner ＋ 在庫（#227）を 1 PR にする。
+2. #220 の対応（Codex の access program 確認、または Opus arm）。
+3. L1 を SPEC §8b に 1 行入れ、C9 の adapter 追加を止める。
+4. L2、L5、L6 を DEVELOPMENT と OPERATIONS に反映。
+5. C4〜C8 は Step 2 の整理 PR 1 本。
+
+## 10. 未確認の仮定
+
+- `c5d0ef3` の branch は読んだだけで、`pnpm check` や実機は動かしていない。branch 内の進捗レビューが書く「802 tests 成功」は検証していない。
+- 本番の台帳と Private Evidence は読んでいないため、第 3 周の `no-judge` 5 件の impact 内訳と、#185 以降の周回で何件が `finding-parked` になったかは分からない。
+- `pnpm check` の 16 件の失敗は root ユーザー起因と判断したが、非 root 環境での再実行はしていない。
+- 「使われていない」は「`campaign run` の経路から呼ばれない」の意味で、所有者が手で呼んでいる可能性は排除できない。
