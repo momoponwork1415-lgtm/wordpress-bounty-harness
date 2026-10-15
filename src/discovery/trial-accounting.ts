@@ -1,6 +1,11 @@
 import type { LedgerEventV1 } from "../ledger/index.js";
 
-type FinishedRun = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
+type FinishedEvent = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
+type FinishedRun = {
+  readonly observed?: FinishedEvent["observed"] | undefined;
+  readonly childThreadsObserved?: FinishedEvent["childThreadsObserved"] | undefined;
+  readonly brokerMetrics?: FinishedEvent["brokerMetrics"] | undefined;
+};
 
 /** SPEC §6: a run with no source, child, or more than one broker transfer is not a Trial. */
 export function countsAsTrial(

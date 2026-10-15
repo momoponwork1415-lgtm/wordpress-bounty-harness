@@ -480,6 +480,7 @@ export async function runDiscoveryCampaign(options: {
       outcome: "completed" | "failed" | "provider-limited";
       foundNew: boolean;
       heldBoundary: boolean;
+      counted: boolean;
     }> => {
       const run =
         runWallTimeMs === undefined
@@ -537,6 +538,7 @@ export async function runDiscoveryCampaign(options: {
       startedExplorations.add(run.runId);
       runCount++;
       let outcome: "completed" | "failed" | "provider-limited" = "failed";
+      let childStarted = false;
       let wallTimeMs = 0;
       let usage: NativeRunReceipt["usage"] | undefined;
       let observed: NativeRunReceipt["observed"] | undefined;
@@ -571,6 +573,7 @@ export async function runDiscoveryCampaign(options: {
             history,
           },
         });
+        childStarted = (result.agentRuns?.length ?? 0) > 0;
         if (result.researchArtifact !== undefined) {
           if (result.researchArtifact.attachment.kind !== "research")
             throw new Error("Discovery research artifact kind is invalid");
@@ -638,6 +641,14 @@ export async function runDiscoveryCampaign(options: {
       } catch {
         outcome = "failed";
       }
+      const counted = countsAsTrial(
+        { observed, childThreadsObserved, brokerMetrics },
+        childStarted,
+      );
+      if (!counted && outcome === "completed") {
+        outcome = "failed";
+        failure = { reason: "evidence", reasonDetail: "no-work" };
+      }
       const finished = await options.ledger.append({
         ...base,
         identity: `discovery-finish-${run.runId}`,
@@ -667,9 +678,14 @@ export async function runDiscoveryCampaign(options: {
       });
       if (finished.status === "conflict")
         throw new Error("Discovery finish identity conflict");
-      return { outcome, ...reportState };
+      return { outcome, counted, ...reportState };
     };
     const explore = await executePlanned(trial.explore);
+    if (!explore.counted) {
+      stopped ??=
+        explore.outcome === "provider-limited" ? "provider-limit" : "incomplete";
+      return;
+    }
     // Stop rules are evaluated once per Trial; in-flight Trials still finish.
     if (explore.outcome === "provider-limited") stopped ??= "provider-limit";
     if (explore.outcome === "failed") stopped ??= "incomplete";

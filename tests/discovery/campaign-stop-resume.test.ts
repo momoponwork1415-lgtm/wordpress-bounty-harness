@@ -103,7 +103,7 @@ const input = {
   history: { mode: "none" as const },
 };
 
-type Reply = "empty" | "limit" | "finding";
+type Reply = "empty" | "limit" | "finding" | "no-work";
 
 async function open() {
   const root = await mkdtemp(join(tmpdir(), "wbh-stop-"));
@@ -196,7 +196,7 @@ async function open() {
                         },
                       ]
                     : [],
-                examined: "source",
+                examined: reply === "no-work" ? "none" : "source",
                 unexamined: "none",
               }),
             ),
@@ -214,6 +214,24 @@ async function open() {
                 reasoningOutputTokens: "unavailable",
               },
               reportArtifactDigest: attachment.digest,
+              ...(reply === "no-work"
+                ? {
+                    observed: {
+                      toolCalls: 0,
+                      filesRead: 0,
+                      uniqueFilesRead: 0,
+                      labRequests: 0,
+                      dbQueries: 0,
+                    },
+                    childThreadsObserved: 0,
+                    childThreadsAdmitted: 0,
+                    brokerMetrics: {
+                      forwardedRequests: 1,
+                      requestLimitExceeded: 0,
+                      unauthorizedRequests: 0,
+                    },
+                  }
+                : {}),
             }),
           };
         },
@@ -298,7 +316,19 @@ describe("discovery campaign stop and resume", () => {
       })[0]?.reasons;
     expect(inspect()).toEqual([]);
 
-    const result = await campaign({ prefix: "resume", replies: () => "empty" });
+    const noWork = await campaign({
+      prefix: "resume",
+      replies: () => "no-work",
+    });
+    expect(noWork).toMatchObject({ runCount: 1, stoppedBy: "incomplete" });
+    expect(inspect()).toEqual([]);
+    expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
+    expect(ledger.read({ type: "discovery-run-finished" })[0]?.event).toMatchObject({
+      outcome: "failed",
+      reason: "evidence",
+      reasonDetail: "no-work",
+    });
+    const result = await campaign({ prefix: "retry", replies: () => "empty" });
     expect(result).toMatchObject({ runCount: 6, stoppedBy: "no-new-finding" });
     const starts = ledger.read({ type: "discovery-run-started" });
     expect(starts[1]?.event).toMatchObject({
@@ -306,6 +336,7 @@ describe("discovery campaign stop and resume", () => {
       trialOrdinal: 0,
       campaignId: "campaign-1",
     });
+    expect(starts[2]?.event).toMatchObject({ runId: "retry-0", trialOrdinal: 0 });
     expect(inspect()).toEqual(["previously-selected"]);
     expect(ledger.read({ type: "discovery-concluded" })).toHaveLength(1);
   });
