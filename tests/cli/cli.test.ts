@@ -3357,7 +3357,8 @@ describe("harness CLI vertical slice", () => {
       "selection-report.json": JSON.stringify(oldReport),
     });
     for (const [index, { event }] of reservations.slice(0, 3).entries()) {
-      if (event.type !== "target-selected") throw new Error("Expected selection");
+      if (event.type !== "target-selected")
+        throw new Error("Expected selection");
       expect(
         (
           await ledger().append({
@@ -3384,7 +3385,9 @@ describe("harness CLI vertical slice", () => {
     );
     expect(preDigest.code).toBe(1);
     expect(preDigest.stderr).toContain("legacy-history-changed");
-    expect(ledger().read({ campaignId: "campaign-pre-digest" })).toHaveLength(0);
+    expect(
+      ledger().read({ campaignId: "campaign-pre-digest" }),
+    ).toHaveLength(0);
 
     await writeFile(
       legacyHistoryFile,

@@ -244,7 +244,13 @@ describe("WordPress ledger exclusions", () => {
   it("requires a known and changed prompt version for every earlier selection", () => {
     const ledger = reader([
       ...trial("seen", "1.2.0"),
-      ...trial("seen", "1.3.0", "campaign-2", digest("b"), "wp2shell-bounty-v3"),
+      ...trial(
+        "seen",
+        "1.3.0",
+        "campaign-2",
+        digest("b"),
+        "wp2shell-bounty-v3",
+      ),
     ]);
     expect(
       inspect(
@@ -416,8 +422,9 @@ describe("WordPress ledger exclusions", () => {
       selected("retry", "1.0.0", "campaign-2", digest("b")),
       child,
     ]);
-    expect(inspect(ledger, [{ slug: "retry", version: "1.0.0" }])[0]?.reasons)
-      .toEqual([]);
+    expect(
+      inspect(ledger, [{ slug: "retry", version: "1.0.0" }])[0]?.reasons,
+    ).toEqual([]);
   });
 
   it("never revisits a spent slug, even on a higher version", () => {

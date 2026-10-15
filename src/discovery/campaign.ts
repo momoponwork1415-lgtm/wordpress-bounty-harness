@@ -435,10 +435,10 @@ export async function runDiscoveryCampaign(options: {
       spentOrdinals.add(ordinal);
       legacySpent--;
     }
-  const pendingOrdinals = Array.from(
-    { length: limit },
-    (_, ordinal) => ordinal,
-  ).filter((ordinal) => !spentOrdinals.has(ordinal));
+  const pendingOrdinals: number[] = [];
+  for (let ordinal = 0; ordinal < limit; ordinal++) {
+    if (!spentOrdinals.has(ordinal)) pendingOrdinals.push(ordinal);
+  }
   let next = 0;
   const runOne = async (index: number) => {
     const trial = options.plannedTrials[index]!;

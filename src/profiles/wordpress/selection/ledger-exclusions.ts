@@ -197,8 +197,7 @@ export function inspectWordPressLedgerExclusions(input: {
       legacy !== "unavailable" && legacy.reconsider.has(slug);
     if (legacy !== "unavailable" && !reconsidered) {
       if (legacy.started.has(slug)) reasons.push("legacy-started");
-      else if (legacy.ambiguous.has(slug))
-        reasons.push("legacy-ambiguous");
+      else if (legacy.ambiguous.has(slug)) reasons.push("legacy-ambiguous");
     }
     const earlier = selectedBySlug.get(slug) ?? [];
     if (earlier.length > 0 && !reconsidered) {
