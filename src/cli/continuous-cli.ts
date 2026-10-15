@@ -37,6 +37,8 @@ function notify(command: string, line: string): Promise<void> {
     const child = spawn("/bin/sh", ["-c", command], { stdio: "pipe" });
     child.on("error", () => resolve());
     child.on("close", () => resolve());
+    // A command that never reads its input closes the pipe first (EPIPE).
+    child.stdin.on("error", () => undefined);
     child.stdin.end(`${line}\n`);
   });
 }
