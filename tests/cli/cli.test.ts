@@ -1067,6 +1067,14 @@ describe("harness CLI vertical slice", () => {
       },
     },
     {
+      promptId: "wp2shell-bounty-v4",
+      config: {
+        mode: "wp2shell",
+        promptId: "wp2shell-bounty-v4",
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    },
+    {
       promptId: "wp2shell-whitebox-v1.7",
       config: {
         promptId: "wp2shell-whitebox-v1.7",
@@ -1742,7 +1750,7 @@ describe("harness CLI vertical slice", () => {
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("stopped by no-new-finding");
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("WordPress discovery: WP2Shell bounty v3");
+    expect(prompts[0]).toContain("WordPress discovery: WP2Shell bounty v4");
     expect(prompts[0]).toContain("## Entry points");
     expect(coordinations).toEqual(["cooperative"]);
     expect(expirations).toEqual(["2026-10-08T01:00:00.000Z"]);
@@ -1892,7 +1900,7 @@ describe("harness CLI vertical slice", () => {
     });
     expect(production).toMatchObject({
       mode: "wp2shell",
-      promptId: "wp2shell-bounty-v3",
+      promptId: "wp2shell-bounty-v4",
       entryIndex: true,
       runWallTimeMinutes: 60,
       stopRules: { maxRuns: 1, noFindingRuns: 1 },
