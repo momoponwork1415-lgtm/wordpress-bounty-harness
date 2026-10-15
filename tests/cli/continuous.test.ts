@@ -10,7 +10,6 @@ import {
   continuousPaths,
   createContinuousRunner,
   type ContinuousDeps,
-  type ContinuousMemo,
   type ContinuousStopReason,
 } from "../../src/cli/continuous.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
@@ -21,21 +20,6 @@ afterEach(async () => {
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
 });
-
-function savedMemo(fields: Partial<ContinuousMemo>): ContinuousMemo {
-  return {
-    state: "starting",
-    detail: {},
-    backoffStep: 0,
-    consecutiveErrorBatches: 0,
-    consecutiveRefusalBatches: 0,
-    consecutiveNoProgressBatches: 0,
-    consecutiveEmptyDays: 0,
-    probe: false,
-    updatedAt: "2026-10-20T00:00:00.000Z",
-    ...fields,
-  };
-}
 
 type Step = (input: {
   campaignId: string;
@@ -259,57 +243,12 @@ describe("continuous runner", () => {
     expect(existsSync(`${paths.memo}.crashed.tmp`)).toBe(true);
   });
 
-  it("recreates a missing memo and runs the unbound ledger batch once", async () => {
-    let cleanups = 0;
-    let selects = 0;
-    const campaigns: string[] = [];
-    const t = await setup([], {
-      cleanupLeftovers: async () => ++cleanups,
-      select: async () => (
-        selects++,
-        { batchId: "selection-10", targets: ["a"] }
-      ),
-      runCampaign: async (input) => {
-        campaigns.push(input.campaignId);
-        return {
-          campaignId: input.campaignId,
-          targets: [],
-          skipped: [],
-          stopped: "operator",
-        };
-      },
-    });
-    await t.append("selection-9", {
-      type: "target-selected",
-      selectionId: "wporg:a@1.0.0",
-    });
-    const paths = continuousPaths(t.root);
-    await writeFile(
-      paths.memo,
-      JSON.stringify(savedMemo({ campaignId: "old" })),
-    );
-    await rm(paths.memo);
-
-    expect(await t.runner.run()).toBe("operator");
-    expect({ cleanups, selects, campaigns }).toEqual({
-      cleanups: 1,
-      selects: 0,
-      campaigns: ["prod-20261020-1"],
-    });
-    expect(
-      t.log.filter((line) => line.includes("warning memo-recreated")),
-    ).toHaveLength(1);
-    expect(JSON.parse(await readFile(paths.memo, "utf8"))).toMatchObject({
-      state: "stopped",
-      backoffStep: 0,
-    });
-  });
-
   it.each([
+    ["missing", null, true],
     ["truncated JSON", '{"state":"running"', false],
     ["missing fields", '{"state":"running","detail":{}}', true],
-  ])(
-    "recreates a %s memo without replaying a finished campaign",
+  ] as const)(
+    "recreates a %s memo without replaying a completed campaign",
     async (_name, damaged, withUnboundBatch) => {
       let cleanups = 0;
       let selects = 0;
@@ -333,6 +272,10 @@ describe("continuous runner", () => {
           };
         },
       });
+      await t.append("selection-9", {
+        type: "target-selected",
+        selectionId: "wporg:a@1.0.0",
+      });
       await t.append("prod-20261020-7", {
         type: "selection-batch-bound",
         selectionBatchId: "selection-9",
@@ -346,7 +289,8 @@ describe("continuous runner", () => {
           selectionId: "wporg:b@1.0.0",
         });
       const paths = continuousPaths(t.root);
-      await writeFile(paths.memo, damaged);
+      await writeFile(paths.memo, damaged ?? JSON.stringify(t.runner.memo()));
+      if (damaged === null) await rm(paths.memo);
 
       expect(await t.runner.run()).toBe("operator");
       expect({ cleanups, selects, campaigns }).toEqual({
@@ -376,9 +320,11 @@ describe("continuous runner", () => {
     });
     await writeFile(
       continuousPaths(t.root).memo,
-      JSON.stringify(
-        savedMemo({ state: "backoff", detail: { until: "broken" } }),
-      ),
+      JSON.stringify({
+        ...t.runner.memo(),
+        state: "backoff",
+        detail: { until: "broken" },
+      }),
     );
     expect(await t.runner.run()).toBe("operator");
     expect({ cleanups, selects, campaigns: t.calls.length }).toEqual({
@@ -432,9 +378,11 @@ describe("continuous runner", () => {
     await writeFile(continuousPaths(t.root).pid, "8");
     await writeFile(
       continuousPaths(t.root).memo,
-      JSON.stringify(
-        savedMemo({ state: "stopped", detail: { reason: "operator" } }),
-      ),
+      JSON.stringify({
+        ...t.runner.memo(),
+        state: "stopped",
+        detail: { reason: "operator" },
+      }),
     );
     await writeFile(continuousPaths(t.root).stop, "");
     expect(await t.runner.run()).toBe("operator");
@@ -454,9 +402,11 @@ describe("continuous runner", () => {
     const t = await setup([async () => ({})]);
     await writeFile(
       continuousPaths(t.root).memo,
-      JSON.stringify(
-        savedMemo({ campaignId: "prod-20261019-4", target: null }),
-      ),
+      JSON.stringify({
+        ...t.runner.memo(),
+        campaignId: "prod-20261019-4",
+        target: null,
+      }),
     );
     await writeFile(continuousPaths(t.root).pid, "8");
     await writeFile(continuousPaths(t.root).stop, "");
@@ -519,9 +469,11 @@ describe("continuous runner", () => {
     const t = await setup(steps);
     await writeFile(
       continuousPaths(t.root).memo,
-      JSON.stringify(
-        savedMemo({ campaignId: "prod-20261019-4", target: null }),
-      ),
+      JSON.stringify({
+        ...t.runner.memo(),
+        campaignId: "prod-20261019-4",
+        target: null,
+      }),
     );
     await t.runner.run();
     expect(t.calls[0]).toMatchObject({

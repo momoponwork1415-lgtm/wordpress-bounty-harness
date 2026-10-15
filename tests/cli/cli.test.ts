@@ -3349,6 +3349,11 @@ describe("harness CLI vertical slice", () => {
     const invalid = await run("continuous", "status");
     expect(invalid.code).toBe(0);
     expect(invalid.stdout).toContain("state never-started");
+    await writeFile(join(state, "continuous.pid"), String(process.pid));
+    const liveWithoutMemo = await run("continuous", "status");
+    expect(liveWithoutMemo.code).toBe(0);
+    expect(liveWithoutMemo.stdout).toContain("state running");
+    await rm(join(state, "continuous.pid"));
     await run("continuous", "stop");
     const stoppedAfterCrash = await run("continuous", "status");
     expect(stoppedAfterCrash.code).toBe(1);

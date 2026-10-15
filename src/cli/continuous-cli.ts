@@ -167,9 +167,11 @@ export async function continuousCommand(
         ? livePid === null
           ? "stopped"
           : "stopping"
-        : memo !== null && memo.state !== "stopped" && livePid === null
-          ? "stale"
-          : (memo?.state ?? "never-started");
+        : memo === null && livePid !== null
+          ? "running"
+          : memo !== null && memo.state !== "stopped" && livePid === null
+            ? "stale"
+            : (memo?.state ?? "never-started");
     const displayDetail =
       stopReason !== null ? { reason: stopReason } : (memo?.detail ?? {});
     io.stdout(
