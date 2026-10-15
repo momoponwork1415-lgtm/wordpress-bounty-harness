@@ -185,7 +185,7 @@ export async function readContinuousMemo(
   }
 }
 
-/** Atomically publish a terminal stop or explicit operator request. */
+/** Atomically publish an explicit operator or terminal policy stop. */
 export function requestContinuousStop(
   stateDirectory: string,
   reason: ContinuousStopReason = "operator",
