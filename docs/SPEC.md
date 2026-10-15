@@ -52,7 +52,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、canaryの配置先（options、post meta、ファイル、canaryユーザー） |
 | 判定器集合 | 第7節の種別別判定器 |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
-| prompt雛形 | 既定 `wp2shell-bounty-v3`、比較用 `wp2shell-bounty-v2` と `short-objective-managed-v4`、過去の `screening-v1` を含む版付きprompt、trust境界宣言の雛形。ADR 0017、0019、0029 |
+| prompt雛形 | 既定 `wp2shell-bounty-v4`、比較・履歴照合用 `wp2shell-bounty-v3`、`wp2shell-bounty-v2` と `short-objective-managed-v4`、過去の `screening-v1` を含む版付きprompt、trust境界宣言の雛形。ADR 0017、0019、0029 |
 | source補助 | 保存先のwrite / readをつなぐ索引と登録入口。Rootと子が参照できるが、固定した役割分担の命令にはしない |
 | Lead型 | sourceに根拠があり、影響までの辺が1つ足りないprimitiveの分類と記録 |
 | 評価対象の表現 | 開発対象のslug、版、修正版、影響分類。正解表の手入力は初期受入条件にしない |
@@ -79,11 +79,11 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 - 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
 - 対象の公開履歴: ローカルWordfence履歴DBから、snapshotの版より前（評価runではheld-outの公開日より前）に公開された対象プラグインの記録を抽出して渡す。内容は種別、影響版、修正版、公開日、公開記録のタイトル、修正版との差分で変わったファイルの一覧まで。PoC・payload・再現手順は含めない。渡した・渡さないを `CampaignInput` に記録する（ADR 0012）。
-- 入力: 版・digest付きの目的prompt `wp2shell-bounty-v3` を既定にし、`wp2shell-bounty-v2` と `short-objective-managed-v4` を比較armとして保持する。`screening-v1` 等の旧版は過去Trialの目的文とdigestの照合用に残し、旧screeningを現行modeで新規起動しない。人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、固定sourceから生成した入口索引、Lab HTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB accountを渡す。入口索引は入口の所在だけを示すカタログであり、経路や分担を指示しない。索引なしの比較Trialは別armとして記録し、同じ比較分母に混ぜない。分担と仮説はRootが決める。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
+- 入力: 版・digest付きの目的prompt `wp2shell-bounty-v4` を既定にし、`wp2shell-bounty-v3`、`wp2shell-bounty-v2` と `short-objective-managed-v4` を比較・履歴照合用に保持する。`screening-v1` 等の旧版は過去Trialの目的文とdigestの照合用に残し、旧screeningを現行modeで新規起動しない。人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、固定sourceから生成した入口索引、Lab HTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB accountを渡す。入口索引は入口の所在だけを示すカタログであり、経路や分担を指示しない。索引なしの比較Trialは別armとして記録し、同じ比較分母に混ぜない。分担と仮説はRootが決める。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
 - 許可する操作: 固定sourceの読み取り、LabへのHTTP、Lab DBのRO accountによる読み取り。探索runにcanaryは渡さず、canaryの発行と確認は検証段階のHarnessが行う。外向き通信は認証ブローカー経由のprovider APIだけ。
 - 構成: 対象ごとにRoot＋最大3子の協調Trialを1回行う。Harnessは人数上限、隔離、wall、証拠保存、停止を管理し、子の有効なFindingとLeadはRootの最終JSONと独立して保存する。開発セットの3回反復は独立したTrialとして測り、本番の対象ごと1回という既定を変えない（ADR 0029）。
 - 出力: `Finding[]`（0件可）、`Lead[]`（0件可）、観測できた入口索引の `examined` / `unexamined` と理由を記録する。入口索引の網羅は正常終了条件にしない。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。候補は生のまま保存し、profileの正規化を通してから受理する。受理できない候補は `candidate-held` として分類とissue pathだけを台帳に残し、保留だけのTrialは無成果に数えない（ADR 0018）。Finding / Leadの出力契約はprompt本文ではなくHarnessがschemaから生成する節として渡し、目的文と契約節のdigestを別に記録する（ADR 0019）。
-- 停止規則: 1 Trialの既定wall上限は60分。Rootの最終報告が早く返ればそこで正常終了し、Harnessは最低時間を強制しない。既定の `wp2shell-bounty-v3` 本文にも最低探索時間を置かない。履歴照合用のv2本文は変更しない。wall到達、provider上限、broker制限、実行・schema失敗は理由付きの `incomplete` とし、既に保存した子の成果を失わない。最終JSONに到達しなかったTrialを候補0件の正常完了にしない。Harnessによる続行差し込みや同一対象の自動追加Trialはしない。provider上限では新規Trialを止め、runner（`continuous run`）がbackoff後に同じcampaign IDで未消費の対象を再開する。拒否・wall・schema等の対象単位の失敗は `target-skipped` として次の対象へ進み、campaignを止めない。Rootがsourceを1件も読まず、子を起動せず、broker転送が1以下で終わったrunはTrialに数えず、その対象は次の選定で戻る（途中まで走ったTrialはTrialとして数え、再選定しない）。正常完了の0件も脆弱性なしを意味せず、source読取とwallから早期終了と探索後の0件を分ける。
+- 停止規則: 1 Trialの既定wall上限は60分。Rootの最終報告が早く返ればそこで正常終了し、Harnessは最低時間を強制しない。既定の `wp2shell-bounty-v4` 本文にも最低探索時間を置かない。履歴照合用のv2・v3本文は変更しない。wall到達、provider上限、broker制限、実行・schema失敗は理由付きの `incomplete` とし、既に保存した子の成果を失わない。最終JSONに到達しなかったTrialを候補0件の正常完了にしない。Harnessによる続行差し込みや同一対象の自動追加Trialはしない。provider上限では新規Trialを止め、runner（`continuous run`）がbackoff後に同じcampaign IDで未消費の対象を再開する。拒否・wall・schema等の対象単位の失敗は `target-skipped` として次の対象へ進み、campaignを止めない。Rootがsourceを1件も読まず、子を起動せず、broker転送が1以下で終わったrunはTrialに数えず、その対象は次の選定で戻る（途中まで走ったTrialはTrialとして数え、再選定しない）。正常完了の0件も脆弱性なしを意味せず、source読取とwallから早期終了と探索後の0件を分ける。
 - 同時実行: 最初はTrialを1つずつ回す。provider要求総数・usage・wallを観測し、安全に増やせることを確かめてから対象間の並列数を決める。
 - 記録する項目（runごと）: trialId / trialOrdinal、Root・子の役割、要求model IDとeffort、CLIの正確な版と同梱カタログのdigest、認証方式、cyber access program、service tier、各agentのusage（providerが返さない項目は `unavailable`）、観測できたsource読取とcommand件数の下限、入口索引・prompt・sourceのdigest、wallと停止理由。過去の段・継続付きrunは別形式として読めるようにする。
 - 本番model: Daybreak Blue対応の `gpt-6-sol` 系を使う。正確なmodel IDとsubagentへの継承は実機preflightで固定する。`gpt-6.1-sol`やLunaへ暗黙に切り替えない。
