@@ -91,6 +91,13 @@ export const reviewExportV1Schema = z.strictObject({
       latestKnown: z.string().nullable(),
       latestKnownAt: z.iso.datetime({ offset: true }).nullable(),
       sameAsExplored: z.boolean().nullable(),
+      /** The public listing observed once at export time; null when it failed. */
+      latestObserved: z
+        .strictObject({
+          version: z.string(),
+          observedAt: z.iso.datetime({ offset: true }),
+        })
+        .nullable(),
     }),
   }),
   finding: z.strictObject({
@@ -170,8 +177,52 @@ export const reviewExportV1Schema = z.strictObject({
       }),
     ),
     scopeAssessments: z.array(
-      z.strictObject({ programmeId: id, status: z.string() }),
+      z.strictObject({
+        assessmentId: z.string(),
+        programmeId: id,
+        status: z.string(),
+      }),
     ),
+    /** The latest decision's private record; null before any decision. */
+    decision: z
+      .strictObject({
+        decision: z.enum(["accept", "reject", "defer"]),
+        reasonCode: z.string().nullable(),
+        duplicate: z.string().nullable(),
+        decidedAt: z.iso.datetime({ offset: true }),
+      })
+      .nullable(),
+    humanReproduction: z
+      .strictObject({
+        result: z.enum(["match", "mismatch", "unavailable"]),
+        minutes: z.number().nullable(),
+        recordedAt: z.iso.datetime({ offset: true }),
+      })
+      .nullable(),
+    /** The newest verification of a Finding derived from this one (reverify). */
+    latestReverification: z
+      .strictObject({
+        verificationId: id,
+        findingId: id,
+        status: z.string(),
+        basis: z.string().nullable(),
+        recordedAt: z.iso.datetime({ offset: true }),
+      })
+      .nullable(),
+    latestDraft: z
+      .strictObject({
+        digest,
+        revision: z.number().int().positive(),
+        preparedBy: z.string(),
+        programme: z.string(),
+      })
+      .nullable(),
+    labSetup: z
+      .strictObject({
+        digest,
+        ordinaryActivationDefaults: z.boolean().nullable(),
+      })
+      .nullable(),
   }),
   privateEvidence: z.strictObject({
     directory: z.string(),
@@ -356,6 +407,10 @@ export async function exportReviewBundle(options: {
   readonly findingId: string;
   readonly stateDiff?: StateDiffReader;
   readonly clock?: () => Date;
+  /** One public observation of the target's newest version; failures become null. */
+  readonly observeLatestVersion?: (
+    targetId: string,
+  ) => Promise<{ version: string; observedAt: string } | null>;
 }): Promise<ReviewExportV1> {
   const { ledger, store, evidenceDirectory } = options;
   const campaignId = id.parse(options.campaignId);
@@ -518,6 +573,54 @@ export async function exportReviewBundle(options: {
     .read({ campaignId, findingId, type: "scope-assessed", limit: 1000 })
     .map(({ event }) => event)
     .filter((event) => event.type === "scope-assessed");
+  const privateRecord = async (
+    event: LedgerEventV1 | undefined,
+    kind: string,
+  ) => {
+    const ref = event?.artifacts.find((item) => item.kind === kind);
+    return ref === undefined
+      ? undefined
+      : ((await readJson(store, ref.digest, "record.json", 200_000)) as
+          Record<string, unknown> | undefined);
+  };
+  const lastDecision = decisions.at(-1);
+  const decisionRecord = await privateRecord(lastDecision, "review-decision");
+  const duplicate = decisionRecord?.duplicate as
+    { status?: string; ref?: string } | undefined;
+  const ofFinding = (type: LedgerEventV1["type"], ids: readonly string[]) =>
+    ids.flatMap((findingIdOf) =>
+      ledger
+        .read({ campaignId, findingId: findingIdOf, type, limit: 1000 })
+        .map(({ event }) => event),
+    );
+  const reproduction = ofFinding("human-reproduction-recorded", [findingId]).at(
+    -1,
+  );
+  const reproduceMinutes = ofFinding("human-effort-recorded", [findingId])
+    .filter(
+      (event) =>
+        event.type === "human-effort-recorded" && event.action === "reproduce",
+    )
+    .at(-1);
+  const derived = readAll(ledger, "finding-recorded")
+    .map(({ event }) => event)
+    .filter(
+      (event) =>
+        event.type === "finding-recorded" &&
+        event.campaignId === campaignId &&
+        event.derivedFromFindingId === findingId,
+    )
+    .map((event) => (event.type === "finding-recorded" ? event.findingId : ""));
+  const reverification = ofFinding("verification-finished", derived)
+    .filter((event) => event.type === "verification-finished")
+    .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))
+    .at(-1);
+  const draft = ofFinding("draft-saved", [findingId]).at(-1);
+  const draftRecord = await privateRecord(draft, "review-draft");
+  const latestObserved =
+    explored === null || options.observeLatestVersion === undefined
+      ? null
+      : await options.observeLatestVersion(explored.targetId).catch(() => null);
 
   return reviewExportV1Schema.parse({
     schema: REVIEW_EXPORT_SCHEMA_ID,
@@ -539,6 +642,7 @@ export async function exportReviewBundle(options: {
           explored === null || latest === null
             ? null
             : explored.version === latest.version,
+        latestObserved,
       },
     },
     finding: {
@@ -621,9 +725,64 @@ export async function exportReviewBundle(options: {
         humanElapsedSeconds: event.humanElapsedSeconds ?? null,
       })),
       scopeAssessments: scopes.map((event) => ({
+        assessmentId: event.identity,
         programmeId: event.programmeId,
         status: event.status,
       })),
+      decision:
+        lastDecision === undefined
+          ? null
+          : {
+              decision: lastDecision.decision,
+              reasonCode:
+                typeof decisionRecord?.reasonCode === "string"
+                  ? decisionRecord.reasonCode
+                  : null,
+              duplicate:
+                duplicate?.status === undefined
+                  ? null
+                  : duplicate.ref === undefined
+                    ? duplicate.status
+                    : `${duplicate.status}:${duplicate.ref}`,
+              decidedAt: lastDecision.occurredAt,
+            },
+      humanReproduction:
+        reproduction?.type !== "human-reproduction-recorded"
+          ? null
+          : {
+              result: reproduction.result,
+              minutes:
+                reproduceMinutes?.type === "human-effort-recorded"
+                  ? reproduceMinutes.minutes
+                  : null,
+              recordedAt: reproduction.occurredAt,
+            },
+      latestReverification:
+        reverification?.type !== "verification-finished"
+          ? null
+          : {
+              verificationId: reverification.verificationId,
+              findingId: reverification.findingId,
+              status: reverification.result.status,
+              basis: reverification.basis?.kind ?? null,
+              recordedAt: reverification.occurredAt,
+            },
+      latestDraft:
+        draft?.type !== "draft-saved" || draftRecord === undefined
+          ? null
+          : {
+              digest: draft.revisionDigest,
+              revision: Number(draftRecord.revision),
+              preparedBy: String(draftRecord.preparedBy),
+              programme: String(draftRecord.destination),
+            },
+      labSetup:
+        verification === undefined
+          ? null
+          : {
+              digest: verification.labSetupDigest,
+              ordinaryActivationDefaults: null,
+            },
     },
     privateEvidence: { directory: evidenceDirectory, artifacts },
   });
