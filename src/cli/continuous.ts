@@ -108,7 +108,7 @@ export function continuousPaths(stateDirectory: string) {
   };
 }
 
-/** Atomically publish operator intent, including from a signal handler. */
+/** Atomically publish an explicit operator stop request. */
 export function requestContinuousStop(stateDirectory: string): void {
   const path = continuousPaths(stateDirectory).stop;
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
@@ -277,8 +277,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       );
   };
   const stop = async (reason: ContinuousStopReason) => {
-    if (reason === "operator" && !existsSync(paths.stop))
-      requestContinuousStop(deps.stateDirectory);
     await enter("stopped", { reason });
     return reason;
   };
@@ -304,7 +302,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     await writeFile(paths.pid, String(deps.pid), { mode: 0o600 });
     const onSignal = () => {
       signalled = true;
-      requestContinuousStop(deps.stateDirectory);
     };
     deps.signals.on("SIGINT", onSignal);
     deps.signals.on("SIGTERM", onSignal);
