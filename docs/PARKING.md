@@ -24,3 +24,6 @@ Step 1（[DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節）の完了まで着手し�
 | 2026-10-14 | 探索 prompt の A/B 事前登録（#201、再発見 case 5 × 2 arm） | Step 1 合格後 |
 | 2026-10-14 | Wordfence mirror の日次更新（#231） | 提出候補が週 1 件を超えたとき |
 | 2026-10-15 | 運転ログから週 1 件の変更案を数字付きで出す skill `wbh-tune`（提案のみ。Harness を変えない。meta-harness の人間ゲート版、[報告](reviews/2026-10-15-software-factory-and-meta-harness.md)） | `continuous run` が 1 週回り、Trial 開始 10 件以上と review batch 1 回の `decide --minutes` が台帳にあるとき。1 週に 1 変更 |
+| 2026-10-16 | 探索入力を非信頼データと宣言する Harness 生成の固定節と、実際の stdin 全体の digest（full input digest）を run-started と receipt に結合する（#270 項目 7） | Step 1 判定後。または source / README 由来の指示に agent が従った実例が 1 件出たとき |
+| 2026-10-16 | 入口索引の表示を `bounded text index` に変え、dynamic / unknown を区別する。PHP parser の導入（#270 項目 8） | 空白形の回帰を 1 本足した後、実測で入口の取りこぼしが recall を下げたと分かったとき |
+| 2026-10-16 | 提出操作全体の再送契約（提出記録・付随記録・再開位置を 1 つの操作 identity に結合、#270 項目 12） | 初提出の前。提出候補が 1 件出たとき |
