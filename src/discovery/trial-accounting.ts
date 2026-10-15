@@ -3,7 +3,7 @@ import type { LedgerEventV1 } from "../ledger/index.js";
 type FinishedEvent = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
 type FinishedRun = {
   readonly observed?: FinishedEvent["observed"] | undefined;
-  readonly childThreadsObserved?: FinishedEvent["childThreadsObserved"] | undefined;
+  readonly childThreadsObserved?: number | undefined;
   readonly brokerMetrics?: FinishedEvent["brokerMetrics"] | undefined;
 };
 

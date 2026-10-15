@@ -430,14 +430,14 @@ export async function runDiscoveryCampaign(options: {
   )
     throw new Error("Invalid exploration wall time");
   const limit = Math.min(input.stopRules.maxRuns, options.plannedTrials.length);
-  for (let ordinal = 0; ordinal < limit && legacySpent > 0; ordinal++)
-    if (!spentOrdinals.has(ordinal)) {
-      spentOrdinals.add(ordinal);
-      legacySpent--;
-    }
   const pendingOrdinals: number[] = [];
   for (let ordinal = 0; ordinal < limit; ordinal++) {
-    if (!spentOrdinals.has(ordinal)) pendingOrdinals.push(ordinal);
+    if (spentOrdinals.has(ordinal)) continue;
+    if (legacySpent > 0) {
+      legacySpent--;
+      continue;
+    }
+    pendingOrdinals.push(ordinal);
   }
   let next = 0;
   const runOne = async (index: number) => {
@@ -682,8 +682,9 @@ export async function runDiscoveryCampaign(options: {
     };
     const explore = await executePlanned(trial.explore);
     if (!explore.counted) {
-      stopped ??=
-        explore.outcome === "provider-limited" ? "provider-limit" : "incomplete";
+      if (explore.outcome === "provider-limited")
+        stopped ??= "provider-limit";
+      else stopped ??= "incomplete";
       return;
     }
     // Stop rules are evaluated once per Trial; in-flight Trials still finish.

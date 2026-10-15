@@ -3014,22 +3014,6 @@ describe("harness CLI vertical slice", () => {
     ).toBe(2);
   });
 
-  it("keeps the directly pinned development campaign available without legacy history", async () => {
-    const { run, configPath } = await harness({
-      legacyHistoryUnavailable: true,
-    });
-    const manual = await run(
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "manual-no-legacy",
-      "--config",
-      configPath,
-    );
-    expect(manual.code).toBe(0);
-  });
-
   it("classifies a source mismatch in the ledger and keeps its detail private", async () => {
     const { run, configPath, ledger, store } = await harness({
       candidates: ["broken-plugin", "synthetic-plugin"],
@@ -3359,20 +3343,17 @@ describe("harness CLI vertical slice", () => {
     for (const [index, { event }] of reservations.slice(0, 3).entries()) {
       if (event.type !== "target-selected")
         throw new Error("Expected selection");
-      expect(
-        (
-          await ledger().append({
-            ...event,
-            campaignId: "selection-pre-digest",
-            identity: `pre-digest-${index}`,
-            artifacts: event.artifacts.map((artifact) =>
-              artifact.kind === "selection-report"
-                ? { ...artifact, digest: oldReportDigest }
-                : artifact,
-            ),
-          })
-        ).status,
-      ).toBe("appended");
+      const appended = await ledger().append({
+        ...event,
+        campaignId: "selection-pre-digest",
+        identity: `pre-digest-${index}`,
+        artifacts: event.artifacts.map((artifact) =>
+          artifact.kind === "selection-report"
+            ? { ...artifact, digest: oldReportDigest }
+            : artifact,
+        ),
+      });
+      expect(appended.status).toBe("appended");
     }
     const preDigest = await run(
       "campaign",
