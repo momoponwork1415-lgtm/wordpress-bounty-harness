@@ -10,6 +10,7 @@ import {
   continuousPaths,
   createContinuousRunner,
   type ContinuousDeps,
+  type ContinuousStopReason,
 } from "../../src/cli/continuous.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger, type LedgerEventInput } from "../../src/ledger/index.js";
@@ -147,6 +148,27 @@ const limited =
     return { stopped: "provider-limit" };
   };
 
+async function expectLatchedStop(
+  t: Awaited<ReturnType<typeof setup>>,
+  reason: ContinuousStopReason,
+) {
+  expect(await readFile(continuousPaths(t.root).stop, "utf8")).toBe(
+    `${reason}\n`,
+  );
+  const campaigns = t.calls.length;
+  const forbidden = async () => {
+    throw new Error("a stopped restart must do no work");
+  };
+  t.deps.legacyHistoryAvailable = forbidden;
+  t.deps.floorPolicyAvailable = forbidden;
+  t.deps.preflight = forbidden;
+  t.deps.cleanupLeftovers = forbidden;
+  t.deps.select = forbidden;
+  t.deps.runCampaign = forbidden;
+  expect(await createContinuousRunner(t.deps).run()).toBe(reason);
+  expect(t.calls).toHaveLength(campaigns);
+}
+
 describe("continuous runner", () => {
   it.each([
     ["rate-limit", [5, 10, 20, 40, 60, 60]],
@@ -169,6 +191,67 @@ describe("continuous runner", () => {
     },
   );
 
+  it("restores the original quota deadline after a crash during backoff", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    const startedAt = t.deps.clock().getTime();
+    const campaignTimes: number[] = [];
+    const cleanupTimes: number[] = [];
+    t.deps.cleanupLeftovers = async () => (
+      cleanupTimes.push(t.deps.clock().getTime()),
+      0
+    );
+    steps.push(limited("quota", t));
+    steps.push(() => (campaignTimes.push(t.deps.clock().getTime()), {}));
+    const regularSleep = t.deps.sleep;
+    let minutesSlept = 0;
+    t.deps.sleep = async (ms) => {
+      await regularSleep(ms);
+      if (++minutesSlept === 7) throw new Error("synthetic crash");
+    };
+
+    await expect(t.runner.run()).rejects.toThrow("synthetic crash");
+    const saved = JSON.parse(
+      await readFile(continuousPaths(t.root).memo, "utf8"),
+    ) as { state: string; detail: { until: string } };
+    expect(saved.state).toBe("backoff");
+    expect(saved.detail.until).toBe(
+      new Date(startedAt + 30 * 60_000).toISOString(),
+    );
+    expect(existsSync(continuousPaths(t.root).stop)).toBe(false);
+
+    t.deps.sleep = regularSleep;
+    expect(await createContinuousRunner(t.deps).run()).toBe("operator");
+    expect(t.hours()).toBe(0.5);
+    expect(campaignTimes).toEqual([startedAt + 30 * 60_000]);
+    expect(cleanupTimes.at(-1)).toBeGreaterThanOrEqual(startedAt + 30 * 60_000);
+    expect(t.calls[1]?.campaignId).toBe(t.calls[0]?.campaignId);
+  });
+
+  it("stops for review when a saved hold has no valid deadline", async () => {
+    let cleanups = 0;
+    let selects = 0;
+    const t = await setup([], {
+      cleanupLeftovers: async () => ++cleanups,
+      select: async () => (
+        selects++,
+        { batchId: "selection-1", targets: ["a"] }
+      ),
+    });
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify({ state: "backoff", detail: { until: "broken" } }),
+    );
+    expect(await t.runner.run()).toBe("errors");
+    expect({ cleanups, selects, campaigns: t.calls.length }).toEqual({
+      cleanups: 0,
+      selects: 0,
+      campaigns: 0,
+    });
+    expect(t.runner.memo().lastError).toBe("invalid saved backoff deadline");
+    await expectLatchedStop(t, "errors");
+  });
+
   it("starts a new campaign id after a finished one, numbered from the ledger", async () => {
     const steps: Step[] = [];
     const t = await setup(steps);
@@ -185,19 +268,89 @@ describe("continuous runner", () => {
     ]);
   });
 
-  it("refuses a live pid and clears a dead pid and a stale stop marker", async () => {
+  it("refuses to resume while another runner pid is live", async () => {
     const t = await setup([], { pidAlive: (pid) => pid === 7 });
     await writeFile(continuousPaths(t.root).pid, "7");
-    await expect(t.runner.run()).rejects.toThrow("already running as pid 7");
+    await writeFile(continuousPaths(t.root).stop, "");
+    await expect(t.runner.run({ resume: true })).rejects.toThrow(
+      "already running as pid 7",
+    );
+    expect(existsSync(continuousPaths(t.root).stop)).toBe(true);
+  });
+
+  it("keeps a stop marker after a dead pid until explicit resume", async () => {
+    let selects = 0;
+    let cleanups = 0;
+    const t = await setup([async () => ({})], {
+      pidAlive: () => false,
+      select: async () => (
+        selects++,
+        { batchId: "selection-1", targets: ["a"] }
+      ),
+      cleanupLeftovers: async () => ++cleanups,
+    });
     await writeFile(continuousPaths(t.root).pid, "8");
     await writeFile(continuousPaths(t.root).stop, "");
-    const steps: Step[] = [async () => ({})];
-    const fresh = await setup(steps, {
-      stateDirectory: t.root,
-      pidAlive: (pid) => pid === 7,
+    expect(await t.runner.run()).toBe("operator");
+    expect({ selects, cleanups, campaigns: t.calls.length }).toEqual({
+      selects: 0,
+      cleanups: 0,
+      campaigns: 0,
     });
-    await fresh.runner.run();
-    expect(fresh.calls).toHaveLength(2);
+    expect(existsSync(continuousPaths(t.root).stop)).toBe(true);
+    expect(await t.runner.run({ resume: true })).toBe("operator");
+    expect(t.calls).toHaveLength(2);
+    expect(cleanups).toBe(2);
+    expect(existsSync(continuousPaths(t.root).stop)).toBe(true);
+  });
+
+  it("does not resume a crashed campaign until the owner clears its marker", async () => {
+    const t = await setup([async () => ({})]);
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify({ campaignId: "prod-20261019-4", target: null }),
+    );
+    await writeFile(continuousPaths(t.root).pid, "8");
+    await writeFile(continuousPaths(t.root).stop, "");
+    expect(await t.runner.run()).toBe("operator");
+    expect(t.calls).toHaveLength(0);
+    expect(await createContinuousRunner(t.deps).run({ resume: true })).toBe(
+      "operator",
+    );
+    expect(t.calls[0]).toMatchObject({
+      campaignId: "prod-20261019-4",
+      retryIncompleteVerifications: true,
+    });
+  });
+
+  it("does not start a cleanup after the operator stops an active campaign", async () => {
+    let cleanups = 0;
+    const steps: Step[] = [];
+    const t = await setup(steps, {
+      cleanupLeftovers: async () => ++cleanups,
+    });
+    steps.push(async () => {
+      await writeFile(continuousPaths(t.root).stop, "");
+      return {};
+    });
+    expect(await t.runner.run()).toBe("operator");
+    expect(cleanups).toBe(1); // Startup sweep only.
+    expect(t.calls).toHaveLength(1);
+  });
+
+  it("persists a signal as an operator stop before draining the campaign", async () => {
+    let term: () => void = () => undefined;
+    const t = await setup([() => (term(), {})], {
+      signals: {
+        on(signal: string, listener: () => void) {
+          if (signal === "SIGTERM") term = listener;
+          return process;
+        },
+        off: () => process,
+      } as never,
+    });
+    expect(await t.runner.run()).toBe("operator");
+    expect(existsSync(continuousPaths(t.root).stop)).toBe(true);
   });
 
   it("resumes the unfinished campaign under its id", async () => {
@@ -239,6 +392,7 @@ describe("continuous runner", () => {
     expect(await t.runner.run()).toBe("errors");
     expect(t.runner.memo().lastError).toHaveLength(200);
     expect(new Set(t.calls.map((call) => call.campaignId)).size).toBe(3);
+    await expectLatchedStop(t, "errors");
   });
 
   it("holds after a batch whose every target was refused, then probes one target", async () => {
@@ -278,6 +432,7 @@ describe("continuous runner", () => {
     ]);
     // Once at start, once more before the hold.
     expect(preflights).toBe(2);
+    await expectLatchedStop(t, "no-progress");
   });
 
   it("sleeps a day on an empty pool, retries a failed listing hourly, and stops exhausted on the third empty day", async () => {
@@ -294,6 +449,7 @@ describe("continuous runner", () => {
       t.log.filter((line) => line.includes("reason=listing-unavailable")),
     ).toHaveLength(1);
     expect(t.hours()).toBe(1 + 2 * 24);
+    await expectLatchedStop(t, "exhausted");
   });
 
   it("waits for a renewed login without exiting", async () => {
@@ -340,6 +496,7 @@ describe("continuous runner", () => {
     expect(await t.runner.run()).toBe(reason);
     expect(t.calls).toHaveLength(0);
     expect(t.notified.at(-1)).toContain(`reason=${reason}`);
+    await expectLatchedStop(t, reason);
   });
 
   it("runs an unbound batch left by a crash before selecting again", async () => {
