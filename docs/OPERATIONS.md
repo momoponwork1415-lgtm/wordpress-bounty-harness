@@ -70,7 +70,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
 - tokenの更新はしない。preflightが「1時間以内に失効」を出したら、ホストで `codex login` をやり直す。
 - APIキー（`host-private-bearer`）の経路も残っている。
 
-provider の構造化エラー `cyber_policy` は `incomplete(provider: provider-cyber-policy)` と記録する。これは broker の要求上限や認証期限切れ、正常な候補0件とは別の停止理由。詳細な診断は Git 外 Private Evidence の receipt に結び付けて保持し、台帳へエラー本文を写さない。拒否された対象は `target-skipped(provider-refused)` として Trial に数えず、次の対象へ進む。同じ対象は次の選定で自然に戻る。拒否を避ける目的で prompt を言い換えない。件数は `ledger stops` で見る。
+provider の構造化エラー `cyber_policy` は `incomplete(provider: provider-cyber-policy)` と記録する。これは broker の要求上限や認証期限切れ、正常な候補0件とは別の停止理由。詳細な診断は Git 外 Private Evidence の receipt に結び付けて保持し、台帳へエラー本文を写さない。拒否された対象は `target-skipped(provider-refused)` として次の対象へ進む。Root が source を 1 件も読まず、子を起動せず、broker 転送が 1 以下で終わった run は Trial に数えず、その対象は次の選定で戻る。途中まで走った Trial は Trial として数え、再選定しない。拒否を避ける目的で prompt を言い換えない。件数は `ledger stops` で見る。
 
 `campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v4` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
 
@@ -199,11 +199,11 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 
 ### 対象の自動選定
 
-`select` は [選定方針 JSON](../src/profiles/wordpress/policy/selection.json) を直接読み、WordPress.org の人気順・タグ順を列挙する。install下限もこの JSON が正本。台帳の探索開始（`runKind: explore` の `discovery-run-started`）と Finding を照合し、適格な次点候補で補充して3〜5対象を返す。選定されただけで Trial が始まらなかった対象（Lab や Snapshot の失敗）と、source を 1 件も読まず子を起動せず broker 転送 1 以下で終わった run しか持たない対象は除外しない。版またはprompt版が変わったときの再訪は `revisitPolicy` で決める。未公開 Finding を持つ対象は、提出済みでも公開を確認できないため除外する。
+`select` は [選定方針 JSON](../src/profiles/wordpress/policy/selection.json) を直接読み、WordPress.org の人気順・タグ順を列挙する。install下限もこの JSON が正本。台帳の探索開始（`runKind: explore` の `discovery-run-started`）と Finding を照合し、適格な次点候補で補充して3〜5対象を返す。選定されただけで Trial が始まらなかった対象（Lab や Snapshot の失敗）、終了記録のない開始直後の attempt、source を 1 件も読まず子を起動せず broker 転送 1 以下で終わった run しか持たない対象は除外しない。自動候補源の `revisitPolicy` は `never` を要求し、版または prompt 版が変わっても途中まで走った Trial を戻さない。未公開 Finding を持つ対象は、提出済みでも公開を確認できないため除外する。
 
-旧世代の既往は host 設定の `legacyHistory: {"file": "/abs/legacy-slugs.json"}` で渡す。`select` のたびに読み、`started` を `legacy-started`、`ambiguous` を `legacy-ambiguous` として除外し、`reconsider` の slug は既往と過去の Trial を無視して戻す。file が無ければ `legacy history unavailable` と表示して進む（`continuous run` は起動しない）。digest と件数は選定レポートに残る。`select --minimum <n>`（既定 3、runner は 1）未満しか固定できないときは、台帳に `target-selected` を書かず、各対象に `below-minimum` を付けて空の選定を返す。
+旧世代の既往は host 設定の `legacyHistory: {"file": "/abs/legacy-slugs.json"}` で渡す。`select` のたびに読み、`started` を `legacy-started`、`ambiguous` を `legacy-ambiguous` として除外し、`reconsider` の slug は既往と過去の Trial を無視して戻す。file が無ければ `select` は `legacy history unavailable` と表示して進むが、候補源による `campaign run` と `continuous run` は起動しない。digest と件数は選定レポートに残し、実行時に digest が異なれば `legacy-history-changed` で止まる。`select --minimum <n>`（既定 3、runner は 1）未満しか固定できないときは、台帳に `target-selected` を書かず、各対象に `below-minimum` を付けて空の選定を返す。
 
-列挙は人気順 10 頁と方針のタグ 8 個を各 1 頁、1 頁 50 件、候補 1,000 件まで読む（schema の上限は `popularPages` 20、`maxCandidates` 2,000）。`revisitPolicy` は `never` で、版や prompt 版が変わっても探索を始めた slug は戻らない。下限だけを変えた写し `selection.50000.json` と `selection.30000.json` を同じ場所に置き、起動時に所有者が選ぶ。方針 file を差し替えると policy digest が変わり束縛済みの batch を再開できないので、batch の境界で入れ替える。
+列挙は人気順 10 頁と方針のタグ 8 個を各 1 頁、1 頁 50 件、候補 1,000 件まで読む（schema の上限は `popularPages` 20、`maxCandidates` 2,000）。`revisitPolicy` は `never` で、版や prompt 版が変わっても Trial として数えた slug は戻らない。下限だけを変えた写し `selection.50000.json` と `selection.30000.json` を同じ場所に置き、起動時に所有者が選ぶ。方針 file を差し替えると policy digest が変わり束縛済みの batch を再開できないので、batch の境界で入れ替える。
 
 legacy JSON は起動前に 1 回作る。旧研究 DB の slug を返す SQL は実物の schema を見て書く。
 

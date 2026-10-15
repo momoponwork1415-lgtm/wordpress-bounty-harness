@@ -122,10 +122,16 @@ test("folds the old DB and old ledgers into started / ambiguous and counts what 
     reconsider: ["db-maybe"],
     sources: [dbPath, state],
   });
+  expect(
+    wordPressLegacyHistorySchema.parse({
+      ...exported,
+      reconsider: ["db-started", "fresh-big"],
+    }).reconsider,
+  ).toEqual(["db-started", "fresh-big"]);
   expect(() =>
     wordPressLegacyHistorySchema.parse({
       ...exported,
-      reconsider: ["db-started"],
+      reconsider: ["db-maybe", "db-maybe"],
     }),
   ).toThrow("duplicate or conflicting slugs");
   expect(result.stderr).toContain("started 2  ambiguous 1  reconsider 1");
@@ -148,6 +154,6 @@ test("folds the old DB and old ledgers into started / ambiguous and counts what 
     [script, "--state", state, "--reconsider", "both"],
     { encoding: "utf8" },
   );
-  expect(startedReconsider.status).toBe(2);
-  expect(startedReconsider.stderr).toContain("ambiguous, unstarted slug");
+  expect(startedReconsider.status).toBe(0);
+  expect(JSON.parse(startedReconsider.stdout).reconsider).toEqual(["both"]);
 });

@@ -56,7 +56,7 @@ function started(
   });
 }
 
-/** A selection whose exploration Trial started. */
+/** A selection with source work and a finished exploration Trial. */
 function trial(
   slug: string,
   version: string,
@@ -64,9 +64,30 @@ function trial(
   snapshotDigest = digest("a"),
   promptVariant = "wp2shell-bounty-v2",
 ) {
+  const run = started(promptVariant, campaignId, snapshotDigest);
   return [
     selected(slug, version, campaignId, snapshotDigest),
-    started(promptVariant, campaignId, snapshotDigest),
+    run,
+    ledgerEventV1Schema.parse({
+      ...base(campaignId, snapshotDigest, `finish-${run.runId}`),
+      type: "discovery-run-finished",
+      runId: run.runId,
+      outcome: "completed",
+      costUsd: "unavailable",
+      wallTimeMs: 1000,
+      observed: {
+        toolCalls: 1,
+        filesRead: 1,
+        uniqueFilesRead: 1,
+        labRequests: 0,
+        dbQueries: 0,
+      },
+      brokerMetrics: {
+        forwardedRequests: 2,
+        requestLimitExceeded: 0,
+        unauthorizedRequests: 0,
+      },
+    }),
   ];
 }
 
@@ -221,10 +242,8 @@ describe("WordPress ledger exclusions", () => {
 
   it("requires a known and changed prompt version for every earlier selection", () => {
     const ledger = reader([
-      selected("seen", "1.2.0"),
-      started("wp2shell-bounty-v2"),
-      selected("seen", "1.3.0", "campaign-2", digest("b")),
-      started("wp2shell-bounty-v3", "campaign-2", digest("b")),
+      ...trial("seen", "1.2.0"),
+      ...trial("seen", "1.3.0", "campaign-2", digest("b"), "wp2shell-bounty-v3"),
     ]);
     expect(
       inspect(
@@ -259,10 +278,7 @@ describe("WordPress ledger exclusions", () => {
   });
 
   it("uses either configured change without accepting equal or older versions", () => {
-    const ledger = reader([
-      selected("seen", "2.0.0"),
-      started("wp2shell-bounty-v2"),
-    ]);
+    const ledger = reader(trial("seen", "2.0.0"));
     expect(
       inspect(
         ledger,
@@ -293,11 +309,11 @@ describe("WordPress ledger exclusions", () => {
     ).toEqual(["previously-selected"]);
   });
 
-  it("only reconsiders ambiguous legacy slugs and preserves current Trial exclusions", () => {
+  it("lets the owner reconsider legacy and current Trial exclusions", () => {
     const legacyHistory = {
       started: new Set(["old-started", "back"]),
       ambiguous: new Set(["old-ambiguous", "held"]),
-      reconsider: new Set(["held", "retried"]),
+      reconsider: new Set(["back", "held", "retried"]),
       digest: digest("f"),
     };
     const result = inspectWordPressLedgerExclusions({
@@ -317,14 +333,14 @@ describe("WordPress ledger exclusions", () => {
     expect(result.map(({ slug, reasons }) => [slug, reasons])).toEqual([
       ["old-started", ["legacy-started"]],
       ["old-ambiguous", ["legacy-ambiguous"]],
-      ["back", ["legacy-started"]],
+      ["back", []],
       ["held", []],
-      ["retried", ["previously-selected"]],
+      ["retried", []],
       ["new", []],
     ]);
   });
 
-  it("holds a started refusal when zero observed activity cannot prove non-Trial", () => {
+  it("does not count a run that read nothing and started no child as a Trial", () => {
     const finished = (
       runId: string,
       snapshotDigest: string,
@@ -346,8 +362,9 @@ describe("WordPress ledger exclusions", () => {
       dbQueries: 0,
     });
     const ledger = reader([
-      // Zero observed source and child activity is only a lower bound.
-      ...trial("refused", "1.0.0", "campaign-1", digest("a")),
+      // Refused at once: no source read, no child, one forwarded request.
+      selected("refused", "1.0.0", "campaign-1", digest("a")),
+      started("wp2shell-bounty-v2", "campaign-1", digest("a")),
       finished("run-campaign-1-wp2shell-bounty-v2", digest("a"), {
         outcome: "failed",
         reason: "provider",
@@ -360,7 +377,8 @@ describe("WordPress ledger exclusions", () => {
         },
       }),
       // Ran partway into a quota: it is a Trial.
-      ...trial("limited", "1.0.0", "campaign-1", digest("b"), "v3"),
+      selected("limited", "1.0.0", "campaign-1", digest("b")),
+      started("v3", "campaign-1", digest("b")),
       finished("run-campaign-1-v3", digest("b"), {
         outcome: "provider-limited",
         reason: "provider",
@@ -373,10 +391,35 @@ describe("WordPress ledger exclusions", () => {
         { slug: "refused", version: "1.0.0" },
         { slug: "limited", version: "1.0.0" },
       ]).map(({ reasons }) => reasons),
-    ).toEqual([["previously-selected"], ["previously-selected"]]);
+    ).toEqual([[], ["previously-selected"]]);
   });
 
-  it("never revisits a started slug, even on a higher version", () => {
+  it("returns a start-only attempt to the next selection", () => {
+    const ledger = reader([
+      selected("retry", "1.0.0"),
+      started("wp2shell-bounty-v2"),
+    ]);
+    expect(
+      inspect(ledger, [{ slug: "retry", version: "1.0.0" }])[0]?.reasons,
+    ).toEqual([]);
+  });
+
+  it("ignores an unmatched start and a child-only record", () => {
+    const child = ledgerEventV1Schema.parse({
+      ...started("wp2shell-bounty-v2", "campaign-2", digest("b")),
+      runKind: "child",
+      parentRunId: "another-root",
+    });
+    const ledger = reader([
+      started("wp2shell-bounty-v2", "campaign-1", digest("a")),
+      selected("retry", "1.0.0", "campaign-2", digest("b")),
+      child,
+    ]);
+    expect(inspect(ledger, [{ slug: "retry", version: "1.0.0" }])[0]?.reasons)
+      .toEqual([]);
+  });
+
+  it("never revisits a spent slug, even on a higher version", () => {
     expect(
       inspect(reader(trial("seen", "1.0.0")), [
         { slug: "seen", version: "9.0.0" },

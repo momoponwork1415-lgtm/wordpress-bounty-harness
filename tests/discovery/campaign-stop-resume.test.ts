@@ -17,6 +17,7 @@ import {
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
 import { admitWordPressFinding } from "../../src/profiles/wordpress/discovery/finding.js";
+import { inspectWordPressLedgerExclusions } from "../../src/profiles/wordpress/selection/ledger-exclusions.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const profile = defineAgentRuntimeProfile({
@@ -258,6 +259,57 @@ async function open() {
 }
 
 describe("discovery campaign stop and resume", () => {
+  it("reuses ordinal 0 after a start-only crash and returns its slug to selection", async () => {
+    const { ledger, campaign } = await open();
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: "campaign-1",
+      snapshotDigest: digest,
+      occurredAt: "2026-10-08T07:00:00Z",
+    };
+    await ledger.append({
+      ...base,
+      identity: "retry-selection",
+      type: "target-selected",
+      selectionId: "wporg:retry@1.0.0",
+    });
+    await ledger.append({
+      ...base,
+      identity: "abandoned-start",
+      type: "discovery-run-started",
+      runId: "abandoned-0",
+      trialId: "abandoned-0",
+      trialOrdinal: 0,
+      runKind: "explore",
+      labId: "lab-1",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "short-objective",
+        assignmentUnit: "plugin",
+      },
+    });
+    const candidates = [{ slug: "retry", version: "1.0.0" }];
+    const inspect = () =>
+      inspectWordPressLedgerExclusions({
+        ledger,
+        candidates,
+        currentPromptVariant: "short-objective",
+        revisitPolicy: { kind: "never" },
+      })[0]?.reasons;
+    expect(inspect()).toEqual([]);
+
+    const result = await campaign({ prefix: "resume", replies: () => "empty" });
+    expect(result).toMatchObject({ runCount: 6, stoppedBy: "no-new-finding" });
+    const starts = ledger.read({ type: "discovery-run-started" });
+    expect(starts[1]?.event).toMatchObject({
+      runId: "resume-0",
+      trialOrdinal: 0,
+      campaignId: "campaign-1",
+    });
+    expect(inspect()).toEqual(["previously-selected"]);
+    expect(ledger.read({ type: "discovery-concluded" })).toHaveLength(1);
+  });
+
   it("counts a historical stage-tagged exploration while excluding its child", async () => {
     const { ledger, campaign } = await open();
     const historical = {

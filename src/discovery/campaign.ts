@@ -5,7 +5,7 @@ import {
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
-import type { Ledger } from "../ledger/index.js";
+import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 import type {
   DiscoveryTransportRun,
   DiscoveryTransportResult,
@@ -16,6 +16,7 @@ import {
 } from "./native-run-receipts.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import { createReportRecorder } from "./record-discovery-report.js";
+import { countsAsTrial } from "./trial-accounting.js";
 import {
   recoverChildAgentReports,
   recoverRootAgentReport,
@@ -347,10 +348,11 @@ export async function runDiscoveryCampaign(options: {
   ).at(0);
   if (concluded?.type === "discovery-concluded")
     return { runCount: 0, findingsRecorded: 0, stoppedBy: concluded.stoppedBy };
-  // Starting a Trial consumes its ordinal, even when the transport later
-  // records an incomplete or provider-limited receipt. A resumed campaign may
-  // verify already recorded claims, but never starts a replacement Trial.
+  // A start without a finish or child is an unspent attempt (SPEC §6).
+  // Keep explicit ordinals so parallel runs cannot create a misleading count.
   const startedExplorations = new Set<string>();
+  const childParents = new Set<string>();
+  const ordinalByRun = new Map<string, number>();
   let startAfterSequence = 0;
   for (;;) {
     const page = options.ledger.read({
@@ -359,18 +361,57 @@ export async function runDiscoveryCampaign(options: {
       afterSequence: startAfterSequence,
       limit: 1000,
     });
-    for (const { event } of page)
+    for (const { event } of page) {
       if (
-        event.type === "discovery-run-started" &&
-        event.snapshotDigest === input.snapshotDigest &&
-        // Historical events had no runKind and each represented exploration.
-        (event.runKind ?? "explore") === "explore"
+        event.type !== "discovery-run-started" ||
+        event.snapshotDigest !== input.snapshotDigest
       )
+        continue;
+      if (event.runKind === "child") {
+        if (event.parentRunId !== undefined)
+          childParents.add(event.parentRunId);
+      } else if ((event.runKind ?? "explore") === "explore") {
         startedExplorations.add(event.runId);
+        if (event.trialOrdinal !== undefined)
+          ordinalByRun.set(event.runId, event.trialOrdinal);
+      }
+    }
     if (page.length < 1000) break;
     startAfterSequence = page[page.length - 1]!.sequence;
   }
-  const spent = startedExplorations.size;
+  const recordedFinishes = () => {
+    const finishes = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "discovery-run-finished" }>
+    >();
+    let afterSequence = 0;
+    for (;;) {
+      const page = options.ledger.read({
+        campaignId: options.campaignId,
+        type: "discovery-run-finished",
+        afterSequence,
+        limit: 1000,
+      });
+      for (const { event } of page)
+        if (
+          event.type === "discovery-run-finished" &&
+          event.snapshotDigest === input.snapshotDigest
+        )
+          finishes.set(event.runId, event);
+      if (page.length < 1000) return finishes;
+      afterSequence = page[page.length - 1]!.sequence;
+    }
+  };
+  const priorFinishes = recordedFinishes();
+  const spentOrdinals = new Set<number>();
+  let legacySpent = 0;
+  for (const runId of startedExplorations) {
+    if (!countsAsTrial(priorFinishes.get(runId), childParents.has(runId)))
+      continue;
+    const ordinal = ordinalByRun.get(runId);
+    if (ordinal === undefined) legacySpent++;
+    else spentOrdinals.add(ordinal);
+  }
   const seen = new Set<string>();
   let noNewFindings = 0;
   let runCount = 0;
@@ -389,7 +430,16 @@ export async function runDiscoveryCampaign(options: {
   )
     throw new Error("Invalid exploration wall time");
   const limit = Math.min(input.stopRules.maxRuns, options.plannedTrials.length);
-  let next = spent;
+  for (let ordinal = 0; ordinal < limit && legacySpent > 0; ordinal++)
+    if (!spentOrdinals.has(ordinal)) {
+      spentOrdinals.add(ordinal);
+      legacySpent--;
+    }
+  const pendingOrdinals = Array.from(
+    { length: limit },
+    (_, ordinal) => ordinal,
+  ).filter((ordinal) => !spentOrdinals.has(ordinal));
+  let next = 0;
   const runOne = async (index: number) => {
     const trial = options.plannedTrials[index]!;
     if (
@@ -632,39 +682,21 @@ export async function runDiscoveryCampaign(options: {
       stopped ??= "no-new-finding";
   };
   const worker = async () => {
-    while (stopped === undefined && next < limit) {
-      await runOne(next++);
+    while (stopped === undefined && next < pendingOrdinals.length) {
+      await runOne(pendingOrdinals[next++]!);
     }
   };
   await Promise.all(Array.from({ length: concurrency }, worker));
-  const outcomes = new Map<
-    string,
-    "completed" | "failed" | "provider-limited" | "setup-failed"
-  >();
-  let finishAfterSequence = 0;
-  for (;;) {
-    const page = options.ledger.read({
-      campaignId: options.campaignId,
-      type: "discovery-run-finished",
-      afterSequence: finishAfterSequence,
-      limit: 1000,
-    });
-    for (const { event } of page)
-      if (
-        event.type === "discovery-run-finished" &&
-        event.snapshotDigest === input.snapshotDigest &&
-        startedExplorations.has(event.runId)
-      )
-        outcomes.set(event.runId, event.outcome);
-    if (page.length < 1000) break;
-    finishAfterSequence = page[page.length - 1]!.sequence;
-  }
-  const recordedFailure = [...startedExplorations].some(
-    (runId) => outcomes.get(runId) === "provider-limited",
+  const outcomes = recordedFinishes();
+  const countedRuns = [...startedExplorations].filter((runId) =>
+    countsAsTrial(outcomes.get(runId), childParents.has(runId)),
+  );
+  const recordedFailure = countedRuns.some(
+    (runId) => outcomes.get(runId)?.outcome === "provider-limited",
   )
     ? "provider-limit"
-    : [...startedExplorations].some(
-          (runId) => outcomes.get(runId) !== "completed",
+    : countedRuns.some(
+          (runId) => outcomes.get(runId)?.outcome !== "completed",
         )
       ? "incomplete"
       : undefined;
@@ -674,7 +706,7 @@ export async function runDiscoveryCampaign(options: {
     (options.plannedTrials.length >= input.stopRules.maxRuns
       ? "max-runs"
       : "plans-exhausted");
-  // A started Trial remains spent on resume, including incomplete attempts.
+  // A counted Trial remains spent on resume, including incomplete attempts.
   if (stoppedBy !== "provider-limit" && stoppedBy !== "incomplete") {
     const recorded = await options.ledger.append({
       schemaVersion: 1,

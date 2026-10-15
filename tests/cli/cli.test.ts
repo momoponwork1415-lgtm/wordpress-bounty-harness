@@ -3348,6 +3348,54 @@ describe("harness CLI vertical slice", () => {
     expect(replay.code).toBe(1);
     expect(replay.stderr).toContain("requires revisitPolicy: never");
     expect(ledger().read({ campaignId: "campaign-replay" })).toHaveLength(0);
+
+    // A batch reserved before legacy digests existed cannot resume unchanged.
+    await writeFile(policyPath, JSON.stringify(replayPolicy));
+    const oldReport = JSON.parse(reportFile.bytes.toString("utf8"));
+    delete oldReport.legacyHistory;
+    const oldReportDigest = await store().putFiles({
+      "selection-report.json": JSON.stringify(oldReport),
+    });
+    for (const [index, { event }] of reservations.slice(0, 3).entries()) {
+      if (event.type !== "target-selected") throw new Error("Expected selection");
+      expect(
+        (
+          await ledger().append({
+            ...event,
+            campaignId: "selection-pre-digest",
+            identity: `pre-digest-${index}`,
+            artifacts: event.artifacts.map((artifact) =>
+              artifact.kind === "selection-report"
+                ? { ...artifact, digest: oldReportDigest }
+                : artifact,
+            ),
+          })
+        ).status,
+      ).toBe("appended");
+    }
+    const preDigest = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-pre-digest",
+      "--config",
+      configPath,
+    );
+    expect(preDigest.code).toBe(1);
+    expect(preDigest.stderr).toContain("legacy-history-changed");
+    expect(ledger().read({ campaignId: "campaign-pre-digest" })).toHaveLength(0);
+
+    await writeFile(
+      legacyHistoryFile,
+      JSON.stringify({
+        ...JSON.parse(originalHistory),
+        reconsider: ["item-a"],
+      }),
+    );
+    const reconsidered = await run("select", "--config", policyPath);
+    expect(reconsidered.code).toBe(0);
+    expect(reconsidered.stderr).not.toContain("Legacy history is invalid");
   });
 
   it("runs the continuous runner on the host status, stops it, and reports it", async () => {
