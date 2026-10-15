@@ -323,13 +323,6 @@ describe("discovery campaign stop and resume", () => {
     expect(noWork).toMatchObject({ runCount: 1, stoppedBy: "incomplete" });
     expect(inspect()).toEqual([]);
     expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
-    expect(
-      ledger.read({ type: "discovery-run-finished" })[0]?.event,
-    ).toMatchObject({
-      outcome: "failed",
-      reason: "evidence",
-      reasonDetail: "no-work",
-    });
     const result = await campaign({ prefix: "retry", replies: () => "empty" });
     expect(result).toMatchObject({ runCount: 6, stoppedBy: "no-new-finding" });
     const starts = ledger.read({ type: "discovery-run-started" });

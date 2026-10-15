@@ -3366,9 +3366,9 @@ describe("harness CLI vertical slice", () => {
     );
     expect(preDigest.code).toBe(1);
     expect(preDigest.stderr).toContain("legacy-history-changed");
-    expect(
-      ledger().read({ campaignId: "campaign-pre-digest" }),
-    ).toHaveLength(0);
+    expect(ledger().read({ campaignId: "campaign-pre-digest" })).toHaveLength(
+      0,
+    );
 
     await writeFile(
       legacyHistoryFile,

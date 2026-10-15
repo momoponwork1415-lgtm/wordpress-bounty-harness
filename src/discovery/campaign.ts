@@ -349,7 +349,6 @@ export async function runDiscoveryCampaign(options: {
   if (concluded?.type === "discovery-concluded")
     return { runCount: 0, findingsRecorded: 0, stoppedBy: concluded.stoppedBy };
   // A start without a finish or child is an unspent attempt (SPEC §6).
-  // Keep explicit ordinals so parallel runs cannot create a misleading count.
   const startedExplorations = new Set<string>();
   const childParents = new Set<string>();
   const ordinalByRun = new Map<string, number>();
@@ -682,8 +681,7 @@ export async function runDiscoveryCampaign(options: {
     };
     const explore = await executePlanned(trial.explore);
     if (!explore.counted) {
-      if (explore.outcome === "provider-limited")
-        stopped ??= "provider-limit";
+      if (explore.outcome === "provider-limited") stopped ??= "provider-limit";
       else stopped ??= "incomplete";
       return;
     }
@@ -712,9 +710,7 @@ export async function runDiscoveryCampaign(options: {
     (runId) => outcomes.get(runId)?.outcome === "provider-limited",
   )
     ? "provider-limit"
-    : countedRuns.some(
-          (runId) => outcomes.get(runId)?.outcome !== "completed",
-        )
+    : countedRuns.some((runId) => outcomes.get(runId)?.outcome !== "completed")
       ? "incomplete"
       : undefined;
   const stoppedBy =
