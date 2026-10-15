@@ -122,10 +122,16 @@ test("folds the old DB and old ledgers into started / ambiguous and counts what 
     reconsider: ["db-maybe"],
     sources: [dbPath, state],
   });
-  expect(() =>
+  expect(
     wordPressLegacyHistorySchema.parse({
       ...exported,
       reconsider: ["db-started"],
+    }).reconsider,
+  ).toEqual(["db-started"]);
+  expect(() =>
+    wordPressLegacyHistorySchema.parse({
+      ...exported,
+      reconsider: ["db-started", "db-started"],
     }),
   ).toThrow("duplicate or conflicting slugs");
   expect(result.stderr).toContain("started 2  ambiguous 1  reconsider 1");
@@ -145,9 +151,29 @@ test("folds the old DB and old ledgers into started / ambiguous and counts what 
   expect(relative.status).toBe(2);
   const startedReconsider = spawnSync(
     process.execPath,
-    [script, "--state", state, "--reconsider", "both"],
+    [
+      script,
+      "--db",
+      dbPath,
+      "--db-started-sql",
+      "SELECT plugin AS slug FROM runs WHERE started = 1",
+      "--state",
+      state,
+      "--report",
+      reportPath,
+      "--reconsider",
+      "both",
+      "--reconsider",
+      "db-started",
+    ],
     { encoding: "utf8" },
   );
-  expect(startedReconsider.status).toBe(2);
-  expect(startedReconsider.stderr).toContain("ambiguous, unstarted slug");
+  expect(startedReconsider.status).toBe(0);
+  expect(JSON.parse(startedReconsider.stdout).reconsider).toEqual([
+    "both",
+    "db-started",
+  ]);
+  expect(startedReconsider.stderr).toContain(
+    "floor 100000  enumerable 2  legacy 0  remaining 2",
+  );
 });

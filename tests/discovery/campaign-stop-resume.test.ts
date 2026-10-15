@@ -17,6 +17,7 @@ import {
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
 import { admitWordPressFinding } from "../../src/profiles/wordpress/discovery/finding.js";
+import { inspectWordPressLedgerExclusions } from "../../src/profiles/wordpress/selection/ledger-exclusions.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const profile = defineAgentRuntimeProfile({
@@ -277,6 +278,7 @@ describe("discovery campaign stop and resume", () => {
       identity: "historical-explore",
       type: "discovery-run-started",
       runId: "old-root",
+      trialOrdinal: 1,
       stage: "screening",
     });
     await ledger.append({
@@ -288,19 +290,86 @@ describe("discovery campaign stop and resume", () => {
       parentRunId: "old-root",
       stage: "screening",
     });
+    await ledger.append({
+      ...historical,
+      identity: "unspent-start",
+      type: "discovery-run-started",
+      runId: "unfinished-root",
+      trialOrdinal: 0,
+      runKind: "explore",
+    });
     const result = await campaign({
       prefix: "new",
       replies: () => "finding",
     });
-    // The legacy explore event has no finish. Resume must retain that typed
-    // incomplete state even after all remaining Trial ordinals finish.
+    // The child start proves a partial legacy Trial even without a root finish.
     expect(result).toMatchObject({ runCount: 5, stoppedBy: "incomplete" });
     expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
     expect(
       ledger
         .read({ type: "discovery-run-started" })
         .filter(({ event }) => event.type === "discovery-run-started"),
-    ).toHaveLength(7);
+    ).toHaveLength(8);
+    expect(
+      ledger.read({ type: "discovery-run-started" })[3]?.event,
+    ).toMatchObject({ runId: "new-0", trialOrdinal: 0 });
+    expect(
+      ledger
+        .read({ type: "discovery-run-started" })
+        .some(
+          ({ event }) =>
+            event.type === "discovery-run-started" && event.runId === "new-1",
+        ),
+    ).toBe(false);
+  });
+
+  it("reuses ordinal zero after a start-only attempt and returns its slug to selection (#270)", async () => {
+    const { ledger, campaign } = await open();
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: "campaign-1",
+      snapshotDigest: digest,
+      occurredAt: "2026-10-08T07:00:00Z",
+    };
+    await ledger.append({
+      ...base,
+      identity: "selection-retry",
+      type: "target-selected",
+      selectionId: "wporg:retry@1.0.0",
+    });
+    await ledger.append({
+      ...base,
+      identity: "start-without-receipt",
+      type: "discovery-run-started",
+      runId: "attempt-0",
+      trialId: "attempt-0",
+      trialOrdinal: 0,
+      runKind: "explore",
+      labId: "lab-1",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "short-objective",
+        assignmentUnit: "plugin",
+      },
+    });
+    expect(ledger.read({ type: "discovery-run-finished" })).toHaveLength(0);
+    expect(
+      inspectWordPressLedgerExclusions({
+        ledger,
+        candidates: [{ slug: "retry", version: "1.0.0" }],
+        currentPromptVariant: "short-objective",
+        revisitPolicy: { kind: "never" },
+      })[0]?.reasons,
+    ).toEqual([]);
+
+    const resumed = await campaign({ prefix: "retry", replies: () => "empty" });
+    expect(resumed).toMatchObject({ runCount: 6, stoppedBy: "no-new-finding" });
+    const starts = ledger.read({ type: "discovery-run-started" });
+    expect(starts[1]?.event).toMatchObject({
+      campaignId: "campaign-1",
+      runId: "retry-0",
+      trialOrdinal: 0,
+    });
   });
 
   it("concludes a campaign with a maximum-length id", async () => {

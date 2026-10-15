@@ -26,8 +26,7 @@ export const wordPressLegacyHistorySchema = z
         startedSlugs.size === started.length &&
         ambiguousSlugs.size === ambiguous.length &&
         new Set(reconsider).size === reconsider.length &&
-        started.every((item) => !ambiguousSlugs.has(item)) &&
-        reconsider.every((item) => ambiguousSlugs.has(item))
+        started.every((item) => !ambiguousSlugs.has(item))
       );
     },
     { message: "Legacy history has duplicate or conflicting slugs" },

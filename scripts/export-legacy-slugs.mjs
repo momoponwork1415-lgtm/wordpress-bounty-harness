@@ -95,9 +95,6 @@ for (const item of started) ambiguous.delete(item);
 const reconsider = new Set(
   values.reconsider.map((item) => slug(item, "--reconsider")),
 );
-for (const item of reconsider)
-  if (!ambiguous.has(item) || started.has(item))
-    fail(`--reconsider requires an ambiguous, unstarted slug: ${item}`);
 const sorted = (set) => [...set].sort();
 process.stdout.write(
   `${JSON.stringify(
@@ -119,7 +116,8 @@ process.stderr.write(
 );
 
 // Remaining candidates per floor: eligible slugs in `select` reports (run the
-// lowest-floor policy on a scratch state) minus started and ambiguous.
+// lowest-floor policy on a scratch state) minus legacy exclusions, with owner
+// reconsider overrides restored.
 if (values.report.length > 0) {
   const installs = new Map();
   for (const path of values.report) {
@@ -132,7 +130,7 @@ if (values.report.length > 0) {
     const eligible = [...installs].filter(([, count]) => count >= floor);
     const remaining = eligible.filter(
       ([item]) =>
-        !started.has(item) && (!ambiguous.has(item) || reconsider.has(item)),
+        reconsider.has(item) || !(started.has(item) || ambiguous.has(item)),
     );
     process.stderr.write(
       `floor ${floor}  enumerable ${eligible.length}  legacy ${eligible.length - remaining.length}  remaining ${remaining.length}\n`,

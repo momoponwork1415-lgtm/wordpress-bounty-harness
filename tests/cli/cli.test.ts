@@ -3202,9 +3202,6 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(changedHistory.stderr).toContain("legacy-history-changed");
-    expect(
-      ledger().read({ campaignId: "campaign-changed-history" }),
-    ).toHaveLength(0);
     await writeFile(legacyHistoryFile, originalHistory);
     expect(first.stdout).toContain(
       "excluded wporg:item-d  reasons below-rank-cutoff",
@@ -3347,7 +3344,64 @@ describe("harness CLI vertical slice", () => {
     );
     expect(replay.code).toBe(1);
     expect(replay.stderr).toContain("requires revisitPolicy: never");
-    expect(ledger().read({ campaignId: "campaign-replay" })).toHaveLength(0);
+
+    // A batch bound before legacy digests were recorded parses as null. The
+    // resumed campaign stops before writing another event until reselected.
+    await writeFile(
+      policyPath,
+      JSON.stringify({ ...replayPolicy, revisitPolicy: { kind: "never" } }),
+    );
+    const oldSelection = reservations[0]?.event;
+    if (oldSelection?.type !== "target-selected")
+      throw new Error("Expected a reserved target");
+    const oldReport = JSON.parse(reportFile.bytes.toString("utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete oldReport.legacyHistory;
+    oldReport.selectedSnapshotDigests = [oldSelection.snapshotDigest];
+    const oldReportDigest = await store().putFiles({
+      "selection-report.json": JSON.stringify(oldReport),
+    });
+    const oldBatchId = "selection-legacy-null";
+    expect(
+      await ledger().append({
+        ...oldSelection,
+        identity: "old-selection-without-legacy-digest",
+        campaignId: oldBatchId,
+        artifacts: oldSelection.artifacts.map((artifact) =>
+          artifact.kind === "selection-report"
+            ? { kind: "selection-report" as const, digest: oldReportDigest }
+            : artifact,
+        ),
+      }),
+    ).toMatchObject({ status: "appended" });
+    expect(
+      await ledger().append({
+        schemaVersion: 1,
+        identity: "old-bound-batch",
+        campaignId: "campaign-old-bound",
+        snapshotDigest: oldSelection.snapshotDigest,
+        occurredAt: now,
+        type: "selection-batch-bound",
+        selectionBatchId: oldBatchId,
+        policyDigest: oldReport.policyDigest as string,
+        selectionIds: [oldSelection.selectionId],
+        artifacts: [{ kind: "selection-report", digest: oldReportDigest }],
+      }),
+    ).toMatchObject({ status: "appended" });
+    const oldResume = await run(
+      "campaign",
+      "run",
+      "item-a",
+      "--campaign",
+      "campaign-old-bound",
+      "--config",
+      configPath,
+    );
+    expect(oldResume.code).toBe(1);
+    expect(oldResume.stderr).toContain("legacy-history-changed");
+    expect(ledger().read({ campaignId: "campaign-old-bound" })).toHaveLength(1);
   });
 
   it("runs the continuous runner on the host status, stops it, and reports it", async () => {

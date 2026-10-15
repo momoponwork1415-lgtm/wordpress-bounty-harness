@@ -56,7 +56,26 @@ function started(
   });
 }
 
-/** A selection whose exploration Trial started. */
+function finished(
+  promptVariant: string,
+  campaignId = "campaign-1",
+  snapshotDigest = digest("a"),
+) {
+  return ledgerEventV1Schema.parse({
+    ...base(
+      campaignId,
+      snapshotDigest,
+      `finish-${campaignId}-${promptVariant}`,
+    ),
+    type: "discovery-run-finished",
+    runId: `run-${campaignId}-${promptVariant}`,
+    outcome: "completed",
+    costUsd: "unavailable",
+    wallTimeMs: 1000,
+  });
+}
+
+/** A selection with a completed exploration Trial. */
 function trial(
   slug: string,
   version: string,
@@ -67,6 +86,7 @@ function trial(
   return [
     selected(slug, version, campaignId, snapshotDigest),
     started(promptVariant, campaignId, snapshotDigest),
+    finished(promptVariant, campaignId, snapshotDigest),
   ];
 }
 
@@ -221,10 +241,14 @@ describe("WordPress ledger exclusions", () => {
 
   it("requires a known and changed prompt version for every earlier selection", () => {
     const ledger = reader([
-      selected("seen", "1.2.0"),
-      started("wp2shell-bounty-v2"),
-      selected("seen", "1.3.0", "campaign-2", digest("b")),
-      started("wp2shell-bounty-v3", "campaign-2", digest("b")),
+      ...trial("seen", "1.2.0"),
+      ...trial(
+        "seen",
+        "1.3.0",
+        "campaign-2",
+        digest("b"),
+        "wp2shell-bounty-v3",
+      ),
     ]);
     expect(
       inspect(
@@ -259,10 +283,7 @@ describe("WordPress ledger exclusions", () => {
   });
 
   it("uses either configured change without accepting equal or older versions", () => {
-    const ledger = reader([
-      selected("seen", "2.0.0"),
-      started("wp2shell-bounty-v2"),
-    ]);
+    const ledger = reader([...trial("seen", "2.0.0")]);
     expect(
       inspect(
         ledger,
@@ -293,11 +314,11 @@ describe("WordPress ledger exclusions", () => {
     ).toEqual(["previously-selected"]);
   });
 
-  it("only reconsiders ambiguous legacy slugs and preserves current Trial exclusions", () => {
+  it("lets owner reconsider override legacy and earlier Trial exclusions", () => {
     const legacyHistory = {
       started: new Set(["old-started", "back"]),
       ambiguous: new Set(["old-ambiguous", "held"]),
-      reconsider: new Set(["held", "retried"]),
+      reconsider: new Set(["back", "held", "retried"]),
       digest: digest("f"),
     };
     const result = inspectWordPressLedgerExclusions({
@@ -317,14 +338,14 @@ describe("WordPress ledger exclusions", () => {
     expect(result.map(({ slug, reasons }) => [slug, reasons])).toEqual([
       ["old-started", ["legacy-started"]],
       ["old-ambiguous", ["legacy-ambiguous"]],
-      ["back", ["legacy-started"]],
+      ["back", []],
       ["held", []],
-      ["retried", ["previously-selected"]],
+      ["retried", []],
       ["new", []],
     ]);
   });
 
-  it("holds a started refusal when zero observed activity cannot prove non-Trial", () => {
+  it("reselects a fully observed non-Trial and retains a partial Trial", () => {
     const finished = (
       runId: string,
       snapshotDigest: string,
@@ -346,8 +367,8 @@ describe("WordPress ledger exclusions", () => {
       dbQueries: 0,
     });
     const ledger = reader([
-      // Zero observed source and child activity is only a lower bound.
-      ...trial("refused", "1.0.0", "campaign-1", digest("a")),
+      selected("refused", "1.0.0", "campaign-1", digest("a")),
+      started("wp2shell-bounty-v2", "campaign-1", digest("a")),
       finished("run-campaign-1-wp2shell-bounty-v2", digest("a"), {
         outcome: "failed",
         reason: "provider",
@@ -360,7 +381,8 @@ describe("WordPress ledger exclusions", () => {
         },
       }),
       // Ran partway into a quota: it is a Trial.
-      ...trial("limited", "1.0.0", "campaign-1", digest("b"), "v3"),
+      selected("limited", "1.0.0", "campaign-1", digest("b")),
+      started("v3", "campaign-1", digest("b")),
       finished("run-campaign-1-v3", digest("b"), {
         outcome: "provider-limited",
         reason: "provider",
@@ -373,7 +395,23 @@ describe("WordPress ledger exclusions", () => {
         { slug: "refused", version: "1.0.0" },
         { slug: "limited", version: "1.0.0" },
       ]).map(({ reasons }) => reasons),
-    ).toEqual([["previously-selected"], ["previously-selected"]]);
+    ).toEqual([[], ["previously-selected"]]);
+  });
+
+  it("ignores child runs when counting exploration Trials", () => {
+    const child = ledgerEventV1Schema.parse({
+      ...started("wp2shell-bounty-v2"),
+      runKind: "child",
+      parentRunId: "root-run",
+    });
+    const ledger = reader([
+      selected("child-only", "1.0.0"),
+      child,
+      finished("wp2shell-bounty-v2"),
+    ]);
+    expect(
+      inspect(ledger, [{ slug: "child-only", version: "1.0.0" }])[0]?.reasons,
+    ).toEqual([]);
   });
 
   it("never revisits a started slug, even on a higher version", () => {
