@@ -250,7 +250,6 @@ describe("continuous runner", () => {
     const paths = continuousPaths(t.root);
     const committed = await readFile(paths.memo, "utf8");
     expect((await stat(paths.memo)).mode & 0o777).toBe(0o600);
-    expect(existsSync(paths.initialized)).toBe(true);
     await writeFile(`${paths.memo}.crashed.tmp`, '{"state":"running"');
     await rm(paths.stop);
 
@@ -260,55 +259,112 @@ describe("continuous runner", () => {
     expect(existsSync(`${paths.memo}.crashed.tmp`)).toBe(true);
   });
 
-  it("fails closed when a previously initialized runner loses its memo", async () => {
-    const t = await setup([async () => ({})]);
-    expect(await t.runner.run()).toBe("operator");
-    const paths = continuousPaths(t.root);
-    await rm(paths.stop);
-    await rm(paths.memo);
-    const campaigns = t.calls.length;
+  it("recreates a missing memo and runs the unbound ledger batch once", async () => {
     let cleanups = 0;
     let selects = 0;
-    t.deps.cleanupLeftovers = async () => ++cleanups;
-    t.deps.select = async () => (
-      selects++,
-      { batchId: "selection-9", targets: ["a"] }
-    );
-
-    expect(await createContinuousRunner(t.deps).run()).toBe("errors");
-    expect({ cleanups, selects, campaigns: t.calls.length }).toEqual({
-      cleanups: 0,
-      selects: 0,
-      campaigns,
+    const campaigns: string[] = [];
+    const t = await setup([], {
+      cleanupLeftovers: async () => ++cleanups,
+      select: async () => (
+        selects++,
+        { batchId: "selection-10", targets: ["a"] }
+      ),
+      runCampaign: async (input) => {
+        campaigns.push(input.campaignId);
+        return {
+          campaignId: input.campaignId,
+          targets: [],
+          skipped: [],
+          stopped: "operator",
+        };
+      },
     });
-    expect(await readFile(paths.stop, "utf8")).toBe("errors\n");
-    await expect(readFile(paths.memo, "utf8")).rejects.toThrow();
+    await t.append("selection-9", {
+      type: "target-selected",
+      selectionId: "wporg:a@1.0.0",
+    });
+    const paths = continuousPaths(t.root);
+    await writeFile(
+      paths.memo,
+      JSON.stringify(savedMemo({ campaignId: "old" })),
+    );
+    await rm(paths.memo);
+
+    expect(await t.runner.run()).toBe("operator");
+    expect({ cleanups, selects, campaigns }).toEqual({
+      cleanups: 1,
+      selects: 0,
+      campaigns: ["prod-20261020-1"],
+    });
+    expect(
+      t.log.filter((line) => line.includes("warning memo-recreated")),
+    ).toHaveLength(1);
+    expect(JSON.parse(await readFile(paths.memo, "utf8"))).toMatchObject({
+      state: "stopped",
+      backoffStep: 0,
+    });
   });
 
   it.each([
-    ["truncated JSON", '{"state":"running"'],
-    ["missing fields", '{"state":"running","detail":{}}'],
-  ])("fails closed and preserves a %s memo", async (_name, damaged) => {
-    const t = await setup([async () => ({})]);
-    expect(await t.runner.run()).toBe("operator");
-    const paths = continuousPaths(t.root);
-    await rm(paths.stop);
-    await writeFile(paths.memo, damaged);
-    const campaigns = t.calls.length;
-    t.deps.cleanupLeftovers = async () => {
-      throw new Error("cleanup must not start");
-    };
-    t.deps.select = async () => {
-      throw new Error("selection must not start");
-    };
+    ["truncated JSON", '{"state":"running"', false],
+    ["missing fields", '{"state":"running","detail":{}}', true],
+  ])(
+    "recreates a %s memo without replaying a finished campaign",
+    async (_name, damaged, withUnboundBatch) => {
+      let cleanups = 0;
+      let selects = 0;
+      const campaigns: { id: string; retry: boolean }[] = [];
+      const t = await setup([], {
+        cleanupLeftovers: async () => ++cleanups,
+        select: async () => (
+          selects++,
+          { batchId: "selection-10", targets: ["a"] }
+        ),
+        runCampaign: async (input) => {
+          campaigns.push({
+            id: input.campaignId,
+            retry: input.retryIncompleteVerifications,
+          });
+          return {
+            campaignId: input.campaignId,
+            targets: [],
+            skipped: [],
+            stopped: "operator",
+          };
+        },
+      });
+      await t.append("prod-20261020-7", {
+        type: "selection-batch-bound",
+        selectionBatchId: "selection-9",
+        policyDigest: `sha256:${"b".repeat(64)}`,
+        selectionIds: ["wporg:a@1.0.0"],
+      });
+      await t.trial("prod-20261020-7", { outcome: "completed" });
+      if (withUnboundBatch)
+        await t.append("selection-10", {
+          type: "target-selected",
+          selectionId: "wporg:b@1.0.0",
+        });
+      const paths = continuousPaths(t.root);
+      await writeFile(paths.memo, damaged);
 
-    expect(await createContinuousRunner(t.deps).run()).toBe("errors");
-    expect(t.calls).toHaveLength(campaigns);
-    expect(await readFile(paths.memo, "utf8")).toBe(damaged);
-    expect(await readFile(paths.stop, "utf8")).toBe("errors\n");
-  });
+      expect(await t.runner.run()).toBe("operator");
+      expect({ cleanups, selects, campaigns }).toEqual({
+        cleanups: 1,
+        selects: withUnboundBatch ? 0 : 1,
+        campaigns: [{ id: "prod-20261020-8", retry: false }],
+      });
+      expect(
+        t.log.filter((line) => line.includes("warning memo-recreated")),
+      ).toHaveLength(1);
+      expect(JSON.parse(await readFile(paths.memo, "utf8"))).toMatchObject({
+        state: "stopped",
+        backoffStep: 0,
+      });
+    },
+  );
 
-  it("stops for review when a saved hold has no valid deadline", async () => {
+  it("recreates a memo with an invalid hold deadline", async () => {
     let cleanups = 0;
     let selects = 0;
     const t = await setup([], {
@@ -324,14 +380,16 @@ describe("continuous runner", () => {
         savedMemo({ state: "backoff", detail: { until: "broken" } }),
       ),
     );
-    expect(await t.runner.run()).toBe("errors");
+    expect(await t.runner.run()).toBe("operator");
     expect({ cleanups, selects, campaigns: t.calls.length }).toEqual({
-      cleanups: 0,
-      selects: 0,
-      campaigns: 0,
+      cleanups: 1,
+      selects: 1,
+      campaigns: 1,
     });
-    expect(t.runner.memo().lastError).toBe("invalid saved backoff deadline");
-    await expectLatchedStop(t, "errors");
+    expect(
+      t.log.filter((line) => line.includes("warning memo-recreated")),
+    ).toHaveLength(1);
+    expect(t.runner.memo().lastError).toBeUndefined();
   });
 
   it("starts a new campaign id after a finished one, numbered from the ledger", async () => {
@@ -428,20 +486,33 @@ describe("continuous runner", () => {
     expect(t.calls).toHaveLength(1);
   });
 
-  it("persists a signal as an operator stop before draining the campaign", async () => {
-    let term: () => void = () => undefined;
-    const t = await setup([() => (term(), {})], {
-      signals: {
-        on(signal: string, listener: () => void) {
-          if (signal === "SIGTERM") term = listener;
-          return process;
-        },
-        off: () => process,
-      } as never,
-    });
-    expect(await t.runner.run()).toBe("operator");
-    expect(existsSync(continuousPaths(t.root).stop)).toBe(true);
-  });
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "drains on %s without latching an operator stop",
+    async (signal) => {
+      let send: () => void = () => undefined;
+      const steps: Step[] = [
+        () => (send(), {}),
+        () => ({ stopped: "operator" }),
+      ];
+      const t = await setup(steps, {
+        signals: {
+          on(name: string, listener: () => void) {
+            if (name === signal) send = listener;
+            return process;
+          },
+          off: () => process,
+        } as never,
+      });
+      expect(await t.runner.run()).toBe("operator");
+      expect(existsSync(continuousPaths(t.root).stop)).toBe(false);
+      expect(await createContinuousRunner(t.deps).run()).toBe("operator");
+      expect(t.calls[1]).toMatchObject({
+        campaignId: t.calls[0]?.campaignId,
+        retryIncompleteVerifications: true,
+      });
+      expect(existsSync(continuousPaths(t.root).stop)).toBe(false);
+    },
+  );
 
   it("resumes the unfinished campaign under its id", async () => {
     const steps: Step[] = [async () => ({})];
@@ -465,7 +536,9 @@ describe("continuous runner", () => {
     steps.push(limited("quota", t));
     await t.runner.run();
     const states = t.log
-      .filter((line) => !line.includes(" batch "))
+      .filter(
+        (line) => !line.includes(" batch ") && !line.includes(" warning "),
+      )
       .map((line) => line.split(" ")[1]);
     expect(states).toEqual(["running", "backoff", "running", "stopped"]);
     expect(t.notified).toHaveLength(4);

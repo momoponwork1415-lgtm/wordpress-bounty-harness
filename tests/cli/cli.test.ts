@@ -3347,9 +3347,8 @@ describe("harness CLI vertical slice", () => {
     expect(stale.stdout).toContain("state stale");
     await writeFile(join(state, "continuous.json"), "{broken");
     const invalid = await run("continuous", "status");
-    expect(invalid.code).toBe(1);
-    expect(invalid.stdout).toContain("state invalid-memo");
-    expect(invalid.stdout).toContain("manual recovery required");
+    expect(invalid.code).toBe(0);
+    expect(invalid.stdout).toContain("state never-started");
     await run("continuous", "stop");
     const stoppedAfterCrash = await run("continuous", "status");
     expect(stoppedAfterCrash.code).toBe(1);
@@ -3365,11 +3364,7 @@ describe("harness CLI vertical slice", () => {
     expect(liveResume.stderr).toContain("still running as pid");
     await rm(join(state, "continuous.pid"));
     const damagedResume = await run("continuous", "resume");
-    expect(damagedResume.code).toBe(1);
-    expect(damagedResume.stderr).toContain("recover it before resume");
-    await expect(stat(join(state, "continuous.stop"))).resolves.toBeDefined();
-    await writeFile(join(state, "continuous.json"), JSON.stringify(priorMemo));
-    expect((await run("continuous", "resume")).code).toBe(0);
+    expect(damagedResume.code).toBe(0);
     await expect(stat(join(state, "continuous.stop"))).rejects.toThrow();
     expect(
       (
