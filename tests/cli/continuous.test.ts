@@ -277,20 +277,33 @@ describe("continuous runner", () => {
     expect(t.calls).toHaveLength(1);
   });
 
-  it("persists a signal as an operator stop before draining the campaign", async () => {
-    let term: () => void = () => undefined;
-    const t = await setup([() => (term(), {})], {
-      signals: {
-        on(signal: string, listener: () => void) {
-          if (signal === "SIGTERM") term = listener;
-          return process;
-        },
-        off: () => process,
-      } as never,
-    });
-    expect(await t.runner.run()).toBe("operator");
-    expect(existsSync(continuousPaths(t.root).stop)).toBe(true);
-  });
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "drains on %s without latching an operator stop",
+    async (signal) => {
+      let send: () => void = () => undefined;
+      const steps: Step[] = [
+        () => (send(), {}),
+        () => ({ stopped: "operator" }),
+      ];
+      const t = await setup(steps, {
+        signals: {
+          on(name: string, listener: () => void) {
+            if (name === signal) send = listener;
+            return process;
+          },
+          off: () => process,
+        } as never,
+      });
+      expect(await t.runner.run()).toBe("operator");
+      expect(existsSync(continuousPaths(t.root).stop)).toBe(false);
+      expect(await createContinuousRunner(t.deps).run()).toBe("operator");
+      expect(t.calls[1]).toMatchObject({
+        campaignId: t.calls[0]?.campaignId,
+        retryIncompleteVerifications: true,
+      });
+      expect(existsSync(continuousPaths(t.root).stop)).toBe(false);
+    },
+  );
 
   it("resumes the unfinished campaign under its id", async () => {
     const steps: Step[] = [async () => ({})];

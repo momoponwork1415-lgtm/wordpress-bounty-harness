@@ -111,7 +111,7 @@ export function continuousPaths(stateDirectory: string) {
   };
 }
 
-/** Atomically publish a terminal stop, including from a signal handler. */
+/** Atomically publish an explicit operator or terminal policy stop. */
 export function requestContinuousStop(
   stateDirectory: string,
   reason: ContinuousStopReason = "operator",
@@ -299,7 +299,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       );
   };
   const stop = async (reason: ContinuousStopReason) => {
-    if (!existsSync(paths.stop))
+    if (reason !== "operator" && !existsSync(paths.stop))
       requestContinuousStop(deps.stateDirectory, reason);
     await enter("stopped", { reason });
     return reason;
@@ -327,7 +327,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     await writeFile(paths.pid, String(deps.pid), { mode: 0o600 });
     const onSignal = () => {
       signalled = true;
-      requestContinuousStop(deps.stateDirectory);
     };
     deps.signals.on("SIGINT", onSignal);
     deps.signals.on("SIGTERM", onSignal);
