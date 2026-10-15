@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,8 +10,10 @@ import {
   continuousPaths,
   createContinuousRunner,
   type ContinuousDeps,
+  type ContinuousMemo,
   type ContinuousStopReason,
 } from "../../src/cli/continuous.js";
+import { acquireContinuousLock } from "../../src/cli/continuous-lock.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger, type LedgerEventInput } from "../../src/ledger/index.js";
 
@@ -20,6 +22,21 @@ afterEach(async () => {
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
 });
+
+function savedMemo(fields: Partial<ContinuousMemo>): ContinuousMemo {
+  return {
+    state: "starting",
+    detail: {},
+    backoffStep: 0,
+    consecutiveErrorBatches: 0,
+    consecutiveRefusalBatches: 0,
+    consecutiveNoProgressBatches: 0,
+    consecutiveEmptyDays: 0,
+    probe: false,
+    updatedAt: "2026-10-20T00:00:00.000Z",
+    ...fields,
+  };
+}
 
 type Step = (input: {
   campaignId: string;
@@ -109,7 +126,6 @@ async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
     clock: () => new Date(now),
     sleep: async (ms) => void (slept.push(ms), (now += ms)),
     signals: { on: () => process, off: () => process } as never,
-    pidAlive: () => false,
     pid: 4242,
     io: {
       log: (line) => log.push(line),
@@ -228,6 +244,70 @@ describe("continuous runner", () => {
     expect(t.calls[1]?.campaignId).toBe(t.calls[0]?.campaignId);
   });
 
+  it("keeps the committed memo when a crash leaves a partial temporary file", async () => {
+    const t = await setup([async () => ({})]);
+    expect(await t.runner.run()).toBe("operator");
+    const paths = continuousPaths(t.root);
+    const committed = await readFile(paths.memo, "utf8");
+    expect((await stat(paths.memo)).mode & 0o777).toBe(0o600);
+    expect(existsSync(paths.initialized)).toBe(true);
+    await writeFile(`${paths.memo}.crashed.tmp`, '{"state":"running"');
+    await rm(paths.stop);
+
+    expect(await createContinuousRunner(t.deps).run()).toBe("operator");
+    expect(t.calls).toHaveLength(3);
+    expect(committed).toContain('"state": "stopped"');
+    expect(existsSync(`${paths.memo}.crashed.tmp`)).toBe(true);
+  });
+
+  it("fails closed when a previously initialized runner loses its memo", async () => {
+    const t = await setup([async () => ({})]);
+    expect(await t.runner.run()).toBe("operator");
+    const paths = continuousPaths(t.root);
+    await rm(paths.stop);
+    await rm(paths.memo);
+    const campaigns = t.calls.length;
+    let cleanups = 0;
+    let selects = 0;
+    t.deps.cleanupLeftovers = async () => ++cleanups;
+    t.deps.select = async () => (
+      selects++,
+      { batchId: "selection-9", targets: ["a"] }
+    );
+
+    expect(await createContinuousRunner(t.deps).run()).toBe("errors");
+    expect({ cleanups, selects, campaigns: t.calls.length }).toEqual({
+      cleanups: 0,
+      selects: 0,
+      campaigns,
+    });
+    expect(await readFile(paths.stop, "utf8")).toBe("errors\n");
+    await expect(readFile(paths.memo, "utf8")).rejects.toThrow();
+  });
+
+  it.each([
+    ["truncated JSON", '{"state":"running"'],
+    ["missing fields", '{"state":"running","detail":{}}'],
+  ])("fails closed and preserves a %s memo", async (_name, damaged) => {
+    const t = await setup([async () => ({})]);
+    expect(await t.runner.run()).toBe("operator");
+    const paths = continuousPaths(t.root);
+    await rm(paths.stop);
+    await writeFile(paths.memo, damaged);
+    const campaigns = t.calls.length;
+    t.deps.cleanupLeftovers = async () => {
+      throw new Error("cleanup must not start");
+    };
+    t.deps.select = async () => {
+      throw new Error("selection must not start");
+    };
+
+    expect(await createContinuousRunner(t.deps).run()).toBe("errors");
+    expect(t.calls).toHaveLength(campaigns);
+    expect(await readFile(paths.memo, "utf8")).toBe(damaged);
+    expect(await readFile(paths.stop, "utf8")).toBe("errors\n");
+  });
+
   it("stops for review when a saved hold has no valid deadline", async () => {
     let cleanups = 0;
     let selects = 0;
@@ -240,7 +320,9 @@ describe("continuous runner", () => {
     });
     await writeFile(
       continuousPaths(t.root).memo,
-      JSON.stringify({ state: "backoff", detail: { until: "broken" } }),
+      JSON.stringify(
+        savedMemo({ state: "backoff", detail: { until: "broken" } }),
+      ),
     );
     expect(await t.runner.run()).toBe("errors");
     expect({ cleanups, selects, campaigns: t.calls.length }).toEqual({
@@ -268,21 +350,30 @@ describe("continuous runner", () => {
     ]);
   });
 
-  it("refuses to resume while another runner pid is live", async () => {
-    const t = await setup([], { pidAlive: (pid) => pid === 7 });
+  it("refuses to resume while another runner holds the state lock", async () => {
+    let cleanups = 0;
+    const t = await setup([], {
+      cleanupLeftovers: async () => ++cleanups,
+    });
+    const lock = await acquireContinuousLock(t.root);
     await writeFile(continuousPaths(t.root).pid, "7");
     await writeFile(continuousPaths(t.root).stop, "");
-    await expect(t.runner.run({ resume: true })).rejects.toThrow(
-      "already running as pid 7",
-    );
+    try {
+      await expect(t.runner.run({ resume: true })).rejects.toThrow(
+        "state lock",
+      );
+    } finally {
+      await lock.release();
+    }
     expect(existsSync(continuousPaths(t.root).stop)).toBe(true);
+    expect(existsSync(continuousPaths(t.root).memo)).toBe(false);
+    expect(cleanups).toBe(0);
   });
 
   it("keeps a stop marker after a dead pid until explicit resume", async () => {
     let selects = 0;
     let cleanups = 0;
     const t = await setup([async () => ({})], {
-      pidAlive: () => false,
       select: async () => (
         selects++,
         { batchId: "selection-1", targets: ["a"] }
@@ -290,6 +381,12 @@ describe("continuous runner", () => {
       cleanupLeftovers: async () => ++cleanups,
     });
     await writeFile(continuousPaths(t.root).pid, "8");
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify(
+        savedMemo({ state: "stopped", detail: { reason: "operator" } }),
+      ),
+    );
     await writeFile(continuousPaths(t.root).stop, "");
     expect(await t.runner.run()).toBe("operator");
     expect({ selects, cleanups, campaigns: t.calls.length }).toEqual({
@@ -308,7 +405,9 @@ describe("continuous runner", () => {
     const t = await setup([async () => ({})]);
     await writeFile(
       continuousPaths(t.root).memo,
-      JSON.stringify({ campaignId: "prod-20261019-4", target: null }),
+      JSON.stringify(
+        savedMemo({ campaignId: "prod-20261019-4", target: null }),
+      ),
     );
     await writeFile(continuousPaths(t.root).pid, "8");
     await writeFile(continuousPaths(t.root).stop, "");
@@ -358,7 +457,9 @@ describe("continuous runner", () => {
     const t = await setup(steps);
     await writeFile(
       continuousPaths(t.root).memo,
-      JSON.stringify({ campaignId: "prod-20261019-4", target: null }),
+      JSON.stringify(
+        savedMemo({ campaignId: "prod-20261019-4", target: null }),
+      ),
     );
     await t.runner.run();
     expect(t.calls[0]).toMatchObject({

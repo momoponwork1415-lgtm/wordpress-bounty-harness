@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../../src/cli/index.js";
+import { acquireContinuousLock } from "../../src/cli/continuous-lock.js";
 import { reviewExportV1Schema } from "../../src/review/index.js";
 import {
   createWordPressCliProfile,
@@ -3565,13 +3566,25 @@ describe("harness CLI vertical slice", () => {
       "reason legacy-history-missing",
     );
     expect((await run("continuous", "resume")).code).toBe(0);
+    const priorMemo = JSON.parse(
+      await readFile(join(state, "continuous.json"), "utf8"),
+    ) as Record<string, unknown>;
     await writeFile(
       join(state, "continuous.json"),
-      JSON.stringify({ state: "running", detail: { campaignId: "crashed" } }),
+      JSON.stringify({
+        ...priorMemo,
+        state: "running",
+        detail: { campaignId: "crashed" },
+      }),
     );
     const stale = await run("continuous", "status");
     expect(stale.code).toBe(1);
     expect(stale.stdout).toContain("state stale");
+    await writeFile(join(state, "continuous.json"), "{broken");
+    const invalid = await run("continuous", "status");
+    expect(invalid.code).toBe(1);
+    expect(invalid.stdout).toContain("state invalid-memo");
+    expect(invalid.stdout).toContain("manual recovery required");
     await run("continuous", "stop");
     const stoppedAfterCrash = await run("continuous", "status");
     expect(stoppedAfterCrash.code).toBe(1);
@@ -3582,10 +3595,20 @@ describe("harness CLI vertical slice", () => {
     const stopping = await run("continuous", "status");
     expect(stopping.code).toBe(1);
     expect(stopping.stdout).toContain("state stopping  reason operator");
-    const liveResume = await run("continuous", "resume");
-    expect(liveResume.code).toBe(1);
-    expect(liveResume.stderr).toContain("still running as pid");
+    const liveLock = await acquireContinuousLock(state);
+    try {
+      const liveResume = await run("continuous", "resume");
+      expect(liveResume.code).toBe(1);
+      expect(liveResume.stderr).toContain("state lock");
+    } finally {
+      await liveLock.release();
+    }
     await rm(join(state, "continuous.pid"));
+    const damagedResume = await run("continuous", "resume");
+    expect(damagedResume.code).toBe(1);
+    expect(damagedResume.stderr).toContain("recover it before resume");
+    await expect(stat(join(state, "continuous.stop"))).resolves.toBeDefined();
+    await writeFile(join(state, "continuous.json"), JSON.stringify(priorMemo));
     expect((await run("continuous", "resume")).code).toBe(0);
     await expect(stat(join(state, "continuous.stop"))).rejects.toThrow();
     expect(
