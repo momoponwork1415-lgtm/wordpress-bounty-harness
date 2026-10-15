@@ -64,14 +64,15 @@ function trial(
   snapshotDigest = digest("a"),
   promptVariant = "wp2shell-bounty-v2",
 ) {
+  const runId = `run-${campaignId}-${promptVariant}`;
   const run = started(promptVariant, campaignId, snapshotDigest);
   return [
     selected(slug, version, campaignId, snapshotDigest),
     run,
     ledgerEventV1Schema.parse({
-      ...base(campaignId, snapshotDigest, `finish-${run.runId}`),
+      ...base(campaignId, snapshotDigest, `finish-${runId}`),
       type: "discovery-run-finished",
-      runId: run.runId,
+      runId,
       outcome: "completed",
       costUsd: "unavailable",
       wallTimeMs: 1000,
