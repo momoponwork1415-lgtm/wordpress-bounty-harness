@@ -199,7 +199,7 @@ export async function readContinuousMemo(
   return row as ContinuousMemo;
 }
 
-/** Atomically publish a terminal stop, including from a signal handler. */
+/** Atomically publish an explicit terminal stop request. */
 export function requestContinuousStop(
   stateDirectory: string,
   reason: ContinuousStopReason = "operator",
@@ -463,7 +463,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     await writeFile(paths.pid, String(deps.pid), { mode: 0o600 });
     const onSignal = () => {
       signalled = true;
-      requestContinuousStop(deps.stateDirectory);
     };
     deps.signals.on("SIGINT", onSignal);
     deps.signals.on("SIGTERM", onSignal);
