@@ -69,3 +69,7 @@ Matt Pocock系スキルの5つの標準ラベルを使う。対応は `docs/agen
 ### Domain docs
 
 単一コンテキストとして、用語集はルートの `GLOSSARY.md`、判断記録は `docs/adr/` に置く。読み方は `docs/agents/domain.md`。
+
+### Measurement, review, briefs, ledger
+
+AI が自分で回す手順は `docs/agents/` に置く。計測は `measurement.md`、PR のレビューと merge は `pr-review-merge.md`、Codex への依頼文は `codex-briefs.md`、台帳の読み方は `ledger-reading.md`。進行中の状態は Git ではなく Issue の comment に書く。
