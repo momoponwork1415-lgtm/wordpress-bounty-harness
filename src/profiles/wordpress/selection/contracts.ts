@@ -26,6 +26,8 @@ const commonSelectionPolicy = {
   promptVariant: z.string().min(1).max(128).optional(),
   revisitPolicy: wordPressRevisitPolicySchema.optional(),
   minimumActiveInstallations: z.number().int().nonnegative(),
+  /** Hard ceiling of the default population (ADR 0032, 2026-10-16); the public-record exception for larger plugins is #295. */
+  maximumActiveInstallations: z.number().int().positive().optional(),
   maximumObservationAgeDays: z.number().positive(),
   maximumUpdateAgeDays: z.number().positive(),
   maximumTargets: z.number().int().positive(),
@@ -90,23 +92,33 @@ const manualSelectionPolicy = z
     { message: "History signals require a source", path: ["historySource"] },
   );
 
-const automaticSelectionPolicy = z.strictObject({
-  ...commonSelectionPolicy,
-  promptVariant: z.string().min(1).max(128),
-  revisitPolicy: wordPressRevisitPolicySchema,
-  maximumTargets: z.number().int().min(3).max(5),
-  /** The core image version pinned when select freezes the chosen targets. */
-  wordpressVersion: coreVersionSchema,
-  candidateSource: z.strictObject({
-    kind: z.literal("wordpress-org"),
-    popularPages: z.number().int().min(1).max(20),
-    tags: z.array(slugSchema).max(8),
-    pagesPerTag: z.number().int().min(1).max(5),
-    perPage: z.number().int().min(1).max(50),
-    maxCandidates: z.number().int().min(5).max(2000),
-    maxAgeDays: z.number().positive().max(7),
-  }),
-});
+const automaticSelectionPolicy = z
+  .strictObject({
+    ...commonSelectionPolicy,
+    promptVariant: z.string().min(1).max(128),
+    revisitPolicy: wordPressRevisitPolicySchema,
+    maximumTargets: z.number().int().min(3).max(5),
+    /** The core image version pinned when select freezes the chosen targets. */
+    wordpressVersion: coreVersionSchema,
+    candidateSource: z.strictObject({
+      kind: z.literal("wordpress-org"),
+      popularPages: z.number().int().min(1).max(20),
+      tags: z.array(slugSchema).max(8),
+      pagesPerTag: z.number().int().min(1).max(5),
+      perPage: z.number().int().min(1).max(50),
+      maxCandidates: z.number().int().min(5).max(2000),
+      maxAgeDays: z.number().positive().max(7),
+    }),
+  })
+  .refine(
+    (policy) =>
+      policy.maximumActiveInstallations === undefined ||
+      policy.maximumActiveInstallations > policy.minimumActiveInstallations,
+    {
+      message:
+        "maximumActiveInstallations must exceed minimumActiveInstallations",
+    },
+  );
 
 /** A policy nominates candidates manually or from the directory, never both. */
 export const wordPressSelectionPolicySchema = z.union([
@@ -128,6 +140,7 @@ export type SelectionReason =
   | "excluded-author"
   | "excluded-slug"
   | "below-installation-threshold"
+  | "above-installation-ceiling"
   | "core-requirement-unavailable"
   | "core-version-incompatible"
   | "programme-asset-out-of-scope"

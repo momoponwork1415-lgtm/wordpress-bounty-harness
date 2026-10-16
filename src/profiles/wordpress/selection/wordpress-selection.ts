@@ -238,6 +238,12 @@ export function createWordPressSelection(
       if (observation.activeInstallations < policy.minimumActiveInstallations) {
         reasons.push("below-installation-threshold");
       }
+      if (
+        policy.maximumActiveInstallations !== undefined &&
+        observation.activeInstallations >= policy.maximumActiveInstallations
+      ) {
+        reasons.push("above-installation-ceiling");
+      }
       const pinnedVersion = pinnedVersions?.[slug];
       // Directory `requires` describes the observed stable release, not a historical pin.
       if (

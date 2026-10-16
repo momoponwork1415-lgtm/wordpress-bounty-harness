@@ -26,6 +26,7 @@
     "maxAgeDays": 1
   },
   "minimumActiveInstallations": 50000,
+  "maximumActiveInstallations": 1000000,
   "maximumObservationAgeDays": 2,
   "maximumUpdateAgeDays": 365,
   "maximumTargets": 5,
