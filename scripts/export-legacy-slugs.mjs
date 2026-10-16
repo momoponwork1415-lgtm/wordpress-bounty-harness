@@ -116,7 +116,8 @@ process.stderr.write(
 );
 
 // Remaining candidates per floor: eligible slugs in `select` reports (run the
-// lowest-floor policy on a scratch state) minus started and ambiguous.
+// lowest-floor policy on a scratch state) minus legacy exclusions, with owner
+// reconsider overrides restored.
 if (values.report.length > 0) {
   const installs = new Map();
   for (const path of values.report) {

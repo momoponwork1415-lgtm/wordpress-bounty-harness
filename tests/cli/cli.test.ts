@@ -141,10 +141,25 @@ async function harness(
     readonly verifierLabProvisionFailures?: number;
     readonly coreSource?: boolean;
     readonly databaseAccess?: "read-only" | "none";
+    readonly legacyHistoryUnavailable?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
   directories.push(root);
+  const legacyHistoryFile = join(root, "legacy-history.json");
+  if (!options.legacyHistoryUnavailable)
+    await writeFile(
+      legacyHistoryFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        sourceDigest: sha("a"),
+        exportedAt: now,
+        sources: ["synthetic"],
+        started: [],
+        ambiguous: [],
+        reconsider: [],
+      }),
+    );
   const sourceDirectory = join(root, "source");
   await mkdir(join(sourceDirectory, "includes"), { recursive: true });
   await writeFile(
@@ -733,6 +748,7 @@ async function harness(
     newId: () => `id-${++ids}`,
     profile: createWordPressCliProfile({
       scopePolicy: await loadWordpressScopePolicy(),
+      legacyHistoryFile,
       ...(options.scopeFacts === undefined
         ? {}
         : { scopeFacts: options.scopeFacts }),
@@ -844,6 +860,7 @@ async function harness(
     docker,
     live,
     root,
+    legacyHistoryFile,
     ledger: () => state.ledger,
     state: () => state,
     profile: environment.profile,
@@ -3141,9 +3158,10 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("returns an empty selection with reasons below the floor, and a batch at --minimum 1", async () => {
-    const { run, root, ledger, store } = await harness({
+    const { run, root, ledger, store, configPath } = await harness({
       candidates: ["broken-plugin", "item-b"],
       failFreeze: "broken-plugin",
+      legacyHistoryUnavailable: true,
     });
     const policyPath = join(root, "selection.json");
     const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
@@ -3202,6 +3220,18 @@ describe("harness CLI vertical slice", () => {
     expect(one.code).toBe(0);
     expect(one.stdout).toMatch(/^selection batch selection-/m);
     expect(ledger().read({ type: "target-selected" })).toHaveLength(1);
+    const automatic = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-no-legacy",
+      "--config",
+      configPath,
+    );
+    expect(automatic.code).toBe(1);
+    expect(automatic.stderr).toContain("legacy-history-missing");
+    expect(ledger().read({ campaignId: "campaign-no-legacy" })).toHaveLength(0);
     expect(
       (await run("select", "--config", policyPath, "--minimum", "0")).code,
     ).toBe(2);
@@ -3493,6 +3523,83 @@ describe("harness CLI vertical slice", () => {
     );
     expect(changedTarget.code).toBe(1);
     expect(changedTarget.stderr).toContain("target set differs");
+    const replayPolicy = JSON.parse(await readFile(policyPath, "utf8"));
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...replayPolicy,
+        revisitPolicy: { kind: "version-or-prompt-changed" },
+      }),
+    );
+    const replay = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-replay",
+      "--config",
+      configPath,
+    );
+    expect(replay.code).toBe(1);
+    expect(replay.stderr).toContain("requires revisitPolicy: never");
+
+    // A batch bound before legacy digests were recorded parses as null. The
+    // resumed campaign stops before writing another event until reselected.
+    await writeFile(
+      policyPath,
+      JSON.stringify({ ...replayPolicy, revisitPolicy: { kind: "never" } }),
+    );
+    const oldSelection = reservations[0]?.event;
+    if (oldSelection?.type !== "target-selected")
+      throw new Error("Expected a reserved target");
+    const oldReport = JSON.parse(reportFile.bytes.toString("utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete oldReport.legacyHistory;
+    oldReport.selectedSnapshotDigests = [oldSelection.snapshotDigest];
+    const oldReportDigest = await store().putFiles({
+      "selection-report.json": JSON.stringify(oldReport),
+    });
+    const oldBatchId = "selection-legacy-null";
+    expect(
+      await ledger().append({
+        ...oldSelection,
+        identity: "old-selection-without-legacy-digest",
+        campaignId: oldBatchId,
+        artifacts: oldSelection.artifacts.map((artifact) =>
+          artifact.kind === "selection-report"
+            ? { kind: "selection-report" as const, digest: oldReportDigest }
+            : artifact,
+        ),
+      }),
+    ).toMatchObject({ status: "appended" });
+    expect(
+      await ledger().append({
+        schemaVersion: 1,
+        identity: "old-bound-batch",
+        campaignId: "campaign-old-bound",
+        snapshotDigest: oldSelection.snapshotDigest,
+        occurredAt: now,
+        type: "selection-batch-bound",
+        selectionBatchId: oldBatchId,
+        policyDigest: oldReport.policyDigest as string,
+        selectionIds: [oldSelection.selectionId],
+        artifacts: [{ kind: "selection-report", digest: oldReportDigest }],
+      }),
+    ).toMatchObject({ status: "appended" });
+    const oldResume = await run(
+      "campaign",
+      "run",
+      "item-a",
+      "--campaign",
+      "campaign-old-bound",
+      "--config",
+      configPath,
+    );
+    expect(oldResume.code).toBe(1);
+    expect(oldResume.stderr).toContain("legacy-history-changed");
+    expect(ledger().read({ campaignId: "campaign-old-bound" })).toHaveLength(1);
   });
 
   it("runs the continuous runner on the host status, stops it, and reports it", async () => {
