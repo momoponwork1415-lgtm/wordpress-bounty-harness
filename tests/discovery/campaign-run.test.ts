@@ -63,6 +63,7 @@ async function campaign(
     readonly research?: { readonly truncated: boolean };
     readonly timing?: {
       readonly rootStartedAt: string;
+      readonly rootReceiptStartedAt?: string;
       readonly rootCompletedAt: string;
       readonly childStartedAt?: string;
       readonly childCompletedAt?: string;
@@ -70,6 +71,8 @@ async function campaign(
   } = {},
 ) {
   const rootStartedAt = options.timing?.rootStartedAt ?? "2026-10-08T07:00:00Z";
+  const rootReceiptStartedAt =
+    options.timing?.rootReceiptStartedAt ?? rootStartedAt;
   const rootCompletedAt =
     options.timing?.rootCompletedAt ?? "2026-10-08T07:00:01Z";
   let now = rootStartedAt;
@@ -174,7 +177,7 @@ async function campaign(
               terminal: "incomplete",
               reason: "provider",
               providerLimit: "quota",
-              startedAt: rootStartedAt,
+              startedAt: rootReceiptStartedAt,
               completedAt: rootCompletedAt,
             }),
           };
@@ -216,7 +219,7 @@ async function campaign(
               terminal: "incomplete",
               reason: "schema",
               reasonDetail: "invalid-event-shape",
-              startedAt: rootStartedAt,
+              startedAt: rootReceiptStartedAt,
               completedAt: rootCompletedAt,
               ...(options.rootChildCounts === undefined
                 ? {}
@@ -249,7 +252,7 @@ async function campaign(
               terminal: "incomplete",
               reason: "schema",
               reasonDetail: "final-message-not-report",
-              startedAt: rootStartedAt,
+              startedAt: rootReceiptStartedAt,
               completedAt: rootCompletedAt,
               usage: {
                 inputTokens: 1000,
@@ -325,7 +328,7 @@ async function campaign(
             profile: run.profile,
             terminal: "completed",
             reason: "unavailable",
-            startedAt: rootStartedAt,
+            startedAt: rootReceiptStartedAt,
             completedAt: rootCompletedAt,
             ...(options.rootChildCounts === undefined
               ? {}
@@ -459,6 +462,26 @@ it("uses the native completion time for completed and provider-limited Root runs
       outcome: rootProviderLimited ? "provider-limited" : "completed",
     });
   }
+});
+
+it("records Root dispatch before sandbox start while using native wall and finish", async () => {
+  const { ledger } = await campaign([], {
+    indexed: true,
+    timing: {
+      rootStartedAt: "2026-10-08T23:59:59Z",
+      rootReceiptStartedAt: "2026-10-09T00:00:01Z",
+      rootCompletedAt: "2026-10-09T00:00:03Z",
+    },
+  });
+  expect(
+    ledger.read({ type: "discovery-run-started" })[0]?.event.occurredAt,
+  ).toBe("2026-10-08T23:59:59.000Z");
+  expect(
+    ledger.read({ type: "discovery-run-finished" })[0]?.event,
+  ).toMatchObject({
+    occurredAt: "2026-10-09T00:00:03.000Z",
+    wallTimeMs: 2000,
+  });
 });
 
 it("uses the completion clock when a Root transport failure has no receipt", async () => {

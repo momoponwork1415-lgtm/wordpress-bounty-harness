@@ -399,8 +399,8 @@ type ChildRollout = {
   readonly usage: z.infer<typeof usageSchema> | undefined;
   readonly observed: Observed;
   readonly finalMessage: string | undefined;
-  readonly startedAt: string;
-  readonly completedAt: string;
+  readonly startedAt: string | undefined;
+  readonly completedAt: string | undefined;
 };
 
 function decodeChildRollout(
@@ -482,8 +482,8 @@ function decodeChildRollout(
     usage,
     observed: observedFromCommands(commands),
     finalMessage,
-    startedAt: startedAt ?? new Date(0).toISOString(),
-    completedAt: completedAt ?? startedAt ?? new Date(0).toISOString(),
+    startedAt,
+    completedAt,
   };
 }
 
@@ -1305,6 +1305,7 @@ export class CodexNativeAgentRuntime {
     if (parentThreadId !== undefined) {
       const children = await this.#captureChildren(
         state.run,
+        result,
         result.rollouts ?? [],
         parentThreadId,
         grantReceiptDigest,
@@ -1357,6 +1358,7 @@ export class CodexNativeAgentRuntime {
 
   async #captureChildren(
     run: DiscoveryTransportRun,
+    sandboxRun: Pick<CodexSandboxResult, "startedAt" | "completedAt">,
     rollouts: readonly string[],
     parentThreadId: string,
     grantReceiptDigest: string,
@@ -1374,20 +1376,29 @@ export class CodexNativeAgentRuntime {
       children.push({ child, raw, order });
     }
     children.sort((left, right) => {
-      const byStart = left.child.startedAt.localeCompare(right.child.startedAt);
+      const byStart = (left.child.startedAt ?? "").localeCompare(
+        right.child.startedAt ?? "",
+      );
       return byStart || left.order - right.order;
     });
     const admitted = children.slice(0, 3);
     const agentRuns: AgentRun[] = [];
     for (const { child, raw } of admitted)
       agentRuns.push(
-        await this.#captureChild(run, child, raw, grantReceiptDigest),
+        await this.#captureChild(
+          run,
+          sandboxRun,
+          child,
+          raw,
+          grantReceiptDigest,
+        ),
       );
     return { agentRuns, observed: children.length, admitted: admitted.length };
   }
 
   async #captureChild(
     run: DiscoveryTransportRun,
+    sandboxRun: Pick<CodexSandboxResult, "startedAt" | "completedAt">,
     child: ChildRollout,
     raw: string,
     grantReceiptDigest: string,
@@ -1425,20 +1436,31 @@ export class CodexNativeAgentRuntime {
         reasonDetail = "child-final-message-not-report";
       }
     }
+    if (reason === undefined && child.completedAt === undefined) {
+      reason = "schema";
+      reasonDetail = "child-completion-time-unavailable";
+    }
+    if (reason === undefined && child.startedAt === undefined) {
+      reason = "schema";
+      reasonDetail = "child-start-time-unavailable";
+    }
+    // An unobserved finish cannot assign numeric usage to a UTC day.
+    const datedUsage =
+      child.completedAt === undefined ? undefined : child.usage;
     const receipt = createNativeRunReceipt({
       ...run,
       runId: child.threadId,
       terminal: reason === undefined ? "completed" : "incomplete",
       reason: reason ?? "unavailable",
       ...(reasonDetail === undefined ? {} : { reasonDetail }),
-      startedAt: child.startedAt,
-      completedAt: child.completedAt,
+      startedAt: child.startedAt ?? sandboxRun.startedAt,
+      completedAt: child.completedAt ?? sandboxRun.completedAt,
       usage: {
-        inputTokens: child.usage?.input_tokens ?? "unavailable",
-        cachedInputTokens: child.usage?.cached_input_tokens ?? "unavailable",
-        outputTokens: child.usage?.output_tokens ?? "unavailable",
+        inputTokens: datedUsage?.input_tokens ?? "unavailable",
+        cachedInputTokens: datedUsage?.cached_input_tokens ?? "unavailable",
+        outputTokens: datedUsage?.output_tokens ?? "unavailable",
         reasoningOutputTokens:
-          child.usage?.reasoning_output_tokens ?? "unavailable",
+          datedUsage?.reasoning_output_tokens ?? "unavailable",
       },
       observed: child.observed,
       grantReceiptDigest,

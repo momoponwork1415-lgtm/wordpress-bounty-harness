@@ -245,6 +245,9 @@ describe("Codex native agent runtime", () => {
             },
           },
           {
+            timestamp: new Date(
+              Date.parse(now) + ordinal * 1000 + 500,
+            ).toISOString(),
             type: "event_msg",
             payload: {
               type: "task_complete",
@@ -262,6 +265,7 @@ describe("Codex native agent runtime", () => {
       const attachments = new ProviderAttachmentStore(root);
       const runtime = new CodexNativeAgentRuntime(
         sandbox(stdout, [], {
+          completedAt: new Date(Date.parse(now) + 5000).toISOString(),
           // Session file ordering is not guaranteed to be spawn ordering.
           rollouts: [
             rootRollout,
@@ -563,6 +567,80 @@ describe("Codex native agent runtime", () => {
           unexamined: '{"reason":"none"}',
         });
       }
+      const childStartedAt = "2026-10-08T23:59:59.000Z";
+      const sandboxCompletedAt = "2026-10-09T00:00:03.000Z";
+      const missingChildFinish = childRollout
+        .split("\n")
+        .map((line) => {
+          const event = JSON.parse(line) as {
+            timestamp?: string;
+            type: string;
+            payload?: { type?: string };
+          };
+          if (event.payload?.type === "task_complete") delete event.timestamp;
+          else event.timestamp = childStartedAt;
+          return JSON.stringify(event);
+        })
+        .join("\n");
+      const missingTimestamp = await new CodexNativeAgentRuntime(
+        sandbox(brokenRoot, [], {
+          rollouts: [rootRollout, missingChildFinish],
+          startedAt: childStartedAt,
+          completedAt: sandboxCompletedAt,
+        }),
+        broker(),
+        attachments,
+        image,
+        () => new Date(sandboxCompletedAt),
+      ).execute({
+        ...run,
+        profile: cooperativeProfile,
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(missingTimestamp.agentRuns?.[0]?.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "schema",
+        reasonDetail: "child-completion-time-unavailable",
+        startedAt: childStartedAt,
+        completedAt: sandboxCompletedAt,
+        usage: { inputTokens: "unavailable", outputTokens: "unavailable" },
+      });
+      expect(missingTimestamp.agentRuns?.[0]?.attachment).toBeDefined();
+      const withoutAnyChildTimestamp = missingChildFinish
+        .split("\n")
+        .map((line) => {
+          const event = JSON.parse(line) as { timestamp?: string };
+          delete event.timestamp;
+          return JSON.stringify(event);
+        })
+        .join("\n");
+      const missingBoth = await new CodexNativeAgentRuntime(
+        sandbox(brokenRoot, [], {
+          rollouts: [rootRollout, withoutAnyChildTimestamp],
+          startedAt: childStartedAt,
+          completedAt: sandboxCompletedAt,
+        }),
+        broker(),
+        attachments,
+        image,
+        () => new Date(sandboxCompletedAt),
+      ).execute({
+        ...run,
+        profile: cooperativeProfile,
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(missingBoth.agentRuns?.[0]?.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "schema",
+        startedAt: childStartedAt,
+        completedAt: sandboxCompletedAt,
+      });
       for (const [overrides, reasonDetail] of [
         [{ rollouts: [childRollout] }, "root-rollout-missing"],
         [

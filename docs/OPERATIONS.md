@@ -182,6 +182,8 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 
 この修正を取り込む前の `discovery-run-finished.occurredAt` は開始時刻のままの場合がある。過去 event は追記専用のまま書き換えないため、日をまたいだ旧 run の `ledger usage` は開始日の集計を示し続ける。過去の費用・上限を日別に分析するときは、Git 外 Private Evidence の native receipt の `completedAt` と照合して別途集計する。receipt がない run の正確な終了日は復元できない。
 
+Root の `discovery-run-started.occurredAt` は Harness が実行を渡す時刻で、native receipt の `startedAt` は sandbox 準備後の実行開始時刻なので一致しない場合がある。run の実 wall は native receipt を見る。子 rollout に完了時刻が無い場合は `incomplete(schema)` とし、sandbox の終了観測時刻を終了 event に記録する。正確な子の終了日は不明なので、token 数は日別使用量に割り当てず `unavailable` とする。
+
 収益の式は「対象数 × 当たり率 × in-scope率 × 平均報奨 − 月費用」。funnelの各段がこの各項に対応する。
 
 | 細い段 | 直す場所 |
