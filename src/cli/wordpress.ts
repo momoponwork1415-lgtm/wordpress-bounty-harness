@@ -198,9 +198,10 @@ const campaignModes = z.discriminatedUnion("mode", [
       .enum([
         "wp2shell-bounty-v2",
         "wp2shell-bounty-v3",
+        "wp2shell-bounty-v4",
         "wp2shell-whitebox-v1.7",
       ])
-      .default("wp2shell-bounty-v3"),
+      .default("wp2shell-bounty-v4"),
     stopRules: singleTrialStop,
     entryIndex: z.literal(true).default(true),
   }),
@@ -212,9 +213,10 @@ const campaignModes = z.discriminatedUnion("mode", [
       .enum([
         "wp2shell-bounty-v2",
         "wp2shell-bounty-v3",
+        "wp2shell-bounty-v4",
         "wp2shell-whitebox-v1.7",
       ])
-      .default("wp2shell-bounty-v3"),
+      .default("wp2shell-bounty-v4"),
     stopRules: singleTrialStop,
     entryIndex: z.literal(false),
   }),
@@ -256,6 +258,7 @@ export const wordpressCampaignConfigSchema = z
           : config.promptId !== undefined &&
               config.promptId !== "wp2shell-bounty-v2" &&
               config.promptId !== "wp2shell-bounty-v3" &&
+              config.promptId !== "wp2shell-bounty-v4" &&
               config.promptId !== "wp2shell-whitebox-v1.7"
             ? "comparison"
             : config.entryIndex === false
@@ -851,7 +854,9 @@ async function planWordPressDiscovery(
   const outputContractV1 = wordPressDiscoveryOutputContract();
   const outputContractV2 = wordPressDiscoveryOutputContractV2();
   const outputContractFor = (id: string) =>
-    id === "wp2shell-bounty-v3" || id === "wp2shell-whitebox-v1.7"
+    id === "wp2shell-bounty-v3" ||
+    id === "wp2shell-bounty-v4" ||
+    id === "wp2shell-whitebox-v1.7"
       ? outputContractV2
       : outputContractV1;
   const objectiveOnly = (id: string) =>
@@ -1318,7 +1323,7 @@ export function createWordPressCliProfile(
         legacyHistory: legacy.history,
         candidates: eligible.map(({ slug, version }) => ({ slug, version })),
         currentPromptVariant:
-          policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v3",
+          policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v4",
         revisitPolicy: policy.revisitPolicy ?? { kind: "never" },
       });
       const ledgerReasons = new Map(
@@ -1436,7 +1441,7 @@ export function createWordPressCliProfile(
           type: "target-selected",
           selectionId: `${target.targetId}@${target.version}`,
           promptVariant:
-            policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v3",
+            policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v4",
           artifacts: [
             { kind: "target-selection", digest: selectionDigest },
             { kind: "selection-report", digest: reportDigest },
