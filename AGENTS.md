@@ -6,7 +6,7 @@
 
 1. [docs/SPEC.md](docs/SPEC.md) — 目的、不変条件、モジュール境界、受け渡し契約、単一協調Trialの主経路と最初の縦断スライス。
 2. [docs/adr/](docs/adr/) — 番号順。設計の理由と、採らなかった選択肢。
-3. [docs/DESIGN-WALKTHROUGH.md](docs/DESIGN-WALKTHROUGH.md) — 全体を1つの流れで理解したいときだけ。規則は増やさない。図で見るなら [docs/DESIGN-DIAGRAMS.md](docs/DESIGN-DIAGRAMS.md)（2026-10-13 確定版）。 開発の流れ（作業列、ゲート、憲章、逆圧、monitor / tune）を図で見るなら [docs/FACTORY.md](docs/FACTORY.md)。
+3. [docs/DESIGN-WALKTHROUGH.md](docs/DESIGN-WALKTHROUGH.md) — 全体を1つの流れで理解したいときだけ。規則は増やさない。図で見るなら [docs/DESIGN-DIAGRAMS.md](docs/DESIGN-DIAGRAMS.md)（2026-10-13 確定版）、動きとデータの図は [docs/SYSTEM-DIAGRAMS.md](docs/SYSTEM-DIAGRAMS.md)。 開発の流れ（作業列、ゲート、憲章、逆圧、monitor / tune）を図で見るなら [docs/FACTORY.md](docs/FACTORY.md)。
 4. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 第 2 節 — 今の Step、完了条件、凍結しているもの。[docs/LESSONS.md](docs/LESSONS.md) — 過去 4 世代の教訓。新しい設計案はこの 2 つに反していないかを先に見る。止めてある案は [docs/PARKING.md](docs/PARKING.md)。過去 4 世代の実験記録と取り込んだ原本は [docs/knowledge/](docs/knowledge/) — 新しい問いを立てる前に同じ問いが無いか見る。
 
 ## 不変条件（SPEC.md 第2節）
@@ -69,3 +69,7 @@ Matt Pocock系スキルの5つの標準ラベルを使う。対応は `docs/agen
 ### Domain docs
 
 単一コンテキストとして、用語集はルートの `GLOSSARY.md`、判断記録は `docs/adr/` に置く。読み方は `docs/agents/domain.md`。
+
+### Measurement, review, briefs, ledger
+
+AI が自分で回す手順は `docs/agents/` に置く。計測は `measurement.md`、PR のレビューと merge は `pr-review-merge.md`、Codex への依頼文は `codex-briefs.md`、台帳の読み方は `ledger-reading.md`。進行中の状態は Git ではなく Issue の comment に書く。
