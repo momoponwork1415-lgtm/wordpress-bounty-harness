@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
@@ -8,6 +8,7 @@ import type {
   LedgerEventV1,
   LedgerReadQuery,
 } from "../ledger/index.js";
+import { acquireContinuousLock } from "./continuous-lock.js";
 import type { CampaignSummary } from "./pipeline.js";
 
 // Final design P6. Constants, not settings.
@@ -38,10 +39,19 @@ const STOP_REASONS = [
   "legacy-history-missing",
   "missing-floor-policy",
 ] as const;
+const HOLD_STATES = new Set([
+  "backoff",
+  "holding-disk-low",
+  "holding-error",
+  "holding-no-progress",
+  "holding-refusals",
+  "sleeping",
+  "waiting-login",
+]);
 
 export type ContinuousStopReason = (typeof STOP_REASONS)[number];
 
-/** The runner's working memo. The ledger stays the record; this file may be deleted. */
+/** Disposable working memo; the ledger remains the source of truth. */
 export type ContinuousMemo = {
   state: string;
   detail: Record<string, string>;
@@ -91,7 +101,6 @@ export interface ContinuousDeps {
   clock(): Date;
   sleep(ms: number): Promise<void>;
   readonly signals: Pick<NodeJS.Process, "on" | "off">;
-  pidAlive(pid: number): boolean;
   readonly pid: number;
   readonly io: {
     log(line: string): void;
@@ -109,6 +118,71 @@ export function continuousPaths(stateDirectory: string) {
     stop: join(stateDirectory, "continuous.stop"),
     log: join(stateDirectory, "continuous.log"),
   };
+}
+
+/** Sync contents before publishing the new file, then sync the directory entry. */
+async function writeStateFile(
+  stateDirectory: string,
+  path: string,
+  contents: string,
+): Promise<void> {
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    const file = await open(temporary, "wx", 0o600);
+    try {
+      await file.writeFile(contents, "utf8");
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await rename(temporary, path);
+    const directory = await open(stateDirectory, "r");
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+/** A missing or unusable work memo is recreated from defaults on startup. */
+export async function readContinuousMemo(
+  stateDirectory: string,
+): Promise<ContinuousMemo | null> {
+  const raw = await readFile(
+    continuousPaths(stateDirectory).memo,
+    "utf8",
+  ).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (raw === null) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<ContinuousMemo> | null;
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+      return null;
+    if (
+      typeof value.state !== "string" ||
+      value.detail === null ||
+      typeof value.detail !== "object" ||
+      Array.isArray(value.detail) ||
+      typeof value.backoffStep !== "number" ||
+      typeof value.consecutiveErrorBatches !== "number" ||
+      typeof value.consecutiveRefusalBatches !== "number" ||
+      typeof value.consecutiveNoProgressBatches !== "number" ||
+      typeof value.consecutiveEmptyDays !== "number" ||
+      typeof value.probe !== "boolean" ||
+      typeof value.updatedAt !== "string" ||
+      (HOLD_STATES.has(value.state) &&
+        !Number.isFinite(Date.parse(value.detail.until ?? "")))
+    )
+      return null;
+    return value as ContinuousMemo;
+  } catch {
+    return null;
+  }
 }
 
 /** Atomically publish an explicit operator or terminal policy stop. */
@@ -246,7 +320,7 @@ function batchFacts(deps: ContinuousDeps, campaignId: string) {
 /** One host, one operator, one production state (OPERATIONS §2). */
 export function createContinuousRunner(deps: ContinuousDeps) {
   const paths = continuousPaths(deps.stateDirectory);
-  let memo: ContinuousMemo = {
+  const defaultMemo = (): ContinuousMemo => ({
     state: "starting",
     detail: {},
     backoffStep: 0,
@@ -256,14 +330,17 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     consecutiveEmptyDays: 0,
     probe: false,
     updatedAt: deps.clock().toISOString(),
-  };
+  });
+  let memo = defaultMemo();
   let signalled = false;
   const stopRequested = () => signalled || existsSync(paths.stop);
   const save = async () => {
     memo.updatedAt = deps.clock().toISOString();
-    await writeFile(paths.memo, `${JSON.stringify(memo, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    await writeStateFile(
+      deps.stateDirectory,
+      paths.memo,
+      `${JSON.stringify(memo, null, 2)}\n`,
+    );
   };
   /** A state change writes one line to the log and to --notify. */
   const enter = async (state: string, detail: Record<string, string> = {}) => {
@@ -286,6 +363,12 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     await deps.io.notify?.(line).catch(() => undefined);
   };
   /** Sleeps in one-minute steps so a stop request is never late by more. */
+  const sleepUntil = async (until: Date) => {
+    while (!stopRequested() && deps.clock() < until)
+      await deps.sleep(
+        Math.min(MINUTE, until.getTime() - deps.clock().getTime()),
+      );
+  };
   const hold = async (
     state: string,
     ms: number,
@@ -293,10 +376,19 @@ export function createContinuousRunner(deps: ContinuousDeps) {
   ) => {
     const until = new Date(deps.clock().getTime() + ms);
     await enter(state, { until: until.toISOString(), ...detail });
-    while (!stopRequested() && deps.clock() < until)
-      await deps.sleep(
-        Math.min(MINUTE, until.getTime() - deps.clock().getTime()),
-      );
+    await sleepUntil(until);
+  };
+  /** A crash must not reset or bypass a saved quota, refusal, or empty-pool hold. */
+  const restoreHold = async (): Promise<boolean> => {
+    if (!HOLD_STATES.has(memo.state)) return true;
+    const deadline = Date.parse(memo.detail.until ?? "");
+    if (!Number.isFinite(deadline)) {
+      memo.lastError = `invalid saved ${memo.state} deadline`;
+      await stop("errors");
+      return false;
+    }
+    await sleepUntil(new Date(deadline));
+    return true;
   };
   const stop = async (reason: ContinuousStopReason) => {
     if (reason !== "operator" && !existsSync(paths.stop))
@@ -304,18 +396,28 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     await enter("stopped", { reason });
     return reason;
   };
-
   const run = async (
     options: { readonly resume?: boolean } = {},
   ): Promise<ContinuousStopReason> => {
     signalled = false;
-    await mkdir(deps.stateDirectory, { recursive: true, mode: 0o700 });
-    const previous = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
-    if (previous > 0 && previous !== deps.pid && deps.pidAlive(previous))
-      throw new Error(`continuous run is already running as pid ${previous}`);
-    const saved = await readFile(paths.memo, "utf8").catch(() => "{}");
-    memo = { ...memo, ...(JSON.parse(saved) as Partial<ContinuousMemo>) };
+    const lock = await acquireContinuousLock(deps.stateDirectory);
+    try {
+      return await runLocked(options);
+    } finally {
+      await lock.release();
+    }
+  };
+
+  const runLocked = async (options: {
+    readonly resume?: boolean;
+  }): Promise<ContinuousStopReason> => {
+    const saved = await readContinuousMemo(deps.stateDirectory);
     const heldReason = await readContinuousStopReason(deps.stateDirectory);
+    if (saved === null) {
+      memo = defaultMemo();
+      deps.io.log(`${deps.clock().toISOString()} warning memo-recreated`);
+      await save();
+    } else memo = saved;
     if (heldReason !== null) {
       if (!options.resume) {
         // Preserve the marker and unfinished campaign across service restarts.
@@ -337,6 +439,8 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       if (stopRequested()) return stop("operator");
       if (!(await deps.floorPolicyAvailable()))
         return stop("missing-floor-policy");
+      if (stopRequested()) return stop("operator");
+      if (!(await restoreHold())) return "errors";
       if (stopRequested()) return stop("operator");
       await deps.preflight();
       if (stopRequested()) return stop("operator");

@@ -7,10 +7,12 @@ import {
   clearContinuousStop,
   continuousPaths,
   createContinuousRunner,
+  readContinuousMemo,
   readContinuousStopReason,
   requestContinuousStop,
   type ContinuousMemo,
 } from "./continuous.js";
+import { acquireContinuousLock } from "./continuous-lock.js";
 import type { CliIo, CliProfile, CliState } from "./index.js";
 
 export type ContinuousHostStatus = {
@@ -134,16 +136,18 @@ export async function continuousCommand(
   if (sub === "resume") {
     if (context.resume)
       throw new Error("--resume is only valid with continuous run");
-    const pid = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
-    if (pid > 0 && pidAlive(pid))
-      throw new Error(`continuous run is still running as pid ${pid}`);
-    const cleared = await clearContinuousStop(state.stateDirectory);
-    io.stdout(
-      cleared
-        ? "stop request cleared; start continuous run to resume"
-        : "no stop request to clear",
-    );
-    return 0;
+    const lock = await acquireContinuousLock(state.stateDirectory);
+    try {
+      const cleared = await clearContinuousStop(state.stateDirectory);
+      io.stdout(
+        cleared
+          ? "stop request cleared; start continuous run to resume"
+          : "no stop request to clear",
+      );
+      return 0;
+    } finally {
+      await lock.release();
+    }
   }
   if (sub === "stop") {
     if (context.resume)
@@ -155,9 +159,9 @@ export async function continuousCommand(
   if (sub === "status") {
     if (context.resume)
       throw new Error("--resume is only valid with continuous run");
-    const memo = JSON.parse(
-      await readFile(paths.memo, "utf8").catch(() => "null"),
-    ) as ContinuousMemo | null;
+    const memo: ContinuousMemo | null = await readContinuousMemo(
+      state.stateDirectory,
+    );
     const pid = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
     const livePid = pid > 0 && pidAlive(pid) ? pid : null;
     const stopReason = await readContinuousStopReason(state.stateDirectory);
@@ -166,9 +170,11 @@ export async function continuousCommand(
         ? livePid === null
           ? "stopped"
           : "stopping"
-        : memo !== null && memo.state !== "stopped" && livePid === null
-          ? "stale"
-          : (memo?.state ?? "never-started");
+        : memo === null && livePid !== null
+          ? "running"
+          : memo !== null && memo.state !== "stopped" && livePid === null
+            ? "stale"
+            : (memo?.state ?? "never-started");
     const displayDetail =
       stopReason !== null ? { reason: stopReason } : (memo?.detail ?? {});
     io.stdout(
@@ -274,7 +280,6 @@ export async function continuousCommand(
     clock: state.clock,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     signals: process,
-    pidAlive,
     pid: process.pid,
     io: {
       log(line) {
