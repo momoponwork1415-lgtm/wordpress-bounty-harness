@@ -129,7 +129,9 @@ async function harness(
       readonly bundledCatalogDigest: string;
     };
     readonly labProbeHttp?: "ok" | "failed";
+    readonly labProbeThrows?: boolean;
     readonly labProvisionFailure?: boolean;
+    readonly labProvisionThrows?: boolean;
     readonly labMissingExtension?: boolean;
     readonly labSeedFailure?: boolean;
     readonly labSeedThrows?: boolean;
@@ -479,6 +481,13 @@ async function harness(
     },
     lab: {
       ...lab,
+      ...(options.labProbeThrows === true
+        ? {
+            probe: async () => {
+              throw new Error("Synthetic probe exception");
+            },
+          }
+        : {}),
       teardown: async (...args: Parameters<typeof lab.teardown>) => {
         teardownCalls++;
         if (
@@ -501,6 +510,11 @@ async function harness(
           }
         : {}),
       provision: async (...args: Parameters<typeof lab.provision>) => {
+        if (
+          options.labProvisionThrows === true &&
+          args[2]?.purpose !== "verification"
+        )
+          throw new Error("Synthetic provision exception");
         if (args[2]?.purpose === "verification") {
           verificationProvisionAttempts++;
           if (
@@ -1258,7 +1272,7 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("records the Lab provision stage and stores Docker diagnostics by private digest", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
+    const { run, configPath, prompts, ledger, store } = await harness({
       labProvisionFailure: true,
     });
     const result = await run(
@@ -1282,7 +1296,124 @@ describe("harness CLI vertical slice", () => {
       ],
     });
     expect(JSON.stringify(event)).not.toContain("fixture docker error");
+    if (event?.type !== "lab-provisioned") throw new Error("Lab event missing");
+    const digest = event.artifacts?.[0]?.digest;
+    if (digest === undefined) throw new Error("Lab diagnostic digest missing");
+    const artifact = await store().readFile(
+      digest,
+      "lab-diagnostic.json",
+      2048,
+    );
+    expect(artifact.status).toBe("resolved");
+    if (artifact.status === "resolved")
+      expect(JSON.parse(artifact.bytes.toString("utf8"))).toMatchObject({
+        exception: {
+          className: "LabDockerFailure",
+          message: "gVisor Lab command failed",
+        },
+        nextStep: expect.any(String),
+      });
   });
+
+  it("keeps a generic provision exception in Private Evidence and shows its stage in CLI", async () => {
+    const { run, configPath, ledger, store } = await harness({
+      labProvisionThrows: true,
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-provision-throws",
+      "--config",
+      configPath,
+    );
+    const event = ledger().read({ type: "lab-provisioned" }).at(0)?.event;
+    expect(event).toMatchObject({
+      status: "failed",
+      failureStage: "provision",
+      reason: "provision",
+      artifacts: [
+        { kind: "lab-diagnostic", digest: expect.stringMatching(/^sha256:/) },
+      ],
+    });
+    if (event?.type !== "lab-provisioned") throw new Error("Lab event missing");
+    const digest = event.artifacts?.[0]?.digest;
+    if (digest === undefined) throw new Error("Lab diagnostic digest missing");
+    const artifact = await store().readFile(
+      digest,
+      "lab-diagnostic.json",
+      2048,
+    );
+    expect(artifact.status).toBe("resolved");
+    if (artifact.status === "resolved")
+      expect(JSON.parse(artifact.bytes.toString("utf8"))).toMatchObject({
+        exception: {
+          className: "Error",
+          message: "Synthetic provision exception",
+        },
+        nextStep: expect.any(String),
+      });
+    expect(JSON.stringify(event)).not.toContain(
+      "Synthetic provision exception",
+    );
+    expect(result.stdout).toContain("failureStage=provision reason=provision");
+    expect(result.stdout).toContain(digest.slice(7, 19));
+    expect(result.code).toBe(1);
+  });
+
+  it.each([
+    ["seed", { labSeedThrows: true }, "Synthetic seed exception", "provision"],
+    [
+      "probe",
+      { labProbeThrows: true },
+      "Synthetic probe exception",
+      "reachability",
+    ],
+  ] as const)(
+    "records a %s exception in the Lab diagnostic",
+    async (stage, options, message, reason) => {
+      const { run, configPath, ledger, store } = await harness(options);
+      const result = await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        `campaign-${stage}-throws`,
+        "--config",
+        configPath,
+      );
+      const event = ledger().read({ type: "lab-provisioned" }).at(0)?.event;
+      expect(event).toMatchObject({
+        status: "failed",
+        failureStage: stage,
+        reason,
+        artifacts: [
+          { kind: "lab-diagnostic", digest: expect.stringMatching(/^sha256:/) },
+        ],
+      });
+      if (event?.type !== "lab-provisioned")
+        throw new Error("Lab event missing");
+      const digest = event.artifacts?.[0]?.digest;
+      if (digest === undefined)
+        throw new Error("Lab diagnostic digest missing");
+      const artifact = await store().readFile(
+        digest,
+        "lab-diagnostic.json",
+        2048,
+      );
+      expect(artifact.status).toBe("resolved");
+      if (artifact.status === "resolved")
+        expect(JSON.parse(artifact.bytes.toString("utf8"))).toMatchObject({
+          exception: { className: "Error", message },
+          nextStep: expect.any(String),
+        });
+      expect(JSON.stringify(event)).not.toContain(message);
+      expect(result.stdout).toContain(`failureStage=${stage} reason=${reason}`);
+      expect(result.stdout).toContain(digest.slice(7, 19));
+      expect(result.code).toBe(1);
+    },
+  );
 
   it("records a missing PHP extension as an incomplete precondition without starting discovery", async () => {
     const { run, configPath, prompts, ledger } = await harness({
@@ -2351,13 +2482,16 @@ describe("harness CLI vertical slice", () => {
       "--config",
       configPath,
     );
-    expect(result.code).toBe(0);
+    expect(result.code).toBe(1);
     expect(
       ledger().read({
         campaignId: "campaign-parallel-cleanup",
-        type: "target-skipped",
+        type: "lab-provisioned",
       }),
-    ).toHaveLength(2);
+    ).toMatchObject([
+      { event: { status: "failed", failureStage: "seed" } },
+      { event: { status: "failed", failureStage: "seed" } },
+    ]);
     expect(live.containers.size).toBe(0);
     expect(live.networks.size).toBe(0);
     expect(live.volumes.size).toBe(0);

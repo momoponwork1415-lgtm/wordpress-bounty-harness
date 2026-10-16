@@ -8,6 +8,21 @@ export interface LabHandle {
   readonly scenario?: { readonly id: string; readonly digest: string };
 }
 
+export interface LabExceptionSummary {
+  readonly className: string;
+  readonly message: string;
+}
+
+/** Exception detail is bounded before it enters a private diagnostic artifact. */
+export function describeLabException(error: unknown): LabExceptionSummary {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    className:
+      error instanceof Error ? error.constructor.name || "Error" : typeof error,
+    message: Array.from(message).slice(0, 500).join(""),
+  };
+}
+
 export type ProvisionResult<Handle extends LabHandle> =
   | { readonly status: "ready"; readonly handle: Handle }
   | {
@@ -16,6 +31,7 @@ export type ProvisionResult<Handle extends LabHandle> =
       readonly nextStep: string;
       /** Private diagnostic data; callers store it outside the ledger. */
       readonly diagnostic?: string;
+      readonly exception?: LabExceptionSummary;
     };
 
 export type LabReachability = {
@@ -37,6 +53,7 @@ export interface LabProvisioner<Setup, Handle extends LabHandle> {
         readonly reason: "provision";
         readonly nextStep: string;
         readonly diagnostic?: string;
+        readonly exception?: LabExceptionSummary;
       }
   >;
   teardown(handle: Handle): Promise<

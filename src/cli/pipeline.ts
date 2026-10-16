@@ -10,6 +10,7 @@ import type {
   LabProvisioner,
   LabReachability,
 } from "../lab/index.js";
+import { describeLabException } from "../lab/index.js";
 import type {
   Ledger,
   LedgerEventV1,
@@ -166,6 +167,11 @@ export type CampaignSummary = {
     readonly lab: "ready" | "failed";
     readonly runCount: number;
     readonly stoppedBy: string;
+    readonly labFailure?: {
+      readonly failureStage: "provision" | "seed" | "probe";
+      readonly reason: string;
+      readonly diagnosticDigest: string;
+    };
     readonly verifications: readonly {
       readonly findingId: string;
       readonly status: VerificationResultV1["status"];
@@ -425,26 +431,43 @@ export async function runCampaignPipeline<
       });
 
       stage = "discovery";
-      const provisioned = await pipeline.lab.provision(snapshot, setup);
+      const provisioned = await pipeline.lab
+        .provision(snapshot, setup)
+        .catch((error: unknown) => ({
+          status: "incomplete" as const,
+          reason: "provision" as const,
+          nextStep: "Inspect the Lab provision error and provision a fresh Lab",
+          diagnostic: undefined,
+          exception: describeLabException(error),
+        }));
       if (provisioned.status === "ready") handle = provisioned.handle;
       const seeded =
         provisioned.status === "ready"
-          ? await pipeline.lab.seedCanaries(provisioned.handle)
+          ? await pipeline.lab
+              .seedCanaries(provisioned.handle)
+              .catch((error: unknown) => ({
+                status: "incomplete" as const,
+                reason: "provision" as const,
+                nextStep: "Inspect the Lab seed error and seed a fresh Lab",
+                diagnostic: undefined,
+                exception: describeLabException(error),
+              }))
           : null;
       const labId =
         provisioned.status === "ready"
           ? provisioned.handle.id
           : options.newId();
+      let probeException: ReturnType<typeof describeLabException> | undefined;
       const reachability =
         provisioned.status === "ready" &&
         seeded?.status === "seeded" &&
         pipeline.lab.probe !== undefined
           ? await pipeline.lab
               .probe(provisioned.handle)
-              .catch((): LabReachability => ({
-                http: "failed",
-                database: "failed",
-              }))
+              .catch((error: unknown): LabReachability => {
+                probeException = describeLabException(error);
+                return { http: "failed", database: "failed" };
+              })
           : undefined;
       const ready =
         provisioned.status === "ready" &&
@@ -467,6 +490,30 @@ export async function runCampaignPipeline<
           : seeded?.status === "incomplete"
             ? seeded.diagnostic
             : undefined;
+      const exception =
+        provisioned.status === "incomplete"
+          ? provisioned.exception
+          : seeded?.status === "incomplete"
+            ? seeded.exception
+            : probeException;
+      const nextStep =
+        provisioned.status === "incomplete"
+          ? provisioned.nextStep
+          : seeded?.status === "incomplete"
+            ? seeded.nextStep
+            : "Inspect Lab HTTP reachability and provision a fresh Lab";
+      const diagnosticDigest =
+        failure === undefined
+          ? undefined
+          : await options.store.putFiles({
+              "lab-diagnostic.json": canonicalJson({
+                failureStage: failure.failureStage,
+                reason: failure.reason,
+                nextStep,
+                ...(exception === undefined ? {} : { exception }),
+              }),
+              ...(diagnostic === undefined ? {} : { "stderr.txt": diagnostic }),
+            });
       await append({
         ...base,
         identity: `lab-provisioned-${labId}`,
@@ -481,15 +528,13 @@ export async function runCampaignPipeline<
           : { scenario: provisioned.handle.scenario }),
         ...(reachability === undefined ? {} : { reachability }),
         ...(failure === undefined ? {} : failure),
-        ...(diagnostic === undefined
+        ...(diagnosticDigest === undefined
           ? {}
           : {
               artifacts: [
                 {
                   kind: "lab-diagnostic",
-                  digest: await options.store.putFiles({
-                    "stderr.txt": diagnostic,
-                  }),
+                  digest: diagnosticDigest,
                 },
               ],
             }),
@@ -506,6 +551,9 @@ export async function runCampaignPipeline<
             provisioned.reason === "precondition"
               ? "incomplete(precondition)"
               : "setup-failed",
+          ...(failure === undefined || diagnosticDigest === undefined
+            ? {}
+            : { labFailure: { ...failure, diagnosticDigest } }),
           verifications: [],
         };
         return;

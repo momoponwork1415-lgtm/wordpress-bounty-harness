@@ -48,6 +48,7 @@ export type {
 export { WORDPRESS_CORE_IDENTITY } from "./provision-input.js";
 import type { ExpectedSourceTree } from "../../../infrastructure/canonical-source-tree.js";
 import { runNativeModelProcess } from "../../../infrastructure/native-model-process.js";
+import { describeLabException } from "../../../lab/index.js";
 import type {
   LabHandle,
   LabProvisioner,
@@ -831,6 +832,7 @@ export function openWordPressLab(options: {
           ...(error instanceof LabDockerFailure && error.diagnostic
             ? { diagnostic: error.diagnostic }
             : {}),
+          exception: describeLabException(error),
         };
       }
     },
@@ -861,6 +863,7 @@ export function openWordPressLab(options: {
           ...(error instanceof LabDockerFailure && error.diagnostic
             ? { diagnostic: error.diagnostic }
             : {}),
+          exception: describeLabException(error),
         };
       }
     },

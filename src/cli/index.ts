@@ -868,7 +868,11 @@ export async function runCli(
         }
         for (const target of summary.targets) {
           io.stdout(
-            `${target.targetId} ${target.version}  snapshot ${target.snapshotDigest}  lab ${target.lab}  runs ${target.runCount}  stopped by ${target.stoppedBy}`,
+            `${target.targetId} ${target.version}  snapshot ${target.snapshotDigest}  lab ${target.lab}  runs ${target.runCount}  stopped by ${target.stoppedBy}${
+              target.labFailure === undefined
+                ? ""
+                : `  failureStage=${target.labFailure.failureStage} reason=${target.labFailure.reason} artifact=${target.labFailure.diagnosticDigest.slice(7, 19)}`
+            }`,
           );
           for (const verification of target.verifications)
             io.stdout(
@@ -881,7 +885,12 @@ export async function runCli(
           );
         print(formatFunnel(state.ledger.funnel(summary.campaignId)));
         // A distinct exit code lets an unattended schedule tell a resumable stop apart.
-        return summary.stopped === undefined ? 0 : 3;
+        if (summary.stopped !== undefined) return 3;
+        return summary.targets.some(
+          (target) => target.stoppedBy === "setup-failed",
+        )
+          ? 1
+          : 0;
       }
       case "review":
         print(
