@@ -916,6 +916,23 @@ const programmeRef = {
 };
 
 describe("harness CLI vertical slice", () => {
+  it("rejects a campaign ID longer than the ledger identity permits before starting work", async () => {
+    const { run, configPath, docker, prompts } = await harness();
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "c".repeat(41),
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("--campaign must be at most 40 characters");
+    expect(docker).toHaveLength(0);
+    expect(prompts).toHaveLength(0);
+  });
+
   it("records a measured evaluation block with a bounded reason code", async () => {
     const { run, ledger, configPath } = await harness();
     expect((await run("select", "--config", configPath)).code).toBe(0);
@@ -2351,13 +2368,16 @@ describe("harness CLI vertical slice", () => {
       "--config",
       configPath,
     );
-    expect(result.code).toBe(0);
-    expect(
-      ledger().read({
-        campaignId: "campaign-parallel-cleanup",
-        type: "target-skipped",
-      }),
-    ).toHaveLength(2);
+    expect(result.code).toBe(1);
+    const skips = ledger().read({
+      campaignId: "campaign-parallel-cleanup",
+      type: "target-skipped",
+    });
+    expect(skips).toHaveLength(2);
+    expect(skips.map(({ event }) => event)).toMatchObject([
+      { reason: "other" },
+      { reason: "other" },
+    ]);
     expect(live.containers.size).toBe(0);
     expect(live.networks.size).toBe(0);
     expect(live.volumes.size).toBe(0);
@@ -3563,6 +3583,15 @@ describe("harness CLI vertical slice", () => {
         )
       ).code,
     ).not.toBe(0);
+    const longPrefix = await run(
+      "continuous",
+      "run",
+      ...command,
+      "--campaign-prefix",
+      "p".repeat(29),
+    );
+    expect(longPrefix.code).toBe(1);
+    expect(longPrefix.stderr).toContain("at most 28 characters");
   });
 
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {

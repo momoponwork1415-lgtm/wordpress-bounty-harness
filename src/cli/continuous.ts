@@ -132,7 +132,12 @@ function nextCampaignId(deps: ContinuousDeps): string {
           highest,
           Number(event.campaignId.slice(head.length)) || 0,
         );
-  return `${head}${highest + 1}`;
+  const campaignId = `${head}${highest + 1}`;
+  if (campaignId.length > 40)
+    throw new Error(
+      "Generated campaign ID exceeds 40 characters; shorten --campaign-prefix",
+    );
+  return campaignId;
 }
 
 /** The latest usage limit any run of this campaign hit; quota when unknown. */

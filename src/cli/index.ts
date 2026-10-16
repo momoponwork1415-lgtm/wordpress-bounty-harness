@@ -845,8 +845,12 @@ export async function runCli(
           throw new UsageError(
             "campaign run takes exactly one of <slug> or --all",
           );
+        const campaignId = required(values.campaign, "campaign");
+        // target-selected-<campaign>-<sha256 digest> must fit the ledger's 128-character identity.
+        if (campaignId.length > 40)
+          throw new UsageError("--campaign must be at most 40 characters");
         const summary = await environment.profile.runCampaign(state, {
-          campaignId: required(values.campaign, "campaign"),
+          campaignId,
           configPath: resolve(required(values.config, "config")),
           target,
           retryIncompleteVerifications: values["retry-incomplete"] === true,
@@ -881,7 +885,11 @@ export async function runCli(
           );
         print(formatFunnel(state.ledger.funnel(summary.campaignId)));
         // A distinct exit code lets an unattended schedule tell a resumable stop apart.
-        return summary.stopped === undefined ? 0 : 3;
+        return summary.stopped !== undefined
+          ? 3
+          : summary.targets.length === 0
+            ? 1
+            : 0;
       }
       case "review":
         print(

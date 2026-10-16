@@ -169,10 +169,10 @@ export async function continuousCommand(
     throw new Error("continuous run needs --config and --selection");
   if (
     context.campaignPrefix.startsWith("selection-") ||
-    !/^[a-z0-9][a-z0-9-]{0,40}$/.test(context.campaignPrefix)
+    !/^[a-z0-9][a-z0-9-]{0,27}$/.test(context.campaignPrefix)
   )
     throw new Error(
-      "--campaign-prefix must be a short slug not starting with selection-",
+      "--campaign-prefix must be a slug of at most 28 characters not starting with selection-",
     );
   const hostStatus = profile.hostStatus;
   if (hostStatus === undefined)
