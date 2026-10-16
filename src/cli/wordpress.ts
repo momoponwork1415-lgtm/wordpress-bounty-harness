@@ -1108,6 +1108,38 @@ async function runWordPressCampaign(
   const ablationConfig =
     config.mode === "ablation" ? config.ablation : undefined;
   const boundaries = await options.boundaries(config, state);
+  // A previous teardown failure is a campaign stop, not a negative finding.
+  // Inspect only the recorded Lab ids and never delete them implicitly.
+  let afterSequence = 0;
+  const cleanupLabIds = new Set<string>();
+  for (;;) {
+    const page = state.ledger.read({
+      campaignId: input.campaignId,
+      type: "campaign-stopped",
+      afterSequence,
+      limit: 1000,
+    });
+    for (const { event } of page)
+      if (event.type === "campaign-stopped")
+        for (const labId of event.cleanupLabIds ?? []) cleanupLabIds.add(labId);
+    if (page.length < 1000) break;
+    afterSequence = page.at(-1)!.sequence;
+  }
+  for (const labId of cleanupLabIds) {
+    const remaining = await boundaries.lab.cleanupLeftovers({
+      remove: false,
+      labId,
+    });
+    if (
+      remaining.containers.length +
+        remaining.networks.length +
+        remaining.volumes.length >
+      0
+    )
+      throw new Error(
+        `Lab ${labId} cleanup is incomplete; inspect and remove its resources before resuming`,
+      );
+  }
   const [objective, trustBoundary] = await Promise.all([
     loadWordPressDiscoveryAsset(config.promptId),
     loadWordPressDiscoveryAsset("trust-boundary-v1"),
