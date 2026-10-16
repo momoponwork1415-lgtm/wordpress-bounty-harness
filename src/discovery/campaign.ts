@@ -498,6 +498,7 @@ export async function runDiscoveryCampaign(options: {
       let researchArtifact:
         { readonly digest: string; readonly truncated: boolean } | undefined;
       let receiptDigest: string | undefined;
+      let receiptCompletedAt: string | undefined;
       let failure: ReportFailure | undefined;
       const reportState = { foundNew: false, heldBoundary: false };
       const recordReport = createReportRecorder({
@@ -530,6 +531,7 @@ export async function runDiscoveryCampaign(options: {
           };
         }
         const receipt = nativeRunReceiptSchema.parse(result.receipt);
+        receiptCompletedAt = new Date(receipt.completedAt).toISOString();
         wallTimeMs = Math.max(
           0,
           Date.parse(receipt.completedAt) - Date.parse(receipt.startedAt),
@@ -590,6 +592,7 @@ export async function runDiscoveryCampaign(options: {
       }
       const finished = await options.ledger.append({
         ...base,
+        occurredAt: receiptCompletedAt ?? clock().toISOString(),
         identity: `discovery-finish-${run.runId}`,
         type: "discovery-run-finished",
         runId: run.runId,

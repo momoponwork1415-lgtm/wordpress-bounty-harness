@@ -180,6 +180,8 @@ harness ledger usage [--campaign <id>]    # providerが返したtokenを対象�
 harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、CLI版、カタログdigest、tier、access、認証の組ごとのrun数
 ```
 
+この修正を取り込む前の `discovery-run-finished.occurredAt` は開始時刻のままの場合がある。過去 event は追記専用のまま書き換えないため、日をまたいだ旧 run の `ledger usage` は開始日の集計を示し続ける。過去の費用・上限を日別に分析するときは、Git 外 Private Evidence の native receipt の `completedAt` と照合して別途集計する。receipt がない run の正確な終了日は復元できない。
+
 収益の式は「対象数 × 当たり率 × in-scope率 × 平均報奨 − 月費用」。funnelの各段がこの各項に対応する。
 
 | 細い段 | 直す場所 |

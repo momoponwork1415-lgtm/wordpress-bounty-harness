@@ -76,6 +76,7 @@ export async function recoverChildAgentReports(
     const receipt = nativeRunReceiptSchema.parse(child.receipt);
     const started = await options.ledger.append({
       ...options.base,
+      occurredAt: new Date(receipt.startedAt).toISOString(),
       identity: `discovery-start-${receipt.runId}`,
       type: "discovery-run-started",
       runId: receipt.runId,
@@ -122,6 +123,7 @@ export async function recoverChildAgentReports(
     }
     const finished = await options.ledger.append({
       ...options.base,
+      occurredAt: new Date(receipt.completedAt).toISOString(),
       identity: `discovery-finish-${receipt.runId}`,
       type: "discovery-run-finished",
       runId: receipt.runId,

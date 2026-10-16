@@ -50,6 +50,8 @@ async function campaign(
     readonly childSurvivesBrokenRoot?: boolean;
     readonly heldOnly?: boolean;
     readonly rootTranscriptInvalid?: boolean;
+    readonly rootProviderLimited?: boolean;
+    readonly rootThrowsAt?: string;
     readonly indexed?: boolean;
     readonly leadOnly?: boolean;
     /** Report a Finding whose impact lies outside the Programme Boundary (#185). */
@@ -59,8 +61,18 @@ async function campaign(
       readonly admitted: number;
     };
     readonly research?: { readonly truncated: boolean };
+    readonly timing?: {
+      readonly rootStartedAt: string;
+      readonly rootCompletedAt: string;
+      readonly childStartedAt?: string;
+      readonly childCompletedAt?: string;
+    };
   } = {},
 ) {
+  const rootStartedAt = options.timing?.rootStartedAt ?? "2026-10-08T07:00:00Z";
+  const rootCompletedAt =
+    options.timing?.rootCompletedAt ?? "2026-10-08T07:00:01Z";
+  let now = rootStartedAt;
   const root = await mkdtemp(join(tmpdir(), "wbh-campaign-"));
   directories.push(root);
   const attachments = new ProviderAttachmentStore(join(root, "reports"));
@@ -145,8 +157,28 @@ async function campaign(
     classifyCandidate: classifyWordPressCandidate,
     executor: {
       async execute(run) {
-        expect(run.expiresAt).toBe("2026-10-08T08:00:00.000Z");
+        expect(run.expiresAt).toBe(
+          new Date(Date.parse(rootStartedAt) + 60 * 60_000).toISOString(),
+        );
         const ordinal = calls++;
+        if (options.rootThrowsAt !== undefined) {
+          now = options.rootThrowsAt;
+          throw new Error("synthetic transport failure");
+        }
+        if (options.rootProviderLimited) {
+          return {
+            receipt: createNativeRunReceipt({
+              runId: run.runId,
+              targetSnapshotDigest: run.targetSnapshotDigest,
+              profile: run.profile,
+              terminal: "incomplete",
+              reason: "provider",
+              providerLimit: "quota",
+              startedAt: rootStartedAt,
+              completedAt: rootCompletedAt,
+            }),
+          };
+        }
         const researchArtifact =
           options.research === undefined
             ? undefined
@@ -184,8 +216,8 @@ async function campaign(
               terminal: "incomplete",
               reason: "schema",
               reasonDetail: "invalid-event-shape",
-              startedAt: "2026-10-08T07:00:00Z",
-              completedAt: "2026-10-08T07:00:01Z",
+              startedAt: rootStartedAt,
+              completedAt: rootCompletedAt,
               ...(options.rootChildCounts === undefined
                 ? {}
                 : {
@@ -217,8 +249,14 @@ async function campaign(
               terminal: "incomplete",
               reason: "schema",
               reasonDetail: "final-message-not-report",
-              startedAt: "2026-10-08T07:00:00Z",
-              completedAt: "2026-10-08T07:00:01Z",
+              startedAt: rootStartedAt,
+              completedAt: rootCompletedAt,
+              usage: {
+                inputTokens: 1000,
+                cachedInputTokens: 100,
+                outputTokens: 50,
+                reasoningOutputTokens: 5,
+              },
             }),
             agentRuns: [
               {
@@ -230,8 +268,15 @@ async function campaign(
                   profile: run.profile,
                   terminal: "completed",
                   reason: "unavailable",
-                  startedAt: "2026-10-08T07:00:00Z",
-                  completedAt: "2026-10-08T07:00:01Z",
+                  startedAt: options.timing?.childStartedAt ?? rootStartedAt,
+                  completedAt:
+                    options.timing?.childCompletedAt ?? rootCompletedAt,
+                  usage: {
+                    inputTokens: 200,
+                    cachedInputTokens: 20,
+                    outputTokens: 10,
+                    reasoningOutputTokens: 2,
+                  },
                   reportArtifactDigest: childAttachment.digest,
                 }),
               },
@@ -280,8 +325,8 @@ async function campaign(
             profile: run.profile,
             terminal: "completed",
             reason: "unavailable",
-            startedAt: "2026-10-08T07:00:00Z",
-            completedAt: "2026-10-08T07:00:01Z",
+            startedAt: rootStartedAt,
+            completedAt: rootCompletedAt,
             ...(options.rootChildCounts === undefined
               ? {}
               : {
@@ -323,7 +368,7 @@ async function campaign(
         },
       }),
     ),
-    clock: () => new Date("2026-10-08T07:00:00Z"),
+    clock: () => new Date(now),
   });
   return { result, calls, ledger, evidence, attachments };
 }
@@ -354,6 +399,86 @@ it("records valid child claims even when Root formatting and a sibling claim fai
       (await evidence.readFile(reference.digest, "finding.json", 100_000))
         .status,
   ).toBe("resolved");
+});
+
+it("records Root and child completion across UTC midnight and charges usage to the finish day", async () => {
+  const { ledger } = await campaign([], {
+    childSurvivesBrokenRoot: true,
+    timing: {
+      rootStartedAt: "2026-10-08T23:59:59Z",
+      rootCompletedAt: "2026-10-09T00:00:03Z",
+      childStartedAt: "2026-10-08T23:59:59.500Z",
+      childCompletedAt: "2026-10-09T00:00:02.500Z",
+    },
+  });
+  const times = (type: "discovery-run-started" | "discovery-run-finished") =>
+    Object.fromEntries(
+      ledger.read({ type }).map(({ event }) => {
+        if (!("runId" in event)) throw new Error("Expected run event");
+        return [event.runId, event.occurredAt];
+      }),
+    );
+  expect(times("discovery-run-started")).toEqual({
+    "run-0": "2026-10-08T23:59:59.000Z",
+    "child-1": "2026-10-08T23:59:59.500Z",
+  });
+  expect(times("discovery-run-finished")).toEqual({
+    "child-1": "2026-10-09T00:00:02.500Z",
+    "run-0": "2026-10-09T00:00:03.000Z",
+  });
+  expect(ledger.usage({ campaignId: "campaign-1" })).toMatchObject([
+    {
+      day: "2026-10-09",
+      runs: 2,
+      tokens: {
+        inputTokens: 1200,
+        cachedInputTokens: 120,
+        outputTokens: 60,
+        reasoningOutputTokens: 7,
+      },
+    },
+  ]);
+});
+
+it("uses the native completion time for completed and provider-limited Root runs", async () => {
+  for (const rootProviderLimited of [false, true]) {
+    const { ledger } = await campaign([], {
+      indexed: true,
+      rootProviderLimited,
+      timing: {
+        rootStartedAt: "2026-10-08T22:00:00Z",
+        rootCompletedAt: "2026-10-08T22:00:07Z",
+      },
+    });
+    const [started] = ledger.read({ type: "discovery-run-started" });
+    const [finished] = ledger.read({ type: "discovery-run-finished" });
+    expect(started?.event.occurredAt).toBe("2026-10-08T22:00:00.000Z");
+    expect(finished?.event).toMatchObject({
+      occurredAt: "2026-10-08T22:00:07.000Z",
+      wallTimeMs: 7000,
+      outcome: rootProviderLimited ? "provider-limited" : "completed",
+    });
+  }
+});
+
+it("uses the completion clock when a Root transport failure has no receipt", async () => {
+  const { ledger } = await campaign([], {
+    indexed: true,
+    rootThrowsAt: "2026-10-09T00:00:02Z",
+    timing: {
+      rootStartedAt: "2026-10-08T23:59:59Z",
+      rootCompletedAt: "2026-10-09T00:00:02Z",
+    },
+  });
+  expect(
+    ledger.read({ type: "discovery-run-started" })[0]?.event.occurredAt,
+  ).toBe("2026-10-08T23:59:59.000Z");
+  expect(
+    ledger.read({ type: "discovery-run-finished" })[0]?.event,
+  ).toMatchObject({
+    occurredAt: "2026-10-09T00:00:02.000Z",
+    outcome: "failed",
+  });
 });
 
 it("admits an extracted Root candidate without treating the transcript as completed", async () => {
