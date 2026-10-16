@@ -116,6 +116,8 @@ async function harness(
     readonly listingObservations?: readonly WordPressOrgListingObservation[];
     /** A slug whose snapshot cannot be frozen. */
     readonly failFreeze?: string;
+    /** A plain freeze exception that has no source-specific reason code. */
+    readonly failFreezeOther?: string;
     /** A slug whose acquired bytes disagree with its manifest. */
     readonly corruptSourceManifest?: string;
     /** Simulates an archive connection failing after the selection freeze succeeded. */
@@ -458,6 +460,8 @@ async function harness(
   const boundaries: WordPressCampaignBoundaries = {
     selection,
     freeze: async (target) => {
+      if (target.slug === options.failFreezeOther)
+        throw new Error("Synthetic unexpected freeze failure");
       if (target.slug === options.failFreeze)
         throw new SourceAcquisitionError("connect-timeout", {
           code: "ETIMEDOUT",
@@ -931,6 +935,29 @@ describe("harness CLI vertical slice", () => {
     expect(result.stderr).toContain("--campaign must be at most 40 characters");
     expect(docker).toHaveLength(0);
     expect(prompts).toHaveLength(0);
+  });
+
+  it("returns failure when every campaign target is skipped for an unexpected freeze error", async () => {
+    const { run, configPath, ledger, prompts } = await harness({
+      failFreezeOther: "synthetic-plugin",
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-freeze-other",
+      "--config",
+      configPath,
+    );
+    expect(
+      ledger().read({
+        campaignId: "campaign-freeze-other",
+        type: "target-skipped",
+      }),
+    ).toMatchObject([{ event: { stage: "freeze", reason: "other" } }]);
+    expect(prompts).toHaveLength(0);
+    expect(result.code).toBe(1);
   });
 
   it("records a measured evaluation block with a bounded reason code", async () => {
@@ -2368,16 +2395,13 @@ describe("harness CLI vertical slice", () => {
       "--config",
       configPath,
     );
-    expect(result.code).toBe(1);
-    const skips = ledger().read({
-      campaignId: "campaign-parallel-cleanup",
-      type: "target-skipped",
-    });
-    expect(skips).toHaveLength(2);
-    expect(skips.map(({ event }) => event)).toMatchObject([
-      { reason: "other" },
-      { reason: "other" },
-    ]);
+    expect(result.code).toBe(0);
+    expect(
+      ledger().read({
+        campaignId: "campaign-parallel-cleanup",
+        type: "target-skipped",
+      }),
+    ).toHaveLength(2);
     expect(live.containers.size).toBe(0);
     expect(live.networks.size).toBe(0);
     expect(live.volumes.size).toBe(0);

@@ -887,7 +887,9 @@ export async function runCli(
         // A distinct exit code lets an unattended schedule tell a resumable stop apart.
         return summary.stopped !== undefined
           ? 3
-          : summary.targets.length === 0
+          : summary.targets.length === 0 &&
+              summary.skipped.length > 0 &&
+              summary.skipped.every((skipped) => skipped.stage === "freeze")
             ? 1
             : 0;
       }
