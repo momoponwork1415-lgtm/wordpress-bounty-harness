@@ -83,4 +83,24 @@ PR の「測った数字」に貼る列は固定する。
 | （動かない） | custom-facebook-feed 4.13.0 | — | 外部 API 依存。catalog 外（#283） |
 | （動かない） | unlimited-elements-for-elementor 2.0.16 | — | SVN export と Elementor 依存の接続待ち（#282） |
 
+### 2026-10-16 追加（再発見ベンチマークの拡張）
+
+所有者の基準: install 数は 10 万〜100 万を優先し、100 万以上は根拠（Critical 分類、記録の多さ）があるときだけ。直近（2026-06〜10）に CVE 付きの公開記録があり、分類が Programme Boundary 内（reflected XSS は除く）、脆弱版 ZIP が WordPress.org にある plugin から選んだ。scenario は無し（plugin 非依存の既定 Lab）。検証は探索の後に所有者が Finding から起動する（#297）。state は `~/.local/state/wordpress-bounty-harness-bench-20261016/<case>/`、campaign ID は `bench-v5-<case>-1016-rN`。
+
+| case | slug / 版 | install | catalog の公開記録 | 備考 |
+| --- | --- | ---: | --- | --- |
+| forminator | forminator 1.57.3 | 60 万 | CVE-2026-96341、CVE-2026-102388 | 記録 16 件 |
+| tec | the-events-calendar 6.17.4 | 60 万 | CVE-2026-78006 | |
+| ninjaforms | ninja-forms 3.15.4 | 50 万 | CVE-2026-90438 | |
+| wpstatistics | wp-statistics 14.16.13 | 50 万 | CVE-2026-93770 | |
+| nextgen | nextgen-gallery 4.5.0 | 30 万 | CVE-2026-94123 | |
+| latepoint | latepoint 5.7.2 | 10 万 | CVE-2026-100163、CVE-2026-96662 | |
+| give | give 4.17.0 | 10 万 | CVE-2026-104405、CVE-2026-104672 | |
+| tutor | tutor 4.1.0 | 10 万 | CVE-2026-42702 | 所有者の過去報告先 |
+| newsletter | newsletter 9.4.0 | 20 万 | CVE-2026-96566 | 所有者の過去報告先 |
+| adinserter | ad-inserter 2.8.18 | 30 万 | CVE-2026-97077、CVE-2026-81655 | 所有者の過去報告先 |
+| popupmaker | popup-maker 1.24.0 | 70 万 | CVE-2026-87915 | |
+| ultimatemember | ultimate-member 2.13.1 | 20 万 | CVE-2026-96270 | 記録 12 件 |
+| updraftplus | updraftplus 1.26.4 | 400 万 | （catalog 外）CVE-2026-10795 | 100 万以上の根拠: 未認証の認証回避（Critical）。mirror の software 行が free / premium の 2 件で `build-rediscovery-catalog.mjs` が受け付けないため catalog に入れず、Trial だけ回す |
+
 実例は `docs/evaluation/2026-10-16-wiring-gate-measurement.md`。
