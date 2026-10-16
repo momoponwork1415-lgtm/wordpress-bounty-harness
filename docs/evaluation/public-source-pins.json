@@ -70,120 +70,102 @@
       "bytes": 19448933
     },
     {
-      "slug": "forminator",
-      "version": "1.57.3",
-      "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/forminator.1.57.3.zip",
-      "archiveDigest": "sha256:970534402c4b932f6d665c74bacf3a9e2e158a0ccc917f079f0bcc64d3779652",
-      "bytes": 10635411,
-      "observedAt": "2026-10-16"
-    },
-    {
-      "slug": "the-events-calendar",
-      "version": "6.17.4",
-      "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/the-events-calendar.6.17.4.zip",
-      "archiveDigest": "sha256:d8271f2df4f3abc45699471c99d55bbe0c8a6a7efd997da9a5b858032c1c1561",
-      "bytes": 19485252,
-      "observedAt": "2026-10-16"
-    },
-    {
-      "slug": "ninja-forms",
-      "version": "3.15.4",
-      "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/ninja-forms.3.15.4.zip",
-      "archiveDigest": "sha256:883d8f24a66ecc731f9aae240b937dd96a0ad844f6678faafaed7892e59cef8f",
-      "bytes": 6905985,
-      "observedAt": "2026-10-16"
-    },
-    {
-      "slug": "wp-statistics",
-      "version": "14.16.13",
-      "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/wp-statistics.14.16.13.zip",
-      "archiveDigest": "sha256:f34f03e715aee57d8ec5b736e7dd69b7c22b785e97c4a18d7a525195193bce29",
-      "bytes": 8375716,
-      "observedAt": "2026-10-16"
-    },
-    {
-      "slug": "nextgen-gallery",
-      "version": "4.5.0",
-      "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/nextgen-gallery.4.5.0.zip",
-      "archiveDigest": "sha256:cbf71a95c27676c3a933cdb19cd826fb690aedbe15e97556bbb5505cf2d434e4",
-      "bytes": 10655918,
-      "observedAt": "2026-10-16"
-    },
-    {
-      "slug": "latepoint",
-      "version": "5.7.2",
-      "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/latepoint.5.7.2.zip",
-      "archiveDigest": "sha256:74b1dcf6126f1b52acadabf6a67d821b3b4820c1cebb801e4f7c78646603e567",
-      "bytes": 6362206,
-      "observedAt": "2026-10-16"
-    },
-    {
-      "slug": "give",
-      "version": "4.17.0",
-      "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/give.4.17.0.zip",
-      "archiveDigest": "sha256:8478d361848c2d058071e119c10e9894cf7071f580d22145fc525b9cffdcdf49",
-      "bytes": 41136379,
-      "observedAt": "2026-10-16"
-    },
-    {
       "slug": "tutor",
-      "version": "4.1.0",
+      "version": "3.9.8",
       "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/tutor.4.1.0.zip",
-      "archiveDigest": "sha256:9f2b5595167a7a4a19509d67c311970059dfd364fee8c421dc81381776d4eeaf",
-      "bytes": 7989948,
+      "sourceUrl": "https://downloads.wordpress.org/plugin/tutor.3.9.8.zip",
+      "archiveDigest": "sha256:7eb118cce88e2b73bfe11e6ca6a3892b0d4f7c8eb6b9c5a0acaf926133d42856",
+      "bytes": 5518300,
       "observedAt": "2026-10-16"
     },
     {
-      "slug": "newsletter",
-      "version": "9.4.0",
+      "slug": "booking-package",
+      "version": "1.7.06",
       "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/newsletter.9.4.0.zip",
-      "archiveDigest": "sha256:a2f3dec889d6e6725b04cafa3d6a3d27a31ca72227bf3b248c4fa5ed46d2003e",
-      "bytes": 7972240,
+      "sourceUrl": "https://downloads.wordpress.org/plugin/booking-package.1.7.06.zip",
+      "archiveDigest": "sha256:02208f8cd68453a86a5939b621c04ab57c22faed7e439be4c3c9a65163904a07",
+      "bytes": 917840,
       "observedAt": "2026-10-16"
     },
     {
-      "slug": "ad-inserter",
-      "version": "2.8.18",
+      "slug": "classified-listing",
+      "version": "5.3.10",
       "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/ad-inserter.2.8.18.zip",
-      "archiveDigest": "sha256:11343085771eb3c88ed561dc8bc6718473efa4eb5ab1e56a74ef0057fe23cff6",
-      "bytes": 2904311,
+      "sourceUrl": "https://downloads.wordpress.org/plugin/classified-listing.5.3.10.zip",
+      "archiveDigest": "sha256:bcc52d917e2928a4cc5474f6224dc1903f4e3814e1f48e473bd29c781ee01ea9",
+      "bytes": 7345524,
       "observedAt": "2026-10-16"
     },
     {
-      "slug": "popup-maker",
-      "version": "1.24.0",
+      "slug": "reepay-checkout-gateway",
+      "version": "1.8.9",
       "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/popup-maker.1.24.0.zip",
-      "archiveDigest": "sha256:ed99be036f05353d7c9bacdc4e8ca9846fe26b8e8685f0c393603c955dc1ae3e",
-      "bytes": 1544099,
+      "sourceUrl": "https://downloads.wordpress.org/plugin/reepay-checkout-gateway.1.8.9.zip",
+      "archiveDigest": "sha256:7d50c2264c83e5549813d33c54b30a84b2a3de0de283689ac85d89d587bb57d6",
+      "bytes": 1105437,
       "observedAt": "2026-10-16"
     },
     {
-      "slug": "updraftplus",
-      "version": "1.26.4",
+      "slug": "wp-user-frontend",
+      "version": "4.3.1",
       "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/updraftplus.1.26.4.zip",
-      "archiveDigest": "sha256:8c1a46e1b70315c8dbad575160494443f35463bfea253294912b1a153bcc9d0c",
-      "bytes": 8029169,
+      "sourceUrl": "https://downloads.wordpress.org/plugin/wp-user-frontend.4.3.1.zip",
+      "archiveDigest": "sha256:179f0fa6694708c3bdabd3f8c248af9ff08edfc0c70db5fa5369e8344fb005d3",
+      "bytes": 10088684,
       "observedAt": "2026-10-16"
     },
     {
-      "slug": "ultimate-member",
-      "version": "2.13.1",
+      "slug": "cost-calculator-builder",
+      "version": "3.6.17",
       "kind": "wordpress-org-zip",
-      "sourceUrl": "https://downloads.wordpress.org/plugin/ultimate-member.2.13.1.zip",
-      "archiveDigest": "sha256:9573cb5803ae2b2d7719d8b2c1188042401b635c92b8a81365126cf62658200e",
-      "bytes": 3935525,
+      "sourceUrl": "https://downloads.wordpress.org/plugin/cost-calculator-builder.3.6.17.zip",
+      "archiveDigest": "sha256:e89761c87ae7695021a44ebfa719f385b1f8ec8491c5cde8b90bba7727073928",
+      "bytes": 16404490,
+      "observedAt": "2026-10-16"
+    },
+    {
+      "slug": "geodirectory",
+      "version": "2.8.183",
+      "kind": "wordpress-org-zip",
+      "sourceUrl": "https://downloads.wordpress.org/plugin/geodirectory.2.8.183.zip",
+      "archiveDigest": "sha256:6d42df6b22bf5f01e8dc010f45a96c14ff97cd0ebc6000a48b4ec593488afc96",
+      "bytes": 6252566,
+      "observedAt": "2026-10-16"
+    },
+    {
+      "slug": "rometheme-for-elementor",
+      "version": "2.1.5",
+      "kind": "wordpress-org-zip",
+      "sourceUrl": "https://downloads.wordpress.org/plugin/rometheme-for-elementor.2.1.5.zip",
+      "archiveDigest": "sha256:76033d76f63f8eaadebd0f85f521d63f7cb14be47af310867ef518c1f7992634",
+      "bytes": 10391275,
+      "observedAt": "2026-10-16"
+    },
+    {
+      "slug": "rometheme-for-elementor",
+      "version": "2.0.2",
+      "kind": "wordpress-org-zip",
+      "sourceUrl": "https://downloads.wordpress.org/plugin/rometheme-for-elementor.2.0.2.zip",
+      "archiveDigest": "sha256:a36f72eaac0168139e775fbeb30c8f9b44d001d174fa07b481f2638cc4f8387f",
+      "bytes": 7760508,
+      "observedAt": "2026-10-16"
+    },
+    {
+      "slug": "lifterlms",
+      "version": "9.2.1",
+      "kind": "wordpress-org-zip",
+      "sourceUrl": "https://downloads.wordpress.org/plugin/lifterlms.9.2.1.zip",
+      "archiveDigest": "sha256:719bb162ee4640ecd2704f0d35ecbd5bf0e2490d85d776fc5624a4cd82826af6",
+      "bytes": 8419491,
+      "observedAt": "2026-10-16"
+    },
+    {
+      "slug": "location-weather",
+      "version": "3.0.2",
+      "kind": "wordpress-org-zip",
+      "sourceUrl": "https://downloads.wordpress.org/plugin/location-weather.3.0.2.zip",
+      "archiveDigest": "sha256:031e540d044c252101f5fb3bfe96a679c4b6f7b81c8d94139ea90d3040749cf8",
+      "bytes": 6437978,
       "observedAt": "2026-10-16"
     }
   ],
