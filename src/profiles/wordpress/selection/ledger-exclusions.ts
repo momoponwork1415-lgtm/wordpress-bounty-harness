@@ -184,17 +184,16 @@ export function inspectWordPressLedgerExclusions(input: {
   return input.candidates.map(({ slug, version }) => {
     const reasons: WordPressLedgerExclusionReason[] = [];
     if (unpublishedFindingSlugs.has(slug)) reasons.push("unpublished-finding");
-    const reconsidered =
-      legacy !== "unavailable" && legacy.reconsider.has(slug);
+    // A reconsidered slug forgets the Trials that predate the legacy export, not the ones run since.
+    const exportedAt =
+      legacy !== "unavailable" && legacy.reconsider.has(slug)
+        ? Date.parse(legacy.exportedAt)
+        : null;
+    const reconsidered = exportedAt !== null;
     if (legacy !== "unavailable" && !reconsidered) {
       if (legacy.started.has(slug)) reasons.push("legacy-started");
       else if (legacy.ambiguous.has(slug)) reasons.push("legacy-ambiguous");
     }
-    // A reconsidered slug forgets the Trials that predate the legacy export, not the ones run since.
-    const exportedAt =
-      reconsidered && legacy !== "unavailable"
-        ? Date.parse(legacy.exportedAt)
-        : null;
     const earlier = (selectedBySlug.get(slug) ?? []).filter(
       (selected) =>
         exportedAt === null || Date.parse(selected.startedAt) >= exportedAt,
