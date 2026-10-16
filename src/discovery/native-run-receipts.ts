@@ -50,7 +50,7 @@ const bodySchema = z.strictObject({
   observed: observed.optional(),
   /** Unique direct child threads seen in the Root rollout. */
   childThreadsObserved: count.optional(),
-  /** Direct child threads selected for capture, at most three. */
+  /** Valid direct child reports admitted for recovery, at most three. */
   childThreadsAdmitted: count.optional(),
   brokerMetrics: z
     .strictObject({

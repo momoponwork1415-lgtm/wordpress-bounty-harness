@@ -398,6 +398,7 @@ type ChildRollout = {
   readonly cyberAccessProgram: string | undefined;
   readonly usage: z.infer<typeof usageSchema> | undefined;
   readonly observed: Observed;
+  /** Latest complete report, falling back to a recoverable partial candidate report. */
   readonly finalMessage: string | undefined;
   readonly startedAt: string;
   readonly completedAt: string;
@@ -414,6 +415,7 @@ function decodeChildRollout(
   let cyberAccessProgram: string | undefined;
   let usage: z.infer<typeof usageSchema> | undefined;
   let finalMessage: string | undefined;
+  let completeMessage: string | undefined;
   let startedAt: string | undefined;
   let completedAt: string | undefined;
   const commands: ObservedCommand[] = [];
@@ -466,8 +468,20 @@ function decodeChildRollout(
               : {}),
           });
       } else if (payload?.type === "task_complete") {
-        if (typeof payload.last_agent_message === "string")
-          finalMessage = payload.last_agent_message;
+        if (typeof payload.last_agent_message === "string") {
+          try {
+            parseChildFinalMessage(payload.last_agent_message);
+            finalMessage = payload.last_agent_message;
+            if (
+              childReportSchema.safeParse(
+                JSON.parse(payload.last_agent_message) as unknown,
+              ).success
+            )
+              completeMessage = payload.last_agent_message;
+          } catch {
+            // A later completion cannot erase an earlier candidate report.
+          }
+        }
         if (typeof event.timestamp === "string") completedAt = event.timestamp;
       }
     }
@@ -481,7 +495,7 @@ function decodeChildRollout(
     cyberAccessProgram,
     usage,
     observed: observedFromCommands(commands),
-    finalMessage,
+    finalMessage: completeMessage ?? finalMessage,
     startedAt: startedAt ?? new Date(0).toISOString(),
     completedAt: completedAt ?? startedAt ?? new Date(0).toISOString(),
   };
@@ -1377,13 +1391,20 @@ export class CodexNativeAgentRuntime {
       const byStart = left.child.startedAt.localeCompare(right.child.startedAt);
       return byStart || left.order - right.order;
     });
-    const admitted = children.slice(0, 3);
     const agentRuns: AgentRun[] = [];
-    for (const { child, raw } of admitted)
-      agentRuns.push(
-        await this.#captureChild(run, child, raw, grantReceiptDigest),
+    let admitted = 0;
+    for (const { child, raw } of children) {
+      const agentRun = await this.#captureChild(
+        run,
+        child,
+        raw,
+        grantReceiptDigest,
+        admitted < 3,
       );
-    return { agentRuns, observed: children.length, admitted: admitted.length };
+      agentRuns.push(agentRun);
+      if (agentRun.receipt.terminal === "completed") admitted++;
+    }
+    return { agentRuns, observed: children.length, admitted };
   }
 
   async #captureChild(
@@ -1391,6 +1412,7 @@ export class CodexNativeAgentRuntime {
     child: ChildRollout,
     raw: string,
     grantReceiptDigest: string,
+    allowReport: boolean,
   ): Promise<AgentRun> {
     let reason: "policy" | "schema" | "evidence" | undefined;
     let reasonDetail: string | undefined;
@@ -1420,6 +1442,10 @@ export class CodexNativeAgentRuntime {
           "findings",
           Buffer.from(canonicalJson(report)),
         );
+        if (!allowReport) {
+          reason = "policy";
+          reasonDetail = "child-report-cap-exceeded";
+        }
       } catch {
         reason = "schema";
         reasonDetail = "child-final-message-not-report";
