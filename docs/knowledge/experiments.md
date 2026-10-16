@@ -22,5 +22,6 @@
 | 2026-10-11 | 10 | 開発セット TranslatePress 3.2.5 で何が確認できるか | ATO は runtime-confirmed、stored XSS は一度も確認されず、未知 0 | [reviews/2026-10-11-harness-completeness-review.md](../reviews/2026-10-11-harness-completeness-review.md) |
 | 2026-10-12〜13 | 10 | 本番 4 周で人間レビューの件数と中身はどうなるか | 第 3 周の候補 8 件中 scope 内 3 件。本物らしい 2 件が判定器の watch 外で `not-observed` | [reviews/2026-10-13-human-review-contract-and-parallel.md](../reviews/2026-10-13-human-review-contract-and-parallel.md) |
 | 2026-10-13 | 10 | install 下限と候補タグをデータで決めると | 下限 100,000、タグ 8 族。pool 442 plugin | [reviews/2026-10-13-selection-data.md](../reviews/2026-10-13-selection-data.md)、ADR 0032 |
+| 2026-10-13 | 10 | #214 探索 v4 の同一公開済み開発対象で、Lab scenario の有無により縦断結果はどう変わるか | 3 Trial は全件完了。scenario なし2件は Finding 4 / Lead 4、検証4件とも `incomplete(precondition)`。scenario あり1件は Finding 1 / Lead 2、判定器で1件 `runtime-confirmed`。3件とも同一 Snapshotで、未知発見率は測れない | [reviews/2026-10-13-critical-high-v4-development-trials.md](../reviews/2026-10-13-critical-high-v4-development-trials.md) |
 
 新しい行は PR で足す。「調べて報告」の成果物は [docs/reviews/](../reviews/) に置き、ここには 1 行だけ書く。
