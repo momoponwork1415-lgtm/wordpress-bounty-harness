@@ -22,6 +22,8 @@ import {
 import type { WordPressLabHandle } from "../../../src/profiles/wordpress/lab/index.js";
 import { loadWordPressVerifierPrompt } from "../../../src/profiles/wordpress/prompts/index.js";
 import { CodexVerifier } from "../../../src/profiles/wordpress/verification/codex-verifier.js";
+import { createWordPressJudges } from "../../../src/profiles/wordpress/verification/judges.js";
+import { canaries, quietLab } from "./judge-fixture.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const profile = defineAgentRuntimeProfile({
@@ -212,7 +214,7 @@ async function fixture(
       contributor: { username: "contributor", password: "contributor-secret" },
     },
   };
-  return { verifier, finding, lab, runs, store, ledger };
+  return { verifier, finding, lab, runs, store, ledger, attachments };
 }
 
 describe("CodexVerifier.attempt", () => {
@@ -508,6 +510,262 @@ describe("CodexVerifier.attempt", () => {
         lab: invalid.lab,
       }),
     ).toMatchObject({ status: "incomplete", reason: "recipe" });
+  });
+
+  describe.each([
+    ["session-optional", "sensitive-object-access"],
+    ["session-required", "account-takeover"],
+  ] as const)("%s route", (_route, impact) => {
+    it.each([
+      { name: "outer null", value: null, expected: "absent" },
+      { name: "nested null", value: "null", expected: "absent" },
+      {
+        name: "nested null cookie",
+        value: '{"cookie":null}',
+        expected: "absent",
+      },
+      { name: "nested empty object", value: "{}", expected: "absent" },
+      {
+        name: "valid cookie",
+        value: '{"cookie":"synthetic%7Csession"}',
+        expected: "present",
+      },
+      { name: "outer empty string", value: "", expected: "invalid" },
+      { name: "nested empty string", value: '""', expected: "invalid" },
+      { name: "empty cookie", value: '{"cookie":""}', expected: "invalid" },
+      {
+        name: "malformed nonempty cookie",
+        value: '{"cookie":"bad cookie"}',
+        expected: "invalid",
+      },
+      {
+        name: "non-string cookie",
+        value: '{"cookie":42}',
+        expected: "invalid",
+      },
+      {
+        name: "extra key on valid cookie",
+        value: '{"cookie":"valid","extra":true}',
+        expected: "invalid",
+      },
+      {
+        name: "extra key on null cookie",
+        value: '{"cookie":null,"extra":true}',
+        expected: "invalid",
+      },
+      { name: "nested array", value: "[]", expected: "invalid" },
+      { name: "malformed JSON", value: '{"cookie":', expected: "invalid" },
+    ] as const)("$name", async ({ value, expected }) => {
+      const report = {
+        "http.json": JSON.stringify({
+          exchanges: [{ request: {}, response: { body: "ordinary" } }],
+        }),
+        "steps.md": "Synthetic steps",
+        "route.json": JSON.stringify({
+          role: "subscriber",
+          defaultSettings: true,
+          steps: [
+            {
+              kind: "http",
+              method: "GET",
+              path: "/synthetic",
+              expected: "Synthetic observation",
+            },
+          ],
+        }),
+        "session.json": value,
+      };
+      const f = await fixture([report], undefined, impact);
+      const attempt = await f.verifier.attempt({
+        campaignId: "campaign-1",
+        finding: f.finding,
+        lab: f.lab,
+      });
+
+      const original = JSON.stringify(report);
+      const originalDigest = `sha256:${createHash("sha256")
+        .update(original)
+        .digest("hex")}`;
+      const savedReport = await f.attachments.readByDigest(
+        "verification",
+        originalDigest,
+      );
+      expect(savedReport.status).toBe("resolved");
+      if (savedReport.status === "resolved")
+        expect(savedReport.bytes.toString("utf8")).toBe(original);
+
+      if (expected === "invalid") {
+        expect(attempt).toMatchObject({
+          status: "incomplete",
+          reason: "recipe",
+        });
+        return;
+      }
+      expect(attempt.status).toBe("attempted");
+      if (attempt.status !== "attempted") return;
+      expect(
+        (await f.store.readFile(attempt.recipeDigest, "http.json", 1024))
+          .status,
+      ).toBe("resolved");
+      const session = await f.store.readFile(
+        attempt.recipeDigest,
+        "session.json",
+        1024,
+      );
+      expect(session.status).toBe(
+        expected === "present" ? "resolved" : "missing",
+      );
+      if (session.status === "resolved")
+        expect(JSON.parse(session.bytes.toString("utf8"))).toEqual({
+          cookie: "synthetic%7Csession",
+        });
+      if (impact === "account-takeover" && expected === "absent") {
+        const judge = createWordPressJudges({
+          store: f.store,
+          lab: quietLab(),
+        }).for(f.finding);
+        expect(
+          await judge!.observe({
+            finding: f.finding,
+            lab: f.lab,
+            recipeDigest: attempt.recipeDigest,
+          }),
+        ).toMatchObject({ status: "not-observed" });
+      }
+    });
+  });
+
+  it("passes a nested absent session to Harness capture and the non-session canary judge", async () => {
+    const body = canaries.sensitiveCanaries[0]!.value;
+    const report = {
+      "http.json": JSON.stringify({
+        exchanges: [{ request: {}, response: { body: "ordinary" } }],
+      }),
+      "steps.md": "Synthetic steps",
+      "route.json": JSON.stringify({
+        role: "subscriber",
+        defaultSettings: true,
+        steps: [
+          {
+            kind: "http",
+            method: "GET",
+            path: "/synthetic",
+            expected: "Read protected object",
+          },
+        ],
+      }),
+      "session.json": '{"cookie":null}',
+    };
+    const f = await fixture([report]);
+    const attempt = await f.verifier.attempt({
+      campaignId: "campaign-1",
+      finding: f.finding,
+      lab: f.lab,
+    });
+    expect(attempt.status).toBe("attempted");
+    if (attempt.status !== "attempted") return;
+    const capture = Buffer.from(
+      `${JSON.stringify({
+        request: {
+          method: "GET",
+          path: "/synthetic",
+          headers: {},
+          body: "",
+          bodyBase64: "",
+          truncated: false,
+        },
+        response: {
+          statusCode: 200,
+          headers: {},
+          body,
+          bodyBase64: Buffer.from(body).toString("base64"),
+          truncated: false,
+        },
+      })}\n`,
+    );
+    const judge = createWordPressJudges({
+      store: f.store,
+      lab: quietLab({
+        async readCapture() {
+          return { status: "captured", bytes: capture, dropped: 0 };
+        },
+      }),
+    }).for(f.finding);
+    expect(judge).not.toBeNull();
+    const observed = await judge!.observe({
+      finding: f.finding,
+      lab: f.lab,
+      recipeDigest: attempt.recipeDigest,
+    });
+    expect(observed).toMatchObject({
+      status: "observed",
+      evidenceCapture: "harness-captured",
+      conditions: { observedVia: "sensitive-canary-access" },
+    });
+  });
+
+  it("requires Lab authentication of a presented session before the principal judge observes it", async () => {
+    const f = await fixture(
+      [
+        {
+          "http.json": JSON.stringify({
+            exchanges: [{ request: {}, response: { body: "ordinary" } }],
+          }),
+          "steps.md": "Synthetic steps",
+          "route.json": JSON.stringify({
+            role: "subscriber",
+            defaultSettings: true,
+            steps: [
+              {
+                kind: "http",
+                method: "GET",
+                path: "/synthetic",
+                expected: "Administrator access",
+              },
+            ],
+          }),
+          "session.json": '{"cookie":"synthetic%7Csession"}',
+          "refutation.md": "Verifier claims administrator access.",
+        },
+      ],
+      undefined,
+      "account-takeover",
+    );
+    const attempt = await f.verifier.attempt({
+      campaignId: "campaign-1",
+      finding: f.finding,
+      lab: f.lab,
+    });
+    expect(attempt.status).toBe("attempted");
+    if (attempt.status !== "attempted") return;
+    let authenticated = false;
+    const presented: string[] = [];
+    const judge = createWordPressJudges({
+      store: f.store,
+      lab: quietLab({
+        async observeSessionUser(_lab, cookie) {
+          presented.push(cookie);
+          return authenticated
+            ? { status: "user", login: canaries.adminUser }
+            : { status: "none" };
+        },
+      }),
+    }).for(f.finding);
+    expect(judge).not.toBeNull();
+    const input = {
+      finding: f.finding,
+      lab: f.lab,
+      recipeDigest: attempt.recipeDigest,
+    };
+    expect(await judge!.observe(input)).toMatchObject({
+      status: "not-observed",
+    });
+    authenticated = true;
+    expect(await judge!.observe(input)).toMatchObject({
+      status: "observed",
+      conditions: { reachedRole: "administrator", observedVia: "session" },
+    });
+    expect(presented).toEqual(["synthetic%7Csession", "synthetic%7Csession"]);
   });
 
   it("takes a missing session candidate from a reported login Set-Cookie header", async () => {

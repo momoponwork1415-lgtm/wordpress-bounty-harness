@@ -55,6 +55,11 @@ const attachmentSchema = z.looseObject({
 const sessionSchema = z.strictObject({
   cookie: z.string().regex(/^[A-Za-z0-9%|._@+-]{1,4096}$/),
 });
+const absentSessionSchema = z.union([
+  z.null(),
+  z.strictObject({}),
+  z.strictObject({ cookie: z.null() }),
+]);
 
 const routeSchema = z.looseObject({
   role: z.enum(["unauthenticated", "subscriber", "customer"]),
@@ -629,9 +634,9 @@ export class CodexVerifier implements Verifier<
     let session: string | undefined;
     if (typeof data["session.json"] === "string") {
       try {
-        session = canonicalJson(
-          sessionSchema.parse(JSON.parse(data["session.json"]) as unknown),
-        );
+        const parsed = JSON.parse(data["session.json"]) as unknown;
+        if (!absentSessionSchema.safeParse(parsed).success)
+          session = canonicalJson(sessionSchema.parse(parsed));
       } catch {
         return {
           status: "incomplete",
