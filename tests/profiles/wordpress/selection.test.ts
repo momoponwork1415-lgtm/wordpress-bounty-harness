@@ -195,6 +195,7 @@ describe("WordPress selection public interface", () => {
         "Automattic",
         "Facebook",
         "Google",
+        "MailPoet",
         "SiteGround",
         "WooCommerce",
         "Yoast",
