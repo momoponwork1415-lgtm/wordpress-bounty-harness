@@ -64,6 +64,7 @@ const basePolicy = {
   id: "selection-v1",
   candidateSlugs: ["popular", "exposed"],
   minimumActiveInstallations: 500,
+  maximumActiveInstallations: 1_000_000,
   maximumObservationAgeDays: 2,
   maximumUpdateAgeDays: 365,
   maximumTargets: 2,
@@ -166,9 +167,26 @@ describe("WordPress selection public interface", () => {
     expect(second[0]?.policy.digest).not.toBe(first[0]?.policy.digest);
   });
 
+  it("rejects a ceiling that does not exceed the floor", async () => {
+    const policy = await loadWordPressSelectionPolicy();
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...policy,
+        maximumActiveInstallations: policy.minimumActiveInstallations,
+      }).success,
+    ).toBe(false);
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...policy,
+        maximumActiveInstallations: policy.minimumActiveInstallations + 1,
+      }).success,
+    ).toBe(true);
+  });
+
   it("ships an automatic policy with the 100000-install floor, data-derived tags and no tag weights (ADR 0032)", async () => {
     const policy = await loadWordPressSelectionPolicy();
     expect(policy.minimumActiveInstallations).toBe(100_000);
+    expect(policy.maximumActiveInstallations).toBe(1_000_000);
     expect("candidateSource" in policy && policy.candidateSource.kind).toBe(
       "wordpress-org",
     );
@@ -297,12 +315,20 @@ describe("WordPress selection public interface", () => {
         recent: observation("recent", []),
         excluded,
         tiny: observation("tiny", [], 499),
+        huge: observation("huge", [], 1_000_000),
         closed: failed("closed", "closed"),
       },
     });
     const policy = {
       ...basePolicy,
-      candidateSlugs: ["recent", "excluded", "tiny", "missing", "closed"],
+      candidateSlugs: [
+        "recent",
+        "excluded",
+        "tiny",
+        "huge",
+        "missing",
+        "closed",
+      ],
     };
     const inspected = await selection.inspect(policy);
     expect(
@@ -311,6 +337,7 @@ describe("WordPress selection public interface", () => {
       ["recent", "eligible", []],
       ["excluded", "ineligible", ["excluded-author"]],
       ["tiny", "ineligible", ["below-installation-threshold"]],
+      ["huge", "ineligible", ["above-installation-ceiling"]],
       ["missing", "ineligible", ["observation-unavailable"]],
       ["closed", "ineligible", ["distribution-closed"]],
     ]);
