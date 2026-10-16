@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+import {
+  countsAsTrial,
+  recordedTrialActivity,
+} from "../../../discovery/counts-as-trial.js";
 import type {
   Ledger,
   LedgerEventV1,
@@ -100,27 +104,7 @@ function promptChanged(
   });
 }
 
-/**
- * A run that read no source, started no child and forwarded at most one
- * provider request is not a Trial (SPEC §6). A run without a receipt counts.
- */
-function countsAsTrial(
-  finished:
-    Extract<LedgerEventV1, { type: "discovery-run-finished" }> | undefined,
-): boolean {
-  if (finished?.observed === undefined) return true;
-  return (
-    finished.observed.filesRead > 0 ||
-    (finished.childThreadsObserved ?? 0) > 0 ||
-    (finished.brokerMetrics?.forwardedRequests ?? 0) > 1
-  );
-}
-
-/**
- * Inspect the entire append-only ledger, including older campaigns. A target
- * whose exploration Trial started remains excluded until the policy's explicit
- * revisit condition holds. A selection whose Trial never started is not.
- */
+/** Inspect the append-only ledger; selections without a counted Trial remain eligible. */
 export function inspectWordPressLedgerExclusions(input: {
   readonly ledger: Pick<Ledger, "read">;
   readonly candidates: readonly {
@@ -160,13 +144,15 @@ export function inspectWordPressLedgerExclusions(input: {
   for (const event of ledgerEvents(input.ledger, "discovery-run-finished"))
     if (event.type === "discovery-run-finished")
       finishedRuns.set(`${event.campaignId}\0${event.runId}`, event);
+  const activeRuns = recordedTrialActivity(input.ledger);
   for (const event of ledgerEvents(input.ledger, "discovery-run-started")) {
     if (event.type !== "discovery-run-started") continue;
     const key = snapshotKey(event);
     recordPrompt(key, event.configuration.promptVariant);
     // Historical events had no runKind and each represented exploration.
     if ((event.runKind ?? "explore") !== "explore") continue;
-    if (!countsAsTrial(finishedRuns.get(`${event.campaignId}\0${event.runId}`)))
+    const runKey = `${event.campaignId}\0${event.runId}`;
+    if (!countsAsTrial(finishedRuns.get(runKey), activeRuns.has(runKey)))
       continue;
     const slug = selectedBySnapshot.get(key);
     const version = versionBySnapshot.get(key);

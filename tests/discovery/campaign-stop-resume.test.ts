@@ -17,6 +17,7 @@ import {
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
 import { admitWordPressFinding } from "../../src/profiles/wordpress/discovery/finding.js";
+import { inspectWordPressLedgerExclusions } from "../../src/profiles/wordpress/selection/ledger-exclusions.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const profile = defineAgentRuntimeProfile({
@@ -102,7 +103,7 @@ const input = {
   history: { mode: "none" as const },
 };
 
-type Reply = "empty" | "limit" | "finding";
+type Reply = "empty" | "limit" | "finding" | "no-work";
 
 async function open() {
   const root = await mkdtemp(join(tmpdir(), "wbh-stop-"));
@@ -195,7 +196,7 @@ async function open() {
                         },
                       ]
                     : [],
-                examined: "source",
+                examined: reply === "no-work" ? "none" : "source",
                 unexamined: "none",
               }),
             ),
@@ -213,6 +214,24 @@ async function open() {
                 reasoningOutputTokens: "unavailable",
               },
               reportArtifactDigest: attachment.digest,
+              ...(reply === "no-work"
+                ? {
+                    observed: {
+                      toolCalls: 0,
+                      filesRead: 0,
+                      uniqueFilesRead: 0,
+                      labRequests: 0,
+                      dbQueries: 0,
+                    },
+                    childThreadsObserved: 0,
+                    childThreadsAdmitted: 0,
+                    brokerMetrics: {
+                      forwardedRequests: 1,
+                      requestLimitExceeded: 0,
+                      unauthorizedRequests: 0,
+                    },
+                  }
+                : {}),
             }),
           };
         },
@@ -258,6 +277,75 @@ async function open() {
 }
 
 describe("discovery campaign stop and resume", () => {
+  it("reuses ordinal 0 after a start-only crash and returns its slug to selection", async () => {
+    const { ledger, campaign } = await open();
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: "campaign-1",
+      snapshotDigest: digest,
+      occurredAt: "2026-10-08T07:00:00Z",
+    };
+    await ledger.append({
+      ...base,
+      identity: "retry-selection",
+      type: "target-selected",
+      selectionId: "wporg:retry@1.0.0",
+    });
+    await ledger.append({
+      ...base,
+      identity: "abandoned-start",
+      type: "discovery-run-started",
+      runId: "abandoned-0",
+      trialId: "abandoned-0",
+      trialOrdinal: 0,
+      runKind: "explore",
+      labId: "lab-1",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "short-objective",
+        assignmentUnit: "plugin",
+      },
+    });
+    const candidates = [{ slug: "retry", version: "1.0.0" }];
+    const inspect = () =>
+      inspectWordPressLedgerExclusions({
+        ledger,
+        candidates,
+        currentPromptVariant: "short-objective",
+        revisitPolicy: { kind: "never" },
+      })[0]?.reasons;
+    expect(inspect()).toEqual([]);
+
+    const noWork = await campaign({
+      prefix: "resume",
+      replies: () => "no-work",
+    });
+    expect(noWork).toMatchObject({ runCount: 1, stoppedBy: "incomplete" });
+    expect(inspect()).toEqual([]);
+    expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
+    expect(
+      ledger.read({ type: "discovery-run-finished" })[0]?.event,
+    ).toMatchObject({
+      outcome: "failed",
+      reason: "evidence",
+      reasonDetail: "no-work",
+    });
+    const result = await campaign({ prefix: "retry", replies: () => "empty" });
+    expect(result).toMatchObject({ runCount: 6, stoppedBy: "no-new-finding" });
+    const starts = ledger.read({ type: "discovery-run-started" });
+    expect(starts[1]?.event).toMatchObject({
+      runId: "resume-0",
+      trialOrdinal: 0,
+      campaignId: "campaign-1",
+    });
+    expect(starts[2]?.event).toMatchObject({
+      runId: "retry-0",
+      trialOrdinal: 0,
+    });
+    expect(inspect()).toEqual(["previously-selected"]);
+    expect(ledger.read({ type: "discovery-concluded" })).toHaveLength(1);
+  });
+
   it("counts a historical stage-tagged exploration while excluding its child", async () => {
     const { ledger, campaign } = await open();
     const historical = {
