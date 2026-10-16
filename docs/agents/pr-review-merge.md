@@ -33,6 +33,8 @@ gh pr merge <n> --squash
 ```
 
 - 積み上がった PR（例 #265 の上に #266 #267 #269）は下から順に。下が変わったら上に main を merge し直してから。
+- **下の PR を merge したら、上の PR の base を main に変える**（`gh pr edit <n> --base main`）。変えずに merge すると、上の PR は下の branch に merge されて main に入らない（2026-10-16 の #264。#289 で回収した）。下の branch を消しておけば GitHub が自動で付け替える。
+- `gh pr checks --watch` は全 check の完了前に返ることがある。merge 前に `gh pr view <n> --json mergeStateStatus` が `CLEAN` か確かめる。`BLOCKED` なら check が残っている。
 - merge の comment に「委任: 所有者の <日付> の指示に基づき AI が merge」と、根拠になった数字（campaign ID）を書く。
 - 1 コマンドで複数の PR を閉じる・merge するのは避け、1 件ずつ打つ。
 - worktree が branch を使っていると `--delete-branch` が失敗する。先に worktree を外す。
