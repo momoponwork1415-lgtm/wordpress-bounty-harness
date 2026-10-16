@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -7,6 +7,7 @@ import {
   clearContinuousStop,
   continuousPaths,
   createContinuousRunner,
+  readContinuousStopReason,
   requestContinuousStop,
   type ContinuousMemo,
 } from "./continuous.js";
@@ -159,17 +160,17 @@ export async function continuousCommand(
     ) as ContinuousMemo | null;
     const pid = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
     const livePid = pid > 0 && pidAlive(pid) ? pid : null;
-    const stopMarker = existsSync(paths.stop);
-    const displayState = stopMarker
-      ? livePid === null
-        ? "stopped"
-        : "stopping"
-      : memo !== null && memo.state !== "stopped" && livePid === null
-        ? "stale"
-        : (memo?.state ?? "never-started");
-    const displayDetail = stopMarker
-      ? { reason: "operator" }
-      : (memo?.detail ?? {});
+    const stopReason = await readContinuousStopReason(state.stateDirectory);
+    const displayState =
+      stopReason !== null
+        ? livePid === null
+          ? "stopped"
+          : "stopping"
+        : memo !== null && memo.state !== "stopped" && livePid === null
+          ? "stale"
+          : (memo?.state ?? "never-started");
+    const displayDetail =
+      stopReason !== null ? { reason: stopReason } : (memo?.detail ?? {});
     io.stdout(
       `state ${displayState}${Object.entries(displayDetail)
         .map(([key, value]) => `  ${key} ${value}`)
@@ -285,6 +286,7 @@ export async function continuousCommand(
         : { notify: (line: string) => notify(context.notify!, line) }),
     },
   });
-  const reason = await runner.run({ resume: context.resume });
-  return reason === "operator" ? 0 : 1;
+  await runner.run({ resume: context.resume });
+  // All seven named stops are intentional. Restart=on-failure is for crashes.
+  return 0;
 }
