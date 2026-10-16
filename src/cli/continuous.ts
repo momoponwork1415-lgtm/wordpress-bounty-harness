@@ -404,7 +404,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     return true;
   };
   const stop = async (reason: ContinuousStopReason) => {
-    if (!existsSync(paths.stop))
+    if (reason !== "operator" && !existsSync(paths.stop))
       requestContinuousStop(deps.stateDirectory, reason);
     await enter("stopped", { reason });
     return reason;
