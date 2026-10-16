@@ -217,6 +217,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       /** An operator asked the campaign to drain at the next target boundary. */
       "operator",
     ]),
+    /** Failed Lab teardown ids; historical stop events have no ids. */
+    cleanupLabIds: z.array(id).min(1).max(2).optional(),
   }),
   /**
    * A target was left behind by an error. Before a snapshot exists, the

@@ -133,6 +133,8 @@ async function harness(
     readonly labMissingExtension?: boolean;
     readonly labSeedFailure?: boolean;
     readonly labSeedThrows?: boolean;
+    readonly labTeardownFails?: boolean;
+    readonly verifierLabTeardownFails?: boolean;
     /** The first Finding lacks a runnable recipe until a new Lab scenario is selected. */
     readonly firstVerifierIncomplete?: boolean;
     readonly verifierRecipeFailures?: number;
@@ -451,6 +453,8 @@ async function harness(
   let inFlight = 0;
   let maxInFlight = 0;
   let verificationProvisionAttempts = 0;
+  let teardownCalls = 0;
+  const verificationLabIds = new Set<string>();
   const boundaries: WordPressCampaignBoundaries = {
     selection,
     freeze: async (target) => {
@@ -475,6 +479,20 @@ async function harness(
     },
     lab: {
       ...lab,
+      teardown: async (...args: Parameters<typeof lab.teardown>) => {
+        teardownCalls++;
+        if (
+          options.labTeardownFails === true ||
+          (options.verifierLabTeardownFails === true &&
+            verificationLabIds.has(args[0].id))
+        )
+          return {
+            status: "incomplete" as const,
+            reason: "cleanup" as const,
+            nextStep: "Synthetic Lab cleanup needs operator repair",
+          };
+        return lab.teardown(...args);
+      },
       ...(options.labSeedThrows === true
         ? {
             seedCanaries: async () => {
@@ -491,7 +509,13 @@ async function harness(
           )
             throw new Error("Synthetic verification Lab provision failure");
         }
-        return lab.provision(...args);
+        const provisioned = await lab.provision(...args);
+        if (
+          args[2]?.purpose === "verification" &&
+          provisioned.status === "ready"
+        )
+          verificationLabIds.add(provisioned.handle.id);
+        return provisioned;
       },
     },
     sourceFor: async () => ({
@@ -826,6 +850,7 @@ async function harness(
     store: () => state.store,
     maxInFlight: () => maxInFlight,
     verificationProvisionAttempts: () => verificationProvisionAttempts,
+    teardownCalls: () => teardownCalls,
   };
 }
 
@@ -1356,7 +1381,14 @@ describe("harness CLI vertical slice", () => {
     expect(live.containers.size).toBe(0);
     expect(live.networks.size).toBe(0);
     expect(live.volumes.size).toBe(0);
+    const labsBeforeExhaustedRecipeResume = ledger().read({
+      campaignId: "retry-campaign",
+      type: "lab-provisioned",
+    }).length;
     expect((await run(...args)).code).toBe(0);
+    expect(
+      ledger().read({ campaignId: "retry-campaign", type: "lab-provisioned" }),
+    ).toHaveLength(labsBeforeExhaustedRecipeResume);
     expect(
       ledger().read({
         campaignId: "retry-campaign",
@@ -1436,7 +1468,14 @@ describe("harness CLI vertical slice", () => {
       result: { status: "incomplete", reason: "precondition" },
     });
     if (first?.type !== "verification-finished") return;
+    const labsBeforeUnchangedResume = ledger().read({
+      campaignId: "scenario-retry",
+      type: "lab-provisioned",
+    }).length;
     expect((await run(...args)).code).toBe(0);
+    expect(
+      ledger().read({ campaignId: "scenario-retry", type: "lab-provisioned" }),
+    ).toHaveLength(labsBeforeUnchangedResume);
     expect(
       ledger().read({
         campaignId: "scenario-retry",
@@ -1473,7 +1512,7 @@ describe("harness CLI vertical slice", () => {
     expect(
       ledger().read({ campaignId: "scenario-retry", type: "lab-provisioned" })
         .length,
-    ).toBeGreaterThan(labsBefore);
+    ).toBe(labsBefore);
     expect(
       ledger()
         .read({
@@ -2340,6 +2379,136 @@ describe("harness CLI vertical slice", () => {
     }
   });
 
+  it("stops after a discovery Lab cleanup failure and gates same-campaign resume", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      candidates: ["synthetic-plugin", "zz-next-plugin"],
+      zeroFindings: true,
+      labTeardownFails: true,
+      config: {
+        promptId: undefined,
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    });
+    const command = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-cleanup-incomplete",
+      "--config",
+      configPath,
+    ];
+    const first = await run(...command);
+    expect(first.code).toBe(1);
+    expect(first.stderr).toContain(
+      "Synthetic Lab cleanup needs operator repair",
+    );
+    expect(prompts).toHaveLength(1);
+    expect(ledger().read({ type: "target-skipped" })).toHaveLength(1);
+    expect(ledger().read({ type: "campaign-stopped" })).toMatchObject([
+      { event: { reason: "incomplete", cleanupLabIds: [expect.any(String)] } },
+    ]);
+    const second = await run(...command);
+    expect(second.code).toBe(1);
+    expect(second.stderr).toContain("cleanup is incomplete");
+    expect(prompts).toHaveLength(1);
+  });
+
+  it("drains in-flight Labs before returning a cleanup failure", async () => {
+    const { run, configPath, prompts, teardownCalls } = await harness({
+      candidates: ["synthetic-plugin", "second-plugin", "zz-next-plugin"],
+      zeroFindings: true,
+      labTeardownFails: true,
+      config: {
+        promptId: undefined,
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+        resources: {
+          maxConcurrentRuns: 1,
+          maxConcurrentTargets: 2,
+          memoryBudgetMiB: 10_240,
+        },
+      },
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-drain",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(1);
+    expect(prompts).toHaveLength(2);
+    expect(teardownCalls()).toBe(2);
+  });
+
+  it("stops on Verifier Lab cleanup failure without losing its review item", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
+      candidates: ["synthetic-plugin", "zz-next-plugin"],
+      verifierLabTeardownFails: true,
+      config: {
+        promptId: undefined,
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    });
+    const command = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-verifier-cleanup",
+      "--config",
+      configPath,
+    ];
+    const first = await run(...command);
+    expect(first.code).toBe(1);
+    expect(prompts).toHaveLength(1);
+    expect(ledger().read({ type: "verification-finished" })).toMatchObject([
+      { event: { result: { status: "incomplete", reason: "cleanup" } } },
+    ]);
+    expect(ledger().read({ type: "campaign-stopped" })).toMatchObject([
+      { event: { reason: "incomplete", cleanupLabIds: [expect.any(String)] } },
+    ]);
+    const review = await run(
+      "review",
+      "--campaign",
+      "campaign-verifier-cleanup",
+    );
+    expect(review.stdout).toContain("incomplete");
+    expect(review.stdout).toContain("reason: cleanup");
+    const second = await run(...command);
+    expect(second.code).toBe(1);
+    expect(prompts).toHaveLength(1);
+  });
+
+  it("checks every recorded cleanup Lab id before resuming", async () => {
+    const { run, configPath, prompts, ledger } = await harness();
+    expect((await run("select", "--config", configPath)).code).toBe(0);
+    await ledger().append({
+      schemaVersion: 1,
+      identity: "replay-cleanup-stop",
+      campaignId: "campaign-replay-cleanup",
+      snapshotDigest: sha("a"),
+      occurredAt: now,
+      type: "campaign-stopped",
+      reason: "incomplete",
+      cleanupLabIds: ["11111111-1111-4111-8111-111111111111", uuid],
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-replay-cleanup",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(`Lab ${uuid} cleanup is incomplete`);
+    expect(prompts).toHaveLength(0);
+  });
+
   it("keeps a target Lab until its verification finishes, then removes it", async () => {
     const { run, configPath, labIdsDuringVerification, live, docker } =
       await harness({
@@ -2483,6 +2652,60 @@ describe("harness CLI vertical slice", () => {
       expect.objectContaining({ reason: "provider" }),
     );
     expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(1);
+  });
+
+  it("does not provision a Lab after the Verifier quota retry is exhausted", async () => {
+    const { run, configPath, ledger, prompts } = await harness({
+      verifierQuotaOnAttempts: [1, 2],
+      config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
+    });
+    const command = [
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "campaign-quota-exhausted",
+      "--config",
+      configPath,
+    ];
+    expect((await run(...command)).code).toBe(3);
+    expect((await run(...command)).code).toBe(3);
+    const first = ledger().read({
+      campaignId: "campaign-quota-exhausted",
+      type: "verification-finished",
+    })[0]?.event;
+    if (first?.type !== "verification-finished")
+      throw new Error("Missing quota verification");
+    // One other Finding was pending when quota stopped the first two runs.
+    expect((await run(...command)).code).toBe(0);
+    const labsAfterPendingFinding = ledger().read({
+      campaignId: "campaign-quota-exhausted",
+      type: "lab-provisioned",
+    }).length;
+    expect((await run(...command)).code).toBe(0);
+    expect(
+      ledger().read({
+        campaignId: "campaign-quota-exhausted",
+        type: "lab-provisioned",
+      }),
+    ).toHaveLength(labsAfterPendingFinding);
+    expect(prompts).toHaveLength(1);
+    const review = await run(
+      "review",
+      "--campaign",
+      "campaign-quota-exhausted",
+    );
+    expect(review.code).toBe(0);
+    expect(review.stdout).toContain(`finding ${first.findingId}`);
+    expect(review.stdout).toContain("incomplete");
+    expect((await run(...command, "--retry-incomplete")).code).toBe(0);
+    expect(
+      ledger().read({
+        campaignId: "campaign-quota-exhausted",
+        findingId: first.findingId,
+        type: "verification-finished",
+      }),
+    ).toHaveLength(3);
   });
 
   it("lists parked Findings by one-line property and says when there are none (#185)", async () => {
@@ -3230,6 +3453,10 @@ describe("harness CLI vertical slice", () => {
     const third = await run("select", "--config", policyPath);
     expect(third.code).toBe(0);
     expect(third.stdout).toContain("wporg:item-g 9.9.9 score");
+    const labsBeforeCompletedResume = ledger().read({
+      campaignId: "campaign-reserved",
+      type: "lab-provisioned",
+    }).length;
     const resumed = await run(
       "campaign",
       "run",
@@ -3242,6 +3469,13 @@ describe("harness CLI vertical slice", () => {
     expect(resumed.code).toBe(0);
     // item-d already finished; the resume stays on its bound batch.
     expect(resumed.stdout).not.toContain("item-g");
+    expect(resumed.stdout).toContain("no selected target matched item-d");
+    expect(
+      ledger().read({
+        campaignId: "campaign-reserved",
+        type: "lab-provisioned",
+      }),
+    ).toHaveLength(labsBeforeCompletedResume);
     expect(
       ledger().read({
         campaignId: "campaign-reserved",
