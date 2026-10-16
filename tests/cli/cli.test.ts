@@ -3646,7 +3646,7 @@ describe("harness CLI vertical slice", () => {
       ledger()
         .read({ type: "campaign-stopped" })
         .map(({ event }) => event),
-    ).toMatchObject([{ reason: "operator" }]);
+    ).toHaveLength(0); // The stop arrived before campaign run started.
     const status = await run("continuous", "status");
     expect(status.code).toBe(1);
     expect(status.stdout).toContain("state stopped  reason operator");
@@ -3655,10 +3655,46 @@ describe("harness CLI vertical slice", () => {
     await expect(stat(join(state, "continuous.stop"))).resolves.toBeDefined();
 
     host.legacyHistoryAvailable = false;
-    expect((await run("continuous", "run", ...command)).code).toBe(1);
+    const blocked = await run("continuous", "run", ...command);
+    expect(blocked.code).toBe(0);
+    expect((await run("continuous", "status")).stdout).toContain(
+      "state stopped  reason operator",
+    );
+    await expect(stat(join(state, "continuous.stop"))).resolves.toBeDefined();
+    expect((await run("continuous", "run", ...command, "--resume")).code).toBe(
+      0,
+    );
     expect((await run("continuous", "status")).stdout).toContain(
       "reason legacy-history-missing",
     );
+    expect((await run("continuous", "run", ...command)).code).toBe(0);
+    expect((await run("continuous", "status")).stdout).toContain(
+      "reason legacy-history-missing",
+    );
+    expect((await run("continuous", "resume")).code).toBe(0);
+    await writeFile(
+      join(state, "continuous.json"),
+      JSON.stringify({ state: "running", detail: { campaignId: "crashed" } }),
+    );
+    const stale = await run("continuous", "status");
+    expect(stale.code).toBe(1);
+    expect(stale.stdout).toContain("state stale");
+    await run("continuous", "stop");
+    const stoppedAfterCrash = await run("continuous", "status");
+    expect(stoppedAfterCrash.code).toBe(1);
+    expect(stoppedAfterCrash.stdout).toContain(
+      "state stopped  reason operator",
+    );
+    await writeFile(join(state, "continuous.pid"), String(process.pid));
+    const stopping = await run("continuous", "status");
+    expect(stopping.code).toBe(1);
+    expect(stopping.stdout).toContain("state stopping  reason operator");
+    const liveResume = await run("continuous", "resume");
+    expect(liveResume.code).toBe(1);
+    expect(liveResume.stderr).toContain("still running as pid");
+    await rm(join(state, "continuous.pid"));
+    expect((await run("continuous", "resume")).code).toBe(0);
+    await expect(stat(join(state, "continuous.stop"))).rejects.toThrow();
     expect(
       (
         await run(
