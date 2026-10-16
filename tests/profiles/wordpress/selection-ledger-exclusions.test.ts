@@ -75,6 +75,18 @@ function finished(
   });
 }
 
+function labFailed(campaignId = "campaign-1", snapshotDigest = digest("a")) {
+  return ledgerEventV1Schema.parse({
+    ...base(campaignId, snapshotDigest, `lab-${campaignId}-${snapshotDigest}`),
+    type: "lab-provisioned",
+    labId: "lab-1",
+    status: "failed",
+    purpose: "discovery",
+    failureStage: "provision",
+    reason: "provision",
+  });
+}
+
 /** A selection with a completed exploration Trial. */
 function trial(
   slug: string,
@@ -368,6 +380,33 @@ describe("WordPress ledger exclusions", () => {
     expect(result.map(({ slug, reasons }) => [slug, reasons])).toEqual([
       ["retried", ["previously-selected"]],
       ["fresh", []],
+    ]);
+  });
+
+  it("excludes a version whose discovery Lab failed to provision until the version changes", () => {
+    const result = inspectWordPressLedgerExclusions({
+      ledger: reader([
+        selected("needs-elementor", "1.0.0"),
+        labFailed(),
+        selected("other", "1.0.0", "campaign-2", digest("b")),
+        labFailed("campaign-2", digest("b")),
+        started("wp2shell-bounty-v2", "campaign-2", digest("b")),
+        finished("wp2shell-bounty-v2", "campaign-2", digest("b")),
+      ]),
+      candidates: [
+        { slug: "needs-elementor", version: "1.0.0" },
+        { slug: "needs-elementor", version: "1.0.1" },
+        { slug: "other", version: "1.0.0" },
+      ],
+      revisitPolicy: { kind: "never" },
+      currentPromptVariant: "wp2shell-bounty-v2",
+    });
+    expect(
+      result.map(({ slug, version, reasons }) => [slug, version, reasons]),
+    ).toEqual([
+      ["needs-elementor", "1.0.0", ["lab-provision-failed"]],
+      ["needs-elementor", "1.0.1", []],
+      ["other", "1.0.0", ["previously-selected"]],
     ]);
   });
 
