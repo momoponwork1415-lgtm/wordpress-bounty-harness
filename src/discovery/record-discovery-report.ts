@@ -82,14 +82,16 @@ async function holdCandidate(
 ) {
   options.state.heldBoundary = true;
   const issuePaths =
-    error instanceof z.ZodError
-      ? error.issues.map((issue) => issue.path.join("."))
-      : [
-          error instanceof Error &&
-          error.message === "Candidate identity mismatch"
-            ? "identity"
-            : "admission",
-        ];
+    error instanceof Error && error.message === "report-cap"
+      ? ["report-cap"]
+      : error instanceof z.ZodError
+        ? error.issues.map((issue) => issue.path.join("."))
+        : [
+            error instanceof Error &&
+            error.message === "Candidate identity mismatch"
+              ? "identity"
+              : "admission",
+          ];
   const classification =
     options.classifyCandidate?.(candidate, candidateKind) ?? {};
   const appended = await options.ledger.append({
@@ -308,6 +310,7 @@ export function createReportRecorder(options: RecorderOptions) {
   return async (
     ownerRunId: string,
     attachment: NonNullable<DiscoveryTransportResult["attachment"]>,
+    heldReason?: "report-cap",
   ): Promise<void> => {
     const stored = await options.attachments.read(attachment);
     if (stored.status !== "resolved")
@@ -321,6 +324,27 @@ export function createReportRecorder(options: RecorderOptions) {
       );
     } catch {
       throw new DiscoveryReportError("Discovery report is malformed");
+    }
+    if (heldReason !== undefined) {
+      for (const [kind, candidates] of [
+        ["finding", report.findings],
+        ["lead", report.leads],
+      ] as const)
+        for (const [index, candidate] of candidates.entries()) {
+          const rawDigest = await options.evidence.putFiles({
+            "candidate.json": canonicalJson(candidate),
+          });
+          await holdCandidate(
+            options,
+            ownerRunId,
+            kind,
+            index,
+            candidate,
+            rawDigest,
+            new Error(heldReason),
+          );
+        }
+      return;
     }
     for (const [index, candidate] of report.findings.entries())
       await recordFindingCandidate(

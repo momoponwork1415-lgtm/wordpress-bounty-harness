@@ -234,7 +234,7 @@ describe("gVisor Codex sandbox", () => {
     }
   });
 
-  it("captures Root and the earliest three children when more than sixteen sessions exist", async () => {
+  it("preserves every direct child's raw completion and metadata after three invalid reports", async () => {
     const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
     try {
       const source = join(root, "source");
@@ -272,27 +272,81 @@ describe("gVisor Codex sandbox", () => {
             );
             for (let child = 0; child < 20; child++) {
               const minute = child === 0 ? 4 : child === 3 ? 1 : child;
+              const report =
+                child === 0
+                  ? JSON.stringify({
+                      findings: [{ claim: "fourth child" }],
+                      leads: [],
+                      examined: "source",
+                      unexamined: "none",
+                    })
+                  : "invalid report";
+              const completed = (message: string) =>
+                JSON.stringify({
+                  type: "event_msg",
+                  payload: {
+                    type: "task_complete",
+                    last_agent_message: message,
+                  },
+                });
               await writeFile(
                 join(
                   sessions,
                   `rollout-${String(child).padStart(2, "0")}.jsonl`,
                 ),
-                `${JSON.stringify({
-                  timestamp: `2026-10-08T07:${String(minute).padStart(2, "0")}:00Z`,
-                  type: "session_meta",
-                  payload: {
-                    id: `child-${child}`,
-                    source: {
-                      subagent: {
-                        thread_spawn: {
-                          parent_thread_id: "root",
-                          depth: 1,
-                          agent_path: `/root/child_${child}`,
+                [
+                  JSON.stringify({
+                    timestamp: `2026-10-08T07:${String(minute).padStart(2, "0")}:00Z`,
+                    type: "session_meta",
+                    payload: {
+                      id: `child-${child}`,
+                      source: {
+                        subagent: {
+                          thread_spawn: {
+                            parent_thread_id: "root",
+                            depth: 1,
+                            agent_path: `/root/child_${child}`,
+                          },
                         },
                       },
                     },
-                  },
-                })}\nCHILD_REPORT_${child}\n`,
+                  }),
+                  JSON.stringify({
+                    type: "turn_context",
+                    payload: {
+                      model: "gpt-6-sol",
+                      effort: "high",
+                      cyber_access_program: "daybreak_blue",
+                    },
+                  }),
+                  JSON.stringify({
+                    type: "event_msg",
+                    payload: {
+                      type: "token_count",
+                      info: {
+                        total_token_usage: {
+                          input_tokens: child + 1,
+                          output_tokens: 2,
+                        },
+                      },
+                    },
+                  }),
+                  JSON.stringify({
+                    type: "event_msg",
+                    payload: {
+                      type: "item_completed",
+                      item: {
+                        type: "CommandExecution",
+                        cwd: "/workspace/main",
+                        command: ["cat source.php"],
+                      },
+                    },
+                  }),
+                  completed(report),
+                  ...(child === 0
+                    ? [completed("Additional prose after the JSON")]
+                    : []),
+                ].join("\n") + "\n",
               );
             }
           }
@@ -336,17 +390,31 @@ describe("gVisor Codex sandbox", () => {
       expect(result.rollouts?.some((raw) => raw.includes("ROOT_REPORT"))).toBe(
         true,
       );
-      const completeChildren = result.rollouts
-        ?.filter((raw) => raw.includes("CHILD_REPORT_"))
-        .map((raw) => /CHILD_REPORT_(\d+)/.exec(raw)?.[1]);
-      expect(completeChildren).toEqual(["1", "2", "3"]);
-      const metadataOnly = result.rollouts?.filter(
-        (raw) => !raw.includes("ROOT_REPORT") && !raw.includes("CHILD_REPORT_"),
+      const children = result.rollouts?.filter((raw) =>
+        raw.includes('"parent_thread_id":"root"'),
       );
-      expect(metadataOnly).toHaveLength(17);
+      expect(children).toHaveLength(20);
       expect(
-        metadataOnly?.every((raw) => raw.trimEnd().split("\n").length === 1),
+        children?.every((raw) => raw.includes('"type":"task_complete"')),
       ).toBe(true);
+      const fourth = children?.find((raw) => raw.includes('"id":"child-0"'));
+      expect(fourth).toContain(
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            last_agent_message: JSON.stringify({
+              findings: [{ claim: "fourth child" }],
+              leads: [],
+              examined: "source",
+              unexamined: "none",
+            }),
+          },
+        }),
+      );
+      expect(fourth).toContain("Additional prose after the JSON");
+      expect(fourth).toContain('"type":"token_count"');
+      expect(fourth).toContain('"type":"item_completed"');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -27,6 +27,7 @@ type RecoveryContext = {
   readonly recordReport: (
     ownerRunId: string,
     attachment: ReportAttachment,
+    heldReason?: "report-cap",
   ) => Promise<void>;
 };
 
@@ -74,6 +75,10 @@ export async function recoverChildAgentReports(
 ): Promise<void> {
   for (const child of options.result.agentRuns ?? []) {
     const receipt = nativeRunReceiptSchema.parse(child.receipt);
+    const capHeld =
+      receipt.terminal === "incomplete" &&
+      receipt.reason === "policy" &&
+      receipt.reasonDetail === "child-report-cap-exceeded";
     const started = await options.ledger.append({
       ...options.base,
       identity: `discovery-start-${receipt.runId}`,
@@ -96,18 +101,23 @@ export async function recoverChildAgentReports(
     let failure: ReportFailure | undefined;
     if (
       (receipt.terminal === "completed" ||
-        (receipt.terminal === "incomplete" && receipt.reason === "schema")) &&
+        (receipt.terminal === "incomplete" && receipt.reason === "schema") ||
+        capHeld) &&
       receipt.targetSnapshotDigest === options.snapshotDigest &&
       receipt.runtimeProfileDigest === options.run.profile.digest &&
       child.attachment !== undefined &&
       receipt.reportArtifactDigest === child.attachment.digest
     ) {
       try {
-        await options.recordReport(receipt.runId, child.attachment);
+        await options.recordReport(
+          receipt.runId,
+          child.attachment,
+          capHeld ? "report-cap" : undefined,
+        );
         if (receipt.terminal === "completed") outcome = "completed";
         else
           failure = {
-            reason: "schema",
+            reason: capHeld ? "policy" : "schema",
             reasonDetail: receipt.reasonDetail ?? "child-report-unreadable",
           };
       } catch (error) {

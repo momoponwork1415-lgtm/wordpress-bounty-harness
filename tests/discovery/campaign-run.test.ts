@@ -48,6 +48,7 @@ async function campaign(
   findingRuns: readonly number[],
   options: {
     readonly childSurvivesBrokenRoot?: boolean;
+    readonly overflowReport?: boolean;
     readonly heldOnly?: boolean;
     readonly rootTranscriptInvalid?: boolean;
     readonly indexed?: boolean;
@@ -271,8 +272,43 @@ async function campaign(
           "findings",
           Buffer.from(JSON.stringify(report)),
         );
+        const overflowAttachment =
+          options.overflowReport && ordinal === 0
+            ? await attachments.put(
+                "findings",
+                Buffer.from(
+                  JSON.stringify({
+                    findings: [claim],
+                    leads: [],
+                    examined: "source",
+                    unexamined: "none",
+                  }),
+                ),
+              )
+            : undefined;
         return {
           attachment,
+          ...(overflowAttachment === undefined
+            ? {}
+            : {
+                agentRuns: [
+                  {
+                    agentPath: "/root/child-4",
+                    attachment: overflowAttachment,
+                    receipt: createNativeRunReceipt({
+                      runId: "child-4",
+                      targetSnapshotDigest: run.targetSnapshotDigest,
+                      profile: run.profile,
+                      terminal: "incomplete",
+                      reason: "policy",
+                      reasonDetail: "child-report-cap-exceeded",
+                      startedAt: "2026-10-08T07:00:00Z",
+                      completedAt: "2026-10-08T07:00:01Z",
+                      reportArtifactDigest: overflowAttachment.digest,
+                    }),
+                  },
+                ],
+              }),
           ...(researchArtifact === undefined ? {} : { researchArtifact }),
           receipt: createNativeRunReceipt({
             runId: run.runId,
@@ -431,6 +467,39 @@ it("keeps raw held candidates and stops at the output boundary", async () => {
     ref &&
       (await evidence.readFile(ref.digest, "candidate.json", 100_000)).status,
   ).toBe("resolved");
+});
+
+it("keeps cap-held child candidates reachable without counting a normal zero-result Trial", async () => {
+  const { result, ledger, evidence } = await campaign([], {
+    indexed: true,
+    overflowReport: true,
+  });
+  expect(result.stoppedBy).toBe("output-boundary");
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(0);
+  const held = ledger.read({ type: "candidate-held" })[0]?.event;
+  expect(held).toMatchObject({
+    runId: "child-4",
+    issuePaths: ["report-cap"],
+    impact: "account-takeover",
+  });
+  const candidateRef = held?.artifacts[0];
+  expect(
+    candidateRef &&
+      (await evidence.readFile(candidateRef.digest, "candidate.json", 100_000))
+        .status,
+  ).toBe("resolved");
+  const finished = ledger
+    .read({ type: "discovery-run-finished" })
+    .find(
+      ({ event }) =>
+        event.type === "discovery-run-finished" && event.runId === "child-4",
+    )?.event;
+  expect(finished).toMatchObject({
+    outcome: "failed",
+    reason: "policy",
+    reasonDetail: "child-report-cap-exceeded",
+  });
+  expect(finished?.artifacts[0]?.kind).toBe("native-run-receipt");
 });
 
 it("passes the fixed source entry index to one cooperative Trial without a stage", async () => {

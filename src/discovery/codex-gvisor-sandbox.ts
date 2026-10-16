@@ -161,26 +161,50 @@ function sessionHeader(
   return undefined;
 }
 
-function childMetadataOnly(header: SessionHeader): string {
-  return `${JSON.stringify({
-    timestamp: header.startedAt,
-    type: "session_meta",
-    payload: {
-      id: header.threadId,
-      source: {
-        subagent: {
-          thread_spawn: {
-            parent_thread_id: header.parentThreadId,
-            depth: 1,
-            agent_path: header.agentPath,
-          },
-        },
-      },
-    },
-  })}\n`;
+/** Keep original report lines and the fields needed for child receipts within capture bounds. */
+function childEvidence(raw: string): string {
+  const lines: string[] = [];
+  for (const line of raw.split("\n")) {
+    let value: unknown;
+    try {
+      value = JSON.parse(line) as unknown;
+    } catch {
+      continue;
+    }
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+      continue;
+    const event = value as Record<string, unknown>;
+    const payload = event.payload;
+    if (event.type === "session_meta" || event.type === "turn_context") {
+      lines.push(line);
+      continue;
+    }
+    if (
+      event.type !== "event_msg" ||
+      typeof payload !== "object" ||
+      payload === null ||
+      Array.isArray(payload)
+    )
+      continue;
+    const message = payload as Record<string, unknown>;
+    if (message.type === "task_complete" || message.type === "token_count") {
+      lines.push(line);
+      continue;
+    }
+    const item = message.item;
+    if (
+      message.type === "item_completed" &&
+      typeof item === "object" &&
+      item !== null &&
+      !Array.isArray(item) &&
+      (item as Record<string, unknown>).type === "CommandExecution"
+    )
+      lines.push(line);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
-/** Capture Root and the first three direct children, counting later children by metadata. */
+/** Capture Root and essential evidence from every unique direct child. */
 async function collectRollouts(home: string): Promise<readonly string[]> {
   const sessions = join(home, "sessions");
   if (!(await lstat(sessions).catch(() => undefined))?.isDirectory()) return [];
@@ -227,32 +251,21 @@ async function collectRollouts(home: string): Promise<readonly string[]> {
     );
   const admitted = new Set(roots.map((header) => header.file));
   const admittedIds = new Set<string>();
-  const capturedChildIds = new Set<string>();
   for (const child of children) {
     if (admittedIds.has(child.threadId)) continue;
     admittedIds.add(child.threadId);
-    if (admittedIds.size <= 3) {
-      admitted.add(child.file);
-      capturedChildIds.add(child.threadId);
-    }
+    admitted.add(child.file);
   }
   const rollouts: string[] = [];
   let bytes = 0;
   for (const header of headers) {
-    if (!admitted.has(header.file)) {
-      if (
-        header.kind === "child" &&
-        rootIds.has(header.parentThreadId ?? "") &&
-        !capturedChildIds.has(header.threadId)
-      )
-        rollouts.push(childMetadataOnly(header));
-      continue;
-    }
-    const size = (await stat(header.file)).size;
-    bytes += size;
-    if (size > MAX_SESSION_BYTES || bytes > MAX_CAPTURE_BYTES)
+    if (!admitted.has(header.file)) continue;
+    const raw = await readSessionFile(header.file, MAX_SESSION_BYTES, true);
+    const evidence = header.kind === "root" ? raw : childEvidence(raw);
+    bytes += Buffer.byteLength(evidence);
+    if (bytes > MAX_CAPTURE_BYTES)
       throw new Error("Codex session evidence limit exceeded");
-    rollouts.push(await readSessionFile(header.file, MAX_SESSION_BYTES, true));
+    rollouts.push(evidence);
   }
   return rollouts;
 }
