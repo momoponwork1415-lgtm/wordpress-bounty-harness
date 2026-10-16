@@ -4,6 +4,12 @@ import { z } from "zod";
 
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
+import {
+  draftSummarySchema,
+  duplicateSummary,
+  MAX_RECORD_BYTES,
+  readReviewHistory,
+} from "./record-contract.js";
 
 /**
  * `review export`: the one bundle the Claude Code skills read (ADR 0031). It
@@ -273,14 +279,7 @@ const MAX_ROWS = 500;
 const MAX_MEMO_CHARS = 16_384;
 
 function readAll(ledger: Ledger, type: LedgerEventV1["type"]) {
-  const records: ReturnType<Ledger["read"]>[number][] = [];
-  let afterSequence = 0;
-  for (;;) {
-    const page = ledger.read({ type, afterSequence, limit: 1000 });
-    records.push(...page);
-    if (page.length < 1000) return records;
-    afterSequence = page[page.length - 1]!.sequence;
-  }
+  return readReviewHistory(ledger, { type });
 }
 
 function httpRow(
@@ -480,13 +479,19 @@ export async function exportReviewBundle(options: {
         ),
   );
 
-  const verifications = ledger
-    .read({ campaignId, findingId, type: "verification-finished", limit: 1000 })
+  const verifications = readReviewHistory(ledger, {
+    campaignId,
+    findingId,
+    type: "verification-finished",
+  })
     .map(({ event }) => event)
     .filter((event) => event.type === "verification-finished");
   const verification = verifications.at(-1);
-  const verifierRuns = ledger
-    .read({ campaignId, findingId, type: "verifier-run-finished", limit: 1000 })
+  const verifierRuns = readReviewHistory(ledger, {
+    campaignId,
+    findingId,
+    type: "verifier-run-finished",
+  })
     .map(({ event }) => event)
     .filter((event) => event.type === "verifier-run-finished");
   for (const event of verifierRuns)
@@ -562,15 +567,21 @@ export async function exportReviewBundle(options: {
         : { status: "captured", path: contentPath(diffRef.digest), summary };
   }
 
-  const decisions = ledger
-    .read({ campaignId, findingId, type: "review-decided", limit: 1000 })
+  const decisions = readReviewHistory(ledger, {
+    campaignId,
+    findingId,
+    type: "review-decided",
+  })
     .map(({ event }) => event)
     .filter((event) => event.type === "review-decided");
   for (const event of decisions)
     for (const artifact of event.artifacts)
       addArtifact(artifact.kind, artifact.digest);
-  const scopes = ledger
-    .read({ campaignId, findingId, type: "scope-assessed", limit: 1000 })
+  const scopes = readReviewHistory(ledger, {
+    campaignId,
+    findingId,
+    type: "scope-assessed",
+  })
     .map(({ event }) => event)
     .filter((event) => event.type === "scope-assessed");
   const privateRecord = async (
@@ -580,22 +591,39 @@ export async function exportReviewBundle(options: {
     const ref = event?.artifacts.find((item) => item.kind === kind);
     return ref === undefined
       ? undefined
-      : ((await readJson(store, ref.digest, "record.json", 200_000)) as
-          Record<string, unknown> | undefined);
+      : ((await readJson(
+          store,
+          ref.digest,
+          "record.json",
+          MAX_RECORD_BYTES,
+        )) as Record<string, unknown> | undefined);
   };
-  const lastDecision = decisions.at(-1);
+  const lastDecision = decisions
+    .filter(
+      (event) =>
+        event.snapshotDigest === verification?.snapshotDigest &&
+        (event.verificationId === verification?.verificationId ||
+          (event.verificationId === undefined && verifications.length === 1)),
+    )
+    .at(-1);
   const decisionRecord = await privateRecord(lastDecision, "review-decision");
-  const duplicate = decisionRecord?.duplicate as
-    { status?: string; ref?: string } | undefined;
+  const duplicate = duplicateSummary(decisionRecord?.duplicate);
   const ofFinding = (type: LedgerEventV1["type"], ids: readonly string[]) =>
     ids.flatMap((findingIdOf) =>
-      ledger
-        .read({ campaignId, findingId: findingIdOf, type, limit: 1000 })
-        .map(({ event }) => event),
+      readReviewHistory(ledger, {
+        campaignId,
+        findingId: findingIdOf,
+        type,
+      }).map(({ event }) => event),
     );
-  const reproduction = ofFinding("human-reproduction-recorded", [findingId]).at(
-    -1,
-  );
+  const reproduction = ofFinding("human-reproduction-recorded", [findingId])
+    .filter(
+      (event) =>
+        event.type === "human-reproduction-recorded" &&
+        event.snapshotDigest === verification?.snapshotDigest &&
+        event.verificationId === verification?.verificationId,
+    )
+    .at(-1);
   const reproduceMinutes = ofFinding("human-effort-recorded", [findingId])
     .filter(
       (event) =>
@@ -617,6 +645,7 @@ export async function exportReviewBundle(options: {
     .at(-1);
   const draft = ofFinding("draft-saved", [findingId]).at(-1);
   const draftRecord = await privateRecord(draft, "review-draft");
+  const draftSummary = draftSummarySchema.safeParse(draftRecord);
   const latestObserved =
     explored === null || options.observeLatestVersion === undefined
       ? null
@@ -738,12 +767,7 @@ export async function exportReviewBundle(options: {
                 typeof decisionRecord?.reasonCode === "string"
                   ? decisionRecord.reasonCode
                   : null,
-              duplicate:
-                duplicate?.status === undefined
-                  ? null
-                  : duplicate.ref === undefined
-                    ? duplicate.status
-                    : `${duplicate.status}:${duplicate.ref}`,
+              duplicate,
               decidedAt: lastDecision.occurredAt,
             },
       humanReproduction:
@@ -752,6 +776,7 @@ export async function exportReviewBundle(options: {
           : {
               result: reproduction.result,
               minutes:
+                verifications.length === 1 &&
                 reproduceMinutes?.type === "human-effort-recorded"
                   ? reproduceMinutes.minutes
                   : null,
@@ -768,13 +793,13 @@ export async function exportReviewBundle(options: {
               recordedAt: reverification.occurredAt,
             },
       latestDraft:
-        draft?.type !== "draft-saved" || draftRecord === undefined
+        draft?.type !== "draft-saved" || !draftSummary.success
           ? null
           : {
               digest: draft.revisionDigest,
-              revision: Number(draftRecord.revision),
-              preparedBy: String(draftRecord.preparedBy),
-              programme: String(draftRecord.destination),
+              revision: draftSummary.data.revision,
+              preparedBy: draftSummary.data.preparedBy,
+              programme: draftSummary.data.destination,
             },
       labSetup:
         verification === undefined

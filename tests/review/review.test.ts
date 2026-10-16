@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
-import { Review } from "../../src/review/index.js";
+import { exportReviewBundle, Review } from "../../src/review/index.js";
 
 const snapshot = `sha256:${"a".repeat(64)}`;
 const labSetup = `sha256:${"b".repeat(64)}`;
@@ -39,13 +39,14 @@ async function fixture(
       },
     ],
   },
+  artifactMaxBytes = 100_000,
 ) {
   const directory = await mkdtemp(join(tmpdir(), "review-"));
   directories.push(directory);
   const artifactStore = new PrivateArtifactStore({
     rootDirectory: join(directory, "private"),
     maxEntries: 10,
-    maxBytes: 100_000,
+    maxBytes: artifactMaxBytes,
   });
   const ledger = new Ledger({
     databasePath: join(directory, "ledger.sqlite"),
@@ -235,7 +236,7 @@ describe("review public interface", () => {
   });
 
   it("binds a private draft revision and human authorization to the exact candidate and destination", async () => {
-    const { review, ledger } = await fixture();
+    const { review, ledger, artifactStore, directory } = await fixture();
     const [assessment] = await review.assessScope({ ref });
     if (assessment === undefined) throw new Error("missing assessment");
     const draft = await review.saveDraft({
@@ -243,7 +244,23 @@ describe("review public interface", () => {
       content: "Private report text",
       preparedBy: "ai",
     });
+    expect(draft.digest).toBe(
+      "sha256:758c9c78fc0d8553b4f30a47db8fd383715cba9a670948c365522e95fcb5fc5e",
+    );
     expect(draft.revision).toBe(1);
+    const exported = await exportReviewBundle({
+      ledger,
+      store: artifactStore,
+      evidenceDirectory: join(directory, "private"),
+      campaignId: "campaign-1",
+      findingId: "finding-1",
+    });
+    expect(exported.review.latestDraft).toMatchObject({
+      digest: draft.digest,
+      revision: 1,
+      preparedBy: "ai",
+      programme: "wordfence",
+    });
     expect(
       (
         await review.admitExternalAction({
@@ -311,6 +328,25 @@ describe("review public interface", () => {
       verificationStatus: "runtime-confirmed",
       drafts: [{ revision: 1 }, { revision: 2 }],
     });
+  });
+
+  it("keeps a multibyte draft readable through the review interface", async () => {
+    const { review, ledger } = await fixture(undefined, 1_000_000);
+    const [assessment] = await review.assessScope({ ref });
+    if (assessment === undefined) throw new Error("missing assessment");
+
+    const draft = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "あ".repeat(40_000),
+      preparedBy: "ai",
+    });
+    expect(ledger.read({ type: "draft-saved" })).toHaveLength(1);
+    expect(
+      await review.inspect({
+        campaignId: "campaign-1",
+        findingId: "finding-1",
+      }),
+    ).toMatchObject({ drafts: [{ digest: draft.digest, revision: 1 }] });
   });
 
   it("rejects admission without a confirmed verification and exposes a duplicate-lookup seam", async () => {

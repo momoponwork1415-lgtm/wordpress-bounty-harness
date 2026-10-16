@@ -7,6 +7,12 @@ import {
 } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
+import {
+  draftSchema,
+  duplicateSchema,
+  MAX_RECORD_BYTES,
+  readReviewHistory,
+} from "./record-contract.js";
 import { openReproductionPackage } from "./reproduction-package.js";
 
 export {
@@ -49,16 +55,6 @@ const assessmentSchema = z.strictObject({
   reason: z.string().min(1).max(2000),
   assessedAt: z.iso.datetime(),
 });
-const draftSchema = z.strictObject({
-  assessmentId: digest,
-  candidateId: digest,
-  digest,
-  revision: z.number().int().positive(),
-  destination: id,
-  content: z.string().min(1).max(100_000),
-  preparedBy: z.enum(["ai", "human"]),
-  createdAt: z.iso.datetime(),
-});
 const authorizationSchema = z.strictObject({
   candidateId: digest,
   draftDigest: digest,
@@ -67,13 +63,6 @@ const authorizationSchema = z.strictObject({
   authorizedAt: z.iso.datetime(),
 });
 
-const duplicateSchema = z.discriminatedUnion("status", [
-  z.strictObject({ status: z.enum(["unavailable", "no-match"]) }),
-  z.strictObject({
-    status: z.literal("possible-match"),
-    reference: z.string().min(1).max(256),
-  }),
-]);
 const reviewDecisionV1Schema = z.strictObject({
   schemaVersion: z.literal(1),
   ref: refSchema,
@@ -991,18 +980,14 @@ export class Review<TFacts = unknown> {
   }
 
   #readAll(type: LedgerEventV1["type"]) {
-    const records: ReturnType<Ledger["read"]>[number][] = [];
-    let afterSequence = 0;
-    for (;;) {
-      const page = this.#ledger.read({ type, afterSequence, limit: 1000 });
-      records.push(...page);
-      if (page.length < 1000) return records;
-      afterSequence = page[page.length - 1]!.sequence;
-    }
+    return readReviewHistory(this.#ledger, { type });
   }
 
   async #storeRecord(record: object): Promise<string> {
-    return this.#store.putFiles({ "record.json": canonicalJson(record) });
+    const json = canonicalJson(record);
+    if (Buffer.byteLength(json) > MAX_RECORD_BYTES)
+      throw new RangeError("Review record exceeds its byte limit");
+    return this.#store.putFiles({ "record.json": json });
   }
 
   async #readRecord<T>(
@@ -1016,7 +1001,7 @@ export class Review<TFacts = unknown> {
     const resolved = await this.#store.readFile(
       evidence.digest,
       "record.json",
-      100_000,
+      MAX_RECORD_BYTES,
     );
     if (resolved.status !== "resolved")
       throw new Error("Private Evidence is unavailable");

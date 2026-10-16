@@ -255,6 +255,127 @@ const reader = (summary: StateDiffSummary | null): StateDiffReader => ({
 });
 
 describe("review export", () => {
+  it("reads private review records at the byte limit and omits larger records", async () => {
+    const { ledger, store, evidenceDirectory } = await fixture({
+      verification: "none",
+    });
+    const record = (size: number) => {
+      const fields = {
+        revision: 1,
+        preparedBy: "ai",
+        destination: "wordfence",
+      };
+      const empty = canonicalJson({ ...fields, padding: "" });
+      return canonicalJson({
+        ...fields,
+        padding: "x".repeat(size - Buffer.byteLength(empty)),
+      });
+    };
+    for (const [size, revisionDigest] of [
+      [1_000_000, sha("8")],
+      [1_000_001, sha("9")],
+    ] as const) {
+      const bytes = record(size);
+      expect(Buffer.byteLength(bytes)).toBe(size);
+      const digest = await store.putFiles({ "record.json": bytes });
+      await ledger.append({
+        schemaVersion: 1,
+        campaignId: "campaign-1",
+        snapshotDigest: snapshot,
+        identity: `draft-${size}`,
+        occurredAt: "2026-10-09T00:00:00Z",
+        type: "draft-saved",
+        findingId: "finding-1",
+        candidateId: "candidate-1",
+        revisionDigest,
+        artifacts: [{ kind: "review-draft", digest }],
+      });
+      const bundle = await exportReviewBundle({
+        ledger,
+        store,
+        evidenceDirectory,
+        campaignId: "campaign-1",
+        findingId: "finding-1",
+      });
+      expect(bundle.review.latestDraft?.digest ?? null).toBe(
+        size === 1_000_000 ? revisionDigest : null,
+      );
+    }
+  });
+
+  it("includes the complete decision history beyond one ledger page", async () => {
+    const { ledger, store, evidenceDirectory } = await fixture({
+      verification: "confirmed",
+    });
+    for (let index = 0; index < 1001; index++)
+      await ledger.append({
+        schemaVersion: 1,
+        campaignId: "campaign-1",
+        snapshotDigest: snapshot,
+        identity: `decision-page-${index}`,
+        occurredAt: "2026-10-09T00:00:00Z",
+        type: "review-decided",
+        findingId: "finding-1",
+        verificationId: "verification-1",
+        decision: "defer",
+      });
+
+    const bundle = await exportReviewBundle({
+      ledger,
+      store,
+      evidenceDirectory,
+      campaignId: "campaign-1",
+      findingId: "finding-1",
+    });
+    expect(bundle.review.decisions).toHaveLength(1002);
+  }, 20_000);
+
+  it("keeps past decisions and human results out of the selected verification", async () => {
+    const { ledger, store, evidenceDirectory } = await fixture({
+      verification: "confirmed",
+    });
+    await ledger.append({
+      schemaVersion: 1,
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot,
+      identity: "human-result-1",
+      occurredAt: "2026-10-09T00:00:00Z",
+      type: "human-reproduction-recorded",
+      findingId: "finding-1",
+      verificationId: "verification-1",
+      reproductionPackageDigest: sha("9"),
+      result: "match",
+    });
+    await ledger.append({
+      schemaVersion: 1,
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot,
+      identity: "verification-2",
+      occurredAt: "2026-10-10T00:00:00Z",
+      type: "verification-finished",
+      findingId: "finding-1",
+      verificationId: "verification-2",
+      labSetupDigest: labSetup,
+      result: {
+        status: "incomplete",
+        reason: "observation",
+        nextStep: "Retry",
+      },
+    });
+
+    const bundle = await exportReviewBundle({
+      ledger,
+      store,
+      evidenceDirectory,
+      campaignId: "campaign-1",
+      findingId: "finding-1",
+    });
+    expect(bundle.verification?.verificationId).toBe("verification-2");
+    expect(bundle.review.decisions).toHaveLength(1);
+    expect(bundle.review.decision).toBeNull();
+    expect(bundle.review.humanReproduction).toBeNull();
+  });
+
   it("builds a versioned bundle with review material and paths, never bodies or payloads", async () => {
     const { ledger, store, evidenceDirectory, diffDigest, evidence } =
       await fixture();
@@ -526,7 +647,7 @@ describe("review export", () => {
             kind: "review-decision",
             digest: await record({
               reasonCode: "accepted",
-              duplicate: { status: "possible-match", ref: "CVE-1" },
+              duplicate: { status: "possible-match", reference: "CVE-1" },
             }),
           },
         ],
@@ -639,6 +760,31 @@ describe("review export", () => {
         programme: "wordfence",
       },
     });
+    await ledger.append({
+      ...base,
+      identity: "decision-legacy",
+      occurredAt: "2026-10-12T00:00:00Z",
+      type: "review-decided",
+      findingId: "finding-1",
+      verificationId: "verification-1",
+      decision: "defer",
+      artifacts: [
+        {
+          kind: "review-decision",
+          digest: await record({
+            duplicate: { status: "possible-match", ref: "LEGACY-1" },
+          }),
+        },
+      ],
+    });
+    expect(
+      (
+        await exported(async () => ({
+          version: "1.4",
+          observedAt: "2026-10-14T00:00:00Z",
+        }))
+      ).review.decision?.duplicate,
+    ).toBe("possible-match:LEGACY-1");
     // A failed observation is null, not an error.
     const failed = await exported(async () => {
       throw new Error("offline");
