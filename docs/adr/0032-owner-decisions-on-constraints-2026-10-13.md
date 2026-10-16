@@ -73,6 +73,20 @@ amends: 0030（タグ単位の履歴利用）, 0022（自動再試行の範囲�
 
 自動再試行は実装どおり recipe 2 回、observation 2 回、provision 1 回、precondition は scenario ID が変わったときだけ（2026-10-14、所有者が実装を正本と決めた。#107、#209）。Verifier の provider 上限は 1 回（ADR 0022 の 2026-10-14 追記）。
 
+## 2026-10-16 追加判断: 既定 prompt を v5 にする
+
+所有者は 2026-10-16 に、v4 索引あり 5 run と索引なし 8 run で本体のコメント本文経由の Stored XSS（公開記録 3 件）が一度も候補にならないこと（#291）を見て、探索 prompt を `wp2shell-bounty-v5` に改め、既定にすると決めた。v5 は所有者が日本語訳を全文読んで確認した本文で、digest は `sha256:59c6bd1bb5fd5ef7618ce180de7f2d90af68fa4bcba26f90aa31aa3679d80cda`。出典対照表は docs/reviews/2026-10-16-wp2shell-bounty-v5-draft.md。
+
+v5 で変えたもの: 受け入れる種類の順位と「落とす種類」の一覧を prompt から外し、対象内かどうかは Harness が付ける Programme Boundary の節に任せる。false negative を false positive より嫌うと 1 文で書く。WordPress 本体が受け取って保存する内容（コメント、登録項目など）を攻撃者が制御するデータとして名指しし、書く側・保存・読む側の 3 点を検査させる。stop 条件を「source に根ざした frontier が残る限り続け、registry を見直してから止める」に強める（wordpress-harness v8 由来）。最低時間は置かない（ADR 0029 のまま）。
+
+変えないもの: Root＋最大 3 子、wall 60 分、入口索引の既定、Finding / Lead 契約の Harness 生成（ADR 0019）、公開記録を渡さない（ADR 0012）、対象固有の名前を入れない。v4 本文と digest は履歴照合用に残す。
+
+同日の運用判断（2026-10-16）: Lab で前提を満たせない対象（外部 API に依存する Smash Balloon 系など）も探索対象から外さず、Finding が出れば検証が `incomplete(precondition)` でも人間レビューに回してよい（#283 の「カタログから外す」を取り消す）。検証は最悪、人手か Claude Code との対話で行う。Lab scenario の拡充（#213、#244）は探索の後に置く。
+
+選定の帯（2026-10-16、ADR 0030 への修正）: 既定の母集団は 10 万以上 100 万未満のインストール帯とし、帯の中ではインストール数で順位を付けない。100 万以上は「直近 1 年に公開記録が一定件数以上」という根拠を満たすときだけ候補に残し、根拠を選定記録に書く。公開記録は slug 単位の件数だけを gate に使い、score と探索には渡さない（ADR 0012）。実装は #295。
+
+採らなかった選択肢: Harness 製の入口索引に出力側 sink を足す（索引あり・なしで差が出なかったので主因でない）。AI が前段で索引を作る（ADR 0029 で外した段付き構造の再導入）。wordpress-harness v8 全文への差し替え（v7 系で有償実績が無い）。
+
 ## 採らなかった選択肢
 
 - 制約ごとに ADR を書く: 週 1 本の規則に収まらない。
