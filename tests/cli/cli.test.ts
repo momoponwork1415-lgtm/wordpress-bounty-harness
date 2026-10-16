@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../../src/cli/index.js";
+import { acquireContinuousLock } from "../../src/cli/continuous-lock.js";
 import { reviewExportV1Schema } from "../../src/review/index.js";
 import {
   createWordPressCliProfile,
@@ -3598,9 +3599,14 @@ describe("harness CLI vertical slice", () => {
     const stopping = await run("continuous", "status");
     expect(stopping.code).toBe(1);
     expect(stopping.stdout).toContain("state stopping  reason operator");
-    const liveResume = await run("continuous", "resume");
-    expect(liveResume.code).toBe(1);
-    expect(liveResume.stderr).toContain("still running as pid");
+    const liveLock = await acquireContinuousLock(state);
+    try {
+      const liveResume = await run("continuous", "resume");
+      expect(liveResume.code).toBe(1);
+      expect(liveResume.stderr).toContain("state lock");
+    } finally {
+      await liveLock.release();
+    }
     await rm(join(state, "continuous.pid"));
     const damagedResume = await run("continuous", "resume");
     expect(damagedResume.code).toBe(0);

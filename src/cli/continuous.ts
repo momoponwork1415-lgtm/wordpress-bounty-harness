@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
@@ -8,6 +8,7 @@ import type {
   LedgerEventV1,
   LedgerReadQuery,
 } from "../ledger/index.js";
+import { acquireContinuousLock } from "./continuous-lock.js";
 import type { CampaignSummary } from "./pipeline.js";
 
 // Final design P6. Constants, not settings.
@@ -100,7 +101,6 @@ export interface ContinuousDeps {
   clock(): Date;
   sleep(ms: number): Promise<void>;
   readonly signals: Pick<NodeJS.Process, "on" | "off">;
-  pidAlive(pid: number): boolean;
   readonly pid: number;
   readonly io: {
     log(line: string): void;
@@ -400,10 +400,17 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     options: { readonly resume?: boolean } = {},
   ): Promise<ContinuousStopReason> => {
     signalled = false;
-    await mkdir(deps.stateDirectory, { recursive: true, mode: 0o700 });
-    const previous = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
-    if (previous > 0 && previous !== deps.pid && deps.pidAlive(previous))
-      throw new Error(`continuous run is already running as pid ${previous}`);
+    const lock = await acquireContinuousLock(deps.stateDirectory);
+    try {
+      return await runLocked(options);
+    } finally {
+      await lock.release();
+    }
+  };
+
+  const runLocked = async (options: {
+    readonly resume?: boolean;
+  }): Promise<ContinuousStopReason> => {
     const saved = await readContinuousMemo(deps.stateDirectory);
     const heldReason = await readContinuousStopReason(deps.stateDirectory);
     if (saved === null) {
