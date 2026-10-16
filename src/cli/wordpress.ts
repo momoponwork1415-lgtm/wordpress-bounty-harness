@@ -202,7 +202,7 @@ const campaignModes = z.discriminatedUnion("mode", [
         "wp2shell-bounty-v5",
         "wp2shell-whitebox-v1.7",
       ])
-      .default("wp2shell-bounty-v4"),
+      .default("wp2shell-bounty-v5"),
     stopRules: singleTrialStop,
     entryIndex: z.literal(true).default(true),
   }),
@@ -218,7 +218,7 @@ const campaignModes = z.discriminatedUnion("mode", [
         "wp2shell-bounty-v5",
         "wp2shell-whitebox-v1.7",
       ])
-      .default("wp2shell-bounty-v4"),
+      .default("wp2shell-bounty-v5"),
     stopRules: singleTrialStop,
     entryIndex: z.literal(false),
   }),
@@ -1360,7 +1360,7 @@ export function createWordPressCliProfile(
         legacyHistory: legacy.history,
         candidates: eligible.map(({ slug, version }) => ({ slug, version })),
         currentPromptVariant:
-          policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v4",
+          policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v5",
         revisitPolicy: policy.revisitPolicy ?? { kind: "never" },
       });
       const ledgerReasons = new Map(
@@ -1478,7 +1478,7 @@ export function createWordPressCliProfile(
           type: "target-selected",
           selectionId: `${target.targetId}@${target.version}`,
           promptVariant:
-            policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v4",
+            policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v5",
           artifacts: [
             { kind: "target-selection", digest: selectionDigest },
             { kind: "selection-report", digest: reportDigest },

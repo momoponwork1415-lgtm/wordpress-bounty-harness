@@ -56,7 +56,7 @@ it.each(["3.3.1", "3.2.6"])(
     const config = wordpressCampaignConfigSchema.parse(source);
     expect(config).toMatchObject({
       mode: "wp2shell",
-      promptId: "wp2shell-bounty-v4",
+      promptId: "wp2shell-bounty-v5",
       entryIndex: true,
       runWallTimeMinutes: 60,
       stopRules: { maxRuns: 1, noFindingRuns: 1 },

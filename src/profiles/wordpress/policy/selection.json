@@ -2,7 +2,7 @@
   "kind": "wordpress-selection-policy",
   "schemaVersion": 1,
   "id": "wordpress-selection-2026-10-20",
-  "promptVariant": "wp2shell-bounty-v4",
+  "promptVariant": "wp2shell-bounty-v5",
   "revisitPolicy": {
     "kind": "never"
   },
