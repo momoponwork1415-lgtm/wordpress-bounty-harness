@@ -1,12 +1,84 @@
 {
   "schemaVersion": 1,
-  "manifestDigest": "sha256:8859127f2c6f9b1cf1ab889da2966149632af0cfa34246ea64a8400c1d231892",
+  "manifestDigest": "sha256:27d7de91d5c42df5bdc4ee5062f0ba724ebf13a9b7e5323638089039cd708c86",
   "cases": [
+    {
+      "caseId": "ad-inserter-2-8-18-a",
+      "slug": "ad-inserter",
+      "vulnerableVersion": "2.8.18",
+      "fixedVersion": "2.8.19"
+    },
+    {
+      "caseId": "ad-inserter-2-8-18-b",
+      "slug": "ad-inserter",
+      "vulnerableVersion": "2.8.18",
+      "fixedVersion": "2.8.19"
+    },
     {
       "caseId": "brizy-2-8-11",
       "slug": "brizy",
       "vulnerableVersion": "2.8.11",
       "fixedVersion": "2.8.12"
+    },
+    {
+      "caseId": "forminator-1-57-3-a",
+      "slug": "forminator",
+      "vulnerableVersion": "1.57.3",
+      "fixedVersion": "1.58.0"
+    },
+    {
+      "caseId": "forminator-1-57-3-b",
+      "slug": "forminator",
+      "vulnerableVersion": "1.57.3",
+      "fixedVersion": "1.58.0"
+    },
+    {
+      "caseId": "give-4-17-0-a",
+      "slug": "give",
+      "vulnerableVersion": "4.17.0",
+      "fixedVersion": "4.18.0"
+    },
+    {
+      "caseId": "give-4-17-0-b",
+      "slug": "give",
+      "vulnerableVersion": "4.17.0",
+      "fixedVersion": "4.18.0"
+    },
+    {
+      "caseId": "latepoint-5-7-2-a",
+      "slug": "latepoint",
+      "vulnerableVersion": "5.7.2",
+      "fixedVersion": "5.7.3"
+    },
+    {
+      "caseId": "latepoint-5-7-2-b",
+      "slug": "latepoint",
+      "vulnerableVersion": "5.7.2",
+      "fixedVersion": "5.7.3"
+    },
+    {
+      "caseId": "newsletter-9-4-0",
+      "slug": "newsletter",
+      "vulnerableVersion": "9.4.0",
+      "fixedVersion": "9.4.1"
+    },
+    {
+      "caseId": "nextgen-gallery-4-5-0",
+      "slug": "nextgen-gallery",
+      "vulnerableVersion": "4.5.0",
+      "fixedVersion": "4.5.1"
+    },
+    {
+      "caseId": "ninja-forms-3-15-4",
+      "slug": "ninja-forms",
+      "vulnerableVersion": "3.15.4",
+      "fixedVersion": "3.15.5"
+    },
+    {
+      "caseId": "popup-maker-1-24-0",
+      "slug": "popup-maker",
+      "vulnerableVersion": "1.24.0",
+      "fixedVersion": "1.25.0"
     },
     {
       "caseId": "relevanssi-4-28-3",
@@ -27,6 +99,12 @@
       "fixedVersion": "4.14.0"
     },
     {
+      "caseId": "the-events-calendar-6-17-4",
+      "slug": "the-events-calendar",
+      "vulnerableVersion": "6.17.4",
+      "fixedVersion": "6.17.4.1"
+    },
+    {
       "caseId": "translatepress-3-2-6-a",
       "slug": "translatepress-multilingual",
       "vulnerableVersion": "3.2.6",
@@ -45,10 +123,28 @@
       "fixedVersion": "3.3.2"
     },
     {
+      "caseId": "tutor-4-1-0",
+      "slug": "tutor",
+      "vulnerableVersion": "4.1.0",
+      "fixedVersion": "4.1.1"
+    },
+    {
+      "caseId": "ultimate-member-2-13-1",
+      "slug": "ultimate-member",
+      "vulnerableVersion": "2.13.1",
+      "fixedVersion": "2.14.0"
+    },
+    {
       "caseId": "unlimited-elements-2-0-16",
       "slug": "unlimited-elements-for-elementor",
       "vulnerableVersion": "2.0.16",
       "fixedVersion": "2.0.21"
+    },
+    {
+      "caseId": "wp-statistics-14-16-13",
+      "slug": "wp-statistics",
+      "vulnerableVersion": "14.16.13",
+      "fixedVersion": "14.16.14"
     }
   ]
 }
