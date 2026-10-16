@@ -154,11 +154,11 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `arbitrary-file-read` / `delete` / `download` | canaryファイルに届く。pathと拡張子の両方を攻撃者が決められたことを判定器が記録する | High Threat（PHPファイル）/ その他 ≥500 | 受理（path + 拡張子の完全制御が条件） |
 | `lfi` / `rfi` | 同上 | その他 ≥500 | 受理（同上） |
 | `sqli` | canary行の読み出しまたは書き込み。Labは `wp_magic_quotes` 既定のまま | Common ≥500 | 受理 |
-| `options-update` | Labが置いたcanary optionまたは重大なoption（`users_can_register`、`default_role`、`siteurl`、`admin_email` 等）が低権限から変わる | High Threat ≥25 | 受理（重大な影響が条件） |
+| `options-update` | Labが置いたcanary optionまたは重大なoption（`users_can_register`、`default_role`、`siteurl`、`admin_email` 等）が低権限から変わる。2026-10-17 から `finding-parked`（ADR 0032） | High Threat ≥25 | 受理（重大な影響が条件） |
 | `privesc-to-admin` / `auth-bypass-to-admin` / `account-takeover` | 低権限主体が管理者の認証状態または管理者相当の能力を得る | High Threat ≥25 | 受理 |
-| `privesc-to-contributor+` / `auth-bypass-non-admin` | 低権限主体がcontributor以上の能力または他主体の認証状態を得る | その他 ≥500 | 受理（contributor以上が条件） |
-| `sensitive-object-access` | 判定器は後回し（`incomplete(no-judge)` として人間へ） | その他 ≥500（Sensitive Information Disclosure） | 受理（機微な対象が条件） |
-| `content-deletion` | 判定器を作らない。探索の目的に含めない | その他 ≥500 | broken access controlの条件次第 |
+| `privesc-to-contributor+` / `auth-bypass-non-admin` | 低権限主体がcontributor以上の能力または他主体の認証状態を得る。2026-10-17 から `finding-parked`（ADR 0032） | その他 ≥500 | 受理（contributor以上が条件） |
+| `sensitive-object-access` | 判定器は後回し。2026-10-17 から `finding-parked`（ADR 0032） | その他 ≥500（Sensitive Information Disclosure） | 受理（機微な対象が条件） |
+| `content-deletion` | 判定器を作らない。2026-10-17 から `finding-parked`（ADR 0032） | その他 ≥500 | broken access controlの条件次第 |
 | `stored-xss` | 低権限主体のnonce付き値が、影響を受けるページで実行されcanary受信先へ届く。発火contextと範囲を記録 | Common ≥500。特定ページだけでも候補 | 受理（サイト全体に効くことが条件。それ以外はmVDPのみ） |
 | `reflected-xss` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（JS実行、nonce不要が条件）だが出さない |
 | `csrf-to-write` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（連鎖が条件）だが出さない |
@@ -225,7 +225,7 @@ TranslatePressの公開済み脆弱版・修正版で縦断経路を実証した
 21. Stored XSS判定器はFindingが宣言する被害者ロールと画面で発火を観測する。
 22. Verifierの `incomplete` は理由ごとの再試行方針で前へ進める。
 23. funnelは最終JSON到達と受理から数え、tokenあたりの `runtime-confirmed` で費用を示す。
-24. `sensitive-object-access` を優先順位に残し、判定器を持つ。
+24. `sensitive-object-access` を優先順位に残し、判定器を持つ（2026-10-17 に `finding-parked` へ。ADR 0032）。
 25. 単独screeningから条件付きRoot＋3 deep-diveへ進み、入口網羅の継続境界をHarnessが持つ（旧主経路。0029が置き換え）。
 26. 通常利用の汎用Lab scenarioを優先し、被害者のブラウザ操作はHarness観測器に限る。
 27. contributor以上を信頼側に置き、公開7件の再発見を配線と判定器の証明として評価する。

@@ -30,7 +30,7 @@
 - agentに渡る文章（prompt本文、skill本文、Harness生成の節の雛形）は `owner-approved` ラベルが付くまでmergeしない。2026-10-13以降、採否とラベル付与は所有者がAIに委任しており、AIは委任を明記したPR commentを残す（DEVELOPMENT.md 第5節）。AIは出典対照表にある要素だけを書き、要素を足さない。
 - prompt本文を変えたら版を上げ、旧版を残してdigest pinを更新する。旧promptは過去Trialの目的文とdigestを照合するために維持する。台帳の旧 `stage` / `continuationOf` 付きeventも読み続け、既存eventを消さない。
 - Finding / Leadの出力契約はprompt本文に書かず、Harnessがschemaから生成する節として渡す（ADR 0019）。候補は出力境界で棄却せず、正規化して受理するか保留する（ADR 0018）。
-- 受理した Finding のうち impact が Programme Boundary の外にあるもの（`other`、`csrf-to-write`、`missing-authz`、`idor`、`reflected-xss`）は `finding-parked`。`content-deletion` は Wordfence が対象内なので除外しない（ADR 0032 Q1） として台帳と Private Evidence に残し、検証 queue・review queue・funnel の raw に入れない。一覧は `review parked --campaign <id>`。対象範囲内の Finding は判定器の結果に関係なく全件 review queue に出る（#185、ADR 0031）。
+- 受理した Finding のうち impact が Programme Boundary の外にあるもの（`other`、`csrf-to-write`、`missing-authz`、`idor`、`reflected-xss`）と、所有者が 2026-10-17 に「重大かどうかの判別が付きにくい」として外した `sensitive-object-access`、`content-deletion`、`options-update`、`privesc-to-contributor+`、`auth-bypass-non-admin` は `finding-parked` として台帳と Private Evidence に残し、検証 queue・review queue・funnel の raw に入れない（ADR 0032 の 2026-10-17 節。Q1 の content-deletion 復帰を上書き）。探索 prompt の目的文は変えず、出口で振り分ける。一覧は `review parked --campaign <id>`。対象範囲内の Finding は判定器の結果に関係なく全件 review queue に出る（#185、ADR 0031）。
 - contributor以上と管理者が意図して付与する権限はtrust境界の内側に置く。公開済み7件の再発見は配線と判定器の確認であり、未知の発見率を示さない。promptとscenarioに対象固有の関数名、option名、URL、画面名を入れない。
 
 ## 検証Labの前提（SPEC.md 第7節、ADR 0026）
