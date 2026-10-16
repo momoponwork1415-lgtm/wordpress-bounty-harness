@@ -10,7 +10,7 @@ Unlimited Elements 2.0.16 だけは 2026-10-12 の後続確認で `pluginDepende
 
 ## #127 再発見カタログ
 
-[`rediscovery-catalog-pins.json`](rediscovery-catalog-pins.json) には、Git 外のmanifestのSHA-256と各caseの脆弱版・修正版だけを置く。2026-10-12 時点は 7 つの対象版に対して 8 件の公開記録、2026-10-16 の拡張で 19 の対象版に対して 24 件を別々に照合する（選定基準と case 一覧は [docs/agents/measurement.md](../agents/measurement.md) の開発セット）。修正版ZIPのbytesとdigest、公開記録IDと日付はGit外のmanifestにあり、探索入力には使わない。
+[`rediscovery-catalog-pins.json`](rediscovery-catalog-pins.json) には、Git 外のmanifestのSHA-256と各caseの脆弱版・修正版だけを置く。2026-10-16 の所有者決定で、catalog は所有者が発見者の公開記録だけにした（16 の対象版、19 記録。一覧は [docs/agents/measurement.md](../agents/measurement.md) の開発セット）。修正版ZIPのbytesとdigest、公開記録IDと日付はGit外のmanifestにあり、探索入力には使わない。
 
 `scripts/build-rediscovery-catalog.mjs` は、Git外のcase入力（`schemaVersion: 1`、`cases` の各項目は `caseId` / `slug` / `vulnerableVersion` / `cve`）、Wordfence mirror DBとstate、`public-source-pins.json`、Git外の出力先、Git側のpin出力先を `--cases` / `--mirror` / `--mirror-state` / `--source-pins` / `--private-dir` / `--pin-output` で受け取る。WordPress.orgの版一覧と実際に取得できるZIPを照合し、修正版archiveをGit外に保存する。
 

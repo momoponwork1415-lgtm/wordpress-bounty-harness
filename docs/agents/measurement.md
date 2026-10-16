@@ -83,24 +83,29 @@ PR の「測った数字」に貼る列は固定する。
 | （動かない） | custom-facebook-feed 4.13.0 | — | 外部 API 依存。catalog 外（#283） |
 | （動かない） | unlimited-elements-for-elementor 2.0.16 | — | SVN export と Elementor 依存の接続待ち（#282） |
 
-### 2026-10-16 追加（再発見ベンチマークの拡張）
+### 2026-10-16 の決定: 再発見ベンチマークは所有者が発見した記録だけにする
 
-所有者の基準: install 数は 10 万〜100 万を優先し、100 万以上は根拠（Critical 分類、記録の多さ）があるときだけ。直近（2026-06〜10）に CVE 付きの公開記録があり、分類が Programme Boundary 内（reflected XSS は除く）、脆弱版 ZIP が WordPress.org にある plugin から選んだ。scenario は無し（plugin 非依存の既定 Lab）。検証は探索の後に所有者が Finding から起動する（#297）。state は `~/.local/state/wordpress-bounty-harness-bench-20261016/<case>/`、campaign ID は `bench-v5-<case>-1016-rN`。
+所有者の決定（2026-10-16）: ベンチマークは Wordfence の公開記録で発見者が所有者（Yuto Hyakumoto / momopon1415）になっているものだけ。他者の記録を広く足す案（同日の 12 plugin 拡張、PR #298）は取り消した。mirror に所有者名義の記録は 28 件あり、reflected XSS 7 件（Programme Boundary 外）、WPML（WordPress.org に ZIP なし）、Widget Countdown（修正版なし、script が受け付けない）を除く 19 記録・16 対象版を catalog にした。scenario は catalog 既存 case のものを使い、新規 case は無し（plugin 非依存の既定 Lab）。検証は探索の後に所有者が Finding から起動する（#297）。state は `~/.local/state/wordpress-bounty-harness-bench-20261016/<case>/`、campaign ID は `bench-v5-<case>-1016-rN`。
 
-| case | slug / 版 | install | catalog の公開記録 | 備考 |
-| --- | --- | ---: | --- | --- |
-| forminator | forminator 1.57.3 | 60 万 | CVE-2026-96341、CVE-2026-102388 | 記録 16 件 |
-| tec | the-events-calendar 6.17.4 | 60 万 | CVE-2026-78006 | |
-| ninjaforms | ninja-forms 3.15.4 | 50 万 | CVE-2026-90438 | |
-| wpstatistics | wp-statistics 14.16.13 | 50 万 | CVE-2026-93770 | |
-| nextgen | nextgen-gallery 4.5.0 | 30 万 | CVE-2026-94123 | |
-| latepoint | latepoint 5.7.2 | 10 万 | CVE-2026-100163、CVE-2026-96662 | |
-| give | give 4.17.0 | 10 万 | CVE-2026-104405、CVE-2026-104672 | |
-| tutor | tutor 4.1.0 | 10 万 | CVE-2026-42702 | 所有者の過去報告先 |
-| newsletter | newsletter 9.4.0 | 20 万 | CVE-2026-96566 | 所有者の過去報告先 |
-| adinserter | ad-inserter 2.8.18 | 30 万 | CVE-2026-97077、CVE-2026-81655 | 所有者の過去報告先 |
-| popupmaker | popup-maker 1.24.0 | 70 万 | CVE-2026-87915 | |
-| ultimatemember | ultimate-member 2.13.1 | 20 万 | CVE-2026-96270 | 記録 12 件 |
-| updraftplus | updraftplus 1.26.4 | 400 万 | （catalog 外）CVE-2026-10795 | 100 万以上の根拠: 未認証の認証回避（Critical）。mirror の software 行が free / premium の 2 件で `build-rediscovery-catalog.mjs` が受け付けないため catalog に入れず、Trial だけ回す |
+| case | slug / 版 | 公開記録 | 分類 / 位置 | Trial |
+| --- | --- | --- | --- | --- |
+| ssa | simply-schedule-appointments 1.6.10.0 | CVE-2026-3658 | SQLi / 未認証 | 回す（scenario public-booking-page-v1） |
+| tutor398 | tutor 3.9.8 | CVE-2026-5502 | コンテンツ改変（missing-authz）/ Subscriber+ | 回す。Programme Boundary 外の分類なので Finding は parked になる |
+| bookingpkg | booking-package 1.7.06 | CVE-2026-4911 | 価格改変 / 未認証 | 回す |
+| brizy | brizy 2.8.11 | CVE-2026-5324 | Stored XSS / 未認証 | 計測済み（2026-10-16-prompt-v5-comparison.md） |
+| classified | classified-listing 5.3.10 | CVE-2026-7563 | missing-authz / Subscriber+ | 回す。parked になる |
+| wpuf | wp-user-frontend 4.3.1 | CVE-2026-5459 | IDOR / 未認証 | 回す。parked になる |
+| costcalc | cost-calculator-builder 3.6.17 | CVE-2026-7753 | missing-authz → 情報漏えい / Subscriber+ | 回す。parked になる |
+| tp326 | translatepress-multilingual 3.2.6 | CVE-2026-18512 | Stored XSS / Subscriber+ | 計測済み |
+| tp331 | translatepress-multilingual 3.3.1 | CVE-2026-19632 | ATO / 未認証 | 回す（scenario translatepress-translation-data-v1） |
+| geodir | geodirectory 2.8.183 | CVE-2026-96766 | Stored XSS / Subscriber+ | 回す |
+| relevanssi | relevanssi 4.28.3 | CVE-2026-97641 | Stored XSS / 未認証 | 計測済み |
+| （依存待ち） | rometheme-for-elementor 2.1.5 | CVE-2026-84763 | Stored XSS / 未認証 | Elementor 依存（#282 と同じ接続） |
+| （依存待ち） | rometheme-for-elementor 2.0.2 | CVE-2026-3425、CVE-2026-3426 | LFI / missing-authz、Author+ | 依存待ち。信頼境界の内側なので Finding にならない |
+| （依存待ち） | unlimited-elements-for-elementor 2.0.16 | CVE-2026-18561 | SQLi / 未認証 | Elementor 依存（#282） |
+| （依存待ち） | reepay-checkout-gateway 1.8.9 | CVE-2026-3462 | missing-authz / Subscriber+ | WooCommerce 依存 |
+| （動かない） | custom-facebook-feed 4.13.0 | CVE-2026-93756 | Stored XSS / 未認証 | 外部 API 依存（#283） |
+| （回さない） | lifterlms 9.2.1 | CVE-2026-5207 | SQLi / Custom+ | 信頼境界の内側 |
+| （回さない） | location-weather 3.0.2 | CVE-2026-7249 | missing-authz / Contributor+ | 信頼境界の内側 |
 
 実例は `docs/evaluation/2026-10-16-wiring-gate-measurement.md`。
