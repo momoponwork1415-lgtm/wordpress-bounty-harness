@@ -196,6 +196,7 @@ describe("WordPress selection public interface", () => {
         "Facebook",
         "Google",
         "SiteGround",
+        "WooCommerce",
         "Yoast",
       ]),
     );
