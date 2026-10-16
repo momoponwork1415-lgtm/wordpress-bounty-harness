@@ -108,3 +108,20 @@ v5 で変えたもの: 受け入れる種類の順位と「落とす種類」の
 | 8 | #220 の受入条件 2 | 「拒否は記録して次対象へ進む」に改定。拒否が続いた週の Step 1 判定は「拒否を除く対象で回り切った」と読む |
 | 9 | A/B 事前登録（#201） | Step 1 の間は中止 |
 | 10 | Q2（Reflected XSS） | 半年後の見直しのまま |
+
+## 2026-10-17 の所有者決定（Claude の委任セッション）
+
+本番 3 batch（20 対象）の review queue に出た対象内 Finding は `sensitive-object-access` 2 件だけで、どちらも Wordfence が明示的に対象外とする「非公開 / 下書き投稿の閲覧」に相当した。所有者は「脆弱性が出ない気がする。sensitive information exposure は外していい」「content-deletion と options-update も対象外かも。重大かどうかの判別が付きづらい」「privesc-to-contributor+ / auth-bypass-non-admin も対象外より」と判断した。
+
+| 項目 | 決定 |
+| --- | --- |
+| `sensitive-object-access` | `finding-parked` に回す。判定器が無く scope 評価が常に `ambiguous` で、人間の時間だけを使っていた |
+| `content-deletion` | `finding-parked` に回す（Q1 を上書き）。重大な削除かどうかを機械で判別できない |
+| `options-update` | `finding-parked` に回す。更新できる option が重大かどうかの判別が付きにくい。任意 option 更新から管理者登録に至る経路は `privesc-to-admin` として記録される |
+| `privesc-to-contributor+` / `auth-bypass-non-admin` | `finding-parked` に回す。Wordfence の「その他」帯で、管理者未満の到達先は報奨の判別が付きにくい |
+| 残す分類 | High Threat（`rce`、`php-file-write`、PHP ファイルに届く `arbitrary-file-read` / `delete`、`privesc-to-admin`、`auth-bypass-to-admin`、`account-takeover`）、Common（`sqli`、`stored-xss`）、その他のうち `arbitrary-file-read` / `delete` / `download`、`lfi` / `rfi` |
+| 探索 prompt | 変えない。v5 の目的文は「重大なデータの読み取り・改変」「subscriber／customer からの権限昇格」を残し、出口の `WORDPRESS_PROGRAMME_EXCLUDED_IMPACTS` で振り分ける。prompt の版は上げない |
+| 既存の Finding | 台帳は追記専用なので、review queue にある prod-20261016-3 の 2 件は所有者が `review decide` で処理する |
+
+2026-10-13 の「`options-update` と `sensitive-object-access` は分類名だけで一律に除外しない」はこの決定で終わる。parked は `review parked` で見られ、半年後の見直し（Q2 と同じ時期）で復帰を再検討する。
+
