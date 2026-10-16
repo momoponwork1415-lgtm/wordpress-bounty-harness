@@ -30,7 +30,7 @@ type DiscoveryOptions = Parameters<typeof runDiscoveryCampaign>[0];
 /** Everything a campaign needs, built by a profile composition from public interfaces. */
 export interface CampaignPipeline<
   Target extends TargetSelection,
-  Setup,
+  Setup extends { readonly scenario?: { readonly id: string } | undefined },
   Handle extends LabHandle,
   Finding extends VerifiableFinding,
   Reconstruction,
@@ -78,6 +78,7 @@ type IncompleteReason = Extract<
   VerificationResultV1,
   { status: "incomplete" }
 >["reason"];
+type VerificationRecord = { sequence: number; event: FinishedVerification };
 
 function readAll(
   ledger: Ledger,
@@ -91,6 +92,33 @@ function readAll(
     if (page.length < 1000) return records;
     afterSequence = page[page.length - 1]!.sequence;
   }
+}
+
+function scenarioForVerification(
+  previous: VerificationRecord,
+  labs: readonly LedgerRecord[],
+  snapshotDigest: string,
+): string | null | undefined {
+  const verificationLab = labs.find(
+    ({ event }) =>
+      event.identity === `verification-lab-${previous.event.verificationId}`,
+  );
+  if (verificationLab?.event.type === "lab-provisioned")
+    return verificationLab.event.scenario?.id ?? null;
+  // A precondition can fail before a verification Lab exists. Its discovery
+  // Lab records the selected scenario before that attempt.
+  const discoveryLab = labs
+    .filter(
+      ({ sequence, event }) =>
+        sequence < previous.sequence &&
+        event.type === "lab-provisioned" &&
+        event.snapshotDigest === snapshotDigest &&
+        event.purpose === "discovery",
+    )
+    .at(-1);
+  return discoveryLab?.event.type === "lab-provisioned"
+    ? (discoveryLab.event.scenario?.id ?? null)
+    : undefined;
 }
 
 /** ADR 0022: counts include the attempt that produced the current reason. */
@@ -148,7 +176,7 @@ export type CampaignSummary = {
 /** Wiring only: each step is a module's public interface; rules stay in the modules. */
 export async function runCampaignPipeline<
   Target extends TargetSelection,
-  Setup,
+  Setup extends { readonly scenario?: { readonly id: string } | undefined },
   Handle extends LabHandle,
   Finding extends VerifiableFinding,
   Reconstruction,
@@ -231,25 +259,72 @@ export async function runCampaignPipeline<
     findings.push(event.findingId);
     findingsBySnapshot.set(event.snapshotDigest, findings);
   }
-  const latestVerification = new Map<string, VerificationResultV1["status"]>();
-  for (const { event } of readAll(ledger, {
+  const verificationHistory = new Map<string, VerificationRecord[]>();
+  for (const record of readAll(ledger, {
     campaignId,
     type: "verification-finished",
-  }))
-    if (event.type === "verification-finished" && event.basis === undefined)
-      latestVerification.set(
-        `${event.snapshotDigest}\0${event.findingId}`,
-        event.result.status,
-      );
-  const isCompleted = (target: Target): boolean => {
+  })) {
+    const { event } = record;
+    if (event.type !== "verification-finished" || event.basis !== undefined)
+      continue;
+    const key = `${event.snapshotDigest}\0${event.findingId}`;
+    const history = verificationHistory.get(key) ?? [];
+    history.push({ sequence: record.sequence, event });
+    verificationHistory.set(key, history);
+  }
+  const recordedLabs = readAll(ledger, {
+    campaignId,
+    type: "lab-provisioned",
+  });
+  // An incomplete result remains reviewable. Skip target work only when the
+  // ledger proves that no automatic verification is due on this resume.
+  const isCompleted = (
+    target: Target,
+    currentScenarioId?: string | null,
+  ): boolean => {
     const snapshotDigest = selectedSnapshots.get(
       `${target.targetId}@${target.version}`,
     );
     if (snapshotDigest === undefined || !concludedSnapshots.has(snapshotDigest))
       return false;
     return (findingsBySnapshot.get(snapshotDigest) ?? []).every((findingId) => {
-      const status = latestVerification.get(`${snapshotDigest}\0${findingId}`);
-      return status !== undefined && status !== "incomplete";
+      const history =
+        verificationHistory.get(`${snapshotDigest}\0${findingId}`) ?? [];
+      const previous = history.at(-1);
+      if (previous === undefined) return false;
+      if (previous.event.result.status !== "incomplete") return true;
+      if (options.retryIncompleteVerifications === true) return false;
+      // The legacy single-attempt mode may retry after any setup change.
+      // Without a provisioned Lab digest, leave it to the normal path.
+      if (options.automaticVerificationRetries === false) return false;
+      if (
+        previous.event.promptVersion === undefined ||
+        previous.event.promptVersion !== pipeline.verification.promptVersion
+      )
+        return true;
+      const reason = previous.event.result.reason;
+      if (reason === "precondition" && currentScenarioId === undefined)
+        return false;
+      const attemptsForReason = history.filter(
+        ({ event }) =>
+          event.labSetupDigest === previous.event.labSetupDigest &&
+          event.promptVersion === previous.event.promptVersion &&
+          event.result.status === "incomplete" &&
+          event.result.reason === reason,
+      ).length;
+      // If the previous setup would not allow a retry, a different setup
+      // cannot allow one under ADR 0022 either.
+      return !shouldAutomaticallyRetryVerification({
+        reason,
+        attemptsForReason,
+        sameLabSetup: true,
+        previousScenarioId: scenarioForVerification(
+          previous,
+          recordedLabs,
+          snapshotDigest,
+        ),
+        currentScenarioId,
+      });
     });
   };
 
@@ -310,6 +385,12 @@ export async function runCampaignPipeline<
     const run = async (): Promise<void> => {
       const snapshot = await pipeline.freeze(target);
       snapshotDigest = snapshot.digest;
+      const setup = pipeline.setupFor(snapshot);
+      if (
+        selectedSnapshots.get(selectionId) === snapshot.digest &&
+        isCompleted(target, setup.scenario?.id ?? null)
+      )
+        return;
       const base = {
         schemaVersion: 1 as const,
         campaignId,
@@ -343,7 +424,6 @@ export async function runCampaignPipeline<
       });
 
       stage = "discovery";
-      const setup = pipeline.setupFor(snapshot);
       const provisioned = await pipeline.lab.provision(snapshot, setup);
       if (provisioned.status === "ready") handle = provisioned.handle;
       const seeded =
@@ -475,32 +555,6 @@ export async function runCampaignPipeline<
         type: "verification-finished",
       });
       const labs = readAll(ledger, { campaignId, type: "lab-provisioned" });
-      const scenarioFor = (previous: {
-        sequence: number;
-        event: FinishedVerification;
-      }): string | null | undefined => {
-        const verificationLab = labs.find(
-          ({ event }) =>
-            event.identity ===
-            `verification-lab-${previous.event.verificationId}`,
-        );
-        if (verificationLab?.event.type === "lab-provisioned")
-          return verificationLab.event.scenario?.id ?? null;
-        // A precondition can fail before a verification Lab exists. Its
-        // discovery Lab records the selected scenario before that attempt.
-        const discoveryLab = labs
-          .filter(
-            ({ sequence, event }) =>
-              sequence < previous.sequence &&
-              event.type === "lab-provisioned" &&
-              event.snapshotDigest === snapshot.digest &&
-              event.purpose === "discovery",
-          )
-          .at(-1);
-        return discoveryLab?.event.type === "lab-provisioned"
-          ? (discoveryLab.event.scenario?.id ?? null)
-          : undefined;
-      };
       const verifications: {
         findingId: string;
         status: VerificationResultV1["status"];
@@ -567,7 +621,11 @@ export async function runCampaignPipeline<
             attemptsForReason,
             sameLabSetup:
               previous.event.labSetupDigest === campaignInput.lab.setupDigest,
-            previousScenarioId: scenarioFor(previous),
+            previousScenarioId: scenarioForVerification(
+              previous,
+              labs,
+              snapshot.digest,
+            ),
             currentScenarioId: handle?.scenario?.id ?? null,
           });
         };
