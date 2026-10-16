@@ -328,7 +328,10 @@ export class Verification<
         );
       const lab = provisioned.handle;
       labSetupDigest = lab.setupDigest;
-      let result: VerificationResultV1;
+      let result: VerificationResultV1 = incomplete(
+        "evidence",
+        "Verification stopped unexpectedly; repeat in a fresh Lab",
+      );
       try {
         const labEvent = await this.#options.ledger.append({
           schemaVersion: 1,
@@ -374,11 +377,17 @@ export class Verification<
         );
       } finally {
         const removed = await this.#options.lab.teardown(lab).catch(() => null);
-        if (removed?.status !== "removed")
-          result = incomplete(
-            "cleanup",
-            removed?.nextStep ?? "Inspect and remove remaining Lab resources",
-          );
+        if (removed?.status !== "removed") {
+          const cleanupLabIds =
+            result.status === "incomplete" ? (result.cleanupLabIds ?? []) : [];
+          result = {
+            ...incomplete(
+              "cleanup",
+              removed?.nextStep ?? "Inspect and remove remaining Lab resources",
+            ),
+            cleanupLabIds: [...cleanupLabIds, lab.id],
+          };
+        }
       }
       return result;
     };
@@ -646,10 +655,13 @@ export class Verification<
         .teardown(replayLab)
         .catch(() => null);
       if (removed?.status !== "removed")
-        result = incomplete(
-          "cleanup",
-          removed?.nextStep ?? "Inspect and remove the reproduction Lab",
-        );
+        result = {
+          ...incomplete(
+            "cleanup",
+            removed?.nextStep ?? "Inspect and remove the reproduction Lab",
+          ),
+          cleanupLabIds: [replayLab.id],
+        };
     }
     return result;
   }
