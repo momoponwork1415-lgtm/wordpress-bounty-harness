@@ -199,6 +199,7 @@ const campaignModes = z.discriminatedUnion("mode", [
         "wp2shell-bounty-v2",
         "wp2shell-bounty-v3",
         "wp2shell-bounty-v4",
+        "wp2shell-bounty-v5",
         "wp2shell-whitebox-v1.7",
       ])
       .default("wp2shell-bounty-v4"),
@@ -214,6 +215,7 @@ const campaignModes = z.discriminatedUnion("mode", [
         "wp2shell-bounty-v2",
         "wp2shell-bounty-v3",
         "wp2shell-bounty-v4",
+        "wp2shell-bounty-v5",
         "wp2shell-whitebox-v1.7",
       ])
       .default("wp2shell-bounty-v4"),
@@ -259,6 +261,7 @@ export const wordpressCampaignConfigSchema = z
               config.promptId !== "wp2shell-bounty-v2" &&
               config.promptId !== "wp2shell-bounty-v3" &&
               config.promptId !== "wp2shell-bounty-v4" &&
+              config.promptId !== "wp2shell-bounty-v5" &&
               config.promptId !== "wp2shell-whitebox-v1.7"
             ? "comparison"
             : config.entryIndex === false
@@ -875,6 +878,7 @@ async function planWordPressDiscovery(
   const outputContractFor = (id: string) =>
     id === "wp2shell-bounty-v3" ||
     id === "wp2shell-bounty-v4" ||
+    id === "wp2shell-bounty-v5" ||
     id === "wp2shell-whitebox-v1.7"
       ? outputContractV2
       : outputContractV1;
