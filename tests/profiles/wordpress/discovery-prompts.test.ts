@@ -100,6 +100,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v2",
       "wp2shell-bounty-v3",
       "wp2shell-bounty-v4",
+      "wp2shell-bounty-v5",
       "wp2shell-whitebox-v1.7",
       "trust-boundary-v1",
     ]);
@@ -119,6 +120,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v2",
       "wp2shell-bounty-v3",
       "wp2shell-bounty-v4",
+      "wp2shell-bounty-v5",
       "wp2shell-whitebox-v1.7",
     ]);
 
@@ -196,6 +198,8 @@ describe("WordPress discovery prompt assets", () => {
         "sha256:a97b4b3c1101470cec743dd51af1d2169f15d4d5ee1a2797997be05edef72c9b",
       "wp2shell-bounty-v4":
         "sha256:6c823fe2ddb8a9af27ea743927f5d4a8203ec29ef4bca7dbadf3135c1739ab62",
+      "wp2shell-bounty-v5":
+        "sha256:59c6bd1bb5fd5ef7618ce180de7f2d90af68fa4bcba26f90aa31aa3679d80cda",
       "wp2shell-whitebox-v1.7":
         "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",
     } as const;
@@ -277,6 +281,49 @@ describe("WordPress discovery prompt assets", () => {
     );
   });
 
+  it("keeps the multi-agent method in v5, drops class ranking and effort floors, and names core-stored data as attacker input", async () => {
+    const archived = await loadWordPressDiscoveryAsset("wp2shell-bounty-v4");
+    const current = await loadWordPressDiscoveryAsset("wp2shell-bounty-v5");
+    expect(archived.digest).toBe(
+      "sha256:6c823fe2ddb8a9af27ea743927f5d4a8203ec29ef4bca7dbadf3135c1739ab62",
+    );
+    expect(Buffer.byteLength(current.text, "utf8")).toBeLessThan(7_000);
+    expect(current.text).toContain(
+      "A false negative is worse than a false positive here",
+    );
+    expect(current.text).toContain(
+      "comments and other content WordPress core accepts and stores on their behalf",
+    );
+    expect(current.text).toContain(
+      "Treat the writer, the storage, and the reader as three places to inspect",
+    );
+    expect(current.text).toContain("Use multiple agents aggressively");
+    expect(current.text).toContain("Search in all three directions");
+    expect(current.text).toContain("research/REGISTRY.md");
+    expect(current.text).toContain("Keep every agent short");
+    expect(current.text).toContain(
+      "After the first complete Finding, run at least one more round on a different approach family",
+    );
+    expect(current.text).toContain(
+      "Stop only when no actionable frontier remains",
+    );
+    expect(current.text).toContain(
+      "Reporting zero Findings after bounded closure is a normal ending",
+    );
+    expect(current.text).not.toMatch(
+      /at least\s+\d+\s+(?:minutes?|hours?)|effort floor/i,
+    );
+    expect(current.text).not.toMatch(
+      /strongest first|Dropped classes|Critical examples|High examples/,
+    );
+    expect(current.text).not.toMatch(
+      /sourceTrace|labObservations|JSON string|Each Finding is an object|Each Lead is an object/,
+    );
+    expect(current.text).not.toMatch(
+      /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|Relevanssi|Brizy|Elementor|\b(?:PoC|CVE|advisory)\b/i,
+    );
+  });
+
   it("pins the v2 bytes and excludes answer clues and scripted commands", async () => {
     const pins = {
       "short-objective-v2":
@@ -332,11 +379,18 @@ describe("WordPress discovery prompt assets", () => {
   it("keeps both variants within the same attacker, operation, impact and Finding contract", async () => {
     for (const id of WORDPRESS_DISCOVERY_PROMPT_IDS) {
       const { text } = await loadWordPressDiscoveryAsset(id);
-      expect(text).toContain("unauthenticated");
-      expect(text).toMatch(/subscriber/i);
-      expect(text).toMatch(/customer/i);
-      expect(text).toMatch(/\brce\b|remote code execution/i);
-      expect(text).toMatch(/stored[- ]xss/i);
+      if (id === "wp2shell-bounty-v5") {
+        // v5 leaves attacker positions and in-scope effects to the supplied
+        // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).
+        expect(text).toContain("trust boundary");
+        expect(text).toContain("Programme Boundary");
+      } else {
+        expect(text).toContain("unauthenticated");
+        expect(text).toMatch(/subscriber/i);
+        expect(text).toMatch(/customer/i);
+        expect(text).toMatch(/\brce\b|remote code execution/i);
+        expect(text).toMatch(/stored[- ]xss/i);
+      }
       if (!WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id)) {
         expect(text).toContain("attackerPosition");
         expect(text).toContain("configurationPrecondition");

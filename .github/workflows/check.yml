@@ -34,6 +34,7 @@ jobs:
           set -eu
           test -f dist/profiles/wordpress/prompts/wp2shell-bounty-v3.md
           test -f dist/profiles/wordpress/prompts/wp2shell-bounty-v4.md
+          test -f dist/profiles/wordpress/prompts/wp2shell-bounty-v5.md
           test -f dist/profiles/wordpress/policy/campaign.json
           test -f dist/profiles/wordpress/policy/selection.json
           node dist/cli/main.js 2>&1 | grep -q "host configuration is required"
