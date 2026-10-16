@@ -51,7 +51,7 @@ const HOLD_STATES = new Set([
 
 export type ContinuousStopReason = (typeof STOP_REASONS)[number];
 
-/** Working state needed for safe restart; the ledger remains the event record. */
+/** Disposable working memo; the ledger remains the source of truth. */
 export type ContinuousMemo = {
   state: string;
   detail: Record<string, string>;
@@ -114,7 +114,6 @@ const DAY = 24 * 60 * MINUTE;
 export function continuousPaths(stateDirectory: string) {
   return {
     memo: join(stateDirectory, "continuous.json"),
-    initialized: join(stateDirectory, "continuous.initialized"),
     pid: join(stateDirectory, "continuous.pid"),
     stop: join(stateDirectory, "continuous.stop"),
     log: join(stateDirectory, "continuous.log"),
@@ -148,7 +147,7 @@ async function writeStateFile(
   }
 }
 
-/** Never repair a partial memo by filling defaults: doing so can lose a campaign. */
+/** A missing or unusable work memo is recreated from defaults on startup. */
 export async function readContinuousMemo(
   stateDirectory: string,
 ): Promise<ContinuousMemo | null> {
@@ -160,46 +159,33 @@ export async function readContinuousMemo(
     throw error;
   });
   if (raw === null) return null;
-  let value: unknown;
   try {
-    value = JSON.parse(raw);
+    const value = JSON.parse(raw) as Partial<ContinuousMemo> | null;
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+      return null;
+    if (
+      typeof value.state !== "string" ||
+      value.detail === null ||
+      typeof value.detail !== "object" ||
+      Array.isArray(value.detail) ||
+      typeof value.backoffStep !== "number" ||
+      typeof value.consecutiveErrorBatches !== "number" ||
+      typeof value.consecutiveRefusalBatches !== "number" ||
+      typeof value.consecutiveNoProgressBatches !== "number" ||
+      typeof value.consecutiveEmptyDays !== "number" ||
+      typeof value.probe !== "boolean" ||
+      typeof value.updatedAt !== "string" ||
+      (HOLD_STATES.has(value.state) &&
+        !Number.isFinite(Date.parse(value.detail.until ?? "")))
+    )
+      return null;
+    return value as ContinuousMemo;
   } catch {
-    throw new Error("continuous.json is invalid");
+    return null;
   }
-  const row = value as Record<string, unknown> | null;
-  const count = (key: string) =>
-    Number.isSafeInteger(row?.[key]) && (row?.[key] as number) >= 0;
-  if (
-    row === null ||
-    typeof row !== "object" ||
-    Array.isArray(row) ||
-    typeof row.state !== "string" ||
-    (!["starting", "running", "stopped"].includes(row.state) &&
-      !HOLD_STATES.has(row.state)) ||
-    row.detail === null ||
-    typeof row.detail !== "object" ||
-    Array.isArray(row.detail) ||
-    !Object.values(row.detail).every((item) => typeof item === "string") ||
-    !count("backoffStep") ||
-    !count("consecutiveErrorBatches") ||
-    !count("consecutiveRefusalBatches") ||
-    !count("consecutiveNoProgressBatches") ||
-    !count("consecutiveEmptyDays") ||
-    typeof row.probe !== "boolean" ||
-    typeof row.updatedAt !== "string" ||
-    !Number.isFinite(Date.parse(row.updatedAt)) ||
-    (row.campaignId !== undefined &&
-      (typeof row.campaignId !== "string" || row.campaignId.length === 0)) ||
-    (row.target !== undefined &&
-      row.target !== null &&
-      typeof row.target !== "string") ||
-    (row.lastError !== undefined && typeof row.lastError !== "string")
-  )
-    throw new Error("continuous.json is invalid");
-  return row as ContinuousMemo;
 }
 
-/** Atomically publish an explicit terminal stop request. */
+/** Atomically publish an explicit operator or terminal policy stop. */
 export function requestContinuousStop(
   stateDirectory: string,
   reason: ContinuousStopReason = "operator",
@@ -334,7 +320,7 @@ function batchFacts(deps: ContinuousDeps, campaignId: string) {
 /** One host, one operator, one production state (OPERATIONS §2). */
 export function createContinuousRunner(deps: ContinuousDeps) {
   const paths = continuousPaths(deps.stateDirectory);
-  let memo: ContinuousMemo = {
+  const defaultMemo = (): ContinuousMemo => ({
     state: "starting",
     detail: {},
     backoffStep: 0,
@@ -344,7 +330,8 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     consecutiveEmptyDays: 0,
     probe: false,
     updatedAt: deps.clock().toISOString(),
-  };
+  });
+  let memo = defaultMemo();
   let signalled = false;
   const stopRequested = () => signalled || existsSync(paths.stop);
   const save = async () => {
@@ -409,15 +396,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     await enter("stopped", { reason });
     return reason;
   };
-  const stopForMemo = async (code: "missing" | "invalid") => {
-    // Preserve the damaged file for inspection; do not synthesize campaign state.
-    requestContinuousStop(deps.stateDirectory, "errors");
-    const line = `${deps.clock().toISOString()} stopped reason=errors memo=${code}`;
-    deps.io.log(line);
-    await deps.io.notify?.(line).catch(() => undefined);
-    return "errors" as const;
-  };
-
   const run = async (
     options: { readonly resume?: boolean } = {},
   ): Promise<ContinuousStopReason> => {
@@ -433,25 +411,13 @@ export function createContinuousRunner(deps: ContinuousDeps) {
   const runLocked = async (options: {
     readonly resume?: boolean;
   }): Promise<ContinuousStopReason> => {
-    let saved: ContinuousMemo | null;
-    try {
-      saved = await readContinuousMemo(deps.stateDirectory);
-    } catch {
-      return stopForMemo("invalid");
-    }
+    const saved = await readContinuousMemo(deps.stateDirectory);
     const heldReason = await readContinuousStopReason(deps.stateDirectory);
     if (saved === null) {
-      if (
-        existsSync(paths.initialized) ||
-        existsSync(paths.pid) ||
-        existsSync(paths.log)
-      )
-        return stopForMemo("missing");
-      if (heldReason !== null && !options.resume) return heldReason;
+      memo = defaultMemo();
+      deps.io.log(`${deps.clock().toISOString()} warning memo-recreated`);
       await save();
     } else memo = saved;
-    if (!existsSync(paths.initialized))
-      await writeStateFile(deps.stateDirectory, paths.initialized, "1\n");
     if (heldReason !== null) {
       if (!options.resume) {
         // Preserve the marker and unfinished campaign across service restarts.
