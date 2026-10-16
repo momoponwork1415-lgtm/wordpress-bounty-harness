@@ -75,6 +75,8 @@ export const verificationResultV1Schema = z.discriminatedUnion("status", [
       "no-judge",
     ]),
     nextStep: z.string().min(1).max(2000),
+    /** Lab teardown failed; retain opaque ids so a resumed campaign can inspect them. */
+    cleanupLabIds: z.array(id).min(1).max(2).optional(),
     /** A profile found an ordinary Lab scenario to try before human review. */
     nextScenarioId: id.optional(),
     evidenceDigest: digest.optional(),

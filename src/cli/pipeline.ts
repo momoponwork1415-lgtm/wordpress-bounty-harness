@@ -222,6 +222,7 @@ export async function runCampaignPipeline<
     skipped?: SkippedSummary;
   };
   let stopped: CampaignSummary["stopped"];
+  let fatalError: Error | undefined;
   const requestStop = (reason: NonNullable<CampaignSummary["stopped"]>) => {
     if (reason === "provider-limit" || stopped === undefined) stopped = reason;
   };
@@ -559,6 +560,7 @@ export async function runCampaignPipeline<
         findingId: string;
         status: VerificationResultV1["status"];
       }[] = [];
+      let verificationCleanupFailed = false;
       const findings = readAll(ledger, {
         campaignId,
         type: "finding-recorded",
@@ -661,6 +663,33 @@ export async function runCampaignPipeline<
             findingId: event.findingId,
             status: result.status,
           });
+          if (result.status === "incomplete" && result.reason === "cleanup") {
+            fatalError ??= new Error(result.nextStep);
+            verificationCleanupFailed = true;
+            requestStop("incomplete");
+            const cleanupLabIds =
+              result.cleanupLabIds ??
+              readAll(ledger, { campaignId, type: "lab-provisioned" })
+                .filter(
+                  ({ event: labEvent }) =>
+                    labEvent.identity ===
+                      `verification-lab-${verificationId}` ||
+                    labEvent.identity ===
+                      `verification-replay-lab-${verificationId}`,
+                )
+                .flatMap(({ event: labEvent }) =>
+                  labEvent.type === "lab-provisioned" ? [labEvent.labId] : [],
+                );
+            await append({
+              ...base,
+              identity: `campaign-stopped-${options.newId()}`,
+              occurredAt: at(),
+              type: "campaign-stopped",
+              reason: "incomplete",
+              ...(cleanupLabIds.length === 0 ? {} : { cleanupLabIds }),
+            });
+            break;
+          }
           if (
             result.status === "incomplete" &&
             result.reason === "provider" &&
@@ -685,6 +714,7 @@ export async function runCampaignPipeline<
           )
             break;
         } while (true);
+        if (verificationCleanupFailed) break;
       }
       result.target = { ...summary, verifications };
       // A resumed target has already spent its one Trial. Keep its typed
@@ -721,13 +751,25 @@ export async function runCampaignPipeline<
     } finally {
       if (handle !== undefined) {
         const removed = await pipeline.lab.teardown(handle).catch(() => null);
-        if (removed?.status !== "removed" && result.skipped === undefined)
-          await skip(
-            new Error(
-              removed?.nextStep ??
-                "Inspect and remove remaining Lab resources before retry",
-            ),
+        if (removed?.status !== "removed") {
+          const cleanupFailure = new Error(
+            removed?.nextStep ??
+              "Inspect and remove remaining Lab resources before retry",
           );
+          fatalError ??= cleanupFailure;
+          requestStop("incomplete");
+          await append({
+            schemaVersion: 1,
+            campaignId,
+            snapshotDigest,
+            identity: `campaign-stopped-${options.newId()}`,
+            occurredAt: at(),
+            type: "campaign-stopped",
+            reason: "incomplete",
+            cleanupLabIds: [handle.id],
+          });
+          if (result.skipped === undefined) await skip(cleanupFailure);
+        }
       }
     }
     return result;
@@ -759,7 +801,14 @@ export async function runCampaignPipeline<
         return;
       }
       const index = next++;
-      results[index] = await processTarget(target);
+      try {
+        results[index] = await processTarget(target);
+      } catch (error) {
+        fatalError ??=
+          error instanceof Error ? error : new Error(String(error));
+        requestStop("incomplete");
+        return;
+      }
     }
   };
   await Promise.all(
@@ -768,6 +817,7 @@ export async function runCampaignPipeline<
       worker,
     ),
   );
+  if (fatalError !== undefined) throw fatalError;
   const targets = results.flatMap((result) =>
     result?.target === undefined ? [] : [result.target],
   );
