@@ -27,7 +27,9 @@ export type WordPressLedgerExclusionReason =
   | "previously-selected"
   | "unpublished-finding"
   | "legacy-started"
-  | "legacy-ambiguous";
+  | "legacy-ambiguous"
+  /** This exact version failed Lab provisioning (e.g. a missing dependency plugin) and never started a Trial. */
+  | "lab-provision-failed";
 
 /** Earlier generations' history, exported once outside Git (D2). */
 export type WordPressLegacyHistory =
@@ -141,6 +143,17 @@ export function inspectWordPressLedgerExclusions(input: {
       recordPrompt(key, event.promptVariant);
   }
 
+  // A discovery Lab that failed to provision for a snapshot that never explored marks that slug@version.
+  const labFailedSnapshots = new Set<string>();
+  for (const event of ledgerEvents(input.ledger, "lab-provisioned"))
+    if (
+      event.type === "lab-provisioned" &&
+      event.status === "failed" &&
+      event.purpose !== "verification"
+    )
+      labFailedSnapshots.add(snapshotKey(event));
+  const exploredSnapshots = new Set<string>();
+
   const finishedRuns = new Map<
     string,
     Extract<LedgerEventV1, { type: "discovery-run-finished" }>
@@ -155,6 +168,7 @@ export function inspectWordPressLedgerExclusions(input: {
     recordPrompt(key, event.configuration.promptVariant);
     // Historical events had no runKind and each represented exploration.
     if ((event.runKind ?? "explore") !== "explore") continue;
+    exploredSnapshots.add(key);
     const runKey = `${event.campaignId}\0${event.runId}`;
     if (!countsAsTrial(finishedRuns.get(runKey), activeRuns.has(runKey)))
       continue;
@@ -180,10 +194,23 @@ export function inspectWordPressLedgerExclusions(input: {
     unpublishedFindingSlugs.add(slug);
   }
 
+  const labFailedVersions = new Map<string, Set<string>>();
+  for (const key of labFailedSnapshots) {
+    if (exploredSnapshots.has(key)) continue;
+    const slug = selectedBySnapshot.get(key);
+    const version = versionBySnapshot.get(key);
+    if (slug === undefined || version === undefined) continue;
+    const versions = labFailedVersions.get(slug) ?? new Set<string>();
+    versions.add(version);
+    labFailedVersions.set(slug, versions);
+  }
+
   const legacy = input.legacyHistory ?? "unavailable";
   return input.candidates.map(({ slug, version }) => {
     const reasons: WordPressLedgerExclusionReason[] = [];
     if (unpublishedFindingSlugs.has(slug)) reasons.push("unpublished-finding");
+    if (labFailedVersions.get(slug)?.has(version))
+      reasons.push("lab-provision-failed");
     // A reconsidered slug forgets the Trials that predate the legacy export, not the ones run since.
     const exportedAt =
       legacy !== "unavailable" && legacy.reconsider.has(slug)
