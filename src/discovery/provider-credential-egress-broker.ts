@@ -10,6 +10,7 @@ import { canonicalDigest } from "../infrastructure/canonical-json.js";
 import { createGrantTls } from "./grant-tls.js";
 import type { ProviderApiProtocol } from "./provider-credential-proxy.js";
 import {
+  ANTHROPIC_UPSTREAM_ORIGIN,
   BROKER_TLS_HOSTNAME,
   CHATGPT_UPSTREAM_ORIGIN,
   PROVIDER_UPSTREAM_ORIGIN,
@@ -25,6 +26,7 @@ export const DISCOVERY_LEFTOVER_PATTERNS = {
   containers: [
     /^provider-egress-broker-[A-Za-z0-9_.-]+$/,
     /^codex-agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    /^claude-agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   ],
   networks: [/^provider-egress-(?!broker-)[A-Za-z0-9_.-]+$/],
 } as const;
@@ -36,7 +38,12 @@ export const EGRESS_BROKER_LEFTOVER_PATTERNS = DISCOVERY_LEFTOVER_PATTERNS;
 export const EGRESS_BROKER_MEMORY_MIB = 512;
 
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
-const modelSchema = z.enum(["gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"]);
+const modelSchema = z.enum([
+  "gpt-6-sol",
+  "gpt-6.1-sol",
+  "gpt-6-luna",
+  "claude-opus-5-5",
+]);
 const dockerNameSchema = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u);
@@ -49,7 +56,7 @@ export const providerCredentialEgressGrantRequestSchema = z
     schemaVersion: z.literal(1),
     runtimeProfileDigest: digestSchema,
     model: modelSchema,
-    protocol: z.enum(["responses", "chat-completions"]),
+    protocol: z.enum(["responses", "chat-completions", "anthropic-messages"]),
     maxRequests: z.number().int().positive().max(10_000),
     maxRequestBytes: z
       .number()
@@ -86,6 +93,7 @@ export interface ProviderCredentialEgressGrant {
   readonly dockerNetworkName: string;
   readonly model: string;
   readonly protocol: ProviderApiProtocol;
+  readonly anthropicAuthentication?: "api-key" | "subscription-token";
   readonly expiresAt: string;
 }
 
@@ -137,9 +145,13 @@ const providerCredentialEgressReceiptBodySchema = z.strictObject({
   grantId: dockerNameSchema,
   runtimeProfileDigest: digestSchema,
   brokerImage: pinnedImageSchema,
-  upstreamOrigin: z.enum([PROVIDER_UPSTREAM_ORIGIN, CHATGPT_UPSTREAM_ORIGIN]),
+  upstreamOrigin: z.enum([
+    PROVIDER_UPSTREAM_ORIGIN,
+    CHATGPT_UPSTREAM_ORIGIN,
+    ANTHROPIC_UPSTREAM_ORIGIN,
+  ]),
   model: modelSchema,
-  protocol: z.enum(["responses", "chat-completions"]),
+  protocol: z.enum(["responses", "chat-completions", "anthropic-messages"]),
   maxRequests: z.number().int().positive().max(10_000),
   maxRequestBytes: z
     .number()
@@ -161,6 +173,27 @@ const providerCredentialEgressReceiptBodySchema = z.strictObject({
       forwardedRequests: z.number().int().nonnegative(),
       requestLimitExceeded: z.number().int().nonnegative(),
       unauthorizedRequests: z.number().int().nonnegative(),
+      unauthorizedMissingCredentialRequests: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional(),
+      unauthorizedMismatchedCredentialRequests: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional(),
+      unauthorizedMessagesEndpointRequests: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional(),
+      unauthorizedOtherEndpointRequests: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional(),
+      rejectedConnectivityProbes: z.number().int().nonnegative().optional(),
       upstreamSuccess: z.number().int().nonnegative().optional(),
       upstreamClientError: z.number().int().nonnegative().optional(),
       upstreamServerError: z.number().int().nonnegative().optional(),
@@ -222,8 +255,12 @@ export interface ProviderCredentialEgressBrokerOptions {
   readonly dockerExecutablePath: string;
   readonly brokerImage: string;
   readonly credentialFilePath: string;
-  /** An API key file (the default) or a Codex CLI ChatGPT `auth.json`. */
-  readonly credentialKind?: "api-key" | "chatgpt-login";
+  /** The host-private provider credential format; never mounted into an agent. */
+  readonly credentialKind?:
+    | "api-key"
+    | "chatgpt-login"
+    | "anthropic-api-key"
+    | "anthropic-subscription-token";
   readonly scratchRootDirectory: string;
   readonly proxyBundleDirectory: string;
   readonly providerNetworkName?: string;
@@ -236,6 +273,7 @@ export interface ProviderCredentialEgressBrokerOptions {
   readonly runDocker?: (
     args: readonly string[],
     timeoutMs: number,
+    hostEnvironment?: NodeJS.ProcessEnv,
   ) => Promise<DockerCommandResult>;
 }
 
@@ -284,6 +322,7 @@ async function defaultDockerCommand(
   args: readonly string[],
   timeoutMs: number,
   secrets: readonly string[],
+  hostEnvironment?: NodeJS.ProcessEnv,
 ): Promise<DockerCommandResult> {
   const result = await runNativeModelProcess({
     executablePath,
@@ -294,6 +333,7 @@ async function defaultDockerCommand(
       LANG: "C",
       LC_ALL: "C",
       TZ: "UTC",
+      ...hostEnvironment,
     },
     timeoutMs,
     maxOutputBytes: 64 * 1024,
@@ -414,9 +454,15 @@ export function createProviderCredentialEgressBroker(
   const providerNetworkName = options.providerNetworkName ?? "bridge";
   const containerUser = nonRootHostUser();
   const chatgpt = options.credentialKind === "chatgpt-login";
+  const subscription =
+    options.credentialKind === "anthropic-subscription-token";
+  const anthropic =
+    options.credentialKind === "anthropic-api-key" || subscription;
   const upstreamOrigin = chatgpt
     ? CHATGPT_UPSTREAM_ORIGIN
-    : PROVIDER_UPSTREAM_ORIGIN;
+    : anthropic
+      ? ANTHROPIC_UPSTREAM_ORIGIN
+      : PROVIDER_UPSTREAM_ORIGIN;
   const upstreamHostname = new URL(upstreamOrigin).hostname;
 
   return {
@@ -426,6 +472,11 @@ export function createProviderCredentialEgressBroker(
     ) {
       const request =
         providerCredentialEgressGrantRequestSchema.parse(requestValue);
+      if (
+        anthropic !== (request.protocol === "anthropic-messages") ||
+        anthropic !== (request.model === "claude-opus-5-5")
+      )
+        throw new Error("Provider protocol, model and credential kind differ");
       const startedAt = clock();
       validateGrantDeadline(request, startedAt);
       const grantId = nextUuid();
@@ -493,6 +544,7 @@ export function createProviderCredentialEgressBroker(
         | ((
             args: readonly string[],
             timeoutMs: number,
+            hostEnvironment?: NodeJS.ProcessEnv,
           ) => Promise<DockerCommandResult>)
         | undefined;
       try {
@@ -515,10 +567,13 @@ export function createProviderCredentialEgressBroker(
             options.credentialFilePath,
           );
           secrets = [apiKey];
-          stagedFiles = { "provider-api-key": `${apiKey}\n` };
+          stagedFiles = {
+            [subscription ? "provider-subscription-token" : "provider-api-key"]:
+              `${apiKey}\n`,
+          };
         }
-        const grantSecrets = secrets;
-        runDocker = async (args, timeoutMs) => {
+        const grantSecrets = [...secrets, grantToken];
+        runDocker = async (args, timeoutMs, hostEnvironment) => {
           const result =
             options.runDocker === undefined
               ? await defaultDockerCommand(
@@ -526,8 +581,9 @@ export function createProviderCredentialEgressBroker(
                   args,
                   timeoutMs,
                   grantSecrets,
+                  hostEnvironment,
                 )
-              : await options.runDocker(args, timeoutMs);
+              : await options.runDocker(args, timeoutMs, hostEnvironment);
           return {
             exitCode: result.exitCode,
             stdout: redactSecret(result.stdout, ...grantSecrets),
@@ -640,9 +696,11 @@ export function createProviderCredentialEgressBroker(
               `${proxyBundle}:/opt/provider-egress:ro`,
               ...secretMounts,
               "--env",
-              `PROVIDER_AUTHENTICATION=${chatgpt ? "chatgpt" : "api-key"}`,
+              `PROVIDER_AUTHENTICATION=${chatgpt ? "chatgpt" : subscription ? "anthropic-subscription-token" : anthropic ? "anthropic-api-key" : "api-key"}`,
+              // Docker reads the grant from this child process's environment.
+              // The value stays out of host argv and ordinary command logs.
               "--env",
-              `PROVIDER_GRANT_TOKEN=${grantToken}`,
+              "PROVIDER_GRANT_TOKEN",
               "--env",
               `PROVIDER_MODEL=${request.model}`,
               "--env",
@@ -660,6 +718,7 @@ export function createProviderCredentialEgressBroker(
               "/opt/provider-egress/provider-credential-proxy-cli.js",
             ],
             20_000,
+            { PROVIDER_GRANT_TOKEN: grantToken },
           );
           if (!dockerSucceeded(broker)) {
             setup = {
@@ -759,6 +818,13 @@ export function createProviderCredentialEgressBroker(
                         dockerNetworkName: networkName,
                         model: request.model,
                         protocol: request.protocol,
+                        ...(anthropic
+                          ? {
+                              anthropicAuthentication: subscription
+                                ? ("subscription-token" as const)
+                                : ("api-key" as const),
+                            }
+                          : {}),
                         expiresAt: request.expiresAt,
                       });
                       operationResult = { status: "completed", value };

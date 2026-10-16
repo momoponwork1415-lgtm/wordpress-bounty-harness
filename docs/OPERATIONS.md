@@ -69,6 +69,33 @@ harness review [--campaign <id>]                         # 検証済みの列を
 - tokenの更新はしない。preflightが「1時間以内に失効」を出したら、ホストで `codex login` をやり直す。
 - APIキー（`host-private-bearer`）の経路も残っている。
 
+### Claude Opus 5.5 を探索に使う場合（opt-in）
+
+`containers/development-set/claude/Dockerfile` から image を build し、`docker image inspect` で得た repo digest を Git 外 host 設定の `images.claude` に固定する。Claude Code CLI は `2.1.296`、Agent SDK は `0.3.296` を image に含む。Opus 5.5 には Claude Code 2.1.280 以降が必要。購読を使う場合、所有者が公式の `claude setup-token` で発行した token を Git 外の本人所有・0600 ファイルに保存する。broker だけが token 本文を読み、Claude sandbox には Trial 限定 grant を渡す。API key を使う場合は別の本人所有・0600 ファイルを指定する。
+
+```json
+{
+  "images": { "claude": "wordpress-bounty-claude@sha256:<build-digest>" },
+  "claude": {
+    "credentialFilePath": "/private/claude-setup-token",
+    "runtimeProfile": {
+      "id": "claude-opus-55-high",
+      "requestedModelId": "claude-opus-5-5",
+      "requestedEffort": "high",
+      "claudeCliVersion": "2.1.296",
+      "authenticationMethod": "anthropic-subscription-host",
+      "cyberAccessProgram": "unavailable",
+      "serviceTier": "default",
+      "subagent": { "modelId": "claude-opus-5-5", "effort": "high" }
+    }
+  }
+}
+```
+
+上の JSON は既存 host 設定に追加するフィールドの例。API key を使う場合は `credentialFilePath` をその key ファイルに変え、`authenticationMethod` を `anthropic-api-key-host` にする。campaign 設定に `"discoveryProvider": "claude-opus-5-5"` を追加すると探索だけが Claude に切り替わる。省略時は従来の Codex。Codex image と認証は Verifier のため引き続き必要。`harness runtime check --config <campaign.json>` は Codex と Claude の pinned image、CLI 版、credential ファイルの権限を検査する。実際の model 権限は provider 応答で判明し、拒否なら Trial を `incomplete(provider)` にする。Claude の Root と最大3子は一つの Agent SDK query の中で動き、同じ子への後続 wave は `SendMessage` を使う。broker は `POST /v1/messages` と `POST /v1/messages?beta=true`、pinned model、期限、要求数とbyte数の上限だけを認める。購読経路では sandbox の grant を `ANTHROPIC_AUTH_TOKEN` に置き、OAuth capability header を要求してから broker がホスト側 token に差し替える。
+
+Claude sandbox は Root と子で CPU 6・8 GiB を共有し、broker の上限は別に 512 MiB。Lab の使用量も対象ごとに加算する。対象間の並列数は `resources.maxConcurrentTargets` が制御し、`maxConcurrentRuns` は各対象の run 数を制御する。`memoryBudgetMiB` は全 campaign 横断の予約ではなく、各対象の run admission に渡る。別 campaign 間の全ホスト共通 semaphore もない。所有者が指定した今回の負荷試験は Opus 1対象で usage・wall・失敗を観測してから Opus 2対象へ上げ、同時 Codex 2対象との合計を最大4対象にする。Codex 側の同時実行 guard を解消し、外側監視で CPU・RAM・provider rate・停止伝播を確認してから増やす。
+
 `campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v4` のRoot＋最大3子による協調Trialを1回行い、wall上限は60分。Rootの報告で正常終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、Harnessのcontinuation差し込みは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
 
 固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。

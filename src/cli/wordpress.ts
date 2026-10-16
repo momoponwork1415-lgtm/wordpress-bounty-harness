@@ -7,6 +7,7 @@ import {
   allocateTrialArms,
   CODEX_SANDBOX_MEMORY_MIB,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
+  CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
   DISCOVERY_LEFTOVER_PATTERNS,
   EGRESS_BROKER_MEMORY_MIB,
 } from "../discovery/index.js";
@@ -141,6 +142,7 @@ const ablation = z
 /** Human-edited, Git-tracked run configuration. It carries no credentials or keys. */
 const commonCampaignFields = {
   schemaVersion: z.literal(1),
+  discoveryProvider: z.enum(["codex", "claude-opus-5-5"]).default("codex"),
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
   runWallTimeMinutes: z.number().positive().max(240).optional(),
@@ -968,7 +970,10 @@ async function planWordPressDiscovery(
         config.resources.memoryBudgetMiB /
           (boundaries.runtimeProfile.subagent.modelId === "unavailable"
             ? DISCOVERY_RUN_MEMORY_MIB
-            : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB),
+            : (boundaries.runtimeProfile.transportKind === "claude-code/v1"
+                ? CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB
+                : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB) +
+              EGRESS_BROKER_MEMORY_MIB),
       ),
     ),
     ...(ablationConfig === undefined
@@ -1297,9 +1302,10 @@ export function createWordPressCliProfile(
       const reportDigest = await state.store.putFiles({
         "selection-report.json": canonicalJson(report),
       });
-      if ("candidateSource" in policy && chosen.length < 3)
+      const minimumTargets = Math.min(3, policy.maximumTargets);
+      if ("candidateSource" in policy && chosen.length < minimumTargets)
         throw new Error(
-          `Selection found ${chosen.length} eligible frozen targets; at least 3 are required (report ${reportDigest})`,
+          `Selection found ${chosen.length} eligible frozen targets; at least ${minimumTargets} are required (report ${reportDigest})`,
         );
       const batchId = chosen.length === 0 ? null : `selection-${state.newId()}`;
       for (const { target, snapshot } of chosen) {
@@ -1375,8 +1381,14 @@ export function createWordPressCliProfile(
       const measured = await boundaries.probeRuntime();
       return [
         {
-          item: "codex-cli",
-          profile: boundaries.runtimeProfile.codexCliVersion,
+          item:
+            boundaries.runtimeProfile.transportKind === "claude-code/v1"
+              ? "claude-cli"
+              : "codex-cli",
+          profile:
+            boundaries.runtimeProfile.transportKind === "claude-code/v1"
+              ? boundaries.runtimeProfile.claudeCliVersion
+              : boundaries.runtimeProfile.codexCliVersion,
           image: measured.cliVersion,
         },
         {

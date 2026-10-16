@@ -1092,7 +1092,7 @@ export async function runCli(
         io.stdout("recorded runtimes (oldest first)");
         for (const { runtime, runs, firstDay, lastDay } of groups)
           io.stdout(
-            `  ${runtime.requestedModelId} effort ${runtime.requestedEffort}  codex-cli ${runtime.codexCliVersion}  catalog ${runtime.bundledCatalogDigest}  tier ${runtime.serviceTier}  access ${runtime.cyberAccessProgram}  auth ${runtime.authenticationMethod}  runs ${runs}  ${firstDay}..${lastDay}`,
+            `  ${runtime.requestedModelId} effort ${runtime.requestedEffort}  ${runtime.claudeCliVersion === undefined ? `codex-cli ${runtime.codexCliVersion}` : `claude-cli ${runtime.claudeCliVersion}`}  catalog ${runtime.bundledCatalogDigest}  tier ${runtime.serviceTier}  access ${runtime.cyberAccessProgram}  auth ${runtime.authenticationMethod}  runs ${runs}  ${firstDay}..${lastDay}`,
           );
         return 0;
       }

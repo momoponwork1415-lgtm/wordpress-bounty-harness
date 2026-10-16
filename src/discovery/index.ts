@@ -18,15 +18,19 @@ export {
 } from "./campaign.js";
 export {
   agentRuntimeProfileDefinitionSchema,
+  claudeRuntimeProfileDefinitionSchema,
   agentRuntimeProfileSchema,
   admitAgentRuntimeProfile,
   admitCooperativeRuntimeProfile,
+  admitClaudeCooperativeRuntimeProfile,
   codexModelCatalog,
   defineAgentRuntimeProfile,
+  defineClaudeRuntimeProfile,
   type AgentRuntimeProfile,
   type AgentRuntimeProfileAdmission,
   type CooperativeRuntimeProfileAdmission,
   type AgentRuntimeProfileDefinition,
+  type ClaudeRuntimeProfileDefinition,
 } from "./agent-runtime-profile.js";
 export {
   CodexNativeAgentRuntime,
@@ -38,6 +42,11 @@ export {
   type DiscoveryTransportRun,
   type DiscoveryTransportResult,
 } from "./codex-native-agent-runtime.js";
+export { ClaudeNativeAgentRuntime } from "./claude-native-agent-runtime.js";
+export {
+  GvisorClaudeSandbox,
+  CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
+} from "./claude-gvisor-sandbox.js";
 export {
   GvisorCodexSandbox,
   type GvisorCodexSandboxOptions,
