@@ -573,10 +573,17 @@ export function formatQueue(
     const head = `${item.status}  ${item.ref.campaignId}  finding ${item.ref.findingId}  ${item.category}`;
     const decision = `  decision: ${item.decision ?? "none"}`;
     const verification = `  verification ${item.ref.verificationId}  snapshot ${item.ref.snapshotDigest}`;
+    const latestAttempt =
+      item.latestAttempt.verificationId === item.ref.verificationId
+        ? []
+        : [
+            `  latest attempt: ${item.latestAttempt.verificationId} (${item.latestAttempt.status})`,
+          ];
     if (item.status !== "incomplete")
       lines.push(
         head,
         verification,
+        ...latestAttempt,
         `  observer: ${item.judgeId}`,
         `  observed: ${
           Object.entries(item.conditions)
@@ -592,6 +599,7 @@ export function formatQueue(
       lines.push(
         head,
         verification,
+        ...latestAttempt,
         `  reason: ${item.reason}`,
         `  next: ${item.nextStep}`,
         decision,

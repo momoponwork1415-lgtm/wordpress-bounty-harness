@@ -109,6 +109,11 @@ export type ReviewItem =
       readonly conditions: Readonly<Record<string, string>>;
       readonly evidenceDigest: string;
       readonly reproductionPackageDigest: string;
+      readonly latestAttempt: {
+        readonly verificationId: string;
+        readonly status:
+          "runtime-confirmed" | "reproduced" | "contradicted" | "incomplete";
+      };
       readonly decision: Decision | null;
     }
   | {
@@ -117,6 +122,11 @@ export type ReviewItem =
       readonly category: string;
       readonly reason: string;
       readonly nextStep: string;
+      readonly latestAttempt: {
+        readonly verificationId: string;
+        readonly status:
+          "runtime-confirmed" | "reproduced" | "contradicted" | "incomplete";
+      };
       readonly decision: Decision | null;
     };
 export type ReviewQueue = {
@@ -139,6 +149,8 @@ export type ReviewView = {
   readonly scopeAssessments: readonly ScopeAssessment[];
   readonly drafts: readonly SubmissionDraftRef[];
   readonly privateEvidenceDigests: readonly string[];
+  readonly latestVerificationId: string | null;
+  readonly positiveVerificationId: string | null;
   readonly reproductionPackageDigest: string | null;
 };
 export type ExternalActionAdmission =
@@ -228,10 +240,22 @@ export class Review<TFacts = unknown> {
         event: Extract<LedgerEventV1, { type: "verification-finished" }>;
       }
     >();
+    const latestPositive = new Map<
+      string,
+      {
+        sequence: number;
+        event: Extract<LedgerEventV1, { type: "verification-finished" }>;
+      }
+    >();
     const attempts = new Map<string, number>();
     for (const { sequence, event } of this.#readAll("verification-finished"))
       if (event.type === "verification-finished" && inCampaign(event)) {
         latestVerification.set(key(event), { sequence, event });
+        if (
+          event.result.status === "runtime-confirmed" ||
+          event.result.status === "reproduced"
+        )
+          latestPositive.set(key(event), { sequence, event });
         if (event.result.status === "incomplete") {
           const attemptKey = `${key(event)}\u0000${event.labSetupDigest}\u0000${event.result.reason}`;
           attempts.set(attemptKey, (attempts.get(attemptKey) ?? 0) + 1);
@@ -258,7 +282,17 @@ export class Review<TFacts = unknown> {
         unverified++;
         continue;
       }
-      const { event, sequence } = verified;
+      // A failed retry does not erase an earlier positive. A contradicted
+      // event alone has no route binding and cannot invalidate it either.
+      const positive = latestPositive.get(key(finding));
+      const { event, sequence } =
+        positive?.event.snapshotDigest === finding.snapshotDigest
+          ? positive
+          : verified;
+      const latestAttempt = {
+        verificationId: verified.event.verificationId,
+        status: verified.event.result.status,
+      };
       const ref = {
         campaignId: event.campaignId,
         findingId: event.findingId,
@@ -271,6 +305,28 @@ export class Review<TFacts = unknown> {
           ? decided.decision
           : null;
       const result = event.result;
+      if (verified.event.result.status === "incomplete") {
+        const latestResult = verified.event.result;
+        const attemptCount =
+          attempts.get(
+            `${key(verified.event)}\u0000${verified.event.labSetupDigest}\u0000${latestResult.reason}`,
+          ) ?? 0;
+        const exhausted =
+          latestResult.reason === "evidence" ||
+          latestResult.reason === "cleanup" ||
+          latestResult.reason === "digest-mismatch" ||
+          latestResult.reason === "no-judge" ||
+          latestResult.reason === "provider" ||
+          latestResult.reason === "sandbox" ||
+          (latestResult.reason === "precondition" &&
+            latestResult.nextScenarioId === undefined) ||
+          ((latestResult.reason === "recipe" ||
+            latestResult.reason === "observation") &&
+            attemptCount >= 3) ||
+          (latestResult.reason === "provision" && attemptCount >= 2);
+        const counts = exhausted ? incompleteByReason : retryPendingByReason;
+        counts[latestResult.reason] = (counts[latestResult.reason] ?? 0) + 1;
+      }
       if (result.status === "contradicted") contradicted++;
       else if (
         result.status === "runtime-confirmed" ||
@@ -287,33 +343,17 @@ export class Review<TFacts = unknown> {
           conditions: result.conditions,
           evidenceDigest: result.evidenceDigest,
           reproductionPackageDigest: result.reproductionPackageDigest,
+          latestAttempt,
           decision,
         });
       else {
-        const attemptCount =
-          attempts.get(
-            `${key(event)}\u0000${event.labSetupDigest}\u0000${result.reason}`,
-          ) ?? 0;
-        const exhausted =
-          result.reason === "evidence" ||
-          result.reason === "cleanup" ||
-          result.reason === "digest-mismatch" ||
-          result.reason === "no-judge" ||
-          result.reason === "provider" ||
-          result.reason === "sandbox" ||
-          (result.reason === "precondition" &&
-            result.nextScenarioId === undefined) ||
-          ((result.reason === "recipe" || result.reason === "observation") &&
-            attemptCount >= 3) ||
-          (result.reason === "provision" && attemptCount >= 2);
-        const counts = exhausted ? incompleteByReason : retryPendingByReason;
-        counts[result.reason] = (counts[result.reason] ?? 0) + 1;
         items.push({
           status: result.status,
           ref,
           category: finding.category,
           reason: result.reason,
           nextStep: result.nextStep,
+          latestAttempt,
           decision,
         });
       }
@@ -881,14 +921,28 @@ export class Review<TFacts = unknown> {
     const query = z
       .strictObject({ campaignId: id, findingId: id })
       .parse(input);
-    const verification = this.#readAll("verification-finished")
-      .filter(
+    const verifications = this.#readAll("verification-finished").filter(
+      ({ event }) =>
+        event.type === "verification-finished" &&
+        event.campaignId === query.campaignId &&
+        event.findingId === query.findingId,
+    );
+    const verification = verifications.at(-1);
+    const finding = this.#ledger.read({
+      campaignId: query.campaignId,
+      findingId: query.findingId,
+      type: "finding-recorded",
+      limit: 1,
+    })[0]?.event;
+    const positive = [...verifications]
+      .reverse()
+      .find(
         ({ event }) =>
           event.type === "verification-finished" &&
-          event.campaignId === query.campaignId &&
-          event.findingId === query.findingId,
-      )
-      .at(-1);
+          event.snapshotDigest === finding?.snapshotDigest &&
+          (event.result.status === "runtime-confirmed" ||
+            event.result.status === "reproduced"),
+      );
     const assessments = (await this.#allAssessments()).filter(
       (item) =>
         item.ref.campaignId === query.campaignId &&
@@ -935,11 +989,19 @@ export class Review<TFacts = unknown> {
       scopeAssessments: assessments,
       drafts,
       privateEvidenceDigests,
+      latestVerificationId:
+        verification?.event.type === "verification-finished"
+          ? verification.event.verificationId
+          : null,
+      positiveVerificationId:
+        positive?.event.type === "verification-finished"
+          ? positive.event.verificationId
+          : null,
       reproductionPackageDigest:
-        verification?.event.type === "verification-finished" &&
-        (verification.event.result.status === "runtime-confirmed" ||
-          verification.event.result.status === "reproduced")
-          ? verification.event.result.reproductionPackageDigest
+        positive?.event.type === "verification-finished" &&
+        (positive.event.result.status === "runtime-confirmed" ||
+          positive.event.result.status === "reproduced")
+          ? positive.event.result.reproductionPackageDigest
           : null,
     };
   }

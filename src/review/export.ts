@@ -115,6 +115,7 @@ export const reviewExportV1Schema = z.strictObject({
     /** Full private record, including fields this bundle leaves out. */
     path: z.string().nullable(),
   }),
+  /** Current review evidence: a prior positive survives an incomplete retry. */
   verification: z
     .strictObject({
       verificationId: id,
@@ -142,6 +143,35 @@ export const reviewExportV1Schema = z.strictObject({
           occurredAt: z.iso.datetime({ offset: true }),
         }),
       ),
+    })
+    .nullable(),
+  /** Newest attempt, whether or not it supplied usable evidence. */
+  latestAttempt: z
+    .strictObject({
+      verificationId: id,
+      status: z.enum([
+        "runtime-confirmed",
+        "reproduced",
+        "contradicted",
+        "incomplete",
+      ]),
+      reason: z.string().nullable(),
+      nextStep: z.string().nullable(),
+      occurredAt: z.iso.datetime({ offset: true }),
+      labSetupDigest: digest,
+    })
+    .nullable(),
+  /** Latest positive result still available for human reproduction. */
+  positiveEvidence: z
+    .strictObject({
+      verificationId: id,
+      status: z.enum(["runtime-confirmed", "reproduced"]),
+      judgeId: id,
+      conditions: z.record(z.string(), z.string()),
+      evidenceDigest: digest,
+      occurredAt: z.iso.datetime({ offset: true }),
+      labSetupDigest: digest,
+      reproductionPackage: z.strictObject({ digest, path: z.string().min(1) }),
     })
     .nullable(),
   http: z.strictObject({
@@ -484,7 +514,19 @@ export async function exportReviewBundle(options: {
     .read({ campaignId, findingId, type: "verification-finished", limit: 1000 })
     .map(({ event }) => event)
     .filter((event) => event.type === "verification-finished");
-  const verification = verifications.at(-1);
+  const latestAttempt = verifications.at(-1);
+  // An incomplete attempt describes a retry failure, not a refutation of an
+  // earlier positive result. A bare contradicted event does not prove that it
+  // used the same route and setup, so it cannot clear this evidence either.
+  const positive = [...verifications]
+    .reverse()
+    .find(
+      (event) =>
+        event.snapshotDigest === finding.snapshotDigest &&
+        (event.result.status === "runtime-confirmed" ||
+          event.result.status === "reproduced"),
+    );
+  const verification = positive ?? latestAttempt;
   const verifierRuns = ledger
     .read({ campaignId, findingId, type: "verifier-run-finished", limit: 1000 })
     .map(({ event }) => event)
@@ -498,7 +540,10 @@ export async function exportReviewBundle(options: {
       addArtifact("judge-evidence", event.result.evidenceDigest);
     if ("refutationDigest" in event.result)
       addArtifact("refutation", event.result.refutationDigest);
-    if (event.result.status === "runtime-confirmed")
+    if (
+      event.result.status === "runtime-confirmed" ||
+      event.result.status === "reproduced"
+    )
       addArtifact(
         "reproduction-package",
         event.result.reproductionPackageDigest,
@@ -522,8 +567,8 @@ export async function exportReviewBundle(options: {
 
   let refutation: ReviewExportV1["refutation"] = null;
   const refutationDigest =
-    verification !== undefined && "refutationDigest" in verification.result
-      ? verification.result.refutationDigest
+    latestAttempt !== undefined && "refutationDigest" in latestAttempt.result
+      ? latestAttempt.result.refutationDigest
       : undefined;
   if (refutationDigest !== undefined) {
     const memo = await store.readFile(
@@ -714,6 +759,44 @@ export async function exportReviewBundle(options: {
               promptDigest: event.promptDigest,
               occurredAt: event.occurredAt,
             })),
+          },
+    latestAttempt:
+      latestAttempt === undefined
+        ? null
+        : {
+            verificationId: latestAttempt.verificationId,
+            status: latestAttempt.result.status,
+            reason:
+              latestAttempt.result.status === "incomplete"
+                ? latestAttempt.result.reason
+                : null,
+            nextStep:
+              latestAttempt.result.status === "incomplete"
+                ? latestAttempt.result.nextStep
+                : null,
+            occurredAt: latestAttempt.occurredAt,
+            labSetupDigest: latestAttempt.labSetupDigest,
+          },
+    positiveEvidence:
+      positive === undefined ||
+      (positive.result.status !== "runtime-confirmed" &&
+        positive.result.status !== "reproduced")
+        ? null
+        : {
+            verificationId: positive.verificationId,
+            status: positive.result.status,
+            judgeId:
+              positive.result.status === "runtime-confirmed"
+                ? positive.result.judgeId
+                : positive.result.reproducerId,
+            conditions: positive.result.conditions,
+            evidenceDigest: positive.result.evidenceDigest,
+            occurredAt: positive.occurredAt,
+            labSetupDigest: positive.labSetupDigest,
+            reproductionPackage: {
+              digest: positive.result.reproductionPackageDigest,
+              path: contentPath(positive.result.reproductionPackageDigest),
+            },
           },
     http,
     refutation,

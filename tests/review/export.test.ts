@@ -255,6 +255,187 @@ const reader = (summary: StateDiffSummary | null): StateDiffReader => ({
 });
 
 describe("review export", () => {
+  it("keeps a positive reproduction package when the latest attempt is incomplete", async () => {
+    const { ledger, store, evidenceDirectory } = await fixture({
+      verification: "confirmed",
+    });
+    const original = ledger.read({
+      campaignId: "campaign-1",
+      findingId: "finding-1",
+      type: "verification-finished",
+    })[0]?.event;
+    if (
+      original?.type !== "verification-finished" ||
+      original.result.status !== "runtime-confirmed"
+    )
+      throw new Error("missing positive fixture");
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "verification-retry-incomplete",
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-08T01:20:00Z",
+      type: "verification-finished",
+      verificationId: "verification-retry-incomplete",
+      findingId: "finding-1",
+      labSetupDigest: labSetup,
+      retryOf: "verification-1",
+      result: {
+        status: "incomplete",
+        reason: "observation",
+        nextStep: "Repeat the Lab observation",
+      },
+    });
+
+    const bundle = await exportReviewBundle({
+      ledger,
+      store,
+      evidenceDirectory,
+      campaignId: "campaign-1",
+      findingId: "finding-1",
+    });
+    expect(bundle.verification).toMatchObject({
+      verificationId: "verification-1",
+      status: "runtime-confirmed",
+      attempts: 2,
+    });
+    expect(bundle.latestAttempt).toMatchObject({
+      verificationId: "verification-retry-incomplete",
+      status: "incomplete",
+      reason: "observation",
+      nextStep: "Repeat the Lab observation",
+    });
+    expect(bundle.positiveEvidence).toMatchObject({
+      verificationId: "verification-1",
+      status: "runtime-confirmed",
+      evidenceDigest: original.result.evidenceDigest,
+      reproductionPackage: {
+        digest: original.result.reproductionPackageDigest,
+        path: join(
+          evidenceDirectory,
+          original.result.reproductionPackageDigest,
+          "content",
+        ),
+      },
+    });
+  });
+
+  it("does not clear a positive with an unbound contradicted event", async () => {
+    const { ledger, store, evidenceDirectory } = await fixture({
+      verification: "confirmed",
+    });
+    const original = ledger.read({
+      campaignId: "campaign-1",
+      findingId: "finding-1",
+      type: "verification-finished",
+    })[0]?.event;
+    if (
+      original?.type !== "verification-finished" ||
+      original.result.status !== "runtime-confirmed"
+    )
+      throw new Error("missing positive fixture");
+    expect(
+      (
+        await ledger.append({
+          schemaVersion: 1,
+          identity: "unbound-contradiction",
+          campaignId: "campaign-1",
+          snapshotDigest: snapshot,
+          occurredAt: "2026-10-08T01:20:00Z",
+          type: "verification-finished",
+          verificationId: "unbound-contradiction",
+          findingId: "finding-1",
+          labSetupDigest: labSetup,
+          evidenceCapture: "harness-captured",
+          result: {
+            status: "contradicted",
+            judgeId: "option-canary",
+            evidenceDigest: original.result.evidenceDigest,
+          },
+        })
+      ).status,
+    ).toBe("appended");
+
+    const bundle = await exportReviewBundle({
+      ledger,
+      store,
+      evidenceDirectory,
+      campaignId: "campaign-1",
+      findingId: "finding-1",
+    });
+    expect(bundle.verification).toMatchObject({
+      verificationId: "verification-1",
+      status: "runtime-confirmed",
+    });
+    expect(bundle.latestAttempt).toMatchObject({
+      verificationId: "unbound-contradiction",
+      status: "contradicted",
+    });
+    expect(bundle.positiveEvidence?.reproductionPackage.digest).toMatch(
+      /^sha256:/,
+    );
+  });
+
+  it("exports the reproduction package for a later reproduced result", async () => {
+    const { ledger, store, evidenceDirectory } = await fixture({
+      verification: "confirmed",
+    });
+    const original = ledger.read({
+      campaignId: "campaign-1",
+      findingId: "finding-1",
+      type: "verification-finished",
+    })[0]?.event;
+    if (
+      original?.type !== "verification-finished" ||
+      original.result.status !== "runtime-confirmed"
+    )
+      throw new Error("missing positive fixture");
+    const packageDigest = await store.putFiles({
+      "manual.md": "A separate human reproduction route",
+    });
+    expect(
+      (
+        await ledger.append({
+          schemaVersion: 1,
+          identity: "verification-reproduced",
+          campaignId: "campaign-1",
+          snapshotDigest: snapshot,
+          occurredAt: "2026-10-08T01:20:00Z",
+          type: "verification-finished",
+          verificationId: "verification-reproduced",
+          findingId: "finding-1",
+          labSetupDigest: labSetup,
+          result: {
+            status: "reproduced",
+            reproducerId: "standard-reproducer",
+            proofKind: "captured-script-observation",
+            conditions: {},
+            evidenceDigest: original.result.evidenceDigest,
+            reproductionPackageDigest: packageDigest,
+            negativeControl: "pending-fixed-version",
+          },
+        })
+      ).status,
+    ).toBe("appended");
+
+    const bundle = await exportReviewBundle({
+      ledger,
+      store,
+      evidenceDirectory,
+      campaignId: "campaign-1",
+      findingId: "finding-1",
+    });
+    expect(bundle.verification?.status).toBe("reproduced");
+    expect(bundle.positiveEvidence?.reproductionPackage.digest).toBe(
+      packageDigest,
+    );
+    expect(bundle.privateEvidence.artifacts).toContainEqual({
+      kind: "reproduction-package",
+      digest: packageDigest,
+      path: join(evidenceDirectory, packageDigest, "content"),
+    });
+  });
+
   it("builds a versioned bundle with review material and paths, never bodies or payloads", async () => {
     const { ledger, store, evidenceDirectory, diffDigest, evidence } =
       await fixture();

@@ -52,6 +52,7 @@
 | 25 | 結果は非公開 Markdown に（verdict、binding、method、trace、反証、残る不確実性） | ✓「verdictとtimestamp」「残る不確実性」「推奨する次のaction」 | — | ✓「Store…Cases in a non-Git root」 | — | 台帳は decide の reason のみ。本文は Private Evidence | |
 | 26 | payload・credential・未公開 finding を Git と会話に出さない。最終応答は path・状態・件数・棄却 category だけ | ✓「payload、credential…をGitへ入れない」 | ✓「`.private/`へ置く」 | ✓「give only the private paths, the final stage/status per Lead」 | ✓「never into Git, not even temporarily」 | export は path と digest のみ（不変条件 8） | |
 | 27 | この skill は campaign state を変えず、外部提出せず、次の skill を自動起動しない | ✓「Harnessのcampaign stateを変更せず」 | ✓「Human confirmationは外部開示を許可しない」 | ✓「do not launch it automatically」 | ✓「does not advance a Case on its own」 | decide 以外に書き先なし（ADR 0031） | |
+| 28 | `verification.status` は現在有効な証拠で分岐し、後発 `incomplete` は最新 attempt として併記する | ✓「negative evidenceと未解決のproof gapも記録する」 | ✓「tool/UI failureを`disproved`にしない」 | — | — | export `verification.status` / `latestAttempt.status` / `positiveEvidence`（#278、不変条件 4）。skill 本文は変更しない | |
 
 ## 表 2. wbh-dedupe
 

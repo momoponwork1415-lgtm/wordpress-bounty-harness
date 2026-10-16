@@ -150,14 +150,17 @@ describe("review public interface", () => {
       reproductionPackageDigest: expect.stringMatching(/^sha256:/),
     });
   });
-  it("inspects the latest verification after retrying the same Finding", async () => {
+  it("keeps the positive review item and package beside a later incomplete attempt", async () => {
     const { review, ledger } = await fixture();
     const original = ledger.read({
       campaignId: ref.campaignId,
       findingId: ref.findingId,
       type: "verification-finished",
     })[0]?.event;
-    if (original?.type !== "verification-finished")
+    if (
+      original?.type !== "verification-finished" ||
+      original.result.status !== "runtime-confirmed"
+    )
       throw new Error("missing original verification");
     const base = {
       schemaVersion: 1 as const,
@@ -185,8 +188,21 @@ describe("review public interface", () => {
       }),
     ).toMatchObject({
       verificationStatus: "incomplete",
-      reproductionPackageDigest: null,
+      latestVerificationId: "verification-retry-incomplete",
+      positiveVerificationId: "verification-1",
+      reproductionPackageDigest: original.result.reproductionPackageDigest,
     });
+    expect(review.queue({ campaignId: ref.campaignId }).items).toContainEqual(
+      expect.objectContaining({
+        status: "runtime-confirmed",
+        ref,
+        reproductionPackageDigest: original.result.reproductionPackageDigest,
+        latestAttempt: {
+          verificationId: "verification-retry-incomplete",
+          status: "incomplete",
+        },
+      }),
+    );
     await ledger.append({
       ...base,
       identity: "verification-retry-confirmed",
