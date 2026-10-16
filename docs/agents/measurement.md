@@ -85,25 +85,25 @@ PR の「測った数字」に貼る列は固定する。
 
 ### 2026-10-16 の決定: 再発見ベンチマークは所有者が発見した記録だけにする
 
-所有者の決定（2026-10-16）: ベンチマークは Wordfence の公開記録で発見者が所有者（Yuto Hyakumoto / momopon1415）になっているものだけ。他者の記録を広く足す案（同日の 12 plugin 拡張、PR #298）は取り消した。mirror に所有者名義の記録は 28 件あり、reflected XSS 7 件（Programme Boundary 外）、WPML（WordPress.org に ZIP なし）、Widget Countdown（修正版なし、script が受け付けない）を除く 19 記録・16 対象版を catalog にした。scenario は catalog 既存 case のものを使い、新規 case は無し（plugin 非依存の既定 Lab）。検証は探索の後に所有者が Finding から起動する（#297）。state は `~/.local/state/wordpress-bounty-harness-bench-20261016/<case>/`、campaign ID は `bench-v5-<case>-1016-rN`。
+所有者の決定（2026-10-16）: ベンチマークは Wordfence の公開記録で発見者が所有者（Yuto Hyakumoto / momopon1415）になっているものだけ。他者の記録を広く足す案（同日の 12 plugin 拡張、PR #298）は取り消した。mirror に所有者名義の記録は 28 件あり、reflected XSS 7 件（Programme Boundary 外）、WPML（WordPress.org に ZIP なし）、Widget Countdown（修正版なし、script が受け付けない）を除く 19 記録・16 対象版を catalog にした。scenario は catalog 既存 case のものを使い、新規 case は無し（plugin 非依存の既定 Lab）。所有者の追加決定（同日）: catalog のうち reflected XSS か対象外分類の記録しか無い plugin は Trial を回さない。回すのは Programme Boundary 内の記録（SQLi、Stored XSS、ATO）を持つ対象だけ。検証は探索の後に所有者が Finding から起動する（#297）。state は `~/.local/state/wordpress-bounty-harness-bench-20261016/<case>/`、campaign ID は `bench-v5-<case>-1016-rN`。
 
 | case | slug / 版 | 公開記録 | 分類 / 位置 | Trial |
 | --- | --- | --- | --- | --- |
 | ssa | simply-schedule-appointments 1.6.10.0 | CVE-2026-3658 | SQLi / 未認証 | 回す（scenario public-booking-page-v1） |
-| tutor398 | tutor 3.9.8 | CVE-2026-5502 | コンテンツ改変（missing-authz）/ Subscriber+ | 回す。Programme Boundary 外の分類なので Finding は parked になる |
-| bookingpkg | booking-package 1.7.06 | CVE-2026-4911 | 価格改変 / 未認証 | 回す |
+| （回さない） | tutor 3.9.8 | CVE-2026-5502 | コンテンツ改変（missing-authz）/ Subscriber+ | 対象外の分類（所有者決定 2026-10-16: reflected XSS と対象外の記録しか無い plugin は回さない） |
+| （回さない） | booking-package 1.7.06 | CVE-2026-4911 | 価格改変 / 未認証 | 対象外の分類（business-logic-only） |
 | brizy | brizy 2.8.11 | CVE-2026-5324 | Stored XSS / 未認証 | 計測済み（2026-10-16-prompt-v5-comparison.md） |
-| classified | classified-listing 5.3.10 | CVE-2026-7563 | missing-authz / Subscriber+ | 回す。parked になる |
-| wpuf | wp-user-frontend 4.3.1 | CVE-2026-5459 | IDOR / 未認証 | 回す。parked になる |
-| costcalc | cost-calculator-builder 3.6.17 | CVE-2026-7753 | missing-authz → 情報漏えい / Subscriber+ | 回す。parked になる |
+| （回さない） | classified-listing 5.3.10 | CVE-2026-7563 | missing-authz / Subscriber+ | 対象外の分類 |
+| （回さない） | wp-user-frontend 4.3.1 | CVE-2026-5459 | IDOR / 未認証 | 対象外の分類 |
+| （回さない） | cost-calculator-builder 3.6.17 | CVE-2026-7753 | missing-authz → 情報漏えい / Subscriber+ | 対象外の分類 |
 | tp326 | translatepress-multilingual 3.2.6 | CVE-2026-18512 | Stored XSS / Subscriber+ | 計測済み |
 | tp331 | translatepress-multilingual 3.3.1 | CVE-2026-19632 | ATO / 未認証 | 回す（scenario translatepress-translation-data-v1） |
 | geodir | geodirectory 2.8.183 | CVE-2026-96766 | Stored XSS / Subscriber+ | 回す |
 | relevanssi | relevanssi 4.28.3 | CVE-2026-97641 | Stored XSS / 未認証 | 計測済み |
 | （依存待ち） | rometheme-for-elementor 2.1.5 | CVE-2026-84763 | Stored XSS / 未認証 | Elementor 依存（#282 と同じ接続） |
-| （依存待ち） | rometheme-for-elementor 2.0.2 | CVE-2026-3425、CVE-2026-3426 | LFI / missing-authz、Author+ | 依存待ち。信頼境界の内側なので Finding にならない |
+| （回さない） | rometheme-for-elementor 2.0.2 | CVE-2026-3425、CVE-2026-3426 | LFI / missing-authz、Author+ | 信頼境界の内側 |
 | （依存待ち） | unlimited-elements-for-elementor 2.0.16 | CVE-2026-18561 | SQLi / 未認証 | Elementor 依存（#282） |
-| （依存待ち） | reepay-checkout-gateway 1.8.9 | CVE-2026-3462 | missing-authz / Subscriber+ | WooCommerce 依存 |
+| （回さない） | reepay-checkout-gateway 1.8.9 | CVE-2026-3462 | missing-authz / Subscriber+ | 対象外の分類。WooCommerce 依存 |
 | （動かない） | custom-facebook-feed 4.13.0 | CVE-2026-93756 | Stored XSS / 未認証 | 外部 API 依存（#283） |
 | （回さない） | lifterlms 9.2.1 | CVE-2026-5207 | SQLi / Custom+ | 信頼境界の内側 |
 | （回さない） | location-weather 3.0.2 | CVE-2026-7249 | missing-authz / Contributor+ | 信頼境界の内側 |
