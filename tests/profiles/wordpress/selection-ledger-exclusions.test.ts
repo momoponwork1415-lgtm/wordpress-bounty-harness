@@ -319,6 +319,7 @@ describe("WordPress ledger exclusions", () => {
       started: new Set(["old-started", "back"]),
       ambiguous: new Set(["old-ambiguous", "held"]),
       reconsider: new Set(["back", "held", "retried"]),
+      exportedAt: "2026-10-12T00:00:00Z",
       digest: digest("f"),
     };
     const result = inspectWordPressLedgerExclusions({
@@ -342,6 +343,31 @@ describe("WordPress ledger exclusions", () => {
       ["held", []],
       ["retried", []],
       ["new", []],
+    ]);
+  });
+
+  it("counts a reconsidered slug's Trials that started after the legacy export", () => {
+    const legacyHistory = {
+      started: new Set(["retried"]),
+      ambiguous: new Set<string>(),
+      reconsider: new Set(["retried", "fresh"]),
+      // The export predates the recorded Trial (2026-10-11T12:00Z).
+      exportedAt: "2026-10-10T00:00:00Z",
+      digest: digest("f"),
+    };
+    const result = inspectWordPressLedgerExclusions({
+      ledger: reader(trial("retried", "1.0.0")),
+      candidates: ["retried", "fresh"].map((slug) => ({
+        slug,
+        version: "1.0.0",
+      })),
+      revisitPolicy: { kind: "never" },
+      currentPromptVariant: "wp2shell-bounty-v2",
+      legacyHistory,
+    });
+    expect(result.map(({ slug, reasons }) => [slug, reasons])).toEqual([
+      ["retried", ["previously-selected"]],
+      ["fresh", []],
     ]);
   });
 

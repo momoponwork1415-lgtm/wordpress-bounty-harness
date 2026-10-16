@@ -67,12 +67,13 @@ export async function loadWordPressLegacyHistory(
   if (!parsed.success)
     throw new Error(`Legacy history is invalid: ${parsed.error.message}`);
   const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-  const { started, ambiguous, reconsider } = parsed.data;
+  const { started, ambiguous, reconsider, exportedAt } = parsed.data;
   return {
     history: {
       started: new Set(started),
       ambiguous: new Set(ambiguous),
       reconsider: new Set(reconsider),
+      exportedAt,
       digest,
     },
     report: {

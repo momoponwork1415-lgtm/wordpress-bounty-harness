@@ -34,8 +34,10 @@ export type WordPressLegacyHistory =
   | {
       readonly started: ReadonlySet<string>;
       readonly ambiguous: ReadonlySet<string>;
-      /** Slugs the owner hands back; they ignore legacy and earlier Trials. */
+      /** Slugs the owner hands back; they ignore legacy and the Trials that started before `exportedAt`. */
       readonly reconsider: ReadonlySet<string>;
+      /** When the legacy file was exported; Trials from this instant on count as new. */
+      readonly exportedAt: string;
       readonly digest: string;
     }
   | "unavailable";
@@ -49,6 +51,8 @@ export interface WordPressLedgerExclusion {
 interface EarlierSelection {
   readonly version: string;
   readonly snapshotKey: string;
+  /** `occurredAt` of the counted exploration start. */
+  readonly startedAt: string;
 }
 
 const pageSize = 1000;
@@ -159,7 +163,7 @@ export function inspectWordPressLedgerExclusions(input: {
     if (slug === undefined || version === undefined) continue;
     const earlier = selectedBySlug.get(slug) ?? [];
     if (!earlier.some((item) => item.snapshotKey === key))
-      earlier.push({ version, snapshotKey: key });
+      earlier.push({ version, snapshotKey: key, startedAt: event.occurredAt });
     selectedBySlug.set(slug, earlier);
   }
 
@@ -180,14 +184,21 @@ export function inspectWordPressLedgerExclusions(input: {
   return input.candidates.map(({ slug, version }) => {
     const reasons: WordPressLedgerExclusionReason[] = [];
     if (unpublishedFindingSlugs.has(slug)) reasons.push("unpublished-finding");
-    const reconsidered =
-      legacy !== "unavailable" && legacy.reconsider.has(slug);
+    // A reconsidered slug forgets the Trials that predate the legacy export, not the ones run since.
+    const exportedAt =
+      legacy !== "unavailable" && legacy.reconsider.has(slug)
+        ? Date.parse(legacy.exportedAt)
+        : null;
+    const reconsidered = exportedAt !== null;
     if (legacy !== "unavailable" && !reconsidered) {
       if (legacy.started.has(slug)) reasons.push("legacy-started");
       else if (legacy.ambiguous.has(slug)) reasons.push("legacy-ambiguous");
     }
-    const earlier = selectedBySlug.get(slug) ?? [];
-    if (earlier.length > 0 && !reconsidered) {
+    const earlier = (selectedBySlug.get(slug) ?? []).filter(
+      (selected) =>
+        exportedAt === null || Date.parse(selected.startedAt) >= exportedAt,
+    );
+    if (earlier.length > 0) {
       const versionIncreased = earlier.every(
         (selected) => compareVersions(version, selected.version) > 0,
       );
