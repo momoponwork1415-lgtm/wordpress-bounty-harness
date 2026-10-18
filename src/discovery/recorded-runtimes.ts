@@ -38,54 +38,46 @@ export async function summarizeRecordedRuntimes(options: {
       lastDay: string;
     }
   >();
-  let afterSequence = 0;
-  for (;;) {
-    const page = options.ledger.read({
-      ...(options.campaignId === undefined
-        ? {}
-        : { campaignId: options.campaignId }),
-      type: "discovery-run-finished",
-      afterSequence,
-      limit: 1000,
-    });
-    for (const { event } of page) {
-      const reference = event.artifacts.find(
-        (artifact) => artifact.kind === "native-run-receipt",
-      );
-      if (reference === undefined) continue;
-      const file = await options.store.readFile(
-        reference.digest,
-        "receipt.json",
-        64 * 1024,
-      );
-      if (file.status !== "resolved") continue;
-      const receipt = nativeRunReceiptSchema.parse(
-        JSON.parse(file.bytes.toString("utf8")) as unknown,
-      );
-      const runtime: RecordedRuntime = {
-        requestedModelId: receipt.requestedModelId,
-        requestedEffort: receipt.requestedEffort,
-        codexCliVersion: receipt.codexCliVersion,
-        bundledCatalogDigest: receipt.bundledCatalogDigest,
-        serviceTier: receipt.serviceTier,
-        cyberAccessProgram: receipt.cyberAccessProgram,
-        authenticationMethod: receipt.authenticationMethod,
-      };
-      const day = new Date(event.occurredAt).toISOString().slice(0, 10);
-      const key = JSON.stringify(runtime);
-      const group = groups.get(key) ?? {
-        runtime,
-        runs: 0,
-        firstDay: day,
-        lastDay: day,
-      };
-      groups.set(key, group);
-      group.runs++;
-      if (day < group.firstDay) group.firstDay = day;
-      if (day > group.lastDay) group.lastDay = day;
-    }
-    if (page.length < 1000) break;
-    afterSequence = page[page.length - 1]!.sequence;
+  for (const { event } of options.ledger.readAll({
+    ...(options.campaignId === undefined
+      ? {}
+      : { campaignId: options.campaignId }),
+    type: "discovery-run-finished",
+  })) {
+    const reference = event.artifacts.find(
+      (artifact) => artifact.kind === "native-run-receipt",
+    );
+    if (reference === undefined) continue;
+    const file = await options.store.readFile(
+      reference.digest,
+      "receipt.json",
+      64 * 1024,
+    );
+    if (file.status !== "resolved") continue;
+    const receipt = nativeRunReceiptSchema.parse(
+      JSON.parse(file.bytes.toString("utf8")) as unknown,
+    );
+    const runtime: RecordedRuntime = {
+      requestedModelId: receipt.requestedModelId,
+      requestedEffort: receipt.requestedEffort,
+      codexCliVersion: receipt.codexCliVersion,
+      bundledCatalogDigest: receipt.bundledCatalogDigest,
+      serviceTier: receipt.serviceTier,
+      cyberAccessProgram: receipt.cyberAccessProgram,
+      authenticationMethod: receipt.authenticationMethod,
+    };
+    const day = new Date(event.occurredAt).toISOString().slice(0, 10);
+    const key = JSON.stringify(runtime);
+    const group = groups.get(key) ?? {
+      runtime,
+      runs: 0,
+      firstDay: day,
+      lastDay: day,
+    };
+    groups.set(key, group);
+    group.runs++;
+    if (day < group.firstDay) group.firstDay = day;
+    if (day > group.lastDay) group.lastDay = day;
   }
   return [...groups.values()];
 }

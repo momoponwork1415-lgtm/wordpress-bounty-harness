@@ -306,19 +306,8 @@ async function reservedSelectionBatch(
   policy: WordPressSelectionPolicy,
   selectionBatchId?: string,
 ): Promise<ReservedSelectionBatch> {
-  const all: ReturnType<CliState["ledger"]["read"]>[number][] = [];
-  let afterSequence = 0;
-  for (;;) {
-    const page = state.ledger.read({
-      type: "target-selected",
-      afterSequence,
-      limit: 1000,
-    });
-    all.push(...page);
-    if (page.length < 1000) break;
-    afterSequence = page.at(-1)!.sequence;
-  }
-  const batches = new Map<string, typeof all>();
+  const all = state.ledger.readAll({ type: "target-selected" });
+  const batches = new Map<string, (typeof all)[number][]>();
   for (const record of all) {
     const event = record.event;
     if (
@@ -1044,21 +1033,13 @@ async function runWordPressCampaign(
   const boundaries = await options.boundaries(config, state);
   // A previous teardown failure is a campaign stop, not a negative finding.
   // Inspect only the recorded Lab ids and never delete them implicitly.
-  let afterSequence = 0;
   const cleanupLabIds = new Set<string>();
-  for (;;) {
-    const page = state.ledger.read({
-      campaignId: input.campaignId,
-      type: "campaign-stopped",
-      afterSequence,
-      limit: 1000,
-    });
-    for (const { event } of page)
-      if (event.type === "campaign-stopped")
-        for (const labId of event.cleanupLabIds ?? []) cleanupLabIds.add(labId);
-    if (page.length < 1000) break;
-    afterSequence = page.at(-1)!.sequence;
-  }
+  for (const { event } of state.ledger.readAll({
+    campaignId: input.campaignId,
+    type: "campaign-stopped",
+  }))
+    if (event.type === "campaign-stopped")
+      for (const labId of event.cleanupLabIds ?? []) cleanupLabIds.add(labId);
   for (const labId of cleanupLabIds) {
     const remaining = await boundaries.lab.cleanupLeftovers({
       remove: false,
