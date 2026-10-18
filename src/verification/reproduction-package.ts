@@ -8,6 +8,11 @@ import type { PrivateArtifactStore } from "../infrastructure/private-artifact-st
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const id = z.string().min(1).max(128);
+/** Only the digests are checked here; the profile renderer parses the whole route. */
+const routeEnvelopeSchema = z.looseObject({
+  snapshotDigest: digest,
+  labSetupDigest: digest,
+});
 const packageDocumentReferenceSchema = z.strictObject({
   id,
   version: z.number().int().positive(),
@@ -166,13 +171,21 @@ export async function publishReproductionPackage<Reconstruction>(input: {
       nextStep: "A Harness observation is required before packaging",
     };
   }
-  const routeFile = await input.store.readFile(
+  const routeFile = await input.store.readJson(
     judge.evidenceDigest,
     judge.status === "runtime-confirmed"
       ? "confirmed-route.json"
       : "reproduced-route.json",
+    routeEnvelopeSchema,
     64 * 1024,
   );
+  if (routeFile.status === "malformed") {
+    return {
+      status: "incomplete",
+      reason: "evidence",
+      nextStep: "Repair the confirmed route or evidence and repeat packaging",
+    };
+  }
   if (routeFile.status !== "resolved") {
     return {
       status: "incomplete",
@@ -182,18 +195,10 @@ export async function publishReproductionPackage<Reconstruction>(input: {
   }
   let staging: Awaited<ReturnType<PrivateArtifactStore["stage"]>> | undefined;
   try {
-    const route: unknown = JSON.parse(routeFile.bytes.toString("utf8"));
-    const routeEnvelope = z
-      .object({
-        snapshotDigest: digest,
-        labSetupDigest: digest,
-      })
-      .safeParse(route);
-    if (!routeEnvelope.success)
-      throw new Error("Judge route has no snapshot digest");
+    const route = routeFile.value;
     if (
-      routeEnvelope.data.snapshotDigest !== input.findingSnapshotDigest ||
-      routeEnvelope.data.labSetupDigest !== input.labSetupDigest
+      route.snapshotDigest !== input.findingSnapshotDigest ||
+      route.labSetupDigest !== input.labSetupDigest
     ) {
       return {
         status: "incomplete",

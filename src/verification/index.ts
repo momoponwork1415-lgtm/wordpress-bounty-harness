@@ -873,16 +873,16 @@ export class Verification<
       (artifact) => artifact.kind === "finding",
     );
     if (reference === undefined) return null;
-    const file = await this.#options.store.readFile(
+    const file = await this.#options.store.readJson(
       reference.digest,
       "finding.json",
+      z.unknown(),
       1024 * 1024,
     );
     if (file.status !== "resolved") return null;
     try {
-      const finding = this.#options.readFinding(
-        JSON.parse(file.bytes.toString("utf8")) as unknown,
-      );
+      // The profile's own reader is the schema here; it throws on a foreign shape.
+      const finding = this.#options.readFinding(file.value);
       return finding.findingId === findingId ? { finding, record } : null;
     } catch {
       return null;

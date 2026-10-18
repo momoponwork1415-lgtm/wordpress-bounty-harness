@@ -57,16 +57,17 @@ export async function openWordPressReviewLab(input: {
     };
   };
 }): Promise<WordPressReviewLabSession> {
-  const file = await input.store.readFile(
+  const file = await input.store.readJson(
     input.packageDigest,
     "lab.json",
+    manifestSchema,
     1024 * 1024,
   );
+  if (file.status === "malformed")
+    throw new Error("Review Lab setup manifest is invalid");
   if (file.status !== "resolved")
     throw new Error("Review Lab setup manifest is missing");
-  const manifest = manifestSchema.parse(
-    JSON.parse(file.bytes.toString("utf8")) as unknown,
-  );
+  const manifest = file.value;
   const snapshot = manifest.snapshot;
   const snapshotBody = snapshotSchema.parse({
     kind: snapshot.kind,

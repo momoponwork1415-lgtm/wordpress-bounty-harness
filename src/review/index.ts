@@ -23,85 +23,44 @@ export {
   type StateDiffSummary,
 } from "./export.js";
 
-const id = z.string().min(1).max(128);
-const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-const refSchema = z.strictObject({
-  campaignId: id,
-  findingId: id,
-  verificationId: id,
-  snapshotDigest: digest,
-});
-const scopeStatus = z.enum([
-  "in-scope",
-  "out-of-scope",
-  "ambiguous",
-  "incomplete",
-]);
+import {
+  assessmentSchema,
+  authorizationSchema,
+  digest,
+  draftSchema,
+  id,
+  readReviewRecord,
+  refSchema,
+  REVIEW_RECORD_FILE,
+  reviewDecisionV1Schema,
+  scopeStatus,
+  type ReviewDecisionV1,
+  type ReviewRecordByKind,
+  type ReviewRecordKind,
+  type ReviewRef,
+  type ScopeAssessment,
+  type SubmissionDraft,
+} from "./records.js";
+
+export {
+  readReviewRecord,
+  REVIEW_RECORD_FILE,
+  REVIEW_RECORD_MAX_BYTES,
+  type ReviewDecisionV1,
+  type ReviewRecordByKind,
+  type ReviewRecordKind,
+  type ReviewRecordRead,
+  type ReviewRef,
+  type ScopeAssessment,
+} from "./records.js";
+
 const scopeResult = z.strictObject({
   programmeId: id,
   status: scopeStatus.exclude(["incomplete"]),
   destination: id,
   reason: z.string().min(1).max(2000),
 });
-const assessmentSchema = z.strictObject({
-  id: digest,
-  ref: refSchema,
-  policyDigest: digest,
-  programmeId: id,
-  status: scopeStatus,
-  destination: id,
-  reason: z.string().min(1).max(2000),
-  assessedAt: z.iso.datetime(),
-});
-const draftSchema = z.strictObject({
-  assessmentId: digest,
-  candidateId: digest,
-  digest,
-  revision: z.number().int().positive(),
-  destination: id,
-  content: z.string().min(1).max(100_000),
-  preparedBy: z.enum(["ai", "human"]),
-  createdAt: z.iso.datetime(),
-});
-const authorizationSchema = z.strictObject({
-  candidateId: digest,
-  draftDigest: digest,
-  destination: id,
-  authorizedBy: id,
-  authorizedAt: z.iso.datetime(),
-});
 
-const duplicateSchema = z.discriminatedUnion("status", [
-  z.strictObject({ status: z.enum(["unavailable", "no-match"]) }),
-  z.strictObject({
-    status: z.literal("possible-match"),
-    reference: z.string().min(1).max(256),
-  }),
-]);
-const reviewDecisionV1Schema = z.strictObject({
-  schemaVersion: z.literal(1),
-  ref: refSchema,
-  verificationStatus: z.enum(["runtime-confirmed", "reproduced", "incomplete"]),
-  decision: z.enum(["accept", "reject", "defer"]),
-  reasonCode: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
-  duplicate: duplicateSchema,
-  openedEvidence: z.array(digest).max(100),
-  decidedBy: id,
-  decidedAt: z.iso.datetime(),
-  elapsedMs: z.number().int().nonnegative(),
-  /** Seconds the human reported spending on this item (ADR 0032 Q22); absent on older records. */
-  humanElapsedSeconds: z.number().int().nonnegative().max(604_800).optional(),
-  /** Discovery run and prompt the Finding came from, so a submission can be traced back (Q22). */
-  trace: z
-    .strictObject({
-      runId: id.optional(),
-      promptDigest: digest.optional(),
-    })
-    .optional(),
-});
-
-export type ReviewRef = z.infer<typeof refSchema>;
-export type ReviewDecisionV1 = z.infer<typeof reviewDecisionV1Schema>;
 type Decision = ReviewDecisionV1["decision"];
 export type ReviewItem =
   | {
@@ -133,8 +92,7 @@ export type ReviewQueue = {
   readonly retryPendingByReason: Readonly<Record<string, number>>;
   readonly preconditionClassCounts: Readonly<Record<string, number>>;
 };
-export type ScopeAssessment = z.infer<typeof assessmentSchema>;
-export type SubmissionDraftRef = Omit<z.infer<typeof draftSchema>, "content">;
+export type SubmissionDraftRef = Omit<SubmissionDraft, "content">;
 export type ReviewView = {
   readonly verificationStatus:
     | "runtime-confirmed"
@@ -1062,34 +1020,29 @@ export class Review<TFacts = unknown> {
   }
 
   async #storeRecord(record: object): Promise<string> {
-    return this.#store.putFiles({ "record.json": canonicalJson(record) });
+    return this.#store.putFiles({
+      [REVIEW_RECORD_FILE]: canonicalJson(record),
+    });
   }
 
-  async #readRecord<T>(
+  /** Review's own records are required reading; a missing one is an error, not a null. */
+  async #readRecord<K extends ReviewRecordKind>(
     event: LedgerEventV1,
-    kind: string,
-    schema: z.ZodType<T>,
-  ): Promise<T> {
-    const evidence = event.artifacts.find((item) => item.kind === kind);
-    if (evidence === undefined)
+    kind: K,
+  ): Promise<ReviewRecordByKind[K]> {
+    const read = await readReviewRecord(this.#store, event, kind);
+    if (read.status === "unreferenced")
       throw new Error("Private Evidence reference is missing");
-    const resolved = await this.#store.readFile(
-      evidence.digest,
-      "record.json",
-      100_000,
-    );
-    if (resolved.status !== "resolved")
+    if (read.status === "unavailable")
       throw new Error("Private Evidence is unavailable");
-    return schema.parse(JSON.parse(resolved.bytes.toString("utf8")) as unknown);
+    return read.record;
   }
 
   async #allAssessments(): Promise<ScopeAssessment[]> {
     return Promise.all(
       this.#ledger
         .readAll({ type: "scope-assessed" })
-        .map(({ event }) =>
-          this.#readRecord(event, "review-scope", assessmentSchema),
-        ),
+        .map(({ event }) => this.#readRecord(event, "review-scope")),
     );
   }
 
@@ -1103,13 +1056,11 @@ export class Review<TFacts = unknown> {
     );
   }
 
-  async #allDrafts(): Promise<z.infer<typeof draftSchema>[]> {
+  async #allDrafts(): Promise<SubmissionDraft[]> {
     return Promise.all(
       this.#ledger
         .readAll({ type: "draft-saved" })
-        .map(({ event }) =>
-          this.#readRecord(event, "review-draft", draftSchema),
-        ),
+        .map(({ event }) => this.#readRecord(event, "review-draft")),
     );
   }
 }

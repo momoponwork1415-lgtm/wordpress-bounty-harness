@@ -7,9 +7,8 @@ import { Ledger } from "../ledger/index.js";
 
 export type CliState = {
   readonly ledger: Ledger;
+  /** Private Evidence on this host (outside Git); printed paths come from it. */
   readonly store: PrivateArtifactStore;
-  /** Where Private Evidence artifacts live on this host (outside Git). */
-  readonly evidenceDirectory: string;
   /** The state root; `lab up` keeps its one record file here. */
   readonly stateDirectory: string;
   readonly clock: () => Date;
@@ -26,16 +25,14 @@ export async function openState(
 ): Promise<CliState> {
   const root = resolve(directory);
   await mkdir(root, { recursive: true, mode: 0o700 });
-  const evidenceDirectory = join(root, "private-evidence");
   const store = new PrivateArtifactStore({
-    rootDirectory: evidenceDirectory,
+    rootDirectory: join(root, "private-evidence"),
     maxEntries: 64,
     // A bounded capture and its supporting evidence fit in one artifact.
     maxBytes: 72 * 1024 * 1024,
   });
   return {
     store,
-    evidenceDirectory,
     stateDirectory: root,
     ledger: new Ledger({
       databasePath: join(root, "ledger.sqlite"),
