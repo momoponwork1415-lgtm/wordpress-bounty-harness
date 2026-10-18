@@ -28,17 +28,80 @@ export interface VerifiableFinding {
   readonly impact?: string;
 }
 
-type FindingRecord = Extract<LedgerEventV1, { type: "finding-recorded" }>;
+/** The `finding-recorded` event Verification reloaded the Finding from. */
+export type RecordedFinding = Extract<
+  LedgerEventV1,
+  { type: "finding-recorded" }
+>;
+type FindingRecord = RecordedFinding;
+type VerifierRunEvent = Extract<
+  LedgerEventV1,
+  { type: "verifier-run-finished" }
+>;
 
-/** A fresh-container agent that repairs and refutes a recipe. It cannot confirm. */
+/**
+ * A fresh-container agent that repairs and refutes a recipe. It cannot confirm.
+ * Verification has already reloaded the Finding from Private Evidence, matched
+ * its id to the record and its Snapshot digest to the Lab before `attempt`.
+ */
 export interface Verifier<Finding, Handle extends LabHandle> {
   attempt(input: {
     readonly campaignId: string;
     readonly finding: Finding;
     readonly lab: Handle;
+    /** The campaign's `finding-recorded` event; carries only digest references. */
+    readonly record: RecordedFinding;
     /** Earlier judge-owned route for a same-path version comparison. */
     readonly referenceRoute?: unknown;
   }): Promise<VerifierAttempt>;
+}
+
+/** The transport receipt fields the ledger needs; the whole receipt goes to Private Evidence. */
+export type VerifierRunReceipt = {
+  readonly digest: string;
+  readonly runId: string;
+  readonly targetSnapshotDigest: string;
+  readonly terminal: VerifierRunEvent["terminal"];
+  readonly providerLimit?: VerifierRunEvent["providerLimit"];
+};
+
+/** Appends one `verifier-run-finished` event for a transport receipt, whatever the transport. */
+export async function recordVerifierRun(input: {
+  readonly ledger: Ledger;
+  readonly store: PrivateArtifactStore;
+  readonly clock: () => Date;
+  readonly campaignId: string;
+  readonly findingId: string;
+  readonly promptDigest: string;
+  readonly receipt: VerifierRunReceipt;
+  readonly canaryIssued?: VerifierRunEvent["canaryIssued"];
+}): Promise<void> {
+  const { receipt } = input;
+  const receiptDigest = await input.store.putFiles({
+    "receipt.json": canonicalJson(receipt),
+  });
+  const appended = await input.ledger.append({
+    schemaVersion: 1,
+    identity: `verifier-${receipt.digest}`,
+    campaignId: input.campaignId,
+    snapshotDigest: receipt.targetSnapshotDigest,
+    occurredAt: input.clock().toISOString(),
+    type: "verifier-run-finished",
+    findingId: input.findingId,
+    runId: receipt.runId,
+    promptDigest: input.promptDigest,
+    receiptDigest,
+    terminal: receipt.terminal,
+    ...(input.canaryIssued === undefined
+      ? {}
+      : { canaryIssued: input.canaryIssued }),
+    ...(receipt.providerLimit === undefined
+      ? {}
+      : { providerLimit: receipt.providerLimit }),
+    artifacts: [{ kind: "native-run-receipt", digest: receiptDigest }],
+  });
+  if (appended.status === "conflict")
+    throw new Error("Verifier run identity conflict");
 }
 export type VerifierAttempt =
   | {
@@ -167,6 +230,7 @@ type VerificationRun<
   readonly campaignId: string;
   readonly verificationId: string;
   readonly finding: Finding;
+  readonly record: FindingRecord;
   readonly snapshotDigest: string;
   readonly lab: Handle;
   readonly reconstruction: Reconstruction;
@@ -372,6 +436,7 @@ export class Verification<
             campaignId,
             verificationId,
             finding,
+            record,
             snapshotDigest,
             lab,
             reconstruction: input.reconstruction,
@@ -479,6 +544,7 @@ export class Verification<
     const {
       campaignId,
       finding,
+      record,
       snapshotDigest,
       lab,
       reconstruction,
@@ -525,6 +591,7 @@ export class Verification<
         campaignId,
         finding,
         lab,
+        record,
         ...(referenceRoute === undefined ? {} : { referenceRoute }),
       });
     } catch (error) {
