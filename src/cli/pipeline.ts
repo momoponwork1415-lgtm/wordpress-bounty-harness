@@ -14,10 +14,12 @@ import type { Ledger, LedgerEventV1, LedgerRecord } from "../ledger/index.js";
 import type { TargetSelection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
 import { storeTargetSkipDiagnostic } from "./skip-diagnostic.js";
-import type {
-  VerifiableFinding,
-  Verification,
-  VerificationResultV1,
+import {
+  countAttemptsForReason,
+  shouldAutomaticallyRetryVerification,
+  type VerifiableFinding,
+  type Verification,
+  type VerificationResultV1,
 } from "../verification/index.js";
 
 type DiscoveryOptions = Parameters<typeof runDiscoveryCampaign>[0];
@@ -71,10 +73,6 @@ type FinishedVerification = Extract<
   LedgerEventV1,
   { type: "verification-finished" }
 >;
-type IncompleteReason = Extract<
-  VerificationResultV1,
-  { status: "incomplete" }
->["reason"];
 type VerificationRecord = { sequence: number; event: FinishedVerification };
 
 function scenarioForVerification(
@@ -102,33 +100,6 @@ function scenarioForVerification(
   return discoveryLab?.event.type === "lab-provisioned"
     ? (discoveryLab.event.scenario?.id ?? null)
     : undefined;
-}
-
-/** ADR 0022: counts include the attempt that produced the current reason. */
-export function shouldAutomaticallyRetryVerification(input: {
-  readonly reason: IncompleteReason;
-  readonly attemptsForReason: number;
-  readonly sameLabSetup: boolean;
-  /** null is a recorded default scenario; undefined means no scenario record. */
-  readonly previousScenarioId?: string | null | undefined;
-  readonly currentScenarioId?: string | null | undefined;
-}): boolean {
-  switch (input.reason) {
-    case "recipe":
-    case "observation":
-      return input.sameLabSetup && input.attemptsForReason < 3;
-    case "provision":
-    case "provider":
-      return input.sameLabSetup && input.attemptsForReason < 2;
-    case "precondition":
-      return (
-        input.previousScenarioId !== undefined &&
-        input.currentScenarioId !== undefined &&
-        input.previousScenarioId !== input.currentScenarioId
-      );
-    default:
-      return false;
-  }
 }
 
 export type CampaignSummary = {
@@ -305,13 +276,14 @@ export async function runCampaignPipeline<
       const reason = previous.event.result.reason;
       if (reason === "precondition" && currentScenarioId === undefined)
         return false;
-      const attemptsForReason = history.filter(
-        ({ event }) =>
-          event.labSetupDigest === previous.event.labSetupDigest &&
-          event.promptVersion === previous.event.promptVersion &&
-          event.result.status === "incomplete" &&
-          event.result.reason === reason,
-      ).length;
+      const attemptsForReason = countAttemptsForReason(
+        history.map(({ event }) => event),
+        {
+          labSetupDigest: previous.event.labSetupDigest,
+          promptVersion: previous.event.promptVersion,
+          reason,
+        },
+      );
       // If the previous setup would not allow a retry, a different setup
       // cannot allow one under ADR 0022 either.
       return !shouldAutomaticallyRetryVerification({
@@ -692,15 +664,14 @@ export async function runCampaignPipeline<
           )
             return false;
           const reason = previous.event.result.reason;
-          const attemptsForReason = history.filter(({ event: prior }) => {
-            if (
-              prior.labSetupDigest !== campaignLabSetupDigest ||
-              prior.promptVersion !== previous.event.promptVersion ||
-              prior.result.status !== "incomplete"
-            )
-              return false;
-            return prior.result.reason === reason;
-          }).length;
+          const attemptsForReason = countAttemptsForReason(
+            history.map(({ event: prior }) => prior),
+            {
+              labSetupDigest: campaignLabSetupDigest,
+              promptVersion: previous.event.promptVersion,
+              reason,
+            },
+          );
           return shouldAutomaticallyRetryVerification({
             reason,
             attemptsForReason,
@@ -996,13 +967,14 @@ export async function verifyNextFinding<
       if (previous.event.promptVersion !== options.verification.promptVersion)
         continue;
       const reason = previous.event.result.reason;
-      const attemptsForReason = history.filter(
-        ({ event: prior }) =>
-          prior.result.status === "incomplete" &&
-          prior.result.reason === reason &&
-          prior.labSetupDigest === previous.event.labSetupDigest &&
-          prior.promptVersion === previous.event.promptVersion,
-      ).length;
+      const attemptsForReason = countAttemptsForReason(
+        history.map(({ event: prior }) => prior),
+        {
+          labSetupDigest: previous.event.labSetupDigest,
+          promptVersion: previous.event.promptVersion,
+          reason,
+        },
+      );
       const previousScenarioId = scenarioForVerification(
         previous,
         labs,
