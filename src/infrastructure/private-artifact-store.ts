@@ -16,6 +16,7 @@ import { z } from "zod";
 
 import {
   measureCanonicalSourceTree,
+  SourceTreeError,
   verifyCanonicalSourceTree,
 } from "./canonical-source-tree.js";
 import { canonicalJson } from "./canonical-json.js";
@@ -172,8 +173,7 @@ export class PrivateArtifactStore {
       );
     } catch (error: unknown) {
       throw new PrivateArtifactStoreError(
-        error instanceof Error &&
-          error.message === "Source tree exceeds its sealed bounds"
+        error instanceof SourceTreeError && error.code === "bounds-exceeded"
           ? "size-limit-exceeded"
           : "unsafe-artifact",
         "Private artifact staging could not be measured safely",
