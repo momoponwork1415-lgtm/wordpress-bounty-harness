@@ -33,7 +33,7 @@
 
 ## 単一協調Trialの探索（SPEC.md 第6節、ADR 0029）
 
-- 新規探索で実行可能な目的promptは `wp2shell-bounty-v8` だけ。起動modeも `wp2shell` のみで、対象ごとにRoot＋最大4子の協調Trialを1回行う。wall上限は120分、最低60分は能動的に探索する。早期最終報告は同じ協調セッションで継続し、継続不能やwall・provider・broker・schema等の失敗は理由付き `incomplete` として正常な候補0件に数えない（ADR 0033）。
+- 新規探索で実行可能な目的promptは `wp2shell-bounty-v8` だけ。起動modeも `wp2shell` のみで、対象ごとにRoot＋最大4子の協調Trialを1回行う。wall上限は120分、最低60分は能動的に探索する。早期最終報告は同じ協調セッションで継続し、継続不能やwall・provider・broker・schema等の失敗は理由付き `incomplete` として正常な候補0件に数えない（ADR 0033）。`provider-cyber-policy` で止まった Root thread は操作者が `campaign resume --run <runId>` で名指ししたときだけ、同じ Snapshot・同じ再開段落・残り wall で新しい使い捨て sandbox に再開し、同じ Trial の segment として数える。自動再開と prompt の言い換えはしない（ADR 0036）。
 - v8 には入口索引を渡さず、固定sourceからRoot自身が着眼点を決める。最低時間を守るための同一セッション継続以外に、screeningから条件付きdeep-diveへの分岐や入口網羅の終了条件は置かない。子の有効なFindingとLeadはRoot報告と独立して保存する。
 - Snapshotは対象plugin、WordPress core、実行imageに対応するPHP source、`Requires Plugins` と選定方針の明示指定による依存pluginを版・digestで固定する。自動選定の本番対象はfreeze時点の公式stable版、手動・歴史的評価対象は明示版pinを使う。探索では全sourceを読み取り専用で渡し、Labにも固定したplugin依存を供給する。依存の欠落を黙って無視しない。
 - 旧版の探索promptと実験結果は過去Trialのdigest・構成照合用に保持するが、旧版を使う新規Trialは起動しない。索引あり・なしや旧段付きTrialを同じ比較分母に混ぜない。v8は脆弱性が必ずあるという前提や固定された攻撃経路を与えない。

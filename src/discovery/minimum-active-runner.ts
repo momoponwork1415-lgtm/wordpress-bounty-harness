@@ -6,20 +6,23 @@ const minimumActiveMs = Number(process.argv[2]);
 const initialArgs = JSON.parse(process.argv[3]);
 const resumeArgs = JSON.parse(process.argv[4]);
 const resumePrompt = process.argv[5];
+// Operator-triggered resume of an earlier segment: the Root thread already exists.
+const resumeThreadId = process.argv[6];
 if (
   !Number.isSafeInteger(minimumActiveMs) ||
   minimumActiveMs <= 0 ||
   !Array.isArray(initialArgs) ||
   !Array.isArray(resumeArgs) ||
   typeof resumePrompt !== "string" ||
-  resumePrompt.length === 0
+  resumePrompt.length === 0 ||
+  (resumeThreadId !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(resumeThreadId))
 ) {
   process.exit(2);
 }
 
 let initialPrompt = "";
 for await (const chunk of process.stdin) initialPrompt += chunk.toString();
-let threadId;
+let threadId = resumeThreadId;
 let activeChild;
 for (const signal of ["SIGTERM", "SIGINT"]) {
   process.on(signal, () => activeChild?.kill(signal));
@@ -64,9 +67,17 @@ async function turn(args, prompt) {
 }
 
 const startedAt = Date.now();
-let exitCode = await turn(initialArgs, initialPrompt);
-if (exitCode !== 0 || process.exitCode === 2) process.exit(exitCode || 2);
-if (threadId === undefined) process.exit(2);
+let exitCode;
+if (resumeThreadId === undefined) {
+  exitCode = await turn(initialArgs, initialPrompt);
+  if (exitCode !== 0 || process.exitCode === 2) process.exit(exitCode || 2);
+  if (threadId === undefined) process.exit(2);
+} else {
+  // The first turn of a resumed segment continues the restored thread with the
+  // same pinned directive; the initial objective is not sent again.
+  exitCode = await turn([...resumeArgs, threadId, "-"], resumePrompt);
+  if (exitCode !== 0 || process.exitCode === 2) process.exit(exitCode || 2);
+}
 
 while (Date.now() - startedAt < minimumActiveMs) {
   exitCode = await turn([...resumeArgs, threadId, "-"], resumePrompt);

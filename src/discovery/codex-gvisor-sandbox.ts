@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   lstat,
+  mkdir,
   mkdtemp,
   open,
   readdir,
@@ -10,7 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { constants } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { isIP } from "node:net";
 
 import { z } from "zod";
@@ -33,9 +34,14 @@ import {
 import type {
   CodexSandbox,
   CodexSandboxCommand,
+  CodexSandboxResumeSeed,
   CodexSandboxResult,
 } from "./codex-native-agent-runtime.js";
 import { MINIMUM_ACTIVE_RUNNER_SOURCE } from "./minimum-active-runner.js";
+import {
+  codexThreadIdSchema,
+  isCodexSessionPath,
+} from "./native-run-receipts.js";
 import {
   SANDBOX_RESEARCH_MOUNT_PATH,
   SANDBOX_SOURCE_MOUNT_PATH,
@@ -188,14 +194,19 @@ function childMetadataOnly(header: SessionHeader): string {
   })}\n${JSON.stringify({ type: "session_capture", payload: { truncated: true } })}\n`;
 }
 
-/** Capture every direct child across waves; max_threads limits concurrency, not total threads. */
+/**
+ * Capture every direct child across waves; max_threads limits concurrency, not
+ * total threads. `paths[i]` is the sessions-relative path of `rollouts[i]`, so
+ * a later resume can restore each file where `codex exec resume` looks for it.
+ */
 async function collectRollouts(home: string): Promise<{
   readonly rollouts: readonly string[];
+  readonly paths: readonly string[];
   readonly truncated: boolean;
 }> {
   const sessions = join(home, "sessions");
   if (!(await lstat(sessions).catch(() => undefined))?.isDirectory())
-    return { rollouts: [], truncated: false };
+    return { rollouts: [], paths: [], truncated: false };
   const files: string[] = [];
   let sessionCountTruncated = false;
   const visit = async (directory: string, depth: number): Promise<void> => {
@@ -249,20 +260,88 @@ async function collectRollouts(home: string): Promise<{
     admitted.add(child.file);
   }
   const rollouts: string[] = [];
+  const paths: string[] = [];
   let bytes = 0;
   let truncated = sessionCountTruncated;
   for (const header of headers) {
     if (!admitted.has(header.file)) continue;
+    const path = relative(sessions, header.file).split(sep).join("/");
     const size = (await stat(header.file)).size;
     if (size > MAX_SESSION_BYTES || bytes + size > MAX_CAPTURE_BYTES) {
       truncated = true;
-      if (header.kind === "child") rollouts.push(childMetadataOnly(header));
+      if (header.kind === "child") {
+        rollouts.push(childMetadataOnly(header));
+        paths.push(path);
+      }
       continue;
     }
     bytes += size;
     rollouts.push(await readSessionFile(header.file, MAX_SESSION_BYTES, true));
+    paths.push(path);
   }
-  return { rollouts, truncated };
+  return { rollouts, paths, truncated };
+}
+
+/** A relative path inside the restored notes directory: no absolute, `.`, `..` or empty segment. */
+function isResearchRelativePath(path: string): boolean {
+  if (path.length === 0 || Buffer.byteLength(path) > MAX_RESEARCH_PATH_BYTES)
+    return false;
+  const segments = path.split("/");
+  return (
+    segments.length <= MAX_RESEARCH_DEPTH + 1 &&
+    segments.every(
+      (segment) =>
+        segment.length > 0 &&
+        segment !== "." &&
+        segment !== ".." &&
+        !/[\0\\]/.test(segment),
+    )
+  );
+}
+
+function admittedResumeSeed(seed: CodexSandboxResumeSeed): boolean {
+  if (!codexThreadIdSchema.safeParse(seed.threadId).success) return false;
+  if (seed.sessions.length === 0 || seed.sessions.length > MAX_SESSION_FILES)
+    return false;
+  const sessionPaths = new Set<string>();
+  let sessionBytes = 0;
+  for (const file of seed.sessions) {
+    if (!isCodexSessionPath(file.path) || sessionPaths.has(file.path))
+      return false;
+    sessionPaths.add(file.path);
+    const size = Buffer.byteLength(file.content);
+    if (size === 0 || size > MAX_SESSION_BYTES) return false;
+    sessionBytes += size;
+  }
+  if (sessionBytes > MAX_CAPTURE_BYTES) return false;
+  if (seed.research.length > MAX_RESEARCH_ENTRIES) return false;
+  const researchPaths = new Set<string>();
+  let researchBytes = 0;
+  for (const file of seed.research) {
+    if (!isResearchRelativePath(file.path) || researchPaths.has(file.path))
+      return false;
+    researchPaths.add(file.path);
+    researchBytes += file.content.byteLength;
+  }
+  return researchBytes <= MAX_RESEARCH_BYTES;
+}
+
+/** Write the seed into the fresh, empty Codex home and notes directory; `wx` refuses any pre-existing file. */
+async function seedResume(
+  codexHome: string,
+  researchDirectory: string,
+  seed: CodexSandboxResumeSeed,
+): Promise<void> {
+  for (const file of seed.sessions) {
+    const target = join(codexHome, "sessions", ...file.path.split("/"));
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    await writeFile(target, file.content, { flag: "wx", mode: 0o600 });
+  }
+  for (const file of seed.research) {
+    const target = join(researchDirectory, ...file.path.split("/"));
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    await writeFile(target, file.content, { flag: "wx", mode: 0o600 });
+  }
 }
 
 type ResearchArchiveEntry =
@@ -656,7 +735,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
           command.resumeArgs?.[1] !== "resume" ||
           typeof command.resumePrompt !== "string" ||
           command.resumePrompt.length === 0 ||
-          command.resumePrompt.length > 2_048)
+          command.resumePrompt.length > 2_048) ||
+      (command.resume !== undefined &&
+        (command.minimumActiveMs === undefined ||
+          !admittedResumeSeed(command.resume)))
     ) {
       throw new Error("Codex sandbox command is not admitted");
     }
@@ -739,6 +821,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
           MINIMUM_ACTIVE_RUNNER_SOURCE,
           { flag: "wx", mode: 0o600 },
         );
+      // Restore an earlier segment's thread before the fresh container starts;
+      // the same digest-verified source mounts and a new grant apply as always.
+      if (command.resume !== undefined && researchDirectory !== undefined)
+        await seedResume(codexHome, researchDirectory, command.resume);
       if (tls !== undefined) {
         await writeFile(join(staging, "grant-ca.pem"), tls.caPem, {
           flag: "wx",
@@ -803,6 +889,9 @@ export class GvisorCodexSandbox implements CodexSandbox {
               JSON.stringify(command.args),
               JSON.stringify(command.resumeArgs),
               command.resumePrompt!,
+              ...(command.resume === undefined
+                ? []
+                : [command.resume.threadId]),
             ]),
       ];
       let result: NativeModelProcessResult;
@@ -867,12 +956,14 @@ export class GvisorCodexSandbox implements CodexSandbox {
       }
       const completedAt = now().toISOString();
       const collected = await collectRollouts(codexHome).then(
-        ({ rollouts, truncated }) => ({
+        ({ rollouts, paths, truncated }) => ({
           rollouts,
+          rolloutPaths: paths,
           ...(truncated ? { rolloutFailure: "capture-failed" as const } : {}),
         }),
         () => ({
           rollouts: [] as readonly string[],
+          rolloutPaths: [] as readonly string[],
           rolloutFailure: "capture-failed" as const,
         }),
       );

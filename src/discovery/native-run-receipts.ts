@@ -12,6 +12,32 @@ import {
 } from "./agent-runtime-profile.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+/** A Codex thread id as the CLI prints it in `thread.started`. */
+export const codexThreadIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+/**
+ * A session file's path relative to `$CODEX_HOME/sessions`: dated directories
+ * and one `rollout-*.jsonl`, no `.` or `..` segments. `codex exec resume`
+ * finds the thread by this layout, so a restored file must keep its path.
+ */
+export function isCodexSessionPath(path: string): boolean {
+  if (path.length === 0 || path.length > 512) return false;
+  const segments = path.split("/");
+  if (segments.length > 6) return false;
+  const file = segments.at(-1)!;
+  return (
+    segments
+      .slice(0, -1)
+      .every(
+        (segment) =>
+          /^[A-Za-z0-9_.-]+$/.test(segment) &&
+          segment !== "." &&
+          segment !== "..",
+      ) && /^rollout-[A-Za-z0-9_.-]+\.jsonl$/.test(file)
+  );
+}
+const codexSessionPathSchema = z.string().refine(isCodexSessionPath, {
+  message: "Codex session path is not a sessions-relative rollout file",
+});
 const reported = z.union([
   z.string().min(1).max(128),
   z.literal("unavailable"),
@@ -64,6 +90,30 @@ const bodySchema = z.strictObject({
     .optional(),
   sandboxExitCode: z.number().int().optional(),
   diagnosticArtifactDigest: digest.optional(),
+  /**
+   * The cooperative Root thread and the session files Private Evidence holds
+   * for it (ADR 0036). An operator may resume the same thread in a new
+   * disposable sandbox from these; receipts without it are not resumable.
+   */
+  session: z
+    .strictObject({
+      rootThreadId: codexThreadIdSchema,
+      /** Root turns this segment started (`thread.started` events); the last one is the one that failed. */
+      rootTurns: count,
+      /** Which resume segment this receipt records; the original run is 0. */
+      segment: count,
+      files: z
+        .array(
+          z.strictObject({
+            path: codexSessionPathSchema,
+            threadId: codexThreadIdSchema,
+            kind: z.enum(["root", "child"]),
+            diagnosticArtifactDigest: digest,
+          }),
+        )
+        .max(256),
+    })
+    .optional(),
   terminal: z.enum(["completed", "incomplete"]),
   reason: z.union([
     z.enum([
@@ -142,6 +192,7 @@ export const nativeRunReceiptSchema = bodySchema
       });
   });
 export type NativeRunReceipt = z.infer<typeof nativeRunReceiptSchema>;
+export type NativeRunSession = NonNullable<NativeRunReceipt["session"]>;
 
 export interface NativeRunIdentity {
   readonly runId: string;
@@ -164,6 +215,7 @@ export function createNativeRunReceipt(
     readonly brokerMetrics?: NativeRunReceipt["brokerMetrics"];
     readonly sandboxExitCode?: number;
     readonly diagnosticArtifactDigest?: string;
+    readonly session?: NativeRunSession;
     readonly grantReceiptDigest?: string;
     readonly reportArtifactDigest?: string;
   },
@@ -205,6 +257,7 @@ export function createNativeRunReceipt(
     ...(input.diagnosticArtifactDigest === undefined
       ? {}
       : { diagnosticArtifactDigest: input.diagnosticArtifactDigest }),
+    ...(input.session === undefined ? {} : { session: input.session }),
     terminal: input.terminal,
     reason: input.reason,
     ...(input.reasonDetail === undefined

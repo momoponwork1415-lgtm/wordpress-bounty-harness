@@ -239,6 +239,12 @@ export async function executeTrial(
     trialId: trial.trialId,
     trialOrdinal: trial.trialOrdinal,
     runKind: "explore",
+    ...(trial.resumes === undefined
+      ? {}
+      : {
+          resumesRun: trial.resumes.runId,
+          resumeSegment: trial.resumes.segment,
+        }),
     ...(context.labId === undefined
       ? { labAttached: false as const }
       : { labId: context.labId, labAttached: true as const }),
