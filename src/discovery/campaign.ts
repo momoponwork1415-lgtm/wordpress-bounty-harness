@@ -18,7 +18,10 @@ import {
 } from "./native-run-receipts.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import { recordReadPaths } from "./read-paths.js";
-import { createReportRecorder } from "./record-discovery-report.js";
+import {
+  createReportRecorder,
+  type ReportRecorder,
+} from "./record-discovery-report.js";
 import {
   recoverChildAgentReports,
   recoverRootAgentReport,
@@ -162,16 +165,6 @@ export function validateProductionCampaignInput(
   return parsed;
 }
 
-export type AdmittedFinding = {
-  readonly findingId: string;
-  readonly discoveryRunId: string;
-  readonly snapshotDigest: string;
-  readonly claim: string;
-  readonly impact: string;
-  readonly sourceTrace: readonly unknown[];
-  readonly historyRecordId?: string | undefined;
-};
-
 export type PlannedDiscoveryRun = {
   readonly run: Omit<DiscoveryTransportRun, "campaignInput">;
   readonly configuration: {
@@ -187,19 +180,6 @@ export type PlannedDiscoveryRun = {
       | { readonly enabled: false };
     readonly labAccess?: { readonly database: "read-only" | "none" };
   };
-};
-
-/** Shared identity of an admitted lead; a profile supplies its claim fields. */
-export type AdmittedLead = {
-  readonly leadId: string;
-  readonly discoveryRunId: string;
-  readonly trialId: string;
-  readonly snapshotDigest: string;
-  readonly primitive: string;
-  readonly storage: { readonly kind: string; readonly key: string } | null;
-  readonly missingEdge:
-    "producer" | "consumer" | "auth-use" | "reachability" | "precondition";
-  readonly sourceTrace: readonly { readonly file: string }[];
 };
 
 export type PlannedTrial = {
@@ -241,43 +221,8 @@ export async function runDiscoveryCampaign(options: {
   readonly attachments: ProviderAttachmentStore;
   readonly evidence: PrivateArtifactStore;
   readonly ledger: Ledger;
-  readonly admitFinding: (
-    candidate: unknown,
-    context: {
-      runId: string;
-      snapshotDigest: string;
-      reportArtifactDigest: string;
-    },
-  ) => AdmittedFinding;
-  /** Programme Boundary 外の impact を `finding-parked` に落とす（#185）。 */
-  readonly isProgrammeImpact?: (impact: string) => boolean;
-  /** Profile-owned admission policy; the generic recorder only stores its result. */
-  readonly classifyFindingPrecondition?: (finding: AdmittedFinding) => {
-    readonly preconditionClass: string;
-    readonly park: boolean;
-  };
-  readonly normalizeCandidate?: (candidate: unknown) => {
-    value: unknown;
-    changes: { path: string; operation: string }[];
-  };
-  readonly classifyCandidate?: (
-    candidate: unknown,
-    kind: "finding" | "lead",
-  ) => {
-    impact?: string;
-    primitive?: string;
-    missingEdge?: string;
-  };
-  readonly admitLead?: (
-    candidate: unknown,
-    context: {
-      runId: string;
-      trialId: string;
-      snapshotDigest: string;
-      reportArtifactDigest: string;
-    },
-  ) => AdmittedLead;
-  readonly leadSignature?: (lead: AdmittedLead) => string;
+  /** Profile-owned admission of every candidate in a report; see `ReportRecorder`. */
+  readonly recordReport: ReportRecorder;
   /** Profile-owned Root coverage validator. Absent for archived or control arms. */
   readonly assessCoverage?: (value: unknown) => {
     readonly accepted: boolean;

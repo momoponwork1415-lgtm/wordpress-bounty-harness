@@ -6,14 +6,8 @@ import type { Ledger, LedgerEventV1 } from "../../../ledger/index.js";
 import { recoverRootReportFromRollout } from "../../../discovery/codex-native-agent-runtime.js";
 import { nativeRunReceiptSchema } from "../../../discovery/native-run-receipts.js";
 import type { ProviderAttachmentStore } from "../../../discovery/provider-research-report.js";
-import { admitWordPressFinding } from "./finding.js";
-import { admitWordPressLead } from "./lead.js";
-import { isWordPressProgrammeImpact } from "./programme-impacts.js";
-import { classifyWordPressPrecondition } from "../verification/precondition-class.js";
-import {
-  classifyWordPressCandidate,
-  normalizeWordPressCandidate,
-} from "./normalize-candidate.js";
+import type { RecordedCandidate } from "../../../discovery/record-discovery-report.js";
+import { recordWordPressReport } from "./candidate-admission.js";
 
 /** Bump this when the syntax rules change; prior interpretations remain in the ledger. */
 const parserVersion = "wordpress-candidate-v1";
@@ -123,217 +117,74 @@ export async function reacceptWordPressRun(options: {
       leads: z.array(z.unknown()).default([]),
     })
     .parse(report);
-  const previous = new Set(
-    events.flatMap((event) =>
+  const previous = events.filter(
+    (event) =>
       (event.type === "candidate-rejected" ||
         event.type === "candidate-held") &&
-      event.runId === runId
-        ? [`${event.candidateKind}:${event.candidateIndex}`]
-        : [],
+      event.runId === runId,
+  );
+  const previousKeys = new Set(
+    previous.map((event) =>
+      event.type === "candidate-rejected" || event.type === "candidate-held"
+        ? `${event.candidateKind}:${event.candidateIndex}`
+        : "",
     ),
   );
-  const allCandidates = [
-    ...parsed.findings.map((raw, index) => ({
-      kind: "finding" as const,
-      index,
-      raw,
-    })),
-    ...parsed.leads.map((raw, index) => ({
-      kind: "lead" as const,
-      index,
-      raw,
-    })),
-  ];
-  const selected =
-    receipt.reportArtifactDigest === "unavailable"
-      ? allCandidates
-      : allCandidates.filter(({ kind, index }) =>
-          previous.has(`${kind}:${index}`),
-        );
-  const normalizedBefore = new Set(
-    events.flatMap((event) =>
-      event.type === "candidate-normalized" &&
-      event.runId === runId &&
-      event.parserVersion === parserVersion
-        ? [`${event.candidateKind}:${event.candidateIndex}`]
-        : [],
-    ),
-  );
-  const heldBefore = new Set(
-    events.flatMap((event) =>
-      event.type === "candidate-held" &&
-      event.runId === runId &&
-      event.parserVersion === parserVersion
-        ? [`${event.candidateKind}:${event.candidateIndex}`]
-        : [],
-    ),
-  );
-  const recordedFindings = new Set(
-    events.flatMap((event) =>
-      event.type === "finding-recorded" || event.type === "finding-parked"
-        ? [event.findingId]
-        : [],
-    ),
-  );
-  const recordedLeads = new Set(
-    events.flatMap((event) =>
-      event.type === "lead-recorded" ? [event.leadId] : [],
-    ),
-  );
-  let accepted = 0,
-    held = 0,
-    alreadyProcessed = 0;
-  for (const { kind, index, raw } of selected) {
+  // A sealed report fixes each candidate; a rejected or held candidate must match it byte for byte.
+  for (const prior of previous) {
+    if (prior.type !== "candidate-rejected" && prior.type !== "candidate-held")
+      continue;
+    const raw =
+      prior.candidateKind === "finding"
+        ? parsed.findings[prior.candidateIndex]
+        : parsed.leads[prior.candidateIndex];
+    if (raw === undefined) continue;
     const rawDigest = await evidence.putFiles({
       "candidate.json": canonicalJson(raw),
     });
-    const prior = events.find(
-      (event) =>
-        (event.type === "candidate-rejected" ||
-          event.type === "candidate-held") &&
-        event.runId === runId &&
-        event.candidateKind === kind &&
-        event.candidateIndex === index,
-    );
     if (
-      prior?.type === "candidate-rejected" ||
-      prior?.type === "candidate-held"
-    ) {
-      if (
-        !prior.artifacts.some(
-          (artifact) =>
-            artifact.kind === "candidate" && artifact.digest === rawDigest,
-        )
+      !prior.artifacts.some(
+        (artifact) =>
+          artifact.kind === "candidate" && artifact.digest === rawDigest,
       )
-        throw new Error("Archived candidate differs from its sealed report");
-    }
-    const normalized = normalizeWordPressCandidate(raw);
-    const base = {
-      schemaVersion: 1 as const,
+    )
+      throw new Error("Archived candidate differs from its sealed report");
+  }
+  const recorded = await recordWordPressReport(parsed, {
+    ledger,
+    evidence,
+    base: {
+      schemaVersion: 1,
       campaignId,
       snapshotDigest: started.snapshotDigest,
       occurredAt: (options.clock ?? (() => new Date()))().toISOString(),
-    };
-    const key = `${runId}-${kind}-${index}-${parserVersion}`;
-    const wasNormalized = normalizedBefore.has(`${kind}:${index}`);
-    if (!wasNormalized) {
-      const recorded = await ledger.append({
-        ...base,
-        identity: `candidate-normalized-${key}`,
-        type: "candidate-normalized",
-        runId,
-        candidateKind: kind,
-        candidateIndex: index,
-        parserVersion,
-        changes: normalized.changes,
-        artifacts: [{ kind: "candidate", digest: rawDigest }],
-      });
-      if (recorded.status === "conflict")
-        throw new Error("Candidate normalization conflict");
-    }
-    try {
-      if (kind === "finding") {
-        const finding = admitWordPressFinding(normalized.value, {
-          runId,
-          snapshotDigest: started.snapshotDigest,
-          reportArtifactDigest: reportDigest,
-        });
-        if (wasNormalized && recordedFindings.has(finding.findingId)) {
-          alreadyProcessed++;
-          continue;
-        }
-        if (!recordedFindings.has(finding.findingId)) {
-          const findingDigest = await evidence.putFiles({
-            "finding.json": canonicalJson(finding),
-          });
-          const preconditionClass = classifyWordPressPrecondition({
-            configurationPrecondition: finding.configurationPrecondition,
-          }).preconditionClass;
-          const inScope = isWordPressProgrammeImpact(finding.impact);
-          const result =
-            inScope && preconditionClass !== "admin-configuration"
-              ? await ledger.append({
-                  ...base,
-                  identity: `discovery-finding-${finding.findingId}`,
-                  type: "finding-recorded",
-                  runId,
-                  findingId: finding.findingId,
-                  category: finding.impact,
-                  preconditionClass,
-                  artifacts: [{ kind: "finding", digest: findingDigest }],
-                })
-              : await ledger.append({
-                  ...base,
-                  identity: `discovery-finding-parked-${finding.findingId}`,
-                  type: "finding-parked",
-                  runId,
-                  findingId: finding.findingId,
-                  category: finding.impact,
-                  reason: inScope
-                    ? "admin-configuration-precondition"
-                    : "outside-programme-boundary",
-                  preconditionClass,
-                  artifacts: [{ kind: "finding", digest: findingDigest }],
-                });
-          if (result.status === "conflict")
-            throw new Error("Finding identity conflict");
-          recordedFindings.add(finding.findingId);
-        }
-      } else {
-        const lead = admitWordPressLead(normalized.value, {
-          runId,
-          trialId: started.trialId ?? runId,
-          snapshotDigest: started.snapshotDigest,
-          reportArtifactDigest: reportDigest,
-        });
-        if (wasNormalized && recordedLeads.has(lead.leadId)) {
-          alreadyProcessed++;
-          continue;
-        }
-        if (!recordedLeads.has(lead.leadId)) {
-          const leadDigest = await evidence.putFiles({
-            "lead.json": canonicalJson(lead),
-          });
-          const result = await ledger.append({
-            ...base,
-            identity: `discovery-lead-${lead.leadId}`,
-            type: "lead-recorded",
-            runId,
-            trialId: started.trialId ?? runId,
-            leadId: lead.leadId,
-            missingEdge: lead.missingEdge,
-            primitive: lead.primitive,
-            storageKind: lead.storage?.kind ?? "none",
-            artifacts: [{ kind: "lead", digest: leadDigest }],
-          });
-          if (result.status === "conflict")
-            throw new Error("Lead identity conflict");
-          recordedLeads.add(lead.leadId);
-        }
-      }
-      accepted++;
-    } catch (error) {
-      if (!(error instanceof z.ZodError)) throw error;
-      if (heldBefore.has(`${kind}:${index}`)) {
-        alreadyProcessed++;
-        continue;
-      }
-      const result = await ledger.append({
-        ...base,
-        identity: `candidate-held-${key}`,
-        type: "candidate-held",
-        runId,
-        candidateKind: kind,
-        candidateIndex: index,
-        parserVersion,
-        issuePaths: error.issues.map((issue) => issue.path.join(".")),
-        ...classifyWordPressCandidate(normalized.value, kind),
-        artifacts: [{ kind: "candidate", digest: rawDigest }],
-      });
-      if (result.status === "conflict")
-        throw new Error("Candidate hold conflict");
-      held++;
-    }
-  }
-  return { reached: selected.length, accepted, held, alreadyProcessed };
+    },
+    runId,
+    trialId: started.trialId ?? runId,
+    snapshotDigest: started.snapshotDigest,
+    reportArtifactDigest: reportDigest,
+    parserVersion,
+    existingIdentities: new Set(events.map((event) => event.identity)),
+    ...(receipt.reportArtifactDigest === "unavailable"
+      ? {}
+      : {
+          select: (kind: "finding" | "lead", index: number) =>
+            previousKeys.has(`${kind}:${index}`),
+        }),
+  });
+  const count = (
+    predicate: (candidate: RecordedCandidate) => boolean,
+  ): number => recorded.candidates.filter(predicate).length;
+  return {
+    reached: recorded.candidates.length,
+    accepted: count(
+      (candidate) =>
+        candidate.outcome !== "held" && candidate.status === "appended",
+    ),
+    held: count(
+      (candidate) =>
+        candidate.outcome === "held" && candidate.status === "appended",
+    ),
+    alreadyProcessed: count((candidate) => candidate.status === "existing"),
+  };
 }

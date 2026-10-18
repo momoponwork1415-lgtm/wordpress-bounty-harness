@@ -45,21 +45,7 @@ export interface CampaignPipeline<
     readonly runWallTimeMs?: number;
     readonly executor: DiscoveryOptions["executor"];
     readonly attachments: DiscoveryOptions["attachments"];
-    readonly admitFinding: DiscoveryOptions["admitFinding"];
-    readonly isProgrammeImpact?: NonNullable<
-      DiscoveryOptions["isProgrammeImpact"]
-    >;
-    readonly classifyFindingPrecondition?: NonNullable<
-      DiscoveryOptions["classifyFindingPrecondition"]
-    >;
-    readonly normalizeCandidate?: NonNullable<
-      DiscoveryOptions["normalizeCandidate"]
-    >;
-    readonly classifyCandidate?: NonNullable<
-      DiscoveryOptions["classifyCandidate"]
-    >;
-    readonly admitLead?: NonNullable<DiscoveryOptions["admitLead"]>;
-    readonly leadSignature?: NonNullable<DiscoveryOptions["leadSignature"]>;
+    readonly recordReport: DiscoveryOptions["recordReport"];
     readonly assessCoverage?: NonNullable<DiscoveryOptions["assessCoverage"]>;
   }>;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;

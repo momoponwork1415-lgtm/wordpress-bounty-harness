@@ -13,7 +13,6 @@ import type {
   DiscoveryTransportResult,
   DiscoveryTransportRun,
   PlannedDiscoveryRun,
-  AdmittedLead,
   ProviderAttachmentStore,
 } from "../discovery/index.js";
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
@@ -28,21 +27,12 @@ import {
   canonicalDigest,
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
-import {
-  admitWordPressLead,
-  readWordPressLead,
-  wordPressLeadSignature,
-} from "../profiles/wordpress/discovery/lead.js";
+import { recordWordPressReport } from "../profiles/wordpress/discovery/candidate-admission.js";
 import {
   admitWordPressFinding,
   readWordPressFinding,
   type WordPressFinding,
 } from "../profiles/wordpress/discovery/finding.js";
-import { isWordPressProgrammeImpact } from "../profiles/wordpress/discovery/programme-impacts.js";
-import {
-  normalizeWordPressCandidate,
-  classifyWordPressCandidate,
-} from "../profiles/wordpress/discovery/normalize-candidate.js";
 import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
@@ -81,7 +71,6 @@ import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js"
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
-import { classifyWordPressPrecondition } from "../profiles/wordpress/verification/precondition-class.js";
 import {
   createWordPressLabStateObserver,
   createWordPressStateDiffReader,
@@ -962,23 +951,7 @@ async function planWordPressDiscovery(
               config.coverage.maxUnvisitedRatio,
             ),
         }),
-    admitFinding: admitWordPressFinding,
-    isProgrammeImpact: isWordPressProgrammeImpact,
-    classifyFindingPrecondition: (finding) => {
-      const result = classifyWordPressPrecondition({
-        configurationPrecondition:
-          readWordPressFinding(finding).configurationPrecondition,
-      });
-      return {
-        preconditionClass: result.preconditionClass,
-        park: result.preconditionClass === "admin-configuration",
-      };
-    },
-    normalizeCandidate: normalizeWordPressCandidate,
-    classifyCandidate: classifyWordPressCandidate,
-    admitLead: admitWordPressLead,
-    leadSignature: (lead: AdmittedLead) =>
-      wordPressLeadSignature(readWordPressLead(lead)),
+    recordReport: recordWordPressReport,
   };
 }
 
