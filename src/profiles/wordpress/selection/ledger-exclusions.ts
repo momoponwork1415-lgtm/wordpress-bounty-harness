@@ -4,11 +4,7 @@ import {
   countsAsTrial,
   recordedTrialActivity,
 } from "../../../discovery/counts-as-trial.js";
-import type {
-  Ledger,
-  LedgerEventV1,
-  LedgerRecord,
-} from "../../../ledger/index.js";
+import type { Ledger, LedgerEventV1 } from "../../../ledger/index.js";
 import { compareVersions } from "../plugin-version.js";
 
 /** Revisit is an explicit policy choice; the default policy uses `never`. */
@@ -57,28 +53,11 @@ interface EarlierSelection {
   readonly startedAt: string;
 }
 
-const pageSize = 1000;
-
 function ledgerEvents(
-  ledger: Pick<Ledger, "read">,
+  ledger: Pick<Ledger, "readAll">,
   type: LedgerEventV1["type"],
 ): readonly LedgerEventV1[] {
-  const events: LedgerEventV1[] = [];
-  let afterSequence = 0;
-  for (;;) {
-    const page: readonly LedgerRecord[] = ledger.read({
-      type,
-      afterSequence,
-      limit: pageSize,
-    });
-    if (page.length === 0) return events;
-    events.push(...page.map(({ event }) => event));
-    const lastSequence = page.at(-1)?.sequence;
-    if (lastSequence === undefined || lastSequence <= afterSequence)
-      throw new Error("Ledger pagination did not advance");
-    afterSequence = lastSequence;
-    if (page.length < pageSize) return events;
-  }
+  return ledger.readAll({ type }).map(({ event }) => event);
 }
 
 function snapshotKey(
@@ -112,7 +91,7 @@ function promptChanged(
 
 /** Inspect the append-only ledger; selections without a counted Trial remain eligible. */
 export function inspectWordPressLedgerExclusions(input: {
-  readonly ledger: Pick<Ledger, "read">;
+  readonly ledger: Pick<Ledger, "readAll">;
   readonly candidates: readonly {
     readonly slug: string;
     readonly version: string;

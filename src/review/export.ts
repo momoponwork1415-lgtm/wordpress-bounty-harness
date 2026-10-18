@@ -272,17 +272,6 @@ const authoredHttpSchema = z.looseObject({
 const MAX_ROWS = 500;
 const MAX_MEMO_CHARS = 16_384;
 
-function readAll(ledger: Ledger, type: LedgerEventV1["type"]) {
-  const records: ReturnType<Ledger["read"]>[number][] = [];
-  let afterSequence = 0;
-  for (;;) {
-    const page = ledger.read({ type, afterSequence, limit: 1000 });
-    records.push(...page);
-    if (page.length < 1000) return records;
-    afterSequence = page[page.length - 1]!.sequence;
-  }
-}
-
 function httpRow(
   method: string,
   address: string,
@@ -440,14 +429,17 @@ export async function exportReviewBundle(options: {
       ? undefined
       : await readJson(store, findingRef.digest, "finding.json", 1024 * 1024),
   );
-  const run = readAll(ledger, "discovery-run-started").find(
-    ({ event }) =>
-      event.type === "discovery-run-started" &&
-      event.campaignId === campaignId &&
-      event.runId === finding.runId,
-  )?.event;
+  const run = ledger
+    .readAll({ type: "discovery-run-started" })
+    .find(
+      ({ event }) =>
+        event.type === "discovery-run-started" &&
+        event.campaignId === campaignId &&
+        event.runId === finding.runId,
+    )?.event;
 
-  const selections = readAll(ledger, "target-selected")
+  const selections = ledger
+    .readAll({ type: "target-selected" })
     .map(({ event }) => event)
     .filter((event) => event.type === "target-selected");
   const selected = selections.find(
@@ -481,12 +473,12 @@ export async function exportReviewBundle(options: {
   );
 
   const verifications = ledger
-    .read({ campaignId, findingId, type: "verification-finished", limit: 1000 })
+    .readAll({ campaignId, findingId, type: "verification-finished" })
     .map(({ event }) => event)
     .filter((event) => event.type === "verification-finished");
   const verification = verifications.at(-1);
   const verifierRuns = ledger
-    .read({ campaignId, findingId, type: "verifier-run-finished", limit: 1000 })
+    .readAll({ campaignId, findingId, type: "verifier-run-finished" })
     .map(({ event }) => event)
     .filter((event) => event.type === "verifier-run-finished");
   for (const event of verifierRuns)
@@ -507,12 +499,14 @@ export async function exportReviewBundle(options: {
   const labEvent =
     verification === undefined
       ? undefined
-      : readAll(ledger, "lab-provisioned").find(
-          ({ event }) =>
-            event.type === "lab-provisioned" &&
-            event.identity ===
-              `verification-lab-${verification.verificationId}`,
-        )?.event;
+      : ledger
+          .readAll({ type: "lab-provisioned" })
+          .find(
+            ({ event }) =>
+              event.type === "lab-provisioned" &&
+              event.identity ===
+                `verification-lab-${verification.verificationId}`,
+          )?.event;
 
   const evidenceDigest =
     verification !== undefined && "evidenceDigest" in verification.result
@@ -563,14 +557,14 @@ export async function exportReviewBundle(options: {
   }
 
   const decisions = ledger
-    .read({ campaignId, findingId, type: "review-decided", limit: 1000 })
+    .readAll({ campaignId, findingId, type: "review-decided" })
     .map(({ event }) => event)
     .filter((event) => event.type === "review-decided");
   for (const event of decisions)
     for (const artifact of event.artifacts)
       addArtifact(artifact.kind, artifact.digest);
   const scopes = ledger
-    .read({ campaignId, findingId, type: "scope-assessed", limit: 1000 })
+    .readAll({ campaignId, findingId, type: "scope-assessed" })
     .map(({ event }) => event)
     .filter((event) => event.type === "scope-assessed");
   const privateRecord = async (
@@ -590,7 +584,7 @@ export async function exportReviewBundle(options: {
   const ofFinding = (type: LedgerEventV1["type"], ids: readonly string[]) =>
     ids.flatMap((findingIdOf) =>
       ledger
-        .read({ campaignId, findingId: findingIdOf, type, limit: 1000 })
+        .readAll({ campaignId, findingId: findingIdOf, type })
         .map(({ event }) => event),
     );
   const reproduction = ofFinding("human-reproduction-recorded", [findingId]).at(
@@ -602,7 +596,8 @@ export async function exportReviewBundle(options: {
         event.type === "human-effort-recorded" && event.action === "reproduce",
     )
     .at(-1);
-  const derived = readAll(ledger, "finding-recorded")
+  const derived = ledger
+    .readAll({ type: "finding-recorded" })
     .map(({ event }) => event)
     .filter(
       (event) =>

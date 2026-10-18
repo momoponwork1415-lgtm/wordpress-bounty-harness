@@ -380,58 +380,44 @@ export async function runDiscoveryCampaign(options: {
       string,
       Extract<LedgerEventV1, { type: "discovery-run-finished" }>
     >();
-    for (let afterSequence = 0; ;) {
-      const page = options.ledger.read({
-        campaignId: options.campaignId,
-        type: "discovery-run-finished",
-        afterSequence,
-        limit: 1000,
-      });
-      for (const { event } of page)
-        if (
-          event.type === "discovery-run-finished" &&
-          event.snapshotDigest === input.snapshotDigest
-        )
-          finishes.set(event.runId, event);
-      if (page.length < 1000) return finishes;
-      afterSequence = page[page.length - 1]!.sequence;
-    }
+    for (const { event } of options.ledger.readAll({
+      campaignId: options.campaignId,
+      type: "discovery-run-finished",
+    }))
+      if (
+        event.type === "discovery-run-finished" &&
+        event.snapshotDigest === input.snapshotDigest
+      )
+        finishes.set(event.runId, event);
+    return finishes;
   };
   const finishedRuns = readFinishes();
   const activeRuns = recordedTrialActivity(options.ledger, options.campaignId);
   const startedExplorations = new Set<string>();
   const spentOrdinals = new Set<number>();
   let nextLegacyOrdinal = 0;
-  let startAfterSequence = 0;
-  for (;;) {
-    const page = options.ledger.read({
-      campaignId: options.campaignId,
-      type: "discovery-run-started",
-      afterSequence: startAfterSequence,
-      limit: 1000,
-    });
-    for (const { event } of page)
-      if (
-        event.type === "discovery-run-started" &&
-        event.snapshotDigest === input.snapshotDigest &&
-        // Historical events had no runKind and each represented exploration.
-        (event.runKind ?? "explore") === "explore" &&
-        countsAsTrial(
-          finishedRuns.get(event.runId),
-          activeRuns.has(`${event.campaignId}\0${event.runId}`),
-        )
-      ) {
-        startedExplorations.add(event.runId);
-        if (event.trialOrdinal !== undefined)
-          spentOrdinals.add(event.trialOrdinal);
-        else {
-          while (spentOrdinals.has(nextLegacyOrdinal)) nextLegacyOrdinal++;
-          spentOrdinals.add(nextLegacyOrdinal++);
-        }
+  for (const { event } of options.ledger.readAll({
+    campaignId: options.campaignId,
+    type: "discovery-run-started",
+  }))
+    if (
+      event.type === "discovery-run-started" &&
+      event.snapshotDigest === input.snapshotDigest &&
+      // Historical events had no runKind and each represented exploration.
+      (event.runKind ?? "explore") === "explore" &&
+      countsAsTrial(
+        finishedRuns.get(event.runId),
+        activeRuns.has(`${event.campaignId}\0${event.runId}`),
+      )
+    ) {
+      startedExplorations.add(event.runId);
+      if (event.trialOrdinal !== undefined)
+        spentOrdinals.add(event.trialOrdinal);
+      else {
+        while (spentOrdinals.has(nextLegacyOrdinal)) nextLegacyOrdinal++;
+        spentOrdinals.add(nextLegacyOrdinal++);
       }
-    if (page.length < 1000) break;
-    startAfterSequence = page[page.length - 1]!.sequence;
-  }
+    }
   const seen = new Set<string>();
   let noNewFindings = 0;
   let runCount = 0;

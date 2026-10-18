@@ -151,10 +151,9 @@ export function createWordPressScopeFacts(options: {
       if (finding?.type !== "finding-recorded")
         throw new Error("Finding record is missing");
       const lab = options.ledger
-        .read({
+        .readAll({
           campaignId: ref.campaignId,
           type: "lab-provisioned",
-          limit: 1000,
         })
         .map(({ event }) => event)
         .find(
@@ -168,10 +167,9 @@ export function createWordPressScopeFacts(options: {
           ? wordPressScenario(lab.scenario.id)
           : undefined;
       const selected = options.ledger
-        .read({
+        .readAll({
           campaignId: ref.campaignId,
           type: "target-selected",
-          limit: 1000,
         })
         .filter(
           ({ event }) => event.snapshotDigest === verification.snapshotDigest,
