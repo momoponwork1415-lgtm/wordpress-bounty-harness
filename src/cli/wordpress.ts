@@ -922,6 +922,8 @@ async function planWordPressDiscovery(
       "Discovery Lab mode differs from the campaign configuration",
     );
   const wallMinutes = config.runWallTimeMinutes ?? 60;
+  const effectiveWallMinutes =
+    config.mode === "dispatch" ? config.dispatch.taskWallMinutes : wallMinutes;
   const ablationConfig =
     config.mode === "ablation" ? config.ablation : undefined;
   const assignmentConfig =
@@ -1081,10 +1083,7 @@ async function planWordPressDiscovery(
     historyFraction:
       ablationConfig?.axes.find((axis) => axis.axis === "history")
         ?.armBFraction ?? 0,
-    runWallTimeMs:
-      (config.mode === "dispatch"
-        ? config.dispatch.taskWallMinutes
-        : wallMinutes) * 60_000,
+    runWallTimeMs: effectiveWallMinutes * 60_000,
     ...(taskPlan === undefined ? {} : { taskMode: true as const }),
     concurrency: Math.min(
       config.mode === "dispatch"
@@ -1191,7 +1190,9 @@ async function planWordPressDiscovery(
             ...(source.dependency === undefined
               ? {}
               : { dependencySource: source.dependency }),
-            expiresAt: new Date(now + wallMinutes * 60_000).toISOString(),
+            expiresAt: new Date(
+              now + effectiveWallMinutes * 60_000,
+            ).toISOString(),
           },
         };
         return {

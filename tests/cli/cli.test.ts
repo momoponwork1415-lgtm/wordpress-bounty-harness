@@ -2052,7 +2052,7 @@ describe("harness CLI vertical slice", () => {
           dispatch: {
             entriesPerTask: 1,
             maxTasksPerTarget: 24,
-            taskWallMinutes: 10,
+            taskWallMinutes: 7,
             taskMaxRequests: 150,
             concurrency: 1,
           },
@@ -2101,7 +2101,7 @@ describe("harness CLI vertical slice", () => {
     ).toBe(starts.length - 1);
     expect(coordinations.every((value) => value === "solo")).toBe(true);
     expect(
-      expirations.every((value) => value === "2026-10-08T00:10:00.000Z"),
+      expirations.every((value) => value === "2026-10-08T00:07:00.000Z"),
     ).toBe(true);
     expect(
       ledger().read({
