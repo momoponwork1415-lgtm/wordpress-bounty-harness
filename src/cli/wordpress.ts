@@ -8,9 +8,6 @@ import type { PlannedDiscoveryRun } from "../discovery/index.js";
 import { Review } from "../review/index.js";
 import { targetSelectionId } from "../selection/index.js";
 import { SourceAcquisitionError, type Snapshot } from "../snapshot/index.js";
-import { renderWordPressEntryIndex } from "../profiles/wordpress/discovery/entry-points.js";
-import { buildWordPressSourceIndex } from "../profiles/wordpress/discovery/storage-index.js";
-import { assessWordPressCoverage } from "../profiles/wordpress/discovery/coverage.js";
 import {
   canonicalDigest,
   canonicalJson,
@@ -24,7 +21,6 @@ import {
 import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
-  wordPressDiscoveryOutputContractV3,
   wordPressDiscoveryOutputContractV4,
 } from "../profiles/wordpress/discovery/output-contract.js";
 import type {
@@ -483,28 +479,17 @@ type WordPressDiscoveryContext = {
 /**
  * Which Harness-generated output contract a prompt version receives, read
  * from the prompt table. Objective-only bodies get a generated contract
- * (ADR 0019); with the entry index on, coverage-capable versions switch to
- * contract v3 and report the Root coverage schema.
+ * (ADR 0019). The entry-index coverage contract (v3) was deleted with the
+ * index (ADR 0034); old Trials keep their recorded `contractDigest`.
  */
-export function wordPressDiscoveryContractPlan(
-  id: string,
-  entryIndex: boolean,
-): {
+export function wordPressDiscoveryContractPlan(id: string): {
   readonly objectiveOnly: boolean;
-  readonly contract: "v1" | "v2" | "v3" | "v4" | null;
-  readonly coverage: boolean;
+  readonly contract: "v1" | "v2" | "v4" | null;
 } {
   const record = wordPressDiscoveryPrompt(id);
-  const coverage = record.entryIndexCoverage && entryIndex;
   return {
     objectiveOnly: record.outputContract !== null,
-    contract:
-      record.outputContract === null
-        ? null
-        : coverage
-          ? "v3"
-          : record.outputContract,
-    coverage,
+    contract: record.outputContract,
   };
 }
 
@@ -519,18 +504,12 @@ async function planWordPressDiscovery(
       "Discovery Lab mode differs from the campaign configuration",
     );
   const wallMinutes = config.runWallTimeMinutes;
-  const outputContractV3 = wordPressDiscoveryOutputContractV3(
-    config.coverage.maxUnvisitedRatio,
-  );
   const outputContracts = {
     v1: wordPressDiscoveryOutputContract(),
     v2: wordPressDiscoveryOutputContractV2(),
-    v3: outputContractV3,
     v4: wordPressDiscoveryOutputContractV4(),
   };
-  const planFor = (id: string) =>
-    wordPressDiscoveryContractPlan(id, config.entryIndex);
-  const coverageFor = (id: string) => planFor(id).coverage;
+  const planFor = (id: string) => wordPressDiscoveryContractPlan(id);
   const objectiveOnly = (id: string) => planFor(id).objectiveOnly;
   const outputContractFor = (id: string) => {
     const { contract } = planFor(id);
@@ -547,13 +526,6 @@ async function planWordPressDiscovery(
           config.stopRules.maxRuns,
           target.runBudget ?? config.stopRules.maxRuns,
         );
-  const sourceIndex = !config.entryIndex
-    ? undefined
-    : await buildWordPressSourceIndex(source.directory, target.slug);
-  const entryIndexMetadata =
-    !config.entryIndex || sourceIndex === undefined
-      ? ({ enabled: false } as const)
-      : ({ enabled: true, digest: sourceIndex.digest } as const);
   const stopRules = {
     maxRuns,
     noFindingRuns: Math.min(config.stopRules.noFindingRuns, maxRuns),
@@ -602,9 +574,6 @@ async function planWordPressDiscovery(
         : []),
       "## Assigned files",
       "All files under /workspace/main.",
-      ...(config.entryIndex && sourceIndex !== undefined
-        ? [renderWordPressEntryIndex(sourceIndex)]
-        : []),
     ].join("\n\n");
   const now = state.clock().getTime();
   return {
@@ -622,7 +591,6 @@ async function planWordPressDiscovery(
       lab:
         lab === undefined ? { mode: "none" } : { setupDigest: lab.setupDigest },
       history: { mode: "none" },
-      entryIndex: entryIndexMetadata,
     },
     runWallTimeMs: wallMinutes * 60_000,
     concurrency: Math.min(
@@ -659,7 +627,6 @@ async function planWordPressDiscovery(
                 : ("mounted" as const),
           },
           assignmentUnit: "plugin",
-          entryIndex: entryIndexMetadata,
           labAccess: {
             database: lab?.database === undefined ? "none" : "read-only",
           },
@@ -672,9 +639,6 @@ async function planWordPressDiscovery(
           prompt: promptFor(selectedObjective),
           minimumActiveMs: 60 * 60_000,
           resumePrompt,
-          ...(coverageFor(selectedObjective.id)
-            ? { coverageSchema: outputContractV3.coverageSchema }
-            : {}),
           ...(lab === undefined
             ? {}
             : {
@@ -711,16 +675,6 @@ async function planWordPressDiscovery(
     }),
     executor: boundaries.executor,
     attachments: boundaries.attachments,
-    ...(sourceIndex === undefined || !config.entryIndex
-      ? {}
-      : {
-          assessCoverage: (value: unknown) =>
-            assessWordPressCoverage(
-              value,
-              sourceIndex,
-              config.coverage.maxUnvisitedRatio,
-            ),
-        }),
     recordReport: recordWordPressReport,
   };
 }

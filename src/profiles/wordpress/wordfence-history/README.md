@@ -12,8 +12,6 @@
 
 adapterはSQLiteをread-onlyで開き、stateとDBのschema、feed digest、件数のmetadataが一致するときだけ検索する。APIへの通信や自動更新はしない。`signals`は旧正規化器のtitle/descriptionからの分類なので、分類が欠けた履歴は手動確認候補として残す。重複照合結果、履歴の本文、認証情報をDiscovery入力やGitに置かない。
 
-## Discovery向けの時点で切った公開カタログ
+## Discovery向けの時点で切った公開カタログ（削除済み）
 
-`extractCampaignHistory(plugin, historyCutoff, { databasePath, statePath })` は同じローカルmirrorを読み、公開日がcutoffより**厳密に前**のplugin記録だけを `CampaignInput v1` のcatalogに投影する。投影する項目はid、分類signal、影響版、修正版、公開日、公開記録のタイトル、変更ファイル一覧に限る。advisory本文、PoC、payload、再現手順は投影しない。現行mirrorに差分ファイル情報はないため `changedFiles: []` とし、ファイルを推測しない。取得できない公開日を持つ記録は除外する。stateとDBの整合が取れないときは `unavailable` を返し、空の履歴として扱わない。
-
-cutoffは本番ではsnapshot版の公開日時、評価ではheld-outの公開日時に一致させる。`validateProductionCampaignInput` / `validateEvaluationCampaignInput` が境界で検査する。runはCampaignInputの履歴をそのまま受け取り、台帳の `discovery-run-started.history` にmode・digest・渡したrecord idを残す。WordPressの `wp2shell` modeは履歴を渡さない（旧 `ablation` の `arm` は台帳から読むだけ）。CLIのcutoffは選定の `versionPublishedAt`（固定しない安定版のWordPress.org最終更新日時）で、固定版には付かないため履歴を渡さない。Findingの任意の `historyRecordId` は、そのrunへ渡したidだけを記録できる。
+`extractCampaignHistory` と `CampaignInput v1` の `catalog` mode は 2026-10-18 の [ADR 0034](../../../../docs/adr/0034-harness-control-only-deletions.md) で削除した。ablation の history 軸でしか使われず、`wp2shell` mode は常に `history: { mode: "none" }` を渡していた。旧Trialの台帳 `discovery-run-started.history`（mode・digest・渡したrecord id）は読み続け、Findingの任意の `historyRecordId` はそのrunへ渡したidだけを記録できるという台帳側の規則も残る。このmirrorを探索へ投影する code はもう無い。

@@ -103,7 +103,6 @@ describe("finishedEventFrom", () => {
       wallTimeMs: 3_000,
       researchArtifact: { digest: other, truncated: false },
       receiptDigest: digest,
-      coverageDigest: other,
       readPathsDigest: digest,
       counted: true,
       foundNew: false,
@@ -131,7 +130,6 @@ describe("finishedEventFrom", () => {
       providerLimit: "quota",
       artifacts: [
         { kind: "native-run-receipt", digest },
-        { kind: "coverage", digest: other },
         { kind: "read-paths", digest },
       ],
     });

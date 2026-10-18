@@ -46,6 +46,7 @@ const reportSchema = z.strictObject({
   leads: z.array(claimTextSchema),
   examined: z.string().max(16_384),
   unexamined: z.string().max(16_384),
+  /** Old v5/v6 Root reports carried an entry-index coverage record; still readable, never required (ADR 0034). */
   coverage: z.unknown().optional(),
 });
 /** Children are not constrained by Root's --output-schema; preserve structured coverage as text. */
@@ -190,16 +191,6 @@ const reportJsonSchema = {
   required: ["findings", "leads", "examined", "unexamined"],
 } as const;
 
-function reportJsonSchemaFor(coverageSchema?: Record<string, unknown>) {
-  if (coverageSchema === undefined) return reportJsonSchema;
-  const { $schema: _meta, ...recordSchema } = coverageSchema;
-  return {
-    ...reportJsonSchema,
-    properties: { ...reportJsonSchema.properties, coverage: recordSchema },
-    required: [...reportJsonSchema.required, "coverage"],
-  };
-}
-
 export interface CodexSandboxCommand {
   readonly executable: "codex";
   readonly args: readonly string[];
@@ -278,8 +269,6 @@ export interface DiscoveryTransportRun {
   readonly minimumActiveMs?: number;
   /** A versioned excerpt already present in prompt, used only for early Root resumes. */
   readonly resumePrompt?: string;
-  /** Profile-owned Root report schema; children keep their existing report. */
-  readonly coverageSchema?: Record<string, unknown>;
   /** Screening uses one agent even when the runtime profile permits children. */
   readonly coordination?: "solo" | "cooperative";
   /** Verification uses the same isolated transport with a different sealed report. */
@@ -331,7 +320,6 @@ const discoveryTransportRunSchema = z.strictObject({
     .max(120 * 60_000)
     .optional(),
   resumePrompt: z.string().min(1).max(2_048).optional(),
-  coverageSchema: z.record(z.string(), z.unknown()).optional(),
   coordination: z.enum(["solo", "cooperative"]).optional(),
   outputKind: z.literal("verification").optional(),
   lab: z
@@ -1327,17 +1315,14 @@ function sandboxCommand(
           resumeArgs: codexResumeArgs(run, grant, login),
           resumePrompt: run.resumePrompt ?? run.prompt,
         }),
-    stdin:
-      run.campaignInput.history.mode === "catalog"
-        ? `${run.prompt}\n\nPublic history catalog (records strictly before the cutoff):\n${canonicalJson(run.campaignInput.history)}`
-        : run.prompt,
+    stdin: run.prompt,
     supportFiles: [
       {
         path: "/opt/codex-support/report-schema.json",
         content: JSON.stringify(
           run.outputKind === "verification"
             ? verificationReportJsonSchema
-            : reportJsonSchemaFor(run.coverageSchema),
+            : reportJsonSchema,
         ),
       },
     ],

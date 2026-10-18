@@ -470,8 +470,6 @@ async function harness(
   const prompts: string[] = [];
   const transportRuns: DiscoveryTransportRun[] = [];
   const promptDigests: string[] = [];
-  const entryIndexes: DiscoveryTransportRun["campaignInput"]["entryIndex"][] =
-    [];
   const histories: string[] = [];
   const coordinations: (DiscoveryTransportRun["coordination"] | undefined)[] =
     [];
@@ -582,7 +580,6 @@ async function harness(
         transportRuns.push(run);
         const call = prompts.push(run.prompt);
         promptDigests.push(run.campaignInput.promptDigest);
-        entryIndexes.push(run.campaignInput.entryIndex);
         histories.push(run.campaignInput.history.mode);
         coordinations.push(run.coordination);
         expirations.push(run.expiresAt);
@@ -676,23 +673,6 @@ async function harness(
           leads: options.leadsOnCalls?.[call] ?? [],
           examined: "synthetic",
           unexamined: "none",
-          ...(run.coverageSchema === undefined
-            ? {}
-            : {
-                coverage: {
-                  indexDigest: run.prompt.match(
-                    /Index digest: (sha256:[a-f0-9]{64})/,
-                  )?.[1],
-                  incomplete: run.prompt.includes("Incomplete: true"),
-                  entries: [
-                    ...run.prompt.matchAll(/^- (e-[1-9][0-9]*):/gm),
-                  ].map((match) => ({
-                    id: match[1],
-                    status: "observed",
-                    reason: null,
-                  })),
-                },
-              }),
         };
         const attachment = await attachments.put(
           "findings",
@@ -880,7 +860,6 @@ async function harness(
     prompts,
     transportRuns,
     promptDigests,
-    entryIndexes,
     histories,
     coordinations,
     expirations,
@@ -1519,8 +1498,8 @@ describe("harness CLI vertical slice", () => {
     ).toBe(false);
   });
 
-  it("runs source-first without appending the entry catalogue", async () => {
-    const { run, configPath, prompts, entryIndexes, ledger } = await harness({
+  it("runs source-first and records no entry index on the run (ADR 0034)", async () => {
+    const { run, configPath, prompts, ledger } = await harness({
       entryPoints: true,
     });
     const campaign = await run(
@@ -1536,14 +1515,13 @@ describe("harness CLI vertical slice", () => {
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).not.toContain("## Entry points");
     expect(prompts[0]).toContain("All files under /workspace/main.");
-    expect(entryIndexes).toEqual([{ enabled: false }]);
     const started = ledger().read({
       campaignId: "campaign-index-default",
       type: "discovery-run-started",
     });
-    expect(started[0]?.event).toMatchObject({
-      configuration: { entryIndex: { enabled: false } },
-    });
+    expect(started[0]?.event.type).toBe("discovery-run-started");
+    if (started[0]?.event.type === "discovery-run-started")
+      expect(started[0].event.configuration).not.toHaveProperty("entryIndex");
   });
 
   it("runs one source-first WP2Shell Trial by default and records a zero-candidate conclusion", async () => {
@@ -1794,7 +1772,7 @@ describe("harness CLI vertical slice", () => {
     expect(prompts).toHaveLength(0);
   });
 
-  it("parses an explicit entryIndex false as wp2shell and rejects the old control mode and opt-in catalogue", () => {
+  it("rejects the deleted entryIndex and coverage keys and the old control mode (ADR 0034)", () => {
     const base = {
       schemaVersion: 1 as const,
       programmeBoundary: { version: "v1", text: "Synthetic" },
@@ -1802,8 +1780,15 @@ describe("harness CLI vertical slice", () => {
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
     };
     expect(
-      wordpressCampaignConfigSchema.parse({ ...base, entryIndex: false }),
-    ).toMatchObject({ mode: "wp2shell", entryIndex: false });
+      wordpressCampaignConfigSchema.safeParse({ ...base, entryIndex: false })
+        .success,
+    ).toBe(false);
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...base,
+        coverage: { maxUnvisitedRatio: 0.2 },
+      }).success,
+    ).toBe(false);
     // Owner decision 2026-10-18: the normal mode explores without a Lab.
     expect(wordpressCampaignConfigSchema.parse(base).discovery).toEqual({
       lab: "none",
@@ -1856,7 +1841,6 @@ describe("harness CLI vertical slice", () => {
     expect(production).toMatchObject({
       mode: "wp2shell",
       promptId: "wp2shell-bounty-v8",
-      entryIndex: false,
       runWallTimeMinutes: 120,
       stopRules: { maxRuns: 1, noFindingRuns: 1 },
     });

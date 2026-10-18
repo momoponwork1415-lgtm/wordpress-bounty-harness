@@ -69,11 +69,6 @@ const commonCampaignFields = {
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
   runWallTimeMinutes: z.number().positive().max(120).default(120),
-  coverage: z
-    .strictObject({
-      maxUnvisitedRatio: z.number().min(0).max(1).default(0.2),
-    })
-    .default({ maxUnvisitedRatio: 0.2 }),
   /** Host bounds: targets, per-target discovery runs and their memory budget. */
   resources: z
     .strictObject({
@@ -111,7 +106,6 @@ export const wordpressCampaignConfigSchema = z
     runWallTimeMinutes: z.number().gt(60).max(120).default(120),
     promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
     stopRules: singleTrialStop,
-    entryIndex: z.literal(false).default(false),
   })
   .superRefine((config, context) => {
     if (
