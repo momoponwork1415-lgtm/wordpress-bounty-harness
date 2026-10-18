@@ -40,7 +40,6 @@ function fakeProfile(overrides: Partial<CliProfile> = {}): CliProfile {
     reverify: unused("reverify"),
     stateDiffReader: unused("stateDiffReader"),
     httpEvidenceReader: unused("httpEvidenceReader"),
-    labUp: unused("labUp"),
     labDown: unused("labDown"),
     ...overrides,
   } as CliProfile;

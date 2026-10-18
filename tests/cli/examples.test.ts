@@ -40,10 +40,8 @@ it("starts the checked-in v8 campaign with one concurrent target on WordPress 7.
   ) as unknown;
   const config = wordpressCampaignConfigSchema.parse(source);
   expect(config).toMatchObject({
-    mode: "wp2shell",
     promptId: "wp2shell-bounty-v8",
     runWallTimeMinutes: 120,
-    stopRules: { maxRuns: 1, noFindingRuns: 1 },
   });
   expect(config.resources.maxConcurrentTargets).toBe(1);
   expect(config.wordpressVersion).toBe("7.1.3");
@@ -75,10 +73,8 @@ it.each(["3.3.1", "3.2.6"])(
     )) as Record<string, unknown>;
     expect(source).not.toHaveProperty("promptId");
     expect(wordpressCampaignConfigSchema.parse(source)).toMatchObject({
-      mode: "wp2shell",
       promptId: "wp2shell-bounty-v8",
       runWallTimeMinutes: 120,
-      stopRules: { maxRuns: 1, noFindingRuns: 1 },
     });
   },
 );

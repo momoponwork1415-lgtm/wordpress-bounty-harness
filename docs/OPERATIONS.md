@@ -138,7 +138,7 @@ harness continuous status --state <dir>
 - `run` は `select` → `campaign run --all` → 次の batch を回り続ける。実行履歴の正本は台帳で、`<state>/continuous.json` / `.pid` / `.log` は作業用、`.stop` は理由とともに解除まで残す停止指示。第 2 の journal、owner lease、host 共通 claim、crash 復旧の自動化は持たない。
 - 止まるのは operator の stop、候補枯渇（`exhausted`）、Programme 写しの 35 日超（`programme-stale`）、legacy JSON の欠落（`legacy-history-missing`）、例外 3 batch 連続（`errors`。mirror の鮮度 gate で `select` が止まったときも例外として数える、ADR 0037）、completed 0 の batch 3 連続（`no-progress`）の 6 つ。明示的な operator stop と他 5 つの理由は、理由付き停止マーカーを残して終了コード 0 で終え、systemd の `Restart=on-failure` では再起動しない。`OnFailure` はこれらの停止では発火しないため、停止の通知は `--notify` と `continuous status` の監視で行う。例外による crash は終了コード 1 で再起動対象。quota、拒否、ログイン失効（`waiting-login`）、disk 不足では止まらず待つ。
 - `status` は状態、pid、最後の例外、今日と今週の Trial 開始・completed・provider-limited・provider-refused・run-failed・Lab 失敗・unsettled、review queue と parked を出す。停止マーカーが残り pid が生きていれば `stopping`、pid が死んでいれば `stopped(<理由>)`、停止マーカーがなく memo だけ実行中なら `stale` と表示し、いずれも終了コード 1。`stop` は `<state>/continuous.stop` に `operator` を記録し、runner は次の対象の境界で止まる。停止マーカーは crash や systemd 再起動でも消えず、通常の `continuous run` は選定・campaign・Lab 掃除を始めない。
-- レビュー後または異常停止の原因を確認・修正した後は pid が消えたことを `continuous status` で確認し、systemd 運用なら `continuous resume --state <dir>` で停止マーカーを解除してから unit を起動する。手動運用なら `continuous run ... --resume` で解除と起動を一度に行える。実行中 pid がある間の再開は拒否する。systemd unit の `ExecStart` に `--resume` を固定しない。SIGINT / SIGTERM は進行中の対象を drain して終了するが、停止マーカーは残さない。runner は `campaign run --selection <path>` と同じく campaign 設定の `selectionPolicyPath` を差し替えて走る。各 batch の後の Lab 残骸の掃除は、`lab up` の Lab か `lab up --for-review` が生きている間は行わない。
+- レビュー後または異常停止の原因を確認・修正した後は pid が消えたことを `continuous status` で確認し、systemd 運用なら `continuous resume --state <dir>` で停止マーカーを解除してから unit を起動する。手動運用なら `continuous run ... --resume` で解除と起動を一度に行える。実行中 pid がある間の再開は拒否する。systemd unit の `ExecStart` に `--resume` を固定しない。SIGINT / SIGTERM は進行中の対象を drain して終了するが、停止マーカーは残さない。runner は `campaign run --selection <path>` と同じく campaign 設定の `selectionPolicyPath` を差し替えて走る。各 batch の後の Lab 残骸の掃除は、旧形の `lab up` が記録した Lab か `lab up --for-review` が生きている間は行わない。
 - install 下限の切り下げは方針の `cascade` が宣言し、runner も `select` も人手なしに同じ規則で動く（ADR 0037 の 2026-10-19 追記）。主帯 100k–1M で `--minimum`（runner は 1）に満たないときだけ、`cascade` の段を順に試す: 50k → 30k → ≥1M かつ paying class 記録 ≥2（所有者の順。報告 §5.4 の ≥1M 先行は採らない）。各段は主方針に段の値を重ねたもので、`excludedAuthors` は ≥1M でも効く。段を使った選定は選定レポートと `target-selected` に `cascadeStep`（1 始まり）を残し、主帯は無印。全段で 0 のときだけ `exhausted`。
 - 帯ごとの収率は台帳から読む: `target-selected` の `cascadeStep` を campaignId と snapshotDigest で `discovery-run-started`（Trial）と scope 内の `finding-recorded` に結び、段ごとに Finding / Trial を数える（`sqlite3 ledger.sqlite "select json_extract(event_json,'$.cascadeStep') step, count(*) from ledger_events where event_type='target-selected' group by step"` が段ごとの選定数）。この数字が出るまで段の順は変えない。
 - 前提: 単一 host、単一運用者、本番の `--state` は 1 つ。硬い総 token 枠は置かず、provider の quota と operator の stop だけで止まる。未 merge branch で回した Trial は本番の分母に混ぜない。起動は systemd user unit（`loginctl enable-linger`、`WorkingDirectory=<本番 checkout>`、`Restart=on-failure`、`RestartSec=300`、`TimeoutStopSec=4500`、`KillMode=mixed`、`OnFailure=<通知 unit>`）か `nohup`。本番 checkout での `pnpm build` は `continuous stop` の後だけ。
@@ -236,7 +236,7 @@ node scripts/export-legacy-slugs.mjs \
 
 旧 `--state` の台帳では探索開始のある slug を `started` に畳み込む。`--report` には下限 30,000 の方針で別の state に `select` した選定レポートを渡す。標準エラーに下限 100,000 / 50,000 / 30,000 ごとの列挙可能数と残り候補数が出る。本番の台帳には触れない。
 
-旧 `scripts/prepare-pilot-selection.mjs` は `harness select` の薄い呼び出しとして残す。`--host`、`--state`、`--config` を受け取り、候補と順位は作らない。
+旧 `scripts/prepare-pilot-selection.mjs` は 2026-10-19 に削除した。同じことは `harness --host <host.json> --state <state> select --config src/profiles/wordpress/policy/selection.json` で行う。
 
 スコア内訳、除外理由、候補一覧の取得元と観測時刻は標準出力と Git 外の `selection-report` に残る。最初の Snapshot 固定に失敗した候補は `snapshot-unavailable` として除外し、`target-skipped` から対象選定記録・選定レポート・Private Evidence の診断を digest 参照できるようにする。台帳の理由は短い定型コードだけにする。`target-selected` は固定済み Snapshot digest と `target-selection` の Private Evidence を参照する。次の `campaign run --all` は同じ方針 digest の最新バッチを使い、Snapshot が変われば止まる。公開履歴は host 設定 `wordfenceHistory` の mirror から slug 単位の件数と最新公開日だけを採点に使い（重みは上の列挙の段落と `policy/selection.md`。現行は `history: 0`、`historyPayingClass: 1`、`recordRecency: 1`）、記録の内容は読まず探索にも渡さない。mirror の `last_successful_at` が方針の `maximumHistoryAgeDays`（既定 2 日、一時 14 日）より古い、state と DB が食い違う、host に mirror が無いときは `select` が候補を観測せずに止まる。選定レポートと `target-selection.json` に mirror の時点と digest、件数、最新公開日が残る（ADR 0037）。
 
@@ -263,13 +263,12 @@ node scripts/recover-child-reports.mjs \
 ### 手で確かめるためのLab
 
 ```
-harness lab up --campaign <id> --finding <id> --config <campaign.json> [--port 8080] [--db-port 3307]
+harness lab up --for-review --campaign <id> --finding <id>
 harness lab down [--config <path>]
 ```
 
-- `lab up` は検証と同じ Lab 供給（runsc、同じ scenario、依存 plugin、固定 Snapshot）を立て、runsc の gateway container で `127.0.0.1:<port>` に WordPress を、Lab が DB を公開する設定なら `127.0.0.1:<db-port>` に read-only DB を出す。攻撃者用アカウントと DB 接続情報を表示し、台帳には何も書かない。Snapshot が Finding と違えば Lab を起動せずに止まる。
-- 画面出力の `setup` 行で、検証時の Lab setup digest と同じかが分かる。
-- `lab down` は `lab up` が記録した 1 つの Lab の container / network / volume だけを削除し、残存が 0 でなければ終了コード 1 で残りを列挙する。同時に動く campaign の Lab には触らない。
+- 手で再現する Lab は `lab up --for-review` で立てる（上の review の表の 7 行目）。`--config` を取る旧形の `lab up` は 2026-10-19 に削除した。
+- `lab down` は旧形の `lab up` が記録した 1 つの Lab の container / network / volume だけを削除し、残存が 0 でなければ終了コード 1 で残りを列挙する。同時に動く campaign の Lab には触らない。
 
 ### Lab / brokerの残骸
 

@@ -1327,20 +1327,6 @@ describe("Codex native agent runtime", () => {
       expect(commands[0]?.args).toContain("apps");
       expect(commands[0]?.args).toContain("remote_plugin");
       expect(commands[0]?.args).not.toContain("--ephemeral");
-      const screening = await runtime.execute({
-        ...run,
-        runId: "screening-solo",
-        profile: cooperativeProfile,
-        coordination: "solo",
-        campaignInput: {
-          ...run.campaignInput,
-          modelProfileDigest: cooperativeProfile.digest,
-        },
-      });
-      expect(screening.receipt.terminal).toBe("completed");
-      expect(commands[1]?.args).toContain("features.multi_agent=false");
-      expect(commands[1]?.args).not.toContain("agents.max_threads=4");
-      expect(commands[1]?.researchMount).toBeUndefined();
       expect(result.researchArtifact).toMatchObject({
         attachment: {
           kind: "research",

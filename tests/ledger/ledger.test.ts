@@ -1137,6 +1137,32 @@ describe("Ledger public interface", () => {
     });
   });
 
+  it("still reads old report-recovery events and accepts runs without an assignment unit", async () => {
+    const { ledger } = await fixture();
+    expect(
+      await ledger.append({
+        ...common("discovery-report-recovered-run-old-wordpress-candidate-v1"),
+        type: "discovery-report-recovered",
+        runId: "run-old",
+        sourceDiagnosticDigest: revision,
+        reportArtifactDigest: labSetup,
+        parserVersion: "wordpress-candidate-v1",
+      }),
+    ).toEqual({ status: "appended" });
+    expect(
+      await ledger.append({
+        ...common("start-run-new"),
+        type: "discovery-run-started",
+        runId: "run-new",
+        history: { mode: "none" },
+        configuration: { promptVariant: "wp2shell-bounty-v8" },
+      }),
+    ).toEqual({ status: "appended" });
+    expect(
+      ledger.read({ campaignId: "campaign-1" }).map(({ event }) => event.type),
+    ).toEqual(["discovery-report-recovered", "discovery-run-started"]);
+  });
+
   it("still reads old entry-index runs with catalog history, coverage artifacts and incomplete(depth) (ADR 0034)", async () => {
     const { ledger, artifactStore } = await fixture();
     const coverage = await evidence(artifactStore);

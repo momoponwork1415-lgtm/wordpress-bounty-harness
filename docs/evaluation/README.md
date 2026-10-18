@@ -6,13 +6,13 @@
 
 coreは開発セットで使ったdigest固定の公式WordPress imageから、未起動containerを通じて取り出した。`wp-includes/version.php` は6.8.3で、`sourceDigest` はDependency Snapshot用のcanonical manifest digest。各caseでのpluginの起動、追加依存、設定、core 6.8.3との互換性はこの旧資料だけでは確認できない。#127の実行可否と結果は下記カタログと日付付き評価に記録する。
 
-Unlimited Elements 2.0.16 だけは 2026-10-12 の後続確認で `pluginDependencies` に Elementor 4.2.0 の公式版付き ZIP と展開後の tree digest を追加した。全体の `observedAt` は旧資料の観測日で、この依存の観測日は項目内に記録した。対象のヘッダーは Elementor 4.2.0 までを tested up to と記し、Elementor 側のヘッダーは WordPress 6.8 以上を要求する。`pnpm build && node scripts/preflight-unlimited-elements-sources.mjs --state <Git外の絶対パス> --host <host.jsonの絶対パス>` は公式 SVN の指定 revision を export し、対象・Elementor・Core の pin を照合して同じ Snapshot に固定する。これは対象を起動しない静的 preflight であり、Lab の動作・探索・既知経路の再発見は証明しない。
+Unlimited Elements 2.0.16 だけは 2026-10-12 の後続確認で `pluginDependencies` に Elementor 4.2.0 の公式版付き ZIP と展開後の tree digest を追加した。全体の `observedAt` は旧資料の観測日で、この依存の観測日は項目内に記録した。対象のヘッダーは Elementor 4.2.0 までを tested up to と記し、Elementor 側のヘッダーは WordPress 6.8 以上を要求する。公式 SVN の指定 revision を export して対象・Elementor・Core の pin を照合していた静的 preflight の `scripts/preflight-unlimited-elements-sources.mjs` は 2026-10-19 に削除した（再開時は Git 履歴から戻す）。
 
 ## #127 再発見カタログ
 
 [`rediscovery-catalog-pins.json`](rediscovery-catalog-pins.json) には、Git 外のmanifestのSHA-256と各caseの脆弱版・修正版だけを置く。2026-10-16 の所有者決定で、catalog は所有者が発見者の公開記録だけにした（16 の対象版、19 記録。一覧は [docs/agents/measurement.md](../agents/measurement.md) の開発セット）。修正版ZIPのbytesとdigest、公開記録IDと日付はGit外のmanifestにあり、探索入力には使わない。
 
-`scripts/build-rediscovery-catalog.mjs` は、Git外のcase入力（`schemaVersion: 1`、`cases` の各項目は `caseId` / `slug` / `vulnerableVersion` / `cve`）、Wordfence mirror DBとstate、`public-source-pins.json`、Git外の出力先、Git側のpin出力先を `--cases` / `--mirror` / `--mirror-state` / `--source-pins` / `--private-dir` / `--pin-output` で受け取る。WordPress.orgの版一覧と実際に取得できるZIPを照合し、修正版archiveをGit外に保存する。
+このpinとmanifestを作った `scripts/build-rediscovery-catalog.mjs` は 2026-10-19 に削除した。catalog を作り直すときは Git 履歴から戻す。
 
 `scripts/report-rediscovery-cases.mjs --state <Git外のstate> --campaign <id>` は台帳から探索の完了・候補・検証理由・修正版対照・人間が個別に開いたFinding数を集計する。`review` の一覧表示は「開いた」に数えず、台帳の `review-item-opened` event だけを数える。この event を書いていた `review inspect` は 2026-10-18 に削除したので、以後の campaign では 0 になる。
 

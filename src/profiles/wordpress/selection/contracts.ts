@@ -36,15 +36,9 @@ const commonSelectionPolicy = {
   maximumTargets: z.number().int().positive(),
   excludedAuthors: z.array(z.string().min(1)),
   excludedSlugs: z.array(slugSchema),
-  /** Legacy (ADR 0032 Q5): tag weights are readable for old policies but no longer used by the current one. */
-  surfaceTagWeights: z.record(z.string(), z.number().nonnegative()).optional(),
-  /** Legacy (ADR 0032 Q5): High Threat tag lists are readable for old policies but no longer used by the current one. */
-  highThreatTags: z.array(z.string().min(1)).optional(),
   scoreWeights: z.strictObject({
     installations: z.number().nonnegative(),
     recency: z.number().nonnegative(),
-    surface: z.number().nonnegative().optional(),
-    highThreat: z.number().nonnegative().optional(),
     /** Public advisory count in the window, from the local mirror (ADR 0037). 0 or absent: the mirror is not opened. */
     history: z.number().nonnegative().optional(),
     /** One point per paying-class record in the window, up to `historyPayingClassCap` (ADR 0037, 2026-10-19 addendum). */
@@ -62,13 +56,6 @@ const commonSelectionPolicy = {
   maximumHistoryAgeDays: z.number().positive().optional(),
   /** Signal class names (primitive or terminal kind) that count as a paying class (default in `advisoryHistoryDefaults`). */
   historyPayingClasses: z.array(z.string().min(1).max(64)).max(32).optional(),
-  /** Legacy (ADR 0032 Q6): per-target run budgets were never effective in production; the campaign stop rule decides. */
-  runBudget: z
-    .strictObject({
-      default: z.number().int().positive().max(40),
-      highThreat: z.number().int().positive().max(40),
-    })
-    .optional(),
   /** Manual pin: select this version instead of the observed stable version. */
 } as const;
 
@@ -237,9 +224,9 @@ export interface WordPressTargetAdvisoryHistory {
 export interface WordPressTargetSelection extends TargetSelection {
   readonly slug: string;
   readonly activeInstallations: number;
-  /** A public tag matched the policy's High Threat surface list. */
-  readonly highThreatSurface: boolean;
-  /** Legacy upper bound on discovery runs; absent for policies written after ADR 0032. */
+  /** Legacy, read only: stored selections written before 2026-10-19 carry the High Threat tag match. */
+  readonly highThreatSurface?: boolean | undefined;
+  /** Legacy, read only: stored selections written before 2026-10-19 may carry a per-target run budget. */
   readonly runBudget?: number | undefined;
   /** The WordPress.org tag listing that nominated this target (ADR 0032 Q3), absent for popular or manual nominations. */
   readonly candidateTag?: string | undefined;
@@ -254,8 +241,10 @@ export interface WordPressTargetSelection extends TargetSelection {
   readonly scoreBreakdown: {
     readonly installations: number;
     readonly recency: number;
-    readonly surface: number;
-    readonly highThreat: number;
+    /** Legacy, read only: tag-surface points of selections written before 2026-10-19. */
+    readonly surface?: number | undefined;
+    /** Legacy, read only: High Threat points of selections written before 2026-10-19. */
+    readonly highThreat?: number | undefined;
     readonly history: number;
     /** Absent in records written before ADR 0037. */
     readonly historyPayingClass?: number | undefined;
@@ -283,7 +272,9 @@ export const wordPressTargetSelectionSchema: z.ZodType<WordPressTargetSelection>
       digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
     }),
     activeInstallations: z.number().int().nonnegative(),
-    highThreatSurface: z.boolean(),
+    /** Legacy, read only (old stored selections). */
+    highThreatSurface: z.boolean().optional(),
+    /** Legacy, read only (old stored selections). */
     runBudget: z.number().int().positive().max(40).optional(),
     candidateTag: slugSchema.optional(),
     versionPublishedAt: z.iso.datetime({ offset: true }).optional(),
@@ -298,8 +289,10 @@ export const wordPressTargetSelectionSchema: z.ZodType<WordPressTargetSelection>
     scoreBreakdown: z.strictObject({
       installations: z.number().finite(),
       recency: z.number().finite(),
-      surface: z.number().finite(),
-      highThreat: z.number().finite(),
+      /** Legacy, read only (old stored selections). */
+      surface: z.number().finite().optional(),
+      /** Legacy, read only (old stored selections). */
+      highThreat: z.number().finite().optional(),
       history: z.number().finite(),
       historyPayingClass: z.number().finite().optional(),
       recordRecency: z.number().finite().optional(),

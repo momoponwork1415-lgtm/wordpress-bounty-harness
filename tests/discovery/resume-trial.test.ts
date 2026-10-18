@@ -337,9 +337,10 @@ describe("resumability rule (ADR 0036)", () => {
       configuration: {
         promptVariant: "wp2shell-bounty-v8",
         promptDigest,
-        assignmentUnit: "plugin",
       },
     });
+    // An old start event's assignment unit is read but not carried into the segment.
+    expect(assessment.plan.configuration).not.toHaveProperty("assignmentUnit");
     expect(assessment.plan.resume.threadId).toBe(ROOT_THREAD);
     expect(assessment.plan.resume.sessions.map((file) => file.path)).toEqual([
       ROOT_PATH,

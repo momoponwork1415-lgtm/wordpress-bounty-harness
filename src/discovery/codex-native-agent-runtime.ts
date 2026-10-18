@@ -306,8 +306,8 @@ export interface DiscoveryTransportRun {
    * segment this run is. Children listed here were recorded by earlier segments.
    */
   readonly resume?: DiscoveryResumeInput;
-  /** Screening uses one agent even when the runtime profile permits children. */
-  readonly coordination?: "solo" | "cooperative";
+  /** Discovery requires the cooperative profile; absent, a run is cooperative whenever the profile permits children. */
+  readonly coordination?: "cooperative";
   /** Verification uses the same isolated transport with a different sealed report. */
   readonly outputKind?: "verification";
   readonly lab?: {
@@ -387,7 +387,7 @@ const discoveryTransportRunSchema = z.strictObject({
     .optional(),
   resumePrompt: z.string().min(1).max(2_048).optional(),
   resume: discoveryResumeInputSchema.optional(),
-  coordination: z.enum(["solo", "cooperative"]).optional(),
+  coordination: z.literal("cooperative").optional(),
   outputKind: z.literal("verification").optional(),
   lab: z
     .strictObject({
@@ -1176,7 +1176,6 @@ function incompleteExecution(
 
 function cooperativeRun(run: DiscoveryTransportRun): boolean {
   return (
-    run.coordination !== "solo" &&
     run.outputKind !== "verification" &&
     (run.profile.subagent.modelId !== "unavailable" ||
       run.profile.subagent.effort !== "unavailable")
