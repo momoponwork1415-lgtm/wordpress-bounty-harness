@@ -2128,6 +2128,47 @@ describe("harness CLI vertical slice", () => {
     ).toHaveLength(1);
   });
 
+  it("runs the checked-in dispatch example without an explicit campaign ID", async () => {
+    const { run, ledger, prompts, docker } = await harness({
+      candidates: ["translatepress-multilingual"],
+      entryPoints: true,
+      zeroFindings: true,
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "translatepress-multilingual",
+      "--config",
+      "examples/campaign-dispatch.json",
+    );
+    expect(result.code).toBe(0);
+    const starts = ledger().read({ type: "discovery-run-started" });
+    expect(starts.length).toBeGreaterThan(0);
+    expect(new Set(starts.map(({ event }) => event.campaignId)).size).toBe(1);
+    expect(result.stdout).toContain(`campaign ${starts[0]!.event.campaignId}`);
+    expect(
+      starts.every(
+        ({ event }) =>
+          event.type === "discovery-run-started" && event.runKind === "task",
+      ),
+    ).toBe(true);
+    expect(prompts).toHaveLength(starts.length);
+    expect(docker).toHaveLength(0);
+  });
+
+  it("still requires --campaign for a cooperative campaign", async () => {
+    const { run, configPath } = await harness();
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("--campaign");
+  });
+
   it("uses disjoint campaign modes and retains the short objective comparison arm", () => {
     const base = {
       schemaVersion: 1 as const,

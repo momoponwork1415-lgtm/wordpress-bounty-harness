@@ -93,6 +93,50 @@ it.each(["3.3.1", "3.2.6"])(
   },
 );
 
+it("loads the checked-in dispatch campaign and pins its development target", async () => {
+  const source = JSON.parse(
+    await readFile(
+      join(
+        import.meta.dirname,
+        "..",
+        "..",
+        "examples",
+        "campaign-dispatch.json",
+      ),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  expect(source).not.toHaveProperty("stopRules");
+  const config = wordpressCampaignConfigSchema.parse(source);
+  expect(config).toMatchObject({
+    mode: "dispatch",
+    discovery: { lab: "none" },
+    promptId: "wp2shell-bounty-v5",
+    entryIndex: true,
+    dispatch: {
+      entriesPerTask: 6,
+      maxTasksPerTarget: 24,
+      taskWallMinutes: 10,
+      taskMaxRequests: 150,
+      concurrency: 4,
+    },
+    resources: { maxConcurrentRuns: 4, maxConcurrentTargets: 1 },
+    selectionPolicyPath: "examples/translatepress-3.2.6/selection.json",
+  });
+  const production = wordpressCampaignConfigSchema.parse(
+    await example("campaign-production-v1.json", "3.2.6"),
+  );
+  expect(config.programmeBoundary).toEqual(production.programmeBoundary);
+  const policy = wordPressSelectionPolicySchema.parse(
+    await example("selection.json", "3.2.6"),
+  );
+  if (!("candidateSlugs" in policy)) throw new Error("Expected manual policy");
+  expect(policy.candidateSlugs).toEqual(["translatepress-multilingual"]);
+  expect(policy.pinnedVersions).toEqual({
+    "translatepress-multilingual": "3.2.6",
+  });
+});
+
 describe("TranslatePress 3.3.1 development-set example", () => {
   it("keeps the short prompt comparison arm and bounds the cooperative default at 60 minutes", async () => {
     const previous = wordpressCampaignConfigSchema.parse(

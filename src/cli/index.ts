@@ -290,6 +290,7 @@ const USAGE = [
   "usage: harness [--state <dir>] <command>",
   "  select --config <path> [--minimum <n>]",
   "  campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--repeat <n>] [--retry-incomplete]",
+  "  campaign run <slug> --config <path> (dispatch: creates a campaign ID)",
   "  continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--verify-concurrency <n>] [--notify <command>] [--resume]",
   "  continuous stop",
   "  continuous resume",
@@ -879,9 +880,17 @@ export async function runCli(
           throw new UsageError(
             "campaign run takes exactly one of <slug> or --all",
           );
+        const configPath = resolve(required(values.config, "config"));
+        const autoCampaign =
+          values.campaign === undefined &&
+          (JSON.parse(await readFile(configPath, "utf8")) as { mode?: unknown })
+            .mode === "dispatch";
+        const campaignId = autoCampaign
+          ? `dispatch-${state.newId()}`
+          : required(values.campaign, "campaign");
         const summary = await environment.profile.runCampaign(state, {
-          campaignId: required(values.campaign, "campaign"),
-          configPath: resolve(required(values.config, "config")),
+          campaignId,
+          configPath,
           target,
           repeat,
           retryIncompleteVerifications: values["retry-incomplete"] === true,
@@ -889,6 +898,7 @@ export async function runCli(
             ? {}
             : { selectionPolicyPath: resolve(values.selection) }),
         });
+        if (autoCampaign) io.stdout(`campaign ${campaignId}`);
         for (const skipped of summary.skipped)
           io.stderr(
             `skipped ${skipped.targetId} ${skipped.version} at ${skipped.stage}: ${skipped.message}`,
