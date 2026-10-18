@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.21、2026-10-19。設計判断はこの文書と [ADR](adr/) に置く。旧リポジトリの [Issue 221](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317) は経緯の資料であり、現在の探索主経路は [ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) と [ADR 0033](adr/0033-minimum-exploration-and-pinned-dependency-sources.md) に従う。現行コードとの差分と実装順は [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md)。TranslatePressでの最小ベンチマークと本番移行は [TRANSLATEPRESS-BENCHMARK.md](TRANSLATEPRESS-BENCHMARK.md)。
+版: v0.21、2026-10-19。設計判断はこの文書と [ADR](adr/) に置く。旧リポジトリの [Issue 221](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317) は経緯の資料であり、現在の探索主経路は [ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) と [ADR 0033](adr/0033-minimum-exploration-and-pinned-dependency-sources.md) に従う。[IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) は 2026-10-10 時点の作業計画の記録で、今の Step と作業順は [DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節。TranslatePressでの最小ベンチマークと本番移行は [TRANSLATEPRESS-BENCHMARK.md](TRANSLATEPRESS-BENCHMARK.md)。
 
 ## 1. 目的と指標
 

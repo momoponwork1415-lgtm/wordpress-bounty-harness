@@ -1,5 +1,7 @@
 # システム図解（2026-10-16 版）
 
+> **2026-10-19 時点で図と違う点**（図は描いた日の記録。正本は SPEC と ADR）: (1) 探索は既定で Lab を付けず（`discovery.lab: none`、PR #365）、検証は後から Finding 単位に Lab を立てて `verify next`（Codex Verifier）か `verify next --handoff`（skill `wbh-verify`、ADR 0035）で行う。(2) 新規探索は `wp2shell-bounty-v8` だけで、Root＋最大 4 子、wall 120 分・最低 60 分。`provider-cyber-policy` で止まった Root は操作者の `campaign resume` で同じ Trial の segment として再開する（ADR 0033、0036）。(3) 選定は主帯 100k–1M を mirror の paying class 件数・最終記録の新しさ・install で順位付けし、尽きたら cascade 50k → 30k → ≥1M（ADR 0037）。(4) Programme Boundary 外と判別の付きにくい 5 分類は `finding-parked`（ADR 0032）。(5) 入口索引と coverage は削除（ADR 0034）。(6) `owner-approved` は委任済みの AI が付ける（ADR 0032 の 2026-10-18 節）。
+
 正本は [SPEC](SPEC.md) と [ADR](adr/)。食い違えば正本が勝つ。この文書は規則を足さない。所有者が全体と細部の動きを図で追えるように、3 段のズームで描く。流れ図は [ARCHITECTURE](ARCHITECTURE.md)、境界と統治は [DESIGN-DIAGRAMS](DESIGN-DIAGRAMS.md)、開発ループは [FACTORY](FACTORY.md) にあり、ここでは重ねない。
 
 - 第 1 段: 全体 1 枚
@@ -536,9 +538,9 @@ flowchart TB
 | Private Evidence | 本文（候補、HTTP 記録、画面、認証情報、未公開の発見）を置く Git 外の保管先。台帳から digest で参照 |
 | funnel | 台帳から出す「段ごとの件数」。候補 → 受理 → 検証 → 確認 → レビュー → 提出 → 結果と、各段で何件残ったかを 1 行で示す |
 | review export | 人間がレビューする材料を 1 つの JSON にまとめた出力。skill はこれだけを読む |
-| skill | 所有者が使う手順書付きの AI 補助。レビュー、重複照合、報告文の 3 本。台帳を直接は書かない |
-| continuous run | 選定から検証までを対象 5 件ずつ繰り返す無人運転。止まるのは決められた 7 つの理由だけ |
-| owner-approved | agent に渡る文章と判定器などの重要 path に付ける、所有者が読んで承認した印。これが無いと merge しない |
+| skill | 所有者または AI session が使う手順書付きの AI 補助。レビュー、重複照合、報告文、検証（`wbh-verify`）の 4 本。台帳を直接は書かない |
+| continuous run | 選定から検証までを対象 5 件ずつ繰り返す無人運転。止まるのは決められた 6 つの理由だけ |
+| owner-approved | agent に渡る文章と判定器などの重要 path に付ける印。これが無いと merge しない。2026-10-18 以降は委任済みの AI が差分を確認して付ける |
 
 ## 図と正本の対応
 

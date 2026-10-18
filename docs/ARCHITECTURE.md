@@ -1,5 +1,7 @@
 # アーキテクチャ図
 
+> **2026-10-19 時点で図と違う点**（図は描いた日の記録。正本は SPEC と ADR）: (1) 探索は既定で Lab を付けず（`discovery.lab: none`、PR #365）、検証は後から Finding 単位に Lab を立てて `verify next`（Codex Verifier）か `verify next --handoff`（skill `wbh-verify`、ADR 0035）で行う。(2) 新規探索は `wp2shell-bounty-v8` だけで、Root＋最大 4 子、wall 120 分・最低 60 分。`provider-cyber-policy` で止まった Root は操作者の `campaign resume` で同じ Trial の segment として再開する（ADR 0033、0036）。(3) 選定は主帯 100k–1M を mirror の paying class 件数・最終記録の新しさ・install で順位付けし、尽きたら cascade 50k → 30k → ≥1M（ADR 0037）。(4) Programme Boundary 外と判別の付きにくい 5 分類は `finding-parked`（ADR 0032）。(5) 入口索引と coverage は削除（ADR 0034）。(6) `owner-approved` は委任済みの AI が付ける（ADR 0032 の 2026-10-18 節）。
+
 現行の目標構成を示す。規則は [SPEC](SPEC.md) と [ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md)。2026-10-10 時点の実装記録は [実装計画](IMPLEMENTATION-PLAN.md)、本番へ進む条件は [TranslatePressベンチマーク](TRANSLATEPRESS-BENCHMARK.md)。
 
 ## 0. 開発から本番への切り替え
