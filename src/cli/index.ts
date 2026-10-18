@@ -612,6 +612,7 @@ export function formatQueue(
   )
     lines.push("review queue is empty");
   lines.push(`incomplete by reason: ${counts(queue.incompleteByReason)}`);
+  lines.push(`precondition class: ${counts(queue.preconditionClassCounts)}`);
   lines.push(
     `retry candidates by reason: ${counts(queue.retryPendingByReason)}`,
   );
@@ -933,7 +934,7 @@ export async function runCli(
         return 0;
       }
       case "review parked": {
-        // Programme Boundary 外に置いた Finding の 1 行一覧。ラベル付けミスの安全網（#185）。
+        // Parked Findings remain inspectable by reason without joining the review queue.
         const parked = state.ledger.read({
           ...campaignOrSince(values),
           type: "finding-parked",
@@ -960,7 +961,9 @@ export async function runCli(
                 property = parsedFinding.data.brokenProperty;
             }
           }
-          print([`parked  ${event.category}  ${event.findingId}  ${property}`]);
+          print([
+            `parked  ${event.category}  ${event.findingId}  ${property}  reason: ${event.reason}`,
+          ]);
         }
         return 0;
       }

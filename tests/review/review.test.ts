@@ -137,6 +137,43 @@ const ref = {
 };
 
 describe("review public interface", () => {
+  it("excludes a later parked Finding and counts its latest precondition class", async () => {
+    const { review, ledger } = await fixture();
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: ref.campaignId,
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-08T01:00:00Z",
+      findingId: ref.findingId,
+    };
+    await ledger.append({
+      ...base,
+      identity: "classified-admin",
+      type: "finding-precondition-classified",
+      preconditionClass: "admin-configuration",
+    });
+    await ledger.append({
+      ...base,
+      identity: "parked-admin",
+      type: "finding-parked",
+      runId: "run-1",
+      category: "sqli",
+      reason: "admin-configuration-precondition",
+      preconditionClass: "admin-configuration",
+    });
+    const queue = review.queue({ campaignId: ref.campaignId });
+    expect(queue.items).toHaveLength(0);
+    expect(queue.preconditionClassCounts).toMatchObject({
+      "admin-configuration": 1,
+      unknown: 0,
+    });
+    expect(ledger.funnel(ref.campaignId)).toMatchObject({
+      parked: 1,
+      raw: 0,
+      accepted: 0,
+    });
+  });
+
   it("opens the confirmed reproduction package through the review interface", async () => {
     const { review } = await fixture();
     const opened = await review.openReproductionPackage({ ref });

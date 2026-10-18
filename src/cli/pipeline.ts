@@ -56,6 +56,9 @@ export interface CampaignPipeline<
     readonly isProgrammeImpact?: NonNullable<
       DiscoveryOptions["isProgrammeImpact"]
     >;
+    readonly classifyFindingPrecondition?: NonNullable<
+      DiscoveryOptions["classifyFindingPrecondition"]
+    >;
     readonly normalizeCandidate?: NonNullable<
       DiscoveryOptions["normalizeCandidate"]
     >;
@@ -290,6 +293,15 @@ export async function runCampaignPipeline<
     if (snapshotDigest === undefined || !concludedSnapshots.has(snapshotDigest))
       return false;
     return (findingsBySnapshot.get(snapshotDigest) ?? []).every((findingId) => {
+      if (
+        ledger.read({
+          campaignId,
+          findingId,
+          type: "finding-parked",
+          limit: 1,
+        }).length > 0
+      )
+        return true;
       const history =
         verificationHistory.get(`${snapshotDigest}\0${findingId}`) ?? [];
       const previous = history.at(-1);
@@ -580,6 +592,15 @@ export async function runCampaignPipeline<
       };
       for (const { event } of findings) {
         if (event.type !== "finding-recorded") continue;
+        if (
+          ledger.read({
+            campaignId,
+            findingId: event.findingId,
+            type: "finding-parked",
+            limit: 1,
+          }).length > 0
+        )
+          continue;
         // The Verifier shares the subscription; a usage limit stops the campaign.
         if (stopped === "provider-limit") break;
         const history = earlier.filter(

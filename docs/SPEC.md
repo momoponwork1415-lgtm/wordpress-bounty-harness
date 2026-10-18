@@ -91,6 +91,8 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 ## 7. Verificationの仕様
 
 - Verifier: 新しいコンテナ。渡すのはFinding、固定source pack、Lab endpoint、低権限account、RO DB account、Lab Setup（profileの版付き通常機能シナリオIDを含む、ADR 0020・0026）と、impactに応じてLabが検証時に発行したcanary。Findingの前提はplugin非依存の通常利用scenarioを優先するcatalogueと照合し、不足は `incomplete(precondition)` の次の手に次のscenario IDを書く。`incomplete(precondition)` の理由コードを台帳から、次の手の本文をPrivate Evidenceから集計し、頻出前提をcatalogueへ追加する。探索の会話履歴と作業領域、ブラウザ、管理者セッションは渡さない。役割はrecipeの環境不備の修正と反証に限り、再探索はしない。被害者側の操作はHarness所有のLab観測器が型で制限した手順で実行する。
+
+WordPress profile は Finding の `configurationPrecondition` と Verifier attachment の `precondition` を Harness 所有の決定論的規則で `default` / `common-usage` / `admin-configuration` / `unknown` に分ける。既定値の宣言と版付き通常機能 scenario catalogue に照合し、明示された特定値や非既定の管理者設定だけを `admin-configuration-precondition` で `finding-parked` にする。一般利用は対応 scenario ID への有界再検証へ回し、未収録なら `common-usage-scenario-missing` を残して #213 の集計対象にする。規則で決められない前提は `incomplete(precondition)` として review queue に残す。Verifier 自身の分類申告は判定に使わない。
 - HTTP証拠: Verifierの宛先はLab内のHarness所有reverse proxyへ向け、request / responseをPrivate EvidenceにJSON Linesで捕捉する。判定器は捕捉記録を優先し、request側をdecode後も検査する。捕捉が無い場合だけVerifierの `http.json` を補助資料として読み、台帳のoptionalな `evidenceCapture` は `harness-captured` / `agent-authored` のenumだけを記録する。実行時確認には引き続きnonce canaryの回収を要する。
 - Verifierの出力: `http.json`、`steps.md`、`route.json`、別主体のcookieをLabが検査する `session.json`、`refutation.md`、設定前提。payload、cookie、HTTP本文はPrivate Evidenceに置く。
 - 判定器（Harness所有、決定論的）。作るのは両プログラムで報奨に届く分類だけ。Reflected XSS、CSRF、到達先のないmissing authorization / IDOR、コンテンツ削除は判定器を作らず、探索の目的にも含めない（記録はする）:
@@ -121,7 +123,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 8a. プログラム対象範囲の方針
 
-技術的な真偽（`runtime-confirmed`）とプログラム対象範囲は分ける。対象範囲は `review` で提出先ごとに評価し、検証を止める条件にしない。方針は [src/profiles/wordpress/policy/programme-scope.md](../src/profiles/wordpress/policy/programme-scope.md) に観測日付きで置き、提出前に公式ページで再確認する。
+技術的な真偽（`runtime-confirmed`）とプログラム対象範囲は分ける。対象範囲は原則 `review` で提出先ごとに評価する。影響分類が対象外の Finding と、明示的な管理者の特別設定が前提の Finding は第7節の規則で検証前に park する。方針は [src/profiles/wordpress/policy/programme-scope.md](../src/profiles/wordpress/policy/programme-scope.md) に観測日付きで置き、提出前に公式ページで再確認する。
 
 2026-10-08時点の方針（Wordfence公式ページの写しとPatchstack 2026年版ガイドライン、判断者の指示）:
 

@@ -2777,6 +2777,7 @@ describe("harness CLI vertical slice", () => {
     expect(listed.stdout).toContain(
       "parked  other  finding-parked-1  Throttle trusts a forwarded header",
     );
+    expect(listed.stdout).toContain("reason: outside-programme-boundary");
     expect(
       ledger().read({
         campaignId: "campaign-parked",

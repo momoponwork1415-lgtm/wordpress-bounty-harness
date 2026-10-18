@@ -155,6 +155,7 @@ harness continuous status --state <dir>
 
 ```
 harness review inspect --campaign <id> --finding <id>        # 1件の参照情報を開き、台帳へ記録する（review-item-opened）
+harness review parked --campaign <id>                       # parked Finding と reason を一覧する
 harness review export --campaign <id> --finding <id>         # 1画面のレビュー材料をJSON 1本（schema review-export/v1）で出す。台帳には書かない。skillはこれだけを読む
 harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--minutes <n>]
 harness review dedupe --campaign <id> --finding <id>          # ローカルWordfence履歴mirrorと照合
@@ -168,6 +169,7 @@ harness review outcome --candidate <id> --outcome triaged|resolved|duplicate|inf
 ```
 
 - `export` は Finding（claim / attackerPosition / brokenProperty / impact）、HTTP の method / path / status 行、反証メモ、検証 Lab の実行前後差分の要約（option 名と digest、ユーザーの役割、テーブル件数と checksum）、探索した版と台帳が知る最新版、install 数、Private Evidence の path を 1 本の JSON にまとめる。候補本文、payload、HTTP 本文、option 値は path と digest でだけ参照し、stdout に値を出さない。
+- `review parked` の reason は `outside-programme-boundary`（影響分類が対象外）と `admin-configuration-precondition`（特定値または非既定の管理者設定が前提）の 2 種類。どちらも Finding の Private Evidence を保持し、検証・review queue に入れない。
 - `decide --minutes` は人間がその項目に使った時間を `human-effort-recorded` に分で、`review-decided` に `humanElapsedSeconds` として残す。決定は検証 ID、探索 run ID、prompt digest に結び付いて記録され、提出から run と prompt まで辿れる。
 - `scope` は判定器の証拠と選定記録から事実を読む。最新版での確認が要るプログラムは、`reverify` が `runtime-confirmed` を返した後でだけ満たされる。
 - 確認済みrouteのないFindingは、前回が`incomplete(precondition)`でLab記録があり、`--version`なしで選定されたSnapshotが元のFindingと同じ場合だけ、前回と異なるscenario IDのLabで独立再検証できる。Snapshotが異なる場合と`--version`付きの修正版比較はLab起動前に拒否する。元のverification eventは残り、再試行は新しいverificationIdとsetup digestを記録する。
