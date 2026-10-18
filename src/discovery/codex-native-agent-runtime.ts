@@ -23,6 +23,7 @@ import {
   ProviderAttachmentStore,
   type ProviderAttachmentRef,
 } from "./provider-research-report.js";
+import { commandsFromRollout, type ObservedCommand } from "./read-paths.js";
 
 /** A profile claim travels as JSON text so the provider's strict schema stays closed. */
 const claimTextSchema = z.string().transform((text, context) => {
@@ -566,11 +567,6 @@ export function recoverChildReportFromRollout(
   };
 }
 type Observed = NonNullable<NativeRunReceipt["observed"]>;
-type ObservedCommand = {
-  readonly text: string;
-  readonly cwd?: string;
-  readonly parsed?: readonly unknown[];
-};
 function sourcePath(path: string, cwd?: string): string | undefined {
   let directory = cwd;
   if (cwd?.startsWith("file://")) {
@@ -638,34 +634,7 @@ function observedFromCommands(
 }
 
 function observedFromRollout(raw: string): Observed {
-  const commands: ObservedCommand[] = [];
-  for (const line of raw.split("\n")) {
-    try {
-      const event = object(JSON.parse(line) as unknown);
-      const payload = object(event?.payload);
-      const item = object(payload?.item);
-      if (
-        event?.type === "event_msg" &&
-        payload?.type === "item_completed" &&
-        item?.type === "CommandExecution" &&
-        Array.isArray(item.command)
-      ) {
-        commands.push({
-          text:
-            item.command
-              .filter((part): part is string => typeof part === "string")
-              .at(-1) ?? "",
-          ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
-          ...(Array.isArray(item.parsed_cmd)
-            ? { parsed: item.parsed_cmd }
-            : {}),
-        });
-      }
-    } catch {
-      // Keep observations from other well-formed events.
-    }
-  }
-  return observedFromCommands(commands);
+  return observedFromCommands(commandsFromRollout(raw));
 }
 
 function usageFromTranscript(

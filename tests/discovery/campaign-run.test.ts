@@ -287,6 +287,21 @@ async function campaign(
           };
         }
         if (ordinal === 0 && options.childSurvivesBrokenRoot) {
+          const diagnostic = await attachments.put(
+            "diagnostic",
+            Buffer.from(
+              JSON.stringify({
+                type: "event_msg",
+                payload: {
+                  type: "item_completed",
+                  item: {
+                    type: "CommandExecution",
+                    command: ["bash", "-lc", "cat includes/example.php"],
+                  },
+                },
+              }),
+            ),
+          );
           const childAttachment = await attachments.put(
             "findings",
             Buffer.from(
@@ -323,6 +338,7 @@ async function campaign(
                   startedAt: "2026-10-08T07:00:00Z",
                   completedAt: "2026-10-08T07:00:01Z",
                   reportArtifactDigest: childAttachment.digest,
+                  diagnosticArtifactDigest: diagnostic.digest,
                 }),
               },
             ],
@@ -472,6 +488,17 @@ it("records valid child claims even when Root formatting and a sibling claim fai
         event.type === "discovery-run-finished" && event.runId === "child-1",
     );
   expect(childFinish?.event).toMatchObject({ outcome: "completed" });
+  const readPaths = childFinish?.event.artifacts.find(
+    (artifact) => artifact.kind === "read-paths",
+  );
+  const stored = await evidence.readFile(
+    readPaths!.digest,
+    "read-paths.json",
+    1024,
+  );
+  expect(stored.status === "resolved" && stored.bytes.toString()).toBe(
+    '["includes/example.php"]',
+  );
   expect(ledger.funnel("campaign-1")).toMatchObject({
     runCount: 2,
     discoveryAttempts: 1,

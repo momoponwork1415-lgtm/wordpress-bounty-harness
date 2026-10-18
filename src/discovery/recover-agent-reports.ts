@@ -6,6 +6,8 @@ import type {
   DiscoveryTransportRun,
 } from "./codex-native-agent-runtime.js";
 import type { PlannedDiscoveryRun } from "./campaign.js";
+import type { ProviderAttachmentStore } from "./provider-research-report.js";
+import { recordReadPaths } from "./read-paths.js";
 import {
   nativeRunReceiptSchema,
   type NativeRunReceipt,
@@ -33,6 +35,7 @@ type RecoveryContext = {
 type ChildRecoveryOptions = RecoveryContext & {
   readonly ledger: Ledger;
   readonly evidence: PrivateArtifactStore;
+  readonly attachments: Pick<ProviderAttachmentStore, "readByDigest">;
   readonly base: {
     readonly schemaVersion: 1;
     readonly campaignId: string;
@@ -94,6 +97,11 @@ export async function recoverChildAgentReports(
     const receiptDigest = await options.evidence.putFiles({
       "receipt.json": canonicalJson(receipt),
     });
+    const readPathsDigest = await recordReadPaths(
+      options.attachments,
+      options.evidence,
+      receipt.diagnosticArtifactDigest,
+    );
     let outcome: "completed" | "failed" = "failed";
     let failure: ReportFailure | undefined;
     if (
@@ -142,7 +150,12 @@ export async function recoverChildAgentReports(
         ? {}
         : { diagnosticArtifactDigest: receipt.diagnosticArtifactDigest }),
       ...(failure === undefined ? {} : failure),
-      artifacts: [{ kind: "native-run-receipt", digest: receiptDigest }],
+      artifacts: [
+        { kind: "native-run-receipt", digest: receiptDigest },
+        ...(readPathsDigest === undefined
+          ? []
+          : [{ kind: "read-paths", digest: readPathsDigest }]),
+      ],
     });
     if (finished.status === "conflict")
       throw new Error("Child finish identity conflict");
