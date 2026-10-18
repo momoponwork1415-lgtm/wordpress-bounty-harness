@@ -64,7 +64,9 @@ export function scenarioForVerification(
       event.identity === `verification-lab-${previous.event.verificationId}`,
   );
   if (verificationLab?.event.type === "lab-provisioned")
-    return verificationLab.event.scenario?.id ?? null;
+    return verificationLab.event.status === "ready"
+      ? (verificationLab.event.scenario?.id ?? null)
+      : undefined;
   const discoveryLab = labs
     .filter(
       ({ sequence, event }) =>
@@ -124,7 +126,6 @@ export function createVerificationConsumer(options: {
         event.derivationKind === "fixed-version-control"
       )
         continue;
-      if ("duplicateOf" in event && event.duplicateOf !== undefined) continue;
       if (
         filter.snapshotDigest !== undefined &&
         event.snapshotDigest !== filter.snapshotDigest

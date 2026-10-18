@@ -1181,6 +1181,7 @@ export class Ledger {
           if (event.status !== "failed") break;
           add(event.type, {
             status: event.status,
+            purpose: event.purpose,
             failureStage: event.failureStage,
             reason: event.reason,
           });

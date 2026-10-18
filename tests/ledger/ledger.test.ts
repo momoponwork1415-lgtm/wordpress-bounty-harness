@@ -1072,6 +1072,42 @@ describe("Ledger public interface", () => {
     });
   });
 
+  it("groups failed discovery and verification Labs separately", async () => {
+    const { ledger } = await fixture();
+    for (const purpose of ["discovery", "verification"] as const)
+      await ledger.append({
+        ...common(`failed-${purpose}`),
+        type: "lab-provisioned",
+        labId: `lab-${purpose}`,
+        status: "failed",
+        purpose,
+        failureStage: "provision",
+        reason: "provision",
+      });
+    expect(ledger.stops({ campaignId: "campaign-1" })).toEqual([
+      {
+        type: "lab-provisioned",
+        fields: {
+          status: "failed",
+          purpose: "discovery",
+          failureStage: "provision",
+          reason: "provision",
+        },
+        count: 1,
+      },
+      {
+        type: "lab-provisioned",
+        fields: {
+          status: "failed",
+          purpose: "verification",
+          failureStage: "provision",
+          reason: "provision",
+        },
+        count: 1,
+      },
+    ]);
+  });
+
   it("records a Finding reference only to a catalog record given to that run", async () => {
     const { ledger } = await fixture();
     expect(

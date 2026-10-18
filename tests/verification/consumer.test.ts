@@ -112,3 +112,41 @@ it("retries only bounded incomplete verifications on the same Finding", async ()
   await appendVerification(3);
   expect(await consumer.pullNext({ campaignId: "campaign-1" })).toBeNull();
 });
+
+it("does not retry a failed precondition Lab solely because a scenario is configured", async () => {
+  const { ledger, snapshotDigest, finding } = await fixture();
+  await finding("failed-lab");
+  await ledger.append({
+    schemaVersion: 1,
+    identity: "verification-lab-verify-1",
+    campaignId: "campaign-1",
+    snapshotDigest,
+    occurredAt: "2026-10-18T00:00:01.000Z",
+    type: "lab-provisioned",
+    labId: "verify-1",
+    status: "failed",
+    purpose: "verification",
+    failureStage: "provision",
+    reason: "precondition",
+  });
+  await ledger.append({
+    schemaVersion: 1,
+    identity: "verify-1",
+    campaignId: "campaign-1",
+    snapshotDigest,
+    occurredAt: "2026-10-18T00:00:02.000Z",
+    type: "verification-finished",
+    verificationId: "verify-1",
+    findingId: "failed-lab",
+    labSetupDigest: `sha256:${"b".repeat(64)}`,
+    promptVersion: "verifier-v7",
+    attempt: 1,
+    result: { status: "incomplete", reason: "precondition", nextStep: "Retry" },
+  });
+  const consumer = createVerificationConsumer({
+    ledger,
+    promptVersion: "verifier-v7",
+    currentScenarioId: async () => "ordinary-v1",
+  });
+  expect(await consumer.pullNext({ campaignId: "campaign-1" })).toBeNull();
+});
