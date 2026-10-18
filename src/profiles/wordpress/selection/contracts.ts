@@ -47,13 +47,17 @@ const commonSelectionPolicy = {
     highThreat: z.number().nonnegative().optional(),
     /** Public advisory count in the window, from the local mirror (ADR 0037). 0 or absent: the mirror is not opened. */
     history: z.number().nonnegative().optional(),
-    /** Records of a paying class in the same window; default 0 keeps ADR 0037's decided behaviour unchanged. */
+    /** One point per paying-class record in the window, up to `historyPayingClassCap` (ADR 0037, 2026-10-19 addendum). */
     historyPayingClass: z.number().nonnegative().optional(),
+    /** How recently the newest counted record was published, 1 at the mirror's asOf and 0 at the window's edge. */
+    recordRecency: z.number().nonnegative().optional(),
   }),
   /** Days before the mirror's `last_successful_at` that records count (default 365). */
   historyWindowDays: z.number().positive().max(3650).optional(),
   /** Records at or above this count score the full history weight (default 10). */
   historyCountCap: z.number().int().positive().max(1000).optional(),
+  /** Paying-class records beyond this count add nothing (default 3). */
+  historyPayingClassCap: z.number().int().positive().max(1000).optional(),
   /** `select` stops when the mirror's last success is older than this (default 2). */
   maximumHistoryAgeDays: z.number().positive().optional(),
   /** Signal class names (primitive or terminal kind) that count as a paying class (default in `advisoryHistoryDefaults`). */
@@ -172,6 +176,7 @@ export type SelectionReason =
 export const advisoryHistoryDefaults = {
   windowDays: 365,
   countCap: 10,
+  payingClassCap: 3,
   maximumAgeDays: 2,
   payingClasses: [
     "stored-xss",
@@ -217,6 +222,8 @@ export interface WordPressTargetSelection extends TargetSelection {
     readonly history: number;
     /** Absent in records written before ADR 0037. */
     readonly historyPayingClass?: number | undefined;
+    /** Absent in records written before the ADR 0037 addendum of 2026-10-19. */
+    readonly recordRecency?: number | undefined;
   };
   /** Present when the policy weights advisory history (ADR 0037). */
   readonly advisoryHistory?: WordPressTargetAdvisoryHistory | undefined;
@@ -256,6 +263,7 @@ export const wordPressTargetSelectionSchema: z.ZodType<WordPressTargetSelection>
       highThreat: z.number().finite(),
       history: z.number().finite(),
       historyPayingClass: z.number().finite().optional(),
+      recordRecency: z.number().finite().optional(),
     }),
     advisoryHistory: z
       .strictObject({

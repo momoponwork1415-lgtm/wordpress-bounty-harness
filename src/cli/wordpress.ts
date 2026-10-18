@@ -856,10 +856,8 @@ async function runWordPressCampaign(
 ): ReturnType<CliProfile["runCampaign"]> {
   const { config, boundaries } = session;
   const policy = await session.policy();
-  if ("candidateSource" in policy && policy.revisitPolicy.kind !== "never")
-    throw new Error(
-      "Automatic Trial requires revisitPolicy: never until repeat-Trial approval is implemented",
-    );
+  // The policy's revisitPolicy is applied by `select`; a repeat Trial on a higher
+  // version is a selection outcome, not a campaign-level approval (ADR 0037 addendum).
   let legacyHistoryDigest: string | undefined;
   if ("candidateSource" in policy) {
     const legacy = await loadWordPressLegacyHistory(options.legacyHistoryFile);
@@ -1055,6 +1053,7 @@ export function createWordPressCliProfile(
           ? {}
           : { legacyHistoryFile: options.legacyHistoryFile }),
         promptVariant,
+        clock: state.clock,
       }).decide(policy);
       const inspected = decision.inspections;
       const inspectionBySlug = new Map(
