@@ -5,7 +5,7 @@ description: 人間が再現を記録した Finding 1 件について、Wordfenc
 
 # wbh-report
 
-対象: `harness review reproduced --result match` が記録済みで、`review decide` が `accept` の Finding 1 件。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js`。場所は `--state <dir>` か `WBH_STATE_DIRECTORY`。
+対象: `harness review decide --reproduced match` が記録済みで、`review decide` が `accept` の Finding 1 件。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js`。場所は `--state <dir>` か `WBH_STATE_DIRECTORY`。
 
 ## 読む入力
 
