@@ -57,7 +57,7 @@ flowchart TB
   FINAL -.整形失敗でも個別成果は残す.-> RESULTS
 ```
 
-Harness は人数上限、隔離、wall 上限 120 分、記録、停止を管理する。Root は v7 の WP2Shell 由来の探索指針を使って調べ方と子の分担を決める。新規探索で使える目的 prompt は v7 だけで、対象ごとに 1 Trial を行う。入口索引は渡さない。
+Harness は人数上限、隔離、wall 上限 120 分、記録、停止を管理する。Root は `wp2shell-bounty-v8` の WP2Shell 由来の探索指針を使って調べ方と子の分担を決める。新規探索で使える目的 prompt は `wp2shell-bounty-v8` だけで、対象ごとに 1 Trial を行う。入口索引は渡さない。
 
 ## 3. 実行境界
 

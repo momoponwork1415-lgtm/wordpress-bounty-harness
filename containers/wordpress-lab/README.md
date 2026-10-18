@@ -18,7 +18,7 @@ To update the image:
    `<registry>/wbh-wordpress-lab@sha256:<digest>` reference. Leave
    `images.wordpressCli` on its independently pinned image.
 5. Run `harness runtime check --config <campaign.json>` and an ordinary-use
-   smoke in a disposable runsc Lab. Check `lab cleanup --remove` and confirm
+   smoke in a disposable runsc Lab. Check `lab cleanup --config <campaign.json> --remove` and confirm
    zero leftover containers, networks, and volumes before starting a campaign.
 
 Never put the host config, Lab evidence, or credentials in Git.

@@ -124,7 +124,7 @@ flowchart LR
 
 ### 4.5 Programme Boundary と前提分類
 
-- Programme Boundary 文は 2026-10-17 版（[#310 の計画](2026-10-17-thorough-search-v6-plan.md) 第 3 節）。
+- Programme Boundary 文は 2026-10-17 版（[#310 の計画](../2026-10-17-thorough-search-v6-plan.md) 第 3 節）。
 - 前提分類は brief B のとおり（既定／一般的な利用／管理者設定／不明）。管理者設定は park、一般的な利用は検証側で型付き手順により Lab に作る。
 
 ### 4.6 検証 consumer
