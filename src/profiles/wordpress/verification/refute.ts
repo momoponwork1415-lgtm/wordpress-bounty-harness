@@ -70,12 +70,40 @@ export async function refutePendingFindings(options: RefuteOptions): Promise<
       .filter((event) => event.type === "finding-parked")
       .map((event) => event.findingId),
   );
-  const done = new Set(
-    readAll(ledger, campaignId, "refutation-recorded")
-      .filter((event) => event.type === "refutation-recorded")
-      .map((event) => event.findingId),
+  const recorded = readAll(ledger, campaignId, "refutation-recorded").filter(
+    (event) => event.type === "refutation-recorded",
   );
-  const findings = readAll(ledger, campaignId, "finding-recorded").filter(
+  const done = new Set(recorded.map((event) => event.findingId));
+  const allFindings = readAll(ledger, campaignId, "finding-recorded");
+  // A prior process may have stopped between the verdict and park writes.
+  for (const refutation of recorded) {
+    if (refutation.verdict !== "refuted" || parked.has(refutation.findingId))
+      continue;
+    const finding = allFindings.find(
+      (event): event is RecordedFinding =>
+        event.type === "finding-recorded" &&
+        event.findingId === refutation.findingId &&
+        event.snapshotDigest === refutation.snapshotDigest,
+    );
+    if (finding === undefined) continue;
+    const result = await ledger.append({
+      schemaVersion: 1,
+      identity: `refuted-${finding.findingId}`,
+      campaignId,
+      snapshotDigest: finding.snapshotDigest,
+      occurredAt: options.clock().toISOString(),
+      type: "finding-parked",
+      findingId: finding.findingId,
+      runId: finding.runId,
+      category: finding.category,
+      reason: "refuted",
+      artifacts: finding.artifacts,
+    });
+    if (result.status === "conflict")
+      throw new Error("Refutation park conflict");
+    parked.add(finding.findingId);
+  }
+  const findings = allFindings.filter(
     (event): event is RecordedFinding =>
       event.type === "finding-recorded" &&
       event.derivationKind !== "fixed-version-control" &&
@@ -86,7 +114,7 @@ export async function refutePendingFindings(options: RefuteOptions): Promise<
   );
   if (
     options.findingId !== undefined &&
-    !readAll(ledger, campaignId, "finding-recorded").some(
+    !allFindings.some(
       (event) =>
         event.type === "finding-recorded" &&
         event.findingId === options.findingId,

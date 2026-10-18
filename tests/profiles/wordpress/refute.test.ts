@@ -130,3 +130,70 @@ it("parks only a source-refuted Finding and passes no Lab to the refuter", async
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("finishes parking a refuted Finding after interruption between ledger writes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "refute-recovery-"));
+  try {
+    const store = new PrivateArtifactStore({
+      rootDirectory: join(root, "evidence"),
+      maxEntries: 10,
+      maxBytes: 10_000,
+    });
+    const ledger = new Ledger({
+      databasePath: join(root, "ledger.sqlite"),
+      artifactStore: store,
+    });
+    const common = {
+      schemaVersion: 1 as const,
+      campaignId: "campaign-1",
+      snapshotDigest: digest,
+      occurredAt: "2026-10-18T00:00:00Z",
+    };
+    await ledger.append({
+      ...common,
+      identity: "finding-1",
+      type: "finding-recorded",
+      findingId: "finding-1",
+      runId: "discover-1",
+      category: "sqli",
+    });
+    await ledger.append({
+      ...common,
+      identity: "refutation-1",
+      type: "refutation-recorded",
+      findingId: "finding-1",
+      runId: "refute-1",
+      verdict: "refuted",
+      reasonCode: "guard-effective",
+      promptVersion: "refute-v1",
+      promptDigest: digest,
+      reportDigest: digest,
+    });
+    expect(
+      await refutePendingFindings({
+        campaignId: common.campaignId,
+        ledger,
+        store,
+        attachments: undefined as never,
+        profile: undefined as never,
+        prompt: { id: "refute-v1", digest, text: "test" },
+        resolveSource: async () => {
+          throw new Error("already refuted");
+        },
+        runtime: {
+          execute: async () => {
+            throw new Error("already refuted");
+          },
+        },
+        clock: () => new Date(common.occurredAt),
+        newId: () => "unused",
+      }),
+    ).toEqual([]);
+    expect(ledger.read({ type: "finding-parked" })[0]?.event).toMatchObject({
+      findingId: "finding-1",
+      reason: "refuted",
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

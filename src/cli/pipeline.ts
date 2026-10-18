@@ -66,6 +66,11 @@ export interface CampaignPipeline<
     readonly leadSignature?: NonNullable<DiscoveryOptions["leadSignature"]>;
   }>;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
+  readonly refuteFinding?: (input: {
+    readonly campaignId: string;
+    readonly findingId: string;
+    readonly snapshotDigest: string;
+  }) => Promise<boolean>;
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
 }
 
@@ -262,6 +267,23 @@ export async function runCampaignPipeline<
     findingsBySnapshot.set(event.snapshotDigest, findings);
   }
   const verificationHistory = new Map<string, VerificationRecord[]>();
+  const refutedFindings = new Set(
+    readAll(ledger, { campaignId, type: "finding-parked" })
+      .filter(
+        ({ event }) =>
+          event.type === "finding-parked" && event.reason === "refuted",
+      )
+      .map(({ event }) =>
+        event.type === "finding-parked" ? event.findingId : "",
+      ),
+  );
+  const refutations = new Set(
+    readAll(ledger, { campaignId, type: "refutation-recorded" })
+      .filter(({ event }) => event.type === "refutation-recorded")
+      .map(({ event }) =>
+        event.type === "refutation-recorded" ? event.findingId : "",
+      ),
+  );
   for (const record of readAll(ledger, {
     campaignId,
     type: "verification-finished",
@@ -290,6 +312,9 @@ export async function runCampaignPipeline<
     if (snapshotDigest === undefined || !concludedSnapshots.has(snapshotDigest))
       return false;
     return (findingsBySnapshot.get(snapshotDigest) ?? []).every((findingId) => {
+      if (refutedFindings.has(findingId)) return true;
+      if (pipeline.refuteFinding !== undefined && !refutations.has(findingId))
+        return false;
       const history =
         verificationHistory.get(`${snapshotDigest}\0${findingId}`) ?? [];
       const previous = history.at(-1);
@@ -580,6 +605,18 @@ export async function runCampaignPipeline<
       };
       for (const { event } of findings) {
         if (event.type !== "finding-recorded") continue;
+        if (refutedFindings.has(event.findingId)) continue;
+        if (pipeline.refuteFinding !== undefined) {
+          const refuted = await pipeline.refuteFinding({
+            campaignId,
+            findingId: event.findingId,
+            snapshotDigest: snapshot.digest,
+          });
+          if (refuted) {
+            refutedFindings.add(event.findingId);
+            continue;
+          }
+        }
         // The Verifier shares the subscription; a usage limit stops the campaign.
         if (stopped === "provider-limit") break;
         const history = earlier.filter(

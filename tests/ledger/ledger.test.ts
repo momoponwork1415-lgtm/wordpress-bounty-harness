@@ -113,6 +113,16 @@ describe("Ledger public interface", () => {
     expect(
       ledger.read({ campaignId: "campaign-1", type: "refutation-recorded" }),
     ).toHaveLength(1);
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      accepted: 1,
+      raw: 0,
+      refutation: {
+        processed: 1,
+        after: 0,
+        byVerdict: { refuted: 1, upheld: 0, undecided: 0 },
+        byReason: { "guard-effective": 1 },
+      },
+    });
   });
 
   it("measures owner time and opened findings per distinct submission across categories", async () => {
@@ -933,6 +943,12 @@ describe("Ledger public interface", () => {
 
     expect(ledger.funnel("campaign-1")).toEqual({
       campaignId: "campaign-1",
+      refutation: {
+        processed: 0,
+        after: 4,
+        byVerdict: { refuted: 0, upheld: 0, undecided: 0 },
+        byReason: {},
+      },
       discoveryAttempts: 1,
       runCount: 2,
       knownCostUsd: 0,

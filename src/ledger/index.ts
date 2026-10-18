@@ -542,6 +542,12 @@ export type UsageRow = {
 
 export type CampaignFunnel = FunnelCounts & {
   readonly campaignId: string;
+  readonly refutation: {
+    readonly processed: number;
+    readonly after: number;
+    readonly byVerdict: Readonly<Record<string, number>>;
+    readonly byReason: Readonly<Record<string, number>>;
+  };
   readonly discoveryAttempts: number;
   readonly runCount: number;
   readonly knownCostUsd: number;
@@ -1259,6 +1265,10 @@ export class Ledger {
       string,
       Extract<LedgerEventV1, { type: "finding-parked" }>
     >();
+    const refutations = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "refutation-recorded" }>
+    >();
     const verifications = new Map<
       string,
       Extract<LedgerEventV1, { type: "verification-finished" }>
@@ -1376,6 +1386,9 @@ export class Ledger {
           if (!parkedFindings.has(current.findingId))
             parkedFindings.set(current.findingId, current);
           break;
+        case "refutation-recorded":
+          refutations.set(current.findingId, current);
+          break;
         case "lead-recorded":
           if (!normalizationSeen.has(`${current.runId}\0lead`))
             legacyReached.push({
@@ -1426,6 +1439,7 @@ export class Ledger {
     ) as Record<string, number>;
     for (const finding of findings.values()) {
       if (finding.derivationKind === "fixed-version-control") continue;
+      if (parkedFindings.get(finding.findingId)?.reason === "refuted") continue;
       const status = verifications.get(finding.findingId)?.result.status;
       if (
         status === undefined ||
@@ -1498,6 +1512,8 @@ export class Ledger {
       const category = (byCategory[finding.category] ??= emptyCounts());
       for (const count of [totals, category, objective(finding.runId)]) {
         count.accepted++;
+        if (parkedFindings.get(finding.findingId)?.reason === "refuted")
+          continue;
         count.raw++;
         const verification = verifications.get(finding.findingId);
         if (verification === undefined) continue;
@@ -1685,6 +1701,32 @@ export class Ledger {
     );
     return {
       campaignId: campaign,
+      refutation: {
+        processed: refutations.size,
+        after: totals.raw,
+        byVerdict: Object.fromEntries(
+          ["refuted", "upheld", "undecided"].map((verdict) => [
+            verdict,
+            [...refutations.values()].filter(
+              (event) => event.verdict === verdict,
+            ).length,
+          ]),
+        ),
+        byReason: Object.fromEntries(
+          [
+            ...new Set(
+              [...refutations.values()].map((event) => event.reasonCode),
+            ),
+          ]
+            .sort()
+            .map((reason) => [
+              reason,
+              [...refutations.values()].filter(
+                (event) => event.reasonCode === reason,
+              ).length,
+            ]),
+        ),
+      },
       discoveryAttempts,
       runCount: startedRuns.size,
       knownCostUsd,

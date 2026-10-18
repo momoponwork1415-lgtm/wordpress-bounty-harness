@@ -137,6 +137,24 @@ const ref = {
 };
 
 describe("review public interface", () => {
+  it("removes a source-refuted Finding from the queue even after an earlier verification", async () => {
+    const { review, ledger } = await fixture();
+    expect(review.queue({ campaignId: "campaign-1" }).items).toHaveLength(1);
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "park-refuted",
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-08T01:00:00Z",
+      type: "finding-parked",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "sqli",
+      reason: "refuted",
+    });
+    expect(review.queue({ campaignId: "campaign-1" }).items).toHaveLength(0);
+  });
+
   it("opens the confirmed reproduction package through the review interface", async () => {
     const { review } = await fixture();
     const opened = await review.openReproductionPackage({ ref });
