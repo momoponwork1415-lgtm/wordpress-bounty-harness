@@ -141,13 +141,7 @@ async function campaign(
     campaignId: "campaign-1",
     labId: "lab-1",
     input,
-    historyFraction: 0.5,
     runWallTimeMs: options.wallOnFirstRun ? 30 : 60 * 60_000,
-    ...(options.indexed
-      ? {}
-      : {
-          ablation: { axes: [{ axis: "history" as const, armBFraction: 0.5 }] },
-        }),
     ledger,
     attachments,
     evidence,
@@ -786,9 +780,9 @@ it("stops after consecutive completed runs without a new Finding and records eac
           : null,
       ),
   ).toEqual([
-    ["none", "short-objective"],
+    ["catalog", "short-objective"],
     ["catalog", "wp2shell-derived"],
-    ["none", "short-objective"],
+    ["catalog", "short-objective"],
   ]);
   expect(ledger.funnel("campaign-1")).toMatchObject({
     raw: 1,
@@ -797,28 +791,6 @@ it("stops after consecutive completed runs without a new Finding and records eac
     knownCostUsd: 0,
     unpricedRuns: 3,
     wallTimeMs: 3000,
-  });
-});
-
-it("records the history arm the runner allocated to each run and counts runs and Findings per arm", async () => {
-  const { ledger } = await campaign([1]);
-  expect(
-    ledger
-      .read({ type: "discovery-run-started" })
-      .map(({ event }) =>
-        event.type === "discovery-run-started"
-          ? [event.history.mode, event.configuration.arms?.history]
-          : null,
-      ),
-  ).toEqual([
-    ["none", "a"],
-    ["catalog", "b"],
-    ["none", "a"],
-    ["catalog", "b"],
-  ]);
-  expect(ledger.funnel("campaign-1").byArm).toEqual({
-    "history:a": { runs: 2, findings: 0, confirmed: 0 },
-    "history:b": { runs: 2, findings: 1, confirmed: 0 },
   });
 });
 

@@ -2,9 +2,6 @@ import { z } from "zod";
 
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
-import { clopperPearson, type Interval } from "./interval.js";
-
-export type { Interval } from "./interval.js";
 
 const id = z.string().min(1).max(128);
 
@@ -46,41 +43,6 @@ export type ProspectiveScore = {
   }[];
 };
 
-export type ArmTally = {
-  readonly runs: number;
-  /** Runs that produced at least one runtime-confirmed Finding. */
-  readonly hits: number;
-  readonly findings: number;
-  readonly knownCostUsd: number;
-  readonly unpricedRuns: number;
-};
-
-export type ArmComparison = {
-  readonly axis: "history" | "prompt" | "continuation";
-  /** One row per searched snapshot; only paired rows enter the pooled numbers. */
-  readonly targets: readonly {
-    readonly snapshotDigest: string;
-    readonly selectionId: string | null;
-    readonly paired: boolean;
-    readonly arms: { readonly a: ArmTally; readonly b: ArmTally };
-  }[];
-  readonly pooled: {
-    readonly a: ArmTally & { readonly interval: Interval };
-    readonly b: ArmTally & { readonly interval: Interval };
-  };
-  /** Overlapping intervals are inconclusive, never "no difference". */
-  readonly verdict: "inconclusive" | "a-higher" | "b-higher";
-};
-
-type MutableTally = { -readonly [K in keyof ArmTally]: ArmTally[K] };
-const emptyTally = (): MutableTally => ({
-  runs: 0,
-  hits: 0,
-  findings: 0,
-  knownCostUsd: 0,
-  unpricedRuns: 0,
-});
-
 function overlaps(
   trace: readonly SourceLocation[],
   allowed: readonly SourceLocation[],
@@ -109,116 +71,6 @@ export class Evaluation {
     this.#ledger = options.ledger;
     this.#store = options.store;
     this.#locationsOf = options.locationsOf;
-  }
-
-  /** Pairs arms within each target, then pools the paired targets across campaigns. */
-  compare(input: {
-    readonly axis: "history" | "prompt" | "continuation";
-    readonly campaignId?: string;
-  }): ArmComparison {
-    const campaignId =
-      input.campaignId === undefined ? undefined : id.parse(input.campaignId);
-    const events = (type: LedgerEventV1["type"]) =>
-      this.#events(type, campaignId);
-    const finished = new Map<
-      string,
-      Extract<LedgerEventV1, { type: "discovery-run-finished" }>
-    >();
-    for (const event of events("discovery-run-finished"))
-      if (event.type === "discovery-run-finished")
-        finished.set(event.runId, event);
-    const confirmed = new Map<string, boolean>();
-    for (const event of events("verification-finished"))
-      if (event.type === "verification-finished")
-        confirmed.set(
-          event.findingId,
-          event.result.status === "runtime-confirmed",
-        );
-    const starts = events("discovery-run-started");
-    const trialByRun = new Map<string, string>();
-    for (const event of starts)
-      if (event.type === "discovery-run-started")
-        trialByRun.set(event.runId, event.trialId ?? event.runId);
-    const findingsByRun = new Map<string, string[]>();
-    for (const event of events("finding-recorded"))
-      if (event.type === "finding-recorded") {
-        const trialId = trialByRun.get(event.runId) ?? event.runId;
-        findingsByRun.set(trialId, [
-          ...(findingsByRun.get(trialId) ?? []),
-          event.findingId,
-        ]);
-      }
-    const selections = new Map<string, string>();
-    for (const event of events("target-selected"))
-      if (
-        event.type === "target-selected" &&
-        !selections.has(event.snapshotDigest)
-      )
-        selections.set(event.snapshotDigest, event.selectionId);
-
-    const targets = new Map<string, { a: MutableTally; b: MutableTally }>();
-    for (const event of starts) {
-      if (
-        event.type !== "discovery-run-started" ||
-        (event.runKind ?? "explore") !== "explore" ||
-        (event.configuration.arms?.[input.axis] ??
-          (event.configuration.axis === input.axis
-            ? event.configuration.arm
-            : undefined)) === undefined
-      )
-        continue;
-      const end = finished.get(event.runId);
-      // A failed Trial has no valid discovery result and cannot be a miss.
-      if (end?.outcome !== "completed") continue;
-      const target = targets.get(event.snapshotDigest) ?? {
-        a: emptyTally(),
-        b: emptyTally(),
-      };
-      targets.set(event.snapshotDigest, target);
-      const arm =
-        event.configuration.arms?.[input.axis] ?? event.configuration.arm;
-      if (arm === undefined) continue;
-      const tally = target[arm];
-      const findings = findingsByRun.get(event.runId) ?? [];
-      tally.runs++;
-      tally.findings += findings.length;
-      if (findings.some((findingId) => confirmed.get(findingId) === true))
-        tally.hits++;
-      if (end.costUsd === "unavailable") tally.unpricedRuns++;
-      else tally.knownCostUsd += end.costUsd;
-    }
-
-    const pooled = { a: emptyTally(), b: emptyTally() };
-    const rows = [...targets.entries()].map(([snapshotDigest, arms]) => {
-      const paired = arms.a.runs > 0 && arms.b.runs > 0;
-      if (paired)
-        for (const arm of ["a", "b"] as const)
-          for (const key of Object.keys(pooled[arm]) as (keyof ArmTally)[])
-            pooled[arm][key] += arms[arm][key];
-      return {
-        snapshotDigest,
-        selectionId: selections.get(snapshotDigest) ?? null,
-        paired,
-        arms,
-      };
-    });
-    const a = {
-      ...pooled.a,
-      interval: clopperPearson(pooled.a.hits, pooled.a.runs),
-    };
-    const b = {
-      ...pooled.b,
-      interval: clopperPearson(pooled.b.hits, pooled.b.runs),
-    };
-    const verdict =
-      a.runs === 0 || b.runs === 0
-        ? "inconclusive"
-        : a.interval.lower > b.interval.upper
-          ? "a-higher"
-          : b.interval.lower > a.interval.upper
-            ? "b-higher"
-            : "inconclusive";
-    return { axis: input.axis, targets: rows, pooled: { a, b }, verdict };
   }
 
   /** Scores searched snapshots against advisories published after their selection. */

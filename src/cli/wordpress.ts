@@ -10,7 +10,6 @@ import {
 } from "../discovery/index.js";
 import type {
   AgentRuntimeProfile,
-  CampaignHistory,
   DiscoveryTransportResult,
   DiscoveryTransportRun,
   PlannedDiscoveryRun,
@@ -24,12 +23,7 @@ import { Verification, type Verifier } from "../verification/index.js";
 import { WORDPRESS_VERIFIER_PROMPT_ID } from "../profiles/wordpress/prompts/index.js";
 import { parseWordPressAdvisories } from "../profiles/wordpress/advisory.js";
 import { wordpressFindingLocations } from "../profiles/wordpress/answer-key.js";
-import {
-  planWordPressEntryAssignments,
-  renderWordPressEntryAssignment,
-  renderWordPressEntryIndex,
-  type WordPressEntryAssignment,
-} from "../profiles/wordpress/discovery/entry-points.js";
+import { renderWordPressEntryIndex } from "../profiles/wordpress/discovery/entry-points.js";
 import { buildWordPressSourceIndex } from "../profiles/wordpress/discovery/storage-index.js";
 import { assessWordPressCoverage } from "../profiles/wordpress/discovery/coverage.js";
 import {
@@ -86,10 +80,7 @@ import { inspectWordPressLedgerExclusions } from "../profiles/wordpress/selectio
 import { loadWordPressLegacyHistory } from "../profiles/wordpress/selection/legacy-history.js";
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
-import {
-  extractCampaignHistory,
-  inspectHistoryMirror,
-} from "../profiles/wordpress/wordfence-history/index.js";
+import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import { classifyWordPressPrecondition } from "../profiles/wordpress/verification/precondition-class.js";
 import {
@@ -122,18 +113,7 @@ const text = z.strictObject({
 const DISCOVERY_RUN_MEMORY_MIB =
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
 
-const armBFraction = z.number().min(0).max(1);
 const runnablePrompt = z.literal(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID);
-const ablationAxis = z.strictObject({
-  axis: z.literal("history"),
-  armBFraction,
-});
-const ablation = z
-  .union([
-    z.strictObject({ axes: z.array(ablationAxis).min(1).max(2) }),
-    z.strictObject({ axis: z.literal("history"), armBFraction }),
-  ])
-  .transform((value) => ("axes" in value ? value : { axes: [value] }));
 
 /** Human-edited, Git-tracked run configuration. It carries no credentials or keys. */
 const commonCampaignFields = {
@@ -179,80 +159,15 @@ const commonCampaignFields = {
 const singleTrialStop = z
   .strictObject({ maxRuns: z.literal(1), noFindingRuns: z.literal(1) })
   .default({ maxRuns: 1, noFindingRuns: 1 });
-const comparisonStop = z
+export const wordpressCampaignConfigSchema = z
   .strictObject({
-    maxRuns: z.number().int().positive().max(40),
-    noFindingRuns: z.number().int().positive(),
-  })
-  .default({ maxRuns: 1, noFindingRuns: 1 });
-const assignment = z.strictObject({
-  unit: z.literal("entry-point"),
-  entriesPerRun: z.number().int().min(1).max(64).default(8),
-});
-const campaignModes = z.discriminatedUnion("mode", [
-  z.strictObject({
     ...commonCampaignFields,
-    mode: z.literal("wp2shell"),
-    runWallTimeMinutes: z.number().positive().max(120).default(120),
+    mode: z.literal("wp2shell").default("wp2shell"),
     promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
     stopRules: singleTrialStop,
     entryIndex: z.literal(false).default(false),
-  }),
-  z.strictObject({
-    ...commonCampaignFields,
-    mode: z.literal("entry-index-control"),
-    runWallTimeMinutes: z.number().positive().max(120).default(120),
-    promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
-    stopRules: singleTrialStop,
-    entryIndex: z.literal(false),
-  }),
-  z.strictObject({
-    ...commonCampaignFields,
-    mode: z.literal("comparison"),
-    promptId: runnablePrompt,
-    stopRules: comparisonStop,
-    entryIndex: z.boolean().default(true),
-  }),
-  z.strictObject({
-    ...commonCampaignFields,
-    mode: z.literal("ablation"),
-    promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
-    stopRules: comparisonStop,
-    entryIndex: z.boolean().default(true),
-    ablation,
-  }),
-  z.strictObject({
-    ...commonCampaignFields,
-    mode: z.literal("assignment"),
-    promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
-    stopRules: comparisonStop,
-    entryIndex: z.literal(true).default(true),
-    assignment,
-  }),
-]);
-export const wordpressCampaignConfigSchema = z
-  .preprocess((value) => {
-    if (typeof value !== "object" || value === null || Array.isArray(value))
-      return value;
-    const config = value as Record<string, unknown>;
-    if (config.mode !== undefined) return value;
-    const mode =
-      config.assignment !== undefined
-        ? "assignment"
-        : config.ablation !== undefined
-          ? "ablation"
-          : config.entryIndex === false
-            ? "entry-index-control"
-            : "wp2shell";
-    return { ...config, mode };
-  }, campaignModes)
+  })
   .superRefine((config, context) => {
-    if (config.mode !== "wp2shell")
-      context.addIssue({
-        code: "custom",
-        path: ["mode"],
-        message: "New WordPress campaigns use the wp2shell mode only",
-      });
     if (
       config.lab.initialApprovedComment === true &&
       config.lab.initialPosts.length === 0
@@ -270,13 +185,6 @@ export const wordpressCampaignConfigSchema = z
         code: "custom",
         path: ["lab", "scenarioId"],
         message: "Unknown WordPress Lab scenario",
-      });
-    const axes = config.mode === "ablation" ? config.ablation.axes : [];
-    if (new Set(axes.map((axis) => axis.axis)).size !== axes.length)
-      context.addIssue({
-        code: "custom",
-        path: ["ablation", "axes"],
-        message: "Ablation axes must be distinct",
       });
   });
 export type WordPressCampaignConfig = z.infer<
@@ -840,34 +748,19 @@ type WordPressDiscoveryContext = {
   readonly state: CliState;
   readonly objective: WordPressDiscoveryAsset;
   readonly trustBoundary: WordPressDiscoveryAsset;
-  readonly historyFor: (
-    config: WordPressCampaignConfig,
-    target: WordPressTargetSelection,
-  ) => CampaignHistory;
 };
 
 async function planWordPressDiscovery(
   { target, snapshot, lab }: WordPressDiscoveryInput,
   context: WordPressDiscoveryContext,
 ): Promise<WordPressDiscoveryPlan> {
-  const {
-    config,
-    repeat,
-    boundaries,
-    state,
-    objective,
-    trustBoundary,
-    historyFor,
-  } = context;
+  const { config, repeat, boundaries, state, objective, trustBoundary } =
+    context;
   if ((lab === undefined) !== (config.discovery.lab === "none"))
     throw new Error(
       "Discovery Lab mode differs from the campaign configuration",
     );
   const wallMinutes = config.runWallTimeMinutes;
-  const ablationConfig =
-    config.mode === "ablation" ? config.ablation : undefined;
-  const assignmentConfig =
-    config.mode === "assignment" ? config.assignment : undefined;
   const outputContractV1 = wordPressDiscoveryOutputContract();
   const outputContractV2 = wordPressDiscoveryOutputContractV2();
   const outputContractV3 = wordPressDiscoveryOutputContractV3(
@@ -898,43 +791,23 @@ async function planWordPressDiscovery(
           config.stopRules.maxRuns,
           target.runBudget ?? config.stopRules.maxRuns,
         );
-  const sourceIndex =
-    !config.entryIndex && assignmentConfig === undefined
-      ? undefined
-      : await buildWordPressSourceIndex(source.directory, target.slug);
+  const sourceIndex = !config.entryIndex
+    ? undefined
+    : await buildWordPressSourceIndex(source.directory, target.slug);
   const entryIndexMetadata =
     !config.entryIndex || sourceIndex === undefined
       ? ({ enabled: false } as const)
       : ({ enabled: true, digest: sourceIndex.digest } as const);
-  let assignments: readonly WordPressEntryAssignment[] = [];
-  if (assignmentConfig !== undefined) {
-    if (sourceIndex === undefined)
-      throw new Error("Source index is unavailable");
-    assignments = planWordPressEntryAssignments(
-      sourceIndex,
-      assignmentConfig.entriesPerRun,
-    );
-  }
-  if (assignmentConfig !== undefined && assignments.length === 0)
-    throw new Error(
-      "Entry-point assignment found no registrations in the source",
-    );
   const stopRules = {
     maxRuns,
-    noFindingRuns: Math.min(
-      Math.max(config.stopRules.noFindingRuns, assignments.length),
-      maxRuns,
-    ),
+    noFindingRuns: Math.min(config.stopRules.noFindingRuns, maxRuns),
   };
   const accounts = Object.entries(lab?.attackerAccounts ?? {}).map(
     ([role, account]) =>
       `- ${role}: ${account.username} / ${account.password} (Lab only)`,
   );
   // Only low-privilege Lab accounts exist on the handle; nothing else is offered.
-  const promptFor = (
-    assignment: WordPressEntryAssignment | undefined,
-    selectedObjective: typeof objective,
-  ) =>
+  const promptFor = (selectedObjective: typeof objective) =>
     [
       selectedObjective.text.trim(),
       ...(objectiveOnly(selectedObjective.id)
@@ -968,32 +841,12 @@ async function planWordPressDiscovery(
       ...(objectiveOnly(selectedObjective.id)
         ? ["Writable notes directory: /workspace/research."]
         : []),
-      ...(assignment === undefined
-        ? ["## Assigned files", "All files under /workspace/main."]
-        : [
-            renderWordPressEntryAssignment(
-              assignment,
-              source.dependency !== undefined,
-            ),
-          ]),
+      "## Assigned files",
+      "All files under /workspace/main.",
       ...(config.entryIndex && sourceIndex !== undefined
         ? [renderWordPressEntryIndex(sourceIndex)]
         : []),
     ].join("\n\n");
-  const assignmentMetadata = (assignment: WordPressEntryAssignment) => {
-    if (
-      assignment.indexDigest === undefined ||
-      assignment.componentIds === undefined
-    )
-      throw new Error("Indexed assignment metadata is missing");
-    return {
-      partition: assignment.partition,
-      of: assignment.of,
-      planDigest: assignment.planDigest,
-      indexDigest: assignment.indexDigest,
-      componentDigest: canonicalDigest(assignment.componentIds),
-    };
-  };
   const now = state.clock().getTime();
   return {
     input: {
@@ -1009,27 +862,17 @@ async function planWordPressDiscovery(
       stopRules,
       lab:
         lab === undefined ? { mode: "none" } : { setupDigest: lab.setupDigest },
-      history: historyFor(config, target),
+      history: { mode: "none" },
       entryIndex: entryIndexMetadata,
     },
-    historyFraction:
-      ablationConfig?.axes.find((axis) => axis.axis === "history")
-        ?.armBFraction ?? 0,
     runWallTimeMs: wallMinutes * 60_000,
     concurrency: Math.min(
       config.resources.maxConcurrentRuns,
       Math.floor(config.resources.memoryBudgetMiB / DISCOVERY_RUN_MEMORY_MIB),
     ),
-    ...(ablationConfig === undefined
-      ? {}
-      : { ablation: { axes: ablationConfig.axes } }),
     plannedTrials: Array.from({ length: maxRuns }, (_, trialOrdinal) => {
       const trialId = state.newId();
       const selectedObjective = objective;
-      const assignment =
-        assignments.length === 0
-          ? undefined
-          : assignments[trialOrdinal % assignments.length]!;
       const explore: PlannedDiscoveryRun = {
         configuration: {
           promptVariant: selectedObjective.id,
@@ -1047,11 +890,8 @@ async function planWordPressDiscovery(
                 ? ("none" as const)
                 : ("mounted" as const),
           },
-          assignmentUnit: assignment === undefined ? "plugin" : "entry-point",
+          assignmentUnit: "plugin",
           entryIndex: entryIndexMetadata,
-          ...(assignment === undefined
-            ? {}
-            : { assignment: assignmentMetadata(assignment) }),
           labAccess: {
             database: lab?.database === undefined ? "none" : "read-only",
           },
@@ -1061,7 +901,7 @@ async function planWordPressDiscovery(
           targetSnapshotDigest: snapshot.digest,
           profile: boundaries.runtimeProfile,
           coordination: "cooperative" as const,
-          prompt: promptFor(assignment, selectedObjective),
+          prompt: promptFor(selectedObjective),
           ...(coverageFor(selectedObjective.id)
             ? { coverageSchema: outputContractV3.coverageSchema }
             : {}),
@@ -1132,10 +972,6 @@ async function runWordPressCampaign(
   state: CliState,
   input: Parameters<CliProfile["runCampaign"]>[1],
   options: WordPressCliProfileOptions,
-  historyFor: (
-    config: WordPressCampaignConfig,
-    target: WordPressTargetSelection,
-  ) => CampaignHistory,
 ): ReturnType<CliProfile["runCampaign"]> {
   const { config, policy } = await loadConfig(
     input.configPath,
@@ -1284,7 +1120,6 @@ async function runWordPressCampaign(
           state,
           objective,
           trustBoundary,
-          historyFor,
         }),
       verification: verificationFor(state, boundaries),
       reconstructionFor: reconstructionFor(config),
@@ -1295,25 +1130,6 @@ async function runWordPressCampaign(
 export function createWordPressCliProfile(
   options: WordPressCliProfileOptions,
 ): CliProfile {
-  /** Public records before the stable version's release; none when the cutoff or mirror is missing. */
-  const historyFor = (
-    config: WordPressCampaignConfig,
-    target: WordPressTargetSelection,
-  ): CampaignHistory => {
-    if (
-      config.mode !== "ablation" ||
-      !config.ablation.axes.some((axis) => axis.axis === "history") ||
-      options.wordfenceHistory === undefined ||
-      target.versionPublishedAt === undefined
-    )
-      return { mode: "none" };
-    const extracted = extractCampaignHistory(
-      target.slug,
-      target.versionPublishedAt,
-      options.wordfenceHistory,
-    );
-    return extracted.status === "ready" ? extracted.history : { mode: "none" };
-  };
   return {
     review: (state) =>
       new Review({
@@ -1555,8 +1371,7 @@ export function createWordPressCliProfile(
           })),
       };
     },
-    runCampaign: (state, input) =>
-      runWordPressCampaign(state, input, options, historyFor),
+    runCampaign: (state, input) => runWordPressCampaign(state, input, options),
     async verifyNext(state, input) {
       const { config } = await loadConfig(input.configPath);
       const boundaries = await options.boundaries(config, state);

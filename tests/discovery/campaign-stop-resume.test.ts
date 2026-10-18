@@ -135,7 +135,6 @@ async function open() {
         ...input,
         modelProfileDigest: (options.profile ?? profile).digest,
       },
-      historyFraction: 0,
       ...(options.concurrency === undefined
         ? {}
         : { concurrency: options.concurrency }),

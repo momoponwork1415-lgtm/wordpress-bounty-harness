@@ -14,7 +14,6 @@ import {
   type SourceFileSets,
 } from "../discovery/index.js";
 import type {
-  ArmComparison,
   ProspectiveAdvisory,
   ProspectiveScore,
   SourceLocation,
@@ -317,7 +316,6 @@ const USAGE = [
   "  lab up --campaign <id> --finding <id> --config <path> [--port <n>] [--db-port <n>]",
   "  lab down [--config <path>]",
   "  eval case-blocked --campaign <id> --case <id> --snapshot <digest> --stage source|dependency|lab --reason <code>",
-  "  eval compare [--axis history|prompt|continuation] [--campaign <id>]",
   "  eval prospective --advisories <path> [--campaign <id>]",
 ].join("\n");
 
@@ -348,7 +346,6 @@ const options = {
   case: { type: "string" },
   snapshot: { type: "string" },
   stage: { type: "string" },
-  axis: { type: "string" },
   advisories: { type: "string" },
   remove: { type: "boolean" },
   "for-review": { type: "boolean" },
@@ -539,33 +536,6 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
     );
   }
   return lines;
-}
-
-const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
-
-export function formatComparison(comparison: ArmComparison): string[] {
-  const paired = comparison.targets.filter((target) => target.paired);
-  const arm = (name: "a" | "b") => {
-    const tally = comparison.pooled[name];
-    const rate = tally.runs === 0 ? 0 : tally.hits / tally.runs;
-    return `  arm ${name}: hits ${tally.hits}/${tally.runs} (${percent(rate)}, 95% CI ${(tally.interval.lower * 100).toFixed(1)}–${percent(tally.interval.upper)})  findings ${tally.findings}  cost $${tally.knownCostUsd.toFixed(2)} known, ${tally.unpricedRuns} run(s) unavailable`;
-  };
-  const verdict = {
-    inconclusive:
-      paired.length === 0 ? "判定不能（対なし）" : "判定不能（区間が重なる）",
-    "a-higher": "arm a が高い",
-    "b-higher": "arm b が高い",
-  }[comparison.verdict];
-  return [
-    `compare ${comparison.axis}  paired targets ${paired.length}  unpaired ${comparison.targets.length - paired.length}`,
-    arm("a"),
-    arm("b"),
-    `  verdict: ${verdict}`,
-    ...comparison.targets.map(
-      (target) =>
-        `  target ${target.selectionId ?? target.snapshotDigest}  a ${target.arms.a.hits}/${target.arms.a.runs}  b ${target.arms.b.hits}/${target.arms.b.runs}${target.paired ? "" : "  (unpaired, excluded)"}`,
-    ),
-  ];
 }
 
 export function formatProspective(score: ProspectiveScore): string[] {
@@ -1448,29 +1418,6 @@ export async function runCli(
                 environment.profile.locationsOf(finding),
             }).prospective({
               advisories,
-              ...(values.campaign === undefined
-                ? {}
-                : { campaignId: values.campaign }),
-            }),
-          ),
-        );
-        return 0;
-      }
-      case "eval compare": {
-        const axis = values.axis ?? "history";
-        if (axis !== "history" && axis !== "prompt" && axis !== "continuation")
-          throw new UsageError(
-            "--axis supports history, prompt or continuation",
-          );
-        print(
-          formatComparison(
-            new Evaluation({
-              ledger: state.ledger,
-              store: state.store,
-              locationsOf: (finding) =>
-                environment.profile.locationsOf(finding),
-            }).compare({
-              axis,
               ...(values.campaign === undefined
                 ? {}
                 : { campaignId: values.campaign }),

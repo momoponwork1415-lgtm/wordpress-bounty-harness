@@ -2,7 +2,6 @@ export {
   campaignHistorySchema,
   campaignInputV1Schema,
   createHistoryCatalog,
-  historyForRun,
   runDiscoveryCampaign,
   validateEvaluationCampaignInput,
   validateProductionCampaignInput,
@@ -12,9 +11,6 @@ export {
   type PlannedDiscoveryRun,
   type PlannedTrial,
   type AdmittedLead,
-  allocateTrialArms,
-  type AblationAxis,
-  type TrialArms,
 } from "./campaign.js";
 export {
   agentRuntimeProfileDefinitionSchema,
