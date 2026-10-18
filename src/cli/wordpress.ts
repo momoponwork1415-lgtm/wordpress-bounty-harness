@@ -58,7 +58,7 @@ import { wordPressScenario } from "../profiles/wordpress/lab/scenarios.js";
 import {
   loadWordPressDiscoveryAsset,
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
-  WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS,
+  wordPressDiscoveryPrompt,
   type WordPressDiscoveryAsset,
 } from "../profiles/wordpress/prompts/index.js";
 import {
@@ -744,6 +744,34 @@ type WordPressDiscoveryContext = {
   readonly trustBoundary: WordPressDiscoveryAsset;
 };
 
+/**
+ * Which Harness-generated output contract a prompt version receives, read
+ * from the prompt table. Objective-only bodies get a generated contract
+ * (ADR 0019); with the entry index on, coverage-capable versions switch to
+ * contract v3 and report the Root coverage schema.
+ */
+export function wordPressDiscoveryContractPlan(
+  id: string,
+  entryIndex: boolean,
+): {
+  readonly objectiveOnly: boolean;
+  readonly contract: "v1" | "v2" | "v3" | "v4" | null;
+  readonly coverage: boolean;
+} {
+  const record = wordPressDiscoveryPrompt(id);
+  const coverage = record.entryIndexCoverage && entryIndex;
+  return {
+    objectiveOnly: record.outputContract !== null,
+    contract:
+      record.outputContract === null
+        ? null
+        : coverage
+          ? "v3"
+          : record.outputContract,
+    coverage,
+  };
+}
+
 async function planWordPressDiscovery(
   { target, snapshot, lab }: WordPressDiscoveryInput,
   context: WordPressDiscoveryContext,
@@ -755,30 +783,25 @@ async function planWordPressDiscovery(
       "Discovery Lab mode differs from the campaign configuration",
     );
   const wallMinutes = config.runWallTimeMinutes;
-  const outputContractV1 = wordPressDiscoveryOutputContract();
-  const outputContractV2 = wordPressDiscoveryOutputContractV2();
-  const outputContractV4 = wordPressDiscoveryOutputContractV4();
   const outputContractV3 = wordPressDiscoveryOutputContractV3(
     config.coverage.maxUnvisitedRatio,
   );
-  const coverageFor = (id: string) =>
-    (id === "wp2shell-bounty-v5" || id === "wp2shell-bounty-v6") &&
-    config.entryIndex;
-  const outputContractFor = (id: string) =>
-    id === WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID
-      ? outputContractV4
-      : coverageFor(id)
-        ? outputContractV3
-        : id === "wp2shell-bounty-v3" ||
-            id === "wp2shell-bounty-v4" ||
-            id === "wp2shell-bounty-v5" ||
-            id === "wp2shell-bounty-v6" ||
-            id === "wp2shell-bounty-v7" ||
-            id === "wp2shell-whitebox-v1.7"
-          ? outputContractV2
-          : outputContractV1;
-  const objectiveOnly = (id: string) =>
-    WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
+  const outputContracts = {
+    v1: wordPressDiscoveryOutputContract(),
+    v2: wordPressDiscoveryOutputContractV2(),
+    v3: outputContractV3,
+    v4: wordPressDiscoveryOutputContractV4(),
+  };
+  const planFor = (id: string) =>
+    wordPressDiscoveryContractPlan(id, config.entryIndex);
+  const coverageFor = (id: string) => planFor(id).coverage;
+  const objectiveOnly = (id: string) => planFor(id).objectiveOnly;
+  const outputContractFor = (id: string) => {
+    const { contract } = planFor(id);
+    if (contract === null)
+      throw new Error("Prompt carries its own output contract");
+    return outputContracts[contract];
+  };
   const source = await boundaries.sourceFor(snapshot);
   // The campaign stop rule decides depth; legacy per-target budgets only lower it (ADR 0032 Q6).
   const maxRuns =
