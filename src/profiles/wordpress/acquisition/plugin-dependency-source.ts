@@ -102,15 +102,21 @@ export function openWordPressOrgPluginDependencySource(options: {
   explicitPins: Readonly<Record<string, string>>,
   explicitSlugs: readonly string[],
   versionPolicy: "stable-observed" | "pinned-only",
+  targetSource?: AcquiredSource,
 ) => Promise<readonly AcquiredSource[]> {
   const sourceFromPacket = (packet: TargetIntakePacket) =>
     acquiredSourceFromIntakePacket(
       packet,
       join(options.storageDirectory, "target-intake"),
     );
-  const declaredBy = async (packet: TargetIntakePacket) =>
+  const declaredBy = async (
+    packet: TargetIntakePacket,
+    capturedSource?: AcquiredSource,
+  ) =>
     requiredPluginSlugs(
-      await sourceFromPacket(packet).readFile(packet.mainPluginFile),
+      await (capturedSource ?? sourceFromPacket(packet)).readFile(
+        packet.mainPluginFile,
+      ),
     );
   const acquire = async (
     slug: string,
@@ -139,7 +145,23 @@ export function openWordPressOrgPluginDependencySource(options: {
     return result.intake.packet;
   };
 
-  return async (targetPacket, explicitPins, explicitSlugs, versionPolicy) => {
+  return async (
+    targetPacket,
+    explicitPins,
+    explicitSlugs,
+    versionPolicy,
+    targetSource,
+  ) => {
+    if (
+      targetSource !== undefined &&
+      (targetSource.identity !== targetPacket.pluginIdentity ||
+        targetSource.version !== targetPacket.version ||
+        canonicalDigest(targetSource.manifest) !==
+          targetPacket.sourceTree.digest)
+    )
+      throw new SourceAcquisitionError("source-mismatch", {
+        reason: "required-plugin-target-source-mismatch",
+      });
     for (const [slug, version] of Object.entries(explicitPins)) {
       if (
         !slugSchema.safeParse(slug).success ||
@@ -217,7 +239,7 @@ export function openWordPressOrgPluginDependencySource(options: {
     }
 
     const roots = [
-      ...(await declaredBy(targetPacket)).map((slug) => ({
+      ...(await declaredBy(targetPacket, targetSource)).map((slug) => ({
         slug,
         parent: targetSlug,
       })),

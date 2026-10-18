@@ -2414,6 +2414,93 @@ describe("harness CLI vertical slice", () => {
     expect(docker.some(({ args }) => args[0] === "ps")).toBe(false);
   });
 
+  it("defers verification while keeping the discovery Lab and Findings for verify next", async () => {
+    const {
+      run,
+      configPath,
+      prompts,
+      ledger,
+      live,
+      verificationProvisionAttempts,
+    } = await harness({
+      entryPoints: true,
+      leadsOnCalls: {
+        1: [
+          {
+            summary: "Synthetic partial route",
+            attackerPosition: "subscriber",
+            primitive: "write",
+            storage: { kind: "option", key: "synthetic_plugin_shared" },
+            missingEdge: "auth-use",
+            sourceTrace: [
+              {
+                file: "includes/synthetic.php",
+                function: "synthetic_save",
+                line: 4,
+              },
+            ],
+            labObservations: "Synthetic partial observation",
+          },
+        ],
+      },
+    });
+    const campaign = "campaign-defer-verification";
+    const command = [
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      campaign,
+      "--config",
+      configPath,
+      "--defer-verification",
+    ];
+    const discovered = await run(...command);
+    expect(discovered.code).toBe(0);
+    expect(discovered.stdout).toContain("lab ready  runs 1");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("## Lab");
+    expect(
+      ledger().read({ campaignId: campaign, type: "discovery-concluded" }),
+    ).toHaveLength(1);
+    expect(
+      ledger().read({ campaignId: campaign, type: "finding-recorded" }),
+    ).toHaveLength(2);
+    expect(
+      ledger().read({ campaignId: campaign, type: "lead-recorded" }),
+    ).toHaveLength(1);
+    expect(
+      ledger().read({ campaignId: campaign, type: "verification-finished" }),
+    ).toHaveLength(0);
+    expect(
+      ledger().read({ campaignId: campaign, type: "lab-provisioned" }),
+    ).toMatchObject([{ event: { status: "ready", purpose: "discovery" } }]);
+    expect(verificationProvisionAttempts()).toBe(0);
+    expect(live.containers.size).toBe(0);
+
+    const repeated = await run(...command);
+    expect(repeated.code).toBe(0);
+    expect(prompts).toHaveLength(1);
+    expect(
+      ledger().read({ campaignId: campaign, type: "lab-provisioned" }),
+    ).toHaveLength(1);
+
+    const verified = await run(
+      "verify",
+      "next",
+      "--campaign",
+      campaign,
+      "--config",
+      configPath,
+    );
+    expect(verified.code).toBe(0);
+    expect(verified.stdout).toContain("verified finding");
+    expect(
+      ledger().read({ campaignId: campaign, type: "verification-finished" }),
+    ).toHaveLength(1);
+    expect(verificationProvisionAttempts()).toBe(1);
+  });
+
   it.each([
     { failure: "refuseOnCalls", reason: "provider-refused" },
     { failure: "failOnCalls", reason: "run-failed" },
@@ -4188,6 +4275,82 @@ describe("harness CLI vertical slice", () => {
       finding,
     );
     expect(scoped.stdout).toMatch(/^wordfence ambiguous /m);
+  });
+
+  it("reuses the recorded SVN source pin for same-version re-verification", async () => {
+    const { run, configPath, ledger, frozenSelections, root } = await harness();
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      selectionPolicyPath: string;
+    };
+    const policy = JSON.parse(
+      await readFile(config.selectionPolicyPath, "utf8"),
+    ) as Record<string, unknown>;
+    const sourcePin = {
+      kind: "captured-wordpress-org-svn-export" as const,
+      storageDirectory: join(root, "svn-capture"),
+      packetDigest: sha("a"),
+      sourceTreeDigest: sha("b"),
+      revision: 3628543,
+    };
+    policy.targetSourcePins = { "synthetic-plugin": sourcePin };
+    await writeFile(config.selectionPolicyPath, JSON.stringify(policy));
+    const campaign = ["--campaign", "campaign-1"];
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "--all",
+          ...campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const finding = ledger()
+      .read({ campaignId: "campaign-1", type: "finding-recorded" })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "finding-recorded" &&
+          event.category === "account-takeover",
+      );
+    if (finding?.type !== "finding-recorded")
+      throw new Error("Expected a synthetic Finding");
+
+    delete policy.targetSourcePins;
+    await writeFile(config.selectionPolicyPath, JSON.stringify(policy));
+    const sameVersion = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding.findingId,
+      "--config",
+      configPath,
+      "--version",
+      "3.3.1",
+    );
+    expect(sameVersion.code).toBe(0);
+    expect(frozenSelections.at(-1)?.targetSourcePin).toEqual(sourcePin);
+
+    policy.targetSourcePins = {
+      "synthetic-plugin": { ...sourcePin, revision: sourcePin.revision + 1 },
+    };
+    await writeFile(config.selectionPolicyPath, JSON.stringify(policy));
+    const conflicting = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding.findingId,
+      "--config",
+      configPath,
+      "--version",
+      "3.3.1",
+    );
+    expect(conflicting.code).not.toBe(0);
+    expect(conflicting.stderr).toContain("source-mismatch");
   });
 
   it("rechecks a confirmed Finding on its original Snapshot after the Lab scenario changes", async () => {

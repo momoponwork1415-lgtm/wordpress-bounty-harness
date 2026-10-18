@@ -4,6 +4,7 @@ import {
   createWordPressSelection,
   loadWordPressSelectionPolicy,
   wordPressSelectionPolicySchema,
+  wordPressTargetSelectionSchema,
 } from "../../../src/profiles/wordpress/selection/index.js";
 import type { CreateWordPressSelectionOptions } from "../../../src/profiles/wordpress/selection/wordpress-selection.js";
 import type { WordPressOrgTargetSource } from "../../../src/profiles/wordpress/acquisition/index.js";
@@ -173,6 +174,43 @@ describe("WordPress selection public interface", () => {
       wordPressSelectionPolicySchema.safeParse({
         ...basePolicy,
         pluginDependencyPins: { misspelled: { elementor: "3.32.0" } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("pins a captured SVN target only for a manually pinned version", async () => {
+    const sourcePin = {
+      kind: "captured-wordpress-org-svn-export" as const,
+      storageDirectory: "/private/svn-intake",
+      packetDigest: digest("1"),
+      sourceTreeDigest: digest("2"),
+      revision: 3628543,
+    };
+    const policy = {
+      ...basePolicy,
+      pinnedVersions: { exposed: "2.0.16" },
+      targetSourcePins: { exposed: sourcePin },
+    };
+    const selected = await harness({}).select(policy);
+    expect(selected.find((item) => item.slug === "exposed")).toMatchObject({
+      version: "2.0.16",
+      targetSourcePin: sourcePin,
+    });
+    expect(
+      wordPressTargetSelectionSchema.parse(
+        selected.find((item) => item.slug === "exposed"),
+      ).targetSourcePin,
+    ).toEqual(sourcePin);
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...basePolicy,
+        targetSourcePins: { exposed: sourcePin },
+      }).success,
+    ).toBe(false);
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...policy,
+        targetSourcePins: { other: sourcePin },
       }).success,
     ).toBe(false);
   });

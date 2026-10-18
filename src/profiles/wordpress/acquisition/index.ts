@@ -59,7 +59,12 @@ export {
   requiredPluginSlugs,
 } from "./plugin-dependency-source.js";
 export { acquiredSourceFromIntakePacket } from "./intake-packet-source.js";
-export { acquirePinnedWordPressOrgSvnSource } from "./pinned-svn-source.js";
+export {
+  acquirePinnedWordPressOrgSvnSource,
+  capturedWordPressOrgSvnPinSchema,
+  openCapturedWordPressOrgSvnSource,
+} from "./pinned-svn-source.js";
+export type { CapturedWordPressOrgSvnPin } from "./pinned-svn-source.js";
 export { openMaterializedSources } from "./materialized-sources.js";
 export {
   openWordPressCoreSource,

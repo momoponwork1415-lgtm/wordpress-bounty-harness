@@ -2,7 +2,9 @@ import { z } from "zod";
 
 import type { TargetSelection } from "../../../selection/index.js";
 import {
+  capturedWordPressOrgSvnPinSchema,
   wordPressOrgTargetObservationRefSchema,
+  type CapturedWordPressOrgSvnPin,
   type WordPressOrgTargetObservationRef,
 } from "../acquisition/index.js";
 import {
@@ -68,6 +70,10 @@ const manualSelectionPolicy = z
         ),
       )
       .optional(),
+    /** A previously captured official SVN revision for a manually pinned version. */
+    targetSourcePins: z
+      .record(slugSchema, capturedWordPressOrgSvnPinSchema)
+      .optional(),
     /** Historical manual nominations remain readable; the current rule is set by ADR 0030. */
     historySignals: z
       .record(slugSchema, z.number().int().nonnegative())
@@ -93,6 +99,11 @@ const manualSelectionPolicy = z
       ) &&
       Object.keys(policy.pluginDependencyPins ?? {}).every((slug) =>
         policy.candidateSlugs.includes(slug),
+      ) &&
+      Object.keys(policy.targetSourcePins ?? {}).every(
+        (slug) =>
+          policy.candidateSlugs.includes(slug) &&
+          policy.pinnedVersions?.[slug] !== undefined,
       ),
     {
       message: "Pinned, dependency and history slugs must be candidates",
@@ -177,6 +188,7 @@ export interface WordPressTargetSelection extends TargetSelection {
   readonly versionPublishedAt?: string | undefined;
   /** Selection-time operator pins; the snapshot also seals the acquired bytes. */
   readonly pluginDependencyPins?: Readonly<Record<string, string>> | undefined;
+  readonly targetSourcePin?: CapturedWordPressOrgSvnPin | undefined;
   readonly pluginDependencySlugs?: readonly string[] | undefined;
   readonly dependencyVersionPolicy?:
     "stable-observed" | "pinned-only" | undefined;
@@ -211,6 +223,7 @@ export const wordPressTargetSelectionSchema: z.ZodType<WordPressTargetSelection>
     pluginDependencyPins: z
       .record(slugSchema, z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$/))
       .optional(),
+    targetSourcePin: capturedWordPressOrgSvnPinSchema.optional(),
     pluginDependencySlugs: z.array(slugSchema).max(16).optional(),
     dependencyVersionPolicy: z
       .enum(["stable-observed", "pinned-only"])

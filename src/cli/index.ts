@@ -186,6 +186,8 @@ export interface CliProfile {
       readonly repeat?: number;
       /** Retry an incomplete independent verification on the same Lab setup. */
       readonly retryIncompleteVerifications?: boolean;
+      /** Keep the discovery Lab, but leave Findings for a later `verify next`. */
+      readonly deferVerification?: boolean;
       /** Checked before each next target; true drains the campaign as `operator`. */
       readonly stop?: () => boolean;
       /** Aborts exploration currently running when continuous mode receives SIGTERM. */
@@ -286,7 +288,7 @@ export type CliEnvironment = {
 const USAGE = [
   "usage: harness [--state <dir>] <command>",
   "  select --config <path> [--minimum <n>]",
-  "  campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--repeat <n>] [--retry-incomplete]",
+  "  campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--repeat <n>] [--retry-incomplete] [--defer-verification]",
   "  continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--verify-concurrency <n>] [--notify <command>] [--resume]",
   "  continuous stop",
   "  continuous resume",
@@ -353,6 +355,7 @@ const options = {
   remove: { type: "boolean" },
   "for-review": { type: "boolean" },
   "retry-incomplete": { type: "boolean" },
+  "defer-verification": { type: "boolean" },
   repeat: { type: "string" },
   "verify-concurrency": { type: "string" },
   port: { type: "string" },
@@ -880,6 +883,7 @@ export async function runCli(
           target,
           repeat,
           retryIncompleteVerifications: values["retry-incomplete"] === true,
+          deferVerification: values["defer-verification"] === true,
           ...(values.selection === undefined
             ? {}
             : { selectionPolicyPath: resolve(values.selection) }),

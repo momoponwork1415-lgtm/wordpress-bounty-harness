@@ -285,6 +285,10 @@ export function createWordPressSelection(
         policy.pluginDependencyPins?.[slug] === undefined
           ? {}
           : { pluginDependencyPins: policy.pluginDependencyPins[slug] }),
+        ...(!("targetSourcePins" in policy) ||
+        policy.targetSourcePins?.[slug] === undefined
+          ? {}
+          : { targetSourcePin: policy.targetSourcePins[slug] }),
         ...(!("pluginDependencySlugs" in policy) ||
         policy.pluginDependencySlugs?.[slug] === undefined
           ? {}

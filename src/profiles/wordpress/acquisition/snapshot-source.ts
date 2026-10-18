@@ -13,6 +13,17 @@ import type {
   WordPressOrgTargetSource,
 } from "./wordpress-org-contracts.js";
 import type { TargetIntakePacket } from "./contracts.js";
+import {
+  openCapturedWordPressOrgSvnSource,
+  type CapturedWordPressOrgSvnPin,
+} from "./pinned-svn-source.js";
+
+export type WordPressSnapshotAcquireRequest = WordPressOrgAcquireRequest & {
+  readonly capturedSvnTarget?: {
+    readonly slug: string;
+    readonly pin: CapturedWordPressOrgSvnPin;
+  };
+};
 
 function failureKind(
   acquired: Exclude<WordPressOrgAcquisitionResult, { status: "ready" }>,
@@ -45,46 +56,62 @@ export function openWordPressOrgSnapshotSource(options: {
     pins: Readonly<Record<string, string>>,
     slugs: readonly string[],
     versionPolicy: "stable-observed" | "pinned-only",
+    targetSource: AcquiredSource,
   ) => Promise<readonly AcquiredSource[]>;
-}): SourceAcquisition<WordPressOrgAcquireRequest> {
+}): SourceAcquisition<WordPressSnapshotAcquireRequest> {
   return {
     async acquire(selection) {
-      const acquired = await options.targetSource.acquire(selection);
-      if (acquired.status !== "ready") {
-        throw new SourceAcquisitionError(failureKind(acquired), {
-          status: acquired.status,
-          ...("reason" in acquired ? { reason: acquired.reason } : {}),
-          ...("reasons" in acquired ? { reasons: acquired.reasons } : {}),
-          ...("diagnostic" in acquired && acquired.diagnostic !== undefined
-            ? { transport: acquired.diagnostic }
-            : {}),
+      let packet: TargetIntakePacket;
+      let target: AcquiredSource;
+      if (selection.capturedSvnTarget !== undefined) {
+        const imported = await openCapturedWordPressOrgSvnSource({
+          pin: selection.capturedSvnTarget.pin,
+          slug: selection.capturedSvnTarget.slug,
+          version: selection.requestedVersion,
+          policy: selection.policy,
         });
+        packet = imported.packet;
+        target = imported.source;
+      } else {
+        const { capturedSvnTarget: _capturedSvnTarget, ...archiveRequest } =
+          selection;
+        const acquired = await options.targetSource.acquire(archiveRequest);
+        if (acquired.status !== "ready") {
+          throw new SourceAcquisitionError(failureKind(acquired), {
+            status: acquired.status,
+            ...("reason" in acquired ? { reason: acquired.reason } : {}),
+            ...("reasons" in acquired ? { reasons: acquired.reasons } : {}),
+            ...("diagnostic" in acquired && acquired.diagnostic !== undefined
+              ? { transport: acquired.diagnostic }
+              : {}),
+          });
+        }
+        packet = acquired.intake.packet;
+        const files = new Map(
+          packet.sourceTree.manifest.entries.map((entry) => [
+            entry.path,
+            entry.digest,
+          ]),
+        );
+        target = {
+          identity: packet.pluginIdentity,
+          version: packet.version,
+          manifest: packet.sourceTree.manifest,
+          async readFile(path) {
+            const digest = files.get(path);
+            if (digest === undefined)
+              throw new Error("File is absent from source manifest");
+            return readFile(
+              join(
+                options.storageDirectory,
+                "target-intake",
+                "blobs",
+                digest.slice(7),
+              ),
+            );
+          },
+        };
       }
-      const packet = acquired.intake.packet;
-      const files = new Map(
-        packet.sourceTree.manifest.entries.map((entry) => [
-          entry.path,
-          entry.digest,
-        ]),
-      );
-      const target: AcquiredSource = {
-        identity: packet.pluginIdentity,
-        version: packet.version,
-        manifest: packet.sourceTree.manifest,
-        async readFile(path) {
-          const digest = files.get(path);
-          if (digest === undefined)
-            throw new Error("File is absent from source manifest");
-          return readFile(
-            join(
-              options.storageDirectory,
-              "target-intake",
-              "blobs",
-              digest.slice(7),
-            ),
-          );
-        },
-      };
       return {
         target,
         dependencies: [
@@ -94,6 +121,7 @@ export function openWordPressOrgSnapshotSource(options: {
             selection.pluginDependencyPins ?? {},
             selection.pluginDependencySlugs ?? [],
             selection.dependencyVersionPolicy ?? "pinned-only",
+            target,
           )) ?? []),
         ],
       };

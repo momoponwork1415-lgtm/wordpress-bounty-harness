@@ -1255,6 +1255,9 @@ async function runWordPressCampaign(
       : {
           retryIncompleteVerifications: input.retryIncompleteVerifications,
         }),
+    ...(input.deferVerification === undefined
+      ? {}
+      : { deferVerification: input.deferVerification }),
     ledger: state.ledger,
     store: state.store,
     clock: state.clock,
@@ -1726,11 +1729,78 @@ export function createWordPressCliProfile(
                     historySource: _historySource,
                     ...rest
                   }) => rest)(policy);
+            const {
+              targetSourcePins: _targetSourcePins,
+              ...policyWithoutCapturedSources
+            } = reverifyPolicy as WordPressSelectionPolicy & {
+              targetSourcePins?: Readonly<Record<string, unknown>>;
+            };
+            const sameOriginalVersion =
+              version === originalSnapshot.target.version;
+            let capturedSourcePin: WordPressTargetSelection["targetSourcePin"];
+            if (sameOriginalVersion) {
+              const originalSelectionEvent = state.ledger
+                .read({
+                  campaignId: input.campaignId,
+                  type: "target-selected",
+                  limit: 1000,
+                })
+                .map(({ event }) => event)
+                .find(
+                  (event) =>
+                    event.type === "target-selected" &&
+                    event.snapshotDigest === originalSnapshotDigest,
+                );
+              const selectionRef = originalSelectionEvent?.artifacts.find(
+                (artifact) => artifact.kind === "target-selection",
+              );
+              const configuredPin =
+                "targetSourcePins" in policy
+                  ? policy.targetSourcePins?.[slug]
+                  : undefined;
+              if (selectionRef === undefined) {
+                // Older ZIP selections need no captured-source record. A new
+                // SVN pin cannot be substituted for an unknown original.
+                if (configuredPin !== undefined)
+                  throw new SourceAcquisitionError("source-mismatch", {
+                    reason: "original-target-source-pin-unavailable",
+                  });
+              } else {
+                const file = await state.store.readFile(
+                  selectionRef.digest,
+                  "target-selection.json",
+                  1024 * 1024,
+                );
+                if (file.status !== "resolved")
+                  throw new SourceAcquisitionError("source-mismatch", {
+                    reason: "original-target-selection-unavailable",
+                  });
+                const originalSelection = wordPressTargetSelectionSchema.parse(
+                  JSON.parse(file.bytes.toString("utf8")),
+                );
+                if (
+                  originalSelection.targetId !==
+                    originalSnapshot.target.identity ||
+                  originalSelection.version !==
+                    originalSnapshot.target.version ||
+                  (configuredPin !== undefined &&
+                    canonicalJson(configuredPin) !==
+                      canonicalJson(originalSelection.targetSourcePin ?? null))
+                )
+                  throw new SourceAcquisitionError("source-mismatch", {
+                    reason: "original-target-source-pin-mismatch",
+                  });
+                capturedSourcePin = originalSelection.targetSourcePin;
+              }
+            }
             const selected = await boundaries.selection.select({
-              ...reverifyPolicy,
+              ...policyWithoutCapturedSources,
               candidateSlugs: [slug],
               pluginDependencyPins: { [slug]: pluginDependencyPins },
               pinnedVersions: version === undefined ? {} : { [slug]: version },
+              ...(capturedSourcePin === undefined
+                ? {}
+                : { targetSourcePins: { [slug]: capturedSourcePin } }),
               maximumTargets: 1,
             });
             const target = selected[0] ?? null;

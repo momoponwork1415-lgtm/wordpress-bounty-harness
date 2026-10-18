@@ -264,13 +264,21 @@ export async function createWordPressHostProfile(options: {
         clock: state.clock,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       }),
-      freeze: async (target) =>
-        snapshotStore.freeze({
+      freeze: async (target) => {
+        const snapshot = await snapshotStore.freeze({
           kind: "wordpress-org-target-acquire",
           schemaVersion: 1,
           observationRef: target.observationRef,
           requestedVersion: target.version,
           policy: intakePolicy,
+          ...(target.targetSourcePin === undefined
+            ? {}
+            : {
+                capturedSvnTarget: {
+                  slug: target.slug,
+                  pin: target.targetSourcePin,
+                },
+              }),
           ...(target.pluginDependencyPins === undefined
             ? {}
             : { pluginDependencyPins: target.pluginDependencyPins }),
@@ -280,7 +288,16 @@ export async function createWordPressHostProfile(options: {
           ...(target.dependencyVersionPolicy === undefined
             ? {}
             : { dependencyVersionPolicy: target.dependencyVersionPolicy }),
-        }),
+        });
+        if (
+          snapshot.target.identity !== target.targetId ||
+          snapshot.target.version !== target.version
+        )
+          throw new SourceAcquisitionError("source-mismatch", {
+            reason: "selected-target-source-mismatch",
+          });
+        return snapshot;
+      },
     };
   };
 
@@ -484,6 +501,14 @@ export async function createWordPressHostProfile(options: {
           observationRef: target.observationRef,
           requestedVersion: target.version,
           policy: intakePolicy,
+          ...(target.targetSourcePin === undefined
+            ? {}
+            : {
+                capturedSvnTarget: {
+                  slug: target.slug,
+                  pin: target.targetSourcePin,
+                },
+              }),
           ...(target.pluginDependencyPins === undefined
             ? {}
             : { pluginDependencyPins: target.pluginDependencyPins }),
@@ -494,6 +519,13 @@ export async function createWordPressHostProfile(options: {
             ? {}
             : { dependencyVersionPolicy: target.dependencyVersionPolicy }),
         });
+        if (
+          snapshot.target.identity !== target.targetId ||
+          snapshot.target.version !== target.version
+        )
+          throw new SourceAcquisitionError("source-mismatch", {
+            reason: "selected-target-source-mismatch",
+          });
         frozen.set(snapshot.digest, snapshot);
         return snapshot;
       },

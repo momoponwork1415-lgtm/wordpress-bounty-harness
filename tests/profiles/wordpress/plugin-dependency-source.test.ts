@@ -75,6 +75,69 @@ async function fixture() {
 }
 
 describe("WordPress plugin dependency source", () => {
+  it("reads declared dependencies from an imported target outside the ZIP store", async () => {
+    const { packet, storageDirectory } = await fixture();
+    const mainFile =
+      "<?php\n/* Plugin Name: Addon\nRequires Plugins: elementor */";
+    const target = await packet("addon", "2.0.16", mainFile);
+    const elementor = await packet(
+      "elementor",
+      "4.2.0",
+      "<?php\n/* Plugin Name: Elementor */",
+    );
+    const source = {
+      identity: target.pluginIdentity,
+      version: target.version,
+      manifest: target.sourceTree.manifest,
+      async readFile(path: string) {
+        expect(path).toBe(target.mainPluginFile);
+        return Buffer.from(mainFile);
+      },
+    };
+    await rm(
+      join(
+        storageDirectory,
+        "target-intake",
+        "blobs",
+        target.sourceTree.manifest.entries[0]!.digest.slice(7),
+      ),
+    );
+    const acquire = openWordPressOrgPluginDependencySource({
+      storageDirectory,
+      policy,
+      targetSource: {
+        async observe({ slug }) {
+          expect(slug).toBe("elementor");
+          return {
+            status: "observed",
+            observation: { stableVersion: "4.2.0" },
+            observationRef: {
+              kind: "wordpress-org-target-observation-ref",
+              schemaVersion: 1,
+              id: "observation-elementor",
+              digest: digest("elementor"),
+            },
+          } as Awaited<ReturnType<WordPressOrgTargetSource["observe"]>>;
+        },
+        async acquire() {
+          return {
+            status: "ready",
+            intake: { packet: elementor },
+          } as Awaited<ReturnType<WordPressOrgTargetSource["acquire"]>>;
+        },
+      },
+    });
+    expect(
+      await acquire(target, { elementor: "4.2.0" }, [], "pinned-only", source),
+    ).toMatchObject([{ identity: "wporg:elementor", version: "4.2.0" }]);
+    await expect(
+      acquire(target, { elementor: "4.2.0" }, [], "pinned-only", {
+        ...source,
+        version: "wrong",
+      }),
+    ).rejects.toThrow(SourceAcquisitionError);
+  });
+
   it("reads only the main PHP header in WordPress' first 8 KiB", () => {
     expect(
       requiredPluginSlugs(
