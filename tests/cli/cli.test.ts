@@ -1464,7 +1464,7 @@ describe("harness CLI vertical slice", () => {
     expect(queue.code).toBe(0);
     expect(queue.stdout).toMatch(/^runtime-confirmed .* account-takeover$/m);
     expect(queue.stdout).toMatch(
-      /reproduction package: sha256:[a-f0-9]{64} \(\S+private-evidence\/sha256:[a-f0-9]{64}\)/,
+      /reproduction package: sha256:[a-f0-9]{64} \(\S+private-evidence\/sha256:[a-f0-9]{64}\/content\)/,
     );
     expect(queue.stdout).toContain(
       "observed: attackerRole=subscriber defaultSettings=true observedVia=session reachedRole=administrator",

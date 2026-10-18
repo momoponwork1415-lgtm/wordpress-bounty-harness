@@ -20,6 +20,9 @@ import {
 } from "./canonical-source-tree.js";
 import { canonicalJson } from "./canonical-json.js";
 
+/** Every committed artifact keeps its files under `<root>/<artifactId>/content/`. */
+const CONTENT_DIRECTORY = "content";
+
 const artifactIdSchema = z
   .string()
   .min(1)
@@ -75,6 +78,20 @@ export type PrivateArtifactFileResolution =
     }
   | Exclude<PrivateArtifactResolution, { readonly status: "resolved" }>;
 
+/**
+ * A JSON file read through its schema. `malformed` separates text that is not
+ * JSON (`json`) from JSON the schema rejects (`schema`), so a caller can name
+ * which one it saw without touching the bytes itself.
+ */
+export type PrivateArtifactJsonResolution<T> =
+  | {
+      readonly status: "resolved";
+      readonly artifact: PrivateArtifactDescriptor;
+      readonly value: T;
+    }
+  | { readonly status: "malformed"; readonly reason: "json" | "schema" }
+  | Exclude<PrivateArtifactResolution, { readonly status: "resolved" }>;
+
 function isFileSystemError(
   error: unknown,
   code: string,
@@ -108,12 +125,33 @@ export class PrivateArtifactStore {
     };
   }
 
+  /** The host directory this store owns; Private Evidence lives here, outside Git. */
+  get rootDirectory(): string {
+    return this.#rootDirectory;
+  }
+
+  /**
+   * Where a committed artifact's files live on this host. A pure path for
+   * review material and printed output; nothing is read or verified.
+   */
+  contentPath(artifactId: string): string {
+    const parsed = artifactIdSchema.safeParse(artifactId);
+    if (!parsed.success) {
+      throw new PrivateArtifactStoreError(
+        "invalid-artifact-id",
+        "Private artifact identity is invalid",
+        parsed.error,
+      );
+    }
+    return join(this.#rootDirectory, parsed.data, CONTENT_DIRECTORY);
+  }
+
   async stage(): Promise<PrivateArtifactStaging> {
     await this.#prepareRoot();
     const rootDirectory = await mkdtemp(
       join(this.#rootDirectory, ".active-artifact-"),
     );
-    const contentDirectory = join(rootDirectory, "content");
+    const contentDirectory = join(rootDirectory, CONTENT_DIRECTORY);
     await mkdir(contentDirectory, { mode: 0o700 });
     return { rootDirectory, contentDirectory };
   }
@@ -251,7 +289,7 @@ export class PrivateArtifactStore {
       ) {
         return { status: "size-limit-exceeded" };
       }
-      const contentDirectory = join(destination, "content");
+      const contentDirectory = join(destination, CONTENT_DIRECTORY);
       const verified = await verifyCanonicalSourceTree(
         contentDirectory,
         artifact,
@@ -344,6 +382,27 @@ export class PrivateArtifactStore {
     }
   }
 
+  /** `readFile` followed by `JSON.parse` and the schema; the bytes never leave this call. */
+  async readJson<T>(
+    artifact: PrivateArtifactDescriptor | string,
+    relativePath: string,
+    schema: z.ZodType<T>,
+    maxBytes: number,
+  ): Promise<PrivateArtifactJsonResolution<T>> {
+    const file = await this.readFile(artifact, relativePath, maxBytes);
+    if (file.status !== "resolved") return file;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(file.bytes.toString("utf8")) as unknown;
+    } catch {
+      return { status: "malformed", reason: "json" };
+    }
+    const value = schema.safeParse(parsed);
+    return value.success
+      ? { status: "resolved", artifact: file.artifact, value: value.data }
+      : { status: "malformed", reason: "schema" };
+  }
+
   async #prepareRoot(): Promise<void> {
     await mkdir(this.#rootDirectory, { recursive: true, mode: 0o700 });
     const stat = await lstat(this.#rootDirectory);
@@ -360,7 +419,8 @@ export class PrivateArtifactStore {
     if (
       dirname(staging.rootDirectory) !== this.#rootDirectory ||
       !basename(staging.rootDirectory).startsWith(".active-artifact-") ||
-      staging.contentDirectory !== join(staging.rootDirectory, "content")
+      staging.contentDirectory !==
+        join(staging.rootDirectory, CONTENT_DIRECTORY)
     ) {
       throw new PrivateArtifactStoreError(
         "invalid-staging",

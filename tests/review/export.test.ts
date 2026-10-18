@@ -261,7 +261,6 @@ describe("review export", () => {
     const bundle = await exportReviewBundle({
       ledger,
       store,
-      evidenceDirectory,
       campaignId: "campaign-1",
       findingId: "finding-1",
       stateDiff: reader({
@@ -489,12 +488,11 @@ describe("review export", () => {
   });
 
   it("refuses a Finding the campaign never recorded", async () => {
-    const { ledger, store, evidenceDirectory } = await fixture();
+    const { ledger, store } = await fixture();
     await expect(
       exportReviewBundle({
         ledger,
         store,
-        evidenceDirectory,
         campaignId: "campaign-1",
         findingId: "finding-9",
       }),
@@ -502,7 +500,7 @@ describe("review export", () => {
   });
 
   it("fills the decision, reproduction, reverification, draft and newest release", async () => {
-    const { ledger, store, evidenceDirectory } = await fixture({
+    const { ledger, store } = await fixture({
       verification: "confirmed",
     });
     const base = {
@@ -606,7 +604,6 @@ describe("review export", () => {
       exportReviewBundle({
         ledger,
         store,
-        evidenceDirectory,
         campaignId: "campaign-1",
         findingId: "finding-1",
         observeLatestVersion: observe as never,

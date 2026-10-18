@@ -1069,14 +1069,15 @@ export class Review<TFacts = unknown> {
     const evidence = event.artifacts.find((item) => item.kind === kind);
     if (evidence === undefined)
       throw new Error("Private Evidence reference is missing");
-    const resolved = await this.#store.readFile(
+    const resolved = await this.#store.readJson(
       evidence.digest,
       "record.json",
+      schema,
       100_000,
     );
     if (resolved.status !== "resolved")
       throw new Error("Private Evidence is unavailable");
-    return schema.parse(JSON.parse(resolved.bytes.toString("utf8")) as unknown);
+    return resolved.value;
   }
 
   async #allAssessments(): Promise<ScopeAssessment[]> {

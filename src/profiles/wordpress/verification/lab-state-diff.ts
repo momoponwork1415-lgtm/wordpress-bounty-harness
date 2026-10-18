@@ -113,21 +113,15 @@ export function createWordPressStateDiffReader(options: {
 }): StateDiffReader {
   return {
     async read(digest) {
-      const file = await options.store.readFile(
+      const file = await options.store.readJson(
         digest,
         LAB_STATE_DIFF_FILE,
+        wordpressLabStateDiffSchema,
         32 * 1024 * 1024,
       );
-      if (file.status !== "resolved") return null;
-      try {
-        return summarizeWordPressLabStateDiff(
-          wordpressLabStateDiffSchema.parse(
-            JSON.parse(file.bytes.toString("utf8")) as unknown,
-          ),
-        );
-      } catch {
-        return null;
-      }
+      return file.status === "resolved"
+        ? summarizeWordPressLabStateDiff(file.value)
+        : null;
     },
   };
 }
