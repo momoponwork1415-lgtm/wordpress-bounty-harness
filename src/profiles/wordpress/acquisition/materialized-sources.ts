@@ -19,6 +19,7 @@ import {
 import type { WordPressSource, WordPressSourceResolver } from "../lab/index.js";
 import { PHP_RUNTIME_SOURCE_IDENTITY } from "./php-runtime-source.js";
 import { WORDPRESS_CORE_IDENTITY } from "./wordpress-core-source.js";
+import { parseWordPressOrgPluginIdentity } from "../target-identity.js";
 
 /** Generous bounds for re-measuring a tree whose sealed size is not at hand. */
 const MEASURE_LIMITS = { maxEntries: 200_000, maxBytes: 2 * 1024 ** 3 };
@@ -32,7 +33,7 @@ const sourceKind = (
   | { kind: "php-source" } => {
   if (identity === WORDPRESS_CORE_IDENTITY) return { kind: "wordpress-core" };
   if (identity === PHP_RUNTIME_SOURCE_IDENTITY) return { kind: "php-source" };
-  const slug = /^wporg:([a-z0-9][a-z0-9-]*)$/.exec(identity)?.[1];
+  const slug = parseWordPressOrgPluginIdentity(identity) ?? undefined;
   if (slug === undefined)
     throw new SourceAcquisitionError("source-mismatch", {
       reason: "materialized-source-identity",

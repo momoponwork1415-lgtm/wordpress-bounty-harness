@@ -10,3 +10,10 @@ export interface TargetSelection {
   readonly selectedAt: string;
   readonly policy: { readonly id: string; readonly digest: string };
 }
+
+/** The id a selected target version carries in the ledger: `<targetId>@<version>`. */
+export function targetSelectionId(
+  target: Pick<TargetSelection, "targetId" | "version">,
+): string {
+  return `${target.targetId}@${target.version}`;
+}

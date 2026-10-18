@@ -45,6 +45,7 @@ import {
   type WordPressOrgTargetSource,
 } from "./wordpress-org-contracts.js";
 import { extractZipArchive } from "./zip-archive.js";
+import { wordPressOrgPluginIdentity } from "../target-identity.js";
 
 const metadataSchema = z.object({
   slug: z.string(),
@@ -251,7 +252,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
     requestValue: WordPressOrgObserveRequest,
   ): Promise<WordPressOrgObservationResult> {
     const request = wordPressOrgObserveRequestSchema.parse(requestValue);
-    const pluginIdentity = `wporg:${request.slug}`;
+    const pluginIdentity = wordPressOrgPluginIdentity(request.slug);
     const sourceUrl = metadataUrl(request.slug);
     let response: WordPressOrgSourceResponse;
     try {

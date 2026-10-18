@@ -19,6 +19,7 @@ import { assertSimplyScheduleBookingTarget } from "./simply-schedule-booking.js"
 import { assertBrizyBuilderPageTarget } from "./brizy-builder-page.js";
 import { assertBrizyFileAttachmentFormTarget } from "./brizy-file-attachment-form.js";
 import { PHP_RUNTIME_SOURCE_IDENTITY } from "../acquisition/php-runtime-source.js";
+import { wordPressOrgPluginIdentity } from "../target-identity.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const slug = z
@@ -150,7 +151,7 @@ async function prepareDependencies(
         throw new Error("PHP source dependency mismatch");
       phpVersion = item.version;
     } else {
-      if (expected.identity !== `wporg:${item.pluginSlug}`)
+      if (expected.identity !== wordPressOrgPluginIdentity(item.pluginSlug))
         throw new Error("Plugin dependency identity mismatch");
       dependencies.push({ slug: item.pluginSlug, directory });
     }

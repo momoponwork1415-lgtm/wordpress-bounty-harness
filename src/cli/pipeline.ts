@@ -11,7 +11,7 @@ import type {
   LabReachability,
 } from "../lab/index.js";
 import type { Ledger, LedgerEventV1, LedgerRecord } from "../ledger/index.js";
-import type { TargetSelection } from "../selection/index.js";
+import { targetSelectionId, type TargetSelection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
 import { storeTargetSkipDiagnostic } from "./skip-diagnostic.js";
 import {
@@ -228,9 +228,7 @@ export async function runCampaignPipeline<
     target: Target,
     currentScenarioId?: string | null,
   ): boolean => {
-    const snapshotDigest = selectedSnapshots.get(
-      `${target.targetId}@${target.version}`,
-    );
+    const snapshotDigest = selectedSnapshots.get(targetSelectionId(target));
     if (snapshotDigest === undefined || !concludedSnapshots.has(snapshotDigest))
       return false;
     if (options.discoveryLab === "none" || options.deferVerification === true)
@@ -309,7 +307,7 @@ export async function runCampaignPipeline<
   };
 
   const processTarget = async (target: Target): Promise<TargetResult> => {
-    const selectionId = `${target.targetId}@${target.version}`;
+    const selectionId = targetSelectionId(target);
     let stage: SkipStage = "freeze";
     // Before a snapshot exists, the selection record stands in for its digest.
     let snapshotDigest = canonicalDigest(target);
@@ -1226,7 +1224,7 @@ export async function reverifyOnSelectedVersion<
       .find(
         (event) =>
           event.type === "target-selected" &&
-          event.selectionId === `${target.targetId}@${target.version}`,
+          event.selectionId === targetSelectionId(target),
       );
     if (recordedSelection?.type !== "target-selected")
       throw new Error("The pinned reference Snapshot is not recorded");
@@ -1351,7 +1349,7 @@ export async function reverifyOnSelectedVersion<
       identity: `target-selected-${verificationId}`,
       occurredAt: target.selectedAt,
       type: "target-selected" as const,
-      selectionId: `${target.targetId}@${target.version}`,
+      selectionId: targetSelectionId(target),
       artifacts: [
         {
           kind: "target-selection",
