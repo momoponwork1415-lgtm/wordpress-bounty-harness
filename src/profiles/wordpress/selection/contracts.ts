@@ -45,8 +45,19 @@ const commonSelectionPolicy = {
     recency: z.number().nonnegative(),
     surface: z.number().nonnegative().optional(),
     highThreat: z.number().nonnegative().optional(),
+    /** Public advisory count in the window, from the local mirror (ADR 0037). 0 or absent: the mirror is not opened. */
     history: z.number().nonnegative().optional(),
+    /** Records of a paying class in the same window; default 0 keeps ADR 0037's decided behaviour unchanged. */
+    historyPayingClass: z.number().nonnegative().optional(),
   }),
+  /** Days before the mirror's `last_successful_at` that records count (default 365). */
+  historyWindowDays: z.number().positive().max(3650).optional(),
+  /** Records at or above this count score the full history weight (default 10). */
+  historyCountCap: z.number().int().positive().max(1000).optional(),
+  /** `select` stops when the mirror's last success is older than this (default 2). */
+  maximumHistoryAgeDays: z.number().positive().optional(),
+  /** Signal class names (primitive or terminal kind) that count as a paying class (default in `advisoryHistoryDefaults`). */
+  historyPayingClasses: z.array(z.string().min(1).max(64)).max(32).optional(),
   /** Legacy (ADR 0032 Q6): per-target run budgets were never effective in production; the campaign stop rule decides. */
   runBudget: z
     .strictObject({
@@ -75,16 +86,6 @@ const manualSelectionPolicy = z
     targetSourcePins: z
       .record(slugSchema, capturedWordPressOrgSvnPinSchema)
       .optional(),
-    /** Historical manual nominations remain readable; the current rule is set by ADR 0030. */
-    historySignals: z
-      .record(slugSchema, z.number().int().nonnegative())
-      .optional(),
-    historySource: z
-      .strictObject({
-        digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
-        refreshedAt: z.iso.datetime({ offset: true }),
-      })
-      .optional(),
     /** Manual pin: select this version instead of the observed stable version. */
     pinnedVersions: z
       .record(slugSchema, z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/))
@@ -93,9 +94,6 @@ const manualSelectionPolicy = z
   .refine(
     (policy) =>
       Object.keys(policy.pinnedVersions ?? {}).every((slug) =>
-        policy.candidateSlugs.includes(slug),
-      ) &&
-      Object.keys(policy.historySignals ?? {}).every((slug) =>
         policy.candidateSlugs.includes(slug),
       ) &&
       Object.keys(policy.pluginDependencyPins ?? {}).every((slug) =>
@@ -107,14 +105,9 @@ const manualSelectionPolicy = z
           policy.pinnedVersions?.[slug] !== undefined,
       ),
     {
-      message: "Pinned, dependency and history slugs must be candidates",
+      message: "Pinned and dependency slugs must be candidates",
       path: ["candidateSlugs"],
     },
-  )
-  .refine(
-    (policy) =>
-      policy.historySignals === undefined || policy.historySource !== undefined,
-    { message: "History signals require a source", path: ["historySource"] },
   );
 
 const automaticSelectionPolicy = z
@@ -173,8 +166,31 @@ export type SelectionReason =
   | "core-requirement-unavailable"
   | "core-version-incompatible"
   | "programme-asset-out-of-scope"
-  | "programme-stale"
-  | "history-stale";
+  | "programme-stale";
+
+/** Defaults the policy may override; `select` reads them through `advisoryHistorySettings`. */
+export const advisoryHistoryDefaults = {
+  windowDays: 365,
+  countCap: 10,
+  maximumAgeDays: 2,
+  payingClasses: [
+    "stored-xss",
+    "sql-injection",
+    "privilege-escalation",
+    "authentication-bypass",
+    "arbitrary-file-upload",
+    "remote-code-execution",
+  ],
+} as const;
+
+/** Counts and dates from the public advisory mirror; no record content (ADR 0037). */
+export interface WordPressTargetAdvisoryHistory {
+  readonly count: number;
+  readonly payingClassCount: number;
+  readonly latestPublished?: string | undefined;
+  readonly mirrorAsOf: string;
+  readonly mirrorDigest: string;
+}
 
 export interface WordPressTargetSelection extends TargetSelection {
   readonly slug: string;
@@ -199,7 +215,11 @@ export interface WordPressTargetSelection extends TargetSelection {
     readonly surface: number;
     readonly highThreat: number;
     readonly history: number;
+    /** Absent in records written before ADR 0037. */
+    readonly historyPayingClass?: number | undefined;
   };
+  /** Present when the policy weights advisory history (ADR 0037). */
+  readonly advisoryHistory?: WordPressTargetAdvisoryHistory | undefined;
   readonly observationRef: WordPressOrgTargetObservationRef;
   readonly programmeRef: ProgrammeEligibilitySnapshotRef;
 }
@@ -235,7 +255,17 @@ export const wordPressTargetSelectionSchema: z.ZodType<WordPressTargetSelection>
       surface: z.number().finite(),
       highThreat: z.number().finite(),
       history: z.number().finite(),
+      historyPayingClass: z.number().finite().optional(),
     }),
+    advisoryHistory: z
+      .strictObject({
+        count: z.number().int().nonnegative(),
+        payingClassCount: z.number().int().nonnegative(),
+        latestPublished: z.iso.datetime({ offset: true }).optional(),
+        mirrorAsOf: z.iso.datetime({ offset: true }),
+        mirrorDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+      })
+      .optional(),
     observationRef: wordPressOrgTargetObservationRefSchema,
     programmeRef: programmeEligibilitySnapshotRefSchema,
   });

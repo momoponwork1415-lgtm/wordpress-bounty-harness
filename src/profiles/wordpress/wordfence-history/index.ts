@@ -219,6 +219,8 @@ export type HistoryMirrorStatus =
       readonly maxAgeMs: number;
       readonly recordCount: number;
       readonly staleFallback: boolean;
+      /** The feed digest the state and database agree on. */
+      readonly contentSha256: string;
     }
   | {
       readonly status: "unavailable";
@@ -263,6 +265,7 @@ export function inspectHistoryMirror(
     maxAgeMs,
     recordCount: state.record_count,
     staleFallback: state.stale_fallback === true,
+    contentSha256: state.content_sha256,
   };
 }
 

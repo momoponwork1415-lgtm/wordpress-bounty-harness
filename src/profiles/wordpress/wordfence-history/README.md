@@ -12,6 +12,10 @@
 
 adapterはSQLiteをread-onlyで開き、stateとDBのschema、feed digest、件数のmetadataが一致するときだけ検索する。APIへの通信や自動更新はしない。`signals`は旧正規化器のtitle/descriptionからの分類なので、分類が欠けた履歴は手動確認候補として残す。重複照合結果、履歴の本文、認証情報をDiscovery入力やGitに置かない。
 
+## 選定向けの件数（ADR 0037）
+
+`openWordfenceAdvisoryHistory({ databasePath, statePath })` は選定の `WordPressAdvisoryHistorySource`。`inspectHistoryMirror` と同じ整合・鮮度の規則（方針の `maximumHistoryAgeDays`）で開き、slug ごとに window 内の非 informational plugin 記録の件数、`signals` の class 名が報奨対象 class に入る件数、最新の公開日だけを返す。title、description、CWE、record JSON は読まない。mirror が stale / unavailable のときは開かず、選定が止まる。
+
 ## Discovery向けの時点で切った公開カタログ（削除済み）
 
 `extractCampaignHistory` と `CampaignInput v1` の `catalog` mode は 2026-10-18 の [ADR 0034](../../../../docs/adr/0034-harness-control-only-deletions.md) で削除した。ablation の history 軸でしか使われず、`wp2shell` mode は常に `history: { mode: "none" }` を渡していた。旧Trialの台帳 `discovery-run-started.history`（mode・digest・渡したrecord id）は読み続け、Findingの任意の `historyRecordId` はそのrunへ渡したidだけを記録できるという台帳側の規則も残る。このmirrorを探索へ投影する code はもう無い。

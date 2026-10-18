@@ -1,7 +1,7 @@
 {
   "kind": "wordpress-selection-policy",
   "schemaVersion": 1,
-  "id": "wordpress-selection-2026-10-20-50000",
+  "id": "wordpress-selection-2026-10-21-50000",
   "promptVariant": "wp2shell-bounty-v8",
   "pluginDependencySlugs": {
     "unlimited-elements-for-elementor": ["elementor"]
@@ -45,6 +45,19 @@
   "excludedSlugs": [],
   "scoreWeights": {
     "installations": 10,
-    "recency": 5
-  }
+    "recency": 5,
+    "history": 5,
+    "historyPayingClass": 0
+  },
+  "historyWindowDays": 365,
+  "historyCountCap": 10,
+  "maximumHistoryAgeDays": 2,
+  "historyPayingClasses": [
+    "stored-xss",
+    "sql-injection",
+    "privilege-escalation",
+    "authentication-bypass",
+    "arbitrary-file-upload",
+    "remote-code-execution"
+  ]
 }
