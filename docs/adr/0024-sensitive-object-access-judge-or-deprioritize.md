@@ -1,5 +1,6 @@
 ---
 status: accepted
+amended-by: 0032 の 2026-10-17 節（`sensitive-object-access` は `finding-parked`）
 ---
 
 # sensitive-object-access を優先順位に残すなら判定器を持つ
