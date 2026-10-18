@@ -18,7 +18,7 @@ open Issue を見直すときは次の 4 つに分け、束ごとに扱いを決
 | --- | --- | --- | --- |
 | 起動前 | runner の起動に要るもの。依存順に並べる | `ready-for-agent` | Codex に依頼文を出す。起動の条件はこの束の先頭だけにする |
 | Step 1 の週 | 最初の提出までに要るもの（重複照合、Lab の前提、ベンチマーク） | `ready-for-agent` | 起動後に並行 |
-| 所有者の判断 | owner-approved path、provider の追加、Programme の条件 | `ready-for-human` | AI も Codex も先に進めない。所有者に質問を 1 つずつ |
+| 所有者の判断 | provider の追加、Programme の条件、外部行動の承認（owner-approved path は 2026-10-18 以降、委任済みの AI が扱う） | `ready-for-human` | AI も Codex も先に進めない。所有者に質問を 1 つずつ |
 | 閉じる・止める | 吸収済み、置き換え済み、先回り、優先度低 | `wontfix` | close。先回りと優先度低は PARKING に行を足す |
 
 - 閉じる comment の型: `triage（<日付>、所有者の委任で AI）: <理由>。<吸収先 / 置き換え先 / PARKING の条件>`。

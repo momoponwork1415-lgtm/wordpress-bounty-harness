@@ -37,7 +37,7 @@ open PR が 3 本を超えたら新しい PR を出さず、branch を push し�
 ## 分担
 
 - 数字（3 Trial、実 Lab の計測）は Claude が貼る。依頼文に「数字は Claude が貼る」と書く。
-- agent に渡る文章の変更が必要になったら Codex は止まり、Issue に理由を書く。所有者の `owner-approved` が要る。
+- agent に渡る文章の変更が必要になったら Codex は止まり、Issue に理由を書く。`owner-approved` が要る（2026-10-18 以降は委任済みの AI が付ける、DEVELOPMENT 第 5 節）。
 
 ## 書かないこと
 
