@@ -70,7 +70,13 @@ export type WordPressSelectionAdvisoryHistoryReport =
     };
 
 export interface WordPressSelectionBatchInspection {
+  /** The primary band's view of every candidate. */
   readonly inspections: readonly WordPressSelectionInspection[];
+  /** The same candidates under each `cascade` step, in policy order (empty without a cascade). */
+  readonly cascade: readonly {
+    readonly step: number;
+    readonly inspections: readonly WordPressSelectionInspection[];
+  }[];
   readonly sourceStatus: "manual" | WordPressOrgCandidateEnumeration["status"];
   readonly sourceListings: WordPressOrgCandidateEnumeration["listings"];
   readonly advisoryHistory: WordPressSelectionAdvisoryHistoryReport;
@@ -113,19 +119,93 @@ export interface WordPressSelectionDecision {
   readonly ranked: readonly WordPressTargetSelection[];
   /** `ranked` cut at `maximumTargets`. */
   readonly selected: readonly WordPressTargetSelection[];
+  /** The cascade step whose band `ranked` comes from; absent for the primary band. */
+  readonly cascadeStep?: number | undefined;
+  /** Eligible counts of the bands tried, step 0 being the primary band, in the order tried. */
+  readonly cascade: readonly {
+    readonly step: number;
+    readonly eligible: number;
+  }[];
   readonly sourceStatus: WordPressSelectionBatchInspection["sourceStatus"];
   readonly sourceListings: WordPressSelectionBatchInspection["sourceListings"];
   readonly legacyHistory: WordPressLegacyHistoryReport;
   readonly advisoryHistory: WordPressSelectionAdvisoryHistoryReport;
 }
 
+export interface WordPressSelectionDecideOptions {
+  /**
+   * Fewest eligible candidates that make the primary band sufficient; below it
+   * the policy's `cascade` steps are tried in order (default 1).
+   */
+  readonly minimum?: number;
+}
+
 /** The selection `policy/selection.md` describes: policy, Ledger and legacy history. */
 export interface WordPressSelection {
-  decide(policy: WordPressSelectionPolicy): Promise<WordPressSelectionDecision>;
+  decide(
+    policy: WordPressSelectionPolicy,
+    options?: WordPressSelectionDecideOptions,
+  ): Promise<WordPressSelectionDecision>;
   /** `decide(policy).selected`: the next batch, Ledger exclusions applied. */
   select(
     policy: WordPressSelectionPolicy,
+    options?: WordPressSelectionDecideOptions,
   ): Promise<readonly WordPressTargetSelection[]>;
+}
+
+interface SelectionBand {
+  /** 0 for the primary band, otherwise the 1-based cascade step. */
+  readonly step: number;
+  readonly minimumActiveInstallations: number;
+  readonly maximumActiveInstallations: number | undefined;
+  readonly minimumPayingClassCount: number | undefined;
+}
+
+/** The primary band followed by the policy's cascade steps, each the primary with its fields overridden. */
+function selectionBands(policy: WordPressSelectionPolicy): SelectionBand[] {
+  const primary: SelectionBand = {
+    step: 0,
+    minimumActiveInstallations: policy.minimumActiveInstallations,
+    maximumActiveInstallations: policy.maximumActiveInstallations,
+    minimumPayingClassCount: undefined,
+  };
+  const steps = "cascade" in policy ? (policy.cascade ?? []) : [];
+  return [
+    primary,
+    ...steps.map((step, index) => ({
+      step: index + 1,
+      minimumActiveInstallations: step.minimumActiveInstallations,
+      maximumActiveInstallations:
+        step.maximumActiveInstallations === undefined
+          ? policy.maximumActiveInstallations
+          : (step.maximumActiveInstallations ?? undefined),
+      minimumPayingClassCount: step.minimumPayingClassCount,
+    })),
+  ];
+}
+
+function bandSelectionReasons(
+  band: SelectionBand,
+  activeInstallations: number,
+  counted: WordPressAdvisoryHistoryCount | undefined,
+): SelectionReason[] {
+  const reasons: SelectionReason[] = [];
+  if (activeInstallations < band.minimumActiveInstallations)
+    reasons.push("below-installation-threshold");
+  if (
+    band.maximumActiveInstallations !== undefined &&
+    activeInstallations >= band.maximumActiveInstallations
+  )
+    reasons.push("above-installation-ceiling");
+  // The count is read only for candidates the band-independent rules admit;
+  // an unread count is not a failed floor.
+  if (
+    band.minimumPayingClassCount !== undefined &&
+    counted !== undefined &&
+    counted.payingClassCount < band.minimumPayingClassCount
+  )
+    reasons.push("below-paying-class-minimum");
+  return reasons;
 }
 
 const byScore = (
@@ -207,7 +287,15 @@ export function advisoryHistorySettings(policy: WordPressSelectionPolicy): {
       policy.maximumHistoryAgeDays ?? advisoryHistoryDefaults.maximumAgeDays,
     payingClasses:
       policy.historyPayingClasses ?? advisoryHistoryDefaults.payingClasses,
-    used: weight > 0 || payingClassWeight > 0 || recordRecencyWeight > 0,
+    // A cascade step's paying-class floor also needs the counts.
+    used:
+      weight > 0 ||
+      payingClassWeight > 0 ||
+      recordRecencyWeight > 0 ||
+      ("cascade" in policy &&
+        (policy.cascade ?? []).some(
+          (step) => step.minimumPayingClassCount !== undefined,
+        )),
   };
 }
 
@@ -409,7 +497,13 @@ export function createWordPressSelection(
             asset.scope === "publicly-distributed",
         );
 
-      const results: WordPressSelectionInspection[] = [];
+      // One observation per candidate serves the primary band and every
+      // cascade step; only the install band and paying-class floor differ.
+      const bands = selectionBands(policy);
+      const results = bands.map((): WordPressSelectionInspection[] => []);
+      const pushToEveryBand = (item: WordPressSelectionInspection): void => {
+        for (const band of results) band.push(item);
+      };
       for (const slug of [...new Set(candidateSlugs)]) {
         const enumeration = candidateProvenance.get(slug);
         const reasons: SelectionReason[] = [];
@@ -430,7 +524,7 @@ export function createWordPressSelection(
               ? "distribution-closed"
               : "observation-unavailable",
           );
-          results.push({
+          pushToEveryBand({
             slug,
             status: "ineligible",
             reasons,
@@ -463,49 +557,54 @@ export function createWordPressSelection(
         ) {
           reasons.push("excluded-author");
         }
-        if (
-          observation.activeInstallations < policy.minimumActiveInstallations
-        ) {
-          reasons.push("below-installation-threshold");
-        }
-        if (
-          policy.maximumActiveInstallations !== undefined &&
-          observation.activeInstallations >= policy.maximumActiveInstallations
-        ) {
-          reasons.push("above-installation-ceiling");
-        }
         const pinnedVersion = pinnedVersions?.[slug];
         // Directory `requires` describes the observed stable release, not a historical pin.
+        const coreReasons: SelectionReason[] = [];
         if (
           policy.wordpressVersion !== undefined &&
           (pinnedVersion ?? observation.stableVersion) ===
             observation.stableVersion
         ) {
           if (observation.minimumWordPressVersion === undefined)
-            reasons.push("core-requirement-unavailable");
+            coreReasons.push("core-requirement-unavailable");
           else if (
             compareVersions(
               observation.minimumWordPressVersion,
               policy.wordpressVersion,
             ) > 0
           )
-            reasons.push("core-version-incompatible");
+            coreReasons.push("core-version-incompatible");
         }
-        if (
+        const ineligibleEverywhere =
           reasons.length > 0 ||
+          coreReasons.length > 0 ||
           updateAge === undefined ||
-          programmeResult?.status !== "current"
+          programmeResult?.status !== "current";
+        // The mirror is read once the band-independent rules pass; a step's
+        // paying-class floor needs the count even where the primary band fails.
+        const counted = ineligibleEverywhere
+          ? undefined
+          : mirror?.count(slug, historyWindow);
+        const bandReasons = bands.map((band) =>
+          bandSelectionReasons(band, observation.activeInstallations, counted),
+        );
+        if (
+          ineligibleEverywhere ||
+          bandReasons.every((perBand) => perBand.length > 0)
         ) {
-          results.push({
-            slug,
-            status: "ineligible",
-            reasons,
-            observedAt: observation.observedAt,
-            ...(enumeration === undefined ? {} : { enumeration }),
-          });
+          bands.forEach((_band, index) =>
+            results[index]!.push({
+              slug,
+              status: "ineligible",
+              reasons: [...reasons, ...bandReasons[index]!, ...coreReasons],
+              observedAt: observation.observedAt,
+              ...(enumeration === undefined ? {} : { enumeration }),
+            }),
+          );
           continue;
         }
-        const counted = mirror?.count(slug, historyWindow);
+        if (updateAge === undefined || programmeResult?.status !== "current")
+          throw new Error("unreachable: eligibility checked above");
         const scoreBreakdown = score(
           observation,
           policy,
@@ -576,17 +675,37 @@ export function createWordPressSelection(
           observationRef: result.observationRef,
           programmeRef: programmeResult.snapshotRef,
         };
-        results.push({
-          slug,
-          status: "eligible",
-          reasons,
-          selection,
-          observedAt: observation.observedAt,
-          ...(enumeration === undefined ? {} : { enumeration }),
+        bands.forEach((band, index) => {
+          const perBand = bandReasons[index]!;
+          results[index]!.push(
+            perBand.length > 0
+              ? {
+                  slug,
+                  status: "ineligible",
+                  reasons: perBand,
+                  observedAt: observation.observedAt,
+                  ...(enumeration === undefined ? {} : { enumeration }),
+                }
+              : {
+                  slug,
+                  status: "eligible",
+                  reasons: [],
+                  selection:
+                    band.step === 0
+                      ? selection
+                      : { ...selection, cascadeStep: band.step },
+                  observedAt: observation.observedAt,
+                  ...(enumeration === undefined ? {} : { enumeration }),
+                },
+          );
         });
       }
       return {
-        inspections: results,
+        inspections: results[0]!,
+        cascade: bands.slice(1).map((band, index) => ({
+          step: band.step,
+          inspections: results[index + 1]!,
+        })),
         sourceStatus: enumeration?.status ?? "manual",
         sourceListings: enumeration?.listings ?? [],
         advisoryHistory,
@@ -622,37 +741,68 @@ export function openWordPressSelection(input: {
 }): WordPressSelection {
   async function decide(
     policyInput: WordPressSelectionPolicy,
+    options: WordPressSelectionDecideOptions = {},
   ): Promise<WordPressSelectionDecision> {
     const policy = wordPressSelectionPolicySchema.parse(policyInput);
+    const minimum = options.minimum ?? 1;
     const batch = await input.candidates.inspectBatch(policy);
-    const eligible = eligibleTargets(batch.inspections);
     const legacy = await loadWordPressLegacyHistory(input.legacyHistoryFile);
-    const ledgerReasons = new Map(
-      inspectWordPressLedgerExclusions({
-        ledger: input.ledger,
-        legacyHistory: legacy.history,
-        candidates: eligible.map(({ slug, version }) => ({ slug, version })),
-        currentPromptVariant: policy.promptVariant ?? input.promptVariant,
-        revisitPolicy: policy.revisitPolicy ?? { kind: "never" },
-        now: (input.clock ?? (() => new Date()))(),
-      }).map(({ slug, reasons }) => [slug, reasons]),
-    );
-    const inspections = batch.inspections.map((item) => ({
-      ...item,
-      reasons: [...item.reasons, ...(ledgerReasons.get(item.slug) ?? [])],
-    }));
-    const excluded = new Set(
-      inspections
-        .filter((item) => item.reasons.length > 0)
-        .map((item) => item.slug),
-    );
-    const ranked = eligible
-      .filter((target) => !excluded.has(target.slug))
-      .sort(byScore);
+    const now = (input.clock ?? (() => new Date()))();
+    // Ledger exclusions are the same rule for every band; only the eligible set differs.
+    const evaluate = (
+      bandInspections: readonly WordPressSelectionInspection[],
+    ): Pick<WordPressSelectionDecision, "inspections" | "ranked"> => {
+      const eligible = eligibleTargets(bandInspections);
+      const ledgerReasons = new Map(
+        inspectWordPressLedgerExclusions({
+          ledger: input.ledger,
+          legacyHistory: legacy.history,
+          candidates: eligible.map(({ slug, version }) => ({ slug, version })),
+          currentPromptVariant: policy.promptVariant ?? input.promptVariant,
+          revisitPolicy: policy.revisitPolicy ?? { kind: "never" },
+          now,
+        }).map(({ slug, reasons }) => [slug, reasons]),
+      );
+      const inspections = bandInspections.map((item) => ({
+        ...item,
+        reasons: [...item.reasons, ...(ledgerReasons.get(item.slug) ?? [])],
+      }));
+      const excluded = new Set(
+        inspections
+          .filter((item) => item.reasons.length > 0)
+          .map((item) => item.slug),
+      );
+      return {
+        inspections,
+        ranked: eligible
+          .filter((target) => !excluded.has(target.slug))
+          .sort(byScore),
+      };
+    };
+    // The primary band stands whenever it reaches the minimum; the cascade
+    // steps are tried in policy order only below it (ADR 0037 addendum).
+    const primary = evaluate(batch.inspections);
+    const tried = [{ step: 0, eligible: primary.ranked.length }];
+    let chosen: Pick<WordPressSelectionDecision, "inspections" | "ranked"> & {
+      readonly cascadeStep?: number;
+    } = primary;
+    if (primary.ranked.length < minimum)
+      for (const step of batch.cascade) {
+        const evaluated = evaluate(step.inspections);
+        tried.push({ step: step.step, eligible: evaluated.ranked.length });
+        if (evaluated.ranked.length >= minimum) {
+          chosen = { ...evaluated, cascadeStep: step.step };
+          break;
+        }
+      }
     return {
-      inspections,
-      ranked,
-      selected: ranked.slice(0, policy.maximumTargets),
+      inspections: chosen.inspections,
+      ranked: chosen.ranked,
+      selected: chosen.ranked.slice(0, policy.maximumTargets),
+      ...(chosen.cascadeStep === undefined
+        ? {}
+        : { cascadeStep: chosen.cascadeStep }),
+      cascade: tried,
       sourceStatus: batch.sourceStatus,
       sourceListings: batch.sourceListings,
       legacyHistory: legacy.report,
@@ -661,7 +811,7 @@ export function openWordPressSelection(input: {
   }
   return {
     decide,
-    select: async (policy) => (await decide(policy)).selected,
+    select: async (policy, options) => (await decide(policy, options)).selected,
   };
 }
 

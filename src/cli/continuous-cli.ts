@@ -231,8 +231,6 @@ export async function continuousCommand(
         throw new Error("The runtime check differs from the runtime profile");
     },
     legacyHistoryAvailable: async () => (await host()).legacyHistoryAvailable,
-    floorPolicyAvailable: () =>
-      profile.floorPoliciesAvailable(state, { selectionPath }),
     readAuth: async () => {
       const expiresAt = (await host()).loginExpiresAt;
       return expiresAt === null ? null : { expiresAt };

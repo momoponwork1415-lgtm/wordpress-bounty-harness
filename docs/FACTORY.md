@@ -123,7 +123,7 @@ flowchart LR
   subgraph REV["製品ループ"]
     Q["review queue"] -->|batch 上限 3 件| STOP2["所有者が decide --minutes で記録"]
     Q -->|"週 15 件超"| STOP3["PARKING の低価値保留を再開"]
-    RUN["runner"] -->|"7 停止理由<br/>operator / errors / no-progress / programme-stale / exhausted / legacy-history-missing / missing-floor-policy"| STOP4["止まって通知。人間が再開"]
+    RUN["runner"] -->|"6 停止理由<br/>operator / errors / no-progress / programme-stale / exhausted / legacy-history-missing"| STOP4["止まって通知。人間が再開"]
   end
 ```
 

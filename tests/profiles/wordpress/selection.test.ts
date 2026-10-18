@@ -16,6 +16,7 @@ import {
   openWordPressSelection,
   wordPressSelectionPolicySchema,
   wordPressTargetSelectionSchema,
+  type WordPressSelectionPolicy,
 } from "../../../src/profiles/wordpress/selection/index.js";
 import type { CreateWordPressSelectionOptions } from "../../../src/profiles/wordpress/selection/wordpress-selection.js";
 import type { WordPressOrgTargetSource } from "../../../src/profiles/wordpress/acquisition/index.js";
@@ -249,13 +250,15 @@ describe("WordPress selection public interface", () => {
     const currentPolicy = await loadWordPressSelectionPolicy();
     const selected = await selection.rank({
       ...currentPolicy,
-      // This harness has no mirror; the shipped history weights would stop it (ADR 0037).
+      // This harness has no mirror; the shipped history weights and the
+      // cascade's paying-class floor would stop it (ADR 0037).
       scoreWeights: {
         ...currentPolicy.scoreWeights,
         history: 0,
         historyPayingClass: 0,
         recordRecency: 0,
       },
+      cascade: [],
       pluginDependencySlugs: { exposed: ["elementor"] },
     });
     expect(selected).toHaveLength(1);
@@ -351,9 +354,9 @@ describe("WordPress selection public interface", () => {
       ).toBe(false);
   });
 
-  it("ships the statistics-derived weights (ADR 0037, 2026-10-19 addendum) in the default policy and the two floor siblings, which differ only in id and floor", async () => {
+  it("ships the statistics-derived weights (ADR 0037, 2026-10-19 addendum) and the owner's cascade order in the default policy", async () => {
     const policy = await loadWordPressSelectionPolicy();
-    expect(policy.id).toBe("wordpress-selection-2026-10-22");
+    expect(policy.id).toBe("wordpress-selection-2026-10-23");
     // docs/reviews/2026-10-19-selection-statistics.md §5.1: paying class decides,
     // record recency splits ties, installs come last; WordPress.org recency is a leak.
     expect(policy.scoreWeights).toEqual({
@@ -381,22 +384,44 @@ describe("WordPress selection public interface", () => {
       "arbitrary-file-upload",
       "remote-code-execution",
     ]);
-    for (const [file, floor] of [
-      ["selection.50000.json", 50_000],
-      ["selection.30000.json", 30_000],
-    ] as const) {
-      const sibling = await loadWordPressSelectionPolicy(
-        new URL(
-          `../../../src/profiles/wordpress/policy/${file}`,
-          import.meta.url,
+    // The owner's order (2026-10-18): 50k, 30k, then ≥1M with two paying-class records.
+    expect("cascade" in policy && policy.cascade).toEqual([
+      { minimumActiveInstallations: 50_000 },
+      { minimumActiveInstallations: 30_000 },
+      {
+        minimumActiveInstallations: 1_000_000,
+        maximumActiveInstallations: null,
+        minimumPayingClassCount: 2,
+      },
+    ]);
+    // The floor siblings are gone with the cascade; nothing reads them.
+    for (const file of ["selection.50000.json", "selection.30000.json"])
+      await expect(
+        loadWordPressSelectionPolicy(
+          new URL(
+            `../../../src/profiles/wordpress/policy/${file}`,
+            import.meta.url,
+          ),
         ),
-      );
-      expect(sibling).toEqual({
+      ).rejects.toThrow(/ENOENT/);
+    // A step whose ceiling does not exceed its floor is rejected.
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
         ...policy,
-        id: `${policy.id}-${floor}`,
-        minimumActiveInstallations: floor,
-      });
-    }
+        cascade: [{ minimumActiveInstallations: 1_000_000 }],
+      }).success,
+    ).toBe(false);
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...policy,
+        cascade: [
+          {
+            minimumActiveInstallations: 1_000_000,
+            maximumActiveInstallations: null,
+          },
+        ],
+      }).success,
+    ).toBe(true);
     // The historical manual signals are gone; a policy still carrying them is rejected.
     expect(
       wordPressSelectionPolicySchema.safeParse({
@@ -1281,5 +1306,295 @@ describe("WordPress selection over the Ledger (policy/selection.md)", () => {
         })
       ).map((item) => item.slug),
     ).toEqual(["popular"]);
+  });
+});
+
+describe("install-band cascade (ADR 0037, 2026-10-19 addendum)", () => {
+  const mirrorAsOf = "2026-10-07T00:00:00.000Z";
+  /** Installs and paying-class counts per candidate; everyone else is an independent author. */
+  const pool: Record<
+    string,
+    { installs: number; paying: number; author?: string }
+  > = {
+    "band-a": { installs: 150_000, paying: 1 },
+    mid: { installs: 60_000, paying: 0 },
+    low: { installs: 35_000, paying: 0 },
+    "giant-paying": { installs: 2_000_000, paying: 3 },
+    "giant-quiet": { installs: 2_000_000, paying: 1 },
+    "giant-automattic": {
+      installs: 3_000_000,
+      paying: 5,
+      author: "Automattic",
+    },
+  };
+  const automaticPolicy = {
+    kind: "wordpress-selection-policy" as const,
+    schemaVersion: 1 as const,
+    id: "cascade-test",
+    promptVariant: "wp2shell-bounty-v8",
+    revisitPolicy: { kind: "never" as const },
+    wordpressVersion: "6.8",
+    candidateSource: {
+      kind: "wordpress-org" as const,
+      popularPages: 1,
+      tags: [],
+      pagesPerTag: 1,
+      perPage: 50,
+      maxCandidates: 50,
+      maxAgeDays: 1,
+    },
+    minimumActiveInstallations: 100_000,
+    maximumActiveInstallations: 1_000_000,
+    maximumObservationAgeDays: 2,
+    maximumUpdateAgeDays: 365,
+    maximumTargets: 3,
+    excludedAuthors: ["Automattic"],
+    excludedSlugs: [],
+    scoreWeights: { installations: 0.5, recency: 0, historyPayingClass: 1 },
+    cascade: [
+      { minimumActiveInstallations: 50_000 },
+      { minimumActiveInstallations: 30_000 },
+      {
+        minimumActiveInstallations: 1_000_000,
+        maximumActiveInstallations: null,
+        minimumPayingClassCount: 2,
+      },
+    ],
+  };
+  function candidates() {
+    let opened = 0;
+    const selection = createWordPressSelection({
+      targetSource: {
+        observe: async ({ slug }: { slug: string }) => {
+          const row = pool[slug];
+          if (row === undefined) return failed(slug, "not-found");
+          const observed = observation(slug, [], row.installs);
+          return row.author === undefined
+            ? observed
+            : {
+                ...observed,
+                observation: { ...observed.observation, author: row.author },
+              };
+        },
+      } as unknown as WordPressOrgTargetSource,
+      programme: {
+        inspect: async () => ({
+          status: "current",
+          snapshotRef: programmeRef,
+          snapshot: {
+            programmeIdentity: "programme:wordfence",
+            policy: {
+              programmeOpportunityBand: "high-impact-only",
+              eligibility: {
+                assets: [
+                  { kind: "wordpress-plugin", scope: "publicly-distributed" },
+                ],
+              },
+            },
+          },
+        }),
+      } as unknown as ProgrammeIntelligence,
+      programmeRef,
+      clock: () => new Date(now),
+      enumerateCandidates: async () => ({
+        status: "available",
+        candidates: Object.keys(pool).map((slug) => ({
+          slug,
+          sourceKind: "popular" as const,
+          sourcePage: 1,
+          sourceUrl: "https://api.wordpress.org/plugins/info/1.2/",
+          observedAt: now,
+          contentDigest: digest("d"),
+        })),
+        listings: [],
+      }),
+      advisoryHistory: {
+        open: () => {
+          opened++;
+          return {
+            status: "open",
+            mirror: {
+              asOf: mirrorAsOf,
+              digest: digest("f"),
+              recordCount: 1,
+              lastRefreshFailed: false,
+              count: (slug) => ({
+                count: pool[slug]?.paying ?? 0,
+                payingClassCount: pool[slug]?.paying ?? 0,
+              }),
+              close: () => undefined,
+            },
+          };
+        },
+      },
+    });
+    return { selection, opened: () => opened };
+  }
+  /** A completed Trial of `slug@1.2.3`, which `revisitPolicy: never` keeps out. */
+  const trialOf = (slug: string, index: number) => {
+    const campaignId = `campaign-${slug}`;
+    const snapshotDigest = digest(String(index + 1));
+    return [
+      recorded(campaignId, snapshotDigest, `selected-${slug}`, {
+        type: "target-selected",
+        selectionId: `wporg:${slug}@1.2.3`,
+        promptVariant: "wp2shell-bounty-v8",
+      }),
+      recorded(campaignId, snapshotDigest, `run-${slug}`, {
+        type: "discovery-run-started",
+        runId: `run-${slug}`,
+        labId: "lab-1",
+        history: { mode: "none" },
+        configuration: {
+          promptVariant: "wp2shell-bounty-v8",
+          assignmentUnit: "target",
+        },
+      }),
+      recorded(campaignId, snapshotDigest, `finished-${slug}`, {
+        type: "discovery-run-finished",
+        runId: `run-${slug}`,
+        outcome: "completed",
+        costUsd: "unavailable",
+        wallTimeMs: 1000,
+      }),
+    ];
+  };
+  const decideWith = (
+    explored: readonly string[],
+    minimum: number,
+    policy: WordPressSelectionPolicy = automaticPolicy,
+  ) =>
+    openWordPressSelection({
+      candidates: candidates().selection,
+      ledger: ledgerOf(explored.flatMap((slug, index) => trialOf(slug, index))),
+      promptVariant: "wp2shell-bounty-v8",
+      clock: () => new Date(now),
+    }).decide(policy, { minimum });
+
+  it("stays in the primary band while it reaches the minimum, however many steps are declared", async () => {
+    const decision = await decideWith([], 1);
+    expect(decision.selected.map((item) => item.slug)).toEqual(["band-a"]);
+    expect(decision.cascadeStep).toBeUndefined();
+    expect(decision.cascade).toEqual([{ step: 0, eligible: 1 }]);
+    expect(decision.selected[0]?.cascadeStep).toBeUndefined();
+    expect(
+      decision.inspections.find((item) => item.slug === "mid")?.reasons,
+    ).toEqual(["below-installation-threshold"]);
+    expect(
+      decision.inspections.find((item) => item.slug === "giant-paying")
+        ?.reasons,
+    ).toEqual(["above-installation-ceiling"]);
+    // The pure ranking never cascades.
+    expect(
+      (await candidates().selection.rank(automaticPolicy)).map(
+        (item) => item.slug,
+      ),
+    ).toEqual(["band-a"]);
+  });
+
+  it("falls through the steps in policy order only as each band is exhausted, and records the step", async () => {
+    // Step 1 (50k): the primary band's only candidate was already explored.
+    const first = await decideWith(["band-a"], 1);
+    expect(first.cascadeStep).toBe(1);
+    expect(first.selected.map((item) => [item.slug, item.cascadeStep])).toEqual(
+      [["mid", 1]],
+    );
+    expect(first.cascade).toEqual([
+      { step: 0, eligible: 0 },
+      { step: 1, eligible: 1 },
+    ]);
+    // The report shows that step's reasons: the explored slug and the 30k candidate.
+    expect(
+      first.inspections.find((item) => item.slug === "band-a")?.reasons,
+    ).toEqual(["previously-selected"]);
+    expect(
+      first.inspections.find((item) => item.slug === "low")?.reasons,
+    ).toEqual(["below-installation-threshold"]);
+    // Step 2 (30k).
+    const second = await decideWith(["band-a", "mid"], 1);
+    expect(second.cascadeStep).toBe(2);
+    expect(second.selected.map((item) => item.slug)).toEqual(["low"]);
+    expect(second.cascade.map(({ step }) => step)).toEqual([0, 1, 2]);
+    // Step 3 (≥1M with two paying-class records): the quiet giant and the
+    // excluded author stay out; the band candidates are below its floor
+    // (Ledger reasons attach only to candidates the band admits).
+    const third = await decideWith(["band-a", "mid", "low"], 1);
+    expect(third.cascadeStep).toBe(3);
+    expect(third.selected.map((item) => [item.slug, item.cascadeStep])).toEqual(
+      [["giant-paying", 3]],
+    );
+    const belowGiantFloor = [
+      "below-installation-threshold",
+      "below-paying-class-minimum",
+    ];
+    expect(third.inspections.map((item) => [item.slug, item.reasons])).toEqual([
+      ["band-a", belowGiantFloor],
+      ["mid", belowGiantFloor],
+      ["low", belowGiantFloor],
+      ["giant-paying", []],
+      ["giant-quiet", ["below-paying-class-minimum"]],
+      ["giant-automattic", ["excluded-author"]],
+    ]);
+    for (const item of third.selected)
+      expect(wordPressTargetSelectionSchema.safeParse(item).success).toBe(true);
+    // Every band exhausted: the primary band's empty decision stands.
+    const none = await decideWith(["band-a", "mid", "low", "giant-paying"], 1);
+    expect(none.cascadeStep).toBeUndefined();
+    expect(none.selected).toEqual([]);
+    expect(none.cascade).toEqual([
+      { step: 0, eligible: 0 },
+      { step: 1, eligible: 0 },
+      { step: 2, eligible: 0 },
+      { step: 3, eligible: 0 },
+    ]);
+  });
+
+  it("measures exhaustion against the caller's minimum and keeps the primary band's candidates inside a wider step", async () => {
+    const decision = await decideWith([], 3);
+    // Primary 1 < 3, step 1 adds mid (2 < 3), step 2 adds low (3).
+    expect(decision.cascadeStep).toBe(2);
+    expect(decision.cascade).toEqual([
+      { step: 0, eligible: 1 },
+      { step: 1, eligible: 2 },
+      { step: 2, eligible: 3 },
+    ]);
+    expect(decision.selected.map((item) => item.slug)).toEqual([
+      "band-a",
+      "mid",
+      "low",
+    ]);
+    expect(decision.selected.every((item) => item.cascadeStep === 2)).toBe(
+      true,
+    );
+    // The same policy digest binds the batch whichever step admitted it.
+    expect(
+      new Set(decision.selected.map((item) => item.policy.digest)).size,
+    ).toBe(1);
+  });
+
+  it("opens the mirror for a paying-class floor even when no history weight is set", async () => {
+    const quietWeights = {
+      ...automaticPolicy,
+      scoreWeights: { installations: 0.5, recency: 0 },
+    };
+    const harnessed = candidates();
+    const decision = await openWordPressSelection({
+      candidates: harnessed.selection,
+      ledger: ledgerOf(
+        ["band-a", "mid", "low"].flatMap((slug, index) => trialOf(slug, index)),
+      ),
+      promptVariant: "wp2shell-bounty-v8",
+    }).decide(quietWeights, { minimum: 1 });
+    expect(harnessed.opened()).toBe(1);
+    expect(decision.selected.map((item) => item.slug)).toEqual([
+      "giant-paying",
+    ]);
+    // Without a paying-class floor and without weights the mirror stays closed.
+    const plain = candidates();
+    await plain.selection.rank({
+      ...quietWeights,
+      cascade: [{ minimumActiveInstallations: 50_000 }],
+    });
+    expect(plain.opened()).toBe(0);
   });
 });

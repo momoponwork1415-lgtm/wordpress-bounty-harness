@@ -102,7 +102,6 @@ async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
     cleanupLeftovers: async () => 0,
     preflight: async () => undefined,
     legacyHistoryAvailable: async () => true,
-    floorPolicyAvailable: async () => true,
     readAuth: async () => ({ expiresAt: new Date(now + 30 * 86_400_000) }),
     programmeObservedAt: async () => new Date(now - 86_400_000),
     statfs: async () => ({ freeBytes: 100 * 1024 ** 3 }),
@@ -161,7 +160,6 @@ async function expectLatchedStop(
     throw new Error("a stopped restart must do no work");
   };
   t.deps.legacyHistoryAvailable = forbidden;
-  t.deps.floorPolicyAvailable = forbidden;
   t.deps.preflight = forbidden;
   t.deps.cleanupLeftovers = forbidden;
   t.deps.select = forbidden;
@@ -510,7 +508,6 @@ describe("continuous runner", () => {
       { programmeObservedAt: async () => new Date("2026-09-01T00:00:00Z") },
     ],
     ["legacy-history-missing", { legacyHistoryAvailable: async () => false }],
-    ["missing-floor-policy", { floorPolicyAvailable: async () => false }],
   ] as const)("stops as %s before any campaign", async (reason, override) => {
     const t = await setup([], override);
     expect(await t.runner.run()).toBe(reason);

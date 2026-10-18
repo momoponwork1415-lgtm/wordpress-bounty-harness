@@ -121,6 +121,13 @@ export interface CliSelectionReport {
         readonly countCap: number;
         readonly maximumAgeDays: number;
       };
+  /** The policy's fallback band that produced this selection; absent for the primary band (ADR 0037 addendum). */
+  readonly cascadeStep?: number;
+  /** Eligible counts of the bands tried, step 0 being the primary band. */
+  readonly cascade?: readonly {
+    readonly step: number;
+    readonly eligible: number;
+  }[];
   readonly selected: readonly {
     readonly targetId: string;
     readonly version: string;
@@ -131,6 +138,7 @@ export interface CliSelectionReport {
       readonly payingClassCount: number;
       readonly latestPublished?: string | undefined;
     };
+    readonly cascadeStep?: number;
     readonly observedAt: string;
     readonly sourceUrl?: string;
   }[];
@@ -257,11 +265,6 @@ export interface CliProfile {
   ): Promise<ContinuousHostStatus>;
   /** Whether `lab up` holds a Lab for an operator; `continuous run` skips its sweep meanwhile. */
   labHeld(state: CliState): Promise<boolean>;
-  /** Whether the policies an `exhausted` runner is restarted with sit next to `selectionPath`. */
-  floorPoliciesAvailable(
-    state: CliState,
-    input: { readonly selectionPath: string },
-  ): Promise<boolean>;
   /** Docker resources a crashed run left behind; removed only when asked. */
   cleanupLeftovers(
     state: CliState,
@@ -774,6 +777,15 @@ const COMMANDS: readonly Command[] = [
             ? "advisory history not used"
             : `advisory history ${advisory.digest}  as of ${advisory.asOf}${advisory.lastRefreshFailed ? " (last refresh failed)" : ""}  records ${advisory.recordCount}  window ${advisory.windowDays} d  cap ${advisory.countCap}`,
         );
+      if (report.cascade !== undefined && report.cascade.length > 1)
+        io.stdout(
+          `cascade ${report.cascade
+            .map(
+              ({ step, eligible }) =>
+                `step ${step} eligible ${eligible}${step === (report.cascadeStep ?? 0) ? " (selected)" : ""}`,
+            )
+            .join("; ")}`,
+        );
       for (const target of report.selected)
         io.stdout(
           `${target.targetId} ${target.version} score ${target.score.toFixed(2)}  breakdown ${Object.entries(
@@ -784,6 +796,10 @@ const COMMANDS: readonly Command[] = [
             target.advisoryHistory === undefined
               ? ""
               : `  history records ${target.advisoryHistory.count} paying ${target.advisoryHistory.payingClassCount} latest ${target.advisoryHistory.latestPublished ?? "none"}`
+          }${
+            target.cascadeStep === undefined
+              ? ""
+              : `  cascade step ${target.cascadeStep}`
           }  observed ${target.observedAt}  source ${target.sourceUrl ?? "unavailable"}  excluded none`,
         );
       for (const target of report.excluded)
