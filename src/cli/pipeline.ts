@@ -171,6 +171,10 @@ export async function runCampaignPipeline<
   const maxConcurrentTargets = options.maxConcurrentTargets ?? 1;
   if (!Number.isSafeInteger(maxConcurrentTargets) || maxConcurrentTargets < 1)
     throw new Error("Invalid target concurrency");
+  const verificationConsumer = createVerificationConsumer({
+    ledger,
+    promptVersion: pipeline.verification.promptVersion,
+  });
   type TargetSummary = CampaignSummary["targets"][number];
   type SkippedSummary = CampaignSummary["skipped"][number];
   type TargetResult = {
@@ -322,6 +326,7 @@ export async function runCampaignPipeline<
     // Before a snapshot exists, the selection record stands in for its digest.
     let snapshotDigest = canonicalDigest(target);
     let handle: Handle | undefined;
+    let releaseAttached: (() => void) | undefined;
     let result: TargetResult = {};
     const skip = async (error: unknown): Promise<void> => {
       // The ledger gets only a fixed reason and a digest. Raw diagnostics stay private.
@@ -661,6 +666,8 @@ export async function runCampaignPipeline<
           });
         };
         if (!shouldRetry(true)) continue;
+        releaseAttached = verificationConsumer.reserve(event) ?? undefined;
+        if (releaseAttached === undefined) continue;
         do {
           const previous = history.at(-1)?.event;
           const verificationId = options.newId();
@@ -743,6 +750,8 @@ export async function runCampaignPipeline<
           )
             break;
         } while (true);
+        releaseAttached();
+        releaseAttached = undefined;
         if (verificationCleanupFailed) break;
       }
       result.target = { ...summary, verifications };
@@ -778,6 +787,7 @@ export async function runCampaignPipeline<
     } catch (error: unknown) {
       await skip(error);
     } finally {
+      releaseAttached?.();
       if (handle !== undefined) {
         const removed = await pipeline.lab.teardown(handle).catch(() => null);
         if (removed?.status !== "removed") {

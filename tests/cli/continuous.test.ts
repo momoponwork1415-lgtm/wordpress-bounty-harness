@@ -203,6 +203,169 @@ describe("continuous runner", () => {
     expect(verifiedDuringCampaign).toBe(true);
   });
 
+  it("backs off a provider-limited verifier before pulling another Finding", async () => {
+    let campaignStarted!: () => void;
+    let finishCampaign!: () => void;
+    const started = new Promise<void>((resolve) => {
+      campaignStarted = resolve;
+    });
+    const finished = new Promise<void>((resolve) => {
+      finishCampaign = resolve;
+    });
+    let pulls = 0;
+    const t = await setup(
+      [
+        async () => {
+          campaignStarted();
+          await finished;
+          return {};
+        },
+      ],
+      {
+        verifyNext: async () => {
+          await started;
+          if (++pulls === 1)
+            return {
+              findingId: "finding-1",
+              status: "incomplete",
+              providerLimit: "rate-limit",
+            };
+          finishCampaign();
+          return null;
+        },
+      },
+    );
+    expect(await t.runner.run()).toBe("operator");
+    expect(pulls).toBe(2);
+    expect(
+      t.log.some((line) =>
+        line.includes(
+          "verification backoff minutes=5 providerLimit=rate-limit",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("pauses verification while discovery holds for a provider limit", async () => {
+    let releaseAuth!: () => void;
+    let releaseSleep!: () => void;
+    let enteredBackoff!: () => void;
+    const authGate = new Promise<void>((resolve) => {
+      releaseAuth = resolve;
+    });
+    const sleepGate = new Promise<void>((resolve) => {
+      releaseSleep = resolve;
+    });
+    const backoff = new Promise<void>((resolve) => {
+      enteredBackoff = resolve;
+    });
+    let authReads = 0;
+    let pulls = 0;
+    let t!: Awaited<ReturnType<typeof setup>>;
+    t = await setup(
+      [
+        async ({ campaignId }) => {
+          await t.trial(campaignId, {
+            outcome: "provider-limited",
+            reason: "provider",
+            providerLimit: "rate-limit",
+          });
+          return { stopped: "provider-limit" };
+        },
+      ],
+      {
+        readAuth: async () => {
+          if (++authReads === 1) await authGate;
+          return { expiresAt: new Date("2026-11-20T00:00:00Z") };
+        },
+        verifyNext: async () => {
+          pulls++;
+          return null;
+        },
+      },
+    );
+    t.deps.io.log = (line) => {
+      if (line.includes(" backoff ")) {
+        releaseAuth();
+        enteredBackoff();
+      }
+    };
+    t.deps.sleep = async () => {
+      await sleepGate;
+    };
+    const running = t.runner.run();
+    await backoff;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(pulls).toBe(0);
+    await writeFile(continuousPaths(t.root).stop, "operator\n");
+    releaseSleep();
+    expect(await running).toBe("operator");
+  });
+
+  it("checks stop within one minute while waiting for verification login", async () => {
+    let woke!: () => void;
+    const sleeping = new Promise<void>((resolve) => {
+      woke = resolve;
+    });
+    let authReads = 0;
+    const durations: number[] = [];
+    let t!: Awaited<ReturnType<typeof setup>>;
+    t = await setup(
+      [
+        async () => {
+          await sleeping;
+          return { stopped: "operator" };
+        },
+      ],
+      {
+        readAuth: async () =>
+          ++authReads === 1
+            ? null
+            : { expiresAt: new Date("2026-11-20T00:00:00Z") },
+        verifyNext: async () => null,
+      },
+    );
+    t.deps.sleep = async (ms) => {
+      durations.push(ms);
+      await writeFile(continuousPaths(t.root).stop, "operator\n");
+      woke();
+    };
+    expect(await t.runner.run()).toBe("operator");
+    expect(durations[0]).toBe(60_000);
+  });
+
+  it("drains both loops after a stop marker", async () => {
+    let verificationStarted!: () => void;
+    let releaseVerification!: () => void;
+    const started = new Promise<void>((resolve) => {
+      verificationStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseVerification = resolve;
+    });
+    let pulls = 0;
+    const t = await setup(
+      [
+        async () => {
+          await started;
+          await writeFile(continuousPaths(t.root).stop, "operator\n");
+          releaseVerification();
+          return {};
+        },
+      ],
+      {
+        verifyNext: async () => {
+          pulls++;
+          verificationStarted();
+          await release;
+          return { findingId: "finding-1", status: "incomplete" };
+        },
+      },
+    );
+    expect(await t.runner.run()).toBe("operator");
+    expect(pulls).toBe(1);
+  });
+
   it.each([
     ["rate-limit", [5, 10, 20, 40, 60, 60]],
     ["quota", [30, 60, 360]],

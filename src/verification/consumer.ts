@@ -94,6 +94,16 @@ export function createVerificationConsumer(options: {
     snapshotDigest: string,
   ) => Promise<string | null>;
 }) {
+  const reserve = (finding: Pick<Finding, "campaignId" | "findingId">) => {
+    const key = `${finding.campaignId}\0${finding.findingId}`;
+    if (inFlight.has(key)) return null;
+    inFlight.add(key);
+    let released = false;
+    return () => {
+      if (!released) inFlight.delete(key);
+      released = true;
+    };
+  };
   const pullNext = async (
     filter: {
       readonly campaignId?: string;
@@ -181,11 +191,11 @@ export function createVerificationConsumer(options: {
         )
           continue;
       }
-      if (inFlight.has(key)) continue;
-      inFlight.add(key);
-      return { finding: event, history, release: () => inFlight.delete(key) };
+      const release = reserve(event);
+      if (release === null) continue;
+      return { finding: event, history, release };
     }
     return null;
   };
-  return { pullNext };
+  return { pullNext, reserve };
 }

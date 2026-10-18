@@ -150,3 +150,23 @@ it("does not retry a failed precondition Lab solely because a scenario is config
   });
   expect(await consumer.pullNext({ campaignId: "campaign-1" })).toBeNull();
 });
+
+it("keeps an attached reservation unavailable to another consumer", async () => {
+  const { ledger, finding } = await fixture();
+  await finding("shared");
+  const attached = createVerificationConsumer({ ledger, promptVersion: "v7" });
+  const background = createVerificationConsumer({
+    ledger,
+    promptVersion: "v7",
+  });
+  const release = attached.reserve({
+    campaignId: "campaign-1",
+    findingId: "shared",
+  });
+  expect(release).not.toBeNull();
+  expect(await background.pullNext({ campaignId: "campaign-1" })).toBeNull();
+  release?.();
+  const ticket = await background.pullNext({ campaignId: "campaign-1" });
+  expect(ticket?.finding.findingId).toBe("shared");
+  ticket?.release();
+});

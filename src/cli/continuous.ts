@@ -66,6 +66,7 @@ export interface ContinuousDeps {
   verifyNext?(): Promise<{
     readonly findingId: string;
     readonly status: string;
+    readonly providerLimit?: "rate-limit" | "quota";
   } | null>;
   /** Freezes a batch of at least SELECT_MINIMUM targets, or none. */
   select(): Promise<{
@@ -265,6 +266,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
   };
   let signalled = false;
   let operatorController = new AbortController();
+  let discoveryHoldUntil = 0;
   const stopRequested = () => signalled || existsSync(paths.stop);
   const save = async () => {
     memo.updatedAt = deps.clock().toISOString();
@@ -317,6 +319,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
   ): Promise<ContinuousStopReason> => {
     signalled = false;
     operatorController = new AbortController();
+    discoveryHoldUntil = 0;
     await mkdir(deps.stateDirectory, { recursive: true, mode: 0o700 });
     const previous = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
     if (previous > 0 && previous !== deps.pid && deps.pidAlive(previous))
@@ -351,14 +354,49 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       if (stopRequested()) return stop("operator");
       await deps.cleanupLeftovers();
       let verifying = true;
+      let verifyBackoffUntil = 0;
+      let verifyBackoffStep = 0;
       const verifyWorker = async () => {
         while (verifying && !stopRequested()) {
+          const now = deps.clock();
+          const holdUntil = Math.max(verifyBackoffUntil, discoveryHoldUntil);
+          if (holdUntil > now.getTime()) {
+            await deps.sleep(Math.min(MINUTE, holdUntil - now.getTime()));
+            continue;
+          }
+          const auth = await deps.readAuth();
+          if (
+            auth === null ||
+            auth.expiresAt.getTime() - now.getTime() <
+              deps.loginMarginMinutes * MINUTE
+          ) {
+            await deps.sleep(MINUTE);
+            continue;
+          }
+          if (stopRequested()) break;
+          if (discoveryHoldUntil > deps.clock().getTime()) continue;
           try {
             const result = await deps.verifyNext!();
             if (result !== null) {
               deps.io.log(
                 `${deps.clock().toISOString()} verification finding=${result.findingId} status=${result.status}`,
               );
+              if (result.providerLimit !== undefined) {
+                const step = verifyBackoffStep++;
+                const minutes =
+                  result.providerLimit === "rate-limit"
+                    ? BACKOFF_RATE_LIMIT_MINUTES[
+                        Math.min(step, BACKOFF_RATE_LIMIT_MINUTES.length - 1)
+                      ]!
+                    : (BACKOFF_QUOTA_MINUTES[step] ??
+                      QUOTA_LONG_SLEEP_HOURS * 60);
+                verifyBackoffUntil = deps.clock().getTime() + minutes * MINUTE;
+                deps.io.log(
+                  `${deps.clock().toISOString()} verification backoff minutes=${minutes} providerLimit=${result.providerLimit}`,
+                );
+              } else {
+                verifyBackoffStep = 0;
+              }
               continue;
             }
           } catch (error) {
@@ -496,6 +534,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
               ]!
             : (BACKOFF_QUOTA_MINUTES[step] ?? QUOTA_LONG_SLEEP_HOURS * 60);
         current.retry = true;
+        discoveryHoldUntil = deps.clock().getTime() + minutes * MINUTE;
         await hold("backoff", minutes * MINUTE, {
           step: String(step + 1),
           minutes: String(minutes),
