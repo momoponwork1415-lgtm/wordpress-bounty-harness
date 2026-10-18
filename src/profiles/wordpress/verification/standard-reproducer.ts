@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
+import type { CapturedExchange } from "../../../lab/capture.js";
 import { canonicalJson } from "../../../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
 import type {
@@ -10,6 +11,7 @@ import type {
 } from "../../../verification/index.js";
 import type { WordPressFinding } from "../discovery/finding.js";
 import type { WordPressLab, WordPressLabHandle } from "../lab/index.js";
+import { PROXY_CAPTURE_FILE } from "./http-evidence.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
 import { requestContainsSecret } from "./request-secret.js";
 import {
@@ -35,22 +37,6 @@ const outputSchema = z.strictObject({
     }),
   ),
 });
-const capturedExchangeSchema = z.strictObject({
-  request: z.looseObject({
-    method: z.string(),
-    path: z.string(),
-    headers: z.record(z.string(), z.unknown()),
-    body: z.string(),
-    truncated: z.literal(false),
-  }),
-  response: z.looseObject({
-    statusCode: z.number().int().min(100).max(599),
-    body: z.string(),
-    bodyBase64: z.string(),
-    truncated: z.literal(false),
-  }),
-});
-
 type ReproducerLab = Pick<
   WordPressLab,
   "markCapture" | "readCapture" | "runStandardScript" | "canaryLedger"
@@ -170,16 +156,11 @@ export function createWordPressStandardReproducer(options: {
           "observation",
           "The Lab HTTP capture is missing or dropped",
         );
-      const exchanges: z.infer<typeof capturedExchangeSchema>[] = [];
-      try {
-        for (const line of capture.bytes.toString("utf8").trimEnd().split("\n"))
-          exchanges.push(
-            capturedExchangeSchema.parse(JSON.parse(line) as unknown),
-          );
-      } catch {
+      // Every line must be a complete exchange; a truncated body cannot be hashed.
+      if (capture.defects.length > 0)
         return incomplete("observation", "The Lab HTTP capture is unreadable");
-      }
-      const routeExchanges: typeof exchanges = [];
+      const { exchanges } = capture;
+      const routeExchanges: CapturedExchange[] = [];
       let cursor = 0;
       for (const [index, step] of route.steps.entries()) {
         if (step.kind !== "http") return incomplete("recipe", "Invalid step");
@@ -253,7 +234,7 @@ export function createWordPressStandardReproducer(options: {
           );
       }
       const evidenceDigest = await options.store.putFiles({
-        "proxy-capture.jsonl": capture.bytes,
+        [PROXY_CAPTURE_FILE]: capture.bytes,
         "structured-output.json": canonicalJson(output),
         "standard-reproduce.py": STANDARD_REPRODUCER_SCRIPT,
         "reproduced-route.json": canonicalJson({
@@ -269,7 +250,7 @@ export function createWordPressStandardReproducer(options: {
           evidence: [
             {
               kind: "http",
-              path: "proxy-capture.jsonl",
+              path: PROXY_CAPTURE_FILE,
               capture: "harness-captured",
             },
             {

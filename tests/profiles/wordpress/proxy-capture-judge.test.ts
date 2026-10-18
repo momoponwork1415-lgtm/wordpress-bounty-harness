@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
+import { httpCapture } from "../../../src/lab/capture.js";
 import { createWordPressJudges } from "../../../src/profiles/wordpress/verification/judges.js";
 import type { JudgeObservation } from "../../../src/verification/index.js";
 import {
@@ -76,7 +77,7 @@ async function observe(
       async readCapture() {
         return capture === null
           ? { status: "unavailable" }
-          : { status: "captured", bytes: capture, dropped: 0 };
+          : { status: "captured", ...httpCapture(capture, 0) };
       },
     }),
     files: {
@@ -137,7 +138,7 @@ async function observeReference(
       async readCapture() {
         return capture === null
           ? { status: "unavailable" }
-          : { status: "captured", bytes: capture, dropped: 0 };
+          : { status: "captured", ...httpCapture(capture, 0) };
       },
     });
     const candidate = {
@@ -286,6 +287,49 @@ const boundScriptRoute = {
 };
 
 describe("WordPress judges with proxy capture", () => {
+  // Private Evidence is content-addressed, so one digest pins every evidence
+  // byte (capture, route, receipt). These values were recorded before the
+  // capture format moved into src/lab/capture.ts and must not move with it.
+  it("writes byte-identical evidence for the same capture", async () => {
+    expect((await observe("ordinary")).observed).toMatchObject({
+      status: "observed",
+      evidenceDigest:
+        "sha256:0d6f5d8bd941a293dd8e8861f80a3e33c05474867ffd20f5ebac6ee7a6641a7a",
+    });
+    expect(
+      (
+        await observe(
+          "ordinary",
+          captured("ordinary", "the patched route returned no canary"),
+        )
+      ).observed,
+    ).toMatchObject({
+      status: "not-observed",
+      evidenceDigest:
+        "sha256:d0cabca42ba320e18c5f5990bde531c2290961bbc3cbf181f8332e99bb3b5d8d",
+    });
+    expect(
+      await observeReference(
+        replayRoute,
+        capturedRequests([firstRequest, secondRequest]),
+      ),
+    ).toMatchObject({
+      status: "incomplete",
+      evidenceDigest:
+        "sha256:5cab3ad38ce8730c1a1ed4332d8430b7a86421a106d4e8b860fedf5310151872",
+    });
+    expect(
+      await observeReference(
+        boundReplayRoute,
+        capturedRequests([firstRequest, secondRequest]),
+      ),
+    ).toMatchObject({
+      status: "incomplete",
+      evidenceDigest:
+        "sha256:9b4b8067af5ed2a7937d481b49206490fc93f1c566c465b9834a1588191d6fa7",
+    });
+  });
+
   it("uses proxy response evidence ahead of the agent record", async () => {
     const { observed, store } = await observe("ordinary");
     expect(observed).toMatchObject({

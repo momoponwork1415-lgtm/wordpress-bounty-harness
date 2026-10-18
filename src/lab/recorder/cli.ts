@@ -1,4 +1,8 @@
-import { createRecorderServer } from "./index.js";
+import {
+  createRecorderServer,
+  RECORDER_CAPTURE_PATH,
+  RECORDER_DROPPED_PATH,
+} from "./index.js";
 
 const upstreamHost = process.env.WBH_UPSTREAM_HOST;
 if (upstreamHost === undefined || !/^[a-z0-9][a-z0-9.-]*$/.test(upstreamHost))
@@ -7,6 +11,6 @@ if (upstreamHost === undefined || !/^[a-z0-9][a-z0-9.-]*$/.test(upstreamHost))
 createRecorderServer({
   upstreamHost,
   upstreamPort: 80,
-  capturePath: "/var/lib/wbh/capture.jsonl",
-  droppedPath: "/var/lib/wbh/dropped",
+  capturePath: RECORDER_CAPTURE_PATH,
+  droppedPath: RECORDER_DROPPED_PATH,
 }).listen(80, "0.0.0.0");

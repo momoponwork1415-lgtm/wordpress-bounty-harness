@@ -18,6 +18,8 @@ export {
   REVIEW_EXPORT_SCHEMA_ID,
   reviewExportV1Schema,
   stateDiffSummarySchema,
+  type HttpEvidenceReader,
+  type HttpEvidenceRecord,
   type ReviewExportV1,
   type StateDiffReader,
   type StateDiffSummary,

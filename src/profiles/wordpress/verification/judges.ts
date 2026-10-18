@@ -10,6 +10,10 @@ import type {
   JudgeObservation,
   JudgeSet,
 } from "../../../verification/index.js";
+import {
+  capturedExchangeSchema,
+  type CaptureDefect,
+} from "../../../lab/capture.js";
 import type { WordPressFinding } from "../discovery/finding.js";
 import { wordpressVictimRouteSchema } from "../lab/index.js";
 import type {
@@ -17,6 +21,7 @@ import type {
   WordPressLab,
   WordPressLabHandle,
 } from "../lab/index.js";
+import { AUTHORED_HTTP_FILE, PROXY_CAPTURE_FILE } from "./http-evidence.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
 import { createWordPressStandardReproducer } from "./standard-reproducer.js";
 import { requestContainsSecret } from "./request-secret.js";
@@ -92,23 +97,6 @@ const httpRecordSchema = z.looseObject({
     .max(500),
 });
 type HttpRecord = z.infer<typeof httpRecordSchema>;
-const capturedExchangeSchema = z.strictObject({
-  request: z.looseObject({
-    method: z.string(),
-    path: z.string(),
-    headers: z.record(z.string(), z.unknown()),
-    body: z.string(),
-    bodyBase64: z.string(),
-    truncated: z.boolean(),
-  }),
-  response: z.looseObject({
-    statusCode: z.number().int(),
-    headers: z.record(z.string(), z.unknown()),
-    body: z.string(),
-    bodyBase64: z.string(),
-    truncated: z.boolean(),
-  }),
-});
 type HttpEvidence = {
   readonly capture: "harness-captured" | "agent-authored";
   readonly http: HttpRecord | null;
@@ -443,7 +431,7 @@ async function readHttpEvidence(
 ): Promise<HttpEvidence | Incomplete> {
   const authored = await options.store.readFile(
     recipeDigest,
-    "http.json",
+    AUTHORED_HTTP_FILE,
     5 * 1024 * 1024,
   );
   const fallback = (): HttpEvidence => {
@@ -474,33 +462,21 @@ async function readHttpEvidence(
       reason: "evidence",
       nextStep: "The proxy dropped HTTP records; repeat in a fresh Lab",
     };
-  const lines = capture.bytes.toString("utf8").trimEnd().split("\n");
-  const exchanges = [];
-  for (const line of lines) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line) as unknown;
-    } catch {
-      return {
-        status: "incomplete",
-        reason: "evidence",
-        nextStep: "The proxy HTTP record is unreadable; repeat",
-      };
-    }
-    const entry = capturedExchangeSchema.safeParse(parsed);
-    if (
-      !entry.success ||
-      entry.data.request.truncated ||
-      entry.data.response.truncated
-    )
-      return {
-        status: "incomplete",
-        reason: "evidence",
-        nextStep: "The proxy HTTP record is incomplete; repeat",
-      };
-    exchanges.push(entry.data);
-  }
-  const http = httpRecordSchema.safeParse({ exchanges });
+  // The first defective line decides, as the line-by-line read did.
+  const defect: CaptureDefect | undefined = capture.defects[0];
+  if (defect?.kind === "unreadable")
+    return {
+      status: "incomplete",
+      reason: "evidence",
+      nextStep: "The proxy HTTP record is unreadable; repeat",
+    };
+  if (defect !== undefined)
+    return {
+      status: "incomplete",
+      reason: "evidence",
+      nextStep: "The proxy HTTP record is incomplete; repeat",
+    };
+  const http = httpRecordSchema.safeParse({ exchanges: capture.exchanges });
   if (!http.success)
     return {
       status: "incomplete",
@@ -562,7 +538,7 @@ async function recordEvidence(
   );
   const http = await options.store.readFile(
     recipeDigest,
-    "http.json",
+    AUTHORED_HTTP_FILE,
     5 * 1024 * 1024,
   );
   if (!route.success || http.status !== "resolved") return null;
@@ -598,21 +574,27 @@ async function recordEvidence(
           ? [
               {
                 kind: "http",
-                path: "proxy-capture.jsonl",
+                path: PROXY_CAPTURE_FILE,
                 capture: "harness-captured",
               },
             ]
-          : [{ kind: "http", path: "http.json", capture: "agent-authored" }]),
+          : [
+              {
+                kind: "http",
+                path: AUTHORED_HTTP_FILE,
+                capture: "agent-authored",
+              },
+            ]),
         { kind: "canary", path: "canary-observation.json" },
         ...(screenshot === undefined
           ? []
           : [{ kind: "screenshot", path: "victim-screen.png" }]),
       ],
     }),
-    "http.json": http.bytes,
+    [AUTHORED_HTTP_FILE]: http.bytes,
     ...(httpEvidence.captureBytes === undefined
       ? {}
-      : { "proxy-capture.jsonl": httpEvidence.captureBytes }),
+      : { [PROXY_CAPTURE_FILE]: httpEvidence.captureBytes }),
     "canary-observation.json": canonicalJson({
       ...observation,
       capturedRouteDigest:
@@ -706,7 +688,7 @@ function canaryJudge(
             httpEvidence.captureBytes === undefined
               ? undefined
               : await options.store.putFiles({
-                  "proxy-capture.jsonl": httpEvidence.captureBytes,
+                  [PROXY_CAPTURE_FILE]: httpEvidence.captureBytes,
                   "route-observation.json": canonicalJson({
                     judgeId: id,
                     status: "incomplete",
@@ -776,7 +758,7 @@ function canaryJudge(
             httpEvidence.captureBytes === undefined
               ? undefined
               : await options.store.putFiles({
-                  "proxy-capture.jsonl": httpEvidence.captureBytes,
+                  [PROXY_CAPTURE_FILE]: httpEvidence.captureBytes,
                   "route-observation.json": canonicalJson({
                     judgeId: id,
                     status: "incomplete",
@@ -806,7 +788,7 @@ function canaryJudge(
         // A matching captured route cannot show that the application accepted it.
         const processingUnproven = boundReference.success;
         const evidenceDigest = await options.store.putFiles({
-          "proxy-capture.jsonl": httpEvidence.captureBytes,
+          [PROXY_CAPTURE_FILE]: httpEvidence.captureBytes,
           "canary-observation.json": canonicalJson({
             judgeId: id,
             status: processingUnproven ? "incomplete" : "not-observed",

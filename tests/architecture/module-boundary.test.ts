@@ -47,8 +47,11 @@ describe("module boundary (ADR 0011)", () => {
 
   it("generic modules do not name WordPress-specific concepts", async () => {
     // 語が現れたら profile へ移す合図（AGENTS.md）。コメントと文字列も含めて見る。
+    // `proxy-capture` は WordPress 判定器が Private Evidence に置く file 名
+    // （src/profiles/wordpress/verification/http-evidence.ts）。汎用側は
+    // HttpEvidenceReader の seam を通して読む。
     const pattern =
-      /\bwp_options\b|\bwp_ajax\b|admin-ajax\.php|\bwp-admin\b|\bwp-content\b/;
+      /\bwp_options\b|\bwp_ajax\b|admin-ajax\.php|\bwp-admin\b|\bwp-content\b|proxy-capture/;
     const offenders: string[] = [];
     for (const module of GENERIC_MODULES) {
       for (const file of await listTypeScriptFiles(join(SOURCE_ROOT, module))) {

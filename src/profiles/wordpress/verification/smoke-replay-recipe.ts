@@ -6,6 +6,7 @@
 import { z } from "zod";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import { capturedExchangeSchema } from "../../../lab/capture.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const path = z
@@ -20,21 +21,13 @@ const httpStep = z.looseObject({
   body: z.string().optional(),
 });
 const routeSchema = z.looseObject({ steps: z.array(z.unknown()).min(8) });
-const exchangeSchema = z.strictObject({
-  request: z.looseObject({
-    method: z.string(),
-    path,
-    headers: z.record(z.string(), z.unknown()),
-    body: z.string(),
-    truncated: z.literal(false),
-  }),
-  response: z.looseObject({
-    statusCode: z.number().int(),
-    headers: z.record(z.string(), z.unknown()),
-    body: z.string(),
-    truncated: z.literal(false),
-  }),
-});
+/** A recorder line whose bodies are complete and whose path is a plain Lab path. */
+const exchangeSchema = capturedExchangeSchema.refine(
+  (exchange) =>
+    !exchange.request.truncated &&
+    !exchange.response.truncated &&
+    path.safeParse(exchange.request.path).success,
+);
 const bindingSchema = z.strictObject({
   name: z.enum(["security", "resetKey"]),
   left: z.string().min(4).max(128),

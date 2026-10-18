@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { httpCapture } from "../../../src/lab/capture.js";
 import { canaries, judgeOnce, quietLab, route } from "./judge-fixture.js";
 
 const privatePost = canaries.sensitiveCanaries[0]!;
@@ -38,7 +39,7 @@ async function observe(bytes: Buffer | null, sessionLogin?: string) {
       async readCapture() {
         return bytes === null
           ? { status: "unavailable" }
-          : { status: "captured", bytes, dropped: 0 };
+          : { status: "captured", ...httpCapture(bytes, 0) };
       },
       async observeSessionUser() {
         return sessionLogin === undefined

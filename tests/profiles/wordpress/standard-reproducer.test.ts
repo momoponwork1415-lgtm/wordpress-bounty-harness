@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
+import { httpCapture } from "../../../src/lab/capture.js";
 import { createWordPressStandardReproducer } from "../../../src/profiles/wordpress/verification/standard-reproducer.js";
 import { canaries, finding, handle, route } from "./judge-fixture.js";
 
@@ -74,7 +75,7 @@ async function observe(input: {
       async readCapture() {
         return capture === null
           ? { status: "unavailable" as const }
-          : { status: "captured" as const, bytes: capture, dropped: 0 };
+          : { status: "captured" as const, ...httpCapture(capture, 0) };
       },
       async runStandardScript(_, scriptInput) {
         expect(JSON.parse(scriptInput)).toMatchObject({

@@ -35,12 +35,21 @@ function exchange(
   body: string,
   response: string,
 ) {
+  // The shape the Lab recorder writes (src/lab/capture.ts); judges parse it before binding.
   return {
-    request: { method, path, headers: {}, body, truncated: false },
+    request: {
+      method,
+      path,
+      headers: {},
+      body,
+      bodyBase64: Buffer.from(body).toString("base64"),
+      truncated: false,
+    },
     response: {
       statusCode: 200,
       headers: {},
       body: response,
+      bodyBase64: Buffer.from(response).toString("base64"),
       truncated: false,
     },
   };
