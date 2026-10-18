@@ -87,7 +87,7 @@ it("parks only a source-refuted Finding and passes no Lab to the refuter", async
       ),
     );
     let seenRun: unknown;
-    const result = await refutePendingFindings({
+    const options: Parameters<typeof refutePendingFindings>[0] = {
       campaignId: "campaign-1",
       ledger,
       store,
@@ -112,13 +112,15 @@ it("parks only a source-refuted Finding and passes no Lab to the refuter", async
       },
       clock: () => new Date("2026-10-18T00:00:00Z"),
       newId: () => "refute-1",
-    });
+    };
+    const result = await refutePendingFindings(options);
     expect(result).toEqual([
       { findingId: finding.findingId, verdict: "refuted" },
     ]);
     expect(seenRun).toMatchObject({
       outputKind: "refutation",
       coordination: "solo",
+      campaignInput: { lab: { mode: "none" } },
     });
     expect(seenRun).not.toHaveProperty("lab");
     expect(seenRun).not.toHaveProperty("refutationClaim.labObservations");
@@ -126,73 +128,36 @@ it("parks only a source-refuted Finding and passes no Lab to the refuter", async
       ledger.read({ campaignId: "campaign-1", type: "finding-parked" })[0]
         ?.event,
     ).toMatchObject({ reason: "refuted" });
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-it("finishes parking a refuted Finding after interruption between ledger writes", async () => {
-  const root = await mkdtemp(join(tmpdir(), "refute-recovery-"));
-  try {
-    const store = new PrivateArtifactStore({
-      rootDirectory: join(root, "evidence"),
-      maxEntries: 10,
-      maxBytes: 10_000,
-    });
-    const ledger = new Ledger({
-      databasePath: join(root, "ledger.sqlite"),
-      artifactStore: store,
-    });
-    const common = {
-      schemaVersion: 1 as const,
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "finding-recovery",
       campaignId: "campaign-1",
       snapshotDigest: digest,
       occurredAt: "2026-10-18T00:00:00Z",
-    };
-    await ledger.append({
-      ...common,
-      identity: "finding-1",
       type: "finding-recorded",
-      findingId: "finding-1",
+      findingId: "finding-recovery",
       runId: "discover-1",
       category: "sqli",
     });
     await ledger.append({
-      ...common,
-      identity: "refutation-1",
+      schemaVersion: 1,
+      identity: "refutation-recovery",
+      campaignId: "campaign-1",
+      snapshotDigest: digest,
+      occurredAt: "2026-10-18T00:00:00Z",
       type: "refutation-recorded",
-      findingId: "finding-1",
-      runId: "refute-1",
+      findingId: "finding-recovery",
+      runId: "refute-2",
       verdict: "refuted",
       reasonCode: "guard-effective",
       promptVersion: "refute-v1",
       promptDigest: digest,
       reportDigest: digest,
     });
+    expect(await refutePendingFindings(options)).toEqual([]);
     expect(
-      await refutePendingFindings({
-        campaignId: common.campaignId,
-        ledger,
-        store,
-        attachments: undefined as never,
-        profile: undefined as never,
-        prompt: { id: "refute-v1", digest, text: "test" },
-        resolveSource: async () => {
-          throw new Error("already refuted");
-        },
-        runtime: {
-          execute: async () => {
-            throw new Error("already refuted");
-          },
-        },
-        clock: () => new Date(common.occurredAt),
-        newId: () => "unused",
-      }),
-    ).toEqual([]);
-    expect(ledger.read({ type: "finding-parked" })[0]?.event).toMatchObject({
-      findingId: "finding-1",
-      reason: "refuted",
-    });
+      ledger.read({ findingId: "finding-recovery", type: "finding-parked" }),
+    ).toHaveLength(1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

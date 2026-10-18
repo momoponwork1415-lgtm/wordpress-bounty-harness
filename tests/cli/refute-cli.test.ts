@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 
 import { runCli, type CliProfile } from "../../src/cli/index.js";
-import { runCampaignPipeline } from "../../src/cli/pipeline.js";
+import {
+  runCampaignPipeline,
+  verifyNextFinding,
+} from "../../src/cli/pipeline.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
 
@@ -28,9 +31,8 @@ it("routes refute run and backfill without selecting a Lab", async () => {
       },
     } as unknown as CliProfile;
     const environment = { stateDirectory: root, profile };
-    const output: string[] = [];
     const io = {
-      stdout: (line: string) => output.push(line),
+      stdout: () => undefined,
       stderr: () => undefined,
     };
     expect(
@@ -157,18 +159,6 @@ it("refutes a recorded Finding before the verification consumer and skips it on 
           refutations++;
           await ledger.append({
             ...common,
-            identity: "refutation-1",
-            type: "refutation-recorded",
-            findingId: "finding-1",
-            runId: "refute-1",
-            verdict: "refuted",
-            reasonCode: "guard-effective",
-            promptVersion: "refute-v1",
-            promptDigest: digest,
-            reportDigest: digest,
-          });
-          await ledger.append({
-            ...common,
             identity: "park-1",
             type: "finding-parked",
             findingId: "finding-1",
@@ -190,6 +180,32 @@ it("refutes a recorded Finding before the verification consumer and skips it on 
     await runCampaignPipeline(options as never);
     await runCampaignPipeline(options as never);
     expect([provisions, refutations, verifications]).toEqual([1, 1, 0]);
+    await ledger.append({
+      ...common,
+      identity: "finding-2",
+      type: "finding-recorded",
+      findingId: "finding-2",
+      runId: "discover-1",
+      category: "sqli",
+    });
+    let pendingRefutations = 0;
+    expect(
+      await verifyNextFinding({
+        campaignId: common.campaignId,
+        ledger,
+        newId: () => "unused",
+        loadSnapshot: async () => {
+          throw new Error("Lab opened before refutation");
+        },
+        setupFor: () => ({}),
+        reconstructionFor: () => null,
+        verification: options.pipeline.verification as never,
+        refuteFinding: async () => {
+          pendingRefutations++;
+        },
+      }),
+    ).toBeNull();
+    expect(pendingRefutations).toBe(1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

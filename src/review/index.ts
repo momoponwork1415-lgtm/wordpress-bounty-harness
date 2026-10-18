@@ -126,6 +126,7 @@ export type ReviewQueue = {
   readonly incompleteByReason: Readonly<Record<string, number>>;
   /** Preliminary reason-based retry candidates; the pipeline also checks setup, scenario, and prompt. */
   readonly retryPendingByReason: Readonly<Record<string, number>>;
+  readonly preconditionClassCounts: Readonly<Record<string, number>>;
 };
 export type ScopeAssessment = z.infer<typeof assessmentSchema>;
 export type SubmissionDraftRef = Omit<z.infer<typeof draftSchema>, "content">;
@@ -244,32 +245,48 @@ export class Review<TFacts = unknown> {
     for (const { sequence, event } of this.#readAll("review-decided"))
       if (event.type === "review-decided" && inCampaign(event))
         latestDecision.set(key(event), { sequence, decision: event.decision });
-    const refuted = new Set(
-      this.#readAll("finding-parked")
-        .filter(
-          ({ event }) =>
-            event.type === "finding-parked" &&
-            event.reason === "refuted" &&
-            inCampaign(event),
-        )
-        .map(({ event }) =>
-          event.type === "finding-parked" ? key(event) : "",
-        ),
-    );
 
     const items: ReviewItem[] = [];
+    const parkedEvents = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "finding-parked" }>
+    >();
+    for (const { event } of this.#readAll("finding-parked"))
+      if (event.type === "finding-parked" && inCampaign(event))
+        parkedEvents.set(key(event), event);
+    const parked = new Set(parkedEvents.keys());
+    const latestPreconditionClass = new Map<string, string>();
+    for (const { event } of this.#readAll("finding-precondition-classified"))
+      if (event.type === "finding-precondition-classified" && inCampaign(event))
+        latestPreconditionClass.set(key(event), event.preconditionClass);
+    const preconditionClassCounts: Record<string, number> = {
+      default: 0,
+      "common-usage": 0,
+      "admin-configuration": 0,
+      unknown: 0,
+    };
+    for (const event of parkedEvents.values()) {
+      const classification =
+        latestPreconditionClass.get(key(event)) ??
+        event.preconditionClass ??
+        "unknown";
+      preconditionClassCounts[classification] =
+        (preconditionClassCounts[classification] ?? 0) + 1;
+    }
     const incompleteByReason: Record<string, number> = Object.create(null);
     const retryPendingByReason: Record<string, number> = Object.create(null);
     let contradicted = 0;
     let unverified = 0;
     for (const { event: finding } of this.#readAll("finding-recorded")) {
-      if (
-        finding.type !== "finding-recorded" ||
-        !inCampaign(finding) ||
-        refuted.has(key(finding))
-      )
-        continue;
+      if (finding.type !== "finding-recorded" || !inCampaign(finding)) continue;
       if (finding.derivationKind === "fixed-version-control") continue;
+      if (parked.has(key(finding))) continue;
+      const classification =
+        latestPreconditionClass.get(key(finding)) ??
+        finding.preconditionClass ??
+        "unknown";
+      preconditionClassCounts[classification] =
+        (preconditionClassCounts[classification] ?? 0) + 1;
       const verified = latestVerification.get(key(finding));
       if (verified === undefined) {
         unverified++;
@@ -341,6 +358,7 @@ export class Review<TFacts = unknown> {
       unverified,
       incompleteByReason,
       retryPendingByReason,
+      preconditionClassCounts,
     };
   }
 

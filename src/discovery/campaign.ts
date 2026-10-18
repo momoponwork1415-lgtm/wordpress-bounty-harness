@@ -92,7 +92,13 @@ export const campaignInputV1Schema = z.strictObject({
     maxRuns: z.number().int().positive(),
     noFindingRuns: z.number().int().positive(),
   }),
-  lab: z.strictObject({ setupDigest: digest }),
+  lab: z.union([
+    z.strictObject({ setupDigest: digest }),
+    z.strictObject({
+      mode: z.literal("none"),
+      setupDigest: z.undefined().optional(),
+    }),
+  ]),
   history: campaignHistorySchema,
   entryIndex: z
     .union([
@@ -270,7 +276,9 @@ export type DiscoveryStop =
 /** Run planned Trials, preserve admitted claims, and apply campaign stop rules. */
 export async function runDiscoveryCampaign(options: {
   readonly campaignId: string;
-  readonly labId: string;
+  readonly labId?: string;
+  /** An explicit repeat runs every planned independent Trial unless a run fails. */
+  readonly repeatAll?: boolean;
   readonly input: CampaignInputV1;
   readonly historyFraction: number;
   /** Runs in flight at once on this host; at most four. */
@@ -301,6 +309,11 @@ export async function runDiscoveryCampaign(options: {
   ) => AdmittedFinding;
   /** Programme Boundary 外の impact を `finding-parked` に落とす（#185）。 */
   readonly isProgrammeImpact?: (impact: string) => boolean;
+  /** Profile-owned admission policy; the generic recorder only stores its result. */
+  readonly classifyFindingPrecondition?: (finding: AdmittedFinding) => {
+    readonly preconditionClass: string;
+    readonly park: boolean;
+  };
   readonly normalizeCandidate?: (candidate: unknown) => {
     value: unknown;
     changes: { path: string; operation: string }[];
@@ -323,6 +336,11 @@ export async function runDiscoveryCampaign(options: {
     },
   ) => AdmittedLead;
   readonly leadSignature?: (lead: AdmittedLead) => string;
+  /** Profile-owned Root coverage validator. Absent for archived or control arms. */
+  readonly assessCoverage?: (value: unknown) => {
+    readonly accepted: boolean;
+    readonly record?: unknown;
+  };
   readonly clock?: () => Date;
 }): Promise<{
   readonly runCount: number;
@@ -332,7 +350,7 @@ export async function runDiscoveryCampaign(options: {
   const input = campaignInputV1Schema.parse(options.input);
   const id = z.string().min(1).max(128);
   id.parse(options.campaignId);
-  id.parse(options.labId);
+  if (options.labId !== undefined) id.parse(options.labId);
   if (
     !Number.isFinite(options.historyFraction) ||
     options.historyFraction < 0 ||
@@ -509,7 +527,9 @@ export async function runDiscoveryCampaign(options: {
         trialId: trial.trialId,
         trialOrdinal: trial.trialOrdinal,
         runKind: "explore",
-        labId: options.labId,
+        ...(options.labId === undefined
+          ? { labAttached: false as const }
+          : { labId: options.labId, labAttached: true as const }),
         history: historyMetadata,
         configuration: {
           ...planned.configuration,
@@ -541,6 +561,7 @@ export async function runDiscoveryCampaign(options: {
       let researchArtifact:
         { readonly digest: string; readonly truncated: boolean } | undefined;
       let receiptDigest: string | undefined;
+      let coverageDigest: string | undefined;
       let failure: ReportFailure | undefined;
       const reportState = { foundNew: false, heldBoundary: false };
       const recordReport = createReportRecorder({
@@ -655,7 +676,7 @@ export async function runDiscoveryCampaign(options: {
           base,
           trialId: trial.trialId,
           trialOrdinal: trial.trialOrdinal,
-          labId: options.labId,
+          ...(options.labId === undefined ? {} : { labId: options.labId }),
           history: historyMetadata,
           configuration: planned.configuration,
           promptDigest: input.promptDigest,
@@ -671,6 +692,35 @@ export async function runDiscoveryCampaign(options: {
         if (recoveredRoot.recovered) outcome = "completed";
         if (recoveredRoot.failure !== undefined)
           failure = recoveredRoot.failure;
+        if (
+          outcome === "completed" &&
+          run.coverageSchema !== undefined &&
+          options.assessCoverage !== undefined
+        ) {
+          let coverage: unknown;
+          if (result.attachment !== undefined) {
+            const stored = await options.attachments.read(result.attachment);
+            if (stored.status === "resolved") {
+              try {
+                const report = JSON.parse(
+                  stored.bytes.toString("utf8"),
+                ) as Record<string, unknown>;
+                coverage = report.coverage;
+              } catch {
+                // The report recorder already classifies malformed reports.
+              }
+            }
+          }
+          const assessed = options.assessCoverage(coverage);
+          if (assessed.record !== undefined)
+            coverageDigest = await options.evidence.putFiles({
+              "coverage.json": canonicalJson(assessed.record),
+            });
+          if (!assessed.accepted) {
+            outcome = "failed";
+            failure = { reason: "depth" };
+          }
+        }
       } catch {
         outcome = "failed";
         if (controller.signal.aborted) {
@@ -724,13 +774,14 @@ export async function runDiscoveryCampaign(options: {
           : { diagnosticArtifactDigest }),
         ...(researchArtifact === undefined ? {} : { researchArtifact }),
         ...(outcome === "completed" || failure === undefined ? {} : failure),
-        ...(receiptDigest === undefined
-          ? {}
-          : {
-              artifacts: [
-                { kind: "native-run-receipt", digest: receiptDigest },
-              ],
-            }),
+        artifacts: [
+          ...(receiptDigest === undefined
+            ? []
+            : [{ kind: "native-run-receipt", digest: receiptDigest }]),
+          ...(coverageDigest === undefined
+            ? []
+            : [{ kind: "coverage", digest: coverageDigest }]),
+        ],
       });
       if (finished.status === "conflict")
         throw new Error("Discovery finish identity conflict");
@@ -748,11 +799,11 @@ export async function runDiscoveryCampaign(options: {
     if (explore.outcome === "provider-limited") stopped ??= "provider-limit";
     if (explore.outcome === "failed") stopped ??= "incomplete";
     if (explore.outcome === "completed") {
-      if (explore.heldBoundary && !explore.foundNew)
+      if (!options.repeatAll && explore.heldBoundary && !explore.foundNew)
         stopped ??= "output-boundary";
       else noNewFindings = explore.foundNew ? 0 : noNewFindings + 1;
     }
-    if (noNewFindings >= input.stopRules.noFindingRuns)
+    if (!options.repeatAll && noNewFindings >= input.stopRules.noFindingRuns)
       stopped ??= "no-new-finding";
   };
   const worker = async () => {
