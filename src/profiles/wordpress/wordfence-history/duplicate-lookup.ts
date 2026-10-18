@@ -4,6 +4,7 @@ import type {
   DuplicateLookupResult,
 } from "../../../review/index.js";
 import { duplicateQuerySchema, findDuplicates } from "./index.js";
+import { parseWordPressOrgSelectionId } from "../target-identity.js";
 
 /**
  * Review's duplicate seam backed by the local Wordfence history mirror. It
@@ -30,11 +31,11 @@ export function createWordfenceDuplicateLookup(options: {
         .find((event) => event.snapshotDigest === finding.snapshotDigest);
       const match =
         selected?.type === "target-selected"
-          ? /^wporg:([a-z0-9][a-z0-9-]*)@(.+)$/.exec(selected.selectionId)
+          ? parseWordPressOrgSelectionId(selected.selectionId)
           : null;
       const query = duplicateQuerySchema.safeParse({
-        plugin: match?.[1],
-        version: match?.[2],
+        plugin: match?.slug,
+        version: match?.version,
         property: finding.category,
       });
       if (!query.success) return { status: "unavailable" };

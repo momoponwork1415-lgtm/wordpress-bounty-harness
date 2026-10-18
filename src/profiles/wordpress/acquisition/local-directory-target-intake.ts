@@ -30,6 +30,7 @@ import {
   type TargetIntakePacket,
   type TargetIntakeReason,
 } from "./contracts.js";
+import { wordPressOrgPluginIdentity } from "../target-identity.js";
 
 interface LocalDirectoryTargetIntakeOptions {
   readonly storageDirectory: string;
@@ -388,7 +389,7 @@ class LocalDirectoryTargetIntake implements TargetIntake {
     }
     const pluginIdentity =
       request.pluginIdentity.kind === "wporg"
-        ? `wporg:${request.pluginIdentity.slug}`
+        ? wordPressOrgPluginIdentity(request.pluginIdentity.slug)
         : `premium:${request.pluginIdentity.vendor}/${request.pluginIdentity.product}`;
     const targetSnapshotDigest = canonicalDigestPreservingProperties({
       kind: "target-snapshot",

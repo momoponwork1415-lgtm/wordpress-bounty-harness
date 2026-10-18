@@ -26,6 +26,7 @@ import {
   type TargetIntakePacket,
   type TargetIntakePolicy,
 } from "./contracts.js";
+import { wordPressOrgPluginIdentity } from "../target-identity.js";
 
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
@@ -100,7 +101,7 @@ export async function openCapturedWordPressOrgSvnSource(options: {
     packet.sourceTree.manifest.entries.length + directories.size >
       policy.limits.maxEntries ||
     totalBytes > policy.limits.maxTotalBytes ||
-    packet.pluginIdentity !== `wporg:${options.slug}` ||
+    packet.pluginIdentity !== wordPressOrgPluginIdentity(options.slug) ||
     packet.canonicalInstallDirectory !== options.slug ||
     packet.version !== options.version ||
     packet.targetSnapshot.pluginSlug !== options.slug ||

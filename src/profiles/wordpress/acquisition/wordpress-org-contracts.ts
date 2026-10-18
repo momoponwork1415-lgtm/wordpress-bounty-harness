@@ -7,6 +7,7 @@ import {
   type ReadyIntakeDisposition,
   type TargetIntakeReason,
 } from "./contracts.js";
+import { wordPressOrgPluginIdentitySchema } from "../target-identity.js";
 
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const identifierSchema = z
@@ -31,7 +32,7 @@ export const wordPressOrgTargetObservationRefSchema = z.strictObject({
 export const wordPressOrgTargetObservationSchema = z.strictObject({
   kind: z.literal("wordpress-org-target-observation"),
   schemaVersion: z.literal(1),
-  pluginIdentity: z.string().regex(/^wporg:[a-z0-9][a-z0-9-]*$/),
+  pluginIdentity: wordPressOrgPluginIdentitySchema,
   officialSlug: slugSchema,
   displayName: z.string().min(1).max(256),
   stableVersion: versionSchema,
@@ -79,7 +80,7 @@ export const wordPressOrgAcquireRequestSchema = z.strictObject({
 export const wordPressOrgAcquisitionOriginalSchema = z.strictObject({
   kind: z.literal("wordpress-org-acquisition-original"),
   schemaVersion: z.literal(1),
-  pluginIdentity: z.string().regex(/^wporg:[a-z0-9][a-z0-9-]*$/),
+  pluginIdentity: wordPressOrgPluginIdentitySchema,
   version: versionSchema,
   sourceUrl: z.url(),
   retrievedAt: z.string().datetime({ offset: true }),

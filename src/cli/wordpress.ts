@@ -6,6 +6,7 @@ import { z } from "zod";
 import { DISCOVERY_LEFTOVER_PATTERNS } from "../discovery/index.js";
 import type { PlannedDiscoveryRun } from "../discovery/index.js";
 import { Review } from "../review/index.js";
+import { targetSelectionId } from "../selection/index.js";
 import { SourceAcquisitionError, type Snapshot } from "../snapshot/index.js";
 import { renderWordPressEntryIndex } from "../profiles/wordpress/discovery/entry-points.js";
 import { buildWordPressSourceIndex } from "../profiles/wordpress/discovery/storage-index.js";
@@ -73,6 +74,11 @@ import {
   type WordPressCampaignSession,
   type WordPressCliProfileOptions,
 } from "./wordpress-session.js";
+import {
+  parseWordPressOrgPluginIdentity,
+  parseWordPressOrgSelectionId,
+  wordPressOrgPluginIdentity,
+} from "../profiles/wordpress/target-identity.js";
 
 export {
   wordpressCampaignConfigSchema,
@@ -211,7 +217,7 @@ async function reservedSelectionBatch(
       );
       if (
         target.policy.digest !== digest ||
-        `${target.targetId}@${target.version}` !== event.selectionId
+        targetSelectionId(target) !== event.selectionId
       )
         throw new Error("Reserved target selection does not match the ledger");
       result.push({ target, snapshotDigest: event.snapshotDigest });
@@ -285,9 +291,7 @@ async function bindCampaignSelectionBatch(
   const selected = batch.selections.filter(
     ({ target }) => targetSlug === null || target.slug === targetSlug,
   );
-  const selectionIds = selected.map(
-    ({ target }) => `${target.targetId}@${target.version}`,
-  );
+  const selectionIds = selected.map(({ target }) => targetSelectionId(target));
   if (binding !== undefined) {
     if (canonicalJson(binding.selectionIds) !== canonicalJson(selectionIds))
       throw new Error("Campaign target set differs from its bound selection");
@@ -754,7 +758,7 @@ async function runWordPressCampaign(
       : undefined;
   const reservedDigests = new Map(
     reservedSelections?.map(({ target, snapshotDigest }) => [
-      `${target.targetId}@${target.version}`,
+      targetSelectionId(target),
       snapshotDigest,
     ]) ?? [],
   );
@@ -817,13 +821,11 @@ async function runWordPressCampaign(
             target.slug === input.target,
         ),
       freeze: async (target) => {
-        const reservedDigest = reservedDigests.get(
-          `${target.targetId}@${target.version}`,
-        );
+        const reservedDigest = reservedDigests.get(targetSelectionId(target));
         if (reservedSelections !== undefined && reservedDigest === undefined)
           throw new SourceAcquisitionError("source-mismatch", {
             reason: "reserved-snapshot-unavailable",
-            selectionId: `${target.targetId}@${target.version}`,
+            selectionId: targetSelectionId(target),
           });
         // Selection already froze this source. Reuse the pinned Snapshot so a
         // second WordPress.org download cannot replace or block the campaign.
@@ -841,7 +843,7 @@ async function runWordPressCampaign(
             reason: "reserved-snapshot-changed",
             expectedDigest: reservedDigest,
             actualDigest: snapshot.digest,
-            expectedTarget: `${target.targetId}@${target.version}`,
+            expectedTarget: targetSelectionId(target),
             actualTarget: `${snapshot.target.identity}@${snapshot.target.version}`,
           });
         return snapshot;
@@ -965,7 +967,7 @@ export function createWordPressCliProfile(
             state.store,
             error,
           );
-          const selectionId = `${target.targetId}@${target.version}`;
+          const selectionId = targetSelectionId(target);
           const selectionArtifactDigest = await state.store.putFiles({
             "target-selection.json": canonicalJson(target),
           });
@@ -1038,7 +1040,7 @@ export function createWordPressCliProfile(
           snapshotDigest: snapshot.digest,
           occurredAt: target.selectedAt,
           type: "target-selected",
-          selectionId: `${target.targetId}@${target.version}`,
+          selectionId: targetSelectionId(target),
           promptVariant,
           artifacts: [
             { kind: "target-selection", digest: selectionDigest },
@@ -1070,7 +1072,7 @@ export function createWordPressCliProfile(
         excluded: inspected
           .filter((item) => !chosenSlugs.has(item.slug))
           .map((item) => ({
-            targetId: `wporg:${item.slug}`,
+            targetId: wordPressOrgPluginIdentity(item.slug),
             reasons: reasons.get(item.slug) ?? [],
             ...(item.observedAt === undefined
               ? {}
@@ -1208,21 +1210,24 @@ export function createWordPressCliProfile(
             originalSnapshotDigest,
             version,
           }) {
-            const slug = /^wporg:([a-z0-9][a-z0-9-]*)@/.exec(selectionId)?.[1];
+            const slug = parseWordPressOrgSelectionId(selectionId)?.slug;
             if (slug === undefined) return null;
             const originalSnapshot = await boundaries.loadSnapshot(
               originalSnapshotDigest,
             );
-            if (originalSnapshot.target.identity !== `wporg:${slug}`)
+            if (
+              originalSnapshot.target.identity !==
+              wordPressOrgPluginIdentity(slug)
+            )
               throw new Error(
                 "The original Snapshot belongs to another target",
               );
             const originalPluginPins: Record<string, string> = {};
             for (const dependency of originalSnapshot.dependencies) {
-              const dependencySlug = /^wporg:([a-z0-9][a-z0-9-]*)$/.exec(
+              const dependencySlug = parseWordPressOrgPluginIdentity(
                 dependency.identity,
-              )?.[1];
-              if (dependencySlug === undefined) continue;
+              );
+              if (dependencySlug === null) continue;
               if (
                 originalPluginPins[dependencySlug] !== undefined &&
                 originalPluginPins[dependencySlug] !== dependency.version
