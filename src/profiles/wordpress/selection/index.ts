@@ -1,10 +1,14 @@
 export {
   createWordPressSelection,
   loadWordPressSelectionPolicy,
+  openWordPressSelection,
 } from "./wordpress-selection.js";
 export type {
+  WordPressCandidateInspection,
+  WordPressSelection,
   WordPressSelectionBatchInspection,
-  WordPressSelectionWithBatchInspection,
+  WordPressSelectionDecision,
+  WordPressSelectionExclusionReason,
 } from "./wordpress-selection.js";
 export {
   wordPressSelectionPolicySchema,
