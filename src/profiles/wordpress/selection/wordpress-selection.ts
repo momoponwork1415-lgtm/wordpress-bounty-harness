@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import { canonicalDigestPreservingProperties } from "../../../infrastructure/canonical-json.js";
-import type { Selection } from "../../../selection/index.js";
+import type { Ledger } from "../../../ledger/index.js";
 import type {
   WordPressOrgTargetSource,
   WordPressOrgTargetObservation,
@@ -23,6 +23,14 @@ import {
   type WordPressSelectionInspection,
   type SelectionReason,
 } from "./contracts.js";
+import {
+  inspectWordPressLedgerExclusions,
+  type WordPressLedgerExclusionReason,
+} from "./ledger-exclusions.js";
+import {
+  loadWordPressLegacyHistory,
+  type WordPressLegacyHistoryReport,
+} from "./legacy-history.js";
 
 const dayMs = 86_400_000;
 
@@ -43,16 +51,68 @@ export interface WordPressSelectionBatchInspection {
   readonly sourceListings: WordPressOrgCandidateEnumeration["listings"];
 }
 
-export type WordPressSelectionWithBatchInspection = Selection<
-  WordPressSelectionPolicy,
-  WordPressTargetSelection,
-  WordPressSelectionInspection
-> & {
-  /** Older injected Selection adapters may only implement inspect. */
-  readonly inspectBatch?: (
+/**
+ * The boundary toward WordPress.org and the Programme: observes each
+ * candidate, applies the policy's eligibility rules and scores it. It reads
+ * no Ledger; `openWordPressSelection` adds that.
+ */
+export interface WordPressCandidateInspection {
+  inspectBatch(
     policy: WordPressSelectionPolicy,
-  ) => Promise<WordPressSelectionBatchInspection>;
-};
+  ): Promise<WordPressSelectionBatchInspection>;
+  inspect(
+    policy: WordPressSelectionPolicy,
+  ): Promise<readonly WordPressSelectionInspection[]>;
+  /**
+   * Eligible targets by score, cut at `maximumTargets`, without Ledger
+   * exclusions: manual pins for a campaign run and re-verification of a
+   * Finding's own target, which the Ledger would otherwise exclude.
+   */
+  rank(
+    policy: WordPressSelectionPolicy,
+  ): Promise<readonly WordPressTargetSelection[]>;
+}
+
+export type WordPressSelectionExclusionReason =
+  SelectionReason | WordPressLedgerExclusionReason;
+
+export interface WordPressSelectionDecision {
+  /** Every candidate with its policy, Ledger and legacy-history reasons merged. */
+  readonly inspections: readonly (Omit<
+    WordPressSelectionInspection,
+    "reasons"
+  > & {
+    readonly reasons: readonly WordPressSelectionExclusionReason[];
+  })[];
+  /** Candidates left without a reason, best first; one order for every caller. */
+  readonly ranked: readonly WordPressTargetSelection[];
+  /** `ranked` cut at `maximumTargets`. */
+  readonly selected: readonly WordPressTargetSelection[];
+  readonly sourceStatus: WordPressSelectionBatchInspection["sourceStatus"];
+  readonly sourceListings: WordPressSelectionBatchInspection["sourceListings"];
+  readonly legacyHistory: WordPressLegacyHistoryReport;
+}
+
+/** The selection `policy/selection.md` describes: policy, Ledger and legacy history. */
+export interface WordPressSelection {
+  decide(policy: WordPressSelectionPolicy): Promise<WordPressSelectionDecision>;
+  /** `decide(policy).selected`: the next batch, Ledger exclusions applied. */
+  select(
+    policy: WordPressSelectionPolicy,
+  ): Promise<readonly WordPressTargetSelection[]>;
+}
+
+const byScore = (
+  left: WordPressTargetSelection,
+  right: WordPressTargetSelection,
+): number => right.score - left.score || left.slug.localeCompare(right.slug);
+
+const eligibleTargets = (
+  inspections: readonly { readonly selection?: WordPressTargetSelection }[],
+): WordPressTargetSelection[] =>
+  inspections.flatMap((item) =>
+    item.selection === undefined ? [] : [item.selection],
+  );
 
 /** WordPress.org dates look like `2026-09-01 12:00am GMT`; ISO strings also parse. */
 function parseObservedDate(date: string): number | undefined {
@@ -128,7 +188,7 @@ function highThreatSurface(
 
 export function createWordPressSelection(
   options: CreateWordPressSelectionOptions,
-): WordPressSelectionWithBatchInspection {
+): WordPressCandidateInspection {
   const clock = options.clock ?? (() => new Date());
 
   async function inspectBatch(
@@ -343,19 +403,64 @@ export function createWordPressSelection(
     inspectBatch,
     inspect: async (policyInput) =>
       (await inspectBatch(policyInput)).inspections,
-    async select(policyInput) {
+    async rank(policyInput) {
       const policy = wordPressSelectionPolicySchema.parse(policyInput);
-      const { inspections: inspected } = await inspectBatch(policy);
-      return inspected
-        .flatMap((item) =>
-          item.selection === undefined ? [] : [item.selection],
-        )
-        .sort(
-          (left, right) =>
-            right.score - left.score || left.slug.localeCompare(right.slug),
-        )
+      const { inspections } = await inspectBatch(policy);
+      return eligibleTargets(inspections)
+        .sort(byScore)
         .slice(0, policy.maximumTargets);
     },
+  };
+}
+
+export function openWordPressSelection(input: {
+  readonly candidates: WordPressCandidateInspection;
+  readonly ledger: Pick<Ledger, "readAll">;
+  /** Git-outside legacy history JSON, read on every decision (D2). */
+  readonly legacyHistoryFile?: string;
+  /** The prompt a policy without `promptVariant` is selected for. */
+  readonly promptVariant: string;
+}): WordPressSelection {
+  async function decide(
+    policyInput: WordPressSelectionPolicy,
+  ): Promise<WordPressSelectionDecision> {
+    const policy = wordPressSelectionPolicySchema.parse(policyInput);
+    const batch = await input.candidates.inspectBatch(policy);
+    const eligible = eligibleTargets(batch.inspections);
+    const legacy = await loadWordPressLegacyHistory(input.legacyHistoryFile);
+    const ledgerReasons = new Map(
+      inspectWordPressLedgerExclusions({
+        ledger: input.ledger,
+        legacyHistory: legacy.history,
+        candidates: eligible.map(({ slug, version }) => ({ slug, version })),
+        currentPromptVariant: policy.promptVariant ?? input.promptVariant,
+        revisitPolicy: policy.revisitPolicy ?? { kind: "never" },
+      }).map(({ slug, reasons }) => [slug, reasons]),
+    );
+    const inspections = batch.inspections.map((item) => ({
+      ...item,
+      reasons: [...item.reasons, ...(ledgerReasons.get(item.slug) ?? [])],
+    }));
+    const excluded = new Set(
+      inspections
+        .filter((item) => item.reasons.length > 0)
+        .map((item) => item.slug),
+    );
+    const ranked = eligible
+      .filter((target) => !excluded.has(target.slug))
+      .sort(byScore);
+    return {
+      inspections,
+      ranked,
+      selected: ranked.slice(0, policy.maximumTargets),
+      sourceStatus: batch.sourceStatus,
+      sourceListings: batch.sourceListings,
+      legacyHistory: legacy.report,
+    };
+  }
+  return {
+    decide,
+    select: async (policy) => (await decide(policy)).selected,
   };
 }
 

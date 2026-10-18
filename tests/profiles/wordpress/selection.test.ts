@@ -1,8 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  ledgerEventV1Schema,
+  type Ledger,
+  type LedgerReadAllQuery,
+  type LedgerRecord,
+} from "../../../src/ledger/index.js";
 import {
   createWordPressSelection,
   loadWordPressSelectionPolicy,
+  openWordPressSelection,
   wordPressSelectionPolicySchema,
   wordPressTargetSelectionSchema,
 } from "../../../src/profiles/wordpress/selection/index.js";
@@ -159,7 +170,7 @@ describe("WordPress selection public interface", () => {
       ...basePolicy,
       pluginDependencyPins: { exposed: { elementor: "3.32.0" } },
     };
-    const selected = await selection.select(policy);
+    const selected = await selection.rank(policy);
     expect(selected.find((item) => item.slug === "exposed")).toMatchObject({
       pluginDependencyPins: { elementor: "3.32.0" },
       dependencyVersionPolicy: "pinned-only",
@@ -169,7 +180,7 @@ describe("WordPress selection public interface", () => {
     ).toBeUndefined();
     expect(
       selected.find((item) => item.slug === "exposed")?.policy.digest,
-    ).not.toBe((await selection.select(basePolicy))[1]?.policy.digest);
+    ).not.toBe((await selection.rank(basePolicy))[1]?.policy.digest);
     expect(
       wordPressSelectionPolicySchema.safeParse({
         ...basePolicy,
@@ -191,7 +202,7 @@ describe("WordPress selection public interface", () => {
       pinnedVersions: { exposed: "2.0.16" },
       targetSourcePins: { exposed: sourcePin },
     };
-    const selected = await harness({}).select(policy);
+    const selected = await harness({}).rank(policy);
     expect(selected.find((item) => item.slug === "exposed")).toMatchObject({
       version: "2.0.16",
       targetSourcePin: sourcePin,
@@ -236,7 +247,7 @@ describe("WordPress selection public interface", () => {
       }),
     });
     const currentPolicy = await loadWordPressSelectionPolicy();
-    const selected = await selection.select({
+    const selected = await selection.rank({
       ...currentPolicy,
       pluginDependencySlugs: { exposed: ["elementor"] },
     });
@@ -261,13 +272,13 @@ describe("WordPress selection public interface", () => {
 
   it("changes order when the policy changes and records the score breakdown", async () => {
     const selection = harness({});
-    const first = await selection.select(basePolicy);
+    const first = await selection.rank(basePolicy);
     expect(first.map((item) => item.slug)).toEqual(["popular", "exposed"]);
     expect(first[0]?.scoreBreakdown.installations).toBeGreaterThan(
       first[1]?.scoreBreakdown.installations ?? 0,
     );
 
-    const second = await selection.select({
+    const second = await selection.rank({
       ...basePolicy,
       scoreWeights: {
         installations: 0,
@@ -345,7 +356,7 @@ describe("WordPress selection public interface", () => {
     void surfaceTagWeights;
     void highThreatTags;
     void runBudget;
-    const plain = await selection.select({
+    const plain = await selection.rank({
       ...rest,
       candidateSlugs: ["popular", "files"],
       scoreWeights: { installations: 10, recency: 0 },
@@ -367,7 +378,7 @@ describe("WordPress selection public interface", () => {
       },
     });
     const policy = { ...basePolicy, candidateSlugs: ["popular", "files"] };
-    const plain = await selection.select(policy);
+    const plain = await selection.rank(policy);
     expect(plain.map((item) => item.slug)).toEqual(["popular", "files"]);
     expect(plain.find((item) => item.slug === "files")).toMatchObject({
       highThreatSurface: true,
@@ -376,7 +387,7 @@ describe("WordPress selection public interface", () => {
     });
     expect(plain.find((item) => item.slug === "popular")?.runBudget).toBe(10);
 
-    const weighted = await selection.select({
+    const weighted = await selection.rank({
       ...policy,
       scoreWeights: { ...policy.scoreWeights, highThreat: 100 },
     });
@@ -390,7 +401,7 @@ describe("WordPress selection public interface", () => {
 
   it("does not rank candidates by historical advisory counts", async () => {
     const selection = harness({});
-    const ranked = await selection.select({
+    const ranked = await selection.rank({
       ...basePolicy,
       historySignals: { popular: 1, exposed: 12 },
       historySource: { digest: digest("d"), refreshedAt: now },
@@ -457,7 +468,7 @@ describe("WordPress selection public interface", () => {
       ["missing", "ineligible", ["observation-unavailable"]],
       ["closed", "ineligible", ["distribution-closed"]],
     ]);
-    expect((await selection.select(policy)).map((item) => item.slug)).toEqual([
+    expect((await selection.rank(policy)).map((item) => item.slug)).toEqual([
       "recent",
     ]);
   });
@@ -488,7 +499,7 @@ describe("WordPress selection public interface", () => {
       ["newer", "ineligible", ["core-version-incompatible"]],
       ["unknown", "ineligible", ["core-requirement-unavailable"]],
     ]);
-    expect((await selection.select(policy)).map((item) => item.slug)).toEqual([
+    expect((await selection.rank(policy)).map((item) => item.slug)).toEqual([
       "equal",
       "older",
     ]);
@@ -510,7 +521,7 @@ describe("WordPress selection public interface", () => {
       reasons: ["core-version-incompatible"],
     });
 
-    const historical = await selection.select({
+    const historical = await selection.rank({
       ...stablePolicy,
       pinnedVersions: { legacy: "1.0.0" },
     });
@@ -519,13 +530,13 @@ describe("WordPress selection public interface", () => {
 
   it("never makes stale programme or target observations eligible", async () => {
     const staleProgramme = harness({ programmeStatus: "stale" });
-    expect(await staleProgramme.select(basePolicy)).toEqual([]);
+    expect(await staleProgramme.rank(basePolicy)).toEqual([]);
     expect((await staleProgramme.inspect(basePolicy))[0]?.reasons).toContain(
       "programme-stale",
     );
 
     const staleTarget = harness({ clock: "2026-10-12T00:00:00.000Z" });
-    expect(await staleTarget.select(basePolicy)).toEqual([]);
+    expect(await staleTarget.rank(basePolicy)).toEqual([]);
     expect((await staleTarget.inspect(basePolicy))[0]?.reasons).toContain(
       "observation-stale",
     );
@@ -556,17 +567,17 @@ describe("WordPress selection public interface", () => {
       advanceMsPerRead: 3_000,
     });
     expect((await selection.inspect(basePolicy))[0]?.reasons).toEqual([]);
-    expect(await selection.select(basePolicy)).toHaveLength(2);
+    expect(await selection.rank(basePolicy)).toHaveLength(2);
   });
 
   it("dates the stable version by its last update and leaves a pinned version undated", async () => {
     const selection = harness({});
-    const [stable] = await selection.select({
+    const [stable] = await selection.rank({
       ...basePolicy,
       candidateSlugs: ["exposed"],
     });
     expect(stable?.versionPublishedAt).toBe("2026-09-01T00:00:00.000Z");
-    const [pinned] = await selection.select({
+    const [pinned] = await selection.rank({
       ...basePolicy,
       candidateSlugs: ["exposed"],
       pinnedVersions: { exposed: "1.0.0" },
@@ -576,17 +587,183 @@ describe("WordPress selection public interface", () => {
 
   it("selects a manually pinned version and binds the pin into the policy digest", async () => {
     const selection = harness({});
-    const unpinned = await selection.select(basePolicy);
+    const unpinned = await selection.rank(basePolicy);
     const pinnedPolicy = {
       ...basePolicy,
       candidateSlugs: ["exposed"],
       pinnedVersions: { exposed: "1.0.0" },
     };
-    const [pinned] = await selection.select(pinnedPolicy);
+    const [pinned] = await selection.rank(pinnedPolicy);
     expect(pinned).toMatchObject({ slug: "exposed", version: "1.0.0" });
     expect(pinned?.policy.digest).not.toBe(unpinned[0]?.policy.digest);
     await expect(
-      selection.select({ ...basePolicy, pinnedVersions: { absent: "1.0.0" } }),
+      selection.rank({ ...basePolicy, pinnedVersions: { absent: "1.0.0" } }),
     ).rejects.toThrow();
+  });
+});
+
+/** An append-only Ledger read back from memory, in sequence order. */
+function ledgerOf(events: readonly unknown[]): Pick<Ledger, "readAll"> {
+  const records: readonly LedgerRecord[] = events.map((event, index) => ({
+    sequence: index + 1,
+    event: ledgerEventV1Schema.parse(event),
+  }));
+  return {
+    readAll(query: LedgerReadAllQuery = {}) {
+      return records.filter(
+        ({ event }) =>
+          (query.type === undefined || event.type === query.type) &&
+          (query.campaignId === undefined ||
+            event.campaignId === query.campaignId),
+      );
+    },
+  };
+}
+
+const occurredAt = "2026-10-01T00:00:00.000Z";
+const recorded = (
+  campaignId: string,
+  snapshotDigest: string,
+  identity: string,
+  event: Record<string, unknown>,
+): Record<string, unknown> => ({
+  schemaVersion: 1,
+  campaignId,
+  snapshotDigest,
+  identity,
+  occurredAt,
+  artifacts: [],
+  ...event,
+});
+/** `exposed@1.2.3` was selected, explored with one completed Trial and yielded a Finding. */
+const exposedTrialWithFinding = (promptVariant = "wp2shell-bounty-v8") => [
+  recorded("campaign-1", digest("d"), "selected-exposed", {
+    type: "target-selected",
+    selectionId: "wporg:exposed@1.2.3",
+    promptVariant,
+  }),
+  recorded("campaign-1", digest("d"), "run-exposed", {
+    type: "discovery-run-started",
+    runId: "run-exposed",
+    labId: "lab-1",
+    history: { mode: "none" },
+    configuration: { promptVariant, assignmentUnit: "target" },
+  }),
+  recorded("campaign-1", digest("d"), "finished-exposed", {
+    type: "discovery-run-finished",
+    runId: "run-exposed",
+    outcome: "completed",
+    costUsd: "unavailable",
+    wallTimeMs: 1000,
+  }),
+  recorded("campaign-1", digest("d"), "finding-exposed", {
+    type: "finding-recorded",
+    findingId: "finding-1",
+    runId: "run-exposed",
+    category: "stored-xss",
+  }),
+];
+
+const temporaryDirectories: string[] = [];
+afterEach(async () => {
+  for (const directory of temporaryDirectories.splice(0))
+    await rm(directory, { recursive: true, force: true });
+});
+
+describe("WordPress selection over the Ledger (policy/selection.md)", () => {
+  const open = (ledger: Pick<Ledger, "readAll">, legacyHistoryFile?: string) =>
+    openWordPressSelection({
+      candidates: harness({}),
+      ledger,
+      ...(legacyHistoryFile === undefined ? {} : { legacyHistoryFile }),
+      promptVariant: "wp2shell-bounty-v8",
+    });
+
+  it("select() excludes a slug with a recorded Finding and keeps the others in score order", async () => {
+    const selection = open(ledgerOf(exposedTrialWithFinding()));
+    expect(
+      (await selection.select(basePolicy)).map((item) => item.slug),
+    ).toEqual(["popular"]);
+    // The same candidates rank in full when the Ledger is empty.
+    expect(
+      (await open(ledgerOf([])).select(basePolicy)).map((item) => item.slug),
+    ).toEqual(["popular", "exposed"]);
+    // The pure ranking below the Ledger still returns the Finding's own target.
+    expect(
+      (await harness({}).rank(basePolicy)).map((item) => item.slug),
+    ).toEqual(["popular", "exposed"]);
+  });
+
+  it("decide() merges Ledger reasons into the inspection report and cuts the ranking at maximumTargets", async () => {
+    const decision = await open(ledgerOf(exposedTrialWithFinding())).decide({
+      ...basePolicy,
+      maximumTargets: 1,
+    });
+    expect(
+      decision.inspections.map((item) => [item.slug, item.reasons]),
+    ).toEqual([
+      ["popular", []],
+      ["exposed", ["unpublished-finding", "previously-selected"]],
+    ]);
+    expect(decision.ranked.map((item) => item.slug)).toEqual(["popular"]);
+    expect(decision.selected).toEqual(decision.ranked.slice(0, 1));
+    expect(decision.sourceStatus).toBe("manual");
+    expect(decision.legacyHistory).toEqual({ status: "unavailable" });
+  });
+
+  it("excludes a slug an earlier generation already started, and reports the legacy digest", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wbh-selection-"));
+    temporaryDirectories.push(root);
+    const legacyHistoryFile = join(root, "legacy-history.json");
+    await writeFile(
+      legacyHistoryFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        sourceDigest: digest("e"),
+        exportedAt: occurredAt,
+        sources: ["synthetic"],
+        started: ["popular"],
+        ambiguous: [],
+        reconsider: [],
+      }),
+    );
+    const decision = await open(ledgerOf([]), legacyHistoryFile).decide(
+      basePolicy,
+    );
+    expect(
+      decision.inspections.find((item) => item.slug === "popular")?.reasons,
+    ).toEqual(["legacy-started"]);
+    expect(decision.selected.map((item) => item.slug)).toEqual(["exposed"]);
+    expect(decision.legacyHistory).toMatchObject({
+      status: "available",
+      started: 1,
+      ambiguous: 0,
+      reconsider: 0,
+    });
+  });
+
+  it("reads the policy's own prompt variant before the campaign's when judging a revisit", async () => {
+    const ledger = ledgerOf([
+      ...exposedTrialWithFinding("wp2shell-bounty-v7").filter(
+        (event) => event.type !== "finding-recorded",
+      ),
+    ]);
+    const revisit = {
+      ...basePolicy,
+      revisitPolicy: { kind: "prompt-version-changed" as const },
+    };
+    // Explored with v7; a v8 selection is a revisit under this policy.
+    expect(
+      (await open(ledger).select(revisit)).map((item) => item.slug),
+    ).toEqual(["popular", "exposed"]);
+    // The policy pins v7 itself: the same prompt again is not a revisit.
+    expect(
+      (
+        await open(ledger).select({
+          ...revisit,
+          promptVariant: "wp2shell-bounty-v7",
+        })
+      ).map((item) => item.slug),
+    ).toEqual(["popular"]);
   });
 });
