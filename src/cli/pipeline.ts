@@ -467,13 +467,13 @@ export async function runCampaignPipeline<
             discovered.runCount > 0) ||
           discovered.stoppedBy === "operator"
         ) {
-          requestStop("provider-limit");
+          requestStop(discovered.stoppedBy);
           await append({
             ...base,
             identity: `campaign-stopped-${options.newId()}`,
             occurredAt: at(),
             type: "campaign-stopped",
-            reason: "provider-limit",
+            reason: discovered.stoppedBy,
           });
         } else if (
           discovered.stoppedBy === "incomplete" &&
