@@ -162,55 +162,6 @@ export function validateProductionCampaignInput(
   return parsed;
 }
 
-/** Deterministic fractional allocation of run ordinals to arm b; zero means none and one means all. */
-export function allocateArm(ordinal: number, armBFraction: number): "a" | "b" {
-  if (!Number.isSafeInteger(ordinal) || ordinal < 0)
-    throw new Error("Invalid run ordinal");
-  if (!Number.isFinite(armBFraction) || armBFraction < 0 || armBFraction > 1)
-    throw new Error("Invalid arm fraction");
-  return Math.floor((ordinal + 1) * armBFraction) >
-    Math.floor(ordinal * armBFraction)
-    ? "b"
-    : "a";
-}
-
-export type AblationAxis = {
-  readonly axis: "history" | "prompt";
-  readonly armBFraction: number;
-};
-export type TrialArms = Partial<Record<AblationAxis["axis"], "a" | "b">>;
-
-/** Offset each axis by powers of two to cover a 2x2 cell every four Trials. */
-export function allocateTrialArms(
-  trialOrdinal: number,
-  axes: readonly AblationAxis[],
-): TrialArms {
-  if (!Number.isSafeInteger(trialOrdinal) || trialOrdinal < 0)
-    throw new Error("Invalid Trial ordinal");
-  const arms: TrialArms = {};
-  const seen = new Set<AblationAxis["axis"]>();
-  for (const [index, axis] of axes.entries()) {
-    if (seen.has(axis.axis)) throw new Error("Duplicate ablation axis");
-    seen.add(axis.axis);
-    arms[axis.axis] = allocateArm(
-      Math.floor(trialOrdinal / 2 ** index),
-      axis.armBFraction,
-    );
-  }
-  return arms;
-}
-
-/** Deterministic fractional allocation; zero means no history and one means all runs. */
-export function historyForRun(
-  ordinal: number,
-  historyFraction: number,
-  catalogHistory: Extract<CampaignHistory, { mode: "catalog" }>,
-): CampaignHistory {
-  const arm = allocateArm(ordinal, historyFraction);
-  const admitted = catalog.parse(catalogHistory);
-  return arm === "b" ? admitted : { mode: "none" };
-}
-
 export type AdmittedFinding = {
   readonly findingId: string;
   readonly discoveryRunId: string;
@@ -234,13 +185,6 @@ export type PlannedDiscoveryRun = {
     readonly entryIndex?:
       | { readonly enabled: true; readonly digest: string }
       | { readonly enabled: false };
-    readonly assignment?: {
-      readonly partition: number;
-      readonly of: number;
-      readonly planDigest: string;
-      readonly indexDigest?: string;
-      readonly componentDigest?: string;
-    };
     readonly labAccess?: { readonly database: "read-only" | "none" };
   };
 };
@@ -281,15 +225,12 @@ export async function runDiscoveryCampaign(options: {
   /** An explicit repeat runs every planned independent Trial unless a run fails. */
   readonly repeatAll?: boolean;
   readonly input: CampaignInputV1;
-  readonly historyFraction: number;
   /** Runs in flight at once on this host; at most four. */
   readonly concurrency?: number;
   /** Exploration wall time, stamped when each Trial starts rather than when all plans are built. */
   readonly runWallTimeMs?: number;
   /** Operator cancellation of in-flight exploration. */
   readonly signal?: AbortSignal;
-  /** Records each run's arm on the history axis: a without history, b with it. */
-  readonly ablation?: { readonly axes: readonly AblationAxis[] };
   readonly plannedTrials: readonly PlannedTrial[];
   readonly executor: {
     execute(
@@ -352,12 +293,6 @@ export async function runDiscoveryCampaign(options: {
   const id = z.string().min(1).max(128);
   id.parse(options.campaignId);
   if (options.labId !== undefined) id.parse(options.labId);
-  if (
-    !Number.isFinite(options.historyFraction) ||
-    options.historyFraction < 0 ||
-    options.historyFraction > 1
-  )
-    throw new Error("Invalid history allocation fraction");
   const clock = options.clock ?? (() => new Date());
   const concurrency = options.concurrency ?? 1;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4)
@@ -446,21 +381,9 @@ export async function runDiscoveryCampaign(options: {
       throw new Error(
         "Trial identity or ordinal differs from its exploration run",
       );
-    const assignedArms = allocateTrialArms(
-      trial.trialOrdinal,
-      options.ablation?.axes ?? [],
-    );
-    const arms: TrialArms =
-      input.history.mode === "none" && assignedArms.history !== undefined
-        ? { ...assignedArms, history: "a" }
-        : assignedArms;
     const history =
       input.history.mode === "catalog"
-        ? arms.history === undefined
-          ? historyForRun(index, options.historyFraction, input.history)
-          : arms.history === "b"
-            ? input.history
-            : { mode: "none" as const }
+        ? catalog.parse(input.history)
         : { mode: "none" as const };
     const historyMetadata =
       history.mode === "catalog"
@@ -529,7 +452,6 @@ export async function runDiscoveryCampaign(options: {
                 ? ("none" as const)
                 : ("mounted" as const),
           },
-          ...(options.ablation === undefined ? {} : { arms }),
         },
       });
       if (started.status === "conflict")

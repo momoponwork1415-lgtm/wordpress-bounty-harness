@@ -4,13 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  enumerateWordPressEntryPoints,
-  entryKey,
-  planWordPressEntryAssignments,
-  renderWordPressEntryAssignment,
-  partitionWordPressEntryPoints,
-} from "../../../src/profiles/wordpress/discovery/entry-points.js";
+import { enumerateWordPressEntryPoints } from "../../../src/profiles/wordpress/discovery/entry-points.js";
 import { buildWordPressSourceIndex } from "../../../src/profiles/wordpress/discovery/storage-index.js";
 
 const fixture = join(
@@ -76,7 +70,7 @@ describe("WordPress source index", () => {
     expect(index.settingsKeys).toContain("plugin_shared");
   });
 
-  it("splits an oversized component at a key boundary on both sides and digests independently of input order", async () => {
+  it("digests independently of input order", async () => {
     const entries = await enumerateWordPressEntryPoints(fixture);
     const index = await buildWordPressSourceIndex(fixture, "plugin", entries);
     const reversed = await buildWordPressSourceIndex(
@@ -85,45 +79,6 @@ describe("WordPress source index", () => {
       [...entries].reverse(),
     );
     expect(reversed.digest).toBe(index.digest);
-    const assignments = planWordPressEntryAssignments(index, 1);
-    const boundary = assignments.filter((assignment) =>
-      assignment.boundaryKeys?.includes("option:plugin_shared"),
-    );
-    expect(boundary).toHaveLength(2);
-    expect(
-      boundary.every((assignment) =>
-        renderWordPressEntryAssignment(assignment).includes(
-          "Boundary keys shared",
-        ),
-      ),
-    ).toBe(true);
-    expect(assignments[0]?.planDigest).toMatch(/^sha256:/);
-    expect(assignments[0]?.indexDigest).toBe(index.digest);
-    expect(renderWordPressEntryAssignment(assignments[0]!)).toContain(
-      "Storage keys in scope:",
-    );
-  });
-
-  it("keeps the original partitions when every entry is a singleton component", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wbh-singleton-index-"));
-    try {
-      await writeFile(
-        join(root, "plugin.php"),
-        "<?php\nadd_action('wp_ajax_nopriv_one', 'one');\nadd_action('wp_ajax_nopriv_two', 'two');\nfunction one() {}\nfunction two() {}\n",
-      );
-      const entries = await enumerateWordPressEntryPoints(root);
-      const index = await buildWordPressSourceIndex(root, "plugin", entries);
-      const legacy = partitionWordPressEntryPoints(entries, 2);
-      const planned = planWordPressEntryAssignments(index, 2);
-      expect(
-        planned.map((assignment) => assignment.entries.map(entryKey)),
-      ).toEqual(legacy.map((assignment) => assignment.entries.map(entryKey)));
-      expect(planned.map((assignment) => assignment.files)).toEqual(
-        legacy.map((assignment) => assignment.files),
-      );
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
   });
 
   it("marks an oversized file as a partial index instead of throwing", async () => {
@@ -136,11 +91,6 @@ describe("WordPress source index", () => {
       const index = await buildWordPressSourceIndex(root, "plugin");
       expect(index.incomplete).toBe(true);
       expect(index.entries).toEqual([]);
-      expect(
-        renderWordPressEntryAssignment(
-          planWordPressEntryAssignments(index, 8)[0]!,
-        ),
-      ).toContain("Index: partial (limit reached)");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

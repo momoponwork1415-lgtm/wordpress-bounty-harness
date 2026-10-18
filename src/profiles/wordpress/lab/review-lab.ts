@@ -1,16 +1,12 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-
 import { z } from "zod";
 
-import {
-  canonicalDigest,
-  canonicalJson,
-} from "../../../infrastructure/canonical-json.js";
+import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
-import { snapshotSchema } from "../../../snapshot/index.js";
-import { openMaterializedSources } from "../acquisition/materialized-sources.js";
-import { openWordPressLab } from "./index.js";
+import {
+  snapshotSchema,
+  type SnapshotReader,
+} from "../../../snapshot/index.js";
+import { openWordPressLab, type WordPressSourceResolver } from "./index.js";
 import { setupSchema } from "./provision-input.js";
 import { createReviewLabWaiter } from "./review-lab-wait.js";
 
@@ -46,9 +42,12 @@ export async function openWordPressReviewLab(input: {
   readonly packageDigest: string;
   readonly category: string;
   readonly store: PrivateArtifactStore;
+  /** The frozen Snapshots the package must agree with. */
+  readonly snapshots: SnapshotReader;
+  /** The materialized source trees the Lab mounts. */
+  readonly source: WordPressSourceResolver;
   readonly host: {
     readonly dockerExecutablePath: string;
-    readonly workDirectory: string;
     readonly images: {
       readonly database: string;
       readonly wordpress: string;
@@ -81,16 +80,12 @@ export async function openWordPressReviewLab(input: {
     manifest.setup.snapshotDigest !== snapshot.digest
   )
     throw new Error("Review Lab Snapshot digest mismatch");
-  const frozen = await readFile(
-    join(
-      input.host.workDirectory,
-      "snapshots",
-      `${snapshot.digest.slice(7)}.json`,
-    ),
-    "utf8",
-  );
-  if (frozen !== canonicalJson(snapshotBody))
-    throw new Error("Frozen Snapshot artifact differs from the package");
+  // The frozen artifact is re-verified against the same digest the package carries.
+  const frozen = await input.snapshots.load(snapshot.digest);
+  if (frozen.status !== "loaded")
+    throw new Error(
+      `Frozen Snapshot artifact differs from the package: ${frozen.reason}`,
+    );
   const lab = openWordPressLab({
     dockerExecutablePath: input.host.dockerExecutablePath,
     images: {
@@ -100,9 +95,7 @@ export async function openWordPressReviewLab(input: {
       browser: input.host.images.browser,
       recorder: input.host.images.broker,
     },
-    source: openMaterializedSources({
-      rootDirectory: join(input.host.workDirectory, "sources"),
-    }),
+    source: input.source,
   });
   const provisioned = await lab.provision(snapshot, manifest.setup, {
     purpose: "verification",
