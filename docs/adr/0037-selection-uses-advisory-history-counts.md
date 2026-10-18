@@ -2,7 +2,7 @@
 status: accepted
 date: 2026-10-19
 amends: 0030（公開履歴を選定で採点しない）, 0032（2026-10-16「選定の帯」の「score に件数を入れず gate に限る」、および `revisitPolicy: never`）
-amended-by: 本文末尾の 2026-10-19 追記（公開統計による重みの確定、再訪規則、cascade）
+amended-by: 本文末尾の 2026-10-19 追記（公開統計による重みの確定、再訪規則、cascade）, PR #383（`maximumHistoryAgeDays` の一時値 14）
 ---
 
 # 対象選定は公開履歴の件数と公開日を採点に使う（#295）
@@ -80,3 +80,10 @@ amended-by: 本文末尾の 2026-10-19 追記（公開統計による重みの�
 ### 再計測
 
 2027-04 に cutoff 2026-10-14、窓 183 日で `scripts/analysis/selection-statistics.py` を回し、帯 top-50 精度が 70% を下回れば重みを見直す。本番台帳の受理率との関係は引き続き測る。
+
+## 2026-10-19 注記: 実物との対応（文書整理、所有者の委任で AI）
+
+- 方針 id: 帰結の `wordpress-selection-2026-10-21`、追記 2 の `wordpress-selection-2026-10-22` の後、PR #382 で `wordpress-selection-2026-10-23` に上がった。50000 / 30000 の兄弟 file は追記 4 で削除したので、「兄弟も同じ日付」は削除前の記述。
+- 「採らなかった選択肢」の「100 万超の例外自体は本 ADR の対象外で #295 に残る」: 追記 4 の cascade 最後の段で実装し、#295 は close。
+- 鮮度 gate: 決定 3 と追記 2 の既定は 2 日のまま。mirror 更新が API の rate limit で通らない間の一時値として、PR #383 が `selection.json` を 14 日にした（所有者決定 2026-10-19「いったん 14 日のものでいい」）。日次更新（cron 19:10 UTC）が 1 回通ったら 2 に戻す（#385）。
+- 帰結の「mirror の日次更新（#231）が前提」: #231 は close 済みで、更新は host の cron が旧環境の `refresh_wordfence.py` を回している（`docs/agents/production-monitoring.md` 第 2 節）。

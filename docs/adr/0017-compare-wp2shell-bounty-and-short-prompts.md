@@ -1,5 +1,6 @@
 ---
 status: accepted
+amended-by: 0029（既定 prompt）, 0033（新規探索は v8 のみ）, PR #357（比較 arm の mode を削除、2026-10-18）
 ---
 # 短い管理promptとWP2Shell式報奨promptを同条件で比較する
 

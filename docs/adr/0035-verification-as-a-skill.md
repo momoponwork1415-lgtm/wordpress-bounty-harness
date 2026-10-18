@@ -34,3 +34,7 @@ supersedes: 0026 for the administrator boundary of a Verifier run
 ## 消し方
 
 `src/profiles/wordpress/verification/handoff-verifier.ts`、`tests/profiles/wordpress/handoff-verifier.test.ts`、`.claude/skills/wbh-verify/`、`WordPressCampaignBoundaries.handoffVerifier`、CLI の `--handoff` / `verify next --finding`、`WordPressLab.exposeToHost` の `via: "recorder"` と `withdrawFromHost`、`Verifier.attempt` の `restartObservation` を削除し、ADR 0026 の文を戻す。台帳の `promptVersion: wbh-verify/v1` の event は読み続ける。
+
+## 2026-10-19 注記（文書整理、所有者の委任で AI）
+
+「採らなかった選択肢」の「（#353 で削除）」は予定で、scenario 選択と plugin 別 adapter はまだ main にある。削除は帰結の受入の数字（Brizy、TranslatePress 3.2.6）を docs/evaluation に置いた後に #353 で行う（#352 は受け入れの Issue に絞った）。
