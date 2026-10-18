@@ -909,7 +909,7 @@ const COMMANDS: readonly Command[] = [
   command({
     name: "review decide",
     usage: [
-      "review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>] [--minutes <n>]",
+      "review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--by <name>] [--minutes <n>]",
     ],
     options: {
       by: STR,
@@ -920,6 +920,8 @@ const COMMANDS: readonly Command[] = [
       minutes: STR,
       opened: STRS,
       reason: STR,
+      reproduced: STR,
+      "reproduce-minutes": STR,
     },
     handler: async ({ values, state, environment, io }) => {
       const review = environment.profile.review(state);
@@ -932,14 +934,56 @@ const COMMANDS: readonly Command[] = [
         decision !== "defer"
       )
         throw new UsageError("--decision must be accept, reject or defer");
+      const reasonCode = required(values.reason, "reason");
+      const duplicate = parseDuplicate(values.duplicate);
+      const reproduced = values.reproduced;
+      if (reproduced === undefined) {
+        if (values["reproduce-minutes"] !== undefined)
+          throw new UsageError("--reproduce-minutes needs --reproduced");
+      } else {
+        if (
+          reproduced !== "match" &&
+          reproduced !== "mismatch" &&
+          reproduced !== "unavailable"
+        )
+          throw new UsageError(
+            "--reproduced must be match, mismatch or unavailable",
+          );
+        if (item.status === "incomplete" || item.status === "contradicted")
+          throw new UsageError(
+            "Only an evidence-backed package can be reproduced",
+          );
+      }
+      // Every input is read before the first ledger write, so a bad value writes nothing.
+      const reproduceMinutes =
+        reproduced === undefined
+          ? null
+          : await humanMinutes(values["reproduce-minutes"], io, "reproduce");
       // One caller input: the minutes land on the decision (ADR 0032 Q22) and on the effort record.
       const minutes = await humanMinutes(values.minutes, io, "read");
+      if (reproduced !== undefined) {
+        // The human reproduction precedes the decision it informs.
+        await review.recordHumanReproduction({
+          ref: item.ref,
+          result: reproduced,
+        });
+        if (reproduceMinutes !== null)
+          await review.recordHumanEffort({
+            campaignId: item.ref.campaignId,
+            findingId,
+            action: "reproduce",
+            minutes: reproduceMinutes,
+          });
+        io.stdout(
+          `manual reproduction ${reproduced} recorded for finding ${findingId}`,
+        );
+      }
       const recorded = await review.decide({
         ref: item.ref,
         decision,
-        reasonCode: required(values.reason, "reason"),
+        reasonCode,
         openedEvidence: values.opened ?? [],
-        duplicate: parseDuplicate(values.duplicate),
+        duplicate,
         decidedBy: values.by ?? "operator",
         ...(minutes === null
           ? {}
@@ -955,41 +999,6 @@ const COMMANDS: readonly Command[] = [
           action: "read",
           minutes,
         });
-      return 0;
-    },
-  }),
-  command({
-    name: "review reproduced",
-    usage: [
-      "review reproduced --campaign <id> --finding <id> --result match|mismatch|unavailable [--minutes <n>]",
-    ],
-    options: { campaign: STR, finding: STR, minutes: STR, result: STR },
-    handler: async ({ values, state, environment, io }) => {
-      const review = environment.profile.review(state);
-      const item = queued(review, values);
-      if (item.status === "incomplete" || item.status === "contradicted")
-        throw new UsageError(
-          "Only an evidence-backed package can be reproduced",
-        );
-      const result = required(values.result, "result");
-      if (
-        result !== "match" &&
-        result !== "mismatch" &&
-        result !== "unavailable"
-      )
-        throw new UsageError("--result must be match, mismatch or unavailable");
-      await review.recordHumanReproduction({ ref: item.ref, result });
-      const minutes = await humanMinutes(values.minutes, io, "reproduce");
-      if (minutes !== null)
-        await review.recordHumanEffort({
-          campaignId: item.ref.campaignId,
-          findingId: item.ref.findingId,
-          action: "reproduce",
-          minutes,
-        });
-      io.stdout(
-        `manual reproduction ${result} recorded for finding ${item.ref.findingId}`,
-      );
       return 0;
     },
   }),

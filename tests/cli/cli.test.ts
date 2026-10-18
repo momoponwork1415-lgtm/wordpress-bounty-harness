@@ -3823,6 +3823,135 @@ describe("harness CLI vertical slice", () => {
     expect(funnel.stdout).toMatch(/wordfence 1/);
   });
 
+  it("records only the decision when review decide has no --reproduced", async () => {
+    const { run, configPath, ledger } = await harness();
+    const campaign = ["--campaign", "campaign-1"];
+    await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    const queue = await run("review", ...campaign);
+    const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      queue.stdout,
+    )![1]!;
+    const decided = await run(
+      "review",
+      "decide",
+      ...campaign,
+      "--finding",
+      finding,
+      "--decision",
+      "defer",
+      "--reason",
+      "needs-reading",
+      "--minutes",
+      "5",
+    );
+    expect(decided.stderr).toBe("");
+    expect(decided.code).toBe(0);
+    expect(decided.stdout).toMatch(
+      new RegExp(`^recorded defer \\(needs-reading\\) for finding ${finding} `),
+    );
+    expect(decided.stdout).not.toContain("manual reproduction");
+    const events = ledger()
+      .readAll({ campaignId: "campaign-1", findingId: finding })
+      .map(({ event }) => event);
+    expect(
+      events.filter((event) => event.type === "human-reproduction-recorded"),
+    ).toHaveLength(0);
+    expect(
+      events.filter((event) => event.type === "review-decided"),
+    ).toHaveLength(1);
+    expect(
+      events.flatMap((event) =>
+        event.type === "human-effort-recorded"
+          ? [[event.action, event.minutes]]
+          : [],
+      ),
+    ).toEqual([["read", 5]]);
+  });
+
+  it("records the human reproduction before the decision when review decide has --reproduced", async () => {
+    const { run, configPath, ledger } = await harness();
+    const campaign = ["--campaign", "campaign-1"];
+    await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    const queue = await run("review", ...campaign);
+    const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      queue.stdout,
+    )![1]!;
+    const decide = (...extra: string[]) =>
+      run(
+        "review",
+        "decide",
+        ...campaign,
+        "--finding",
+        finding,
+        "--decision",
+        "accept",
+        "--reason",
+        "reproduced-by-hand",
+        ...extra,
+      );
+    const recorded = () =>
+      ledger()
+        .readAll({ campaignId: "campaign-1", findingId: finding })
+        .map(({ event }) => event)
+        .filter(
+          (event) =>
+            event.type === "human-reproduction-recorded" ||
+            event.type === "review-decided" ||
+            event.type === "human-effort-recorded",
+        );
+
+    // A bad value or a stray minutes flag is a usage error that writes nothing.
+    expect((await decide("--reproduced", "yes")).code).toBe(2);
+    expect((await decide("--reproduce-minutes", "40")).code).toBe(2);
+    expect(
+      (await decide("--reproduced", "match", "--reproduce-minutes", "-1")).code,
+    ).toBe(2);
+    expect(recorded()).toHaveLength(0);
+
+    const decided = await decide(
+      "--reproduced",
+      "match",
+      "--reproduce-minutes",
+      "40",
+      "--minutes",
+      "5",
+    );
+    expect(decided.stderr).toBe("");
+    expect(decided.code).toBe(0);
+    expect(decided.stdout.split("\n")[0]).toBe(
+      `manual reproduction match recorded for finding ${finding}`,
+    );
+    expect(decided.stdout.split("\n")[1]).toMatch(
+      /^recorded accept \(reproduced-by-hand\) /,
+    );
+    expect(
+      recorded().map((event) =>
+        event.type === "human-effort-recorded"
+          ? `${event.type}:${event.action}:${event.minutes}`
+          : event.type === "human-reproduction-recorded"
+            ? `${event.type}:${event.result}`
+            : event.type,
+      ),
+    ).toEqual([
+      "human-reproduction-recorded:match",
+      "human-effort-recorded:reproduce:40",
+      "review-decided",
+      "human-effort-recorded:read:5",
+    ]);
+
+    // The export reads the same event as before the fold.
+    const exported = reviewExportV1Schema.parse(
+      JSON.parse(
+        (await run("review", "export", ...campaign, "--finding", finding))
+          .stdout,
+      ),
+    );
+    expect(exported.review.humanReproduction).toMatchObject({
+      result: "match",
+      minutes: 40,
+    });
+  });
+
   it("assesses scope from the judge's evidence and the selection record without injected facts", async () => {
     const { run, configPath } = await harness();
     const campaign = ["--campaign", "campaign-1"];

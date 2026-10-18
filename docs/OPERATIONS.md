@@ -158,8 +158,8 @@ harness continuous status --state <dir>
 | 4 | 所有者 | WordPress.org の plugin 頁で最新版を確認（export に `target.versions.latestObserved` があればそれを使う） |
 | 5 | 所有者 | `harness review reverify --campaign <id> --finding <id> --config <path> --version <最新版>` |
 | 6 | 所有者 | `harness review scope --campaign <id> --finding <id>`（`wordfence in-scope` のものだけ先へ） |
-| 7 | 所有者 | `harness lab up --for-review --campaign <id> --finding <id>` で手で再現し、`harness review reproduced --campaign <id> --finding <id> --result match --minutes <n>` |
-| 8 | 所有者 | `harness review decide ...`（skill が示したコマンドを確かめて打つ） |
+| 7 | 所有者 | `harness lab up --for-review --campaign <id> --finding <id>` で手で再現する |
+| 8 | 所有者 | `harness review decide ... --reproduced match --reproduce-minutes <n>`（skill が示したコマンドを確かめ、手での再現の結果を足して打つ。再現の記録は判断の前に台帳へ入る） |
 | 9 | skill | `wbh-report`（英語の下書きを Private Evidence に書き、`review draft` で digest を記録） |
 | 10 | 所有者 | `harness review authorize --to wordfence` → 送信 → `harness review submitted` → `harness review outcome` |
 
@@ -168,7 +168,7 @@ harness continuous status --state <dir>
 ```
 harness review parked --campaign <id>                       # parked Finding と reason を一覧する
 harness review export --campaign <id> --finding <id>         # 1画面のレビュー材料をJSON 1本（schema review-export/v1）で出す。台帳には書かない。skillはこれだけを読む
-harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--minutes <n>]
+harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--minutes <n>]
 harness review dedupe --campaign <id> --finding <id>          # ローカルWordfence履歴mirrorと照合
 harness review scope --campaign <id> --finding <id>           # Wordfence / Patchstack ごとに in-scope / out-of-scope / ambiguous
 harness review reverify --campaign <id> --finding <id> --config <path>   # 最新版を新しいLabで検証し直す

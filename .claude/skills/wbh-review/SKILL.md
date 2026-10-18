@@ -26,7 +26,7 @@ description: review queue の Finding 1 件を review export の JSON だけか�
 11. **最新版。** `target.versions.latestKnown` が `target.versions.explored` と違えば書く。最新版での確認は `harness review reverify --campaign <id> --finding <id> --config <path> --version <latest>` で別に行い、この skill の中では実行しない。
 12. **`verification.status` で分ける。** `verification` が null か `verification.status` が `incomplete` なら、13 と 14 を行わず、要約と非公開 note と `defer` の提案で終える。
 13. **scope は別々に。** Wordfence と Patchstack の判定は `harness review scope --campaign <id> --finding <id>` の結果を引く。2 つを混ぜない。score、rank、報酬の予測は書かない。
-14. **人間が手で行う操作。** 画面での再現が要るときは `harness lab up --for-review --campaign <id> --finding <id>` を案内し、操作は人間が行う。UI の経路を source や記憶から作らない。画面に出ている言葉で記録する。人間が再現したら `harness review reproduced --campaign <id> --finding <id> --result match|mismatch|unavailable --minutes <n>` を記録する。
+14. **人間が手で行う操作。** 画面での再現が要るときは `harness lab up --for-review --campaign <id> --finding <id>` を案内し、操作は人間が行う。UI の経路を source や記憶から作らない。画面に出ている言葉で記録する。人間が再現したら `harness review decide --campaign <id> --finding <id> --decision <accept|reject|defer> --reason <category> --reproduced match|mismatch|unavailable --reproduce-minutes <n>` を記録する。
 
 ## 出力
 
