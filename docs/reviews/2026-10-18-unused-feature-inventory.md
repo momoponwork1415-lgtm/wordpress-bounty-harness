@@ -235,3 +235,10 @@ PARKING が既に決めている 1〜4・10 を合わせると src 約 2,100 行
 - これは報告で、正本ではない。削除の採否は所有者が行ごとに決め、採った行だけを Step 1 合格後の整理 PR（PARKING 2026-10-14、最終設計 P13）に入れる。
 - PARKING と AGENTS.md の食い違い（archive prompt 10 版）、PARKING と #324 の食い違い（`assignment` mode）は、この報告では解決せず両方を記した。
 - 本番台帳の件数は未確認なので、「本番で一度も出ていない」とはどの event 種別についても言っていない。
+
+## 訂正（2026-10-18、削除 PR の実装時に判明）
+
+- 軸 2 と軸 5 の「precondition 文から scenario を自動選択する code は現行 main に無く、scenario は `lab.scenarioId` でだけ決まる」は**誤り**。`nextWordPressScenario` が precondition 文から 4 つの scenario（`approved-comment-searchable-v1`、`public-booking-page-v1`、`public-builder-page-v1`、`public-file-attachment-form-v1`）を自動選択し、`verify next` の再検証（#209）がそれを使う。したがって Relevanssi、Simply Schedule、Brizy ×2 の adapter 4 本は本番経路から到達するので削除候補から外す（#344 は Download Monitor / Download Manager の 2 本だけを削除）。
+- `review-item-opened` の writer は `review open` ではなく `review inspect` にある。`review open` の削除（#343）で writer は消えない。
+- `examples/translatepress-3.2.6/` で旧 arm を参照するのは 8 file ではなく 4 file。残り 5 file は比較 arm（v2 / v4）の設定で、残す。
+- `containers/development-set/` は host 固定 image の唯一の build 手順なので残す。
