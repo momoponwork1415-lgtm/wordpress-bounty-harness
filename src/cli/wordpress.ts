@@ -205,13 +205,14 @@ const campaignModes = z.discriminatedUnion("mode", [
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("wp2shell"),
-    runWallTimeMinutes: z.number().positive().max(60).default(60),
+    runWallTimeMinutes: z.number().positive().max(120).default(60),
     promptId: z
       .enum([
         "wp2shell-bounty-v2",
         "wp2shell-bounty-v3",
         "wp2shell-bounty-v4",
         "wp2shell-bounty-v5",
+        "wp2shell-bounty-v6",
         "wp2shell-whitebox-v1.7",
       ])
       .default("wp2shell-bounty-v5"),
@@ -274,6 +275,7 @@ export const wordpressCampaignConfigSchema = z
               config.promptId !== "wp2shell-bounty-v3" &&
               config.promptId !== "wp2shell-bounty-v4" &&
               config.promptId !== "wp2shell-bounty-v5" &&
+              config.promptId !== "wp2shell-bounty-v6" &&
               config.promptId !== "wp2shell-whitebox-v1.7"
             ? "comparison"
             : config.entryIndex === false
@@ -282,6 +284,17 @@ export const wordpressCampaignConfigSchema = z
     return { ...config, mode };
   }, campaignModes)
   .superRefine((config, context) => {
+    if (
+      config.mode === "wp2shell" &&
+      config.promptId !== "wp2shell-bounty-v6" &&
+      config.runWallTimeMinutes > 60
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["runWallTimeMinutes"],
+        message:
+          "Only wp2shell-bounty-v6 permits a wall limit above 60 minutes",
+      });
     if (
       config.lab.initialApprovedComment === true &&
       config.lab.initialPosts.length === 0
