@@ -22,6 +22,7 @@ import {
   type WordPressOrgAcquisitionResult,
   type WordPressOrgTargetSource,
 } from "./wordpress-org-contracts.js";
+import { wordPressOrgPluginIdentity } from "../target-identity.js";
 
 const slugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/);
 const versionSchema = z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$/);
@@ -140,7 +141,9 @@ export function openWordPressOrgPluginDependencySource(options: {
         status: result.status,
         ...("reason" in result ? { detail: result.reason } : {}),
       });
-    if (result.intake.packet.pluginIdentity !== `wporg:${slug}`)
+    if (
+      result.intake.packet.pluginIdentity !== wordPressOrgPluginIdentity(slug)
+    )
       throw new SourceAcquisitionError("source-mismatch", {
         reason: "required-plugin-identity",
         slug,

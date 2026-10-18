@@ -12,6 +12,7 @@ import {
   type ProgrammeEligibilitySnapshotRef,
 } from "../programme-intelligence/index.js";
 import { wordPressRevisitPolicySchema } from "./ledger-exclusions.js";
+import { wordPressOrgPluginIdentitySchema } from "../target-identity.js";
 
 const slugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
 const coreVersionSchema = z
@@ -206,7 +207,7 @@ export interface WordPressTargetSelection extends TargetSelection {
 /** Validate a private selection before replaying its reserved snapshot. */
 export const wordPressTargetSelectionSchema: z.ZodType<WordPressTargetSelection> =
   z.strictObject({
-    targetId: z.string().regex(/^wporg:[a-z0-9][a-z0-9-]*$/),
+    targetId: wordPressOrgPluginIdentitySchema,
     slug: slugSchema,
     version: z.string().min(1).max(64),
     score: z.number().finite(),

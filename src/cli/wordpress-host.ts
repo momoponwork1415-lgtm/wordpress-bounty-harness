@@ -64,6 +64,7 @@ import {
   type WordPressCampaignBoundaries,
   type WordPressCampaignConfig,
 } from "./wordpress-session.js";
+import { parseWordPressOrgPluginIdentity } from "../profiles/wordpress/target-identity.js";
 
 const absolutePath = z
   .string()
@@ -619,8 +620,8 @@ export async function createWordPressHostProfile(options: {
       }),
     /** One WordPress.org observation for `review export`; failures are null. */
     async latestVersion(state, targetId) {
-      const slug = /^wporg:([a-z0-9][a-z0-9-]*)$/.exec(targetId)?.[1];
-      if (slug === undefined) return null;
+      const slug = parseWordPressOrgPluginIdentity(targetId);
+      if (slug === null) return null;
       const observed = await openWordPressOrgTargetSource({
         storageDirectory: join(host.workDirectory, "wordpress-org"),
         adapter: createWordPressOrgFetchAdapter(

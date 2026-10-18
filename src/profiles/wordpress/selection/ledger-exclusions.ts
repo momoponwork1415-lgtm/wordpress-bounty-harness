@@ -6,6 +6,7 @@ import {
 } from "../../../discovery/counts-as-trial.js";
 import type { Ledger, LedgerEventV1 } from "../../../ledger/index.js";
 import { compareVersions } from "../plugin-version.js";
+import { parseWordPressOrgSelectionId } from "../target-identity.js";
 
 /** Revisit is an explicit policy choice; the default policy uses `never`. */
 export const wordPressRevisitPolicySchema = z.discriminatedUnion("kind", [
@@ -66,16 +67,6 @@ function snapshotKey(
   return `${event.campaignId}\0${event.snapshotDigest}`;
 }
 
-function selectionIdentity(selectionId: string): {
-  readonly slug: string;
-  readonly version: string;
-} | null {
-  const matched = /^wporg:([a-z0-9][a-z0-9-]*)@(.+)$/u.exec(selectionId);
-  return matched?.[1] && matched[2]
-    ? { slug: matched[1], version: matched[2] }
-    : null;
-}
-
 function promptChanged(
   earlier: readonly EarlierSelection[],
   promptVersions: ReadonlyMap<string, ReadonlySet<string>>,
@@ -113,7 +104,7 @@ export function inspectWordPressLedgerExclusions(input: {
 
   for (const event of ledgerEvents(input.ledger, "target-selected")) {
     if (event.type !== "target-selected") continue;
-    const identity = selectionIdentity(event.selectionId);
+    const identity = parseWordPressOrgSelectionId(event.selectionId);
     if (identity === null) continue;
     const key = snapshotKey(event);
     selectedBySnapshot.set(key, identity.slug);
