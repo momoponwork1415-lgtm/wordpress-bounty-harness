@@ -17,29 +17,95 @@ import {
 import {
   loadWordPressDiscoveryAsset,
   loadWordPressVerifierPrompt,
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
   WORDPRESS_DISCOVERY_ASSET_IDS,
   WORDPRESS_DISCOVERY_PROMPT_IDS,
+  WORDPRESS_DISCOVERY_PROMPTS,
   WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS,
+  WORDPRESS_TRUST_BOUNDARY,
+  WORDPRESS_VERIFIER_PROMPT_ID,
+  WORDPRESS_VERIFIER_PROMPTS,
 } from "../../../src/profiles/wordpress/prompts/index.js";
 
-describe("WordPress discovery prompt assets", () => {
-  it("pins the current Verifier prompt to its file bytes and keeps answer strings out", async () => {
-    const prompt = await loadWordPressVerifierPrompt();
-    const bytes = await readFile(
-      new URL(
-        "../../../src/profiles/wordpress/prompts/verifier-v8.md",
-        import.meta.url,
+const promptBytes = (id: string) =>
+  readFile(
+    new URL(
+      `../../../src/profiles/wordpress/prompts/${id}.md`,
+      import.meta.url,
+    ),
+  );
+
+describe("WordPress prompt table", () => {
+  it("pins every prompt body to the digest recorded in its table row", async () => {
+    // A changed `.md` body fails here until its row is re-pinned under a new version.
+    for (const row of [
+      ...WORDPRESS_DISCOVERY_PROMPTS,
+      WORDPRESS_TRUST_BOUNDARY,
+    ]) {
+      const asset = await loadWordPressDiscoveryAsset(row.id);
+      const bytes = await promptBytes(row.id);
+      expect(asset.id).toBe(row.id);
+      expect(asset.sourceUrl.pathname.endsWith(`/${row.id}.md`)).toBe(true);
+      expect(asset.text).toBe(bytes.toString("utf8"));
+      expect(asset.text.length).toBeGreaterThan(100);
+      expect(asset.digest).toBe(
+        `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+      );
+      expect(asset.digest).toBe(row.digest);
+    }
+    for (const row of WORDPRESS_VERIFIER_PROMPTS) {
+      const prompt = await loadWordPressVerifierPrompt(row.id);
+      const bytes = await promptBytes(row.id);
+      expect(prompt.id).toBe(row.id);
+      expect(prompt.text).toBe(bytes.toString("utf8"));
+      expect(prompt.digest).toBe(
+        `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+      );
+      expect(prompt.digest).toBe(row.digest);
+    }
+  });
+
+  it("derives the id lists and the current versions from the table", () => {
+    const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(20);
+    expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
+    expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
+      ...ids,
+      WORDPRESS_TRUST_BOUNDARY.id,
+    ]);
+    expect(WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS).toEqual(
+      WORDPRESS_DISCOVERY_PROMPTS.filter(
+        (row) => row.outputContract !== null,
+      ).map((row) => row.id),
+    );
+    expect(
+      WORDPRESS_DISCOVERY_PROMPTS.filter((row) => row.status === "current"),
+    ).toHaveLength(1);
+    expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v8");
+    expect(
+      WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
+    ).toHaveLength(1);
+    expect(WORDPRESS_VERIFIER_PROMPT_ID).toBe("verifier-v8");
+    expect(WORDPRESS_TRUST_BOUNDARY.id).toBe("trust-boundary-v1");
+  });
+
+  it("only the coverage-capable versions answer to the entry index", () => {
+    expect(
+      WORDPRESS_DISCOVERY_PROMPTS.filter((row) => row.entryIndexCoverage).map(
+        (row) => row.id,
       ),
-    );
-    expect(bytes.byteLength).toBeLessThan(4_000);
+    ).toEqual(["wp2shell-bounty-v5", "wp2shell-bounty-v6"]);
+    for (const row of WORDPRESS_DISCOVERY_PROMPTS)
+      if (row.entryIndexCoverage) expect(row.outputContract).not.toBeNull();
+  });
+});
+
+describe("WordPress discovery prompt assets", () => {
+  it("keeps answer strings out of the current Verifier prompt", async () => {
+    const prompt = await loadWordPressVerifierPrompt();
+    expect(Buffer.byteLength(prompt.text, "utf8")).toBeLessThan(4_000);
     expect(prompt.id).toBe("verifier-v8");
-    expect(prompt.text).toBe(bytes.toString("utf8"));
-    expect(prompt.digest).toBe(
-      "sha256:798b881faa52504e68fde9a9129dee4bfe471798fe3f9bc21b38635caa12e830",
-    );
-    expect(prompt.digest).toBe(
-      `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
-    );
     expect(prompt.text).toContain("http.json");
     expect(prompt.text).toContain("refutation.md");
     expect(prompt.text).not.toMatch(
@@ -53,9 +119,6 @@ describe("WordPress discovery prompt assets", () => {
   it("keeps the archived v6 Verifier prompt loadable", async () => {
     const prompt = await loadWordPressVerifierPrompt("verifier-v6");
     expect(prompt.id).toBe("verifier-v6");
-    expect(prompt.digest).toBe(
-      "sha256:f548a5a3121fc8eb1d761042577944c3fbf5899bd481884ed690753cf3400d58",
-    );
     expect(prompt.text).toContain("# WordPress Verifier v6");
     expect(prompt.text).toContain("try to refute the Finding");
   });
@@ -88,9 +151,6 @@ describe("WordPress discovery prompt assets", () => {
 
   it("keeps v7 loadable and changes only source mount guidance in v8", async () => {
     const oldPrompt = await loadWordPressVerifierPrompt("verifier-v7");
-    expect(oldPrompt.digest).toBe(
-      "sha256:df5ed497912146fd4ceaeacbf923d3cee3337c477afad8645044fca460bd3b18",
-    );
     const current = await loadWordPressVerifierPrompt();
     const before =
       "The Lab section may name a read-only database account and a WordPress core source tree; both are for reading only.";
@@ -102,65 +162,6 @@ describe("WordPress discovery prompt assets", () => {
         .replace("# WordPress Verifier v7", "# WordPress Verifier v8")
         .replace(before, after),
     );
-  });
-
-  it("publishes versioned prompt variants and the shared trust boundary", async () => {
-    expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
-      "wp2shell-derived-v1",
-      "short-objective-v1",
-      "wp2shell-derived-v2",
-      "short-objective-v2",
-      "short-objective-managed-v1",
-      "short-objective-managed-v2",
-      "short-objective-managed-v3",
-      "short-objective-managed-v4",
-      "short-objective-managed-v5",
-      "screening-v1",
-      "wp2shell-single-http-v2",
-      "wp2shell-bounty-v1",
-      "wp2shell-bounty-v2",
-      "wp2shell-bounty-v3",
-      "wp2shell-bounty-v4",
-      "wp2shell-bounty-v5",
-      "wp2shell-bounty-v6",
-      "wp2shell-bounty-v7",
-      "wp2shell-bounty-v8",
-      "wp2shell-whitebox-v1.7",
-      "trust-boundary-v1",
-    ]);
-    expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual([
-      "wp2shell-derived-v1",
-      "short-objective-v1",
-      "wp2shell-derived-v2",
-      "short-objective-v2",
-      "short-objective-managed-v1",
-      "short-objective-managed-v2",
-      "short-objective-managed-v3",
-      "short-objective-managed-v4",
-      "short-objective-managed-v5",
-      "screening-v1",
-      "wp2shell-single-http-v2",
-      "wp2shell-bounty-v1",
-      "wp2shell-bounty-v2",
-      "wp2shell-bounty-v3",
-      "wp2shell-bounty-v4",
-      "wp2shell-bounty-v5",
-      "wp2shell-bounty-v6",
-      "wp2shell-bounty-v7",
-      "wp2shell-bounty-v8",
-      "wp2shell-whitebox-v1.7",
-    ]);
-
-    for (const id of WORDPRESS_DISCOVERY_ASSET_IDS) {
-      const asset = await loadWordPressDiscoveryAsset(id);
-      const bytes = await readFile(asset.sourceUrl);
-      expect(asset.id).toBe(id);
-      expect(asset.text).toBe(bytes.toString("utf8"));
-      expect(asset.digest).toBe(
-        `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
-      );
-      expect(asset.text.length).toBeGreaterThan(100);
-    }
   });
 
   it("states the structured source trace contract in both comparison arms", async () => {
@@ -242,30 +243,9 @@ describe("WordPress discovery prompt assets", () => {
     );
   });
 
-  it("keeps the new objective assets free of the claim contract", async () => {
-    const pins = {
-      "short-objective-managed-v5":
-        "sha256:972ebe7d10a0173fef24a7603e01defcb17fd81e87810795f705737114f584b4",
-      "screening-v1":
-        "sha256:effeb9e343601157e2da76eb65b99d4de91a9618daf7379efce13491a1d6aba6",
-      "wp2shell-bounty-v3":
-        "sha256:a97b4b3c1101470cec743dd51af1d2169f15d4d5ee1a2797997be05edef72c9b",
-      "wp2shell-bounty-v4":
-        "sha256:6c823fe2ddb8a9af27ea743927f5d4a8203ec29ef4bca7dbadf3135c1739ab62",
-      "wp2shell-bounty-v5":
-        "sha256:59c6bd1bb5fd5ef7618ce180de7f2d90af68fa4bcba26f90aa31aa3679d80cda",
-      "wp2shell-bounty-v6":
-        "sha256:3b85b6bdacd3181da779fd6cc1eec5c45c9e01d4f16e80163fdab4e62dff3503",
-      "wp2shell-bounty-v7":
-        "sha256:bb41592c57ce664a90b8b429d9d3d0c86da7c5547aeae9048a18440af9b1893e",
-      "wp2shell-bounty-v8":
-        "sha256:d44532a985d1ef6b74f7117ea8bafbb60b25a7ae191d17ee362b2da58f3c639d",
-      "wp2shell-whitebox-v1.7":
-        "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",
-    } as const;
+  it("keeps the objective-only assets free of the claim contract", async () => {
     for (const id of WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS) {
-      const { text, digest } = await loadWordPressDiscoveryAsset(id);
-      expect(digest).toBe(pins[id]);
+      const { text } = await loadWordPressDiscoveryAsset(id);
       if (id === "wp2shell-bounty-v7" || id === "wp2shell-bounty-v8")
         expect(text).toContain("Use multiagents aggressively");
       else expect(text).toMatch(/Lead|Finding/);
@@ -304,9 +284,7 @@ describe("WordPress discovery prompt assets", () => {
     const archived = await loadWordPressDiscoveryAsset("wp2shell-bounty-v3");
     const current = await loadWordPressDiscoveryAsset("wp2shell-bounty-v4");
     expect(Buffer.byteLength(current.text, "utf8")).toBeLessThan(4_000);
-    expect(archived.digest).toBe(
-      "sha256:a97b4b3c1101470cec743dd51af1d2169f15d4d5ee1a2797997be05edef72c9b",
-    );
+    expect(archived.text).not.toContain("Critical examples");
     expect(current.text).toContain(
       "Finding targets are these Critical examples for an unauthenticated attacker",
     );
@@ -346,9 +324,7 @@ describe("WordPress discovery prompt assets", () => {
   it("keeps the multi-agent method in v5, drops class ranking and effort floors, and names core-stored data as attacker input", async () => {
     const archived = await loadWordPressDiscoveryAsset("wp2shell-bounty-v4");
     const current = await loadWordPressDiscoveryAsset("wp2shell-bounty-v5");
-    expect(archived.digest).toBe(
-      "sha256:6c823fe2ddb8a9af27ea743927f5d4a8203ec29ef4bca7dbadf3135c1739ab62",
-    );
+    expect(archived.text).toContain("Critical examples");
     expect(Buffer.byteLength(current.text, "utf8")).toBeLessThan(7_000);
     expect(current.text).toContain(
       "A false negative is worse than a false positive here",
@@ -407,31 +383,17 @@ describe("WordPress discovery prompt assets", () => {
     expect(v6.text).not.toMatch(/at least\s+\d+\s+(?:minutes?|hours?)/i);
   });
 
-  it("pins the v2 bytes and excludes answer clues and scripted commands", async () => {
-    const pins = {
-      "short-objective-v2":
-        "sha256:e6a7a1650f2af3c1e34d73a42c2d378497f4553818967cb804227cbd01436809",
-      "short-objective-managed-v1":
-        "sha256:58460c592c424fe752c8e9fdf0b53b686302ee1e11d72a48a06dc9109a496215",
-      "short-objective-managed-v2":
-        "sha256:05331cbdf24b49b6352020ce6faf84f5d005e275d0665f88287c9ae7c4d54825",
-      "short-objective-managed-v3":
-        "sha256:989cec70830ff7d145e3c72fd9a984cacd253d181c253851e070f3bff50e6bab",
-      "short-objective-managed-v4":
-        "sha256:7aa340bdab52d28f0830f38b43703e958d44e163b3ac937ff7be7896ccd73040",
-      "wp2shell-derived-v2":
-        "sha256:f9d90b8ad1dd955527756bf9ad9869624cff999dd7fab3908a7f050b1cd422be",
-      "wp2shell-single-http-v2":
-        "sha256:a466aa5d5abba7ff18b70135d3ae7730880674652c87fd65feaa3534765904fe",
-      "wp2shell-bounty-v1":
-        "sha256:5b334f59d315d6cee721b7dc698353ed5a9f44553474dd87c7aac7192d832a98",
-      "wp2shell-bounty-v2":
-        "sha256:efeaefbd1775e2a4fd3984e19672e7e5cf8cfdbe0b16b84cededa23587b239c5",
-    } as const;
-    for (const [id, digest] of Object.entries(pins)) {
-      const asset = await loadWordPressDiscoveryAsset(id as keyof typeof pins);
-      expect(asset.digest).toBe(digest);
-      expect(asset.text).toContain("A Lead is not a Finding.");
+  it("keeps the handwritten-contract bodies free of answer clues and scripted commands", async () => {
+    // The first generation (v1 of each arm) predates the "A Lead is not a Finding." line.
+    const firstGeneration = new Set([
+      "wp2shell-derived-v1",
+      "short-objective-v1",
+    ]);
+    for (const row of WORDPRESS_DISCOVERY_PROMPTS) {
+      if (row.outputContract !== null) continue;
+      const asset = await loadWordPressDiscoveryAsset(row.id);
+      if (!firstGeneration.has(row.id))
+        expect(asset.text).toContain("A Lead is not a Finding.");
       expect(asset.text).not.toMatch(
         /\b(?:PoC|payload|CVE)\b|<script\b|\bcurl\s+-/i,
       );
