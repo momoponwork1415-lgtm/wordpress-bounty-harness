@@ -1,4 +1,4 @@
-import type { DockerResult, Resources, WordPressLabHandle } from "./index.js";
+import type { WordPressLabSession } from "./lab-session.js";
 
 /**
  * A Harness-owned TCP forwarder that publishes the Lab's WordPress and, when
@@ -21,11 +21,6 @@ const forward = (listenPort, host, port) =>
 forward(80, process.env.WBH_WP_IP, 80);
 if (process.env.WBH_DB_IP) forward(3306, process.env.WBH_DB_IP, 3306);`;
 
-type RequireDocker = (
-  args: readonly string[],
-  timeoutMs?: number,
-) => Promise<DockerResult>;
-
 export type HostExposure =
   | {
       readonly status: "exposed";
@@ -42,27 +37,27 @@ export function hostGatewayName(labId: string): string {
 const port = (value: number) =>
   Number.isSafeInteger(value) && value >= 1 && value <= 65535;
 
-export async function exposeWordPressLabToHost(input: {
-  readonly resource: Resources;
-  readonly handle: WordPressLabHandle;
-  readonly image: string;
-  readonly httpPort: number;
-  readonly databasePort?: number;
-  readonly requireDocker: RequireDocker;
-}): Promise<HostExposure> {
-  const { resource, handle, requireDocker } = input;
+export async function exposeWordPressLabToHost(
+  lab: Pick<WordPressLabSession, "id" | "network" | "handle" | "requireDocker">,
+  input: {
+    readonly image: string;
+    readonly httpPort: number;
+    readonly databasePort?: number;
+  },
+): Promise<HostExposure> {
   if (
     !port(input.httpPort) ||
     (input.databasePort !== undefined && !port(input.databasePort))
   )
     return { status: "unavailable", diagnostic: "Host port is out of range" };
+  const { handle } = lab;
   const database =
     handle.database === undefined || input.databasePort === undefined
       ? null
       : { ip: handle.database.ipv4, port: input.databasePort };
-  const container = hostGatewayName(resource.id);
+  const container = hostGatewayName(lab.id);
   try {
-    await requireDocker([
+    await lab.requireDocker([
       "create",
       "--name",
       container,
@@ -85,8 +80,8 @@ export async function exposeWordPressLabToHost(input: {
       "-e",
       HOST_GATEWAY_SCRIPT,
     ]);
-    await requireDocker(["network", "connect", resource.network, container]);
-    await requireDocker(["start", container]);
+    await lab.requireDocker(["network", "connect", lab.network, container]);
+    await lab.requireDocker(["start", container]);
   } catch (error: unknown) {
     return {
       status: "unavailable",

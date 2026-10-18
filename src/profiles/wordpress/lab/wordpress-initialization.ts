@@ -1,9 +1,10 @@
-import type {
-  DockerResult,
-  ParsedWordPressLabSetup,
-  Resources,
-} from "./index.js";
 import { SQL_CANARY_TABLE } from "./canary-placement.js";
+import {
+  DATABASE_NAME,
+  READ_ONLY_DATABASE_USER,
+  type WordPressLabSession,
+} from "./lab-session.js";
+import type { PreparedWordPressLab } from "./provision-input.js";
 import {
   scenarioBookingPage,
   scenarioBuilderPage,
@@ -12,7 +13,6 @@ import {
   scenarioSearchableComment,
   scenarioTranslationSeedScript,
   translatePressLocaleSetupScript,
-  type WordPressScenario,
 } from "./scenarios.js";
 import { buildSearchableCommentIndex } from "./relevanssi-search-index.js";
 import { seedSimplyScheduleBooking } from "./simply-schedule-booking.js";
@@ -38,108 +38,81 @@ import {
   wpMembersOrdinarySetupScript,
 } from "./wp-members-adapter.js";
 
-type WordPressCommand = (
-  resource: Resources,
-  args: readonly string[],
-  environment?: readonly string[],
-) => Promise<DockerResult>;
-type RequireDocker = (
-  args: readonly string[],
-  timeoutMs?: number,
-) => Promise<DockerResult>;
-
-export const DATABASE_NAME = "wordpress";
-export const READ_ONLY_DATABASE_USER = "wbh_reader";
-
-type Account = { readonly username: string; readonly password: string };
-export interface WordPressInitialization {
-  readonly resource: Resources;
-  readonly setup: ParsedWordPressLabSetup;
-  readonly scenario: WordPressScenario | undefined;
-  readonly coreVersion: string | undefined;
-  readonly target: { readonly slug: string; readonly directory: string };
-  readonly dependencies: readonly {
-    readonly slug: string;
-    readonly directory: string;
-  }[];
-  readonly subscriber: Account;
-  readonly customer?: Account;
-  readonly victimSubscriber?: Account;
-  readonly victimCustomer?: Account;
-  readonly wp: WordPressCommand;
-  readonly requireDocker: RequireDocker;
+interface WordPressInitialization {
+  readonly lab: WordPressLabSession;
+  readonly prepared: PreparedWordPressLab;
 }
 
-async function installCore(input: WordPressInitialization): Promise<void> {
-  const { resource, wp, setup, coreVersion } = input;
-  if (coreVersion !== undefined) {
-    const running = await wp(resource, ["core", "version"]);
-    if (running.stdout.trim() !== coreVersion)
+/** The plugin adapters removed in #353 still take the Lab and a two-argument command. */
+const adapterCommand = (lab: WordPressLabSession, args: readonly string[]) =>
+  lab.wp(args);
+
+async function installCore({
+  lab,
+  prepared,
+}: WordPressInitialization): Promise<void> {
+  if (prepared.coreVersion !== undefined) {
+    const running = await lab.wp(["core", "version"]);
+    if (running.stdout.trim() !== prepared.coreVersion)
       throw new Error("The Lab image runs another WordPress version");
   }
-  await wp(resource, [
+  await lab.wp([
     "core",
     "install",
     "--url=http://wordpress",
-    `--title=${setup.siteTitle}`,
+    `--title=${prepared.setup.siteTitle}`,
     "--admin_user=harness-admin",
-    `--admin_password=${resource.adminPassword}`,
+    `--admin_password=${lab.adminPassword}`,
     "--admin_email=harness-admin@example.invalid",
     "--skip-email",
   ]);
 }
 
-async function installPlugins(input: WordPressInitialization): Promise<void> {
-  const { resource, wp, requireDocker, dependencies, target } = input;
-  for (const source of [...dependencies, target]) {
-    await requireDocker([
+async function installPlugins({
+  lab,
+  prepared,
+}: WordPressInitialization): Promise<void> {
+  for (const source of [...prepared.dependencies, prepared.target]) {
+    await lab.requireDocker([
       "exec",
-      resource.wordpress,
+      lab.wordpress,
       "mkdir",
       "-p",
       `/var/www/html/wp-content/plugins/${source.slug}`,
     ]);
-    await requireDocker([
+    await lab.requireDocker([
       "cp",
       `${source.directory}/.`,
-      `${resource.wordpress}:/var/www/html/wp-content/plugins/${source.slug}`,
+      `${lab.wordpress}:/var/www/html/wp-content/plugins/${source.slug}`,
     ]);
     // Docker cp preserves modes from the host tree. A restrictive host umask
     // can leave the public plugin unreadable to WP-CLI's UID 33.
-    await requireDocker([
+    await lab.requireDocker([
       "exec",
       "--user=root",
-      resource.wordpress,
+      lab.wordpress,
       "chmod",
       "-R",
       "a+rX",
       `/var/www/html/wp-content/plugins/${source.slug}`,
     ]);
-    await wp(resource, ["plugin", "activate", source.slug]);
+    await lab.wp(["plugin", "activate", source.slug]);
   }
 }
 
-async function configureSecondaryLocale(
-  input: WordPressInitialization,
-): Promise<void> {
-  const locale = input.resource.administratorSecondaryLocale;
+async function configureSecondaryLocale({
+  lab,
+}: WordPressInitialization): Promise<void> {
+  const locale = lab.administratorSecondaryLocale;
   if (locale !== undefined)
-    await input.wp(input.resource, [
-      "eval",
-      translatePressLocaleSetupScript(locale),
-    ]);
+    await lab.wp(["eval", translatePressLocaleSetupScript(locale)]);
 }
 
-async function createAccounts(input: WordPressInitialization): Promise<void> {
-  const {
-    resource,
-    wp,
-    subscriber,
-    customer,
-    victimSubscriber,
-    victimCustomer,
-  } = input;
-  await wp(resource, [
+async function createAccounts({ lab }: WordPressInitialization): Promise<void> {
+  const { subscriber, customer } = lab.attackerAccounts;
+  const { subscriber: victimSubscriber, customer: victimCustomer } =
+    lab.victimAccounts;
+  await lab.wp([
     "user",
     "create",
     subscriber.username,
@@ -148,7 +121,7 @@ async function createAccounts(input: WordPressInitialization): Promise<void> {
     `--user_pass=${subscriber.password}`,
   ]);
   if (customer !== undefined)
-    await wp(resource, [
+    await lab.wp([
       "user",
       "create",
       customer.username,
@@ -157,7 +130,7 @@ async function createAccounts(input: WordPressInitialization): Promise<void> {
       `--user_pass=${customer.password}`,
     ]);
   if (victimSubscriber !== undefined)
-    await wp(resource, [
+    await lab.wp([
       "user",
       "create",
       victimSubscriber.username,
@@ -166,7 +139,7 @@ async function createAccounts(input: WordPressInitialization): Promise<void> {
       `--user_pass=${victimSubscriber.password}`,
     ]);
   if (victimCustomer !== undefined)
-    await wp(resource, [
+    await lab.wp([
       "user",
       "create",
       victimCustomer.username,
@@ -176,16 +149,17 @@ async function createAccounts(input: WordPressInitialization): Promise<void> {
     ]);
 }
 
-async function seedInitialPosts(
-  input: WordPressInitialization,
-): Promise<string | undefined> {
-  const { resource, wp, setup, scenario } = input;
+async function seedInitialPosts({
+  lab,
+  prepared,
+}: WordPressInitialization): Promise<string | undefined> {
+  const { setup, scenario } = prepared;
   let approvedCommentPostId: string | undefined;
   for (const [index, title] of setup.initialPosts.entries()) {
     const approvedComment =
       index === 0 &&
       (setup.initialApprovedComment === true || scenario?.approvedComment);
-    const created = await wp(resource, [
+    const created = await lab.wp([
       "post",
       "create",
       "--post_status=publish",
@@ -197,7 +171,7 @@ async function seedInitialPosts(
     if (!/^[1-9][0-9]*$/.test(postId))
       throw new Error("Seed post ID is unavailable");
     approvedCommentPostId = postId;
-    await wp(resource, [
+    await lab.wp([
       "comment",
       "create",
       `--comment_post_ID=${postId}`,
@@ -211,12 +185,13 @@ async function seedInitialPosts(
   return approvedCommentPostId;
 }
 
-async function seedScenarioContent(
-  input: WordPressInitialization,
-): Promise<void> {
-  const content = scenarioContent(input.scenario);
+async function seedScenarioContent({
+  lab,
+  prepared,
+}: WordPressInitialization): Promise<void> {
+  const content = scenarioContent(prepared.scenario);
   if (content === undefined) return;
-  const created = await input.wp(input.resource, [
+  const created = await lab.wp([
     "post",
     "create",
     `--post_type=${content.type}`,
@@ -230,66 +205,71 @@ async function seedScenarioContent(
     throw new Error("Scenario content ID is unavailable");
 }
 
-async function seedScenarioTranslation(
-  input: WordPressInitialization,
-): Promise<void> {
-  const script = scenarioTranslationSeedScript(input.scenario);
-  if (script !== undefined) await input.wp(input.resource, ["eval", script]);
+async function seedScenarioTranslation({
+  lab,
+  prepared,
+}: WordPressInitialization): Promise<void> {
+  const script = scenarioTranslationSeedScript(prepared.scenario);
+  if (script !== undefined) await lab.wp(["eval", script]);
 }
 
-async function seedScenarioRegistration(
-  input: WordPressInitialization,
-): Promise<void> {
+async function seedScenarioRegistration({
+  lab,
+  prepared,
+}: WordPressInitialization): Promise<void> {
+  const id = prepared.scenario?.id;
   if (
-    input.scenario?.id === USER_REGISTRATION_SCENARIO_ID ||
-    input.scenario?.id === USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID ||
-    input.scenario?.id === USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID
+    id === USER_REGISTRATION_SCENARIO_ID ||
+    id === USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID ||
+    id === USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID
   )
-    await input.wp(input.resource, [
-      "eval",
-      userRegistrationOrdinarySetupScript(),
-    ]);
+    await lab.wp(["eval", userRegistrationOrdinarySetupScript()]);
 }
 
-async function seedScenarioMembership(
-  input: WordPressInitialization,
-): Promise<void> {
+async function seedScenarioMembership({
+  lab,
+  prepared,
+}: WordPressInitialization): Promise<void> {
+  const id = prepared.scenario?.id;
   if (
-    input.scenario?.id !== USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID &&
-    input.scenario?.id !== USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID
+    id !== USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID &&
+    id !== USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID
   )
     return;
-  await input.wp(input.resource, [
-    "eval",
-    userRegistrationMembershipInstallScript(),
-  ]);
+  await lab.wp(["eval", userRegistrationMembershipInstallScript()]);
   // Module classes are loaded at bootstrap, after the installer's option write.
-  await input.wp(input.resource, [
+  const subscriber = lab.attackerAccounts.subscriber.username;
+  await lab.wp([
     "eval",
-    input.scenario.id === USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID
-      ? userRegistrationMembershipEnrollmentScript(input.subscriber.username)
-      : userRegistrationMembershipUnjoinedScript(input.subscriber.username),
+    id === USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID
+      ? userRegistrationMembershipEnrollmentScript(subscriber)
+      : userRegistrationMembershipUnjoinedScript(subscriber),
   ]);
 }
 
-async function seedScenarioCommentForm(
-  input: WordPressInitialization,
-): Promise<void> {
-  if (input.scenario?.id === WPDISCUZ_COMMENT_SCENARIO_ID)
-    await input.wp(input.resource, ["eval", wpDiscuzOrdinarySetupScript()]);
+async function seedScenarioCommentForm({
+  lab,
+  prepared,
+}: WordPressInitialization): Promise<void> {
+  if (prepared.scenario?.id === WPDISCUZ_COMMENT_SCENARIO_ID)
+    await lab.wp(["eval", wpDiscuzOrdinarySetupScript()]);
 }
 
-async function seedScenarioMemberPost(
-  input: WordPressInitialization,
-): Promise<void> {
-  if (input.scenario?.id === WP_MEMBERS_SCENARIO_ID)
-    await input.wp(input.resource, ["eval", wpMembersOrdinarySetupScript()]);
+async function seedScenarioMemberPost({
+  lab,
+  prepared,
+}: WordPressInitialization): Promise<void> {
+  if (prepared.scenario?.id === WP_MEMBERS_SCENARIO_ID)
+    await lab.wp(["eval", wpMembersOrdinarySetupScript()]);
 }
 
 /** Initialize the isolated WordPress site after all containers are healthy. */
 export async function initializeWordPress(
-  input: WordPressInitialization,
+  lab: WordPressLabSession,
+  prepared: PreparedWordPressLab,
 ): Promise<void> {
+  const input: WordPressInitialization = { lab, prepared };
+  const { scenario, target } = prepared;
   await installCore(input);
   await installPlugins(input);
   await configureSecondaryLocale(input);
@@ -298,29 +278,29 @@ export async function initializeWordPress(
   await seedScenarioContent(input);
   await seedScenarioTranslation(input);
   await buildSearchableCommentIndex({
-    scenario: input.scenario,
-    targetSlug: input.target.slug,
+    scenario,
+    targetSlug: target.slug,
     postId: approvedCommentPostId,
-    resource: input.resource,
-    wp: input.wp,
+    resource: lab,
+    wp: adapterCommand,
   });
   await seedSimplyScheduleBooking({
-    bookingPage: scenarioBookingPage(input.scenario),
-    targetSlug: input.target.slug,
-    resource: input.resource,
-    wp: input.wp,
+    bookingPage: scenarioBookingPage(scenario),
+    targetSlug: target.slug,
+    resource: lab,
+    wp: adapterCommand,
   });
   await seedBrizyBuilderPage({
-    builderPage: scenarioBuilderPage(input.scenario),
-    targetSlug: input.target.slug,
-    resource: input.resource,
-    wp: input.wp,
+    builderPage: scenarioBuilderPage(scenario),
+    targetSlug: target.slug,
+    resource: lab,
+    wp: adapterCommand,
   });
   await seedBrizyFileAttachmentForm({
-    fileAttachmentForm: scenarioFileAttachmentForm(input.scenario),
-    targetSlug: input.target.slug,
-    resource: input.resource,
-    wp: input.wp,
+    fileAttachmentForm: scenarioFileAttachmentForm(scenario),
+    targetSlug: target.slug,
+    resource: lab,
+    wp: adapterCommand,
   });
   await seedScenarioRegistration(input);
   await seedScenarioMembership(input);
@@ -330,16 +310,15 @@ export async function initializeWordPress(
 
 /** Grant SELECT on the tables present at provision time, before canary placement. */
 export async function grantReadOnlyDatabaseAccess(
-  resource: Resources,
-  requireDocker: RequireDocker,
+  lab: WordPressLabSession,
 ): Promise<void> {
   const tables = (
-    await requireDocker([
+    await lab.requireDocker([
       "exec",
-      resource.database,
+      lab.database,
       "mariadb",
       "--user=root",
-      `--password=${resource.databasePassword}`,
+      `--password=${lab.databasePassword}`,
       "--skip-column-names",
       "--batch",
       "--execute",
@@ -352,15 +331,15 @@ export async function grantReadOnlyDatabaseAccess(
       (line) => /^[A-Za-z0-9_]{1,64}$/.test(line) && line !== SQL_CANARY_TABLE,
     );
   if (tables.length === 0) throw new Error("No tables to expose");
-  await requireDocker([
+  await lab.requireDocker([
     "exec",
-    resource.database,
+    lab.database,
     "mariadb",
     "--user=root",
-    `--password=${resource.databasePassword}`,
+    `--password=${lab.databasePassword}`,
     "--execute",
     [
-      `CREATE USER '${READ_ONLY_DATABASE_USER}'@'%' IDENTIFIED BY '${resource.readerPassword}'`,
+      `CREATE USER '${READ_ONLY_DATABASE_USER}'@'%' IDENTIFIED BY '${lab.readerPassword}'`,
       ...tables.map(
         (table) =>
           `GRANT SELECT ON ${DATABASE_NAME}.${table} TO '${READ_ONLY_DATABASE_USER}'@'%'`,
