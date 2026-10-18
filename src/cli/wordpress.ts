@@ -111,6 +111,7 @@ import {
   provisionFindingLab,
   reverifyOnSelectedVersion,
   runCampaignPipeline,
+  verifyNextFinding,
   type CampaignPipeline,
 } from "./pipeline.js";
 import {
@@ -149,6 +150,9 @@ const ablation = z
 /** Human-edited, Git-tracked run configuration. It carries no credentials or keys. */
 const commonCampaignFields = {
   schemaVersion: z.literal(1),
+  discovery: z
+    .strictObject({ lab: z.enum(["attached", "none"]) })
+    .default({ lab: "attached" }),
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
   runWallTimeMinutes: z.number().positive().max(240).optional(),
@@ -852,6 +856,7 @@ type WordPressDiscoveryPlan = Awaited<
 >;
 type WordPressDiscoveryContext = {
   readonly config: WordPressCampaignConfig;
+  readonly repeat: number;
   readonly boundaries: WordPressCampaignBoundaries;
   readonly state: CliState;
   readonly objective: WordPressDiscoveryAsset;
@@ -869,6 +874,7 @@ async function planWordPressDiscovery(
 ): Promise<WordPressDiscoveryPlan> {
   const {
     config,
+    repeat,
     boundaries,
     state,
     objective,
@@ -876,6 +882,10 @@ async function planWordPressDiscovery(
     armBObjective,
     historyFor,
   } = context;
+  if ((lab === undefined) !== (config.discovery.lab === "none"))
+    throw new Error(
+      "Discovery Lab mode differs from the campaign configuration",
+    );
   const wallMinutes = config.runWallTimeMinutes ?? 60;
   const ablationConfig =
     config.mode === "ablation" ? config.ablation : undefined;
@@ -903,10 +913,13 @@ async function planWordPressDiscovery(
     WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
   const source = await boundaries.sourceFor(snapshot);
   // The campaign stop rule decides depth; legacy per-target budgets only lower it (ADR 0032 Q6).
-  const maxRuns = Math.min(
-    config.stopRules.maxRuns,
-    target.runBudget ?? config.stopRules.maxRuns,
-  );
+  const maxRuns =
+    repeat > 1
+      ? repeat
+      : Math.min(
+          config.stopRules.maxRuns,
+          target.runBudget ?? config.stopRules.maxRuns,
+        );
   const sourceIndex =
     !config.entryIndex && assignmentConfig === undefined
       ? undefined
@@ -935,7 +948,7 @@ async function planWordPressDiscovery(
       maxRuns,
     ),
   };
-  const accounts = Object.entries(lab.attackerAccounts).map(
+  const accounts = Object.entries(lab?.attackerAccounts ?? {}).map(
     ([role, account]) =>
       `- ${role}: ${account.username} / ${account.password} (Lab only)`,
   );
@@ -953,18 +966,26 @@ async function planWordPressDiscovery(
       trustBoundary.text.trim(),
       `## Programme Boundary (${config.programmeBoundary.version})`,
       config.programmeBoundary.text.trim(),
-      "## Lab",
-      `Endpoint: ${lab.endpoint}`,
-      ...accounts,
-      ...(lab.database === undefined
-        ? ["Database: not exposed to this run."]
+      ...(lab === undefined
+        ? [
+            "This Trial has no Lab. Runtime confirmation happens during verification.",
+          ]
         : [
-            `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
+            "## Lab",
+            `Endpoint: ${lab.endpoint}`,
+            ...accounts,
+            ...(lab.database === undefined
+              ? ["Database: not exposed to this run."]
+              : [
+                  `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
+                ]),
           ]),
       ...(source.dependency === undefined
         ? []
         : [
-            "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
+            lab === undefined
+              ? "WordPress core source (read-only): /workspace/wordpress."
+              : "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
           ]),
       ...(objectiveOnly(selectedObjective.id)
         ? ["Writable notes directory: /workspace/research."]
@@ -1008,7 +1029,8 @@ async function planWordPressDiscovery(
       modelProfileDigest: boundaries.runtimeProfile.digest,
       promptDigest: objective.digest,
       stopRules,
-      lab: { setupDigest: lab.setupDigest },
+      lab:
+        lab === undefined ? { mode: "none" } : { setupDigest: lab.setupDigest },
       history: historyFor(config, target),
       entryIndex: entryIndexMetadata,
     },
@@ -1062,7 +1084,7 @@ async function planWordPressDiscovery(
             ? {}
             : { assignment: assignmentMetadata(assignment) }),
           labAccess: {
-            database: lab.database === undefined ? "none" : "read-only",
+            database: lab?.database === undefined ? "none" : "read-only",
           },
         },
         run: {
@@ -1074,19 +1096,23 @@ async function planWordPressDiscovery(
           ...(coverageFor(selectedObjective.id)
             ? { coverageSchema: outputContractV3.coverageSchema }
             : {}),
-          lab: {
-            endpoint: lab.endpoint,
-            networkName: lab.networkName,
-            internalIp: lab.internalIp,
-            ...(lab.database === undefined
-              ? {}
-              : {
-                  database: {
-                    host: lab.database.host,
-                    ipv4: lab.database.ipv4,
-                  },
-                }),
-          },
+          ...(lab === undefined
+            ? {}
+            : {
+                lab: {
+                  endpoint: lab.endpoint,
+                  networkName: lab.networkName,
+                  internalIp: lab.internalIp,
+                  ...(lab.database === undefined
+                    ? {}
+                    : {
+                        database: {
+                          host: lab.database.host,
+                          ipv4: lab.database.ipv4,
+                        },
+                      }),
+                },
+              }),
           sourceDirectory: source.directory,
           sourceTree: source.tree,
           ...(source.dependency === undefined
@@ -1230,6 +1256,8 @@ async function runWordPressCampaign(
       : undefined;
   return runCampaignPipeline({
     campaignId: input.campaignId,
+    discoveryLab: config.discovery.lab,
+    repeat: input.repeat ?? 1,
     maxConcurrentTargets: config.resources.maxConcurrentTargets,
     ...(input.stop === undefined ? {} : { stop: input.stop }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
@@ -1285,9 +1313,10 @@ async function runWordPressCampaign(
       },
       lab: boundaries.lab,
       setupFor: setupFor(config),
-      discovery: (input) =>
-        planWordPressDiscovery(input, {
+      discovery: (discoveryInput) =>
+        planWordPressDiscovery(discoveryInput, {
           config,
+          repeat: input.repeat ?? 1,
           boundaries,
           state,
           objective,
@@ -1563,6 +1592,24 @@ export function createWordPressCliProfile(
     },
     runCampaign: (state, input) =>
       runWordPressCampaign(state, input, options, historyFor),
+    async verifyNext(state, input) {
+      const { config } = await loadConfig(input.configPath);
+      const boundaries = await options.boundaries(config, state);
+      return verifyNextFinding({
+        ...(input.campaignId === undefined
+          ? {}
+          : { campaignId: input.campaignId }),
+        ...(input.campaignPrefix === undefined
+          ? {}
+          : { campaignPrefix: input.campaignPrefix }),
+        ledger: state.ledger,
+        newId: state.newId,
+        loadSnapshot: boundaries.loadSnapshot,
+        setupFor: setupFor(config),
+        reconstructionFor: reconstructionFor(config),
+        verification: verificationFor(state, boundaries),
+      });
+    },
     stateDiffReader: (state) =>
       createWordPressStateDiffReader({ store: state.store }),
     labUp: (state, input) => wordPressLabUp(state, input, options),

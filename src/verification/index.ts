@@ -318,14 +318,32 @@ export class Verification<
       const provisioned = await this.#options.lab
         .provision(input.snapshot, input.setup, { purpose: "verification" })
         .catch(() => null);
-      if (provisioned === null || provisioned.status !== "ready")
-        return incomplete(
+      if (provisioned === null || provisioned.status !== "ready") {
+        const reason =
           provisioned?.status === "incomplete" &&
-            provisioned.reason === "precondition"
+          provisioned.reason === "precondition"
             ? "precondition"
-            : "provision",
+            : "provision";
+        const failed = await this.#options.ledger.append({
+          schemaVersion: 1,
+          identity: `verification-lab-failed-${verificationId}`,
+          campaignId,
+          snapshotDigest,
+          occurredAt: (
+            this.#options.clock ?? (() => new Date())
+          )().toISOString(),
+          type: "verification-lab-failed",
+          findingId,
+          verificationId,
+          reason,
+        });
+        if (failed.status === "conflict")
+          throw new Error("Verification Lab failure identity conflict");
+        return incomplete(
+          reason,
           provisioned?.nextStep ?? "Provision a fresh Lab and repeat",
         );
+      }
       const lab = provisioned.handle;
       labSetupDigest = lab.setupDigest;
       let result: VerificationResultV1 = incomplete(

@@ -302,11 +302,11 @@ describe("CodexVerifier.attempt", () => {
         )
       ).status,
     ).toBe("resolved");
-    expect(f.runs[0]?.lab.database).toEqual({
+    expect(f.runs[0]?.lab?.database).toEqual({
       host: "database",
       ipv4: "172.20.0.3",
     });
-    expect(f.runs[0]?.lab.internalIp).toBe("172.20.0.4");
+    expect(f.runs[0]?.lab?.internalIp).toBe("172.20.0.4");
     expect(f.runs[0]?.prompt).toContain("fixture_reader");
     const run = f.runs[0];
     expect(run).toBeDefined();
@@ -351,7 +351,7 @@ describe("CodexVerifier.attempt", () => {
       finding: f.finding,
       lab: f.lab,
     });
-    expect(f.runs[0]?.lab.database).toBeUndefined();
+    expect(f.runs[0]?.lab?.database).toBeUndefined();
     expect(f.runs[0]?.prompt).not.toContain("fixture_reader");
     expect(f.runs[0]?.prompt).not.toContain("wbh-sensitive-");
   });
