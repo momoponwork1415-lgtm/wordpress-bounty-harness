@@ -1120,6 +1120,7 @@ export function createWordPressCliProfile(
         selectedSnapshotDigests: chosen.map(({ snapshot }) => snapshot.digest),
         freezeFailures,
         legacyHistory: decision.legacyHistory,
+        advisoryHistory: decision.advisoryHistory,
         minimum,
       };
       const reportDigest = await state.store.putFiles({
@@ -1178,11 +1179,15 @@ export function createWordPressCliProfile(
         batchId,
         sourceStatus: decision.sourceStatus,
         legacyHistory: decision.legacyHistory,
+        advisoryHistory: decision.advisoryHistory,
         selected: chosen.map(({ target }) => ({
           targetId: target.targetId,
           version: target.version,
           score: target.score,
           scoreBreakdown: target.scoreBreakdown,
+          ...(target.advisoryHistory === undefined
+            ? {}
+            : { advisoryHistory: target.advisoryHistory }),
           observedAt:
             inspectionBySlug.get(target.slug)?.observedAt ?? target.selectedAt,
           ...(inspectionBySlug.get(target.slug)?.enumeration === undefined
@@ -1390,19 +1395,23 @@ export function createWordPressCliProfile(
               ...originalPluginPins,
             };
             // Rechecking a known Finding does not need the candidate batch's
-            // history ranking.
+            // history ranking, so the mirror is not opened here (ADR 0037).
+            const unranked = {
+              ...policy,
+              scoreWeights: {
+                ...policy.scoreWeights,
+                history: 0,
+                historyPayingClass: 0,
+              },
+            };
             const reverifyPolicy =
-              "candidateSource" in policy
+              "candidateSource" in unranked
                 ? (({
                     candidateSource: _candidateSource,
                     pluginDependencySlugs: _pluginDependencySlugs,
                     ...rest
-                  }) => rest)(policy)
-                : (({
-                    historySignals: _historySignals,
-                    historySource: _historySource,
-                    ...rest
-                  }) => rest)(policy);
+                  }) => rest)(unranked)
+                : unranked;
             const {
               targetSourcePins: _targetSourcePins,
               ...policyWithoutCapturedSources

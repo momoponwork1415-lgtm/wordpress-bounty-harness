@@ -30,7 +30,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 | モジュール | 目的 | 公開インターフェース | 所有する記録 | 失敗時 | 出自 |
 | --- | --- | --- | --- | --- | --- |
-| `selection` | 方針に従って対象を機械的に選び、予算内で順序付ける | `select(policy) → TargetSelection[]`、`inspect` | 選定方針（人間が編集）、WordPress.org の観測、台帳の過去選定、選定記録とスコア内訳 | WordPress.org / Programme観測の unavailable / stale をeligibleにしない | 開発対象はslugと版を直接指定可。公開履歴の扱いは ADR 0030 |
+| `selection` | 方針に従って対象を機械的に選び、予算内で順序付ける | `select(policy) → TargetSelection[]`、`inspect` | 選定方針（人間が編集）、WordPress.org の観測、台帳の過去選定、選定記録とスコア内訳 | WordPress.org / Programme観測の unavailable / stale をeligibleにしない | 開発対象はslugと版を直接指定可。公開履歴は mirror の件数と公開日だけを採点に使う（ADR 0037） |
 | `snapshot` | 対象plugin、WordPress本体、PHP、必要な依存pluginのsourceをdigestで固定する | `freeze(selection) → Snapshot`、`verify(digest)` | Target / Dependency Snapshot、canonical manifest | archiveの不正path・symlink・size超過を拒否し、必要な依存の欠落を黙って省略しない | 移植: `canonical-source-tree`、`canonical-json`、`immutable-file`、`private-artifact-store` |
 | `lab` | WordPress + MySQLの使い捨てgVisor環境を供給し、canaryとロール別アカウントを仕込む | `provision(snapshot, setup) → LabHandle`、`seedCanaries`、`teardown` | Lab Setup digest、canary台帳（nonceと配置先）、ロール認証情報（Lab内のみ） | source / image / runsc不一致では起動しない。provision失敗は `incomplete` 用の理由コード | 移植: `human-os` のgVisor候補検証Lab。拡張: discovery用の複数Lab、canary seeding、ロール基準の正常操作記録 |
 | `discovery` | 固定Snapshotで対象ごとにRoot＋最大4子の協調Trialを1回回す | `run(campaignInput) → DiscoveryRun`、`campaign(stopRule)` | Trial id、Root / 子の実行記録、model profile digest、prompt digest、usage、FindingとLeadのdigest参照 | provider / schema / sandbox失敗はtyped receiptとして残し、有効な個別成果を失わない。provider上限はcampaignを止め、runnerがbackoff後に同じcampaign IDで再開する。対象単位の失敗は `target-skipped` で次の対象へ進む | ADR 0029。旧単独Trialと二段構えの記録は読み続ける |
@@ -143,7 +143,7 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 
 | 場所 | 手段 | 強さ |
 | --- | --- | --- |
-| `selection` | 対象外資産（作者、配布停止、ベンダー側service）を落とす。install下限と上限は[選定方針 JSON](../src/profiles/wordpress/policy/selection.json)を正本とし、プログラムの報奨対象下限は別のscope規則として記録する。公開履歴の件数・内容は選定候補の列挙・除外・採点に使わず、Finding 後の重複照合と時点で切った探索入力にのみ使う（ADR 0030） | 機械的。方針と除外理由を残す |
+| `selection` | 対象外資産（作者、配布停止、ベンダー側service）を落とす。install下限と上限は[選定方針 JSON](../src/profiles/wordpress/policy/selection.json)を正本とし、プログラムの報奨対象下限は別のscope規則として記録する。公開履歴はローカル mirror の slug 単位の件数と公開日だけを採点に使い、記録の内容は読まず探索にも渡さない。mirror が方針の鮮度を超えて古ければ選定を止める（ADR 0037、ADR 0030 を上書き） | 機械的。方針と除外理由を残す |
 | `lab` | discoveryとverifierに渡す認証情報を未認証・subscriber・customer（WooCommerce有効時）に限る。contributor以上と管理者の認証情報は渡さない。設定は既定のまま、一般的な利用範囲の初期データ（公開フォーム1つ等）はprofileのsetup manifestで入れ、Lab Setup digestに記録する | 機械的。contributor以上の経路は試せない。設定変更もできない |
 | `discovery` | 目的promptに到達すべき影響の共通分類（下表）と報奨順を書き、trust境界宣言でcontributor以上と管理者の明示設定を信頼側に置く | 誘導。agentは他も報告してよいが、台帳で分類される |
 | `verification` と `review` | 判定器の成功条件をプログラムの受理条件に合わせる（下表）。scope評価はFindingと判定器の観測だけから、方針ファイルの規則で `in-scope` / `out` / `ambiguous` を出す。agentの自己申告は使わない | 機械的。提出候補にならない |

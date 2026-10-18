@@ -108,11 +108,29 @@ export interface CliSelectionReport {
         readonly ambiguous: number;
         readonly reconsider: number;
       };
+  /** The public advisory mirror behind the history score: timestamp and digest, no record content (ADR 0037). */
+  readonly advisoryHistory?:
+    | { readonly status: "not-used" }
+    | {
+        readonly status: "used";
+        readonly asOf: string;
+        readonly digest: string;
+        readonly recordCount: number;
+        readonly lastRefreshFailed: boolean;
+        readonly windowDays: number;
+        readonly countCap: number;
+        readonly maximumAgeDays: number;
+      };
   readonly selected: readonly {
     readonly targetId: string;
     readonly version: string;
     readonly score: number;
-    readonly scoreBreakdown: Readonly<Record<string, number>>;
+    readonly scoreBreakdown: Readonly<Record<string, number | undefined>>;
+    readonly advisoryHistory?: {
+      readonly count: number;
+      readonly payingClassCount: number;
+      readonly latestPublished?: string | undefined;
+    };
     readonly observedAt: string;
     readonly sourceUrl?: string;
   }[];
@@ -749,15 +767,24 @@ const COMMANDS: readonly Command[] = [
             ? "legacy history unavailable"
             : `legacy history ${legacy.digest}  started ${legacy.started}  ambiguous ${legacy.ambiguous}  reconsider ${legacy.reconsider}`,
         );
+      const advisory = report.advisoryHistory;
+      if (advisory !== undefined)
+        io.stdout(
+          advisory.status === "not-used"
+            ? "advisory history not used"
+            : `advisory history ${advisory.digest}  as of ${advisory.asOf}${advisory.lastRefreshFailed ? " (last refresh failed)" : ""}  records ${advisory.recordCount}  window ${advisory.windowDays} d  cap ${advisory.countCap}`,
+        );
       for (const target of report.selected)
         io.stdout(
           `${target.targetId} ${target.version} score ${target.score.toFixed(2)}  breakdown ${Object.entries(
             target.scoreBreakdown,
           )
-            .map(([part, points]) => `${part}=${points.toFixed(2)}`)
-            .join(
-              " ",
-            )}  observed ${target.observedAt}  source ${target.sourceUrl ?? "unavailable"}  excluded none`,
+            .map(([part, points]) => `${part}=${(points ?? 0).toFixed(2)}`)
+            .join(" ")}${
+            target.advisoryHistory === undefined
+              ? ""
+              : `  history records ${target.advisoryHistory.count} paying ${target.advisoryHistory.payingClassCount} latest ${target.advisoryHistory.latestPublished ?? "none"}`
+          }  observed ${target.observedAt}  source ${target.sourceUrl ?? "unavailable"}  excluded none`,
         );
       for (const target of report.excluded)
         io.stdout(

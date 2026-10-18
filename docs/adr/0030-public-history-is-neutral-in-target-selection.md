@@ -1,5 +1,5 @@
 ---
-status: accepted (2026-10-13; #144 merged)
+status: superseded by 0037 (2026-10-19; selection scores advisory counts and dates from the local mirror)
 date: 2026-10-12
 supersedes: selection history ranking in SPEC section 8b
 ---

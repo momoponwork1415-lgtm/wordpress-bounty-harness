@@ -55,6 +55,7 @@ import {
   type WordPressSelectionPolicy,
 } from "../profiles/wordpress/selection/index.js";
 import { CodexVerifier } from "../profiles/wordpress/verification/codex-verifier.js";
+import { openWordfenceAdvisoryHistory } from "../profiles/wordpress/wordfence-history/advisory-counts.js";
 import { HandoffVerifier } from "../profiles/wordpress/verification/handoff-verifier.js";
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
@@ -207,6 +208,12 @@ export async function createWordPressHostProfile(options: {
     sandboxImageDigest: digestOf(host.images.codex),
   });
 
+  // Selection reads the mirror's counts and dates only when the policy weights history (ADR 0037).
+  const advisoryHistory =
+    host.wordfenceHistory === undefined
+      ? undefined
+      : openWordfenceAdvisoryHistory(host.wordfenceHistory);
+
   // Public selection and source freezing need no provider credential or Lab.
   const selectionBoundaries = async (
     state: CliState,
@@ -277,6 +284,7 @@ export async function createWordPressHostProfile(options: {
         programmeRef,
         clock: state.clock,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+        ...(advisoryHistory === undefined ? {} : { advisoryHistory }),
       }),
       freeze: async (target) => {
         const snapshot = await snapshotStore.freeze({
@@ -456,6 +464,7 @@ export async function createWordPressHostProfile(options: {
         programmeRef,
         clock: state.clock,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+        ...(advisoryHistory === undefined ? {} : { advisoryHistory }),
       });
       return selection;
     };

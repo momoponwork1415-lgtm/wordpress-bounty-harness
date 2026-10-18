@@ -249,6 +249,8 @@ describe("WordPress selection public interface", () => {
     const currentPolicy = await loadWordPressSelectionPolicy();
     const selected = await selection.rank({
       ...currentPolicy,
+      // This harness has no mirror; the shipped history weight would stop it (ADR 0037).
+      scoreWeights: { ...currentPolicy.scoreWeights, history: 0 },
       pluginDependencySlugs: { exposed: ["elementor"] },
     });
     expect(selected).toHaveLength(1);
@@ -344,6 +346,52 @@ describe("WordPress selection public interface", () => {
       ).toBe(false);
   });
 
+  it("ships the advisory-history weights (ADR 0037) in the default policy and the two floor siblings, which differ only in id and floor", async () => {
+    const policy = await loadWordPressSelectionPolicy();
+    expect(policy.id).toBe("wordpress-selection-2026-10-21");
+    expect(policy.scoreWeights).toEqual({
+      installations: 10,
+      recency: 5,
+      history: 5,
+      historyPayingClass: 0,
+    });
+    expect(policy.historyWindowDays).toBe(365);
+    expect(policy.historyCountCap).toBe(10);
+    expect(policy.maximumHistoryAgeDays).toBe(2);
+    expect(policy.historyPayingClasses).toEqual([
+      "stored-xss",
+      "sql-injection",
+      "privilege-escalation",
+      "authentication-bypass",
+      "arbitrary-file-upload",
+      "remote-code-execution",
+    ]);
+    for (const [file, floor] of [
+      ["selection.50000.json", 50_000],
+      ["selection.30000.json", 30_000],
+    ] as const) {
+      const sibling = await loadWordPressSelectionPolicy(
+        new URL(
+          `../../../src/profiles/wordpress/policy/${file}`,
+          import.meta.url,
+        ),
+      );
+      expect(sibling).toEqual({
+        ...policy,
+        id: `${policy.id}-${floor}`,
+        minimumActiveInstallations: floor,
+      });
+    }
+    // The historical manual signals are gone; a policy still carrying them is rejected.
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...basePolicy,
+        historySignals: { popular: 1 },
+        historySource: { digest: digest("d"), refreshedAt: now },
+      }).success,
+    ).toBe(false);
+  });
+
   it("omits run budgets and treats every surface alike when a policy carries no legacy weights", async () => {
     const selection = harness({
       observations: {
@@ -399,37 +447,316 @@ describe("WordPress selection public interface", () => {
     });
   });
 
-  it("does not rank candidates by historical advisory counts", async () => {
-    const selection = harness({});
-    const ranked = await selection.rank({
-      ...basePolicy,
-      historySignals: { popular: 1, exposed: 12 },
-      historySource: { digest: digest("d"), refreshedAt: now },
-      scoreWeights: {
-        ...basePolicy.scoreWeights,
-        installations: 0,
-        history: 10,
+  describe("advisory history from the local mirror (ADR 0037)", () => {
+    const mirrorAsOf = "2026-10-07T00:00:00.000Z";
+    const mirrorDigest = digest("f");
+    const counts: Record<
+      string,
+      { count: number; payingClassCount: number; latestPublished?: string }
+    > = {
+      popular: { count: 1, payingClassCount: 0 },
+      exposed: {
+        count: 12,
+        payingClassCount: 3,
+        latestPublished: "2026-10-07T00:00:00.000Z",
       },
-    });
-    expect(ranked.map((item) => item.slug)).toEqual(["exposed", "popular"]);
-    expect(ranked.every((item) => item.scoreBreakdown.history === 0)).toBe(
-      true,
-    );
-  });
+    };
+    /** A fake source; `opened` counts how often selection reached for the mirror. */
+    function fakeHistory(status: "open" | "stale" | "unavailable" = "open"): {
+      source: NonNullable<CreateWordPressSelectionOptions["advisoryHistory"]>;
+      opened: () => number;
+      closed: () => number;
+      windows: () => { fromMs: number; toMs: number }[];
+    } {
+      let opened = 0;
+      let closed = 0;
+      const windows: { fromMs: number; toMs: number }[] = [];
+      return {
+        opened: () => opened,
+        closed: () => closed,
+        windows: () => windows,
+        source: {
+          open() {
+            opened++;
+            if (status === "stale")
+              return {
+                status: "stale",
+                lastSuccessfulAt: "2026-10-01T00:00:00Z",
+                ageMs: 7 * 86_400_000,
+              };
+            if (status === "unavailable")
+              return { status: "unavailable", reason: "state is unreadable" };
+            return {
+              status: "open",
+              mirror: {
+                asOf: mirrorAsOf,
+                digest: mirrorDigest,
+                recordCount: 42,
+                lastRefreshFailed: false,
+                count(slug, window) {
+                  windows.push({ fromMs: window.fromMs, toMs: window.toMs });
+                  return (
+                    counts[slug] ?? {
+                      count: 0,
+                      payingClassCount: 0,
+                      title: "never read",
+                    }
+                  );
+                },
+                close: () => {
+                  closed++;
+                },
+              },
+            };
+          },
+        },
+      };
+    }
+    const withHistory = (
+      fake: ReturnType<typeof fakeHistory>,
+      options: Parameters<typeof harness>[0] = {},
+    ) =>
+      createWordPressSelection({
+        targetSource: {
+          observe: async ({ slug }: { slug: string }) =>
+            (options.observations ?? {
+              popular: observation("popular", [], 100_000),
+              exposed: observation("exposed", ["form"], 1_000),
+            })[slug] ?? failed(slug, "not-found"),
+        } as unknown as WordPressOrgTargetSource,
+        programme: {
+          inspect: async () => ({
+            status: "current",
+            snapshotRef: programmeRef,
+            snapshot: {
+              programmeIdentity: "programme:wordfence",
+              policy: {
+                programmeOpportunityBand: "high-impact-only",
+                eligibility: {
+                  assets: [
+                    { kind: "wordpress-plugin", scope: "publicly-distributed" },
+                  ],
+                },
+              },
+            },
+          }),
+        } as unknown as ProgrammeIntelligence,
+        programmeRef,
+        clock: () => new Date(options.clock ?? now),
+        advisoryHistory: fake.source,
+      });
 
-  it("does not let stale legacy history change current selection", async () => {
-    const selection = harness({});
-    const inspected = await selection.inspect({
-      ...basePolicy,
-      historySignals: { popular: 2 },
-      historySource: {
-        digest: digest("d"),
-        refreshedAt: "2026-10-06T00:00:00Z",
-      },
+    it("weight 0 reproduces the ranking without history and never opens the mirror", async () => {
+      const fake = fakeHistory();
+      const baseline = await harness({}).rank(basePolicy);
+      const zeroWeight = await withHistory(fake).rank({
+        ...basePolicy,
+        scoreWeights: { ...basePolicy.scoreWeights, history: 0 },
+      });
+      const absent = await withHistory(fake).rank(basePolicy);
+      for (const ranked of [zeroWeight, absent]) {
+        expect(ranked.map((item) => [item.slug, item.score])).toEqual(
+          baseline.map((item) => [item.slug, item.score]),
+        );
+        expect(
+          ranked.every(
+            (item) =>
+              item.scoreBreakdown.history === 0 &&
+              item.scoreBreakdown.historyPayingClass === 0 &&
+              item.advisoryHistory === undefined,
+          ),
+        ).toBe(true);
+      }
+      expect(fake.opened()).toBe(0);
     });
-    expect(inspected.find((item) => item.slug === "popular")).toMatchObject({
-      status: "eligible",
-      reasons: [],
+
+    it("scores min(count, cap) / cap plus a tenth for a fresh latest record, relative to the mirror's asOf", async () => {
+      const fake = fakeHistory();
+      const policy = {
+        ...basePolicy,
+        historyWindowDays: 100,
+        historyCountCap: 10,
+        scoreWeights: {
+          ...basePolicy.scoreWeights,
+          installations: 0,
+          surface: 0,
+          history: 5,
+        },
+      };
+      const ranked = await withHistory(fake).rank(policy);
+      const exposed = ranked.find((item) => item.slug === "exposed");
+      const popular = ranked.find((item) => item.slug === "popular");
+      // 12 records cap at 10 → full weight; the latest record is at asOf → +0.1 × weight.
+      expect(exposed?.scoreBreakdown.history).toBeCloseTo(5 * (1 + 0.1), 10);
+      // 1 record, no latest date → 5 × 1/10 and no freshness.
+      expect(popular?.scoreBreakdown.history).toBeCloseTo(0.5, 10);
+      expect(ranked.map((item) => item.slug)).toEqual(["exposed", "popular"]);
+      // The paying-class member stays 0 until its own weight is set.
+      expect(exposed?.scoreBreakdown.historyPayingClass).toBe(0);
+      // The window is anchored on the mirror, not on the selection clock.
+      const asOfMs = Date.parse(mirrorAsOf);
+      expect(fake.windows()).toEqual(
+        expect.arrayContaining([
+          { fromMs: asOfMs - 100 * 86_400_000, toMs: asOfMs },
+        ]),
+      );
+      expect(fake.opened()).toBe(1);
+      expect(fake.closed()).toBe(1);
+      // A history-only ranking is independent of when `select` runs.
+      const later = await withHistory(fake, {
+        clock: "2026-10-08T12:00:00.000Z",
+      }).rank(policy);
+      expect(later.map((item) => item.scoreBreakdown.history)).toEqual(
+        ranked.map((item) => item.scoreBreakdown.history),
+      );
+    });
+
+    it("weights paying-class records separately, and weight 0 leaves the decided score unchanged", async () => {
+      const fake = fakeHistory();
+      const policy = {
+        ...basePolicy,
+        scoreWeights: {
+          ...basePolicy.scoreWeights,
+          installations: 0,
+          surface: 0,
+          history: 5,
+        },
+      };
+      const decided = await withHistory(fake).rank(policy);
+      const paying = await withHistory(fake).rank({
+        ...policy,
+        historyCountCap: 10,
+        scoreWeights: { ...policy.scoreWeights, historyPayingClass: 4 },
+      });
+      const exposedPaying = paying.find((item) => item.slug === "exposed");
+      expect(exposedPaying?.scoreBreakdown.historyPayingClass).toBeCloseTo(
+        4 * (3 / 10),
+        10,
+      );
+      expect(exposedPaying?.advisoryHistory?.payingClassCount).toBe(3);
+      expect(
+        paying.find((item) => item.slug === "popular")?.scoreBreakdown
+          .historyPayingClass,
+      ).toBe(0);
+      expect(
+        decided.every((item) => item.scoreBreakdown.historyPayingClass === 0),
+      ).toBe(true);
+      expect(exposedPaying?.score).toBeCloseTo(
+        (decided.find((item) => item.slug === "exposed")?.score ?? NaN) +
+          4 * (3 / 10),
+        10,
+      );
+    });
+
+    it("records only counts, dates and the mirror's timestamp and digest on the target", async () => {
+      const fake = fakeHistory();
+      const ranked = await withHistory(fake).rank({
+        ...basePolicy,
+        scoreWeights: { ...basePolicy.scoreWeights, history: 5 },
+      });
+      expect(
+        ranked.find((item) => item.slug === "exposed")?.advisoryHistory,
+      ).toEqual({
+        count: 12,
+        payingClassCount: 3,
+        latestPublished: "2026-10-07T00:00:00.000Z",
+        mirrorAsOf,
+        mirrorDigest,
+      });
+      expect(
+        ranked.find((item) => item.slug === "popular")?.advisoryHistory,
+      ).toEqual({
+        count: 1,
+        payingClassCount: 0,
+        mirrorAsOf,
+        mirrorDigest,
+      });
+      // Anything beyond the contract (a title the fake sneaks in) never reaches the record.
+      expect(JSON.stringify(ranked)).not.toContain("never read");
+      for (const item of ranked)
+        expect(wordPressTargetSelectionSchema.safeParse(item).success).toBe(
+          true,
+        );
+    });
+
+    it("stops before observing anything when the mirror is stale, unavailable or not configured", async () => {
+      const policy = {
+        ...basePolicy,
+        maximumHistoryAgeDays: 2,
+        scoreWeights: { ...basePolicy.scoreWeights, history: 5 },
+      };
+      await expect(
+        withHistory(fakeHistory("stale")).inspectBatch(policy),
+      ).rejects.toThrow(
+        "Wordfence history mirror is stale: last success 2026-10-01T00:00:00Z is 7.0 days old, policy maximumHistoryAgeDays is 2",
+      );
+      await expect(
+        withHistory(fakeHistory("unavailable")).rank(policy),
+      ).rejects.toThrow(
+        "Wordfence history mirror is unavailable (state is unreadable)",
+      );
+      await expect(harness({}).rank(policy)).rejects.toThrow(
+        "no wordfenceHistory mirror configured",
+      );
+      // A batch inspection that stops observed no candidate.
+      const observe = vi.fn();
+      await expect(
+        createWordPressSelection({
+          targetSource: { observe } as unknown as WordPressOrgTargetSource,
+          programme: { inspect: vi.fn() } as unknown as ProgrammeIntelligence,
+          programmeRef,
+          advisoryHistory: fakeHistory("stale").source,
+        }).inspect(policy),
+      ).rejects.toThrow("stale");
+      expect(observe).not.toHaveBeenCalled();
+      // The maximum age reaches the source as milliseconds.
+      const open = vi.fn(() => ({
+        status: "unavailable" as const,
+        reason: "database and state disagree",
+      }));
+      await expect(
+        createWordPressSelection({
+          targetSource: { observe } as unknown as WordPressOrgTargetSource,
+          programme: { inspect: vi.fn() } as unknown as ProgrammeIntelligence,
+          programmeRef,
+          clock: () => new Date(now),
+          advisoryHistory: { open },
+        }).inspect({ ...policy, maximumHistoryAgeDays: 3 }),
+      ).rejects.toThrow("database and state disagree");
+      expect(open).toHaveBeenCalledWith({
+        now: new Date(now),
+        maximumAgeMs: 3 * 86_400_000,
+      });
+    });
+
+    it("reports the mirror's timestamp, digest and window through decide()", async () => {
+      const decision = await openWordPressSelection({
+        candidates: withHistory(fakeHistory()),
+        ledger: { readAll: () => [] },
+        promptVariant: "wp2shell-bounty-v8",
+      }).decide({
+        ...basePolicy,
+        scoreWeights: { ...basePolicy.scoreWeights, history: 5 },
+      });
+      expect(decision.advisoryHistory).toEqual({
+        status: "used",
+        asOf: mirrorAsOf,
+        digest: mirrorDigest,
+        recordCount: 42,
+        lastRefreshFailed: false,
+        windowDays: 365,
+        countCap: 10,
+        maximumAgeDays: 2,
+      });
+      expect(
+        (
+          await openWordPressSelection({
+            candidates: harness({}),
+            ledger: { readAll: () => [] },
+            promptVariant: "wp2shell-bounty-v8",
+          }).decide(basePolicy)
+        ).advisoryHistory,
+      ).toEqual({ status: "not-used" });
     });
   });
 
