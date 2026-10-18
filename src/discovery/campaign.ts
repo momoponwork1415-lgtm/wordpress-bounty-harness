@@ -14,6 +14,9 @@ import type {
 import {
   createNativeRunReceipt,
   nativeRunReceiptSchema,
+  receiptWallTimeMs,
+  runFinishedFieldsFrom,
+  sealNativeRunReceipt,
   type NativeRunReceipt,
 } from "./native-run-receipts.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
@@ -405,13 +408,8 @@ export async function runDiscoveryCampaign(options: {
       runCount++;
       let outcome: "completed" | "failed" | "provider-limited" = "failed";
       let wallTimeMs = 0;
-      let usage: NativeRunReceipt["usage"] | undefined;
-      let observed: NativeRunReceipt["observed"] | undefined;
-      let childThreadsObserved: number | undefined;
-      let childThreadsAdmitted: number | undefined;
-      let brokerMetrics: NativeRunReceipt["brokerMetrics"];
-      let sandboxExitCode: number | undefined;
-      let diagnosticArtifactDigest: string | undefined;
+      /** The transport's receipt; absent when the executor threw before returning one. */
+      let receipt: NativeRunReceipt | undefined;
       let researchArtifact:
         { readonly digest: string; readonly truncated: boolean } | undefined;
       let receiptDigest: string | undefined;
@@ -491,22 +489,10 @@ export async function runDiscoveryCampaign(options: {
             truncated: result.researchArtifact.truncated,
           };
         }
-        const receipt = nativeRunReceiptSchema.parse(result.receipt);
-        wallTimeMs = Math.max(
-          0,
-          Date.parse(receipt.completedAt) - Date.parse(receipt.startedAt),
-        );
-        usage = receipt.usage;
-        observed = receipt.observed;
-        childThreadsObserved = receipt.childThreadsObserved;
-        childThreadsAdmitted = receipt.childThreadsAdmitted;
-        brokerMetrics = receipt.brokerMetrics;
-        sandboxExitCode = receipt.sandboxExitCode;
-        diagnosticArtifactDigest = receipt.diagnosticArtifactDigest;
+        receipt = nativeRunReceiptSchema.parse(result.receipt);
+        wallTimeMs = receiptWallTimeMs(receipt);
         // The receipt carries the runtime the run used (CLI version, catalog digest, model).
-        receiptDigest = await options.evidence.putFiles({
-          "receipt.json": canonicalJson(receipt),
-        });
+        receiptDigest = await sealNativeRunReceipt(options.evidence, receipt);
         readPathsDigest = await recordReadPaths(
           options.attachments,
           options.evidence,
@@ -589,29 +575,26 @@ export async function runDiscoveryCampaign(options: {
             controller.signal.reason === "operator" ? "operator" : "wall";
           failure = { reason };
           wallTimeMs = runWallTimeMs ?? 0;
-          const receipt = createNativeRunReceipt({
-            runId: run.runId,
-            targetSnapshotDigest: run.targetSnapshotDigest,
-            profile: run.profile,
-            terminal: "incomplete",
-            reason,
-            startedAt: base.occurredAt,
-            completedAt: clock().toISOString(),
-          });
-          receiptDigest = await options.evidence.putFiles({
-            "receipt.json": canonicalJson(receipt),
-          });
+          // Sealed for the record only; the event keeps the transport's fields, if any arrived.
+          receiptDigest = await sealNativeRunReceipt(
+            options.evidence,
+            createNativeRunReceipt({
+              runId: run.runId,
+              targetSnapshotDigest: run.targetSnapshotDigest,
+              profile: run.profile,
+              terminal: "incomplete",
+              reason,
+              startedAt: base.occurredAt,
+              completedAt: clock().toISOString(),
+            }),
+          );
         }
       } finally {
         if (wallTimer !== undefined) clearTimeout(wallTimer);
         if (shutdownTimer !== undefined) clearTimeout(shutdownTimer);
         options.signal?.removeEventListener("abort", onOperatorStop);
       }
-      const counted = countsAsTrial({
-        observed,
-        childThreadsObserved,
-        brokerMetrics,
-      });
+      const counted = countsAsTrial(receipt ?? {});
       if (!counted && outcome === "completed") {
         outcome = "failed";
         failure = { reason: "evidence", reasonDetail: "no-work" };
@@ -624,15 +607,7 @@ export async function runDiscoveryCampaign(options: {
         outcome,
         costUsd: "unavailable",
         wallTimeMs,
-        ...(usage === undefined ? {} : { usage }),
-        ...(observed === undefined ? {} : { observed }),
-        ...(childThreadsObserved === undefined ? {} : { childThreadsObserved }),
-        ...(childThreadsAdmitted === undefined ? {} : { childThreadsAdmitted }),
-        ...(brokerMetrics === undefined ? {} : { brokerMetrics }),
-        ...(sandboxExitCode === undefined ? {} : { sandboxExitCode }),
-        ...(diagnosticArtifactDigest === undefined
-          ? {}
-          : { diagnosticArtifactDigest }),
+        ...(receipt === undefined ? {} : runFinishedFieldsFrom(receipt)),
         ...(researchArtifact === undefined ? {} : { researchArtifact }),
         ...(outcome === "completed" || failure === undefined ? {} : failure),
         artifacts: [

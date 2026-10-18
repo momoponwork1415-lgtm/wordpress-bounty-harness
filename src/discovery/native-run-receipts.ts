@@ -1,13 +1,11 @@
-import { rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-
 import { z } from "zod";
 
 import {
   canonicalDigest,
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
-import { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
+import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
+import type { LedgerEventV1 } from "../ledger/index.js";
 import {
   agentRuntimeProfileSchema,
   type AgentRuntimeProfile,
@@ -227,76 +225,91 @@ export function createNativeRunReceipt(
   });
 }
 
-export class NativeRunReceiptStore {
-  readonly #artifacts: PrivateArtifactStore;
+/** The one file of a sealed receipt artifact in Private Evidence. */
+export const NATIVE_RUN_RECEIPT_FILE = "receipt.json";
+/** Every receipt string is at most 128 characters; a sealed receipt stays far below this. */
+const NATIVE_RUN_RECEIPT_MAX_BYTES = 64 * 1024;
 
-  constructor(rootDirectory: string) {
-    this.#artifacts = new PrivateArtifactStore({
-      rootDirectory,
-      maxEntries: 1,
-      maxBytes: 1024 * 1024,
-    });
-  }
+/** Seals one validated receipt into Private Evidence; the digest is what the ledger references. */
+export async function sealNativeRunReceipt(
+  evidence: Pick<PrivateArtifactStore, "putFiles">,
+  receipt: NativeRunReceipt,
+): Promise<string> {
+  return evidence.putFiles({
+    [NATIVE_RUN_RECEIPT_FILE]: canonicalJson(
+      nativeRunReceiptSchema.parse(receipt),
+    ),
+  });
+}
 
-  async finalize(
-    identity: NativeRunIdentity,
-    receipt: NativeRunReceipt,
-  ): Promise<void> {
-    nativeRunReceiptSchema.parse(receipt);
-    if (
-      receipt.runId !== identity.runId ||
-      receipt.targetSnapshotDigest !== identity.targetSnapshotDigest ||
-      receipt.runtimeProfileDigest !== identity.profile.digest
-    ) {
-      throw new Error("Receipt does not match the run identity");
-    }
-    const staging = await this.#artifacts.stage();
-    try {
-      await writeFile(
-        join(staging.contentDirectory, "receipt.json"),
-        canonicalJson(receipt),
-        { flag: "wx", mode: 0o600 },
-      );
-      const stored = await this.#artifacts.commit(
-        canonicalDigest(identity).slice(7),
-        staging,
-      );
-      if (stored.status === "conflict")
-        throw new Error("Native run receipt conflict");
-    } catch (error: unknown) {
-      await rm(staging.rootDirectory, { recursive: true, force: true });
-      throw error;
-    }
-  }
+/**
+ * Reads a sealed receipt back by its artifact digest. Absent or unreadable
+ * evidence is `undefined`; content that is not a receipt throws, since a
+ * `native-run-receipt` artifact holding anything else is a Harness defect.
+ */
+export async function readNativeRunReceipt(
+  evidence: Pick<PrivateArtifactStore, "readJson">,
+  artifactDigest: string,
+): Promise<NativeRunReceipt | undefined> {
+  const file = await evidence.readJson(
+    artifactDigest,
+    NATIVE_RUN_RECEIPT_FILE,
+    nativeRunReceiptSchema,
+    NATIVE_RUN_RECEIPT_MAX_BYTES,
+  );
+  if (file.status === "malformed")
+    throw new Error(`Private run receipt is malformed (${file.reason})`);
+  if (file.status !== "resolved") return undefined;
+  return file.value;
+}
 
-  async recover(
-    identity: NativeRunIdentity,
-  ): Promise<
-    | { status: "recovered"; receipt: NativeRunReceipt }
-    | { status: "missing" | "invalid" }
-  > {
-    const file = await this.#artifacts.readFile(
-      canonicalDigest(identity).slice(7),
-      "receipt.json",
-      1024 * 1024,
-    );
-    if (file.status === "missing") return { status: "missing" };
-    if (file.status !== "resolved") return { status: "invalid" };
-    try {
-      const encoded = file.bytes.toString("utf8");
-      const receipt = nativeRunReceiptSchema.parse(
-        JSON.parse(encoded) as unknown,
-      );
-      if (
-        encoded !== canonicalJson(receipt) ||
-        receipt.runId !== identity.runId ||
-        receipt.targetSnapshotDigest !== identity.targetSnapshotDigest ||
-        receipt.runtimeProfileDigest !== identity.profile.digest
-      )
-        return { status: "invalid" };
-      return { status: "recovered", receipt };
-    } catch {
-      return { status: "invalid" };
-    }
-  }
+type RunFinishedEvent = Extract<
+  LedgerEventV1,
+  { type: "discovery-run-finished" }
+>;
+
+/** The wall the receipt itself records; never negative. */
+export function receiptWallTimeMs(receipt: NativeRunReceipt): number {
+  return Math.max(
+    0,
+    Date.parse(receipt.completedAt) - Date.parse(receipt.startedAt),
+  );
+}
+
+/**
+ * The `discovery-run-finished` fields a receipt supplies, optional ones only
+ * when present. Root and child finishes both copy a receipt through here, so a
+ * new receipt field reaches the ledger by one line.
+ */
+export function runFinishedFieldsFrom(
+  receipt: NativeRunReceipt,
+): Pick<
+  RunFinishedEvent,
+  | "usage"
+  | "observed"
+  | "childThreadsObserved"
+  | "childThreadsAdmitted"
+  | "brokerMetrics"
+  | "sandboxExitCode"
+  | "diagnosticArtifactDigest"
+> {
+  return {
+    usage: receipt.usage,
+    ...(receipt.observed === undefined ? {} : { observed: receipt.observed }),
+    ...(receipt.childThreadsObserved === undefined
+      ? {}
+      : { childThreadsObserved: receipt.childThreadsObserved }),
+    ...(receipt.childThreadsAdmitted === undefined
+      ? {}
+      : { childThreadsAdmitted: receipt.childThreadsAdmitted }),
+    ...(receipt.brokerMetrics === undefined
+      ? {}
+      : { brokerMetrics: receipt.brokerMetrics }),
+    ...(receipt.sandboxExitCode === undefined
+      ? {}
+      : { sandboxExitCode: receipt.sandboxExitCode }),
+    ...(receipt.diagnosticArtifactDigest === undefined
+      ? {}
+      : { diagnosticArtifactDigest: receipt.diagnosticArtifactDigest }),
+  };
 }
