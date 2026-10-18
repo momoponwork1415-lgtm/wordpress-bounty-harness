@@ -1,20 +1,19 @@
+import { sourceRelativePath } from "../../../discovery/index.js";
+import { WORDPRESS_DEPENDENCY_SOURCE_ROOTS } from "../sandbox-layout.js";
+
+const CORE = WORDPRESS_DEPENDENCY_SOURCE_ROOTS[0]!;
+
 /** Preserve the source tree named in a Finding/Lead without keeping sandbox paths. */
 export function normalizeWordPressSourcePath(value: string): string {
-  if (value.startsWith("/workspace/main/"))
-    return value.slice("/workspace/main/".length);
-  if (value.startsWith("/workspace/wordpress/"))
-    return `@wordpress/${value.slice("/workspace/wordpress/".length)}`;
-  if (value.startsWith("../wordpress/"))
-    return `@wordpress/${value.slice("../wordpress/".length)}`;
-  if (value.startsWith("/workspace/php/"))
-    return `@php/${value.slice("/workspace/php/".length)}`;
-  if (value.startsWith("../php/"))
-    return `@php/${value.slice("../php/".length)}`;
-  if (value.startsWith("/workspace/dependencies/"))
-    return `@dependencies/${value.slice("/workspace/dependencies/".length)}`;
-  if (value.startsWith("../dependencies/"))
-    return `@dependencies/${value.slice("../dependencies/".length)}`;
+  const mounted = sourceRelativePath(
+    WORDPRESS_DEPENDENCY_SOURCE_ROOTS.map((root) => root.path),
+    value,
+  );
+  if (mounted !== undefined) return mounted;
+  for (const root of WORDPRESS_DEPENDENCY_SOURCE_ROOTS)
+    if (value.startsWith(root.relative))
+      return `${root.label}/${value.slice(root.relative.length)}`;
   if (value.startsWith("WordPress "))
-    return `@wordpress/${value.slice("WordPress ".length)}`;
+    return `${CORE.label}/${value.slice("WordPress ".length)}`;
   return value;
 }

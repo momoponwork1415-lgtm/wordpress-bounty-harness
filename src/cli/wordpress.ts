@@ -42,6 +42,7 @@ import {
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
 import { loadWordPressLegacyHistory } from "../profiles/wordpress/selection/legacy-history.js";
+import { WORDPRESS_SANDBOX_LAYOUT } from "../profiles/wordpress/sandbox-layout.js";
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/index.js";
@@ -563,17 +564,17 @@ async function planWordPressDiscovery(
         ? []
         : [
             lab === undefined
-              ? "WordPress core source (read-only): /workspace/wordpress."
-              : "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
+              ? `WordPress core source (read-only): ${source.dependency.path}.`
+              : `WordPress core source (read-only): ${source.dependency.path}, the same version the Lab runs.`,
           ]),
       ...(source.dependencySources ?? []).map(
         (dependency) => `Dependency source (read-only): ${dependency.path}.`,
       ),
       ...(objectiveOnly(selectedObjective.id)
-        ? ["Writable notes directory: /workspace/research."]
+        ? [`Writable notes directory: ${WORDPRESS_SANDBOX_LAYOUT.research}.`]
         : []),
       "## Assigned files",
-      "All files under /workspace/main.",
+      `All files under ${WORDPRESS_SANDBOX_LAYOUT.target}.`,
     ].join("\n\n");
   const now = state.clock().getTime();
   return {

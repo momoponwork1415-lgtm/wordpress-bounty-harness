@@ -549,7 +549,13 @@ async function harness(
       directory: sourceDirectory,
       tree,
       ...(options.coreSource === true
-        ? { dependency: { directory: sourceDirectory, tree } }
+        ? {
+            dependency: {
+              path: "/workspace/wordpress",
+              directory: sourceDirectory,
+              tree,
+            },
+          }
         : {}),
       ...(options.dependencySources === true
         ? {

@@ -50,8 +50,12 @@ describe("module boundary (ADR 0011)", () => {
     // `proxy-capture` は WordPress 判定器が Private Evidence に置く file 名
     // （src/profiles/wordpress/verification/http-evidence.ts）。汎用側は
     // HttpEvidenceReader の seam を通して読む。
+    // sandbox の mount 配置のうち `/workspace/wordpress`・`/workspace/php`・
+    // `/workspace/dependencies` と、その read-path label は profile の
+    // src/profiles/wordpress/sandbox-layout.ts が 1 回宣言し、汎用側は run の入力として受け取る。
+    // `/workspace/main` と `/workspace/research` は sandbox 自身の契約なので汎用側に置く。
     const pattern =
-      /\bwp_options\b|\bwp_ajax\b|admin-ajax\.php|\bwp-admin\b|\bwp-content\b|proxy-capture/;
+      /\bwp_options\b|\bwp_ajax\b|admin-ajax\.php|\bwp-admin\b|\bwp-content\b|proxy-capture|\/workspace\/(?:wordpress|php|dependencies)\b|@(?:wordpress|php|dependencies)\//;
     const offenders: string[] = [];
     for (const module of GENERIC_MODULES) {
       for (const file of await listTypeScriptFiles(join(SOURCE_ROOT, module))) {

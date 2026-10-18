@@ -91,6 +91,13 @@ export {
 } from "./recorded-runtimes.js";
 export { readPathsFromCommands, recordReadPaths } from "./read-paths.js";
 export {
+  SANDBOX_RESEARCH_MOUNT_PATH,
+  SANDBOX_SOURCE_MOUNT_PATH,
+  dependencyMountLabel,
+  dependencyMountPathsOf,
+  sourceRelativePath,
+} from "./sandbox-layout.js";
+export {
   readPrivateChatgptLogin,
   type PrivateChatgptLogin,
 } from "./provider-private-credential.js";

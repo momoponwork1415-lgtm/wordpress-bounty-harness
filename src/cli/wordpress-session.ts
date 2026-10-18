@@ -141,6 +141,7 @@ export interface WordPressCampaignBoundaries {
     readonly directory: string;
     readonly tree: ExpectedSourceTree;
     readonly dependency?: {
+      readonly path: string;
       readonly directory: string;
       readonly tree: ExpectedSourceTree;
     };

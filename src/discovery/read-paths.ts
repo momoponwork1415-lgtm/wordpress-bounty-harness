@@ -3,11 +3,13 @@ import { posix } from "node:path";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
+import {
+  SANDBOX_SOURCE_MOUNT_PATH,
+  sourceRelativePath,
+} from "./sandbox-layout.js";
 
 /** Private Evidence file of a run's `read-paths` artifact: sorted source-relative paths. */
 export const READ_PATHS_FILE = "read-paths.json";
-/** The read-only target source mount inside the sandbox. */
-const SOURCE_MOUNT = "/workspace/main";
 // A file-like token: no flags, globs, variables or `file:line`; the last segment has an extension.
 const PATH_TOKEN = /^[A-Za-z0-9_./@+][A-Za-z0-9_./@+,-]*\.[A-Za-z0-9]+$/;
 
@@ -50,7 +52,7 @@ export function commandsFromRollout(raw: string): ObservedCommand[] {
 }
 
 function directoryOf(cwd: string | undefined): string | undefined {
-  if (cwd === undefined) return SOURCE_MOUNT;
+  if (cwd === undefined) return SANDBOX_SOURCE_MOUNT_PATH;
   if (!cwd.startsWith("file://")) return cwd;
   try {
     return new URL(cwd).pathname;
@@ -61,11 +63,12 @@ function directoryOf(cwd: string | undefined): string | undefined {
 
 /**
  * Sorted distinct source-relative paths that observed commands name under the
- * target or supplied dependency mounts. A lower bound: paths built by the
+ * target or the run's dependency mounts. A lower bound: paths built by the
  * shell or tools are missed.
  */
 export function readPathsFromCommands(
   commands: readonly ObservedCommand[],
+  dependencyMounts: readonly string[],
 ): string[] {
   const paths = new Set<string>();
   for (const command of commands) {
@@ -82,21 +85,11 @@ export function readPathsFromCommands(
       .map((word) => word.replace(/^['"]+|['"]+$/g, ""));
     for (const token of [...parsed, ...words]) {
       if (!PATH_TOKEN.test(token)) continue;
-      const resolved = posix.resolve(directory, token);
-      if (resolved.startsWith(`${SOURCE_MOUNT}/`))
-        paths.add(resolved.slice(SOURCE_MOUNT.length + 1));
-      else if (resolved.startsWith("/workspace/wordpress/"))
-        paths.add(
-          `@wordpress/${resolved.slice("/workspace/wordpress/".length)}`,
-        );
-      else if (resolved.startsWith("/workspace/php/"))
-        paths.add(`@php/${resolved.slice("/workspace/php/".length)}`);
-      else if (
-        /^\/workspace\/dependencies\/[a-z0-9][a-z0-9-]{0,63}\//.test(resolved)
-      )
-        paths.add(
-          `@dependencies/${resolved.slice("/workspace/dependencies/".length)}`,
-        );
+      const relative = sourceRelativePath(
+        dependencyMounts,
+        posix.resolve(directory, token),
+      );
+      if (relative !== undefined) paths.add(relative);
     }
   }
   return [...paths].sort();
@@ -110,6 +103,7 @@ export async function recordReadPaths(
   attachments: Pick<ProviderAttachmentStore, "readByDigest">,
   evidence: Pick<PrivateArtifactStore, "putFiles">,
   diagnosticDigest: string | undefined,
+  dependencyMounts: readonly string[],
 ): Promise<string | undefined> {
   if (diagnosticDigest === undefined) return undefined;
   try {
@@ -120,6 +114,7 @@ export async function recordReadPaths(
     if (stored.status !== "resolved") return undefined;
     const paths = readPathsFromCommands(
       commandsFromRollout(stored.bytes.toString("utf8")),
+      dependencyMounts,
     );
     return await evidence.putFiles({ [READ_PATHS_FILE]: canonicalJson(paths) });
   } catch {

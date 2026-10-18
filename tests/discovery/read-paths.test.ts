@@ -10,6 +10,12 @@ import {
   recordReadPaths,
 } from "../../src/discovery/index.js";
 
+const MOUNTS = [
+  "/workspace/wordpress",
+  "/workspace/php",
+  "/workspace/dependencies/elementor",
+  "/workspace/dependencies/php-runtime",
+];
 const directories: string[] = [];
 afterEach(async () => {
   for (const directory of directories.splice(0))
@@ -19,19 +25,22 @@ afterEach(async () => {
 describe("readPathsFromCommands", () => {
   it("keeps file paths under the source mount, relative and sorted", () => {
     expect(
-      readPathsFromCommands([
-        { text: "sed -n '1,80p' includes/b.php", cwd: "/workspace/main" },
-        {
-          text: "nl -ba /workspace/main/a.php | head",
-          cwd: "file:///workspace/main/includes",
-        },
-        { text: "cat ./x.php", cwd: "/workspace/main/includes" },
-        {
-          text: "true",
-          parsed: [{ type: "read", path: "parsed.php" }],
-        },
-        { text: 'rg -n "foo" "assets/app.js"' },
-      ]),
+      readPathsFromCommands(
+        [
+          { text: "sed -n '1,80p' includes/b.php", cwd: "/workspace/main" },
+          {
+            text: "nl -ba /workspace/main/a.php | head",
+            cwd: "file:///workspace/main/includes",
+          },
+          { text: "cat ./x.php", cwd: "/workspace/main/includes" },
+          {
+            text: "true",
+            parsed: [{ type: "read", path: "parsed.php" }],
+          },
+          { text: 'rg -n "foo" "assets/app.js"' },
+        ],
+        [],
+      ),
     ).toEqual([
       "a.php",
       "assets/app.js",
@@ -43,16 +52,19 @@ describe("readPathsFromCommands", () => {
 
   it("records the pinned core, PHP and plugin dependency source mounts", () => {
     expect(
-      readPathsFromCommands([
-        {
-          text: "cat /workspace/wordpress/wp-load.php /workspace/php/main/php.c",
-        },
-        {
-          text: "cat includes/base.php",
-          cwd: "/workspace/dependencies/elementor",
-        },
-        { text: "cat /workspace/dependencies/php-runtime/main.php" },
-      ]),
+      readPathsFromCommands(
+        [
+          {
+            text: "cat /workspace/wordpress/wp-load.php /workspace/php/main/php.c",
+          },
+          {
+            text: "cat includes/base.php",
+            cwd: "/workspace/dependencies/elementor",
+          },
+          { text: "cat /workspace/dependencies/php-runtime/main.php" },
+        ],
+        MOUNTS,
+      ),
     ).toEqual([
       "@dependencies/elementor/includes/base.php",
       "@dependencies/php-runtime/main.php",
@@ -63,13 +75,18 @@ describe("readPathsFromCommands", () => {
 
   it("drops paths outside supplied mounts, flags, globs and non-file tokens", () => {
     expect(
-      readPathsFromCommands([
-        { text: "cat /workspace/other/wp-load.php ../main2/a.php" },
-        { text: "cat /etc/passwd.txt /tmp/notes.md" },
-        { text: "rg --include=*.php -n foo . includes/ 1,20p $FILE.php" },
-        { text: "grep -rn foo a.php:12", cwd: "file://%zz" },
-        { text: "find . -name '*.php'" },
-      ]),
+      readPathsFromCommands(
+        [
+          { text: "cat /workspace/other/wp-load.php ../main2/a.php" },
+          { text: "cat /etc/passwd.txt /tmp/notes.md" },
+          { text: "rg --include=*.php -n foo . includes/ 1,20p $FILE.php" },
+          { text: "grep -rn foo a.php:12", cwd: "file://%zz" },
+          { text: "find . -name '*.php'" },
+          // A mount this run did not supply is not a source tree of the run.
+          { text: "cat /workspace/wordpress/wp-load.php" },
+        ],
+        MOUNTS.filter((mount) => mount !== "/workspace/wordpress"),
+      ),
     ).toEqual([]);
   });
 });
@@ -102,14 +119,19 @@ describe("recordReadPaths", () => {
       },
     };
     expect(
-      await recordReadPaths(attachments, evidence, diagnostic.digest),
+      await recordReadPaths(attachments, evidence, diagnostic.digest, []),
     ).toBe(`sha256:${"f".repeat(64)}`);
     expect(files).toEqual([{ "read-paths.json": '["child.php"]' }]);
-    expect(await recordReadPaths(attachments, evidence, undefined)).toBe(
+    expect(await recordReadPaths(attachments, evidence, undefined, [])).toBe(
       undefined,
     );
     expect(
-      await recordReadPaths(attachments, evidence, `sha256:${"0".repeat(64)}`),
+      await recordReadPaths(
+        attachments,
+        evidence,
+        `sha256:${"0".repeat(64)}`,
+        [],
+      ),
     ).toBe(undefined);
   });
 });
