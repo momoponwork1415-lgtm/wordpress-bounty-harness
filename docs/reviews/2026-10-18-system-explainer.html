@@ -1,0 +1,2011 @@
+<title>WordPress Bounty Harness 全体像</title>
+<meta name="claude:viewport-fit-sides" content="cover" />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Zen+Kaku+Gothic+New:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+/>
+<style>
+  /* Layout: one reading column (max 44rem) with a numbered table of contents; flow diagrams are vertical rails so they read on a phone. */
+  :root {
+    --bg: #f5f7f8;
+    --surface: #ffffff;
+    --fg: #1b2430;
+    --muted: #5b6876;
+    --line: #d6dde3;
+    --accent: #0f6b63;
+    --accent-soft: #dcefec;
+    --warn: #8a5a00;
+    --warn-soft: #fff1d6;
+    --human: #5b3fa6;
+    --human-soft: #ece6fa;
+    --code-bg: #eef1f4;
+    --font-body:
+      "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", system-ui, sans-serif;
+    --font-display:
+      "Zen Kaku Gothic New", "Noto Sans JP", "Hiragino Sans", system-ui,
+      sans-serif;
+    --font-mono:
+      "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121a21;
+      --surface: #1a242d;
+      --fg: #e4e9ee;
+      --muted: #9aa8b6;
+      --line: #2e3b47;
+      --accent: #5fc2b5;
+      --accent-soft: #17352f;
+      --warn: #f0b64a;
+      --warn-soft: #3a2d12;
+      --human: #b7a3f0;
+      --human-soft: #2a2340;
+      --code-bg: #232e38;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121a21;
+    --surface: #1a242d;
+    --fg: #e4e9ee;
+    --muted: #9aa8b6;
+    --line: #2e3b47;
+    --accent: #5fc2b5;
+    --accent-soft: #17352f;
+    --warn: #f0b64a;
+    --warn-soft: #3a2d12;
+    --human: #b7a3f0;
+    --human-soft: #2a2340;
+    --code-bg: #232e38;
+    color-scheme: dark;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.85;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 0 4rem;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  .wrap {
+    max-width: 44rem;
+    margin: 0 auto;
+    min-width: 0;
+  }
+  header.hero {
+    padding-block: 2.5rem 1.5rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(1.7rem, 5vw, 2.3rem);
+    line-height: 1.3;
+    margin: 0.4rem 0 0.8rem;
+    text-wrap: balance;
+    font-weight: 700;
+  }
+  .lede {
+    color: var(--muted);
+    margin: 0 0 1rem;
+  }
+  .meta {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.2rem;
+  }
+  nav.toc {
+    margin: 1.5rem 0 0;
+    padding: 1rem 1.2rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+  nav.toc ol {
+    margin: 0;
+    padding-left: 1.4rem;
+    columns: 1;
+  }
+  nav.toc li {
+    margin: 0.15rem 0;
+  }
+  nav.toc a {
+    color: var(--fg);
+    text-decoration: none;
+    border-bottom: 1px solid var(--line);
+  }
+  nav.toc a:hover,
+  nav.toc a:focus {
+    border-color: var(--accent);
+  }
+  section {
+    padding-block: 2.2rem 0;
+  }
+  h2 {
+    font-family: var(--font-display);
+    font-size: 1.45rem;
+    line-height: 1.35;
+    margin: 0 0 0.3rem;
+    text-wrap: balance;
+    padding-top: 0.6rem;
+    border-top: 3px solid var(--accent);
+  }
+  h2 small {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+    margin-bottom: 0.3rem;
+  }
+  h3 {
+    font-family: var(--font-display);
+    font-size: 1.12rem;
+    margin: 1.6rem 0 0.4rem;
+    text-wrap: balance;
+  }
+  p {
+    margin: 0.6rem 0;
+  }
+  ul,
+  ol {
+    padding-left: 1.4rem;
+  }
+  li {
+    margin: 0.25rem 0;
+  }
+  code,
+  .path {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    background: var(--code-bg);
+    padding: 0.08em 0.35em;
+    border-radius: 3px;
+    overflow-wrap: anywhere;
+  }
+  .src {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+  .src::before {
+    content: "出典 ";
+    letter-spacing: 0.04em;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+    margin: 0.8rem 0;
+  }
+  .tablewrap {
+    overflow-x: auto;
+    min-width: 0;
+  }
+  th,
+  td {
+    text-align: left;
+    vertical-align: top;
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid var(--line);
+  }
+  th {
+    font-weight: 500;
+    color: var(--muted);
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+  }
+  td.num {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .badge {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    padding: 0.1em 0.5em;
+    border-radius: 3px;
+    vertical-align: middle;
+    margin-left: 0.3em;
+  }
+  .badge.draft {
+    background: var(--warn-soft);
+    color: var(--warn);
+  }
+  .badge.human {
+    background: var(--human-soft);
+    color: var(--human);
+  }
+  .badge.ok {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .note {
+    background: var(--surface);
+    border-left: 3px solid var(--accent);
+    padding: 0.7rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 4px 4px 0;
+  }
+  .note.warn {
+    border-left-color: var(--warn);
+  }
+  .note.human {
+    border-left-color: var(--human);
+  }
+  /* invariants */
+  .inv {
+    counter-reset: inv;
+    display: grid;
+    gap: 0.8rem;
+    margin: 1rem 0;
+    padding: 0;
+    list-style: none;
+  }
+  .inv li {
+    counter-increment: inv;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 0.9rem 1rem 0.9rem 3.2rem;
+    position: relative;
+    min-width: 0;
+  }
+  .inv li::before {
+    content: counter(inv);
+    position: absolute;
+    left: 0.9rem;
+    top: 0.85rem;
+    width: 1.7rem;
+    height: 1.7rem;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--surface);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    display: grid;
+    place-items: center;
+  }
+  .inv b {
+    display: block;
+    font-weight: 700;
+    margin-bottom: 0.2rem;
+  }
+  .inv .why {
+    color: var(--muted);
+    font-size: 0.92rem;
+    margin: 0.3rem 0 0;
+  }
+  /* flow rail */
+  .flow {
+    list-style: none;
+    padding: 0;
+    margin: 1.2rem 0;
+    position: relative;
+  }
+  .flow::before {
+    content: "";
+    position: absolute;
+    left: 1.05rem;
+    top: 1rem;
+    bottom: 1rem;
+    width: 2px;
+    background: var(--line);
+  }
+  .flow li {
+    position: relative;
+    padding-left: 3rem;
+    margin: 0 0 1rem;
+    min-width: 0;
+  }
+  .flow li .dot {
+    position: absolute;
+    left: 0.55rem;
+    top: 0.35rem;
+    width: 1.05rem;
+    height: 1.05rem;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 3px solid var(--bg);
+  }
+  .flow li.human .dot {
+    background: var(--human);
+  }
+  .flow li.draft .dot {
+    background: var(--warn);
+  }
+  .flow .stage {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 1.02rem;
+  }
+  .flow .who {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+  }
+  .flow .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 0.7rem 0.9rem;
+    margin-top: 0.35rem;
+    font-size: 0.93rem;
+  }
+  .flow .card p {
+    margin: 0.3rem 0;
+  }
+  .kv {
+    display: grid;
+    grid-template-columns: 7.5rem 1fr;
+    gap: 0.2rem 0.8rem;
+    font-size: 0.92rem;
+    margin: 0.4rem 0;
+  }
+  .kv dt {
+    color: var(--muted);
+  }
+  .kv dd {
+    margin: 0;
+    min-width: 0;
+  }
+  @media (max-width: 480px) {
+    .kv {
+      grid-template-columns: 1fr;
+    }
+    .kv dt {
+      margin-top: 0.3rem;
+    }
+  }
+  /* faq */
+  .faq dt {
+    font-weight: 700;
+    margin-top: 1.1rem;
+  }
+  .faq dd {
+    margin: 0.25rem 0 0;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 0.8rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.6;
+  }
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  a {
+    color: var(--accent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      scroll-behavior: auto;
+    }
+  }
+</style>
+
+<div class="wrap">
+  <header class="hero">
+    <div class="eyebrow">momoponwork1415-lgtm / wordpress-bounty-harness</div>
+    <h1>WordPress Bounty Harness 全体像</h1>
+    <p class="lede">
+      所有者向けの一枚説明。コードを読まなくても「何が、どこで、誰の判断で動くか」が分かるように、正本（SPEC・ADR・評価記録・Issue）だけから書いた。各段落の末尾に出典のパスを置く。設計中のものには
+      <span class="badge draft">設計中</span> を付けた。
+    </p>
+    <div class="meta">
+      <span>基準日 2026-10-18</span><span>main 990212c（#335）</span
+      ><span>所要 20〜30 分</span>
+    </div>
+    <nav class="toc" aria-label="目次">
+      <ol>
+        <li><a href="#s1">この Harness が何をするか、何をしないか</a></li>
+        <li><a href="#s2">8 つの不変条件を、所有者の言葉で</a></li>
+        <li><a href="#s3">1 つの Trial の一生</a></li>
+        <li><a href="#s4">データはどこにあるか</a></li>
+        <li><a href="#s5">運転のしかた</a></li>
+        <li><a href="#s6">今どこにいるか（2026-10-18 時点）</a></li>
+        <li><a href="#s7">用語集</a></li>
+        <li><a href="#s8">所有者がよく聞く問いへの短い答え</a></li>
+      </ol>
+    </nav>
+  </header>
+
+  <!-- ============================================================ -->
+  <section id="s1">
+    <h2><small>1</small>この Harness が何をするか、何をしないか</h2>
+    <p>
+      目的は 1 つ。WordPress プラグインの未知の脆弱性を AI
+      に探させ、<b>実行時検証を通ったものだけ</b>を人間が Wordfence（第 2
+      候補として Patchstack）へ提出して報奨を得ること。収益は「月に回せる対象数
+      × 当たり率 × in-scope 率 × 平均報奨 − 月費用（約 $700）」で考える。費用は
+      ChatGPT Pro の購読（Codex CLI 認証）で固定され、Harness は金額ではなく
+      quota / rate limit を見る。
+    </p>
+    <p class="src">docs/SPEC.md §1、§14</p>
+
+    <h3>やること</h3>
+    <ul>
+      <li>
+        対象を方針どおりに機械選定し、source を digest で固定し、gVisor
+        の使い捨て Lab を立て、Root＋最大 3 子の協調 Trial を対象ごとに 1
+        回回す。
+      </li>
+      <li>
+        出てきた候補を正規化して受理・保留・park に分け、受理した Finding を独立
+        Verifier と Harness 所有の判定器で確かめる。
+      </li>
+      <li>
+        全段階を追記専用の台帳に残し、人間が読む材料（review export）を 1 件 1
+        本の JSON で出す。
+      </li>
+    </ul>
+    <h3>やらないこと</h3>
+    <ul>
+      <li>外部送信（報告、ベンダー連絡、公開）。Harness 自身は送らない。</li>
+      <li>対象選定の人間承認、未検証候補の人間による採否。</li>
+      <li>探索 agent への PoC・payload・再現手順・評価対象の答えの提供。</li>
+      <li>ホストでの対象コード実行、弱い隔離への暗黙の切り替え。</li>
+      <li>payload・HTTP 記録・画面画像・未公開の発見を Git に置くこと。</li>
+    </ul>
+    <p class="src">docs/SPEC.md §2、docs/OPERATIONS.md §7</p>
+
+    <h3>誰が何をするか</h3>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>主体</th>
+            <th>すること</th>
+            <th>しないこと</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>所有者</td>
+            <td>
+              方針を持つ。review queue の Finding
+              を読む。再現する。文案と送信先を承認し、自分で提出し、転帰を台帳へ戻す。同じ
+              slug の 2 回目以降の Trial を事前承認する。
+            </td>
+            <td>
+              対象の承認。未検証候補の採否。prompt の全文読了（2026-10-18
+              に読了ゲートを外した）。
+            </td>
+          </tr>
+          <tr>
+            <td>委任 AI セッション（Claude）</td>
+            <td>
+              運転、計測、PR の review と merge、<code>owner-approved</code>
+              の付与（委任 comment 付き）、報告書（docs/reviews）の執筆、Codex
+              への依頼文の作成。
+            </td>
+            <td>外部送信の承認。出典に無い要素を prompt に足すこと。</td>
+          </tr>
+          <tr>
+            <td>Codex / Opus 実装者</td>
+            <td>
+              依頼文（brief）どおりに 1 PR ずつ実装。agent
+              に渡る文章は出典対照表の行だけを写す。
+            </td>
+            <td>
+              merge。本番 runner の起動。<code>~/.local/state</code> と本番
+              checkout への接触。
+            </td>
+          </tr>
+          <tr>
+            <td>探索 agent（Root＋最大 3 子）</td>
+            <td>
+              gVisor 内で固定 source と Lab を読み、Finding と Lead を schema
+              で返す。分担と仮説は Root が決める。
+            </td>
+            <td>外向き通信（broker 経由の provider API 以外）。確認の宣言。</td>
+          </tr>
+          <tr>
+            <td>Verifier（<code>verifier-v7</code>）</td>
+            <td>
+              新しいコンテナで Finding の手順を整え、発火を確認する。HTTP は Lab
+              内の捕捉 proxy へ向ける。
+            </td>
+            <td>
+              再探索。ブラウザ操作。管理者セッションの使用。<code
+                >runtime-confirmed</code
+              >
+              の宣言。
+            </td>
+          </tr>
+          <tr>
+            <td>判定器（<code>judges.ts</code>）</td>
+            <td>
+              nonce 付き canary の回収だけで
+              <code>runtime-confirmed</code> を出す。決定論的。
+            </td>
+            <td>自己申告・自由文・LLM 合議を証明にすること。</td>
+          </tr>
+          <tr>
+            <td>
+              skill 3 本（<code>wbh-review</code> / <code>wbh-dedupe</code> /
+              <code>wbh-report</code>）
+            </td>
+            <td>
+              review export だけを読んで要約・重複照合・英語下書きを出す。
+            </td>
+            <td>台帳への直接書き込み（所有者が打つ 5 コマンド以外）。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="src">
+      docs/SPEC.md §4、§7、§8；docs/adr/0031；docs/adr/0032（2026-10-18
+      節）；docs/DEVELOPMENT.md §5；.claude/skills/*/SKILL.md
+    </p>
+
+    <div class="note human">
+      <b>人間の判断点は 2 つだけ</b><span class="badge human">HUMAN</span
+      ><br />(1) 提出前のレビュー、(2)
+      外部行動の承認。権限・対象範囲の拡張も人間の明示承認を要する。それ以外（選定、固定、Lab、探索、検証、台帳）は無人で回る。<span
+        class="src"
+        >docs/SPEC.md §2 不変条件 6；docs/adr/0006</span
+      >
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="s2">
+    <h2><small>2</small>8 つの不変条件を、所有者の言葉で</h2>
+    <p>
+      設計・実装・レビューのすべてで守る 8
+      項目。各項目に「なぜそうしたか」を過去の教訓と ADR から添えた。
+    </p>
+    <ol class="inv">
+      <li>
+        <b
+          >探索 agent に渡すのは、固定 source、trust 境界宣言、Programme
+          Boundary、Lab、時点で切った公開履歴のカタログだけ。答え・PoC・payload・再現手順は渡さない。</b
+        >
+        <p class="why">
+          なぜ: 評価が汚染されると「見つけた」が「なぞった」と区別できない。旧
+          ADR 0001
+          は履歴を全面禁止したが、公開日で時点を切れば汚染は防げ、本番では「修正の回避」「同じパターンの別関数」を狙える。
+        </p>
+        <p class="src">docs/adr/0012；docs/adr/0027</p>
+      </li>
+      <li>
+        <b
+          >対象を動かすのは
+          gVisor（<code>runsc</code>）の使い捨て環境の中だけ。ホストでは動かさない。外向きは認証ブローカー経由の
+          provider API だけ。</b
+        >
+        <p class="why">
+          なぜ: 探索 agent に Lab
+          内実行を許すと精度が上がる（公開事例と一致）が、その代償として Lab
+          外への到達・永続化・外向き通信を機械的に塞ぐ必要がある。API キーや
+          OAuth token は agent のコンテナに入れず、run ごとの broker が
+          model・件数・大きさ・期限を強制して中継する。Codex CLI 内側の sandbox
+          は無効化し、外側の runsc と broker を必須にすると 2026-10-08
+          に決めた。
+        </p>
+        <p class="src">docs/adr/0003；docs/adr/0009；docs/SPEC.md §14</p>
+      </li>
+      <li>
+        <b
+          ><code>runtime-confirmed</code> を出せるのは Harness
+          所有の決定論的判定器だけ。証明は nonce 付き canary の回収に限る。</b
+        >
+        <p class="why">
+          なぜ: LLM の合議が存在しない脆弱性を全員一致で支持した事例があり、同じ
+          Verifier
+          が成立した書き込みを「反証」として書いた例も本リポで観測した。agent
+          の自己申告、リバースシェル、永続化、ホストアクセスは証明に数えない。
+        </p>
+        <p class="src">docs/adr/0004；docs/adr/0031「採らなかった選択肢」</p>
+      </li>
+      <li>
+        <b
+          >検証の失敗（環境、手順、観測、証拠の不足）は
+          <code>incomplete</code>。<code>contradicted</code>
+          にも棄却にもしない。</b
+        >
+        <p class="why">
+          なぜ:
+          偽陰性は偽陽性より高くつく（本物を落とすと報奨を失う）。初期実装では自由文の反証メモの存在だけで
+          <code>contradicted</code> が出て人間の列から消えていた。<code
+            >incomplete</code
+          >
+          は理由コードと次の手を持ち、別列で必ず表示する。
+        </p>
+        <p class="src">
+          docs/adr/0002；docs/LESSONS.md
+          10；docs/reviews/2026-10-11-thorough-design-review.md H1
+        </p>
+      </li>
+      <li>
+        <b
+          >判定は Finding と検証結果が同じ Target Snapshot digest
+          を持つときだけ。不一致は <code>incomplete</code>。</b
+        >
+        <p class="why">
+          なぜ: 版がずれた Lab
+          で確認しても、どの版の主張を確認したのか言えない。最新版での再検証は新しい
+          Snapshot に結び付けた別 Finding として記録し、旧 Finding
+          への由来だけを参照する。
+        </p>
+        <p class="src">docs/adr/0005；docs/SPEC.md §2 不変条件 5</p>
+      </li>
+      <li>
+        <b
+          >人間の判断点は「提出前のレビュー」と「外部行動の承認」の 2
+          つ。対象選定の承認と未検証候補の採否は置かない。</b
+        >
+        <p class="why">
+          なぜ: 前の harness
+          の問題は「対象選定に人間が入る」「結果確認に人間が入る」の 2
+          点だった。前者は自動選定で解き、後者は人間を無くすのではなく読む件数を
+          Harness が絞ることで解く。人間に見えない成果は無いのと同じ（再現済み
+          30 件と候補 12 件が放置された世代がある）。
+        </p>
+        <p class="src">
+          docs/DEVELOPMENT.md §1；docs/adr/0006；docs/LESSONS.md 5
+        </p>
+      </li>
+      <li>
+        <b
+          >外部送信は、正確な Submission
+          Candidate・文案の版・送信先に結び付いた承認があるときだけ。Harness
+          自身は送らない。</b
+        >
+        <p class="why">
+          なぜ: 文案は skill が書くが、その digest と承認の結び付きは Harness
+          が台帳に記録する。「この版のこの文案を、この送信先へ」が残っていなければ、後で何を出したか辿れない。送信は人間が
+          Wordfence の画面で行い、<code>submitted</code> と
+          <code>outcome</code> で記録する。
+        </p>
+        <p class="src">
+          docs/SPEC.md §2 不変条件 7；docs/adr/0031；docs/OPERATIONS.md §3
+        </p>
+      </li>
+      <li>
+        <b
+          >台帳は追記専用で、持つのは digest 参照だけ。payload、HTTP
+          記録、画面画像、実行ログ、認証情報、未公開の発見は Git 外の Private
+          Evidence に置く。</b
+        >
+        <p class="why">
+          なぜ: リポジトリは公開で、未公開の発見や payload が Git
+          に入れば取り返しがつかない。CI の <code>private-guard</code> が
+          path・大きさ・内容（canary token、HTTP
+          捕捉、鍵、cookie）を走査する。追記専用なので、既存 event
+          を書き換える代わりに新しい event を足す。
+        </p>
+        <p class="src">
+          docs/adr/0005；docs/DESIGN-DIAGRAMS.md §4；docs/DEVELOPMENT.md §5
+        </p>
+      </li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="s3">
+    <h2><small>3</small>1 つの Trial の一生</h2>
+    <p>
+      campaign 1 周は「選定 → 固定 → Lab → 探索 → 正規化 → 検証 → 台帳 →
+      review」。紫の点が人間、黄の点が設計中の段。下の図は現行の主経路（ADR
+      0029）で、2026-10-18 に merge された「探索用 Lab 任意」「verify
+      next」を含む。
+    </p>
+
+    <ol class="flow">
+      <li>
+        <span class="dot"></span>
+        <div class="stage">① selection — 対象を機械的に選ぶ</div>
+        <div class="who">Harness（selection.json が正本）</div>
+        <div class="card">
+          <dl class="kv">
+            <dt>母集団</dt>
+            <dd>
+              WordPress.org の人気順 10 頁と 8
+              タグ族（forms、contact-form、membership、page-builder、elementor-addons、multilingual、backup、booking）各
+              1 頁。
+            </dd>
+            <dt>条件</dt>
+            <dd>
+              アクティブインストール 100,000 以上 1,000,000 未満、更新 365
+              日以内。除外作者 7
+              社（Automattic、Facebook、Google、MailPoet、SiteGround、WooCommerce、Yoast）。
+            </dd>
+            <dt>順位</dt>
+            <dd>
+              log10(1+installs)×10 ＋ 鮮度×5。公開履歴の件数は plugin
+              単位の順位・除外に使わない（ADR 0030）。
+            </dd>
+            <dt>再訪</dt>
+            <dd>
+              <code>revisitPolicy: never</code>。Trial として数えた slug
+              は版が上がっても戻らない。旧世代の既往は Git 外
+              <code>legacy-history.json</code> で除外。
+            </dd>
+            <dt>出力</dt>
+            <dd>
+              1 batch 3〜5 対象。<code>target-selected</code> と
+              <code>selection-batch-bound</code> を台帳へ。承認は不要。
+            </dd>
+          </dl>
+          <p class="src">
+            src/profiles/wordpress/policy/selection.json；docs/adr/0032
+            Q3〜Q9、2026-10-16 節；docs/OPERATIONS.md §5「対象の自動選定」。注:
+            ADR 0032 は除外作者 5 社と書くが、selection.json は #304/#306 で 7
+            社になっている。
+          </p>
+        </div>
+      </li>
+
+      <li>
+        <span class="dot"></span>
+        <div class="stage">② Target Snapshot — source を digest で固定する</div>
+        <div class="who">snapshot モジュール ＋ profile の acquisition</div>
+        <div class="card">
+          <p>
+            plugin の zip と WordPress core（campaign.json では
+            7.1.3、開発セットの image は 6.8.3）を canonical manifest の digest
+            で固定する。archive の不正 path・symlink・size 超過は拒否。以後の全
+            event はこの digest を持ち、探索と Verifier は
+            <code>/workspace</code> の read-only mount で同じ版を読む。
+          </p>
+          <p class="src">
+            docs/SPEC.md
+            §4；src/profiles/wordpress/policy/campaign.json；docs/evaluation/README.md
+          </p>
+        </div>
+      </li>
+
+      <li>
+        <span class="dot"></span>
+        <div class="stage">③ Lab — 使い捨ての WordPress + MySQL</div>
+        <div class="who">lab モジュール ＋ profile の lab（gVisor）</div>
+        <div class="card">
+          <p>
+            runsc 上に WordPress、MySQL、canary、HTTP 捕捉 proxy の container
+            を立てる。agent に渡す認証情報は未認証・subscriber・customer
+            だけで、contributor
+            以上と管理者は渡さない。設定は既定のまま、「通常機能
+            scenario」（版と digest 付き、plugin
+            非依存を優先）で無害な初期データだけ入れる。DB は provision 時点の
+            table だけ読める read-only account。
+          </p>
+          <p>
+            2026-10-18 から探索用 Lab は任意（<code
+              >discovery.lab: "attached" | "none"</code
+            >）。<code>none</code> なら探索は source だけで走り、Finding は後で
+            <code>verify next</code> が Finding 単位の Lab を立てて検証する。
+          </p>
+          <p class="src">
+            docs/SPEC.md §8b；docs/adr/0020、0026；docs/adr/0029（2026-10-18
+            追記）；docs/OPERATIONS.md「探索だけ回し、検証を 1 件ずつ回す」（PR
+            #321）
+          </p>
+        </div>
+      </li>
+
+      <li>
+        <span class="dot"></span>
+        <div class="stage">
+          ④ discovery — Root＋最大 3 子の協調 Trial を 1 回
+        </div>
+        <div class="who">
+          Codex CLI（gpt-6-sol 系）を gVisor sandbox で、broker 経由
+        </div>
+        <div class="card">
+          <dl class="kv">
+            <dt>渡すもの</dt>
+            <dd>
+              目的 prompt（既定 <code>wp2shell-bounty-v5</code>、digest
+              固定）、trust 境界宣言、Programme Boundary 文（<code
+                >wordfence-2026-10-17</code
+              >
+              版）、固定 source、Harness 生成の<b>入口索引</b>（AJAX action /
+              REST route / shortcode / request-hook
+              の所在カタログ。経路や分担は指示しない）、Harness
+              生成の<b>出力契約の節</b>（Finding / Lead の schema から生成。ADR
+              0019）、任意の Lab。公開履歴は渡さない運用。
+            </dd>
+            <dt>構成</dt>
+            <dd>
+              Root が分担と仮説を決め、子は最大 3。子の Finding と Lead は Root
+              の最終 JSON と独立に保存する（Root が wall
+              で止まっても子の成果は残る）。
+            </dd>
+            <dt>停止</dt>
+            <dd>
+              Root の最終報告で正常終了。最低時間は置かない。wall 上限は
+              campaign.json で 60 分（v6 計測用 config は 120
+              分）。wall・provider 上限・broker 上限・schema 失敗は理由付き
+              <code>incomplete</code> で、候補 0 件の正常完了に数えない。
+            </dd>
+            <dt>深さの記録</dt>
+            <dd>
+              Root は入口索引の各 id を <code>observed</code> /
+              <code>blocked</code> で報告し、Harness が検証する。未訪問が
+              <code>coverage.maxUnvisitedRatio</code>（既定 0.2）を超えると
+              <code>incomplete(depth)</code>（PR #320）。
+            </dd>
+            <dt>Trial に数えない</dt>
+            <dd>
+              Root が source を 1 件も読まず、子を起動せず、broker 転送が 1
+              以下で終わった run。その対象は次の選定に戻る。
+            </dd>
+            <dt>broker 上限</dt>
+            <dd>
+              Root＋3 で provider 要求 1,600 件、要求本文 8 MiB。超過は
+              <code>incomplete(policy)</code>。
+            </dd>
+          </dl>
+          <p class="src">
+            docs/adr/0029；docs/SPEC.md
+            §6；docs/adr/0019；src/profiles/wordpress/policy/campaign.json；docs/OPERATIONS.md
+            §2。注: AGENTS.md は既定を
+            <code>wp2shell-bounty-v3</code> と書くが、SPEC と campaign.json は
+            v5。
+          </p>
+        </div>
+      </li>
+
+      <li>
+        <span class="dot"></span>
+        <div class="stage">⑤ 候補の正規化 — 受理 / 保留 / park</div>
+        <div class="who">
+          Harness（profile の normalize-candidate、programme-impacts）
+        </div>
+        <div class="card">
+          <p>
+            Root と子の最終 JSON から抜いた候補は、まず生のまま Private Evidence
+            に保存する。次に構文だけの正規化（文字列配列の結合、<code
+              >sourceTrace</code
+            >
+            の構造化、<code>@wordpress/</code> 接頭辞）を通し、schema を通れば
+            <b>Finding</b> か <b>Lead</b> として受理する。通らなければ
+            <b><code>candidate-held</code></b
+            >（分類と issue path
+            だけ台帳に残し、後で再受理できる）。候補を出力境界で棄却しない。
+          </p>
+          <p>
+            受理した Finding のうち impact が Programme Boundary
+            の外にあるものは <b><code>finding-parked</code></b> として台帳と
+            Private Evidence に残し、検証 queue・review queue・funnel の raw
+            に入れない。park される分類は 10:
+            <code>other</code
+            >、<code>csrf-to-write</code>、<code>missing-authz</code>、<code>idor</code>、<code>reflected-xss</code>、<code>sensitive-object-access</code>、<code>content-deletion</code>、<code>options-update</code>、<code>privesc-to-contributor+</code>、<code>auth-bypass-non-admin</code>。残る分類は
+            RCE / PHP file write、PHP に届く任意ファイル read /
+            delete、管理者への privesc / auth-bypass、account
+            takeover、SQLi、stored XSS、任意ファイル read / delete /
+            download、LFI / RFI。
+          </p>
+          <p class="src">
+            docs/adr/0018；docs/adr/0032（2026-10-17
+            節）；src/profiles/wordpress/discovery/programme-impacts.ts。注:
+            AGENTS.md は <code>content-deletion</code> を park
+            から除外すると書くが、2026-10-17 の所有者決定でコードは park する。
+          </p>
+        </div>
+      </li>
+
+      <li>
+        <span class="dot"></span>
+        <div class="stage">⑥ verification — Verifier と判定器</div>
+        <div class="who">
+          Verifier（別コンテナ、verifier-v7）→ Harness 判定器（judges.ts）
+        </div>
+        <div class="card">
+          <p>
+            <b>Verifier</b>
+            は探索の会話を持たない新しいコンテナで、Finding・固定 source・Lab
+            endpoint・低権限 account・RO DB・Lab Setup と、impact に応じて Lab
+            が発行した canary
+            を受け取る。役割は手順の整備と「発火したか」の確認（2026-10-13
+            に「反証」から向きを変えた）。再探索はしない。HTTP は Lab 内の
+            Harness 所有 reverse proxy に向け、request / response は Harness
+            が捕捉する。被害者側の操作は Harness
+            所有の観測器が型付き手順で行い、Verifier
+            にブラウザや管理者セッションは渡さない。
+          </p>
+          <p>
+            <b>判定器</b>は分類ごとに成功条件が固定されている。RCE / PHP file
+            write は Execution Canary（nonce）の実行痕跡、SQLi は canary
+            行の読み書き、任意ファイル read は Lab が置いた canary file
+            の内容、管理者への昇格 / ATO は canary
+            ユーザーとロール別正常操作との差分、stored XSS は低権限主体が置いた
+            nonce 付き値が被害者ロールの画面で headless browser 上で実行され
+            canary 受信先へ届くこと。timing 差、文字列の反射、alert
+            の有無、自己申告は不採用。
+          </p>
+          <dl class="kv">
+            <dt>結果</dt>
+            <dd>
+              <code>runtime-confirmed</code> / <code>contradicted</code> /
+              <code>incomplete</code>。
+            </dd>
+            <dt>incomplete の理由</dt>
+            <dd>
+              provision、precondition、recipe、observation、evidence、cleanup、digest-mismatch、no-judge（判定器が無い分類）。探索側には
+              depth。
+            </dd>
+            <dt>自動再試行</dt>
+            <dd>
+              recipe 2 回、observation 2 回、provision 1 回、precondition は
+              scenario ID が変わったときだけ、provider 上限 1 回。attempt
+              番号と前の verificationId を台帳に残す。
+            </dd>
+            <dt>前提の分類</dt>
+            <dd>
+              Finding の <code>configurationPrecondition</code> を Harness
+              の決定論的規則で <code>default</code> /
+              <code>common-usage</code> / <code>admin-configuration</code> /
+              <code>unknown</code> に分ける。<code>admin-configuration</code> は
+              <code>finding-parked(admin-configuration-precondition)</code
+              >、<code>common-usage</code> は対応 scenario への有界再検証、<code
+                >unknown</code
+              >
+              は <code>incomplete(precondition)</code> として review queue
+              に残す（PR #316）。
+            </dd>
+          </dl>
+          <p class="src">
+            docs/SPEC.md
+            §7；docs/adr/0004、0021、0022、0026；docs/adr/0032（Q14、ADR 0022
+            への修正）；src/profiles/wordpress/verification/precondition-class.ts
+          </p>
+        </div>
+      </li>
+
+      <li>
+        <span class="dot"></span>
+        <div class="stage">⑦ ledger と Private Evidence</div>
+        <div class="who">ledger モジュール（SQLite、追記専用）</div>
+        <div class="card">
+          <p>
+            全モジュールが型付き event を 1 つの台帳に追記する。例:
+            <code>target-selected</code
+            >、<code>selection-batch-bound</code>、<code>snapshot-frozen</code>、<code>lab-provisioned</code>、<code
+              >discovery-run-started / finished</code
+            >、<code>discovery-concluded</code>、<code>candidate-held</code>、<code>finding-recorded</code>、<code>finding-parked</code>、<code>lead-recorded</code>、<code>verification-finished</code>、<code>review-decided</code>、<code>scope-assessed</code>、<code>draft-saved</code>、<code>external-action-authorized</code>、<code>submission-outcome</code>、<code>campaign-stopped</code>、<code>target-skipped</code>。全
+            event が snapshot digest と campaign id
+            を持ち、本文（候補、HTTP、payload、画面、rollout）は
+            content-addressed の Private Evidence にあって台帳は digest
+            だけを持つ。funnel・usage・stops・runtime
+            は台帳から読み取り専用で導く。
+          </p>
+          <p class="src">
+            docs/SPEC.md §9；docs/adr/0005、0023；docs/DESIGN-DIAGRAMS.md §2
+          </p>
+        </div>
+      </li>
+
+      <li class="human">
+        <span class="dot"></span>
+        <div class="stage">
+          ⑧ review queue → Submission Candidate
+          <span class="badge human">HUMAN</span>
+        </div>
+        <div class="who">所有者 ＋ skill 3 本</div>
+        <div class="card">
+          <p>
+            Programme Boundary 内の Finding は判定器の結果に関係なく全件 review
+            queue に出る（#185、ADR 0031）。<code>runtime-confirmed</code>
+            には再現パッケージ（手動手順、Python 最小スクリプト、Lab
+            再構築情報、判定器の証拠）が付き、<code>incomplete</code>
+            には理由と次の手が付く。<code>contradicted</code> は件数だけ。
+          </p>
+          <p>
+            所有者は <code>review export</code> で 1 件分の JSON
+            を出し、<code>wbh-review</code>（要約と accept / reject / defer
+            の提案）、<code>wbh-dedupe</code>（mirror と Patchstack / WPScan
+            照合、3 値）を使い、最新版で <code>review reverify</code>、<code
+              >review scope</code
+            >、必要なら <code>lab up --for-review</code> で手で再現して
+            <code>review reproduced</code>、<code>review decide</code>。accept
+            なら <code>wbh-report</code> が英語下書きを Private Evidence に書き
+            <code>review draft</code> で digest を記録。<code
+              >review authorize --to wordfence</code
+            >（判断点 2）の後、所有者が自分で送信し <code>submitted</code>、後日
+            <code>outcome</code>（triaged / resolved / duplicate / informative /
+            N/A / rejected、報奨額）。
+          </p>
+          <p class="src">
+            docs/OPERATIONS.md §3；docs/adr/0031；docs/SPEC.md §8
+          </p>
+        </div>
+      </li>
+    </ol>
+
+    <div class="note">
+      <b>台帳から見える funnel</b><br />協調 Trial の実行と完了 → 最終 JSON 到達
+      → 受理 / 保留 → verifier 通過 → confirmed / contradicted / incomplete →
+      reviewed → in-scope → submitted → outcome。campaign 別・arm
+      別・分類別。索引あり／なし、旧段付き Trial、v5／v6
+      は同じ分母に混ぜない。<span class="src"
+        >docs/SPEC.md §10；docs/adr/0023、0029</span
+      >
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="s4">
+    <h2><small>4</small>データはどこにあるか</h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>もの</th>
+            <th>場所</th>
+            <th>Git</th>
+            <th>中身</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>台帳</td>
+            <td>
+              <code>--state &lt;dir&gt;</code> の SQLite。既定
+              <code>~/.local/state/wordpress-bounty-harness</code>
+            </td>
+            <td>外</td>
+            <td>型付き event と digest 参照だけ。追記専用。</td>
+          </tr>
+          <tr>
+            <td>Private Evidence</td>
+            <td>同じ state dir の content-addressed store</td>
+            <td>外</td>
+            <td>
+              候補本文、HTTP
+              捕捉、payload、画面、rollout、再現パッケージ、Verifier の
+              <code>http.json</code> / <code>steps.md</code> /
+              <code>refutation.md</code>、選定レポート、skip 診断。
+            </td>
+          </tr>
+          <tr>
+            <td>継続運転の作業 file</td>
+            <td>
+              <code>&lt;state&gt;/continuous.json</code> / <code>.pid</code> /
+              <code>.log</code> / <code>.stop</code>
+            </td>
+            <td>外</td>
+            <td>runner の memo と停止マーカー。正本は台帳。</td>
+          </tr>
+          <tr>
+            <td>host 設定</td>
+            <td>
+              Git 外 JSON（例の雛形は
+              <code>examples/translatepress-3.3.1/host.example.json</code>）
+            </td>
+            <td>外</td>
+            <td>
+              docker、image digest、Codex runtime profile、認証 file
+              の<b>パス</b>、Programme 写しのパス、履歴
+              mirror、<code>legacyHistory.file</code>。
+            </td>
+          </tr>
+          <tr>
+            <td>認証</td>
+            <td>ホストの Codex <code>auth.json</code>（0600）</td>
+            <td>外</td>
+            <td>
+              読むのは broker だけ。agent には使い捨ての grant token
+              しか入らない。
+            </td>
+          </tr>
+          <tr>
+            <td>campaign 設定</td>
+            <td><code>src/profiles/wordpress/policy/campaign.json</code></td>
+            <td>内</td>
+            <td>
+              mode、promptId（v5）、Programme Boundary 文（2026-10-17
+              版）、stopRules、wall 60 分、coverage 0.2、resources、Lab 設定。
+            </td>
+          </tr>
+          <tr>
+            <td>選定方針</td>
+            <td>
+              <code>src/profiles/wordpress/policy/selection.json</code
+              >（下限違いの写し
+              <code>selection.50000.json</code
+              >、<code>selection.30000.json</code>）
+            </td>
+            <td>内</td>
+            <td>install 帯、タグ、除外作者、重み。</td>
+          </tr>
+          <tr>
+            <td>対象範囲の方針</td>
+            <td>
+              <code>src/profiles/wordpress/policy/programme-scope.md</code
+              >、<code>wordfence-scope-2026-10-08.md</code>、<code
+                >patchstack-scope-2026-10-08.md</code
+              >
+            </td>
+            <td>内</td>
+            <td>公式ページの写しと観測日。提出前に公式で再確認。</td>
+          </tr>
+          <tr>
+            <td>prompt</td>
+            <td>
+              <code>src/profiles/wordpress/prompts/</code
+              >（wp2shell-bounty-v1〜v6、whitebox-v1.7、verifier-v1〜v7、trust-boundary-v1、旧
+              short-objective / screening）
+            </td>
+            <td>内</td>
+            <td>
+              版と digest を <code>prompts/index.ts</code> で固定。旧版は過去
+              Trial の照合用に残す。
+            </td>
+          </tr>
+          <tr>
+            <td>設定例</td>
+            <td>
+              <code>examples/</code
+              >（<code>campaign-v6-measure.json</code>、<code
+                >translatepress-3.2.5</code
+              >
+              / <code>3.2.6</code> /
+              <code>3.3.1</code>、<code>evaluation/</code>）
+            </td>
+            <td>内</td>
+            <td>過去 arm の config と host 雛形。認証情報は入れない。</td>
+          </tr>
+          <tr>
+            <td>評価の pin</td>
+            <td><code>docs/evaluation/*.json</code></td>
+            <td>内</td>
+            <td>
+              公開 source と再発見 catalog の digest だけ。修正版 zip・公開記録
+              ID・答えは Git 外 manifest。
+            </td>
+          </tr>
+          <tr>
+            <td>Wordfence 履歴 mirror</td>
+            <td>
+              コードは
+              <code>src/profiles/wordpress/wordfence-history/</code>、DB は Git
+              外
+            </td>
+            <td>混</td>
+            <td>
+              重複照合と（時点を切った）探索入力。<code>history status</code>
+              で鮮度。
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="src">
+      docs/OPERATIONS.md §1、§2；docs/SPEC.md
+      §5、§9；docs/evaluation/README.md；docs/adr/0032 Q19
+    </p>
+
+    <h3>campaign ID の読み方</h3>
+    <p>
+      本番は <code>prod-YYYYMMDD-N</code>（<code>--campaign-prefix prod</code
+      >）。計測は本番の分母に混ぜないため別の接頭辞を付ける: 配線 gate
+      <code>wiring-gate-*</code> / <code>wg-int-*</code>、索引なし arm
+      <code>wg-noidx-*</code>、v1.7 arm <code>wg-v17-*</code>、v5 arm
+      <code>wg-v5-*</code>、所有者 catalog
+      <code>bench-v5-&lt;case&gt;-1016-rN</code>、v6 計測
+      <code>v6m-{B,C}-&lt;case&gt;-1018-rN</code>、週次 smoke
+      <code>smoke-&lt;YYYYMMDD&gt;</code>。ID は 40 文字以内（#281
+      が直るまで）。計測の state は用途ごとに
+      <code
+        >~/.local/state/wordpress-bounty-harness-&lt;用途&gt;-&lt;日付&gt;/&lt;case&gt;/</code
+      >
+      に分ける。
+    </p>
+    <p class="src">
+      docs/agents/measurement.md；docs/evaluation/2026-10-16-prompt-v5-comparison.md；docs/OPERATIONS.md
+      §2
+    </p>
+
+    <div class="note warn">
+      <b>この文書の依頼にあった <code>policy/</code> は repo のトップには無い</b
+      ><br />方針 file はすべて
+      <code>src/profiles/wordpress/policy/</code> にある（ADR 0011 のとおり
+      WordPress 固有のものは profile に置く）。
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="s5">
+    <h2><small>5</small>運転のしかた</h2>
+    <p>
+      CLI は AI と skill が叩く機械向けの interface（ADR 0032 Q27）。所有者は
+      Claude Code の skill
+      から操作し、台帳に書くコマンドは所有者が確かめて打つ。<code>harness</code>
+      は <code>pnpm build</code> 後の
+      <code>node dist/cli/main.js</code> で、<code>--host</code>（または
+      <code>WBH_HOST_CONFIG</code>）と <code>--state</code>（または
+      <code>WBH_STATE_DIRECTORY</code>）が要る。
+    </p>
+
+    <h3>継続運転（production runner）</h3>
+    <pre>
+harness continuous run    --host &lt;host.json&gt; --state &lt;dir&gt; --config &lt;campaign.json&gt; \
+                          --selection &lt;selection.json&gt; [--campaign-prefix prod] [--verify-concurrency 1] [--resume]
+harness continuous status --host &lt;host.json&gt; --state &lt;dir&gt;
+harness continuous stop   --host &lt;host.json&gt; --state &lt;dir&gt;
+harness continuous resume --host &lt;host.json&gt; --state &lt;dir&gt;</pre>
+    <ul>
+      <li>
+        <code>run</code> は <code>select</code> →
+        <code>campaign run --all</code> → 次の batch を回り続ける。止まる理由は
+        7 つ: operator の stop、候補枯渇、Programme 写し 35 日超、legacy JSON
+        欠落、下限別方針 file 欠落、例外 3 batch 連続、completed 0 の batch 3
+        連続。quota、拒否、ログイン失効（<code>waiting-login</code>）、disk
+        不足では止まらず待つ。
+      </li>
+      <li>
+        provider 上限は
+        <code>campaign-stopped(provider-limit)</code> で止め、runner が
+        backoff（quota 30→60 分、rate-limit 5→60 分、2 回連続で 6
+        時間）の後に同じ campaign ID で未消費の対象から再開する。
+      </li>
+      <li>
+        対象単位の失敗（拒否
+        <code>provider-cyber-policy</code>、wall、schema、CLI 終了）は
+        <code>target-skipped</code> で次へ進み、campaign
+        を止めない。拒否を避けるために prompt を言い換えない。
+      </li>
+      <li>
+        <code>stop</code>
+        は対象の境界で効く（進行中の対象は終わらせる）。停止マーカーは crash
+        や再起動でも残り、<code>resume</code> か
+        <code>run --resume</code> で解除する。SIGTERM は進行中 run を drain
+        して終わり、マーカーは残さない。
+      </li>
+      <li>
+        本番 checkout は detached
+        worktree（<code>/home/dev/wordpress-bounty-harness-prod*</code>）。そこでの
+        <code>pnpm build</code> は <code>continuous stop</code> の後だけ。
+      </li>
+    </ul>
+    <p class="src">docs/OPERATIONS.md §2「継続運転」；src/cli/index.ts USAGE</p>
+
+    <h3>手で回す（計測、単発）</h3>
+    <pre>
+harness select --config &lt;selection.json&gt; [--minimum 3]
+harness campaign run &lt;slug&gt;|--all --campaign &lt;id&gt; --config &lt;campaign.json&gt; [--repeat 3] [--retry-incomplete]
+harness verify next --campaign &lt;id&gt; --config &lt;campaign.json&gt;
+harness ledger funnel|stops|usage|runtime --campaign &lt;id&gt;
+harness runtime check --config &lt;campaign.json&gt;      # 起動時検査: docker/runsc、image digest、認証、proxy bundle、CLI 版
+harness history status                                # mirror の鮮度。fresh 以外は exit 1</pre>
+    <p>
+      <code>campaign run</code>、<code>runtime check</code>、<code
+        >lab cleanup</code
+      >、<code>review reverify</code> は境界を組む前に起動時検査を全部通し、1
+      つでも欠ければ何も起動せず、runc や通常 Docker
+      やホストプロセスへ切り替えない。
+    </p>
+    <p class="src">docs/OPERATIONS.md §2「起動時検査」</p>
+
+    <h3>安全な止め方・片付け方</h3>
+    <ul>
+      <li>
+        <b>1 host に campaign process は 1 つ。</b>runner の起動時 cleanup
+        はホスト上の他の <code>wbh-*</code> Lab
+        も消すので、計測中に本番を起動しない（逆も同じ）。
+      </li>
+      <li>
+        wall 到達時や SIGTERM では、Harness が agent と broker の container を<b
+          >名前で</b
+        >
+        <code>docker stop -t 10</code>（失敗時
+        <code>docker kill</code>）してから子の報告を回収し、<code
+          >incomplete(wall)</code
+        >
+        を記録して Lab を片付ける（PR #318 で修正。#312 は provider 接続待ちで
+        wall が 5 時間 49 分効かなかった事故）。
+      </li>
+      <li>
+        残骸は <code>harness lab cleanup --config &lt;path&gt;</code>（一覧）→
+        <code>--remove</code>。対象は
+        <code>wbh-&lt;uuid&gt;-{db,wp,canary,proxy,host,net,site}</code> と
+        <code>provider-egress-broker-&lt;id&gt;</code> /
+        <code>provider-egress-&lt;id&gt;</code>
+        の名前に一致するものだけ。実行中の campaign が無いときに使う。
+      </li>
+      <li>
+        review 用 Lab は <code>lab up --for-review</code> /
+        <code>lab down</code>。runner を再開する前に <code>lab down</code>。
+      </li>
+      <li>
+        RAM 16 GiB 未満の host では review batch の前に
+        <code>continuous stop</code>、後に <code>resume</code> と
+        <code>run</code>。
+      </li>
+    </ul>
+    <p class="src">
+      docs/OPERATIONS.md
+      §2、§3、§5；docs/reviews/2026-10-18-codex-plan-dispatch-architecture.md「運用上の注意」；Issue
+      #312
+    </p>
+
+    <h3>所有者が承認するもの・しないもの</h3>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>承認する</th>
+            <th>承認しない（無人）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              外部行動（<code>review authorize</code
+              >、送信先と文案の版を指定）。送信は自分で。
+            </td>
+            <td>対象の選定、Snapshot、Lab、探索の起動。</td>
+          </tr>
+          <tr>
+            <td>
+              権限・対象範囲の拡張（contributor 以上を攻撃者位置に入れる等）。
+            </td>
+            <td>未検証候補の採否。候補は正規化で受理か保留。</td>
+          </tr>
+          <tr>
+            <td>
+              同じ slug の 2 回目以降の独立 Trial（1 Trial ごと。ADR 0032 Q6）。
+            </td>
+            <td>
+              agent に渡る文章の全文読了（2026-10-18 に外した。委任 AI
+              が差分を確認してラベルを付ける）。
+            </td>
+          </tr>
+          <tr>
+            <td>
+              install 下限の変更（<code>--selection selection.50000.json</code>
+              で起動し直す）。
+            </td>
+            <td>
+              provider 上限・ログイン失効からの再開（人手に数えない保守）。
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      人手介入に数えないもの: 1 日 1 回の
+      <code>continuous status</code>、ChatGPT の再ログイン、Programme 写しの月 1
+      回の更新、提出前の mirror 更新、<code>docker system prune</code>（<code
+        >-a</code
+      >
+      なし）、<code>lab cleanup</code>、review batch 前後の stop / resume /
+      run。
+    </p>
+    <p class="src">
+      docs/SPEC.md §2 不変条件 6、7；docs/adr/0032（Q6、2026-10-18
+      節）；docs/OPERATIONS.md §1「人手に数えない保守」
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="s6">
+    <h2><small>6</small>今どこにいるか（2026-10-18 時点）</h2>
+
+    <h3>Step 1 の目標と完了条件</h3>
+    <p>
+      Step 1 は「選定 → Snapshot → Lab → 探索 → 検証の自律ループ。scope 内
+      Finding を全件人間に届ける」。完了条件は (a) ループが quota 1
+      週分を人手介入 0 で回り切る、(b) Programme Boundary 内の Finding が全件
+      <code>review export</code> に届く、(c) 所有者が skill で 1 回の review
+      batch を完了し所要時間を記録する。期日は runner 起動＋8 日（runner は
+      2026-10-16 に起動）。週の問いは第 1 週（〜10-17）「ループは人手 0
+      で回るか、止まった理由は何か」、第 2 週（〜10-24）「review batch
+      は何時間で何件を判断できたか」。Step 1
+      の間は不変条件、モジュール境界、判定器の集合、選定方針の構造、探索
+      prompt（v4 への 1 回と v5 を除く）を凍結する。
+    </p>
+    <p class="src">docs/DEVELOPMENT.md §2</p>
+
+    <h3>数字（すべて出典付き）</h3>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>何</th>
+            <th>値</th>
+            <th>出典</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>目標</td>
+            <td class="num">
+              報奨で月 $1,000 以上（ATO 月 1、または stored XSS 月 4、または
+              SQLi 月 2 程度）
+            </td>
+            <td>docs/DEVELOPMENT.md §1</td>
+          </tr>
+          <tr>
+            <td>過去の実績の形</td>
+            <td>
+              2026-07-25〜08-11 の 18 日で有償 9 件、08-12〜10-13 の 2
+              か月で有償 3 件、09-02 以降は提出 0
+            </td>
+            <td>docs/LESSONS.md 13</td>
+          </tr>
+          <tr>
+            <td>再発見ベンチマーク</td>
+            <td>
+              所有者名義の公開記録だけ。mirror に 28 件、reflected XSS 7
+              件等を除いて 19 記録・16 対象版を catalog に。Trial を回すのは
+              Programme Boundary 内の記録を持つ対象（SSA、TP 3.2.6、TP
+              3.3.1、GeoDirectory、Relevanssi、Brizy）
+            </td>
+            <td>
+              docs/agents/measurement.md；docs/evaluation/README.md；ADR
+              0027（当初「公開 7 件」）
+            </td>
+          </tr>
+          <tr>
+            <td>配線 gate（2026-10-16、v4）</td>
+            <td class="num">
+              7 run、Trial 7、completed 5、incomplete 2（provider 1、wall
+              1）、Lab 失敗 1、<b>runtime-confirmed 5</b>（SSA: SQLi 1 と
+              stored-xss 1、TP 3.3.1: 未認証→管理者 1、TP 3.2.6: 同 2）
+            </td>
+            <td>docs/evaluation/2026-10-16-wiring-gate-measurement.md</td>
+          </tr>
+          <tr>
+            <td>prompt 4 arm 比較（2026-10-16）</td>
+            <td>
+              sink 型 stored XSS の候補は v4 では索引あり／なしとも 0、v5
+              で初めて候補になり TP で判定器の confirmed（1 run で 2
+              件）に届いた。Relevanssi と Brizy の stored XSS は全 arm で
+              <code>incomplete(precondition)</code>。v5 の TP 合計
+              runtime-confirmed 7
+            </td>
+            <td>docs/evaluation/2026-10-16-prompt-v5-comparison.md</td>
+          </tr>
+          <tr>
+            <td>本番 runner（2026-10-16〜17）</td>
+            <td class="num">
+              26 batch、130 対象、探索 Trial 115（完了 111）。Root wall 中央値 7
+              分、最長 20 分、60 分到達 0。対象範囲内 Finding 4（全て
+              <code>incomplete(precondition)</code>）、parked
+              42（sensitive-object-access 36）、Lead 394、Lab 失敗 15、provider
+              拒否 4、run-failed 1、<b>runtime-confirmed 0</b>。2026-10-17
+              に所有者が停止
+            </td>
+            <td>
+              docs/reviews/2026-10-17-thorough-search-v6-plan.md
+              §1；docs/reviews/2026-10-18-source-only-dispatch-design.md
+              §1（こちらは Lead 403）
+            </td>
+          </tr>
+          <tr>
+            <td>未知の確認</td>
+            <td class="num">
+              0 件。v5 が出した公開記録と一致しない Finding 9 件（7 系統）は全て
+              <code>incomplete(precondition)</code>
+              で、確認されるまで未知の発見に数えない
+            </td>
+            <td>
+              docs/knowledge/experiments.md 2026-10-11
+              行；docs/evaluation/2026-10-16-prompt-v5-comparison.md 読み取り 5
+            </td>
+          </tr>
+          <tr>
+            <td>索引の基準値（2026-10-18）</td>
+            <td class="num">
+              TP 3.2.6: php 180、入口 96。Brizy: 変数・連結の add_action
+              90、wp_ajax 連結 16。SSA: REST 52 のうち第 2 引数が連結
+              36。Unlimited Elements: call_user_func 30。<code>incomplete</code>
+              は 7 件とも false で取りこぼしを知らせない
+            </td>
+            <td>docs/evaluation/2026-10-18-index-baseline.md</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note warn">
+      依頼文にあった「本番 350
+      run」という数字は、読んだどの文書にも見つからなかった。本番の分母として文書にあるのは
+      130 対象・115 Trial（完了 111）である。
+    </div>
+
+    <h3>v6 prompt と ADR 0029 の 2026-10-17 改訂</h3>
+    <p>
+      <code>wp2shell-bounty-v6</code> は v5 の全文に v1.7
+      の「削除と秘密の露出は受理種類でない」「弱い形の判定」「落とす種類」「十分に裏付けられた弱い経路が勝つ」を戻し、新規要素として「Root
+      は入口索引の全項目を <code>observed</code> か <code>blocked</code> として
+      registry に記録してから閉じる」を足したもの。最低時間は置かない。PR #319
+      で merge 済み（9f852a1）、prompt 登録と Programme Boundary 2026-10-17
+      版も入った。ただし <b>campaign.json の既定は v5 のまま</b>で、v6 は
+      <code>examples/campaign-v6-measure.json</code>（wall 120
+      分）で計測する。ADR 0029 の 2026-10-17 改訂は wall 60→120
+      分と「索引の全項目を記録してから閉じる」を書くが、SPEC
+      §6・AGENTS.md・OPERATIONS.md はまだ 60
+      分と「全入口の処理は終了条件にしない」のまま。
+    </p>
+    <p>
+      開発セットの arm B（v5＋PB 2026-10-17）／C（v6＋PB 2026-10-17、wall
+      120）の計測は、2026-10-18 に provider の cyber policy 拒否で 9 / 9 run が
+      20 秒以内に終わり数字が取れていない。本番と同一構成の旧 build
+      でも拒否されたので原因は build や prompt ではなく provider か account
+      側と判断した。その後所有者が Codex に再ログインし、probe Trial が 27
+      分以上走って provider
+      が戻ったことを確認した（この復旧の経緯はセッションの作業メモにあり、repo
+      の文書にはまだ無い）。
+    </p>
+    <p class="src">
+      docs/reviews/2026-10-17-thorough-search-v6-plan.md
+      §4〜§6；docs/reviews/2026-10-17-codex-brief-prompt-v6.md；docs/adr/0029「2026-10-17
+      改訂」；docs/evaluation/2026-10-18-index-baseline.md
+      補足；src/profiles/wordpress/prompts/wp2shell-bounty-v6.md；git log
+      9f852a1
+    </p>
+
+    <h3>統治の変更（2026-10-18）</h3>
+    <p>
+      所有者は「owner-approved
+      のラベルはいらないかも。結局、脆弱性を発見できるかどうかだからそっちで実験して結果がある程度わかるはず」と判断し、<b
+        >所有者本人の全文読了を merge の条件にしない</b
+      >ことにした。委任済みの AI が差分を確認し、委任を明記した PR comment
+      を残してラベルを付ける。対象は
+      <code>docs/adr/</code>、<code>docs/SPEC.md</code>、trust
+      境界宣言、Programme Boundary、policy、判定器、prompt
+      の目的文、skill、出力契約の雛形、Verifier の victim
+      契約。採否は探索の数字（completed、Finding、Lead、runtime-confirmed）で決める。変えないもの:
+      不変条件 1〜8、出典に無い要素を足さない規則、adr-guard
+      の仕組み、外部送信の承認は所有者本人。
+    </p>
+    <p class="src">
+      docs/adr/0032「2026-10-18 の所有者決定」；docs/DEVELOPMENT.md §5（PR
+      #327、46c1168）
+    </p>
+
+    <h3>
+      設計中: 課題配分型探索（dispatch）と ADR 0033
+      <span class="badge draft">設計中</span>
+    </h3>
+    <p>
+      所有者の方針（2026-10-18）「1 plugin につき Lab を付けず、source だけの
+      review
+      を複数同時に回せる方が便利」を受けて、主経路を次の形に置き換える案が
+      docs/reviews に置かれている。<b
+        >ADR 0033 はまだ書かれておらず（<code>docs/adr/</code> に 0033
+        は無い）、SPEC §6・§7 も未改訂。</b
+      >正本ではない。
+    </p>
+    <ol class="flow">
+      <li class="draft">
+        <span class="dot"></span>
+        <div class="stage">課題の生成（Harness）</div>
+        <div class="card">
+          <p>
+            入口索引と保存先索引から「入口の群 ×
+            対象内の種類」の短い課題を作る。1 課題 1 agent（子なし）、tool
+            回数と wall（例 10 分）に上限、同時
+            N。索引の穴は正規表現で追わず、短い solo
+            agent（<code>index-completion-v1</code>、Lab なし）に埋めさせて
+            <code>origin: agent</code> で併合する（#328、brief 1a-0〜1a-2）。
+          </p>
+        </div>
+      </li>
+      <li class="draft">
+        <span class="dot"></span>
+        <div class="stage">coordinator（Harness、agent ではない）</div>
+        <div class="card">
+          <p>
+            全課題の出力を集約、正規化、run 横断の重複統合、coverage（observed /
+            blocked /
+            unvisited）を割り当てと突き合わせて記録。未処理の入口と欠けた辺の
+            Lead を gapfill 課題として再投入し、増えなくなったら閉じる。
+          </p>
+        </div>
+      </li>
+      <li class="draft">
+        <span class="dot"></span>
+        <div class="stage">反証段（source のみ）</div>
+        <div class="card">
+          <p>
+            正規化済み Finding 1 件につき、別
+            prompt（<code>refute-v1</code>、出典対照表 7 行）の solo agent が
+            source だけで潰しに行く。新しい候補は出せない。<code>refuted</code>
+            / <code>upheld</code> /
+            <code>undecided</code> と固定理由コード。<code>refuted</code> は
+            <code>finding-parked(refuted)</code>、他は検証 queue へ。<code
+              >runtime-confirmed</code
+            >
+            には関与しない（不変条件 3）。既定 off。
+          </p>
+        </div>
+      </li>
+      <li class="draft">
+        <span class="dot"></span>
+        <div class="stage">検証 consumer（探索と独立）</div>
+        <div class="card">
+          <p>
+            <code>verify next</code> 相当の worker が台帳の未検証 Finding を 1
+            件引き、その Snapshot の Lab を 1
+            つ立てて判定器を回す。探索だけ流し続けても、検証だけ消化しても動く。
+          </p>
+        </div>
+      </li>
+    </ol>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Phase / 列</th>
+            <th>内容</th>
+            <th>状態（2026-10-18）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>0</td>
+            <td>
+              #318 wall、#316 前提分類、#320 深度記録、#321 探索用 Lab
+              任意＋verify next、#319 v6
+            </td>
+            <td>5 本すべて merge 済み</td>
+          </tr>
+          <tr>
+            <td>1a</td>
+            <td>
+              課題生成 <code>task-plan.ts</code>（#324）、索引の
+              <code>unresolved</code> 一覧（#335）
+            </td>
+            <td>merge 済み</td>
+          </tr>
+          <tr>
+            <td>1b / 1c / 1d</td>
+            <td>
+              dispatch mode と台帳 record、sandbox 上限と同時数、example と CLI
+            </td>
+            <td>
+              PR #333、#334 open。1b は修正待ち（operator stop を見ない worker
+              loop、全 mode 共通の失敗分類、test 不足）
+            </td>
+          </tr>
+          <tr>
+            <td>4a / 4a2 / 4a3 / 4b</td>
+            <td>
+              反証の transport と台帳契約（#325）、service、routing、<code
+                >refute-v1</code
+              >
+              prompt
+            </td>
+            <td>
+              #325 は merge 可。4a2 / 4a3
+              は修正待ち（失敗を黙って捨てる、promptId 未使用、verdict 無しで
+              Lab 検証に進む）
+            </td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td>検証 consumer の分離（#326）</td>
+            <td>
+              修正待ち（failed record に scenario が無く Lab
+              を立て続ける、二重検証、provider hold の共有）
+            </td>
+          </tr>
+          <tr>
+            <td>2 / 3 / 6</td>
+            <td>
+              coordinator、gapfill、仕上げ（履歴 prior #295、rfi 判定器、ADR
+              0033 と SPEC 書き直し）
+            </td>
+            <td>未着手</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      本番再開の判断基準（案）: 200 対象で runtime-confirmed 1
+      件以上、または対象内の有償クラス候補 5 件以上。満たさなければ選定（履歴
+      prior）と model の見直しへ。
+    </p>
+    <p class="src">
+      docs/reviews/2026-10-18-source-only-dispatch-design.md；docs/reviews/2026-10-18-codex-plan-dispatch-architecture.md；docs/reviews/2026-10-18-codex-review-fixes-dispatch.md
+      §1〜§2；Issue #328；gh pr list（#324〜#335）
+    </p>
+
+    <h3>健全性指標（Issue #332）<span class="badge draft">設計中</span></h3>
+    <p>
+      「見つかったか」以外に Harness が正しく動いているかを Trial
+      ごとに数字で見る 3 層。<b>層 1 索引の網羅</b>（登録の解決率、<code
+        >unresolved</code
+      >
+      件数、所有者の既知 7 件の入口か sink が索引に載る数。目標 7 / 7、最低 6 /
+      7）。<b>層 2 探索の到達</b>（coverage の observed / blocked /
+      unvisited、agent の command 列から数える「開いた file
+      の割合」（未実装）、Lead の <code>missingEdge</code> 内訳。基準は 403 件中
+      producer 224）。<b>層 3 配線の確認</b>（既知 7
+      件の再発見率、候補受理率、incomplete 理由の内訳）。判断は「層 1・2
+      が低いまま 0 件なら探索を止めて索引と課題生成を直す。高くて 0
+      件なら対象を替える」。<b
+        >所有者の決定: 本番の再開は層 1 と層 2 の数字が一度出てから。</b
+      >
+    </p>
+    <p class="src">Issue #332（2026-10-18）</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="s7">
+    <h2><small>7</small>用語集</h2>
+    <div class="tablewrap">
+      <table>
+        <tbody>
+          <tr>
+            <td><b>Target Snapshot</b></td>
+            <td>
+              調べる対象と必要な依存 source を版と digest で固定したもの。
+            </td>
+          </tr>
+          <tr>
+            <td><b>Campaign</b></td>
+            <td>
+              1 つの Target Snapshot（本番では選定 batch
+              の対象集合）に対する探索・検証・記録のまとまり。
+            </td>
+          </tr>
+          <tr>
+            <td><b>Trial</b></td>
+            <td>
+              Campaign 内の独立した探索試行。主経路では Root と最大 3 子が 1
+              つの Trial。
+            </td>
+          </tr>
+          <tr>
+            <td><b>Discovery run</b></td>
+            <td>
+              モデル実行の記録単位。Root と子の実行を Trial の中で区別する。
+            </td>
+          </tr>
+          <tr>
+            <td><b>Finding</b></td>
+            <td>
+              攻撃者の立場、入口から影響までの source
+              上の経路、観測を持つ<b>未確認</b>の主張。
+            </td>
+          </tr>
+          <tr>
+            <td><b>Lead</b></td>
+            <td>
+              source に根拠があるが、影響までに未解決の辺が残る手がかり。Finding
+              でも検証結果でもない。
+            </td>
+          </tr>
+          <tr>
+            <td><b>candidate-held（保留候補）</b></td>
+            <td>
+              最終 JSON から抜いたが正規化後も出力契約を通らない候補。分類と
+              issue path だけ台帳に残す。
+            </td>
+          </tr>
+          <tr>
+            <td><b>finding-parked</b></td>
+            <td>
+              受理した Finding のうち Programme Boundary 外の
+              impact、または管理者設定が前提のもの。検証・review
+              に入れず記録だけ残す。
+            </td>
+          </tr>
+          <tr>
+            <td><b>Verifier</b></td>
+            <td>
+              新しいコンテナで Finding の発火を確かめる独立
+              agent。再探索はしない。
+            </td>
+          </tr>
+          <tr>
+            <td><b>判定器</b></td>
+            <td>
+              Harness 所有の決定論的な確認手段。<code>runtime-confirmed</code>
+              を出せる唯一の主体。
+            </td>
+          </tr>
+          <tr>
+            <td><b>VerificationResult</b></td>
+            <td>
+              <code>runtime-confirmed</code> / <code>contradicted</code> /
+              <code>incomplete</code> のいずれかと理由コード、次の手。
+            </td>
+          </tr>
+          <tr>
+            <td><b>通常機能シナリオ</b></td>
+            <td>
+              profile が版と digest
+              で管理する、対象の通常の利用状態。権限付与や危険設定は含まない。
+            </td>
+          </tr>
+          <tr>
+            <td><b>Reproduction Package</b></td>
+            <td>
+              人間が Lab
+              を再構築し、遠隔攻撃者の手順で同じ結果を確かめるための証拠と手順。
+            </td>
+          </tr>
+          <tr>
+            <td><b>Submission Candidate</b></td>
+            <td>
+              最新版で確認済みの脆弱性、提出先、文案の版を結び付けたレビュー対象。
+            </td>
+          </tr>
+          <tr>
+            <td><b>Private Evidence</b></td>
+            <td>
+              HTTP 記録、payload、画像、認証情報、未公開の発見を置く Git
+              外の保管先。
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="src">
+      GLOSSARY.md；docs/SPEC.md §15；docs/OPERATIONS.md §3（<code
+        >review parked</code
+      >
+      の reason）
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="s8">
+    <h2><small>8</small>所有者がよく聞く問いへの短い答え</h2>
+    <dl class="faq">
+      <dt>なぜ本番で 0 件なのか</dt>
+      <dd>
+        本番 115 Trial の対象範囲内 Finding 4 件は全て
+        <code>incomplete(precondition)</code> で、前提が「管理者が特定の block /
+        slider 設定を公開している」など Lab の既定状態に無いものだった。候補 46
+        件のうち 36 件は sensitive-object-access で、当時 agent に渡していた
+        Programme Boundary 文がそれを対象内と書いていた。Root wall 中央値 7 分で
+        60 分到達 0 と探索が浅く、これが v6 の網羅条件と dispatch
+        設計の動機になった。<span class="src"
+          >docs/reviews/2026-10-17-thorough-search-v6-plan.md §1〜§2</span
+        >
+      </dd>
+
+      <dt>索引の穴とは何か</dt>
+      <dd>
+        入口索引は正規表現で <code>add_action</code> / <code>wp_ajax_*</code> /
+        REST route / shortcode のリテラル登録を拾うので、prefix 連結（Brizy で
+        90 件）、route 連結（SSA で 36 件、名前が
+        <code>/</code> に潰れる）、自前 dispatcher（Unlimited Elements で
+        <code>call_user_func</code> 30 件）の登録が落ちる。所有者の 7
+        件のうち入口がリテラルで載るのは 2 件だけで、3 件は producer が
+        core（comment）や外部 API で plugin
+        は「読んで描画する側」。方針は正規表現を完全にせず、<code
+          >unresolved</code
+        >
+        一覧を作って短い agent に埋めさせること。<span class="src"
+          >Issue #328；docs/evaluation/2026-10-18-index-baseline.md</span
+        >
+      </dd>
+
+      <dt>refute 段（反証段）は何か <span class="badge draft">設計中</span></dt>
+      <dd>
+        Lab の前に置く source だけの段で、別 prompt の agent が候補 1
+        件を潰しに行き、新しい候補は出せない。<code>refuted</code> は
+        <code>finding-parked(refuted)</code> として Private Evidence
+        に残し、<code>upheld</code> /
+        <code>undecided</code> だけが検証に進む。判定器の確定ではないので
+        <code>runtime-confirmed</code>
+        には関与せず、開発セットで既知の型が落ちないことを gate にする。<span
+          class="src"
+          >docs/reviews/2026-10-18-source-only-dispatch-design.md §4.4</span
+        >
+      </dd>
+
+      <dt>なぜ judges は agent の自己申告を信じないか</dt>
+      <dd>
+        LLM
+        の合議が存在しない脆弱性を全員一致で支持した事例があり、本リポでも同じ
+        Verifier が成立した書き込みを「反証」と書いた。確認は Lab が仕込んだ
+        nonce 付き canary が回収されたかという機械的な事実だけにし、agent
+        が「成功した」と言っても、リバースシェルや永続化を見せても証明にしない。だから
+        Verifier は手順を整える役で、確定は Harness の判定器がする。<span
+          class="src"
+          >docs/adr/0004；docs/adr/0031</span
+        >
+      </dd>
+
+      <dt>なぜ reflected XSS は park されるのか</dt>
+      <dd>
+        Wordfence が明示的に対象外にしており、Patchstack
+        は条件付きで受理するが所有者が 2026-10-08
+        に「探索の目的にも提出候補にもしない」と決めた。判定器も作らない。mirror
+        にある所有者名義の公開記録 28 件のうち reflected XSS は 7
+        件あり、だからこそ再発見 catalog からも除いた。半年後に見直す。<span
+          class="src"
+          >docs/SPEC.md §8a；docs/adr/0032 Q2；docs/agents/measurement.md</span
+        >
+      </dd>
+
+      <dt>なぜ検証の失敗を「偽」にしないのか</dt>
+      <dd>
+        環境・手順・観測・証拠の不足で確認できなかったことと、主張が間違っていることは別で、前者を
+        <code>contradicted</code> にすると本物を落として報奨を失う。だから
+        <code>incomplete</code>
+        は理由コードと次の手を持ち、理由ごとに有界の自動再試行をして、残りは人間の列に出る。<span
+          class="src"
+          >docs/SPEC.md §2 不変条件 4；docs/adr/0022；docs/LESSONS.md 10</span
+        >
+      </dd>
+
+      <dt>なぜ探索に最低時間を置かないのか</dt>
+      <dd>
+        報酬が出た Lab は 2.1 時間で、5 時間超は全部成果なしだった（whitebox
+        世代）。v1.7 の 45 分下限なしでも v5
+        は同じ分類に届いたので下限を戻す根拠が無く、所有者も 2026-10-16
+        に「信憑性が無い」として外した。深さは時間ではなく、入口索引の全項目を記録してから閉じる条件（v6）で担保する。<span
+          class="src"
+          >docs/LESSONS.md 3；docs/evaluation/2026-10-16-prompt-v5-comparison.md
+          読み取り 3；docs/adr/0029</span
+        >
+      </dd>
+
+      <dt>既知 7 件の再発見で何が分かるか、何が分からないか</dt>
+      <dd>
+        分かるのは配線（探索 → 保存 → 判定器）と分類ごとの判定能力。TP の ATO と
+        stored XSS、SSA の SQLi と stored XSS は判定器で
+        <code>runtime-confirmed</code>
+        に届いた。分からないのは未知の発見率で、モデルが既知経路を記憶している可能性を除けないので、発見率の主張には使わない。<span
+          class="src"
+          >docs/adr/0027；docs/evaluation/2026-10-16-wiring-gate-measurement.md</span
+        >
+      </dd>
+
+      <dt>なぜ探索から Lab を外せるのか</dt>
+      <dd>
+        探索と検証が同じ Lab に縛られていると、依存
+        plugin（Elementor、WooCommerce）で Lab
+        が立たない対象は探索の機会そのものを失った（本番で 15 枠）。Lab
+        を検証側だけにすれば、探索は source だけで並列に回し、Finding 1
+        件ごとに新しい Lab で判定器を回せる。<code>runtime-confirmed</code>
+        の条件（同じ Snapshot、canary 回収）は変わらない。<span class="src"
+          >docs/reviews/2026-10-18-source-only-dispatch-design.md
+          §0、§1；docs/adr/0029（2026-10-18 追記）</span
+        >
+      </dd>
+    </dl>
+  </section>
+
+  <footer>
+    <p>
+      この文書は「調べて報告」の成果物で正本ではない。食い違えば docs/SPEC.md と
+      docs/adr/ が勝つ。確認した文書と実装の食い違い: AGENTS.md の既定
+      prompt（v3）と content-deletion の扱い、ADR 0032 の除外作者数（5 社 →
+      selection.json は 7 社）、SPEC §6 / OPERATIONS の wall 60 分と ADR 0029
+      改訂の 120 分、SPEC §7 の options-update / sensitive-object-access
+      判定器（現在は park）、依頼文の <code>policy/</code> パス。
+    </p>
+  </footer>
+</div>

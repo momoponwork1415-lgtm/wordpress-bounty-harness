@@ -14,8 +14,8 @@ Unlimited Elements 2.0.16 だけは 2026-10-12 の後続確認で `pluginDepende
 
 `scripts/build-rediscovery-catalog.mjs` は、Git外のcase入力（`schemaVersion: 1`、`cases` の各項目は `caseId` / `slug` / `vulnerableVersion` / `cve`）、Wordfence mirror DBとstate、`public-source-pins.json`、Git外の出力先、Git側のpin出力先を `--cases` / `--mirror` / `--mirror-state` / `--source-pins` / `--private-dir` / `--pin-output` で受け取る。WordPress.orgの版一覧と実際に取得できるZIPを照合し、修正版archiveをGit外に保存する。
 
-`scripts/report-rediscovery-cases.mjs --state <Git外のstate> --campaign <id>` は台帳から探索の完了・候補・検証理由・修正版対照・人間が個別に開いたFinding数を集計する。`review` の一覧表示は「開いた」に数えず、`review inspect --campaign <id> --finding <id>` の記録だけを数える。過去にファイルを直接開いた操作は遡及して数えられない。
+`scripts/report-rediscovery-cases.mjs --state <Git外のstate> --campaign <id>` は台帳から探索の完了・候補・検証理由・修正版対照・人間が個別に開いたFinding数を集計する。`review` の一覧表示は「開いた」に数えず、台帳の `review-item-opened` event だけを数える。この event を書いていた `review inspect` は 2026-10-18 に削除したので、以後の campaign では 0 になる。
 
 この集計は campaign 内の観測であり、個別の公開記録との経路一致を判定しない。`publicRecordMatch: unassessed` のまま既知事例の再発見に数えず、評価時に公開記録ごとに人間が照合する。source 読取数は Root と全 agent の下限を別々に出し、子だけが読んだ case を「読まずに終了」と扱わない。
 
-provider 起動前に通常利用の前提が成立しない case は、実測後に `harness eval case-blocked --campaign <id> --case <id> --snapshot <Snapshot または選定記録の digest> --stage source|dependency|lab --reason <code>` で台帳へ追記する。Snapshot 前は既存の `target-skipped` と同じく固定した選定記録の digest を使う。source 取得不能、依存 Snapshot 不在、外部サービス不通などの理由コードだけを記録し、private な調査本文は含めない。
+provider 起動前に通常利用の前提が成立しない case は、理由コード（source 取得不能、依存 Snapshot 不在、外部サービス不通、通常利用の設定不能）を評価記録の文書に書く。これを台帳へ追記していた `eval case-blocked` は 2026-10-18 に削除した。過去の `evaluation-case-blocked` event は読み続ける。

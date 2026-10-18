@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="555" viewBox="0 0 360 624" style="max-width:100%;height:auto" role="img" aria-labelledby="title-verification-4 desc-verification-4">
+<title id="title-verification-4">検証と判定 4/4</title><desc id="desc-verification-4">隔離、独立検証、判定、レビュー。項目 10、11。</desc>
+<rect x="0" y="0" width="360" height="624" fill="#f8fafc"/>
+<rect x="0" y="0" width="360" height="128" fill="#0f172a"/>
+<text x="18" y="28" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#93c5fd">HARNESS • 2026.10.14</text>
+<text x="18" y="68" font-family="system-ui,sans-serif" font-size="25" font-weight="800" fill="#ffffff">検証と判定</text>
+<text x="18" y="99" font-family="system-ui,sans-serif" font-size="14" fill="#cbd5e1">項目 10–11 ／ 4 / 4</text>
+<text x="18" y="153" font-family="system-ui,sans-serif" font-size="12.5" fill="#475569">色付きラベルで実装状態を表示</text>
+<g id="step-10"><rect x="16" y="175" width="328" height="190" rx="16" fill="#f5efff" stroke="#7c3aed" stroke-width="2"/>
+<rect x="16" y="175" width="7" height="190" rx="3.5" fill="#7c3aed"/>
+<rect x="32" y="189" width="78" height="26" rx="13" fill="#7c3aed"/><text x="71" y="207" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">人間</text>
+<text x="326" y="208" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">10</text>
+<text x="32" y="238" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">人間が読む段階</text>
+<text x="32" y="276" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">Findingを理解し手動Labで確認</text>
+<text x="32" y="299" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">重複とprogramme scopeを査読</text>
+<text x="32" y="322" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">提出文案の版と送信先を確認</text>
+<text x="32" y="345" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">明示承認後、人間が外部へ提出</text>
+</g>
+<g id="step-11"><rect x="16" y="381" width="328" height="213" rx="16" fill="#fff7e8" stroke="#b45309" stroke-width="2"/>
+<rect x="16" y="381" width="7" height="213" rx="3.5" fill="#b45309"/>
+<rect x="32" y="395" width="78" height="26" rx="13" fill="#b45309"/><text x="71" y="413" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">設計案</text>
+<text x="326" y="414" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">11</text>
+<text x="32" y="444" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">改善に返す測定</text>
+<text x="32" y="482" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">理由別incompleteとattempt／wa</text>
+<text x="32" y="505" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">ll</text>
+<text x="32" y="528" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">reviewで開いた件数・所要時間</text>
+<text x="32" y="551" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">提出可能件数と報奨転帰を結ぶ</text>
+<text x="32" y="574" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">類似Findingは理解を軽くできる</text>
+</g>
+<text x="180" y="607" font-family="system-ui,sans-serif" font-size="11.5" text-anchor="middle" fill="#64748b">wordpress-bounty-harness • 設計・実装照合</text>
+</svg>

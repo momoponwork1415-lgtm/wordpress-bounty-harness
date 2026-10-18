@@ -22,8 +22,6 @@ import { Review, type ScopeFactsProvider } from "../review/index.js";
 import { SourceAcquisitionError, type Snapshot } from "../snapshot/index.js";
 import { Verification, type Verifier } from "../verification/index.js";
 import { WORDPRESS_VERIFIER_PROMPT_ID } from "../profiles/wordpress/prompts/index.js";
-import { parseWordPressAdvisories } from "../profiles/wordpress/advisory.js";
-import { wordpressFindingLocations } from "../profiles/wordpress/answer-key.js";
 import {
   planWordPressEntryAssignments,
   renderWordPressEntryAssignment,
@@ -1383,8 +1381,6 @@ export function createWordPressCliProfile(
         line: `history mirror ${mirror.status}${mirror.staleFallback ? " (last refresh failed)" : ""}  last success ${mirror.lastSuccessfulAt} (${hours(mirror.ageMs)} h ago, limit ${mirror.maxAgeMs / 3_600_000} h)  records ${mirror.recordCount}`,
       };
     },
-    advisories: parseWordPressAdvisories,
-    locationsOf: wordpressFindingLocations,
     async select(state, input) {
       const { config, policy, wordpressVersion } = await loadSelectInput(
         input.configPath,

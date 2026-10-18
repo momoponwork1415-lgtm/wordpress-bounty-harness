@@ -89,13 +89,6 @@ export {
   type RecordedRuntime,
   type RecordedRuntimeGroup,
 } from "./recorded-runtimes.js";
-export {
-  summarizeCampaignCoverage,
-  type CampaignCoverage,
-  type CoverageRatio,
-  type CoverageRow,
-  type SourceFileSets,
-} from "./coverage-report.js";
 export { readPathsFromCommands, recordReadPaths } from "./read-paths.js";
 export {
   readPrivateChatgptLogin,

@@ -5,21 +5,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
-import {
-  summarizeCampaignCoverage,
-  summarizeRecordedRuntimes,
-  type CampaignCoverage,
-  type CoverageRatio,
-  type CoverageRow,
-  type SourceFileSets,
-} from "../discovery/index.js";
-import type {
-  ArmComparison,
-  ProspectiveAdvisory,
-  ProspectiveScore,
-  SourceLocation,
-} from "../evaluation/index.js";
-import { Evaluation } from "../evaluation/index.js";
+import { summarizeRecordedRuntimes } from "../discovery/index.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import {
@@ -155,18 +141,10 @@ export interface CliProfile {
     close(): Promise<void>;
     wait(): Promise<void>;
   }>;
-  /** Source files of one Target Snapshot for `ledger coverage`; null or absent prints "unavailable". */
-  sourceFiles?(
-    state: CliState,
-    snapshotDigest: string,
-  ): Promise<SourceFileSets | null>;
   /** Lines describing the public history mirror, and whether it is fresh; null when none is configured. */
   historyStatus(
     state: CliState,
   ): { readonly fresh: boolean; readonly line: string } | null;
-  /** Later public advisories in key form, matched to targets by the profile. */
-  advisories(value: unknown): readonly ProspectiveAdvisory[];
-  locationsOf(finding: unknown): readonly SourceLocation[];
   select(
     state: CliState,
     input: {
@@ -294,7 +272,6 @@ const USAGE = [
   "  continuous resume",
   "  continuous status",
   "  review [--campaign <id>]",
-  "  review inspect --campaign <id> --finding <id>",
   "  review parked --campaign <id> | --since <ISO>",
   "  review export --campaign <id> --finding <id>",
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>] [--minutes <n>]",
@@ -308,7 +285,6 @@ const USAGE = [
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
   "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
   "  ledger funnel --campaign <id> | --since <ISO>",
-  "  ledger coverage --campaign <id>",
   "  ledger stops [--campaign <id>] [--since <ISO>]",
   "  ledger usage [--campaign <id>]",
   "  ledger runtime [--campaign <id>]",
@@ -318,9 +294,6 @@ const USAGE = [
   "  lab up --for-review --campaign <id> --finding <id>",
   "  lab up --campaign <id> --finding <id> --config <path> [--port <n>] [--db-port <n>]",
   "  lab down [--config <path>]",
-  "  eval case-blocked --campaign <id> --case <id> --snapshot <digest> --stage source|dependency|lab --reason <code>",
-  "  eval compare [--axis history|prompt|continuation] [--campaign <id>]",
-  "  eval prospective --advisories <path> [--campaign <id>]",
 ].join("\n");
 
 const options = {
@@ -347,11 +320,6 @@ const options = {
   draft: { type: "string" },
   to: { type: "string" },
   outcome: { type: "string" },
-  case: { type: "string" },
-  snapshot: { type: "string" },
-  stage: { type: "string" },
-  axis: { type: "string" },
-  advisories: { type: "string" },
   remove: { type: "boolean" },
   "for-review": { type: "boolean" },
   "retry-incomplete": { type: "boolean" },
@@ -455,36 +423,6 @@ export function formatStopRow(row: StopRow): string {
   return [row.type, ...fields, `count=${row.count}`, ...extra].join("  ");
 }
 
-function formatCoverageRow(row: CoverageRow): string {
-  const percent = (covered: number, total: number) =>
-    total === 0 ? "unavailable" : `${((covered / total) * 100).toFixed(1)}%`;
-  const ratio = (value: CoverageRatio) =>
-    value === "unavailable"
-      ? "unavailable"
-      : `${value.covered}/${value.total} (${percent(value.covered, value.total)})`;
-  const tally = (counts: Readonly<Record<string, number>>) =>
-    Object.keys(counts)
-      .sort()
-      .map((key) => `${key} ${counts[key]}`)
-      .join(", ");
-  const { entries } = row;
-  const entryText =
-    entries === "unavailable"
-      ? "entries unavailable"
-      : `entries observed ${entries.observed} blocked ${entries.blocked} unvisited ${entries.unvisited} (observed ${percent(entries.observed, entries.observed + entries.blocked + entries.unvisited)})${Object.keys(entries.blockedReasons).length === 0 ? "" : ` blocked by ${tally(entries.blockedReasons)}`}`;
-  return `${entryText}  files ${ratio(row.sourceFiles)}  indexed files ${ratio(row.indexedFiles)}  missingEdge ${tally(row.missingEdges)}`;
-}
-
-export function formatCoverage(coverage: CampaignCoverage): string[] {
-  return [
-    `campaign ${coverage.campaignId}`,
-    `runs ${coverage.runs.length}  total  ${formatCoverageRow(coverage.total)}`,
-    ...coverage.runs.map(
-      (run) => `  ${run.runKind} ${run.runId}  ${formatCoverageRow(run)}`,
-    ),
-  ];
-}
-
 export function formatFunnel(funnel: CampaignFunnel): string[] {
   const rate = (value: number | null) =>
     value === null ? "unavailable" : value.toFixed(2);
@@ -542,48 +480,6 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
     );
   }
   return lines;
-}
-
-const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
-
-export function formatComparison(comparison: ArmComparison): string[] {
-  const paired = comparison.targets.filter((target) => target.paired);
-  const arm = (name: "a" | "b") => {
-    const tally = comparison.pooled[name];
-    const rate = tally.runs === 0 ? 0 : tally.hits / tally.runs;
-    return `  arm ${name}: hits ${tally.hits}/${tally.runs} (${percent(rate)}, 95% CI ${(tally.interval.lower * 100).toFixed(1)}–${percent(tally.interval.upper)})  findings ${tally.findings}  cost $${tally.knownCostUsd.toFixed(2)} known, ${tally.unpricedRuns} run(s) unavailable`;
-  };
-  const verdict = {
-    inconclusive:
-      paired.length === 0 ? "判定不能（対なし）" : "判定不能（区間が重なる）",
-    "a-higher": "arm a が高い",
-    "b-higher": "arm b が高い",
-  }[comparison.verdict];
-  return [
-    `compare ${comparison.axis}  paired targets ${paired.length}  unpaired ${comparison.targets.length - paired.length}`,
-    arm("a"),
-    arm("b"),
-    `  verdict: ${verdict}`,
-    ...comparison.targets.map(
-      (target) =>
-        `  target ${target.selectionId ?? target.snapshotDigest}  a ${target.arms.a.hits}/${target.arms.a.runs}  b ${target.arms.b.hits}/${target.arms.b.runs}${target.paired ? "" : "  (unpaired, excluded)"}`,
-    ),
-  ];
-}
-
-export function formatProspective(score: ProspectiveScore): string[] {
-  const { counts } = score;
-  return [
-    `prospective ${score.metric}  advisories ${score.advisories.length}  found ${counts.found}  missed ${counts.missed}  unscorable ${counts.unscorable}  predates-run ${counts["predates-run"]}  not-searched ${counts["not-searched"]}`,
-    ...score.advisories.map(
-      (advisory) =>
-        `  ${advisory.status} ${advisory.caseId}  overlapping ${advisory.overlapping.length}  unreadable ${advisory.unreadable.length}`,
-    ),
-    ...(score.rubric.length === 0 ? [] : ["blind rubric pairs:"]),
-    ...score.rubric.map(
-      (pair) => `  ${pair.caseId}  finding ${pair.findingId}`,
-    ),
-  ];
 }
 
 export function formatQueue(
@@ -931,35 +827,6 @@ export async function runCli(
           ),
         );
         return 0;
-      case "review inspect": {
-        const review = environment.profile.review(state);
-        const item = queued(review, values);
-        const view = await review.inspect({
-          campaignId: item.ref.campaignId,
-          findingId: item.ref.findingId,
-        });
-        io.stdout(
-          JSON.stringify({
-            status: item.status,
-            category: item.category,
-            ref: item.ref,
-            view,
-          }),
-        );
-        const opened = await state.ledger.append({
-          schemaVersion: 1,
-          identity: `review-open:${randomUUID()}`,
-          campaignId: item.ref.campaignId,
-          snapshotDigest: item.ref.snapshotDigest,
-          occurredAt: state.clock().toISOString(),
-          type: "review-item-opened",
-          findingId: item.ref.findingId,
-          verificationId: item.ref.verificationId,
-        });
-        if (opened.status === "conflict")
-          throw new Error("Review open ledger conflict");
-        return 0;
-      }
       case "review parked": {
         // Parked Findings remain inspectable by reason without joining the review queue.
         const parked = state.ledger.read({
@@ -1367,25 +1234,6 @@ export async function runCli(
         );
         return 0;
       }
-      case "ledger coverage": {
-        const { profile } = environment;
-        print(
-          formatCoverage(
-            await summarizeCampaignCoverage({
-              ledger: state.ledger,
-              store: state.store,
-              campaignId: required(values.campaign, "campaign"),
-              ...(profile.sourceFiles === undefined
-                ? {}
-                : {
-                    sourceFiles: (digest: string) =>
-                      profile.sourceFiles!(state, digest),
-                  }),
-            }),
-          ),
-        );
-        return 0;
-      }
       case "ledger stops": {
         const instant = since(values.since);
         const rows = state.ledger.stops({
@@ -1396,91 +1244,6 @@ export async function runCli(
         });
         if (rows.length === 0) print(["no stops recorded"]);
         print(rows.map(formatStopRow));
-        return 0;
-      }
-      case "eval case-blocked": {
-        const campaignId = required(values.campaign, "campaign");
-        const caseId = required(values.case, "case");
-        const snapshotDigest = required(values.snapshot, "snapshot");
-        const stage = required(values.stage, "stage");
-        const reason = required(values.reason, "reason");
-        if (
-          !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(caseId) ||
-          !/^sha256:[a-f0-9]{64}$/.test(snapshotDigest) ||
-          !(
-            (stage === "source" &&
-              reason === "source-acquisition-unavailable") ||
-            (stage === "dependency" &&
-              reason === "dependency-snapshot-unavailable") ||
-            (stage === "lab" &&
-              (reason === "external-service-unavailable" ||
-                reason === "normal-use-setup-unavailable"))
-          )
-        )
-          throw new UsageError("Invalid evaluation case block");
-        const recorded = await state.ledger.append({
-          schemaVersion: 1,
-          identity: `evaluation-block:${randomUUID()}`,
-          campaignId,
-          snapshotDigest,
-          occurredAt: state.clock().toISOString(),
-          type: "evaluation-case-blocked",
-          caseId,
-          stage,
-          reason,
-        });
-        if (recorded.status === "conflict")
-          throw new Error("Evaluation case block ledger conflict");
-        io.stdout(`${caseId} blocked at ${stage}: ${reason}`);
-        return 0;
-      }
-      case "eval prospective": {
-        const advisories = environment.profile.advisories(
-          JSON.parse(
-            await readFile(
-              resolve(required(values.advisories, "advisories")),
-              "utf8",
-            ),
-          ) as unknown,
-        );
-        print(
-          formatProspective(
-            await new Evaluation({
-              ledger: state.ledger,
-              store: state.store,
-              locationsOf: (finding) =>
-                environment.profile.locationsOf(finding),
-            }).prospective({
-              advisories,
-              ...(values.campaign === undefined
-                ? {}
-                : { campaignId: values.campaign }),
-            }),
-          ),
-        );
-        return 0;
-      }
-      case "eval compare": {
-        const axis = values.axis ?? "history";
-        if (axis !== "history" && axis !== "prompt" && axis !== "continuation")
-          throw new UsageError(
-            "--axis supports history, prompt or continuation",
-          );
-        print(
-          formatComparison(
-            new Evaluation({
-              ledger: state.ledger,
-              store: state.store,
-              locationsOf: (finding) =>
-                environment.profile.locationsOf(finding),
-            }).compare({
-              axis,
-              ...(values.campaign === undefined
-                ? {}
-                : { campaignId: values.campaign }),
-            }),
-          ),
-        );
         return 0;
       }
       default:

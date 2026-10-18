@@ -11,7 +11,6 @@ const GENERIC_MODULES = [
   "verification",
   "ledger",
   "review",
-  "evaluation",
   "infrastructure",
 ];
 

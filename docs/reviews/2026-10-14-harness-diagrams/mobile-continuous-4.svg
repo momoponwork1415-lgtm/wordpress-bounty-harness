@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="534" viewBox="0 0 360 601" style="max-width:100%;height:auto" role="img" aria-labelledby="title-continuous-4 desc-continuous-4">
+<title id="title-continuous-4">継続運転 4/4</title><desc id="desc-continuous-4">補充、quota、停止、復旧、実装順。項目 10、11。</desc>
+<rect x="0" y="0" width="360" height="601" fill="#f8fafc"/>
+<rect x="0" y="0" width="360" height="128" fill="#0f172a"/>
+<text x="18" y="28" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#93c5fd">HARNESS • 2026.10.14</text>
+<text x="18" y="68" font-family="system-ui,sans-serif" font-size="25" font-weight="800" fill="#ffffff">継続運転</text>
+<text x="18" y="99" font-family="system-ui,sans-serif" font-size="14" fill="#cbd5e1">項目 10–11 ／ 4 / 4</text>
+<text x="18" y="153" font-family="system-ui,sans-serif" font-size="12.5" fill="#475569">色付きラベルで実装状態を表示</text>
+<g id="step-10"><rect x="16" y="175" width="328" height="190" rx="16" fill="#fff7e8" stroke="#b45309" stroke-width="2"/>
+<rect x="16" y="175" width="7" height="190" rx="3.5" fill="#b45309"/>
+<rect x="32" y="189" width="78" height="26" rx="13" fill="#b45309"/><text x="71" y="207" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">設計案</text>
+<text x="326" y="208" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">10</text>
+<text x="32" y="238" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">合格を示す数字</text>
+<text x="32" y="276" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">scope内Findingのexport欠落0</text>
+<text x="32" y="299" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">無承認の同slug追加Trial 0</text>
+<text x="32" y="322" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">中断を正常0件と誤算0</text>
+<text x="32" y="345" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">枠回復・再起動後の重複0</text>
+</g>
+<g id="step-11"><rect x="16" y="381" width="328" height="190" rx="16" fill="#f1f5f9" stroke="#64748b" stroke-width="2"/>
+<rect x="16" y="381" width="7" height="190" rx="3.5" fill="#64748b"/>
+<rect x="32" y="395" width="78" height="26" rx="13" fill="#64748b"/><text x="71" y="413" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">将来</text>
+<text x="326" y="414" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">11</text>
+<text x="32" y="444" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">その先の拡張</text>
+<text x="32" y="482" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">他プラットフォームのprofile</text>
+<text x="32" y="505" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">Mantis等への探索方式切替</text>
+<text x="32" y="528" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">ログをAIと人間で見て改善</text>
+<text x="32" y="551" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">変更採否は人間が設計承認</text>
+</g>
+<text x="180" y="584" font-family="system-ui,sans-serif" font-size="11.5" text-anchor="middle" fill="#64748b">wordpress-bounty-harness • 設計・実装照合</text>
+</svg>

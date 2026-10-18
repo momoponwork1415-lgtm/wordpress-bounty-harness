@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="738" viewBox="0 0 360 830" style="max-width:100%;height:auto" role="img" aria-labelledby="title-execution-3 desc-execution-3">
+<title id="title-execution-3">並列実行 3/3</title><desc id="desc-execution-3">単一Trial、campaign、provider間の資源管理。項目 8、9、10。</desc>
+<rect x="0" y="0" width="360" height="830" fill="#f8fafc"/>
+<rect x="0" y="0" width="360" height="128" fill="#0f172a"/>
+<text x="18" y="28" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#93c5fd">HARNESS • 2026.10.14</text>
+<text x="18" y="68" font-family="system-ui,sans-serif" font-size="25" font-weight="800" fill="#ffffff">並列実行</text>
+<text x="18" y="99" font-family="system-ui,sans-serif" font-size="14" fill="#cbd5e1">項目 8–10 ／ 3 / 3</text>
+<text x="18" y="153" font-family="system-ui,sans-serif" font-size="12.5" fill="#475569">色付きラベルで実装状態を表示</text>
+<g id="step-8"><rect x="16" y="175" width="328" height="213" rx="16" fill="#fff7e8" stroke="#b45309" stroke-width="2"/>
+<rect x="16" y="175" width="7" height="213" rx="3.5" fill="#b45309"/>
+<rect x="32" y="189" width="78" height="26" rx="13" fill="#b45309"/><text x="71" y="207" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">設計案</text>
+<text x="326" y="208" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">08</text>
+<text x="32" y="238" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">共通のPC資源枠</text>
+<text x="32" y="276" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">CPU・RAM・Lab・Trial slotを予</text>
+<text x="32" y="299" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">約</text>
+<text x="32" y="322" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">provider別の同時枠も同じ門で管理</text>
+<text x="32" y="345" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">Opusは最大2、全体は実測で調整</text>
+<text x="32" y="368" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">初期並列は現行の2を維持</text>
+</g>
+<g id="step-9"><rect x="16" y="404" width="328" height="190" rx="16" fill="#fff7e8" stroke="#b45309" stroke-width="2"/>
+<rect x="16" y="404" width="7" height="190" rx="3.5" fill="#b45309"/>
+<rect x="32" y="418" width="78" height="26" rx="13" fill="#b45309"/><text x="71" y="436" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">設計案</text>
+<text x="326" y="437" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">09</text>
+<text x="32" y="467" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">quota 到達時</text>
+<text x="32" y="505" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">該当providerの新規開始を待機</text>
+<text x="32" y="528" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">別providerは別の初回slugを処理</text>
+<text x="32" y="551" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">5時間・週次枠の回復後にpreflight</text>
+<text x="32" y="574" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">従量課金へ暗黙に切り替えない</text>
+</g>
+<g id="step-10"><rect x="16" y="610" width="328" height="190" rx="16" fill="#fff7e8" stroke="#b45309" stroke-width="2"/>
+<rect x="16" y="610" width="7" height="190" rx="3.5" fill="#b45309"/>
+<rect x="32" y="624" width="78" height="26" rx="13" fill="#b45309"/><text x="71" y="642" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">設計案</text>
+<text x="326" y="643" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">10</text>
+<text x="32" y="673" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">重複なく復旧</text>
+<text x="32" y="711" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">台帳・運用表・容器を照合</text>
+<text x="32" y="734" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">開始済みTrialを勝手に再探索しない</text>
+<text x="32" y="757" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">子の保存済み成果と検証を回収</text>
+<text x="32" y="780" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">曖昧な対象だけ保留する</text>
+</g>
+<text x="180" y="813" font-family="system-ui,sans-serif" font-size="11.5" text-anchor="middle" fill="#64748b">wordpress-bounty-harness • 設計・実装照合</text>
+</svg>

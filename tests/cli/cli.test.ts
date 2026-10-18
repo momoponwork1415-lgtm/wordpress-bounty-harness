@@ -965,38 +965,6 @@ const programmeRef = {
 };
 
 describe("harness CLI vertical slice", () => {
-  it("records a measured evaluation block with a bounded reason code", async () => {
-    const { run, ledger, configPath } = await harness();
-    expect((await run("select", "--config", configPath)).code).toBe(0);
-    const args = [
-      "eval",
-      "case-blocked",
-      "--campaign",
-      "benchmark-case",
-      "--case",
-      "case-a",
-      "--snapshot",
-      sha("a"),
-      "--stage",
-      "lab",
-      "--reason",
-      "external-service-unavailable",
-    ];
-    expect((await run(...args)).code).toBe(0);
-    expect(ledger().read({ type: "evaluation-case-blocked" })).toMatchObject([
-      {
-        event: {
-          campaignId: "benchmark-case",
-          caseId: "case-a",
-          stage: "lab",
-          reason: "external-service-unavailable",
-        },
-      },
-    ]);
-    expect((await run(...args.slice(0, -1), "arbitrary text")).code).toBe(2);
-    expect(ledger().read({ type: "evaluation-case-blocked" })).toHaveLength(1);
-  });
-
   it("records read-only DB access without storing its account in the ledger", async () => {
     const { run, configPath, prompts, ledger } = await harness();
     await run(
@@ -1462,7 +1430,7 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("runs a pinned campaign end to end and exposes review and funnel", async () => {
-    const { run, configPath, prompts, docker, ledger } = await harness();
+    const { run, configPath, prompts, docker } = await harness();
 
     const campaign = await run(
       "campaign",
@@ -1509,40 +1477,6 @@ describe("harness CLI vertical slice", () => {
       queue.stdout,
     )?.[1];
     expect(confirmedFinding).toBeDefined();
-    expect(ledger().read({ type: "review-item-opened" })).toHaveLength(0);
-    const inspected = await run(
-      "review",
-      "inspect",
-      "--campaign",
-      "campaign-1",
-      "--finding",
-      confirmedFinding!,
-    );
-    expect(inspected.code).toBe(0);
-    expect(JSON.parse(inspected.stdout)).toMatchObject({
-      status: "runtime-confirmed",
-      ref: { findingId: confirmedFinding },
-      view: { verificationStatus: "runtime-confirmed" },
-    });
-    expect(ledger().read({ type: "review-item-opened" })).toMatchObject([
-      {
-        event: {
-          type: "review-item-opened",
-          findingId: confirmedFinding,
-        },
-      },
-    ]);
-    const missingOpen = await run(
-      "review",
-      "inspect",
-      "--campaign",
-      "campaign-1",
-      "--finding",
-      "unknown-finding",
-    );
-    expect(missingOpen.code).not.toBe(0);
-    expect(ledger().read({ type: "review-item-opened" })).toHaveLength(1);
-
     const decided = await run(
       "review",
       "decide",
@@ -2048,60 +1982,6 @@ describe("harness CLI vertical slice", () => {
     expect(
       ledger().read({ campaignId: "campaign-lead", type: "lead-recorded" }),
     ).toHaveLength(2);
-  });
-
-  it("scores the campaign against later public advisories and lists blind rubric pairs", async () => {
-    const { run, configPath, root } = await harness();
-    await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-1",
-      "--config",
-      configPath,
-    );
-    const advisoriesPath = join(root, "advisories.json");
-    const advisory = (advisoryId: string, file: string) => ({
-      schemaVersion: 1,
-      advisoryId,
-      slug: "synthetic-plugin",
-      affectedVersions: [
-        {
-          fromVersion: "*",
-          fromInclusive: true,
-          toVersion: "3.4.0",
-          toInclusive: false,
-        },
-      ],
-      publishedAt: "2026-11-01",
-      impact: "account-takeover",
-      allowedLocations: [{ file }],
-    });
-    await writeFile(
-      advisoriesPath,
-      JSON.stringify([
-        advisory("adv-1", "includes/synthetic.php"),
-        advisory("adv-2", "includes/unrelated.php"),
-      ]),
-    );
-    const scored = await run(
-      "eval",
-      "prospective",
-      "--advisories",
-      advisoriesPath,
-    );
-    expect(scored.code).toBe(0);
-    const lines = scored.stdout.split("\n");
-    expect(lines.slice(0, 3)).toEqual([
-      "prospective location-overlap  advisories 2  found 1  missed 1  unscorable 0  predates-run 0  not-searched 0",
-      "  found adv-1  overlapping 1  unreadable 0",
-      "  missed adv-2  overlapping 0  unreadable 0",
-    ]);
-    expect(lines[3]).toBe("blind rubric pairs:");
-    expect(lines[4]).toMatch(/^  adv-1  finding \S+$/);
-    // Key locations stay in the advisory file.
-    expect(scored.stdout).not.toContain("includes/");
   });
 
   it("stops the campaign on a provider limit and resumes it with the same command", async () => {

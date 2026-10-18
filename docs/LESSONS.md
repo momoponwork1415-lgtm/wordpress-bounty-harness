@@ -15,3 +15,4 @@
 11. **払われない分類は追わない。** Programme Boundary 外の効果は Lead に落とし、Finding に数えない。
 12. **AI に prompt を任せると要素が増える。** 出典に無い要素は入れない。採否は所有者が対照表で決める（所有者、2026-10-13）。
 13. **harness を作っている間は報酬が止まる。** 2026-07-25〜08-11 の 18 日で有償 9 件、08-12〜10-13 の 2 か月で有償 3 件、09-02 以降は提出 0（所有者の Wordfence 履歴、2026-10-13）。開発の期日を切り、本番周回を止めない。
+14. **AI と harness の責務が曖昧だと、harness が中身を抱え込む。** 探索の舵取り（索引、分担、coverage）と検証の手順（Verifier 指示の連鎖、scenario 選択）を code にした世代は肥大して捨てた（wpb の先回り 7,300 行、wordpress-harness v1〜v9、本 repo の 2026-10-11〜18 の索引・dispatch・coverage）。harness は制御だけ、中身は prompt と skill（AGENTS.md「Harness と AI の責務」、所有者 2026-10-18）。
