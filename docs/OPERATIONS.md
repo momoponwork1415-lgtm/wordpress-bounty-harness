@@ -269,14 +269,11 @@ harness lab cleanup --config <path> --remove   # 削除
 
 ## 6. 評価
 
-主指標は本番から得る。現在の `eval score --keys` は任意の研究用互換機能で、TranslatePressベンチマークや本番開始には使わない。下記の `eval compare` の旧軸は過去Trialの読取用であり、新主経路へcontinuation軸を適用しない。
+主指標は本番から得る。旧 `eval score --keys` と Answer Key、盲検 rubric は 2026-10-18 に削除した（PARKING 2026-10-14 行）。下記の `eval compare` の旧軸は過去Trialの読取用であり、新主経路へcontinuation軸を適用しない。
 
 ```
 harness eval compare [--axis history|prompt|continuation] [--campaign <id>]   # 旧軸の比較。新主経路のcontinuationは無い
 harness eval prospective --advisories <path> [--campaign <id>]    # 後日公開されたadvisoryで本番台帳を再採点
-harness eval score --campaign <id> --keys <path> --case <id> [--manifest <path>] # 答えの鍵でlocation-overlap。held-outは任意
-harness eval keys --keys <path> [--manifest <path>]                # 私的な鍵を検査し、公開可能なcase IDとdigestだけを出す
-harness eval rubric --file <path>                                 # 私的な盲検rubricを検査し、件数とdigestだけを出す
 ```
 
 - **新主経路の比較**: 同じ対象・model・source・Lab・wall上限で、prompt版や入口索引の有無だけを変えた独立Trialを別armとして記録する。旧段付きTrialを同じ分母に混ぜない。
@@ -289,12 +286,6 @@ harness eval rubric --file <path>                                 # 私的な盲
   - 結果は `found` / `missed` / `unscorable`（採点失敗）/ `predates-run` / `not-searched` に分かれる。`missed` 以外は見逃しに数えない。
   - `blind rubric pairs:` の (advisory, Finding) 対だけを、armや検証結果を見ずに人間がtarget-hit / partial / non-targetで採点する。
 - **held-out**: 初期の開発と本番開始には使わない。比較研究が必要になった時だけ予算とcaseを決める。
-
-### 任意の旧評価鍵と盲検rubric
-
-将来の比較研究で旧採点器を使う場合だけ、Answer Keyの本文をGit外の権限を絞ったJSONファイルに置く。`eval keys --keys <path>` は形式と重複を検査し、case IDと正規化した鍵のSHA-256 digestだけをJSONで出す。この出力だけをGitのdigest manifestに保存できる。`eval keys --keys <path> --manifest <path>` で全鍵のdigestを照合し、`eval score` にも `--manifest <path>` を付けて採点する鍵のdigestを確認できる。鍵本文や原因箇所は標準出力・台帳に出さない。現行計画では人間に鍵の記入を求めない。
-
-人間の盲検採点には [入力テンプレート](../examples/evaluation/blind-rubric.template.json) をGit外へコピーし、caseとFindingの対ごとに場所、root cause、攻撃者条件、影響を `match` / `partial` / `mismatch` / `unknown` で評価する。armと検証結果を見ずに `target-hit` / `partial` / `non-target` を人間が決め、記入者と時刻を残す。`eval rubric --file <path>` は必須欄と重複を検査し、件数とdigestだけを出す。記入済みフォームはPrivate EvidenceとしてGit外に保管する。
 
 ## 7. やらないこと
 

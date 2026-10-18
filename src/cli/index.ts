@@ -13,26 +13,14 @@ import {
   type CoverageRow,
   type SourceFileSets,
 } from "../discovery/index.js";
-import {
-  blindRubricEntriesSchema,
-  type BlindRubricEntry,
-} from "../evaluation/blind-rubric.js";
-import {
-  keyDigestManifestSchema,
-  type KeyDigestManifest,
-} from "../evaluation/key-registry.js";
 import type {
   ArmComparison,
-  LocationAnswerKey,
   ProspectiveAdvisory,
   ProspectiveScore,
   SourceLocation,
 } from "../evaluation/index.js";
 import { Evaluation } from "../evaluation/index.js";
-import {
-  canonicalDigest,
-  canonicalJson,
-} from "../infrastructure/canonical-json.js";
+import { canonicalJson } from "../infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import {
   Ledger,
@@ -167,7 +155,6 @@ export interface CliProfile {
     close(): Promise<void>;
     wait(): Promise<void>;
   }>;
-  answerKeys(value: unknown): readonly LocationAnswerKey[];
   /** Source files of one Target Snapshot for `ledger coverage`; null or absent prints "unavailable". */
   sourceFiles?(
     state: CliState,
@@ -309,7 +296,6 @@ const USAGE = [
   "  review parked --campaign <id> | --since <ISO>",
   "  review export --campaign <id> --finding <id>",
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--by <name>] [--minutes <n>]",
-  "  review open --campaign <id> --finding <id> [--minutes <n>]",
   "  review reproduced --campaign <id> --finding <id> --result match|mismatch|unavailable [--minutes <n>]",
   "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
@@ -330,10 +316,7 @@ const USAGE = [
   "  lab up --for-review --campaign <id> --finding <id>",
   "  lab up --campaign <id> --finding <id> --config <path> [--port <n>] [--db-port <n>]",
   "  lab down [--config <path>]",
-  "  eval score --campaign <id> --keys <path> --case <id> [--manifest <path>]",
   "  eval case-blocked --campaign <id> --case <id> --snapshot <digest> --stage source|dependency|lab --reason <code>",
-  "  eval keys --keys <path> [--manifest <path>]",
-  "  eval rubric --file <path>",
   "  eval compare [--axis history|prompt|continuation] [--campaign <id>]",
   "  eval prospective --advisories <path> [--campaign <id>]",
 ].join("\n");
@@ -426,35 +409,6 @@ async function humanMinutes(
   if (!Number.isFinite(minutes) || minutes > 1440)
     throw new UsageError("--minutes must be between 0 and 1440");
   return minutes;
-}
-
-async function readPrivateAnswerKeys(
-  path: string,
-  profile: CliProfile,
-): Promise<readonly LocationAnswerKey[]> {
-  try {
-    const value = JSON.parse(await readFile(resolve(path), "utf8")) as unknown;
-    const keys = profile.answerKeys(value);
-    const seen = new Set<string>();
-    for (const key of keys) {
-      if (seen.has(key.caseId)) throw new Error("Duplicate case ID");
-      seen.add(key.caseId);
-    }
-    return keys;
-  } catch {
-    // Validation errors can echo private field values; keep them out of CLI output.
-    throw new UsageError("Private Answer Key file is invalid or unreadable");
-  }
-}
-
-async function readKeyDigestManifest(path: string) {
-  try {
-    return keyDigestManifestSchema.parse(
-      JSON.parse(await readFile(resolve(path), "utf8")) as unknown,
-    );
-  } catch {
-    throw new UsageError("Answer Key digest manifest is invalid or unreadable");
-  }
 }
 
 async function openState(
@@ -1092,25 +1046,6 @@ export async function runCli(
           });
         return 0;
       }
-      case "review open": {
-        const review = environment.profile.review(state);
-        const item = queued(review, values);
-        if (item.status === "incomplete")
-          throw new UsageError("Only an evidence-backed package can be opened");
-        const opened = await review.openReproductionPackage({ ref: item.ref });
-        if (opened.status !== "opened")
-          throw new UsageError("Reproduction package is unavailable");
-        io.stdout(opened.manual);
-        const minutes = await humanMinutes(values.minutes, io, "read");
-        if (minutes !== null)
-          await review.recordHumanEffort({
-            campaignId: item.ref.campaignId,
-            findingId: item.ref.findingId,
-            action: "read",
-            minutes,
-          });
-        return 0;
-      }
       case "review reproduced": {
         const review = environment.profile.review(state);
         const item = queued(review, values);
@@ -1493,104 +1428,6 @@ export async function runCli(
         if (recorded.status === "conflict")
           throw new Error("Evaluation case block ledger conflict");
         io.stdout(`${caseId} blocked at ${stage}: ${reason}`);
-        return 0;
-      }
-      case "eval score": {
-        const caseId = required(values.case, "case");
-        const keys = await readPrivateAnswerKeys(
-          required(values.keys, "keys"),
-          environment.profile,
-        );
-        const answerKey = keys.find((key) => key.caseId === caseId);
-        if (answerKey === undefined)
-          throw new UsageError("The key file has no such case");
-        if (values.manifest !== undefined) {
-          const manifest = await readKeyDigestManifest(values.manifest);
-          const pinned = manifest.keys.find((key) => key.caseId === caseId);
-          if (pinned?.digest !== canonicalDigest(answerKey))
-            throw new UsageError("Answer Key digest differs from the manifest");
-        }
-        const score = await new Evaluation({
-          ledger: state.ledger,
-          store: state.store,
-          locationsOf: (finding) => environment.profile.locationsOf(finding),
-        }).score({
-          campaignId: required(values.campaign, "campaign"),
-          answerKey,
-        });
-        // Only counts and record ids are printed; key locations stay in the key file.
-        io.stdout(
-          `${score.metric}  case ${score.caseId}  campaign ${score.campaignId}  findings ${score.findings}  overlapping ${score.overlapping.length}  unreadable ${score.unreadable.length}  hit ${score.hit ? "yes" : "no"}`,
-        );
-        for (const findingId of score.overlapping)
-          io.stdout(`  overlapping finding ${findingId}`);
-        for (const findingId of score.unreadable)
-          io.stdout(`  unreadable finding ${findingId}`);
-        if (score.leadCandidates !== undefined) {
-          io.stdout(
-            `  source candidates ${score.leadCandidates.total}  overlapping ${score.leadCandidates.overlapping.length}  unreadable ${score.leadCandidates.unreadable.length}  hit ${score.leadCandidates.hit ? "yes" : "no"}`,
-          );
-          for (const leadId of score.leadCandidates.overlapping)
-            io.stdout(`  overlapping lead ${leadId}`);
-          for (const leadId of score.leadCandidates.unreadable)
-            io.stdout(`  unreadable lead ${leadId}`);
-        }
-        return 0;
-      }
-      case "eval keys": {
-        const keys = await readPrivateAnswerKeys(
-          required(values.keys, "keys"),
-          environment.profile,
-        );
-        const digests = keys.map((key) => ({
-          caseId: key.caseId,
-          digest: canonicalDigest(key),
-        }));
-        digests.sort((left, right) => left.caseId.localeCompare(right.caseId));
-        // The output is safe to commit; the private key fields are not printed.
-        let manifest: KeyDigestManifest;
-        try {
-          manifest = keyDigestManifestSchema.parse({
-            schemaVersion: 1,
-            keys: digests,
-          });
-        } catch {
-          throw new UsageError("Private Answer Key case IDs are invalid");
-        }
-        if (values.manifest !== undefined) {
-          const pinned = await readKeyDigestManifest(values.manifest);
-          if (
-            pinned.keys.length !== manifest.keys.length ||
-            pinned.keys.some(
-              (key) =>
-                manifest.keys.find((entry) => entry.caseId === key.caseId)
-                  ?.digest !== key.digest,
-            )
-          )
-            throw new UsageError("Answer Key digests differ from the manifest");
-        }
-        io.stdout(canonicalJson(manifest));
-        return 0;
-      }
-      case "eval rubric": {
-        let rubric: BlindRubricEntry[];
-        try {
-          rubric = blindRubricEntriesSchema.parse(
-            JSON.parse(
-              await readFile(resolve(required(values.file, "file")), "utf8"),
-            ) as unknown,
-          );
-        } catch {
-          throw new UsageError(
-            "Private blind rubric file is invalid or unreadable",
-          );
-        }
-        io.stdout(
-          canonicalJson({
-            entries: rubric.length,
-            digest: canonicalDigest(rubric),
-          }),
-        );
         return 0;
       }
       case "eval prospective": {

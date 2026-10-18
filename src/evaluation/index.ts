@@ -14,7 +14,7 @@ export interface SourceLocation {
   readonly function?: string | undefined;
 }
 
-/** The profile-neutral part of an Answer Key that location-overlap needs. */
+/** The profile-neutral part of an advisory key that location-overlap needs. */
 export interface LocationAnswerKey {
   readonly caseId: string;
   readonly allowedLocations: readonly SourceLocation[];
@@ -44,23 +44,6 @@ export type ProspectiveScore = {
     readonly caseId: string;
     readonly findingId: string;
   }[];
-};
-
-export type LocationOverlapScore = {
-  readonly metric: "location-overlap";
-  readonly campaignId: string;
-  readonly caseId: string;
-  readonly findings: number;
-  readonly overlapping: readonly string[];
-  /** Findings whose private record could not be read; a scoring failure, not a miss. */
-  readonly unreadable: readonly string[];
-  readonly hit: boolean;
-  readonly leadCandidates?: {
-    readonly total: number;
-    readonly overlapping: readonly string[];
-    readonly unreadable: readonly string[];
-    readonly hit: boolean;
-  };
 };
 
 export type ArmTally = {
@@ -126,79 +109,6 @@ export class Evaluation {
     this.#ledger = options.ledger;
     this.#store = options.store;
     this.#locationsOf = options.locationsOf;
-  }
-
-  async score(input: {
-    readonly campaignId: string;
-    readonly answerKey: LocationAnswerKey;
-  }): Promise<LocationOverlapScore> {
-    const campaignId = id.parse(input.campaignId);
-    const caseId = id.parse(input.answerKey.caseId);
-    if (input.answerKey.allowedLocations.length === 0)
-      throw new Error("Answer Key has no allowed locations");
-    const overlapping: string[] = [];
-    const unreadable: string[] = [];
-    let findings = 0;
-    let afterSequence = 0;
-    for (;;) {
-      const page = this.#ledger.read({
-        campaignId,
-        type: "finding-recorded",
-        afterSequence,
-        limit: 1000,
-      });
-      for (const { event } of page) {
-        if (event.type !== "finding-recorded") continue;
-        findings++;
-        const trace = await this.#trace(event.artifacts);
-        if (trace === null) unreadable.push(event.findingId);
-        else if (overlaps(trace, input.answerKey.allowedLocations))
-          overlapping.push(event.findingId);
-      }
-      if (page.length < 1000) break;
-      afterSequence = page[page.length - 1]!.sequence;
-    }
-    const leadOverlapping: string[] = [];
-    const leadUnreadable: string[] = [];
-    let leads = 0;
-    let leadAfterSequence = 0;
-    for (;;) {
-      const page = this.#ledger.read({
-        campaignId,
-        type: "lead-recorded",
-        afterSequence: leadAfterSequence,
-        limit: 1000,
-      });
-      for (const { event } of page) {
-        if (event.type !== "lead-recorded") continue;
-        leads++;
-        const trace = await this.#trace(event.artifacts, "lead");
-        if (trace === null) leadUnreadable.push(event.leadId);
-        else if (overlaps(trace, input.answerKey.allowedLocations))
-          leadOverlapping.push(event.leadId);
-      }
-      if (page.length < 1000) break;
-      leadAfterSequence = page[page.length - 1]!.sequence;
-    }
-    return {
-      metric: "location-overlap",
-      campaignId,
-      caseId,
-      findings,
-      overlapping,
-      unreadable,
-      hit: overlapping.length > 0,
-      ...(leads === 0
-        ? {}
-        : {
-            leadCandidates: {
-              total: leads,
-              overlapping: leadOverlapping,
-              unreadable: leadUnreadable,
-              hit: leadOverlapping.length > 0,
-            },
-          }),
-    };
   }
 
   /** Pairs arms within each target, then pools the paired targets across campaigns. */
@@ -425,13 +335,12 @@ export class Evaluation {
 
   async #trace(
     artifacts: readonly { readonly kind: string; readonly digest: string }[],
-    kind: "finding" | "lead" = "finding",
   ): Promise<readonly SourceLocation[] | null> {
-    const reference = artifacts.find((artifact) => artifact.kind === kind);
+    const reference = artifacts.find((artifact) => artifact.kind === "finding");
     if (reference === undefined) return null;
     const file = await this.#store.readFile(
       reference.digest,
-      `${kind}.json`,
+      "finding.json",
       1024 * 1024,
     );
     if (file.status !== "resolved") return null;

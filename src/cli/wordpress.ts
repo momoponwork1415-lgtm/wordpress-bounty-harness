@@ -25,10 +25,7 @@ import { SourceAcquisitionError, type Snapshot } from "../snapshot/index.js";
 import { Verification, type Verifier } from "../verification/index.js";
 import { WORDPRESS_VERIFIER_PROMPT_ID } from "../profiles/wordpress/prompts/index.js";
 import { parseWordPressAdvisories } from "../profiles/wordpress/advisory.js";
-import {
-  parseWordPressAnswerKeys,
-  wordpressFindingLocations,
-} from "../profiles/wordpress/answer-key.js";
+import { wordpressFindingLocations } from "../profiles/wordpress/answer-key.js";
 import {
   planWordPressEntryAssignments,
   renderWordPressEntryAssignment,
@@ -1387,7 +1384,6 @@ export function createWordPressCliProfile(
             }),
         clock: state.clock,
       }),
-    answerKeys: parseWordPressAnswerKeys,
     historyStatus(state) {
       if (options.wordfenceHistory === undefined) return null;
       const mirror = inspectHistoryMirror({

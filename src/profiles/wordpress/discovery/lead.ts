@@ -1,8 +1,6 @@
 import { z } from "zod";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
-import { entryKey } from "./entry-points.js";
-import type { WordPressSourceIndex } from "./storage-index.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const id = z.string().min(1).max(128);
@@ -133,48 +131,4 @@ export function readWordPressLead(value: unknown): WordPressLead {
   if (canonicalDigest(body) !== leadId)
     throw new Error("Lead identity does not match its content");
   return { ...body, leadId };
-}
-
-/** Source-index facts around one Lead; no earlier report or other claim is included. */
-export function renderWordPressLeadNeighbourhood(
-  lead: WordPressLead,
-  index: WordPressSourceIndex,
-): string {
-  const traceFiles = new Set(lead.sourceTrace.map((location) => location.file));
-  const matchingKeys = new Set(
-    lead.storage === null
-      ? index.components
-          .filter((component) =>
-            component.files.some((file) => traceFiles.has(file)),
-          )
-          .flatMap((component) => component.entries)
-      : index.entries
-          .filter((entry) =>
-            entry.storage.some(
-              (ref) =>
-                ref.kind === lead.storage?.kind &&
-                ref.key === lead.storage?.key,
-            ),
-          )
-          .map(entryKey),
-  );
-  const entries = index.entries.filter((entry) =>
-    matchingKeys.has(entryKey(entry)),
-  );
-  return [
-    `Index: ${index.incomplete ? "partial" : "complete"}`,
-    ...(lead.storage === null
-      ? []
-      : [`Storage: ${lead.storage.kind}:${lead.storage.key}`]),
-    ...(entries.length === 0
-      ? ["No adjacent indexed entry found."]
-      : entries.flatMap((entry) => [
-          `- ${entry.kind} ${entry.name} — ${entry.file}:${entry.line}`,
-          `  Files: ${entry.reach.join(", ")}`,
-          ...entry.crossings.map(
-            (crossing) =>
-              `  ${crossing.kind}: ${crossing.name} (${crossing.file}:${crossing.line})`,
-          ),
-        ])),
-  ].join("\n");
 }
