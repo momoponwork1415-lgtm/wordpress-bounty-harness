@@ -230,7 +230,9 @@ export class Review<TFacts = unknown> {
       }
     >();
     const attempts = new Map<string, number>();
-    for (const { sequence, event } of this.#readAll("verification-finished"))
+    for (const { sequence, event } of this.#ledger.readAll({
+      type: "verification-finished",
+    }))
       if (event.type === "verification-finished" && inCampaign(event)) {
         latestVerification.set(key(event), { sequence, event });
         if (event.result.status === "incomplete") {
@@ -242,7 +244,9 @@ export class Review<TFacts = unknown> {
       string,
       { sequence: number; decision: Decision }
     >();
-    for (const { sequence, event } of this.#readAll("review-decided"))
+    for (const { sequence, event } of this.#ledger.readAll({
+      type: "review-decided",
+    }))
       if (event.type === "review-decided" && inCampaign(event))
         latestDecision.set(key(event), { sequence, decision: event.decision });
 
@@ -251,12 +255,14 @@ export class Review<TFacts = unknown> {
       string,
       Extract<LedgerEventV1, { type: "finding-parked" }>
     >();
-    for (const { event } of this.#readAll("finding-parked"))
+    for (const { event } of this.#ledger.readAll({ type: "finding-parked" }))
       if (event.type === "finding-parked" && inCampaign(event))
         parkedEvents.set(key(event), event);
     const parked = new Set(parkedEvents.keys());
     const latestPreconditionClass = new Map<string, string>();
-    for (const { event } of this.#readAll("finding-precondition-classified"))
+    for (const { event } of this.#ledger.readAll({
+      type: "finding-precondition-classified",
+    }))
       if (event.type === "finding-precondition-classified" && inCampaign(event))
         latestPreconditionClass.set(key(event), event.preconditionClass);
     const preconditionClassCounts: Record<string, number> = {
@@ -277,7 +283,9 @@ export class Review<TFacts = unknown> {
     const retryPendingByReason: Record<string, number> = Object.create(null);
     let contradicted = 0;
     let unverified = 0;
-    for (const { event: finding } of this.#readAll("finding-recorded")) {
+    for (const { event: finding } of this.#ledger.readAll({
+      type: "finding-recorded",
+    })) {
       if (finding.type !== "finding-recorded" || !inCampaign(finding)) continue;
       if (finding.derivationKind === "fixed-version-control") continue;
       if (parked.has(key(finding))) continue;
@@ -373,14 +381,16 @@ export class Review<TFacts = unknown> {
     readonly humanElapsedSeconds?: number;
   }): Promise<ReviewDecisionV1> {
     const ref = refSchema.parse(input.ref);
-    const verification = this.#readAll("verification-finished").find(
-      ({ event }) =>
-        event.type === "verification-finished" &&
-        event.campaignId === ref.campaignId &&
-        event.findingId === ref.findingId &&
-        event.verificationId === ref.verificationId &&
-        event.snapshotDigest === ref.snapshotDigest,
-    )?.event;
+    const verification = this.#ledger
+      .readAll({ type: "verification-finished" })
+      .find(
+        ({ event }) =>
+          event.type === "verification-finished" &&
+          event.campaignId === ref.campaignId &&
+          event.findingId === ref.findingId &&
+          event.verificationId === ref.verificationId &&
+          event.snapshotDigest === ref.snapshotDigest,
+      )?.event;
     if (
       verification?.type !== "verification-finished" ||
       verification.result.status === "contradicted"
@@ -573,7 +583,8 @@ export class Review<TFacts = unknown> {
     const verification = this.#requireConfirmed(assessment.ref);
     if (verification.result.status === "reproduced") {
       const packageDigest = verification.result.reproductionPackageDigest;
-      const manual = this.#readAll("human-reproduction-recorded")
+      const manual = this.#ledger
+        .readAll({ type: "human-reproduction-recorded" })
         .map(({ event }) => event)
         .filter(
           (event) =>
@@ -725,13 +736,15 @@ export class Review<TFacts = unknown> {
     );
     if (draft.revision !== latest)
       return { status: "not-authorized", reason: "superseded-draft" };
-    const authorization = this.#readAll("external-action-authorized").find(
-      ({ event }) =>
-        event.type === "external-action-authorized" &&
-        event.candidateId === candidateId &&
-        event.revisionDigest === draftDigest &&
-        event.destination === destination,
-    );
+    const authorization = this.#ledger
+      .readAll({ type: "external-action-authorized" })
+      .find(
+        ({ event }) =>
+          event.type === "external-action-authorized" &&
+          event.candidateId === candidateId &&
+          event.revisionDigest === draftDigest &&
+          event.destination === destination,
+      );
     return authorization === undefined
       ? { status: "not-authorized", reason: "exact-authorization-required" }
       : { status: "authorized", authorizationId: authorization.event.identity };
@@ -787,11 +800,13 @@ export class Review<TFacts = unknown> {
       .max(1_000_000)
       .optional()
       .parse(input.rewardUsd);
-    const submission = this.#readAll("submission-recorded").find(
-      ({ event }) =>
-        event.type === "submission-recorded" &&
-        event.candidateId === candidateId,
-    )?.event;
+    const submission = this.#ledger
+      .readAll({ type: "submission-recorded" })
+      .find(
+        ({ event }) =>
+          event.type === "submission-recorded" &&
+          event.candidateId === candidateId,
+      )?.event;
     if (submission === undefined)
       throw new Error("Record the submission before its outcome");
     const appended = await this.#ledger.append({
@@ -826,11 +841,13 @@ export class Review<TFacts = unknown> {
     const candidateEvent =
       input.candidateId === undefined
         ? undefined
-        : this.#readAll("submission-recorded").find(
-            ({ event }) =>
-              event.type === "submission-recorded" &&
-              event.candidateId === input.candidateId,
-          )?.event;
+        : this.#ledger
+            .readAll({ type: "submission-recorded" })
+            .find(
+              ({ event }) =>
+                event.type === "submission-recorded" &&
+                event.candidateId === input.candidateId,
+            )?.event;
     const candidate =
       candidateEvent?.type === "submission-recorded"
         ? candidateEvent
@@ -840,12 +857,14 @@ export class Review<TFacts = unknown> {
     const finding =
       findingId === undefined
         ? undefined
-        : this.#readAll("finding-recorded").find(
-            ({ event }) =>
-              event.type === "finding-recorded" &&
-              event.campaignId === campaignId &&
-              event.findingId === findingId,
-          )?.event;
+        : this.#ledger
+            .readAll({ type: "finding-recorded" })
+            .find(
+              ({ event }) =>
+                event.type === "finding-recorded" &&
+                event.campaignId === campaignId &&
+                event.findingId === findingId,
+            )?.event;
     if (findingId !== undefined && finding?.type !== "finding-recorded")
       throw new Error("Human effort must refer to a recorded Finding");
     const snapshotDigest = finding?.snapshotDigest ?? candidate?.snapshotDigest;
@@ -916,7 +935,8 @@ export class Review<TFacts = unknown> {
     const query = z
       .strictObject({ campaignId: id, findingId: id })
       .parse(input);
-    const verification = this.#readAll("verification-finished")
+    const verification = this.#ledger
+      .readAll({ type: "verification-finished" })
       .filter(
         ({ event }) =>
           event.type === "verification-finished" &&
@@ -935,30 +955,38 @@ export class Review<TFacts = unknown> {
       .map(({ content: _content, ...reference }) => reference);
     const candidateIds = new Set(drafts.map((draft) => draft.candidateId));
     const privateEvidenceDigests = [
-      ...this.#readAll("verification-finished").filter(
-        ({ event }) =>
-          event.type === "verification-finished" &&
-          event.campaignId === query.campaignId &&
-          event.findingId === query.findingId,
-      ),
-      ...this.#readAll("scope-assessed").filter(
-        ({ event }) =>
-          event.type === "scope-assessed" &&
-          event.campaignId === query.campaignId &&
-          event.findingId === query.findingId,
-      ),
-      ...this.#readAll("draft-saved").filter(
-        ({ event }) =>
-          event.type === "draft-saved" &&
-          event.campaignId === query.campaignId &&
-          event.findingId === query.findingId,
-      ),
-      ...this.#readAll("external-action-authorized").filter(
-        ({ event }) =>
-          event.type === "external-action-authorized" &&
-          event.campaignId === query.campaignId &&
-          candidateIds.has(event.candidateId),
-      ),
+      ...this.#ledger
+        .readAll({ type: "verification-finished" })
+        .filter(
+          ({ event }) =>
+            event.type === "verification-finished" &&
+            event.campaignId === query.campaignId &&
+            event.findingId === query.findingId,
+        ),
+      ...this.#ledger
+        .readAll({ type: "scope-assessed" })
+        .filter(
+          ({ event }) =>
+            event.type === "scope-assessed" &&
+            event.campaignId === query.campaignId &&
+            event.findingId === query.findingId,
+        ),
+      ...this.#ledger
+        .readAll({ type: "draft-saved" })
+        .filter(
+          ({ event }) =>
+            event.type === "draft-saved" &&
+            event.campaignId === query.campaignId &&
+            event.findingId === query.findingId,
+        ),
+      ...this.#ledger
+        .readAll({ type: "external-action-authorized" })
+        .filter(
+          ({ event }) =>
+            event.type === "external-action-authorized" &&
+            event.campaignId === query.campaignId &&
+            candidateIds.has(event.candidateId),
+        ),
     ].flatMap(({ event }) =>
       event.artifacts.map((artifact) => artifact.digest),
     );
@@ -982,13 +1010,15 @@ export class Review<TFacts = unknown> {
   #requireConfirmed(
     ref: ReviewRef,
   ): Extract<LedgerEventV1, { type: "verification-finished" }> {
-    const verification = this.#readAll("verification-finished").find(
-      ({ event }) =>
-        event.type === "verification-finished" &&
-        event.campaignId === ref.campaignId &&
-        event.findingId === ref.findingId &&
-        event.verificationId === ref.verificationId,
-    );
+    const verification = this.#ledger
+      .readAll({ type: "verification-finished" })
+      .find(
+        ({ event }) =>
+          event.type === "verification-finished" &&
+          event.campaignId === ref.campaignId &&
+          event.findingId === ref.findingId &&
+          event.verificationId === ref.verificationId,
+      );
     if (
       verification?.event.type !== "verification-finished" ||
       verification.event.snapshotDigest !== ref.snapshotDigest ||
@@ -1009,12 +1039,14 @@ export class Review<TFacts = unknown> {
       .read({ campaignId, findingId, type: "finding-recorded", limit: 1 })
       .at(0)?.event;
     if (finding?.type !== "finding-recorded") return undefined;
-    const run = this.#readAll("discovery-run-started").find(
-      ({ event }) =>
-        event.type === "discovery-run-started" &&
-        event.campaignId === campaignId &&
-        event.runId === finding.runId,
-    )?.event;
+    const run = this.#ledger
+      .readAll({ type: "discovery-run-started" })
+      .find(
+        ({ event }) =>
+          event.type === "discovery-run-started" &&
+          event.campaignId === campaignId &&
+          event.runId === finding.runId,
+      )?.event;
     const promptDigest =
       run?.type === "discovery-run-started"
         ? run.configuration.promptDigest
@@ -1023,17 +1055,6 @@ export class Review<TFacts = unknown> {
       runId: finding.runId,
       ...(promptDigest === undefined ? {} : { promptDigest }),
     };
-  }
-
-  #readAll(type: LedgerEventV1["type"]) {
-    const records: ReturnType<Ledger["read"]>[number][] = [];
-    let afterSequence = 0;
-    for (;;) {
-      const page = this.#ledger.read({ type, afterSequence, limit: 1000 });
-      records.push(...page);
-      if (page.length < 1000) return records;
-      afterSequence = page[page.length - 1]!.sequence;
-    }
   }
 
   async #storeRecord(record: object): Promise<string> {
@@ -1060,9 +1081,11 @@ export class Review<TFacts = unknown> {
 
   async #allAssessments(): Promise<ScopeAssessment[]> {
     return Promise.all(
-      this.#readAll("scope-assessed").map(({ event }) =>
-        this.#readRecord(event, "review-scope", assessmentSchema),
-      ),
+      this.#ledger
+        .readAll({ type: "scope-assessed" })
+        .map(({ event }) =>
+          this.#readRecord(event, "review-scope", assessmentSchema),
+        ),
     );
   }
 
@@ -1078,9 +1101,11 @@ export class Review<TFacts = unknown> {
 
   async #allDrafts(): Promise<z.infer<typeof draftSchema>[]> {
     return Promise.all(
-      this.#readAll("draft-saved").map(({ event }) =>
-        this.#readRecord(event, "review-draft", draftSchema),
-      ),
+      this.#ledger
+        .readAll({ type: "draft-saved" })
+        .map(({ event }) =>
+          this.#readRecord(event, "review-draft", draftSchema),
+        ),
     );
   }
 }

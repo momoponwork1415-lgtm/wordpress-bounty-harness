@@ -495,6 +495,11 @@ export type LedgerReadQuery = {
   /** Events at or after this instant (ISO 8601). */
   readonly since?: string;
 };
+/** `readAll` takes the same filters as `read`; it pages by sequence itself. */
+export type LedgerReadAllQuery = Omit<
+  LedgerReadQuery,
+  "limit" | "afterSequence"
+>;
 /** One group of `ledger stops`: an event type, its grouping fields and how many. */
 export type StopRow = {
   readonly type:
@@ -647,6 +652,9 @@ const querySchema = z.strictObject({
   limit: z.number().int().min(1).max(1000).optional(),
   since: z.iso.datetime({ offset: true }).optional(),
 });
+
+/** `read`'s maximum `limit`; `readAll` pages at this size. */
+const READ_ALL_PAGE = 1000;
 
 const SINCE_CLAUSE =
   "julianday(json_extract(event_json, '$.occurredAt')) >= julianday(?)";
@@ -1032,6 +1040,18 @@ export class Ledger {
         ),
       };
     });
+  }
+
+  /** Every matching event in sequence order; pages through `read` until exhausted. */
+  readAll(query: LedgerReadAllQuery = {}): readonly LedgerRecord[] {
+    const records: LedgerRecord[] = [];
+    let afterSequence = 0;
+    for (;;) {
+      const page = this.read({ ...query, afterSequence, limit: READ_ALL_PAGE });
+      records.push(...page);
+      if (page.length < READ_ALL_PAGE) return records;
+      afterSequence = page[page.length - 1]!.sequence;
+    }
   }
 
   usage(query: { readonly campaignId?: string } = {}): readonly UsageRow[] {

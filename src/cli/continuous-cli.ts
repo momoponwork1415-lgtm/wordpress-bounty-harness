@@ -63,20 +63,8 @@ export function continuousCounts(
   state: Pick<CliState, "ledger">,
   since: string,
 ) {
-  const all = (type: "discovery-run-started" | "discovery-run-finished") => {
-    const events = [];
-    for (let afterSequence = 0; ;) {
-      const page = state.ledger.read({
-        type,
-        since,
-        afterSequence,
-        limit: 1000,
-      });
-      events.push(...page.map(({ event }) => event));
-      if (page.length < 1000) return events;
-      afterSequence = page.at(-1)!.sequence;
-    }
-  };
+  const all = (type: "discovery-run-started" | "discovery-run-finished") =>
+    state.ledger.readAll({ type, since }).map(({ event }) => event);
   const explore = new Set(
     all("discovery-run-started").flatMap((event) =>
       event.type === "discovery-run-started" &&

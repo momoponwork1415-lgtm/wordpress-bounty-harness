@@ -19,14 +19,7 @@ import {
 const parserVersion = "wordpress-candidate-v1";
 
 function campaignEvents(ledger: Ledger, campaignId: string): LedgerEventV1[] {
-  const events: LedgerEventV1[] = [];
-  let afterSequence = 0;
-  for (;;) {
-    const page = ledger.read({ campaignId, afterSequence, limit: 1000 });
-    events.push(...page.map(({ event }) => event));
-    if (page.length < 1000) return events;
-    afterSequence = page.at(-1)!.sequence;
-  }
+  return ledger.readAll({ campaignId }).map(({ event }) => event);
 }
 
 /** Reinterpret only archived candidate output bound to an existing run receipt. */

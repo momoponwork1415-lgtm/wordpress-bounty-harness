@@ -551,6 +551,48 @@ describe("Ledger public interface", () => {
     expect(ledger.read({ campaignId: "campaign-1" })).toHaveLength(2);
   });
 
+  it("readAll returns every event past the page size, in sequence, with filters", async () => {
+    const { ledger } = await fixture();
+    const total = 1003;
+    for (let index = 0; index < total; index++)
+      await ledger.append({
+        ...common(
+          `snapshot-${index}`,
+          snapshot,
+          index % 2 === 0 ? "campaign-even" : "campaign-odd",
+        ),
+        type: "snapshot-frozen",
+        sourceDigest: snapshot,
+      });
+    await ledger.append({
+      ...common("selection-1", snapshot, "campaign-even"),
+      type: "target-selected",
+      selectionId: "selection-1",
+      artifacts: [],
+    });
+    expect(ledger.read()).toHaveLength(100);
+    expect(ledger.read({ limit: 1000 })).toHaveLength(1000);
+    const all = ledger.readAll();
+    expect(all).toHaveLength(total + 1);
+    expect(all.map(({ sequence }) => sequence)).toEqual(
+      Array.from({ length: total + 1 }, (_, index) => index + 1),
+    );
+    expect(all.at(-1)?.event.type).toBe("target-selected");
+    const even = ledger.readAll({
+      campaignId: "campaign-even",
+      type: "snapshot-frozen",
+    });
+    expect(even).toHaveLength(Math.ceil(total / 2));
+    expect(
+      even.every(
+        ({ event }) =>
+          event.type === "snapshot-frozen" &&
+          event.campaignId === "campaign-even",
+      ),
+    ).toBe(true);
+    expect(ledger.readAll({ type: "target-selected" })).toHaveLength(1);
+  }, 30_000);
+
   it("records a mismatched or ungrounded judgment as incomplete", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);
@@ -1058,6 +1100,40 @@ describe("Ledger public interface", () => {
         assignmentUnit: "route",
       },
       history: { mode: "catalog" },
+    });
+  });
+
+  it("still reads old assignment and ablation-arm run events and counts them per arm", async () => {
+    const { ledger } = await fixture();
+    for (const [runId, configuration] of [
+      [
+        "assigned-run",
+        {
+          assignmentUnit: "entry-point",
+          assignment: { partition: 0, of: 2, planDigest: revision },
+          arms: { history: "b", prompt: "a" },
+        },
+      ],
+      [
+        "single-axis-run",
+        { assignmentUnit: "plugin", axis: "history", arm: "a" },
+      ],
+    ] as const)
+      expect(
+        await ledger.append({
+          ...common(`start-${runId}`),
+          type: "discovery-run-started",
+          runId,
+          labId: "lab-1",
+          history: { mode: "none" },
+          configuration: { promptVariant: "v5", ...configuration },
+        }),
+      ).toEqual({ status: "appended" });
+    expect(ledger.funnel("campaign-1").byArm).toEqual({
+      "history:a": { runs: 1, findings: 0, confirmed: 0 },
+      "history:b": { runs: 1, findings: 0, confirmed: 0 },
+      "prompt:a": { runs: 1, findings: 0, confirmed: 0 },
+      "history:b+prompt:a": { runs: 1, findings: 0, confirmed: 0 },
     });
   });
 
