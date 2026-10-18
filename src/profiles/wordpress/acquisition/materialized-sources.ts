@@ -1,9 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
 import {
+  checkSourceAgainstManifest,
   measureCanonicalSourceTree,
   type ExpectedSourceTree,
 } from "../../../infrastructure/canonical-source-tree.js";
@@ -100,31 +101,17 @@ export function openMaterializedSources(options: {
     await mkdir(options.rootDirectory, { recursive: true, mode: 0o700 });
     const staging = join(options.rootDirectory, `.staging-${randomUUID()}`);
     try {
-      for (const entry of manifest.entries) {
-        let bytes: Uint8Array;
-        try {
-          bytes = await source.readFile(entry.path);
-        } catch (error) {
-          throw new SourceAcquisitionError("source-mismatch", {
-            reason: "manifest-file-unavailable",
-            path: entry.path,
-            detail: error instanceof Error ? error.message : String(error),
-          });
-        }
-        const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-        if (bytes.byteLength !== entry.size || digest !== entry.digest)
-          throw new SourceAcquisitionError("source-mismatch", {
-            reason: "manifest-content",
-            path: entry.path,
-            expectedSize: entry.size,
-            actualSize: bytes.byteLength,
-            expectedDigest: entry.digest,
-            actualDigest: digest,
-          });
-        const path = join(staging, entry.path);
-        await mkdir(dirname(path), { recursive: true });
-        await writeFile(path, bytes, { flag: "wx", mode: 0o444 });
-      }
+      const checked = await checkSourceAgainstManifest(
+        manifest,
+        (path) => source.readFile(path),
+        async (entry, bytes) => {
+          const path = join(staging, entry.path);
+          await mkdir(dirname(path), { recursive: true });
+          await writeFile(path, bytes, { flag: "wx", mode: 0o444 });
+        },
+      );
+      if (checked.status !== "verified")
+        throw new SourceAcquisitionError("source-mismatch", checked.mismatch);
       await rename(staging, directoryFor(sourceDigest));
     } catch (error: unknown) {
       await rm(staging, { recursive: true, force: true });

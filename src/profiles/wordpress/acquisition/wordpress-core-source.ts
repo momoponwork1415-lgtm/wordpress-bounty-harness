@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, rm } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
+import { walkCanonicalSourceTree } from "../../../infrastructure/canonical-source-tree.js";
 import type { NativeModelProcessResult } from "../../../infrastructure/native-model-process.js";
 import { runNativeModelProcess } from "../../../infrastructure/native-model-process.js";
 import type { AcquiredSource } from "../../../snapshot/index.js";
@@ -114,16 +114,13 @@ export function openWordPressCoreSource(options: {
       throw new Error(
         `The Lab image runs WordPress ${version}, not the declared ${options.expectedVersion}`,
       );
-    const entries = await manifestEntries(directory, limits);
+    // Links, path collisions and files changing under the walk stop the freeze.
+    const { manifest } = await walkCanonicalSourceTree(directory, limits);
     return [
       {
         identity: WORDPRESS_CORE_IDENTITY,
         version,
-        manifest: {
-          kind: "canonical-file-manifest",
-          schemaVersion: 1,
-          entries,
-        },
+        manifest,
         readFile: (path) => readFile(join(directory, path)),
       },
     ];
@@ -137,45 +134,4 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-/** Sorted manifest of regular files; links and odd entries stop the freeze. */
-async function manifestEntries(
-  root: string,
-  limits: { readonly maxEntries: number; readonly maxBytes: number },
-): Promise<{ path: string; digest: string; size: number }[]> {
-  const entries: { path: string; digest: string; size: number }[] = [];
-  let bytes = 0;
-  const walk = async (
-    absolute: string,
-    segments: readonly string[],
-  ): Promise<void> => {
-    for (const child of (await readdir(absolute, { withFileTypes: true })).sort(
-      (left, right) => (left.name < right.name ? -1 : 1),
-    )) {
-      if (/[\\\0]/.test(child.name))
-        throw new Error("WordPress core contains an invalid path");
-      const path = join(absolute, child.name);
-      const stat = await lstat(path);
-      if (stat.isSymbolicLink())
-        throw new Error("WordPress core contains a symbolic link");
-      if (stat.isDirectory()) {
-        await walk(path, [...segments, child.name]);
-        continue;
-      }
-      if (!stat.isFile() || stat.nlink > 1)
-        throw new Error("WordPress core contains a non-regular entry");
-      const content = await readFile(path);
-      bytes += content.byteLength;
-      entries.push({
-        path: [...segments, child.name].join("/"),
-        digest: `sha256:${createHash("sha256").update(content).digest("hex")}`,
-        size: content.byteLength,
-      });
-      if (entries.length > limits.maxEntries || bytes > limits.maxBytes)
-        throw new Error("WordPress core exceeds the source limits");
-    }
-  };
-  await walk(root, []);
-  return entries.sort((left, right) => (left.path < right.path ? -1 : 1));
 }

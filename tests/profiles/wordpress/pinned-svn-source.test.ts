@@ -272,7 +272,9 @@ describe("pinned WordPress.org SVN source", () => {
         "php-runtime-source",
         "wporg:elementor",
       ]);
-      expect(await snapshots.verify(frozen.digest)).toBe(true);
+      expect(await snapshots.load(frozen.digest)).toMatchObject({
+        status: "loaded",
+      });
       expect((await sources.resolve(frozen)).dependencies).toHaveLength(3);
       const blobDigest = captured.packet.sourceTree.manifest.entries[0]!.digest;
       await writeFile(

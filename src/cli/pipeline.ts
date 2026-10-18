@@ -43,8 +43,6 @@ export interface CampaignPipeline<
   }) => Promise<{
     readonly input: CampaignInputV1;
     readonly plannedTrials: readonly PlannedTrial[];
-    readonly historyFraction: number;
-    readonly ablation?: NonNullable<DiscoveryOptions["ablation"]>;
     readonly concurrency?: number;
     readonly runWallTimeMs?: number;
     readonly executor: DiscoveryOptions["executor"];

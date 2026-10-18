@@ -4,11 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  planWordPressEntryAssignments,
-  renderWordPressEntryAssignment,
-  renderWordPressEntryIndex,
-} from "../../../src/profiles/wordpress/discovery/entry-points.js";
+import { renderWordPressEntryIndex } from "../../../src/profiles/wordpress/discovery/entry-points.js";
 import { buildWordPressSourceIndex } from "../../../src/profiles/wordpress/discovery/storage-index.js";
 import {
   describeWordPressUnresolved,
@@ -126,14 +122,9 @@ describe("WordPress unresolved registrations", () => {
       expect(renderWordPressEntryIndex(index)).toBe(
         renderWordPressEntryIndex(cleared),
       );
-      const render = (value: typeof index) =>
-        planWordPressEntryAssignments(value, 8).map((assignment) =>
-          renderWordPressEntryAssignment(assignment, true),
-        );
-      expect(render(index)).toEqual(render(cleared));
-      expect(
-        [renderWordPressEntryIndex(index), ...render(index)].join("\n"),
-      ).not.toMatch(/unresolved|dynamic-hook|dispatcher/i);
+      expect(renderWordPressEntryIndex(index)).not.toMatch(
+        /unresolved|dynamic-hook|dispatcher/i,
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

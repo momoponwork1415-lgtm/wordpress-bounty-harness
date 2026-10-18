@@ -41,10 +41,24 @@ describe("snapshot", () => {
       const frozen = await snapshot.freeze(undefined);
       expect(frozen.target.sourceDigest).toMatch(/^sha256:/);
       expect(frozen.dependencies).toHaveLength(1);
-      expect(await snapshot.verify(frozen.digest)).toBe(true);
+      expect(await snapshot.load(frozen.digest)).toEqual({
+        status: "loaded",
+        snapshot: frozen,
+      });
+      expect(await snapshot.load(`sha256:${"0".repeat(64)}`)).toEqual({
+        status: "unavailable",
+        reason: "missing",
+      });
+      expect(await snapshot.load("not-a-digest")).toEqual({
+        status: "unavailable",
+        reason: "invalid-digest",
+      });
       const path = join(directory, `${frozen.digest.slice(7)}.json`);
       await writeFile(path, `${await readFile(path, "utf8")} `);
-      expect(await snapshot.verify(frozen.digest)).toBe(false);
+      expect(await snapshot.load(frozen.digest)).toEqual({
+        status: "unavailable",
+        reason: "digest-mismatch",
+      });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
