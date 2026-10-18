@@ -63,7 +63,7 @@
   "historyWindowDays": 365,
   "historyCountCap": 10,
   "historyPayingClassCap": 3,
-  "maximumHistoryAgeDays": 2,
+  "maximumHistoryAgeDays": 14,
   "historyPayingClasses": [
     "stored-xss",
     "sql-injection",
