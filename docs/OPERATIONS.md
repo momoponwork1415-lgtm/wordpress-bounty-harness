@@ -24,7 +24,7 @@
 | 選定方針 | `src/profiles/wordpress/policy/selection.json`（説明は同じ場所の `selection.md`）。インストール数の下限と上限、更新の鮮度、除外slug、公開履歴の重み・window・mirror の最大 age（ADR 0037） | 月1回程度 |
 | trust境界宣言 | `src/profiles/wordpress/prompts/trust-boundary-v1.md` をそのまま使う | ほぼ変えない |
 | 対象範囲の方針 | `src/profiles/wordpress/policy/programme-scope.md` を公式ページで見直す | 提出前と月1回 |
-| 履歴mirror | 第5節の手順で更新し、`history status` で鮮度を確かめる。mirror が 2 日以上古いと選定が止まる（方針 `maximumHistoryAgeDays`、ADR 0037）。日次更新の自動化は #231 | 毎日と提出前 |
+| 履歴mirror | 第5節の手順で更新し、`history status` で鮮度を確かめる。mirror が方針 `maximumHistoryAgeDays` より古いと選定が止まる（ADR 0037。既定 2 日、2026-10-19 から一時的に 14 日、PR #383、戻しは #385）。日次更新は host の cron（19:10 UTC）が旧環境の `refresh_wordfence.py` を回す | 毎日と提出前 |
 | 人手に数えない保守 | Step 1 の「人手介入 0」の判定で介入に数えないもの: 1 日 1 回の `continuous status`、ChatGPT の再ログイン（`waiting-login` からの再開）、Programme 写しの月 1 回の更新、提出前の mirror 更新、`docker system prune`（`-a` を付けない）、`lab cleanup`、レビュー batch の前後の `continuous stop` / `resume` / `run`。それ以外（下限の変更、設定変更、手動の `campaign run`、修正 PR）は介入に数える | 判定時 |
 
 ## 2. 週の流れ
@@ -33,7 +33,7 @@
 harness history status                                   # 履歴mirrorの鮮度。fresh以外は終了コード1
 harness runtime check --config <path>                    # 起動時検査の全項目とCodex image / runtime profileの一致。欠ければ終了コード1
 harness select --config src/profiles/wordpress/policy/selection.json   # WordPress.org から3〜5対象を選び Snapshot 固定。承認は不要
-harness campaign run --all --campaign <id> --config <campaign.json>    # campaign 設定は同じ選定方針を参照する。最新の選定バッチから Lab → discovery → verification
+harness campaign run --all --campaign <id> --config <campaign.json>    # campaign 設定は同じ選定方針を参照する。最新の選定バッチから discovery（探索用 Lab は既定で付けない）。検証は後から verify next で Finding ごと
 harness review [--campaign <id>]                         # 検証済みの列を見る
 ```
 
@@ -63,11 +63,11 @@ harness campaign resume --campaign <id> --run <runId> --config <campaign.json>  
 
 `campaign resume` は操作者が名指しした 1 run だけを、同じ Snapshot・同じ runtime profile・同じ v8 再開段落・残り wall（120 分 − 消費済み）で、session file と notes を復元した新しい使い捨て container に `codex exec resume` する。再開できる run は `failed(provider: provider-cyber-policy)` で Lab 無し、receipt に `session` があり、残り wall が 5 分以上あるものだけ。それ以外は `not resumable: <理由>` を 1 行出して終了コード 3、event は書かない。再開 segment は同じ `trialId` で `discovery-run-started.resumesRun` を持ち、funnel では Trial 1 回のまま、wall と token は合算する。同じ thread が再び拒否されることはある。自動では再開せず、prompt の言い換えもしない。旧 receipt（`session` 無し）の run は再開できない。
 
-`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v8` のRoot＋最大4子による協調Trialを1回行い、wall上限は120分。最低60分は能動的に探索し、Rootが早く最終報告したときは同じ協調セッションで探索を続ける。継続不能、wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、同一対象の追加Trialは起動しない。各 Finding は別コンテナの Verifier と判定器を通る。
+`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v8` のRoot＋最大4子による協調Trialを1回行い、wall上限は120分。最低60分は能動的に探索し、Rootが早く最終報告したときは同じ協調セッションで探索を続ける。継続不能、wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、同一対象の追加Trialは起動しない。各 Finding は後から `verify next`（`continuous run` では検証 worker が順に、検証 skill では `--handoff`、ADR 0035）で Finding 単位の Lab と判定器を通る（下の `discovery.lab`）。
 wall 到達時は agent と broker を名前で `docker stop -t 10`（失敗時は `docker kill`）してから、子の報告を回収し `discovery-run-finished` に `incomplete(wall)` を記録して Lab を片付ける。
 `continuous run` に SIGTERM を送ると進行中の探索 run を同じ手順で停止し、`stopped reason=operator` を記録して終了する。
 
-v7 は固定 source からの探索をRootに任せ、入口索引を渡さない。`discovery-run-started` に索引無効を記録する。旧v5/v6の索引、coverage と `incomplete(depth)` の記録は過去の評価結果として読み続ける。
+v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入口索引を渡さない（索引の生成 code は ADR 0034 で削除）。旧v5/v6の索引、coverage と `incomplete(depth)` の記録は過去の評価結果として読み続ける。
 
 既定かつ新規Trialで唯一選べるpromptは `wp2shell-bounty-v8`（2026-10-18、所有者決定）。旧版と実験結果は履歴照合用に残し、探索には使わない。Snapshotに対象、WordPress core、実行imageと一致するPHP source、`Requires Plugins` または明示pinによる依存pluginを固定する。探索sourceは `/workspace/main`、`/workspace/wordpress`、`/workspace/php`、`/workspace/dependencies/<slug>` に読み取り専用でmountする。`ledger runtime` とrun receiptで実際のwall・source読取を確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
 
@@ -136,13 +136,13 @@ harness continuous status --state <dir>
 ```
 
 - `run` は `select` → `campaign run --all` → 次の batch を回り続ける。実行履歴の正本は台帳で、`<state>/continuous.json` / `.pid` / `.log` は作業用、`.stop` は理由とともに解除まで残す停止指示。第 2 の journal、owner lease、host 共通 claim、crash 復旧の自動化は持たない。
-- 止まるのは operator の stop、候補枯渇（`exhausted`）、Programme 写しの 35 日超（`programme-stale`）、legacy JSON の欠落（`legacy-history-missing`）、例外 3 batch 連続（`errors`）、completed 0 の batch 3 連続（`no-progress`）の 6 つ。明示的な operator stop と他 5 つの理由は、理由付き停止マーカーを残して終了コード 0 で終え、systemd の `Restart=on-failure` では再起動しない。`OnFailure` はこれらの停止では発火しないため、停止の通知は `--notify` と `continuous status` の監視で行う。例外による crash は終了コード 1 で再起動対象。quota、拒否、ログイン失効（`waiting-login`）、disk 不足では止まらず待つ。
+- 止まるのは operator の stop、候補枯渇（`exhausted`）、Programme 写しの 35 日超（`programme-stale`）、legacy JSON の欠落（`legacy-history-missing`）、例外 3 batch 連続（`errors`。mirror の鮮度 gate で `select` が止まったときも例外として数える、ADR 0037）、completed 0 の batch 3 連続（`no-progress`）の 6 つ。明示的な operator stop と他 5 つの理由は、理由付き停止マーカーを残して終了コード 0 で終え、systemd の `Restart=on-failure` では再起動しない。`OnFailure` はこれらの停止では発火しないため、停止の通知は `--notify` と `continuous status` の監視で行う。例外による crash は終了コード 1 で再起動対象。quota、拒否、ログイン失効（`waiting-login`）、disk 不足では止まらず待つ。
 - `status` は状態、pid、最後の例外、今日と今週の Trial 開始・completed・provider-limited・provider-refused・run-failed・Lab 失敗・unsettled、review queue と parked を出す。停止マーカーが残り pid が生きていれば `stopping`、pid が死んでいれば `stopped(<理由>)`、停止マーカーがなく memo だけ実行中なら `stale` と表示し、いずれも終了コード 1。`stop` は `<state>/continuous.stop` に `operator` を記録し、runner は次の対象の境界で止まる。停止マーカーは crash や systemd 再起動でも消えず、通常の `continuous run` は選定・campaign・Lab 掃除を始めない。
 - レビュー後または異常停止の原因を確認・修正した後は pid が消えたことを `continuous status` で確認し、systemd 運用なら `continuous resume --state <dir>` で停止マーカーを解除してから unit を起動する。手動運用なら `continuous run ... --resume` で解除と起動を一度に行える。実行中 pid がある間の再開は拒否する。systemd unit の `ExecStart` に `--resume` を固定しない。SIGINT / SIGTERM は進行中の対象を drain して終了するが、停止マーカーは残さない。runner は `campaign run --selection <path>` と同じく campaign 設定の `selectionPolicyPath` を差し替えて走る。各 batch の後の Lab 残骸の掃除は、`lab up` の Lab か `lab up --for-review` が生きている間は行わない。
 - install 下限の切り下げは方針の `cascade` が宣言し、runner も `select` も人手なしに同じ規則で動く（ADR 0037 の 2026-10-19 追記）。主帯 100k–1M で `--minimum`（runner は 1）に満たないときだけ、`cascade` の段を順に試す: 50k → 30k → ≥1M かつ paying class 記録 ≥2（所有者の順。報告 §5.4 の ≥1M 先行は採らない）。各段は主方針に段の値を重ねたもので、`excludedAuthors` は ≥1M でも効く。段を使った選定は選定レポートと `target-selected` に `cascadeStep`（1 始まり）を残し、主帯は無印。全段で 0 のときだけ `exhausted`。
 - 帯ごとの収率は台帳から読む: `target-selected` の `cascadeStep` を campaignId と snapshotDigest で `discovery-run-started`（Trial）と scope 内の `finding-recorded` に結び、段ごとに Finding / Trial を数える（`sqlite3 ledger.sqlite "select json_extract(event_json,'$.cascadeStep') step, count(*) from ledger_events where event_type='target-selected' group by step"` が段ごとの選定数）。この数字が出るまで段の順は変えない。
 - 前提: 単一 host、単一運用者、本番の `--state` は 1 つ。硬い総 token 枠は置かず、provider の quota と operator の stop だけで止まる。未 merge branch で回した Trial は本番の分母に混ぜない。起動は systemd user unit（`loginctl enable-linger`、`WorkingDirectory=<本番 checkout>`、`Restart=on-failure`、`RestartSec=300`、`TimeoutStopSec=4500`、`KillMode=mixed`、`OnFailure=<通知 unit>`）か `nohup`。本番 checkout での `pnpm build` は `continuous stop` の後だけ。
-- 同じ plugin slug の 2 回目以降の独立 Trial は 1 Trial ごとに所有者が事前承認する（ADR 0032 Q6）。承認の形式は所有者が 2 回目を求めるときに設計する。Step 1 は初回 Trial だけを回す。
+- 同じ plugin slug の再訪は選定方針の `revisitPolicy`（版上昇かつ最後の Trial から 90 日、ADR 0037 の 2026-10-19 追記 3）で決まり、所有者の事前承認は要らない。同じ版を手で再 Trial するときは ADR 0032 Q6 のまま 1 Trial ごとに所有者が事前承認する。
 - 週次 smoke（#126）は、既知の `runtime-confirmed` Finding に `review reverify` を 1 回打つことで代える（campaign ID は `smoke-<YYYYMMDD>`）。
 - 最新版で確認した新しい `runtime-confirmed` Finding が出たら、その Snapshot と Lab Setup を保持し、週次 smoke の case に加える。通った検証は回帰試験になる。
 
@@ -213,7 +213,7 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 - 更新は既存の正規化器で行う。旧環境で `python3 tools/refresh_wordfence.py --workspace /home/dev/wp-bounty-workspace` を実行する。API keyは `WORDFENCE_INTELLIGENCE_API_KEY` か `~/.config/wordfence/env` に置く。成功後30分以内の再取得は抑止される。
 - 更新後に `harness history status` を見る。照合口と同じ規則で、`fresh` / `stale`（既定24時間超、または前回更新の失敗）/ `unavailable`（stateが読めない、DBとstateが食い違う）を表示する。
 - `stale` / `unavailable` は「重複なし」を意味しない。詳細は [wordfence-history/README.md](../src/profiles/wordpress/wordfence-history/README.md)。
-- 選定は同じ mirror の件数を採点に使い、`last_successful_at` が 2 日（方針 `maximumHistoryAgeDays`）を超えると `select` と runner の選定が止まる（ADR 0037）。日次更新を回す（#231）。
+- 選定は同じ mirror の件数を採点に使い、`last_successful_at` が方針 `maximumHistoryAgeDays`（既定 2 日、2026-10-19 から一時 14 日、#385 で戻す）を超えると `select` と runner の選定が止まる（ADR 0037）。日次更新は host の cron（19:10 UTC）で回す。
 
 ### 対象の自動選定
 
@@ -238,7 +238,7 @@ node scripts/export-legacy-slugs.mjs \
 
 旧 `scripts/prepare-pilot-selection.mjs` は `harness select` の薄い呼び出しとして残す。`--host`、`--state`、`--config` を受け取り、候補と順位は作らない。
 
-スコア内訳、除外理由、候補一覧の取得元と観測時刻は標準出力と Git 外の `selection-report` に残る。最初の Snapshot 固定に失敗した候補は `snapshot-unavailable` として除外し、`target-skipped` から対象選定記録・選定レポート・Private Evidence の診断を digest 参照できるようにする。台帳の理由は短い定型コードだけにする。`target-selected` は固定済み Snapshot digest と `target-selection` の Private Evidence を参照する。次の `campaign run --all` は同じ方針 digest の最新バッチを使い、Snapshot が変われば止まる。公開履歴は host 設定 `wordfenceHistory` の mirror から slug 単位の件数と最新公開日だけを採点に使い（`scoreWeights.history`、既定 5。`historyPayingClass` は既定 0）、記録の内容は読まず探索にも渡さない。mirror の `last_successful_at` が方針の `maximumHistoryAgeDays`（既定 2 日）より古い、state と DB が食い違う、host に mirror が無いときは `select` が候補を観測せずに止まる。選定レポートと `target-selection.json` に mirror の時点と digest、件数、最新公開日が残る（ADR 0037）。
+スコア内訳、除外理由、候補一覧の取得元と観測時刻は標準出力と Git 外の `selection-report` に残る。最初の Snapshot 固定に失敗した候補は `snapshot-unavailable` として除外し、`target-skipped` から対象選定記録・選定レポート・Private Evidence の診断を digest 参照できるようにする。台帳の理由は短い定型コードだけにする。`target-selected` は固定済み Snapshot digest と `target-selection` の Private Evidence を参照する。次の `campaign run --all` は同じ方針 digest の最新バッチを使い、Snapshot が変われば止まる。公開履歴は host 設定 `wordfenceHistory` の mirror から slug 単位の件数と最新公開日だけを採点に使い（重みは上の列挙の段落と `policy/selection.md`。現行は `history: 0`、`historyPayingClass: 1`、`recordRecency: 1`）、記録の内容は読まず探索にも渡さない。mirror の `last_successful_at` が方針の `maximumHistoryAgeDays`（既定 2 日、一時 14 日）より古い、state と DB が食い違う、host に mirror が無いときは `select` が候補を観測せずに止まる。選定レポートと `target-selection.json` に mirror の時点と digest、件数、最新公開日が残る（ADR 0037）。
 
 ### 子の最終JSONがschemaで失敗したとき
 
