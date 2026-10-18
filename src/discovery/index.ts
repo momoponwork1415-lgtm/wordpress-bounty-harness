@@ -1,13 +1,9 @@
 export {
   campaignHistorySchema,
   campaignInputV1Schema,
-  createHistoryCatalog,
   runDiscoveryCampaign,
-  validateEvaluationCampaignInput,
-  validateProductionCampaignInput,
   type CampaignHistory,
   type CampaignInputV1,
-  type CatalogRecord,
   type PlannedDiscoveryRun,
   type PlannedTrial,
 } from "./campaign.js";

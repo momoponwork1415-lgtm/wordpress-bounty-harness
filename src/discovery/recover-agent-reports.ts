@@ -18,7 +18,7 @@ import {
 export class DiscoveryReportError extends Error {}
 
 export type ReportFailure = {
-  readonly reason: Exclude<NativeRunReceipt["reason"], "unavailable"> | "depth";
+  readonly reason: Exclude<NativeRunReceipt["reason"], "unavailable">;
   readonly reasonDetail?: string;
   readonly providerLimit?: "rate-limit" | "quota";
 };
@@ -47,13 +47,7 @@ type ChildRecoveryOptions = RecoveryContext & {
   readonly trialId: string;
   readonly trialOrdinal: number;
   readonly labId?: string;
-  readonly history:
-    | { readonly mode: "none" }
-    | {
-        readonly mode: "catalog";
-        readonly digest: string;
-        readonly recordIds: string[];
-      };
+  readonly history: { readonly mode: "none" };
   readonly configuration: PlannedDiscoveryRun["configuration"];
   readonly promptDigest: string;
   readonly trustBoundaryVersion: string;

@@ -53,7 +53,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | 判定器集合 | 第7節の種別別判定器 |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
 | prompt雛形 | 新規探索では `wp2shell-bounty-v8` だけを実行可能にする。旧版は過去Trialのdigest・実験結果の照合用に保存し、新規探索には使わない。trust境界宣言の雛形も持つ。ADR 0019、0029、0033 |
-| source補助 | 保存先のwrite / readをつなぐ索引と登録入口。Rootと子が参照できるが、固定した役割分担の命令にはしない |
+| source補助 | （削除済み、ADR 0034）保存先索引と登録入口の生成は 2026-10-18 に Harness から外した。どこを読み何を索引にするかは prompt 側の Root が決める |
 | Lead型 | sourceに根拠があり、影響までの辺が1つ足りないprimitiveの分類と記録 |
 | 評価対象の表現 | 開発対象のslug、版、修正版、影響分類。正解表の手入力は初期受入条件にしない |
 
@@ -64,7 +64,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | 契約 | 送り元 → 受け手 | 主な項目 |
 | --- | --- | --- |
 | `TargetSelection v1` | selection → snapshot | plugin slug、version、スコア内訳、方針の版、選定時刻、必要なら対象slugに結び付けた依存pluginの明示pin |
-| `CampaignInput v1` | snapshot → discovery | Target / Dependency Snapshot digest、trust境界宣言（人間が書く、版付き）、Programme Boundary（匿名化）、対象の公開履歴（カタログ情報、`historyCutoff` とdigest付き。渡さないrunは `none`）、model profile digest、prompt digest、Trial単位の停止規則、Lab設定 |
+| `CampaignInput v1` | snapshot → discovery | Target / Dependency Snapshot digest、trust境界宣言（人間が書く、版付き）、Programme Boundary（匿名化）、公開履歴は `none` のみ（時点で切ったカタログの生成は ADR 0034 で削除。旧runの `catalog` は台帳から読む）、model profile digest、prompt digest、Trial単位の停止規則、Lab設定 |
 | `PlannedTrial` | profile → discovery | Trial id / ordinal、Rootと最大4子の実行枠、固定sourceの参照、単一Trialのwall上限。旧形式の入口索引・段・Lead継続planは互換読取のみ |
 | `Finding v1` | discovery → verification / ledger | claim、attacker position（`unauthenticated` / `subscriber` / `customer` のみ）、到達する影響の種別（第8b節の共通分類）、設定前提（`default` / 変更内容）、破られるproperty、入口からeffectまでのtrace（file、function、行）、既存controlへの評価、Lab内で観測した事実、recipe ref（Private）、discovery run id、snapshot digest |
 | `Lead v1` | discovery → ledger / 次回の探索計画 | primitive、storage分類、欠けた辺、source trace。本文はPrivate Evidence、台帳はdigestとenumだけ。Verifierへは送らない |
@@ -85,7 +85,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - 出力: `Finding[]`（0件可）、`Lead[]`（0件可）。v8に入口索引のcoverage recordや網羅の終了条件を課さない。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。候補は生のまま保存し、profileの正規化を通してから受理する。受理できない候補は `candidate-held` として分類とissue pathだけを台帳に残し、保留だけのTrialは無成果に数えない（ADR 0018）。Finding / Leadの出力契約はprompt本文ではなくHarnessがschemaから生成する節として渡し、目的文と契約節のdigestを別に記録する（ADR 0019）。
 - 停止規則: 1 Trialの既定wall上限は120分。最低60分は能動的な探索を指示し、Rootの早期最終報告は同じ協調セッションで継続させる。Harnessが保証するのは60分の経過時間であり、能動性はsource読取・子の活動・ラウンド・provider使用量で事後評価する。継続不能、wall到達、provider上限、broker制限、実行・schema失敗は理由付きの `incomplete` とし、既に保存した子の成果を失わない。最終JSONに到達しなかったTrialを候補0件の正常完了にしない。旧版本文は変更せず履歴照合に残す。同一対象の自動追加Trialはしない。provider上限では新規Trialを止め、runner（`continuous run`）がbackoff後に同じcampaign IDで未消費の対象を再開する。拒否・wall・schema等の対象単位の失敗は `target-skipped` として次の対象へ進み、campaignを止めない。Rootがsourceを1件も読まず、子を起動せず、broker転送が1以下で終わったrunはTrialに数えず、その対象は次の選定で戻る（途中まで走ったTrialはTrialとして数え、再選定しない）。正常完了の0件も脆弱性なしを意味せず、source読取とwallから早期終了と探索後の0件を分ける。
 - 同時実行: 最初はTrialを1つずつ回す。provider要求総数・usage・wallを観測し、安全に増やせることを確かめてから対象間の並列数を決める。
-- 記録する項目（runごと）: trialId / trialOrdinal、Root・子の役割、要求model IDとeffort、CLIの正確な版と同梱カタログのdigest、認証方式、cyber access program、service tier、各agentのusage（providerが返さない項目は `unavailable`）、観測できたsource読取とcommand件数の下限、prompt・sourceのdigest、wallと停止理由。v8の入口索引は無効として記録し、過去の索引・段・継続付きrunは読めるようにする。
+- 記録する項目（runごと）: trialId / trialOrdinal、Root・子の役割、要求model IDとeffort、CLIの正確な版と同梱カタログのdigest、認証方式、cyber access program、service tier、各agentのusage（providerが返さない項目は `unavailable`）、観測できたsource読取とcommand件数の下限、prompt・sourceのdigest、wallと停止理由。v8のrunは入口索引を持たず、過去の索引・段・継続付きrunは読めるようにする（ADR 0034）。
 - 本番model: Daybreak Blue対応の `gpt-6-sol` 系を使う。正確なmodel IDとsubagentへの継承は実機preflightで固定する。`gpt-6.1-sol`やLunaへ暗黙に切り替えない。
 
 ## 7. Verificationの仕様
@@ -173,8 +173,8 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 - イベント例: `target-selected`、`selection-batch-bound`（自動選定したcampaignのバッチと対象集合を固定）、`snapshot-frozen`、`lab-provisioned`、`discovery-run-started / finished`、`lead-recorded`、`finding-recorded`、`verification-finished`、`review-decided`、`scope-assessed`、`draft-saved`、`external-action-authorized`、`submission-outcome`。
 - 規則: 追記のみ。全イベントにsnapshot digest。判定系イベントはdigest一致時のみ有効。setup失敗はdiscovery試行に数えない。
 - funnel view: raw findings → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・種別別に読み取り専用で導く。
-- 添付: Codex `findings.json` / `coverage.json` 等はPrivate Evidenceにdigest付きで保存し、台帳からは参照だけ。
-- Trialの台帳項目: `trialId`、`trialOrdinal`、`runKind`、arm、source索引・分担のdigest。旧Trialの `stage` / `continuationOf` は既存eventの読取互換として残し、新しい主経路では書かない。Leadは欠けた辺・primitive・storage分類と本文のdigestだけを記録する。
+- 添付: Codex `findings.json` 等はPrivate Evidenceにdigest付きで保存し、台帳からは参照だけ。旧Trialの `coverage.json` は参照を読み続ける（ADR 0034）。
+- Trialの台帳項目: `trialId`、`trialOrdinal`、`runKind`。旧Trialの arm、source索引・分担のdigest、`stage` / `continuationOf`、`incomplete(depth)` は既存eventの読取互換として残し、新しい主経路では書かない（ADR 0034）。Leadは欠けた辺・primitive・storage分類と本文のdigestだけを記録する。
 - `lab-provisioned.reachability.http` と `verification-finished.evidenceCapture` は追加されたoptional項目。旧eventは引き続き読める。過去の `campaign-stopped.reason = daily-run-cap` も読めるが、新しいcampaignに日次上限の設定・停止はない。
 
 ## 10. 評価
@@ -288,6 +288,6 @@ TranslatePressの公開済み開発対象を脆弱版と修正版で固定し、
 | 判定器 | Harness所有の決定論的な確認手段。`runtime-confirmed` を出せる唯一の主体 |
 | Verified Vulnerability | `runtime-confirmed` からだけ作る技術的記録。programme scopeと独立 |
 | Trust境界宣言 | 人間が書く「何を信頼するか」の宣言。既知脆弱性を含まない |
-| 公開履歴（history） | 対象プラグインの公開advisoryのカタログ情報。時点で切って探索に渡す。PoCは含まない |
-| historyCutoff | 探索runに渡す履歴の時点。本番はsnapshotの版、評価はheld-outの公開日 |
+| 公開履歴（history） | 対象プラグインの公開advisoryのカタログ情報。旧Trialでは時点で切って探索に渡した。生成は ADR 0034 で削除し、台帳の記録を読むだけ。PoCは含まない |
+| historyCutoff | 旧Trialで探索runに渡した履歴の時点（本番はsnapshotの版、評価はheld-outの公開日）。台帳の読取のみ（ADR 0034） |
 | Answer Key | 評価側だけが持つheld-out caseの正解。探索へ渡さない |

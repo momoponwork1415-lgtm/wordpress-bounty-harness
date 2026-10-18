@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import {
-  createHistoryCatalog,
   createNativeRunReceipt,
   defineAgentRuntimeProfile,
   ProviderAttachmentStore,
@@ -13,8 +12,6 @@ import {
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
 import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/candidate-admission.js";
-import { assessWordPressCoverage } from "../../src/profiles/wordpress/discovery/coverage.js";
-import type { WordPressSourceIndex } from "../../src/profiles/wordpress/discovery/storage-index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const profile = defineAgentRuntimeProfile({
@@ -44,7 +41,8 @@ async function campaign(
     readonly rootTranscriptInvalid?: boolean;
     readonly wallOnFirstRun?: boolean;
     readonly ignoreAbort?: boolean;
-    readonly indexed?: boolean;
+    /** One planned Trial with stop rules 1/1, like the production campaign. */
+    readonly singleTrial?: boolean;
     readonly leadOnly?: boolean;
     /** Report a Finding whose impact lies outside the Programme Boundary (#185). */
     readonly parkedImpact?: boolean;
@@ -54,11 +52,6 @@ async function campaign(
       readonly admitted: number;
     };
     readonly research?: { readonly truncated: boolean };
-    readonly coverage?: {
-      readonly index: WordPressSourceIndex;
-      readonly record?: unknown;
-      readonly maxUnvisitedRatio?: number;
-    };
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-campaign-"));
@@ -83,17 +76,6 @@ async function campaign(
     labId: "lab-1",
     status: "ready",
   });
-  const history = createHistoryCatalog("2026-02-01T00:00:00Z", [
-    {
-      id: "public-1",
-      kind: "sql-injection",
-      affectedVersions: ["1.0"],
-      fixedVersions: ["1.1"],
-      publishedAt: "2026-01-01T00:00:00Z",
-      title: "Synthetic public record",
-      changedFiles: [],
-    },
-  ]);
   const input = {
     schemaVersion: 1 as const,
     snapshotDigest: digest,
@@ -101,14 +83,11 @@ async function campaign(
     programmeBoundary: { version: "v1", text: "Synthetic boundary" },
     modelProfileDigest: profile.digest,
     promptDigest: digest,
-    stopRules: options.indexed
+    stopRules: options.singleTrial
       ? { maxRuns: 1, noFindingRuns: 1 }
       : { maxRuns: 6, noFindingRuns: 2 },
     lab: { setupDigest: digest },
-    history,
-    ...(options.indexed
-      ? { entryIndex: { enabled: true as const, digest } }
-      : {}),
+    history: { mode: "none" as const },
   };
   const claim = {
     claim: "Synthetic account state change",
@@ -120,7 +99,7 @@ async function campaign(
       { file: "includes/example.php", function: "fixture", line: 12 },
     ],
     existingControls: "Capability check elsewhere",
-    labObservations: options.indexed ? "none" : "Canary user changed",
+    labObservations: "Canary user changed",
   };
   let calls = 0;
   const result = await runDiscoveryCampaign({
@@ -132,16 +111,6 @@ async function campaign(
     attachments,
     evidence,
     recordReport: recordWordPressReport,
-    ...(options.coverage === undefined
-      ? {}
-      : {
-          assessCoverage: (value: unknown) =>
-            assessWordPressCoverage(
-              value,
-              options.coverage!.index,
-              options.coverage!.maxUnvisitedRatio ?? 0.2,
-            ),
-        }),
     executor: {
       async execute(run, ...rest) {
         expect(run.expiresAt).toBe(
@@ -337,9 +306,6 @@ async function campaign(
             : [],
           examined: "source",
           unexamined: "none",
-          ...(options.coverage?.record === undefined
-            ? {}
-            : { coverage: options.coverage.record }),
         };
         const attachment = await attachments.put(
           "findings",
@@ -368,7 +334,7 @@ async function campaign(
       },
     },
     plannedTrials: Array.from(
-      { length: options.indexed ? 1 : 6 },
+      { length: options.singleTrial ? 1 : 6 },
       (_, index) => ({
         trialId: `run-${index}`,
         trialOrdinal: index,
@@ -376,16 +342,12 @@ async function campaign(
           configuration: {
             promptVariant: index % 2 ? "wp2shell-derived" : "short-objective",
             assignmentUnit: "route",
-            ...(options.indexed
-              ? { entryIndex: { enabled: true as const, digest } }
-              : {}),
           },
           run: {
             runId: `run-${index}`,
             targetSnapshotDigest: digest,
             profile,
             prompt: "Synthetic objective",
-            ...(options.coverage === undefined ? {} : { coverageSchema: {} }),
             sourceDirectory: "/private/source",
             sourceTree: { digest, entries: 1, bytes: 1 },
             lab: {
@@ -406,7 +368,7 @@ async function campaign(
 it("writes discovery-run-finished with wall after a silent executor reaches its limit", async () => {
   const { result, ledger } = await campaign([], {
     wallOnFirstRun: true,
-    indexed: true,
+    singleTrial: true,
     childSurvivesBrokenRoot: true,
   });
   expect(result).toMatchObject({ runCount: 1, stoppedBy: "incomplete" });
@@ -427,7 +389,7 @@ it("writes discovery-run-finished with wall after a silent executor reaches its 
 it("finishes the ledger when an executor ignores the wall cancellation", async () => {
   const { ledger } = await campaign([], {
     wallOnFirstRun: true,
-    indexed: true,
+    singleTrial: true,
     ignoreAbort: true,
   });
   expect(
@@ -493,7 +455,7 @@ it("admits an extracted Root candidate without treating the transcript as comple
 it("records child thread counts on both completed and incomplete Root runs", async () => {
   for (const rootTranscriptInvalid of [false, true]) {
     const { ledger } = await campaign([], {
-      indexed: true,
+      singleTrial: true,
       rootTranscriptInvalid,
       rootChildCounts: { observed: 4, admitted: 4 },
     });
@@ -511,7 +473,7 @@ it("records child thread counts on both completed and incomplete Root runs", asy
 it("references bounded Trial research evidence from completed and failed Root runs", async () => {
   for (const rootTranscriptInvalid of [false, true]) {
     const { ledger, attachments } = await campaign([], {
-      indexed: true,
+      singleTrial: true,
       rootTranscriptInvalid,
       research: { truncated: true },
     });
@@ -554,166 +516,6 @@ it("keeps raw held candidates and stops at the output boundary", async () => {
   ).toBe("resolved");
 });
 
-it("passes the fixed source entry index to one cooperative Trial without a stage", async () => {
-  const { result, calls, ledger } = await campaign([], { indexed: true });
-  expect(result).toEqual({
-    runCount: 1,
-    findingsRecorded: 0,
-    stoppedBy: "no-new-finding",
-  });
-  expect(calls).toBe(1);
-  const started = ledger.read({ type: "discovery-run-started" })[0]?.event;
-  expect(started).toMatchObject({
-    trialId: "run-0",
-    runKind: "explore",
-    configuration: {
-      promptVariant: "short-objective",
-      entryIndex: { enabled: true, digest },
-    },
-  });
-  expect(started).not.toHaveProperty("stage");
-  expect(started).not.toHaveProperty("continuationOf");
-});
-
-function coverageIndex(incomplete = false): WordPressSourceIndex {
-  return {
-    schemaVersion: 1,
-    digest,
-    incomplete,
-    entries: Array.from({ length: 10 }, (_, ordinal) => ({
-      kind: "ajax" as const,
-      name: `action-${ordinal}`,
-      file: "plugin.php",
-      line: ordinal + 1,
-      callback: null,
-      reach: [],
-      storage: [],
-      crossings: [],
-    })),
-    dynamicStorage: [],
-    components: [],
-    settingsKeys: [],
-    unresolved: [],
-    unresolvedCounts: {
-      "dynamic-hook": 0,
-      "dynamic-rest-route": 0,
-      dispatcher: 0,
-    },
-  };
-}
-
-function coverageRecord(
-  statuses: readonly ("observed" | "blocked" | "unvisited")[],
-  incomplete = false,
-) {
-  return {
-    indexDigest: digest,
-    incomplete,
-    entries: statuses.map((status, ordinal) => ({
-      id: `e-${ordinal + 1}`,
-      status,
-      reason: status === "blocked" ? "precondition" : null,
-    })),
-  };
-}
-
-it("classifies a Root report without coverage as incomplete(depth)", async () => {
-  const { ledger, result } = await campaign([], {
-    indexed: true,
-    coverage: { index: coverageIndex() },
-  });
-  expect(result.stoppedBy).toBe("incomplete");
-  expect(
-    ledger.read({ type: "discovery-run-finished" })[0]?.event,
-  ).toMatchObject({
-    outcome: "failed",
-    reason: "depth",
-  });
-  expect(ledger.funnel("campaign-1").incompleteDepth).toBe(1);
-});
-
-it("classifies malformed Root coverage as incomplete(depth)", async () => {
-  const { ledger } = await campaign([], {
-    indexed: true,
-    coverage: {
-      index: coverageIndex(),
-      record: {
-        ...coverageRecord(Array(10).fill("observed")),
-        note: "free text",
-      },
-    },
-  });
-  expect(
-    ledger.read({ type: "discovery-run-finished" })[0]?.event,
-  ).toMatchObject({
-    outcome: "failed",
-    reason: "depth",
-  });
-});
-
-it("records complete observed/blocked coverage and completes the Trial", async () => {
-  const { ledger, evidence, result } = await campaign([], {
-    indexed: true,
-    coverage: {
-      index: coverageIndex(),
-      record: coverageRecord([
-        "observed",
-        "blocked",
-        ...Array(8).fill("observed"),
-      ]),
-    },
-  });
-  expect(result.stoppedBy).toBe("no-new-finding");
-  const finished = ledger.read({ type: "discovery-run-finished" })[0]?.event;
-  expect(finished).toMatchObject({ outcome: "completed" });
-  const ref = finished?.artifacts.find(
-    (artifact) => artifact.kind === "coverage",
-  );
-  expect(ref).toBeDefined();
-  expect(
-    ref &&
-      (await evidence.readFile(ref.digest, "coverage.json", 100_000)).status,
-  ).toBe("resolved");
-});
-
-it("classifies 30 percent unvisited coverage as incomplete(depth)", async () => {
-  const { ledger } = await campaign([], {
-    indexed: true,
-    coverage: {
-      index: coverageIndex(),
-      record: coverageRecord([
-        ...Array(7).fill("observed"),
-        "unvisited",
-        "unvisited",
-        "unvisited",
-      ]),
-    },
-  });
-  expect(
-    ledger.read({ type: "discovery-run-finished" })[0]?.event,
-  ).toMatchObject({
-    outcome: "failed",
-    reason: "depth",
-  });
-});
-
-it("does not apply the unvisited threshold to an incomplete index", async () => {
-  const { ledger, result } = await campaign([], {
-    indexed: true,
-    coverage: {
-      index: coverageIndex(true),
-      record: coverageRecord(
-        [...Array(7).fill("observed"), "unvisited", "unvisited", "unvisited"],
-        true,
-      ),
-    },
-  });
-  expect(result.stoppedBy).toBe("no-new-finding");
-  expect(
-    ledger.read({ type: "discovery-run-finished" })[0]?.event,
-  ).toMatchObject({ outcome: "completed" });
-});
-
 it("stops after consecutive completed runs without a new Finding and records each run configuration", async () => {
   const { result, calls, ledger } = await campaign([0]);
   expect(result).toEqual({
@@ -751,9 +553,9 @@ it("stops after consecutive completed runs without a new Finding and records eac
           : null,
       ),
   ).toEqual([
-    ["catalog", "short-objective"],
-    ["catalog", "wp2shell-derived"],
-    ["catalog", "short-objective"],
+    ["none", "short-objective"],
+    ["none", "wp2shell-derived"],
+    ["none", "short-objective"],
   ]);
   expect(ledger.funnel("campaign-1")).toMatchObject({
     raw: 1,

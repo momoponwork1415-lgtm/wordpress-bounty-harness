@@ -1,8 +1,6 @@
-import { canonicalJson } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 import type {
-  CampaignHistory,
   CampaignInputV1,
   PlannedDiscoveryRun,
   PlannedTrial,
@@ -45,7 +43,6 @@ export type TrialContext = {
   readonly campaignId: string;
   readonly labId?: string;
   readonly input: CampaignInputV1;
-  readonly history: CampaignHistory;
   readonly runWallTimeMs?: number;
   readonly signal?: AbortSignal;
   readonly executor: {
@@ -58,10 +55,6 @@ export type TrialContext = {
   readonly evidence: PrivateArtifactStore;
   readonly ledger: Ledger;
   readonly recordReport: ReportRecorder;
-  readonly assessCoverage?: (value: unknown) => {
-    readonly accepted: boolean;
-    readonly record?: unknown;
-  };
   readonly clock: () => Date;
   readonly seen: Set<string>;
 };
@@ -82,7 +75,6 @@ export type TrialOutcome = {
   readonly researchArtifact?: FinishedEvent["researchArtifact"];
   /** Sealed receipt: the transport's, or a synthetic one after a cancellation. */
   readonly receiptDigest?: string;
-  readonly coverageDigest?: string;
   readonly readPathsDigest?: string;
   /** SPEC §6: a run that did no observable work is not a Trial. */
   readonly counted: boolean;
@@ -119,9 +111,6 @@ export function finishedEventFrom(
       ...(outcome.receiptDigest === undefined
         ? []
         : [{ kind: "native-run-receipt", digest: outcome.receiptDigest }]),
-      ...(outcome.coverageDigest === undefined
-        ? []
-        : [{ kind: "coverage", digest: outcome.coverageDigest }]),
       ...(outcome.readPathsDigest === undefined
         ? []
         : [{ kind: "read-paths", digest: outcome.readPathsDigest }]),
@@ -129,31 +118,14 @@ export function finishedEventFrom(
   };
 }
 
-function historyMetadataOf(history: CampaignHistory) {
-  return history.mode === "catalog"
-    ? {
-        mode: "catalog" as const,
-        digest: history.digest,
-        recordIds: history.records.map((record) => record.id),
-      }
-    : { mode: "none" as const };
-}
-
 /** The planned run must belong to the CampaignInput it runs under. */
 function assertPlannedForInput(
-  planned: PlannedDiscoveryRun,
   run: PlannedDiscoveryRun["run"],
   input: CampaignInputV1,
 ): void {
   if (
     run.targetSnapshotDigest !== input.snapshotDigest ||
-    run.profile.digest !== input.modelProfileDigest ||
-    (input.entryIndex === undefined
-      ? planned.configuration.entryIndex !== undefined
-      : input.entryIndex.enabled
-        ? planned.configuration.entryIndex?.enabled !== true ||
-          planned.configuration.entryIndex.digest !== input.entryIndex.digest
-        : planned.configuration.entryIndex?.enabled !== false)
+    run.profile.digest !== input.modelProfileDigest
   )
     throw new Error("Planned run differs from the CampaignInput");
 }
@@ -218,26 +190,6 @@ function armCancellation(options: {
   };
 }
 
-/** The Root report's `coverage` member, if the report is readable JSON. */
-async function coverageOf(
-  attachments: ProviderAttachmentStore,
-  attachment: DiscoveryTransportResult["attachment"],
-): Promise<unknown> {
-  if (attachment === undefined) return undefined;
-  const stored = await attachments.read(attachment);
-  if (stored.status !== "resolved") return undefined;
-  try {
-    const report = JSON.parse(stored.bytes.toString("utf8")) as Record<
-      string,
-      unknown
-    >;
-    return report.coverage;
-  } catch {
-    // The report recorder already classifies malformed reports.
-    return undefined;
-  }
-}
-
 /** A transport receipt that ended short of completion names the failure. */
 function failureOf(receipt: NativeRunReceipt): ReportFailure | undefined {
   if (receipt.terminal !== "incomplete" || receipt.reason === "unavailable")
@@ -271,8 +223,7 @@ export async function executeTrial(
           ...planned.run,
           expiresAt: new Date(clock().getTime() + runWallTimeMs).toISOString(),
         };
-  assertPlannedForInput(planned, run, input);
-  const historyMetadata = historyMetadataOf(context.history);
+  assertPlannedForInput(run, input);
   const base: EventBase = {
     schemaVersion: 1,
     campaignId: context.campaignId,
@@ -290,7 +241,7 @@ export async function executeTrial(
     ...(context.labId === undefined
       ? { labAttached: false as const }
       : { labId: context.labId, labAttached: true as const }),
-    history: historyMetadata,
+    history: input.history,
     configuration: {
       ...planned.configuration,
       promptDigest: planned.configuration.promptDigest ?? input.promptDigest,
@@ -351,7 +302,6 @@ export async function executeTrial(
           ...input,
           promptDigest:
             planned.configuration.promptDigest ?? input.promptDigest,
-          history: context.history,
         },
       },
       cancellation.signal,
@@ -392,7 +342,7 @@ export async function executeTrial(
       trialId: trial.trialId,
       trialOrdinal: trial.trialOrdinal,
       ...(context.labId === undefined ? {} : { labId: context.labId }),
-      history: historyMetadata,
+      history: input.history,
       configuration: planned.configuration,
       promptDigest: input.promptDigest,
       trustBoundaryVersion: input.trustBoundary.version,
@@ -407,23 +357,6 @@ export async function executeTrial(
     if (recoveredRoot.recovered) draft.outcome = "completed";
     if (recoveredRoot.failure !== undefined)
       draft.failure = recoveredRoot.failure;
-    if (
-      draft.outcome === "completed" &&
-      run.coverageSchema !== undefined &&
-      context.assessCoverage !== undefined
-    ) {
-      const assessed = context.assessCoverage(
-        await coverageOf(context.attachments, result.attachment),
-      );
-      if (assessed.record !== undefined)
-        draft.coverageDigest = await context.evidence.putFiles({
-          "coverage.json": canonicalJson(assessed.record),
-        });
-      if (!assessed.accepted) {
-        draft.outcome = "failed";
-        draft.failure = { reason: "depth" };
-      }
-    }
   } catch {
     draft.outcome = "failed";
     if (cancellation.signal.aborted) {
