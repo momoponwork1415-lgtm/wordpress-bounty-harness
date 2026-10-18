@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 import {
@@ -7,6 +7,8 @@ import {
   walkCanonicalSourceTree,
 } from "../../../infrastructure/canonical-source-tree.js";
 import type { NativeModelProcessResult } from "../../../infrastructure/native-model-process.js";
+import { bytesDigest } from "../../../infrastructure/content-digest.js";
+import { pathExists } from "../../../infrastructure/immutable-file.js";
 import { runNativeModelProcess } from "../../../infrastructure/native-model-process.js";
 import {
   SourceAcquisitionError,
@@ -163,8 +165,11 @@ export function openPhpRuntimeSource(options: {
           "php-image-version-or-checksum-missing",
         );
 
-      const cached = await exists(directory);
-      if (cached && !(await exists(join(directory, "main", "php_version.h"))))
+      const cached = await pathExists(directory);
+      if (
+        cached &&
+        !(await pathExists(join(directory, "main", "php_version.h")))
+      )
         throw failure("source-mismatch", "php-source-cache-incomplete");
       if (!cached) {
         await mkdir(options.stagingDirectory, { recursive: true, mode: 0o700 });
@@ -196,10 +201,8 @@ export function openPhpRuntimeSource(options: {
           );
           if ((await stat(archive)).size > MAX_ARCHIVE_BYTES)
             throw failure("quota-exceeded", "php-archive-too-large");
-          const actualSha256 = createHash("sha256")
-            .update(await readFile(archive))
-            .digest("hex");
-          if (actualSha256 !== archiveSha256)
+          const actualSha256 = bytesDigest(await readFile(archive));
+          if (actualSha256 !== `sha256:${archiveSha256}`)
             throw failure("source-mismatch", "php-archive-checksum-mismatch");
           const names = (
             await tar(["--quoting-style=literal", "-tJf", archive])
@@ -239,7 +242,7 @@ export function openPhpRuntimeSource(options: {
             "-C",
             source,
           ]);
-          if (await exists(directory)) {
+          if (await pathExists(directory)) {
             await rm(staging, { recursive: true, force: true });
           } else {
             await rename(source, directory);
@@ -305,14 +308,5 @@ function sourceTreeFailure(error: SourceTreeError): SourceAcquisitionError {
       return failure("deferred", "php-source-acquisition-failed", {
         detail: error.message,
       });
-  }
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch {
-    return false;
   }
 }

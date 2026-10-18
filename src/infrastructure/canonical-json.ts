@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
-
 import { z } from "zod";
+
+import { bytesDigest } from "./content-digest.js";
 
 type JsonPrimitive = boolean | null | number | string;
 
@@ -27,10 +27,6 @@ function isPropertyJsonValue(value: unknown): value is JsonValue {
     return false;
   }
   return Object.values(value).every(isPropertyJsonValue);
-}
-
-function digest(encoded: string): string {
-  return `sha256:${createHash("sha256").update(encoded).digest("hex")}`;
 }
 
 /** Encode already-validated JSON without changing persisted byte ordering. */
@@ -74,7 +70,7 @@ export function canonicalJsonPreservingProperties(value: unknown): string {
 }
 
 export function canonicalDigestPreservingProperties(value: unknown): string {
-  return digest(canonicalJsonPreservingProperties(value));
+  return bytesDigest(canonicalJsonPreservingProperties(value));
 }
 
 /**
@@ -84,5 +80,5 @@ export function canonicalDigestPreservingProperties(value: unknown): string {
  * the digest belongs with the encoding rather than beside either store.
  */
 export function canonicalDigest(value: unknown): string {
-  return digest(canonicalJson(value));
+  return bytesDigest(canonicalJson(value));
 }

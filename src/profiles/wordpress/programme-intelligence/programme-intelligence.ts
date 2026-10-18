@@ -1,7 +1,10 @@
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import {
+  artifactId,
+  bytesDigest,
+} from "../../../infrastructure/content-digest.js";
 import { persistImmutableFile } from "../../../infrastructure/immutable-file.js";
 import { canonicalJson, sha256Digest } from "../acquisition/canonical-json.js";
 import {
@@ -31,16 +34,12 @@ interface RetrievedPolicy {
   readonly policy: NormalizedProgrammePolicy;
 }
 
-function rawDigest(bytes: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-}
-
 function snapshotRef(snapshot: ProgrammeEligibilitySnapshot) {
   const digest = sha256Digest(snapshot);
   return programmeEligibilitySnapshotRefSchema.parse({
     kind: "programme-eligibility-snapshot-ref",
     schemaVersion: 1,
-    id: `programme-snapshot:${digest.slice(7, 31)}`,
+    id: artifactId("programme-snapshot", digest),
     digest,
   });
 }
@@ -119,7 +118,7 @@ class FileProgrammeIntelligence implements ProgrammeIntelligence {
         sourceId: adapter.sourceId,
         sourceUrl: adapter.sourceUrl,
         retrievedAt,
-        contentDigest: rawDigest(bytes),
+        contentDigest: bytesDigest(bytes),
         parserVersion: adapter.parserVersion,
       });
       let policy: NormalizedProgrammePolicy;
@@ -135,7 +134,7 @@ class FileProgrammeIntelligence implements ProgrammeIntelligence {
                   sourceId: sourceAdapter.sourceId,
                   sourceUrl: sourceAdapter.sourceUrl,
                   retrievedAt,
-                  contentDigest: rawDigest(sourceBytes),
+                  contentDigest: bytesDigest(sourceBytes),
                   parserVersion: sourceAdapter.parserVersion,
                 }),
             ),

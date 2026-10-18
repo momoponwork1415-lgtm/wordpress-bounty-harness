@@ -1,7 +1,14 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import {
+  artifactId,
+  bytesDigest,
+} from "../../../infrastructure/content-digest.js";
+import {
+  hasErrorCode,
+  persistContentAddressedFile,
+} from "../../../infrastructure/immutable-file.js";
 import {
   checkSourceAgainstManifest,
   SourceTreeError,
@@ -85,19 +92,6 @@ export function acquiredSourceFromIntakePacket(
       return readFile(blobPath(intakeStorageDirectory, digest));
     },
   };
-}
-
-function rawDigest(bytes: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-}
-
-function hasErrorCode(error: unknown, code: string): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === code
-  );
 }
 
 /** The strict walk's first refusal, in the intake's vocabulary. */
@@ -230,24 +224,6 @@ function requestIdentity(
   });
 }
 
-function artifactId(prefix: string, digest: string): string {
-  return `${prefix}:${digest.slice("sha256:".length, "sha256:".length + 24)}`;
-}
-
-async function persistBytes(path: string, bytes: Uint8Array): Promise<void> {
-  try {
-    await writeFile(path, bytes, { flag: "wx" });
-  } catch (error) {
-    if (!hasErrorCode(error, "EEXIST")) {
-      throw error;
-    }
-    const existing = await readFile(path);
-    if (!existing.equals(bytes)) {
-      throw new Error(`Content-addressed artifact conflict: ${path}`);
-    }
-  }
-}
-
 class LocalDirectoryTargetIntake implements TargetIntake {
   readonly #storageDirectory: string;
   readonly #sourceCaptureKind:
@@ -263,11 +239,14 @@ class LocalDirectoryTargetIntake implements TargetIntake {
 
   async #persistJson(value: unknown): Promise<{ id: string; digest: string }> {
     const bytes = Buffer.from(canonicalJson(value), "utf8");
-    const digest = rawDigest(bytes);
+    const digest = bytesDigest(bytes);
     const id = artifactId("artifact", digest);
     const directory = join(this.#storageDirectory, "objects");
     await mkdir(directory, { recursive: true });
-    await persistBytes(join(directory, `${digest.slice(7)}.json`), bytes);
+    await persistContentAddressedFile(
+      join(directory, `${digest.slice(7)}.json`),
+      bytes,
+    );
     return { id, digest };
   }
 
@@ -455,9 +434,8 @@ class LocalDirectoryTargetIntake implements TargetIntake {
       policy: { id: request.policy.id, digest: request.policy.digest },
     };
 
-    await mkdir(join(this.#storageDirectory, "blobs"), { recursive: true });
     for (const file of capture.files) {
-      await persistBytes(
+      await persistContentAddressedFile(
         blobPath(this.#storageDirectory, file.digest),
         file.bytes,
       );

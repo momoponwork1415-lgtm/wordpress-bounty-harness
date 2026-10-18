@@ -1,8 +1,17 @@
-import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { z } from "zod";
+
+import {
+  fetchBounded,
+  ResponseTooLargeError,
+} from "../../../infrastructure/bounded-fetch.js";
+import {
+  artifactId,
+  bytesDigest,
+} from "../../../infrastructure/content-digest.js";
+import { persistContentAddressedFile } from "../../../infrastructure/immutable-file.js";
 
 import { canonicalJson, sha256Digest } from "./canonical-json.js";
 import {
@@ -52,44 +61,6 @@ const metadataSchema = z.object({
 const DEFAULT_METADATA_MAXIMUM_BYTES = 1_000_000;
 const METADATA_TIMEOUT_MS = 30_000;
 const ARCHIVE_TIMEOUT_MS = 5 * 60_000;
-
-class ResponseTooLargeError extends Error {
-  constructor() {
-    super("WordPress.org response exceeded its byte ceiling");
-    this.name = "ResponseTooLargeError";
-  }
-}
-
-function rawDigest(bytes: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-}
-
-function hasErrorCode(error: unknown, code: string): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === code
-  );
-}
-
-function artifactId(prefix: string, digest: string): string {
-  return `${prefix}:${digest.slice(7, 31)}`;
-}
-
-async function persistBytes(path: string, bytes: Uint8Array): Promise<void> {
-  try {
-    await writeFile(path, bytes, { flag: "wx" });
-  } catch (error) {
-    if (!hasErrorCode(error, "EEXIST")) {
-      throw error;
-    }
-    const existing = await readFile(path);
-    if (!existing.equals(bytes)) {
-      throw new Error(`Content-addressed artifact conflict: ${path}`);
-    }
-  }
-}
 
 function metadataUrl(slug: string): string {
   const url = new URL("https://api.wordpress.org/plugins/info/1.2/");
@@ -209,83 +180,36 @@ function archiveUrlFor(
   return isOfficialDownloadUrl(url, observation.officialSlug) ? url : undefined;
 }
 
-async function boundedResponseBytes(
-  response: Response,
-  maximumBytes: number,
-): Promise<Uint8Array> {
-  const contentLength = response.headers.get("content-length");
-  if (
-    contentLength !== null &&
-    Number.isFinite(Number(contentLength)) &&
-    Number(contentLength) > maximumBytes
-  ) {
-    throw new ResponseTooLargeError();
-  }
-  if (response.body === null) {
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > maximumBytes) {
-      throw new ResponseTooLargeError();
-    }
-    return bytes;
-  }
-  const chunks: Uint8Array[] = [];
-  const reader = response.body.getReader();
-  let total = 0;
-  try {
-    while (true) {
-      const next = await reader.read();
-      if (next.done) {
-        break;
-      }
-      total += next.value.byteLength;
-      if (total > maximumBytes) {
-        await reader.cancel();
-        throw new ResponseTooLargeError();
-      }
-      chunks.push(next.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
 class FetchWordPressOrgSourceAdapter implements WordPressOrgSourceAdapter {
-  readonly #fetch: (
-    url: string,
-    init: {
-      method: "GET";
-      redirect: "follow";
-      headers: { accept: string };
-      signal: AbortSignal;
-    },
-  ) => Promise<Response>;
+  readonly #fetch: typeof fetch;
 
   constructor(fetchImplementation: typeof fetch) {
-    this.#fetch = (url, init) => fetchImplementation(url, init);
+    this.#fetch = fetchImplementation;
   }
 
   async retrieve(
     request: WordPressOrgSourceRequest,
   ): Promise<WordPressOrgSourceResponse> {
-    const response = await this.#fetch(request.sourceUrl, {
-      method: "GET",
-      redirect: "follow",
-      headers: {
-        accept:
-          request.kind === "metadata" ? "application/json" : "application/zip",
+    const { response, readBody } = await fetchBounded(
+      this.#fetch,
+      request.sourceUrl,
+      {
+        method: "GET",
+        redirect: "follow",
+        headers: {
+          accept:
+            request.kind === "metadata"
+              ? "application/json"
+              : "application/zip",
+        },
+        timeoutMs:
+          request.kind === "metadata"
+            ? METADATA_TIMEOUT_MS
+            : ARCHIVE_TIMEOUT_MS,
+        maximumBytes: request.maximumBytes,
       },
-      signal: AbortSignal.timeout(
-        request.kind === "metadata" ? METADATA_TIMEOUT_MS : ARCHIVE_TIMEOUT_MS,
-      ),
-    });
-    const bytes = await boundedResponseBytes(response, request.maximumBytes);
+    );
+    const bytes = await readBody();
     return {
       status: response.status,
       sourceUrl: response.url || request.sourceUrl,
@@ -402,7 +326,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
         kind: "wordpress-org-plugin-directory",
         sourceUrl: response.sourceUrl,
         retrievedAt,
-        contentDigest: rawDigest(response.bytes),
+        contentDigest: bytesDigest(response.bytes),
         parserVersion: "wordpress-org-plugin-information-v1",
       },
       downloadProvenance: { sourceUrl: metadata.download_link },
@@ -460,7 +384,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
       );
     }
 
-    const contentDigest = rawDigest(response.bytes);
+    const contentDigest = bytesDigest(response.bytes);
     const acquisitionOriginalRef = {
       id: artifactId("wporg-archive", contentDigest),
       digest: contentDigest,
@@ -470,7 +394,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
       "wordpress-org-acquisition-originals",
     );
     await mkdir(originalsDirectory, { recursive: true });
-    await persistBytes(
+    await persistContentAddressedFile(
       join(originalsDirectory, `${contentDigest.slice(7)}.zip`),
       response.bytes,
     );
@@ -584,7 +508,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
       "wordpress-org-observations",
     );
     await mkdir(directory, { recursive: true });
-    await persistBytes(
+    await persistContentAddressedFile(
       join(directory, `${digest.slice(7)}.json`),
       Buffer.from(canonicalJson(observation), "utf8"),
     );
