@@ -23,6 +23,8 @@ import {
 import type { WordPressLabHandle } from "../../../src/profiles/wordpress/lab/index.js";
 import { loadWordPressVerifierPrompt } from "../../../src/profiles/wordpress/prompts/index.js";
 import { CodexVerifier } from "../../../src/profiles/wordpress/verification/codex-verifier.js";
+import { WordPressVerifier } from "../../../src/profiles/wordpress/verification/wordpress-verifier.js";
+import type { Verifier } from "../../../src/verification/index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const profile = defineAgentRuntimeProfile({
@@ -182,8 +184,13 @@ async function fixture(
       };
     },
   };
-  const verifier = new CodexVerifier({
-    runtime,
+  const wordpressVerifier = new WordPressVerifier({
+    transport: new CodexVerifier({
+      runtime,
+      profile,
+      sourcePack,
+      clock: () => new Date("2026-10-08T00:00:00Z"),
+    }),
     lab: {
       markCapture: async () => "0",
       prepareExecutionCanary: () =>
@@ -225,10 +232,27 @@ async function fixture(
     },
     store,
     ledger,
-    profile,
-    sourcePack,
     clock: () => new Date("2026-10-08T00:00:00Z"),
   });
+  /** Verification hands the Verifier its campaign's `finding-recorded` event; the fixture does the same. */
+  type AttemptInput = Parameters<
+    Verifier<WordPressFinding, WordPressLabHandle>["attempt"]
+  >[0];
+  const verifier = {
+    attempt(input: Omit<AttemptInput, "record">) {
+      const record = ledger
+        .read({
+          campaignId: input.campaignId,
+          findingId: input.finding.findingId,
+          type: "finding-recorded",
+          limit: 1,
+        })
+        .at(0)?.event;
+      if (record?.type !== "finding-recorded")
+        throw new Error("Fixture Finding is not recorded in this campaign");
+      return wordpressVerifier.attempt({ ...input, record });
+    },
+  };
   const lab = {
     id: "lab-1",
     snapshotDigest: digest,

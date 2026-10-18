@@ -466,6 +466,39 @@ describe("verification public interface", () => {
     });
   });
 
+  it("hands the Verifier the reloaded Finding with its campaign's finding-recorded event", async () => {
+    const inputs: Parameters<
+      Verifier<SyntheticFinding, LabHandle>["attempt"]
+    >[0][] = [];
+    const { result } = await fixture({
+      verifier: async (input) => {
+        inputs.push(input);
+        return { status: "attempted", recipeDigest: setupDigest };
+      },
+    });
+    expect(result.status).toBe("runtime-confirmed");
+    expect(inputs).toHaveLength(1);
+    const input = inputs[0]!;
+    expect(input.finding).toEqual({
+      findingId: "finding-1",
+      snapshotDigest,
+      impact: "account-takeover",
+    });
+    expect(input.record).toMatchObject({
+      type: "finding-recorded",
+      campaignId: "campaign-1",
+      findingId: "finding-1",
+      snapshotDigest,
+      runId: "run-1",
+      category: "account-takeover",
+    });
+    // The record carries digest references only; the Finding body stays in Private Evidence.
+    expect(input.record.artifacts).toEqual([
+      { kind: "finding", digest: expect.stringMatching(/^sha256:/) },
+    ]);
+    expect(input.lab.snapshotDigest).toBe(input.finding.snapshotDigest);
+  });
+
   it("keeps a sandbox transport failure incomplete with its own reason", async () => {
     const { result } = await fixture({
       verifier: async () => {
@@ -960,11 +993,12 @@ describe("Lab state observer around the Verifier run", () => {
       "verifier",
       `after:lab-1:${digests[0]}`,
     ]);
-    // The Verifier sees the campaign, the Finding and the Lab handle only.
+    // The Verifier sees the campaign, the Finding, its ledger record and the Lab handle only.
     expect(Object.keys(verifierInputs[0] as object).sort()).toEqual([
       "campaignId",
       "finding",
       "lab",
+      "record",
     ]);
     expect(JSON.stringify(verifierInputs[0])).not.toContain(digests[0]);
     const finished = ledger.read({ type: "verification-finished" })[0]?.event;
