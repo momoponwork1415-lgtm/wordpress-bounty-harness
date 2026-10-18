@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="820" viewBox="0 0 360 922" style="max-width:100%;height:auto" role="img" aria-labelledby="title-verification-3 desc-verification-3">
+<title id="title-verification-3">検証と判定 3/4</title><desc id="desc-verification-3">隔離、独立検証、判定、レビュー。項目 7、8、9。</desc>
+<rect x="0" y="0" width="360" height="922" fill="#f8fafc"/>
+<rect x="0" y="0" width="360" height="128" fill="#0f172a"/>
+<text x="18" y="28" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#93c5fd">HARNESS • 2026.10.14</text>
+<text x="18" y="68" font-family="system-ui,sans-serif" font-size="25" font-weight="800" fill="#ffffff">検証と判定</text>
+<text x="18" y="99" font-family="system-ui,sans-serif" font-size="14" fill="#cbd5e1">項目 7–9 ／ 3 / 4</text>
+<text x="18" y="153" font-family="system-ui,sans-serif" font-size="12.5" fill="#475569">色付きラベルで実装状態を表示</text>
+<g id="step-7"><rect x="16" y="175" width="328" height="236" rx="16" fill="#fff0f2" stroke="#be123c" stroke-width="2"/>
+<rect x="16" y="175" width="7" height="236" rx="3.5" fill="#be123c"/>
+<rect x="32" y="189" width="78" height="26" rx="13" fill="#be123c"/><text x="71" y="207" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">課題</text>
+<text x="326" y="208" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">07</text>
+<text x="32" y="238" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">実測：検証で止まる</text>
+<text x="32" y="276" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">完了本番3周：15対象／Finding14</text>
+<text x="32" y="299" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">14件全てincomplete、confirme</text>
+<text x="32" y="322" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">d 0</text>
+<text x="32" y="345" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">後続3 Trial：Finding9も全件in</text>
+<text x="32" y="368" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">complete</text>
+<text x="32" y="391" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">前提不足7、観測不足2</text>
+</g>
+<g id="step-8"><rect x="16" y="427" width="328" height="213" rx="16" fill="#fff0f2" stroke="#be123c" stroke-width="2"/>
+<rect x="16" y="427" width="7" height="213" rx="3.5" fill="#be123c"/>
+<rect x="32" y="441" width="78" height="26" rx="13" fill="#be123c"/><text x="71" y="459" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">課題</text>
+<text x="326" y="460" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">08</text>
+<text x="32" y="490" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">再試行とLab前提の差</text>
+<text x="32" y="528" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">#107：observation上限が所有者</text>
+<text x="32" y="551" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">決定と差</text>
+<text x="32" y="574" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">理由が変わると試行数が増える</text>
+<text x="32" y="597" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">#213：通常機能scenarioが不足</text>
+<text x="32" y="620" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">判定条件を緩めず根因別に直す</text>
+</g>
+<g id="step-9"><rect x="16" y="656" width="328" height="236" rx="16" fill="#fff0f2" stroke="#be123c" stroke-width="2"/>
+<rect x="16" y="656" width="7" height="236" rx="3.5" fill="#be123c"/>
+<rect x="32" y="670" width="78" height="26" rx="13" fill="#be123c"/><text x="71" y="688" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">課題</text>
+<text x="326" y="689" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">09</text>
+<text x="32" y="719" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">review queue の実装差</text>
+<text x="32" y="757" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">mainはconfirmed等とincomplet</text>
+<text x="32" y="780" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">eを列挙</text>
+<text x="32" y="803" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">contradicted／未検証は件数のみ</text>
+<text x="32" y="826" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">scope内Finding全件配送の契約と</text>
+<text x="32" y="849" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">差</text>
+<text x="32" y="872" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">exportの欠落を実測で確かめる</text>
+</g>
+<text x="180" y="905" font-family="system-ui,sans-serif" font-size="11.5" text-anchor="middle" fill="#64748b">wordpress-bounty-harness • 設計・実装照合</text>
+</svg>

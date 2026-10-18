@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="758" viewBox="0 0 360 853" style="max-width:100%;height:auto" role="img" aria-labelledby="title-selection-1 desc-selection-1">
+<title id="title-selection-1">対象選定 1/3</title><desc id="desc-selection-1">候補収集、既往判定、予約、在庫不足の扱い。項目 1、2、3。</desc>
+<rect x="0" y="0" width="360" height="853" fill="#f8fafc"/>
+<rect x="0" y="0" width="360" height="128" fill="#0f172a"/>
+<text x="18" y="28" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#93c5fd">HARNESS • 2026.10.14</text>
+<text x="18" y="68" font-family="system-ui,sans-serif" font-size="25" font-weight="800" fill="#ffffff">対象選定</text>
+<text x="18" y="99" font-family="system-ui,sans-serif" font-size="14" fill="#cbd5e1">項目 1–3 ／ 1 / 3</text>
+<text x="18" y="153" font-family="system-ui,sans-serif" font-size="12.5" fill="#475569">色付きラベルで実装状態を表示</text>
+<g id="step-1"><rect x="16" y="175" width="328" height="190" rx="16" fill="#e9f8f3" stroke="#0f766e" stroke-width="2"/>
+<rect x="16" y="175" width="7" height="190" rx="3.5" fill="#0f766e"/>
+<rect x="32" y="189" width="78" height="26" rx="13" fill="#0f766e"/><text x="71" y="207" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">main</text>
+<text x="326" y="208" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">01</text>
+<text x="32" y="238" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">main の選定方針</text>
+<text x="32" y="276" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">active installs 下限100,000</text>
+<text x="32" y="299" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">人気2頁＋8タグ各2頁を列挙</text>
+<text x="32" y="322" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">最大500候補から最大5対象を選ぶ</text>
+<text x="32" y="345" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">順位はinstall数と更新の新しさ</text>
+</g>
+<g id="step-2"><rect x="16" y="381" width="328" height="236" rx="16" fill="#e9f8f3" stroke="#0f766e" stroke-width="2"/>
+<rect x="16" y="381" width="7" height="236" rx="3.5" fill="#0f766e"/>
+<rect x="32" y="395" width="78" height="26" rx="13" fill="#0f766e"/><text x="71" y="413" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">main</text>
+<text x="326" y="414" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">02</text>
+<text x="32" y="444" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">観測と適格性の検査</text>
+<text x="32" y="482" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">WordPress.org／Programmeを観</text>
+<text x="32" y="505" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">測</text>
+<text x="32" y="528" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">鮮度・版・除外作者を確認</text>
+<text x="32" y="551" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">unavailable／staleはeligibl</text>
+<text x="32" y="574" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">eにしない</text>
+<text x="32" y="597" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">公開脆弱性履歴で個別順位付けしない</text>
+</g>
+<g id="step-3"><rect x="16" y="633" width="328" height="190" rx="16" fill="#fff0f2" stroke="#be123c" stroke-width="2"/>
+<rect x="16" y="633" width="7" height="190" rx="3.5" fill="#be123c"/>
+<rect x="32" y="647" width="78" height="26" rx="13" fill="#be123c"/><text x="71" y="665" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">課題</text>
+<text x="326" y="666" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">03</text>
+<text x="32" y="696" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">現行の再候補化は新方針と衝突</text>
+<text x="32" y="734" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">mainは版またはprompt変更で再候補</text>
+<text x="32" y="757" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">選定済み記録も既往判定に使用</text>
+<text x="32" y="780" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">所有者方針はslug単位の初回のみ自動</text>
+<text x="32" y="803" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">新版の2回目も毎Trial承認が必要</text>
+</g>
+<text x="180" y="836" font-family="system-ui,sans-serif" font-size="11.5" text-anchor="middle" fill="#64748b">wordpress-bounty-harness • 設計・実装照合</text>
+</svg>

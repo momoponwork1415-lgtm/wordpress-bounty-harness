@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="921" viewBox="0 0 360 1036" style="max-width:100%;height:auto" role="img" aria-labelledby="title-execution-2 desc-execution-2">
+<title id="title-execution-2">並列実行 2/3</title><desc id="desc-execution-2">単一Trial、campaign、provider間の資源管理。項目 4、5、6、7。</desc>
+<rect x="0" y="0" width="360" height="1036" fill="#f8fafc"/>
+<rect x="0" y="0" width="360" height="128" fill="#0f172a"/>
+<text x="18" y="28" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#93c5fd">HARNESS • 2026.10.14</text>
+<text x="18" y="68" font-family="system-ui,sans-serif" font-size="25" font-weight="800" fill="#ffffff">並列実行</text>
+<text x="18" y="99" font-family="system-ui,sans-serif" font-size="14" fill="#cbd5e1">項目 4–7 ／ 2 / 3</text>
+<text x="18" y="153" font-family="system-ui,sans-serif" font-size="12.5" fill="#475569">色付きラベルで実装状態を表示</text>
+<g id="step-4"><rect x="16" y="175" width="328" height="213" rx="16" fill="#fff0f2" stroke="#be123c" stroke-width="2"/>
+<rect x="16" y="175" width="7" height="213" rx="3.5" fill="#be123c"/>
+<rect x="32" y="189" width="78" height="26" rx="13" fill="#be123c"/><text x="71" y="207" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">課題</text>
+<text x="326" y="208" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">04</text>
+<text x="32" y="238" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">campaign を越える制御がない</text>
+<text x="32" y="276" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">次batchの自動補充は未実装</text>
+<text x="32" y="299" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">別state／providerの同slug予約</text>
+<text x="32" y="322" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">なし</text>
+<text x="32" y="345" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">PC全体のCPU・RAM枠の仲裁なし</text>
+<text x="32" y="368" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">長期運転の監督プロセスも未実装</text>
+</g>
+<g id="step-5"><rect x="16" y="404" width="328" height="190" rx="16" fill="#eef2ff" stroke="#4f46e5" stroke-width="2"/>
+<rect x="16" y="404" width="7" height="190" rx="3.5" fill="#4f46e5"/>
+<rect x="32" y="418" width="78" height="26" rx="13" fill="#4f46e5"/><text x="71" y="436" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">Draft</text>
+<text x="326" y="437" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">05</text>
+<text x="32" y="467" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">Opus探索はPR #225</text>
+<text x="32" y="505" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">購読token経路とbrokerを追加中</text>
+<text x="32" y="528" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">実対象2 Trialは両方incomplete</text>
+<text x="32" y="551" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">Root完走0、横断2＋2並列未測定</text>
+<text x="32" y="574" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">本番の共通資源枠には未接続</text>
+</g>
+<g id="step-6"><rect x="16" y="610" width="328" height="190" rx="16" fill="#fff7e8" stroke="#b45309" stroke-width="2"/>
+<rect x="16" y="610" width="7" height="190" rx="3.5" fill="#b45309"/>
+<rect x="32" y="624" width="78" height="26" rx="13" fill="#b45309"/><text x="71" y="642" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">設計案</text>
+<text x="326" y="643" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">06</text>
+<text x="32" y="673" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">親運転IDでbatchをつなぐ</text>
+<text x="32" y="711" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">campaignの対象集合は不変のまま</text>
+<text x="32" y="734" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">親IDが複数campaignを順次生成</text>
+<text x="32" y="757" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">在庫が減れば次batchを補充</text>
+<text x="32" y="780" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">Trial結果は既存の追記台帳へ</text>
+</g>
+<g id="step-7"><rect x="16" y="816" width="328" height="190" rx="16" fill="#fff7e8" stroke="#b45309" stroke-width="2"/>
+<rect x="16" y="816" width="7" height="190" rx="3.5" fill="#b45309"/>
+<rect x="32" y="830" width="78" height="26" rx="13" fill="#b45309"/><text x="71" y="848" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">設計案</text>
+<text x="326" y="849" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">07</text>
+<text x="32" y="879" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">共通の対象claim</text>
+<text x="32" y="917" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">profile＋slugをホスト共通で予約</text>
+<text x="32" y="940" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">同時起動はleaseとfencingで排他</text>
+<text x="32" y="963" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">旧履歴が不明なら開始を拒否</text>
+<text x="32" y="986" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">運用表は台帳から再照合できる</text>
+</g>
+<text x="180" y="1019" font-family="system-ui,sans-serif" font-size="11.5" text-anchor="middle" fill="#64748b">wordpress-bounty-harness • 設計・実装照合</text>
+</svg>

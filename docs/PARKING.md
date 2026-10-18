@@ -23,6 +23,9 @@ Step 1（[DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節）の完了まで着手し�
 | 2026-10-14 | install 下限を方針版で変える仕組み（#230） | `--selection` で下限別の方針 file を選ぶ運用で代える。運用で足りなくなったとき |
 | 2026-10-14 | 探索 prompt の A/B 事前登録（#201、再発見 case 5 × 2 arm） | Step 1 合格後 |
 | 2026-10-14 | Wordfence mirror の日次更新（#231） | 提出候補が週 1 件を超えたとき |
+| 2026-10-14 | WordPress プラグイン以外の対象を第 2 の Target Profile として追加する | WordPress 版の縦断ループが安定し、第 2 対象の固有要件が確認できたとき |
+| 2026-10-14 | Google Mantis など探索手法の切り替えを比較可能な戦略として扱う | Step 1 の既定手法の実測分母ができ、比較する問いを 1 つ定めたとき |
+| 2026-10-14 | 運転ログを AI が分析し、人間と協調して Harness を改善する | 継続運転の記録と人間レビューの転帰が十分に蓄積したとき |
 | 2026-10-15 | 運転ログから週 1 件の変更案を数字付きで出す skill `wbh-tune`（提案のみ。Harness を変えない。meta-harness の人間ゲート版、[報告](reviews/2026-10-15-software-factory-and-meta-harness.md)） | `continuous run` が 1 週回り、Trial 開始 10 件以上と review batch 1 回の `decide --minutes` が台帳にあるとき。1 週に 1 変更 |
 | 2026-10-16 | 探索入力を非信頼データと宣言する Harness 生成の固定節と、実際の stdin 全体の digest（full input digest）を run-started と receipt に結合する（#270 項目 7） | Step 1 判定後。または source / README 由来の指示に agent が従った実例が 1 件出たとき |
 | 2026-10-16 | 入口索引の表示を `bounded text index` に変え、dynamic / unknown を区別する。PHP parser の導入（#270 項目 8） | 空白形の回帰を 1 本足した後、実測で入口の取りこぼしが recall を下げたと分かったとき |

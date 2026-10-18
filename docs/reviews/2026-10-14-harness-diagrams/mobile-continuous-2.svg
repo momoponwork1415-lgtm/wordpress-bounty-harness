@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="717" viewBox="0 0 360 807" style="max-width:100%;height:auto" role="img" aria-labelledby="title-continuous-2 desc-continuous-2">
+<title id="title-continuous-2">継続運転 2/4</title><desc id="desc-continuous-2">補充、quota、停止、復旧、実装順。項目 4、5、6。</desc>
+<rect x="0" y="0" width="360" height="807" fill="#f8fafc"/>
+<rect x="0" y="0" width="360" height="128" fill="#0f172a"/>
+<text x="18" y="28" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#93c5fd">HARNESS • 2026.10.14</text>
+<text x="18" y="68" font-family="system-ui,sans-serif" font-size="25" font-weight="800" fill="#ffffff">継続運転</text>
+<text x="18" y="99" font-family="system-ui,sans-serif" font-size="14" fill="#cbd5e1">項目 4–6 ／ 2 / 4</text>
+<text x="18" y="153" font-family="system-ui,sans-serif" font-size="12.5" fill="#475569">色付きラベルで実装状態を表示</text>
+<g id="step-4"><rect x="16" y="175" width="328" height="190" rx="16" fill="#fff7e8" stroke="#b45309" stroke-width="2"/>
+<rect x="16" y="175" width="7" height="190" rx="3.5" fill="#b45309"/>
+<rect x="32" y="189" width="78" height="26" rx="13" fill="#b45309"/><text x="71" y="207" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">設計案</text>
+<text x="326" y="208" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">04</text>
+<text x="32" y="238" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">STOPPING：通常停止</text>
+<text x="32" y="276" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">新規claimを停止</text>
+<text x="32" y="299" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">進行中Trialは各wall上限で完了</text>
+<text x="32" y="322" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">検証・exportまで記録して終了</text>
+<text x="32" y="345" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">緊急停止は別の操作</text>
+</g>
+<g id="step-5"><rect x="16" y="381" width="328" height="190" rx="16" fill="#fff7e8" stroke="#b45309" stroke-width="2"/>
+<rect x="16" y="381" width="7" height="190" rx="3.5" fill="#b45309"/>
+<rect x="32" y="395" width="78" height="26" rx="13" fill="#b45309"/><text x="71" y="413" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">設計案</text>
+<text x="326" y="414" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">05</text>
+<text x="32" y="444" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">RECOVERING：異常後に照合</text>
+<text x="32" y="482" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">OSサービスが監督プロセスを再起動</text>
+<text x="32" y="505" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">台帳・予約表・実容器を照合</text>
+<text x="32" y="528" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">不明な対象は保留、成果を回収</text>
+<text x="32" y="551" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">隔離／broker違反は全体停止</text>
+</g>
+<g id="step-6"><rect x="16" y="587" width="328" height="190" rx="16" fill="#e9f8f3" stroke="#0f766e" stroke-width="2"/>
+<rect x="16" y="587" width="7" height="190" rx="3.5" fill="#0f766e"/>
+<rect x="32" y="601" width="78" height="26" rx="13" fill="#0f766e"/><text x="71" y="619" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">main</text>
+<text x="326" y="620" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">06</text>
+<text x="32" y="650" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">main が今できること</text>
+<text x="32" y="688" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">1 campaign内の対象2並列</text>
+<text x="32" y="711" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">#203：provider停止と同ID再開</text>
+<text x="32" y="734" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">review exportとLab前後差分あり</text>
+<text x="32" y="757" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">固定batchを消費すると終了</text>
+</g>
+<text x="180" y="790" font-family="system-ui,sans-serif" font-size="11.5" text-anchor="middle" fill="#64748b">wordpress-bounty-harness • 設計・実装照合</text>
+</svg>
