@@ -198,6 +198,8 @@ export interface DiscoveryTransportRun {
   readonly prompt: string;
   /** Screening uses one agent even when the runtime profile permits children. */
   readonly coordination?: "solo" | "cooperative";
+  /** Dispatch budget; the broker applies it in brief 1c. */
+  readonly taskMaxRequests?: number;
   /** Verification uses the same isolated transport with a different sealed report. */
   readonly outputKind?: "verification";
   readonly lab?: {
@@ -236,6 +238,7 @@ const discoveryTransportRunSchema = z.strictObject({
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
   coordination: z.enum(["solo", "cooperative"]).optional(),
+  taskMaxRequests: z.number().int().min(1).max(1600).optional(),
   outputKind: z.literal("verification").optional(),
   lab: z
     .strictObject({

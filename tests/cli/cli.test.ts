@@ -2038,6 +2038,79 @@ describe("harness CLI vertical slice", () => {
     ]);
   });
 
+  it("dispatches indexed source tasks as solo runs and retries one failed task", async () => {
+    const { run, configPath, coordinations, expirations, ledger, prompts } =
+      await harness({
+        entryPoints: true,
+        zeroFindings: true,
+        refuseOnCalls: [1],
+        config: {
+          mode: "dispatch",
+          promptId: undefined,
+          stopRules: undefined,
+          discovery: { lab: "none" },
+          dispatch: {
+            entriesPerTask: 1,
+            maxTasksPerTarget: 24,
+            taskWallMinutes: 10,
+            taskMaxRequests: 150,
+            concurrency: 1,
+          },
+        },
+      });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-dispatch",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(0);
+    const starts = ledger()
+      .read({
+        campaignId: "campaign-dispatch",
+        type: "discovery-run-started",
+      })
+      .map(({ event }) => event);
+    expect(starts.length).toBeGreaterThan(2);
+    expect(prompts).toHaveLength(starts.length);
+    expect(
+      starts.every(
+        (event) =>
+          event.type === "discovery-run-started" && event.runKind === "task",
+      ),
+    ).toBe(true);
+    expect(
+      starts.filter(
+        (event) =>
+          event.type === "discovery-run-started" &&
+          event.configuration.retryOf !== undefined,
+      ),
+    ).toHaveLength(1);
+    expect(
+      new Set(
+        starts.flatMap((event) =>
+          event.type === "discovery-run-started" &&
+          event.configuration.retryOf === undefined
+            ? [event.configuration.taskId]
+            : [],
+        ),
+      ).size,
+    ).toBe(starts.length - 1);
+    expect(coordinations.every((value) => value === "solo")).toBe(true);
+    expect(
+      expirations.every((value) => value === "2026-10-08T00:10:00.000Z"),
+    ).toBe(true);
+    expect(
+      ledger().read({
+        campaignId: "campaign-dispatch",
+        type: "discovery-concluded",
+      }),
+    ).toHaveLength(1);
+  });
+
   it("uses disjoint campaign modes and retains the short objective comparison arm", () => {
     const base = {
       schemaVersion: 1 as const,

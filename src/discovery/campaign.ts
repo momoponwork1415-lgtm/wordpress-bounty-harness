@@ -88,7 +88,7 @@ export const campaignInputV1Schema = z.strictObject({
   modelProfileDigest: digest,
   promptDigest: digest,
   stopRules: z.strictObject({
-    maxRuns: z.number().int().positive(),
+    maxRuns: z.number().int().nonnegative(),
     noFindingRuns: z.number().int().positive(),
   }),
   lab: z.union([
@@ -240,6 +240,11 @@ export type PlannedDiscoveryRun = {
       readonly componentDigest?: string;
     };
     readonly labAccess?: { readonly database: "read-only" | "none" };
+    readonly taskId?: string;
+    readonly taskKind?: "initial";
+    readonly taskOrdinal?: number;
+    readonly taskOf?: number;
+    readonly retryOf?: string;
   };
 };
 
@@ -278,9 +283,11 @@ export async function runDiscoveryCampaign(options: {
   readonly labId?: string;
   /** An explicit repeat runs every planned independent Trial unless a run fails. */
   readonly repeatAll?: boolean;
+  /** A task is independent of finding-based stop rules and has one retry. */
+  readonly taskMode?: boolean;
   readonly input: CampaignInputV1;
   readonly historyFraction: number;
-  /** Runs in flight at once on this host; at most four. */
+  /** Runs in flight at once on this host; at most four until brief 1c. */
   readonly concurrency?: number;
   /** Exploration wall time, stamped when each Trial starts rather than when all plans are built. */
   readonly runWallTimeMs?: number;
@@ -332,6 +339,8 @@ export async function runDiscoveryCampaign(options: {
   readonly stoppedBy: DiscoveryStop;
 }> {
   const input = campaignInputV1Schema.parse(options.input);
+  if (!options.taskMode && input.stopRules.maxRuns === 0)
+    throw new Error("Non-task campaigns require at least one run");
   const id = z.string().min(1).max(128);
   id.parse(options.campaignId);
   if (options.labId !== undefined) id.parse(options.labId);
@@ -397,19 +406,33 @@ export async function runDiscoveryCampaign(options: {
       if (
         event.type === "discovery-run-started" &&
         event.snapshotDigest === input.snapshotDigest &&
-        // Historical events had no runKind and each represented exploration.
-        (event.runKind ?? "explore") === "explore" &&
-        countsAsTrial(
-          finishedRuns.get(event.runId),
-          activeRuns.has(`${event.campaignId}\0${event.runId}`),
-        )
+        ((options.taskMode && event.runKind === "task") ||
+          (!options.taskMode && (event.runKind ?? "explore") === "explore"))
       ) {
-        startedExplorations.add(event.runId);
-        if (event.trialOrdinal !== undefined)
-          spentOrdinals.add(event.trialOrdinal);
-        else {
-          while (spentOrdinals.has(nextLegacyOrdinal)) nextLegacyOrdinal++;
-          spentOrdinals.add(nextLegacyOrdinal++);
+        const finish = finishedRuns.get(event.runId);
+        if (options.taskMode) {
+          if (finish === undefined) continue;
+          startedExplorations.add(event.runId);
+          if (
+            finish.outcome === "completed" ||
+            event.configuration.retryOf !== undefined
+          )
+            spentOrdinals.add(
+              event.trialOrdinal ?? event.configuration.taskOrdinal ?? 0,
+            );
+        } else if (
+          countsAsTrial(
+            finish,
+            activeRuns.has(`${event.campaignId}\0${event.runId}`),
+          )
+        ) {
+          startedExplorations.add(event.runId);
+          if (event.trialOrdinal !== undefined)
+            spentOrdinals.add(event.trialOrdinal);
+          else {
+            while (spentOrdinals.has(nextLegacyOrdinal)) nextLegacyOrdinal++;
+            spentOrdinals.add(nextLegacyOrdinal++);
+          }
         }
       }
     if (page.length < 1000) break;
@@ -510,7 +533,7 @@ export async function runDiscoveryCampaign(options: {
         runId: run.runId,
         trialId: trial.trialId,
         trialOrdinal: trial.trialOrdinal,
-        runKind: "explore",
+        runKind: options.taskMode ? "task" : "explore",
         ...(options.labId === undefined
           ? { labAttached: false as const }
           : { labId: options.labId, labAttached: true as const }),
@@ -634,12 +657,15 @@ export async function runDiscoveryCampaign(options: {
           failure = recoveredRoot.failure;
       } catch {
         outcome = "failed";
+        failure = { reason: "evidence", reasonDetail: "execution-error" };
       }
-      const counted = countsAsTrial({
-        observed,
-        childThreadsObserved,
-        brokerMetrics,
-      });
+      const counted =
+        options.taskMode ||
+        countsAsTrial({
+          observed,
+          childThreadsObserved,
+          brokerMetrics,
+        });
       if (!counted && outcome === "completed") {
         outcome = "failed";
         failure = { reason: "evidence", reasonDetail: "no-work" };
@@ -675,6 +701,23 @@ export async function runDiscoveryCampaign(options: {
         throw new Error("Discovery finish identity conflict");
       return { outcome, counted, ...reportState };
     };
+    if (options.taskMode) {
+      const originalRunId = trial.explore.run.runId;
+      const retryRunId = canonicalDigest({ originalRunId, retry: 1 }).slice(7);
+      const initial =
+        finishedRuns.get(originalRunId) ??
+        (await executePlanned(trial.explore));
+      if (initial.outcome !== "completed" && !finishedRuns.has(retryRunId))
+        await executePlanned({
+          ...trial.explore,
+          run: { ...trial.explore.run, runId: retryRunId },
+          configuration: {
+            ...trial.explore.configuration,
+            retryOf: originalRunId,
+          },
+        });
+      return;
+    }
     const explore = await executePlanned(trial.explore);
     if (!explore.counted) {
       stopped ??=
@@ -709,21 +752,38 @@ export async function runDiscoveryCampaign(options: {
       activeAfter.has(`${options.campaignId}\0${runId}`),
     ),
   );
-  const recordedFailure = countedRuns.some(
-    (runId) => outcomes.get(runId)?.outcome === "provider-limited",
-  )
-    ? "provider-limit"
-    : countedRuns.some((runId) => outcomes.get(runId)?.outcome !== "completed")
+  const taskFailed =
+    options.taskMode &&
+    options.plannedTrials.some((trial) => {
+      const originalRunId = trial.explore.run.runId;
+      const retryRunId = canonicalDigest({ originalRunId, retry: 1 }).slice(7);
+      const final = outcomes.get(retryRunId) ?? outcomes.get(originalRunId);
+      return final?.outcome !== "completed";
+    });
+  const recordedFailure = options.taskMode
+    ? taskFailed
       ? "incomplete"
-      : undefined;
+      : undefined
+    : countedRuns.some(
+          (runId) => outcomes.get(runId)?.outcome === "provider-limited",
+        )
+      ? "provider-limit"
+      : countedRuns.some(
+            (runId) => outcomes.get(runId)?.outcome !== "completed",
+          )
+        ? "incomplete"
+        : undefined;
   const stoppedBy =
     recordedFailure ??
     stopped ??
     (options.plannedTrials.length >= input.stopRules.maxRuns
       ? "max-runs"
       : "plans-exhausted");
-  // A recorded partial Trial remains spent on resume.
-  if (stoppedBy !== "provider-limit" && stoppedBy !== "incomplete") {
+  // Dispatch concludes after every task, including a task with two failed attempts.
+  if (
+    options.taskMode ||
+    (stoppedBy !== "provider-limit" && stoppedBy !== "incomplete")
+  ) {
     const recorded = await options.ledger.append({
       schemaVersion: 1,
       campaignId: options.campaignId,
@@ -734,7 +794,7 @@ export async function runDiscoveryCampaign(options: {
         snapshotDigest: input.snapshotDigest,
       })}`,
       type: "discovery-concluded",
-      stoppedBy,
+      stoppedBy: stoppedBy === "provider-limit" ? "incomplete" : stoppedBy,
     });
     if (recorded.status === "conflict")
       throw new Error("Discovery conclusion identity conflict");

@@ -72,7 +72,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     trialId: id.optional(),
     trialOrdinal: z.number().int().nonnegative().optional(),
     stage: z.enum(["screening", "deep-dive"]).optional(),
-    runKind: z.enum(["explore", "continue", "child"]).optional(),
+    runKind: z.enum(["explore", "continue", "child", "task"]).optional(),
     continuationOf: id.optional(),
     parentRunId: id.optional(),
     history: z.union([
@@ -95,6 +95,11 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         .strictObject({ dependency: z.enum(["mounted", "none"]) })
         .optional(),
       assignmentUnit: id,
+      taskId: id.optional(),
+      taskKind: z.literal("initial").optional(),
+      taskOrdinal: z.number().int().nonnegative().optional(),
+      taskOf: z.number().int().positive().optional(),
+      retryOf: id.optional(),
       entryIndex: z
         .union([
           z.strictObject({ enabled: z.literal(true), digest }),
@@ -210,6 +215,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       "output-boundary",
       "max-runs",
       "plans-exhausted",
+      "incomplete",
     ]),
   }),
   /** The campaign stopped early; rerunning it with the same id resumes it. */
@@ -1202,7 +1208,10 @@ export class Ledger {
     const startedRuns = new Map<string, string | undefined>();
     const labByRun = new Map<string, "attached" | "none">();
     let verificationLabFailed = 0;
-    const runKinds = new Map<string, "explore" | "continue" | "child">();
+    const runKinds = new Map<
+      string,
+      "explore" | "continue" | "child" | "task"
+    >();
     const trialByRun = new Map<string, string>();
     const runArms = new Map<string, string[]>();
     const objectiveByRun = new Map<string, string>();

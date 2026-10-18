@@ -36,6 +36,7 @@ import {
   type WordPressEntryAssignment,
 } from "../profiles/wordpress/discovery/entry-points.js";
 import { buildWordPressSourceIndex } from "../profiles/wordpress/discovery/storage-index.js";
+import { planWordPressTasks } from "../profiles/wordpress/discovery/task-plan.js";
 import {
   canonicalDigest,
   canonicalJson,
@@ -193,7 +194,49 @@ const assignment = z.strictObject({
   unit: z.literal("entry-point"),
   entriesPerRun: z.number().int().min(1).max(64).default(8),
 });
+const dispatchSettings = z
+  .strictObject({
+    entriesPerTask: z.number().int().min(1).max(32).default(6),
+    maxTasksPerTarget: z.number().int().min(1).max(200).default(24),
+    taskWallMinutes: z.number().int().min(1).max(30).default(10),
+    taskMaxRequests: z.number().int().min(1).max(1600).default(150),
+    concurrency: z.number().int().min(1).max(16).default(4),
+  })
+  .default({
+    entriesPerTask: 6,
+    maxTasksPerTarget: 24,
+    taskWallMinutes: 10,
+    taskMaxRequests: 150,
+    concurrency: 4,
+  });
 const campaignModes = z.discriminatedUnion("mode", [
+  z.strictObject({
+    ...commonCampaignFields,
+    mode: z.literal("dispatch"),
+    discovery: z
+      .strictObject({ lab: z.literal("none").default("none") })
+      .default({ lab: "none" }),
+    promptId: z
+      .enum([
+        "wp2shell-bounty-v2",
+        "wp2shell-bounty-v3",
+        "wp2shell-bounty-v4",
+        "wp2shell-bounty-v5",
+        "wp2shell-whitebox-v1.7",
+      ])
+      .default("wp2shell-bounty-v5"),
+    entryIndex: z.literal(true).default(true),
+    // The parsed shape remains compatible with campaign readers; users cannot set it.
+    stopRules: z.preprocess(
+      (value) =>
+        value === undefined ? { maxRuns: 0, noFindingRuns: 1 } : null,
+      z.strictObject({
+        maxRuns: z.number().int().nonnegative(),
+        noFindingRuns: z.number().int().positive(),
+      }),
+    ),
+    dispatch: dispatchSettings,
+  }),
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("wp2shell"),
@@ -897,12 +940,14 @@ async function planWordPressDiscovery(
   const source = await boundaries.sourceFor(snapshot);
   // The campaign stop rule decides depth; legacy per-target budgets only lower it (ADR 0032 Q6).
   const maxRuns =
-    repeat > 1
-      ? repeat
-      : Math.min(
-          config.stopRules.maxRuns,
-          target.runBudget ?? config.stopRules.maxRuns,
-        );
+    config.mode === "dispatch"
+      ? 0
+      : repeat > 1
+        ? repeat
+        : Math.min(
+            config.stopRules.maxRuns,
+            target.runBudget ?? config.stopRules.maxRuns,
+          );
   const sourceIndex =
     !config.entryIndex && assignmentConfig === undefined
       ? undefined
@@ -924,13 +969,29 @@ async function planWordPressDiscovery(
     throw new Error(
       "Entry-point assignment found no registrations in the source",
     );
-  const stopRules = {
-    maxRuns,
-    noFindingRuns: Math.min(
-      Math.max(config.stopRules.noFindingRuns, assignments.length),
-      maxRuns,
-    ),
-  };
+  const taskPlan =
+    config.mode === "dispatch" && sourceIndex !== undefined
+      ? planWordPressTasks(sourceIndex, {
+          entriesPerTask: config.dispatch.entriesPerTask,
+          maxTasksPerTarget: Math.min(
+            config.dispatch.maxTasksPerTarget,
+            target.runBudget ?? 200,
+          ),
+        })
+      : undefined;
+  const stopRules =
+    config.mode === "dispatch"
+      ? {
+          maxRuns: taskPlan!.tasks.length,
+          noFindingRuns: Math.max(1, taskPlan!.tasks.length),
+        }
+      : {
+          maxRuns,
+          noFindingRuns: Math.min(
+            Math.max(config.stopRules.noFindingRuns, assignments.length),
+            maxRuns,
+          ),
+        };
   const accounts = Object.entries(lab?.attackerAccounts ?? {}).map(
     ([role, account]) =>
       `- ${role}: ${account.username} / ${account.password} (Lab only)`,
@@ -1020,12 +1081,19 @@ async function planWordPressDiscovery(
     historyFraction:
       ablationConfig?.axes.find((axis) => axis.axis === "history")
         ?.armBFraction ?? 0,
-    runWallTimeMs: wallMinutes * 60_000,
+    runWallTimeMs:
+      (config.mode === "dispatch"
+        ? config.dispatch.taskWallMinutes
+        : wallMinutes) * 60_000,
+    ...(taskPlan === undefined ? {} : { taskMode: true as const }),
     concurrency: Math.min(
-      config.resources.maxConcurrentRuns,
+      config.mode === "dispatch"
+        ? config.dispatch.concurrency
+        : config.resources.maxConcurrentRuns,
       Math.floor(
         config.resources.memoryBudgetMiB /
-          (boundaries.runtimeProfile.subagent.modelId === "unavailable"
+          (taskPlan !== undefined ||
+          boundaries.runtimeProfile.subagent.modelId === "unavailable"
             ? DISCOVERY_RUN_MEMORY_MIB
             : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB),
       ),
@@ -1033,80 +1101,106 @@ async function planWordPressDiscovery(
     ...(ablationConfig === undefined
       ? {}
       : { ablation: { axes: ablationConfig.axes } }),
-    plannedTrials: Array.from({ length: maxRuns }, (_, trialOrdinal) => {
-      const trialId = state.newId();
-      const arms = allocateTrialArms(trialOrdinal, ablationConfig?.axes ?? []);
-      const selectedObjective =
-        arms.prompt === "b" && armBObjective !== undefined
-          ? armBObjective
-          : objective;
-      const assignment =
-        assignments.length === 0
-          ? undefined
-          : assignments[trialOrdinal % assignments.length]!;
-      const explore: PlannedDiscoveryRun = {
-        configuration: {
-          promptVariant: selectedObjective.id,
-          promptDigest: selectedObjective.digest,
-          ...(objectiveOnly(selectedObjective.id)
-            ? {
-                objectiveDigest: selectedObjective.digest,
-                contractDigest: outputContractFor(selectedObjective.id).digest,
-              }
-            : {}),
-          trustBoundaryVersion: trustBoundary.id,
-          sourcePack: {
-            dependency:
-              source.dependency === undefined
-                ? ("none" as const)
-                : ("mounted" as const),
+    plannedTrials: Array.from(
+      { length: taskPlan?.tasks.length ?? maxRuns },
+      (_, trialOrdinal) => {
+        const task = taskPlan?.tasks[trialOrdinal];
+        const trialId = state.newId();
+        const arms = allocateTrialArms(
+          trialOrdinal,
+          ablationConfig?.axes ?? [],
+        );
+        const selectedObjective =
+          arms.prompt === "b" && armBObjective !== undefined
+            ? armBObjective
+            : objective;
+        const assignment =
+          task?.assignment ??
+          (assignments.length === 0
+            ? undefined
+            : assignments[trialOrdinal % assignments.length]!);
+        const explore: PlannedDiscoveryRun = {
+          configuration: {
+            promptVariant: selectedObjective.id,
+            promptDigest: selectedObjective.digest,
+            ...(objectiveOnly(selectedObjective.id)
+              ? {
+                  objectiveDigest: selectedObjective.digest,
+                  contractDigest: outputContractFor(selectedObjective.id)
+                    .digest,
+                }
+              : {}),
+            trustBoundaryVersion: trustBoundary.id,
+            sourcePack: {
+              dependency:
+                source.dependency === undefined
+                  ? ("none" as const)
+                  : ("mounted" as const),
+            },
+            assignmentUnit: assignment === undefined ? "plugin" : "entry-point",
+            entryIndex: entryIndexMetadata,
+            ...(assignment === undefined
+              ? {}
+              : { assignment: assignmentMetadata(assignment) }),
+            ...(task === undefined
+              ? {}
+              : {
+                  taskId: task.taskId,
+                  taskKind: task.taskKind,
+                  taskOrdinal: task.ordinal,
+                  taskOf: taskPlan!.tasks.length,
+                }),
+            labAccess: {
+              database: lab?.database === undefined ? "none" : "read-only",
+            },
           },
-          assignmentUnit: assignment === undefined ? "plugin" : "entry-point",
-          entryIndex: entryIndexMetadata,
-          ...(assignment === undefined
-            ? {}
-            : { assignment: assignmentMetadata(assignment) }),
-          labAccess: {
-            database: lab?.database === undefined ? "none" : "read-only",
+          run: {
+            runId: trialId,
+            targetSnapshotDigest: snapshot.digest,
+            profile: boundaries.runtimeProfile,
+            coordination:
+              task === undefined ? ("cooperative" as const) : ("solo" as const),
+            ...(task === undefined
+              ? {}
+              : {
+                  taskMaxRequests:
+                    config.mode === "dispatch"
+                      ? config.dispatch.taskMaxRequests
+                      : 150,
+                }),
+            prompt: promptFor(assignment, selectedObjective),
+            ...(lab === undefined
+              ? {}
+              : {
+                  lab: {
+                    endpoint: lab.endpoint,
+                    networkName: lab.networkName,
+                    internalIp: lab.internalIp,
+                    ...(lab.database === undefined
+                      ? {}
+                      : {
+                          database: {
+                            host: lab.database.host,
+                            ipv4: lab.database.ipv4,
+                          },
+                        }),
+                  },
+                }),
+            sourceDirectory: source.directory,
+            sourceTree: source.tree,
+            ...(source.dependency === undefined
+              ? {}
+              : { dependencySource: source.dependency }),
+            expiresAt: new Date(now + wallMinutes * 60_000).toISOString(),
           },
-        },
-        run: {
-          runId: trialId,
-          targetSnapshotDigest: snapshot.digest,
-          profile: boundaries.runtimeProfile,
-          coordination: "cooperative" as const,
-          prompt: promptFor(assignment, selectedObjective),
-          ...(lab === undefined
-            ? {}
-            : {
-                lab: {
-                  endpoint: lab.endpoint,
-                  networkName: lab.networkName,
-                  internalIp: lab.internalIp,
-                  ...(lab.database === undefined
-                    ? {}
-                    : {
-                        database: {
-                          host: lab.database.host,
-                          ipv4: lab.database.ipv4,
-                        },
-                      }),
-                },
-              }),
-          sourceDirectory: source.directory,
-          sourceTree: source.tree,
-          ...(source.dependency === undefined
-            ? {}
-            : { dependencySource: source.dependency }),
-          expiresAt: new Date(now + wallMinutes * 60_000).toISOString(),
-        },
-      };
-      return {
-        trialId,
-        trialOrdinal,
-        explore,
-      };
-    }),
+        };
+        return {
+          trialId,
+          trialOrdinal,
+          explore,
+        };
+      },
+    ),
     executor: boundaries.executor,
     attachments: boundaries.attachments,
     admitFinding: admitWordPressFinding,
