@@ -1,8 +1,7 @@
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
+import { openState } from "../dist/cli/state.js";
 import { ProviderAttachmentStore } from "../dist/discovery/index.js";
-import { PrivateArtifactStore } from "../dist/infrastructure/private-artifact-store.js";
-import { Ledger } from "../dist/ledger/index.js";
 import { recoverWordPressChildReports } from "../dist/profiles/wordpress/discovery/recover-child-reports.js";
 
 const usage =
@@ -16,20 +15,11 @@ for (let index = 2; index < process.argv.length; index += 2) {
 }
 for (const key of ["--campaign", "--state", "--attachments"])
   if (!args.has(key)) throw new Error(usage);
-const stateDirectory = resolve(args.get("--state"));
-const store = new PrivateArtifactStore({
-  rootDirectory: join(stateDirectory, "private-evidence"),
-  maxEntries: 64,
-  maxBytes: 72 * 1024 * 1024,
-});
-const ledger = new Ledger({
-  databasePath: join(stateDirectory, "ledger.sqlite"),
-  artifactStore: store,
-});
+const state = await openState(args.get("--state"));
 const result = await recoverWordPressChildReports({
   campaignId: args.get("--campaign"),
-  ledger,
-  evidence: store,
+  ledger: state.ledger,
+  evidence: state.store,
   attachments: new ProviderAttachmentStore(resolve(args.get("--attachments"))),
 });
 console.log(
