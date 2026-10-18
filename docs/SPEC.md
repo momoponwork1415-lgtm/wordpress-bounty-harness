@@ -40,7 +40,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `evaluation` | 2026-10-18 に削除（所有者指示）。`eval compare / prospective / case-blocked` と location-overlap 採点は運用・skill・runner のどれも呼んでいなかった。費用と転帰の集計は `ledger` の `funnel` / `usage` が持つ | — | — | — | — |
 | `cli` | 上記を薄く接続する | コマンド | なし | | 移植: `cli.ts` の構成だけ |
 
-持ち込まないもの: `research/` のResearch Campaigns内部とcheckpointによる長期セッション再開、条件付き3試行、Human Candidate Review、Research Grant、Approved Target Batch、旧スキーマ、Grok / Claude Code / GLM / DeepSeek adapter（開発比較が必要になったら移す）。現行の単独Trialの1 hop Lead継続は主経路から外すが、過去の台帳は読み続ける。
+持ち込まないもの: `research/` のResearch Campaigns内部とcheckpointによる長期セッション再開、条件付き3試行、Human Candidate Review、Research Grant、Approved Target Batch、旧スキーマ、Grok / Claude Code / GLM / DeepSeek adapter（開発比較が必要になったら移す）。旧単独Trialの1 hop Lead継続は書き込み経路から削除済みで、過去の台帳は読み続ける。
 
 ## 4a. Target Profile（対象固有部分の置き場）
 
@@ -67,7 +67,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `CampaignInput v1` | snapshot → discovery | Target / Dependency Snapshot digest、trust境界宣言（人間が書く、版付き）、Programme Boundary（匿名化）、公開履歴は `none` のみ（時点で切ったカタログの生成は ADR 0034 で削除。旧runの `catalog` は台帳から読む）、model profile digest、prompt digest、Trial単位の停止規則、Lab設定 |
 | `PlannedTrial` | profile → discovery | Trial id / ordinal、Rootと最大4子の実行枠、固定sourceの参照、単一Trialのwall上限。旧形式の入口索引・段・Lead継続planは互換読取のみ |
 | `Finding v1` | discovery → verification / ledger | claim、attacker position（`unauthenticated` / `subscriber` / `customer` のみ）、到達する影響の種別（第8b節の共通分類）、設定前提（`default` / 変更内容）、破られるproperty、入口からeffectまでのtrace（file、function、行）、既存controlへの評価、Lab内で観測した事実、recipe ref（Private）、discovery run id、snapshot digest |
-| `Lead v1` | discovery → ledger / 次回の探索計画 | primitive、storage分類、欠けた辺、source trace。本文はPrivate Evidence、台帳はdigestとenumだけ。Verifierへは送らない |
+| `Lead v1` | discovery → ledger | primitive、storage分類、欠けた辺、source trace。本文はPrivate Evidence、台帳はdigestとenumだけ。Verifierへは送らない |
 | `VerificationResult v1` | verification → ledger / review | `runtime-confirmed` / `contradicted` / `incomplete`、判定器の種類、判定器が観測した条件（使ったrole、path / 拡張子の制御、到達role、XSSの発火context、変更したoption、設定前提）、証拠ref、Lab Setup digest、`incomplete` 理由コード、次の手（verifierが書く）、再現パッケージref（confirmedのみ）。台帳にはoptionalな `evidenceCapture` enum |
 | `ReviewDecision v1` | review → ledger | 採否、理由コード、重複照合の結果、判断時刻、開いた証拠の一覧 |
 | `SubmissionCandidate v1` | review → review（承認） | Verified Vulnerability ref、programme、scope判定、Draft revision digest、送信先 |
@@ -200,11 +200,13 @@ TranslatePressの公開済み脆弱版・修正版で縦断経路を実証した
 - 本番探索の開始ゲートは、上記2対象の**少なくとも1件**でsource根拠付きFindingを新しいLabのHarness判定器が `runtime-confirmed` とし、同一経路を修正版で再実行してconfirmedにならず、子の成果と費用・停止理由が欠落なく残ること。これで示せるのは配線と1分類の能力だけで、未知脆弱性の発見率ではない。
 - 本人発見の公開7件の再発見では、協調Trialにsource根拠付き候補が出るかと、新Labの判定器でconfirmedかつ修正版の別Snapshotで同じ経路が成立しないかを別指標にする。TranslatePress以外でStored XSS 1件以上とSQLi 1件以上を目標とし、各caseの落ちた段階と理由を台帳と日付付き評価文書に残す。探索のpromptとscenarioに対象固有の関数名、option名、URL、画面名を入れない。評価対象の記録本文、PoC、payload、原因箇所、修正差分を探索へ渡さない（ADR 0027）。
 - ゲート通過後は、現行最新版を対象とした少数の本番探索へ進む。対象選定の最小方針・Snapshot固定・隔離が機能していれば、レポートJSONの完全自動化や多数のheld-out事例を待たない。ただし提出候補を人間に渡す条件（最新版での独立確認、重複・scope照合、証拠、手動Lab再現、承認）は第8節のまま守る。
-- 複数手法の比較が必要になった時だけ、同じ対象・model・予算でA/Bまたはpass@kを事前登録する。旧 `eval score --keys` とAnswer Keyは将来の任意の研究用互換機能であり、人間による鍵入力を要求しない。
+- 複数手法の比較が必要になった時だけ、同じ対象・model・予算でA/Bまたはpass@kを事前登録する。旧 `eval score --keys` とAnswer Keyは2026-10-18に削除した（§4 の `evaluation` 行）。
 
 ## 11. ADR（新リポジトリで最初に書くもの）
 
-1. 探索に既知脆弱性の答えを与えない（旧ADR 0003を引き継ぐ）。→ **0012で置き換え**: 評価では時点で切り、本番では対象の公開履歴（カタログ情報）を変種分析の入力として渡す。
+一覧は 0029 までの当初の記録。現在の効力は各 ADR の front matter（status / amended-by）を正とし、0030〜0037 は [docs/adr/](adr/) を見る。
+
+1. 探索に既知脆弱性の答えを与えない（旧ADR 0003を引き継ぐ）。→ **0012で置き換え**: 評価では時点で切り、本番では対象の公開履歴（カタログ情報）を変種分析の入力として渡す（本番で catalog を渡す経路は 0034 で削除）。
 2. 自動の実行時検証を人間レビューの前に置く（旧ADR 0135を置き換える）。
 3. 探索エージェントは隔離Lab内で対象を実行してよい。Lab外への到達と外部行動は禁止。
 4. `runtime-confirmed` はHarness所有の決定論的判定器だけが出す。
@@ -215,8 +217,8 @@ TranslatePressの公開済み脆弱版・修正版で縦断経路を実証した
 9. provider認証情報は有界のegress brokerを通す（旧ADR 0142を引き継ぐ）。
 10. プログラム対象範囲は技術的検証を止めず、reviewで提出先ごとに評価する。authz / IDORは重大な影響へつながる場合だけ対象。
 11. 対象固有のコードはTarget Profileに閉じ込め、汎用モジュールはprofileを型でしか知らない。2つ目のprofileまで汎用化しない。
-12. 既知脆弱性は評価では時点で切り、本番では対象の公開履歴を変種分析の入力として渡す（0001を置き換え）。
-13. 探索promptの版とA/B軸を保持する。既定の選択は0017から0025を経て0029が更新する。
+12. 既知脆弱性は評価では時点で切り、本番では対象の公開履歴を変種分析の入力として渡す（0001を置き換え。catalog の生成は 0034 で削除）。
+13. 探索promptの版を保持する（A/B軸の mode は PR #357 で削除）。既定の選択は0017から0025を経て0029が更新する。
 14. 旧単独TrialのLead継続は同一Trial内の1 hopに限る。0025のHarness継続も主経路から外し、過去記録を読む。
 15. 判定器のHTTP証拠はHarnessが捕捉し、Verifierの記録は補助として扱う。
 16. Root＋最大3 subagentで探索から人間の手動再現までの縦断を先に実証する。主経路の入口は0029が更新する。

@@ -191,7 +191,7 @@ harness review outcome --candidate <id> --outcome triaged|resolved|duplicate|inf
 ## 4. 見るべき数字
 
 ```
-harness ledger funnel --campaign <id> | --since <ISO>  # --since は全 campaign の指定時刻以降の event を合算。探索の incomplete(depth) を独立表示。raw → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome、種別別、arm別、転帰と報奨
+harness ledger funnel --campaign <id> | --since <ISO>  # --since は全 campaign の指定時刻以降の event を合算。旧 Trial の incomplete(depth) を独立表示（生成は ADR 0034 で削除、旧 event だけ）。raw → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome、種別別、arm別（旧 Trial）、転帰と報奨
 harness ledger stops [--campaign <id>] [--since <ISO>]  # run の失敗理由×provider上限、target-skipped の段階×理由、Lab 失敗段階、campaign 停止理由の件数。拒否 run は explore 件数と 60 秒以内の件数も出す
 harness ledger usage [--campaign <id>]    # providerが返したtokenを対象・UTC日ごとに合計。返らなかった項目はunavailableの件数
 harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、CLI版、カタログdigest、tier、access、認証の組ごとのrun数
@@ -201,7 +201,7 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 
 | 細い段 | 直す場所 |
 | --- | --- |
-| raw Findingが少ない | 本番A/B（第6節）、分担単位 |
+| raw Findingが少ない | 探索 prompt の版（開発セット 3 Trial、DEVELOPMENT 第 5 節）、選定方針 |
 | verifier通過が少ない | 判定器の成功条件、Lab構成（`incomplete` の理由コードを見る） |
 | in-scopeが少ない | 選定方針（対象外になりやすい種別・tierを避ける） |
 | duplicateが多い | Finding 後の重複照合と履歴mirrorの鮮度。選定は mirror の件数と公開日だけを採点に使い、記録の内容は重複照合でだけ読む（ADR 0037） |
@@ -288,10 +288,7 @@ harness lab cleanup --config <path> --remove   # 削除
 - **過去比較の照合**: 旧prompt版や入口索引の有無を変えた独立Trialは過去結果として別armで読む。新規探索のprompt・modeはv8と `wp2shell` のみ。旧段付きTrialを同じ分母に混ぜない。
 - **旧A/Bの読取**: 過去の `ablation.axes` にあった `history`、`prompt`、`continuation` と旧 `{"axis":"history","armBFraction":0.5}` の割当・digestは台帳に残る。旧基準は `short-objective-managed-v4` と継続なしだった。
   - #73のLuna開発セットでは公開2事例に対して全cellでsource候補0/3だった。当時の事前登録の規則で短い目的promptを既定に残したが、優劣の証明ではない。失敗Trialの補充は元の12試行と分けて記録した。150分対照も実wallは設定上限より短かった。現在の既定はADR 0029に従う。
-- **前向き評価**: 四半期ごとに、公開されたadvisoryで本番台帳を再採点し、見逃しを数える。
-  - advisoryファイルはGit外に置く私的データ。1件ごとに `{schemaVersion: 1, advisoryId, slug, affectedVersions: [{fromVersion, fromInclusive, toVersion, toInclusive}], publishedAt, impact, allowedLocations: [{file, function?}]}` を書く。`allowedLocations` は公開パッチを読んで人間が書く。
-  - 結果は `found` / `missed` / `unscorable`（採点失敗）/ `predates-run` / `not-searched` に分かれる。`missed` 以外は見逃しに数えない。
-  - `blind rubric pairs:` の (advisory, Finding) 対だけを、armや検証結果を見ずに人間がtarget-hit / partial / non-targetで採点する。
+- **前向き評価**: 公開されたadvisoryで本番台帳を見直し、見逃しを数える。採点 command（`eval prospective`、盲検 rubric）は上のとおり削除したので、行うときは台帳と公開記録を照合して `docs/evaluation/` に記録する。
 - **held-out**: 初期の開発と本番開始には使わない。比較研究が必要になった時だけ予算とcaseを決める。
 
 ## 7. やらないこと
