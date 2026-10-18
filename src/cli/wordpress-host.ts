@@ -34,7 +34,6 @@ import {
   openWordPressOrgSnapshotSource,
   openWordPressOrgTargetSource,
 } from "../profiles/wordpress/acquisition/index.js";
-import { wordpressSourceFileSets } from "../profiles/wordpress/discovery/coverage.js";
 import type { WordPressFinding } from "../profiles/wordpress/discovery/finding.js";
 import {
   openWordPressLab,
@@ -499,22 +498,6 @@ export async function createWordPressHostProfile(options: {
   });
   return {
     ...profile,
-    /** Reads a frozen Snapshot's materialized target source; never acquires or writes. */
-    async sourceFiles(_state, digest) {
-      const record = snapshotSchema.parse(
-        JSON.parse(
-          await readFile(
-            join(directories.snapshots, `${digest.slice(7)}.json`),
-            "utf8",
-          ),
-        ) as unknown,
-      );
-      if (canonicalDigest(record) !== digest) return null;
-      const resolved = await openMaterializedSources({
-        rootDirectory: directories.sources,
-      }).resolve({ ...record, dependencies: [], digest });
-      return wordpressSourceFileSets(resolved.target.sourceDirectory);
-    },
     /** One WordPress.org observation for `review export`; failures are null. */
     async latestVersion(state, targetId) {
       const slug = /^wporg:([a-z0-9][a-z0-9-]*)$/.exec(targetId)?.[1];
