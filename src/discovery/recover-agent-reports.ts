@@ -1,4 +1,3 @@
-import { canonicalJson } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger } from "../ledger/index.js";
 import type {
@@ -10,6 +9,9 @@ import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import { recordReadPaths } from "./read-paths.js";
 import {
   nativeRunReceiptSchema,
+  receiptWallTimeMs,
+  runFinishedFieldsFrom,
+  sealNativeRunReceipt,
   type NativeRunReceipt,
 } from "./native-run-receipts.js";
 
@@ -94,9 +96,7 @@ export async function recoverChildAgentReports(
     });
     if (started.status === "conflict")
       throw new Error("Child start identity conflict");
-    const receiptDigest = await options.evidence.putFiles({
-      "receipt.json": canonicalJson(receipt),
-    });
+    const receiptDigest = await sealNativeRunReceipt(options.evidence, receipt);
     const readPathsDigest = await recordReadPaths(
       options.attachments,
       options.evidence,
@@ -137,18 +137,8 @@ export async function recoverChildAgentReports(
       runId: receipt.runId,
       outcome,
       costUsd: "unavailable",
-      wallTimeMs: Math.max(
-        0,
-        Date.parse(receipt.completedAt) - Date.parse(receipt.startedAt),
-      ),
-      usage: receipt.usage,
-      ...(receipt.observed === undefined ? {} : { observed: receipt.observed }),
-      ...(receipt.sandboxExitCode === undefined
-        ? {}
-        : { sandboxExitCode: receipt.sandboxExitCode }),
-      ...(receipt.diagnosticArtifactDigest === undefined
-        ? {}
-        : { diagnosticArtifactDigest: receipt.diagnosticArtifactDigest }),
+      wallTimeMs: receiptWallTimeMs(receipt),
+      ...runFinishedFieldsFrom(receipt),
       ...(failure === undefined ? {} : failure),
       artifacts: [
         { kind: "native-run-receipt", digest: receiptDigest },

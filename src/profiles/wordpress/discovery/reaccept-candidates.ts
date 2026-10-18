@@ -4,7 +4,7 @@ import { canonicalJson } from "../../../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../../../ledger/index.js";
 import { recoverRootReportFromRollout } from "../../../discovery/codex-native-agent-runtime.js";
-import { nativeRunReceiptSchema } from "../../../discovery/native-run-receipts.js";
+import { readNativeRunReceipt } from "../../../discovery/native-run-receipts.js";
 import type { ProviderAttachmentStore } from "../../../discovery/provider-research-report.js";
 import type { RecordedCandidate } from "../../../discovery/record-discovery-report.js";
 import { recordWordPressReport } from "./candidate-admission.js";
@@ -46,16 +46,9 @@ export async function reacceptWordPressRun(options: {
   );
   if (receiptRef === undefined)
     throw new Error("Archived run receipt is missing");
-  const storedReceipt = await evidence.readFile(
-    receiptRef.digest,
-    "receipt.json",
-    100_000,
-  );
-  if (storedReceipt.status !== "resolved")
+  const receipt = await readNativeRunReceipt(evidence, receiptRef.digest);
+  if (receipt === undefined)
     throw new Error("Archived run receipt is unreadable");
-  const receipt = nativeRunReceiptSchema.parse(
-    JSON.parse(storedReceipt.bytes.toString("utf8")) as unknown,
-  );
   if (
     receipt.runId !== runId ||
     receipt.targetSnapshotDigest !== started.snapshotDigest
