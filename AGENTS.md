@@ -51,7 +51,7 @@
 
 WordPress 固有のもの（WordPress.org からの取得、WordPress + MySQL の Lab 供給、PHP 向けの判定器、Wordfence / Patchstack の対象範囲方針、trust 境界宣言の雛形、保存先索引と成分分担、Lead 型、評価対象の分類）は `profiles/wordpress/` に置く。
 
-汎用モジュール（selection / snapshot / lab / discovery / verification / ledger / review / evaluation）は profile が実装するインターフェースの型だけに依存し、WordPress の型や path を import しない。plugin、slug、hook、AJAX action、`wp_options` のような語が汎用モジュールに現れたら、それは profile へ移す合図。
+汎用モジュール（selection / snapshot / lab / discovery / verification / ledger / review）は profile が実装するインターフェースの型だけに依存し、WordPress の型や path を import しない。plugin、slug、hook、AJAX action、`wp_options` のような語が汎用モジュールに現れたら、それは profile へ移す合図。
 
 profile のインターフェースは、2つ目の profile ができるまで汎用化しない。
 

@@ -2,9 +2,10 @@ import { posix } from "node:path";
 
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
-import { READ_PATHS_FILE } from "./coverage-report.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 
+/** Private Evidence file of a run's `read-paths` artifact: sorted source-relative paths. */
+export const READ_PATHS_FILE = "read-paths.json";
 /** The read-only target source mount inside the sandbox. */
 const SOURCE_MOUNT = "/workspace/main";
 // A file-like token: no flags, globs, variables or `file:line`; the last segment has an extension.
