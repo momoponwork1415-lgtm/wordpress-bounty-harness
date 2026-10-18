@@ -22,8 +22,6 @@ export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
    * Otherwise the body is objective-only and receives this generated version.
    */
   readonly outputContract: WordPressOutputContractVersion | null;
-  /** With the entry index on, contract v3 and the Root coverage schema replace `outputContract`. */
-  readonly entryIndexCoverage: boolean;
 }
 
 export const WORDPRESS_DISCOVERY_PROMPTS = [
@@ -32,7 +30,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:99ce948c3985b054306f1e7ccda8a76db89d8b9a5c9e92f453cb0c852dcda96a",
     outputContract: null,
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -40,7 +37,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:66c14c0334c5e70e546e1ed8c10f760b4005f56fe626b02e3de78f09f69af7c0",
     outputContract: null,
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -48,7 +44,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:f9d90b8ad1dd955527756bf9ad9869624cff999dd7fab3908a7f050b1cd422be",
     outputContract: null,
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -56,7 +51,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:e6a7a1650f2af3c1e34d73a42c2d378497f4553818967cb804227cbd01436809",
     outputContract: null,
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -64,7 +58,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:58460c592c424fe752c8e9fdf0b53b686302ee1e11d72a48a06dc9109a496215",
     outputContract: null,
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -72,7 +65,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:05331cbdf24b49b6352020ce6faf84f5d005e275d0665f88287c9ae7c4d54825",
     outputContract: null,
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -80,7 +72,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:989cec70830ff7d145e3c72fd9a984cacd253d181c253851e070f3bff50e6bab",
     outputContract: null,
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -88,7 +79,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:7aa340bdab52d28f0830f38b43703e958d44e163b3ac937ff7be7896ccd73040",
     outputContract: null,
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -96,7 +86,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:972ebe7d10a0173fef24a7603e01defcb17fd81e87810795f705737114f584b4",
     outputContract: "v1",
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -104,7 +93,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:effeb9e343601157e2da76eb65b99d4de91a9618daf7379efce13491a1d6aba6",
     outputContract: "v1",
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -112,7 +100,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:a466aa5d5abba7ff18b70135d3ae7730880674652c87fd65feaa3534765904fe",
     outputContract: null,
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -120,7 +107,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:5b334f59d315d6cee721b7dc698353ed5a9f44553474dd87c7aac7192d832a98",
     outputContract: null,
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -128,7 +114,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:efeaefbd1775e2a4fd3984e19672e7e5cf8cfdbe0b16b84cededa23587b239c5",
     outputContract: null,
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -136,7 +121,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:a97b4b3c1101470cec743dd51af1d2169f15d4d5ee1a2797997be05edef72c9b",
     outputContract: "v2",
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -144,7 +128,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:6c823fe2ddb8a9af27ea743927f5d4a8203ec29ef4bca7dbadf3135c1739ab62",
     outputContract: "v2",
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -152,7 +135,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:59c6bd1bb5fd5ef7618ce180de7f2d90af68fa4bcba26f90aa31aa3679d80cda",
     outputContract: "v2",
-    entryIndexCoverage: true,
     status: "archived",
   },
   {
@@ -160,7 +142,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:3b85b6bdacd3181da779fd6cc1eec5c45c9e01d4f16e80163fdab4e62dff3503",
     outputContract: "v2",
-    entryIndexCoverage: true,
     status: "archived",
   },
   {
@@ -168,7 +149,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:bb41592c57ce664a90b8b429d9d3d0c86da7c5547aeae9048a18440af9b1893e",
     outputContract: "v2",
-    entryIndexCoverage: false,
     status: "archived",
   },
   {
@@ -176,7 +156,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:d44532a985d1ef6b74f7117ea8bafbb60b25a7ae191d17ee362b2da58f3c639d",
     outputContract: "v4",
-    entryIndexCoverage: false,
     status: "current",
   },
   {
@@ -184,7 +163,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",
     outputContract: "v2",
-    entryIndexCoverage: false,
     status: "archived",
   },
 ] as const satisfies readonly WordPressDiscoveryPromptRecord[];

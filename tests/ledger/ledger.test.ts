@@ -1137,6 +1137,54 @@ describe("Ledger public interface", () => {
     });
   });
 
+  it("still reads old entry-index runs with catalog history, coverage artifacts and incomplete(depth) (ADR 0034)", async () => {
+    const { ledger, artifactStore } = await fixture();
+    const coverage = await evidence(artifactStore);
+    expect(
+      await ledger.append({
+        ...common("start-indexed-run"),
+        type: "discovery-run-started",
+        runId: "indexed-run",
+        labId: "lab-1",
+        trialId: "indexed-run",
+        trialOrdinal: 0,
+        runKind: "explore",
+        history: { mode: "catalog", digest: snapshot, recordIds: ["public-1"] },
+        configuration: {
+          promptVariant: "wp2shell-bounty-v6",
+          promptDigest: revision,
+          contractDigest: labSetup,
+          assignmentUnit: "plugin",
+          entryIndex: { enabled: true, digest: otherSnapshot },
+        },
+      }),
+    ).toEqual({ status: "appended" });
+    expect(
+      await ledger.append({
+        ...common("finish-indexed-run"),
+        type: "discovery-run-finished",
+        runId: "indexed-run",
+        outcome: "failed",
+        reason: "depth",
+        costUsd: "unavailable",
+        wallTimeMs: 1,
+        artifacts: [{ kind: "coverage", digest: coverage }],
+      }),
+    ).toEqual({ status: "appended" });
+    const [started] = ledger.read({ type: "discovery-run-started" });
+    expect(started?.event).toMatchObject({
+      history: { mode: "catalog", recordIds: ["public-1"] },
+      configuration: { entryIndex: { enabled: true, digest: otherSnapshot } },
+    });
+    const [finished] = ledger.read({ type: "discovery-run-finished" });
+    expect(finished?.event).toMatchObject({
+      outcome: "failed",
+      reason: "depth",
+      artifacts: [{ kind: "coverage", digest: coverage }],
+    });
+    expect(ledger.funnel("campaign-1").incompleteDepth).toBe(1);
+  });
+
   it("separates attached and source-only Trials and counts verification Lab failures", async () => {
     const { ledger } = await fixture();
     await ledger.append({

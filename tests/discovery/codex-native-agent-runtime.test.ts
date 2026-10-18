@@ -6,10 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
-import {
-  createHistoryCatalog,
-  defineAgentRuntimeProfile,
-} from "../../src/discovery/index.js";
+import { defineAgentRuntimeProfile } from "../../src/discovery/index.js";
 import {
   CodexNativeAgentRuntime,
   recoverChildReportFromRollout,
@@ -26,8 +23,6 @@ import {
   PROVIDER_UPSTREAM_ORIGIN,
 } from "../../src/discovery/index.js";
 import { ProviderAttachmentStore } from "../../src/discovery/index.js";
-import { z } from "zod";
-import { wordpressCoverageRecordSchema } from "../../src/profiles/wordpress/discovery/coverage.js";
 import { recoverRootAgentReport } from "../../src/discovery/recover-agent-reports.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
@@ -1466,57 +1461,6 @@ describe("Codex native agent runtime", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-  it("sends only validated pre-cutoff catalog history to the agent", async () => {
-    const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
-    try {
-      const commands: CodexSandboxCommand[] = [];
-      const runtime = new CodexNativeAgentRuntime(
-        sandbox(transcript, commands),
-        broker(),
-        new ProviderAttachmentStore(root),
-        image,
-        () => new Date(now),
-      );
-      const history = createHistoryCatalog("2026-02-01T00:00:00Z", [
-        {
-          id: "public-1",
-          kind: "sql-injection",
-          affectedVersions: ["1.0"],
-          fixedVersions: ["1.1"],
-          publishedAt: "2026-01-01T00:00:00Z",
-          title: "Synthetic title",
-          changedFiles: [],
-        },
-      ]);
-      expect(
-        (
-          await runtime.execute({
-            ...run,
-            campaignInput: { ...run.campaignInput, history },
-          })
-        ).receipt.terminal,
-      ).toBe("completed");
-      expect(commands[0]?.stdin).toContain("Synthetic title");
-      expect(commands[0]?.stdin).toContain("2026-02-01T00:00:00Z");
-      const unsafe = {
-        ...run,
-        campaignInput: {
-          ...run.campaignInput,
-          history: {
-            ...history,
-            records: [{ ...history.records[0]!, payload: "secret" }],
-          },
-        },
-      };
-      expect((await runtime.execute(unsafe)).receipt).toMatchObject({
-        terminal: "incomplete",
-        reason: "policy",
-      });
-      expect(commands).toHaveLength(1);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
   it("rejects an Answer Key field before invoking the agent", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-transport-"));
     try {
@@ -2121,63 +2065,6 @@ describe("Codex native agent runtime", () => {
         terminal: "incomplete",
         reason: "schema",
         reasonDetail: "final-message-not-report",
-      });
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("uses the profile coverage schema for Root structured output", async () => {
-    const root = await mkdtemp(join(tmpdir(), "codex-coverage-"));
-    try {
-      const commands: CodexSandboxCommand[] = [];
-      const attachments = new ProviderAttachmentStore(root);
-      const report = {
-        findings: [],
-        leads: [],
-        examined: "source",
-        unexamined: "none",
-        coverage: { indexDigest: digest, incomplete: false, entries: [] },
-      };
-      const stdout = transcript.replace(
-        JSON.stringify(
-          JSON.stringify({
-            findings: [],
-            leads: [],
-            examined: "source",
-            unexamined: "none",
-          }),
-        ),
-        JSON.stringify(JSON.stringify(report)),
-      );
-      const runtime = new CodexNativeAgentRuntime(
-        sandbox(stdout, commands),
-        broker(),
-        attachments,
-        image,
-        () => new Date(now),
-      );
-      const result = await runtime.execute({
-        ...run,
-        coverageSchema: z.toJSONSchema(wordpressCoverageRecordSchema, {
-          io: "output",
-        }),
-      });
-      expect(result.receipt.terminal).toBe("completed");
-      const stored =
-        result.attachment && (await attachments.read(result.attachment));
-      expect(
-        stored?.status === "resolved" &&
-          JSON.parse(stored.bytes.toString("utf8")),
-      ).toMatchObject({ coverage: report.coverage });
-      const schema = JSON.parse(commands[0]!.supportFiles[0]!.content) as {
-        required: string[];
-        properties: Record<string, unknown>;
-      };
-      expect(schema.required).toContain("coverage");
-      expect(schema.properties.coverage).toMatchObject({
-        type: "object",
-        additionalProperties: false,
       });
     } finally {
       await rm(root, { recursive: true, force: true });

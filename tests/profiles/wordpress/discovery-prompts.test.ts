@@ -6,11 +6,9 @@ import { z } from "zod";
 
 import { wordpressFindingClaimSchema } from "../../../src/profiles/wordpress/discovery/finding.js";
 import { wordpressLeadClaimSchema } from "../../../src/profiles/wordpress/discovery/lead.js";
-import { wordpressCoverageRecordSchema } from "../../../src/profiles/wordpress/discovery/coverage.js";
 import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
-  wordPressDiscoveryOutputContractV3,
   wordPressDiscoveryOutputContractV4,
 } from "../../../src/profiles/wordpress/discovery/output-contract.js";
 
@@ -90,14 +88,9 @@ describe("WordPress prompt table", () => {
     expect(WORDPRESS_TRUST_BOUNDARY.id).toBe("trust-boundary-v1");
   });
 
-  it("only the coverage-capable versions answer to the entry index", () => {
-    expect(
-      WORDPRESS_DISCOVERY_PROMPTS.filter((row) => row.entryIndexCoverage).map(
-        (row) => row.id,
-      ),
-    ).toEqual(["wp2shell-bounty-v5", "wp2shell-bounty-v6"]);
+  it("carries no entry-index coverage column after ADR 0034", () => {
     for (const row of WORDPRESS_DISCOVERY_PROMPTS)
-      if (row.entryIndexCoverage) expect(row.outputContract).not.toBeNull();
+      expect(row).not.toHaveProperty("entryIndexCoverage");
   });
 });
 
@@ -214,23 +207,6 @@ describe("WordPress discovery prompt assets", () => {
     expect(current.digest).toBe(
       "sha256:a74a93951d790aec174c3506a6df9ae2cd391bc44bdedea7fdf8ff74d503db3d",
     );
-  });
-
-  it("generates the Root coverage contract from the WordPress schema", () => {
-    const current = wordPressDiscoveryOutputContractV3();
-    const schema = JSON.parse(current.text.split("Coverage schema: ")[1]!);
-    expect(current.id).toBe("wordpress-discovery-contract-v3");
-    expect(schema).toEqual(
-      z.toJSONSchema(wordpressCoverageRecordSchema, { io: "output" }),
-    );
-    expect(current.text).toContain("Children do not report `coverage`");
-    expect(current.text).toContain("Include every listed id once");
-    expect(current.text).toContain("more than 0.2 of entries");
-    expect(wordPressDiscoveryOutputContractV3(0.3).digest).not.toBe(
-      current.digest,
-    );
-    expect(current.text).not.toMatch(/checklist|30 minutes/i);
-    expect(current.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
   });
 
   it("describes pinned dependency source paths only in the new contract", () => {

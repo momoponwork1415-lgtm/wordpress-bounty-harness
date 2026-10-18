@@ -29,7 +29,7 @@
 - **Harness は制御だけを持つ。** 選定、Snapshot と digest、gVisor と broker、prompt と source を渡して走らせること、wall と子の数、出力の全件保存と schema による正規化、Programme Boundary 外の出口での park、Finding 単位の Lab 供給と canary の播種、判定器、台帳と Private Evidence、review の記録。判断の要らない処理だけを code にする（LESSONS 4）。
 - **探索と検証の中身は prompt と skill が持つ。** どこを読むか、何を索引にするか、どの順で仮説を立てるか、どう再現するか、前提をどう作るかは agent の仕事。探索は目的 prompt（記事の wp2shell）を渡して Root に任せる。検証は skill が Harness の立てた Lab に対して行い、`runtime-confirmed` は判定器だけが出す。
 - **移す合図。** Harness の code に「agent にこう探させる」「この前提ならこの scenario」「索引の網羅率」のような判断が現れたら、prompt か skill へ移す。agent の自己申告を Harness が根拠にする code が現れたら、判定器か観測器へ移す。観測（読んだ file、wall、token、出力）は Harness が取る。舵取りは取らない。
-- **削除。** 入口・保存先索引の探索入力、task-plan と dispatch、coverage と `incomplete(depth)`、Verifier 指示の連鎖、precondition 文から scenario を選ぶ正規表現、plugin 別 Lab adapter と scenario は境界の外側にあるので、skill 化と同時に削除する。使わない設定にして残す中間状態は置かない。ADR 0033 と、SPEC・ADR 0029・ADR 0026 の該当行はこの決定に合わせて改訂する。それまで下の 2 節の索引・scenario の行は、既存 Trial の記録を読むための記述として扱う。
+- **削除。** 入口・保存先索引の探索入力、task-plan と dispatch、coverage と `incomplete(depth)`、Verifier 指示の連鎖、precondition 文から scenario を選ぶ正規表現、plugin 別 Lab adapter と scenario は境界の外側にあるので、skill 化と同時に削除する。使わない設定にして残す中間状態は置かない。入口・保存先索引、coverage と `incomplete(depth)`、公開履歴 catalog の生成は ADR 0034（2026-10-18）で削除済みで、SPEC・ADR 0029 の該当行は改訂した。Verifier 指示の連鎖と scenario / adapter は #352 と同時に消し、ADR 0026 の該当行をそのとき改訂する。それまで下の検証 Lab 節の scenario の行は、既存 Trial の記録を読むための記述として扱う。
 
 ## 単一協調Trialの探索（SPEC.md 第6節、ADR 0029）
 
@@ -50,7 +50,7 @@
 
 ## `profiles/wordpress/` の規則（ADR 0011）
 
-WordPress 固有のもの（WordPress.org からの取得、WordPress + MySQL の Lab 供給、PHP 向けの判定器、Wordfence / Patchstack の対象範囲方針、trust 境界宣言の雛形、保存先索引と成分分担、Lead 型、評価対象の分類）は `profiles/wordpress/` に置く。
+WordPress 固有のもの（WordPress.org からの取得、WordPress + MySQL の Lab 供給、PHP 向けの判定器、Wordfence / Patchstack の対象範囲方針、trust 境界宣言の雛形、Lead 型、評価対象の分類）は `profiles/wordpress/` に置く。
 
 汎用モジュール（selection / snapshot / lab / discovery / verification / ledger / review）は profile が実装するインターフェースの型だけに依存し、WordPress の型や path を import しない。plugin、slug、hook、AJAX action、`wp_options` のような語が汎用モジュールに現れたら、それは profile へ移す合図。
 

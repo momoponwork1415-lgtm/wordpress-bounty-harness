@@ -42,7 +42,6 @@ it("starts the checked-in v8 campaign with one concurrent target on WordPress 7.
   expect(config).toMatchObject({
     mode: "wp2shell",
     promptId: "wp2shell-bounty-v8",
-    entryIndex: false,
     runWallTimeMinutes: 120,
     stopRules: { maxRuns: 1, noFindingRuns: 1 },
   });
@@ -78,7 +77,6 @@ it.each(["3.3.1", "3.2.6"])(
     expect(wordpressCampaignConfigSchema.parse(source)).toMatchObject({
       mode: "wp2shell",
       promptId: "wp2shell-bounty-v8",
-      entryIndex: false,
       runWallTimeMinutes: 120,
       stopRules: { maxRuns: 1, noFindingRuns: 1 },
     });

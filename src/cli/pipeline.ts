@@ -48,7 +48,6 @@ export interface CampaignPipeline<
     readonly executor: DiscoveryOptions["executor"];
     readonly attachments: DiscoveryOptions["attachments"];
     readonly recordReport: DiscoveryOptions["recordReport"];
-    readonly assessCoverage?: NonNullable<DiscoveryOptions["assessCoverage"]>;
   }>;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;

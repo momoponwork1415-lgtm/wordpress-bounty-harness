@@ -16,54 +16,15 @@ import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import type { ReportRecorder } from "./record-discovery-report.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-const publishedAt = z.iso.datetime({ offset: true });
-const catalogRecordSchema = z.strictObject({
-  id: z.string().min(1).max(128),
-  kind: z.string().min(1).max(128),
-  affectedVersions: z.array(z.string().min(1)),
-  fixedVersions: z.array(z.string().min(1)),
-  publishedAt,
-  title: z.string().min(1).max(1024),
-  changedFiles: z.array(z.string().min(1)),
+
+/**
+ * New runs receive no public history. The time-cut `catalog` mode and its
+ * generator were deleted with the ablation arm (ADR 0034); the ledger keeps
+ * reading `discovery-run-started.history` of old catalog runs.
+ */
+export const campaignHistorySchema = z.strictObject({
+  mode: z.literal("none"),
 });
-export type CatalogRecord = z.infer<typeof catalogRecordSchema>;
-
-const catalog = z
-  .strictObject({
-    mode: z.literal("catalog"),
-    historyCutoff: publishedAt,
-    digest,
-    records: z.array(catalogRecordSchema),
-  })
-  .superRefine((value, context) => {
-    if (
-      value.digest !==
-      canonicalDigest({
-        historyCutoff: value.historyCutoff,
-        records: value.records,
-      })
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["digest"],
-        message: "History catalog digest mismatch",
-      });
-    }
-    for (const [index, record] of value.records.entries()) {
-      if (Date.parse(record.publishedAt) >= Date.parse(value.historyCutoff)) {
-        context.addIssue({
-          code: "custom",
-          path: ["records", index, "publishedAt"],
-          message: "History record is at or after the cutoff",
-        });
-      }
-    }
-  });
-
-export const campaignHistorySchema = z.union([
-  z.strictObject({ mode: z.literal("none") }),
-  catalog,
-]);
 export type CampaignHistory = z.infer<typeof campaignHistorySchema>;
 
 export const campaignInputV1Schema = z.strictObject({
@@ -91,66 +52,8 @@ export const campaignInputV1Schema = z.strictObject({
     }),
   ]),
   history: campaignHistorySchema,
-  entryIndex: z
-    .union([
-      z.strictObject({ enabled: z.literal(true), digest }),
-      z.strictObject({ enabled: z.literal(false) }),
-    ])
-    .optional(),
 });
 export type CampaignInputV1 = z.infer<typeof campaignInputV1Schema>;
-
-/** Validate before either evaluation or provider transport. */
-export function createHistoryCatalog(
-  historyCutoff: string,
-  records: readonly unknown[],
-): Extract<CampaignHistory, { mode: "catalog" }> {
-  const parsedRecords = records.map((record) =>
-    catalogRecordSchema.parse(record),
-  );
-  const body = { historyCutoff, records: parsedRecords };
-  return catalog.parse({
-    mode: "catalog",
-    ...body,
-    digest: canonicalDigest(body),
-  });
-}
-
-/** An evaluation run must use the held-out publication instant as its cutoff. */
-export function validateEvaluationCampaignInput(
-  input: unknown,
-  heldOutPublishedAt: string,
-): CampaignInputV1 {
-  const heldOut = publishedAt.parse(heldOutPublishedAt);
-  const parsed = campaignInputV1Schema.parse(input);
-  if (
-    parsed.history.mode === "catalog" &&
-    Date.parse(parsed.history.historyCutoff) !== Date.parse(heldOut)
-  ) {
-    throw new Error(
-      "Evaluation history cutoff differs from held-out publication",
-    );
-  }
-  return parsed;
-}
-
-/** Production uses the pinned snapshot version's publication instant. */
-export function validateProductionCampaignInput(
-  input: unknown,
-  snapshotVersionPublishedAt: string,
-): CampaignInputV1 {
-  const published = publishedAt.parse(snapshotVersionPublishedAt);
-  const parsed = campaignInputV1Schema.parse(input);
-  if (
-    parsed.history.mode === "catalog" &&
-    Date.parse(parsed.history.historyCutoff) !== Date.parse(published)
-  ) {
-    throw new Error(
-      "Production history cutoff differs from snapshot publication",
-    );
-  }
-  return parsed;
-}
 
 export type PlannedDiscoveryRun = {
   readonly run: Omit<DiscoveryTransportRun, "campaignInput">;
@@ -162,9 +65,6 @@ export type PlannedDiscoveryRun = {
     readonly trustBoundaryVersion?: string;
     readonly sourcePack?: { readonly dependency: "mounted" | "none" };
     readonly assignmentUnit: string;
-    readonly entryIndex?:
-      | { readonly enabled: true; readonly digest: string }
-      | { readonly enabled: false };
     readonly labAccess?: { readonly database: "read-only" | "none" };
   };
 };
@@ -210,11 +110,6 @@ export async function runDiscoveryCampaign(options: {
   readonly ledger: Ledger;
   /** Profile-owned admission of every candidate in a report; see `ReportRecorder`. */
   readonly recordReport: ReportRecorder;
-  /** Profile-owned Root coverage validator. Absent for archived or control arms. */
-  readonly assessCoverage?: (value: unknown) => {
-    readonly accepted: boolean;
-    readonly record?: unknown;
-  };
   readonly clock?: () => Date;
 }): Promise<{
   readonly runCount: number;
@@ -250,10 +145,6 @@ export async function runDiscoveryCampaign(options: {
     campaignId: options.campaignId,
     ...(options.labId === undefined ? {} : { labId: options.labId }),
     input,
-    history:
-      input.history.mode === "catalog"
-        ? catalog.parse(input.history)
-        : { mode: "none" },
     ...(options.runWallTimeMs === undefined
       ? {}
       : { runWallTimeMs: options.runWallTimeMs }),
@@ -263,9 +154,6 @@ export async function runDiscoveryCampaign(options: {
     evidence: options.evidence,
     ledger: options.ledger,
     recordReport: options.recordReport,
-    ...(options.assessCoverage === undefined
-      ? {}
-      : { assessCoverage: options.assessCoverage }),
     clock,
     seen: new Set<string>(),
   };

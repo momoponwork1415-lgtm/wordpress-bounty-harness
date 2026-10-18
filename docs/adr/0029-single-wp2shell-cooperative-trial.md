@@ -10,7 +10,7 @@ supersedes: 0025 for the default discovery route; 0017 for the default prompt
 
 対象の固定 Target Snapshot ごとに、Root と最大3子の協調 Trial を1回だけ起動する。既定の目的 prompt は版・digest を固定した `wp2shell-bounty-v2` とし、`short-objective-managed-v4` は比較 arm に残す。単独 screening、候補の有無による二段目、Harness の続行差し込みは主経路に置かない。分担と仮説は Root が決め、Harness は人数、隔離、証拠保存、停止を管理する。子が出した有効な Finding / Lead は Root の最終 JSON と独立して保存する。
 
-固定 source から生成した入口索引を、既定で Root にカタログ情報として渡す。索引は入口の所在を示すだけで、攻撃経路や子の分担を指示せず、全入口の処理を正常終了の条件にしない。索引を渡さない比較 Trial は明示して別 arm として記録し、索引ありの Trial と同じ比較分母に混ぜない。
+（2026-10-18 [ADR 0034](0034-harness-control-only-deletions.md): 索引の生成 code は削除済み。この段落と 2026-10-17 改訂は旧 Trial の記録を読むための記述。）固定 source から生成した入口索引を、既定で Root にカタログ情報として渡す。索引は入口の所在を示すだけで、攻撃経路や子の分担を指示せず、全入口の処理を正常終了の条件にしない。索引を渡さない比較 Trial は明示して別 arm として記録し、索引ありの Trial と同じ比較分母に混ぜない。
 
 1 Trial の wall 上限は既定で60分とする。Root の最終報告が早く返ればその時点で正常終了し、Harness は最低実行時間を強制しない。既存の `wp2shell-bounty-v2` 本文には30分の探索指示が残るが、#143 で新しい版へ移すまで本文と digest は変えない。wall 到達、provider 上限、broker 制限、実行または schema の失敗は理由付きの `incomplete` として記録し、候補0件の正常完了に数えない。観測済みの子の成果と Private Evidence は保持する。自動 continuation、同一対象の自動追加 Trial、段別予算配分は行わない。provider 上限では新しい Trial の開始を止め、未消費の対象は同じ campaign から再開できるよう記録する。
 
@@ -36,7 +36,7 @@ supersedes: 0025 for the default discovery route; 0017 for the default prompt
 - 探索に渡すもの、安全境界、Harness 所有の判定器、同一 Snapshot digest、提出前の人間判断と外部行動の承認、Private Evidence の配置は SPEC 第2節の不変条件8項目のまま。目的 prompt の本文を変えるときは旧版を残して新 ID と digest を登録する。
 - 開発セットの各変更は、独立した3 Trial の completed、Finding、Lead、wall 中央値、失敗理由、usage と検証結果を報告する。既存の二段構え Trial と新主経路 Trial は同じ比較の分母に混ぜない。
 - 2026-10-18（所有者決定）: 探索用 Lab は任意とし、既定の付属設定は維持する。
-- Lab を付けない Trial は固定 Snapshot と source、trust 境界、Programme Boundary、入口索引で起動する。
+- Lab を付けない Trial は固定 Snapshot と source、trust 境界、Programme Boundary で起動する（入口索引は ADR 0034 で削除）。
 - 検証は Finding 単位に独立した Lab を供給し、判定器の canary 回収で確認する。
 - 2026-10-14 追記（所有者決定）: Root が source を 1 件も読まず、子を起動せず、broker 転送が 1 以下で終わった run は Trial に数えず、その対象は次の選定で戻る。「同一対象の自動追加 Trial はしない」は途中まで走った Trial に適用し、未開始の run には適用しない。provider 上限と対象単位の失敗の扱いは SPEC §6 のとおり runner が再開・skip する。
 
@@ -45,6 +45,8 @@ Root は固定入口索引の各 id の状態を typed coverage record で報告
 記録が無効、または完全な索引で未訪問が設定閾値を超える場合は `incomplete(depth)` とする。最低時間と wall 上限は変えない。
 
 ## 2026-10-17 改訂
+
+（coverage record と `incomplete(depth)` の生成 code は 2026-10-18 ADR 0034 で削除。以下は v6 Trial の記録を読むための記述。）
 
 - **入口索引の扱い**: 「全入口の処理を正常終了の条件にしない」を改め、Root は索引の全項目を `observed` か `blocked` として registry に記録してから閉じる。索引は引き続き経路や子の分担を指示しない。索引が `incomplete`（source が大きく走査が切れた）なら、その事実を記録して終了条件から外す。
 - **最低実行時間**: 置かない方針は維持する。網羅条件が時間の下限の役を果たす。
