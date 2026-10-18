@@ -15,7 +15,7 @@ import {
 } from "../../src/discovery/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
-import { admitWordPressFinding } from "../../src/profiles/wordpress/discovery/finding.js";
+import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/candidate-admission.js";
 import { inspectWordPressLedgerExclusions } from "../../src/profiles/wordpress/selection/ledger-exclusions.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
@@ -90,7 +90,7 @@ async function open() {
       ledger,
       attachments,
       evidence,
-      admitFinding: admitWordPressFinding,
+      recordReport: recordWordPressReport,
       executor: {
         async execute(
           run: DiscoveryTransportRun,

@@ -1,17 +1,11 @@
 import { z } from "zod";
 
-import {
-  canonicalDigest,
-  canonicalJson,
-} from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger } from "../ledger/index.js";
 import type { DiscoveryTransportResult } from "./codex-native-agent-runtime.js";
-import type { AdmittedFinding, AdmittedLead } from "./campaign.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import { DiscoveryReportError } from "./recover-agent-reports.js";
 
-const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const providerReportSchema = z.object({
   findings: z.array(z.unknown()),
   leads: z.array(z.unknown()).default([]),
@@ -19,316 +13,65 @@ const providerReportSchema = z.object({
   unexamined: z.string().default(""),
 });
 
-type RecorderOptions = {
-  readonly attachments: ProviderAttachmentStore;
-  readonly evidence: PrivateArtifactStore;
+/** The candidate arrays of one agent report, exactly as the agent wrote them. */
+export type CandidateReport = {
+  readonly findings: readonly unknown[];
+  readonly leads: readonly unknown[];
+};
+
+/** Where one report's candidates are recorded and which run they belong to. */
+export type ReportRecorderContext = {
   readonly ledger: Ledger;
+  readonly evidence: PrivateArtifactStore;
   readonly base: {
     readonly schemaVersion: 1;
     readonly campaignId: string;
     readonly snapshotDigest: string;
     readonly occurredAt: string;
   };
+  readonly runId: string;
+  readonly trialId: string;
+  readonly snapshotDigest: string;
+  readonly reportArtifactDigest: string;
+};
+
+export type RecordedCandidate = {
+  readonly kind: "finding" | "lead";
+  readonly index: number;
+  /** ADR 0018: a candidate is recorded, parked outside the queues, or held; never rejected. */
+  readonly outcome: "recorded" | "parked" | "held";
+  /** `existing` when an identical event was already in the ledger. */
+  readonly status: "appended" | "existing";
+  /** Dedupe signature of a recorded claim; the campaign compares it across Trials. */
+  readonly signature?: string;
+};
+
+export type RecordedReport = {
+  readonly candidates: readonly RecordedCandidate[];
+};
+
+/**
+ * Profile-owned admission: normalize each candidate, admit it against the
+ * profile's claim schema, then record, park or hold it in the ledger. The
+ * generic campaign only reads the summary.
+ */
+export type ReportRecorder = (
+  report: CandidateReport,
+  context: ReportRecorderContext,
+) => Promise<RecordedReport>;
+
+type RecorderOptions = {
+  readonly attachments: ProviderAttachmentStore;
+  readonly evidence: PrivateArtifactStore;
+  readonly ledger: Ledger;
+  readonly base: ReportRecorderContext["base"];
   readonly snapshotDigest: string;
   readonly trialId: string;
   readonly seen: Set<string>;
   readonly state: { foundNew: boolean; heldBoundary: boolean };
   readonly onFindingRecorded: (count: number) => void;
-  readonly admitFinding: (
-    candidate: unknown,
-    context: {
-      runId: string;
-      snapshotDigest: string;
-      reportArtifactDigest: string;
-    },
-  ) => AdmittedFinding;
-  readonly normalizeCandidate?: (candidate: unknown) => {
-    value: unknown;
-    changes: { path: string; operation: string }[];
-  };
-  readonly classifyCandidate?: (
-    candidate: unknown,
-    kind: "finding" | "lead",
-  ) => {
-    impact?: string;
-    primitive?: string;
-    missingEdge?: string;
-  };
-  readonly admitLead?: (
-    candidate: unknown,
-    context: {
-      runId: string;
-      trialId: string;
-      snapshotDigest: string;
-      reportArtifactDigest: string;
-    },
-  ) => AdmittedLead;
-  readonly leadSignature?: (lead: AdmittedLead) => string;
-  /**
-   * Programme Boundary を impact で判定する。false の Finding は `finding-parked`
-   * として残し、検証 queue と review queue には入れない（#185）。省略時は全件 Finding。
-   */
-  readonly isProgrammeImpact?: (impact: string) => boolean;
-  readonly classifyFindingPrecondition?: (finding: AdmittedFinding) => {
-    readonly preconditionClass: string;
-    readonly park: boolean;
-  };
+  readonly recordReport: ReportRecorder;
 };
-
-async function holdCandidate(
-  options: RecorderOptions,
-  ownerRunId: string,
-  candidateKind: "finding" | "lead",
-  candidateIndex: number,
-  candidate: unknown,
-  rawDigest: string,
-  error: unknown,
-) {
-  options.state.heldBoundary = true;
-  const issuePaths =
-    error instanceof z.ZodError
-      ? error.issues.map((issue) => issue.path.join("."))
-      : [
-          error instanceof Error &&
-          error.message === "Candidate identity mismatch"
-            ? "identity"
-            : "admission",
-        ];
-  const classification =
-    options.classifyCandidate?.(candidate, candidateKind) ?? {};
-  const appended = await options.ledger.append({
-    ...options.base,
-    identity: `candidate-held-${ownerRunId}-${candidateKind}-${candidateIndex}`,
-    type: "candidate-held",
-    runId: ownerRunId,
-    candidateKind,
-    candidateIndex,
-    issuePaths,
-    ...classification,
-    artifacts: [{ kind: "candidate", digest: rawDigest }],
-  });
-  if (appended.status === "conflict")
-    throw new Error("Candidate hold identity conflict");
-}
-
-async function prepareCandidate(
-  options: RecorderOptions,
-  ownerRunId: string,
-  kind: "finding" | "lead",
-  index: number,
-  raw: unknown,
-) {
-  const rawDigest = await options.evidence.putFiles({
-    "candidate.json": canonicalJson(raw),
-  });
-  const normalized = options.normalizeCandidate?.(raw) ?? {
-    value: raw,
-    changes: [],
-  };
-  const appended = await options.ledger.append({
-    ...options.base,
-    identity: `candidate-normalized-${ownerRunId}-${kind}-${index}`,
-    type: "candidate-normalized",
-    runId: ownerRunId,
-    candidateKind: kind,
-    candidateIndex: index,
-    changes: normalized.changes,
-    artifacts: [{ kind: "candidate", digest: rawDigest }],
-  });
-  if (appended.status === "conflict")
-    throw new Error("Candidate normalization identity conflict");
-  return { ...normalized, rawDigest };
-}
-
-async function recordFindingCandidate(
-  options: RecorderOptions,
-  ownerRunId: string,
-  attachmentDigest: string,
-  index: number,
-  candidate: unknown,
-): Promise<void> {
-  const prepared = await prepareCandidate(
-    options,
-    ownerRunId,
-    "finding",
-    index,
-    candidate,
-  );
-  let finding: AdmittedFinding;
-  try {
-    finding = options.admitFinding(prepared.value, {
-      runId: ownerRunId,
-      snapshotDigest: options.snapshotDigest,
-      reportArtifactDigest: attachmentDigest,
-    });
-  } catch (error) {
-    await holdCandidate(
-      options,
-      ownerRunId,
-      "finding",
-      index,
-      prepared.value,
-      prepared.rawDigest,
-      error,
-    );
-    return;
-  }
-  if (
-    finding.discoveryRunId !== ownerRunId ||
-    finding.snapshotDigest !== options.snapshotDigest
-  ) {
-    await holdCandidate(
-      options,
-      ownerRunId,
-      "finding",
-      index,
-      prepared.value,
-      prepared.rawDigest,
-      new Error("Candidate identity mismatch"),
-    );
-    return;
-  }
-  const findingDigest = await options.evidence.putFiles({
-    "finding.json": canonicalJson(finding),
-  });
-  const precondition = options.classifyFindingPrecondition?.(finding);
-  if (
-    options.isProgrammeImpact !== undefined &&
-    !options.isProgrammeImpact(finding.impact)
-  ) {
-    // 対象範囲外の効果は候補として残すが、Finding には数えず検証にも回さない。
-    const parked = await options.ledger.append({
-      ...options.base,
-      artifacts: [{ kind: "finding", digest: findingDigest }],
-      identity: `discovery-finding-parked-${finding.findingId}`,
-      type: "finding-parked",
-      findingId: finding.findingId,
-      runId: ownerRunId,
-      category: finding.impact,
-      reason: "outside-programme-boundary",
-      ...(precondition === undefined
-        ? {}
-        : { preconditionClass: precondition.preconditionClass }),
-    });
-    if (parked.status === "conflict")
-      throw new Error("Parked finding identity conflict");
-    return;
-  }
-  if (precondition?.park === true) {
-    const parked = await options.ledger.append({
-      ...options.base,
-      artifacts: [{ kind: "finding", digest: findingDigest }],
-      identity: `discovery-finding-parked-${finding.findingId}`,
-      type: "finding-parked",
-      findingId: finding.findingId,
-      runId: ownerRunId,
-      category: finding.impact,
-      reason: "admin-configuration-precondition",
-      preconditionClass: precondition.preconditionClass,
-    });
-    if (parked.status === "conflict")
-      throw new Error("Parked finding identity conflict");
-    return;
-  }
-  const appended = await options.ledger.append({
-    ...options.base,
-    artifacts: [{ kind: "finding", digest: findingDigest }],
-    identity: `discovery-finding-${finding.findingId}`,
-    type: "finding-recorded",
-    findingId: finding.findingId,
-    runId: ownerRunId,
-    category: finding.impact,
-    ...(precondition === undefined
-      ? {}
-      : { preconditionClass: precondition.preconditionClass }),
-    ...(finding.historyRecordId === undefined
-      ? {}
-      : { historyRecordId: finding.historyRecordId }),
-  });
-  if (appended.status === "conflict")
-    throw new Error("Finding identity conflict");
-  options.onFindingRecorded(appended.status === "appended" ? 1 : 0);
-  const signature = canonicalDigest({
-    claim: finding.claim,
-    impact: finding.impact,
-    sourceTrace: finding.sourceTrace,
-  });
-  if (!options.seen.has(signature)) options.state.foundNew = true;
-  options.seen.add(signature);
-}
-
-async function recordLeadCandidate(
-  options: RecorderOptions,
-  ownerRunId: string,
-  attachmentDigest: string,
-  index: number,
-  candidate: unknown,
-): Promise<void> {
-  const prepared = await prepareCandidate(
-    options,
-    ownerRunId,
-    "lead",
-    index,
-    candidate,
-  );
-  let lead: AdmittedLead;
-  try {
-    if (options.admitLead === undefined || options.leadSignature === undefined)
-      throw new Error("Lead admission is unavailable");
-    lead = options.admitLead(prepared.value, {
-      runId: ownerRunId,
-      trialId: options.trialId,
-      snapshotDigest: options.snapshotDigest,
-      reportArtifactDigest: attachmentDigest,
-    });
-  } catch (error) {
-    await holdCandidate(
-      options,
-      ownerRunId,
-      "lead",
-      index,
-      prepared.value,
-      prepared.rawDigest,
-      error,
-    );
-    return;
-  }
-  if (
-    lead.discoveryRunId !== ownerRunId ||
-    lead.trialId !== options.trialId ||
-    lead.snapshotDigest !== options.snapshotDigest
-  ) {
-    await holdCandidate(
-      options,
-      ownerRunId,
-      "lead",
-      index,
-      prepared.value,
-      prepared.rawDigest,
-      new Error("Candidate identity mismatch"),
-    );
-    return;
-  }
-  const leadDigest = await options.evidence.putFiles({
-    "lead.json": canonicalJson(lead),
-  });
-  const appended = await options.ledger.append({
-    ...options.base,
-    artifacts: [{ kind: "lead", digest: leadDigest }],
-    identity: `discovery-lead-${lead.leadId}`,
-    type: "lead-recorded",
-    leadId: lead.leadId,
-    runId: ownerRunId,
-    trialId: options.trialId,
-    missingEdge: lead.missingEdge,
-    primitive: lead.primitive,
-    storageKind: lead.storage?.kind ?? "none",
-  });
-  if (appended.status === "conflict") throw new Error("Lead identity conflict");
-  const signature = digest.parse(options.leadSignature!(lead));
-  if (!options.seen.has(signature)) options.state.foundNew = true;
-  options.seen.add(signature);
-}
 
 /** Preserve every individual candidate, including malformed and held output. */
 export function createReportRecorder(options: RecorderOptions) {
@@ -349,21 +92,31 @@ export function createReportRecorder(options: RecorderOptions) {
     } catch {
       throw new DiscoveryReportError("Discovery report is malformed");
     }
-    for (const [index, candidate] of report.findings.entries())
-      await recordFindingCandidate(
-        options,
-        ownerRunId,
-        attachment.digest,
-        index,
-        candidate,
-      );
-    for (const [index, candidate] of report.leads.entries())
-      await recordLeadCandidate(
-        options,
-        ownerRunId,
-        attachment.digest,
-        index,
-        candidate,
-      );
+    const recorded = await options.recordReport(
+      { findings: report.findings, leads: report.leads },
+      {
+        ledger: options.ledger,
+        evidence: options.evidence,
+        base: options.base,
+        runId: ownerRunId,
+        trialId: options.trialId,
+        snapshotDigest: options.snapshotDigest,
+        reportArtifactDigest: attachment.digest,
+      },
+    );
+    for (const candidate of recorded.candidates) {
+      if (candidate.outcome === "held") options.state.heldBoundary = true;
+      if (
+        candidate.kind === "finding" &&
+        candidate.outcome === "recorded" &&
+        candidate.status === "appended"
+      )
+        options.onFindingRecorded(1);
+      if (candidate.signature !== undefined) {
+        if (!options.seen.has(candidate.signature))
+          options.state.foundNew = true;
+        options.seen.add(candidate.signature);
+      }
+    }
   };
 }

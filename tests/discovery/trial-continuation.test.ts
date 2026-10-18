@@ -13,12 +13,7 @@ import {
 } from "../../src/discovery/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
-import { admitWordPressFinding } from "../../src/profiles/wordpress/discovery/finding.js";
-import {
-  admitWordPressLead,
-  readWordPressLead,
-  wordPressLeadSignature,
-} from "../../src/profiles/wordpress/discovery/lead.js";
+import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/candidate-admission.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const profile = defineAgentRuntimeProfile({
@@ -132,10 +127,7 @@ async function trialCampaign(options: {
     ledger,
     evidence,
     attachments,
-    admitFinding: admitWordPressFinding,
-    admitLead: admitWordPressLead,
-    leadSignature: (candidate) =>
-      wordPressLeadSignature(readWordPressLead(candidate)),
+    recordReport: recordWordPressReport,
     clock: () => new Date("2026-10-08T08:00:00Z"),
     executor: {
       async execute(run) {

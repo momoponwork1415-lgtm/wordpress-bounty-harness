@@ -12,21 +12,7 @@ import {
 } from "../../src/discovery/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
-import {
-  admitWordPressFinding,
-  readWordPressFinding,
-} from "../../src/profiles/wordpress/discovery/finding.js";
-import { isWordPressProgrammeImpact } from "../../src/profiles/wordpress/discovery/programme-impacts.js";
-import { classifyWordPressPrecondition } from "../../src/profiles/wordpress/verification/precondition-class.js";
-import {
-  admitWordPressLead,
-  readWordPressLead,
-  wordPressLeadSignature,
-} from "../../src/profiles/wordpress/discovery/lead.js";
-import {
-  classifyWordPressCandidate,
-  normalizeWordPressCandidate,
-} from "../../src/profiles/wordpress/discovery/normalize-candidate.js";
+import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/candidate-admission.js";
 import { assessWordPressCoverage } from "../../src/profiles/wordpress/discovery/coverage.js";
 import type { WordPressSourceIndex } from "../../src/profiles/wordpress/discovery/storage-index.js";
 
@@ -145,22 +131,7 @@ async function campaign(
     ledger,
     attachments,
     evidence,
-    admitFinding: admitWordPressFinding,
-    isProgrammeImpact: isWordPressProgrammeImpact,
-    classifyFindingPrecondition: (finding) => {
-      const classification = classifyWordPressPrecondition({
-        configurationPrecondition:
-          readWordPressFinding(finding).configurationPrecondition,
-      }).preconditionClass;
-      return {
-        preconditionClass: classification,
-        park: classification === "admin-configuration",
-      };
-    },
-    admitLead: admitWordPressLead,
-    leadSignature: (lead) => wordPressLeadSignature(readWordPressLead(lead)),
-    normalizeCandidate: normalizeWordPressCandidate,
-    classifyCandidate: classifyWordPressCandidate,
+    recordReport: recordWordPressReport,
     ...(options.coverage === undefined
       ? {}
       : {
