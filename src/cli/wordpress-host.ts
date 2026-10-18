@@ -52,13 +52,18 @@ import {
 } from "../profiles/wordpress/selection/index.js";
 import { CodexVerifier } from "../profiles/wordpress/verification/codex-verifier.js";
 import { WordPressVerifier } from "../profiles/wordpress/verification/wordpress-verifier.js";
-import { openTranscribedWordfenceProgramme } from "../profiles/wordpress/wordfence-programme/index.js";
-import type { CliProfile, CliState } from "./index.js";
 import {
-  createWordPressCliProfile,
+  openTranscribedWordfenceProgramme,
+  wordfenceProgrammeTranscriptionSchema,
+} from "../profiles/wordpress/wordfence-programme/index.js";
+import type { CliProfile, CliState } from "./index.js";
+import { createWordPressCliProfile } from "./wordpress.js";
+import {
+  readWordPressCampaignConfig,
+  readWordPressSelectionPolicyFile,
   type WordPressCampaignBoundaries,
   type WordPressCampaignConfig,
-} from "./wordpress.js";
+} from "./wordpress-session.js";
 
 const absolutePath = z
   .string()
@@ -625,8 +630,6 @@ export async function createWordPressHostProfile(options: {
     },
     /** What `continuous run` checks before each batch (final design P6). */
     async hostStatus(state, input) {
-      const json = async (path: string) =>
-        JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
       const free = async (path: string) => {
         const fs = await statfs(path);
         return fs.bavail * fs.bsize;
@@ -637,15 +640,20 @@ export async function createWordPressHostProfile(options: {
               .then(({ expiresAt }) => expiresAt)
               .catch(() => null)
           : new Date(8.64e15);
-      const transcription = await json(
-        host.wordfenceProgrammeTranscriptionPath,
+      // The same schemas the campaign commands apply; a malformed file stops here.
+      const transcription = wordfenceProgrammeTranscriptionSchema.parse(
+        JSON.parse(
+          await readFile(host.wordfenceProgrammeTranscriptionPath, "utf8"),
+        ) as unknown,
       );
-      const config = await json(input.configPath);
-      const selection = await json(input.selectionPath);
-      const wall = Number(config.runWallTimeMinutes ?? 120);
+      const config = await readWordPressCampaignConfig(input.configPath);
+      const selection = await readWordPressSelectionPolicyFile(
+        input.selectionPath,
+      );
+      const wall = config.runWallTimeMinutes;
       return {
         loginExpiresAt: login,
-        programmeObservedAt: new Date(String(transcription.transcribedAt)),
+        programmeObservedAt: new Date(transcription.transcribedAt),
         freeBytes: Math.min(
           await free(host.workDirectory),
           await free(state.stateDirectory),
@@ -656,8 +664,7 @@ export async function createWordPressHostProfile(options: {
             () => true,
             () => false,
           )),
-        loginMarginMinutes:
-          Number(selection.maximumTargets ?? 5) * (wall + 30 * 3 + 15),
+        loginMarginMinutes: selection.maximumTargets * (wall + 30 * 3 + 15),
       };
     },
   };
