@@ -91,7 +91,7 @@ it("parks only a source-refuted Finding and passes no Lab to the refuter", async
       ),
     );
     let seenRun: unknown;
-    const result = await refutePendingFindings({
+    const options: Parameters<typeof refutePendingFindings>[0] = {
       campaignId: "campaign-1",
       ledger,
       store,
@@ -116,9 +116,47 @@ it("parks only a source-refuted Finding and passes no Lab to the refuter", async
       },
       clock: () => new Date("2026-10-18T00:00:00Z"),
       newId: () => "refute-1",
-    });
+    };
+    expect(
+      await refutePendingFindings({
+        ...options,
+        runtime: {
+          execute: async () => {
+            throw new Error("provider offline");
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        findingId: finding.findingId,
+        status: "pending",
+        reason: "transport-error",
+      },
+    ]);
+    expect(
+      await refutePendingFindings({
+        ...options,
+        attachments: {
+          read: async () => {
+            throw new Error("attachment offline");
+          },
+        } as unknown as ProviderAttachmentStore,
+      }),
+    ).toEqual([
+      {
+        findingId: finding.findingId,
+        status: "pending",
+        reason: "report-unavailable",
+      },
+    ]);
+    const result = await refutePendingFindings(options);
     expect(result).toEqual([
-      { findingId: finding.findingId, verdict: "refuted" },
+      {
+        findingId: finding.findingId,
+        status: "recorded",
+        verdict: "refuted",
+        reason: "guard-effective",
+      },
     ]);
     expect(seenRun).toMatchObject({
       outputKind: "refutation",
@@ -138,6 +176,44 @@ it("parks only a source-refuted Finding and passes no Lab to the refuter", async
       ledger.read({ campaignId: "campaign-1", type: "finding-parked" })[0]
         ?.event,
     ).toMatchObject({ reason: "refuted" });
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "finding-missing",
+      campaignId: "campaign-1",
+      snapshotDigest: digest,
+      occurredAt: "2026-10-18T00:00:00Z",
+      type: "finding-recorded",
+      findingId: "finding-missing",
+      runId: "discover-1",
+      category: "sqli",
+    });
+    expect(
+      await refutePendingFindings({
+        campaignId: "campaign-1",
+        ledger,
+        store,
+        attachments,
+        profile,
+        prompt: { id: "refute-v1", digest, text: "Refute the claim" },
+        resolveSource: async () => ({
+          directory: "/fixed/source",
+          tree: { digest, entries: 1, bytes: 1 },
+        }),
+        runtime: {
+          execute: async () => {
+            throw new Error("not reached");
+          },
+        },
+        clock: () => new Date("2026-10-18T00:00:00Z"),
+        newId: () => "unused",
+      }),
+    ).toEqual([
+      {
+        findingId: "finding-missing",
+        status: "failed",
+        reason: "finding-artifact-missing",
+      },
+    ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -15,6 +15,18 @@ import {
 } from "../discovery/refutation.js";
 
 type RecordedFinding = Extract<LedgerEventV1, { type: "finding-recorded" }>;
+export type RefutationAttemptResult =
+  | {
+      readonly findingId: string;
+      readonly status: "recorded";
+      readonly verdict: "refuted" | "upheld" | "undecided";
+      readonly reason: string;
+    }
+  | {
+      readonly findingId: string;
+      readonly status: "pending" | "failed";
+      readonly reason: string;
+    };
 
 export interface RefuteOptions {
   readonly campaignId: string;
@@ -59,12 +71,9 @@ function readAll(
 }
 
 /** Runs once per unprocessed Finding. Transport failures leave the Finding pending. */
-export async function refutePendingFindings(options: RefuteOptions): Promise<
-  readonly {
-    findingId: string;
-    verdict: "refuted" | "upheld" | "undecided";
-  }[]
-> {
+export async function refutePendingFindings(
+  options: RefuteOptions,
+): Promise<readonly RefutationAttemptResult[]> {
   const { ledger, campaignId } = options;
   const parked = new Set(
     readAll(ledger, campaignId, "finding-parked")
@@ -94,32 +103,39 @@ export async function refutePendingFindings(options: RefuteOptions): Promise<
     )
   )
     throw new Error("Finding is not recorded in this campaign");
-  const results: {
-    findingId: string;
-    verdict: "refuted" | "upheld" | "undecided";
-  }[] = [];
+  const results: RefutationAttemptResult[] = [];
   for (const event of findings) {
+    const report = (status: "pending" | "failed", reason: string) => {
+      results.push({ findingId: event.findingId, status, reason });
+    };
     const ref = event.artifacts.find((item) => item.kind === "finding");
-    if (ref === undefined) continue;
-    const stored = await options.store.readFile(
-      ref.digest,
-      "finding.json",
-      1024 * 1024,
-    );
-    if (stored.status !== "resolved") continue;
+    if (ref === undefined) {
+      report("failed", "finding-artifact-missing");
+      continue;
+    }
+    const stored = await options.store
+      .readFile(ref.digest, "finding.json", 1024 * 1024)
+      .catch(() => undefined);
+    if (stored?.status !== "resolved") {
+      report("failed", "finding-artifact-unavailable");
+      continue;
+    }
     let finding: ReturnType<typeof readWordPressFinding>;
     try {
       finding = readWordPressFinding(
         JSON.parse(stored.bytes.toString("utf8")) as unknown,
       );
     } catch {
+      report("failed", "finding-artifact-invalid");
       continue;
     }
     if (
       finding.findingId !== event.findingId ||
       finding.snapshotDigest !== event.snapshotDigest
-    )
+    ) {
+      report("failed", "finding-identity-mismatch");
       continue;
+    }
     const {
       claim,
       attackerPosition,
@@ -132,7 +148,10 @@ export async function refutePendingFindings(options: RefuteOptions): Promise<
     const source = await options
       .resolveSource(event.snapshotDigest)
       .catch(() => undefined);
-    if (source === undefined) continue;
+    if (source === undefined) {
+      report("pending", "source-unavailable");
+      continue;
+    }
     const claimFields = {
       claim,
       attackerPosition,
@@ -149,7 +168,10 @@ export async function refutePendingFindings(options: RefuteOptions): Promise<
       ) > 16_384
     )
       boundedTrace = boundedTrace.slice(0, -1);
-    if (boundedTrace.length === 0) continue;
+    if (boundedTrace.length === 0) {
+      report("failed", "claim-too-large");
+      continue;
+    }
     const runId = options.newId();
     const contract = wordPressRefutationOutputContract();
     const run: DiscoveryTransportRun = {
@@ -181,60 +203,96 @@ export async function refutePendingFindings(options: RefuteOptions): Promise<
       ).toISOString(),
     };
     const result = await options.runtime.execute(run).catch(() => undefined);
-    if (result === undefined) continue;
+    if (result === undefined) {
+      report("pending", "transport-error");
+      continue;
+    }
+    if (result.receipt.terminal !== "completed") {
+      report("pending", "transport-incomplete");
+      continue;
+    }
     if (
-      result.receipt.terminal !== "completed" ||
       result.attachment?.kind !== "refutation" ||
       result.receipt.reportArtifactDigest !== result.attachment.digest
-    )
+    ) {
+      report("pending", "report-unavailable");
       continue;
-    const attachment = await options.attachments.read(result.attachment);
-    if (attachment.status !== "resolved") continue;
+    }
+    const attachment = await options.attachments
+      .read(result.attachment)
+      .catch(() => undefined);
+    if (attachment?.status !== "resolved") {
+      report("pending", "report-unavailable");
+      continue;
+    }
     let parsed: ReturnType<typeof wordPressRefutationSchema.safeParse>;
     try {
       parsed = wordPressRefutationSchema.safeParse(
         JSON.parse(attachment.bytes.toString("utf8")) as unknown,
       );
     } catch {
+      report("pending", "report-invalid");
       continue;
     }
-    if (!parsed.success) continue;
+    if (!parsed.success) {
+      report("pending", "report-invalid");
+      continue;
+    }
     const verdict = parsed.data.verdict;
-    const recorded = await ledger.append({
-      schemaVersion: 1,
-      identity: `refutation-${event.findingId}`,
-      campaignId,
-      snapshotDigest: event.snapshotDigest,
-      occurredAt: options.clock().toISOString(),
-      type: "refutation-recorded",
-      findingId: event.findingId,
-      runId,
-      verdict,
-      reasonCode: parsed.data.reasonCode,
-      promptVersion: options.prompt.id,
-      promptDigest: options.prompt.digest,
-      reportDigest: result.attachment.digest,
-    });
-    if (recorded.status === "conflict")
-      throw new Error("Refutation ledger conflict");
-    if (verdict === "refuted") {
-      const parked = await ledger.append({
+    const recorded = await ledger
+      .append({
         schemaVersion: 1,
-        identity: `refuted-${event.findingId}`,
+        identity: `refutation-${event.findingId}`,
         campaignId,
         snapshotDigest: event.snapshotDigest,
         occurredAt: options.clock().toISOString(),
-        type: "finding-parked",
+        type: "refutation-recorded",
         findingId: event.findingId,
-        runId: event.runId,
-        category: event.category,
-        reason: "refuted",
-        artifacts: event.artifacts,
-      });
-      if (parked.status === "conflict")
-        throw new Error("Refutation park conflict");
+        runId,
+        verdict,
+        reasonCode: parsed.data.reasonCode,
+        promptVersion: options.prompt.id,
+        promptDigest: options.prompt.digest,
+        reportDigest: result.attachment.digest,
+      })
+      .catch(() => undefined);
+    if (recorded === undefined || recorded.status === "conflict") {
+      report(
+        "failed",
+        recorded === undefined ? "ledger-write-error" : "ledger-conflict",
+      );
+      continue;
     }
-    results.push({ findingId: event.findingId, verdict });
+    if (verdict === "refuted") {
+      const parked = await ledger
+        .append({
+          schemaVersion: 1,
+          identity: `refuted-${event.findingId}`,
+          campaignId,
+          snapshotDigest: event.snapshotDigest,
+          occurredAt: options.clock().toISOString(),
+          type: "finding-parked",
+          findingId: event.findingId,
+          runId: event.runId,
+          category: event.category,
+          reason: "refuted",
+          artifacts: event.artifacts,
+        })
+        .catch(() => undefined);
+      if (parked === undefined || parked.status === "conflict") {
+        report(
+          "failed",
+          parked === undefined ? "ledger-write-error" : "ledger-conflict",
+        );
+        continue;
+      }
+    }
+    results.push({
+      findingId: event.findingId,
+      status: "recorded",
+      verdict,
+      reason: parsed.data.reasonCode,
+    });
   }
   return results;
 }

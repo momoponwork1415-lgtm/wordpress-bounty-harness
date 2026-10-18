@@ -203,10 +203,19 @@ export interface CliProfile {
       readonly configPath?: string;
     },
   ): Promise<
-    readonly {
-      readonly findingId: string;
-      readonly verdict: "refuted" | "upheld" | "undecided";
-    }[]
+    readonly (
+      | {
+          readonly findingId: string;
+          readonly status: "recorded";
+          readonly verdict: "refuted" | "upheld" | "undecided";
+          readonly reason: string;
+        }
+      | {
+          readonly findingId: string;
+          readonly status: "pending" | "failed";
+          readonly reason: string;
+        }
+    )[]
   >;
   /** Verify one unverified or retry-eligible Finding in a fresh Lab. */
   verifyNext?(
