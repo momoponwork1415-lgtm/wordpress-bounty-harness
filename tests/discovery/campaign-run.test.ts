@@ -601,6 +601,12 @@ function coverageIndex(incomplete = false): WordPressSourceIndex {
     dynamicStorage: [],
     components: [],
     settingsKeys: [],
+    unresolved: [],
+    unresolvedCounts: {
+      "dynamic-hook": 0,
+      "dynamic-rest-route": 0,
+      dispatcher: 0,
+    },
   };
 }
 

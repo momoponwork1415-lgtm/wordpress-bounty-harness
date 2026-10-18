@@ -9,6 +9,13 @@ import {
   REQUEST_HOOKS,
   type WordPressEntryPoint,
 } from "./entry-points.js";
+import {
+  compareUnresolved,
+  countWordPressUnresolved,
+  scanWordPressUnresolved,
+  type WordPressUnresolvedCounts,
+  type WordPressUnresolvedRegistration,
+} from "./unresolved.js";
 
 export type WordPressStorageKind =
   "option" | "post-meta" | "user-meta" | "transient" | "db-table" | "file";
@@ -46,7 +53,11 @@ export interface WordPressSourceIndex {
   readonly dynamicStorage: readonly WordPressStorageRef[];
   readonly components: readonly WordPressComponent[];
   readonly settingsKeys: readonly string[];
+  /** Size limits only; unresolved registrations do not set it. */
   readonly incomplete: boolean;
+  /** Registrations the regex scan could not resolve. Not rendered for agents. */
+  readonly unresolved: readonly WordPressUnresolvedRegistration[];
+  readonly unresolvedCounts: WordPressUnresolvedCounts;
   readonly digest: string;
 }
 
@@ -503,6 +514,9 @@ export async function buildWordPressSourceIndex(
         .map((ref) => ref.key),
     ),
   ].sort();
+  const unresolved = [...texts]
+    .flatMap(([file, text]) => scanWordPressUnresolved(text, file))
+    .sort(compareUnresolved);
   const body = {
     schemaVersion: 1 as const,
     entries: indexed,
@@ -510,6 +524,8 @@ export async function buildWordPressSourceIndex(
     components,
     settingsKeys,
     incomplete,
+    unresolved,
+    unresolvedCounts: countWordPressUnresolved(unresolved),
   };
   return { ...body, digest: canonicalDigest(body) };
 }
