@@ -51,6 +51,7 @@ import {
   type WordPressSelectionPolicy,
 } from "../profiles/wordpress/selection/index.js";
 import { CodexVerifier } from "../profiles/wordpress/verification/codex-verifier.js";
+import { WordPressVerifier } from "../profiles/wordpress/verification/wordpress-verifier.js";
 import { openTranscribedWordfenceProgramme } from "../profiles/wordpress/wordfence-programme/index.js";
 import type { CliProfile, CliState } from "./index.js";
 import {
@@ -448,7 +449,13 @@ export async function createWordPressHostProfile(options: {
 
     const frozen = new Map<string, Snapshot>();
     const verifier: Verifier<WordPressFinding, WordPressLabHandle> = {
-      async attempt({ campaignId, finding, lab: handle, referenceRoute }) {
+      async attempt({
+        campaignId,
+        finding,
+        lab: handle,
+        record,
+        referenceRoute,
+      }) {
         const snapshot = frozen.get(handle.snapshotDigest);
         const source =
           snapshot === undefined
@@ -470,18 +477,22 @@ export async function createWordPressHostProfile(options: {
             nextStep:
               "Freeze the target again so its materialized source matches the Lab snapshot",
           };
-        return new CodexVerifier({
-          runtime,
+        return new WordPressVerifier({
+          transport: new CodexVerifier({
+            runtime,
+            profile: runtimeProfile,
+            sourcePack,
+            clock: state.clock,
+          }),
           store: state.store,
           ledger: state.ledger,
-          profile: runtimeProfile,
-          sourcePack,
           lab,
           clock: state.clock,
         }).attempt({
           campaignId,
           finding,
           lab: handle,
+          record,
           ...(referenceRoute === undefined ? {} : { referenceRoute }),
         });
       },
