@@ -12,8 +12,12 @@ import {
 } from "../../src/discovery/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
-import { admitWordPressFinding } from "../../src/profiles/wordpress/discovery/finding.js";
+import {
+  admitWordPressFinding,
+  readWordPressFinding,
+} from "../../src/profiles/wordpress/discovery/finding.js";
 import { isWordPressProgrammeImpact } from "../../src/profiles/wordpress/discovery/programme-impacts.js";
+import { classifyWordPressPrecondition } from "../../src/profiles/wordpress/verification/precondition-class.js";
 import {
   admitWordPressLead,
   readWordPressLead,
@@ -56,6 +60,7 @@ async function campaign(
     readonly leadOnly?: boolean;
     /** Report a Finding whose impact lies outside the Programme Boundary (#185). */
     readonly parkedImpact?: boolean;
+    readonly precondition?: string;
     readonly rootChildCounts?: {
       readonly observed: number;
       readonly admitted: number;
@@ -116,7 +121,7 @@ async function campaign(
     claim: "Synthetic account state change",
     attackerPosition: "subscriber",
     impact: options.parkedImpact ? "other" : "account-takeover",
-    configurationPrecondition: "default",
+    configurationPrecondition: options.precondition ?? "default",
     brokenProperty: "Account ownership",
     sourceTrace: [
       { file: "includes/example.php", function: "fixture", line: 12 },
@@ -141,6 +146,16 @@ async function campaign(
     evidence,
     admitFinding: admitWordPressFinding,
     isProgrammeImpact: isWordPressProgrammeImpact,
+    classifyFindingPrecondition: (finding) => {
+      const classification = classifyWordPressPrecondition({
+        configurationPrecondition:
+          readWordPressFinding(finding).configurationPrecondition,
+      }).preconditionClass;
+      return {
+        preconditionClass: classification,
+        park: classification === "admin-configuration",
+      };
+    },
     admitLead: admitWordPressLead,
     leadSignature: (lead) => wordPressLeadSignature(readWordPressLead(lead)),
     normalizeCandidate: normalizeWordPressCandidate,
@@ -668,4 +683,26 @@ it("parks a Finding outside the Programme Boundary without verifying or counting
     raw: 0,
     accepted: 0,
   });
+});
+
+it("parks an in-scope Finding with a special admin setting while retaining private evidence", async () => {
+  const { result, ledger, evidence } = await campaign([0], {
+    precondition:
+      "An administrator selects Password protected visibility for a published block.",
+  });
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(0);
+  const parked = ledger.read({ type: "finding-parked" });
+  expect(parked[0]?.event).toMatchObject({
+    reason: "admin-configuration-precondition",
+    preconditionClass: "admin-configuration",
+  });
+  const reference = parked[0]?.event.artifacts[0];
+  expect(reference?.kind).toBe("finding");
+  expect(
+    reference &&
+      (await evidence.readFile(reference.digest, "finding.json", 100_000))
+        .status,
+  ).toBe("resolved");
+  expect(result.findingsRecorded).toBe(0);
+  expect(ledger.funnel("campaign-1")).toMatchObject({ parked: 1, raw: 0 });
 });

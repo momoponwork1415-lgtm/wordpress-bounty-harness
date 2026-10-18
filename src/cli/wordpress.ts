@@ -94,6 +94,7 @@ import {
   inspectHistoryMirror,
 } from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
+import { classifyWordPressPrecondition } from "../profiles/wordpress/verification/precondition-class.js";
 import { SmokeReplayVerifier } from "../profiles/wordpress/verification/smoke-replay-verifier.js";
 import {
   createWordPressLabStateObserver,
@@ -1085,6 +1086,16 @@ async function planWordPressDiscovery(
     attachments: boundaries.attachments,
     admitFinding: admitWordPressFinding,
     isProgrammeImpact: isWordPressProgrammeImpact,
+    classifyFindingPrecondition: (finding) => {
+      const result = classifyWordPressPrecondition({
+        configurationPrecondition:
+          readWordPressFinding(finding).configurationPrecondition,
+      });
+      return {
+        preconditionClass: result.preconditionClass,
+        park: result.preconditionClass === "admin-configuration",
+      };
+    },
     normalizeCandidate: normalizeWordPressCandidate,
     classifyCandidate: classifyWordPressCandidate,
     admitLead: admitWordPressLead,

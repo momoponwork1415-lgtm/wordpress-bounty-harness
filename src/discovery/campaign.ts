@@ -301,6 +301,11 @@ export async function runDiscoveryCampaign(options: {
   ) => AdmittedFinding;
   /** Programme Boundary 外の impact を `finding-parked` に落とす（#185）。 */
   readonly isProgrammeImpact?: (impact: string) => boolean;
+  /** Profile-owned admission policy; the generic recorder only stores its result. */
+  readonly classifyFindingPrecondition?: (finding: AdmittedFinding) => {
+    readonly preconditionClass: string;
+    readonly park: boolean;
+  };
   readonly normalizeCandidate?: (candidate: unknown) => {
     value: unknown;
     changes: { path: string; operation: string }[];
