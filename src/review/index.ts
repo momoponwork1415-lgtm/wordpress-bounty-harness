@@ -7,6 +7,10 @@ import {
 } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
+import {
+  countAttemptsForReason,
+  shouldAutomaticallyRetryVerification,
+} from "../verification/retry-budget.js";
 import { openReproductionPackage } from "./reproduction-package.js";
 
 export {
@@ -123,8 +127,9 @@ export type ReviewQueue = {
   readonly items: readonly ReviewItem[];
   readonly contradicted: number;
   readonly unverified: number;
+  /** Latest `incomplete` per Finding whose ADR 0022 budget the runner will not retry on its own. */
   readonly incompleteByReason: Readonly<Record<string, number>>;
-  /** Preliminary reason-based retry candidates; the pipeline also checks setup, scenario, and prompt. */
+  /** Latest `incomplete` per Finding the runner still retries on the same Lab Setup and prompt version. */
   readonly retryPendingByReason: Readonly<Record<string, number>>;
   readonly preconditionClassCounts: Readonly<Record<string, number>>;
 };
@@ -222,23 +227,23 @@ export class Review<TFacts = unknown> {
       `${event.campaignId}\u0000${event.findingId}`;
     const inCampaign = (event: LedgerEventV1) =>
       campaignId === undefined || event.campaignId === campaignId;
+    type FinishedVerification = Extract<
+      LedgerEventV1,
+      { type: "verification-finished" }
+    >;
     const latestVerification = new Map<
       string,
-      {
-        sequence: number;
-        event: Extract<LedgerEventV1, { type: "verification-finished" }>;
-      }
+      { sequence: number; event: FinishedVerification }
     >();
-    const attempts = new Map<string, number>();
+    const verificationHistory = new Map<string, FinishedVerification[]>();
     for (const { sequence, event } of this.#ledger.readAll({
       type: "verification-finished",
     }))
       if (event.type === "verification-finished" && inCampaign(event)) {
         latestVerification.set(key(event), { sequence, event });
-        if (event.result.status === "incomplete") {
-          const attemptKey = `${key(event)}\u0000${event.labSetupDigest}\u0000${event.result.reason}`;
-          attempts.set(attemptKey, (attempts.get(attemptKey) ?? 0) + 1);
-        }
+        const history = verificationHistory.get(key(event)) ?? [];
+        history.push(event);
+        verificationHistory.set(key(event), history);
       }
     const latestDecision = new Map<
       string,
@@ -332,23 +337,22 @@ export class Review<TFacts = unknown> {
           decision,
         });
       else {
-        const attemptCount =
-          attempts.get(
-            `${key(event)}\u0000${event.labSetupDigest}\u0000${result.reason}`,
-          ) ?? 0;
-        const exhausted =
-          result.reason === "evidence" ||
-          result.reason === "cleanup" ||
-          result.reason === "digest-mismatch" ||
-          result.reason === "no-judge" ||
-          result.reason === "provider" ||
-          result.reason === "sandbox" ||
-          (result.reason === "precondition" &&
-            result.nextScenarioId === undefined) ||
-          ((result.reason === "recipe" || result.reason === "observation") &&
-            attemptCount >= 3) ||
-          (result.reason === "provision" && attemptCount >= 2);
-        const counts = exhausted ? incompleteByReason : retryPendingByReason;
+        // The queue predicts the runner's next pass with nothing changed: same
+        // Lab Setup, same prompt version. It holds no Lab Setup, so a changed
+        // scenario id (the only `precondition` retry) is never predicted here.
+        const pending = shouldAutomaticallyRetryVerification({
+          reason: result.reason,
+          attemptsForReason: countAttemptsForReason(
+            verificationHistory.get(key(event)) ?? [],
+            {
+              labSetupDigest: event.labSetupDigest,
+              promptVersion: event.promptVersion,
+              reason: result.reason,
+            },
+          ),
+          sameLabSetup: true,
+        });
+        const counts = pending ? retryPendingByReason : incompleteByReason;
         counts[result.reason] = (counts[result.reason] ?? 0) + 1;
         items.push({
           status: result.status,

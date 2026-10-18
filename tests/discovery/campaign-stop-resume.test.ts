@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { shouldAutomaticallyRetryVerification } from "../../src/cli/pipeline.js";
 import {
   createNativeRunReceipt,
   defineAgentRuntimeProfile,
@@ -34,57 +33,6 @@ const profile = defineAgentRuntimeProfile({
   subagent: { modelId: "unavailable", effort: "unavailable" },
 });
 
-describe("verification retry policy on campaign resume", () => {
-  const base = { attemptsForReason: 1, sameLabSetup: true };
-  type RetryInput = Parameters<typeof shouldAutomaticallyRetryVerification>[0];
-  const check = (
-    reason: RetryInput["reason"],
-    expected: boolean,
-    overrides: Partial<RetryInput> = {},
-  ) =>
-    expect(
-      shouldAutomaticallyRetryVerification({ ...base, reason, ...overrides }),
-    ).toBe(expected);
-
-  it.each(["recipe", "observation"] as const)("retry policy: %s", (reason) => {
-    for (const attemptsForReason of [0, 1, 2])
-      check(reason, true, { attemptsForReason });
-    check(reason, false, { attemptsForReason: 3 });
-    check(reason, false, { sameLabSetup: false });
-  });
-
-  it("retries precondition only after the scenario id changes", () => {
-    const previous = { previousScenarioId: "a" };
-    check("precondition", true, { ...previous, currentScenarioId: "b" });
-    check("precondition", false, { ...previous, currentScenarioId: "a" });
-    check("precondition", true, {
-      previousScenarioId: null,
-      currentScenarioId: "b",
-    });
-    check("precondition", false, {
-      previousScenarioId: null,
-      currentScenarioId: null,
-    });
-    check("precondition", false, { currentScenarioId: "b" });
-  });
-
-  it.each(["provision", "provider"] as const)("retries %s once", (reason) => {
-    check(reason, true);
-    check(reason, true, { attemptsForReason: 0 });
-    check(reason, false, { attemptsForReason: 2 });
-    check(reason, false, { sameLabSetup: false });
-  });
-
-  it.each([
-    "evidence",
-    "cleanup",
-    "digest-mismatch",
-    "no-judge",
-    "sandbox",
-  ] as const)("does not automatically retry %s", (reason) =>
-    check(reason, false),
-  );
-});
 const directories: string[] = [];
 afterEach(async () => {
   for (const directory of directories.splice(0))

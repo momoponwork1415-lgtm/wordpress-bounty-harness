@@ -16,6 +16,11 @@ export {
   type ReproductionRenderer,
   type VerificationResultV1,
 } from "./reproduction-package.js";
+export {
+  countAttemptsForReason,
+  shouldAutomaticallyRetryVerification,
+  type IncompleteReason,
+} from "./retry-budget.js";
 
 const id = z.string().min(1).max(128);
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
