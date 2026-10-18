@@ -37,6 +37,7 @@ import {
   type WordPressEntryAssignment,
 } from "../profiles/wordpress/discovery/entry-points.js";
 import { buildWordPressSourceIndex } from "../profiles/wordpress/discovery/storage-index.js";
+import { assessWordPressCoverage } from "../profiles/wordpress/discovery/coverage.js";
 import {
   canonicalDigest,
   canonicalJson,
@@ -59,6 +60,7 @@ import {
 import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
+  wordPressDiscoveryOutputContractV3,
 } from "../profiles/wordpress/discovery/output-contract.js";
 import type {
   WordPressLab,
@@ -96,6 +98,7 @@ import {
 } from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import { refutePendingFindings } from "../profiles/wordpress/verification/refute.js";
+import { classifyWordPressPrecondition } from "../profiles/wordpress/verification/precondition-class.js";
 import { SmokeReplayVerifier } from "../profiles/wordpress/verification/smoke-replay-verifier.js";
 import {
   createWordPressLabStateObserver,
@@ -110,6 +113,7 @@ import {
   provisionFindingLab,
   reverifyOnSelectedVersion,
   runCampaignPipeline,
+  verifyNextFinding,
   type CampaignPipeline,
 } from "./pipeline.js";
 import {
@@ -154,9 +158,17 @@ const commonCampaignFields = {
       promptId: z.literal("refute-v1").default("refute-v1"),
     })
     .default({ enabled: false, promptId: "refute-v1" }),
+  discovery: z
+    .strictObject({ lab: z.enum(["attached", "none"]) })
+    .default({ lab: "attached" }),
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
   runWallTimeMinutes: z.number().positive().max(240).optional(),
+  coverage: z
+    .strictObject({
+      maxUnvisitedRatio: z.number().min(0).max(1).default(0.2),
+    })
+    .default({ maxUnvisitedRatio: 0.2 }),
   /** Host bounds: targets, per-target discovery runs and their memory budget. */
   resources: z
     .strictObject({
@@ -201,13 +213,14 @@ const campaignModes = z.discriminatedUnion("mode", [
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("wp2shell"),
-    runWallTimeMinutes: z.number().positive().max(60).default(60),
+    runWallTimeMinutes: z.number().positive().max(120).default(60),
     promptId: z
       .enum([
         "wp2shell-bounty-v2",
         "wp2shell-bounty-v3",
         "wp2shell-bounty-v4",
         "wp2shell-bounty-v5",
+        "wp2shell-bounty-v6",
         "wp2shell-whitebox-v1.7",
       ])
       .default("wp2shell-bounty-v5"),
@@ -270,6 +283,7 @@ export const wordpressCampaignConfigSchema = z
               config.promptId !== "wp2shell-bounty-v3" &&
               config.promptId !== "wp2shell-bounty-v4" &&
               config.promptId !== "wp2shell-bounty-v5" &&
+              config.promptId !== "wp2shell-bounty-v6" &&
               config.promptId !== "wp2shell-whitebox-v1.7"
             ? "comparison"
             : config.entryIndex === false
@@ -278,6 +292,17 @@ export const wordpressCampaignConfigSchema = z
     return { ...config, mode };
   }, campaignModes)
   .superRefine((config, context) => {
+    if (
+      config.mode === "wp2shell" &&
+      config.promptId !== "wp2shell-bounty-v6" &&
+      config.runWallTimeMinutes > 60
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["runWallTimeMinutes"],
+        message:
+          "Only wp2shell-bounty-v6 permits a wall limit above 60 minutes",
+      });
     if (
       config.lab.initialApprovedComment === true &&
       config.lab.initialPosts.length === 0
@@ -852,6 +877,7 @@ type WordPressDiscoveryPlan = Awaited<
 >;
 type WordPressDiscoveryContext = {
   readonly config: WordPressCampaignConfig;
+  readonly repeat: number;
   readonly boundaries: WordPressCampaignBoundaries;
   readonly state: CliState;
   readonly objective: WordPressDiscoveryAsset;
@@ -869,6 +895,7 @@ async function planWordPressDiscovery(
 ): Promise<WordPressDiscoveryPlan> {
   const {
     config,
+    repeat,
     boundaries,
     state,
     objective,
@@ -876,6 +903,10 @@ async function planWordPressDiscovery(
     armBObjective,
     historyFor,
   } = context;
+  if ((lab === undefined) !== (config.discovery.lab === "none"))
+    throw new Error(
+      "Discovery Lab mode differs from the campaign configuration",
+    );
   const wallMinutes = config.runWallTimeMinutes ?? 60;
   const ablationConfig =
     config.mode === "ablation" ? config.ablation : undefined;
@@ -883,21 +914,33 @@ async function planWordPressDiscovery(
     config.mode === "assignment" ? config.assignment : undefined;
   const outputContractV1 = wordPressDiscoveryOutputContract();
   const outputContractV2 = wordPressDiscoveryOutputContractV2();
+  const outputContractV3 = wordPressDiscoveryOutputContractV3(
+    config.coverage.maxUnvisitedRatio,
+  );
+  const coverageFor = (id: string) =>
+    (id === "wp2shell-bounty-v5" || id === "wp2shell-bounty-v6") &&
+    config.entryIndex;
   const outputContractFor = (id: string) =>
-    id === "wp2shell-bounty-v3" ||
-    id === "wp2shell-bounty-v4" ||
-    id === "wp2shell-bounty-v5" ||
-    id === "wp2shell-whitebox-v1.7"
-      ? outputContractV2
-      : outputContractV1;
+    coverageFor(id)
+      ? outputContractV3
+      : id === "wp2shell-bounty-v3" ||
+          id === "wp2shell-bounty-v4" ||
+          id === "wp2shell-bounty-v5" ||
+          id === "wp2shell-bounty-v6" ||
+          id === "wp2shell-whitebox-v1.7"
+        ? outputContractV2
+        : outputContractV1;
   const objectiveOnly = (id: string) =>
     WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
   const source = await boundaries.sourceFor(snapshot);
   // The campaign stop rule decides depth; legacy per-target budgets only lower it (ADR 0032 Q6).
-  const maxRuns = Math.min(
-    config.stopRules.maxRuns,
-    target.runBudget ?? config.stopRules.maxRuns,
-  );
+  const maxRuns =
+    repeat > 1
+      ? repeat
+      : Math.min(
+          config.stopRules.maxRuns,
+          target.runBudget ?? config.stopRules.maxRuns,
+        );
   const sourceIndex =
     !config.entryIndex && assignmentConfig === undefined
       ? undefined
@@ -926,7 +969,7 @@ async function planWordPressDiscovery(
       maxRuns,
     ),
   };
-  const accounts = Object.entries(lab.attackerAccounts).map(
+  const accounts = Object.entries(lab?.attackerAccounts ?? {}).map(
     ([role, account]) =>
       `- ${role}: ${account.username} / ${account.password} (Lab only)`,
   );
@@ -944,18 +987,26 @@ async function planWordPressDiscovery(
       trustBoundary.text.trim(),
       `## Programme Boundary (${config.programmeBoundary.version})`,
       config.programmeBoundary.text.trim(),
-      "## Lab",
-      `Endpoint: ${lab.endpoint}`,
-      ...accounts,
-      ...(lab.database === undefined
-        ? ["Database: not exposed to this run."]
+      ...(lab === undefined
+        ? [
+            "This Trial has no Lab. Runtime confirmation happens during verification.",
+          ]
         : [
-            `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
+            "## Lab",
+            `Endpoint: ${lab.endpoint}`,
+            ...accounts,
+            ...(lab.database === undefined
+              ? ["Database: not exposed to this run."]
+              : [
+                  `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
+                ]),
           ]),
       ...(source.dependency === undefined
         ? []
         : [
-            "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
+            lab === undefined
+              ? "WordPress core source (read-only): /workspace/wordpress."
+              : "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
           ]),
       ...(objectiveOnly(selectedObjective.id)
         ? ["Writable notes directory: /workspace/research."]
@@ -999,7 +1050,8 @@ async function planWordPressDiscovery(
       modelProfileDigest: boundaries.runtimeProfile.digest,
       promptDigest: objective.digest,
       stopRules,
-      lab: { setupDigest: lab.setupDigest },
+      lab:
+        lab === undefined ? { mode: "none" } : { setupDigest: lab.setupDigest },
       history: historyFor(config, target),
       entryIndex: entryIndexMetadata,
     },
@@ -1053,7 +1105,7 @@ async function planWordPressDiscovery(
             ? {}
             : { assignment: assignmentMetadata(assignment) }),
           labAccess: {
-            database: lab.database === undefined ? "none" : "read-only",
+            database: lab?.database === undefined ? "none" : "read-only",
           },
         },
         run: {
@@ -1062,19 +1114,26 @@ async function planWordPressDiscovery(
           profile: boundaries.runtimeProfile,
           coordination: "cooperative" as const,
           prompt: promptFor(assignment, selectedObjective),
-          lab: {
-            endpoint: lab.endpoint,
-            networkName: lab.networkName,
-            internalIp: lab.internalIp,
-            ...(lab.database === undefined
-              ? {}
-              : {
-                  database: {
-                    host: lab.database.host,
-                    ipv4: lab.database.ipv4,
-                  },
-                }),
-          },
+          ...(coverageFor(selectedObjective.id)
+            ? { coverageSchema: outputContractV3.coverageSchema }
+            : {}),
+          ...(lab === undefined
+            ? {}
+            : {
+                lab: {
+                  endpoint: lab.endpoint,
+                  networkName: lab.networkName,
+                  internalIp: lab.internalIp,
+                  ...(lab.database === undefined
+                    ? {}
+                    : {
+                        database: {
+                          host: lab.database.host,
+                          ipv4: lab.database.ipv4,
+                        },
+                      }),
+                },
+              }),
           sourceDirectory: source.directory,
           sourceTree: source.tree,
           ...(source.dependency === undefined
@@ -1091,8 +1150,28 @@ async function planWordPressDiscovery(
     }),
     executor: boundaries.executor,
     attachments: boundaries.attachments,
+    ...(sourceIndex === undefined || !config.entryIndex
+      ? {}
+      : {
+          assessCoverage: (value: unknown) =>
+            assessWordPressCoverage(
+              value,
+              sourceIndex,
+              config.coverage.maxUnvisitedRatio,
+            ),
+        }),
     admitFinding: admitWordPressFinding,
     isProgrammeImpact: isWordPressProgrammeImpact,
+    classifyFindingPrecondition: (finding) => {
+      const result = classifyWordPressPrecondition({
+        configurationPrecondition:
+          readWordPressFinding(finding).configurationPrecondition,
+      });
+      return {
+        preconditionClass: result.preconditionClass,
+        park: result.preconditionClass === "admin-configuration",
+      };
+    },
     normalizeCandidate: normalizeWordPressCandidate,
     classifyCandidate: classifyWordPressCandidate,
     admitLead: admitWordPressLead,
@@ -1224,6 +1303,8 @@ async function runWordPressCampaign(
       : undefined;
   return runCampaignPipeline({
     campaignId: input.campaignId,
+    discoveryLab: config.discovery.lab,
+    repeat: input.repeat ?? 1,
     maxConcurrentTargets: config.resources.maxConcurrentTargets,
     ...(input.stop === undefined ? {} : { stop: input.stop }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
@@ -1279,9 +1360,10 @@ async function runWordPressCampaign(
       },
       lab: boundaries.lab,
       setupFor: setupFor(config),
-      discovery: (input) =>
-        planWordPressDiscovery(input, {
+      discovery: (discoveryInput) =>
+        planWordPressDiscovery(discoveryInput, {
           config,
+          repeat: input.repeat ?? 1,
           boundaries,
           state,
           objective,
@@ -1576,6 +1658,24 @@ export function createWordPressCliProfile(
         boundaries,
         input.findingId,
       );
+    },
+    async verifyNext(state, input) {
+      const { config } = await loadConfig(input.configPath);
+      const boundaries = await options.boundaries(config, state);
+      return verifyNextFinding({
+        ...(input.campaignId === undefined
+          ? {}
+          : { campaignId: input.campaignId }),
+        ...(input.campaignPrefix === undefined
+          ? {}
+          : { campaignPrefix: input.campaignPrefix }),
+        ledger: state.ledger,
+        newId: state.newId,
+        loadSnapshot: boundaries.loadSnapshot,
+        setupFor: setupFor(config),
+        reconstructionFor: reconstructionFor(config),
+        verification: verificationFor(state, boundaries),
+      });
     },
     stateDiffReader: (state) =>
       createWordPressStateDiffReader({ store: state.store }),

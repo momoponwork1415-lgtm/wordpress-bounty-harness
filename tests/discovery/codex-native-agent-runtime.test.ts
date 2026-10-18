@@ -26,6 +26,8 @@ import {
   PROVIDER_UPSTREAM_ORIGIN,
 } from "../../src/discovery/index.js";
 import { ProviderAttachmentStore } from "../../src/discovery/index.js";
+import { z } from "zod";
+import { wordpressCoverageRecordSchema } from "../../src/profiles/wordpress/discovery/coverage.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const image = `node@${digest}`;
@@ -233,7 +235,11 @@ describe("Codex native agent runtime", () => {
           claim: "A guard is bypassed",
           sourceTrace: report.sourceTrace,
         },
-        campaignInput: { ...run.campaignInput, history: { mode: "none" } },
+        campaignInput: {
+          ...run.campaignInput,
+          lab: { mode: "none" },
+          history: { mode: "none" },
+        },
       });
       expect(result.receipt.terminal).toBe("completed");
       expect(result.attachment?.kind).toBe("refutation");
@@ -1155,6 +1161,31 @@ describe("Codex native agent runtime", () => {
     }
   });
 
+  it("runs a source-only Trial on the broker's own internal network without a Lab host", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-source-only-"));
+    try {
+      const commands: CodexSandboxCommand[] = [];
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(transcript, commands),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      const { lab: _lab, ...withoutLab } = run;
+      const result = await runtime.execute({
+        ...withoutLab,
+        campaignInput: { ...run.campaignInput, lab: { mode: "none" } },
+      });
+      expect(result.receipt.terminal).toBe("completed");
+      expect(commands).toHaveLength(1);
+      expect(commands[0]?.labHost).toBeUndefined();
+      expect(commands[0]?.grant.dockerNetworkName).toBe("internal-run");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("passes a frozen core dependency mount and rejects a relative dependency path", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-core-transport-"));
     try {
@@ -1598,6 +1629,63 @@ describe("Codex native agent runtime", () => {
         terminal: "incomplete",
         reason: "schema",
         reasonDetail: "final-message-not-report",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the profile coverage schema for Root structured output", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-coverage-"));
+    try {
+      const commands: CodexSandboxCommand[] = [];
+      const attachments = new ProviderAttachmentStore(root);
+      const report = {
+        findings: [],
+        leads: [],
+        examined: "source",
+        unexamined: "none",
+        coverage: { indexDigest: digest, incomplete: false, entries: [] },
+      };
+      const stdout = transcript.replace(
+        JSON.stringify(
+          JSON.stringify({
+            findings: [],
+            leads: [],
+            examined: "source",
+            unexamined: "none",
+          }),
+        ),
+        JSON.stringify(JSON.stringify(report)),
+      );
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(stdout, commands),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const result = await runtime.execute({
+        ...run,
+        coverageSchema: z.toJSONSchema(wordpressCoverageRecordSchema, {
+          io: "output",
+        }),
+      });
+      expect(result.receipt.terminal).toBe("completed");
+      const stored =
+        result.attachment && (await attachments.read(result.attachment));
+      expect(
+        stored?.status === "resolved" &&
+          JSON.parse(stored.bytes.toString("utf8")),
+      ).toMatchObject({ coverage: report.coverage });
+      const schema = JSON.parse(commands[0]!.supportFiles[0]!.content) as {
+        required: string[];
+        properties: Record<string, unknown>;
+      };
+      expect(schema.required).toContain("coverage");
+      expect(schema.properties.coverage).toMatchObject({
+        type: "object",
+        additionalProperties: false,
       });
     } finally {
       await rm(root, { recursive: true, force: true });

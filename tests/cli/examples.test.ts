@@ -45,6 +45,35 @@ it("starts the checked-in campaign with two targets on WordPress 7.1.3", async (
   expect(config.wordpressVersion).toBe("7.1.3");
 });
 
+it("loads the opt-in v6 measurement example with a 120-minute wall", async () => {
+  const measure = wordpressCampaignConfigSchema.parse(
+    JSON.parse(
+      await readFile(
+        join(
+          import.meta.dirname,
+          "..",
+          "..",
+          "examples",
+          "campaign-v6-measure.json",
+        ),
+        "utf8",
+      ),
+    ) as unknown,
+  );
+  expect(measure).toMatchObject({
+    mode: "wp2shell",
+    promptId: "wp2shell-bounty-v6",
+    runWallTimeMinutes: 120,
+    entryIndex: true,
+  });
+  expect(
+    wordpressCampaignConfigSchema.safeParse({
+      ...measure,
+      promptId: "wp2shell-bounty-v5",
+    }).success,
+  ).toBe(false);
+});
+
 it.each(["3.3.1", "3.2.6"])(
   "runs the pinned %s production example as one indexed 60-minute WP2Shell Trial",
   async (version) => {

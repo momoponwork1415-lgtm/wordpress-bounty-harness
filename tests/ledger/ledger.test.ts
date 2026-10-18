@@ -934,6 +934,12 @@ describe("Ledger public interface", () => {
     expect(ledger.funnel("campaign-1")).toEqual({
       campaignId: "campaign-1",
       discoveryAttempts: 1,
+      incompleteDepth: 0,
+      byLab: {
+        attached: { runs: 2, findings: 4, confirmed: 1 },
+        none: { runs: 0, findings: 0, confirmed: 0 },
+      },
+      verificationLabFailed: 0,
       runCount: 2,
       knownCostUsd: 0,
       unpricedRuns: 2,
@@ -1072,6 +1078,42 @@ describe("Ledger public interface", () => {
         assignmentUnit: "route",
       },
       history: { mode: "catalog" },
+    });
+  });
+
+  it("separates attached and source-only Trials and counts verification Lab failures", async () => {
+    const { ledger } = await fixture();
+    await ledger.append({
+      ...common("lab-attached"),
+      type: "lab-provisioned",
+      labId: "lab-attached",
+      status: "ready",
+      purpose: "discovery",
+    });
+    for (const [runId, labAttached] of [
+      ["attached-run", true],
+      ["source-run", false],
+    ] as const)
+      await ledger.append({
+        ...common(`start-${runId}`),
+        type: "discovery-run-started",
+        runId,
+        ...(labAttached ? { labId: "lab-attached" } : {}),
+        labAttached,
+        history: { mode: "none" },
+        configuration: { promptVariant: "v5", assignmentUnit: "plugin" },
+      });
+    await ledger.append({
+      ...common("verify-lab-failed"),
+      type: "verification-lab-failed",
+      findingId: "finding-1",
+      verificationId: "verification-1",
+      reason: "provision",
+    });
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      discoveryAttempts: 2,
+      byLab: { attached: { runs: 1 }, none: { runs: 1 } },
+      verificationLabFailed: 1,
     });
   });
 

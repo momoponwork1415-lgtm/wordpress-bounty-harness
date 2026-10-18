@@ -119,6 +119,7 @@ it("parks only a source-refuted Finding and passes no Lab to the refuter", async
     expect(seenRun).toMatchObject({
       outputKind: "refutation",
       coordination: "solo",
+      campaignInput: { lab: { mode: "none" } },
     });
     expect(seenRun).not.toHaveProperty("lab");
     expect(seenRun).not.toHaveProperty("refutationClaim.labObservations");

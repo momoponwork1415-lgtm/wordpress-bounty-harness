@@ -605,8 +605,8 @@ export class GvisorCodexSandbox implements CodexSandbox {
         (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.labHost.name) ||
           isIP(command.labHost.ipv4) !== 4)) ||
       (command.databaseHost !== undefined &&
-        (command.labHost === undefined ||
-          !/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.databaseHost.name) ||
+        (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.databaseHost.name) ||
+          command.labHost === undefined ||
           command.databaseHost.name === command.labHost.name ||
           isIP(command.databaseHost.ipv4) !== 4)) ||
       command.sourceMount.mode !== "ro" ||
