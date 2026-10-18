@@ -170,6 +170,38 @@ async function expectLatchedStop(
 }
 
 describe("continuous runner", () => {
+  it("consumes verification work while a discovery batch is running", async () => {
+    let campaignStarted!: () => void;
+    let finishCampaign!: () => void;
+    const started = new Promise<void>((resolve) => {
+      campaignStarted = resolve;
+    });
+    const finished = new Promise<void>((resolve) => {
+      finishCampaign = resolve;
+    });
+    let verifiedDuringCampaign = false;
+    const t = await setup(
+      [
+        async () => {
+          campaignStarted();
+          await finished;
+          return {};
+        },
+      ],
+      {
+        verifyConcurrency: 1,
+        verifyNext: async () => {
+          await started;
+          verifiedDuringCampaign = true;
+          finishCampaign();
+          return null;
+        },
+      },
+    );
+    expect(await t.runner.run()).toBe("operator");
+    expect(verifiedDuringCampaign).toBe(true);
+  });
+
   it.each([
     ["rate-limit", [5, 10, 20, 40, 60, 60]],
     ["quota", [30, 60, 360]],

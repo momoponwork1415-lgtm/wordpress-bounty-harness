@@ -113,6 +113,20 @@ provider の構造化エラー `cyber_policy` は `incomplete(provider: provider
 
 `contradicted` は件数しか出ない。
 
+### 探索だけ回し、検証を 1 件ずつ回す
+
+`campaign.json` の `discovery.lab` を `"none"` にすると探索用 Lab を供給せず、Finding は台帳に記録して検証を後へ送る。省略時は `"attached"`。設定変更は campaign.json の PR で行い、prompt 本文は変えない。
+
+```sh
+harness campaign run <slug> --campaign <id> --config <campaign.json> [--repeat 3]
+harness verify next --campaign <id> --config <campaign.json>
+harness ledger funnel --campaign <id>
+```
+
+`verify next` は未検証または既存の有界再検証規則に該当する Finding を 1 件選び、その Finding の Snapshot に新しい検証 Lab を立てて Verifier と判定器を回し、Lab を片付ける。対象が無ければ `no verification pending` と出す。`--repeat 3` は同じ Snapshot に別々の Trial ID を 3 つ作る。既定は 1 回。funnel の `by Lab` は探索用 Lab の有無、`verification Lab failed` は検証側の供給失敗を示す。
+
+`continuous run --verify-concurrency <n>` は探索 batch と並行して検証 queue を消化する。既定の `n` は 1。検証 Lab の同時数は `resources.maxConcurrentTargets` に含めず、`--verify-concurrency` で別に制限する。
+
 ### 継続運転（`continuous run`、最終設計 P6）
 
 ```
