@@ -64,7 +64,12 @@ export const duplicateSchema = z.discriminatedUnion("status", [
 export const reviewDecisionV1Schema = z.strictObject({
   schemaVersion: z.literal(1),
   ref: refSchema,
-  verificationStatus: z.enum(["runtime-confirmed", "reproduced", "incomplete"]),
+  verificationStatus: z.enum([
+    "runtime-confirmed",
+    "reproduced",
+    "contradicted",
+    "incomplete",
+  ]),
   decision: z.enum(["accept", "reject", "defer"]),
   reasonCode: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
   duplicate: duplicateSchema,

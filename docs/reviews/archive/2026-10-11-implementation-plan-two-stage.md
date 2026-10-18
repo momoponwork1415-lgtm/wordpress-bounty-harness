@@ -1,6 +1,6 @@
 # 2026-10-11 実装計画: 判定器の修正と二段構え探索への移行
 
-Codex に渡す作業計画。設計の正本は ADR（#129 で追加する 0025〜0027）と SPEC。根拠は [設計レビュー](2026-10-11-harness-completeness-review.md)、prompt 本文は [下書き](2026-10-11-two-stage-prompts-draft.md)。この文書は順番と各 PR の範囲を決めるもので、所有者が読んで採用したら [IMPLEMENTATION-PLAN.md](../IMPLEMENTATION-PLAN.md) をこの内容で置き換える。
+Codex に渡す作業計画。設計の正本は ADR（#129 で追加する 0025〜0027）と SPEC。根拠は [設計レビュー](../2026-10-11-harness-completeness-review.md)、prompt 本文は [下書き](../2026-10-11-two-stage-prompts-draft.md)。この文書は順番と各 PR の範囲を決めるもので、所有者が読んで採用したら [IMPLEMENTATION-PLAN.md](../../IMPLEMENTATION-PLAN.md) をこの内容で置き換える。
 
 ## 全体の規則（全 PR 共通）
 

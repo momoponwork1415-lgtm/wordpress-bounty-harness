@@ -1,10 +1,10 @@
 # WP2Shell 記事への原点回帰: 原文の日本語訳と新版案（2026-10-18）
 
-状態: 旧比較案。所有者の 2026-10-18 決定により [WP2Shell にさらに寄せた v7 案](2026-10-18-wp2shell-bounty-v7.md) に置き換えた。これは探索に使わない。正本は [SPEC](../SPEC.md) と [ADR 0029](../adr/0029-single-wp2shell-cooperative-trial.md)。
+状態: 旧比較案。所有者の 2026-10-18 決定により [WP2Shell にさらに寄せた v7 案](../2026-10-18-wp2shell-bounty-v7.md) に置き換えた。これは探索に使わない。正本は [SPEC](../../SPEC.md) と [ADR 0029](../../adr/0029-single-wp2shell-cooperative-trial.md)。
 
 出典は Searchlight Cyber の[WP2Shell 記事「The Story of wp2shell」](https://www.slcyber.io/research/exploit-brokers-pay-500000-for-a-wordpress-rce-i-found-one-with-gpt5-6/#the-story-of-wp2shell)に掲載された著者の prompt。英語の全文は記事を参照。以下の原文訳は記事の prompt だけを訳し、記事後半の脆弱性の詳細は含めない。
 
-[取り込まれた WordPress プラグイン用 WP2Shell テンプレート](../knowledge/imported/wp2shell/PROMPT.article.template.txt)は、記事の原文から対象、通信条件、依存ソースの配置を変えた別資料であり、§1 の翻訳元ではない。
+[取り込まれた WordPress プラグイン用 WP2Shell テンプレート](../../knowledge/imported/wp2shell/PROMPT.article.template.txt)は、記事の原文から対象、通信条件、依存ソースの配置を変えた別資料であり、§1 の翻訳元ではない。
 
 ## 1. 記事に掲載された原文 prompt の日本語訳
 
@@ -92,4 +92,4 @@ Use the available Trial time for active exploration. The Harness enforces the ru
 - 時間: 記事の最低6時間を、Harness 所有の wall 上限へ置換した（SPEC 第6節、ADR 0029）。
 - 既知情報: 現行の時点切り規則に合わせて、報告・PoC・公開された修正版との比較を禁じた（ADR 0012）。
 
-比較前に既定を変えない。`wp2shell-bounty-v5` と同じ Snapshot、Lab、索引、model、出力契約で、この本文だけを変えた別 arm として測る。2026-10-18 時点で provider の拒否により v6 開発測定の9 runが成立せず、現時点では新版の発見率を主張できない（[測定記録](../evaluation/2026-10-18-index-baseline.md)）。
+比較前に既定を変えない。`wp2shell-bounty-v5` と同じ Snapshot、Lab、索引、model、出力契約で、この本文だけを変えた別 arm として測る。2026-10-18 時点で provider の拒否により v6 開発測定の9 runが成立せず、現時点では新版の発見率を主張できない（[測定記録](../../evaluation/2026-10-18-index-baseline.md)）。

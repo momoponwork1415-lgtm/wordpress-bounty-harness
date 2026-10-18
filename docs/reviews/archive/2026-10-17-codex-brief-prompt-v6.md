@@ -1,6 +1,6 @@
 # Codex brief: 探索 prompt v6 と Programme Boundary 文の組み立て（2026-10-17）
 
-所有者が Codex に貼る用。前提は [2026-10-17-thorough-search-v6-plan.md](2026-10-17-thorough-search-v6-plan.md)。Codex は本文を新しく考えず、下に指定した既存の行を写して並べる。出典に無い要素は足さない（DEVELOPMENT.md 第 5 節）。
+所有者が Codex に貼る用。前提は [2026-10-17-thorough-search-v6-plan.md](../2026-10-17-thorough-search-v6-plan.md)。Codex は本文を新しく考えず、下に指定した既存の行を写して並べる。出典に無い要素は足さない（DEVELOPMENT.md 第 5 節）。
 
 ---
 

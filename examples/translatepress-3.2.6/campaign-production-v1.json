@@ -10,7 +10,7 @@
     "maxConcurrentRuns": 1,
     "memoryBudgetMiB": 10752
   },
-  "wordpressVersion": "6.8.3",
+  "wordpressVersion": "7.1.3",
   "lab": {
     "siteTitle": "Harness Lab",
     "initialPosts": ["Welcome", "Sample page for translation"],

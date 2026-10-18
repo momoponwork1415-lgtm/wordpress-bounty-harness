@@ -1,13 +1,13 @@
 # 外部のハーネス実践との照合（2026-10-17）
 
-調べて報告。正本ではない。所有者の「自分では正しくできているか分からないのでインターネットで調べて」（2026-10-17）を受け、バグバウンティの受理側（Wordfence、Patchstack）、大手の脆弱性発見ハーネス（Wordfence Argus、Anthropic Project Glasswing と Cloudflare の運用記録、XBOW、OpenAI Aardvark、Google Big Sleep、DARPA AIxCC）、論文（OpenAnt、Refute-or-Promote、AWS Deception Benchmark、Baselines Before Architecture）を本リポの設計と並べた。2026-10-13 の [prompt 出典対照表](2026-10-13-prompt-source-comparison.md) が扱った 5 本の公開 harness は繰り返さない。
+調べて報告。正本ではない。所有者の「自分では正しくできているか分からないのでインターネットで調べて」（2026-10-17）を受け、バグバウンティの受理側（Wordfence、Patchstack）、大手の脆弱性発見ハーネス（Wordfence Argus、Anthropic Project Glasswing と Cloudflare の運用記録、XBOW、OpenAI Aardvark、Google Big Sleep、DARPA AIxCC）、論文（OpenAnt、Refute-or-Promote、AWS Deception Benchmark、Baselines Before Architecture）を本リポの設計と並べた。2026-10-13 の [prompt 出典対照表](../2026-10-13-prompt-source-comparison.md) が扱った 5 本の公開 harness は繰り返さない。
 
 ## 0. 結論
 
 1. **本リポの骨格は外部の慣行と一致している。** 探索と検証の分離、検証側だけが確定を出す、迷ったら記録して検証で落とす、人間の提出前レビュー。XBOW「創造的な AI が見つけ、決定論的な論理が本物かを決める」、Cloudflare の「validate agent は別 prompt で、新しい finding を出せない」、OpenAnt の敵対的検証、Refute-or-Promote の「殺す責務を持つ agent」、AWS benchmark の「exploit を証明させると false positive が 17〜74 ポイント減る」は、すべて SPEC 第 2 節の不変条件 3・4 と ADR 0018 の形。
 2. **受理側は 2026 年に「実害の無い報告」を切る方向に動いた。** Patchstack は 2026-06-01 から受理種類を条件付きの 11 種に絞り、contributor を対象外にし、「AI の誤った前提」「実際の plugin で試していない報告」に即時 1 週間 ban、却下率 50% 以上で leaderboard から除外、「管理者が設定しないと成立しない」ものを除外（規約 4.1）。本リポが 2026-10-17 に 5 分類を park した判断はこの流れと一致し、むしろ遅い。
 3. **最大の差は検証の到達点。** 外部は agent が sandbox で PoC を実行し、失敗を読んで直す（Cloudflare per-task scratch、OpenAnt 動的段 75.8% 再現、Argus は 6 段の chain を約 2 時間で PoC まで）。本リポの Verifier は「source 上は成立、Lab にその設定が無い」で止まり、本番 4 件が全部 `incomplete(precondition)`。ただし Patchstack 4.1 は管理者設定前提を却下するので、「設定を Lab に作って確定させる」より「既定設定で成立しないものは検証で落とす」が受理側の基準に近い。
-4. **徹底的な探索の外部での形は「1 つの長い agent」ではなく「狭い課題を多数並列＋取り漏れの再投入」。** Cloudflare: 「狭い範囲が良い finding を出す」「並列の狭い課題が 1 つの網羅 agent に勝つ」、約 50 hunter 同時、recon が trust 境界と入口を文書化、gapfill が薄い領域を再 queue。XBOW: 「何千もの短命 agent、それぞれ狭い目的」。本リポの Root＋3 子・7 分は、この意味で浅い。[#310 の計画](2026-10-17-thorough-search-v6-plan.md) の「索引の全項目を observed / blocked にする終了条件」は方向が合うが、実装は Root の自己申告より Harness が入口ごとの課題を配る形の方が外部に近い。
+4. **徹底的な探索の外部での形は「1 つの長い agent」ではなく「狭い課題を多数並列＋取り漏れの再投入」。** Cloudflare: 「狭い範囲が良い finding を出す」「並列の狭い課題が 1 つの網羅 agent に勝つ」、約 50 hunter 同時、recon が trust 境界と入口を文書化、gapfill が薄い領域を再 queue。XBOW: 「何千もの短命 agent、それぞれ狭い目的」。本リポの Root＋3 子・7 分は、この意味で浅い。[#310 の計画](../2026-10-17-thorough-search-v6-plan.md) の「索引の全項目を observed / blocked にする終了条件」は方向が合うが、実装は Root の自己申告より Harness が入口ごとの課題を配る形の方が外部に近い。
 5. **過去の既知脆弱性は探索ではなく選定で使うのが外部の結論と整合する。** Big Sleep「以前こういうバグがあった。似たものが他にもある」、Argus「弱点を発明したのではない」。ADR 0012（探索 agent に公開記録を渡さない）は維持し、#295（履歴で選定順位を付ける）は採る価値がある。
 6. **安定性は技法より効く。** AIxCC の第一の教訓「安定性と正確性が順位を決めた」「ボトルネックは技法ではなく自律システムへの堅牢な統合」。#312（wall が効かず 5.5 時間停止）はこの種類。
 

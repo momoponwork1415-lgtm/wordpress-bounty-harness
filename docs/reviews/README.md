@@ -1,16 +1,66 @@
 # 報告の置き場
 
-AI に「調べて報告」を依頼したときの成果物を日付付きで置く。正本（[SPEC.md](../SPEC.md) / [ADR](../adr/)）ではなく、食い違えば正本が勝つ。報告を読んで所有者が決めたことだけが、PR か ADR になる（[DEVELOPMENT.md](../DEVELOPMENT.md) 第4節）。
+AI に「調べて報告」を頼んだときの成果物を、日付付きで置く。報告は正本ではない。正本は [SPEC.md](../SPEC.md) と [ADR](../adr/) で、食い違えば正本が勝つ。報告を読んで所有者が決めたことだけが、PR か ADR になる（[DEVELOPMENT.md](../DEVELOPMENT.md) 第 4 節）。
 
-2026-10-09 の5本は、#77〜#87 の設計元になった報告で、当時の未コミット変更を現状として書いている。
+報告は後から書き換えない。古くなった点は、下の一覧で 1 行ずつ補う。
 
-## 現状と違う報告（2026-10-19 時点）
+## この階にある報告
 
-報告は書き換えない。読むときに次の差を当てる。
+正本と運用文書（AGENTS、SPEC、ADR、`docs/` 直下、`docs/agents/`、`docs/evaluation/`、`docs/knowledge/`、skill、コード）から参照されている報告と、それらの報告が参照している報告だけを置く。
 
-- `2026-10-14-final-design.md`: 探索の Lab、即時の検証、`owner-approved` の付け手、Step 1 の「人手 0」の範囲は 2026-10-18〜19 の決定（ADR 0033〜0037、#238 の comment）で変わった。
-- `2026-10-14-autonomous-verification-loop-design-proposal.md`: 検証は skill と handoff（ADR 0035）になった。
+設計と方針の出典:
+
+- [2026-10-11-harness-completeness-review.md](2026-10-11-harness-completeness-review.md): 報奨を得る装置としての完成度を、探索・検証・選定の 3 領域で監査した。
+- [2026-10-11-thorough-design-review.md](2026-10-11-thorough-design-review.md): 不変条件が守られているかと、削るべき構造を 4 本の監査で調べた。
+- [2026-10-11-comparison-with-public-harnesses.md](2026-10-11-comparison-with-public-harnesses.md): 公開ハーネスと比べた作り込みの過不足。
+- [2026-10-11-issue-119-real-lab-dependency.md](2026-10-11-issue-119-real-lab-dependency.md): #119 の実機受入条件と、被害者側の操作の依存。
+- [2026-10-11-overall-design-v1.md](2026-10-11-overall-design-v1.md): WP2Shell 方式へ戻すと決めた日の全体仕様の下書き。
+- [2026-10-11-return-to-wp2shell-route.md](2026-10-11-return-to-wp2shell-route.md): 探索の主経路を WP2Shell 方式へ戻すための報告。
+- [2026-10-11-two-stage-prompts-draft.md](2026-10-11-two-stage-prompts-draft.md): 二段構え探索の prompt 下書き。採らなかった案の記録。
+- [2026-10-12-consolidation-and-production-first.md](2026-10-12-consolidation-and-production-first.md): 文書と Issue の整理案と、本番 1 周を先に回す計画。
+- [2026-10-13-design-features-constraints.md](2026-10-13-design-features-constraints.md): 機能一覧と、制約ごとの出典。
+- [2026-10-13-past-repos-lessons.md](2026-10-13-past-repos-lessons.md): 過去 4 世代の教訓の長い版。[LESSONS.md](../LESSONS.md) の出典。
+- [2026-10-13-human-review-contract-and-parallel.md](2026-10-13-human-review-contract-and-parallel.md): 本番 4 周から読んだ、人間レビューの契約と並列化。
+- [2026-10-13-selection-data.md](2026-10-13-selection-data.md): 選定に使う install 帯とタグの集計。
+- [2026-10-14-final-design.md](2026-10-14-final-design.md): 2026-10-14 時点の最終設計（実装仕様版）。
+- [2026-10-14-overbuild-and-gaps-review.md](2026-10-14-overbuild-and-gaps-review.md): 作り込み過ぎと不足の棚卸し。
+- [2026-10-15-software-factory-and-meta-harness.md](2026-10-15-software-factory-and-meta-harness.md): software factory と meta-harness の考え方の取り入れ方。
+- [2026-10-18-operating-policy-gap-report.md](2026-10-18-operating-policy-gap-report.md): 2026-10-18 の運用方針と現状の対照。
+- [2026-10-19-selection-statistics.md](2026-10-19-selection-statistics.md): 公開統計から決めた選定の基準。
+
+探索 prompt の出典と実測:
+
+- [2026-10-13-prompt-source-comparison.md](2026-10-13-prompt-source-comparison.md): prompt v4 の出典対照表。
+- [2026-10-13-source-prompts-ja.md](2026-10-13-source-prompts-ja.md): 出典 prompt（WP2Shell 記事、旧 harness）の日本語訳。
+- [2026-10-13-prompts-in-use-ja.md](2026-10-13-prompts-in-use-ja.md): 2026-10-13 に使っていた prompt の日本語訳。
+- [2026-10-13-critical-high-v4-development-trials.md](2026-10-13-critical-high-v4-development-trials.md): prompt v4 の開発 Trial の実測。
+- [2026-10-16-wp2shell-bounty-v5-draft.md](2026-10-16-wp2shell-bounty-v5-draft.md): prompt v5 の草案。
+- [2026-10-17-thorough-search-v6-plan.md](2026-10-17-thorough-search-v6-plan.md): prompt v6 に向けた網羅性の見直し計画。
+- [2026-10-18-wp2shell-bounty-v7.md](2026-10-18-wp2shell-bounty-v7.md): prompt v7 の採用本文。
+- [2026-10-18-v8-r2-public-record-comparison.md](2026-10-18-v8-r2-public-record-comparison.md): v8 r2 の Trial と公開記録の照合。
+
+Codex への依頼文:
+
+- [2026-10-16-codex-one-prompt.md](2026-10-16-codex-one-prompt.md): Codex の 1 セッションに貼る簡潔版。
+- [2026-10-16-codex-monitor-brief.md](2026-10-16-codex-monitor-brief.md): 監視だけを行う Codex セッションの依頼文。
+- [2026-10-16-codex-orchestration-brief.md](2026-10-16-codex-orchestration-brief.md): Codex のオーケストレーションの依頼文（長い版）。
+- [2026-10-16-codex-briefs-262-265-268.md](2026-10-16-codex-briefs-262-265-268.md): PR 3 本の修正の依頼文。
+- [2026-10-16-codex-briefs-issues.md](2026-10-16-codex-briefs-issues.md): Issue 6 本の依頼文。
+
+## 現状と違う点（2026-10-19 時点）
+
+- `2026-10-14-final-design.md`: 探索の Lab、即時の検証、`owner-approved` の付け手、Step 1 の「人手 0」の範囲は、2026-10-18〜19 の決定（ADR 0033〜0037、#238 の comment）で変わった。
+- `2026-10-17-thorough-search-v6-plan.md`: 入口索引と coverage は ADR 0034 で削除した。
+- prompt v4〜v7 の草案と対照表: 旧版の記録。新規探索は `wp2shell-bounty-v8` だけ（ADR 0033）。
+
+## archive/
+
+どこからも参照されていない報告は [archive/](archive/) に移した。ファイル名は変えていない。2026-10-08〜10 の旧文書（`DESIGN-EVIDENCE.md`、`PILOT-2026-10-10.md`）もここに置いた。LESSONS と ADR はこれらの報告から引いているので、出典として消さずに残す。
+
+archive の中で現状と違う点:
+
+- 2026-10-09 の 5 本: #77〜#87 の設計元。当時の未コミットの変更を現状として書いている。
+- `2026-10-14-autonomous-verification-loop-design-proposal.md`: 検証は skill と handoff になった（ADR 0035）。
 - `2026-10-16-selection-candidates-preview.md`: 選定の順位は ADR 0037 の採点と cascade に置き換わった。
-- `2026-10-17-thorough-search-v6-plan.md`、`2026-10-18-index-coverage-vs-owner-findings.md`: 入口索引と coverage は ADR 0034 で削除した。
-- `2026-10-18-source-only-dispatch-design.md`、`2026-10-18-codex-plan-dispatch-architecture.md`、`2026-10-18-codex-orchestration-dispatch.md`、`2026-10-18-codex-review-fixes-dispatch.md`: 課題配分（dispatch）は採らず、PR #357 で mode を削除した。
-- prompt v4〜v7 の草案・対照表（`2026-10-13-critical-high-prompt-v4-source-map.md`、`2026-10-16-wp2shell-bounty-v5-draft.md`、`2026-10-17-codex-brief-prompt-v6.md`、`2026-10-18-wp2shell-bounty-v7.md`）: 旧版の記録。新規探索は v8 だけ（ADR 0033）。
+- `2026-10-18-index-coverage-vs-owner-findings.md`: 入口索引と coverage は ADR 0034 で削除した。
+- `2026-10-18-source-only-dispatch-design.md` ほか dispatch の報告 3 本: 課題配分は採らず、PR #357 で mode を削除した。
