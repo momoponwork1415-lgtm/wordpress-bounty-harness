@@ -1,0 +1,2213 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>未使用機能の棚卸し</title>
+    <meta
+      name="description"
+      content="wordpress-bounty-harness の使われていない機能を根拠付きで並べた削除候補一覧（2026-10-18、報告であり正本ではない）"
+    />
+    <style>
+      :root {
+        --bg: #f7f6f2;
+        --surface: #ffffff;
+        --text: #1f2328;
+        --muted: #5c6470;
+        --border: #d9d6cf;
+        --accent: #2a5db0;
+        --code-bg: #eeece6;
+        --del-bg: #fbe9e7;
+        --del-fg: #8f1d12;
+        --hold-bg: #fff4d6;
+        --hold-fg: #7a5200;
+        --keep-bg: #e6f2e9;
+        --keep-fg: #1f5c33;
+        --row-del: #fdf4f3;
+        --row-hold: #fffaf0;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --bg: #15171a;
+          --surface: #1d2024;
+          --text: #e6e4de;
+          --muted: #a0a6ae;
+          --border: #363b42;
+          --accent: #8fb4f2;
+          --code-bg: #272b31;
+          --del-bg: #4a1d19;
+          --del-fg: #ffb4ab;
+          --hold-bg: #4a3a10;
+          --hold-fg: #ffd98a;
+          --keep-bg: #1b3a26;
+          --keep-fg: #a7dcb5;
+          --row-del: #231a19;
+          --row-hold: #24201a;
+        }
+      }
+      :root[data-theme="dark"] {
+        --bg: #15171a;
+        --surface: #1d2024;
+        --text: #e6e4de;
+        --muted: #a0a6ae;
+        --border: #363b42;
+        --accent: #8fb4f2;
+        --code-bg: #272b31;
+        --del-bg: #4a1d19;
+        --del-fg: #ffb4ab;
+        --hold-bg: #4a3a10;
+        --hold-fg: #ffd98a;
+        --keep-bg: #1b3a26;
+        --keep-fg: #a7dcb5;
+        --row-del: #231a19;
+        --row-hold: #24201a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        -webkit-text-size-adjust: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+        font-size: 15px;
+        line-height: 1.65;
+      }
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px 16px 64px;
+      }
+      h1 {
+        font-size: 1.5rem;
+        line-height: 1.3;
+        margin: 0 0 12px;
+      }
+      h2 {
+        font-size: 1.2rem;
+        margin: 40px 0 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--border);
+      }
+      h3 {
+        font-size: 1.02rem;
+        margin: 24px 0 8px;
+      }
+      p {
+        margin: 0 0 12px;
+      }
+      a {
+        color: var(--accent);
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.88em;
+        background: var(--code-bg);
+        padding: 1px 4px;
+        border-radius: 4px;
+        word-break: break-all;
+      }
+      nav {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin: 16px 0 24px;
+      }
+      nav ol {
+        margin: 0;
+        padding-left: 1.4em;
+        columns: 2;
+        column-gap: 24px;
+      }
+      nav li {
+        break-inside: avoid;
+        margin: 2px 0;
+      }
+      @media (max-width: 640px) {
+        nav ol {
+          columns: 1;
+        }
+      }
+      ul {
+        padding-left: 1.3em;
+        margin: 0 0 12px;
+      }
+      li {
+        margin: 4px 0;
+      }
+      .table-wrap {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        margin: 12px -16px 20px;
+        padding: 0 16px;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 720px;
+        background: var(--surface);
+        font-size: 0.86rem;
+        line-height: 1.5;
+      }
+      th,
+      td {
+        border: 1px solid var(--border);
+        padding: 6px 8px;
+        vertical-align: top;
+        text-align: left;
+      }
+      thead th {
+        background: var(--code-bg);
+        position: sticky;
+        top: 0;
+      }
+      tbody th[scope="row"] {
+        font-weight: 600;
+        min-width: 9em;
+      }
+      tr.del {
+        background: var(--row-del);
+      }
+      tr.hold {
+        background: var(--row-hold);
+      }
+      .rec {
+        white-space: nowrap;
+        font-weight: 600;
+      }
+      .rec-del {
+        color: var(--del-fg);
+        background: var(--del-bg);
+      }
+      .rec-hold {
+        color: var(--hold-fg);
+        background: var(--hold-bg);
+      }
+      .rec-keep {
+        color: var(--keep-fg);
+        background: var(--keep-bg);
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 8px 0 16px;
+        font-size: 0.86rem;
+      }
+      .legend span {
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-weight: 600;
+      }
+      footer {
+        margin-top: 48px;
+        color: var(--muted);
+        font-size: 0.86rem;
+        border-top: 1px solid var(--border);
+        padding-top: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>2026-10-18 使っていない機能の棚卸し（削除候補の一覧）</h1>
+      <div class="legend">
+        <span class="rec-del">削除候補</span><span class="rec-hold">保留</span
+        ><span class="rec-keep">残す</span>
+      </div>
+      <nav aria-label="目次">
+        <ol>
+          <li><a href="#走査の条件">走査の条件</a></li>
+          <li>
+            <a href="#規則の前提-この表で-残す-と書く根拠"
+              >規則の前提（この表で「残す」と書く根拠）</a
+            >
+          </li>
+          <li>
+            <a href="#軸-1-cli-command-37-subcommand"
+              >軸 1: CLI command（37 subcommand）</a
+            >
+          </li>
+          <li>
+            <a href="#軸-2-設定-option-campaign-host-selection-schema"
+              >軸 2: 設定 option（campaign / host / selection schema）</a
+            >
+          </li>
+          <li>
+            <a href="#軸-3-prompt-版-探索-18-trust-boundary-1-verifier-7"
+              >軸 3: prompt 版（探索 18 + trust-boundary 1 + Verifier 7）</a
+            >
+          </li>
+          <li>
+            <a href="#軸-4-台帳-event-種別-31-と読取"
+              >軸 4: 台帳 event 種別（31）と読取</a
+            >
+          </li>
+          <li>
+            <a href="#軸-5-検証-scenario-plugin-固有-lab-adapter-判定器"
+              >軸 5: 検証 scenario・plugin 固有 Lab adapter・判定器</a
+            >
+          </li>
+          <li>
+            <a href="#軸-6-他-file-から-import-されない-export"
+              >軸 6: 他 file から import されない export</a
+            >
+          </li>
+          <li>
+            <a href="#軸-7-実運用の台帳で出た-event-件数のみ"
+              >軸 7: 実運用の台帳で出た event（件数のみ）</a
+            >
+          </li>
+          <li>
+            <a href="#軸外-scripts-examples-spike-policy"
+              >軸外: scripts・examples・spike・policy</a
+            >
+          </li>
+          <li>
+            <a href="#まとめ-削減行-リスクの順"
+              >まとめ（削減行 ÷ リスクの順）</a
+            >
+          </li>
+          <li><a href="#消してはいけないもの">消してはいけないもの</a></li>
+          <li><a href="#測った数字">測った数字</a></li>
+          <li><a href="#注記">注記</a></li>
+        </ol>
+      </nav>
+      <p>
+        これは報告であり正本ではない。正本は <a href="../SPEC.md">SPEC.md</a> と
+        <a href="../adr/">adr/</a
+        >。所有者の「使っていない機能などは削除対象かも」（2026-10-18）に対して、何が使われていないかを根拠付きで並べたもの。<strong
+          >ここでは何も削除していない。採否は所有者が行ごとに決める。</strong
+        >
+        同日の
+        <a href="2026-10-18-architecture-deepening-report.md"
+          >アーキテクチャ深化報告</a
+        >
+        候補 9（CLI command table）と
+        <a href="../PARKING.md">PARKING.md</a> 2026-10-14 行（削除候補 4
+        件）の分析は繰り返さず、その先を埋める。HTML 版は同名の
+        <a href="2026-10-18-unused-feature-inventory.html">.html</a>。
+      </p>
+      <h2 id="走査の条件">走査の条件</h2>
+      <ul>
+        <li>
+          対象: origin/main <code>c8d390c</code>（2026-10-18）。<code
+            >src/</code
+          >
+          165 file 38,678 行（うち <code>.ts</code> 124 file）、<code
+            >tests/</code
+          >
+          33,177 行。code は読み取りだけで、<code>src/</code> は触っていない。
+        </li>
+        <li>
+          「参照」の数え方: repo 内の skill 3
+          本（<code>.claude/skills/wbh-*/SKILL.md</code>。<code
+            >~/.claude/skills/wbh-*</code
+          >
+          は repo
+          外に存在しない）、<code>docs/agents/*.md</code>・<code>docs/DEVELOPMENT.md</code>・<code>docs/SPEC.md</code>・<code>docs/OPERATIONS.md</code>、<code
+            >docs/evaluation/*.md</code
+          >
+          と
+          <code>docs/reviews/2026-10-1*.md</code
+          >、<code>examples/</code>・<code>scripts/</code>・<code>src/profiles/wordpress/policy/</code>、<code
+            >tests/</code
+          >
+          を <code>grep</code> で数えた。test は配列形（<code
+            >run("eval", "score", …)</code
+          >）も数えた。
+        </li>
+        <li>
+          台帳:
+          <code
+            >~/.local/state/wordpress-bounty-harness-v6-measure-20261018/{brizy,relevanssi,tp326}/state/ledger.sqlite</code
+          >
+          を read-only で開き、<code>event_type</code> の件数だけを取った（3
+          台帳、12 campaign、98 event）。Private Evidence
+          は開いていない。<strong>本番台帳は読んでいない</strong>: 依頼にあった
+          <code>~/.local/state/wordpress-bounty-harness-prod/</code>
+          は存在せず、本番の state
+          は別名（<code>~/.local/state/wordpress-bounty-harness</code>）にあると
+          memory が示すが、依頼の「それ以外の
+          <code>~/.local/state</code>
+          に触らない」に従って開かなかった。本番で実際に出た event
+          種別の件数は未確認。
+        </li>
+        <li>
+          行数は <code>wc -l</code> と case の開始行差による概算。test
+          の削減行は別に書く。
+        </li>
+      </ul>
+      <h2 id="規則の前提-この表で-残す-と書く根拠">
+        規則の前提（この表で「残す」と書く根拠）
+      </h2>
+      <ul>
+        <li>
+          不変条件 1〜8（SPEC §2、AGENTS.md）。判定器・broker・Private
+          Evidence・台帳の追記専用・人間の 2 判断点に関わる code
+          は、未使用でも削除候補にしない。
+        </li>
+        <li>
+          AGENTS.md: 「prompt 本文を変えたら版を上げ、旧版を残して digest pin
+          を更新する。旧 prompt は過去 Trial の目的文と digest
+          を照合するために維持する」「台帳の旧 <code>stage</code> /
+          <code>continuationOf</code> 付き event も読み続け、既存 event
+          を消さない」。
+        </li>
+        <li>
+          DEVELOPMENT §2: Step 1 の間は不変条件・module
+          境界・<strong>判定器の集合</strong>・選定方針の構造・探索 prompt
+          を凍結。
+        </li>
+        <li>
+          PARKING 2026-10-14: 「週次 smoke の replay Verifier（#126）、<code
+            >assignment</code
+          >
+          mode、旧 arm の examples、<code
+            >eval score / keys / rubric / compare</code
+          >、<code>review open</code>、archive prompt 10 版、plugin 固有 Lab
+          adapter 8 本の削除」は
+          <strong>Step 1 合格後の整理 PR</strong> と決まっている。PARKING
+          2026-10-13: review CLI の多機能を skill 側へ寄せるのは Step 2。
+        </li>
+        <li>
+          ADR 0029: <code>wp2shell-bounty-v2</code>・<code
+            >short-objective-managed-v4</code
+          >
+          は比較 arm、<code>screening-v1</code> は過去 Trial
+          の構成照合用に保持。ADR 0032 Q27: CLI
+          は機械向け、既存の多機能は削除せず拡張を止め、整理は Step 2。ADR 0032
+          2026-10-17:
+          <code>sensitive-object-access</code
+          >・<code>content-deletion</code>・<code>options-update</code>・<code>privesc-to-contributor+</code>・<code
+            >auth-bypass-non-admin</code
+          >
+          は出口で <code>finding-parked</code>。
+        </li>
+      </ul>
+      <p>
+        推奨の記号: <strong>削除候補</strong> = 参照 0
+        で規則上の障害が無い、または PARKING
+        が既に削除を決めている（条件付き）。<strong>保留</strong> =
+        使われていないが規則か進行中の作業が絡み、所有者の判断が要る。<strong
+          >残す</strong
+        >
+        = 使われている、または規則で保持が決まっている。
+      </p>
+      <h2 id="軸-1-cli-command-37-subcommand">
+        軸 1: CLI command（37 subcommand）
+      </h2>
+      <p>
+        参照列は
+        <code
+          >skill / 運用文書（agents・DEVELOPMENT・SPEC・OPERATIONS）/
+          測定・review 文書 / examples+scripts / test 起動数</code
+        >。path は <code>src/cli/index.ts</code> の <code>case</code> 開始行。
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>command</th>
+              <th>path</th>
+              <th>参照</th>
+              <th>規則</th>
+              <th>削除規模</th>
+              <th>推奨</th>
+              <th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="del">
+              <th scope="row"><code>review open</code></th>
+              <td>L1097–1115、event <code>review-item-opened</code></td>
+              <td>0 / 0 / 2 / 0 / <strong>0</strong></td>
+              <td>PARKING 2026-10-14 が Step 1 合格後の削除と決定</td>
+              <td>
+                cli 19 行 + <code>humanMinutes</code> 呼び 1 + option
+                <code>opened</code> は decide が使うので残る
+              </td>
+              <td class="rec rec-del">
+                <strong>削除候補</strong>（PARKING 条件）
+              </td>
+              <td>
+                skill も運用文書も呼ばない。test も無い。手で再現した事実は
+                <code>review reproduced</code> が記録する。event 種別の reader
+                は残す
+              </td>
+            </tr>
+            <tr class="del">
+              <th scope="row"><code>eval score</code></th>
+              <td>L1500–1541</td>
+              <td>0 / 2 / 3 / 0 / 4</td>
+              <td>
+                OPERATIONS §8「任意の研究用互換機能。本番には使わない」。PARKING
+                が削除を決定
+              </td>
+              <td>
+                cli 42 行 + <code>evaluation/key-registry.ts</code> 30 +
+                <code>profiles/wordpress/answer-key.ts</code> 93 +
+                <code>evaluation/index.ts</code> の location-overlap 部分 +
+                CliProfile <code>answerKeys</code> / <code>locationsOf</code>
+              </td>
+              <td class="rec rec-del">
+                <strong>削除候補</strong>（PARKING 条件）
+              </td>
+              <td>
+                Answer Key は Git 外にしか無く、ベンチマークは所有者実績 case
+                だけに縮んだ（2026-10-16）。test:
+                <code>tests/evaluation/key-registry.test.ts</code> 37、<code
+                  >location-overlap.test.ts</code
+                >
+                132、<code>tests/profiles/wordpress/answer-key.test.ts</code> 62
+              </td>
+            </tr>
+            <tr class="del">
+              <th scope="row"><code>eval keys</code></th>
+              <td>L1542–1576</td>
+              <td>0 / 1 / 0 / 0 / 1</td>
+              <td>同上</td>
+              <td>上に含む（cli 35 行）</td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+              <td><code>eval score</code> と一体</td>
+            </tr>
+            <tr class="del">
+              <th scope="row"><code>eval rubric</code></th>
+              <td>L1577–1597</td>
+              <td>0 / 1 / 0 / 0 / 1</td>
+              <td>同上</td>
+              <td>
+                cli 21 行 + <code>evaluation/blind-rubric.ts</code> 41 +
+                <code>examples/evaluation/blind-rubric.template.json</code> 14 +
+                test 52
+              </td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+              <td>
+                人間の盲検採点は一度も運用されていない（台帳 event も無い）
+              </td>
+            </tr>
+            <tr class="del">
+              <th scope="row"><code>eval compare</code></th>
+              <td>L1624–1652</td>
+              <td>0 / 1 / 0 / 0 / 2</td>
+              <td>
+                OPERATIONS §8「旧軸の比較。過去 Trial の読取用」。PARKING
+                が削除を決定。深化報告は「残す選択もある」
+              </td>
+              <td>
+                cli 29 行 + <code>evaluation/index.ts</code> の compare 部分 +
+                <code>interval.ts</code> 50 + test
+                <code>compare.test.ts</code> 343
+              </td>
+              <td class="rec rec-del"><strong>削除候補（弱）</strong></td>
+              <td>
+                旧二段構え Trial の history / prompt / continuation 軸。ablation
+                mode（軸 2）と対で消える。旧 Trial を読み返す必要が残るなら保留
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row"><code>eval prospective</code></th>
+              <td>L1598–1623</td>
+              <td>0 / 1 / 1 / 0 / 1</td>
+              <td>規則なし（PARKING に無い）。OPERATIONS §8 に 1 行</td>
+              <td>
+                cli 26 行 + <code>profiles/wordpress/advisory.ts</code> 53 +
+                <code>evaluation/index.ts</code> prospective 部分 + CliProfile
+                <code>advisories</code> + test
+                <code>prospective.test.ts</code> 265
+              </td>
+              <td class="rec rec-hold"><strong>保留</strong></td>
+              <td>
+                「後日公開 advisory
+                で本番台帳を再採点」は設計上の価値が残る。ただし 2026-10-16
+                以降の運用で 1 度も使われていない
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row"><code>eval case-blocked</code></th>
+              <td>L1464–1499、event <code>evaluation-case-blocked</code></td>
+              <td>0 / 0 / 2 / 0 / 1</td>
+              <td>
+                docs/evaluation/README.md
+                が再発見ベンチマークの手順として記す。PARKING に無い
+              </td>
+              <td>cli 36 行 + event writer</td>
+              <td class="rec rec-hold"><strong>保留</strong></td>
+              <td>
+                13 case 拡張は 2026-10-16 に中止。所有者実績 case
+                だけなら使う場面は少ないが、ベンチマーク手順の一部
+              </td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>review inspect</code></th>
+              <td>L978–1006</td>
+              <td>0 / 1 / 3 / 0 / 2</td>
+              <td>
+                PARKING 2026-10-13: review CLI の人間向け表示は Step 2 で skill
+                へ
+              </td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>
+                skill が
+                <code>review export</code> を使うので表示用途は重なるが、整理は
+                Step 2 の決定
+              </td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>review reproduced</code></th>
+              <td>L1116–1145</td>
+              <td>2 / 1 / 2 / 0 / 0</td>
+              <td>OPERATIONS 表 7 行目</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>test 起動 0 は test の欠落であり未使用ではない</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row">
+                <code>review dedupe</code> / <code>scope</code> /
+                <code>draft</code> / <code>authorize</code> /
+                <code>submitted</code> / <code>outcome</code>
+              </th>
+              <td>L1146–1293</td>
+              <td>1〜3 / 1 / 1〜4 / 0 / 1〜4</td>
+              <td>不変条件 6・7 の判断点を記録。PARKING: Step 2 で skill へ</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>
+                <code>review outcome</code> は skill 0 だが報酬記録の唯一の入口
+              </td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>ledger coverage</code></th>
+              <td>L1433–1451</td>
+              <td>0 / 0 / 0 / 0 / 1 file</td>
+              <td>#336（当日 merge）</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>新規。v6 測定で使う</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row">
+                <code>lab up --campaign … --config</code>（review 用でない方）
+              </th>
+              <td>L1326–1367</td>
+              <td>
+                skill は <code>--for-review</code> だけ。OPERATIONS L268
+                が手順を記す
+              </td>
+              <td>—</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>
+                検証 Lab を手で立てる経路。<code>--port</code> /
+                <code>--db-port</code> は OPERATIONS のみに出る
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                <code>campaign run --repeat</code> /
+                <code>--retry-incomplete</code>
+              </th>
+              <td>L916–963</td>
+              <td>
+                <code>--retry-incomplete</code>: 運用文書 0、review 文書 3、test
+                2。<code>--repeat</code>: 運用文書 1
+              </td>
+              <td>ADR 0029「開発セットの 3 回反復は独立 Trial」</td>
+              <td>各 10 行前後</td>
+              <td class="rec rec-hold">保留</td>
+              <td>開発セット測定の道具。本番 runner は使わない</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row">
+                その他 24 command（<code>select</code>、<code>campaign run</code
+                >、<code>continuous *</code>、<code>review</code> /
+                <code>export</code> / <code>decide</code> /
+                <code>parked</code> / <code>reverify</code>、<code
+                  >verify next</code
+                >、<code>ledger funnel</code> / <code>stops</code> /
+                <code>usage</code> / <code>runtime</code>、<code
+                  >history status</code
+                >、<code>runtime check</code>、<code>lab cleanup</code> /
+                <code>down</code>）
+              </th>
+              <td>—</td>
+              <td>運用文書または skill に 1 件以上</td>
+              <td>—</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>本番 runner・skill・運用手順が呼ぶ</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        未参照の判定: skill と運用文書の両方で 0 なのは
+        <code>review open</code>・<code>eval case-blocked</code>・<code
+          >ledger coverage</code
+        >
+        の 3 つ。skill だけ 0 で運用文書にあるものは、ADR 0032 Q27
+        の「機械向け」の位置づけどおり。
+      </p>
+      <h2 id="軸-2-設定-option-campaign-host-selection-schema">
+        軸 2: 設定 option（campaign / host / selection schema）
+      </h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>option</th>
+              <th>path</th>
+              <th>非使用の根拠</th>
+              <th>規則</th>
+              <th>削除規模</th>
+              <th>推奨</th>
+              <th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="hold">
+              <th scope="row">
+                <code>mode: "assignment"</code> +
+                <code>assignment.{unit,entriesPerRun}</code>
+              </th>
+              <td>
+                <code>src/cli/wordpress.ts</code> L200–203, 253–260, 269–270,
+                905–960
+              </td>
+              <td>
+                examples 2
+                file（<code>translatepress-3.2.5/campaign-luna-ab*.json</code>、2026-10-10）。policy
+                0。本番 0
+              </td>
+              <td>
+                PARKING 2026-10-14 が削除を決定。<strong
+                  >ただし
+                  #324（2026-10-18、<code>discovery/task-plan.ts</code>）が
+                  entry assignment の上に dispatch task 計画を足した</strong
+                >
+              </td>
+              <td>
+                schema 15 行 + wordpress.ts 約 55 行 +
+                <code>entry-points.ts</code> の
+                <code>planWordPressEntryAssignments</code> + test
+              </td>
+              <td class="rec rec-hold">
+                <strong>保留（矛盾の解消が先）</strong>
+              </td>
+              <td>
+                PARKING は削除、当日の #324 は拡張。所有者が dispatch
+                構想（docs/reviews/2026-10-18-codex-plan-dispatch-architecture.md）を採るかで決まる
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                <code>mode: "ablation"</code> + <code>ablation.axes[]</code> /
+                <code>armBFraction</code> / <code>armBPromptId</code>
+              </th>
+              <td>
+                wordpress.ts L131–148, 245–252, 316–322;
+                <code>discovery/campaign.ts</code>
+                L165–215（<code>allocateArm</code>）
+              </td>
+              <td>examples 2 file（同上）。policy 0。本番 0。cli.test 14 行</td>
+              <td>
+                ADR 0013（版付き prompt ablation）は accepted のまま。ADR 0032
+                #9「A/B 事前登録は Step 1 中止」、PARKING「A/B 事前登録は Step 1
+                合格後」
+              </td>
+              <td>約 100 行 + <code>eval compare</code> と共有の集計</td>
+              <td class="rec rec-hold"><strong>保留</strong></td>
+              <td>A/B は中止でなく延期。消すなら ADR 0013 の追記が要る</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row">
+                <code>mode: "entry-index-control"</code>（<code
+                  >entryIndex: false</code
+                >）
+              </th>
+              <td>wordpress.ts L222–237</td>
+              <td>
+                examples 0（3 file とも <code>entryIndex: true</code>）。test 1
+              </td>
+              <td>
+                ADR 0029「索引を渡さない比較 Trial は別 arm
+                として記録」。2026-10-16 の v5 比較で使用
+              </td>
+              <td>16 行</td>
+              <td class="rec rec-keep">残す</td>
+              <td>比較 arm の定義そのもの</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>mode: "comparison"</code></th>
+              <td>wordpress.ts L238–244</td>
+              <td>
+                examples では明示せず preprocess が推定（short-objective 系
+                prompt）
+              </td>
+              <td>ADR 0029 比較 arm</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>—</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>lab.scenarioId</code></th>
+              <td>wordpress.ts L188, 307–315, 625–656</td>
+              <td>
+                examples 2（値はどちらも
+                <code>translatepress-translation-data-v1</code>）。policy
+                0。test 1
+              </td>
+              <td>
+                ADR 0026（汎用 scenario 優先）。PARKING 2026-10-13: precondition
+                文から scenario を選ぶ仕組みの置き換えは条件待ち
+              </td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>
+                15 scenario のうち設定から選べる唯一の経路。<strong
+                  >grep の範囲では precondition 文から scenario を自動選択する
+                  code は現行 main に無く、scenario は
+                  <code>lab.scenarioId</code> でだけ決まる。</strong
+                >
+                policy/campaign.json は未設定なので本番は常に既定 scenario
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                <code>lab.translatePress.administratorSecondaryLocale</code>
+              </th>
+              <td>wordpress.ts L183–187</td>
+              <td>examples 14（すべて TranslatePress 開発セット）。policy 0</td>
+              <td>
+                AGENTS: prompt と scenario に対象固有名を入れない（設定 schema
+                は対象外だが同じ匂い）
+              </td>
+              <td>5 行 + Lab 初期化の分岐</td>
+              <td class="rec rec-hold">保留</td>
+              <td>
+                開発セットが TranslatePress である間は必要。汎用 campaign schema
+                に plugin 名があるのは ADR 0011 の合図
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row"><code>lab.customerRole</code></th>
+              <td>wordpress.ts L181</td>
+              <td>
+                必須 boolean だが examples 23 file と policy のすべてが
+                <code>false</code>。<code>true</code> は src / tests / examples
+                に 0
+              </td>
+              <td>
+                Programme Boundary は Customer を攻撃者位置に含む。WooCommerce
+                常備は PARKING 2026-10-13
+              </td>
+              <td>1 行 + Lab 初期化の分岐</td>
+              <td class="rec rec-hold">保留</td>
+              <td>
+                <code>true</code> が一度も試されていない option。消すなら
+                Boundary 文の Customer と整合を取る
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row"><code>lab.initialApprovedComment</code></th>
+              <td>wordpress.ts L180, 299–306, 654</td>
+              <td>
+                examples
+                2（<code>*-comment-fixture.json</code>、2026-10-11）。policy
+                0。test 2
+              </td>
+              <td>PARKING「旧 arm の examples」と同じ組</td>
+              <td>10 行</td>
+              <td class="rec rec-hold">保留</td>
+              <td>
+                <code>approved-comment-v1</code> scenario
+                と重複する機能。fixture examples を消すとき一緒に
+              </td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>lab.databaseAccess: "none"</code></th>
+              <td>wordpress.ts L182</td>
+              <td>
+                設定された 4 箇所はすべて既定値 <code>read-only</code>。<code
+                  >none</code
+                >
+                は examples / policy に 0
+              </td>
+              <td>ADR 0029 2026-10-18 追記（探索 Lab は任意）</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>既定値を持つ enum。<code>none</code> は設定で到達できる</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>discovery.lab: "none"</code></th>
+              <td>wordpress.ts L153–155, 898, 1272</td>
+              <td>
+                policy/campaign.json は <code>attached</code>。<code>none</code>
+                は examples 0。<code>pipeline.ts</code> L459 が内部で使う
+              </td>
+              <td>ADR 0029 2026-10-18 所有者決定「探索用 Lab は任意」</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>当日の所有者決定</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>coverage.maxUnvisitedRatio</code></th>
+              <td>wordpress.ts L159–163</td>
+              <td>policy/campaign.json が設定。test 1</td>
+              <td>ADR 0029 2026-10-17 改訂（v6 depth）</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>—</td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">host <code>scopePolicyPath</code></th>
+              <td><code>src/cli/wordpress-host.ts</code> L91, 491</td>
+              <td>
+                examples 0、policy 0、tests 0。使われれば
+                <code>loadWordpressScopePolicy</code> に path を渡す
+              </td>
+              <td>規則なし</td>
+              <td>3 行</td>
+              <td class="rec rec-hold">保留</td>
+              <td>
+                scope 方針 file
+                を差し替える口。一度も使われていないが、Patchstack
+                追加（PARKING）のときに要る可能性
+              </td>
+            </tr>
+            <tr class="keep">
+              <th scope="row">
+                host <code>wordfenceHistory</code> / <code>legacyHistory</code>
+              </th>
+              <td>wordpress-host.ts L93–97</td>
+              <td>
+                <code>host.example.json</code> が
+                <code>wordfenceHistory</code> を設定。<code>legacyHistory</code>
+                は examples 0 だが本番 host 設定が持ち、<code
+                  >continuous run</code
+                >
+                が必須にする
+              </td>
+              <td>ADR 0032 2026-10-14 決定 3</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>—</td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                selection <code>surfaceTagWeights</code> /
+                <code>highThreatTags</code> /
+                <code>scoreWeights.{surface,highThreat,history}</code> /
+                <code>runBudget</code>
+              </th>
+              <td>
+                <code>src/profiles/wordpress/selection/contracts.ts</code>
+                L36–52 と
+                <code>WordPressTargetSelection.highThreatSurface</code> /
+                <code>runBudget</code> / <code>scoreBreakdown.*</code>
+              </td>
+              <td>
+                code 注記が「Legacy（ADR 0032 Q5 /
+                Q6）、現行方針では使わない」。policy/*.json 0。examples 5
+                file（旧手動方針）。tests 2〜3
+              </td>
+              <td>
+                ADR 0032 Q5 / Q6。台帳 <code>target-selected</code> が
+                <code>scoreBreakdown</code> を持つなら reader は残る
+              </td>
+              <td>schema 約 25 行 + 選定の score 計算の分岐</td>
+              <td class="rec rec-hold">保留</td>
+              <td>
+                旧方針 file と旧 event を読むために残っている。旧 arm examples
+                を消す PR で一緒に判断
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                selection <code>historySignals</code> /
+                <code>historySource</code>
+              </th>
+              <td>contracts.ts L56–66, 69–82</td>
+              <td>examples 0、policy 0、tests 1</td>
+              <td>ADR 0030「過去の手動指名は読めるまま」</td>
+              <td>約 25 行</td>
+              <td class="rec rec-hold">保留</td>
+              <td>
+                ADR 0030 の文言が保持を求める。手動方針 file が Git に 1
+                つも無いので実害は無い
+              </td>
+            </tr>
+            <tr class="keep">
+              <th scope="row">
+                selection <code>pinnedVersions</code> /
+                <code>candidateSlugs</code>（手動方針）
+              </th>
+              <td>contracts.ts L54–55, 69–73</td>
+              <td>examples 5（開発セット）</td>
+              <td>再発見ベンチマーク（所有者実績 case）が使う</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <h2 id="軸-3-prompt-版-探索-18-trust-boundary-1-verifier-7">
+        軸 3: prompt 版（探索 18 + trust-boundary 1 + Verifier 7）
+      </h2>
+      <p>
+        AGENTS.md の規則により、<strong>旧 prompt は削除候補にしない</strong
+        >。ただし PARKING 2026-10-14 は「archive prompt 10 版の削除」を Step 1
+        合格後と決めているので、2
+        つの文書が食い違っている。どちらを採るかは所有者。深化報告 候補 3
+        は、<code>.md</code> 本文を消しても台帳の <code>promptVariant</code> と
+        digest を照合できるよう「archived 行を読み取り専用の registry
+        行として残す」案を示している。
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>prompt</th>
+              <th>行</th>
+              <th>examples / tests / docs</th>
+              <th>状態</th>
+              <th>規則</th>
+              <th>推奨</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="keep">
+              <th scope="row"><code>wp2shell-bounty-v5</code></th>
+              <td>34</td>
+              <td>4 / 3 / 9</td>
+              <td>既定（schema default、ADR 0032 2026-10-16）</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>wp2shell-bounty-v6</code></th>
+              <td>42</td>
+              <td>1 / 2 / 1</td>
+              <td>
+                測定 arm（<code>examples/campaign-v6-measure.json</code>、ADR
+                0029 2026-10-17）
+              </td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>wp2shell-bounty-v2</code></th>
+              <td>17</td>
+              <td>3 / 4 / 15</td>
+              <td>比較 arm</td>
+              <td>ADR 0029</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>short-objective-managed-v4</code></th>
+              <td>11</td>
+              <td>4 / 3 / 14</td>
+              <td>比較 arm</td>
+              <td>ADR 0029</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>wp2shell-whitebox-v1.7</code></th>
+              <td>55</td>
+              <td>1 / 3 / 7</td>
+              <td>所有者の実績 prompt。v5 比較の arm</td>
+              <td>2026-10-16 比較</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>screening-v1</code></th>
+              <td>13</td>
+              <td>0 / 3 / 9</td>
+              <td>構成照合用。<code>runnablePrompt</code> から除外済み</td>
+              <td>ADR 0029</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row">
+                <code>wp2shell-bounty-v3</code> / <code>-v4</code>
+              </th>
+              <td>11 / 11</td>
+              <td>0 / 5・3 / 13・8</td>
+              <td>旧既定（v3 は ADR 0029 当初、v4 は所有者の 1 回改訂）</td>
+              <td>AGENTS（digest 照合）</td>
+              <td class="rec rec-keep">残す（規則）</td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                <code>wp2shell-derived-v1</code> / <code>-v2</code>
+              </th>
+              <td>13 / 9</td>
+              <td>0 / 1 / 1・0</td>
+              <td>archive</td>
+              <td>AGENTS は保持、PARKING は Step 1 合格後に削除</td>
+              <td class="rec rec-hold">
+                <strong>保留</strong>（規則の食い違い）
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                <code>short-objective-v1</code> / <code>-v2</code>
+              </th>
+              <td>7 / 7</td>
+              <td>2・3 / 3 / 1・4</td>
+              <td>archive。参照は旧 arm examples のみ</td>
+              <td>同上</td>
+              <td class="rec rec-hold"><strong>保留</strong></td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                <code>short-objective-managed-v1</code> / <code>-v2</code> /
+                <code>-v3</code> / <code>-v5</code>
+              </th>
+              <td>11 / 11 / 11 / 7</td>
+              <td>2・0・1・0 / 1〜2 / 1〜2</td>
+              <td>archive</td>
+              <td>同上</td>
+              <td class="rec rec-hold"><strong>保留</strong></td>
+            </tr>
+            <tr class="hold">
+              <th scope="row"><code>wp2shell-single-http-v2</code></th>
+              <td>9</td>
+              <td>2 / 3 / 1</td>
+              <td>archive</td>
+              <td>同上</td>
+              <td class="rec rec-hold"><strong>保留</strong></td>
+            </tr>
+            <tr class="hold">
+              <th scope="row"><code>wp2shell-bounty-v1</code></th>
+              <td>15</td>
+              <td>2 / 1 / 4</td>
+              <td>archive</td>
+              <td>同上</td>
+              <td class="rec rec-hold"><strong>保留</strong></td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>trust-boundary-v1</code></th>
+              <td>9</td>
+              <td>0 / 1 / 14</td>
+              <td>不変条件 1 の人間が書いた宣言</td>
+              <td>不変条件 1</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>verifier-v7</code> / <code>-v6</code></th>
+              <td>15 / 15</td>
+              <td>0 / 5・1 / 4</td>
+              <td>
+                v7 が現行、v6 は
+                <code>loadWordPressVerifierPrompt</code> が受ける唯一の旧版
+              </td>
+              <td>#207 / #208</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+            <tr class="hold">
+              <th scope="row"><code>verifier-v1</code> 〜 <code>-v5</code></th>
+              <td>7+9+9+11+13 = 49</td>
+              <td>0 / 0 / 3・2・0・0・0</td>
+              <td>
+                <strong>code から読めない</strong>（<code
+                  >loadWordPressVerifierPrompt</code
+                >
+                は v6 / v7 だけを受ける）
+              </td>
+              <td>
+                AGENTS の規則は探索 prompt の文言だが、Verifier 指示の digest
+                も台帳に記録される（#208）
+              </td>
+              <td class="rec rec-hold"><strong>保留</strong></td>
+              <td>
+                本文の照合は Git 履歴でも可能。消すなら digest pin を docs
+                に残す
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        archive 10 版の本文は計 100 行。削除しても agent
+        に渡る文章は変わらないので owner-approved
+        は不要だが、<code>WORDPRESS_DISCOVERY_PROMPT_IDS</code>・switch・schema
+        enum・preprocess の 6 箇所（深化報告 候補 3）を同時に直す必要がある。
+      </p>
+      <h2 id="軸-4-台帳-event-種別-31-と読取">
+        軸 4: 台帳 event 種別（31）と読取
+      </h2>
+      <p>
+        reader は全種別を残す（AGENTS.md）。ここでは
+        <strong>writer</strong> の有無と、v6 測定台帳での出現を見る。
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>event 種別</th>
+              <th>src の writer</th>
+              <th>test file 数</th>
+              <th>v6 測定台帳での件数（98 中）</th>
+              <th>規則</th>
+              <th>推奨</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="keep">
+              <th scope="row"><code>candidate-rejected</code></th>
+              <td>
+                <strong>0</strong>（#111 / ADR 0018 で writer 削除。<code
+                  >ledger/index.ts</code
+                >
+                L280, 623, 1339 が読む）
+              </td>
+              <td>2</td>
+              <td>0</td>
+              <td>ADR 0018、AGENTS（旧 event を読み続ける）</td>
+              <td class="rec rec-keep">残す（reader のみ）</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>child-report-recovered</code></th>
+              <td>
+                src 0。<code>scripts/recover-child-reports.mjs</code> L205–206
+                だけが書く
+              </td>
+              <td>0</td>
+              <td>0</td>
+              <td>OPERATIONS L247 が手順を記す</td>
+              <td class="rec rec-keep">残す（script 経路）</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>review-item-opened</code></th>
+              <td>
+                <code>cli/index.ts</code>（<code>review open</code> のみ）
+              </td>
+              <td>2</td>
+              <td>0</td>
+              <td>PARKING（<code>review open</code> 削除）</td>
+              <td>
+                <code>review open</code> と一緒に writer を消し、reader は残す
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row"><code>evaluation-case-blocked</code></th>
+              <td>
+                <code>cli/index.ts</code>（<code>eval case-blocked</code> のみ）
+              </td>
+              <td>2</td>
+              <td>0</td>
+              <td>docs/evaluation/README.md</td>
+              <td class="rec rec-hold">保留（軸 1 と同じ）</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>verification-lab-failed</code></th>
+              <td><code>verification/index.ts</code></td>
+              <td>1</td>
+              <td>0</td>
+              <td>不変条件 4（失敗は incomplete）</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>finding-precondition-classified</code></th>
+              <td><code>codex-verifier.ts</code></td>
+              <td>1</td>
+              <td>1</td>
+              <td>ADR 0022</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>discovery-report-recovered</code></th>
+              <td>
+                <code>discovery/reaccept-candidates.ts</code>（CLI
+                表に無い別入口 <code>reaccept-cli.ts</code>）
+              </td>
+              <td>1</td>
+              <td>0</td>
+              <td>ADR 0018</td>
+              <td class="rec rec-keep">残す（運用の回復手順）</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row">
+                <code>human-effort-recorded</code> /
+                <code>human-reproduction-recorded</code> /
+                <code>review-decided</code> / <code>scope-assessed</code> /
+                <code>draft-saved</code> /
+                <code>external-action-authorized</code> /
+                <code>submission-recorded</code> /
+                <code>submission-outcome</code>
+              </th>
+              <td><code>review/index.ts</code></td>
+              <td>1〜5</td>
+              <td>0（測定台帳には review 操作が無い）</td>
+              <td>不変条件 6・7</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row">
+                <code>target-selected</code> /
+                <code>selection-batch-bound</code> /
+                <code>snapshot-frozen</code> / <code>lab-provisioned</code> /
+                <code>discovery-run-started</code> / <code>-finished</code> /
+                <code>discovery-concluded</code> /
+                <code>campaign-stopped</code> / <code>target-skipped</code> /
+                <code>candidate-normalized</code> /
+                <code>candidate-held</code> / <code>finding-recorded</code> /
+                <code>finding-parked</code> / <code>lead-recorded</code> /
+                <code>verifier-run-finished</code> /
+                <code>verification-finished</code>
+              </th>
+              <td>複数</td>
+              <td>2〜17</td>
+              <td>
+                13 種別が出現（<code>lab-provisioned</code> 19、<code
+                  >discovery-run-*</code
+                >
+                各 13、<code>target-*</code> 各 11、<code>snapshot-frozen</code>
+                11、<code>candidate-normalized</code> 5、<code
+                  >verifier-run-finished</code
+                >
+                4、<code>verification-finished</code> 4、<code
+                  >finding-recorded</code
+                >
+                3、<code>lead-recorded</code> 2、<code
+                  >finding-precondition-classified</code
+                >
+                1、<code>discovery-concluded</code> 1）
+              </td>
+              <td>主経路</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        旧 <code>stage</code> /
+        <code>continuationOf</code
+        >（L74–76）、<code>discovery-run-finished.stage</code>（L246）は reader
+        として残る。台帳の query / 集計（<code>read</code> /
+        <code>usage</code> / <code>stops</code> / <code>funnel</code>）はすべて
+        CLI から到達する。
+      </p>
+      <h2 id="軸-5-検証-scenario-plugin-固有-lab-adapter-判定器">
+        軸 5: 検証 scenario・plugin 固有 Lab adapter・判定器
+      </h2>
+      <h3
+        id="scenario-15-件-src-profiles-wordpress-lab-scenarios-ts-l38-224-と-adapter-10-file-428-行"
+      >
+        scenario 15 件（<code>src/profiles/wordpress/lab/scenarios.ts</code>
+        L38–224）と adapter 10 file 428 行
+      </h3>
+      <p>
+        scenario は <code>lab.scenarioId</code> でだけ選ばれる（軸
+        2）。policy/campaign.json は未設定なので、本番で到達できる scenario
+        は既定だけで、以下 14 件は開発セットの設定か test からしか到達できない。
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>scenario</th>
+              <th>adapter（行）</th>
+              <th>examples / docs(evaluation・OPERATIONS) / tests</th>
+              <th>規則</th>
+              <th>削除規模</th>
+              <th>推奨</th>
+              <th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="keep">
+              <th scope="row">
+                <code>translatepress-translation-data-v1</code>
+              </th>
+              <td>なし（初期化の分岐）</td>
+              <td>2 / 3 / 2</td>
+              <td>開発セット（TranslatePress）</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>唯一設定から使われる scenario</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>approved-comment-v1</code></th>
+              <td>なし</td>
+              <td>0 / 0 / 3</td>
+              <td>ADR 0026（plugin 非依存）</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>汎用。Stored XSS 判定器の消費者</td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                <code>private-post-v1</code> / <code>private-page-v1</code>
+              </th>
+              <td>なし</td>
+              <td>0 / 0 / 4・2</td>
+              <td>
+                sensitive-object 判定器の前提。ADR 0032 2026-10-17
+                で同分類は出口で parked
+              </td>
+              <td>定義 2 行組 約 30 行</td>
+              <td class="rec rec-hold">保留</td>
+              <td>
+                判定器の集合は Step 1 凍結。消すなら sensitiveObject
+                判定器と一緒に Step 2
+              </td>
+            </tr>
+            <tr class="del">
+              <th scope="row"><code>approved-comment-searchable-v1</code></th>
+              <td><code>relevanssi-search-index.ts</code>（56）</td>
+              <td>0 / 0 / 1</td>
+              <td>
+                PARKING「plugin 固有 Lab adapter 8 本の削除」。13 case 拡張は
+                2026-10-16 中止
+              </td>
+              <td>56 + 定義 12 + 初期化分岐</td>
+              <td class="rec rec-del">
+                <strong>削除候補</strong>（PARKING 条件）
+              </td>
+              <td>Relevanssi の再発見 case は所有者実績でない</td>
+            </tr>
+            <tr class="del">
+              <th scope="row"><code>public-booking-page-v1</code></th>
+              <td><code>simply-schedule-booking.ts</code>（44）</td>
+              <td>0 / 0 / 1（test 65 行）</td>
+              <td>同上</td>
+              <td>44 + 65 test</td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+              <td>同上</td>
+            </tr>
+            <tr class="del">
+              <th scope="row">
+                <code>public-builder-page-v1</code> /
+                <code>public-file-attachment-form-v1</code>
+              </th>
+              <td>
+                <code>brizy-builder-page.ts</code>（46）/
+                <code>brizy-file-attachment-form.ts</code>（75）
+              </td>
+              <td>0 / 0 / 1・1（test 69 + 66）</td>
+              <td>
+                同上。v6 測定の <code>brizy</code> 台帳は既定 scenario で走った
+              </td>
+              <td>121 + 135 test</td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+              <td>Brizy は所有者実績 case でない</td>
+            </tr>
+            <tr class="del">
+              <th scope="row"><code>public-file-download-v1</code></th>
+              <td><code>download-monitor-adapter.ts</code>（35）</td>
+              <td>0 / 0 / 1</td>
+              <td>同上</td>
+              <td>35</td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+              <td>—</td>
+            </tr>
+            <tr class="del">
+              <th scope="row">
+                <code>public-and-subscriber-downloads-v1</code>
+              </th>
+              <td><code>download-manager-adapter.ts</code>（29）</td>
+              <td>0 / 0 / 1</td>
+              <td>同上</td>
+              <td>29</td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+              <td>—</td>
+            </tr>
+            <tr class="del">
+              <th scope="row"><code>public-member-post-v1</code></th>
+              <td><code>wp-members-adapter.ts</code>（37）</td>
+              <td>0 / 0 / 2</td>
+              <td>同上</td>
+              <td>37</td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+              <td>—</td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                <code>public-registration-and-account-v1</code> /
+                <code>public-free-membership-v1</code> / <code>-v2</code>
+              </th>
+              <td>
+                <code>user-registration-adapter.ts</code>（26）/
+                <code>user-registration-membership-adapter.ts</code>（58）
+              </td>
+              <td>OPERATIONS 1 / 1・1・0 / 1</td>
+              <td>
+                OPERATIONS に残る記述が 1 件。所有者実績 case
+                に含まれるかは所有者の一覧で確認が要る
+              </td>
+              <td>84</td>
+              <td class="rec rec-hold">保留</td>
+              <td>
+                所有者実績の再発見 case が User Registration を含むなら残す
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row"><code>public-plugin-comment-v1</code></th>
+              <td><code>wpdiscuz-adapter.ts</code>（22）</td>
+              <td>OPERATIONS 1 / 1 / 2</td>
+              <td>同上</td>
+              <td>22</td>
+              <td class="rec rec-hold">保留</td>
+              <td>同上</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        adapter の削除は深化報告 候補 5 のとおり
+        <code>scenarios.ts</code> の定義行・digest pin・<code
+          >wordpress-initialization.ts</code
+        >
+        の分岐・<code>cli/wordpress.ts</code> の再現注記の 3〜4 file
+        にまたがる。
+      </p>
+      <h3 id="判定器-9-件-judges-ts-l626-1413-合計-1-413-行">
+        判定器 9 件（<code>judges.ts</code> L626–1413、合計 1,413 行）
+      </h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>判定器</th>
+              <th>path</th>
+              <th>到達性</th>
+              <th>規則</th>
+              <th>推奨</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="keep">
+              <th scope="row"><code>sensitiveObjectJudge</code></th>
+              <td>L882–981（100 行）</td>
+              <td>
+                impact <code>sensitive-object-access</code> は 2026-10-17 以降
+                <code>finding-parked</code> → 検証 queue に入らず
+                <strong>主経路から到達不能</strong>
+              </td>
+              <td>DEVELOPMENT §2「判定器の集合」凍結。ADR 0024</td>
+              <td class="rec rec-keep">
+                残す（凍結）。半年後の見直し（ADR 0032）で判断
+              </td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>nonAdministratorJudge</code></th>
+              <td>L1031–1055（25 行）</td>
+              <td>
+                <code>privesc-to-contributor+</code> /
+                <code>auth-bypass-non-admin</code> は parked → 到達不能
+              </td>
+              <td>同上</td>
+              <td class="rec rec-keep">残す（凍結）</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>optionJudge</code></th>
+              <td>L1201–1236（36 行）</td>
+              <td><code>options-update</code> は parked → 到達不能</td>
+              <td>同上</td>
+              <td class="rec rec-keep">残す（凍結）</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row">
+                <code>administratorJudge</code> / <code>sqlCanaryJudge</code> /
+                <code>executionCanaryJudge</code> / <code>fileReadJudge</code> /
+                <code>fileDeleteJudge</code> / <code>storedScriptJudge</code>
+              </th>
+              <td>L1011–1237</td>
+              <td>主経路</td>
+              <td>不変条件 3</td>
+              <td class="rec rec-keep">残す</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <h3 id="週次-smoke-の-replay-verifier-126">
+        週次 smoke の replay Verifier（#126）
+      </h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>部品</th>
+              <th>path</th>
+              <th>行</th>
+              <th>参照</th>
+              <th>規則</th>
+              <th>推奨</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="del">
+              <th scope="row"><code>SmokeReplayVerifier</code></th>
+              <td>
+                <code
+                  >profiles/wordpress/verification/smoke-replay-verifier.ts</code
+                >
+              </td>
+              <td>207</td>
+              <td><code>cli/wordpress.ts</code> が import。test 46</td>
+              <td>
+                PARKING 2026-10-14 が削除を決定。OPERATIONS L148「週次 smoke は
+                <code>review reverify</code> 1 回で代える」
+              </td>
+              <td class="rec rec-del">
+                <strong>削除候補</strong>（PARKING 条件）
+              </td>
+            </tr>
+            <tr class="del">
+              <th scope="row">smoke replay recipe</th>
+              <td><code>smoke-replay-recipe.ts</code></td>
+              <td>455</td>
+              <td><code>scripts/smoke-real-lab.mjs</code> と test 179</td>
+              <td>同上</td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+            </tr>
+            <tr class="del">
+              <th scope="row">HTTP 再生 CLI</th>
+              <td><code>lab/recorder/replay-cli.ts</code></td>
+              <td>387</td>
+              <td>
+                test 213。<code>lab/recorder/index.ts</code>（142）と
+                <code>cli.ts</code>（12）は Lab に mount する捕捉器（ADR
+                0015）で別物
+              </td>
+              <td>同上</td>
+              <td class="rec rec-del">
+                <strong>削除候補</strong>（recorder 本体は残す）
+              </td>
+            </tr>
+            <tr class="del">
+              <th scope="row"><code>scripts/smoke-real-lab.mjs</code></th>
+              <td>—</td>
+              <td>564</td>
+              <td>OPERATIONS L32–46 が手順を残す（L148 と矛盾）</td>
+              <td>同上</td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+            </tr>
+            <tr class="del">
+              <th scope="row"><code>reverify.smokeReplayDigest</code></th>
+              <td>
+                <code>cli/index.ts</code>
+                L262、<code>cli/wordpress.ts</code>、<code>judges.ts</code>
+                の参照
+              </td>
+              <td>数十行</td>
+              <td>—</td>
+              <td>同上</td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+            </tr>
+            <tr class="del">
+              <th scope="row">
+                <code
+                  >examples/translatepress-3.3.1/campaign-real-lab-smoke.json</code
+                >
+              </th>
+              <td>—</td>
+              <td>29</td>
+              <td>smoke 専用</td>
+              <td>同上</td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        合計: src 約 1,050 行 + script 564 行 + test 438 行 + OPERATIONS の 1
+        節。
+      </p>
+      <h2 id="軸-6-他-file-から-import-されない-export">
+        軸 6: 他 file から import されない export
+      </h2>
+      <p>
+        <code>src/**/*.ts</code> 124 file の export 632 件を走査し、自 file と
+        <code>tests/</code> 以外に importer が無いものは
+        <strong>185 件</strong>。内訳はおおよそ型・interface 115 件、実行時の値
+        70 件。実行時の値のほとんどは自 file 内で使われており、<code
+          >export</code
+        >
+        修飾子が余っているだけで削除行は 0〜1 行（例:
+        <code>cli/continuous.ts</code> の定数 19 件、<code>cli/index.ts</code>
+        の <code>format*</code> 8
+        件、<code>allocateArm</code>、<code>encodeCanonicalJson</code>、<code>wordpressVictimActionSchema</code>）。本体ごと未使用なのは次の
+        4 関数。
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>export</th>
+              <th>path</th>
+              <th>importer</th>
+              <th>行</th>
+              <th>規則</th>
+              <th>推奨</th>
+              <th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="del">
+              <th scope="row"><code>renderWordPressLeadNeighbourhood</code></th>
+              <td>
+                <code>profiles/wordpress/discovery/lead.ts</code> L139–180
+              </td>
+              <td>tests 1 のみ。src 0（2026-10-09 #82 以来）</td>
+              <td>42</td>
+              <td>規則なし</td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+              <td>Lead の近傍描画。どの CLI 経路からも呼ばれない</td>
+            </tr>
+            <tr class="del">
+              <th scope="row"><code>describeWordPressEntryPlan</code></th>
+              <td>
+                <code>profiles/wordpress/discovery/entry-points.ts</code>
+                L470–480
+              </td>
+              <td>tests 1 のみ。src 0（2026-10-11 6375b18 以来）</td>
+              <td>11</td>
+              <td>規則なし</td>
+              <td class="rec rec-del"><strong>削除候補</strong></td>
+              <td>
+                assignment mode の説明文。軸 2 の
+                <code>assignment</code> と一緒に
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row"><code>planWordPressTasks</code></th>
+              <td>
+                <code>profiles/wordpress/discovery/task-plan.ts</code>
+                L29–70（file 70 行）
+              </td>
+              <td>tests 1（62 行）のみ。src 0</td>
+              <td>42（file 70）</td>
+              <td>#324（当日）。dispatch 構想の途中</td>
+              <td class="rec rec-hold">保留</td>
+              <td>配線前の新規 module。構想を採らないなら file ごと削除候補</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>describeWordPressUnresolved</code></th>
+              <td>
+                <code>profiles/wordpress/discovery/unresolved.ts</code> L149–153
+              </td>
+              <td>
+                tests 1 + <code>scripts/report-index-unresolved.mjs</code>（29
+                行、docs 0、当日 #335）
+              </td>
+              <td>5（file 153）</td>
+              <td>#335</td>
+              <td class="rec rec-keep">残す</td>
+              <td>
+                script 経路で使う。script 自体は docs に 0 参照なので手順を
+                OPERATIONS か measurement.md に 1 行足すとよい
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        <code>export</code> 修飾子だけの整理（約 60
+        箇所）は行数が減らないので、この表では候補にしない。
+      </p>
+      <h2 id="軸-7-実運用の台帳で出た-event-件数のみ">
+        軸 7: 実運用の台帳で出た event（件数のみ）
+      </h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>台帳</th>
+              <th>campaign</th>
+              <th>event</th>
+              <th>出現した種別</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">v6-measure <code>brizy</code></th>
+              <td>2</td>
+              <td>12</td>
+              <td>6 種別（選定〜探索終了のみ）</td>
+            </tr>
+            <tr>
+              <th scope="row">v6-measure <code>relevanssi</code></th>
+              <td>2</td>
+              <td>12</td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <th scope="row">v6-measure <code>tp326</code></th>
+              <td>8</td>
+              <td>74</td>
+              <td>13 種別（検証・候補正規化・precondition 分類を含む）</td>
+            </tr>
+            <tr>
+              <th scope="row">
+                本番（<code>~/.local/state/wordpress-bounty-harness</code>）
+              </th>
+              <td>—</td>
+              <td>—</td>
+              <td>
+                <strong>未読</strong>（依頼の許可範囲外。memory では 2026-10-16
+                以降 111 Trial 超）
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        3 台帳で一度も出なかった種別は 18。うち review 系 8
+        種別は測定台帳に出ないのが正常。<code>candidate-rejected</code>・<code>child-report-recovered</code>・<code>review-item-opened</code>・<code>evaluation-case-blocked</code>・<code>candidate-held</code>・<code>finding-parked</code>・<code>verification-lab-failed</code>・<code>campaign-stopped</code>・<code>selection-batch-bound</code>・<code
+          >discovery-report-recovered</code
+        >
+        は本番台帳で確認するまで未使用と断定しない。
+      </p>
+      <h2 id="軸外-scripts-examples-spike-policy">
+        軸外: scripts・examples・spike・policy
+      </h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>対象</th>
+              <th>行</th>
+              <th>参照</th>
+              <th>規則</th>
+              <th>推奨</th>
+              <th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="del">
+              <th scope="row">
+                <code>examples/translatepress-3.2.5/</code>（4 file）
+              </th>
+              <td>156</td>
+              <td>
+                <code>tests/cli/examples.test.ts</code> が
+                <code>campaign-luna-ab*.json</code>・<code
+                  >selection-luna-40.json</code
+                >
+                を pin。最終 commit 2026-10-10
+              </td>
+              <td>PARKING「旧 arm の examples」</td>
+              <td class="rec rec-del">
+                <strong>削除候補</strong>（PARKING 条件）
+              </td>
+              <td>
+                ablation / assignment / 90 分 wall の旧 A/B 設定。消すと
+                examples.test.ts の pin も消える
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                <code>examples/translatepress-3.2.6/</code>（13 file）
+              </th>
+              <td>413</td>
+              <td>
+                examples.test.ts が <code>*-comment-fixture.json</code>・<code
+                  >campaign-short-managed-v4.json</code
+                >
+                等を pin。最終 commit 2026-10-11
+              </td>
+              <td>
+                同上。ただし 3.2.6 は所有者実績の再発見 case（TranslatePress
+                3.2.6）
+              </td>
+              <td class="rec rec-hold">保留</td>
+              <td>
+                selection file と
+                <code>campaign-production-v1.json</code>
+                は再発見で使う可能性。旧 arm 分（managed-v1 /
+                v3、short-objective-v1 / v2、wp2shell-bounty-v1、single-http-v2
+                を指す 8 file）だけ削除候補
+              </td>
+            </tr>
+            <tr class="del">
+              <th scope="row">
+                <code>scripts/preflight-unlimited-elements-sources.mjs</code>
+              </th>
+              <td>286</td>
+              <td>docs 2、tests 0</td>
+              <td>
+                PARKING 2026-10-13「Unlimited Elements 等の残りは Step 2」
+              </td>
+              <td class="rec rec-del"><strong>削除候補（弱）</strong></td>
+              <td>
+                対象のベンチマークが止まっている。再開時は Git 履歴から戻せる
+              </td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                <code>scripts/prepare-pilot-selection.mjs</code>
+              </th>
+              <td>31</td>
+              <td>docs 4（PILOT-2026-10-10）</td>
+              <td>規則なし</td>
+              <td class="rec rec-hold">保留</td>
+              <td>pilot の記録文書が参照する</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>scripts/preflight-root-three.mjs</code></th>
+              <td>323</td>
+              <td><code>pnpm preflight:root-three</code>、docs 2</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>runtime check の前段</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row">
+                <code>scripts/report-index-unresolved.mjs</code>
+              </th>
+              <td>29</td>
+              <td>docs 0、tests 0（当日 #335）</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>新規。手順文書に未記載</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row"><code>spike/</code>（3 file、2026-10-08）</th>
+              <td>—</td>
+              <td>SPEC.md と 10-09 review が参照</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>設計根拠の記録</td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">
+                <code>policy/patchstack-scope-2026-10-08.md</code>
+              </th>
+              <td>—</td>
+              <td>docs 1、tests 1</td>
+              <td>PARKING「Patchstack を第 2 の提出先に」</td>
+              <td class="rec rec-hold">保留（parked）</td>
+              <td>再開条件が書かれている</td>
+            </tr>
+            <tr class="keep">
+              <th scope="row">
+                <code>policy/selection.30000.json</code> /
+                <code>.50000.json</code>
+              </th>
+              <td>—</td>
+              <td>OPERATIONS L144 が存在を必須にする</td>
+              <td>—</td>
+              <td class="rec rec-keep">残す</td>
+              <td>—</td>
+            </tr>
+            <tr class="hold">
+              <th scope="row"><code>containers/development-set/</code></th>
+              <td>—</td>
+              <td>
+                <code>examples/translatepress-3.2.5/README.md</code> が参照
+              </td>
+              <td>—</td>
+              <td class="rec rec-hold">保留</td>
+              <td>旧 arm examples と一緒に判断</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <h2 id="まとめ-削減行-リスクの順">まとめ（削減行 ÷ リスクの順）</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>順</th>
+              <th>候補</th>
+              <th>削減規模（src / tests）</th>
+              <th>規則上の障害</th>
+              <th>推奨</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="del">
+              <th scope="row">1</th>
+              <td>週次 smoke の replay Verifier（#126）一式</td>
+              <td>約 1,050 + script 564 / 438</td>
+              <td>なし。PARKING が決定済み（Step 1 合格後）</td>
+              <td class="rec rec-del">削除候補</td>
+            </tr>
+            <tr class="del">
+              <th scope="row">2</th>
+              <td>
+                <code>eval score / keys / rubric</code> + Answer Key + 盲検
+                rubric
+              </td>
+              <td>約 400 / 約 280</td>
+              <td>なし。PARKING が決定済み。OPERATIONS §8 の 1 節を消す</td>
+              <td class="rec rec-del">削除候補</td>
+            </tr>
+            <tr class="del">
+              <th scope="row">3</th>
+              <td>
+                plugin 固有 Lab adapter 6 本（Brizy ×2、Relevanssi、Simply
+                Schedule、Download Monitor、Download Manager）+ scenario 6 行 +
+                初期化分岐
+              </td>
+              <td>約 285 + 定義約 70 / 200</td>
+              <td>
+                なし。PARKING が決定済み。残り 4 本（User Registration
+                ×2、wpDiscuz、WP-Members）は所有者実績 case との照合が先
+              </td>
+              <td class="rec rec-del">削除候補</td>
+            </tr>
+            <tr class="del">
+              <th scope="row">4</th>
+              <td>旧 arm の examples（3.2.5 全部 + 3.2.6 の旧 arm 8 file）</td>
+              <td>約 156 + 約 250 / examples.test.ts の pin</td>
+              <td>なし。PARKING が決定済み</td>
+              <td class="rec rec-del">削除候補</td>
+            </tr>
+            <tr class="del">
+              <th scope="row">5</th>
+              <td>
+                <code>eval compare</code> + ablation mode +
+                <code>allocateArm</code> + <code>interval.ts</code>
+              </td>
+              <td>約 180 / 343</td>
+              <td>ADR 0013 は accepted のまま。A/B は延期（PARKING）</td>
+              <td class="rec rec-del">削除候補（弱）／保留</td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">6</th>
+              <td>
+                <code>assignment</code> mode +
+                <code>planWordPressEntryAssignments</code> +
+                <code>describeWordPressEntryPlan</code>
+              </td>
+              <td>約 80 / 約 30</td>
+              <td>PARKING は削除、#324（当日）は拡張</td>
+              <td class="rec rec-hold">保留（矛盾の解消が先）</td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">7</th>
+              <td>archive prompt 10 版</td>
+              <td>100 + registry 6 箇所</td>
+              <td>AGENTS は保持、PARKING は削除</td>
+              <td class="rec rec-hold">保留（規則の食い違い）</td>
+            </tr>
+            <tr class="del">
+              <th scope="row">8</th>
+              <td><code>renderWordPressLeadNeighbourhood</code></td>
+              <td>42 / 約 30</td>
+              <td>なし</td>
+              <td class="rec rec-del">削除候補</td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">9</th>
+              <td><code>verifier-v1</code>〜<code>v5</code></td>
+              <td>49</td>
+              <td>AGENTS 規則の類推</td>
+              <td class="rec rec-hold">保留</td>
+            </tr>
+            <tr class="del">
+              <th scope="row">10</th>
+              <td>
+                <code>review open</code> +
+                <code>review-item-opened</code> writer
+              </td>
+              <td>19</td>
+              <td>なし。PARKING が決定済み</td>
+              <td class="rec rec-del">削除候補</td>
+            </tr>
+            <tr class="hold">
+              <th scope="row">11</th>
+              <td><code>eval prospective</code> + <code>advisory.ts</code></td>
+              <td>約 80 / 265</td>
+              <td>PARKING に無い</td>
+              <td class="rec rec-hold">保留</td>
+            </tr>
+            <tr class="del">
+              <th scope="row">12</th>
+              <td>
+                <code>scripts/preflight-unlimited-elements-sources.mjs</code>
+              </td>
+              <td>286</td>
+              <td>PARKING（Step 2）</td>
+              <td class="rec rec-del">削除候補（弱）</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        PARKING が既に決めている 1〜4・10 を合わせると src 約 2,100 行 + script
+        850 行、tests 約 1,200 行が Step 1 合格後の整理 PR 1 本（または 4
+        本）で消える。これは深化報告 候補 9 の見積り（約 −1,500 / −900）を
+        adapter と examples の分だけ上回る。
+      </p>
+      <h2 id="消してはいけないもの">消してはいけないもの</h2>
+      <ul>
+        <li>
+          不変条件 1〜8 を実装する code:
+          <code>discovery/provider-credential-egress-broker.ts</code
+          >・<code>provider-credential-proxy*.ts</code>（不変条件 2）、<code
+            >profiles/wordpress/verification/judges.ts</code
+          >
+          の 9 判定器と canary 配置（不変条件 3。到達不能な 3 判定器も Step 1
+          凍結）、<code>verification/index.ts</code> の incomplete
+          判定（4）、Snapshot digest 照合（5）、<code>review/index.ts</code>
+          の決定・承認・提出記録（6・7）、<code>ledger/index.ts</code>
+          の追記専用と digest 参照（8）。
+        </li>
+        <li>
+          判定器の集合（DEVELOPMENT §2
+          凍結）。<code>sensitiveObjectJudge</code>・<code>nonAdministratorJudge</code>・<code
+            >optionJudge</code
+          >
+          は parked 分類のため到達不能だが、半年後の見直しで戻る可能性がある。
+        </li>
+        <li>
+          保持が決まっている prompt:
+          <code>wp2shell-bounty-v5</code
+          >（既定）、<code>-v6</code>（測定）、<code>-v2</code>・<code>short-objective-managed-v4</code>（比較
+          arm）、<code>screening-v1</code>（構成照合）、<code>wp2shell-whitebox-v1.7</code>（所有者実績）、<code>-v3</code>・<code>-v4</code>（旧既定、digest
+          照合）、<code>trust-boundary-v1</code>、<code>verifier-v6</code> /
+          <code>-v7</code>。
+        </li>
+        <li>
+          台帳の全 event 種別の
+          reader（<code>candidate-rejected</code>、<code>child-report-recovered</code>、旧
+          <code>stage</code> / <code>continuationOf</code> を含む）。writer
+          を消しても schema と読取は残す。既存 event は消さない。
+        </li>
+        <li>
+          owner-approved の対象 path:
+          <code>docs/adr/</code>、<code>docs/SPEC.md</code>、trust
+          境界宣言、Programme Boundary、<code>policy/</code>、判定器、agent
+          に渡る文章（prompt 本文、skill 本文、Harness
+          生成節の雛形）。削除であっても差分の確認と委任を明記した PR comment
+          が要る（ADR 0032 2026-10-18）。
+        </li>
+        <li>
+          本番 runner が使うもの:
+          <code>continuous *</code>、<code>select</code>、<code
+            >campaign run</code
+          >、<code>verify next</code>、<code
+            >review export / decide / parked / reverify</code
+          >、<code>history status</code>、<code>runtime check</code>、<code
+            >lab cleanup</code
+          >、<code>policy/selection*.json</code>、host の
+          <code>legacyHistory</code
+          >、<code>scripts/export-legacy-slugs.mjs</code>。
+        </li>
+        <li>
+          Lab の HTTP 捕捉器
+          <code>lab/recorder/index.ts</code>・<code>cli.ts</code>（ADR
+          0015）。replay（<code>replay-cli.ts</code>）だけが #126 の削除対象。
+        </li>
+      </ul>
+      <h2 id="測った数字">測った数字</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>対象</th>
+              <th>数</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">CLI subcommand</th>
+              <td>
+                37（USAGE 38 行）。skill と運用文書の両方で参照 0: 3（<code
+                  >review open</code
+                >、<code>eval case-blocked</code>、<code>ledger coverage</code
+                >）。削除候補: 4（<code>review open</code>、<code
+                  >eval score / keys / rubric</code
+                >）、弱 1（<code>eval compare</code>）
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">
+                設定 option（campaign 23 key、host 12 key、selection 約 25 key）
+              </th>
+              <td>
+                examples と policy のどこにも非既定値が無い: campaign
+                7（<code>assignment</code>、<code>ablation</code>、<code
+                  >entry-index-control</code
+                >
+                明示、<code>customerRole: true</code>、<code
+                  >databaseAccess: none</code
+                >、<code>discovery.lab: none</code>、<code
+                  >initialApprovedComment</code
+                >
+                は fixture 2 件のみ）、host
+                1（<code>scopePolicyPath</code>）、selection 2（<code
+                  >historySignals</code
+                >
+                / <code>historySource</code>）+ Legacy 注記 4
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">探索 prompt</th>
+              <td>
+                18。既定 1、測定 1、比較 arm 3、構成照合 1、旧既定 2、archive
+                10（規則の食い違いで保留）
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">Verifier prompt</th>
+              <td>7。code から読めない旧版 5</td>
+            </tr>
+            <tr>
+              <th scope="row">台帳 event 種別</th>
+              <td>
+                31。src の writer 0: 2（<code>candidate-rejected</code>
+                は意図的、<code>child-report-recovered</code> は script
+                が書く）。CLI 1 command だけが書く:
+                2（<code>review-item-opened</code>、<code>evaluation-case-blocked</code>）
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">実運用台帳（v6 測定 3 台帳）</th>
+              <td>98 event、12 campaign、出現 13 種別。本番台帳は未読</td>
+            </tr>
+            <tr>
+              <th scope="row">scenario / adapter / 判定器</th>
+              <td>
+                15 / 10 file 428 行 / 9（到達不能 3）。設定から到達できる
+                scenario: 1
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">export</th>
+              <td>
+                632 件。他 file から import されない 185
+                件。本体ごと未使用の関数 4（95 行）
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <h2 id="注記">注記</h2>
+      <ul>
+        <li>
+          これは報告で、正本ではない。削除の採否は所有者が行ごとに決め、採った行だけを
+          Step 1 合格後の整理 PR（PARKING 2026-10-14、最終設計 P13）に入れる。
+        </li>
+        <li>
+          PARKING と AGENTS.md の食い違い（archive prompt 10 版）、PARKING と
+          #324 の食い違い（<code>assignment</code>
+          mode）は、この報告では解決せず両方を記した。
+        </li>
+        <li>
+          本番台帳の件数は未確認なので、「本番で一度も出ていない」とはどの event
+          種別についても言っていない。
+        </li>
+      </ul>
+      <footer>
+        生成元:
+        <a href="2026-10-18-unused-feature-inventory.md">同名の Markdown</a
+        >（内容は同じ）。報告であり正本ではない。採否は所有者が行ごとに決める。
+      </footer>
+    </main>
+  </body>
+</html>
