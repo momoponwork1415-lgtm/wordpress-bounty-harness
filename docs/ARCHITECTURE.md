@@ -1,6 +1,6 @@
 # アーキテクチャ図
 
-目標構成を示す。実装済みとの差は [実装計画](IMPLEMENTATION-PLAN.md)、規則は [SPEC](SPEC.md) と [ADR 0016](adr/0016-root-plus-three-first-vertical-slice.md)。本番へ進む条件は [TranslatePressベンチマーク](TRANSLATEPRESS-BENCHMARK.md)。
+現行の目標構成を示す。規則は [SPEC](SPEC.md) と [ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md)。2026-10-10 時点の実装記録は [実装計画](IMPLEMENTATION-PLAN.md)、本番へ進む条件は [TranslatePressベンチマーク](TRANSLATEPRESS-BENCHMARK.md)。
 
 ## 0. 開発から本番への切り替え
 
@@ -25,7 +25,7 @@ flowchart LR
   CHOOSE -->|実運用| SEL[方針と公開データから自動選定]
   PIN & SEL --> SNAP[plugin・WordPress core・必要な依存を固定]
   SNAP --> LAB[gVisor Labを起動]
-  LAB --> DISC[Root＋最大3 subagentで探索]
+  LAB --> DISC[Root＋最大4 subagentで探索]
   DISC -->|Finding| VERIFY[別Labで独立検証]
   VERIFY -->|confirmed| LATEST[公開中の最新版で再検証]
   LATEST --> DEDUPE[重複・scope照合]
@@ -42,11 +42,12 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-  INPUT[固定source・WP2Shell報奨prompt・trust境界・Lab] --> ROOT[Root agent<br/>問いを立て分担し統合]
+  INPUT[固定source・v7 prompt・trust境界・Programme Boundary・Lab] --> ROOT[Root agent<br/>問いを立て分担し統合]
   ROOT --> A[subagent 1]
   ROOT --> B[subagent 2]
   ROOT --> C[subagent 3]
-  A & B & C --> RESULTS[Finding / Lead / coverageを個別保存]
+  ROOT --> D[subagent 4]
+  A & B & C & D --> RESULTS[Finding / Leadを個別保存]
   ROOT --> RESULTS
   RESULTS --> LEDGER[(台帳にはdigestだけ)]
   RESULTS --> PRIVATE[(Private Evidenceに本文)]
@@ -54,7 +55,7 @@ flowchart TB
   FINAL -.整形失敗でも個別成果は残す.-> RESULTS
 ```
 
-Harnessは人数上限、隔離、時間、記録、停止を管理する。Rootが調べ方を決め、Harnessのpromptに固定役割や探索手順を埋め込まない。同じ版の別Trialを回す外側のループは残すが、回数と停止値は実測後に決める。
+Harness は人数上限、隔離、wall 上限 120 分、記録、停止を管理する。Root は v7 の WP2Shell 由来の探索指針を使って調べ方と子の分担を決める。新規探索で使える目的 prompt は v7 だけで、対象ごとに 1 Trial を行う。入口索引は渡さない。
 
 ## 3. 実行境界
 
@@ -67,7 +68,7 @@ flowchart LR
     PRIVATE[(Git外のPrivate Evidence)]
   end
   subgraph DISC[gVisor使い捨て探索環境]
-    AGENTS[Root＋最大3 subagent]
+    AGENTS[Root＋最大4 subagent]
     LAB1[WordPress＋MySQL Lab]
     SOURCE[読み取り専用source]
     AGENTS <-->|内部HTTP| LAB1

@@ -40,6 +40,16 @@ describe("WordPress Finding admission", () => {
             function: "h",
             line: 2,
           },
+          {
+            file: "/workspace/php/ext/standard/file.c",
+            function: "i",
+            line: 3,
+          },
+          {
+            file: "../dependencies/elementor/includes/api.php",
+            function: "j",
+            line: 4,
+          },
         ],
         privateRecipeReference: "See the sealed report for Lab steps",
       },
@@ -49,6 +59,8 @@ describe("WordPress Finding admission", () => {
       "includes/example.php",
       "@wordpress/wp-includes/load.php",
       "@wordpress/wp-admin/admin-ajax.php",
+      "@php/ext/standard/file.c",
+      "@dependencies/elementor/includes/api.php",
     ]);
     expect(readWordPressFinding(finding)).toEqual(finding);
     expect(() =>

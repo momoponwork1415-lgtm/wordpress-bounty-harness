@@ -15,7 +15,6 @@ import {
   readPrivateChatgptLogin,
 } from "../discovery/index.js";
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
-import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import {
   runNativeModelProcess,
   type NativeModelProcessResult,
@@ -30,10 +29,16 @@ import type { Verifier } from "../verification/index.js";
 import {
   createWordPressOrgFetchAdapter,
   openMaterializedSources,
+  openPhpRuntimeSource,
   openWordPressCoreSource,
+  openWordPressOrgPluginDependencySource,
   openWordPressOrgSnapshotSource,
   openWordPressOrgTargetSource,
 } from "../profiles/wordpress/acquisition/index.js";
+import {
+  mountedWordPressSourcePack,
+  type WordPressMountedSourcePack,
+} from "../profiles/wordpress/acquisition/mounted-source-pack.js";
 import type { WordPressFinding } from "../profiles/wordpress/discovery/finding.js";
 import {
   openWordPressLab,
@@ -175,6 +180,7 @@ export async function createWordPressHostProfile(options: {
     snapshots: join(host.workDirectory, "snapshots"),
     sources: join(host.workDirectory, "sources"),
     wordpressCore: join(host.workDirectory, "wordpress-core"),
+    phpRuntime: join(host.workDirectory, "php-runtime"),
     programme: join(host.workDirectory, "programme"),
     codexScratch: join(host.workDirectory, "codex-scratch"),
     brokerScratch: join(host.workDirectory, "broker-scratch"),
@@ -195,6 +201,7 @@ export async function createWordPressHostProfile(options: {
       directories.wordpressOrg,
       directories.sources,
       directories.wordpressCore,
+      directories.phpRuntime,
       directories.snapshots,
       directories.programme,
     ])
@@ -216,13 +223,28 @@ export async function createWordPressHostProfile(options: {
       expectedVersion: wordpressVersion,
       runDocker: (args, timeoutMs) => runDocker(args, undefined, timeoutMs),
     });
+    const phpSource = openPhpRuntimeSource({
+      dockerExecutablePath: host.dockerExecutablePath,
+      image: host.images.wordpress,
+      stagingDirectory: directories.phpRuntime,
+      runDocker: (args, timeoutMs) => runDocker(args, undefined, timeoutMs),
+    });
+    const pluginDependencies = openWordPressOrgPluginDependencySource({
+      targetSource,
+      storageDirectory: directories.wordpressOrg,
+      policy: intakePolicy,
+    });
     const snapshotStore = openSnapshot({
       storageDirectory: directories.snapshots,
       source: sources.acquisition(
         openWordPressOrgSnapshotSource({
           targetSource,
           storageDirectory: directories.wordpressOrg,
-          dependencies: coreSource,
+          dependencies: async () => [
+            ...(await coreSource()),
+            ...(await phpSource()),
+          ],
+          pluginDependencies,
         }),
       ),
     });
@@ -241,14 +263,40 @@ export async function createWordPressHostProfile(options: {
         clock: state.clock,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       }),
-      freeze: async (target) =>
-        snapshotStore.freeze({
+      freeze: async (target) => {
+        const snapshot = await snapshotStore.freeze({
           kind: "wordpress-org-target-acquire",
           schemaVersion: 1,
           observationRef: target.observationRef,
           requestedVersion: target.version,
           policy: intakePolicy,
-        }),
+          ...(target.targetSourcePin === undefined
+            ? {}
+            : {
+                capturedSvnTarget: {
+                  slug: target.slug,
+                  pin: target.targetSourcePin,
+                },
+              }),
+          ...(target.pluginDependencyPins === undefined
+            ? {}
+            : { pluginDependencyPins: target.pluginDependencyPins }),
+          ...(target.pluginDependencySlugs === undefined
+            ? {}
+            : { pluginDependencySlugs: [...target.pluginDependencySlugs] }),
+          ...(target.dependencyVersionPolicy === undefined
+            ? {}
+            : { dependencyVersionPolicy: target.dependencyVersionPolicy }),
+        });
+        if (
+          snapshot.target.identity !== target.targetId ||
+          snapshot.target.version !== target.version
+        )
+          throw new SourceAcquisitionError("source-mismatch", {
+            reason: "selected-target-source-mismatch",
+          });
+        return snapshot;
+      },
     };
   };
 
@@ -263,8 +311,8 @@ export async function createWordPressHostProfile(options: {
       image: host.images.codex,
       bundledCatalogPath: host.codex.bundledCatalogPath,
       scratchRootDirectory: directories.codexScratch,
-      maxOutputBytes: 16 * 1024 * 1024,
-      timeoutMs: (config.runWallTimeMinutes ?? 60) * 60_000,
+      maxOutputBytes: 64 * 1024 * 1024,
+      timeoutMs: config.runWallTimeMinutes * 60_000,
       ...(runtimeProfile.subagent.modelId === "unavailable"
         ? {}
         : { memoryMiB: CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB }),
@@ -279,6 +327,7 @@ export async function createWordPressHostProfile(options: {
         runDocker,
         proxyBundleDirectory,
         runtimeProfile,
+        runWallTimeMinutes: config.runWallTimeMinutes,
         probe: () => sandbox.probe(),
       })
     ).filter((item) => !item.ok);
@@ -304,26 +353,31 @@ export async function createWordPressHostProfile(options: {
       expectedVersion: config.wordpressVersion,
       runDocker: (args, timeoutMs) => runDocker(args, undefined, timeoutMs),
     });
+    const phpSource = openPhpRuntimeSource({
+      dockerExecutablePath: host.dockerExecutablePath,
+      image: host.images.wordpress,
+      stagingDirectory: directories.phpRuntime,
+      runDocker: (args, timeoutMs) => runDocker(args, undefined, timeoutMs),
+    });
+    const pluginDependencies = openWordPressOrgPluginDependencySource({
+      targetSource,
+      storageDirectory: directories.wordpressOrg,
+      policy: intakePolicy,
+    });
     const snapshotStore = openSnapshot({
       storageDirectory: directories.snapshots,
       source: sources.acquisition(
         openWordPressOrgSnapshotSource({
           targetSource,
           storageDirectory: directories.wordpressOrg,
-          dependencies: coreSource,
+          dependencies: async () => [
+            ...(await coreSource()),
+            ...(await phpSource()),
+          ],
+          pluginDependencies,
         }),
       ),
     });
-    const coreOf = (
-      resolved: Awaited<ReturnType<typeof sources.resolve>>,
-    ): { directory: string; tree: ExpectedSourceTree } | undefined => {
-      const core = resolved.dependencies.find(
-        (dependency) => dependency.kind === "wordpress-core",
-      );
-      return core === undefined
-        ? undefined
-        : { directory: core.sourceDirectory, tree: core.sourceTree };
-    };
     const lab = openWordPressLab({
       dockerExecutablePath: host.dockerExecutablePath,
       images: {
@@ -399,24 +453,28 @@ export async function createWordPressHostProfile(options: {
           snapshot === undefined
             ? undefined
             : await sources.resolve(snapshot).catch(() => undefined);
-        if (source === undefined)
+        let sourcePack: WordPressMountedSourcePack | undefined;
+        try {
+          sourcePack =
+            source === undefined
+              ? undefined
+              : mountedWordPressSourcePack(source);
+        } catch {
+          sourcePack = undefined;
+        }
+        if (sourcePack === undefined)
           return {
             status: "incomplete",
             reason: "precondition",
             nextStep:
               "Freeze the target again so its materialized source matches the Lab snapshot",
           };
-        const core = coreOf(source);
         return new CodexVerifier({
           runtime,
           store: state.store,
           ledger: state.ledger,
           profile: runtimeProfile,
-          source: {
-            directory: source.target.sourceDirectory,
-            tree: source.target.sourceTree,
-          },
-          ...(core === undefined ? {} : { dependencySource: core }),
+          sourcePack,
           lab,
           clock: state.clock,
         }).attempt({
@@ -442,7 +500,31 @@ export async function createWordPressHostProfile(options: {
           observationRef: target.observationRef,
           requestedVersion: target.version,
           policy: intakePolicy,
+          ...(target.targetSourcePin === undefined
+            ? {}
+            : {
+                capturedSvnTarget: {
+                  slug: target.slug,
+                  pin: target.targetSourcePin,
+                },
+              }),
+          ...(target.pluginDependencyPins === undefined
+            ? {}
+            : { pluginDependencyPins: target.pluginDependencyPins }),
+          ...(target.pluginDependencySlugs === undefined
+            ? {}
+            : { pluginDependencySlugs: [...target.pluginDependencySlugs] }),
+          ...(target.dependencyVersionPolicy === undefined
+            ? {}
+            : { dependencyVersionPolicy: target.dependencyVersionPolicy }),
         });
+        if (
+          snapshot.target.identity !== target.targetId ||
+          snapshot.target.version !== target.version
+        )
+          throw new SourceAcquisitionError("source-mismatch", {
+            reason: "selected-target-source-mismatch",
+          });
         frozen.set(snapshot.digest, snapshot);
         return snapshot;
       },
@@ -468,11 +550,14 @@ export async function createWordPressHostProfile(options: {
       lab,
       async sourceFor(snapshot) {
         const resolved = await sources.resolve(snapshot);
-        const core = coreOf(resolved);
+        const sourcePack = mountedWordPressSourcePack(resolved, {
+          requireRuntimeSources: true,
+        });
         return {
-          directory: resolved.target.sourceDirectory,
-          tree: resolved.target.sourceTree,
-          ...(core === undefined ? {} : { dependency: core }),
+          directory: sourcePack.target.directory,
+          tree: sourcePack.target.tree,
+          dependency: sourcePack.core!,
+          dependencySources: sourcePack.dependencies,
         };
       },
       runtimeProfile,
@@ -539,7 +624,7 @@ export async function createWordPressHostProfile(options: {
       );
       const config = await json(input.configPath);
       const selection = await json(input.selectionPath);
-      const wall = Number(config.runWallTimeMinutes ?? 60);
+      const wall = Number(config.runWallTimeMinutes ?? 120);
       return {
         loginExpiresAt: login,
         programmeObservedAt: new Date(String(transcription.transcribedAt)),
@@ -563,7 +648,7 @@ export async function createWordPressHostProfile(options: {
 /**
  * Checks the host without starting a target container. An API key is never
  * read; a ChatGPT login is parsed in memory only to see that it outlives the
- * next hour, since the broker does not refresh it.
+ * Trial wall limit plus startup margin, since the broker does not refresh it.
  */
 async function preflight(options: {
   readonly host: WordPressHostConfig;
@@ -574,6 +659,7 @@ async function preflight(options: {
     bundledCatalogDigest: string;
     authenticationMethod: string;
   };
+  readonly runWallTimeMinutes: number;
   readonly probe: () => Promise<{
     readonly cliVersion: string;
     readonly bundledCatalogDigest: string;
@@ -652,16 +738,17 @@ async function preflight(options: {
     options.runtimeProfile.authenticationMethod === "chatgpt-oauth-host" &&
     items.at(-1)?.ok === true
   ) {
+    const loginHorizonMinutes = options.runWallTimeMinutes + 15;
     const login = await readPrivateChatgptLogin(
       options.host.credentialFilePath,
-      new Date(Date.now() + 60 * 60_000),
+      new Date(Date.now() + loginHorizonMinutes * 60_000),
     ).catch(() => undefined);
     items.pop();
     check(
       "credential",
       login !== undefined,
       login === undefined
-        ? "the ChatGPT login is unreadable or expires within an hour (log in again with the Codex CLI)"
+        ? `the ChatGPT login is unreadable or expires within ${loginHorizonMinutes} minutes (Trial wall limit plus startup margin; log in again with the Codex CLI)`
         : `ChatGPT login valid until ${login.expiresAt.toISOString()} (broker only)`,
     );
   }

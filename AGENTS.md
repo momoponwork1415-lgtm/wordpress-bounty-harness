@@ -33,9 +33,10 @@
 
 ## 単一協調Trialの探索（SPEC.md 第6節、ADR 0029）
 
-- 主経路は対象ごとに `wp2shell-bounty-v5` を既定とするRoot＋最大3子の協調Trialを1回。wall上限は60分。Rootが早く報告すれば終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` とし、正常な候補0件に数えない。
-- 固定source由来の入口索引を既定でカタログとして渡す。索引は経路や分担を指示せず、全入口の処理は終了条件でない。Harnessの続行差し込み、screeningから条件付きdeep-diveへの分岐は行わない。子の有効なFindingとLeadはRoot報告と独立して保存する。
-- `wp2shell-bounty-v4`、`wp2shell-bounty-v3`、`wp2shell-bounty-v2` と `short-objective-managed-v4` は比較・履歴照合用、`screening-v1` は過去Trialの構成照合用に保持する。旧screeningを現行modeで新規起動しない。索引あり・なしや旧段付きTrialを同じ比較分母に混ぜない。どの版も脆弱性が必ずあるという前提や固定された攻撃経路を与えない。
+- 新規探索で実行可能な目的promptは `wp2shell-bounty-v8` だけ。起動modeも `wp2shell` のみで、対象ごとにRoot＋最大4子の協調Trialを1回行う。wall上限は120分、最低60分は能動的に探索する。早期最終報告は同じ協調セッションで継続し、継続不能やwall・provider・broker・schema等の失敗は理由付き `incomplete` として正常な候補0件に数えない（ADR 0033）。
+- v8 には入口索引を渡さず、固定sourceからRoot自身が着眼点を決める。最低時間を守るための同一セッション継続以外に、screeningから条件付きdeep-diveへの分岐や入口網羅の終了条件は置かない。子の有効なFindingとLeadはRoot報告と独立して保存する。
+- Snapshotは対象plugin、WordPress core、実行imageに対応するPHP source、`Requires Plugins` と選定方針の明示指定による依存pluginを版・digestで固定する。自動選定の本番対象はfreeze時点の公式stable版、手動・歴史的評価対象は明示版pinを使う。探索では全sourceを読み取り専用で渡し、Labにも固定したplugin依存を供給する。依存の欠落を黙って無視しない。
+- 旧版の探索promptと実験結果は過去Trialのdigest・構成照合用に保持するが、旧版を使う新規Trialは起動しない。索引あり・なしや旧段付きTrialを同じ比較分母に混ぜない。v8は脆弱性が必ずあるという前提や固定された攻撃経路を与えない。
 - agentに渡る文章（prompt本文、skill本文、Harness生成の節の雛形）は `owner-approved` ラベルが付くまでmergeしない。2026-10-13以降、採否とラベル付与は所有者がAIに委任しており、AIは委任を明記したPR commentを残す（DEVELOPMENT.md 第5節）。2026-10-18以降は所有者の読了もmergeの条件でなく、ADR・SPEC・policy・判定器のpathも含めて委任済みのAIが差分を確認してラベルを付ける。採否は探索の数字で決める（ADR 0032 の 2026-10-18 節）。AIは出典対照表にある要素だけを書き、要素を足さない。
 - prompt本文を変えたら版を上げ、旧版を残してdigest pinを更新する。旧promptは過去Trialの目的文とdigestを照合するために維持する。台帳の旧 `stage` / `continuationOf` 付きeventも読み続け、既存eventを消さない。
 - Finding / Leadの出力契約はprompt本文に書かず、Harnessがschemaから生成する節として渡す（ADR 0019）。候補は出力境界で棄却せず、正規化して受理するか保留する（ADR 0018）。

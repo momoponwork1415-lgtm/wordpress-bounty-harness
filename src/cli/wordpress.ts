@@ -4,8 +4,6 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import {
-  allocateTrialArms,
-  CODEX_SANDBOX_MEMORY_MIB,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   DISCOVERY_LEFTOVER_PATTERNS,
   EGRESS_BROKER_MEMORY_MIB,
@@ -55,6 +53,7 @@ import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
   wordPressDiscoveryOutputContractV3,
+  wordPressDiscoveryOutputContractV4,
 } from "../profiles/wordpress/discovery/output-contract.js";
 import type {
   WordPressLab,
@@ -64,8 +63,8 @@ import type {
 import { wordPressScenario } from "../profiles/wordpress/lab/scenarios.js";
 import {
   loadWordPressDiscoveryAsset,
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
   WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS,
-  WORDPRESS_DISCOVERY_PROMPT_IDS,
   type WordPressDiscoveryAsset,
 } from "../profiles/wordpress/prompts/index.js";
 import {
@@ -120,20 +119,14 @@ const text = z.strictObject({
 
 /** One discovery run holds a Codex sandbox and its own egress broker. */
 const DISCOVERY_RUN_MEMORY_MIB =
-  CODEX_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
+  CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
 
 const armBFraction = z.number().min(0).max(1);
-const runnablePrompt = z
-  .enum(WORDPRESS_DISCOVERY_PROMPT_IDS)
-  .exclude(["screening-v1"]);
-const ablationAxis = z.discriminatedUnion("axis", [
-  z.strictObject({ axis: z.literal("history"), armBFraction }),
-  z.strictObject({
-    axis: z.literal("prompt"),
-    armBFraction,
-    armBPromptId: runnablePrompt,
-  }),
-]);
+const runnablePrompt = z.literal(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID);
+const ablationAxis = z.strictObject({
+  axis: z.literal("history"),
+  armBFraction,
+});
 const ablation = z
   .union([
     z.strictObject({ axes: z.array(ablationAxis).min(1).max(2) }),
@@ -149,7 +142,7 @@ const commonCampaignFields = {
     .default({ lab: "attached" }),
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
-  runWallTimeMinutes: z.number().positive().max(240).optional(),
+  runWallTimeMinutes: z.number().positive().max(120).default(120),
   coverage: z
     .strictObject({
       maxUnvisitedRatio: z.number().min(0).max(1).default(0.2),
@@ -158,14 +151,14 @@ const commonCampaignFields = {
   /** Host bounds: targets, per-target discovery runs and their memory budget. */
   resources: z
     .strictObject({
-      maxConcurrentRuns: z.number().int().min(1).max(4).default(2),
+      maxConcurrentRuns: z.number().int().min(1).max(4).default(1),
       maxConcurrentTargets: z.number().int().min(1).max(4).default(1),
       memoryBudgetMiB: z.number().int().positive(),
     })
     .default({
-      maxConcurrentRuns: 2,
+      maxConcurrentRuns: 1,
       maxConcurrentTargets: 1,
-      memoryBudgetMiB: 4 * DISCOVERY_RUN_MEMORY_MIB,
+      memoryBudgetMiB: DISCOVERY_RUN_MEMORY_MIB,
     }),
   wordpressVersion: z.string().min(1).max(32),
   lab: z.strictObject({
@@ -199,33 +192,16 @@ const campaignModes = z.discriminatedUnion("mode", [
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("wp2shell"),
-    runWallTimeMinutes: z.number().positive().max(120).default(60),
-    promptId: z
-      .enum([
-        "wp2shell-bounty-v2",
-        "wp2shell-bounty-v3",
-        "wp2shell-bounty-v4",
-        "wp2shell-bounty-v5",
-        "wp2shell-bounty-v6",
-        "wp2shell-whitebox-v1.7",
-      ])
-      .default("wp2shell-bounty-v5"),
+    runWallTimeMinutes: z.number().gt(60).max(120).default(120),
+    promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
     stopRules: singleTrialStop,
-    entryIndex: z.literal(true).default(true),
+    entryIndex: z.literal(false).default(false),
   }),
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("entry-index-control"),
-    runWallTimeMinutes: z.number().positive().max(60).default(60),
-    promptId: z
-      .enum([
-        "wp2shell-bounty-v2",
-        "wp2shell-bounty-v3",
-        "wp2shell-bounty-v4",
-        "wp2shell-bounty-v5",
-        "wp2shell-whitebox-v1.7",
-      ])
-      .default("wp2shell-bounty-v5"),
+    runWallTimeMinutes: z.number().positive().max(120).default(120),
+    promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
     stopRules: singleTrialStop,
     entryIndex: z.literal(false),
   }),
@@ -239,7 +215,7 @@ const campaignModes = z.discriminatedUnion("mode", [
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("ablation"),
-    promptId: runnablePrompt.default("wp2shell-bounty-v3"),
+    promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
     stopRules: comparisonStop,
     entryIndex: z.boolean().default(true),
     ablation,
@@ -247,7 +223,7 @@ const campaignModes = z.discriminatedUnion("mode", [
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("assignment"),
-    promptId: runnablePrompt.default("wp2shell-bounty-v3"),
+    promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
     stopRules: comparisonStop,
     entryIndex: z.literal(true).default(true),
     assignment,
@@ -264,30 +240,17 @@ export const wordpressCampaignConfigSchema = z
         ? "assignment"
         : config.ablation !== undefined
           ? "ablation"
-          : config.promptId !== undefined &&
-              config.promptId !== "wp2shell-bounty-v2" &&
-              config.promptId !== "wp2shell-bounty-v3" &&
-              config.promptId !== "wp2shell-bounty-v4" &&
-              config.promptId !== "wp2shell-bounty-v5" &&
-              config.promptId !== "wp2shell-bounty-v6" &&
-              config.promptId !== "wp2shell-whitebox-v1.7"
-            ? "comparison"
-            : config.entryIndex === false
-              ? "entry-index-control"
-              : "wp2shell";
+          : config.entryIndex === false
+            ? "entry-index-control"
+            : "wp2shell";
     return { ...config, mode };
   }, campaignModes)
   .superRefine((config, context) => {
-    if (
-      config.mode === "wp2shell" &&
-      config.promptId !== "wp2shell-bounty-v6" &&
-      config.runWallTimeMinutes > 60
-    )
+    if (config.mode !== "wp2shell")
       context.addIssue({
         code: "custom",
-        path: ["runWallTimeMinutes"],
-        message:
-          "Only wp2shell-bounty-v6 permits a wall limit above 60 minutes",
+        path: ["mode"],
+        message: "New WordPress campaigns use the wp2shell mode only",
       });
     if (
       config.lab.initialApprovedComment === true &&
@@ -332,6 +295,11 @@ export interface WordPressCampaignBoundaries {
       readonly directory: string;
       readonly tree: ExpectedSourceTree;
     };
+    readonly dependencySources?: readonly {
+      readonly path: string;
+      readonly directory: string;
+      readonly tree: ExpectedSourceTree;
+    }[];
   }>;
   readonly runtimeProfile: AgentRuntimeProfile;
   /** What the pinned Codex image actually ships (GvisorCodexSandbox.probe). */
@@ -387,6 +355,11 @@ async function loadSelectInput(configPath: string): Promise<{
       throw new Error(
         "Direct selection policy requires wordpressVersion to freeze selections",
       );
+    if (
+      directPolicy.data.promptVariant !== undefined &&
+      directPolicy.data.promptVariant !== WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID
+    )
+      throw new Error("New selections use the current prompt variant only");
     return {
       policy: directPolicy.data,
       wordpressVersion: directPolicy.data.wordpressVersion,
@@ -398,7 +371,10 @@ async function loadSelectInput(configPath: string): Promise<{
     policy.wordpressVersion !== config.wordpressVersion
   )
     throw new Error("Selection and campaign WordPress versions differ");
-  if ("candidateSource" in policy && policy.promptVariant !== config.promptId)
+  if (
+    policy.promptVariant !== undefined &&
+    policy.promptVariant !== config.promptId
+  )
     throw new Error("Selection and campaign prompt variants differ");
   return { config, policy, wordpressVersion: config.wordpressVersion };
 }
@@ -868,7 +844,6 @@ type WordPressDiscoveryContext = {
   readonly state: CliState;
   readonly objective: WordPressDiscoveryAsset;
   readonly trustBoundary: WordPressDiscoveryAsset;
-  readonly armBObjective?: WordPressDiscoveryAsset;
   readonly historyFor: (
     config: WordPressCampaignConfig,
     target: WordPressTargetSelection,
@@ -886,20 +861,20 @@ async function planWordPressDiscovery(
     state,
     objective,
     trustBoundary,
-    armBObjective,
     historyFor,
   } = context;
   if ((lab === undefined) !== (config.discovery.lab === "none"))
     throw new Error(
       "Discovery Lab mode differs from the campaign configuration",
     );
-  const wallMinutes = config.runWallTimeMinutes ?? 60;
+  const wallMinutes = config.runWallTimeMinutes;
   const ablationConfig =
     config.mode === "ablation" ? config.ablation : undefined;
   const assignmentConfig =
     config.mode === "assignment" ? config.assignment : undefined;
   const outputContractV1 = wordPressDiscoveryOutputContract();
   const outputContractV2 = wordPressDiscoveryOutputContractV2();
+  const outputContractV4 = wordPressDiscoveryOutputContractV4();
   const outputContractV3 = wordPressDiscoveryOutputContractV3(
     config.coverage.maxUnvisitedRatio,
   );
@@ -907,15 +882,18 @@ async function planWordPressDiscovery(
     (id === "wp2shell-bounty-v5" || id === "wp2shell-bounty-v6") &&
     config.entryIndex;
   const outputContractFor = (id: string) =>
-    coverageFor(id)
-      ? outputContractV3
-      : id === "wp2shell-bounty-v3" ||
-          id === "wp2shell-bounty-v4" ||
-          id === "wp2shell-bounty-v5" ||
-          id === "wp2shell-bounty-v6" ||
-          id === "wp2shell-whitebox-v1.7"
-        ? outputContractV2
-        : outputContractV1;
+    id === WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID
+      ? outputContractV4
+      : coverageFor(id)
+        ? outputContractV3
+        : id === "wp2shell-bounty-v3" ||
+            id === "wp2shell-bounty-v4" ||
+            id === "wp2shell-bounty-v5" ||
+            id === "wp2shell-bounty-v6" ||
+            id === "wp2shell-bounty-v7" ||
+            id === "wp2shell-whitebox-v1.7"
+          ? outputContractV2
+          : outputContractV1;
   const objectiveOnly = (id: string) =>
     WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
   const source = await boundaries.sourceFor(snapshot);
@@ -994,6 +972,9 @@ async function planWordPressDiscovery(
               ? "WordPress core source (read-only): /workspace/wordpress."
               : "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
           ]),
+      ...(source.dependencySources ?? []).map(
+        (dependency) => `Dependency source (read-only): ${dependency.path}.`,
+      ),
       ...(objectiveOnly(selectedObjective.id)
         ? ["Writable notes directory: /workspace/research."]
         : []),
@@ -1047,23 +1028,23 @@ async function planWordPressDiscovery(
     runWallTimeMs: wallMinutes * 60_000,
     concurrency: Math.min(
       config.resources.maxConcurrentRuns,
-      Math.floor(
-        config.resources.memoryBudgetMiB /
-          (boundaries.runtimeProfile.subagent.modelId === "unavailable"
-            ? DISCOVERY_RUN_MEMORY_MIB
-            : CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB),
-      ),
+      Math.floor(config.resources.memoryBudgetMiB / DISCOVERY_RUN_MEMORY_MIB),
     ),
     ...(ablationConfig === undefined
       ? {}
       : { ablation: { axes: ablationConfig.axes } }),
     plannedTrials: Array.from({ length: maxRuns }, (_, trialOrdinal) => {
       const trialId = state.newId();
-      const arms = allocateTrialArms(trialOrdinal, ablationConfig?.axes ?? []);
-      const selectedObjective =
-        arms.prompt === "b" && armBObjective !== undefined
-          ? armBObjective
-          : objective;
+      const selectedObjective = objective;
+      const resumePrompt = selectedObjective.text
+        .trim()
+        .split(/\n\s*\n/)
+        .at(-1);
+      if (
+        resumePrompt === undefined ||
+        !resumePrompt.startsWith("Before giving up,")
+      )
+        throw new Error("Versioned minimum exploration directive is missing");
       const assignment =
         assignments.length === 0
           ? undefined
@@ -1100,6 +1081,8 @@ async function planWordPressDiscovery(
           profile: boundaries.runtimeProfile,
           coordination: "cooperative" as const,
           prompt: promptFor(assignment, selectedObjective),
+          minimumActiveMs: 60 * 60_000,
+          resumePrompt,
           ...(coverageFor(selectedObjective.id)
             ? { coverageSchema: outputContractV3.coverageSchema }
             : {}),
@@ -1125,6 +1108,9 @@ async function planWordPressDiscovery(
           ...(source.dependency === undefined
             ? {}
             : { dependencySource: source.dependency }),
+          ...(source.dependencySources === undefined
+            ? {}
+            : { dependencySources: source.dependencySources }),
           expiresAt: new Date(now + wallMinutes * 60_000).toISOString(),
         },
       };
@@ -1184,7 +1170,10 @@ async function runWordPressCampaign(
     policy.wordpressVersion !== config.wordpressVersion
   )
     throw new Error("Selection and campaign WordPress versions differ");
-  if ("candidateSource" in policy && policy.promptVariant !== config.promptId)
+  if (
+    policy.promptVariant !== undefined &&
+    policy.promptVariant !== config.promptId
+  )
     throw new Error("Selection and campaign prompt variants differ");
   if ("candidateSource" in policy && policy.revisitPolicy.kind !== "never")
     throw new Error(
@@ -1215,8 +1204,6 @@ async function runWordPressCampaign(
       snapshotDigest,
     ]) ?? [],
   );
-  const ablationConfig =
-    config.mode === "ablation" ? config.ablation : undefined;
   const boundaries = await options.boundaries(config, state);
   // A previous teardown failure is a campaign stop, not a negative finding.
   // Inspect only the recorded Lab ids and never delete them implicitly.
@@ -1254,13 +1241,6 @@ async function runWordPressCampaign(
     loadWordPressDiscoveryAsset(config.promptId),
     loadWordPressDiscoveryAsset("trust-boundary-v1"),
   ]);
-  const promptAxis = ablationConfig?.axes.find(
-    (axis) => axis.axis === "prompt",
-  );
-  const armBObjective =
-    promptAxis?.axis === "prompt"
-      ? await loadWordPressDiscoveryAsset(promptAxis.armBPromptId)
-      : undefined;
   return runCampaignPipeline({
     campaignId: input.campaignId,
     discoveryLab: config.discovery.lab,
@@ -1273,6 +1253,9 @@ async function runWordPressCampaign(
       : {
           retryIncompleteVerifications: input.retryIncompleteVerifications,
         }),
+    ...(input.deferVerification === undefined
+      ? {}
+      : { deferVerification: input.deferVerification }),
     ledger: state.ledger,
     store: state.store,
     clock: state.clock,
@@ -1328,7 +1311,6 @@ async function runWordPressCampaign(
           state,
           objective,
           trustBoundary,
-          ...(armBObjective === undefined ? {} : { armBObjective }),
           historyFor,
         }),
       verification: verificationFor(state, boundaries),
@@ -1434,7 +1416,9 @@ export function createWordPressCliProfile(
         legacyHistory: legacy.history,
         candidates: eligible.map(({ slug, version }) => ({ slug, version })),
         currentPromptVariant:
-          policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v5",
+          policy.promptVariant ??
+          config?.promptId ??
+          WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
         revisitPolicy: policy.revisitPolicy ?? { kind: "never" },
       });
       const ledgerReasons = new Map(
@@ -1552,7 +1536,9 @@ export function createWordPressCliProfile(
           type: "target-selected",
           selectionId: `${target.targetId}@${target.version}`,
           promptVariant:
-            policy.promptVariant ?? config?.promptId ?? "wp2shell-bounty-v5",
+            policy.promptVariant ??
+            config?.promptId ??
+            WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
           artifacts: [
             { kind: "target-selection", digest: selectionDigest },
             { kind: "selection-report", digest: reportDigest },
@@ -1679,25 +1665,138 @@ export function createWordPressCliProfile(
             });
             return { finding, category: finding.impact };
           },
-          async selectVersion({ selectionId, version }) {
+          async selectVersion({
+            selectionId,
+            originalSnapshotDigest,
+            version,
+          }) {
             const slug = /^wporg:([a-z0-9][a-z0-9-]*)@/.exec(selectionId)?.[1];
             if (slug === undefined) return null;
+            const originalSnapshot = await boundaries.loadSnapshot(
+              originalSnapshotDigest,
+            );
+            if (originalSnapshot.target.identity !== `wporg:${slug}`)
+              throw new Error(
+                "The original Snapshot belongs to another target",
+              );
+            const originalPluginPins: Record<string, string> = {};
+            for (const dependency of originalSnapshot.dependencies) {
+              const dependencySlug = /^wporg:([a-z0-9][a-z0-9-]*)$/.exec(
+                dependency.identity,
+              )?.[1];
+              if (dependencySlug === undefined) continue;
+              if (
+                originalPluginPins[dependencySlug] !== undefined &&
+                originalPluginPins[dependencySlug] !== dependency.version
+              )
+                throw new Error(
+                  `The original Snapshot has conflicting versions for ${dependencySlug}`,
+                );
+              originalPluginPins[dependencySlug] = dependency.version;
+            }
+            const explicitSlugs =
+              "pluginDependencySlugs" in policy
+                ? (policy.pluginDependencySlugs?.[slug] ?? [])
+                : [];
+            for (const dependencySlug of explicitSlugs)
+              if (originalPluginPins[dependencySlug] === undefined)
+                throw new Error(
+                  `The original Snapshot has no pinned source for ${dependencySlug}`,
+                );
+            const configuredPluginPins =
+              "pluginDependencyPins" in policy
+                ? (policy.pluginDependencyPins?.[slug] ?? {})
+                : {};
+            const pluginDependencyPins = {
+              ...configuredPluginPins,
+              ...originalPluginPins,
+            };
             // Rechecking a known Finding does not need the candidate batch's
             // history ranking.
             const reverifyPolicy =
               "candidateSource" in policy
-                ? (({ candidateSource: _candidateSource, ...rest }) => rest)(
-                    policy,
-                  )
+                ? (({
+                    candidateSource: _candidateSource,
+                    pluginDependencySlugs: _pluginDependencySlugs,
+                    ...rest
+                  }) => rest)(policy)
                 : (({
                     historySignals: _historySignals,
                     historySource: _historySource,
                     ...rest
                   }) => rest)(policy);
+            const {
+              targetSourcePins: _targetSourcePins,
+              ...policyWithoutCapturedSources
+            } = reverifyPolicy as WordPressSelectionPolicy & {
+              targetSourcePins?: Readonly<Record<string, unknown>>;
+            };
+            const sameOriginalVersion =
+              version === originalSnapshot.target.version;
+            let capturedSourcePin: WordPressTargetSelection["targetSourcePin"];
+            if (sameOriginalVersion) {
+              const originalSelectionEvent = state.ledger
+                .read({
+                  campaignId: input.campaignId,
+                  type: "target-selected",
+                  limit: 1000,
+                })
+                .map(({ event }) => event)
+                .find(
+                  (event) =>
+                    event.type === "target-selected" &&
+                    event.snapshotDigest === originalSnapshotDigest,
+                );
+              const selectionRef = originalSelectionEvent?.artifacts.find(
+                (artifact) => artifact.kind === "target-selection",
+              );
+              const configuredPin =
+                "targetSourcePins" in policy
+                  ? policy.targetSourcePins?.[slug]
+                  : undefined;
+              if (selectionRef === undefined) {
+                // Older ZIP selections need no captured-source record. A new
+                // SVN pin cannot be substituted for an unknown original.
+                if (configuredPin !== undefined)
+                  throw new SourceAcquisitionError("source-mismatch", {
+                    reason: "original-target-source-pin-unavailable",
+                  });
+              } else {
+                const file = await state.store.readFile(
+                  selectionRef.digest,
+                  "target-selection.json",
+                  1024 * 1024,
+                );
+                if (file.status !== "resolved")
+                  throw new SourceAcquisitionError("source-mismatch", {
+                    reason: "original-target-selection-unavailable",
+                  });
+                const originalSelection = wordPressTargetSelectionSchema.parse(
+                  JSON.parse(file.bytes.toString("utf8")),
+                );
+                if (
+                  originalSelection.targetId !==
+                    originalSnapshot.target.identity ||
+                  originalSelection.version !==
+                    originalSnapshot.target.version ||
+                  (configuredPin !== undefined &&
+                    canonicalJson(configuredPin) !==
+                      canonicalJson(originalSelection.targetSourcePin ?? null))
+                )
+                  throw new SourceAcquisitionError("source-mismatch", {
+                    reason: "original-target-source-pin-mismatch",
+                  });
+                capturedSourcePin = originalSelection.targetSourcePin;
+              }
+            }
             const selected = await boundaries.selection.select({
-              ...reverifyPolicy,
+              ...policyWithoutCapturedSources,
               candidateSlugs: [slug],
+              pluginDependencyPins: { [slug]: pluginDependencyPins },
               pinnedVersions: version === undefined ? {} : { [slug]: version },
+              ...(capturedSourcePin === undefined
+                ? {}
+                : { targetSourcePins: { [slug]: capturedSourcePin } }),
               maximumTargets: 1,
             });
             const target = selected[0] ?? null;

@@ -4,7 +4,9 @@ import {
   createWordPressSelection,
   loadWordPressSelectionPolicy,
   wordPressSelectionPolicySchema,
+  wordPressTargetSelectionSchema,
 } from "../../../src/profiles/wordpress/selection/index.js";
+import type { CreateWordPressSelectionOptions } from "../../../src/profiles/wordpress/selection/wordpress-selection.js";
 import type { WordPressOrgTargetSource } from "../../../src/profiles/wordpress/acquisition/index.js";
 import type { ProgrammeIntelligence } from "../../../src/profiles/wordpress/programme-intelligence/index.js";
 
@@ -92,6 +94,9 @@ function harness(options: {
   clock?: string;
   /** The clock moves on by this much each time it is read, as a real one does. */
   advanceMsPerRead?: number;
+  enumerateCandidates?: NonNullable<
+    CreateWordPressSelectionOptions["enumerateCandidates"]
+  >;
 }) {
   const observations = options.observations ?? {
     popular: observation("popular", [], 100_000),
@@ -133,6 +138,9 @@ function harness(options: {
     targetSource,
     programme,
     programmeRef,
+    ...(options.enumerateCandidates === undefined
+      ? {}
+      : { enumerateCandidates: options.enumerateCandidates }),
     clock: (() => {
       let reads = 0;
       return () =>
@@ -145,6 +153,112 @@ function harness(options: {
 }
 
 describe("WordPress selection public interface", () => {
+  it("carries explicit plugin dependency version pins into the frozen selection", async () => {
+    const selection = harness({});
+    const policy = {
+      ...basePolicy,
+      pluginDependencyPins: { exposed: { elementor: "3.32.0" } },
+    };
+    const selected = await selection.select(policy);
+    expect(selected.find((item) => item.slug === "exposed")).toMatchObject({
+      pluginDependencyPins: { elementor: "3.32.0" },
+      dependencyVersionPolicy: "pinned-only",
+    });
+    expect(
+      selected.find((item) => item.slug === "popular")?.pluginDependencyPins,
+    ).toBeUndefined();
+    expect(
+      selected.find((item) => item.slug === "exposed")?.policy.digest,
+    ).not.toBe((await selection.select(basePolicy))[1]?.policy.digest);
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...basePolicy,
+        pluginDependencyPins: { misspelled: { elementor: "3.32.0" } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("pins a captured SVN target only for a manually pinned version", async () => {
+    const sourcePin = {
+      kind: "captured-wordpress-org-svn-export" as const,
+      storageDirectory: "/private/svn-intake",
+      packetDigest: digest("1"),
+      sourceTreeDigest: digest("2"),
+      revision: 3628543,
+    };
+    const policy = {
+      ...basePolicy,
+      pinnedVersions: { exposed: "2.0.16" },
+      targetSourcePins: { exposed: sourcePin },
+    };
+    const selected = await harness({}).select(policy);
+    expect(selected.find((item) => item.slug === "exposed")).toMatchObject({
+      version: "2.0.16",
+      targetSourcePin: sourcePin,
+    });
+    expect(
+      wordPressTargetSelectionSchema.parse(
+        selected.find((item) => item.slug === "exposed"),
+      ).targetSourcePin,
+    ).toEqual(sourcePin);
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...basePolicy,
+        targetSourcePins: { exposed: sourcePin },
+      }).success,
+    ).toBe(false);
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...policy,
+        targetSourcePins: { other: sourcePin },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("carries slug-only dependencies only from the current automatic policy", async () => {
+    const selection = harness({
+      observations: {
+        exposed: observation("exposed", ["form"], 100_000),
+      },
+      enumerateCandidates: async () => ({
+        status: "available",
+        candidates: [
+          {
+            slug: "exposed",
+            sourceKind: "popular",
+            sourcePage: 1,
+            sourceUrl: "https://api.wordpress.org/plugins/info/1.2/",
+            observedAt: now,
+            contentDigest: digest("d"),
+          },
+        ],
+        listings: [],
+      }),
+    });
+    const currentPolicy = await loadWordPressSelectionPolicy();
+    const selected = await selection.select({
+      ...currentPolicy,
+      pluginDependencySlugs: { exposed: ["elementor"] },
+    });
+    expect(selected).toHaveLength(1);
+    expect(selected[0]).toMatchObject({
+      pluginDependencySlugs: ["elementor"],
+      dependencyVersionPolicy: "stable-observed",
+    });
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...basePolicy,
+        pluginDependencySlugs: { exposed: ["elementor"] },
+      }).success,
+    ).toBe(false);
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...currentPolicy,
+        pluginDependencyPins: { exposed: { elementor: "3.32.0" } },
+      }).success,
+    ).toBe(false);
+  });
+
   it("changes order when the policy changes and records the score breakdown", async () => {
     const selection = harness({});
     const first = await selection.select(basePolicy);

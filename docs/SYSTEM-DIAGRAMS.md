@@ -22,7 +22,7 @@ flowchart LR
     SEL[1 選定<br/>select]
     SNAP[2 Snapshot<br/>digest で固定]
     LAB[3 Lab<br/>gVisor の使い捨て WordPress]
-    DISC[4 Discovery<br/>Root + 子 3 の協調 Trial]
+    DISC[Discovery<br/>Root + 子 4 の協調 Trial]
     NORM[5 正規化<br/>受理 / 保留 / parked]
     VER[6 Verification<br/>新しい Lab + Verifier + 判定器]
     REV[7 Review<br/>export → skill → decide]
@@ -85,7 +85,7 @@ sequenceDiagram
 
 根拠: SPEC §3、§6、§7。`src/cli/pipeline.ts` 400〜770 行。
 
-### 2.2 協調 Trial の中身（Root + 子 3）
+### 2.2 協調 Trial の中身（Root + 子 4）
 
 ```mermaid
 sequenceDiagram
@@ -94,16 +94,16 @@ sequenceDiagram
   participant B as broker container
   participant C as codex-agent container
   participant R as Root（Codex CLI）
-  participant K as 子 1〜3（CLI の multi_agent）
+  participant K as 子 1〜4（CLI の multi_agent）
   participant Lab as Lab（wp）
 
-  H->>H: prompt を組む（目的文 + 出力契約 + Trust boundary + Programme Boundary + Lab + 入口索引）
+  H->>H: prompt を組む（目的文 + 出力契約 + Trust boundary + Programme Boundary + Lab）
   H->>B: grant を発行（要求数・byte 上限・期限）
   H->>C: 起動（source を読み取り専用で mount、network は Lab の内部 net だけ）
-  H->>R: prompt を stdin で渡す（wall 60 分の timer 開始）
+  H->>R: prompt を stdin で渡す（wall 120 分の timer 開始）
   R->>C: /workspace/main の source を読む
   R->>Lab: 無害な HTTP で挙動を見る（直接、記録なし）
-  R->>K: 子を起こす（max_threads 3, depth 1）
+  R->>K: 子を起こす（max_threads 4, depth 1）
   K->>C: source を読む
   K-->>R: 子の最終報告
   R->>B: モデル呼び出し（provider へ中継）
@@ -115,7 +115,7 @@ sequenceDiagram
   Note over H: 子の有効な報告は Root と独立に保存する（ADR 0029）
 ```
 
-読み方: 子は Harness が起こすのではなく、Codex CLI の `multi_agent` が起こす。Harness は後から rollout を読み、最初の 3 子だけを受理する。Root が wall で止まっても子の報告は残る。
+読み方: 子は Harness が起こすのではなく、Codex CLI の `multi_agent` が起こす。Harness は後から各ラウンドの子の rollout を読み、有効な報告をすべて個別に保存する。Root が wall で止まっても子の報告は残る。rollout が保存上限を超えた場合は、保存できた報告を残して Trial を `incomplete(evidence)` にする。
 
 根拠: SPEC §6、ADR 0029。`src/discovery/codex-native-agent-runtime.ts` 1039〜1457 行、`src/infrastructure/native-model-process.ts` 63〜80 行、`src/discovery/recover-agent-reports.ts`。
 
@@ -515,8 +515,8 @@ flowchart TB
 | Lab | gVisor で隔離した使い捨ての WordPress 環境。対象 plugin を実際に動かす場所で、終わったら消す |
 | gVisor / runsc | Google 製の container 隔離技術。container とホスト OS の間に「見せかけの kernel」を置き、container から本物の kernel に直接触れさせない。runsc はその起動コマンド |
 | broker | provider（モデル API）への通り道を 1 本に絞る中継 container。認証情報を持ち、要求数と byte 数の上限を数える。agent はここ以外に外へ出られない |
-| Root / 子 | 協調 Trial で動く agent。Root が全体を見て、最大 3 つの子に分担を振る。どちらも同じ container の中で動く |
-| Trial | 1 回の探索の試み。Root と子 3 で 1 Trial。source を読まずに終わった run は Trial に数えない |
+| Root / 子 | 協調 Trial で動く agent。Root が全体を見て、最大 4 つの子に分担を振る。どちらも同じ container の中で動く |
+| Trial | 1 回の探索の試み。Root と最大 4 子で 1 Trial。source を読まずに終わった run は Trial に数えない |
 | Finding | 「この入口からこの影響に至る」という、source 上の根拠付きの未確認の主張。検証して初めて結果になる |
 | Lead | 根拠はあるが、影響までの道に未解決の部分が残る手がかり。検証はしない |
 | 保留（held） | 出力の形が契約に合わず、受理できなかった候補。捨てずに本文を残す |

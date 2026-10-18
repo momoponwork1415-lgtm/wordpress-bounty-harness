@@ -66,6 +66,14 @@ export const wordPressOrgAcquireRequestSchema = z.strictObject({
   observationRef: wordPressOrgTargetObservationRefSchema,
   requestedVersion: versionSchema,
   policy: targetIntakePolicySchema,
+  /** Selection-time dependency pins, used by snapshot acquisition only. */
+  pluginDependencyPins: z
+    .record(slugSchema, z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$/))
+    .optional(),
+  pluginDependencySlugs: z.array(slugSchema).max(16).optional(),
+  dependencyVersionPolicy: z
+    .enum(["stable-observed", "pinned-only"])
+    .optional(),
 });
 
 export const wordPressOrgAcquisitionOriginalSchema = z.strictObject({

@@ -343,7 +343,7 @@ describe("gVisor Codex sandbox", () => {
     }
   });
 
-  it("captures Root and the earliest three children when more than sixteen sessions exist", async () => {
+  it("captures every direct child across later waves when more than sixteen sessions exist", async () => {
     const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
     try {
       const source = join(root, "source");
@@ -448,14 +448,121 @@ describe("gVisor Codex sandbox", () => {
       const completeChildren = result.rollouts
         ?.filter((raw) => raw.includes("CHILD_REPORT_"))
         .map((raw) => /CHILD_REPORT_(\d+)/.exec(raw)?.[1]);
-      expect(completeChildren).toEqual(["1", "2", "3"]);
+      expect(completeChildren).toEqual(
+        Array.from({ length: 20 }, (_, index) => String(index)),
+      );
       const metadataOnly = result.rollouts?.filter(
         (raw) => !raw.includes("ROOT_REPORT") && !raw.includes("CHILD_REPORT_"),
       );
-      expect(metadataOnly).toHaveLength(17);
+      expect(metadataOnly).toHaveLength(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps bounded child evidence and marks capture incomplete above 256 session files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-many-waves-"));
+    try {
+      const source = join(root, "source");
+      await mkdir(source);
+      await writeFile(join(source, "main.txt"), "fixed source");
+      const expectedTree = await measureCanonicalSourceTree(source, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      const sandbox = new GvisorCodexSandbox({
+        dockerExecutablePath: "/usr/bin/docker",
+        image: `node@${digest}`,
+        bundledCatalogPath: "/opt/codex/model-catalog.json",
+        scratchRootDirectory: root,
+        maxOutputBytes: 1024 * 1024,
+        timeoutMs: 60_000,
+        runDocker: async (args) => {
+          if (args.includes("--network=internal-run")) {
+            const mount = args.find((arg) => arg.endsWith(",dst=/tmp/codex"));
+            const codexHome =
+              /^--mount=type=bind,src=(.+),dst=\/tmp\/codex$/.exec(
+                mount ?? "",
+              )?.[1];
+            if (codexHome === undefined) throw new Error("Codex home missing");
+            const sessions = join(codexHome, "sessions", "2026", "10", "08");
+            await mkdir(sessions, { recursive: true });
+            await writeFile(
+              join(sessions, "rollout-000-root.jsonl"),
+              `${JSON.stringify({
+                timestamp: "2026-10-08T07:00:00Z",
+                type: "session_meta",
+                payload: { id: "root", source: "exec" },
+              })}\nROOT_REPORT\n`,
+            );
+            for (let ordinal = 1; ordinal <= 258; ordinal++)
+              await writeFile(
+                join(
+                  sessions,
+                  `rollout-${String(ordinal).padStart(3, "0")}.jsonl`,
+                ),
+                `${JSON.stringify({
+                  timestamp: "2026-10-08T07:01:00Z",
+                  type: "session_meta",
+                  payload: {
+                    id: `child-${ordinal}`,
+                    source: {
+                      subagent: {
+                        thread_spawn: {
+                          parent_thread_id: "root",
+                          depth: 1,
+                          agent_path: `/root/child_${ordinal}`,
+                        },
+                      },
+                    },
+                  },
+                })}\nCHILD_REPORT_${ordinal}\n`,
+              );
+          }
+          return {
+            kind: "exited" as const,
+            exitCode: 0,
+            stdout: args.includes("--version")
+              ? "codex-cli 0.161.0\n"
+              : args.includes("--entrypoint=sha256sum")
+                ? `${"b".repeat(64)}  /opt/codex/model-catalog.json\n`
+                : "{}\n",
+            stderr: "",
+          };
+        },
+      });
+      const result = await sandbox.execute({
+        executable: "codex",
+        args: ["exec", "--json"],
+        stdin: "Inspect the source.",
+        supportFiles: [
+          { path: "/opt/codex-support/report-schema.json", content: "{}" },
+        ],
+        grant: {
+          baseUrl: "http://172.28.0.2:8080",
+          authorization: `Bearer ${randomBytes(32).toString("hex")}`,
+          dockerNetworkName: "internal-run",
+          model: "gpt-6.1-sol",
+          protocol: "responses",
+          expiresAt: "2026-10-08T07:30:00Z",
+        },
+        sourceMount: {
+          directory: source,
+          path: "/workspace/main",
+          mode: "ro",
+          expectedTree,
+        },
+        labHost: { name: "wordpress", ipv4: "172.20.0.2" },
+      });
+      expect(result.rolloutFailure).toBe("capture-failed");
+      expect(result.rollouts).toHaveLength(256);
+      expect(result.rollouts?.[0]).toContain("ROOT_REPORT");
       expect(
-        metadataOnly?.every((raw) => raw.trimEnd().split("\n").length === 1),
+        result.rollouts?.some((raw) => raw.includes("CHILD_REPORT_250")),
       ).toBe(true);
+      expect(
+        result.rollouts?.some((raw) => raw.includes("CHILD_REPORT_256")),
+      ).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -643,6 +750,63 @@ describe("gVisor Codex sandbox", () => {
       ).toContain(
         `--mount=type=bind,src=${core},dst=/workspace/wordpress,readonly`,
       );
+      const php = join(root, "php-source");
+      await mkdir(php);
+      await writeFile(join(php, "main.c"), "/* fixed PHP runtime */");
+      const phpTree = await measureCanonicalSourceTree(php, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      const phpMount = {
+        directory: php,
+        path: "/workspace/php",
+        mode: "ro" as const,
+        expectedTree: phpTree,
+      };
+      await sandbox.execute({
+        ...command,
+        additionalDependencyMounts: [phpMount],
+      });
+      expect(
+        calls.filter(({ args }) => args[0] === "run").at(-1)?.args,
+      ).toContain(`--mount=type=bind,src=${php},dst=/workspace/php,readonly`);
+      const plugin = join(root, "php-runtime-plugin");
+      await mkdir(plugin);
+      await writeFile(join(plugin, "main.php"), "<?php // valid plugin slug");
+      const pluginTree = await measureCanonicalSourceTree(plugin, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      await sandbox.execute({
+        ...command,
+        additionalDependencyMounts: [
+          phpMount,
+          {
+            directory: plugin,
+            path: "/workspace/dependencies/php-runtime",
+            mode: "ro",
+            expectedTree: pluginTree,
+          },
+        ],
+      });
+      expect(
+        calls.filter(({ args }) => args[0] === "run").at(-1)?.args,
+      ).toContain(
+        `--mount=type=bind,src=${plugin},dst=/workspace/dependencies/php-runtime,readonly`,
+      );
+      await expect(
+        sandbox.execute({
+          ...command,
+          additionalDependencyMounts: [phpMount, phpMount],
+        }),
+      ).rejects.toThrow("not admitted");
+      await writeFile(join(php, "main.c"), "mutated PHP runtime");
+      await expect(
+        sandbox.execute({
+          ...command,
+          additionalDependencyMounts: [phpMount],
+        }),
+      ).rejects.toThrow("fixed snapshot tree");
       await writeFile(join(core, "version.php"), "changed core");
       await expect(
         sandbox.execute({ ...command, dependencyMount }),
@@ -684,8 +848,8 @@ describe("gVisor Codex sandbox", () => {
         collectedBytes: 8 * 1024 * 1024,
         entries: [{ path: "REGISTRY.md", truncated: true }],
       });
-      expect(calls).toHaveLength(16);
-      expect(new Set(researchDirectories).size).toBe(4);
+      expect(calls).toHaveLength(24);
+      expect(new Set(researchDirectories).size).toBe(6);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

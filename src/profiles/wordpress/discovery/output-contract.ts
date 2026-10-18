@@ -8,20 +8,22 @@ import { wordpressLeadClaimSchema } from "./lead.js";
 import { wordpressCoverageRecordSchema } from "./coverage.js";
 
 /** The claim schemas own keys, required fields, types, and enum values. */
-function renderWordPressDiscoveryOutputContract<Version extends "v1" | "v2">(
-  version: Version,
-) {
+function renderWordPressDiscoveryOutputContract<
+  Version extends "v1" | "v2" | "v4",
+>(version: Version) {
   const finding = z.toJSONSchema(wordpressFindingClaimSchema, { io: "output" });
   const lead = z.toJSONSchema(wordpressLeadClaimSchema, { io: "output" });
   const text = [
     `## Finding and Lead output contract (wordpress-discovery-contract-${version})`,
-    ...(version === "v2"
+    ...(version === "v2" || version === "v4"
       ? [
           "As Root, include this complete contract in every child spawn assignment. In every follow-up to a child, require that child's latest final message to be one JSON object with exactly `findings`, `leads`, `examined`, and `unexamined`, even when there are no claims. Use empty arrays and the two strings for an empty report. A later prose reply must not replace the child's report.",
         ]
       : []),
     "Return `findings`, `leads`, `examined`, and `unexamined`. The last two are strings. A child reports direct Finding and Lead objects. In Root's final report, encode each Finding and Lead object as one JSON string in its array, as required by the transport schema.",
-    "Each claim object must follow its schema below. Fields of type string are single strings, not arrays. `sourceTrace` is an array of objects with `file`, `function`, and positive integer `line`. Use target-relative paths; prefix WordPress core paths with `@wordpress/`.",
+    version === "v4"
+      ? "Each claim object must follow its schema below. Fields of type string are single strings, not arrays. `sourceTrace` is an array of objects with `file`, `function`, and positive integer `line`. Use target-relative paths; prefix WordPress core paths with `@wordpress/`, PHP paths with `@php/`, and supplied plugin dependency paths with `@dependencies/<id>/`."
+      : "Each claim object must follow its schema below. Fields of type string are single strings, not arrays. `sourceTrace` is an array of objects with `file`, `function`, and positive integer `line`. Use target-relative paths; prefix WordPress core paths with `@wordpress/`.",
     `Finding schema: ${canonicalJson(finding)}`,
     `Lead schema: ${canonicalJson(lead)}`,
   ].join("\n\n");
@@ -40,6 +42,11 @@ export function wordPressDiscoveryOutputContract() {
 /** Root relays the schema contract to children at each turn. */
 export function wordPressDiscoveryOutputContractV2() {
   return renderWordPressDiscoveryOutputContract("v2");
+}
+
+/** v8 reports can cite pinned PHP and plugin dependency source trees. */
+export function wordPressDiscoveryOutputContractV4() {
+  return renderWordPressDiscoveryOutputContract("v4");
 }
 
 /** Root-only coverage is a new contract; v1/v2 remain pinned for old Trials. */

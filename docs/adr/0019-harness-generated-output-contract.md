@@ -32,3 +32,7 @@ status: accepted
 
 - `discovery-run-started` の configuration に `objectiveDigest` と `contractDigest` を持つ。既存の `promptDigest` は後方互換のため残す。
 - 既定 prompt の切り替えはこの ADR では行わない。目的文だけの新版を追加した後、ADR 0017 の方針に従って比較する。
+
+## 2026-10-18 所有者決定による改訂
+
+「探索手順、checklist、役割分担は契約節にも目的文にも書かない」という決定のうち、目的文への探索手法の記載禁止を `wp2shell-bounty-v7` について解除する。所有者は WP2Shell 記事の多様な着眼点、方法の系統一覧、複数ラウンド、反証、Root の方向転換をほぼそのまま唯一の探索目的文に戻すと決めた。固定の攻撃経路と子の固定配分は与えない。Finding / Lead の schema 由来の出力契約を Harness が別節で生成し、digest を分ける決定は維持する。
