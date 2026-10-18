@@ -206,16 +206,33 @@ describe("Codex native agent runtime", () => {
           },
         }),
       );
-      const result = await new CodexNativeAgentRuntime(
+      const runtime = new CodexNativeAgentRuntime(
         sandbox(lines.join("\n"), []),
         broker(),
         new ProviderAttachmentStore(root),
         image,
         () => new Date(now),
-      ).execute(run);
+      );
+      // Reads count only under the mounts this run supplies.
+      const tree = { digest, entries: 1, bytes: 1 };
+      const result = await runtime.execute({
+        ...run,
+        dependencySources: [
+          { path: "/workspace/php", directory: "/synthetic/php", tree },
+          {
+            path: "/workspace/dependencies/elementor",
+            directory: "/synthetic/elementor",
+            tree,
+          },
+        ],
+      });
       expect(result.receipt).toMatchObject({
         terminal: "completed",
         observed: { filesRead: 2, uniqueFilesRead: 2 },
+      });
+      expect((await runtime.execute(run)).receipt).toMatchObject({
+        terminal: "completed",
+        observed: { filesRead: 0, uniqueFilesRead: 0 },
       });
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -1397,7 +1414,14 @@ describe("Codex native agent runtime", () => {
         image,
         () => new Date(now),
       );
-      const result = await runtime.execute(run);
+      const result = await runtime.execute({
+        ...run,
+        dependencySource: {
+          path: "/workspace/wordpress",
+          directory: "/synthetic/wordpress-core",
+          tree: { digest, entries: 1, bytes: 1 },
+        },
+      });
       expect(result.receipt.observed).toEqual({
         toolCalls: 2,
         filesRead: 3,
@@ -1577,6 +1601,7 @@ describe("Codex native agent runtime", () => {
         () => new Date(now),
       );
       const dependencySource = {
+        path: "/workspace/wordpress",
         directory: "/synthetic/wordpress-core",
         tree: { digest, entries: 1, bytes: 20 },
       };

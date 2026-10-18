@@ -807,14 +807,33 @@ describe("gVisor Codex sandbox", () => {
           additionalDependencyMounts: [phpMount],
         }),
       ).rejects.toThrow("fixed snapshot tree");
+      // Dependency mounts live beside each other under the workspace root only.
+      for (const path of [
+        "/opt/codex-support",
+        "/workspace/main",
+        "/workspace/research",
+        "/workspace/main/core",
+        "/workspace/Wordpress",
+      ])
+        await expect(
+          sandbox.execute({
+            ...command,
+            dependencyMount: { ...dependencyMount, path },
+          }),
+        ).rejects.toThrow("not admitted");
+      await expect(
+        sandbox.execute({
+          ...command,
+          dependencyMount,
+          additionalDependencyMounts: [
+            { ...phpMount, path: "/workspace/wordpress/php" },
+          ],
+        }),
+      ).rejects.toThrow("not admitted");
       await writeFile(join(core, "version.php"), "changed core");
       await expect(
         sandbox.execute({ ...command, dependencyMount }),
       ).rejects.toThrow("fixed snapshot tree");
-      Object.assign(dependencyMount, { path: "/workspace/else" });
-      await expect(
-        sandbox.execute({ ...command, dependencyMount }),
-      ).rejects.toThrow();
       await expect(
         sandbox.execute({
           ...command,

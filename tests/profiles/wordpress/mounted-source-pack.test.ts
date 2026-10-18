@@ -36,8 +36,8 @@ const sources: Awaited<ReturnType<WordPressSourceResolver["resolve"]>> = {
 describe("mountedWordPressSourcePack", () => {
   it("maps one frozen source set to the shared discovery and verifier mounts", () => {
     expect(mountedWordPressSourcePack(sources)).toEqual({
-      target: { directory: "/frozen/target", tree },
-      core: { directory: "/frozen/core", tree },
+      target: { path: "/workspace/main", directory: "/frozen/target", tree },
+      core: { path: "/workspace/wordpress", directory: "/frozen/core", tree },
       dependencies: [
         { path: "/workspace/php", directory: "/frozen/php", tree },
         {

@@ -36,6 +36,12 @@ import type {
   CodexSandboxResult,
 } from "./codex-native-agent-runtime.js";
 import { MINIMUM_ACTIVE_RUNNER_SOURCE } from "./minimum-active-runner.js";
+import {
+  SANDBOX_RESEARCH_MOUNT_PATH,
+  SANDBOX_SOURCE_MOUNT_PATH,
+  dependencyMountPathsAreDisjoint,
+  isDependencyMountPath,
+} from "./sandbox-layout.js";
 
 /** Memory ceiling of one Codex sandbox container. */
 export const CODEX_SANDBOX_MEMORY_MIB = 2048;
@@ -611,27 +617,32 @@ export class GvisorCodexSandbox implements CodexSandbox {
           command.databaseHost.name === command.labHost.name ||
           isIP(command.databaseHost.ipv4) !== 4)) ||
       command.sourceMount.mode !== "ro" ||
-      command.sourceMount.path !== "/workspace/main" ||
+      command.sourceMount.path !== SANDBOX_SOURCE_MOUNT_PATH ||
       !isAbsolute(command.sourceMount.directory) ||
       (command.dependencyMount !== undefined &&
         (command.dependencyMount.mode !== "ro" ||
-          command.dependencyMount.path !== "/workspace/wordpress" ||
+          !isDependencyMountPath(command.dependencyMount.path) ||
           !isAbsolute(command.dependencyMount.directory))) ||
       (command.additionalDependencyMounts !== undefined &&
         (command.additionalDependencyMounts.length > 32 ||
-          new Set(command.additionalDependencyMounts.map((mount) => mount.path))
-            .size !== command.additionalDependencyMounts.length ||
           command.additionalDependencyMounts.some(
             (mount) =>
               mount.mode !== "ro" ||
-              !/^\/workspace\/(?:php|dependencies\/[a-z0-9][a-z0-9-]{0,63})$/.test(
-                mount.path,
-              ) ||
+              !isDependencyMountPath(mount.path) ||
               !isAbsolute(mount.directory),
           ))) ||
+      // Every dependency tree sits beside the others under the workspace root.
+      !dependencyMountPathsAreDisjoint([
+        ...(command.dependencyMount === undefined
+          ? []
+          : [command.dependencyMount.path]),
+        ...(command.additionalDependencyMounts ?? []).map(
+          (mount) => mount.path,
+        ),
+      ]) ||
       (command.researchMount !== undefined &&
         (command.researchMount.mode !== "rw" ||
-          command.researchMount.path !== "/workspace/research")) ||
+          command.researchMount.path !== SANDBOX_RESEARCH_MOUNT_PATH)) ||
       command.supportFiles.length !== 1 ||
       command.supportFiles[0]?.path !==
         "/opt/codex-support/report-schema.json" ||
@@ -673,7 +684,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
     const dependency =
       command.dependencyMount === undefined
         ? undefined
-        : await mountOf(command.dependencyMount);
+        : {
+            path: command.dependencyMount.path,
+            directory: await mountOf(command.dependencyMount),
+          };
     const additionalDependencies = await Promise.all(
       (command.additionalDependencyMounts ?? []).map(async (mount) => ({
         path: mount.path,
@@ -752,11 +766,11 @@ export class GvisorCodexSandbox implements CodexSandbox {
           : [
               `--add-host=${command.databaseHost.name}:${command.databaseHost.ipv4}`,
             ]),
-        `--mount=type=bind,src=${source},dst=/workspace/main,readonly`,
+        `--mount=type=bind,src=${source},dst=${SANDBOX_SOURCE_MOUNT_PATH},readonly`,
         ...(dependency === undefined
           ? []
           : [
-              `--mount=type=bind,src=${dependency},dst=/workspace/wordpress,readonly`,
+              `--mount=type=bind,src=${dependency.directory},dst=${dependency.path},readonly`,
             ]),
         ...additionalDependencies.map(
           (mount) =>
@@ -765,11 +779,11 @@ export class GvisorCodexSandbox implements CodexSandbox {
         ...(researchDirectory === undefined
           ? []
           : [
-              `--mount=type=bind,src=${researchDirectory},dst=/workspace/research`,
+              `--mount=type=bind,src=${researchDirectory},dst=${SANDBOX_RESEARCH_MOUNT_PATH}`,
             ]),
 
         `--mount=type=bind,src=${staging},dst=/opt/codex-support,readonly`,
-        "--workdir=/workspace/main",
+        `--workdir=${SANDBOX_SOURCE_MOUNT_PATH}`,
         "--env=HOME=/tmp",
         "--env=CODEX_HOME=/tmp/codex",
         `--mount=type=bind,src=${codexHome},dst=/tmp/codex`,

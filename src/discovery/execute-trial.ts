@@ -20,6 +20,7 @@ import {
 } from "./native-run-receipts.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import { recordReadPaths } from "./read-paths.js";
+import { dependencyMountPathsOf } from "./sandbox-layout.js";
 import {
   createReportRecorder,
   type ReportRecorder,
@@ -325,6 +326,7 @@ export async function executeTrial(
       context.attachments,
       context.evidence,
       receipt.diagnosticArtifactDigest,
+      dependencyMountPathsOf(run),
     );
     if (readPathsDigest !== undefined) draft.readPathsDigest = readPathsDigest;
     if (receipt.providerLimit !== undefined) draft.outcome = "provider-limited";

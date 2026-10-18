@@ -97,10 +97,10 @@ export class CodexVerifier implements WordPressVerifierTransport {
               },
             }),
         sourcePack: {
-          target: "/workspace/main",
+          target: sourcePack.target.path,
           ...(sourcePack.core === undefined
             ? {}
-            : { wordpressCore: "/workspace/wordpress" }),
+            : { wordpressCore: sourcePack.core.path }),
           dependencies: sourcePack.dependencies.map((source) => source.path),
         },
         ...(canary === undefined ? {} : { canary }),

@@ -7,6 +7,7 @@ import type {
 import type { PlannedDiscoveryRun } from "./campaign.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import { recordReadPaths } from "./read-paths.js";
+import { dependencyMountPathsOf } from "./sandbox-layout.js";
 import {
   nativeRunReceiptSchema,
   receiptWallTimeMs,
@@ -95,6 +96,7 @@ export async function recoverChildAgentReports(
       options.attachments,
       options.evidence,
       receipt.diagnosticArtifactDigest,
+      dependencyMountPathsOf(options.run),
     );
     let outcome: "completed" | "failed" = "failed";
     let failure: ReportFailure | undefined;

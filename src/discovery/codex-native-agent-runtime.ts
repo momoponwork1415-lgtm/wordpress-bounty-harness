@@ -28,6 +28,15 @@ import {
   type ProviderAttachmentRef,
 } from "./provider-research-report.js";
 import { commandsFromRollout, type ObservedCommand } from "./read-paths.js";
+import {
+  SANDBOX_RESEARCH_MOUNT_PATH,
+  SANDBOX_SOURCE_MOUNT_PATH,
+  dependencyMountPathSchema,
+  dependencyMountPathsAreDisjoint,
+  dependencyMountPathsOf,
+  mountedSourcePath,
+  mountedSourcePathPattern,
+} from "./sandbox-layout.js";
 
 /** A profile claim travels as JSON text so the provider's strict schema stays closed. */
 const claimTextSchema = z.string().transform((text, context) => {
@@ -206,13 +215,14 @@ export interface CodexSandboxCommand {
   readonly grant: ProviderCredentialEgressGrant;
   readonly sourceMount: {
     readonly directory: string;
-    readonly path: "/workspace/main";
+    readonly path: typeof SANDBOX_SOURCE_MOUNT_PATH;
     readonly mode: "ro";
     readonly expectedTree: ExpectedSourceTree;
   };
+  /** The profile's primary dependency tree, at the mount path the run declares. */
   readonly dependencyMount?: {
     readonly directory: string;
-    readonly path: "/workspace/wordpress";
+    readonly path: string;
     readonly mode: "ro";
     readonly expectedTree: ExpectedSourceTree;
   };
@@ -224,7 +234,7 @@ export interface CodexSandboxCommand {
     readonly expectedTree: ExpectedSourceTree;
   }[];
   readonly researchMount?: {
-    readonly path: "/workspace/research";
+    readonly path: typeof SANDBOX_RESEARCH_MOUNT_PATH;
     readonly mode: "rw";
   };
   readonly labHost?: { readonly name: string; readonly ipv4: string };
@@ -282,7 +292,9 @@ export interface DiscoveryTransportRun {
   readonly campaignInput: CampaignInputV1;
   readonly sourceDirectory: string;
   readonly sourceTree: ExpectedSourceTree;
+  /** Mount paths come from the profile's sandbox layout declaration. */
   readonly dependencySource?: {
+    readonly path: string;
     readonly directory: string;
     readonly tree: ExpectedSourceTree;
   };
@@ -344,6 +356,7 @@ const discoveryTransportRunSchema = z.strictObject({
   }),
   dependencySource: z
     .strictObject({
+      path: dependencyMountPathSchema,
       directory: z.string().min(1),
       tree: z.strictObject({
         digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
@@ -355,11 +368,7 @@ const discoveryTransportRunSchema = z.strictObject({
   dependencySources: z
     .array(
       z.strictObject({
-        path: z
-          .string()
-          .regex(
-            /^\/workspace\/(?:php|dependencies\/[a-z0-9][a-z0-9-]{0,63})$/,
-          ),
+        path: dependencyMountPathSchema,
         directory: z.string().min(1),
         tree: z.strictObject({
           digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
@@ -518,7 +527,7 @@ type ChildRollout = {
   readonly effort: string | undefined;
   readonly cyberAccessProgram: string | undefined;
   readonly usage: z.infer<typeof usageSchema> | undefined;
-  readonly observed: Observed;
+  readonly commands: readonly ObservedCommand[];
   readonly finalMessage: string | undefined;
   readonly startedAt: string;
   readonly completedAt: string;
@@ -605,7 +614,7 @@ function decodeChildRollout(
     effort,
     cyberAccessProgram,
     usage,
-    observed: observedFromCommands(commands),
+    commands,
     finalMessage,
     startedAt: startedAt ?? new Date(0).toISOString(),
     completedAt: completedAt ?? startedAt ?? new Date(0).toISOString(),
@@ -672,7 +681,11 @@ export function recoverChildReportFromRollout(
   };
 }
 type Observed = NonNullable<NativeRunReceipt["observed"]>;
-function sourcePath(path: string, cwd?: string): string | undefined {
+function sourcePath(
+  path: string,
+  cwd: string | undefined,
+  dependencyMounts: readonly string[],
+): string | undefined {
   let directory = cwd;
   if (cwd?.startsWith("file://")) {
     try {
@@ -681,17 +694,17 @@ function sourcePath(path: string, cwd?: string): string | undefined {
       return undefined;
     }
   }
-  const resolved = posix.resolve(directory ?? "/", path);
-  return resolved.startsWith("/workspace/main/") ||
-    resolved.startsWith("/workspace/wordpress/") ||
-    resolved.startsWith("/workspace/php/") ||
-    /^\/workspace\/dependencies\/[a-z0-9][a-z0-9-]{0,63}\//.test(resolved)
-    ? resolved
-    : undefined;
+  return mountedSourcePath(
+    dependencyMounts,
+    posix.resolve(directory ?? "/", path),
+  );
 }
+/** Counts reads of the target source and the run's dependency mounts. */
 function observedFromCommands(
   commands: readonly (string | ObservedCommand)[],
+  dependencyMounts: readonly string[],
 ): Observed {
+  const mountedPath = mountedSourcePathPattern(dependencyMounts);
   const paths = new Set<string>();
   let filesRead = 0;
   let labRequests = 0;
@@ -706,7 +719,7 @@ function observedFromCommands(
           (parsed?.type === "read" || parsed?.type === "search") &&
           typeof parsed.path === "string"
         ) {
-          const path = sourcePath(parsed.path, entry.cwd);
+          const path = sourcePath(parsed.path, entry.cwd, dependencyMounts);
           if (path !== undefined) {
             filesRead++;
             if (parsed.type === "read") paths.add(path);
@@ -714,9 +727,7 @@ function observedFromCommands(
         }
       }
     if (filesRead === before)
-      for (const match of command.matchAll(
-        /\/workspace\/(?:main|wordpress|php|dependencies\/[a-z0-9][a-z0-9-]{0,63})\/[^\s'"`;&|)]+/g,
-      )) {
+      for (const match of command.matchAll(mountedPath)) {
         filesRead++;
         paths.add(match[0]);
       }
@@ -740,8 +751,11 @@ function observedFromCommands(
   };
 }
 
-function observedFromRollout(raw: string): Observed {
-  return observedFromCommands(commandsFromRollout(raw));
+function observedFromRollout(
+  raw: string,
+  dependencyMounts: readonly string[],
+): Observed {
+  return observedFromCommands(commandsFromRollout(raw), dependencyMounts);
 }
 
 function usageFromTranscript(
@@ -816,7 +830,8 @@ function usageFromRollout(raw: string): NativeRunReceipt["usage"] | undefined {
 }
 function decodeTranscript(
   stdout: string,
-  outputKind?: "verification",
+  outputKind: "verification" | undefined,
+  dependencyMounts: readonly string[],
 ):
   | {
       report:
@@ -940,7 +955,7 @@ function decodeTranscript(
       outputTokens: usage?.output_tokens ?? "unavailable",
       reasoningOutputTokens: usage?.reasoning_output_tokens ?? "unavailable",
     },
-    observed: observedFromCommands(commands),
+    observed: observedFromCommands(commands, dependencyMounts),
   };
 }
 
@@ -1118,9 +1133,8 @@ function admittedRun(
     (run.dependencySource === undefined ||
       isAbsolute(run.dependencySource.directory)) &&
     (run.dependencySources === undefined ||
-      (run.dependencySources.every((source) => isAbsolute(source.directory)) &&
-        new Set(run.dependencySources.map((source) => source.path)).size ===
-          run.dependencySources.length)) &&
+      run.dependencySources.every((source) => isAbsolute(source.directory))) &&
+    dependencyMountPathsAreDisjoint(dependencyMountPathsOf(run)) &&
     CODEX_AUTHENTICATION_METHODS.includes(run.profile.authenticationMethod) &&
     (!cooperative ||
       admitCooperativeRuntimeProfile(run.profile, sandboxImage).status ===
@@ -1329,7 +1343,7 @@ function sandboxCommand(
     grant,
     sourceMount: {
       directory: run.sourceDirectory,
-      path: "/workspace/main",
+      path: SANDBOX_SOURCE_MOUNT_PATH,
       mode: "ro",
       expectedTree: run.sourceTree,
     },
@@ -1338,7 +1352,7 @@ function sandboxCommand(
       : {
           dependencyMount: {
             directory: run.dependencySource.directory,
-            path: "/workspace/wordpress" as const,
+            path: run.dependencySource.path,
             mode: "ro" as const,
             expectedTree: run.dependencySource.tree,
           },
@@ -1356,7 +1370,7 @@ function sandboxCommand(
     ...(cooperative
       ? {
           researchMount: {
-            path: "/workspace/research" as const,
+            path: SANDBOX_RESEARCH_MOUNT_PATH,
             mode: "rw" as const,
           },
         }
@@ -1668,7 +1682,10 @@ export class CodexNativeAgentRuntime {
     state.rootDiagnosticArtifactDigest = (
       await this.attachments.put("diagnostic", Buffer.from(processDiagnostic))
     ).digest;
-    state.rootObserved = observedFromRollout(rootRollout);
+    state.rootObserved = observedFromRollout(
+      rootRollout,
+      dependencyMountPathsOf(state.run),
+    );
     state.rootUsage ??= usageFromRollout(rootRollout);
   }
 
@@ -1765,7 +1782,10 @@ export class CodexNativeAgentRuntime {
         reasoningOutputTokens:
           child.usage?.reasoning_output_tokens ?? "unavailable",
       },
-      observed: child.observed,
+      observed: observedFromCommands(
+        child.commands,
+        dependencyMountPathsOf(run),
+      ),
       grantReceiptDigest,
       ...(diagnosticArtifactDigest === undefined
         ? {}
@@ -1788,7 +1808,11 @@ export class CodexNativeAgentRuntime {
   ): Promise<DiscoveryTransportResult> {
     const decoded =
       result.status === "exited" && result.exitCode === 0
-        ? decodeTranscript(result.stdout, state.run.outputKind)
+        ? decodeTranscript(
+            result.stdout,
+            state.run.outputKind,
+            dependencyMountPathsOf(state.run),
+          )
         : undefined;
     const failure = this.#executionFailure(
       state,

@@ -1,8 +1,14 @@
 import type { ExpectedSourceTree } from "../../../infrastructure/canonical-source-tree.js";
 import { SourceAcquisitionError } from "../../../snapshot/index.js";
 import type { WordPressSourceResolver } from "../lab/index.js";
+import {
+  WORDPRESS_SANDBOX_LAYOUT,
+  wordpressDependencyPluginMountPath,
+} from "../sandbox-layout.js";
 
+/** One fixed tree and the sandbox path the layout assigns to it. */
 type MountedTree = Readonly<{
+  path: string;
   directory: string;
   tree: ExpectedSourceTree;
 }>;
@@ -10,7 +16,7 @@ type MountedTree = Readonly<{
 export type WordPressMountedSourcePack = Readonly<{
   target: MountedTree;
   core?: MountedTree;
-  dependencies: readonly Readonly<MountedTree & { path: string }>[];
+  dependencies: readonly MountedTree[];
 }>;
 
 /** One Snapshot-derived mount map for both discovery and verification. */
@@ -40,7 +46,7 @@ export function mountedWordPressSourcePack(
     if (source.kind === "php-source")
       return [
         {
-          path: "/workspace/php",
+          path: WORDPRESS_SANDBOX_LAYOUT.php,
           directory: source.sourceDirectory,
           tree: source.sourceTree,
         },
@@ -52,7 +58,7 @@ export function mountedWordPressSourcePack(
       });
     return [
       {
-        path: `/workspace/dependencies/${source.pluginSlug}`,
+        path: wordpressDependencyPluginMountPath(source.pluginSlug),
         directory: source.sourceDirectory,
         tree: source.sourceTree,
       },
@@ -68,6 +74,7 @@ export function mountedWordPressSourcePack(
 
   return {
     target: {
+      path: WORDPRESS_SANDBOX_LAYOUT.target,
       directory: resolved.target.sourceDirectory,
       tree: resolved.target.sourceTree,
     },
@@ -75,6 +82,7 @@ export function mountedWordPressSourcePack(
       ? {}
       : {
           core: {
+            path: WORDPRESS_SANDBOX_LAYOUT.wordpressCore,
             directory: core[0].sourceDirectory,
             tree: core[0].sourceTree,
           },
