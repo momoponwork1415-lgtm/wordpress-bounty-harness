@@ -9,7 +9,7 @@
 - コマンド名は `runCli`（`src/cli/index.ts`）が受け付けるもの。
 - host設定は `--host <path>` か `WBH_HOST_CONFIG` で渡す。
 - 台帳とPrivate Evidenceの置き場は `--state <dir>` か `WBH_STATE_DIRECTORY` で選ぶ。既定は `~/.local/state/wordpress-bounty-harness`。
-- 過去の単独Trialの設定例は [examples/translatepress-3.3.1/](../examples/translatepress-3.3.1/README.md)、過去の2×2開発セットは [examples/translatepress-3.2.5/](../examples/translatepress-3.2.5/README.md)。Root＋3の本番開始条件は [TranslatePressベンチマーク](TRANSLATEPRESS-BENCHMARK.md)。
+- 過去の単独Trialの設定例は [examples/translatepress-3.3.1/](../examples/translatepress-3.3.1/README.md)。過去の2×2開発セット（`examples/translatepress-3.2.5/`）は 2026-10-18 に削除し、Git 履歴にだけ残る。Root＋3の本番開始条件は [TranslatePressベンチマーク](TRANSLATEPRESS-BENCHMARK.md)。
 
 ## 1. 一度だけやる準備
 
