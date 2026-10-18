@@ -212,6 +212,78 @@ describe("WordPress ledger exclusions", () => {
     ).toEqual(["previously-selected"]);
   });
 
+  it("re-admits a higher version only after minimumDaysSinceTrial have passed since the latest Trial (ADR 0037 addendum)", () => {
+    // Trials started 2026-10-11T12:00Z (`occurredAt`).
+    const ledger = reader([
+      ...trial("seen", "1.9.0", "campaign-1", digest("a")),
+      ...trial("seen", "1.10.0", "campaign-2", digest("b")),
+    ]);
+    const at = (days: number) =>
+      new Date(Date.parse(occurredAt) + days * 86_400_000);
+    const rule = (version: string, now: Date) =>
+      inspectWordPressLedgerExclusions({
+        ledger,
+        candidates: [{ slug: "seen", version }],
+        revisitPolicy: { kind: "version-increased", minimumDaysSinceTrial: 90 },
+        currentPromptVariant: "wp2shell-bounty-v2",
+        now,
+      })[0]?.reasons;
+    // Same version: excluded however long ago.
+    expect(rule("1.10.0", at(400))).toEqual(["previously-selected"]);
+    // Higher version but only 30 days: excluded.
+    expect(rule("1.11.0", at(30))).toEqual(["previously-selected"]);
+    // Higher version and 89.9 days: still excluded; 90 days: admitted.
+    expect(rule("1.11.0", at(89.9))).toEqual(["previously-selected"]);
+    expect(rule("1.11.0", at(90))).toEqual([]);
+    expect(rule("1.11.0", at(400))).toEqual([]);
+    // Without the day gap, the version increase alone re-admits (the pre-addendum rule).
+    expect(
+      inspectWordPressLedgerExclusions({
+        ledger,
+        candidates: [{ slug: "seen", version: "1.11.0" }],
+        revisitPolicy: { kind: "version-increased" },
+        currentPromptVariant: "wp2shell-bounty-v2",
+        now: at(1),
+      })[0]?.reasons,
+    ).toEqual([]);
+    // An unpublished Finding keeps the slug out regardless.
+    expect(
+      inspectWordPressLedgerExclusions({
+        ledger: reader([
+          ...trial("seen", "1.9.0", "campaign-1", digest("a")),
+          finding("finding-1", "campaign-1", digest("a")),
+        ]),
+        candidates: [{ slug: "seen", version: "1.11.0" }],
+        revisitPolicy: { kind: "version-increased", minimumDaysSinceTrial: 90 },
+        currentPromptVariant: "wp2shell-bounty-v2",
+        now: at(400),
+      })[0]?.reasons,
+    ).toEqual(["unpublished-finding"]);
+    // Legacy-started slugs stay excluded; the rule reads only ledger Trials.
+    expect(
+      inspectWordPressLedgerExclusions({
+        ledger: reader([]),
+        candidates: [{ slug: "old", version: "9.0.0" }],
+        revisitPolicy: { kind: "version-increased", minimumDaysSinceTrial: 90 },
+        currentPromptVariant: "wp2shell-bounty-v2",
+        now: at(400),
+        legacyHistory: {
+          started: new Set(["old"]),
+          ambiguous: new Set<string>(),
+          reconsider: new Set<string>(),
+          exportedAt: "2026-10-12T00:00:00Z",
+          digest: digest("f"),
+        },
+      })[0]?.reasons,
+    ).toEqual(["legacy-started"]);
+    expect(
+      wordPressRevisitPolicySchema.safeParse({
+        kind: "never",
+        minimumDaysSinceTrial: 90,
+      }).success,
+    ).toBe(false);
+  });
+
   it("keeps a Finding private even after a version increase", () => {
     const ledger = reader([...trial("seen", "1.2.0"), finding("finding-1")]);
     expect(

@@ -8,10 +8,19 @@ import type { Ledger, LedgerEventV1 } from "../../../ledger/index.js";
 import { compareVersions } from "../plugin-version.js";
 import { parseWordPressOrgSelectionId } from "../target-identity.js";
 
-/** Revisit is an explicit policy choice; the default policy uses `never`. */
+/**
+ * Revisit is an explicit policy choice. The default policy re-admits a slug
+ * once its stable version exceeds every counted Trial's version and
+ * `minimumDaysSinceTrial` days have passed since the latest of those Trials
+ * started (ADR 0037, 2026-10-19 addendum; `never` was ADR 0032).
+ */
 export const wordPressRevisitPolicySchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("never") }),
-  z.strictObject({ kind: z.literal("version-increased") }),
+  z.strictObject({
+    kind: z.literal("version-increased"),
+    /** Absent: the version increase alone re-admits. */
+    minimumDaysSinceTrial: z.number().int().nonnegative().max(3650).optional(),
+  }),
   z.strictObject({ kind: z.literal("prompt-version-changed") }),
   z.strictObject({ kind: z.literal("version-or-prompt-changed") }),
 ]);
@@ -90,8 +99,12 @@ export function inspectWordPressLedgerExclusions(input: {
   readonly currentPromptVariant: string;
   readonly revisitPolicy: WordPressRevisitPolicy;
   readonly legacyHistory?: WordPressLegacyHistory;
+  /** The instant `minimumDaysSinceTrial` is measured to; defaults to the wall clock. */
+  readonly now?: Date;
 }): readonly WordPressLedgerExclusion[] {
   const revisitPolicy = wordPressRevisitPolicySchema.parse(input.revisitPolicy);
+  const nowMs = (input.now ?? new Date()).getTime();
+  if (!Number.isFinite(nowMs)) throw new Error("Selection clock is invalid");
   const promptVersions = new Map<string, Set<string>>();
   const selectedBySlug = new Map<string, EarlierSelection[]>();
   const selectedBySnapshot = new Map<string, string>();
@@ -199,6 +212,16 @@ export function inspectWordPressLedgerExclusions(input: {
       const versionIncreased = earlier.every(
         (selected) => compareVersions(version, selected.version) > 0,
       );
+      // The gap is measured from the latest counted Trial of this slug.
+      const latestStartMs = Math.max(
+        ...earlier.map((selected) => Date.parse(selected.startedAt)),
+      );
+      const daysSinceTrial = (nowMs - latestStartMs) / 86_400_000;
+      const waitedLongEnough =
+        revisitPolicy.kind !== "version-increased" ||
+        revisitPolicy.minimumDaysSinceTrial === undefined ||
+        (Number.isFinite(daysSinceTrial) &&
+          daysSinceTrial >= revisitPolicy.minimumDaysSinceTrial);
       const changedPrompt = promptChanged(
         earlier,
         promptVersions,
@@ -206,7 +229,7 @@ export function inspectWordPressLedgerExclusions(input: {
       );
       const revisit =
         revisitPolicy.kind === "version-increased"
-          ? versionIncreased
+          ? versionIncreased && waitedLongEnough
           : revisitPolicy.kind === "prompt-version-changed"
             ? changedPrompt
             : revisitPolicy.kind === "version-or-prompt-changed"

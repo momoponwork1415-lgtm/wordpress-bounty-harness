@@ -461,7 +461,7 @@ stateDiagram-v2
 - `discovery-concluded` の stoppedBy: no-new-finding / max-runs / output-boundary / plans-exhausted。provider-limit と incomplete は concluded にせず、再開できる。
 - 「数えない run」は Root が source を 1 件も読まず、子を起こさず、broker 転送が 1 以下で終わった run。その対象だけが次の選定で戻る。
 
-`revisitPolicy: never` では、Trial に数えた対象は二度と選ばない。数えない run の対象だけが戻る。
+`revisitPolicy: never` では、Trial に数えた対象は二度と選ばない。数えない run の対象だけが戻る。現行方針（ADR 0037 の 2026-10-19 追記）は `version-increased` ＋ `minimumDaysSinceTrial: 90` で、版が上がり 90 日経った対象も戻る。
 
 根拠: SPEC §6、最終設計 D2 / P5、ADR 0029。`src/profiles/wordpress/selection/ledger-exclusions.ts` 103〜117 行、`src/discovery/campaign.ts` 623〜693 行、`src/cli/pipeline.ts` 732〜745 行。
 

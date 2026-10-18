@@ -65,6 +65,7 @@ export type WordPressSelectionAdvisoryHistoryReport =
       readonly lastRefreshFailed: boolean;
       readonly windowDays: number;
       readonly countCap: number;
+      readonly payingClassCap: number;
       readonly maximumAgeDays: number;
     };
 
@@ -182,8 +183,10 @@ function normalizeName(name: string): string {
 export function advisoryHistorySettings(policy: WordPressSelectionPolicy): {
   readonly weight: number;
   readonly payingClassWeight: number;
+  readonly recordRecencyWeight: number;
   readonly windowDays: number;
   readonly countCap: number;
+  readonly payingClassCap: number;
   readonly maximumAgeDays: number;
   readonly payingClasses: readonly string[];
   /** The mirror is opened only when a history weight is positive. */
@@ -191,53 +194,69 @@ export function advisoryHistorySettings(policy: WordPressSelectionPolicy): {
 } {
   const weight = policy.scoreWeights.history ?? 0;
   const payingClassWeight = policy.scoreWeights.historyPayingClass ?? 0;
+  const recordRecencyWeight = policy.scoreWeights.recordRecency ?? 0;
   return {
     weight,
     payingClassWeight,
+    recordRecencyWeight,
     windowDays: policy.historyWindowDays ?? advisoryHistoryDefaults.windowDays,
     countCap: policy.historyCountCap ?? advisoryHistoryDefaults.countCap,
+    payingClassCap:
+      policy.historyPayingClassCap ?? advisoryHistoryDefaults.payingClassCap,
     maximumAgeDays:
       policy.maximumHistoryAgeDays ?? advisoryHistoryDefaults.maximumAgeDays,
     payingClasses:
       policy.historyPayingClasses ?? advisoryHistoryDefaults.payingClasses,
-    used: weight > 0 || payingClassWeight > 0,
+    used: weight > 0 || payingClassWeight > 0 || recordRecencyWeight > 0,
   };
 }
 
-/** The share of the history weight a record published today adds over one published at the window's edge. */
-const HISTORY_FRESHNESS_SHARE = 0.1;
+/** Where the newest counted record falls in the window: 1 at the mirror's `asOf`, 0 at the window's edge or with no record. */
+export function recordRecency(
+  latestPublished: string | undefined,
+  asOfMs: number,
+  windowDays: number,
+): number {
+  const latestMs =
+    latestPublished === undefined ? undefined : Date.parse(latestPublished);
+  if (latestMs === undefined || !Number.isFinite(latestMs)) return 0;
+  return Math.max(
+    0,
+    Math.min(1, 1 - (asOfMs - latestMs) / (windowDays * dayMs)),
+  );
+}
 
 /**
- * `weight × (min(count, cap) / cap + 0.1 × freshness)` where freshness is
- * 1 for a record published at the mirror's `asOf` and 0 at the window's edge.
- * The paying-class member uses the same shape without the freshness term.
- * Both are relative to the mirror, not the wall clock, so one mirror gives
- * one score (policy/selection.md).
+ * Three members, all relative to the mirror's `asOf` rather than the wall
+ * clock, so one mirror gives one score (policy/selection.md, ADR 0037 and its
+ * 2026-10-19 addendum):
+ * - `history = w × min(count, historyCountCap) / historyCountCap`
+ * - `historyPayingClass = w × min(payingClassCount, historyPayingClassCap)`
+ *   (one point per record, not normalised)
+ * - `recordRecency = w × max(0, 1 − daysSinceLatestRecord / historyWindowDays)`
  */
 function historyScore(
   counted: WordPressAdvisoryHistoryCount,
   settings: ReturnType<typeof advisoryHistorySettings>,
   asOfMs: number,
-): { readonly history: number; readonly historyPayingClass: number } {
+): {
+  readonly history: number;
+  readonly historyPayingClass: number;
+  readonly recordRecency: number;
+} {
   const volume = Math.min(counted.count, settings.countCap) / settings.countCap;
-  const latestMs =
-    counted.latestPublished === undefined
-      ? undefined
-      : Date.parse(counted.latestPublished);
-  const freshness =
-    latestMs === undefined || !Number.isFinite(latestMs)
-      ? 0
-      : Math.max(
-          0,
-          Math.min(1, 1 - (asOfMs - latestMs) / (settings.windowDays * dayMs)),
-        );
-  const payingVolume =
-    Math.min(counted.payingClassCount, settings.countCap) / settings.countCap;
   return {
-    history: settings.weight * (volume + HISTORY_FRESHNESS_SHARE * freshness),
-    historyPayingClass: settings.payingClassWeight * payingVolume,
+    history: settings.weight * volume,
+    historyPayingClass:
+      settings.payingClassWeight *
+      Math.min(counted.payingClassCount, settings.payingClassCap),
+    recordRecency:
+      settings.recordRecencyWeight *
+      recordRecency(counted.latestPublished, asOfMs, settings.windowDays),
   };
 }
+
+const NO_HISTORY = { history: 0, historyPayingClass: 0, recordRecency: 0 };
 
 /** Stops `select` before any candidate is observed when the mirror cannot be trusted (ADR 0037). */
 function openAdvisoryHistory(
@@ -268,7 +287,7 @@ function score(
   observation: WordPressOrgTargetObservation,
   policy: WordPressSelectionPolicy,
   updateAgeDays: number,
-  history: { readonly history: number; readonly historyPayingClass: number },
+  history: typeof NO_HISTORY,
 ): WordPressTargetSelection["scoreBreakdown"] {
   const installations =
     Math.log10(1 + observation.activeInstallations) *
@@ -293,6 +312,7 @@ function score(
     highThreat,
     history: history.history,
     historyPayingClass: history.historyPayingClass,
+    recordRecency: history.recordRecency,
   };
 }
 
@@ -333,6 +353,7 @@ export function createWordPressSelection(
               lastRefreshFailed: mirror.lastRefreshFailed,
               windowDays: historySettings.windowDays,
               countCap: historySettings.countCap,
+              payingClassCap: historySettings.payingClassCap,
               maximumAgeDays: historySettings.maximumAgeDays,
             };
       const asOfMs = mirror === undefined ? now : Date.parse(mirror.asOf);
@@ -490,7 +511,7 @@ export function createWordPressSelection(
           policy,
           updateAge,
           counted === undefined
-            ? { history: 0, historyPayingClass: 0 }
+            ? NO_HISTORY
             : historyScore(counted, historySettings, asOfMs),
         );
         const lastUpdated = parseObservedDate(observation.lastUpdated);
@@ -535,7 +556,8 @@ export function createWordPressSelection(
             scoreBreakdown.surface +
             scoreBreakdown.highThreat +
             scoreBreakdown.history +
-            (scoreBreakdown.historyPayingClass ?? 0),
+            (scoreBreakdown.historyPayingClass ?? 0) +
+            (scoreBreakdown.recordRecency ?? 0),
           ...(mirror === undefined || counted === undefined
             ? {}
             : {
@@ -595,6 +617,8 @@ export function openWordPressSelection(input: {
   readonly legacyHistoryFile?: string;
   /** The prompt a policy without `promptVariant` is selected for. */
   readonly promptVariant: string;
+  /** Measures the revisit rule's days since the last Trial; defaults to the wall clock. */
+  readonly clock?: () => Date;
 }): WordPressSelection {
   async function decide(
     policyInput: WordPressSelectionPolicy,
@@ -610,6 +634,7 @@ export function openWordPressSelection(input: {
         candidates: eligible.map(({ slug, version }) => ({ slug, version })),
         currentPromptVariant: policy.promptVariant ?? input.promptVariant,
         revisitPolicy: policy.revisitPolicy ?? { kind: "never" },
+        now: (input.clock ?? (() => new Date()))(),
       }).map(({ slug, reasons }) => [slug, reasons]),
     );
     const inspections = batch.inspections.map((item) => ({

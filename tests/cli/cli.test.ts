@@ -3683,8 +3683,12 @@ describe("harness CLI vertical slice", () => {
       "--config",
       configPath,
     );
+    // A changed revisit rule is a changed policy digest: no batch matches it
+    // (the former `revisitPolicy: never` guard went with the ADR 0037 addendum).
     expect(replay.code).toBe(1);
-    expect(replay.stderr).toContain("requires revisitPolicy: never");
+    expect(replay.stderr).toContain(
+      "No reserved selection batch matches this policy",
+    );
 
     // A batch bound before legacy digests were recorded parses as null. The
     // resumed campaign stops before writing another event until reselected.

@@ -249,8 +249,13 @@ describe("WordPress selection public interface", () => {
     const currentPolicy = await loadWordPressSelectionPolicy();
     const selected = await selection.rank({
       ...currentPolicy,
-      // This harness has no mirror; the shipped history weight would stop it (ADR 0037).
-      scoreWeights: { ...currentPolicy.scoreWeights, history: 0 },
+      // This harness has no mirror; the shipped history weights would stop it (ADR 0037).
+      scoreWeights: {
+        ...currentPolicy.scoreWeights,
+        history: 0,
+        historyPayingClass: 0,
+        recordRecency: 0,
+      },
       pluginDependencySlugs: { exposed: ["elementor"] },
     });
     expect(selected).toHaveLength(1);
@@ -346,18 +351,28 @@ describe("WordPress selection public interface", () => {
       ).toBe(false);
   });
 
-  it("ships the advisory-history weights (ADR 0037) in the default policy and the two floor siblings, which differ only in id and floor", async () => {
+  it("ships the statistics-derived weights (ADR 0037, 2026-10-19 addendum) in the default policy and the two floor siblings, which differ only in id and floor", async () => {
     const policy = await loadWordPressSelectionPolicy();
-    expect(policy.id).toBe("wordpress-selection-2026-10-21");
+    expect(policy.id).toBe("wordpress-selection-2026-10-22");
+    // docs/reviews/2026-10-19-selection-statistics.md §5.1: paying class decides,
+    // record recency splits ties, installs come last; WordPress.org recency is a leak.
     expect(policy.scoreWeights).toEqual({
-      installations: 10,
-      recency: 5,
-      history: 5,
-      historyPayingClass: 0,
+      installations: 0.5,
+      recency: 0,
+      history: 0,
+      historyPayingClass: 1,
+      recordRecency: 1,
     });
     expect(policy.historyWindowDays).toBe(365);
     expect(policy.historyCountCap).toBe(10);
+    expect(policy.historyPayingClassCap).toBe(3);
     expect(policy.maximumHistoryAgeDays).toBe(2);
+    expect(policy.maximumTargets).toBe(5);
+    expect(policy.maximumUpdateAgeDays).toBe(365);
+    expect(policy.revisitPolicy).toEqual({
+      kind: "version-increased",
+      minimumDaysSinceTrial: 90,
+    });
     expect(policy.historyPayingClasses).toEqual([
       "stored-xss",
       "sql-injection",
@@ -563,14 +578,29 @@ describe("WordPress selection public interface", () => {
             (item) =>
               item.scoreBreakdown.history === 0 &&
               item.scoreBreakdown.historyPayingClass === 0 &&
+              item.scoreBreakdown.recordRecency === 0 &&
               item.advisoryHistory === undefined,
           ),
         ).toBe(true);
       }
       expect(fake.opened()).toBe(0);
+      // The same holds when only the newer weights are written as 0.
+      const zeroNew = await withHistory(fake).rank({
+        ...basePolicy,
+        scoreWeights: {
+          ...basePolicy.scoreWeights,
+          history: 0,
+          historyPayingClass: 0,
+          recordRecency: 0,
+        },
+      });
+      expect(zeroNew.map((item) => [item.slug, item.score])).toEqual(
+        baseline.map((item) => [item.slug, item.score]),
+      );
+      expect(fake.opened()).toBe(0);
     });
 
-    it("scores min(count, cap) / cap plus a tenth for a fresh latest record, relative to the mirror's asOf", async () => {
+    it("scores min(count, cap) / cap for the history member, relative to the mirror's asOf and without a freshness share", async () => {
       const fake = fakeHistory();
       const policy = {
         ...basePolicy,
@@ -586,13 +616,14 @@ describe("WordPress selection public interface", () => {
       const ranked = await withHistory(fake).rank(policy);
       const exposed = ranked.find((item) => item.slug === "exposed");
       const popular = ranked.find((item) => item.slug === "popular");
-      // 12 records cap at 10 → full weight; the latest record is at asOf → +0.1 × weight.
-      expect(exposed?.scoreBreakdown.history).toBeCloseTo(5 * (1 + 0.1), 10);
-      // 1 record, no latest date → 5 × 1/10 and no freshness.
+      // 12 records cap at 10 → full weight; the latest record's date moves `recordRecency`, not `history`.
+      expect(exposed?.scoreBreakdown.history).toBeCloseTo(5, 10);
+      // 1 record → 5 × 1/10.
       expect(popular?.scoreBreakdown.history).toBeCloseTo(0.5, 10);
       expect(ranked.map((item) => item.slug)).toEqual(["exposed", "popular"]);
-      // The paying-class member stays 0 until its own weight is set.
+      // The other members stay 0 until their own weights are set.
       expect(exposed?.scoreBreakdown.historyPayingClass).toBe(0);
+      expect(exposed?.scoreBreakdown.recordRecency).toBe(0);
       // The window is anchored on the mirror, not on the selection clock.
       const asOfMs = Date.parse(mirrorAsOf);
       expect(fake.windows()).toEqual(
@@ -611,7 +642,7 @@ describe("WordPress selection public interface", () => {
       );
     });
 
-    it("weights paying-class records separately, and weight 0 leaves the decided score unchanged", async () => {
+    it("scores one point per paying-class record up to historyPayingClassCap, and weight 0 leaves the decided score unchanged", async () => {
       const fake = fakeHistory();
       const policy = {
         ...basePolicy,
@@ -629,8 +660,9 @@ describe("WordPress selection public interface", () => {
         scoreWeights: { ...policy.scoreWeights, historyPayingClass: 4 },
       });
       const exposedPaying = paying.find((item) => item.slug === "exposed");
+      // 3 paying records, default cap 3 → 4 × min(3, 3); not divided by the cap.
       expect(exposedPaying?.scoreBreakdown.historyPayingClass).toBeCloseTo(
-        4 * (3 / 10),
+        4 * 3,
         10,
       );
       expect(exposedPaying?.advisoryHistory?.payingClassCount).toBe(3);
@@ -642,10 +674,166 @@ describe("WordPress selection public interface", () => {
         decided.every((item) => item.scoreBreakdown.historyPayingClass === 0),
       ).toBe(true);
       expect(exposedPaying?.score).toBeCloseTo(
-        (decided.find((item) => item.slug === "exposed")?.score ?? NaN) +
-          4 * (3 / 10),
+        (decided.find((item) => item.slug === "exposed")?.score ?? NaN) + 4 * 3,
         10,
       );
+      // A lower cap clips the count; a higher one does not inflate it.
+      for (const [cap, expected] of [
+        [2, 2],
+        [5, 3],
+      ] as const) {
+        const capped = await withHistory(fake).rank({
+          ...policy,
+          historyPayingClassCap: cap,
+          scoreWeights: { ...policy.scoreWeights, historyPayingClass: 1 },
+        });
+        expect(
+          capped.find((item) => item.slug === "exposed")?.scoreBreakdown
+            .historyPayingClass,
+        ).toBe(expected);
+      }
+    });
+
+    it("scores recordRecency as 1 − days since the newest record / window, anchored on the mirror's asOf", async () => {
+      const fake = fakeHistory();
+      const policy = {
+        ...basePolicy,
+        historyWindowDays: 100,
+        scoreWeights: {
+          ...basePolicy.scoreWeights,
+          installations: 0,
+          surface: 0,
+          recordRecency: 2,
+        },
+      };
+      const ranked = await withHistory(fake).rank(policy);
+      // exposed's latest record is at asOf → full weight; popular has no dated record → 0.
+      expect(
+        ranked.find((item) => item.slug === "exposed")?.scoreBreakdown
+          .recordRecency,
+      ).toBeCloseTo(2, 10);
+      expect(
+        ranked.find((item) => item.slug === "popular")?.scoreBreakdown
+          .recordRecency,
+      ).toBe(0);
+      expect(ranked.map((item) => item.slug)).toEqual(["exposed", "popular"]);
+      // The mirror was opened for this weight alone.
+      expect(fake.opened()).toBe(1);
+      // The clock does not move the value; only the mirror's asOf does.
+      const later = await withHistory(fake, {
+        clock: "2026-10-09T12:00:00.000Z",
+      }).rank(policy);
+      expect(later).toHaveLength(2);
+      expect(later.map((item) => item.scoreBreakdown.recordRecency)).toEqual(
+        ranked.map((item) => item.scoreBreakdown.recordRecency),
+      );
+    });
+
+    it("ranks the report's way: paying count decides, record recency splits ties, installs come last (§5.1)", async () => {
+      // Six candidates in the 100k–1M band with the shipped weights.
+      const day = 86_400_000;
+      const daysAgo = (days: number) =>
+        new Date(Date.parse(mirrorAsOf) - days * day).toISOString();
+      const band: Record<
+        string,
+        { installs: number; paying: number; latestDaysAgo?: number }
+      > = {
+        "three-fresh-small": {
+          installs: 100_000,
+          paying: 3,
+          latestDaysAgo: 10,
+        },
+        "three-old-large": { installs: 900_000, paying: 3, latestDaysAgo: 300 },
+        "five-fresh-small": { installs: 100_000, paying: 5, latestDaysAgo: 5 },
+        "one-fresh-large": { installs: 900_000, paying: 1, latestDaysAgo: 1 },
+        "zero-fresh-large": { installs: 900_000, paying: 0, latestDaysAgo: 1 },
+        "zero-none-huge": { installs: 999_999, paying: 0 },
+      };
+      const fake = fakeHistory();
+      const open = fake.source.open;
+      fake.source.open = (options) => {
+        const opened = open(options);
+        if (opened.status !== "open") return opened;
+        return {
+          ...opened,
+          mirror: {
+            ...opened.mirror,
+            count(slug) {
+              const row = band[slug];
+              if (row === undefined) throw new Error(`unexpected ${slug}`);
+              return {
+                count: row.paying + 1,
+                payingClassCount: row.paying,
+                ...(row.latestDaysAgo === undefined
+                  ? {}
+                  : { latestPublished: daysAgo(row.latestDaysAgo) }),
+              };
+            },
+          },
+        };
+      };
+      const shipped = await loadWordPressSelectionPolicy();
+      const ranked = await withHistory(fake, {
+        observations: Object.fromEntries(
+          Object.entries(band).map(([slug, row]) => [
+            slug,
+            observation(slug, [], row.installs),
+          ]),
+        ),
+      }).rank({
+        ...basePolicy,
+        candidateSlugs: Object.keys(band),
+        maximumTargets: 6,
+        minimumActiveInstallations: 100_000,
+        scoreWeights: shipped.scoreWeights,
+        historyWindowDays: shipped.historyWindowDays,
+        historyCountCap: shipped.historyCountCap,
+        historyPayingClassCap: shipped.historyPayingClassCap,
+        historyPayingClasses: shipped.historyPayingClasses,
+      });
+      expect(ranked.map((item) => item.slug)).toEqual([
+        // 5 paying records cap at 3; the freshest record of the capped group wins.
+        "five-fresh-small",
+        "three-fresh-small",
+        // Same cap, 300-day-old record: recency 0.18 loses to 0.97 despite 9× installs.
+        "three-old-large",
+        // One paying record beats none, whatever the installs.
+        "one-fresh-large",
+        // No paying record: recency then installs decide.
+        "zero-fresh-large",
+        "zero-none-huge",
+      ]);
+      const five = ranked[0]!;
+      expect(five.scoreBreakdown.historyPayingClass).toBe(3);
+      expect(five.scoreBreakdown.recordRecency).toBeCloseTo(1 - 5 / 365, 10);
+      expect(five.scoreBreakdown.installations).toBeCloseTo(
+        0.5 * Math.log10(100_001),
+        10,
+      );
+      expect(five.scoreBreakdown.recency).toBe(0);
+      expect(five.scoreBreakdown.history).toBe(0);
+      // Band values stay in the report's ranges: 0–3 + 0–1 + 2.5–3.0.
+      for (const item of ranked) {
+        expect(item.scoreBreakdown.installations).toBeGreaterThanOrEqual(2.5);
+        expect(item.scoreBreakdown.installations).toBeLessThanOrEqual(3.0);
+        expect(item.score).toBeCloseTo(
+          item.scoreBreakdown.historyPayingClass! +
+            item.scoreBreakdown.recordRecency! +
+            item.scoreBreakdown.installations,
+          10,
+        );
+      }
+    });
+
+    it("keeps 200,000 installs at 53.01 points under the former weight 10 (log10(1 + installs))", async () => {
+      const ranked = await harness({
+        observations: { popular: observation("popular", [], 200_000) },
+      }).rank({
+        ...basePolicy,
+        candidateSlugs: ["popular"],
+        scoreWeights: { installations: 10, recency: 0 },
+      });
+      expect(ranked[0]?.scoreBreakdown.installations).toBeCloseTo(53.01, 2);
     });
 
     it("records only counts, dates and the mirror's timestamp and digest on the target", async () => {
@@ -746,6 +934,7 @@ describe("WordPress selection public interface", () => {
         lastRefreshFailed: false,
         windowDays: 365,
         countCap: 10,
+        payingClassCap: 3,
         maximumAgeDays: 2,
       });
       expect(
