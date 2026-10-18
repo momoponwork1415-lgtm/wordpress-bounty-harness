@@ -23,4 +23,21 @@ describe("Native Model Process", () => {
       stdout: "partial-thread-event\n",
     });
   });
+
+  it("reaps an attached client on operator cancellation", async () => {
+    const controller = new AbortController();
+    const startedAt = performance.now();
+    const running = runNativeModelProcess({
+      executablePath: "/bin/sh",
+      args: ["-c", "trap '' TERM; while :; do sleep 1; done"],
+      workingDirectory: tmpdir(),
+      environment: process.env,
+      timeoutMs: 60_000,
+      maxOutputBytes: 1024,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort("operator"), 20);
+    await expect(running).resolves.toMatchObject({ kind: "cancelled" });
+    expect((performance.now() - startedAt) / 1000).toBeLessThan(3);
+  });
 });

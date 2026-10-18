@@ -12,6 +12,7 @@ import type {
   DiscoveryTransportResult,
 } from "./codex-native-agent-runtime.js";
 import {
+  createNativeRunReceipt,
   nativeRunReceiptSchema,
   type NativeRunReceipt,
 } from "./native-run-receipts.js";
@@ -284,11 +285,16 @@ export async function runDiscoveryCampaign(options: {
   readonly concurrency?: number;
   /** Exploration wall time, stamped when each Trial starts rather than when all plans are built. */
   readonly runWallTimeMs?: number;
+  /** Operator cancellation of in-flight exploration. */
+  readonly signal?: AbortSignal;
   /** Records each run's arm on the history axis: a without history, b with it. */
   readonly ablation?: { readonly axes: readonly AblationAxis[] };
   readonly plannedTrials: readonly PlannedTrial[];
   readonly executor: {
-    execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
+    execute(
+      run: DiscoveryTransportRun,
+      signal?: AbortSignal,
+    ): Promise<DiscoveryTransportResult>;
   };
   readonly attachments: ProviderAttachmentStore;
   readonly evidence: PrivateArtifactStore;
@@ -303,6 +309,11 @@ export async function runDiscoveryCampaign(options: {
   ) => AdmittedFinding;
   /** Programme Boundary 外の impact を `finding-parked` に落とす（#185）。 */
   readonly isProgrammeImpact?: (impact: string) => boolean;
+  /** Profile-owned admission policy; the generic recorder only stores its result. */
+  readonly classifyFindingPrecondition?: (finding: AdmittedFinding) => {
+    readonly preconditionClass: string;
+    readonly park: boolean;
+  };
   readonly normalizeCandidate?: (candidate: unknown) => {
     value: unknown;
     changes: { path: string; operation: string }[];
@@ -325,6 +336,11 @@ export async function runDiscoveryCampaign(options: {
     },
   ) => AdmittedLead;
   readonly leadSignature?: (lead: AdmittedLead) => string;
+  /** Profile-owned Root coverage validator. Absent for archived or control arms. */
+  readonly assessCoverage?: (value: unknown) => {
+    readonly accepted: boolean;
+    readonly record?: unknown;
+  };
   readonly clock?: () => Date;
 }): Promise<{
   readonly runCount: number;
@@ -545,6 +561,7 @@ export async function runDiscoveryCampaign(options: {
       let researchArtifact:
         { readonly digest: string; readonly truncated: boolean } | undefined;
       let receiptDigest: string | undefined;
+      let coverageDigest: string | undefined;
       let failure: ReportFailure | undefined;
       const reportState = { foundNew: false, heldBoundary: false };
       const recordReport = createReportRecorder({
@@ -558,16 +575,59 @@ export async function runDiscoveryCampaign(options: {
           findingsRecorded += count;
         },
       });
+      const controller = new AbortController();
+      const onOperatorStop = () => controller.abort("operator");
+      options.signal?.addEventListener("abort", onOperatorStop, { once: true });
+      if (options.signal?.aborted) onOperatorStop();
+      const wallTimer =
+        runWallTimeMs === undefined
+          ? undefined
+          : setTimeout(() => controller.abort("wall"), runWallTimeMs);
+      let shutdownTimer: NodeJS.Timeout | undefined;
+      const shutdownFallback = new Promise<DiscoveryTransportResult>(
+        (resolve) => {
+          const afterAbort = () => {
+            shutdownTimer = setTimeout(
+              () => {
+                resolve({
+                  receipt: createNativeRunReceipt({
+                    runId: run.runId,
+                    targetSnapshotDigest: run.targetSnapshotDigest,
+                    profile: run.profile,
+                    terminal: "incomplete",
+                    reason:
+                      controller.signal.reason === "operator"
+                        ? "operator"
+                        : "wall",
+                    startedAt: base.occurredAt,
+                    completedAt: clock().toISOString(),
+                  }),
+                });
+              },
+              Math.min(70_000, runWallTimeMs ?? 70_000),
+            );
+          };
+          controller.signal.addEventListener("abort", afterAbort, {
+            once: true,
+          });
+          if (controller.signal.aborted) afterAbort();
+        },
+      );
       try {
-        const result = await options.executor.execute({
-          ...run,
-          campaignInput: {
-            ...input,
-            promptDigest:
-              planned.configuration.promptDigest ?? input.promptDigest,
-            history,
+        const execution = options.executor.execute(
+          {
+            ...run,
+            campaignInput: {
+              ...input,
+              promptDigest:
+                planned.configuration.promptDigest ?? input.promptDigest,
+              history,
+            },
           },
-        });
+          controller.signal,
+        );
+        const result = await Promise.race([execution, shutdownFallback]);
+        if (wallTimer !== undefined) clearTimeout(wallTimer);
         if (result.researchArtifact !== undefined) {
           if (result.researchArtifact.attachment.kind !== "research")
             throw new Error("Discovery research artifact kind is invalid");
@@ -632,8 +692,59 @@ export async function runDiscoveryCampaign(options: {
         if (recoveredRoot.recovered) outcome = "completed";
         if (recoveredRoot.failure !== undefined)
           failure = recoveredRoot.failure;
+        if (
+          outcome === "completed" &&
+          run.coverageSchema !== undefined &&
+          options.assessCoverage !== undefined
+        ) {
+          let coverage: unknown;
+          if (result.attachment !== undefined) {
+            const stored = await options.attachments.read(result.attachment);
+            if (stored.status === "resolved") {
+              try {
+                const report = JSON.parse(
+                  stored.bytes.toString("utf8"),
+                ) as Record<string, unknown>;
+                coverage = report.coverage;
+              } catch {
+                // The report recorder already classifies malformed reports.
+              }
+            }
+          }
+          const assessed = options.assessCoverage(coverage);
+          if (assessed.record !== undefined)
+            coverageDigest = await options.evidence.putFiles({
+              "coverage.json": canonicalJson(assessed.record),
+            });
+          if (!assessed.accepted) {
+            outcome = "failed";
+            failure = { reason: "depth" };
+          }
+        }
       } catch {
         outcome = "failed";
+        if (controller.signal.aborted) {
+          const reason =
+            controller.signal.reason === "operator" ? "operator" : "wall";
+          failure = { reason };
+          wallTimeMs = runWallTimeMs ?? 0;
+          const receipt = createNativeRunReceipt({
+            runId: run.runId,
+            targetSnapshotDigest: run.targetSnapshotDigest,
+            profile: run.profile,
+            terminal: "incomplete",
+            reason,
+            startedAt: base.occurredAt,
+            completedAt: clock().toISOString(),
+          });
+          receiptDigest = await options.evidence.putFiles({
+            "receipt.json": canonicalJson(receipt),
+          });
+        }
+      } finally {
+        if (wallTimer !== undefined) clearTimeout(wallTimer);
+        if (shutdownTimer !== undefined) clearTimeout(shutdownTimer);
+        options.signal?.removeEventListener("abort", onOperatorStop);
       }
       const counted = countsAsTrial({
         observed,
@@ -663,13 +774,14 @@ export async function runDiscoveryCampaign(options: {
           : { diagnosticArtifactDigest }),
         ...(researchArtifact === undefined ? {} : { researchArtifact }),
         ...(outcome === "completed" || failure === undefined ? {} : failure),
-        ...(receiptDigest === undefined
-          ? {}
-          : {
-              artifacts: [
-                { kind: "native-run-receipt", digest: receiptDigest },
-              ],
-            }),
+        artifacts: [
+          ...(receiptDigest === undefined
+            ? []
+            : [{ kind: "native-run-receipt", digest: receiptDigest }]),
+          ...(coverageDigest === undefined
+            ? []
+            : [{ kind: "coverage", digest: coverageDigest }]),
+        ],
       });
       if (finished.status === "conflict")
         throw new Error("Discovery finish identity conflict");

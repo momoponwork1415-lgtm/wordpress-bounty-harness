@@ -36,6 +36,7 @@ import {
   type WordPressEntryAssignment,
 } from "../profiles/wordpress/discovery/entry-points.js";
 import { buildWordPressSourceIndex } from "../profiles/wordpress/discovery/storage-index.js";
+import { assessWordPressCoverage } from "../profiles/wordpress/discovery/coverage.js";
 import {
   canonicalDigest,
   canonicalJson,
@@ -58,6 +59,7 @@ import {
 import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
+  wordPressDiscoveryOutputContractV3,
 } from "../profiles/wordpress/discovery/output-contract.js";
 import type {
   WordPressLab,
@@ -94,6 +96,7 @@ import {
   inspectHistoryMirror,
 } from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
+import { classifyWordPressPrecondition } from "../profiles/wordpress/verification/precondition-class.js";
 import { SmokeReplayVerifier } from "../profiles/wordpress/verification/smoke-replay-verifier.js";
 import {
   createWordPressLabStateObserver,
@@ -153,6 +156,11 @@ const commonCampaignFields = {
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
   runWallTimeMinutes: z.number().positive().max(240).optional(),
+  coverage: z
+    .strictObject({
+      maxUnvisitedRatio: z.number().min(0).max(1).default(0.2),
+    })
+    .default({ maxUnvisitedRatio: 0.2 }),
   /** Host bounds: targets, per-target discovery runs and their memory budget. */
   resources: z
     .strictObject({
@@ -197,13 +205,14 @@ const campaignModes = z.discriminatedUnion("mode", [
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("wp2shell"),
-    runWallTimeMinutes: z.number().positive().max(60).default(60),
+    runWallTimeMinutes: z.number().positive().max(120).default(60),
     promptId: z
       .enum([
         "wp2shell-bounty-v2",
         "wp2shell-bounty-v3",
         "wp2shell-bounty-v4",
         "wp2shell-bounty-v5",
+        "wp2shell-bounty-v6",
         "wp2shell-whitebox-v1.7",
       ])
       .default("wp2shell-bounty-v5"),
@@ -266,6 +275,7 @@ export const wordpressCampaignConfigSchema = z
               config.promptId !== "wp2shell-bounty-v3" &&
               config.promptId !== "wp2shell-bounty-v4" &&
               config.promptId !== "wp2shell-bounty-v5" &&
+              config.promptId !== "wp2shell-bounty-v6" &&
               config.promptId !== "wp2shell-whitebox-v1.7"
             ? "comparison"
             : config.entryIndex === false
@@ -274,6 +284,17 @@ export const wordpressCampaignConfigSchema = z
     return { ...config, mode };
   }, campaignModes)
   .superRefine((config, context) => {
+    if (
+      config.mode === "wp2shell" &&
+      config.promptId !== "wp2shell-bounty-v6" &&
+      config.runWallTimeMinutes > 60
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["runWallTimeMinutes"],
+        message:
+          "Only wp2shell-bounty-v6 permits a wall limit above 60 minutes",
+      });
     if (
       config.lab.initialApprovedComment === true &&
       config.lab.initialPosts.length === 0
@@ -885,13 +906,22 @@ async function planWordPressDiscovery(
     config.mode === "assignment" ? config.assignment : undefined;
   const outputContractV1 = wordPressDiscoveryOutputContract();
   const outputContractV2 = wordPressDiscoveryOutputContractV2();
+  const outputContractV3 = wordPressDiscoveryOutputContractV3(
+    config.coverage.maxUnvisitedRatio,
+  );
+  const coverageFor = (id: string) =>
+    (id === "wp2shell-bounty-v5" || id === "wp2shell-bounty-v6") &&
+    config.entryIndex;
   const outputContractFor = (id: string) =>
-    id === "wp2shell-bounty-v3" ||
-    id === "wp2shell-bounty-v4" ||
-    id === "wp2shell-bounty-v5" ||
-    id === "wp2shell-whitebox-v1.7"
-      ? outputContractV2
-      : outputContractV1;
+    coverageFor(id)
+      ? outputContractV3
+      : id === "wp2shell-bounty-v3" ||
+          id === "wp2shell-bounty-v4" ||
+          id === "wp2shell-bounty-v5" ||
+          id === "wp2shell-bounty-v6" ||
+          id === "wp2shell-whitebox-v1.7"
+        ? outputContractV2
+        : outputContractV1;
   const objectiveOnly = (id: string) =>
     WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
   const source = await boundaries.sourceFor(snapshot);
@@ -1076,6 +1106,9 @@ async function planWordPressDiscovery(
           profile: boundaries.runtimeProfile,
           coordination: "cooperative" as const,
           prompt: promptFor(assignment, selectedObjective),
+          ...(coverageFor(selectedObjective.id)
+            ? { coverageSchema: outputContractV3.coverageSchema }
+            : {}),
           ...(lab === undefined
             ? {}
             : {
@@ -1109,8 +1142,28 @@ async function planWordPressDiscovery(
     }),
     executor: boundaries.executor,
     attachments: boundaries.attachments,
+    ...(sourceIndex === undefined || !config.entryIndex
+      ? {}
+      : {
+          assessCoverage: (value: unknown) =>
+            assessWordPressCoverage(
+              value,
+              sourceIndex,
+              config.coverage.maxUnvisitedRatio,
+            ),
+        }),
     admitFinding: admitWordPressFinding,
     isProgrammeImpact: isWordPressProgrammeImpact,
+    classifyFindingPrecondition: (finding) => {
+      const result = classifyWordPressPrecondition({
+        configurationPrecondition:
+          readWordPressFinding(finding).configurationPrecondition,
+      });
+      return {
+        preconditionClass: result.preconditionClass,
+        park: result.preconditionClass === "admin-configuration",
+      };
+    },
     normalizeCandidate: normalizeWordPressCandidate,
     classifyCandidate: classifyWordPressCandidate,
     admitLead: admitWordPressLead,
@@ -1220,6 +1273,7 @@ async function runWordPressCampaign(
     repeat: input.repeat ?? 1,
     maxConcurrentTargets: config.resources.maxConcurrentTargets,
     ...(input.stop === undefined ? {} : { stop: input.stop }),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.retryIncompleteVerifications === undefined
       ? {}
       : {

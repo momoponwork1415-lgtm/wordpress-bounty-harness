@@ -20,6 +20,7 @@ import {
   type ExpectedSourceTree,
 } from "../infrastructure/canonical-source-tree.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
+import { stopDockerContainer } from "../infrastructure/stop-docker-container.js";
 
 import {
   runNativeModelProcess,
@@ -395,6 +396,7 @@ type DockerRun = (
   args: readonly string[],
   stdin: string | undefined,
   timeoutMs: number,
+  signal?: AbortSignal,
 ) => Promise<NativeModelProcessResult>;
 
 const base64url = (value: unknown) =>
@@ -537,6 +539,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
         args: readonly string[],
         stdin: string | undefined,
         timeoutMs: number,
+        signal?: AbortSignal,
       ) =>
         runNativeModelProcess({
           executablePath: this.#options.dockerExecutablePath,
@@ -550,6 +553,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
             TZ: "UTC",
           },
           timeoutMs,
+          ...(signal === undefined ? {} : { signal }),
           maxOutputBytes: this.#options.maxOutputBytes,
           redact: (text) =>
             secret === undefined ? text : text.split(secret).join("[REDACTED]"),
@@ -574,7 +578,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
     ];
   }
 
-  async execute(command: CodexSandboxCommand): Promise<CodexSandboxResult> {
+  async execute(
+    command: CodexSandboxCommand,
+    signal?: AbortSignal,
+  ): Promise<CodexSandboxResult> {
     networkSchema.parse(command.grant.dockerNetworkName);
     const tls = command.grant.tls;
     if (
@@ -736,9 +743,57 @@ export class GvisorCodexSandbox implements CodexSandbox {
         ...command.args,
       ];
       let result: NativeModelProcessResult;
+      const controller = new AbortController();
+      const onAbort = () =>
+        controller.abort(signal?.reason === "operator" ? "operator" : "wall");
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+      const wallTimer = setTimeout(
+        () => controller.abort("wall"),
+        this.#options.timeoutMs,
+      );
       try {
-        result = await runDocker(args, command.stdin, this.#options.timeoutMs);
+        const client = runDocker(
+          args,
+          command.stdin,
+          this.#options.timeoutMs,
+          controller.signal,
+        );
+        const aborted = new Promise<NativeModelProcessResult>((resolve) => {
+          const finish = () =>
+            resolve({ kind: "cancelled", stdout: "", stderr: "" });
+          controller.signal.addEventListener("abort", finish, { once: true });
+          if (controller.signal.aborted) finish();
+        });
+        result = await Promise.race([client, aborted]);
+        if (controller.signal.aborted || result.kind !== "exited")
+          await stopDockerContainer(async (stopArgs, timeoutMs) => {
+            const stopped = await runDocker(stopArgs, undefined, timeoutMs);
+            return {
+              exitCode: stopped.kind === "exited" ? stopped.exitCode : -1,
+            };
+          }, containerName);
+        if (controller.signal.aborted) {
+          // Let the SIGTERM/SIGKILL process-tree path reap the attached client.
+          await Promise.race([
+            client.then(
+              () => undefined,
+              () => undefined,
+            ),
+            new Promise<void>((resolve) => setTimeout(resolve, 2_500)),
+          ]);
+          result = {
+            kind:
+              controller.signal.reason === "operator"
+                ? "cancelled"
+                : "timed-out",
+            stdout: result.stdout,
+            stderr: result.stderr,
+          };
+        }
       } finally {
+        clearTimeout(wallTimer);
+        signal?.removeEventListener("abort", onAbort);
         // `--rm` is not sufficient when the Docker client is killed on timeout:
         // runsc may leave a stopped container behind (#176).
         await runDocker(
