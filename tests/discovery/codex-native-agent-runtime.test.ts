@@ -217,6 +217,35 @@ describe("Codex native agent runtime", () => {
     }
   });
 
+  it("passes a dispatch solo task's request and wall bounds to the broker and sandbox", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-dispatch-bounds-"));
+    try {
+      const commands: CodexSandboxCommand[] = [];
+      let maxRequests = 0;
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(transcript, commands),
+        broker({}, undefined, (count) => {
+          maxRequests = count;
+        }),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      const result = await runtime.execute({
+        ...run,
+        coordination: "solo",
+        taskMaxRequests: 150,
+        expiresAt: "2026-10-08T07:10:00.000Z",
+      });
+      expect(result.receipt.terminal).toBe("completed");
+      expect(maxRequests).toBe(150);
+      expect(commands[0]?.timeoutMs).toBe(10 * 60_000);
+      expect(commands[0]?.researchMount).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps Root and the first three unique children when a later wave creates another thread", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-child-overrun-"));
     try {

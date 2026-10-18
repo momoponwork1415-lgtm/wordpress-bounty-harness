@@ -464,6 +464,17 @@ describe("discovery campaign stop and resume", () => {
     ]);
   });
 
+  it("accepts sixteen discovery workers without exceeding the planned run count", async () => {
+    const { campaign, maxInFlight } = await open();
+    const result = await campaign({
+      prefix: "parallel-sixteen",
+      concurrency: 16,
+      replies: () => "empty",
+    });
+    expect(maxInFlight()).toBe(6);
+    expect(result.runCount).toBe(6);
+  });
+
   it("runs up to the concurrency bound and lets in-flight runs finish after a limit", async () => {
     const { campaign, finished, maxInFlight } = await open();
     const result = await campaign({

@@ -289,7 +289,7 @@ export async function runDiscoveryCampaign(options: {
   readonly taskMode?: boolean;
   readonly input: CampaignInputV1;
   readonly historyFraction: number;
-  /** Runs in flight at once on this host; at most four until brief 1c. */
+  /** Runs in flight at once on this host; at most sixteen. */
   readonly concurrency?: number;
   /** Exploration wall time, stamped when each Trial starts rather than when all plans are built. */
   readonly runWallTimeMs?: number;
@@ -371,7 +371,7 @@ export async function runDiscoveryCampaign(options: {
     throw new Error("Invalid history allocation fraction");
   const clock = options.clock ?? (() => new Date());
   const concurrency = options.concurrency ?? 1;
-  if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4)
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 16)
     throw new Error("Invalid discovery concurrency");
   const ofTarget = <T extends { readonly snapshotDigest: string }>(
     events: readonly T[],

@@ -143,6 +143,7 @@ describe("gVisor Codex sandbox", () => {
         maxBytes: 1024,
       });
       const calls: (readonly string[])[] = [];
+      const timeouts: number[] = [];
       const sandbox = new GvisorCodexSandbox({
         dockerExecutablePath: "/usr/bin/docker",
         image: `node@${digest}`,
@@ -151,8 +152,9 @@ describe("gVisor Codex sandbox", () => {
         maxOutputBytes: 1024 * 1024,
         timeoutMs: 60_000,
         randomUuid: () => sandboxUuid,
-        runDocker: async (args) => {
+        runDocker: async (args, _stdin, timeoutMs) => {
           calls.push(args);
+          timeouts.push(timeoutMs);
           if (args.includes("--network=internal-run"))
             return {
               kind: "timed-out" as const,
@@ -174,6 +176,7 @@ describe("gVisor Codex sandbox", () => {
       const result = await sandbox.execute({
         executable: "codex",
         args: ["exec", "--json"],
+        timeoutMs: 5_000,
         stdin: "Inspect the source.",
         supportFiles: [
           { path: "/opt/codex-support/report-schema.json", content: "{}" },
@@ -201,6 +204,11 @@ describe("gVisor Codex sandbox", () => {
       expect(
         calls.find((args) => args.includes("--network=internal-run")),
       ).toContain(`--name=codex-agent-${sandboxUuid}`);
+      expect(
+        timeouts[
+          calls.findIndex((args) => args.includes("--network=internal-run"))
+        ],
+      ).toBe(5_000);
       expect(calls.at(-1)).toEqual([
         "rm",
         "--force",

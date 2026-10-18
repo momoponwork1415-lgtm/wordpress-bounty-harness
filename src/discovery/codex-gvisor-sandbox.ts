@@ -601,6 +601,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
     }
     if (
       command.executable !== "codex" ||
+      (command.timeoutMs !== undefined &&
+        (!Number.isSafeInteger(command.timeoutMs) ||
+          command.timeoutMs <= 0 ||
+          command.timeoutMs > 240 * 60_000)) ||
       (command.labHost !== undefined &&
         (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.labHost.name) ||
           isIP(command.labHost.ipv4) !== 4)) ||
@@ -750,13 +754,13 @@ export class GvisorCodexSandbox implements CodexSandbox {
       if (signal?.aborted) onAbort();
       const wallTimer = setTimeout(
         () => controller.abort("wall"),
-        this.#options.timeoutMs,
+        command.timeoutMs ?? this.#options.timeoutMs,
       );
       try {
         const client = runDocker(
           args,
           command.stdin,
-          this.#options.timeoutMs,
+          command.timeoutMs ?? this.#options.timeoutMs,
           controller.signal,
         );
         const aborted = new Promise<NativeModelProcessResult>((resolve) => {

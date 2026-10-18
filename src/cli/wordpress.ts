@@ -165,7 +165,7 @@ const commonCampaignFields = {
   /** Host bounds: targets, per-target discovery runs and their memory budget. */
   resources: z
     .strictObject({
-      maxConcurrentRuns: z.number().int().min(1).max(4).default(2),
+      maxConcurrentRuns: z.number().int().min(1).max(16).default(2),
       maxConcurrentTargets: z.number().int().min(1).max(4).default(1),
       memoryBudgetMiB: z.number().int().positive(),
     })

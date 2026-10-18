@@ -152,6 +152,8 @@ export interface CodexSandboxCommand {
   readonly executable: "codex";
   readonly args: readonly string[];
   readonly stdin: string;
+  /** Command wall bound for a task; omitted for the existing Trial path. */
+  readonly timeoutMs?: number;
   readonly supportFiles: readonly {
     readonly path: string;
     readonly content: string;
@@ -1136,10 +1138,12 @@ function sandboxCommand(
   cooperative: boolean,
   labEndpoint: URL | undefined,
   login: boolean,
+  timeoutMs?: number,
 ): CodexSandboxCommand {
   return {
     executable: "codex",
     args: codexArgs(run, grant, cooperative, login),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
     stdin:
       run.campaignInput.history.mode === "catalog"
         ? `${run.prompt}\n\nPublic history catalog (records strictly before the cutoff):\n${canonicalJson(run.campaignInput.history)}`
@@ -1335,7 +1339,7 @@ export class CodexNativeAgentRuntime {
           runtimeProfileDigest: run.profile.digest,
           model: run.profile.requestedModelId,
           protocol: "responses",
-          maxRequests: cooperative ? 1600 : 100,
+          maxRequests: cooperative ? 1600 : (run.taskMaxRequests ?? 100),
           maxRequestBytes: cooperative ? 8 * 1024 * 1024 : 1024 * 1024,
           maxResponseBytes: 8 * 1024 * 1024,
           expiresAt: run.expiresAt,
@@ -1346,7 +1350,19 @@ export class CodexNativeAgentRuntime {
         async (grant) => {
           const login = assertBrokerAddress(grant, run);
           return this.sandbox.execute(
-            sandboxCommand(run, grant, cooperative, labEndpoint, login),
+            sandboxCommand(
+              run,
+              grant,
+              cooperative,
+              labEndpoint,
+              login,
+              run.coordination === "solo" && run.taskMaxRequests !== undefined
+                ? Math.max(
+                    1,
+                    Date.parse(run.expiresAt) - this.clock().getTime(),
+                  )
+                : undefined,
+            ),
             signal,
           );
         },
