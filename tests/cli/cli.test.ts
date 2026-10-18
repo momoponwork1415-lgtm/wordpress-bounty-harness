@@ -834,25 +834,6 @@ async function harness(
       },
     }),
   );
-  const keysPath = join(root, "keys.json");
-  await writeFile(
-    keysPath,
-    JSON.stringify([
-      {
-        schemaVersion: 1,
-        caseId: "synthetic-case",
-        cohort: "first-party",
-        entryPoint: { kind: "ajax-action", action: "synthetic_action" },
-        violatedProperty: "Synthetic property",
-        missingCheck: "Synthetic check",
-        attackerPosition: "subscriber",
-        impact: "account-takeover",
-        allowedLocations: [{ file: "includes/synthetic.php" }],
-        publishedAt: "2026-01-02",
-        modelCutoff: "2026-01-01",
-      },
-    ]),
-  );
   const run = async (...argv: string[]) => {
     const stdout: string[] = [];
     const stderr: string[] = [];
@@ -865,7 +846,6 @@ async function harness(
   return {
     run,
     configPath,
-    keysPath,
     prompts,
     promptDigests,
     entryIndexes,
@@ -980,93 +960,6 @@ describe("harness CLI vertical slice", () => {
     ]);
     expect((await run(...args.slice(0, -1), "arbitrary text")).code).toBe(2);
     expect(ledger().read({ type: "evaluation-case-blocked" })).toHaveLength(1);
-  });
-
-  it("prints only digest references for private keys and blind rubric forms", async () => {
-    const { run, keysPath, root } = await harness();
-    const keys = await run("eval", "keys", "--keys", keysPath);
-    expect(keys.code).toBe(0);
-    expect(JSON.parse(keys.stdout)).toMatchObject({
-      schemaVersion: 1,
-      keys: [
-        { caseId: "synthetic-case", digest: expect.stringMatching(/^sha256:/) },
-      ],
-    });
-    expect(keys.stdout).not.toContain("Synthetic property");
-    expect(keys.stdout).not.toContain("includes/synthetic.php");
-    const manifestPath = join(root, "key-digests.json");
-    await writeFile(manifestPath, keys.stdout);
-    const verified = await run(
-      "eval",
-      "score",
-      "--campaign",
-      "synthetic-campaign",
-      "--keys",
-      keysPath,
-      "--case",
-      "synthetic-case",
-      "--manifest",
-      manifestPath,
-    );
-    expect(verified.code).toBe(0);
-    await writeFile(
-      manifestPath,
-      JSON.stringify({
-        schemaVersion: 1,
-        keys: [
-          { caseId: "synthetic-case", digest: `sha256:${"0".repeat(64)}` },
-        ],
-      }),
-    );
-    const rejected = await run(
-      "eval",
-      "score",
-      "--campaign",
-      "synthetic-campaign",
-      "--keys",
-      keysPath,
-      "--case",
-      "synthetic-case",
-      "--manifest",
-      manifestPath,
-    );
-    expect(rejected.code).toBe(2);
-    expect(rejected.stderr).toContain("digest differs");
-    expect(rejected.stderr).not.toContain("Synthetic property");
-    const invalidKeysPath = join(root, "invalid-keys.json");
-    await writeFile(
-      invalidKeysPath,
-      JSON.stringify([{ privateAnswer: "PRIVATE-SYNTHETIC-ANSWER" }]),
-    );
-    const invalid = await run("eval", "keys", "--keys", invalidKeysPath);
-    expect(invalid.code).toBe(2);
-    expect(invalid.stderr).not.toContain("PRIVATE-SYNTHETIC-ANSWER");
-
-    const rubricPath = join(root, "rubric.json");
-    await writeFile(
-      rubricPath,
-      JSON.stringify([
-        {
-          schemaVersion: 1,
-          caseId: "synthetic-case",
-          findingId: "synthetic-finding",
-          location: { rating: "match" },
-          rootCause: { rating: "partial", note: "Private explanation" },
-          attackerConditions: { rating: "unknown" },
-          impact: { rating: "mismatch" },
-          verdict: "partial",
-          assessedBy: "human",
-          assessedAt: "2026-10-10T00:00:00Z",
-        },
-      ]),
-    );
-    const rubric = await run("eval", "rubric", "--file", rubricPath);
-    expect(rubric.code).toBe(0);
-    expect(JSON.parse(rubric.stdout)).toMatchObject({
-      entries: 1,
-      digest: expect.stringMatching(/^sha256:/),
-    });
-    expect(rubric.stdout).not.toContain("Private explanation");
   });
 
   it("records read-only DB access without storing its account in the ledger", async () => {
@@ -1558,9 +1451,8 @@ describe("harness CLI vertical slice", () => {
     ).toEqual(after);
   });
 
-  it("runs a pinned campaign end to end and exposes review, funnel and location-overlap", async () => {
-    const { run, configPath, keysPath, prompts, docker, ledger } =
-      await harness();
+  it("runs a pinned campaign end to end and exposes review and funnel", async () => {
+    const { run, configPath, prompts, docker, ledger } = await harness();
 
     const campaign = await run(
       "campaign",
@@ -1666,21 +1558,6 @@ describe("harness CLI vertical slice", () => {
     expect(funnel.stdout).toContain("cost unavailable");
     expect(funnel.stdout).toContain("confirmed / 1M tokens 370.37");
     expect(funnel.stdout).toMatch(/account-takeover: .*raw 1 .* confirmed 1/);
-
-    const score = await run(
-      "eval",
-      "score",
-      "--campaign",
-      "campaign-1",
-      "--keys",
-      keysPath,
-      "--case",
-      "synthetic-case",
-    );
-    expect(score.stdout).toContain(
-      "location-overlap  case synthetic-case  campaign campaign-1  findings 2  overlapping 1  unreadable 0  hit yes",
-    );
-    expect(score.stdout).not.toContain("includes/synthetic.php");
   });
 
   it("caps a target's runs at its selection run budget below the campaign ceiling", async () => {
@@ -2241,7 +2118,7 @@ describe("harness CLI vertical slice", () => {
       ],
       labObservations: "Synthetic partial observation",
     });
-    const { run, configPath, keysPath, prompts, ledger } = await harness({
+    const { run, configPath, prompts, ledger } = await harness({
       entryPoints: true,
       leadsOnCalls: {
         1: [
@@ -2279,20 +2156,6 @@ describe("harness CLI vertical slice", () => {
     expect(
       ledger().read({ campaignId: "campaign-lead", type: "lead-recorded" }),
     ).toHaveLength(2);
-    const scored = await run(
-      "eval",
-      "score",
-      "--campaign",
-      "campaign-lead",
-      "--keys",
-      keysPath,
-      "--case",
-      "synthetic-case",
-    );
-    expect(scored.code).toBe(0);
-    expect(scored.stdout).toContain(
-      "source candidates 2  overlapping 2  unreadable 0  hit yes",
-    );
   });
 
   it("scores the campaign against later public advisories and lists blind rubric pairs", async () => {

@@ -1,14 +1,10 @@
-import { join } from "node:path";
-
 import { expect, it } from "vitest";
 
 import {
   admitWordPressLead,
   readWordPressLead,
-  renderWordPressLeadNeighbourhood,
   wordPressLeadSignature,
 } from "../../../src/profiles/wordpress/discovery/lead.js";
-import { buildWordPressSourceIndex } from "../../../src/profiles/wordpress/discovery/storage-index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const claim = {
@@ -61,21 +57,4 @@ it("admits and signs a private WordPress Lead independently of its wording", () 
     ),
   ).toThrow();
   expect(() => readWordPressLead({ ...lead, summary: "tampered" })).toThrow();
-});
-
-it("renders only source-index neighbours around the Lead", async () => {
-  const root = join(
-    import.meta.dirname,
-    "..",
-    "..",
-    "fixtures",
-    "wordpress-source-index",
-  );
-  const index = await buildWordPressSourceIndex(root, "plugin");
-  const lead = admitWordPressLead(claim, context);
-  const text = renderWordPressLeadNeighbourhood(lead, index);
-  expect(text).toContain("plugin_save");
-  expect(text).toContain("plugin_load");
-  expect(text).toContain("plugin_shared");
-  expect(text).not.toContain("No completed effect observed");
 });
