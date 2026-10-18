@@ -55,6 +55,7 @@ async function fixture(
       },
   impact: WordPressFinding["impact"] = "sensitive-object-access",
   issueCanary = true,
+  configurationPrecondition = "default",
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-codex-verifier-"));
   roots.push(root);
@@ -73,7 +74,7 @@ async function fixture(
       claim: "A synthetic access rule is missing",
       attackerPosition: "subscriber",
       impact,
-      configurationPrecondition: "default",
+      configurationPrecondition,
       brokenProperty: "Only the owner may read it",
       sourceTrace: [{ file: "plugin.php", function: "view", line: 12 }],
       existingControls: "none",
@@ -767,6 +768,49 @@ describe("CodexVerifier.attempt", () => {
       status: "incomplete",
       reason: "precondition",
       nextStep: "catalogue に無い前提",
+    });
+  });
+
+  it("parks a legacy recorded Finding with an explicit admin setting before a Verifier run", async () => {
+    const f = await fixture(
+      [],
+      undefined,
+      "stored-xss",
+      true,
+      "An administrator selects Password protected visibility for a published block.",
+    );
+    const attempt = await f.verifier.attempt({
+      campaignId: "campaign-1",
+      finding: f.finding,
+      lab: f.lab,
+    });
+    expect(attempt).toMatchObject({
+      status: "incomplete",
+      reason: "precondition",
+    });
+    expect(f.runs).toHaveLength(0);
+    expect(f.ledger.read({ type: "finding-parked" })[0]?.event).toMatchObject({
+      reason: "admin-configuration-precondition",
+      preconditionClass: "admin-configuration",
+    });
+  });
+
+  it("parks a special setting disclosed only by the Verifier attachment", async () => {
+    const f = await fixture([
+      { precondition: "The slider button Link is set to {author_name}." },
+    ]);
+    const attempt = await f.verifier.attempt({
+      campaignId: "campaign-1",
+      finding: f.finding,
+      lab: f.lab,
+    });
+    expect(attempt).toMatchObject({
+      status: "incomplete",
+      reason: "precondition",
+    });
+    expect(f.runs).toHaveLength(1);
+    expect(f.ledger.read({ type: "finding-parked" })[0]?.event).toMatchObject({
+      reason: "admin-configuration-precondition",
     });
   });
 

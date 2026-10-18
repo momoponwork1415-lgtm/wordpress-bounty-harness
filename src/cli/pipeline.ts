@@ -56,6 +56,9 @@ export interface CampaignPipeline<
     readonly isProgrammeImpact?: NonNullable<
       DiscoveryOptions["isProgrammeImpact"]
     >;
+    readonly classifyFindingPrecondition?: NonNullable<
+      DiscoveryOptions["classifyFindingPrecondition"]
+    >;
     readonly normalizeCandidate?: NonNullable<
       DiscoveryOptions["normalizeCandidate"]
     >;
@@ -64,6 +67,7 @@ export interface CampaignPipeline<
     >;
     readonly admitLead?: NonNullable<DiscoveryOptions["admitLead"]>;
     readonly leadSignature?: NonNullable<DiscoveryOptions["leadSignature"]>;
+    readonly assessCoverage?: NonNullable<DiscoveryOptions["assessCoverage"]>;
   }>;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
@@ -203,6 +207,7 @@ export async function runCampaignPipeline<
   readonly automaticVerificationRetries?: boolean;
   /** Checked before each next target. True drains in-flight targets and stops as `operator`. */
   readonly stop?: () => boolean;
+  readonly signal?: AbortSignal;
 }): Promise<CampaignSummary> {
   const { campaignId, ledger, pipeline, clock } = options;
   const at = () => clock().toISOString();
@@ -292,6 +297,15 @@ export async function runCampaignPipeline<
       return false;
     if (options.discoveryLab === "none") return true;
     return (findingsBySnapshot.get(snapshotDigest) ?? []).every((findingId) => {
+      if (
+        ledger.read({
+          campaignId,
+          findingId,
+          type: "finding-parked",
+          limit: 1,
+        }).length > 0
+      )
+        return true;
       const history =
         verificationHistory.get(`${snapshotDigest}\0${findingId}`) ?? [];
       const previous = history.at(-1);
@@ -578,6 +592,7 @@ export async function runCampaignPipeline<
         ledger,
         evidence: options.store,
         clock,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...prepared,
         repeatAll: (options.repeat ?? 1) > 1,
       });
@@ -634,6 +649,15 @@ export async function runCampaignPipeline<
       };
       for (const { event } of findings) {
         if (event.type !== "finding-recorded") continue;
+        if (
+          ledger.read({
+            campaignId,
+            findingId: event.findingId,
+            type: "finding-parked",
+            limit: 1,
+          }).length > 0
+        )
+          continue;
         // The Verifier shares the subscription; a usage limit stops the campaign.
         if (stopped === "provider-limit") break;
         const history = earlier.filter(

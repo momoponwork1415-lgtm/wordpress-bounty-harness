@@ -189,6 +189,8 @@ export interface CliProfile {
       readonly retryIncompleteVerifications?: boolean;
       /** Checked before each next target; true drains the campaign as `operator`. */
       readonly stop?: () => boolean;
+      /** Aborts exploration currently running when continuous mode receives SIGTERM. */
+      readonly signal?: AbortSignal;
       /** Replaces the campaign config's selection policy path in process. */
       readonly selectionPolicyPath?: string;
     },
@@ -495,6 +497,7 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
   const lines = [
     `campaign ${funnel.campaignId}`,
     `agent runs ${funnel.runCount} (discovery attempts ${funnel.discoveryAttempts})  ${cost}  summed agent time ${(funnel.wallTimeMs / 1000).toFixed(1)}s`,
+    `incomplete(depth) ${funnel.incompleteDepth}`,
     `by Lab: attached runs ${funnel.byLab.attached.runs} findings ${funnel.byLab.attached.findings} confirmed ${funnel.byLab.attached.confirmed}; none runs ${funnel.byLab.none.runs} findings ${funnel.byLab.none.findings} confirmed ${funnel.byLab.none.confirmed}; verification Lab failed ${funnel.verificationLabFailed}`,
     stages(funnel),
     `noncache input ${funnel.noncachedInputTokens} token(s) (${funnel.unavailableInputRuns} run(s) unavailable)  confirmed / 1M tokens ${rate(funnel.confirmedPerMillionInputTokens)}  confirmed / agent wall hour ${rate(funnel.confirmedPerAgentWallHour)}`,
@@ -629,6 +632,7 @@ export function formatQueue(
   )
     lines.push("review queue is empty");
   lines.push(`incomplete by reason: ${counts(queue.incompleteByReason)}`);
+  lines.push(`precondition class: ${counts(queue.preconditionClassCounts)}`);
   lines.push(
     `retry candidates by reason: ${counts(queue.retryPendingByReason)}`,
   );
@@ -958,7 +962,7 @@ export async function runCli(
         return 0;
       }
       case "review parked": {
-        // Programme Boundary 外に置いた Finding の 1 行一覧。ラベル付けミスの安全網（#185）。
+        // Parked Findings remain inspectable by reason without joining the review queue.
         const parked = state.ledger.read({
           ...campaignOrSince(values),
           type: "finding-parked",
@@ -985,7 +989,9 @@ export async function runCli(
                 property = parsedFinding.data.brokenProperty;
             }
           }
-          print([`parked  ${event.category}  ${event.findingId}  ${property}`]);
+          print([
+            `parked  ${event.category}  ${event.findingId}  ${property}  reason: ${event.reason}`,
+          ]);
         }
         return 0;
       }

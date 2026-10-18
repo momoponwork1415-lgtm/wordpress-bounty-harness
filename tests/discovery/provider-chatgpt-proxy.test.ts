@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { request as httpsRequest } from "node:https";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   BROKER_TLS_HOSTNAME,
@@ -133,6 +133,28 @@ async function open(options: { maxRequests?: number } = {}) {
 }
 
 describe("ChatGPT subscription egress proxy", () => {
+  it("logs connection refusal and upstream status without credentials or payloads", async () => {
+    const lines: string[] = [];
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk) => {
+        lines.push(String(chunk));
+        return true;
+      });
+    try {
+      const { send, responses, accessToken, accountId } = await open();
+      await send({ method: "GET", path: "/backend-api/codex/responses" });
+      await responses("gpt-6-luna");
+      expect(lines).toContain("provider-egress connection-error status=426\n");
+      expect(lines).toContain("provider-egress upstream status=200\n");
+      expect(lines.join("")).not.toContain(accessToken);
+      expect(lines.join("")).not.toContain(accountId);
+      expect(lines.join("")).not.toContain("response.completed");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   it("answers workspace discovery itself and lets the CLI fall back from WebSockets without calling upstream", async () => {
     const { send, received, proxy } = await open();
     const discovery = await send({

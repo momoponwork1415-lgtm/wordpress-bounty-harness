@@ -13,7 +13,7 @@ import {
 import type { ExpectedSourceTree } from "../../../infrastructure/canonical-source-tree.js";
 import { canonicalJson } from "../../../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
-import type { Ledger } from "../../../ledger/index.js";
+import type { Ledger, LedgerEventV1 } from "../../../ledger/index.js";
 import {
   VerifierTransportIncompleteError,
   type Verifier,
@@ -30,6 +30,10 @@ import {
 } from "../lab/index.js";
 import { nextWordPressScenario } from "../lab/scenarios.js";
 import { loadWordPressVerifierPrompt } from "../prompts/index.js";
+import {
+  classifyWordPressPrecondition,
+  type ClassifiedPrecondition,
+} from "./precondition-class.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
 
 const httpSchema = z.looseObject({
@@ -205,6 +209,52 @@ export class CodexVerifier implements Verifier<
     },
   ) {}
 
+  async #recordPrecondition(
+    campaignId: string,
+    finding: WordPressFinding,
+    event: Extract<LedgerEventV1, { type: "finding-recorded" }>,
+    classification: ClassifiedPrecondition,
+    identitySuffix: string,
+  ): Promise<void> {
+    const classifiedIdentity = createHash("sha256")
+      .update(
+        `${campaignId}\0${finding.findingId}\0${identitySuffix}\0${classification.preconditionClass}`,
+      )
+      .digest("hex");
+    const parkedIdentity = createHash("sha256")
+      .update(`${campaignId}\0${finding.findingId}\0parked`)
+      .digest("hex");
+    const classified = await this.options.ledger.append({
+      schemaVersion: 1,
+      identity: `precondition-${classifiedIdentity}`,
+      campaignId,
+      snapshotDigest: finding.snapshotDigest,
+      occurredAt: this.options.clock().toISOString(),
+      type: "finding-precondition-classified",
+      findingId: finding.findingId,
+      preconditionClass: classification.preconditionClass,
+    });
+    if (classified.status === "conflict")
+      throw new Error("Finding precondition classification conflict");
+    if (classification.preconditionClass !== "admin-configuration") return;
+    const parked = await this.options.ledger.append({
+      schemaVersion: 1,
+      identity: `parked-${parkedIdentity}`,
+      campaignId,
+      snapshotDigest: finding.snapshotDigest,
+      occurredAt: this.options.clock().toISOString(),
+      type: "finding-parked",
+      findingId: finding.findingId,
+      runId: event.runId,
+      category: event.category,
+      reason: "admin-configuration-precondition",
+      preconditionClass: "admin-configuration",
+      artifacts: event.artifacts,
+    });
+    if (parked.status === "conflict")
+      throw new Error("Finding precondition parking conflict");
+  }
+
   /** The canary the Finding's impact needs, issued fresh for this attempt. */
   #canaryFor(
     finding: WordPressFinding,
@@ -280,7 +330,7 @@ export class CodexVerifier implements Verifier<
       (artifact) => artifact.kind === "finding",
     );
     if (
-      event === undefined ||
+      event?.type !== "finding-recorded" ||
       reference === undefined ||
       lab.snapshotDigest !== finding.snapshotDigest
     )
@@ -325,17 +375,44 @@ export class CodexVerifier implements Verifier<
           "catalogue に無い前提: Use the Finding recorded for this Lab snapshot",
       };
 
-    const requiredScenario = nextWordPressScenario(
-      admitted.configurationPrecondition,
-      lab.scenario?.id,
-      { secondaryLocaleConfigured: lab.secondaryLocale !== undefined },
-    );
-    if (requiredScenario !== "catalogue に無い前提")
+    const initialPrecondition = classifyWordPressPrecondition({
+      configurationPrecondition: admitted.configurationPrecondition,
+      currentScenarioId: lab.scenario?.id,
+      secondaryLocaleConfigured: lab.secondaryLocale !== undefined,
+    });
+    if (
+      event.preconditionClass !== initialPrecondition.preconditionClass ||
+      initialPrecondition.preconditionClass === "admin-configuration"
+    )
+      await this.#recordPrecondition(
+        campaignId,
+        admitted,
+        event,
+        initialPrecondition,
+        "finding",
+      );
+    if (initialPrecondition.preconditionClass === "admin-configuration")
       return {
         status: "incomplete",
         reason: "precondition",
-        nextStep: requiredScenario,
-        nextScenarioId: requiredScenario.split(":", 1)[0]!,
+        nextStep: "admin-configuration-precondition",
+      };
+    if (initialPrecondition.nextScenarioId !== undefined)
+      return {
+        status: "incomplete",
+        reason: "precondition",
+        nextStep: nextWordPressScenario(
+          admitted.configurationPrecondition,
+          lab.scenario?.id,
+          { secondaryLocaleConfigured: lab.secondaryLocale !== undefined },
+        ),
+        nextScenarioId: initialPrecondition.nextScenarioId,
+      };
+    if (initialPrecondition.reasonCode !== undefined)
+      return {
+        status: "incomplete",
+        reason: "precondition",
+        nextStep: initialPrecondition.reasonCode,
       };
 
     const fixed = await loadWordPressVerifierPrompt();
@@ -551,20 +628,47 @@ export class CodexVerifier implements Verifier<
       typeof data.precondition === "string" &&
       data.precondition.trim().length > 0
     ) {
-      const requiredScenario = nextWordPressScenario(
-        `${admitted.configurationPrecondition} ${data.precondition}`,
-        lab.scenario?.id,
-        { secondaryLocaleConfigured: lab.secondaryLocale !== undefined },
+      const classified = classifyWordPressPrecondition({
+        configurationPrecondition: admitted.configurationPrecondition,
+        attachmentPrecondition: data.precondition,
+        currentScenarioId: lab.scenario?.id,
+        secondaryLocaleConfigured: lab.secondaryLocale !== undefined,
+      });
+      await this.#recordPrecondition(
+        campaignId,
+        admitted,
+        event,
+        classified,
+        runId,
       );
       return {
         status: "incomplete",
         reason: "precondition",
-        nextStep: requiredScenario,
-        ...(requiredScenario === "catalogue に無い前提"
+        nextStep:
+          classified.preconditionClass === "admin-configuration"
+            ? "admin-configuration-precondition"
+            : (classified.reasonCode ??
+              (classified.nextScenarioId === undefined
+                ? "catalogue に無い前提"
+                : nextWordPressScenario(
+                    `${admitted.configurationPrecondition} ${data.precondition}`,
+                    lab.scenario?.id,
+                    {
+                      secondaryLocaleConfigured:
+                        lab.secondaryLocale !== undefined,
+                    },
+                  ))),
+        ...(classified.nextScenarioId === undefined
           ? {}
-          : { nextScenarioId: requiredScenario.split(":", 1)[0]! }),
+          : { nextScenarioId: classified.nextScenarioId }),
       };
     }
+    if (initialPrecondition.preconditionClass === "unknown")
+      return {
+        status: "incomplete",
+        reason: "precondition",
+        nextStep: "catalogue に無い前提",
+      };
     if (
       typeof data["http.json"] !== "string" ||
       typeof data["steps.md"] !== "string" ||

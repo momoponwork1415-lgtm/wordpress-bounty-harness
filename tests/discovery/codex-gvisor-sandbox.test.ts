@@ -23,6 +23,115 @@ const digest = `sha256:${"a".repeat(64)}`;
 const sandboxUuid = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
 
 describe("gVisor Codex sandbox", () => {
+  it("ends a silent Docker client and stops its named container at the wall", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-wall-"));
+    try {
+      const source = join(root, "source");
+      await mkdir(source);
+      await writeFile(join(source, "main.txt"), "fixed source");
+      const expectedTree = await measureCanonicalSourceTree(source, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      const calls: string[][] = [];
+      let clientStopped = false;
+      let runStartedAt = 0;
+      let agentStoppedAt = 0;
+      const sandbox = new GvisorCodexSandbox({
+        dockerExecutablePath: "/usr/bin/docker",
+        image: `node@${digest}`,
+        bundledCatalogPath: "/opt/codex/model-catalog.json",
+        scratchRootDirectory: root,
+        maxOutputBytes: 1024 * 1024,
+        timeoutMs: 30,
+        randomUuid: () => sandboxUuid,
+        runDocker: async (...call) => {
+          const [args] = call;
+          calls.push([...args]);
+          if (args[0] === "stop") agentStoppedAt = performance.now();
+          if (args.includes("--network=internal-run")) {
+            runStartedAt = performance.now();
+            return new Promise((resolve) => {
+              const signal = (
+                call as unknown as [
+                  readonly string[],
+                  string | undefined,
+                  number,
+                  AbortSignal | undefined,
+                ]
+              )[3];
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  clientStopped = true;
+                  resolve({ kind: "timed-out", stdout: "", stderr: "" });
+                },
+                { once: true },
+              );
+            });
+          }
+          return {
+            kind: "exited" as const,
+            exitCode: 0,
+            stdout: args.includes("--version")
+              ? "codex-cli 0.161.0\n"
+              : args.includes("--entrypoint=sha256sum")
+                ? `${"b".repeat(64)}  /opt/codex/model-catalog.json\n`
+                : "",
+            stderr: "",
+          };
+        },
+      });
+      const result = await Promise.race([
+        sandbox.execute({
+          executable: "codex",
+          args: ["exec", "--json"],
+          stdin: "Inspect the source.",
+          supportFiles: [
+            { path: "/opt/codex-support/report-schema.json", content: "{}" },
+          ],
+          grant: {
+            baseUrl: "http://172.28.0.2:8080",
+            authorization: `Bearer ${randomBytes(32).toString("hex")}`,
+            dockerNetworkName: "internal-run",
+            model: "gpt-6.1-sol",
+            protocol: "responses",
+            expiresAt: "2026-10-08T07:30:00Z",
+          },
+          sourceMount: {
+            directory: source,
+            path: "/workspace/main",
+            mode: "ro",
+            expectedTree,
+          },
+          labHost: { name: "wordpress", ipv4: "172.20.0.2" },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("wall did not stop Docker")), 250),
+        ),
+      ]);
+      expect(clientStopped).toBe(true);
+      expect((agentStoppedAt - (runStartedAt + 30)) / 1000).toBeLessThan(1);
+      expect(calls).toContainEqual([
+        "stop",
+        "-t",
+        "10",
+        `codex-agent-${sandboxUuid}`,
+      ]);
+      expect(calls.at(-1)).toEqual([
+        "rm",
+        "--force",
+        `codex-agent-${sandboxUuid}`,
+      ]);
+      expect(result).toMatchObject({
+        status: "failed",
+        failureKind: "timed-out",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("names and explicitly removes a stopped agent container (#176)", async () => {
     const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
     try {

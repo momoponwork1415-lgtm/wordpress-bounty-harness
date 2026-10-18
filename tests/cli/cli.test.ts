@@ -645,6 +645,23 @@ async function harness(
           leads: options.leadsOnCalls?.[call] ?? [],
           examined: "synthetic",
           unexamined: "none",
+          ...(run.coverageSchema === undefined
+            ? {}
+            : {
+                coverage: {
+                  indexDigest: run.prompt.match(
+                    /Index digest: (sha256:[a-f0-9]{64})/,
+                  )?.[1],
+                  incomplete: run.prompt.includes("Incomplete: true"),
+                  entries: [
+                    ...run.prompt.matchAll(/^- (e-[1-9][0-9]*):/gm),
+                  ].map((match) => ({
+                    id: match[1],
+                    status: "observed",
+                    reason: null,
+                  })),
+                },
+              }),
         };
         const attachment = await attachments.put(
           "findings",
@@ -2118,6 +2135,13 @@ describe("harness CLI vertical slice", () => {
       wordpressVersion: "6.8",
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
     };
+    expect(
+      wordpressCampaignConfigSchema.parse({
+        ...base,
+        mode: "dispatch",
+        promptId: "wp2shell-bounty-v6",
+      }).promptId,
+    ).toBe("wp2shell-bounty-v6");
     const production = wordpressCampaignConfigSchema.parse({
       ...base,
       mode: "wp2shell",
@@ -2962,6 +2986,7 @@ describe("harness CLI vertical slice", () => {
     expect(listed.stdout).toContain(
       "parked  other  finding-parked-1  Throttle trusts a forwarded header",
     );
+    expect(listed.stdout).toContain("reason: outside-programme-boundary");
     expect(
       ledger().read({
         campaignId: "campaign-parked",

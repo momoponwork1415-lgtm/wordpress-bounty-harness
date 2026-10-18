@@ -41,6 +41,7 @@ const reportSchema = z.strictObject({
   leads: z.array(claimTextSchema),
   examined: z.string().max(16_384),
   unexamined: z.string().max(16_384),
+  coverage: z.unknown().optional(),
 });
 /** Children are not constrained by Root's --output-schema; preserve structured coverage as text. */
 const childCoverageSchema = z
@@ -69,6 +70,7 @@ const candidateReportSchema = z.object({
   leads: z.array(z.unknown()).default([]),
   examined: childCoverageSchema.default(""),
   unexamined: childCoverageSchema.default(""),
+  coverage: z.unknown().optional(),
 });
 function extractCandidateReport(message: string) {
   const value = JSON.parse(message) as unknown;
@@ -136,6 +138,16 @@ const reportJsonSchema = {
   required: ["findings", "leads", "examined", "unexamined"],
 } as const;
 
+function reportJsonSchemaFor(coverageSchema?: Record<string, unknown>) {
+  if (coverageSchema === undefined) return reportJsonSchema;
+  const { $schema: _meta, ...recordSchema } = coverageSchema;
+  return {
+    ...reportJsonSchema,
+    properties: { ...reportJsonSchema.properties, coverage: recordSchema },
+    required: [...reportJsonSchema.required, "coverage"],
+  };
+}
+
 export interface CodexSandboxCommand {
   readonly executable: "codex";
   readonly args: readonly string[];
@@ -169,7 +181,7 @@ export interface CodexSandboxResult {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr?: string;
-  readonly failureKind?: "timed-out" | "output-limit-exceeded";
+  readonly failureKind?: "timed-out" | "output-limit-exceeded" | "cancelled";
   readonly startedAt: string;
   readonly completedAt: string;
   readonly image: string;
@@ -189,13 +201,18 @@ export interface CodexSandboxResult {
 }
 /** The Lab module supplies this executor. This adapter has no host execution fallback. */
 export interface CodexSandbox {
-  execute(command: CodexSandboxCommand): Promise<CodexSandboxResult>;
+  execute(
+    command: CodexSandboxCommand,
+    signal?: AbortSignal,
+  ): Promise<CodexSandboxResult>;
 }
 export interface DiscoveryTransportRun {
   readonly runId: string;
   readonly targetSnapshotDigest: string;
   readonly profile: AgentRuntimeProfile;
   readonly prompt: string;
+  /** Profile-owned Root report schema; children keep their existing report. */
+  readonly coverageSchema?: Record<string, unknown>;
   /** Screening uses one agent even when the runtime profile permits children. */
   readonly coordination?: "solo" | "cooperative";
   /** Dispatch budget; the broker applies it in brief 1c. */
@@ -237,6 +254,7 @@ const discoveryTransportRunSchema = z.strictObject({
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
+  coverageSchema: z.record(z.string(), z.unknown()).optional(),
   coordination: z.enum(["solo", "cooperative"]).optional(),
   taskMaxRequests: z.number().int().min(1).max(1600).optional(),
   outputKind: z.literal("verification").optional(),
@@ -886,7 +904,13 @@ function brokerRequestBytesExceeded(stdout: string): boolean {
 
 type AgentRun = NonNullable<DiscoveryTransportResult["agentRuns"]>[number];
 type IncompleteReason =
-  "provider" | "schema" | "sandbox" | "policy" | "evidence";
+  | "provider"
+  | "schema"
+  | "sandbox"
+  | "policy"
+  | "evidence"
+  | "wall"
+  | "operator";
 type GrantedSandboxRun = ProviderCredentialEgressResult<CodexSandboxResult>;
 type ExecutionState = {
   readonly run: DiscoveryTransportRun;
@@ -1126,7 +1150,7 @@ function sandboxCommand(
         content: JSON.stringify(
           run.outputKind === "verification"
             ? verificationReportJsonSchema
-            : reportJsonSchema,
+            : reportJsonSchemaFor(run.coverageSchema),
         ),
       },
     ],
@@ -1178,7 +1202,10 @@ export class CodexNativeAgentRuntime {
     readonly clock: () => Date = () => new Date(),
   ) {}
 
-  async execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult> {
+  async execute(
+    run: DiscoveryTransportRun,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryTransportResult> {
     const state: ExecutionState = {
       run,
       startedAt: this.clock().toISOString(),
@@ -1211,9 +1238,18 @@ export class CodexNativeAgentRuntime {
       run,
       state.cooperative,
       labEndpoint,
+      signal,
     );
     if (granted === undefined)
-      return incompleteExecution(state, "provider", this.clock().toISOString());
+      return incompleteExecution(
+        state,
+        signal?.aborted
+          ? signal.reason === "operator"
+            ? "operator"
+            : "wall"
+          : "provider",
+        this.clock().toISOString(),
+      );
     state.brokerMetrics = granted.receipt.metrics;
     if (
       granted.receipt.setup.status !== "ready" ||
@@ -1246,6 +1282,16 @@ export class CodexNativeAgentRuntime {
         result,
         granted.receipt.digest,
       );
+      if (
+        result.failureKind === "timed-out" ||
+        result.failureKind === "cancelled"
+      )
+        return incompleteExecution(
+          state,
+          result.failureKind === "timed-out" ? "wall" : "operator",
+          result.completedAt,
+          granted.receipt.digest,
+        );
       if (failure !== undefined)
         return incompleteExecution(
           state,
@@ -1256,6 +1302,16 @@ export class CodexNativeAgentRuntime {
           failure.reasonDetail,
         );
     }
+    if (
+      result.failureKind === "timed-out" ||
+      result.failureKind === "cancelled"
+    )
+      return incompleteExecution(
+        state,
+        result.failureKind === "timed-out" ? "wall" : "operator",
+        result.completedAt,
+        granted.receipt.digest,
+      );
     if (granted.receipt.cleanup.status !== "completed")
       return incompleteExecution(
         state,
@@ -1270,6 +1326,7 @@ export class CodexNativeAgentRuntime {
     run: DiscoveryTransportRun,
     cooperative: boolean,
     labEndpoint: URL | undefined,
+    signal?: AbortSignal,
   ): Promise<GrantedSandboxRun | undefined> {
     return this.broker
       .withGrant(
@@ -1290,8 +1347,10 @@ export class CodexNativeAgentRuntime {
           const login = assertBrokerAddress(grant, run);
           return this.sandbox.execute(
             sandboxCommand(run, grant, cooperative, labEndpoint, login),
+            signal,
           );
         },
+        signal,
       )
       .catch(() => undefined);
   }
@@ -1301,6 +1360,18 @@ export class CodexNativeAgentRuntime {
     result: CodexSandboxResult,
     grantReceiptDigest: string,
   ): Promise<{ reason: IncompleteReason; reasonDetail: string } | undefined> {
+    const parentThreadId = rootThreadId(result.stdout);
+    if (parentThreadId !== undefined) {
+      const children = await this.#captureChildren(
+        state.run,
+        result.rollouts ?? [],
+        parentThreadId,
+        grantReceiptDigest,
+      );
+      state.agentRuns = children.agentRuns;
+      state.childThreadsObserved = children.observed;
+      state.childThreadsAdmitted = children.admitted;
+    }
     if (result.researchFailure !== undefined || result.research === undefined)
       return { reason: "evidence", reasonDetail: "research-capture-failed" };
     try {
@@ -1313,18 +1384,6 @@ export class CodexNativeAgentRuntime {
       };
     } catch {
       return { reason: "evidence", reasonDetail: "research-capture-failed" };
-    }
-    const parentThreadId = rootThreadId(result.stdout);
-    if (parentThreadId !== undefined) {
-      const children = await this.#captureChildren(
-        state.run,
-        result.rollouts ?? [],
-        parentThreadId,
-        grantReceiptDigest,
-      );
-      state.agentRuns = children.agentRuns;
-      state.childThreadsObserved = children.observed;
-      state.childThreadsAdmitted = children.admitted;
     }
     if (result.rolloutFailure !== undefined)
       return { reason: "evidence", reasonDetail: "rollout-capture-failed" };

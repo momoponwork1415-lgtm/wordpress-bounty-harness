@@ -68,7 +68,15 @@ const bodySchema = z.strictObject({
   diagnosticArtifactDigest: digest.optional(),
   terminal: z.enum(["completed", "incomplete"]),
   reason: z.union([
-    z.enum(["provider", "schema", "sandbox", "policy", "evidence"]),
+    z.enum([
+      "provider",
+      "schema",
+      "sandbox",
+      "policy",
+      "evidence",
+      "wall",
+      "operator",
+    ]),
     z.literal("unavailable"),
   ]),
   reasonDetail: z

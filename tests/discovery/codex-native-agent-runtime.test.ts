@@ -26,6 +26,8 @@ import {
   PROVIDER_UPSTREAM_ORIGIN,
 } from "../../src/discovery/index.js";
 import { ProviderAttachmentStore } from "../../src/discovery/index.js";
+import { z } from "zod";
+import { wordpressCoverageRecordSchema } from "../../src/profiles/wordpress/discovery/coverage.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const image = `node@${digest}`;
@@ -192,6 +194,29 @@ function sandbox(
 }
 
 describe("Codex native agent runtime", () => {
+  it("records a wall timeout as an incomplete receipt", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-wall-receipt-"));
+    try {
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox("", [], {
+          status: "failed",
+          exitCode: -1,
+          failureKind: "timed-out",
+        }),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      expect((await runtime.execute(run)).receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "wall",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps Root and the first three unique children when a later wave creates another thread", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-child-overrun-"));
     try {
@@ -1539,6 +1564,63 @@ describe("Codex native agent runtime", () => {
         terminal: "incomplete",
         reason: "schema",
         reasonDetail: "final-message-not-report",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the profile coverage schema for Root structured output", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-coverage-"));
+    try {
+      const commands: CodexSandboxCommand[] = [];
+      const attachments = new ProviderAttachmentStore(root);
+      const report = {
+        findings: [],
+        leads: [],
+        examined: "source",
+        unexamined: "none",
+        coverage: { indexDigest: digest, incomplete: false, entries: [] },
+      };
+      const stdout = transcript.replace(
+        JSON.stringify(
+          JSON.stringify({
+            findings: [],
+            leads: [],
+            examined: "source",
+            unexamined: "none",
+          }),
+        ),
+        JSON.stringify(JSON.stringify(report)),
+      );
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(stdout, commands),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const result = await runtime.execute({
+        ...run,
+        coverageSchema: z.toJSONSchema(wordpressCoverageRecordSchema, {
+          io: "output",
+        }),
+      });
+      expect(result.receipt.terminal).toBe("completed");
+      const stored =
+        result.attachment && (await attachments.read(result.attachment));
+      expect(
+        stored?.status === "resolved" &&
+          JSON.parse(stored.bytes.toString("utf8")),
+      ).toMatchObject({ coverage: report.coverage });
+      const schema = JSON.parse(commands[0]!.supportFiles[0]!.content) as {
+        required: string[];
+        properties: Record<string, unknown>;
+      };
+      expect(schema.required).toContain("coverage");
+      expect(schema.properties.coverage).toMatchObject({
+        type: "object",
+        additionalProperties: false,
       });
     } finally {
       await rm(root, { recursive: true, force: true });

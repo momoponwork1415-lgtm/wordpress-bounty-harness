@@ -458,9 +458,10 @@ export function renderWordPressEntryIndex(index: WordPressSourceIndex): string {
     "## Entry points",
     `Index digest: ${index.digest}`,
     `Index: ${index.incomplete ? "partial (limit reached)" : "complete"}`,
+    `Incomplete: ${index.incomplete}`,
     ...index.entries.map(
-      (entry) =>
-        `- ${entry.kind} \`${entry.name}\` — ${entry.file}:${entry.line}`,
+      (entry, ordinal) =>
+        `- e-${ordinal + 1}: ${entry.kind} \`${entry.name}\` — ${entry.file}:${entry.line}`,
     ),
   ].join("\n");
 }
