@@ -250,39 +250,6 @@ export interface ExecutionCanary {
   readonly php: string;
 }
 
-/** Private requests are passed over stdin to a short-lived runner in the Lab recorder. */
-export type ReplayHttpInput = {
-  readonly steps: readonly {
-    readonly method: string;
-    readonly path: string;
-    readonly headers?: Readonly<Record<string, string>>;
-    readonly body?: string;
-    readonly bindingsAfter?: readonly {
-      readonly name: string;
-      readonly left: string;
-      readonly right: string;
-      readonly pattern?: string;
-      readonly occurrence?: "unique" | "last";
-    }[];
-  }[];
-  readonly initialBindings: Readonly<Record<string, string>>;
-};
-
-export type ReplayHttpResult =
-  | { readonly status: "completed"; readonly completedSteps: number }
-  | {
-      readonly status: "incomplete";
-      readonly completedSteps: number;
-      readonly reason:
-        | "invalid-input"
-        | "missing-binding"
-        | "ambiguous-binding"
-        | "binding-pattern"
-        | "request-failed"
-        | "response-too-large";
-    }
-  | { readonly status: "unavailable" };
-
 export interface WordPressLab extends LabProvisioner<
   WordPressLabSetup,
   WordPressLabHandle
@@ -314,10 +281,6 @@ export interface WordPressLab extends LabProvisioner<
   ): { readonly username: "harness-admin"; readonly password: string } | null;
   /** Review-only receiver address for a human-operated browser in the Lab network. */
   reviewReceiverIp(handle: WordPressLabHandle): string | null;
-  replayHttp(
-    handle: WordPressLabHandle,
-    input: ReplayHttpInput,
-  ): Promise<ReplayHttpResult>;
   canaryLedger(handle: WordPressLabHandle): WordPressCanaryLedger | null;
   prepareExecutionCanary(handle: WordPressLabHandle): ExecutionCanary | null;
   /**
@@ -500,14 +463,7 @@ export function openWordPressLab(options: {
     args: readonly string[],
     timeoutMs = 60_000,
     maxOutputBytes = 64 * 1024,
-    stdin?: string,
-  ): Promise<DockerResult> =>
-    runner.run({
-      args,
-      timeoutMs,
-      maxOutputBytes,
-      ...(stdin === undefined ? {} : { stdin }),
-    });
+  ): Promise<DockerResult> => runner.run({ args, timeoutMs, maxOutputBytes });
   const requireDocker = async (
     args: readonly string[],
     timeoutMs?: number,
@@ -645,59 +601,6 @@ export function openWordPressLab(options: {
       await requireDocker(["image", "inspect", image], 30_000);
   };
   return {
-    async replayHttp(handle, input) {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle) return { status: "unavailable" };
-      const serialized = JSON.stringify(input);
-      if (Buffer.byteLength(serialized) > 12 * 1024 * 1024)
-        return { status: "unavailable" };
-      const result = await docker(
-        [
-          "exec",
-          "-i",
-          resource.recorder,
-          "node",
-          "/opt/wbh-recorder/replay-cli.js",
-        ],
-        180_000,
-        4096,
-        serialized,
-      );
-      if (result.exitCode !== 0 && result.exitCode !== 1)
-        return { status: "unavailable" };
-      let output: unknown;
-      try {
-        output = JSON.parse(result.stdout) as unknown;
-      } catch {
-        return { status: "unavailable" };
-      }
-      const parsed = z
-        .discriminatedUnion("status", [
-          z.strictObject({
-            status: z.literal("completed"),
-            completedSteps: z.number().int().nonnegative(),
-          }),
-          z.strictObject({
-            status: z.literal("incomplete"),
-            completedSteps: z.number().int().nonnegative(),
-            reason: z.enum([
-              "invalid-input",
-              "missing-binding",
-              "ambiguous-binding",
-              "binding-pattern",
-              "request-failed",
-              "response-too-large",
-            ]),
-          }),
-        ])
-        .safeParse(output);
-      if (
-        !parsed.success ||
-        (result.exitCode === 0) !== (parsed.data.status === "completed")
-      )
-        return { status: "unavailable" };
-      return parsed.data;
-    },
     async cleanupLeftovers({ remove, patterns = {}, labId: onlyLab }) {
       if (onlyLab !== undefined && !exactLabId.test(onlyLab))
         throw new Error("Lab id is invalid");

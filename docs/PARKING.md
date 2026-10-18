@@ -19,7 +19,7 @@ Step 1（[DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節）の完了まで着手し�
 | 2026-10-13 | review CLI の多機能（decide / scope / draft / authorize / dedupe の人間向け表示）を skill 側へ寄せ、CLI を機械向けの最小集合に整理する | Step 2。skill 3 本が 10 件回って出力が安定したとき（ADR 0032 Q27） |
 | 2026-10-14 | 継続運転の journal / owner lease / host 共通 claim / crash reconciliation / 既往 gate（`codex/issue-229-batch-pin`、`codex/issue-229-continuous-pr`、`codex/issue-227-inventory-slice`、`codex/issue-228-cross-campaign-claims`、`codex/repeat-trial-approval`）。branch は参照用に残し merge しない | 第 2 provider が実動したとき、または実機で連続運転が 2 回止まったとき |
 | 2026-10-14 | 軽微な到達効果の事前保留（`codex/low-value-impact-gate`、#218） | review queue が週 15 件を超えたとき |
-| 2026-10-14 | 週次 smoke の replay Verifier（#126）、`assignment` mode、旧 arm の examples、`eval score / keys / rubric / compare`、`review open`、archive prompt 10 版、plugin 固有 Lab adapter 8 本の削除 | Step 1 合格後の整理 PR（最終設計 P13） |
+| 2026-10-14 | 週次 smoke の replay Verifier（#126）、`assignment` mode、旧 arm の examples、`eval score / keys / rubric / compare`、`review open`、archive prompt 10 版、plugin 固有 Lab adapter 8 本の削除 | Step 1 合格後の整理 PR（最終設計 P13）。週次 smoke の replay Verifier（#126）は 2026-10-18 所有者承認で削除（PR #342。`judges.ts` が読む `smoke-binding.json` の照合は凍結のため残し、`smoke-replay-recipe.ts` を読取専用の shim に縮めた） |
 | 2026-10-14 | install 下限を方針版で変える仕組み（#230） | `--selection` で下限別の方針 file を選ぶ運用で代える。運用で足りなくなったとき |
 | 2026-10-14 | 探索 prompt の A/B 事前登録（#201、再発見 case 5 × 2 arm） | Step 1 合格後 |
 | 2026-10-14 | Wordfence mirror の日次更新（#231） | 提出候補が週 1 件を超えたとき |

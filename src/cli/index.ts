@@ -258,8 +258,6 @@ export interface CliProfile {
       readonly referenceCampaignId?: string;
       /** Use a separately recorded, immutable Snapshot for this version. */
       readonly snapshotCampaignId?: string;
-      /** WordPress profile only: private bounded replay for the weekly smoke. */
-      readonly smokeReplayDigest?: string;
     },
   ): Promise<ReverificationSummary>;
   /** Summarizes the profile's Lab state diff artifact for `review export` (#186). */
