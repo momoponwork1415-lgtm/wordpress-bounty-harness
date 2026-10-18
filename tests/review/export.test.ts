@@ -9,6 +9,7 @@ import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-
 import { Ledger } from "../../src/ledger/index.js";
 import {
   exportReviewBundle,
+  Review,
   REVIEW_EXPORT_SCHEMA_ID,
   reviewExportV1Schema,
   type StateDiffReader,
@@ -44,6 +45,11 @@ async function fixture(
     readonly verification?: "incomplete" | "confirmed" | "none";
     readonly labStateDiff?: "captured" | "missing" | "absent";
     readonly reader?: StateDiffReader;
+    /**
+     * `bare` appends a decision and a scope assessment with no private record,
+     * as older ledgers hold them; `none` leaves review events to `Review`.
+     */
+    readonly review?: "bare" | "none";
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-export-"));
@@ -226,28 +232,59 @@ async function fixture(
           }
         : { artifacts: [{ kind: "recipe", digest: recipe }] }),
   });
-  await ledger.append({
-    ...base,
-    identity: "decision-1",
-    occurredAt: "2026-10-08T02:00:00Z",
-    type: "review-decided",
-    findingId: "finding-1",
-    decision: "defer",
-    humanElapsedSeconds: 540,
-    verificationId: "verification-1",
-    runId: "run-1",
-    promptDigest,
-  });
-  await ledger.append({
-    ...base,
-    identity: "scope-1",
-    occurredAt: "2026-10-08T02:01:00Z",
-    type: "scope-assessed",
-    findingId: "finding-1",
-    programmeId: "wordfence",
-    status: "in-scope",
-  });
+  if ((options.review ?? "bare") === "bare") {
+    await ledger.append({
+      ...base,
+      identity: "decision-1",
+      occurredAt: "2026-10-08T02:00:00Z",
+      type: "review-decided",
+      findingId: "finding-1",
+      decision: "defer",
+      humanElapsedSeconds: 540,
+      verificationId: "verification-1",
+      runId: "run-1",
+      promptDigest,
+    });
+    await ledger.append({
+      ...base,
+      identity: "scope-1",
+      occurredAt: "2026-10-08T02:01:00Z",
+      type: "scope-assessed",
+      findingId: "finding-1",
+      programmeId: "wordfence",
+      status: "in-scope",
+    });
+  }
   return { ledger, store, evidenceDirectory, diffDigest: diff, evidence };
+}
+
+const ref = {
+  campaignId: "campaign-1",
+  findingId: "finding-1",
+  verificationId: "verification-1",
+  snapshotDigest: snapshot,
+};
+
+/** The same Review that writes the records the export reads back. */
+function reviewOver(ledger: Ledger, store: PrivateArtifactStore): Review {
+  return new Review({
+    ledger,
+    artifactStore: store,
+    scopeEvaluator: {
+      programmeIds: ["wordfence"],
+      policyDigest: `sha256:${"9".repeat(64)}`,
+      assess: async () => [
+        {
+          programmeId: "wordfence",
+          status: "in-scope",
+          destination: "wordfence",
+          reason: "qualified",
+        },
+      ],
+    },
+    factsProvider: { load: async () => ({}) },
+    clock: () => new Date("2026-10-09T00:00:00Z"),
+  });
 }
 
 const reader = (summary: StateDiffSummary | null): StateDiffReader => ({
@@ -502,33 +539,36 @@ describe("review export", () => {
   it("fills the decision, reproduction, reverification, draft and newest release", async () => {
     const { ledger, store } = await fixture({
       verification: "confirmed",
+      review: "none",
     });
     const base = {
       schemaVersion: 1 as const,
       campaignId: "campaign-1",
       snapshotDigest: snapshot,
     };
-    const record = (value: object) =>
-      store.putFiles({ "record.json": canonicalJson(value) });
+    // The decision and the drafts are Review's own records, written by Review.
+    const review = reviewOver(ledger, store);
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "accepted",
+      openedEvidence: [],
+      duplicate: { status: "possible-match", reference: "CVE-1" },
+      decidedBy: "owner",
+    });
+    const [assessment] = await review.assessScope({ ref });
+    await review.saveDraft({
+      assessmentId: assessment!.id,
+      content: "First draft",
+      preparedBy: "ai",
+    });
+    const second = await review.saveDraft({
+      assessmentId: assessment!.id,
+      content: "Second draft",
+      preparedBy: "ai",
+    });
     const latest = `sha256:${"f".repeat(64)}`;
     for (const event of [
-      {
-        ...base,
-        identity: "decision-2",
-        occurredAt: "2026-10-09T00:00:00Z",
-        type: "review-decided" as const,
-        findingId: "finding-1",
-        decision: "accept" as const,
-        artifacts: [
-          {
-            kind: "review-decision",
-            digest: await record({
-              reasonCode: "accepted",
-              duplicate: { status: "possible-match", ref: "CVE-1" },
-            }),
-          },
-        ],
-      },
       {
         ...base,
         identity: "effort-1",
@@ -579,25 +619,6 @@ describe("review export", () => {
           nextStep: "Repeat",
         },
       },
-      {
-        ...base,
-        identity: "draft-1",
-        occurredAt: "2026-10-11T00:00:00Z",
-        type: "draft-saved" as const,
-        findingId: "finding-1",
-        candidateId: "candidate-1",
-        revisionDigest: sha("8"),
-        artifacts: [
-          {
-            kind: "review-draft",
-            digest: await record({
-              revision: 2,
-              preparedBy: "ai",
-              destination: "wordfence",
-            }),
-          },
-        ],
-      },
     ])
       expect((await ledger.append(event)).status).toBe("appended");
     const exported = (observe: () => Promise<never | object>) =>
@@ -621,6 +642,7 @@ describe("review export", () => {
         decision: "accept",
         reasonCode: "accepted",
         duplicate: "possible-match:CVE-1",
+        decidedAt: "2026-10-09T00:00:00.000Z",
       },
       humanReproduction: { result: "match", minutes: 35 },
       latestReverification: {
@@ -630,7 +652,7 @@ describe("review export", () => {
         basis: "latest-version",
       },
       latestDraft: {
-        digest: sha("8"),
+        digest: second.digest,
         revision: 2,
         preparedBy: "ai",
         programme: "wordfence",
@@ -641,5 +663,48 @@ describe("review export", () => {
       throw new Error("offline");
     });
     expect(failed.target.versions.latestObserved).toBeNull();
+  });
+
+  it("carries a possible-match reference from Review's decision record", async () => {
+    const { ledger, store } = await fixture({
+      verification: "confirmed",
+      review: "none",
+    });
+    const review = reviewOver(ledger, store);
+    const exportDecision = async () =>
+      (
+        await exportReviewBundle({
+          ledger,
+          store,
+          campaignId: "campaign-1",
+          findingId: "finding-1",
+        })
+      ).review.decision;
+    await review.decide({
+      ref,
+      decision: "defer",
+      reasonCode: "needs-dedupe",
+      openedEvidence: [],
+      duplicate: { status: "no-match" },
+      decidedBy: "owner",
+    });
+    expect(await exportDecision()).toMatchObject({
+      decision: "defer",
+      reasonCode: "needs-dedupe",
+      duplicate: "no-match",
+    });
+    await review.decide({
+      ref,
+      decision: "reject",
+      reasonCode: "duplicate",
+      openedEvidence: [],
+      duplicate: { status: "possible-match", reference: "CVE-2026-0001" },
+      decidedBy: "owner",
+    });
+    expect(await exportDecision()).toMatchObject({
+      decision: "reject",
+      reasonCode: "duplicate",
+      duplicate: "possible-match:CVE-2026-0001",
+    });
   });
 });

@@ -4,6 +4,11 @@ import { z } from "zod";
 
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
+import {
+  readReviewRecord,
+  type ReviewRecordByKind,
+  type ReviewRecordKind,
+} from "./records.js";
 
 /**
  * `review export`: the one bundle the Claude Code skills read (ADR 0031). It
@@ -554,24 +559,18 @@ export async function exportReviewBundle(options: {
     .readAll({ campaignId, findingId, type: "scope-assessed" })
     .map(({ event }) => event)
     .filter((event) => event.type === "scope-assessed");
-  const privateRecord = async (
+  // Review's own records, read the way Review wrote them. An event without a
+  // readable record (older events) keeps the derived fields null.
+  const privateRecord = async <K extends ReviewRecordKind>(
     event: LedgerEventV1 | undefined,
-    kind: string,
-  ) => {
-    const ref = event?.artifacts.find((item) => item.kind === kind);
-    if (ref === undefined) return undefined;
-    const file = await store.readJson(
-      ref.digest,
-      "record.json",
-      z.record(z.string(), z.unknown()),
-      200_000,
-    );
-    return file.status === "resolved" ? file.value : undefined;
+    kind: K,
+  ): Promise<ReviewRecordByKind[K] | null> => {
+    if (event === undefined) return null;
+    const read = await readReviewRecord(store, event, kind);
+    return read.status === "read" ? read.record : null;
   };
   const lastDecision = decisions.at(-1);
   const decisionRecord = await privateRecord(lastDecision, "review-decision");
-  const duplicate = decisionRecord?.duplicate as
-    { status?: string; ref?: string } | undefined;
   const ofFinding = (type: LedgerEventV1["type"], ids: readonly string[]) =>
     ids.flatMap((findingIdOf) =>
       ledger
@@ -712,16 +711,13 @@ export async function exportReviewBundle(options: {
           ? null
           : {
               decision: lastDecision.decision,
-              reasonCode:
-                typeof decisionRecord?.reasonCode === "string"
-                  ? decisionRecord.reasonCode
-                  : null,
+              reasonCode: decisionRecord?.reasonCode ?? null,
               duplicate:
-                duplicate?.status === undefined
+                decisionRecord === null
                   ? null
-                  : duplicate.ref === undefined
-                    ? duplicate.status
-                    : `${duplicate.status}:${duplicate.ref}`,
+                  : decisionRecord.duplicate.status === "possible-match"
+                    ? `${decisionRecord.duplicate.status}:${decisionRecord.duplicate.reference}`
+                    : decisionRecord.duplicate.status,
               decidedAt: lastDecision.occurredAt,
             },
       humanReproduction:
@@ -746,13 +742,13 @@ export async function exportReviewBundle(options: {
               recordedAt: reverification.occurredAt,
             },
       latestDraft:
-        draft?.type !== "draft-saved" || draftRecord === undefined
+        draft?.type !== "draft-saved" || draftRecord === null
           ? null
           : {
               digest: draft.revisionDigest,
-              revision: Number(draftRecord.revision),
-              preparedBy: String(draftRecord.preparedBy),
-              programme: String(draftRecord.destination),
+              revision: draftRecord.revision,
+              preparedBy: draftRecord.preparedBy,
+              programme: draftRecord.destination,
             },
       labSetup:
         verification === undefined
