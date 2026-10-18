@@ -20,6 +20,7 @@ import {
   verifyCanonicalSourceTree,
 } from "./canonical-source-tree.js";
 import { canonicalJson } from "./canonical-json.js";
+import { hasErrorCode } from "./immutable-file.js";
 
 const artifactIdSchema = z
   .string()
@@ -75,13 +76,6 @@ export type PrivateArtifactFileResolution =
       readonly bytes: Buffer;
     }
   | Exclude<PrivateArtifactResolution, { readonly status: "resolved" }>;
-
-function isFileSystemError(
-  error: unknown,
-  code: string,
-): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error && error.code === code;
-}
 
 export class PrivateArtifactStore {
   readonly #rootDirectory: string;
@@ -196,10 +190,7 @@ export class PrivateArtifactStore {
       await rename(staging.rootDirectory, destination);
       return { status: "stored", artifact };
     } catch (error: unknown) {
-      if (
-        !isFileSystemError(error, "EEXIST") &&
-        !isFileSystemError(error, "ENOTEMPTY")
-      ) {
+      if (!hasErrorCode(error, "EEXIST") && !hasErrorCode(error, "ENOTEMPTY")) {
         throw error;
       }
       const existing = await this.resolve(artifact);
@@ -260,7 +251,7 @@ export class PrivateArtifactStore {
         ? { status: "resolved", artifact, contentDirectory }
         : { status: "integrity-mismatch" };
     } catch (error: unknown) {
-      if (isFileSystemError(error, "ENOENT")) return { status: "missing" };
+      if (hasErrorCode(error, "ENOENT")) return { status: "missing" };
       return { status: "unsafe" };
     }
   }
@@ -277,7 +268,7 @@ export class PrivateArtifactStore {
       }
       entries = await readdir(this.#rootDirectory, { withFileTypes: true });
     } catch (error: unknown) {
-      if (isFileSystemError(error, "ENOENT")) return [];
+      if (hasErrorCode(error, "ENOENT")) return [];
       throw error;
     }
     return entries
@@ -337,7 +328,7 @@ export class PrivateArtifactStore {
       }
       return { status: "resolved", artifact: resolution.artifact, bytes };
     } catch (error: unknown) {
-      if (isFileSystemError(error, "ENOENT")) return { status: "missing" };
+      if (hasErrorCode(error, "ENOENT")) return { status: "missing" };
       return { status: "unsafe" };
     } finally {
       await handle?.close();

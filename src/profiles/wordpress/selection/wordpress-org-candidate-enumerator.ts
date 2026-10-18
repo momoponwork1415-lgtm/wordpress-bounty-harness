@@ -1,6 +1,10 @@
-import { createHash } from "node:crypto";
-
 import { z } from "zod";
+
+import {
+  fetchBounded,
+  ResponseTooLargeError,
+} from "../../../infrastructure/bounded-fetch.js";
+import { bytesDigest } from "../../../infrastructure/content-digest.js";
 
 const endpoint = "https://api.wordpress.org/plugins/info/1.2/";
 const maximumResponseBytes = 1_000_000;
@@ -123,35 +127,6 @@ function listingRequests(
   return requests;
 }
 
-async function readBounded(response: Response): Promise<Uint8Array> {
-  const declared = response.headers.get("content-length");
-  if (declared !== null && Number(declared) > maximumResponseBytes)
-    throw new Error("too-large");
-  if (response.body === null) return new Uint8Array();
-  const reader = response.body.getReader();
-  const parts: Uint8Array[] = [];
-  let length = 0;
-  try {
-    while (true) {
-      const next = await reader.read();
-      if (next.done) break;
-      length += next.value.byteLength;
-      if (length > maximumResponseBytes) throw new Error("too-large");
-      parts.push(next.value);
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const part of parts) {
-    bytes.set(part, offset);
-    offset += part.byteLength;
-  }
-  return bytes;
-}
-
 function unavailable(
   request: ListingRequest,
   reason: UnavailableReason,
@@ -171,13 +146,15 @@ async function observeListing(
 }> {
   const checkedAt = clock().toISOString();
   let response: Response;
+  let readBody: () => Promise<Uint8Array>;
   try {
-    response = await fetcher(request.sourceUrl, {
-      signal: AbortSignal.timeout(15_000),
+    ({ response, readBody } = await fetchBounded(fetcher, request.sourceUrl, {
+      timeoutMs: 15_000,
       redirect: "error",
       credentials: "omit",
       headers: { Accept: "application/json" },
-    });
+      maximumBytes: maximumResponseBytes,
+    }));
   } catch {
     return {
       listing: unavailable(request, "network-failure", checkedAt),
@@ -225,12 +202,12 @@ async function observeListing(
 
   let bytes: Uint8Array;
   try {
-    bytes = await readBounded(response);
+    bytes = await readBody();
   } catch (error) {
     return {
       listing: unavailable(
         request,
-        error instanceof Error && error.message === "too-large"
+        error instanceof ResponseTooLargeError
           ? "too-large"
           : "network-failure",
         checkedAt,
@@ -248,7 +225,7 @@ async function observeListing(
         slugs: [],
       };
     }
-    const contentDigest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    const contentDigest = bytesDigest(bytes);
     return {
       listing: {
         ...request,

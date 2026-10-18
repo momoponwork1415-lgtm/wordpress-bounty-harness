@@ -1,14 +1,25 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import {
+  artifactId,
+  bytesDigest,
+} from "../../../infrastructure/content-digest.js";
+import {
+  hasErrorCode,
+  persistContentAddressedFile,
+} from "../../../infrastructure/immutable-file.js";
 import {
   checkSourceAgainstManifest,
   SourceTreeError,
   walkCanonicalSourceTree,
   type SourceTreeRejection,
 } from "../../../infrastructure/canonical-source-tree.js";
-import { canonicalJson, sha256Digest } from "./canonical-json.js";
+import type { AcquiredSource } from "../../../snapshot/index.js";
+import {
+  canonicalJsonPreservingProperties,
+  canonicalDigestPreservingProperties,
+} from "../../../infrastructure/canonical-json.js";
 import {
   intakeDispositionSchema,
   manualTargetIntakeRequestSchema,
@@ -47,17 +58,43 @@ interface CaptureRejected {
 
 type CaptureResult = CaptureSuccess | CaptureRejected;
 
-function rawDigest(bytes: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+/**
+ * The intake store layout lives here and nowhere else: `objects/` holds the
+ * canonical JSON records, `blobs/` holds the captured bytes by digest.
+ */
+const TARGET_INTAKE_SUBDIRECTORY = "target-intake";
+
+/** Where a store root keeps its intake packets and captured blobs. */
+export function targetIntakeDirectory(storageDirectory: string): string {
+  return join(storageDirectory, TARGET_INTAKE_SUBDIRECTORY);
 }
 
-function hasErrorCode(error: unknown, code: string): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === code
+function blobPath(intakeDirectory: string, digest: string): string {
+  return join(intakeDirectory, "blobs", digest.slice("sha256:".length));
+}
+
+/** Reads only the captured bytes named by an intake packet. */
+export function acquiredSourceFromIntakePacket(
+  packet: TargetIntakePacket,
+  intakeStorageDirectory: string,
+): AcquiredSource {
+  const files = new Map(
+    packet.sourceTree.manifest.entries.map((entry) => [
+      entry.path,
+      entry.digest,
+    ]),
   );
+  return {
+    identity: packet.pluginIdentity,
+    version: packet.version,
+    manifest: packet.sourceTree.manifest,
+    async readFile(path) {
+      const digest = files.get(path);
+      if (digest === undefined)
+        throw new Error("File is absent from source manifest");
+      return readFile(blobPath(intakeStorageDirectory, digest));
+    },
+  };
 }
 
 /** The strict walk's first refusal, in the intake's vocabulary. */
@@ -173,7 +210,7 @@ function requestIdentity(
   request: ManualTargetIntakeRequest,
   sourceObservation: unknown,
 ): string {
-  return sha256Digest({
+  return canonicalDigestPreservingProperties({
     kind: request.kind,
     schemaVersion: request.schemaVersion,
     source: { kind: request.source.kind, observation: sourceObservation },
@@ -190,24 +227,6 @@ function requestIdentity(
   });
 }
 
-function artifactId(prefix: string, digest: string): string {
-  return `${prefix}:${digest.slice("sha256:".length, "sha256:".length + 24)}`;
-}
-
-async function persistBytes(path: string, bytes: Uint8Array): Promise<void> {
-  try {
-    await writeFile(path, bytes, { flag: "wx" });
-  } catch (error) {
-    if (!hasErrorCode(error, "EEXIST")) {
-      throw error;
-    }
-    const existing = await readFile(path);
-    if (!existing.equals(bytes)) {
-      throw new Error(`Content-addressed artifact conflict: ${path}`);
-    }
-  }
-}
-
 class LocalDirectoryTargetIntake implements TargetIntake {
   readonly #storageDirectory: string;
   readonly #sourceCaptureKind:
@@ -222,12 +241,15 @@ class LocalDirectoryTargetIntake implements TargetIntake {
   }
 
   async #persistJson(value: unknown): Promise<{ id: string; digest: string }> {
-    const bytes = Buffer.from(canonicalJson(value), "utf8");
-    const digest = rawDigest(bytes);
+    const bytes = Buffer.from(canonicalJsonPreservingProperties(value), "utf8");
+    const digest = bytesDigest(bytes);
     const id = artifactId("artifact", digest);
     const directory = join(this.#storageDirectory, "objects");
     await mkdir(directory, { recursive: true });
-    await persistBytes(join(directory, `${digest.slice(7)}.json`), bytes);
+    await persistContentAddressedFile(
+      join(directory, `${digest.slice(7)}.json`),
+      bytes,
+    );
     return { id, digest };
   }
 
@@ -275,7 +297,7 @@ class LocalDirectoryTargetIntake implements TargetIntake {
       schemaVersion: 1 as const,
       entries: manifestEntries,
     };
-    const treeDigest = sha256Digest(manifest);
+    const treeDigest = canonicalDigestPreservingProperties(manifest);
     const requestDigest = requestIdentity(request, { treeDigest });
     const phpFiles = capture.files.filter((file) => file.path.endsWith(".php"));
     const candidates = phpFiles.flatMap((file) => {
@@ -368,14 +390,14 @@ class LocalDirectoryTargetIntake implements TargetIntake {
       request.pluginIdentity.kind === "wporg"
         ? `wporg:${request.pluginIdentity.slug}`
         : `premium:${request.pluginIdentity.vendor}/${request.pluginIdentity.product}`;
-    const targetSnapshotDigest = sha256Digest({
+    const targetSnapshotDigest = canonicalDigestPreservingProperties({
       kind: "target-snapshot",
       schemaVersion: 1,
       pluginIdentity,
       version: request.requestedVersion,
       treeDigest,
     });
-    const packetSeed = sha256Digest({
+    const packetSeed = canonicalDigestPreservingProperties({
       requestDigest,
       pluginIdentity,
       mainPluginFile: selected.file.path,
@@ -415,10 +437,11 @@ class LocalDirectoryTargetIntake implements TargetIntake {
       policy: { id: request.policy.id, digest: request.policy.digest },
     };
 
-    const blobDirectory = join(this.#storageDirectory, "blobs");
-    await mkdir(blobDirectory, { recursive: true });
     for (const file of capture.files) {
-      await persistBytes(join(blobDirectory, file.digest.slice(7)), file.bytes);
+      await persistContentAddressedFile(
+        blobPath(this.#storageDirectory, file.digest),
+        file.bytes,
+      );
     }
     const packetRef = await this.#persistJson(packet);
     const receipt: IntakeReceipt = {

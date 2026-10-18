@@ -1,8 +1,9 @@
-import { lstat, mkdir, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, readFile, rename, rm } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 import { walkCanonicalSourceTree } from "../../../infrastructure/canonical-source-tree.js";
 import type { NativeModelProcessResult } from "../../../infrastructure/native-model-process.js";
+import { pathExists } from "../../../infrastructure/immutable-file.js";
 import { runNativeModelProcess } from "../../../infrastructure/native-model-process.js";
 import type { AcquiredSource } from "../../../snapshot/index.js";
 import { WORDPRESS_CORE_IDENTITY } from "../lab/index.js";
@@ -83,7 +84,7 @@ export function openWordPressCoreSource(options: {
   const directory = join(options.stagingDirectory, imageDigest);
 
   const extract = async (): Promise<void> => {
-    if (await exists(join(directory, "wp-includes", "version.php"))) return;
+    if (await pathExists(join(directory, "wp-includes", "version.php"))) return;
     await mkdir(options.stagingDirectory, { recursive: true, mode: 0o700 });
     const staging = `${directory}.staging`;
     await rm(staging, { recursive: true, force: true });
@@ -125,13 +126,4 @@ export function openWordPressCoreSource(options: {
       },
     ];
   };
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch {
-    return false;
-  }
 }

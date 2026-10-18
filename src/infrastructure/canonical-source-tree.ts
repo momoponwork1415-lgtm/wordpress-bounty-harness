@@ -4,6 +4,7 @@ import { lstat, open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import { canonicalDigest } from "./canonical-json.js";
+import { bytesDigest } from "./content-digest.js";
 
 export interface ExpectedSourceTree {
   readonly digest: string;
@@ -81,10 +82,6 @@ function sameFile(before: Stats, after: Stats): boolean {
     before.mtimeMs === after.mtimeMs &&
     before.ctimeMs === after.ctimeMs
   );
-}
-
-function fileDigest(bytes: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
 async function digestRegularFile(
@@ -323,7 +320,7 @@ export async function checkSourceAgainstManifest(
         },
       };
     }
-    const digest = fileDigest(bytes);
+    const digest = bytesDigest(bytes);
     if (bytes.byteLength !== entry.size || digest !== entry.digest)
       return {
         status: "mismatch",
