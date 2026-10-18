@@ -276,7 +276,8 @@ export type DiscoveryStop =
   | "max-runs"
   | "plans-exhausted"
   | "provider-limit"
-  | "incomplete";
+  | "incomplete"
+  | "operator";
 
 /** Run planned Trials, preserve admitted claims, and apply campaign stop rules. */
 export async function runDiscoveryCampaign(options: {
@@ -355,6 +356,8 @@ export async function runDiscoveryCampaign(options: {
   readonly stoppedBy: DiscoveryStop;
 }> {
   const input = campaignInputV1Schema.parse(options.input);
+  if (options.taskMode && options.plannedTrials.length === 0)
+    throw new Error("Task campaigns require at least one task");
   if (!options.taskMode && input.stopRules.maxRuns === 0)
     throw new Error("Non-task campaigns require at least one run");
   const id = z.string().min(1).max(128);
@@ -763,7 +766,7 @@ export async function runDiscoveryCampaign(options: {
           receiptDigest = await options.evidence.putFiles({
             "receipt.json": canonicalJson(receipt),
           });
-        } else {
+        } else if (options.taskMode) {
           failure = { reason: "evidence", reasonDetail: "execution-error" };
         }
       } finally {
@@ -820,7 +823,11 @@ export async function runDiscoveryCampaign(options: {
       const initial =
         finishedRuns.get(originalRunId) ??
         (await executePlanned(trial.explore));
-      if (initial.outcome !== "completed" && !finishedRuns.has(retryRunId))
+      if (
+        initial.outcome !== "completed" &&
+        !options.signal?.aborted &&
+        !finishedRuns.has(retryRunId)
+      )
         await executePlanned({
           ...trial.explore,
           run: { ...trial.explore.run, runId: retryRunId },
@@ -852,6 +859,7 @@ export async function runDiscoveryCampaign(options: {
   };
   const worker = async () => {
     while (stopped === undefined && next < limit) {
+      if (options.taskMode && options.signal?.aborted) break;
       const ordinal = next++;
       if (!spentOrdinals.has(ordinal)) await runOne(ordinal);
     }
@@ -887,6 +895,7 @@ export async function runDiscoveryCampaign(options: {
         ? "incomplete"
         : undefined;
   const stoppedBy =
+    (options.taskMode && options.signal?.aborted ? "operator" : undefined) ??
     recordedFailure ??
     stopped ??
     (options.plannedTrials.length >= input.stopRules.maxRuns
@@ -894,8 +903,9 @@ export async function runDiscoveryCampaign(options: {
       : "plans-exhausted");
   // Dispatch concludes after every task, including a task with two failed attempts.
   if (
-    options.taskMode ||
-    (stoppedBy !== "provider-limit" && stoppedBy !== "incomplete")
+    stoppedBy !== "operator" &&
+    (options.taskMode ||
+      (stoppedBy !== "provider-limit" && stoppedBy !== "incomplete"))
   ) {
     const recorded = await options.ledger.append({
       schemaVersion: 1,

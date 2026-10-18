@@ -216,7 +216,8 @@ const dispatchSettings = z
     taskWallMinutes: 10,
     taskMaxRequests: 150,
     concurrency: 4,
-  });
+  })
+  .describe("dispatch.concurrency ignores resources.maxConcurrentRuns");
 const campaignModes = z.discriminatedUnion("mode", [
   z.strictObject({
     ...commonCampaignFields,

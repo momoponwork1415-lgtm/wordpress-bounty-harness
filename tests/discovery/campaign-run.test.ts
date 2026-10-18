@@ -56,6 +56,9 @@ async function campaign(
     readonly childSurvivesBrokenRoot?: boolean;
     readonly heldOnly?: boolean;
     readonly rootTranscriptInvalid?: boolean;
+    readonly taskMode?: boolean;
+    readonly failCalls?: number;
+    readonly stopAfterFirst?: boolean;
     readonly wallOnFirstRun?: boolean;
     readonly ignoreAbort?: boolean;
     readonly indexed?: boolean;
@@ -87,6 +90,7 @@ async function campaign(
     databasePath: join(root, "ledger.sqlite"),
     artifactStore: evidence,
   });
+  const operator = new AbortController();
   await ledger.append({
     schemaVersion: 1,
     identity: "lab-ready",
@@ -115,10 +119,12 @@ async function campaign(
     programmeBoundary: { version: "v1", text: "Synthetic boundary" },
     modelProfileDigest: profile.digest,
     promptDigest: digest,
-    stopRules: options.indexed
-      ? { maxRuns: 1, noFindingRuns: 1 }
-      : { maxRuns: 6, noFindingRuns: 2 },
-    lab: { setupDigest: digest },
+    stopRules: options.taskMode
+      ? { maxRuns: 2, noFindingRuns: 1 }
+      : options.indexed
+        ? { maxRuns: 1, noFindingRuns: 1 }
+        : { maxRuns: 6, noFindingRuns: 2 },
+    lab: options.taskMode ? { mode: "none" as const } : { setupDigest: digest },
     history,
     ...(options.indexed
       ? { entryIndex: { enabled: true as const, digest } }
@@ -139,7 +145,8 @@ async function campaign(
   let calls = 0;
   const result = await runDiscoveryCampaign({
     campaignId: "campaign-1",
-    labId: "lab-1",
+    ...(options.taskMode ? {} : { labId: "lab-1" }),
+    ...(options.taskMode ? { taskMode: true, signal: operator.signal } : {}),
     input,
     historyFraction: 0.5,
     runWallTimeMs: options.wallOnFirstRun ? 30 : 60 * 60_000,
@@ -185,6 +192,8 @@ async function campaign(
             : "2026-10-08T08:00:00.000Z",
         );
         const ordinal = calls++;
+        if (options.taskMode && ordinal < (options.failCalls ?? 0))
+          throw new Error("synthetic task transport failure");
         if (ordinal === 0 && options.wallOnFirstRun) {
           if (options.ignoreAbort)
             return await new Promise<never>(() => undefined);
@@ -364,6 +373,7 @@ async function campaign(
           "findings",
           Buffer.from(JSON.stringify(report)),
         );
+        if (options.stopAfterFirst && ordinal === 0) operator.abort();
         return {
           attachment,
           ...(researchArtifact === undefined ? {} : { researchArtifact }),
@@ -387,7 +397,7 @@ async function campaign(
       },
     },
     plannedTrials: Array.from(
-      { length: options.indexed ? 1 : 6 },
+      { length: options.taskMode ? 2 : options.indexed ? 1 : 6 },
       (_, index) => ({
         trialId: `run-${index}`,
         trialOrdinal: index,
@@ -407,11 +417,15 @@ async function campaign(
             ...(options.coverage === undefined ? {} : { coverageSchema: {} }),
             sourceDirectory: "/private/source",
             sourceTree: { digest, entries: 1, bytes: 1 },
-            lab: {
-              endpoint: "http://wordpress",
-              networkName: "lab-internal",
-              internalIp: "172.20.0.2",
-            },
+            ...(options.taskMode
+              ? {}
+              : {
+                  lab: {
+                    endpoint: "http://wordpress",
+                    networkName: "lab-internal",
+                    internalIp: "172.20.0.2",
+                  },
+                }),
             expiresAt: "2026-10-08T07:30:00Z",
           },
         },
@@ -421,6 +435,36 @@ async function campaign(
   });
   return { result, calls, ledger, evidence, attachments };
 }
+
+it("keeps other tasks running after two failed attempts and records incomplete", async () => {
+  const { result, ledger } = await campaign([], {
+    taskMode: true,
+    failCalls: 2,
+  });
+  expect(result).toMatchObject({ runCount: 3, stoppedBy: "incomplete" });
+  expect(
+    ledger
+      .read({ type: "discovery-run-finished" })
+      .map(({ event }) =>
+        event.type === "discovery-run-finished" ? event.outcome : null,
+      ),
+  ).toEqual(["failed", "failed", "completed"]);
+  expect(
+    ledger.read({ type: "discovery-run-started" })[1]?.event,
+  ).toMatchObject({ runKind: "task", configuration: { retryOf: "run-0" } });
+  expect(ledger.read({ type: "discovery-concluded" })[0]?.event).toMatchObject({
+    stoppedBy: "incomplete",
+  });
+});
+
+it("stops task dispatch without concluding when the operator stops", async () => {
+  const { result, ledger } = await campaign([], {
+    taskMode: true,
+    stopAfterFirst: true,
+  });
+  expect(result).toMatchObject({ runCount: 1, stoppedBy: "operator" });
+  expect(ledger.read({ type: "discovery-concluded" })).toHaveLength(0);
+});
 
 it("writes discovery-run-finished with wall after a silent executor reaches its limit", async () => {
   const { result, ledger } = await campaign([], {

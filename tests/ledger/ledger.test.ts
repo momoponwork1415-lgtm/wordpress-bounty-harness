@@ -70,6 +70,47 @@ async function evidence(store: PrivateArtifactStore): Promise<string> {
 }
 
 describe("Ledger public interface", () => {
+  it("round trips task run metadata, retry identity, and incomplete conclusion", async () => {
+    const { ledger } = await fixture();
+    await ledger.append({
+      ...common("task-start"),
+      type: "discovery-run-started",
+      runId: "retry-1",
+      runKind: "task",
+      labAttached: false,
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "dispatch",
+        assignmentUnit: "entry-point",
+        taskId: "task-1",
+        taskKind: "initial",
+        taskOrdinal: 1,
+        taskOf: 3,
+        retryOf: "original-1",
+      },
+    });
+    await ledger.append({
+      ...common("task-concluded"),
+      type: "discovery-concluded",
+      stoppedBy: "incomplete",
+    });
+    expect(
+      ledger.read({ type: "discovery-run-started" })[0]?.event,
+    ).toMatchObject({
+      runKind: "task",
+      configuration: {
+        taskId: "task-1",
+        taskKind: "initial",
+        taskOrdinal: 1,
+        taskOf: 3,
+        retryOf: "original-1",
+      },
+    });
+    expect(
+      ledger.read({ type: "discovery-concluded" })[0]?.event,
+    ).toMatchObject({ stoppedBy: "incomplete" });
+  });
+
   it("measures owner time and opened findings per distinct submission across categories", async () => {
     const { ledger } = await fixture();
     for (const [findingId, category] of [

@@ -449,6 +449,7 @@ export async function runCampaignPipeline<
           ledger,
           evidence: options.store,
           clock,
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
           ...prepared,
           repeatAll: (options.repeat ?? 1) > 1,
         });
@@ -462,8 +463,9 @@ export async function runCampaignPipeline<
           verifications: [],
         };
         if (
-          discovered.stoppedBy === "provider-limit" &&
-          discovered.runCount > 0
+          (discovered.stoppedBy === "provider-limit" &&
+            discovered.runCount > 0) ||
+          discovered.stoppedBy === "operator"
         ) {
           requestStop("provider-limit");
           await append({
