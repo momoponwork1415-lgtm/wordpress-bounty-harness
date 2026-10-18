@@ -739,7 +739,12 @@ export async function createWordPressHostProfile(options: {
             () => true,
             () => false,
           )),
-        loginMarginMinutes: selection.maximumTargets * (wall + 30 * 3 + 15),
+        // Targets run in waves of maxConcurrentTargets; the margin covers one batch.
+        loginMarginMinutes:
+          Math.ceil(
+            selection.maximumTargets / config.resources.maxConcurrentTargets,
+          ) *
+          (wall + 30 * 3 + 15),
       };
     },
   };

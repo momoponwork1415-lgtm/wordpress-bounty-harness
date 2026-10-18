@@ -20,7 +20,7 @@ export type ContinuousHostStatus = {
   readonly programmeObservedAt: Date;
   readonly freeBytes: number;
   readonly legacyHistoryAvailable: boolean;
-  /** maximumTargets × (runWallTimeMinutes + 30 × 3 + 15). */
+  /** ceil(maximumTargets / maxConcurrentTargets) × (runWallTimeMinutes + 30 × 3 + 15). */
   readonly loginMarginMinutes: number;
 };
 
