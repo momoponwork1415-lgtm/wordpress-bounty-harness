@@ -58,6 +58,16 @@ const manualSelectionPolicy = z
   .strictObject({
     ...commonSelectionPolicy,
     candidateSlugs: z.array(slugSchema),
+    /** Historical/manual dependencies must have explicit versions. */
+    pluginDependencyPins: z
+      .record(
+        slugSchema,
+        z.record(
+          slugSchema,
+          z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$/),
+        ),
+      )
+      .optional(),
     /** Historical manual nominations remain readable; the current rule is set by ADR 0030. */
     historySignals: z
       .record(slugSchema, z.number().int().nonnegative())
@@ -80,9 +90,12 @@ const manualSelectionPolicy = z
       ) &&
       Object.keys(policy.historySignals ?? {}).every((slug) =>
         policy.candidateSlugs.includes(slug),
+      ) &&
+      Object.keys(policy.pluginDependencyPins ?? {}).every((slug) =>
+        policy.candidateSlugs.includes(slug),
       ),
     {
-      message: "Pinned and history slugs must be candidates",
+      message: "Pinned, dependency and history slugs must be candidates",
       path: ["candidateSlugs"],
     },
   )
@@ -95,6 +108,10 @@ const manualSelectionPolicy = z
 const automaticSelectionPolicy = z
   .strictObject({
     ...commonSelectionPolicy,
+    /** Undeclared runtime dependencies resolved to official stable at freeze. */
+    pluginDependencySlugs: z
+      .record(slugSchema, z.array(slugSchema).max(16))
+      .optional(),
     promptVariant: z.string().min(1).max(128),
     revisitPolicy: wordPressRevisitPolicySchema,
     maximumTargets: z.number().int().min(3).max(5),
@@ -158,6 +175,11 @@ export interface WordPressTargetSelection extends TargetSelection {
   readonly candidateTag?: string | undefined;
   /** The plugin's last update on WordPress.org, standing in for the stable version's release. */
   readonly versionPublishedAt?: string | undefined;
+  /** Selection-time operator pins; the snapshot also seals the acquired bytes. */
+  readonly pluginDependencyPins?: Readonly<Record<string, string>> | undefined;
+  readonly pluginDependencySlugs?: readonly string[] | undefined;
+  readonly dependencyVersionPolicy?:
+    "stable-observed" | "pinned-only" | undefined;
   readonly scoreBreakdown: {
     readonly installations: number;
     readonly recency: number;
@@ -186,6 +208,13 @@ export const wordPressTargetSelectionSchema: z.ZodType<WordPressTargetSelection>
     runBudget: z.number().int().positive().max(40).optional(),
     candidateTag: slugSchema.optional(),
     versionPublishedAt: z.iso.datetime({ offset: true }).optional(),
+    pluginDependencyPins: z
+      .record(slugSchema, z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$/))
+      .optional(),
+    pluginDependencySlugs: z.array(slugSchema).max(16).optional(),
+    dependencyVersionPolicy: z
+      .enum(["stable-observed", "pinned-only"])
+      .optional(),
     scoreBreakdown: z.strictObject({
       installations: z.number().finite(),
       recency: z.number().finite(),

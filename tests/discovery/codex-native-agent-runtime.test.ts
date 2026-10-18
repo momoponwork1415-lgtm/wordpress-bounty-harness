@@ -28,6 +28,7 @@ import {
 import { ProviderAttachmentStore } from "../../src/discovery/index.js";
 import { z } from "zod";
 import { wordpressCoverageRecordSchema } from "../../src/profiles/wordpress/discovery/coverage.js";
+import { recoverRootAgentReport } from "../../src/discovery/recover-agent-reports.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const image = `node@${digest}`;
@@ -194,6 +195,175 @@ function sandbox(
 }
 
 describe("Codex native agent runtime", () => {
+  it("counts source reads in pinned PHP and plugin dependency mounts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-dependency-observed-"));
+    try {
+      const lines = transcript.split("\n");
+      lines.splice(
+        2,
+        0,
+        JSON.stringify({
+          type: "item.completed",
+          item: {
+            type: "command_execution",
+            command:
+              "sed -n '1,50p' /workspace/php/main/php.c /workspace/dependencies/elementor/includes/base.php",
+          },
+        }),
+      );
+      const result = await new CodexNativeAgentRuntime(
+        sandbox(lines.join("\n"), []),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      ).execute(run);
+      expect(result.receipt).toMatchObject({
+        terminal: "completed",
+        observed: { filesRead: 2, uniqueFilesRead: 2 },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts multiple turns of one Root session and accounts for all turn usage", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-multi-turn-"));
+    try {
+      const firstEvents = transcript
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const threadId = firstEvents[0]?.thread_id;
+      firstEvents[2] = {
+        type: "item.completed",
+        item: {
+          type: "agent_message",
+          text: JSON.stringify({
+            findings: [JSON.stringify({ claim: "earlier Root candidate" })],
+            leads: [],
+            examined: "first routes",
+            unexamined: "new routes",
+          }),
+        },
+      };
+      const first = firstEvents
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+      const second = [
+        { type: "thread.started", thread_id: threadId },
+        { type: "turn.started" },
+        {
+          type: "item.completed",
+          item: {
+            type: "agent_message",
+            text: JSON.stringify({
+              findings: [],
+              leads: [],
+              examined: "new routes",
+              unexamined: "none",
+            }),
+          },
+        },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 7, output_tokens: 3 },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+      const attachments = new ProviderAttachmentStore(root);
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(`${first}\n${second}`, []),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const result = await runtime.execute(run);
+      expect(result.receipt).toMatchObject({
+        terminal: "completed",
+        usage: {
+          inputTokens: 17,
+          outputTokens: 7,
+        },
+      });
+      if (result.attachment === undefined) throw new Error("Missing report");
+      const saved = await attachments.read(result.attachment);
+      expect(saved.status).toBe("resolved");
+      if (saved.status === "resolved") {
+        const report = JSON.parse(saved.bytes.toString("utf8")) as {
+          findings: string[];
+          examined: string;
+        };
+        expect(report.examined).toBe("new routes");
+        expect(JSON.parse(report.findings[0]!)).toMatchObject({
+          claim: "earlier Root candidate",
+        });
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not complete a cooperative Trial when Root returns before its minimum active time", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-early-final-"));
+    try {
+      const cooperativeProfile = defineAgentRuntimeProfile({
+        id: "cooperative-minimum",
+        transportKind: "codex-native/v1",
+        sandboxImageDigest: digest,
+        requestedModelId: "gpt-6-sol",
+        requestedEffort: "high",
+        codexCliVersion: "0.161.0",
+        bundledCatalogDigest: digest,
+        authenticationMethod: "host-private-bearer",
+        cyberAccessProgram: "daybreak_blue",
+        serviceTier: "priority",
+        subagent: { modelId: "gpt-6-sol", effort: "high" },
+      });
+      const commands: CodexSandboxCommand[] = [];
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(transcript, commands, {
+          completedAt: "2026-10-08T07:10:00.000Z",
+          rollouts: [
+            JSON.stringify({
+              timestamp: now,
+              type: "session_meta",
+              payload: {
+                id: JSON.parse(transcript.split("\n")[0]!)?.thread_id,
+                source: "exec",
+              },
+            }),
+          ],
+        }),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      const result = await runtime.execute({
+        ...run,
+        profile: cooperativeProfile,
+        coordination: "cooperative",
+        minimumActiveMs: 60 * 60_000,
+        expiresAt: "2026-10-08T09:00:00.000Z",
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(commands[0]?.minimumActiveMs).toBe(60 * 60_000);
+      expect(result.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "policy",
+        reasonDetail: "early-final-before-minimum",
+        reportArtifactDigest: result.attachment?.digest,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("records a wall timeout as an incomplete receipt", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-wall-receipt-"));
     try {
@@ -212,6 +382,282 @@ describe("Codex native agent runtime", () => {
         terminal: "incomplete",
         reason: "wall",
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retains an earlier Root candidate when a resumed cooperative Trial reaches the wall cap", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-wall-root-candidate-"));
+    try {
+      const cooperativeProfile = defineAgentRuntimeProfile({
+        id: "cooperative-wall",
+        transportKind: "codex-native/v1",
+        sandboxImageDigest: digest,
+        requestedModelId: "gpt-6-sol",
+        requestedEffort: "high",
+        codexCliVersion: "0.161.0",
+        bundledCatalogDigest: digest,
+        authenticationMethod: "host-private-bearer",
+        cyberAccessProgram: "daybreak_blue",
+        serviceTier: "priority",
+        subagent: { modelId: "gpt-6-sol", effort: "high" },
+      });
+      const rootRollout = [
+        {
+          timestamp: now,
+          type: "session_meta",
+          payload: { id: "root-wall", source: "exec" },
+        },
+        {
+          timestamp: "2026-10-08T07:10:00.000Z",
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            last_agent_message: JSON.stringify({
+              findings: [{ claim: "earlier Root candidate" }],
+              leads: [],
+              examined: "source",
+              unexamined: "new rounds",
+            }),
+          },
+        },
+        {
+          timestamp: "2026-10-08T07:20:00.000Z",
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            last_agent_message: JSON.stringify({
+              findings: [],
+              leads: [],
+              examined: "new routes",
+              unexamined: "more routes",
+            }),
+          },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+      const attachments = new ProviderAttachmentStore(root);
+      const result = await new CodexNativeAgentRuntime(
+        sandbox("", [], {
+          status: "failed",
+          exitCode: -1,
+          failureKind: "timed-out",
+          startedAt: now,
+          completedAt: "2026-10-08T09:00:00.000Z",
+          rollouts: [rootRollout],
+        }),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      ).execute({
+        ...run,
+        profile: cooperativeProfile,
+        coordination: "cooperative",
+        minimumActiveMs: 60 * 60_000,
+        expiresAt: "2026-10-08T09:00:00.000Z",
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(result.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "wall",
+        reportArtifactDigest: result.attachment?.digest,
+      });
+      if (result.attachment === undefined) throw new Error("Candidate lost");
+      const saved = await attachments.read(result.attachment);
+      expect(saved.status).toBe("resolved");
+      if (saved.status === "resolved")
+        expect(JSON.parse(saved.bytes.toString("utf8"))).toMatchObject({
+          findings: [{ claim: "earlier Root candidate" }],
+        });
+      const recorded: string[] = [];
+      const recovery = await recoverRootAgentReport({
+        result,
+        receipt: result.receipt,
+        run: { ...run, profile: cooperativeProfile },
+        snapshotDigest: digest,
+        recordReport: async (ownerRunId) => {
+          recorded.push(ownerRunId);
+        },
+      });
+      expect(recovery.recovered).toBe(false);
+      expect(recorded).toEqual([run.runId]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retains an earlier Root candidate when a later resume exits with a provider error", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "codex-resume-provider-failure-"),
+    );
+    try {
+      const cooperativeProfile = defineAgentRuntimeProfile({
+        id: "cooperative-resume-failure",
+        transportKind: "codex-native/v1",
+        sandboxImageDigest: digest,
+        requestedModelId: "gpt-6-sol",
+        requestedEffort: "high",
+        codexCliVersion: "0.161.0",
+        bundledCatalogDigest: digest,
+        authenticationMethod: "host-private-bearer",
+        cyberAccessProgram: "daybreak_blue",
+        serviceTier: "priority",
+        subagent: { modelId: "gpt-6-sol", effort: "high" },
+      });
+      const candidate = {
+        findings: [JSON.stringify({ claim: "earlier Root candidate" })],
+        leads: [],
+        examined: "first routes",
+        unexamined: "new routes",
+      };
+      const stdout = [
+        { type: "thread.started", thread_id: "root-resume-failed" },
+        { type: "turn.started" },
+        {
+          type: "item.completed",
+          item: { type: "agent_message", text: JSON.stringify(candidate) },
+        },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 10, output_tokens: 4 },
+        },
+        { type: "thread.started", thread_id: "root-resume-failed" },
+        { type: "turn.started" },
+        { type: "error", message: "Provider unavailable" },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+      const rootRollout = [
+        {
+          timestamp: now,
+          type: "session_meta",
+          payload: { id: "root-resume-failed", source: "exec" },
+        },
+        {
+          timestamp: "2026-10-08T07:10:00.000Z",
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            last_agent_message: JSON.stringify(candidate),
+          },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+      const attachments = new ProviderAttachmentStore(root);
+      const result = await new CodexNativeAgentRuntime(
+        sandbox(stdout, [], {
+          exitCode: 1,
+          completedAt: "2026-10-08T07:20:00.000Z",
+          rollouts: [rootRollout],
+        }),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      ).execute({
+        ...run,
+        profile: cooperativeProfile,
+        coordination: "cooperative",
+        minimumActiveMs: 60 * 60_000,
+        expiresAt: "2026-10-08T09:00:00.000Z",
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(result.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "provider",
+        reasonDetail: "cli-exit:1",
+        reportArtifactDigest: result.attachment?.digest,
+      });
+      if (result.attachment === undefined) throw new Error("Candidate lost");
+      const saved = await attachments.read(result.attachment);
+      expect(saved.status).toBe("resolved");
+      if (saved.status === "resolved")
+        expect(JSON.parse(saved.bytes.toString("utf8"))).toMatchObject({
+          findings: candidate.findings,
+        });
+      const recorded: string[] = [];
+      const recovery = await recoverRootAgentReport({
+        result,
+        receipt: result.receipt,
+        run: { ...run, profile: cooperativeProfile },
+        snapshotDigest: digest,
+        recordReport: async (ownerRunId) => {
+          recorded.push(ownerRunId);
+        },
+      });
+      expect(recovery.recovered).toBe(false);
+      expect(recorded).toEqual([run.runId]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retains a Root candidate when cooperative evidence capture fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-root-capture-failure-"));
+    try {
+      const cooperativeProfile = defineAgentRuntimeProfile({
+        id: "cooperative-capture-failure",
+        transportKind: "codex-native/v1",
+        sandboxImageDigest: digest,
+        requestedModelId: "gpt-6-sol",
+        requestedEffort: "high",
+        codexCliVersion: "0.161.0",
+        bundledCatalogDigest: digest,
+        authenticationMethod: "host-private-bearer",
+        cyberAccessProgram: "daybreak_blue",
+        serviceTier: "priority",
+        subagent: { modelId: "gpt-6-sol", effort: "high" },
+      });
+      const attachments = new ProviderAttachmentStore(root);
+      const result = await new CodexNativeAgentRuntime(
+        sandbox(transcript, [], {
+          researchFailure: "capture-failed",
+          completedAt: "2026-10-08T07:20:00.000Z",
+        }),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      ).execute({
+        ...run,
+        profile: cooperativeProfile,
+        coordination: "cooperative",
+        minimumActiveMs: 60 * 60_000,
+        expiresAt: "2026-10-08T09:00:00.000Z",
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(result.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "evidence",
+        reasonDetail: "research-capture-failed",
+        reportArtifactDigest: result.attachment?.digest,
+      });
+      expect(result.attachment).toBeDefined();
+      const recorded: string[] = [];
+      const recovery = await recoverRootAgentReport({
+        result,
+        receipt: result.receipt,
+        run: { ...run, profile: cooperativeProfile },
+        snapshotDigest: digest,
+        recordReport: async (ownerRunId) => {
+          recorded.push(ownerRunId);
+        },
+      });
+      expect(recovery.recovered).toBe(false);
+      expect(recorded).toEqual([run.runId]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -1226,6 +1672,63 @@ describe("Codex native agent runtime", () => {
         terminal: "incomplete",
         reason: "policy",
       });
+      expect(commands).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("passes distinct sealed dependency sources and rejects duplicate mount paths", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-dependencies-transport-"));
+    try {
+      const commands: CodexSandboxCommand[] = [];
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(transcript, commands),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      const php = {
+        path: "/workspace/php",
+        directory: "/synthetic/php-source",
+        tree: { digest, entries: 2, bytes: 40 },
+      };
+      const plugin = {
+        path: "/workspace/dependencies/elementor",
+        directory: "/synthetic/elementor-source",
+        tree: { digest, entries: 3, bytes: 60 },
+      };
+      expect(
+        (
+          await runtime.execute({
+            ...run,
+            dependencySources: [php, plugin],
+          })
+        ).receipt.terminal,
+      ).toBe("completed");
+      expect(commands[0]?.additionalDependencyMounts).toEqual([
+        {
+          path: php.path,
+          directory: php.directory,
+          expectedTree: php.tree,
+          mode: "ro",
+        },
+        {
+          path: plugin.path,
+          directory: plugin.directory,
+          expectedTree: plugin.tree,
+          mode: "ro",
+        },
+      ]);
+      expect(
+        (
+          await runtime.execute({
+            ...run,
+            dependencySources: [php, php],
+          })
+        ).receipt,
+      ).toMatchObject({ terminal: "incomplete", reason: "policy" });
       expect(commands).toHaveLength(1);
     } finally {
       await rm(root, { recursive: true, force: true });

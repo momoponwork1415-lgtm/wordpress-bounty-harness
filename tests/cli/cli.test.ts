@@ -30,7 +30,7 @@ import {
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
 import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acquisition/index.js";
-import { wordPressDiscoveryOutputContractV2 } from "../../src/profiles/wordpress/discovery/output-contract.js";
+import { wordPressDiscoveryOutputContractV4 } from "../../src/profiles/wordpress/discovery/output-contract.js";
 import {
   openWordPressLab,
   type DockerRequest,
@@ -136,6 +136,9 @@ async function harness(
     readonly verifierRecipeFailures?: number;
     readonly verifierLabProvisionFailures?: number;
     readonly coreSource?: boolean;
+    readonly dependencySources?: boolean;
+    /** Plugin sources sealed in the original and control Snapshots. */
+    readonly snapshotPluginDependencies?: Readonly<Record<string, string>>;
     readonly databaseAccess?: "read-only" | "none";
     readonly legacyHistoryUnavailable?: boolean;
   } = {},
@@ -241,14 +244,19 @@ async function harness(
       recorder: `node-recorder@${sha("5")}`,
     },
     source: {
-      resolve: async () => ({
+      resolve: async (snapshot) => ({
         target: {
           kind: "plugin",
           pluginSlug: "synthetic-plugin",
           sourceDirectory,
           sourceTree: tree,
         },
-        dependencies: [],
+        dependencies: snapshot.dependencies.map((dependency) => ({
+          kind: "plugin" as const,
+          pluginSlug: dependency.identity.slice("wporg:".length),
+          sourceDirectory,
+          sourceTree: tree,
+        })),
       }),
     },
     runner: {
@@ -439,7 +447,14 @@ async function harness(
               : manifest,
           readFile: (path: string) => readFile(join(sourceDirectory, path)),
         },
-        dependencies: [],
+        dependencies: Object.entries(
+          options.snapshotPluginDependencies ?? {},
+        ).map(([slug, version]) => ({
+          identity: `wporg:${slug}`,
+          version,
+          manifest,
+          readFile: (path: string) => readFile(join(sourceDirectory, path)),
+        })),
       }),
     },
   });
@@ -449,9 +464,13 @@ async function harness(
     Awaited<ReturnType<typeof snapshots.freeze>>
   >();
   const freezeCounts = new Map<string, number>();
+  const frozenSelections: Parameters<
+    WordPressCampaignBoundaries["freeze"]
+  >[0][] = [];
 
   const attachments = new ProviderAttachmentStore(join(root, "provider"));
   const prompts: string[] = [];
+  const transportRuns: DiscoveryTransportRun[] = [];
   const promptDigests: string[] = [];
   const entryIndexes: DiscoveryTransportRun["campaignInput"]["entryIndex"][] =
     [];
@@ -469,6 +488,7 @@ async function harness(
   const boundaries: WordPressCampaignBoundaries = {
     selection,
     freeze: async (target) => {
+      frozenSelections.push(target);
       if (target.slug === options.failFreeze)
         throw new SourceAcquisitionError("connect-timeout", {
           code: "ETIMEDOUT",
@@ -535,6 +555,22 @@ async function harness(
       ...(options.coreSource === true
         ? { dependency: { directory: sourceDirectory, tree } }
         : {}),
+      ...(options.dependencySources === true
+        ? {
+            dependencySources: [
+              {
+                path: "/workspace/php",
+                directory: sourceDirectory,
+                tree,
+              },
+              {
+                path: "/workspace/dependencies/elementor",
+                directory: sourceDirectory,
+                tree,
+              },
+            ],
+          }
+        : {}),
     }),
     runtimeProfile: profile,
     probeRuntime: async () =>
@@ -545,6 +581,7 @@ async function harness(
     attachments,
     executor: {
       async execute(run: DiscoveryTransportRun) {
+        transportRuns.push(run);
         const call = prompts.push(run.prompt);
         promptDigests.push(run.campaignInput.promptDigest);
         entryIndexes.push(run.campaignInput.entryIndex);
@@ -807,7 +844,7 @@ async function harness(
       schemaVersion: 1,
       selectionPolicyPath: policyPath,
       mode: "wp2shell",
-      promptId: "wp2shell-bounty-v7",
+      promptId: "wp2shell-bounty-v8",
       programmeBoundary: {
         version: "v1",
         text: "Synthetic programme boundary",
@@ -843,6 +880,7 @@ async function harness(
     run,
     configPath,
     prompts,
+    transportRuns,
     promptDigests,
     entryIndexes,
     histories,
@@ -861,6 +899,7 @@ async function harness(
     maxInFlight: () => maxInFlight,
     verificationProvisionAttempts: () => verificationProvisionAttempts,
     teardownCalls: () => teardownCalls,
+    frozenSelections,
   };
 }
 
@@ -984,7 +1023,7 @@ describe("harness CLI vertical slice", () => {
     expect(JSON.stringify(started)).not.toContain("wbh_reader");
   });
 
-  it("adds the generated v2 contract to the sole runnable prompt and records separate digests", async () => {
+  it("adds the generated v4 contract to the sole runnable prompt and records separate digests", async () => {
     const { run, configPath, prompts, ledger } = await harness();
     const result = await run(
       "campaign",
@@ -996,8 +1035,8 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(result.code).toBe(0);
-    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v7");
-    const contract = wordPressDiscoveryOutputContractV2();
+    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v8");
+    const contract = wordPressDiscoveryOutputContractV4();
     expect(prompts[0]).toContain(objective.text.trim());
     expect(prompts[0]).toContain(contract.text);
     expect(prompts[0]?.split(contract.text)).toHaveLength(2);
@@ -1086,6 +1125,34 @@ describe("harness CLI vertical slice", () => {
     expect(prompts[0]).toContain(
       "WordPress core source (read-only): /workspace/wordpress",
     );
+  });
+
+  it("passes pinned PHP and plugin sources to the discovery transport", async () => {
+    const { run, configPath, prompts, transportRuns } = await harness({
+      coreSource: true,
+      dependencySources: true,
+    });
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-dependency-sources",
+      "--config",
+      configPath,
+    );
+    expect(prompts[0]).toContain(
+      "Dependency source (read-only): /workspace/php.",
+    );
+    expect(prompts[0]).toContain(
+      "Dependency source (read-only): /workspace/dependencies/elementor.",
+    );
+    expect(
+      transportRuns[0]?.dependencySources?.map((source) => source.path),
+    ).toEqual(["/workspace/php", "/workspace/dependencies/elementor"]);
+    expect(transportRuns[0]?.minimumActiveMs).toBe(60 * 60_000);
+    expect(transportRuns[0]?.resumePrompt).toBeTruthy();
+    expect(prompts[0]).toContain(transportRuns[0]?.resumePrompt);
   });
 
   it("mentions the writable research directory for the runnable objective", async () => {
@@ -1233,7 +1300,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(first.map((event) => event.attempt)).toEqual([1, 2, 3]);
     expect(first.map((event) => event.promptVersion)).toEqual(
-      Array.from({ length: 3 }, () => "verifier-v7"),
+      Array.from({ length: 3 }, () => "verifier-v8"),
     );
     expect(first.map((event) => event.retryOf)).toEqual([
       undefined,
@@ -1527,7 +1594,7 @@ describe("harness CLI vertical slice", () => {
       programmeBoundary: { version: "v1", text: "Synthetic" },
       wordpressVersion: "6.8",
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
-      promptId: "wp2shell-bounty-v7",
+      promptId: "wp2shell-bounty-v8",
     };
     expect(
       wordpressCampaignConfigSchema.safeParse({
@@ -1867,7 +1934,7 @@ describe("harness CLI vertical slice", () => {
     });
     expect(production).toMatchObject({
       mode: "wp2shell",
-      promptId: "wp2shell-bounty-v7",
+      promptId: "wp2shell-bounty-v8",
       entryIndex: false,
       runWallTimeMinutes: 120,
       stopRules: { maxRuns: 1, noFindingRuns: 1 },
@@ -1897,7 +1964,7 @@ describe("harness CLI vertical slice", () => {
         wordpressCampaignConfigSchema.safeParse({
           ...base,
           mode,
-          promptId: "wp2shell-bounty-v7",
+          promptId: "wp2shell-bounty-v8",
         }).success,
       ).toBe(false);
   });
@@ -2984,7 +3051,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...policy,
-        promptVariant: "wp2shell-bounty-v7",
+        promptVariant: "wp2shell-bounty-v8",
         revisitPolicy: { kind: "never" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -3180,7 +3247,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...manual,
-        promptVariant: "wp2shell-bounty-v7",
+        promptVariant: "wp2shell-bounty-v8",
         revisitPolicy: { kind: "never" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -3265,7 +3332,7 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(mismatched.code).toBe(1);
-    expect(mismatched.stderr).toContain("wp2shell-bounty-v7");
+    expect(mismatched.stderr).toContain("wp2shell-bounty-v8");
     await writeFile(configPath, JSON.stringify(campaignConfig));
     const campaign = await run(
       "campaign",
@@ -3718,6 +3785,83 @@ describe("harness CLI vertical slice", () => {
     );
     expect(scoped.stdout).toMatch(/^wordfence in-scope /m);
     expect(scoped.stdout).toMatch(/^patchstack in-scope /m);
+  });
+
+  it("pins the original plugin sources when an automatic policy re-verifies a fixed version", async () => {
+    const { run, configPath, root, ledger, frozenSelections } = await harness({
+      snapshotPluginDependencies: {
+        elementor: "3.34.4",
+        "header-helper": "1.2.3",
+      },
+    });
+    const campaign = ["--campaign", "campaign-1"];
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "--all",
+          ...campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const finding = ledger()
+      .read({ campaignId: "campaign-1", type: "finding-recorded" })
+      .map(({ event }) => event)
+      .find((event) => event.type === "finding-recorded");
+    expect(finding?.type).toBe("finding-recorded");
+    if (finding?.type !== "finding-recorded") return;
+
+    const policyPath = join(root, "selection.json");
+    const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete policy.candidateSlugs;
+    delete policy.pinnedVersions;
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...policy,
+        promptVariant: "wp2shell-bounty-v8",
+        revisitPolicy: { kind: "never" },
+        wordpressVersion: "6.8",
+        maximumTargets: 3,
+        candidateSource: {
+          kind: "wordpress-org",
+          popularPages: 1,
+          tags: [],
+          pagesPerTag: 1,
+          perPage: 20,
+          maxCandidates: 20,
+          maxAgeDays: 1,
+        },
+        pluginDependencySlugs: { "synthetic-plugin": ["elementor"] },
+      }),
+    );
+    const reverified = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding.findingId,
+      "--config",
+      configPath,
+      "--version",
+      "3.3",
+    );
+    expect(reverified.code).toBe(0);
+    expect(reverified.stderr).toBe("");
+    expect(frozenSelections.at(-1)).toMatchObject({
+      version: "3.3",
+      dependencyVersionPolicy: "pinned-only",
+      pluginDependencyPins: {
+        elementor: "3.34.4",
+        "header-helper": "1.2.3",
+      },
+    });
   });
 
   it("retries an incomplete Finding on its original Snapshot with a fresh scenario and verification event", async () => {
@@ -4301,7 +4445,7 @@ describe("harness CLI vertical slice", () => {
       attackerPosition: "subscriber",
       impact: "account-takeover",
       brokenProperty: "Synthetic property",
-      promptVariant: "wp2shell-bounty-v7",
+      promptVariant: "wp2shell-bounty-v8",
       promptDigest: expect.stringMatching(/^sha256:/),
     });
     expect(bundle.target).toMatchObject({

@@ -60,7 +60,8 @@ function directoryOf(cwd: string | undefined): string | undefined {
 
 /**
  * Sorted distinct source-relative paths that observed commands name under the
- * source mount. A lower bound: paths built by the shell or tools are missed.
+ * target or supplied dependency mounts. A lower bound: paths built by the
+ * shell or tools are missed.
  */
 export function readPathsFromCommands(
   commands: readonly ObservedCommand[],
@@ -83,6 +84,18 @@ export function readPathsFromCommands(
       const resolved = posix.resolve(directory, token);
       if (resolved.startsWith(`${SOURCE_MOUNT}/`))
         paths.add(resolved.slice(SOURCE_MOUNT.length + 1));
+      else if (resolved.startsWith("/workspace/wordpress/"))
+        paths.add(
+          `@wordpress/${resolved.slice("/workspace/wordpress/".length)}`,
+        );
+      else if (resolved.startsWith("/workspace/php/"))
+        paths.add(`@php/${resolved.slice("/workspace/php/".length)}`);
+      else if (
+        /^\/workspace\/dependencies\/[a-z0-9][a-z0-9-]{0,63}\//.test(resolved)
+      )
+        paths.add(
+          `@dependencies/${resolved.slice("/workspace/dependencies/".length)}`,
+        );
     }
   }
   return [...paths].sort();

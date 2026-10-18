@@ -750,6 +750,63 @@ describe("gVisor Codex sandbox", () => {
       ).toContain(
         `--mount=type=bind,src=${core},dst=/workspace/wordpress,readonly`,
       );
+      const php = join(root, "php-source");
+      await mkdir(php);
+      await writeFile(join(php, "main.c"), "/* fixed PHP runtime */");
+      const phpTree = await measureCanonicalSourceTree(php, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      const phpMount = {
+        directory: php,
+        path: "/workspace/php",
+        mode: "ro" as const,
+        expectedTree: phpTree,
+      };
+      await sandbox.execute({
+        ...command,
+        additionalDependencyMounts: [phpMount],
+      });
+      expect(
+        calls.filter(({ args }) => args[0] === "run").at(-1)?.args,
+      ).toContain(`--mount=type=bind,src=${php},dst=/workspace/php,readonly`);
+      const plugin = join(root, "php-runtime-plugin");
+      await mkdir(plugin);
+      await writeFile(join(plugin, "main.php"), "<?php // valid plugin slug");
+      const pluginTree = await measureCanonicalSourceTree(plugin, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      await sandbox.execute({
+        ...command,
+        additionalDependencyMounts: [
+          phpMount,
+          {
+            directory: plugin,
+            path: "/workspace/dependencies/php-runtime",
+            mode: "ro",
+            expectedTree: pluginTree,
+          },
+        ],
+      });
+      expect(
+        calls.filter(({ args }) => args[0] === "run").at(-1)?.args,
+      ).toContain(
+        `--mount=type=bind,src=${plugin},dst=/workspace/dependencies/php-runtime,readonly`,
+      );
+      await expect(
+        sandbox.execute({
+          ...command,
+          additionalDependencyMounts: [phpMount, phpMount],
+        }),
+      ).rejects.toThrow("not admitted");
+      await writeFile(join(php, "main.c"), "mutated PHP runtime");
+      await expect(
+        sandbox.execute({
+          ...command,
+          additionalDependencyMounts: [phpMount],
+        }),
+      ).rejects.toThrow("fixed snapshot tree");
       await writeFile(join(core, "version.php"), "changed core");
       await expect(
         sandbox.execute({ ...command, dependencyMount }),
@@ -791,8 +848,8 @@ describe("gVisor Codex sandbox", () => {
         collectedBytes: 8 * 1024 * 1024,
         entries: [{ path: "REGISTRY.md", truncated: true }],
       });
-      expect(calls).toHaveLength(16);
-      expect(new Set(researchDirectories).size).toBe(4);
+      expect(calls).toHaveLength(24);
+      expect(new Set(researchDirectories).size).toBe(6);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

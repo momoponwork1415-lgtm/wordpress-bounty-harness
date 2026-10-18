@@ -15,7 +15,6 @@ import {
   readPrivateChatgptLogin,
 } from "../discovery/index.js";
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
-import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import {
   runNativeModelProcess,
   type NativeModelProcessResult,
@@ -30,10 +29,16 @@ import type { Verifier } from "../verification/index.js";
 import {
   createWordPressOrgFetchAdapter,
   openMaterializedSources,
+  openPhpRuntimeSource,
   openWordPressCoreSource,
+  openWordPressOrgPluginDependencySource,
   openWordPressOrgSnapshotSource,
   openWordPressOrgTargetSource,
 } from "../profiles/wordpress/acquisition/index.js";
+import {
+  mountedWordPressSourcePack,
+  type WordPressMountedSourcePack,
+} from "../profiles/wordpress/acquisition/mounted-source-pack.js";
 import { wordpressSourceFileSets } from "../profiles/wordpress/discovery/coverage.js";
 import type { WordPressFinding } from "../profiles/wordpress/discovery/finding.js";
 import {
@@ -176,6 +181,7 @@ export async function createWordPressHostProfile(options: {
     snapshots: join(host.workDirectory, "snapshots"),
     sources: join(host.workDirectory, "sources"),
     wordpressCore: join(host.workDirectory, "wordpress-core"),
+    phpRuntime: join(host.workDirectory, "php-runtime"),
     programme: join(host.workDirectory, "programme"),
     codexScratch: join(host.workDirectory, "codex-scratch"),
     brokerScratch: join(host.workDirectory, "broker-scratch"),
@@ -196,6 +202,7 @@ export async function createWordPressHostProfile(options: {
       directories.wordpressOrg,
       directories.sources,
       directories.wordpressCore,
+      directories.phpRuntime,
       directories.snapshots,
       directories.programme,
     ])
@@ -217,13 +224,28 @@ export async function createWordPressHostProfile(options: {
       expectedVersion: wordpressVersion,
       runDocker: (args, timeoutMs) => runDocker(args, undefined, timeoutMs),
     });
+    const phpSource = openPhpRuntimeSource({
+      dockerExecutablePath: host.dockerExecutablePath,
+      image: host.images.wordpress,
+      stagingDirectory: directories.phpRuntime,
+      runDocker: (args, timeoutMs) => runDocker(args, undefined, timeoutMs),
+    });
+    const pluginDependencies = openWordPressOrgPluginDependencySource({
+      targetSource,
+      storageDirectory: directories.wordpressOrg,
+      policy: intakePolicy,
+    });
     const snapshotStore = openSnapshot({
       storageDirectory: directories.snapshots,
       source: sources.acquisition(
         openWordPressOrgSnapshotSource({
           targetSource,
           storageDirectory: directories.wordpressOrg,
-          dependencies: coreSource,
+          dependencies: async () => [
+            ...(await coreSource()),
+            ...(await phpSource()),
+          ],
+          pluginDependencies,
         }),
       ),
     });
@@ -249,6 +271,15 @@ export async function createWordPressHostProfile(options: {
           observationRef: target.observationRef,
           requestedVersion: target.version,
           policy: intakePolicy,
+          ...(target.pluginDependencyPins === undefined
+            ? {}
+            : { pluginDependencyPins: target.pluginDependencyPins }),
+          ...(target.pluginDependencySlugs === undefined
+            ? {}
+            : { pluginDependencySlugs: [...target.pluginDependencySlugs] }),
+          ...(target.dependencyVersionPolicy === undefined
+            ? {}
+            : { dependencyVersionPolicy: target.dependencyVersionPolicy }),
         }),
     };
   };
@@ -264,7 +295,7 @@ export async function createWordPressHostProfile(options: {
       image: host.images.codex,
       bundledCatalogPath: host.codex.bundledCatalogPath,
       scratchRootDirectory: directories.codexScratch,
-      maxOutputBytes: 16 * 1024 * 1024,
+      maxOutputBytes: 64 * 1024 * 1024,
       timeoutMs: config.runWallTimeMinutes * 60_000,
       ...(runtimeProfile.subagent.modelId === "unavailable"
         ? {}
@@ -306,26 +337,31 @@ export async function createWordPressHostProfile(options: {
       expectedVersion: config.wordpressVersion,
       runDocker: (args, timeoutMs) => runDocker(args, undefined, timeoutMs),
     });
+    const phpSource = openPhpRuntimeSource({
+      dockerExecutablePath: host.dockerExecutablePath,
+      image: host.images.wordpress,
+      stagingDirectory: directories.phpRuntime,
+      runDocker: (args, timeoutMs) => runDocker(args, undefined, timeoutMs),
+    });
+    const pluginDependencies = openWordPressOrgPluginDependencySource({
+      targetSource,
+      storageDirectory: directories.wordpressOrg,
+      policy: intakePolicy,
+    });
     const snapshotStore = openSnapshot({
       storageDirectory: directories.snapshots,
       source: sources.acquisition(
         openWordPressOrgSnapshotSource({
           targetSource,
           storageDirectory: directories.wordpressOrg,
-          dependencies: coreSource,
+          dependencies: async () => [
+            ...(await coreSource()),
+            ...(await phpSource()),
+          ],
+          pluginDependencies,
         }),
       ),
     });
-    const coreOf = (
-      resolved: Awaited<ReturnType<typeof sources.resolve>>,
-    ): { directory: string; tree: ExpectedSourceTree } | undefined => {
-      const core = resolved.dependencies.find(
-        (dependency) => dependency.kind === "wordpress-core",
-      );
-      return core === undefined
-        ? undefined
-        : { directory: core.sourceDirectory, tree: core.sourceTree };
-    };
     const lab = openWordPressLab({
       dockerExecutablePath: host.dockerExecutablePath,
       images: {
@@ -401,24 +437,28 @@ export async function createWordPressHostProfile(options: {
           snapshot === undefined
             ? undefined
             : await sources.resolve(snapshot).catch(() => undefined);
-        if (source === undefined)
+        let sourcePack: WordPressMountedSourcePack | undefined;
+        try {
+          sourcePack =
+            source === undefined
+              ? undefined
+              : mountedWordPressSourcePack(source);
+        } catch {
+          sourcePack = undefined;
+        }
+        if (sourcePack === undefined)
           return {
             status: "incomplete",
             reason: "precondition",
             nextStep:
               "Freeze the target again so its materialized source matches the Lab snapshot",
           };
-        const core = coreOf(source);
         return new CodexVerifier({
           runtime,
           store: state.store,
           ledger: state.ledger,
           profile: runtimeProfile,
-          source: {
-            directory: source.target.sourceDirectory,
-            tree: source.target.sourceTree,
-          },
-          ...(core === undefined ? {} : { dependencySource: core }),
+          sourcePack,
           lab,
           clock: state.clock,
         }).attempt({
@@ -444,6 +484,15 @@ export async function createWordPressHostProfile(options: {
           observationRef: target.observationRef,
           requestedVersion: target.version,
           policy: intakePolicy,
+          ...(target.pluginDependencyPins === undefined
+            ? {}
+            : { pluginDependencyPins: target.pluginDependencyPins }),
+          ...(target.pluginDependencySlugs === undefined
+            ? {}
+            : { pluginDependencySlugs: [...target.pluginDependencySlugs] }),
+          ...(target.dependencyVersionPolicy === undefined
+            ? {}
+            : { dependencyVersionPolicy: target.dependencyVersionPolicy }),
         });
         frozen.set(snapshot.digest, snapshot);
         return snapshot;
@@ -470,11 +519,14 @@ export async function createWordPressHostProfile(options: {
       lab,
       async sourceFor(snapshot) {
         const resolved = await sources.resolve(snapshot);
-        const core = coreOf(resolved);
+        const sourcePack = mountedWordPressSourcePack(resolved, {
+          requireRuntimeSources: true,
+        });
         return {
-          directory: resolved.target.sourceDirectory,
-          tree: resolved.target.sourceTree,
-          ...(core === undefined ? {} : { dependency: core }),
+          directory: sourcePack.target.directory,
+          tree: sourcePack.target.tree,
+          dependency: sourcePack.core!,
+          dependencySources: sourcePack.dependencies,
         };
       },
       runtimeProfile,

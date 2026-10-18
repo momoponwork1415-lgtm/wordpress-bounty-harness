@@ -1095,6 +1095,7 @@ export async function reverifyOnSelectedVersion<
     /** The current or explicitly pinned version of the same target. */
     readonly selectVersion: (input: {
       readonly selectionId: string;
+      readonly originalSnapshotDigest: string;
       readonly version?: string;
     }) => Promise<Target | null>;
     readonly loadSnapshot?: (digest: string) => Promise<Snapshot>;
@@ -1245,6 +1246,7 @@ export async function reverifyOnSelectedVersion<
   const requestedVersion = options.version ?? originalVersion;
   const target = await pipeline.selectVersion({
     selectionId: selected.selectionId,
+    originalSnapshotDigest: finding.snapshotDigest,
     ...(requestedVersion === undefined ? {} : { version: requestedVersion }),
   });
   if (target === null)

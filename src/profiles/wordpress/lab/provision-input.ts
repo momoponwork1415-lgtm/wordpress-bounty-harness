@@ -28,6 +28,7 @@ import {
   DATABASE_NAME,
   READ_ONLY_DATABASE_USER,
 } from "./wordpress-initialization.js";
+import { PHP_RUNTIME_SOURCE_IDENTITY } from "../acquisition/php-runtime-source.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const slug = z
@@ -72,6 +73,7 @@ export interface PreparedWordPressLab {
   readonly target: PluginDirectory;
   readonly dependencies: readonly PluginDirectory[];
   readonly coreVersion: string | undefined;
+  readonly phpVersion: string | undefined;
 }
 
 function validateScenario(
@@ -131,9 +133,11 @@ async function prepareDependencies(
 ): Promise<{
   readonly dependencies: readonly PluginDirectory[];
   readonly coreVersion: string | undefined;
+  readonly phpVersion: string | undefined;
 }> {
   const dependencies: PluginDirectory[] = [];
   let coreVersion: string | undefined;
+  let phpVersion: string | undefined;
   for (let index = 0; index < resolved.dependencies.length; index++) {
     const item = resolved.dependencies[index];
     const expected = snapshot.dependencies[index];
@@ -148,11 +152,21 @@ async function prepareDependencies(
       )
         throw new Error("WordPress core dependency mismatch");
       coreVersion = item.version;
+    } else if (item.kind === "php-source") {
+      if (
+        expected.identity !== PHP_RUNTIME_SOURCE_IDENTITY ||
+        expected.version !== item.version ||
+        phpVersion !== undefined
+      )
+        throw new Error("PHP source dependency mismatch");
+      phpVersion = item.version;
     } else {
+      if (expected.identity !== `wporg:${item.pluginSlug}`)
+        throw new Error("Plugin dependency identity mismatch");
       dependencies.push({ slug: item.pluginSlug, directory });
     }
   }
-  return { dependencies, coreVersion };
+  return { dependencies, coreVersion, phpVersion };
 }
 
 /** Validate immutable source and scenario before starting any container. */
@@ -209,7 +223,7 @@ export async function prepareWordPressLab(
     resolved.target,
     snapshot.target.sourceDigest,
   );
-  const { dependencies, coreVersion } = await prepareDependencies(
+  const { dependencies, coreVersion, phpVersion } = await prepareDependencies(
     resolved,
     snapshot,
   );
@@ -220,6 +234,7 @@ export async function prepareWordPressLab(
     target: { slug: resolved.target.pluginSlug, directory },
     dependencies,
     coreVersion,
+    phpVersion,
   };
 }
 

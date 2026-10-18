@@ -15,16 +15,21 @@ import {
   type SourceAcquisition,
 } from "../../../snapshot/index.js";
 import type { WordPressSource, WordPressSourceResolver } from "../lab/index.js";
+import { PHP_RUNTIME_SOURCE_IDENTITY } from "./php-runtime-source.js";
 import { WORDPRESS_CORE_IDENTITY } from "./wordpress-core-source.js";
 
 /** Generous bounds for re-measuring a tree whose sealed size is not at hand. */
 const MEASURE_LIMITS = { maxEntries: 200_000, maxBytes: 2 * 1024 ** 3 };
 
-/** A frozen source is a WordPress.org plugin or the WordPress core itself. */
+/** A frozen source is a WordPress.org plugin or a pinned runtime source. */
 const sourceKind = (
   identity: string,
-): { kind: "plugin"; slug: string } | { kind: "wordpress-core" } => {
+):
+  | { kind: "plugin"; slug: string }
+  | { kind: "wordpress-core" }
+  | { kind: "php-source" } => {
   if (identity === WORDPRESS_CORE_IDENTITY) return { kind: "wordpress-core" };
+  if (identity === PHP_RUNTIME_SOURCE_IDENTITY) return { kind: "php-source" };
   const slug = /^wporg:([a-z0-9][a-z0-9-]*)$/.exec(identity)?.[1];
   if (slug === undefined)
     throw new SourceAcquisitionError("source-mismatch", {
@@ -142,19 +147,19 @@ export function openMaterializedSources(options: {
   }): Promise<WordPressSource> => {
     const { directory, tree } = await verified(record.sourceDigest);
     const kind = sourceKind(record.identity);
-    return kind.kind === "plugin"
-      ? {
-          kind: "plugin",
-          pluginSlug: kind.slug,
-          sourceDirectory: directory,
-          sourceTree: tree,
-        }
-      : {
-          kind: "wordpress-core",
-          version: record.version,
-          sourceDirectory: directory,
-          sourceTree: tree,
-        };
+    if (kind.kind === "plugin")
+      return {
+        kind: "plugin",
+        pluginSlug: kind.slug,
+        sourceDirectory: directory,
+        sourceTree: tree,
+      };
+    return {
+      kind: kind.kind,
+      version: record.version,
+      sourceDirectory: directory,
+      sourceTree: tree,
+    };
   };
 
   return {

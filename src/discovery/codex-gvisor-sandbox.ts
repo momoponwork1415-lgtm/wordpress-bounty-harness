@@ -35,6 +35,7 @@ import type {
   CodexSandboxCommand,
   CodexSandboxResult,
 } from "./codex-native-agent-runtime.js";
+import { MINIMUM_ACTIVE_RUNNER_SOURCE } from "./minimum-active-runner.js";
 
 /** Memory ceiling of one Codex sandbox container. */
 export const CODEX_SANDBOX_MEMORY_MIB = 2048;
@@ -616,11 +617,35 @@ export class GvisorCodexSandbox implements CodexSandbox {
         (command.dependencyMount.mode !== "ro" ||
           command.dependencyMount.path !== "/workspace/wordpress" ||
           !isAbsolute(command.dependencyMount.directory))) ||
+      (command.additionalDependencyMounts !== undefined &&
+        (command.additionalDependencyMounts.length > 32 ||
+          new Set(command.additionalDependencyMounts.map((mount) => mount.path))
+            .size !== command.additionalDependencyMounts.length ||
+          command.additionalDependencyMounts.some(
+            (mount) =>
+              mount.mode !== "ro" ||
+              !/^\/workspace\/(?:php|dependencies\/[a-z0-9][a-z0-9-]{0,63})$/.test(
+                mount.path,
+              ) ||
+              !isAbsolute(mount.directory),
+          ))) ||
       (command.researchMount !== undefined &&
         (command.researchMount.mode !== "rw" ||
           command.researchMount.path !== "/workspace/research")) ||
       command.supportFiles.length !== 1 ||
-      command.supportFiles[0]?.path !== "/opt/codex-support/report-schema.json"
+      command.supportFiles[0]?.path !==
+        "/opt/codex-support/report-schema.json" ||
+      (command.minimumActiveMs === undefined
+        ? command.resumeArgs !== undefined || command.resumePrompt !== undefined
+        : !Number.isSafeInteger(command.minimumActiveMs) ||
+          command.minimumActiveMs <= 0 ||
+          command.minimumActiveMs > this.#options.timeoutMs ||
+          command.researchMount === undefined ||
+          command.resumeArgs?.[0] !== "exec" ||
+          command.resumeArgs?.[1] !== "resume" ||
+          typeof command.resumePrompt !== "string" ||
+          command.resumePrompt.length === 0 ||
+          command.resumePrompt.length > 2_048)
     ) {
       throw new Error("Codex sandbox command is not admitted");
     }
@@ -649,6 +674,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
       command.dependencyMount === undefined
         ? undefined
         : await mountOf(command.dependencyMount);
+    const additionalDependencies = await Promise.all(
+      (command.additionalDependencyMounts ?? []).map(async (mount) => ({
+        path: mount.path,
+        directory: await mountOf(mount),
+      })),
+    );
 
     const scratchRoot = await realpath(this.#options.scratchRootDirectory);
     if (
@@ -688,6 +719,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
         command.supportFiles[0].content,
         { flag: "wx", mode: 0o600 },
       );
+      if (command.minimumActiveMs !== undefined)
+        await writeFile(
+          join(staging, "minimum-active-runner.mjs"),
+          MINIMUM_ACTIVE_RUNNER_SOURCE,
+          { flag: "wx", mode: 0o600 },
+        );
       if (tls !== undefined) {
         await writeFile(join(staging, "grant-ca.pem"), tls.caPem, {
           flag: "wx",
@@ -721,6 +758,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
           : [
               `--mount=type=bind,src=${dependency},dst=/workspace/wordpress,readonly`,
             ]),
+        ...additionalDependencies.map(
+          (mount) =>
+            `--mount=type=bind,src=${mount.directory},dst=${mount.path},readonly`,
+        ),
         ...(researchDirectory === undefined
           ? []
           : [
@@ -738,9 +779,17 @@ export class GvisorCodexSandbox implements CodexSandbox {
               `--add-host=${BROKER_TLS_HOSTNAME}:${tls.address}`,
               "--env=CODEX_CA_CERTIFICATE=/opt/codex-support/grant-ca.pem",
             ]),
-        "--entrypoint=codex",
+        `--entrypoint=${command.minimumActiveMs === undefined ? "codex" : "node"}`,
         this.#options.image,
-        ...command.args,
+        ...(command.minimumActiveMs === undefined
+          ? command.args
+          : [
+              "/opt/codex-support/minimum-active-runner.mjs",
+              String(command.minimumActiveMs),
+              JSON.stringify(command.args),
+              JSON.stringify(command.resumeArgs),
+              command.resumePrompt!,
+            ]),
       ];
       let result: NativeModelProcessResult;
       const controller = new AbortController();

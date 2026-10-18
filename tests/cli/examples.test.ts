@@ -22,7 +22,7 @@ const example = async (file: string, version = "3.3.1"): Promise<unknown> =>
     ),
   ) as unknown;
 
-it("starts the checked-in v7 campaign with one concurrent target on WordPress 7.1.3", async () => {
+it("starts the checked-in v8 campaign with one concurrent target on WordPress 7.1.3", async () => {
   const source = JSON.parse(
     await readFile(
       join(
@@ -41,7 +41,7 @@ it("starts the checked-in v7 campaign with one concurrent target on WordPress 7.
   const config = wordpressCampaignConfigSchema.parse(source);
   expect(config).toMatchObject({
     mode: "wp2shell",
-    promptId: "wp2shell-bounty-v7",
+    promptId: "wp2shell-bounty-v8",
     entryIndex: false,
     runWallTimeMinutes: 120,
     stopRules: { maxRuns: 1, noFindingRuns: 1 },
@@ -68,7 +68,7 @@ it("retains the v6 measurement example as an unrunnable historical fixture", asy
 });
 
 it.each(["3.3.1", "3.2.6"])(
-  "runs the pinned %s production example as one source-first 120-minute v7 Trial",
+  "runs the pinned %s production example as one source-first 120-minute v8 Trial",
   async (version) => {
     const source = (await example(
       "campaign-production-v1.json",
@@ -77,7 +77,7 @@ it.each(["3.3.1", "3.2.6"])(
     expect(source).not.toHaveProperty("promptId");
     expect(wordpressCampaignConfigSchema.parse(source)).toMatchObject({
       mode: "wp2shell",
-      promptId: "wp2shell-bounty-v7",
+      promptId: "wp2shell-bounty-v8",
       entryIndex: false,
       runWallTimeMinutes: 120,
       stopRules: { maxRuns: 1, noFindingRuns: 1 },

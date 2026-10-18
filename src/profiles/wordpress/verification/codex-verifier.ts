@@ -10,7 +10,6 @@ import {
   type DiscoveryTransportRun,
   type NativeRunReceipt,
 } from "../../../discovery/index.js";
-import type { ExpectedSourceTree } from "../../../infrastructure/canonical-source-tree.js";
 import { canonicalJson } from "../../../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../../../ledger/index.js";
@@ -23,6 +22,7 @@ import {
   readWordPressFinding,
   type WordPressFinding,
 } from "../discovery/finding.js";
+import type { WordPressMountedSourcePack } from "../acquisition/mounted-source-pack.js";
 import {
   wordpressVictimRouteSchema,
   type WordPressLab,
@@ -188,14 +188,7 @@ export class CodexVerifier implements Verifier<
       readonly store: PrivateArtifactStore;
       readonly ledger: Ledger;
       readonly profile: AgentRuntimeProfile;
-      readonly source: {
-        readonly directory: string;
-        readonly tree: ExpectedSourceTree;
-      };
-      readonly dependencySource?: {
-        readonly directory: string;
-        readonly tree: ExpectedSourceTree;
-      };
+      readonly sourcePack: WordPressMountedSourcePack;
       /** Issues the canary a Finding's impact needs; only the Lab can observe it. */
       readonly lab: Pick<
         WordPressLab,
@@ -481,9 +474,15 @@ export class CodexVerifier implements Verifier<
                 readOnlyAccount: verifierDatabase.readOnlyAccount,
               },
             }),
-        ...(this.options.dependencySource === undefined
-          ? {}
-          : { wordpressCoreSource: "/workspace/wordpress" }),
+        sourcePack: {
+          target: "/workspace/main",
+          ...(this.options.sourcePack.core === undefined
+            ? {}
+            : { wordpressCore: "/workspace/wordpress" }),
+          dependencies: this.options.sourcePack.dependencies.map(
+            (source) => source.path,
+          ),
+        },
         ...(canary === undefined ? {} : { canary }),
       }),
       ...(routeReference?.success
@@ -537,11 +536,12 @@ export class CodexVerifier implements Verifier<
         lab: { setupDigest: lab.setupDigest },
         history: { mode: "none" },
       },
-      sourceDirectory: this.options.source.directory,
-      sourceTree: this.options.source.tree,
-      ...(this.options.dependencySource === undefined
+      sourceDirectory: this.options.sourcePack.target.directory,
+      sourceTree: this.options.sourcePack.target.tree,
+      ...(this.options.sourcePack.core === undefined
         ? {}
-        : { dependencySource: this.options.dependencySource }),
+        : { dependencySource: this.options.sourcePack.core }),
+      dependencySources: this.options.sourcePack.dependencies,
       expiresAt: new Date(
         now.getTime() + (this.options.wallTimeMs ?? 30 * 60_000),
       ).toISOString(),

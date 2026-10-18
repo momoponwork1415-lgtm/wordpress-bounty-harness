@@ -20,12 +20,13 @@ export const WORDPRESS_DISCOVERY_PROMPT_IDS = [
   "wp2shell-bounty-v5",
   "wp2shell-bounty-v6",
   "wp2shell-bounty-v7",
+  "wp2shell-bounty-v8",
   "wp2shell-whitebox-v1.7",
 ] as const;
 
 /** The only discovery objective accepted for new WordPress campaign runs. */
 export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID =
-  "wp2shell-bounty-v7" as const;
+  "wp2shell-bounty-v8" as const;
 
 /** These objectives receive the current Harness-generated output contract. */
 export const WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS = [
@@ -36,6 +37,7 @@ export const WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS = [
   "wp2shell-bounty-v5",
   "wp2shell-bounty-v6",
   "wp2shell-bounty-v7",
+  "wp2shell-bounty-v8",
   "wp2shell-whitebox-v1.7",
 ] as const;
 
@@ -77,6 +79,7 @@ export async function loadWordPressDiscoveryAsset(
     case "wp2shell-bounty-v5":
     case "wp2shell-bounty-v6":
     case "wp2shell-bounty-v7":
+    case "wp2shell-bounty-v8":
     case "wp2shell-whitebox-v1.7":
     case "trust-boundary-v1":
       fileName = `${id}.md`;
@@ -96,19 +99,22 @@ export async function loadWordPressDiscoveryAsset(
 }
 
 /** Fixed Verifier instructions; the caller records this exact byte digest. */
-export const WORDPRESS_VERIFIER_PROMPT_ID = "verifier-v7" as const;
+export const WORDPRESS_VERIFIER_PROMPT_ID = "verifier-v8" as const;
 export async function loadWordPressVerifierPrompt(
-  id: "verifier-v6" | "verifier-v7" = WORDPRESS_VERIFIER_PROMPT_ID,
+  id:
+    | "verifier-v6"
+    | "verifier-v7"
+    | "verifier-v8" = WORDPRESS_VERIFIER_PROMPT_ID,
 ): Promise<{
-  readonly id: "verifier-v6" | "verifier-v7";
+  readonly id: "verifier-v6" | "verifier-v7" | "verifier-v8";
   readonly text: string;
   readonly digest: `sha256:${string}`;
 }> {
   const fileName =
     id === "verifier-v6"
       ? "verifier-v6.md"
-      : id === "verifier-v7"
-        ? "verifier-v7.md"
+      : id === "verifier-v7" || id === "verifier-v8"
+        ? `${id}.md`
         : undefined;
   if (fileName === undefined)
     throw new Error("Unknown WordPress Verifier prompt");

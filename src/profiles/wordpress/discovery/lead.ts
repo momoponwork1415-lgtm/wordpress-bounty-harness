@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import { normalizeWordPressSourcePath } from "./source-path.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const id = z.string().min(1).max(128);
@@ -17,15 +18,7 @@ const relativeFile = z
   );
 const sourceFile = z
   .string()
-  .transform((value) =>
-    value.startsWith("/workspace/main/")
-      ? value.slice("/workspace/main/".length)
-      : value.startsWith("/workspace/wordpress/")
-        ? `@wordpress/${value.slice("/workspace/wordpress/".length)}`
-        : value.startsWith("../wordpress/")
-          ? `@wordpress/${value.slice("../wordpress/".length)}`
-          : value,
-  )
+  .transform(normalizeWordPressSourcePath)
   .pipe(relativeFile);
 
 export const wordpressLeadClaimSchema = z.strictObject({

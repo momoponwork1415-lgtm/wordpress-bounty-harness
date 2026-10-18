@@ -12,6 +12,7 @@ import type {
   WordPressOrgAcquisitionResult,
   WordPressOrgTargetSource,
 } from "./wordpress-org-contracts.js";
+import type { TargetIntakePacket } from "./contracts.js";
 
 function failureKind(
   acquired: Exclude<WordPressOrgAcquisitionResult, { status: "ready" }>,
@@ -39,6 +40,12 @@ export function openWordPressOrgSnapshotSource(options: {
   readonly targetSource: WordPressOrgTargetSource;
   readonly storageDirectory: string;
   readonly dependencies?: () => Promise<readonly AcquiredSource[]>;
+  readonly pluginDependencies?: (
+    packet: TargetIntakePacket,
+    pins: Readonly<Record<string, string>>,
+    slugs: readonly string[],
+    versionPolicy: "stable-observed" | "pinned-only",
+  ) => Promise<readonly AcquiredSource[]>;
 }): SourceAcquisition<WordPressOrgAcquireRequest> {
   return {
     async acquire(selection) {
@@ -80,7 +87,15 @@ export function openWordPressOrgSnapshotSource(options: {
       };
       return {
         target,
-        dependencies: (await options.dependencies?.()) ?? [],
+        dependencies: [
+          ...((await options.dependencies?.()) ?? []),
+          ...((await options.pluginDependencies?.(
+            packet,
+            selection.pluginDependencyPins ?? {},
+            selection.pluginDependencySlugs ?? [],
+            selection.dependencyVersionPolicy ?? "pinned-only",
+          )) ?? []),
+        ],
       };
     },
   };

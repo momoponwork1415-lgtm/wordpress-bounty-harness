@@ -281,6 +281,16 @@ export function createWordPressSelection(
         targetId: observation.pluginIdentity,
         slug,
         version: pinnedVersion ?? observation.stableVersion,
+        ...(!("pluginDependencyPins" in policy) ||
+        policy.pluginDependencyPins?.[slug] === undefined
+          ? {}
+          : { pluginDependencyPins: policy.pluginDependencyPins[slug] }),
+        ...(!("pluginDependencySlugs" in policy) ||
+        policy.pluginDependencySlugs?.[slug] === undefined
+          ? {}
+          : { pluginDependencySlugs: policy.pluginDependencySlugs[slug] }),
+        dependencyVersionPolicy:
+          "candidateSlugs" in policy ? "pinned-only" : "stable-observed",
         // Only the stable version is dated; a pin may name any older release.
         ...(pinnedVersion === undefined && lastUpdated !== undefined
           ? { versionPublishedAt: new Date(lastUpdated).toISOString() }

@@ -18,7 +18,7 @@ flowchart LR
   SN --> DISC
   LAB --> DISC
   subgraph DISC["discovery（協調 Trial 1 回・wall 120 分）"]
-    R["Root（wp2shell-bounty-v7）<br/>round を繰り返し、frontier が尽きるまで続けて報告"] --- C1["子 1"]
+    R["Root（wp2shell-bounty-v8）<br/>最低60分の探索、複数round、反証と方向転換"] --- C1["子 1"]
     R --- C2["子 2"]
     R --- C3["子 3"]
     R --- C4["子 4"]
@@ -128,7 +128,7 @@ flowchart LR
 | 領域               | 確定内容                                                                                                                                                                 | 根拠                                          |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
 | 流れ               | 選定 → Snapshot → Lab → 協調 Trial 1 回 → Verifier + 判定器 + 前後差分 → 台帳 → review export → skill → 人間 2 判断点 → 人間が提出                                       | SPEC 第 3 節、ADR 0029 / 0031                 |
-| 探索               | Root + 子 4、wall 120 分、新規探索 prompt は `wp2shell-bounty-v7` のみ（2026-10-18 所有者決定）。脆弱性が必ずあるという前提と固定経路は与えない | SPEC 第 6 節、ADR 0029、ADR 0032 |
+| 探索               | Root + 子 4、最低60分・wall上限120分、新規探索 prompt は `wp2shell-bounty-v8` のみ（2026-10-18 所有者決定）。対象・WordPress本体・PHP・依存pluginの固定sourceを使う | SPEC 第 6 節、ADR 0029、ADR 0033 |
 | 検証               | 判定器は増やさない。Verifier は「発火したか」を見る。失敗は incomplete。再試行は recipe 2 / observation 1                                                               | ADR 0022（0032 で修正）、所有者決定 2026-10-13 |
 | 人間レビュー       | scope 内の Finding は判定結果に関係なく人間に届く。順位付け・要約・文案は skill が担い、Harness は材料（review export）だけ出す                                         | #185 / #186、ADR 0031                         |
 | 選定               | install 下限 100,000、候補タグはミラー由来の 8 族、plugin 別の順位付けに公開履歴を使わない。6 か月後に `candidateTag` で効果を測る                                      | ADR 0030 / 0032 Q3〜Q6                        |

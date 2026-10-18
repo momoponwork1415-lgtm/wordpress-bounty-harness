@@ -55,6 +55,7 @@ import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
   wordPressDiscoveryOutputContractV3,
+  wordPressDiscoveryOutputContractV4,
 } from "../profiles/wordpress/discovery/output-contract.js";
 import type {
   WordPressLab,
@@ -193,7 +194,7 @@ const campaignModes = z.discriminatedUnion("mode", [
   z.strictObject({
     ...commonCampaignFields,
     mode: z.literal("wp2shell"),
-    runWallTimeMinutes: z.number().positive().max(120).default(120),
+    runWallTimeMinutes: z.number().gt(60).max(120).default(120),
     promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
     stopRules: singleTrialStop,
     entryIndex: z.literal(false).default(false),
@@ -296,6 +297,11 @@ export interface WordPressCampaignBoundaries {
       readonly directory: string;
       readonly tree: ExpectedSourceTree;
     };
+    readonly dependencySources?: readonly {
+      readonly path: string;
+      readonly directory: string;
+      readonly tree: ExpectedSourceTree;
+    }[];
   }>;
   readonly runtimeProfile: AgentRuntimeProfile;
   /** What the pinned Codex image actually ships (GvisorCodexSandbox.probe). */
@@ -870,6 +876,7 @@ async function planWordPressDiscovery(
     config.mode === "assignment" ? config.assignment : undefined;
   const outputContractV1 = wordPressDiscoveryOutputContract();
   const outputContractV2 = wordPressDiscoveryOutputContractV2();
+  const outputContractV4 = wordPressDiscoveryOutputContractV4();
   const outputContractV3 = wordPressDiscoveryOutputContractV3(
     config.coverage.maxUnvisitedRatio,
   );
@@ -877,16 +884,18 @@ async function planWordPressDiscovery(
     (id === "wp2shell-bounty-v5" || id === "wp2shell-bounty-v6") &&
     config.entryIndex;
   const outputContractFor = (id: string) =>
-    coverageFor(id)
-      ? outputContractV3
-      : id === "wp2shell-bounty-v3" ||
-          id === "wp2shell-bounty-v4" ||
-          id === "wp2shell-bounty-v5" ||
-          id === "wp2shell-bounty-v6" ||
-          id === WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID ||
-          id === "wp2shell-whitebox-v1.7"
-        ? outputContractV2
-        : outputContractV1;
+    id === WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID
+      ? outputContractV4
+      : coverageFor(id)
+        ? outputContractV3
+        : id === "wp2shell-bounty-v3" ||
+            id === "wp2shell-bounty-v4" ||
+            id === "wp2shell-bounty-v5" ||
+            id === "wp2shell-bounty-v6" ||
+            id === "wp2shell-bounty-v7" ||
+            id === "wp2shell-whitebox-v1.7"
+          ? outputContractV2
+          : outputContractV1;
   const objectiveOnly = (id: string) =>
     WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
   const source = await boundaries.sourceFor(snapshot);
@@ -965,6 +974,9 @@ async function planWordPressDiscovery(
               ? "WordPress core source (read-only): /workspace/wordpress."
               : "WordPress core source (read-only): /workspace/wordpress, the same version the Lab runs.",
           ]),
+      ...(source.dependencySources ?? []).map(
+        (dependency) => `Dependency source (read-only): ${dependency.path}.`,
+      ),
       ...(objectiveOnly(selectedObjective.id)
         ? ["Writable notes directory: /workspace/research."]
         : []),
@@ -1026,6 +1038,15 @@ async function planWordPressDiscovery(
     plannedTrials: Array.from({ length: maxRuns }, (_, trialOrdinal) => {
       const trialId = state.newId();
       const selectedObjective = objective;
+      const resumePrompt = selectedObjective.text
+        .trim()
+        .split(/\n\s*\n/)
+        .at(-1);
+      if (
+        resumePrompt === undefined ||
+        !resumePrompt.startsWith("Before giving up,")
+      )
+        throw new Error("Versioned minimum exploration directive is missing");
       const assignment =
         assignments.length === 0
           ? undefined
@@ -1062,6 +1083,8 @@ async function planWordPressDiscovery(
           profile: boundaries.runtimeProfile,
           coordination: "cooperative" as const,
           prompt: promptFor(assignment, selectedObjective),
+          minimumActiveMs: 60 * 60_000,
+          resumePrompt,
           ...(coverageFor(selectedObjective.id)
             ? { coverageSchema: outputContractV3.coverageSchema }
             : {}),
@@ -1087,6 +1110,9 @@ async function planWordPressDiscovery(
           ...(source.dependency === undefined
             ? {}
             : { dependencySource: source.dependency }),
+          ...(source.dependencySources === undefined
+            ? {}
+            : { dependencySources: source.dependencySources }),
           expiresAt: new Date(now + wallMinutes * 60_000).toISOString(),
         },
       };
@@ -1640,16 +1666,61 @@ export function createWordPressCliProfile(
             });
             return { finding, category: finding.impact };
           },
-          async selectVersion({ selectionId, version }) {
+          async selectVersion({
+            selectionId,
+            originalSnapshotDigest,
+            version,
+          }) {
             const slug = /^wporg:([a-z0-9][a-z0-9-]*)@/.exec(selectionId)?.[1];
             if (slug === undefined) return null;
+            const originalSnapshot = await boundaries.loadSnapshot(
+              originalSnapshotDigest,
+            );
+            if (originalSnapshot.target.identity !== `wporg:${slug}`)
+              throw new Error(
+                "The original Snapshot belongs to another target",
+              );
+            const originalPluginPins: Record<string, string> = {};
+            for (const dependency of originalSnapshot.dependencies) {
+              const dependencySlug = /^wporg:([a-z0-9][a-z0-9-]*)$/.exec(
+                dependency.identity,
+              )?.[1];
+              if (dependencySlug === undefined) continue;
+              if (
+                originalPluginPins[dependencySlug] !== undefined &&
+                originalPluginPins[dependencySlug] !== dependency.version
+              )
+                throw new Error(
+                  `The original Snapshot has conflicting versions for ${dependencySlug}`,
+                );
+              originalPluginPins[dependencySlug] = dependency.version;
+            }
+            const explicitSlugs =
+              "pluginDependencySlugs" in policy
+                ? (policy.pluginDependencySlugs?.[slug] ?? [])
+                : [];
+            for (const dependencySlug of explicitSlugs)
+              if (originalPluginPins[dependencySlug] === undefined)
+                throw new Error(
+                  `The original Snapshot has no pinned source for ${dependencySlug}`,
+                );
+            const configuredPluginPins =
+              "pluginDependencyPins" in policy
+                ? (policy.pluginDependencyPins?.[slug] ?? {})
+                : {};
+            const pluginDependencyPins = {
+              ...configuredPluginPins,
+              ...originalPluginPins,
+            };
             // Rechecking a known Finding does not need the candidate batch's
             // history ranking.
             const reverifyPolicy =
               "candidateSource" in policy
-                ? (({ candidateSource: _candidateSource, ...rest }) => rest)(
-                    policy,
-                  )
+                ? (({
+                    candidateSource: _candidateSource,
+                    pluginDependencySlugs: _pluginDependencySlugs,
+                    ...rest
+                  }) => rest)(policy)
                 : (({
                     historySignals: _historySignals,
                     historySource: _historySource,
@@ -1658,6 +1729,7 @@ export function createWordPressCliProfile(
             const selected = await boundaries.selection.select({
               ...reverifyPolicy,
               candidateSlugs: [slug],
+              pluginDependencyPins: { [slug]: pluginDependencyPins },
               pinnedVersions: version === undefined ? {} : { [slug]: version },
               maximumTargets: 1,
             });

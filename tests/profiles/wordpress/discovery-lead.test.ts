@@ -42,6 +42,21 @@ it("admits and signs a private WordPress Lead independently of its wording", () 
       context,
     ).sourceTrace[0]?.file,
   ).toBe("@wordpress/wp-includes/user.php");
+  expect(
+    admitWordPressLead(
+      {
+        ...claim,
+        sourceTrace: [
+          {
+            file: "/workspace/dependencies/elementor/includes/api.php",
+            function: "dependency",
+            line: 3,
+          },
+        ],
+      },
+      context,
+    ).sourceTrace[0]?.file,
+  ).toBe("@dependencies/elementor/includes/api.php");
   expect(wordPressLeadSignature(lead)).toBe(
     wordPressLeadSignature(
       admitWordPressLead({ ...claim, summary: "Other wording" }, context),
