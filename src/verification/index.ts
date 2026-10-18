@@ -324,6 +324,23 @@ export class Verification<
           provisioned.reason === "precondition"
             ? "precondition"
             : "provision";
+        const labRecord = await this.#options.ledger.append({
+          schemaVersion: 1,
+          identity: `verification-lab-${verificationId}`,
+          campaignId,
+          snapshotDigest,
+          occurredAt: (
+            this.#options.clock ?? (() => new Date())
+          )().toISOString(),
+          type: "lab-provisioned",
+          labId: verificationId,
+          status: "failed",
+          purpose: "verification",
+          failureStage: "provision",
+          reason,
+        });
+        if (labRecord.status === "conflict")
+          throw new Error("Verification Lab failure identity conflict");
         const failed = await this.#options.ledger.append({
           schemaVersion: 1,
           identity: `verification-lab-failed-${verificationId}`,

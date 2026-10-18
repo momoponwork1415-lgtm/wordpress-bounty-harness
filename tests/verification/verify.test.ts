@@ -787,9 +787,16 @@ describe("verification public interface", () => {
   });
 
   it("maps provision failure to incomplete provision", async () => {
-    const { result, calls } = await fixture({ provision: "incomplete" });
+    const { result, calls, ledger } = await fixture({
+      provision: "incomplete",
+    });
     expect(result).toMatchObject({ status: "incomplete", reason: "provision" });
     expect(calls.verifier).toBe(0);
+    expect(ledger.read({ type: "lab-provisioned" })[0]?.event).toMatchObject({
+      purpose: "verification",
+      status: "failed",
+      failureStage: "provision",
+    });
   });
 
   it("maps a Verifier failure to incomplete recipe and still tears down", async () => {

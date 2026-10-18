@@ -24,6 +24,13 @@ import type {
   Verification,
   VerificationResultV1,
 } from "../verification/index.js";
+import {
+  createVerificationConsumer,
+  scenarioForVerification,
+  shouldAutomaticallyRetryVerification,
+} from "../verification/consumer.js";
+
+export { shouldAutomaticallyRetryVerification } from "../verification/consumer.js";
 
 type DiscoveryOptions = Parameters<typeof runDiscoveryCampaign>[0];
 
@@ -74,10 +81,6 @@ type FinishedVerification = Extract<
   LedgerEventV1,
   { type: "verification-finished" }
 >;
-type IncompleteReason = Extract<
-  VerificationResultV1,
-  { status: "incomplete" }
->["reason"];
 type VerificationRecord = { sequence: number; event: FinishedVerification };
 
 function readAll(
@@ -91,60 +94,6 @@ function readAll(
     records.push(...page);
     if (page.length < 1000) return records;
     afterSequence = page[page.length - 1]!.sequence;
-  }
-}
-
-function scenarioForVerification(
-  previous: VerificationRecord,
-  labs: readonly LedgerRecord[],
-  snapshotDigest: string,
-): string | null | undefined {
-  const verificationLab = labs.find(
-    ({ event }) =>
-      event.identity === `verification-lab-${previous.event.verificationId}`,
-  );
-  if (verificationLab?.event.type === "lab-provisioned")
-    return verificationLab.event.scenario?.id ?? null;
-  // A precondition can fail before a verification Lab exists. Its discovery
-  // Lab records the selected scenario before that attempt.
-  const discoveryLab = labs
-    .filter(
-      ({ sequence, event }) =>
-        sequence < previous.sequence &&
-        event.type === "lab-provisioned" &&
-        event.snapshotDigest === snapshotDigest &&
-        event.purpose === "discovery",
-    )
-    .at(-1);
-  return discoveryLab?.event.type === "lab-provisioned"
-    ? (discoveryLab.event.scenario?.id ?? null)
-    : undefined;
-}
-
-/** ADR 0022: counts include the attempt that produced the current reason. */
-export function shouldAutomaticallyRetryVerification(input: {
-  readonly reason: IncompleteReason;
-  readonly attemptsForReason: number;
-  readonly sameLabSetup: boolean;
-  /** null is a recorded default scenario; undefined means no scenario record. */
-  readonly previousScenarioId?: string | null | undefined;
-  readonly currentScenarioId?: string | null | undefined;
-}): boolean {
-  switch (input.reason) {
-    case "recipe":
-    case "observation":
-      return input.sameLabSetup && input.attemptsForReason < 3;
-    case "provision":
-    case "provider":
-      return input.sameLabSetup && input.attemptsForReason < 2;
-    case "precondition":
-      return (
-        input.previousScenarioId !== undefined &&
-        input.currentScenarioId !== undefined &&
-        input.previousScenarioId !== input.currentScenarioId
-      );
-    default:
-      return false;
   }
 }
 
@@ -607,10 +556,6 @@ export async function runCampaignPipeline<
         return;
       }
       stage = "verification";
-      const earlier = readAll(ledger, {
-        campaignId,
-        type: "verification-finished",
-      });
       const labs = readAll(ledger, { campaignId, type: "lab-provisioned" });
       const verifications: {
         findingId: string;
@@ -636,7 +581,11 @@ export async function runCampaignPipeline<
         if (event.type !== "finding-recorded") continue;
         // The Verifier shares the subscription; a usage limit stops the campaign.
         if (stopped === "provider-limit") break;
-        const history = earlier.filter(
+        const history = readAll(ledger, {
+          campaignId,
+          findingId: event.findingId,
+          type: "verification-finished",
+        }).filter(
           (
             record,
           ): record is { sequence: number; event: FinishedVerification } =>
@@ -902,9 +851,8 @@ export type VerifyNextSummary = {
   readonly findingId: string;
   readonly verificationId: string;
   readonly status: VerificationResultV1["status"];
+  readonly providerLimit?: "rate-limit" | "quota";
 };
-
-const verificationInFlight = new Set<string>();
 
 /** Consume one unverified or bounded-retry Finding without starting a discovery Lab. */
 export async function verifyNextFinding<
@@ -922,123 +870,59 @@ export async function verifyNextFinding<
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
 }): Promise<VerifyNextSummary | null> {
-  const findings = readAll(options.ledger, {
+  const consumer = createVerificationConsumer({
+    ledger: options.ledger,
+    promptVersion: options.verification.promptVersion,
+    currentScenarioId: async (digest) =>
+      options.setupFor(await options.loadSnapshot(digest)).scenario?.id ?? null,
+  });
+  const ticket = await consumer.pullNext({
     ...(options.campaignId === undefined
       ? {}
       : { campaignId: options.campaignId }),
-    type: "finding-recorded",
-  });
-  const histories = readAll(options.ledger, {
-    ...(options.campaignId === undefined
+    ...(options.campaignPrefix === undefined
       ? {}
-      : { campaignId: options.campaignId }),
-    type: "verification-finished",
+      : { campaignPrefix: options.campaignPrefix }),
   });
-  const labs = readAll(options.ledger, {
-    ...(options.campaignId === undefined
-      ? {}
-      : { campaignId: options.campaignId }),
-    type: "lab-provisioned",
-  });
-  for (const { event } of findings) {
-    if (
-      event.type !== "finding-recorded" ||
-      event.derivationKind === "fixed-version-control"
-    )
-      continue;
-    if (
-      options.campaignPrefix !== undefined &&
-      !event.campaignId.startsWith(`${options.campaignPrefix}-`)
-    )
-      continue;
-    const key = `${event.campaignId}\0${event.findingId}`;
-    if (verificationInFlight.has(key)) continue;
-    const history = histories.filter(
-      (record): record is VerificationRecord =>
-        record.event.type === "verification-finished" &&
-        record.event.campaignId === event.campaignId &&
-        record.event.findingId === event.findingId &&
-        record.event.basis === undefined,
-    );
-    const previous = history.at(-1);
-    if (previous !== undefined) {
-      if (previous.event.result.status !== "incomplete") continue;
-      if (previous.event.promptVersion !== options.verification.promptVersion)
-        continue;
-      const reason = previous.event.result.reason;
-      const attemptsForReason = history.filter(
-        ({ event: prior }) =>
-          prior.result.status === "incomplete" &&
-          prior.result.reason === reason &&
-          prior.labSetupDigest === previous.event.labSetupDigest &&
-          prior.promptVersion === previous.event.promptVersion,
-      ).length;
-      const previousScenarioId = scenarioForVerification(
-        previous,
-        labs,
-        event.snapshotDigest,
-      );
-      // Scenario-dependent retries are decided after loading the same pinned Snapshot.
-      if (
-        !shouldAutomaticallyRetryVerification({
-          reason,
-          attemptsForReason,
-          sameLabSetup: true,
-          previousScenarioId,
-          currentScenarioId: previousScenarioId,
-        }) &&
-        reason !== "precondition"
-      )
-        continue;
-    }
-    verificationInFlight.add(key);
-    try {
-      const snapshot = await options.loadSnapshot(event.snapshotDigest);
-      const setup = options.setupFor(snapshot);
-      if (
-        previous?.event.result.status === "incomplete" &&
-        previous.event.result.reason === "precondition" &&
-        !shouldAutomaticallyRetryVerification({
-          reason: "precondition",
-          attemptsForReason: 1,
-          sameLabSetup: true,
-          previousScenarioId: scenarioForVerification(
-            previous,
-            labs,
-            event.snapshotDigest,
-          ),
-          currentScenarioId: setup.scenario?.id ?? null,
-        })
-      )
-        continue;
-      const verificationId = options.newId();
-      const result = await options.verification.verify({
-        campaignId: event.campaignId,
-        findingId: event.findingId,
-        verificationId,
-        attempt: Math.max(
-          history.length + 1,
-          (previous?.event.attempt ?? 0) + 1,
-        ),
-        ...(previous === undefined
-          ? {}
-          : { retryOf: previous.event.verificationId }),
-        snapshot,
-        setup,
-        campaignLabSetupDigest: canonicalDigest(setup),
-        reconstruction: options.reconstructionFor(snapshot),
-      });
-      return {
-        campaignId: event.campaignId,
-        findingId: event.findingId,
-        verificationId,
-        status: result.status,
-      };
-    } finally {
-      verificationInFlight.delete(key);
-    }
+  if (ticket === null) return null;
+  try {
+    const { finding, history } = ticket;
+    const previous = history.at(-1)?.event;
+    const snapshot = await options.loadSnapshot(finding.snapshotDigest);
+    const setup = options.setupFor(snapshot);
+    const verificationId = options.newId();
+    const result = await options.verification.verify({
+      campaignId: finding.campaignId,
+      findingId: finding.findingId,
+      verificationId,
+      attempt: Math.max(history.length + 1, (previous?.attempt ?? 0) + 1),
+      ...(previous === undefined ? {} : { retryOf: previous.verificationId }),
+      snapshot,
+      setup,
+      campaignLabSetupDigest: canonicalDigest(setup),
+      reconstruction: options.reconstructionFor(snapshot),
+    });
+    const latestRun =
+      result.status === "incomplete" && result.reason === "provider"
+        ? readAll(options.ledger, {
+            campaignId: finding.campaignId,
+            findingId: finding.findingId,
+            type: "verifier-run-finished",
+          }).at(-1)?.event
+        : undefined;
+    return {
+      campaignId: finding.campaignId,
+      findingId: finding.findingId,
+      verificationId,
+      status: result.status,
+      ...(latestRun?.type !== "verifier-run-finished" ||
+      latestRun.providerLimit === undefined
+        ? {}
+        : { providerLimit: latestRun.providerLimit }),
+    };
+  } finally {
+    ticket.release();
   }
-  return null;
 }
 
 /**
