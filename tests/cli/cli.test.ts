@@ -842,6 +842,9 @@ async function harness(
       schemaVersion: 1,
       selectionPolicyPath: policyPath,
       mode: "wp2shell",
+      // The policy default is "none" (owner decision 2026-10-18); these tests
+      // exercise the attached-Lab path unless a test overrides it.
+      discovery: { lab: "attached" },
       promptId: "wp2shell-bounty-v8",
       programmeBoundary: {
         version: "v1",
@@ -1801,6 +1804,10 @@ describe("harness CLI vertical slice", () => {
     expect(
       wordpressCampaignConfigSchema.parse({ ...base, entryIndex: false }),
     ).toMatchObject({ mode: "wp2shell", entryIndex: false });
+    // Owner decision 2026-10-18: the normal mode explores without a Lab.
+    expect(wordpressCampaignConfigSchema.parse(base).discovery).toEqual({
+      lab: "none",
+    });
     expect(
       wordpressCampaignConfigSchema.safeParse({
         ...base,

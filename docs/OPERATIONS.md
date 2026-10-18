@@ -101,7 +101,7 @@ v7 は固定 source からの探索をRootに任せ、入口索引を渡さな�
 
 ### 探索だけ回し、検証を 1 件ずつ回す
 
-`campaign.json` の `discovery.lab` を `"none"` にすると探索用 Lab を供給せず、Finding は台帳に記録して検証を後へ送る。省略時は `"attached"`。設定変更は campaign.json の PR で行い、prompt 本文は変えない。
+`campaign.json` の `discovery.lab` は既定（省略時）が `"none"` で、探索用 Lab を供給せず、Finding は台帳に記録して検証を後へ送る（所有者決定 2026-10-18「通常モードは Lab を起動しない探索」）。`"attached"` にすると従来どおり探索用 Lab を供給する。設定変更は campaign.json の PR で行い、prompt 本文は変えない。
 
 ```sh
 harness campaign run <slug> --campaign <id> --config <campaign.json> [--repeat 3]
