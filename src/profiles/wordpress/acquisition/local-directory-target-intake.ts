@@ -16,7 +16,10 @@ import {
   type SourceTreeRejection,
 } from "../../../infrastructure/canonical-source-tree.js";
 import type { AcquiredSource } from "../../../snapshot/index.js";
-import { canonicalJson, sha256Digest } from "./canonical-json.js";
+import {
+  canonicalJsonPreservingProperties,
+  canonicalDigestPreservingProperties,
+} from "../../../infrastructure/canonical-json.js";
 import {
   intakeDispositionSchema,
   manualTargetIntakeRequestSchema,
@@ -207,7 +210,7 @@ function requestIdentity(
   request: ManualTargetIntakeRequest,
   sourceObservation: unknown,
 ): string {
-  return sha256Digest({
+  return canonicalDigestPreservingProperties({
     kind: request.kind,
     schemaVersion: request.schemaVersion,
     source: { kind: request.source.kind, observation: sourceObservation },
@@ -238,7 +241,7 @@ class LocalDirectoryTargetIntake implements TargetIntake {
   }
 
   async #persistJson(value: unknown): Promise<{ id: string; digest: string }> {
-    const bytes = Buffer.from(canonicalJson(value), "utf8");
+    const bytes = Buffer.from(canonicalJsonPreservingProperties(value), "utf8");
     const digest = bytesDigest(bytes);
     const id = artifactId("artifact", digest);
     const directory = join(this.#storageDirectory, "objects");
@@ -294,7 +297,7 @@ class LocalDirectoryTargetIntake implements TargetIntake {
       schemaVersion: 1 as const,
       entries: manifestEntries,
     };
-    const treeDigest = sha256Digest(manifest);
+    const treeDigest = canonicalDigestPreservingProperties(manifest);
     const requestDigest = requestIdentity(request, { treeDigest });
     const phpFiles = capture.files.filter((file) => file.path.endsWith(".php"));
     const candidates = phpFiles.flatMap((file) => {
@@ -387,14 +390,14 @@ class LocalDirectoryTargetIntake implements TargetIntake {
       request.pluginIdentity.kind === "wporg"
         ? `wporg:${request.pluginIdentity.slug}`
         : `premium:${request.pluginIdentity.vendor}/${request.pluginIdentity.product}`;
-    const targetSnapshotDigest = sha256Digest({
+    const targetSnapshotDigest = canonicalDigestPreservingProperties({
       kind: "target-snapshot",
       schemaVersion: 1,
       pluginIdentity,
       version: request.requestedVersion,
       treeDigest,
     });
-    const packetSeed = sha256Digest({
+    const packetSeed = canonicalDigestPreservingProperties({
       requestDigest,
       pluginIdentity,
       mainPluginFile: selected.file.path,

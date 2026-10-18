@@ -13,7 +13,10 @@ import {
 } from "../../../infrastructure/content-digest.js";
 import { persistContentAddressedFile } from "../../../infrastructure/immutable-file.js";
 
-import { canonicalJson, sha256Digest } from "./canonical-json.js";
+import {
+  canonicalJsonPreservingProperties,
+  canonicalDigestPreservingProperties,
+} from "../../../infrastructure/canonical-json.js";
 import {
   openLocalDirectoryTargetIntake,
   targetIntakeDirectory,
@@ -496,7 +499,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
   async #persistObservation(
     observation: WordPressOrgTargetObservation,
   ): Promise<WordPressOrgTargetObservationRef> {
-    const digest = sha256Digest(observation);
+    const digest = canonicalDigestPreservingProperties(observation);
     const ref = wordPressOrgTargetObservationRefSchema.parse({
       kind: "wordpress-org-target-observation-ref",
       schemaVersion: 1,
@@ -510,7 +513,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
     await mkdir(directory, { recursive: true });
     await persistContentAddressedFile(
       join(directory, `${digest.slice(7)}.json`),
-      Buffer.from(canonicalJson(observation), "utf8"),
+      Buffer.from(canonicalJsonPreservingProperties(observation), "utf8"),
     );
     return ref;
   }
@@ -530,7 +533,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
       JSON.parse(bytes.toString("utf8")),
     );
     if (
-      sha256Digest(observation) !== ref.digest ||
+      canonicalDigestPreservingProperties(observation) !== ref.digest ||
       artifactId("wporg-observation", ref.digest) !== ref.id
     ) {
       throw new Error("WordPress.org Target Observation integrity mismatch");
