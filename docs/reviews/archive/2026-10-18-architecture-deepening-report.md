@@ -1,6 +1,6 @@
 # 2026-10-18 アーキテクチャ深化（deepening）候補の報告
 
-これは報告であり正本ではない。正本は [SPEC.md](../SPEC.md) と [adr/](../adr/)。所有者が候補を選ぶための一覧で、実装も grilling も行っていない。図付きの版は同名の [HTML](2026-10-18-architecture-deepening-report.html)。
+これは報告であり正本ではない。正本は [SPEC.md](../../SPEC.md) と [adr/](../../adr/)。所有者が候補を選ぶための一覧で、実装も grilling も行っていない。図付きの版は同名の [HTML](2026-10-18-architecture-deepening-report.html)。
 
 - 走査: origin/main `fcde290`、`src/` 122 file 37,032 行、`tests/` 94 file 32,612 行。skill は `mattpocock-skills/improve-codebase-architecture`（語彙は `codebase-design`: module / interface / implementation / depth / seam / adapter / leverage / locality）。
 - 触らないものとして固定: 8 不変条件、`profiles/wordpress/verification/judges.ts` の成功条件、`prompts/*.md` 本文、既存台帳 event の形、`policy/`。すべての候補はこれらを変えない。

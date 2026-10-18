@@ -2,7 +2,7 @@
 
 問い: 公開された防御側の脆弱性探索ハーネスから、現在の WordPress バグバウンティ Harness に役立つ事実は何か。
 
-方法: 各社の記事と所有する GitHub リポジトリの一次資料を確認した。GitHub の参照先は今回読んだ commit に固定した。コードを実行して性能や隔離を再現した調査ではない。公開日と source の最終 commit 日は区別する。現行仕様との照合先は [SPEC](../SPEC.md)、[DEVELOPMENT](../DEVELOPMENT.md)、[LESSONS](../LESSONS.md)。
+方法: 各社の記事と所有する GitHub リポジトリの一次資料を確認した。GitHub の参照先は今回読んだ commit に固定した。コードを実行して性能や隔離を再現した調査ではない。公開日と source の最終 commit 日は区別する。現行仕様との照合先は [SPEC](../../SPEC.md)、[DEVELOPMENT](../../DEVELOPMENT.md)、[LESSONS](../../LESSONS.md)。
 
 ## 要点
 
@@ -22,11 +22,11 @@
 
 ## この Harness での読み方
 
-1. **既存 Step 1 に直結する観測点:** `review export` が scope 内 Finding を `incomplete` のままでも source/snapshot、実行時証拠参照、正確な不足事実とともに人間へ届けるか。`candidate-held` は Finding とは別に記録されるため、同じ review 対象だと推定しない。これは Anthropic の独立検証、Mantis の再現失敗時の留保、Cloudflare の `needs_validation` と近い問題に対する現在の設計の実測である。[DEVELOPMENT 第2節](../DEVELOPMENT.md)、[SPEC 第6・7節](../SPEC.md)、[ADR 0018](../adr/0018-hold-and-normalize-discovery-candidates.md)。
-2. **隔離の参照:** 各公開物は設定文だけでなく agent と対象コードの実行場所を区別する。現行の `runsc`・provider broker・fallback 禁止を preflight で観測する材料になる。Mantis の複数 sandbox backend や Anthropic の明示 bypass を取り込む提案ではない。[SPEC 第2節](../SPEC.md)、[Anthropic sandbox](https://github.com/anthropics/defending-code-reference-harness/blob/d3bea6b5793b5f3d59a75ebe69a58efa88383145/docs/agent-sandbox.md)、[Mantis tool boundary](https://github.com/google/mantis/blob/2b3bbdcbb8d259d1777b89dcfa3c8e87615ccc80/reference/README.md)。
-3. **後で比較する仮説:** Cloudflare の「single run は反復の累積発見の約半分」という数値と、Anthropic の再走査推奨は、その対象・運用の経験である。この Harness の対象ごと1回を否定する測定ではない。現行 Trial の wall、source 読取、候補、費用、提出転帰に不足が出た時だけ同条件の A/B を考える。[Cloudflare 記事](https://blog.cloudflare.com/build-your-own-vulnerability-harness/)、[Anthropic best practices](https://github.com/anthropics/defending-code-reference-harness/blob/d3bea6b5793b5f3d59a75ebe69a58efa88383145/docs/best-practices.md)、[SPEC 第10節](../SPEC.md)。
-4. **coverage の意味は分ける:** Cloudflare の coverage ledger は監査範囲・未処理・保留を明示するためのもので、quick/scoped run を部分的な範囲と表示する。この Harness の入口索引は所在のカタログで、全入口の処理を Trial の正常終了条件にしない。coverage の可視化という点だけが参考になる。[Cloudflare skill](https://github.com/cloudflare/security-audit-skill/blob/c1c8a8c1471069fb0e188eeaff69b8e8db6564a8/skills/security-audit/SKILL.md)、[SPEC 第6節](../SPEC.md)。
-5. **運用上の失敗を正常0件と混ぜない:** Cloudflare は provider の一時エラーが `200 OK` の本文として返り、空の正常 run に見えた経験を明記する。Anthropic の参照実装は rate limit 後の再開と、先に提出された成果の救済を持つ。この repo は自動 retry しない決定なので再開方式を移植せず、quota・broker・schema の失敗を理由付き `incomplete` にできたかを Step 1 の台帳で見る。[Cloudflare 記事](https://blog.cloudflare.com/build-your-own-vulnerability-harness/)、[Anthropic pipeline](https://github.com/anthropics/defending-code-reference-harness/blob/d3bea6b5793b5f3d59a75ebe69a58efa88383145/docs/pipeline.md)、[SPEC 第6節](../SPEC.md)。
+1. **既存 Step 1 に直結する観測点:** `review export` が scope 内 Finding を `incomplete` のままでも source/snapshot、実行時証拠参照、正確な不足事実とともに人間へ届けるか。`candidate-held` は Finding とは別に記録されるため、同じ review 対象だと推定しない。これは Anthropic の独立検証、Mantis の再現失敗時の留保、Cloudflare の `needs_validation` と近い問題に対する現在の設計の実測である。[DEVELOPMENT 第2節](../../DEVELOPMENT.md)、[SPEC 第6・7節](../../SPEC.md)、[ADR 0018](../../adr/0018-hold-and-normalize-discovery-candidates.md)。
+2. **隔離の参照:** 各公開物は設定文だけでなく agent と対象コードの実行場所を区別する。現行の `runsc`・provider broker・fallback 禁止を preflight で観測する材料になる。Mantis の複数 sandbox backend や Anthropic の明示 bypass を取り込む提案ではない。[SPEC 第2節](../../SPEC.md)、[Anthropic sandbox](https://github.com/anthropics/defending-code-reference-harness/blob/d3bea6b5793b5f3d59a75ebe69a58efa88383145/docs/agent-sandbox.md)、[Mantis tool boundary](https://github.com/google/mantis/blob/2b3bbdcbb8d259d1777b89dcfa3c8e87615ccc80/reference/README.md)。
+3. **後で比較する仮説:** Cloudflare の「single run は反復の累積発見の約半分」という数値と、Anthropic の再走査推奨は、その対象・運用の経験である。この Harness の対象ごと1回を否定する測定ではない。現行 Trial の wall、source 読取、候補、費用、提出転帰に不足が出た時だけ同条件の A/B を考える。[Cloudflare 記事](https://blog.cloudflare.com/build-your-own-vulnerability-harness/)、[Anthropic best practices](https://github.com/anthropics/defending-code-reference-harness/blob/d3bea6b5793b5f3d59a75ebe69a58efa88383145/docs/best-practices.md)、[SPEC 第10節](../../SPEC.md)。
+4. **coverage の意味は分ける:** Cloudflare の coverage ledger は監査範囲・未処理・保留を明示するためのもので、quick/scoped run を部分的な範囲と表示する。この Harness の入口索引は所在のカタログで、全入口の処理を Trial の正常終了条件にしない。coverage の可視化という点だけが参考になる。[Cloudflare skill](https://github.com/cloudflare/security-audit-skill/blob/c1c8a8c1471069fb0e188eeaff69b8e8db6564a8/skills/security-audit/SKILL.md)、[SPEC 第6節](../../SPEC.md)。
+5. **運用上の失敗を正常0件と混ぜない:** Cloudflare は provider の一時エラーが `200 OK` の本文として返り、空の正常 run に見えた経験を明記する。Anthropic の参照実装は rate limit 後の再開と、先に提出された成果の救済を持つ。この repo は自動 retry しない決定なので再開方式を移植せず、quota・broker・schema の失敗を理由付き `incomplete` にできたかを Step 1 の台帳で見る。[Cloudflare 記事](https://blog.cloudflare.com/build-your-own-vulnerability-harness/)、[Anthropic pipeline](https://github.com/anthropics/defending-code-reference-harness/blob/d3bea6b5793b5f3d59a75ebe69a58efa88383145/docs/pipeline.md)、[SPEC 第6節](../../SPEC.md)。
 
 ## 補助的な新着一次資料
 
@@ -38,15 +38,15 @@
 
 | 選択肢 | 得られるもの | 現在の扱い |
 | --- | --- | --- |
-| A. 現行 Step 1 の縦断確認に参照する | `review export` に不足事実と Private Evidence 参照が揃うか、sandbox と broker が実際に境界を強制しているかを点検する視点 | **推奨。** 既定 prompt や判定器を変えず、[DEVELOPMENT 第2節](../DEVELOPMENT.md)の週の問いに直接寄与する。 |
-| B. 各社の skill や pipeline を移植する | coverage 台帳、tiered reproduction、複数の verifier、複数モデルを追加できる可能性 | 現在は採らない。source・言語・効果の判定条件が違い、[PARKING](../PARKING.md)と Step 1 の凍結に反する。 |
+| A. 現行 Step 1 の縦断確認に参照する | `review export` に不足事実と Private Evidence 参照が揃うか、sandbox と broker が実際に境界を強制しているかを点検する視点 | **推奨。** 既定 prompt や判定器を変えず、[DEVELOPMENT 第2節](../../DEVELOPMENT.md)の週の問いに直接寄与する。 |
+| B. 各社の skill や pipeline を移植する | coverage 台帳、tiered reproduction、複数の verifier、複数モデルを追加できる可能性 | 現在は採らない。source・言語・効果の判定条件が違い、[PARKING](../../PARKING.md)と Step 1 の凍結に反する。 |
 | C. 現行の単一協調 Trial と比較試験する | WordPress の同一対象・モデル・予算で発見と費用の差を測れる | 現行ループの実測後に、探索構造が律速だと分かった場合のみ検討する。探索変更には独立3 Trial と所有者による agent 向け全文レビューが要る。 |
 
 特に適用可能なのは、**「独立した観測だけを強い verdict にする」「保留には正確な不足事実を付ける」「agent が書いた証拠をそのまま正本にしない」**という原則である。現行の nonce canary・snapshot digest・追記台帳・Private Evidence は既にその方向にある。実機で成立したかは、この調査では判定していない。[Anthropic 検証ガイド](https://github.com/anthropics/defending-code-reference-harness/blob/d3bea6b5793b5f3d59a75ebe69a58efa88383145/docs/best-practices.md)、[Mantis reproducer](https://github.com/google/mantis/blob/2b3bbdcbb8d259d1777b89dcfa3c8e87615ccc80/mantis-reproduce/SKILL.md)、[Cloudflare validation](https://github.com/cloudflare/security-audit-skill/blob/c1c8a8c1471069fb0e188eeaff69b8e8db6564a8/skills/security-audit/VALIDATION-AND-REPORTING.md)。
 
 ## 前回比較からの訂正
 
-[10月11日の公開ハーネス比較](2026-10-11-comparison-with-public-harnesses.md)は、Anthropic と Cloudflare の内部コードを読んでいないと記した。今回、Anthropic の**公開参照実装**と Cloudflare の**公開 skill**を確認できた。どちらも各社の本番システムそのものの全コードではないため、本番の運用値や強制力まで確認できたとはしない。Cloudflare 記事の初期7相と現在の公開 skill の6相、Anthropic の C/C++ 例と WordPress の Web 論理バグも分けて扱う。
+[10月11日の公開ハーネス比較](../2026-10-11-comparison-with-public-harnesses.md)は、Anthropic と Cloudflare の内部コードを読んでいないと記した。今回、Anthropic の**公開参照実装**と Cloudflare の**公開 skill**を確認できた。どちらも各社の本番システムそのものの全コードではないため、本番の運用値や強制力まで確認できたとはしない。Cloudflare 記事の初期7相と現在の公開 skill の6相、Anthropic の C/C++ 例と WordPress の Web 論理バグも分けて扱う。
 
 ## 未確認・限界
 

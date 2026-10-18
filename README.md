@@ -3,7 +3,7 @@
 WordPressプラグインの未知脆弱性をAIで発見し、実行時検証を通ったものだけを人間がWordfence / Patchstackへ提出するためのHarness。
 
 - 設計の読み解き（まずこれ）: [docs/DESIGN-WALKTHROUGH.md](docs/DESIGN-WALKTHROUGH.md)
-- 判断の根拠と未証明の項目: [docs/DESIGN-EVIDENCE.md](docs/DESIGN-EVIDENCE.md)
+- 判断の根拠と未証明の項目（2026-10-08 時点の記録）: [docs/reviews/archive/DESIGN-EVIDENCE.md](docs/reviews/archive/DESIGN-EVIDENCE.md)
 - アーキテクチャ図: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - TranslatePressの最小ベンチマークと本番移行: [docs/TRANSLATEPRESS-BENCHMARK.md](docs/TRANSLATEPRESS-BENCHMARK.md)
 - 仕様: [docs/SPEC.md](docs/SPEC.md)
