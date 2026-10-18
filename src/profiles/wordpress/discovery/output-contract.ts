@@ -43,7 +43,7 @@ export function wordPressDiscoveryOutputContractV2() {
 }
 
 /** Root-only coverage is a new contract; v1/v2 remain pinned for old Trials. */
-export function wordPressDiscoveryOutputContractV3() {
+export function wordPressDiscoveryOutputContractV3(maxUnvisitedRatio = 0.2) {
   const finding = z.toJSONSchema(wordpressFindingClaimSchema, { io: "output" });
   const lead = z.toJSONSchema(wordpressLeadClaimSchema, { io: "output" });
   const coverage = z.toJSONSchema(wordpressCoverageRecordSchema, {
@@ -54,7 +54,7 @@ export function wordPressDiscoveryOutputContractV3() {
     "As Root, include the Finding and Lead portion of this contract in every child spawn assignment. In every follow-up to a child, require that child's latest final message to be one JSON object with exactly `findings`, `leads`, `examined`, and `unexamined`, even when there are no claims. Use empty arrays and the two strings for an empty child report. A later prose reply must not replace the child's report. Children do not report `coverage`.",
     "Return `findings`, `leads`, `examined`, `unexamined`, and `coverage` in Root's final report. `examined` and `unexamined` are strings. A child reports direct Finding and Lead objects. In Root's final report, encode each Finding and Lead object as one JSON string in its array, as required by the transport schema.",
     "Each claim object must follow its schema below. Fields of type string are single strings, not arrays. `sourceTrace` is an array of objects with `file`, `function`, and positive integer `line`. Use target-relative paths; prefix WordPress core paths with `@wordpress/`.",
-    "Root's `coverage` is one object for the supplied Entry points index. Include every listed id once. Copy its digest and incomplete flag. Use `observed`, `blocked`, or `unvisited` for each id. Use a short reason code only for `blocked`; use null for other statuses. Include children's results when recording Root coverage. This records coverage; it does not require visiting every entry.",
+    `Root's \`coverage\` is one object for the supplied Entry points index. Include every listed id once. Copy its digest and incomplete flag. Use \`observed\`, \`blocked\`, or \`unvisited\` for each id. Use a short reason code only for \`blocked\`; use null for other statuses. Include children's results when recording Root coverage. For a complete index, more than ${maxUnvisitedRatio} of entries marked \`unvisited\` makes the run \`incomplete(depth)\`; this threshold does not apply to an incomplete index. This records coverage; it does not require visiting every entry.`,
     `Finding schema: ${canonicalJson(finding)}`,
     `Lead schema: ${canonicalJson(lead)}`,
     `Coverage schema: ${canonicalJson(coverage)}`,

@@ -199,6 +199,10 @@ describe("WordPress discovery prompt assets", () => {
     );
     expect(current.text).toContain("Children do not report `coverage`");
     expect(current.text).toContain("Include every listed id once");
+    expect(current.text).toContain("more than 0.2 of entries");
+    expect(wordPressDiscoveryOutputContractV3(0.3).digest).not.toBe(
+      current.digest,
+    );
     expect(current.text).not.toMatch(/checklist|30 minutes/i);
     expect(current.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
   });

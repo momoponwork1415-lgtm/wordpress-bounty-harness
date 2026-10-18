@@ -883,15 +883,19 @@ async function planWordPressDiscovery(
     config.mode === "assignment" ? config.assignment : undefined;
   const outputContractV1 = wordPressDiscoveryOutputContract();
   const outputContractV2 = wordPressDiscoveryOutputContractV2();
-  const outputContractV3 = wordPressDiscoveryOutputContractV3();
+  const outputContractV3 = wordPressDiscoveryOutputContractV3(
+    config.coverage.maxUnvisitedRatio,
+  );
   const coverageFor = (id: string) =>
-    id === "wp2shell-bounty-v5" && config.entryIndex;
+    (id === "wp2shell-bounty-v5" || id === "wp2shell-bounty-v6") &&
+    config.entryIndex;
   const outputContractFor = (id: string) =>
     coverageFor(id)
       ? outputContractV3
       : id === "wp2shell-bounty-v3" ||
           id === "wp2shell-bounty-v4" ||
           id === "wp2shell-bounty-v5" ||
+          id === "wp2shell-bounty-v6" ||
           id === "wp2shell-whitebox-v1.7"
         ? outputContractV2
         : outputContractV1;
