@@ -3,6 +3,8 @@ import { existsSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { z } from "zod";
+
 import type {
   Ledger,
   LedgerEventV1,
@@ -41,22 +43,85 @@ const STOP_REASONS = [
 
 export type ContinuousStopReason = (typeof STOP_REASONS)[number];
 
-/** The runner's working memo. The ledger stays the record; this file may be deleted. */
-export type ContinuousMemo = {
-  state: string;
-  detail: Record<string, string>;
-  campaignId?: string;
-  target?: string | null;
-  backoffStep: number;
-  consecutiveErrorBatches: number;
-  consecutiveRefusalBatches: number;
-  consecutiveNoProgressBatches: number;
-  consecutiveEmptyDays: number;
+/**
+ * The runner's working memo. The ledger stays the record; this file may be
+ * deleted. Fields a saved memo lacks start over, so a hand-trimmed memo reads.
+ */
+const continuousMemoSchema = z.object({
+  state: z.string().default("starting"),
+  detail: z.record(z.string(), z.string()).default({}),
+  campaignId: z.string().optional(),
+  target: z.string().nullable().optional(),
+  backoffStep: z.number().int().nonnegative().default(0),
+  consecutiveErrorBatches: z.number().int().nonnegative().default(0),
+  consecutiveRefusalBatches: z.number().int().nonnegative().default(0),
+  consecutiveNoProgressBatches: z.number().int().nonnegative().default(0),
+  consecutiveEmptyDays: z.number().int().nonnegative().default(0),
   /** After a refused batch, the next batch runs one target. */
-  probe: boolean;
-  lastError?: string;
-  updatedAt: string;
-};
+  probe: z.boolean().default(false),
+  lastError: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+
+export type ContinuousMemo = z.infer<typeof continuousMemoSchema>;
+
+/** The saved memo, or null when none exists; a malformed memo is an error, not a state. */
+export async function readContinuousMemo(
+  stateDirectory: string,
+): Promise<ContinuousMemo | null> {
+  const raw = await readFile(
+    continuousPaths(stateDirectory).memo,
+    "utf8",
+  ).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (raw === null) return null;
+  const parsed = continuousMemoSchema.safeParse(JSON.parse(raw) as unknown);
+  if (!parsed.success)
+    throw new Error(
+      `The runner memo ${continuousPaths(stateDirectory).memo} is malformed: ${parsed.error.message}`,
+    );
+  return parsed.data;
+}
+
+/** Signal 0 probes without killing; EPERM means the pid exists under another user. */
+export function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** The pid a marker file names, when that process is alive; null otherwise. */
+export async function readLivePid(
+  path: string,
+  alive: (pid: number) => boolean = pidAlive,
+): Promise<number | null> {
+  const pid = Number(await readFile(path, "utf8").catch(() => "0"));
+  return pid > 0 && alive(pid) ? pid : null;
+}
+
+/** `lab up --for-review` holds the runner's Lab sweep while its pid lives. */
+export async function holdLabSweep(
+  stateDirectory: string,
+  pid: number,
+): Promise<() => Promise<void>> {
+  const path = continuousPaths(stateDirectory).reviewLabPid;
+  await writeFile(path, String(pid), { mode: 0o600 });
+  return () => rm(path, { force: true });
+}
+
+export function labSweepHeld(
+  stateDirectory: string,
+  alive: (pid: number) => boolean = pidAlive,
+): Promise<boolean> {
+  return readLivePid(continuousPaths(stateDirectory).reviewLabPid, alive).then(
+    (pid) => pid !== null,
+  );
+}
 
 export interface ContinuousDeps {
   readonly stateDirectory: string;
@@ -114,6 +179,8 @@ export function continuousPaths(stateDirectory: string) {
     pid: join(stateDirectory, "continuous.pid"),
     stop: join(stateDirectory, "continuous.stop"),
     log: join(stateDirectory, "continuous.log"),
+    /** Written by `lab up --for-review`; read by the sweep guard only. */
+    reviewLabPid: join(stateDirectory, "review-lab.pid"),
   };
 }
 
@@ -212,25 +279,40 @@ function unboundBatch(deps: ContinuousDeps): string | undefined {
   return latest === undefined || bound.has(latest) ? undefined : latest;
 }
 
-/** Completed explore Trials, and whether every skipped target was refused. */
-function batchFacts(deps: ContinuousDeps, campaignId: string) {
+/**
+ * Explore Trials in the ledger: how many started, and the outcome of each one
+ * that finished. Continuation and child runs belong to their Trial, not counted.
+ */
+export function exploreTrials(
+  ledger: Pick<Ledger, "readAll">,
+  query: Pick<LedgerReadAllQuery, "campaignId" | "since">,
+): { readonly started: number; readonly finished: readonly string[] } {
+  const key = (event: { campaignId: string; runId: string }) =>
+    `${event.campaignId} ${event.runId}`;
   const explore = new Set(
-    readAll(deps.ledger, { campaignId, type: "discovery-run-started" }).flatMap(
+    readAll(ledger, { ...query, type: "discovery-run-started" }).flatMap(
       (event) =>
         event.type === "discovery-run-started" &&
         (event.runKind ?? "explore") === "explore"
-          ? [event.runId]
+          ? [key(event)]
           : [],
     ),
   );
-  const completed = readAll(deps.ledger, {
-    campaignId,
+  const finished = readAll(ledger, {
+    ...query,
     type: "discovery-run-finished",
-  }).filter(
-    (event) =>
-      event.type === "discovery-run-finished" &&
-      explore.has(event.runId) &&
-      event.outcome === "completed",
+  }).flatMap((event) =>
+    event.type === "discovery-run-finished" && explore.has(key(event))
+      ? [event.outcome]
+      : [],
+  );
+  return { started: explore.size, finished };
+}
+
+/** Completed explore Trials, and whether every skipped target was refused. */
+function batchFacts(deps: ContinuousDeps, campaignId: string) {
+  const completed = exploreTrials(deps.ledger, { campaignId }).finished.filter(
+    (outcome) => outcome === "completed",
   ).length;
   const skips = readAll(deps.ledger, { campaignId, type: "target-skipped" });
   const refusedAll =
@@ -312,11 +394,10 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     signalled = false;
     operatorController = new AbortController();
     await mkdir(deps.stateDirectory, { recursive: true, mode: 0o700 });
-    const previous = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
-    if (previous > 0 && previous !== deps.pid && deps.pidAlive(previous))
+    const previous = await readLivePid(paths.pid, deps.pidAlive);
+    if (previous !== null && previous !== deps.pid)
       throw new Error(`continuous run is already running as pid ${previous}`);
-    const saved = await readFile(paths.memo, "utf8").catch(() => "{}");
-    memo = { ...memo, ...(JSON.parse(saved) as Partial<ContinuousMemo>) };
+    memo = { ...memo, ...(await readContinuousMemo(deps.stateDirectory)) };
     const heldReason = await readContinuousStopReason(deps.stateDirectory);
     if (heldReason !== null) {
       if (!options.resume) {

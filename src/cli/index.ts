@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import { readFile, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import { summarizeRecordedRuntimes } from "../discovery/index.js";
@@ -24,6 +24,7 @@ import type {
   ReverificationSummary,
   VerifyNextSummary,
 } from "./pipeline.js";
+import { holdLabSweep } from "./continuous.js";
 import {
   continuousCommand,
   type ContinuousHostStatus,
@@ -182,6 +183,13 @@ export interface CliProfile {
     state: CliState,
     input: { readonly configPath: string; readonly selectionPath: string },
   ): Promise<ContinuousHostStatus>;
+  /** Whether `lab up` holds a Lab for an operator; `continuous run` skips its sweep meanwhile. */
+  labHeld(state: CliState): Promise<boolean>;
+  /** Whether the policies an `exhausted` runner is restarted with sit next to `selectionPath`. */
+  floorPoliciesAvailable(
+    state: CliState,
+    input: { readonly selectionPath: string },
+  ): Promise<boolean>;
   /** Docker resources a crashed run left behind; removed only when asked. */
   cleanupLeftovers(
     state: CliState,
@@ -1115,9 +1123,7 @@ export async function runCli(
             throw new UsageError(
               "A reproduction package is required for review Lab setup",
             );
-          // `continuous run` skips its Lab sweep while this pid lives.
-          const marker = join(state.stateDirectory, "review-lab.pid");
-          await writeFile(marker, String(process.pid), { mode: 0o600 });
+          const release = await holdLabSweep(state.stateDirectory, process.pid);
           try {
             await runForegroundReviewLab(
               () =>
@@ -1128,7 +1134,7 @@ export async function runCli(
               io,
             );
           } finally {
-            await rm(marker, { force: true });
+            await release();
           }
           return 0;
         }
