@@ -1,9 +1,15 @@
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import {
+  artifactId,
+  bytesDigest,
+} from "../../../infrastructure/content-digest.js";
 import { persistImmutableFile } from "../../../infrastructure/immutable-file.js";
-import { canonicalJson, sha256Digest } from "../acquisition/canonical-json.js";
+import {
+  canonicalJsonPreservingProperties,
+  canonicalDigestPreservingProperties,
+} from "../../../infrastructure/canonical-json.js";
 import {
   normalizedProgrammePolicySchema,
   programmeEligibilityFreshnessPolicySchema,
@@ -31,16 +37,12 @@ interface RetrievedPolicy {
   readonly policy: NormalizedProgrammePolicy;
 }
 
-function rawDigest(bytes: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-}
-
 function snapshotRef(snapshot: ProgrammeEligibilitySnapshot) {
-  const digest = sha256Digest(snapshot);
+  const digest = canonicalDigestPreservingProperties(snapshot);
   return programmeEligibilitySnapshotRefSchema.parse({
     kind: "programme-eligibility-snapshot-ref",
     schemaVersion: 1,
-    id: `programme-snapshot:${digest.slice(7, 31)}`,
+    id: artifactId("programme-snapshot", digest),
     digest,
   });
 }
@@ -119,7 +121,7 @@ class FileProgrammeIntelligence implements ProgrammeIntelligence {
         sourceId: adapter.sourceId,
         sourceUrl: adapter.sourceUrl,
         retrievedAt,
-        contentDigest: rawDigest(bytes),
+        contentDigest: bytesDigest(bytes),
         parserVersion: adapter.parserVersion,
       });
       let policy: NormalizedProgrammePolicy;
@@ -135,7 +137,7 @@ class FileProgrammeIntelligence implements ProgrammeIntelligence {
                   sourceId: sourceAdapter.sourceId,
                   sourceUrl: sourceAdapter.sourceUrl,
                   retrievedAt,
-                  contentDigest: rawDigest(sourceBytes),
+                  contentDigest: bytesDigest(sourceBytes),
                   parserVersion: sourceAdapter.parserVersion,
                 }),
             ),
@@ -163,8 +165,13 @@ class FileProgrammeIntelligence implements ProgrammeIntelligence {
       throw new Error("Programme Intelligence lost its required source");
     }
     const sources = retrieved.map(({ source }) => source);
-    const firstPolicy = canonicalJson(first.policy);
-    if (retrieved.some(({ policy }) => canonicalJson(policy) !== firstPolicy)) {
+    const firstPolicy = canonicalJsonPreservingProperties(first.policy);
+    if (
+      retrieved.some(
+        ({ policy }) =>
+          canonicalJsonPreservingProperties(policy) !== firstPolicy,
+      )
+    ) {
       return {
         status: "policy-conflict",
         programmeIdentity: request.programmeIdentity,
@@ -217,7 +224,10 @@ class FileProgrammeIntelligence implements ProgrammeIntelligence {
     snapshot: ProgrammeEligibilitySnapshot,
   ): Promise<ProgrammeEligibilitySnapshotRef> {
     const ref = snapshotRef(snapshot);
-    const bytes = Buffer.from(canonicalJson(snapshot), "utf8");
+    const bytes = Buffer.from(
+      canonicalJsonPreservingProperties(snapshot),
+      "utf8",
+    );
     const directory = join(this.#storageDirectory, "programme-snapshots");
     const path = join(directory, `${ref.digest.slice(7)}.json`);
     if ((await persistImmutableFile(path, bytes)) === "conflict") {
@@ -240,7 +250,7 @@ class FileProgrammeIntelligence implements ProgrammeIntelligence {
       JSON.parse(bytes.toString("utf8")),
     );
     if (
-      sha256Digest(snapshot) !== ref.digest ||
+      canonicalDigestPreservingProperties(snapshot) !== ref.digest ||
       snapshotRef(snapshot).id !== ref.id
     ) {
       throw new Error("Programme Eligibility Snapshot integrity mismatch");

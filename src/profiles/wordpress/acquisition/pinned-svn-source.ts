@@ -16,8 +16,10 @@ import {
   SourceAcquisitionError,
   type AcquiredSource,
 } from "../../../snapshot/index.js";
-import { openLocalDirectoryTargetIntake } from "./local-directory-target-intake.js";
-import { acquiredSourceFromIntakePacket } from "./intake-packet-source.js";
+import {
+  acquiredSourceFromIntakePacket,
+  openLocalDirectoryTargetIntake,
+} from "./local-directory-target-intake.js";
 import {
   targetIntakePacketSchema,
   targetIntakePolicySchema,
