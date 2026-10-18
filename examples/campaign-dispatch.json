@@ -16,7 +16,7 @@
     "concurrency": 4
   },
   "resources": {
-    "maxConcurrentRuns": 4,
+    "maxConcurrentRuns": 1,
     "maxConcurrentTargets": 1,
     "memoryBudgetMiB": 10240
   },

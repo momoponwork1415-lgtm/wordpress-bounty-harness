@@ -120,7 +120,7 @@ it("loads the checked-in dispatch campaign and pins its development target", asy
       taskMaxRequests: 150,
       concurrency: 4,
     },
-    resources: { maxConcurrentRuns: 4, maxConcurrentTargets: 1 },
+    resources: { maxConcurrentRuns: 1, maxConcurrentTargets: 1 },
     selectionPolicyPath: "examples/translatepress-3.2.6/selection.json",
   });
   const production = wordpressCampaignConfigSchema.parse(
