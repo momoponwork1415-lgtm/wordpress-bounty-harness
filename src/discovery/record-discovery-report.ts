@@ -69,6 +69,10 @@ type RecorderOptions = {
    * として残し、検証 queue と review queue には入れない（#185）。省略時は全件 Finding。
    */
   readonly isProgrammeImpact?: (impact: string) => boolean;
+  readonly classifyFindingPrecondition?: (finding: AdmittedFinding) => {
+    readonly preconditionClass: string;
+    readonly park: boolean;
+  };
 };
 
 async function holdCandidate(
@@ -187,6 +191,7 @@ async function recordFindingCandidate(
   const findingDigest = await options.evidence.putFiles({
     "finding.json": canonicalJson(finding),
   });
+  const precondition = options.classifyFindingPrecondition?.(finding);
   if (
     options.isProgrammeImpact !== undefined &&
     !options.isProgrammeImpact(finding.impact)
@@ -201,6 +206,25 @@ async function recordFindingCandidate(
       runId: ownerRunId,
       category: finding.impact,
       reason: "outside-programme-boundary",
+      ...(precondition === undefined
+        ? {}
+        : { preconditionClass: precondition.preconditionClass }),
+    });
+    if (parked.status === "conflict")
+      throw new Error("Parked finding identity conflict");
+    return;
+  }
+  if (precondition?.park === true) {
+    const parked = await options.ledger.append({
+      ...options.base,
+      artifacts: [{ kind: "finding", digest: findingDigest }],
+      identity: `discovery-finding-parked-${finding.findingId}`,
+      type: "finding-parked",
+      findingId: finding.findingId,
+      runId: ownerRunId,
+      category: finding.impact,
+      reason: "admin-configuration-precondition",
+      preconditionClass: precondition.preconditionClass,
     });
     if (parked.status === "conflict")
       throw new Error("Parked finding identity conflict");
@@ -214,6 +238,9 @@ async function recordFindingCandidate(
     findingId: finding.findingId,
     runId: ownerRunId,
     category: finding.impact,
+    ...(precondition === undefined
+      ? {}
+      : { preconditionClass: precondition.preconditionClass }),
     ...(finding.historyRecordId === undefined
       ? {}
       : { historyRecordId: finding.historyRecordId }),

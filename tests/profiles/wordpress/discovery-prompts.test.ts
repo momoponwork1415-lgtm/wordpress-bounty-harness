@@ -6,9 +6,11 @@ import { z } from "zod";
 
 import { wordpressFindingClaimSchema } from "../../../src/profiles/wordpress/discovery/finding.js";
 import { wordpressLeadClaimSchema } from "../../../src/profiles/wordpress/discovery/lead.js";
+import { wordpressCoverageRecordSchema } from "../../../src/profiles/wordpress/discovery/coverage.js";
 import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
+  wordPressDiscoveryOutputContractV3,
 } from "../../../src/profiles/wordpress/discovery/output-contract.js";
 
 import {
@@ -112,6 +114,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v3",
       "wp2shell-bounty-v4",
       "wp2shell-bounty-v5",
+      "wp2shell-bounty-v6",
       "wp2shell-whitebox-v1.7",
       "trust-boundary-v1",
       "refute-v1",
@@ -133,6 +136,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v3",
       "wp2shell-bounty-v4",
       "wp2shell-bounty-v5",
+      "wp2shell-bounty-v6",
       "wp2shell-whitebox-v1.7",
     ]);
 
@@ -200,6 +204,23 @@ describe("WordPress discovery prompt assets", () => {
     );
   });
 
+  it("generates the Root coverage contract from the WordPress schema", () => {
+    const current = wordPressDiscoveryOutputContractV3();
+    const schema = JSON.parse(current.text.split("Coverage schema: ")[1]!);
+    expect(current.id).toBe("wordpress-discovery-contract-v3");
+    expect(schema).toEqual(
+      z.toJSONSchema(wordpressCoverageRecordSchema, { io: "output" }),
+    );
+    expect(current.text).toContain("Children do not report `coverage`");
+    expect(current.text).toContain("Include every listed id once");
+    expect(current.text).toContain("more than 0.2 of entries");
+    expect(wordPressDiscoveryOutputContractV3(0.3).digest).not.toBe(
+      current.digest,
+    );
+    expect(current.text).not.toMatch(/checklist|30 minutes/i);
+    expect(current.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+  });
+
   it("keeps the new objective assets free of the claim contract", async () => {
     const pins = {
       "short-objective-managed-v5":
@@ -212,6 +233,8 @@ describe("WordPress discovery prompt assets", () => {
         "sha256:6c823fe2ddb8a9af27ea743927f5d4a8203ec29ef4bca7dbadf3135c1739ab62",
       "wp2shell-bounty-v5":
         "sha256:59c6bd1bb5fd5ef7618ce180de7f2d90af68fa4bcba26f90aa31aa3679d80cda",
+      "wp2shell-bounty-v6":
+        "sha256:3b85b6bdacd3181da779fd6cc1eec5c45c9e01d4f16e80163fdab4e62dff3503",
       "wp2shell-whitebox-v1.7":
         "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",
     } as const;
@@ -336,6 +359,27 @@ describe("WordPress discovery prompt assets", () => {
     );
   });
 
+  it("pins v6's index closure rule and keeps its source-derived class paragraphs", async () => {
+    const v6 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v6");
+    const v17 = await loadWordPressDiscoveryAsset("wp2shell-whitebox-v1.7");
+    const sourceLines = v17.text.split("\n");
+    for (const line of [19, 23])
+      expect(v6.text).toContain(sourceLines[line - 1]);
+    expect(v6.text).toContain(
+      sourceLines[20]!
+        .split("An option that changes what a page looks like")[0]!
+        .trimEnd(),
+    );
+    expect(v6.text).not.toContain(
+      "An option that changes what a page looks like",
+    );
+    expect(v6.text).toContain(
+      "every item in the Harness-provided entry index as `observed` or `blocked`",
+    );
+    expect(v6.text).toContain("do not apply this closure condition");
+    expect(v6.text).not.toMatch(/at least\s+\d+\s+(?:minutes?|hours?)/i);
+  });
+
   it("pins the v2 bytes and excludes answer clues and scripted commands", async () => {
     const pins = {
       "short-objective-v2":
@@ -391,7 +435,7 @@ describe("WordPress discovery prompt assets", () => {
   it("keeps both variants within the same attacker, operation, impact and Finding contract", async () => {
     for (const id of WORDPRESS_DISCOVERY_PROMPT_IDS) {
       const { text } = await loadWordPressDiscoveryAsset(id);
-      if (id === "wp2shell-bounty-v5") {
+      if (id === "wp2shell-bounty-v5" || id === "wp2shell-bounty-v6") {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).
         expect(text).toContain("trust boundary");

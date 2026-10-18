@@ -40,7 +40,11 @@ import {
   type ReviewQueue,
   type StateDiffReader,
 } from "../review/index.js";
-import type { CampaignSummary, ReverificationSummary } from "./pipeline.js";
+import type {
+  CampaignSummary,
+  ReverificationSummary,
+  VerifyNextSummary,
+} from "./pipeline.js";
 import {
   continuousCommand,
   type ContinuousHostStatus,
@@ -179,6 +183,8 @@ export interface CliProfile {
       readonly configPath: string;
       /** A profile target name, or null for every selected target. */
       readonly target: string | null;
+      /** Explicit independent Trials on the same Snapshot. */
+      readonly repeat?: number;
       /** Retry an incomplete independent verification on the same Lab setup. */
       readonly retryIncompleteVerifications?: boolean;
       /** Checked before each next target; true drains the campaign as `operator`. */
@@ -202,6 +208,15 @@ export interface CliProfile {
       readonly verdict: "refuted" | "upheld" | "undecided";
     }[]
   >;
+  /** Verify one unverified or retry-eligible Finding in a fresh Lab. */
+  verifyNext?(
+    state: CliState,
+    input: {
+      readonly campaignId?: string;
+      readonly campaignPrefix?: string;
+      readonly configPath: string;
+    },
+  ): Promise<VerifyNextSummary | null>;
   /** The target's newest public version, observed once; absent without a host. */
   latestVersion?(
     state: CliState,
@@ -287,8 +302,8 @@ export type CliEnvironment = {
 const USAGE = [
   "usage: harness [--state <dir>] <command>",
   "  select --config <path> [--minimum <n>]",
-  "  campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--retry-incomplete]",
-  "  continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--notify <command>] [--resume]",
+  "  campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--repeat <n>] [--retry-incomplete]",
+  "  continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--verify-concurrency <n>] [--notify <command>] [--resume]",
   "  continuous stop",
   "  continuous resume",
   "  continuous status",
@@ -302,6 +317,7 @@ const USAGE = [
   "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
   "  review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>]",
+  "  verify next --campaign <id> --config <path>",
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
   "  review authorize --candidate <id> --draft <digest> --to <destination> [--by <name>]",
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
@@ -359,6 +375,8 @@ const options = {
   remove: { type: "boolean" },
   "for-review": { type: "boolean" },
   "retry-incomplete": { type: "boolean" },
+  repeat: { type: "string" },
+  "verify-concurrency": { type: "string" },
   port: { type: "string" },
   "db-port": { type: "string" },
   since: { type: "string" },
@@ -495,6 +513,8 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
   const lines = [
     `campaign ${funnel.campaignId}`,
     `agent runs ${funnel.runCount} (discovery attempts ${funnel.discoveryAttempts})  ${cost}  summed agent time ${(funnel.wallTimeMs / 1000).toFixed(1)}s`,
+    `incomplete(depth) ${funnel.incompleteDepth}`,
+    `by Lab: attached runs ${funnel.byLab.attached.runs} findings ${funnel.byLab.attached.findings} confirmed ${funnel.byLab.attached.confirmed}; none runs ${funnel.byLab.none.runs} findings ${funnel.byLab.none.findings} confirmed ${funnel.byLab.none.confirmed}; verification Lab failed ${funnel.verificationLabFailed}`,
     stages(funnel),
     `refutation ${funnel.refutation.processed} processed  ${funnel.refutation.after} after  verdicts ${Object.entries(
       funnel.refutation.byVerdict,
@@ -637,6 +657,7 @@ export function formatQueue(
   )
     lines.push("review queue is empty");
   lines.push(`incomplete by reason: ${counts(queue.incompleteByReason)}`);
+  lines.push(`precondition class: ${counts(queue.preconditionClassCounts)}`);
   lines.push(
     `retry candidates by reason: ${counts(queue.retryPendingByReason)}`,
   );
@@ -860,6 +881,10 @@ export async function runCli(
           campaignPrefix: values["campaign-prefix"] ?? "prod",
           notify: values.notify,
           resume: values.resume ?? false,
+          verifyConcurrency:
+            values["verify-concurrency"] === undefined
+              ? 1
+              : Number(values["verify-concurrency"]),
         });
       case "select": {
         const minimum =
@@ -901,6 +926,9 @@ export async function runCli(
       }
       case "campaign run": {
         const target = rest[0] ?? null;
+        const repeat = values.repeat === undefined ? 1 : Number(values.repeat);
+        if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > 40)
+          throw new UsageError("--repeat must be an integer from 1 to 40");
         if ((target === null) === (values.all !== true) || rest.length > 1)
           throw new UsageError(
             "campaign run takes exactly one of <slug> or --all",
@@ -909,6 +937,7 @@ export async function runCli(
           campaignId: required(values.campaign, "campaign"),
           configPath: resolve(required(values.config, "config")),
           target,
+          repeat,
           retryIncompleteVerifications: values["retry-incomplete"] === true,
           ...(values.selection === undefined
             ? {}
@@ -987,7 +1016,7 @@ export async function runCli(
         return 0;
       }
       case "review parked": {
-        // Programme Boundary 外に置いた Finding の 1 行一覧。ラベル付けミスの安全網（#185）。
+        // Parked Findings remain inspectable by reason without joining the review queue.
         const parked = state.ledger.read({
           ...campaignOrSince(values),
           type: "finding-parked",
@@ -1014,7 +1043,9 @@ export async function runCli(
                 property = parsedFinding.data.brokenProperty;
             }
           }
-          print([`parked  ${event.category}  ${event.findingId}  ${property}`]);
+          print([
+            `parked  ${event.category}  ${event.findingId}  ${property}  reason: ${event.reason}`,
+          ]);
         }
         return 0;
       }
@@ -1152,6 +1183,20 @@ export async function runCli(
         });
         io.stdout(
           `reverified finding ${values.finding} as ${summary.findingId} on ${summary.targetId} ${summary.version}  snapshot ${summary.snapshotDigest}  verification ${summary.verificationId}: ${summary.status}`,
+        );
+        return 0;
+      }
+      case "verify next": {
+        if (environment.profile.verifyNext === undefined)
+          throw new Error("verify next needs a verification profile");
+        const summary = await environment.profile.verifyNext(state, {
+          campaignId: required(values.campaign, "campaign"),
+          configPath: resolve(required(values.config, "config")),
+        });
+        io.stdout(
+          summary === null
+            ? "no verification pending"
+            : `verified finding ${summary.findingId} as ${summary.verificationId}: ${summary.status}`,
         );
         return 0;
       }

@@ -42,7 +42,7 @@ export interface CampaignPipeline<
   readonly discovery: (input: {
     readonly target: Target;
     readonly snapshot: Snapshot;
-    readonly lab: Handle;
+    readonly lab?: Handle;
   }) => Promise<{
     readonly input: CampaignInputV1;
     readonly plannedTrials: readonly PlannedTrial[];
@@ -56,6 +56,9 @@ export interface CampaignPipeline<
     readonly isProgrammeImpact?: NonNullable<
       DiscoveryOptions["isProgrammeImpact"]
     >;
+    readonly classifyFindingPrecondition?: NonNullable<
+      DiscoveryOptions["classifyFindingPrecondition"]
+    >;
     readonly normalizeCandidate?: NonNullable<
       DiscoveryOptions["normalizeCandidate"]
     >;
@@ -64,6 +67,7 @@ export interface CampaignPipeline<
     >;
     readonly admitLead?: NonNullable<DiscoveryOptions["admitLead"]>;
     readonly leadSignature?: NonNullable<DiscoveryOptions["leadSignature"]>;
+    readonly assessCoverage?: NonNullable<DiscoveryOptions["assessCoverage"]>;
   }>;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
   readonly refuteFinding?: (input: {
@@ -168,7 +172,7 @@ export type CampaignSummary = {
     readonly targetId: string;
     readonly version: string;
     readonly snapshotDigest: string;
-    readonly lab: "ready" | "failed";
+    readonly lab: "ready" | "failed" | "none";
     readonly runCount: number;
     readonly stoppedBy: string;
     readonly verifications: readonly {
@@ -200,6 +204,8 @@ export async function runCampaignPipeline<
   readonly newId: () => string;
   /** Targets in flight at once; discovery run concurrency remains per target. */
   readonly maxConcurrentTargets?: number;
+  readonly discoveryLab?: "attached" | "none";
+  readonly repeat?: number;
   /** An explicit operator retry after repairing the Verifier protocol. */
   readonly retryIncompleteVerifications?: boolean;
   /** Disable ADR 0022 automatic retries to restore the prior single-attempt behavior. */
@@ -267,16 +273,6 @@ export async function runCampaignPipeline<
     findingsBySnapshot.set(event.snapshotDigest, findings);
   }
   const verificationHistory = new Map<string, VerificationRecord[]>();
-  const refutedFindings = new Set(
-    readAll(ledger, { campaignId, type: "finding-parked" })
-      .filter(
-        ({ event }) =>
-          event.type === "finding-parked" && event.reason === "refuted",
-      )
-      .map(({ event }) =>
-        event.type === "finding-parked" ? event.findingId : "",
-      ),
-  );
   const refutations = new Set(
     readAll(ledger, { campaignId, type: "refutation-recorded" })
       .filter(({ event }) => event.type === "refutation-recorded")
@@ -311,8 +307,17 @@ export async function runCampaignPipeline<
     );
     if (snapshotDigest === undefined || !concludedSnapshots.has(snapshotDigest))
       return false;
+    if (options.discoveryLab === "none") return true;
     return (findingsBySnapshot.get(snapshotDigest) ?? []).every((findingId) => {
-      if (refutedFindings.has(findingId)) return true;
+      if (
+        ledger.read({
+          campaignId,
+          findingId,
+          type: "finding-parked",
+          limit: 1,
+        }).length > 0
+      )
+        return true;
       if (pipeline.refuteFinding !== undefined && !refutations.has(findingId))
         return false;
       const history =
@@ -451,6 +456,55 @@ export async function runCampaignPipeline<
       });
 
       stage = "discovery";
+      if (options.discoveryLab === "none") {
+        const prepared = await pipeline.discovery({ target, snapshot });
+        const discovered = await runDiscoveryCampaign({
+          campaignId,
+          ledger,
+          evidence: options.store,
+          clock,
+          ...prepared,
+          repeatAll: (options.repeat ?? 1) > 1,
+        });
+        result.target = {
+          targetId: target.targetId,
+          version: target.version,
+          snapshotDigest: snapshot.digest,
+          lab: "none",
+          runCount: discovered.runCount,
+          stoppedBy: discovered.stoppedBy,
+          verifications: [],
+        };
+        if (
+          discovered.stoppedBy === "provider-limit" &&
+          discovered.runCount > 0
+        ) {
+          requestStop("provider-limit");
+          await append({
+            ...base,
+            identity: `campaign-stopped-${options.newId()}`,
+            occurredAt: at(),
+            type: "campaign-stopped",
+            reason: "provider-limit",
+          });
+        } else if (
+          discovered.stoppedBy === "incomplete" &&
+          discovered.runCount > 0
+        ) {
+          await append({
+            ...base,
+            identity: `target-skipped-${options.newId()}`,
+            occurredAt: at(),
+            type: "target-skipped",
+            selectionId,
+            stage: "discovery",
+            reason: refusedTrial(snapshot.digest)
+              ? "provider-refused"
+              : "run-failed",
+          });
+        }
+        return;
+      }
       const provisioned = await pipeline.lab.provision(snapshot, setup);
       if (provisioned.status === "ready") handle = provisioned.handle;
       const seeded =
@@ -543,6 +597,9 @@ export async function runCampaignPipeline<
         lab: provisioned.handle,
       });
       const campaignInput = prepared.input;
+      const campaignLabSetupDigest = campaignInput.lab.setupDigest;
+      if (campaignLabSetupDigest === undefined)
+        throw new Error("Attached discovery is missing its Lab setup digest");
       const discovered = await runDiscoveryCampaign({
         campaignId,
         labId,
@@ -551,6 +608,7 @@ export async function runCampaignPipeline<
         clock,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...prepared,
+        repeatAll: (options.repeat ?? 1) > 1,
       });
       const summary = {
         targetId: target.targetId,
@@ -605,18 +663,24 @@ export async function runCampaignPipeline<
       };
       for (const { event } of findings) {
         if (event.type !== "finding-recorded") continue;
-        if (refutedFindings.has(event.findingId)) continue;
-        if (pipeline.refuteFinding !== undefined) {
-          const refuted = await pipeline.refuteFinding({
+        if (
+          ledger.read({
+            campaignId,
+            findingId: event.findingId,
+            type: "finding-parked",
+            limit: 1,
+          }).length > 0
+        )
+          continue;
+        if (
+          pipeline.refuteFinding !== undefined &&
+          (await pipeline.refuteFinding({
             campaignId,
             findingId: event.findingId,
             snapshotDigest: snapshot.digest,
-          });
-          if (refuted) {
-            refutedFindings.add(event.findingId);
-            continue;
-          }
-        }
+          }))
+        )
+          continue;
         // The Verifier shares the subscription; a usage limit stops the campaign.
         if (stopped === "provider-limit") break;
         const history = earlier.filter(
@@ -634,7 +698,7 @@ export async function runCampaignPipeline<
           if (previous.event.result.status !== "incomplete") return false;
           if (options.automaticVerificationRetries === false)
             return (
-              previous.event.labSetupDigest !== campaignInput.lab.setupDigest ||
+              previous.event.labSetupDigest !== campaignLabSetupDigest ||
               options.retryIncompleteVerifications === true
             );
           if (
@@ -650,7 +714,7 @@ export async function runCampaignPipeline<
           const reason = previous.event.result.reason;
           const attemptsForReason = history.filter(({ event: prior }) => {
             if (
-              prior.labSetupDigest !== campaignInput.lab.setupDigest ||
+              prior.labSetupDigest !== campaignLabSetupDigest ||
               prior.promptVersion !== previous.event.promptVersion ||
               prior.result.status !== "incomplete"
             )
@@ -661,7 +725,7 @@ export async function runCampaignPipeline<
             reason,
             attemptsForReason,
             sameLabSetup:
-              previous.event.labSetupDigest === campaignInput.lab.setupDigest,
+              previous.event.labSetupDigest === campaignLabSetupDigest,
             previousScenarioId: scenarioForVerification(
               previous,
               labs,
@@ -684,7 +748,7 @@ export async function runCampaignPipeline<
               : { retryOf: previous.verificationId }),
             snapshot,
             setup,
-            campaignLabSetupDigest: campaignInput.lab.setupDigest,
+            campaignLabSetupDigest,
             reconstruction: pipeline.reconstructionFor(snapshot),
           });
           const recorded = readAll(ledger, {
@@ -879,6 +943,177 @@ export type ReverificationSummary = {
   readonly verificationId: string;
   readonly status: VerificationResultV1["status"];
 };
+
+export type VerifyNextSummary = {
+  readonly campaignId: string;
+  readonly findingId: string;
+  readonly verificationId: string;
+  readonly status: VerificationResultV1["status"];
+};
+
+const verificationInFlight = new Set<string>();
+
+/** Consume one unverified or bounded-retry Finding without starting a discovery Lab. */
+export async function verifyNextFinding<
+  Setup extends { readonly scenario?: { readonly id: string } | undefined },
+  Handle extends LabHandle,
+  Finding extends VerifiableFinding,
+  Reconstruction,
+>(options: {
+  readonly campaignId?: string;
+  readonly campaignPrefix?: string;
+  readonly ledger: Ledger;
+  readonly newId: () => string;
+  readonly loadSnapshot: (digest: string) => Promise<Snapshot>;
+  readonly setupFor: (snapshot: Snapshot) => Setup;
+  readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
+  readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
+  readonly refuteFinding?: (input: {
+    readonly campaignId: string;
+    readonly findingId: string;
+  }) => Promise<void>;
+}): Promise<VerifyNextSummary | null> {
+  const findings = readAll(options.ledger, {
+    ...(options.campaignId === undefined
+      ? {}
+      : { campaignId: options.campaignId }),
+    type: "finding-recorded",
+  });
+  const histories = readAll(options.ledger, {
+    ...(options.campaignId === undefined
+      ? {}
+      : { campaignId: options.campaignId }),
+    type: "verification-finished",
+  });
+  const labs = readAll(options.ledger, {
+    ...(options.campaignId === undefined
+      ? {}
+      : { campaignId: options.campaignId }),
+    type: "lab-provisioned",
+  });
+  for (const { event } of findings) {
+    if (
+      event.type !== "finding-recorded" ||
+      event.derivationKind === "fixed-version-control"
+    )
+      continue;
+    if (
+      options.campaignPrefix !== undefined &&
+      !event.campaignId.startsWith(`${options.campaignPrefix}-`)
+    )
+      continue;
+    const parked = () =>
+      options.ledger.read({
+        campaignId: event.campaignId,
+        findingId: event.findingId,
+        type: "finding-parked",
+        limit: 1,
+      }).length > 0;
+    if (parked()) continue;
+    const key = `${event.campaignId}\0${event.findingId}`;
+    if (verificationInFlight.has(key)) continue;
+    const history = histories.filter(
+      (record): record is VerificationRecord =>
+        record.event.type === "verification-finished" &&
+        record.event.campaignId === event.campaignId &&
+        record.event.findingId === event.findingId &&
+        record.event.basis === undefined,
+    );
+    const previous = history.at(-1);
+    if (previous !== undefined) {
+      if (previous.event.result.status !== "incomplete") continue;
+      if (previous.event.promptVersion !== options.verification.promptVersion)
+        continue;
+      const reason = previous.event.result.reason;
+      const attemptsForReason = history.filter(
+        ({ event: prior }) =>
+          prior.result.status === "incomplete" &&
+          prior.result.reason === reason &&
+          prior.labSetupDigest === previous.event.labSetupDigest &&
+          prior.promptVersion === previous.event.promptVersion,
+      ).length;
+      const previousScenarioId = scenarioForVerification(
+        previous,
+        labs,
+        event.snapshotDigest,
+      );
+      // Scenario-dependent retries are decided after loading the same pinned Snapshot.
+      if (
+        !shouldAutomaticallyRetryVerification({
+          reason,
+          attemptsForReason,
+          sameLabSetup: true,
+          previousScenarioId,
+          currentScenarioId: previousScenarioId,
+        }) &&
+        reason !== "precondition"
+      )
+        continue;
+    }
+    verificationInFlight.add(key);
+    try {
+      if (options.refuteFinding !== undefined) {
+        await options.refuteFinding({
+          campaignId: event.campaignId,
+          findingId: event.findingId,
+        });
+        const refutation = options.ledger
+          .read({
+            campaignId: event.campaignId,
+            findingId: event.findingId,
+            type: "refutation-recorded",
+            limit: 1,
+          })
+          .at(0)?.event;
+        if (refutation?.type !== "refutation-recorded" || parked()) continue;
+      }
+      const snapshot = await options.loadSnapshot(event.snapshotDigest);
+      const setup = options.setupFor(snapshot);
+      if (
+        previous?.event.result.status === "incomplete" &&
+        previous.event.result.reason === "precondition" &&
+        !shouldAutomaticallyRetryVerification({
+          reason: "precondition",
+          attemptsForReason: 1,
+          sameLabSetup: true,
+          previousScenarioId: scenarioForVerification(
+            previous,
+            labs,
+            event.snapshotDigest,
+          ),
+          currentScenarioId: setup.scenario?.id ?? null,
+        })
+      )
+        continue;
+      const verificationId = options.newId();
+      const result = await options.verification.verify({
+        campaignId: event.campaignId,
+        findingId: event.findingId,
+        verificationId,
+        attempt: Math.max(
+          history.length + 1,
+          (previous?.event.attempt ?? 0) + 1,
+        ),
+        ...(previous === undefined
+          ? {}
+          : { retryOf: previous.event.verificationId }),
+        snapshot,
+        setup,
+        campaignLabSetupDigest: canonicalDigest(setup),
+        reconstruction: options.reconstructionFor(snapshot),
+      });
+      return {
+        campaignId: event.campaignId,
+        findingId: event.findingId,
+        verificationId,
+        status: result.status,
+      };
+    } finally {
+      verificationInFlight.delete(key);
+    }
+  }
+  return null;
+}
 
 /**
  * Freezes the selected version. A new Snapshot gets a derived Finding; an

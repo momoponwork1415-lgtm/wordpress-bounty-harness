@@ -183,7 +183,6 @@ export async function refutePendingFindings(options: RefuteOptions): Promise<
       ...(source.dependency === undefined
         ? {}
         : { dependencySource: source.dependency }),
-      // The transport's legacy CampaignInput lab digest is metadata only here.
       campaignInput: {
         schemaVersion: 1,
         snapshotDigest: event.snapshotDigest,
@@ -192,7 +191,7 @@ export async function refutePendingFindings(options: RefuteOptions): Promise<
         modelProfileDigest: options.profile.digest,
         promptDigest: options.prompt.digest,
         stopRules: { maxRuns: 1, noFindingRuns: 1 },
-        lab: { setupDigest: event.snapshotDigest },
+        lab: { mode: "none" },
         history: { mode: "none" },
       },
       expiresAt: new Date(
