@@ -14,9 +14,12 @@ import {
   type AgentRuntimeProfile,
 } from "./agent-runtime-profile.js";
 import {
+  codexThreadIdSchema,
   createNativeRunReceipt,
+  isCodexSessionPath,
   nativeRunReceiptSchema,
   type NativeRunReceipt,
+  type NativeRunSession,
 } from "./native-run-receipts.js";
 import type {
   ProviderCredentialEgressBroker,
@@ -200,6 +203,20 @@ const reportJsonSchema = {
   required: ["findings", "leads", "examined", "unexamined"],
 } as const;
 
+/** Files one earlier segment left behind, restored before a resumed Root starts (ADR 0036). */
+export type CodexSandboxResumeSeed = {
+  readonly threadId: string;
+  /** Session files at their `sessions/`-relative paths; the Root's is among them. */
+  readonly sessions: readonly {
+    readonly path: string;
+    readonly content: string;
+  }[];
+  /** The Trial notes archive's complete files, relative to `/workspace/research`. */
+  readonly research: readonly {
+    readonly path: string;
+    readonly content: Buffer;
+  }[];
+};
 export interface CodexSandboxCommand {
   readonly executable: "codex";
   readonly args: readonly string[];
@@ -208,6 +225,8 @@ export interface CodexSandboxCommand {
   readonly minimumActiveMs?: number;
   readonly resumeArgs?: readonly string[];
   readonly resumePrompt?: string;
+  /** Operator-triggered resume: start with `exec resume <threadId>` on the restored session. */
+  readonly resume?: CodexSandboxResumeSeed;
   readonly supportFiles: readonly {
     readonly path: string;
     readonly content: string;
@@ -253,6 +272,8 @@ export interface CodexSandboxResult {
   readonly bundledCatalogDigest: string;
   /** Private CLI session records, including child threads omitted from --json stdout. */
   readonly rollouts?: readonly string[];
+  /** `rolloutPaths[i]` is the `sessions/`-relative path of `rollouts[i]`, when the sandbox reports it. */
+  readonly rolloutPaths?: readonly string[];
   readonly rolloutFailure?: "capture-failed";
   /** Canonical JSON archive of the Trial-local writable notes directory. */
   readonly research?: { readonly archive: Buffer; readonly truncated: boolean };
@@ -279,6 +300,12 @@ export interface DiscoveryTransportRun {
   readonly minimumActiveMs?: number;
   /** A versioned excerpt already present in prompt, used only for early Root resumes. */
   readonly resumePrompt?: string;
+  /**
+   * Operator-triggered continuation of an earlier segment's Root thread in a
+   * new sandbox (ADR 0036): the restored session files and notes, and which
+   * segment this run is. Children listed here were recorded by earlier segments.
+   */
+  readonly resume?: DiscoveryResumeInput;
   /** Screening uses one agent even when the runtime profile permits children. */
   readonly coordination?: "solo" | "cooperative";
   /** Verification uses the same isolated transport with a different sealed report. */
@@ -320,6 +347,33 @@ export interface DiscoveryTransportResult {
   }[];
 }
 
+const discoveryResumeInputSchema = z.strictObject({
+  threadId: codexThreadIdSchema,
+  segment: z.number().int().positive().max(64),
+  sessions: z
+    .array(
+      z.strictObject({
+        path: z.string().refine(isCodexSessionPath),
+        threadId: codexThreadIdSchema,
+        kind: z.enum(["root", "child"]),
+        /** Sealed in Private Evidence by the earlier segment; carried forward unchanged. */
+        diagnosticArtifactDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+        content: z.string().min(1),
+      }),
+    )
+    .min(1)
+    .max(256),
+  research: z
+    .array(
+      z.strictObject({
+        path: z.string().min(1).max(1024),
+        contentBase64: z.string(),
+      }),
+    )
+    .max(256),
+});
+export type DiscoveryResumeInput = z.infer<typeof discoveryResumeInputSchema>;
+
 const discoveryTransportRunSchema = z.strictObject({
   runId: z.string().min(1).max(128),
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
@@ -332,6 +386,7 @@ const discoveryTransportRunSchema = z.strictObject({
     .max(120 * 60_000)
     .optional(),
   resumePrompt: z.string().min(1).max(2_048).optional(),
+  resume: discoveryResumeInputSchema.optional(),
   coordination: z.enum(["solo", "cooperative"]).optional(),
   outputKind: z.literal("verification").optional(),
   lab: z
@@ -436,6 +491,20 @@ function rootThreadId(stdout: string): string | undefined {
     }
   }
   return undefined;
+}
+
+/** Root turns the segment started; the runner prints one `thread.started` per turn. */
+function rootTurnsStarted(stdout: string): number {
+  let turns = 0;
+  for (const line of stdout.split("\n")) {
+    try {
+      const event = object(JSON.parse(line) as unknown);
+      if (event?.type === "thread.started") turns++;
+    } catch {
+      // Not a transcript event.
+    }
+  }
+  return turns;
 }
 
 function rootThreadIdFromResult(
@@ -1043,6 +1112,9 @@ type ExecutionState = {
   rootObserved: Observed | undefined;
   brokerMetrics: NativeRunReceipt["brokerMetrics"] | undefined;
   sandboxExitCode: number | undefined;
+  /** Root thread, segment and session files; set once the Root rollout is captured. */
+  session: NativeRunSession | undefined;
+  childSessionFiles: NativeRunSession["files"];
   researchArtifact:
     | {
         readonly attachment: ProviderAttachmentRef;
@@ -1076,6 +1148,7 @@ function incompleteExecution(
       ...(state.rootDiagnosticArtifactDigest === undefined
         ? {}
         : { diagnosticArtifactDigest: state.rootDiagnosticArtifactDigest }),
+      ...(state.session === undefined ? {} : { session: state.session }),
       ...(state.rootUsage === undefined ? {} : { usage: state.rootUsage }),
       ...(state.rootObserved === undefined
         ? {}
@@ -1129,6 +1202,14 @@ function admittedRun(
     (run.resumePrompt === undefined ||
       (run.minimumActiveMs !== undefined &&
         run.prompt.includes(run.resumePrompt))) &&
+    (run.resume === undefined ||
+      (cooperative &&
+        run.minimumActiveMs !== undefined &&
+        run.resumePrompt !== undefined &&
+        run.resume.sessions.some(
+          (file) =>
+            file.kind === "root" && file.threadId === run.resume?.threadId,
+        ))) &&
     isAbsolute(run.sourceDirectory) &&
     (run.dependencySource === undefined ||
       isAbsolute(run.dependencySource.directory)) &&
@@ -1329,6 +1410,21 @@ function sandboxCommand(
           resumeArgs: codexResumeArgs(run, grant, login),
           resumePrompt: run.resumePrompt ?? run.prompt,
         }),
+    ...(run.resume === undefined
+      ? {}
+      : {
+          resume: {
+            threadId: run.resume.threadId,
+            sessions: run.resume.sessions.map(({ path, content }) => ({
+              path,
+              content,
+            })),
+            research: run.resume.research.map(({ path, contentBase64 }) => ({
+              path,
+              content: Buffer.from(contentBase64, "base64"),
+            })),
+          },
+        }),
     stdin: run.prompt,
     supportFiles: [
       {
@@ -1414,6 +1510,8 @@ export class CodexNativeAgentRuntime {
       rootObserved: undefined,
       brokerMetrics: undefined,
       sandboxExitCode: undefined,
+      session: undefined,
+      childSessionFiles: [],
       researchArtifact: undefined,
     };
     if (run.coordination === "cooperative" && !state.cooperative)
@@ -1571,13 +1669,14 @@ export class CodexNativeAgentRuntime {
     if (parentThreadId !== undefined) {
       const children = await this.#captureChildren(
         state.run,
-        result.rollouts ?? [],
+        result,
         parentThreadId,
         grantReceiptDigest,
       );
       state.agentRuns = children.agentRuns;
       state.childThreadsObserved = children.observed;
       state.childThreadsAdmitted = children.admitted;
+      state.childSessionFiles = children.sessionFiles;
       if (children.observed > 255)
         return {
           reason: "evidence",
@@ -1601,9 +1700,10 @@ export class CodexNativeAgentRuntime {
       return { reason: "evidence", reasonDetail: "rollout-capture-failed" };
     if (parentThreadId === undefined)
       return { reason: "schema", reasonDetail: "missing-root-thread-id" };
-    const rootRollout = (result.rollouts ?? []).find((raw) =>
+    const rootIndex = (result.rollouts ?? []).findIndex((raw) =>
       isRootRollout(raw, parentThreadId),
     );
+    const rootRollout = result.rollouts?.[rootIndex];
     if (rootRollout === undefined)
       return { reason: "evidence", reasonDetail: "root-rollout-missing" };
     try {
@@ -1611,7 +1711,52 @@ export class CodexNativeAgentRuntime {
     } catch {
       return { reason: "evidence", reasonDetail: "root-rollout-unavailable" };
     }
+    this.#recordSession(state, result, parentThreadId, rootIndex);
     return undefined;
+  }
+
+  /**
+   * The receipt names the Root thread and every session file Private Evidence
+   * holds for it, so an operator can restore the thread later (ADR 0036).
+   * Children of earlier segments keep the digests those segments sealed.
+   */
+  #recordSession(
+    state: ExecutionState,
+    result: CodexSandboxResult,
+    rootThreadId: string,
+    rootIndex: number,
+  ): void {
+    const rootPath = result.rolloutPaths?.[rootIndex];
+    const rootDigest = state.rootDiagnosticArtifactDigest;
+    if (
+      rootPath === undefined ||
+      !isCodexSessionPath(rootPath) ||
+      rootDigest === undefined
+    )
+      return;
+    const priorChildren = (state.run.resume?.sessions ?? [])
+      .filter((file) => file.kind === "child")
+      .map(({ path, threadId, diagnosticArtifactDigest }) => ({
+        path,
+        threadId,
+        kind: "child" as const,
+        diagnosticArtifactDigest,
+      }));
+    state.session = {
+      rootThreadId,
+      rootTurns: rootTurnsStarted(result.stdout),
+      segment: state.run.resume?.segment ?? 0,
+      files: [
+        {
+          path: rootPath,
+          threadId: rootThreadId,
+          kind: "root" as const,
+          diagnosticArtifactDigest: rootDigest,
+        },
+        ...priorChildren,
+        ...state.childSessionFiles,
+      ].slice(0, 256),
+    };
   }
 
   async #retainRootCandidate(
@@ -1691,17 +1836,23 @@ export class CodexNativeAgentRuntime {
 
   async #captureChildren(
     run: DiscoveryTransportRun,
-    rollouts: readonly string[],
+    result: CodexSandboxResult,
     parentThreadId: string,
     grantReceiptDigest: string,
   ): Promise<{
     agentRuns: AgentRun[];
     observed: number;
     admitted: number;
+    sessionFiles: NativeRunSession["files"];
   }> {
-    const seen = new Set<string>();
+    // Children restored from an earlier segment were recorded by that segment.
+    const seen = new Set<string>(
+      (run.resume?.sessions ?? [])
+        .filter((file) => file.kind === "child")
+        .map((file) => file.threadId),
+    );
     const children: { child: ChildRollout; raw: string; order: number }[] = [];
-    for (const [order, raw] of rollouts.entries()) {
+    for (const [order, raw] of (result.rollouts ?? []).entries()) {
       const child = decodeChildRollout(raw, parentThreadId);
       if (child === undefined || seen.has(child.threadId)) continue;
       seen.add(child.threadId);
@@ -1714,14 +1865,35 @@ export class CodexNativeAgentRuntime {
     // max_threads=4 bounds live children, not the number of waves in a Trial.
     const admitted = children.slice(0, 255);
     const agentRuns: AgentRun[] = [];
-    for (const { child, raw } of admitted)
-      agentRuns.push(
-        await this.#captureChild(run, child, raw, grantReceiptDigest),
+    const sessionFiles: NativeRunSession["files"][number][] = [];
+    for (const { child, raw, order } of admitted) {
+      const agentRun = await this.#captureChild(
+        run,
+        child,
+        raw,
+        grantReceiptDigest,
       );
+      agentRuns.push(agentRun);
+      const path = result.rolloutPaths?.[order];
+      const digest = agentRun.receipt.diagnosticArtifactDigest;
+      if (
+        !child.captureTruncated &&
+        path !== undefined &&
+        isCodexSessionPath(path) &&
+        digest !== undefined
+      )
+        sessionFiles.push({
+          path,
+          threadId: child.threadId,
+          kind: "child",
+          diagnosticArtifactDigest: digest,
+        });
+    }
     return {
       agentRuns,
       observed: children.length,
       admitted: admitted.filter(({ child }) => !child.captureTruncated).length,
+      sessionFiles,
     };
   }
 
@@ -2009,6 +2181,7 @@ export class CodexNativeAgentRuntime {
         ...(state.rootDiagnosticArtifactDigest === undefined
           ? {}
           : { diagnosticArtifactDigest: state.rootDiagnosticArtifactDigest }),
+        ...(state.session === undefined ? {} : { session: state.session }),
         grantReceiptDigest,
         reportArtifactDigest: attachment.digest,
       }),

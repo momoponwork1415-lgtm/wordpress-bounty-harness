@@ -1221,6 +1221,95 @@ describe("Ledger public interface", () => {
     });
   });
 
+  it("counts a resumed segment's Trial once while old runs keep their counts (ADR 0036)", async () => {
+    const { ledger } = await fixture();
+    const start = (
+      runId: string,
+      extra: Record<string, unknown> = {},
+      promptVariant = "wp2shell-bounty-v8",
+    ) =>
+      ledger.append({
+        ...common(`start-${runId}`),
+        type: "discovery-run-started",
+        runId,
+        trialId: extra.trialId === undefined ? runId : String(extra.trialId),
+        trialOrdinal: 0,
+        runKind: "explore",
+        labAttached: false,
+        history: { mode: "none" },
+        configuration: { promptVariant, assignmentUnit: "plugin" },
+        ...extra,
+      });
+    const finish = (
+      runId: string,
+      outcome: "failed" | "completed",
+      wallTimeMs: number,
+    ) =>
+      ledger.append({
+        ...common(`finish-${runId}`),
+        type: "discovery-run-finished",
+        runId,
+        outcome,
+        costUsd: "unavailable",
+        wallTimeMs,
+        ...(outcome === "failed"
+          ? { reason: "provider", reasonDetail: "provider-cyber-policy" }
+          : {}),
+        artifacts: [],
+      });
+    // An older explore run without any resume field counts as before.
+    expect(await start("old-run", {}, "wp2shell-bounty-v5")).toEqual({
+      status: "appended",
+    });
+    await finish("old-run", "completed", 1_000);
+    expect(await start("refused-run")).toEqual({ status: "appended" });
+    await finish("refused-run", "failed", 2_000);
+    expect(
+      await start("refused-run-resume", {
+        trialId: "refused-run",
+        resumesRun: "refused-run",
+        resumeSegment: 1,
+      }),
+    ).toEqual({ status: "appended" });
+    await finish("refused-run-resume", "completed", 3_000);
+    const [, , resumed] = ledger
+      .read({ type: "discovery-run-started" })
+      .map(({ event }) => event);
+    expect(resumed).toMatchObject({
+      runId: "refused-run-resume",
+      resumesRun: "refused-run",
+      resumeSegment: 1,
+    });
+    const funnel = ledger.funnel("campaign-1");
+    expect(funnel).toMatchObject({
+      discoveryAttempts: 2,
+      runCount: 3,
+      wallTimeMs: 6_000,
+      byLab: { none: { runs: 2 }, attached: { runs: 0 } },
+    });
+    expect(funnel.byObjective["wp2shell-bounty-v8"]).toMatchObject({
+      runs: 1,
+      wallTimeMs: 5_000,
+    });
+    expect(funnel.byObjective["wp2shell-bounty-v5"]).toMatchObject({
+      runs: 1,
+      wallTimeMs: 1_000,
+    });
+    // Both finishes stay readable; the refusal is still a stop.
+    expect(ledger.stops({ campaignId: "campaign-1" })).toMatchObject([
+      {
+        type: "discovery-run-finished",
+        fields: {
+          outcome: "failed",
+          reason: "provider",
+          reasonDetail: "provider-cyber-policy",
+        },
+        count: 1,
+        explore: 1,
+      },
+    ]);
+  });
+
   it("records a Finding reference only to a catalog record given to that run", async () => {
     const { ledger } = await fixture();
     expect(

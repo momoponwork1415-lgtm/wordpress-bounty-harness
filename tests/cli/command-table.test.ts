@@ -43,6 +43,8 @@ const PINNED_USAGE = [
   "  lab up --for-review --campaign <id> --finding <id>",
   "  lab up --campaign <id> --finding <id> --config <path> [--port <n>] [--db-port <n>]",
   "  lab down [--config <path>]",
+  // Added after the table (ADR 0036); registered last so the pinned lines above stay in place.
+  "  campaign resume --campaign <id> --run <runId> --config <path>",
 ].join("\n");
 
 const directories: string[] = [];

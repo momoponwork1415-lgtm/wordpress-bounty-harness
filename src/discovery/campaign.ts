@@ -73,6 +73,8 @@ export type PlannedTrial = {
   readonly trialId: string;
   readonly trialOrdinal: number;
   readonly explore: PlannedDiscoveryRun;
+  /** Set only by an operator-triggered resume (ADR 0036): the refused run this segment continues. */
+  readonly resumes?: { readonly runId: string; readonly segment: number };
 };
 
 export type DiscoveryStop =

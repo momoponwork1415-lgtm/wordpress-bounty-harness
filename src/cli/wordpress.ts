@@ -3,7 +3,11 @@ import { dirname, join } from "node:path";
 
 import { z } from "zod";
 
-import { DISCOVERY_LEFTOVER_PATTERNS } from "../discovery/index.js";
+import {
+  assessTrialResume,
+  DISCOVERY_LEFTOVER_PATTERNS,
+  executeTrialResume,
+} from "../discovery/index.js";
 import type { PlannedDiscoveryRun } from "../discovery/index.js";
 import { Review } from "../review/index.js";
 import { targetSelectionId } from "../selection/index.js";
@@ -494,6 +498,113 @@ export function wordPressDiscoveryContractPlan(id: string): {
   };
 }
 
+type WordPressDiscoverySource = Awaited<
+  ReturnType<WordPressCampaignBoundaries["sourceFor"]>
+>;
+
+/** ADR 0033: the Root explores at least this long; a resumed segment inherits what is left of it. */
+const WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS = 60 * 60_000;
+
+function wordPressOutputContractFor(id: string) {
+  const { contract } = wordPressDiscoveryContractPlan(id);
+  if (contract === null)
+    throw new Error("Prompt carries its own output contract");
+  return {
+    v1: wordPressDiscoveryOutputContract,
+    v2: wordPressDiscoveryOutputContractV2,
+    v4: wordPressDiscoveryOutputContractV4,
+  }[contract]();
+}
+
+/**
+ * The whole text one Root receives: the versioned objective, the generated
+ * contract (ADR 0019), the human-written boundaries and the mounted sources.
+ * A resumed segment rebuilds it the same way so the pinned resume paragraph is
+ * verifiably part of it (ADR 0036).
+ */
+function wordPressDiscoveryPromptText(options: {
+  readonly objective: WordPressDiscoveryAsset;
+  readonly trustBoundary: WordPressDiscoveryAsset;
+  readonly config: WordPressCampaignConfig;
+  readonly lab: WordPressDiscoveryInput["lab"];
+  readonly source: WordPressDiscoverySource;
+}): string {
+  const { objective, trustBoundary, config, lab, source } = options;
+  const objectiveOnly = wordPressDiscoveryContractPlan(
+    objective.id,
+  ).objectiveOnly;
+  // Only low-privilege Lab accounts exist on the handle; nothing else is offered.
+  const accounts = Object.entries(lab?.attackerAccounts ?? {}).map(
+    ([role, account]) =>
+      `- ${role}: ${account.username} / ${account.password} (Lab only)`,
+  );
+  return [
+    objective.text.trim(),
+    ...(objectiveOnly ? [wordPressOutputContractFor(objective.id).text] : []),
+    "## Trust boundary",
+    trustBoundary.text.trim(),
+    `## Programme Boundary (${config.programmeBoundary.version})`,
+    config.programmeBoundary.text.trim(),
+    ...(lab === undefined
+      ? [
+          "This Trial has no Lab. Runtime confirmation happens during verification.",
+        ]
+      : [
+          "## Lab",
+          `Endpoint: ${lab.endpoint}`,
+          ...accounts,
+          ...(lab.database === undefined
+            ? ["Database: not exposed to this run."]
+            : [
+                `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
+              ]),
+        ]),
+    ...(source.dependency === undefined
+      ? []
+      : [
+          lab === undefined
+            ? `WordPress core source (read-only): ${source.dependency.path}.`
+            : `WordPress core source (read-only): ${source.dependency.path}, the same version the Lab runs.`,
+        ]),
+    ...(source.dependencySources ?? []).map(
+      (dependency) => `Dependency source (read-only): ${dependency.path}.`,
+    ),
+    ...(objectiveOnly
+      ? [`Writable notes directory: ${WORDPRESS_SANDBOX_LAYOUT.research}.`]
+      : []),
+    "## Assigned files",
+    `All files under ${WORDPRESS_SANDBOX_LAYOUT.target}.`,
+  ].join("\n\n");
+}
+
+/** The last paragraph of the objective is the pinned directive early Root resumes receive. */
+function wordPressResumeParagraph(objective: WordPressDiscoveryAsset): string {
+  const resumePrompt = objective.text
+    .trim()
+    .split(/\n\s*\n/)
+    .at(-1);
+  if (
+    resumePrompt === undefined ||
+    !resumePrompt.startsWith("Before giving up,")
+  )
+    throw new Error("Versioned minimum exploration directive is missing");
+  return resumePrompt;
+}
+
+/** The source mounts of one Snapshot as the transport run names them. */
+function wordPressSourceMounts(source: WordPressDiscoverySource) {
+  return {
+    sourceDirectory: source.directory,
+    sourceTree: source.tree,
+    ...(source.dependency === undefined
+      ? {}
+      : { dependencySource: source.dependency }),
+    ...(source.dependencySources === undefined
+      ? {}
+      : { dependencySources: source.dependencySources }),
+  };
+}
+
 async function planWordPressDiscovery(
   { target, snapshot, lab }: WordPressDiscoveryInput,
   context: WordPressDiscoveryContext,
@@ -505,19 +616,9 @@ async function planWordPressDiscovery(
       "Discovery Lab mode differs from the campaign configuration",
     );
   const wallMinutes = config.runWallTimeMinutes;
-  const outputContracts = {
-    v1: wordPressDiscoveryOutputContract(),
-    v2: wordPressDiscoveryOutputContractV2(),
-    v4: wordPressDiscoveryOutputContractV4(),
-  };
-  const planFor = (id: string) => wordPressDiscoveryContractPlan(id);
-  const objectiveOnly = (id: string) => planFor(id).objectiveOnly;
-  const outputContractFor = (id: string) => {
-    const { contract } = planFor(id);
-    if (contract === null)
-      throw new Error("Prompt carries its own output contract");
-    return outputContracts[contract];
-  };
+  const objectiveOnly = (id: string) =>
+    wordPressDiscoveryContractPlan(id).objectiveOnly;
+  const outputContractFor = wordPressOutputContractFor;
   const source = await boundaries.sourceFor(snapshot);
   // The campaign stop rule decides depth; legacy per-target budgets only lower it (ADR 0032 Q6).
   const maxRuns =
@@ -531,51 +632,14 @@ async function planWordPressDiscovery(
     maxRuns,
     noFindingRuns: Math.min(config.stopRules.noFindingRuns, maxRuns),
   };
-  const accounts = Object.entries(lab?.attackerAccounts ?? {}).map(
-    ([role, account]) =>
-      `- ${role}: ${account.username} / ${account.password} (Lab only)`,
-  );
-  // Only low-privilege Lab accounts exist on the handle; nothing else is offered.
   const promptFor = (selectedObjective: typeof objective) =>
-    [
-      selectedObjective.text.trim(),
-      ...(objectiveOnly(selectedObjective.id)
-        ? [outputContractFor(selectedObjective.id).text]
-        : []),
-      "## Trust boundary",
-      trustBoundary.text.trim(),
-      `## Programme Boundary (${config.programmeBoundary.version})`,
-      config.programmeBoundary.text.trim(),
-      ...(lab === undefined
-        ? [
-            "This Trial has no Lab. Runtime confirmation happens during verification.",
-          ]
-        : [
-            "## Lab",
-            `Endpoint: ${lab.endpoint}`,
-            ...accounts,
-            ...(lab.database === undefined
-              ? ["Database: not exposed to this run."]
-              : [
-                  `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
-                ]),
-          ]),
-      ...(source.dependency === undefined
-        ? []
-        : [
-            lab === undefined
-              ? `WordPress core source (read-only): ${source.dependency.path}.`
-              : `WordPress core source (read-only): ${source.dependency.path}, the same version the Lab runs.`,
-          ]),
-      ...(source.dependencySources ?? []).map(
-        (dependency) => `Dependency source (read-only): ${dependency.path}.`,
-      ),
-      ...(objectiveOnly(selectedObjective.id)
-        ? [`Writable notes directory: ${WORDPRESS_SANDBOX_LAYOUT.research}.`]
-        : []),
-      "## Assigned files",
-      `All files under ${WORDPRESS_SANDBOX_LAYOUT.target}.`,
-    ].join("\n\n");
+    wordPressDiscoveryPromptText({
+      objective: selectedObjective,
+      trustBoundary,
+      config,
+      lab,
+      source,
+    });
   const now = state.clock().getTime();
   return {
     input: {
@@ -601,15 +665,7 @@ async function planWordPressDiscovery(
     plannedTrials: Array.from({ length: maxRuns }, (_, trialOrdinal) => {
       const trialId = state.newId();
       const selectedObjective = objective;
-      const resumePrompt = selectedObjective.text
-        .trim()
-        .split(/\n\s*\n/)
-        .at(-1);
-      if (
-        resumePrompt === undefined ||
-        !resumePrompt.startsWith("Before giving up,")
-      )
-        throw new Error("Versioned minimum exploration directive is missing");
+      const resumePrompt = wordPressResumeParagraph(selectedObjective);
       const explore: PlannedDiscoveryRun = {
         configuration: {
           promptVariant: selectedObjective.id,
@@ -638,7 +694,7 @@ async function planWordPressDiscovery(
           profile: boundaries.runtimeProfile,
           coordination: "cooperative" as const,
           prompt: promptFor(selectedObjective),
-          minimumActiveMs: 60 * 60_000,
+          minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
           resumePrompt,
           ...(lab === undefined
             ? {}
@@ -657,14 +713,7 @@ async function planWordPressDiscovery(
                       }),
                 },
               }),
-          sourceDirectory: source.directory,
-          sourceTree: source.tree,
-          ...(source.dependency === undefined
-            ? {}
-            : { dependencySource: source.dependency }),
-          ...(source.dependencySources === undefined
-            ? {}
-            : { dependencySources: source.dependencySources }),
+          ...wordPressSourceMounts(source),
           expiresAt: new Date(now + wallMinutes * 60_000).toISOString(),
         },
       };
@@ -677,6 +726,125 @@ async function planWordPressDiscovery(
     executor: boundaries.executor,
     attachments: boundaries.attachments,
     recordReport: recordWordPressReport,
+  };
+}
+
+/**
+ * `campaign resume --run`: continue one provider-refused Root thread in a new
+ * sandbox on the same Snapshot (ADR 0036). The resumability rule lives in the
+ * discovery module; this body only rebuilds the WordPress inputs the original
+ * run had (prompt text, source mounts, runtime profile) and reports.
+ */
+async function resumeWordPressCampaignRun(
+  state: CliState,
+  input: Parameters<NonNullable<CliProfile["resumeCampaignRun"]>>[1],
+  session: WordPressCampaignSession,
+): ReturnType<NonNullable<CliProfile["resumeCampaignRun"]>> {
+  const { config, boundaries } = session;
+  if (config.discovery.lab !== "none")
+    return {
+      status: "refused",
+      reason: "lab-attached",
+      detail: "resume supports discovery.lab = none only",
+    };
+  const started = state.ledger
+    .readAll({ campaignId: input.campaignId, type: "discovery-run-started" })
+    .map(({ event }) => event)
+    .find(
+      (event) =>
+        event.type === "discovery-run-started" && event.runId === input.runId,
+    );
+  if (started === undefined)
+    return { status: "refused", reason: "run-unknown" };
+  const [objective, trustBoundary] = await Promise.all([
+    loadWordPressDiscoveryAsset(config.promptId),
+    loadWordPressDiscoveryAsset("trust-boundary-v1"),
+  ]);
+  const resumePrompt = wordPressResumeParagraph(objective);
+  // The Snapshot the run was frozen on; the sandbox re-verifies every tree digest at mount.
+  const snapshot = await boundaries.loadSnapshot(started.snapshotDigest);
+  if (snapshot.digest !== started.snapshotDigest)
+    return {
+      status: "refused",
+      reason: "snapshot-digest-differs",
+      detail: snapshot.digest,
+    };
+  const source = await boundaries.sourceFor(snapshot);
+  const prompt = wordPressDiscoveryPromptText({
+    objective,
+    trustBoundary,
+    config,
+    lab: undefined,
+    source,
+  });
+  const assessment = await assessTrialResume({
+    ledger: state.ledger,
+    evidence: state.store,
+    attachments: boundaries.attachments,
+    campaignId: input.campaignId,
+    runId: input.runId,
+    snapshotDigest: snapshot.digest,
+    promptDigest: objective.digest,
+    prompt,
+    resumePrompt,
+    profileDigest: boundaries.runtimeProfile.digest,
+    wallTimeMs: config.runWallTimeMinutes * 60_000,
+    minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
+  });
+  if (assessment.status === "refused") return assessment;
+  const { plan } = assessment;
+  const outcome = await executeTrialResume(
+    {
+      campaignId: input.campaignId,
+      input: {
+        schemaVersion: 1,
+        snapshotDigest: snapshot.digest,
+        trustBoundary: { version: trustBoundary.id, text: trustBoundary.text },
+        programmeBoundary: config.programmeBoundary,
+        modelProfileDigest: boundaries.runtimeProfile.digest,
+        promptDigest: objective.digest,
+        stopRules: config.stopRules,
+        lab: { mode: "none" },
+        history: { mode: "none" },
+      },
+      executor: boundaries.executor,
+      attachments: boundaries.attachments,
+      evidence: state.store,
+      ledger: state.ledger,
+      recordReport: recordWordPressReport,
+      clock: state.clock,
+    },
+    plan,
+    {
+      runId: state.newId(),
+      targetSnapshotDigest: snapshot.digest,
+      profile: boundaries.runtimeProfile,
+      coordination: "cooperative",
+      prompt,
+      resumePrompt,
+      ...wordPressSourceMounts(source),
+    },
+  );
+  return {
+    status: "resumed",
+    runId: outcome.runId,
+    resumesRun: plan.resumesRun,
+    trialId: plan.trialId,
+    segment: plan.segment,
+    remainingWallMs: plan.remainingWallMs,
+    outcome: outcome.outcome,
+    ...(outcome.failure === undefined
+      ? {}
+      : {
+          failure: {
+            reason: outcome.failure.reason,
+            ...(outcome.failure.reasonDetail === undefined
+              ? {}
+              : { reasonDetail: outcome.failure.reasonDetail }),
+          },
+        }),
+    wallTimeMs: outcome.wallTimeMs,
+    findingsRecorded: outcome.findingsRecorded,
   };
 }
 
@@ -1048,6 +1216,12 @@ export function createWordPressCliProfile(
         state,
         input,
         options,
+        await openWordPressCampaignSession(options, state, input),
+      ),
+    resumeCampaignRun: async (state, input) =>
+      resumeWordPressCampaignRun(
+        state,
+        input,
         await openWordPressCampaignSession(options, state, input),
       ),
     async verifyNext(state, input) {
