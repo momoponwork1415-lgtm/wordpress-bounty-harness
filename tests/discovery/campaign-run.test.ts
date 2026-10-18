@@ -50,6 +50,8 @@ async function campaign(
     readonly childSurvivesBrokenRoot?: boolean;
     readonly heldOnly?: boolean;
     readonly rootTranscriptInvalid?: boolean;
+    readonly wallOnFirstRun?: boolean;
+    readonly ignoreAbort?: boolean;
     readonly indexed?: boolean;
     readonly leadOnly?: boolean;
     /** Report a Finding whose impact lies outside the Programme Boundary (#185). */
@@ -128,7 +130,7 @@ async function campaign(
     labId: "lab-1",
     input,
     historyFraction: 0.5,
-    runWallTimeMs: 60 * 60_000,
+    runWallTimeMs: options.wallOnFirstRun ? 30 : 60 * 60_000,
     ...(options.indexed
       ? {}
       : {
@@ -144,9 +146,65 @@ async function campaign(
     normalizeCandidate: normalizeWordPressCandidate,
     classifyCandidate: classifyWordPressCandidate,
     executor: {
-      async execute(run) {
-        expect(run.expiresAt).toBe("2026-10-08T08:00:00.000Z");
+      async execute(run, ...rest) {
+        expect(run.expiresAt).toBe(
+          options.wallOnFirstRun
+            ? "2026-10-08T07:00:00.030Z"
+            : "2026-10-08T08:00:00.000Z",
+        );
         const ordinal = calls++;
+        if (ordinal === 0 && options.wallOnFirstRun) {
+          if (options.ignoreAbort)
+            return await new Promise<never>(() => undefined);
+          const signal = (rest as [AbortSignal | undefined])[0];
+          await new Promise<void>((resolve) =>
+            signal?.addEventListener("abort", () => resolve(), { once: true }),
+          );
+          const childAttachment = options.childSurvivesBrokenRoot
+            ? await attachments.put(
+                "findings",
+                Buffer.from(
+                  JSON.stringify({
+                    findings: [claim],
+                    leads: [],
+                    examined: "child source",
+                    unexamined: "none",
+                  }),
+                ),
+              )
+            : undefined;
+          return {
+            receipt: createNativeRunReceipt({
+              runId: run.runId,
+              targetSnapshotDigest: run.targetSnapshotDigest,
+              profile: run.profile,
+              terminal: "incomplete",
+              reason: "wall",
+              startedAt: "2026-10-08T07:00:00Z",
+              completedAt: "2026-10-08T07:00:01Z",
+            }),
+            ...(childAttachment === undefined
+              ? {}
+              : {
+                  agentRuns: [
+                    {
+                      agentPath: "/root/child-1",
+                      attachment: childAttachment,
+                      receipt: createNativeRunReceipt({
+                        runId: "child-1",
+                        targetSnapshotDigest: run.targetSnapshotDigest,
+                        profile: run.profile,
+                        terminal: "completed",
+                        reason: "unavailable",
+                        startedAt: "2026-10-08T07:00:00Z",
+                        completedAt: "2026-10-08T07:00:01Z",
+                        reportArtifactDigest: childAttachment.digest,
+                      }),
+                    },
+                  ],
+                }),
+          };
+        }
         const researchArtifact =
           options.research === undefined
             ? undefined
@@ -327,6 +385,41 @@ async function campaign(
   });
   return { result, calls, ledger, evidence, attachments };
 }
+
+it("writes discovery-run-finished with wall after a silent executor reaches its limit", async () => {
+  const { result, ledger } = await campaign([], {
+    wallOnFirstRun: true,
+    indexed: true,
+    childSurvivesBrokenRoot: true,
+  });
+  expect(result).toMatchObject({ runCount: 1, stoppedBy: "incomplete" });
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(1);
+  expect(
+    ledger
+      .read({ type: "discovery-run-finished" })
+      .find(
+        ({ event }) =>
+          event.type === "discovery-run-finished" && event.runId === "run-0",
+      )?.event,
+  ).toMatchObject({
+    outcome: "failed",
+    reason: "wall",
+  });
+});
+
+it("finishes the ledger when an executor ignores the wall cancellation", async () => {
+  const { ledger } = await campaign([], {
+    wallOnFirstRun: true,
+    indexed: true,
+    ignoreAbort: true,
+  });
+  expect(
+    ledger.read({ type: "discovery-run-finished" })[0]?.event,
+  ).toMatchObject({
+    outcome: "failed",
+    reason: "wall",
+  });
+});
 
 it("records valid child claims even when Root formatting and a sibling claim fail", async () => {
   const { ledger, evidence } = await campaign([], {

@@ -169,7 +169,7 @@ export interface CodexSandboxResult {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr?: string;
-  readonly failureKind?: "timed-out" | "output-limit-exceeded";
+  readonly failureKind?: "timed-out" | "output-limit-exceeded" | "cancelled";
   readonly startedAt: string;
   readonly completedAt: string;
   readonly image: string;
@@ -189,7 +189,10 @@ export interface CodexSandboxResult {
 }
 /** The Lab module supplies this executor. This adapter has no host execution fallback. */
 export interface CodexSandbox {
-  execute(command: CodexSandboxCommand): Promise<CodexSandboxResult>;
+  execute(
+    command: CodexSandboxCommand,
+    signal?: AbortSignal,
+  ): Promise<CodexSandboxResult>;
 }
 export interface DiscoveryTransportRun {
   readonly runId: string;
@@ -881,7 +884,13 @@ function brokerRequestBytesExceeded(stdout: string): boolean {
 
 type AgentRun = NonNullable<DiscoveryTransportResult["agentRuns"]>[number];
 type IncompleteReason =
-  "provider" | "schema" | "sandbox" | "policy" | "evidence";
+  | "provider"
+  | "schema"
+  | "sandbox"
+  | "policy"
+  | "evidence"
+  | "wall"
+  | "operator";
 type GrantedSandboxRun = ProviderCredentialEgressResult<CodexSandboxResult>;
 type ExecutionState = {
   readonly run: DiscoveryTransportRun;
@@ -1167,7 +1176,10 @@ export class CodexNativeAgentRuntime {
     readonly clock: () => Date = () => new Date(),
   ) {}
 
-  async execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult> {
+  async execute(
+    run: DiscoveryTransportRun,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryTransportResult> {
     const state: ExecutionState = {
       run,
       startedAt: this.clock().toISOString(),
@@ -1200,9 +1212,18 @@ export class CodexNativeAgentRuntime {
       run,
       state.cooperative,
       labEndpoint,
+      signal,
     );
     if (granted === undefined)
-      return incompleteExecution(state, "provider", this.clock().toISOString());
+      return incompleteExecution(
+        state,
+        signal?.aborted
+          ? signal.reason === "operator"
+            ? "operator"
+            : "wall"
+          : "provider",
+        this.clock().toISOString(),
+      );
     state.brokerMetrics = granted.receipt.metrics;
     if (
       granted.receipt.setup.status !== "ready" ||
@@ -1235,6 +1256,16 @@ export class CodexNativeAgentRuntime {
         result,
         granted.receipt.digest,
       );
+      if (
+        result.failureKind === "timed-out" ||
+        result.failureKind === "cancelled"
+      )
+        return incompleteExecution(
+          state,
+          result.failureKind === "timed-out" ? "wall" : "operator",
+          result.completedAt,
+          granted.receipt.digest,
+        );
       if (failure !== undefined)
         return incompleteExecution(
           state,
@@ -1245,6 +1276,16 @@ export class CodexNativeAgentRuntime {
           failure.reasonDetail,
         );
     }
+    if (
+      result.failureKind === "timed-out" ||
+      result.failureKind === "cancelled"
+    )
+      return incompleteExecution(
+        state,
+        result.failureKind === "timed-out" ? "wall" : "operator",
+        result.completedAt,
+        granted.receipt.digest,
+      );
     if (granted.receipt.cleanup.status !== "completed")
       return incompleteExecution(
         state,
@@ -1259,6 +1300,7 @@ export class CodexNativeAgentRuntime {
     run: DiscoveryTransportRun,
     cooperative: boolean,
     labEndpoint: URL,
+    signal?: AbortSignal,
   ): Promise<GrantedSandboxRun | undefined> {
     return this.broker
       .withGrant(
@@ -1277,8 +1319,10 @@ export class CodexNativeAgentRuntime {
           const login = assertBrokerAddress(grant, run);
           return this.sandbox.execute(
             sandboxCommand(run, grant, cooperative, labEndpoint, login),
+            signal,
           );
         },
+        signal,
       )
       .catch(() => undefined);
   }
@@ -1288,6 +1332,18 @@ export class CodexNativeAgentRuntime {
     result: CodexSandboxResult,
     grantReceiptDigest: string,
   ): Promise<{ reason: IncompleteReason; reasonDetail: string } | undefined> {
+    const parentThreadId = rootThreadId(result.stdout);
+    if (parentThreadId !== undefined) {
+      const children = await this.#captureChildren(
+        state.run,
+        result.rollouts ?? [],
+        parentThreadId,
+        grantReceiptDigest,
+      );
+      state.agentRuns = children.agentRuns;
+      state.childThreadsObserved = children.observed;
+      state.childThreadsAdmitted = children.admitted;
+    }
     if (result.researchFailure !== undefined || result.research === undefined)
       return { reason: "evidence", reasonDetail: "research-capture-failed" };
     try {
@@ -1300,18 +1356,6 @@ export class CodexNativeAgentRuntime {
       };
     } catch {
       return { reason: "evidence", reasonDetail: "research-capture-failed" };
-    }
-    const parentThreadId = rootThreadId(result.stdout);
-    if (parentThreadId !== undefined) {
-      const children = await this.#captureChildren(
-        state.run,
-        result.rollouts ?? [],
-        parentThreadId,
-        grantReceiptDigest,
-      );
-      state.agentRuns = children.agentRuns;
-      state.childThreadsObserved = children.observed;
-      state.childThreadsAdmitted = children.admitted;
     }
     if (result.rolloutFailure !== undefined)
       return { reason: "evidence", reasonDetail: "rollout-capture-failed" };

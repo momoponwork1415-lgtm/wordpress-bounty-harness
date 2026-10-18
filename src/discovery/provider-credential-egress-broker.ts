@@ -15,6 +15,7 @@ import {
   PROVIDER_UPSTREAM_ORIGIN,
 } from "./provider-credential-proxy.js";
 import { runNativeModelProcess } from "../infrastructure/native-model-process.js";
+import { stopDockerContainer } from "../infrastructure/stop-docker-container.js";
 import {
   readPrivateChatgptLogin,
   readPrivateProviderCredential,
@@ -209,6 +210,7 @@ export interface ProviderCredentialEgressBroker {
   withGrant<T>(
     request: ProviderCredentialEgressGrantRequest,
     operation: (grant: ProviderCredentialEgressGrant) => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<ProviderCredentialEgressResult<T>>;
 }
 
@@ -423,6 +425,7 @@ export function createProviderCredentialEgressBroker(
     async withGrant<T>(
       requestValue: ProviderCredentialEgressGrantRequest,
       operation: (grant: ProviderCredentialEgressGrant) => Promise<T>,
+      signal?: AbortSignal,
     ) {
       const request =
         providerCredentialEgressGrantRequestSchema.parse(requestValue);
@@ -495,6 +498,19 @@ export function createProviderCredentialEgressBroker(
             timeoutMs: number,
           ) => Promise<DockerCommandResult>)
         | undefined;
+      let stopOnAbort: Promise<void> | undefined;
+      const stopBroker = () => {
+        if (
+          !brokerCreated ||
+          runDocker === undefined ||
+          stopOnAbort !== undefined
+        )
+          return;
+        stopOnAbort = stopDockerContainer(runDocker, containerName).catch(
+          () => undefined,
+        );
+      };
+      signal?.addEventListener("abort", stopBroker, { once: true });
       try {
         // Staged secret files, by their path inside the broker container.
         let stagedFiles: Readonly<Record<string, string>>;
@@ -595,7 +611,11 @@ export function createProviderCredentialEgressBroker(
                 stage: "network-admit",
                 reason: "agent-network-not-internal",
               };
-        const executeDocker = runDocker;
+        const dockerCommand = runDocker;
+        const executeDocker = (args: readonly string[], timeoutMs: number) =>
+          signal?.aborted
+            ? Promise.resolve({ exitCode: -1, stdout: "", stderr: "" })
+            : dockerCommand(args, timeoutMs);
         const network = await executeDocker(
           request.agentNetworkName === undefined
             ? ["network", "create", "--internal", networkName]
@@ -669,6 +689,7 @@ export function createProviderCredentialEgressBroker(
             };
           } else {
             brokerCreated = true;
+            if (signal?.aborted) stopBroker();
             pendingSetupFailure = {
               status: "failed",
               stage: "provider-network-connect",
@@ -774,6 +795,9 @@ export function createProviderCredentialEgressBroker(
       } catch {
         setup = pendingSetupFailure;
       } finally {
+        signal?.removeEventListener("abort", stopBroker);
+        if (signal?.aborted) stopBroker();
+        await stopOnAbort;
         const failedSteps: (
           "broker-remove" | "network-remove" | "credential-staging-remove"
         )[] = [];

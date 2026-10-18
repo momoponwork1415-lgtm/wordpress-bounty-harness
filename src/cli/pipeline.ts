@@ -201,6 +201,7 @@ export async function runCampaignPipeline<
   readonly automaticVerificationRetries?: boolean;
   /** Checked before each next target. True drains in-flight targets and stops as `operator`. */
   readonly stop?: () => boolean;
+  readonly signal?: AbortSignal;
 }): Promise<CampaignSummary> {
   const { campaignId, ledger, pipeline, clock } = options;
   const at = () => clock().toISOString();
@@ -523,6 +524,7 @@ export async function runCampaignPipeline<
         ledger,
         evidence: options.store,
         clock,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...prepared,
       });
       const summary = {

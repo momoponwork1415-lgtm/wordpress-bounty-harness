@@ -137,7 +137,15 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     costUsd: z.union([z.number().nonnegative(), z.literal("unavailable")]),
     wallTimeMs: z.number().int().nonnegative(),
     reason: z
-      .enum(["provider", "schema", "sandbox", "policy", "evidence"])
+      .enum([
+        "provider",
+        "schema",
+        "sandbox",
+        "policy",
+        "evidence",
+        "wall",
+        "operator",
+      ])
       .optional(),
     reasonDetail: z
       .string()

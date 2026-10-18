@@ -290,6 +290,7 @@ function chatgptListener(
       }
       if (request.method === "GET") {
         // The CLI tries a WebSocket first and falls back to HTTP on 426.
+        process.stderr.write("provider-egress connection-error status=426\n");
         sendJson(response, 426, "websocket-not-admitted");
         return;
       }
@@ -356,6 +357,9 @@ function chatgptListener(
           signal: AbortSignal.timeout(remainingMs),
         },
       );
+      process.stderr.write(
+        `provider-egress upstream status=${upstream.status}\n`,
+      );
       if (upstream.status >= 500) counters.upstreamServerError += 1;
       else if (upstream.status >= 400) counters.upstreamClientError += 1;
       else counters.upstreamSuccess += 1;
@@ -375,6 +379,7 @@ function chatgptListener(
       }
     } catch {
       counters.relayFailures += 1;
+      process.stderr.write("provider-egress connection-error\n");
       if (!response.headersSent) {
         sendJson(response, 502, "provider-unavailable");
       } else {
@@ -456,6 +461,9 @@ function apiKeyListener(
         redirect: "error",
         signal: AbortSignal.timeout(remainingMs),
       });
+      process.stderr.write(
+        `provider-egress upstream status=${upstream.status}\n`,
+      );
       if (upstream.status >= 500) counters.upstreamServerError += 1;
       else if (upstream.status >= 400) counters.upstreamClientError += 1;
       else counters.upstreamSuccess += 1;
@@ -477,6 +485,7 @@ function apiKeyListener(
       response.end(redactedUpstreamBody);
     } catch {
       counters.relayFailures += 1;
+      process.stderr.write("provider-egress connection-error\n");
       if (!response.headersSent) {
         sendJson(response, 502, "provider-unavailable");
       } else {

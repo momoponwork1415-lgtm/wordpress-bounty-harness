@@ -12,6 +12,7 @@ import type {
   DiscoveryTransportResult,
 } from "./codex-native-agent-runtime.js";
 import {
+  createNativeRunReceipt,
   nativeRunReceiptSchema,
   type NativeRunReceipt,
 } from "./native-run-receipts.js";
@@ -276,11 +277,16 @@ export async function runDiscoveryCampaign(options: {
   readonly concurrency?: number;
   /** Exploration wall time, stamped when each Trial starts rather than when all plans are built. */
   readonly runWallTimeMs?: number;
+  /** Operator cancellation of in-flight exploration. */
+  readonly signal?: AbortSignal;
   /** Records each run's arm on the history axis: a without history, b with it. */
   readonly ablation?: { readonly axes: readonly AblationAxis[] };
   readonly plannedTrials: readonly PlannedTrial[];
   readonly executor: {
-    execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
+    execute(
+      run: DiscoveryTransportRun,
+      signal?: AbortSignal,
+    ): Promise<DiscoveryTransportResult>;
   };
   readonly attachments: ProviderAttachmentStore;
   readonly evidence: PrivateArtifactStore;
@@ -548,16 +554,59 @@ export async function runDiscoveryCampaign(options: {
           findingsRecorded += count;
         },
       });
+      const controller = new AbortController();
+      const onOperatorStop = () => controller.abort("operator");
+      options.signal?.addEventListener("abort", onOperatorStop, { once: true });
+      if (options.signal?.aborted) onOperatorStop();
+      const wallTimer =
+        runWallTimeMs === undefined
+          ? undefined
+          : setTimeout(() => controller.abort("wall"), runWallTimeMs);
+      let shutdownTimer: NodeJS.Timeout | undefined;
+      const shutdownFallback = new Promise<DiscoveryTransportResult>(
+        (resolve) => {
+          const afterAbort = () => {
+            shutdownTimer = setTimeout(
+              () => {
+                resolve({
+                  receipt: createNativeRunReceipt({
+                    runId: run.runId,
+                    targetSnapshotDigest: run.targetSnapshotDigest,
+                    profile: run.profile,
+                    terminal: "incomplete",
+                    reason:
+                      controller.signal.reason === "operator"
+                        ? "operator"
+                        : "wall",
+                    startedAt: base.occurredAt,
+                    completedAt: clock().toISOString(),
+                  }),
+                });
+              },
+              Math.min(70_000, runWallTimeMs ?? 70_000),
+            );
+          };
+          controller.signal.addEventListener("abort", afterAbort, {
+            once: true,
+          });
+          if (controller.signal.aborted) afterAbort();
+        },
+      );
       try {
-        const result = await options.executor.execute({
-          ...run,
-          campaignInput: {
-            ...input,
-            promptDigest:
-              planned.configuration.promptDigest ?? input.promptDigest,
-            history,
+        const execution = options.executor.execute(
+          {
+            ...run,
+            campaignInput: {
+              ...input,
+              promptDigest:
+                planned.configuration.promptDigest ?? input.promptDigest,
+              history,
+            },
           },
-        });
+          controller.signal,
+        );
+        const result = await Promise.race([execution, shutdownFallback]);
+        if (wallTimer !== undefined) clearTimeout(wallTimer);
         if (result.researchArtifact !== undefined) {
           if (result.researchArtifact.attachment.kind !== "research")
             throw new Error("Discovery research artifact kind is invalid");
@@ -624,6 +673,28 @@ export async function runDiscoveryCampaign(options: {
           failure = recoveredRoot.failure;
       } catch {
         outcome = "failed";
+        if (controller.signal.aborted) {
+          const reason =
+            controller.signal.reason === "operator" ? "operator" : "wall";
+          failure = { reason };
+          wallTimeMs = runWallTimeMs ?? 0;
+          const receipt = createNativeRunReceipt({
+            runId: run.runId,
+            targetSnapshotDigest: run.targetSnapshotDigest,
+            profile: run.profile,
+            terminal: "incomplete",
+            reason,
+            startedAt: base.occurredAt,
+            completedAt: clock().toISOString(),
+          });
+          receiptDigest = await options.evidence.putFiles({
+            "receipt.json": canonicalJson(receipt),
+          });
+        }
+      } finally {
+        if (wallTimer !== undefined) clearTimeout(wallTimer);
+        if (shutdownTimer !== undefined) clearTimeout(shutdownTimer);
+        options.signal?.removeEventListener("abort", onOperatorStop);
       }
       const counted = countsAsTrial({
         observed,
