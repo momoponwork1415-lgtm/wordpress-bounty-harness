@@ -92,7 +92,13 @@ export const campaignInputV1Schema = z.strictObject({
     maxRuns: z.number().int().positive(),
     noFindingRuns: z.number().int().positive(),
   }),
-  lab: z.strictObject({ setupDigest: digest }),
+  lab: z.union([
+    z.strictObject({ setupDigest: digest }),
+    z.strictObject({
+      mode: z.literal("none"),
+      setupDigest: z.undefined().optional(),
+    }),
+  ]),
   history: campaignHistorySchema,
   entryIndex: z
     .union([
@@ -270,7 +276,9 @@ export type DiscoveryStop =
 /** Run planned Trials, preserve admitted claims, and apply campaign stop rules. */
 export async function runDiscoveryCampaign(options: {
   readonly campaignId: string;
-  readonly labId: string;
+  readonly labId?: string;
+  /** An explicit repeat runs every planned independent Trial unless a run fails. */
+  readonly repeatAll?: boolean;
   readonly input: CampaignInputV1;
   readonly historyFraction: number;
   /** Runs in flight at once on this host; at most four. */
@@ -342,7 +350,7 @@ export async function runDiscoveryCampaign(options: {
   const input = campaignInputV1Schema.parse(options.input);
   const id = z.string().min(1).max(128);
   id.parse(options.campaignId);
-  id.parse(options.labId);
+  if (options.labId !== undefined) id.parse(options.labId);
   if (
     !Number.isFinite(options.historyFraction) ||
     options.historyFraction < 0 ||
@@ -519,7 +527,9 @@ export async function runDiscoveryCampaign(options: {
         trialId: trial.trialId,
         trialOrdinal: trial.trialOrdinal,
         runKind: "explore",
-        labId: options.labId,
+        ...(options.labId === undefined
+          ? { labAttached: false as const }
+          : { labId: options.labId, labAttached: true as const }),
         history: historyMetadata,
         configuration: {
           ...planned.configuration,
@@ -666,7 +676,7 @@ export async function runDiscoveryCampaign(options: {
           base,
           trialId: trial.trialId,
           trialOrdinal: trial.trialOrdinal,
-          labId: options.labId,
+          ...(options.labId === undefined ? {} : { labId: options.labId }),
           history: historyMetadata,
           configuration: planned.configuration,
           promptDigest: input.promptDigest,
@@ -789,11 +799,11 @@ export async function runDiscoveryCampaign(options: {
     if (explore.outcome === "provider-limited") stopped ??= "provider-limit";
     if (explore.outcome === "failed") stopped ??= "incomplete";
     if (explore.outcome === "completed") {
-      if (explore.heldBoundary && !explore.foundNew)
+      if (!options.repeatAll && explore.heldBoundary && !explore.foundNew)
         stopped ??= "output-boundary";
       else noNewFindings = explore.foundNew ? 0 : noNewFindings + 1;
     }
-    if (noNewFindings >= input.stopRules.noFindingRuns)
+    if (!options.repeatAll && noNewFindings >= input.stopRules.noFindingRuns)
       stopped ??= "no-new-finding";
   };
   const worker = async () => {

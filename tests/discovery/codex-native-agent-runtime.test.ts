@@ -1096,6 +1096,31 @@ describe("Codex native agent runtime", () => {
     }
   });
 
+  it("runs a source-only Trial on the broker's own internal network without a Lab host", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-source-only-"));
+    try {
+      const commands: CodexSandboxCommand[] = [];
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(transcript, commands),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      const { lab: _lab, ...withoutLab } = run;
+      const result = await runtime.execute({
+        ...withoutLab,
+        campaignInput: { ...run.campaignInput, lab: { mode: "none" } },
+      });
+      expect(result.receipt.terminal).toBe("completed");
+      expect(commands).toHaveLength(1);
+      expect(commands[0]?.labHost).toBeUndefined();
+      expect(commands[0]?.grant.dockerNetworkName).toBe("internal-run");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("passes a frozen core dependency mount and rejects a relative dependency path", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-core-transport-"));
     try {

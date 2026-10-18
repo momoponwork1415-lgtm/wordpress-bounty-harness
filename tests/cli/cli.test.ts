@@ -1848,6 +1848,118 @@ describe("harness CLI vertical slice", () => {
     ).toHaveLength(1);
   });
 
+  it("runs without a discovery Lab, then verifies one Finding in a fresh Lab", async () => {
+    const { run, configPath, prompts, ledger, live, labIdsDuringVerification } =
+      await harness({
+        entryPoints: true,
+        config: {
+          promptId: undefined,
+          discovery: { lab: "none" },
+          stopRules: { maxRuns: 1, noFindingRuns: 1 },
+        },
+      });
+    const campaignId = "campaign-explore-only";
+    const discovered = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      campaignId,
+      "--config",
+      configPath,
+    );
+    if (discovered.stderr) throw new Error(discovered.stderr);
+    expect(discovered.code).toBe(0);
+    expect(discovered.stdout).toContain("lab none");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain(
+      "This Trial has no Lab. Runtime confirmation happens during verification.",
+    );
+    expect(prompts[0]).not.toContain("## Lab\n\nEndpoint:");
+    expect(ledger().read({ campaignId, type: "lab-provisioned" })).toHaveLength(
+      0,
+    );
+    expect(
+      ledger().read({ campaignId, type: "verification-finished" }),
+    ).toHaveLength(0);
+    expect(
+      ledger().read({ campaignId, type: "discovery-run-started" })[0]?.event,
+    ).toMatchObject({ labAttached: false });
+    expect(
+      ledger().read({ campaignId, type: "discovery-run-finished" })[0]?.event,
+    ).toMatchObject({ outcome: "completed" });
+    const verified = await run(
+      "verify",
+      "next",
+      "--campaign",
+      campaignId,
+      "--config",
+      configPath,
+    );
+    expect(verified.code).toBe(0);
+    expect(verified.stdout).toContain("verified finding");
+    expect(verified.stdout).toContain("runtime-confirmed");
+    expect(
+      ledger().read({ campaignId, type: "verification-finished" }),
+    ).toHaveLength(1);
+    expect(
+      ledger()
+        .read({ campaignId, type: "lab-provisioned" })
+        .filter(
+          ({ event }) =>
+            event.type === "lab-provisioned" &&
+            event.purpose === "verification",
+        ),
+    ).toHaveLength(1);
+    expect(labIdsDuringVerification).toHaveLength(1);
+    expect(live.containers.size).toBe(0);
+    expect(live.networks.size).toBe(0);
+    expect(live.volumes.size).toBe(0);
+    expect(ledger().funnel(campaignId).byLab.none).toMatchObject({
+      runs: 1,
+      findings: 2,
+    });
+  });
+
+  it("--repeat 3 records three independent Trial IDs on the same Snapshot", async () => {
+    const { run, configPath, ledger, prompts } = await harness({
+      zeroFindings: true,
+      config: {
+        promptId: undefined,
+        discovery: { lab: "none" },
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    });
+    const campaignId = "campaign-repeat-three";
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      campaignId,
+      "--config",
+      configPath,
+      "--repeat",
+      "3",
+    );
+    if (result.stderr) throw new Error(result.stderr);
+    expect(result.code).toBe(0);
+    expect(prompts).toHaveLength(3);
+    const starts = ledger()
+      .read({ campaignId, type: "discovery-run-started" })
+      .map(({ event }) => event);
+    expect(starts).toHaveLength(3);
+    expect(
+      new Set(
+        starts.map((event) =>
+          event.type === "discovery-run-started" ? event.trialId : null,
+        ),
+      ).size,
+    ).toBe(3);
+    expect(new Set(starts.map((event) => event.snapshotDigest)).size).toBe(1);
+    expect(ledger().funnel(campaignId).byLab.none.runs).toBe(3);
+  });
+
   it("reads historical stage and continuation references without writing them on new Trials", async () => {
     const { run, configPath, ledger } = await harness();
     expect((await run("select", "--config", configPath)).code).toBe(0);

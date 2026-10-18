@@ -127,6 +127,7 @@ export async function continuousCommand(
     readonly campaignPrefix: string;
     readonly notify: string | undefined;
     readonly resume: boolean;
+    readonly verifyConcurrency?: number;
   },
 ): Promise<number> {
   const { state, profile, io } = context;
@@ -195,6 +196,13 @@ export async function continuousCommand(
     return ["stopped", "stopping", "stale"].includes(displayState) ? 1 : 0;
   }
   if (sub !== "run") return 2;
+  const verifyConcurrency = context.verifyConcurrency ?? 1;
+  if (
+    !Number.isSafeInteger(verifyConcurrency) ||
+    verifyConcurrency < 1 ||
+    verifyConcurrency > 8
+  )
+    throw new Error("--verify-concurrency must be an integer from 1 to 8");
   const configPath = context.configPath;
   const selectionPath = context.selectionPath;
   if (configPath === undefined || selectionPath === undefined)
@@ -210,10 +218,27 @@ export async function continuousCommand(
   if (hostStatus === undefined)
     throw new Error("continuous run needs a host profile");
   const host = () => hostStatus(state, { configPath, selectionPath });
+  let activeVerification = 0;
   const runner = createContinuousRunner({
     stateDirectory: state.stateDirectory,
     campaignPrefix: context.campaignPrefix,
     ledger: state.ledger,
+    verifyConcurrency,
+    ...(profile.verifyNext === undefined
+      ? {}
+      : {
+          verifyNext: async () => {
+            activeVerification++;
+            try {
+              return await profile.verifyNext!(state, {
+                configPath,
+                campaignPrefix: context.campaignPrefix,
+              });
+            } finally {
+              activeVerification--;
+            }
+          },
+        }),
     async select() {
       const report = await profile.select(state, {
         configPath: selectionPath,
@@ -236,6 +261,7 @@ export async function continuousCommand(
         selectionPolicyPath: selectionPath,
       }),
     async cleanupLeftovers() {
+      if (activeVerification > 0) return 0;
       if (await reviewLabLive(state.stateDirectory)) return 0;
       const removed = await profile.cleanupLeftovers(state, {
         configPath,
