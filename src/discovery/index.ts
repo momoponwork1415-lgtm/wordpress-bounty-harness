@@ -32,22 +32,34 @@ export {
   rootThreadIdFromRollout,
   type CodexSandbox,
   type CodexSandboxCommand,
+  type CodexSandboxResumeSeed,
   type CodexSandboxResult,
+  type DiscoveryResumeInput,
   type DiscoveryTransportRun,
   type DiscoveryTransportResult,
 } from "./codex-native-agent-runtime.js";
+export {
+  assessTrialResume,
+  executeTrialResume,
+  RESUME_WALL_FLOOR_MS,
+  type ResumeAssessment,
+  type ResumePlan,
+  type ResumeRefusalReason,
+} from "./resume-trial.js";
 export {
   GvisorCodexSandbox,
   type GvisorCodexSandboxOptions,
 } from "./codex-gvisor-sandbox.js";
 export {
   createNativeRunReceipt,
+  isCodexSessionPath,
   nativeRunReceiptSchema,
   readNativeRunReceipt,
   runFinishedFieldsFrom,
   sealNativeRunReceipt,
   type NativeRunIdentity,
   type NativeRunReceipt,
+  type NativeRunSession,
 } from "./native-run-receipts.js";
 export {
   createProviderCredentialEgressBroker,

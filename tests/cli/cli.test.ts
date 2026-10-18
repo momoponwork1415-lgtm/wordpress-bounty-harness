@@ -69,6 +69,9 @@ const profile = defineAgentRuntimeProfile({
   subagent: { modelId: "unavailable", effort: "unavailable" },
 });
 
+/** The Root thread a refused cooperative run leaves behind (ADR 0036 tests). */
+const REFUSED_ROOT_THREAD = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
+
 const claim = (impact: string, file: string) => ({
   claim: `Synthetic ${impact} claim`,
   attackerPosition: "subscriber",
@@ -101,6 +104,8 @@ async function harness(
     readonly failOnCalls?: readonly number[];
     /** Provider calls (1-based) the provider refuses without a usage limit. */
     readonly refuseOnCalls?: readonly number[];
+    /** A refused receipt names its Root thread and session file, as a cooperative run's does (ADR 0036). */
+    readonly refusalSession?: boolean;
     /** Verifier attempts (1-based) that end on a provider quota. */
     readonly verifierQuotaOnAttempts?: readonly number[];
     readonly leadsOnCalls?: Readonly<Record<number, readonly unknown[]>>;
@@ -645,7 +650,20 @@ async function harness(
                 }),
           };
         }
-        if (options.refuseOnCalls?.includes(call) === true)
+        if (options.refuseOnCalls?.includes(call) === true) {
+          const rootRollout =
+            options.refusalSession === true
+              ? await attachments.put(
+                  "diagnostic",
+                  Buffer.from(
+                    `${JSON.stringify({
+                      timestamp: now,
+                      type: "session_meta",
+                      payload: { id: REFUSED_ROOT_THREAD, source: "exec" },
+                    })}\n`,
+                  ),
+                )
+              : undefined;
           return {
             receipt: createNativeRunReceipt({
               runId: run.runId,
@@ -655,9 +673,28 @@ async function harness(
               reason: "provider",
               reasonDetail: "provider-cyber-policy",
               startedAt: now,
-              completedAt: now,
+              completedAt: "2026-10-08T00:10:00.000Z",
+              ...(rootRollout === undefined
+                ? {}
+                : {
+                    diagnosticArtifactDigest: rootRollout.digest,
+                    session: {
+                      rootThreadId: REFUSED_ROOT_THREAD,
+                      rootTurns: 1,
+                      segment: run.resume?.segment ?? 0,
+                      files: [
+                        {
+                          path: "2026/10/08/rollout-2026-10-08T00-00-00-root.jsonl",
+                          threadId: REFUSED_ROOT_THREAD,
+                          kind: "root",
+                          diagnosticArtifactDigest: rootRollout.digest,
+                        },
+                      ],
+                    },
+                  }),
             }),
           };
+        }
         if (options.failOnCalls?.includes(call) === true)
           return {
             receipt: createNativeRunReceipt({
@@ -2495,6 +2532,203 @@ describe("harness CLI vertical slice", () => {
       expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(2);
     },
   );
+
+  it("resumes a provider-refused Root thread once in a new run of the same Trial, and refuses everything else with a reason (ADR 0036)", async () => {
+    const { run, configPath, transportRuns, ledger } = await harness({
+      refuseOnCalls: [1],
+      refusalSession: true,
+      zeroFindings: true,
+      config: {
+        promptId: undefined,
+        discovery: { lab: "none" },
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    });
+    const campaign = "campaign-resume";
+    const first = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      campaign,
+      "--config",
+      configPath,
+    );
+    expect(first.code).toBe(0);
+    const refusedRunId = transportRuns[0]!.runId;
+    expect(
+      ledger()
+        .read({ campaignId: campaign, type: "target-skipped" })
+        .map(({ event }) => event),
+    ).toMatchObject([{ reason: "provider-refused" }]);
+
+    const unknown = await run(
+      "campaign",
+      "resume",
+      "--campaign",
+      campaign,
+      "--run",
+      "no-such-run",
+      "--config",
+      configPath,
+    );
+    expect(unknown.code).toBe(3);
+    expect(unknown.stderr).toBe("not resumable: run-unknown");
+    expect(transportRuns).toHaveLength(1);
+
+    const resumed = await run(
+      "campaign",
+      "resume",
+      "--campaign",
+      campaign,
+      "--run",
+      refusedRunId,
+      "--config",
+      configPath,
+    );
+    expect(resumed.code).toBe(0);
+    expect(transportRuns).toHaveLength(2);
+    const segment = transportRuns[1]!;
+    expect(segment.runId).not.toBe(refusedRunId);
+    expect(segment).toMatchObject({
+      coordination: "cooperative",
+      // 60 min minimum less the 10 min the refused segment consumed.
+      minimumActiveMs: 50 * 60_000,
+      resume: {
+        threadId: REFUSED_ROOT_THREAD,
+        segment: 1,
+        sessions: [{ kind: "root", threadId: REFUSED_ROOT_THREAD }],
+      },
+    });
+    expect(segment.prompt).toContain(segment.resumePrompt!);
+    expect(segment.prompt).toBe(transportRuns[0]!.prompt);
+    expect(resumed.stdout).toContain(
+      `resumed ${refusedRunId} as ${segment.runId}  trial ${refusedRunId}  segment 1  remaining wall 110 min`,
+    );
+    expect(resumed.stdout).toContain("outcome completed");
+    const starts = ledger()
+      .read({ campaignId: campaign, type: "discovery-run-started" })
+      .map(({ event }) => event);
+    expect(starts).toHaveLength(2);
+    expect(starts[1]).toMatchObject({
+      runId: segment.runId,
+      trialId: refusedRunId,
+      trialOrdinal: 0,
+      resumesRun: refusedRunId,
+      resumeSegment: 1,
+      labAttached: false,
+    });
+    // The original failure and skip stay; the Trial is counted once.
+    expect(
+      ledger()
+        .read({ campaignId: campaign, type: "discovery-run-finished" })
+        .map(({ event }) =>
+          event.type === "discovery-run-finished" ? event.outcome : "",
+        ),
+    ).toEqual(["failed", "completed"]);
+    expect(ledger().funnel(campaign)).toMatchObject({
+      discoveryAttempts: 1,
+      byLab: { none: { runs: 1 } },
+    });
+
+    const again = await run(
+      "campaign",
+      "resume",
+      "--campaign",
+      campaign,
+      "--run",
+      refusedRunId,
+      "--config",
+      configPath,
+    );
+    expect(again.code).toBe(3);
+    expect(again.stderr).toBe(
+      `not resumable: already-resumed (${segment.runId})`,
+    );
+    const completed = await run(
+      "campaign",
+      "resume",
+      "--campaign",
+      campaign,
+      "--run",
+      segment.runId,
+      "--config",
+      configPath,
+    );
+    expect(completed.code).toBe(3);
+    expect(completed.stderr).toBe(
+      "not resumable: not-a-provider-refusal (completed)",
+    );
+    expect(transportRuns).toHaveLength(2);
+  });
+
+  it("does not resume a refused run whose receipt predates session records or whose campaign attaches a Lab", async () => {
+    const legacy = await harness({
+      refuseOnCalls: [1],
+      zeroFindings: true,
+      config: {
+        promptId: undefined,
+        discovery: { lab: "none" },
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    });
+    const command = (configPath: string, campaign: string) => [
+      "--campaign",
+      campaign,
+      "--config",
+      configPath,
+    ];
+    expect(
+      (
+        await legacy.run(
+          "campaign",
+          "run",
+          "--all",
+          ...command(legacy.configPath, "campaign-legacy"),
+        )
+      ).code,
+    ).toBe(0);
+    const legacyResume = await legacy.run(
+      "campaign",
+      "resume",
+      "--run",
+      legacy.transportRuns[0]!.runId,
+      ...command(legacy.configPath, "campaign-legacy"),
+    );
+    expect(legacyResume.code).toBe(3);
+    expect(legacyResume.stderr).toBe("not resumable: session-unrecorded");
+    expect(legacy.transportRuns).toHaveLength(1);
+
+    const attached = await harness({
+      refuseOnCalls: [1],
+      refusalSession: true,
+      zeroFindings: true,
+      config: {
+        promptId: undefined,
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      },
+    });
+    expect(
+      (
+        await attached.run(
+          "campaign",
+          "run",
+          "--all",
+          ...command(attached.configPath, "campaign-attached"),
+        )
+      ).code,
+    ).toBe(0);
+    const attachedResume = await attached.run(
+      "campaign",
+      "resume",
+      "--run",
+      attached.transportRuns[0]!.runId,
+      ...command(attached.configPath, "campaign-attached"),
+    );
+    expect(attachedResume.code).toBe(3);
+    expect(attachedResume.stderr).toContain("not resumable: lab-attached");
+    expect(attached.transportRuns).toHaveLength(1);
+  });
 
   it("drains at the next target boundary when the operator stops, then resumes", async () => {
     const { run, profile, state, configPath, prompts, ledger } = await harness({

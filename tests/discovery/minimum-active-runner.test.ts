@@ -76,6 +76,129 @@ it("resumes the same Root session with the short directive until the active time
   }
 });
 
+/** A fake `codex` that echoes its argv and prompt per turn and reports the thread it was told to resume. */
+async function writeEchoingCodex(directory: string): Promise<string> {
+  const fakeCodex = join(directory, "codex");
+  await writeFile(
+    fakeCodex,
+    [
+      "#!/usr/bin/env node",
+      "let prompt = '';",
+      "process.stdin.on('data', (chunk) => prompt += chunk);",
+      "process.stdin.on('end', () => {",
+      "  const args = process.argv.slice(2);",
+      "  const resumed = args.indexOf('resume');",
+      "  const threadId = resumed === -1 ? 'fresh-thread' : args[args.length - 2];",
+      "  if (process.env.FAKE_CODEX_WRONG_THREAD === '1') { console.log(JSON.stringify({ type: 'thread.started', thread_id: 'another-thread' })); process.exit(0); }",
+      "  console.log(JSON.stringify({ type: 'thread.started', thread_id: threadId }));",
+      "  console.log(JSON.stringify({ type: 'turn.started' }));",
+      "  console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ args, prompt }) } }));",
+      "  console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }));",
+      "});",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return fakeCodex;
+}
+
+async function runRunner(
+  directory: string,
+  argv: readonly string[],
+  env: Record<string, string> = {},
+) {
+  const runner = join(directory, "runner.mjs");
+  await writeFile(runner, MINIMUM_ACTIVE_RUNNER_SOURCE);
+  const child = spawn(process.execPath, [runner, ...argv], {
+    env: {
+      ...process.env,
+      ...env,
+      PATH: `${directory}:${process.env.PATH ?? ""}`,
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stdin.end("Initial full objective");
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => (stdout += chunk.toString()));
+  child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+  const exitCode = await new Promise<number | null>((resolve) =>
+    child.on("close", resolve),
+  );
+  const turns = stdout
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((event) => event.type === "item.completed")
+    .map(
+      (event) =>
+        JSON.parse((event.item as Record<string, string>).text!) as {
+          args: string[];
+          prompt: string;
+        },
+    );
+  return { exitCode, stderr, turns };
+}
+
+it("resumes a restored thread with the pinned directive as its first turn and never resends the objective (ADR 0036)", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "minimum-active-resume-"));
+  try {
+    await writeEchoingCodex(directory);
+    const startedAt = Date.now();
+    const { exitCode, stderr, turns } = await runRunner(directory, [
+      "600",
+      JSON.stringify(["exec", "--json", "-"]),
+      JSON.stringify(["exec", "resume", "--json"]),
+      "Before giving up, keep exploring.",
+      "restored-root-thread",
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(600);
+    expect(turns.length).toBeGreaterThanOrEqual(1);
+    for (const turn of turns) {
+      expect(turn.args).toEqual([
+        "exec",
+        "resume",
+        "--json",
+        "restored-root-thread",
+        "-",
+      ]);
+      expect(turn.prompt).toBe("Before giving up, keep exploring.");
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it("exits non-zero when the resumed CLI reports a different thread or the thread id is malformed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "minimum-active-resume-bad-"));
+  try {
+    await writeEchoingCodex(directory);
+    const wrongThread = await runRunner(
+      directory,
+      [
+        "100",
+        JSON.stringify(["exec", "--json", "-"]),
+        JSON.stringify(["exec", "resume", "--json"]),
+        "Before giving up, keep exploring.",
+        "restored-root-thread",
+      ],
+      { FAKE_CODEX_WRONG_THREAD: "1" },
+    );
+    expect(wrongThread.exitCode).toBe(2);
+    const malformed = await runRunner(directory, [
+      "100",
+      JSON.stringify(["exec", "--json", "-"]),
+      JSON.stringify(["exec", "resume", "--json"]),
+      "Before giving up, keep exploring.",
+      "not a thread id",
+    ]);
+    expect(malformed.exitCode).toBe(2);
+    expect(malformed.turns).toEqual([]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 it("runs the continuation driver only inside the gVisor agent container", async () => {
   const directory = await mkdtemp(join(tmpdir(), "minimum-active-sandbox-"));
   try {

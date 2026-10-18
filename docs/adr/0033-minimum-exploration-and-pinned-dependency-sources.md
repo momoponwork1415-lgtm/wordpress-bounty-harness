@@ -22,6 +22,7 @@ v7のsource packは対象とWordPress本体だけだった。PHPの型、標準�
 
 ## 帰結
 
+- 2026-10-19（[ADR 0036](0036-operator-resume-after-provider-refusal.md)）: 最低 60 分の同一セッション継続は、provider の拒否後に操作者が再開した segment をまたいで数える。再開 segment の最低時間は 60 分 − 消費済み wall、wall は 120 分 − 消費済み wall。
 - 旧v7とv8のTrialはpromptとsource pack、停止条件が異なるため、同じ比較分母に混ぜない。
 - 60分未満の正常完了は認めない。途中の環境・provider失敗は既存の `incomplete` 規則に従う。
 - 経過時間だけでは思考や分析を分単位で証明できない。実Trialでは読取・子の活動・ラウンドの観測値とwallを併記する。

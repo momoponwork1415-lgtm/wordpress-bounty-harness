@@ -75,6 +75,13 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     runKind: z.enum(["explore", "continue", "child"]).optional(),
     continuationOf: id.optional(),
     parentRunId: id.optional(),
+    /**
+     * Operator-triggered resume of a refused Root thread (ADR 0036): the run
+     * this segment continues, and its 1-based segment index. The original
+     * run's `failed` finish stays; the funnel counts the Trial once.
+     */
+    resumesRun: id.optional(),
+    resumeSegment: z.number().int().positive().optional(),
     history: z.union([
       z.strictObject({ mode: z.literal("none") }),
       z.strictObject({
@@ -1244,6 +1251,8 @@ export class Ledger {
     const labByRun = new Map<string, "attached" | "none">();
     let verificationLabFailed = 0;
     const runKinds = new Map<string, "explore" | "continue" | "child">();
+    /** Resume segments continue an earlier run's Trial; they are not new attempts (ADR 0036). */
+    const resumeSegments = new Set<string>();
     const trialByRun = new Map<string, string>();
     const runArms = new Map<string, string[]>();
     const objectiveByRun = new Map<string, string>();
@@ -1308,6 +1317,8 @@ export class Ledger {
             current.labAttached === false ? "none" : "attached",
           );
           runKinds.set(current.runId, current.runKind ?? "explore");
+          if (current.resumesRun !== undefined)
+            resumeSegments.add(current.runId);
           trialByRun.set(current.runId, current.trialId ?? current.runId);
           objectiveByRun.set(
             current.runId,
@@ -1474,7 +1485,8 @@ export class Ledger {
         confirmedPerAgentWallHour: null,
       });
     };
-    for (const runId of startedRuns.keys()) objective(runId).runs++;
+    for (const runId of startedRuns.keys())
+      if (!resumeSegments.has(runId)) objective(runId).runs++;
     for (const event of events) {
       if (event.type !== "discovery-run-finished") continue;
       const slice = objective(event.runId);
@@ -1647,7 +1659,8 @@ export class Ledger {
       none: { runs: 0, findings: 0, confirmed: 0 },
     };
     for (const [runId, lab] of labByRun)
-      if (runKinds.get(runId) === "explore") byLab[lab].runs++;
+      if (runKinds.get(runId) === "explore" && !resumeSegments.has(runId))
+        byLab[lab].runs++;
     for (const finding of findings.values()) {
       if (finding.derivationKind === "fixed-version-control") continue;
       const lab = labByRun.get(trialByRun.get(finding.runId) ?? finding.runId);
@@ -1662,6 +1675,7 @@ export class Ledger {
     const discoveryAttempts = [...startedRuns.entries()].filter(
       ([runId, labId]) =>
         runKinds.get(runId) !== "child" &&
+        !resumeSegments.has(runId) &&
         (labByRun.get(runId) === "none" ||
           (labId !== undefined && readyLabs.has(labId))) &&
         !setupFailedRuns.has(runId),

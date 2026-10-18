@@ -124,6 +124,29 @@ export interface CliSelectionReport {
   }[];
 }
 
+/** What `campaign resume --run` did: a reasoned refusal without events, or the new segment's outcome. */
+export type ResumeCampaignRunSummary =
+  | {
+      readonly status: "refused";
+      readonly reason: string;
+      readonly detail?: string;
+    }
+  | {
+      readonly status: "resumed";
+      readonly runId: string;
+      readonly resumesRun: string;
+      readonly trialId: string;
+      readonly segment: number;
+      readonly remainingWallMs: number;
+      readonly outcome: string;
+      readonly failure?: {
+        readonly reason: string;
+        readonly reasonDetail?: string;
+      };
+      readonly wallTimeMs: number;
+      readonly findingsRecorded: number;
+    };
+
 /** A profile composition: everything target-specific the commands need. */
 export interface CliProfile {
   review(state: CliState): Review;
@@ -175,6 +198,18 @@ export interface CliProfile {
       readonly selectionPolicyPath?: string;
     },
   ): Promise<CampaignSummary>;
+  /**
+   * Operator-triggered resume of one provider-refused Root thread in a new
+   * sandbox (ADR 0036). Refusals are printed with their reason and write nothing.
+   */
+  resumeCampaignRun?(
+    state: CliState,
+    input: {
+      readonly campaignId: string;
+      readonly runId: string;
+      readonly configPath: string;
+    },
+  ): Promise<ResumeCampaignRunSummary>;
   /** Verify one unverified or retry-eligible Finding in a fresh Lab. */
   verifyNext?(
     state: CliState,
@@ -1392,6 +1427,36 @@ const COMMANDS: readonly Command[] = [
         summary.remaining.networks.length +
         summary.remaining.volumes.length;
       return remaining === 0 ? 0 : 1;
+    },
+  }),
+  // ADR 0036: operator-triggered resume of a provider-refused Root thread.
+  command({
+    name: "campaign resume",
+    usage: ["campaign resume --campaign <id> --run <runId> --config <path>"],
+    options: { campaign: STR, run: STR, config: STR },
+    handler: async ({ values, state, environment, io, print }) => {
+      if (environment.profile.resumeCampaignRun === undefined)
+        throw new UsageError("This profile cannot resume a discovery run");
+      const campaignId = required(values.campaign, "campaign");
+      const summary = await environment.profile.resumeCampaignRun(state, {
+        campaignId,
+        runId: required(values.run, "run"),
+        configPath: resolve(required(values.config, "config")),
+      });
+      if (summary.status === "refused") {
+        io.stderr(
+          `not resumable: ${summary.reason}${summary.detail === undefined ? "" : ` (${summary.detail})`}`,
+        );
+        return 3;
+      }
+      io.stdout(
+        `resumed ${summary.resumesRun} as ${summary.runId}  trial ${summary.trialId}  segment ${summary.segment}  remaining wall ${Math.floor(summary.remainingWallMs / 60_000)} min`,
+      );
+      io.stdout(
+        `  outcome ${summary.outcome}${summary.failure === undefined ? "" : ` (${summary.failure.reason}${summary.failure.reasonDetail === undefined ? "" : `: ${summary.failure.reasonDetail}`})`}  wall ${Math.round(summary.wallTimeMs / 60_000)} min  findings ${summary.findingsRecorded}`,
+      );
+      print(formatFunnel(state.ledger.funnel(campaignId)));
+      return summary.outcome === "completed" ? 0 : 3;
     },
   }),
 ];
