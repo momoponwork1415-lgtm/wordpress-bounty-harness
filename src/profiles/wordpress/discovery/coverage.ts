@@ -1,6 +1,12 @@
+import { relative, sep } from "node:path";
+
 import { z } from "zod";
 
-import type { WordPressSourceIndex } from "./storage-index.js";
+import {
+  buildWordPressSourceIndex,
+  phpFiles,
+  type WordPressSourceIndex,
+} from "./storage-index.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const entryId = z.string().regex(/^e-[1-9][0-9]*$/);
@@ -68,5 +74,18 @@ export function assessWordPressCoverage(
       expected.length === 0 ||
       unvisited / expected.length <= maxUnvisitedRatio,
     record,
+  };
+}
+
+/** PHP files of a source tree and the registration files of its index entries, for `ledger coverage`. */
+export async function wordpressSourceFileSets(sourceDirectory: string) {
+  const listed = await phpFiles(sourceDirectory);
+  // The plugin prefix only classifies storage keys; entry files do not depend on it.
+  const index = await buildWordPressSourceIndex(sourceDirectory, "");
+  return {
+    all: listed.files
+      .map((file) => relative(sourceDirectory, file).split(sep).join("/"))
+      .sort(),
+    indexed: [...new Set(index.entries.map((entry) => entry.file))].sort(),
   };
 }

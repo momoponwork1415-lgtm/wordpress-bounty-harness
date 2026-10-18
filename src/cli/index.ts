@@ -5,7 +5,14 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
-import { summarizeRecordedRuntimes } from "../discovery/index.js";
+import {
+  summarizeCampaignCoverage,
+  summarizeRecordedRuntimes,
+  type CampaignCoverage,
+  type CoverageRatio,
+  type CoverageRow,
+  type SourceFileSets,
+} from "../discovery/index.js";
 import {
   blindRubricEntriesSchema,
   type BlindRubricEntry,
@@ -161,6 +168,11 @@ export interface CliProfile {
     wait(): Promise<void>;
   }>;
   answerKeys(value: unknown): readonly LocationAnswerKey[];
+  /** Source files of one Target Snapshot for `ledger coverage`; null or absent prints "unavailable". */
+  sourceFiles?(
+    state: CliState,
+    snapshotDigest: string,
+  ): Promise<SourceFileSets | null>;
   /** Lines describing the public history mirror, and whether it is fresh; null when none is configured. */
   historyStatus(
     state: CliState,
@@ -310,6 +322,7 @@ const USAGE = [
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
   "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
   "  ledger funnel --campaign <id> | --since <ISO>",
+  "  ledger coverage --campaign <id>",
   "  ledger stops [--campaign <id>] [--since <ISO>]",
   "  ledger usage [--campaign <id>]",
   "  ledger runtime [--campaign <id>]",
@@ -485,6 +498,36 @@ export function formatStopRow(row: StopRow): string {
       ? []
       : [`explore=${row.explore}`, `within60s=${row.within60s ?? 0}`];
   return [row.type, ...fields, `count=${row.count}`, ...extra].join("  ");
+}
+
+function formatCoverageRow(row: CoverageRow): string {
+  const percent = (covered: number, total: number) =>
+    total === 0 ? "unavailable" : `${((covered / total) * 100).toFixed(1)}%`;
+  const ratio = (value: CoverageRatio) =>
+    value === "unavailable"
+      ? "unavailable"
+      : `${value.covered}/${value.total} (${percent(value.covered, value.total)})`;
+  const tally = (counts: Readonly<Record<string, number>>) =>
+    Object.keys(counts)
+      .sort()
+      .map((key) => `${key} ${counts[key]}`)
+      .join(", ");
+  const { entries } = row;
+  const entryText =
+    entries === "unavailable"
+      ? "entries unavailable"
+      : `entries observed ${entries.observed} blocked ${entries.blocked} unvisited ${entries.unvisited} (observed ${percent(entries.observed, entries.observed + entries.blocked + entries.unvisited)})${Object.keys(entries.blockedReasons).length === 0 ? "" : ` blocked by ${tally(entries.blockedReasons)}`}`;
+  return `${entryText}  files ${ratio(row.sourceFiles)}  indexed files ${ratio(row.indexedFiles)}  missingEdge ${tally(row.missingEdges)}`;
+}
+
+export function formatCoverage(coverage: CampaignCoverage): string[] {
+  return [
+    `campaign ${coverage.campaignId}`,
+    `runs ${coverage.runs.length}  total  ${formatCoverageRow(coverage.total)}`,
+    ...coverage.runs.map(
+      (run) => `  ${run.runKind} ${run.runId}  ${formatCoverageRow(run)}`,
+    ),
+  ];
 }
 
 export function formatFunnel(funnel: CampaignFunnel): string[] {
@@ -1383,6 +1426,25 @@ export async function runCli(
               scope.campaignId,
               scope.since === undefined ? {} : { since: scope.since },
             ),
+          ),
+        );
+        return 0;
+      }
+      case "ledger coverage": {
+        const { profile } = environment;
+        print(
+          formatCoverage(
+            await summarizeCampaignCoverage({
+              ledger: state.ledger,
+              store: state.store,
+              campaignId: required(values.campaign, "campaign"),
+              ...(profile.sourceFiles === undefined
+                ? {}
+                : {
+                    sourceFiles: (digest: string) =>
+                      profile.sourceFiles!(state, digest),
+                  }),
+            }),
           ),
         );
         return 0;
