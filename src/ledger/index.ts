@@ -68,7 +68,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
   event({
     type: z.literal("discovery-run-started"),
     runId: id,
-    labId: id,
+    labId: id.optional(),
+    labAttached: z.boolean().optional(),
     trialId: id.optional(),
     trialOrdinal: z.number().int().nonnegative().optional(),
     stage: z.enum(["screening", "deep-dive"]).optional(),
@@ -126,6 +127,12 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     }),
   }),
   event({
+    type: z.literal("verification-lab-failed"),
+    findingId: id,
+    verificationId: id,
+    reason: z.enum(["provision", "precondition"]),
+  }),
+  event({
     type: z.literal("discovery-run-finished"),
     runId: id,
     /** `provider-limited`: the subscription refused the run; the campaign's Trial policy decides whether the started attempt consumes its budget. */
@@ -146,6 +153,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         "evidence",
         "wall",
         "operator",
+        "depth",
       ])
       .optional(),
     reasonDetail: z
@@ -308,6 +316,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     findingId: id,
     runId: id,
     category: id,
+    preconditionClass: id.optional(),
     continuationOrdinal: z.number().int().nonnegative().optional(),
     historyRecordId: id.optional(),
     /** A fresh-snapshot hypothesis derived from an earlier Finding. */
@@ -316,13 +325,23 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       .enum(["latest-version", "fixed-version-control"])
       .optional(),
   }),
-  /** A Finding whose impact lies outside the Programme Boundary; kept, never verified (#185). */
+  /** A Finding held outside the active verification and review queues. */
   event({
     type: z.literal("finding-parked"),
     findingId: id,
     runId: id,
     category: id,
-    reason: z.enum(["outside-programme-boundary", "refuted"]),
+    reason: z.enum([
+      "outside-programme-boundary",
+      "admin-configuration-precondition",
+      "refuted",
+    ]),
+    preconditionClass: id.optional(),
+  }),
+  event({
+    type: z.literal("finding-precondition-classified"),
+    findingId: id,
+    preconditionClass: id,
   }),
   event({
     type: z.literal("refutation-recorded"),
@@ -543,6 +562,9 @@ export type UsageRow = {
 export type CampaignFunnel = FunnelCounts & {
   readonly campaignId: string;
   readonly discoveryAttempts: number;
+  readonly incompleteDepth: number;
+  readonly byLab: Readonly<Record<"attached" | "none", ArmCounts>>;
+  readonly verificationLabFailed: number;
   readonly runCount: number;
   readonly knownCostUsd: number;
   readonly unpricedRuns: number;
@@ -616,6 +638,7 @@ const querySchema = z.strictObject({
       "finding-recorded",
       "finding-parked",
       "refutation-recorded",
+      "finding-precondition-classified",
       "lead-recorded",
       "child-report-recovered",
       "discovery-report-recovered",
@@ -1234,7 +1257,9 @@ export class Ledger {
       ),
     );
     const readyLabs = new Set<string>();
-    const startedRuns = new Map<string, string>();
+    const startedRuns = new Map<string, string | undefined>();
+    const labByRun = new Map<string, "attached" | "none">();
+    let verificationLabFailed = 0;
     const runKinds = new Map<string, "explore" | "continue" | "child">();
     const trialByRun = new Map<string, string>();
     const runArms = new Map<string, string[]>();
@@ -1295,6 +1320,10 @@ export class Ledger {
           break;
         case "discovery-run-started":
           startedRuns.set(current.runId, current.labId);
+          labByRun.set(
+            current.runId,
+            current.labAttached === false ? "none" : "attached",
+          );
           runKinds.set(current.runId, current.runKind ?? "explore");
           trialByRun.set(current.runId, current.trialId ?? current.runId);
           objectiveByRun.set(
@@ -1318,6 +1347,9 @@ export class Ledger {
             runArms.set(current.runId, [
               `${current.configuration.axis}:${current.configuration.arm}`,
             ]);
+          break;
+        case "verification-lab-failed":
+          verificationLabFailed++;
           break;
         case "discovery-run-finished":
           if (current.costUsd === "unavailable") unpricedRuns++;
@@ -1426,6 +1458,7 @@ export class Ledger {
     ) as Record<string, number>;
     for (const finding of findings.values()) {
       if (finding.derivationKind === "fixed-version-control") continue;
+      if (parkedFindings.has(finding.findingId)) continue;
       const status = verifications.get(finding.findingId)?.result.status;
       if (
         status === undefined ||
@@ -1495,6 +1528,7 @@ export class Ledger {
     }
     for (const finding of findings.values()) {
       if (finding.derivationKind === "fixed-version-control") continue;
+      if (parkedFindings.has(finding.findingId)) continue;
       const category = (byCategory[finding.category] ??= emptyCounts());
       for (const count of [totals, category, objective(finding.runId)]) {
         count.accepted++;
@@ -1622,11 +1656,39 @@ export class Ledger {
           counts.confirmed++;
       }
     }
+    const byLab: Record<
+      "attached" | "none",
+      { -readonly [K in keyof ArmCounts]: number }
+    > = {
+      attached: { runs: 0, findings: 0, confirmed: 0 },
+      none: { runs: 0, findings: 0, confirmed: 0 },
+    };
+    for (const [runId, lab] of labByRun)
+      if (runKinds.get(runId) === "explore") byLab[lab].runs++;
+    for (const finding of findings.values()) {
+      if (finding.derivationKind === "fixed-version-control") continue;
+      const lab = labByRun.get(trialByRun.get(finding.runId) ?? finding.runId);
+      if (lab === undefined) continue;
+      byLab[lab].findings++;
+      if (
+        verifications.get(finding.findingId)?.result.status ===
+        "runtime-confirmed"
+      )
+        byLab[lab].confirmed++;
+    }
     const discoveryAttempts = [...startedRuns.entries()].filter(
       ([runId, labId]) =>
         runKinds.get(runId) !== "child" &&
-        readyLabs.has(labId) &&
+        (labByRun.get(runId) === "none" ||
+          (labId !== undefined && readyLabs.has(labId))) &&
         !setupFailedRuns.has(runId),
+    ).length;
+    const incompleteDepth = events.filter(
+      (event) =>
+        event.type === "discovery-run-finished" &&
+        event.outcome === "failed" &&
+        event.reason === "depth" &&
+        runKinds.get(event.runId) === "explore",
     ).length;
     const agreement = (
       values: readonly ("match" | "mismatch" | "unavailable")[],
@@ -1686,6 +1748,9 @@ export class Ledger {
     return {
       campaignId: campaign,
       discoveryAttempts,
+      incompleteDepth,
+      byLab,
+      verificationLabFailed,
       runCount: startedRuns.size,
       knownCostUsd,
       unpricedRuns,
