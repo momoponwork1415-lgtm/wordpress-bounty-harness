@@ -341,6 +341,8 @@ const USAGE = [
   "  lab up --for-review --campaign <id> --finding <id>",
   "  lab up --campaign <id> --finding <id> --config <path> [--port <n>] [--db-port <n>]",
   "  lab down [--config <path>]",
+  "  refute run --campaign <id> [--finding <id>|--all-pending] [--config <path>]",
+  "  refute backfill --campaign <id> [--config <path>]",
   "  eval score --campaign <id> --keys <path> --case <id> [--manifest <path>]",
   "  eval case-blocked --campaign <id> --case <id> --snapshot <digest> --stage source|dependency|lab --reason <code>",
   "  eval keys --keys <path> [--manifest <path>]",
@@ -352,6 +354,7 @@ const USAGE = [
 const options = {
   state: { type: "string" },
   all: { type: "boolean" },
+  "all-pending": { type: "boolean" },
   campaign: { type: "string" },
   config: { type: "string" },
   finding: { type: "string" },
@@ -522,6 +525,15 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
     `incomplete(depth) ${funnel.incompleteDepth}`,
     `by Lab: attached runs ${funnel.byLab.attached.runs} findings ${funnel.byLab.attached.findings} confirmed ${funnel.byLab.attached.confirmed}; none runs ${funnel.byLab.none.runs} findings ${funnel.byLab.none.findings} confirmed ${funnel.byLab.none.confirmed}; verification Lab failed ${funnel.verificationLabFailed}`,
     stages(funnel),
+    `refutation ${funnel.refutation.processed} processed  ${funnel.refutation.after} after  verdicts ${Object.entries(
+      funnel.refutation.byVerdict,
+    )
+      .map(([name, count]) => `${name}=${count}`)
+      .join(", ")}  reasons ${
+      Object.entries(funnel.refutation.byReason)
+        .map(([name, count]) => `${name}=${count}`)
+        .join(", ") || "none"
+    }`,
     `noncache input ${funnel.noncachedInputTokens} token(s) (${funnel.unavailableInputRuns} run(s) unavailable)  confirmed / 1M tokens ${rate(funnel.confirmedPerMillionInputTokens)}  confirmed / agent wall hour ${rate(funnel.confirmedPerAgentWallHour)}`,
     `owner minutes / submission ${rate(funnel.ownerMinutesPerSubmission)}  opened findings / submission ${rate(funnel.openedFindingsPerSubmission)}  manual reproduction agreement ${funnel.manualReproductionAgreement === null ? "unavailable" : `${(funnel.manualReproductionAgreement * 100).toFixed(1)}%`}`,
   ];
@@ -832,6 +844,35 @@ export async function runCli(
     const command = [group, sub].filter((part) => part !== undefined).join(" ");
     const print = (lines: readonly string[]) => lines.forEach(io.stdout);
     switch (command) {
+      case "refute run":
+      case "refute backfill": {
+        if (
+          rest.length > 0 ||
+          (command === "refute run" &&
+            (values.finding === undefined) ===
+              (values["all-pending"] !== true)) ||
+          (command === "refute backfill" &&
+            (values.finding !== undefined || values["all-pending"] === true))
+        )
+          throw new UsageError(
+            "Select one Finding or --all-pending for refute run",
+          );
+        if (environment.profile.refute === undefined)
+          throw new UsageError("Refutation is unavailable for this profile");
+        const results = await environment.profile.refute(state, {
+          campaignId: required(values.campaign, "campaign"),
+          ...(command === "refute run" && values.finding !== undefined
+            ? { findingId: values.finding }
+            : {}),
+          ...(values.config === undefined
+            ? {}
+            : { configPath: resolve(values.config) }),
+        });
+        for (const result of results)
+          io.stdout(`${result.findingId}: ${result.verdict}`);
+        if (results.length === 0) io.stdout("no pending refutations");
+        return 0;
+      }
       case "continuous run":
       case "continuous stop":
       case "continuous resume":

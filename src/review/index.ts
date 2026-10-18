@@ -245,6 +245,18 @@ export class Review<TFacts = unknown> {
     for (const { sequence, event } of this.#readAll("review-decided"))
       if (event.type === "review-decided" && inCampaign(event))
         latestDecision.set(key(event), { sequence, decision: event.decision });
+    const refuted = new Set(
+      this.#readAll("finding-parked")
+        .filter(
+          ({ event }) =>
+            event.type === "finding-parked" &&
+            event.reason === "refuted" &&
+            inCampaign(event),
+        )
+        .map(({ event }) =>
+          event.type === "finding-parked" ? key(event) : "",
+        ),
+    );
 
     const items: ReviewItem[] = [];
     const parkedEvents = new Map<
@@ -278,7 +290,12 @@ export class Review<TFacts = unknown> {
     let contradicted = 0;
     let unverified = 0;
     for (const { event: finding } of this.#readAll("finding-recorded")) {
-      if (finding.type !== "finding-recorded" || !inCampaign(finding)) continue;
+      if (
+        finding.type !== "finding-recorded" ||
+        !inCampaign(finding) ||
+        refuted.has(key(finding))
+      )
+        continue;
       if (finding.derivationKind === "fixed-version-control") continue;
       if (parked.has(key(finding))) continue;
       const classification =

@@ -70,6 +70,11 @@ export interface CampaignPipeline<
     readonly assessCoverage?: NonNullable<DiscoveryOptions["assessCoverage"]>;
   }>;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
+  readonly refuteFinding?: (input: {
+    readonly campaignId: string;
+    readonly findingId: string;
+    readonly snapshotDigest: string;
+  }) => Promise<boolean>;
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
 }
 
@@ -268,6 +273,13 @@ export async function runCampaignPipeline<
     findingsBySnapshot.set(event.snapshotDigest, findings);
   }
   const verificationHistory = new Map<string, VerificationRecord[]>();
+  const refutations = new Set(
+    readAll(ledger, { campaignId, type: "refutation-recorded" })
+      .filter(({ event }) => event.type === "refutation-recorded")
+      .map(({ event }) =>
+        event.type === "refutation-recorded" ? event.findingId : "",
+      ),
+  );
   for (const record of readAll(ledger, {
     campaignId,
     type: "verification-finished",
@@ -306,6 +318,8 @@ export async function runCampaignPipeline<
         }).length > 0
       )
         return true;
+      if (pipeline.refuteFinding !== undefined && !refutations.has(findingId))
+        return false;
       const history =
         verificationHistory.get(`${snapshotDigest}\0${findingId}`) ?? [];
       const previous = history.at(-1);
@@ -658,6 +672,14 @@ export async function runCampaignPipeline<
           }).length > 0
         )
           continue;
+        if (pipeline.refuteFinding !== undefined) {
+          const refuted = await pipeline.refuteFinding({
+            campaignId,
+            findingId: event.findingId,
+            snapshotDigest: snapshot.digest,
+          });
+          if (refuted) continue;
+        }
         // The Verifier shares the subscription; a usage limit stops the campaign.
         if (stopped === "provider-limit") break;
         const history = earlier.filter(

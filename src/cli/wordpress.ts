@@ -1373,6 +1373,33 @@ async function runWordPressCampaign(
           historyFor,
         }),
       verification: verificationFor(state, boundaries),
+      ...(config.refutation.enabled
+        ? {
+            refuteFinding: async ({
+              campaignId,
+              findingId,
+            }: {
+              campaignId: string;
+              findingId: string;
+              snapshotDigest: string;
+            }) => {
+              await refuteWordPressFindings(
+                state,
+                campaignId,
+                boundaries,
+                config.refutation.promptId,
+                findingId,
+              );
+              return state.ledger
+                .read({ campaignId, findingId, type: "finding-parked" })
+                .some(
+                  ({ event }) =>
+                    event.type === "finding-parked" &&
+                    event.reason === "refuted",
+                );
+            },
+          }
+        : {}),
       reconstructionFor: reconstructionFor(config),
     },
   });
