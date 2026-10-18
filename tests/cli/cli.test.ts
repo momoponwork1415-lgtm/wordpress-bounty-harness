@@ -3759,11 +3759,10 @@ describe("harness CLI vertical slice", () => {
       await readFile(join(root, "selection.json"), "utf8"),
     ) as object;
     await mkdir(join(root, "policies"));
-    for (const name of ["selection", "selection.50000", "selection.30000"])
-      await writeFile(
-        join(root, "policies", `${name}.json`),
-        JSON.stringify({ ...policy, wordpressVersion }),
-      );
+    await writeFile(
+      join(root, "policies", "selection.json"),
+      JSON.stringify({ ...policy, wordpressVersion }),
+    );
     const host = {
       loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
       programmeObservedAt: new Date(now),

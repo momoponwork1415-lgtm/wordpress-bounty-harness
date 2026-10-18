@@ -36,6 +36,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     selectionId: id,
     /** Absent in historical events; a new selection may record its planned prompt. */
     promptVariant: id.optional(),
+    /** The selection policy's fallback band (1-based) that admitted the target; absent for the primary band. */
+    cascadeStep: z.number().int().positive().optional(),
   }),
   event({
     /** Bind a campaign to one immutable automatic selection before its first target. */

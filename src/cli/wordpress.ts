@@ -1,5 +1,5 @@
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import { z } from "zod";
 
@@ -327,15 +327,6 @@ const labUpRecordSchema = z.strictObject({
 });
 const labUpRecordPath = (state: CliState) =>
   join(state.stateDirectory, "lab-up.json");
-
-/**
- * The install-floor copies of the selection policy an `exhausted` runner is
- * restarted with (OPERATIONS.md §runner); they sit next to the policy in use.
- */
-const WORDPRESS_FLOOR_POLICY_FILES = [
-  "selection.50000.json",
-  "selection.30000.json",
-] as const;
 
 async function readLabUpRecord(
   state: CliState,
@@ -1045,7 +1036,10 @@ export function createWordPressCliProfile(
         policy.promptVariant ??
         config?.promptId ??
         WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID;
+      // Automatic batches keep the historical floor of 3 unless the caller lowers it.
+      const minimum = input.minimum ?? ("candidateSource" in policy ? 3 : 1);
       // Policy, Ledger and legacy history decide; this command freezes and records.
+      // Below `minimum` eligible candidates the policy's cascade steps are tried in order.
       const decision = await openWordPressSelection({
         candidates: boundaries.selection,
         ledger: state.ledger,
@@ -1054,7 +1048,7 @@ export function createWordPressCliProfile(
           : { legacyHistoryFile: options.legacyHistoryFile }),
         promptVariant,
         clock: state.clock,
-      }).decide(policy);
+      }).decide(policy, { minimum });
       const inspected = decision.inspections;
       const inspectionBySlug = new Map(
         inspected.map((item) => [item.slug, item]),
@@ -1065,8 +1059,6 @@ export function createWordPressCliProfile(
       );
       const chosen: { target: WordPressTargetSelection; snapshot: Snapshot }[] =
         [];
-      // Automatic batches keep the historical floor of 3 unless the caller lowers it.
-      const minimum = input.minimum ?? ("candidateSource" in policy ? 3 : 1);
       const selectionAttemptId = `selection-${state.newId()}`;
       const freezeFailures: {
         selectionId: string;
@@ -1121,6 +1113,10 @@ export function createWordPressCliProfile(
         legacyHistory: decision.legacyHistory,
         advisoryHistory: decision.advisoryHistory,
         minimum,
+        ...(decision.cascadeStep === undefined
+          ? {}
+          : { cascadeStep: decision.cascadeStep }),
+        cascade: decision.cascade,
       };
       const reportDigest = await state.store.putFiles({
         "selection-report.json": canonicalJson(report),
@@ -1165,6 +1161,10 @@ export function createWordPressCliProfile(
           type: "target-selected",
           selectionId: targetSelectionId(target),
           promptVariant,
+          // The band that admitted the target, so per-band yield can be read from the ledger.
+          ...(target.cascadeStep === undefined
+            ? {}
+            : { cascadeStep: target.cascadeStep }),
           artifacts: [
             { kind: "target-selection", digest: selectionDigest },
             { kind: "selection-report", digest: reportDigest },
@@ -1179,6 +1179,10 @@ export function createWordPressCliProfile(
         sourceStatus: decision.sourceStatus,
         legacyHistory: decision.legacyHistory,
         advisoryHistory: decision.advisoryHistory,
+        ...(decision.cascadeStep === undefined
+          ? {}
+          : { cascadeStep: decision.cascadeStep }),
+        cascade: decision.cascade,
         selected: chosen.map(({ target }) => ({
           targetId: target.targetId,
           version: target.version,
@@ -1187,6 +1191,9 @@ export function createWordPressCliProfile(
           ...(target.advisoryHistory === undefined
             ? {}
             : { advisoryHistory: target.advisoryHistory }),
+          ...(target.cascadeStep === undefined
+            ? {}
+            : { cascadeStep: target.cascadeStep }),
           observedAt:
             inspectionBySlug.get(target.slug)?.observedAt ?? target.selectedAt,
           ...(inspectionBySlug.get(target.slug)?.enumeration === undefined
@@ -1266,17 +1273,6 @@ export function createWordPressCliProfile(
         () => true,
         () => false,
       ),
-    async floorPoliciesAvailable(_state, { selectionPath }) {
-      const present = await Promise.all(
-        WORDPRESS_FLOOR_POLICY_FILES.map((name) =>
-          stat(join(dirname(selectionPath), name)).then(
-            () => true,
-            () => false,
-          ),
-        ),
-      );
-      return present.every(Boolean);
-    },
     async cleanupLeftovers(state, input) {
       const { boundaries } = await openWordPressCampaignSession(
         options,

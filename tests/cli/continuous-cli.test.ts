@@ -35,7 +35,6 @@ function fakeProfile(overrides: Partial<CliProfile> = {}): CliProfile {
     select: unused("select"),
     runCampaign: unused("runCampaign"),
     labHeld: unused("labHeld"),
-    floorPoliciesAvailable: unused("floorPoliciesAvailable"),
     cleanupLeftovers: unused("cleanupLeftovers"),
     checkRuntime: unused("checkRuntime"),
     reverify: unused("reverify"),
@@ -148,7 +147,6 @@ function hostProfile(
       legacyHistoryAvailable: true,
       loginMarginMinutes: 60,
     }),
-    floorPoliciesAvailable: async () => true,
     labHeld: async () => false,
     checkRuntime: async () => [],
     async cleanupLeftovers(_state, input) {
@@ -301,26 +299,6 @@ describe("continuous run", () => {
     await expect(t.command("run", RUN_OPTIONS)).rejects.toThrow(
       "continuous run needs a host profile",
     );
-  });
-
-  it("stops before any batch when the profile lacks the floor policies", async () => {
-    const asked: string[] = [];
-    const sweeps: string[] = [];
-    const t = await setup(
-      hostProfile({
-        stateDirectory: "unused",
-        sweeps,
-        async floorPoliciesAvailable(_state, input) {
-          asked.push(input.selectionPath);
-          return false;
-        },
-      }),
-    );
-    expect(await t.command("run", RUN_OPTIONS)).toBe(0);
-    expect(asked).toEqual([RUN_OPTIONS.selectionPath]);
-    expect(await readFile(t.paths.stop, "utf8")).toBe("missing-floor-policy\n");
-    expect(sweeps).toEqual([]);
-    expect(t.stdout.at(-1)).toMatch(/ stopped reason=missing-floor-policy$/);
   });
 
   it("stops when the host status says the legacy history is missing", async () => {

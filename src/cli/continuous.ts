@@ -38,7 +38,6 @@ const STOP_REASONS = [
   "programme-stale",
   "exhausted",
   "legacy-history-missing",
-  "missing-floor-policy",
 ] as const;
 
 export type ContinuousStopReason = (typeof STOP_REASONS)[number];
@@ -151,7 +150,6 @@ export interface ContinuousDeps {
   /** The same host check as `runtime check`; throws on failure. */
   preflight(): Promise<void>;
   legacyHistoryAvailable(): Promise<boolean>;
-  floorPolicyAvailable(): Promise<boolean>;
   /** The provider login's expiry, re-read from its file; null when unreadable. */
   readAuth(): Promise<{ readonly expiresAt: Date } | null>;
   /** When the Programme scope copy was transcribed. */
@@ -418,9 +416,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       if (stopRequested()) return stop("operator");
       if (!(await deps.legacyHistoryAvailable()))
         return stop("legacy-history-missing");
-      if (stopRequested()) return stop("operator");
-      if (!(await deps.floorPolicyAvailable()))
-        return stop("missing-floor-policy");
       if (stopRequested()) return stop("operator");
       await deps.preflight();
       if (stopRequested()) return stop("operator");

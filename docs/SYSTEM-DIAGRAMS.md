@@ -221,7 +221,7 @@ sequenceDiagram
   Note over R,M: 状態の正本は台帳。メモは作業用で、消えても作り直す
 ```
 
-停止理由は 7 つ: `operator`、`errors`、`no-progress`、`programme-stale`、`exhausted`、`legacy-history-missing`、`missing-floor-policy`。保守（Lab 掃除、再起動）は人手介入に数えない。
+停止理由は 6 つ: `operator`、`errors`、`no-progress`、`programme-stale`、`exhausted`、`legacy-history-missing`（`missing-floor-policy` は方針の `cascade` に置き換えて削除、ADR 0037 追記）。保守（Lab 掃除、再起動）は人手介入に数えない。
 
 根拠: 最終設計（2026-10-14）§3.1〜3.2、§7。`src/cli/continuous.ts`（PR #262〜#269 で修正中の部分を含む）。
 

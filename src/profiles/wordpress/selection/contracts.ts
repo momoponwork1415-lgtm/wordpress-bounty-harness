@@ -114,9 +114,27 @@ const manualSelectionPolicy = z
     },
   );
 
+/**
+ * One fallback band: the primary policy with these fields overridden. Tried in
+ * order only when the primary band leaves fewer eligible candidates than the
+ * caller's minimum (ADR 0037, 2026-10-19 addendum).
+ */
+export const wordPressSelectionCascadeStepSchema = z.strictObject({
+  minimumActiveInstallations: z.number().int().nonnegative(),
+  /** null lifts the ceiling; absent keeps the primary policy's. */
+  maximumActiveInstallations: z.number().int().positive().nullable().optional(),
+  /** Candidates with fewer paying-class records in the window are ineligible at this step. */
+  minimumPayingClassCount: z.number().int().nonnegative().optional(),
+});
+
+export type WordPressSelectionCascadeStep = z.infer<
+  typeof wordPressSelectionCascadeStepSchema
+>;
+
 const automaticSelectionPolicy = z
   .strictObject({
     ...commonSelectionPolicy,
+    cascade: z.array(wordPressSelectionCascadeStepSchema).max(8).optional(),
     /** Undeclared runtime dependencies resolved to official stable at freeze. */
     pluginDependencySlugs: z
       .record(slugSchema, z.array(slugSchema).max(16))
@@ -144,6 +162,23 @@ const automaticSelectionPolicy = z
       message:
         "maximumActiveInstallations must exceed minimumActiveInstallations",
     },
+  )
+  .refine(
+    (policy) =>
+      (policy.cascade ?? []).every((step) => {
+        const ceiling =
+          step.maximumActiveInstallations === undefined
+            ? policy.maximumActiveInstallations
+            : step.maximumActiveInstallations;
+        return ceiling === null || ceiling === undefined
+          ? true
+          : ceiling > step.minimumActiveInstallations;
+      }),
+    {
+      message:
+        "Each cascade step's ceiling must exceed its minimumActiveInstallations",
+      path: ["cascade"],
+    },
   );
 
 /** A policy nominates candidates manually or from the directory, never both. */
@@ -167,6 +202,8 @@ export type SelectionReason =
   | "excluded-slug"
   | "below-installation-threshold"
   | "above-installation-ceiling"
+  /** A cascade step's `minimumPayingClassCount` was not met (ADR 0037 addendum). */
+  | "below-paying-class-minimum"
   | "core-requirement-unavailable"
   | "core-version-incompatible"
   | "programme-asset-out-of-scope"
@@ -227,6 +264,8 @@ export interface WordPressTargetSelection extends TargetSelection {
   };
   /** Present when the policy weights advisory history (ADR 0037). */
   readonly advisoryHistory?: WordPressTargetAdvisoryHistory | undefined;
+  /** 1-based index into the policy's `cascade` that admitted this target; absent for the primary band. */
+  readonly cascadeStep?: number | undefined;
   readonly observationRef: WordPressOrgTargetObservationRef;
   readonly programmeRef: ProgrammeEligibilitySnapshotRef;
 }
@@ -274,6 +313,7 @@ export const wordPressTargetSelectionSchema: z.ZodType<WordPressTargetSelection>
         mirrorDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
       })
       .optional(),
+    cascadeStep: z.number().int().positive().optional(),
     observationRef: wordPressOrgTargetObservationRefSchema,
     programmeRef: programmeEligibilitySnapshotRefSchema,
   });
