@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="779" viewBox="0 0 360 876" style="max-width:100%;height:auto" role="img" aria-labelledby="title-verification-2 desc-verification-2">
+<title id="title-verification-2">検証と判定 2/4</title><desc id="desc-verification-2">隔離、独立検証、判定、レビュー。項目 4、5、6。</desc>
+<rect x="0" y="0" width="360" height="876" fill="#f8fafc"/>
+<rect x="0" y="0" width="360" height="128" fill="#0f172a"/>
+<text x="18" y="28" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#93c5fd">HARNESS • 2026.10.14</text>
+<text x="18" y="68" font-family="system-ui,sans-serif" font-size="25" font-weight="800" fill="#ffffff">検証と判定</text>
+<text x="18" y="99" font-family="system-ui,sans-serif" font-size="14" fill="#cbd5e1">項目 4–6 ／ 2 / 4</text>
+<text x="18" y="153" font-family="system-ui,sans-serif" font-size="12.5" fill="#475569">色付きラベルで実装状態を表示</text>
+<g id="step-4"><rect x="16" y="175" width="328" height="190" rx="16" fill="#e9f8f3" stroke="#0f766e" stroke-width="2"/>
+<rect x="16" y="175" width="7" height="190" rx="3.5" fill="#0f766e"/>
+<rect x="32" y="189" width="78" height="26" rx="13" fill="#0f766e"/><text x="71" y="207" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">main</text>
+<text x="326" y="208" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">04</text>
+<text x="32" y="238" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">独立Verifierと観測器</text>
+<text x="32" y="276" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">Findingと同じSnapshotで新Lab</text>
+<text x="32" y="299" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">探索会話や管理者sessionは渡さない</text>
+<text x="32" y="322" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">被害者操作はHarnessの型付き手順</text>
+<text x="32" y="345" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">HTTP捕捉とLab前後差分を保存</text>
+</g>
+<g id="step-5"><rect x="16" y="381" width="328" height="190" rx="16" fill="#e9f8f3" stroke="#0f766e" stroke-width="2"/>
+<rect x="16" y="381" width="7" height="190" rx="3.5" fill="#0f766e"/>
+<rect x="32" y="395" width="78" height="26" rx="13" fill="#0f766e"/><text x="71" y="413" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">main</text>
+<text x="326" y="414" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">05</text>
+<text x="32" y="444" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">判定器だけがconfirmedを出す</text>
+<text x="32" y="482" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">nonce付きcanaryの回収を要求</text>
+<text x="32" y="505" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">agent自己申告は証明にしない</text>
+<text x="32" y="528" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">digest不一致はincomplete</text>
+<text x="32" y="551" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">証拠本文はPrivate Evidenceへ</text>
+</g>
+<g id="step-6"><rect x="16" y="587" width="328" height="259" rx="16" fill="#e9f8f3" stroke="#0f766e" stroke-width="2"/>
+<rect x="16" y="587" width="7" height="259" rx="3.5" fill="#0f766e"/>
+<rect x="32" y="601" width="78" height="26" rx="13" fill="#0f766e"/><text x="71" y="619" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">main</text>
+<text x="326" y="620" font-family="system-ui,sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#475569">06</text>
+<text x="32" y="650" font-family="system-ui,sans-serif" font-size="18" font-weight="800" fill="#0f172a">検証の3つの結果</text>
+<text x="32" y="688" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">runtime-confirmed：canary証</text>
+<text x="32" y="711" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">拠あり</text>
+<text x="32" y="734" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">contradicted：同経路が反証され</text>
+<text x="32" y="757" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">た</text>
+<text x="32" y="780" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">incomplete：環境・前提・観測不足</text>
+<text x="32" y="803" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">incompleteは脆弱性なしを意味しな</text>
+<text x="32" y="826" font-family="system-ui,sans-serif" font-size="15.5" fill="#334155">い</text>
+</g>
+<text x="180" y="859" font-family="system-ui,sans-serif" font-size="11.5" text-anchor="middle" fill="#64748b">wordpress-bounty-harness • 設計・実装照合</text>
+</svg>

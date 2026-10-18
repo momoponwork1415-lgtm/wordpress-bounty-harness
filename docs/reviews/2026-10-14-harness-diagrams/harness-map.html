@@ -1,0 +1,1379 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>Harness 全体図解｜2026-10-14</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #0f172a;
+        --muted: #475569;
+        --line: #dbe4ed;
+        --page: #f6f8fb;
+        --panel: #fff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        margin: 0;
+        max-width: 100%;
+        overflow-x: hidden;
+        background: var(--page);
+        color: var(--ink);
+        font-family:
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        line-height: 1.65;
+      }
+      a {
+        color: #075985;
+      }
+      a:focus-visible,
+      button:focus-visible,
+      select:focus-visible {
+        outline: 3px solid #2563eb;
+        outline-offset: 3px;
+      }
+      button,
+      select {
+        font: inherit;
+      }
+      .wrap {
+        width: min(100%, 760px);
+        margin-inline: auto;
+        padding-inline: 16px;
+      }
+      .hero {
+        background: linear-gradient(145deg, #0f172a 0%, #164e63 100%);
+        color: #fff;
+        padding: 26px 0 28px;
+      }
+      .eyebrow {
+        margin: 0 0 8px;
+        color: #93c5fd;
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+      }
+      h1 {
+        font-size: clamp(1.65rem, 7vw, 2.4rem);
+        line-height: 1.22;
+        margin: 0 0 12px;
+      }
+      .hero p:last-child {
+        margin: 0;
+        color: #dbeafe;
+        font-size: 0.95rem;
+      }
+      .guide {
+        padding-block: 16px 12px;
+      }
+      .guide p {
+        margin: 0 0 10px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+      }
+      .legend span,
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 0.76rem;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+      .legend .current,
+      .badge.current {
+        background: #d1fae5;
+        color: #065f46;
+      }
+      .legend .draft,
+      .badge.draft {
+        background: #e0e7ff;
+        color: #3730a3;
+      }
+      .legend .design,
+      .badge.design {
+        background: #fef3c7;
+        color: #92400e;
+      }
+      .legend .human,
+      .badge.human {
+        background: #ede9fe;
+        color: #5b21b6;
+      }
+      .legend .issue,
+      .badge.issue {
+        background: #ffe4e6;
+        color: #9f1239;
+      }
+      .legend .future,
+      .badge.future {
+        background: #e2e8f0;
+        color: #334155;
+      }
+      .selector {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: rgba(255, 255, 255, 0.97);
+        border-block: 1px solid var(--line);
+        box-shadow: 0 3px 12px #0f172a0d;
+      }
+      .selector .wrap {
+        padding-block: 9px;
+      }
+      .selector label {
+        display: block;
+        color: var(--muted);
+        font-size: 0.77rem;
+        font-weight: 800;
+        margin-bottom: 4px;
+      }
+      .selector select {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        min-height: 46px;
+        border: 1px solid #94a3b8;
+        border-radius: 10px;
+        background: #fff;
+        color: var(--ink);
+        padding: 7px 12px;
+        font-size: 1rem;
+        font-weight: 700;
+      }
+      main {
+        padding-block: 20px 90px;
+      }
+      .chapter {
+        max-width: 100%;
+        overflow-wrap: anywhere;
+      }
+      .chapter-head {
+        margin-bottom: 22px;
+      }
+      .chapter-head .count {
+        font-size: 0.78rem;
+        letter-spacing: 0.08em;
+        font-weight: 800;
+        color: #0f766e;
+        margin: 0 0 5px;
+      }
+      h2 {
+        font-size: clamp(1.5rem, 6vw, 2rem);
+        line-height: 1.25;
+        margin: 0 0 8px;
+      }
+      .chapter-head p:last-child {
+        margin: 0;
+        color: var(--muted);
+      }
+      .segment {
+        margin: 0 0 30px;
+      }
+      .segment-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 8px;
+      }
+      .segment-index {
+        border-radius: 8px;
+        background: #e2e8f0;
+        color: #334155;
+        padding: 2px 8px;
+        font-size: 0.75rem;
+        font-weight: 800;
+        flex: none;
+      }
+      h3 {
+        font-size: 1.05rem;
+        line-height: 1.35;
+        margin: 0;
+      }
+      .steps {
+        display: grid;
+        gap: 11px;
+      }
+      .step {
+        min-width: 0;
+        max-width: 100%;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-left: 5px solid var(--accent);
+        border-radius: 14px;
+        padding: 16px 16px 15px;
+        box-shadow: 0 4px 14px #0f172a0a;
+      }
+      .step.current {
+        --accent: #0f766e;
+      }
+      .step.draft {
+        --accent: #4f46e5;
+      }
+      .step.design {
+        --accent: #b45309;
+      }
+      .step.human {
+        --accent: #7c3aed;
+      }
+      .step.issue {
+        --accent: #be123c;
+      }
+      .step.future {
+        --accent: #64748b;
+      }
+      .step-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 9px;
+      }
+      .step-no {
+        font-size: 0.8rem;
+        font-weight: 800;
+        color: #64748b;
+        white-space: nowrap;
+      }
+      h4 {
+        font-size: 1.08rem;
+        line-height: 1.42;
+        margin: 0 0 10px;
+        overflow-wrap: anywhere;
+      }
+      .step ul {
+        padding-left: 1.2em;
+        margin: 0;
+        color: #334155;
+      }
+      .step li {
+        margin: 4px 0;
+        font-size: 0.96rem;
+        overflow-wrap: anywhere;
+      }
+      .sources {
+        border-top: 1px solid var(--line);
+        padding-top: 18px;
+        margin-top: 18px;
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+      .sources p {
+        margin: 0 0 8px;
+      }
+      .sources a {
+        display: inline-block;
+        margin-right: 12px;
+        margin-bottom: 6px;
+      }
+      .pager {
+        position: sticky;
+        bottom: 0;
+        z-index: 11;
+        background: rgba(255, 255, 255, 0.97);
+        border-top: 1px solid var(--line);
+        box-shadow: 0 -4px 16px #0f172a12;
+        padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
+      }
+      .pager .wrap {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        gap: 8px;
+      }
+      .pager button {
+        min-width: 0;
+        min-height: 44px;
+        border: 1px solid #0f766e;
+        border-radius: 10px;
+        background: #0f766e;
+        color: white;
+        padding: 6px 8px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .pager button:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      .pager button:last-child {
+        justify-self: stretch;
+      }
+      .pager output {
+        font-size: 0.86rem;
+        font-weight: 800;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .js .chapter {
+        display: none;
+      }
+      .js .chapter.active {
+        display: block;
+      }
+      @media (min-width: 680px) {
+        .wrap {
+          padding-inline: 24px;
+        }
+        .steps {
+          gap: 14px;
+        }
+        .step {
+          padding: 18px 20px;
+        }
+      }
+      @media (max-width: 360px) {
+        .wrap {
+          padding-inline: 12px;
+        }
+        .step {
+          padding: 14px;
+        }
+        .step li {
+          font-size: 0.94rem;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+      }
+    </style>
+    <script>
+      document.documentElement.classList.add("js");
+    </script>
+  </head>
+  <body>
+    <header class="hero">
+      <div class="wrap">
+        <p class="eyebrow">WORDPRESS BOUNTY HARNESS · 2026.10.14</p>
+        <h1>ハーネス全体図解</h1>
+        <p>
+          設計と実装の現在地を、スマホでも読める5章のカード図にまとめました。
+        </p>
+      </div>
+    </header>
+    <div class="guide wrap">
+      <p>各カードのラベルが実装状態です。章を切り替えて読み進められます。</p>
+      <div class="legend" aria-label="状態の凡例">
+        <span class="current">現行</span><span class="draft">Draft</span
+        ><span class="design">設計案</span><span class="issue">課題</span
+        ><span class="human">人間</span><span class="future">将来</span>
+      </div>
+    </div>
+    <nav class="selector" aria-label="章の選択">
+      <div class="wrap">
+        <label for="chapter-select">表示する章</label
+        ><select id="chapter-select">
+          <option value="0">1. 全体像</option>
+          <option value="1">2. 対象選定</option>
+          <option value="2">3. 並列実行</option>
+          <option value="3">4. 検証と判定</option>
+          <option value="4">5. 継続運転</option>
+        </select>
+      </div>
+    </nav>
+    <main class="wrap">
+      <section
+        class="chapter active"
+        id="overview"
+        aria-labelledby="h-overview"
+      >
+        <div class="chapter-head">
+          <p class="count">CHAPTER 1 / 5</p>
+          <h2 id="h-overview">全体像</h2>
+          <p>
+            人間の方針決定から、対象選定、隔離探索、検証、レビュー、改善への循環。
+          </p>
+        </div>
+        <section class="segment" aria-labelledby="h-overview-1">
+          <div class="segment-head">
+            <span class="segment-index">01 / 03</span>
+            <h3 id="h-overview-1">戦略から探索へ</h3>
+          </div>
+          <div class="steps">
+            <article class="step human">
+              <div class="step-top">
+                <span class="badge human">人間</span
+                ><span class="step-no">項目 01</span>
+              </div>
+              <h4>人間が戦略と方針を決める</h4>
+              <ul>
+                <li>対象帯・カテゴリ・Programmeを設定</li>
+                <li>運転開始／停止、追加Trialを承認</li>
+                <li>AIはログから改善案を出す</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 02</span>
+              </div>
+              <h4>selection：対象を選ぶ</h4>
+              <ul>
+                <li>WordPress.org と公開履歴を観測</li>
+                <li>main は上位3〜5件の固定batch</li>
+                <li>継続在庫と自動補充は未実装</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 03</span>
+              </div>
+              <h4>snapshot：sourceを固定</h4>
+              <ul>
+                <li>plugin＋WordPress coreをdigest固定</li>
+                <li>公開履歴は時点で切ったカタログ</li>
+                <li>評価の答え・PoCは渡さない</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 04</span>
+              </div>
+              <h4>lab：使い捨て環境</h4>
+              <ul>
+                <li>gVisor（runsc）内にWP＋MySQL</li>
+                <li>低権限認証とRO DBを供給</li>
+                <li>対象コードはホストで動かさない</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <section class="segment" aria-labelledby="h-overview-2">
+          <div class="segment-head">
+            <span class="segment-index">02 / 03</span>
+            <h3 id="h-overview-2">候補を検証へ渡す</h3>
+          </div>
+          <div class="steps">
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 05</span>
+              </div>
+              <h4>discovery：1対象1 Trial</h4>
+              <ul>
+                <li>Codex Root＋最大3子が協調探索</li>
+                <li>wall上限60分、早期報告で終了</li>
+                <li>子のFinding／Leadも独立保存</li>
+              </ul>
+            </article>
+            <article class="step draft">
+              <div class="step-top">
+                <span class="badge draft">Draft</span
+                ><span class="step-no">項目 06</span>
+              </div>
+              <h4>探索版とproviderの拡張</h4>
+              <ul>
+                <li>main既定はv3、v4はPR #217</li>
+                <li>Opus経路はPR #225のDraft</li>
+                <li>異なる版を同じ評価分母に混ぜない</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 07</span>
+              </div>
+              <h4>出力を正規化し振り分ける</h4>
+              <ul>
+                <li>Finding／Leadを受理または保留</li>
+                <li>Programme外のimpactはpark</li>
+                <li>scope内Findingを独立検証へ</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 08</span>
+              </div>
+              <h4>verification：独立検証</h4>
+              <ul>
+                <li>新しいLabとVerifierで確認</li>
+                <li>Harness判定器がnonceを回収</li>
+                <li>失敗は理由付きincomplete</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <section class="segment" aria-labelledby="h-overview-3">
+          <div class="segment-head">
+            <span class="segment-index">03 / 03</span>
+            <h3 id="h-overview-3">記録と人間の判断</h3>
+          </div>
+          <div class="steps">
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 09</span>
+              </div>
+              <h4>ledger と Private Evidence</h4>
+              <ul>
+                <li>台帳は追記専用でdigest参照のみ</li>
+                <li>HTTP・payload・ログはGit外</li>
+                <li>Trialと検証の由来を追跡</li>
+              </ul>
+            </article>
+            <article class="step issue">
+              <div class="step-top">
+                <span class="badge issue">課題</span
+                ><span class="step-no">項目 10</span>
+              </div>
+              <h4>review queue の現行差分</h4>
+              <ul>
+                <li>mainはconfirmed等とincompleteを列挙</li>
+                <li>contradicted／未検証は件数のみ</li>
+                <li>scope内全件配送の契約と要照合</li>
+              </ul>
+            </article>
+            <article class="step human">
+              <div class="step-top">
+                <span class="badge human">人間</span
+                ><span class="step-no">項目 11</span>
+              </div>
+              <h4>人間が理解・確認・提出</h4>
+              <ul>
+                <li>手動Lab再現、重複・scope査読</li>
+                <li>文案を確認し外部行動を承認</li>
+                <li>Harnessは送信せず、人間が提出</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 12</span>
+              </div>
+              <h4>転帰を次の方針へ戻す</h4>
+              <ul>
+                <li>報奨とreview負荷をrunへ結ぶ</li>
+                <li>AIがログを読み改善案を提案</li>
+                <li>仕様・戦略の採否は人間が決定</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <div class="sources">
+          <p>根拠文書（2026-10-14時点）</p>
+          <a href="../../SPEC.md">SPEC</a><a href="../../adr/">ADR</a
+          ><a href="../../DEVELOPMENT.md">DEVELOPMENT</a
+          ><a href="../../LESSONS.md">LESSONS</a
+          ><a href="MOBILE.md">分割SVG版</a>
+        </div>
+      </section>
+      <section class="chapter" id="selection" aria-labelledby="h-selection">
+        <div class="chapter-head">
+          <p class="count">CHAPTER 2 / 5</p>
+          <h2 id="h-selection">対象選定</h2>
+          <p>
+            現行の選定基準、再候補化の衝突、横断ガード、候補在庫と不足時の扱い。
+          </p>
+        </div>
+        <section class="segment" aria-labelledby="h-selection-1">
+          <div class="segment-head">
+            <span class="segment-index">01 / 03</span>
+            <h3 id="h-selection-1">現行と方針の衝突</h3>
+          </div>
+          <div class="steps">
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 01</span>
+              </div>
+              <h4>main の選定方針</h4>
+              <ul>
+                <li>active installs 下限100,000</li>
+                <li>人気2頁＋8タグ各2頁を列挙</li>
+                <li>最大500候補から最大5対象を選ぶ</li>
+                <li>順位はinstall数と更新の新しさ</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 02</span>
+              </div>
+              <h4>観測と適格性の検査</h4>
+              <ul>
+                <li>WordPress.org／Programmeを観測</li>
+                <li>鮮度・版・除外作者を確認</li>
+                <li>unavailable／staleはeligibleにしない</li>
+                <li>公開脆弱性履歴で個別順位付けしない</li>
+              </ul>
+            </article>
+            <article class="step issue">
+              <div class="step-top">
+                <span class="badge issue">課題</span
+                ><span class="step-no">項目 03</span>
+              </div>
+              <h4>現行の再候補化は新方針と衝突</h4>
+              <ul>
+                <li>mainは版またはprompt変更で再候補</li>
+                <li>選定済み記録も既往判定に使用</li>
+                <li>所有者方針はslug単位の初回のみ自動</li>
+                <li>新版の2回目も毎Trial承認が必要</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <section class="segment" aria-labelledby="h-selection-2">
+          <div class="segment-head">
+            <span class="segment-index">02 / 03</span>
+            <h3 id="h-selection-2">在庫と予約の設計</h3>
+          </div>
+          <div class="steps">
+            <article class="step draft">
+              <div class="step-top">
+                <span class="badge draft">Draft</span
+                ><span class="step-no">項目 04</span>
+              </div>
+              <h4>横断ガードはPR #216</h4>
+              <ul>
+                <li>ホスト共通Trial registryを追加</li>
+                <li>既知22 stateの開始141件を復元</li>
+                <li>ただし旧DB・アーカイブは未網羅</li>
+                <li>Draftで新しい実対象Trialは未実施</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 05</span>
+              </div>
+              <h4>候補在庫は軽いメタデータ</h4>
+              <ul>
+                <li>初回と証明できるslugを順位付き保持</li>
+                <li>24時間分は補充目安、終了期限でない</li>
+                <li>Snapshot／Labは起動直前まで作らない</li>
+                <li>方針ID・観測時刻・出典を保持</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 06</span>
+              </div>
+              <h4>実行直前の再検査と予約</h4>
+              <ul>
+                <li>鮮度・Programme・版を再観測</li>
+                <li>全campaign／providerの開始履歴を照合</li>
+                <li>対象claimを原子的に取得</li>
+                <li>その後Snapshotをdigest固定</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <section class="segment" aria-labelledby="h-selection-3">
+          <div class="segment-head">
+            <span class="segment-index">03 / 03</span>
+            <h3 id="h-selection-3">既往・不明・不足の分岐</h3>
+          </div>
+          <div class="steps">
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 07</span>
+              </div>
+              <h4>分岐A：未探索を確認</h4>
+              <ul>
+                <li>初回の単一協調Trialを自動開始</li>
+                <li>選定だけではTrialを消費しない</li>
+                <li>開始eventで実探索を記録</li>
+              </ul>
+            </article>
+            <article class="step human">
+              <div class="step-top">
+                <span class="badge human">人間</span
+                ><span class="step-no">項目 08</span>
+              </div>
+              <h4>分岐B：既往slug</h4>
+              <ul>
+                <li>新版・新promptでも初回に戻さない</li>
+                <li>Finding等を見て追加目的を決める</li>
+                <li>独立Trialごとに事前承認</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 09</span>
+              </div>
+              <h4>分岐C：旧履歴が曖昧</h4>
+              <ul>
+                <li>初回の自動在庫から外して保留</li>
+                <li>旧DB・アーカイブと照合して解除</li>
+                <li>不明を未探索と推定しない</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 10</span>
+              </div>
+              <h4>候補不足と方針変更</h4>
+              <ul>
+                <li>許可済みの列挙範囲で追加取得</li>
+                <li>一部取得失敗は枯渇と数えない</li>
+                <li>本当に尽きたらreview待ち</li>
+                <li>install帯・カテゴリは人間が版変更</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">後続・低優先</span>
+              </div>
+              <h4>日次データ更新と新規公開情報</h4>
+              <ul>
+                <li>
+                  Wordfence Intelligenceの公開DBとプラグイン版情報を日次更新
+                </li>
+                <li>
+                  取得時刻・提供元の更新時刻・版を記録し、鮮度を確認できるようにする
+                </li>
+                <li>
+                  公開直後の脆弱性を選定に使う案は保留（ADR 0030の変更要）
+                </li>
+                <li>
+                  探索agentには脆弱性詳細・PoCを渡さず、時点カットオフを守る
+                </li>
+                <li>開始済みTrialのSnapshotは変えず、次回の候補評価から反映</li>
+                <li>開発優先度は低め。まず継続運転と検証までを安定化</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <div class="sources">
+          <p>根拠文書（2026-10-14時点）</p>
+          <a href="../../SPEC.md">SPEC</a><a href="../../adr/">ADR</a
+          ><a href="../../DEVELOPMENT.md">DEVELOPMENT</a
+          ><a href="../../LESSONS.md">LESSONS</a
+          ><a href="MOBILE.md">分割SVG版</a>
+        </div>
+      </section>
+      <section class="chapter" id="execution" aria-labelledby="h-execution">
+        <div class="chapter-head">
+          <p class="count">CHAPTER 3 / 5</p>
+          <h2 id="h-execution">並列実行</h2>
+          <p>
+            1
+            campaign内の実装と、Codex・Opus間の対象予約、PC資源、quota、復旧の設計。
+          </p>
+        </div>
+        <section class="segment" aria-labelledby="h-execution-1">
+          <div class="segment-head">
+            <span class="segment-index">01 / 03</span>
+            <h3 id="h-execution-1">現行の実行経路</h3>
+          </div>
+          <div class="steps">
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 01</span>
+              </div>
+              <h4>固定campaignを実行</h4>
+              <ul>
+                <li>選定した対象集合をbatchに固定</li>
+                <li>対象間は最大2並列</li>
+                <li>対象内のTrialは最大1</li>
+                <li>各対象でLabとcleanupを分離</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 02</span>
+              </div>
+              <h4>単一協調Trialの内部</h4>
+              <ul>
+                <li>Root＋最大3子、wall上限60分</li>
+                <li>続行差し込み・自動追加Trialなし</li>
+                <li>子の有効成果はRootと独立保存</li>
+                <li>失敗は正常な候補0件にしない</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 03</span>
+              </div>
+              <h4>main の停止・再開</h4>
+              <ul>
+                <li>provider上限で新規対象開始を止める</li>
+                <li>実行中の対象は結果を記録</li>
+                <li>同一campaign IDの再実行で</li>
+                <li>完了済みを飛ばし未完了を続行</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <section class="segment" aria-labelledby="h-execution-2">
+          <div class="segment-head">
+            <span class="segment-index">02 / 03</span>
+            <h3 id="h-execution-2">campaignを越える制御</h3>
+          </div>
+          <div class="steps">
+            <article class="step issue">
+              <div class="step-top">
+                <span class="badge issue">課題</span
+                ><span class="step-no">項目 04</span>
+              </div>
+              <h4>campaign を越える制御がない</h4>
+              <ul>
+                <li>次batchの自動補充は未実装</li>
+                <li>別state／providerの同slug予約なし</li>
+                <li>PC全体のCPU・RAM枠の仲裁なし</li>
+                <li>長期運転の監督プロセスも未実装</li>
+              </ul>
+            </article>
+            <article class="step draft">
+              <div class="step-top">
+                <span class="badge draft">Draft</span
+                ><span class="step-no">項目 05</span>
+              </div>
+              <h4>Opus探索はPR #225</h4>
+              <ul>
+                <li>購読token経路とbrokerを追加中</li>
+                <li>実対象2 Trialは両方incomplete</li>
+                <li>Root完走0、横断2＋2並列未測定</li>
+                <li>本番の共通資源枠には未接続</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 06</span>
+              </div>
+              <h4>親運転IDでbatchをつなぐ</h4>
+              <ul>
+                <li>campaignの対象集合は不変のまま</li>
+                <li>親IDが複数campaignを順次生成</li>
+                <li>在庫が減れば次batchを補充</li>
+                <li>Trial結果は既存の追記台帳へ</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 07</span>
+              </div>
+              <h4>共通の対象claim</h4>
+              <ul>
+                <li>profile＋slugをホスト共通で予約</li>
+                <li>同時起動はleaseとfencingで排他</li>
+                <li>旧履歴が不明なら開始を拒否</li>
+                <li>運用表は台帳から再照合できる</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <section class="segment" aria-labelledby="h-execution-3">
+          <div class="segment-head">
+            <span class="segment-index">03 / 03</span>
+            <h3 id="h-execution-3">quotaと再開</h3>
+          </div>
+          <div class="steps">
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 08</span>
+              </div>
+              <h4>共通のPC資源枠</h4>
+              <ul>
+                <li>CPU・RAM・Lab・Trial slotを予約</li>
+                <li>provider別の同時枠も同じ門で管理</li>
+                <li>Opusは最大2、全体は実測で調整</li>
+                <li>初期並列は現行の2を維持</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 09</span>
+              </div>
+              <h4>quota 到達時</h4>
+              <ul>
+                <li>該当providerの新規開始を待機</li>
+                <li>別providerは別の初回slugを処理</li>
+                <li>5時間・週次枠の回復後にpreflight</li>
+                <li>従量課金へ暗黙に切り替えない</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 10</span>
+              </div>
+              <h4>重複なく復旧</h4>
+              <ul>
+                <li>台帳・運用表・容器を照合</li>
+                <li>開始済みTrialを勝手に再探索しない</li>
+                <li>子の保存済み成果と検証を回収</li>
+                <li>曖昧な対象だけ保留する</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <div class="sources">
+          <p>根拠文書（2026-10-14時点）</p>
+          <a href="../../SPEC.md">SPEC</a><a href="../../adr/">ADR</a
+          ><a href="../../DEVELOPMENT.md">DEVELOPMENT</a
+          ><a href="../../LESSONS.md">LESSONS</a
+          ><a href="MOBILE.md">分割SVG版</a>
+        </div>
+      </section>
+      <section
+        class="chapter"
+        id="verification"
+        aria-labelledby="h-verification"
+      >
+        <div class="chapter-head">
+          <p class="count">CHAPTER 4 / 5</p>
+          <h2 id="h-verification">検証と判定</h2>
+          <p>
+            隔離、独立検証、決定論的判定、実測で止まっている箇所と人間レビュー。
+          </p>
+        </div>
+        <section class="segment" aria-labelledby="h-verification-1">
+          <div class="segment-head">
+            <span class="segment-index">01 / 04</span>
+            <h3 id="h-verification-1">入力と隔離</h3>
+          </div>
+          <div class="steps">
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 01</span>
+              </div>
+              <h4>探索agentへ渡す入力</h4>
+              <ul>
+                <li>固定source・人間のtrust境界宣言</li>
+                <li>Programme Boundary・Lab</li>
+                <li>時点付き公開履歴はカタログのみ</li>
+                <li>held-outの答え／PoCは渡さない</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 02</span>
+              </div>
+              <h4>隔離と通信</h4>
+              <ul>
+                <li>対象実行は使い捨てgVisor内だけ</li>
+                <li>外向きは認証broker経由のAPI</li>
+                <li>host source実行へfallbackしない</li>
+                <li>探索と検証の作業領域を分ける</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 03</span>
+              </div>
+              <h4>候補の受理境界</h4>
+              <ul>
+                <li>Finding／Leadを正規化して保存</li>
+                <li>受理不能はcandidate-held</li>
+                <li>other等のscope外impactはpark</li>
+                <li>content-deletionは一律parkしない</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <section class="segment" aria-labelledby="h-verification-2">
+          <div class="segment-head">
+            <span class="segment-index">02 / 04</span>
+            <h3 id="h-verification-2">独立検証と判定</h3>
+          </div>
+          <div class="steps">
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 04</span>
+              </div>
+              <h4>独立Verifierと観測器</h4>
+              <ul>
+                <li>Findingと同じSnapshotで新Lab</li>
+                <li>探索会話や管理者sessionは渡さない</li>
+                <li>被害者操作はHarnessの型付き手順</li>
+                <li>HTTP捕捉とLab前後差分を保存</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 05</span>
+              </div>
+              <h4>判定器だけがconfirmedを出す</h4>
+              <ul>
+                <li>nonce付きcanaryの回収を要求</li>
+                <li>agent自己申告は証明にしない</li>
+                <li>digest不一致はincomplete</li>
+                <li>証拠本文はPrivate Evidenceへ</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 06</span>
+              </div>
+              <h4>検証の3つの結果</h4>
+              <ul>
+                <li>runtime-confirmed：canary証拠あり</li>
+                <li>contradicted：同経路が反証された</li>
+                <li>incomplete：環境・前提・観測不足</li>
+                <li>incompleteは脆弱性なしを意味しない</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <section class="segment" aria-labelledby="h-verification-3">
+          <div class="segment-head">
+            <span class="segment-index">03 / 04</span>
+            <h3 id="h-verification-3">実測の詰まり</h3>
+          </div>
+          <div class="steps">
+            <article class="step issue">
+              <div class="step-top">
+                <span class="badge issue">課題</span
+                ><span class="step-no">項目 07</span>
+              </div>
+              <h4>実測：検証で止まる</h4>
+              <ul>
+                <li>完了本番3周：15対象／Finding14</li>
+                <li>14件全てincomplete、confirmed 0</li>
+                <li>後続3 Trial：Finding9も全件incomplete</li>
+                <li>前提不足7、観測不足2</li>
+              </ul>
+            </article>
+            <article class="step issue">
+              <div class="step-top">
+                <span class="badge issue">課題</span
+                ><span class="step-no">項目 08</span>
+              </div>
+              <h4>再試行とLab前提の差</h4>
+              <ul>
+                <li>#107：observation上限が所有者決定と差</li>
+                <li>理由が変わると試行数が増える</li>
+                <li>#213：通常機能scenarioが不足</li>
+                <li>判定条件を緩めず根因別に直す</li>
+              </ul>
+            </article>
+            <article class="step issue">
+              <div class="step-top">
+                <span class="badge issue">課題</span
+                ><span class="step-no">項目 09</span>
+              </div>
+              <h4>review queue の実装差</h4>
+              <ul>
+                <li>mainはconfirmed等とincompleteを列挙</li>
+                <li>contradicted／未検証は件数のみ</li>
+                <li>scope内Finding全件配送の契約と差</li>
+                <li>exportの欠落を実測で確かめる</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <section class="segment" aria-labelledby="h-verification-4">
+          <div class="segment-head">
+            <span class="segment-index">04 / 04</span>
+            <h3 id="h-verification-4">人間レビューと改善</h3>
+          </div>
+          <div class="steps">
+            <article class="step human">
+              <div class="step-top">
+                <span class="badge human">人間</span
+                ><span class="step-no">項目 10</span>
+              </div>
+              <h4>人間が読む段階</h4>
+              <ul>
+                <li>Findingを理解し手動Labで確認</li>
+                <li>重複とprogramme scopeを査読</li>
+                <li>提出文案の版と送信先を確認</li>
+                <li>明示承認後、人間が外部へ提出</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 11</span>
+              </div>
+              <h4>改善に返す測定</h4>
+              <ul>
+                <li>理由別incompleteとattempt／wall</li>
+                <li>reviewで開いた件数・所要時間</li>
+                <li>提出可能件数と報奨転帰を結ぶ</li>
+                <li>類似Findingは理解を軽くできる</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <div class="sources">
+          <p>根拠文書（2026-10-14時点）</p>
+          <a href="../../SPEC.md">SPEC</a><a href="../../adr/">ADR</a
+          ><a href="../../DEVELOPMENT.md">DEVELOPMENT</a
+          ><a href="../../LESSONS.md">LESSONS</a
+          ><a href="MOBILE.md">分割SVG版</a>
+        </div>
+      </section>
+      <section class="chapter" id="continuous" aria-labelledby="h-continuous">
+        <div class="chapter-head">
+          <p class="count">CHAPTER 5 / 5</p>
+          <h2 id="h-continuous">継続運転</h2>
+          <p>
+            ユーザーが止めるか利用枠が尽きるまで、未探索対象を補充し、待機・異常停止・再開を管理する設計。
+          </p>
+        </div>
+        <section class="segment" aria-labelledby="h-continuous-1">
+          <div class="segment-head">
+            <span class="segment-index">01 / 04</span>
+            <h3 id="h-continuous-1">運転状態</h3>
+          </div>
+          <div class="steps">
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 01</span>
+              </div>
+              <h4>RUNNING：未探索対象を補充</h4>
+              <ul>
+                <li>親運転IDの下で固定batchを連続生成</li>
+                <li>24時間は在庫量の目安だけ</li>
+                <li>本人が止めるまで期限は置かない</li>
+                <li>初回slugだけ安全に開始</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 02</span>
+              </div>
+              <h4>WAIT_QUOTA：枠の回復待ち</h4>
+              <ul>
+                <li>5時間・週次枠の上限を記録</li>
+                <li>別providerが動ければ別slugを継続</li>
+                <li>回復後preflightを通して再開</li>
+                <li>開始済みTrialは自動でやり直さない</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 03</span>
+              </div>
+              <h4>WAIT_REVIEW：候補が尽きる</h4>
+              <ul>
+                <li>許可された候補源を調べ切る</li>
+                <li>履歴不明と追加Trial承認待ちは分離</li>
+                <li>方針をAIが自動で緩めない</li>
+                <li>新しい方針か候補源を人間が判断</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <section class="segment" aria-labelledby="h-continuous-2">
+          <div class="segment-head">
+            <span class="segment-index">02 / 04</span>
+            <h3 id="h-continuous-2">停止・復旧と現行差</h3>
+          </div>
+          <div class="steps">
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 04</span>
+              </div>
+              <h4>STOPPING：通常停止</h4>
+              <ul>
+                <li>新規claimを停止</li>
+                <li>進行中Trialは各wall上限で完了</li>
+                <li>検証・exportまで記録して終了</li>
+                <li>緊急停止は別の操作</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 05</span>
+              </div>
+              <h4>RECOVERING：異常後に照合</h4>
+              <ul>
+                <li>OSサービスが監督プロセスを再起動</li>
+                <li>台帳・予約表・実容器を照合</li>
+                <li>不明な対象は保留、成果を回収</li>
+                <li>隔離／broker違反は全体停止</li>
+              </ul>
+            </article>
+            <article class="step current">
+              <div class="step-top">
+                <span class="badge current">現行</span
+                ><span class="step-no">項目 06</span>
+              </div>
+              <h4>main が今できること</h4>
+              <ul>
+                <li>1 campaign内の対象2並列</li>
+                <li>#203：provider停止と同ID再開</li>
+                <li>review exportとLab前後差分あり</li>
+                <li>固定batchを消費すると終了</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <section class="segment" aria-labelledby="h-continuous-3">
+          <div class="segment-head">
+            <span class="segment-index">03 / 04</span>
+            <h3 id="h-continuous-3">障害と実装順</h3>
+          </div>
+          <div class="steps">
+            <article class="step issue">
+              <div class="step-top">
+                <span class="badge issue">課題</span
+                ><span class="step-no">項目 07</span>
+              </div>
+              <h4>今の実測障害</h4>
+              <ul>
+                <li>#213：Labの通常機能前提不足</li>
+                <li>#222：権限設定でLabがsource読取失敗</li>
+                <li>#223：source取得タイムアウト</li>
+                <li>#220：Draft系Trialがprovider拒否</li>
+              </ul>
+            </article>
+            <article class="step draft">
+              <div class="step-top">
+                <span class="badge draft">Draft</span
+                ><span class="step-no">項目 08</span>
+              </div>
+              <h4>まだ本番基線でない変更</h4>
+              <ul>
+                <li>#216：追加Trial承認ガード</li>
+                <li>#217：重大影響向けv4 prompt</li>
+                <li>#225：Opus経路（完走0）</li>
+                <li>どれもmainへ未mergeのDraft</li>
+              </ul>
+            </article>
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 09</span>
+              </div>
+              <h4>Step 1 の実装順</h4>
+              <ul>
+                <li>①既存候補レビュー＋検証理由を改善</li>
+                <li>②旧履歴を照合し重複開始を防止</li>
+                <li>③補充・横断資源枠・quota待ち</li>
+                <li>④1週分を無人で試験</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <section class="segment" aria-labelledby="h-continuous-4">
+          <div class="segment-head">
+            <span class="segment-index">04 / 04</span>
+            <h3 id="h-continuous-4">合格基準と将来</h3>
+          </div>
+          <div class="steps">
+            <article class="step design">
+              <div class="step-top">
+                <span class="badge design">設計案</span
+                ><span class="step-no">項目 10</span>
+              </div>
+              <h4>合格を示す数字</h4>
+              <ul>
+                <li>scope内Findingのexport欠落0</li>
+                <li>無承認の同slug追加Trial 0</li>
+                <li>中断を正常0件と誤算0</li>
+                <li>枠回復・再起動後の重複0</li>
+              </ul>
+            </article>
+            <article class="step future">
+              <div class="step-top">
+                <span class="badge future">将来</span
+                ><span class="step-no">項目 11</span>
+              </div>
+              <h4>その先の拡張</h4>
+              <ul>
+                <li>他プラットフォームのprofile</li>
+                <li>Mantis等への探索方式切替</li>
+                <li>ログをAIと人間で見て改善</li>
+                <li>変更採否は人間が設計承認</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+        <div class="sources">
+          <p>根拠文書（2026-10-14時点）</p>
+          <a href="../../SPEC.md">SPEC</a><a href="../../adr/">ADR</a
+          ><a href="../../DEVELOPMENT.md">DEVELOPMENT</a
+          ><a href="../../LESSONS.md">LESSONS</a
+          ><a href="MOBILE.md">分割SVG版</a>
+        </div>
+      </section>
+    </main>
+    <footer class="pager">
+      <div class="wrap">
+        <button id="prev" type="button" aria-label="前の章">← 前の章</button
+        ><output id="position" aria-live="polite">1 / 5</output
+        ><button id="next" type="button" aria-label="次の章">次の章 →</button>
+      </div>
+    </footer>
+    <script>
+      (function () {
+        const sections = [...document.querySelectorAll(".chapter")];
+        const select = document.getElementById("chapter-select");
+        const prev = document.getElementById("prev");
+        const next = document.getElementById("next");
+        const pos = document.getElementById("position");
+        let current = 0;
+        function show(index, scroll) {
+          current = Math.max(0, Math.min(sections.length - 1, index));
+          sections.forEach((s, i) => {
+            s.classList.toggle("active", i === current);
+            s.setAttribute("aria-hidden", i === current ? "false" : "true");
+          });
+          select.value = String(current);
+          pos.value = current + 1 + " / " + sections.length;
+          prev.disabled = current === 0;
+          next.disabled = current === sections.length - 1;
+          document.title =
+            sections[current].querySelector("h2").textContent +
+            "｜Harness 全体図解";
+          if (scroll)
+            window.scrollTo({
+              top: 0,
+              behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+                .matches
+                ? "auto"
+                : "smooth",
+            });
+        }
+        select.addEventListener("change", () =>
+          show(Number(select.value), true),
+        );
+        prev.addEventListener("click", () => show(current - 1, true));
+        next.addEventListener("click", () => show(current + 1, true));
+        const hash = location.hash.slice(1);
+        const initial = sections.findIndex((s) => s.id === hash);
+        show(initial >= 0 ? initial : 0, false);
+      })();
+    </script>
+  </body>
+</html>
