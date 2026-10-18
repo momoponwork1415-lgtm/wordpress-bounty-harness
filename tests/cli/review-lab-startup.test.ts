@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runForegroundReviewLab } from "../../src/cli/index.js";
 
@@ -15,15 +15,16 @@ const sessionFields = {
   browserImage: "browser@test",
 };
 
-describe("review Lab startup signals", () => {
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("review Lab foreground signals", () => {
   it("remembers an interrupt during launch and closes the returned session", async () => {
     const signals = new EventEmitter();
     const lines: string[] = [];
     let finishLaunch!: (
-      session: typeof sessionFields & {
-        wait(): Promise<void>;
-        close(): Promise<void>;
-      },
+      session: typeof sessionFields & { close(): Promise<void> },
     ) => void;
     const launch = new Promise<Parameters<typeof finishLaunch>[0]>(
       (resolve) => {
@@ -38,7 +39,6 @@ describe("review Lab startup signals", () => {
     const closeCalled = new Promise<void>((resolve) => {
       closeStarted = resolve;
     });
-    let waits = 0;
     const running = runForegroundReviewLab(
       () => launch,
       { stdout: (line) => lines.push(line), stderr: () => undefined },
@@ -50,16 +50,12 @@ describe("review Lab startup signals", () => {
     signals.emit("SIGINT");
     finishLaunch({
       ...sessionFields,
-      async wait() {
-        waits += 1;
-      },
       close() {
         closeStarted();
         return closing;
       },
     });
     await closeCalled;
-    expect(waits).toBe(0);
     expect(lines).toEqual([]);
     expect(signals.listenerCount("SIGINT")).toBe(1);
     expect(signals.listenerCount("SIGTERM")).toBe(1);
@@ -72,17 +68,14 @@ describe("review Lab startup signals", () => {
     expect(signals.listenerCount("SIGTERM")).toBe(0);
   });
 
-  it("does not enter wait when an interrupt arrives while presenting the session", async () => {
+  it("does not start waiting when an interrupt arrives while presenting the session", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const signals = new EventEmitter();
     const lines: string[] = [];
-    let waits = 0;
     let closes = 0;
     await runForegroundReviewLab(
       async () => ({
         ...sessionFields,
-        async wait() {
-          waits += 1;
-        },
         async close() {
           closes += 1;
         },
@@ -96,12 +89,56 @@ describe("review Lab startup signals", () => {
       },
       signals,
     );
-    expect(waits).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
     expect(closes).toBe(1);
     expect(lines.at(-1)).toBe("review Lab removed");
     expect(signals.listenerCount("SIGINT")).toBe(0);
     expect(signals.listenerCount("SIGTERM")).toBe(0);
   });
+
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "keeps the process alive after presenting until %s, then closes the session once",
+    async (signal) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const signals = new EventEmitter();
+      const lines: string[] = [];
+      let closes = 0;
+      let presented!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        presented = resolve;
+      });
+      const running = runForegroundReviewLab(
+        async () => ({
+          ...sessionFields,
+          async close() {
+            closes += 1;
+          },
+        }),
+        {
+          stdout(line) {
+            lines.push(line);
+            if (line.startsWith("Run the package")) presented();
+          },
+          stderr: () => undefined,
+        },
+        signals,
+      );
+      await ready;
+      await Promise.resolve();
+      // The keep-alive interval is the only timer; it exists only while waiting.
+      expect(vi.getTimerCount()).toBe(1);
+      expect(closes).toBe(0);
+
+      signals.emit(signal);
+      signals.emit(signal);
+      await running;
+      expect(vi.getTimerCount()).toBe(0);
+      expect(closes).toBe(1);
+      expect(lines.at(-1)).toBe("review Lab removed");
+      expect(signals.listenerCount("SIGINT")).toBe(0);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+    },
+  );
 
   it("removes the temporary signal handlers when launch fails", async () => {
     const signals = new EventEmitter();
