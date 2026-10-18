@@ -37,8 +37,8 @@ import type {
 import {
   loadWordPressSelectionPolicy,
   wordPressSelectionPolicySchema,
+  type WordPressCandidateInspection,
   type WordPressSelectionPolicy,
-  type WordPressSelectionWithBatchInspection,
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
@@ -139,7 +139,7 @@ export type WordPressCampaignConfig = z.infer<
 
 /** System-boundary adapters: WordPress.org, Docker/runsc and the provider CLI. */
 export interface WordPressCampaignBoundaries {
-  readonly selection: WordPressSelectionWithBatchInspection;
+  readonly selection: WordPressCandidateInspection;
   readonly freeze: (target: WordPressTargetSelection) => Promise<Snapshot>;
   readonly loadSnapshot: (digest: string) => Promise<Snapshot>;
   readonly lab: WordPressLab;

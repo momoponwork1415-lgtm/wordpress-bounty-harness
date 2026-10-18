@@ -38,13 +38,12 @@ import {
 } from "../profiles/wordpress/prompts/index.js";
 import { createWordpressScopeEvaluator } from "../profiles/wordpress/scope-policy.js";
 import {
+  openWordPressSelection,
   wordPressSelectionPolicySchema,
   wordPressTargetSelectionSchema,
   type WordPressSelectionPolicy,
-  type WordPressSelectionInspection,
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
-import { inspectWordPressLedgerExclusions } from "../profiles/wordpress/selection/ledger-exclusions.js";
 import { loadWordPressLegacyHistory } from "../profiles/wordpress/selection/legacy-history.js";
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
@@ -799,7 +798,7 @@ async function runWordPressCampaign(
     pipeline: {
       select: async () =>
         (reservedSelections === undefined
-          ? await boundaries.selection.select(policy)
+          ? await boundaries.selection.rank(policy)
           : reservedSelections.map(({ target }) => target)
         ).filter(
           (target) =>
@@ -909,49 +908,27 @@ export function createWordPressCliProfile(
           : await options.selectionBoundaries(state, wordpressVersion);
       if (boundaries === undefined)
         throw new Error("Direct policy selection is unavailable on this host");
-      if (
-        "candidateSource" in policy &&
-        boundaries.selection.inspectBatch === undefined
-      )
-        throw new Error("Automatic selection requires listing observations");
-      const inspectedBatch = await boundaries.selection.inspectBatch?.(policy);
-      const inspected: readonly WordPressSelectionInspection[] =
-        inspectedBatch?.inspections ??
-        (await boundaries.selection.inspect(policy));
+      const promptVariant =
+        policy.promptVariant ??
+        config?.promptId ??
+        WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID;
+      // Policy, Ledger and legacy history decide; this command freezes and records.
+      const decision = await openWordPressSelection({
+        candidates: boundaries.selection,
+        ledger: state.ledger,
+        ...(options.legacyHistoryFile === undefined
+          ? {}
+          : { legacyHistoryFile: options.legacyHistoryFile }),
+        promptVariant,
+      }).decide(policy);
+      const inspected = decision.inspections;
       const inspectionBySlug = new Map(
         inspected.map((item) => [item.slug, item]),
       );
-      const eligible = inspected.flatMap((item) =>
-        item.selection === undefined ? [] : [item.selection],
-      );
-      const legacy = await loadWordPressLegacyHistory(
-        options.legacyHistoryFile,
-      );
-      const excludedByLedger = inspectWordPressLedgerExclusions({
-        ledger: state.ledger,
-        legacyHistory: legacy.history,
-        candidates: eligible.map(({ slug, version }) => ({ slug, version })),
-        currentPromptVariant:
-          policy.promptVariant ??
-          config?.promptId ??
-          WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
-        revisitPolicy: policy.revisitPolicy ?? { kind: "never" },
-      });
-      const ledgerReasons = new Map(
-        excludedByLedger.map(({ slug, reasons }) => [slug, reasons]),
-      );
+      // Freeze and batch outcomes are appended to the decision's reasons below.
       const reasons = new Map<string, string[]>(
-        inspected.map((item) => [
-          item.slug,
-          [...item.reasons, ...(ledgerReasons.get(item.slug) ?? [])],
-        ]),
+        inspected.map((item) => [item.slug, [...item.reasons]]),
       );
-      const rankable = eligible
-        .filter((target) => (reasons.get(target.slug) ?? []).length === 0)
-        .sort(
-          (left, right) =>
-            right.score - left.score || left.slug.localeCompare(right.slug),
-        );
       const chosen: { target: WordPressTargetSelection; snapshot: Snapshot }[] =
         [];
       // Automatic batches keep the historical floor of 3 unless the caller lowers it.
@@ -964,7 +941,8 @@ export function createWordPressCliProfile(
         diagnosticDigest: string;
         selectionArtifactDigest: string;
       }[] = [];
-      for (const target of rankable) {
+      // Ranked beyond the cutoff fills in when a better-ranked source fails to freeze.
+      for (const target of decision.ranked) {
         if (chosen.length >= policy.maximumTargets) {
           reasons.get(target.slug)?.push("below-rank-cutoff");
           continue;
@@ -998,15 +976,15 @@ export function createWordPressCliProfile(
         schemaVersion: 1,
         policyDigest: canonicalDigest(policy),
         inspectedAt: state.clock().toISOString(),
-        sourceStatus: inspectedBatch?.sourceStatus ?? "manual",
-        sourceListings: inspectedBatch?.sourceListings ?? [],
+        sourceStatus: decision.sourceStatus,
+        sourceListings: decision.sourceListings,
         inspections: inspected.map((item) => ({
           ...item,
           reasons: reasons.get(item.slug) ?? [],
         })),
         selectedSnapshotDigests: chosen.map(({ snapshot }) => snapshot.digest),
         freezeFailures,
-        legacyHistory: legacy.report,
+        legacyHistory: decision.legacyHistory,
         minimum,
       };
       const reportDigest = await state.store.putFiles({
@@ -1051,10 +1029,7 @@ export function createWordPressCliProfile(
           occurredAt: target.selectedAt,
           type: "target-selected",
           selectionId: `${target.targetId}@${target.version}`,
-          promptVariant:
-            policy.promptVariant ??
-            config?.promptId ??
-            WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
+          promptVariant,
           artifacts: [
             { kind: "target-selection", digest: selectionDigest },
             { kind: "selection-report", digest: reportDigest },
@@ -1066,8 +1041,8 @@ export function createWordPressCliProfile(
       const chosenSlugs = new Set(chosen.map(({ target }) => target.slug));
       return {
         batchId,
-        sourceStatus: inspectedBatch?.sourceStatus ?? "manual",
-        legacyHistory: legacy.report,
+        sourceStatus: decision.sourceStatus,
+        legacyHistory: decision.legacyHistory,
         selected: chosen.map(({ target }) => ({
           targetId: target.targetId,
           version: target.version,
@@ -1323,7 +1298,9 @@ export function createWordPressCliProfile(
                 capturedSourcePin = originalSelection.targetSourcePin;
               }
             }
-            const selected = await boundaries.selection.select({
+            // The Finding's own target carries a recorded Finding, so the
+            // Ledger-aware select would exclude it; rank the pinned policy.
+            const selected = await boundaries.selection.rank({
               ...policyWithoutCapturedSources,
               candidateSlugs: [slug],
               pluginDependencyPins: { [slug]: pluginDependencyPins },

@@ -505,10 +505,12 @@ export async function createWordPressHostProfile(options: {
 
     return {
       selection: {
+        inspectBatch: async (policy: WordPressSelectionPolicy) =>
+          (await selectionOnce()).inspectBatch(policy),
         inspect: async (policy: WordPressSelectionPolicy) =>
           (await selectionOnce()).inspect(policy),
-        select: async (policy: WordPressSelectionPolicy) =>
-          (await selectionOnce()).select(policy),
+        rank: async (policy: WordPressSelectionPolicy) =>
+          (await selectionOnce()).rank(policy),
       },
       async freeze(target) {
         const snapshot = await snapshotStore.freeze({
