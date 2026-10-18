@@ -328,6 +328,11 @@ export async function runDiscoveryCampaign(options: {
     },
   ) => AdmittedLead;
   readonly leadSignature?: (lead: AdmittedLead) => string;
+  /** Profile-owned Root coverage validator. Absent for archived or control arms. */
+  readonly assessCoverage?: (value: unknown) => {
+    readonly accepted: boolean;
+    readonly record?: unknown;
+  };
   readonly clock?: () => Date;
 }): Promise<{
   readonly runCount: number;
@@ -546,6 +551,7 @@ export async function runDiscoveryCampaign(options: {
       let researchArtifact:
         { readonly digest: string; readonly truncated: boolean } | undefined;
       let receiptDigest: string | undefined;
+      let coverageDigest: string | undefined;
       let failure: ReportFailure | undefined;
       const reportState = { foundNew: false, heldBoundary: false };
       const recordReport = createReportRecorder({
@@ -676,6 +682,35 @@ export async function runDiscoveryCampaign(options: {
         if (recoveredRoot.recovered) outcome = "completed";
         if (recoveredRoot.failure !== undefined)
           failure = recoveredRoot.failure;
+        if (
+          outcome === "completed" &&
+          run.coverageSchema !== undefined &&
+          options.assessCoverage !== undefined
+        ) {
+          let coverage: unknown;
+          if (result.attachment !== undefined) {
+            const stored = await options.attachments.read(result.attachment);
+            if (stored.status === "resolved") {
+              try {
+                const report = JSON.parse(
+                  stored.bytes.toString("utf8"),
+                ) as Record<string, unknown>;
+                coverage = report.coverage;
+              } catch {
+                // The report recorder already classifies malformed reports.
+              }
+            }
+          }
+          const assessed = options.assessCoverage(coverage);
+          if (assessed.record !== undefined)
+            coverageDigest = await options.evidence.putFiles({
+              "coverage.json": canonicalJson(assessed.record),
+            });
+          if (!assessed.accepted) {
+            outcome = "failed";
+            failure = { reason: "depth" };
+          }
+        }
       } catch {
         outcome = "failed";
         if (controller.signal.aborted) {
@@ -729,13 +764,14 @@ export async function runDiscoveryCampaign(options: {
           : { diagnosticArtifactDigest }),
         ...(researchArtifact === undefined ? {} : { researchArtifact }),
         ...(outcome === "completed" || failure === undefined ? {} : failure),
-        ...(receiptDigest === undefined
-          ? {}
-          : {
-              artifacts: [
-                { kind: "native-run-receipt", digest: receiptDigest },
-              ],
-            }),
+        artifacts: [
+          ...(receiptDigest === undefined
+            ? []
+            : [{ kind: "native-run-receipt", digest: receiptDigest }]),
+          ...(coverageDigest === undefined
+            ? []
+            : [{ kind: "coverage", digest: coverageDigest }]),
+        ],
       });
       if (finished.status === "conflict")
         throw new Error("Discovery finish identity conflict");

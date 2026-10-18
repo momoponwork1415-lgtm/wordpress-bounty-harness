@@ -27,6 +27,8 @@ import {
   classifyWordPressCandidate,
   normalizeWordPressCandidate,
 } from "../../src/profiles/wordpress/discovery/normalize-candidate.js";
+import { assessWordPressCoverage } from "../../src/profiles/wordpress/discovery/coverage.js";
+import type { WordPressSourceIndex } from "../../src/profiles/wordpress/discovery/storage-index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const profile = defineAgentRuntimeProfile({
@@ -66,6 +68,11 @@ async function campaign(
       readonly admitted: number;
     };
     readonly research?: { readonly truncated: boolean };
+    readonly coverage?: {
+      readonly index: WordPressSourceIndex;
+      readonly record?: unknown;
+      readonly maxUnvisitedRatio?: number;
+    };
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-campaign-"));
@@ -160,6 +167,16 @@ async function campaign(
     leadSignature: (lead) => wordPressLeadSignature(readWordPressLead(lead)),
     normalizeCandidate: normalizeWordPressCandidate,
     classifyCandidate: classifyWordPressCandidate,
+    ...(options.coverage === undefined
+      ? {}
+      : {
+          assessCoverage: (value: unknown) =>
+            assessWordPressCoverage(
+              value,
+              options.coverage!.index,
+              options.coverage!.maxUnvisitedRatio ?? 0.2,
+            ),
+        }),
     executor: {
       async execute(run, ...rest) {
         expect(run.expiresAt).toBe(
@@ -339,6 +356,9 @@ async function campaign(
             : [],
           examined: "source",
           unexamined: "none",
+          ...(options.coverage?.record === undefined
+            ? {}
+            : { coverage: options.coverage.record }),
         };
         const attachment = await attachments.put(
           "findings",
@@ -384,6 +404,7 @@ async function campaign(
             targetSnapshotDigest: digest,
             profile,
             prompt: "Synthetic objective",
+            ...(options.coverage === undefined ? {} : { coverageSchema: {} }),
             sourceDirectory: "/private/source",
             sourceTree: { digest, entries: 1, bytes: 1 },
             lab: {
@@ -560,6 +581,139 @@ it("passes the fixed source entry index to one cooperative Trial without a stage
   });
   expect(started).not.toHaveProperty("stage");
   expect(started).not.toHaveProperty("continuationOf");
+});
+
+function coverageIndex(incomplete = false): WordPressSourceIndex {
+  return {
+    schemaVersion: 1,
+    digest,
+    incomplete,
+    entries: Array.from({ length: 10 }, (_, ordinal) => ({
+      kind: "ajax" as const,
+      name: `action-${ordinal}`,
+      file: "plugin.php",
+      line: ordinal + 1,
+      callback: null,
+      reach: [],
+      storage: [],
+      crossings: [],
+    })),
+    dynamicStorage: [],
+    components: [],
+    settingsKeys: [],
+  };
+}
+
+function coverageRecord(
+  statuses: readonly ("observed" | "blocked" | "unvisited")[],
+  incomplete = false,
+) {
+  return {
+    indexDigest: digest,
+    incomplete,
+    entries: statuses.map((status, ordinal) => ({
+      id: `e-${ordinal + 1}`,
+      status,
+      reason: status === "blocked" ? "precondition" : null,
+    })),
+  };
+}
+
+it("classifies a Root report without coverage as incomplete(depth)", async () => {
+  const { ledger, result } = await campaign([], {
+    indexed: true,
+    coverage: { index: coverageIndex() },
+  });
+  expect(result.stoppedBy).toBe("incomplete");
+  expect(
+    ledger.read({ type: "discovery-run-finished" })[0]?.event,
+  ).toMatchObject({
+    outcome: "failed",
+    reason: "depth",
+  });
+  expect(ledger.funnel("campaign-1").incompleteDepth).toBe(1);
+});
+
+it("classifies malformed Root coverage as incomplete(depth)", async () => {
+  const { ledger } = await campaign([], {
+    indexed: true,
+    coverage: {
+      index: coverageIndex(),
+      record: {
+        ...coverageRecord(Array(10).fill("observed")),
+        note: "free text",
+      },
+    },
+  });
+  expect(
+    ledger.read({ type: "discovery-run-finished" })[0]?.event,
+  ).toMatchObject({
+    outcome: "failed",
+    reason: "depth",
+  });
+});
+
+it("records complete observed/blocked coverage and completes the Trial", async () => {
+  const { ledger, evidence, result } = await campaign([], {
+    indexed: true,
+    coverage: {
+      index: coverageIndex(),
+      record: coverageRecord([
+        "observed",
+        "blocked",
+        ...Array(8).fill("observed"),
+      ]),
+    },
+  });
+  expect(result.stoppedBy).toBe("no-new-finding");
+  const finished = ledger.read({ type: "discovery-run-finished" })[0]?.event;
+  expect(finished).toMatchObject({ outcome: "completed" });
+  const ref = finished?.artifacts.find(
+    (artifact) => artifact.kind === "coverage",
+  );
+  expect(ref).toBeDefined();
+  expect(
+    ref &&
+      (await evidence.readFile(ref.digest, "coverage.json", 100_000)).status,
+  ).toBe("resolved");
+});
+
+it("classifies 30 percent unvisited coverage as incomplete(depth)", async () => {
+  const { ledger } = await campaign([], {
+    indexed: true,
+    coverage: {
+      index: coverageIndex(),
+      record: coverageRecord([
+        ...Array(7).fill("observed"),
+        "unvisited",
+        "unvisited",
+        "unvisited",
+      ]),
+    },
+  });
+  expect(
+    ledger.read({ type: "discovery-run-finished" })[0]?.event,
+  ).toMatchObject({
+    outcome: "failed",
+    reason: "depth",
+  });
+});
+
+it("does not apply the unvisited threshold to an incomplete index", async () => {
+  const { ledger, result } = await campaign([], {
+    indexed: true,
+    coverage: {
+      index: coverageIndex(true),
+      record: coverageRecord(
+        [...Array(7).fill("observed"), "unvisited", "unvisited", "unvisited"],
+        true,
+      ),
+    },
+  });
+  expect(result.stoppedBy).toBe("no-new-finding");
+  expect(
+    ledger.read({ type: "discovery-run-finished" })[0]?.event,
+  ).toMatchObject({ outcome: "completed" });
 });
 
 it("stops after consecutive completed runs without a new Finding and records each run configuration", async () => {

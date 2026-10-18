@@ -67,6 +67,7 @@ export interface CampaignPipeline<
     >;
     readonly admitLead?: NonNullable<DiscoveryOptions["admitLead"]>;
     readonly leadSignature?: NonNullable<DiscoveryOptions["leadSignature"]>;
+    readonly assessCoverage?: NonNullable<DiscoveryOptions["assessCoverage"]>;
   }>;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;

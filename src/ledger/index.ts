@@ -145,6 +145,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         "evidence",
         "wall",
         "operator",
+        "depth",
       ])
       .optional(),
     reasonDetail: z
@@ -542,6 +543,7 @@ export type UsageRow = {
 export type CampaignFunnel = FunnelCounts & {
   readonly campaignId: string;
   readonly discoveryAttempts: number;
+  readonly incompleteDepth: number;
   readonly runCount: number;
   readonly knownCostUsd: number;
   readonly unpricedRuns: number;
@@ -1605,6 +1607,13 @@ export class Ledger {
         readyLabs.has(labId) &&
         !setupFailedRuns.has(runId),
     ).length;
+    const incompleteDepth = events.filter(
+      (event) =>
+        event.type === "discovery-run-finished" &&
+        event.outcome === "failed" &&
+        event.reason === "depth" &&
+        runKinds.get(event.runId) === "explore",
+    ).length;
     const agreement = (
       values: readonly ("match" | "mismatch" | "unavailable")[],
     ) => {
@@ -1663,6 +1672,7 @@ export class Ledger {
     return {
       campaignId: campaign,
       discoveryAttempts,
+      incompleteDepth,
       runCount: startedRuns.size,
       knownCostUsd,
       unpricedRuns,

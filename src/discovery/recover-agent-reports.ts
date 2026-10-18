@@ -14,7 +14,7 @@ import {
 export class DiscoveryReportError extends Error {}
 
 export type ReportFailure = {
-  readonly reason: Exclude<NativeRunReceipt["reason"], "unavailable">;
+  readonly reason: Exclude<NativeRunReceipt["reason"], "unavailable"> | "depth";
   readonly reasonDetail?: string;
   readonly providerLimit?: "rate-limit" | "quota";
 };
