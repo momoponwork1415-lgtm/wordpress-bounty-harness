@@ -18,7 +18,10 @@ import {
 } from "./native-run-receipts.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import { recordReadPaths } from "./read-paths.js";
-import { createReportRecorder } from "./record-discovery-report.js";
+import {
+  createReportRecorder,
+  type ReportRecorder,
+} from "./record-discovery-report.js";
 import {
   recoverChildAgentReports,
   recoverRootAgentReport,
@@ -162,65 +165,6 @@ export function validateProductionCampaignInput(
   return parsed;
 }
 
-/** Deterministic fractional allocation of run ordinals to arm b; zero means none and one means all. */
-export function allocateArm(ordinal: number, armBFraction: number): "a" | "b" {
-  if (!Number.isSafeInteger(ordinal) || ordinal < 0)
-    throw new Error("Invalid run ordinal");
-  if (!Number.isFinite(armBFraction) || armBFraction < 0 || armBFraction > 1)
-    throw new Error("Invalid arm fraction");
-  return Math.floor((ordinal + 1) * armBFraction) >
-    Math.floor(ordinal * armBFraction)
-    ? "b"
-    : "a";
-}
-
-export type AblationAxis = {
-  readonly axis: "history" | "prompt";
-  readonly armBFraction: number;
-};
-export type TrialArms = Partial<Record<AblationAxis["axis"], "a" | "b">>;
-
-/** Offset each axis by powers of two to cover a 2x2 cell every four Trials. */
-export function allocateTrialArms(
-  trialOrdinal: number,
-  axes: readonly AblationAxis[],
-): TrialArms {
-  if (!Number.isSafeInteger(trialOrdinal) || trialOrdinal < 0)
-    throw new Error("Invalid Trial ordinal");
-  const arms: TrialArms = {};
-  const seen = new Set<AblationAxis["axis"]>();
-  for (const [index, axis] of axes.entries()) {
-    if (seen.has(axis.axis)) throw new Error("Duplicate ablation axis");
-    seen.add(axis.axis);
-    arms[axis.axis] = allocateArm(
-      Math.floor(trialOrdinal / 2 ** index),
-      axis.armBFraction,
-    );
-  }
-  return arms;
-}
-
-/** Deterministic fractional allocation; zero means no history and one means all runs. */
-export function historyForRun(
-  ordinal: number,
-  historyFraction: number,
-  catalogHistory: Extract<CampaignHistory, { mode: "catalog" }>,
-): CampaignHistory {
-  const arm = allocateArm(ordinal, historyFraction);
-  const admitted = catalog.parse(catalogHistory);
-  return arm === "b" ? admitted : { mode: "none" };
-}
-
-export type AdmittedFinding = {
-  readonly findingId: string;
-  readonly discoveryRunId: string;
-  readonly snapshotDigest: string;
-  readonly claim: string;
-  readonly impact: string;
-  readonly sourceTrace: readonly unknown[];
-  readonly historyRecordId?: string | undefined;
-};
-
 export type PlannedDiscoveryRun = {
   readonly run: Omit<DiscoveryTransportRun, "campaignInput">;
   readonly configuration: {
@@ -234,28 +178,8 @@ export type PlannedDiscoveryRun = {
     readonly entryIndex?:
       | { readonly enabled: true; readonly digest: string }
       | { readonly enabled: false };
-    readonly assignment?: {
-      readonly partition: number;
-      readonly of: number;
-      readonly planDigest: string;
-      readonly indexDigest?: string;
-      readonly componentDigest?: string;
-    };
     readonly labAccess?: { readonly database: "read-only" | "none" };
   };
-};
-
-/** Shared identity of an admitted lead; a profile supplies its claim fields. */
-export type AdmittedLead = {
-  readonly leadId: string;
-  readonly discoveryRunId: string;
-  readonly trialId: string;
-  readonly snapshotDigest: string;
-  readonly primitive: string;
-  readonly storage: { readonly kind: string; readonly key: string } | null;
-  readonly missingEdge:
-    "producer" | "consumer" | "auth-use" | "reachability" | "precondition";
-  readonly sourceTrace: readonly { readonly file: string }[];
 };
 
 export type PlannedTrial = {
@@ -281,15 +205,12 @@ export async function runDiscoveryCampaign(options: {
   /** An explicit repeat runs every planned independent Trial unless a run fails. */
   readonly repeatAll?: boolean;
   readonly input: CampaignInputV1;
-  readonly historyFraction: number;
   /** Runs in flight at once on this host; at most four. */
   readonly concurrency?: number;
   /** Exploration wall time, stamped when each Trial starts rather than when all plans are built. */
   readonly runWallTimeMs?: number;
   /** Operator cancellation of in-flight exploration. */
   readonly signal?: AbortSignal;
-  /** Records each run's arm on the history axis: a without history, b with it. */
-  readonly ablation?: { readonly axes: readonly AblationAxis[] };
   readonly plannedTrials: readonly PlannedTrial[];
   readonly executor: {
     execute(
@@ -300,43 +221,8 @@ export async function runDiscoveryCampaign(options: {
   readonly attachments: ProviderAttachmentStore;
   readonly evidence: PrivateArtifactStore;
   readonly ledger: Ledger;
-  readonly admitFinding: (
-    candidate: unknown,
-    context: {
-      runId: string;
-      snapshotDigest: string;
-      reportArtifactDigest: string;
-    },
-  ) => AdmittedFinding;
-  /** Programme Boundary 外の impact を `finding-parked` に落とす（#185）。 */
-  readonly isProgrammeImpact?: (impact: string) => boolean;
-  /** Profile-owned admission policy; the generic recorder only stores its result. */
-  readonly classifyFindingPrecondition?: (finding: AdmittedFinding) => {
-    readonly preconditionClass: string;
-    readonly park: boolean;
-  };
-  readonly normalizeCandidate?: (candidate: unknown) => {
-    value: unknown;
-    changes: { path: string; operation: string }[];
-  };
-  readonly classifyCandidate?: (
-    candidate: unknown,
-    kind: "finding" | "lead",
-  ) => {
-    impact?: string;
-    primitive?: string;
-    missingEdge?: string;
-  };
-  readonly admitLead?: (
-    candidate: unknown,
-    context: {
-      runId: string;
-      trialId: string;
-      snapshotDigest: string;
-      reportArtifactDigest: string;
-    },
-  ) => AdmittedLead;
-  readonly leadSignature?: (lead: AdmittedLead) => string;
+  /** Profile-owned admission of every candidate in a report; see `ReportRecorder`. */
+  readonly recordReport: ReportRecorder;
   /** Profile-owned Root coverage validator. Absent for archived or control arms. */
   readonly assessCoverage?: (value: unknown) => {
     readonly accepted: boolean;
@@ -352,12 +238,6 @@ export async function runDiscoveryCampaign(options: {
   const id = z.string().min(1).max(128);
   id.parse(options.campaignId);
   if (options.labId !== undefined) id.parse(options.labId);
-  if (
-    !Number.isFinite(options.historyFraction) ||
-    options.historyFraction < 0 ||
-    options.historyFraction > 1
-  )
-    throw new Error("Invalid history allocation fraction");
   const clock = options.clock ?? (() => new Date());
   const concurrency = options.concurrency ?? 1;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4)
@@ -446,21 +326,9 @@ export async function runDiscoveryCampaign(options: {
       throw new Error(
         "Trial identity or ordinal differs from its exploration run",
       );
-    const assignedArms = allocateTrialArms(
-      trial.trialOrdinal,
-      options.ablation?.axes ?? [],
-    );
-    const arms: TrialArms =
-      input.history.mode === "none" && assignedArms.history !== undefined
-        ? { ...assignedArms, history: "a" }
-        : assignedArms;
     const history =
       input.history.mode === "catalog"
-        ? arms.history === undefined
-          ? historyForRun(index, options.historyFraction, input.history)
-          : arms.history === "b"
-            ? input.history
-            : { mode: "none" as const }
+        ? catalog.parse(input.history)
         : { mode: "none" as const };
     const historyMetadata =
       history.mode === "catalog"
@@ -529,7 +397,6 @@ export async function runDiscoveryCampaign(options: {
                 ? ("none" as const)
                 : ("mounted" as const),
           },
-          ...(options.ablation === undefined ? {} : { arms }),
         },
       });
       if (started.status === "conflict")

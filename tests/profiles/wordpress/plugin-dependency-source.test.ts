@@ -437,7 +437,9 @@ describe("WordPress plugin dependency source", () => {
         sourceDigest: elementor.sourceTree.digest,
       },
     ]);
-    expect(await snapshot.verify(sealed.digest)).toBe(true);
+    expect(await snapshot.load(sealed.digest)).toMatchObject({
+      status: "loaded",
+    });
   });
 
   it("requires explicit versions for historical/manual dependency chains", async () => {

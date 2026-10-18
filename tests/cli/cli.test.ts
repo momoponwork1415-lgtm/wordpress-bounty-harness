@@ -90,8 +90,6 @@ async function harness(
       readonly default: number;
       readonly highThreat: number;
     };
-    /** Arm b fraction of a history ablation in the campaign config. */
-    readonly ablation?: number;
     /** False selects the observed stable version instead of the 3.3.1 pin. */
     readonly pinned?: boolean;
     /** Opens a synthetic local Wordfence mirror holding one public record. */
@@ -844,15 +842,15 @@ async function harness(
       schemaVersion: 1,
       selectionPolicyPath: policyPath,
       mode: "wp2shell",
+      // The policy default is "none" (owner decision 2026-10-18); these tests
+      // exercise the attached-Lab path unless a test overrides it.
+      discovery: { lab: "attached" },
       promptId: "wp2shell-bounty-v8",
       programmeBoundary: {
         version: "v1",
         text: "Synthetic programme boundary",
       },
       stopRules: { maxRuns: 1, noFindingRuns: 1 },
-      ...(options.ablation === undefined
-        ? {}
-        : { ablation: { axis: "history", armBFraction: options.ablation } }),
       // Sequential by default so the call order is deterministic.
       resources: { maxConcurrentRuns: 1, memoryBudgetMiB: 10_752 },
       ...options.config,
@@ -1021,7 +1019,7 @@ describe("harness CLI vertical slice", () => {
     });
   });
 
-  it("keeps old objective bytes readable but rejects them for new campaigns in every mode", async () => {
+  it("keeps old objective bytes readable but rejects them for new campaigns", async () => {
     const archived = await loadWordPressDiscoveryAsset("wp2shell-bounty-v2");
     expect(archived.digest).toBe(
       "sha256:efeaefbd1775e2a4fd3984e19672e7e5cf8cfdbe0b16b84cededa23587b239c5",
@@ -1032,30 +1030,12 @@ describe("harness CLI vertical slice", () => {
       wordpressVersion: "6.8",
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
     };
-    for (const mode of [
-      "wp2shell",
-      "entry-index-control",
-      "comparison",
-      "ablation",
-      "assignment",
-    ] as const) {
-      const modeFields =
-        mode === "entry-index-control"
-          ? { entryIndex: false }
-          : mode === "ablation"
-            ? { ablation: { axis: "history", armBFraction: 0.5 } }
-            : mode === "assignment"
-              ? { assignment: { unit: "entry-point" } }
-              : {};
-      expect(
-        wordpressCampaignConfigSchema.safeParse({
-          ...base,
-          mode,
-          promptId: "wp2shell-bounty-v2",
-          ...modeFields,
-        }).success,
-      ).toBe(false);
-    }
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...base,
+        promptId: "wp2shell-bounty-v2",
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps DB access disabled when the campaign requests none", async () => {
@@ -1814,13 +1794,20 @@ describe("harness CLI vertical slice", () => {
     expect(prompts).toHaveLength(0);
   });
 
-  it("rejects the old entry-index control mode and opt-in catalogue", () => {
+  it("parses an explicit entryIndex false as wp2shell and rejects the old control mode and opt-in catalogue", () => {
     const base = {
       schemaVersion: 1 as const,
       programmeBoundary: { version: "v1", text: "Synthetic" },
       wordpressVersion: "6.8",
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
     };
+    expect(
+      wordpressCampaignConfigSchema.parse({ ...base, entryIndex: false }),
+    ).toMatchObject({ mode: "wp2shell", entryIndex: false });
+    // Owner decision 2026-10-18: the normal mode explores without a Lab.
+    expect(wordpressCampaignConfigSchema.parse(base).discovery).toEqual({
+      lab: "none",
+    });
     expect(
       wordpressCampaignConfigSchema.safeParse({
         ...base,

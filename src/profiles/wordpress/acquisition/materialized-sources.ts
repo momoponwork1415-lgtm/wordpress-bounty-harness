@@ -1,9 +1,11 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import { pathExists } from "../../../infrastructure/immutable-file.js";
 import {
+  checkSourceAgainstManifest,
   measureCanonicalSourceTree,
   type ExpectedSourceTree,
 } from "../../../infrastructure/canonical-source-tree.js";
@@ -39,15 +41,6 @@ const sourceKind = (
   return { kind: "plugin", slug };
 };
 
-async function exists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Lays each frozen source out once as a read-only tree under its source digest,
  * so the Lab, the discovery sandbox and the Verifier mount the same bytes.
@@ -66,7 +59,7 @@ export function openMaterializedSources(options: {
     sourceDigest: string,
   ): Promise<{ directory: string; tree: ExpectedSourceTree }> => {
     const directory = directoryFor(sourceDigest);
-    if (!(await exists(directory)))
+    if (!(await pathExists(directory, { followSymbolicLinks: true })))
       throw new SourceAcquisitionError("source-mismatch", {
         reason: "materialized-source-unavailable",
         sourceDigest,
@@ -93,45 +86,37 @@ export function openMaterializedSources(options: {
       });
     const manifest = parsed.data;
     const sourceDigest = canonicalDigest(manifest);
-    if (await exists(directoryFor(sourceDigest))) {
+    if (
+      await pathExists(directoryFor(sourceDigest), {
+        followSymbolicLinks: true,
+      })
+    ) {
       await verified(sourceDigest);
       return;
     }
     await mkdir(options.rootDirectory, { recursive: true, mode: 0o700 });
     const staging = join(options.rootDirectory, `.staging-${randomUUID()}`);
     try {
-      for (const entry of manifest.entries) {
-        let bytes: Uint8Array;
-        try {
-          bytes = await source.readFile(entry.path);
-        } catch (error) {
-          throw new SourceAcquisitionError("source-mismatch", {
-            reason: "manifest-file-unavailable",
-            path: entry.path,
-            detail: error instanceof Error ? error.message : String(error),
-          });
-        }
-        const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-        if (bytes.byteLength !== entry.size || digest !== entry.digest)
-          throw new SourceAcquisitionError("source-mismatch", {
-            reason: "manifest-content",
-            path: entry.path,
-            expectedSize: entry.size,
-            actualSize: bytes.byteLength,
-            expectedDigest: entry.digest,
-            actualDigest: digest,
-          });
-        const path = join(staging, entry.path);
-        await mkdir(dirname(path), { recursive: true });
-        await writeFile(path, bytes, { flag: "wx", mode: 0o444 });
-      }
+      const checked = await checkSourceAgainstManifest(
+        manifest,
+        (path) => source.readFile(path),
+        async (entry, bytes) => {
+          const path = join(staging, entry.path);
+          await mkdir(dirname(path), { recursive: true });
+          await writeFile(path, bytes, { flag: "wx", mode: 0o444 });
+        },
+      );
+      if (checked.status !== "verified")
+        throw new SourceAcquisitionError("source-mismatch", checked.mismatch);
       await rename(staging, directoryFor(sourceDigest));
     } catch (error: unknown) {
       await rm(staging, { recursive: true, force: true });
       // Another freeze may have laid out the same digest first.
       if (
         !(error instanceof SourceAcquisitionError) &&
-        (await exists(directoryFor(sourceDigest)))
+        (await pathExists(directoryFor(sourceDigest), {
+          followSymbolicLinks: true,
+        }))
       ) {
         await verified(sourceDigest);
         return;

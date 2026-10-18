@@ -13,7 +13,7 @@ import {
   loadWordPressReproductionTemplate,
 } from "../../../src/profiles/wordpress/acceptance/index.js";
 import { wordpressReproductionRenderer } from "../../../src/profiles/wordpress/verification/reproduction-package.js";
-import { STANDARD_REPRODUCER_SCRIPT } from "../../../src/profiles/wordpress/verification/standard-script.js";
+import { STANDARD_REPRODUCER_SCRIPT } from "../../../src/profiles/wordpress/lab/standard-script.js";
 import { openReproductionPackage } from "../../../src/review/reproduction-package.js";
 import { publishReproductionPackage } from "../../../src/verification/reproduction-package.js";
 

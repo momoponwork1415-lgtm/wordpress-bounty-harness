@@ -1,16 +1,25 @@
-import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import {
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  readdir,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { canonicalJson, sha256Digest } from "./canonical-json.js";
+import {
+  artifactId,
+  bytesDigest,
+} from "../../../infrastructure/content-digest.js";
+import {
+  hasErrorCode,
+  persistContentAddressedFile,
+} from "../../../infrastructure/immutable-file.js";
+import {
+  checkSourceAgainstManifest,
+  SourceTreeError,
+  walkCanonicalSourceTree,
+  type SourceTreeRejection,
+} from "../../../infrastructure/canonical-source-tree.js";
+import type { AcquiredSource } from "../../../snapshot/index.js";
+import {
+  canonicalJsonPreservingProperties,
+  canonicalDigestPreservingProperties,
+} from "../../../infrastructure/canonical-json.js";
 import {
   intakeDispositionSchema,
   manualTargetIntakeRequestSchema,
@@ -49,190 +58,120 @@ interface CaptureRejected {
 
 type CaptureResult = CaptureSuccess | CaptureRejected;
 
-const structuralReasonOrder: readonly TargetIntakeReason[] = [
-  "source-not-directory",
-  "link-entry",
-  "hardlink-entry",
-  "non-regular-entry",
-  "path-collision",
-  "quota-exceeded",
-];
+/**
+ * The intake store layout lives here and nowhere else: `objects/` holds the
+ * canonical JSON records, `blobs/` holds the captured bytes by digest.
+ */
+const TARGET_INTAKE_SUBDIRECTORY = "target-intake";
 
-function rawDigest(bytes: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+/** Where a store root keeps its intake packets and captured blobs. */
+export function targetIntakeDirectory(storageDirectory: string): string {
+  return join(storageDirectory, TARGET_INTAKE_SUBDIRECTORY);
 }
 
-function hasErrorCode(error: unknown, code: string): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === code
+function blobPath(intakeDirectory: string, digest: string): string {
+  return join(intakeDirectory, "blobs", digest.slice("sha256:".length));
+}
+
+/** Reads only the captured bytes named by an intake packet. */
+export function acquiredSourceFromIntakePacket(
+  packet: TargetIntakePacket,
+  intakeStorageDirectory: string,
+): AcquiredSource {
+  const files = new Map(
+    packet.sourceTree.manifest.entries.map((entry) => [
+      entry.path,
+      entry.digest,
+    ]),
   );
+  return {
+    identity: packet.pluginIdentity,
+    version: packet.version,
+    manifest: packet.sourceTree.manifest,
+    async readFile(path) {
+      const digest = files.get(path);
+      if (digest === undefined)
+        throw new Error("File is absent from source manifest");
+      return readFile(blobPath(intakeStorageDirectory, digest));
+    },
+  };
 }
 
-function sortedReasons(
-  reasons: ReadonlySet<TargetIntakeReason>,
-): readonly TargetIntakeReason[] {
-  return structuralReasonOrder.filter((reason) => reasons.has(reason));
-}
-
-async function readRegularFileWithoutFollowingLink(
-  absolutePath: string,
-): Promise<{ readonly bytes: Buffer; readonly nlink: number } | undefined> {
-  let handle;
-  try {
-    handle = await open(
-      absolutePath,
-      constants.O_RDONLY | constants.O_NOFOLLOW,
-    );
-  } catch (error) {
-    if (hasErrorCode(error, "ELOOP")) {
+/** The strict walk's first refusal, in the intake's vocabulary. */
+function structuralReason(
+  rejection: SourceTreeRejection,
+): TargetIntakeReason | undefined {
+  switch (rejection) {
+    case "root-not-directory":
+      return "source-not-directory";
+    case "symbolic-link":
+      return "link-entry";
+    case "hard-link":
+      return "hardlink-entry";
+    case "non-regular-entry":
+    case "invalid-path":
+      return "non-regular-entry";
+    case "path-collision":
+      return "path-collision";
+    case "bounds-exceeded":
+      return "quota-exceeded";
+    case "changed-while-reading":
       return undefined;
-    }
-    throw error;
-  }
-  try {
-    const before = await handle.stat();
-    if (!before.isFile()) {
-      return undefined;
-    }
-    const bytes = await handle.readFile();
-    const after = await handle.stat();
-    if (
-      before.dev !== after.dev ||
-      before.ino !== after.ino ||
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      bytes.byteLength !== after.size
-    ) {
-      throw new Error(
-        `Source file changed while being captured: ${absolutePath}`,
-      );
-    }
-    return { bytes, nlink: after.nlink };
-  } finally {
-    await handle.close();
   }
 }
 
+/** Walks the tree once, then reads back exactly the bytes the manifest names. */
 async function captureDirectory(
   sourceDirectory: string,
   policy: ManualTargetIntakeRequest["policy"],
 ): Promise<CaptureResult> {
-  let rootStat;
+  let walked;
   try {
-    rootStat = await lstat(sourceDirectory);
+    walked = await walkCanonicalSourceTree(sourceDirectory, {
+      maxEntries: policy.limits.maxEntries,
+      maxBytes: policy.limits.maxTotalBytes,
+    });
   } catch (error) {
     if (hasErrorCode(error, "ENOENT") || hasErrorCode(error, "ENOTDIR")) {
       return { status: "rejected", reasons: ["source-not-directory"] };
     }
+    const reason =
+      error instanceof SourceTreeError
+        ? structuralReason(error.code)
+        : undefined;
+    if (reason !== undefined) return { status: "rejected", reasons: [reason] };
     throw error;
   }
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-    return { status: "rejected", reasons: ["source-not-directory"] };
+  const { entries } = walked.manifest;
+  if (
+    entries.some(
+      (entry) =>
+        entry.size > policy.limits.maxFileBytes ||
+        Buffer.byteLength(entry.path, "utf8") > policy.limits.maxPathBytes ||
+        entry.path.split("/").length - 1 > policy.limits.maxDepth,
+    )
+  ) {
+    return { status: "rejected", reasons: ["quota-exceeded"] };
   }
-
-  const files: CapturedFile[] = [];
-  const reasons = new Set<TargetIntakeReason>();
-  const collisionKeys = new Set<string>();
-  let entryCount = 0;
-  let totalBytes = 0;
-
-  const walk = async (
-    absoluteDirectory: string,
-    pathSegments: readonly string[],
-  ): Promise<void> => {
-    const entries = await readdir(absoluteDirectory, { withFileTypes: true });
-    entries.sort((left, right) =>
-      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
-    );
-    for (const entry of entries) {
-      entryCount += 1;
-      if (entryCount > policy.limits.maxEntries) {
-        reasons.add("quota-exceeded");
-        continue;
-      }
-      const segments = [...pathSegments, entry.name];
-      const relativePath = segments.join("/");
-      const absolutePath = join(absoluteDirectory, entry.name);
-      if (
-        entry.name.includes("\\") ||
-        entry.name.includes("\0") ||
-        entry.name === "." ||
-        entry.name === ".."
-      ) {
-        reasons.add("non-regular-entry");
-        continue;
-      }
-      if (
-        Buffer.byteLength(relativePath, "utf8") > policy.limits.maxPathBytes ||
-        segments.length - 1 > policy.limits.maxDepth
-      ) {
-        reasons.add("quota-exceeded");
-        continue;
-      }
-      const collisionKey = relativePath.normalize("NFC").toLowerCase();
-      if (collisionKeys.has(collisionKey)) {
-        reasons.add("path-collision");
-        continue;
-      }
-      collisionKeys.add(collisionKey);
-
-      const stat = await lstat(absolutePath);
-      if (stat.isSymbolicLink()) {
-        reasons.add("link-entry");
-        continue;
-      }
-      if (stat.isDirectory()) {
-        await walk(absolutePath, segments);
-        continue;
-      }
-      if (!stat.isFile()) {
-        reasons.add("non-regular-entry");
-        continue;
-      }
-      if (stat.nlink > 1) {
-        reasons.add("hardlink-entry");
-        continue;
-      }
-      if (stat.size > policy.limits.maxFileBytes) {
-        reasons.add("quota-exceeded");
-        continue;
-      }
-      const captured = await readRegularFileWithoutFollowingLink(absolutePath);
-      if (captured === undefined) {
-        reasons.add("link-entry");
-        continue;
-      }
-      if (captured.nlink > 1) {
-        reasons.add("hardlink-entry");
-        continue;
-      }
-      totalBytes += captured.bytes.byteLength;
-      if (totalBytes > policy.limits.maxTotalBytes) {
-        reasons.add("quota-exceeded");
-        continue;
-      }
-      files.push({
-        path: relativePath,
-        digest: rawDigest(captured.bytes),
-        size: captured.bytes.byteLength,
-        bytes: captured.bytes,
-      });
-    }
-  };
-
-  await walk(sourceDirectory, []);
-  if (reasons.size > 0) {
-    return { status: "rejected", reasons: sortedReasons(reasons) };
-  }
-  if (files.length === 0) {
+  if (entries.length === 0) {
     return { status: "rejected", reasons: ["main-plugin-file-missing"] };
   }
-  files.sort((left, right) =>
-    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  const files: CapturedFile[] = [];
+  const checked = await checkSourceAgainstManifest(
+    walked.manifest,
+    (path) => readFile(join(sourceDirectory, path)),
+    async (entry, bytes) => {
+      files.push({
+        ...entry,
+        bytes: Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes),
+      });
+    },
   );
+  if (checked.status !== "verified") {
+    throw new Error(
+      `Source file changed while being captured: ${checked.mismatch.path}`,
+    );
+  }
   return { status: "captured", files };
 }
 
@@ -271,7 +210,7 @@ function requestIdentity(
   request: ManualTargetIntakeRequest,
   sourceObservation: unknown,
 ): string {
-  return sha256Digest({
+  return canonicalDigestPreservingProperties({
     kind: request.kind,
     schemaVersion: request.schemaVersion,
     source: { kind: request.source.kind, observation: sourceObservation },
@@ -288,24 +227,6 @@ function requestIdentity(
   });
 }
 
-function artifactId(prefix: string, digest: string): string {
-  return `${prefix}:${digest.slice("sha256:".length, "sha256:".length + 24)}`;
-}
-
-async function persistBytes(path: string, bytes: Uint8Array): Promise<void> {
-  try {
-    await writeFile(path, bytes, { flag: "wx" });
-  } catch (error) {
-    if (!hasErrorCode(error, "EEXIST")) {
-      throw error;
-    }
-    const existing = await readFile(path);
-    if (!existing.equals(bytes)) {
-      throw new Error(`Content-addressed artifact conflict: ${path}`);
-    }
-  }
-}
-
 class LocalDirectoryTargetIntake implements TargetIntake {
   readonly #storageDirectory: string;
   readonly #sourceCaptureKind:
@@ -320,12 +241,15 @@ class LocalDirectoryTargetIntake implements TargetIntake {
   }
 
   async #persistJson(value: unknown): Promise<{ id: string; digest: string }> {
-    const bytes = Buffer.from(canonicalJson(value), "utf8");
-    const digest = rawDigest(bytes);
+    const bytes = Buffer.from(canonicalJsonPreservingProperties(value), "utf8");
+    const digest = bytesDigest(bytes);
     const id = artifactId("artifact", digest);
     const directory = join(this.#storageDirectory, "objects");
     await mkdir(directory, { recursive: true });
-    await persistBytes(join(directory, `${digest.slice(7)}.json`), bytes);
+    await persistContentAddressedFile(
+      join(directory, `${digest.slice(7)}.json`),
+      bytes,
+    );
     return { id, digest };
   }
 
@@ -373,7 +297,7 @@ class LocalDirectoryTargetIntake implements TargetIntake {
       schemaVersion: 1 as const,
       entries: manifestEntries,
     };
-    const treeDigest = sha256Digest(manifest);
+    const treeDigest = canonicalDigestPreservingProperties(manifest);
     const requestDigest = requestIdentity(request, { treeDigest });
     const phpFiles = capture.files.filter((file) => file.path.endsWith(".php"));
     const candidates = phpFiles.flatMap((file) => {
@@ -466,14 +390,14 @@ class LocalDirectoryTargetIntake implements TargetIntake {
       request.pluginIdentity.kind === "wporg"
         ? `wporg:${request.pluginIdentity.slug}`
         : `premium:${request.pluginIdentity.vendor}/${request.pluginIdentity.product}`;
-    const targetSnapshotDigest = sha256Digest({
+    const targetSnapshotDigest = canonicalDigestPreservingProperties({
       kind: "target-snapshot",
       schemaVersion: 1,
       pluginIdentity,
       version: request.requestedVersion,
       treeDigest,
     });
-    const packetSeed = sha256Digest({
+    const packetSeed = canonicalDigestPreservingProperties({
       requestDigest,
       pluginIdentity,
       mainPluginFile: selected.file.path,
@@ -513,10 +437,11 @@ class LocalDirectoryTargetIntake implements TargetIntake {
       policy: { id: request.policy.id, digest: request.policy.digest },
     };
 
-    const blobDirectory = join(this.#storageDirectory, "blobs");
-    await mkdir(blobDirectory, { recursive: true });
     for (const file of capture.files) {
-      await persistBytes(join(blobDirectory, file.digest.slice(7)), file.bytes);
+      await persistContentAddressedFile(
+        blobPath(this.#storageDirectory, file.digest),
+        file.bytes,
+      );
     }
     const packetRef = await this.#persistJson(packet);
     const receipt: IntakeReceipt = {

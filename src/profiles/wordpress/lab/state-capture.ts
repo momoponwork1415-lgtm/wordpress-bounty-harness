@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
-import type { DockerResult, Resources } from "./index.js";
-import { DATABASE_NAME } from "./wordpress-initialization.js";
+import { DATABASE_NAME, type WordPressLabSession } from "./lab-session.js";
 
 /**
  * Whole-site state the Lab reads from its own MySQL around the Verifier run
@@ -82,26 +81,22 @@ export function rolesFromCapabilities(serialized: string): string[] {
   return roles.sort();
 }
 
-type RunDocker = (
-  args: readonly string[],
-  timeoutMs?: number,
-  maxOutputBytes?: number,
-) => Promise<DockerResult>;
+/** What the capture needs from a Lab: its database container, root secret and runner. */
+type CaptureLab = Pick<
+  WordPressLabSession,
+  "database" | "databasePassword" | "docker"
+>;
 
 const OUTPUT_LIMIT = 32 * 1024 * 1024;
 
-async function query(
-  resource: Resources,
-  docker: RunDocker,
-  sql: string,
-): Promise<string[][]> {
-  const result = await docker(
+async function query(lab: CaptureLab, sql: string): Promise<string[][]> {
+  const result = await lab.docker(
     [
       "exec",
-      resource.database,
+      lab.database,
       "mariadb",
       "--user=root",
-      `--password=${resource.databasePassword}`,
+      `--password=${lab.databasePassword}`,
       "--skip-column-names",
       "--batch",
       "--execute",
@@ -116,13 +111,11 @@ async function query(
 }
 
 /** Reads the whole site state through the Lab's own database container. */
-export async function captureWordPressLabState(input: {
-  readonly resource: Resources;
-  readonly docker: RunDocker;
-  readonly now: () => Date;
-}): Promise<WordPressLabState> {
-  const { resource, docker } = input;
-  const tables = (await query(resource, docker, "SHOW TABLES"))
+export async function captureWordPressLabState(
+  lab: CaptureLab,
+  now: () => Date,
+): Promise<WordPressLabState> {
+  const tables = (await query(lab, "SHOW TABLES"))
     .map((row) => row[0] ?? "")
     .filter((name) => tableName.safeParse(name).success)
     .sort();
@@ -133,8 +126,7 @@ export async function captureWordPressLabState(input: {
   const tablePrefix = optionsTable.slice(0, -"options".length);
   const options = (
     await query(
-      resource,
-      docker,
+      lab,
       `SELECT option_name, option_value, autoload FROM \`${optionsTable}\` ORDER BY option_name`,
     )
   ).map((row) => ({
@@ -144,8 +136,7 @@ export async function captureWordPressLabState(input: {
   }));
   const users = (
     await query(
-      resource,
-      docker,
+      lab,
       `SELECT u.ID, u.user_login, u.user_email, u.user_registered, SHA2(u.user_pass, 256), COALESCE(m.meta_value, '') FROM \`${tablePrefix}users\` u LEFT JOIN \`${tablePrefix}usermeta\` m ON m.user_id = u.ID AND m.meta_key = '${tablePrefix}capabilities' ORDER BY u.ID`,
     )
   ).map((row) => ({
@@ -159,8 +150,7 @@ export async function captureWordPressLabState(input: {
   const counts = new Map(
     (
       await query(
-        resource,
-        docker,
+        lab,
         tables
           .map((name) => `SELECT '${name}', COUNT(*) FROM \`${name}\``)
           .join(" UNION ALL "),
@@ -170,15 +160,14 @@ export async function captureWordPressLabState(input: {
   const checksums = new Map(
     (
       await query(
-        resource,
-        docker,
+        lab,
         `CHECKSUM TABLE ${tables.map((name) => `\`${name}\``).join(", ")}`,
       )
     ).map((row) => [(row[0] ?? "").replace(/^.*\./, ""), row[1] ?? ""]),
   );
   return wordpressLabStateSchema.parse({
     schema: WORDPRESS_LAB_STATE_SCHEMA_ID,
-    capturedAt: input.now().toISOString(),
+    capturedAt: now().toISOString(),
     tablePrefix,
     options,
     users,

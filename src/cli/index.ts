@@ -1,15 +1,12 @@
 import { z } from "zod";
 
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import { summarizeRecordedRuntimes } from "../discovery/index.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
-import { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import {
-  Ledger,
   type CampaignFunnel,
   type StopRow,
   type FunnelCounts,
@@ -30,6 +27,7 @@ import {
   continuousCommand,
   type ContinuousHostStatus,
 } from "./continuous-cli.js";
+import { openState, type CliState } from "./state.js";
 
 export interface CliIo {
   stdout(line: string): void;
@@ -40,15 +38,7 @@ export interface CliIo {
   ): Promise<number>;
 }
 
-export type CliState = {
-  readonly ledger: Ledger;
-  /** Private Evidence on this host (outside Git); printed paths come from it. */
-  readonly store: PrivateArtifactStore;
-  /** The state root; `lab up` keeps its one record file here. */
-  readonly stateDirectory: string;
-  readonly clock: () => Date;
-  readonly newId: () => string;
-};
+export type { CliState } from "./state.js";
 
 /** What `lab up --finding` started; Lab-only credentials are printed on purpose (#186). */
 export type LabUpSummary = {
@@ -379,30 +369,6 @@ async function humanMinutes(
   if (!Number.isFinite(minutes) || minutes > 1440)
     throw new UsageError("--minutes must be between 0 and 1440");
   return minutes;
-}
-
-async function openState(
-  directory: string,
-  environment: CliEnvironment,
-): Promise<CliState> {
-  const root = resolve(directory);
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  const store = new PrivateArtifactStore({
-    rootDirectory: join(root, "private-evidence"),
-    maxEntries: 64,
-    // A bounded capture and its supporting evidence fit in one artifact.
-    maxBytes: 72 * 1024 * 1024,
-  });
-  return {
-    store,
-    stateDirectory: root,
-    ledger: new Ledger({
-      databasePath: join(root, "ledger.sqlite"),
-      artifactStore: store,
-    }),
-    clock: environment.clock ?? (() => new Date()),
-    newId: environment.newId ?? randomUUID,
-  };
 }
 
 function stages(counts: FunnelCounts): string {

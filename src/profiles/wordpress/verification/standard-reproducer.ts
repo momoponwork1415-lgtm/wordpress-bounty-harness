@@ -15,7 +15,7 @@ import { requestContainsSecret } from "./request-secret.js";
 import {
   STANDARD_REPRODUCER_ID,
   STANDARD_REPRODUCER_SCRIPT,
-} from "./standard-script.js";
+} from "../lab/standard-script.js";
 
 const routeSchema = z.looseObject({
   role: z.enum(["unauthenticated", "subscriber", "customer"]),

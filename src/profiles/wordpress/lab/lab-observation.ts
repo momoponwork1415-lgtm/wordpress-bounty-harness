@@ -5,15 +5,26 @@ import { z } from "zod";
 import type { LabReachability } from "../../../lab/index.js";
 import { BEACON_LOG } from "./container-startup.js";
 import type {
-  DockerResult,
-  Resources,
+  ExecutionCanary,
+  ScriptCanary,
+  WordPressCanaryFilesObservation,
+  WordPressCanaryTableObservation,
+  WordPressExecutionObservation,
   WordPressFileCanary,
-  WordPressLab,
   WordPressLabHandle,
-  WordPressRoleObservation,
+  WordPressOptionsObservation,
   WordPressScriptContext,
+  WordPressSessionObservation,
   WordPressStoredScriptFailurePhase,
-} from "./index.js";
+  WordPressStoredScriptObservation,
+} from "./contract.js";
+import type { WordPressLabSession } from "./lab-session.js";
+
+/**
+ * Observations the Lab makes about itself. Every function takes the active
+ * session; `index.ts` resolves the handle to it and answers "unavailable" when
+ * no session owns the handle.
+ */
 
 const REACHABILITY_PROBE = `$http = @file_get_contents("http://wordpress/");
 $database = "not-exposed";
@@ -133,43 +144,237 @@ export const wordpressVictimRouteSchema = z.strictObject({
   paths: z.array(victimVisitSchema).min(1).max(5),
 });
 export type WordPressVictimRoute = z.infer<typeof wordpressVictimRouteSchema>;
+type VictimActions = readonly z.infer<typeof wordpressVictimActionSchema>[];
 
-type RunDocker = (
-  args: readonly string[],
-  timeoutMs?: number,
-  maxOutputBytes?: number,
-) => Promise<DockerResult>;
-type WordPressCommand = (
-  resource: Resources,
-  args: readonly string[],
-  environment?: readonly string[],
-) => Promise<DockerResult>;
+export async function markCapture(
+  lab: WordPressLabSession,
+): Promise<string | null> {
+  const result = await lab.docker([
+    "exec",
+    lab.recorder,
+    "wc",
+    "-c",
+    "/var/lib/wbh/capture.jsonl",
+  ]);
+  const marker = result.stdout.trim().split(/\s+/)[0];
+  return result.exitCode === 0 && marker !== undefined && /^\d+$/.test(marker)
+    ? marker
+    : null;
+}
 
-type ObservationMethods = Pick<
-  WordPressLab,
-  | "markCapture"
-  | "readCapture"
-  | "probe"
-  | "canaryLedger"
-  | "prepareExecutionCanary"
-  | "observeSessionUser"
-  | "observeCanaryTable"
-  | "observeCanaryFiles"
-  | "prepareScriptCanary"
-  | "issuedScriptNonces"
-  | "observeStoredScript"
-  | "observeOptions"
-  | "observeAccountRoles"
-  | "observeExecution"
->;
+export async function readCapture(
+  lab: WordPressLabSession,
+  sinceMarker: string,
+): Promise<
+  | {
+      readonly status: "captured";
+      readonly bytes: Buffer;
+      readonly dropped: number;
+    }
+  | { readonly status: "unavailable" }
+> {
+  if (
+    !/^\d+$/.test(sinceMarker) ||
+    !Number.isSafeInteger(Number(sinceMarker)) ||
+    Number(sinceMarker) > 64 * 1024 * 1024
+  )
+    return { status: "unavailable" };
+  const [capture, dropped] = await Promise.all([
+    lab.docker(
+      [
+        "exec",
+        lab.recorder,
+        "tail",
+        "-c",
+        `+${Number(sinceMarker) + 1}`,
+        "/var/lib/wbh/capture.jsonl",
+      ],
+      60_000,
+      64 * 1024 * 1024 + 1024,
+    ),
+    lab.docker([
+      "exec",
+      lab.recorder,
+      "sh",
+      "-c",
+      "cat /var/lib/wbh/dropped 2>/dev/null || printf 0",
+    ]),
+  ]);
+  const count = Number(dropped.stdout.trim());
+  if (
+    capture.exitCode !== 0 ||
+    dropped.exitCode !== 0 ||
+    !Number.isSafeInteger(count) ||
+    count < 0
+  )
+    return { status: "unavailable" };
+  return {
+    status: "captured",
+    bytes: Buffer.from(capture.stdout, "utf8"),
+    dropped: count,
+  };
+}
+
+/** The probe result for a Lab that cannot be reached at all. */
+export function labUnreachable(handle: WordPressLabHandle): LabReachability {
+  return {
+    http: "failed",
+    database: handle.database === undefined ? "not-exposed" : "failed",
+  };
+}
+
+export async function probe(
+  lab: WordPressLabSession,
+): Promise<LabReachability> {
+  const { handle } = lab;
+  const database = handle.database;
+  try {
+    const result = await lab.docker(
+      [
+        "run",
+        "--rm",
+        "--runtime=runsc",
+        "--network",
+        lab.network,
+        `--add-host=wordpress:${handle.internalIp}`,
+        ...(database === undefined
+          ? []
+          : [
+              `--add-host=${database.host}:${database.ipv4}`,
+              "--env",
+              `WBH_DB_HOST=${database.host}`,
+              "--env",
+              `WBH_DB_USER=${database.readOnlyAccount.username}`,
+              "--env",
+              `WBH_DB_PASSWORD=${database.readOnlyAccount.password}`,
+              "--env",
+              `WBH_DB_NAME=${database.name}`,
+            ]),
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--tmpfs=/tmp:rw,nosuid,nodev,size=16m",
+        "--entrypoint=php",
+        lab.images.wordpress,
+        "-r",
+        REACHABILITY_PROBE,
+      ],
+      60_000,
+    );
+    if (result.exitCode !== 0) return labUnreachable(handle);
+    const parsed = z
+      .strictObject({
+        http: z.enum(["ok", "failed"]),
+        database: z.enum(["ok", "failed", "not-exposed"]),
+      })
+      .safeParse(JSON.parse(result.stdout.trim()) as unknown);
+    return parsed.success ? parsed.data : labUnreachable(handle);
+  } catch {
+    return labUnreachable(handle);
+  }
+}
+
+export function prepareExecutionCanary(
+  lab: WordPressLabSession,
+): ExecutionCanary | null {
+  const token = lab.nonce();
+  if (!/^[A-Za-z0-9-]{1,100}$/.test(token)) return null;
+  lab.executionNonces.add(token);
+  const path = `/tmp/wbh-execution-${token}`;
+  return {
+    nonce: token,
+    php: `<?php file_put_contents('${path}', hash('sha256', '${token}' . getenv('WBH_EXECUTION_SALT'))); ?>`,
+  };
+}
+
+export async function observeSessionUser(
+  lab: WordPressLabSession,
+  cookie: string,
+  scheme: "logged_in" | "auth" | "secure_auth" = "logged_in",
+): Promise<WordPressSessionObservation> {
+  // The value travels as an environment variable, never as PHP source.
+  if (!/^[A-Za-z0-9%|._@+-]{1,4096}$/.test(cookie)) return { status: "none" };
+  try {
+    const result = await lab.wp(
+      [
+        "eval",
+        '$id = wp_validate_auth_cookie(rawurldecode((string) getenv("WBH_SESSION_COOKIE")), (string) getenv("WBH_SESSION_SCHEME")); echo $id ? get_userdata($id)->user_login : "";',
+      ],
+      [`WBH_SESSION_COOKIE=${cookie}`, `WBH_SESSION_SCHEME=${scheme}`],
+    );
+    const login = result.stdout.trim();
+    return login === "" ? { status: "none" } : { status: "user", login };
+  } catch {
+    return { status: "unavailable" };
+  }
+}
+
+export async function observeCanaryTable(
+  lab: WordPressLabSession,
+): Promise<WordPressCanaryTableObservation> {
+  const canary = lab.canaries?.sqlCanary;
+  if (canary === undefined) return { status: "unavailable" };
+  try {
+    const present = await lab.wp([
+      "db",
+      "query",
+      `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '${canary.table}'`,
+      "--skip-column-names",
+    ]);
+    if (present.stdout.trim() === "0") return { status: "changed" };
+    const rows = await lab.wp([
+      "db",
+      "query",
+      `SELECT id, value FROM ${canary.table} ORDER BY id`,
+      "--skip-column-names",
+    ]);
+    return {
+      status:
+        rows.stdout.trim() === `1\t${canary.value}` ? "intact" : "changed",
+    };
+  } catch {
+    return { status: "unavailable" };
+  }
+}
+
+export async function observeCanaryFiles(
+  lab: WordPressLabSession,
+): Promise<WordPressCanaryFilesObservation> {
+  const files = lab.canaries?.fileCanaries;
+  if (files === undefined) return { status: "unavailable" };
+  const deleted: WordPressFileCanary["kind"][] = [];
+  for (const file of files) {
+    const result = await lab.docker(
+      ["exec", lab.wordpress, "test", "-e", file.path],
+      10_000,
+    );
+    if (result.exitCode === 1) deleted.push(file.kind);
+    else if (result.exitCode !== 0) return { status: "unavailable" };
+  }
+  return { status: "observed", deleted };
+}
+
+export function prepareScriptCanary(
+  lab: WordPressLabSession,
+): ScriptCanary | null {
+  const token = lab.nonce();
+  if (!/^[A-Za-z0-9-]{1,100}$/.test(token)) return null;
+  lab.scriptNonces.add(token);
+  const beaconUrl = `http://canary:8080/b/${token}`;
+  return {
+    nonce: token,
+    beaconUrl,
+    javascript: `fetch(${JSON.stringify(beaconUrl)}, { method: "POST", headers: { "X-WBH-Script-Canary": ${JSON.stringify(token)} } });`,
+    loaderJavascript: `import("//canary:8080/c/${token}")`,
+  };
+}
 
 async function readBeaconCount(
-  resource: Resources,
+  lab: WordPressLabSession,
   issued: ReadonlySet<string>,
-  docker: RunDocker,
 ): Promise<number> {
-  const log = await docker(
-    ["exec", resource.receiver, "cat", BEACON_LOG],
+  const log = await lab.docker(
+    ["exec", lab.receiver, "cat", BEACON_LOG],
     10_000,
   );
   if (log.exitCode === 1 && log.stdout === "") return 0;
@@ -178,44 +383,31 @@ async function readBeaconCount(
 }
 
 async function visitStoredScriptPage(input: {
-  readonly resource: Resources;
-  readonly handle: WordPressLabHandle;
+  readonly lab: WordPressLabSession;
   readonly receiverIp: string;
   readonly issued: ReadonlySet<string>;
   readonly path: string;
   readonly role: WordPressVictimRoute["role"];
-  readonly actions?: readonly z.infer<typeof wordpressVictimActionSchema>[];
-  readonly browserImage: string;
-  readonly docker: RunDocker;
+  readonly actions?: VictimActions;
 }): Promise<{ readonly fired: boolean; readonly screenshot: Buffer }> {
-  const {
-    resource,
-    handle,
-    receiverIp,
-    issued,
-    path,
-    role,
-    actions,
-    browserImage,
-    docker,
-  } = input;
+  const { lab, receiverIp, issued, path, role, actions } = input;
   const account =
     role === "administrator"
-      ? { username: "harness-admin", password: resource.adminPassword }
+      ? { username: "harness-admin", password: lab.adminPassword }
       : role === "unauthenticated"
         ? undefined
-        : resource.victimAccounts[role];
+        : lab.victimAccounts[role];
   if (role !== "unauthenticated" && account === undefined)
     throw new Error("Victim role is unavailable");
-  const before = await readBeaconCount(resource, issued, docker);
-  const result = await docker(
+  const before = await readBeaconCount(lab, issued);
+  const result = await lab.docker(
     [
       "run",
       "--rm",
       "--runtime=runsc",
       "--network",
-      resource.network,
-      `--add-host=wordpress:${handle.internalIp}`,
+      lab.network,
+      `--add-host=wordpress:${lab.handle.internalIp}`,
       `--add-host=canary:${receiverIp}`,
       "--read-only",
       "--cap-drop=ALL",
@@ -235,7 +427,7 @@ async function visitStoredScriptPage(input: {
       "--env",
       `WBH_VISIT_ACTIONS=${JSON.stringify(actions ?? [])}`,
       "--entrypoint=node",
-      browserImage,
+      lab.images.browser,
       "-e",
       BROWSER_VISIT,
     ],
@@ -255,460 +447,137 @@ async function visitStoredScriptPage(input: {
   )
     throw new Error("Browser screenshot is invalid");
   return {
-    fired: (await readBeaconCount(resource, issued, docker)) > before,
+    fired: (await readBeaconCount(lab, issued)) > before,
     screenshot,
   };
 }
 
-type ObservationRuntime = {
-  readonly active: Map<string, Resources>;
-  readonly docker: RunDocker;
-  readonly wp: WordPressCommand;
-  readonly roles: (
-    resource: Resources,
-    username: string,
-  ) => Promise<WordPressRoleObservation>;
-  readonly optionDigest: (resource: Resources, name: string) => Promise<string>;
-  readonly nonce: () => string;
-  readonly images: { readonly wordpress: string; readonly browser: string };
-};
-
-function createCaptureObservations(
-  runtime: ObservationRuntime,
-): Pick<ObservationMethods, "markCapture" | "readCapture"> {
-  const { active, docker } = runtime;
-  return {
-    async markCapture(handle) {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle) return null;
-      const result = await docker([
-        "exec",
-        resource.recorder,
-        "wc",
-        "-c",
-        "/var/lib/wbh/capture.jsonl",
-      ]);
-      const marker = result.stdout.trim().split(/\s+/)[0];
-      return result.exitCode === 0 &&
-        marker !== undefined &&
-        /^\d+$/.test(marker)
-        ? marker
-        : null;
-    },
-    async readCapture(handle, sinceMarker) {
-      const resource = active.get(handle.id);
-      if (
-        resource?.handle !== handle ||
-        !/^\d+$/.test(sinceMarker) ||
-        !Number.isSafeInteger(Number(sinceMarker)) ||
-        Number(sinceMarker) > 64 * 1024 * 1024
-      )
-        return { status: "unavailable" };
-      const [capture, dropped] = await Promise.all([
-        docker(
-          [
-            "exec",
-            resource.recorder,
-            "tail",
-            "-c",
-            `+${Number(sinceMarker) + 1}`,
-            "/var/lib/wbh/capture.jsonl",
-          ],
-          60_000,
-          64 * 1024 * 1024 + 1024,
-        ),
-        docker([
-          "exec",
-          resource.recorder,
-          "sh",
-          "-c",
-          "cat /var/lib/wbh/dropped 2>/dev/null || printf 0",
-        ]),
-      ]);
-      const count = Number(dropped.stdout.trim());
-      if (
-        capture.exitCode !== 0 ||
-        dropped.exitCode !== 0 ||
-        !Number.isSafeInteger(count) ||
-        count < 0
-      )
-        return { status: "unavailable" };
-      return {
-        status: "captured",
-        bytes: Buffer.from(capture.stdout, "utf8"),
-        dropped: count,
-      };
-    },
-  };
-}
-
-function createProbeObservation(
-  runtime: ObservationRuntime,
-): Pick<ObservationMethods, "probe"> {
-  const { active, docker } = runtime;
-  const options = { images: runtime.images };
-  return {
-    async probe(handle) {
-      const resource = active.get(handle.id);
-      const database = handle.database;
-      const failed = (): LabReachability => ({
-        http: "failed",
-        database: database === undefined ? "not-exposed" : "failed",
+export async function observeStoredScript(
+  lab: WordPressLabSession,
+  input: {
+    readonly routePaths: readonly string[];
+    readonly victim?: WordPressVictimRoute;
+  },
+): Promise<WordPressStoredScriptObservation> {
+  const { receiverIp } = lab;
+  if (receiverIp === undefined) return { status: "unavailable", phase: "lab" };
+  if (lab.scriptNonces.size === 0) return { status: "not-prepared" };
+  const routePaths = z
+    .array(wordpressVisitPathSchema)
+    .max(5)
+    .safeParse(input.routePaths);
+  if (!routePaths.success)
+    return { status: "unavailable", phase: "route-input" };
+  const victim =
+    input.victim === undefined
+      ? undefined
+      : wordpressVictimRouteSchema.safeParse(input.victim);
+  if (victim !== undefined && !victim.success)
+    return { status: "unavailable", phase: "victim-input" };
+  const issued = new Set([...lab.scriptNonces].map((token) => `/b/${token}`));
+  let phase: WordPressStoredScriptFailurePhase = "front";
+  try {
+    const contexts: WordPressScriptContext[] = [];
+    let screenshot: Buffer | undefined;
+    const fired = async (
+      path: string,
+      role: WordPressVictimRoute["role"],
+      actions?: VictimActions,
+    ): Promise<boolean> => {
+      const observation = await visitStoredScriptPage({
+        lab,
+        receiverIp,
+        issued,
+        path,
+        role,
+        ...(actions === undefined ? {} : { actions }),
       });
-      if (resource?.handle !== handle) return failed();
-      try {
-        const result = await docker(
-          [
-            "run",
-            "--rm",
-            "--runtime=runsc",
-            "--network",
-            resource.network,
-            `--add-host=wordpress:${handle.internalIp}`,
-            ...(database === undefined
-              ? []
-              : [
-                  `--add-host=${database.host}:${database.ipv4}`,
-                  "--env",
-                  `WBH_DB_HOST=${database.host}`,
-                  "--env",
-                  `WBH_DB_USER=${database.readOnlyAccount.username}`,
-                  "--env",
-                  `WBH_DB_PASSWORD=${database.readOnlyAccount.password}`,
-                  "--env",
-                  `WBH_DB_NAME=${database.name}`,
-                ]),
-            "--read-only",
-            "--cap-drop=ALL",
-            "--security-opt=no-new-privileges",
-            "--tmpfs=/tmp:rw,nosuid,nodev,size=16m",
-            "--entrypoint=php",
-            options.images.wordpress,
-            "-r",
-            REACHABILITY_PROBE,
-          ],
-          60_000,
-        );
-        if (result.exitCode !== 0) return failed();
-        const parsed = z
-          .strictObject({
-            http: z.enum(["ok", "failed"]),
-            database: z.enum(["ok", "failed", "not-exposed"]),
-          })
-          .safeParse(JSON.parse(result.stdout.trim()) as unknown);
-        return parsed.success ? parsed.data : failed();
-      } catch {
-        return failed();
+      if (observation.fired) screenshot ??= observation.screenshot;
+      return observation.fired;
+    };
+    if (await fired("/", "unauthenticated")) contexts.push("front");
+    phase = "dashboard";
+    const dashboard = await fired("/wp-admin/", "administrator");
+    phase = "posts";
+    const posts = await fired("/wp-admin/edit.php", "administrator");
+    if (dashboard && posts) contexts.push("admin-all");
+    else if (dashboard || posts) contexts.push("admin-partial");
+    let routePage = false;
+    phase = "route-page";
+    for (const path of routePaths.data)
+      if (await fired(path, "unauthenticated")) routePage = true;
+    if (routePage) contexts.push("route-page");
+    let victimPage = false;
+    if (victim?.success) {
+      phase = "victim-page";
+      for (const visit of victim.data.paths) {
+        const path = typeof visit === "string" ? visit : visit.path;
+        const actions = typeof visit === "string" ? undefined : visit.actions;
+        if (await fired(path, victim.data.role, actions)) victimPage = true;
       }
-    },
-  };
+    }
+    if (victimPage) contexts.push("victim-route-page");
+    const victimRole =
+      victim?.success && victimPage ? victim.data.role : undefined;
+    const sameAccount =
+      (victimRole === "subscriber" || victimRole === "customer") &&
+      lab.victimAccounts[victimRole]?.username ===
+        lab.handle.attackerAccounts[victimRole]?.username;
+    return {
+      status: "observed",
+      contexts,
+      ...(victimRole === undefined
+        ? {}
+        : { victimRole: sameAccount ? ("self" as const) : victimRole }),
+      ...(screenshot === undefined ? {} : { screenshot }),
+    };
+  } catch {
+    return { status: "unavailable", phase };
+  }
 }
 
-function createCanarySetupObservations(
-  runtime: ObservationRuntime,
-): Pick<
-  ObservationMethods,
-  "canaryLedger" | "prepareExecutionCanary" | "observeSessionUser"
-> {
-  const { active, nonce, wp } = runtime;
-  return {
-    canaryLedger(handle) {
-      const resource = active.get(handle.id);
-      return resource?.handle === handle ? (resource.canaries ?? null) : null;
-    },
-    prepareExecutionCanary(handle) {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle) return null;
-      const token = nonce();
-      if (!/^[A-Za-z0-9-]{1,100}$/.test(token)) return null;
-      resource.executionNonces.add(token);
-      const path = `/tmp/wbh-execution-${token}`;
-      return {
-        nonce: token,
-        php: `<?php file_put_contents('${path}', hash('sha256', '${token}' . getenv('WBH_EXECUTION_SALT'))); ?>`,
-      };
-    },
-    async observeSessionUser(handle, cookie, scheme = "logged_in") {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle) return { status: "unavailable" };
-      // The value travels as an environment variable, never as PHP source.
-      if (!/^[A-Za-z0-9%|._@+-]{1,4096}$/.test(cookie))
-        return { status: "none" };
-      try {
-        const result = await wp(
-          resource,
-          [
-            "eval",
-            '$id = wp_validate_auth_cookie(rawurldecode((string) getenv("WBH_SESSION_COOKIE")), (string) getenv("WBH_SESSION_SCHEME")); echo $id ? get_userdata($id)->user_login : "";',
-          ],
-          [`WBH_SESSION_COOKIE=${cookie}`, `WBH_SESSION_SCHEME=${scheme}`],
-        );
-        const login = result.stdout.trim();
-        return login === "" ? { status: "none" } : { status: "user", login };
-      } catch {
-        return { status: "unavailable" };
-      }
-    },
-  };
+export async function observeOptions(
+  lab: WordPressLabSession,
+): Promise<WordPressOptionsObservation> {
+  const baseline = lab.optionBaseline;
+  if (baseline === undefined) return { status: "unavailable" };
+  try {
+    const changed: string[] = [];
+    for (const [name, digest] of baseline)
+      if ((await lab.optionDigest(name)) !== digest) changed.push(name);
+    return { status: "observed", changed };
+  } catch {
+    return { status: "unavailable" };
+  }
 }
 
-function createCanaryInspectionObservations(
-  runtime: ObservationRuntime,
-): Pick<
-  ObservationMethods,
-  | "observeCanaryTable"
-  | "observeCanaryFiles"
-  | "prepareScriptCanary"
-  | "issuedScriptNonces"
-> {
-  const { active, wp, docker, nonce } = runtime;
-  return {
-    async observeCanaryTable(handle) {
-      const resource = active.get(handle.id);
-      const canary = resource?.canaries?.sqlCanary;
-      if (resource?.handle !== handle || canary === undefined)
-        return { status: "unavailable" };
-      try {
-        const present = await wp(resource, [
-          "db",
-          "query",
-          `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '${canary.table}'`,
-          "--skip-column-names",
-        ]);
-        if (present.stdout.trim() === "0") return { status: "changed" };
-        const rows = await wp(resource, [
-          "db",
-          "query",
-          `SELECT id, value FROM ${canary.table} ORDER BY id`,
-          "--skip-column-names",
-        ]);
-        return {
-          status:
-            rows.stdout.trim() === `1\t${canary.value}` ? "intact" : "changed",
-        };
-      } catch {
-        return { status: "unavailable" };
-      }
-    },
-    async observeCanaryFiles(handle) {
-      const resource = active.get(handle.id);
-      const files = resource?.canaries?.fileCanaries;
-      if (resource?.handle !== handle || files === undefined)
-        return { status: "unavailable" };
-      const deleted: WordPressFileCanary["kind"][] = [];
-      for (const file of files) {
-        const result = await docker(
-          ["exec", resource.wordpress, "test", "-e", file.path],
-          10_000,
-        );
-        if (result.exitCode === 1) deleted.push(file.kind);
-        else if (result.exitCode !== 0) return { status: "unavailable" };
-      }
-      return { status: "observed", deleted };
-    },
-    prepareScriptCanary(handle) {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle) return null;
-      const token = nonce();
-      if (!/^[A-Za-z0-9-]{1,100}$/.test(token)) return null;
-      resource.scriptNonces.add(token);
-      const beaconUrl = `http://canary:8080/b/${token}`;
-      return {
-        nonce: token,
-        beaconUrl,
-        javascript: `fetch(${JSON.stringify(beaconUrl)}, { method: "POST", headers: { "X-WBH-Script-Canary": ${JSON.stringify(token)} } });`,
-        loaderJavascript: `import("//canary:8080/c/${token}")`,
-      };
-    },
-    issuedScriptNonces(handle) {
-      const resource = active.get(handle.id);
-      return resource?.handle === handle ? [...resource.scriptNonces] : null;
-    },
-  };
-}
-
-function createStoredScriptObservation(
-  runtime: ObservationRuntime,
-): Pick<ObservationMethods, "observeStoredScript"> {
-  const { active, docker } = runtime;
-  const options = { images: runtime.images };
-  return {
-    async observeStoredScript(handle, input) {
-      const resource = active.get(handle.id);
-      const receiverIp = resource?.receiverIp;
-      if (resource?.handle !== handle || receiverIp === undefined)
-        return { status: "unavailable", phase: "lab" };
-      if (resource.scriptNonces.size === 0) return { status: "not-prepared" };
-      const routePaths = z
-        .array(wordpressVisitPathSchema)
-        .max(5)
-        .safeParse(input.routePaths);
-      if (!routePaths.success)
-        return { status: "unavailable", phase: "route-input" };
-      const victim =
-        input.victim === undefined
-          ? undefined
-          : wordpressVictimRouteSchema.safeParse(input.victim);
-      if (victim !== undefined && !victim.success)
-        return { status: "unavailable", phase: "victim-input" };
-      const issued = new Set(
-        [...resource.scriptNonces].map((token) => `/b/${token}`),
+export async function observeExecution(
+  lab: WordPressLabSession,
+): Promise<WordPressExecutionObservation> {
+  if (lab.executionNonces.size === 0) return { status: "not-prepared" };
+  try {
+    for (const token of lab.executionNonces) {
+      const marker = await lab.docker(
+        ["exec", lab.wordpress, "cat", `/tmp/wbh-execution-${token}`],
+        10_000,
       );
-      const visit = (
-        path: string,
-        role: WordPressVictimRoute["role"],
-        actions?: readonly z.infer<typeof wordpressVictimActionSchema>[],
-      ) =>
-        visitStoredScriptPage({
-          resource,
-          handle,
-          receiverIp,
-          issued,
-          path,
-          role,
-          ...(actions === undefined ? {} : { actions }),
-          browserImage: options.images.browser,
-          docker,
-        });
-      let phase: WordPressStoredScriptFailurePhase = "front";
-      try {
-        const contexts: WordPressScriptContext[] = [];
-        let screenshot: Buffer | undefined;
-        const fired = async (
-          path: string,
-          role: WordPressVictimRoute["role"],
-          actions?: readonly z.infer<typeof wordpressVictimActionSchema>[],
-        ): Promise<boolean> => {
-          const observation = await visit(path, role, actions);
-          if (observation.fired) screenshot ??= observation.screenshot;
-          return observation.fired;
-        };
-        if (await fired("/", "unauthenticated")) contexts.push("front");
-        phase = "dashboard";
-        const dashboard = await fired("/wp-admin/", "administrator");
-        phase = "posts";
-        const posts = await fired("/wp-admin/edit.php", "administrator");
-        if (dashboard && posts) contexts.push("admin-all");
-        else if (dashboard || posts) contexts.push("admin-partial");
-        let routePage = false;
-        phase = "route-page";
-        for (const path of routePaths.data)
-          if (await fired(path, "unauthenticated")) routePage = true;
-        if (routePage) contexts.push("route-page");
-        let victimPage = false;
-        if (victim?.success) {
-          phase = "victim-page";
-          for (const visit of victim.data.paths) {
-            const path = typeof visit === "string" ? visit : visit.path;
-            const actions =
-              typeof visit === "string" ? undefined : visit.actions;
-            if (await fired(path, victim.data.role, actions)) victimPage = true;
-          }
-        }
-        if (victimPage) contexts.push("victim-route-page");
-        const victimRole =
-          victim?.success && victimPage ? victim.data.role : undefined;
-        const sameAccount =
-          (victimRole === "subscriber" || victimRole === "customer") &&
-          resource.victimAccounts[victimRole]?.username ===
-            handle.attackerAccounts[victimRole]?.username;
-        return {
-          status: "observed",
-          contexts,
-          ...(victimRole === undefined
-            ? {}
-            : { victimRole: sameAccount ? ("self" as const) : victimRole }),
-          ...(screenshot === undefined ? {} : { screenshot }),
-        };
-      } catch {
-        return { status: "unavailable", phase };
-      }
-    },
-  };
-}
-
-function createFinalObservations(
-  runtime: ObservationRuntime,
-): Pick<
-  ObservationMethods,
-  "observeOptions" | "observeAccountRoles" | "observeExecution"
-> {
-  const { active, optionDigest, roles, docker } = runtime;
-  return {
-    async observeOptions(handle) {
-      const resource = active.get(handle.id);
-      const baseline = resource?.optionBaseline;
-      if (resource?.handle !== handle || baseline === undefined)
-        return { status: "unavailable" };
-      try {
-        const changed: string[] = [];
-        for (const [name, digest] of baseline)
-          if ((await optionDigest(resource, name)) !== digest)
-            changed.push(name);
-        return { status: "observed", changed };
-      } catch {
-        return { status: "unavailable" };
-      }
-    },
-    async observeAccountRoles(handle, username) {
-      const resource = active.get(handle.id);
-      return resource?.handle === handle
-        ? roles(resource, username)
-        : { status: "unavailable" };
-    },
-    async observeExecution(handle) {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle) return { status: "unavailable" };
-      if (resource.executionNonces.size === 0)
-        return { status: "not-prepared" };
-      try {
-        for (const token of resource.executionNonces) {
-          const marker = await docker(
-            ["exec", resource.wordpress, "cat", `/tmp/wbh-execution-${token}`],
-            10_000,
-          );
-          const expected = createHash("sha256")
-            .update(`${token}${resource.executionSalt}`)
-            .digest("hex");
-          if (marker.exitCode !== 0 || marker.stdout.trim() !== expected)
-            continue;
-          const found = await docker(
-            [
-              "exec",
-              resource.wordpress,
-              "grep",
-              "-rlF",
-              "--",
-              token,
-              "/var/www/html",
-            ],
-            30_000,
-          );
-          const files = found.stdout
-            .split("\n")
-            .filter((line) => line.startsWith("/var/www/html/"))
-            .slice(0, 5)
-            .map((line) => line.slice("/var/www/html/".length));
-          return { status: "executed", files };
-        }
-        return { status: "not-executed" };
-      } catch {
-        return { status: "unavailable" };
-      }
-    },
-  };
-}
-
-/** The Lab observer keeps the same method contracts across the smaller groups. */
-export function createWordPressLabObservations(
-  runtime: ObservationRuntime,
-): ObservationMethods {
-  return {
-    ...createCaptureObservations(runtime),
-    ...createProbeObservation(runtime),
-    ...createCanarySetupObservations(runtime),
-    ...createCanaryInspectionObservations(runtime),
-    ...createStoredScriptObservation(runtime),
-    ...createFinalObservations(runtime),
-  };
+      const expected = createHash("sha256")
+        .update(`${token}${lab.executionSalt}`)
+        .digest("hex");
+      if (marker.exitCode !== 0 || marker.stdout.trim() !== expected) continue;
+      const found = await lab.docker(
+        ["exec", lab.wordpress, "grep", "-rlF", "--", token, "/var/www/html"],
+        30_000,
+      );
+      const files = found.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("/var/www/html/"))
+        .slice(0, 5)
+        .map((line) => line.slice("/var/www/html/".length));
+      return { status: "executed", files };
+    }
+    return { status: "not-executed" };
+  } catch {
+    return { status: "unavailable" };
+  }
 }

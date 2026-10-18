@@ -12,21 +12,7 @@ import {
 } from "../../src/discovery/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
-import {
-  admitWordPressFinding,
-  readWordPressFinding,
-} from "../../src/profiles/wordpress/discovery/finding.js";
-import { isWordPressProgrammeImpact } from "../../src/profiles/wordpress/discovery/programme-impacts.js";
-import { classifyWordPressPrecondition } from "../../src/profiles/wordpress/verification/precondition-class.js";
-import {
-  admitWordPressLead,
-  readWordPressLead,
-  wordPressLeadSignature,
-} from "../../src/profiles/wordpress/discovery/lead.js";
-import {
-  classifyWordPressCandidate,
-  normalizeWordPressCandidate,
-} from "../../src/profiles/wordpress/discovery/normalize-candidate.js";
+import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/candidate-admission.js";
 import { assessWordPressCoverage } from "../../src/profiles/wordpress/discovery/coverage.js";
 import type { WordPressSourceIndex } from "../../src/profiles/wordpress/discovery/storage-index.js";
 
@@ -141,32 +127,11 @@ async function campaign(
     campaignId: "campaign-1",
     labId: "lab-1",
     input,
-    historyFraction: 0.5,
     runWallTimeMs: options.wallOnFirstRun ? 30 : 60 * 60_000,
-    ...(options.indexed
-      ? {}
-      : {
-          ablation: { axes: [{ axis: "history" as const, armBFraction: 0.5 }] },
-        }),
     ledger,
     attachments,
     evidence,
-    admitFinding: admitWordPressFinding,
-    isProgrammeImpact: isWordPressProgrammeImpact,
-    classifyFindingPrecondition: (finding) => {
-      const classification = classifyWordPressPrecondition({
-        configurationPrecondition:
-          readWordPressFinding(finding).configurationPrecondition,
-      }).preconditionClass;
-      return {
-        preconditionClass: classification,
-        park: classification === "admin-configuration",
-      };
-    },
-    admitLead: admitWordPressLead,
-    leadSignature: (lead) => wordPressLeadSignature(readWordPressLead(lead)),
-    normalizeCandidate: normalizeWordPressCandidate,
-    classifyCandidate: classifyWordPressCandidate,
+    recordReport: recordWordPressReport,
     ...(options.coverage === undefined
       ? {}
       : {
@@ -786,9 +751,9 @@ it("stops after consecutive completed runs without a new Finding and records eac
           : null,
       ),
   ).toEqual([
-    ["none", "short-objective"],
+    ["catalog", "short-objective"],
     ["catalog", "wp2shell-derived"],
-    ["none", "short-objective"],
+    ["catalog", "short-objective"],
   ]);
   expect(ledger.funnel("campaign-1")).toMatchObject({
     raw: 1,
@@ -797,28 +762,6 @@ it("stops after consecutive completed runs without a new Finding and records eac
     knownCostUsd: 0,
     unpricedRuns: 3,
     wallTimeMs: 3000,
-  });
-});
-
-it("records the history arm the runner allocated to each run and counts runs and Findings per arm", async () => {
-  const { ledger } = await campaign([1]);
-  expect(
-    ledger
-      .read({ type: "discovery-run-started" })
-      .map(({ event }) =>
-        event.type === "discovery-run-started"
-          ? [event.history.mode, event.configuration.arms?.history]
-          : null,
-      ),
-  ).toEqual([
-    ["none", "a"],
-    ["catalog", "b"],
-    ["none", "a"],
-    ["catalog", "b"],
-  ]);
-  expect(ledger.funnel("campaign-1").byArm).toEqual({
-    "history:a": { runs: 2, findings: 0, confirmed: 0 },
-    "history:b": { runs: 2, findings: 1, confirmed: 0 },
   });
 });
 

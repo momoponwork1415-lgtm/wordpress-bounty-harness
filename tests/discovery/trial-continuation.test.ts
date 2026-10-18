@@ -13,12 +13,7 @@ import {
 } from "../../src/discovery/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
-import { admitWordPressFinding } from "../../src/profiles/wordpress/discovery/finding.js";
-import {
-  admitWordPressLead,
-  readWordPressLead,
-  wordPressLeadSignature,
-} from "../../src/profiles/wordpress/discovery/lead.js";
+import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/candidate-admission.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const profile = defineAgentRuntimeProfile({
@@ -128,16 +123,11 @@ async function trialCampaign(options: {
     campaignId: "campaign-1",
     labId: "lab-1",
     input,
-    historyFraction: 0,
-    ablation: { axes: [{ axis: "prompt", armBFraction: 0.5 }] },
     plannedTrials,
     ledger,
     evidence,
     attachments,
-    admitFinding: admitWordPressFinding,
-    admitLead: admitWordPressLead,
-    leadSignature: (candidate) =>
-      wordPressLeadSignature(readWordPressLead(candidate)),
+    recordReport: recordWordPressReport,
     clock: () => new Date("2026-10-08T08:00:00Z"),
     executor: {
       async execute(run) {
@@ -217,7 +207,7 @@ it("records Leads without injecting a Harness continuation", async () => {
     ).toBe("resolved");
 });
 
-it("counts a later Finding in its prompt comparison arm", async () => {
+it("records a later Trial's Finding after an earlier Lead", async () => {
   const { result, calls, ledger } = await trialCampaign({
     trialCount: 2,
     noFindingRuns: 2,
@@ -228,5 +218,5 @@ it("counts a later Finding in its prompt comparison arm", async () => {
   });
   expect(result).toMatchObject({ runCount: 2, stoppedBy: "max-runs" });
   expect(calls.map((call) => call.runId)).toEqual(["trial-0", "trial-1"]);
-  expect(ledger.funnel("campaign-1").byArm["prompt:b"]?.findings).toBe(1);
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(1);
 });

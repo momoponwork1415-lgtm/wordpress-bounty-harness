@@ -1,21 +1,77 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createWordPressLabObservations } from "./lab-observation.js";
-import { STANDARD_REPRODUCER_SCRIPT } from "../verification/standard-script.js";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 import { z } from "zod";
 
+import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import type {
+  LabProvisioner,
+  LabReachability,
+  ProvisionResult,
+} from "../../../lab/index.js";
+import {
+  placeVerificationCanaries,
+  seedWordPressCanaries,
+} from "./canary-placement.js";
 import { startLabContainers } from "./container-startup.js";
+import type {
+  ExecutionCanary,
+  Leftovers,
+  LeftoverPatterns,
+  ScriptCanary,
+  WordPressCanaryFilesObservation,
+  WordPressCanaryLedger,
+  WordPressCanaryTableObservation,
+  WordPressExecutionObservation,
+  WordPressLabHandle,
+  WordPressOptionsObservation,
+  WordPressRoleObservation,
+  WordPressSessionObservation,
+  WordPressSourceResolver,
+  WordPressStoredScriptObservation,
+} from "./contract.js";
 import {
   exposeWordPressLabToHost,
   type HostExposure,
 } from "./host-exposure.js";
 import {
+  createLabDocker,
+  LabDockerFailure,
+  nativeDockerRunner,
+  type DockerRunner,
+} from "./lab-docker.js";
+import * as observe from "./lab-observation.js";
+import type { WordPressVictimRoute } from "./lab-observation.js";
+import {
+  DATABASE_NAME,
+  READ_ONLY_DATABASE_USER,
+  WordPressLabSession,
+  type LabImages,
+} from "./lab-session.js";
+import {
+  prepareWordPressLab,
+  type PreparedWordPressLab,
+  type WordPressLabSetup,
+} from "./provision-input.js";
+import { STANDARD_REPRODUCER_SCRIPT } from "./standard-script.js";
+import {
   captureWordPressLabState,
   type WordPressLabState,
 } from "./state-capture.js";
+import {
+  grantReadOnlyDatabaseAccess,
+  initializeWordPress,
+} from "./wordpress-initialization.js";
+
+export type * from "./contract.js";
+export { WORDPRESS_SENSITIVE_OBJECT_KINDS_V1 } from "./contract.js";
+export type {
+  DockerRequest,
+  DockerResult,
+  DockerRunner,
+} from "./lab-docker.js";
 export type {
   WordPressLabState,
   WordPressLabStateDiff,
@@ -26,234 +82,25 @@ export {
   wordpressLabStateSchema,
 } from "./state-capture.js";
 export { hostGatewayName, type HostExposure } from "./host-exposure.js";
-import {
-  placeVerificationCanaries,
-  seedWordPressCanaries,
-} from "./canary-placement.js";
-import {
-  grantReadOnlyDatabaseAccess,
-  initializeWordPress,
-} from "./wordpress-initialization.js";
-import {
-  createLabHandle,
-  createLabResource,
-  databaseIp,
-  prepareWordPressLab,
-  type WordPressLabSetup,
-} from "./provision-input.js";
 export type {
   WordPressLabSetup,
   ParsedWordPressLabSetup,
 } from "./provision-input.js";
 export { WORDPRESS_CORE_IDENTITY } from "./provision-input.js";
-import type { ExpectedSourceTree } from "../../../infrastructure/canonical-source-tree.js";
-import { runNativeModelProcess } from "../../../infrastructure/native-model-process.js";
-import type {
-  LabHandle,
-  LabProvisioner,
-  LabReachability,
-  ProvisionResult,
-} from "../../../lab/index.js";
-import type { Snapshot } from "../../../snapshot/index.js";
-
-const pinnedImage = z.string().regex(/^[^\s@]+@sha256:[a-f0-9]{64}$/);
 export {
   wordpressVisitPathSchema,
   wordpressVictimRouteSchema,
+  type WordPressVictimRoute,
 } from "./lab-observation.js";
-import type { WordPressVictimRoute } from "./lab-observation.js";
-export type { WordPressVictimRoute } from "./lab-observation.js";
+/** Name the plugin-specific adapters (removed in #353) use for the Lab they run against. */
+export type Resources = WordPressLabSession;
 
-export type DockerRequest = {
-  readonly args: readonly string[];
-  readonly stdin?: string;
-  readonly timeoutMs: number;
-  readonly maxOutputBytes: number;
-};
-export type DockerResult = {
-  readonly exitCode: number;
-  readonly stdout: string;
-  readonly stderr: string;
-};
-class LabDockerFailure extends Error {
-  constructor(readonly diagnostic: string) {
-    super("gVisor Lab command failed");
-  }
-}
+const pinnedImage = z.string().regex(/^[^\s@]+@sha256:[a-f0-9]{64}$/);
+
 class MissingWordPressExtension extends Error {
   constructor() {
     super("The WordPress Lab image is missing pdo_mysql");
   }
-}
-export interface DockerRunner {
-  run(request: DockerRequest): Promise<DockerResult>;
-}
-
-export type WordPressSource =
-  | {
-      readonly kind: "plugin";
-      readonly pluginSlug: string;
-      readonly sourceDirectory: string;
-      readonly sourceTree: ExpectedSourceTree;
-    }
-  | {
-      readonly kind: "wordpress-core";
-      readonly version: string;
-      readonly sourceDirectory: string;
-      readonly sourceTree: ExpectedSourceTree;
-    }
-  | {
-      readonly kind: "php-source";
-      readonly version: string;
-      readonly sourceDirectory: string;
-      readonly sourceTree: ExpectedSourceTree;
-    };
-export interface WordPressSourceResolver {
-  resolve(snapshot: Snapshot): Promise<{
-    readonly target: WordPressSource;
-    readonly dependencies: readonly WordPressSource[];
-  }>;
-}
-
-export interface WordPressLabHandle extends LabHandle {
-  /** Non-secret ordinary locale setting for prerequisite matching. */
-  readonly secondaryLocale?: string;
-  readonly networkName: string;
-  readonly internalIp: string;
-  /** Verifier traffic passes through this Lab-local recorder. */
-  readonly recorderIp: string;
-  readonly database?: {
-    readonly host: "database";
-    readonly ipv4: string;
-    readonly port: 3306;
-    readonly name: "wordpress";
-    readonly readOnlyAccount: {
-      readonly username: "wbh_reader";
-      readonly password: string;
-    };
-  };
-  readonly attackerAccounts: Readonly<{
-    subscriber: { readonly username: string; readonly password: string };
-    customer?: { readonly username: string; readonly password: string };
-  }>;
-}
-
-export interface WordPressCanaryLedger {
-  readonly nonce: string;
-  readonly option: string;
-  readonly postId: string;
-  readonly postMeta: string;
-  readonly file: string;
-  readonly user: string;
-  /** Administrator canary: a takeover target the attacker never holds credentials for. */
-  readonly adminUser: string;
-  /** Roles of each attacker account when the Lab was seeded. */
-  readonly roleBaseline: Readonly<Record<string, readonly string[]>>;
-  /** One row whose value is stored only in this table; reading it needs SQL access. */
-  readonly sqlCanary: { readonly table: string; readonly value: string };
-  /** Files outside wp-content at fixed paths; only their values are secret. */
-  readonly fileCanaries: readonly WordPressFileCanary[];
-  /** Verification-only protected objects; never mounted into a discovery Lab. */
-  readonly sensitiveCanaries: readonly WordPressSensitiveCanary[];
-}
-
-export const WORDPRESS_SENSITIVE_OBJECT_KINDS_V1 = [
-  "private-post",
-  "other-user-meta",
-] as const;
-export type WordPressSensitiveObjectKind =
-  (typeof WORDPRESS_SENSITIVE_OBJECT_KINDS_V1)[number];
-export interface WordPressSensitiveCanary {
-  readonly kind: WordPressSensitiveObjectKind;
-  readonly objectId: string;
-  readonly value: string;
-}
-
-export interface ScriptCanary {
-  readonly nonce: string;
-  readonly beaconUrl: string;
-  /** Exact browser code for the nonce-bound POST; stays in Private Evidence. */
-  readonly javascript: string;
-  /** Short code for constrained surfaces; the module sends the same POST. */
-  readonly loaderJavascript: string;
-}
-
-export type WordPressScriptContext =
-  "front" | "admin-all" | "admin-partial" | "route-page" | "victim-route-page";
-
-/** Bounded observer diagnostic; never includes a visited path or browser output. */
-export type WordPressStoredScriptFailurePhase =
-  | "lab"
-  | "route-input"
-  | "victim-input"
-  | "front"
-  | "dashboard"
-  | "posts"
-  | "route-page"
-  | "victim-page";
-
-export type WordPressStoredScriptObservation =
-  | {
-      readonly status: "observed";
-      readonly contexts: readonly WordPressScriptContext[];
-      /** Actual Lab browser principal when a declared victim page fired. */
-      readonly victimRole?:
-        | "administrator"
-        | "subscriber"
-        | "customer"
-        | "unauthenticated"
-        | "self";
-      /** First page whose visit delivered an issued canary; stays in Private Evidence. */
-      readonly screenshot?: Buffer;
-    }
-  | { readonly status: "not-prepared" }
-  | {
-      readonly status: "unavailable";
-      /** Optional for callers created before phase diagnostics were added. */
-      readonly phase?: WordPressStoredScriptFailurePhase;
-    };
-
-export type WordPressOptionsObservation =
-  | { readonly status: "observed"; readonly changed: readonly string[] }
-  | { readonly status: "unavailable" };
-
-export interface WordPressFileCanary {
-  /** Different directory and extension, so reaching both shows full path control. */
-  readonly kind: "outside-webroot" | "php-source";
-  readonly path: string;
-  readonly value: string;
-}
-
-export type WordPressCanaryFilesObservation =
-  | {
-      readonly status: "observed";
-      readonly deleted: readonly WordPressFileCanary["kind"][];
-    }
-  | { readonly status: "unavailable" };
-
-export type WordPressCanaryTableObservation = {
-  readonly status: "intact" | "changed" | "unavailable";
-};
-
-export type WordPressRoleObservation =
-  | { readonly status: "roles"; readonly roles: readonly string[] }
-  | { readonly status: "unavailable" };
-
-export type WordPressSessionObservation =
-  | { readonly status: "user"; readonly login: string }
-  | { readonly status: "none" | "unavailable" };
-
-export type WordPressExecutionObservation =
-  | {
-      readonly status: "executed";
-      /** Files under the web root that hold the canary, relative to it. */
-      readonly files: readonly string[];
-    }
-  | { readonly status: "not-executed" | "not-prepared" | "unavailable" };
-
-export interface ExecutionCanary {
-  readonly nonce: string;
-  readonly php: string;
 }
 
 export interface WordPressLab extends LabProvisioner<
@@ -361,17 +208,6 @@ export interface WordPressLab extends LabProvisioner<
   }): Promise<Leftovers>;
 }
 
-export type LeftoverPatterns = {
-  readonly containers?: readonly RegExp[];
-  readonly networks?: readonly RegExp[];
-  readonly volumes?: readonly RegExp[];
-};
-export type Leftovers = {
-  readonly containers: readonly string[];
-  readonly networks: readonly string[];
-  readonly volumes: readonly string[];
-};
-
 const labId = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const labLeftoverPatterns = (id: string) =>
   ({
@@ -382,54 +218,49 @@ const labLeftoverPatterns = (id: string) =>
 const LAB_LEFTOVERS = labLeftoverPatterns(labId);
 const exactLabId = new RegExp(`^${labId}$`);
 
-export interface Resources {
-  readonly id: string;
-  readonly network: string;
-  readonly volume: string;
-  readonly database: string;
-  readonly wordpress: string;
-  readonly recorder: string;
-  readonly databasePassword: string;
-  readonly readerPassword: string;
-  readonly adminPassword: string;
-  /** Verification-only browser accounts, never included in the attacker handle. */
-  readonly victimAccounts: Readonly<{
-    subscriber?: { readonly username: string; readonly password: string };
-    customer?: { readonly username: string; readonly password: string };
-  }>;
-  readonly administratorSecondaryLocale?: string;
-  /** Only the WordPress container's environment holds this. */
-  readonly executionSalt: string;
-  handle?: WordPressLabHandle;
-  canaries?: WordPressCanaryLedger;
-  sensitiveCanaries: WordPressSensitiveCanary[];
-  /** Option digests taken when canaries were seeded. */
-  optionBaseline?: ReadonlyMap<string, string>;
-  executionNonces: Set<string>;
-  scriptNonces: Set<string>;
-  /** Beacon receiver container; only the Lab reads what it logged. */
-  readonly receiver: string;
-  receiverIp?: string;
-  /** gVisor containers cannot use Docker's name resolution, so WordPress gets this address. */
-  databaseIp?: string;
-  receiverCreated: boolean;
-  networkCreated: boolean;
-  volumeCreated: boolean;
-  databaseCreated: boolean;
-  wordpressCreated: boolean;
-  recorderCreated: boolean;
+/** The handle hands the Verifier only what it may use; the session keeps the rest. */
+function issueHandle(input: {
+  readonly lab: WordPressLabSession;
+  readonly prepared: PreparedWordPressLab;
+  readonly images: LabImages;
+  readonly internalIp: string;
+  readonly recorderIp: string;
+}): WordPressLabHandle {
+  const { lab, prepared, images, internalIp, recorderIp } = input;
+  const { setup, snapshot } = prepared;
+  return {
+    id: lab.id,
+    snapshotDigest: snapshot.digest,
+    setupDigest: canonicalDigest({ setup, images }),
+    ...(setup.scenario === undefined ? {} : { scenario: setup.scenario }),
+    ...(lab.administratorSecondaryLocale === undefined
+      ? {}
+      : { secondaryLocale: lab.administratorSecondaryLocale }),
+    endpoint: "http://wordpress",
+    networkName: lab.network,
+    internalIp,
+    recorderIp,
+    attackerAccounts: lab.attackerAccounts,
+    ...(setup.databaseAccess === "read-only"
+      ? {
+          database: {
+            host: "database" as const,
+            ipv4: lab.databaseAddress(),
+            port: 3306 as const,
+            name: DATABASE_NAME,
+            readOnlyAccount: {
+              username: READ_ONLY_DATABASE_USER,
+              password: lab.readerPassword,
+            },
+          },
+        }
+      : {}),
+  };
 }
 
 export function openWordPressLab(options: {
   readonly dockerExecutablePath: string;
-  readonly images: {
-    readonly database: string;
-    readonly wordpress: string;
-    readonly wordpressCli: string;
-    /** Playwright Chromium, used only by the Lab's own observer visits. */
-    readonly browser: string;
-    readonly recorder: string;
-  };
+  readonly images: LabImages;
   readonly source: WordPressSourceResolver;
   readonly runner?: DockerRunner;
   readonly nonce?: () => string;
@@ -442,155 +273,19 @@ export function openWordPressLab(options: {
   if (!Number.isSafeInteger(attempts) || attempts < 1)
     throw new Error("Invalid health attempt count");
   const nonce = options.nonce ?? randomUUID;
-  const runner = options.runner ?? {
-    async run(request: DockerRequest): Promise<DockerResult> {
-      const result = await runNativeModelProcess({
-        executablePath: options.dockerExecutablePath,
-        args: request.args,
-        ...(request.stdin === undefined ? {} : { stdin: request.stdin }),
-        workingDirectory: "/",
-        environment: {
-          PATH: process.env.PATH ?? "/usr/bin:/bin",
-          LANG: "C",
-          LC_ALL: "C",
-          TZ: "UTC",
-        },
-        timeoutMs: request.timeoutMs,
-        maxOutputBytes: request.maxOutputBytes,
-      });
-      return result.kind === "exited"
-        ? result
-        : { exitCode: -1, stdout: "", stderr: result.stderr };
-    },
-  };
-  const active = new Map<string, Resources>();
-
-  const docker = (
-    args: readonly string[],
-    timeoutMs = 60_000,
-    maxOutputBytes = 64 * 1024,
-  ): Promise<DockerResult> => runner.run({ args, timeoutMs, maxOutputBytes });
-  const requireDocker = async (
-    args: readonly string[],
-    timeoutMs?: number,
-  ): Promise<DockerResult> => {
-    const result = await docker(args, timeoutMs);
-    if (result.exitCode !== 0)
-      throw new LabDockerFailure(
-        result.stderr ||
-          result.stdout ||
-          `Docker command exited with status ${result.exitCode}`,
-      );
-    return result;
-  };
-  const wpCommand = (
-    resource: Resources,
-    args: readonly string[],
-    environment: readonly string[] = [],
-  ): readonly string[] => [
-    "run",
-    "--rm",
-    "--runtime=runsc",
-    "--network",
-    resource.network,
-    "--security-opt=no-new-privileges",
-    // The Apache image owns the shared WordPress volume as UID/GID 33;
-    // the CLI image's www-data is UID/GID 82 and cannot create uploads.
-    "--user=33:33",
-    ...environment.flatMap((entry) => ["--env", entry]),
-    "--env",
-    `WORDPRESS_DB_HOST=${databaseIp(resource)}`,
-    "--env",
-    "WORDPRESS_DB_NAME=wordpress",
-    "--env",
-    "WORDPRESS_DB_USER=root",
-    "--env",
-    `WORDPRESS_DB_PASSWORD=${resource.databasePassword}`,
-    "--volume",
-    `${resource.volume}:/var/www/html`,
-    options.images.wordpressCli,
-    "wp",
-    ...args,
-  ];
-  const wp = (
-    resource: Resources,
-    args: readonly string[],
-    environment: readonly string[] = [],
-  ): Promise<DockerResult> =>
-    requireDocker(wpCommand(resource, args, environment));
-  /** Digest of an option as WP-CLI prints it; a missing option has its own marker. */
-  const optionDigest = async (
-    resource: Resources,
-    name: string,
-  ): Promise<string> => {
-    const result = await docker(
-      wpCommand(resource, ["option", "get", name, "--format=json"]),
-    );
-    if (result.exitCode === 1) return "absent";
-    if (result.exitCode !== 0) throw new Error("Option unreadable");
-    return createHash("sha256").update(result.stdout.trim()).digest("hex");
-  };
-  const cleanup = async (resource: Resources): Promise<boolean> => {
-    let okay = true;
-    for (const args of [
-      ...(resource.wordpressCreated ||
-      resource.databaseCreated ||
-      resource.receiverCreated ||
-      resource.recorderCreated
-        ? [
-            [
-              "rm",
-              "--force",
-              ...[
-                resource.wordpressCreated ? resource.wordpress : undefined,
-                resource.databaseCreated ? resource.database : undefined,
-                resource.receiverCreated ? resource.receiver : undefined,
-                resource.recorderCreated ? resource.recorder : undefined,
-              ].filter((value): value is string => value !== undefined),
-            ],
-          ]
-        : []),
-      ...(resource.volumeCreated
-        ? [["volume", "rm", "--force", resource.volume]]
-        : []),
-      ...(resource.networkCreated ? [["network", "rm", resource.network]] : []),
-    ]) {
-      try {
-        if ((await docker(args)).exitCode !== 0) okay = false;
-      } catch {
-        okay = false;
-      }
-    }
-    if (okay) active.delete(resource.id);
-    return okay;
-  };
-  const roles = async (
-    resource: Resources,
-    username: string,
-  ): Promise<WordPressRoleObservation> => {
-    if (!/^[A-Za-z0-9._@-]{1,60}$/.test(username))
-      return { status: "unavailable" };
-    try {
-      const result = await wp(resource, [
-        "user",
-        "get",
-        username,
-        "--field=roles",
-      ]);
-      return {
-        status: "roles",
-        roles: result.stdout
-          .split(",")
-          .map((role) => role.trim())
-          .filter((role) => role.length > 0)
-          .sort(),
-      };
-    } catch {
-      return { status: "unavailable" };
-    }
+  const docker = createLabDocker(
+    options.runner ?? nativeDockerRunner(options.dockerExecutablePath),
+  );
+  const active = new Map<string, WordPressLabSession>();
+  /** The one place a handle is checked: only the exact issued object reaches its Lab. */
+  const sessionFor = (
+    handle: WordPressLabHandle,
+  ): WordPressLabSession | undefined => {
+    const lab = active.get(handle.id);
+    return lab?.owns(handle) ? lab : undefined;
   };
   const preflight = async (): Promise<void> => {
-    const runtimes = await docker(
+    const runtimes = await docker.run(
       ["info", "--format", "{{json .Runtimes}}"],
       10_000,
     );
@@ -604,7 +299,7 @@ export function openWordPressLab(options: {
     )
       throw new Error("runsc unavailable");
     for (const image of Object.values(options.images))
-      await requireDocker(["image", "inspect", image], 30_000);
+      await docker.require(["image", "inspect", image], 30_000);
   };
   return {
     async cleanupLeftovers({ remove, patterns = {}, labId: onlyLab }) {
@@ -633,7 +328,7 @@ export function openWordPressLab(options: {
       for (const [kind, list] of kinds) {
         const matching = [...owned[kind], ...(patterns[kind] ?? [])];
         // A host with thousands of anonymous volumes lists far more than the 64 KiB default.
-        const listing = await docker(list, 60_000, 8 * 1024 * 1024);
+        const listing = await docker.run(list, 60_000, 8 * 1024 * 1024);
         if (listing.exitCode !== 0)
           throw new LabDockerFailure(
             listing.stderr ||
@@ -648,7 +343,7 @@ export function openWordPressLab(options: {
       if (remove)
         for (const [kind, , removal] of kinds)
           if (found[kind].length > 0)
-            await requireDocker([...removal, ...found[kind]]);
+            await docker.require([...removal, ...found[kind]]);
       return found;
     },
     async provision(
@@ -656,41 +351,36 @@ export function openWordPressLab(options: {
       candidateSetup,
       context,
     ): Promise<ProvisionResult<WordPressLabHandle>> {
-      let resource: Resources | undefined;
+      let lab: WordPressLabSession | undefined;
       try {
         const prepared = await prepareWordPressLab(
           candidateSnapshot,
           candidateSetup,
           options.source,
         );
-        const {
-          setup,
-          scenario,
-          target,
-          dependencies,
-          coreVersion,
-          phpVersion,
-        } = prepared;
+        const { setup, phpVersion } = prepared;
         await preflight();
-        const created = createLabResource(
-          prepared,
-          context?.purpose === "verification",
-        );
-        resource = created.resource;
-        const { subscriber, customer, victimSubscriber, victimCustomer } =
-          created;
-        const { id } = resource;
-        const { internalIp, recorderIp } = await startLabContainers(resource, {
-          images: options.images,
-          attempts,
+        const secondaryLocale =
+          setup.translatePress?.administratorSecondaryLocale ??
+          prepared.scenario?.secondaryLocale ??
+          undefined;
+        lab = new WordPressLabSession({
           docker,
-          requireDocker,
+          images: options.images,
+          nonce,
+          customerRole: setup.customerRole,
+          forVerification: context?.purpose === "verification",
+          ...(secondaryLocale === undefined ? {} : { secondaryLocale }),
         });
+        const { internalIp, recorderIp } = await startLabContainers(
+          lab,
+          attempts,
+        );
         // Probe the running runsc image before installing the target plugin.
         // PHP exits 43 only when the required extension is absent.
-        const extension = await docker([
+        const extension = await lab.docker([
           "exec",
-          resource.wordpress,
+          lab.wordpress,
           "php",
           "-r",
           'exit(extension_loaded("pdo_mysql") ? 0 : 43);',
@@ -701,9 +391,9 @@ export function openWordPressLab(options: {
             extension.stderr || "WordPress PHP extension probe failed",
           );
         if (phpVersion !== undefined) {
-          const runningPhp = await docker([
+          const runningPhp = await lab.docker([
             "exec",
-            resource.wordpress,
+            lab.wordpress,
             "php",
             "-r",
             "echo PHP_VERSION;",
@@ -716,38 +406,23 @@ export function openWordPressLab(options: {
               "The Lab runs another PHP version than the frozen source",
             );
         }
-        await initializeWordPress({
-          resource,
-          setup,
-          scenario,
-          coreVersion,
-          target,
-          dependencies,
-          subscriber,
-          ...(customer === undefined ? {} : { customer }),
-          ...(victimSubscriber === undefined ? {} : { victimSubscriber }),
-          ...(victimCustomer === undefined ? {} : { victimCustomer }),
-          wp,
-          requireDocker,
-        });
+        await initializeWordPress(lab, prepared);
         if (context?.purpose === "verification")
-          await placeVerificationCanaries(resource, wp);
+          await placeVerificationCanaries(lab);
         if (setup.databaseAccess === "read-only")
-          await grantReadOnlyDatabaseAccess(resource, requireDocker);
-        const handle = createLabHandle({
+          await grantReadOnlyDatabaseAccess(lab);
+        const handle = issueHandle({
+          lab,
           prepared,
-          resource,
           images: options.images,
           internalIp,
           recorderIp,
-          subscriber,
-          customer,
         });
-        resource.handle = handle;
-        active.set(id, resource);
+        lab.bind(handle);
+        active.set(lab.id, lab);
         return { status: "ready", handle };
       } catch (error: unknown) {
-        if (resource !== undefined) await cleanup(resource);
+        if (lab !== undefined) await lab.cleanup();
         return {
           status: "incomplete",
           reason:
@@ -767,24 +442,15 @@ export function openWordPressLab(options: {
       }
     },
     async seedCanaries(handle) {
-      const resource = active.get(handle.id);
-      if (resource === undefined || resource.handle !== handle)
+      const lab = sessionFor(handle);
+      if (lab === undefined)
         return {
           status: "incomplete",
           reason: "provision",
           nextStep: "Provision a fresh Lab before seeding canaries",
         };
       try {
-        const seededDigest = await seedWordPressCanaries({
-          resource,
-          handle,
-          nonce,
-          wp,
-          requireDocker,
-          roles,
-          optionDigest,
-        });
-        return { status: "seeded", digest: seededDigest };
+        return { status: "seeded", digest: await seedWordPressCanaries(lab) };
       } catch (error: unknown) {
         return {
           status: "incomplete",
@@ -797,9 +463,9 @@ export function openWordPressLab(options: {
       }
     },
     async runStandardScript(handle, input) {
-      const resource = active.get(handle.id);
+      const lab = sessionFor(handle);
       if (
-        resource?.handle !== handle ||
+        lab === undefined ||
         Buffer.byteLength(STANDARD_REPRODUCER_SCRIPT) > 64 * 1024 ||
         Buffer.byteLength(input) > 128 * 1024
       )
@@ -816,13 +482,13 @@ export function openWordPressLab(options: {
           ),
           writeFile(join(directory, "input.json"), input, { mode: 0o600 }),
         ]);
-        const result = await docker(
+        const result = await lab.docker(
           [
             "run",
             "--rm",
             "--runtime=runsc",
             "--network",
-            resource.network,
+            lab.network,
             "--add-host",
             `wordpress:${handle.recorderIp}`,
             "--read-only",
@@ -849,73 +515,130 @@ export function openWordPressLab(options: {
       }
     },
     reviewAdministrator(handle) {
-      const resource = active.get(handle.id);
-      return resource?.handle === handle
-        ? { username: "harness-admin", password: resource.adminPassword }
-        : null;
+      const lab = sessionFor(handle);
+      return lab === undefined
+        ? null
+        : { username: "harness-admin", password: lab.adminPassword };
     },
     reviewReceiverIp(handle) {
-      const resource = active.get(handle.id);
-      return resource?.handle === handle ? (resource.receiverIp ?? null) : null;
+      return sessionFor(handle)?.receiverIp ?? null;
     },
     async teardown(handle) {
-      const resource = active.get(handle.id);
-      if (resource === undefined || resource.handle !== handle)
+      const lab = sessionFor(handle);
+      if (lab === undefined)
         return {
           status: "incomplete",
           reason: "cleanup",
           nextStep: "Inspect Lab resources and remove them before retry",
         };
-      return (await cleanup(resource))
-        ? { status: "removed" }
-        : {
-            status: "incomplete",
-            reason: "cleanup",
-            nextStep: "Inspect and remove remaining Lab resources",
-          };
+      if (!(await lab.cleanup()))
+        return {
+          status: "incomplete",
+          reason: "cleanup",
+          nextStep: "Inspect and remove remaining Lab resources",
+        };
+      active.delete(lab.id);
+      return { status: "removed" };
     },
     async captureState(handle) {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle) return { status: "unavailable" };
+      const lab = sessionFor(handle);
+      if (lab === undefined) return { status: "unavailable" };
       try {
         return {
           status: "captured",
-          state: await captureWordPressLabState({
-            resource,
-            docker,
-            now: () => new Date(),
-          }),
+          state: await captureWordPressLabState(lab, () => new Date()),
         };
       } catch {
         return { status: "unavailable" };
       }
     },
     async exposeToHost(handle, input) {
-      const resource = active.get(handle.id);
-      if (resource?.handle !== handle)
+      const lab = sessionFor(handle);
+      if (lab === undefined)
         return {
           status: "unavailable",
           diagnostic: "The Lab is not active in this process",
         };
-      return exposeWordPressLabToHost({
-        resource,
-        handle,
+      return exposeWordPressLabToHost(lab, {
         image: options.images.recorder,
         httpPort: input.httpPort,
         ...(input.databasePort === undefined
           ? {}
           : { databasePort: input.databasePort }),
-        requireDocker,
       });
     },
-    ...createWordPressLabObservations({
-      active,
-      docker,
-      wp,
-      roles,
-      optionDigest,
-      nonce,
-      images: options.images,
-    }),
+    async markCapture(handle) {
+      const lab = sessionFor(handle);
+      return lab === undefined ? null : observe.markCapture(lab);
+    },
+    async readCapture(handle, sinceMarker) {
+      const lab = sessionFor(handle);
+      return lab === undefined
+        ? { status: "unavailable" }
+        : observe.readCapture(lab, sinceMarker);
+    },
+    async probe(handle) {
+      const lab = sessionFor(handle);
+      return lab === undefined
+        ? observe.labUnreachable(handle)
+        : observe.probe(lab);
+    },
+    canaryLedger(handle) {
+      return sessionFor(handle)?.canaries ?? null;
+    },
+    prepareExecutionCanary(handle) {
+      const lab = sessionFor(handle);
+      return lab === undefined ? null : observe.prepareExecutionCanary(lab);
+    },
+    async observeSessionUser(handle, cookie, scheme) {
+      const lab = sessionFor(handle);
+      return lab === undefined
+        ? { status: "unavailable" }
+        : observe.observeSessionUser(lab, cookie, scheme);
+    },
+    async observeCanaryTable(handle) {
+      const lab = sessionFor(handle);
+      return lab === undefined
+        ? { status: "unavailable" }
+        : observe.observeCanaryTable(lab);
+    },
+    async observeCanaryFiles(handle) {
+      const lab = sessionFor(handle);
+      return lab === undefined
+        ? { status: "unavailable" }
+        : observe.observeCanaryFiles(lab);
+    },
+    prepareScriptCanary(handle) {
+      const lab = sessionFor(handle);
+      return lab === undefined ? null : observe.prepareScriptCanary(lab);
+    },
+    issuedScriptNonces(handle) {
+      const lab = sessionFor(handle);
+      return lab === undefined ? null : [...lab.scriptNonces];
+    },
+    async observeStoredScript(handle, input) {
+      const lab = sessionFor(handle);
+      return lab === undefined
+        ? { status: "unavailable", phase: "lab" }
+        : observe.observeStoredScript(lab, input);
+    },
+    async observeOptions(handle) {
+      const lab = sessionFor(handle);
+      return lab === undefined
+        ? { status: "unavailable" }
+        : observe.observeOptions(lab);
+    },
+    async observeAccountRoles(handle, username) {
+      const lab = sessionFor(handle);
+      return lab === undefined
+        ? { status: "unavailable" }
+        : lab.roles(username);
+    },
+    async observeExecution(handle) {
+      const lab = sessionFor(handle);
+      return lab === undefined
+        ? { status: "unavailable" }
+        : observe.observeExecution(lab);
+    },
   };
 }
