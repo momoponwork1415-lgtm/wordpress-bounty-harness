@@ -53,6 +53,18 @@ rebase 後に `pnpm check` を通し、force-push ではなく `git push --force
 
 AI 側の作業: #318 は CI 成功後に委任 comment を付けて merge。#316、#320、#321、#319 は所有者が読んで label を付けたら merge。merge のたびに次の rebase を Codex に依頼（または AI が機械的に行う）。
 
+## Brief 1a-0 〜 1a-2: 索引の未解決一覧と、agent による索引補完（Issue #328、2026-10-18 追加）
+
+所有者の方針「ある程度索引の足りない部分は AI に探させるべき」。正規表現の索引は 7 件の固定 source で測ると、prefix 連結・自前 dispatcher・route 連結の登録を落とす（Issue #328 の表）。正規表現で追わず、Harness が `unresolved` 一覧を作り、短い solo agent に索引の穴を埋めさせ、schema で受けて併合する。詳細と受入条件は #328 の 2026-10-18 comment。brief 1（課題生成）は併合後の索引を入力にする。
+
+```
+Issue #328 の本文と 2026-10-18 の comment を読んでから始める。3 PR に割る。
+1a-0: entry-points.ts / storage-index.ts に unresolved 一覧（変数・連結の hook、call_user_func / switch で分岐する callback、第 2 引数が連結の REST route、request handler の印があるのに入口が無い file）と、core data を読む hook の crossing を足す。純関数と test のみ。
+1a-1: 索引補完の課題の Harness 側。unresolved の数で 1〜3 本の solo agent（Lab なし、wall 10 分、要求上限 150）を起動し、索引と unresolved 一覧を割り当て節として渡す。出力は schema（入口 { kind, name, file, line, callback, registeredVia, confidence }、sink { kind, file, line, dataSources }、見た file）。Harness は file:line と kind を検証し origin: agent を付けて併合、台帳に index-supplemented を記録。Finding / Lead はこの課題から受け取らない。
+1a-2: 目的文 index-completion-v1 の file と digest 登録のみ。要素は #328 comment の E-6 の 5 つに限る。
+やらないこと: 索引補完の agent に Lab や HTTP を渡さない。補完結果を Finding にしない。prompt 本文に対象固有の名前を入れない。
+```
+
 ## Brief 1: 課題の生成と dispatch mode
 
 ```
