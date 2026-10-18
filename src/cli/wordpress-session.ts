@@ -41,6 +41,7 @@ import {
   type WordPressSelectionPolicy,
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
+import { WBH_VERIFY_SKILL_ID } from "../profiles/wordpress/verification/handoff-verifier.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import { createWordPressLabStateObserver } from "../profiles/wordpress/verification/lab-state-diff.js";
 import {
@@ -167,7 +168,18 @@ export interface WordPressCampaignBoundaries {
   };
   readonly attachments: ProviderAttachmentStore;
   readonly verifier: Verifier<WordPressFinding, WordPressLabHandle>;
+  /** `verify next --handoff`: a Verifier that hands the Lab to a skill on the host (#352). */
+  readonly handoffVerifier?: (
+    handoff: VerifierHandoff,
+  ) => Verifier<WordPressFinding, WordPressLabHandle>;
 }
+
+/** Where `verify next --handoff` exchanges files with the skill, and the host ports it uses. */
+export type VerifierHandoff = {
+  readonly directory: string;
+  readonly httpPort: number;
+  readonly databasePort: number;
+};
 
 export type WordPressCliProfileOptions = {
   readonly boundaries: (
@@ -294,16 +306,26 @@ const reconstructionFor =
 function verificationFor(
   state: CliState,
   boundaries: WordPressCampaignBoundaries,
+  handoff: VerifierHandoff | undefined,
 ): WordPressVerification {
+  if (handoff !== undefined && boundaries.handoffVerifier === undefined)
+    throw new Error("This profile has no handoff Verifier");
   return new Verification({
     ledger: state.ledger,
     store: state.store,
     lab: boundaries.lab,
-    verifier: boundaries.verifier,
+    // The skill id is the prompt version of a handoff run; the ledger tells the two apart.
+    verifier:
+      handoff === undefined
+        ? boundaries.verifier
+        : boundaries.handoffVerifier!(handoff),
     judges: createWordPressJudges({ store: state.store, lab: boundaries.lab }),
     readFinding: readWordPressFinding,
     renderer: wordpressReproductionRenderer,
-    promptVersion: WORDPRESS_VERIFIER_PROMPT_ID,
+    promptVersion:
+      handoff === undefined
+        ? WORDPRESS_VERIFIER_PROMPT_ID
+        : WBH_VERIFY_SKILL_ID,
     // Whole-site before / after diff around the Verifier run; review material, not proof (#186).
     stateObserver: createWordPressLabStateObserver({
       store: state.store,
@@ -339,6 +361,8 @@ export async function openWordPressCampaignSession(
     readonly configPath: string;
     /** Replaces the campaign config's selection policy path in process. */
     readonly selectionPolicyPath?: string;
+    /** Verifies through the handoff transport instead of the Codex Verifier. */
+    readonly handoff?: VerifierHandoff;
   },
 ): Promise<WordPressCampaignSession> {
   const parsed = await readWordPressCampaignConfig(input.configPath);
@@ -354,6 +378,6 @@ export async function openWordPressCampaignSession(
     boundaries,
     setupFor: setupFor(config),
     reconstructionFor: reconstructionFor(config),
-    verification: verificationFor(state, boundaries),
+    verification: verificationFor(state, boundaries, input.handoff),
   };
 }

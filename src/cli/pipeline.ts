@@ -900,6 +900,11 @@ export async function verifyNextFinding<
 >(options: {
   readonly campaignId?: string;
   readonly campaignPrefix?: string;
+  /**
+   * The one Finding an operator or skill named. They supply what the automatic
+   * rules could not, so the prompt-version match and retry budget do not apply.
+   */
+  readonly only?: { readonly findingId: string };
   readonly ledger: Ledger;
   readonly newId: () => string;
   readonly loadSnapshot: (digest: string) => Promise<Snapshot>;
@@ -936,6 +941,11 @@ export async function verifyNextFinding<
       !event.campaignId.startsWith(`${options.campaignPrefix}-`)
     )
       continue;
+    if (
+      options.only !== undefined &&
+      event.findingId !== options.only.findingId
+    )
+      continue;
     const key = `${event.campaignId}\0${event.findingId}`;
     if (verificationInFlight.has(key)) continue;
     const history = histories.filter(
@@ -946,7 +956,7 @@ export async function verifyNextFinding<
         record.event.basis === undefined,
     );
     const previous = history.at(-1);
-    if (previous !== undefined) {
+    if (previous !== undefined && options.only === undefined) {
       if (previous.event.result.status !== "incomplete") continue;
       if (previous.event.promptVersion !== options.verification.promptVersion)
         continue;
@@ -982,6 +992,7 @@ export async function verifyNextFinding<
       const snapshot = await options.loadSnapshot(event.snapshotDigest);
       const setup = options.setupFor(snapshot);
       if (
+        options.only === undefined &&
         previous?.event.result.status === "incomplete" &&
         previous.event.result.reason === "precondition" &&
         !shouldAutomaticallyRetryVerification({

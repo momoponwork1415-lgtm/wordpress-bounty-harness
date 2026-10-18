@@ -171,6 +171,14 @@ export interface CliProfile {
       readonly campaignId?: string;
       readonly campaignPrefix?: string;
       readonly configPath: string;
+      /** Hand the Lab to a skill through this directory instead of the agent transport. */
+      readonly handoff?: {
+        readonly directory: string;
+        readonly httpPort: number;
+        readonly databasePort: number;
+      };
+      /** With `handoff`: the one Finding the operator named, outside the automatic retry rules. */
+      readonly findingId?: string;
     },
   ): Promise<VerifyNextSummary | null>;
   /** The target's newest public version, observed once; absent without a host. */
@@ -278,7 +286,7 @@ const USAGE = [
   "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
   "  review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>]",
-  "  verify next --campaign <id> --config <path>",
+  "  verify next --campaign <id> --config <path> [--handoff <dir> [--finding <id>] [--port <n>] [--db-port <n>]]",
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
   "  review authorize --candidate <id> --draft <digest> --to <destination> [--by <name>]",
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
@@ -321,6 +329,7 @@ const options = {
   outcome: { type: "string" },
   remove: { type: "boolean" },
   "for-review": { type: "boolean" },
+  handoff: { type: "string" },
   "retry-incomplete": { type: "boolean" },
   "defer-verification": { type: "boolean" },
   repeat: { type: "string" },
@@ -968,9 +977,28 @@ export async function runCli(
       case "verify next": {
         if (environment.profile.verifyNext === undefined)
           throw new Error("verify next needs a verification profile");
+        if (values.finding !== undefined && values.handoff === undefined)
+          throw new UsageError("--finding names a Finding for --handoff only");
         const summary = await environment.profile.verifyNext(state, {
           campaignId: required(values.campaign, "campaign"),
           configPath: resolve(required(values.config, "config")),
+          ...(values.handoff === undefined
+            ? {}
+            : {
+                handoff: {
+                  directory: resolve(values.handoff),
+                  httpPort: integerOption(values.port, "port", 8080, 65535),
+                  databasePort: integerOption(
+                    values["db-port"],
+                    "db-port",
+                    3307,
+                    65535,
+                  ),
+                },
+              }),
+          ...(values.finding === undefined
+            ? {}
+            : { findingId: values.finding }),
         });
         io.stdout(
           summary === null

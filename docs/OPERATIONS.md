@@ -111,6 +111,12 @@ harness ledger funnel --campaign <id>
 
 `verify next` は未検証または既存の有界再検証規則に該当する Finding を 1 件選び、その Finding の Snapshot に新しい検証 Lab を立てて Verifier と判定器を回し、Lab を片付ける。対象が無ければ `no verification pending` と出す。`--repeat 3` は同じ Snapshot に別々の Trial ID を 3 つ作る。既定は 1 回。funnel の `by Lab` は探索用 Lab の有無、`verification Lab failed` は検証側の供給失敗を示す。
 
+```sh
+harness verify next --campaign <id> --config <campaign.json> --handoff <dir> [--finding <id>] [--port 8080] [--db-port 3307]
+```
+
+`--handoff <dir>` は Verifier を Codex から skill `wbh-verify` への受け渡しに替える（ADR 0035）。Harness は検証 Lab を立てて `127.0.0.1:<port>` に Lab の recorder 経由で公開し、`<dir>/lab.json`（接続先と Host header、攻撃者位置の資格、設定管理者の資格、canary、`<dir>/review-export.json` の path）を書き、`<dir>/setup-done` を待ってから HTTP 捕捉と Lab 状態の基線を取り、6 file（`route.json` `http.json` `session.json` `steps.md` `refutation.md` `precondition`）か `<dir>/abort` を待つ。待ち時間の上限は Codex Verifier と同じ 30 分で、超過と `abort` は `incomplete(recipe)`。以後は判定器 → `verification-finished`（`promptVersion: wbh-verify/v1`）→ review queue と同じ。`--finding <id>` は操作者が名指しした Finding を自動再試行の規則（prompt 版の一致、再試行予算）に関わらず検証する。`<dir>` は Git の外に置き、終わったら消す。
+
 `continuous run --verify-concurrency <n>` は探索 batch と並行して検証 queue を消化する。既定の `n` は 1。検証 Lab の同時数は `resources.maxConcurrentTargets` に含めず、`--verify-concurrency` で別に制限する。
 
 ### 継続運転（`continuous run`、最終設計 P6）

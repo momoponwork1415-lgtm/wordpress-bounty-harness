@@ -46,7 +46,7 @@
 ## 検証Labの前提（SPEC.md 第7節、ADR 0026）
 
 - WordPress profileの通常機能scenarioはplugin非依存の状態を優先して追加する。頻出する `incomplete(precondition)` の理由を集計して決め、版とdigestを固定する。
-- 被害者側の操作はHarness所有のLab観測器が型付き手順で行う。Verifierにブラウザや管理者セッションを渡さない。
+- 被害者側の操作はHarness所有のLab観測器が型付き手順で行う。Verifierにブラウザを渡さない。管理者セッションは `verify next --handoff` の skill に前提作りのためだけに渡し、`setup-done` 以後は攻撃者位置のみ（ADR 0035）。Codex Verifierには渡さない。
 
 ## `profiles/wordpress/` の規則（ADR 0011）
 
