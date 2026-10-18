@@ -41,6 +41,7 @@ const reportSchema = z.strictObject({
   leads: z.array(claimTextSchema),
   examined: z.string().max(16_384),
   unexamined: z.string().max(16_384),
+  coverage: z.unknown().optional(),
 });
 /** Children are not constrained by Root's --output-schema; preserve structured coverage as text. */
 const childCoverageSchema = z
@@ -69,6 +70,7 @@ const candidateReportSchema = z.object({
   leads: z.array(z.unknown()).default([]),
   examined: childCoverageSchema.default(""),
   unexamined: childCoverageSchema.default(""),
+  coverage: z.unknown().optional(),
 });
 function extractCandidateReport(message: string) {
   const value = JSON.parse(message) as unknown;
@@ -136,6 +138,16 @@ const reportJsonSchema = {
   required: ["findings", "leads", "examined", "unexamined"],
 } as const;
 
+function reportJsonSchemaFor(coverageSchema?: Record<string, unknown>) {
+  if (coverageSchema === undefined) return reportJsonSchema;
+  const { $schema: _meta, ...recordSchema } = coverageSchema;
+  return {
+    ...reportJsonSchema,
+    properties: { ...reportJsonSchema.properties, coverage: recordSchema },
+    required: [...reportJsonSchema.required, "coverage"],
+  };
+}
+
 export interface CodexSandboxCommand {
   readonly executable: "codex";
   readonly args: readonly string[];
@@ -199,6 +211,8 @@ export interface DiscoveryTransportRun {
   readonly targetSnapshotDigest: string;
   readonly profile: AgentRuntimeProfile;
   readonly prompt: string;
+  /** Profile-owned Root report schema; children keep their existing report. */
+  readonly coverageSchema?: Record<string, unknown>;
   /** Screening uses one agent even when the runtime profile permits children. */
   readonly coordination?: "solo" | "cooperative";
   /** Verification uses the same isolated transport with a different sealed report. */
@@ -238,6 +252,7 @@ const discoveryTransportRunSchema = z.strictObject({
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
+  coverageSchema: z.record(z.string(), z.unknown()).optional(),
   coordination: z.enum(["solo", "cooperative"]).optional(),
   outputKind: z.literal("verification").optional(),
   lab: z.strictObject({
@@ -1126,7 +1141,7 @@ function sandboxCommand(
         content: JSON.stringify(
           run.outputKind === "verification"
             ? verificationReportJsonSchema
-            : reportJsonSchema,
+            : reportJsonSchemaFor(run.coverageSchema),
         ),
       },
     ],

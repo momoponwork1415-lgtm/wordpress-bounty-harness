@@ -889,6 +889,7 @@ describe("Ledger public interface", () => {
     expect(ledger.funnel("campaign-1")).toEqual({
       campaignId: "campaign-1",
       discoveryAttempts: 1,
+      incompleteDepth: 0,
       runCount: 2,
       knownCostUsd: 0,
       unpricedRuns: 2,

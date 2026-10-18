@@ -36,6 +36,7 @@ import {
   type WordPressEntryAssignment,
 } from "../profiles/wordpress/discovery/entry-points.js";
 import { buildWordPressSourceIndex } from "../profiles/wordpress/discovery/storage-index.js";
+import { assessWordPressCoverage } from "../profiles/wordpress/discovery/coverage.js";
 import {
   canonicalDigest,
   canonicalJson,
@@ -58,6 +59,7 @@ import {
 import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
+  wordPressDiscoveryOutputContractV3,
 } from "../profiles/wordpress/discovery/output-contract.js";
 import type {
   WordPressLab,
@@ -150,6 +152,11 @@ const commonCampaignFields = {
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
   runWallTimeMinutes: z.number().positive().max(240).optional(),
+  coverage: z
+    .strictObject({
+      maxUnvisitedRatio: z.number().min(0).max(1).default(0.2),
+    })
+    .default({ maxUnvisitedRatio: 0.2 }),
   /** Host bounds: targets, per-target discovery runs and their memory budget. */
   resources: z
     .strictObject({
@@ -876,13 +883,18 @@ async function planWordPressDiscovery(
     config.mode === "assignment" ? config.assignment : undefined;
   const outputContractV1 = wordPressDiscoveryOutputContract();
   const outputContractV2 = wordPressDiscoveryOutputContractV2();
+  const outputContractV3 = wordPressDiscoveryOutputContractV3();
+  const coverageFor = (id: string) =>
+    id === "wp2shell-bounty-v5" && config.entryIndex;
   const outputContractFor = (id: string) =>
-    id === "wp2shell-bounty-v3" ||
-    id === "wp2shell-bounty-v4" ||
-    id === "wp2shell-bounty-v5" ||
-    id === "wp2shell-whitebox-v1.7"
-      ? outputContractV2
-      : outputContractV1;
+    coverageFor(id)
+      ? outputContractV3
+      : id === "wp2shell-bounty-v3" ||
+          id === "wp2shell-bounty-v4" ||
+          id === "wp2shell-bounty-v5" ||
+          id === "wp2shell-whitebox-v1.7"
+        ? outputContractV2
+        : outputContractV1;
   const objectiveOnly = (id: string) =>
     WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS.some((entry) => entry === id);
   const source = await boundaries.sourceFor(snapshot);
@@ -1055,6 +1067,9 @@ async function planWordPressDiscovery(
           profile: boundaries.runtimeProfile,
           coordination: "cooperative" as const,
           prompt: promptFor(assignment, selectedObjective),
+          ...(coverageFor(selectedObjective.id)
+            ? { coverageSchema: outputContractV3.coverageSchema }
+            : {}),
           lab: {
             endpoint: lab.endpoint,
             networkName: lab.networkName,
@@ -1084,6 +1099,16 @@ async function planWordPressDiscovery(
     }),
     executor: boundaries.executor,
     attachments: boundaries.attachments,
+    ...(sourceIndex === undefined || !config.entryIndex
+      ? {}
+      : {
+          assessCoverage: (value: unknown) =>
+            assessWordPressCoverage(
+              value,
+              sourceIndex,
+              config.coverage.maxUnvisitedRatio,
+            ),
+        }),
     admitFinding: admitWordPressFinding,
     isProgrammeImpact: isWordPressProgrammeImpact,
     classifyFindingPrecondition: (finding) => {

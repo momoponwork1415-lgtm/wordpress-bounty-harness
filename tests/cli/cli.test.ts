@@ -645,6 +645,23 @@ async function harness(
           leads: options.leadsOnCalls?.[call] ?? [],
           examined: "synthetic",
           unexamined: "none",
+          ...(run.coverageSchema === undefined
+            ? {}
+            : {
+                coverage: {
+                  indexDigest: run.prompt.match(
+                    /Index digest: (sha256:[a-f0-9]{64})/,
+                  )?.[1],
+                  incomplete: run.prompt.includes("Incomplete: true"),
+                  entries: [
+                    ...run.prompt.matchAll(/^- (e-[1-9][0-9]*):/gm),
+                  ].map((match) => ({
+                    id: match[1],
+                    status: "observed",
+                    reason: null,
+                  })),
+                },
+              }),
         };
         const attachment = await attachments.put(
           "findings",

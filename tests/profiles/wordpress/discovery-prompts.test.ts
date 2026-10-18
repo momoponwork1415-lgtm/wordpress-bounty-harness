@@ -6,9 +6,11 @@ import { z } from "zod";
 
 import { wordpressFindingClaimSchema } from "../../../src/profiles/wordpress/discovery/finding.js";
 import { wordpressLeadClaimSchema } from "../../../src/profiles/wordpress/discovery/lead.js";
+import { wordpressCoverageRecordSchema } from "../../../src/profiles/wordpress/discovery/coverage.js";
 import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
+  wordPressDiscoveryOutputContractV3,
 } from "../../../src/profiles/wordpress/discovery/output-contract.js";
 
 import {
@@ -186,6 +188,19 @@ describe("WordPress discovery prompt assets", () => {
     expect(current.digest).toBe(
       "sha256:a74a93951d790aec174c3506a6df9ae2cd391bc44bdedea7fdf8ff74d503db3d",
     );
+  });
+
+  it("generates the Root coverage contract from the WordPress schema", () => {
+    const current = wordPressDiscoveryOutputContractV3();
+    const schema = JSON.parse(current.text.split("Coverage schema: ")[1]!);
+    expect(current.id).toBe("wordpress-discovery-contract-v3");
+    expect(schema).toEqual(
+      z.toJSONSchema(wordpressCoverageRecordSchema, { io: "output" }),
+    );
+    expect(current.text).toContain("Children do not report `coverage`");
+    expect(current.text).toContain("Include every listed id once");
+    expect(current.text).not.toMatch(/checklist|30 minutes/i);
+    expect(current.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
   });
 
   it("keeps the new objective assets free of the claim contract", async () => {

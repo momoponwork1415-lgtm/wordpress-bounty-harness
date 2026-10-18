@@ -9,6 +9,7 @@
   },
   "stopRules": { "maxRuns": 1, "noFindingRuns": 1 },
   "runWallTimeMinutes": 60,
+  "coverage": { "maxUnvisitedRatio": 0.2 },
   "resources": {
     "maxConcurrentRuns": 1,
     "maxConcurrentTargets": 2,
