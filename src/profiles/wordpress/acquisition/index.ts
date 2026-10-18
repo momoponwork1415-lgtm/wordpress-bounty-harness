@@ -1,50 +1,13 @@
+// Only what code outside this folder (src and tests) imports. Everything else
+// is reached through the module that owns it.
+export type { TargetIntakePacket, TargetIntakePolicy } from "./contracts.js";
 export {
-  intakeDispositionSchema,
-  intakeReceiptSchema,
-  manualTargetIntakeRequestSchema,
-  readyIntakeDispositionSchema,
-  targetIntakePacketSchema,
-  targetIntakePolicySchema,
-  targetIntakeReasonSchema,
-} from "./contracts.js";
+  acquiredSourceFromIntakePacket,
+  openLocalDirectoryTargetIntake,
+} from "./local-directory-target-intake.js";
+export { wordPressOrgTargetObservationRefSchema } from "./wordpress-org-contracts.js";
 export type {
-  IntakeDisposition,
-  IntakeReceipt,
-  ManualTargetIntakeRequest,
-  ReadyIntakeDisposition,
-  TargetIntake,
-  TargetIntakePolicy,
-  TargetIntakePacket,
-  TargetIntakeReason,
-} from "./contracts.js";
-export { openLocalDirectoryTargetIntake } from "./local-directory-target-intake.js";
-export {
-  wordPressOrgAcquireRequestSchema,
-  wordPressOrgAcquisitionOriginalSchema,
-  wordPressOrgObserveRequestSchema,
-  wordPressOrgSourceRequestSchema,
-  wordPressOrgSourceResponseSchema,
-  wordPressOrgTargetObservationRefSchema,
-  wordPressOrgTargetObservationSchema,
-} from "./wordpress-org-contracts.js";
-export type {
-  ObservedWordPressOrgTarget,
-  OpenWordPressOrgTargetSourceOptions,
-  WordPressOrgAcquisitionFailureWithOriginal,
-  WordPressOrgAcquisitionFailure,
-  WordPressOrgAcquireRequest,
-  WordPressOrgAcquisitionOriginal,
-  WordPressOrgAcquisitionResult,
-  WordPressOrgAcquisitionWithIntake,
-  WordPressOrgArchiveRejected,
-  WordPressOrgFetchAdapterOptions,
-  WordPressOrgObservationResult,
-  WordPressOrgObservationFailure,
-  WordPressOrgObserveRequest,
   WordPressOrgSourceAdapter,
-  WordPressOrgSourceFailure,
-  WordPressOrgSourceRequest,
-  WordPressOrgSourceResponse,
   WordPressOrgTargetObservation,
   WordPressOrgTargetObservationRef,
   WordPressOrgTargetSource,
@@ -58,7 +21,6 @@ export {
   openWordPressOrgPluginDependencySource,
   requiredPluginSlugs,
 } from "./plugin-dependency-source.js";
-export { acquiredSourceFromIntakePacket } from "./intake-packet-source.js";
 export {
   acquirePinnedWordPressOrgSvnSource,
   capturedWordPressOrgSvnPinSchema,
@@ -66,11 +28,5 @@ export {
 } from "./pinned-svn-source.js";
 export type { CapturedWordPressOrgSvnPin } from "./pinned-svn-source.js";
 export { openMaterializedSources } from "./materialized-sources.js";
-export {
-  openWordPressCoreSource,
-  WORDPRESS_CORE_IDENTITY,
-} from "./wordpress-core-source.js";
-export {
-  openPhpRuntimeSource,
-  PHP_RUNTIME_SOURCE_IDENTITY,
-} from "./php-runtime-source.js";
+export { openWordPressCoreSource } from "./wordpress-core-source.js";
+export { openPhpRuntimeSource } from "./php-runtime-source.js";

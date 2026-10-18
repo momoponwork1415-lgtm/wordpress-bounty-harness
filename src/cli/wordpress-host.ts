@@ -21,7 +21,7 @@ import {
 } from "../infrastructure/native-model-process.js";
 import {
   openSnapshot,
-  snapshotSchema,
+  openSnapshotReader,
   SourceAcquisitionError,
   type Snapshot,
 } from "../snapshot/index.js";
@@ -44,12 +44,14 @@ import {
   openWordPressLab,
   type WordPressLabHandle,
 } from "../profiles/wordpress/lab/index.js";
+import { openWordPressReviewLab } from "../profiles/wordpress/lab/review-lab.js";
 import { loadWordpressScopePolicy } from "../profiles/wordpress/scope-policy.js";
 import {
   createWordPressSelection,
   type WordPressSelectionPolicy,
 } from "../profiles/wordpress/selection/index.js";
 import { CodexVerifier } from "../profiles/wordpress/verification/codex-verifier.js";
+import { WordPressVerifier } from "../profiles/wordpress/verification/wordpress-verifier.js";
 import { openTranscribedWordfenceProgramme } from "../profiles/wordpress/wordfence-programme/index.js";
 import type { CliProfile, CliState } from "./index.js";
 import {
@@ -447,7 +449,13 @@ export async function createWordPressHostProfile(options: {
 
     const frozen = new Map<string, Snapshot>();
     const verifier: Verifier<WordPressFinding, WordPressLabHandle> = {
-      async attempt({ campaignId, finding, lab: handle, referenceRoute }) {
+      async attempt({
+        campaignId,
+        finding,
+        lab: handle,
+        record,
+        referenceRoute,
+      }) {
         const snapshot = frozen.get(handle.snapshotDigest);
         const source =
           snapshot === undefined
@@ -469,18 +477,22 @@ export async function createWordPressHostProfile(options: {
             nextStep:
               "Freeze the target again so its materialized source matches the Lab snapshot",
           };
-        return new CodexVerifier({
-          runtime,
+        return new WordPressVerifier({
+          transport: new CodexVerifier({
+            runtime,
+            profile: runtimeProfile,
+            sourcePack,
+            clock: state.clock,
+          }),
           store: state.store,
           ledger: state.ledger,
-          profile: runtimeProfile,
-          sourcePack,
           lab,
           clock: state.clock,
         }).attempt({
           campaignId,
           finding,
           lab: handle,
+          record,
           ...(referenceRoute === undefined ? {} : { referenceRoute }),
         });
       },
@@ -529,23 +541,15 @@ export async function createWordPressHostProfile(options: {
         return snapshot;
       },
       async loadSnapshot(digest) {
-        if (!(await snapshotStore.verify(digest)))
+        const loaded = await snapshotStore.load(digest);
+        if (loaded.status !== "loaded")
           throw new SourceAcquisitionError("source-mismatch", {
             reason: "snapshot-artifact-unavailable",
             digest,
           });
-        const record = snapshotSchema.parse(
-          JSON.parse(
-            await readFile(
-              join(directories.snapshots, `${digest.slice(7)}.json`),
-              "utf8",
-            ),
-          ) as unknown,
-        );
-        const snapshot = { ...record, digest };
-        await sources.resolve(snapshot);
-        frozen.set(digest, snapshot);
-        return snapshot;
+        await sources.resolve(loaded.snapshot);
+        frozen.set(digest, loaded.snapshot);
+        return loaded.snapshot;
       },
       lab,
       async sourceFor(snapshot) {
@@ -583,6 +587,20 @@ export async function createWordPressHostProfile(options: {
   });
   return {
     ...profile,
+    /** `lab up --for-review`: a fresh Lab from a sealed package, no discovery. */
+    reviewLab: (state, input) =>
+      openWordPressReviewLab({
+        ...input,
+        store: state.store,
+        host: {
+          dockerExecutablePath: host.dockerExecutablePath,
+          images: host.images,
+        },
+        snapshots: openSnapshotReader({
+          storageDirectory: directories.snapshots,
+        }),
+        source: openMaterializedSources({ rootDirectory: directories.sources }),
+      }),
     /** One WordPress.org observation for `review export`; failures are null. */
     async latestVersion(state, targetId) {
       const slug = /^wporg:([a-z0-9][a-z0-9-]*)$/.exec(targetId)?.[1];

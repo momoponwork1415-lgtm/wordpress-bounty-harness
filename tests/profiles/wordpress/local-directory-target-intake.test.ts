@@ -298,11 +298,44 @@ JS,
         },
       });
 
+      // The strict walk stops at the first structural problem it meets.
       expect(disposition).toMatchObject({
         status: "rejected",
-        reasons: ["hardlink-entry", "quota-exceeded"],
+        reasons: ["hardlink-entry"],
       });
       expect(disposition).not.toHaveProperty("packet");
+
+      await rm(join(source, "hardlink.php"));
+      await writeFile(join(source, "second.php"), "<?php\n");
+      const overQuota = await intake.intake({
+        kind: "manual-target-intake",
+        schemaVersion: 1,
+        source: { kind: "local-directory", path: source },
+        pluginIdentity: { kind: "wporg", slug: "plugin" },
+        requestedVersion: "1.0.0",
+        provenance: {
+          kind: "operator-provided",
+          acquisitionRef: { id: "manual-copy-3", digest: digest("4") },
+        },
+        policy: {
+          kind: "target-intake-policy",
+          schemaVersion: 1,
+          id: "manual-local-v1",
+          digest: digest("2"),
+          limits: {
+            maxEntries: 1,
+            maxFileBytes: 1_000_000,
+            maxTotalBytes: 10_000_000,
+            maxPathBytes: 512,
+            maxDepth: 16,
+          },
+        },
+      });
+      expect(overQuota).toMatchObject({
+        status: "rejected",
+        reasons: ["quota-exceeded"],
+      });
+      expect(overQuota).not.toHaveProperty("packet");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

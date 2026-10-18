@@ -1,4 +1,4 @@
-import { canonicalJson } from "../acquisition/canonical-json.js";
+import { canonicalJsonPreservingProperties } from "../../../infrastructure/canonical-json.js";
 import {
   normalizedProgrammePolicySchema,
   programmeEligibilitySchema,
@@ -54,7 +54,8 @@ function hasEligibilityConflict(
   return keys.some(
     (key) =>
       asserted[key] !== undefined &&
-      canonicalJson(asserted[key]) !== canonicalJson(authoritative[key]),
+      canonicalJsonPreservingProperties(asserted[key]) !==
+        canonicalJsonPreservingProperties(authoritative[key]),
   );
 }
 

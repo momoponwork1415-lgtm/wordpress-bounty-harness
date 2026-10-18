@@ -10,8 +10,14 @@ export {
   type CatalogRecord,
   type PlannedDiscoveryRun,
   type PlannedTrial,
-  type AdmittedLead,
 } from "./campaign.js";
+export type {
+  CandidateReport,
+  RecordedCandidate,
+  RecordedReport,
+  ReportRecorder,
+  ReportRecorderContext,
+} from "./record-discovery-report.js";
 export {
   agentRuntimeProfileDefinitionSchema,
   agentRuntimeProfileSchema,

@@ -278,7 +278,9 @@ Version: 2.4.1
         policy: intakePolicy,
       });
       expect(frozen.target.identity).toBe("wporg:example-security");
-      expect(await snapshot.verify(frozen.digest)).toBe(true);
+      expect(await snapshot.load(frozen.digest)).toMatchObject({
+        status: "loaded",
+      });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
