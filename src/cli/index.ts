@@ -869,7 +869,9 @@ export async function runCli(
             : { configPath: resolve(values.config) }),
         });
         for (const result of results)
-          io.stdout(`${result.findingId}: ${result.verdict}`);
+          io.stdout(
+            `${result.findingId}: ${result.status}${result.status === "recorded" ? ` ${result.verdict}` : ""} (${result.reason})`,
+          );
         if (results.length === 0) io.stdout("no pending refutations");
         return 0;
       }

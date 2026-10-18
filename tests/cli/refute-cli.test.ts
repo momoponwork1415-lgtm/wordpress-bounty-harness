@@ -22,7 +22,9 @@ it("routes refute run and backfill without selecting a Lab", async () => {
         return [
           {
             findingId: input.findingId ?? "finding-1",
+            status: "recorded" as const,
             verdict: "undecided" as const,
+            reason: "unknown",
           },
         ];
       },

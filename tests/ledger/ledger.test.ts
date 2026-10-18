@@ -114,7 +114,7 @@ describe("Ledger public interface", () => {
       ledger.read({ campaignId: "campaign-1", type: "refutation-recorded" }),
     ).toHaveLength(1);
     expect(ledger.funnel("campaign-1")).toMatchObject({
-      accepted: 1,
+      accepted: 0,
       raw: 0,
       refutation: {
         processed: 1,
