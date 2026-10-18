@@ -90,6 +90,13 @@ export {
   type RecordedRuntimeGroup,
 } from "./recorded-runtimes.js";
 export {
+  summarizeCampaignCoverage,
+  type CampaignCoverage,
+  type CoverageRatio,
+  type CoverageRow,
+  type SourceFileSets,
+} from "./coverage-report.js";
+export {
   readPrivateChatgptLogin,
   type PrivateChatgptLogin,
 } from "./provider-private-credential.js";

@@ -126,7 +126,7 @@ const compareCrossings = (
   a.kind.localeCompare(b.kind) ||
   a.name.localeCompare(b.name);
 
-async function phpFiles(
+export async function phpFiles(
   root: string,
 ): Promise<{ files: string[]; incomplete: boolean }> {
   const files: string[] = [];
