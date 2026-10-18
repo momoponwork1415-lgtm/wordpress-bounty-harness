@@ -18,6 +18,7 @@ const kindSchema = z.enum([
   "diagnostic",
   "research",
   "verification",
+  "refutation",
 ]);
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export const providerAttachmentRefSchema = z.strictObject({

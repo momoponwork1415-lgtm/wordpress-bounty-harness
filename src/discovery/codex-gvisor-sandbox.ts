@@ -601,10 +601,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
     }
     if (
       command.executable !== "codex" ||
-      !/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.labHost.name) ||
-      isIP(command.labHost.ipv4) !== 4 ||
+      (command.labHost !== undefined &&
+        (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.labHost.name) ||
+          isIP(command.labHost.ipv4) !== 4)) ||
       (command.databaseHost !== undefined &&
-        (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.databaseHost.name) ||
+        (command.labHost === undefined ||
+          !/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.databaseHost.name) ||
           command.databaseHost.name === command.labHost.name ||
           isIP(command.databaseHost.ipv4) !== 4)) ||
       command.sourceMount.mode !== "ro" ||
@@ -617,8 +619,15 @@ export class GvisorCodexSandbox implements CodexSandbox {
       (command.researchMount !== undefined &&
         (command.researchMount.mode !== "rw" ||
           command.researchMount.path !== "/workspace/research")) ||
-      command.supportFiles.length !== 1 ||
-      command.supportFiles[0]?.path !== "/opt/codex-support/report-schema.json"
+      (command.supportFiles.length !== 1 &&
+        command.supportFiles.length !== 2) ||
+      command.supportFiles[0]?.path !==
+        "/opt/codex-support/report-schema.json" ||
+      (command.supportFiles.length === 2 &&
+        (command.labHost !== undefined ||
+          command.supportFiles[1]?.path !==
+            "/opt/codex-support/finding-claim.json" ||
+          Buffer.byteLength(command.supportFiles[1].content) > 16_384))
     ) {
       throw new Error("Codex sandbox command is not admitted");
     }
@@ -686,6 +695,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
         command.supportFiles[0].content,
         { flag: "wx", mode: 0o600 },
       );
+      if (command.supportFiles[1] !== undefined)
+        await writeFile(
+          join(staging, "finding-claim.json"),
+          command.supportFiles[1].content,
+          { flag: "wx", mode: 0o600 },
+        );
       if (tls !== undefined) {
         await writeFile(join(staging, "grant-ca.pem"), tls.caPem, {
           flag: "wx",
@@ -705,7 +720,9 @@ export class GvisorCodexSandbox implements CodexSandbox {
         // The prompt arrives on stdin.
         "--interactive",
         `--network=${command.grant.dockerNetworkName}`,
-        `--add-host=${command.labHost.name}:${command.labHost.ipv4}`,
+        ...(command.labHost === undefined
+          ? []
+          : [`--add-host=${command.labHost.name}:${command.labHost.ipv4}`]),
         ...(command.databaseHost === undefined
           ? []
           : [

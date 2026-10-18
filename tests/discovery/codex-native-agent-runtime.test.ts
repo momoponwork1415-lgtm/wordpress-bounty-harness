@@ -192,6 +192,67 @@ function sandbox(
 }
 
 describe("Codex native agent runtime", () => {
+  it("runs a refutation with one claim and source, without Lab or history access", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-refutation-"));
+    try {
+      const commands: CodexSandboxCommand[] = [];
+      const attachments = new ProviderAttachmentStore(root);
+      const report = {
+        verdict: "undecided",
+        reasonCode: "unknown",
+        sourceTrace: [{ file: "plugin.php", function: "entry", line: 4 }],
+        note: "Source alone does not settle the claim",
+      };
+      const stdout = [
+        { type: "thread.started", thread_id: crypto.randomUUID() },
+        { type: "turn.started" },
+        {
+          type: "item.completed",
+          item: { type: "agent_message", text: JSON.stringify(report) },
+        },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 10, output_tokens: 4 },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(stdout, commands),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      );
+      const { lab: _lab, ...sourceOnlyRun } = run;
+      const result = await runtime.execute({
+        ...sourceOnlyRun,
+        outputKind: "refutation",
+        coordination: "solo",
+        refutationClaim: {
+          claim: "A guard is bypassed",
+          sourceTrace: report.sourceTrace,
+        },
+        campaignInput: { ...run.campaignInput, history: { mode: "none" } },
+      });
+      expect(result.receipt.terminal).toBe("completed");
+      expect(result.attachment?.kind).toBe("refutation");
+      expect(commands[0]?.labHost).toBeUndefined();
+      expect(commands[0]?.databaseHost).toBeUndefined();
+      expect(commands[0]?.researchMount).toBeUndefined();
+      expect(commands[0]?.supportFiles.map((file) => file.path)).toEqual([
+        "/opt/codex-support/report-schema.json",
+        "/opt/codex-support/finding-claim.json",
+      ]);
+      expect(commands[0]?.stdin).toBe(run.prompt);
+      expect(await attachments.read(result.attachment!)).toMatchObject({
+        status: "resolved",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("records a wall timeout as an incomplete receipt", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-wall-receipt-"));
     try {

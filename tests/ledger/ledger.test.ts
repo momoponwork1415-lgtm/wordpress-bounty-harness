@@ -70,6 +70,51 @@ async function evidence(store: PrivateArtifactStore): Promise<string> {
 }
 
 describe("Ledger public interface", () => {
+  it("records a source-only refutation against the exact Finding snapshot", async () => {
+    const { ledger } = await fixture();
+    await ledger.append({
+      ...common("finding-refute"),
+      type: "finding-recorded",
+      findingId: "finding-refute",
+      runId: "discover-1",
+      category: "sqli",
+    });
+    const refutation = {
+      ...common("refutation-1"),
+      type: "refutation-recorded" as const,
+      findingId: "finding-refute",
+      runId: "refute-1",
+      verdict: "refuted" as const,
+      reasonCode: "guard-effective" as const,
+      promptVersion: "refute-v1",
+      promptDigest: labSetup,
+      reportDigest: revision,
+    };
+    expect((await ledger.append(refutation)).status).toBe("appended");
+    expect(
+      (
+        await ledger.append({
+          ...refutation,
+          identity: "wrong-snapshot",
+          snapshotDigest: otherSnapshot,
+        })
+      ).status,
+    ).toBe("conflict");
+    expect(
+      await ledger.append({
+        ...common("park-refute"),
+        type: "finding-parked",
+        findingId: "finding-refute",
+        runId: "discover-1",
+        category: "sqli",
+        reason: "refuted",
+      }),
+    ).toMatchObject({ status: "appended" });
+    expect(
+      ledger.read({ campaignId: "campaign-1", type: "refutation-recorded" }),
+    ).toHaveLength(1);
+  });
+
   it("measures owner time and opened findings per distinct submission across categories", async () => {
     const { ledger } = await fixture();
     for (const [findingId, category] of [

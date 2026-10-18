@@ -3,6 +3,7 @@ import { isAbsolute, posix } from "node:path";
 
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
+import { refutationReportSchema } from "./refutation-report.js";
 import { campaignInputV1Schema, type CampaignInputV1 } from "./campaign.js";
 import {
   admitAgentRuntimeProfile,
@@ -161,7 +162,7 @@ export interface CodexSandboxCommand {
     readonly path: "/workspace/research";
     readonly mode: "rw";
   };
-  readonly labHost: { readonly name: string; readonly ipv4: string };
+  readonly labHost?: { readonly name: string; readonly ipv4: string };
   readonly databaseHost?: { readonly name: string; readonly ipv4: string };
 }
 export interface CodexSandboxResult {
@@ -202,8 +203,10 @@ export interface DiscoveryTransportRun {
   /** Screening uses one agent even when the runtime profile permits children. */
   readonly coordination?: "solo" | "cooperative";
   /** Verification uses the same isolated transport with a different sealed report. */
-  readonly outputKind?: "verification";
-  readonly lab: {
+  readonly outputKind?: "verification" | "refutation";
+  /** Only a bounded claim object; the private Finding record is never mounted. */
+  readonly refutationClaim?: Readonly<Record<string, unknown>>;
+  readonly lab?: {
     readonly endpoint: string;
     readonly networkName: string;
     readonly internalIp: string;
@@ -239,18 +242,21 @@ const discoveryTransportRunSchema = z.strictObject({
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
   coordination: z.enum(["solo", "cooperative"]).optional(),
-  outputKind: z.literal("verification").optional(),
-  lab: z.strictObject({
-    endpoint: z.url(),
-    networkName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
-    internalIp: z.ipv4(),
-    database: z
-      .strictObject({
-        host: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
-        ipv4: z.ipv4(),
-      })
-      .optional(),
-  }),
+  outputKind: z.enum(["verification", "refutation"]).optional(),
+  refutationClaim: z.record(z.string(), z.json()).optional(),
+  lab: z
+    .strictObject({
+      endpoint: z.url(),
+      networkName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
+      internalIp: z.ipv4(),
+      database: z
+        .strictObject({
+          host: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+          ipv4: z.ipv4(),
+        })
+        .optional(),
+    })
+    .optional(),
   campaignInput: campaignInputV1Schema,
   sourceDirectory: z.string().min(1),
   sourceTree: z.strictObject({
@@ -700,11 +706,13 @@ function usageFromRollout(raw: string): NativeRunReceipt["usage"] | undefined {
 }
 function decodeTranscript(
   stdout: string,
-  outputKind?: "verification",
+  outputKind?: "verification" | "refutation",
 ):
   | {
       report:
-        z.infer<typeof reportSchema> | z.infer<typeof verificationReportSchema>;
+        | z.infer<typeof reportSchema>
+        | z.infer<typeof verificationReportSchema>
+        | z.infer<typeof refutationReportSchema>;
       usage: {
         inputTokens: number | "unavailable";
         cachedInputTokens: number | "unavailable";
@@ -720,6 +728,7 @@ function decodeTranscript(
   let report:
     | z.infer<typeof reportSchema>
     | z.infer<typeof verificationReportSchema>
+    | z.infer<typeof refutationReportSchema>
     | undefined;
   let usage: ReturnType<typeof usageSchema.parse> | undefined;
   let finalMessage: string | undefined;
@@ -800,9 +809,13 @@ function decodeTranscript(
   if (finalMessage === undefined)
     return { reasonDetail: "missing-final-message" };
   try {
-    const found = (
-      outputKind === "verification" ? verificationReportSchema : reportSchema
-    ).safeParse(JSON.parse(finalMessage) as unknown);
+    const schema =
+      outputKind === "verification"
+        ? verificationReportSchema
+        : outputKind === "refutation"
+          ? refutationReportSchema
+          : reportSchema;
+    const found = schema.safeParse(JSON.parse(finalMessage) as unknown);
     if (!found.success) return { reasonDetail: "final-message-not-report" };
     report = found.data;
   } catch {
@@ -966,6 +979,7 @@ function cooperativeRun(run: DiscoveryTransportRun): boolean {
   return (
     run.coordination !== "solo" &&
     run.outputKind !== "verification" &&
+    run.outputKind !== "refutation" &&
     (run.profile.subagent.modelId !== "unavailable" ||
       run.profile.subagent.effort !== "unavailable")
   );
@@ -978,6 +992,12 @@ function admittedRun(
 ): boolean {
   return (
     discoveryTransportRunSchema.safeParse(run).success &&
+    (run.outputKind === "refutation"
+      ? run.lab === undefined &&
+        run.coordination === "solo" &&
+        run.refutationClaim !== undefined &&
+        run.campaignInput.history.mode === "none"
+      : run.lab !== undefined && run.refutationClaim === undefined) &&
     run.campaignInput.snapshotDigest === run.targetSnapshotDigest &&
     run.campaignInput.modelProfileDigest === run.profile.digest &&
     admitAgentRuntimeProfile(run.profile, sandboxImage).status === "admitted" &&
@@ -993,6 +1013,7 @@ function admittedRun(
 }
 
 function admittedLabEndpoint(run: DiscoveryTransportRun): URL | undefined {
+  if (run.lab === undefined) return undefined;
   let endpoint: URL;
   try {
     endpoint = new URL(run.lab.endpoint);
@@ -1031,7 +1052,7 @@ function assertBrokerAddress(
   grant: ProviderCredentialEgressGrant,
   run: DiscoveryTransportRun,
 ): boolean {
-  if (grant.dockerNetworkName !== run.lab.networkName)
+  if (run.lab !== undefined && grant.dockerNetworkName !== run.lab.networkName)
     throw new Error("Provider grant is not on the Lab network");
   const login = run.profile.authenticationMethod === "chatgpt-oauth-host";
   if (
@@ -1110,13 +1131,14 @@ function sandboxCommand(
   run: DiscoveryTransportRun,
   grant: ProviderCredentialEgressGrant,
   cooperative: boolean,
-  labEndpoint: URL,
+  labEndpoint: URL | undefined,
   login: boolean,
 ): CodexSandboxCommand {
   return {
     executable: "codex",
     args: codexArgs(run, grant, cooperative, login),
     stdin:
+      run.outputKind !== "refutation" &&
       run.campaignInput.history.mode === "catalog"
         ? `${run.prompt}\n\nPublic history catalog (records strictly before the cutoff):\n${canonicalJson(run.campaignInput.history)}`
         : run.prompt,
@@ -1126,9 +1148,19 @@ function sandboxCommand(
         content: JSON.stringify(
           run.outputKind === "verification"
             ? verificationReportJsonSchema
-            : reportJsonSchema,
+            : run.outputKind === "refutation"
+              ? z.toJSONSchema(refutationReportSchema, { io: "output" })
+              : reportJsonSchema,
         ),
       },
+      ...(run.outputKind === "refutation"
+        ? [
+            {
+              path: "/opt/codex-support/finding-claim.json",
+              content: canonicalJson(run.refutationClaim),
+            },
+          ]
+        : []),
     ],
     grant,
     sourceMount: {
@@ -1155,8 +1187,12 @@ function sandboxCommand(
           },
         }
       : {}),
-    labHost: { name: labEndpoint.hostname, ipv4: run.lab.internalIp },
-    ...(run.lab.database === undefined
+    ...(run.lab === undefined || labEndpoint === undefined
+      ? {}
+      : {
+          labHost: { name: labEndpoint.hostname, ipv4: run.lab.internalIp },
+        }),
+    ...(run.lab?.database === undefined
       ? {}
       : {
           databaseHost: {
@@ -1205,8 +1241,9 @@ export class CodexNativeAgentRuntime {
       );
     if (!admittedRun(run, this.sandboxImage, state.cooperative))
       return incompleteExecution(state, "policy", this.clock().toISOString());
-    const labEndpoint = admittedLabEndpoint(run);
-    if (labEndpoint === undefined)
+    const labEndpoint =
+      run.lab === undefined ? undefined : admittedLabEndpoint(run);
+    if (run.lab !== undefined && labEndpoint === undefined)
       return incompleteExecution(state, "policy", this.clock().toISOString());
     const granted = await this.#runWithBroker(
       run,
@@ -1299,7 +1336,7 @@ export class CodexNativeAgentRuntime {
   async #runWithBroker(
     run: DiscoveryTransportRun,
     cooperative: boolean,
-    labEndpoint: URL,
+    labEndpoint: URL | undefined,
     signal?: AbortSignal,
   ): Promise<GrantedSandboxRun | undefined> {
     return this.broker
@@ -1313,7 +1350,9 @@ export class CodexNativeAgentRuntime {
           maxRequestBytes: cooperative ? 8 * 1024 * 1024 : 1024 * 1024,
           maxResponseBytes: 8 * 1024 * 1024,
           expiresAt: run.expiresAt,
-          agentNetworkName: run.lab.networkName,
+          ...(run.lab === undefined
+            ? {}
+            : { agentNetworkName: run.lab.networkName }),
         },
         async (grant) => {
           const login = assertBrokerAddress(grant, run);
@@ -1594,7 +1633,10 @@ export class CodexNativeAgentRuntime {
     grantReceiptDigest: string,
     reasonDetail: string,
   ): Promise<DiscoveryTransportResult> {
-    if (state.run.outputKind === "verification")
+    if (
+      state.run.outputKind === "verification" ||
+      state.run.outputKind === "refutation"
+    )
       return incompleteExecution(
         state,
         "schema",
@@ -1642,10 +1684,15 @@ export class CodexNativeAgentRuntime {
     let attachment: ProviderAttachmentRef;
     try {
       attachment = await this.attachments.put(
-        state.run.outputKind === "verification" ? "verification" : "findings",
+        state.run.outputKind === "verification"
+          ? "verification"
+          : state.run.outputKind === "refutation"
+            ? "refutation"
+            : "findings",
         Buffer.from(
           canonicalJson(
-            state.run.outputKind === "verification"
+            state.run.outputKind === "verification" ||
+              state.run.outputKind === "refutation"
               ? decoded.report
               : (extractRootCandidateReport(result.stdout) ?? decoded.report),
           ),

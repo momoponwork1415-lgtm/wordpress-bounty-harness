@@ -8,6 +8,7 @@ import {
 } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import { verificationResultV1Schema } from "../verification/reproduction-package.js";
+import { refutationReportSchema } from "../discovery/refutation-report.js";
 
 const id = z.string().min(1).max(128);
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -321,7 +322,17 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     findingId: id,
     runId: id,
     category: id,
-    reason: z.literal("outside-programme-boundary"),
+    reason: z.enum(["outside-programme-boundary", "refuted"]),
+  }),
+  event({
+    type: z.literal("refutation-recorded"),
+    findingId: id,
+    runId: id,
+    verdict: refutationReportSchema.shape.verdict,
+    reasonCode: refutationReportSchema.shape.reasonCode,
+    promptVersion: id,
+    promptDigest: digest,
+    reportDigest: digest,
   }),
   event({
     type: z.literal("lead-recorded"),
@@ -604,6 +615,7 @@ const querySchema = z.strictObject({
       "candidate-held",
       "finding-recorded",
       "finding-parked",
+      "refutation-recorded",
       "lead-recorded",
       "child-report-recovered",
       "discovery-report-recovered",
@@ -880,6 +892,30 @@ export class Ledger {
           )
           .get(parsed.campaignId, parsed.findingId);
         if (previousFinding !== undefined) {
+          this.#db.exec("COMMIT");
+          return { status: "conflict" };
+        }
+      }
+
+      if (parsed.type === "refutation-recorded") {
+        const finding = this.#db
+          .prepare(
+            "SELECT event_json FROM ledger_events WHERE campaign_id = ? AND event_type = 'finding-recorded' AND finding_id = ? LIMIT 1",
+          )
+          .get(parsed.campaignId, parsed.findingId);
+        const recorded =
+          finding === undefined
+            ? undefined
+            : ledgerEventV1Schema.parse(
+                JSON.parse(
+                  z.object({ event_json: z.string() }).parse(finding)
+                    .event_json,
+                ) as unknown,
+              );
+        if (
+          recorded?.type !== "finding-recorded" ||
+          recorded.snapshotDigest !== parsed.snapshotDigest
+        ) {
           this.#db.exec("COMMIT");
           return { status: "conflict" };
         }
