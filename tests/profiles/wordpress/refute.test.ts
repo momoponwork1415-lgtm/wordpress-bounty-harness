@@ -37,7 +37,11 @@ it("parks only a source-refuted Finding and passes no Lab to the refuter", async
         impact: "sqli",
         configurationPrecondition: "default",
         brokenProperty: "query integrity",
-        sourceTrace: [{ file: "plugin.php", function: "entry", line: 4 }],
+        sourceTrace: Array.from({ length: 400 }, (_, index) => ({
+          file: "plugin.php",
+          function: "entry",
+          line: index + 1,
+        })),
         existingControls: "guard may apply",
         labObservations: "none",
       },
@@ -123,6 +127,13 @@ it("parks only a source-refuted Finding and passes no Lab to the refuter", async
     });
     expect(seenRun).not.toHaveProperty("lab");
     expect(seenRun).not.toHaveProperty("refutationClaim.labObservations");
+    expect(
+      Buffer.byteLength(
+        canonicalJson(
+          (seenRun as { refutationClaim: unknown }).refutationClaim,
+        ),
+      ),
+    ).toBeLessThanOrEqual(16_384);
     expect(
       ledger.read({ campaignId: "campaign-1", type: "finding-parked" })[0]
         ?.event,

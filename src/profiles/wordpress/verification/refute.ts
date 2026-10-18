@@ -7,6 +7,7 @@ import type {
 import type { ExpectedSourceTree } from "../../../infrastructure/canonical-source-tree.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../../../ledger/index.js";
+import { canonicalJson } from "../../../infrastructure/canonical-json.js";
 import { readWordPressFinding } from "../discovery/finding.js";
 import {
   wordPressRefutationOutputContract,
@@ -132,6 +133,23 @@ export async function refutePendingFindings(options: RefuteOptions): Promise<
       .resolveSource(event.snapshotDigest)
       .catch(() => undefined);
     if (source === undefined) continue;
+    const claimFields = {
+      claim,
+      attackerPosition,
+      impact,
+      configurationPrecondition,
+      brokenProperty,
+      existingControls,
+    };
+    let boundedTrace = sourceTrace.slice(0, 64);
+    while (
+      boundedTrace.length > 0 &&
+      Buffer.byteLength(
+        canonicalJson({ ...claimFields, sourceTrace: boundedTrace }),
+      ) > 16_384
+    )
+      boundedTrace = boundedTrace.slice(0, -1);
+    if (boundedTrace.length === 0) continue;
     const runId = options.newId();
     const contract = wordPressRefutationOutputContract();
     const run: DiscoveryTransportRun = {
@@ -141,15 +159,7 @@ export async function refutePendingFindings(options: RefuteOptions): Promise<
       prompt: `${options.prompt.text}\n\n${contract.text}`,
       coordination: "solo",
       outputKind: "refutation",
-      refutationClaim: {
-        claim,
-        attackerPosition,
-        impact,
-        configurationPrecondition,
-        brokenProperty,
-        sourceTrace,
-        existingControls,
-      },
+      refutationClaim: { ...claimFields, sourceTrace: boundedTrace },
       sourceDirectory: source.directory,
       sourceTree: source.tree,
       ...(source.dependency === undefined

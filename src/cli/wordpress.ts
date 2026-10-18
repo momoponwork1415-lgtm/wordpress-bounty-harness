@@ -1184,11 +1184,12 @@ async function refuteWordPressFindings(
   state: CliState,
   campaignId: string,
   boundaries: WordPressCampaignBoundaries,
+  promptId: WordPressCampaignConfig["refutation"]["promptId"],
   findingId?: string,
 ) {
   // 4b registers this asset and its digest; until then opt-in execution fails closed.
   const asset = await loadWordPressDiscoveryAsset(
-    "refute-v1" as Parameters<typeof loadWordPressDiscoveryAsset>[0],
+    promptId as Parameters<typeof loadWordPressDiscoveryAsset>[0],
   );
   return refutePendingFindings({
     campaignId,
@@ -1196,7 +1197,7 @@ async function refuteWordPressFindings(
     store: state.store,
     attachments: boundaries.attachments,
     profile: boundaries.runtimeProfile,
-    prompt: { id: "refute-v1", digest: asset.digest, text: asset.text },
+    prompt: { id: promptId, digest: asset.digest, text: asset.text },
     resolveSource: async (snapshotDigest) =>
       boundaries.sourceFor(await boundaries.loadSnapshot(snapshotDigest)),
     runtime: boundaries.executor,
@@ -1648,14 +1649,13 @@ export function createWordPressCliProfile(
             import.meta.url,
           ),
         );
-      const config = wordpressCampaignConfigSchema.parse(
-        JSON.parse(await readFile(path, "utf8")) as unknown,
-      );
+      const { config } = await loadConfig(path);
       const boundaries = await options.boundaries(config, state);
       return refuteWordPressFindings(
         state,
         input.campaignId,
         boundaries,
+        config.refutation.promptId,
         input.findingId,
       );
     },
