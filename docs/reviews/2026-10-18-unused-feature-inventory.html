@@ -2205,10 +2205,34 @@
       </ul>
       <h2 id="訂正">訂正（2026-10-18、削除 PR の実装時に判明）</h2>
       <ul>
-        <li>軸 2 と軸 5 の「precondition 文から scenario を自動選択する code は現行 main に無く、scenario は <code>lab.scenarioId</code> でだけ決まる」は<strong>誤り</strong>。<code>nextWordPressScenario</code> が precondition 文から 4 つの scenario（<code>approved-comment-searchable-v1</code>、<code>public-booking-page-v1</code>、<code>public-builder-page-v1</code>、<code>public-file-attachment-form-v1</code>）を自動選択し、<code>verify next</code> の再検証（#209）がそれを使う。Relevanssi、Simply Schedule、Brizy ×2 の adapter 4 本は本番経路から到達するので削除候補から外す（#344 は Download Monitor / Download Manager の 2 本だけ）。</li>
-        <li><code>review-item-opened</code> の writer は <code>review open</code> ではなく <code>review inspect</code> にある。</li>
-        <li><code>examples/translatepress-3.2.6/</code> で旧 arm を参照するのは 8 file ではなく 4 file。残り 5 file は比較 arm（v2 / v4）の設定で、残す。</li>
-        <li><code>containers/development-set/</code> は host 固定 image の唯一の build 手順なので残す。</li>
+        <li>
+          軸 2 と軸 5 の「precondition 文から scenario を自動選択する code
+          は現行 main に無く、scenario は
+          <code>lab.scenarioId</code>
+          でだけ決まる」は<strong>誤り</strong>。<code
+            >nextWordPressScenario</code
+          >
+          が precondition 文から 4 つの
+          scenario（<code>approved-comment-searchable-v1</code>、<code>public-booking-page-v1</code>、<code>public-builder-page-v1</code>、<code>public-file-attachment-form-v1</code>）を自動選択し、<code
+            >verify next</code
+          >
+          の再検証（#209）がそれを使う。Relevanssi、Simply Schedule、Brizy ×2 の
+          adapter 4 本は本番経路から到達するので削除候補から外す（#344 は
+          Download Monitor / Download Manager の 2 本だけ）。
+        </li>
+        <li>
+          <code>review-item-opened</code> の writer は
+          <code>review open</code> ではなく <code>review inspect</code> にある。
+        </li>
+        <li>
+          <code>examples/translatepress-3.2.6/</code> で旧 arm を参照するのは 8
+          file ではなく 4 file。残り 5 file は比較 arm（v2 /
+          v4）の設定で、残す。
+        </li>
+        <li>
+          <code>containers/development-set/</code> は host 固定 image の唯一の
+          build 手順なので残す。
+        </li>
       </ul>
       <footer>
         生成元:
