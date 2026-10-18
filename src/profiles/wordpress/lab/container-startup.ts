@@ -1,7 +1,7 @@
 import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 
-import type { DockerResult, Resources } from "./index.js";
+import type { WordPressLabSession } from "./lab-session.js";
 
 export const BEACON_LOG = "/tmp/wbh-beacons";
 /** Only a browser script can send the nonce-bound custom header on a POST. */
@@ -39,27 +39,6 @@ file_put_contents('${BEACON_LOG}', $path . "\\n", FILE_APPEND | LOCK_EX);
 http_response_code(204);
 `;
 
-type RunDocker = (
-  args: readonly string[],
-  timeoutMs?: number,
-  maxOutputBytes?: number,
-) => Promise<DockerResult>;
-type RequireDocker = (
-  args: readonly string[],
-  timeoutMs?: number,
-) => Promise<DockerResult>;
-
-export interface ContainerStartup {
-  readonly images: {
-    readonly database: string;
-    readonly wordpress: string;
-    readonly recorder: string;
-  };
-  readonly attempts: number;
-  readonly docker: RunDocker;
-  readonly requireDocker: RequireDocker;
-}
-
 function privateIpv4(output: string): string {
   const address = output.trim();
   const octets = address.split(".").map(Number);
@@ -75,100 +54,90 @@ function privateIpv4(output: string): string {
   return address;
 }
 
-async function startNetworkAndDatabase(
-  resource: Resources,
-  startup: ContainerStartup,
-): Promise<void> {
-  const { requireDocker, images } = startup;
-  await requireDocker(["network", "create", "--internal", resource.network]);
-  resource.networkCreated = true;
-  await requireDocker(["volume", "create", resource.volume]);
-  resource.volumeCreated = true;
-  await requireDocker([
-    "run",
-    "--detach",
-    "--name",
-    resource.database,
-    "--runtime=runsc",
-    "--network",
-    resource.network,
-    "--security-opt=no-new-privileges",
-    "--env",
-    `MARIADB_ROOT_PASSWORD=${resource.databasePassword}`,
-    "--env",
-    "MARIADB_DATABASE=wordpress",
-    images.database,
-  ]);
-  resource.databaseCreated = true;
-  resource.databaseIp = privateIpv4(
+async function containerIp(
+  lab: WordPressLabSession,
+  container: string,
+): Promise<string> {
+  return privateIpv4(
     (
-      await requireDocker([
+      await lab.requireDocker([
         "inspect",
         "--format",
         "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-        resource.database,
+        container,
       ])
     ).stdout,
   );
 }
 
-async function startWordPress(
-  resource: Resources,
-  startup: ContainerStartup,
-): Promise<string> {
-  const { requireDocker, images } = startup;
-  await requireDocker([
+async function startNetworkAndDatabase(
+  lab: WordPressLabSession,
+): Promise<void> {
+  await lab.requireDocker(["network", "create", "--internal", lab.network]);
+  lab.created.add("network");
+  await lab.requireDocker(["volume", "create", lab.volume]);
+  lab.created.add("volume");
+  await lab.requireDocker([
     "run",
     "--detach",
     "--name",
-    resource.wordpress,
+    lab.database,
     "--runtime=runsc",
     "--network",
-    resource.network,
+    lab.network,
+    "--security-opt=no-new-privileges",
+    "--env",
+    `MARIADB_ROOT_PASSWORD=${lab.databasePassword}`,
+    "--env",
+    "MARIADB_DATABASE=wordpress",
+    lab.images.database,
+  ]);
+  lab.created.add("database");
+  lab.databaseIp = await containerIp(lab, lab.database);
+}
+
+async function startWordPress(lab: WordPressLabSession): Promise<string> {
+  await lab.requireDocker([
+    "run",
+    "--detach",
+    "--name",
+    lab.wordpress,
+    "--runtime=runsc",
+    "--network",
+    lab.network,
     "--network-alias",
     "wordpress",
     "--security-opt=no-new-privileges",
     "--volume",
-    `${resource.volume}:/var/www/html`,
+    `${lab.volume}:/var/www/html`,
     "--env",
-    `WORDPRESS_DB_HOST=${resource.databaseIp}`,
+    `WORDPRESS_DB_HOST=${lab.databaseIp}`,
     "--env",
     "WORDPRESS_DB_NAME=wordpress",
     "--env",
     "WORDPRESS_DB_USER=root",
     "--env",
-    `WORDPRESS_DB_PASSWORD=${resource.databasePassword}`,
+    `WORDPRESS_DB_PASSWORD=${lab.databasePassword}`,
     "--env",
-    `WBH_EXECUTION_SALT=${resource.executionSalt}`,
-    images.wordpress,
+    `WBH_EXECUTION_SALT=${lab.executionSalt}`,
+    lab.images.wordpress,
   ]);
-  resource.wordpressCreated = true;
-  return privateIpv4(
-    (
-      await requireDocker([
-        "inspect",
-        "--format",
-        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-        resource.wordpress,
-      ])
-    ).stdout,
-  );
+  lab.created.add("wordpress");
+  return containerIp(lab, lab.wordpress);
 }
 
 async function startRecorder(
-  resource: Resources,
-  startup: ContainerStartup,
+  lab: WordPressLabSession,
   internalIp: string,
 ): Promise<string> {
-  const { requireDocker, images } = startup;
-  await requireDocker([
+  await lab.requireDocker([
     "run",
     "--detach",
     "--name",
-    resource.recorder,
+    lab.recorder,
     "--runtime=runsc",
     "--network",
-    resource.network,
+    lab.network,
     `--add-host=wordpress:${internalIp}`,
     "--read-only",
     "--cap-drop=ALL",
@@ -179,35 +148,22 @@ async function startRecorder(
     "--volume",
     `${fileURLToPath(new URL("../../../lab-recorder/", import.meta.url))}:/opt/wbh-recorder:ro`,
     "--entrypoint=node",
-    images.recorder,
+    lab.images.recorder,
     "/opt/wbh-recorder/cli.js",
   ]);
-  resource.recorderCreated = true;
-  return privateIpv4(
-    (
-      await requireDocker([
-        "inspect",
-        "--format",
-        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-        resource.recorder,
-      ])
-    ).stdout,
-  );
+  lab.created.add("recorder");
+  return containerIp(lab, lab.recorder);
 }
 
-async function startReceiver(
-  resource: Resources,
-  startup: ContainerStartup,
-): Promise<void> {
-  const { requireDocker, images } = startup;
-  await requireDocker([
+async function startReceiver(lab: WordPressLabSession): Promise<void> {
+  await lab.requireDocker([
     "run",
     "--detach",
     "--name",
-    resource.receiver,
+    lab.receiver,
     "--runtime=runsc",
     "--network",
-    resource.network,
+    lab.network,
     "--network-alias",
     "canary",
     "--read-only",
@@ -216,49 +172,39 @@ async function startReceiver(
     "--tmpfs=/tmp:rw,nosuid,nodev,size=16m",
     "--entrypoint",
     "sh",
-    images.wordpress,
+    lab.images.wordpress,
     "-c",
     `echo ${Buffer.from(BEACON_ROUTER).toString("base64")} | base64 -d > /tmp/router.php && exec php -S 0.0.0.0:8080 /tmp/router.php`,
   ]);
-  resource.receiverCreated = true;
-  resource.receiverIp = privateIpv4(
-    (
-      await requireDocker([
-        "inspect",
-        "--format",
-        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-        resource.receiver,
-      ])
-    ).stdout,
-  );
+  lab.created.add("receiver");
+  lab.receiverIp = await containerIp(lab, lab.receiver);
 }
 
 async function waitForHealth(
-  resource: Resources,
-  startup: ContainerStartup,
+  lab: WordPressLabSession,
+  attempts: number,
 ): Promise<void> {
-  const { docker, attempts } = startup;
   for (let attempt = 0; attempt < attempts; attempt++) {
     const [wordpressHealth, databaseHealth] = await Promise.all([
-      docker(
+      lab.docker(
         [
           "exec",
-          resource.wordpress,
+          lab.wordpress,
           "php",
           "-r",
           'exit(is_file("/var/www/html/wp-settings.php") ? 0 : 1);',
         ],
         10_000,
       ),
-      docker(
+      lab.docker(
         [
           "exec",
-          resource.database,
+          lab.database,
           "mariadb-admin",
           "ping",
           "--host=127.0.0.1",
           "--user=root",
-          `--password=${resource.databasePassword}`,
+          `--password=${lab.databasePassword}`,
           "--silent",
         ],
         10_000,
@@ -273,13 +219,13 @@ async function waitForHealth(
 
 /** Starts only runsc containers; caller owns cleanup after any failure. */
 export async function startLabContainers(
-  resource: Resources,
-  startup: ContainerStartup,
+  lab: WordPressLabSession,
+  attempts: number,
 ): Promise<{ readonly internalIp: string; readonly recorderIp: string }> {
-  await startNetworkAndDatabase(resource, startup);
-  const internalIp = await startWordPress(resource, startup);
-  const recorderIp = await startRecorder(resource, startup, internalIp);
-  await startReceiver(resource, startup);
-  await waitForHealth(resource, startup);
+  await startNetworkAndDatabase(lab);
+  const internalIp = await startWordPress(lab);
+  const recorderIp = await startRecorder(lab, internalIp);
+  await startReceiver(lab);
+  await waitForHealth(lab, attempts);
   return { internalIp, recorderIp };
 }

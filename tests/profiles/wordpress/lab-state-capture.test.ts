@@ -13,7 +13,6 @@ import {
 } from "../../../src/profiles/wordpress/lab/host-exposure.js";
 import type {
   DockerResult,
-  Resources,
   WordPressLabHandle,
 } from "../../../src/profiles/wordpress/lab/index.js";
 import {
@@ -41,12 +40,13 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 
+/** The slice of a Lab session these functions read. */
 const resource = {
   id: "0f1e2d3c-4b5a-4987-a654-3210fedcba98",
   network: "wbh-0f1e2d3c-4b5a-4987-a654-3210fedcba98-net",
   database: "wbh-0f1e2d3c-4b5a-4987-a654-3210fedcba98-db",
   databasePassword: "root-secret",
-} as unknown as Resources;
+};
 
 const user = (
   login: string,
@@ -144,11 +144,10 @@ describe("WordPress Lab state capture", () => {
         };
       throw new Error(`unexpected query ${sql}`);
     };
-    const state = await captureWordPressLabState({
-      resource,
-      docker,
-      now: () => new Date("2026-10-08T00:00:00Z"),
-    });
+    const state = await captureWordPressLabState(
+      { ...resource, docker },
+      () => new Date("2026-10-08T00:00:00Z"),
+    );
     expect(state).toEqual({
       schema: WORDPRESS_LAB_STATE_SCHEMA_ID,
       capturedAt: "2026-10-08T00:00:00.000Z",
@@ -188,18 +187,26 @@ describe("WordPress Lab state capture", () => {
 
   it("fails the capture when a query fails or the options table is missing", async () => {
     await expect(
-      captureWordPressLabState({
-        resource,
-        docker: async () => ({ exitCode: 1, stdout: "", stderr: "denied" }),
-        now: () => new Date(),
-      }),
+      captureWordPressLabState(
+        {
+          ...resource,
+          docker: async () => ({ exitCode: 1, stdout: "", stderr: "denied" }),
+        },
+        () => new Date(),
+      ),
     ).rejects.toThrow("Lab database query failed");
     await expect(
-      captureWordPressLabState({
-        resource,
-        docker: async () => ({ exitCode: 0, stdout: "wp_posts\n", stderr: "" }),
-        now: () => new Date(),
-      }),
+      captureWordPressLabState(
+        {
+          ...resource,
+          docker: async () => ({
+            exitCode: 0,
+            stdout: "wp_posts\n",
+            stderr: "",
+          }),
+        },
+        () => new Date(),
+      ),
     ).rejects.toThrow("Options table is missing");
   });
 
@@ -463,17 +470,17 @@ describe("WordPress Lab host exposure", () => {
       internalIp: "172.20.0.3",
       database: { ipv4: "172.20.0.2" },
     } as unknown as WordPressLabHandle;
-    const exposure = await exposeWordPressLabToHost({
-      resource,
-      handle,
-      image: "node-recorder@sha256:abc",
-      httpPort: 8080,
-      databasePort: 3307,
-      requireDocker: async (args) => {
-        calls.push([...args]);
-        return { exitCode: 0, stdout: "", stderr: "" };
+    const exposure = await exposeWordPressLabToHost(
+      {
+        ...resource,
+        handle,
+        requireDocker: async (args) => {
+          calls.push([...args]);
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
       },
-    });
+      { image: "node-recorder@sha256:abc", httpPort: 8080, databasePort: 3307 },
+    );
     expect(exposure).toEqual({
       status: "exposed",
       container: hostGatewayName(resource.id),
@@ -509,23 +516,25 @@ describe("WordPress Lab host exposure", () => {
       internalIp: "172.20.0.3",
     } as unknown as WordPressLabHandle;
     expect(
-      await exposeWordPressLabToHost({
-        resource,
-        handle,
-        image: "image",
-        httpPort: 70000,
-        requireDocker: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
-      }),
+      await exposeWordPressLabToHost(
+        {
+          ...resource,
+          handle,
+          requireDocker: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+        },
+        { image: "image", httpPort: 70000 },
+      ),
     ).toMatchObject({ status: "unavailable" });
-    const failing = await exposeWordPressLabToHost({
-      resource,
-      handle,
-      image: "image",
-      httpPort: 8080,
-      requireDocker: async () => {
-        throw new Error("docker failed");
+    const failing = await exposeWordPressLabToHost(
+      {
+        ...resource,
+        handle,
+        requireDocker: async () => {
+          throw new Error("docker failed");
+        },
       },
-    });
+      { image: "image", httpPort: 8080 },
+    );
     expect(failing).toEqual({
       status: "unavailable",
       diagnostic: "The host gateway could not be started",

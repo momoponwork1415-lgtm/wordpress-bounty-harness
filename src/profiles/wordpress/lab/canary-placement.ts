@@ -1,14 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
-import type {
-  DockerResult,
-  Resources,
-  WordPressCanaryLedger,
-  WordPressFileCanary,
-  WordPressLabHandle,
-  WordPressRoleObservation,
-} from "./index.js";
+import type { WordPressCanaryLedger, WordPressFileCanary } from "./contract.js";
+import type { WordPressLabSession } from "./lab-session.js";
 import { translatePressCanaryAdministratorLocaleScript } from "./scenarios.js";
 
 export const SQL_CANARY_TABLE = "wbh_canary";
@@ -27,23 +21,12 @@ function watchedOptions(canaries: WordPressCanaryLedger): readonly string[] {
   return [canaries.option, ...CRITICAL_OPTIONS];
 }
 
-type WordPressCommand = (
-  resource: Resources,
-  args: readonly string[],
-  environment?: readonly string[],
-) => Promise<DockerResult>;
-type RequireDocker = (
-  args: readonly string[],
-  timeoutMs?: number,
-) => Promise<DockerResult>;
-
 export async function placeVerificationCanaries(
-  resource: Resources,
-  wp: WordPressCommand,
+  lab: WordPressLabSession,
 ): Promise<void> {
   const privateValue = `wbh-sensitive-${randomBytes(24).toString("hex")}`;
   const privatePost = (
-    await wp(resource, [
+    await lab.wp([
       "post",
       "create",
       "--post_status=private",
@@ -55,11 +38,11 @@ export async function placeVerificationCanaries(
   ).stdout.trim();
   const personalValue = `wbh-sensitive-${randomBytes(24).toString("hex")}`;
   const ownerId = (
-    await wp(resource, [
+    await lab.wp([
       "user",
       "create",
-      `wbh-private-owner-${resource.id.slice(0, 8)}`,
-      `wbh-private-owner-${resource.id.slice(0, 8)}@example.invalid`,
+      `wbh-private-owner-${lab.id.slice(0, 8)}`,
+      `wbh-private-owner-${lab.id.slice(0, 8)}@example.invalid`,
       "--role=subscriber",
       `--user_pass=${randomUUID()}`,
       "--porcelain",
@@ -67,7 +50,7 @@ export async function placeVerificationCanaries(
   ).stdout.trim();
   if (!/^[1-9][0-9]*$/.test(privatePost) || !/^[1-9][0-9]*$/.test(ownerId))
     throw new Error("Sensitive canary object ID unavailable");
-  await wp(resource, [
+  await lab.wp([
     "user",
     "meta",
     "add",
@@ -75,35 +58,21 @@ export async function placeVerificationCanaries(
     "wbh_private_note",
     personalValue,
   ]);
-  resource.sensitiveCanaries.push(
+  lab.sensitiveCanaries.push(
     { kind: "private-post", objectId: privatePost, value: privateValue },
     { kind: "other-user-meta", objectId: ownerId, value: personalValue },
   );
 }
 
-export interface CanaryPlacement {
-  readonly resource: Resources;
-  readonly handle: WordPressLabHandle;
-  readonly nonce: () => string;
-  readonly wp: WordPressCommand;
-  readonly requireDocker: RequireDocker;
-  readonly roles: (
-    resource: Resources,
-    username: string,
-  ) => Promise<WordPressRoleObservation>;
-  readonly optionDigest: (resource: Resources, name: string) => Promise<string>;
-}
-
-async function placeBasicCanaries(input: CanaryPlacement): Promise<{
+async function placeBasicCanaries(lab: WordPressLabSession): Promise<{
   readonly token: string;
   readonly postId: string;
   readonly adminUser: string;
 }> {
-  const { resource, wp, requireDocker } = input;
-  const token = input.nonce();
+  const token = lab.nonce();
   if (!/^[A-Za-z0-9-]{1,100}$/.test(token)) throw new Error("Invalid nonce");
-  await wp(resource, ["option", "add", `wbh_canary_${token}`, token]);
-  const post = await wp(resource, [
+  await lab.wp(["option", "add", `wbh_canary_${token}`, token]);
+  const post = await lab.wp([
     "post",
     "create",
     "--post_status=publish",
@@ -112,22 +81,15 @@ async function placeBasicCanaries(input: CanaryPlacement): Promise<{
   ]);
   const postId = post.stdout.trim();
   if (!/^\d+$/.test(postId)) throw new Error("Canary post missing");
-  await wp(resource, [
-    "post",
-    "meta",
-    "add",
-    postId,
-    `wbh_canary_${token}`,
-    token,
-  ]);
-  await requireDocker([
+  await lab.wp(["post", "meta", "add", postId, `wbh_canary_${token}`, token]);
+  await lab.requireDocker([
     "exec",
-    resource.wordpress,
+    lab.wordpress,
     "sh",
     "-c",
     `printf %s '${token}' > /var/www/html/wp-content/wbh-canary-${token}.txt`,
   ]);
-  await wp(resource, [
+  await lab.wp([
     "user",
     "create",
     `wbh-canary-${token}`,
@@ -136,7 +98,7 @@ async function placeBasicCanaries(input: CanaryPlacement): Promise<{
     `--user_pass=${randomUUID()}`,
   ]);
   const adminUser = `wbh-canary-admin-${token}`;
-  await wp(resource, [
+  await lab.wp([
     "user",
     "create",
     adminUser,
@@ -144,27 +106,26 @@ async function placeBasicCanaries(input: CanaryPlacement): Promise<{
     "--role=administrator",
     `--user_pass=${randomUUID()}`,
   ]);
-  if (resource.administratorSecondaryLocale !== undefined)
-    await wp(resource, [
+  if (lab.administratorSecondaryLocale !== undefined)
+    await lab.wp([
       "eval",
       translatePressCanaryAdministratorLocaleScript(
         adminUser,
-        resource.administratorSecondaryLocale,
+        lab.administratorSecondaryLocale,
       ),
     ]);
   return { token, postId, adminUser };
 }
 
-async function placeSqlAndFileCanaries(input: CanaryPlacement): Promise<{
+async function placeSqlAndFileCanaries(lab: WordPressLabSession): Promise<{
   readonly sqlCanary: { readonly table: string; readonly value: string };
   readonly fileCanaries: readonly WordPressFileCanary[];
 }> {
-  const { resource, wp, requireDocker } = input;
   const sqlCanary = {
     table: SQL_CANARY_TABLE,
     value: randomBytes(16).toString("hex"),
   };
-  await wp(resource, [
+  await lab.wp([
     "db",
     "query",
     `CREATE TABLE ${sqlCanary.table} (id INT PRIMARY KEY, value CHAR(32) NOT NULL); INSERT INTO ${sqlCanary.table} VALUES (1, '${sqlCanary.value}')`,
@@ -182,9 +143,9 @@ async function placeSqlAndFileCanaries(input: CanaryPlacement): Promise<{
     },
   ];
   for (const file of fileCanaries)
-    await requireDocker([
+    await lab.requireDocker([
       "exec",
-      resource.wordpress,
+      lab.wordpress,
       "sh",
       "-c",
       // Served over HTTP the PHP canary runs and prints nothing; only its source holds the value.
@@ -194,12 +155,11 @@ async function placeSqlAndFileCanaries(input: CanaryPlacement): Promise<{
 }
 
 async function captureRoleBaseline(
-  input: CanaryPlacement,
+  lab: WordPressLabSession,
 ): Promise<Record<string, readonly string[]>> {
-  const { resource, handle, roles } = input;
   const roleBaseline: Record<string, readonly string[]> = {};
-  for (const account of Object.values(handle.attackerAccounts)) {
-    const observed = await roles(resource, account.username);
+  for (const account of Object.values(lab.handle.attackerAccounts)) {
+    const observed = await lab.roles(account.username);
     if (observed.status !== "roles")
       throw new Error("Role baseline unavailable");
     roleBaseline[account.username] = observed.roles;
@@ -208,40 +168,35 @@ async function captureRoleBaseline(
 }
 
 async function captureOptionBaseline(
-  input: CanaryPlacement,
+  lab: WordPressLabSession,
   canaries: WordPressCanaryLedger,
 ): Promise<ReadonlyMap<string, string>> {
-  const { resource, optionDigest } = input;
   const optionBaseline = new Map<string, string>();
   for (const name of watchedOptions(canaries))
-    optionBaseline.set(name, await optionDigest(resource, name));
+    optionBaseline.set(name, await lab.optionDigest(name));
   return optionBaseline;
 }
 
 /** Placement happens after discovery is over; values stay in the Lab and Private Evidence. */
 export async function seedWordPressCanaries(
-  input: CanaryPlacement,
+  lab: WordPressLabSession,
 ): Promise<string> {
-  const { resource } = input;
-  const { token, postId, adminUser } = await placeBasicCanaries(input);
-  const { sqlCanary, fileCanaries } = await placeSqlAndFileCanaries(input);
-  const roleBaseline = await captureRoleBaseline(input);
-  resource.canaries = {
+  const { token, postId, adminUser } = await placeBasicCanaries(lab);
+  const { sqlCanary, fileCanaries } = await placeSqlAndFileCanaries(lab);
+  const roleBaseline = await captureRoleBaseline(lab);
+  lab.canaries = {
     nonce: token,
     adminUser,
     roleBaseline,
     sqlCanary,
     fileCanaries,
-    sensitiveCanaries: resource.sensitiveCanaries,
+    sensitiveCanaries: lab.sensitiveCanaries,
     option: `wbh_canary_${token}`,
     postId,
     postMeta: `wbh_canary_${token}`,
     file: `/var/www/html/wp-content/wbh-canary-${token}.txt`,
     user: `wbh-canary-${token}`,
   };
-  resource.optionBaseline = await captureOptionBaseline(
-    input,
-    resource.canaries,
-  );
-  return canonicalDigest(resource.canaries);
+  lab.optionBaseline = await captureOptionBaseline(lab, lab.canaries);
+  return canonicalDigest(lab.canaries);
 }

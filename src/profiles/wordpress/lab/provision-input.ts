@@ -1,4 +1,3 @@
-import { randomBytes, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
@@ -7,12 +6,7 @@ import { z } from "zod";
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
 import { verifyCanonicalSourceTree } from "../../../infrastructure/canonical-source-tree.js";
 import { snapshotSchema, type Snapshot } from "../../../snapshot/index.js";
-import type {
-  Resources,
-  WordPressLabHandle,
-  WordPressSource,
-  WordPressSourceResolver,
-} from "./index.js";
+import type { WordPressSource, WordPressSourceResolver } from "./contract.js";
 import {
   scenarioBookingPage,
   scenarioBuilderPage,
@@ -24,10 +18,6 @@ import { assertSearchableCommentTarget } from "./relevanssi-search-index.js";
 import { assertSimplyScheduleBookingTarget } from "./simply-schedule-booking.js";
 import { assertBrizyBuilderPageTarget } from "./brizy-builder-page.js";
 import { assertBrizyFileAttachmentFormTarget } from "./brizy-file-attachment-form.js";
-import {
-  DATABASE_NAME,
-  READ_ONLY_DATABASE_USER,
-} from "./wordpress-initialization.js";
 import { PHP_RUNTIME_SOURCE_IDENTITY } from "../acquisition/php-runtime-source.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -65,7 +55,6 @@ export type ParsedWordPressLabSetup = z.output<typeof setupSchema>;
 export const WORDPRESS_CORE_IDENTITY = "wordpress-core";
 
 type PluginDirectory = { readonly slug: string; readonly directory: string };
-type Account = { readonly username: string; readonly password: string };
 export interface PreparedWordPressLab {
   readonly snapshot: Snapshot;
   readonly setup: ParsedWordPressLabSetup;
@@ -235,138 +224,5 @@ export async function prepareWordPressLab(
     dependencies,
     coreVersion,
     phpVersion,
-  };
-}
-
-export function createLabResource(
-  prepared: PreparedWordPressLab,
-  forVerification: boolean,
-): {
-  readonly resource: Resources;
-  readonly subscriber: Account;
-  readonly customer: Account | undefined;
-  readonly victimSubscriber: Account | undefined;
-  readonly victimCustomer: Account | undefined;
-} {
-  const id = randomUUID();
-  const prefix = `wbh-${id}`;
-  const subscriber = {
-    username: `wbh-subscriber-${id.slice(0, 8)}`,
-    password: randomUUID(),
-  };
-  const customer = prepared.setup.customerRole
-    ? {
-        username: `wbh-customer-${id.slice(0, 8)}`,
-        password: randomUUID(),
-      }
-    : undefined;
-  const victimSubscriber = forVerification
-    ? {
-        username: `wbh-victim-subscriber-${id.slice(0, 8)}`,
-        password: randomUUID(),
-      }
-    : undefined;
-  const victimCustomer =
-    forVerification && prepared.setup.customerRole
-      ? {
-          username: `wbh-victim-customer-${id.slice(0, 8)}`,
-          password: randomUUID(),
-        }
-      : undefined;
-  const secondaryLocale =
-    prepared.setup.translatePress?.administratorSecondaryLocale ??
-    prepared.scenario?.secondaryLocale ??
-    undefined;
-  const resource: Resources = {
-    id,
-    network: `${prefix}-net`,
-    volume: `${prefix}-site`,
-    database: `${prefix}-db`,
-    wordpress: `${prefix}-wp`,
-    recorder: `${prefix}-proxy`,
-    receiver: `${prefix}-canary`,
-    databasePassword: randomUUID(),
-    readerPassword: randomBytes(32).toString("hex"),
-    adminPassword: randomUUID(),
-    victimAccounts: {
-      ...(victimSubscriber === undefined
-        ? {}
-        : { subscriber: victimSubscriber }),
-      ...(victimCustomer === undefined ? {} : { customer: victimCustomer }),
-    },
-    ...(secondaryLocale === undefined
-      ? {}
-      : {
-          administratorSecondaryLocale: secondaryLocale,
-        }),
-    executionSalt: randomBytes(16).toString("hex"),
-    executionNonces: new Set(),
-    scriptNonces: new Set(),
-    sensitiveCanaries: [],
-    receiverCreated: false,
-    networkCreated: false,
-    volumeCreated: false,
-    databaseCreated: false,
-    wordpressCreated: false,
-    recorderCreated: false,
-  };
-  return { resource, subscriber, customer, victimSubscriber, victimCustomer };
-}
-
-export function databaseIp(resource: Resources): string {
-  if (resource.databaseIp === undefined)
-    throw new Error("Lab database address is unavailable");
-  return resource.databaseIp;
-}
-
-export function createLabHandle(input: {
-  readonly prepared: PreparedWordPressLab;
-  readonly resource: Resources;
-  readonly images: Readonly<Record<string, string>>;
-  readonly internalIp: string;
-  readonly recorderIp: string;
-  readonly subscriber: Account;
-  readonly customer: Account | undefined;
-}): WordPressLabHandle {
-  const {
-    prepared,
-    resource,
-    images,
-    internalIp,
-    recorderIp,
-    subscriber,
-    customer,
-  } = input;
-  const { setup, snapshot } = prepared;
-  return {
-    id: resource.id,
-    snapshotDigest: snapshot.digest,
-    setupDigest: canonicalDigest({ setup, images }),
-    ...(setup.scenario === undefined ? {} : { scenario: setup.scenario }),
-    ...(resource.administratorSecondaryLocale === undefined
-      ? {}
-      : { secondaryLocale: resource.administratorSecondaryLocale }),
-    endpoint: "http://wordpress",
-    networkName: resource.network,
-    internalIp,
-    recorderIp,
-    attackerAccounts: {
-      subscriber,
-      ...(customer === undefined ? {} : { customer }),
-    },
-    ...(setup.databaseAccess === "read-only"
-      ? {
-          database: {
-            host: "database" as const,
-            ipv4: databaseIp(resource),
-            port: 3306 as const,
-            name: DATABASE_NAME,
-            readOnlyAccount: {
-              username: READ_ONLY_DATABASE_USER,
-              password: resource.readerPassword,
-            },
-          },
-        }
-      : {}),
   };
 }
