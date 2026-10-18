@@ -154,6 +154,8 @@ describe("provider credential egress", () => {
         "// fixture",
       );
       const commands: string[][] = [];
+      let failStop = false;
+      let brokerStoppedAt = 0;
       const broker = createProviderCredentialEgressBroker({
         dockerExecutablePath: "/usr/bin/docker",
         brokerImage: `node@${digest}`,
@@ -164,8 +166,9 @@ describe("provider credential egress", () => {
         resolveProviderAddresses: async () => ["203.0.113.10"],
         runDocker: async (args) => {
           commands.push([...args]);
+          if (args[0] === "stop") brokerStoppedAt = performance.now();
           return {
-            exitCode: 0,
+            exitCode: failStop && args[0] === "stop" ? 1 : 0,
             stdout:
               args[0] === "exec" &&
               args.at(-1)?.includes("process.stdout.write")
@@ -257,6 +260,29 @@ describe("provider credential egress", () => {
         value: "long trial",
       });
       expect(long.receipt.expiresAt).toBe("2026-10-08T09:30:00.000Z");
+      failStop = true;
+      const cancelled = new AbortController();
+      const beforeAbort = commands.length;
+      const stopped = await broker.withGrant(
+        request,
+        async () => {
+          const wallAt = performance.now();
+          cancelled.abort("wall");
+          expect((brokerStoppedAt - wallAt) / 1000).toBeLessThan(1);
+          return "stopped";
+        },
+        cancelled.signal,
+      );
+      expect(stopped.operation.status).toBe("completed");
+      const abortCommands = commands.slice(beforeAbort);
+      const stop = abortCommands.find((args) => args[0] === "stop");
+      expect(stop).toEqual([
+        "stop",
+        "-t",
+        "10",
+        expect.stringMatching(/^provider-egress-broker-/),
+      ]);
+      expect(abortCommands).toContainEqual(["kill", stop?.[3] ?? "missing"]);
       await expect(
         broker.withGrant(
           { ...request, expiresAt: "2026-10-08T11:01:00.000Z" },

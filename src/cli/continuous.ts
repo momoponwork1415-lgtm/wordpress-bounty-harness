@@ -74,6 +74,7 @@ export interface ContinuousDeps {
     readonly target: string | null;
     readonly retryIncompleteVerifications: boolean;
     readonly stop: () => boolean;
+    readonly signal?: AbortSignal;
   }): Promise<CampaignSummary>;
   /** Removes crashed Lab leftovers (not review Labs); returns how many. */
   cleanupLeftovers(): Promise<number>;
@@ -258,6 +259,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     updatedAt: deps.clock().toISOString(),
   };
   let signalled = false;
+  let operatorController = new AbortController();
   const stopRequested = () => signalled || existsSync(paths.stop);
   const save = async () => {
     memo.updatedAt = deps.clock().toISOString();
@@ -309,6 +311,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     options: { readonly resume?: boolean } = {},
   ): Promise<ContinuousStopReason> => {
     signalled = false;
+    operatorController = new AbortController();
     await mkdir(deps.stateDirectory, { recursive: true, mode: 0o700 });
     const previous = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
     if (previous > 0 && previous !== deps.pid && deps.pidAlive(previous))
@@ -327,6 +330,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     await writeFile(paths.pid, String(deps.pid), { mode: 0o600 });
     const onSignal = () => {
       signalled = true;
+      operatorController.abort("operator");
     };
     deps.signals.on("SIGINT", onSignal);
     deps.signals.on("SIGTERM", onSignal);
@@ -421,6 +425,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
           target: current.target,
           retryIncompleteVerifications: current.retry,
           stop: stopRequested,
+          signal: operatorController.signal,
         });
         memo.consecutiveErrorBatches = 0;
       } catch (error) {

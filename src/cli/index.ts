@@ -183,6 +183,8 @@ export interface CliProfile {
       readonly retryIncompleteVerifications?: boolean;
       /** Checked before each next target; true drains the campaign as `operator`. */
       readonly stop?: () => boolean;
+      /** Aborts exploration currently running when continuous mode receives SIGTERM. */
+      readonly signal?: AbortSignal;
       /** Replaces the campaign config's selection policy path in process. */
       readonly selectionPolicyPath?: string;
     },

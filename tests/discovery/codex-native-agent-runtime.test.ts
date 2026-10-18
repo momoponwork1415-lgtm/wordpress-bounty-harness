@@ -192,6 +192,29 @@ function sandbox(
 }
 
 describe("Codex native agent runtime", () => {
+  it("records a wall timeout as an incomplete receipt", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-wall-receipt-"));
+    try {
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox("", [], {
+          status: "failed",
+          exitCode: -1,
+          failureKind: "timed-out",
+        }),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      expect((await runtime.execute(run)).receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "wall",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps Root and the first three unique children when a later wave creates another thread", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-child-overrun-"));
     try {

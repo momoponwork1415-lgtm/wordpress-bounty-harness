@@ -8,7 +8,7 @@ export type NativeModelProcessResult =
       readonly stderr: string;
     }
   | {
-      readonly kind: "timed-out" | "output-limit-exceeded";
+      readonly kind: "timed-out" | "output-limit-exceeded" | "cancelled";
       readonly stdout: string;
       readonly stderr: string;
     };
@@ -20,6 +20,7 @@ export interface NativeModelProcessRunOptions {
   readonly environment: NodeJS.ProcessEnv;
   readonly stdin?: string;
   readonly timeoutMs: number;
+  readonly signal?: AbortSignal;
   readonly maxOutputBytes: number;
   readonly redact?: (text: string) => string;
 }
@@ -60,9 +61,12 @@ export function runNativeModelProcess(
     const stderr: Buffer[] = [];
     let stdoutBytes = 0;
     let stderrBytes = 0;
-    let terminalKind: "timed-out" | "output-limit-exceeded" | undefined;
+    let terminalKind:
+      "timed-out" | "output-limit-exceeded" | "cancelled" | undefined;
     let killTimer: NodeJS.Timeout | undefined;
-    const terminate = (kind: "timed-out" | "output-limit-exceeded"): void => {
+    const terminate = (
+      kind: "timed-out" | "output-limit-exceeded" | "cancelled",
+    ): void => {
       if (terminalKind !== undefined) return;
       terminalKind = kind;
       signalProcessTree(child, "SIGTERM");
@@ -73,6 +77,9 @@ export function runNativeModelProcess(
     };
     const timeout = setTimeout(() => terminate("timed-out"), options.timeoutMs);
     timeout.unref();
+    const onAbort = () => terminate("cancelled");
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutBytes += chunk.byteLength;
@@ -91,18 +98,21 @@ export function runNativeModelProcess(
     });
     child.once("error", (error) => {
       clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", onAbort);
       if (killTimer !== undefined) clearTimeout(killTimer);
       reject(error);
     });
     child.stdin.once("error", (error: NodeJS.ErrnoException) => {
       if (error.code === "EPIPE") return;
       clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", onAbort);
       if (killTimer !== undefined) clearTimeout(killTimer);
       signalProcessTree(child, "SIGKILL");
       reject(error);
     });
     child.once("close", (exitCode) => {
       clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", onAbort);
       const redact = options.redact ?? ((text: string) => text);
       const stdoutText = redact(Buffer.concat(stdout).toString("utf8"));
       const stderrText = redact(Buffer.concat(stderr).toString("utf8"));

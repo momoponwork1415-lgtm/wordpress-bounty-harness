@@ -25,6 +25,7 @@ type Step = (input: {
   campaignId: string;
   target: string | null;
   retryIncompleteVerifications: boolean;
+  signal?: AbortSignal;
 }) => Promise<Partial<CampaignSummary>> | Partial<CampaignSummary>;
 
 async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
@@ -304,6 +305,41 @@ describe("continuous runner", () => {
       expect(existsSync(continuousPaths(t.root).stop)).toBe(false);
     },
   );
+
+  it("aborts the in-flight campaign on SIGTERM before recording operator stop", async () => {
+    let send: () => void = () => undefined;
+    let activeStopped = false;
+    const t = await setup(
+      [
+        async ({ signal }) => {
+          setTimeout(() => send(), 10);
+          await new Promise<void>((resolve) =>
+            signal?.addEventListener(
+              "abort",
+              () => {
+                activeStopped = true;
+                resolve();
+              },
+              { once: true },
+            ),
+          );
+          return { stopped: "operator" };
+        },
+      ],
+      {
+        signals: {
+          on(name: string, listener: () => void) {
+            if (name === "SIGTERM") send = listener;
+            return process;
+          },
+          off: () => process,
+        } as never,
+      },
+    );
+    await expect(t.runner.run()).resolves.toBe("operator");
+    expect(activeStopped).toBe(true);
+    expect(t.log.at(-1)).toMatch(/ stopped reason=operator$/);
+  });
 
   it("resumes the unfinished campaign under its id", async () => {
     const steps: Step[] = [async () => ({})];

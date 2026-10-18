@@ -101,6 +101,7 @@ export type HostDockerRun = (
   args: readonly string[],
   stdin: string | undefined,
   timeoutMs: number,
+  signal?: AbortSignal,
 ) => Promise<NativeModelProcessResult>;
 
 export type HostPreflightItem = {
@@ -153,7 +154,7 @@ export async function createWordPressHostProfile(options: {
     fileURLToPath(new URL("../discovery/", import.meta.url));
   const runDocker: HostDockerRun =
     options.runDocker ??
-    ((args, stdin, timeoutMs) =>
+    ((args, stdin, timeoutMs, signal) =>
       runNativeModelProcess({
         executablePath: host.dockerExecutablePath,
         args,
@@ -166,6 +167,7 @@ export async function createWordPressHostProfile(options: {
           TZ: "UTC",
         },
         timeoutMs,
+        ...(signal === undefined ? {} : { signal }),
         maxOutputBytes: 64 * 1024,
       }));
   const directories = {
