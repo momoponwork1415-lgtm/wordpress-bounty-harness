@@ -1,0 +1,1066 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review — wordpress-bounty-harness (2026-10-18)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "neutral",
+        securityLevel: "loose",
+      });
+    </script>
+    <style>
+      .seam {
+        stroke-dasharray: 4 4;
+      }
+      .leak {
+        stroke: #dc2626;
+      }
+      .deep {
+        background: linear-gradient(135deg, #0f172a, #1e293b);
+        color: #f8fafc;
+      }
+      .mod {
+        border: 1px solid #94a3b8;
+        background: #fff;
+      }
+      .mod-thick {
+        border: 3px solid #0f172a;
+        background: #fff;
+      }
+      .band {
+        border-left: 4px solid #94a3b8;
+      }
+      .band-leak {
+        border-left: 4px solid #dc2626;
+      }
+      .label {
+        font-size: 0.65rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .mermaid svg {
+        max-height: 340px;
+      }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans">
+    <main class="max-w-5xl mx-auto px-6 py-12 space-y-12">
+      <header class="space-y-3">
+        <p class="text-xs uppercase tracking-wider text-slate-500">
+          報告（正本ではない）· 読み取り専用の走査 · 実装なし
+        </p>
+        <h1 class="text-3xl font-serif">
+          Architecture review — wordpress-bounty-harness
+        </h1>
+        <p class="text-sm text-slate-600">
+          2026-10-18 · origin/main fcde290 · 走査範囲 src/ 122 files 37,032
+          行、tests/ 94 files 32,612 行 · skill:
+          mattpocock-skills/improve-codebase-architecture
+        </p>
+        <div class="flex flex-wrap gap-4 text-xs text-slate-600 pt-2">
+          <span
+            ><span class="inline-block w-4 h-3 mod align-middle mr-1"></span
+            >module</span
+          >
+          <span
+            ><span
+              class="inline-block w-4 h-3 mod-thick align-middle mr-1"
+            ></span
+            >deep module</span
+          >
+          <span
+            ><svg width="28" height="10" class="inline align-middle mr-1">
+              <line
+                x1="0"
+                y1="5"
+                x2="28"
+                y2="5"
+                stroke="#64748b"
+                stroke-width="2"
+                class="seam"
+              /></svg
+            >seam</span
+          >
+          <span
+            ><svg width="28" height="10" class="inline align-middle mr-1">
+              <line
+                x1="0"
+                y1="5"
+                x2="28"
+                y2="5"
+                stroke="#dc2626"
+                stroke-width="2"
+              /></svg
+            >leak（ADR 0011 の語彙漏れ）</span
+          >
+          <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800"
+            >Strong</span
+          >
+          <span class="px-2 py-0.5 rounded bg-amber-100 text-amber-800"
+            >Worth exploring</span
+          >
+          <span class="px-2 py-0.5 rounded bg-slate-200 text-slate-700"
+            >Speculative</span
+          >
+        </div>
+        <div
+          class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"
+        >
+          固定で触らないもの: 8 不変条件、<code
+            >profiles/wordpress/verification/judges.ts</code
+          >
+          の成功条件、<code>prompts/*.md</code> 本文、既存台帳 event
+          の形、<code>policy/</code>。候補はすべてこれらを変えない。順位は価値 /
+          リスク。
+        </div>
+      </header>
+
+      <section id="candidates" class="space-y-10">
+        <!-- ===================== 1 ===================== -->
+        <article
+          id="c1"
+          class="rounded-xl border border-slate-200 bg-white p-6 space-y-5"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <h2 class="text-xl font-serif">
+              1. Ledger に <code>readAll(query)</code> を持たせ、35 箇所の 1000
+              件ページング loop を吸収する
+            </h2>
+            <div class="flex gap-2 shrink-0">
+              <span
+                class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs"
+                >Strong</span
+              >
+              <span
+                class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs"
+                >local-substitutable (SQLite)</span
+              >
+            </div>
+          </div>
+          <pre class="font-mono text-sm text-slate-700 whitespace-pre-wrap">
+src/ledger/index.ts（append / read / usage / stops / funnel）
+呼び側: src/cli/pipeline.ts ×11, src/review/export.ts ×6, src/evaluation/index.ts ×3, src/cli/wordpress.ts ×2, src/discovery/campaign.ts ×2, src/profiles/wordpress/scope-facts.ts ×2, 他 8 file ×1
+重複 helper: cli/pipeline.ts readAll, cli/continuous.ts readAll, review/export.ts readAll</pre>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div
+              class="rounded-lg border border-slate-200 bg-stone-50 p-4 space-y-2"
+            >
+              <p class="label text-slate-500">
+                Before — interface は
+                <code>read(limit, afterSequence)</code>、各呼び側が loop
+                を再実装
+              </p>
+              <div class="space-y-1">
+                <div class="band h-7 pl-3 text-xs flex items-center bg-white">
+                  pipeline.ts · for(;;) read limit 1000 · ×11
+                </div>
+                <div class="band h-7 pl-3 text-xs flex items-center bg-white">
+                  review/export.ts · readAll + loop · ×6
+                </div>
+                <div class="band h-7 pl-3 text-xs flex items-center bg-white">
+                  campaign.ts · readFinishes / started loop · ×2
+                </div>
+                <div class="band h-7 pl-3 text-xs flex items-center bg-white">
+                  cli/wordpress.ts · reservedSelectionBatch loop · ×2
+                </div>
+                <div class="band h-7 pl-3 text-xs flex items-center bg-white">
+                  evaluation / scope-facts / continuous … · ×12
+                </div>
+                <div
+                  class="mod h-10 flex items-center justify-center text-xs mt-2"
+                >
+                  ledger · read(query) → 1 page
+                </div>
+              </div>
+            </div>
+            <div
+              class="rounded-lg border border-slate-200 bg-stone-50 p-4 space-y-2"
+            >
+              <p class="label text-slate-500">
+                After — ページングは implementation に沈む
+              </p>
+              <div class="space-y-1">
+                <div
+                  class="band h-7 pl-3 text-xs flex items-center bg-white text-slate-400"
+                >
+                  呼び側 35 箇所 · <code>ledger.readAll(query)</code> 1 行
+                </div>
+                <div
+                  class="mod-thick h-28 flex flex-col items-center justify-center text-xs mt-2"
+                >
+                  <span class="label">ledger (deep)</span>
+                  <span
+                    >append · read · <b>readAll</b> · usage · stops ·
+                    funnel</span
+                  >
+                  <span class="text-slate-400 mt-1"
+                    >内部: page 1000, afterSequence, snapshot filter</span
+                  >
+                </div>
+              </div>
+            </div>
+          </div>
+          <p>
+            <b>Problem.</b> 追記専用台帳の読み出しは Ledger の interface
+            で完結すべきだが、1000 件ページングという implementation の事実が 14
+            file に漏れ、3 つの private
+            <code>readAll</code> が同じことをしている。
+          </p>
+          <p>
+            <b>Solution.</b>
+            <code
+              >Ledger.readAll(query:
+              Omit&lt;LedgerReadQuery,"limit"|"afterSequence"&gt;)</code
+            >（または iterator）を 1 本足し、呼び側の loop と 3 helper
+            を消す。event の形も append も触らない。
+          </p>
+          <ul class="text-sm list-disc pl-5 space-y-1">
+            <li>locality: ページング bug は 1 箇所で直る</li>
+            <li>leverage: 1 interface、35 call sites</li>
+            <li>約 −120 行、3 shallow helper 削除</li>
+            <li>
+              tests: ledger.test.ts（16）に readAll の 1 件追加、消費側 tests
+              は無変更で通る
+            </li>
+          </ul>
+          <p class="text-xs text-slate-500">
+            不変条件リスク: なし（読み取りのみ、台帳の形は不変）。PARKING 吸収:
+            なし。
+          </p>
+        </article>
+
+        <!-- ===================== 2 ===================== -->
+        <article
+          id="c2"
+          class="rounded-xl border border-slate-200 bg-white p-6 space-y-5"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <h2 class="text-xl font-serif">
+              2. WordPress campaign session: config・policy・boundaries を 1
+              回で開く
+            </h2>
+            <div class="flex gap-2 shrink-0">
+              <span
+                class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs"
+                >Strong</span
+              >
+              <span
+                class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs"
+                >in-process</span
+              >
+            </div>
+          </div>
+          <pre class="font-mono text-sm text-slate-700 whitespace-pre-wrap">
+src/cli/wordpress.ts（1,733 行）: loadConfig / loadSelectInput / verificationFor / setupFor / reconstructionFor
+src/cli/wordpress-host.ts: hostStatus（config と selection を schema なしで JSON.parse）
+src/cli/index.ts: eval rubric / prospective の JSON.parse</pre>
+          <div class="rounded-lg border border-slate-200 bg-white p-4">
+            <pre class="mermaid">
+flowchart LR
+  subgraph before["Before: CliProfile の 8 method がそれぞれ開く"]
+    direction TB
+    S[select] --> L1[loadSelectInput → loadConfig]
+    R[runCampaign] --> L2[loadConfig + 2 つの整合性 check]
+    V[verifyNext] --> L3[loadConfig]
+    U[labUp / labDown] --> L4[loadConfig ×2]
+    C[cleanupLeftovers / checkRuntime] --> L5[loadConfig ×2]
+    Rv[reverify] --> L6[loadConfig]
+    H[hostStatus] --> L7[JSON.parse 生読み]
+    L1 & L2 & L3 & L4 & L5 & L6 --> B[options.boundaries config,state ×8]
+    L2 & L3 & Rv --> VF[new Verification ×3]
+  end
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class L7 leak
+            </pre>
+          </div>
+          <div class="rounded-lg border border-slate-200 bg-white p-4">
+            <pre class="mermaid">
+flowchart LR
+  subgraph after["After: 1 つの deep module"]
+    direction LR
+    P[CliProfile methods ×9] --> O["openWordPressCampaignSession(configPath, state, overrides)"]
+    O --> SES["session: config · policy · boundaries · verification · setupFor · reconstructionFor · hostFacts"]
+  end
+  classDef deep fill:#0f172a,color:#f8fafc,stroke:#0f172a;
+  class SES deep
+            </pre>
+          </div>
+          <p>
+            <b>Problem.</b> 「config を読む → policy を読む → 整合性を見る →
+            boundaries を組む → Verification を組む」は 1
+            つの概念だが、interface が 5 つの関数に割れ、8 method
+            がそれぞれ並べ直している。整合性 check（WordPress 版・prompt
+            変種の不一致）は 2 箇所に同文で存在し、<code>hostStatus</code>
+            は同じ config を schema なしで読んで
+            <code>runWallTimeMinutes</code> を取り出す。
+          </p>
+          <p>
+            <b>Solution.</b> <code>openWordPressCampaignSession()</code> を 1
+            本置き、config・policy・整合性・boundaries・Verification・setupFor・reconstructionFor・host
+            事実（wall、maximumTargets）をその implementation
+            に沈める。CliProfile method は session を受けて本体だけを書く。
+          </p>
+          <ul class="text-sm list-disc pl-5 space-y-1">
+            <li>locality: config 読みと整合性 check が 1 箇所</li>
+            <li>leverage: 1 interface、9 call sites（hostStatus 含む）</li>
+            <li>
+              shallow な <code>loadSelectInput</code> /
+              <code>verificationFor</code> を吸収
+            </li>
+            <li>
+              tests: cli.test.ts（66）は <code>runCli</code> と fake boundaries
+              越しなので無変更。session 単体 test を 5 件ほど新設
+            </li>
+          </ul>
+          <p class="text-xs text-slate-500">
+            不変条件リスク: なし。PARKING 吸収: 直接なし（候補 3・4 の前提）。
+          </p>
+        </article>
+
+        <!-- ===================== 3 ===================== -->
+        <article
+          id="c3"
+          class="rounded-xl border border-slate-200 bg-white p-6 space-y-5"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <h2 class="text-xl font-serif">
+              3. prompt registry を 1 枚の表にし、4 つの ID 一覧と contract
+              対応表を吸収する
+            </h2>
+            <div class="flex gap-2 shrink-0">
+              <span
+                class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs"
+                >Strong</span
+              >
+              <span
+                class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs"
+                >in-process</span
+              >
+            </div>
+          </div>
+          <pre class="font-mono text-sm text-slate-700 whitespace-pre-wrap">
+src/profiles/wordpress/prompts/index.ts: WORDPRESS_DISCOVERY_PROMPT_IDS(18) · WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS(7) · switch(id) 19 case
+src/cli/wordpress.ts: campaignModes の promptId enum ×2（6 件 / 5 件）· preprocess の mode 推定（6 件の比較）· outputContractFor / coverageFor / objectiveOnly
+examples/*.json（33 file 1,140 行）が旧 arm の promptId を参照</pre>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+              <p class="label text-slate-500 mb-2">
+                Before — 1 つの prompt を足すと 6 箇所を触る
+              </p>
+              <div class="grid grid-cols-2 gap-2 text-xs">
+                <div class="mod p-2">prompts/index.ts<br />PROMPT_IDS</div>
+                <div class="mod p-2">prompts/index.ts<br />OBJECTIVE_ONLY</div>
+                <div class="mod p-2">prompts/index.ts<br />switch 19 case</div>
+                <div class="mod p-2">cli/wordpress.ts<br />wp2shell enum</div>
+                <div class="mod p-2">
+                  cli/wordpress.ts<br />entry-index-control enum
+                </div>
+                <div class="mod p-2">
+                  cli/wordpress.ts<br />preprocess 6 比較
+                </div>
+                <div class="mod p-2 col-span-2">
+                  cli/wordpress.ts outputContractFor · coverageFor ·
+                  objectiveOnly（v1 / v2 / v3 の分岐）
+                </div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+              <p class="label text-slate-500 mb-2">After — 1 行 = 1 prompt</p>
+              <div class="mod-thick p-3 text-xs font-mono">
+                <div class="label text-slate-500 mb-1">prompts/registry.ts</div>
+                { id: "wp2shell-bounty-v5",<br />
+                &nbsp;&nbsp;file: "wp2shell-bounty-v5.md",<br />
+                &nbsp;&nbsp;contract: "v3", coverage: true,<br />
+                &nbsp;&nbsp;objectiveOnly: true,<br />
+                &nbsp;&nbsp;modes:
+                ["wp2shell","entry-index-control","comparison","ablation"],<br />
+                &nbsp;&nbsp;status: "default" | "arm" | "history-only" |
+                "archived" }
+                <div class="mt-2 text-slate-500">
+                  派生: PROMPT_IDS · runnable enum · contractFor(id) · 推定 mode
+                </div>
+              </div>
+            </div>
+          </div>
+          <p>
+            <b>Problem.</b> 「どの prompt がどの output contract を受け、どの
+            mode で起動でき、既定か比較 arm か履歴照合用か」という 1
+            つの知識が、profile と cli の 6
+            箇所に文字列列挙で散っている。AGENTS.md の「旧 prompt は digest
+            照合のために維持」と「archive prompt 10
+            版の削除」（PARKING）は、この表に
+            <code>status</code> が無いので手作業でしか追えない。
+          </p>
+          <p>
+            <b>Solution.</b> <code>prompts/registry.ts</code> に 1 行 1 prompt
+            の表を置き、ID 一覧・runnable enum・contract 選択・mode
+            推定をそこから導出する。<code>.md</code> 本文と digest
+            は触らない。archived 行は読み取り専用に残す（ledger の
+            <code>promptVariant</code> 照合を維持）。
+          </p>
+          <ul class="text-sm list-disc pl-5 space-y-1">
+            <li>locality: prompt の属性は 1 行</li>
+            <li>leverage: 1 表、cli schema・plan・examples 検査が導出</li>
+            <li>
+              archive は <code>status: "archived"</code> → 後日 .md 削除が 1
+              行削除になる
+            </li>
+            <li>
+              tests: discovery-prompts.test.ts（17）と examples.test.ts（12）が
+              digest・mode・enum を pin。表の導出値が同一なら無変更
+            </li>
+          </ul>
+          <p class="text-xs text-slate-500">
+            不変条件リスク: なし（本文・digest 不変。agent
+            に渡る文章は変えないので owner-approved 不要）。PARKING 吸収:
+            「archive prompt 10 版」「旧 arm の examples」「<code
+              >assignment</code
+            >
+            mode」の削除を行単位にする。
+          </p>
+        </article>
+
+        <!-- ===================== 4 ===================== -->
+        <article
+          id="c4"
+          class="rounded-xl border border-slate-200 bg-white p-6 space-y-5"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <h2 class="text-xl font-serif">
+              4. <code>planWordPressDiscovery</code> を profile の
+              <code>discovery/plan.ts</code> へ移し、自分の interface で test
+              する
+            </h2>
+            <div class="flex gap-2 shrink-0">
+              <span
+                class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs"
+                >Strong</span
+              >
+              <span
+                class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs"
+                >in-process</span
+              >
+            </div>
+          </div>
+          <pre class="font-mono text-sm text-slate-700 whitespace-pre-wrap">
+src/cli/wordpress.ts L884–1173（約 290 行）: prompt 組み立て · output contract 選択 · 入口索引 · assignment · Trial 配列 · admit 関数束
+→ src/profiles/wordpress/discovery/plan.ts（新）+ tests/profiles/wordpress/discovery-plan.test.ts（新）</pre>
+          <div class="rounded-lg border border-slate-200 bg-white p-4">
+            <pre class="mermaid">
+flowchart TB
+  subgraph before["Before: cli に profile の知識が居る"]
+    direction LR
+    CLI[cli/wordpress.ts planWordPressDiscovery] --> E[entry-points]
+    CLI --> SI[storage-index]
+    CLI --> OC[output-contract v1/v2/v3]
+    CLI --> PR[prompts]
+    CLI --> F[finding / lead / normalize / coverage]
+    T1[tests/cli/cli.test.ts 4,822 行] -. 唯一の test 経路 .-> CLI
+  end
+  subgraph after["After: profile module、cli は 1 行で呼ぶ"]
+    direction LR
+    CLI2[cli/wordpress.ts] --> PLAN["profile/discovery/plan.ts<br/>planTrials(input) → DiscoveryPlan"]
+    PLAN --> E2[entry-points · storage-index · output-contract · prompts · finding · lead]
+    T2[discovery-plan.test.ts] --> PLAN
+  end
+  classDef deep fill:#0f172a,color:#f8fafc,stroke:#0f172a;
+  class PLAN deep
+            </pre>
+          </div>
+          <p>
+            <b>Problem.</b> SPEC §4 は
+            <code>cli</code> を「薄く接続する」と定めるが、prompt
+            本文の節の並べ方、Lab 認証情報の行、contract の版選択、Trial ordinal
+            への arm 割付という WordPress discovery の中心知識が cli に 290
+            行で居る。test は <code>runCli</code> 経由（cli.test.ts 4,822
+            行）しか無く、「Lab 無しの Trial には Lab
+            節が無い」のような事実を直接 pin できない。
+          </p>
+          <p>
+            <b>Solution.</b> 入力（config・target・snapshot・lab
+            handle・source・assets・runtimeProfile・clock・newId）を受け、<code
+              >CampaignPipeline["discovery"]</code
+            >
+            の戻り値を返す純関数 module として profile に置く。cli は
+            session（候補 2）を渡して 1 行で呼ぶ。
+          </p>
+          <ul class="text-sm list-disc pl-5 space-y-1">
+            <li>locality: prompt 組み立ての変更は profile 1 file</li>
+            <li>
+              interface が test surface: 「索引 off なら
+              <code>entryIndex.enabled=false</code>」等を 10 件程度直接 pin
+            </li>
+            <li>
+              ADR 0011 の方向と一致（WordPress の語が cli から profile へ）
+            </li>
+            <li>cli/wordpress.ts 1,733 → 約 1,400 行</li>
+          </ul>
+          <p class="text-xs text-slate-500">
+            不変条件リスク: なし（prompt 本文に渡る文字列は同一。Harness
+            生成節の雛形を変えない）。PARKING 吸収: <code>assignment</code> mode
+            削除時の変更箇所がこの file に閉じる。
+          </p>
+        </article>
+
+        <!-- ===================== 5 ===================== -->
+        <article
+          id="c5"
+          class="rounded-xl border border-slate-200 bg-white p-6 space-y-5"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <h2 class="text-xl font-serif">
+              5. Lab scenario 定義が自分の setup script と再現注記を持ち、plugin
+              別 adapter 10 本を表の行にする
+            </h2>
+            <div class="flex gap-2 shrink-0">
+              <span
+                class="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs"
+                >Worth exploring</span
+              >
+              <span
+                class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs"
+                >local-substitutable (Docker)</span
+              >
+            </div>
+          </div>
+          <pre class="font-mono text-sm text-slate-700 whitespace-pre-wrap">
+src/profiles/wordpress/lab/scenarios.ts（432 行、15 定義 + digest pin）
+src/profiles/wordpress/lab/wordpress-initialization.ts（433 行）: seedScenarioRegistration / Membership / CommentForm / MemberPost / Downloads / Translation / Booking / BuilderPage … 各 1 関数が scenario id を if で見る
+plugin 別 adapter 10 file 428 行: brizy-builder-page, brizy-file-attachment-form, download-monitor, download-manager, user-registration, user-registration-membership, wpdiscuz, wp-members, relevanssi-search-index, simply-schedule-booking
+src/cli/wordpress.ts reconstructionFor: TranslatePress 文言と scenario id を直書き
+tests: brizy ×2, simply-schedule-booking（計 200 行）</pre>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+              <p class="label text-slate-500 mb-2">
+                Before — 1 scenario = 3 file に分散
+              </p>
+              <div class="space-y-1 text-xs">
+                <div class="band band-leak h-8 pl-3 flex items-center bg-white">
+                  scenarios.ts · 定義行 + adapterDigest
+                </div>
+                <div class="band band-leak h-8 pl-3 flex items-center bg-white">
+                  wp-members-adapter.ts · PHP script 1 本
+                </div>
+                <div class="band band-leak h-8 pl-3 flex items-center bg-white">
+                  wordpress-initialization.ts · seedScenarioMemberPost() ·
+                  if(id===…)
+                </div>
+                <div class="band band-leak h-8 pl-3 flex items-center bg-white">
+                  cli/wordpress.ts reconstructionFor · 再現注記
+                </div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+              <p class="label text-slate-500 mb-2">
+                After — 1 scenario = 1 行、初期化は for 文
+              </p>
+              <div class="mod-thick p-3 text-xs font-mono">
+                { id: "public-member-post-v1", version: 1, pluginSlug:
+                "wp-members",<br />
+                &nbsp;&nbsp;setup: [ wpMembersOrdinarySetupScript ],<br />
+                &nbsp;&nbsp;reconstructionNotes: ["…"] }
+                <div class="mt-2 text-slate-500">
+                  initialization: for (script of scenario.setup) wp eval
+                </div>
+              </div>
+            </div>
+          </div>
+          <p>
+            <b>Problem.</b> scenario
+            は「id・版・digest・何を仕込むか・再現時に何と書くか」の 1
+            概念だが、仕込みは adapter file、呼び分けは initialization の if
+            列、再現注記は cli に居る。plugin 固有 adapter
+            の削除（PARKING）は現状 3 file × 8 本の手作業。
+          </p>
+          <p>
+            <b>Solution.</b> 定義に <code>setup</code>（順序付き script 列）と
+            <code>reconstructionNotes</code> を持たせ、initialization
+            は列を順に実行する。digest 変化を避けるなら定義本体の形は変えず、id
+            をキーにした隣接表に置く。削除は行削除になる。
+          </p>
+          <ul class="text-sm list-disc pl-5 space-y-1">
+            <li>locality: scenario の全部が 1 行</li>
+            <li>plugin 固有 adapter 8 本 + test 3 本の削除が機械的に</li>
+            <li>cli から TranslatePress の文言が消える</li>
+            <li>
+              tests: wordpress-lab.test.ts（42）が provision 結果を pin。adapter
+              単体 test 3 本は表の test に置き換え（replace, don't layer）
+            </li>
+          </ul>
+          <div
+            class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"
+          >
+            注意: 定義 object の形を変えると
+            <code>canonicalDigest(definition)</code> が変わり 15 件の pin
+            と版の更新が要る（SPEC §7「版と digest を固定」）。隣接表方式なら
+            digest は不変。ADR 0026（plugin 非依存 scenario 優先）とは一致。
+          </div>
+          <p class="text-xs text-slate-500">
+            不変条件リスク: なし（Lab 供給は gVisor 内のまま。canary
+            配置は触らない）。PARKING 吸収: 「plugin 固有 Lab adapter 8
+            本の削除」。
+          </p>
+        </article>
+
+        <!-- ===================== 6 ===================== -->
+        <article
+          id="c6"
+          class="rounded-xl border border-slate-200 bg-white p-6 space-y-5"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <h2 class="text-xl font-serif">
+              6. <code>runDiscoveryCampaign</code>: 14 個の <code>let</code> を
+              1 つの TrialOutcome record に、再開走査を内部 seam に
+            </h2>
+            <div class="flex gap-2 shrink-0">
+              <span
+                class="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs"
+                >Worth exploring</span
+              >
+              <span
+                class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs"
+                >mock (executor 注入)</span
+              >
+            </div>
+          </div>
+          <pre class="font-mono text-sm text-slate-700 whitespace-pre-wrap">
+src/discovery/campaign.ts（855 行、runDiscoveryCampaign 1 関数 580 行、内側 executePlanned 300 行）
+既に切り出し済み: counts-as-trial.ts(60) · record-discovery-report.ts(369) · recover-agent-reports.ts(178)</pre>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+              <p class="label text-slate-500 mb-2">Before — 断面</p>
+              <div class="space-y-1 text-xs">
+                <div class="band h-7 pl-3 flex items-center bg-white">
+                  入力検査 · 50 行
+                </div>
+                <div class="band h-7 pl-3 flex items-center bg-white">
+                  再開走査（finishes / started / spentOrdinals）· 70 行
+                </div>
+                <div class="band h-10 pl-3 flex items-center bg-white">
+                  executePlanned · 300 行 · let ×14 → discovery-run-finished
+                </div>
+                <div class="band h-7 pl-3 flex items-center bg-white">
+                  stop rule · 20 行
+                </div>
+                <div class="band h-7 pl-3 flex items-center bg-white">
+                  worker ×concurrency · 結論 event · 40 行
+                </div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+              <p class="label text-slate-500 mb-2">
+                After — 外 interface は不変、内側に 2 seam
+              </p>
+              <div class="space-y-1 text-xs">
+                <div class="mod-thick h-9 pl-3 flex items-center">
+                  runDiscoveryCampaign(options) → { runCount, findingsRecorded,
+                  stoppedBy }
+                </div>
+                <div class="mod h-9 pl-3 flex items-center ml-6">
+                  discoveryProgress(ledger, campaignId, snapshotDigest) → {
+                  spentOrdinals, finishes }
+                </div>
+                <div class="mod h-9 pl-3 flex items-center ml-6">
+                  executeTrial(...) → TrialOutcome（1 record）
+                </div>
+                <div class="mod h-9 pl-3 flex items-center ml-6">
+                  finishedEventFrom(outcome) →
+                  discovery-run-finished（形は不変）
+                </div>
+              </div>
+            </div>
+          </div>
+          <p>
+            <b>Problem.</b> 外の interface は小さく深い（test 27 件が
+            <code>runDiscoveryCampaign</code> 越しに通る）が、implementation
+            の中で receipt の 14 欄が <code>let</code> として 300
+            行に渡り、<code>discovery-run-finished</code> の組み立てが try /
+            catch / finally の 3 経路に分かれる。
+          </p>
+          <p>
+            <b>Solution.</b> 1 Trial の実行を <code>TrialOutcome</code>（receipt
+            欄・failure・counted・foundNew・heldBoundary）を返す内部 module
+            にし、event は 1 関数で outcome から 1:1 に写す。再開走査も内部 seam
+            として切る。外 interface と event の形は変えない。
+          </p>
+          <ul class="text-sm list-disc pl-5 space-y-1">
+            <li>locality: receipt → event の写像が 1 箇所</li>
+            <li>内部 seam は自分の test だけに使い、interface に出さない</li>
+            <li>
+              tests: campaign-run.test.ts（18）+
+              campaign-stop-resume.test.ts（9）は無変更で通ることが完了条件
+            </li>
+            <li>行数はほぼ ±0、file は 1 → 3</li>
+          </ul>
+          <p class="text-xs text-slate-500">
+            不変条件リスク: なし（event の形 1:1、incomplete
+            の理由付けは同一）。PARKING 吸収: なし。
+          </p>
+        </article>
+
+        <!-- ===================== 7 ===================== -->
+        <article
+          id="c7"
+          class="rounded-xl border border-slate-200 bg-white p-6 space-y-5"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <h2 class="text-xl font-serif">
+              7. Codex transport: transcript 復号を内部 module に切り、<code
+                >incompleteExecution</code
+              >
+              の位置引数 7 個を options に、WordPress の語を run 入力へ
+            </h2>
+            <div class="flex gap-2 shrink-0">
+              <span
+                class="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs"
+                >Worth exploring</span
+              >
+              <span
+                class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs"
+                >mock (Codex CLI)</span
+              >
+            </div>
+          </div>
+          <pre class="font-mono text-sm text-slate-700 whitespace-pre-wrap">
+src/discovery/codex-native-agent-runtime.ts（1,719 行）
+  復号系 ~450 行: decodeTranscript · usageFromTranscript / usageFromRollout · observedFromCommands / observedFromRollout · decodeChildRollout · providerLimitOf · brokerRequestBytesExceeded · providerPolicyDetail
+  incompleteExecution(state, reason, completedAt, grantReceiptDigest?, providerLimit?, reasonDetail?, attachment?) — 呼び出し 17 箇所が undefined を位置で埋める
+  leak: path "/workspace/wordpress" ×3、/\bwordpress\b/ で labRequests を数える（L622）
+src/discovery/codex-gvisor-sandbox.ts: "/workspace/wordpress" ×2</pre>
+          <div class="rounded-lg border border-slate-200 bg-white p-4">
+            <pre class="mermaid">
+flowchart LR
+  subgraph before["Before"]
+    direction TB
+    EX[CodexNativeAgentRuntime.execute] --> D1[decodeTranscript]
+    EX --> D2[usageFrom*]
+    EX --> D3[observedFrom*]
+    EX --> D4[decodeChildRollout]
+    EX --> D5[providerLimitOf / brokerBytes / policyDetail]
+    EX --> IE["incompleteExecution(…7 positional)"]
+    D3 -. "/workspace/wordpress", \\bwordpress\\b .-> WP((WordPress 語))
+  end
+  subgraph after["After"]
+    direction TB
+    EX2[CodexNativeAgentRuntime.execute] --> DEC["codex-transcript.ts<br/>decodeCodexRun(result, run) → DecodedRun"]
+    EX2 --> IE2["incomplete({ reason, completedAt, …})"]
+    RUN[run.dependencySource.mountPath · run.lab.endpoint hostname] --> DEC
+  end
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  classDef deep fill:#0f172a,color:#f8fafc,stroke:#0f172a;
+  class D3,WP leak
+  class DEC deep
+            </pre>
+          </div>
+          <p>
+            <b>Problem.</b> 復号（stdout の JSONL と rollout を receipt
+            の欄へ）は transport とは別の 1 概念で、純関数 450 行が class
+            の周りに並ぶ。<code>incompleteExecution</code> は 7 位置引数で 17
+            箇所から呼ばれ、引数順の bug が型で捕まらない。加えて汎用 discovery
+            が <code>/workspace/wordpress</code> と
+            <code>\bwordpress\b</code> を知っている（ADR 0011
+            の合図。architecture test の語彙 pattern
+            には含まれないので検出されない）。
+          </p>
+          <p>
+            <b>Solution.</b> 復号を <code>codex-transcript.ts</code> に移し
+            <code
+              >decodeCodexRun(result, run) → DecodedRun | { reasonDetail }</code
+            >
+            の 1 interface にする。<code>incompleteExecution</code> は options
+            object。依存 mount path は
+            <code>run.dependencySource.mountPath</code> として profile
+            が渡し、labRequests 判定は <code>run.lab.endpoint</code> の hostname
+            を使う（現在の値はどちらも "wordpress" なので receipt は同一）。
+          </p>
+          <ul class="text-sm list-disc pl-5 space-y-1">
+            <li>locality: 復号 bug は 1 module</li>
+            <li>interface shrinks: 7 位置引数 → 名前付き 1 object</li>
+            <li>
+              汎用 discovery から WordPress 語が消え、architecture test に
+              <code>\bwordpress\b</code> を足せる
+            </li>
+            <li>
+              tests: codex-native-agent-runtime.test.ts（23）と
+              codex-gvisor-sandbox.test.ts（6）が receipt と mount を pin。復号
+              module に直接 test を 6 件ほど足し、class 越しの重複を減らす
+            </li>
+          </ul>
+          <div
+            class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"
+          >
+            注意: transport は不変条件 2・3
+            に隣接する。復号は読み取りだけで隔離と承認（admittedRun /
+            sandboxAdmissionFailure / assertBrokerAddress）には触れないことを PR
+            の「変えなかったこと」に書く。
+          </div>
+          <p class="text-xs text-slate-500">
+            不変条件リスク: 2・3 に隣接するが変更しない（admission と broker
+            は対象外）。PARKING 吸収: なし。
+          </p>
+        </article>
+
+        <!-- ===================== 8 ===================== -->
+        <article
+          id="c8"
+          class="rounded-xl border border-slate-200 bg-white p-6 space-y-5"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <h2 class="text-xl font-serif">
+              8. host 側の source / snapshot 供給を 1
+              回で開く（wordpress-host.ts）
+            </h2>
+            <div class="flex gap-2 shrink-0">
+              <span
+                class="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs"
+                >Worth exploring</span
+              >
+              <span
+                class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs"
+                >ports &amp; adapters (Docker · WordPress.org)</span
+              >
+            </div>
+          </div>
+          <pre class="font-mono text-sm text-slate-700 whitespace-pre-wrap">
+src/cli/wordpress-host.ts（711 行）
+  selectionBoundaries と boundaries が同じ 5 つを別々に組む: openWordPressOrgTargetSource ×2(+latestVersion で 3) · openMaterializedSources ×2 · openWordPressCoreSource ×2 · openSnapshot ×2 · openTranscribedWordfenceProgramme ×2
+  loadSnapshot が snapshot store の file 配置（`${digest.slice(7)}.json`）を知っている</pre>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+              <p class="label text-slate-500 mb-2">
+                Before — mass: interface と implementation がほぼ同じ高さ
+              </p>
+              <div class="flex gap-3 items-end h-40 text-xs">
+                <div class="flex-1 flex flex-col">
+                  <div class="mod h-16 flex items-center justify-center">
+                    selectionBoundaries<br />5 open 呼び
+                  </div>
+                  <div
+                    class="mod h-16 flex items-center justify-center bg-stone-100"
+                  >
+                    impl 60 行
+                  </div>
+                </div>
+                <div class="flex-1 flex flex-col">
+                  <div class="mod h-16 flex items-center justify-center">
+                    boundaries<br />同じ 5 open + 4
+                  </div>
+                  <div
+                    class="mod h-20 flex items-center justify-center bg-stone-100"
+                  >
+                    impl 230 行
+                  </div>
+                </div>
+                <div class="flex-1 flex flex-col">
+                  <div class="mod h-12 flex items-center justify-center">
+                    latestVersion<br />open ×1
+                  </div>
+                  <div
+                    class="mod h-8 flex items-center justify-center bg-stone-100"
+                  >
+                    impl
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+              <p class="label text-slate-500 mb-2">
+                After — 1 deep module、3 caller は短い
+              </p>
+              <div class="flex gap-3 items-end h-40 text-xs">
+                <div class="flex-1 flex flex-col">
+                  <div class="mod-thick h-8 flex items-center justify-center">
+                    openWordPressHostSources(host, wpVersion, deps)
+                  </div>
+                  <div
+                    class="mod-thick h-28 flex items-center justify-center bg-stone-100 text-center"
+                  >
+                    targetSource · materialized · core · snapshotStore ·
+                    programme<br />loadSnapshot · sourceFor · coreOf
+                  </div>
+                </div>
+                <div class="flex-1 flex flex-col">
+                  <div
+                    class="mod h-6 flex items-center justify-center text-slate-400"
+                  >
+                    selection
+                  </div>
+                  <div
+                    class="mod h-6 flex items-center justify-center text-slate-400"
+                  >
+                    campaign
+                  </div>
+                  <div
+                    class="mod h-6 flex items-center justify-center text-slate-400"
+                  >
+                    latestVersion
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p>
+            <b>Problem.</b> 「この host で source を取得・固定・解決する」が 2
+            つの closure に二重に書かれ、<code>latestVersion</code> が 3
+            つ目を組む。<code>loadSnapshot</code> は snapshot module の内部 path
+            を知る。
+          </p>
+          <p>
+            <b>Solution.</b> <code>openWordPressHostSources()</code> に 5 つの
+            open と
+            <code>loadSnapshot / sourceFor / coreOf</code>
+            を沈め、selection・campaign・latestVersion はそれを受ける。<code
+              >snapshot</code
+            >
+            module に <code>load(digest)</code> を足して path 知識を戻す。
+          </p>
+          <ul class="text-sm list-disc pl-5 space-y-1">
+            <li>
+              locality: WordPress.org・core image・snapshot の配線が 1 箇所
+            </li>
+            <li>約 −100 行</li>
+            <li>
+              tests: wordpress-host.test.ts（4）と cli.test.ts が runDocker /
+              fetch を差し替えて pin。無変更で通ることが条件
+            </li>
+          </ul>
+          <p class="text-xs text-slate-500">
+            不変条件リスク: なし（preflight と gVisor
+            の起動条件は触らない）。PARKING 吸収: なし。
+          </p>
+        </article>
+
+        <!-- ===================== 9 ===================== -->
+        <article
+          id="c9"
+          class="rounded-xl border border-slate-200 bg-white p-6 space-y-5"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <h2 class="text-xl font-serif">
+              9. CLI を command table にし、PARKING の削除候補（review open ·
+              eval score/keys/rubric/compare · replay Verifier）を行削除にする
+            </h2>
+            <div class="flex gap-2 shrink-0">
+              <span
+                class="px-2 py-0.5 rounded bg-slate-200 text-slate-700 text-xs"
+                >Speculative</span
+              >
+              <span
+                class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs"
+                >in-process</span
+              >
+            </div>
+          </div>
+          <pre class="font-mono text-sm text-slate-700 whitespace-pre-wrap">
+src/cli/index.ts（1,600 行）: runCli の switch 800 行 · 34 command · humanMinutes + recordHumanEffort の対が 5 回
+削除候補（PARKING 2026-10-13 / 10-14）:
+  review open: cli 20 行
+  eval score / keys / rubric: cli 130 行 + evaluation/key-registry.ts 30 + blind-rubric.ts 41 + profiles/answer-key.ts 93（eval compare は OPERATIONS §8 が旧軸の読取用と記す）
+  replay Verifier (#126): smoke-replay-verifier.ts 207 + smoke-replay-recipe.ts 455 + lab/recorder/replay-cli.ts 387 + reverify --smokeReplayDigest · tests 438 行 · scripts/smoke-real-lab.mjs
+skill が実際に打つ command: review export · decide · scope · reproduced · reverify · draft · authorize（.claude/skills/wbh-*）</pre>
+          <div class="rounded-lg border border-slate-200 bg-white p-4">
+            <pre class="mermaid">
+flowchart LR
+  subgraph before["Before: runCli switch · 34 case · 各 case が parse + 実行 + 整形"]
+    direction TB
+    A1[review decide] --> R[Review class · deep]
+    A2[review open] --> R
+    A3[review scope] --> R
+    A4[eval score] --> EV[Evaluation]
+    A5[eval keys] --> KR[key-registry]
+    A6[eval rubric] --> BR[blind-rubric]
+    A7[lab up / down] --> P[CliProfile]
+    A8[… 27 more] --> P
+  end
+  subgraph after["After: 1 行 = 1 command"]
+    direction TB
+    TBL["commands: { name, usage, parse(values) → input, run(ctx, input) → lines }[]"] --> R2[Review]
+    TBL --> P2[CliProfile]
+    TBL --> L2[Ledger]
+  end
+  classDef deep fill:#0f172a,color:#f8fafc,stroke:#0f172a;
+  class R,TBL deep
+            </pre>
+          </div>
+          <p>
+            <b>Problem.</b> <code>Review</code> と
+            <code>Ledger</code> は既に深いが、その上の cli 層は 34 case が
+            parse・実行・整形を一つの switch に書く shallow module で、command
+            の追加削除が switch と USAGE 文字列と options 表の 3
+            箇所に散る。PARKING の削除 4 件はいずれも「case
+            を消す」作業だが、現状では test（cli.test.ts 66
+            件）の該当行の特定も手作業。
+          </p>
+          <p>
+            <b>Solution.</b> command を表の行にし、USAGE と options
+            を行から導出する。削除は行削除 + 対応 test 削除になる。replay
+            Verifier は <code>reverify</code> の
+            <code>smokeReplayDigest</code> 分岐と共に 1 PR で消す（OPERATIONS §7
+            は週次 smoke を <code>review reverify</code> で代えると記す）。
+          </p>
+          <ul class="text-sm list-disc pl-5 space-y-1">
+            <li>interface shrinks: 34 → 約 28 command</li>
+            <li>約 −1,500 行（src）−900 行（tests）</li>
+            <li>
+              skill 3 本の依存は維持（export · decide · scope · reproduced ·
+              reverify · draft · authorize）
+            </li>
+            <li>
+              tests: cli.test.ts の削除 command 分を消し、表の USAGE 導出に 1 件
+            </li>
+          </ul>
+          <div
+            class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"
+          >
+            PARKING の再開条件（Step 2、skill 3 本が 10
+            件回って出力が安定したとき）が先。本報告は候補の形と大きさを示すだけで、着手時期は所有者の判断。<code
+              >eval compare</code
+            >
+            は旧 Trial の読取用として残す選択もある。
+          </div>
+          <p class="text-xs text-slate-500">
+            不変条件リスク: なし（6・7 の判断点は Review class
+            側。削除対象は表示と研究用採点）。PARKING 吸収: 「review CLI
+            の多機能を skill 側へ」「review open」「eval score / keys / rubric /
+            compare」「replay Verifier（#126）」。
+          </p>
+        </article>
+      </section>
+
+      <section
+        id="top-recommendation"
+        class="rounded-xl border-2 border-slate-900 deep p-8 space-y-3"
+      >
+        <p class="label text-slate-300">Top recommendation</p>
+        <h2 class="text-2xl font-serif">
+          <a href="#c2" class="underline decoration-slate-400"
+            >2. WordPress campaign session</a
+          >
+          を先に、次に
+          <a href="#c4" class="underline decoration-slate-400"
+            >4. discovery plan の profile 移動</a
+          >
+        </h2>
+        <p class="text-sm text-slate-200">
+          cli/wordpress.ts は直近 10 日で最も変更された file（34
+          commit）で、config 読み・boundaries 構築・Verification 構築が 8 method
+          に繰り返される。session に沈めると 1,733 行の半分が消え、候補
+          3（prompt registry）と 4（plan 移動）がその上に自然に乗る。候補
+          1（Ledger.readAll）は独立で最小なので、どの順でも最初の 1 PR
+          にできる。
+        </p>
+        <p class="text-xs text-slate-400">
+          この報告は選択肢の提示であり、実装・grilling
+          は行っていない。所有者が候補を選んだ時点で、PR テンプレートの 5
+          項目（問い・変えたこと・変えなかったこと・測った数字・消し方）に沿って
+          1 候補 = 1 PR で進める。
+        </p>
+      </section>
+    </main>
+  </body>
+</html>
