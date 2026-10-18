@@ -8,6 +8,7 @@ import {
   walkCanonicalSourceTree,
   type SourceTreeRejection,
 } from "../../../infrastructure/canonical-source-tree.js";
+import type { AcquiredSource } from "../../../snapshot/index.js";
 import { canonicalJson, sha256Digest } from "./canonical-json.js";
 import {
   intakeDispositionSchema,
@@ -46,6 +47,45 @@ interface CaptureRejected {
 }
 
 type CaptureResult = CaptureSuccess | CaptureRejected;
+
+/**
+ * The intake store layout lives here and nowhere else: `objects/` holds the
+ * canonical JSON records, `blobs/` holds the captured bytes by digest.
+ */
+const TARGET_INTAKE_SUBDIRECTORY = "target-intake";
+
+/** Where a store root keeps its intake packets and captured blobs. */
+export function targetIntakeDirectory(storageDirectory: string): string {
+  return join(storageDirectory, TARGET_INTAKE_SUBDIRECTORY);
+}
+
+function blobPath(intakeDirectory: string, digest: string): string {
+  return join(intakeDirectory, "blobs", digest.slice("sha256:".length));
+}
+
+/** Reads only the captured bytes named by an intake packet. */
+export function acquiredSourceFromIntakePacket(
+  packet: TargetIntakePacket,
+  intakeStorageDirectory: string,
+): AcquiredSource {
+  const files = new Map(
+    packet.sourceTree.manifest.entries.map((entry) => [
+      entry.path,
+      entry.digest,
+    ]),
+  );
+  return {
+    identity: packet.pluginIdentity,
+    version: packet.version,
+    manifest: packet.sourceTree.manifest,
+    async readFile(path) {
+      const digest = files.get(path);
+      if (digest === undefined)
+        throw new Error("File is absent from source manifest");
+      return readFile(blobPath(intakeStorageDirectory, digest));
+    },
+  };
+}
 
 function rawDigest(bytes: Uint8Array): string {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -415,10 +455,12 @@ class LocalDirectoryTargetIntake implements TargetIntake {
       policy: { id: request.policy.id, digest: request.policy.digest },
     };
 
-    const blobDirectory = join(this.#storageDirectory, "blobs");
-    await mkdir(blobDirectory, { recursive: true });
+    await mkdir(join(this.#storageDirectory, "blobs"), { recursive: true });
     for (const file of capture.files) {
-      await persistBytes(join(blobDirectory, file.digest.slice(7)), file.bytes);
+      await persistBytes(
+        blobPath(this.#storageDirectory, file.digest),
+        file.bytes,
+      );
     }
     const packetRef = await this.#persistJson(packet);
     const receipt: IntakeReceipt = {

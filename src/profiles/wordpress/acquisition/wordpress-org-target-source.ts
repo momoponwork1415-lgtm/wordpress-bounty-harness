@@ -5,7 +5,10 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 
 import { canonicalJson, sha256Digest } from "./canonical-json.js";
-import { openLocalDirectoryTargetIntake } from "./local-directory-target-intake.js";
+import {
+  openLocalDirectoryTargetIntake,
+  targetIntakeDirectory,
+} from "./local-directory-target-intake.js";
 import {
   wordPressOrgAcquireRequestSchema,
   wordPressOrgAcquisitionOriginalSchema,
@@ -508,7 +511,7 @@ class FileWordPressOrgTargetSource implements WordPressOrgTargetSource {
         await writeFile(path, file.bytes, { flag: "wx" });
       }
       const intake = openLocalDirectoryTargetIntake({
-        storageDirectory: join(this.#storageDirectory, "target-intake"),
+        storageDirectory: targetIntakeDirectory(this.#storageDirectory),
         sourceCaptureKind: "captured-wordpress-org-archive",
       });
       const disposition = await intake.intake({

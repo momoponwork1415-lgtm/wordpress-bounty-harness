@@ -1,6 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-
 import {
   SourceAcquisitionError,
   type AcquiredSource,
@@ -13,6 +10,10 @@ import type {
   WordPressOrgTargetSource,
 } from "./wordpress-org-contracts.js";
 import type { TargetIntakePacket } from "./contracts.js";
+import {
+  acquiredSourceFromIntakePacket,
+  targetIntakeDirectory,
+} from "./local-directory-target-intake.js";
 import {
   openCapturedWordPressOrgSvnSource,
   type CapturedWordPressOrgSvnPin,
@@ -87,30 +88,10 @@ export function openWordPressOrgSnapshotSource(options: {
           });
         }
         packet = acquired.intake.packet;
-        const files = new Map(
-          packet.sourceTree.manifest.entries.map((entry) => [
-            entry.path,
-            entry.digest,
-          ]),
+        target = acquiredSourceFromIntakePacket(
+          packet,
+          targetIntakeDirectory(options.storageDirectory),
         );
-        target = {
-          identity: packet.pluginIdentity,
-          version: packet.version,
-          manifest: packet.sourceTree.manifest,
-          async readFile(path) {
-            const digest = files.get(path);
-            if (digest === undefined)
-              throw new Error("File is absent from source manifest");
-            return readFile(
-              join(
-                options.storageDirectory,
-                "target-intake",
-                "blobs",
-                digest.slice(7),
-              ),
-            );
-          },
-        };
       }
       return {
         target,

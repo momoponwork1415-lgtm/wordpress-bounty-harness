@@ -12,7 +12,10 @@ import {
   SourceAcquisitionError,
   type AcquiredSource,
 } from "../../../snapshot/index.js";
-import { acquiredSourceFromIntakePacket } from "./intake-packet-source.js";
+import {
+  acquiredSourceFromIntakePacket,
+  targetIntakeDirectory,
+} from "./local-directory-target-intake.js";
 import type { TargetIntakePacket, TargetIntakePolicy } from "./contracts.js";
 import {
   wordPressOrgTargetObservationRefSchema,
@@ -107,7 +110,7 @@ export function openWordPressOrgPluginDependencySource(options: {
   const sourceFromPacket = (packet: TargetIntakePacket) =>
     acquiredSourceFromIntakePacket(
       packet,
-      join(options.storageDirectory, "target-intake"),
+      targetIntakeDirectory(options.storageDirectory),
     );
   const declaredBy = async (
     packet: TargetIntakePacket,
