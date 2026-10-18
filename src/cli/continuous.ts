@@ -62,6 +62,11 @@ export interface ContinuousDeps {
   readonly stateDirectory: string;
   readonly campaignPrefix: string;
   readonly ledger: Pick<Ledger, "read">;
+  readonly verifyConcurrency?: number;
+  verifyNext?(): Promise<{
+    readonly findingId: string;
+    readonly status: string;
+  } | null>;
   /** Freezes a batch of at least SELECT_MINIMUM targets, or none. */
   select(): Promise<{
     readonly batchId: string | null;
@@ -345,7 +350,37 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       await deps.preflight();
       if (stopRequested()) return stop("operator");
       await deps.cleanupLeftovers();
-      return await loop();
+      let verifying = true;
+      const verifyWorker = async () => {
+        while (verifying && !stopRequested()) {
+          try {
+            const result = await deps.verifyNext!();
+            if (result !== null) {
+              deps.io.log(
+                `${deps.clock().toISOString()} verification finding=${result.findingId} status=${result.status}`,
+              );
+              continue;
+            }
+          } catch (error) {
+            deps.io.log(
+              `${deps.clock().toISOString()} verification error=${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+          await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+        }
+      };
+      const workers =
+        deps.verifyNext === undefined
+          ? []
+          : Array.from({ length: deps.verifyConcurrency ?? 1 }, () =>
+              verifyWorker(),
+            );
+      try {
+        return await loop();
+      } finally {
+        verifying = false;
+        await Promise.all(workers);
+      }
     } finally {
       deps.signals.off("SIGINT", onSignal);
       deps.signals.off("SIGTERM", onSignal);

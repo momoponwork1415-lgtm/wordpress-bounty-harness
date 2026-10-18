@@ -14,7 +14,7 @@ import {
 export class DiscoveryReportError extends Error {}
 
 export type ReportFailure = {
-  readonly reason: Exclude<NativeRunReceipt["reason"], "unavailable">;
+  readonly reason: Exclude<NativeRunReceipt["reason"], "unavailable"> | "depth";
   readonly reasonDetail?: string;
   readonly providerLimit?: "rate-limit" | "quota";
 };
@@ -41,7 +41,7 @@ type ChildRecoveryOptions = RecoveryContext & {
   };
   readonly trialId: string;
   readonly trialOrdinal: number;
-  readonly labId: string;
+  readonly labId?: string;
   readonly history:
     | { readonly mode: "none" }
     | {
@@ -83,7 +83,9 @@ export async function recoverChildAgentReports(
       trialOrdinal: options.trialOrdinal,
       runKind: "child",
       parentRunId: options.run.runId,
-      labId: options.labId,
+      ...(options.labId === undefined
+        ? { labAttached: false as const }
+        : { labId: options.labId, labAttached: true as const }),
       history: options.history,
       configuration: childConfiguration(options, child),
     });

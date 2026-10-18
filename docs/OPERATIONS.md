@@ -76,7 +76,7 @@ provider の構造化エラー `cyber_policy` は `incomplete(provider: provider
 wall 到達時は agent と broker を名前で `docker stop -t 10`（失敗時は `docker kill`）してから、子の報告を回収し `discovery-run-finished` に `incomplete(wall)` を記録して Lab を片付ける。
 `continuous run` に SIGTERM を送ると進行中の探索 run を同じ手順で停止し、`stopped reason=operator` を記録して終了する。
 
-固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。
+固定 source から列挙した入口索引は既定で探索 prompt の末尾に付く。比較実験で外すときは campaign 設定に `"entryIndex": false` を書く。索引の有無と有効時の digest は `discovery-run-started` に記録される。v5 の Root は各入口 id の coverage record を最終報告に含める。`coverage.maxUnvisitedRatio` の既定は 0.2。無効な記録、または完全な索引で未訪問が閾値を超える終了は `incomplete(depth)` となり、正常な候補 0 件に数えない。索引が incomplete の場合は閾値を適用しない。
 
 既定promptは `wp2shell-bounty-v5`（2026-10-16、所有者決定）、入口索引は固定source由来のカタログ入力として既定で有効。索引の全件処理は終了条件にしない。`wp2shell-bounty-v4`、`wp2shell-bounty-v3`、`wp2shell-bounty-v2` と `short-objective-managed-v4` は比較・履歴照合用に残す。`ledger runtime` とrun receiptで実際のwall・coverageを確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
 
@@ -114,6 +114,20 @@ wall 到達時は agent と broker を名前で `docker stop -t 10`（失敗時�
 | `incomplete` | 理由コードと次の手 | 環境・手順の不足なら再検証を指示する。`no-judge`（判定器がない種別）なら手で確かめる |
 
 `contradicted` は件数しか出ない。
+
+### 探索だけ回し、検証を 1 件ずつ回す
+
+`campaign.json` の `discovery.lab` を `"none"` にすると探索用 Lab を供給せず、Finding は台帳に記録して検証を後へ送る。省略時は `"attached"`。設定変更は campaign.json の PR で行い、prompt 本文は変えない。
+
+```sh
+harness campaign run <slug> --campaign <id> --config <campaign.json> [--repeat 3]
+harness verify next --campaign <id> --config <campaign.json>
+harness ledger funnel --campaign <id>
+```
+
+`verify next` は未検証または既存の有界再検証規則に該当する Finding を 1 件選び、その Finding の Snapshot に新しい検証 Lab を立てて Verifier と判定器を回し、Lab を片付ける。対象が無ければ `no verification pending` と出す。`--repeat 3` は同じ Snapshot に別々の Trial ID を 3 つ作る。既定は 1 回。funnel の `by Lab` は探索用 Lab の有無、`verification Lab failed` は検証側の供給失敗を示す。
+
+`continuous run --verify-concurrency <n>` は探索 batch と並行して検証 queue を消化する。既定の `n` は 1。検証 Lab の同時数は `resources.maxConcurrentTargets` に含めず、`--verify-concurrency` で別に制限する。
 
 ### 継続運転（`continuous run`、最終設計 P6）
 
@@ -155,6 +169,7 @@ harness continuous status --state <dir>
 
 ```
 harness review inspect --campaign <id> --finding <id>        # 1件の参照情報を開き、台帳へ記録する（review-item-opened）
+harness review parked --campaign <id>                       # parked Finding と reason を一覧する
 harness review export --campaign <id> --finding <id>         # 1画面のレビュー材料をJSON 1本（schema review-export/v1）で出す。台帳には書かない。skillはこれだけを読む
 harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--minutes <n>]
 harness review dedupe --campaign <id> --finding <id>          # ローカルWordfence履歴mirrorと照合
@@ -168,6 +183,7 @@ harness review outcome --candidate <id> --outcome triaged|resolved|duplicate|inf
 ```
 
 - `export` は Finding（claim / attackerPosition / brokenProperty / impact）、HTTP の method / path / status 行、反証メモ、検証 Lab の実行前後差分の要約（option 名と digest、ユーザーの役割、テーブル件数と checksum）、探索した版と台帳が知る最新版、install 数、Private Evidence の path を 1 本の JSON にまとめる。候補本文、payload、HTTP 本文、option 値は path と digest でだけ参照し、stdout に値を出さない。
+- `review parked` の reason は `outside-programme-boundary`（影響分類が対象外）と `admin-configuration-precondition`（特定値または非既定の管理者設定が前提）の 2 種類。どちらも Finding の Private Evidence を保持し、検証・review queue に入れない。
 - `decide --minutes` は人間がその項目に使った時間を `human-effort-recorded` に分で、`review-decided` に `humanElapsedSeconds` として残す。決定は検証 ID、探索 run ID、prompt digest に結び付いて記録され、提出から run と prompt まで辿れる。
 - `scope` は判定器の証拠と選定記録から事実を読む。最新版での確認が要るプログラムは、`reverify` が `runtime-confirmed` を返した後でだけ満たされる。
 - 確認済みrouteのないFindingは、前回が`incomplete(precondition)`でLab記録があり、`--version`なしで選定されたSnapshotが元のFindingと同じ場合だけ、前回と異なるscenario IDのLabで独立再検証できる。Snapshotが異なる場合と`--version`付きの修正版比較はLab起動前に拒否する。元のverification eventは残り、再試行は新しいverificationIdとsetup digestを記録する。
@@ -178,7 +194,7 @@ harness review outcome --candidate <id> --outcome triaged|resolved|duplicate|inf
 ## 4. 見るべき数字
 
 ```
-harness ledger funnel --campaign <id> | --since <ISO>  # --since は全 campaign の指定時刻以降の event を合算。raw → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome、種別別、arm別、転帰と報奨
+harness ledger funnel --campaign <id> | --since <ISO>  # --since は全 campaign の指定時刻以降の event を合算。探索の incomplete(depth) を独立表示。raw → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome、種別別、arm別、転帰と報奨
 harness ledger stops [--campaign <id>] [--since <ISO>]  # run の失敗理由×provider上限、target-skipped の段階×理由、Lab 失敗段階、campaign 停止理由の件数。拒否 run は explore 件数と 60 秒以内の件数も出す
 harness ledger usage [--campaign <id>]    # providerが返したtokenを対象・UTC日ごとに合計。返らなかった項目はunavailableの件数
 harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、CLI版、カタログdigest、tier、access、認証の組ごとのrun数

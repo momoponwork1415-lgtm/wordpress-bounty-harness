@@ -601,10 +601,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
     }
     if (
       command.executable !== "codex" ||
-      !/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.labHost.name) ||
-      isIP(command.labHost.ipv4) !== 4 ||
+      (command.labHost !== undefined &&
+        (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.labHost.name) ||
+          isIP(command.labHost.ipv4) !== 4)) ||
       (command.databaseHost !== undefined &&
         (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.databaseHost.name) ||
+          command.labHost === undefined ||
           command.databaseHost.name === command.labHost.name ||
           isIP(command.databaseHost.ipv4) !== 4)) ||
       command.sourceMount.mode !== "ro" ||
@@ -705,7 +707,9 @@ export class GvisorCodexSandbox implements CodexSandbox {
         // The prompt arrives on stdin.
         "--interactive",
         `--network=${command.grant.dockerNetworkName}`,
-        `--add-host=${command.labHost.name}:${command.labHost.ipv4}`,
+        ...(command.labHost === undefined
+          ? []
+          : [`--add-host=${command.labHost.name}:${command.labHost.ipv4}`]),
         ...(command.databaseHost === undefined
           ? []
           : [

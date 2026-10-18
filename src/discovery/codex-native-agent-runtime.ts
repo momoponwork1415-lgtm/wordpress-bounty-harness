@@ -41,6 +41,7 @@ const reportSchema = z.strictObject({
   leads: z.array(claimTextSchema),
   examined: z.string().max(16_384),
   unexamined: z.string().max(16_384),
+  coverage: z.unknown().optional(),
 });
 /** Children are not constrained by Root's --output-schema; preserve structured coverage as text. */
 const childCoverageSchema = z
@@ -69,6 +70,7 @@ const candidateReportSchema = z.object({
   leads: z.array(z.unknown()).default([]),
   examined: childCoverageSchema.default(""),
   unexamined: childCoverageSchema.default(""),
+  coverage: z.unknown().optional(),
 });
 function extractCandidateReport(message: string) {
   const value = JSON.parse(message) as unknown;
@@ -136,6 +138,16 @@ const reportJsonSchema = {
   required: ["findings", "leads", "examined", "unexamined"],
 } as const;
 
+function reportJsonSchemaFor(coverageSchema?: Record<string, unknown>) {
+  if (coverageSchema === undefined) return reportJsonSchema;
+  const { $schema: _meta, ...recordSchema } = coverageSchema;
+  return {
+    ...reportJsonSchema,
+    properties: { ...reportJsonSchema.properties, coverage: recordSchema },
+    required: [...reportJsonSchema.required, "coverage"],
+  };
+}
+
 export interface CodexSandboxCommand {
   readonly executable: "codex";
   readonly args: readonly string[];
@@ -161,7 +173,7 @@ export interface CodexSandboxCommand {
     readonly path: "/workspace/research";
     readonly mode: "rw";
   };
-  readonly labHost: { readonly name: string; readonly ipv4: string };
+  readonly labHost?: { readonly name: string; readonly ipv4: string };
   readonly databaseHost?: { readonly name: string; readonly ipv4: string };
 }
 export interface CodexSandboxResult {
@@ -199,11 +211,13 @@ export interface DiscoveryTransportRun {
   readonly targetSnapshotDigest: string;
   readonly profile: AgentRuntimeProfile;
   readonly prompt: string;
+  /** Profile-owned Root report schema; children keep their existing report. */
+  readonly coverageSchema?: Record<string, unknown>;
   /** Screening uses one agent even when the runtime profile permits children. */
   readonly coordination?: "solo" | "cooperative";
   /** Verification uses the same isolated transport with a different sealed report. */
   readonly outputKind?: "verification";
-  readonly lab: {
+  readonly lab?: {
     readonly endpoint: string;
     readonly networkName: string;
     readonly internalIp: string;
@@ -238,19 +252,22 @@ const discoveryTransportRunSchema = z.strictObject({
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
+  coverageSchema: z.record(z.string(), z.unknown()).optional(),
   coordination: z.enum(["solo", "cooperative"]).optional(),
   outputKind: z.literal("verification").optional(),
-  lab: z.strictObject({
-    endpoint: z.url(),
-    networkName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
-    internalIp: z.ipv4(),
-    database: z
-      .strictObject({
-        host: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
-        ipv4: z.ipv4(),
-      })
-      .optional(),
-  }),
+  lab: z
+    .strictObject({
+      endpoint: z.url(),
+      networkName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
+      internalIp: z.ipv4(),
+      database: z
+        .strictObject({
+          host: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+          ipv4: z.ipv4(),
+        })
+        .optional(),
+    })
+    .optional(),
   campaignInput: campaignInputV1Schema,
   sourceDirectory: z.string().min(1),
   sourceTree: z.strictObject({
@@ -980,6 +997,9 @@ function admittedRun(
     discoveryTransportRunSchema.safeParse(run).success &&
     run.campaignInput.snapshotDigest === run.targetSnapshotDigest &&
     run.campaignInput.modelProfileDigest === run.profile.digest &&
+    (run.lab === undefined) ===
+      ("mode" in run.campaignInput.lab &&
+        run.campaignInput.lab.mode === "none") &&
     admitAgentRuntimeProfile(run.profile, sandboxImage).status === "admitted" &&
     run.prompt.length > 0 &&
     isAbsolute(run.sourceDirectory) &&
@@ -993,6 +1013,7 @@ function admittedRun(
 }
 
 function admittedLabEndpoint(run: DiscoveryTransportRun): URL | undefined {
+  if (run.lab === undefined) return undefined;
   let endpoint: URL;
   try {
     endpoint = new URL(run.lab.endpoint);
@@ -1031,7 +1052,7 @@ function assertBrokerAddress(
   grant: ProviderCredentialEgressGrant,
   run: DiscoveryTransportRun,
 ): boolean {
-  if (grant.dockerNetworkName !== run.lab.networkName)
+  if (run.lab !== undefined && grant.dockerNetworkName !== run.lab.networkName)
     throw new Error("Provider grant is not on the Lab network");
   const login = run.profile.authenticationMethod === "chatgpt-oauth-host";
   if (
@@ -1110,7 +1131,7 @@ function sandboxCommand(
   run: DiscoveryTransportRun,
   grant: ProviderCredentialEgressGrant,
   cooperative: boolean,
-  labEndpoint: URL,
+  labEndpoint: URL | undefined,
   login: boolean,
 ): CodexSandboxCommand {
   return {
@@ -1126,7 +1147,7 @@ function sandboxCommand(
         content: JSON.stringify(
           run.outputKind === "verification"
             ? verificationReportJsonSchema
-            : reportJsonSchema,
+            : reportJsonSchemaFor(run.coverageSchema),
         ),
       },
     ],
@@ -1155,8 +1176,10 @@ function sandboxCommand(
           },
         }
       : {}),
-    labHost: { name: labEndpoint.hostname, ipv4: run.lab.internalIp },
-    ...(run.lab.database === undefined
+    ...(labEndpoint === undefined || run.lab === undefined
+      ? {}
+      : { labHost: { name: labEndpoint.hostname, ipv4: run.lab.internalIp } }),
+    ...(run.lab?.database === undefined
       ? {}
       : {
           databaseHost: {
@@ -1206,7 +1229,7 @@ export class CodexNativeAgentRuntime {
     if (!admittedRun(run, this.sandboxImage, state.cooperative))
       return incompleteExecution(state, "policy", this.clock().toISOString());
     const labEndpoint = admittedLabEndpoint(run);
-    if (labEndpoint === undefined)
+    if (run.lab !== undefined && labEndpoint === undefined)
       return incompleteExecution(state, "policy", this.clock().toISOString());
     const granted = await this.#runWithBroker(
       run,
@@ -1299,7 +1322,7 @@ export class CodexNativeAgentRuntime {
   async #runWithBroker(
     run: DiscoveryTransportRun,
     cooperative: boolean,
-    labEndpoint: URL,
+    labEndpoint: URL | undefined,
     signal?: AbortSignal,
   ): Promise<GrantedSandboxRun | undefined> {
     return this.broker
@@ -1313,7 +1336,9 @@ export class CodexNativeAgentRuntime {
           maxRequestBytes: cooperative ? 8 * 1024 * 1024 : 1024 * 1024,
           maxResponseBytes: 8 * 1024 * 1024,
           expiresAt: run.expiresAt,
-          agentNetworkName: run.lab.networkName,
+          ...(run.lab === undefined
+            ? {}
+            : { agentNetworkName: run.lab.networkName }),
         },
         async (grant) => {
           const login = assertBrokerAddress(grant, run);

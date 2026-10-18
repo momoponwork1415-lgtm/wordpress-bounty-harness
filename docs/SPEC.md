@@ -11,7 +11,7 @@
 
 ## 2. 不変条件
 
-1. 探索エージェントへ渡すのは、固定source、人間が書いたtrust境界宣言、Programme Boundary、Lab、そして時点で切った対象の公開履歴（カタログ情報のみ）だけ。評価対象の答え（held-outのadvisory本文、原因箇所、PoC）と、評価runではheld-outの公開日以降の記録は渡さない。PoC、payload、他人の再現手順は本番でも渡さない（[ADR 0012](adr/0012-time-cut-known-vulnerability-history.md)）。
+1. 探索エージェントへ渡すのは、固定source、人間が書いたtrust境界宣言、Programme Boundary、任意のLab、そして時点で切った対象の公開履歴（カタログ情報のみ）だけ。評価対象の答え（held-outのadvisory本文、原因箇所、PoC）と、評価runではheld-outの公開日以降の記録は渡さない。PoC、payload、他人の再現手順は本番でも渡さない（[ADR 0012](adr/0012-time-cut-known-vulnerability-history.md)）。
 2. 探索・検証はgVisor（`runsc`）の使い捨て環境でのみ対象を実行する。ホストで対象コードを実行しない。弱い隔離へ暗黙に切り替えない。外向き通信は認証ブローカー経由のprovider APIだけ。
 3. `runtime-confirmed` はHarness所有の決定論的判定器だけが出す。エージェントやrecipeの自己申告は確認にしない。証明はnonce付きcanaryの回収に限り、リバースシェル・永続化・ホストアクセスを使わない。
 4. 検証の失敗（環境・手順・観測・証拠の不足）は `incomplete` であり、`contradicted` にも棄却にもしない。
@@ -79,7 +79,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 - 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
 - 対象の公開履歴: ローカルWordfence履歴DBから、snapshotの版より前（評価runではheld-outの公開日より前）に公開された対象プラグインの記録を抽出して渡す。内容は種別、影響版、修正版、公開日、公開記録のタイトル、修正版との差分で変わったファイルの一覧まで。PoC・payload・再現手順は含めない。渡した・渡さないを `CampaignInput` に記録する（ADR 0012）。
-- 入力: 版・digest付きの目的prompt `wp2shell-bounty-v5` を既定にし、`wp2shell-bounty-v4`、`wp2shell-bounty-v3`、`wp2shell-bounty-v2` と `short-objective-managed-v4` を比較・履歴照合用に保持する。`screening-v1` 等の旧版は過去Trialの目的文とdigestの照合用に残し、旧screeningを現行modeで新規起動しない。人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、固定sourceから生成した入口索引、Lab HTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB accountを渡す。入口索引は入口の所在だけを示すカタログであり、経路や分担を指示しない。索引なしの比較Trialは別armとして記録し、同じ比較分母に混ぜない。分担と仮説はRootが決める。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
+- 入力: 版・digest付きの目的prompt `wp2shell-bounty-v5` を既定にし、`wp2shell-bounty-v4`、`wp2shell-bounty-v3`、`wp2shell-bounty-v2` と `short-objective-managed-v4` を比較・履歴照合用に保持する。`screening-v1` 等の旧版は過去Trialの目的文とdigestの照合用に残し、旧screeningを現行modeで新規起動しない。人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、固定sourceから生成した入口索引、Lab（任意）のHTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB accountを渡す。入口索引は入口の所在だけを示すカタログであり、経路や分担を指示しない。索引なしの比較Trialは別armとして記録し、同じ比較分母に混ぜない。分担と仮説はRootが決める。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
 - 許可する操作: 固定sourceの読み取り、LabへのHTTP、Lab DBのRO accountによる読み取り。探索runにcanaryは渡さず、canaryの発行と確認は検証段階のHarnessが行う。外向き通信は認証ブローカー経由のprovider APIだけ。
 - 構成: 対象ごとにRoot＋最大3子の協調Trialを1回行う。Harnessは人数上限、隔離、wall、証拠保存、停止を管理し、子の有効なFindingとLeadはRootの最終JSONと独立して保存する。開発セットの3回反復は独立したTrialとして測り、本番の対象ごと1回という既定を変えない（ADR 0029）。
 - 出力: `Finding[]`（0件可）、`Lead[]`（0件可）、観測できた入口索引の `examined` / `unexamined` と理由を記録する。入口索引の網羅は正常終了条件にしない。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。候補は生のまま保存し、profileの正規化を通してから受理する。受理できない候補は `candidate-held` として分類とissue pathだけを台帳に残し、保留だけのTrialは無成果に数えない（ADR 0018）。Finding / Leadの出力契約はprompt本文ではなくHarnessがschemaから生成する節として渡し、目的文と契約節のdigestを別に記録する（ADR 0019）。
@@ -91,6 +91,8 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 ## 7. Verificationの仕様
 
 - Verifier: 新しいコンテナ。渡すのはFinding、固定source pack、Lab endpoint、低権限account、RO DB account、Lab Setup（profileの版付き通常機能シナリオIDを含む、ADR 0020・0026）と、impactに応じてLabが検証時に発行したcanary。Findingの前提はplugin非依存の通常利用scenarioを優先するcatalogueと照合し、不足は `incomplete(precondition)` の次の手に次のscenario IDを書く。`incomplete(precondition)` の理由コードを台帳から、次の手の本文をPrivate Evidenceから集計し、頻出前提をcatalogueへ追加する。探索の会話履歴と作業領域、ブラウザ、管理者セッションは渡さない。役割はrecipeの環境不備の修正と反証に限り、再探索はしない。被害者側の操作はHarness所有のLab観測器が型で制限した手順で実行する。
+
+WordPress profile は Finding の `configurationPrecondition` と Verifier attachment の `precondition` を Harness 所有の決定論的規則で `default` / `common-usage` / `admin-configuration` / `unknown` に分ける。既定値の宣言と版付き通常機能 scenario catalogue に照合し、明示された特定値や非既定の管理者設定だけを `admin-configuration-precondition` で `finding-parked` にする。一般利用は対応 scenario ID への有界再検証へ回し、未収録なら `common-usage-scenario-missing` を残して #213 の集計対象にする。規則で決められない前提は `incomplete(precondition)` として review queue に残す。Verifier 自身の分類申告は判定に使わない。
 - HTTP証拠: Verifierの宛先はLab内のHarness所有reverse proxyへ向け、request / responseをPrivate EvidenceにJSON Linesで捕捉する。判定器は捕捉記録を優先し、request側をdecode後も検査する。捕捉が無い場合だけVerifierの `http.json` を補助資料として読み、台帳のoptionalな `evidenceCapture` は `harness-captured` / `agent-authored` のenumだけを記録する。実行時確認には引き続きnonce canaryの回収を要する。
 - Verifierの出力: `http.json`、`steps.md`、`route.json`、別主体のcookieをLabが検査する `session.json`、`refutation.md`、設定前提。payload、cookie、HTTP本文はPrivate Evidenceに置く。
 - 判定器（Harness所有、決定論的）。作るのは両プログラムで報奨に届く分類だけ。Reflected XSS、CSRF、到達先のないmissing authorization / IDOR、コンテンツ削除は判定器を作らず、探索の目的にも含めない（記録はする）:
@@ -121,7 +123,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 8a. プログラム対象範囲の方針
 
-技術的な真偽（`runtime-confirmed`）とプログラム対象範囲は分ける。対象範囲は `review` で提出先ごとに評価し、検証を止める条件にしない。方針は [src/profiles/wordpress/policy/programme-scope.md](../src/profiles/wordpress/policy/programme-scope.md) に観測日付きで置き、提出前に公式ページで再確認する。
+技術的な真偽（`runtime-confirmed`）とプログラム対象範囲は分ける。対象範囲は原則 `review` で提出先ごとに評価する。影響分類が対象外の Finding と、明示的な管理者の特別設定が前提の Finding は第7節の規則で検証前に park する。方針は [src/profiles/wordpress/policy/programme-scope.md](../src/profiles/wordpress/policy/programme-scope.md) に観測日付きで置き、提出前に公式ページで再確認する。
 
 2026-10-08時点の方針（Wordfence公式ページの写しとPatchstack 2026年版ガイドライン、判断者の指示）:
 
