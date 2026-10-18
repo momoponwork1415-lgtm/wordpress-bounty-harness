@@ -22,6 +22,15 @@
 7. 外部送信（報告、ベンダー連絡、公開）は、正確な Submission Candidate、文案の版、送信先へ結び付いた承認があるときだけ。Harness 自身は送信を実行しない。
 8. 台帳は追記専用で、持つのは digest 参照だけ。payload、HTTP 記録、画面画像、実行ログ、認証情報、未公開の発見は Git 外の Private Evidence に置く。
 
+## Harness と AI の責務（所有者決定 2026-10-18）
+
+過去 4 世代と本 repo の 2026-10 は同じ失敗を繰り返した。探索や検証の「やり方」を Harness の code に入れ、Harness が肥大し、報酬が止まる（LESSONS 14）。境界を次に固定する。設計・実装・レビューで不変条件の次に見る。
+
+- **Harness は制御だけを持つ。** 選定、Snapshot と digest、gVisor と broker、prompt と source を渡して走らせること、wall と子の数、出力の全件保存と schema による正規化、Programme Boundary 外の出口での park、Finding 単位の Lab 供給と canary の播種、判定器、台帳と Private Evidence、review の記録。判断の要らない処理だけを code にする（LESSONS 4）。
+- **探索と検証の中身は prompt と skill が持つ。** どこを読むか、何を索引にするか、どの順で仮説を立てるか、どう再現するか、前提をどう作るかは agent の仕事。探索は目的 prompt（記事の wp2shell）を渡して Root に任せる。検証は skill が Harness の立てた Lab に対して行い、`runtime-confirmed` は判定器だけが出す。
+- **移す合図。** Harness の code に「agent にこう探させる」「この前提ならこの scenario」「索引の網羅率」のような判断が現れたら、prompt か skill へ移す。agent の自己申告を Harness が根拠にする code が現れたら、判定器か観測器へ移す。観測（読んだ file、wall、token、出力）は Harness が取る。舵取りは取らない。
+- **削除。** 入口・保存先索引の探索入力、task-plan と dispatch、coverage と `incomplete(depth)`、Verifier 指示の連鎖、precondition 文から scenario を選ぶ正規表現、plugin 別 Lab adapter と scenario は境界の外側にあるので、skill 化と同時に削除する。使わない設定にして残す中間状態は置かない。ADR 0033 と、SPEC・ADR 0029・ADR 0026 の該当行はこの決定に合わせて改訂する。それまで下の 2 節の索引・scenario の行は、既存 Trial の記録を読むための記述として扱う。
+
 ## 単一協調Trialの探索（SPEC.md 第6節、ADR 0029）
 
 - 主経路は対象ごとに `wp2shell-bounty-v5` を既定とするRoot＋最大3子の協調Trialを1回。wall上限は60分。Rootが早く報告すれば終了し、Harnessと既定promptは最低実行時間を設けない。wall・provider・broker・schema等の失敗は理由付き `incomplete` とし、正常な候補0件に数えない。
