@@ -4,12 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  describeWordPressEntryPlan,
-  enumerateWordPressEntryPoints,
-  partitionWordPressEntryPoints,
-  renderWordPressEntryAssignment,
-} from "../../../src/profiles/wordpress/discovery/entry-points.js";
+import { enumerateWordPressEntryPoints } from "../../../src/profiles/wordpress/discovery/entry-points.js";
 
 async function syntheticPlugin(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "wbh-entry-points-"));
@@ -67,45 +62,5 @@ describe("WordPress entry-point enumeration", () => {
       "ajax wp_ajax_plugin_delete includes/api.php:6",
       "ajax wp_ajax_plugin_lookup plugin.php:4",
     ]);
-  });
-
-  it("packs entries into partitions by registration file and renders the scope", async () => {
-    const entries = await enumerateWordPressEntryPoints(
-      await syntheticPlugin(),
-    );
-    const assignments = partitionWordPressEntryPoints(entries, 4);
-    expect(assignments.map((assignment) => assignment.entries.length)).toEqual([
-      4, 4, 1,
-    ]);
-    expect(assignments.map((assignment) => assignment.files)).toEqual([
-      ["plugin.php"],
-      ["includes/api.php"],
-      ["includes/api.php"],
-    ]);
-    expect(
-      new Set(assignments.map((assignment) => assignment.planDigest)).size,
-    ).toBe(1);
-    expect(assignments[0]!.of).toBe(3);
-    const text = renderWordPressEntryAssignment(assignments[0]!);
-    expect(text).toContain("## Assigned entry points (partition 1 of 3)");
-    expect(text).toContain(
-      "- ajax-nopriv `wp_ajax_nopriv_plugin_lookup` — plugin.php:3",
-    );
-    expect(text).toContain("Registration files: plugin.php");
-    expect(text).not.toContain("checklist");
-    expect(describeWordPressEntryPlan(assignments)).toContain('"partition":2');
-  });
-
-  it("is deterministic and rejects an invalid width", async () => {
-    const entries = await enumerateWordPressEntryPoints(
-      await syntheticPlugin(),
-    );
-    expect(partitionWordPressEntryPoints(entries, 3)).toEqual(
-      partitionWordPressEntryPoints([...entries].reverse(), 3),
-    );
-    expect(() => partitionWordPressEntryPoints(entries, 0)).toThrow(
-      "Invalid entries per run",
-    );
-    expect(partitionWordPressEntryPoints([], 8)).toEqual([]);
   });
 });

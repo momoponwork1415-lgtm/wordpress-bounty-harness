@@ -1103,6 +1103,40 @@ describe("Ledger public interface", () => {
     });
   });
 
+  it("still reads old assignment and ablation-arm run events and counts them per arm", async () => {
+    const { ledger } = await fixture();
+    for (const [runId, configuration] of [
+      [
+        "assigned-run",
+        {
+          assignmentUnit: "entry-point",
+          assignment: { partition: 0, of: 2, planDigest: revision },
+          arms: { history: "b", prompt: "a" },
+        },
+      ],
+      [
+        "single-axis-run",
+        { assignmentUnit: "plugin", axis: "history", arm: "a" },
+      ],
+    ] as const)
+      expect(
+        await ledger.append({
+          ...common(`start-${runId}`),
+          type: "discovery-run-started",
+          runId,
+          labId: "lab-1",
+          history: { mode: "none" },
+          configuration: { promptVariant: "v5", ...configuration },
+        }),
+      ).toEqual({ status: "appended" });
+    expect(ledger.funnel("campaign-1").byArm).toEqual({
+      "history:a": { runs: 1, findings: 0, confirmed: 0 },
+      "history:b": { runs: 1, findings: 0, confirmed: 0 },
+      "prompt:a": { runs: 1, findings: 0, confirmed: 0 },
+      "history:b+prompt:a": { runs: 1, findings: 0, confirmed: 0 },
+    });
+  });
+
   it("separates attached and source-only Trials and counts verification Lab failures", async () => {
     const { ledger } = await fixture();
     await ledger.append({

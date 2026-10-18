@@ -21,7 +21,6 @@
 
 - **固定版**: 3.3.1は安定版ではないので、`https://downloads.wordpress.org/plugin/translatepress-multilingual.3.3.1.zip` から取得する。主plugin fileの版が3.3.1でなければ止まる。
 - **Lab初期データ**: サイト名、投稿2件、Subscriber（攻撃者役）。TranslatePressはWooCommerceを要らないので、Customerは作らない。
-- **arm**: pinした版は公開日時が分からないため、履歴なし（arm a）だけで回る。`ablation` は書かない。
 - **採点**: 新しい本番開始ゲートでは手入力のAnswer Keyを使わない。Findingの独立確認と修正版の同一経路対照を見る。
 
 ## 実行コマンド

@@ -128,8 +128,6 @@ async function trialCampaign(options: {
     campaignId: "campaign-1",
     labId: "lab-1",
     input,
-    historyFraction: 0,
-    ablation: { axes: [{ axis: "prompt", armBFraction: 0.5 }] },
     plannedTrials,
     ledger,
     evidence,
@@ -217,7 +215,7 @@ it("records Leads without injecting a Harness continuation", async () => {
     ).toBe("resolved");
 });
 
-it("counts a later Finding in its prompt comparison arm", async () => {
+it("records a later Trial's Finding after an earlier Lead", async () => {
   const { result, calls, ledger } = await trialCampaign({
     trialCount: 2,
     noFindingRuns: 2,
@@ -228,5 +226,5 @@ it("counts a later Finding in its prompt comparison arm", async () => {
   });
   expect(result).toMatchObject({ runCount: 2, stoppedBy: "max-runs" });
   expect(calls.map((call) => call.runId)).toEqual(["trial-0", "trial-1"]);
-  expect(ledger.funnel("campaign-1").byArm["prompt:b"]?.findings).toBe(1);
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(1);
 });
