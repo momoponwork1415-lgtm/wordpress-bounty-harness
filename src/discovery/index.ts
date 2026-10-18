@@ -96,6 +96,7 @@ export {
   type CoverageRow,
   type SourceFileSets,
 } from "./coverage-report.js";
+export { readPathsFromCommands, recordReadPaths } from "./read-paths.js";
 export {
   readPrivateChatgptLogin,
   type PrivateChatgptLogin,

@@ -17,6 +17,7 @@ import {
   type NativeRunReceipt,
 } from "./native-run-receipts.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
+import { recordReadPaths } from "./read-paths.js";
 import { createReportRecorder } from "./record-discovery-report.js";
 import {
   recoverChildAgentReports,
@@ -562,6 +563,7 @@ export async function runDiscoveryCampaign(options: {
         { readonly digest: string; readonly truncated: boolean } | undefined;
       let receiptDigest: string | undefined;
       let coverageDigest: string | undefined;
+      let readPathsDigest: string | undefined;
       let failure: ReportFailure | undefined;
       const reportState = { foundNew: false, heldBoundary: false };
       const recordReport = createReportRecorder({
@@ -652,6 +654,11 @@ export async function runDiscoveryCampaign(options: {
         receiptDigest = await options.evidence.putFiles({
           "receipt.json": canonicalJson(receipt),
         });
+        readPathsDigest = await recordReadPaths(
+          options.attachments,
+          options.evidence,
+          receipt.diagnosticArtifactDigest,
+        );
         if (receipt.providerLimit !== undefined) outcome = "provider-limited";
         if (
           receipt.terminal === "incomplete" &&
@@ -673,6 +680,7 @@ export async function runDiscoveryCampaign(options: {
           recordReport,
           ledger: options.ledger,
           evidence: options.evidence,
+          attachments: options.attachments,
           base,
           trialId: trial.trialId,
           trialOrdinal: trial.trialOrdinal,
@@ -781,6 +789,9 @@ export async function runDiscoveryCampaign(options: {
           ...(coverageDigest === undefined
             ? []
             : [{ kind: "coverage", digest: coverageDigest }]),
+          ...(readPathsDigest === undefined
+            ? []
+            : [{ kind: "read-paths", digest: readPathsDigest }]),
         ],
       });
       if (finished.status === "conflict")
