@@ -1,14 +1,14 @@
 # 検証までの自律運転: 設計承認案（2026-10-14）
 
-状態: **提案。未承認。** 正本は [SPEC](../SPEC.md) と [ADR](../adr/) であり、この文書は変更しない。GitHub `main` と公開済み Issue / PR を照合した。ローカル作業ツリーと旧研究 DB・アーカイブの完全性は、ローカル実行環境の起動エラーにより未確認。
+状態: **提案。未承認。** 正本は [SPEC](../../SPEC.md) と [ADR](../../adr/) であり、この文書は変更しない。GitHub `main` と公開済み Issue / PR を照合した。ローカル作業ツリーと旧研究 DB・アーカイブの完全性は、ローカル実行環境の起動エラーにより未確認。
 
 ## 目的と優先順位
 
 直近の目的は、未探索対象の初回 Trial から独立検証と `review export` までを、Harness 単体で継続実行し、提出に値する候補を人間へ届けること。運転は固定 24 時間で終了させず、所有者の通常停止、適格な初回対象の枯渇、または安全上の停止まで続ける。一時的な provider 枠切れは待機して再開する。
 
-検証と人間への配送を先に改善する。過去の完了済み本番 3 周は 15 対象から Finding 14 件、`runtime-confirmed` 0 件で、全 14 件が `incomplete` だった（[実測](2026-10-13-human-review-contract-and-parallel.md)）。直近の初回 3 Trial も Finding 9 件の最新検証が全件 `incomplete`（precondition 7、observation 2）である（[PR #216](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/pull/216)）。探索数だけを先に増やすと、検証できない候補とレビュー負担が増える。
+検証と人間への配送を先に改善する。過去の完了済み本番 3 周は 15 対象から Finding 14 件、`runtime-confirmed` 0 件で、全 14 件が `incomplete` だった（[実測](../2026-10-13-human-review-contract-and-parallel.md)）。直近の初回 3 Trial も Finding 9 件の最新検証が全件 `incomplete`（precondition 7、observation 2）である（[PR #216](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/pull/216)）。探索数だけを先に増やすと、検証できない候補とレビュー負担が増える。
 
-現行 `review.queue()` は `runtime-confirmed` / `reproduced` / `incomplete` を項目として列挙する一方、`contradicted` と未検証 Finding は件数のみである（[実装](../../src/review/index.ts)）。ユーザー提示の「scope 内 Finding は判定結果に関係なく全件 review queue」という契約との差も、Step 1 の配送測定で解消する。
+現行 `review.queue()` は `runtime-confirmed` / `reproduced` / `incomplete` を項目として列挙する一方、`contradicted` と未検証 Finding は件数のみである（[実装](../../../src/review/index.ts)）。ユーザー提示の「scope 内 Finding は判定結果に関係なく全件 review queue」という契約との差も、Step 1 の配送測定で解消する。
 
 全体の詳細図は [SVG 図解（5 枚）](2026-10-14-harness-diagrams/README.md) に置く。図は GitHub `main`、Draft PR、未実装提案を区別する。
 
@@ -31,7 +31,7 @@ Harness supervisor: batch補充、枠待ち、停止、復旧、台帳照合
 Codex heartbeat: 通知とログ要約のみ
 ```
 
-1. **既存のモジュール境界を使う。** `selection` が候補在庫と選定方針、`discovery` が連続運転の監督、`ledger` が Trial と検証結果の追記記録を担う。新しい対象 profile や探索方式の抽象化は、2つ目の実例ができるまで作らない（[SPEC §4a](../SPEC.md)、[LESSONS](../LESSONS.md)）。
+1. **既存のモジュール境界を使う。** `selection` が候補在庫と選定方針、`discovery` が連続運転の監督、`ledger` が Trial と検証結果の追記記録を担う。新しい対象 profile や探索方式の抽象化は、2つ目の実例ができるまで作らない（[SPEC §4a](../../SPEC.md)、[LESSONS](../../LESSONS.md)）。
 2. **在庫は slug と観測情報だけにする。** 在庫を作る段階で Snapshot や Lab を量産しない。直近の実測処理速度から「次の約24時間で使う初回対象数」を補充目安にし、上限は版付き方針で制御する。24時間は運転期限ではない。候補源は許可済みの範囲で段階的に列挙し、取得失敗を枯渇と誤認しない。適格候補が尽きたら `waiting-review` とし、install 下限やカテゴリを AI が勝手に緩めない。install 下限は方針の版付き数値、上限は現段階では比較区分とする。カテゴリも人間が版付き方針で変更でき、新しい batch にだけ適用する。
 3. **初回と追加 Trial を実行直前に区別する。** plugin slug を同一性とする。全 campaign、provider、`--state` の `discovery-run-started` と旧 DB・アーカイブの実探索を照合し、初回と証明できる slug のみ自動 claim する。旧記録が曖昧な slug は保留する。新版・prompt 変更でも自動初回在庫へ戻さない。2回目以降は、対象・目的・費用・1 Trial に結び付く事前承認が必要（[#215](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/215#issuecomment-6147213921)）。`target-selected` だけで Trial 済みとは数えない。
 4. **固定 batch をつなぐ。** 現在の `selection-batch-bound` と campaign ID は不変に保ち、親の運転 ID の下で複数の小さな campaign を順次作る。各 batch の終了後に在庫を補充し、未消費対象だけ次へ進める。親 ID と運転状態は既存モジュール内に追加し、過去 event を変更しない。
@@ -49,10 +49,10 @@ Codex heartbeat: 通知とログ要約のみ
 | 3 | 在庫・複数 batch の補充・共通 claim と資源枠を追加する | 複数 batch で適格な初回対象を補充し、PC 資源超過・対象重複 0。並列 2 の実 Lab wall と失敗率を記録 |
 | 4 | 枠待ち、通常・緊急停止、異常・再起動復旧を実装する | 1週分の購読枠を人手介入0で運転。quota回復・強制終了後に成果欠落、無承認再 Trial、残留 gVisor 容器が各0 |
 
-本番の評価は対象数だけでなく、Trial正常完了、Finding分類、`incomplete`理由、reviewで開いた件数、提出可能判定、提出転帰と入金を同じ run / policy digest で追う。月額720ドルの購読費は固定費として純収益に入れる。既知旧版での `runtime-confirmed` は配線の検査であり、未知・最新版の当たり率には算入しない（[SPEC §10](../SPEC.md)）。
+本番の評価は対象数だけでなく、Trial正常完了、Finding分類、`incomplete`理由、reviewで開いた件数、提出可能判定、提出転帰と入金を同じ run / policy digest で追う。月額720ドルの購読費は固定費として純収益に入れる。既知旧版での `runtime-confirmed` は配線の検査であり、未知・最新版の当たり率には算入しない（[SPEC §10](../../SPEC.md)）。
 
 ## 承認に含まれる正本の例外と保留範囲
 
-この案は、[DEVELOPMENT §2](../DEVELOPMENT.md) の Step 1 中の選定方針構造の凍結と、[SPEC §2](../SPEC.md) の「人間の判断点は2つ」に対し、**同一 slug の追加 Trial 承認、連続在庫・運転**に限る明示例外を要する。既存の `version-or-prompt-changed` 再候補化と [ADR 0032](../adr/0032-owner-decisions-on-constraints-2026-10-13.md) の自動 +2 Trial、SPEC と実装の再試行上限は整合させる。承認後、コードより先に正本を改訂し、Issue の古い受入条件を更新する。大きな変更は1 PR に混ぜず、上表の問いごとに測定する。
+この案は、[DEVELOPMENT §2](../../DEVELOPMENT.md) の Step 1 中の選定方針構造の凍結と、[SPEC §2](../../SPEC.md) の「人間の判断点は2つ」に対し、**同一 slug の追加 Trial 承認、連続在庫・運転**に限る明示例外を要する。既存の `version-or-prompt-changed` 再候補化と [ADR 0032](../../adr/0032-owner-decisions-on-constraints-2026-10-13.md) の自動 +2 Trial、SPEC と実装の再試行上限は整合させる。承認後、コードより先に正本を改訂し、Issue の古い受入条件を更新する。大きな変更は1 PR に混ぜず、上表の問いごとに測定する。
 
 今回の設計には、検証後のレポート自動化、提出自動化、探索方式切替、WordPress以外の profile、選定方針の自動調整を含めない。これらは実測と人間の戦略判断から次の案を作る。

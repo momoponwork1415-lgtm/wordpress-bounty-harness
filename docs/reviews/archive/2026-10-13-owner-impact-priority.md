@@ -1,6 +1,6 @@
 # Critical／High の影響を探索目標にする判断（2026-10-13）
 
-調べて報告。正本は [SPEC](../SPEC.md) と [ADR 0032](../adr/0032-owner-decisions-on-constraints-2026-10-13.md)。実装作業は #214。未公開の候補本文、payload、HTTP記録、Lab証拠はGit外のPrivate Evidenceに保持する。
+調べて報告。正本は [SPEC](../../SPEC.md) と [ADR 0032](../../adr/0032-owner-decisions-on-constraints-2026-10-13.md)。実装作業は #214。未公開の候補本文、payload、HTTP記録、Lab証拠はGit外のPrivate Evidenceに保持する。
 
 ## 実測と今回の9件
 

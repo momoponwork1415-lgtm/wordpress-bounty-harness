@@ -1,6 +1,6 @@
 # WP2Shell bounty v4 探索目的文の出典対照と日本語訳
 
-日付: 2026-10-13。探索 agent に渡す正本は [`wp2shell-bounty-v4.md`](../../src/profiles/wordpress/prompts/wp2shell-bounty-v4.md)。この文書は owner review 用の対照表で、探索には渡さない。目的文 digest は `sha256:6c823fe2ddb8a9af27ea743927f5d4a8203ec29ef4bca7dbadf3135c1739ab62`。旧 v3 は byte 不変の `sha256:a97b4b3c1101470cec743dd51af1d2169f15d4d5ee1a2797997be05edef72c9b`。
+日付: 2026-10-13。探索 agent に渡す正本は [`wp2shell-bounty-v4.md`](../../../src/profiles/wordpress/prompts/wp2shell-bounty-v4.md)。この文書は owner review 用の対照表で、探索には渡さない。目的文 digest は `sha256:6c823fe2ddb8a9af27ea743927f5d4a8203ec29ef4bca7dbadf3135c1739ab62`。旧 v3 は byte 不変の `sha256:a97b4b3c1101470cec743dd51af1d2169f15d4d5ee1a2797997be05edef72c9b`。
 
 ## 英語原文の全文
 
@@ -34,12 +34,12 @@
 
 | v4 要素 | 出典 | 対照 |
 | --- | --- | --- |
-| 固定 source、使い捨て Lab、低権限の位置、trust 境界、対象への帰属 | 旧 [`wp2shell-bounty-v3.md`](../../src/profiles/wordpress/prompts/wp2shell-bounty-v3.md) 第 1 段落。SPEC 第 2、6 節 | v3 の目的と trust 境界を継承。Programme Boundary が「優先順位」を定めるという旧表現だけ、優先順位を owner 指定のリストに合わせて「programme scope」に変更 |
+| 固定 source、使い捨て Lab、低権限の位置、trust 境界、対象への帰属 | 旧 [`wp2shell-bounty-v3.md`](../../../src/profiles/wordpress/prompts/wp2shell-bounty-v3.md) 第 1 段落。SPEC 第 2、6 節 | v3 の目的と trust 境界を継承。Programme Boundary が「優先順位」を定めるという旧表現だけ、優先順位を owner 指定のリストに合わせて「programme scope」に変更 |
 | Critical 9 例、High 8 例と攻撃者位置 | 所有者が本会話で提示した 2 リスト、および [Wordfence Bug Bounty Program の Critical / High Severity Examples](https://www.wordfence.com/threat-intel/bug-bounty-program/) | 全 17 例を効果と攻撃者位置の組み合わせとして Finding の対象にした。公式ページは CVSS 単独での判定を否定し、例に例外の可能性を認めるため、prompt は severity の自動確定を指示しない |
 | 追加の悪用前提を要しない | 同じ [Wordfence 公式ページ](https://www.wordfence.com/threat-intel/bug-bounty-program/) の例の前提、および所有者の今回の Critical / High 指定 | 特別な設定や通常の機能の流れを超えた能動的な操作を例に挙げた。stored XSS の通常の閲覧を機械的に除外せず、実際の影響や前提を source / Lab で確かめる |
 | `options-update` と `sensitive-object-access` のラベルだけでは十分でない | 所有者が本会話で「2 分類を一律に外す」から「Critical／High に当たる場合は対象にする」へ訂正した判断 | 分類名による一律排除も一律採用も指示せず、重大な実害の完成を要する |
-| 対象の完成した効果だけを Finding、具体的だが未解決の連鎖を Lead とする | 所有者が本会話で Critical / High の例を「対象の脆弱性」と指定。[SPEC](../SPEC.md) 第 6 節の Finding / Lead 区別 | 弱い効果のラベル付けによる水増しを避ける。出力境界での正規化・保留は従来の契約に従う |
-| 部分的 primitive を Finding にしない、3 子の協調、波、検証の問い、停止条件、Lead | 旧 [`wp2shell-bounty-v3.md`](../../src/profiles/wordpress/prompts/wp2shell-bounty-v3.md) 第 2〜5 段落 | 優先効果の段落以外は v3 と同じ。旧 v3 本文と digest は保持 |
-| Finding / Lead の schema、出力形式 | [ADR 0019](../adr/0019-harness-generated-output-contract.md)、`wordpress-discovery-contract-v2` | 本文へ転記せず Harness が生成する契約を従来どおり付ける |
+| 対象の完成した効果だけを Finding、具体的だが未解決の連鎖を Lead とする | 所有者が本会話で Critical / High の例を「対象の脆弱性」と指定。[SPEC](../../SPEC.md) 第 6 節の Finding / Lead 区別 | 弱い効果のラベル付けによる水増しを避ける。出力境界での正規化・保留は従来の契約に従う |
+| 部分的 primitive を Finding にしない、3 子の協調、波、検証の問い、停止条件、Lead | 旧 [`wp2shell-bounty-v3.md`](../../../src/profiles/wordpress/prompts/wp2shell-bounty-v3.md) 第 2〜5 段落 | 優先効果の段落以外は v3 と同じ。旧 v3 本文と digest は保持 |
+| Finding / Lead の schema、出力形式 | [ADR 0019](../../adr/0019-harness-generated-output-contract.md)、`wordpress-discovery-contract-v2` | 本文へ転記せず Harness が生成する契約を従来どおり付ける |
 
 この対象リストは owner の探索優先事項であり、公式の全報奨対象を列挙するものではない。Wordfence の公式例は、対象 plugin / theme の active installations が 50,000 以上であることも条件としている。既定の機械選定下限は別規則で 100,000。
