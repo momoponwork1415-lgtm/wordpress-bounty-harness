@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "mode": "wp2shell",
-  "discovery": { "lab": "attached" },
+  "discovery": { "lab": "none" },
   "selectionPolicyPath": "src/profiles/wordpress/policy/selection.json",
   "promptId": "wp2shell-bounty-v8",
   "programmeBoundary": {
