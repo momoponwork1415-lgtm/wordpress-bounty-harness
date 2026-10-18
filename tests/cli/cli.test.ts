@@ -2762,6 +2762,40 @@ describe("harness CLI vertical slice", () => {
     expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(3);
   });
 
+  it("does not wire refutation when the WordPress campaign disables it", async () => {
+    const { run, configPath, ledger } = await harness({
+      config: {
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
+        refutation: { enabled: false, promptId: "refute-v1" },
+      },
+    });
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "synthetic-plugin",
+          "--campaign",
+          "campaign-no-refute",
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    expect(
+      ledger().read({
+        campaignId: "campaign-no-refute",
+        type: "refutation-recorded",
+      }),
+    ).toHaveLength(0);
+    expect(
+      ledger().read({
+        campaignId: "campaign-no-refute",
+        type: "verification-finished",
+      }).length,
+    ).toBeGreaterThan(0);
+  });
+
   it("stops the campaign on a Verifier quota and retries that verification once on resume", async () => {
     const { run, configPath, ledger } = await harness({
       verifierQuotaOnAttempts: [1],

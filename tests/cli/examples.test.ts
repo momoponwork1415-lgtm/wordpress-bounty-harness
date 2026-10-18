@@ -43,6 +43,7 @@ it("starts the checked-in campaign with two targets on WordPress 7.1.3", async (
   );
   expect(config.resources.maxConcurrentTargets).toBe(2);
   expect(config.wordpressVersion).toBe("7.1.3");
+  expect(config.refutation).toEqual({ enabled: false, promptId: "refute-v1" });
 });
 
 it("loads the opt-in v6 measurement example with a 120-minute wall", async () => {

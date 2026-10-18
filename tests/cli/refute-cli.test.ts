@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 
 import { runCli, type CliProfile } from "../../src/cli/index.js";
-import { runCampaignPipeline } from "../../src/cli/pipeline.js";
+import {
+  runCampaignPipeline,
+  verifyNextFinding,
+} from "../../src/cli/pipeline.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
 
@@ -19,14 +22,27 @@ it("routes refute run and backfill without selecting a Lab", async () => {
         input: { campaignId: string; findingId?: string },
       ) => {
         calls.push(input);
-        return [
-          {
-            findingId: input.findingId ?? "finding-1",
-            status: "recorded" as const,
-            verdict: "undecided" as const,
-            reason: "unknown",
-          },
-        ];
+        return input.findingId === undefined
+          ? [
+              {
+                findingId: "finding-2",
+                status: "pending" as const,
+                reason: "transport-error",
+              },
+              {
+                findingId: "finding-3",
+                status: "failed" as const,
+                reason: "finding-artifact-missing",
+              },
+            ]
+          : [
+              {
+                findingId: input.findingId,
+                status: "recorded" as const,
+                verdict: "undecided" as const,
+                reason: "unknown",
+              },
+            ];
       },
     } as unknown as CliProfile;
     const environment = { stateDirectory: root, profile };
@@ -35,6 +51,28 @@ it("routes refute run and backfill without selecting a Lab", async () => {
       stdout: (line: string) => output.push(line),
       stderr: () => undefined,
     };
+    expect(
+      await runCli(
+        ["refute", "run", "--campaign", "campaign-1"],
+        environment,
+        io,
+      ),
+    ).toBe(2);
+    expect(
+      await runCli(
+        [
+          "refute",
+          "run",
+          "--campaign",
+          "campaign-1",
+          "--finding",
+          "finding-1",
+          "--all-pending",
+        ],
+        environment,
+        io,
+      ),
+    ).toBe(2);
     expect(
       await runCli(
         ["refute", "run", "--campaign", "campaign-1", "--finding", "finding-1"],
@@ -52,6 +90,11 @@ it("routes refute run and backfill without selecting a Lab", async () => {
     expect(calls).toEqual([
       { campaignId: "campaign-1", findingId: "finding-1" },
       { campaignId: "campaign-1" },
+    ]);
+    expect(output).toEqual([
+      "finding-1: recorded undecided (unknown)",
+      "finding-2: pending (transport-error)",
+      "finding-3: failed (finding-artifact-missing)",
     ]);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -192,6 +235,58 @@ it("refutes a recorded Finding before the verification consumer and skips it on 
     await runCampaignPipeline(options as never);
     await runCampaignPipeline(options as never);
     expect([provisions, refutations, verifications]).toEqual([1, 1, 0]);
+    await ledger.append({
+      ...common,
+      identity: "finding-2",
+      type: "finding-recorded",
+      findingId: "finding-2",
+      runId: "discover-1",
+      category: "sqli",
+    });
+    await runCampaignPipeline({
+      ...options,
+      pipeline: { ...options.pipeline, refuteFinding: async () => false },
+    } as never);
+    expect(verifications).toBe(0);
+    expect(
+      ledger.read({
+        campaignId: common.campaignId,
+        findingId: "finding-2",
+        type: "verification-finished",
+      }),
+    ).toHaveLength(0);
+    let pendingRefutations = 0;
+    const nextOptions = {
+      campaignId: common.campaignId,
+      ledger,
+      newId: () => "unused",
+      loadSnapshot: async () => {
+        throw new Error("Lab opened before refutation");
+      },
+      setupFor: () => ({}),
+      reconstructionFor: () => null,
+      verification: options.pipeline.verification,
+      refuteFinding: async () => {
+        pendingRefutations++;
+      },
+    };
+    expect(await verifyNextFinding(nextOptions as never)).toBeNull();
+    expect(pendingRefutations).toBe(1);
+    await ledger.append({
+      ...common,
+      identity: "park-2",
+      type: "finding-parked",
+      findingId: "finding-2",
+      runId: "discover-1",
+      category: "sqli",
+      reason: "admin-configuration-precondition",
+    });
+    expect(
+      await verifyNextFinding({
+        ...nextOptions,
+        refuteFinding: undefined,
+      } as never),
+    ).toBeNull();
   } finally {
     await rm(root, { recursive: true, force: true });
   }

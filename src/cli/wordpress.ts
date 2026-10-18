@@ -1702,6 +1702,25 @@ export function createWordPressCliProfile(
         setupFor: setupFor(config),
         reconstructionFor: reconstructionFor(config),
         verification: verificationFor(state, boundaries),
+        ...(config.refutation.enabled
+          ? {
+              refuteFinding: async ({
+                campaignId,
+                findingId,
+              }: {
+                campaignId: string;
+                findingId: string;
+              }) => {
+                await refuteWordPressFindings(
+                  state,
+                  campaignId,
+                  boundaries,
+                  config.refutation.promptId,
+                  findingId,
+                );
+              },
+            }
+          : {}),
       });
     },
     stateDiffReader: (state) =>

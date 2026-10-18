@@ -673,12 +673,27 @@ export async function runCampaignPipeline<
         )
           continue;
         if (pipeline.refuteFinding !== undefined) {
-          const refuted = await pipeline.refuteFinding({
-            campaignId,
-            findingId: event.findingId,
-            snapshotDigest: snapshot.digest,
-          });
+          const refuted = await pipeline
+            .refuteFinding({
+              campaignId,
+              findingId: event.findingId,
+              snapshotDigest: snapshot.digest,
+            })
+            .catch(() => false);
           if (refuted) continue;
+          const verdict = ledger
+            .read({
+              campaignId,
+              findingId: event.findingId,
+              type: "refutation-recorded",
+              limit: 1,
+            })
+            .at(0)?.event;
+          if (
+            verdict?.type !== "refutation-recorded" ||
+            verdict.verdict === "refuted"
+          )
+            continue;
         }
         // The Verifier shares the subscription; a usage limit stops the campaign.
         if (stopped === "provider-limit") break;
@@ -967,6 +982,10 @@ export async function verifyNextFinding<
   readonly setupFor: (snapshot: Snapshot) => Setup;
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
+  readonly refuteFinding?: (input: {
+    readonly campaignId: string;
+    readonly findingId: string;
+  }) => Promise<void>;
 }): Promise<VerifyNextSummary | null> {
   const findings = readAll(options.ledger, {
     ...(options.campaignId === undefined
@@ -995,6 +1014,15 @@ export async function verifyNextFinding<
     if (
       options.campaignPrefix !== undefined &&
       !event.campaignId.startsWith(`${options.campaignPrefix}-`)
+    )
+      continue;
+    if (
+      options.ledger.read({
+        campaignId: event.campaignId,
+        findingId: event.findingId,
+        type: "finding-parked",
+        limit: 1,
+      }).length > 0
     )
       continue;
     const key = `${event.campaignId}\0${event.findingId}`;
@@ -1039,6 +1067,36 @@ export async function verifyNextFinding<
     }
     verificationInFlight.add(key);
     try {
+      if (options.refuteFinding !== undefined) {
+        await options
+          .refuteFinding({
+            campaignId: event.campaignId,
+            findingId: event.findingId,
+          })
+          .catch(() => undefined);
+        const verdict = options.ledger
+          .read({
+            campaignId: event.campaignId,
+            findingId: event.findingId,
+            type: "refutation-recorded",
+            limit: 1,
+          })
+          .at(0)?.event;
+        if (
+          verdict?.type !== "refutation-recorded" ||
+          verdict.verdict === "refuted"
+        )
+          continue;
+        if (
+          options.ledger.read({
+            campaignId: event.campaignId,
+            findingId: event.findingId,
+            type: "finding-parked",
+            limit: 1,
+          }).length > 0
+        )
+          continue;
+      }
       const snapshot = await options.loadSnapshot(event.snapshotDigest);
       const setup = options.setupFor(snapshot);
       if (
