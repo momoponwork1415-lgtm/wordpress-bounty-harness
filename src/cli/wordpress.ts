@@ -70,6 +70,7 @@ import { loadWordPressLegacyHistory } from "../profiles/wordpress/selection/lega
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/index.js";
+import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import {
   createWordPressLabStateObserver,
@@ -1395,6 +1396,8 @@ export function createWordPressCliProfile(
     },
     stateDiffReader: (state) =>
       createWordPressStateDiffReader({ store: state.store }),
+    httpEvidenceReader: (state) =>
+      createWordPressHttpEvidenceReader({ store: state.store }),
     labUp: (state, input) => wordPressLabUp(state, input, options),
     labDown: (state, input) => wordPressLabDown(state, input, options),
     async cleanupLeftovers(state, input) {

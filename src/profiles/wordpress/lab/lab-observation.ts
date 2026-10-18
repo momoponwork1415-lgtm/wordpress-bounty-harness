@@ -2,6 +2,12 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
+import {
+  httpCapture,
+  RECORDER_CAPTURE_PATH,
+  RECORDER_DROPPED_PATH,
+  type HttpCaptureRead,
+} from "../../../lab/capture.js";
 import type { LabReachability } from "../../../lab/index.js";
 import { BEACON_LOG } from "./container-startup.js";
 import type {
@@ -154,7 +160,7 @@ export async function markCapture(
     lab.recorder,
     "wc",
     "-c",
-    "/var/lib/wbh/capture.jsonl",
+    RECORDER_CAPTURE_PATH,
   ]);
   const marker = result.stdout.trim().split(/\s+/)[0];
   return result.exitCode === 0 && marker !== undefined && /^\d+$/.test(marker)
@@ -165,14 +171,7 @@ export async function markCapture(
 export async function readCapture(
   lab: WordPressLabSession,
   sinceMarker: string,
-): Promise<
-  | {
-      readonly status: "captured";
-      readonly bytes: Buffer;
-      readonly dropped: number;
-    }
-  | { readonly status: "unavailable" }
-> {
+): Promise<HttpCaptureRead> {
   if (
     !/^\d+$/.test(sinceMarker) ||
     !Number.isSafeInteger(Number(sinceMarker)) ||
@@ -187,7 +186,7 @@ export async function readCapture(
         "tail",
         "-c",
         `+${Number(sinceMarker) + 1}`,
-        "/var/lib/wbh/capture.jsonl",
+        RECORDER_CAPTURE_PATH,
       ],
       60_000,
       64 * 1024 * 1024 + 1024,
@@ -197,7 +196,7 @@ export async function readCapture(
       lab.recorder,
       "sh",
       "-c",
-      "cat /var/lib/wbh/dropped 2>/dev/null || printf 0",
+      `cat ${RECORDER_DROPPED_PATH} 2>/dev/null || printf 0`,
     ]),
   ]);
   const count = Number(dropped.stdout.trim());
@@ -210,8 +209,7 @@ export async function readCapture(
     return { status: "unavailable" };
   return {
     status: "captured",
-    bytes: Buffer.from(capture.stdout, "utf8"),
-    dropped: count,
+    ...httpCapture(Buffer.from(capture.stdout, "utf8"), count),
   };
 }
 

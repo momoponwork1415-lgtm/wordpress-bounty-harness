@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 
+import { RECORDER_STATE_DIRECTORY } from "../../../lab/capture.js";
 import type { WordPressLabSession } from "./lab-session.js";
 
 export const BEACON_LOG = "/tmp/wbh-beacons";
@@ -142,7 +143,7 @@ async function startRecorder(
     "--read-only",
     "--cap-drop=ALL",
     "--security-opt=no-new-privileges",
-    "--tmpfs=/var/lib/wbh:rw,nosuid,nodev,size=65m",
+    `--tmpfs=${RECORDER_STATE_DIRECTORY}:rw,nosuid,nodev,size=65m`,
     "--env",
     "WBH_UPSTREAM_HOST=wordpress",
     "--volume",

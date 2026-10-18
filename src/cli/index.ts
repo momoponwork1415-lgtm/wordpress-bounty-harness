@@ -14,6 +14,7 @@ import {
 import {
   exportReviewBundle,
   type DuplicateLookupResult,
+  type HttpEvidenceReader,
   type Review,
   type ReviewQueue,
   type StateDiffReader,
@@ -218,6 +219,8 @@ export interface CliProfile {
   ): Promise<ReverificationSummary>;
   /** Summarizes the profile's Lab state diff artifact for `review export` (#186). */
   stateDiffReader(state: CliState): StateDiffReader;
+  /** Reads the profile's HTTP evidence record for `review export`; names of its files stay in the profile. */
+  httpEvidenceReader(state: CliState): HttpEvidenceReader;
   /** Starts the verification Lab of one Finding and publishes it on host loopback ports. */
   labUp(
     state: CliState,
@@ -829,6 +832,7 @@ export async function runCli(
           campaignId: required(values.campaign, "campaign"),
           findingId: required(values.finding, "finding"),
           stateDiff: environment.profile.stateDiffReader(state),
+          httpEvidence: environment.profile.httpEvidenceReader(state),
           clock: state.clock,
           ...(environment.profile.latestVersion === undefined
             ? {}

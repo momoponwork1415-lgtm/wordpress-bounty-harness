@@ -241,6 +241,26 @@ export interface StateDiffReader {
   read(digest: string): Promise<StateDiffSummary | null>;
 }
 
+/**
+ * How a profile reads the HTTP record inside a judge's evidence artifact.
+ * Only method, address and status cross this seam; Review drops query values
+ * and never sees bodies. `null` means the artifact holds no HTTP record.
+ */
+export interface HttpEvidenceReader {
+  read(evidenceDigest: string): Promise<HttpEvidenceRecord | null>;
+}
+export interface HttpEvidenceRecord {
+  readonly source: "harness-captured" | "agent-authored";
+  /** Absolute path of the record file on this host. */
+  readonly path: string;
+  readonly exchanges: readonly {
+    readonly method: string;
+    /** A path or URL; its query string is reduced to parameter names here. */
+    readonly address: string;
+    readonly status: number | null;
+  }[];
+}
+
 const findingRecordSchema = z.looseObject({
   claim: z.string(),
   attackerPosition: z.string(),
@@ -251,27 +271,6 @@ const findingRecordSchema = z.looseObject({
 });
 const selectionRecordSchema = z.looseObject({
   activeInstallations: z.number().int().nonnegative().optional(),
-});
-const capturedLineSchema = z.looseObject({
-  request: z.looseObject({ method: z.string(), path: z.string() }),
-  response: z.looseObject({ statusCode: z.number().int() }),
-});
-const authoredHttpSchema = z.looseObject({
-  exchanges: z.array(
-    z.looseObject({
-      request: z.looseObject({
-        method: z.string().optional(),
-        url: z.string().optional(),
-        path: z.string().optional(),
-      }),
-      response: z
-        .looseObject({
-          status: z.number().int().optional(),
-          statusCode: z.number().int().optional(),
-        })
-        .optional(),
-    }),
-  ),
 });
 
 const MAX_ROWS = 500;
@@ -296,69 +295,31 @@ function httpRow(
   };
 }
 
+/** Method, path and parameter names of each exchange; values and bodies stay behind `path`. */
 async function httpSummary(
-  store: PrivateArtifactStore,
+  reader: HttpEvidenceReader | undefined,
   evidenceDigest: string | undefined,
 ): Promise<ReviewExportV1["http"]> {
-  const unavailable: ReviewExportV1["http"] = {
-    source: "unavailable",
-    path: null,
-    exchanges: [],
-    truncated: false,
-  };
-  if (evidenceDigest === undefined) return unavailable;
-  const captured = await store.readFile(
-    evidenceDigest,
-    "proxy-capture.jsonl",
-    64 * 1024 * 1024,
-  );
-  if (captured.status === "resolved") {
-    const lines = captured.bytes.toString("utf8").trimEnd().split("\n");
-    const exchanges: z.infer<typeof httpRowSchema>[] = [];
-    for (const line of lines.slice(0, MAX_ROWS)) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line) as unknown;
-      } catch {
-        continue;
-      }
-      const entry = capturedLineSchema.safeParse(parsed);
-      if (!entry.success) continue;
-      exchanges.push(
-        httpRow(
-          entry.data.request.method,
-          entry.data.request.path,
-          entry.data.response.statusCode,
-        ),
-      );
-    }
+  const record =
+    evidenceDigest === undefined
+      ? null
+      : ((await reader?.read(evidenceDigest)) ?? null);
+  if (record === null)
     return {
-      source: "harness-captured",
-      path: join(store.contentPath(evidenceDigest), "proxy-capture.jsonl"),
-      exchanges,
-      truncated: lines.length > MAX_ROWS,
+      source: "unavailable",
+      path: null,
+      exchanges: [],
+      truncated: false,
     };
-  }
-  const authored = await store.readJson(
-    evidenceDigest,
-    "http.json",
-    authoredHttpSchema,
-    5 * 1024 * 1024,
-  );
-  if (authored.status !== "resolved") return unavailable;
   return {
-    source: "agent-authored",
-    path: join(store.contentPath(evidenceDigest), "http.json"),
-    exchanges: authored.value.exchanges
+    source: record.source,
+    path: record.path,
+    exchanges: record.exchanges
       .slice(0, MAX_ROWS)
       .map((exchange) =>
-        httpRow(
-          exchange.request.method ?? "?",
-          exchange.request.url ?? exchange.request.path ?? "",
-          exchange.response?.statusCode ?? exchange.response?.status ?? null,
-        ),
+        httpRow(exchange.method, exchange.address, exchange.status),
       ),
-    truncated: authored.value.exchanges.length > MAX_ROWS,
+    truncated: record.exchanges.length > MAX_ROWS,
   };
 }
 
@@ -382,6 +343,7 @@ export async function exportReviewBundle(options: {
   readonly campaignId: string;
   readonly findingId: string;
   readonly stateDiff?: StateDiffReader;
+  readonly httpEvidence?: HttpEvidenceReader;
   readonly clock?: () => Date;
   /** One public observation of the target's newest version; failures become null. */
   readonly observeLatestVersion?: (
@@ -504,7 +466,7 @@ export async function exportReviewBundle(options: {
     verification !== undefined && "evidenceDigest" in verification.result
       ? verification.result.evidenceDigest
       : undefined;
-  const http = await httpSummary(store, evidenceDigest);
+  const http = await httpSummary(options.httpEvidence, evidenceDigest);
 
   let refutation: ReviewExportV1["refutation"] = null;
   const refutationDigest =

@@ -15,7 +15,21 @@ import {
 export const BODY_LIMIT_BYTES = 1024 * 1024;
 export const CAPTURE_LIMIT_BYTES = 64 * BODY_LIMIT_BYTES;
 
-export interface CapturedExchange {
+/**
+ * Where the recorder keeps its state inside the Lab's recorder container. The
+ * Lab mounts a tmpfs here and reads the two files back with `docker exec`.
+ * This directory is copied alone into the pinned Node image, so nothing here
+ * may import outside `src/lab/recorder/`; `src/lab/capture.ts` owns the
+ * read side (schema and parsing) and re-exports these paths.
+ */
+export const RECORDER_STATE_DIRECTORY = "/var/lib/wbh";
+/** One JSON line per exchange, appended in request order. */
+export const RECORDER_CAPTURE_PATH = `${RECORDER_STATE_DIRECTORY}/capture.jsonl`;
+/** The decimal count of exchanges refused after `CAPTURE_LIMIT_BYTES`. */
+export const RECORDER_DROPPED_PATH = `${RECORDER_STATE_DIRECTORY}/dropped`;
+
+/** One line of the capture file, as the recorder writes it. */
+export interface RecordedExchange {
   readonly request: {
     readonly method: string;
     readonly path: string;
@@ -110,7 +124,7 @@ export function createRecorderServer(options: {
       );
       response.pipe(clientResponse);
       response.on("end", () => {
-        const record: CapturedExchange = {
+        const record: RecordedExchange = {
           request: {
             method: clientRequest.method ?? "GET",
             path: clientRequest.url ?? "/",

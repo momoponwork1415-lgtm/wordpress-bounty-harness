@@ -12,6 +12,8 @@ import {
   Review,
   REVIEW_EXPORT_SCHEMA_ID,
   reviewExportV1Schema,
+  type HttpEvidenceReader,
+  type HttpEvidenceRecord,
   type StateDiffReader,
   type StateDiffSummary,
 } from "../../src/review/index.js";
@@ -147,23 +149,10 @@ async function fixture(
     purpose: "verification",
     scenario: { id: "ordinary-blog", digest: scenarioDigest },
   });
+  // The HTTP record itself is profile-owned and reaches export only through
+  // HttpEvidenceReader; the artifact holds a body sentinel export must not read.
   const evidence = await store.putFiles({
-    "proxy-capture.jsonl": [
-      canonicalJson({
-        request: {
-          method: "POST",
-          path: `/wp-admin/admin-ajax.php?action=save&token=${QUERY_VALUE}`,
-          headers: { cookie: "session=secret" },
-          body: PAYLOAD,
-        },
-        response: { statusCode: 200, body: RESPONSE_BODY },
-      }),
-      canonicalJson({
-        request: { method: "GET", path: "/", headers: {}, body: "" },
-        response: { statusCode: 200, body: RESPONSE_BODY },
-      }),
-      "not json",
-    ].join("\n"),
+    "http-record": `${PAYLOAD} ${RESPONSE_BODY}`,
     "canary-observation.json": canonicalJson({ fired: false }),
   });
   const refutation = await store.putFiles({
@@ -291,6 +280,28 @@ const reader = (summary: StateDiffSummary | null): StateDiffReader => ({
   read: async () => summary,
 });
 
+/** A profile reader handing over method, address and status; addresses still carry query values. */
+const httpReader = (
+  store: PrivateArtifactStore,
+  exchanges: HttpEvidenceRecord["exchanges"] | null = [
+    {
+      method: "POST",
+      address: `/wp-admin/admin-ajax.php?action=save&token=${QUERY_VALUE}`,
+      status: 200,
+    },
+    { method: "GET", address: "/", status: 200 },
+  ],
+): HttpEvidenceReader => ({
+  read: async (digest) =>
+    exchanges === null
+      ? null
+      : {
+          source: "harness-captured",
+          path: join(store.contentPath(digest), "http-record"),
+          exchanges,
+        },
+});
+
 describe("review export", () => {
   it("builds a versioned bundle with review material and paths, never bodies or payloads", async () => {
     const { ledger, store, evidenceDirectory, diffDigest, evidence } =
@@ -308,6 +319,7 @@ describe("review export", () => {
           changed: [{ key: "x", beforeDigest: "aa", afterDigest: "bb" }],
         },
       }),
+      httpEvidence: httpReader(store),
       clock: () => new Date("2026-10-08T03:00:00Z"),
     });
     expect(reviewExportV1Schema.parse(bundle)).toEqual(bundle);
@@ -357,12 +369,7 @@ describe("review export", () => {
     // Method, path and status only; query parameter names, not values.
     expect(bundle.http).toEqual({
       source: "harness-captured",
-      path: join(
-        evidenceDirectory,
-        evidence!,
-        "content",
-        "proxy-capture.jsonl",
-      ),
+      path: join(evidenceDirectory, evidence!, "content", "http-record"),
       exchanges: [
         {
           method: "POST",
@@ -372,6 +379,39 @@ describe("review export", () => {
         },
         { method: "GET", path: "/", queryKeys: [], status: 200 },
       ],
+      truncated: false,
+    });
+    // Review caps the rows and says so; a profile reader without a record means unavailable.
+    const many = await exportReviewBundle({
+      ledger,
+      store,
+      campaignId: "campaign-1",
+      findingId: "finding-1",
+      httpEvidence: httpReader(
+        store,
+        Array.from({ length: 501 }, (_, index) => ({
+          method: "GET",
+          address: `/page/${index}`,
+          status: 200,
+        })),
+      ),
+    });
+    expect(many.http.exchanges).toHaveLength(500);
+    expect(many.http.truncated).toBe(true);
+    expect(
+      (
+        await exportReviewBundle({
+          ledger,
+          store,
+          campaignId: "campaign-1",
+          findingId: "finding-1",
+          httpEvidence: httpReader(store, null),
+        })
+      ).http,
+    ).toEqual({
+      source: "unavailable",
+      path: null,
+      exchanges: [],
       truncated: false,
     });
     expect(bundle.refutation).toMatchObject({

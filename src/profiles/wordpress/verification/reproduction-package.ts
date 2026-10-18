@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import { parseHttpCapture } from "../../../lab/capture.js";
 import type { ReproductionRenderer } from "../../../verification/reproduction-package.js";
 import { snapshotSchema } from "../../../snapshot/index.js";
 import {
@@ -81,18 +82,6 @@ const snapshotWithDigestSchema = snapshotSchema.safeExtend({ digest });
 
 export type WordPressReconstruction = z.infer<typeof reconstructionSchema>;
 
-const capturedExchangeSchema = z.strictObject({
-  request: z.looseObject({
-    method: z.enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]),
-    path,
-    truncated: z.literal(false),
-  }),
-  response: z.looseObject({
-    statusCode: z.number().int().min(100).max(599),
-    truncated: z.literal(false),
-  }),
-});
-
 function evidenceOrigin(
   entry: z.infer<typeof routeSchema>["evidence"][number],
 ): "harness-captured" | "agent-authored" {
@@ -110,18 +99,13 @@ function safeInlineJson(value: unknown): string {
 
 /** Only the Lab proxy's recorded method, path and status may enter the main steps. */
 function capturedHttpSequence(bytes: Buffer): string[] {
-  const rows = bytes.toString("utf8").trimEnd().split("\n");
-  if (rows.length > 500) return [];
-  try {
-    return rows.map((row, index) => {
-      const parsed: unknown = JSON.parse(row);
-      const exchange = capturedExchangeSchema.parse(parsed);
-      return `${index + 1}. ${exchange.request.method} ${safeInlineJson(exchange.request.path)} → ${exchange.response.statusCode}`;
-    });
-  } catch {
-    // The raw, digest-bound capture stays available even if its display shape differs.
-    return [];
-  }
+  const capture = parseHttpCapture(bytes);
+  // The raw, digest-bound capture stays available even if a line is defective.
+  if (capture.defects.length > 0 || capture.exchanges.length > 500) return [];
+  return capture.exchanges.map(
+    (exchange, index) =>
+      `${index + 1}. ${exchange.request.method} ${safeInlineJson(exchange.request.path)} → ${exchange.response.statusCode}`,
+  );
 }
 
 function renderScript(): string {

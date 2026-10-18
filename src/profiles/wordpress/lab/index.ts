@@ -6,6 +6,7 @@ import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import type { HttpCaptureRead } from "../../../lab/capture.js";
 import type {
   LabProvisioner,
   LabReachability,
@@ -109,17 +110,11 @@ export interface WordPressLab extends LabProvisioner<
 > {
   probe(handle: WordPressLabHandle): Promise<LabReachability>;
   markCapture(handle: WordPressLabHandle): Promise<string | null>;
+  /** The recorder's exchanges since `sinceMarker`, parsed, with the bytes for evidence. */
   readCapture(
     handle: WordPressLabHandle,
     sinceMarker: string,
-  ): Promise<
-    | {
-        readonly status: "captured";
-        readonly bytes: Buffer;
-        readonly dropped: number;
-      }
-    | { readonly status: "unavailable" }
-  >;
+  ): Promise<HttpCaptureRead>;
   /** Executes only the Harness-owned standard script in an isolated Lab peer. */
   runStandardScript(
     handle: WordPressLabHandle,
