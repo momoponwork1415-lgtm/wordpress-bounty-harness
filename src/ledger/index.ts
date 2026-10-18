@@ -44,7 +44,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     type: z.literal("selection-batch-bound"),
     selectionBatchId: id,
     policyDigest: digest,
-    selectionIds: z.array(id).min(1).max(5),
+    selectionIds: z.array(id).min(1).max(10),
   }),
   event({
     type: z.literal("snapshot-frozen"),

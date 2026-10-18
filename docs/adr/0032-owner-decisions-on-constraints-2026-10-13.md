@@ -151,6 +151,6 @@ v5 で変えたもの: 受け入れる種類の順位と「落とす種類」の
 | Q5 / Q9 順位と採点式 | ADR 0037 の 2026-10-19 追記 2 の重み（`installations: 0.5`、`recency: 0`、`historyPayingClass: 1`、`recordRecency: 1`）。所有者は 2026-10-19 に重みの決定を AI に委任した |
 | Q6 2 回目以降の独立 Trial | 選定による再訪は ADR 0037 追記 3（版上昇かつ最後の Trial から 90 日、`revisitPolicy: version-increased`）。「再訪は選定の結果であり、campaign 単位の承認ではない」。同じ版を手で再 Trial するときの扱いは Q6 のまま |
 | 確認 除外作者 5 社 | `policy/selection.json` の `excludedAuthors` は 7 名。WooCommerce と MailPoet は Automattic 資産として 2026-10-17 に足した（`policy/selection.md`） |
-| 確認 並列 3（Opus 併用時 2） | repo の既定は `resources.maxConcurrentRuns: 1`、`maxConcurrentTargets: 1`（schema 上限 4）。本番は host の campaign 設定で 4 / 4（2026-10-19 起動）。上限の引き上げは #347 |
+| 確認 並列 3（Opus 併用時 2） | repo の既定は `resources.maxConcurrentRuns: 1`、`maxConcurrentTargets: 1`。2026-10-19 に所有者が「並列数は 10、選ぶ数も増やす」と指示し、schema 上限を `maxConcurrentTargets` 4 → 10、`maximumTargets` 5 → 10 に上げた（#347）。対象ごとの `maxConcurrentRuns` の上限 4 は変えない。本番は host の campaign 設定で同時対象 10、選定方針の写しで `maximumTargets` 10 |
 | Q12 子は 3 | 子は最大 4（ADR 0029 の 2026-10-18 節、ADR 0033） |
 | 2026-10-16「選定の帯」「帯の上限の先行適用」の 100 万超の例外 | ADR 0037 追記 4 の cascade 最後の段として実装（PR #382、#295 は close） |

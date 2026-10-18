@@ -32,7 +32,7 @@
 ```
 harness history status                                   # 履歴mirrorの鮮度。fresh以外は終了コード1
 harness runtime check --config <path>                    # 起動時検査の全項目とCodex image / runtime profileの一致。欠ければ終了コード1
-harness select --config src/profiles/wordpress/policy/selection.json   # WordPress.org から3〜5対象を選び Snapshot 固定。承認は不要
+harness select --config src/profiles/wordpress/policy/selection.json   # WordPress.org から `maximumTargets`（3〜10）件までの対象を選び Snapshot 固定。承認は不要
 harness campaign run --all --campaign <id> --config <campaign.json>    # campaign 設定は同じ選定方針を参照する。最新の選定バッチから discovery（探索用 Lab は既定で付けない）。検証は後から verify next で Finding ごと
 harness review [--campaign <id>]                         # 検証済みの列を見る
 ```
@@ -78,6 +78,7 @@ v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入�
   - `observed` は完了した command event の文字列から Harness が数える下限の近似。script 内部のファイル読出しや通信は含まない。
   - 実効の同時数は協調Trialでは `min(maxConcurrentRuns, floor(memoryBudgetMiB / 10752))`。10,752 MiBはRoot＋最大4子のCodex sandbox（10 GiB）とrunごとのegress broker（512 MiB）の合計。旧単独Trialの計算単位は2,560 MiB。
   - ホストが小さいときは `memoryBudgetMiB` を下げる。1run分に満たない値では開始しない。
+  - **同時対象数**: `resources.maxConcurrentTargets`（1〜10）は対象ごとの campaign を何本同時に走らせるか。対象ごとの run は `maxRuns: 1` なので、実際に同時に走る探索 run はこの数になる。`memoryBudgetMiB` は対象ごとの run 数だけを縛り、対象をまたいだ合計は見ない（container の memory 上限は予約ではなく、Lab なし探索の実測は Codex 約 170 MiB、broker 約 110 MiB）。1 batch で選ぶ数は選定方針の `maximumTargets`（3〜10）で、同時対象数と同じにすると batch の最後に 1 本だけ走る時間が無くなる。`continuous run` のログイン余裕は `ceil(maximumTargets / maxConcurrentTargets) × (runWallTimeMinutes + 105)` 分（2026-10-19、所有者の指示で上限を 4 / 5 から 10 / 10 へ。#347）。
   - Labのメモリは対象ごとに別に要る。
 - **上限での停止と再開**: provider のrate limit / quotaの応答を受けたとき。
   - 新しいrunを出さず、進行中のrunを記録して止まる。終了コードは3で、台帳に `campaign-stopped(provider-limit)` が残る。
@@ -217,7 +218,7 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 
 ### 対象の自動選定
 
-`select` は [選定方針 JSON](../src/profiles/wordpress/policy/selection.json) を直接読み、WordPress.org の人気順・タグ順を列挙する。install下限もこの JSON が正本。`pluginDependencySlugs` は `Requires Plugins` ヘッダに現れない必要な依存を対象slugごとに列挙し、freeze時点の公式stable版をSnapshotに固定する。手動の開発・歴史的評価対象は `pluginDependencyPins` で版を明示する。台帳の探索開始（`runKind: explore` の `discovery-run-started`）と Finding を照合し、適格な次点候補で補充して3〜5対象を返す。選定だけで Trial が始まらなかった対象のうち Snapshot の失敗は除外しない。探索用 Lab の供給に失敗した対象は、その版に限って `lab-provision-failed` で除外し、版が上がれば戻す。依存pluginはSnapshotに固定し、Labと探索に同じsourceを渡す。source 0 件・子 0・broker 転送 1 以下で終わった run しか持たない対象は除外しない。終了記録と観測値のない開始記録だけの attempt も Trial に数えない。途中まで走った Trial は数え、再選定しない。自動候補源の `revisitPolicy` は `{ "kind": "version-increased", "minimumDaysSinceTrial": 90 }`: WordPress.org の現行 stable 版が台帳に数えた同 slug の全 Trial の版より高く、かつ最後の Trial 開始から 90 日以上経った slug だけが戻る（ADR 0037 の 2026-10-19 追記。それまでの `never` を置き換えた）。prompt 版の変更では戻さない。未公開 Finding を持つ対象は、提出済みでも公開を確認できないため除外する。
+`select` は [選定方針 JSON](../src/profiles/wordpress/policy/selection.json) を直接読み、WordPress.org の人気順・タグ順を列挙する。install下限もこの JSON が正本。`pluginDependencySlugs` は `Requires Plugins` ヘッダに現れない必要な依存を対象slugごとに列挙し、freeze時点の公式stable版をSnapshotに固定する。手動の開発・歴史的評価対象は `pluginDependencyPins` で版を明示する。台帳の探索開始（`runKind: explore` の `discovery-run-started`）と Finding を照合し、適格な次点候補で補充して `maximumTargets`（3〜10）件までの対象を返す。選定だけで Trial が始まらなかった対象のうち Snapshot の失敗は除外しない。探索用 Lab の供給に失敗した対象は、その版に限って `lab-provision-failed` で除外し、版が上がれば戻す。依存pluginはSnapshotに固定し、Labと探索に同じsourceを渡す。source 0 件・子 0・broker 転送 1 以下で終わった run しか持たない対象は除外しない。終了記録と観測値のない開始記録だけの attempt も Trial に数えない。途中まで走った Trial は数え、再選定しない。自動候補源の `revisitPolicy` は `{ "kind": "version-increased", "minimumDaysSinceTrial": 90 }`: WordPress.org の現行 stable 版が台帳に数えた同 slug の全 Trial の版より高く、かつ最後の Trial 開始から 90 日以上経った slug だけが戻る（ADR 0037 の 2026-10-19 追記。それまでの `never` を置き換えた）。prompt 版の変更では戻さない。未公開 Finding を持つ対象は、提出済みでも公開を確認できないため除外する。
 
 旧世代の既往は host 設定の `legacyHistory: {"file": "/abs/legacy-slugs.json"}` で渡す。`select` のたびに読み、`started` を `legacy-started`、`ambiguous` を `legacy-ambiguous` として除外する。所有者が `reconsider` に書いた slug は `legacy-*` と、file の `exportedAt` より前に始まった Trial の `previously-selected` を解除して再選定できる。`exportedAt` 以降に始まった Trial は通常どおり数えるので、同じ slug が batch ごとに選ばれ続けることはない（2026-10-16 の本番で popup-maker と the-events-calendar が連続選定された修正）。file が無ければ `select` は `legacy history unavailable` と表示し、候補源による `campaign run` と `continuous run` は起動しない。選定レポートの旧履歴 digest と実行時の digest が違えば止まる。`select --minimum <n>`（既定 3、runner は 1）未満しか固定できないときは、台帳に `target-selected` を書かず、各対象に `below-minimum` を付けて空の選定を返す。
 

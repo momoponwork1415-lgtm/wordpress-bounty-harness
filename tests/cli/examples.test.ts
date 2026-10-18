@@ -45,6 +45,16 @@ it("starts the checked-in v8 campaign with one concurrent target on WordPress 7.
   });
   expect(config.resources.maxConcurrentTargets).toBe(1);
   expect(config.wordpressVersion).toBe("7.1.3");
+  for (const [maxConcurrentTargets, accepted] of [
+    [10, true],
+    [11, false],
+  ] as const)
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...(source as object),
+        resources: { ...config.resources, maxConcurrentTargets },
+      }).success,
+    ).toBe(accepted);
 });
 
 it("retains the v6 measurement example as an unrunnable historical fixture", async () => {

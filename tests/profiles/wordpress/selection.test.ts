@@ -350,7 +350,7 @@ describe("WordPress selection public interface", () => {
       throw new Error("Expected automatic policy");
     expect(policy.candidateSource.tags.length).toBeGreaterThanOrEqual(6);
     expect(policy.wordpressVersion).toBe("7.1.3");
-    for (const maximumTargets of [2, 6])
+    for (const maximumTargets of [2, 11])
       expect(
         wordPressSelectionPolicySchema.safeParse({
           ...policy,

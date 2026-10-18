@@ -155,7 +155,7 @@ export interface ContinuousDeps {
   /** When the Programme scope copy was transcribed. */
   programmeObservedAt(): Promise<Date>;
   statfs(): Promise<{ readonly freeBytes: number }>;
-  /** maximumTargets × (runWallTimeMinutes + 30 × 3 + 15). */
+  /** ceil(maximumTargets / maxConcurrentTargets) × (runWallTimeMinutes + 30 × 3 + 15). */
   readonly loginMarginMinutes: number;
   clock(): Date;
   sleep(ms: number): Promise<void>;

@@ -128,7 +128,7 @@ const automaticSelectionPolicy = z
       .optional(),
     promptVariant: z.string().min(1).max(128),
     revisitPolicy: wordPressRevisitPolicySchema,
-    maximumTargets: z.number().int().min(3).max(5),
+    maximumTargets: z.number().int().min(3).max(10),
     /** The core image version pinned when select freezes the chosen targets. */
     wordpressVersion: coreVersionSchema,
     candidateSource: z.strictObject({

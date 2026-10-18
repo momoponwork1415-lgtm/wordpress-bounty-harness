@@ -74,7 +74,7 @@ const commonCampaignFields = {
   resources: z
     .strictObject({
       maxConcurrentRuns: z.number().int().min(1).max(4).default(1),
-      maxConcurrentTargets: z.number().int().min(1).max(4).default(1),
+      maxConcurrentTargets: z.number().int().min(1).max(10).default(1),
       memoryBudgetMiB: z.number().int().positive(),
     })
     .default({
