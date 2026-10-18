@@ -189,6 +189,19 @@ export interface CliProfile {
       readonly selectionPolicyPath?: string;
     },
   ): Promise<CampaignSummary>;
+  refute?(
+    state: CliState,
+    input: {
+      readonly campaignId: string;
+      readonly findingId?: string;
+      readonly configPath?: string;
+    },
+  ): Promise<
+    readonly {
+      readonly findingId: string;
+      readonly verdict: "refuted" | "upheld" | "undecided";
+    }[]
+  >;
   /** The target's newest public version, observed once; absent without a host. */
   latestVersion?(
     state: CliState,

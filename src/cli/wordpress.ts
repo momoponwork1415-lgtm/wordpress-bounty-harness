@@ -1,5 +1,6 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
@@ -94,6 +95,7 @@ import {
   inspectHistoryMirror,
 } from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
+import { refutePendingFindings } from "../profiles/wordpress/verification/refute.js";
 import { SmokeReplayVerifier } from "../profiles/wordpress/verification/smoke-replay-verifier.js";
 import {
   createWordPressLabStateObserver,
@@ -146,6 +148,12 @@ const ablation = z
 /** Human-edited, Git-tracked run configuration. It carries no credentials or keys. */
 const commonCampaignFields = {
   schemaVersion: z.literal(1),
+  refutation: z
+    .strictObject({
+      enabled: z.boolean().default(false),
+      promptId: z.literal("refute-v1").default("refute-v1"),
+    })
+    .default({ enabled: false, promptId: "refute-v1" }),
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
   runWallTimeMinutes: z.number().positive().max(240).optional(),
@@ -1093,6 +1101,32 @@ async function planWordPressDiscovery(
   };
 }
 
+async function refuteWordPressFindings(
+  state: CliState,
+  campaignId: string,
+  boundaries: WordPressCampaignBoundaries,
+  findingId?: string,
+) {
+  // 4b registers this asset and its digest; until then opt-in execution fails closed.
+  const asset = await loadWordPressDiscoveryAsset(
+    "refute-v1" as Parameters<typeof loadWordPressDiscoveryAsset>[0],
+  );
+  return refutePendingFindings({
+    campaignId,
+    ledger: state.ledger,
+    store: state.store,
+    attachments: boundaries.attachments,
+    profile: boundaries.runtimeProfile,
+    prompt: { id: "refute-v1", digest: asset.digest, text: asset.text },
+    resolveSource: async (snapshotDigest) =>
+      boundaries.sourceFor(await boundaries.loadSnapshot(snapshotDigest)),
+    runtime: boundaries.executor,
+    clock: state.clock,
+    newId: state.newId,
+    ...(findingId === undefined ? {} : { findingId }),
+  });
+}
+
 async function runWordPressCampaign(
   state: CliState,
   input: Parameters<CliProfile["runCampaign"]>[1],
@@ -1523,6 +1557,26 @@ export function createWordPressCliProfile(
     },
     runCampaign: (state, input) =>
       runWordPressCampaign(state, input, options, historyFor),
+    async refute(state, input) {
+      const path =
+        input.configPath ??
+        fileURLToPath(
+          new URL(
+            "../profiles/wordpress/policy/campaign.json",
+            import.meta.url,
+          ),
+        );
+      const config = wordpressCampaignConfigSchema.parse(
+        JSON.parse(await readFile(path, "utf8")) as unknown,
+      );
+      const boundaries = await options.boundaries(config, state);
+      return refuteWordPressFindings(
+        state,
+        input.campaignId,
+        boundaries,
+        input.findingId,
+      );
+    },
     stateDiffReader: (state) =>
       createWordPressStateDiffReader({ store: state.store }),
     labUp: (state, input) => wordPressLabUp(state, input, options),
