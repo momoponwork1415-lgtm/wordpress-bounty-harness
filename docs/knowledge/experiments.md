@@ -23,5 +23,6 @@
 | 2026-10-12〜13 | 10 | 本番 4 周で人間レビューの件数と中身はどうなるか | 第 3 周の候補 8 件中 scope 内 3 件。本物らしい 2 件が判定器の watch 外で `not-observed` | [reviews/2026-10-13-human-review-contract-and-parallel.md](../reviews/2026-10-13-human-review-contract-and-parallel.md) |
 | 2026-10-13 | 10 | install 下限と候補タグをデータで決めると | 下限 100,000、タグ 8 族。pool 442 plugin | [reviews/2026-10-13-selection-data.md](../reviews/2026-10-13-selection-data.md)、ADR 0032 |
 | 2026-10-13 | 10 | #214 探索 v4 の同一公開済み開発対象で、Lab scenario の有無により縦断結果はどう変わるか | 3 Trial は全件完了。scenario なし2件は Finding 4 / Lead 4、検証4件とも `incomplete(precondition)`。scenario あり1件は Finding 1 / Lead 2、判定器で1件 `runtime-confirmed`。3件とも同一 Snapshotで、未知発見率は測れない | [reviews/2026-10-13-critical-high-v4-development-trials.md](../reviews/2026-10-13-critical-high-v4-development-trials.md) |
+| 2026-10-18〜19 | 10 v8 | WP2Shell 記事に寄せた v8 は5対象で source 根拠付き候補を生成できるか | 最終 Trial は4/5完了、1件は schema error。所有者は探索段階の候補生成能力ありと定性的に判断。未知発見率と公開記録ごとの再発見率は未測定 | [2026-10-19-v8-five-target-rediscovery.md](../evaluation/2026-10-19-v8-five-target-rediscovery.md) |
 
 新しい行は PR で足す。「調べて報告」の成果物は [docs/reviews/](../reviews/) に置き、ここには 1 行だけ書く。
