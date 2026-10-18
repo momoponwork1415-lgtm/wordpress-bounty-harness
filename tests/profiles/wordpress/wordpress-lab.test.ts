@@ -180,12 +180,6 @@ async function fixture(
                   : "172.20.0.2",
             stderr: "",
           };
-        if (request.args[0] === "exec" && request.args[1] === "-i")
-          return {
-            exitCode: 0,
-            stdout: '{"status":"completed","completedSteps":1}',
-            stderr: "",
-          };
         if (request.args[0] === "exec" && request.args[1]?.endsWith("-proxy")) {
           if (request.args[2] === "wc")
             return {
@@ -358,27 +352,6 @@ describe("WordPress gVisor Lab", () => {
       expect(await lab.teardown(provisioned.handle)).toEqual({
         status: "removed",
       });
-  });
-
-  it("passes a private replay request to the runsc recorder over stdin", async () => {
-    const { lab, snapshot, setup, commands } = await fixture();
-    const provisioned = await lab.provision(snapshot, setup);
-    expect(provisioned.status).toBe("ready");
-    if (provisioned.status !== "ready") return;
-    const secret = "private-replay-value";
-    expect(
-      await lab.replayHttp(provisioned.handle, {
-        initialBindings: { value: secret },
-        steps: [{ method: "GET", path: "/{{value}}" }],
-      }),
-    ).toEqual({ status: "completed", completedSteps: 1 });
-    const replay = commands.find(
-      (command) => command.args[0] === "exec" && command.args[1] === "-i",
-    );
-    expect(replay?.args).toContain(`wbh-${provisioned.handle.id}-proxy`);
-    expect(JSON.stringify(replay?.args)).not.toContain(secret);
-    expect(replay?.stdin).toContain(secret);
-    await lab.teardown(provisioned.handle);
   });
 
   it("runs WP-CLI as the Apache volume owner when activating plugins", async () => {

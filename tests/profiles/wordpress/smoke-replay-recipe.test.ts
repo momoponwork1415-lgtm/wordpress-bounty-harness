@@ -1,20 +1,16 @@
 import { describe, expect, it } from "vitest";
 
+import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import {
   bindSmokeReferenceRoute,
-  createSmokeReplayRecipe,
   extractReplayBinding,
-  replayInputFor,
+  type SmokeReplayRecipe,
 } from "../../../src/profiles/wordpress/verification/smoke-replay-recipe.js";
 
 const sourceUser = "wbh-canary-admin-source";
-const comparisonUser = "wbh-canary-admin-comparison";
 const thirdUser = "wbh-canary-admin-third";
 const sourceKey = "01234567890123456789";
-const comparisonKey = "98765432109876543210";
 const thirdKey = "13579246801357924680";
-const sourceSecurity = "ABCDEFGHIJ";
-const comparisonSecurity = "KLMNOPQRST";
 const thirdSecurity = "UVWXYZ1234";
 
 function route(user: string, key: string) {
@@ -50,13 +46,8 @@ function exchange(
   };
 }
 
-function capture(
-  user: string,
-  key: string,
-  security: string,
-  lateReset = false,
-) {
-  const rows = [
+function capture(user: string, key: string, security: string) {
+  return [
     exchange(
       "GET",
       "/first",
@@ -68,40 +59,46 @@ function capture(
       "POST",
       "/third",
       `security=${security}`,
-      lateReset ? "pending" : `prefix-reset-${key}-reset-suffix`,
+      `prefix-reset-${key}-reset-suffix`,
     ),
-  ];
-  if (lateReset)
-    rows.push(exchange("GET", "/poll", "", `prefix-reset-${key}-reset-suffix`));
-  rows.push(
     exchange("GET", `/fourth?user=${user}&key=${key}`, "", "ok"),
     exchange("GET", "/fifth", "", "ok"),
     exchange("POST", "/sixth", `key=${key}`, "ok"),
     exchange("POST", "/seventh", `user=${user}`, "ok"),
     exchange("GET", "/eighth", "", "ok"),
-  );
-  return rows;
+  ];
 }
 
-describe("private WordPress smoke replay bindings", () => {
+describe("legacy smoke replay bindings read by the canary judges", () => {
   const sourceRoute = route(sourceUser, sourceKey);
-  const sourceCapture = capture(sourceUser, sourceKey, sourceSecurity);
-  const comparisonRoute = route(comparisonUser, comparisonKey);
-  const comparisonCapture = capture(
-    comparisonUser,
-    comparisonKey,
-    comparisonSecurity,
-    true,
-  );
-
-  it("counts malformed delimiter intervals as the replay runner does", () => {
-    const binding = {
+  const recipe: SmokeReplayRecipe = {
+    schemaVersion: 1,
+    findingSnapshotDigest: sourceRoute.snapshotDigest,
+    sourceRouteDigest: canonicalDigest(sourceRoute),
+    sourceAdminUser: sourceUser,
+    sourceResetKey: sourceKey,
+    securityBinding: {
+      name: "security",
+      left: "prefix-security-",
+      right: "-security-suffix",
+      pattern: "[A-Za-z0-9]{10}",
+      occurrence: "unique",
+    },
+    resetKeyBinding: {
       name: "resetKey",
       left: "prefix-reset-",
       right: "-reset-suffix",
       pattern: "[A-Za-z0-9]{20}",
       occurrence: "last",
-    } as const;
+    },
+    steps: sourceRoute.steps.map(({ method, path }) => ({
+      method: method as "GET" | "POST",
+      path,
+    })),
+  };
+
+  it("counts malformed delimiter intervals as the replay runner did", () => {
+    const binding = recipe.resetKeyBinding;
     expect(
       extractReplayBinding(
         `prefix-reset-${sourceKey}-reset-suffix prefix-reset-invalid!-reset-suffix`,
@@ -116,41 +113,8 @@ describe("private WordPress smoke replay bindings", () => {
     ).toBe(sourceKey);
   });
 
-  it("derives request templates only after two positive captures agree", () => {
-    const recipe = createSmokeReplayRecipe({
-      sourceRoute,
-      sourceCapture,
-      comparisonRoute,
-      comparisonCapture,
-      findingSnapshotDigest: sourceRoute.snapshotDigest,
-    });
-    const input = replayInputFor(recipe, thirdUser);
-    expect(input.steps).toHaveLength(8);
-    expect(input.steps[0]?.bindingsAfter?.[0]?.name).toBe("security");
-    expect(input.steps[2]?.bindingsAfter?.[0]?.occurrence).toBe("last");
-    expect(input.steps[3]?.path).toContain("{{resetKey}}");
-    expect(input.steps[3]?.path).toContain("{{adminUser}}");
-    expect(input.initialBindings).toEqual({ adminUser: thirdUser });
-  });
-
   it("binds the original route to fresh responses, and rejects a missing key", () => {
-    const recipe = createSmokeReplayRecipe({
-      sourceRoute,
-      sourceCapture,
-      comparisonRoute,
-      comparisonCapture,
-      findingSnapshotDigest: sourceRoute.snapshotDigest,
-    });
     const fresh = capture(thirdUser, thirdKey, thirdSecurity);
-    expect(() =>
-      createSmokeReplayRecipe({
-        sourceRoute,
-        sourceCapture,
-        comparisonRoute: route(thirdUser, thirdKey),
-        comparisonCapture: fresh,
-        findingSnapshotDigest: sourceRoute.snapshotDigest,
-      }),
-    ).not.toThrow();
     const bound = bindSmokeReferenceRoute({
       recipe,
       sourceRoute,

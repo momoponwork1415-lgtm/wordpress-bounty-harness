@@ -97,7 +97,6 @@ import {
 } from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import { classifyWordPressPrecondition } from "../profiles/wordpress/verification/precondition-class.js";
-import { SmokeReplayVerifier } from "../profiles/wordpress/verification/smoke-replay-verifier.js";
 import {
   createWordPressLabStateObserver,
   createWordPressStateDiffReader,
@@ -1655,14 +1654,7 @@ export function createWordPressCliProfile(
     async reverify(state, input) {
       const { config, policy } = await loadConfig(input.configPath);
       const boundaries = await options.boundaries(config, state);
-      const verifier =
-        input.smokeReplayDigest === undefined
-          ? boundaries.verifier
-          : new SmokeReplayVerifier({
-              lab: boundaries.lab,
-              store: state.store,
-              recipeDigest: input.smokeReplayDigest,
-            });
+      const verifier = boundaries.verifier;
       return reverifyOnSelectedVersion({
         campaignId: input.campaignId,
         findingId: input.findingId,
