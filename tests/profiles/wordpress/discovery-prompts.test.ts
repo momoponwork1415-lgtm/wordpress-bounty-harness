@@ -20,6 +20,17 @@ import {
 } from "../../../src/profiles/wordpress/prompts/index.js";
 
 describe("WordPress discovery prompt assets", () => {
+  it("loads and pins the source-only refutation objective separately from discovery prompts", async () => {
+    const prompt = await loadWordPressDiscoveryAsset("refute-v1");
+    expect(prompt.id).toBe("refute-v1");
+    expect(prompt.digest).toBe(
+      "sha256:b85f7c2ca8a76700709506e2e9a519a38300da0a93c7501b17d4a550249f769c",
+    );
+    expect(prompt.text).toContain("/workspace/main");
+    expect(prompt.text).toContain("undecided");
+    expect(prompt.text).not.toMatch(/sourceTrace|reasonCode|JSON string/);
+    expect(WORDPRESS_DISCOVERY_PROMPT_IDS).not.toContain("refute-v1");
+  });
   it("pins the current Verifier prompt to its file bytes and keeps answer strings out", async () => {
     const prompt = await loadWordPressVerifierPrompt();
     const bytes = await readFile(
@@ -103,6 +114,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v5",
       "wp2shell-whitebox-v1.7",
       "trust-boundary-v1",
+      "refute-v1",
     ]);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-derived-v1",

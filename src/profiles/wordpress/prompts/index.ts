@@ -34,6 +34,7 @@ export const WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS = [
 export const WORDPRESS_DISCOVERY_ASSET_IDS = [
   ...WORDPRESS_DISCOVERY_PROMPT_IDS,
   "trust-boundary-v1",
+  "refute-v1",
 ] as const;
 
 export type WordPressDiscoveryAssetId =
@@ -69,6 +70,7 @@ export async function loadWordPressDiscoveryAsset(
     case "wp2shell-bounty-v5":
     case "wp2shell-whitebox-v1.7":
     case "trust-boundary-v1":
+    case "refute-v1":
       fileName = `${id}.md`;
       break;
     default:
