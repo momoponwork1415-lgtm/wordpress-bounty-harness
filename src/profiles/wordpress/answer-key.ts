@@ -79,15 +79,3 @@ export function wordpressFindingLocations(
         : { file: location.file, function: location.function },
     );
 }
-
-/** Answer keys live outside Git; a file holds one key or an array of keys. */
-export function parseWordPressAnswerKeys(
-  value: unknown,
-): readonly WordPressAnswerKey[] {
-  return z
-    .union([
-      wordpressAnswerKeySchema.transform((key) => [key]),
-      z.array(wordpressAnswerKeySchema).min(1),
-    ])
-    .parse(value);
-}
