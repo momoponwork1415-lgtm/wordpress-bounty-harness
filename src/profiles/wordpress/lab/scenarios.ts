@@ -2,14 +2,6 @@ import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
 import { brizyBuilderPageSetupScript } from "./brizy-builder-page.js";
 import { brizyFileAttachmentFormSetupScript } from "./brizy-file-attachment-form.js";
 import {
-  DOWNLOAD_MONITOR_SCENARIO_ID,
-  downloadMonitorOrdinarySetupScript,
-} from "./download-monitor-adapter.js";
-import {
-  DOWNLOAD_MANAGER_SCENARIO_ID,
-  downloadManagerOrdinarySetupScript,
-} from "./download-manager-adapter.js";
-import {
   USER_REGISTRATION_SCENARIO_ID,
   userRegistrationOrdinarySetupScript,
 } from "./user-registration-adapter.js";
@@ -198,29 +190,6 @@ const definitions = [
     ordinaryMemberPost: true,
     adapterDigest: canonicalDigest(wpMembersOrdinarySetupScript()),
   },
-  {
-    id: DOWNLOAD_MANAGER_SCENARIO_ID,
-    version: 1,
-    name: "公開・会員向けダウンロード",
-    pluginSlug: "download-manager",
-    approvedComment: false,
-    secondaryLocale: null,
-    translation: null,
-    ordinaryDownloads: true,
-    adapterDigest: canonicalDigest(downloadManagerOrdinarySetupScript()),
-  },
-  {
-    id: DOWNLOAD_MONITOR_SCENARIO_ID,
-    version: 1,
-    name: "公開ページと通常のファイルダウンロード",
-    pluginSlug: "download-monitor",
-    approvedComment: false,
-    secondaryLocale: null,
-    translation: null,
-    roles: ["unauthenticated", "subscriber"],
-    expectedObservations: ["public-page-link", "public-download-fixture"],
-    adapterDigest: canonicalDigest(downloadMonitorOrdinarySetupScript()),
-  },
 ] as const;
 
 const pins: Record<(typeof definitions)[number]["id"], string> = {
@@ -250,10 +219,6 @@ const pins: Record<(typeof definitions)[number]["id"], string> = {
     "sha256:5051e8b9acb5c18b6c3b5428e8489fb764d158376b21f3ddebebb287cf22bb8c",
   "public-member-post-v1":
     "sha256:514d484423cd823054545d984b4ab3bbb8b6475575df3fc6eeb6109d13846af6",
-  "public-and-subscriber-downloads-v1":
-    "sha256:f5ac78c0ca7e5d302502c7cee8d7c76898f33efc1faa6136a62bed9656392591",
-  "public-file-download-v1":
-    "sha256:ef995efab795678b3a5f991d1890ac35790bf2cac57ce0ea1427b852bc84d8c3",
 };
 
 export const wordPressScenarioCatalogue = definitions.map((definition) => {
