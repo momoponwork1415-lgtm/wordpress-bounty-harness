@@ -1,32 +1,19 @@
 import { z } from "zod";
 
-import {
-  canonicalDigest,
-  canonicalJson,
-} from "../infrastructure/canonical-json.js";
+import { canonicalDigest } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
-import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
-import { countsAsTrial, recordedTrialActivity } from "./counts-as-trial.js";
+import type { Ledger } from "../ledger/index.js";
+import {
+  readResumeProgress,
+  recordedFailureAfterRuns,
+} from "./campaign-progress.js";
 import type {
   DiscoveryTransportRun,
   DiscoveryTransportResult,
 } from "./codex-native-agent-runtime.js";
-import {
-  createNativeRunReceipt,
-  nativeRunReceiptSchema,
-  type NativeRunReceipt,
-} from "./native-run-receipts.js";
+import { executeTrial, type TrialContext } from "./execute-trial.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
-import { recordReadPaths } from "./read-paths.js";
-import {
-  createReportRecorder,
-  type ReportRecorder,
-} from "./record-discovery-report.js";
-import {
-  recoverChildAgentReports,
-  recoverRootAgentReport,
-  type ReportFailure,
-} from "./recover-agent-reports.js";
+import type { ReportRecorder } from "./record-discovery-report.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const publishedAt = z.iso.datetime({ offset: true });
@@ -242,72 +229,15 @@ export async function runDiscoveryCampaign(options: {
   const concurrency = options.concurrency ?? 1;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4)
     throw new Error("Invalid discovery concurrency");
-  const ofTarget = <T extends { readonly snapshotDigest: string }>(
-    events: readonly T[],
-  ) => events.filter((event) => event.snapshotDigest === input.snapshotDigest);
-  // A concluded target is done; otherwise continue after the runs already spent.
-  const concluded = ofTarget(
-    options.ledger
-      .read({ campaignId: options.campaignId, type: "discovery-concluded" })
-      .map(({ event }) => event),
-  ).at(0);
-  if (concluded?.type === "discovery-concluded")
-    return { runCount: 0, findingsRecorded: 0, stoppedBy: concluded.stoppedBy };
-  // A start with no finish or receipt may reuse its ordinal on resume. A
-  // partial Trial with a receipt still consumes its ordinal.
-  const readFinishes = () => {
-    const finishes = new Map<
-      string,
-      Extract<LedgerEventV1, { type: "discovery-run-finished" }>
-    >();
-    for (const { event } of options.ledger.readAll({
-      campaignId: options.campaignId,
-      type: "discovery-run-finished",
-    }))
-      if (
-        event.type === "discovery-run-finished" &&
-        event.snapshotDigest === input.snapshotDigest
-      )
-        finishes.set(event.runId, event);
-    return finishes;
-  };
-  const finishedRuns = readFinishes();
-  const activeRuns = recordedTrialActivity(options.ledger, options.campaignId);
-  const startedExplorations = new Set<string>();
-  const spentOrdinals = new Set<number>();
-  let nextLegacyOrdinal = 0;
-  for (const { event } of options.ledger.readAll({
+  const target = {
+    ledger: options.ledger,
     campaignId: options.campaignId,
-    type: "discovery-run-started",
-  }))
-    if (
-      event.type === "discovery-run-started" &&
-      event.snapshotDigest === input.snapshotDigest &&
-      // Historical events had no runKind and each represented exploration.
-      (event.runKind ?? "explore") === "explore" &&
-      countsAsTrial(
-        finishedRuns.get(event.runId),
-        activeRuns.has(`${event.campaignId}\0${event.runId}`),
-      )
-    ) {
-      startedExplorations.add(event.runId);
-      if (event.trialOrdinal !== undefined)
-        spentOrdinals.add(event.trialOrdinal);
-      else {
-        while (spentOrdinals.has(nextLegacyOrdinal)) nextLegacyOrdinal++;
-        spentOrdinals.add(nextLegacyOrdinal++);
-      }
-    }
-  const seen = new Set<string>();
-  let noNewFindings = 0;
-  let runCount = 0;
-  let findingsRecorded = 0;
-  let stopped:
-    | "no-new-finding"
-    | "output-boundary"
-    | "provider-limit"
-    | "incomplete"
-    | undefined;
+    snapshotDigest: input.snapshotDigest,
+  };
+  // A concluded target is done; otherwise continue after the runs already spent.
+  const progress = readResumeProgress(target);
+  if (progress.concluded !== undefined)
+    return { runCount: 0, findingsRecorded: 0, stoppedBy: progress.concluded };
   if (
     options.runWallTimeMs !== undefined &&
     (!Number.isSafeInteger(options.runWallTimeMs) ||
@@ -315,8 +245,50 @@ export async function runDiscoveryCampaign(options: {
       options.runWallTimeMs > 240 * 60_000)
   )
     throw new Error("Invalid exploration wall time");
+  const startedExplorations = new Set(progress.startedExplorations);
+  const context: TrialContext = {
+    campaignId: options.campaignId,
+    ...(options.labId === undefined ? {} : { labId: options.labId }),
+    input,
+    history:
+      input.history.mode === "catalog"
+        ? catalog.parse(input.history)
+        : { mode: "none" },
+    ...(options.runWallTimeMs === undefined
+      ? {}
+      : { runWallTimeMs: options.runWallTimeMs }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    executor: options.executor,
+    attachments: options.attachments,
+    evidence: options.evidence,
+    ledger: options.ledger,
+    recordReport: options.recordReport,
+    ...(options.assessCoverage === undefined
+      ? {}
+      : { assessCoverage: options.assessCoverage }),
+    clock,
+    seen: new Set<string>(),
+  };
+  // Stop rules are evaluated once per Trial; in-flight Trials still finish.
+  const tally: {
+    runCount: number;
+    findingsRecorded: number;
+    noNewFindings: number;
+    next: number;
+    stopped:
+      | Extract<
+          DiscoveryStop,
+          "no-new-finding" | "output-boundary" | "provider-limit" | "incomplete"
+        >
+      | undefined;
+  } = {
+    runCount: 0,
+    findingsRecorded: 0,
+    noNewFindings: 0,
+    next: 0,
+    stopped: undefined,
+  };
   const limit = Math.min(input.stopRules.maxRuns, options.plannedTrials.length);
-  let next = 0;
   const runOne = async (index: number) => {
     const trial = options.plannedTrials[index]!;
     if (
@@ -326,375 +298,41 @@ export async function runDiscoveryCampaign(options: {
       throw new Error(
         "Trial identity or ordinal differs from its exploration run",
       );
-    const history =
-      input.history.mode === "catalog"
-        ? catalog.parse(input.history)
-        : { mode: "none" as const };
-    const historyMetadata =
-      history.mode === "catalog"
-        ? {
-            mode: "catalog" as const,
-            digest: history.digest,
-            recordIds: history.records.map((record) => record.id),
-          }
-        : { mode: "none" as const };
-    const executePlanned = async (
-      planned: PlannedDiscoveryRun,
-      runWallTimeMs = options.runWallTimeMs,
-    ): Promise<{
-      outcome: "completed" | "failed" | "provider-limited";
-      counted: boolean;
-      foundNew: boolean;
-      heldBoundary: boolean;
-    }> => {
-      const run =
-        runWallTimeMs === undefined
-          ? planned.run
-          : {
-              ...planned.run,
-              expiresAt: new Date(
-                clock().getTime() + runWallTimeMs,
-              ).toISOString(),
-            };
-      if (
-        run.targetSnapshotDigest !== input.snapshotDigest ||
-        run.profile.digest !== input.modelProfileDigest ||
-        (input.entryIndex === undefined
-          ? planned.configuration.entryIndex !== undefined
-          : input.entryIndex.enabled
-            ? planned.configuration.entryIndex?.enabled !== true ||
-              planned.configuration.entryIndex.digest !==
-                input.entryIndex.digest
-            : planned.configuration.entryIndex?.enabled !== false)
-      )
-        throw new Error("Planned run differs from the CampaignInput");
-      const base = {
-        schemaVersion: 1 as const,
-        campaignId: options.campaignId,
-        snapshotDigest: input.snapshotDigest,
-        occurredAt: clock().toISOString(),
-      };
-      const started = await options.ledger.append({
-        ...base,
-        identity: `discovery-start-${run.runId}`,
-        type: "discovery-run-started",
-        runId: run.runId,
-        trialId: trial.trialId,
-        trialOrdinal: trial.trialOrdinal,
-        runKind: "explore",
-        ...(options.labId === undefined
-          ? { labAttached: false as const }
-          : { labId: options.labId, labAttached: true as const }),
-        history: historyMetadata,
-        configuration: {
-          ...planned.configuration,
-          promptDigest:
-            planned.configuration.promptDigest ?? input.promptDigest,
-          trustBoundaryVersion: input.trustBoundary.version,
-          sourcePack: {
-            dependency:
-              run.dependencySource === undefined
-                ? ("none" as const)
-                : ("mounted" as const),
-          },
-        },
-      });
-      if (started.status === "conflict")
-        throw new Error("Discovery run identity conflict");
-      startedExplorations.add(run.runId);
-      runCount++;
-      let outcome: "completed" | "failed" | "provider-limited" = "failed";
-      let wallTimeMs = 0;
-      let usage: NativeRunReceipt["usage"] | undefined;
-      let observed: NativeRunReceipt["observed"] | undefined;
-      let childThreadsObserved: number | undefined;
-      let childThreadsAdmitted: number | undefined;
-      let brokerMetrics: NativeRunReceipt["brokerMetrics"];
-      let sandboxExitCode: number | undefined;
-      let diagnosticArtifactDigest: string | undefined;
-      let researchArtifact:
-        { readonly digest: string; readonly truncated: boolean } | undefined;
-      let receiptDigest: string | undefined;
-      let coverageDigest: string | undefined;
-      let readPathsDigest: string | undefined;
-      let failure: ReportFailure | undefined;
-      const reportState = { foundNew: false, heldBoundary: false };
-      const recordReport = createReportRecorder({
-        ...options,
-        base,
-        snapshotDigest: input.snapshotDigest,
-        trialId: trial.trialId,
-        seen,
-        state: reportState,
-        onFindingRecorded: (count) => {
-          findingsRecorded += count;
-        },
-      });
-      const controller = new AbortController();
-      const onOperatorStop = () => controller.abort("operator");
-      options.signal?.addEventListener("abort", onOperatorStop, { once: true });
-      if (options.signal?.aborted) onOperatorStop();
-      const wallTimer =
-        runWallTimeMs === undefined
-          ? undefined
-          : setTimeout(() => controller.abort("wall"), runWallTimeMs);
-      let shutdownTimer: NodeJS.Timeout | undefined;
-      const shutdownFallback = new Promise<DiscoveryTransportResult>(
-        (resolve) => {
-          const afterAbort = () => {
-            shutdownTimer = setTimeout(
-              () => {
-                resolve({
-                  receipt: createNativeRunReceipt({
-                    runId: run.runId,
-                    targetSnapshotDigest: run.targetSnapshotDigest,
-                    profile: run.profile,
-                    terminal: "incomplete",
-                    reason:
-                      controller.signal.reason === "operator"
-                        ? "operator"
-                        : "wall",
-                    startedAt: base.occurredAt,
-                    completedAt: clock().toISOString(),
-                  }),
-                });
-              },
-              Math.min(70_000, runWallTimeMs ?? 70_000),
-            );
-          };
-          controller.signal.addEventListener("abort", afterAbort, {
-            once: true,
-          });
-          if (controller.signal.aborted) afterAbort();
-        },
-      );
-      try {
-        const execution = options.executor.execute(
-          {
-            ...run,
-            campaignInput: {
-              ...input,
-              promptDigest:
-                planned.configuration.promptDigest ?? input.promptDigest,
-              history,
-            },
-          },
-          controller.signal,
-        );
-        const result = await Promise.race([execution, shutdownFallback]);
-        if (wallTimer !== undefined) clearTimeout(wallTimer);
-        if (result.researchArtifact !== undefined) {
-          if (result.researchArtifact.attachment.kind !== "research")
-            throw new Error("Discovery research artifact kind is invalid");
-          researchArtifact = {
-            digest: result.researchArtifact.attachment.digest,
-            truncated: result.researchArtifact.truncated,
-          };
-        }
-        const receipt = nativeRunReceiptSchema.parse(result.receipt);
-        wallTimeMs = Math.max(
-          0,
-          Date.parse(receipt.completedAt) - Date.parse(receipt.startedAt),
-        );
-        usage = receipt.usage;
-        observed = receipt.observed;
-        childThreadsObserved = receipt.childThreadsObserved;
-        childThreadsAdmitted = receipt.childThreadsAdmitted;
-        brokerMetrics = receipt.brokerMetrics;
-        sandboxExitCode = receipt.sandboxExitCode;
-        diagnosticArtifactDigest = receipt.diagnosticArtifactDigest;
-        // The receipt carries the runtime the run used (CLI version, catalog digest, model).
-        receiptDigest = await options.evidence.putFiles({
-          "receipt.json": canonicalJson(receipt),
-        });
-        readPathsDigest = await recordReadPaths(
-          options.attachments,
-          options.evidence,
-          receipt.diagnosticArtifactDigest,
-        );
-        if (receipt.providerLimit !== undefined) outcome = "provider-limited";
-        if (
-          receipt.terminal === "incomplete" &&
-          receipt.reason !== "unavailable"
-        )
-          failure = {
-            reason: receipt.reason,
-            ...(receipt.reasonDetail === undefined
-              ? {}
-              : { reasonDetail: receipt.reasonDetail }),
-            ...(receipt.providerLimit === undefined
-              ? {}
-              : { providerLimit: receipt.providerLimit }),
-          };
-        await recoverChildAgentReports({
-          result,
-          run,
-          snapshotDigest: input.snapshotDigest,
-          recordReport,
-          ledger: options.ledger,
-          evidence: options.evidence,
-          attachments: options.attachments,
-          base,
-          trialId: trial.trialId,
-          trialOrdinal: trial.trialOrdinal,
-          ...(options.labId === undefined ? {} : { labId: options.labId }),
-          history: historyMetadata,
-          configuration: planned.configuration,
-          promptDigest: input.promptDigest,
-          trustBoundaryVersion: input.trustBoundary.version,
-        });
-        const recoveredRoot = await recoverRootAgentReport({
-          result,
-          receipt,
-          run,
-          snapshotDigest: input.snapshotDigest,
-          recordReport,
-        });
-        if (recoveredRoot.recovered) outcome = "completed";
-        if (recoveredRoot.failure !== undefined)
-          failure = recoveredRoot.failure;
-        if (
-          outcome === "completed" &&
-          run.coverageSchema !== undefined &&
-          options.assessCoverage !== undefined
-        ) {
-          let coverage: unknown;
-          if (result.attachment !== undefined) {
-            const stored = await options.attachments.read(result.attachment);
-            if (stored.status === "resolved") {
-              try {
-                const report = JSON.parse(
-                  stored.bytes.toString("utf8"),
-                ) as Record<string, unknown>;
-                coverage = report.coverage;
-              } catch {
-                // The report recorder already classifies malformed reports.
-              }
-            }
-          }
-          const assessed = options.assessCoverage(coverage);
-          if (assessed.record !== undefined)
-            coverageDigest = await options.evidence.putFiles({
-              "coverage.json": canonicalJson(assessed.record),
-            });
-          if (!assessed.accepted) {
-            outcome = "failed";
-            failure = { reason: "depth" };
-          }
-        }
-      } catch {
-        outcome = "failed";
-        if (controller.signal.aborted) {
-          const reason =
-            controller.signal.reason === "operator" ? "operator" : "wall";
-          failure = { reason };
-          wallTimeMs = runWallTimeMs ?? 0;
-          const receipt = createNativeRunReceipt({
-            runId: run.runId,
-            targetSnapshotDigest: run.targetSnapshotDigest,
-            profile: run.profile,
-            terminal: "incomplete",
-            reason,
-            startedAt: base.occurredAt,
-            completedAt: clock().toISOString(),
-          });
-          receiptDigest = await options.evidence.putFiles({
-            "receipt.json": canonicalJson(receipt),
-          });
-        }
-      } finally {
-        if (wallTimer !== undefined) clearTimeout(wallTimer);
-        if (shutdownTimer !== undefined) clearTimeout(shutdownTimer);
-        options.signal?.removeEventListener("abort", onOperatorStop);
-      }
-      const counted = countsAsTrial({
-        observed,
-        childThreadsObserved,
-        brokerMetrics,
-      });
-      if (!counted && outcome === "completed") {
-        outcome = "failed";
-        failure = { reason: "evidence", reasonDetail: "no-work" };
-      }
-      const finished = await options.ledger.append({
-        ...base,
-        identity: `discovery-finish-${run.runId}`,
-        type: "discovery-run-finished",
-        runId: run.runId,
-        outcome,
-        costUsd: "unavailable",
-        wallTimeMs,
-        ...(usage === undefined ? {} : { usage }),
-        ...(observed === undefined ? {} : { observed }),
-        ...(childThreadsObserved === undefined ? {} : { childThreadsObserved }),
-        ...(childThreadsAdmitted === undefined ? {} : { childThreadsAdmitted }),
-        ...(brokerMetrics === undefined ? {} : { brokerMetrics }),
-        ...(sandboxExitCode === undefined ? {} : { sandboxExitCode }),
-        ...(diagnosticArtifactDigest === undefined
-          ? {}
-          : { diagnosticArtifactDigest }),
-        ...(researchArtifact === undefined ? {} : { researchArtifact }),
-        ...(outcome === "completed" || failure === undefined ? {} : failure),
-        artifacts: [
-          ...(receiptDigest === undefined
-            ? []
-            : [{ kind: "native-run-receipt", digest: receiptDigest }]),
-          ...(coverageDigest === undefined
-            ? []
-            : [{ kind: "coverage", digest: coverageDigest }]),
-          ...(readPathsDigest === undefined
-            ? []
-            : [{ kind: "read-paths", digest: readPathsDigest }]),
-        ],
-      });
-      if (finished.status === "conflict")
-        throw new Error("Discovery finish identity conflict");
-      return { outcome, counted, ...reportState };
-    };
-    const explore = await executePlanned(trial.explore);
+    startedExplorations.add(trial.explore.run.runId);
+    tally.runCount++;
+    const explore = await executeTrial(context, trial);
+    tally.findingsRecorded += explore.findingsRecorded;
     if (!explore.counted) {
-      stopped ??=
+      tally.stopped ??=
         explore.outcome === "provider-limited"
           ? "provider-limit"
           : "incomplete";
       return;
     }
-    // Stop rules are evaluated once per Trial; in-flight Trials still finish.
-    if (explore.outcome === "provider-limited") stopped ??= "provider-limit";
-    if (explore.outcome === "failed") stopped ??= "incomplete";
+    if (explore.outcome === "provider-limited")
+      tally.stopped ??= "provider-limit";
+    if (explore.outcome === "failed") tally.stopped ??= "incomplete";
     if (explore.outcome === "completed") {
       if (!options.repeatAll && explore.heldBoundary && !explore.foundNew)
-        stopped ??= "output-boundary";
-      else noNewFindings = explore.foundNew ? 0 : noNewFindings + 1;
+        tally.stopped ??= "output-boundary";
+      else tally.noNewFindings = explore.foundNew ? 0 : tally.noNewFindings + 1;
     }
-    if (!options.repeatAll && noNewFindings >= input.stopRules.noFindingRuns)
-      stopped ??= "no-new-finding";
+    if (
+      !options.repeatAll &&
+      tally.noNewFindings >= input.stopRules.noFindingRuns
+    )
+      tally.stopped ??= "no-new-finding";
   };
   const worker = async () => {
-    while (stopped === undefined && next < limit) {
-      const ordinal = next++;
-      if (!spentOrdinals.has(ordinal)) await runOne(ordinal);
+    while (tally.stopped === undefined && tally.next < limit) {
+      const ordinal = tally.next++;
+      if (!progress.spentOrdinals.has(ordinal)) await runOne(ordinal);
     }
   };
   await Promise.all(Array.from({ length: concurrency }, worker));
-  const outcomes = readFinishes();
-  const activeAfter = recordedTrialActivity(options.ledger, options.campaignId);
-  const countedRuns = [...startedExplorations].filter((runId) =>
-    countsAsTrial(
-      outcomes.get(runId),
-      activeAfter.has(`${options.campaignId}\0${runId}`),
-    ),
-  );
-  const recordedFailure = countedRuns.some(
-    (runId) => outcomes.get(runId)?.outcome === "provider-limited",
-  )
-    ? "provider-limit"
-    : countedRuns.some((runId) => outcomes.get(runId)?.outcome !== "completed")
-      ? "incomplete"
-      : undefined;
-  const stoppedBy =
-    recordedFailure ??
-    stopped ??
+  const stoppedBy: DiscoveryStop =
+    recordedFailureAfterRuns(target, startedExplorations) ??
+    tally.stopped ??
     (options.plannedTrials.length >= input.stopRules.maxRuns
       ? "max-runs"
       : "plans-exhausted");
@@ -715,5 +353,9 @@ export async function runDiscoveryCampaign(options: {
     if (recorded.status === "conflict")
       throw new Error("Discovery conclusion identity conflict");
   }
-  return { runCount, findingsRecorded, stoppedBy };
+  return {
+    runCount: tally.runCount,
+    findingsRecorded: tally.findingsRecorded,
+    stoppedBy,
+  };
 }

@@ -5,6 +5,50 @@ import {
   type VerificationResultV1,
 } from "../verification/reproduction-package.js";
 
+const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const PACKAGE_FILE_LIMIT = 1024 * 1024;
+
+/**
+ * What a review Lab needs from `lab.json`: the frozen Snapshot and Lab setup
+ * digests the Lab must reproduce, and the setup and Snapshot it was built from.
+ * A profile reads `setup` and `snapshot` with its own schema; the rest of the
+ * file is passed through as written.
+ */
+export const labReconstructionSchema = z.looseObject({
+  snapshotDigest: digest,
+  labSetupDigest: digest,
+  setup: z.unknown(),
+  snapshot: z.unknown(),
+});
+export type LabReconstruction = z.infer<typeof labReconstructionSchema>;
+
+/** A review Lab is rebuilt from the sealed package alone; the ledger holds only its digest. */
+export async function openLabReconstruction(
+  store: PrivateArtifactStore,
+  packageDigest: string,
+): Promise<
+  | { readonly status: "opened"; readonly reconstruction: LabReconstruction }
+  | {
+      readonly status: "unavailable";
+      readonly reason:
+        | "missing"
+        | "malformed"
+        | "integrity-mismatch"
+        | "size-limit-exceeded"
+        | "unsafe";
+    }
+> {
+  const file = await store.readJson(
+    packageDigest,
+    "lab.json",
+    labReconstructionSchema,
+    PACKAGE_FILE_LIMIT,
+  );
+  return file.status === "resolved"
+    ? { status: "opened", reconstruction: file.value }
+    : { status: "unavailable", reason: file.status };
+}
+
 /** Review opens the sealed private artifact through its digest, never ledger text. */
 export async function openReproductionPackage(
   store: PrivateArtifactStore,
@@ -15,6 +59,7 @@ export async function openReproductionPackage(
       readonly status: "opened";
       readonly manual: string;
       readonly script: string;
+      /** Passed through as written; older packages carry less than `labReconstructionSchema`. */
       readonly reconstruction: unknown;
       readonly evidence: unknown;
       /** Null for packages sealed before agent-authored sidecars were added. */
@@ -33,7 +78,7 @@ export async function openReproductionPackage(
   if (result.status !== "runtime-confirmed" && result.status !== "reproduced")
     return { status: "unavailable" };
   const digest = result.reproductionPackageDigest;
-  const limit = 1024 * 1024;
+  const limit = PACKAGE_FILE_LIMIT;
   const [manual, script, lab, evidence, sidecar] = await Promise.all([
     store.readFile(digest, "manual.md", limit),
     store.readFile(digest, "reproduce.py", limit),
@@ -68,5 +113,5 @@ export async function openReproductionPackage(
 
 /** Only the back-reference is checked; the rest of the file is passed through as written. */
 const evidenceFileSchema = z.looseObject({
-  judgeEvidenceDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  judgeEvidenceDigest: digest,
 });

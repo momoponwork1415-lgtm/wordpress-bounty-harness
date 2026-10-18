@@ -5,7 +5,7 @@ import {
   recoverChildReportFromRollout,
   rootThreadIdFromRollout,
 } from "../../../discovery/codex-native-agent-runtime.js";
-import { nativeRunReceiptSchema } from "../../../discovery/native-run-receipts.js";
+import { readNativeRunReceipt } from "../../../discovery/native-run-receipts.js";
 import type { ProviderAttachmentStore } from "../../../discovery/provider-research-report.js";
 import { recordWordPressReport } from "./candidate-admission.js";
 
@@ -53,12 +53,10 @@ export async function recoverWordPressChildReports(options: {
     )?.digest;
     if (digest === undefined)
       throw new Error("A finished run has no private receipt");
-    const read = await evidence.readFile(digest, "receipt.json", 64 * 1024);
-    if (read.status !== "resolved")
+    const receipt = await readNativeRunReceipt(evidence, digest);
+    if (receipt === undefined)
       throw new Error("Private run receipt is unavailable");
-    return nativeRunReceiptSchema.parse(
-      JSON.parse(read.bytes.toString("utf8")) as unknown,
-    );
+    return receipt;
   };
   const diagnosticOf = async (digest: string) => {
     const result = await attachments.readByDigest("diagnostic", digest);

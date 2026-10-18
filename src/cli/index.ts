@@ -129,7 +129,6 @@ export interface CliProfile {
     readonly canaries: unknown;
     readonly browserImage: string;
     close(): Promise<void>;
-    wait(): Promise<void>;
   }>;
   /** Lines describing the public history mirror, and whether it is fresh; null when none is configured. */
   historyStatus(
@@ -551,16 +550,32 @@ function exactDraft(values: Values) {
   };
 }
 
-/** Holds startup signals until the new Lab session can be closed safely. */
+/**
+ * The one owner of SIGINT/SIGTERM for `lab up --for-review`: a signal during
+ * launch closes the session as soon as it exists; a signal afterwards ends the
+ * foreground wait. The profile session only knows how to close itself.
+ */
 export async function runForegroundReviewLab(
   launch: () => Promise<ReviewLabSession>,
   io: CliIo,
   signals: ReviewSignalSource = process,
 ): Promise<void> {
   let interrupted = false;
+  let release: (() => void) | undefined;
   const interrupt = () => {
     interrupted = true;
+    release?.();
   };
+  const waitForInterrupt = () =>
+    new Promise<void>((resolve) => {
+      // Signal listeners alone do not keep Node's event loop alive.
+      const keepAlive = setInterval(() => undefined, 60_000);
+      release = () => {
+        clearInterval(keepAlive);
+        release = undefined;
+        resolve();
+      };
+    });
   signals.on("SIGINT", interrupt);
   signals.on("SIGTERM", interrupt);
   try {
@@ -585,8 +600,8 @@ export async function runForegroundReviewLab(
         io.stdout(
           "Run the package's manual HTTP or browser steps in that client; interrupt this command to remove the Lab.",
         );
-        // There is no await between this check and wait() installing its handlers.
-        if (!interrupted) await session.wait();
+        // Printing is synchronous, so an interrupt raised while printing is already recorded here.
+        if (!interrupted) await waitForInterrupt();
       }
     } finally {
       await session.close();
