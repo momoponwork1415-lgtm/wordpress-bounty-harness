@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type {
   Ledger,
   LedgerEventV1,
-  LedgerReadQuery,
+  LedgerReadAllQuery,
 } from "../ledger/index.js";
 import type { CampaignSummary } from "./pipeline.js";
 
@@ -61,7 +61,7 @@ export type ContinuousMemo = {
 export interface ContinuousDeps {
   readonly stateDirectory: string;
   readonly campaignPrefix: string;
-  readonly ledger: Pick<Ledger, "read">;
+  readonly ledger: Pick<Ledger, "readAll">;
   readonly verifyConcurrency?: number;
   verifyNext?(): Promise<{
     readonly findingId: string;
@@ -165,16 +165,10 @@ export async function clearContinuousStop(
 }
 
 function readAll(
-  ledger: Pick<Ledger, "read">,
-  query: Omit<LedgerReadQuery, "limit" | "afterSequence">,
+  ledger: Pick<Ledger, "readAll">,
+  query: LedgerReadAllQuery,
 ): LedgerEventV1[] {
-  const events: LedgerEventV1[] = [];
-  for (let afterSequence = 0; ;) {
-    const page = ledger.read({ ...query, afterSequence, limit: 1000 });
-    events.push(...page.map(({ event }) => event));
-    if (page.length < 1000) return events;
-    afterSequence = page[page.length - 1]!.sequence;
-  }
+  return ledger.readAll(query).map(({ event }) => event);
 }
 
 /** `<prefix>-<YYYYMMDD>-<n>`; n continues from the ledger's highest. */

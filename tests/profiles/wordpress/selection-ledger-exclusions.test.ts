@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ledgerEventV1Schema,
   type Ledger,
-  type LedgerReadQuery,
+  type LedgerReadAllQuery,
   type LedgerRecord,
 } from "../../../src/ledger/index.js";
 import {
@@ -135,28 +135,25 @@ function submitted(
 
 function reader(
   events: readonly ReturnType<typeof selected>[],
-): Pick<Ledger, "read"> {
+): Pick<Ledger, "readAll"> {
   const records: readonly LedgerRecord[] = events.map((event, index) => ({
     sequence: index + 1,
     event,
   }));
   return {
-    read(query: LedgerReadQuery = {}) {
-      return records
-        .filter(
-          ({ sequence, event }) =>
-            sequence > (query.afterSequence ?? 0) &&
-            (query.type === undefined || event.type === query.type) &&
-            (query.campaignId === undefined ||
-              event.campaignId === query.campaignId),
-        )
-        .slice(0, query.limit ?? 100);
+    readAll(query: LedgerReadAllQuery = {}) {
+      return records.filter(
+        ({ event }) =>
+          (query.type === undefined || event.type === query.type) &&
+          (query.campaignId === undefined ||
+            event.campaignId === query.campaignId),
+      );
     },
   };
 }
 
 function inspect(
-  ledger: Pick<Ledger, "read">,
+  ledger: Pick<Ledger, "readAll">,
   candidates: readonly { readonly slug: string; readonly version: string }[],
   kind:
     | "never"

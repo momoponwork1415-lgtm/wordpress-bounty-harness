@@ -10,12 +10,7 @@ import type {
   LabProvisioner,
   LabReachability,
 } from "../lab/index.js";
-import type {
-  Ledger,
-  LedgerEventV1,
-  LedgerReadQuery,
-  LedgerRecord,
-} from "../ledger/index.js";
+import type { Ledger, LedgerEventV1, LedgerRecord } from "../ledger/index.js";
 import type { TargetSelection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
 import { storeTargetSkipDiagnostic } from "./skip-diagnostic.js";
@@ -83,20 +78,6 @@ type IncompleteReason = Extract<
   { status: "incomplete" }
 >["reason"];
 type VerificationRecord = { sequence: number; event: FinishedVerification };
-
-function readAll(
-  ledger: Ledger,
-  query: Omit<LedgerReadQuery, "limit" | "afterSequence">,
-): LedgerRecord[] {
-  const records: LedgerRecord[] = [];
-  let afterSequence = 0;
-  for (;;) {
-    const page = ledger.read({ ...query, afterSequence, limit: 1000 });
-    records.push(...page);
-    if (page.length < 1000) return records;
-    afterSequence = page[page.length - 1]!.sequence;
-  }
-}
 
 function scenarioForVerification(
   previous: VerificationRecord,
@@ -235,19 +216,19 @@ export async function runCampaignPipeline<
   };
 
   const selectedSnapshots = new Map<string, string>();
-  for (const { event } of readAll(ledger, {
+  for (const { event } of ledger.readAll({
     campaignId,
     type: "target-selected",
   }))
     if (event.type === "target-selected")
       selectedSnapshots.set(event.selectionId, event.snapshotDigest);
   const concludedSnapshots = new Set(
-    readAll(ledger, { campaignId, type: "discovery-concluded" }).map(
-      ({ event }) => event.snapshotDigest,
-    ),
+    ledger
+      .readAll({ campaignId, type: "discovery-concluded" })
+      .map(({ event }) => event.snapshotDigest),
   );
   // A refused or failed Trial is skipped for this campaign; it is not resumed.
-  for (const { event } of readAll(ledger, {
+  for (const { event } of ledger.readAll({
     campaignId,
     type: "target-skipped",
   }))
@@ -258,7 +239,7 @@ export async function runCampaignPipeline<
     )
       concludedSnapshots.add(event.snapshotDigest);
   const findingsBySnapshot = new Map<string, string[]>();
-  for (const { event } of readAll(ledger, {
+  for (const { event } of ledger.readAll({
     campaignId,
     type: "finding-recorded",
   })) {
@@ -268,7 +249,7 @@ export async function runCampaignPipeline<
     findingsBySnapshot.set(event.snapshotDigest, findings);
   }
   const verificationHistory = new Map<string, VerificationRecord[]>();
-  for (const record of readAll(ledger, {
+  for (const record of ledger.readAll({
     campaignId,
     type: "verification-finished",
   })) {
@@ -280,7 +261,7 @@ export async function runCampaignPipeline<
     history.push({ sequence: record.sequence, event });
     verificationHistory.set(key, history);
   }
-  const recordedLabs = readAll(ledger, {
+  const recordedLabs = ledger.readAll({
     campaignId,
     type: "lab-provisioned",
   });
@@ -348,10 +329,11 @@ export async function runCampaignPipeline<
 
   /** A refusal is a provider failure without a usage limit (e.g. cyber_policy). */
   const refusedTrial = (snapshotDigest: string): boolean => {
-    const finished = readAll(ledger, {
-      campaignId,
-      type: "discovery-run-finished",
-    })
+    const finished = ledger
+      .readAll({
+        campaignId,
+        type: "discovery-run-finished",
+      })
       .map(({ event }) => event)
       .filter(
         (event) =>
@@ -622,26 +604,30 @@ export async function runCampaignPipeline<
         return;
       }
       stage = "verification";
-      const earlier = readAll(ledger, {
+      const earlier = ledger.readAll({
         campaignId,
         type: "verification-finished",
       });
-      const labs = readAll(ledger, { campaignId, type: "lab-provisioned" });
+      const labs = ledger.readAll({ campaignId, type: "lab-provisioned" });
       const verifications: {
         findingId: string;
         status: VerificationResultV1["status"];
       }[] = [];
       let verificationCleanupFailed = false;
-      const findings = readAll(ledger, {
-        campaignId,
-        type: "finding-recorded",
-      }).filter(({ event }) => event.snapshotDigest === snapshot.digest);
-      const providerLimited = (findingId: string): boolean => {
-        const run = readAll(ledger, {
+      const findings = ledger
+        .readAll({
           campaignId,
-          findingId,
-          type: "verifier-run-finished",
-        }).at(-1)?.event;
+          type: "finding-recorded",
+        })
+        .filter(({ event }) => event.snapshotDigest === snapshot.digest);
+      const providerLimited = (findingId: string): boolean => {
+        const run = ledger
+          .readAll({
+            campaignId,
+            findingId,
+            type: "verifier-run-finished",
+          })
+          .at(-1)?.event;
         return (
           run?.type === "verifier-run-finished" &&
           run.providerLimit !== undefined
@@ -728,11 +714,13 @@ export async function runCampaignPipeline<
             campaignLabSetupDigest,
             reconstruction: pipeline.reconstructionFor(snapshot),
           });
-          const recorded = readAll(ledger, {
-            campaignId,
-            findingId: event.findingId,
-            type: "verification-finished",
-          }).at(-1);
+          const recorded = ledger
+            .readAll({
+              campaignId,
+              findingId: event.findingId,
+              type: "verification-finished",
+            })
+            .at(-1);
           if (
             recorded?.event.type !== "verification-finished" ||
             recorded.event.verificationId !== verificationId
@@ -749,7 +737,8 @@ export async function runCampaignPipeline<
             requestStop("incomplete");
             const cleanupLabIds =
               result.cleanupLabIds ??
-              readAll(ledger, { campaignId, type: "lab-provisioned" })
+              ledger
+                .readAll({ campaignId, type: "lab-provisioned" })
                 .filter(
                   ({ event: labEvent }) =>
                     labEvent.identity ===
@@ -946,19 +935,19 @@ export async function verifyNextFinding<
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
 }): Promise<VerifyNextSummary | null> {
-  const findings = readAll(options.ledger, {
+  const findings = options.ledger.readAll({
     ...(options.campaignId === undefined
       ? {}
       : { campaignId: options.campaignId }),
     type: "finding-recorded",
   });
-  const histories = readAll(options.ledger, {
+  const histories = options.ledger.readAll({
     ...(options.campaignId === undefined
       ? {}
       : { campaignId: options.campaignId }),
     type: "verification-finished",
   });
-  const labs = readAll(options.ledger, {
+  const labs = options.ledger.readAll({
     ...(options.campaignId === undefined
       ? {}
       : { campaignId: options.campaignId }),
@@ -1114,7 +1103,7 @@ export async function reverifyOnSelectedVersion<
   if (finding?.type !== "finding-recorded")
     throw new Error("The finding is not recorded in this campaign");
   const selected = ledger
-    .read({ campaignId, type: "target-selected", limit: 1000 })
+    .readAll({ campaignId, type: "target-selected" })
     .map(({ event }) => event)
     .find(
       (event) =>
@@ -1144,11 +1133,10 @@ export async function reverifyOnSelectedVersion<
       throw new Error("The reference route belongs to a different Finding");
   }
   const observed = ledger
-    .read({
+    .readAll({
       campaignId: referenceCampaignId,
       findingId,
       type: "verification-finished",
-      limit: 1000,
     })
     .map(({ event }) => event)
     .filter(
@@ -1227,10 +1215,9 @@ export async function reverifyOnSelectedVersion<
     options.version === undefined
   ) {
     const frozen = ledger
-      .read({
+      .readAll({
         campaignId: options.snapshotCampaignId,
         type: "snapshot-frozen",
-        limit: 1000,
       })
       .some(
         ({ event }) =>
@@ -1254,10 +1241,9 @@ export async function reverifyOnSelectedVersion<
     snapshot = await pipeline.freeze(target);
   } else {
     const recordedSelection = ledger
-      .read({
+      .readAll({
         campaignId: options.snapshotCampaignId,
         type: "target-selected",
-        limit: 1000,
       })
       .map(({ event }) => event)
       .find(
@@ -1268,10 +1254,9 @@ export async function reverifyOnSelectedVersion<
     if (recordedSelection?.type !== "target-selected")
       throw new Error("The pinned reference Snapshot is not recorded");
     const frozen = ledger
-      .read({
+      .readAll({
         campaignId: options.snapshotCampaignId,
         type: "snapshot-frozen",
-        limit: 1000,
       })
       .some(
         ({ event }) =>
@@ -1302,11 +1287,10 @@ export async function reverifyOnSelectedVersion<
   const setup = pipeline.setupFor(snapshot);
   if (observed === undefined) {
     const previous = ledger
-      .read({
+      .readAll({
         campaignId,
         findingId,
         type: "verification-finished",
-        limit: 1000,
       })
       .map(({ event }) => event)
       .filter(
@@ -1324,7 +1308,7 @@ export async function reverifyOnSelectedVersion<
         "A prior incomplete(precondition) verification is required for scenario retry",
       );
     const previousLab = ledger
-      .read({ campaignId, type: "lab-provisioned", limit: 1000 })
+      .readAll({ campaignId, type: "lab-provisioned" })
       .map(({ event }) => event)
       .find(
         (event) =>
@@ -1348,10 +1332,9 @@ export async function reverifyOnSelectedVersion<
     options.version !== undefined
   ) {
     const observedLab = ledger
-      .read({
+      .readAll({
         campaignId: referenceCampaignId,
         type: "lab-provisioned",
-        limit: 1000,
       })
       .map(({ event }) => event)
       .find(
@@ -1542,7 +1525,7 @@ export async function provisionFindingLab<
   if (finding?.type !== "finding-recorded")
     throw new Error("The finding is not recorded in this campaign");
   const selected = ledger
-    .read({ campaignId, type: "target-selected", limit: 1000 })
+    .readAll({ campaignId, type: "target-selected" })
     .map(({ event }) => event)
     .find(
       (event) =>
@@ -1570,7 +1553,7 @@ export async function provisionFindingLab<
       "The frozen source differs from the finding snapshot; the Lab was not started",
     );
   const verification = ledger
-    .read({ campaignId, findingId, type: "verification-finished", limit: 1000 })
+    .readAll({ campaignId, findingId, type: "verification-finished" })
     .map(({ event }) => event)
     .filter(
       (event) =>

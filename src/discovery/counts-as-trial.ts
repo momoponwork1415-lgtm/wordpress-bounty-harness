@@ -10,31 +10,24 @@ type TrialObservation = {
 
 /** Persisted child starts and candidate records prove work before a root finish. */
 export function recordedTrialActivity(
-  ledger: Pick<Ledger, "read">,
+  ledger: Pick<Ledger, "readAll">,
   campaignId?: string,
 ): ReadonlySet<string> {
   const active = new Set<string>();
-  for (let afterSequence = 0; ;) {
-    const page = ledger.read({
-      ...(campaignId === undefined ? {} : { campaignId }),
-      afterSequence,
-      limit: 1000,
-    });
-    for (const { event } of page) {
-      const runId =
-        event.type === "discovery-run-started"
-          ? event.runKind === "child"
-            ? event.parentRunId
-            : undefined
-          : event.type === "finding-recorded" ||
-              event.type === "lead-recorded" ||
-              event.type === "candidate-held"
-            ? event.runId
-            : undefined;
-      if (runId !== undefined) active.add(`${event.campaignId}\0${runId}`);
-    }
-    if (page.length < 1000) break;
-    afterSequence = page[page.length - 1]!.sequence;
+  for (const { event } of ledger.readAll(
+    campaignId === undefined ? {} : { campaignId },
+  )) {
+    const runId =
+      event.type === "discovery-run-started"
+        ? event.runKind === "child"
+          ? event.parentRunId
+          : undefined
+        : event.type === "finding-recorded" ||
+            event.type === "lead-recorded" ||
+            event.type === "candidate-held"
+          ? event.runId
+          : undefined;
+    if (runId !== undefined) active.add(`${event.campaignId}\0${runId}`);
   }
   return active;
 }
