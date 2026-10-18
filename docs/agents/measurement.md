@@ -30,7 +30,7 @@ case ごとに分ける。1 case = `state/`（台帳と Private Evidence）と `
 
 - `host.json`: `examples/translatepress-3.3.1/host.example.json` を元に、`workDirectory` を case ごとに分け、`images.*` を全部 digest で指定する。WordPress image は `pdo_mysql` 入りのもの（無いと `incomplete(precondition)`）。
 - `selection.json`: manual 形。`candidateSlugs` と `pinnedVersions` で版を固定し、`promptVariant` を既定 prompt にする。
-- `campaign.json`: `promptId`、`runWallTimeMinutes` 60、`stopRules.maxRuns` 1、`lab.scenarioId` を case に合わせる。
+- `campaign.json`: `promptId` は `wp2shell-bounty-v8`、`mode` は `wp2shell`、`runWallTimeMinutes` は 120、`stopRules.maxRuns` は 1、`lab.scenarioId` を case に合わせる。最低60分の能動的探索を同じTrial内で行う。入口索引は渡さない。
 - 時刻: ホスト（WSL2）の時計は遅れることがある。開始前に `date -u` と外部の時刻を比べる。ずれていれば記録に注記し、wall は台帳の `wallTimeMs` で読む。
 
 ## 3. 実行

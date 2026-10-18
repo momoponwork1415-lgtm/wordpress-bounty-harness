@@ -2,7 +2,10 @@ import { z } from "zod";
 import { isAbsolute, posix } from "node:path";
 
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
-import { canonicalJson } from "../infrastructure/canonical-json.js";
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../infrastructure/canonical-json.js";
 import { campaignInputV1Schema, type CampaignInputV1 } from "./campaign.js";
 import {
   admitAgentRuntimeProfile,
@@ -12,6 +15,7 @@ import {
 } from "./agent-runtime-profile.js";
 import {
   createNativeRunReceipt,
+  nativeRunReceiptSchema,
   type NativeRunReceipt,
 } from "./native-run-receipts.js";
 import type {
@@ -83,9 +87,37 @@ function extractCandidateReport(message: string) {
     throw new Error("Final message has no candidate arrays");
   return candidateReportSchema.parse(value);
 }
+function mergeRootTurnReports(messages: readonly string[]) {
+  const reports: z.infer<typeof candidateReportSchema>[] = [];
+  for (const message of messages) {
+    try {
+      reports.push(extractCandidateReport(message));
+    } catch {
+      // Progress prose and malformed interim reports are not candidates.
+    }
+  }
+  const latest = reports.at(-1);
+  if (latest === undefined) return undefined;
+  const distinct = (key: "findings" | "leads") => {
+    const seen = new Set<string>();
+    return reports
+      .flatMap((report) => report[key])
+      .filter((claim) => {
+        const identity = canonicalJson(claim);
+        if (seen.has(identity)) return false;
+        seen.add(identity);
+        return true;
+      });
+  };
+  return {
+    ...latest,
+    findings: distinct("findings"),
+    leads: distinct("leads"),
+  };
+}
 /** Candidate extraction is independent of transcript event admission. */
 function extractRootCandidateReport(stdout: string) {
-  let message: string | undefined;
+  const messages: string[] = [];
   for (const line of stdout.split("\n")) {
     try {
       const event = object(JSON.parse(line) as unknown);
@@ -95,12 +127,31 @@ function extractRootCandidateReport(stdout: string) {
         item?.type === "agent_message" &&
         typeof item.text === "string"
       )
-        message = item.text;
+        messages.push(item.text);
     } catch {
       // A malformed event does not erase a later final message.
     }
   }
-  return message === undefined ? undefined : extractCandidateReport(message);
+  return mergeRootTurnReports(messages);
+}
+
+function extractRootCandidateReportFromRollout(raw: string) {
+  const messages: string[] = [];
+  for (const line of raw.split("\n")) {
+    try {
+      const event = object(JSON.parse(line) as unknown);
+      const payload = object(event?.payload);
+      if (
+        event?.type === "event_msg" &&
+        payload?.type === "task_complete" &&
+        typeof payload.last_agent_message === "string"
+      )
+        messages.push(payload.last_agent_message);
+    } catch {
+      // An interrupted rollout can end with a partial line.
+    }
+  }
+  return mergeRootTurnReports(messages);
 }
 function childClaim(value: unknown): unknown {
   if (typeof value !== "string") return value;
@@ -153,6 +204,10 @@ export interface CodexSandboxCommand {
   readonly executable: "codex";
   readonly args: readonly string[];
   readonly stdin: string;
+  /** A cooperative discovery run resumes the same Root session until this wall floor. */
+  readonly minimumActiveMs?: number;
+  readonly resumeArgs?: readonly string[];
+  readonly resumePrompt?: string;
   readonly supportFiles: readonly {
     readonly path: string;
     readonly content: string;
@@ -170,6 +225,13 @@ export interface CodexSandboxCommand {
     readonly mode: "ro";
     readonly expectedTree: ExpectedSourceTree;
   };
+  /** Additional profile supplied source trees, each sealed in the snapshot. */
+  readonly additionalDependencyMounts?: readonly {
+    readonly directory: string;
+    readonly path: string;
+    readonly mode: "ro";
+    readonly expectedTree: ExpectedSourceTree;
+  }[];
   readonly researchMount?: {
     readonly path: "/workspace/research";
     readonly mode: "rw";
@@ -212,6 +274,10 @@ export interface DiscoveryTransportRun {
   readonly targetSnapshotDigest: string;
   readonly profile: AgentRuntimeProfile;
   readonly prompt: string;
+  /** A completed discovery report is not admitted before this active wall floor. */
+  readonly minimumActiveMs?: number;
+  /** A versioned excerpt already present in prompt, used only for early Root resumes. */
+  readonly resumePrompt?: string;
   /** Profile-owned Root report schema; children keep their existing report. */
   readonly coverageSchema?: Record<string, unknown>;
   /** Screening uses one agent even when the runtime profile permits children. */
@@ -231,6 +297,11 @@ export interface DiscoveryTransportRun {
     readonly directory: string;
     readonly tree: ExpectedSourceTree;
   };
+  readonly dependencySources?: readonly {
+    readonly path: string;
+    readonly directory: string;
+    readonly tree: ExpectedSourceTree;
+  }[];
   readonly expiresAt: string;
 }
 export interface DiscoveryTransportResult {
@@ -253,6 +324,13 @@ const discoveryTransportRunSchema = z.strictObject({
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
+  minimumActiveMs: z
+    .number()
+    .int()
+    .positive()
+    .max(120 * 60_000)
+    .optional(),
+  resumePrompt: z.string().min(1).max(2_048).optional(),
   coverageSchema: z.record(z.string(), z.unknown()).optional(),
   coordination: z.enum(["solo", "cooperative"]).optional(),
   outputKind: z.literal("verification").optional(),
@@ -285,6 +363,24 @@ const discoveryTransportRunSchema = z.strictObject({
         bytes: z.number().int().nonnegative(),
       }),
     })
+    .optional(),
+  dependencySources: z
+    .array(
+      z.strictObject({
+        path: z
+          .string()
+          .regex(
+            /^\/workspace\/(?:php|dependencies\/[a-z0-9][a-z0-9-]{0,63})$/,
+          ),
+        directory: z.string().min(1),
+        tree: z.strictObject({
+          digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+          entries: z.number().int().nonnegative(),
+          bytes: z.number().int().nonnegative(),
+        }),
+      }),
+    )
+    .max(32)
     .optional(),
   expiresAt: z.iso.datetime({ offset: true }),
 });
@@ -343,6 +439,22 @@ function rootThreadId(stdout: string): string | undefined {
     }
   }
   return undefined;
+}
+
+function rootThreadIdFromResult(
+  result: CodexSandboxResult,
+): string | undefined {
+  const fromTranscript = rootThreadId(result.stdout);
+  if (fromTranscript !== undefined) return fromTranscript;
+  const ids = new Set<string>();
+  for (const raw of result.rollouts ?? []) {
+    try {
+      ids.add(rootThreadIdFromRollout(raw));
+    } catch {
+      // Child rollouts have no Root exec identity.
+    }
+  }
+  return ids.size === 1 ? [...ids][0] : undefined;
 }
 
 function isRootRollout(raw: string, threadId: string): boolean {
@@ -422,6 +534,7 @@ type ChildRollout = {
   readonly finalMessage: string | undefined;
   readonly startedAt: string;
   readonly completedAt: string;
+  readonly captureTruncated: boolean;
 };
 
 function decodeChildRollout(
@@ -437,6 +550,7 @@ function decodeChildRollout(
   let finalMessage: string | undefined;
   let startedAt: string | undefined;
   let completedAt: string | undefined;
+  let captureTruncated = false;
   const commands: ObservedCommand[] = [];
   for (const line of raw.split("\n")) {
     if (line.trim().length === 0) continue;
@@ -462,6 +576,8 @@ function decodeChildRollout(
         agentPath = spawn.agent_path;
         if (typeof event.timestamp === "string") startedAt = event.timestamp;
       }
+    } else if (event.type === "session_capture") {
+      if (payload?.truncated === true) captureTruncated = true;
     } else if (event.type === "turn_context") {
       if (typeof payload?.model === "string") modelId = payload.model;
       if (typeof payload?.effort === "string") effort = payload.effort;
@@ -505,6 +621,7 @@ function decodeChildRollout(
     finalMessage,
     startedAt: startedAt ?? new Date(0).toISOString(),
     completedAt: completedAt ?? startedAt ?? new Date(0).toISOString(),
+    captureTruncated,
   };
 }
 
@@ -578,7 +695,9 @@ function sourcePath(path: string, cwd?: string): string | undefined {
   }
   const resolved = posix.resolve(directory ?? "/", path);
   return resolved.startsWith("/workspace/main/") ||
-    resolved.startsWith("/workspace/wordpress/")
+    resolved.startsWith("/workspace/wordpress/") ||
+    resolved.startsWith("/workspace/php/") ||
+    /^\/workspace\/dependencies\/[a-z0-9][a-z0-9-]{0,63}\//.test(resolved)
     ? resolved
     : undefined;
 }
@@ -608,7 +727,7 @@ function observedFromCommands(
       }
     if (filesRead === before)
       for (const match of command.matchAll(
-        /\/workspace\/(?:main|wordpress)\/[^\s'"`;&|)]+/g,
+        /\/workspace\/(?:main|wordpress|php|dependencies\/[a-z0-9][a-z0-9-]{0,63})\/[^\s'"`;&|)]+/g,
       )) {
         filesRead++;
         paths.add(match[0]);
@@ -646,7 +765,30 @@ function usageFromTranscript(
       const event = object(JSON.parse(line) as unknown);
       if (event?.type !== "turn.completed") continue;
       const parsed = usageSchema.safeParse(event.usage);
-      if (parsed.success) usage = parsed.data;
+      if (parsed.success)
+        usage =
+          usage === undefined
+            ? parsed.data
+            : {
+                input_tokens: usage.input_tokens + parsed.data.input_tokens,
+                output_tokens: usage.output_tokens + parsed.data.output_tokens,
+                ...(usage.cached_input_tokens === undefined ||
+                parsed.data.cached_input_tokens === undefined
+                  ? {}
+                  : {
+                      cached_input_tokens:
+                        usage.cached_input_tokens +
+                        parsed.data.cached_input_tokens,
+                    }),
+                ...(usage.reasoning_output_tokens === undefined ||
+                parsed.data.reasoning_output_tokens === undefined
+                  ? {}
+                  : {
+                      reasoning_output_tokens:
+                        usage.reasoning_output_tokens +
+                        parsed.data.reasoning_output_tokens,
+                    }),
+              };
     } catch {
       // A malformed report does not erase earlier usage.
     }
@@ -701,7 +843,7 @@ function decodeTranscript(
     }
   | { reasonDetail: string } {
   const lines = stdout.split("\n").filter((line) => line.trim().length > 0);
-  let started = false;
+  let threadId: string | undefined;
   let completed = false;
   let report:
     | z.infer<typeof reportSchema>
@@ -720,11 +862,19 @@ function decodeTranscript(
     const parsed = event.safeParse(value);
     if (!parsed.success) return { reasonDetail: "invalid-event-shape" };
     if (parsed.data.type === "thread.started") {
-      if (started) return { reasonDetail: "duplicate-thread-start" };
-      started = true;
+      const id = (parsed.data as Record<string, unknown>).thread_id;
+      if (typeof id !== "string")
+        return { reasonDetail: "invalid-thread-start" };
+      if (threadId !== undefined && id !== threadId)
+        return { reasonDetail: "changed-root-thread-id" };
+      threadId = id;
       continue;
     }
-    if (parsed.data.type === "turn.started") continue;
+    if (parsed.data.type === "turn.started") {
+      completed = false;
+      finalMessage = undefined;
+      continue;
+    }
     if (parsed.data.type === "turn.completed") {
       if (completed) return { reasonDetail: "duplicate-turn-completion" };
       const object = parsed.data as Record<string, unknown>;
@@ -781,7 +931,7 @@ function decodeTranscript(
       reasonDetail: `unadmitted-event-type:${/^[a-z][a-z._-]{0,31}$/.test(parsed.data.type) ? parsed.data.type : "other"}`,
     };
   }
-  if (!started) return { reasonDetail: "missing-thread-start" };
+  if (threadId === undefined) return { reasonDetail: "missing-thread-start" };
   if (!completed) return { reasonDetail: "missing-turn-completion" };
   if (finalMessage === undefined)
     return { reasonDetail: "missing-final-message" };
@@ -971,9 +1121,18 @@ function admittedRun(
         run.campaignInput.lab.mode === "none") &&
     admitAgentRuntimeProfile(run.profile, sandboxImage).status === "admitted" &&
     run.prompt.length > 0 &&
+    (run.minimumActiveMs === undefined ||
+      (cooperative && run.outputKind !== "verification")) &&
+    (run.resumePrompt === undefined ||
+      (run.minimumActiveMs !== undefined &&
+        run.prompt.includes(run.resumePrompt))) &&
     isAbsolute(run.sourceDirectory) &&
     (run.dependencySource === undefined ||
       isAbsolute(run.dependencySource.directory)) &&
+    (run.dependencySources === undefined ||
+      (run.dependencySources.every((source) => isAbsolute(source.directory)) &&
+        new Set(run.dependencySources.map((source) => source.path)).size ===
+          run.dependencySources.length)) &&
     CODEX_AUTHENTICATION_METHODS.includes(run.profile.authenticationMethod) &&
     (!cooperative ||
       admitCooperativeRuntimeProfile(run.profile, sandboxImage).status ===
@@ -1069,7 +1228,7 @@ function codexArgs(
           "--enable",
           "multi_agent",
           "-c",
-          "agents.max_threads=3",
+          "agents.max_threads=4",
           "-c",
           "agents.max_depth=1",
         ]
@@ -1096,6 +1255,61 @@ function codexArgs(
   ];
 }
 
+function codexResumeArgs(
+  run: DiscoveryTransportRun,
+  grant: ProviderCredentialEgressGrant,
+  login: boolean,
+): string[] {
+  return [
+    "exec",
+    "resume",
+    "--model",
+    run.profile.requestedModelId,
+    "--skip-git-repo-check",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "-c",
+    'approval_policy="never"',
+    "-c",
+    'sandbox_mode="danger-full-access"',
+    ...(run.profile.cyberAccessProgram === "unavailable"
+      ? []
+      : ["--cyber-access-program", run.profile.cyberAccessProgram]),
+    "--disable",
+    "apps",
+    "--disable",
+    "remote_plugin",
+    "--disable",
+    "unified_exec",
+    "-c",
+    'web_search="disabled"',
+    "--enable",
+    "multi_agent",
+    "-c",
+    "agents.max_threads=4",
+    "-c",
+    "agents.max_depth=1",
+    "-c",
+    `model_reasoning_effort="${run.profile.requestedEffort}"`,
+    ...(login
+      ? [
+          "-c",
+          `chatgpt_base_url="${grant.baseUrl}/backend-api/"`,
+          "--disable",
+          "enable_request_compression",
+        ]
+      : ["-c", `openai_base_url="${grant.baseUrl}/v1"`]),
+    ...(run.profile.serviceTier === "unavailable"
+      ? []
+      : ["-c", `service_tier="${run.profile.serviceTier}"`]),
+    "-c",
+    'history.persistence="none"',
+    "--output-schema",
+    "/opt/codex-support/report-schema.json",
+    "--json",
+  ];
+}
+
 function sandboxCommand(
   run: DiscoveryTransportRun,
   grant: ProviderCredentialEgressGrant,
@@ -1106,6 +1320,13 @@ function sandboxCommand(
   return {
     executable: "codex",
     args: codexArgs(run, grant, cooperative, login),
+    ...(run.minimumActiveMs === undefined
+      ? {}
+      : {
+          minimumActiveMs: run.minimumActiveMs,
+          resumeArgs: codexResumeArgs(run, grant, login),
+          resumePrompt: run.resumePrompt ?? run.prompt,
+        }),
     stdin:
       run.campaignInput.history.mode === "catalog"
         ? `${run.prompt}\n\nPublic history catalog (records strictly before the cutoff):\n${canonicalJson(run.campaignInput.history)}`
@@ -1136,6 +1357,16 @@ function sandboxCommand(
             mode: "ro" as const,
             expectedTree: run.dependencySource.tree,
           },
+        }),
+    ...(run.dependencySources === undefined
+      ? {}
+      : {
+          additionalDependencyMounts: run.dependencySources.map((source) => ({
+            directory: source.directory,
+            path: source.path,
+            mode: "ro" as const,
+            expectedTree: source.tree,
+          })),
         }),
     ...(cooperative
       ? {
@@ -1251,21 +1482,29 @@ export class CodexNativeAgentRuntime {
       if (
         result.failureKind === "timed-out" ||
         result.failureKind === "cancelled"
-      )
+      ) {
+        const attachment = await this.#retainRootCandidate(result);
         return incompleteExecution(
           state,
           result.failureKind === "timed-out" ? "wall" : "operator",
           result.completedAt,
           granted.receipt.digest,
-        );
-      if (failure !== undefined)
-        return incompleteExecution(
-          state,
-          failure.reason,
-          result.completedAt,
-          granted.receipt.digest,
           undefined,
-          failure.reasonDetail,
+          undefined,
+          attachment,
+        );
+      }
+      if (failure !== undefined)
+        return this.#retainRootOnIncomplete(
+          result,
+          incompleteExecution(
+            state,
+            failure.reason,
+            result.completedAt,
+            granted.receipt.digest,
+            undefined,
+            failure.reasonDetail,
+          ),
         );
     }
     if (
@@ -1279,11 +1518,14 @@ export class CodexNativeAgentRuntime {
         granted.receipt.digest,
       );
     if (granted.receipt.cleanup.status !== "completed")
-      return incompleteExecution(
-        state,
-        "provider",
-        result.completedAt,
-        granted.receipt.digest,
+      return this.#retainRootOnIncomplete(
+        result,
+        incompleteExecution(
+          state,
+          "provider",
+          result.completedAt,
+          granted.receipt.digest,
+        ),
       );
     return this.#resolveReport(state, result, granted.receipt.digest);
   }
@@ -1301,7 +1543,7 @@ export class CodexNativeAgentRuntime {
           runtimeProfileDigest: run.profile.digest,
           model: run.profile.requestedModelId,
           protocol: "responses",
-          maxRequests: cooperative ? 1600 : 100,
+          maxRequests: cooperative ? 2000 : 100,
           maxRequestBytes: cooperative ? 8 * 1024 * 1024 : 1024 * 1024,
           maxResponseBytes: 8 * 1024 * 1024,
           expiresAt: run.expiresAt,
@@ -1326,7 +1568,7 @@ export class CodexNativeAgentRuntime {
     result: CodexSandboxResult,
     grantReceiptDigest: string,
   ): Promise<{ reason: IncompleteReason; reasonDetail: string } | undefined> {
-    const parentThreadId = rootThreadId(result.stdout);
+    const parentThreadId = rootThreadIdFromResult(result);
     if (parentThreadId !== undefined) {
       const children = await this.#captureChildren(
         state.run,
@@ -1337,6 +1579,11 @@ export class CodexNativeAgentRuntime {
       state.agentRuns = children.agentRuns;
       state.childThreadsObserved = children.observed;
       state.childThreadsAdmitted = children.admitted;
+      if (children.observed > 255)
+        return {
+          reason: "evidence",
+          reasonDetail: "child-session-limit-exceeded",
+        };
     }
     if (result.researchFailure !== undefined || result.research === undefined)
       return { reason: "evidence", reasonDetail: "research-capture-failed" };
@@ -1366,6 +1613,53 @@ export class CodexNativeAgentRuntime {
       return { reason: "evidence", reasonDetail: "root-rollout-unavailable" };
     }
     return undefined;
+  }
+
+  async #retainRootCandidate(
+    result: CodexSandboxResult,
+  ): Promise<ProviderAttachmentRef | undefined> {
+    let report = extractRootCandidateReport(result.stdout);
+    if (report === undefined) {
+      const threadId = rootThreadIdFromResult(result);
+      const rollout = result.rollouts?.find(
+        (raw) => threadId !== undefined && isRootRollout(raw, threadId),
+      );
+      if (rollout !== undefined)
+        report = extractRootCandidateReportFromRollout(rollout);
+    }
+    if (report === undefined) return undefined;
+    try {
+      return await this.attachments.put(
+        "findings",
+        Buffer.from(canonicalJson(report)),
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** A later failure must not erase a report from an earlier Root turn. */
+  async #retainRootOnIncomplete(
+    result: CodexSandboxResult,
+    failure: DiscoveryTransportResult,
+  ): Promise<DiscoveryTransportResult> {
+    if (
+      failure.receipt.terminal !== "incomplete" ||
+      failure.attachment !== undefined
+    )
+      return failure;
+    const attachment = await this.#retainRootCandidate(result);
+    if (attachment === undefined) return failure;
+    const { digest: _priorDigest, ...body } = failure.receipt;
+    const bound = { ...body, reportArtifactDigest: attachment.digest };
+    return {
+      ...failure,
+      attachment,
+      receipt: nativeRunReceiptSchema.parse({
+        ...bound,
+        digest: canonicalDigest(bound),
+      }),
+    };
   }
 
   async #captureRootRollout(
@@ -1415,13 +1709,18 @@ export class CodexNativeAgentRuntime {
       const byStart = left.child.startedAt.localeCompare(right.child.startedAt);
       return byStart || left.order - right.order;
     });
-    const admitted = children.slice(0, 3);
+    // max_threads=4 bounds live children, not the number of waves in a Trial.
+    const admitted = children.slice(0, 255);
     const agentRuns: AgentRun[] = [];
     for (const { child, raw } of admitted)
       agentRuns.push(
         await this.#captureChild(run, child, raw, grantReceiptDigest),
       );
-    return { agentRuns, observed: children.length, admitted: admitted.length };
+    return {
+      agentRuns,
+      observed: children.length,
+      admitted: admitted.filter(({ child }) => !child.captureTruncated).length,
+    };
   }
 
   async #captureChild(
@@ -1432,7 +1731,10 @@ export class CodexNativeAgentRuntime {
   ): Promise<AgentRun> {
     let reason: "policy" | "schema" | "evidence" | undefined;
     let reasonDetail: string | undefined;
-    if (
+    if (child.captureTruncated) {
+      reason = "evidence";
+      reasonDetail = "child-rollout-truncated";
+    } else if (
       child.modelId !== run.profile.subagent.modelId ||
       child.effort !== run.profile.subagent.effort ||
       child.cyberAccessProgram !== run.profile.cyberAccessProgram ||
@@ -1509,7 +1811,8 @@ export class CodexNativeAgentRuntime {
       grantReceiptDigest,
       decoded,
     );
-    if (failure !== undefined) return failure;
+    if (failure !== undefined)
+      return this.#retainRootOnIncomplete(result, failure);
     if (decoded === undefined || "reasonDetail" in decoded)
       return this.#salvageRootReport(
         state,
@@ -1633,6 +1936,23 @@ export class CodexNativeAgentRuntime {
       { reasonDetail: string }
     >,
   ): Promise<DiscoveryTransportResult> {
+    const activeMs =
+      Date.parse(result.completedAt) - Date.parse(result.startedAt);
+    if (
+      state.run.minimumActiveMs !== undefined &&
+      (!Number.isFinite(activeMs) || activeMs < state.run.minimumActiveMs)
+    )
+      return this.#retainRootOnIncomplete(
+        result,
+        incompleteExecution(
+          state,
+          "policy",
+          result.completedAt,
+          grantReceiptDigest,
+          undefined,
+          "early-final-before-minimum",
+        ),
+      );
     let attachment: ProviderAttachmentRef;
     try {
       attachment = await this.attachments.put(

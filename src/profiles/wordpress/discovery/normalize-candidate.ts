@@ -1,5 +1,6 @@
 import { wordpressFindingClaimSchema } from "./finding.js";
 import { wordpressLeadClaimSchema } from "./lead.js";
+import { normalizeWordPressSourcePath } from "./source-path.js";
 
 /** Syntax repair only. The claim schemas still decide whether a candidate is admissible. */
 export function normalizeWordPressCandidate(candidate: unknown): {
@@ -58,15 +59,7 @@ export function normalizeWordPressCandidate(candidate: unknown): {
       const item: Record<string, unknown> = { ...trace };
       if (typeof item.file === "string") {
         const file = item.file;
-        item.file = file.startsWith("/workspace/main/")
-          ? file.slice("/workspace/main/".length)
-          : file.startsWith("/workspace/wordpress/")
-            ? `@wordpress/${file.slice("/workspace/wordpress/".length)}`
-            : file.startsWith("../wordpress/")
-              ? `@wordpress/${file.slice("../wordpress/".length)}`
-              : file.startsWith("WordPress ")
-                ? `@wordpress/${file.slice("WordPress ".length)}`
-                : file;
+        item.file = normalizeWordPressSourcePath(file);
         if (item.file !== file)
           changes.push({
             path: `${path}.file`,

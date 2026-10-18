@@ -162,15 +162,13 @@ export async function recoverChildAgentReports(
   }
 }
 
-/** Recover a Root report even from a schema-failed transcript. */
+/** Retain a Root candidate from a schema failure or interrupted later turn. */
 export async function recoverRootAgentReport(
   options: RecoveryContext & { readonly receipt: NativeRunReceipt },
 ): Promise<{ readonly recovered: boolean; readonly failure?: ReportFailure }> {
   const { receipt, result, run } = options;
   const attachment = result.attachment;
   if (
-    (receipt.terminal !== "completed" &&
-      !(receipt.terminal === "incomplete" && receipt.reason === "schema")) ||
     receipt.runId !== run.runId ||
     receipt.targetSnapshotDigest !== options.snapshotDigest ||
     receipt.runtimeProfileDigest !== run.profile.digest ||

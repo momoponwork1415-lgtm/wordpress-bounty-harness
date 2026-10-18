@@ -54,10 +54,23 @@ export {
   openWordPressOrgTargetSource,
 } from "./wordpress-org-target-source.js";
 export { openWordPressOrgSnapshotSource } from "./snapshot-source.js";
+export {
+  openWordPressOrgPluginDependencySource,
+  requiredPluginSlugs,
+} from "./plugin-dependency-source.js";
 export { acquiredSourceFromIntakePacket } from "./intake-packet-source.js";
-export { acquirePinnedWordPressOrgSvnSource } from "./pinned-svn-source.js";
+export {
+  acquirePinnedWordPressOrgSvnSource,
+  capturedWordPressOrgSvnPinSchema,
+  openCapturedWordPressOrgSvnSource,
+} from "./pinned-svn-source.js";
+export type { CapturedWordPressOrgSvnPin } from "./pinned-svn-source.js";
 export { openMaterializedSources } from "./materialized-sources.js";
 export {
   openWordPressCoreSource,
   WORDPRESS_CORE_IDENTITY,
 } from "./wordpress-core-source.js";
+export {
+  openPhpRuntimeSource,
+  PHP_RUNTIME_SOURCE_IDENTITY,
+} from "./php-runtime-source.js";

@@ -50,7 +50,7 @@ const bodySchema = z.strictObject({
   observed: observed.optional(),
   /** Unique direct child threads seen in the Root rollout. */
   childThreadsObserved: count.optional(),
-  /** Direct child threads selected for capture, at most three. */
+  /** Direct child threads captured across all waves (at most 255 session files). */
   childThreadsAdmitted: count.optional(),
   brokerMetrics: z
     .strictObject({
@@ -133,7 +133,7 @@ export const nativeRunReceiptSchema = bodySchema
       });
     if (
       receipt.childThreadsAdmitted !== undefined &&
-      (receipt.childThreadsAdmitted > 3 ||
+      (receipt.childThreadsAdmitted > 255 ||
         (receipt.childThreadsObserved !== undefined &&
           receipt.childThreadsAdmitted > receipt.childThreadsObserved))
     )

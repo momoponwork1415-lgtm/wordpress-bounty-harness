@@ -12,7 +12,7 @@ const { values } = parseArgs({
 });
 if (values.host === undefined || values.state === undefined)
   throw new Error(
-    "usage: pnpm preflight:root-three --host <private host.json> --state <private directory>",
+    "usage: pnpm preflight:root-four --host <private host.json> --state <private directory>",
   );
 const stateRoot = resolve(values.state);
 if (stateRoot === workspace || stateRoot.startsWith(`${workspace}${sep}`))
@@ -51,6 +51,7 @@ try {
     "b.txt": "beta blue\n",
     "c.txt": "gamma green\n",
     "d.txt": "delta yellow\n",
+    "e.txt": "epsilon purple\n",
   }))
     await writeFile(join(sourceDirectory, name), content, { mode: 0o600 });
   const sourceTree = await measureCanonicalSourceTree(sourceDirectory, {
@@ -101,7 +102,7 @@ try {
     new ProviderAttachmentStore(attachments),
     host.images.codex,
   );
-  const prompt = `Infrastructure preflight only. The source files are harmless text fixtures. Read /workspace/main/d.txt yourself and GET http://wordpress:8080/ with curl. Create exactly three subagents in parallel. Give each child one distinct file from /workspace/main/a.txt, b.txt, c.txt to read and ask it to GET http://wordpress:8080/ with curl. Each child must return only a JSON object with keys findings (empty array), leads (empty array), examined (short string), unexamined (short string). Wait for all three. Your final response must be the same JSON object shape, with findings and leads empty.`;
+  const prompt = `Infrastructure preflight only. The source files are harmless text fixtures. Read /workspace/main/d.txt yourself and GET http://wordpress:8080/ with curl. Create exactly four subagents in parallel. Give each child one distinct file from /workspace/main/a.txt, b.txt, c.txt, e.txt to read and ask it to GET http://wordpress:8080/ with curl. Each child must return only a JSON object with keys findings (empty array), leads (empty array), examined (short string), unexamined (short string). Wait for all four. Your final response must be the same JSON object shape, with findings and leads empty.`;
   let networkCreated = false;
   let labCreated = false;
   let receipt;
@@ -201,7 +202,7 @@ try {
       result.receipt.diagnosticArtifactDigest !== undefined &&
       (result.receipt.observed?.filesRead ?? 0) > 0 &&
       (result.receipt.observed?.labRequests ?? 0) > 0 &&
-      children.length === 3 &&
+      children.length === 4 &&
       children.every(
         ({ receipt: child }) =>
           child.terminal === "completed" &&

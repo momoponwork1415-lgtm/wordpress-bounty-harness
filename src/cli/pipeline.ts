@@ -181,6 +181,8 @@ export async function runCampaignPipeline<
   /** Targets in flight at once; discovery run concurrency remains per target. */
   readonly maxConcurrentTargets?: number;
   readonly discoveryLab?: "attached" | "none";
+  /** Preserve the attached discovery Lab, but verify Findings in a later command. */
+  readonly deferVerification?: boolean;
   readonly repeat?: number;
   /** An explicit operator retry after repairing the Verifier protocol. */
   readonly retryIncompleteVerifications?: boolean;
@@ -276,7 +278,8 @@ export async function runCampaignPipeline<
     );
     if (snapshotDigest === undefined || !concludedSnapshots.has(snapshotDigest))
       return false;
-    if (options.discoveryLab === "none") return true;
+    if (options.discoveryLab === "none" || options.deferVerification === true)
+      return true;
     return (findingsBySnapshot.get(snapshotDigest) ?? []).every((findingId) => {
       if (
         ledger.read({
@@ -600,6 +603,22 @@ export async function runCampaignPipeline<
           type: "campaign-stopped",
           reason: discovered.stoppedBy,
         });
+        result.target = { ...summary, verifications: [] };
+        return;
+      }
+      if (options.deferVerification === true) {
+        if (discovered.stoppedBy === "incomplete" && discovered.runCount > 0)
+          await append({
+            ...base,
+            identity: `target-skipped-${options.newId()}`,
+            occurredAt: at(),
+            type: "target-skipped",
+            selectionId,
+            stage: "discovery",
+            reason: refusedTrial(snapshot.digest)
+              ? "provider-refused"
+              : "run-failed",
+          });
         result.target = { ...summary, verifications: [] };
         return;
       }
@@ -1084,6 +1103,7 @@ export async function reverifyOnSelectedVersion<
     /** The current or explicitly pinned version of the same target. */
     readonly selectVersion: (input: {
       readonly selectionId: string;
+      readonly originalSnapshotDigest: string;
       readonly version?: string;
     }) => Promise<Target | null>;
     readonly loadSnapshot?: (digest: string) => Promise<Snapshot>;
@@ -1232,6 +1252,7 @@ export async function reverifyOnSelectedVersion<
   const requestedVersion = options.version ?? originalVersion;
   const target = await pipeline.selectVersion({
     selectionId: selected.selectionId,
+    originalSnapshotDigest: finding.snapshotDigest,
     ...(requestedVersion === undefined ? {} : { version: requestedVersion }),
   });
   if (target === null)

@@ -43,6 +43,8 @@ async function fixture(
   core?: { readonly version: string; readonly runningVersion: string },
   pluginSlug = "example",
   strictSourceMode = false,
+  dependencySlugs: readonly string[] = [],
+  php?: { readonly version: string; readonly runningVersion: string },
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-lab-"));
   directories.push(root);
@@ -64,8 +66,8 @@ async function fixture(
       version: "1.0",
       sourceDigest: sourceTree.digest,
     },
-    dependencies:
-      core === undefined
+    dependencies: [
+      ...(core === undefined
         ? []
         : [
             {
@@ -73,7 +75,22 @@ async function fixture(
               version: core.version,
               sourceDigest: sourceTree.digest,
             },
-          ],
+          ]),
+      ...(php === undefined
+        ? []
+        : [
+            {
+              identity: "php-runtime-source",
+              version: php.version,
+              sourceDigest: sourceTree.digest,
+            },
+          ]),
+      ...dependencySlugs.map((slug) => ({
+        identity: `wporg:${slug}`,
+        version: "1.0",
+        sourceDigest: sourceTree.digest,
+      })),
+    ],
   };
   const snapshot: Snapshot = {
     ...snapshotBody,
@@ -117,8 +134,8 @@ async function fixture(
           sourceDirectory,
           sourceTree,
         },
-        dependencies:
-          core === undefined
+        dependencies: [
+          ...(core === undefined
             ? []
             : [
                 {
@@ -127,7 +144,24 @@ async function fixture(
                   sourceDirectory,
                   sourceTree,
                 },
-              ],
+              ]),
+          ...(php === undefined
+            ? []
+            : [
+                {
+                  kind: "php-source" as const,
+                  version: php.version,
+                  sourceDirectory,
+                  sourceTree,
+                },
+              ]),
+          ...dependencySlugs.map((slug) => ({
+            kind: "plugin" as const,
+            pluginSlug: slug,
+            sourceDirectory,
+            sourceTree,
+          })),
+        ],
       }),
     },
     runner: {
@@ -166,6 +200,16 @@ async function fixture(
           request.args[4]?.includes('extension_loaded("pdo_mysql")')
         )
           return { exitCode: 43, stdout: "", stderr: "" };
+        if (
+          request.args[0] === "exec" &&
+          request.args[2] === "php" &&
+          request.args[4] === "echo PHP_VERSION;"
+        )
+          return {
+            exitCode: 0,
+            stdout: php?.runningVersion ?? "8.3.35",
+            stderr: "",
+          };
         if (request.args[0] === "inspect")
           return {
             exitCode: 0,
@@ -337,6 +381,103 @@ async function fixture(
 }
 
 describe("WordPress gVisor Lab", () => {
+  it("checks the active PHP version against frozen source without installing it as a plugin", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "example",
+      false,
+      [],
+      { version: "8.3.35", runningVersion: "8.3.35" },
+    );
+    const provisioned = await lab.provision(snapshot, setup);
+    expect(provisioned.status).toBe("ready");
+    expect(
+      commands.some(({ args }) => args.includes("echo PHP_VERSION;")),
+    ).toBe(true);
+    expect(
+      commands
+        .filter(
+          ({ args }) => args.includes("plugin") && args.includes("activate"),
+        )
+        .map(({ args }) => args[args.indexOf("activate") + 1]),
+    ).toEqual(["example"]);
+    if (provisioned.status === "ready") await lab.teardown(provisioned.handle);
+  });
+
+  it("does not start a Trial when active PHP differs from the frozen source", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "example",
+      false,
+      [],
+      { version: "8.3.35", runningVersion: "8.3.34" },
+    );
+    const provisioned = await lab.provision(snapshot, setup);
+    expect(provisioned).toMatchObject({
+      status: "incomplete",
+      reason: "provision",
+    });
+    expect(
+      commands.some(
+        ({ args }) => args.includes("plugin") && args.includes("activate"),
+      ),
+    ).toBe(false);
+  });
+
+  it("installs and activates pinned plugin dependencies before the target", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "example",
+      false,
+      ["widgets", "elementor"],
+    );
+    const provisioned = await lab.provision(snapshot, setup);
+    expect(provisioned.status).toBe("ready");
+    const activations = commands
+      .filter(
+        ({ args }) => args.includes("plugin") && args.includes("activate"),
+      )
+      .map(({ args }) => args[args.indexOf("activate") + 1]);
+    expect(activations).toEqual(["widgets", "elementor", "example"]);
+    if (provisioned.status === "ready") await lab.teardown(provisioned.handle);
+  });
+
+  it("rejects a dependency resolver that maps the frozen identity to another plugin", async () => {
+    const { lab, snapshot, setup, commands } = await fixture(
+      "ready",
+      undefined,
+      "example",
+      false,
+      ["elementor"],
+    );
+    const body = {
+      kind: snapshot.kind,
+      schemaVersion: snapshot.schemaVersion,
+      target: snapshot.target,
+      dependencies: snapshot.dependencies.map((dependency) => ({
+        ...dependency,
+        identity: "wporg:another-plugin",
+      })),
+    };
+    const altered: Snapshot = { ...body, digest: canonicalDigest(body) };
+    const provisioned = await lab.provision(altered, {
+      ...setup,
+      snapshotDigest: altered.digest,
+    });
+    expect(provisioned).toMatchObject({
+      status: "incomplete",
+      reason: "provision",
+    });
+    expect(
+      commands.some(
+        ({ args }) => args.includes("plugin") && args.includes("activate"),
+      ),
+    ).toBe(false);
+  });
+
   it("activates a copied plugin even when the frozen source has strict modes", async () => {
     const { lab, snapshot, setup } = await fixture(
       "ready",

@@ -9,10 +9,10 @@
     "maxRuns": 1,
     "noFindingRuns": 1
   },
-  "runWallTimeMinutes": 60,
+  "runWallTimeMinutes": 120,
   "resources": {
     "maxConcurrentRuns": 1,
-    "memoryBudgetMiB": 10240
+    "memoryBudgetMiB": 10752
   },
   "wordpressVersion": "6.8.3",
   "lab": {
@@ -23,6 +23,5 @@
       "administratorSecondaryLocale": "fr_FR"
     }
   },
-  "mode": "wp2shell",
-  "entryIndex": true
+  "mode": "wp2shell"
 }

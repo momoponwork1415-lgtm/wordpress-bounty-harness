@@ -1,6 +1,6 @@
 # 実装の道筋と現行機能の棚卸し
 
-2026-10-10時点の `origin/main`（`fef1a4d`）を調べた作業計画。規則の正本は [SPEC](SPEC.md) と [ADR 0016](adr/0016-root-plus-three-first-vertical-slice.md)。ここで「実装済み」はコードがあるという意味で、実対象での成功を意味しない。
+2026-10-10時点の `origin/main`（`fef1a4d`）を調べた過去の作業計画。以下の Root＋3、旧prompt、選定方針の記述は当時の記録であり、現行仕様は [SPEC](SPEC.md) と [ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md)、現行図は [SYSTEM-DIAGRAMS.md](SYSTEM-DIAGRAMS.md) を参照。ここで「実装済み」はコードがあるという意味で、実対象での成功を意味しない。
 
 ## ベンチマークから本番提出まで
 

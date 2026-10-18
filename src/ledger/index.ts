@@ -182,7 +182,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       .optional(),
     /** Unique direct children seen and admitted by a cooperative Root run. */
     childThreadsObserved: z.number().int().nonnegative().optional(),
-    childThreadsAdmitted: z.number().int().nonnegative().max(3).optional(),
+    childThreadsAdmitted: z.number().int().nonnegative().max(255).optional(),
     brokerMetrics: z
       .strictObject({
         forwardedRequests: z.number().int().nonnegative(),

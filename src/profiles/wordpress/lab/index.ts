@@ -101,6 +101,12 @@ export type WordPressSource =
       readonly version: string;
       readonly sourceDirectory: string;
       readonly sourceTree: ExpectedSourceTree;
+    }
+  | {
+      readonly kind: "php-source";
+      readonly version: string;
+      readonly sourceDirectory: string;
+      readonly sourceTree: ExpectedSourceTree;
     };
 export interface WordPressSourceResolver {
   resolve(snapshot: Snapshot): Promise<{
@@ -657,7 +663,14 @@ export function openWordPressLab(options: {
           candidateSetup,
           options.source,
         );
-        const { setup, scenario, target, dependencies, coreVersion } = prepared;
+        const {
+          setup,
+          scenario,
+          target,
+          dependencies,
+          coreVersion,
+          phpVersion,
+        } = prepared;
         await preflight();
         const created = createLabResource(
           prepared,
@@ -687,6 +700,22 @@ export function openWordPressLab(options: {
           throw new LabDockerFailure(
             extension.stderr || "WordPress PHP extension probe failed",
           );
+        if (phpVersion !== undefined) {
+          const runningPhp = await docker([
+            "exec",
+            resource.wordpress,
+            "php",
+            "-r",
+            "echo PHP_VERSION;",
+          ]);
+          if (
+            runningPhp.exitCode !== 0 ||
+            runningPhp.stdout.trim() !== phpVersion
+          )
+            throw new Error(
+              "The Lab runs another PHP version than the frozen source",
+            );
+        }
         await initializeWordPress({
           resource,
           setup,

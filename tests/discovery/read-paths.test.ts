@@ -41,10 +41,30 @@ describe("readPathsFromCommands", () => {
     ]);
   });
 
-  it("drops paths outside the mount, flags, globs and non-file tokens", () => {
+  it("records the pinned core, PHP and plugin dependency source mounts", () => {
     expect(
       readPathsFromCommands([
-        { text: "cat /workspace/wordpress/wp-load.php ../main2/a.php" },
+        {
+          text: "cat /workspace/wordpress/wp-load.php /workspace/php/main/php.c",
+        },
+        {
+          text: "cat includes/base.php",
+          cwd: "/workspace/dependencies/elementor",
+        },
+        { text: "cat /workspace/dependencies/php-runtime/main.php" },
+      ]),
+    ).toEqual([
+      "@dependencies/elementor/includes/base.php",
+      "@dependencies/php-runtime/main.php",
+      "@php/main/php.c",
+      "@wordpress/wp-load.php",
+    ]);
+  });
+
+  it("drops paths outside supplied mounts, flags, globs and non-file tokens", () => {
+    expect(
+      readPathsFromCommands([
+        { text: "cat /workspace/other/wp-load.php ../main2/a.php" },
         { text: "cat /etc/passwd.txt /tmp/notes.md" },
         { text: "rg --include=*.php -n foo . includes/ 1,20p $FILE.php" },
         { text: "grep -rn foo a.php:12", cwd: "file://%zz" },

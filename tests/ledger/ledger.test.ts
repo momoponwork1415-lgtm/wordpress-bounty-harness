@@ -70,6 +70,31 @@ async function evidence(store: PrivateArtifactStore): Promise<string> {
 }
 
 describe("Ledger public interface", () => {
+  it("records later-wave direct children and keeps older three-child events readable", async () => {
+    const { ledger } = await fixture();
+    for (const admitted of [3, 4, 5]) {
+      await ledger.append({
+        ...common(`children-${admitted}`),
+        type: "discovery-run-finished",
+        runId: `run-${admitted}`,
+        outcome: "completed",
+        costUsd: "unavailable",
+        wallTimeMs: 1,
+        childThreadsObserved: admitted,
+        childThreadsAdmitted: admitted,
+      });
+    }
+    expect(
+      ledger
+        .read({ type: "discovery-run-finished" })
+        .map(({ event }) =>
+          event.type === "discovery-run-finished"
+            ? event.childThreadsAdmitted
+            : undefined,
+        ),
+    ).toEqual([3, 4, 5]);
+  });
+
   it("measures owner time and opened findings per distinct submission across categories", async () => {
     const { ledger } = await fixture();
     for (const [findingId, category] of [

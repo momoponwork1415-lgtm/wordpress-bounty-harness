@@ -11,6 +11,7 @@ import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
   wordPressDiscoveryOutputContractV3,
+  wordPressDiscoveryOutputContractV4,
 } from "../../../src/profiles/wordpress/discovery/output-contract.js";
 
 import {
@@ -26,15 +27,15 @@ describe("WordPress discovery prompt assets", () => {
     const prompt = await loadWordPressVerifierPrompt();
     const bytes = await readFile(
       new URL(
-        "../../../src/profiles/wordpress/prompts/verifier-v7.md",
+        "../../../src/profiles/wordpress/prompts/verifier-v8.md",
         import.meta.url,
       ),
     );
     expect(bytes.byteLength).toBeLessThan(4_000);
-    expect(prompt.id).toBe("verifier-v7");
+    expect(prompt.id).toBe("verifier-v8");
     expect(prompt.text).toBe(bytes.toString("utf8"));
     expect(prompt.digest).toBe(
-      "sha256:df5ed497912146fd4ceaeacbf923d3cee3337c477afad8645044fca460bd3b18",
+      "sha256:798b881faa52504e68fde9a9129dee4bfe471798fe3f9bc21b38635caa12e830",
     );
     expect(prompt.digest).toBe(
       `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
@@ -61,7 +62,7 @@ describe("WordPress discovery prompt assets", () => {
 
   it("changes only the approved v6 lines in v7", async () => {
     const oldPrompt = await loadWordPressVerifierPrompt("verifier-v6");
-    const current = await loadWordPressVerifierPrompt();
+    const current = await loadWordPressVerifierPrompt("verifier-v7");
     const replacements = [
       ["# WordPress Verifier v6", "# WordPress Verifier v7"],
       [
@@ -85,6 +86,24 @@ describe("WordPress discovery prompt assets", () => {
     expect(current.text).toBe(expected);
   });
 
+  it("keeps v7 loadable and changes only source mount guidance in v8", async () => {
+    const oldPrompt = await loadWordPressVerifierPrompt("verifier-v7");
+    expect(oldPrompt.digest).toBe(
+      "sha256:df5ed497912146fd4ceaeacbf923d3cee3337c477afad8645044fca460bd3b18",
+    );
+    const current = await loadWordPressVerifierPrompt();
+    const before =
+      "The Lab section may name a read-only database account and a WordPress core source tree; both are for reading only.";
+    const after =
+      "The Lab section may name a read-only database account. The Lab's `sourcePack` lists the read-only source trees mounted from this Finding's Target Snapshot: the target plugin at `/workspace/main` and, when supplied, WordPress core at `/workspace/wordpress`, PHP at `/workspace/php`, and plugin dependencies under `/workspace/dependencies/<slug>`. Check the claimed route and its prerequisites against listed source; treat unlisted dependencies as unavailable.";
+    expect(oldPrompt.text.split(before)).toHaveLength(2);
+    expect(current.text).toBe(
+      oldPrompt.text
+        .replace("# WordPress Verifier v7", "# WordPress Verifier v8")
+        .replace(before, after),
+    );
+  });
+
   it("publishes versioned prompt variants and the shared trust boundary", async () => {
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       "wp2shell-derived-v1",
@@ -104,6 +123,8 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v4",
       "wp2shell-bounty-v5",
       "wp2shell-bounty-v6",
+      "wp2shell-bounty-v7",
+      "wp2shell-bounty-v8",
       "wp2shell-whitebox-v1.7",
       "trust-boundary-v1",
     ]);
@@ -125,6 +146,8 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v4",
       "wp2shell-bounty-v5",
       "wp2shell-bounty-v6",
+      "wp2shell-bounty-v7",
+      "wp2shell-bounty-v8",
       "wp2shell-whitebox-v1.7",
     ]);
 
@@ -209,6 +232,16 @@ describe("WordPress discovery prompt assets", () => {
     expect(current.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
   });
 
+  it("describes pinned dependency source paths only in the new contract", () => {
+    const current = wordPressDiscoveryOutputContractV4();
+    expect(current.id).toBe("wordpress-discovery-contract-v4");
+    expect(current.text).toContain("`@dependencies/<id>/`");
+    expect(current.text).toContain("every child spawn assignment");
+    expect(wordPressDiscoveryOutputContractV2().text).not.toContain(
+      "`@dependencies/<id>/`",
+    );
+  });
+
   it("keeps the new objective assets free of the claim contract", async () => {
     const pins = {
       "short-objective-managed-v5":
@@ -223,13 +256,19 @@ describe("WordPress discovery prompt assets", () => {
         "sha256:59c6bd1bb5fd5ef7618ce180de7f2d90af68fa4bcba26f90aa31aa3679d80cda",
       "wp2shell-bounty-v6":
         "sha256:3b85b6bdacd3181da779fd6cc1eec5c45c9e01d4f16e80163fdab4e62dff3503",
+      "wp2shell-bounty-v7":
+        "sha256:bb41592c57ce664a90b8b429d9d3d0c86da7c5547aeae9048a18440af9b1893e",
+      "wp2shell-bounty-v8":
+        "sha256:d44532a985d1ef6b74f7117ea8bafbb60b25a7ae191d17ee362b2da58f3c639d",
       "wp2shell-whitebox-v1.7":
         "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",
     } as const;
     for (const id of WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS) {
       const { text, digest } = await loadWordPressDiscoveryAsset(id);
       expect(digest).toBe(pins[id]);
-      expect(text).toMatch(/Lead|Finding/);
+      if (id === "wp2shell-bounty-v7" || id === "wp2shell-bounty-v8")
+        expect(text).toContain("Use multiagents aggressively");
+      else expect(text).toMatch(/Lead|Finding/);
       expect(text).not.toMatch(
         /sourceTrace|labObservations|JSON string|Each Finding is an object/,
       );
@@ -423,7 +462,12 @@ describe("WordPress discovery prompt assets", () => {
   it("keeps both variants within the same attacker, operation, impact and Finding contract", async () => {
     for (const id of WORDPRESS_DISCOVERY_PROMPT_IDS) {
       const { text } = await loadWordPressDiscoveryAsset(id);
-      if (id === "wp2shell-bounty-v5" || id === "wp2shell-bounty-v6") {
+      if (
+        id === "wp2shell-bounty-v5" ||
+        id === "wp2shell-bounty-v6" ||
+        id === "wp2shell-bounty-v7" ||
+        id === "wp2shell-bounty-v8"
+      ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).
         expect(text).toContain("trust boundary");

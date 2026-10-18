@@ -15,6 +15,7 @@ import {
 import { canonicalJson } from "../../../src/infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../../src/ledger/index.js";
+import { mountedWordPressSourcePack } from "../../../src/profiles/wordpress/acquisition/mounted-source-pack.js";
 import {
   admitWordPressFinding,
   type WordPressFinding,
@@ -56,6 +57,7 @@ async function fixture(
   impact: WordPressFinding["impact"] = "sensitive-object-access",
   issueCanary = true,
   configurationPrecondition = "default",
+  historicalWithoutPhp = false,
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-codex-verifier-"));
   roots.push(root);
@@ -102,6 +104,38 @@ async function fixture(
     artifacts: [{ kind: "finding", digest: findingDigest }],
   });
   const runs: DiscoveryTransportRun[] = [];
+  const sourcePack = mountedWordPressSourcePack({
+    target: {
+      kind: "plugin",
+      pluginSlug: "synthetic-target",
+      sourceDirectory: "/private/synthetic-source",
+      sourceTree: { digest, entries: 1, bytes: 10 },
+    },
+    dependencies: [
+      {
+        kind: "wordpress-core",
+        version: "6.8.3",
+        sourceDirectory: "/private/wordpress-core",
+        sourceTree: { digest, entries: 2, bytes: 20 },
+      },
+      ...(historicalWithoutPhp
+        ? []
+        : [
+            {
+              kind: "php-source" as const,
+              version: "8.3.35",
+              sourceDirectory: "/private/php-source",
+              sourceTree: { digest, entries: 3, bytes: 30 },
+            },
+          ]),
+      {
+        kind: "plugin",
+        pluginSlug: "elementor",
+        sourceDirectory: "/private/elementor-source",
+        sourceTree: { digest, entries: 4, bytes: 40 },
+      },
+    ],
+  });
   const runtime = {
     attachments,
     async execute(run: DiscoveryTransportRun) {
@@ -192,10 +226,7 @@ async function fixture(
     store,
     ledger,
     profile,
-    source: {
-      directory: "/private/synthetic-source",
-      tree: { digest, entries: 1, bytes: 10 },
-    },
+    sourcePack,
     clock: () => new Date("2026-10-08T00:00:00Z"),
   });
   const lab = {
@@ -213,10 +244,70 @@ async function fixture(
       contributor: { username: "contributor", password: "contributor-secret" },
     },
   };
-  return { verifier, finding, lab, runs, store, ledger };
+  return { verifier, finding, lab, runs, store, ledger, sourcePack };
 }
 
 describe("CodexVerifier.attempt", () => {
+  it("mounts the same Snapshot source pack as discovery and names its paths in the Lab input", async () => {
+    const f = await fixture([{ precondition: "Synthetic prerequisite" }]);
+    await f.verifier.attempt({
+      campaignId: "campaign-1",
+      finding: f.finding,
+      lab: f.lab,
+    });
+    const run = f.runs[0];
+    expect(run).toBeDefined();
+    expect(run?.sourceDirectory).toBe(f.sourcePack.target.directory);
+    expect(run?.sourceTree).toEqual(f.sourcePack.target.tree);
+    expect(run?.dependencySource).toEqual(f.sourcePack.core);
+    expect(run?.dependencySources).toEqual(f.sourcePack.dependencies);
+    const labInput = JSON.parse(run!.prompt.split("\n\n## Lab\n")[1]!) as {
+      sourcePack: unknown;
+    };
+    expect(labInput.sourcePack).toEqual({
+      target: "/workspace/main",
+      wordpressCore: "/workspace/wordpress",
+      dependencies: ["/workspace/php", "/workspace/dependencies/elementor"],
+    });
+    expect(run?.prompt).toContain(
+      "The Lab's `sourcePack` lists the read-only source trees",
+    );
+  });
+
+  it("uses a historical Snapshot without adding PHP source to the Verifier", async () => {
+    const f = await fixture(
+      [{ precondition: "Synthetic prerequisite" }],
+      undefined,
+      "sensitive-object-access",
+      true,
+      "default",
+      true,
+    );
+    await f.verifier.attempt({
+      campaignId: "campaign-1",
+      finding: f.finding,
+      lab: f.lab,
+    });
+    expect(f.runs).toHaveLength(1);
+    expect(f.runs[0]?.dependencySource).toEqual(f.sourcePack.core);
+    expect(f.runs[0]?.dependencySources).toEqual([
+      {
+        path: "/workspace/dependencies/elementor",
+        directory: "/private/elementor-source",
+        tree: { digest, entries: 4, bytes: 40 },
+      },
+    ]);
+    const labInput = JSON.parse(
+      f.runs[0]!.prompt.split("\n\n## Lab\n")[1]!,
+    ) as {
+      sourcePack: { dependencies: string[] };
+    };
+    expect(labInput.sourcePack.dependencies).toEqual([
+      "/workspace/dependencies/elementor",
+    ]);
+    expect(f.runs[0]?.prompt).toContain("when supplied, WordPress core");
+  });
+
   it("records a replay in its own campaign when the same Finding exists in an earlier campaign", async () => {
     const f = await fixture([
       {
@@ -579,7 +670,7 @@ describe("CodexVerifier.attempt", () => {
     expect(event?.type).toBe("verifier-run-finished");
     if (event?.type !== "verifier-run-finished") return;
     expect(event.promptDigest).toBe(
-      "sha256:df5ed497912146fd4ceaeacbf923d3cee3337c477afad8645044fca460bd3b18",
+      "sha256:798b881faa52504e68fde9a9129dee4bfe471798fe3f9bc21b38635caa12e830",
     );
     const storedReceipt = await f.store.readFile(
       event.receiptDigest,
@@ -848,7 +939,7 @@ describe("CodexVerifier.attempt", () => {
     }
   });
 
-  it("passes only low-privilege credentials and starts a fresh v7 run in each Lab", async () => {
+  it("passes only low-privilege credentials and starts a fresh v8 run in each Lab", async () => {
     const report = {
       "http.json": JSON.stringify({
         exchanges: [{ request: {}, response: { body: "ordinary" } }],
@@ -869,7 +960,7 @@ describe("CodexVerifier.attempt", () => {
     });
     expect(retryLab.id).not.toBe(f.lab.id);
     const fixed = await loadWordPressVerifierPrompt();
-    expect(fixed.id).toBe("verifier-v7");
+    expect(fixed.id).toBe("verifier-v8");
     expect(f.runs).toHaveLength(2);
     expect(f.runs[0]?.runId).not.toBe(f.runs[1]?.runId);
     for (const run of f.runs) {
