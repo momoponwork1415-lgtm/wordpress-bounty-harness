@@ -30,11 +30,7 @@ import {
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
 import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acquisition/index.js";
-import {
-  wordPressDiscoveryOutputContract,
-  wordPressDiscoveryOutputContractV2,
-} from "../../src/profiles/wordpress/discovery/output-contract.js";
-import { buildWordPressSourceIndex } from "../../src/profiles/wordpress/discovery/storage-index.js";
+import { wordPressDiscoveryOutputContractV2 } from "../../src/profiles/wordpress/discovery/output-contract.js";
 import {
   openWordPressLab,
   type DockerRequest,
@@ -810,18 +806,18 @@ async function harness(
     JSON.stringify({
       schemaVersion: 1,
       selectionPolicyPath: policyPath,
-      // Legacy campaign fixtures exercise the historical multi-Trial path.
-      promptId: "short-objective-managed-v4",
+      mode: "wp2shell",
+      promptId: "wp2shell-bounty-v7",
       programmeBoundary: {
         version: "v1",
         text: "Synthetic programme boundary",
       },
-      stopRules: { maxRuns: 6, noFindingRuns: 2 },
+      stopRules: { maxRuns: 1, noFindingRuns: 1 },
       ...(options.ablation === undefined
         ? {}
         : { ablation: { axis: "history", armBFraction: options.ablation } }),
       // Sequential by default so the call order is deterministic.
-      resources: { maxConcurrentRuns: 1, memoryBudgetMiB: 10_240 },
+      resources: { maxConcurrentRuns: 1, memoryBudgetMiB: 10_752 },
       ...options.config,
       wordpressVersion: "6.8",
       lab: {
@@ -976,7 +972,7 @@ describe("harness CLI vertical slice", () => {
     expect(prompts[0]).toContain(
       "Database (read-only, Lab only): host database port 3306",
     );
-    expect(prompts[0]).not.toContain("## Finding and Lead output contract");
+    expect(prompts[0]).toContain("## Finding and Lead output contract");
     const started = ledger()
       .read({ type: "discovery-run-started" })
       .at(0)?.event;
@@ -984,111 +980,75 @@ describe("harness CLI vertical slice", () => {
       configuration: { labAccess: { database: "read-only" } },
     });
     if (started?.type === "discovery-run-started")
-      expect(started.configuration.contractDigest).toBeUndefined();
+      expect(started.configuration.contractDigest).toMatch(/^sha256:/);
     expect(JSON.stringify(started)).not.toContain("wbh_reader");
   });
 
-  it.each([
-    {
-      promptId: "short-objective-managed-v5",
-      config: { promptId: "short-objective-managed-v5" },
-    },
-    {
-      promptId: "wp2shell-bounty-v3",
-      config: {
-        mode: "wp2shell",
-        promptId: "wp2shell-bounty-v3",
-        stopRules: { maxRuns: 1, noFindingRuns: 1 },
-      },
-    },
-    {
-      promptId: "wp2shell-bounty-v4",
-      config: {
-        mode: "wp2shell",
-        promptId: "wp2shell-bounty-v4",
-        stopRules: { maxRuns: 1, noFindingRuns: 1 },
-      },
-    },
-    {
-      promptId: "wp2shell-whitebox-v1.7",
-      config: {
-        promptId: "wp2shell-whitebox-v1.7",
-        stopRules: { maxRuns: 1, noFindingRuns: 1 },
-      },
-    },
-  ] as const)(
-    "adds the generated contract to $promptId and records separate digests",
-    async ({ promptId, config }) => {
-      const { run, configPath, prompts, ledger } = await harness({
-        config,
-      });
-      const result = await run(
-        "campaign",
-        "run",
-        "synthetic-plugin",
-        "--campaign",
-        "campaign-contract",
-        "--config",
-        configPath,
-      );
-      expect(result.code).toBe(0);
-      const objective = await loadWordPressDiscoveryAsset(promptId);
-      const contract =
-        promptId === "short-objective-managed-v5"
-          ? wordPressDiscoveryOutputContract()
-          : wordPressDiscoveryOutputContractV2();
-      expect(prompts[0]).toContain(objective.text.trim());
-      expect(prompts[0]).toContain(contract.text);
-      expect(prompts[0]?.split(contract.text)).toHaveLength(2);
-      const started = ledger()
-        .read({
-          campaignId: "campaign-contract",
-          type: "discovery-run-started",
-        })
-        .at(0)?.event;
-      expect(started).toMatchObject({
-        configuration: {
-          promptVariant: objective.id,
-          promptDigest: objective.digest,
-          objectiveDigest: objective.digest,
-          contractDigest: contract.digest,
-        },
-      });
-    },
-  );
-
-  it("keeps explicit v2 on its archived prompt contract", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
-      config: {
-        mode: "wp2shell",
-        promptId: "wp2shell-bounty-v2",
-        stopRules: { maxRuns: 1, noFindingRuns: 1 },
-      },
-    });
+  it("adds the generated v2 contract to the sole runnable prompt and records separate digests", async () => {
+    const { run, configPath, prompts, ledger } = await harness();
     const result = await run(
       "campaign",
       "run",
       "synthetic-plugin",
       "--campaign",
-      "campaign-v2-compat",
+      "campaign-contract",
       "--config",
       configPath,
     );
     expect(result.code).toBe(0);
-    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v2");
+    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v7");
+    const contract = wordPressDiscoveryOutputContractV2();
     expect(prompts[0]).toContain(objective.text.trim());
-    expect(prompts[0]).not.toContain(wordPressDiscoveryOutputContract().text);
+    expect(prompts[0]).toContain(contract.text);
+    expect(prompts[0]?.split(contract.text)).toHaveLength(2);
     const started = ledger()
-      .read({ campaignId: "campaign-v2-compat", type: "discovery-run-started" })
+      .read({ campaignId: "campaign-contract", type: "discovery-run-started" })
       .at(0)?.event;
     expect(started).toMatchObject({
       configuration: {
         promptVariant: objective.id,
         promptDigest: objective.digest,
+        objectiveDigest: objective.digest,
+        contractDigest: contract.digest,
       },
     });
-    if (started?.type === "discovery-run-started")
-      expect(started.configuration.contractDigest).toBeUndefined();
+  });
+
+  it("keeps old objective bytes readable but rejects them for new campaigns in every mode", async () => {
+    const archived = await loadWordPressDiscoveryAsset("wp2shell-bounty-v2");
+    expect(archived.digest).toBe(
+      "sha256:efeaefbd1775e2a4fd3984e19672e7e5cf8cfdbe0b16b84cededa23587b239c5",
+    );
+    const base = {
+      schemaVersion: 1 as const,
+      programmeBoundary: { version: "v1", text: "Synthetic" },
+      wordpressVersion: "6.8",
+      lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
+    };
+    for (const mode of [
+      "wp2shell",
+      "entry-index-control",
+      "comparison",
+      "ablation",
+      "assignment",
+    ] as const) {
+      const modeFields =
+        mode === "entry-index-control"
+          ? { entryIndex: false }
+          : mode === "ablation"
+            ? { ablation: { axis: "history", armBFraction: 0.5 } }
+            : mode === "assignment"
+              ? { assignment: { unit: "entry-point" } }
+              : {};
+      expect(
+        wordpressCampaignConfigSchema.safeParse({
+          ...base,
+          mode,
+          promptId: "wp2shell-bounty-v2",
+          ...modeFields,
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it("keeps DB access disabled when the campaign requests none", async () => {
@@ -1128,37 +1088,20 @@ describe("harness CLI vertical slice", () => {
     );
   });
 
-  it("mentions the writable research directory only for objective-only prompts", async () => {
-    const whitebox = await harness({
-      config: {
-        promptId: "wp2shell-whitebox-v1.7",
-        stopRules: { maxRuns: 1, noFindingRuns: 1 },
-      },
-    });
-    await whitebox.run(
+  it("mentions the writable research directory for the runnable objective", async () => {
+    const trial = await harness();
+    await trial.run(
       "campaign",
       "run",
       "synthetic-plugin",
       "--campaign",
       "campaign-research-notes",
       "--config",
-      whitebox.configPath,
+      trial.configPath,
     );
-    expect(whitebox.prompts[0]).toContain(
+    expect(trial.prompts[0]).toContain(
       "Writable notes directory: /workspace/research.",
     );
-
-    const legacy = await harness();
-    await legacy.run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-without-research-notes",
-      "--config",
-      legacy.configPath,
-    );
-    expect(legacy.prompts[0]).not.toContain("/workspace/research");
   });
 
   it("records the seed stage when canary setup fails", async () => {
@@ -1466,10 +1409,10 @@ describe("harness CLI vertical slice", () => {
     expect(campaign.stderr).toBe("");
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("wporg:synthetic-plugin 3.3.1");
-    expect(campaign.stdout).toContain("stopped by no-new-finding");
+    expect(campaign.stdout).toContain("stopped by max-runs");
     expect(campaign.stdout).toContain(": runtime-confirmed");
     expect(campaign.stdout).toContain(": incomplete");
-    expect(prompts).toHaveLength(3);
+    expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Trust boundary");
     expect(prompts[0]).toMatch(/subscriber: wbh-subscriber-/);
     // The Lab administrator exists for setup only and never reaches the agent.
@@ -1554,9 +1497,9 @@ describe("harness CLI vertical slice", () => {
     expect(funnel.stdout).toContain(
       "raw 2 → verifier通過 2 → confirmed 1 / reproduced 0 / contradicted 0 / incomplete 1 → reviewed 1 → in-scope 0 → submitted 0 → outcome 0",
     );
-    expect(funnel.stdout).toContain("runs 3 (discovery attempts 3)");
+    expect(funnel.stdout).toContain("runs 1 (discovery attempts 1)");
     expect(funnel.stdout).toContain("cost unavailable");
-    expect(funnel.stdout).toContain("confirmed / 1M tokens 370.37");
+    expect(funnel.stdout).toContain("confirmed / 1M tokens 1111.11");
     expect(funnel.stdout).toMatch(/account-takeover: .*raw 1 .* confirmed 1/);
   });
 
@@ -1578,64 +1521,27 @@ describe("harness CLI vertical slice", () => {
     expect(prompts).toHaveLength(1);
   });
 
-  it("assigns connected source scopes and records index and component digests", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
-      entryPoints: true,
-      config: {
-        stopRules: { maxRuns: 2, noFindingRuns: 2 },
+  it("rejects partitioned assignment for new campaigns", () => {
+    const base = {
+      schemaVersion: 1 as const,
+      programmeBoundary: { version: "v1", text: "Synthetic" },
+      wordpressVersion: "6.8",
+      lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
+      promptId: "wp2shell-bounty-v7",
+    };
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...base,
+        mode: "assignment",
         assignment: { unit: "entry-point", entriesPerRun: 2 },
-      },
-    });
-    const campaign = await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-entry",
-      "--config",
-      configPath,
-    );
-    expect(campaign.code).toBe(0);
-    expect(
-      prompts.some((prompt) => prompt.includes("## Assigned entry points")),
-    ).toBe(true);
-    expect(
-      prompts.some((prompt) =>
-        prompt.includes("option `synthetic_plugin_shared`"),
-      ),
-    ).toBe(true);
-    expect(
-      prompts.some(
-        (prompt) => prompt.includes("written by") && prompt.includes("read by"),
-      ),
-    ).toBe(true);
-    const started = ledger().read({
-      campaignId: "campaign-entry",
-      type: "discovery-run-started",
-    });
-    expect(started).toHaveLength(prompts.length);
-    for (const { event } of started) {
-      if (event.type !== "discovery-run-started")
-        throw new Error("Unexpected event");
-      expect(event.configuration.assignmentUnit).toBe("entry-point");
-      expect(event.configuration.assignment?.indexDigest).toMatch(/^sha256:/);
-      expect(event.configuration.assignment?.componentDigest).toMatch(
-        /^sha256:/,
-      );
-      expect(JSON.stringify(event)).not.toContain("synthetic_plugin_shared");
-    }
+      }).success,
+    ).toBe(false);
   });
 
-  it("sends the full entry catalogue by default and pins its digest in input and ledger", async () => {
-    const { run, configPath, prompts, entryIndexes, ledger, root } =
-      await harness({
-        entryPoints: true,
-        config: { stopRules: { maxRuns: 1, noFindingRuns: 1 } },
-      });
-    const expected = await buildWordPressSourceIndex(
-      join(root, "source"),
-      "synthetic-plugin",
-    );
+  it("runs source-first without appending the entry catalogue", async () => {
+    const { run, configPath, prompts, entryIndexes, ledger } = await harness({
+      entryPoints: true,
+    });
     const campaign = await run(
       "campaign",
       "run",
@@ -1647,21 +1553,19 @@ describe("harness CLI vertical slice", () => {
     );
     expect(campaign.code).toBe(0);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("## Entry points");
-    expect(prompts[0]).toContain(`Index digest: ${expected.digest}`);
-    expect(prompts[0]).toContain("wp_ajax_nopriv_synthetic_save");
-    expect(prompts[0]).not.toContain("partition");
-    expect(entryIndexes).toEqual([{ enabled: true, digest: expected.digest }]);
+    expect(prompts[0]).not.toContain("## Entry points");
+    expect(prompts[0]).toContain("All files under /workspace/main.");
+    expect(entryIndexes).toEqual([{ enabled: false }]);
     const started = ledger().read({
       campaignId: "campaign-index-default",
       type: "discovery-run-started",
     });
     expect(started[0]?.event).toMatchObject({
-      configuration: { entryIndex: { enabled: true, digest: expected.digest } },
+      configuration: { entryIndex: { enabled: false } },
     });
   });
 
-  it("runs one indexed WP2Shell Trial by default and records a zero-candidate conclusion", async () => {
+  it("runs one source-first WP2Shell Trial by default and records a zero-candidate conclusion", async () => {
     const { run, configPath, prompts, coordinations, expirations, ledger } =
       await harness({
         entryPoints: true,
@@ -1683,10 +1587,10 @@ describe("harness CLI vertical slice", () => {
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("stopped by no-new-finding");
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("WordPress discovery: WP2Shell bounty v5");
-    expect(prompts[0]).toContain("## Entry points");
+    expect(prompts[0]).toContain("Use multiagents aggressively");
+    expect(prompts[0]).not.toContain("## Entry points");
     expect(coordinations).toEqual(["cooperative"]);
-    expect(expirations).toEqual(["2026-10-08T01:00:00.000Z"]);
+    expect(expirations).toEqual(["2026-10-08T02:00:00.000Z"]);
     const started = ledger().read({
       campaignId: "campaign-wp2shell-default",
       type: "discovery-run-started",
@@ -1868,38 +1772,72 @@ describe("harness CLI vertical slice", () => {
     ).toMatchObject({ stage: "screening", continuationOf: "historical-lead" });
   });
 
-  it("records the entry-index control when one config field disables the catalogue", async () => {
-    const { run, configPath, prompts, entryIndexes, ledger } = await harness({
-      entryPoints: true,
-      config: {
-        promptId: undefined,
-        entryIndex: false,
-        stopRules: { maxRuns: 1, noFindingRuns: 1 },
-      },
-    });
+  it("does not label a new manual selection with an archived prompt", async () => {
+    const { run, root, configPath, prompts } = await harness();
+    const policyPath = join(root, "selection.json");
+    const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...policy,
+        wordpressVersion: "6.8",
+        promptVariant: "wp2shell-bounty-v6",
+      }),
+    );
+    const direct = await run("select", "--config", policyPath);
+    expect(direct.code).toBe(1);
+    expect(direct.stderr).toContain(
+      "New selections use the current prompt variant only",
+    );
+    const fromCampaign = await run("select", "--config", configPath);
+    expect(fromCampaign.code).toBe(1);
+    expect(fromCampaign.stderr).toContain(
+      "Selection and campaign prompt variants differ",
+    );
     const campaign = await run(
       "campaign",
       "run",
       "synthetic-plugin",
       "--campaign",
-      "campaign-index-off",
+      "old-label-rejected",
       "--config",
       configPath,
     );
-    expect(campaign.code).toBe(0);
-    expect(prompts[0]).not.toContain("## Entry points");
-    expect(entryIndexes).toEqual([{ enabled: false }]);
-    expect(
-      ledger().read({
-        campaignId: "campaign-index-off",
-        type: "discovery-run-started",
-      })[0]?.event,
-    ).toMatchObject({ configuration: { entryIndex: { enabled: false } } });
+    expect(campaign.code).toBe(1);
+    expect(campaign.stderr).toContain(
+      "Selection and campaign prompt variants differ",
+    );
+    expect(prompts).toHaveLength(0);
   });
 
-  it("splits runs into history arms and reads runs and Findings per arm from the ledger", async () => {
+  it("rejects the old entry-index control mode and opt-in catalogue", () => {
+    const base = {
+      schemaVersion: 1 as const,
+      programmeBoundary: { version: "v1", text: "Synthetic" },
+      wordpressVersion: "6.8",
+      lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
+    };
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...base,
+        mode: "entry-index-control",
+        entryIndex: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...base,
+        mode: "wp2shell",
+        entryIndex: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("does not expose public history to the article-faithful discovery run", async () => {
     const { run, configPath, histories } = await harness({
-      ablation: 0.5,
       pinned: false,
       history: true,
     });
@@ -1913,26 +1851,10 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(campaign.code).toBe(0);
-    expect(histories).toEqual(["none", "catalog", "none"]);
-    const funnel = await run("ledger", "funnel", "--campaign", "campaign-1");
-    expect(funnel.stdout).toContain(
-      "  history:a: runs 2  findings 2  confirmed 1",
-    );
-    expect(funnel.stdout).toContain(
-      "  history:b: runs 1  findings 0  confirmed 0",
-    );
-    const comparison = await run("eval", "compare", "--axis", "history");
-    expect(comparison.code).toBe(0);
-    expect(comparison.stdout.split("\n")).toEqual([
-      "compare history  paired targets 1  unpaired 0",
-      "  arm a: hits 1/2 (50.0%, 95% CI 1.3–98.7%)  findings 2  cost $0.00 known, 2 run(s) unavailable",
-      "  arm b: hits 0/1 (0.0%, 95% CI 0.0–97.5%)  findings 0  cost $0.00 known, 1 run(s) unavailable",
-      "  verdict: 判定不能（区間が重なる）",
-      "  target wporg:synthetic-plugin@9.9.9  a 1/2  b 0/1",
-    ]);
+    expect(histories).toEqual(["none"]);
   });
 
-  it("uses disjoint campaign modes and retains the short objective comparison arm", () => {
+  it("accepts only the v7 single-Trial WP2Shell campaign mode", () => {
     const base = {
       schemaVersion: 1 as const,
       programmeBoundary: { version: "v1", text: "Synthetic" },
@@ -1945,31 +1867,15 @@ describe("harness CLI vertical slice", () => {
     });
     expect(production).toMatchObject({
       mode: "wp2shell",
-      promptId: "wp2shell-bounty-v5",
-      entryIndex: true,
-      runWallTimeMinutes: 60,
+      promptId: "wp2shell-bounty-v7",
+      entryIndex: false,
+      runWallTimeMinutes: 120,
       stopRules: { maxRuns: 1, noFindingRuns: 1 },
     });
-    expect(
-      wordpressCampaignConfigSchema.parse({
-        ...base,
-        promptId: "wp2shell-whitebox-v1.7",
-      }),
-    ).toMatchObject({
-      mode: "wp2shell",
-      promptId: "wp2shell-whitebox-v1.7",
-    });
-    expect(
-      wordpressCampaignConfigSchema.parse({
-        ...base,
-        promptId: "wp2shell-whitebox-v1.7",
-        entryIndex: false,
-      }),
-    ).toMatchObject({
-      mode: "entry-index-control",
-      promptId: "wp2shell-whitebox-v1.7",
-    });
     for (const forbidden of [
+      { promptId: "wp2shell-whitebox-v1.7" },
+      { promptId: "wp2shell-bounty-v6" },
+      { entryIndex: true },
       { assignment: { unit: "entry-point" } },
       { ablation: { axis: "history", armBFraction: 0.5 } },
       { continuation: {} },
@@ -1981,65 +1887,33 @@ describe("harness CLI vertical slice", () => {
           ...forbidden,
         }).success,
       ).toBe(false);
-    const comparison = wordpressCampaignConfigSchema.parse({
-      ...base,
-      mode: "comparison",
-      promptId: "short-objective-managed-v4",
-      stopRules: { maxRuns: 3, noFindingRuns: 3 },
-    });
-    expect(comparison).toMatchObject({
-      mode: "comparison",
-      promptId: "short-objective-managed-v4",
-      stopRules: { maxRuns: 3, noFindingRuns: 3 },
-    });
+    for (const mode of [
+      "comparison",
+      "ablation",
+      "assignment",
+      "entry-index-control",
+    ])
+      expect(
+        wordpressCampaignConfigSchema.safeParse({
+          ...base,
+          mode,
+          promptId: "wp2shell-bounty-v7",
+        }).success,
+      ).toBe(false);
   });
 
-  it("normalizes old history configuration, rejects continuation, and records prompt-history cells", async () => {
+  it("rejects historical prompt and history ablation configs at the new-run boundary", () => {
     const base = {
       schemaVersion: 1 as const,
       programmeBoundary: { version: "v1", text: "Synthetic" },
       wordpressVersion: "6.8",
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
     };
-    const normalized = wordpressCampaignConfigSchema.parse({
-      ...base,
-      ablation: { axis: "history", armBFraction: 0.5 },
-    });
-    if (normalized.mode !== "ablation") throw new Error("Expected ablation");
-    expect(normalized.ablation.axes).toEqual([
-      { axis: "history", armBFraction: 0.5 },
-    ]);
-    expect(() =>
-      wordpressCampaignConfigSchema.parse({
-        ...base,
-        ablation: { axes: [{ axis: "continuation", armBFraction: 0.5 }] },
-      }),
-    ).toThrow();
-    expect(
-      wordpressCampaignConfigSchema.safeParse({ ...base, continuation: {} })
-        .success,
-    ).toBe(false);
-    expect(
-      wordpressCampaignConfigSchema.safeParse({
-        ...base,
+    for (const config of [
+      { promptId: "short-objective-v2" },
+      { ablation: { axis: "history", armBFraction: 0.5 } },
+      {
         mode: "ablation",
-        ablation: {
-          axes: [
-            {
-              axis: "prompt",
-              armBFraction: 0.5,
-              armBPromptId: "screening-v1",
-            },
-          ],
-        },
-      }).success,
-    ).toBe(false);
-    const { run, configPath, prompts, promptDigests, ledger } = await harness({
-      history: true,
-      pinned: false,
-      config: {
-        promptId: "short-objective-v2",
-        stopRules: { maxRuns: 4, noFindingRuns: 4 },
         ablation: {
           axes: [
             {
@@ -2047,66 +1921,17 @@ describe("harness CLI vertical slice", () => {
               armBFraction: 0.5,
               armBPromptId: "wp2shell-single-http-v2",
             },
-            { axis: "history", armBFraction: 0.5 },
           ],
         },
       },
-    });
-    const result = await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-multi-axis",
-      "--config",
-      configPath,
-    );
-    expect(result.code).toBe(0);
-    expect(prompts).toHaveLength(4);
-    expect(prompts[0]).not.toContain("Maintain a private registry");
-    expect(prompts[1]).toContain("Maintain a private registry");
-    expect(new Set(promptDigests).size).toBe(2);
-    const started = ledger()
-      .read({
-        campaignId: "campaign-multi-axis",
-        type: "discovery-run-started",
-      })
-      .map(({ event }) => event);
-    expect(
-      started.map((event) =>
-        event.type === "discovery-run-started"
-          ? event.configuration.arms
-          : null,
-      ),
-    ).toEqual([
-      { prompt: "a", history: "a" },
-      { prompt: "b", history: "a" },
-      { prompt: "a", history: "b" },
-      { prompt: "b", history: "b" },
-    ]);
-    expect(
-      started.map((event) =>
-        event.type === "discovery-run-started"
-          ? event.configuration.promptDigest
-          : null,
-      ),
-    ).toEqual(promptDigests);
-    const funnel = ledger().funnel("campaign-multi-axis");
-    expect(funnel.byArm["history:a+prompt:b"]?.runs).toBe(1);
-    expect(funnel.byArm["history:b+prompt:a"]?.runs).toBe(1);
-    const comparison = await run(
-      "eval",
-      "compare",
-      "--axis",
-      "prompt",
-      "--campaign",
-      "campaign-multi-axis",
-    );
-    expect(comparison.code).toBe(0);
-    expect(comparison.stdout).toContain("compare prompt");
+      { continuation: {} },
+    ])
+      expect(
+        wordpressCampaignConfigSchema.safeParse({ ...base, ...config }).success,
+      ).toBe(false);
   });
 
-  it("records Leads and source-index facts without starting a Harness continuation", async () => {
+  it("records Leads without starting a Harness continuation", async () => {
     const makeLead = (summary: string, missingEdge: string) => ({
       summary,
       attackerPosition: "subscriber",
@@ -2141,7 +1966,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(result.code).toBe(0);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("## Entry points");
+    expect(prompts[0]).not.toContain("## Entry points");
     expect(prompts[0]).not.toContain("## Lead");
     expect(prompts[0]).not.toContain("Selected Lead");
     const started = ledger()
@@ -2212,30 +2037,9 @@ describe("harness CLI vertical slice", () => {
     expect(scored.stdout).not.toContain("includes/");
   });
 
-  it("keeps every run in arm a when the pinned version has no history cutoff", async () => {
-    const { run, configPath, histories } = await harness({
-      ablation: 0.5,
-      history: true,
-    });
-    await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-1",
-      "--config",
-      configPath,
-    );
-    expect(histories).toEqual(["none", "none", "none"]);
-    const funnel = await run("ledger", "funnel", "--campaign", "campaign-1");
-    expect(funnel.stdout).toContain("  history:a: runs 3");
-    expect(funnel.stdout).not.toContain("history:b");
-  });
-
   it("stops the campaign on a provider limit and resumes it with the same command", async () => {
     const { run, configPath } = await harness({
       limitOnCalls: [2],
-      config: { stopRules: { maxRuns: 4, noFindingRuns: 2 } },
     });
     const command = [
       "campaign",
@@ -2245,6 +2049,8 @@ describe("harness CLI vertical slice", () => {
       "campaign-1",
       "--config",
       configPath,
+      "--repeat",
+      "4",
     ];
     const stopped = await run(...command);
     expect(stopped.code).toBe(3);
@@ -2281,7 +2087,7 @@ describe("harness CLI vertical slice", () => {
           resources: {
             maxConcurrentRuns: 1,
             maxConcurrentTargets: 2,
-            memoryBudgetMiB: 10_240,
+            memoryBudgetMiB: 10_752,
           },
         },
       });
@@ -2347,7 +2153,7 @@ describe("harness CLI vertical slice", () => {
         resources: {
           maxConcurrentRuns: 1,
           maxConcurrentTargets: 2,
-          memoryBudgetMiB: 10_240,
+          memoryBudgetMiB: 10_752,
         },
       },
     });
@@ -2434,7 +2240,7 @@ describe("harness CLI vertical slice", () => {
         resources: {
           maxConcurrentRuns: 1,
           maxConcurrentTargets: 2,
-          memoryBudgetMiB: 10_240,
+          memoryBudgetMiB: 10_752,
         },
       },
     });
@@ -2840,10 +2646,19 @@ describe("harness CLI vertical slice", () => {
 
   it("runs discovery concurrently within the configured count and memory budget", async () => {
     const { run, configPath, maxInFlight } = await harness({
+      candidates: [
+        "synthetic-plugin",
+        "second-plugin",
+        "third-plugin",
+        "fourth-plugin",
+      ],
       config: {
-        stopRules: { maxRuns: 4, noFindingRuns: 4 },
-        // Room for two runs of a Codex sandbox and its broker (2,560 MiB each).
-        resources: { maxConcurrentRuns: 4, memoryBudgetMiB: 6000 },
+        // Two targets may execute independently; each Trial fits the budget.
+        resources: {
+          maxConcurrentRuns: 1,
+          maxConcurrentTargets: 2,
+          memoryBudgetMiB: 10_752,
+        },
       },
     });
     const campaign = await run(
@@ -2856,7 +2671,7 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(campaign.code).toBe(0);
-    expect(campaign.stdout).toContain("runs 4  stopped by max-runs");
+    expect(campaign.stdout).toContain("fourth-plugin");
     expect(maxInFlight()).toBe(2);
   });
 
@@ -2890,6 +2705,8 @@ describe("harness CLI vertical slice", () => {
       "campaign-1",
       "--config",
       configPath,
+      "--repeat",
+      "3",
     );
     const runtimes = await run("ledger", "runtime", "--campaign", "campaign-1");
     expect(runtimes.code).toBe(0);
@@ -3043,7 +2860,7 @@ describe("harness CLI vertical slice", () => {
       "skipped wporg:broken-plugin 9.9.9 at freeze: Source acquisition did not complete: connect-timeout",
     );
     expect(campaign.stdout).toMatch(
-      /^wporg:synthetic-plugin 3\.3\.1 .*stopped by no-new-finding$/m,
+      /^wporg:synthetic-plugin 3\.3\.1 .*stopped by max-runs$/m,
     );
     const skipped = ledger()
       .read({ type: "target-skipped" })
@@ -3167,7 +2984,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...policy,
-        promptVariant: "short-objective-managed-v4",
+        promptVariant: "wp2shell-bounty-v7",
         revisitPolicy: { kind: "never" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -3363,7 +3180,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...manual,
-        promptVariant: "short-objective-managed-v4",
+        promptVariant: "wp2shell-bounty-v7",
         revisitPolicy: { kind: "never" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -3448,7 +3265,7 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(mismatched.code).toBe(1);
-    expect(mismatched.stderr).toContain("prompt variants differ");
+    expect(mismatched.stderr).toContain("wp2shell-bounty-v7");
     await writeFile(configPath, JSON.stringify(campaignConfig));
     const campaign = await run(
       "campaign",
@@ -4484,7 +4301,7 @@ describe("harness CLI vertical slice", () => {
       attackerPosition: "subscriber",
       impact: "account-takeover",
       brokenProperty: "Synthetic property",
-      promptVariant: "short-objective-managed-v4",
+      promptVariant: "wp2shell-bounty-v7",
       promptDigest: expect.stringMatching(/^sha256:/),
     });
     expect(bundle.target).toMatchObject({

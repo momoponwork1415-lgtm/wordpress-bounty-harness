@@ -221,7 +221,7 @@ describe("WordPress host entry", () => {
     );
   });
 
-  it("checks that a ChatGPT login outlives the next hour without printing it", async () => {
+  it("checks that a ChatGPT login outlives the 120-minute Trial plus startup margin without printing it", async () => {
     const valid = await setup(
       {},
       { expiresAt: new Date(Date.now() + 9 * 24 * 60 * 60_000) },
@@ -235,9 +235,23 @@ describe("WordPress host entry", () => {
     const failed = await expiring.run();
     expect(failed.code).toBe(1);
     expect(failed.stderr.join("\n")).toContain(
-      "credential: the ChatGPT login is unreadable or expires within an hour",
+      "credential: the ChatGPT login is unreadable or expires within 135 minutes",
     );
     expect(failed.stderr.join("\n")).not.toContain("synthetic-account");
+
+    const tooShort = await setup(
+      {},
+      { expiresAt: new Date(Date.now() + 90 * 60_000) },
+    );
+    const blocked = await tooShort.run();
+    expect(blocked.code).toBe(1);
+    expect(blocked.stderr.join("\n")).toContain("expires within 135 minutes");
+
+    const longEnough = await setup(
+      {},
+      { expiresAt: new Date(Date.now() + 140 * 60_000) },
+    );
+    expect((await longEnough.run()).code).toBe(0);
   });
 
   it("rejects a host image that is not pinned by digest", () => {

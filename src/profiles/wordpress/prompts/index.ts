@@ -19,8 +19,13 @@ export const WORDPRESS_DISCOVERY_PROMPT_IDS = [
   "wp2shell-bounty-v4",
   "wp2shell-bounty-v5",
   "wp2shell-bounty-v6",
+  "wp2shell-bounty-v7",
   "wp2shell-whitebox-v1.7",
 ] as const;
+
+/** The only discovery objective accepted for new WordPress campaign runs. */
+export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID =
+  "wp2shell-bounty-v7" as const;
 
 /** These objectives receive the current Harness-generated output contract. */
 export const WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS = [
@@ -30,6 +35,7 @@ export const WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS = [
   "wp2shell-bounty-v4",
   "wp2shell-bounty-v5",
   "wp2shell-bounty-v6",
+  "wp2shell-bounty-v7",
   "wp2shell-whitebox-v1.7",
 ] as const;
 
@@ -70,6 +76,7 @@ export async function loadWordPressDiscoveryAsset(
     case "wp2shell-bounty-v4":
     case "wp2shell-bounty-v5":
     case "wp2shell-bounty-v6":
+    case "wp2shell-bounty-v7":
     case "wp2shell-whitebox-v1.7":
     case "trust-boundary-v1":
       fileName = `${id}.md`;

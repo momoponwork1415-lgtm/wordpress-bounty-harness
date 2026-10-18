@@ -530,7 +530,7 @@ it("records child thread counts on both completed and incomplete Root runs", asy
     const { ledger } = await campaign([], {
       indexed: true,
       rootTranscriptInvalid,
-      rootChildCounts: { observed: 4, admitted: 3 },
+      rootChildCounts: { observed: 4, admitted: 4 },
     });
     expect(
       ledger.read({ type: "discovery-run-finished" })[0]?.event,
@@ -538,7 +538,7 @@ it("records child thread counts on both completed and incomplete Root runs", asy
       runId: "run-0",
       outcome: rootTranscriptInvalid ? "failed" : "completed",
       childThreadsObserved: 4,
-      childThreadsAdmitted: 3,
+      childThreadsAdmitted: 4,
     });
   }
 });

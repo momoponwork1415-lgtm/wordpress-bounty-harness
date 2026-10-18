@@ -265,7 +265,7 @@ export async function createWordPressHostProfile(options: {
       bundledCatalogPath: host.codex.bundledCatalogPath,
       scratchRootDirectory: directories.codexScratch,
       maxOutputBytes: 16 * 1024 * 1024,
-      timeoutMs: (config.runWallTimeMinutes ?? 60) * 60_000,
+      timeoutMs: config.runWallTimeMinutes * 60_000,
       ...(runtimeProfile.subagent.modelId === "unavailable"
         ? {}
         : { memoryMiB: CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB }),
@@ -280,6 +280,7 @@ export async function createWordPressHostProfile(options: {
         runDocker,
         proxyBundleDirectory,
         runtimeProfile,
+        runWallTimeMinutes: config.runWallTimeMinutes,
         probe: () => sandbox.probe(),
       })
     ).filter((item) => !item.ok);
@@ -556,7 +557,7 @@ export async function createWordPressHostProfile(options: {
       );
       const config = await json(input.configPath);
       const selection = await json(input.selectionPath);
-      const wall = Number(config.runWallTimeMinutes ?? 60);
+      const wall = Number(config.runWallTimeMinutes ?? 120);
       return {
         loginExpiresAt: login,
         programmeObservedAt: new Date(String(transcription.transcribedAt)),
@@ -580,7 +581,7 @@ export async function createWordPressHostProfile(options: {
 /**
  * Checks the host without starting a target container. An API key is never
  * read; a ChatGPT login is parsed in memory only to see that it outlives the
- * next hour, since the broker does not refresh it.
+ * Trial wall limit plus startup margin, since the broker does not refresh it.
  */
 async function preflight(options: {
   readonly host: WordPressHostConfig;
@@ -591,6 +592,7 @@ async function preflight(options: {
     bundledCatalogDigest: string;
     authenticationMethod: string;
   };
+  readonly runWallTimeMinutes: number;
   readonly probe: () => Promise<{
     readonly cliVersion: string;
     readonly bundledCatalogDigest: string;
@@ -669,16 +671,17 @@ async function preflight(options: {
     options.runtimeProfile.authenticationMethod === "chatgpt-oauth-host" &&
     items.at(-1)?.ok === true
   ) {
+    const loginHorizonMinutes = options.runWallTimeMinutes + 15;
     const login = await readPrivateChatgptLogin(
       options.host.credentialFilePath,
-      new Date(Date.now() + 60 * 60_000),
+      new Date(Date.now() + loginHorizonMinutes * 60_000),
     ).catch(() => undefined);
     items.pop();
     check(
       "credential",
       login !== undefined,
       login === undefined
-        ? "the ChatGPT login is unreadable or expires within an hour (log in again with the Codex CLI)"
+        ? `the ChatGPT login is unreadable or expires within ${loginHorizonMinutes} minutes (Trial wall limit plus startup margin; log in again with the Codex CLI)`
         : `ChatGPT login valid until ${login.expiresAt.toISOString()} (broker only)`,
     );
   }

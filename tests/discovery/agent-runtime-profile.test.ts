@@ -22,7 +22,7 @@ const definition = {
 };
 
 describe("Codex runtime profile", () => {
-  it("admits a pinned Daybreak Blue Root and three matching child slots", () => {
+  it("admits a pinned Daybreak Blue Root and four matching child slots", () => {
     const candidate = {
       ...definition,
       requestedModelId: "gpt-6-sol" as const,

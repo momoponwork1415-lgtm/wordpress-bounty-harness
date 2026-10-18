@@ -422,6 +422,7 @@ type ChildRollout = {
   readonly finalMessage: string | undefined;
   readonly startedAt: string;
   readonly completedAt: string;
+  readonly captureTruncated: boolean;
 };
 
 function decodeChildRollout(
@@ -437,6 +438,7 @@ function decodeChildRollout(
   let finalMessage: string | undefined;
   let startedAt: string | undefined;
   let completedAt: string | undefined;
+  let captureTruncated = false;
   const commands: ObservedCommand[] = [];
   for (const line of raw.split("\n")) {
     if (line.trim().length === 0) continue;
@@ -462,6 +464,8 @@ function decodeChildRollout(
         agentPath = spawn.agent_path;
         if (typeof event.timestamp === "string") startedAt = event.timestamp;
       }
+    } else if (event.type === "session_capture") {
+      if (payload?.truncated === true) captureTruncated = true;
     } else if (event.type === "turn_context") {
       if (typeof payload?.model === "string") modelId = payload.model;
       if (typeof payload?.effort === "string") effort = payload.effort;
@@ -505,6 +509,7 @@ function decodeChildRollout(
     finalMessage,
     startedAt: startedAt ?? new Date(0).toISOString(),
     completedAt: completedAt ?? startedAt ?? new Date(0).toISOString(),
+    captureTruncated,
   };
 }
 
@@ -1069,7 +1074,7 @@ function codexArgs(
           "--enable",
           "multi_agent",
           "-c",
-          "agents.max_threads=3",
+          "agents.max_threads=4",
           "-c",
           "agents.max_depth=1",
         ]
@@ -1301,7 +1306,7 @@ export class CodexNativeAgentRuntime {
           runtimeProfileDigest: run.profile.digest,
           model: run.profile.requestedModelId,
           protocol: "responses",
-          maxRequests: cooperative ? 1600 : 100,
+          maxRequests: cooperative ? 2000 : 100,
           maxRequestBytes: cooperative ? 8 * 1024 * 1024 : 1024 * 1024,
           maxResponseBytes: 8 * 1024 * 1024,
           expiresAt: run.expiresAt,
@@ -1337,6 +1342,11 @@ export class CodexNativeAgentRuntime {
       state.agentRuns = children.agentRuns;
       state.childThreadsObserved = children.observed;
       state.childThreadsAdmitted = children.admitted;
+      if (children.observed > 255)
+        return {
+          reason: "evidence",
+          reasonDetail: "child-session-limit-exceeded",
+        };
     }
     if (result.researchFailure !== undefined || result.research === undefined)
       return { reason: "evidence", reasonDetail: "research-capture-failed" };
@@ -1415,13 +1425,18 @@ export class CodexNativeAgentRuntime {
       const byStart = left.child.startedAt.localeCompare(right.child.startedAt);
       return byStart || left.order - right.order;
     });
-    const admitted = children.slice(0, 3);
+    // max_threads=4 bounds live children, not the number of waves in a Trial.
+    const admitted = children.slice(0, 255);
     const agentRuns: AgentRun[] = [];
     for (const { child, raw } of admitted)
       agentRuns.push(
         await this.#captureChild(run, child, raw, grantReceiptDigest),
       );
-    return { agentRuns, observed: children.length, admitted: admitted.length };
+    return {
+      agentRuns,
+      observed: children.length,
+      admitted: admitted.filter(({ child }) => !child.captureTruncated).length,
+    };
   }
 
   async #captureChild(
@@ -1432,7 +1447,10 @@ export class CodexNativeAgentRuntime {
   ): Promise<AgentRun> {
     let reason: "policy" | "schema" | "evidence" | undefined;
     let reasonDetail: string | undefined;
-    if (
+    if (child.captureTruncated) {
+      reason = "evidence";
+      reasonDetail = "child-rollout-truncated";
+    } else if (
       child.modelId !== run.profile.subagent.modelId ||
       child.effort !== run.profile.subagent.effort ||
       child.cyberAccessProgram !== run.profile.cyberAccessProgram ||

@@ -38,8 +38,8 @@ import type {
 
 /** Memory ceiling of one Codex sandbox container. */
 export const CODEX_SANDBOX_MEMORY_MIB = 2048;
-/** A cooperative Trial keeps the Root and up to three CLI children in one sandbox. */
-export const CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB = 8192;
+/** A cooperative Trial keeps the Root and up to four CLI children in one sandbox. */
+export const CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB = 10240;
 
 const imageSchema = z
   .string()
@@ -53,7 +53,7 @@ const uuidSchema = z
 const MAX_SESSION_FILES = 256;
 const MAX_SESSION_HEADER_BYTES = 64 * 1024;
 const MAX_SESSION_BYTES = 60 * 1024 * 1024;
-const MAX_CAPTURE_BYTES = 240 * 1024 * 1024;
+const MAX_CAPTURE_BYTES = 300 * 1024 * 1024;
 const MAX_RESEARCH_BYTES = 8 * 1024 * 1024;
 const MAX_RESEARCH_ENTRIES = 256;
 const MAX_RESEARCH_DEPTH = 16;
@@ -178,17 +178,25 @@ function childMetadataOnly(header: SessionHeader): string {
         },
       },
     },
-  })}\n`;
+  })}\n${JSON.stringify({ type: "session_capture", payload: { truncated: true } })}\n`;
 }
 
-/** Capture Root and the first three direct children, counting later children by metadata. */
-async function collectRollouts(home: string): Promise<readonly string[]> {
+/** Capture every direct child across waves; max_threads limits concurrency, not total threads. */
+async function collectRollouts(home: string): Promise<{
+  readonly rollouts: readonly string[];
+  readonly truncated: boolean;
+}> {
   const sessions = join(home, "sessions");
-  if (!(await lstat(sessions).catch(() => undefined))?.isDirectory()) return [];
+  if (!(await lstat(sessions).catch(() => undefined))?.isDirectory())
+    return { rollouts: [], truncated: false };
   const files: string[] = [];
+  let sessionCountTruncated = false;
   const visit = async (directory: string, depth: number): Promise<void> => {
     if (depth > 5) throw new Error("Codex session tree is too deep");
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) =>
+      left.name.localeCompare(right.name),
+    )) {
       if (entry.isSymbolicLink())
         throw new Error("Codex session tree contains a symlink");
       const path = join(directory, entry.name);
@@ -196,10 +204,10 @@ async function collectRollouts(home: string): Promise<readonly string[]> {
       else if (
         entry.isFile() &&
         /^rollout-[A-Za-z0-9_.-]+\.jsonl$/.test(entry.name)
-      )
-        files.push(path);
-      if (files.length > MAX_SESSION_FILES)
-        throw new Error("Codex session count exceeded");
+      ) {
+        if (files.length < MAX_SESSION_FILES) files.push(path);
+        else sessionCountTruncated = true;
+      }
     }
   };
   await visit(sessions, 0);
@@ -228,34 +236,26 @@ async function collectRollouts(home: string): Promise<readonly string[]> {
     );
   const admitted = new Set(roots.map((header) => header.file));
   const admittedIds = new Set<string>();
-  const capturedChildIds = new Set<string>();
   for (const child of children) {
     if (admittedIds.has(child.threadId)) continue;
     admittedIds.add(child.threadId);
-    if (admittedIds.size <= 3) {
-      admitted.add(child.file);
-      capturedChildIds.add(child.threadId);
-    }
+    admitted.add(child.file);
   }
   const rollouts: string[] = [];
   let bytes = 0;
+  let truncated = sessionCountTruncated;
   for (const header of headers) {
-    if (!admitted.has(header.file)) {
-      if (
-        header.kind === "child" &&
-        rootIds.has(header.parentThreadId ?? "") &&
-        !capturedChildIds.has(header.threadId)
-      )
-        rollouts.push(childMetadataOnly(header));
+    if (!admitted.has(header.file)) continue;
+    const size = (await stat(header.file)).size;
+    if (size > MAX_SESSION_BYTES || bytes + size > MAX_CAPTURE_BYTES) {
+      truncated = true;
+      if (header.kind === "child") rollouts.push(childMetadataOnly(header));
       continue;
     }
-    const size = (await stat(header.file)).size;
     bytes += size;
-    if (size > MAX_SESSION_BYTES || bytes > MAX_CAPTURE_BYTES)
-      throw new Error("Codex session evidence limit exceeded");
     rollouts.push(await readSessionFile(header.file, MAX_SESSION_BYTES, true));
   }
-  return rollouts;
+  return { rollouts, truncated };
 }
 
 type ResearchArchiveEntry =
@@ -804,7 +804,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
       }
       const completedAt = now().toISOString();
       const collected = await collectRollouts(codexHome).then(
-        (rollouts) => ({ rollouts }),
+        ({ rollouts, truncated }) => ({
+          rollouts,
+          ...(truncated ? { rolloutFailure: "capture-failed" as const } : {}),
+        }),
         () => ({
           rollouts: [] as readonly string[],
           rolloutFailure: "capture-failed" as const,

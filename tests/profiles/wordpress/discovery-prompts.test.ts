@@ -104,6 +104,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v4",
       "wp2shell-bounty-v5",
       "wp2shell-bounty-v6",
+      "wp2shell-bounty-v7",
       "wp2shell-whitebox-v1.7",
       "trust-boundary-v1",
     ]);
@@ -125,6 +126,7 @@ describe("WordPress discovery prompt assets", () => {
       "wp2shell-bounty-v4",
       "wp2shell-bounty-v5",
       "wp2shell-bounty-v6",
+      "wp2shell-bounty-v7",
       "wp2shell-whitebox-v1.7",
     ]);
 
@@ -223,13 +225,17 @@ describe("WordPress discovery prompt assets", () => {
         "sha256:59c6bd1bb5fd5ef7618ce180de7f2d90af68fa4bcba26f90aa31aa3679d80cda",
       "wp2shell-bounty-v6":
         "sha256:3b85b6bdacd3181da779fd6cc1eec5c45c9e01d4f16e80163fdab4e62dff3503",
+      "wp2shell-bounty-v7":
+        "sha256:bb41592c57ce664a90b8b429d9d3d0c86da7c5547aeae9048a18440af9b1893e",
       "wp2shell-whitebox-v1.7":
         "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",
     } as const;
     for (const id of WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS) {
       const { text, digest } = await loadWordPressDiscoveryAsset(id);
       expect(digest).toBe(pins[id]);
-      expect(text).toMatch(/Lead|Finding/);
+      if (id === "wp2shell-bounty-v7")
+        expect(text).toContain("Use multiagents aggressively");
+      else expect(text).toMatch(/Lead|Finding/);
       expect(text).not.toMatch(
         /sourceTrace|labObservations|JSON string|Each Finding is an object/,
       );
@@ -423,7 +429,11 @@ describe("WordPress discovery prompt assets", () => {
   it("keeps both variants within the same attacker, operation, impact and Finding contract", async () => {
     for (const id of WORDPRESS_DISCOVERY_PROMPT_IDS) {
       const { text } = await loadWordPressDiscoveryAsset(id);
-      if (id === "wp2shell-bounty-v5" || id === "wp2shell-bounty-v6") {
+      if (
+        id === "wp2shell-bounty-v5" ||
+        id === "wp2shell-bounty-v6" ||
+        id === "wp2shell-bounty-v7"
+      ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).
         expect(text).toContain("trust boundary");

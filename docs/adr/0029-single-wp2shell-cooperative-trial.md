@@ -51,3 +51,9 @@ Root は固定入口索引の各 id の状態を typed coverage record で報告
 - **wall 上限**: 60 分から 120 分に広げる。wall 到達は従来どおり理由付き `incomplete`。索引の項目数に応じた可変上限は、まず 120 分固定で測ってから検討する。
 - **比較分母**: 網羅条件あり（v6）と無し（v5）の Trial を同じ分母に混ぜない。
 - **理由**: 本番 111 Trial で wall 中央値 7 分、上限到達 0、長い Trial ほど候補が多い（[計画文書](../reviews/2026-10-17-thorough-search-v6-plan.md) 第 1 節）。「索引はカタログであり網羅を強制する根拠がない」とした 2026-10-11 時点の判断は、索引なし arm との比較で索引が原因でないことが分かった後（[v5 比較](../evaluation/2026-10-16-prompt-v5-comparison.md)）も、網羅を終了条件にした arm を一度も測っていない。
+
+## 2026-10-18 所有者決定: WP2Shell 記事系 v7 の一本化
+
+新規探索で実行できる目的promptを `wp2shell-bounty-v7`、起動modeを `wp2shell` だけにする。旧 prompt・旧modeの本文・digestと実験結果は履歴照合用に保存するが、新しい Trial の選択肢から外す。記事の「同時に最大4体を起動」に合わせて、Rootが起動できる子の上限を3体から4体にする。v7 は WP2Shell 記事の探索指針をほぼそのまま用い、課題を WordPress プラグインの Programme Boundary 内の効果へ、`/flag` を後続の独立した Harness 判定器による nonce 付き canary の観測へ置き換える。探索者には canary を渡さず、脆弱性の存在も保証しない。
+
+v7 の wall 上限は120分、最低実行時間は設けない。Rootが早く最終報告すれば終了する。記事にない入口索引と公開履歴カタログは渡さず、v6の coverage 閉鎖条件と `incomplete(depth)` 判定もv7には適用しない。旧Trialの台帳、判定結果、coverage記録は読み続ける。変更した本文と日本語訳、出典対照は [v7 文書](../reviews/2026-10-18-wp2shell-bounty-v7.md)に置く。

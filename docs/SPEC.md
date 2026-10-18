@@ -22,7 +22,7 @@
 
 ## 3. 流れ
 
-開発対象のslugと版を指定（運用時は機械選定） → Snapshot固定 → Lab供給 → WP2Shell目的promptによるRoot＋最大3 subagentの協調Trialを対象ごとに1回 → 独立Verifier → 決定論的判定器 → 最新版で再検証 → 重複・scope照合 → 英語レポートJSON案と再現パッケージ → 人間の手動Lab再現と査読 → 外部行動承認 → 人間が提出し転帰を記録。台帳は全段階を追記する。評価は台帳を読むだけで、探索へ答えを渡さない（ADR 0029）。
+開発対象のslugと版を指定（運用時は機械選定） → Snapshot固定 → Lab供給 → WP2Shell目的promptによるRoot＋最大4 subagentの協調Trialを対象ごとに1回 → 独立Verifier → 決定論的判定器 → 最新版で再検証 → 重複・scope照合 → 英語レポートJSON案と再現パッケージ → 人間の手動Lab再現と査読 → 外部行動承認 → 人間が提出し転帰を記録。台帳は全段階を追記する。評価は台帳を読むだけで、探索へ答えを渡さない（ADR 0029）。
 
 ## 4. モジュール境界
 
@@ -33,7 +33,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `selection` | 方針に従って対象を機械的に選び、予算内で順序付ける | `select(policy) → TargetSelection[]`、`inspect` | 選定方針（人間が編集）、WordPress.org の観測、台帳の過去選定、選定記録とスコア内訳 | WordPress.org / Programme観測の unavailable / stale をeligibleにしない | 開発対象はslugと版を直接指定可。公開履歴の扱いは ADR 0030 |
 | `snapshot` | pluginとWordPress本体のsourceをdigestで固定する | `freeze(selection) → Snapshot`、`verify(digest)` | Target / Dependency Snapshot、canonical manifest | archiveの不正path・symlink・size超過を拒否 | 移植: `canonical-source-tree`、`canonical-json`、`immutable-file`、`private-artifact-store` |
 | `lab` | WordPress + MySQLの使い捨てgVisor環境を供給し、canaryとロール別アカウントを仕込む | `provision(snapshot, setup) → LabHandle`、`seedCanaries`、`teardown` | Lab Setup digest、canary台帳（nonceと配置先）、ロール認証情報（Lab内のみ） | source / image / runsc不一致では起動しない。provision失敗は `incomplete` 用の理由コード | 移植: `human-os` のgVisor候補検証Lab。拡張: discovery用の複数Lab、canary seeding、ロール基準の正常操作記録 |
-| `discovery` | 固定Snapshotで対象ごとにRoot＋最大3子の協調Trialを1回回す | `run(campaignInput) → DiscoveryRun`、`campaign(stopRule)` | Trial id、Root / 子の実行記録、model profile digest、prompt digest、usage、FindingとLeadのdigest参照 | provider / schema / sandbox失敗はtyped receiptとして残し、有効な個別成果を失わない。provider上限はcampaignを止め、runnerがbackoff後に同じcampaign IDで再開する。対象単位の失敗は `target-skipped` で次の対象へ進む | ADR 0029。旧単独Trialと二段構えの記録は読み続ける |
+| `discovery` | 固定Snapshotで対象ごとにRoot＋最大4子の協調Trialを1回回す | `run(campaignInput) → DiscoveryRun`、`campaign(stopRule)` | Trial id、Root / 子の実行記録、model profile digest、prompt digest、usage、FindingとLeadのdigest参照 | provider / schema / sandbox失敗はtyped receiptとして残し、有効な個別成果を失わない。provider上限はcampaignを止め、runnerがbackoff後に同じcampaign IDで再開する。対象単位の失敗は `target-skipped` で次の対象へ進む | ADR 0029。旧単独Trialと二段構えの記録は読み続ける |
 | `verification` | 独立Verifierで反証を試み、Harnessが捕捉したHTTPとcanaryを判定器で照合する | `verify(finding, snapshot, lab) → VerificationResult` | Verifier run記録、判定器の証拠（HTTP捕捉、canary回収、browser観測、ロール基準との差分）、Lab Setup digest | 前提不一致・observation失敗・cleanup失敗は `incomplete` | 新規。移植: Execution Canary |
 | `ledger` | 全イベントを追記し、funnelを読み取り専用で導く | `append(event)`、`read(query)`、`funnel(campaign)` | LedgerEvent（型付きunion、snapshot digest付き）、添付（Codex findings等）のdigest参照 | 同一identityへの異なる内容はconflict。削除しない | 新規。規則はADR 0024とMantisから |
 | `review` | 人間が検証済みFindingを見て提出判断をする。scope、重複、文案、承認 | `queue() → ReviewItem[]`、`decide`、`assessScope`、`draft`、`authorize` | ReviewDecision、Programme Scope Assessment、Submission Candidate、Submission Draft（版付き）、External Action Authorization | scope評価失敗はscopeだけ `incomplete`、Verified Vulnerabilityを失わない。必要な承認がなければadmitしない | 移植: `human-os` のscope評価・Draft・Authorization。新規: review CLI、ローカルWordfence履歴DB照合 |
@@ -52,7 +52,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、canaryの配置先（options、post meta、ファイル、canaryユーザー） |
 | 判定器集合 | 第7節の種別別判定器 |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
-| prompt雛形 | 既定 `wp2shell-bounty-v5`、比較・履歴照合用 `wp2shell-bounty-v4`、`wp2shell-bounty-v3`、`wp2shell-bounty-v2` と `short-objective-managed-v4`、過去の `screening-v1` を含む版付きprompt、trust境界宣言の雛形。ADR 0017、0019、0029 |
+| prompt雛形 | 新規探索では `wp2shell-bounty-v7` だけを実行可能にする。旧版は過去Trialのdigest・実験結果の照合用に保存し、新規探索には使わない。trust境界宣言の雛形も持つ。ADR 0019、0029 |
 | source補助 | 保存先のwrite / readをつなぐ索引と登録入口。Rootと子が参照できるが、固定した役割分担の命令にはしない |
 | Lead型 | sourceに根拠があり、影響までの辺が1つ足りないprimitiveの分類と記録 |
 | 評価対象の表現 | 開発対象のslug、版、修正版、影響分類。正解表の手入力は初期受入条件にしない |
@@ -65,7 +65,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | --- | --- | --- |
 | `TargetSelection v1` | selection → snapshot | plugin slug、version、スコア内訳、方針の版、選定時刻 |
 | `CampaignInput v1` | snapshot → discovery | Target / Dependency Snapshot digest、trust境界宣言（人間が書く、版付き）、Programme Boundary（匿名化）、対象の公開履歴（カタログ情報、`historyCutoff` とdigest付き。渡さないrunは `none`）、model profile digest、prompt digest、Trial単位の停止規則、Lab設定 |
-| `PlannedTrial` | profile → discovery | Trial id / ordinal、Rootと最大3子の実行枠、固定sourceと入口索引の参照、単一Trialのwall上限。旧形式の段・Lead継続planは互換読取のみ |
+| `PlannedTrial` | profile → discovery | Trial id / ordinal、Rootと最大4子の実行枠、固定sourceの参照、単一Trialのwall上限。旧形式の入口索引・段・Lead継続planは互換読取のみ |
 | `Finding v1` | discovery → verification / ledger | claim、attacker position（`unauthenticated` / `subscriber` / `customer` のみ）、到達する影響の種別（第8b節の共通分類）、設定前提（`default` / 変更内容）、破られるproperty、入口からeffectまでのtrace（file、function、行）、既存controlへの評価、Lab内で観測した事実、recipe ref（Private）、discovery run id、snapshot digest |
 | `Lead v1` | discovery → ledger / 次回の探索計画 | primitive、storage分類、欠けた辺、source trace。本文はPrivate Evidence、台帳はdigestとenumだけ。Verifierへは送らない |
 | `VerificationResult v1` | verification → ledger / review | `runtime-confirmed` / `contradicted` / `incomplete`、判定器の種類、判定器が観測した条件（使ったrole、path / 拡張子の制御、到達role、XSSの発火context、変更したoption、設定前提）、証拠ref、Lab Setup digest、`incomplete` 理由コード、次の手（verifierが書く）、再現パッケージref（confirmedのみ）。台帳にはoptionalな `evidenceCapture` enum |
@@ -78,14 +78,14 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 ## 6. Discovery runの仕様
 
 - 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
-- 対象の公開履歴: ローカルWordfence履歴DBから、snapshotの版より前（評価runではheld-outの公開日より前）に公開された対象プラグインの記録を抽出して渡す。内容は種別、影響版、修正版、公開日、公開記録のタイトル、修正版との差分で変わったファイルの一覧まで。PoC・payload・再現手順は含めない。渡した・渡さないを `CampaignInput` に記録する（ADR 0012）。
-- 入力: 版・digest付きの目的prompt `wp2shell-bounty-v5` を既定にし、`wp2shell-bounty-v4`、`wp2shell-bounty-v3`、`wp2shell-bounty-v2` と `short-objective-managed-v4` を比較・履歴照合用に保持する。`screening-v1` 等の旧版は過去Trialの目的文とdigestの照合用に残し、旧screeningを現行modeで新規起動しない。人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、固定sourceから生成した入口索引、Lab（任意）のHTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB accountを渡す。入口索引は入口の所在だけを示すカタログであり、経路や分担を指示しない。索引なしの比較Trialは別armとして記録し、同じ比較分母に混ぜない。分担と仮説はRootが決める。公開履歴は時点で切ったカタログ情報だけを任意に渡す。
+- 旧Trialの公開履歴入力・照合仕様: ローカルWordfence履歴DBから、snapshotの版より前（評価runではheld-outの公開日より前）に公開された対象プラグインの記録を抽出した。内容は種別、影響版、修正版、公開日、公開記録のタイトル、修正版との差分で変わったファイルの一覧までで、PoC・payload・再現手順は含めない。渡した・渡さないは `CampaignInput` に記録する（ADR 0012）。v7 の新規探索にはこの履歴を渡さない。
+- 入力: 新規探索には版・digest付きの目的prompt `wp2shell-bounty-v7` と `wp2shell` mode だけを使う。旧版と旧modeは過去Trialの目的文・digest・実験結果の照合用に残すが、新規Trialには選べない。人間が書いたtrust境界宣言、Programme Boundary、固定したpluginとWordPress coreの読み取り専用source pack、Lab（任意）のHTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB accountを渡す。v7 には固定source由来の入口索引や公開履歴カタログを渡さず、分担と仮説はRootが決める。旧Trialの索引と公開履歴の記録は読み続ける。
 - 許可する操作: 固定sourceの読み取り、LabへのHTTP、Lab DBのRO accountによる読み取り。探索runにcanaryは渡さず、canaryの発行と確認は検証段階のHarnessが行う。外向き通信は認証ブローカー経由のprovider APIだけ。
-- 構成: 対象ごとにRoot＋最大3子の協調Trialを1回行う。Harnessは人数上限、隔離、wall、証拠保存、停止を管理し、子の有効なFindingとLeadはRootの最終JSONと独立して保存する。開発セットの3回反復は独立したTrialとして測り、本番の対象ごと1回という既定を変えない（ADR 0029）。
-- 出力: `Finding[]`（0件可）、`Lead[]`（0件可）、観測できた入口索引の `examined` / `unexamined` と理由を記録する。入口索引の網羅は正常終了条件にしない。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。候補は生のまま保存し、profileの正規化を通してから受理する。受理できない候補は `candidate-held` として分類とissue pathだけを台帳に残し、保留だけのTrialは無成果に数えない（ADR 0018）。Finding / Leadの出力契約はprompt本文ではなくHarnessがschemaから生成する節として渡し、目的文と契約節のdigestを別に記録する（ADR 0019）。
-- 停止規則: 1 Trialの既定wall上限は60分。Rootの最終報告が早く返ればそこで正常終了し、Harnessは最低時間を強制しない。既定の `wp2shell-bounty-v5` 本文にも最低探索時間を置かない。履歴照合用のv2・v3・v4本文は変更しない。wall到達、provider上限、broker制限、実行・schema失敗は理由付きの `incomplete` とし、既に保存した子の成果を失わない。最終JSONに到達しなかったTrialを候補0件の正常完了にしない。Harnessによる続行差し込みや同一対象の自動追加Trialはしない。provider上限では新規Trialを止め、runner（`continuous run`）がbackoff後に同じcampaign IDで未消費の対象を再開する。拒否・wall・schema等の対象単位の失敗は `target-skipped` として次の対象へ進み、campaignを止めない。Rootがsourceを1件も読まず、子を起動せず、broker転送が1以下で終わったrunはTrialに数えず、その対象は次の選定で戻る（途中まで走ったTrialはTrialとして数え、再選定しない）。正常完了の0件も脆弱性なしを意味せず、source読取とwallから早期終了と探索後の0件を分ける。
+- 構成: 対象ごとにRoot＋最大4子の協調Trialを1回行う。Harnessは人数上限、隔離、wall、証拠保存、停止を管理し、子の有効なFindingとLeadはRootの最終JSONと独立して保存する。開発セットの3回反復は独立したTrialとして測り、本番の対象ごと1回という既定を変えない（ADR 0029）。
+- 出力: `Finding[]`（0件可）、`Lead[]`（0件可）。v7に入口索引のcoverage recordや網羅の終了条件を課さない。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。候補は生のまま保存し、profileの正規化を通してから受理する。受理できない候補は `candidate-held` として分類とissue pathだけを台帳に残し、保留だけのTrialは無成果に数えない（ADR 0018）。Finding / Leadの出力契約はprompt本文ではなくHarnessがschemaから生成する節として渡し、目的文と契約節のdigestを別に記録する（ADR 0019）。
+- 停止規則: 1 Trialの既定wall上限は120分。Rootの最終報告が早く返ればそこで正常終了し、Harnessは最低時間を強制しない。`wp2shell-bounty-v7` 本文も最低探索時間を置かない。履歴照合用の旧版本文は変更しない。wall到達、provider上限、broker制限、実行・schema失敗は理由付きの `incomplete` とし、既に保存した子の成果を失わない。最終JSONに到達しなかったTrialを候補0件の正常完了にしない。Harnessによる続行差し込みや同一対象の自動追加Trialはしない。provider上限では新規Trialを止め、runner（`continuous run`）がbackoff後に同じcampaign IDで未消費の対象を再開する。拒否・wall・schema等の対象単位の失敗は `target-skipped` として次の対象へ進み、campaignを止めない。Rootがsourceを1件も読まず、子を起動せず、broker転送が1以下で終わったrunはTrialに数えず、その対象は次の選定で戻る（途中まで走ったTrialはTrialとして数え、再選定しない）。正常完了の0件も脆弱性なしを意味せず、source読取とwallから早期終了と探索後の0件を分ける。
 - 同時実行: 最初はTrialを1つずつ回す。provider要求総数・usage・wallを観測し、安全に増やせることを確かめてから対象間の並列数を決める。
-- 記録する項目（runごと）: trialId / trialOrdinal、Root・子の役割、要求model IDとeffort、CLIの正確な版と同梱カタログのdigest、認証方式、cyber access program、service tier、各agentのusage（providerが返さない項目は `unavailable`）、観測できたsource読取とcommand件数の下限、入口索引・prompt・sourceのdigest、wallと停止理由。過去の段・継続付きrunは別形式として読めるようにする。
+- 記録する項目（runごと）: trialId / trialOrdinal、Root・子の役割、要求model IDとeffort、CLIの正確な版と同梱カタログのdigest、認証方式、cyber access program、service tier、各agentのusage（providerが返さない項目は `unavailable`）、観測できたsource読取とcommand件数の下限、prompt・sourceのdigest、wallと停止理由。v7の入口索引は無効として記録し、過去の索引・段・継続付きrunは読めるようにする。
 - 本番model: Daybreak Blue対応の `gpt-6-sol` 系を使う。正確なmodel IDとsubagentへの継承は実機preflightで固定する。`gpt-6.1-sol`やLunaへ暗黙に切り替えない。
 
 ## 7. Verificationの仕様
@@ -183,10 +183,10 @@ TranslatePressの公開済み脆弱版・修正版で縦断経路を実証した
 
 ### 主指標（本番の台帳から、追加費用なし）
 
-- **本番A/B（必要な場合のみ）**: 旧単独Trialと二段構えの段・継続付きTrialは新主経路の分母に混ぜない。比較するときは対象、モデル、source、Lab、wall上限、判定器を固定し、prompt armや入口索引の有無を明示した独立Trialを分母にする。区間が重なれば「判定不能」とする。隔離と判定器を外すablationは行わない。
+- **過去の比較結果**: 旧単独Trialと二段構えの段・継続付きTrialはv7主経路の分母に混ぜない。旧prompt armと索引あり・なしの結果は履歴として読むが、新規探索ではprompt A/B・ablation・assignment・入口索引切替のmodeを起動しない。隔離と判定器を外すablationも行わない。
 - **前向き評価**: 本番Campaignの台帳を、後日公開されたadvisory（自分の提出以外も含む）と照合する。未発見の経路を後から分析できるが、個別の脆弱性の存在を実行時に知ることはできない。
 - **提出転帰**: triaged / resolved / duplicate / informative / N/A / rejected の率と、報奨額。収益に直結する最終の数字。
-- **funnel**: 協調Trialの実行と完了 → 最終JSON到達 → 受理 / 保留 → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・arm別・種別別に、入口索引のexamined率、Trial wall中央値、usage、失敗理由を読む。旧段・継続付きTrialは別に読めるようにする。非cache入力1M tokenあたりとagent wall 1時間あたりの `runtime-confirmed` と、Findingごとの検証attempt数を同じ表で出す（ADR 0023、0029）。
+- **funnel**: 協調Trialの実行と完了 → 最終JSON到達 → 受理 / 保留 → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・種別別にTrial wall中央値、usage、失敗理由を読む。旧arm・旧入口索引のexamined率・旧段・継続付きTrialは履歴として別に読めるようにする。非cache入力1M tokenあたりとagent wall 1時間あたりの `runtime-confirmed` と、Findingごとの検証attempt数を同じ表で出す（ADR 0023、0029）。
 
 ### 判定器の負の対照（安い。判定器のテストとして回す）
 
@@ -232,7 +232,7 @@ TranslatePressの公開済み脆弱版・修正版で縦断経路を実証した
 26. 通常利用の汎用Lab scenarioを優先し、被害者のブラウザ操作はHarness観測器に限る。
 27. contributor以上を信頼側に置き、公開7件の再発見を配線と判定器の証明として評価する。
 28. 人間の作業を読む・手で再現する・提出するに絞り、分類ごとの受理基準と再現の形を固定する（proposed）。
-29. 単一のWP2Shell協調Trialを対象ごとに1回、既定wall上限60分で回し、入口索引をカタログとして渡す。
+29. 単一のWP2Shell協調Trialを対象ごとに1回、Root＋最大4子・既定wall上限120分で回す。新規Trialの目的promptはv7だけで、入口索引は渡さない。
 
 ## 12. 最初の縦断スライスと受入条件
 
@@ -241,7 +241,7 @@ TranslatePressの公開済み開発対象を脆弱版と修正版で固定し、
 この節はADR 0016に基づく最初の縦断スライスの受入記録である。後続の探索の主経路はADR 0029の単一協調Trialに従う。
 
 1. `snapshot` が対象、WordPress core、必要な依存をdigestで固定し、gVisor Labを供給する。
-2. 実機preflightでDaybreak対応model ID、Rootと最大3つの子、broker、Lab到達を確認する。別モデルや単独agentへ自動fallbackしない。
+2. 実機preflightでDaybreak対応model ID、Rootと最大4つの子、broker、Lab到達を確認する。別モデルや単独agentへ自動fallbackしない。
 3. 協調Trialがsourceを読み、Findingまたは具体的Leadを出す。子の成果はRootの最終JSONと独立して保存され、schema失敗は正常な0件にならない。
 4. Findingが出たら新しいLabの独立VerifierとHarness判定器へ渡す。nonce証拠、HTTP記録、失敗時の `incomplete` 理由を保存する。同じ経路の修正版ではconfirmedが出ない。
 5. 上のゲートを満たしたら、最小の選定方針で公開中最新版の少数の本番探索を始める。confirmedなら最新版の同じSnapshotで独立確認し、Wordfenceを含む重複候補とscopeを照合する。最新版で成立しなければ提出候補にしない。
@@ -280,7 +280,7 @@ TranslatePressの公開済み開発対象を脆弱版と修正版で固定し、
 | --- | --- |
 | Target Snapshot | plugin sourceをmanifest digestで固定した読み取り専用の対象 |
 | Lab | 使い捨てのgVisor環境で動くWordPress + MySQL。canaryとロール別アカウントを持つ |
-| Trial | 独立試行の単位。主経路では対象ごとにRoot＋最大3子の協調Trialを1回行う。旧単独・二段構えTrialも台帳では区別して読む |
+| Trial | 独立試行の単位。主経路では対象ごとにRoot＋最大4子の協調Trialを1回行う。旧単独・二段構えTrialも台帳では区別して読む |
 | Discovery Run | モデル実行の記録単位。Rootと子の実行をTrialの中で区別する |
 | Finding | Discovery Runが出した、攻撃者前提・property・traceを持つ主張。確認ではない |
 | Lead | sourceに根拠があるが、影響までの辺が1つ不足するprimitive。Findingでも確認結果でもない |

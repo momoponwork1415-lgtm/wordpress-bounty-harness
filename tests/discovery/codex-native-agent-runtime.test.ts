@@ -217,7 +217,7 @@ describe("Codex native agent runtime", () => {
     }
   });
 
-  it("keeps Root and the first three unique children when a later wave creates another thread", async () => {
+  it("retains child findings from later waves and rejects mismatched child profiles", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-child-overrun-"));
     try {
       const cooperativeProfile = defineAgentRuntimeProfile({
@@ -290,7 +290,10 @@ describe("Codex native agent runtime", () => {
           // Session file ordering is not guaranteed to be spawn ordering.
           rollouts: [
             rootRollout,
-            childRollout(4, "other-model"),
+            childRollout(7, "other-model"),
+            childRollout(6),
+            childRollout(5),
+            childRollout(4),
             childRollout(2),
             childRollout(1),
             childRollout(3),
@@ -313,21 +316,30 @@ describe("Codex native agent runtime", () => {
       });
       expect(result.receipt).toMatchObject({
         terminal: "completed",
-        childThreadsObserved: 4,
-        childThreadsAdmitted: 3,
+        childThreadsObserved: 7,
+        childThreadsAdmitted: 7,
       });
       expect(result.attachment?.kind).toBe("findings");
       expect(result.agentRuns?.map((child) => child.receipt.runId)).toEqual([
         "child-1",
         "child-2",
         "child-3",
+        "child-4",
+        "child-5",
+        "child-6",
+        "child-7",
       ]);
       expect(
-        result.agentRuns?.every(
-          (child) => child.receipt.terminal === "completed",
-        ),
+        result.agentRuns
+          ?.slice(0, 6)
+          .every((child) => child.receipt.terminal === "completed"),
       ).toBe(true);
-      for (const child of result.agentRuns ?? []) {
+      expect(result.agentRuns?.[6]?.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "policy",
+        reasonDetail: "child-profile-mismatch",
+      });
+      for (const child of result.agentRuns?.slice(0, 6) ?? []) {
         if (child.attachment === undefined)
           throw new Error("Missing child report");
         expect((await attachments.read(child.attachment)).status).toBe(
@@ -338,7 +350,7 @@ describe("Codex native agent runtime", () => {
         await attachments.readByDigest(
           "findings",
           canonicalDigest({
-            findings: [{ claim: "child-4" }],
+            findings: [{ claim: "child-7" }],
             leads: [],
             examined: "source",
             unexamined: "none",
@@ -354,6 +366,7 @@ describe("Codex native agent runtime", () => {
             childRollout(2),
             childRollout(3),
             childRollout(4),
+            childRollout(5),
           ],
         }),
         broker(),
@@ -376,8 +389,49 @@ describe("Codex native agent runtime", () => {
         reasonDetail: "child-profile-mismatch",
       });
       expect(mismatched.agentRuns?.map((child) => child.receipt.runId)).toEqual(
-        ["child-1", "child-2", "child-3"],
+        ["child-1", "child-2", "child-3", "child-4", "child-5"],
       );
+
+      const truncated = await new CodexNativeAgentRuntime(
+        sandbox(stdout, [], {
+          rollouts: [
+            rootRollout,
+            childRollout(1),
+            childRollout(2),
+            childRollout(3),
+            childRollout(4),
+            childRollout(5),
+          ],
+          rolloutFailure: "capture-failed",
+        }),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      ).execute({
+        ...run,
+        profile: cooperativeProfile,
+        coordination: "cooperative",
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(truncated.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "evidence",
+        reasonDetail: "rollout-capture-failed",
+        childThreadsObserved: 5,
+        childThreadsAdmitted: 5,
+      });
+      expect(truncated.agentRuns?.map((child) => child.receipt.runId)).toEqual([
+        "child-1",
+        "child-2",
+        "child-3",
+        "child-4",
+        "child-5",
+      ]);
+      expect(truncated.agentRuns?.[4]?.attachment?.kind).toBe("findings");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -800,13 +854,13 @@ describe("Codex native agent runtime", () => {
         },
       });
       expect(result.receipt.terminal).toBe("completed");
-      expect(maxRequests).toBe(1600);
+      expect(maxRequests).toBe(2000);
       expect(result.receipt.subagent).toEqual({
         modelId: "gpt-6-sol",
         effort: "high",
       });
       expect(commands[0]?.args).toContain("multi_agent");
-      expect(commands[0]?.args).toContain("agents.max_threads=3");
+      expect(commands[0]?.args).toContain("agents.max_threads=4");
       expect(commands[0]?.args).toContain("agents.max_depth=1");
       expect(commands[0]?.researchMount).toEqual({
         path: "/workspace/research",
@@ -827,7 +881,7 @@ describe("Codex native agent runtime", () => {
       });
       expect(screening.receipt.terminal).toBe("completed");
       expect(commands[1]?.args).toContain("features.multi_agent=false");
-      expect(commands[1]?.args).not.toContain("agents.max_threads=3");
+      expect(commands[1]?.args).not.toContain("agents.max_threads=4");
       expect(commands[1]?.researchMount).toBeUndefined();
       expect(result.researchArtifact).toMatchObject({
         attachment: {
