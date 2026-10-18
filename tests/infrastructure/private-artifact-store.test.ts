@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
   PrivateArtifactStore,
@@ -43,6 +44,49 @@ describe("PrivateArtifactStore", () => {
     const read = await store.readFile(first, "b.txt", 10);
     expect(read.status === "resolved" && read.bytes.toString()).toBe("b");
     await expect(store.putFiles({ "../escape": "x" })).rejects.toThrow();
+  });
+
+  it("reads a JSON file through its schema and names each way it can fail", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "private-artifact-store-"));
+    directories.push(directory);
+    const store = new PrivateArtifactStore({
+      rootDirectory: join(directory, "artifacts"),
+      maxEntries: 4,
+      maxBytes: 1024,
+    });
+    const schema = z.strictObject({ revision: z.number().int() });
+    const artifact = await store.putFiles({
+      "record.json": JSON.stringify({ revision: 2 }),
+      "wrong-shape.json": JSON.stringify({ revision: "two" }),
+      "not-json.json": "{",
+    });
+    expect(await store.readJson(artifact, "record.json", schema, 1024)).toEqual(
+      {
+        status: "resolved",
+        artifact: expect.objectContaining({ artifactId: artifact }),
+        value: { revision: 2 },
+      },
+    );
+    expect(
+      await store.readJson(artifact, "wrong-shape.json", schema, 1024),
+    ).toEqual({ status: "malformed", reason: "schema" });
+    expect(
+      await store.readJson(artifact, "not-json.json", schema, 1024),
+    ).toEqual({ status: "malformed", reason: "json" });
+    expect(await store.readJson(artifact, "absent.json", schema, 1024)).toEqual(
+      { status: "missing" },
+    );
+    // The byte limit applies before any parsing.
+    expect(await store.readJson(artifact, "record.json", schema, 4)).toEqual({
+      status: "size-limit-exceeded",
+    });
+    expect(store.rootDirectory).toBe(join(directory, "artifacts"));
+    expect(store.contentPath(artifact)).toBe(
+      join(directory, "artifacts", artifact, "content"),
+    );
+    expect(() => store.contentPath("../escape")).toThrow(
+      PrivateArtifactStoreError,
+    );
   });
 
   it("atomically stores and resolves a bounded private artifact", async () => {

@@ -1,22 +1,20 @@
-import { z } from "zod";
-
-import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
-import {
-  snapshotSchema,
-  type SnapshotReader,
-} from "../../../snapshot/index.js";
-import { openWordPressLab, type WordPressSourceResolver } from "./index.js";
+import { openLabReconstruction } from "../../../review/reproduction-package.js";
+import type { SnapshotReader } from "../../../snapshot/index.js";
+import type { WordPressLab } from "./index.js";
 import { setupSchema } from "./provision-input.js";
-import { createReviewLabWaiter } from "./review-lab-wait.js";
 
-const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-const manifestSchema = z.looseObject({
-  snapshotDigest: digest,
-  labSetupDigest: digest,
-  snapshot: snapshotSchema.safeExtend({ digest }),
-  setup: setupSchema,
-});
+/** The Lab operations a human review session uses; observation stays with verification. */
+export type WordPressReviewLabProvisioner = Pick<
+  WordPressLab,
+  | "provision"
+  | "seedCanaries"
+  | "reviewAdministrator"
+  | "reviewReceiverIp"
+  | "canaryLedger"
+  | "prepareScriptCanary"
+  | "teardown"
+>;
 
 export interface WordPressReviewLabSession {
   readonly endpoint: string;
@@ -33,8 +31,8 @@ export interface WordPressReviewLabSession {
   };
   readonly canaries: unknown;
   readonly browserImage: string;
+  /** Removes the Lab; a second call is a no-op. The caller decides when. */
   close(): Promise<void>;
-  wait(): Promise<void>;
 }
 
 /** Builds one fresh review Lab from a sealed package without running discovery. */
@@ -44,82 +42,53 @@ export async function openWordPressReviewLab(input: {
   readonly store: PrivateArtifactStore;
   /** The frozen Snapshots the package must agree with. */
   readonly snapshots: SnapshotReader;
-  /** The materialized source trees the Lab mounts. */
-  readonly source: WordPressSourceResolver;
-  readonly host: {
-    readonly dockerExecutablePath: string;
-    readonly images: {
-      readonly database: string;
-      readonly wordpress: string;
-      readonly wordpressCli: string;
-      readonly browser: string;
-      readonly broker: string;
-    };
-  };
+  readonly lab: WordPressReviewLabProvisioner;
+  /** The pinned image a human's manual client runs on the Lab network. */
+  readonly browserImage: string;
 }): Promise<WordPressReviewLabSession> {
-  const file = await input.store.readFile(
-    input.packageDigest,
-    "lab.json",
-    1024 * 1024,
-  );
-  if (file.status !== "resolved")
-    throw new Error("Review Lab setup manifest is missing");
-  const manifest = manifestSchema.parse(
-    JSON.parse(file.bytes.toString("utf8")) as unknown,
-  );
-  const snapshot = manifest.snapshot;
-  const snapshotBody = snapshotSchema.parse({
-    kind: snapshot.kind,
-    schemaVersion: snapshot.schemaVersion,
-    target: snapshot.target,
-    dependencies: snapshot.dependencies,
-  });
-  if (
-    snapshot.digest !== manifest.snapshotDigest ||
-    canonicalDigest(snapshotBody) !== snapshot.digest ||
-    manifest.setup.snapshotDigest !== snapshot.digest
-  )
-    throw new Error("Review Lab Snapshot digest mismatch");
-  // The frozen artifact is re-verified against the same digest the package carries.
-  const frozen = await input.snapshots.load(snapshot.digest);
+  const opened = await openLabReconstruction(input.store, input.packageDigest);
+  if (opened.status !== "opened")
+    throw new Error(
+      `Review Lab reconstruction is unavailable: ${opened.reason}`,
+    );
+  const { reconstruction } = opened;
+  // The Lab mounts the frozen Snapshot, not the package's copy; the reader re-verifies its digest.
+  const frozen = await input.snapshots.load(reconstruction.snapshotDigest);
   if (frozen.status !== "loaded")
     throw new Error(
       `Frozen Snapshot artifact differs from the package: ${frozen.reason}`,
     );
-  const lab = openWordPressLab({
-    dockerExecutablePath: input.host.dockerExecutablePath,
-    images: {
-      database: input.host.images.database,
-      wordpress: input.host.images.wordpress,
-      wordpressCli: input.host.images.wordpressCli,
-      browser: input.host.images.browser,
-      recorder: input.host.images.broker,
-    },
-    source: input.source,
-  });
-  const provisioned = await lab.provision(snapshot, manifest.setup, {
+  const setup = setupSchema.parse(reconstruction.setup);
+  const provisioned = await input.lab.provision(frozen.snapshot, setup, {
     purpose: "verification",
   });
   if (provisioned.status !== "ready") throw new Error(provisioned.nextStep);
   const handle = provisioned.handle;
   let live = true;
+  const close = async () => {
+    if (!live) return;
+    live = false;
+    const removed = await input.lab.teardown(handle);
+    if (removed.status !== "removed") throw new Error(removed.nextStep);
+  };
   try {
-    if (handle.setupDigest !== manifest.labSetupDigest)
+    if (handle.setupDigest !== reconstruction.labSetupDigest)
       throw new Error("Review Lab setup digest differs from the package");
-    const seeded = await lab.seedCanaries(handle);
+    const seeded = await input.lab.seedCanaries(handle);
     if (seeded.status !== "seeded") throw new Error(seeded.nextStep);
-    const administrator = lab.reviewAdministrator(handle);
+    const administrator = input.lab.reviewAdministrator(handle);
     if (administrator === null)
       throw new Error("Review administrator is unavailable");
-    const receiverIp = lab.reviewReceiverIp(handle);
+    const receiverIp = input.lab.reviewReceiverIp(handle);
     if (receiverIp === null)
       throw new Error("Review canary receiver is unavailable");
-    const canaries = lab.canaryLedger(handle);
+    const ledger = input.lab.canaryLedger(handle);
     const script =
-      input.category === "stored-xss" ? lab.prepareScriptCanary(handle) : null;
+      input.category === "stored-xss"
+        ? input.lab.prepareScriptCanary(handle)
+        : null;
     if (input.category === "stored-xss" && script === null)
       throw new Error("Review script canary is unavailable");
-    const waiter = createReviewLabWaiter();
     return {
       endpoint: handle.endpoint,
       networkName: handle.networkName,
@@ -128,24 +97,15 @@ export async function openWordPressReviewLab(input: {
       attackerAccounts: handle.attackerAccounts,
       administrator,
       canaries: {
-        ...(canaries === null ? {} : { ledger: canaries }),
+        ...(ledger === null ? {} : { ledger }),
         ...(script === null ? {} : { script }),
       },
-      browserImage: input.host.images.browser,
-      async close() {
-        waiter.release();
-        if (!live) return;
-        const removed = await lab.teardown(handle);
-        if (removed.status !== "removed") throw new Error(removed.nextStep);
-        live = false;
-      },
-      wait() {
-        return waiter.wait();
-      },
+      browserImage: input.browserImage,
+      close,
     };
   } catch (error) {
-    await lab.teardown(handle);
     live = false;
+    await input.lab.teardown(handle);
     throw error;
   }
 }

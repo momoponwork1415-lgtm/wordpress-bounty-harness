@@ -94,21 +94,20 @@ export function createWordPressStandardReproducer(options: {
     async observe({ finding, lab, recipeDigest, referenceRoute }) {
       if (finding.snapshotDigest !== lab.snapshotDigest)
         return incomplete("evidence", "Repeat on the Finding snapshot");
-      const file = await options.store.readFile(
+      const file = await options.store.readJson(
         recipeDigest,
         "route.json",
+        routeSchema,
         1024 * 1024,
       );
+      if (file.status === "malformed" && file.reason === "json")
+        return incomplete("recipe", "The standard HTTP route is unreadable");
+      if (file.status === "malformed")
+        return incomplete("recipe", "The route role or shape is invalid");
       if (file.status !== "resolved")
         return incomplete("recipe", "The standard HTTP route is missing");
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(file.bytes.toString("utf8")) as unknown;
-      } catch {
-        return incomplete("recipe", "The standard HTTP route is unreadable");
-      }
-      const route = routeSchema.safeParse(parsed);
-      if (!route.success || route.data.role !== finding.attackerPosition)
+      const route = file.value;
+      if (route.role !== finding.attackerPosition)
         return incomplete("recipe", "The route role or shape is invalid");
       const allowed = expectedCanaries(finding, lab, options.lab);
       if (allowed.length === 0)
@@ -116,18 +115,18 @@ export function createWordPressStandardReproducer(options: {
           "observation",
           "This category needs a Harness-owned effect observer beyond HTTP response matching",
         );
-      if (route.data.steps.some((step) => step.kind !== "http"))
+      if (route.steps.some((step) => step.kind !== "http"))
         return incomplete(
           "recipe",
           "The standard Python route must use HTTP steps only",
         );
       const account =
-        route.data.role === "unauthenticated"
+        route.role === "unauthenticated"
           ? null
-          : lab.attackerAccounts[route.data.role];
+          : lab.attackerAccounts[route.role];
       if (
-        (account === null && route.data.account !== "none") ||
-        (account !== null && account?.username !== route.data.account)
+        (account === null && route.account !== "none") ||
+        (account !== null && account?.username !== route.account)
       )
         return incomplete("recipe", "The route account differs from the Lab");
       const marker = await options.lab.markCapture(lab);
@@ -137,12 +136,12 @@ export function createWordPressStandardReproducer(options: {
           "The Lab HTTP recorder is unavailable",
         );
       const scriptInput = canonicalJson({
-        role: route.data.role,
+        role: route.role,
         canaries: allowed,
         ...(account === null
           ? {}
           : { username: account.username, password: account.password }),
-        steps: route.data.steps,
+        steps: route.steps,
       });
       const executed = await options.lab.runStandardScript(lab, scriptInput);
       if (executed.status !== "completed")
@@ -157,7 +156,7 @@ export function createWordPressStandardReproducer(options: {
         return incomplete("recipe", "The standard script output is malformed");
       }
       if (
-        output.stepResults.length !== route.data.steps.length ||
+        output.stepResults.length !== route.steps.length ||
         output.stepResults.some((result, index) => result.index !== index)
       )
         return incomplete("recipe", "The standard script output omits a step");
@@ -182,7 +181,7 @@ export function createWordPressStandardReproducer(options: {
       }
       const routeExchanges: typeof exchanges = [];
       let cursor = 0;
-      for (const [index, step] of route.data.steps.entries()) {
+      for (const [index, step] of route.steps.entries()) {
         if (step.kind !== "http") return incomplete("recipe", "Invalid step");
         const match = exchanges.findIndex(
           (exchange, offset) =>
@@ -203,7 +202,7 @@ export function createWordPressStandardReproducer(options: {
         routeExchanges.push(exchanges[match]!);
         cursor = match + 1;
       }
-      const observed = route.data.steps.findIndex((step, index) => {
+      const observed = route.steps.findIndex((step, index) => {
         if (step.kind !== "http") return false;
         const response = routeExchanges[index]?.response.body ?? "";
         return (
@@ -226,25 +225,25 @@ export function createWordPressStandardReproducer(options: {
         const reference = routeSchema.safeParse(referenceRoute);
         if (
           !reference.success ||
-          reference.data.role !== route.data.role ||
-          reference.data.account !== route.data.account ||
-          reference.data.defaultSettings !== route.data.defaultSettings ||
+          reference.data.role !== route.role ||
+          reference.data.account !== route.account ||
+          reference.data.defaultSettings !== route.defaultSettings ||
           canonicalJson(reference.data.configurationChanges) !==
-            canonicalJson(route.data.configurationChanges) ||
-          reference.data.steps.length !== route.data.steps.length ||
+            canonicalJson(route.configurationChanges) ||
+          reference.data.steps.length !== route.steps.length ||
           reference.data.steps.some(
             (step, index) =>
               step.kind !== "http" ||
-              route.data.steps[index]?.kind !== "http" ||
-              step.method !== route.data.steps[index]?.method ||
-              step.path !== route.data.steps[index]?.path ||
+              route.steps[index]?.kind !== "http" ||
+              step.method !== route.steps[index]?.method ||
+              step.path !== route.steps[index]?.path ||
               canonicalJson({
                 headers: step.headers ?? {},
                 body: step.body ?? null,
               }) !==
                 canonicalJson({
-                  headers: route.data.steps[index]?.headers ?? {},
-                  body: route.data.steps[index]?.body ?? null,
+                  headers: route.steps[index]?.headers ?? {},
+                  body: route.steps[index]?.body ?? null,
                 }),
           )
         )
@@ -261,14 +260,12 @@ export function createWordPressStandardReproducer(options: {
           schemaVersion: 1,
           snapshotDigest: finding.snapshotDigest,
           labSetupDigest: lab.setupDigest,
-          role: route.data.role,
-          account: route.data.account,
-          defaultSettings: route.data.defaultSettings,
-          configurationChanges: route.data.configurationChanges,
-          steps: route.data.steps,
-          ...(route.data.victim === undefined
-            ? {}
-            : { victim: route.data.victim }),
+          role: route.role,
+          account: route.account,
+          defaultSettings: route.defaultSettings,
+          configurationChanges: route.configurationChanges,
+          steps: route.steps,
+          ...(route.victim === undefined ? {} : { victim: route.victim }),
           evidence: [
             {
               kind: "http",
@@ -295,9 +292,9 @@ export function createWordPressStandardReproducer(options: {
                 ? "sensitive-canary-access"
                 : "canary-file-read",
           reproductionMethod: STANDARD_REPRODUCER_ID,
-          attackerRole: route.data.role,
+          attackerRole: route.role,
           observedStep: String(observed),
-          defaultSettings: route.data.defaultSettings ? "true" : "false",
+          defaultSettings: route.defaultSettings ? "true" : "false",
         },
       };
     },

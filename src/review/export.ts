@@ -4,6 +4,11 @@ import { z } from "zod";
 
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
+import {
+  readReviewRecord,
+  type ReviewRecordByKind,
+  type ReviewRecordKind,
+} from "./records.js";
 
 /**
  * `review export`: the one bundle the Claude Code skills read (ADR 0031). It
@@ -291,24 +296,8 @@ function httpRow(
   };
 }
 
-async function readJson(
-  store: PrivateArtifactStore,
-  artifact: string,
-  name: string,
-  maxBytes: number,
-): Promise<unknown> {
-  const file = await store.readFile(artifact, name, maxBytes);
-  if (file.status !== "resolved") return undefined;
-  try {
-    return JSON.parse(file.bytes.toString("utf8")) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
 async function httpSummary(
   store: PrivateArtifactStore,
-  evidenceDirectory: string,
   evidenceDigest: string | undefined,
 ): Promise<ReviewExportV1["http"]> {
   const unavailable: ReviewExportV1["http"] = {
@@ -345,24 +334,22 @@ async function httpSummary(
     }
     return {
       source: "harness-captured",
-      path: join(
-        evidenceDirectory,
-        evidenceDigest,
-        "content",
-        "proxy-capture.jsonl",
-      ),
+      path: join(store.contentPath(evidenceDigest), "proxy-capture.jsonl"),
       exchanges,
       truncated: lines.length > MAX_ROWS,
     };
   }
-  const authored = authoredHttpSchema.safeParse(
-    await readJson(store, evidenceDigest, "http.json", 5 * 1024 * 1024),
+  const authored = await store.readJson(
+    evidenceDigest,
+    "http.json",
+    authoredHttpSchema,
+    5 * 1024 * 1024,
   );
-  if (!authored.success) return unavailable;
+  if (authored.status !== "resolved") return unavailable;
   return {
     source: "agent-authored",
-    path: join(evidenceDirectory, evidenceDigest, "content", "http.json"),
-    exchanges: authored.data.exchanges
+    path: join(store.contentPath(evidenceDigest), "http.json"),
+    exchanges: authored.value.exchanges
       .slice(0, MAX_ROWS)
       .map((exchange) =>
         httpRow(
@@ -371,7 +358,7 @@ async function httpSummary(
           exchange.response?.statusCode ?? exchange.response?.status ?? null,
         ),
       ),
-    truncated: authored.data.exchanges.length > MAX_ROWS,
+    truncated: authored.value.exchanges.length > MAX_ROWS,
   };
 }
 
@@ -390,8 +377,8 @@ function versionOf(selectionId: string): {
 /** Builds the bundle from the ledger and Private Evidence; nothing is written. */
 export async function exportReviewBundle(options: {
   readonly ledger: Ledger;
+  /** Private Evidence; the bundle's paths are the ones this store returns. */
   readonly store: PrivateArtifactStore;
-  readonly evidenceDirectory: string;
   readonly campaignId: string;
   readonly findingId: string;
   readonly stateDiff?: StateDiffReader;
@@ -401,11 +388,10 @@ export async function exportReviewBundle(options: {
     targetId: string,
   ) => Promise<{ version: string; observedAt: string } | null>;
 }): Promise<ReviewExportV1> {
-  const { ledger, store, evidenceDirectory } = options;
+  const { ledger, store } = options;
   const campaignId = id.parse(options.campaignId);
   const findingId = id.parse(options.findingId);
-  const contentPath = (artifact: string) =>
-    join(evidenceDirectory, artifact, "content");
+  const contentPath = (artifact: string) => store.contentPath(artifact);
   const finding = ledger
     .read({ campaignId, findingId, type: "finding-recorded", limit: 1 })
     .at(0)?.event;
@@ -424,11 +410,16 @@ export async function exportReviewBundle(options: {
     addArtifact(artifact.kind, artifact.digest);
 
   const findingRef = finding.artifacts.find((item) => item.kind === "finding");
-  const record = findingRecordSchema.safeParse(
+  const findingFile =
     findingRef === undefined
-      ? undefined
-      : await readJson(store, findingRef.digest, "finding.json", 1024 * 1024),
-  );
+      ? null
+      : await store.readJson(
+          findingRef.digest,
+          "finding.json",
+          findingRecordSchema,
+          1024 * 1024,
+        );
+  const record = findingFile?.status === "resolved" ? findingFile.value : null;
   const run = ledger
     .readAll({ type: "discovery-run-started" })
     .find(
@@ -461,16 +452,17 @@ export async function exportReviewBundle(options: {
     (item) => item.kind === "target-selection",
   );
   addArtifact("target-selection", selectionRef?.digest);
-  const selectionRecord = selectionRecordSchema.safeParse(
+  const selectionFile =
     selectionRef === undefined
-      ? undefined
-      : await readJson(
-          store,
+      ? null
+      : await store.readJson(
           selectionRef.digest,
           "target-selection.json",
+          selectionRecordSchema,
           1024 * 1024,
-        ),
-  );
+        );
+  const selectionRecord =
+    selectionFile?.status === "resolved" ? selectionFile.value : null;
 
   const verifications = ledger
     .readAll({ campaignId, findingId, type: "verification-finished" })
@@ -512,7 +504,7 @@ export async function exportReviewBundle(options: {
     verification !== undefined && "evidenceDigest" in verification.result
       ? verification.result.evidenceDigest
       : undefined;
-  const http = await httpSummary(store, evidenceDirectory, evidenceDigest);
+  const http = await httpSummary(store, evidenceDigest);
 
   let refutation: ReviewExportV1["refutation"] = null;
   const refutationDigest =
@@ -567,20 +559,18 @@ export async function exportReviewBundle(options: {
     .readAll({ campaignId, findingId, type: "scope-assessed" })
     .map(({ event }) => event)
     .filter((event) => event.type === "scope-assessed");
-  const privateRecord = async (
+  // Review's own records, read the way Review wrote them. An event without a
+  // readable record (older events) keeps the derived fields null.
+  const privateRecord = async <K extends ReviewRecordKind>(
     event: LedgerEventV1 | undefined,
-    kind: string,
-  ) => {
-    const ref = event?.artifacts.find((item) => item.kind === kind);
-    return ref === undefined
-      ? undefined
-      : ((await readJson(store, ref.digest, "record.json", 200_000)) as
-          Record<string, unknown> | undefined);
+    kind: K,
+  ): Promise<ReviewRecordByKind[K] | null> => {
+    if (event === undefined) return null;
+    const read = await readReviewRecord(store, event, kind);
+    return read.status === "read" ? read.record : null;
   };
   const lastDecision = decisions.at(-1);
   const decisionRecord = await privateRecord(lastDecision, "review-decision");
-  const duplicate = decisionRecord?.duplicate as
-    { status?: string; ref?: string } | undefined;
   const ofFinding = (type: LedgerEventV1["type"], ids: readonly string[]) =>
     ids.flatMap((findingIdOf) =>
       ledger
@@ -626,9 +616,7 @@ export async function exportReviewBundle(options: {
     target: {
       selectionId: selected?.selectionId ?? null,
       targetId: explored?.targetId ?? null,
-      activeInstallations: selectionRecord.success
-        ? (selectionRecord.data.activeInstallations ?? null)
-        : null,
+      activeInstallations: selectionRecord?.activeInstallations ?? null,
       versions: {
         explored: explored?.version ?? null,
         latestKnown: latest?.version ?? null,
@@ -642,18 +630,12 @@ export async function exportReviewBundle(options: {
     },
     finding: {
       category: finding.category,
-      claim: record.success ? record.data.claim : "(finding.json unavailable)",
-      attackerPosition: record.success
-        ? record.data.attackerPosition
-        : "unknown",
-      impact: record.success ? record.data.impact : finding.category,
-      brokenProperty: record.success
-        ? record.data.brokenProperty
-        : "(finding.json unavailable)",
-      configurationPrecondition: record.success
-        ? (record.data.configurationPrecondition ?? null)
-        : null,
-      sourceTrace: record.success ? (record.data.sourceTrace ?? []) : [],
+      claim: record?.claim ?? "(finding.json unavailable)",
+      attackerPosition: record?.attackerPosition ?? "unknown",
+      impact: record?.impact ?? finding.category,
+      brokenProperty: record?.brokenProperty ?? "(finding.json unavailable)",
+      configurationPrecondition: record?.configurationPrecondition ?? null,
+      sourceTrace: record?.sourceTrace ?? [],
       recordedAt: finding.occurredAt,
       runId: finding.runId,
       promptVariant:
@@ -729,16 +711,13 @@ export async function exportReviewBundle(options: {
           ? null
           : {
               decision: lastDecision.decision,
-              reasonCode:
-                typeof decisionRecord?.reasonCode === "string"
-                  ? decisionRecord.reasonCode
-                  : null,
+              reasonCode: decisionRecord?.reasonCode ?? null,
               duplicate:
-                duplicate?.status === undefined
+                decisionRecord === null
                   ? null
-                  : duplicate.ref === undefined
-                    ? duplicate.status
-                    : `${duplicate.status}:${duplicate.ref}`,
+                  : decisionRecord.duplicate.status === "possible-match"
+                    ? `${decisionRecord.duplicate.status}:${decisionRecord.duplicate.reference}`
+                    : decisionRecord.duplicate.status,
               decidedAt: lastDecision.occurredAt,
             },
       humanReproduction:
@@ -763,13 +742,13 @@ export async function exportReviewBundle(options: {
               recordedAt: reverification.occurredAt,
             },
       latestDraft:
-        draft?.type !== "draft-saved" || draftRecord === undefined
+        draft?.type !== "draft-saved" || draftRecord === null
           ? null
           : {
               digest: draft.revisionDigest,
-              revision: Number(draftRecord.revision),
-              preparedBy: String(draftRecord.preparedBy),
-              programme: String(draftRecord.destination),
+              revision: draftRecord.revision,
+              preparedBy: draftRecord.preparedBy,
+              programme: draftRecord.destination,
             },
       labSetup:
         verification === undefined
@@ -779,6 +758,6 @@ export async function exportReviewBundle(options: {
               ordinaryActivationDefaults: null,
             },
     },
-    privateEvidence: { directory: evidenceDirectory, artifacts },
+    privateEvidence: { directory: store.rootDirectory, artifacts },
   });
 }

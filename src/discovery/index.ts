@@ -47,7 +47,9 @@ export {
 export {
   createNativeRunReceipt,
   nativeRunReceiptSchema,
-  NativeRunReceiptStore,
+  readNativeRunReceipt,
+  runFinishedFieldsFrom,
+  sealNativeRunReceipt,
   type NativeRunIdentity,
   type NativeRunReceipt,
 } from "./native-run-receipts.js";

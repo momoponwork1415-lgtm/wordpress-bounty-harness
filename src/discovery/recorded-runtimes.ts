@@ -1,7 +1,7 @@
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger } from "../ledger/index.js";
 import {
-  nativeRunReceiptSchema,
+  readNativeRunReceipt,
   type NativeRunReceipt,
 } from "./native-run-receipts.js";
 
@@ -48,15 +48,8 @@ export async function summarizeRecordedRuntimes(options: {
       (artifact) => artifact.kind === "native-run-receipt",
     );
     if (reference === undefined) continue;
-    const file = await options.store.readFile(
-      reference.digest,
-      "receipt.json",
-      64 * 1024,
-    );
-    if (file.status !== "resolved") continue;
-    const receipt = nativeRunReceiptSchema.parse(
-      JSON.parse(file.bytes.toString("utf8")) as unknown,
-    );
+    const receipt = await readNativeRunReceipt(options.store, reference.digest);
+    if (receipt === undefined) continue;
     const runtime: RecordedRuntime = {
       requestedModelId: receipt.requestedModelId,
       requestedEffort: receipt.requestedEffort,

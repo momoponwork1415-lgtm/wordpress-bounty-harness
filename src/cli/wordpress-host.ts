@@ -599,14 +599,23 @@ export async function createWordPressHostProfile(options: {
       openWordPressReviewLab({
         ...input,
         store: state.store,
-        host: {
-          dockerExecutablePath: host.dockerExecutablePath,
-          images: host.images,
-        },
         snapshots: openSnapshotReader({
           storageDirectory: directories.snapshots,
         }),
-        source: openMaterializedSources({ rootDirectory: directories.sources }),
+        lab: openWordPressLab({
+          dockerExecutablePath: host.dockerExecutablePath,
+          images: {
+            database: host.images.database,
+            wordpress: host.images.wordpress,
+            wordpressCli: host.images.wordpressCli,
+            browser: host.images.browser,
+            recorder: host.images.broker,
+          },
+          source: openMaterializedSources({
+            rootDirectory: directories.sources,
+          }),
+        }),
+        browserImage: host.images.browser,
       }),
     /** One WordPress.org observation for `review export`; failures are null. */
     async latestVersion(state, targetId) {
