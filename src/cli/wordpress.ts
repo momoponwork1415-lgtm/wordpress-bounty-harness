@@ -1,4 +1,4 @@
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { z } from "zod";
@@ -53,9 +53,8 @@ import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/in
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
 import type { WordPressReconstruction } from "../profiles/wordpress/verification/reproduction-package.js";
-import type { CliProfile, CliState, LabUpSummary } from "./index.js";
+import type { CliProfile, CliState } from "./index.js";
 import {
-  provisionFindingLab,
   reverifyOnSelectedVersion,
   runCampaignPipeline,
   verifyNextFinding,
@@ -316,7 +315,7 @@ async function bindCampaignSelectionBatch(
   return selected;
 }
 
-/** The one Lab `lab up` keeps between invocations; `lab down` reads and removes it. */
+/** The one Lab an earlier `lab up` kept between invocations; `lab down` reads and removes it. */
 const labUpRecordSchema = z.strictObject({
   schemaVersion: z.literal(1),
   labId: z.string().regex(/^[0-9a-f-]{36}$/),
@@ -338,82 +337,6 @@ async function readLabUpRecord(
   } catch {
     return null;
   }
-}
-
-async function wordPressLabUp(
-  state: CliState,
-  input: Parameters<CliProfile["labUp"]>[1],
-  { boundaries, setupFor }: WordPressCampaignSession,
-): Promise<LabUpSummary> {
-  const lab = await provisionFindingLab({
-    campaignId: input.campaignId,
-    findingId: input.findingId,
-    ledger: state.ledger,
-    store: state.store,
-    pipeline: {
-      freeze: boundaries.freeze,
-      setupFor,
-      lab: boundaries.lab,
-    },
-    readTarget: (value) => wordPressTargetSelectionSchema.parse(value),
-  });
-  const handle = lab.handle;
-  const exposed = await boundaries.lab.exposeToHost(handle, {
-    httpPort: input.httpPort,
-    ...(handle.database === undefined
-      ? {}
-      : { databasePort: input.databasePort }),
-  });
-  if (exposed.status !== "exposed") {
-    await boundaries.lab.cleanupLeftovers({ remove: true, labId: handle.id });
-    throw new Error(
-      `The Lab could not be published on the host: ${exposed.diagnostic}`,
-    );
-  }
-  await writeFile(
-    labUpRecordPath(state),
-    canonicalJson({
-      schemaVersion: 1,
-      labId: handle.id,
-      campaignId: input.campaignId,
-      findingId: input.findingId,
-      configPath: input.configPath,
-      startedAt: state.clock().toISOString(),
-    }),
-    { mode: 0o600 },
-  );
-  return {
-    labId: handle.id,
-    campaignId: input.campaignId,
-    findingId: input.findingId,
-    snapshotDigest: lab.snapshot.digest,
-    scenario: handle.scenario ?? null,
-    setupDigest: handle.setupDigest,
-    matchesVerification:
-      lab.verification === null
-        ? null
-        : {
-            verificationId: lab.verification.verificationId,
-            same: lab.verification.labSetupDigest === handle.setupDigest,
-          },
-    http: { port: exposed.httpPort, hostHeader: new URL(handle.endpoint).host },
-    database:
-      handle.database === undefined || exposed.databasePort === null
-        ? null
-        : {
-            port: exposed.databasePort,
-            name: handle.database.name,
-            username: handle.database.readOnlyAccount.username,
-            password: handle.database.readOnlyAccount.password,
-          },
-    attackerAccounts: Object.entries(handle.attackerAccounts).map(
-      ([role, account]) => ({
-        role,
-        username: account.username,
-        password: account.password,
-      }),
-    ),
-  };
 }
 
 async function wordPressLabDown(
@@ -597,7 +520,7 @@ function wordPressSourceMounts(source: WordPressDiscoverySource) {
 }
 
 async function planWordPressDiscovery(
-  { target, snapshot, lab }: WordPressDiscoveryInput,
+  { snapshot, lab }: WordPressDiscoveryInput,
   context: WordPressDiscoveryContext,
 ): Promise<WordPressDiscoveryPlan> {
   const { config, repeat, boundaries, state, objective, trustBoundary } =
@@ -611,18 +534,9 @@ async function planWordPressDiscovery(
     wordPressDiscoveryContractPlan(id).objectiveOnly;
   const outputContractFor = wordPressOutputContractFor;
   const source = await boundaries.sourceFor(snapshot);
-  // The campaign stop rule decides depth; legacy per-target budgets only lower it (ADR 0032 Q6).
-  const maxRuns =
-    repeat > 1
-      ? repeat
-      : Math.min(
-          config.stopRules.maxRuns,
-          target.runBudget ?? config.stopRules.maxRuns,
-        );
-  const stopRules = {
-    maxRuns,
-    noFindingRuns: Math.min(config.stopRules.noFindingRuns, maxRuns),
-  };
+  // One Trial per target; only an explicit `--repeat` plans more (ADR 0029).
+  const maxRuns = repeat;
+  const stopRules = { maxRuns, noFindingRuns: 1 };
   const promptFor = (selectedObjective: typeof objective) =>
     wordPressDiscoveryPromptText({
       objective: selectedObjective,
@@ -674,7 +588,6 @@ async function planWordPressDiscovery(
                 ? ("none" as const)
                 : ("mounted" as const),
           },
-          assignmentUnit: "plugin",
           labAccess: {
             database: lab?.database === undefined ? "none" : "read-only",
           },
@@ -794,7 +707,7 @@ async function resumeWordPressCampaignRun(
         programmeBoundary: config.programmeBoundary,
         modelProfileDigest: boundaries.runtimeProfile.digest,
         promptDigest: objective.digest,
-        stopRules: config.stopRules,
+        stopRules: { maxRuns: 1, noFindingRuns: 1 },
         lab: { mode: "none" },
         history: { mode: "none" },
       },
@@ -914,9 +827,6 @@ async function runWordPressCampaign(
       : {
           retryIncompleteVerifications: input.retryIncompleteVerifications,
         }),
-    ...(input.deferVerification === undefined
-      ? {}
-      : { deferVerification: input.deferVerification }),
     ledger: state.ledger,
     store: state.store,
     clock: state.clock,
@@ -1257,15 +1167,6 @@ export function createWordPressCliProfile(
       createWordPressStateDiffReader({ store: state.store }),
     httpEvidenceReader: (state) =>
       createWordPressHttpEvidenceReader({ store: state.store }),
-    async labUp(state, input) {
-      if ((await readLabUpRecord(state)) !== null)
-        throw new Error("A lab is already up; run lab down first");
-      return wordPressLabUp(
-        state,
-        input,
-        await openWordPressCampaignSession(options, state, input),
-      );
-    },
     labDown: (state, input) => wordPressLabDown(state, input, options),
     // A record that exists holds the sweep even when unreadable; `lab down` decides.
     labHeld: (state) =>

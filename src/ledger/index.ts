@@ -103,7 +103,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       sourcePack: z
         .strictObject({ dependency: z.enum(["mounted", "none"]) })
         .optional(),
-      assignmentUnit: id,
+      /** Legacy, read only: written until the assignment mode was removed (2026-10-18). */
+      assignmentUnit: id.optional(),
       entryIndex: z
         .union([
           z.strictObject({ enabled: z.literal(true), digest }),

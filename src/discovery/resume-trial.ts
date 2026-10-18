@@ -131,7 +131,6 @@ function configurationOf(
     ...(configuration.sourcePack === undefined
       ? {}
       : { sourcePack: configuration.sourcePack }),
-    assignmentUnit: configuration.assignmentUnit,
     ...(configuration.labAccess === undefined
       ? {}
       : { labAccess: configuration.labAccess }),

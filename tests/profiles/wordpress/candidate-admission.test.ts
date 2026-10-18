@@ -15,11 +15,10 @@ import { canonicalJson } from "../../../src/infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import { Ledger, type LedgerEventV1 } from "../../../src/ledger/index.js";
 import { recordWordPressReport } from "../../../src/profiles/wordpress/discovery/candidate-admission.js";
-import { reacceptWordPressRun } from "../../../src/profiles/wordpress/discovery/reaccept-candidates.js";
 import { recoverWordPressChildReports } from "../../../src/profiles/wordpress/discovery/recover-child-reports.js";
 
-// 同じ報告が「campaign 中の記録」「保存済み出力の再受理」「子報告の復旧 script」の
-// どの入口から来ても、台帳に残る event は同じでなければならない（ADR 0018、#185）。
+// 同じ報告が「campaign 中の記録」「子報告の復旧 script」の
+// どちらの入口から来ても、台帳に残る event は同じでなければならない（ADR 0018、#185）。
 
 const digest = `sha256:${"a".repeat(64)}`;
 const now = "2026-10-08T08:00:00Z";
@@ -115,7 +114,7 @@ async function viaCampaign() {
       trialId: RUN_ID,
       trialOrdinal: 0,
       explore: {
-        configuration: { promptVariant: "synthetic", assignmentUnit: "plugin" },
+        configuration: { promptVariant: "synthetic" },
         run: {
           runId: RUN_ID,
           targetSnapshotDigest: digest,
@@ -175,76 +174,6 @@ async function viaCampaign() {
     },
   });
   expect(result.findingsRecorded).toBe(1);
-  return ledger;
-}
-
-async function viaReacceptance() {
-  const { evidence, attachments, ledger } = await stores();
-  const diagnostic = await attachments.put(
-    "diagnostic",
-    Buffer.from(
-      JSON.stringify({
-        type: "event_msg",
-        payload: {
-          type: "task_complete",
-          last_agent_message: JSON.stringify(report),
-        },
-      }),
-    ),
-  );
-  const receiptDigest = await evidence.putFiles({
-    "receipt.json": canonicalJson(
-      createNativeRunReceipt({
-        runId: RUN_ID,
-        targetSnapshotDigest: digest,
-        profile,
-        terminal: "incomplete",
-        reason: "schema",
-        startedAt: now,
-        completedAt: "2026-10-08T08:00:01Z",
-        diagnosticArtifactDigest: diagnostic.digest,
-      }),
-    ),
-  });
-  const base = {
-    schemaVersion: 1 as const,
-    campaignId: "campaign-1",
-    snapshotDigest: digest,
-    occurredAt: now,
-  };
-  await ledger.append({
-    ...base,
-    identity: `discovery-start-${RUN_ID}`,
-    type: "discovery-run-started",
-    runId: RUN_ID,
-    trialId: RUN_ID,
-    history: { mode: "none" },
-    configuration: { promptVariant: "synthetic", assignmentUnit: "plugin" },
-  });
-  await ledger.append({
-    ...base,
-    identity: `discovery-finish-${RUN_ID}`,
-    type: "discovery-run-finished",
-    runId: RUN_ID,
-    outcome: "failed",
-    costUsd: "unavailable",
-    wallTimeMs: 1000,
-    artifacts: [{ kind: "native-run-receipt", digest: receiptDigest }],
-  });
-  const summary = await reacceptWordPressRun({
-    campaignId: "campaign-1",
-    runId: RUN_ID,
-    ledger,
-    evidence,
-    attachments,
-    clock,
-  });
-  expect(summary).toEqual({
-    reached: 4,
-    accepted: 3,
-    held: 1,
-    alreadyProcessed: 0,
-  });
   return ledger;
 }
 
@@ -401,26 +330,9 @@ async function viaChildRecovery() {
   return ledger;
 }
 
-/** 再受理は parser 版を identity と event に刻む。その差だけを剥がして比べる。 */
-function withoutParserVersion(events: LedgerEventV1[]): unknown[] {
-  return events.map((event) => {
-    const { parserVersion, ...rest } = event as LedgerEventV1 & {
-      parserVersion?: string;
-    };
-    expect(
-      parserVersion === undefined || parserVersion === "wordpress-candidate-v1",
-    ).toBe(true);
-    return {
-      ...rest,
-      identity: event.identity.replace(/-wordpress-candidate-v1$/, ""),
-    };
-  });
-}
-
-it("records the same report identically through the campaign, reacceptance and child recovery", async () => {
-  const [campaign, reaccepted, recovered] = await Promise.all([
+it("records the same report identically through the campaign and child recovery", async () => {
+  const [campaign, recovered] = await Promise.all([
     viaCampaign(),
-    viaReacceptance(),
     viaChildRecovery(),
   ]);
   const expected = candidateEvents(campaign);
@@ -448,9 +360,8 @@ it("records the same report identically through the campaign, reacceptance and c
     impact: "account-takeover",
   });
   expect(candidateEvents(recovered)).toEqual(expected);
-  expect(withoutParserVersion(candidateEvents(reaccepted))).toEqual(expected);
   // 範囲外の Finding はどの入口でも検証 queue（finding-recorded）に入らない。
-  for (const ledger of [campaign, reaccepted, recovered])
+  for (const ledger of [campaign, recovered])
     expect(
       ledger
         .read({ type: "finding-recorded" })

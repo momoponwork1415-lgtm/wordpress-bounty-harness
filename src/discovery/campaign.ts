@@ -64,7 +64,6 @@ export type PlannedDiscoveryRun = {
     readonly contractDigest?: string;
     readonly trustBoundaryVersion?: string;
     readonly sourcePack?: { readonly dependency: "mounted" | "none" };
-    readonly assignmentUnit: string;
     readonly labAccess?: { readonly database: "read-only" | "none" };
   };
 };

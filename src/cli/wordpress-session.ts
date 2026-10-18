@@ -97,16 +97,11 @@ const commonCampaignFields = {
     scenarioId: z.string().optional(),
   }),
 };
-const singleTrialStop = z
-  .strictObject({ maxRuns: z.literal(1), noFindingRuns: z.literal(1) })
-  .default({ maxRuns: 1, noFindingRuns: 1 });
 export const wordpressCampaignConfigSchema = z
   .strictObject({
     ...commonCampaignFields,
-    mode: z.literal("wp2shell").default("wp2shell"),
     runWallTimeMinutes: z.number().gt(60).max(120).default(120),
     promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
-    stopRules: singleTrialStop,
   })
   .superRefine((config, context) => {
     if (

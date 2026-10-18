@@ -135,13 +135,9 @@ export async function runCampaignPipeline<
   /** Targets in flight at once; discovery run concurrency remains per target. */
   readonly maxConcurrentTargets?: number;
   readonly discoveryLab?: "attached" | "none";
-  /** Preserve the attached discovery Lab, but verify Findings in a later command. */
-  readonly deferVerification?: boolean;
   readonly repeat?: number;
   /** An explicit operator retry after repairing the Verifier protocol. */
   readonly retryIncompleteVerifications?: boolean;
-  /** Disable ADR 0022 automatic retries to restore the prior single-attempt behavior. */
-  readonly automaticVerificationRetries?: boolean;
   /** Checked before each next target. True drains in-flight targets and stops as `operator`. */
   readonly stop?: () => boolean;
   readonly signal?: AbortSignal;
@@ -230,8 +226,7 @@ export async function runCampaignPipeline<
     const snapshotDigest = selectedSnapshots.get(targetSelectionId(target));
     if (snapshotDigest === undefined || !concludedSnapshots.has(snapshotDigest))
       return false;
-    if (options.discoveryLab === "none" || options.deferVerification === true)
-      return true;
+    if (options.discoveryLab === "none") return true;
     return (findingsBySnapshot.get(snapshotDigest) ?? []).every((findingId) => {
       if (
         ledger.read({
@@ -248,9 +243,6 @@ export async function runCampaignPipeline<
       if (previous === undefined) return false;
       if (previous.event.result.status !== "incomplete") return true;
       if (options.retryIncompleteVerifications === true) return false;
-      // The legacy single-attempt mode may retry after any setup change.
-      // Without a provisioned Lab digest, leave it to the normal path.
-      if (options.automaticVerificationRetries === false) return false;
       if (
         previous.event.promptVersion === undefined ||
         previous.event.promptVersion !== pipeline.verification.promptVersion
@@ -559,22 +551,6 @@ export async function runCampaignPipeline<
         result.target = { ...summary, verifications: [] };
         return;
       }
-      if (options.deferVerification === true) {
-        if (discovered.stoppedBy === "incomplete" && discovered.runCount > 0)
-          await append({
-            ...base,
-            identity: `target-skipped-${options.newId()}`,
-            occurredAt: at(),
-            type: "target-skipped",
-            selectionId,
-            stage: "discovery",
-            reason: refusedTrial(snapshot.digest)
-              ? "provider-refused"
-              : "run-failed",
-          });
-        result.target = { ...summary, verifications: [] };
-        return;
-      }
       stage = "verification";
       const earlier = ledger.readAll({
         campaignId,
@@ -631,11 +607,6 @@ export async function runCampaignPipeline<
           const previous = history.at(-1);
           if (previous === undefined) return true;
           if (previous.event.result.status !== "incomplete") return false;
-          if (options.automaticVerificationRetries === false)
-            return (
-              previous.event.labSetupDigest !== campaignLabSetupDigest ||
-              options.retryIncompleteVerifications === true
-            );
           if (
             allowManualOverride &&
             options.retryIncompleteVerifications === true
@@ -745,7 +716,6 @@ export async function runCampaignPipeline<
             });
             break;
           }
-          if (options.automaticVerificationRetries === false) break;
           // The operator override applies to the first attempt only.
           if (
             result.status !== "incomplete" ||
@@ -1467,108 +1437,5 @@ export async function reverifyOnSelectedVersion<
     findingId: verificationFindingId,
     verificationId,
     status: result.status,
-  };
-}
-
-export type FindingLab<Target, Handle extends LabHandle> = {
-  readonly target: Target;
-  readonly snapshot: Snapshot;
-  readonly handle: Handle;
-  /** The latest verification of this Finding, to compare Lab setups with. */
-  readonly verification: {
-    readonly verificationId: string;
-    readonly labSetupDigest: string;
-  } | null;
-};
-
-/**
- * `lab up --finding`: the same Lab supply verification used (frozen snapshot,
- * profile setup, verification purpose, seeded canaries), for a human's own
- * reproduction. Nothing is appended to the ledger; the Lab is not evidence.
- */
-export async function provisionFindingLab<
-  Target extends TargetSelection,
-  Setup,
-  Handle extends LabHandle,
->(options: {
-  readonly campaignId: string;
-  readonly findingId: string;
-  readonly ledger: Ledger;
-  readonly store: PrivateArtifactStore;
-  readonly pipeline: {
-    readonly freeze: (target: Target) => Promise<Snapshot>;
-    readonly setupFor: (snapshot: Snapshot) => Setup;
-    readonly lab: LabProvisioner<Setup, Handle>;
-  };
-  /** Profile parser for the private selection record. */
-  readonly readTarget: (value: unknown) => Target;
-}): Promise<FindingLab<Target, Handle>> {
-  const { campaignId, findingId, ledger, pipeline } = options;
-  const finding = ledger
-    .read({ campaignId, findingId, type: "finding-recorded", limit: 1 })
-    .at(0)?.event;
-  if (finding?.type !== "finding-recorded")
-    throw new Error("The finding is not recorded in this campaign");
-  const selected = ledger
-    .readAll({ campaignId, type: "target-selected" })
-    .map(({ event }) => event)
-    .find(
-      (event) =>
-        event.type === "target-selected" &&
-        event.snapshotDigest === finding.snapshotDigest,
-    );
-  const reference = selected?.artifacts.find(
-    (artifact) => artifact.kind === "target-selection",
-  );
-  if (reference === undefined)
-    throw new Error("The finding's target selection is not recorded");
-  const file = await options.store.readFile(
-    reference.digest,
-    "target-selection.json",
-    1024 * 1024,
-  );
-  if (file.status !== "resolved")
-    throw new Error("The target selection record is unavailable");
-  const target = options.readTarget(
-    JSON.parse(file.bytes.toString("utf8")) as unknown,
-  );
-  const snapshot = await pipeline.freeze(target);
-  if (snapshot.digest !== finding.snapshotDigest)
-    throw new Error(
-      "The frozen source differs from the finding snapshot; the Lab was not started",
-    );
-  const verification = ledger
-    .readAll({ campaignId, findingId, type: "verification-finished" })
-    .map(({ event }) => event)
-    .filter(
-      (event) =>
-        event.type === "verification-finished" &&
-        event.snapshotDigest === finding.snapshotDigest,
-    )
-    .at(-1);
-  const setup = pipeline.setupFor(snapshot);
-  const provisioned = await pipeline.lab.provision(snapshot, setup, {
-    purpose: "verification",
-  });
-  if (provisioned.status !== "ready")
-    throw new Error(
-      `Lab provision failed (${provisioned.reason}): ${provisioned.nextStep}`,
-    );
-  const seeded = await pipeline.lab.seedCanaries(provisioned.handle);
-  if (seeded.status !== "seeded") {
-    await pipeline.lab.teardown(provisioned.handle);
-    throw new Error(`Canary seeding failed: ${seeded.nextStep}`);
-  }
-  return {
-    target,
-    snapshot,
-    handle: provisioned.handle,
-    verification:
-      verification?.type === "verification-finished"
-        ? {
-            verificationId: verification.verificationId,
-            labSetupDigest: verification.labSetupDigest,
-          }
-        : null,
   };
 }

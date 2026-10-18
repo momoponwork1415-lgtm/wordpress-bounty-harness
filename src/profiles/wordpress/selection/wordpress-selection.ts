@@ -383,33 +383,14 @@ function score(
   const recency =
     Math.max(0, 1 - updateAgeDays / policy.maximumUpdateAgeDays) *
     policy.scoreWeights.recency;
-  const surfacePoints = (observation.tags ?? []).reduce(
-    (total, tag) =>
-      total + (policy.surfaceTagWeights?.[normalizeName(tag)] ?? 0),
-    0,
-  );
-  const surface = surfacePoints * (policy.scoreWeights.surface ?? 0);
-  const highThreat =
-    (highThreatSurface(observation, policy) ? 1 : 0) *
-    (policy.scoreWeights.highThreat ?? 0);
   // 公開履歴は mirror の件数と公開日だけを採点に使う（ADR 0037）。記録の内容は読まない。
   return {
     installations,
     recency,
-    surface,
-    highThreat,
     history: history.history,
     historyPayingClass: history.historyPayingClass,
     recordRecency: history.recordRecency,
   };
-}
-
-function highThreatSurface(
-  observation: WordPressOrgTargetObservation,
-  policy: WordPressSelectionPolicy,
-): boolean {
-  const tags = new Set((policy.highThreatTags ?? []).map(normalizeName));
-  return (observation.tags ?? []).some((tag) => tags.has(normalizeName(tag)));
 }
 
 export function createWordPressSelection(
@@ -637,14 +618,6 @@ export function createWordPressSelection(
             ? { versionPublishedAt: new Date(lastUpdated).toISOString() }
             : {}),
           activeInstallations: observation.activeInstallations,
-          highThreatSurface: highThreatSurface(observation, policy),
-          ...(policy.runBudget === undefined
-            ? {}
-            : {
-                runBudget: highThreatSurface(observation, policy)
-                  ? policy.runBudget.highThreat
-                  : policy.runBudget.default,
-              }),
           ...(enumeration?.sourceTag === undefined
             ? {}
             : { candidateTag: enumeration.sourceTag }),
@@ -652,8 +625,6 @@ export function createWordPressSelection(
           score:
             scoreBreakdown.installations +
             scoreBreakdown.recency +
-            scoreBreakdown.surface +
-            scoreBreakdown.highThreat +
             scoreBreakdown.history +
             (scoreBreakdown.historyPayingClass ?? 0) +
             (scoreBreakdown.recordRecency ?? 0),

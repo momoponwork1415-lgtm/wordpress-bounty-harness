@@ -84,10 +84,7 @@ const basePolicy = {
   maximumTargets: 2,
   excludedAuthors: ["Automattic", "Facebook", "Google", "SiteGround", "Yoast"],
   excludedSlugs: [],
-  surfaceTagWeights: { form: 5 },
-  highThreatTags: ["file manager"],
-  scoreWeights: { installations: 10, recency: 0, surface: 1, highThreat: 0 },
-  runBudget: { default: 10, highThreat: 30 },
+  scoreWeights: { installations: 10, recency: 0 },
 };
 
 const failed = (slug: string, reason: "closed" | "not-found") => ({
@@ -281,7 +278,19 @@ describe("WordPress selection public interface", () => {
   });
 
   it("changes order when the policy changes and records the score breakdown", async () => {
-    const selection = harness({});
+    const recent = observation("exposed", ["form"], 1_000);
+    const selection = harness({
+      observations: {
+        popular: observation("popular", [], 100_000),
+        exposed: {
+          ...recent,
+          observation: {
+            ...recent.observation,
+            lastUpdated: "2026-10-06 12:00am GMT",
+          },
+        },
+      },
+    });
     const first = await selection.rank(basePolicy);
     expect(first.map((item) => item.slug)).toEqual(["popular", "exposed"]);
     expect(first[0]?.scoreBreakdown.installations).toBeGreaterThan(
@@ -290,15 +299,12 @@ describe("WordPress selection public interface", () => {
 
     const second = await selection.rank({
       ...basePolicy,
-      scoreWeights: {
-        installations: 0,
-        recency: 0,
-        surface: 10,
-        highThreat: 0,
-      },
+      scoreWeights: { installations: 0, recency: 10 },
     });
     expect(second.map((item) => item.slug)).toEqual(["exposed", "popular"]);
-    expect(second[0]?.scoreBreakdown.surface).toBeGreaterThan(0);
+    expect(second[0]?.scoreBreakdown.recency).toBeGreaterThan(
+      second[1]?.scoreBreakdown.recency ?? 0,
+    );
     expect(second[0]?.policy.digest).not.toBe(first[0]?.policy.digest);
   });
 
@@ -336,11 +342,10 @@ describe("WordPress selection public interface", () => {
         "Yoast",
       ]),
     );
-    expect(policy.scoreWeights.highThreat).toBeUndefined();
-    expect(policy.scoreWeights.surface).toBeUndefined();
-    expect(policy.highThreatTags).toBeUndefined();
-    expect(policy.surfaceTagWeights).toBeUndefined();
-    expect(policy.runBudget).toBeUndefined();
+    for (const legacy of ["surfaceTagWeights", "highThreatTags", "runBudget"])
+      expect(policy).not.toHaveProperty(legacy);
+    expect(policy.scoreWeights).not.toHaveProperty("surface");
+    expect(policy.scoreWeights).not.toHaveProperty("highThreat");
     if (!("candidateSource" in policy))
       throw new Error("Expected automatic policy");
     expect(policy.candidateSource.tags.length).toBeGreaterThanOrEqual(6);
@@ -432,59 +437,47 @@ describe("WordPress selection public interface", () => {
     ).toBe(false);
   });
 
-  it("omits run budgets and treats every surface alike when a policy carries no legacy weights", async () => {
+  it("writes no legacy surface fields and rejects a policy that still carries them", async () => {
     const selection = harness({
       observations: {
         popular: observation("popular", [], 100_000),
         files: observation("files", ["File Manager"], 1_000),
       },
     });
-    const { surfaceTagWeights, highThreatTags, runBudget, ...rest } =
-      basePolicy;
-    void surfaceTagWeights;
-    void highThreatTags;
-    void runBudget;
     const plain = await selection.rank({
-      ...rest,
+      ...basePolicy,
       candidateSlugs: ["popular", "files"],
-      scoreWeights: { installations: 10, recency: 0 },
     });
     expect(plain.map((item) => item.slug)).toEqual(["popular", "files"]);
     for (const item of plain) {
-      expect(item.runBudget).toBeUndefined();
-      expect(item.highThreatSurface).toBe(false);
-      expect(item.scoreBreakdown.surface).toBe(0);
-      expect(item.scoreBreakdown.highThreat).toBe(0);
+      expect(item).not.toHaveProperty("runBudget");
+      expect(item).not.toHaveProperty("highThreatSurface");
+      expect(item.scoreBreakdown).not.toHaveProperty("surface");
+      expect(item.scoreBreakdown).not.toHaveProperty("highThreat");
     }
+    for (const legacy of [
+      { surfaceTagWeights: { form: 5 } },
+      { highThreatTags: ["file manager"] },
+      { runBudget: { default: 10, highThreat: 30 } },
+      { scoreWeights: { ...basePolicy.scoreWeights, surface: 1 } },
+      { scoreWeights: { ...basePolicy.scoreWeights, highThreat: 1 } },
+    ])
+      expect(
+        wordPressSelectionPolicySchema.safeParse({ ...basePolicy, ...legacy })
+          .success,
+      ).toBe(false);
   });
 
-  it("still honours legacy High Threat weights and run budgets for old policies", async () => {
-    const selection = harness({
-      observations: {
-        popular: observation("popular", [], 100_000),
-        files: observation("files", ["File Manager"], 1_000),
-      },
-    });
-    const policy = { ...basePolicy, candidateSlugs: ["popular", "files"] };
-    const plain = await selection.rank(policy);
-    expect(plain.map((item) => item.slug)).toEqual(["popular", "files"]);
-    expect(plain.find((item) => item.slug === "files")).toMatchObject({
+  it("still reads a stored selection written with the legacy surface fields", async () => {
+    const [current] = await harness({}).rank(basePolicy);
+    if (current === undefined) throw new Error("Expected a selection");
+    const old = {
+      ...current,
       highThreatSurface: true,
       runBudget: 30,
-      scoreBreakdown: { highThreat: 0 },
-    });
-    expect(plain.find((item) => item.slug === "popular")?.runBudget).toBe(10);
-
-    const weighted = await selection.rank({
-      ...policy,
-      scoreWeights: { ...policy.scoreWeights, highThreat: 100 },
-    });
-    expect(weighted.map((item) => item.slug)).toEqual(["files", "popular"]);
-    expect(weighted[0]?.scoreBreakdown.highThreat).toBe(100);
-    expect(weighted[1]).toMatchObject({
-      highThreatSurface: false,
-      scoreBreakdown: { highThreat: 0 },
-    });
+      scoreBreakdown: { ...current.scoreBreakdown, surface: 5, highThreat: 15 },
+    };
+    expect(wordPressTargetSelectionSchema.parse(old)).toEqual(old);
   });
 
   describe("advisory history from the local mirror (ADR 0037)", () => {
@@ -634,7 +627,6 @@ describe("WordPress selection public interface", () => {
         scoreWeights: {
           ...basePolicy.scoreWeights,
           installations: 0,
-          surface: 0,
           history: 5,
         },
       };
@@ -674,7 +666,6 @@ describe("WordPress selection public interface", () => {
         scoreWeights: {
           ...basePolicy.scoreWeights,
           installations: 0,
-          surface: 0,
           history: 5,
         },
       };
@@ -727,7 +718,6 @@ describe("WordPress selection public interface", () => {
         scoreWeights: {
           ...basePolicy.scoreWeights,
           installations: 0,
-          surface: 0,
           recordRecency: 2,
         },
       };
