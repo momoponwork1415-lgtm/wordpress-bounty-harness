@@ -58,6 +58,12 @@ export interface Verifier<Finding, Handle extends LabHandle> {
     readonly record: RecordedFinding;
     /** Earlier judge-owned route for a same-path version comparison. */
     readonly referenceRoute?: unknown;
+    /**
+     * Retakes the Harness-owned Lab state baseline from now. A Verifier whose
+     * precondition setup precedes the attacker steps calls it once setup is
+     * done, so what setup changed is neither diffed nor judged.
+     */
+    readonly restartObservation?: () => Promise<void>;
   }): Promise<VerifierAttempt>;
 }
 
@@ -573,7 +579,7 @@ export class Verification<
       );
     // The observer sees the Lab before and after the Verifier; the Verifier sees neither capture.
     const observer = this.#options.stateObserver;
-    const before =
+    let before =
       observer === undefined
         ? undefined
         : await observer.before(lab).catch(() => null);
@@ -598,6 +604,10 @@ export class Verification<
         lab,
         record,
         ...(referenceRoute === undefined ? {} : { referenceRoute }),
+        restartObservation: async () => {
+          if (observer === undefined) return;
+          before = await observer.before(lab).catch(() => null);
+        },
       });
     } catch (error) {
       await observeAfter();

@@ -476,6 +476,9 @@ async function harness(
   const expirations: string[] = [];
   const verifierReferenceRoutes: unknown[] = [];
   const labIdsDuringVerification: string[][] = [];
+  const handoffs: NonNullable<
+    Parameters<NonNullable<WordPressCampaignBoundaries["handoffVerifier"]>>[0]
+  >[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
   let verificationProvisionAttempts = 0;
@@ -699,6 +702,11 @@ async function harness(
         };
       },
     },
+    // `verify next --handoff`: the same synthetic Verifier, recording the handoff it was asked for.
+    handoffVerifier: (handoff) => {
+      handoffs.push(handoff);
+      return boundaries.verifier;
+    },
     verifier: {
       // A fresh-container Verifier; it hands back a recipe, never a verdict.
       async attempt(input) {
@@ -865,6 +873,7 @@ async function harness(
     expirations,
     verifierReferenceRoutes,
     labIdsDuringVerification,
+    handoffs,
     docker,
     live,
     root,
@@ -2350,6 +2359,85 @@ describe("harness CLI vertical slice", () => {
       ledger().read({ campaignId: campaign, type: "verification-finished" }),
     ).toHaveLength(1);
     expect(verificationProvisionAttempts()).toBe(1);
+  });
+
+  it("verify next --handoff names the skill as prompt version and re-verifies the named Finding (#352)", async () => {
+    const { run, configPath, ledger, handoffs, root } = await harness({
+      entryPoints: true,
+    });
+    const campaign = "campaign-handoff";
+    const discovered = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      campaign,
+      "--config",
+      configPath,
+      "--defer-verification",
+    );
+    expect(discovered.code).toBe(0);
+    const recorded = ledger()
+      .read({ campaignId: campaign, type: "finding-recorded" })
+      .map(({ event }) =>
+        event.type === "finding-recorded" ? event.findingId : "",
+      );
+    expect(recorded.length).toBeGreaterThan(0);
+    const findingId = recorded[0]!;
+
+    const refused = await run(
+      "verify",
+      "next",
+      "--campaign",
+      campaign,
+      "--config",
+      configPath,
+      "--finding",
+      findingId,
+    );
+    expect(refused.code).not.toBe(0);
+    expect(handoffs).toHaveLength(0);
+
+    const handoff = [
+      "verify",
+      "next",
+      "--campaign",
+      campaign,
+      "--config",
+      configPath,
+      "--handoff",
+      join(root, "handoff"),
+      "--finding",
+      findingId,
+      "--port",
+      "18080",
+    ];
+    const first = await run(...handoff);
+    expect(first.code).toBe(0);
+    expect(first.stdout).toContain(`verified finding ${findingId}`);
+    expect(handoffs).toEqual([
+      { directory: join(root, "handoff"), httpPort: 18080, databasePort: 3307 },
+    ]);
+    const finished = () =>
+      ledger()
+        .read({ campaignId: campaign, type: "verification-finished" })
+        .map(({ event }) => event)
+        .filter(
+          (event) =>
+            event.type === "verification-finished" &&
+            event.findingId === findingId,
+        );
+    expect(finished()).toMatchObject([{ promptVersion: "wbh-verify/v1" }]);
+
+    // The operator named the Finding again: the retry rules of the automatic queue do not apply.
+    const second = await run(...handoff);
+    expect(second.code).toBe(0);
+    expect(second.stdout).toContain(`verified finding ${findingId}`);
+    expect(finished()).toHaveLength(2);
+    expect(finished()[1]).toMatchObject({
+      promptVersion: "wbh-verify/v1",
+      attempt: 2,
+    });
   });
 
   it.each([

@@ -1045,7 +1045,10 @@ export function createWordPressCliProfile(
         await openWordPressCampaignSession(options, state, input),
       ),
     async verifyNext(state, input) {
-      const session = await openWordPressCampaignSession(options, state, input);
+      const session = await openWordPressCampaignSession(options, state, {
+        configPath: input.configPath,
+        ...(input.handoff === undefined ? {} : { handoff: input.handoff }),
+      });
       return verifyNextFinding({
         ...(input.campaignId === undefined
           ? {}
@@ -1053,6 +1056,9 @@ export function createWordPressCliProfile(
         ...(input.campaignPrefix === undefined
           ? {}
           : { campaignPrefix: input.campaignPrefix }),
+        ...(input.findingId === undefined
+          ? {}
+          : { only: { findingId: input.findingId } }),
         ledger: state.ledger,
         newId: state.newId,
         loadSnapshot: session.boundaries.loadSnapshot,

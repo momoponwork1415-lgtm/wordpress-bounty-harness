@@ -76,6 +76,12 @@ export type WordPressVerifierRun = Readonly<{
   lab: WordPressVerifierLab;
   canary?: WordPressVerifierCanary;
   referenceRoute?: WordPressVerifierReferenceRoute;
+  /**
+   * Restarts the Harness-owned HTTP capture and Lab state baseline from now.
+   * A transport whose precondition setup precedes the attacker steps calls it
+   * once setup is done; the Codex transport never does.
+   */
+  restartObservation: () => Promise<void>;
 }>;
 
 export const WORDPRESS_VERIFIER_FILE_NAMES = [
@@ -387,12 +393,14 @@ export class WordPressVerifier implements Verifier<
     lab,
     record,
     referenceRoute,
+    restartObservation,
   }: {
     readonly campaignId: string;
     readonly finding: WordPressFinding;
     readonly lab: WordPressLabHandle;
     readonly record: RecordedFinding;
     readonly referenceRoute?: unknown;
+    readonly restartObservation?: () => Promise<void>;
   }): Promise<VerifierAttempt> {
     // Verification reloaded the Finding and matched its digest to the Lab
     // (invariant 5); this guard only keeps a direct caller honest.
@@ -468,11 +476,16 @@ export class WordPressVerifier implements Verifier<
       };
 
     const runId = `verify-${finding.findingId}-${randomUUID()}`;
-    const captureMarker = await this.options.lab.markCapture(lab);
+    let captureMarker = await this.options.lab.markCapture(lab);
     const result = await this.options.transport.run({
       runId,
       finding,
       lab: verifierLabView(lab, finding),
+      // Precondition setup before this call is neither captured nor judged.
+      restartObservation: async () => {
+        captureMarker = await this.options.lab.markCapture(lab);
+        await restartObservation?.();
+      },
       ...(canary === undefined ? {} : { canary }),
       ...(routeReference?.success
         ? {
