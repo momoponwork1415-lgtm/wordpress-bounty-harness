@@ -2,7 +2,7 @@
 
 状態: 所有者の追加指示に基づく改訂案。新規の探索 Trial で実行可能にする prompt はこの v8 だけとし、過去の版と実験結果は履歴・digest 照合用に残す。120 分は上限、最低60分は能動的な探索に使う。実装と開発Trialの計測は進行中。
 
-出典: [Searchlight Cyber の WP2Shell 記事](https://www.slcyber.io/research/exploit-brokers-pay-500000-for-a-wordpress-rce-i-found-one-with-gpt5-6/#the-story-of-wp2shell)、[取り込んだ記事系原文](../knowledge/imported/wp2shell/PROMPT.article.template.txt)。出力契約、trust 境界、Programme Boundary、Lab は Harness が別節として渡す。記事にない入口索引と公開履歴カタログは v8 の探索には渡さない。v7からの変更は最低時間と提供する依存sourceの位置だけ。
+出典: [Searchlight Cyber の WP2Shell 記事](https://www.slcyber.io/research/exploit-brokers-pay-500000-for-a-wordpress-rce-i-found-one-with-gpt5-6/#the-story-of-wp2shell)、[取り込んだ記事系原文](../../knowledge/imported/wp2shell/PROMPT.article.template.txt)。出力契約、trust 境界、Programme Boundary、Lab は Harness が別節として渡す。記事にない入口索引と公開履歴カタログは v8 の探索には渡さない。v7からの変更は最低時間と提供する依存sourceの位置だけ。
 
 ## 1. 実行する英文の全文
 
@@ -73,7 +73,7 @@ Before giving up, use at least one hour for active exploration. The Harness will
 | 入口索引・公開履歴 | 記事 prompt にはない | v8 の新規探索には渡さず、固定sourceからRootが方法を決める。旧Trialの記録は保持 |
 | 探索手法 | 多様な方式、系統一覧、停滞経路、複数ラウンド、反証、連鎖 | 元の 7 項目と最終段落をほぼそのまま維持 |
 
-元の /flag を探索者へ渡す canary に置き換えていない。探索には canary を渡さず、別の Lab の判定器が確認する（[SPEC 第 2・6・7 節](../SPEC.md)、[ADR 0004](../adr/0004-harness-owned-judges-decide-runtime-confirmed.md)）。旧 prompt と実験結果は履歴として残すが、新規 Trial の選択肢にはしない。
+元の /flag を探索者へ渡す canary に置き換えていない。探索には canary を渡さず、別の Lab の判定器が確認する（[SPEC 第 2・6・7 節](../../SPEC.md)、[ADR 0004](../../adr/0004-harness-owned-judges-decide-runtime-confirmed.md)）。旧 prompt と実験結果は履歴として残すが、新規 Trial の選択肢にはしない。
 
 ## 4. Harness が生成する出力契約 v4（英文の全文）
 

@@ -1,5 +1,6 @@
 ---
 status: accepted
+superseded-in-part-by: 0026（scenario の追加順と被害者側の操作）, 0034（scenario 定義を #353 で削除する予定）
 ---
 
 # 検証 Lab の前提を profile の版付き通常機能シナリオにして Finding と照合する
@@ -35,3 +36,5 @@ status: accepted
 
 - 受入条件: 記録済みの tp326-wp2-comment-c1 の Finding 2 件を、翻訳データを持つシナリオで再検証し、結果と理由を記録する。確認できない場合も `incomplete` のまま残す。
 - 2 つ目の profile ができるまで、シナリオの型は WordPress profile に閉じる（ADR 0011）。
+
+**2026-10-19 追記:** 一部を ADR 0026 と ADR 0034 が置き換えた。scenario の追加順と被害者側の操作は 0026、scenario 定義そのものの削除予定は 0034 を見る。

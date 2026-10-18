@@ -1,5 +1,6 @@
 ---
 status: accepted
+amended-by: 0032（自動再試行の範囲）
 ---
 
 # Verifier の incomplete を理由ごとの再試行方針で前へ進める
@@ -38,3 +39,5 @@ status: accepted
 
 - 受入条件: 3.3.1 のゲートと同等の Finding で、確定までの attempt 数と wall を記録し、6 回・約 1 時間と比較する。
 - `ledger funnel`（ADR 0023）は Finding ごとの attempt 数を読めるようにする。
+
+**2026-10-19 追記:** 自動再試行の範囲は ADR 0032 が改めた。

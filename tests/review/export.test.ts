@@ -44,7 +44,8 @@ const emptySummary: StateDiffSummary = {
 
 async function fixture(
   options: {
-    readonly verification?: "incomplete" | "confirmed" | "none";
+    readonly verification?:
+      "incomplete" | "confirmed" | "contradicted" | "none";
     readonly labStateDiff?: "captured" | "missing" | "absent";
     readonly reader?: StateDiffReader;
     /**
@@ -197,13 +198,20 @@ async function fixture(
             reproductionPackageDigest: recipe,
             conditions: { attackerRole: "unauthenticated" },
           }
-        : {
-            status: "incomplete",
-            reason: "observation",
-            nextStep: "Review the option diff by hand",
-            evidenceDigest: evidence,
-            refutationDigest: refutation,
-          },
+        : options.verification === "contradicted"
+          ? {
+              status: "contradicted",
+              judgeId: "option-canary",
+              evidenceDigest: evidence,
+              refutationDigest: refutation,
+            }
+          : {
+              status: "incomplete",
+              reason: "observation",
+              nextStep: "Review the option diff by hand",
+              evidenceDigest: evidence,
+              refutationDigest: refutation,
+            },
     ...(labStateDiff === "captured"
       ? {
           labStateDiff: { status: "captured" },
@@ -561,6 +569,30 @@ describe("review export", () => {
         (a) => a.kind === "reproduction-package",
       ),
     ).toBe(true);
+    expect(canonicalJson(bundle)).not.toContain(PAYLOAD);
+  });
+
+  it("exports a contradicted Finding with its judge, evidence and refutation", async () => {
+    const contradicted = await fixture({ verification: "contradicted" });
+    const bundle = await exportReviewBundle({
+      ...contradicted,
+      campaignId: "campaign-1",
+      findingId: "finding-1",
+      stateDiff: reader(emptySummary),
+    });
+    expect(bundle.verification).toMatchObject({
+      status: "contradicted",
+      judgeId: "option-canary",
+      conditions: null,
+      reason: null,
+    });
+    expect(bundle.privateEvidence.artifacts).toContainEqual(
+      expect.objectContaining({
+        kind: "judge-evidence",
+        digest: contradicted.evidence,
+      }),
+    );
+    expect(bundle.refutation?.text).toContain("nonce check held");
     expect(canonicalJson(bundle)).not.toContain(PAYLOAD);
   });
 

@@ -1,6 +1,6 @@
 # ChatGPT への文書作成依頼文 4 本（2026-10-16）
 
-所有者が ChatGPT に貼って、人が Harness を回すための派生文書を 4 本作る。正本は [SPEC](../SPEC.md) と [ADR](../adr/)。ここで作る文書は派生であり、規則を足さない。agent に渡る文章（prompt、skill、trust 境界宣言、Programme Boundary）は対象外。
+所有者が ChatGPT に貼って、人が Harness を回すための派生文書を 4 本作る。正本は [SPEC](../../SPEC.md) と [ADR](../../adr/)。ここで作る文書は派生であり、規則を足さない。agent に渡る文章（prompt、skill、trust 境界宣言、Programme Boundary）は対象外。
 
 おすすめの順: 1 所有者の手順書 → 2 故障カタログ → 3 設定ファイルの説明 → 4 用語集の拡張。1 本ずつ別の会話で作る。
 

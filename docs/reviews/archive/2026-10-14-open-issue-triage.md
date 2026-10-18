@@ -2,7 +2,7 @@
 
 ## 範囲と判断基準
 
-2026-10-14 13時台の GitHub open Issue 30件を、`main` の文書・マージ済みPR・Issueコメントと照合した。Draft PR の成果は `main` の完了機能に数えない。現行の正本は [SPEC](../SPEC.md)、[ADR](../adr/)、[DEVELOPMENT 第2節](../DEVELOPMENT.md)、[PARKING](../PARKING.md)。この文書は採否を決めるための報告であり、Issue は変更していない。
+2026-10-14 13時台の GitHub open Issue 30件を、`main` の文書・マージ済みPR・Issueコメントと照合した。Draft PR の成果は `main` の完了機能に数えない。現行の正本は [SPEC](../../SPEC.md)、[ADR](../../adr/)、[DEVELOPMENT 第2節](../../DEVELOPMENT.md)、[PARKING](../../PARKING.md)。この文書は採否を決めるための報告であり、Issue は変更していない。
 
 整理の目的は、Step 1「選定から検証まで quota 1週分を人手0で完走し、範囲内Findingを全件exportへ届ける」に必要な問いを見えるようにすること。Issue の open/closed とコードの有無は同義ではない。とくに古い Issue 本文より、採用済みADRと後続の所有者判断を優先する。
 
@@ -21,8 +21,8 @@
 
 | Issue | 現行の受け皿・残件 |
 | --- | --- |
-| [#189](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/189) 研究file＋整形run＋自動追加Trial | 自動追加2 Trial は単一協調Trialの [ADR 0029](../adr/0029-single-wp2shell-cooperative-trial.md) と #215 の事前承認に反する。v4目的文は #214 / Draft PR #217、研究file回収の一部は PR #205 で別途扱われた。旧案として閉じる。 |
-| [#141](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/141) `reproduced` と人間作業の機械工程 | 根拠の ADR 0028 は [ADR 0031](../adr/0031-review-report-dedupe-as-skills.md) により withdrawn。既存実装や台帳履歴は消さず、Issue の旧受入条件を止める。 |
+| [#189](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/189) 研究file＋整形run＋自動追加Trial | 自動追加2 Trial は単一協調Trialの [ADR 0029](../../adr/0029-single-wp2shell-cooperative-trial.md) と #215 の事前承認に反する。v4目的文は #214 / Draft PR #217、研究file回収の一部は PR #205 で別途扱われた。旧案として閉じる。 |
+| [#141](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/141) `reproduced` と人間作業の機械工程 | 根拠の ADR 0028 は [ADR 0031](../../adr/0031-review-report-dedupe-as-skills.md) により withdrawn。既存実装や台帳履歴は消さず、Issue の旧受入条件を止める。 |
 | [#95](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/95) Harness 内の英語レポートと人間Lab | Lab 操作と証拠の束は #186、文案は #188 の skill へ移った。旧責務のIssueとして閉じる。 |
 
 [#96](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/96) は重複照合を #188 の skill に移す一方、**提出前に最新版の新しいSnapshotで再検証する**問いが残る。丸ごと閉じず、その残件だけに縮める。実施時点は最初の提出判断までとし、Step 1 の無人運転ゲートとは分ける。
@@ -30,7 +30,7 @@
 ## 残して本文を直す候補
 
 - [#100](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/100)：本番パイロットの親として維持する。PR #182 と本番周回の実測、現行 Step 1 の完了条件を1か所に整理する。本文の1万install下限、公開履歴による選定、追加Trial、人間再現までを現行の選定方針・ADR・DEVELOPMENTに照合する。過去の所有者コメントに「閉じない」があるため無断で閉じない。
-- [#120](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/120)：Issue本文の「agent-authored HTTPの補助利用はADR違反」は不正確。[ADR 0015](../adr/0015-harness-captured-http-evidence.md) は補助資料として許す。一方、捕捉0でも読出し系判定器の成立証拠になり得る経路は残る。問いを「Harness捕捉のないHTTPを `runtime-confirmed` の根拠にしない」へ狭める。
+- [#120](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/120)：Issue本文の「agent-authored HTTPの補助利用はADR違反」は不正確。[ADR 0015](../../adr/0015-harness-captured-http-evidence.md) は補助資料として許す。一方、捕捉0でも読出し系判定器の成立証拠になり得る経路は残る。問いを「Harness捕捉のないHTTPを `runtime-confirmed` の根拠にしない」へ狭める。
 - [#186](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/186)：上記の不足前提説明への参照を追う。既にできた差分・export・Lab操作を未実装として再着手しない。
 - [#188](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/188)：3 skill は PR #202 / #204 で実装済み。Step 1 の残件は所有者が1 batchを処理して時間を記録する実測。実測を #100 に移す場合のみ閉じる。
 

@@ -30,7 +30,7 @@ flowchart LR
 | Selection | 新鮮なWordfence履歴から低権限・高影響候補を抽出し、WordPress.orgのactive install数をGit外DBへ観測日時付きで保存する。1万件以上・最新版・scopeを実行時に再検査し、履歴件数をscoreに記録する | pilot後に選定実績と既知重複から順位を調整する | 最小方針を実装 |
 | 重複照合 | Wordfenceローカルmirrorの候補検索はある。更新は旧リポジトリのscriptに依存し、staleを未重複と扱わない | 検証後にfeed更新を試し、Wordfenceに加えてPatchstack / WPScanの公開情報を照合する。完全一致の自動断定はしない | 提出前の必須ゲート |
 | Report / 人間Lab | 再現パッケージはある。`review draft --file` で人間が用意した文面を記録できる | 攻撃者視点のHTTP証拠から短い英語レポートと入力用JSONを自動生成し、Lab再構築を1コマンドに近づける | 本番探索は先行可。最初の外部提出前に完成 |
-| 評価 / 実績 | `pnpm check` は63ファイル・550テストで通る。TranslatePressの実Finding・修正版対照を通過し、[3対象pilot](PILOT-2026-10-10.md)はFinding 2件、Lead 13件、`runtime-confirmed` 0件と記録した | 未許容eventとno-judgeを次の改善の根拠にする | pilot実行済み |
+| 評価 / 実績 | `pnpm check` は63ファイル・550テストで通る。TranslatePressの実Finding・修正版対照を通過し、[3対象pilot](reviews/archive/PILOT-2026-10-10.md)はFinding 2件、Lead 13件、`runtime-confirmed` 0件と記録した | 未許容eventとno-judgeを次の改善の根拠にする | pilot実行済み |
 
 ## 実装順
 

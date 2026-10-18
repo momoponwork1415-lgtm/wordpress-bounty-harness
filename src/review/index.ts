@@ -77,6 +77,16 @@ export type ReviewItem =
       readonly decision: Decision | null;
     }
   | {
+      /** In-scope Findings reach a human whatever the judge said (ADR 0031, #185). */
+      readonly status: "contradicted";
+      readonly ref: ReviewRef;
+      readonly category: string;
+      readonly judgeId: string;
+      readonly evidenceDigest: string;
+      readonly refutationDigest: string | null;
+      readonly decision: Decision | null;
+    }
+  | {
       readonly status: "incomplete";
       readonly ref: ReviewRef;
       readonly category: string;
@@ -179,7 +189,7 @@ export class Review<TFacts = unknown> {
     digest.parse(options.scopeEvaluator.policyDigest);
   }
 
-  /** Evidence-backed results and every incomplete verification reach a human. */
+  /** Every verified Finding inside the Programme Boundary reaches a human, `contradicted` included. */
   queue(input: { readonly campaignId?: string } = {}): ReviewQueue {
     const campaignId =
       input.campaignId === undefined ? undefined : id.parse(input.campaignId);
@@ -278,8 +288,18 @@ export class Review<TFacts = unknown> {
           ? decided.decision
           : null;
       const result = event.result;
-      if (result.status === "contradicted") contradicted++;
-      else if (
+      if (result.status === "contradicted") {
+        contradicted++;
+        items.push({
+          status: result.status,
+          ref,
+          category: finding.category,
+          judgeId: result.judgeId,
+          evidenceDigest: result.evidenceDigest,
+          refutationDigest: result.refutationDigest ?? null,
+          decision,
+        });
+      } else if (
         result.status === "runtime-confirmed" ||
         result.status === "reproduced"
       )
@@ -355,15 +375,11 @@ export class Review<TFacts = unknown> {
           event.verificationId === ref.verificationId &&
           event.snapshotDigest === ref.snapshotDigest,
       )?.event;
+    if (verification?.type !== "verification-finished")
+      throw new Error("Only recorded verifications are reviewed");
     if (
-      verification?.type !== "verification-finished" ||
-      verification.result.status === "contradicted"
-    )
-      throw new Error(
-        "Only evidence-backed or incomplete verifications are reviewed",
-      );
-    if (
-      verification.result.status === "incomplete" &&
+      (verification.result.status === "incomplete" ||
+        verification.result.status === "contradicted") &&
       !this.queue({ campaignId: ref.campaignId }).items.some(
         (item) =>
           item.ref.findingId === ref.findingId &&
@@ -371,7 +387,7 @@ export class Review<TFacts = unknown> {
       )
     )
       throw new Error(
-        "This incomplete verification is not the current review item",
+        `This ${verification.result.status} verification is not the current review item`,
       );
     const trace = this.#traceOf(ref.campaignId, ref.findingId);
     const decidedAt = this.#clock();

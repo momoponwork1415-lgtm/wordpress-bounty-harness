@@ -143,7 +143,7 @@ flowchart LR
   DEC -->|不変条件・境界が変わる| ADR["ADR（週 1 本まで）"]
   ISS --> PR["PR 1 本"] --> HOLD["holdout = 翌週の本番"] --> LED
   LED -. Step 1 判定後 .-> TUNE["wbh-tune skill（#271）<br/>変更案を 1 つだけ。Harness に書かない"] --> REP
-  CONF["新しい runtime-confirmed"] --> SMOKE["週次 smoke の case に追加<br/>通った検証は回帰試験（OPERATIONS 第 2 節）"]
+  CONF["新しい runtime-confirmed"] --> SMOKE["週次の review reverify の対象に追加<br/>通った検証は回帰試験（OPERATIONS 第 2 節）"]
 ```
 
 ## 7. 要素と実体の対照

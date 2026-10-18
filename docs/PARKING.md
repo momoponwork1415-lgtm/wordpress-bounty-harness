@@ -10,7 +10,7 @@ Step 1（[DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節）の完了まで着手し�
 | 2026-10-13 | WooCommerce を Lab の依存として常備する | 同じ前提不足が 3 回出たとき（Q47 の自動導出で足りない場合） |
 | 2026-10-13 | LLM による候補の要約・順位付け skill | 週のレビュー batch が 6 時間を超えたとき |
 | 2026-10-13 | 重複照合 skill を Harness から自動で呼ぶ | 人間が skill で 10 件回して出力が安定したとき |
-| 2026-10-13 | Claude 系（Opus）探索 runtime の追加（`codex/opus-55-discovery`） | 無人運転の初回 Trial が 15 本以上あり、拒否率 30% 以上、または拒否 hold が週 2 回以上のとき。再開時は Claude 側の拒否分類を先に入れ、arm は campaign 設定で明示する（2026-10-14） |
+| 2026-10-13 | Claude 系（Opus）探索 runtime の追加（`codex/opus-55-discovery`） | 無人運転の初回 Trial が 15 本以上あり、拒否率 30% 以上、または拒否 hold が週 2 回以上のとき。再開時は Claude 側の拒否分類を先に入れ、arm は campaign 設定で明示する（2026-10-14）。**2026-10-19: 所有者が方針として再開を決めた（整理計画の判断 2）。PR #225 の commit `3478104` は tag `archive/pr-225-claude-runtime` で保全済み。本番の拒否率は 2026-10-16 以降 121 run 中 3 回（2.5%）で数字の条件は未達だが、方針の変更として扱う。再開時は Claude 側の拒否分類を先に入れる（元の行のとおり）。** |
 | 2026-10-13 | Patchstack を第 2 の提出先にする（Programme Boundary を 2 本） | 提出候補が出た後、#175 の線で |
 | 2026-10-13 | 検証 scenario を precondition 文の正規表現で選ぶ仕組みの置き換え | `incomplete(precondition)` の誤選択が 3 回出たとき。**2026-10-18 に AGENTS.md「Harness と AI の責務」で削除を決めた（検証は skill、ADR 0035。削除は #353）** |
 | 2026-10-13 | 文書の整理（docs/reviews/2026-10-12-consolidation-and-production-first.md 第 4 節） | Step 1 完了後 |

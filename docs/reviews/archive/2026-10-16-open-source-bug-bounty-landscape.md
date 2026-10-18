@@ -10,7 +10,7 @@ WordPress 以外で、公開ソースを読んで脆弱性を見つけ、手元�
 
 大規模な対象群という点では [Immunefi の一覧](https://immunefi.com/bug-bounty/) が Wordfence / Patchstack に最も近い。ただし対象は主に Web3 の個別契約・プロトコルで、報奨可否は各プログラムのデプロイ済み資産、影響、PoC 条件で決まる。Vercel は単一所有者の OSS 群で、WordPress プラグイン市場と同じ仕組みではない。
 
-本調査は公開資料の照合であり、候補の Lab を gVisor `runsc` で起動して検証していない。現行 Harness の設計を変更したり、第二 profile を実装したりする提案ではない。[ADR 0011](../adr/0011-target-specific-code-lives-in-a-profile.md) は、WordPress 版の完成後に第二対象で共通部分を抽出する順序を定めている。
+本調査は公開資料の照合であり、候補の Lab を gVisor `runsc` で起動して検証していない。現行 Harness の設計を変更したり、第二 profile を実装したりする提案ではない。[ADR 0011](../../adr/0011-target-specific-code-lives-in-a-profile.md) は、WordPress 版の完成後に第二対象で共通部分を抽出する順序を定めている。
 
 ## 公開された脆弱性の実例
 
