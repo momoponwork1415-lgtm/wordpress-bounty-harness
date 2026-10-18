@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
 import {
-  allocateTrialArms,
   campaignInputV1Schema,
   createHistoryCatalog,
-  historyForRun,
   validateEvaluationCampaignInput,
   validateProductionCampaignInput,
 } from "../../src/discovery/campaign.js";
@@ -97,44 +95,5 @@ describe("CampaignInput public boundary", () => {
         "2026-02-01T00:00:00Z",
       ),
     ).toThrow();
-  });
-
-  it("allocates half of runs to history and records absence explicitly", () => {
-    const history = createHistoryCatalog("2026-02-01T00:00:00Z", [record]);
-    expect(
-      Array.from(
-        { length: 6 },
-        (_, ordinal) => historyForRun(ordinal, 0.5, history).mode,
-      ),
-    ).toEqual(["none", "catalog", "none", "catalog", "none", "catalog"]);
-    expect(historyForRun(0, 1, history)).toEqual(history);
-    expect(historyForRun(0, 0, history)).toEqual({ mode: "none" });
-  });
-
-  it("cycles through all four cells for two half-fraction axes", () => {
-    const axes = [
-      { axis: "prompt" as const, armBFraction: 0.5 },
-      { axis: "history" as const, armBFraction: 0.5 },
-    ];
-    expect(
-      Array.from({ length: 4 }, (_, ordinal) =>
-        allocateTrialArms(ordinal, axes),
-      ),
-    ).toEqual([
-      { prompt: "a", history: "a" },
-      { prompt: "b", history: "a" },
-      { prompt: "a", history: "b" },
-      { prompt: "b", history: "b" },
-    ]);
-    expect(
-      Array.from({ length: 4 }, (_, ordinal) =>
-        allocateTrialArms(ordinal, axes.slice(0, 1)),
-      ),
-    ).toEqual([
-      { prompt: "a" },
-      { prompt: "b" },
-      { prompt: "a" },
-      { prompt: "b" },
-    ]);
   });
 });

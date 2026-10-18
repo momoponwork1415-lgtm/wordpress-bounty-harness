@@ -78,7 +78,7 @@ v7 は固定 source からの探索をRootに任せ、入口索引を渡さな�
   - 拒否（`provider-cyber-policy`）、wall、schema、CLI 終了などの対象単位の失敗は campaign を止めず、その対象を `target-skipped`（理由 `provider-refused` / `run-failed`）にして次へ進む。同じ campaign の再実行ではその対象を再開しない。
   - Verifier が provider の上限を受けたときも同じく `campaign-stopped(provider-limit)` で止める。再開時はその検証を同じ Lab Setup で 1 回だけ自動再試行する。
   - operator の stop は対象の境界で効く。進行中の対象は終わらせ、新しい対象を始めず、台帳に `campaign-stopped(operator)` が残る。
-- **旧入口分担の記録**: `assignment` mode の索引・成分digestは過去Trialの照合用に読む。v8 の新規探索では `assignment` を選べず、入口索引も渡さない。
+- **旧入口分担の記録**: 旧 `assignment` mode（2026-10-18 削除）の索引・成分digestは過去Trialの照合用に台帳から読む。v8 の新規探索では mode は `wp2shell` だけで、入口索引も渡さない。
 - **過去Trialの記録**: 旧 `stage` / `continuationOf` 付きevent、旧ablation arm、旧prompt・入口索引のdigestは台帳から読める。新規探索には旧prompt・旧modeを使わず、段やcontinuationも新規に書かない。Leadの本文はPrivate Evidenceに置き、台帳にはdigestと分類だけを記録する。
 - **対象ごとの失敗**（取得、探索、検証）: 標準エラーに `skipped <対象> <版> at <段階>: <理由>` と出す。台帳の `target-skipped` には段階、短い理由コード、Private Evidence に置いた `target-skip-diagnostic.json` の digest を残し、次の対象へ進む。DNS、接続タイムアウト、HTTP 応答、source 検査不一致を区別する。WordPress.org への取得は Node 同梱の `fetch` に `AbortSignal.timeout`（metadata 30 秒、archive 5 分）を付ける。取得失敗を探索の正常な候補0件に数えない。
 - Lab 準備では使い捨て runsc コンテナから HTTP 到達を確認する。`lab-provisioned.reachability.http = failed` なら探索を始めず、`failureStage` と `reason` を記録する。DB 到達の失敗は記録するが HTTP が通れば続ける。Docker の診断文は Private Evidence に置き、台帳には digest だけを残す。
@@ -268,12 +268,11 @@ harness lab cleanup --config <path> --remove   # 削除
 
 ## 6. 評価
 
-主指標は本番から得る。旧 `eval score --keys` と Answer Key、盲検 rubric、`eval compare`、`eval prospective`、`eval case-blocked` は 2026-10-18 に削除した（PARKING 2026-10-14 行）。旧 A/B の割当・digest と `evaluation-case-blocked` event は台帳に残り、`ledger funnel` の arm 別集計で読める。
+主指標は本番から得る。旧 `eval score --keys` と Answer Key、盲検 rubric、`eval compare`、`eval prospective`、`eval case-blocked` は 2026-10-18 に削除した（PARKING 2026-10-14 行）。campaign 設定の `ablation` / `comparison` / `entry-index-control` / `assignment` mode も 2026-10-18 に削除した。旧 A/B の割当・digest と `evaluation-case-blocked` event は台帳に残り、`ledger funnel` の arm 別集計で読める。
 
 - **過去比較の照合**: 旧prompt版や入口索引の有無を変えた独立Trialは過去結果として別armで読む。新規探索のprompt・modeはv8と `wp2shell` のみ。旧段付きTrialを同じ分母に混ぜない。
 - **旧A/Bの読取**: 過去の `ablation.axes` にあった `history`、`prompt`、`continuation` と旧 `{"axis":"history","armBFraction":0.5}` の割当・digestは台帳に残る。旧基準は `short-objective-managed-v4` と継続なしだった。
   - #73のLuna開発セットでは公開2事例に対して全cellでsource候補0/3だった。当時の事前登録の規則で短い目的promptを既定に残したが、優劣の証明ではない。失敗Trialの補充は元の12試行と分けて記録した。150分対照も実wallは設定上限より短かった。現在の既定はADR 0029に従う。
-  - 履歴を渡せるのは、安定版の公開日時（WordPress.orgの最終更新）より前の公開記録だけ。版を固定した対象やmirrorが使えない対象では、全runがarm aになる。
 - **前向き評価**: 四半期ごとに、公開されたadvisoryで本番台帳を再採点し、見逃しを数える。
   - advisoryファイルはGit外に置く私的データ。1件ごとに `{schemaVersion: 1, advisoryId, slug, affectedVersions: [{fromVersion, fromInclusive, toVersion, toInclusive}], publishedAt, impact, allowedLocations: [{file, function?}]}` を書く。`allowedLocations` は公開パッチを読んで人間が書く。
   - 結果は `found` / `missed` / `unscorable`（採点失敗）/ `predates-run` / `not-searched` に分かれる。`missed` 以外は見逃しに数えない。
