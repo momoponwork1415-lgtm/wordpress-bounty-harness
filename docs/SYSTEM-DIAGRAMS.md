@@ -244,11 +244,11 @@ sequenceDiagram
   H->>SK: wbh-dedupe（公開記録との照合 → possible-match / no-match / unavailable）
   H->>CLI: review reverify（最新版で再検証）
   H->>CLI: review scope（in-scope / out-of-scope / ambiguous）
-  H->>CLI: lab up --for-review → 手で再現 → review reproduced
+  H->>CLI: lab up --for-review → 手で再現
   rect rgb(255, 245, 230)
     Note over H: 人間の判断点 1: 提出前のレビュー
-    H->>CLI: review decide（accept / reject / defer、--minutes）
-    CLI->>L: review-decided + human-effort-recorded
+    H->>CLI: review decide（accept / reject / defer、--reproduced、--minutes）
+    CLI->>L: human-reproduction-recorded + review-decided + human-effort-recorded
   end
   H->>SK: wbh-report（英文の報告を書き、review draft を打つ）
   CLI->>L: draft-saved（candidateId, revisionDigest）
