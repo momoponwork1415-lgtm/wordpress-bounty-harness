@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -8,6 +7,10 @@ import {
   canonicalDigest,
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
+import {
+  checkSourceAgainstManifest,
+  type SourceTreeManifest,
+} from "../infrastructure/canonical-source-tree.js";
 import { persistImmutableFile } from "../infrastructure/immutable-file.js";
 
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -71,7 +74,8 @@ export class SourceAcquisitionError extends Error {
 export interface AcquiredSource {
   readonly identity: string;
   readonly version: string;
-  readonly manifest: SourceManifest;
+  /** Validated against `sourceManifestSchema` before it is sealed. */
+  readonly manifest: SourceTreeManifest;
   readFile(path: string): Promise<Uint8Array>;
 }
 
@@ -120,60 +124,74 @@ async function seal(source: AcquiredSource): Promise<{
       reason: "invalid-manifest",
       detail: parsed.error.message,
     });
-  const manifest = parsed.data;
-  const paths = new Set<string>();
-  const collisionKeys = new Set<string>();
-  let previousPath = "";
-  for (const entry of manifest.entries) {
-    if (entry.path <= previousPath)
-      throw new SourceAcquisitionError("source-mismatch", {
-        reason: "manifest-order",
-        path: entry.path,
-      });
-    previousPath = entry.path;
-    const key = entry.path.normalize("NFC").toLowerCase();
-    if (paths.has(entry.path) || collisionKeys.has(key)) {
-      throw new SourceAcquisitionError("source-mismatch", {
-        reason: "manifest-path-collision",
-        path: entry.path,
-      });
-    }
-    paths.add(entry.path);
-    collisionKeys.add(key);
-    let bytes: Uint8Array;
-    try {
-      bytes = await source.readFile(entry.path);
-    } catch (error) {
-      throw new SourceAcquisitionError("source-mismatch", {
-        reason: "manifest-file-unavailable",
-        path: entry.path,
-        detail: error instanceof Error ? error.message : String(error),
-      });
-    }
-    const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-    if (bytes.byteLength !== entry.size || digest !== entry.digest) {
-      throw new SourceAcquisitionError("source-mismatch", {
-        reason: "manifest-content",
-        path: entry.path,
-        expectedSize: entry.size,
-        actualSize: bytes.byteLength,
-        expectedDigest: entry.digest,
-        actualDigest: digest,
-      });
-    }
-  }
+  const checked = await checkSourceAgainstManifest(parsed.data, (path) =>
+    source.readFile(path),
+  );
+  if (checked.status !== "verified")
+    throw new SourceAcquisitionError("source-mismatch", checked.mismatch);
   return {
     identity: source.identity,
     version: source.version,
-    sourceDigest: canonicalDigest(manifest),
+    sourceDigest: checked.digest,
+  };
+}
+
+export type SnapshotLoad =
+  | { readonly status: "loaded"; readonly snapshot: Snapshot }
+  | {
+      readonly status: "unavailable";
+      readonly reason:
+        "invalid-digest" | "missing" | "malformed" | "digest-mismatch";
+    };
+
+export interface SnapshotReader {
+  /** The frozen Target Snapshot named by its digest, re-verified byte for byte. */
+  load(digest: string): Promise<SnapshotLoad>;
+}
+
+/** Only this module knows how a frozen Snapshot is laid out on disk. */
+function snapshotPath(storageDirectory: string, digest: string): string {
+  return join(storageDirectory, `${digest.slice(7)}.json`);
+}
+
+export function openSnapshotReader(options: {
+  readonly storageDirectory: string;
+}): SnapshotReader {
+  return {
+    async load(digest) {
+      if (!digestSchema.safeParse(digest).success)
+        return { status: "unavailable", reason: "invalid-digest" };
+      let bytes: string;
+      try {
+        bytes = await readFile(
+          snapshotPath(options.storageDirectory, digest),
+          "utf8",
+        );
+      } catch {
+        return { status: "unavailable", reason: "missing" };
+      }
+      let record: z.infer<typeof snapshotSchema>;
+      try {
+        record = snapshotSchema.parse(JSON.parse(bytes) as unknown);
+      } catch {
+        return { status: "unavailable", reason: "malformed" };
+      }
+      if (bytes !== canonicalJson(record) || canonicalDigest(record) !== digest)
+        return { status: "unavailable", reason: "digest-mismatch" };
+      return { status: "loaded", snapshot: { ...record, digest } };
+    },
   };
 }
 
 export function openSnapshot<Selection>(options: {
   readonly storageDirectory: string;
   readonly source: SourceAcquisition<Selection>;
-}) {
+}): SnapshotReader & {
+  freeze(selection: Selection): Promise<Snapshot>;
+} {
+  const reader = openSnapshotReader(options);
   return {
+    load: reader.load,
     async freeze(selection: Selection): Promise<Snapshot> {
       const acquired = await options.source.acquire(selection);
       const target = await seal(acquired.target);
@@ -185,10 +203,9 @@ export function openSnapshot<Selection>(options: {
         dependencies,
       });
       const digest = canonicalDigest(record);
-      const path = join(options.storageDirectory, `${digest.slice(7)}.json`);
       if (
         (await persistImmutableFile(
-          path,
+          snapshotPath(options.storageDirectory, digest),
           Buffer.from(canonicalJson(record)),
         )) !== "stored"
       ) {
@@ -198,21 +215,6 @@ export function openSnapshot<Selection>(options: {
         });
       }
       return { ...record, digest };
-    },
-    async verify(digest: string): Promise<boolean> {
-      if (!digestSchema.safeParse(digest).success) return false;
-      try {
-        const bytes = await readFile(
-          join(options.storageDirectory, `${digest.slice(7)}.json`),
-          "utf8",
-        );
-        const record = snapshotSchema.parse(JSON.parse(bytes) as unknown);
-        return (
-          bytes === canonicalJson(record) && canonicalDigest(record) === digest
-        );
-      } catch {
-        return false;
-      }
     },
   };
 }
