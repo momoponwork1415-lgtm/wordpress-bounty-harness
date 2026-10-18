@@ -119,7 +119,7 @@ const commonCampaignFields = {
   schemaVersion: z.literal(1),
   discovery: z
     .strictObject({ lab: z.enum(["attached", "none"]) })
-    .default({ lab: "attached" }),
+    .default({ lab: "none" }),
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
   runWallTimeMinutes: z.number().positive().max(120).default(120),
