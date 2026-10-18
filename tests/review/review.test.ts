@@ -565,7 +565,7 @@ async function queueFixture() {
 }
 
 describe("review queue and decisions", () => {
-  it("lists evidence-backed and pending incomplete items", async () => {
+  it("lists evidence-backed, contradicted and pending incomplete items", async () => {
     const { review } = await queueFixture();
     const queue = review.queue({ campaignId: "campaign-1" });
     expect(queue.contradicted).toBe(1);
@@ -588,7 +588,34 @@ describe("review queue and decisions", () => {
         reason: "observation",
         ref: expect.objectContaining({ findingId: "finding-2" }),
       }),
+      expect.objectContaining({
+        status: "contradicted",
+        ref: expect.objectContaining({ findingId: "finding-3" }),
+      }),
     ]);
+  });
+
+  it("puts a contradicted Finding in the queue with the judge and its evidence digest", async () => {
+    const { review, artifactStore } = await queueFixture();
+    const refutation = await artifactStore.putFiles({
+      "refutation.md": "Synthetic refutation\n",
+    });
+    const item = review
+      .queue({ campaignId: "campaign-1" })
+      .items.find((candidate) => candidate.ref.findingId === "finding-3");
+    expect(item).toEqual({
+      status: "contradicted",
+      ref: {
+        ...ref,
+        findingId: "finding-3",
+        verificationId: "verification-3",
+      },
+      category: "stored-xss",
+      judgeId: "synthetic",
+      evidenceDigest: refutation,
+      refutationDigest: null,
+      decision: null,
+    });
   });
 
   it("lists exhausted observation failures for human review", async () => {
@@ -812,15 +839,29 @@ describe("review queue and decisions", () => {
     expect(ledger.funnel("campaign-1").reviewed).toBe(1);
   });
 
-  it("refuses decisions on contradicted or unknown verifications", async () => {
+  it("records a decision on a contradicted item and refuses unknown verifications", async () => {
     const { review } = await queueFixture();
+    const contradictedRef = {
+      ...ref,
+      findingId: "finding-3",
+      verificationId: "verification-3",
+    };
+    const recorded = await review.decide({
+      ref: contradictedRef,
+      decision: "reject",
+      reasonCode: "judge-contradicted",
+      openedEvidence: [],
+      decidedBy: "operator",
+    });
+    expect(recorded.verificationStatus).toBe("contradicted");
+    expect(
+      review
+        .queue({ campaignId: "campaign-1" })
+        .items.find((item) => item.ref.findingId === "finding-3"),
+    ).toMatchObject({ decision: "reject" });
     await expect(
       review.decide({
-        ref: {
-          ...ref,
-          findingId: "finding-3",
-          verificationId: "verification-3",
-        },
+        ref: { ...contradictedRef, verificationId: "verification-unknown" },
         decision: "accept",
         reasonCode: "manual",
         openedEvidence: [],

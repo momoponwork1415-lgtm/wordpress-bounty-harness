@@ -467,7 +467,20 @@ export function formatQueue(
     const head = `${item.status}  ${item.ref.campaignId}  finding ${item.ref.findingId}  ${item.category}`;
     const decision = `  decision: ${item.decision ?? "none"}`;
     const verification = `  verification ${item.ref.verificationId}  snapshot ${item.ref.snapshotDigest}`;
-    if (item.status !== "incomplete")
+    if (item.status === "contradicted")
+      lines.push(
+        head,
+        verification,
+        `  observer: ${item.judgeId}`,
+        `  evidence: ${item.evidenceDigest} (${contentPath(item.evidenceDigest)})`,
+        `  refutation: ${
+          item.refutationDigest === null
+            ? "none"
+            : `${item.refutationDigest} (${contentPath(item.refutationDigest)})`
+        }`,
+        decision,
+      );
+    else if (item.status !== "incomplete")
       lines.push(
         head,
         verification,
@@ -507,7 +520,7 @@ export function formatQueue(
     `retry candidates by reason: ${counts(queue.retryPendingByReason)}`,
   );
   lines.push(
-    `contradicted: ${queue.contradicted} (count only)  unverified: ${queue.unverified}`,
+    `contradicted: ${queue.contradicted}  unverified: ${queue.unverified}`,
   );
   return lines;
 }
@@ -540,7 +553,7 @@ type Values = {
   readonly to?: string | undefined;
 };
 
-/** Evidence-backed and exhausted incomplete findings are reviewable. */
+/** Every queued Finding is reviewable: evidence-backed, contradicted, or incomplete. */
 function queued(review: Review, values: Values) {
   const campaignId = required(values.campaign, "campaign");
   const findingId = required(values.finding, "finding");
@@ -1024,7 +1037,7 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, state, environment, io }) => {
       const review = environment.profile.review(state);
       const item = queued(review, values);
-      if (item.status === "incomplete")
+      if (item.status === "incomplete" || item.status === "contradicted")
         throw new UsageError(
           "Only an evidence-backed package can be reproduced",
         );
@@ -1426,7 +1439,7 @@ const COMMANDS: readonly Command[] = [
         if (launch === undefined)
           throw new UsageError("This profile has no review Lab provisioner");
         const item = queued(environment.profile.review(state), values);
-        if (item.status === "incomplete")
+        if (item.status === "incomplete" || item.status === "contradicted")
           throw new UsageError(
             "A reproduction package is required for review Lab setup",
           );

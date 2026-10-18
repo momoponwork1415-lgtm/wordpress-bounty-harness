@@ -2,6 +2,7 @@
 status: accepted
 date: 2026-10-13
 supersedes: 0028 (withdrawn); SPEC 第 8 節のうち review モジュールの責務範囲
+amends: 0002
 ---
 
 # 人間レビュー・報告書・重複照合は Claude Code の skill に置き、Harness は自律ループ・決定論の観測・提出状況の台帳に限る
