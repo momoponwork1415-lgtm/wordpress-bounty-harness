@@ -1,15 +1,17 @@
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
 
 import {
   clearContinuousStop,
   continuousPaths,
   createContinuousRunner,
+  exploreTrials,
+  labSweepHeld,
+  pidAlive,
+  readContinuousMemo,
   readContinuousStopReason,
+  readLivePid,
   requestContinuousStop,
-  type ContinuousMemo,
 } from "./continuous.js";
 import type { CliIo, CliProfile, CliState } from "./index.js";
 
@@ -23,16 +25,6 @@ export type ContinuousHostStatus = {
 };
 
 const SELECT_MINIMUM = 1;
-const FLOOR_POLICIES = ["selection.50000.json", "selection.30000.json"];
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
 
 /** One line on the notify command's standard input; its failure never stops the runner. */
 function notify(command: string, line: string): Promise<void> {
@@ -46,39 +38,12 @@ function notify(command: string, line: string): Promise<void> {
   });
 }
 
-/** A review Lab must outlive a runner sweep (`lab up`, `lab up --for-review`). */
-async function reviewLabLive(stateDirectory: string): Promise<boolean> {
-  if (await stat(join(stateDirectory, "lab-up.json")).catch(() => null))
-    return true;
-  const pid = Number(
-    await readFile(join(stateDirectory, "review-lab.pid"), "utf8").catch(
-      () => "0",
-    ),
-  );
-  return pid > 0 && pidAlive(pid);
-}
-
 /** Counts for `continuous status`, from the ledger only. */
 export function continuousCounts(
   state: Pick<CliState, "ledger">,
   since: string,
 ) {
-  const all = (type: "discovery-run-started" | "discovery-run-finished") =>
-    state.ledger.readAll({ type, since }).map(({ event }) => event);
-  const explore = new Set(
-    all("discovery-run-started").flatMap((event) =>
-      event.type === "discovery-run-started" &&
-      (event.runKind ?? "explore") === "explore"
-        ? [`${event.campaignId} ${event.runId}`]
-        : [],
-    ),
-  );
-  const finished = all("discovery-run-finished").flatMap((event) =>
-    event.type === "discovery-run-finished" &&
-    explore.has(`${event.campaignId} ${event.runId}`)
-      ? [event.outcome]
-      : [],
-  );
+  const { started, finished } = exploreTrials(state.ledger, { since });
   const stops = state.ledger.stops({ since });
   const skipped = (reason: string) =>
     stops
@@ -88,7 +53,7 @@ export function continuousCounts(
       .reduce((sum, row) => sum + row.count, 0);
   const funnel = state.ledger.funnel(undefined, { since });
   return {
-    started: explore.size,
+    started,
     completed: finished.filter((outcome) => outcome === "completed").length,
     providerLimited: finished.filter(
       (outcome) => outcome === "provider-limited",
@@ -98,7 +63,7 @@ export function continuousCounts(
     labFailed: stops
       .filter((row) => row.type === "lab-provisioned")
       .reduce((sum, row) => sum + row.count, 0),
-    unsettled: explore.size - finished.length,
+    unsettled: started - finished.length,
     queue: funnel.raw,
     parked: funnel.parked,
   };
@@ -123,8 +88,8 @@ export async function continuousCommand(
   if (sub === "resume") {
     if (context.resume)
       throw new Error("--resume is only valid with continuous run");
-    const pid = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
-    if (pid > 0 && pidAlive(pid))
+    const pid = await readLivePid(paths.pid);
+    if (pid !== null)
       throw new Error(`continuous run is still running as pid ${pid}`);
     const cleared = await clearContinuousStop(state.stateDirectory);
     io.stdout(
@@ -144,11 +109,8 @@ export async function continuousCommand(
   if (sub === "status") {
     if (context.resume)
       throw new Error("--resume is only valid with continuous run");
-    const memo = JSON.parse(
-      await readFile(paths.memo, "utf8").catch(() => "null"),
-    ) as ContinuousMemo | null;
-    const pid = Number(await readFile(paths.pid, "utf8").catch(() => "0"));
-    const livePid = pid > 0 && pidAlive(pid) ? pid : null;
+    const memo = await readContinuousMemo(state.stateDirectory);
+    const livePid = await readLivePid(paths.pid);
     const stopReason = await readContinuousStopReason(state.stateDirectory);
     const displayState =
       stopReason !== null
@@ -248,9 +210,11 @@ export async function continuousCommand(
         configPath,
         selectionPolicyPath: selectionPath,
       }),
+    // An operator's Lab (`lab up`, `lab up --for-review`) outlives a sweep.
     async cleanupLeftovers() {
       if (activeVerification > 0) return 0;
-      if (await reviewLabLive(state.stateDirectory)) return 0;
+      if (await labSweepHeld(state.stateDirectory)) return 0;
+      if (await profile.labHeld(state)) return 0;
       const removed = await profile.cleanupLeftovers(state, {
         configPath,
         remove: true,
@@ -267,17 +231,8 @@ export async function continuousCommand(
         throw new Error("The runtime check differs from the runtime profile");
     },
     legacyHistoryAvailable: async () => (await host()).legacyHistoryAvailable,
-    floorPolicyAvailable: async () =>
-      (
-        await Promise.all(
-          FLOOR_POLICIES.map((name) =>
-            stat(join(dirname(selectionPath), name)).then(
-              () => true,
-              () => false,
-            ),
-          ),
-        )
-      ).every(Boolean),
+    floorPolicyAvailable: () =>
+      profile.floorPoliciesAvailable(state, { selectionPath }),
     readAuth: async () => {
       const expiresAt = (await host()).loginExpiresAt;
       return expiresAt === null ? null : { expiresAt };

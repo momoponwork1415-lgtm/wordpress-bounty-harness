@@ -1,5 +1,5 @@
-import { readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import { z } from "zod";
 
@@ -326,6 +326,15 @@ const labUpRecordSchema = z.strictObject({
 });
 const labUpRecordPath = (state: CliState) =>
   join(state.stateDirectory, "lab-up.json");
+
+/**
+ * The install-floor copies of the selection policy an `exhausted` runner is
+ * restarted with (OPERATIONS.md §runner); they sit next to the policy in use.
+ */
+const WORDPRESS_FLOOR_POLICY_FILES = [
+  "selection.50000.json",
+  "selection.30000.json",
+] as const;
 
 async function readLabUpRecord(
   state: CliState,
@@ -1112,6 +1121,23 @@ export function createWordPressCliProfile(
       );
     },
     labDown: (state, input) => wordPressLabDown(state, input, options),
+    // A record that exists holds the sweep even when unreadable; `lab down` decides.
+    labHeld: (state) =>
+      stat(labUpRecordPath(state)).then(
+        () => true,
+        () => false,
+      ),
+    async floorPoliciesAvailable(_state, { selectionPath }) {
+      const present = await Promise.all(
+        WORDPRESS_FLOOR_POLICY_FILES.map((name) =>
+          stat(join(dirname(selectionPath), name)).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      );
+      return present.every(Boolean);
+    },
     async cleanupLeftovers(state, input) {
       const { boundaries } = await openWordPressCampaignSession(
         options,
