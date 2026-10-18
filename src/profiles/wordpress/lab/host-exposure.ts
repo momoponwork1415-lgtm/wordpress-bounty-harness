@@ -43,6 +43,8 @@ export async function exposeWordPressLabToHost(
     readonly image: string;
     readonly httpPort: number;
     readonly databasePort?: number;
+    /** `recorder` routes host HTTP through the Lab recorder so it is captured (#352). */
+    readonly via?: "wordpress" | "recorder";
   },
 ): Promise<HostExposure> {
   if (
@@ -73,7 +75,7 @@ export async function exposeWordPressLabToHost(
       "--cap-drop=ALL",
       "--security-opt=no-new-privileges",
       "--env",
-      `WBH_WP_IP=${handle.internalIp}`,
+      `WBH_WP_IP=${input.via === "recorder" ? handle.recorderIp : handle.internalIp}`,
       ...(database === null ? [] : ["--env", `WBH_DB_IP=${database.ip}`]),
       "--entrypoint=node",
       input.image,
@@ -97,4 +99,16 @@ export async function exposeWordPressLabToHost(
     httpPort: input.httpPort,
     databasePort: database?.port ?? null,
   };
+}
+
+/** Removes the host gateway so the Lab network can be torn down; true when gone. */
+export async function withdrawWordPressLabFromHost(
+  lab: Pick<WordPressLabSession, "id" | "docker">,
+): Promise<boolean> {
+  try {
+    const result = await lab.docker(["rm", "--force", hostGatewayName(lab.id)]);
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
 }

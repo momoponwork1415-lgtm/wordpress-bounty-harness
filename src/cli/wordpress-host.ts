@@ -14,7 +14,10 @@ import {
   ProviderAttachmentStore,
   readPrivateChatgptLogin,
 } from "../discovery/index.js";
-import { canonicalDigest } from "../infrastructure/canonical-json.js";
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../infrastructure/canonical-json.js";
 import {
   runNativeModelProcess,
   type NativeModelProcessResult,
@@ -25,6 +28,7 @@ import {
   SourceAcquisitionError,
   type Snapshot,
 } from "../snapshot/index.js";
+import { exportReviewBundle } from "../review/index.js";
 import type { Verifier } from "../verification/index.js";
 import {
   createWordPressOrgFetchAdapter,
@@ -51,6 +55,9 @@ import {
   type WordPressSelectionPolicy,
 } from "../profiles/wordpress/selection/index.js";
 import { CodexVerifier } from "../profiles/wordpress/verification/codex-verifier.js";
+import { HandoffVerifier } from "../profiles/wordpress/verification/handoff-verifier.js";
+import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
+import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
 import { WordPressVerifier } from "../profiles/wordpress/verification/wordpress-verifier.js";
 import {
   openTranscribedWordfenceProgramme,
@@ -577,6 +584,53 @@ export async function createWordPressHostProfile(options: {
       executor: runtime,
       attachments,
       verifier,
+      // The same Harness half as the Codex path; only the transport hands the Lab to a skill (#352).
+      handoffVerifier: (handoff) => ({
+        attempt: ({
+          campaignId,
+          finding,
+          lab: handle,
+          record,
+          referenceRoute,
+          restartObservation,
+        }) =>
+          new WordPressVerifier({
+            transport: new HandoffVerifier({
+              directory: handoff.directory,
+              ports: { http: handoff.httpPort, database: handoff.databasePort },
+              handle,
+              lab,
+              reviewExport: async () =>
+                canonicalJson(
+                  await exportReviewBundle({
+                    ledger: state.ledger,
+                    store: state.store,
+                    campaignId,
+                    findingId: finding.findingId,
+                    stateDiff: createWordPressStateDiffReader({
+                      store: state.store,
+                    }),
+                    httpEvidence: createWordPressHttpEvidenceReader({
+                      store: state.store,
+                    }),
+                    clock: state.clock,
+                  }),
+                ),
+              clock: state.clock,
+            }),
+            store: state.store,
+            ledger: state.ledger,
+            lab,
+            clock: state.clock,
+          }).attempt({
+            campaignId,
+            finding,
+            lab: handle,
+            record,
+            ...(referenceRoute === undefined ? {} : { referenceRoute }),
+            ...(restartObservation === undefined ? {} : { restartObservation }),
+          }),
+      }),
     };
   };
 

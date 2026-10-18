@@ -993,12 +993,14 @@ describe("Lab state observer around the Verifier run", () => {
       "verifier",
       `after:lab-1:${digests[0]}`,
     ]);
-    // The Verifier sees the campaign, the Finding, its ledger record and the Lab handle only.
+    // The Verifier sees the campaign, the Finding, its ledger record, the Lab
+    // handle and a way to restart the baseline; never the capture itself.
     expect(Object.keys(verifierInputs[0] as object).sort()).toEqual([
       "campaignId",
       "finding",
       "lab",
       "record",
+      "restartObservation",
     ]);
     expect(JSON.stringify(verifierInputs[0])).not.toContain(digests[0]);
     const finished = ledger.read({ type: "verification-finished" })[0]?.event;
@@ -1012,6 +1014,66 @@ describe("Lab state observer around the Verifier run", () => {
       { kind: "lab-state-after", digest: digests[1] },
       { kind: "lab-state-diff", digest: digests[2] },
     ]);
+  });
+
+  it("retakes the baseline when the Verifier restarts observation after its setup (#352)", async () => {
+    const order: string[] = [];
+    let captures = 0;
+    let store!: PrivateArtifactStore;
+    const { result, ledger } = await fixture({
+      stateObserver: (fixtureStore) => ({
+        async before() {
+          store = fixtureStore;
+          captures++;
+          order.push(`before:${captures}`);
+          const digest = await store.putFiles({
+            "lab-state.json": `{"n":${captures}}`,
+          });
+          return { digest, state: { n: captures } };
+        },
+        async after(_lab, before) {
+          order.push(
+            `after:${before.state === null ? "" : JSON.stringify(before.state)}`,
+          );
+          return {
+            status: "captured",
+            artifacts: [
+              { kind: "lab-state-before", digest: before.digest },
+              {
+                kind: "lab-state-after",
+                digest: await store.putFiles({ "lab-state.json": '{"n":9}' }),
+              },
+              {
+                kind: "lab-state-diff",
+                digest: await store.putFiles({ "lab-state-diff.json": "{}" }),
+              },
+            ],
+          };
+        },
+      }),
+      verifier: async (input) => {
+        order.push("setup");
+        await input.restartObservation?.();
+        order.push("route");
+        return {
+          status: "attempted",
+          recipeDigest: await store.putFiles({ "recipe.json": "{}" }),
+        };
+      },
+    });
+    expect(result.status).toBe("runtime-confirmed");
+    // Setup happens between the two baselines; the diff starts from the second.
+    expect(order).toEqual([
+      "before:1",
+      "setup",
+      "before:2",
+      "route",
+      'after:{"n":2}',
+    ]);
+    const finished = ledger.read({ type: "verification-finished" })[0]?.event;
+    if (finished?.type !== "verification-finished")
+      throw new Error("missing event");
+    expect(finished.labStateDiff).toEqual({ status: "captured" });
   });
 
   it("downgrades a failed capture to a missing artifact with its stage and leaves the verdict alone", async () => {

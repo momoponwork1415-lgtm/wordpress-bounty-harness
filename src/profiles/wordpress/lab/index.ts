@@ -35,6 +35,7 @@ import type {
 } from "./contract.js";
 import {
   exposeWordPressLabToHost,
+  withdrawWordPressLabFromHost,
   type HostExposure,
 } from "./host-exposure.js";
 import {
@@ -189,8 +190,15 @@ export interface WordPressLab extends LabProvisioner<
   /** Publishes the Lab on host loopback ports for a human's browser and curl (`lab up`). */
   exposeToHost(
     handle: WordPressLabHandle,
-    input: { readonly httpPort: number; readonly databasePort?: number },
+    input: {
+      readonly httpPort: number;
+      readonly databasePort?: number;
+      /** `recorder` captures the host's HTTP like a Verifier's (handoff, #352). */
+      readonly via?: "wordpress" | "recorder";
+    },
   ): Promise<HostExposure>;
+  /** Removes the `exposeToHost` gateway before teardown; true when it is gone. */
+  withdrawFromHost(handle: WordPressLabHandle): Promise<boolean>;
   /**
    * Lists Docker resources a crashed run left behind: Lab names and the given
    * patterns only. Removes them when asked; use only while no campaign runs.
@@ -560,7 +568,12 @@ export function openWordPressLab(options: {
         ...(input.databasePort === undefined
           ? {}
           : { databasePort: input.databasePort }),
+        ...(input.via === undefined ? {} : { via: input.via }),
       });
+    },
+    async withdrawFromHost(handle) {
+      const lab = sessionFor(handle);
+      return lab === undefined ? false : withdrawWordPressLabFromHost(lab);
     },
     async markCapture(handle) {
       const lab = sessionFor(handle);
