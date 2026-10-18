@@ -1,5 +1,5 @@
 ---
-status: superseded by 0017 for default prompt selection
+status: superseded by 0017 for default prompt selection; ablation mode removed by PR #357 (2026-10-18)
 ---
 # 探索promptの管理指示変種を版付きのA/B軸にする
 

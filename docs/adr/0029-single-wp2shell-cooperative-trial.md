@@ -2,6 +2,7 @@
 status: accepted
 date: 2026-10-11
 supersedes: 0025 for the default discovery route; 0017 for the default prompt
+amended-by: 0033（v8・最低 60 分・子 4・依存 source）, 0034（索引・coverage の削除）, 0035（検証は skill）, 0036（操作者の再開）
 ---
 
 # 探索の主経路を単一の WP2Shell 協調 Trial に戻す
@@ -60,3 +61,13 @@ Root は固定入口索引の各 id の状態を typed coverage record で報告
 新規探索で実行できる目的promptを `wp2shell-bounty-v7`、起動modeを `wp2shell` だけにする。旧 prompt・旧modeの本文・digestと実験結果は履歴照合用に保存するが、新しい Trial の選択肢から外す。記事の「同時に最大4体を起動」に合わせて、Rootが起動できる子の上限を3体から4体にする。v7 は WP2Shell 記事の探索指針をほぼそのまま用い、課題を WordPress プラグインの Programme Boundary 内の効果へ、`/flag` を後続の独立した Harness 判定器による nonce 付き canary の観測へ置き換える。探索者には canary を渡さず、脆弱性の存在も保証しない。
 
 v7 の wall 上限は120分、最低実行時間は設けない。Rootが早く最終報告すれば終了する。記事にない入口索引と公開履歴カタログは渡さず、v6の coverage 閉鎖条件と `incomplete(depth)` 判定もv7には適用しない。旧Trialの台帳、判定結果、coverage記録は読み続ける。変更した本文と日本語訳、出典対照は [v7 文書](../reviews/2026-10-18-wp2shell-bounty-v7.md)に置く。
+
+## 2026-10-19 注記: 後の決定との対応（文書整理、所有者の委任で AI）
+
+本文は決定時の記録として残す。新しい決定は足さず、現行の行き先だけを書く。
+
+- 「決定」第 1 段落の `wp2shell-bounty-v2`、Root＋最大 3 子、比較 arm: 新規探索は `wp2shell-bounty-v8` だけ、子は最大 4（[ADR 0033](0033-minimum-exploration-and-pinned-dependency-sources.md)、本 ADR の 2026-10-18 節）。比較 arm の mode は PR #357 で削除。
+- 「決定」第 3 段落の wall 60 分と「最低実行時間を強制しない」、2026-10-18 節の「v7 の最低実行時間は設けない」: wall 上限 120 分、最低 60 分は同じ協調セッションで能動的に探索する（ADR 0033）。
+- 「既存決定との関係」の「探索用 Lab は任意とし、既定の付属設定は維持する」: PR #365 で既定は `discovery.lab: none`（Lab を付けない）。`"attached"` は明示したときだけ。
+- 2026-10-17 の深度の記録と「2026-10-17 改訂」: coverage record と `incomplete(depth)` の生成は ADR 0034 で削除。台帳の旧 event は読み続ける。
+- 検証の前提作りと再現は skill（[ADR 0035](0035-verification-as-a-skill.md)）、`provider-cyber-policy` で止まった Root の再開は [ADR 0036](0036-operator-resume-after-provider-refusal.md)。

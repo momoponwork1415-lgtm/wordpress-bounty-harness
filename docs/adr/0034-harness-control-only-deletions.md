@@ -57,3 +57,8 @@ Verifier 指示の連鎖（`wordpress-verifier.ts` の nextStep）、`scenarios.
 ## 消し方
 
 この PR の merge commit を `git revert` する。削除前の main は `7e65e71`（PR #372 merge 後）で、reviewing session が `archive/pre-adr-0034` tag をそこに置く。索引や coverage を戻すときはその tag から branch を切り、この ADR を superseded にして AGENTS.md の責務節を改める。
+
+## 2026-10-19 注記（文書整理、所有者の委任で AI）
+
+- 「第 1 項（dispatch / assignment / ablation / 比較 arm の mode）は #351」: 実際の削除は PR #357（#351 を v8 の上で置き直したもの）。
+- 「#352 と同時に削除するもの」: #352 の skill 化は PR #374（[ADR 0035](0035-verification-as-a-skill.md)）で merge したが、Verifier 指示の連鎖、`scenarios.ts` の `nextWordPressScenario`、plugin 別 Lab adapter、`lab.scenarioId` はまだ main にある。削除は #352 の受け入れ（Brizy / TranslatePress で handoff が判定器の結論まで届く）の後に #353 で行う。front matter の「0026（scenario catalogue の行は #352 で改訂）」も同じ時点に読み替える。
