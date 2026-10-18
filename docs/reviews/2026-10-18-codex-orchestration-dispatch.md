@@ -12,7 +12,8 @@
 最初に読む（sub-session にも必ず読ませる）: AGENTS.md、docs/DEVELOPMENT.md 第 2・3・5 節、docs/reviews/2026-10-18-source-only-dispatch-design.md、docs/reviews/2026-10-18-codex-plan-dispatch-architecture.md。file が無ければ所有者に聞いて止まる。prompt の .md（src/profiles/wordpress/prompts/）は brief 4 の担当以外は開かない。
 
 作業の分割（計画の brief を PR 単位に割る。各 PR の追加差分は 500 行以内）:
-  1a. brief 1 の 1: task-plan.ts と test だけ（純関数、config と実行に触らない）。
+  1a-0 / 1a-1 / 1a-2. Issue #328 の 2026-10-18 comment と計画の「Brief 1a-0 〜 1a-2」: unresolved 一覧、agent による索引補完（Harness 側）、目的文 index-completion-v1。1a の前に置く。1a-2 は prompt file なので 4b と同じ扱い（出典の 5 要素以外を書かない、PR 本文の先頭に明記）。
+  1a. brief 1 の 1: task-plan.ts と test だけ（純関数、config と実行に触らない）。併合後の索引を入力にする。
   1b. brief 1 の 2〜3: dispatch mode の config、plannedTrials、台帳 field（runKind task、taskId など）、課題失敗の扱い、retry 1 回。
   1c. brief 1 の 3 の sandbox 部分: command 単位 timeout、solo の maxRequests、concurrency 上限 16。
   1d. brief 1 の 4: examples/campaign-dispatch.json と CLI の通し test。
