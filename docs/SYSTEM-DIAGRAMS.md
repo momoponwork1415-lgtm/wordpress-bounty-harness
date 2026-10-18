@@ -270,7 +270,7 @@ sequenceDiagram
 flowchart TB
   subgraph git[Git（公開してよいもの）]
     SPEC[docs/SPEC.md, ADR]
-    POL[profiles/wordpress/policy<br/>campaign.json, selection*.json,<br/>programme-scope.md]
+    POL[profiles/wordpress/policy<br/>campaign.json, selection.json,<br/>programme-scope.md]
     PINS[docs/evaluation/*-pins.json<br/>digest と版だけ]
     PROMPT[prompts, skills<br/>owner-approved]
   end
@@ -523,7 +523,7 @@ flowchart TB
 | parked | 受理したが、報奨 Programme の対象外の影響だった Finding。検証とレビューには進めない |
 | Programme Boundary | 報奨 Programme（Wordfence）が「対象」と定める範囲を写した文章。版と digest で固定 |
 | Trust boundary | 「誰の権限までを信頼の内側とするか」を人間が書いた宣言。contributor 以上の権限は内側 |
-| 入口索引 | source から機械的に拾った「外から呼べる入口」の一覧。経路は指示しない |
+| 入口索引 | source から機械的に拾った「外から呼べる入口」の一覧。経路は指示しない。ADR 0034 で生成 code を削除し、旧 Trial の記録にだけ現れる |
 | Verifier | Finding を実際の Lab で再現してみる agent。手順（recipe）を書き、HTTP を実行する。証明はしない |
 | 判定器（judge） | Harness が持つ決定論の検査。Verifier の自己申告ではなく、Harness が捕捉した HTTP と canary の観測だけを見て結果を出す |
 | canary / nonce | Lab にわざと置いておく目印（canary）。毎回違う使い捨ての値（nonce）を埋め、その値が外に出てきたり変わったりしたら「実際に届いた」と分かる。囮（おとり）と合い言葉の組み合わせ |
