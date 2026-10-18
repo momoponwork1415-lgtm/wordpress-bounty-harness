@@ -8,7 +8,6 @@ import {
   createWordPressHostProfile,
   loadWordPressHostConfig,
 } from "./wordpress-host.js";
-import { openWordPressReviewLab } from "../profiles/wordpress/lab/review-lab.js";
 
 const io: CliIo = {
   stdout: (line) => process.stdout.write(`${line}\n`),
@@ -45,14 +44,7 @@ async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
   const host = await loadWordPressHostConfig(resolve(hostPath));
-  const baseProfile = await createWordPressHostProfile({ host });
-  const profile = {
-    ...baseProfile,
-    reviewLab: (
-      state: Parameters<NonNullable<typeof baseProfile.reviewLab>>[0],
-      input: { readonly packageDigest: string; readonly category: string },
-    ) => openWordPressReviewLab({ host, store: state.store, ...input }),
-  };
+  const profile = await createWordPressHostProfile({ host });
   return runCli(
     args,
     {

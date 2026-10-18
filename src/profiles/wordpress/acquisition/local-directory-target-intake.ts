@@ -1,15 +1,13 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import {
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  readdir,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import {
+  checkSourceAgainstManifest,
+  SourceTreeError,
+  walkCanonicalSourceTree,
+  type SourceTreeRejection,
+} from "../../../infrastructure/canonical-source-tree.js";
 import { canonicalJson, sha256Digest } from "./canonical-json.js";
 import {
   intakeDispositionSchema,
@@ -49,15 +47,6 @@ interface CaptureRejected {
 
 type CaptureResult = CaptureSuccess | CaptureRejected;
 
-const structuralReasonOrder: readonly TargetIntakeReason[] = [
-  "source-not-directory",
-  "link-entry",
-  "hardlink-entry",
-  "non-regular-entry",
-  "path-collision",
-  "quota-exceeded",
-];
-
 function rawDigest(bytes: Uint8Array): string {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
@@ -71,168 +60,81 @@ function hasErrorCode(error: unknown, code: string): boolean {
   );
 }
 
-function sortedReasons(
-  reasons: ReadonlySet<TargetIntakeReason>,
-): readonly TargetIntakeReason[] {
-  return structuralReasonOrder.filter((reason) => reasons.has(reason));
-}
-
-async function readRegularFileWithoutFollowingLink(
-  absolutePath: string,
-): Promise<{ readonly bytes: Buffer; readonly nlink: number } | undefined> {
-  let handle;
-  try {
-    handle = await open(
-      absolutePath,
-      constants.O_RDONLY | constants.O_NOFOLLOW,
-    );
-  } catch (error) {
-    if (hasErrorCode(error, "ELOOP")) {
+/** The strict walk's first refusal, in the intake's vocabulary. */
+function structuralReason(
+  rejection: SourceTreeRejection,
+): TargetIntakeReason | undefined {
+  switch (rejection) {
+    case "root-not-directory":
+      return "source-not-directory";
+    case "symbolic-link":
+      return "link-entry";
+    case "hard-link":
+      return "hardlink-entry";
+    case "non-regular-entry":
+    case "invalid-path":
+      return "non-regular-entry";
+    case "path-collision":
+      return "path-collision";
+    case "bounds-exceeded":
+      return "quota-exceeded";
+    case "changed-while-reading":
       return undefined;
-    }
-    throw error;
-  }
-  try {
-    const before = await handle.stat();
-    if (!before.isFile()) {
-      return undefined;
-    }
-    const bytes = await handle.readFile();
-    const after = await handle.stat();
-    if (
-      before.dev !== after.dev ||
-      before.ino !== after.ino ||
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      bytes.byteLength !== after.size
-    ) {
-      throw new Error(
-        `Source file changed while being captured: ${absolutePath}`,
-      );
-    }
-    return { bytes, nlink: after.nlink };
-  } finally {
-    await handle.close();
   }
 }
 
+/** Walks the tree once, then reads back exactly the bytes the manifest names. */
 async function captureDirectory(
   sourceDirectory: string,
   policy: ManualTargetIntakeRequest["policy"],
 ): Promise<CaptureResult> {
-  let rootStat;
+  let walked;
   try {
-    rootStat = await lstat(sourceDirectory);
+    walked = await walkCanonicalSourceTree(sourceDirectory, {
+      maxEntries: policy.limits.maxEntries,
+      maxBytes: policy.limits.maxTotalBytes,
+    });
   } catch (error) {
     if (hasErrorCode(error, "ENOENT") || hasErrorCode(error, "ENOTDIR")) {
       return { status: "rejected", reasons: ["source-not-directory"] };
     }
+    const reason =
+      error instanceof SourceTreeError
+        ? structuralReason(error.code)
+        : undefined;
+    if (reason !== undefined) return { status: "rejected", reasons: [reason] };
     throw error;
   }
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-    return { status: "rejected", reasons: ["source-not-directory"] };
+  const { entries } = walked.manifest;
+  if (
+    entries.some(
+      (entry) =>
+        entry.size > policy.limits.maxFileBytes ||
+        Buffer.byteLength(entry.path, "utf8") > policy.limits.maxPathBytes ||
+        entry.path.split("/").length - 1 > policy.limits.maxDepth,
+    )
+  ) {
+    return { status: "rejected", reasons: ["quota-exceeded"] };
   }
-
-  const files: CapturedFile[] = [];
-  const reasons = new Set<TargetIntakeReason>();
-  const collisionKeys = new Set<string>();
-  let entryCount = 0;
-  let totalBytes = 0;
-
-  const walk = async (
-    absoluteDirectory: string,
-    pathSegments: readonly string[],
-  ): Promise<void> => {
-    const entries = await readdir(absoluteDirectory, { withFileTypes: true });
-    entries.sort((left, right) =>
-      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
-    );
-    for (const entry of entries) {
-      entryCount += 1;
-      if (entryCount > policy.limits.maxEntries) {
-        reasons.add("quota-exceeded");
-        continue;
-      }
-      const segments = [...pathSegments, entry.name];
-      const relativePath = segments.join("/");
-      const absolutePath = join(absoluteDirectory, entry.name);
-      if (
-        entry.name.includes("\\") ||
-        entry.name.includes("\0") ||
-        entry.name === "." ||
-        entry.name === ".."
-      ) {
-        reasons.add("non-regular-entry");
-        continue;
-      }
-      if (
-        Buffer.byteLength(relativePath, "utf8") > policy.limits.maxPathBytes ||
-        segments.length - 1 > policy.limits.maxDepth
-      ) {
-        reasons.add("quota-exceeded");
-        continue;
-      }
-      const collisionKey = relativePath.normalize("NFC").toLowerCase();
-      if (collisionKeys.has(collisionKey)) {
-        reasons.add("path-collision");
-        continue;
-      }
-      collisionKeys.add(collisionKey);
-
-      const stat = await lstat(absolutePath);
-      if (stat.isSymbolicLink()) {
-        reasons.add("link-entry");
-        continue;
-      }
-      if (stat.isDirectory()) {
-        await walk(absolutePath, segments);
-        continue;
-      }
-      if (!stat.isFile()) {
-        reasons.add("non-regular-entry");
-        continue;
-      }
-      if (stat.nlink > 1) {
-        reasons.add("hardlink-entry");
-        continue;
-      }
-      if (stat.size > policy.limits.maxFileBytes) {
-        reasons.add("quota-exceeded");
-        continue;
-      }
-      const captured = await readRegularFileWithoutFollowingLink(absolutePath);
-      if (captured === undefined) {
-        reasons.add("link-entry");
-        continue;
-      }
-      if (captured.nlink > 1) {
-        reasons.add("hardlink-entry");
-        continue;
-      }
-      totalBytes += captured.bytes.byteLength;
-      if (totalBytes > policy.limits.maxTotalBytes) {
-        reasons.add("quota-exceeded");
-        continue;
-      }
-      files.push({
-        path: relativePath,
-        digest: rawDigest(captured.bytes),
-        size: captured.bytes.byteLength,
-        bytes: captured.bytes,
-      });
-    }
-  };
-
-  await walk(sourceDirectory, []);
-  if (reasons.size > 0) {
-    return { status: "rejected", reasons: sortedReasons(reasons) };
-  }
-  if (files.length === 0) {
+  if (entries.length === 0) {
     return { status: "rejected", reasons: ["main-plugin-file-missing"] };
   }
-  files.sort((left, right) =>
-    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  const files: CapturedFile[] = [];
+  const checked = await checkSourceAgainstManifest(
+    walked.manifest,
+    (path) => readFile(join(sourceDirectory, path)),
+    async (entry, bytes) => {
+      files.push({
+        ...entry,
+        bytes: Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes),
+      });
+    },
   );
+  if (checked.status !== "verified") {
+    throw new Error(
+      `Source file changed while being captured: ${checked.mismatch.path}`,
+    );
+  }
   return { status: "captured", files };
 }
 

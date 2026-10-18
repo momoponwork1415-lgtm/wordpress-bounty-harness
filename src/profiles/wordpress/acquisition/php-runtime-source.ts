@@ -1,15 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-  lstat,
-  mkdir,
-  readdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
+import {
+  SourceTreeError,
+  walkCanonicalSourceTree,
+} from "../../../infrastructure/canonical-source-tree.js";
 import type { NativeModelProcessResult } from "../../../infrastructure/native-model-process.js";
 import { runNativeModelProcess } from "../../../infrastructure/native-model-process.js";
 import {
@@ -271,26 +267,45 @@ export function openPhpRuntimeSource(options: {
       )?.[1];
       if (sourceVersion !== version)
         throw failure("source-mismatch", "php-source-version-mismatch");
-      const entries = await manifestEntries(directory, limits);
+      const { manifest } = await walkCanonicalSourceTree(directory, limits);
       return [
         {
           identity: PHP_RUNTIME_SOURCE_IDENTITY,
           version,
-          manifest: {
-            kind: "canonical-file-manifest" as const,
-            schemaVersion: 1 as const,
-            entries,
-          },
+          manifest,
           readFile: (path: string) => readFile(join(directory, path)),
         },
       ];
     } catch (error: unknown) {
       if (error instanceof SourceAcquisitionError) throw error;
+      if (error instanceof SourceTreeError) throw sourceTreeFailure(error);
       throw failure("deferred", "php-source-acquisition-failed", {
         detail: error instanceof Error ? error.message : String(error),
       });
     }
   };
+}
+
+/** The extracted tree is refused under the same reasons the archive listing is. */
+function sourceTreeFailure(error: SourceTreeError): SourceAcquisitionError {
+  switch (error.code) {
+    case "invalid-path":
+      return failure("invalid-archive", "php-source-invalid-path");
+    case "symbolic-link":
+      return failure("invalid-archive", "php-source-symbolic-link");
+    case "path-collision":
+      return failure("invalid-archive", "php-source-path-collision");
+    case "bounds-exceeded":
+      return failure("quota-exceeded", "php-source-limit");
+    case "hard-link":
+    case "non-regular-entry":
+    case "root-not-directory":
+      return failure("invalid-archive", "php-source-non-regular-entry");
+    case "changed-while-reading":
+      return failure("deferred", "php-source-acquisition-failed", {
+        detail: error.message,
+      });
+  }
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -300,44 +315,4 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-async function manifestEntries(
-  root: string,
-  limits: { readonly maxEntries: number; readonly maxBytes: number },
-): Promise<{ path: string; digest: string; size: number }[]> {
-  const entries: { path: string; digest: string; size: number }[] = [];
-  let bytes = 0;
-  const walk = async (
-    absolute: string,
-    segments: readonly string[],
-  ): Promise<void> => {
-    for (const child of (await readdir(absolute, { withFileTypes: true })).sort(
-      (left, right) => (left.name < right.name ? -1 : 1),
-    )) {
-      if (/[\\\0\r\n]/.test(child.name))
-        throw failure("invalid-archive", "php-source-invalid-path");
-      const path = join(absolute, child.name);
-      const stat = await lstat(path);
-      if (stat.isSymbolicLink())
-        throw failure("invalid-archive", "php-source-symbolic-link");
-      if (stat.isDirectory()) {
-        await walk(path, [...segments, child.name]);
-        continue;
-      }
-      if (!stat.isFile() || stat.nlink > 1)
-        throw failure("invalid-archive", "php-source-non-regular-entry");
-      const content = await readFile(path);
-      bytes += content.byteLength;
-      entries.push({
-        path: [...segments, child.name].join("/"),
-        digest: `sha256:${createHash("sha256").update(content).digest("hex")}`,
-        size: content.byteLength,
-      });
-      if (entries.length > limits.maxEntries || bytes > limits.maxBytes)
-        throw failure("quota-exceeded", "php-source-limit");
-    }
-  };
-  await walk(root, []);
-  return entries.sort((left, right) => (left.path < right.path ? -1 : 1));
 }
