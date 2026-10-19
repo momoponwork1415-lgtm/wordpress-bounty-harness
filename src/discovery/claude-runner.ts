@@ -15,6 +15,8 @@ export const CLAUDE_RUNNER_SOURCE = String.raw`
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const TOOLS = ["Read", "Glob", "Grep", "Bash", "Write", "Edit", "Agent"];
+// The SDK gives the Root this tool for the json_schema report; children answer in text.
+const REPORT_TOOL = "StructuredOutput";
 const MAX_CHILDREN = 4;
 const MAX_FINAL_MESSAGE = 64 * 1024;
 const DENIALS = ${JSON.stringify(CLAUDE_RUNNER_DENIALS)};
@@ -41,6 +43,8 @@ const deny = (reason) => ({
   },
 });
 const preToolUse = async (input) => {
+  if (input.tool_name === REPORT_TOOL)
+    return input.agent_id === undefined ? {} : deny(DENIALS.outsideSurface);
   if (!TOOLS.includes(input.tool_name)) return deny(DENIALS.outsideSurface);
   if (input.tool_name !== "Agent") return {};
   if (input.agent_id !== undefined) return deny(DENIALS.outsideSurface);
@@ -107,7 +111,7 @@ async function turn(prompt) {
       effort: config.effort,
       cwd: "/workspace/main",
       tools: TOOLS,
-      allowedTools: TOOLS,
+      allowedTools: [...TOOLS, REPORT_TOOL],
       permissionMode: "default",
       settingSources: [],
       pathToClaudeCodeExecutable: "/usr/local/bin/claude",
