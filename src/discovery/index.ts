@@ -44,7 +44,10 @@ export {
 export {
   assessTrialResume,
   executeTrialResume,
+  recordInterruptedRun,
   RESUME_WALL_FLOOR_MS,
+  supersedingRun,
+  type InterruptedRunRecording,
   type ResumeAssessment,
   type ResumePlan,
   type ResumeRefusalReason,

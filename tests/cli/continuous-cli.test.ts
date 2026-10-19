@@ -90,11 +90,11 @@ async function setup(
       resume: false,
       ...options,
     });
-  /** One explore Trial (or a run of another kind) at an instant, with its finish. */
+  /** One explore Trial (or a run of another kind) at an instant, with its finish unless `null`. */
   const run = async (
     campaignId: string,
     occurredAt: string,
-    finished: object,
+    finished: object | null,
     runKind: "explore" | "child" = "explore",
   ) => {
     const runId = `run-${++ids}`;
@@ -115,6 +115,7 @@ async function setup(
       history: { mode: "none" },
       configuration: { promptVariant: "v8", assignmentUnit: "cooperative" },
     });
+    if (finished === null) return;
     await append({
       type: "discovery-run-finished",
       runId,
@@ -198,6 +199,21 @@ describe("continuous status", () => {
     );
     expect(t.stdout[2]).toBe(
       "week  trials 1  completed 1  provider-limited 1  provider-refused 0  run-failed 0  lab-failed 0  unsettled 0  findings queue 0 + parked 0",
+    );
+  });
+
+  it("leaves an unfinished run that a restarted campaign ran again out of trials and unsettled", async () => {
+    const t = await setup(fakeProfile());
+    // The host died during the first run; the restarted runner ran the target again.
+    await t.run("prod-20261021-1", "2026-10-21T01:00:00Z", null);
+    await t.run("prod-20261021-1", "2026-10-21T03:00:00Z", {
+      outcome: "completed",
+    });
+    // Another campaign's run died and was not run again: resumable, so unsettled.
+    await t.run("prod-20261021-2", "2026-10-21T04:00:00Z", null);
+    expect(await t.command("status")).toBe(0);
+    expect(t.stdout[1]).toBe(
+      "today  trials 2  completed 1  provider-limited 0  provider-refused 0  run-failed 0  lab-failed 0  unsettled 1  findings queue 0 + parked 0",
     );
   });
 

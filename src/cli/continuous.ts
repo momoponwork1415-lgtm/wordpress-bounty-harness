@@ -17,7 +17,11 @@ import type {
   LedgerEventV1,
   LedgerReadAllQuery,
 } from "../ledger/index.js";
-import { countsAsTrial, recordedTrialActivity } from "../discovery/index.js";
+import {
+  countsAsTrial,
+  recordedTrialActivity,
+  supersedingRun,
+} from "../discovery/index.js";
 import type { CampaignSummary } from "./pipeline.js";
 
 // Final design P6. Constants, not settings.
@@ -300,8 +304,10 @@ function unboundBatch(deps: ContinuousDeps): string | undefined {
 
 /**
  * Explore runs in the ledger: how many started, the outcome of each one that
- * finished, and how many finished runs SPEC §6 does not count as a Trial.
- * Continuation and child runs belong to their Trial, not counted.
+ * finished, how many finished runs SPEC §6 does not count as a Trial, and how
+ * many unfinished runs a later start of the same Trial ordinal replaced (a
+ * restarted campaign ran the target again; ADR 0036). Continuation and child
+ * runs belong to their Trial, not counted.
  */
 export function exploreTrials(
   ledger: Pick<Ledger, "readAll">,
@@ -310,18 +316,20 @@ export function exploreTrials(
   readonly started: number;
   readonly finished: readonly string[];
   readonly notTrials: number;
+  readonly superseded: number;
 } {
   const key = (event: { campaignId: string; runId: string }) =>
     `${event.campaignId} ${event.runId}`;
-  const explore = new Set(
-    readAll(ledger, { ...query, type: "discovery-run-started" }).flatMap(
-      (event) =>
-        event.type === "discovery-run-started" &&
-        (event.runKind ?? "explore") === "explore"
-          ? [key(event)]
-          : [],
-    ),
+  const starts = readAll(ledger, {
+    ...query,
+    type: "discovery-run-started",
+  }).flatMap((event) =>
+    event.type === "discovery-run-started" &&
+    (event.runKind ?? "explore") === "explore"
+      ? [event]
+      : [],
   );
+  const explore = new Set(starts.map(key));
   const finishedEvents = readAll(ledger, {
     ...query,
     type: "discovery-run-finished",
@@ -335,10 +343,17 @@ export function exploreTrials(
     (event) =>
       !countsAsTrial(event, active.has(`${event.campaignId}\0${event.runId}`)),
   ).length;
+  const finishedKeys = new Set(finishedEvents.map(key));
+  const superseded = starts.filter(
+    (event) =>
+      !finishedKeys.has(key(event)) &&
+      supersedingRun(starts, event) !== undefined,
+  ).length;
   return {
     started: explore.size,
     finished: finishedEvents.map((event) => event.outcome),
     notTrials,
+    superseded,
   };
 }
 

@@ -7,6 +7,7 @@ import {
   assessTrialResume,
   DISCOVERY_LEFTOVER_PATTERNS,
   executeTrialResume,
+  recordInterruptedRun,
 } from "../discovery/index.js";
 import type { PlannedDiscoveryRun } from "../discovery/index.js";
 import { Review } from "../review/index.js";
@@ -634,10 +635,11 @@ async function planWordPressDiscovery(
 }
 
 /**
- * `campaign resume --run`: continue one provider-refused Root thread in a new
- * sandbox on the same Snapshot (ADR 0036). The resumability rule lives in the
- * discovery module; this body only rebuilds the WordPress inputs the original
- * run had (prompt text, source mounts, runtime profile) and reports.
+ * `campaign resume --run`: continue one stopped Root thread in a new sandbox on
+ * the same Snapshot (ADR 0036). A run whose host died is sealed from its
+ * sandbox's leftovers first. The rules live in the discovery module; this body
+ * only rebuilds the WordPress inputs the original run had (prompt text, source
+ * mounts, runtime profile) and reports.
  */
 async function resumeWordPressCampaignRun(
   state: CliState,
@@ -681,6 +683,34 @@ async function resumeWordPressCampaignRun(
     lab: undefined,
     source,
   });
+  const context = {
+    campaignId: input.campaignId,
+    input: {
+      schemaVersion: 1 as const,
+      snapshotDigest: snapshot.digest,
+      trustBoundary: { version: trustBoundary.id, text: trustBoundary.text },
+      programmeBoundary: config.programmeBoundary,
+      modelProfileDigest: boundaries.runtimeProfile.digest,
+      promptDigest: objective.digest,
+      stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      lab: { mode: "none" as const },
+      history: { mode: "none" as const },
+    },
+    attachments: boundaries.attachments,
+    evidence: state.store,
+    ledger: state.ledger,
+    recordReport: recordWordPressReport,
+    clock: state.clock,
+  };
+  const run = {
+    targetSnapshotDigest: snapshot.digest,
+    profile: boundaries.runtimeProfile,
+    coordination: "cooperative" as const,
+    prompt,
+    resumePrompt,
+    ...wordPressSourceMounts(source),
+  };
+  const { recoverInterrupted } = boundaries.executor;
   const assessment = await assessTrialResume({
     ledger: state.ledger,
     evidence: state.store,
@@ -694,40 +724,35 @@ async function resumeWordPressCampaignRun(
     profileDigest: boundaries.runtimeProfile.digest,
     wallTimeMs: config.runWallTimeMinutes * 60_000,
     minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
+    // A run whose host died is sealed first, then resumed like any other (ADR 0036).
+    ...(recoverInterrupted === undefined
+      ? {}
+      : {
+          recoverInterrupted: (interrupted) =>
+            recordInterruptedRun(
+              context,
+              {
+                recoverInterrupted: (transportRun, startedAt) =>
+                  recoverInterrupted.call(
+                    boundaries.executor,
+                    transportRun,
+                    startedAt,
+                  ),
+              },
+              interrupted,
+              {
+                ...run,
+                minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
+              },
+            ),
+        }),
   });
   if (assessment.status === "refused") return assessment;
   const { plan } = assessment;
   const outcome = await executeTrialResume(
-    {
-      campaignId: input.campaignId,
-      input: {
-        schemaVersion: 1,
-        snapshotDigest: snapshot.digest,
-        trustBoundary: { version: trustBoundary.id, text: trustBoundary.text },
-        programmeBoundary: config.programmeBoundary,
-        modelProfileDigest: boundaries.runtimeProfile.digest,
-        promptDigest: objective.digest,
-        stopRules: { maxRuns: 1, noFindingRuns: 1 },
-        lab: { mode: "none" },
-        history: { mode: "none" },
-      },
-      executor: boundaries.executor,
-      attachments: boundaries.attachments,
-      evidence: state.store,
-      ledger: state.ledger,
-      recordReport: recordWordPressReport,
-      clock: state.clock,
-    },
+    { ...context, executor: boundaries.executor },
     plan,
-    {
-      runId: state.newId(),
-      targetSnapshotDigest: snapshot.digest,
-      profile: boundaries.runtimeProfile,
-      coordination: "cooperative",
-      prompt,
-      resumePrompt,
-      ...wordPressSourceMounts(source),
-    },
+    { runId: state.newId(), ...run },
   );
   return {
     status: "resumed",

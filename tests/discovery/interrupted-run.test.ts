@@ -12,13 +12,18 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { exploreTrials } from "../../src/cli/continuous.js";
 import {
+  assessTrialResume,
   CodexNativeAgentRuntime,
+  createNativeRunReceipt,
   defineAgentRuntimeProfile,
+  executeTrialResume,
   GvisorCodexSandbox,
   PROVIDER_UPSTREAM_ORIGIN,
   ProviderAttachmentStore,
   providerCredentialEgressReceiptSchema,
+  recordInterruptedRun,
   type DiscoveryTransportRun,
   type ProviderCredentialEgressBroker,
   type SandboxOwner,
@@ -368,6 +373,26 @@ async function fixture() {
       },
       T0,
     );
+  /** `campaign resume` in another process, with the discovery-side sealing wired in. */
+  const resumeFrom = (owner: SandboxOwner, alive: (pid: number) => boolean) => {
+    const runtime = runtimeOn(owner, alive);
+    return assessTrialResume({
+      ledger,
+      evidence,
+      attachments,
+      campaignId: "campaign-1",
+      runId: "run-1",
+      snapshotDigest: digest,
+      promptDigest,
+      prompt,
+      resumePrompt,
+      profileDigest: profile.digest,
+      wallTimeMs: 120 * MINUTE,
+      minimumActiveMs: 60 * MINUTE,
+      recoverInterrupted: (started) =>
+        recordInterruptedRun(context, runtime, started, run),
+    });
+  };
   return {
     scratch,
     ledger,
@@ -376,6 +401,7 @@ async function fixture() {
     recordStart,
     startOnHostA,
     recover,
+    resumeFrom,
   };
 }
 
@@ -460,5 +486,132 @@ describe("run marker and leftovers of a dead host (ADR 0036, 2026-10-19 second a
       status: "runtime-profile-differs",
       detail: otherProfile.digest,
     });
+  });
+});
+
+describe("campaign resume of an interrupted run (ADR 0036, 2026-10-19 second addendum)", () => {
+  it("seals what a dead host left behind, settles the run and resumes the same thread", async () => {
+    const t = await fixture();
+    await t.startOnHostA();
+    // Host A loses power: no finish. After the reboot another process resumes it.
+    const assessment = await t.resumeFrom(DEAD_HOST, () => false);
+    expect(assessment).toMatchObject({
+      status: "resumable",
+      plan: {
+        originalRunId: "run-1",
+        resumesRun: "run-1",
+        segment: 1,
+        consumedWallMs: 30 * MINUTE,
+        remainingWallMs: 90 * MINUTE,
+        minimumActiveMs: 30 * MINUTE,
+        researchRestored: true,
+        resume: { threadId: ROOT_THREAD },
+      },
+    });
+    if (assessment.status !== "resumable") return;
+    expect(assessment.plan.resume.sessions[0]?.content).toBe(rootRollout);
+    expect(assessment.plan.resume.research).toEqual([
+      {
+        path: "notes/plan.md",
+        contentBase64: Buffer.from("plan\n").toString("base64"),
+      },
+    ]);
+    // The original run now has its finish, and its child was recorded as on any failed run.
+    const events = t.ledger
+      .readAll({ campaignId: "campaign-1" })
+      .map(({ event }) => event);
+    expect(
+      events.find(
+        (event) =>
+          event.type === "discovery-run-finished" && event.runId === "run-1",
+      ),
+    ).toMatchObject({
+      occurredAt: T0,
+      outcome: "failed",
+      reason: "interrupted",
+      wallTimeMs: 30 * MINUTE,
+      researchArtifact: { truncated: false },
+    });
+    expect(
+      events.flatMap((event) =>
+        event.type === "discovery-run-started" ? [event.runKind] : [],
+      ),
+    ).toEqual(["explore", "child"]);
+    expect(await leftovers(t.scratch)).toEqual({ markers: [], directories: 0 });
+
+    const outcome = await executeTrialResume(
+      {
+        ...t.context,
+        executor: {
+          async execute(run) {
+            return {
+              receipt: createNativeRunReceipt({
+                runId: run.runId,
+                targetSnapshotDigest: run.targetSnapshotDigest,
+                profile: run.profile,
+                terminal: "incomplete",
+                reason: "wall",
+                startedAt: T0,
+                completedAt: "2026-10-19T01:30:00.000Z",
+              }),
+            };
+          },
+        },
+      },
+      assessment.plan,
+      {
+        runId: "run-1-segment-1",
+        targetSnapshotDigest: digest,
+        profile,
+        coordination: "cooperative",
+        prompt,
+        resumePrompt,
+        sourceDirectory: "/private/frozen-source",
+        sourceTree: { digest, entries: 1, bytes: 1 },
+      },
+    );
+    expect(outcome.runId).toBe("run-1-segment-1");
+    // Nothing is left unsettled, and the Trial is counted once.
+    const trials = exploreTrials(t.ledger, {});
+    expect(trials).toMatchObject({ started: 2, superseded: 0 });
+    expect(trials.finished).toHaveLength(2);
+    expect(t.ledger.funnel("campaign-1").discoveryAttempts).toBe(1);
+  });
+
+  it("refuses a live run and a run without leftovers, writing nothing", async () => {
+    const t = await fixture();
+    await t.recordStart("run-1");
+    expect(await t.resumeFrom(DEAD_HOST, () => false)).toEqual({
+      status: "refused",
+      reason: "session-evidence-missing",
+    });
+    const u = await fixture();
+    await u.startOnHostA();
+    const before = u.ledger.readAll({}).length;
+    expect(
+      await u.resumeFrom({ pid: 5151, bootId: "boot-a" }, () => true),
+    ).toEqual({ status: "refused", reason: "run-alive" });
+    expect(t.ledger.readAll({}).length).toBe(1);
+    expect(u.ledger.readAll({}).length).toBe(before);
+  });
+
+  it("refuses a run that a restarted campaign already ran again, and does not count it as unsettled", async () => {
+    const t = await fixture();
+    await t.startOnHostA();
+    // The runner restarted the campaign and ran the target from scratch.
+    await t.recordStart("run-2", "2026-10-19T01:00:00.000Z");
+    const before = t.ledger.readAll({}).length;
+    expect(await t.resumeFrom(DEAD_HOST, () => false)).toEqual({
+      status: "refused",
+      reason: "superseded",
+      detail: "run-2",
+    });
+    expect(t.ledger.readAll({}).length).toBe(before);
+    expect(exploreTrials(t.ledger, {})).toMatchObject({
+      started: 2,
+      finished: [],
+      superseded: 1,
+    });
+    expect((await leftovers(t.scratch)).markers).toEqual(["run-1.json"]);
   });
 });

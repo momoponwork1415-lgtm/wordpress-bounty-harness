@@ -6,6 +6,7 @@ import type { PlannedDiscoveryRun } from "./campaign.js";
 import type {
   DiscoveryResumeInput,
   DiscoveryTransportRun,
+  InterruptedRunRecovery,
 } from "./codex-native-agent-runtime.js";
 import {
   executeTrial,
@@ -33,6 +34,8 @@ const RESUME_MINIMUM_ACTIVE_FLOOR_MS = 1_000;
 export type ResumeRefusalReason =
   | "run-unknown"
   | "run-unfinished"
+  | "run-alive"
+  | "superseded"
   | "not-an-exploration"
   | "already-resumed"
   | "run-completed"
@@ -137,6 +140,104 @@ function configurationOf(
   };
 }
 
+/**
+ * The later exploration of the same campaign, Snapshot and Trial ordinal that
+ * a campaign started from scratch after `run` stopped without a finish (the
+ * runner's restart does this). Resume segments do not supersede. `starts` are
+ * in ledger order.
+ */
+export function supersedingRun(
+  starts: readonly StartedEvent[],
+  run: StartedEvent,
+): StartedEvent | undefined {
+  const index = starts.findIndex(
+    (event) => event.campaignId === run.campaignId && event.runId === run.runId,
+  );
+  return starts
+    .slice(index + 1)
+    .find(
+      (event) =>
+        event.campaignId === run.campaignId &&
+        event.snapshotDigest === run.snapshotDigest &&
+        (event.runKind ?? "explore") === "explore" &&
+        event.resumesRun === undefined &&
+        (event.trialOrdinal ?? 0) === (run.trialOrdinal ?? 0),
+    );
+}
+
+/** What sealing an interrupted run did; a refusal wrote nothing. */
+export type InterruptedRunRecording =
+  | { readonly status: "recorded" }
+  | {
+      readonly status: "refused";
+      readonly reason: Extract<
+        ResumeRefusalReason,
+        "run-alive" | "session-evidence-missing" | "runtime-profile-differs"
+      >;
+      readonly detail?: string;
+    };
+
+/**
+ * Seals a run whose host process died before its finish (ADR 0036, 2026-10-19
+ * second addendum): the executor reads back what the run's sandbox left on
+ * disk, and the finish is appended for the original run id with the reason
+ * `interrupted`, child and Root reports recorded as a failed run's are. The
+ * leftover directories are removed once sealed. Nothing is executed.
+ */
+export async function recordInterruptedRun(
+  context: Omit<TrialContext, "runWallTimeMs" | "seen" | "executor">,
+  executor: {
+    recoverInterrupted(
+      run: DiscoveryTransportRun,
+      startedAt: string,
+    ): Promise<InterruptedRunRecovery>;
+  },
+  started: StartedEvent,
+  run: Omit<DiscoveryTransportRun, "campaignInput" | "runId" | "expiresAt">,
+): Promise<InterruptedRunRecording> {
+  const transportRun = {
+    ...run,
+    runId: started.runId,
+    expiresAt: started.occurredAt,
+  };
+  const recovery = await executor.recoverInterrupted(
+    {
+      ...transportRun,
+      campaignInput: {
+        ...context.input,
+        promptDigest:
+          started.configuration.promptDigest ?? context.input.promptDigest,
+      },
+    },
+    started.occurredAt,
+  );
+  if (recovery.status === "alive")
+    return { status: "refused", reason: "run-alive" };
+  if (recovery.status === "absent")
+    return { status: "refused", reason: "session-evidence-missing" };
+  if (recovery.status === "runtime-profile-differs")
+    return {
+      status: "refused",
+      reason: "runtime-profile-differs",
+      detail: recovery.detail,
+    };
+  await executeTrial(
+    {
+      ...context,
+      executor: { execute: async () => recovery.result },
+      seen: new Set(),
+    },
+    {
+      trialId: started.trialId ?? started.runId,
+      trialOrdinal: started.trialOrdinal ?? 0,
+      explore: { run: transportRun, configuration: configurationOf(started) },
+      startRecordedAt: started.occurredAt,
+    },
+  );
+  await recovery.discard();
+  return { status: "recorded" };
+}
+
 /** The chain the run belongs to, oldest first; `resumesRun` links each segment to the one before. */
 function segmentChain(
   starts: ReadonlyMap<string, StartedEvent>,
@@ -177,6 +278,13 @@ export async function assessTrialResume(options: {
   /** The Trial's wall and active minimum, shared across segments. */
   readonly wallTimeMs: number;
   readonly minimumActiveMs: number;
+  /**
+   * Seals a run that has a start but no finish because its host process died
+   * (`recordInterruptedRun`). Absent, such a run is `run-unfinished`.
+   */
+  readonly recoverInterrupted?: (
+    started: StartedEvent,
+  ) => Promise<InterruptedRunRecording>;
 }): Promise<ResumeAssessment> {
   const refused = (
     reason: ResumeRefusalReason,
@@ -192,13 +300,17 @@ export async function assessTrialResume(options: {
     type: "discovery-run-started",
   }))
     if (event.type === "discovery-run-started") starts.set(event.runId, event);
-  const finishes = new Map<string, FinishedEvent>();
-  for (const { event } of options.ledger.readAll({
-    campaignId: options.campaignId,
-    type: "discovery-run-finished",
-  }))
-    if (event.type === "discovery-run-finished")
-      finishes.set(event.runId, event);
+  const readFinishes = () => {
+    const finishes = new Map<string, FinishedEvent>();
+    for (const { event } of options.ledger.readAll({
+      campaignId: options.campaignId,
+      type: "discovery-run-finished",
+    }))
+      if (event.type === "discovery-run-finished")
+        finishes.set(event.runId, event);
+    return finishes;
+  };
+  let finishes = readFinishes();
 
   const started = starts.get(options.runId);
   if (started === undefined) return refused("run-unknown");
@@ -208,11 +320,6 @@ export async function assessTrialResume(options: {
     (event) => event.resumesRun === options.runId,
   );
   if (later !== undefined) return refused("already-resumed", later.runId);
-  const finished = finishes.get(options.runId);
-  if (finished === undefined) return refused("run-unfinished");
-  // A run that stopped for any reason can be resumed (owner decision
-  // 2026-10-19, ADR 0036 addendum); one that completed has nothing to continue.
-  if (finished.outcome === "completed") return refused("run-completed");
   if (started.labAttached !== false || started.labId !== undefined)
     return refused("lab-attached");
   if (started.snapshotDigest !== options.snapshotDigest)
@@ -227,6 +334,23 @@ export async function assessTrialResume(options: {
     !options.prompt.includes(options.resumePrompt)
   )
     return refused("resume-paragraph-missing");
+  // Checked after the static rules above, so a refusal there writes nothing.
+  if (!finishes.has(options.runId)) {
+    if (options.recoverInterrupted === undefined)
+      return refused("run-unfinished");
+    const superseding = supersedingRun([...starts.values()], started);
+    if (superseding !== undefined)
+      return refused("superseded", superseding.runId);
+    const recorded = await options.recoverInterrupted(started);
+    if (recorded.status === "refused")
+      return refused(recorded.reason, recorded.detail);
+    finishes = readFinishes();
+  }
+  const finished = finishes.get(options.runId);
+  if (finished === undefined) return refused("run-unfinished");
+  // A run that stopped for any reason can be resumed (owner decision
+  // 2026-10-19, ADR 0036 addendum); one that completed has nothing to continue.
+  if (finished.outcome === "completed") return refused("run-completed");
 
   const receiptReference = finished.artifacts.find(
     (artifact) => artifact.kind === "native-run-receipt",

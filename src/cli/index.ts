@@ -196,8 +196,9 @@ export interface CliProfile {
     },
   ): Promise<CampaignSummary>;
   /**
-   * Operator-triggered resume of one provider-refused Root thread in a new
-   * sandbox (ADR 0036). Refusals are printed with their reason and write nothing.
+   * Operator-triggered resume of one stopped Root thread in a new sandbox
+   * (ADR 0036). Refusals are printed with their reason; only sealing a run whose
+   * host died writes its finish before a later rule may still refuse.
    */
   resumeCampaignRun?(
     state: CliState,
@@ -1416,7 +1417,7 @@ const COMMANDS: readonly Command[] = [
       return remaining === 0 ? 0 : 1;
     },
   }),
-  // ADR 0036: operator-triggered resume of a provider-refused Root thread.
+  // ADR 0036: operator-triggered resume of a stopped Root thread.
   command({
     name: "campaign resume",
     usage: ["campaign resume --campaign <id> --run <runId> --config <path>"],

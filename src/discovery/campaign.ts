@@ -74,6 +74,11 @@ export type PlannedTrial = {
   readonly explore: PlannedDiscoveryRun;
   /** Set only by an operator-triggered resume (ADR 0036): the refused run this segment continues. */
   readonly resumes?: { readonly runId: string; readonly segment: number };
+  /**
+   * Set only when an interrupted run is sealed (ADR 0036): its start is already
+   * in the ledger at this time, so only the finish and its records are written.
+   */
+  readonly startRecordedAt?: string;
 };
 
 export type DiscoveryStop =
