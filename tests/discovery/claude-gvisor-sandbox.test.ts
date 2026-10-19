@@ -85,6 +85,9 @@ describe("Claude gVisor sandbox", () => {
           "--env=ANTHROPIC_AUTH_TOKEN",
           "--env=ANTHROPIC_BASE_URL=http://172.20.0.5:8080",
           "--env=CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-5-5",
+          // A refusal ends on Opus; Claude Code does not switch models.
+          "--env=CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1",
+          "--env=CLAUDE_CODE_NO_MODEL_FALLBACK=1",
           "--add-host=wordpress:172.20.0.2",
           expect.stringMatching(/dst=\/workspace\/main,readonly$/),
         ]),

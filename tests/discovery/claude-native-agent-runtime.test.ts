@@ -314,6 +314,146 @@ describe("Claude native agent runtime", () => {
     expect(result.receipt.reportArtifactDigest).toBe(result.attachment?.digest);
   });
 
+  it("records the broker's 403 after a refused turn as the refusal, for the Root and a child", async () => {
+    // Shaped on the 2026-10-19 Opus Trial: the refused turn is only in the
+    // session files, and Claude Code's retry on another model comes back as
+    // "Failed to authenticate" with the broker's model-not-admitted.
+    const notAdmitted =
+      'Failed to authenticate. API Error: 403 {"error":{"reason":"model-not-admitted"}}';
+    const synthetic = {
+      type: "assistant",
+      error: "authentication_failed",
+      isApiErrorMessage: true,
+      message: {
+        model: "<synthetic>",
+        stop_reason: "stop_sequence",
+        content: [{ type: "text", text: notAdmitted }],
+      },
+    };
+    const refused = {
+      type: "assistant",
+      message: {
+        id: "r1",
+        model: "claude-opus-5-5",
+        stop_reason: "refusal",
+        content: [{ type: "thinking" }],
+      },
+    };
+    const rootSession = lines(
+      { type: "user", message: { content: "Objective." } },
+      refused,
+      { type: "user", message: { content: "Continue." } },
+      {
+        type: "system",
+        subtype: "model_refusal_fallback",
+        trigger: "refusal",
+        originalModel: "claude-opus-5-5",
+        fallbackModel: "another-model",
+      },
+      synthetic,
+    );
+    const { runtime: claude } = await runtime(
+      lines(
+        { type: "system", subtype: "init", session_id: "s1" },
+        readTool,
+        ...childEvents,
+        { ...readTool, message: { ...readTool.message, id: "m3" } },
+        synthetic,
+        {
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: 403,
+          terminal_reason: "api_error",
+          result: notAdmitted,
+        },
+        { type: "harness.runner-error", message: notAdmitted },
+      ),
+      {
+        exitCode: 1,
+        transcripts: [
+          { path: "-workspace-main/s1.jsonl", content: rootSession },
+          {
+            path: "-workspace-main/s1/subagents/agent-agent1.jsonl",
+            content: lines(
+              { type: "user", message: { content: "Look at a.php" } },
+              refused,
+              synthetic,
+            ),
+          },
+        ],
+      },
+    );
+    const result = await claude.execute(run);
+    expect(result.receipt).toMatchObject({
+      terminal: "incomplete",
+      reason: "provider",
+      reasonDetail: "provider-refusal",
+    });
+    expect(result.receipt.providerLimit).toBeUndefined();
+    expect(result.agentRuns?.[0]?.receipt).toMatchObject({
+      terminal: "incomplete",
+      reason: "provider",
+      reasonDetail: "provider-refusal",
+    });
+
+    // Without a refused turn, the same 403 is the broker's model binding.
+    expect(claudeProviderFailure([synthetic])).toEqual({
+      reason: "policy",
+      detail: "model-not-admitted",
+    });
+    // A refusal Claude Code retried on the same model and recovered from is not a stop.
+    expect(
+      claudeProviderFailure([
+        refused,
+        {
+          ...readTool,
+          message: { ...readTool.message, stop_reason: "tool_use" },
+        },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("keeps a genuine authentication failure as provider-authentication", async () => {
+    const failure =
+      'Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error"}}';
+    const { runtime: claude } = await runtime(
+      lines(
+        { type: "system", subtype: "init", session_id: "s1" },
+        readTool,
+        {
+          type: "assistant",
+          error: "authentication_failed",
+          message: {
+            model: "<synthetic>",
+            content: [{ type: "text", text: failure }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: 401,
+          result: failure,
+        },
+      ),
+      {
+        exitCode: 1,
+        transcripts: [
+          {
+            path: "-workspace-main/s1.jsonl",
+            content: lines(readTool),
+          },
+        ],
+      },
+    );
+    expect((await claude.execute(run)).receipt).toMatchObject({
+      terminal: "incomplete",
+      reason: "provider",
+      reasonDetail: "provider-authentication",
+    });
+  });
+
   it("maps rate limits and subscription usage limits onto the provider limits the runner backs off on", async () => {
     const synthetic = (text: string) => ({
       type: "assistant",
