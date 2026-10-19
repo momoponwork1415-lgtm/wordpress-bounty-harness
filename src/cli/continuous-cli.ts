@@ -43,9 +43,10 @@ export function continuousCounts(
   state: Pick<CliState, "ledger">,
   since: string,
 ) {
-  const { started, finished, notTrials } = exploreTrials(state.ledger, {
-    since,
-  });
+  const { started, finished, notTrials, superseded } = exploreTrials(
+    state.ledger,
+    { since },
+  );
   const stops = state.ledger.stops({ since });
   const skipped = (reason: string) =>
     stops
@@ -55,8 +56,9 @@ export function continuousCounts(
       .reduce((sum, row) => sum + row.count, 0);
   const funnel = state.ledger.funnel(undefined, { since });
   return {
-    // SPEC §6: provider-limited and bootstrap-only runs are not Trials.
-    trials: started - notTrials,
+    // SPEC §6: provider-limited and bootstrap-only runs are not Trials, nor
+    // an unfinished run that a restarted campaign ran again (ADR 0036).
+    trials: started - notTrials - superseded,
     completed: finished.filter((outcome) => outcome === "completed").length,
     providerLimited: finished.filter(
       (outcome) => outcome === "provider-limited",
@@ -66,7 +68,8 @@ export function continuousCounts(
     labFailed: stops
       .filter((row) => row.type === "lab-provisioned")
       .reduce((sum, row) => sum + row.count, 0),
-    unsettled: started - finished.length,
+    // Running now, or dead and still resumable with `campaign resume`.
+    unsettled: started - finished.length - superseded,
     queue: funnel.raw,
     parked: funnel.parked,
   };

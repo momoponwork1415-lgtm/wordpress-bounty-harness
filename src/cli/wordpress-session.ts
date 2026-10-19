@@ -9,6 +9,7 @@ import {
 import type {
   AgentRuntimeProfile,
   DiscoveryTransportResult,
+  InterruptedRunRecovery,
   DiscoveryTransportRun,
   ProviderAttachmentStore,
 } from "../discovery/index.js";
@@ -155,6 +156,11 @@ export interface WordPressCampaignBoundaries {
   }>;
   readonly executor: {
     execute(run: DiscoveryTransportRun): Promise<DiscoveryTransportResult>;
+    /** Seals what a dead run's sandbox left on disk (ADR 0036); absent in fakes without a sandbox. */
+    recoverInterrupted?(
+      run: DiscoveryTransportRun,
+      startedAt: string,
+    ): Promise<InterruptedRunRecovery>;
   };
   readonly attachments: ProviderAttachmentStore;
   readonly verifier: Verifier<WordPressFinding, WordPressLabHandle>;

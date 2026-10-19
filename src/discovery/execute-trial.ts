@@ -229,38 +229,42 @@ export async function executeTrial(
     schemaVersion: 1,
     campaignId: context.campaignId,
     snapshotDigest: input.snapshotDigest,
-    occurredAt: clock().toISOString(),
+    occurredAt: trial.startRecordedAt ?? clock().toISOString(),
   };
-  const started = await context.ledger.append({
-    ...base,
-    identity: `discovery-start-${run.runId}`,
-    type: "discovery-run-started",
-    runId: run.runId,
-    trialId: trial.trialId,
-    trialOrdinal: trial.trialOrdinal,
-    runKind: "explore",
-    ...(trial.resumes === undefined
-      ? {}
-      : {
-          resumesRun: trial.resumes.runId,
-          resumeSegment: trial.resumes.segment,
-        }),
-    ...(context.labId === undefined
-      ? { labAttached: false as const }
-      : { labId: context.labId, labAttached: true as const }),
-    history: input.history,
-    configuration: {
-      ...planned.configuration,
-      promptDigest: planned.configuration.promptDigest ?? input.promptDigest,
-      trustBoundaryVersion: input.trustBoundary.version,
-      sourcePack: {
-        dependency:
-          run.dependencySource === undefined
-            ? ("none" as const)
-            : ("mounted" as const),
-      },
-    },
-  });
+  const started =
+    trial.startRecordedAt !== undefined
+      ? { status: "existing" as const }
+      : await context.ledger.append({
+          ...base,
+          identity: `discovery-start-${run.runId}`,
+          type: "discovery-run-started",
+          runId: run.runId,
+          trialId: trial.trialId,
+          trialOrdinal: trial.trialOrdinal,
+          runKind: "explore",
+          ...(trial.resumes === undefined
+            ? {}
+            : {
+                resumesRun: trial.resumes.runId,
+                resumeSegment: trial.resumes.segment,
+              }),
+          ...(context.labId === undefined
+            ? { labAttached: false as const }
+            : { labId: context.labId, labAttached: true as const }),
+          history: input.history,
+          configuration: {
+            ...planned.configuration,
+            promptDigest:
+              planned.configuration.promptDigest ?? input.promptDigest,
+            trustBoundaryVersion: input.trustBoundary.version,
+            sourcePack: {
+              dependency:
+                run.dependencySource === undefined
+                  ? ("none" as const)
+                  : ("mounted" as const),
+            },
+          },
+        });
   if (started.status === "conflict")
     throw new Error("Discovery run identity conflict");
   const draft: TrialDraft = {
