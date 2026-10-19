@@ -8,6 +8,7 @@ import { continuousCommand } from "../../src/cli/continuous-cli.js";
 import {
   continuousPaths,
   holdLabSweep,
+  labSweepHeld,
   requestContinuousStop,
 } from "../../src/cli/continuous.js";
 import type { CliIo, CliProfile, CliState } from "../../src/cli/index.js";
@@ -330,6 +331,19 @@ describe("continuous run", () => {
     expect(await t.command("run", RUN_OPTIONS)).toBe(0);
     expect(sweeps).toEqual(["remove"]);
     expect(t.stdout.at(-1)).toMatch(/ stopped reason=operator$/);
+  });
+
+  it("keeps the sweep held until every holder has released it", async () => {
+    const t = await setup(fakeProfile());
+    const first = await holdLabSweep(t.root, process.pid);
+    const second = await holdLabSweep(t.root, process.ppid);
+    await first();
+    expect(await labSweepHeld(t.root)).toBe(true);
+    await second();
+    expect(await labSweepHeld(t.root)).toBe(false);
+    // A holder whose process died no longer holds the sweep.
+    await holdLabSweep(t.root, process.pid);
+    expect(await labSweepHeld(t.root, () => false)).toBe(false);
   });
 
   it("skips the sweep while the profile holds a Lab or a review Lab pid lives", async () => {

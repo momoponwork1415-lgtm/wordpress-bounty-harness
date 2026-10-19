@@ -1079,25 +1079,30 @@ const COMMANDS: readonly Command[] = [
         throw new Error("verify next needs a verification profile");
       if (values.finding !== undefined && values.handoff === undefined)
         throw new UsageError("--finding names a Finding for --handoff only");
-      const summary = await environment.profile.verifyNext(state, {
-        campaignId: required(values.campaign, "campaign"),
-        configPath: resolve(required(values.config, "config")),
-        ...(values.handoff === undefined
-          ? {}
-          : {
-              handoff: {
-                directory: resolve(values.handoff),
-                httpPort: integerOption(values.port, "port", 8080, 65535),
-                databasePort: integerOption(
-                  values["db-port"],
-                  "db-port",
-                  3307,
-                  65535,
-                ),
-              },
-            }),
-        ...(values.finding === undefined ? {} : { findingId: values.finding }),
-      });
+      const release = await holdLabSweep(state.stateDirectory, process.pid);
+      const summary = await environment.profile
+        .verifyNext(state, {
+          campaignId: required(values.campaign, "campaign"),
+          configPath: resolve(required(values.config, "config")),
+          ...(values.handoff === undefined
+            ? {}
+            : {
+                handoff: {
+                  directory: resolve(values.handoff),
+                  httpPort: integerOption(values.port, "port", 8080, 65535),
+                  databasePort: integerOption(
+                    values["db-port"],
+                    "db-port",
+                    3307,
+                    65535,
+                  ),
+                },
+              }),
+          ...(values.finding === undefined
+            ? {}
+            : { findingId: values.finding }),
+        })
+        .finally(release);
       io.stdout(
         summary === null
           ? "no verification pending"
@@ -1420,11 +1425,14 @@ const COMMANDS: readonly Command[] = [
       if (environment.profile.resumeCampaignRun === undefined)
         throw new UsageError("This profile cannot resume a discovery run");
       const campaignId = required(values.campaign, "campaign");
-      const summary = await environment.profile.resumeCampaignRun(state, {
-        campaignId,
-        runId: required(values.run, "run"),
-        configPath: resolve(required(values.config, "config")),
-      });
+      const release = await holdLabSweep(state.stateDirectory, process.pid);
+      const summary = await environment.profile
+        .resumeCampaignRun(state, {
+          campaignId,
+          runId: required(values.run, "run"),
+          configPath: resolve(required(values.config, "config")),
+        })
+        .finally(release);
       if (summary.status === "refused") {
         io.stderr(
           `not resumable: ${summary.reason}${summary.detail === undefined ? "" : ` (${summary.detail})`}`,
