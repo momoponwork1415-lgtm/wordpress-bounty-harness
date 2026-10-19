@@ -82,6 +82,16 @@ const commonCampaignFields = {
       maxConcurrentRuns: z.number().int().min(1).max(4).default(1),
       maxConcurrentTargets: z.number().int().min(1).max(10).default(1),
       memoryBudgetMiB: z.number().int().positive(),
+      /**
+       * Opt-in caps per discovery runtime under maxConcurrentTargets (2026-10-19).
+       * Absent, only the total applies.
+       */
+      maxConcurrentTargetsByRuntime: z
+        .strictObject({
+          codex: z.number().int().min(0).max(10).optional(),
+          claude: z.number().int().min(0).max(10).optional(),
+        })
+        .optional(),
     })
     .default({
       maxConcurrentRuns: 1,
@@ -110,6 +120,27 @@ export const wordpressCampaignConfigSchema = z
     promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
   })
   .superRefine((config, context) => {
+    const caps = config.resources.maxConcurrentTargetsByRuntime;
+    if (caps !== undefined) {
+      const share = config.discovery.runtimeShare ?? { codex: 1, claude: 0 };
+      for (const runtime of ["codex", "claude"] as const) {
+        const cap = caps[runtime];
+        if (cap !== undefined && cap > config.resources.maxConcurrentTargets)
+          context.addIssue({
+            code: "custom",
+            path: ["resources", "maxConcurrentTargetsByRuntime", runtime],
+            message: "A runtime cap exceeds maxConcurrentTargets",
+          });
+        // A runtime that gets targets needs a cap that lets them start.
+        if (share[runtime] > 0 && (cap === undefined || cap < 1))
+          context.addIssue({
+            code: "custom",
+            path: ["resources", "maxConcurrentTargetsByRuntime", runtime],
+            message:
+              "A runtime with a positive share needs a cap of at least 1",
+          });
+      }
+    }
     if (
       config.lab.initialApprovedComment === true &&
       config.lab.initialPosts.length === 0
@@ -228,6 +259,17 @@ export async function readWordPressCampaignConfig(
       `The memory budget is below one discovery run (${DISCOVERY_RUN_MEMORY_MIB} MiB)`,
     );
   return config;
+}
+
+/** The configured per-runtime caps, only those set; empty when the config has none. */
+export function wordPressRuntimeCeilings(
+  config: WordPressCampaignConfig,
+): Readonly<Record<string, number>> {
+  return Object.fromEntries(
+    Object.entries(config.resources.maxConcurrentTargetsByRuntime ?? {}).filter(
+      (entry): entry is [string, number] => entry[1] !== undefined,
+    ),
+  );
 }
 
 /** A selection policy file, validated against the profile schema. */

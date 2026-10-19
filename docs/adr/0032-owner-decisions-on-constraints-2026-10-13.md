@@ -158,3 +158,13 @@ v5 で変えたもの: 受け入れる種類の順位と「落とす種類」の
 ## 2026-10-19 追記: 同時対象数を runner の稼働中に変える（所有者の指示「並列数は可変にできるようにしよう」）
 
 上の表の「確認 並列 3」の行にある `resources.maxConcurrentTargets` は、同時に走る対象の上限として残す。runner の稼働中は、操作者が `continuous concurrency <n>` で 1 から上限までの値を `<state>/continuous.concurrency` に書き、runner は新しい対象を始める直前にそれを読む。下げても走っている Trial は止めない。file が無ければ上限で走る。設定と選定方針の digest は変わらない。手で回す `campaign run` はこの値を読まない（OPERATIONS.md の継続運転の節）。
+
+## 2026-10-19 追記 2: runtime ごとの同時対象数（所有者の指示「Opus 3 本、Codex 3 本」）
+
+1 つの runner で Codex と Claude（Opus）を同時に走らせ、それぞれの本数に別の上限を置く。上限は campaign 設定の `resources.maxConcurrentTargetsByRuntime: { codex?, claude? }` に書く。書かなければ、今までどおり `maxConcurrentTargets` だけが効く。
+
+- 各値は 0 から `maxConcurrentTargets` まで。`runtimeShare` の重みが正の runtime には 1 以上の値が要る（`runtimeShare` が無ければ全件 Codex なので、Codex に要る）。重みが 0 の runtime には要らない。
+- 対象の runtime は、探索と同じく対象 ID と `runtimeShare` だけで決まる。枠が空いたら、選定順で最初の「runtime に空きがある対象」を始める。どの runtime も埋まっていれば、解放か 30 秒ごとの見直しまで待つ。合計の上限と `continuous concurrency` の値は今までどおり効く。
+- runner の稼働中は、`continuous concurrency <n> --runtime <name>` で 0 からその runtime の上限までの値を `<state>/continuous.concurrency.<name>` に書ける。0 にすると、その runtime の新しい対象は始まらない。下げても走っている Trial は止めない。設定と選定方針の digest は変わらない。手で回す `campaign run` は設定の上限を使い、この file は読まない。
+- batch の偏りは残る。1 batch の対象は hash で runtime に分かれるので、片方の runtime の対象が先に尽きると、その枠は batch が終わるまで空く。選定は凍結中なので、選定で runtime を釣り合わせることはしない。当面は選定方針の `maximumTargets` を上限の 10 にして空きを減らし、batch をまたいで補充する案は数字を見てから決める（OPERATIONS.md の継続運転の節）。
+- provider 上限で campaign が止まる動きは変えていない。Claude の quota で止まると、同じ batch の Codex の新しい対象も backoff の間は始まらない。

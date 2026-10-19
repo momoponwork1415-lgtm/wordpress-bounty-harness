@@ -260,6 +260,28 @@ describe("continuous runner", () => {
     );
   });
 
+  it("hands the campaign each runtime's live limit file and logs the effective runtime limit", async () => {
+    const seen: (number | null)[] = [];
+    const t = await setup([
+      async (input) => {
+        const { targetLimit } = input as Parameters<
+          ContinuousDeps["runCampaign"]
+        >[0];
+        seen.push(await targetLimit.readRuntime!("claude"));
+        await writeFile(`${continuousPaths(t.root).concurrency}.claude`, "0\n");
+        seen.push(await targetLimit.readRuntime!("claude"));
+        seen.push(await targetLimit.readRuntime!("codex"));
+        targetLimit.reportRuntime?.("claude", 0);
+        return {};
+      },
+    ]);
+    await t.runner.run();
+    expect(seen).toEqual([null, 0, null]);
+    expect(t.log).toContain(
+      "2026-10-20T00:00:00.000Z concurrency runtime=claude effective=0 campaign=prod-20261020-1",
+    );
+  });
+
   it("refuses to resume while another runner pid is live", async () => {
     const t = await setup([], { pidAlive: (pid) => pid === 7 });
     await writeFile(continuousPaths(t.root).pid, "7");

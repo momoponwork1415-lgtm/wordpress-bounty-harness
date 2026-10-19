@@ -206,6 +206,10 @@ export interface CliProfile {
   ): Promise<CampaignSummary>;
   /** The campaign config's maxConcurrentTargets, the ceiling of `continuous concurrency`. */
   targetCeiling?(configPath: string): Promise<number>;
+  /** The campaign config's per-runtime caps, the ceilings of `continuous concurrency --runtime`. */
+  runtimeCeilings?(
+    configPath: string,
+  ): Promise<Readonly<Record<string, number>>>;
   /**
    * Operator-triggered resume of one stopped Root thread in a new sandbox
    * (ADR 0036). Refusals are printed with their reason; only sealing a run whose
@@ -671,6 +675,7 @@ const continuousFlags = {
   notify: STR,
   resume: BOOL,
   "verify-concurrency": STR,
+  runtime: STR,
 } as const;
 
 /** The `continuous` subcommands share one handler; `sub` picks the action. */
@@ -694,6 +699,7 @@ function continuousRow(name: string, usage: string): Command {
         campaignPrefix: values["campaign-prefix"] ?? "prod",
         notify: values.notify,
         resume: values.resume ?? false,
+        runtime: values.runtime,
         verifyConcurrency:
           values["verify-concurrency"] === undefined
             ? 1
@@ -1469,7 +1475,7 @@ const COMMANDS: readonly Command[] = [
   // 2026-10-19: the live target limit; registered last so the lines above stay in place.
   continuousRow(
     "continuous concurrency",
-    "continuous concurrency [<n>] --config <path>",
+    "continuous concurrency [<n>] [--runtime <name>] --config <path>",
   ),
 ];
 

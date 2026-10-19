@@ -127,24 +127,96 @@ export interface TargetLimit {
   read(): Promise<number | null>;
   /** The effective limit, on the first read and each time it changes. */
   report?(limit: number): void;
+  /**
+   * The live limit of one runtime's targets (`continuous concurrency --runtime`),
+   * or null when unset or unreadable (its configured cap applies). 0 holds them.
+   */
+  readRuntime?(runtime: string): Promise<number | null>;
+  /** One runtime's effective limit, on the first read and each time it changes. */
+  reportRuntime?(runtime: string, limit: number): void;
   readonly pollMs?: number;
 }
 
-/** Slots for new targets under min(live limit, ceiling); a release or the poll wakes a waiter. */
-function targetSlots(ceiling: number, live: TargetLimit) {
+/**
+ * Per-runtime caps under the total. The profile says which runtime a target
+ * runs on; a runtime without a cap here is bound by the total only.
+ */
+export interface RuntimeTargetCaps<Target> {
+  readonly runtimeOf: (target: Target) => string;
+  readonly ceilings: Readonly<Record<string, number>>;
+}
+
+type Claim =
+  | { readonly kind: "claimed"; readonly index: number }
+  | { readonly kind: "waited" }
+  | { readonly kind: "empty" };
+
+/**
+ * Starts for new targets under min(live limit, ceiling) and, per runtime,
+ * min(live runtime limit, its cap). The first pending target whose runtime has
+ * room starts; otherwise selection order stays. A release or the poll wakes a waiter.
+ */
+function targetScheduler<Target>(options: {
+  readonly ceiling: number;
+  readonly selected: readonly Target[];
+  readonly live: TargetLimit | undefined;
+  readonly runtimeCaps: RuntimeTargetCaps<Target> | undefined;
+}) {
+  const { ceiling, selected, live, runtimeCaps } = options;
+  const runtimes = selected.map((target) => runtimeCaps?.runtimeOf(target));
   let active = 0;
+  const activeByRuntime = new Map<string, number>();
   let reported: number | undefined;
+  const reportedByRuntime = new Map<string, number>();
   const waiters = new Set<() => void>();
-  return {
-    /** True with a slot taken; false after waiting, so the caller checks again. */
-    async acquire(): Promise<boolean> {
+  const limits = async () => {
+    let total = ceiling;
+    if (live !== undefined) {
       const read = await live.read().catch(() => null);
-      const limit =
-        read === null ? ceiling : Math.min(Math.max(read, 1), ceiling);
-      if (limit !== reported) live.report?.((reported = limit));
-      if (active < limit) {
-        active++;
-        return true;
+      total = read === null ? ceiling : Math.min(Math.max(read, 1), ceiling);
+      if (total !== reported) live.report?.((reported = total));
+    }
+    const byRuntime = new Map<string, number>();
+    for (const [runtime, cap] of Object.entries(runtimeCaps?.ceilings ?? {})) {
+      let limit = cap;
+      if (live?.readRuntime !== undefined) {
+        const read = await live.readRuntime(runtime).catch(() => null);
+        limit = read === null ? cap : Math.min(Math.max(read, 0), cap);
+        if (reportedByRuntime.get(runtime) !== limit) {
+          reportedByRuntime.set(runtime, limit);
+          live.reportRuntime?.(runtime, limit);
+        }
+      }
+      byRuntime.set(runtime, limit);
+    }
+    return { total, byRuntime };
+  };
+  return {
+    /** Takes the first startable index out of `pending`, or waits so the caller checks again. */
+    async claim(pending: number[]): Promise<Claim> {
+      const { total, byRuntime } = await limits();
+      // Everything below runs without an await, so two workers never take the same target.
+      if (pending.length === 0) return { kind: "empty" };
+      if (active < total) {
+        const position = pending.findIndex((index) => {
+          const runtime = runtimes[index];
+          const limit =
+            runtime === undefined ? undefined : byRuntime.get(runtime);
+          return (
+            limit === undefined || (activeByRuntime.get(runtime!) ?? 0) < limit
+          );
+        });
+        if (position >= 0) {
+          const index = pending.splice(position, 1)[0]!;
+          active++;
+          const runtime = runtimes[index];
+          if (runtime !== undefined)
+            activeByRuntime.set(
+              runtime,
+              (activeByRuntime.get(runtime) ?? 0) + 1,
+            );
+          return { kind: "claimed", index };
+        }
       }
       await new Promise<void>((resolve) => {
         const wake = () => {
@@ -152,13 +224,16 @@ function targetSlots(ceiling: number, live: TargetLimit) {
           waiters.delete(wake);
           resolve();
         };
-        const timer = setTimeout(wake, live.pollMs ?? TARGET_LIMIT_POLL_MS);
+        const timer = setTimeout(wake, live?.pollMs ?? TARGET_LIMIT_POLL_MS);
         waiters.add(wake);
       });
-      return false;
+      return { kind: "waited" };
     },
-    release(): void {
+    release(index: number): void {
       active--;
+      const runtime = runtimes[index];
+      if (runtime !== undefined)
+        activeByRuntime.set(runtime, (activeByRuntime.get(runtime) ?? 1) - 1);
       for (const wake of [...waiters]) wake();
     },
   };
@@ -188,6 +263,8 @@ export async function runCampaignPipeline<
   readonly maxConcurrentTargets?: number;
   /** The runner's live limit under maxConcurrentTargets; absent, the ceiling applies. */
   readonly targetLimit?: TargetLimit;
+  /** Per-runtime caps under maxConcurrentTargets; absent, only the total applies. */
+  readonly runtimeCaps?: RuntimeTargetCaps<Target>;
   readonly discoveryLab?: "attached" | "none";
   readonly repeat?: number;
   /** An explicit operator retry after repairing the Verifier protocol. */
@@ -843,21 +920,28 @@ export async function runCampaignPipeline<
     (target) => !isCompleted(target),
   );
   const results: (TargetResult | undefined)[] = Array(selected.length);
-  let next = 0;
-  const slots =
-    options.targetLimit === undefined
-      ? undefined
-      : targetSlots(maxConcurrentTargets, options.targetLimit);
+  // Selection order; a target leaves when it starts.
+  const pending = selected.map((_, index) => index);
+  const scheduler = targetScheduler({
+    ceiling: maxConcurrentTargets,
+    selected,
+    live: options.targetLimit,
+    runtimeCaps: options.runtimeCaps,
+  });
   const worker = async () => {
     while (stopped === undefined) {
-      if (selected[next] === undefined) return;
-      // Above the live limit no new target starts; the running ones go on.
-      if (slots !== undefined && !(await slots.acquire())) continue;
-      const target = selected[next];
+      if (pending.length === 0) return;
+      // Above the live limit, or with every pending target's runtime full, no
+      // new target starts; the running ones go on.
+      const claim = await scheduler.claim(pending);
+      if (claim.kind === "empty") return;
       // The operator stop point: in-flight targets finish, no new target starts.
-      const stopping = target !== undefined && options.stop?.() === true;
-      if (target === undefined || stopping) slots?.release();
-      if (target === undefined) return;
+      const stopping = options.stop?.() === true;
+      if (claim.kind === "waited" && !stopping) continue;
+      const index = claim.kind === "claimed" ? claim.index : pending[0];
+      const target = index === undefined ? undefined : selected[index];
+      if (claim.kind === "claimed" && stopping) scheduler.release(claim.index);
+      if (target === undefined || index === undefined) return;
       if (stopping) {
         if (stopped === undefined) {
           stopped = "operator";
@@ -873,7 +957,6 @@ export async function runCampaignPipeline<
         }
         return;
       }
-      const index = next++;
       try {
         results[index] = await processTarget(target);
       } catch (error) {
@@ -882,7 +965,7 @@ export async function runCampaignPipeline<
         requestStop("incomplete");
         return;
       } finally {
-        slots?.release();
+        scheduler.release(index);
       }
     }
   };
