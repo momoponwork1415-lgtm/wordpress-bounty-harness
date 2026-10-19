@@ -255,6 +255,64 @@ describe("continuous status", () => {
   });
 });
 
+describe("continuous concurrency", () => {
+  const withCeiling = () =>
+    fakeProfile({
+      targetCeiling: async (configPath) => {
+        expect(configPath).toBe("/config.json");
+        return 4;
+      },
+    });
+
+  it("falls back to the ceiling while unset, then sets, logs and shows the live limit", async () => {
+    const t = await setup(withCeiling());
+    const options = { configPath: "/config.json" };
+    expect(await t.command("concurrency", options)).toBe(0);
+    expect(t.stdout).toEqual(["concurrency 4  ceiling 4  live unset"]);
+
+    t.stdout.length = 0;
+    expect(await t.command("concurrency", { ...options, rest: ["2"] })).toBe(0);
+    expect(t.stdout[0]).toBe(`${NOW.replace("Z", ".000Z")} concurrency 4->2`);
+    expect(await readFile(t.paths.concurrency, "utf8")).toBe("2\n");
+    expect(await readFile(t.paths.log, "utf8")).toBe(`${t.stdout[0]}\n`);
+
+    t.stdout.length = 0;
+    expect(await t.command("concurrency", { ...options, rest: ["3"] })).toBe(0);
+    expect(t.stdout[0]).toBe(`${NOW.replace("Z", ".000Z")} concurrency 2->3`);
+
+    t.stdout.length = 0;
+    expect(await t.command("concurrency", options)).toBe(0);
+    expect(t.stdout).toEqual(["concurrency 3  ceiling 4  live 3"]);
+    t.stdout.length = 0;
+    await t.command("status");
+    expect(t.stdout[1]).toBe("concurrency live 3");
+  });
+
+  it("rejects a limit outside 1 to the ceiling and leaves the file alone", async () => {
+    const t = await setup(withCeiling());
+    for (const value of ["0", "5", "-1", "two", "2.5"])
+      await expect(
+        t.command("concurrency", {
+          configPath: "/config.json",
+          rest: [value],
+        }),
+      ).rejects.toThrow("concurrency must be an integer from 1 to 4");
+    await expect(t.command("concurrency", { rest: ["2"] })).rejects.toThrow(
+      "continuous concurrency needs --config",
+    );
+    await expect(stat(t.paths.concurrency)).rejects.toThrow();
+  });
+
+  it("reads an unreadable file as the ceiling", async () => {
+    const t = await setup(withCeiling());
+    await writeFile(t.paths.concurrency, "lots\n");
+    expect(await t.command("concurrency", { configPath: "/config.json" })).toBe(
+      0,
+    );
+    expect(t.stdout).toEqual(["concurrency 4  ceiling 4  live unset"]);
+  });
+});
+
 describe("continuous stop and resume", () => {
   it("latches an operator stop that status reports until resume clears it", async () => {
     const t = await setup(fakeProfile());

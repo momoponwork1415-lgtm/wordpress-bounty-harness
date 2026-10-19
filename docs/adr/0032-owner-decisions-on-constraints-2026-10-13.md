@@ -154,3 +154,7 @@ v5 で変えたもの: 受け入れる種類の順位と「落とす種類」の
 | 確認 並列 3（Opus 併用時 2） | repo の既定は `resources.maxConcurrentRuns: 1`、`maxConcurrentTargets: 1`。2026-10-19 に所有者が「並列数は 10、選ぶ数も増やす」と指示し、schema 上限を `maxConcurrentTargets` 4 → 10、`maximumTargets` 5 → 10 に上げた（#347）。対象ごとの `maxConcurrentRuns` の上限 4 は変えない。本番は host の campaign 設定で同時対象 10、選定方針の写しで `maximumTargets` 10 |
 | Q12 子は 3 | 子は最大 4（ADR 0029 の 2026-10-18 節、ADR 0033） |
 | 2026-10-16「選定の帯」「帯の上限の先行適用」の 100 万超の例外 | ADR 0037 追記 4 の cascade 最後の段として実装（PR #382、#295 は close） |
+
+## 2026-10-19 追記: 同時対象数を runner の稼働中に変える（所有者の指示「並列数は可変にできるようにしよう」）
+
+上の表の「確認 並列 3」の行にある `resources.maxConcurrentTargets` は、同時に走る対象の上限として残す。runner の稼働中は、操作者が `continuous concurrency <n>` で 1 から上限までの値を `<state>/continuous.concurrency` に書き、runner は新しい対象を始める直前にそれを読む。下げても走っている Trial は止めない。file が無ければ上限で走る。設定と選定方針の digest は変わらない。手で回す `campaign run` はこの値を読まない（OPERATIONS.md の継続運転の節）。

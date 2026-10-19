@@ -932,6 +932,9 @@ async function runWordPressCampaign(
     discoveryLab: config.discovery.lab,
     repeat: input.repeat ?? 1,
     maxConcurrentTargets: config.resources.maxConcurrentTargets,
+    ...(input.targetLimit === undefined
+      ? {}
+      : { targetLimit: input.targetLimit }),
     ...(input.stop === undefined ? {} : { stop: input.stop }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.retryIncompleteVerifications === undefined
@@ -1285,6 +1288,9 @@ export function createWordPressCliProfile(
       createWordPressHttpEvidenceReader({ store: state.store }),
     labDown: (state, input) => wordPressLabDown(state, input, options),
     // A record that exists holds the sweep even when unreadable; `lab down` decides.
+    targetCeiling: async (configPath) =>
+      (await readWordPressCampaignConfig(configPath)).resources
+        .maxConcurrentTargets,
     labHeld: (state) =>
       stat(labUpRecordPath(state)).then(
         () => true,

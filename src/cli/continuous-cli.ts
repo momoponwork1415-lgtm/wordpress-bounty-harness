@@ -8,10 +8,12 @@ import {
   exploreTrials,
   labSweepHeld,
   pidAlive,
+  readContinuousConcurrency,
   readContinuousMemo,
   readContinuousStopReason,
   readLivePid,
   requestContinuousStop,
+  writeContinuousConcurrency,
 } from "./continuous.js";
 import type { CliIo, CliProfile, CliState } from "./index.js";
 
@@ -87,10 +89,46 @@ export async function continuousCommand(
     readonly notify: string | undefined;
     readonly resume: boolean;
     readonly verifyConcurrency?: number;
+    /** Positionals after the subcommand: `continuous concurrency <n>`. */
+    readonly rest?: readonly string[];
   },
 ): Promise<number> {
   const { state, profile, io } = context;
   const paths = continuousPaths(state.stateDirectory);
+  if (sub === "concurrency") {
+    if (context.resume)
+      throw new Error("--resume is only valid with continuous run");
+    if (context.configPath === undefined)
+      throw new Error("continuous concurrency needs --config");
+    if (profile.targetCeiling === undefined)
+      throw new Error("This profile has no target ceiling");
+    const ceiling = await profile.targetCeiling(context.configPath);
+    const live = await readContinuousConcurrency(state.stateDirectory);
+    const current = Math.min(live ?? ceiling, ceiling);
+    const rest = context.rest ?? [];
+    if (rest.length === 0) {
+      io.stdout(
+        `concurrency ${current}  ceiling ${ceiling}  live ${live ?? "unset"}`,
+      );
+      return 0;
+    }
+    const value = rest[0]!;
+    if (
+      rest.length > 1 ||
+      !/^\d{1,3}$/.test(value) ||
+      Number(value) < 1 ||
+      Number(value) > ceiling
+    )
+      throw new Error(`concurrency must be an integer from 1 to ${ceiling}`);
+    await writeContinuousConcurrency(state.stateDirectory, Number(value));
+    const line = `${state.clock().toISOString()} concurrency ${current}->${Number(value)}`;
+    appendFileSync(paths.log, `${line}\n`, { mode: 0o600 });
+    io.stdout(line);
+    io.stdout(
+      "the runner applies it before its next target start; running Trials go on",
+    );
+    return 0;
+  }
   if (sub === "resume") {
     if (context.resume)
       throw new Error("--resume is only valid with continuous run");
@@ -135,6 +173,9 @@ export async function continuousCommand(
     );
     if (memo?.lastError !== undefined)
       io.stdout(`last error ${memo.lastError}`);
+    // Unset means the config's maxConcurrentTargets.
+    const live = await readContinuousConcurrency(state.stateDirectory);
+    if (live !== null) io.stdout(`concurrency live ${live}`);
     const now = state.clock();
     const day = new Date(now.toISOString().slice(0, 10));
     const monday = new Date(

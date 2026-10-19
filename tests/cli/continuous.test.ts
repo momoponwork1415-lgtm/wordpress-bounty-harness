@@ -239,6 +239,27 @@ describe("continuous runner", () => {
     ]);
   });
 
+  it("hands the campaign the live limit file and logs the effective limit it reports", async () => {
+    const seen: (number | null)[] = [];
+    const t = await setup([
+      async (input) => {
+        const { targetLimit } = input as Parameters<
+          ContinuousDeps["runCampaign"]
+        >[0];
+        seen.push(await targetLimit.read());
+        await writeFile(continuousPaths(t.root).concurrency, "2\n");
+        seen.push(await targetLimit.read());
+        targetLimit.report?.(2);
+        return {};
+      },
+    ]);
+    await t.runner.run();
+    expect(seen).toEqual([null, 2]);
+    expect(t.log).toContain(
+      "2026-10-20T00:00:00.000Z concurrency effective=2 campaign=prod-20261020-1",
+    );
+  });
+
   it("refuses to resume while another runner pid is live", async () => {
     const t = await setup([], { pidAlive: (pid) => pid === 7 });
     await writeFile(continuousPaths(t.root).pid, "7");
