@@ -365,6 +365,12 @@ const runMarkerSchema = z.strictObject({
   staging: z.string().regex(/^codex-run-[A-Za-z0-9]{6}$/),
   codexHome: z.string().regex(/^codex-home-[A-Za-z0-9]{6}$/),
   research: z.string().regex(/^codex-research-[A-Za-z0-9]{6}$/),
+  /** Outlives a `kill -9` of its owner on the same boot; removed before reading back. */
+  container: z
+    .string()
+    .regex(
+      /^codex-agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    ),
   image: imageSchema,
   cliVersion: z.string().min(1).max(128),
   bundledCatalogDigest: digestSchema,
@@ -965,6 +971,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
               staging: relative(scratchRoot, staging),
               codexHome: relative(scratchRoot, codexHome),
               research: relative(scratchRoot, researchDirectory),
+              container: containerName,
               image: this.#options.image,
               cliVersion,
               bundledCatalogDigest,
@@ -1144,6 +1151,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
       (name) => join(scratchRoot, name),
     );
     const [, codexHome, research] = directories as [string, string, string];
+    // A killed owner's container may still be writing; stop it before reading.
+    await this.#docker(scratchRoot)(
+      ["rm", "--force", marker.container],
+      undefined,
+      20_000,
+    ).catch(() => undefined);
     const captured = await captureRun(codexHome, research);
     const lastWrite = Math.max(
       Date.parse(marker.startedAt),

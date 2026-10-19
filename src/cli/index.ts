@@ -193,6 +193,12 @@ export interface CliProfile {
       readonly signal?: AbortSignal;
       /** Replaces the campaign config's selection policy path in process. */
       readonly selectionPolicyPath?: string;
+      /**
+       * The runner only (ADR 0036, 2026-10-19 addendum 3): a run of this campaign
+       * whose host died is resumed in its target's slot; a refusal is logged and
+       * the target runs again as a new Trial.
+       */
+      readonly resumeInterrupted?: { log(line: string): void };
     },
   ): Promise<CampaignSummary>;
   /**

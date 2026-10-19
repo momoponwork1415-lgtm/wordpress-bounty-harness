@@ -24,6 +24,7 @@ import {
   ProviderAttachmentStore,
   providerCredentialEgressReceiptSchema,
   recordInterruptedRun,
+  runDiscoveryCampaign,
   type DiscoveryTransportRun,
   type ProviderCredentialEgressBroker,
   type SandboxOwner,
@@ -398,6 +399,7 @@ async function fixture() {
     ledger,
     evidence,
     context,
+    run,
     recordStart,
     startOnHostA,
     recover,
@@ -573,8 +575,9 @@ describe("campaign resume of an interrupted run (ADR 0036, 2026-10-19 second add
     expect(outcome.runId).toBe("run-1-segment-1");
     // Nothing is left unsettled, and the Trial is counted once.
     const trials = exploreTrials(t.ledger, {});
-    expect(trials).toMatchObject({ started: 2, superseded: 0 });
-    expect(trials.finished).toHaveLength(2);
+    expect(trials).toMatchObject({ started: 1, superseded: 0 });
+    // The Trial ends as its latest segment ended.
+    expect(trials.finished).toEqual(["failed"]);
     expect(t.ledger.funnel("campaign-1").discoveryAttempts).toBe(1);
   });
 
@@ -613,5 +616,128 @@ describe("campaign resume of an interrupted run (ADR 0036, 2026-10-19 second add
       superseded: 1,
     });
     expect((await leftovers(t.scratch)).markers).toEqual(["run-1.json"]);
+  });
+});
+
+describe("runner restart after the host died (ADR 0036, 2026-10-19 addendum 3)", () => {
+  /** The restarted campaign: one planned Trial, and the runner's resume of a dead run. */
+  const restart = (
+    t: Awaited<ReturnType<typeof fixture>>,
+    options: { readonly segment: "completed" | "wall"; readonly refuse?: true },
+  ) => {
+    const executed: string[] = [];
+    const offered: string[] = [];
+    const executor = {
+      async execute(run: DiscoveryTransportRun) {
+        executed.push(run.runId);
+        const identity = {
+          runId: run.runId,
+          targetSnapshotDigest: run.targetSnapshotDigest,
+          profile: run.profile,
+          startedAt: T0,
+          completedAt: "2026-10-19T01:30:00.000Z",
+        };
+        if (options.segment === "wall")
+          return {
+            receipt: createNativeRunReceipt({
+              ...identity,
+              terminal: "incomplete",
+              reason: "wall",
+            }),
+          };
+        const attachment = await t.context.attachments.put(
+          "findings",
+          Buffer.from(report),
+        );
+        return {
+          attachment,
+          receipt: createNativeRunReceipt({
+            ...identity,
+            terminal: "completed",
+            reason: "unavailable",
+            reportArtifactDigest: attachment.digest,
+            observed: {
+              toolCalls: 3,
+              filesRead: 2,
+              uniqueFilesRead: 2,
+              labRequests: 0,
+              dbQueries: 0,
+            },
+          }),
+        };
+      },
+    };
+    const run = async () =>
+      runDiscoveryCampaign({
+        ...t.context,
+        plannedTrials: [
+          {
+            trialId: "run-new",
+            trialOrdinal: 0,
+            explore: {
+              run: { ...t.run, runId: "run-new", expiresAt: T0 },
+              configuration: {
+                promptVariant: "wp2shell-bounty-v8",
+                promptDigest,
+              },
+            },
+          },
+        ],
+        executor,
+        resumeInterrupted: async (started) => {
+          offered.push(started.runId);
+          if (options.refuse) return undefined;
+          const assessment = await t.resumeFrom(DEAD_HOST, () => false);
+          if (assessment.status !== "resumable") return undefined;
+          return executeTrialResume(
+            { ...t.context, executor },
+            assessment.plan,
+            { ...t.run, runId: "run-1-segment-1" },
+          );
+        },
+      });
+    return { run, executed, offered };
+  };
+
+  it("resumes the dead run in its target's slot instead of starting a new Trial", async () => {
+    const t = await fixture();
+    await t.startOnHostA();
+    const runner = restart(t, { segment: "completed" });
+    expect(await runner.run()).toMatchObject({
+      runCount: 1,
+      stoppedBy: "no-new-finding",
+    });
+    expect(runner.offered).toEqual(["run-1"]);
+    expect(runner.executed).toEqual(["run-1-segment-1"]);
+    const trials = exploreTrials(t.ledger, {});
+    expect(trials).toMatchObject({ started: 1, superseded: 0 });
+    expect(trials.finished).toEqual(["completed"]);
+    expect(t.ledger.funnel("campaign-1").discoveryAttempts).toBe(1);
+  });
+
+  it("does not resume a segment that ended incomplete again", async () => {
+    const t = await fixture();
+    await t.startOnHostA();
+    const runner = restart(t, { segment: "wall" });
+    expect((await runner.run()).stoppedBy).toBe("incomplete");
+    // The runner restarts once more: the segment has its finish, so nothing runs.
+    expect(await runner.run()).toMatchObject({
+      runCount: 0,
+      stoppedBy: "incomplete",
+    });
+    expect(runner.offered).toEqual(["run-1"]);
+    expect(runner.executed).toEqual(["run-1-segment-1"]);
+  });
+
+  it("falls back to a new Trial when the resume is refused", async () => {
+    const t = await fixture();
+    await t.startOnHostA();
+    const runner = restart(t, { segment: "completed", refuse: true });
+    expect((await runner.run()).runCount).toBe(1);
+    expect(runner.executed).toEqual(["run-new"]);
+    expect(exploreTrials(t.ledger, {})).toMatchObject({
+      started: 2,
+      superseded: 1,
+    });
   });
 });

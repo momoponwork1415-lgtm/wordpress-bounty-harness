@@ -19,6 +19,7 @@ import type {
 } from "../ledger/index.js";
 import {
   countsAsTrial,
+  latestSegment,
   recordedTrialActivity,
   supersedingRun,
 } from "../discovery/index.js";
@@ -169,6 +170,8 @@ export interface ContinuousDeps {
     readonly retryIncompleteVerifications: boolean;
     readonly stop: () => boolean;
     readonly signal?: AbortSignal;
+    /** Resume the campaign's runs whose host died instead of running them again (ADR 0036). */
+    readonly resumeInterrupted: { log(line: string): void };
   }): Promise<CampaignSummary>;
   /** Removes crashed Lab leftovers (not review Labs); returns how many. */
   cleanupLeftovers(): Promise<number>;
@@ -306,8 +309,8 @@ function unboundBatch(deps: ContinuousDeps): string | undefined {
  * Explore runs in the ledger: how many started, the outcome of each one that
  * finished, how many finished runs SPEC §6 does not count as a Trial, and how
  * many unfinished runs a later start of the same Trial ordinal replaced (a
- * restarted campaign ran the target again; ADR 0036). Continuation and child
- * runs belong to their Trial, not counted.
+ * restarted campaign ran the target again; ADR 0036). Resume segments,
+ * continuation and child runs belong to their Trial, not counted.
  */
 export function exploreTrials(
   ledger: Pick<Ledger, "readAll">,
@@ -329,32 +332,40 @@ export function exploreTrials(
       ? [event]
       : [],
   );
-  const explore = new Set(starts.map(key));
-  const finishedEvents = readAll(ledger, {
-    ...query,
-    type: "discovery-run-finished",
-  }).flatMap((event) =>
-    event.type === "discovery-run-finished" && explore.has(key(event))
-      ? [event]
-      : [],
+  const finishes = new Map(
+    readAll(ledger, { ...query, type: "discovery-run-finished" }).flatMap(
+      (event) =>
+        event.type === "discovery-run-finished" ? [[key(event), event]] : [],
+    ),
   );
+  // A resumed Trial is counted once, by its first start, and ends as its
+  // latest segment ends (ADR 0036).
+  const heads = starts.filter((event) => event.resumesRun === undefined);
+  const lastOf = (head: (typeof starts)[number]) =>
+    key({
+      campaignId: head.campaignId,
+      runId: latestSegment(
+        starts.filter((event) => event.campaignId === head.campaignId),
+        head.runId,
+      ),
+    });
+  const ended = heads.flatMap((head) => {
+    const finished = finishes.get(lastOf(head));
+    return finished === undefined ? [] : [finished.outcome];
+  });
   const active = recordedTrialActivity(ledger, query.campaignId);
-  const notTrials = finishedEvents.filter(
-    (event) =>
-      !countsAsTrial(event, active.has(`${event.campaignId}\0${event.runId}`)),
+  const notTrials = heads.filter((head) => {
+    const own = finishes.get(key(head));
+    return (
+      own !== undefined &&
+      !countsAsTrial(own, active.has(`${head.campaignId}\0${head.runId}`))
+    );
+  }).length;
+  const superseded = heads.filter(
+    (head) =>
+      !finishes.has(lastOf(head)) && supersedingRun(starts, head) !== undefined,
   ).length;
-  const finishedKeys = new Set(finishedEvents.map(key));
-  const superseded = starts.filter(
-    (event) =>
-      !finishedKeys.has(key(event)) &&
-      supersedingRun(starts, event) !== undefined,
-  ).length;
-  return {
-    started: explore.size,
-    finished: finishedEvents.map((event) => event.outcome),
-    notTrials,
-    superseded,
-  };
+  return { started: heads.length, finished: ended, notTrials, superseded };
 }
 
 /** Completed explore Trials, and whether every skipped target was refused. */
@@ -581,6 +592,9 @@ export function createContinuousRunner(deps: ContinuousDeps) {
           retryIncompleteVerifications: current.retry,
           stop: stopRequested,
           signal: operatorController.signal,
+          resumeInterrupted: {
+            log: (line) => deps.io.log(`${deps.clock().toISOString()} ${line}`),
+          },
         });
         memo.consecutiveErrorBatches = 0;
       } catch (error) {

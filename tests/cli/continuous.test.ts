@@ -26,6 +26,7 @@ type Step = (input: {
   target: string | null;
   retryIncompleteVerifications: boolean;
   signal?: AbortSignal;
+  resumeInterrupted?: { log(line: string): void };
 }) => Promise<Partial<CampaignSummary>> | Partial<CampaignSummary>;
 
 async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
@@ -371,8 +372,13 @@ describe("continuous runner", () => {
     expect(t.log.at(-1)).toMatch(/ stopped reason=operator$/);
   });
 
-  it("resumes the unfinished campaign under its id", async () => {
-    const steps: Step[] = [async () => ({})];
+  it("resumes the unfinished campaign under its id, resuming runs whose host died", async () => {
+    const steps: Step[] = [
+      async (input) => {
+        input.resumeInterrupted?.log("interrupted run=run-1 resumed as run-2");
+        return {};
+      },
+    ];
     const t = await setup(steps);
     await writeFile(
       continuousPaths(t.root).memo,
@@ -383,6 +389,10 @@ describe("continuous runner", () => {
       campaignId: "prod-20261019-4",
       retryIncompleteVerifications: true,
     });
+    // The profile's resume lines reach the runner log with a timestamp (ADR 0036).
+    expect(t.log).toContain(
+      "2026-10-20T00:00:00.000Z interrupted run=run-1 resumed as run-2",
+    );
   });
 
   it("writes one log line and one notification per state change", async () => {
