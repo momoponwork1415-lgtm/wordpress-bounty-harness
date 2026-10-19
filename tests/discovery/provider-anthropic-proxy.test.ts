@@ -20,13 +20,18 @@ afterEach(async () => {
 async function open() {
   const oauthToken = `sk-ant-oat-${randomBytes(24).toString("hex")}`;
   const grantToken = randomBytes(32).toString("hex");
-  const upstream: { url: string; headers: Record<string, string> }[] = [];
+  const upstream: {
+    url: string;
+    headers: Record<string, string>;
+    body: unknown;
+  }[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn((url: URL, init: RequestInit) => {
       upstream.push({
         url: url.toString(),
         headers: init.headers as Record<string, string>,
+        body: JSON.parse(String(init.body)) as unknown,
       });
       // An upstream echo of the token must not reach the agent.
       return Promise.resolve(
@@ -78,7 +83,7 @@ async function open() {
           path: input.path ?? "/v1/messages?beta=true",
           headers: {
             authorization: input.authorization ?? `Bearer ${grantToken}`,
-            "anthropic-beta": "claude-code-20250219",
+            "anthropic-beta": "claude-code-20250219, mcp-client-2025-04-04",
             "anthropic-version": "2023-06-01",
             "x-api-key": "agent-supplied",
           },
@@ -136,7 +141,9 @@ describe("Anthropic subscription egress proxy", () => {
     ).toBe(404);
     expect(upstream).toHaveLength(0);
 
-    const forwarded = await send({ body: { model: "claude-opus-5-5" } });
+    const forwarded = await send({
+      body: { model: "claude-opus-5-5", fallbacks: "default" },
+    });
     expect(forwarded.status).toBe(200);
     expect(forwarded.body).not.toContain(oauthToken);
     expect(forwarded.headers["anthropic-ratelimit-unified-status"]).toBe(
@@ -151,6 +158,8 @@ describe("Anthropic subscription egress proxy", () => {
           "anthropic-beta": `claude-code-20250219,${ANTHROPIC_OAUTH_BETA}`,
           "anthropic-version": "2023-06-01",
         }) as unknown,
+        // Server-side model fallback never leaves the broker.
+        body: { model: "claude-opus-5-5" },
       },
     ]);
     expect(upstream[0]?.headers).not.toHaveProperty("x-api-key");

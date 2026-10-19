@@ -108,6 +108,8 @@ const childTranscript = (model = "claude-opus-5-5") =>
       },
     },
   );
+const jsonLast = (text: string) =>
+  JSON.parse(text.trimEnd().split("\n").at(-1)!) as unknown;
 const childEvents = [
   {
     type: "harness.child-start",
@@ -393,6 +395,71 @@ describe("Claude native agent runtime", () => {
       reason: "policy",
       reasonDetail: "child-profile-mismatch",
     });
+  });
+
+  it("keeps a child's report and every transcript when the wall stops the Trial before SubagentStop", async () => {
+    const rootTranscript = lines({
+      type: "user",
+      timestamp: start,
+      message: { content: "Objective." },
+    });
+    const { runtime: claude, attachments } = await runtime(
+      // The child started, but the wall came before its stop event.
+      lines(turn([{ claim: "root" }]), childEvents[0]),
+      {
+        status: "failed",
+        exitCode: -1,
+        failureKind: "timed-out",
+        transcripts: [
+          { path: "-workspace-main/s1.jsonl", content: rootTranscript },
+          {
+            path: "-workspace-main/s1/subagents/agent-agent1.jsonl",
+            content: childTranscript(),
+          },
+        ],
+      },
+    );
+    const result = await claude.execute(run);
+    expect(result.receipt).toMatchObject({
+      terminal: "incomplete",
+      reason: "wall",
+      childThreadsObserved: 1,
+      childThreadsAdmitted: 1,
+    });
+    expect(result.attachment).toBeDefined();
+    const child = result.agentRuns?.[0];
+    expect(child?.agentPath).toBe("/root/agent1");
+    expect(child?.receipt).toMatchObject({ terminal: "completed" });
+    const stored = await attachments.readByDigest(
+      "findings",
+      child!.attachment!.digest,
+    );
+    if (stored.status !== "resolved") throw new Error("child report missing");
+    expect(
+      (
+        JSON.parse(stored.bytes.toString()) as { findings: string[] }
+      ).findings.map((finding) => JSON.parse(finding) as unknown),
+    ).toEqual([{ claim: "child" }]);
+    // The Root diagnostic names every sealed transcript, Root included.
+    const diagnostic = await attachments.readByDigest(
+      "diagnostic",
+      result.receipt.diagnosticArtifactDigest,
+    );
+    if (diagnostic.status !== "resolved") throw new Error("diagnostic missing");
+    const listed = jsonLast(diagnostic.bytes.toString()) as {
+      files: { path: string; digest: string }[];
+    };
+    expect(listed.files.map(({ path }) => path)).toEqual([
+      "-workspace-main/s1.jsonl",
+      "-workspace-main/s1/subagents/agent-agent1.jsonl",
+    ]);
+    const root = await attachments.readByDigest(
+      "diagnostic",
+      listed.files[0]!.digest,
+    );
+    expect(root.status === "resolved" && root.bytes.toString()).toBe(
+      rootTranscript,
+    );
   });
 
   it("does not accept a final report before the active wall floor", async () => {

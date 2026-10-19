@@ -29,10 +29,10 @@
 移すもの（PR 1）:
 
 - Agent SDK の `query()` を使う runner。runner は image に焼かず、Harness が読み取り専用で mount する。
-- 購読トークン用の broker 経路。`/v1/messages` だけを通し、`oauth-2025-04-20` beta を足し、grant を本物のトークンに差し替える。
+- 購読トークン用の broker 経路。`/v1/messages` だけを通し、`oauth-2025-04-20` beta を足し、grant を本物のトークンに差し替える。保全版より通す要求を絞った（下の「broker が通す要求」）。
 - `HEAD /api/hello` の疎通確認には 404 を返す。
 - runsc 下では bubblewrap が動かないため、`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0` を使う（所有者承認 2026-10-14）。
-- SubagentStart / SubagentStop の hook で子の開始と終了を記録する。子の transcript から子の Finding を Root と独立に保存する。
+- SubagentStart / SubagentStop の hook で子の開始と終了を記録する。子の Finding は、子の transcript から Root と独立に保存する。制限時間や異常終了で SubagentStop が来なかった子も、transcript のファイルから見つけて保存する。Root を含むすべての transcript を Private Evidence に封じ、Root の診断記録にその一覧を書く。
 - grant をコンテナ引数に載せず、docker client の環境変数として名前だけで渡す。保全版でも同じ扱いだった。
 
 捨てるもの:
@@ -71,6 +71,24 @@ Claude Code の出力を、既存の型付き理由に当てはめる。本文�
 | `authentication_failed`、401、ログイン要求 | 認証 | `incomplete(provider)`、`provider-authentication`、`providerLimit` なし | Codex の認証切れと同じく `provider-refused` に入る。所有者がトークンを入れ直す |
 
 満杯（529）を rate-limit に入れるのは、Codex の `server_overloaded` の扱い（#400）に合わせた。
+
+## broker が通す要求
+
+grant はエージェントのシェルからも見える。Claude Code の子プロセス環境の除去（`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`）は bubblewrap を要し、runsc の中では動かないからである。仮に除去できても、Bash は Claude Code と同じ利用者で動くので、`/proc/<pid>/environ` から grant を読める。そのため、何を provider に届けるかは broker が決める（`src/discovery/anthropic-request-policy.ts`）。
+
+- 上位の項目は、Claude Code 2.1.296 が組み立てる項目だけを通す（`model`、`messages`、`system`、`tools`、`tool_choice`、`metadata`、`max_tokens`、`thinking`、`temperature`、`top_p`、`top_k`、`stop_sequences`、`stream`、`context_management`、`output_config`、`output_format`、`cache_control`、`speed`、`diagnostics`）。`mcp_servers`、`container` を含むほかの項目は 403 で断る。
+- `fallbacks`（サーバ側で別モデルに切り替える指定）は、転送前に取り除く。答えは必ず固定したモデルから返る。
+- ツールは、クライアントが自分で実行するもの（`type` なし、または `custom`）だけを通す。web 検索、web 取得、コード実行、MCP などのサーバ側ツールは断る。
+- 内容ブロックは、`tool_result` の中まで含めてたどる。`source` が `base64`、`text`、`content` 以外（URL や Files API）のものは断る。サーバ側ツールのブロック（`server_tool_use`、`*_tool_result`、`mcp_*`）も断る。
+- `anthropic-beta` は許可した値だけを転送し、ほかは落としてログに書く。許可一覧は、Claude Code 2.1.296 のバイナリにある beta の一覧から、サーバ側の機能を有効にするもの（web 検索、MCP サーバ、Files API、environments、リモートセッション、advisor、tool search、サーバ側の切り替え、message threads、自動モードの分類器、内部の印）を除いたものである。
+
+## 既知の制限
+
+- エージェントは `CLAUDE_CONFIG_DIR` の transcript に書き込める。偽の拒否の行を書けば、run を `provider-refusal` に見せかけられる。結果は「その対象を進めない」側に倒れるだけで、`runtime-confirmed` には届かない。
+- エージェントは Bash から `claude -p` を起動し、同じ grant で別のセッションを始められる。その要求も上の制限を通り、量は broker の要求上限（1 Trial 10,000 件）で止まる。
+- 要求上限 10,000 件は推定である。Claude Code はモデルの 1 ターンごとに 1 要求を送る。Root と子 4 体の 5 本が 120 分の間、1 ターン 3.6 秒で回り続けた場合に当たる。実測はまだない。
+- Claude の run はまだ再開できない（PR 2）。ホストが死んだ後の `claude-scratch` の残りは掃除しない。
+- provider 上限で止まると、runner は batch 全体を待たせる。そのため、本番の runner には `runtimeShare` を書かず、Opus は別の campaign として手で回す（OPERATIONS）。
 
 ## 再開と最低能動時間
 

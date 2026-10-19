@@ -45,6 +45,10 @@ type Failure = {
 
 /** Where the sandbox mounts the Claude config directory; transcript paths start here. */
 const TRANSCRIPT_ROOT = "/tmp/claude/projects/";
+const CHILD_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** Claude Code writes each child's session to `<project>/<session>/subagents/agent-<id>.jsonl`. */
+const CHILD_TRANSCRIPT =
+  /(?:^|\/)subagents\/agent-([A-Za-z0-9_-]{1,64})\.jsonl$/;
 /** Claude Code labels the assistant messages it writes for an API error with this model. */
 const SYNTHETIC_MODEL = "<synthetic>";
 
@@ -339,7 +343,12 @@ export class ClaudeNativeAgentRuntime {
             runtimeProfileDigest: profile.digest,
             model: profile.requestedModelId,
             protocol: "anthropic-messages",
-            maxRequests: 2000,
+            // Claude Code sends one Messages request per model turn, for the
+            // Root and up to four children at once, and its side requests are
+            // pinned to the same model. Five streams over the 120-minute wall at
+            // one turn per 3.6 s is 10,000, the broker's ceiling; a Trial that
+            // needs more is runaway traffic and stops as broker-request-cap.
+            maxRequests: 10_000,
             maxRequestBytes: 8 * 1024 * 1024,
             maxResponseBytes: 8 * 1024 * 1024,
             expiresAt: run.expiresAt,
@@ -434,6 +443,13 @@ export class ClaudeNativeAgentRuntime {
       this.attachments
         .put(kind, typeof value === "string" ? Buffer.from(value) : value)
         .catch(() => undefined);
+    // Every session transcript, Root and children, is kept whatever ended the run.
+    const sealed = new Map<string, string | undefined>();
+    for (const file of result.transcripts ?? [])
+      sealed.set(file.path, (await put("diagnostic", file.content))?.digest);
+    const transcriptsSealed = [...sealed.values()].every(
+      (digest) => digest !== undefined,
+    );
     const diagnostic = await put(
       "diagnostic",
       `${result.stdout}\n${JSON.stringify({
@@ -444,21 +460,33 @@ export class ClaudeNativeAgentRuntime {
           failureKind: result.failureKind ?? null,
           stderrTail: result.stderr?.slice(-64 * 1024) ?? "",
         },
+      })}\n${JSON.stringify({
+        type: "harness.transcripts",
+        files: [...sealed].map(([path, digest]) => ({
+          path,
+          digest: digest ?? null,
+        })),
       })}`,
     );
     const research =
       result.research === undefined
         ? undefined
         : await put("research", result.research.archive);
-    const agentRuns = await this.#children(run, result, grantReceiptDigest);
-    const childIds = new Set(
-      events.flatMap((event) =>
+    const agentRuns = await this.#children(
+      run,
+      result,
+      grantReceiptDigest,
+      sealed,
+    );
+    const childIds = new Set([
+      ...events.flatMap((event) =>
         event.type === "harness.child-start" &&
         typeof event.agentId === "string"
           ? [event.agentId]
           : [],
       ),
-    );
+      ...agentRuns.map((child) => child.agentPath.slice("/root/".length)),
+    ]);
     const report = rootReport(events);
     const attachment: ProviderAttachmentRef | undefined =
       report === undefined
@@ -499,7 +527,8 @@ export class ClaudeNativeAgentRuntime {
                           reason: "evidence",
                           detail: "research-capture-failed",
                         }
-                      : result.transcriptFailure !== undefined
+                      : result.transcriptFailure !== undefined ||
+                          !transcriptsSealed
                         ? {
                             reason: "evidence",
                             detail: "transcript-capture-failed",
@@ -560,27 +589,44 @@ export class ClaudeNativeAgentRuntime {
     };
   }
 
-  /** Each child is sealed from its own transcript, independent of the Root's report. */
+  /**
+   * Each child is sealed from its own transcript, independent of the Root's
+   * report. A child that never reached SubagentStop (wall, crash) is still
+   * found by its transcript file, like a Codex child by its rollout.
+   */
   async #children(
     run: DiscoveryTransportRun,
     result: ClaudeSandboxResult,
     grantReceiptDigest: string,
+    sealed: ReadonlyMap<string, string | undefined>,
   ): Promise<AgentRun[]> {
+    const paths = new Map<string, string | undefined>();
     const stops = new Map<string, Event>();
     for (const event of jsonLines(result.stdout))
       if (
         event.type === "harness.child-stop" &&
         typeof event.agentId === "string" &&
-        /^[A-Za-z0-9_-]{1,64}$/.test(event.agentId)
-      )
+        CHILD_ID.test(event.agentId)
+      ) {
         stops.set(event.agentId, event);
+        paths.set(
+          event.agentId,
+          typeof event.transcriptPath === "string" &&
+            event.transcriptPath.startsWith(TRANSCRIPT_ROOT)
+            ? event.transcriptPath.slice(TRANSCRIPT_ROOT.length)
+            : undefined,
+        );
+      }
+    for (const file of [...(result.transcripts ?? [])].sort((left, right) =>
+      left.path.localeCompare(right.path),
+    )) {
+      const agentId = CHILD_TRANSCRIPT.exec(file.path)?.[1];
+      if (agentId !== undefined && !paths.has(agentId))
+        paths.set(agentId, file.path);
+    }
     const agentRuns: AgentRun[] = [];
-    for (const [agentId, stop] of [...stops].slice(0, 255)) {
-      const path =
-        typeof stop.transcriptPath === "string" &&
-        stop.transcriptPath.startsWith(TRANSCRIPT_ROOT)
-          ? stop.transcriptPath.slice(TRANSCRIPT_ROOT.length)
-          : undefined;
+    for (const [agentId, path] of [...paths].slice(0, 255)) {
+      const stop = stops.get(agentId);
       const raw = result.transcripts?.find((file) => file.path === path);
       const transcript = jsonLines(raw?.content ?? "");
       const models = new Set(
@@ -599,13 +645,8 @@ export class ClaudeNativeAgentRuntime {
           ? [new Date(event.timestamp).toISOString()]
           : [],
       );
-      const diagnostic =
-        raw === undefined
-          ? undefined
-          : await this.attachments
-              .put("diagnostic", Buffer.from(raw.content))
-              .catch(() => undefined);
-      const report = childReport(stop.finalMessage, transcript);
+      const diagnostic = raw === undefined ? undefined : sealed.get(raw.path);
+      const report = childReport(stop?.finalMessage, transcript);
       const attachment =
         report === undefined
           ? undefined
@@ -641,7 +682,7 @@ export class ClaudeNativeAgentRuntime {
           grantReceiptDigest,
           ...(diagnostic === undefined
             ? {}
-            : { diagnosticArtifactDigest: diagnostic.digest }),
+            : { diagnosticArtifactDigest: diagnostic }),
           ...(attachment === undefined
             ? {}
             : { reportArtifactDigest: attachment.digest }),

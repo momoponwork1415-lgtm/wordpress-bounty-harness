@@ -8,6 +8,11 @@ import {
 import { createServer as createTlsServer } from "node:https";
 import type { Server as NetServer } from "node:net";
 
+import {
+  admitAnthropicRequest,
+  admittedAnthropicBetas,
+} from "./anthropic-request-policy.js";
+
 export const PROVIDER_UPSTREAM_ORIGIN = "https://api.openai.com/v1";
 /** Claude Messages API; only `/v1/messages` is ever forwarded. */
 export const ANTHROPIC_UPSTREAM_ORIGIN = "https://api.anthropic.com";
@@ -586,28 +591,10 @@ function anthropicListener(
         sendJson(response, 400, "request-json-invalid");
         return;
       }
-      if (
-        typeof payload !== "object" ||
-        payload === null ||
-        !("model" in payload) ||
-        payload.model !== options.model
-      ) {
-        sendJson(response, 403, "model-not-admitted");
-        return;
-      }
-      const tools = "tools" in payload ? payload.tools : undefined;
-      if (
-        Array.isArray(tools) &&
-        tools.some(
-          (tool: unknown) =>
-            typeof tool === "object" &&
-            tool !== null &&
-            "type" in tool &&
-            typeof tool.type === "string" &&
-            /^web_(?:search|fetch)/.test(tool.type),
-        )
-      ) {
-        sendJson(response, 403, "server-tool-not-admitted");
+      const decision = admitAnthropicRequest(payload, options.model);
+      if (decision.status === "refused") {
+        process.stderr.write(`provider-egress refused=${decision.reason}\n`);
+        sendJson(response, 403, decision.reason);
         return;
       }
       if (counters.forwardedRequests >= options.maxRequests) {
@@ -627,10 +614,17 @@ function anthropicListener(
         const value = request.headers[name];
         if (typeof value === "string") forwarded[name] = value;
       }
-      const betas = String(request.headers["anthropic-beta"] ?? "")
-        .split(",")
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0);
+      const betas = admittedAnthropicBetas(
+        request.headers["anthropic-beta"],
+        ANTHROPIC_OAUTH_BETA,
+      );
+      if (betas.dropped.length > 0)
+        process.stderr.write(
+          `provider-egress beta-dropped=${betas.dropped
+            .join(",")
+            .replace(/[^a-z0-9,.-]/gi, "?")
+            .slice(0, 512)}\n`,
+        );
       const upstream = await fetch(
         new URL(request.url ?? "/v1/messages", upstreamOrigin.origin),
         {
@@ -638,12 +632,11 @@ function anthropicListener(
           headers: {
             ...forwarded,
             authorization: `Bearer ${oauthToken}`,
-            "anthropic-beta": [
-              ...new Set([...betas, ANTHROPIC_OAUTH_BETA]),
-            ].join(","),
+            "anthropic-beta": betas.admitted.join(","),
             "content-type": "application/json",
           },
-          body: new Uint8Array(body),
+          // Re-serialised so only the admitted fields reach the provider.
+          body: JSON.stringify(decision.body),
           redirect: "error",
           signal: AbortSignal.timeout(remainingMs),
         },

@@ -1029,7 +1029,15 @@ describe("discovery runtime share", () => {
   };
 
   it("runs a target the share assigns to Claude on the Claude runtime and records it", async () => {
-    const { run, configPath, transportRuns, prompts, ledger } = await harness({
+    const {
+      run,
+      configPath,
+      transportRuns,
+      prompts,
+      ledger,
+      root,
+      sweepHeldAtDiscovery,
+    } = await harness({
       claude: true,
       config: {
         discovery: { lab: "none", runtimeShare: { codex: 0, claude: 1 } },
@@ -1049,6 +1057,11 @@ describe("discovery runtime share", () => {
       claudeProfile.digest,
     );
     expect(started(ledger())?.configuration.runtime).toBe("claude-code/v1");
+    // A hand-run campaign holds the runner's leftover sweep while it runs.
+    expect(sweepHeldAtDiscovery).toEqual([true]);
+    expect(
+      existsSync(join(root, "state", "sweep-holds", String(process.pid))),
+    ).toBe(false);
 
     // The same objective and output contract as a Codex Trial reach the agent.
     const codex = await harness({
