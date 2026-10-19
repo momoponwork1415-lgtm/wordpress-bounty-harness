@@ -172,7 +172,7 @@ export interface ContinuousDeps {
     readonly signal?: AbortSignal;
     /** Resume the campaign's runs whose host died instead of running them again (ADR 0036). */
     readonly resumeInterrupted: { log(line: string): void };
-    /** The operator's live limit, read before each new target starts. */
+    /** The operator's live limits (total and per runtime), read before each new target starts. */
     readonly targetLimit: TargetLimit;
   }): Promise<CampaignSummary>;
   /** Removes crashed Lab leftovers (not review Labs); returns how many. */
@@ -272,12 +272,66 @@ export async function readContinuousConcurrency(
   return /^\s*[1-9]\d{0,2}\s*$/.test(raw) ? Number(raw) : null;
 }
 
-/** Atomically publish a live target limit; the caller checks it against the ceiling. */
+/** A runtime name that may become part of a file name. */
+export const RUNTIME_NAME = /^[a-z][a-z0-9-]{0,31}$/;
+
+/** `<state>/continuous.concurrency.<runtime>`: one runtime's live limit under its cap. */
+export function continuousRuntimeConcurrencyPath(
+  stateDirectory: string,
+  runtime: string,
+): string {
+  if (!RUNTIME_NAME.test(runtime))
+    throw new Error(`Invalid runtime name: ${runtime}`);
+  return `${continuousPaths(stateDirectory).concurrency}.${runtime}`;
+}
+
+/** One runtime's live limit; null when the file is missing or does not hold a whole number. 0 holds its starts. */
+export async function readContinuousRuntimeConcurrency(
+  stateDirectory: string,
+  runtime: string,
+): Promise<number | null> {
+  const raw = await readFile(
+    continuousRuntimeConcurrencyPath(stateDirectory, runtime),
+    "utf8",
+  ).catch(() => "");
+  return /^\s*\d{1,3}\s*$/.test(raw) ? Number(raw) : null;
+}
+
+/** The runtimes that have a live limit file, by name. */
+export async function liveRuntimeConcurrencies(
+  stateDirectory: string,
+): Promise<readonly { runtime: string; limit: number }[]> {
+  const prefix = "continuous.concurrency.";
+  const names = await readdir(stateDirectory).catch(() => [] as string[]);
+  const runtimes = names
+    .filter((name) => name.startsWith(prefix))
+    .map((name) => name.slice(prefix.length))
+    .filter((runtime) => RUNTIME_NAME.test(runtime))
+    .sort();
+  const live = [];
+  for (const runtime of runtimes) {
+    const limit = await readContinuousRuntimeConcurrency(
+      stateDirectory,
+      runtime,
+    );
+    if (limit !== null) live.push({ runtime, limit });
+  }
+  return live;
+}
+
+/**
+ * Atomically publish a live target limit, or one runtime's; the caller checks
+ * it against the ceiling.
+ */
 export async function writeContinuousConcurrency(
   stateDirectory: string,
   limit: number,
+  runtime?: string,
 ): Promise<void> {
-  const path = continuousPaths(stateDirectory).concurrency;
+  const path =
+    runtime === undefined
+      ? continuousPaths(stateDirectory).concurrency
+      : continuousRuntimeConcurrencyPath(stateDirectory, runtime);
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, `${limit}\n`, { mode: 0o600, flag: "wx" });
@@ -631,6 +685,12 @@ export function createContinuousRunner(deps: ContinuousDeps) {
             report: (limit) =>
               deps.io.log(
                 `${deps.clock().toISOString()} concurrency effective=${limit} campaign=${campaignId}`,
+              ),
+            readRuntime: (runtime) =>
+              readContinuousRuntimeConcurrency(deps.stateDirectory, runtime),
+            reportRuntime: (runtime, limit) =>
+              deps.io.log(
+                `${deps.clock().toISOString()} concurrency runtime=${runtime} effective=${limit} campaign=${campaignId}`,
               ),
           },
         });

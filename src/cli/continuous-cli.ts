@@ -7,8 +7,10 @@ import {
   createContinuousRunner,
   exploreTrials,
   labSweepHeld,
+  liveRuntimeConcurrencies,
   pidAlive,
   readContinuousConcurrency,
+  readContinuousRuntimeConcurrency,
   readContinuousMemo,
   readContinuousStopReason,
   readLivePid,
@@ -91,10 +93,59 @@ export async function continuousCommand(
     readonly verifyConcurrency?: number;
     /** Positionals after the subcommand: `continuous concurrency <n>`. */
     readonly rest?: readonly string[];
+    /** `continuous concurrency --runtime <name>`: one runtime's live limit. */
+    readonly runtime?: string | undefined;
   },
 ): Promise<number> {
   const { state, profile, io } = context;
   const paths = continuousPaths(state.stateDirectory);
+  if (context.runtime !== undefined && sub !== "concurrency")
+    throw new Error("--runtime is only valid with continuous concurrency");
+  if (sub === "concurrency" && context.runtime !== undefined) {
+    if (context.resume)
+      throw new Error("--resume is only valid with continuous run");
+    if (context.configPath === undefined)
+      throw new Error("continuous concurrency needs --config");
+    if (profile.runtimeCeilings === undefined)
+      throw new Error("This profile has no runtime caps");
+    const runtime = context.runtime;
+    const ceiling = (await profile.runtimeCeilings(context.configPath))[
+      runtime
+    ];
+    if (ceiling === undefined)
+      throw new Error(
+        `runtime ${runtime} has no cap in resources.maxConcurrentTargetsByRuntime`,
+      );
+    const live = await readContinuousRuntimeConcurrency(
+      state.stateDirectory,
+      runtime,
+    );
+    const current = Math.min(live ?? ceiling, ceiling);
+    const rest = context.rest ?? [];
+    if (rest.length === 0) {
+      io.stdout(
+        `concurrency runtime=${runtime} ${current}  ceiling ${ceiling}  live ${live ?? "unset"}`,
+      );
+      return 0;
+    }
+    const value = rest[0]!;
+    if (rest.length > 1 || !/^\d{1,3}$/.test(value) || Number(value) > ceiling)
+      throw new Error(
+        `concurrency of ${runtime} must be an integer from 0 to ${ceiling}`,
+      );
+    await writeContinuousConcurrency(
+      state.stateDirectory,
+      Number(value),
+      runtime,
+    );
+    const line = `${state.clock().toISOString()} concurrency runtime=${runtime} ${current}->${Number(value)}`;
+    appendFileSync(paths.log, `${line}\n`, { mode: 0o600 });
+    io.stdout(line);
+    io.stdout(
+      "the runner applies it before its next target start; running Trials go on",
+    );
+    return 0;
+  }
   if (sub === "concurrency") {
     if (context.resume)
       throw new Error("--resume is only valid with continuous run");
@@ -110,6 +161,16 @@ export async function continuousCommand(
       io.stdout(
         `concurrency ${current}  ceiling ${ceiling}  live ${live ?? "unset"}`,
       );
+      const caps = (await profile.runtimeCeilings?.(context.configPath)) ?? {};
+      for (const [runtime, cap] of Object.entries(caps)) {
+        const runtimeLive = await readContinuousRuntimeConcurrency(
+          state.stateDirectory,
+          runtime,
+        );
+        io.stdout(
+          `concurrency runtime=${runtime} ${Math.min(runtimeLive ?? cap, cap)}  ceiling ${cap}  live ${runtimeLive ?? "unset"}`,
+        );
+      }
       return 0;
     }
     const value = rest[0]!;
@@ -176,6 +237,10 @@ export async function continuousCommand(
     // Unset means the config's maxConcurrentTargets.
     const live = await readContinuousConcurrency(state.stateDirectory);
     if (live !== null) io.stdout(`concurrency live ${live}`);
+    for (const { runtime, limit } of await liveRuntimeConcurrencies(
+      state.stateDirectory,
+    ))
+      io.stdout(`concurrency live runtime=${runtime} ${limit}`);
     const now = state.clock();
     const day = new Date(now.toISOString().slice(0, 10));
     const monday = new Date(

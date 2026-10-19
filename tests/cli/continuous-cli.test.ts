@@ -313,6 +313,80 @@ describe("continuous concurrency", () => {
   });
 });
 
+describe("continuous concurrency --runtime", () => {
+  const withCaps = () =>
+    fakeProfile({
+      targetCeiling: async () => 6,
+      runtimeCeilings: async (configPath) => {
+        expect(configPath).toBe("/config.json");
+        return { codex: 3, claude: 3 };
+      },
+    });
+  const options = { configPath: "/config.json" };
+  const runtimeFile = (root: string, runtime: string) =>
+    `${continuousPaths(root).concurrency}.${runtime}`;
+
+  it("sets one runtime's live limit from 0 to its cap, logs it, and shows it in concurrency and status", async () => {
+    const t = await setup(withCaps());
+    expect(await t.command("concurrency", options)).toBe(0);
+    expect(t.stdout).toEqual([
+      "concurrency 6  ceiling 6  live unset",
+      "concurrency runtime=codex 3  ceiling 3  live unset",
+      "concurrency runtime=claude 3  ceiling 3  live unset",
+    ]);
+
+    t.stdout.length = 0;
+    expect(
+      await t.command("concurrency", {
+        ...options,
+        runtime: "claude",
+        rest: ["0"],
+      }),
+    ).toBe(0);
+    const at = NOW.replace("Z", ".000Z");
+    expect(t.stdout[0]).toBe(`${at} concurrency runtime=claude 3->0`);
+    expect(await readFile(runtimeFile(t.root, "claude"), "utf8")).toBe("0\n");
+    expect(await readFile(t.paths.log, "utf8")).toBe(`${t.stdout[0]}\n`);
+    // The total file is untouched.
+    await expect(stat(t.paths.concurrency)).rejects.toThrow();
+
+    t.stdout.length = 0;
+    expect(
+      await t.command("concurrency", { ...options, runtime: "claude" }),
+    ).toBe(0);
+    expect(t.stdout).toEqual([
+      "concurrency runtime=claude 0  ceiling 3  live 0",
+    ]);
+
+    t.stdout.length = 0;
+    await t.command("status");
+    expect(t.stdout[1]).toBe("concurrency live runtime=claude 0");
+  });
+
+  it("rejects a value above the runtime's cap, a runtime without a cap, and --runtime elsewhere", async () => {
+    const t = await setup(withCaps());
+    for (const value of ["4", "-1", "two"])
+      await expect(
+        t.command("concurrency", {
+          ...options,
+          runtime: "codex",
+          rest: [value],
+        }),
+      ).rejects.toThrow("concurrency of codex must be an integer from 0 to 3");
+    await expect(
+      t.command("concurrency", {
+        ...options,
+        runtime: "../codex",
+        rest: ["1"],
+      }),
+    ).rejects.toThrow("runtime ../codex has no cap");
+    await expect(t.command("status", { runtime: "codex" })).rejects.toThrow(
+      "--runtime is only valid with continuous concurrency",
+    );
+    await expect(stat(runtimeFile(t.root, "codex"))).rejects.toThrow();
+  });
+});
+
 describe("continuous stop and resume", () => {
   it("latches an operator stop that status reports until resume clears it", async () => {
     const t = await setup(fakeProfile());

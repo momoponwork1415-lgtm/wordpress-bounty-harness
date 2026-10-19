@@ -1083,6 +1083,40 @@ describe("discovery runtime share", () => {
     );
   });
 
+  it("runs a Claude-assigned target under a per-runtime cap", async () => {
+    const { run, configPath, transportRuns } = await harness({
+      claude: true,
+      config: {
+        discovery: { lab: "none", runtimeShare: { codex: 1, claude: 1 } },
+        resources: {
+          maxConcurrentRuns: 1,
+          maxConcurrentTargets: 2,
+          memoryBudgetMiB: 10_752,
+          maxConcurrentTargetsByRuntime: { codex: 1, claude: 1 },
+        },
+      },
+    });
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "c-capped",
+      "--config",
+      configPath,
+    );
+    expect(transportRuns).toHaveLength(1);
+    // The scheduler's runtime is the one discovery used for this target.
+    expect(transportRuns[0]?.profile.digest).toBe(
+      assignDiscoveryRuntime("wporg:synthetic-plugin", {
+        codex: 1,
+        claude: 1,
+      }) === "claude"
+        ? claudeProfile.digest
+        : profile.digest,
+    );
+  });
+
   it("keeps every target on Codex without a share and writes no runtime field", async () => {
     const { run, configPath, transportRuns, ledger } = await harness({
       claude: true,

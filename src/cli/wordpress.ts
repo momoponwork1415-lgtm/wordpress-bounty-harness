@@ -71,6 +71,7 @@ import {
   openWordPressCampaignSession,
   readWordPressCampaignConfig,
   readWordPressCampaignPolicy,
+  wordPressRuntimeCeilings,
   type WordPressCampaignBoundaries,
   type WordPressCampaignConfig,
   type WordPressCampaignSession,
@@ -935,6 +936,19 @@ async function runWordPressCampaign(
     ...(input.targetLimit === undefined
       ? {}
       : { targetLimit: input.targetLimit }),
+    ...(config.resources.maxConcurrentTargetsByRuntime === undefined
+      ? {}
+      : {
+          runtimeCaps: {
+            // The same identity and share that pick the runtime at discovery.
+            runtimeOf: (target: WordPressTargetSelection) =>
+              assignDiscoveryRuntime(
+                target.targetId,
+                config.discovery.runtimeShare,
+              ),
+            ceilings: wordPressRuntimeCeilings(config),
+          },
+        }),
     ...(input.stop === undefined ? {} : { stop: input.stop }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.retryIncompleteVerifications === undefined
@@ -1291,6 +1305,8 @@ export function createWordPressCliProfile(
     targetCeiling: async (configPath) =>
       (await readWordPressCampaignConfig(configPath)).resources
         .maxConcurrentTargets,
+    runtimeCeilings: async (configPath) =>
+      wordPressRuntimeCeilings(await readWordPressCampaignConfig(configPath)),
     labHeld: (state) =>
       stat(labUpRecordPath(state)).then(
         () => true,

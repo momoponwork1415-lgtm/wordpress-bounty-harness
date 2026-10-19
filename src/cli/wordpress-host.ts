@@ -770,9 +770,15 @@ export async function createWordPressHostProfile(options: {
             () => false,
           )),
         // Targets run in waves of maxConcurrentTargets; the margin covers one batch.
+        // Under a Codex cap a whole batch on Codex runs in waves of that cap.
         loginMarginMinutes:
           Math.ceil(
-            selection.maximumTargets / config.resources.maxConcurrentTargets,
+            selection.maximumTargets /
+              Math.min(
+                config.resources.maxConcurrentTargets,
+                config.resources.maxConcurrentTargetsByRuntime?.codex ||
+                  config.resources.maxConcurrentTargets,
+              ),
           ) *
           (wall + 30 * 3 + 15),
       };
