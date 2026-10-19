@@ -6,10 +6,14 @@ import { z } from "zod";
 
 import {
   agentRuntimeProfileDefinitionSchema,
+  ClaudeNativeAgentRuntime,
+  claudeRuntimeProfileDefinitionSchema,
   CodexNativeAgentRuntime,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   createProviderCredentialEgressBroker,
   defineAgentRuntimeProfile,
+  defineClaudeRuntimeProfile,
+  GvisorClaudeSandbox,
   GvisorCodexSandbox,
   ProviderAttachmentStore,
   readPrivateChatgptLogin,
@@ -107,6 +111,17 @@ export const wordpressHostConfigSchema = z.strictObject({
       sandboxImageDigest: true,
     }),
   }),
+  /**
+   * The Claude discovery runtime. The OAuth token file (`claude setup-token`)
+   * is read by the egress broker only, like the Codex credential.
+   */
+  claude: z
+    .strictObject({
+      image: pinnedImage,
+      credentialFilePath: absolutePath,
+      runtimeProfile: claudeRuntimeProfileDefinitionSchema,
+    })
+    .optional(),
   wordfenceProgrammeTranscriptionPath: absolutePath,
   scopePolicyPath: absolutePath.optional(),
   wordfenceHistory: z
@@ -447,6 +462,20 @@ export async function createWordPressHostProfile(options: {
       host.images.codex,
       state.clock,
     );
+    const claude =
+      (config.discovery.runtimeShare?.claude ?? 0) === 0
+        ? undefined
+        : await claudeBoundary({
+            host,
+            runDocker,
+            ...(options.runDocker === undefined
+              ? {}
+              : { sandboxDocker: options.runDocker }),
+            proxyBundleDirectory,
+            attachments,
+            runWallTimeMinutes: config.runWallTimeMinutes,
+            clock: state.clock,
+          });
 
     // Selection needs the programme transcription; commands that never select do not.
     let selection: ReturnType<typeof createWordPressSelection> | undefined;
@@ -591,6 +620,7 @@ export async function createWordPressHostProfile(options: {
       runtimeProfile,
       probeRuntime: () => sandbox.probe(),
       executor: runtime,
+      ...(claude === undefined ? {} : { claude }),
       attachments,
       verifier,
       // The same Harness half as the Codex path; only the transport hands the Lab to a skill (#352).
@@ -747,6 +777,96 @@ export async function createWordPressHostProfile(options: {
           (wall + 30 * 3 + 15),
       };
     },
+  };
+}
+
+/**
+ * The Claude runtime for a campaign whose share assigns it targets. Like the
+ * Codex preflight, a missing image, an unsafe token file or a CLI that differs
+ * from the profile stops the command before anything starts. The token is
+ * never read here; only its file metadata is.
+ */
+async function claudeBoundary(options: {
+  readonly host: WordPressHostConfig;
+  readonly runDocker: HostDockerRun;
+  readonly sandboxDocker?: HostDockerRun;
+  readonly proxyBundleDirectory: string;
+  readonly attachments: ProviderAttachmentStore;
+  readonly runWallTimeMinutes: number;
+  readonly clock: () => Date;
+}): Promise<NonNullable<WordPressCampaignBoundaries["claude"]>> {
+  const claude = options.host.claude;
+  if (claude === undefined)
+    throw new Error(
+      "The campaign assigns targets to Claude, but the host config has no claude section",
+    );
+  const scratch = join(options.host.workDirectory, "claude-scratch");
+  await mkdir(scratch, { recursive: true, mode: 0o700 });
+  const sandbox = new GvisorClaudeSandbox({
+    dockerExecutablePath: options.host.dockerExecutablePath,
+    image: claude.image,
+    scratchRootDirectory: scratch,
+    maxOutputBytes: 64 * 1024 * 1024,
+    timeoutMs: options.runWallTimeMinutes * 60_000,
+    clock: options.clock,
+    ...(options.sandboxDocker === undefined
+      ? {}
+      : { runDocker: options.sandboxDocker }),
+  });
+  const runtimeProfile = defineClaudeRuntimeProfile(
+    claude.runtimeProfile,
+    digestOf(claude.image),
+  );
+  const problems: string[] = [];
+  const image = await options.runDocker(
+    ["image", "inspect", "--format", "{{.Id}}", claude.image],
+    undefined,
+    30_000,
+  );
+  if (image.kind !== "exited" || image.exitCode !== 0)
+    problems.push(`${claude.image} is not present locally (pull it by digest)`);
+  const token = await lstat(claude.credentialFilePath).catch(() => undefined);
+  if (
+    token === undefined ||
+    !token.isFile() ||
+    (token.mode & 0o077) !== 0 ||
+    token.size === 0 ||
+    (typeof process.getuid === "function" && token.uid !== process.getuid())
+  )
+    problems.push(
+      "the Claude token file is missing, empty, not owned by this user or not 0600",
+    );
+  if (problems.length === 0) {
+    const measured = await sandbox.probe().catch(() => undefined);
+    if (measured?.cliVersion !== runtimeProfile.claudeCliVersion)
+      problems.push(
+        `image claude ${measured?.cliVersion ?? "unprobed"}; profile claude ${runtimeProfile.claudeCliVersion}`,
+      );
+  }
+  if (problems.length > 0)
+    throw new Error(
+      `Claude preflight failed; nothing was started:\n${problems.map((problem) => `  claude-runtime: ${problem}`).join("\n")}`,
+    );
+  return {
+    runtimeProfile,
+    executor: new ClaudeNativeAgentRuntime(
+      sandbox,
+      createProviderCredentialEgressBroker({
+        dockerExecutablePath: options.host.dockerExecutablePath,
+        brokerImage: options.host.images.broker,
+        credentialFilePath: claude.credentialFilePath,
+        credentialKind: "anthropic-oauth",
+        scratchRootDirectory: join(
+          options.host.workDirectory,
+          "broker-scratch",
+        ),
+        proxyBundleDirectory: options.proxyBundleDirectory,
+        clock: options.clock,
+      }),
+      options.attachments,
+      claude.image,
+      options.clock,
+    ),
   };
 }
 

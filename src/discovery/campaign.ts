@@ -70,6 +70,7 @@ export type PlannedDiscoveryRun = {
     readonly trustBoundaryVersion?: string;
     readonly sourcePack?: { readonly dependency: "mounted" | "none" };
     readonly labAccess?: { readonly database: "read-only" | "none" };
+    readonly runtime?: "codex-native/v1" | "claude-code/v1";
   };
 };
 

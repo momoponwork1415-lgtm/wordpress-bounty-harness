@@ -65,6 +65,8 @@ const bodySchema = z.strictObject({
   requestedModelId: reported,
   requestedEffort: reported,
   codexCliVersion: reported,
+  /** Present on Claude Code runs; Codex runs leave it out. */
+  claudeCliVersion: reported.optional(),
   bundledCatalogDigest: z.union([digest, z.literal("unavailable")]),
   authenticationMethod: reported,
   cyberAccessProgram: reported,
@@ -232,6 +234,9 @@ export function createNativeRunReceipt(
     requestedModelId: profile.requestedModelId,
     requestedEffort: profile.requestedEffort,
     codexCliVersion: profile.codexCliVersion,
+    ...(profile.transportKind === "claude-code/v1"
+      ? { claudeCliVersion: profile.claudeCliVersion }
+      : {}),
     bundledCatalogDigest: profile.bundledCatalogDigest,
     authenticationMethod: profile.authenticationMethod,
     cyberAccessProgram: profile.cyberAccessProgram,

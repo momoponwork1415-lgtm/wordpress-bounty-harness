@@ -4,4 +4,6 @@
 
 両 image は build 後にローカル registry へ push し、得られた `name@sha256:<digest>` を Git 外の host 設定に記す。元の host 設定は上書きせず、開発セット専用の複製を使う。Codex CLI 版と、host 設定の `codex.bundledCatalogPath` の sha256 を `runtimeProfile` と照合する。`harness runtime check` が通るまで実 run を開始しない。
 
+`claude/Dockerfile` は Claude Code 2.1.296 と Agent SDK 0.3.296 を同じ Node image 上に置く（2026-10-14 の購読 smoke で動いた版）。runner は image に焼かず、Harness が `/opt/claude-support/runner.mjs` として読み取り専用で mount する。build 後の `name@sha256:<digest>` を host 設定の `claude.image` に、`claude --version` の版を `claude.runtimeProfile.claudeCliVersion` に書く。版がずれていれば campaign は何も起動せずに止まる。
+
 Lab と探索対象の実行は引き続き `runsc` に限る。registry は image 配布用で、対象 source と認証情報を mount しない。鍵、credential file の内容、採点結果の私的詳細は image に含めない。
