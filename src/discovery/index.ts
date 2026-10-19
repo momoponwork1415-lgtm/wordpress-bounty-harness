@@ -51,11 +51,16 @@ export {
   claudeProviderFailure,
 } from "./claude-native-agent-runtime.js";
 export {
+  claudeRunSession,
+  claudeSessionFromDiagnostic,
+} from "./claude-session.js";
+export {
   CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
   GvisorClaudeSandbox,
   type ClaudeSandbox,
   type ClaudeSandboxCommand,
   type ClaudeSandboxResult,
+  type ClaudeSandboxResumeSeed,
   type GvisorClaudeSandboxOptions,
 } from "./claude-gvisor-sandbox.js";
 export { CLAUDE_RUNNER_DENIALS } from "./claude-runner.js";
@@ -83,6 +88,7 @@ export {
 } from "./codex-gvisor-sandbox.js";
 export {
   createNativeRunReceipt,
+  isClaudeTranscriptPath,
   isCodexSessionPath,
   nativeRunReceiptSchema,
   readNativeRunReceipt,

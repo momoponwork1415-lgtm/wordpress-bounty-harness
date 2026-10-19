@@ -764,8 +764,25 @@ async function resumeWordPressRun(
       (event) =>
         event.type === "discovery-run-started" && event.runId === input.runId,
     );
-  if (started === undefined)
+  if (started?.type !== "discovery-run-started")
     return { status: "refused", reason: "run-unknown" };
+  // The segment runs on the runtime the original run recorded; its profile digest is checked against the receipt.
+  if (
+    started.configuration.runtime === "claude-code/v1" &&
+    boundaries.claude === undefined
+  )
+    return {
+      status: "refused",
+      reason: "runtime-profile-differs",
+      detail: "the campaign configuration assigns no targets to Claude",
+    };
+  const runtime =
+    started.configuration.runtime === "claude-code/v1"
+      ? boundaries.claude!
+      : {
+          runtimeProfile: boundaries.runtimeProfile,
+          executor: boundaries.executor,
+        };
   const [objective, trustBoundary] = await Promise.all([
     loadWordPressDiscoveryAsset(config.promptId),
     loadWordPressDiscoveryAsset("trust-boundary-v1"),
@@ -794,7 +811,7 @@ async function resumeWordPressRun(
       snapshotDigest: snapshot.digest,
       trustBoundary: { version: trustBoundary.id, text: trustBoundary.text },
       programmeBoundary: config.programmeBoundary,
-      modelProfileDigest: boundaries.runtimeProfile.digest,
+      modelProfileDigest: runtime.runtimeProfile.digest,
       promptDigest: objective.digest,
       stopRules: { maxRuns: 1, noFindingRuns: 1 },
       lab: { mode: "none" as const },
@@ -808,13 +825,13 @@ async function resumeWordPressRun(
   };
   const run = {
     targetSnapshotDigest: snapshot.digest,
-    profile: boundaries.runtimeProfile,
+    profile: runtime.runtimeProfile,
     coordination: "cooperative" as const,
     prompt,
     resumePrompt,
     ...wordPressSourceMounts(source),
   };
-  const { recoverInterrupted } = boundaries.executor;
+  const { recoverInterrupted } = runtime.executor;
   const assessment = await assessTrialResume({
     ledger: state.ledger,
     evidence: state.store,
@@ -825,7 +842,7 @@ async function resumeWordPressRun(
     promptDigest: objective.digest,
     prompt,
     resumePrompt,
-    profileDigest: boundaries.runtimeProfile.digest,
+    profileDigest: runtime.runtimeProfile.digest,
     wallTimeMs: config.runWallTimeMinutes * 60_000,
     minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
     // A run whose host died is sealed first, then resumed like any other (ADR 0036).
@@ -838,7 +855,7 @@ async function resumeWordPressRun(
               {
                 recoverInterrupted: (transportRun, startedAt) =>
                   recoverInterrupted.call(
-                    boundaries.executor,
+                    runtime.executor,
                     transportRun,
                     startedAt,
                   ),
@@ -856,7 +873,7 @@ async function resumeWordPressRun(
   const outcome = await executeTrialResume(
     {
       ...context,
-      executor: boundaries.executor,
+      executor: runtime.executor,
       ...(signal === undefined ? {} : { signal }),
     },
     plan,

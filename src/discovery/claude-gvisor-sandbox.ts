@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   lstat,
+  mkdir,
   mkdtemp,
   readdir,
   readFile,
@@ -10,7 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { isIP } from "node:net";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import {
   verifyCanonicalSourceTree,
@@ -24,8 +25,14 @@ import { stopDockerContainer } from "../infrastructure/stop-docker-container.js"
 import { CLAUDE_RUNNER_SOURCE } from "./claude-runner.js";
 import {
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
+  admittedResearchSeed,
   collectResearchArchive,
+  seedResearch,
 } from "./codex-gvisor-sandbox.js";
+import {
+  codexThreadIdSchema,
+  isClaudeTranscriptPath,
+} from "./native-run-receipts.js";
 import type { ProviderCredentialEgressGrant } from "./provider-credential-egress-broker.js";
 import {
   SANDBOX_RESEARCH_MOUNT_PATH,
@@ -42,6 +49,23 @@ const MAX_TRANSCRIPT_FILES = 256;
 const MAX_TRANSCRIPT_BYTES = 60 * 1024 * 1024;
 const MAX_CAPTURE_BYTES = 300 * 1024 * 1024;
 
+/**
+ * What an earlier segment left, restored before a resumed Root starts
+ * (ADR 0036): every transcript at its `projects/`-relative path, the Root
+ * session's among them, and the notes archive's complete files.
+ */
+export type ClaudeSandboxResumeSeed = {
+  readonly sessionId: string;
+  readonly transcripts: readonly {
+    readonly path: string;
+    readonly content: string;
+  }[];
+  readonly research: readonly {
+    readonly path: string;
+    readonly content: Buffer;
+  }[];
+};
+
 type Mount = {
   readonly directory: string;
   readonly expectedTree: ExpectedSourceTree;
@@ -57,7 +81,11 @@ export interface ClaudeSandboxCommand {
     readonly model: string;
     readonly effort: string;
     readonly outputSchema: object;
+    /** Resume this restored session; the first turn is the pinned directive (ADR 0036). */
+    readonly resumeSessionId?: string;
   };
+  /** Present exactly when `input.resumeSessionId` is. */
+  readonly resume?: ClaudeSandboxResumeSeed;
   readonly sourceMount: Mount;
   readonly dependencyMounts: readonly (Mount & { readonly path: string })[];
   readonly labHost?: { readonly name: string; readonly ipv4: string };
@@ -117,6 +145,52 @@ export interface GvisorClaudeSandboxOptions {
 }
 
 const host = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+function admittedResumeSeed(
+  seed: ClaudeSandboxResumeSeed,
+  sessionId: string | undefined,
+): boolean {
+  if (
+    seed.sessionId !== sessionId ||
+    !codexThreadIdSchema.safeParse(seed.sessionId).success ||
+    seed.transcripts.length === 0 ||
+    seed.transcripts.length > MAX_TRANSCRIPT_FILES
+  )
+    return false;
+  const paths = new Set<string>();
+  let bytes = 0;
+  for (const file of seed.transcripts) {
+    if (!isClaudeTranscriptPath(file.path) || paths.has(file.path))
+      return false;
+    paths.add(file.path);
+    const size = Buffer.byteLength(file.content);
+    if (size === 0 || size > MAX_TRANSCRIPT_BYTES) return false;
+    bytes += size;
+  }
+  return (
+    bytes <= MAX_CAPTURE_BYTES &&
+    [...paths].some(
+      (path) =>
+        path.split("/").length === 2 &&
+        path.endsWith(`/${seed.sessionId}.jsonl`),
+    ) &&
+    admittedResearchSeed(seed.research)
+  );
+}
+
+/** Writes the seed into the fresh, empty config and notes directories; `wx` refuses any pre-existing file. */
+async function seedResume(
+  home: string,
+  research: string,
+  seed: ClaudeSandboxResumeSeed,
+): Promise<void> {
+  for (const file of seed.transcripts) {
+    const target = join(home, "projects", ...file.path.split("/"));
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    await writeFile(target, file.content, { flag: "wx", mode: 0o600 });
+  }
+  await seedResearch(research, seed.research);
+}
 
 /** Every `*.jsonl` below `projects/`, bounded; a link or an oversize tree fails the capture. */
 async function collectTranscripts(
@@ -272,7 +346,10 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       ) ||
       !dependencyMountPathsAreDisjoint(
         command.dependencyMounts.map((mount) => mount.path),
-      )
+      ) ||
+      (command.resume === undefined
+        ? command.input.resumeSessionId !== undefined
+        : !admittedResumeSeed(command.resume, command.input.resumeSessionId))
     )
       throw new Error("Claude sandbox command is not admitted");
     const mountOf = async (mount: Mount): Promise<string> => {
@@ -310,6 +387,8 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       for (const prefix of ["claude-run-", "claude-home-", "claude-research-"])
         created.push(await mkdtemp(join(scratch, prefix)));
       const [staging, home, research] = created as [string, string, string];
+      if (command.resume !== undefined)
+        await seedResume(home, research, command.resume);
       await writeFile(join(staging, "runner.mjs"), CLAUDE_RUNNER_SOURCE, {
         flag: "wx",
         mode: 0o600,

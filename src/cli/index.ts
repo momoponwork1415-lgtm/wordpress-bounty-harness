@@ -8,6 +8,7 @@ import { summarizeRecordedRuntimes } from "../discovery/index.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import {
   type CampaignFunnel,
+  type ResumeRow,
   type StopRow,
   type FunnelCounts,
 } from "../ledger/index.js";
@@ -372,6 +373,32 @@ export function formatStopRow(row: StopRow): string {
       ? []
       : [`explore=${row.explore}`, `within60s=${row.within60s ?? 0}`];
   return [row.type, ...fields, `count=${row.count}`, ...extra].join("  ");
+}
+
+/** One resumed segment: the stop it continued, then how it ended and how long it ran. */
+export function formatResumeRow(row: ResumeRow): string {
+  const stop = (value: {
+    readonly outcome?: string;
+    readonly reason?: string;
+    readonly reasonDetail?: string;
+  }) =>
+    value.outcome === undefined
+      ? "unfinished"
+      : [value.outcome, value.reason, value.reasonDetail]
+          .filter((part) => part !== undefined)
+          .join("/");
+  return [
+    row.campaignId,
+    `segment ${row.segment}`,
+    `run ${row.runId}`,
+    `resumes ${row.resumesRun}`,
+    `after ${stop(row.resumed)}`,
+    ...(row.runtime === undefined ? [] : [`runtime ${row.runtime}`]),
+    `ended ${stop(row)}`,
+    ...(row.wallTimeMs === undefined
+      ? []
+      : [`active ${(row.wallTimeMs / 60_000).toFixed(1)} min`]),
+  ].join("  ");
 }
 
 export function formatFunnel(funnel: CampaignFunnel): string[] {
@@ -1287,6 +1314,23 @@ const COMMANDS: readonly Command[] = [
       });
       if (rows.length === 0) print(["no stops recorded"]);
       print(rows.map(formatStopRow));
+      return 0;
+    },
+  }),
+  command({
+    name: "ledger resumes",
+    usage: ["ledger resumes [--campaign <id>] [--since <ISO>]"],
+    options: { campaign: STR, since: STR },
+    handler: async ({ values, state, print }) => {
+      const instant = since(values.since);
+      const rows = state.ledger.resumes({
+        ...(values.campaign === undefined
+          ? {}
+          : { campaignId: values.campaign }),
+        ...(instant === undefined ? {} : { since: instant }),
+      });
+      if (rows.length === 0) print(["no resumed segments recorded"]);
+      print(rows.map(formatResumeRow));
       return 0;
     },
   }),
