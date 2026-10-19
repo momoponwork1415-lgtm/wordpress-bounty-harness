@@ -34,6 +34,7 @@ const PINNED_USAGE = [
   "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
   "  ledger funnel --campaign <id> | --since <ISO>",
   "  ledger stops [--campaign <id>] [--since <ISO>]",
+  "  ledger resumes [--campaign <id>] [--since <ISO>]",
   "  ledger usage [--campaign <id>]",
   "  ledger runtime [--campaign <id>]",
   "  history status",

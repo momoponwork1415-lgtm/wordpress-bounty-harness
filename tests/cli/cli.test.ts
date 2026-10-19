@@ -2740,6 +2740,61 @@ describe("harness CLI vertical slice", () => {
     expect(transportRuns).toHaveLength(2);
   });
 
+  it("resumes a refused Claude run on the Claude runtime it recorded, and lists the segment in `ledger resumes`", async () => {
+    const { run, configPath, transportRuns, ledger } = await harness({
+      claude: true,
+      refuseOnCalls: [1],
+      refusalSession: true,
+      zeroFindings: true,
+      config: {
+        promptId: undefined,
+        discovery: { lab: "none", runtimeShare: { codex: 0, claude: 1 } },
+      },
+    });
+    const campaign = "campaign-claude-resume";
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "--all",
+          "--campaign",
+          campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const refusedRunId = transportRuns[0]!.runId;
+    const resumed = await run(
+      "campaign",
+      "resume",
+      "--campaign",
+      campaign,
+      "--run",
+      refusedRunId,
+      "--config",
+      configPath,
+    );
+    expect(resumed.code).toBe(0);
+    expect(transportRuns[1]).toMatchObject({
+      profile: { digest: claudeProfile.digest },
+      campaignInput: { modelProfileDigest: claudeProfile.digest },
+      resume: { threadId: REFUSED_ROOT_THREAD, segment: 1 },
+    });
+    const starts = ledger()
+      .read({ campaignId: campaign, type: "discovery-run-started" })
+      .map(({ event }) => event);
+    expect(starts[1]).toMatchObject({
+      resumesRun: refusedRunId,
+      configuration: { runtime: "claude-code/v1" },
+    });
+    const resumes = await run("ledger", "resumes", "--campaign", campaign);
+    expect(resumes.stdout).toContain(
+      `segment 1  run ${transportRuns[1]!.runId}  resumes ${refusedRunId}  after failed/provider/provider-cyber-policy  runtime claude-code/v1  ended completed`,
+    );
+  });
+
   it("does not resume a refused run whose receipt predates session records or whose campaign attaches a Lab", async () => {
     const legacy = await harness({
       refuseOnCalls: [1],
