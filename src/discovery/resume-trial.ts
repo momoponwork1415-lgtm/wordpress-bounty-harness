@@ -35,7 +35,7 @@ export type ResumeRefusalReason =
   | "run-unfinished"
   | "not-an-exploration"
   | "already-resumed"
-  | "not-a-provider-refusal"
+  | "run-completed"
   | "lab-attached"
   | "snapshot-digest-differs"
   | "prompt-version-differs"
@@ -210,17 +210,9 @@ export async function assessTrialResume(options: {
   if (later !== undefined) return refused("already-resumed", later.runId);
   const finished = finishes.get(options.runId);
   if (finished === undefined) return refused("run-unfinished");
-  if (
-    finished.outcome !== "failed" ||
-    finished.reason !== "provider" ||
-    finished.reasonDetail !== "provider-cyber-policy"
-  )
-    return refused(
-      "not-a-provider-refusal",
-      [finished.outcome, finished.reason, finished.reasonDetail]
-        .filter((part) => part !== undefined)
-        .join("/"),
-    );
+  // A run that stopped for any reason can be resumed (owner decision
+  // 2026-10-19, ADR 0036 addendum); one that completed has nothing to continue.
+  if (finished.outcome === "completed") return refused("run-completed");
   if (started.labAttached !== false || started.labId !== undefined)
     return refused("lab-attached");
   if (started.snapshotDigest !== options.snapshotDigest)

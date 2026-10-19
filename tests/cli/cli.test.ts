@@ -2532,9 +2532,7 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(completed.code).toBe(3);
-    expect(completed.stderr).toBe(
-      "not resumable: not-a-provider-refusal (completed)",
-    );
+    expect(completed.stderr).toBe("not resumable: run-completed");
     expect(transportRuns).toHaveLength(2);
   });
 
