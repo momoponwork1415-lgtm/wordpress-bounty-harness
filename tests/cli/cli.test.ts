@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -480,6 +480,8 @@ async function harness(
   const handoffs: NonNullable<
     Parameters<NonNullable<WordPressCampaignBoundaries["handoffVerifier"]>>[0]
   >[] = [];
+  /** Whether this process held the runner's leftover sweep at each handoff. */
+  const sweepHeldAtHandoff: boolean[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
   let verificationProvisionAttempts = 0;
@@ -744,6 +746,9 @@ async function harness(
     // `verify next --handoff`: the same synthetic Verifier, recording the handoff it was asked for.
     handoffVerifier: (handoff) => {
       handoffs.push(handoff);
+      sweepHeldAtHandoff.push(
+        existsSync(join(root, "state", "sweep-holds", String(process.pid))),
+      );
       return boundaries.verifier;
     },
     verifier: {
@@ -908,6 +913,7 @@ async function harness(
     verifierReferenceRoutes,
     labIdsDuringVerification,
     handoffs,
+    sweepHeldAtHandoff,
     docker,
     live,
     root,
@@ -2271,10 +2277,11 @@ describe("harness CLI vertical slice", () => {
 
   it("verify next --handoff names the skill as prompt version and re-verifies the named Finding (#352)", async () => {
     // Source-only discovery leaves every Finding for `verify next`.
-    const { run, configPath, ledger, handoffs, root } = await harness({
-      entryPoints: true,
-      config: { discovery: { lab: "none" } },
-    });
+    const { run, configPath, ledger, handoffs, sweepHeldAtHandoff, root } =
+      await harness({
+        entryPoints: true,
+        config: { discovery: { lab: "none" } },
+      });
     const campaign = "campaign-handoff";
     const discovered = await run(
       "campaign",
@@ -2327,6 +2334,11 @@ describe("harness CLI vertical slice", () => {
     expect(handoffs).toEqual([
       { directory: join(root, "handoff"), httpPort: 18080, databasePort: 3307 },
     ]);
+    // The runner's leftover sweep waits while this Verifier's Lab lives.
+    expect(sweepHeldAtHandoff).toEqual([true]);
+    expect(
+      existsSync(join(root, "state", "sweep-holds", String(process.pid))),
+    ).toBe(false);
     const finished = () =>
       ledger()
         .read({ campaignId: campaign, type: "verification-finished" })

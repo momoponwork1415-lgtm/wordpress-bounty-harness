@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 
 import { z } from "zod";
@@ -104,23 +111,36 @@ export async function readLivePid(
   return pid > 0 && alive(pid) ? pid : null;
 }
 
-/** `lab up --for-review` holds the runner's Lab sweep while its pid lives. */
+/**
+ * A process that owns discovery or Lab resources outside the runner
+ * (`lab up --for-review`, `campaign resume`, `verify next`) holds the runner's
+ * leftover sweep while its pid lives. Each holder has its own file.
+ */
 export async function holdLabSweep(
   stateDirectory: string,
   pid: number,
 ): Promise<() => Promise<void>> {
-  const path = continuousPaths(stateDirectory).reviewLabPid;
+  const directory = continuousPaths(stateDirectory).sweepHolds;
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const path = join(directory, String(pid));
   await writeFile(path, String(pid), { mode: 0o600 });
   return () => rm(path, { force: true });
 }
 
-export function labSweepHeld(
+export async function labSweepHeld(
   stateDirectory: string,
   alive: (pid: number) => boolean = pidAlive,
 ): Promise<boolean> {
-  return readLivePid(continuousPaths(stateDirectory).reviewLabPid, alive).then(
-    (pid) => pid !== null,
+  const directory = continuousPaths(stateDirectory).sweepHolds;
+  const names = await readdir(directory).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    },
   );
+  for (const name of names)
+    if ((await readLivePid(join(directory, name), alive)) !== null) return true;
+  return false;
 }
 
 export interface ContinuousDeps {
@@ -178,8 +198,8 @@ export function continuousPaths(stateDirectory: string) {
     pid: join(stateDirectory, "continuous.pid"),
     stop: join(stateDirectory, "continuous.stop"),
     log: join(stateDirectory, "continuous.log"),
-    /** Written by `lab up --for-review`; read by the sweep guard only. */
-    reviewLabPid: join(stateDirectory, "review-lab.pid"),
+    /** One pid file per holder of the sweep; read by the sweep guard only. */
+    sweepHolds: join(stateDirectory, "sweep-holds"),
   };
 }
 
