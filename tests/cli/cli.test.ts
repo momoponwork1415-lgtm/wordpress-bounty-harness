@@ -482,6 +482,8 @@ async function harness(
   >[] = [];
   /** Whether this process held the runner's leftover sweep at each handoff. */
   const sweepHeldAtHandoff: boolean[] = [];
+  /** Whether this process held the runner's leftover sweep at each discovery run. */
+  const sweepHeldAtDiscovery: boolean[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
   let verificationProvisionAttempts = 0;
@@ -590,6 +592,9 @@ async function harness(
     executor: {
       async execute(run: DiscoveryTransportRun) {
         transportRuns.push(run);
+        sweepHeldAtDiscovery.push(
+          existsSync(join(root, "state", "sweep-holds", String(process.pid))),
+        );
         const call = prompts.push(run.prompt);
         promptDigests.push(run.campaignInput.promptDigest);
         histories.push(run.campaignInput.history.mode);
@@ -914,6 +919,7 @@ async function harness(
     labIdsDuringVerification,
     handoffs,
     sweepHeldAtHandoff,
+    sweepHeldAtDiscovery,
     docker,
     live,
     root,
@@ -2277,11 +2283,18 @@ describe("harness CLI vertical slice", () => {
 
   it("verify next --handoff names the skill as prompt version and re-verifies the named Finding (#352)", async () => {
     // Source-only discovery leaves every Finding for `verify next`.
-    const { run, configPath, ledger, handoffs, sweepHeldAtHandoff, root } =
-      await harness({
-        entryPoints: true,
-        config: { discovery: { lab: "none" } },
-      });
+    const {
+      run,
+      configPath,
+      ledger,
+      handoffs,
+      sweepHeldAtHandoff,
+      sweepHeldAtDiscovery,
+      root,
+    } = await harness({
+      entryPoints: true,
+      config: { discovery: { lab: "none" } },
+    });
     const campaign = "campaign-handoff";
     const discovered = await run(
       "campaign",
@@ -2293,6 +2306,9 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(discovered.code).toBe(0);
+    // A manual campaign beside the runner holds its leftover sweep while it runs.
+    expect(sweepHeldAtDiscovery.length).toBeGreaterThan(0);
+    expect(sweepHeldAtDiscovery.every(Boolean)).toBe(true);
     const recorded = ledger()
       .read({ campaignId: campaign, type: "finding-recorded" })
       .map(({ event }) =>

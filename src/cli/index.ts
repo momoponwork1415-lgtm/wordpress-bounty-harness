@@ -786,16 +786,20 @@ const COMMANDS: readonly Command[] = [
         throw new UsageError(
           "campaign run takes exactly one of <slug> or --all",
         );
-      const summary = await environment.profile.runCampaign(state, {
-        campaignId: required(values.campaign, "campaign"),
-        configPath: resolve(required(values.config, "config")),
-        target,
-        repeat,
-        retryIncompleteVerifications: values["retry-incomplete"] === true,
-        ...(values.selection === undefined
-          ? {}
-          : { selectionPolicyPath: resolve(values.selection) }),
-      });
+      // A manual campaign beside the runner keeps its containers (#399).
+      const release = await holdLabSweep(state.stateDirectory, process.pid);
+      const summary = await environment.profile
+        .runCampaign(state, {
+          campaignId: required(values.campaign, "campaign"),
+          configPath: resolve(required(values.config, "config")),
+          target,
+          repeat,
+          retryIncompleteVerifications: values["retry-incomplete"] === true,
+          ...(values.selection === undefined
+            ? {}
+            : { selectionPolicyPath: resolve(values.selection) }),
+        })
+        .finally(release);
       for (const skipped of summary.skipped)
         io.stderr(
           `skipped ${skipped.targetId} ${skipped.version} at ${skipped.stage}: ${skipped.message}`,
