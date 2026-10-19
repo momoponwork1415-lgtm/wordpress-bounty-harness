@@ -120,6 +120,19 @@ describe("readResumeProgress", () => {
     expect([...progress.spentOrdinals].sort()).toEqual([0, 1, 2]);
   });
 
+  it("does not spend the ordinal of a run the provider limit ended, even after children started", async () => {
+    const { start, finish, target } = await open();
+    await start("limited", { trialOrdinal: 0, runKind: "explore" });
+    await start("limited-child", { runKind: "child", parentRunId: "limited" });
+    await finish("limited", "provider-limited", {
+      reason: "provider",
+      providerLimit: "rate-limit",
+    });
+    const progress = readResumeProgress(target);
+    expect([...progress.startedExplorations]).toEqual([]);
+    expect([...progress.spentOrdinals]).toEqual([]);
+  });
+
   it("reports the recorded conclusion of the target", async () => {
     const { ledger, base, target } = await open();
     await ledger.append({

@@ -381,7 +381,10 @@ export async function executeTrial(
   } finally {
     cancellation.dispose();
   }
-  draft.counted = countsAsTrial(draft.receipt ?? {});
+  draft.counted = countsAsTrial({
+    ...draft.receipt,
+    outcome: draft.outcome,
+  });
   if (!draft.counted && draft.outcome === "completed") {
     draft.outcome = "failed";
     draft.failure = { reason: "evidence", reasonDetail: "no-work" };
