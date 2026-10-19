@@ -347,6 +347,11 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         "--env=DISABLE_AUTOUPDATER=1",
         // The advisor is a server tool the broker refuses; keep Claude Code from offering it.
         "--env=CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1",
+        // On a refusal Claude Code would switch the session to another model;
+        // the owner chose to stop there instead (2026-10-19). The broker still
+        // refuses any other model with 403 model-not-admitted.
+        "--env=CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1",
+        "--env=CLAUDE_CODE_NO_MODEL_FALLBACK=1",
         // Claude Code's nested bubblewrap cannot run under runsc (owner, 2026-10-14).
         "--env=CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0",
         "--entrypoint=node",

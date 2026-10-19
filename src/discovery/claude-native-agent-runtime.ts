@@ -130,47 +130,107 @@ function transcriptUsage(events: readonly Event[]): NativeRunReceipt["usage"] {
   };
 }
 
+/** Claude Code's notices that the model ended a turn with `stop_reason: "refusal"`. */
+const REFUSAL_NOTICES: ReadonlySet<unknown> = new Set([
+  "model_refusal_fallback",
+  "model_refusal_no_fallback",
+]);
+/** The broker's 403 for a request naming a model other than the bound one. */
+const MODEL_NOT_ADMITTED = /model-not-admitted/;
+
+const failedTurn = (event: Event): boolean =>
+  object(event.message)?.model === SYNTHETIC_MODEL || event.error !== undefined;
+
+/**
+ * Whether the session's last answer from the model was a refusal. A refusal
+ * that a later answer from the bound model followed (Claude Code retries once
+ * on the same model) was recovered and does not count.
+ */
+function endsInRefusal(events: readonly Event[]): boolean {
+  let refusal = false;
+  for (const event of events) {
+    if (event.type === "system" && REFUSAL_NOTICES.has(event.subtype))
+      refusal = true;
+    else if (event.type === "assistant") {
+      const message = object(event.message);
+      if (message?.stop_reason === "refusal") refusal = true;
+      else if (!failedTurn(event)) refusal = false;
+    }
+  }
+  return refusal;
+}
+
 /**
  * Provider refusals, usage limits and authentication failures, read from the
  * Messages API's own `stop_reason` and from the error turns Claude Code writes
  * for a failed request. The agent's prose is never matched: only synthetic
  * error messages, the SDK's error field and failed results are.
+ *
+ * `transcript` is the Root's session file, which keeps the refused turn that
+ * the runner's compact stdout does not. Without the sandbox's no-fallback
+ * switches, Claude Code answers a refusal by retrying on another model, which
+ * the broker refuses as `model-not-admitted` and Claude Code reports as
+ * "Failed to authenticate"; after a refusal that is the refusal, not an
+ * authentication failure.
  */
 export function claudeProviderFailure(
   events: readonly Event[],
+  transcript: readonly Event[] = [],
 ): Failure | undefined {
-  let refusal = false;
   let limit: ProviderLimit | undefined;
   let authentication = false;
+  let notAdmitted = false;
+  let failed = false;
   const inspect = (text: string) => {
-    if (/usage policy/i.test(text)) refusal = true;
-    else if (/usage limit|limit reached|hit your limit|extra usage/i.test(text))
+    if (/usage limit|limit reached|hit your limit|extra usage/i.test(text))
       limit = "quota";
     else if (/\b(?:429|529)\b|rate[ _-]?limit|overloaded/i.test(text))
       limit ??= "rate-limit";
     else if (/\b401\b|authenticat|oauth token|\/login/i.test(text))
       authentication = true;
   };
+  // A refusal Claude Code wrote as an error turn ("usage policy") counts even
+  // when the model answered later; only a recovered `stop_reason` does not.
+  let usagePolicy = false;
+  const read = (text: string) => {
+    if (/usage policy/i.test(text)) usagePolicy = true;
+    else if (MODEL_NOT_ADMITTED.test(text)) notAdmitted = true;
+    else inspect(text);
+  };
   for (const event of events) {
-    const message = object(event.message);
     if (event.type === "assistant") {
-      if (message?.stop_reason === "refusal") refusal = true;
       if (event.error === "rate_limit") limit ??= "rate-limit";
       if (event.error === "billing_error") limit = "quota";
-      if (event.error === "authentication_failed") authentication = true;
-      if (message?.model === SYNTHETIC_MODEL || event.error !== undefined)
-        for (const block of contentOf(event))
-          if (typeof block.text === "string") inspect(block.text);
+      if (failedTurn(event)) {
+        failed = true;
+        const texts = contentOf(event).flatMap((block) =>
+          typeof block.text === "string" ? [block.text] : [],
+        );
+        if (
+          event.error === "authentication_failed" &&
+          !texts.some((text) => MODEL_NOT_ADMITTED.test(text))
+        )
+          authentication = true;
+        texts.forEach(read);
+      }
     } else if (
       event.type === "result" &&
       (event.is_error === true || event.subtype !== "success")
     ) {
+      failed = true;
       const status = event.api_error_status;
       if (status === 429 || status === 529) limit ??= "rate-limit";
       if (status === 401) authentication = true;
-      if (typeof event.result === "string") inspect(event.result);
+      if (typeof event.result === "string") read(event.result);
     }
   }
+  const refusal =
+    usagePolicy ||
+    endsInRefusal(events) ||
+    (failed &&
+      limit === undefined &&
+      !authentication &&
+      endsInRefusal(transcript));
   if (refusal) return { reason: "provider", detail: "provider-refusal" };
   if (limit !== undefined)
     return {
@@ -179,9 +239,34 @@ export function claudeProviderFailure(
         limit === "quota" ? "provider-usage-limit" : "provider-rate-limit",
       providerLimit: limit,
     };
+  // Not after a refusal: Claude Code asked for another model on its own.
+  if (notAdmitted) return { reason: "policy", detail: "model-not-admitted" };
   if (authentication)
     return { reason: "provider", detail: "provider-authentication" };
   return undefined;
+}
+
+/** The Root's own session file: the transcript of the session stdout last named. */
+function rootTranscript(
+  events: readonly Event[],
+  transcripts: ClaudeSandboxResult["transcripts"],
+): Event[] {
+  const session = events
+    .flatMap((event) =>
+      typeof event.session_id === "string"
+        ? [event.session_id]
+        : event.type === "harness.turn" && typeof event.sessionId === "string"
+          ? [event.sessionId]
+          : [],
+    )
+    .at(-1);
+  if (session === undefined || !CHILD_ID.test(session)) return [];
+  const file = transcripts?.find(
+    (entry) =>
+      entry.path === `${session}.jsonl` ||
+      entry.path.endsWith(`/${session}.jsonl`),
+  );
+  return jsonLines(file?.content ?? "");
 }
 
 /** Every Root turn's structured report, merged as the Codex path merges turns. */
@@ -505,7 +590,10 @@ export class ClaudeNativeAgentRuntime {
           ? { reason: "policy", detail: "claude-image-mismatch" }
           : (brokerMetrics?.requestLimitExceeded ?? 0) > 0
             ? { reason: "policy", detail: "broker-request-cap" }
-            : (claudeProviderFailure(events) ??
+            : (claudeProviderFailure(
+                events,
+                rootTranscript(events, result.transcripts),
+              ) ??
               (result.failureKind === "timed-out"
                 ? { reason: "wall" }
                 : result.failureKind === "cancelled"
