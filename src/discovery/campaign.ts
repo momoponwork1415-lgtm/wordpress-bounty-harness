@@ -5,6 +5,7 @@ import type { PrivateArtifactStore } from "../infrastructure/private-artifact-st
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 import {
   interruptedExplorations,
+  providerLimitedExplorations,
   readResumeProgress,
   recordedFailureAfterRuns,
 } from "./campaign-progress.js";
@@ -97,6 +98,15 @@ export type DiscoveryStop =
   | "provider-limit"
   | "incomplete";
 
+export type ProviderLimitedResumeResult =
+  | { readonly status: "resumed"; readonly outcome: TrialOutcome }
+  | {
+      readonly status: "incomplete";
+      readonly runId: string;
+      readonly reason: string;
+      readonly detail?: string;
+    };
+
 /** Run planned Trials, preserve admitted claims, and apply campaign stop rules. */
 export async function runDiscoveryCampaign(options: {
   readonly campaignId: string;
@@ -133,10 +143,20 @@ export async function runDiscoveryCampaign(options: {
     started: Extract<LedgerEventV1, { type: "discovery-run-started" }>,
     signal?: AbortSignal,
   ) => Promise<TrialOutcome | undefined>;
+  /** The runner only, after provider backoff: continue a stopped Codex Trial in its target slot. */
+  readonly resumeProviderLimited?: (
+    started: Extract<LedgerEventV1, { type: "discovery-run-started" }>,
+    signal?: AbortSignal,
+  ) => Promise<ProviderLimitedResumeResult>;
 }): Promise<{
   readonly runCount: number;
   readonly findingsRecorded: number;
   readonly stoppedBy: DiscoveryStop;
+  readonly resumeRefusal?: {
+    readonly runId: string;
+    readonly reason: string;
+    readonly detail?: string;
+  };
 }> {
   const input = campaignInputV1Schema.parse(options.input);
   const id = z.string().min(1).max(128);
@@ -184,6 +204,9 @@ export async function runDiscoveryCampaign(options: {
     runCount: number;
     findingsRecorded: number;
     noNewFindings: number;
+    resumeRefusal:
+      | Extract<ProviderLimitedResumeResult, { status: "incomplete" }>
+      | undefined;
     next: number;
     stopped:
       | Extract<
@@ -195,6 +218,7 @@ export async function runDiscoveryCampaign(options: {
     runCount: 0,
     findingsRecorded: 0,
     noNewFindings: 0,
+    resumeRefusal: undefined,
     next: 0,
     stopped: undefined,
   };
@@ -239,6 +263,10 @@ export async function runDiscoveryCampaign(options: {
     options.resumeInterrupted === undefined
       ? new Map()
       : interruptedExplorations(target);
+  const providerLimited =
+    options.resumeProviderLimited === undefined
+      ? new Map()
+      : providerLimitedExplorations(target);
   const worker = async () => {
     while (tally.stopped === undefined && tally.next < limit) {
       const ordinal = tally.next++;
@@ -252,12 +280,31 @@ export async function runDiscoveryCampaign(options: {
         startedExplorations.add(resumed.runId);
         tally.runCount++;
         account(resumed);
-      } else if (!progress.spentOrdinals.has(ordinal)) await runOne(ordinal);
+      } else {
+        const limited = providerLimited.get(ordinal);
+        if (limited !== undefined) {
+          const resumed = await options.resumeProviderLimited!(
+            limited,
+            options.signal,
+          );
+          if (resumed.status === "incomplete") {
+            tally.resumeRefusal = resumed;
+            tally.stopped = "incomplete";
+          } else {
+            startedExplorations.add(resumed.outcome.runId);
+            tally.runCount++;
+            account(resumed.outcome);
+          }
+        } else if (dead !== undefined || !progress.spentOrdinals.has(ordinal))
+          await runOne(ordinal);
+      }
     }
   };
   await Promise.all(Array.from({ length: concurrency }, worker));
   const stoppedBy: DiscoveryStop =
-    recordedFailureAfterRuns(target, startedExplorations) ??
+    (tally.resumeRefusal === undefined
+      ? recordedFailureAfterRuns(target, startedExplorations)
+      : "incomplete") ??
     tally.stopped ??
     (options.plannedTrials.length >= input.stopRules.maxRuns
       ? "max-runs"
@@ -283,5 +330,16 @@ export async function runDiscoveryCampaign(options: {
     runCount: tally.runCount,
     findingsRecorded: tally.findingsRecorded,
     stoppedBy,
+    ...(tally.resumeRefusal === undefined
+      ? {}
+      : {
+          resumeRefusal: {
+            runId: tally.resumeRefusal.runId,
+            reason: tally.resumeRefusal.reason,
+            ...(tally.resumeRefusal.detail === undefined
+              ? {}
+              : { detail: tally.resumeRefusal.detail }),
+          },
+        }),
   };
 }

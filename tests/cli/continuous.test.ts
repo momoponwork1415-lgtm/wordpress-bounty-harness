@@ -27,6 +27,7 @@ type Step = (input: {
   retryIncompleteVerifications: boolean;
   signal?: AbortSignal;
   resumeInterrupted?: { log(line: string): void };
+  resumeProviderLimited?: { log(line: string): void };
 }) => Promise<Partial<CampaignSummary>> | Partial<CampaignSummary>;
 
 async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
@@ -217,11 +218,91 @@ describe("continuous runner", () => {
         minutes.map(String),
       );
       expect(new Set(t.calls.map((call) => call.campaignId)).size).toBe(1);
+      expect(t.calls[0]?.resumeProviderLimited).toBeUndefined();
+      expect(
+        t.calls
+          .slice(1, -1)
+          .every((call) => call.resumeProviderLimited !== undefined),
+      ).toBe(true);
       expect(
         t.calls.slice(1).every((call) => call.retryIncompleteVerifications),
       ).toBe(true);
     },
   );
+
+  it("finishes a saved backoff after restart before offering provider-limited resume", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    steps.push(limited("rate-limit", t));
+    steps.push(async (input) => {
+      expect(t.hours()).toBe(5 / 60);
+      expect(input.resumeProviderLimited).toBeDefined();
+      return {};
+    });
+    const normalSleep = t.deps.sleep;
+    t.deps.sleep = async () => {
+      throw new Error("simulated runner crash during backoff");
+    };
+    await expect(t.runner.run()).rejects.toThrow("simulated runner crash");
+    expect(t.calls).toHaveLength(1);
+    expect(t.calls[0]?.resumeProviderLimited).toBeUndefined();
+    expect(
+      JSON.parse(await readFile(continuousPaths(t.root).memo, "utf8")),
+    ).toMatchObject({ state: "backoff", detail: { minutes: "5" } });
+    t.deps.sleep = normalSleep;
+    expect(await createContinuousRunner(t.deps).run()).toBe("operator");
+    expect(t.calls).toHaveLength(3);
+  });
+
+  it("backs off before offering resume when another incomplete result masks a provider limit", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    steps.push(async ({ campaignId }) => {
+      await t.trial(campaignId, {
+        outcome: "provider-limited",
+        reason: "provider",
+        providerLimit: "rate-limit",
+      });
+      return { stopped: "incomplete" };
+    });
+    steps.push((input) => {
+      expect(t.hours()).toBe(5 / 60);
+      expect(input.resumeProviderLimited).toBeDefined();
+      return {};
+    });
+    expect(await t.runner.run()).toBe("operator");
+  });
+
+  it("does not offer resume after a terminal incomplete marker", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    steps.push(async ({ campaignId }) => {
+      await t.trial(campaignId, {
+        outcome: "provider-limited",
+        reason: "provider",
+        providerLimit: "rate-limit",
+      });
+      await t.append(campaignId, {
+        type: "target-skipped",
+        selectionId: "wporg:x@1.0.0",
+        stage: "discovery",
+        reason: "run-failed",
+        artifacts: [
+          {
+            kind: "target-skip-diagnostic",
+            digest: `sha256:${"b".repeat(64)}`,
+          },
+        ],
+      });
+      return { stopped: "incomplete" };
+    });
+    steps.push((input) => {
+      expect(t.hours()).toBe(0);
+      expect(input.resumeProviderLimited).toBeUndefined();
+      return {};
+    });
+    expect(await t.runner.run()).toBe("operator");
+  });
 
   it("starts a new campaign id after a finished one, numbered from the ledger", async () => {
     const steps: Step[] = [];

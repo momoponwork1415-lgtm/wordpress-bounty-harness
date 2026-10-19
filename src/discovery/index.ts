@@ -7,8 +7,15 @@ export {
   type PlannedDiscoveryRun,
   type PlannedTrial,
 } from "./campaign.js";
-export { countsAsTrial, recordedTrialActivity } from "./counts-as-trial.js";
-export { latestSegment } from "./campaign-progress.js";
+export {
+  countsAsTrial,
+  countsAsTrialChain,
+  recordedTrialActivity,
+} from "./counts-as-trial.js";
+export {
+  latestSegment,
+  providerLimitedAutoResumeRefusal,
+} from "./campaign-progress.js";
 export type {
   CandidateReport,
   RecordedCandidate,

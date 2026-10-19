@@ -119,3 +119,14 @@ v8 の協調 Trial は Root 1 thread を同じ gVisor container の中で `codex
 ### 消し方
 
 `runDiscoveryCampaign` の `resumeInterrupted`、`interruptedExplorations`、`WordPressDiscoveryContext.resumeInterrupted` と `resumeInterruptedFor`、`continuous` が渡す `resumeInterrupted`、印の `container` と `leftover` の container 削除、`tests/discovery/interrupted-run.test.ts` の runner 再起動の節を削除する。`resumeWordPressRun` は `resumeWordPressCampaignRun` に戻してよい。runner はまた、死んだ run の対象を新しい Trial としてやり直す。
+
+## 2026-10-19 追記 4: provider 上限で止まった Trial を runner が待機後に続ける
+
+所有者は、途中まで進んだ会話を捨てず、既存の `campaign resume` の経路で続けると決めた。この追記は、上の「provider 上限では新しい Trial としてやり直す」「自動で再開するのは死んだ run だけ」を、`continuous run` に限って改める。Codex CLI は 429 と `Selected model is at capacity` をまず同じ会話内で再試行する。Harness が扱うのは、CLI の再試行が尽き、`discovery-run-finished.outcome: provider-limited` で止まった run である。
+
+1. **待機と再開。** runner は既存の rate-limit / quota backoff を終えてから、対象の枠内で最新の `provider-limited` segment を再開する。起動直後の run も同じ扱いにする。`campaign resume` と同じ判定・復元・新しい使い捨て sandbox・Snapshot・固定の再開段落・残り wall を使い、元の `trialId` の segment として記録する。新しい Trial を最初から起動しない。手動の `campaign run` が `provider-limited` で終了コード 3 を返す動きは維持する。
+2. **再開できないとき。** `runtime-profile-differs`、`session-evidence-missing`、`wall-exhausted` などの拒否、または再開回数の上限に達したときは、理由をログと Private Evidence の診断に記録し、対象を理由付き `incomplete` / `target-skipped(run-failed)` として閉じる。同じ対象を新しい Trial としてやり直さない。`campaign resume` の判定自体は拒否時に event を書かない規則を維持する。
+3. **上限。** runner による自動再開は同じ Trial で最大 5 segment、かつ既存の残り wall 5 分以上という規則を満たす間だけ行う。手動で作られた segment も 5 の枠を消費する。再開 segment が再び `provider-limited` なら、次の backoff 後にこの規則で再判定する。上限に達した Trial は正常な候補 0 件として数えない。
+4. **他の停止理由。** `provider-cyber-policy` は引き続き操作者が run を名指ししたときだけ再開する。Claude の `provider-refusal` は Trial を終了し、別モデルへの切り替えも自動再開もしない。上の追記 3 による `interrupted` の自動回収と再開は続ける。探索 prompt と再開段落は変更しない。
+
+再開後に完了した chain と、再開拒否・上限で閉じた chain は Trial 1 回とし、各 segment の wall・token・source 読取・子の活動を通算する。後者は理由付き `incomplete` として選定からも除外する。先行 segment に探索活動があれば、最後の segment で新たな読取が無くてもその活動は消さない。全 segment を通して活動が無い場合は、正常な候補 0 件にしない。再開待ちの単独 `provider-limited` run は、ADR 0029 のとおりまだ Trial に数えない。これにより、provider の都合で止まった時間を新規 Trial に捨てず、最低 60 分と 120 分上限を同じ Trial で測る。

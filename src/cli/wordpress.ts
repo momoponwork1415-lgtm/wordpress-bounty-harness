@@ -8,6 +8,7 @@ import {
   assignDiscoveryRuntime,
   DISCOVERY_LEFTOVER_PATTERNS,
   executeTrialResume,
+  providerLimitedAutoResumeRefusal,
   recordInterruptedRun,
 } from "../discovery/index.js";
 import type { PlannedDiscoveryRun, ResumePlan } from "../discovery/index.js";
@@ -392,6 +393,7 @@ type WordPressDiscoveryPlan = Awaited<
 type WordPressDiscoveryContext = {
   readonly campaignId: string;
   readonly resumeInterrupted?: { log(line: string): void };
+  readonly resumeProviderLimited?: { log(line: string): void };
   readonly config: WordPressCampaignConfig;
   readonly repeat: number;
   readonly boundaries: WordPressCampaignBoundaries;
@@ -660,6 +662,14 @@ async function planWordPressDiscovery(
             context.resumeInterrupted.log,
           ),
         }),
+    ...(context.resumeProviderLimited === undefined || lab !== undefined
+      ? {}
+      : {
+          resumeProviderLimited: resumeProviderLimitedFor(
+            context,
+            context.resumeProviderLimited.log,
+          ),
+        }),
   };
 }
 
@@ -689,6 +699,42 @@ function resumeInterruptedFor(
       `interrupted run=${started.runId} resumed as ${resumed.outcome.runId} segment=${resumed.plan.segment} outcome=${resumed.outcome.outcome}`,
     );
     return resumed.outcome;
+  };
+}
+
+/** Continue a Codex Trial after the runner's provider backoff, using the manual resume path. */
+function resumeProviderLimitedFor(
+  context: WordPressDiscoveryContext,
+  log: (line: string) => void,
+): NonNullable<WordPressDiscoveryPlan["resumeProviderLimited"]> {
+  return async (started, signal) => {
+    const incomplete = (reason: string, detail?: string) => {
+      log(
+        `provider-limited run=${started.runId} not resumed reason=${reason}${detail === undefined ? "" : ` detail=${detail}`}; target incomplete`,
+      );
+      return {
+        status: "incomplete" as const,
+        runId: started.runId,
+        reason,
+        ...(detail === undefined ? {} : { detail }),
+      };
+    };
+    // Older Codex starts lack a runtime marker; the pinned receipt is checked
+    // by resumeWordPressRun before any sandbox starts.
+    const policyRefusal = providerLimitedAutoResumeRefusal(started);
+    if (policyRefusal !== undefined) return incomplete(policyRefusal);
+    const resumed = await resumeWordPressRun(
+      context.state,
+      context,
+      { campaignId: context.campaignId, runId: started.runId },
+      signal,
+    );
+    if (resumed.status === "refused")
+      return incomplete(resumed.reason, resumed.detail);
+    log(
+      `provider-limited run=${started.runId} resumed as ${resumed.outcome.runId} segment=${resumed.plan.segment} outcome=${resumed.outcome.outcome}`,
+    );
+    return { status: "resumed", outcome: resumed.outcome };
   };
 }
 
@@ -1007,6 +1053,9 @@ async function runWordPressCampaign(
           ...(input.resumeInterrupted === undefined
             ? {}
             : { resumeInterrupted: input.resumeInterrupted }),
+          ...(input.resumeProviderLimited === undefined
+            ? {}
+            : { resumeProviderLimited: input.resumeProviderLimited }),
           config,
           repeat: input.repeat ?? 1,
           boundaries,

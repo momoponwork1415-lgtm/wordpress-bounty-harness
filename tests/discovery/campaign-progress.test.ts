@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  providerLimitedAutoResumeRefusal,
   readResumeProgress,
   recordedFailureAfterRuns,
 } from "../../src/discovery/campaign-progress.js";
@@ -73,6 +74,30 @@ async function open() {
 }
 
 describe("readResumeProgress", () => {
+  it("offers five automatic Codex resume segments, including a startup failure", () => {
+    const codex = { runtime: "codex-native/v1" as const, promptVariant: "v" };
+    expect(
+      providerLimitedAutoResumeRefusal({ configuration: codex }),
+    ).toBeUndefined();
+    expect(
+      providerLimitedAutoResumeRefusal({
+        configuration: codex,
+        resumeSegment: 4,
+      }),
+    ).toBeUndefined();
+    expect(
+      providerLimitedAutoResumeRefusal({
+        configuration: codex,
+        resumeSegment: 5,
+      }),
+    ).toBe("resume-limit");
+    expect(
+      providerLimitedAutoResumeRefusal({
+        configuration: { runtime: "claude-code/v1", promptVariant: "v" },
+      }),
+    ).toBe("runtime-not-codex");
+  });
+
   it("spends ordinals only for explorations that count, and lowest free ones for legacy starts", async () => {
     const { start, finish, target } = await open();
     await start("stamped-2", { trialOrdinal: 2, runKind: "explore" });

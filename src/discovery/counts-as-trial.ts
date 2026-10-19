@@ -57,3 +57,42 @@ export function countsAsTrial(
     finished.brokerMetrics.forwardedRequests > 1
   );
 }
+
+/** A stopped Trial inherits proven work from earlier segments once its latest finish is not provider-limited. */
+export function countsAsTrialChain(
+  runId: string,
+  segment: (runId: string) => {
+    readonly finished: TrialObservation | undefined;
+    readonly hasRecordedActivity: boolean;
+    readonly resumesRun: string | undefined;
+  },
+): boolean {
+  const latest = segment(runId);
+  // A start-only segment can prove its own work (for example a child start),
+  // but cannot borrow a parent's work before its own interrupted run is sealed.
+  if (latest.finished === undefined) return latest.hasRecordedActivity;
+  if (latest.finished?.outcome === "provider-limited") return false;
+  if (countsAsTrial(latest.finished, latest.hasRecordedActivity)) return true;
+  const seen = new Set([runId]);
+  let hadProviderLimit = false;
+  let parent = latest.resumesRun;
+  while (parent !== undefined && !seen.has(parent)) {
+    seen.add(parent);
+    const earlier = segment(parent);
+    const observed = earlier.finished;
+    if (observed?.outcome === "provider-limited") hadProviderLimit = true;
+    if (
+      countsAsTrial(observed, earlier.hasRecordedActivity) ||
+      earlier.hasRecordedActivity ||
+      (observed !== undefined &&
+        ((observed.observed?.filesRead ?? 0) > 0 ||
+          (observed.childThreadsObserved ?? 0) > 0 ||
+          (observed.brokerMetrics?.forwardedRequests ?? 0) > 1))
+    )
+      return true;
+    parent = earlier.resumesRun;
+  }
+  // A resumed session that then fails is a terminal incomplete Trial even if
+  // neither segment managed to read source. It must not be selected afresh.
+  return latest.finished.outcome === "failed" && hadProviderLimit;
+}

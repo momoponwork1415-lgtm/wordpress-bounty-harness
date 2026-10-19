@@ -9,7 +9,11 @@ import type {
   DiscoveryTransportResult,
   DiscoveryTransportRun,
 } from "./codex-native-agent-runtime.js";
-import { countsAsTrial } from "./counts-as-trial.js";
+import {
+  countsAsTrial,
+  countsAsTrialChain,
+  recordedTrialActivity,
+} from "./counts-as-trial.js";
 import {
   createNativeRunReceipt,
   nativeRunReceiptSchema,
@@ -385,10 +389,44 @@ export async function executeTrial(
   } finally {
     cancellation.dispose();
   }
-  draft.counted = countsAsTrial({
+  const currentObservation = {
     ...draft.receipt,
     outcome: draft.outcome,
-  });
+  };
+  if (trial.resumes === undefined)
+    draft.counted = countsAsTrial(currentObservation);
+  else {
+    const starts = new Map(
+      context.ledger
+        .readAll({
+          campaignId: context.campaignId,
+          type: "discovery-run-started",
+        })
+        .flatMap(({ event }) =>
+          event.type === "discovery-run-started"
+            ? [[event.runId, event] as const]
+            : [],
+        ),
+    );
+    const finishes = new Map(
+      context.ledger
+        .readAll({
+          campaignId: context.campaignId,
+          type: "discovery-run-finished",
+        })
+        .flatMap(({ event }) =>
+          event.type === "discovery-run-finished"
+            ? [[event.runId, event] as const]
+            : [],
+        ),
+    );
+    const active = recordedTrialActivity(context.ledger, context.campaignId);
+    draft.counted = countsAsTrialChain(run.runId, (runId) => ({
+      finished: runId === run.runId ? currentObservation : finishes.get(runId),
+      hasRecordedActivity: active.has(`${context.campaignId}\0${runId}`),
+      resumesRun: starts.get(runId)?.resumesRun,
+    }));
+  }
   if (!draft.counted && draft.outcome === "completed") {
     draft.outcome = "failed";
     draft.failure = { reason: "evidence", reasonDetail: "no-work" };
