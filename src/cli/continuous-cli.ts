@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
+import { acquireHostLabLease } from "../infrastructure/host-lab-lease.js";
+
 import {
   clearContinuousStop,
   continuousPaths,
@@ -91,6 +93,8 @@ export async function continuousCommand(
     readonly notify: string | undefined;
     readonly resume: boolean;
     readonly verifyConcurrency?: number;
+    /** Isolated test lease; production uses the shared host path. */
+    readonly hostLabLeaseDirectory?: string;
     /** Positionals after the subcommand: `continuous concurrency <n>`. */
     readonly rest?: readonly string[];
     /** `continuous concurrency --runtime <name>`: one runtime's live limit. */
@@ -327,15 +331,34 @@ export async function continuousCommand(
       if (activeVerification > 0) return 0;
       if (await labSweepHeld(state.stateDirectory)) return 0;
       if (await profile.labHeld(state)) return 0;
-      const removed = await profile.cleanupLeftovers(state, {
-        configPath,
-        remove: true,
+      const lease = await acquireHostLabLease({
+        waitMs: 0,
+        ...(context.hostLabLeaseDirectory === undefined
+          ? {}
+          : { directory: context.hostLabLeaseDirectory }),
       });
-      return (
-        removed.containers.length +
-        removed.networks.length +
-        removed.volumes.length
-      );
+      if (lease === null) return 0;
+      try {
+        // A dead verification process may have left a Lab. The next verifier
+        // diagnoses its exact id; a broad sweep must not erase that evidence.
+        if (lease.reservation !== null) return 0;
+        await lease.reserveSweep();
+        try {
+          const removed = await profile.cleanupLeftovers(state, {
+            configPath,
+            remove: true,
+          });
+          return (
+            removed.containers.length +
+            removed.networks.length +
+            removed.volumes.length
+          );
+        } finally {
+          await lease.clear();
+        }
+      } finally {
+        await lease.release();
+      }
     },
     async preflight() {
       const items = await profile.checkRuntime(state, { configPath });

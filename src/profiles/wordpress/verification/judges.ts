@@ -105,6 +105,9 @@ type HttpEvidence = {
 
 type CapturedRequest = z.infer<typeof capturedRequestSchema>;
 const authenticationHeader = /(?:cookie|auth|token|nonce|api.?key|session)/i;
+/** Unknown cookies may hold form state; these names claim an authentication role. */
+const unknownAuthenticationCookie =
+  /(?:^|[_-])(?:admin|auth|authentication|jwt|bearer|credential|login|logged[_-]?in)(?:$|[_-])/i;
 
 function headerValue(
   headers: Record<string, unknown>,
@@ -139,6 +142,44 @@ function explicitApplicationFailure(body: string): boolean {
       !Array.isArray(parsed) &&
       "success" in parsed &&
       parsed.success === false
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** A redirect can complete a write while keeping the browser inside this Lab. */
+function completedCanaryResponse(
+  statusCode: number,
+  body: string,
+  responseHeaders: Record<string, unknown>,
+  requestHeaders: Record<string, unknown>,
+): boolean {
+  if (explicitApplicationFailure(body)) return false;
+  if (statusCode >= 200 && statusCode < 300) return true;
+  if (![301, 302, 303, 307, 308].includes(statusCode)) return false;
+  const location = headerValue(responseHeaders, "location");
+  const host = headerValue(requestHeaders, "host");
+  if (
+    location === null ||
+    host === null ||
+    /[\r\n\0\\]/.test(location) ||
+    !/^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/.test(host)
+  )
+    return false;
+  if (
+    !(location.startsWith("/") && !location.startsWith("//")) &&
+    !location.startsWith("http://")
+  )
+    return false;
+  try {
+    const target = new URL(location, `http://${host}`);
+    return (
+      target.protocol === "http:" &&
+      target.host.toLowerCase() === host.toLowerCase() &&
+      target.username === "" &&
+      target.password === "" &&
+      target.pathname !== "/wp-login.php"
     );
   } catch {
     return false;
@@ -418,6 +459,7 @@ type Decision =
   | null
   | Incomplete;
 type DecideInput = {
+  readonly finding: WordPressFinding;
   readonly lab: WordPressLabHandle;
   readonly recipeDigest: string;
   readonly canaries: WordPressCanaryLedger;
@@ -747,6 +789,7 @@ function canaryJudge(
             "The captured rerun did not match the earlier confirmed HTTP route; repeat the same route",
         };
       const decision = await decide({
+        finding,
         lab,
         recipeDigest,
         canaries,
@@ -1211,6 +1254,204 @@ const browserStepsSchema = z.looseObject({
     .max(30),
 });
 
+/** A script receipt is attributable only to a captured, correctly positioned attack. */
+async function capturedScriptAttack(
+  options: Options,
+  input: DecideInput,
+): Promise<Incomplete | { readonly attackerRole: string }> {
+  const { finding, lab, recipeDigest, canaries, httpEvidence } = input;
+  const missing = (nextStep: string): Incomplete => ({
+    status: "incomplete",
+    reason: "evidence",
+    nextStep,
+  });
+  if (httpEvidence.capture !== "harness-captured" || httpEvidence.http === null)
+    return missing(
+      "The attacker HTTP capture is unavailable; repeat in a fresh Lab",
+    );
+  const nonces = options.lab.issuedScriptNonces(lab);
+  if (nonces === null || nonces.length === 0)
+    return missing(
+      "The issued script canary cannot be bound to the attack capture",
+    );
+  const route = routeDefinitionSchema.safeParse(
+    await readJson(options.store, recipeDigest, "route.json"),
+  );
+  if (!route.success || route.data.role !== finding.attackerPosition)
+    return missing(
+      "The captured attack route does not match the Finding's attacker position",
+    );
+  const expectedAccount =
+    finding.attackerPosition === "unauthenticated"
+      ? null
+      : lab.attackerAccounts[finding.attackerPosition];
+  if (
+    (expectedAccount === null && route.data.account !== "none") ||
+    (expectedAccount !== null &&
+      route.data.account !== expectedAccount?.username)
+  )
+    return missing(
+      "The captured attack account differs from the Lab attacker account",
+    );
+  const steps = route.data.steps.filter((step) => step.kind === "http");
+  if (steps.length === 0)
+    return missing("The captured attack has no declared HTTP step");
+  let bearingRequests = 0;
+  for (const exchange of httpEvidence.http.exchanges) {
+    const request = capturedRequest(exchange);
+    if (request === null)
+      return missing("The captured attacker HTTP request is incomplete");
+    const bearsCanary = nonces.some((nonce) =>
+      requestContainsSecret(request, nonce),
+    );
+    if (bearsCanary) {
+      bearingRequests++;
+      const parsed = capturedExchangeSchema.safeParse(exchange);
+      if (
+        !parsed.success ||
+        !completedCanaryResponse(
+          parsed.data.response.statusCode,
+          parsed.data.response.body,
+          parsed.data.response.headers,
+          request.headers,
+        ) ||
+        !steps.some(
+          (step) =>
+            step.method === request.method &&
+            step.path === request.path &&
+            request.body === (step.body ?? "") &&
+            Object.entries(step.headers ?? {}).every(
+              ([name, value]) => headerValue(request.headers, name) === value,
+            ),
+        )
+      )
+        return missing(
+          "A canary-bearing HTTP request does not match a completed attacker route step",
+        );
+    }
+
+    // The capture begins after setup-done and ends before the Lab browser
+    // visits any victim page. A canary-free administrator request in this
+    // interval could have planted the script that the browser later sees.
+    const headers = new Map<string, string>();
+    for (const [name, value] of Object.entries(request.headers)) {
+      const key = name.toLowerCase();
+      if (headers.has(key) || typeof value !== "string")
+        return missing(
+          "The captured HTTP authentication headers are ambiguous",
+        );
+      headers.set(key, value);
+      if (
+        (key.startsWith("x-") &&
+          key !== "x-requested-with" &&
+          key !== "x-wp-nonce") ||
+        (/(?:auth|sess|token|jwt|api.?key|credential|nonce)/i.test(key) &&
+          key !== "x-wp-nonce")
+      )
+        return missing(
+          "The captured HTTP request has an unsupported authentication header",
+        );
+    }
+    if (
+      finding.attackerPosition === "unauthenticated" &&
+      headers.has("x-wp-nonce")
+    )
+      return missing(
+        "The unauthenticated attack used an authentication nonce header",
+      );
+
+    const cookieHeader = headers.get("cookie") ?? "";
+    const cookies: { name: string; value: string }[] = [];
+    const seenCookies = new Set<string>();
+    for (const field of cookieHeader === "" ? [] : cookieHeader.split(";")) {
+      const separator = field.indexOf("=");
+      const name = field.slice(0, separator).trim();
+      const value = field.slice(separator + 1).trim();
+      if (
+        separator <= 0 ||
+        !/^[A-Za-z0-9_-]+$/.test(name) ||
+        value === "" ||
+        seenCookies.has(name)
+      )
+        return missing("The captured HTTP cookie header is ambiguous");
+      seenCookies.add(name);
+      cookies.push({ name, value });
+    }
+    const authenticationCookies: {
+      value: string;
+      scheme: "logged_in" | "auth" | "secure_auth";
+    }[] = [];
+    for (const cookie of cookies) {
+      const scheme = /^wordpress_logged_in_[A-Za-z0-9_-]+$/.test(cookie.name)
+        ? "logged_in"
+        : /^wordpress_sec_[A-Za-z0-9_-]+$/.test(cookie.name)
+          ? "secure_auth"
+          : /^wordpress_[A-Za-z0-9_-]+$/.test(cookie.name) &&
+              cookie.name !== "wordpress_test_cookie"
+            ? "auth"
+            : null;
+      if (scheme !== null) {
+        authenticationCookies.push({ value: cookie.value, scheme });
+      } else if (
+        (cookie.name.startsWith("wordpress_") &&
+          cookie.name !== "wordpress_test_cookie") ||
+        unknownAuthenticationCookie.test(cookie.name)
+      ) {
+        return missing(
+          "The captured HTTP request has an unsupported authentication cookie",
+        );
+      }
+    }
+    if (finding.attackerPosition === "unauthenticated") {
+      if (authenticationCookies.length > 0)
+        return missing(
+          "A post-setup request used a logged-in WordPress session",
+        );
+    } else {
+      if (bearsCanary && authenticationCookies.length === 0)
+        return missing(
+          "The canary-bearing request has no verifiable attacker session",
+        );
+      for (const cookie of authenticationCookies) {
+        const actor = await options.lab.observeSessionUser(
+          lab,
+          cookie.value,
+          cookie.scheme,
+        );
+        if (
+          actor.status !== "user" ||
+          actor.login !== expectedAccount?.username
+        )
+          return missing(
+            "A post-setup request session differs from the Lab attacker",
+          );
+      }
+    }
+  }
+  if (bearingRequests === 0)
+    return missing(
+      "No captured attacker HTTP request carried the issued script canary",
+    );
+  if (expectedAccount !== null && expectedAccount !== undefined) {
+    const baseline = canaries.roleBaseline[expectedAccount.username];
+    const roles = await options.lab.observeAccountRoles(
+      lab,
+      expectedAccount.username,
+    );
+    if (
+      baseline?.length !== 1 ||
+      baseline[0] !== finding.attackerPosition ||
+      roles.status !== "roles" ||
+      roles.roles.length !== 1 ||
+      roles.roles[0] !== finding.attackerPosition
+    )
+      return missing(
+        "The Lab attacker account no longer has only its declared low privilege role",
+      );
+  }
+  return { attackerRole: finding.attackerPosition };
+}
+
 /**
  * Stored XSS: an issued script canary reached the Lab receiver while the Lab's
  * own browser opened an affected page. Scope decides whether the observed
@@ -1220,7 +1461,7 @@ function storedScriptJudge(options: Options) {
   return canaryJudge(
     options,
     "wordpress-stored-script",
-    async ({ lab, recipeDigest }) => {
+    async ({ finding, lab, recipeDigest, canaries, httpEvidence }) => {
       const route = await routeConditions(options.store, recipeDigest);
       const steps = browserStepsSchema.safeParse(
         await readJson(options.store, recipeDigest, "route.json"),
@@ -1246,17 +1487,36 @@ function storedScriptJudge(options: Options) {
         ...(victim === undefined ? {} : { victim }),
       });
       switch (script.status) {
-        case "unavailable":
-          return script.phase === undefined
-            ? unavailable
-            : {
-                status: "incomplete",
-                reason: "observation",
-                nextStep:
-                  script.phase === "victim-page"
-                    ? "Stored-script observation failed at victim-page; inspect the saved victim route/actions in Private Evidence and repeat"
-                    : `Stored-script observation failed at ${script.phase}; inspect the Lab observer and repeat`,
-              };
+        case "unavailable": {
+          const evidenceDigest =
+            script.privateDiagnostic === undefined
+              ? undefined
+              : await options.store.putFiles({
+                  "observer-diagnostic.json": canonicalJson({
+                    judgeId: "wordpress-stored-script",
+                    status: "unavailable",
+                    phase: script.phase ?? "unknown",
+                    failureCode: script.failureCode ?? "browser-visit",
+                    snapshotDigest: lab.snapshotDigest,
+                    labSetupDigest: lab.setupDigest,
+                  }),
+                  "browser-stderr.txt": script.privateDiagnostic,
+                });
+          const incomplete: Incomplete =
+            script.phase === undefined
+              ? unavailable
+              : {
+                  status: "incomplete",
+                  reason: "observation",
+                  nextStep:
+                    script.phase === "victim-page"
+                      ? `Stored-script observation failed at victim-page${script.failureCode === undefined ? "" : ` (${script.failureCode})`}; inspect the saved victim route/actions in Private Evidence and repeat`
+                      : `Stored-script observation failed at ${script.phase}${script.failureCode === undefined ? "" : ` (${script.failureCode})`}; inspect the Lab observer and repeat`,
+                };
+          return evidenceDigest === undefined
+            ? incomplete
+            : { ...incomplete, evidenceDigest };
+        }
         case "not-prepared":
           return {
             status: "incomplete",
@@ -1305,6 +1565,28 @@ function storedScriptJudge(options: Options) {
             nextStep:
               "Record the Lab browser principal for the victim page and repeat",
           };
+        if (victim !== undefined && script.screenshot !== undefined) {
+          const evidenceDigest = await options.store.putFiles({
+            "canary-observation.json": canonicalJson({
+              judgeId: "wordpress-stored-script",
+              status: "victim-visited-without-beacon",
+              phase: "victim-page",
+              victimRole: victim.role,
+              completedVictimVisits: victim.paths.length,
+              screenshotVisit: victim.paths.length,
+              snapshotDigest: lab.snapshotDigest,
+              labSetupDigest: lab.setupDigest,
+            }),
+            "victim-screen-diagnostic.png": script.screenshot,
+          });
+          return {
+            status: "incomplete",
+            reason: "observation",
+            nextStep:
+              "The Lab browser visited the declared victim page without a canary receipt; inspect the diagnostic screenshot and route in Private Evidence, then repeat",
+            evidenceDigest,
+          };
+        }
         return null;
       }
       if (script.screenshot === undefined)
@@ -1314,6 +1596,14 @@ function storedScriptJudge(options: Options) {
           nextStep:
             "Capture the victim page screenshot with the Lab observer and repeat",
         };
+      const attack = await capturedScriptAttack(options, {
+        finding,
+        lab,
+        recipeDigest,
+        canaries,
+        httpEvidence,
+      });
+      if ("status" in attack) return attack;
       const siteWide = qualifyingContexts.some(
         (context) => context === "front" || context === "admin-all",
       );
@@ -1327,6 +1617,7 @@ function storedScriptJudge(options: Options) {
             ? {}
             : { victimRole: script.victimRole, victimPrincipal: "separate" }),
           ...route,
+          attackerRole: attack.attackerRole,
         },
       };
     },

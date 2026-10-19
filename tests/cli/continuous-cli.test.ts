@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { continuousCommand } from "../../src/cli/continuous-cli.js";
+import { acquireHostLabLease } from "../../src/infrastructure/host-lab-lease.js";
 import {
   continuousPaths,
   holdLabSweep,
@@ -83,6 +84,7 @@ async function setup(
       state,
       profile,
       io,
+      hostLabLeaseDirectory: join(root, "host-lab-lease"),
       configPath: undefined,
       selectionPath: undefined,
       campaignPrefix: "prod",
@@ -479,6 +481,24 @@ describe("continuous run", () => {
     expect(await t.command("run", RUN_OPTIONS)).toBe(0);
     expect(sweeps).toEqual(["remove"]);
     expect(t.stdout.at(-1)).toMatch(/ stopped reason=operator$/);
+  });
+
+  it("skips the broad sweep while another state holds a verification Lab", async () => {
+    const sweeps: string[] = [];
+    const t = await setup((stateDirectory) =>
+      hostProfile({ stateDirectory, sweeps }),
+    );
+    const lease = await acquireHostLabLease({
+      directory: join(t.root, "host-lab-lease"),
+      waitMs: 0,
+    });
+    expect(lease).not.toBeNull();
+    try {
+      expect(await t.command("run", RUN_OPTIONS)).toBe(0);
+      expect(sweeps).toEqual([]);
+    } finally {
+      await lease?.release();
+    }
   });
 
   it("keeps the sweep held until every holder has released it", async () => {

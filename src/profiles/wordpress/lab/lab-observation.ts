@@ -22,6 +22,7 @@ import type {
   WordPressScriptContext,
   WordPressSessionObservation,
   WordPressStoredScriptFailurePhase,
+  WordPressStoredScriptFailureCode,
   WordPressStoredScriptObservation,
 } from "./contract.js";
 import type { WordPressLabSession } from "./lab-session.js";
@@ -41,7 +42,17 @@ if ($user !== false && $user !== "") {
 }
 echo json_encode(["http" => $http !== false ? "ok" : "failed", "database" => $database]);`;
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
+const MAX_BROWSER_DIAGNOSTIC_BYTES = 16 * 1024;
 const PNG_SIGNATURE = Buffer.from("89504e470d0a1a0a", "hex");
+
+class BrowserVisitFailure extends Error {
+  constructor(
+    readonly failureCode: WordPressStoredScriptFailureCode,
+    readonly privateDiagnostic?: Buffer,
+  ) {
+    super(`Browser visit failed:${failureCode}`);
+  }
+}
 /** One page visit by the Lab's observer; dialogs are dismissed and never count. */
 const BROWSER_VISIT = `const { chromium } = require("playwright");
 (async () => {
@@ -52,13 +63,33 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   dismissDialogs(page);
   const openedPages = new Set();
   const observedPages = new Set([page]);
+  const popupOpeners = new Map();
   page.context().on("page", (tab) => {
     dismissDialogs(tab);
     openedPages.add(tab);
   });
   const base = "http://wordpress";
+  const atLabOrigin = async (tab) => {
+    const url = tab.url();
+    if (new URL(url).origin === base) return true;
+    const opener = popupOpeners.get(tab);
+    if (url !== "about:blank" || opener === undefined) return false;
+    if (await tab.opener() !== opener) return false;
+    return tab.evaluate((origin) => {
+      try {
+        return window.origin === origin &&
+          window.opener !== null &&
+          window.opener.document !== undefined;
+      } catch {
+        return false;
+      }
+    }, base).catch(() => false);
+  };
   const user = process.env.WBH_LOGIN_USER;
   if (user) {
+    // The login page is not the page under observation. A script there must
+    // not make a later victim route look as though it fired.
+    await page.route("http://canary:8080/**", (route) => route.abort());
     await page.goto(base + "/wp-login.php");
     await page.fill("#user_login", user);
     await page.fill("#user_pass", process.env.WBH_LOGIN_PASSWORD ?? "");
@@ -66,7 +97,33 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
     const cookies = await page.context().cookies(base);
     if (!cookies.some((cookie) => cookie.name.startsWith("wordpress_logged_in_")))
       throw new Error("Victim login failed");
+    await page.unroute("http://canary:8080/**");
   }
+  const scriptNonces = JSON.parse(process.env.WBH_SCRIPT_NONCES ?? "[]");
+  const carriesScriptNonce = (value) => {
+    const raw = typeof value === "string" ? value : JSON.stringify(value ?? null);
+    let decoded = raw;
+    try { decoded = decodeURIComponent(raw); } catch { /* malformed encoding stays raw */ }
+    return scriptNonces.some((nonce) => {
+      if (raw.includes(nonce) || decoded.includes(nonce)) return true;
+      for (const source of [raw, decoded]) {
+        for (const token of source.match(new RegExp("[A-Za-z0-9+/]{8,}={0,2}", "g")) ?? [])
+          if (Buffer.from(token, "base64").toString("utf8").includes(nonce)) return true;
+        for (const token of source.match(new RegExp("[a-fA-F0-9]{16,}", "g")) ?? [])
+          if (Buffer.from(token, "hex").toString("utf8").includes(nonce)) return true;
+      }
+      return false;
+    });
+  };
+  let victimCanaryRequest = false;
+  page.context().on("request", (request) => {
+    if (new URL(request.url()).origin !== base) return;
+    if (
+      carriesScriptNonce(request.url()) ||
+      carriesScriptNonce(request.postData()) ||
+      carriesScriptNonce(request.headers())
+    ) victimCanaryRequest = true;
+  });
   let visiblePage = page;
   await visiblePage.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
   if (new URL(visiblePage.url()).origin !== base)
@@ -76,9 +133,12 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
     const target = action.kind === "click-text"
       ? visiblePage.getByText(action.text, { exact: action.exact })
       : visiblePage.locator(action.selector);
-    await target.waitFor({ state: "visible", timeout: 10000 });
+    await target.waitFor({ state: "visible", timeout: 10000 }).catch(() => {
+      throw new Error("Victim action not visible");
+    });
     if (await target.count() !== 1)
       throw new Error("Victim action did not identify one visible element");
+    const opener = visiblePage;
     const expectsPopup = await target.evaluate((element) => {
       const carriers = [
         element.closest('a[target],form[target]'),
@@ -90,23 +150,34 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
     });
     const popup = visiblePage.waitForEvent("popup", { timeout: expectsPopup ? 10000 : 1500 })
       .then((tab) => tab, () => null);
-    await target.click({ timeout: 10000 });
+    if (action.kind === "fill") {
+      await target.fill(action.value, { timeout: 10000 }).catch(() => {
+        throw new Error("Victim action fill failed");
+      });
+      continue;
+    }
+    await target.click({ timeout: 10000 }).catch(() => {
+      throw new Error("Victim action click failed");
+    });
     const opened = await popup;
     if (expectsPopup && opened === null)
       throw new Error("Expected victim popup did not open");
     if (opened !== null) {
       observedPages.add(opened);
+      popupOpeners.set(opened, opener);
       visiblePage = opened;
     }
     await visiblePage.waitForLoadState("load", { timeout: 10000 });
-    if (new URL(visiblePage.url()).origin !== base)
+    if (!await atLabOrigin(visiblePage))
       throw new Error("Victim action left the Lab origin");
   }
   await visiblePage.waitForTimeout(3000);
+  if (victimCanaryRequest)
+    throw new Error("Victim request carried the script canary");
   if ([...openedPages].some((tab) => !observedPages.has(tab)))
     throw new Error("Unobserved victim popup opened");
   for (const tab of observedPages)
-    if (!tab.isClosed() && new URL(tab.url()).origin !== base)
+    if (!tab.isClosed() && !await atLabOrigin(tab))
       throw new Error("Victim observation left the Lab origin");
   const screenshot = await visiblePage.screenshot({ type: "png" });
   if (screenshot.length > ${MAX_SCREENSHOT_BYTES})
@@ -137,12 +208,21 @@ export const wordpressVictimActionSchema = z.discriminatedUnion("kind", [
     text: z.string().min(1).max(120),
     exact: z.boolean(),
   }),
+  z.strictObject({
+    kind: z.literal("fill"),
+    selector: z
+      .string()
+      .min(1)
+      .max(200)
+      .regex(/^[#.a-zA-Z0-9_ \[\]="'():>+~*,-]+$/),
+    value: z.string().min(1).max(120),
+  }),
 ]);
 const victimVisitSchema = z.union([
   wordpressVisitPathSchema,
   z.strictObject({
     path: wordpressVisitPathSchema,
-    actions: z.array(wordpressVictimActionSchema).min(1).max(3),
+    actions: z.array(wordpressVictimActionSchema).min(1).max(5),
   }),
 ]);
 export const wordpressVictimRouteSchema = z.strictObject({
@@ -151,6 +231,31 @@ export const wordpressVictimRouteSchema = z.strictObject({
 });
 export type WordPressVictimRoute = z.infer<typeof wordpressVictimRouteSchema>;
 type VictimActions = readonly z.infer<typeof wordpressVictimActionSchema>[];
+
+function observerInputCarriesCanary(
+  value: unknown,
+  nonces: ReadonlySet<string>,
+): boolean {
+  const raw = JSON.stringify(value ?? null);
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    // Malformed percent encoding still receives the raw comparison.
+  }
+  return [...nonces].some((nonce) => {
+    if (raw.includes(nonce) || decoded.includes(nonce)) return true;
+    for (const source of [raw, decoded]) {
+      for (const token of source.match(/[A-Za-z0-9+/]{8,}={0,2}/g) ?? [])
+        if (Buffer.from(token, "base64").toString("utf8").includes(nonce))
+          return true;
+      for (const token of source.match(/[a-fA-F0-9]{16,}/g) ?? [])
+        if (Buffer.from(token, "hex").toString("utf8").includes(nonce))
+          return true;
+    }
+    return false;
+  });
+}
 
 export async function markCapture(
   lab: WordPressLabSession,
@@ -424,6 +529,8 @@ async function visitStoredScriptPage(input: {
       `WBH_VISIT_PATH=${path}`,
       "--env",
       `WBH_VISIT_ACTIONS=${JSON.stringify(actions ?? [])}`,
+      "--env",
+      `WBH_SCRIPT_NONCES=${JSON.stringify([...lab.scriptNonces])}`,
       "--entrypoint=node",
       lab.images.browser,
       "-e",
@@ -432,7 +539,35 @@ async function visitStoredScriptPage(input: {
     120_000,
     Math.ceil(MAX_SCREENSHOT_BYTES / 3) * 4 + 1024,
   );
-  if (result.exitCode !== 0) throw new Error("Browser visit failed");
+  if (result.exitCode !== 0) {
+    const known: readonly [string, WordPressStoredScriptFailureCode][] = [
+      ["Victim login failed", "victim-login"],
+      ["Victim action not visible", "victim-action-not-visible"],
+      [
+        "Victim action did not identify one visible element",
+        "victim-action-ambiguous",
+      ],
+      ["Victim action click failed", "victim-action-click"],
+      ["Victim action fill failed", "victim-action-fill"],
+      ["Expected victim popup did not open", "victim-popup"],
+      ["Victim navigation left the Lab origin", "victim-navigation"],
+      ["Victim action left the Lab origin", "victim-navigation"],
+      ["Victim observation left the Lab origin", "victim-navigation"],
+      ["Unobserved victim popup opened", "victim-unobserved-popup"],
+      ["Victim request carried the script canary", "victim-canary-request"],
+      ["Browser screenshot exceeds the evidence limit", "victim-screenshot"],
+    ];
+    const failureCode =
+      known.find(([message]) => result.stderr.includes(message))?.[1] ??
+      "browser-visit";
+    const stderr = Buffer.from(result.stderr, "utf8");
+    throw new BrowserVisitFailure(
+      failureCode,
+      failureCode === "browser-visit" && stderr.length > 0
+        ? Buffer.from(stderr.subarray(0, MAX_BROWSER_DIAGNOSTIC_BYTES))
+        : undefined,
+    );
+  }
   const encoded = result.stdout.trim();
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))
     throw new Error("Browser screenshot is missing");
@@ -472,15 +607,32 @@ export async function observeStoredScript(
       : wordpressVictimRouteSchema.safeParse(input.victim);
   if (victim !== undefined && !victim.success)
     return { status: "unavailable", phase: "victim-input" };
+  if (observerInputCarriesCanary(routePaths.data, lab.scriptNonces))
+    return {
+      status: "unavailable",
+      phase: "route-input",
+      failureCode: "observer-canary-input",
+    };
+  if (
+    victim?.success &&
+    observerInputCarriesCanary(victim.data, lab.scriptNonces)
+  )
+    return {
+      status: "unavailable",
+      phase: "victim-input",
+      failureCode: "observer-canary-input",
+    };
   const issued = new Set([...lab.scriptNonces].map((token) => `/b/${token}`));
   let phase: WordPressStoredScriptFailurePhase = "front";
   try {
     const contexts: WordPressScriptContext[] = [];
     let screenshot: Buffer | undefined;
+    let diagnosticVictimScreenshot: Buffer | undefined;
     const fired = async (
       path: string,
       role: WordPressVictimRoute["role"],
       actions?: VictimActions,
+      victimVisit = false,
     ): Promise<boolean> => {
       const observation = await visitStoredScriptPage({
         lab,
@@ -491,6 +643,7 @@ export async function observeStoredScript(
         ...(actions === undefined ? {} : { actions }),
       });
       if (observation.fired) screenshot ??= observation.screenshot;
+      else if (victimVisit) diagnosticVictimScreenshot = observation.screenshot;
       return observation.fired;
     };
     if (await fired("/", "unauthenticated")) contexts.push("front");
@@ -511,7 +664,8 @@ export async function observeStoredScript(
       for (const visit of victim.data.paths) {
         const path = typeof visit === "string" ? visit : visit.path;
         const actions = typeof visit === "string" ? undefined : visit.actions;
-        if (await fired(path, victim.data.role, actions)) victimPage = true;
+        if (await fired(path, victim.data.role, actions, true))
+          victimPage = true;
       }
     }
     if (victimPage) contexts.push("victim-route-page");
@@ -521,16 +675,30 @@ export async function observeStoredScript(
       (victimRole === "subscriber" || victimRole === "customer") &&
       lab.victimAccounts[victimRole]?.username ===
         lab.handle.attackerAccounts[victimRole]?.username;
+    const selectedScreenshot = screenshot ?? diagnosticVictimScreenshot;
     return {
       status: "observed",
       contexts,
       ...(victimRole === undefined
         ? {}
         : { victimRole: sameAccount ? ("self" as const) : victimRole }),
-      ...(screenshot === undefined ? {} : { screenshot }),
+      ...(selectedScreenshot === undefined
+        ? {}
+        : { screenshot: selectedScreenshot }),
     };
-  } catch {
-    return { status: "unavailable", phase };
+  } catch (error) {
+    return {
+      status: "unavailable",
+      phase,
+      failureCode:
+        error instanceof BrowserVisitFailure
+          ? error.failureCode
+          : "browser-visit",
+      ...(error instanceof BrowserVisitFailure &&
+      error.privateDiagnostic !== undefined
+        ? { privateDiagnostic: error.privateDiagnostic }
+        : {}),
+    };
   }
 }
 
