@@ -227,6 +227,15 @@ export interface CodexSandboxCommand {
   readonly resumePrompt?: string;
   /** Operator-triggered resume: start with `exec resume <threadId>` on the restored session. */
   readonly resume?: CodexSandboxResumeSeed;
+  /**
+   * Names the run in a marker outside every mount, so a later process can find
+   * this sandbox's directories when the host dies mid-run (ADR 0036, 2026-10-19
+   * second addendum).
+   */
+  readonly runMarker?: {
+    readonly runId: string;
+    readonly runtimeProfileDigest: string;
+  };
   readonly supportFiles: readonly {
     readonly path: string;
     readonly content: string;
@@ -284,13 +293,39 @@ export interface CodexSandboxResult {
     readonly fallbackUsed: false;
   };
 }
+/**
+ * What the sandbox of a run left on disk. `alive`: the process that started it
+ * still runs on this boot. `found`: it is gone and the files are read back as
+ * a failed result; `discard` removes them once they are sealed.
+ */
+export type CodexSandboxLeftover =
+  | { readonly status: "absent" }
+  | { readonly status: "alive" }
+  | {
+      readonly status: "found";
+      readonly runtimeProfileDigest: string;
+      readonly result: CodexSandboxResult;
+      discard(): Promise<void>;
+    };
 /** The Lab module supplies this executor. This adapter has no host execution fallback. */
 export interface CodexSandbox {
   execute(
     command: CodexSandboxCommand,
     signal?: AbortSignal,
   ): Promise<CodexSandboxResult>;
+  /** Reads back the directories of a run whose marker names `runId`. */
+  leftover?(runId: string): Promise<CodexSandboxLeftover>;
 }
+/** `recoverInterrupted`: the leftover sealed as an `interrupted` result, or why not. */
+export type InterruptedRunRecovery =
+  | { readonly status: "absent" }
+  | { readonly status: "alive" }
+  | { readonly status: "runtime-profile-differs"; readonly detail: string }
+  | {
+      readonly status: "recovered";
+      readonly result: DiscoveryTransportResult;
+      discard(): Promise<void>;
+    };
 export interface DiscoveryTransportRun {
   readonly runId: string;
   readonly targetSnapshotDigest: string;
@@ -1103,7 +1138,8 @@ type IncompleteReason =
   | "policy"
   | "evidence"
   | "wall"
-  | "operator";
+  | "operator"
+  | "interrupted";
 type GrantedSandboxRun = ProviderCredentialEgressResult<CodexSandboxResult>;
 type ExecutionState = {
   readonly run: DiscoveryTransportRun;
@@ -1127,6 +1163,28 @@ type ExecutionState = {
       }
     | undefined;
 };
+
+function executionState(
+  run: DiscoveryTransportRun,
+  startedAt: string,
+): ExecutionState {
+  return {
+    run,
+    startedAt,
+    cooperative: cooperativeRun(run),
+    agentRuns: [],
+    childThreadsObserved: undefined,
+    childThreadsAdmitted: undefined,
+    rootDiagnosticArtifactDigest: undefined,
+    rootUsage: undefined,
+    rootObserved: undefined,
+    brokerMetrics: undefined,
+    sandboxExitCode: undefined,
+    session: undefined,
+    childSessionFiles: [],
+    researchArtifact: undefined,
+  };
+}
 
 function incompleteExecution(
   state: ExecutionState,
@@ -1413,6 +1471,10 @@ function sandboxCommand(
           minimumActiveMs: run.minimumActiveMs,
           resumeArgs: codexResumeArgs(run, grant, login),
           resumePrompt: run.resumePrompt ?? run.prompt,
+          runMarker: {
+            runId: run.runId,
+            runtimeProfileDigest: run.profile.digest,
+          },
         }),
     ...(run.resume === undefined
       ? {}
@@ -1502,22 +1564,7 @@ export class CodexNativeAgentRuntime {
     run: DiscoveryTransportRun,
     signal?: AbortSignal,
   ): Promise<DiscoveryTransportResult> {
-    const state: ExecutionState = {
-      run,
-      startedAt: this.clock().toISOString(),
-      cooperative: cooperativeRun(run),
-      agentRuns: [],
-      childThreadsObserved: undefined,
-      childThreadsAdmitted: undefined,
-      rootDiagnosticArtifactDigest: undefined,
-      rootUsage: undefined,
-      rootObserved: undefined,
-      brokerMetrics: undefined,
-      sandboxExitCode: undefined,
-      session: undefined,
-      childSessionFiles: [],
-      researchArtifact: undefined,
-    };
+    const state = executionState(run, this.clock().toISOString());
     if (run.coordination === "cooperative" && !state.cooperative)
       return incompleteExecution(
         state,
@@ -1629,6 +1676,51 @@ export class CodexNativeAgentRuntime {
         ),
       );
     return this.#resolveReport(state, result, granted.receipt.digest);
+  }
+
+  /**
+   * A cooperative run whose host process died before it finished (ADR 0036,
+   * 2026-10-19 second addendum): its sandbox's leftover rollouts and notes are
+   * sealed exactly as a failed sandbox result is, under the reason
+   * `interrupted`. Nothing runs. `startedAt` is the run's ledger start.
+   */
+  async recoverInterrupted(
+    run: DiscoveryTransportRun,
+    startedAt: string,
+  ): Promise<InterruptedRunRecovery> {
+    const leftover = (await this.sandbox.leftover?.(run.runId)) ?? {
+      status: "absent" as const,
+    };
+    if (leftover.status !== "found") return leftover;
+    if (leftover.runtimeProfileDigest !== run.profile.digest)
+      return {
+        status: "runtime-profile-differs",
+        detail: leftover.runtimeProfileDigest,
+      };
+    const state = executionState(run, startedAt);
+    if (!state.cooperative) return { status: "absent" };
+    const failure = await this.#collectCooperativeEvidence(
+      state,
+      leftover.result,
+      "unavailable",
+    );
+    // Without the Root's session nothing could be resumed; record nothing.
+    if (state.session === undefined) return { status: "absent" };
+    return {
+      status: "recovered",
+      result: await this.#retainRootOnIncomplete(
+        leftover.result,
+        incompleteExecution(
+          state,
+          "interrupted",
+          leftover.result.completedAt,
+          undefined,
+          undefined,
+          failure?.reasonDetail,
+        ),
+      ),
+      discard: () => leftover.discard(),
+    };
   }
 
   async #runWithBroker(

@@ -163,6 +163,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         "wall",
         "operator",
         "depth",
+        /** The host process died mid-run; `campaign resume` sealed its leftovers (ADR 0036). */
+        "interrupted",
       ])
       .optional(),
     reasonDetail: z
