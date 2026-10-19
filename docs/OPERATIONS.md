@@ -57,11 +57,11 @@ harness review [--campaign <id>]                         # 検証済みの列を
 provider の構造化エラー `cyber_policy` は `incomplete(provider: provider-cyber-policy)` と記録する。これは broker の要求上限や認証期限切れ、正常な候補0件とは別の停止理由。詳細な診断は Git 外 Private Evidence の receipt に結び付けて保持し、台帳へエラー本文を写さない。拒否された対象は `target-skipped(provider-refused)` として次の対象へ進む。Root が source を 1 件も読まず、子を起動せず、broker 転送が 1 以下で終わった run は Trial に数えず、その対象は次の選定で戻る。途中まで走った Trial は数え、再選定しない。ただし provider 上限（`provider-limited`）で終わった run は Trial に数えず、runner が backoff 後に同じ対象をやり直す（ADR 0029 の 2026-10-19 追記）。モデルの満杯（「Selected model is at capacity」）も 429 と同じ `rate-limit` として扱う。拒否を避ける目的で prompt を言い換えない。件数は `ledger stops` で見る。
 
 ```sh
-harness ledger stops --campaign <id>                                        # provider-cyber-policy の run を見つける
+harness ledger stops --campaign <id>                                        # 止まった run を見つける
 harness campaign resume --campaign <id> --run <runId> --config <campaign.json>   # その Root thread を新しい sandbox で再開（ADR 0036）
 ```
 
-`campaign resume` は操作者が名指しした 1 run だけを、同じ Snapshot・同じ runtime profile・同じ v8 再開段落・残り wall（120 分 − 消費済み）で、session file と notes を復元した新しい使い捨て container に `codex exec resume` する。再開できる run は `failed(provider: provider-cyber-policy)` で Lab 無し、receipt に `session` があり、残り wall が 5 分以上あるものだけ。それ以外は `not resumable: <理由>` を 1 行出して終了コード 3、event は書かない。再開 segment は同じ `trialId` で `discovery-run-started.resumesRun` を持ち、funnel では Trial 1 回のまま、wall と token は合算する。同じ thread が再び拒否されることはある。自動では再開せず、prompt の言い換えもしない。旧 receipt（`session` 無し）の run は再開できない。
+`campaign resume` は操作者が名指しした 1 run だけを、同じ Snapshot・同じ runtime profile・同じ v8 再開段落・残り wall（120 分 − 消費済み）で、session file と notes を復元した新しい使い捨て container に `codex exec resume` する。再開できる run は `completed` 以外で終わったもの（拒否、provider 上限、モデル満杯、CLI 終了、schema、wall のどれでもよい、ADR 0036 の 2026-10-19 追記）で Lab 無し、receipt に `session` があり、残り wall が 5 分以上あるものだけ。それ以外は `not resumable: <理由>` を 1 行出して終了コード 3、event は書かない。再開 segment は同じ `trialId` で `discovery-run-started.resumesRun` を持ち、funnel では Trial 1 回のまま、wall と token は合算する。同じ thread が再び拒否されることはある。自動では再開せず、prompt の言い換えもしない。旧 receipt（`session` 無し）の run は再開できない。
 
 `campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v8` のRoot＋最大4子による協調Trialを1回行い、wall上限は120分。最低60分は能動的に探索し、Rootが早く最終報告したときは同じ協調セッションで探索を続ける。継続不能、wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、同一対象の追加Trialは起動しない。各 Finding は後から `verify next`（`continuous run` では検証 worker が順に、検証 skill では `--handoff`、ADR 0035）で Finding 単位の Lab と判定器を通る（下の `discovery.lab`）。
 wall 到達時は agent と broker を名前で `docker stop -t 10`（失敗時は `docker kill`）してから、子の報告を回収し `discovery-run-finished` に `incomplete(wall)` を記録して Lab を片付ける。

@@ -16,7 +16,7 @@ v8 の協調 Trial は Root 1 thread を同じ gVisor container の中で `codex
 
 `campaign resume --campaign <id> --run <runId> --config <path>` は、台帳と Private Evidence だけを読んで次を全部満たすときに限り再開する。1 つでも欠ければ理由を 1 行出して終了コード 3 で終わり、event を書かない。
 
-1. `<runId>` は `discovery-run-started`（`runKind: explore`）が有り、`discovery-run-finished` が `outcome: failed`、`reason: provider`、`reasonDetail: provider-cyber-policy`。provider limit、wall、schema、sandbox、`completed` は再開しない（`not-a-provider-refusal`）。
+1. `<runId>` は `discovery-run-started`（`runKind: explore`）が有り、`discovery-run-finished` が `outcome: failed`、`reason: provider`、`reasonDetail: provider-cyber-policy`。provider limit、wall、schema、sandbox、`completed` は再開しない（`not-a-provider-refusal`）。※ 2026-10-19 追記で `completed` 以外の全理由に広げた（下記）。
 2. その run を `resumesRun` で指す後続 segment が無い（`already-resumed`。再開するなら最新 segment の run id を名指しする）。
 3. Lab を付けていない run（`labAttached: false`）で、campaign 設定も `discovery.lab = none`（`lab-attached`）。
 4. 現在の campaign 設定が凍結する Snapshot digest、目的 prompt の digest、runtime profile の digest が元の run と同じ（`snapshot-digest-differs` / `prompt-version-differs` / `runtime-profile-differs`）。prompt 本文に v8 の再開段落（`Before giving up,` で始まる最後の段落）が含まれている（`resume-paragraph-missing`）。
@@ -60,3 +60,13 @@ v8 の協調 Trial は Root 1 thread を同じ gVisor container の中で `codex
 ## 消し方
 
 `src/discovery/resume-trial.ts`、`tests/discovery/resume-trial.test.ts`、`tests/discovery/codex-sandbox-resume-seed.test.ts`、`tests/discovery/codex-runtime-session.test.ts`、CLI の `campaign resume` と `CliProfile.resumeCampaignRun`、`CodexSandboxCommand.resume` と sandbox の seed、runner の `argv[6]`、`DiscoveryTransportRun.resume`、`PlannedTrial.resumes` を削除する。receipt の `session` と台帳の `resumesRun` / `resumeSegment` は読取互換として残す。
+
+## 2026-10-19 追記: 止まった理由を問わず再開できる
+
+所有者は 2026-10-19 に「原因に関係なく停止した場合は再開できるようにしたい」と決めた。同じ日、prod-20261019-4 で sureforms と the-events-calendar の Root がモデルの満杯（`server_overloaded`）で止まった。それぞれ 6 分と 24 分走り、子 4 体が source を読んでいたが、規則 1 に当たらないので再開できず、新しい Trial としてやり直すしかなかった。
+
+- 規則 1 を「`discovery-run-finished` が `completed` 以外」に変える。provider の拒否、provider 上限、モデル満杯、CLI の異常終了、schema、sandbox、wall のどれでも再開できる。`completed` の run は `run-completed` で拒否する。`not-a-provider-refusal` は使わない。
+- 規則 2〜6 は変えない。wall に届いた run は、規則 6（残り wall 5 分以上）で実際には拒否される。receipt に `session` が無い run（sandbox が session を捕まえる前に落ちた run など）は、これまでどおり `session-unrecorded` で拒否する。
+- 操作者が名指ししたときだけ動き、自動では再開しない。これは変えない。provider 上限で終わった run は、runner が backoff 後に新しい Trial としてやり直す（ADR 0029 の 2026-10-19 追記）。その対象を再開すると、runner のやり直しと重なる。provider 上限の run を再開するのは、runner を止めているときに限る。
+- 終了 event の無い run（host の電源断など）は、この追記の対象外で `run-unfinished` のまま。別の変更で扱う。
+

@@ -367,35 +367,9 @@ describe("resumability rule (ADR 0036)", () => {
       readonly detail?: string;
     }[] = [
       {
-        label: "provider limit",
-        run: {
-          runId: "run-1",
-          providerLimit: "quota",
-          reasonDetail: "cli-exit:1",
-        },
-        reason: "not-a-provider-refusal",
-        detail: "provider-limited/provider/cli-exit:1",
-      },
-      {
-        label: "schema failure",
-        run: {
-          runId: "run-1",
-          reason: "schema",
-          reasonDetail: "missing-final-message",
-        },
-        reason: "not-a-provider-refusal",
-        detail: "failed/schema/missing-final-message",
-      },
-      {
-        label: "wall",
-        run: { runId: "run-1", reason: "wall", reasonDetail: "timed-out" },
-        reason: "not-a-provider-refusal",
-      },
-      {
         label: "completed",
         run: { runId: "run-1", outcome: "completed" },
-        reason: "not-a-provider-refusal",
-        detail: "completed",
+        reason: "run-completed",
       },
       {
         label: "attached Lab",
@@ -458,6 +432,25 @@ describe("resumability rule (ADR 0036)", () => {
         ...(testCase.detail === undefined ? {} : { detail: testCase.detail }),
       });
       expect(stores.ledger.readAll({}).length, testCase.label).toBe(before);
+    }
+  });
+
+  it("admits a run that stopped for any reason, not only a provider refusal", async () => {
+    const cases: readonly Parameters<typeof recordRun>[1][] = [
+      { runId: "run-1", providerLimit: "quota", reasonDetail: "cli-exit:1" },
+      {
+        runId: "run-1",
+        reason: "schema",
+        reasonDetail: "missing-final-message",
+      },
+      { runId: "run-1", reason: "provider", reasonDetail: "cli-exit:1" },
+      { runId: "run-1", reason: "wall", reasonDetail: "timed-out" },
+    ];
+    for (const run of cases) {
+      const stores = await open();
+      await recordRun(stores, run);
+      const assessment = await assess(stores);
+      expect(assessment.status, JSON.stringify(run)).toBe("resumable");
     }
   });
 
