@@ -9,7 +9,7 @@ import {
   executeTrialResume,
   recordInterruptedRun,
 } from "../discovery/index.js";
-import type { PlannedDiscoveryRun } from "../discovery/index.js";
+import type { PlannedDiscoveryRun, ResumePlan } from "../discovery/index.js";
 import { Review } from "../review/index.js";
 import { targetSelectionId } from "../selection/index.js";
 import { SourceAcquisitionError, type Snapshot } from "../snapshot/index.js";
@@ -388,6 +388,8 @@ type WordPressDiscoveryPlan = Awaited<
   ReturnType<WordPressDiscoveryPipeline["discovery"]>
 >;
 type WordPressDiscoveryContext = {
+  readonly campaignId: string;
+  readonly resumeInterrupted?: { log(line: string): void };
   readonly config: WordPressCampaignConfig;
   readonly repeat: number;
   readonly boundaries: WordPressCampaignBoundaries;
@@ -631,6 +633,43 @@ async function planWordPressDiscovery(
     executor: boundaries.executor,
     attachments: boundaries.attachments,
     recordReport: recordWordPressReport,
+    ...(context.resumeInterrupted === undefined || lab !== undefined
+      ? {}
+      : {
+          resumeInterrupted: resumeInterruptedFor(
+            context,
+            context.resumeInterrupted.log,
+          ),
+        }),
+  };
+}
+
+/**
+ * The runner's resume of a run whose host died (ADR 0036, 2026-10-19 addendum
+ * 3): the same rules as `campaign resume`; a refusal is logged and the target
+ * runs again as a new Trial, as it did before.
+ */
+function resumeInterruptedFor(
+  context: WordPressDiscoveryContext,
+  log: (line: string) => void,
+): NonNullable<WordPressDiscoveryPlan["resumeInterrupted"]> {
+  return async (started, signal) => {
+    const resumed = await resumeWordPressRun(
+      context.state,
+      context,
+      { campaignId: context.campaignId, runId: started.runId },
+      signal,
+    );
+    if (resumed.status === "refused") {
+      log(
+        `interrupted run=${started.runId} not resumed reason=${resumed.reason}${resumed.detail === undefined ? "" : ` detail=${resumed.detail}`}; the target runs again as a new Trial`,
+      );
+      return undefined;
+    }
+    log(
+      `interrupted run=${started.runId} resumed as ${resumed.outcome.runId} segment=${resumed.plan.segment} outcome=${resumed.outcome.outcome}`,
+    );
+    return resumed.outcome;
   };
 }
 
@@ -646,7 +685,53 @@ async function resumeWordPressCampaignRun(
   input: Parameters<NonNullable<CliProfile["resumeCampaignRun"]>>[1],
   session: WordPressCampaignSession,
 ): ReturnType<NonNullable<CliProfile["resumeCampaignRun"]>> {
-  const { config, boundaries } = session;
+  const resumed = await resumeWordPressRun(state, session, input);
+  if (resumed.status === "refused") return resumed;
+  const { plan, outcome } = resumed;
+  return {
+    status: "resumed",
+    runId: outcome.runId,
+    resumesRun: plan.resumesRun,
+    trialId: plan.trialId,
+    segment: plan.segment,
+    remainingWallMs: plan.remainingWallMs,
+    outcome: outcome.outcome,
+    ...(outcome.failure === undefined
+      ? {}
+      : {
+          failure: {
+            reason: outcome.failure.reason,
+            ...(outcome.failure.reasonDetail === undefined
+              ? {}
+              : { reasonDetail: outcome.failure.reasonDetail }),
+          },
+        }),
+    wallTimeMs: outcome.wallTimeMs,
+    findingsRecorded: outcome.findingsRecorded,
+  };
+}
+
+/** One resume, by the operator or by the runner for a run whose host died. */
+async function resumeWordPressRun(
+  state: CliState,
+  {
+    config,
+    boundaries,
+  }: Pick<WordPressCampaignSession, "config" | "boundaries">,
+  input: { readonly campaignId: string; readonly runId: string },
+  signal?: AbortSignal,
+): Promise<
+  | {
+      readonly status: "refused";
+      readonly reason: string;
+      readonly detail?: string;
+    }
+  | {
+      readonly status: "resumed";
+      readonly plan: ResumePlan;
+      readonly outcome: Awaited<ReturnType<typeof executeTrialResume>>;
+    }
+> {
   if (config.discovery.lab !== "none")
     return {
       status: "refused",
@@ -750,31 +835,15 @@ async function resumeWordPressCampaignRun(
   if (assessment.status === "refused") return assessment;
   const { plan } = assessment;
   const outcome = await executeTrialResume(
-    { ...context, executor: boundaries.executor },
+    {
+      ...context,
+      executor: boundaries.executor,
+      ...(signal === undefined ? {} : { signal }),
+    },
     plan,
     { runId: state.newId(), ...run },
   );
-  return {
-    status: "resumed",
-    runId: outcome.runId,
-    resumesRun: plan.resumesRun,
-    trialId: plan.trialId,
-    segment: plan.segment,
-    remainingWallMs: plan.remainingWallMs,
-    outcome: outcome.outcome,
-    ...(outcome.failure === undefined
-      ? {}
-      : {
-          failure: {
-            reason: outcome.failure.reason,
-            ...(outcome.failure.reasonDetail === undefined
-              ? {}
-              : { reasonDetail: outcome.failure.reasonDetail }),
-          },
-        }),
-    wallTimeMs: outcome.wallTimeMs,
-    findingsRecorded: outcome.findingsRecorded,
-  };
+  return { status: "resumed" as const, plan, outcome };
 }
 
 async function runWordPressCampaign(
@@ -899,6 +968,10 @@ async function runWordPressCampaign(
       setupFor: session.setupFor,
       discovery: (discoveryInput) =>
         planWordPressDiscovery(discoveryInput, {
+          campaignId: input.campaignId,
+          ...(input.resumeInterrupted === undefined
+            ? {}
+            : { resumeInterrupted: input.resumeInterrupted }),
           config,
           repeat: input.repeat ?? 1,
           boundaries,

@@ -55,6 +55,6 @@
 | finding-parked | Programme Boundary 外の impact と、判別の付きにくい 5 分類の Finding。台帳と Private Evidence に残し、検証・レビュー列・funnel の raw に入れない。一覧は `review parked` で見る（ADR 0032）。 |
 | 段（cascade） | 選定の主帯（インストール数 100k–1M）が尽きたときだけ、順に試す段。順は 50k → 30k → ≥1M かつ paying class 記録 ≥2。`target-selected` に `cascadeStep` が残る（ADR 0037）。 |
 | 再開区間（segment） | 止まった Root のスレッド（理由は問わない。`completed` は除く）を、操作者が `campaign resume` で新しいサンドボックスに再開した続き。同じ Trial に数え、`resumesRun` / `resumeSegment` が記録される（ADR 0036）。 |
-| 中断した run（interrupted） | ホストの電源断などで持ち主のプロセスが死に、終了イベントが無いまま残った run。`campaign resume` が残骸を封じて `reason: interrupted` の終了イベントを追記してから再開する。死んだかどうかは、サンドボックスが書く印の boot id と pid で決める（ADR 0036 の 2026-10-19 追記 2）。 |
+| 中断した run（interrupted） | ホストの電源断などで持ち主のプロセスが死に、終了イベントが無いまま残った run。`campaign resume` が残骸を封じて `reason: interrupted` の終了イベントを追記してから再開する。死んだかどうかは、サンドボックスが書く印の boot id と pid で決める（ADR 0036 の 2026-10-19 追記 2）。再起動した `continuous run` も、新しい Trial より先に同じ経路で自動再開する（追記 3）。 |
 | 受け渡し（handoff） | `verify next --handoff <dir>` で Harness が Finding 単位の Lab を立て、スキル `wbh-verify` が前提作りと再現を行う検証の経路。判定は判定器だけが出す（ADR 0035）。 |
 | 通常機能シナリオ | プロファイルが版と digest で管理する、対象プラグインの通常の利用状態の定義。Lab Setup に含め、Finding の前提と照合する。権限の付与や危険設定は含まない（ADR 0020）。 |

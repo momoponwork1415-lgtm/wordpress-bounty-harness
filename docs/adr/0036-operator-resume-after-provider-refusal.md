@@ -85,15 +85,37 @@ v8 の協調 Trial は Root 1 thread を同じ gVisor container の中で `codex
   3. 残った Root と子の rollout、notes を、通常の失敗経路と同じ処理で attachment store と Private Evidence に封じ、`session` 付きの receipt を書き、元の run id に `discovery-run-finished`（`outcome: failed`、`reason: interrupted`）を追記する。子の Finding / Lead と Root の途中の報告は、失敗した run と同じく記録する。封じた後でディレクトリと印を消す。
   4. その後は既存の再開の経路（規則 5・6）がそのまま動く。規則 6 で拒否されても、3 の終了 event は残る。run が止まったという事実の記録だからである。
 - **経過時間の規則。** 回収した run の `wallTimeMs` は、台帳の開始時刻から、その run の `sessions/` と notes の下で最後に書かれたファイルの更新時刻までとする。プロセスが死んだ正確な時刻は分からない。エージェントが最後に書いた時刻は確かな下限で、そこから死ぬまでの時間は探索に使われていないので、Trial の制限時間に数えない。
-- **runner との関係。** runner（`continuous run`）は再起動すると、記録中の campaign を同じ ID で続ける。終了 event も子の記録も無い run は Trial に数えない（SPEC §6）ので、その対象は新しい Trial として最初からやり直される。これは変えない。自動では回収も再開もしない（本 ADR の決定）。やり直しが始まった後の元の run は 1 の `superseded` で再開を拒否し、`continuous status` の `trials` と `unsettled` からも外す。再開を選ぶときは、runner を起動する前に `campaign resume` を打つ。回収した run は Trial に数えるので、runner はその対象をやり直さない。`unsettled` は、実行中の run と、まだ再開できる死んだ run の数になる。
+- **runner との関係。** runner（`continuous run`）は再起動すると、記録中の campaign を同じ ID で続ける。終了 event も子の記録も無い run は Trial に数えない（SPEC §6）ので、その対象は新しい Trial として最初からやり直される。これは変えない。自動では回収も再開もしない（本 ADR の決定）。やり直しが始まった後の元の run は 1 の `superseded` で再開を拒否し、`continuous status` の `trials` と `unsettled` からも外す。再開を選ぶときは、runner を起動する前に `campaign resume` を打つ。回収した run は Trial に数えるので、runner はその対象をやり直さない。`unsettled` は、実行中の run と、まだ再開できる死んだ run の数になる。※ 2026-10-19 追記 3 で、ホストが死んだ run は runner が自動で再開するように変えた。
 - **台帳。** `discovery-run-finished.reason` と receipt の `reason` に `interrupted` を足す。追加だけなので、旧 event はそのまま読める。
 
 ### 変えないこと
 
-- 自動の回収と再開はしない。runner に再開させるには、ADR 0036 の「自動では再開しない」を変える所有者の決定が要る。
+- 自動の回収と再開はしない。runner に再開させるには、ADR 0036 の「自動では再開しない」を変える所有者の決定が要る。※ 所有者は追記 3 でこれを決めた。
 - 不変条件 2（使い捨てのサンドボックス）と 8（台帳は digest だけ、session file は Private Evidence）は変えない。印はホスト側の scratch に置き、台帳には書かない。
 - `superseded` で拒否した run の残骸は、自動では消さない。手で消してよい。
 
 ### 消し方
 
 `recordInterruptedRun`、`supersedingRun`、`CodexNativeAgentRuntime.recoverInterrupted`、`GvisorCodexSandbox.leftover` と印を書く行、`PlannedTrial.startRecordedAt`、`assessTrialResume` の `recoverInterrupted`、`exploreTrials` の `superseded`、`tests/discovery/interrupted-run.test.ts` を削除する。台帳と receipt の `interrupted` は読取互換として残す。
+
+## 2026-10-19 追記 3: ホストが死んだ run だけは runner が自動で再開する
+
+所有者は同じ日に「runner が自動で再開」を選んだ。追記 2 では、電源断の後に runner を起動すると、その対象は新しい Trial として最初からやり直され、元の run は `superseded` になる。再開したいなら、runner を起動する前に操作者が `campaign resume` を打つ必要があった。2026-10-18 の再起動では、prod-20261018-1 の v8 run 1 本が回収されないまま、runner が次の campaign へ移っている。
+
+### 決定
+
+- **自動で再開するのは、終了 event が無く、持ち主のプロセスが死んだ run だけ。** 死んだかどうかは追記 2 の規則（印の boot id が違うか、同じ boot で pid が死んでいる）で決める。それ以外の止まり方（拒否、provider 上限、モデル満杯、CLI 終了、schema、wall）は、これまでどおり操作者が名指ししたときだけ再開する。本 ADR の「自動では再開しない」は、それらの止まり方には今も当てはまる。
+- **runner の中の位置。** runner が記録中の campaign を同じ ID で続けるとき、対象ごとの campaign は Trial の番号（`trialOrdinal`）を順に回す。その番号の最後の segment に開始だけがあり、後から始まった run に置き換えられていなければ、新しい Trial を始める前に、操作者の `campaign resume` と同じ経路（規則 1〜6 と追記 2 の回収）で再開を試みる。再開はその対象の枠の中で走るので、同時に走る探索 run は `resources.maxConcurrentTargets` を超えない。
+- **拒否されたら新しい Trial に戻る。** 回収や再開が拒否されたとき（`run-alive`、`session-evidence-missing`、`runtime-profile-differs`、残り wall 不足など）は、その番号を新しい Trial として走らせる。黙って捨てずに、runner のログに `interrupted run=<runId> not resumed reason=<理由>[ detail=<詳細>]; the target runs again as a new Trial` を 1 行書く。再開したときは `interrupted run=<runId> resumed as <新 runId> segment=<n> outcome=<結果>` を書く。
+- **再開した segment が `incomplete` で終わっても、もう一度は再開しない。** その segment には終了 event があるので、次の runner 再起動でも対象にならない。続けるかどうかは操作者が `campaign resume` で決める。segment もホストごと死んだときだけ、もう一度自動で再開する。
+- **残骸の掃除。** runner の起動時と batch 後の掃除は、探索 container と broker と Lab だけを消し、`codex-scratch` の下（Codex home、notes、印）には触れない。回収は、死んだ持ち主の container（印に名前を書く）を消してから残骸を封じる。
+- **数え方。** 再開した segment は元の Trial に属し、`continuous status` の `trials` と funnel では Trial 1 回と数える。Trial の結果は最後の segment の終了 event で決める。
+
+### 変えないこと
+
+- 対象ごとの Trial 数（`maxRuns: 1`）、同時対象数、wall 上限 120 分、再開段落、プロンプトは変えない。
+- `campaign resume` の手動経路は変えない。runner を止めている間に操作者が打てば、同じことが起きる。
+
+### 消し方
+
+`runDiscoveryCampaign` の `resumeInterrupted`、`interruptedExplorations`、`WordPressDiscoveryContext.resumeInterrupted` と `resumeInterruptedFor`、`continuous` が渡す `resumeInterrupted`、印の `container` と `leftover` の container 削除、`tests/discovery/interrupted-run.test.ts` の runner 再起動の節を削除する。`resumeWordPressRun` は `resumeWordPressCampaignRun` に戻してよい。runner はまた、死んだ run の対象を新しい Trial としてやり直す。

@@ -2,8 +2,9 @@ import { z } from "zod";
 
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
-import type { Ledger } from "../ledger/index.js";
+import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 import {
+  interruptedExplorations,
   readResumeProgress,
   recordedFailureAfterRuns,
 } from "./campaign-progress.js";
@@ -11,7 +12,11 @@ import type {
   DiscoveryTransportRun,
   DiscoveryTransportResult,
 } from "./codex-native-agent-runtime.js";
-import { executeTrial, type TrialContext } from "./execute-trial.js";
+import {
+  executeTrial,
+  type TrialContext,
+  type TrialOutcome,
+} from "./execute-trial.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import type { ReportRecorder } from "./record-discovery-report.js";
 
@@ -117,6 +122,16 @@ export async function runDiscoveryCampaign(options: {
   /** Profile-owned admission of every candidate in a report; see `ReportRecorder`. */
   readonly recordReport: ReportRecorder;
   readonly clock?: () => Date;
+  /**
+   * The runner only (ADR 0036, 2026-10-19 addendum 3): a Trial whose latest
+   * segment has a start but no finish is offered here before its ordinal runs.
+   * The outcome of the resumed segment, or `undefined` to run the ordinal as
+   * before. It runs in this target's slot, so the target concurrency holds.
+   */
+  readonly resumeInterrupted?: (
+    started: Extract<LedgerEventV1, { type: "discovery-run-started" }>,
+    signal?: AbortSignal,
+  ) => Promise<TrialOutcome | undefined>;
 }): Promise<{
   readonly runCount: number;
   readonly findingsRecorded: number;
@@ -194,7 +209,9 @@ export async function runDiscoveryCampaign(options: {
       );
     startedExplorations.add(trial.explore.run.runId);
     tally.runCount++;
-    const explore = await executeTrial(context, trial);
+    account(await executeTrial(context, trial));
+  };
+  const account = (explore: TrialOutcome) => {
     tally.findingsRecorded += explore.findingsRecorded;
     if (!explore.counted) {
       tally.stopped ??=
@@ -217,10 +234,24 @@ export async function runDiscoveryCampaign(options: {
     )
       tally.stopped ??= "no-new-finding";
   };
+  const interrupted =
+    options.resumeInterrupted === undefined
+      ? new Map()
+      : interruptedExplorations(target);
   const worker = async () => {
     while (tally.stopped === undefined && tally.next < limit) {
       const ordinal = tally.next++;
-      if (!progress.spentOrdinals.has(ordinal)) await runOne(ordinal);
+      const dead = interrupted.get(ordinal);
+      const resumed =
+        dead === undefined
+          ? undefined
+          : await options.resumeInterrupted?.(dead, options.signal);
+      if (dead !== undefined && resumed !== undefined) {
+        startedExplorations.add(dead.runId);
+        startedExplorations.add(resumed.runId);
+        tally.runCount++;
+        account(resumed);
+      } else if (!progress.spentOrdinals.has(ordinal)) await runOne(ordinal);
     }
   };
   await Promise.all(Array.from({ length: concurrency }, worker));
