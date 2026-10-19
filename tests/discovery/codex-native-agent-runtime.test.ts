@@ -1720,6 +1720,10 @@ describe("Codex native agent runtime", () => {
           "exceeded retry limit, last status: 429 Too Many Requests",
           "rate-limit",
         ],
+        [
+          "Selected model is at capacity. Please try a different model.",
+          "rate-limit",
+        ],
         // The broker's own per-grant cap is a Harness bound, not the subscription's.
         [
           "unexpected status 429 Too Many Requests: grant-request-limit-exceeded",

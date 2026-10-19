@@ -54,7 +54,7 @@ harness review [--campaign <id>]                         # 検証済みの列を
 - tokenの更新はしない。preflightが期限不足を出したら、ホストで `codex login` をやり直す。
 - APIキー（`host-private-bearer`）の経路も残っている。
 
-provider の構造化エラー `cyber_policy` は `incomplete(provider: provider-cyber-policy)` と記録する。これは broker の要求上限や認証期限切れ、正常な候補0件とは別の停止理由。詳細な診断は Git 外 Private Evidence の receipt に結び付けて保持し、台帳へエラー本文を写さない。拒否された対象は `target-skipped(provider-refused)` として次の対象へ進む。Root が source を 1 件も読まず、子を起動せず、broker 転送が 1 以下で終わった run は Trial に数えず、その対象は次の選定で戻る。途中まで走った Trial は数え、再選定しない。ただし provider 上限（`provider-limited`）で終わった run は Trial に数えず、runner が backoff 後に同じ対象をやり直す（ADR 0029 の 2026-10-19 追記）。拒否を避ける目的で prompt を言い換えない。件数は `ledger stops` で見る。
+provider の構造化エラー `cyber_policy` は `incomplete(provider: provider-cyber-policy)` と記録する。これは broker の要求上限や認証期限切れ、正常な候補0件とは別の停止理由。詳細な診断は Git 外 Private Evidence の receipt に結び付けて保持し、台帳へエラー本文を写さない。拒否された対象は `target-skipped(provider-refused)` として次の対象へ進む。Root が source を 1 件も読まず、子を起動せず、broker 転送が 1 以下で終わった run は Trial に数えず、その対象は次の選定で戻る。途中まで走った Trial は数え、再選定しない。ただし provider 上限（`provider-limited`）で終わった run は Trial に数えず、runner が backoff 後に同じ対象をやり直す（ADR 0029 の 2026-10-19 追記）。モデルの満杯（「Selected model is at capacity」）も 429 と同じ `rate-limit` として扱う。拒否を避ける目的で prompt を言い換えない。件数は `ledger stops` で見る。
 
 ```sh
 harness ledger stops --campaign <id>                                        # provider-cyber-policy の run を見つける

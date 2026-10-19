@@ -1063,7 +1063,12 @@ function providerLimitOf(stdout: string): "rate-limit" | "quota" | undefined {
         : parsed.data.error.message;
     if (message.includes("grant-request-limit-exceeded")) continue;
     if (/usage limit|quota/i.test(message)) return "quota";
-    if (/\b429\b|too many requests|rate[ _-]?limit/i.test(message))
+    // "Selected model is at capacity" (server_overloaded) passes like a 429.
+    if (
+      /\b429\b|too many requests|rate[ _-]?limit|at capacity|overloaded/i.test(
+        message,
+      )
+    )
       limit = "rate-limit";
   }
   return limit;
