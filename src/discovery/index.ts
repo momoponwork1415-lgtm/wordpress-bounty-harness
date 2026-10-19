@@ -7,6 +7,7 @@ export {
   type PlannedDiscoveryRun,
   type PlannedTrial,
 } from "./campaign.js";
+export { countsAsTrial, recordedTrialActivity } from "./counts-as-trial.js";
 export type {
   CandidateReport,
   RecordedCandidate,

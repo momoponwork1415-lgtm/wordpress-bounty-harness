@@ -172,7 +172,7 @@ describe("continuous status", () => {
     ]);
   });
 
-  it("counts explore Trials from the ledger for today and this week only", async () => {
+  it("counts explore Trials from the ledger for today and this week only, leaving provider-limited runs out of trials", async () => {
     const t = await setup(fakeProfile());
     await t.run("prod-20261021-1", "2026-10-21T01:00:00Z", {
       outcome: "completed",
@@ -196,7 +196,7 @@ describe("continuous status", () => {
       "today  trials 1  completed 1  provider-limited 0  provider-refused 0  run-failed 0  lab-failed 0  unsettled 0  findings queue 0 + parked 0",
     );
     expect(t.stdout[2]).toBe(
-      "week  trials 2  completed 1  provider-limited 1  provider-refused 0  run-failed 0  lab-failed 0  unsettled 0  findings queue 0 + parked 0",
+      "week  trials 1  completed 1  provider-limited 1  provider-refused 0  run-failed 0  lab-failed 0  unsettled 0  findings queue 0 + parked 0",
     );
   });
 

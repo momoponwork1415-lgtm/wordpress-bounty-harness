@@ -43,7 +43,9 @@ export function continuousCounts(
   state: Pick<CliState, "ledger">,
   since: string,
 ) {
-  const { started, finished } = exploreTrials(state.ledger, { since });
+  const { started, finished, notTrials } = exploreTrials(state.ledger, {
+    since,
+  });
   const stops = state.ledger.stops({ since });
   const skipped = (reason: string) =>
     stops
@@ -53,7 +55,8 @@ export function continuousCounts(
       .reduce((sum, row) => sum + row.count, 0);
   const funnel = state.ledger.funnel(undefined, { since });
   return {
-    started,
+    // SPEC §6: provider-limited and bootstrap-only runs are not Trials.
+    trials: started - notTrials,
     completed: finished.filter((outcome) => outcome === "completed").length,
     providerLimited: finished.filter(
       (outcome) => outcome === "provider-limited",
@@ -140,7 +143,7 @@ export async function continuousCommand(
     ] as const) {
       const c = continuousCounts(state, since.toISOString());
       io.stdout(
-        `${label}  trials ${c.started}  completed ${c.completed}  provider-limited ${c.providerLimited}  provider-refused ${c.providerRefused}  run-failed ${c.runFailed}  lab-failed ${c.labFailed}  unsettled ${c.unsettled}  findings queue ${c.queue} + parked ${c.parked}`,
+        `${label}  trials ${c.trials}  completed ${c.completed}  provider-limited ${c.providerLimited}  provider-refused ${c.providerRefused}  run-failed ${c.runFailed}  lab-failed ${c.labFailed}  unsettled ${c.unsettled}  findings queue ${c.queue} + parked ${c.parked}`,
       );
     }
     return ["stopped", "stopping", "stale"].includes(displayState) ? 1 : 0;

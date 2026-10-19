@@ -10,6 +10,7 @@ import type {
   LedgerEventV1,
   LedgerReadAllQuery,
 } from "../ledger/index.js";
+import { countsAsTrial, recordedTrialActivity } from "../discovery/index.js";
 import type { CampaignSummary } from "./pipeline.js";
 
 // Final design P6. Constants, not settings.
@@ -278,13 +279,18 @@ function unboundBatch(deps: ContinuousDeps): string | undefined {
 }
 
 /**
- * Explore Trials in the ledger: how many started, and the outcome of each one
- * that finished. Continuation and child runs belong to their Trial, not counted.
+ * Explore runs in the ledger: how many started, the outcome of each one that
+ * finished, and how many finished runs SPEC §6 does not count as a Trial.
+ * Continuation and child runs belong to their Trial, not counted.
  */
 export function exploreTrials(
   ledger: Pick<Ledger, "readAll">,
   query: Pick<LedgerReadAllQuery, "campaignId" | "since">,
-): { readonly started: number; readonly finished: readonly string[] } {
+): {
+  readonly started: number;
+  readonly finished: readonly string[];
+  readonly notTrials: number;
+} {
   const key = (event: { campaignId: string; runId: string }) =>
     `${event.campaignId} ${event.runId}`;
   const explore = new Set(
@@ -296,15 +302,24 @@ export function exploreTrials(
           : [],
     ),
   );
-  const finished = readAll(ledger, {
+  const finishedEvents = readAll(ledger, {
     ...query,
     type: "discovery-run-finished",
   }).flatMap((event) =>
     event.type === "discovery-run-finished" && explore.has(key(event))
-      ? [event.outcome]
+      ? [event]
       : [],
   );
-  return { started: explore.size, finished };
+  const active = recordedTrialActivity(ledger, query.campaignId);
+  const notTrials = finishedEvents.filter(
+    (event) =>
+      !countsAsTrial(event, active.has(`${event.campaignId}\0${event.runId}`)),
+  ).length;
+  return {
+    started: explore.size,
+    finished: finishedEvents.map((event) => event.outcome),
+    notTrials,
+  };
 }
 
 /** Completed explore Trials, and whether every skipped target was refused. */
