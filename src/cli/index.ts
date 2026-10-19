@@ -22,6 +22,7 @@ import {
 import type {
   CampaignSummary,
   ReverificationSummary,
+  TargetLimit,
   VerifyNextSummary,
 } from "./pipeline.js";
 import { holdLabSweep } from "./continuous.js";
@@ -199,8 +200,12 @@ export interface CliProfile {
        * the target runs again as a new Trial.
        */
       readonly resumeInterrupted?: { log(line: string): void };
+      /** The runner only: the operator's live limit under maxConcurrentTargets. */
+      readonly targetLimit?: TargetLimit;
     },
   ): Promise<CampaignSummary>;
+  /** The campaign config's maxConcurrentTargets, the ceiling of `continuous concurrency`. */
+  targetCeiling?(configPath: string): Promise<number>;
   /**
    * Operator-triggered resume of one stopped Root thread in a new sandbox
    * (ADR 0036). Refusals are printed with their reason; only sealing a run whose
@@ -668,14 +673,15 @@ const continuousFlags = {
   "verify-concurrency": STR,
 } as const;
 
-/** The four `continuous` subcommands share one handler; `sub` picks the action. */
+/** The `continuous` subcommands share one handler; `sub` picks the action. */
 function continuousRow(name: string, usage: string): Command {
   return command({
     name,
     usage,
     options: continuousFlags,
-    handler: async ({ values, sub, state, environment, io }) => {
+    handler: async ({ values, sub, rest, state, environment, io }) => {
       return await continuousCommand(sub!, {
+        rest,
         state,
         profile: environment.profile,
         io,
@@ -1460,6 +1466,11 @@ const COMMANDS: readonly Command[] = [
       return summary.outcome === "completed" ? 0 : 3;
     },
   }),
+  // 2026-10-19: the live target limit; registered last so the lines above stay in place.
+  continuousRow(
+    "continuous concurrency",
+    "continuous concurrency [<n>] --config <path>",
+  ),
 ];
 
 const COMMAND_BY_NAME = commandIndex(COMMANDS);

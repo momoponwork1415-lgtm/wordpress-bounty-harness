@@ -43,6 +43,7 @@ const PINNED_USAGE = [
   "  lab down [--config <path>]",
   // Added after the table (ADR 0036); registered last so the pinned lines above stay in place.
   "  campaign resume --campaign <id> --run <runId> --config <path>",
+  "  continuous concurrency [<n>] --config <path>",
 ].join("\n");
 
 const directories: string[] = [];

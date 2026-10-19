@@ -115,6 +115,55 @@ export type CampaignSummary = {
   }[];
 };
 
+/** How often a target held by the live limit looks at the limit again. */
+export const TARGET_LIMIT_POLL_MS = 30_000;
+
+/**
+ * The operator's live target limit (`continuous concurrency`). It only holds
+ * new starts; a running target is never stopped for it.
+ */
+export interface TargetLimit {
+  /** The live limit, or null when unset or unreadable (the ceiling applies). */
+  read(): Promise<number | null>;
+  /** The effective limit, on the first read and each time it changes. */
+  report?(limit: number): void;
+  readonly pollMs?: number;
+}
+
+/** Slots for new targets under min(live limit, ceiling); a release or the poll wakes a waiter. */
+function targetSlots(ceiling: number, live: TargetLimit) {
+  let active = 0;
+  let reported: number | undefined;
+  const waiters = new Set<() => void>();
+  return {
+    /** True with a slot taken; false after waiting, so the caller checks again. */
+    async acquire(): Promise<boolean> {
+      const read = await live.read().catch(() => null);
+      const limit =
+        read === null ? ceiling : Math.min(Math.max(read, 1), ceiling);
+      if (limit !== reported) live.report?.((reported = limit));
+      if (active < limit) {
+        active++;
+        return true;
+      }
+      await new Promise<void>((resolve) => {
+        const wake = () => {
+          clearTimeout(timer);
+          waiters.delete(wake);
+          resolve();
+        };
+        const timer = setTimeout(wake, live.pollMs ?? TARGET_LIMIT_POLL_MS);
+        waiters.add(wake);
+      });
+      return false;
+    },
+    release(): void {
+      active--;
+      for (const wake of [...waiters]) wake();
+    },
+  };
+}
+
 /** Wiring only: each step is a module's public interface; rules stay in the modules. */
 export async function runCampaignPipeline<
   Target extends TargetSelection,
@@ -137,6 +186,8 @@ export async function runCampaignPipeline<
   readonly newId: () => string;
   /** Targets in flight at once; discovery run concurrency remains per target. */
   readonly maxConcurrentTargets?: number;
+  /** The runner's live limit under maxConcurrentTargets; absent, the ceiling applies. */
+  readonly targetLimit?: TargetLimit;
   readonly discoveryLab?: "attached" | "none";
   readonly repeat?: number;
   /** An explicit operator retry after repairing the Verifier protocol. */
@@ -793,12 +844,21 @@ export async function runCampaignPipeline<
   );
   const results: (TargetResult | undefined)[] = Array(selected.length);
   let next = 0;
+  const slots =
+    options.targetLimit === undefined
+      ? undefined
+      : targetSlots(maxConcurrentTargets, options.targetLimit);
   const worker = async () => {
     while (stopped === undefined) {
+      if (selected[next] === undefined) return;
+      // Above the live limit no new target starts; the running ones go on.
+      if (slots !== undefined && !(await slots.acquire())) continue;
       const target = selected[next];
-      if (target === undefined) return;
       // The operator stop point: in-flight targets finish, no new target starts.
-      if (options.stop?.() === true) {
+      const stopping = target !== undefined && options.stop?.() === true;
+      if (target === undefined || stopping) slots?.release();
+      if (target === undefined) return;
+      if (stopping) {
         if (stopped === undefined) {
           stopped = "operator";
           await append({
@@ -821,6 +881,8 @@ export async function runCampaignPipeline<
           error instanceof Error ? error : new Error(String(error));
         requestStop("incomplete");
         return;
+      } finally {
+        slots?.release();
       }
     }
   };

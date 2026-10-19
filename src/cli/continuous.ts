@@ -23,7 +23,7 @@ import {
   recordedTrialActivity,
   supersedingRun,
 } from "../discovery/index.js";
-import type { CampaignSummary } from "./pipeline.js";
+import type { CampaignSummary, TargetLimit } from "./pipeline.js";
 
 // Final design P6. Constants, not settings.
 export const BACKOFF_RATE_LIMIT_MINUTES = [5, 10, 20, 40, 60] as const;
@@ -172,6 +172,8 @@ export interface ContinuousDeps {
     readonly signal?: AbortSignal;
     /** Resume the campaign's runs whose host died instead of running them again (ADR 0036). */
     readonly resumeInterrupted: { log(line: string): void };
+    /** The operator's live limit, read before each new target starts. */
+    readonly targetLimit: TargetLimit;
   }): Promise<CampaignSummary>;
   /** Removes crashed Lab leftovers (not review Labs); returns how many. */
   cleanupLeftovers(): Promise<number>;
@@ -205,6 +207,8 @@ export function continuousPaths(stateDirectory: string) {
     pid: join(stateDirectory, "continuous.pid"),
     stop: join(stateDirectory, "continuous.stop"),
     log: join(stateDirectory, "continuous.log"),
+    /** The live target limit under the config's maxConcurrentTargets. */
+    concurrency: join(stateDirectory, "continuous.concurrency"),
     /** One pid file per holder of the sweep; read by the sweep guard only. */
     sweepHolds: join(stateDirectory, "sweep-holds"),
   };
@@ -255,6 +259,32 @@ export async function clearContinuousStop(
   }
   await rm(consumed, { force: true });
   return true;
+}
+
+/** The live target limit; null when the file is missing or does not hold a positive integer. */
+export async function readContinuousConcurrency(
+  stateDirectory: string,
+): Promise<number | null> {
+  const raw = await readFile(
+    continuousPaths(stateDirectory).concurrency,
+    "utf8",
+  ).catch(() => "");
+  return /^\s*[1-9]\d{0,2}\s*$/.test(raw) ? Number(raw) : null;
+}
+
+/** Atomically publish a live target limit; the caller checks it against the ceiling. */
+export async function writeContinuousConcurrency(
+  stateDirectory: string,
+  limit: number,
+): Promise<void> {
+  const path = continuousPaths(stateDirectory).concurrency;
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${limit}\n`, { mode: 0o600, flag: "wx" });
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }
 
 function readAll(
@@ -585,6 +615,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       await enter("running", { campaignId: current.campaignId });
       if (stopRequested()) return stop("operator");
       let summary: CampaignSummary;
+      const campaignId = current.campaignId;
       try {
         summary = await deps.runCampaign({
           campaignId: current.campaignId,
@@ -594,6 +625,13 @@ export function createContinuousRunner(deps: ContinuousDeps) {
           signal: operatorController.signal,
           resumeInterrupted: {
             log: (line) => deps.io.log(`${deps.clock().toISOString()} ${line}`),
+          },
+          targetLimit: {
+            read: () => readContinuousConcurrency(deps.stateDirectory),
+            report: (limit) =>
+              deps.io.log(
+                `${deps.clock().toISOString()} concurrency effective=${limit} campaign=${campaignId}`,
+              ),
           },
         });
         memo.consecutiveErrorBatches = 0;
