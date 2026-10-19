@@ -1918,7 +1918,7 @@ describe("Codex native agent runtime", () => {
     }
   });
 
-  it("attributes a recovered provider error to transport while preserving Root candidates", async () => {
+  it("completes a Root whose stream recovered from a CLI error event before its final report", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-provider-error-"));
     try {
       const candidate = JSON.stringify({ claim: "source-backed candidate" });
@@ -1933,55 +1933,50 @@ describe("Codex native agent runtime", () => {
           });
         return JSON.stringify(event);
       });
+      // As on 2026-10-19 (sureforms, run 21a361de): the CLI retried after the
+      // model was at capacity, then completed the turn with its final report.
       events.splice(
         2,
         0,
-        JSON.stringify({ type: "error", message: "stream disconnected" }),
+        JSON.stringify({
+          type: "error",
+          message:
+            "Selected model is at capacity. Please try a different model.",
+        }),
       );
       const attachments = new ProviderAttachmentStore(root);
       const result = await new CodexNativeAgentRuntime(
-        sandbox(events.join("\n"), []),
-        broker(
-          {},
-          {
-            forwardedRequests: 2,
-            requestLimitExceeded: 0,
-            unauthorizedRequests: 0,
-            upstreamSuccess: 1,
-            upstreamClientError: 0,
-            upstreamServerError: 0,
-            relayFailures: 1,
-            responseLimitExceeded: 0,
-          },
-        ),
-        attachments,
-        image,
-        () => new Date(now),
-      ).execute(run);
-      expect(result.receipt).toMatchObject({
-        terminal: "incomplete",
-        reason: "provider",
-        reasonDetail: "unadmitted-event-type:error",
-        reportArtifactDigest: expect.stringMatching(/^sha256:/),
-      });
-      const stored =
-        result.attachment && (await attachments.read(result.attachment));
-      expect(
-        stored?.status === "resolved" &&
-          JSON.parse(stored.bytes.toString("utf8")),
-      ).toMatchObject({ findings: [candidate] });
-      const withoutRelayEvidence = await new CodexNativeAgentRuntime(
         sandbox(events.join("\n"), []),
         broker(),
         attachments,
         image,
         () => new Date(now),
       ).execute(run);
-      expect(withoutRelayEvidence.receipt).toMatchObject({
-        terminal: "incomplete",
-        reason: "schema",
-        reasonDetail: "unadmitted-event-type:error",
-      });
+      expect(result.receipt).toMatchObject({ terminal: "completed" });
+      const stored =
+        result.attachment && (await attachments.read(result.attachment));
+      expect(
+        stored?.status === "resolved" &&
+          JSON.parse(stored.bytes.toString("utf8")),
+      ).toMatchObject({ findings: [candidate] });
+      // A turn that does not recover still fails the run.
+      const failed = await new CodexNativeAgentRuntime(
+        sandbox(
+          [
+            ...events.slice(0, 3),
+            JSON.stringify({
+              type: "turn.failed",
+              error: { message: "stream disconnected before completion" },
+            }),
+          ].join("\n"),
+          [],
+        ),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      ).execute(run);
+      expect(failed.receipt.terminal).toBe("incomplete");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

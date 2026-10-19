@@ -977,6 +977,11 @@ function decodeTranscript(
       threadId = id;
       continue;
     }
+    // The CLI reports a recovered stream error (a retry after a 429, "at
+    // capacity" or a disconnect) as a top-level error event and goes on. The
+    // turn's completion and final report below still decide the result; a
+    // turn that does not recover ends with turn.failed, which stays fatal.
+    if (parsed.data.type === "error") continue;
     if (parsed.data.type === "turn.started") {
       completed = false;
       finalMessage = undefined;
@@ -1035,7 +1040,8 @@ function decodeTranscript(
       continue;
     }
     return {
-      reasonDetail: `unadmitted-event-type:${/^[a-z][a-z._-]{0,31}$/.test(parsed.data.type) ? parsed.data.type : "other"}`,
+      // The receipt admits no dots, so `turn.failed` is recorded as `turn-failed`.
+      reasonDetail: `unadmitted-event-type:${/^[a-z][a-z._-]{0,31}$/.test(parsed.data.type) ? parsed.data.type.replaceAll(".", "-") : "other"}`,
     };
   }
   if (threadId === undefined) return { reasonDetail: "missing-thread-start" };
@@ -2188,14 +2194,9 @@ export class CodexNativeAgentRuntime {
     } catch {
       // Keep the original transcript failure when no candidate report can be extracted.
     }
-    // A failed broker relay explains the CLI error without invalidating the
-    // separately captured candidate report.
     return incompleteExecution(
       state,
-      reasonDetail === "unadmitted-event-type:error" &&
-        (state.brokerMetrics?.relayFailures ?? 0) > 0
-        ? "provider"
-        : "schema",
+      "schema",
       result.completedAt,
       grantReceiptDigest,
       undefined,
