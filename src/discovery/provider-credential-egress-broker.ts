@@ -10,6 +10,7 @@ import { canonicalDigest } from "../infrastructure/canonical-json.js";
 import { createGrantTls } from "./grant-tls.js";
 import type { ProviderApiProtocol } from "./provider-credential-proxy.js";
 import {
+  ANTHROPIC_UPSTREAM_ORIGIN,
   BROKER_TLS_HOSTNAME,
   CHATGPT_UPSTREAM_ORIGIN,
   PROVIDER_UPSTREAM_ORIGIN,
@@ -26,6 +27,7 @@ export const DISCOVERY_LEFTOVER_PATTERNS = {
   containers: [
     /^provider-egress-broker-[A-Za-z0-9_.-]+$/,
     /^codex-agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    /^claude-agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   ],
   networks: [/^provider-egress-(?!broker-)[A-Za-z0-9_.-]+$/],
 } as const;
@@ -37,7 +39,17 @@ export const EGRESS_BROKER_LEFTOVER_PATTERNS = DISCOVERY_LEFTOVER_PATTERNS;
 export const EGRESS_BROKER_MEMORY_MIB = 512;
 
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
-const modelSchema = z.enum(["gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"]);
+const modelSchema = z.enum([
+  "gpt-6-sol",
+  "gpt-6.1-sol",
+  "gpt-6-luna",
+  "claude-opus-5-5",
+]);
+const protocolSchema = z.enum([
+  "responses",
+  "chat-completions",
+  "anthropic-messages",
+]);
 const dockerNameSchema = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u);
@@ -50,7 +62,7 @@ export const providerCredentialEgressGrantRequestSchema = z
     schemaVersion: z.literal(1),
     runtimeProfileDigest: digestSchema,
     model: modelSchema,
-    protocol: z.enum(["responses", "chat-completions"]),
+    protocol: protocolSchema,
     maxRequests: z.number().int().positive().max(10_000),
     maxRequestBytes: z
       .number()
@@ -138,9 +150,13 @@ const providerCredentialEgressReceiptBodySchema = z.strictObject({
   grantId: dockerNameSchema,
   runtimeProfileDigest: digestSchema,
   brokerImage: pinnedImageSchema,
-  upstreamOrigin: z.enum([PROVIDER_UPSTREAM_ORIGIN, CHATGPT_UPSTREAM_ORIGIN]),
+  upstreamOrigin: z.enum([
+    PROVIDER_UPSTREAM_ORIGIN,
+    CHATGPT_UPSTREAM_ORIGIN,
+    ANTHROPIC_UPSTREAM_ORIGIN,
+  ]),
   model: modelSchema,
-  protocol: z.enum(["responses", "chat-completions"]),
+  protocol: protocolSchema,
   maxRequests: z.number().int().positive().max(10_000),
   maxRequestBytes: z
     .number()
@@ -224,8 +240,11 @@ export interface ProviderCredentialEgressBrokerOptions {
   readonly dockerExecutablePath: string;
   readonly brokerImage: string;
   readonly credentialFilePath: string;
-  /** An API key file (the default) or a Codex CLI ChatGPT `auth.json`. */
-  readonly credentialKind?: "api-key" | "chatgpt-login";
+  /**
+   * An API key file (the default), a Codex CLI ChatGPT `auth.json`, or the
+   * Claude subscription OAuth token `claude setup-token` prints.
+   */
+  readonly credentialKind?: "api-key" | "chatgpt-login" | "anthropic-oauth";
   readonly scratchRootDirectory: string;
   readonly proxyBundleDirectory: string;
   readonly providerNetworkName?: string;
@@ -416,9 +435,12 @@ export function createProviderCredentialEgressBroker(
   const providerNetworkName = options.providerNetworkName ?? "bridge";
   const containerUser = nonRootHostUser();
   const chatgpt = options.credentialKind === "chatgpt-login";
+  const anthropic = options.credentialKind === "anthropic-oauth";
   const upstreamOrigin = chatgpt
     ? CHATGPT_UPSTREAM_ORIGIN
-    : PROVIDER_UPSTREAM_ORIGIN;
+    : anthropic
+      ? ANTHROPIC_UPSTREAM_ORIGIN
+      : PROVIDER_UPSTREAM_ORIGIN;
   const upstreamHostname = new URL(upstreamOrigin).hostname;
 
   return {
@@ -429,6 +451,12 @@ export function createProviderCredentialEgressBroker(
     ) {
       const request =
         providerCredentialEgressGrantRequestSchema.parse(requestValue);
+      // A Claude token only ever relays the Messages protocol of the Claude model.
+      if (
+        anthropic !== (request.protocol === "anthropic-messages") ||
+        anthropic !== (request.model === "claude-opus-5-5")
+      )
+        throw new Error("Provider protocol, model and credential differ");
       const startedAt = clock();
       validateGrantDeadline(request, startedAt);
       const grantId = nextUuid();
@@ -531,7 +559,10 @@ export function createProviderCredentialEgressBroker(
             options.credentialFilePath,
           );
           secrets = [apiKey];
-          stagedFiles = { "provider-api-key": `${apiKey}\n` };
+          stagedFiles = {
+            [anthropic ? "provider-anthropic-oauth-token" : "provider-api-key"]:
+              `${apiKey}\n`,
+          };
         }
         const grantSecrets = secrets;
         runDocker = async (args, timeoutMs) => {
@@ -660,7 +691,7 @@ export function createProviderCredentialEgressBroker(
               `${proxyBundle}:/opt/provider-egress:ro`,
               ...secretMounts,
               "--env",
-              `PROVIDER_AUTHENTICATION=${chatgpt ? "chatgpt" : "api-key"}`,
+              `PROVIDER_AUTHENTICATION=${chatgpt ? "chatgpt" : anthropic ? "anthropic-oauth" : "api-key"}`,
               "--env",
               `PROVIDER_GRANT_TOKEN=${grantToken}`,
               "--env",

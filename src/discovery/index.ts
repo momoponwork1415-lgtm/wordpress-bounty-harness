@@ -21,9 +21,13 @@ export {
   agentRuntimeProfileSchema,
   admitAgentRuntimeProfile,
   admitCooperativeRuntimeProfile,
+  claudeRuntimeProfileDefinitionSchema,
   codexModelCatalog,
   defineAgentRuntimeProfile,
+  defineClaudeRuntimeProfile,
   type AgentRuntimeProfile,
+  type ClaudeAgentRuntimeProfile,
+  type ClaudeRuntimeProfileDefinition,
   type AgentRuntimeProfileAdmission,
   type CooperativeRuntimeProfileAdmission,
   type AgentRuntimeProfileDefinition,
@@ -42,6 +46,25 @@ export {
   type DiscoveryTransportResult,
   type InterruptedRunRecovery,
 } from "./codex-native-agent-runtime.js";
+export {
+  ClaudeNativeAgentRuntime,
+  claudeProviderFailure,
+} from "./claude-native-agent-runtime.js";
+export {
+  CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
+  GvisorClaudeSandbox,
+  type ClaudeSandbox,
+  type ClaudeSandboxCommand,
+  type ClaudeSandboxResult,
+  type GvisorClaudeSandboxOptions,
+} from "./claude-gvisor-sandbox.js";
+export { CLAUDE_RUNNER_DENIALS } from "./claude-runner.js";
+export {
+  assignDiscoveryRuntime,
+  runtimeShareSchema,
+  type DiscoveryRuntime,
+  type RuntimeShare,
+} from "./runtime-assignment.js";
 export {
   assessTrialResume,
   executeTrialResume,
@@ -80,6 +103,8 @@ export {
   type ProviderCredentialEgressReceipt,
 } from "./provider-credential-egress-broker.js";
 export {
+  ANTHROPIC_OAUTH_BETA,
+  ANTHROPIC_UPSTREAM_ORIGIN,
   BROKER_TLS_HOSTNAME,
   CHATGPT_PLACEHOLDER_ACCOUNT_ID,
   CHATGPT_UPSTREAM_ORIGIN,

@@ -90,7 +90,7 @@ const candidateReportSchema = z.object({
   unexamined: childCoverageSchema.default(""),
   coverage: z.unknown().optional(),
 });
-function extractCandidateReport(message: string) {
+export function extractCandidateReport(message: string) {
   const value = JSON.parse(message) as unknown;
   const record = object(value);
   if (
@@ -100,7 +100,7 @@ function extractCandidateReport(message: string) {
     throw new Error("Final message has no candidate arrays");
   return candidateReportSchema.parse(value);
 }
-function mergeRootTurnReports(messages: readonly string[]) {
+export function mergeRootTurnReports(messages: readonly string[]) {
   const reports: z.infer<typeof candidateReportSchema>[] = [];
   for (const message of messages) {
     try {
@@ -179,7 +179,7 @@ function childClaim(value: unknown): unknown {
  * required, but a Finding's shape belongs to the target profile, so each
  * Finding travels as a JSON object encoded in a string.
  */
-const reportJsonSchema = {
+export const reportJsonSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
@@ -804,7 +804,7 @@ function sourcePath(
   );
 }
 /** Counts reads of the target source and the run's dependency mounts. */
-function observedFromCommands(
+export function observedFromCommands(
   commands: readonly (string | ObservedCommand)[],
   dependencyMounts: readonly string[],
 ): Observed {

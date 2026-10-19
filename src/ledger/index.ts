@@ -112,6 +112,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         ])
         .optional(),
       agentPath: id.optional(),
+      /** The runtime the campaign's share assigned this target to; written only when the share is configured. */
+      runtime: z.enum(["codex-native/v1", "claude-code/v1"]).optional(),
       assignment: z
         .strictObject({
           partition: z.number().int().nonnegative(),

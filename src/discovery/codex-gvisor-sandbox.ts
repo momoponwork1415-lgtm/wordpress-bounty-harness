@@ -460,7 +460,7 @@ type ResearchArchiveEntry =
     };
 
 /** Copy a bounded, non-following view of the writable Trial notes into one canonical archive. */
-async function collectResearchArchive(directory: string): Promise<{
+export async function collectResearchArchive(directory: string): Promise<{
   readonly archive: Buffer;
   readonly truncated: boolean;
 }> {

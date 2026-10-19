@@ -23,7 +23,9 @@ import {
 } from "../../src/cli/wordpress.js";
 import {
   createNativeRunReceipt,
+  assignDiscoveryRuntime,
   defineAgentRuntimeProfile,
+  defineClaudeRuntimeProfile,
   ProviderAttachmentStore,
   type DiscoveryTransportRun,
 } from "../../src/discovery/index.js";
@@ -68,6 +70,18 @@ const profile = defineAgentRuntimeProfile({
   serviceTier: "priority",
   subagent: { modelId: "unavailable", effort: "unavailable" },
 });
+
+const claudeProfile = defineClaudeRuntimeProfile(
+  {
+    id: "synthetic-claude",
+    requestedModelId: "claude-opus-5-5",
+    requestedEffort: "high",
+    claudeCliVersion: "2.1.296",
+    authenticationMethod: "anthropic-oauth-host",
+    subagent: { modelId: "claude-opus-5-5", effort: "high" },
+  },
+  sha("f"),
+);
 
 /** The Root thread a refused cooperative run leaves behind (ADR 0036 tests). */
 const REFUSED_ROOT_THREAD = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
@@ -117,6 +131,8 @@ async function harness(
     readonly failRepeatedFreeze?: boolean;
     /** Extra campaign config fields. */
     readonly config?: Readonly<Record<string, unknown>>;
+    /** The host also offers the Claude runtime, through the same fake executor. */
+    readonly claude?: boolean;
     readonly entryPoints?: boolean;
     /** What the Codex image reports; defaults to the runtime profile's values. */
     readonly probe?: {
@@ -842,7 +858,15 @@ async function harness(
         : {}),
       boundaries: async (_config, opened) => {
         state = opened;
-        return boundaries;
+        return options.claude === true
+          ? {
+              ...boundaries,
+              claude: {
+                runtimeProfile: claudeProfile,
+                executor: boundaries.executor,
+              },
+            }
+          : boundaries;
       },
       selectionBoundaries: async (opened) => {
         state = opened;
@@ -995,6 +1019,136 @@ const programmeRef = {
   id: "wordfence-policy",
   digest: sha("a"),
 };
+
+describe("discovery runtime share", () => {
+  const started = (
+    ledger: ReturnType<Awaited<ReturnType<typeof harness>>["ledger"]>,
+  ) => {
+    const event = ledger.read({ type: "discovery-run-started" }).at(0)?.event;
+    return event?.type === "discovery-run-started" ? event : undefined;
+  };
+
+  it("runs a target the share assigns to Claude on the Claude runtime and records it", async () => {
+    const {
+      run,
+      configPath,
+      transportRuns,
+      prompts,
+      ledger,
+      root,
+      sweepHeldAtDiscovery,
+    } = await harness({
+      claude: true,
+      config: {
+        discovery: { lab: "none", runtimeShare: { codex: 0, claude: 1 } },
+      },
+    });
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "c-claude",
+      "--config",
+      configPath,
+    );
+    expect(transportRuns[0]?.profile.digest).toBe(claudeProfile.digest);
+    expect(transportRuns[0]?.campaignInput.modelProfileDigest).toBe(
+      claudeProfile.digest,
+    );
+    expect(started(ledger())?.configuration.runtime).toBe("claude-code/v1");
+    // A hand-run campaign holds the runner's leftover sweep while it runs.
+    expect(sweepHeldAtDiscovery).toEqual([true]);
+    expect(
+      existsSync(join(root, "state", "sweep-holds", String(process.pid))),
+    ).toBe(false);
+
+    // The same objective and output contract as a Codex Trial reach the agent.
+    const codex = await harness({
+      claude: true,
+      config: { discovery: { lab: "none" } },
+    });
+    await codex.run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "c-codex",
+      "--config",
+      codex.configPath,
+    );
+    expect(prompts[0]).toBe(codex.prompts[0]);
+    expect(transportRuns[0]?.resumePrompt).toBe(
+      codex.transportRuns[0]?.resumePrompt,
+    );
+  });
+
+  it("keeps every target on Codex without a share and writes no runtime field", async () => {
+    const { run, configPath, transportRuns, ledger } = await harness({
+      claude: true,
+    });
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "c-default",
+      "--config",
+      configPath,
+    );
+    expect(transportRuns[0]?.profile.digest).toBe(profile.digest);
+    expect(started(ledger())?.configuration).not.toHaveProperty("runtime");
+  });
+
+  it("starts nothing for a Claude-assigned target when the host offers no Claude runtime", async () => {
+    const { run, configPath, transportRuns } = await harness({
+      config: {
+        discovery: { lab: "attached", runtimeShare: { codex: 0, claude: 1 } },
+      },
+    });
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "c-none",
+      "--config",
+      configPath,
+    );
+    expect(transportRuns).toHaveLength(0);
+  });
+
+  it("assigns by target identity alone, deterministically, in the configured proportion", () => {
+    expect(assignDiscoveryRuntime("wporg:a", undefined)).toBe("codex");
+    expect(assignDiscoveryRuntime("wporg:a", { codex: 1, claude: 0 })).toBe(
+      "codex",
+    );
+    expect(assignDiscoveryRuntime("wporg:a", { codex: 0, claude: 1 })).toBe(
+      "claude",
+    );
+    const targets = Array.from(
+      { length: 400 },
+      (_, index) => `wporg:plugin-${index}`,
+    );
+    const first = targets.map((id) =>
+      assignDiscoveryRuntime(id, { codex: 1, claude: 1 }),
+    );
+    expect(
+      targets.map((id) => assignDiscoveryRuntime(id, { codex: 1, claude: 1 })),
+    ).toEqual(first);
+    const claude = first.filter((runtime) => runtime === "claude").length;
+    expect(claude).toBeGreaterThan(160);
+    expect(claude).toBeLessThan(240);
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...JSON.parse(
+          '{"schemaVersion":1,"programmeBoundary":{"version":"v","text":"t"},"wordpressVersion":"6.8","lab":{"siteTitle":"s","initialPosts":[],"customerRole":false}}',
+        ),
+        discovery: { lab: "none", runtimeShare: { codex: 0, claude: 0 } },
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe("harness CLI vertical slice", () => {
   it("records read-only DB access without storing its account in the ledger", async () => {

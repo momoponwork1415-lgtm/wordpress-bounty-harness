@@ -4,6 +4,7 @@ import {
   admitAgentRuntimeProfile,
   admitCooperativeRuntimeProfile,
   defineAgentRuntimeProfile,
+  defineClaudeRuntimeProfile,
 } from "../../src/discovery/index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
@@ -92,6 +93,45 @@ describe("Codex runtime profile", () => {
         ...definition,
         requestedModelId: "gpt-daybreak-blue-latest" as never,
       }),
+    ).toThrow();
+  });
+});
+
+describe("Claude runtime profile", () => {
+  const claude = {
+    id: "opus",
+    requestedModelId: "claude-opus-5-5" as const,
+    requestedEffort: "high" as const,
+    claudeCliVersion: "2.1.296",
+    authenticationMethod: "anthropic-oauth-host" as const,
+    subagent: { modelId: "claude-opus-5-5" as const, effort: "high" as const },
+  };
+
+  it("binds the Claude CLI and image, but stays out of the Codex cooperative admission", () => {
+    const profile = defineClaudeRuntimeProfile(claude, digest);
+    expect(profile).toMatchObject({
+      transportKind: "claude-code/v1",
+      codexCliVersion: "unavailable",
+      sandboxImageDigest: digest,
+    });
+    expect(admitAgentRuntimeProfile(profile, digest).status).toBe("admitted");
+    expect(admitCooperativeRuntimeProfile(profile, digest).status).not.toBe(
+      "admitted",
+    );
+    expect(() =>
+      defineClaudeRuntimeProfile(
+        { ...claude, claudeCliVersion: "2.1.100" },
+        digest,
+      ),
+    ).toThrow();
+    expect(() =>
+      defineClaudeRuntimeProfile(
+        {
+          ...claude,
+          subagent: { modelId: "claude-haiku-4-5" as never, effort: "high" },
+        },
+        digest,
+      ),
     ).toThrow();
   });
 });

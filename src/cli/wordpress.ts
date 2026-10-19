@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   assessTrialResume,
+  assignDiscoveryRuntime,
   DISCOVERY_LEFTOVER_PATTERNS,
   executeTrialResume,
   recordInterruptedRun,
@@ -537,6 +538,20 @@ async function planWordPressDiscovery(
     wordPressDiscoveryContractPlan(id).objectiveOnly;
   const outputContractFor = wordPressOutputContractFor;
   const source = await boundaries.sourceFor(snapshot);
+  // The campaign's share alone picks the runtime for this target (Harness control).
+  const share = config.discovery.runtimeShare;
+  const assigned = assignDiscoveryRuntime(snapshot.target.identity, share);
+  if (assigned === "claude" && boundaries.claude === undefined)
+    throw new Error(
+      "The campaign assigns this target to Claude, but the host has none",
+    );
+  const runtime =
+    assigned === "claude"
+      ? boundaries.claude!
+      : {
+          runtimeProfile: boundaries.runtimeProfile,
+          executor: boundaries.executor,
+        };
   // One Trial per target; only an explicit `--repeat` plans more (ADR 0029).
   const maxRuns = repeat;
   const stopRules = { maxRuns, noFindingRuns: 1 };
@@ -558,7 +573,7 @@ async function planWordPressDiscovery(
         text: trustBoundary.text,
       },
       programmeBoundary: config.programmeBoundary,
-      modelProfileDigest: boundaries.runtimeProfile.digest,
+      modelProfileDigest: runtime.runtimeProfile.digest,
       promptDigest: objective.digest,
       stopRules,
       lab:
@@ -594,11 +609,14 @@ async function planWordPressDiscovery(
           labAccess: {
             database: lab?.database === undefined ? "none" : "read-only",
           },
+          ...(share === undefined
+            ? {}
+            : { runtime: runtime.runtimeProfile.transportKind }),
         },
         run: {
           runId: trialId,
           targetSnapshotDigest: snapshot.digest,
-          profile: boundaries.runtimeProfile,
+          profile: runtime.runtimeProfile,
           coordination: "cooperative" as const,
           prompt: promptFor(selectedObjective),
           minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
@@ -630,7 +648,7 @@ async function planWordPressDiscovery(
         explore,
       };
     }),
-    executor: boundaries.executor,
+    executor: runtime.executor,
     attachments: boundaries.attachments,
     recordReport: recordWordPressReport,
     ...(context.resumeInterrupted === undefined || lab !== undefined

@@ -299,4 +299,34 @@ describe("provider credential egress", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps a Claude subscription token to the Claude model's Messages protocol", async () => {
+    const commands: string[][] = [];
+    const broker = (credentialKind: "api-key" | "anthropic-oauth") =>
+      createProviderCredentialEgressBroker({
+        dockerExecutablePath: "/usr/bin/docker",
+        brokerImage: `node@${digest}`,
+        credentialFilePath: "/nonexistent/credential",
+        scratchRootDirectory: "/nonexistent",
+        proxyBundleDirectory: "/nonexistent",
+        credentialKind,
+        clock,
+        runDocker: async (args) => {
+          commands.push([...args]);
+          return { exitCode: 1, stdout: "", stderr: "" };
+        },
+      });
+    const claude = {
+      ...request,
+      model: "claude-opus-5-5" as const,
+      protocol: "anthropic-messages" as const,
+    };
+    await expect(
+      broker("anthropic-oauth").withGrant(request, async () => "unused"),
+    ).rejects.toThrow("Provider protocol, model and credential differ");
+    await expect(
+      broker("api-key").withGrant(claude, async () => "unused"),
+    ).rejects.toThrow("Provider protocol, model and credential differ");
+    expect(commands).toEqual([]);
+  });
 });

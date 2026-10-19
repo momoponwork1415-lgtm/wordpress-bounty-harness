@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   EGRESS_BROKER_MEMORY_MIB,
+  runtimeShareSchema,
 } from "../discovery/index.js";
 import type {
   AgentRuntimeProfile,
@@ -66,7 +67,11 @@ const runnablePrompt = z.literal(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID);
 const commonCampaignFields = {
   schemaVersion: z.literal(1),
   discovery: z
-    .strictObject({ lab: z.enum(["attached", "none"]) })
+    .strictObject({
+      lab: z.enum(["attached", "none"]),
+      /** Opt-in split of targets between Codex and Claude; absent, all run on Codex. */
+      runtimeShare: runtimeShareSchema.optional(),
+    })
     .default({ lab: "none" }),
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
@@ -161,6 +166,11 @@ export interface WordPressCampaignBoundaries {
       run: DiscoveryTransportRun,
       startedAt: string,
     ): Promise<InterruptedRunRecovery>;
+  };
+  /** The Claude discovery runtime, present when the host configures it and the campaign's share uses it. */
+  readonly claude?: {
+    readonly runtimeProfile: AgentRuntimeProfile;
+    readonly executor: WordPressCampaignBoundaries["executor"];
   };
   readonly attachments: ProviderAttachmentStore;
   readonly verifier: Verifier<WordPressFinding, WordPressLabHandle>;

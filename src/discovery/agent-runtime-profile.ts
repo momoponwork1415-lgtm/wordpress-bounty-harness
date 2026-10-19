@@ -8,7 +8,7 @@ const reported = z.union([value, z.literal("unavailable")]);
 const effort = z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]);
 const model = z.enum(["gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"]);
 
-/** Only Codex is admitted. The digest supplied here is measured from the CLI's bundled catalog. */
+/** The Codex models. The digest supplied here is measured from the CLI's bundled catalog. */
 export const codexModelCatalog = {
   production: "gpt-6-sol",
   development: "gpt-6-luna",
@@ -42,8 +42,52 @@ export const agentRuntimeProfileDefinitionSchema = bodySchema.omit({
   schemaVersion: true,
 });
 
-export const agentRuntimeProfileSchema = bodySchema
-  .extend({ digest })
+/**
+ * Claude Code under the owner's subscription OAuth token, which only the
+ * egress broker holds. Codex-only fields stay `unavailable` so receipts keep
+ * one shape; the CLI version is measured from the pinned image.
+ */
+const claudeEffort = z.enum(["low", "medium", "high", "xhigh", "max"]);
+const claudeBodySchema = z.strictObject({
+  kind: z.literal("agent-runtime-profile"),
+  schemaVersion: z.literal(2),
+  id: value,
+  transportKind: z.literal("claude-code/v1"),
+  sandboxImageDigest: digest,
+  requestedModelId: z.literal("claude-opus-5-5"),
+  requestedEffort: claudeEffort,
+  claudeCliVersion: z
+    .string()
+    .regex(/^\d+\.\d+\.\d+$/)
+    .refine((version) => {
+      const [major = 0, minor = 0, patch = 0] = version.split(".").map(Number);
+      return major * 1e6 + minor * 1e3 + patch >= 2_001_280;
+    }, "Claude Code 2.1.280 or newer is required for Opus 5.5"),
+  codexCliVersion: z.literal("unavailable"),
+  bundledCatalogDigest: z.literal("unavailable"),
+  authenticationMethod: z.literal("anthropic-oauth-host"),
+  cyberAccessProgram: z.literal("unavailable"),
+  serviceTier: z.literal("unavailable"),
+  subagent: z.strictObject({
+    modelId: z.literal("claude-opus-5-5"),
+    effort: claudeEffort,
+  }),
+});
+
+/** What a human writes for the Claude runtime; the rest is derived. */
+export const claudeRuntimeProfileDefinitionSchema = claudeBodySchema.omit({
+  kind: true,
+  schemaVersion: true,
+  transportKind: true,
+  sandboxImageDigest: true,
+  codexCliVersion: true,
+  bundledCatalogDigest: true,
+  cyberAccessProgram: true,
+  serviceTier: true,
+});
+
+export const agentRuntimeProfileSchema = z
+  .union([bodySchema.extend({ digest }), claudeBodySchema.extend({ digest })])
   .superRefine((profile, context) => {
     const { digest: actual, ...body } = profile;
     if (actual !== canonicalDigest(body)) {
@@ -53,6 +97,7 @@ export const agentRuntimeProfileSchema = bodySchema
         message: "Profile digest mismatch",
       });
     }
+    if (profile.transportKind === "claude-code/v1") return;
     const match = /^(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z0-9.-]+))?$/.exec(
       profile.codexCliVersion,
     );
@@ -72,14 +117,25 @@ export const agentRuntimeProfileSchema = bodySchema
   });
 
 export type AgentRuntimeProfile = z.infer<typeof agentRuntimeProfileSchema>;
-export type AgentRuntimeProfileDefinition = Omit<
+export type CodexAgentRuntimeProfile = Extract<
   AgentRuntimeProfile,
+  { transportKind: "codex-native/v1" }
+>;
+export type ClaudeAgentRuntimeProfile = Extract<
+  AgentRuntimeProfile,
+  { transportKind: "claude-code/v1" }
+>;
+export type AgentRuntimeProfileDefinition = Omit<
+  CodexAgentRuntimeProfile,
   "kind" | "schemaVersion" | "digest"
+>;
+export type ClaudeRuntimeProfileDefinition = z.infer<
+  typeof claudeRuntimeProfileDefinitionSchema
 >;
 
 export function defineAgentRuntimeProfile(
   definition: AgentRuntimeProfileDefinition,
-): AgentRuntimeProfile {
+): CodexAgentRuntimeProfile {
   const body = bodySchema.parse({
     kind: "agent-runtime-profile",
     schemaVersion: 2,
@@ -88,7 +144,28 @@ export function defineAgentRuntimeProfile(
   return agentRuntimeProfileSchema.parse({
     ...body,
     digest: canonicalDigest(body),
+  }) as CodexAgentRuntimeProfile;
+}
+
+export function defineClaudeRuntimeProfile(
+  definition: ClaudeRuntimeProfileDefinition,
+  sandboxImageDigest: string,
+): ClaudeAgentRuntimeProfile {
+  const body = claudeBodySchema.parse({
+    kind: "agent-runtime-profile",
+    schemaVersion: 2,
+    transportKind: "claude-code/v1",
+    sandboxImageDigest,
+    codexCliVersion: "unavailable",
+    bundledCatalogDigest: "unavailable",
+    cyberAccessProgram: "unavailable",
+    serviceTier: "unavailable",
+    ...definition,
   });
+  return agentRuntimeProfileSchema.parse({
+    ...body,
+    digest: canonicalDigest(body),
+  }) as ClaudeAgentRuntimeProfile;
 }
 
 export type AgentRuntimeProfileAdmission =
