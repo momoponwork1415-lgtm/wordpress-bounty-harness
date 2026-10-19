@@ -87,9 +87,10 @@ export function readResumeProgress(target: CampaignTarget): ResumeProgress {
 }
 
 /**
- * After the runs: among the explorations that counted as Trials, a refused run
- * stops the campaign for the provider limit, and any other unfinished run
- * leaves it incomplete. Neither is concluded; a resume continues the target.
+ * After the runs: a run the provider limit ended stops the campaign (it is not
+ * a Trial, so the target runs again after the backoff), and among the
+ * explorations that counted as Trials any other unfinished run leaves it
+ * incomplete. Neither is concluded; a resume continues the target.
  */
 export function recordedFailureAfterRuns(
   target: CampaignTarget,
@@ -97,18 +98,18 @@ export function recordedFailureAfterRuns(
 ): "provider-limit" | "incomplete" | undefined {
   const outcomes = readFinishedRuns(target);
   const active = recordedTrialActivity(target.ledger, target.campaignId);
+  if (
+    [...startedExplorations].some(
+      (runId) => outcomes.get(runId)?.outcome === "provider-limited",
+    )
+  )
+    return "provider-limit";
   const countedRuns = [...startedExplorations].filter((runId) =>
     countsAsTrial(
       outcomes.get(runId),
       active.has(`${target.campaignId}\0${runId}`),
     ),
   );
-  if (
-    countedRuns.some(
-      (runId) => outcomes.get(runId)?.outcome === "provider-limited",
-    )
-  )
-    return "provider-limit";
   if (countedRuns.some((runId) => outcomes.get(runId)?.outcome !== "completed"))
     return "incomplete";
   return undefined;

@@ -479,7 +479,7 @@ describe("WordPress ledger exclusions", () => {
     ]);
   });
 
-  it("reselects a fully observed non-Trial and retains a partial Trial", () => {
+  it("reselects a fully observed non-Trial and a provider-limited run, and retains a partial Trial", () => {
     const finished = (
       runId: string,
       snapshotDigest: string,
@@ -514,7 +514,7 @@ describe("WordPress ledger exclusions", () => {
           unauthorizedRequests: 0,
         },
       }),
-      // Ran partway into a quota: it is a Trial.
+      // Ran partway into a quota: not a Trial (owner decision 2026-10-19).
       selected("limited", "1.0.0", "campaign-1", digest("b")),
       started("v3", "campaign-1", digest("b")),
       finished("run-campaign-1-v3", digest("b"), {
@@ -523,13 +523,22 @@ describe("WordPress ledger exclusions", () => {
         providerLimit: "quota",
         observed: observed(12),
       }),
+      // Read source, then failed for another reason: it is a Trial.
+      selected("partial", "1.0.0", "campaign-1", digest("c")),
+      started("v4", "campaign-1", digest("c")),
+      finished("run-campaign-1-v4", digest("c"), {
+        outcome: "failed",
+        reason: "schema",
+        observed: observed(12),
+      }),
     ]);
     expect(
       inspect(ledger, [
         { slug: "refused", version: "1.0.0" },
         { slug: "limited", version: "1.0.0" },
+        { slug: "partial", version: "1.0.0" },
       ]).map(({ reasons }) => reasons),
-    ).toEqual([[], ["previously-selected"]]);
+    ).toEqual([[], [], ["previously-selected"]]);
   });
 
   it("ignores child runs when counting exploration Trials", () => {

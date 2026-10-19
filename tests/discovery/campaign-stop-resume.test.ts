@@ -352,7 +352,7 @@ describe("discovery campaign stop and resume", () => {
     expect(concluded[0]?.event.identity.length).toBeLessThanOrEqual(128);
   });
 
-  it("stops on a provider limit, records the refused run and resumes after the completed runs", async () => {
+  it("stops on a provider limit, records the limited run and runs that Trial again on resume", async () => {
     const { ledger, campaign, finished } = await open();
     const stopped = await campaign({
       prefix: "first",
@@ -377,16 +377,19 @@ describe("discovery campaign stop and resume", () => {
       prefix: "second",
       replies: () => "empty",
     });
-    // All three started Trials spent their ordinals, including the refused one.
-    expect(resumed).toMatchObject({ runCount: 3, stoppedBy: "provider-limit" });
-    expect(ledger.read({ type: "discovery-concluded" })).toEqual([]);
-
-    const again = await campaign({ prefix: "third", replies: () => "empty" });
-    expect(again).toEqual({
-      runCount: 0,
-      findingsRecorded: 0,
-      stoppedBy: "provider-limit",
-    });
+    // The limited run is not a Trial (owner decision 2026-10-19): its ordinal
+    // runs again, and the campaign concludes after the remaining Trials.
+    expect(resumed).toMatchObject({ runCount: 4, stoppedBy: "max-runs" });
+    expect(finished().map((event) => event?.outcome)).toEqual([
+      "completed",
+      "completed",
+      "provider-limited",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+    ]);
+    expect(ledger.read({ type: "discovery-concluded" })).toHaveLength(1);
   });
 
   it("records the provider-reported usage of each finished run", async () => {

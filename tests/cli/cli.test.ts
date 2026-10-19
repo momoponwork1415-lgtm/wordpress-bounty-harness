@@ -1994,17 +1994,12 @@ describe("harness CLI vertical slice", () => {
     expect(stopped.stdout).toContain("raw 2 → verifier通過 0");
 
     const resumed = await run(...command);
-    expect(resumed.code).toBe(3);
-    // The limited Trial spent its ordinal; later completed Trials do not
-    // change its recorded provider-limit outcome.
-    expect(resumed.stdout).toContain("runs 2  stopped by provider-limit");
-    expect(resumed.stdout).not.toContain("  finding ");
-
-    const again = await run(...command);
-    expect(again.code).toBe(0);
-    expect(again.stdout).toContain("runs 0  stopped by provider-limit");
-    expect(again.stdout.match(/^  finding /gm)).toHaveLength(2);
-    expect(again.stdout).toContain("raw 2 → verifier通過 2 → confirmed 1");
+    expect(resumed.code).toBe(0);
+    // The limited run is not a Trial (owner decision 2026-10-19): its ordinal
+    // runs again and the campaign reaches its run limit.
+    expect(resumed.stdout).toContain("stopped by max-runs");
+    expect(resumed.stdout.match(/^  finding /gm)).toHaveLength(2);
+    expect(resumed.stdout).toContain("raw 2 → verifier通過 2 → confirmed 1");
   });
 
   it("finishes in-flight targets after a provider limit, then resumes only unfinished targets", async () => {
@@ -2049,13 +2044,15 @@ describe("harness CLI vertical slice", () => {
 
     const resumed = await run(...command);
     expect(resumed.code).toBe(0);
-    expect(prompts).toHaveLength(3);
+    // The provider-limited target runs its Trial again (owner decision
+    // 2026-10-19) and the never-started target runs for the first time.
+    expect(prompts).toHaveLength(4);
     expect(
       ledger().read({
         campaignId: "campaign-parallel-stop",
         type: "discovery-run-started",
       }),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     // Two Labs on the first invocation, then the provider-limited target and
     // the never-started target. The completed in-flight target is skipped.
     expect(
@@ -2796,7 +2793,7 @@ describe("harness CLI vertical slice", () => {
     expect(funnel.stdout).toContain("campaign *");
   });
 
-  it("verifies a child Finding on resume without starting a replacement Trial", async () => {
+  it("verifies a child Finding on resume and runs the provider-limited Trial again", async () => {
     const { run, configPath, prompts, ledger } = await harness({
       limitOnCalls: [1],
       childFindingOnLimitedCall: true,
@@ -2818,11 +2815,13 @@ describe("harness CLI vertical slice", () => {
 
     const resumed = await run(...command);
     expect(resumed.code).toBe(0);
-    expect(resumed.stdout).toContain("runs 0  stopped by provider-limit");
-    expect(prompts).toHaveLength(1);
+    // The limited run is not a Trial (owner decision 2026-10-19): a
+    // replacement Trial runs, and the child's Finding is still verified once.
+    expect(resumed.stdout).toContain("runs 1  stopped by no-new-finding");
+    expect(prompts).toHaveLength(2);
     expect(ledger().read({ type: "finding-recorded" })).toHaveLength(1);
     expect(ledger().read({ type: "verification-finished" })).toHaveLength(1);
-    expect(ledger().read({ type: "discovery-concluded" })).toHaveLength(0);
+    expect(ledger().read({ type: "discovery-concluded" })).toHaveLength(1);
   });
 
   it("runs discovery concurrently within the configured count and memory budget", async () => {

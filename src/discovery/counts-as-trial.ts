@@ -2,6 +2,7 @@ import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 
 type FinishedEvent = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
 type TrialObservation = {
+  readonly outcome?: FinishedEvent["outcome"] | undefined;
   readonly observed?: FinishedEvent["observed"] | undefined;
   readonly childThreadsObserved?:
     FinishedEvent["childThreadsObserved"] | undefined;
@@ -32,11 +33,16 @@ export function recordedTrialActivity(
   return active;
 }
 
-/** SPEC §6: an observed bootstrap with no source, child or further broker use is not a Trial. */
+/**
+ * SPEC §6: an observed bootstrap with no source, child or further broker use is
+ * not a Trial, and neither is a run the provider limit ended (owner decision
+ * 2026-10-19, ADR 0029): the target is run again after the backoff.
+ */
 export function countsAsTrial(
   finished: TrialObservation | undefined,
   hasRecordedActivity = false,
 ): boolean {
+  if (finished?.outcome === "provider-limited") return false;
   if (hasRecordedActivity) return true;
   if (finished === undefined) return false;
   if (
