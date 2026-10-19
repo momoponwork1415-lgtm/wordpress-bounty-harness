@@ -124,6 +124,8 @@ const bodySchema = z.strictObject({
       "evidence",
       "wall",
       "operator",
+      /** The host process died mid-run; recovered from the sandbox's leftovers (ADR 0036). */
+      "interrupted",
     ]),
     z.literal("unavailable"),
   ]),

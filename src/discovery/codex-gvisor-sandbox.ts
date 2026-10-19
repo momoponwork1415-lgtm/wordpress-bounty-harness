@@ -5,6 +5,7 @@ import {
   mkdtemp,
   open,
   readdir,
+  readFile,
   realpath,
   rm,
   stat,
@@ -34,6 +35,7 @@ import {
 import type {
   CodexSandbox,
   CodexSandboxCommand,
+  CodexSandboxLeftover,
   CodexSandboxResumeSeed,
   CodexSandboxResult,
 } from "./codex-native-agent-runtime.js";
@@ -344,6 +346,104 @@ async function seedResume(
   }
 }
 
+/**
+ * Run markers sit beside the scratch directories, outside every container
+ * mount, so an agent can neither read nor change them. One marker names the
+ * directories of one cooperative run and the process that owns it (ADR 0036,
+ * 2026-10-19 second addendum).
+ */
+const RUN_MARKER_DIRECTORY = "run-markers";
+const runIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
+const runMarkerSchema = z.strictObject({
+  kind: z.literal("codex-run-marker"),
+  schemaVersion: z.literal(1),
+  runId: z.string().regex(runIdPattern),
+  runtimeProfileDigest: digestSchema,
+  pid: z.number().int().positive(),
+  bootId: z.string().min(1).max(128),
+  startedAt: z.iso.datetime({ offset: true }),
+  staging: z.string().regex(/^codex-run-[A-Za-z0-9]{6}$/),
+  codexHome: z.string().regex(/^codex-home-[A-Za-z0-9]{6}$/),
+  research: z.string().regex(/^codex-research-[A-Za-z0-9]{6}$/),
+  image: imageSchema,
+  cliVersion: z.string().min(1).max(128),
+  bundledCatalogDigest: digestSchema,
+});
+
+/** The process that runs a sandbox, and the host boot it runs on. */
+export type SandboxOwner = { readonly pid: number; readonly bootId: string };
+
+/** The kernel's boot id changes on every host, VM or WSL restart. */
+async function currentOwner(): Promise<SandboxOwner> {
+  const bootId = await readFile("/proc/sys/kernel/random/boot_id", "utf8")
+    .then((text) => text.trim())
+    .catch(() => "");
+  return { pid: process.pid, bootId: bootId || "unavailable" };
+}
+
+/** Signal 0 probes without killing; EPERM means the pid exists under another user. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** The newest modification time below a directory, in ms; 0 when there is none. */
+async function latestWrite(directory: string, depth = 0): Promise<number> {
+  if (depth > MAX_RESEARCH_DEPTH) return 0;
+  const entries = await readdir(directory, { withFileTypes: true }).catch(
+    () => [],
+  );
+  let latest = 0;
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory())
+      latest = Math.max(latest, await latestWrite(path, depth + 1));
+    else if (entry.isFile())
+      latest = Math.max(latest, (await lstat(path)).mtimeMs);
+  }
+  return latest;
+}
+
+/** Rollouts and notes as the sandbox hands them back after a run. */
+async function captureRun(
+  codexHome: string,
+  researchDirectory: string | undefined,
+): Promise<
+  Pick<
+    CodexSandboxResult,
+    | "rollouts"
+    | "rolloutPaths"
+    | "rolloutFailure"
+    | "research"
+    | "researchFailure"
+  >
+> {
+  const collected = await collectRollouts(codexHome).then(
+    ({ rollouts, paths, truncated }) => ({
+      rollouts,
+      rolloutPaths: paths,
+      ...(truncated ? { rolloutFailure: "capture-failed" as const } : {}),
+    }),
+    () => ({
+      rollouts: [] as readonly string[],
+      rolloutPaths: [] as readonly string[],
+      rolloutFailure: "capture-failed" as const,
+    }),
+  );
+  const researchCollected =
+    researchDirectory === undefined
+      ? {}
+      : await collectResearchArchive(researchDirectory).then(
+          (research) => ({ research }),
+          () => ({ researchFailure: "capture-failed" as const }),
+        );
+  return { ...collected, ...researchCollected };
+}
+
 type ResearchArchiveEntry =
   | { readonly path: string; readonly type: "directory" }
   | {
@@ -476,6 +576,9 @@ export interface GvisorCodexSandboxOptions {
   readonly clock?: () => Date;
   readonly runDocker?: DockerRun;
   readonly randomUuid?: () => string;
+  /** This process and boot, recorded in each run marker; tests substitute another host. */
+  readonly owner?: () => Promise<SandboxOwner>;
+  readonly ownerAlive?: (pid: number) => boolean;
 }
 
 type DockerRun = (
@@ -738,7 +841,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
           command.resumePrompt.length > 2_048) ||
       (command.resume !== undefined &&
         (command.minimumActiveMs === undefined ||
-          !admittedResumeSeed(command.resume)))
+          !admittedResumeSeed(command.resume))) ||
+      (command.runMarker !== undefined &&
+        (command.researchMount === undefined ||
+          !runIdPattern.test(command.runMarker.runId) ||
+          !digestSchema.safeParse(command.runMarker.runtimeProfileDigest)
+            .success))
     ) {
       throw new Error("Codex sandbox command is not admitted");
     }
@@ -809,6 +917,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
     const token = command.grant.authorization.replace(/^Bearer /, "");
     const runDocker = this.#docker(scratchRoot, token);
     const base = this.#base();
+    let markerPath: string | undefined;
     try {
       await writeFile(
         join(staging, "report-schema.json"),
@@ -838,6 +947,33 @@ export class GvisorCodexSandbox implements CodexSandbox {
       }
       const { cliVersion, bundledCatalogDigest } = await this.#probe(runDocker);
       const startedAt = now().toISOString();
+      if (command.runMarker !== undefined && researchDirectory !== undefined) {
+        const owner = await (this.#options.owner ?? currentOwner)();
+        const directory = join(scratchRoot, RUN_MARKER_DIRECTORY);
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        const path = join(directory, `${command.runMarker.runId}.json`);
+        await writeFile(
+          path,
+          canonicalJson(
+            runMarkerSchema.parse({
+              kind: "codex-run-marker",
+              schemaVersion: 1,
+              ...command.runMarker,
+              pid: owner.pid,
+              bootId: owner.bootId,
+              startedAt,
+              staging: relative(scratchRoot, staging),
+              codexHome: relative(scratchRoot, codexHome),
+              research: relative(scratchRoot, researchDirectory),
+              image: this.#options.image,
+              cliVersion,
+              bundledCatalogDigest,
+            }),
+          ),
+          { flag: "wx", mode: 0o600 },
+        );
+        markerPath = path;
+      }
       const args = [
         ...base,
         `--name=${containerName}`,
@@ -955,25 +1091,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
         ).catch(() => undefined);
       }
       const completedAt = now().toISOString();
-      const collected = await collectRollouts(codexHome).then(
-        ({ rollouts, paths, truncated }) => ({
-          rollouts,
-          rolloutPaths: paths,
-          ...(truncated ? { rolloutFailure: "capture-failed" as const } : {}),
-        }),
-        () => ({
-          rollouts: [] as readonly string[],
-          rolloutPaths: [] as readonly string[],
-          rolloutFailure: "capture-failed" as const,
-        }),
-      );
-      const researchCollected =
-        researchDirectory === undefined
-          ? {}
-          : await collectResearchArchive(researchDirectory).then(
-              (research) => ({ research }),
-              () => ({ researchFailure: "capture-failed" as const }),
-            );
+      const captured = await captureRun(codexHome, researchDirectory);
       return {
         status: result.kind === "exited" ? "exited" : "failed",
         exitCode: result.kind === "exited" ? result.exitCode : -1,
@@ -985,15 +1103,74 @@ export class GvisorCodexSandbox implements CodexSandbox {
         image: this.#options.image,
         cliVersion,
         bundledCatalogDigest,
-        ...collected,
-        ...researchCollected,
+        ...captured,
         isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
       };
     } finally {
+      if (markerPath !== undefined) await rm(markerPath, { force: true });
       await rm(staging, { recursive: true, force: true });
       await rm(codexHome, { recursive: true, force: true });
       if (researchDirectory !== undefined)
         await rm(researchDirectory, { recursive: true, force: true });
     }
+  }
+  /**
+   * The directories a dead run left behind, read back as a failed result. A
+   * run is dead when its marker names another boot, or a pid that no longer
+   * runs on this boot; a live owner is never second-guessed. `completedAt` is
+   * the last write below the run's sessions and notes (ADR 0036).
+   */
+  async leftover(runId: string): Promise<CodexSandboxLeftover> {
+    if (!runIdPattern.test(runId)) return { status: "absent" };
+    const scratchRoot = await realpath(this.#options.scratchRootDirectory);
+    const markerPath = join(scratchRoot, RUN_MARKER_DIRECTORY, `${runId}.json`);
+    let marker: z.infer<typeof runMarkerSchema>;
+    try {
+      marker = runMarkerSchema.parse(
+        JSON.parse(await readFile(markerPath, "utf8")) as unknown,
+      );
+    } catch {
+      return { status: "absent" };
+    }
+    if (marker.runId !== runId) return { status: "absent" };
+    const owner = await (this.#options.owner ?? currentOwner)();
+    if (
+      marker.bootId === owner.bootId &&
+      (marker.pid === owner.pid ||
+        (this.#options.ownerAlive ?? processAlive)(marker.pid))
+    )
+      return { status: "alive" };
+    const directories = [marker.staging, marker.codexHome, marker.research].map(
+      (name) => join(scratchRoot, name),
+    );
+    const [, codexHome, research] = directories as [string, string, string];
+    const captured = await captureRun(codexHome, research);
+    const lastWrite = Math.max(
+      Date.parse(marker.startedAt),
+      await latestWrite(join(codexHome, "sessions")),
+      await latestWrite(research),
+    );
+    return {
+      status: "found",
+      runtimeProfileDigest: marker.runtimeProfileDigest,
+      result: {
+        status: "failed",
+        exitCode: -1,
+        stdout: "",
+        stderr: "interrupted: the process that owned this run is gone",
+        startedAt: marker.startedAt,
+        completedAt: new Date(lastWrite).toISOString(),
+        image: marker.image,
+        cliVersion: marker.cliVersion,
+        bundledCatalogDigest: marker.bundledCatalogDigest,
+        ...captured,
+        isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
+      },
+      discard: async () => {
+        for (const directory of directories)
+          await rm(directory, { recursive: true, force: true });
+        await rm(markerPath, { force: true });
+      },
+    };
   }
 }

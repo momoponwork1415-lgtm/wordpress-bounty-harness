@@ -33,11 +33,13 @@ export {
   rootThreadIdFromRollout,
   type CodexSandbox,
   type CodexSandboxCommand,
+  type CodexSandboxLeftover,
   type CodexSandboxResumeSeed,
   type CodexSandboxResult,
   type DiscoveryResumeInput,
   type DiscoveryTransportRun,
   type DiscoveryTransportResult,
+  type InterruptedRunRecovery,
 } from "./codex-native-agent-runtime.js";
 export {
   assessTrialResume,
@@ -50,6 +52,7 @@ export {
 export {
   GvisorCodexSandbox,
   type GvisorCodexSandboxOptions,
+  type SandboxOwner,
 } from "./codex-gvisor-sandbox.js";
 export {
   createNativeRunReceipt,
