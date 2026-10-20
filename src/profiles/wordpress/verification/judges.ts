@@ -1579,12 +1579,19 @@ function storedScriptJudge(options: Options) {
               labSetupDigest: lab.setupDigest,
             }),
             "victim-screen-diagnostic.png": script.screenshot,
+            ...(script.victimBrowserDiagnostic === undefined
+              ? {}
+              : {
+                  "victim-browser-diagnostic.json": canonicalJson(
+                    script.victimBrowserDiagnostic,
+                  ),
+                }),
           });
           return {
             status: "incomplete",
             reason: "observation",
             nextStep:
-              "The Lab browser visited the declared victim page without a canary receipt; inspect the diagnostic screenshot and route in Private Evidence, then repeat",
+              "The Lab browser visited the declared victim page without a canary receipt; inspect the diagnostic screenshot, browser counts, and route in Private Evidence, then repeat",
             evidenceDigest,
           };
         }

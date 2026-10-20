@@ -24,6 +24,7 @@ import type {
   WordPressStoredScriptFailurePhase,
   WordPressStoredScriptFailureCode,
   WordPressStoredScriptObservation,
+  WordPressVictimBrowserDiagnostic,
 } from "./contract.js";
 import type { WordPressLabSession } from "./lab-session.js";
 
@@ -44,6 +45,36 @@ echo json_encode(["http" => $http !== false ? "ok" : "failed", "database" => $da
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 const MAX_BROWSER_DIAGNOSTIC_BYTES = 16 * 1024;
 const PNG_SIGNATURE = Buffer.from("89504e470d0a1a0a", "hex");
+const diagnosticCountSchema = z.number().int().min(0).max(999_999);
+const victimBrowserDiagnosticSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  document: z.strictObject({
+    readyState: z.enum(["loading", "interactive", "complete"]),
+    elementCount: diagnosticCountSchema,
+    imageCount: diagnosticCountSchema,
+    brokenImageCount: diagnosticCountSchema,
+    inlineHandlerCount: diagnosticCountSchema,
+    canaryAttributeCount: diagnosticCountSchema,
+    canaryInlineHandlerCount: diagnosticCountSchema,
+  }),
+  runtime: z.strictObject({
+    pageErrorCounts: z.strictObject({
+      syntax: diagnosticCountSchema,
+      reference: diagnosticCountSchema,
+      type: diagnosticCountSchema,
+      security: diagnosticCountSchema,
+      other: diagnosticCountSchema,
+    }),
+    consoleErrorCount: diagnosticCountSchema,
+    failedRequestCount: diagnosticCountSchema,
+    http4xxCount: diagnosticCountSchema,
+    http5xxCount: diagnosticCountSchema,
+  }),
+});
+const browserVisitOutputSchema = z.strictObject({
+  screenshotBase64: z.string(),
+  diagnostic: z.unknown().optional(),
+});
 
 class BrowserVisitFailure extends Error {
   constructor(
@@ -60,13 +91,56 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   try {
   const page = await browser.newPage();
   const dismissDialogs = (tab) => tab.on("dialog", (dialog) => { void dialog.dismiss(); });
+  // Record bounded categories only. Browser messages, request URLs, and page
+  // content are never copied into the diagnostic.
+  const limit = 999999;
+  const increment = (value) => Math.min(limit, value + 1);
+  const runtime = {
+    pageErrorCounts: { syntax: 0, reference: 0, type: 0, security: 0, other: 0 },
+    consoleErrorCount: 0,
+    failedRequestCount: 0,
+    http4xxCount: 0,
+    http5xxCount: 0,
+  };
+  let recordingRuntime = false;
+  const observeRuntime = (tab) => {
+    tab.on("pageerror", (error) => {
+      if (!recordingRuntime) return;
+      let kind = "other";
+      switch (error.name) {
+        case "SyntaxError": kind = "syntax"; break;
+        case "ReferenceError": kind = "reference"; break;
+        case "TypeError": kind = "type"; break;
+        case "SecurityError": kind = "security"; break;
+      }
+      runtime.pageErrorCounts[kind] = increment(runtime.pageErrorCounts[kind]);
+    });
+    tab.on("console", (message) => {
+      if (recordingRuntime && message.type() === "error")
+        runtime.consoleErrorCount = increment(runtime.consoleErrorCount);
+    });
+  };
   dismissDialogs(page);
+  observeRuntime(page);
   const openedPages = new Set();
   const observedPages = new Set([page]);
   const popupOpeners = new Map();
   page.context().on("page", (tab) => {
     dismissDialogs(tab);
+    observeRuntime(tab);
     openedPages.add(tab);
+  });
+  page.context().on("requestfailed", () => {
+    if (recordingRuntime)
+      runtime.failedRequestCount = increment(runtime.failedRequestCount);
+  });
+  page.context().on("response", (response) => {
+    if (!recordingRuntime) return;
+    const status = response.status();
+    if (status >= 400 && status < 500)
+      runtime.http4xxCount = increment(runtime.http4xxCount);
+    else if (status >= 500 && status < 600)
+      runtime.http5xxCount = increment(runtime.http5xxCount);
   });
   const base = "http://wordpress";
   const atLabOrigin = async (tab) => {
@@ -125,6 +199,7 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
     ) victimCanaryRequest = true;
   });
   let visiblePage = page;
+  recordingRuntime = true;
   await visiblePage.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
   if (new URL(visiblePage.url()).origin !== base)
     throw new Error("Victim navigation left the Lab origin");
@@ -179,10 +254,56 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   for (const tab of observedPages)
     if (!tab.isClosed() && !await atLabOrigin(tab))
       throw new Error("Victim observation left the Lab origin");
+  recordingRuntime = false;
+  let documentDiagnostic;
+  try {
+    documentDiagnostic = await visiblePage.evaluate((nonces) => {
+    const limit = 999999;
+    const elements = document.querySelectorAll("*");
+    let imageCount = 0;
+    let brokenImageCount = 0;
+    let inlineHandlerCount = 0;
+    let canaryAttributeCount = 0;
+    let canaryInlineHandlerCount = 0;
+    for (const element of elements) {
+      if (element instanceof HTMLImageElement) {
+        imageCount++;
+        if (element.complete && element.naturalWidth === 0) brokenImageCount++;
+      }
+      for (const attribute of element.attributes) {
+        const handler = attribute.name.toLowerCase().startsWith("on");
+        const carriesCanary = nonces.some((nonce) => attribute.value.includes(nonce));
+        if (handler) inlineHandlerCount++;
+        if (carriesCanary) canaryAttributeCount++;
+        if (handler && carriesCanary) canaryInlineHandlerCount++;
+      }
+    }
+    return {
+      readyState: document.readyState,
+      elementCount: Math.min(limit, elements.length),
+      imageCount: Math.min(limit, imageCount),
+      brokenImageCount: Math.min(limit, brokenImageCount),
+      inlineHandlerCount: Math.min(limit, inlineHandlerCount),
+      canaryAttributeCount: Math.min(limit, canaryAttributeCount),
+      canaryInlineHandlerCount: Math.min(limit, canaryInlineHandlerCount),
+    };
+    }, scriptNonces);
+  } catch {
+    // Diagnostics must never turn a completed canary observation into failure.
+  }
   const screenshot = await visiblePage.screenshot({ type: "png" });
   if (screenshot.length > ${MAX_SCREENSHOT_BYTES})
     throw new Error("Browser screenshot exceeds the evidence limit");
-  process.stdout.write(screenshot.toString("base64"));
+  process.stdout.write(JSON.stringify({
+    screenshotBase64: screenshot.toString("base64"),
+    ...(documentDiagnostic === undefined ? {} : {
+      diagnostic: {
+        schemaVersion: 1,
+        document: documentDiagnostic,
+        runtime,
+      },
+    }),
+  }));
   } finally {
     await browser.close();
   }
@@ -492,7 +613,11 @@ async function visitStoredScriptPage(input: {
   readonly path: string;
   readonly role: WordPressVictimRoute["role"];
   readonly actions?: VictimActions;
-}): Promise<{ readonly fired: boolean; readonly screenshot: Buffer }> {
+}): Promise<{
+  readonly fired: boolean;
+  readonly screenshot: Buffer;
+  readonly diagnostic?: WordPressVictimBrowserDiagnostic;
+}> {
   const { lab, receiverIp, issued, path, role, actions } = input;
   const account =
     role === "administrator"
@@ -537,7 +662,7 @@ async function visitStoredScriptPage(input: {
       BROWSER_VISIT,
     ],
     120_000,
-    Math.ceil(MAX_SCREENSHOT_BYTES / 3) * 4 + 1024,
+    Math.ceil(MAX_SCREENSHOT_BYTES / 3) * 4 + MAX_BROWSER_DIAGNOSTIC_BYTES,
   );
   if (result.exitCode !== 0) {
     const known: readonly [string, WordPressStoredScriptFailureCode][] = [
@@ -568,7 +693,18 @@ async function visitStoredScriptPage(input: {
         : undefined,
     );
   }
-  const encoded = result.stdout.trim();
+  let output: unknown;
+  try {
+    output = JSON.parse(result.stdout);
+  } catch {
+    throw new Error("Browser visit output is invalid");
+  }
+  const parsed = browserVisitOutputSchema.safeParse(output);
+  if (!parsed.success) throw new Error("Browser visit output is invalid");
+  const diagnostic = victimBrowserDiagnosticSchema.safeParse(
+    parsed.data.diagnostic,
+  );
+  const encoded = parsed.data.screenshotBase64;
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))
     throw new Error("Browser screenshot is missing");
   const screenshot = Buffer.from(encoded, "base64");
@@ -582,6 +718,7 @@ async function visitStoredScriptPage(input: {
   return {
     fired: (await readBeaconCount(lab, issued)) > before,
     screenshot,
+    ...(diagnostic.success ? { diagnostic: diagnostic.data } : {}),
   };
 }
 
@@ -628,6 +765,7 @@ export async function observeStoredScript(
     const contexts: WordPressScriptContext[] = [];
     let screenshot: Buffer | undefined;
     let diagnosticVictimScreenshot: Buffer | undefined;
+    let victimBrowserDiagnostic: WordPressVictimBrowserDiagnostic | undefined;
     const fired = async (
       path: string,
       role: WordPressVictimRoute["role"],
@@ -643,7 +781,10 @@ export async function observeStoredScript(
         ...(actions === undefined ? {} : { actions }),
       });
       if (observation.fired) screenshot ??= observation.screenshot;
-      else if (victimVisit) diagnosticVictimScreenshot = observation.screenshot;
+      else if (victimVisit) {
+        diagnosticVictimScreenshot = observation.screenshot;
+        victimBrowserDiagnostic = observation.diagnostic;
+      }
       return observation.fired;
     };
     if (await fired("/", "unauthenticated")) contexts.push("front");
@@ -685,6 +826,9 @@ export async function observeStoredScript(
       ...(selectedScreenshot === undefined
         ? {}
         : { screenshot: selectedScreenshot }),
+      ...(victimBrowserDiagnostic === undefined
+        ? {}
+        : { victimBrowserDiagnostic }),
     };
   } catch (error) {
     return {

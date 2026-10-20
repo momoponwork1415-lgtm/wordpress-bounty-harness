@@ -148,10 +148,37 @@ async function verifyOnce(
             beacons.push("/b/fixed-nonce");
           return {
             exitCode: 0,
-            stdout: Buffer.concat([
-              Buffer.from("89504e470d0a1a0a", "hex"),
-              Buffer.from("synthetic observer output"),
-            ]).toString("base64"),
+            stdout: JSON.stringify({
+              screenshotBase64: Buffer.concat([
+                Buffer.from("89504e470d0a1a0a", "hex"),
+                Buffer.from("synthetic observer output"),
+              ]).toString("base64"),
+              diagnostic: {
+                schemaVersion: 1,
+                document: {
+                  readyState: "complete",
+                  elementCount: 1,
+                  imageCount: 0,
+                  brokenImageCount: 0,
+                  inlineHandlerCount: 0,
+                  canaryAttributeCount: 0,
+                  canaryInlineHandlerCount: 0,
+                },
+                runtime: {
+                  pageErrorCounts: {
+                    syntax: 0,
+                    reference: 0,
+                    type: 0,
+                    security: 0,
+                    other: 0,
+                  },
+                  consoleErrorCount: 0,
+                  failedRequestCount: 0,
+                  http4xxCount: 0,
+                  http5xxCount: 0,
+                },
+              },
+            }),
             stderr: "",
           };
         }

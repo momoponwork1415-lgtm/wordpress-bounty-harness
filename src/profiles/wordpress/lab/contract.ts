@@ -125,6 +125,33 @@ export type WordPressStoredScriptFailureCode =
   | "victim-canary-request"
   | "victim-screenshot";
 
+/** Counts from the Harness-owned victim browser; Private Evidence only. */
+export interface WordPressVictimBrowserDiagnostic {
+  readonly schemaVersion: 1;
+  readonly document: {
+    readonly readyState: "loading" | "interactive" | "complete";
+    readonly elementCount: number;
+    readonly imageCount: number;
+    readonly brokenImageCount: number;
+    readonly inlineHandlerCount: number;
+    readonly canaryAttributeCount: number;
+    readonly canaryInlineHandlerCount: number;
+  };
+  readonly runtime: {
+    readonly pageErrorCounts: {
+      readonly syntax: number;
+      readonly reference: number;
+      readonly type: number;
+      readonly security: number;
+      readonly other: number;
+    };
+    readonly consoleErrorCount: number;
+    readonly failedRequestCount: number;
+    readonly http4xxCount: number;
+    readonly http5xxCount: number;
+  };
+}
+
 export type WordPressStoredScriptObservation =
   | {
       readonly status: "observed";
@@ -138,6 +165,8 @@ export type WordPressStoredScriptObservation =
         | "self";
       /** First firing page, or last non-firing victim page for diagnosis; Private Evidence only. */
       readonly screenshot?: Buffer;
+      /** Last completed non-firing victim visit; Private Evidence only. */
+      readonly victimBrowserDiagnostic?: WordPressVictimBrowserDiagnostic;
     }
   | { readonly status: "not-prepared" }
   | {

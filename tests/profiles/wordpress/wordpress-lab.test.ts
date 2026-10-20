@@ -29,6 +29,31 @@ import { wpMembersOrdinarySetupScript } from "../../../src/profiles/wordpress/la
 
 const directories: string[] = [];
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
+const browserDiagnostic = {
+  schemaVersion: 1,
+  document: {
+    readyState: "complete",
+    elementCount: 12,
+    imageCount: 1,
+    brokenImageCount: 1,
+    inlineHandlerCount: 1,
+    canaryAttributeCount: 1,
+    canaryInlineHandlerCount: 1,
+  },
+  runtime: {
+    pageErrorCounts: {
+      syntax: 1,
+      reference: 0,
+      type: 0,
+      security: 0,
+      other: 0,
+    },
+    consoleErrorCount: 1,
+    failedRequestCount: 1,
+    http4xxCount: 1,
+    http5xxCount: 0,
+  },
+} as const;
 
 afterEach(async () => {
   await Promise.all(
@@ -115,6 +140,7 @@ async function fixture(
     beacons: [] as string[],
     browserFailureAt: null as string | null,
     browserFailureMessage: "private-debug-marker",
+    browserDiagnosticOutput: "valid" as "valid" | "missing" | "invalid",
   };
   const salts = new Map<string, string>();
   let seededRow = "";
@@ -302,10 +328,20 @@ async function fixture(
             database.beacons.push("/b/fixed-nonce");
           return {
             exitCode: 0,
-            stdout: Buffer.concat([
-              Buffer.from("89504e470d0a1a0a", "hex"),
-              Buffer.from("synthetic observer output"),
-            ]).toString("base64"),
+            stdout: JSON.stringify({
+              screenshotBase64: Buffer.concat([
+                Buffer.from("89504e470d0a1a0a", "hex"),
+                Buffer.from("synthetic observer output"),
+              ]).toString("base64"),
+              ...(database.browserDiagnosticOutput === "missing"
+                ? {}
+                : {
+                    diagnostic:
+                      database.browserDiagnosticOutput === "valid"
+                        ? browserDiagnostic
+                        : { schemaVersion: 99 },
+                  }),
+            }),
             stderr: "",
           };
         }
@@ -1798,8 +1834,45 @@ describe("WordPress gVisor Lab", () => {
       status: "observed",
       contexts: [],
       screenshot: expect.any(Buffer),
+      victimBrowserDiagnostic: browserDiagnostic,
     });
     expect(JSON.stringify(noBeaconVictimVisit)).not.toContain("page=fixture");
+
+    database.browserDiagnosticOutput = "missing";
+    expect(
+      await contexts(["/wp-admin/admin.php?page=fixture"], {
+        role: "administrator",
+        paths: ["/wp-admin/admin.php?page=fixture"],
+      }),
+    ).toEqual({
+      status: "observed",
+      contexts: ["victim-route-page"],
+      victimRole: "administrator",
+      screenshot: expect.any(Buffer),
+    });
+    expect(
+      await contexts([], {
+        role: "administrator",
+        paths: ["/wp-admin/admin.php?page=fixture"],
+      }),
+    ).toEqual({
+      status: "observed",
+      contexts: [],
+      screenshot: expect.any(Buffer),
+    });
+    database.browserDiagnosticOutput = "invalid";
+    expect(
+      await contexts(["/wp-admin/admin.php?page=fixture"], {
+        role: "administrator",
+        paths: ["/wp-admin/admin.php?page=fixture"],
+      }),
+    ).toEqual({
+      status: "observed",
+      contexts: ["victim-route-page"],
+      victimRole: "administrator",
+      screenshot: expect.any(Buffer),
+    });
+    database.browserDiagnosticOutput = "valid";
 
     database.browserFailureAt = "/wp-admin/admin.php?page=fixture";
     const failedVictimVisit = await contexts([], {
@@ -2020,24 +2093,32 @@ describe("WordPress gVisor Lab", () => {
       effectiveOrigin?: string;
       openerAccessible?: boolean;
       extraPopup?: boolean;
+      captureDiagnostic?: boolean;
     }): Promise<string> => {
       let onPage: ((tab: unknown) => void) | undefined;
       let resolvePopup: ((tab: unknown) => void) | undefined;
+      const contextListeners = new Map<string, (value: unknown) => void>();
+      const popupListeners = new Map<string, (value: unknown) => void>();
       let finish: (result: string) => void = () => {};
       const completed = new Promise<string>((resolve) => {
         finish = resolve;
       });
       const context = {
         on(event: string, listener: (value: unknown) => void) {
+          contextListeners.set(event, listener);
           if (event === "page") onPage = listener;
         },
       };
       const popup = {
-        on() {},
+        on(event: string, listener: (value: unknown) => void) {
+          popupListeners.set(event, listener);
+        },
         url: () => input.url,
         opener: async () => (input.browserOpener === false ? null : main),
-        evaluate: async (check: (origin: string) => boolean, origin: string) =>
-          check(origin),
+        evaluate: async (
+          check: (argument: string | string[]) => unknown,
+          argument: string | string[],
+        ) => check(argument),
         waitForLoadState: async () => {},
         waitForTimeout: async () => {},
         isClosed: () => false,
@@ -2050,6 +2131,23 @@ describe("WordPress gVisor Lab", () => {
         click: async () => {
           onPage?.(popup);
           if (input.extraPopup) onPage?.({ on() {}, isClosed: () => false });
+          if (input.captureDiagnostic) {
+            popupListeners.get("pageerror")?.({
+              name: "SyntaxError",
+              message: "private runtime detail",
+            });
+            popupListeners.get("console")?.({
+              type: () => "error",
+              text: () => "private console detail",
+            });
+            contextListeners.get("requestfailed")?.({
+              url: () => "private request detail",
+            });
+            contextListeners.get("response")?.({
+              status: () => 404,
+              url: () => "private response detail",
+            });
+          }
           resolvePopup?.(popup);
         },
       };
@@ -2073,6 +2171,11 @@ describe("WordPress gVisor Lab", () => {
           return {};
         },
       });
+      class ImageElement {
+        complete = true;
+        naturalWidth = 0;
+        attributes: { name: string; value: string }[] = [];
+      }
       runInNewContext(script, {
         require: () => ({
           chromium: {
@@ -2088,9 +2191,12 @@ describe("WordPress gVisor Lab", () => {
             WBH_VISIT_ACTIONS: JSON.stringify([
               { kind: "click", selector: "#open" },
             ]),
-            WBH_SCRIPT_NONCES: "[]",
+            WBH_SCRIPT_NONCES: '["marker"]',
           },
-          stdout: { write: () => finish("observed") },
+          stdout: {
+            write: (value: string) =>
+              finish(input.captureDiagnostic ? value : "observed"),
+          },
           exitCode: 0,
         },
         console: { error: (message: unknown) => finish(String(message)) },
@@ -2100,11 +2206,40 @@ describe("WordPress gVisor Lab", () => {
         },
         Buffer,
         URL,
+        HTMLImageElement: ImageElement,
+        document: {
+          readyState: "complete",
+          querySelectorAll: () => [
+            new ImageElement(),
+            { attributes: [{ name: "onclick", value: "marker" }] },
+          ],
+        },
       });
       return completed;
     };
 
     expect(await runPopupVisit({ url: "about:blank" })).toBe("observed");
+    const diagnosticOutput = await runPopupVisit({
+      url: "about:blank",
+      captureDiagnostic: true,
+    });
+    expect(diagnosticOutput).not.toContain("private runtime detail");
+    expect(diagnosticOutput).not.toContain("private request detail");
+    expect(JSON.parse(diagnosticOutput).diagnostic).toMatchObject({
+      document: {
+        elementCount: 2,
+        imageCount: 1,
+        brokenImageCount: 1,
+        canaryAttributeCount: 1,
+        canaryInlineHandlerCount: 1,
+      },
+      runtime: {
+        pageErrorCounts: { syntax: 1 },
+        consoleErrorCount: 1,
+        failedRequestCount: 1,
+        http4xxCount: 1,
+      },
+    });
     expect(
       await runPopupVisit({ url: "about:blank", browserOpener: false }),
     ).toBe("Victim action left the Lab origin");

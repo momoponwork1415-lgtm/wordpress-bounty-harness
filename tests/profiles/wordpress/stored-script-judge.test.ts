@@ -592,9 +592,39 @@ describe("WordPress stored script judge", () => {
     ).toMatchObject({ status: "not-observed" });
   });
 
-  it("keeps a non-firing victim visit incomplete with a diagnostic screenshot only in Private Evidence", async () => {
+  it("keeps a non-firing victim visit incomplete with browser counts only in Private Evidence", async () => {
+    const victimBrowserDiagnostic = {
+      schemaVersion: 1 as const,
+      document: {
+        readyState: "complete" as const,
+        elementCount: 3,
+        imageCount: 1,
+        brokenImageCount: 1,
+        inlineHandlerCount: 1,
+        canaryAttributeCount: 1,
+        canaryInlineHandlerCount: 1,
+      },
+      runtime: {
+        pageErrorCounts: {
+          syntax: 1,
+          reference: 0,
+          type: 0,
+          security: 0,
+          other: 0,
+        },
+        consoleErrorCount: 1,
+        failedRequestCount: 0,
+        http4xxCount: 0,
+        http5xxCount: 0,
+      },
+    };
     const { observed, store } = await judge(
-      { status: "observed", contexts: [], screenshot: observerBytes },
+      {
+        status: "observed",
+        contexts: [],
+        screenshot: observerBytes,
+        victimBrowserDiagnostic,
+      },
       { role: "administrator", paths: ["/wp-admin/admin.php?page=fixture"] },
     );
     expect(observed).toMatchObject({
@@ -605,6 +635,7 @@ describe("WordPress stored script judge", () => {
     });
     expect(JSON.stringify(observed)).not.toContain("page=fixture");
     expect(JSON.stringify(observed)).not.toContain("synthetic observer output");
+    expect(JSON.stringify(observed)).not.toContain("canaryInlineHandlerCount");
     if (observed?.status !== "incomplete" || !observed.evidenceDigest)
       throw new Error("Expected private diagnostic evidence");
     const receipt = await store.readFile(
@@ -617,8 +648,14 @@ describe("WordPress stored script judge", () => {
       "victim-screen-diagnostic.png",
       1024 * 1024,
     );
+    const diagnostic = await store.readFile(
+      observed.evidenceDigest,
+      "victim-browser-diagnostic.json",
+      16 * 1024,
+    );
     expect(receipt.status).toBe("resolved");
     expect(screenshot.status).toBe("resolved");
+    expect(diagnostic.status).toBe("resolved");
     if (receipt.status === "resolved") {
       expect(JSON.parse(receipt.bytes.toString("utf8"))).toMatchObject({
         status: "victim-visited-without-beacon",
@@ -631,6 +668,10 @@ describe("WordPress stored script judge", () => {
     }
     if (screenshot.status === "resolved")
       expect(screenshot.bytes).toEqual(observerBytes);
+    if (diagnostic.status === "resolved")
+      expect(JSON.parse(diagnostic.bytes.toString("utf8"))).toEqual(
+        victimBrowserDiagnostic,
+      );
   });
 
   it("keeps a fired beacon incomplete when the Lab screenshot is missing", async () => {
