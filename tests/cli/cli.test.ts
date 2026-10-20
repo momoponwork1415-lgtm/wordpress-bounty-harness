@@ -2554,7 +2554,7 @@ describe("harness CLI vertical slice", () => {
             event.type === "verification-finished" &&
             event.findingId === findingId,
         );
-    expect(finished()).toMatchObject([{ promptVersion: "wbh-verify/v3" }]);
+    expect(finished()).toMatchObject([{ promptVersion: "wbh-verify/v4" }]);
 
     // The operator named the Finding again: the retry rules of the automatic queue do not apply.
     const second = await run(...handoff);
@@ -2562,7 +2562,7 @@ describe("harness CLI vertical slice", () => {
     expect(second.stdout).toContain(`verified finding ${findingId}`);
     expect(finished()).toHaveLength(2);
     expect(finished()[1]).toMatchObject({
-      promptVersion: "wbh-verify/v3",
+      promptVersion: "wbh-verify/v4",
       attempt: 2,
     });
   });
