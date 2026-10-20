@@ -71,6 +71,7 @@ import {
   openWordPressCampaignSession,
   readWordPressCampaignConfig,
   readWordPressCampaignPolicy,
+  wordPressRuntimeCaps,
   wordPressRuntimeCeilings,
   type WordPressCampaignBoundaries,
   type WordPressCampaignConfig,
@@ -953,23 +954,9 @@ async function runWordPressCampaign(
     ...(input.targetLimit === undefined
       ? {}
       : { targetLimit: input.targetLimit }),
-    ...(config.resources.maxConcurrentTargetsByRuntime === undefined &&
-    config.discovery.runtimeShare === undefined
+    ...(wordPressRuntimeCaps(config) === undefined
       ? {}
-      : {
-          runtimeCaps: {
-            // The same identity and share that pick the runtime at discovery.
-            runtimeOf: (target: WordPressTargetSelection) =>
-              assignDiscoveryRuntime(
-                target.targetId,
-                config.discovery.runtimeShare,
-              ),
-            ceilings: wordPressRuntimeCeilings(config),
-            // Only a split campaign keeps one runtime going past the other's limit.
-            providerLimitPerRuntime:
-              config.discovery.runtimeShare !== undefined,
-          },
-        }),
+      : { runtimeCaps: wordPressRuntimeCaps(config)! }),
     ...(input.stop === undefined ? {} : { stop: input.stop }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.retryIncompleteVerifications === undefined

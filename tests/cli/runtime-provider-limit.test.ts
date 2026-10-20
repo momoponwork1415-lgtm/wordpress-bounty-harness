@@ -16,6 +16,10 @@ import {
   type DiscoveryTransportRun,
 } from "../../src/discovery/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
+import {
+  wordpressCampaignConfigSchema,
+  wordPressRuntimeCaps,
+} from "../../src/cli/wordpress-session.js";
 import { Ledger } from "../../src/ledger/index.js";
 import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/candidate-admission.js";
 
@@ -47,14 +51,16 @@ const noFindings = Buffer.from(
 );
 
 /**
- * A no-Lab campaign over the named targets, one at a time in selection
- * order. A name starting with `c` runs on Claude, any other on Codex; the
- * named targets' Trial ends provider-limited, every other one completes.
+ * A no-Lab campaign over the named targets, in selection order. With a
+ * boolean, a name starting with `c` runs on Claude and any other on Codex.
+ * The named targets' Trial ends provider-limited, every other one completes;
+ * with `manual`, each Trial ends only when the test calls `end`.
  */
 async function campaign(
   names: readonly string[],
   limited: ReadonlySet<string>,
-  perRuntime: boolean | undefined,
+  caps: boolean | RuntimeTargetCaps<Target> | undefined,
+  options: { readonly maxConcurrentTargets?: number; manual?: boolean } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-runtime-limit-"));
   roots.push(root);
@@ -70,23 +76,24 @@ async function campaign(
   const attachments = new ProviderAttachmentStore(join(root, "reports"));
   const nameOf = (target: Target) => target.targetId.slice("wporg:".length);
   const runtimeCaps: RuntimeTargetCaps<Target> | undefined =
-    perRuntime === undefined
-      ? undefined
+    typeof caps !== "boolean"
+      ? caps
       : {
           runtimeOf: (target) =>
             nameOf(target).startsWith("c") ? "claude" : "codex",
           ceilings: {},
-          providerLimitPerRuntime: perRuntime,
+          providerLimitPerRuntime: caps,
         };
+  const gates = new Map<string, () => void>();
   let ids = 0;
-  const summary = await runCampaignPipeline({
+  const done = runCampaignPipeline({
     campaignId: "prod-20261020-1",
     ledger,
     store,
     clock: () => new Date("2026-10-20T00:00:00Z"),
     newId: () => `id-${++ids}`,
     discoveryLab: "none",
-    maxConcurrentTargets: 1,
+    maxConcurrentTargets: options.maxConcurrentTargets ?? 1,
     ...(runtimeCaps === undefined ? {} : { runtimeCaps: runtimeCaps as never }),
     pipeline: {
       select: async () =>
@@ -141,6 +148,8 @@ async function campaign(
         ],
         executor: {
           async execute(run: DiscoveryTransportRun) {
+            if (options.manual === true)
+              await new Promise<void>((end) => gates.set(nameOf(target), end));
             const identity = {
               runId: run.runId,
               targetSnapshotDigest: run.targetSnapshotDigest,
@@ -174,22 +183,22 @@ async function campaign(
       }),
     } as never,
   });
-  const started = ledger
-    .readAll({ campaignId: "prod-20261020-1", type: "discovery-run-started" })
-    .map(({ event }) => ("runId" in event ? event.runId!.slice(4) : ""));
-  const stops = ledger
-    .readAll({ campaignId: "prod-20261020-1", type: "campaign-stopped" })
-    .map(({ event }) => event);
-  return { summary, started, stops, ledger };
+  const started = () =>
+    ledger
+      .readAll({ campaignId: "prod-20261020-1", type: "discovery-run-started" })
+      .map(({ event }) => ("runId" in event ? event.runId!.slice(4) : ""));
+  const stops = () =>
+    ledger
+      .readAll({ campaignId: "prod-20261020-1", type: "campaign-stopped" })
+      .map(({ event }) => event);
+  const end = (name: string) => gates.get(name)!();
+  return { done, started, stops, ledger, end, gated: () => [...gates.keys()] };
 }
 
 describe("a provider limit in a campaign split between runtimes", () => {
   it("stops only the limited runtime's targets; the other runtime's targets still start and finish", async () => {
-    const { summary, started, stops, ledger } = await campaign(
-      ["c1", "x1", "c2", "x2"],
-      new Set(["c1"]),
-      true,
-    );
+    const c = await campaign(["c1", "x1", "c2", "x2"], new Set(["c1"]), true);
+    const [summary, started, stops] = [await c.done, c.started(), c.stops()];
     // c2 waits for the resume; the Codex targets behind it run.
     expect(started).toEqual(["c1", "x1", "x2"]);
     expect(summary.stopped).toBe("provider-limit");
@@ -207,7 +216,7 @@ describe("a provider limit in a campaign split between runtimes", () => {
         snapshotDigest: sha("c1"),
       }),
     ]);
-    expect(ledger.stops({ campaignId: "prod-20261020-1" })).toContainEqual({
+    expect(c.ledger.stops({ campaignId: "prod-20261020-1" })).toContainEqual({
       type: "campaign-stopped",
       fields: { reason: "provider-limit", runtime: "claude" },
       count: 1,
@@ -215,11 +224,12 @@ describe("a provider limit in a campaign split between runtimes", () => {
   });
 
   it("stops the whole campaign when both runtimes hit their limits", async () => {
-    const { summary, started, stops } = await campaign(
+    const c = await campaign(
       ["c1", "x1", "c2", "x2"],
       new Set(["c1", "x1"]),
       true,
     );
+    const [summary, started, stops] = [await c.done, c.started(), c.stops()];
     expect(started).toEqual(["c1", "x1"]);
     expect(summary.stopped).toBe("provider-limit");
     expect(summary.limitedRuntimes).toEqual(["claude", "codex"]);
@@ -235,11 +245,12 @@ describe("a provider limit in a campaign split between runtimes", () => {
   ] as const)(
     "%s stops the whole campaign exactly as before",
     async (_, perRuntime) => {
-      const { summary, started, stops } = await campaign(
+      const c = await campaign(
         ["c1", "x1", "c2", "x2"],
         new Set(["c1"]),
         perRuntime,
       );
+      const [summary, started, stops] = [await c.done, c.started(), c.stops()];
       expect(started).toEqual(["c1"]);
       expect(summary.stopped).toBe("provider-limit");
       expect(summary).not.toHaveProperty("limitedRuntimes");
@@ -247,4 +258,76 @@ describe("a provider limit in a campaign split between runtimes", () => {
       expect(stops[0]).not.toHaveProperty("runtime");
     },
   );
+});
+
+describe("runtime-scoped stops", () => {
+  const until = async (condition: () => boolean) => {
+    // Generous: the whole suite shares the machine.
+    for (let i = 0; i < 1000 && !condition(); i++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(condition()).toBe(true);
+  };
+
+  it("with two targets in flight, starts no pending target of the limited runtime", async () => {
+    const c = await campaign(
+      ["c1", "x1", "c2", "x2", "c3"],
+      new Set(["c1"]),
+      true,
+      { maxConcurrentTargets: 2, manual: true },
+    );
+    await until(() => c.gated().length === 2);
+    expect(c.started().sort()).toEqual(["c1", "x1"]);
+    // c1 hits the limit while x1 runs: the freed slot goes to x2, not c2.
+    c.end("c1");
+    await until(() => c.gated().includes("x2"));
+    c.end("x1");
+    c.end("x2");
+    const summary = await c.done;
+    expect(c.started().sort()).toEqual(["c1", "x1", "x2"]);
+    expect(summary.limitedRuntimes).toEqual(["claude"]);
+  });
+
+  const config = (
+    share: { codex: number; claude: number } | undefined,
+    lab: "none" | "attached" = "none",
+  ) =>
+    wordpressCampaignConfigSchema.parse({
+      schemaVersion: 1,
+      programmeBoundary: { version: "v", text: "t" },
+      wordpressVersion: "6.8",
+      lab: { siteTitle: "s", initialPosts: [], customerRole: false },
+      discovery: {
+        lab,
+        ...(share === undefined ? {} : { runtimeShare: share }),
+      },
+    });
+
+  it.each([
+    ["both runtimes weighted, no Lab", { codex: 1, claude: 1 }, "none", true],
+    ["Claude weighted 0", { codex: 1, claude: 0 }, "none", false],
+    ["Codex weighted 0", { codex: 0, claude: 1 }, "none", false],
+    // The in-campaign Verifier runs on Codex after discovery with a Lab.
+    ["both weighted, attached Lab", { codex: 1, claude: 1 }, "attached", false],
+  ] as const)(
+    "derives the runtime-scoped stop from the config: %s",
+    (_, share, lab, perRuntime) => {
+      expect(
+        wordPressRuntimeCaps(config(share, lab))?.providerLimitPerRuntime,
+      ).toBe(perRuntime);
+    },
+  );
+
+  it("keeps the whole-campaign stop for a {codex: 1, claude: 0} campaign", async () => {
+    expect(wordPressRuntimeCaps(config(undefined))).toBeUndefined();
+    const c = await campaign(
+      ["a1", "a2", "a3"],
+      new Set(["a1"]),
+      wordPressRuntimeCaps(config({ codex: 1, claude: 0 })) as never,
+    );
+    const summary = await c.done;
+    expect(c.started()).toEqual(["a1"]);
+    expect(summary).not.toHaveProperty("limitedRuntimes");
+    expect(c.stops()).toHaveLength(1);
+    expect(c.stops()[0]).not.toHaveProperty("runtime");
+  });
 });

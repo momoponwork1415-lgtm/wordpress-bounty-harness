@@ -155,7 +155,8 @@ export interface RuntimeTargetCaps<Target> {
   /**
    * A provider limit in discovery stops only the targets of the runtime that
    * hit it; the other runtime's targets keep starting. Absent, it stops the
-   * whole campaign.
+   * whole campaign. The in-campaign Verifier does not look at it, so the
+   * profile sets it only for campaigns without a discovery Lab.
    */
   readonly providerLimitPerRuntime?: boolean;
 }

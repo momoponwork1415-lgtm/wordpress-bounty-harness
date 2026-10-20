@@ -305,6 +305,33 @@ describe("continuous runner", () => {
     ]);
   });
 
+  it("after a restart, holds a runtime whose saved backoff has not ended and starts one whose backoff has", async () => {
+    const held: string[][] = [];
+    const t = await setup([
+      (input) => {
+        const { targetLimit } = input as Parameters<
+          ContinuousDeps["runCampaign"]
+        >[0];
+        held.push([...(targetLimit.heldRuntimes?.() ?? [])]);
+        return {};
+      },
+    ]);
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify({
+        state: "backoff",
+        campaignId: "prod-20261019-4",
+        runtimeBackoff: {
+          claude: { step: 2, until: "2026-10-20T00:30:00.000Z" },
+          codex: { step: 1, until: "2026-10-19T23:55:00.000Z" },
+        },
+      }),
+    );
+    await t.runner.run();
+    expect(t.calls[0]!.campaignId).toBe("prod-20261019-4");
+    expect(held).toEqual([["claude"]]);
+  });
+
   it("starts a new campaign id after a finished one, numbered from the ledger", async () => {
     const steps: Step[] = [];
     const t = await setup(steps);

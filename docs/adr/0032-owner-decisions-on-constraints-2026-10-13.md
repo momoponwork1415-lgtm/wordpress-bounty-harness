@@ -168,3 +168,11 @@ v5 で変えたもの: 受け入れる種類の順位と「落とす種類」の
 - runner の稼働中は、`continuous concurrency <n> --runtime <name>` で 0 からその runtime の上限までの値を `<state>/continuous.concurrency.<name>` に書ける。0 にすると、その runtime の新しい対象は始まらない。下げても走っている Trial は止めない。設定と選定方針の digest は変わらない。手で回す `campaign run` は設定の上限を使い、この file は読まない。
 - batch の偏りは残る。1 batch の対象は hash で runtime に分かれるので、片方の runtime の対象が先に尽きると、その枠は batch が終わるまで空く。選定は凍結中なので、選定で runtime を釣り合わせることはしない。当面は選定方針の `maximumTargets` を上限の 10 にして空きを減らし、batch をまたいで補充する案は数字を見てから決める（OPERATIONS.md の継続運転の節）。
 - provider 上限で campaign が止まる動きは変えていない。Claude の quota で止まると、同じ batch の Codex の新しい対象も backoff の間は始まらない。
+
+## 2026-10-20 追記 3: provider 上限で止めるのは、上限に当たった runtime の対象だけにする（所有者の指示「探索はずっと動かしておいてほしい」）
+
+出典は所有者の 2026-10-19 21:31 JST の指示「探索はずっと動かしておいてほしい」（設計課題報告 docs/reviews/2026-10-20-design-issues-from-production-results.md の §3.6）。追記 2 の最後の項目を、次の campaign に限って上書きする。`discovery.runtimeShare` が Codex と Claude の両方に正の重みを付け、`discovery.lab` が `none` の campaign である。
+
+- 探索 run が provider 上限で終わったら、その runtime の未起動の対象だけを止める。もう一方の runtime の対象は起動と完了を続ける。`campaign-stopped` に `runtime` を付ける。両方の runtime が上限に当たれば、campaign 全体が止まる。
+- runner の backoff は runtime ごとに段階を数える。待ち時間が最も早く終わる runtime に合わせて同じ campaign ID で再開し、待ち時間の残る runtime の対象は、その終わりまで起動しない。
+- 上の条件に当たらない campaign と、Verifier の上限は、今までどおり campaign 全体を止める。
