@@ -234,6 +234,58 @@ describe("WordPress stored script judge", () => {
     }
   });
 
+  it("checks every post-setup request when the capture has over 500 exchanges", async () => {
+    const exploratoryRequests = Array.from({ length: 500 }, () =>
+      exchange({}, "ordinary"),
+    );
+    const attackRequest = exchange({}, requestBody);
+    const completeCapture = captureSequence(
+      ...exploratoryRequests,
+      attackRequest,
+    );
+    const { observed, store } = await judge(
+      fired,
+      undefined,
+      { readCapture: async () => completeCapture },
+      "unauthenticated",
+    );
+    expect(observed).toMatchObject({
+      status: "observed",
+      evidenceCapture: "harness-captured",
+      conditions: { attackerRole: "unauthenticated" },
+    });
+    if (observed?.status !== "observed")
+      throw new Error("Expected captured script evidence");
+    const stored = await store.readFile(
+      observed.evidenceDigest,
+      "proxy-capture.jsonl",
+      1024 * 1024,
+    );
+    expect(stored.status).toBe("resolved");
+    if (stored.status === "resolved")
+      expect(stored.bytes).toEqual(completeCapture.bytes);
+
+    const taintedCapture = captureSequence(
+      ...exploratoryRequests,
+      attackRequest,
+      exchange(
+        { cookie: "wordpress_logged_in_fixture=admin-session" },
+        "ordinary",
+      ),
+    );
+    const tainted = await judge(
+      fired,
+      undefined,
+      { readCapture: async () => taintedCapture },
+      "unauthenticated",
+    );
+    expect(tainted.observed).toMatchObject({
+      status: "incomplete",
+      reason: "evidence",
+      nextStep: expect.stringContaining("post-setup request used a logged-in"),
+    });
+  });
+
   it("accepts a canary-bearing write followed by a same-origin redirect", async () => {
     for (const location of ["/", "http://wordpress/?finished=1"]) {
       const { observed } = await judge(fired, undefined, {

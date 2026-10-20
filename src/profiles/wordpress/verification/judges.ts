@@ -86,6 +86,8 @@ const routeConditionsSchema = z.looseObject({
 });
 /** The Verifier's HTTP record; only responses can carry what the Lab held back. */
 const httpRecordSchema = z.looseObject({
+  // The recorder bounds bytes and reports dropped exchanges. A count cap here
+  // would hide post-setup requests from the attacker-principal check.
   exchanges: z
     .array(
       z.looseObject({
@@ -93,8 +95,7 @@ const httpRecordSchema = z.looseObject({
         response: z.looseObject({ body: z.string() }),
       }),
     )
-    .min(1)
-    .max(500),
+    .min(1),
 });
 type HttpRecord = z.infer<typeof httpRecordSchema>;
 type HttpEvidence = {
@@ -523,7 +524,7 @@ async function readHttpEvidence(
     return {
       status: "incomplete",
       reason: "evidence",
-      nextStep: "The proxy HTTP record exceeds the judge limit; repeat",
+      nextStep: "The proxy HTTP record has no valid exchange; repeat",
     };
   return {
     capture: "harness-captured",
