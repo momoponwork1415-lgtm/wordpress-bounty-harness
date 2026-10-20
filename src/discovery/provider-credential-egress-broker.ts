@@ -7,6 +7,7 @@ import { isIP } from "node:net";
 import { z } from "zod";
 
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
+import { claudeModelSchema } from "./agent-runtime-profile.js";
 import { createGrantTls } from "./grant-tls.js";
 import type { ProviderApiProtocol } from "./provider-credential-proxy.js";
 import {
@@ -43,7 +44,7 @@ const modelSchema = z.enum([
   "gpt-6-sol",
   "gpt-6.1-sol",
   "gpt-6-luna",
-  "claude-opus-5-5",
+  ...claudeModelSchema.options,
 ]);
 const protocolSchema = z.enum([
   "responses",

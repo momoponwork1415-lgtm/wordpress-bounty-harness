@@ -134,4 +134,47 @@ describe("Claude runtime profile", () => {
       ),
     ).toThrow();
   });
+
+  it("keeps the digest of the Opus Root and Opus child profile the enum widening left unchanged", () => {
+    // Measured before the Root and child models became an enum (#418).
+    expect(defineClaudeRuntimeProfile(claude, digest).digest).toBe(
+      "sha256:7cfbaa7c8ca66efd1ff3586fcb0fdd4beed6b1f1ce3a65089b1fcefeddac6c0f",
+    );
+  });
+
+  it("binds the Root and child models separately, each to a Claude model", () => {
+    const sonnetChildren = defineClaudeRuntimeProfile(
+      {
+        ...claude,
+        subagent: { modelId: "claude-sonnet-5-5", effort: "high" },
+      },
+      digest,
+    );
+    expect(sonnetChildren).toMatchObject({
+      requestedModelId: "claude-opus-5-5",
+      subagent: { modelId: "claude-sonnet-5-5" },
+    });
+    expect(sonnetChildren.digest).not.toBe(
+      defineClaudeRuntimeProfile(claude, digest).digest,
+    );
+    expect(
+      defineClaudeRuntimeProfile(
+        {
+          ...claude,
+          requestedModelId: "claude-sonnet-5-5",
+          subagent: { modelId: "claude-haiku-5-5", effort: "high" },
+        },
+        digest,
+      ),
+    ).toMatchObject({
+      requestedModelId: "claude-sonnet-5-5",
+      subagent: { modelId: "claude-haiku-5-5" },
+    });
+    expect(() =>
+      defineClaudeRuntimeProfile(
+        { ...claude, requestedModelId: "gpt-6-sol" as never },
+        digest,
+      ),
+    ).toThrow();
+  });
 });
