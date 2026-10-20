@@ -101,6 +101,12 @@ export type CampaignSummary = {
   }[];
   /** Set when the campaign stopped early and can be resumed with the same id. */
   readonly stopped?: "provider-limit" | "incomplete" | "operator";
+  /**
+   * With `stopped: "provider-limit"`, the runtimes whose limit stopped their
+   * targets while the other runtime's targets went on. Absent, the limit
+   * stopped the whole campaign.
+   */
+  readonly limitedRuntimes?: readonly string[];
   readonly targets: readonly {
     readonly targetId: string;
     readonly version: string;
@@ -134,6 +140,8 @@ export interface TargetLimit {
   readRuntime?(runtime: string): Promise<number | null>;
   /** One runtime's effective limit, on the first read and each time it changes. */
   reportRuntime?(runtime: string, limit: number): void;
+  /** Runtimes in provider backoff: none of their targets starts until they leave it. */
+  heldRuntimes?(): ReadonlySet<string>;
   readonly pollMs?: number;
 }
 
@@ -144,6 +152,12 @@ export interface TargetLimit {
 export interface RuntimeTargetCaps<Target> {
   readonly runtimeOf: (target: Target) => string;
   readonly ceilings: Readonly<Record<string, number>>;
+  /**
+   * A provider limit in discovery stops only the targets of the runtime that
+   * hit it; the other runtime's targets keep starting. Absent, it stops the
+   * whole campaign.
+   */
+  readonly providerLimitPerRuntime?: boolean;
 }
 
 type Claim =
@@ -189,17 +203,18 @@ function targetScheduler<Target>(options: {
       }
       byRuntime.set(runtime, limit);
     }
-    return { total, byRuntime };
+    return { total, byRuntime, held: live?.heldRuntimes?.() ?? new Set() };
   };
   return {
     /** Takes the first startable index out of `pending`, or waits so the caller checks again. */
     async claim(pending: number[]): Promise<Claim> {
-      const { total, byRuntime } = await limits();
+      const { total, byRuntime, held } = await limits();
       // Everything below runs without an await, so two workers never take the same target.
       if (pending.length === 0) return { kind: "empty" };
       if (active < total) {
         const position = pending.findIndex((index) => {
           const runtime = runtimes[index];
+          if (runtime !== undefined && held.has(runtime)) return false;
           const limit =
             runtime === undefined ? undefined : byRuntime.get(runtime);
           return (
@@ -294,7 +309,27 @@ export async function runCampaignPipeline<
   };
   let stopped: CampaignSummary["stopped"];
   let fatalError: Error | undefined;
-  const requestStop = (reason: NonNullable<CampaignSummary["stopped"]>) => {
+  let selected: readonly Target[] = [];
+  // Selection order; a target leaves when it starts.
+  const pending: number[] = [];
+  const limitedRuntimes = new Set<string>();
+  const runtimeOf = (target: Target): string | undefined =>
+    options.runtimeCaps?.providerLimitPerRuntime === true
+      ? options.runtimeCaps.runtimeOf(target)
+      : undefined;
+  /** With a runtime, a provider limit stops only that runtime's pending targets. */
+  const requestStop = (
+    reason: NonNullable<CampaignSummary["stopped"]>,
+    runtime?: string,
+  ) => {
+    if (reason === "provider-limit" && runtime !== undefined) {
+      limitedRuntimes.add(runtime);
+      // They stay unstarted for the resume; synchronous, so no claim takes one.
+      for (let at = pending.length - 1; at >= 0; at--)
+        if (runtimeOf(selected[pending[at]!]!) === runtime)
+          pending.splice(at, 1);
+      return;
+    }
     if (reason === "provider-limit" || stopped === undefined) stopped = reason;
   };
 
@@ -526,13 +561,15 @@ export async function runCampaignPipeline<
           discovered.stoppedBy === "provider-limit" &&
           discovered.runCount > 0
         ) {
-          requestStop("provider-limit");
+          const runtime = runtimeOf(target);
+          requestStop("provider-limit", runtime);
           await append({
             ...base,
             identity: `campaign-stopped-${options.newId()}`,
             occurredAt: at(),
             type: "campaign-stopped",
             reason: "provider-limit",
+            ...(runtime === undefined ? {} : { runtime }),
           });
         } else if (
           discovered.stoppedBy === "incomplete" &&
@@ -671,13 +708,15 @@ export async function runCampaignPipeline<
         discovered.stoppedBy === "provider-limit" &&
         discovered.runCount > 0
       ) {
-        requestStop(discovered.stoppedBy);
+        const runtime = runtimeOf(target);
+        requestStop(discovered.stoppedBy, runtime);
         await append({
           ...base,
           identity: `campaign-stopped-${options.newId()}`,
           occurredAt: at(),
           type: "campaign-stopped",
           reason: discovered.stoppedBy,
+          ...(runtime === undefined ? {} : { runtime }),
         });
         result.target = { ...summary, verifications: [] };
         return;
@@ -916,12 +955,9 @@ export async function runCampaignPipeline<
     return result;
   };
 
-  const selected = (await pipeline.select()).filter(
-    (target) => !isCompleted(target),
-  );
+  selected = (await pipeline.select()).filter((target) => !isCompleted(target));
   const results: (TargetResult | undefined)[] = Array(selected.length);
-  // Selection order; a target leaves when it starts.
-  const pending = selected.map((_, index) => index);
+  pending.push(...selected.map((_, index) => index));
   const scheduler = targetScheduler({
     ceiling: maxConcurrentTargets,
     selected,
@@ -982,11 +1018,16 @@ export async function runCampaignPipeline<
   const skipped = results.flatMap((result) =>
     result?.skipped === undefined ? [] : [result.skipped],
   );
+  // A whole-campaign stop keeps its old summary; a runtime stop names its runtimes.
+  const runtimeStopped =
+    stopped !== "provider-limit" && limitedRuntimes.size > 0;
+  if (runtimeStopped) stopped = "provider-limit";
   return {
     campaignId,
     targets,
     skipped,
     ...(stopped === undefined ? {} : { stopped }),
+    ...(runtimeStopped ? { limitedRuntimes: [...limitedRuntimes].sort() } : {}),
   };
 }
 

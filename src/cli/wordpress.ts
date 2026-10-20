@@ -953,7 +953,8 @@ async function runWordPressCampaign(
     ...(input.targetLimit === undefined
       ? {}
       : { targetLimit: input.targetLimit }),
-    ...(config.resources.maxConcurrentTargetsByRuntime === undefined
+    ...(config.resources.maxConcurrentTargetsByRuntime === undefined &&
+    config.discovery.runtimeShare === undefined
       ? {}
       : {
           runtimeCaps: {
@@ -964,6 +965,9 @@ async function runWordPressCampaign(
                 config.discovery.runtimeShare,
               ),
             ceilings: wordPressRuntimeCeilings(config),
+            // Only a split campaign keeps one runtime going past the other's limit.
+            providerLimitPerRuntime:
+              config.discovery.runtimeShare !== undefined,
           },
         }),
     ...(input.stop === undefined ? {} : { stop: input.stop }),
