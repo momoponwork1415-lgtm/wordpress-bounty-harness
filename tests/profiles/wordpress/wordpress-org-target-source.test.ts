@@ -5,7 +5,12 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { openSnapshot } from "../../../src/snapshot/index.js";
+import { storeTargetSkipDiagnostic } from "../../../src/cli/skip-diagnostic.js";
+import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
+import {
+  openSnapshot,
+  SourceAcquisitionError,
+} from "../../../src/snapshot/index.js";
 import {
   createWordPressOrgFetchAdapter,
   openWordPressOrgTargetSource,
@@ -932,6 +937,66 @@ Version: 2.4.1
       ).resolves.toMatchObject({
         status: "ready",
         intake: { packet: { mainPluginFile: "policy-plugin.php" } },
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the intake reason of a deferred target in the skip diagnostic", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wporg-target-deferred-"));
+    // Two plugin headers and neither file is named after the slug.
+    const pluginArchive = archive({
+      "two-headers/first.php":
+        "<?php\n/* Plugin Name: First\nVersion: 1.0.0\n*/\n",
+      "two-headers/second.php":
+        "<?php\n/* Plugin Name: Second\nVersion: 1.0.0\n*/\n",
+    });
+    try {
+      const source = openWordPressOrgTargetSource({
+        storageDirectory: directory,
+        adapter: fixtureAdapter("two-headers", "1.0.0", pluginArchive),
+      });
+      const observed = await source.observe({
+        kind: "wordpress-org-target-observe",
+        schemaVersion: 1,
+        slug: "two-headers",
+      });
+      if (observed.status !== "observed")
+        throw new Error("Expected an observed WordPress.org target");
+      const error: unknown = await openWordPressOrgSnapshotSource({
+        targetSource: source,
+        storageDirectory: directory,
+      })
+        .acquire({
+          kind: "wordpress-org-target-acquire",
+          schemaVersion: 1,
+          observationRef: observed.observationRef,
+          requestedVersion: "1.0.0",
+          policy: intakePolicy,
+        })
+        .then(
+          () => null,
+          (thrown: unknown) => thrown,
+        );
+      expect(error).toBeInstanceOf(SourceAcquisitionError);
+      const store = new PrivateArtifactStore({
+        rootDirectory: join(directory, "evidence"),
+        maxEntries: 10,
+        maxBytes: 100_000,
+      });
+      const stored = await storeTargetSkipDiagnostic(store, error);
+      expect(stored.reason).toBe("deferred");
+      const file = await store.readFile(
+        stored.digest,
+        "target-skip-diagnostic.json",
+        10_000,
+      );
+      if (file.status !== "resolved") throw new Error("Diagnostic is missing");
+      expect(JSON.parse(file.bytes.toString("utf8"))).toEqual({
+        kind: "deferred",
+        reason: "main-plugin-file-ambiguous",
+        detail: { status: "deferred", reasons: ["main-plugin-file-ambiguous"] },
       });
     } finally {
       await rm(directory, { recursive: true, force: true });
