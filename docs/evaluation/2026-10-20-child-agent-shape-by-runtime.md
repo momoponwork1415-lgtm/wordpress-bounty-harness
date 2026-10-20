@@ -67,7 +67,7 @@ Codex の子は Root と同じ規模の「もう 1 本の探索者」で、1 時
 
 | 組み合わせ | 必要なもの |
 | --- | --- |
-| Codex `gpt-6-luna` / effort `max` | host 設定の `runtimeProfile` だけ。`gpt-6-luna` と `max` は `agent-runtime-profile.ts` の enum にある。profile digest が変わるので台帳で区別できる |
+| Codex `gpt-6-luna` / effort `max` | コード変更が要る。`gpt-6-luna` と `max` は `agent-runtime-profile.ts` の enum にあるが、協調 Trial の admission（`admitCooperativeRuntimeProfile`）は Root を `gpt-6-sol`（`codexModelCatalog.production`）に固定し、子のモデルと effort が Root と同じことも要求する。Root と子を揃えて luna / max にするには production model の固定を外す PR 1 本、子だけ変えるには子の一致検査も外す必要がある。profile digest が変わるので台帳で区別はできる |
 | Claude `claude-sonnet-5-5` / `high`（Root、子、または子だけ） | コード変更が要る。Claude の profile schema は `requestedModelId` と `subagent.modelId` を `claude-opus-5-5` の literal に固定しており、broker も結び付けたモデル以外を `model-not-admitted` で断る。enum を広げ、子のモデル検査（transcript のモデル名照合）を profile に合わせる PR 1 本 |
 | 「短命な子」を Codex 側で | 今の配線では不可。Codex の子は常駐スレッドで、one-shot にする配線は無い |
 
