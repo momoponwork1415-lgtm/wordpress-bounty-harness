@@ -170,7 +170,7 @@ harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <
 | 2 | skill | `wbh-review`（要約と accept / reject / defer の提案。`verification.status` が `incomplete` なら 3〜8 を飛ばし `defer` の提案で終える） |
 | 3 | skill | `wbh-dedupe`（重複の 3 値と根拠） |
 | 4 | 所有者 | WordPress.org の plugin 頁で最新版を確認（export に `target.versions.latestObserved` があればそれを使う） |
-| 5 | 所有者 | `harness review reverify --campaign <id> --finding <id> --config <path> --version <最新版>` |
+| 5 | 所有者 | `harness review reverify --campaign <id> --finding <id> --config <path> --handoff <dir>`（確認した最新版を自動選択。版を明示して固定版と比較するときは `--version <版>`） |
 | 6 | 所有者 | `harness review scope --campaign <id> --finding <id>`（`wordfence in-scope` のものだけ先へ） |
 | 7 | 所有者 | `harness lab up --for-review --campaign <id> --finding <id>` で手で再現する |
 | 8 | 所有者 | `harness review decide ... --reproduced match --reproduce-minutes <n>`（skill が示したコマンドを確かめ、手での再現の結果を足して打つ。再現の記録は判断の前に台帳へ入る） |
@@ -187,6 +187,7 @@ harness review decide --campaign <id> --finding <id> --decision accept|reject|de
 harness review dedupe --campaign <id> --finding <id>          # ローカルWordfence履歴mirrorと照合
 harness review scope --campaign <id> --finding <id>           # Wordfence / Patchstack ごとに in-scope / out-of-scope / ambiguous
 harness review reverify --campaign <id> --finding <id> --config <path>   # 最新版を新しいLabで検証し直す
+harness review reverify --campaign <id> --finding <id> --config <path> --handoff <dir> [--port 8080] [--db-port 3307] # 新しい版のLabをskillへ渡し、判定器で再検証
 harness review reverify --campaign <id> --finding <id> --config <new-scenario.json> # incompleteを元のSnapshotで再試行
 harness review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]
 harness review authorize --candidate <id> --draft <digest> --to <destination>
