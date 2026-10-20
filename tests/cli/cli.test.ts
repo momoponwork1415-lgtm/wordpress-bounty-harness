@@ -3062,6 +3062,63 @@ describe("harness CLI vertical slice", () => {
     expect(funnel.stdout).toContain("campaign *");
   });
 
+  it("lists held Finding candidates with their issue paths and codes", async () => {
+    const { run, ledger, store, configPath } = await harness();
+    const warm = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-warm",
+      "--config",
+      configPath,
+    );
+    expect(warm.code).toBe(0);
+    const empty = await run("review", "held", "--campaign", "campaign-held");
+    expect(empty.code).toBe(0);
+    expect(empty.stdout).toContain("no held findings");
+    const candidate = await store().putFiles({
+      "candidate.json": Buffer.from(JSON.stringify({ impact: "stored-xss" })),
+    });
+    const held = (
+      candidateKind: "finding" | "lead",
+      candidateIndex: number,
+      extra: object,
+    ) =>
+      ledger().append({
+        schemaVersion: 1,
+        identity: `held-${candidateKind}-${candidateIndex}`,
+        campaignId: "campaign-held",
+        snapshotDigest: `sha256:${"b".repeat(64)}`,
+        occurredAt: "2026-10-20T00:00:00Z",
+        type: "candidate-held",
+        runId: "run-1",
+        candidateKind,
+        candidateIndex,
+        artifacts: [{ kind: "candidate", digest: candidate }],
+        ...extra,
+      } as never);
+    // An event from before issue codes were recorded reads unchanged.
+    await held("finding", 0, {
+      issuePaths: ["configurationPrecondition"],
+      impact: "stored-xss",
+    });
+    await held("finding", 1, {
+      issuePaths: ["attackerPosition", "impact"],
+      issueCodes: ["invalid_value", "invalid_value"],
+      impact: "unclassified",
+    });
+    await held("lead", 0, { issuePaths: ["summary"] });
+    const listed = await run("review", "held", "--campaign", "campaign-held");
+    expect(listed.code).toBe(0);
+    const lines = listed.stdout.split("\n").filter((line) => line !== "");
+    expect(lines).toEqual([
+      `held  stored-xss  ${candidate}  run-1#0  issues: configurationPrecondition  ${store().contentPath(candidate)}`,
+      `held  unclassified  ${candidate}  run-1#1  issues: attackerPosition(invalid_value), impact(invalid_value)  ${store().contentPath(candidate)}`,
+    ]);
+    expect((await run("review", "held")).code).not.toBe(0);
+  });
+
   it("verifies a child Finding on resume and runs the provider-limited Trial again", async () => {
     const { run, configPath, prompts, ledger } = await harness({
       limitOnCalls: [1],

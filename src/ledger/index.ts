@@ -320,6 +320,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     candidateIndex: z.number().int().nonnegative(),
     parserVersion: id.optional(),
     issuePaths: z.array(z.string().max(256)),
+    /** Zod issue codes, index-aligned with issuePaths; absent on events before 2026-10-20. */
+    issueCodes: z.array(id).optional(),
     impact: id.optional(),
     primitive: id.optional(),
     missingEdge: id.optional(),

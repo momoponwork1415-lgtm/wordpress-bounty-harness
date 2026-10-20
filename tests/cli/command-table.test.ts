@@ -45,6 +45,7 @@ const PINNED_USAGE = [
   // Added after the table (ADR 0036); registered last so the pinned lines above stay in place.
   "  campaign resume --campaign <id> --run <runId> --config <path>",
   "  continuous concurrency [<n>] [--runtime <name>] --config <path>",
+  "  review held --campaign <id>",
 ].join("\n");
 
 const directories: string[] = [];

@@ -48,3 +48,29 @@ it("normalizes a textual source trace and observation while retaining strict adm
     ),
   ).toThrow();
 });
+
+it("leaves valid fields and ambiguous labels to the schema", () => {
+  const raw = {
+    attackerPosition: "unauthenticated or subscriber",
+    impact: "Data loss after stored XSS",
+    configurationPrecondition: `${"p".repeat(999)}\u{1F600}`,
+    claim: "c".repeat(4000),
+  };
+  const normalized = normalizeWordPressCandidate(raw);
+  expect(normalized.changes).toEqual([
+    { path: "configurationPrecondition", operation: "text-truncated" },
+  ]);
+  // The cut does not split a surrogate pair.
+  expect(normalized.value).toMatchObject({
+    attackerPosition: raw.attackerPosition,
+    impact: raw.impact,
+    configurationPrecondition: "p".repeat(999),
+    claim: raw.claim,
+  });
+  expect(
+    normalizeWordPressCandidate({
+      impact: { kind: "sqli", note: "two strings" },
+      attackerPosition: "customer",
+    }).value,
+  ).toMatchObject({ impact: "sqli", attackerPosition: "customer" });
+});

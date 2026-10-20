@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
   createNativeRunReceipt,
@@ -369,4 +370,93 @@ it("records the same report identically through the campaign and child recovery"
           ({ event }) => event.type === "finding-recorded" && event.category,
         ),
     ).toEqual(["account-takeover"]);
+});
+
+// 2026-10-18 以降の本番で保留された 6 件の形（2026-10-20 報告 §2.7）を、本文を使わずに再現する。
+async function recordDirectly(findings: unknown[]) {
+  const { evidence, ledger } = await stores();
+  const report = await recordWordPressReport(
+    { findings, leads: [] },
+    {
+      ledger,
+      evidence,
+      base: {
+        schemaVersion: 1,
+        campaignId: "campaign-1",
+        snapshotDigest: digest,
+        occurredAt: now,
+      },
+      runId: RUN_ID,
+      trialId: RUN_ID,
+      snapshotDigest: digest,
+      reportArtifactDigest: digest,
+    },
+  );
+  const events = candidateEvents(ledger);
+  const changes = events.flatMap((event) =>
+    event.type === "candidate-normalized" ? event.changes : [],
+  );
+  return { evidence, events, changes, report };
+}
+
+it("records a Finding whose precondition is over the schema limit and keeps the raw candidate", async () => {
+  const long = "p".repeat(1100);
+  const { evidence, events, changes } = await recordDirectly([
+    { ...finding, impact: "stored-xss", configurationPrecondition: long },
+  ]);
+  expect(events.map((event) => event.type)).toEqual([
+    "candidate-normalized",
+    "finding-recorded",
+  ]);
+  expect(changes).toEqual([
+    { path: "configurationPrecondition", operation: "text-truncated" },
+  ]);
+  const raw = events[0]!.artifacts[0]!.digest;
+  const stored = await evidence.readJson(
+    raw,
+    "candidate.json",
+    z.object({ configurationPrecondition: z.string() }),
+    1024 * 1024,
+  );
+  expect(
+    stored.status === "resolved" &&
+      stored.value.configurationPrecondition.length,
+  ).toBe(1100);
+});
+
+it("records a Finding whose attacker position and impact are free text with one label", async () => {
+  const { events, changes } = await recordDirectly([
+    {
+      ...finding,
+      attackerPosition: "Authenticated Subscriber (any registered account)",
+      impact: "Stored XSS in an administrator screen, a step towards RCE",
+    },
+    { ...finding, claim: "Second effect", impact: { kind: "stored-xss" } },
+  ]);
+  expect(
+    events
+      .filter((event) => event.type === "finding-recorded")
+      .map((event) => event.type === "finding-recorded" && event.category),
+  ).toEqual(["stored-xss", "stored-xss"]);
+  expect(changes).toEqual([
+    { path: "attackerPosition", operation: "attacker-position-coerced" },
+    { path: "impact", operation: "impact-label-coerced" },
+    { path: "impact", operation: "impact-lifted" },
+  ]);
+});
+
+it("holds a candidate whose position names two roles and records the issue codes", async () => {
+  const { events, report } = await recordDirectly([
+    { ...finding, attackerPosition: "subscriber or customer" },
+  ]);
+  expect(report.candidates.map((candidate) => candidate.outcome)).toEqual([
+    "held",
+  ]);
+  expect(events.find((event) => event.type === "candidate-held")).toMatchObject(
+    {
+      issuePaths: ["attackerPosition"],
+      issueCodes: ["invalid_value"],
+      impact: "account-takeover",
+    },
+  );
 });
