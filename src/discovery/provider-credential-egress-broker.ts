@@ -46,6 +46,7 @@ const modelSchema = z.enum([
   "gpt-6-luna",
   ...claudeModelSchema.options,
 ]);
+const claudeModels: ReadonlySet<string> = new Set(claudeModelSchema.options);
 const protocolSchema = z.enum([
   "responses",
   "chat-completions",
@@ -63,6 +64,12 @@ export const providerCredentialEgressGrantRequestSchema = z
     schemaVersion: z.literal(1),
     runtimeProfileDigest: digestSchema,
     model: modelSchema,
+    /**
+     * The children's model when the profile binds one apart from the Root's
+     * (#418). The broker then admits exactly these two models; without it,
+     * only `model`.
+     */
+    subagentModel: modelSchema.optional(),
     protocol: protocolSchema,
     maxRequests: z.number().int().positive().max(10_000),
     maxRequestBytes: z
@@ -99,6 +106,8 @@ export interface ProviderCredentialEgressGrant {
   readonly authorization: string;
   readonly dockerNetworkName: string;
   readonly model: string;
+  /** The children's model, present when the grant request named one. */
+  readonly subagentModel?: string;
   readonly protocol: ProviderApiProtocol;
   readonly expiresAt: string;
 }
@@ -157,6 +166,8 @@ const providerCredentialEgressReceiptBodySchema = z.strictObject({
     ANTHROPIC_UPSTREAM_ORIGIN,
   ]),
   model: modelSchema,
+  /** Present when the grant admitted a children's model besides `model`. */
+  subagentModel: modelSchema.optional(),
   protocol: protocolSchema,
   maxRequests: z.number().int().positive().max(10_000),
   maxRequestBytes: z
@@ -452,10 +463,15 @@ export function createProviderCredentialEgressBroker(
     ) {
       const request =
         providerCredentialEgressGrantRequestSchema.parse(requestValue);
-      // A Claude token only ever relays the Messages protocol of the Claude model.
+      // A Claude token only ever relays the Messages protocol of Claude
+      // models, and every other credential only non-Claude models.
+      const models = [
+        request.model,
+        ...(request.subagentModel === undefined ? [] : [request.subagentModel]),
+      ];
       if (
         anthropic !== (request.protocol === "anthropic-messages") ||
-        anthropic !== (request.model === "claude-opus-5-5")
+        models.some((model) => anthropic !== claudeModels.has(model))
       )
         throw new Error("Provider protocol, model and credential differ");
       const startedAt = clock();
@@ -502,6 +518,9 @@ export function createProviderCredentialEgressBroker(
           brokerImage: options.brokerImage,
           upstreamOrigin,
           model: request.model,
+          ...(request.subagentModel === undefined
+            ? {}
+            : { subagentModel: request.subagentModel }),
           protocol: request.protocol,
           maxRequests: request.maxRequests,
           maxRequestBytes: request.maxRequestBytes,
@@ -697,6 +716,14 @@ export function createProviderCredentialEgressBroker(
               `PROVIDER_GRANT_TOKEN=${grantToken}`,
               "--env",
               `PROVIDER_MODEL=${request.model}`,
+              // A second variable, not a list in PROVIDER_MODEL, so a proxy
+              // that reads one model keeps admitting exactly that one.
+              ...(request.subagentModel === undefined
+                ? []
+                : [
+                    "--env",
+                    `PROVIDER_SUBAGENT_MODEL=${request.subagentModel}`,
+                  ]),
               "--env",
               `PROVIDER_PROTOCOL=${request.protocol}`,
               "--env",
@@ -811,6 +838,9 @@ export function createProviderCredentialEgressBroker(
                         authorization: `Bearer ${grantToken}`,
                         dockerNetworkName: networkName,
                         model: request.model,
+                        ...(request.subagentModel === undefined
+                          ? {}
+                          : { subagentModel: request.subagentModel }),
                         protocol: request.protocol,
                         expiresAt: request.expiresAt,
                       });

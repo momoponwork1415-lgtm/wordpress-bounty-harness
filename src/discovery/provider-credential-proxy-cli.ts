@@ -94,6 +94,10 @@ async function main(): Promise<void> {
     ...(await credential()),
     grantToken: requiredEnvironment("PROVIDER_GRANT_TOKEN"),
     model: requiredEnvironment("PROVIDER_MODEL"),
+    // The children's model, set by the broker only when the grant binds one.
+    ...(process.env.PROVIDER_SUBAGENT_MODEL === undefined
+      ? {}
+      : { subagentModel: requiredEnvironment("PROVIDER_SUBAGENT_MODEL") }),
     protocol: protocol(),
     maxRequests: positiveInteger("PROVIDER_MAX_REQUESTS"),
     maxRequestBytes: positiveInteger("PROVIDER_MAX_REQUEST_BYTES"),
