@@ -7,6 +7,20 @@ import {
 
 export type TargetSkipReason = SourceAcquisitionFailureKind | "other";
 
+/** The profile's reason code, lifted beside `kind` so the operator reads why without unpacking `detail`. */
+function reasonOf(detail: unknown): { readonly reason?: string } {
+  if (typeof detail !== "object" || detail === null) return {};
+  const { reason, reasons } = detail as Record<string, unknown>;
+  if (typeof reason === "string") return { reason };
+  if (
+    Array.isArray(reasons) &&
+    reasons.length > 0 &&
+    reasons.every((item) => typeof item === "string")
+  )
+    return { reason: reasons.join(",") };
+  return {};
+}
+
 /** Never put an exception or URL in the ledger; store the detail privately. */
 export async function storeTargetSkipDiagnostic(
   store: PrivateArtifactStore,
@@ -14,7 +28,11 @@ export async function storeTargetSkipDiagnostic(
 ): Promise<{ readonly reason: TargetSkipReason; readonly digest: string }> {
   const diagnostic =
     error instanceof SourceAcquisitionError
-      ? { kind: error.kind, detail: error.diagnostic }
+      ? {
+          kind: error.kind,
+          ...reasonOf(error.diagnostic),
+          detail: error.diagnostic,
+        }
       : error instanceof Error
         ? {
             name: error.name,

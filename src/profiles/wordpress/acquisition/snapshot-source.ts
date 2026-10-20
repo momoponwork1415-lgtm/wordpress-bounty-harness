@@ -82,6 +82,10 @@ export function openWordPressOrgSnapshotSource(options: {
             status: acquired.status,
             ...("reason" in acquired ? { reason: acquired.reason } : {}),
             ...("reasons" in acquired ? { reasons: acquired.reasons } : {}),
+            // The intake receipt says why the archive was deferred (#284).
+            ...("intake" in acquired
+              ? { reasons: acquired.intake.reasons }
+              : {}),
             ...("diagnostic" in acquired && acquired.diagnostic !== undefined
               ? { transport: acquired.diagnostic }
               : {}),

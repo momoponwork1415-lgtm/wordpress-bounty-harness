@@ -11,6 +11,7 @@ import {
   type ResumeRow,
   type StopRow,
   type FunnelCounts,
+  type LedgerEventV1,
 } from "../ledger/index.js";
 import {
   exportReviewBundle,
@@ -1521,6 +1522,50 @@ const COMMANDS: readonly Command[] = [
     "continuous concurrency",
     "continuous concurrency [<n>] [--runtime <name>] --config <path>",
   ),
+  // 2026-10-20: held Finding candidates (ADR 0018) had no listing; registered last as above.
+  command({
+    name: "review held",
+    usage: ["review held --campaign <id>"],
+    options: { campaign: STR },
+    handler: async ({ values, state, print }) => {
+      const campaignId = required(values.campaign, "campaign");
+      // As in the funnel, a later normalization of the same candidate clears its hold.
+      const held = new Map<
+        string,
+        Extract<LedgerEventV1, { type: "candidate-held" }>
+      >();
+      const records = (["candidate-normalized", "candidate-held"] as const)
+        .flatMap((type) => state.ledger.readAll({ campaignId, type }))
+        .sort((a, b) => a.sequence - b.sequence);
+      for (const { event } of records) {
+        if (
+          (event.type !== "candidate-normalized" &&
+            event.type !== "candidate-held") ||
+          event.candidateKind !== "finding"
+        )
+          continue;
+        const key = `${event.runId}\0${event.candidateIndex}`;
+        if (event.type === "candidate-held") held.set(key, event);
+        else held.delete(key);
+      }
+      if (held.size === 0) print(["no held findings"]);
+      for (const event of held.values()) {
+        const candidate = event.artifacts.find(
+          (artifact) => artifact.kind === "candidate",
+        )?.digest;
+        const issues = event.issuePaths
+          .map((path, index) => {
+            const code = event.issueCodes?.[index];
+            return code === undefined ? path : `${path}(${code})`;
+          })
+          .join(", ");
+        print([
+          `held  ${event.impact ?? "unclassified"}  ${candidate ?? "(candidate unavailable)"}  ${event.runId}#${event.candidateIndex}  issues: ${issues}  ${candidate === undefined ? "" : state.store.contentPath(candidate)}`.trimEnd(),
+        ]);
+      }
+      return 0;
+    },
+  }),
 ];
 
 const COMMAND_BY_NAME = commandIndex(COMMANDS);
