@@ -33,7 +33,7 @@ function paths(schema: z.ZodType, prefix = ""): string[] {
 }
 
 describe("review skills", () => {
-  it.each(["wbh-review", "wbh-dedupe", "wbh-report"])(
+  it.each(["wbh-review", "wbh-dedupe", "wbh-report", "wbh-destination"])(
     "%s reads only fields that review-export/v1 has",
     async (skill) => {
       const allowed = new Set(paths(reviewExportV1Schema));
