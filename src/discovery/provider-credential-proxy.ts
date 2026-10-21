@@ -65,6 +65,11 @@ export type OpenProviderCredentialProxyOptions = {
   readonly upstreamOrigin: string;
   readonly grantToken: string;
   readonly model: string;
+  /**
+   * The children's model the grant also admits (#418). A request is admitted
+   * only when it names `model` or this one.
+   */
+  readonly subagentModel?: string;
   readonly protocol: ProviderApiProtocol;
   readonly maxRequests: number;
   readonly maxRequestBytes: number;
@@ -95,6 +100,13 @@ export interface ProviderCredentialProxy {
   readonly server: NetServer;
   /** Present in ChatGPT mode, where the main listener speaks TLS. */
   readonly healthOrigin?: string;
+}
+
+/** The models one grant admits: the Root's, and the children's when bound apart. */
+function admittedModels(options: OpenProviderCredentialProxyOptions): string[] {
+  return options.subagentModel === undefined
+    ? [options.model]
+    : [options.model, options.subagentModel];
 }
 
 function protocolPath(protocol: ProviderApiProtocol): string {
@@ -213,6 +225,7 @@ function validateOptions(options: OpenProviderCredentialProxyOptions): void {
         options.chatgpt.healthPort > 65_535) ||
     options.grantToken.length < 8 ||
     options.model.length === 0 ||
+    options.subagentModel?.length === 0 ||
     !Number.isSafeInteger(options.maxRequests) ||
     options.maxRequests <= 0 ||
     !Number.isSafeInteger(options.maxRequestBytes) ||
@@ -302,6 +315,7 @@ function chatgptListener(
   counters: ProxyCounters,
 ): RequestListener {
   const upstreamOrigin = new URL(options.upstreamOrigin);
+  const models = admittedModels(options);
   return async (request, response) => {
     try {
       if (!bearerMatches(request.headers.authorization, options.grantToken)) {
@@ -358,7 +372,8 @@ function chatgptListener(
         typeof payload !== "object" ||
         payload === null ||
         !("model" in payload) ||
-        payload.model !== options.model
+        typeof payload.model !== "string" ||
+        !models.includes(payload.model)
       ) {
         sendJson(response, 403, "model-not-admitted");
         return;
@@ -435,6 +450,7 @@ function apiKeyListener(
 ): RequestListener {
   const path = protocolPath(options.protocol);
   const upstreamOrigin = new URL(options.upstreamOrigin);
+  const models = admittedModels(options);
   return async (request, response) => {
     try {
       if (request.method === "GET" && request.url === "/healthz") {
@@ -470,7 +486,8 @@ function apiKeyListener(
         typeof payload !== "object" ||
         payload === null ||
         !("model" in payload) ||
-        payload.model !== options.model
+        typeof payload.model !== "string" ||
+        !models.includes(payload.model)
       ) {
         sendJson(response, 403, "model-not-admitted");
         return;
@@ -546,6 +563,7 @@ function anthropicListener(
   counters: ProxyCounters,
 ): RequestListener {
   const upstreamOrigin = new URL(options.upstreamOrigin);
+  const models = admittedModels(options);
   return async (request, response) => {
     try {
       if (request.method === "GET" && request.url === "/healthz") {
@@ -591,7 +609,7 @@ function anthropicListener(
         sendJson(response, 400, "request-json-invalid");
         return;
       }
-      const decision = admitAnthropicRequest(payload, options.model);
+      const decision = admitAnthropicRequest(payload, models);
       if (decision.status === "refused") {
         process.stderr.write(`provider-egress refused=${decision.reason}\n`);
         sendJson(response, 403, decision.reason);
