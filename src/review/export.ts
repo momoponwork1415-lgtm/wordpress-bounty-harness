@@ -38,6 +38,14 @@ const httpRowSchema = z.strictObject({
   queryKeys: z.array(z.string().max(128)).max(64),
   status: z.number().int().nullable(),
 });
+/** One file in Private Evidence: where it is on this host and the sha256 of its bytes. */
+const fileRefSchema = z.strictObject({ path: z.string().min(1), digest });
+const firingStatuses = [
+  "observed",
+  "not-observed",
+  "visit-failed",
+  "not-recorded",
+] as const;
 
 /** A profile summarizes its own state-diff file into this shape; values never appear. */
 export const stateDiffSummarySchema = z.strictObject({
@@ -183,6 +191,36 @@ export const reviewExportV1Schema = z.strictObject({
     /** The verification predates the observer, or the Finding is unverified. */
     z.strictObject({ status: z.literal("unavailable") }),
   ]),
+  /**
+   * #437: the Verifier's own record of the attempt and what the Harness-owned
+   * observer saw on the victim side. Observations, not a verdict: the judge's
+   * result stays in `verification`. Null when no recipe was recorded.
+   */
+  observations: z
+    .strictObject({
+      /** The Verifier's narrative; a record of what it did, never proof. */
+      steps: fileRefSchema.nullable(),
+      victim: z
+        .strictObject({
+          role: z.string().max(64),
+          /** Pages the observer was asked to open; query values stay in the recipe. */
+          pages: z
+            .array(
+              z.strictObject({
+                path: z.string().max(2048),
+                queryKeys: z.array(z.string().max(128)).max(64),
+                actions: z.number().int().nonnegative(),
+              }),
+            )
+            .max(5),
+          /** What the observer recorded while it opened the pages. */
+          firing: z.enum(firingStatuses),
+          record: fileRefSchema.nullable(),
+          screenshot: z.string().nullable(),
+        })
+        .nullable(),
+    })
+    .nullable(),
   review: z.strictObject({
     decisions: z.array(
       z.strictObject({
@@ -271,6 +309,33 @@ export interface HttpEvidenceRecord {
   }[];
 }
 
+/**
+ * How a profile reads the Verifier's recipe and its own observer's record of
+ * the victim side (#437). Paths, digests and the observer's status cross this
+ * seam; bodies, payloads and query values do not.
+ */
+export interface VerifierRecordReader {
+  read(input: {
+    readonly recipeDigest: string;
+    /** The judge's evidence artifact, where the observer's record lives. */
+    readonly evidenceDigest: string | null;
+  }): Promise<VerifierRecord>;
+}
+export interface VerifierRecord {
+  readonly steps: z.infer<typeof fileRefSchema> | null;
+  readonly victim: {
+    readonly role: string;
+    /** A path or URL per page; Review reduces its query string to names. */
+    readonly pages: readonly {
+      readonly address: string;
+      readonly actions: number;
+    }[];
+    readonly firing: (typeof firingStatuses)[number];
+    readonly record: z.infer<typeof fileRefSchema> | null;
+    readonly screenshot: string | null;
+  } | null;
+}
+
 const findingRecordSchema = z.looseObject({
   claim: z.string(),
   attackerPosition: z.string(),
@@ -354,6 +419,7 @@ export async function exportReviewBundle(options: {
   readonly findingId: string;
   readonly stateDiff?: StateDiffReader;
   readonly httpEvidence?: HttpEvidenceReader;
+  readonly verifierRecord?: VerifierRecordReader;
   readonly clock?: () => Date;
   /** One public observation of the target's newest version; failures become null. */
   readonly observeLatestVersion?: (
@@ -477,6 +543,33 @@ export async function exportReviewBundle(options: {
       ? verification.result.evidenceDigest
       : undefined;
   const http = await httpSummary(options.httpEvidence, evidenceDigest);
+  const recipeRef = verification?.artifacts.find(
+    (item) => item.kind === "recipe",
+  );
+  const verifierRecord =
+    recipeRef === undefined || options.verifierRecord === undefined
+      ? null
+      : await options.verifierRecord.read({
+          recipeDigest: recipeRef.digest,
+          evidenceDigest: evidenceDigest ?? null,
+        });
+  const victim = verifierRecord?.victim ?? null;
+  const observations: ReviewExportV1["observations"] =
+    verifierRecord === null
+      ? null
+      : {
+          steps: verifierRecord.steps,
+          victim:
+            victim === null
+              ? null
+              : {
+                  ...victim,
+                  pages: victim.pages.slice(0, 5).map((page) => {
+                    const { path, queryKeys } = httpRow("", page.address, null);
+                    return { path, queryKeys, actions: page.actions };
+                  }),
+                },
+        };
 
   let refutation: ReviewExportV1["refutation"] = null;
   const refutationDigest =
@@ -668,6 +761,7 @@ export async function exportReviewBundle(options: {
     http,
     refutation,
     labStateDiff,
+    observations,
     review: {
       decisions: decisions.map((event) => ({
         decision: event.decision,

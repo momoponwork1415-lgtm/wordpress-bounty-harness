@@ -27,6 +27,8 @@ export {
   type ReviewExportV1,
   type StateDiffReader,
   type StateDiffSummary,
+  type VerifierRecord,
+  type VerifierRecordReader,
 } from "./export.js";
 
 import {

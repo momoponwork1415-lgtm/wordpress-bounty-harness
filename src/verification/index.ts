@@ -258,6 +258,8 @@ type VerificationRun<
   readonly onCapture: (capture: "harness-captured" | "agent-authored") => void;
   /** Receives where the before / after Lab state diff went (#186). */
   readonly onStateDiff: (record: LabStateDiffRecord) => void;
+  /** Receives the Verifier's stored recipe, review material whatever the judge says (#437). */
+  readonly onRecipe: (recipeDigest: string) => void;
 };
 const incomplete = (
   reason: Incomplete["reason"],
@@ -350,6 +352,7 @@ export class Verification<
     let labSetupDigest = digest.parse(input.campaignLabSetupDigest);
     let evidenceCapture: "harness-captured" | "agent-authored" | undefined;
     let labStateDiff: LabStateDiffRecord | undefined;
+    let recipeDigest: string | undefined;
     const loaded = await this.#loadFinding(campaignId, findingId);
 
     const decide = async (): Promise<VerificationResultV1> => {
@@ -451,6 +454,9 @@ export class Verification<
         onStateDiff: (record) => {
           labStateDiff = record;
         },
+        onRecipe: (digest) => {
+          recipeDigest = digest;
+        },
       };
       try {
         const labEvent = await this.#options.ledger.append({
@@ -508,6 +514,17 @@ export class Verification<
     };
 
     const decided = await decide();
+    // The recipe is review material by digest (#437); one the store lost stays out.
+    const artifacts = [
+      ...(recipeDigest !== undefined &&
+      (await this.#options.store.resolve(recipeDigest)).status === "resolved"
+        ? [{ kind: "recipe", digest: recipeDigest }]
+        : []),
+      ...(labStateDiff?.status === "captured"
+        ? labStateDiff.artifacts
+        : []
+      ).map((artifact) => ({ kind: artifact.kind, digest: artifact.digest })),
+    ];
     const appended = await this.#options.ledger.append({
       schemaVersion: 1,
       identity: `verification-${verificationId}`,
@@ -539,19 +556,14 @@ export class Verification<
       ...(labStateDiff === undefined
         ? {}
         : labStateDiff.status === "captured"
-          ? {
-              labStateDiff: { status: "captured" as const },
-              artifacts: labStateDiff.artifacts.map((artifact) => ({
-                kind: artifact.kind,
-                digest: artifact.digest,
-              })),
-            }
+          ? { labStateDiff: { status: "captured" as const } }
           : {
               labStateDiff: {
                 status: "missing" as const,
                 reason: labStateDiff.reason,
               },
             }),
+      ...(artifacts.length === 0 ? {} : { artifacts }),
     });
     if (appended.status === "conflict")
       throw new Error("Verification identity conflict");
@@ -650,6 +662,7 @@ export class Verification<
           ? {}
           : { nextScenarioId: attempt.nextScenarioId }),
       };
+    run.onRecipe(attempt.recipeDigest);
     if (judge === null) return { status: "replay-needed", attempt };
     let observation: JudgeObservation;
     try {
