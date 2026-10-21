@@ -7,7 +7,7 @@ import {
 
 const model = "claude-opus-5-5";
 const decide = (body: Record<string, unknown>) =>
-  admitAnthropicRequest({ model, ...body }, model);
+  admitAnthropicRequest({ model, ...body }, [model]);
 const user = (content: unknown) => ({
   messages: [{ role: "user", content }],
 });

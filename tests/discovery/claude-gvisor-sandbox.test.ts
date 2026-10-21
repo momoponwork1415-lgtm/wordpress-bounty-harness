@@ -52,6 +52,7 @@ describe("Claude gVisor sandbox", () => {
           authorization: `Bearer ${grantToken}`,
           dockerNetworkName: "trial-internal",
           model: "claude-opus-5-5",
+          subagentModel: "claude-sonnet-5-5",
           protocol: "anthropic-messages",
           expiresAt: new Date(Date.now() + 60_000).toISOString(),
         },
@@ -63,6 +64,7 @@ describe("Claude gVisor sandbox", () => {
           effort: "high",
           outputSchema: {},
         },
+        subagentModel: "claude-sonnet-5-5",
         sourceMount: { directory: source, expectedTree: tree },
         dependencyMounts: [],
         labHost: { name: "wordpress", ipv4: "172.20.0.2" },
@@ -84,7 +86,13 @@ describe("Claude gVisor sandbox", () => {
           "--cap-drop=ALL",
           "--env=ANTHROPIC_AUTH_TOKEN",
           "--env=ANTHROPIC_BASE_URL=http://172.20.0.5:8080",
-          "--env=CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-5-5",
+          // The Root and its side requests stay on the Root model.
+          "--env=ANTHROPIC_MODEL=claude-opus-5-5",
+          "--env=ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-opus-5-5",
+          "--env=ANTHROPIC_SMALL_FAST_MODEL=claude-opus-5-5",
+          // Every child runs on the profile's subagent model, whatever the Root asks.
+          "--env=CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-5-5",
+          "--env=CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1",
           // A refusal ends on Opus; Claude Code does not switch models.
           "--env=CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1",
           "--env=CLAUDE_CODE_NO_MODEL_FALLBACK=1",
@@ -101,6 +109,10 @@ describe("Claude gVisor sandbox", () => {
       expect(JSON.parse(agent?.stdin ?? "{}")).toMatchObject({
         prompt: "Objective.",
       });
+      // The runner's stdin is unchanged; only Claude Code reads the child model.
+      expect(JSON.parse(agent?.stdin ?? "{}")).not.toHaveProperty(
+        "subagentModel",
+      );
       expect(calls.at(-1)?.args.slice(0, 2)).toEqual(["rm", "--force"]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -138,6 +150,7 @@ describe("Claude gVisor sandbox", () => {
           effort: "high",
           outputSchema: {},
         },
+        subagentModel: "gpt-6-sol",
         sourceMount: {
           directory: tmpdir(),
           expectedTree: {

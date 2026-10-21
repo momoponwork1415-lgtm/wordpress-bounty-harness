@@ -84,6 +84,11 @@ export interface ClaudeSandboxCommand {
     /** Resume this restored session; the first turn is the pinned directive (ADR 0036). */
     readonly resumeSessionId?: string;
   };
+  /**
+   * The model every child runs on, from the profile's `subagent.modelId`
+   * (#418). Claude Code reads it from the environment, not the runner's stdin.
+   */
+  readonly subagentModel: string;
   /** Present exactly when `input.resumeSessionId` is. */
   readonly resume?: ClaudeSandboxResumeSeed;
   readonly sourceMount: Mount;
@@ -395,6 +400,7 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       });
       const { cliVersion } = await this.probe();
       const model = command.input.model;
+      const subagentModel = command.subagentModel;
       const args = [
         ...this.#base(),
         `--name=${containerName}`,
@@ -417,11 +423,15 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         // A Trial-scoped grant the broker swaps for the owner's token; the
         // docker client passes the value on by name so it stays out of argv.
         "--env=ANTHROPIC_AUTH_TOKEN",
-        // Every request names the one model the broker admits.
+        // The Root and its side requests name the Root model; every child
+        // names the subagent model. The broker admits exactly these two.
         `--env=ANTHROPIC_MODEL=${model}`,
         `--env=ANTHROPIC_DEFAULT_HAIKU_MODEL=${model}`,
         `--env=ANTHROPIC_SMALL_FAST_MODEL=${model}`,
-        `--env=CLAUDE_CODE_SUBAGENT_MODEL=${model}`,
+        `--env=CLAUDE_CODE_SUBAGENT_MODEL=${subagentModel}`,
+        // Claude Code 2.1.257 and newer: a `model` the Root passes to the
+        // Agent tool does not override the subagent model.
+        "--env=CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1",
         "--env=CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
         "--env=DISABLE_AUTOUPDATER=1",
         // The advisor is a server tool the broker refuses; keep Claude Code from offering it.

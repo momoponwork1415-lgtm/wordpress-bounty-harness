@@ -14,6 +14,7 @@ export type RecordedRuntime = Pick<
   | "serviceTier"
   | "cyberAccessProgram"
   | "authenticationMethod"
+  | "subagent"
 >;
 
 export type RecordedRuntimeGroup = {
@@ -58,6 +59,8 @@ export async function summarizeRecordedRuntimes(options: {
       serviceTier: receipt.serviceTier,
       cyberAccessProgram: receipt.cyberAccessProgram,
       authenticationMethod: receipt.authenticationMethod,
+      // Profiles that differ only in the children's model are separate runtimes (#418).
+      subagent: receipt.subagent,
     };
     const day = new Date(event.occurredAt).toISOString().slice(0, 10);
     const key = JSON.stringify(runtime);
