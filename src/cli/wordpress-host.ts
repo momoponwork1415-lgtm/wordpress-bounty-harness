@@ -63,6 +63,7 @@ import { openWordfenceAdvisoryHistory } from "../profiles/wordpress/wordfence-hi
 import { HandoffVerifier } from "../profiles/wordpress/verification/handoff-verifier.js";
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
+import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
 import { WordPressVerifier } from "../profiles/wordpress/verification/wordpress-verifier.js";
 import {
   openTranscribedWordfenceProgramme,
@@ -650,6 +651,9 @@ export async function createWordPressHostProfile(options: {
                       store: state.store,
                     }),
                     httpEvidence: createWordPressHttpEvidenceReader({
+                      store: state.store,
+                    }),
+                    verifierRecord: createWordPressVerifierRecordReader({
                       store: state.store,
                     }),
                     clock: state.clock,

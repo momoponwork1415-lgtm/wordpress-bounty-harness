@@ -529,6 +529,8 @@ describe("review export", () => {
       ...unverified,
       campaignId: "campaign-1",
       findingId: "finding-1",
+      // Without a recorded recipe the profile reader is never asked.
+      verifierRecord: { read: () => Promise.reject(new Error("no recipe")) },
     });
     expect(bundle.verification).toBeNull();
     expect(bundle.http).toEqual({
@@ -538,6 +540,7 @@ describe("review export", () => {
       truncated: false,
     });
     expect(bundle.refutation).toBeNull();
+    expect(bundle.observations).toBeNull();
     expect(bundle.labStateDiff).toEqual({ status: "unavailable" });
     expect(bundle.review).toEqual({
       decisions: [],

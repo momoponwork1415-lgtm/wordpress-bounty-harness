@@ -56,6 +56,7 @@ import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/in
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
 import type { WordPressReconstruction } from "../profiles/wordpress/verification/reproduction-package.js";
+import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
 import type { CliProfile, CliState } from "./index.js";
 import {
   reverifyOnSelectedVersion,
@@ -1354,6 +1355,8 @@ export function createWordPressCliProfile(
       createWordPressStateDiffReader({ store: state.store }),
     httpEvidenceReader: (state) =>
       createWordPressHttpEvidenceReader({ store: state.store }),
+    verifierRecordReader: (state) =>
+      createWordPressVerifierRecordReader({ store: state.store }),
     labDown: (state, input) => wordPressLabDown(state, input, options),
     // A record that exists holds the sweep even when unreadable; `lab down` decides.
     targetCeiling: async (configPath) =>
