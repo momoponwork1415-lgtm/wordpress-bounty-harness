@@ -1,9 +1,32 @@
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
-import { countsAsTrial, recordedTrialActivity } from "./counts-as-trial.js";
+import {
+  countsAsTrialChain,
+  recordedTrialActivity,
+} from "./counts-as-trial.js";
 import { supersedingRun } from "./resume-trial.js";
 
 type FinishedEvent = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
 type StartedEvent = Extract<LedgerEventV1, { type: "discovery-run-started" }>;
+
+/**
+ * The runner resumes a provider-limited run only on Codex (ADR 0036, addendum
+ * 4). A Claude run keeps ADR 0029's 2026-10-19 path: after the backoff its
+ * target runs again as a new Trial. Starts without a runtime predate the
+ * runtime share and ran on Codex.
+ */
+export function autoResumesProviderLimit(
+  started: Pick<StartedEvent, "configuration">,
+): boolean {
+  return started.configuration.runtime !== "claude-code/v1";
+}
+
+/** Five resume segments exhaust a Trial's automatic resumes; the original run is not one of them. */
+export function providerLimitedAutoResumeRefusal(
+  started: Pick<StartedEvent, "resumeSegment">,
+): "resume-limit" | undefined {
+  if ((started.resumeSegment ?? 0) >= 5) return "resume-limit";
+  return undefined;
+}
 
 function exploreStarts(target: CampaignTarget): StartedEvent[] {
   return target.ledger
@@ -53,6 +76,24 @@ export function interruptedExplorations(
     )
       interrupted.set(event.trialOrdinal ?? 0, event);
   return interrupted;
+}
+
+/** The latest provider-limited Codex segment per Trial ordinal, before a replacement Trial starts. */
+export function providerLimitedExplorations(
+  target: CampaignTarget,
+): ReadonlyMap<number, StartedEvent> {
+  const finishes = readFinishedRuns(target);
+  const starts = exploreStarts(target);
+  const limited = new Map<number, StartedEvent>();
+  for (const event of starts)
+    if (
+      autoResumesProviderLimit(event) &&
+      finishes.get(event.runId)?.outcome === "provider-limited" &&
+      latestSegment(starts, event.runId) === event.runId &&
+      supersedingRun(starts, event) === undefined
+    )
+      limited.set(event.trialOrdinal ?? 0, event);
+  return limited;
 }
 type ConcludedEvent = Extract<LedgerEventV1, { type: "discovery-concluded" }>;
 
@@ -106,6 +147,14 @@ export function readResumeProgress(target: CampaignTarget): ResumeProgress {
     );
   const finishedRuns = readFinishedRuns(target);
   const activeRuns = recordedTrialActivity(target.ledger, target.campaignId);
+  const starts = new Map(
+    exploreStarts(target).map((event) => [event.runId, event]),
+  );
+  const segment = (runId: string) => ({
+    finished: finishedRuns.get(runId),
+    hasRecordedActivity: activeRuns.has(`${target.campaignId}\0${runId}`),
+    resumesRun: starts.get(runId)?.resumesRun,
+  });
   const startedExplorations = new Set<string>();
   const spentOrdinals = new Set<number>();
   let nextLegacyOrdinal = 0;
@@ -118,10 +167,7 @@ export function readResumeProgress(target: CampaignTarget): ResumeProgress {
       event.snapshotDigest === target.snapshotDigest &&
       // Historical events had no runKind and each represented exploration.
       (event.runKind ?? "explore") === "explore" &&
-      countsAsTrial(
-        finishedRuns.get(event.runId),
-        activeRuns.has(`${event.campaignId}\0${event.runId}`),
-      )
+      countsAsTrialChain(event.runId, segment)
     ) {
       startedExplorations.add(event.runId);
       if (event.trialOrdinal !== undefined)
@@ -150,26 +196,26 @@ export function recordedFailureAfterRuns(
 ): "provider-limit" | "incomplete" | undefined {
   const outcomes = readFinishedRuns(target);
   const active = recordedTrialActivity(target.ledger, target.campaignId);
+  const starts = exploreStarts(target);
+  const startsById = new Map(starts.map((event) => [event.runId, event]));
+  const segment = (runId: string) => ({
+    finished: outcomes.get(runId),
+    hasRecordedActivity: active.has(`${target.campaignId}\0${runId}`),
+    resumesRun: startsById.get(runId)?.resumesRun,
+  });
+  const latestRuns = new Set(
+    [...startedExplorations].map((runId) => latestSegment(starts, runId)),
+  );
   if (
-    [...startedExplorations].some(
+    [...latestRuns].some(
       (runId) => outcomes.get(runId)?.outcome === "provider-limited",
     )
   )
     return "provider-limit";
-  const countedRuns = [...startedExplorations].filter((runId) =>
-    countsAsTrial(
-      outcomes.get(runId),
-      active.has(`${target.campaignId}\0${runId}`),
-    ),
+  const countedRuns = [...latestRuns].filter((runId) =>
+    countsAsTrialChain(runId, segment),
   );
-  // A resumed Trial ends as its latest segment ends.
-  const starts = exploreStarts(target);
-  if (
-    countedRuns.some(
-      (runId) =>
-        outcomes.get(latestSegment(starts, runId))?.outcome !== "completed",
-    )
-  )
+  if (countedRuns.some((runId) => outcomes.get(runId)?.outcome !== "completed"))
     return "incomplete";
   return undefined;
 }

@@ -42,6 +42,7 @@ amended-by: 0033（v8・最低 60 分・子 4・依存 source）, 0034（索引�
 - 2026-10-14 追記（所有者決定）: Root が source を 1 件も読まず、子を起動せず、broker 転送が 1 以下で終わった run は Trial に数えず、その対象は次の選定で戻る。「同一対象の自動追加 Trial はしない」は途中まで走った Trial に適用し、未開始の run には適用しない。provider 上限と対象単位の失敗の扱いは SPEC §6 のとおり runner が再開・skip する。
 - 2026-10-19 追記（所有者決定）: provider 上限（`provider-limited`）で終わった run は、source を読み子を起動していても Trial に数えない。本番で同時 10 対象にしたところ、10 本が開始 2 分で rate limit に当たり、子 4・broker 転送 約 40 の記録があるため 10 対象とも Trial 済みとして消費された（campaign `prod-20261019-1`）。provider 上限は対象の性質でなく provider 側の都合なので、runner は backoff 後に同じ対象をやり直し、選定も除外しない。上の「途中まで走った Trial は数える」は provider 上限以外の失敗（wall、schema、sandbox、拒否など）に限る。既に記録した Finding / Lead は消さず、やり直しで同じ内容は identity で `existing` になる。
 - 2026-10-19 追記（[ADR 0036](0036-operator-resume-after-provider-refusal.md)）: 「Harness の続行差し込みは行わない」は自動継続に限る。`provider-cyber-policy` で止まった Root thread を操作者が `campaign resume --run` で名指ししたときだけ、同じ Snapshot・同じ v8 再開段落で新しい使い捨て sandbox に 1 segment 再開する。新しい Trial ではなく同じ Trial の続きとして数える。
+- 2026-10-19 追記 4（[ADR 0036](0036-operator-resume-after-provider-refusal.md)）: 上の provider 上限の追記は、`continuous run` の Codex の run について改めた。runner は backoff 後に新しい Trial を起動せず、止まった Trial を同じ Root thread の再開 segment として続ける（再開 segment は最大 5、残り wall 5 分以上）。初回 run は単独では Trial に数えない。再開後に完了した chain と、再開拒否・上限で閉じた chain は Trial 1 回に数え、後者は理由付き `incomplete` として選定からも除外する。Claude の run と手動の `campaign run` は上の追記のまま。
 
 2026-10-17: 深度の記録を正常完了の条件にする。網羅の要求ではなく記録の要求。
 Root は固定入口索引の各 id の状態を typed coverage record で報告し、Harness が検証する。

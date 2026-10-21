@@ -18,7 +18,8 @@ import type {
   LedgerReadAllQuery,
 } from "../ledger/index.js";
 import {
-  countsAsTrial,
+  autoResumesProviderLimit,
+  countsAsTrialChain,
   latestSegment,
   recordedTrialActivity,
   supersedingRun,
@@ -173,6 +174,8 @@ export interface ContinuousDeps {
     readonly signal?: AbortSignal;
     /** Resume the campaign's runs whose host died instead of running them again (ADR 0036). */
     readonly resumeInterrupted: { log(line: string): void };
+    /** After provider backoff, resume its stopped Codex Trials in their target slots. */
+    readonly resumeProviderLimited?: { log(line: string): void };
     /** The operator's live limits (total and per runtime), read before each new target starts. */
     readonly targetLimit: TargetLimit;
   }): Promise<CampaignSummary>;
@@ -405,6 +408,60 @@ function backoffMinutes(limit: "rate-limit" | "quota", step: number): number {
     : (BACKOFF_QUOTA_MINUTES[step] ?? QUOTA_LONG_SLEEP_HOURS * 60);
 }
 
+/** Whether this campaign still has a provider-limited latest Codex segment to continue. */
+export function pendingProviderLimited(
+  ledger: Pick<Ledger, "readAll">,
+  campaignId: string,
+): boolean {
+  const terminal = new Set(
+    readAll(ledger, { campaignId, type: "target-skipped" }).flatMap((event) =>
+      event.type === "target-skipped" &&
+      event.stage === "discovery" &&
+      (event.reason === "run-failed" || event.reason === "provider-refused")
+        ? [event.snapshotDigest]
+        : [],
+    ),
+  );
+  const starts = readAll(ledger, {
+    campaignId,
+    type: "discovery-run-started",
+  }).filter(
+    (
+      event,
+    ): event is Extract<LedgerEventV1, { type: "discovery-run-started" }> =>
+      event.type === "discovery-run-started" &&
+      (event.runKind ?? "explore") === "explore",
+  );
+  const finishes = new Map(
+    readAll(ledger, { campaignId, type: "discovery-run-finished" })
+      .filter(
+        (
+          event,
+        ): event is Extract<
+          LedgerEventV1,
+          { type: "discovery-run-finished" }
+        > => event.type === "discovery-run-finished",
+      )
+      .map((event) => [event.runId, event] as const),
+  );
+  return starts.some((start, index) => {
+    if (start.resumesRun !== undefined) return false;
+    if (!autoResumesProviderLimit(start)) return false;
+    if (terminal.has(start.snapshotDigest)) return false;
+    const superseded = starts
+      .slice(index + 1)
+      .some(
+        (later) =>
+          later.resumesRun === undefined &&
+          later.snapshotDigest === start.snapshotDigest &&
+          (later.trialOrdinal ?? 0) === (start.trialOrdinal ?? 0),
+      );
+    if (superseded) return false;
+    const latest = latestSegment(starts, start.runId);
+    return finishes.get(latest)?.outcome === "provider-limited";
+  });
+}
+
 /** The latest automatic batch that no campaign has bound yet. */
 function unboundBatch(deps: ContinuousDeps): string | undefined {
   const bound = new Set(
@@ -454,24 +511,49 @@ export function exploreTrials(
   // A resumed Trial is counted once, by its first start, and ends as its
   // latest segment ends (ADR 0036).
   const heads = starts.filter((event) => event.resumesRun === undefined);
+  const startsById = new Map(starts.map((event) => [key(event), event]));
+  const lastRunIdOf = (head: (typeof starts)[number]) =>
+    latestSegment(
+      starts.filter((event) => event.campaignId === head.campaignId),
+      head.runId,
+    );
   const lastOf = (head: (typeof starts)[number]) =>
-    key({
-      campaignId: head.campaignId,
-      runId: latestSegment(
-        starts.filter((event) => event.campaignId === head.campaignId),
-        head.runId,
-      ),
-    });
+    key({ campaignId: head.campaignId, runId: lastRunIdOf(head) });
   const ended = heads.flatMap((head) => {
     const finished = finishes.get(lastOf(head));
     return finished === undefined ? [] : [finished.outcome];
   });
+  const terminalLimited = new Set(
+    readAll(ledger, { ...query, type: "target-skipped" }).flatMap((event) =>
+      event.type === "target-skipped" &&
+      event.stage === "discovery" &&
+      event.reason === "run-failed" &&
+      event.artifacts.some(
+        (artifact) => artifact.kind === "target-skip-diagnostic",
+      )
+        ? [`${event.campaignId}\0${event.snapshotDigest}`]
+        : [],
+    ),
+  );
   const active = recordedTrialActivity(ledger, query.campaignId);
   const notTrials = heads.filter((head) => {
-    const own = finishes.get(key(head));
+    const lastRunId = lastRunIdOf(head);
+    const own = finishes.get(
+      key({ campaignId: head.campaignId, runId: lastRunId }),
+    );
+    const segment = (runId: string) => ({
+      finished: finishes.get(key({ campaignId: head.campaignId, runId })),
+      hasRecordedActivity: active.has(`${head.campaignId}\0${runId}`),
+      resumesRun: startsById.get(key({ campaignId: head.campaignId, runId }))
+        ?.resumesRun,
+    });
     return (
       own !== undefined &&
-      !countsAsTrial(own, active.has(`${head.campaignId}\0${head.runId}`))
+      !(
+        own.outcome === "provider-limited" &&
+        terminalLimited.has(`${head.campaignId}\0${head.snapshotDigest}`)
+      ) &&
+      !countsAsTrialChain(lastRunId, segment)
     );
   }).length;
   const superseded = heads.filter(
@@ -617,6 +699,32 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         target: null,
       }) ||
       undefined;
+    let providerBackoffFinished = false;
+    const backoffProvider = async (campaignId: string) => {
+      const limit = providerLimitOf(deps, campaignId);
+      const step = memo.backoffStep++;
+      const minutes = backoffMinutes(limit, step);
+      await hold("backoff", minutes * MINUTE, {
+        step: String(step + 1),
+        minutes: String(minutes),
+        providerLimit: limit,
+      });
+      providerBackoffFinished = !stopRequested();
+    };
+    // The process may have died during the wait, or just after the ledger
+    // recorded a limit but before it wrote the backoff memo. Resume only after
+    // the remaining saved wait or a fresh wait, respectively.
+    if (current && pendingProviderLimited(deps.ledger, current.campaignId)) {
+      const until =
+        memo.state === "backoff" ? Date.parse(memo.detail.until ?? "") : NaN;
+      if (Number.isFinite(until)) {
+        while (!stopRequested() && deps.clock().getTime() < until)
+          await deps.sleep(Math.min(MINUTE, until - deps.clock().getTime()));
+      } else {
+        await backoffProvider(current.campaignId);
+      }
+      providerBackoffFinished = !stopRequested();
+    }
     for (;;) {
       if (stopRequested()) return stop("operator");
       const now = deps.clock();
@@ -668,6 +776,8 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       if (stopRequested()) return stop("operator");
       let summary: CampaignSummary;
       const campaignId = current.campaignId;
+      const resumeProviderLimited = providerBackoffFinished;
+      providerBackoffFinished = false;
       try {
         summary = await deps.runCampaign({
           campaignId: current.campaignId,
@@ -677,6 +787,14 @@ export function createContinuousRunner(deps: ContinuousDeps) {
           resumeInterrupted: {
             log: (line) => deps.io.log(`${deps.clock().toISOString()} ${line}`),
           },
+          ...(resumeProviderLimited
+            ? {
+                resumeProviderLimited: {
+                  log: (line: string) =>
+                    deps.io.log(`${deps.clock().toISOString()} ${line}`),
+                },
+              }
+            : {}),
           targetLimit: {
             read: () => readContinuousConcurrency(deps.stateDirectory),
             report: (limit) =>
@@ -718,7 +836,11 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         `${deps.clock().toISOString()} batch ${current.campaignId} stopped=${summary.stopped ?? "none"} skipped=${summary.skipped.length} leftovers=${removed}`,
       );
       if (stopRequested()) return stop("operator");
-      if (summary.stopped === "incomplete") continue;
+      if (summary.stopped === "incomplete") {
+        if (pendingProviderLimited(deps.ledger, current.campaignId))
+          await backoffProvider(current.campaignId);
+        continue;
+      }
       if (
         summary.stopped === "provider-limit" &&
         (summary.limitedRuntimes?.length ?? 0) > 0
@@ -742,17 +864,13 @@ export function createContinuousRunner(deps: ContinuousDeps) {
           .filter(([, held]) => Date.parse(held.until) > now)
           .sort(([, a], [, b]) => a.until.localeCompare(b.until))[0]!;
         await hold("backoff", Date.parse(until) - now, { runtime });
+        // A held runtime's targets start only when its own wait ends, so its
+        // provider-limited Codex Trials resume after that runtime's backoff.
+        providerBackoffFinished = !stopRequested();
         continue;
       }
       if (summary.stopped === "provider-limit") {
-        const limit = providerLimitOf(deps, current.campaignId);
-        const step = memo.backoffStep++;
-        const minutes = backoffMinutes(limit, step);
-        await hold("backoff", minutes * MINUTE, {
-          step: String(step + 1),
-          minutes: String(minutes),
-          providerLimit: limit,
-        });
+        await backoffProvider(current.campaignId);
         continue;
       }
       // The campaign finished: the next batch gets a new id.

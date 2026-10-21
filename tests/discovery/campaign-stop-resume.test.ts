@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { exploreTrials } from "../../src/cli/continuous.js";
 import {
   createNativeRunReceipt,
   defineAgentRuntimeProfile,
@@ -76,6 +77,11 @@ async function open() {
     readonly concurrency?: number;
     readonly profile?: AgentRuntimeProfile;
     readonly campaignId?: string;
+    readonly maxRuns?: number;
+    readonly runtime?: "codex-native/v1" | "claude-code/v1";
+    readonly resumeProviderLimited?: NonNullable<
+      Parameters<typeof runDiscoveryCampaign>[0]["resumeProviderLimited"]
+    >;
   }) =>
     runDiscoveryCampaign({
       campaignId: options.campaignId ?? "campaign-1",
@@ -83,7 +89,13 @@ async function open() {
       input: {
         ...input,
         modelProfileDigest: (options.profile ?? profile).digest,
+        ...(options.maxRuns === undefined
+          ? {}
+          : { stopRules: { maxRuns: options.maxRuns, noFindingRuns: 6 } }),
       },
+      ...(options.resumeProviderLimited === undefined
+        ? {}
+        : { resumeProviderLimited: options.resumeProviderLimited }),
       ...(options.concurrency === undefined
         ? {}
         : { concurrency: options.concurrency }),
@@ -191,6 +203,9 @@ async function open() {
           configuration: {
             promptVariant: "short-objective",
             assignmentUnit: "plugin",
+            ...(options.runtime === undefined
+              ? {}
+              : { runtime: options.runtime }),
           },
           run: {
             runId: `${options.prefix}-${index}`,
@@ -225,6 +240,213 @@ async function open() {
 }
 
 describe("discovery campaign stop and resume", () => {
+  it("continues a provider-limited run as one Trial after backoff", async () => {
+    const { ledger, campaign } = await open();
+    expect(
+      (await campaign({ prefix: "first", maxRuns: 1, replies: () => "limit" }))
+        .stoppedBy,
+    ).toBe("provider-limit");
+    const offered: string[] = [];
+    const continued = await campaign({
+      prefix: "replacement",
+      maxRuns: 1,
+      replies: () => {
+        throw new Error("A new Trial must not start");
+      },
+      resumeProviderLimited: async (started) => {
+        offered.push(started.runId);
+        const base = {
+          schemaVersion: 1 as const,
+          campaignId: "campaign-1",
+          snapshotDigest: digest,
+          occurredAt: "2026-10-08T09:05:00Z",
+        };
+        await ledger.append({
+          ...base,
+          identity: "resume-start",
+          type: "discovery-run-started",
+          runId: "segment-1",
+          trialId: started.trialId,
+          trialOrdinal: 0,
+          resumesRun: started.runId,
+          resumeSegment: 1,
+          labAttached: false,
+          history: { mode: "none" },
+          configuration: { promptVariant: "short-objective" },
+        });
+        await ledger.append({
+          ...base,
+          identity: "resume-finish",
+          type: "discovery-run-finished",
+          runId: "segment-1",
+          outcome: "completed",
+          costUsd: "unavailable",
+          wallTimeMs: 10 * 60_000,
+        });
+        return {
+          status: "resumed",
+          outcome: {
+            runId: "segment-1",
+            outcome: "completed",
+            wallTimeMs: 10 * 60_000,
+            counted: true,
+            foundNew: false,
+            heldBoundary: false,
+            findingsRecorded: 0,
+          },
+        };
+      },
+    });
+    expect(offered).toEqual(["first-0"]);
+    expect(continued).toMatchObject({ runCount: 1, stoppedBy: "max-runs" });
+    expect(
+      ledger
+        .readAll({ campaignId: "campaign-1", type: "discovery-run-started" })
+        .filter(({ event }) => event.type === "discovery-run-started"),
+    ).toHaveLength(2);
+    expect(exploreTrials(ledger, {})).toMatchObject({
+      started: 1,
+      finished: ["completed"],
+      notTrials: 0,
+    });
+    expect(
+      await campaign({
+        prefix: "third",
+        maxRuns: 1,
+        replies: () => {
+          throw new Error("A concluded Trial must not start");
+        },
+      }),
+    ).toMatchObject({ runCount: 0, stoppedBy: "max-runs" });
+  });
+
+  it("leaves a refused provider-limited resume incomplete without starting fresh", async () => {
+    const { ledger, campaign } = await open();
+    await campaign({ prefix: "first", maxRuns: 1, replies: () => "limit" });
+    const result = await campaign({
+      prefix: "replacement",
+      maxRuns: 1,
+      replies: () => {
+        throw new Error("A refused resume must not start a new Trial");
+      },
+      resumeProviderLimited: async (started) => ({
+        status: "incomplete",
+        runId: started.runId,
+        reason: "runtime-profile-differs",
+      }),
+    });
+    expect(result).toMatchObject({
+      runCount: 0,
+      stoppedBy: "incomplete",
+      resumeRefusal: {
+        runId: "first-0",
+        reason: "runtime-profile-differs",
+      },
+    });
+    expect(ledger.read({ type: "discovery-concluded" })).toHaveLength(0);
+    expect(ledger.read({ type: "discovery-run-started" })).toHaveLength(1);
+  });
+
+  it("does not count a resumed chain in which no segment worked as a Trial (SPEC §6)", async () => {
+    const { ledger, campaign } = await open();
+    await campaign({ prefix: "first", maxRuns: 1, replies: () => "limit" });
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: "campaign-1",
+      snapshotDigest: digest,
+      occurredAt: "2026-10-08T09:05:00Z",
+    };
+    await ledger.append({
+      ...base,
+      identity: "failed-resume-start",
+      type: "discovery-run-started",
+      runId: "failed-segment",
+      trialId: "first-0",
+      trialOrdinal: 0,
+      resumesRun: "first-0",
+      resumeSegment: 1,
+      labAttached: false,
+      history: { mode: "none" },
+      configuration: { promptVariant: "short-objective" },
+    });
+    await ledger.append({
+      ...base,
+      identity: "failed-resume-finish",
+      type: "discovery-run-finished",
+      runId: "failed-segment",
+      outcome: "failed",
+      reason: "schema",
+      costUsd: "unavailable",
+      wallTimeMs: 1,
+      observed: {
+        toolCalls: 0,
+        filesRead: 0,
+        uniqueFilesRead: 0,
+        labRequests: 0,
+        dbQueries: 0,
+      },
+      childThreadsObserved: 0,
+      brokerMetrics: {
+        forwardedRequests: 0,
+        requestLimitExceeded: 0,
+        unauthorizedRequests: 0,
+      },
+    });
+    // No segment read source, started a child or forwarded more than one
+    // request: the chain is not a Trial and the ordinal stays free.
+    expect(exploreTrials(ledger, {})).toMatchObject({
+      started: 1,
+      finished: ["failed"],
+      notTrials: 1,
+    });
+    expect(
+      await campaign({
+        prefix: "replacement",
+        maxRuns: 1,
+        replies: () => "empty",
+      }),
+    ).toMatchObject({ runCount: 1, stoppedBy: "max-runs" });
+    expect(exploreTrials(ledger, {})).toMatchObject({
+      started: 2,
+      finished: ["failed", "completed"],
+      notTrials: 1,
+    });
+  });
+
+  it("leaves a Claude provider-limited run to a new Trial after backoff (ADR 0029, 2026-10-19)", async () => {
+    const { ledger, campaign } = await open();
+    const runtime = "claude-code/v1" as const;
+    expect(
+      (
+        await campaign({
+          prefix: "first",
+          maxRuns: 1,
+          runtime,
+          replies: () => "limit",
+        })
+      ).stoppedBy,
+    ).toBe("provider-limit");
+    const offered: string[] = [];
+    const result = await campaign({
+      prefix: "replacement",
+      maxRuns: 1,
+      runtime,
+      replies: () => "empty",
+      resumeProviderLimited: async (started) => {
+        offered.push(started.runId);
+        throw new Error("A Claude run must not be resumed automatically");
+      },
+    });
+    expect(offered).toEqual([]);
+    expect(result).toMatchObject({ runCount: 1, stoppedBy: "max-runs" });
+    expect(result.resumeRefusal).toBeUndefined();
+    expect(exploreTrials(ledger, {})).toMatchObject({
+      started: 2,
+      finished: ["provider-limited", "completed"],
+      notTrials: 1,
+    });
+  });
+
   it("reuses ordinal 0 after a start-only crash and returns its slug to selection", async () => {
     const { ledger, campaign } = await open();
     const base = {

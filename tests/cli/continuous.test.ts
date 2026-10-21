@@ -26,6 +26,7 @@ type Step = (input: {
   target: string | null;
   signal?: AbortSignal;
   resumeInterrupted?: { log(line: string): void };
+  resumeProviderLimited?: { log(line: string): void };
 }) => Promise<Partial<CampaignSummary>> | Partial<CampaignSummary>;
 
 async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
@@ -184,8 +185,92 @@ describe("continuous runner", () => {
         minutes.map(String),
       );
       expect(new Set(t.calls.map((call) => call.campaignId)).size).toBe(1);
+      expect(t.calls[0]?.resumeProviderLimited).toBeUndefined();
+      expect(
+        t.calls
+          .slice(1, -1)
+          .every((call) => call.resumeProviderLimited !== undefined),
+      ).toBe(true);
     },
   );
+
+  it("finishes a saved backoff after restart before offering provider-limited resume", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    steps.push(limited("rate-limit", t));
+    steps.push(async (input) => {
+      expect(t.hours()).toBe(5 / 60);
+      expect(input.resumeProviderLimited).toBeDefined();
+      return {};
+    });
+    const normalSleep = t.deps.sleep;
+    t.deps.sleep = async () => {
+      throw new Error("simulated runner crash during backoff");
+    };
+    await expect(t.runner.run()).rejects.toThrow("simulated runner crash");
+    expect(t.calls).toHaveLength(1);
+    expect(t.calls[0]?.resumeProviderLimited).toBeUndefined();
+    expect(
+      JSON.parse(await readFile(continuousPaths(t.root).memo, "utf8")),
+    ).toMatchObject({ state: "backoff", detail: { minutes: "5" } });
+    t.deps.sleep = normalSleep;
+    expect(await createContinuousRunner(t.deps).run()).toBe("operator");
+    expect(t.calls).toHaveLength(3);
+  });
+
+  it("backs off before offering resume when another incomplete result masks a provider limit", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    steps.push(async ({ campaignId }) => {
+      await t.trial(campaignId, {
+        outcome: "provider-limited",
+        reason: "provider",
+        providerLimit: "rate-limit",
+      });
+      return { stopped: "incomplete" };
+    });
+    steps.push((input) => {
+      expect(t.hours()).toBe(5 / 60);
+      expect(input.resumeProviderLimited).toBeDefined();
+      return {};
+    });
+    expect(await t.runner.run()).toBe("operator");
+  });
+
+  it("does not offer resume after a terminal incomplete marker", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    // The ledger takes only a diagnostic that Private Evidence holds.
+    const diagnostic = await new PrivateArtifactStore({
+      rootDirectory: join(t.root, "evidence"),
+      maxEntries: 4,
+      maxBytes: 1024,
+    }).putFiles({ "target-skip-diagnostic.json": "{}" });
+    steps.push(async ({ campaignId }) => {
+      await t.trial(campaignId, {
+        outcome: "provider-limited",
+        reason: "provider",
+        providerLimit: "rate-limit",
+      });
+      await t.append(campaignId, {
+        type: "target-skipped",
+        selectionId: "wporg:x@1.0.0",
+        stage: "discovery",
+        reason: "run-failed",
+        artifacts: [{ kind: "target-skip-diagnostic", digest: diagnostic }],
+      });
+      return { stopped: "incomplete" };
+    });
+    steps.push((input) => {
+      expect(t.hours()).toBe(0);
+      expect(input.resumeProviderLimited).toBeUndefined();
+      return {};
+    });
+    expect(await t.runner.run()).toBe("operator");
+    // The runner catches a step's error, so a failed expectation shows here.
+    expect(t.runner.memo().lastError).toBeUndefined();
+    expect(t.calls[1]?.campaignId).toBe(t.calls[0]?.campaignId);
+  });
 
   it("backs off only the runtimes a limit stopped, each on its own steps, and holds the other until its own wait ends", async () => {
     const steps: Step[] = [];
@@ -293,6 +378,44 @@ describe("continuous runner", () => {
     await t.runner.run();
     expect(t.calls[0]!.campaignId).toBe("prod-20261019-4");
     expect(held).toEqual([["claude"]]);
+  });
+
+  it("offers provider-limited resume to the batch after a runtime's own backoff", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    const seen: { hours: number; held: string[] }[] = [];
+    steps.push(
+      async ({ campaignId }) => {
+        await t.trial(campaignId, {
+          outcome: "provider-limited",
+          reason: "provider",
+          providerLimit: "rate-limit",
+        });
+        await t.append(campaignId, {
+          type: "campaign-stopped",
+          reason: "provider-limit",
+          runtime: "codex",
+        });
+        return { stopped: "provider-limit", limitedRuntimes: ["codex"] };
+      },
+      (input) => {
+        const { targetLimit } = input as Parameters<
+          ContinuousDeps["runCampaign"]
+        >[0];
+        seen.push({
+          hours: t.hours(),
+          held: [...(targetLimit.heldRuntimes?.() ?? [])],
+        });
+        return {};
+      },
+    );
+    expect(await t.runner.run()).toBe("operator");
+    // Codex's own 5 minutes passed and nothing is held when the Trial resumes.
+    expect(seen).toEqual([{ hours: 5 / 60, held: [] }]);
+    expect(t.calls[0]?.resumeProviderLimited).toBeUndefined();
+    expect(t.calls[1]?.campaignId).toBe(t.calls[0]?.campaignId);
+    expect(t.calls[1]?.resumeProviderLimited).toBeDefined();
+    expect(t.runner.memo().lastError).toBeUndefined();
   });
 
   it("starts a new campaign id after a finished one, numbered from the ledger", async () => {

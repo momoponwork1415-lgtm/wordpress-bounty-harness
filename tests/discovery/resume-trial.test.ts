@@ -511,6 +511,101 @@ describe("resumability rule (ADR 0036)", () => {
 });
 
 describe("executeTrialResume", () => {
+  it("does not turn an all-bootstrap provider resume into a normal zero-candidate finish", async () => {
+    const stores = await open();
+    await recordRun(stores, {
+      runId: "run-1",
+      providerLimit: "quota",
+      wallTimeMs: 60_000,
+    });
+    const assessment = await assess(stores);
+    if (assessment.status !== "resumable") throw new Error(assessment.reason);
+    const outcome = await executeTrialResume(
+      {
+        campaignId: "campaign-1",
+        input: {
+          schemaVersion: 1,
+          snapshotDigest: digest,
+          trustBoundary: {
+            version: "trust-boundary-v1",
+            text: "Low privilege only.",
+          },
+          programmeBoundary: { version: "v1", text: "Boundary" },
+          modelProfileDigest: profile.digest,
+          promptDigest,
+          stopRules: { maxRuns: 1, noFindingRuns: 1 },
+          lab: { mode: "none" },
+          history: { mode: "none" },
+        },
+        executor: {
+          async execute(run) {
+            const attachment = await stores.attachments.put(
+              "findings",
+              Buffer.from(
+                JSON.stringify({
+                  findings: [],
+                  leads: [],
+                  examined: "none",
+                  unexamined: "none",
+                }),
+              ),
+            );
+            return {
+              attachment,
+              receipt: createNativeRunReceipt({
+                runId: run.runId,
+                targetSnapshotDigest: run.targetSnapshotDigest,
+                profile: run.profile,
+                terminal: "completed",
+                reason: "unavailable",
+                startedAt: now,
+                completedAt: now,
+                reportArtifactDigest: attachment.digest,
+                observed: {
+                  toolCalls: 0,
+                  filesRead: 0,
+                  uniqueFilesRead: 0,
+                  labRequests: 0,
+                  dbQueries: 0,
+                },
+                childThreadsObserved: 0,
+                childThreadsAdmitted: 0,
+                brokerMetrics: {
+                  forwardedRequests: 1,
+                  requestLimitExceeded: 0,
+                  unauthorizedRequests: 0,
+                },
+              }),
+            };
+          },
+        },
+        attachments: stores.attachments,
+        evidence: stores.evidence,
+        ledger: stores.ledger,
+        recordReport: recordWordPressReport,
+        clock: () => new Date(now),
+      },
+      assessment.plan,
+      {
+        runId: "run-1-segment-1",
+        targetSnapshotDigest: digest,
+        profile,
+        coordination: "cooperative",
+        prompt,
+        resumePrompt,
+        sourceDirectory: "/private/frozen-source",
+        sourceTree: { digest, entries: 1, bytes: 1 },
+      },
+    );
+    expect(outcome).toMatchObject({
+      outcome: "failed",
+      failure: { reason: "evidence", reasonDetail: "no-work" },
+    });
+    expect(
+      stores.ledger.readAll({ type: "discovery-run-finished" }).at(-1)?.event,
+    ).toMatchObject({ outcome: "failed", reasonDetail: "no-work" });
+  });
+
   it("runs the segment under the same Trial, links it in the ledger and counts the Trial once in the funnel", async () => {
     const stores = await open();
     await recordRun(stores, { runId: "run-1", wallTimeMs: 25 * 60_000 });
