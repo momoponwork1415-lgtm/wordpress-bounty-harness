@@ -174,6 +174,8 @@ export interface JudgeSet<Finding, Handle extends LabHandle> {
 
 export interface Reproducer<Finding, Handle extends LabHandle> {
   readonly id: string;
+  /** Whether this impact can be proven by this reproducer's evidence channel. */
+  supports(finding: Finding): boolean;
   observe(input: {
     readonly finding: Finding;
     readonly lab: Handle;
@@ -232,6 +234,10 @@ export interface LabStateObserver<Handle extends LabHandle> {
 }
 
 type Incomplete = Extract<VerificationResultV1, { status: "incomplete" }>;
+type ReplayNeeded = {
+  readonly status: "replay-needed";
+  readonly attempt: Extract<VerifierAttempt, { status: "attempted" }>;
+};
 type VerificationRun<
   Finding extends VerifiableFinding,
   Setup,
@@ -385,7 +391,7 @@ export class Verification<
           );
       }
       const judge = this.#options.judges.for(finding);
-      if (judge === null && this.#options.judges.reproducer === undefined)
+      if (judge === null && !this.#options.judges.reproducer?.supports(finding))
         return incomplete(
           "no-judge",
           "No standard reproduction runner is configured for this impact",
@@ -425,6 +431,27 @@ export class Verification<
         "evidence",
         "Verification stopped unexpectedly; repeat in a fresh Lab",
       );
+      let replayAttempt: ReplayNeeded["attempt"] | undefined;
+      let primaryLabRemoved = false;
+      const run: VerificationRun<Finding, Setup, Handle, Reconstruction> = {
+        campaignId,
+        verificationId,
+        finding,
+        record,
+        snapshotDigest,
+        lab,
+        reconstruction: input.reconstruction,
+        setup: input.setup,
+        snapshot: input.snapshot,
+        referenceRoute: input.referenceRoute,
+        basisKind: input.basis?.kind,
+        onCapture: (capture) => {
+          evidenceCapture = capture;
+        },
+        onStateDiff: (record) => {
+          labStateDiff = record;
+        },
+      };
       try {
         const labEvent = await this.#options.ledger.append({
           schemaVersion: 1,
@@ -442,28 +469,9 @@ export class Verification<
         });
         if (labEvent.status === "conflict")
           throw new Error("Verification Lab identity conflict");
-        result = await this.#judge(
-          {
-            campaignId,
-            verificationId,
-            finding,
-            record,
-            snapshotDigest,
-            lab,
-            reconstruction: input.reconstruction,
-            setup: input.setup,
-            snapshot: input.snapshot,
-            referenceRoute: input.referenceRoute,
-            basisKind: input.basis?.kind,
-            onCapture: (capture) => {
-              evidenceCapture = capture;
-            },
-            onStateDiff: (record) => {
-              labStateDiff = record;
-            },
-          },
-          judge,
-        );
+        const judged = await this.#judge(run, judge);
+        if (judged.status === "replay-needed") replayAttempt = judged.attempt;
+        else result = judged;
       } catch {
         result = incomplete(
           "evidence",
@@ -471,7 +479,8 @@ export class Verification<
         );
       } finally {
         const removed = await this.#options.lab.teardown(lab).catch(() => null);
-        if (removed?.status !== "removed") {
+        if (removed?.status === "removed") primaryLabRemoved = true;
+        else {
           const cleanupLabIds =
             result.status === "incomplete" ? (result.cleanupLabIds ?? []) : [];
           result = {
@@ -481,6 +490,18 @@ export class Verification<
             ),
             cleanupLabIds: [...cleanupLabIds, lab.id],
           };
+        }
+      }
+      // The provider's host lease permits only one verification Lab. Keep the
+      // recipe and state-diff evidence, release the agent Lab, then replay.
+      if (replayAttempt !== undefined && primaryLabRemoved) {
+        try {
+          result = await this.#replayInFreshLab(run, replayAttempt);
+        } catch {
+          result = incomplete(
+            "evidence",
+            "The fresh reproduction Lab stopped unexpectedly; repeat",
+          );
         }
       }
       return result;
@@ -551,7 +572,7 @@ export class Verification<
   async #judge(
     run: VerificationRun<Finding, Setup, Handle, Reconstruction>,
     judge: Judge<Finding, Handle> | null,
-  ): Promise<VerificationResultV1> {
+  ): Promise<VerificationResultV1 | ReplayNeeded> {
     const {
       campaignId,
       finding,
@@ -629,7 +650,7 @@ export class Verification<
           ? {}
           : { nextScenarioId: attempt.nextScenarioId }),
       };
-    if (judge === null) return this.#replayInFreshLab(run, attempt);
+    if (judge === null) return { status: "replay-needed", attempt };
     let observation: JudgeObservation;
     try {
       observation = await judge.observe({
@@ -647,9 +668,9 @@ export class Verification<
     if (observation.status === "incomplete") {
       if (
         observation.reason === "observation" &&
-        this.#options.judges.reproducer !== undefined
+        this.#options.judges.reproducer?.supports(finding) === true
       ) {
-        return this.#replayInFreshLab(run, attempt);
+        return { status: "replay-needed", attempt };
       }
       if (observation.evidenceCapture !== undefined)
         onCapture(observation.evidenceCapture);
@@ -723,11 +744,23 @@ export class Verification<
       );
     const replayLab = provisioned.handle;
     // A provider returning the agent's Lab has not supplied an independent run.
-    if (replayLab.id === run.lab.id)
+    if (replayLab.id === run.lab.id) {
+      const removed = await this.#options.lab
+        .teardown(replayLab)
+        .catch(() => null);
+      if (removed?.status !== "removed")
+        return {
+          ...incomplete(
+            "cleanup",
+            removed?.nextStep ?? "Inspect and remove the reproduction Lab",
+          ),
+          cleanupLabIds: [replayLab.id],
+        };
       return incomplete(
         "provision",
         "Provision a distinct reproduction Lab before replaying the route",
       );
+    }
     let result: VerificationResultV1 = incomplete(
       "evidence",
       "The fresh reproduction Lab stopped unexpectedly; repeat",

@@ -60,10 +60,12 @@ async function fixture(
       | "incomplete-captured"
       | "throws";
     readonly reproducer?: "observed" | "incomplete" | "not-observed";
+    readonly reproducerSupports?: boolean;
     /** A false effect visible only in the Lab changed by the agent. */
     readonly agentOnlyEffect?: boolean;
     readonly replaySetupMismatch?: boolean;
     readonly teardown?: "removed" | "incomplete" | "replay-incomplete";
+    readonly singleLabOnly?: boolean;
     readonly refute?: boolean;
     /** A Finding rebound to a separately frozen version for a negative control. */
     readonly fixedVersion?: boolean;
@@ -196,6 +198,8 @@ async function fixture(
       result: { status: "incomplete", reason: "evidence", nextStep: "Inspect" },
     });
   const calls = { provision: 0, verifier: 0, teardown: 0 };
+  const activeLabIds = new Set<string>();
+  const labLifecycle: string[] = [];
   const agentTouched = new Set<string>();
   const replayedLabIds: string[] = [];
   let rendered:
@@ -214,6 +218,10 @@ async function fixture(
   };
   const lab: LabProvisioner<{ readonly name: string }, LabHandle> = {
     async provision() {
+      if (options.singleLabOnly === true && activeLabIds.size > 0)
+        throw new Error(
+          "The first verification Lab still holds the host lease",
+        );
       calls.provision++;
       const fresh = {
         ...handle,
@@ -223,19 +231,25 @@ async function fixture(
             ? otherDigest
             : handle.setupDigest,
       };
-      return options.provision === "incomplete"
-        ? { status: "incomplete", reason: "provision", nextStep: "Retry" }
-        : { status: "ready", handle: fresh };
+      if (options.provision === "incomplete")
+        return { status: "incomplete", reason: "provision", nextStep: "Retry" };
+      activeLabIds.add(fresh.id);
+      labLifecycle.push(`provision:${fresh.id}`);
+      return { status: "ready", handle: fresh };
     },
     async seedCanaries() {
       return { status: "seeded", digest: setupDigest };
     },
-    async teardown() {
+    async teardown(lab) {
       calls.teardown++;
-      return options.teardown === "incomplete" ||
-        (options.teardown === "replay-incomplete" && calls.teardown === 1)
-        ? { status: "incomplete", reason: "cleanup", nextStep: "Remove" }
-        : { status: "removed" };
+      labLifecycle.push(`teardown:${lab.id}`);
+      if (
+        options.teardown === "incomplete" ||
+        (options.teardown === "replay-incomplete" && calls.teardown === 2)
+      )
+        return { status: "incomplete", reason: "cleanup", nextStep: "Remove" };
+      activeLabIds.delete(lab.id);
+      return { status: "removed" };
     },
   };
   const verifier: Verifier<SyntheticFinding, LabHandle> = {
@@ -323,12 +337,16 @@ async function fixture(
       : { promptVersion: options.promptVersion }),
     judges: {
       for: (candidate) =>
-        candidate.impact === "account-takeover" ? judge : null,
+        candidate.impact === "account-takeover" ||
+        candidate.impact === "stored-xss"
+          ? judge
+          : null,
       ...(options.reproducer === undefined
         ? {}
         : {
             reproducer: {
               id: "synthetic-standard-v1",
+              supports: () => options.reproducerSupports !== false,
               async observe({ lab: replayLab }) {
                 replayedLabIds.push(replayLab.id);
                 if (options.reproducer === "incomplete")
@@ -430,6 +448,7 @@ async function fixture(
     store,
     rendered,
     replayedLabIds,
+    labLifecycle,
   };
 }
 
@@ -742,6 +761,34 @@ describe("verification public interface", () => {
     });
   });
 
+  it("releases the agent Lab before replay when the host allows only one Lab", async () => {
+    const { result, calls, labLifecycle, replayedLabIds } = await fixture({
+      impact: "other",
+      reproducer: "observed",
+      singleLabOnly: true,
+    });
+    expect(result.status).toBe("reproduced");
+    expect(calls).toEqual({ provision: 2, verifier: 1, teardown: 2 });
+    expect(labLifecycle).toEqual([
+      "provision:lab-1",
+      "teardown:lab-1",
+      "provision:lab-2",
+      "teardown:lab-2",
+    ]);
+    expect(replayedLabIds).toEqual(["lab-2"]);
+  });
+
+  it("does not start a Lab when neither judge nor reproducer supports the Finding", async () => {
+    const { result, calls, replayedLabIds } = await fixture({
+      impact: "other",
+      reproducer: "observed",
+      reproducerSupports: false,
+    });
+    expect(result).toMatchObject({ status: "incomplete", reason: "no-judge" });
+    expect(calls).toEqual({ provision: 0, verifier: 0, teardown: 0 });
+    expect(replayedLabIds).toEqual([]);
+  });
+
   it("cannot reproduce an effect left by the agent in its own Lab", async () => {
     const { result, calls, replayedLabIds, ledger } = await fixture({
       impact: "other",
@@ -804,6 +851,28 @@ describe("verification public interface", () => {
       status: "incomplete",
       reason: "observation",
     });
+  });
+
+  it("preserves the stored-XSS judge diagnostic when the HTTP reproducer cannot observe that impact", async () => {
+    const { result, calls, replayedLabIds, ledger, negativeCaptureDigest } =
+      await fixture({
+        impact: "stored-xss",
+        judge: "incomplete-captured",
+        reproducer: "observed",
+        reproducerSupports: false,
+        negativeCapture: true,
+      });
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+      nextStep: "Replay every step on the fixed version",
+      evidenceDigest: negativeCaptureDigest,
+    });
+    expect(calls).toEqual({ provision: 1, verifier: 1, teardown: 1 });
+    expect(replayedLabIds).toEqual([]);
+    expect(
+      ledger.read({ type: "verification-finished" })[0]?.event,
+    ).toMatchObject({ evidenceCapture: "harness-captured", result });
   });
 
   it("keeps a fixed snapshot incomplete even without an observed original route", async () => {
@@ -904,17 +973,21 @@ describe("verification public interface", () => {
     ).toMatchObject({ result });
   });
 
-  it("keeps both Lab ids when reproduction and primary cleanup fail", async () => {
-    const { result } = await fixture({
+  it("does not provision a replay Lab when primary cleanup fails", async () => {
+    const { result, calls, labLifecycle, replayedLabIds } = await fixture({
       impact: "other",
       reproducer: "observed",
       teardown: "incomplete",
+      singleLabOnly: true,
     });
     expect(result).toMatchObject({
       status: "incomplete",
       reason: "cleanup",
-      cleanupLabIds: ["lab-2", "lab-1"],
+      cleanupLabIds: ["lab-1"],
     });
+    expect(calls).toEqual({ provision: 1, verifier: 1, teardown: 1 });
+    expect(labLifecycle).toEqual(["provision:lab-1", "teardown:lab-1"]);
+    expect(replayedLabIds).toEqual([]);
   });
 
   it("rejects a cross-snapshot verdict even when a version basis is declared", async () => {

@@ -111,10 +111,29 @@ async function observe(input: {
       ? {}
       : { referenceRoute: input.referenceRoute }),
   });
-  return { result, store };
+  return { result, store, reproducer };
 }
 
 describe("Harness standard HTTP reproducer", () => {
+  it("declares support only for effects proved by a captured HTTP response canary", async () => {
+    const { reproducer } = await observe({});
+    for (const impact of [
+      "sqli",
+      "sensitive-object-access",
+      "arbitrary-file-read",
+      "arbitrary-file-download",
+      "lfi",
+    ] as const)
+      expect(reproducer.supports(finding(impact))).toBe(true);
+    for (const impact of [
+      "stored-xss",
+      "account-takeover",
+      "rce",
+      "options-update",
+    ] as const)
+      expect(reproducer.supports(finding(impact))).toBe(false);
+  });
+
   it("requires the executed script and the fresh proxy capture to agree on the canary", async () => {
     const { result, store } = await observe({});
     expect(result).toMatchObject({

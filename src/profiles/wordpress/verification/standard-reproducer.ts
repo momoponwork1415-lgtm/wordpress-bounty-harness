@@ -42,6 +42,19 @@ type ReproducerLab = Pick<
   "markCapture" | "readCapture" | "runStandardScript" | "canaryLedger"
 >;
 
+function supportsHttpCanaryEvidence(finding: WordPressFinding): boolean {
+  switch (finding.impact) {
+    case "sqli":
+    case "sensitive-object-access":
+    case "arbitrary-file-read":
+    case "arbitrary-file-download":
+    case "lfi":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function expectedCanaries(
   finding: WordPressFinding,
   lab: WordPressLabHandle,
@@ -77,6 +90,7 @@ export function createWordPressStandardReproducer(options: {
 }): Reproducer<WordPressFinding, WordPressLabHandle> {
   return {
     id: STANDARD_REPRODUCER_ID,
+    supports: supportsHttpCanaryEvidence,
     async observe({ finding, lab, recipeDigest, referenceRoute }) {
       if (finding.snapshotDigest !== lab.snapshotDigest)
         return incomplete("evidence", "Repeat on the Finding snapshot");

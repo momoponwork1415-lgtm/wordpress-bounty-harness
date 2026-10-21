@@ -111,6 +111,47 @@ export type WordPressStoredScriptFailurePhase =
   | "route-page"
   | "victim-page";
 
+export type WordPressStoredScriptFailureCode =
+  | "browser-visit"
+  | "victim-login"
+  | "victim-action-not-visible"
+  | "victim-action-ambiguous"
+  | "victim-action-click"
+  | "victim-action-fill"
+  | "victim-popup"
+  | "victim-navigation"
+  | "victim-unobserved-popup"
+  | "observer-canary-input"
+  | "victim-canary-request"
+  | "victim-screenshot";
+
+/** Counts from the Harness-owned victim browser; Private Evidence only. */
+export interface WordPressVictimBrowserDiagnostic {
+  readonly schemaVersion: 1;
+  readonly document: {
+    readonly readyState: "loading" | "interactive" | "complete";
+    readonly elementCount: number;
+    readonly imageCount: number;
+    readonly brokenImageCount: number;
+    readonly inlineHandlerCount: number;
+    readonly canaryAttributeCount: number;
+    readonly canaryInlineHandlerCount: number;
+  };
+  readonly runtime: {
+    readonly pageErrorCounts: {
+      readonly syntax: number;
+      readonly reference: number;
+      readonly type: number;
+      readonly security: number;
+      readonly other: number;
+    };
+    readonly consoleErrorCount: number;
+    readonly failedRequestCount: number;
+    readonly http4xxCount: number;
+    readonly http5xxCount: number;
+  };
+}
+
 export type WordPressStoredScriptObservation =
   | {
       readonly status: "observed";
@@ -122,14 +163,20 @@ export type WordPressStoredScriptObservation =
         | "customer"
         | "unauthenticated"
         | "self";
-      /** First page whose visit delivered an issued canary; stays in Private Evidence. */
+      /** First firing page, or last non-firing victim page for diagnosis; Private Evidence only. */
       readonly screenshot?: Buffer;
+      /** Last completed non-firing victim visit; Private Evidence only. */
+      readonly victimBrowserDiagnostic?: WordPressVictimBrowserDiagnostic;
     }
   | { readonly status: "not-prepared" }
   | {
       readonly status: "unavailable";
       /** Optional for callers created before phase diagnostics were added. */
       readonly phase?: WordPressStoredScriptFailurePhase;
+      /** Bounded observer failure code; no browser stderr enters a ledger event. */
+      readonly failureCode?: WordPressStoredScriptFailureCode;
+      /** Private Evidence only. Never copy these bytes into a ledger event. */
+      readonly privateDiagnostic?: Buffer;
     };
 
 export type WordPressOptionsObservation =

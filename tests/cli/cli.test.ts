@@ -251,6 +251,8 @@ async function harness(
   };
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
+    leaseDirectory: join(root, "host-lab-lease"),
+    leaseWaitMs: 0,
     images: {
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
@@ -2552,7 +2554,7 @@ describe("harness CLI vertical slice", () => {
             event.type === "verification-finished" &&
             event.findingId === findingId,
         );
-    expect(finished()).toMatchObject([{ promptVersion: "wbh-verify/v1" }]);
+    expect(finished()).toMatchObject([{ promptVersion: "wbh-verify/v4" }]);
 
     // The operator named the Finding again: the retry rules of the automatic queue do not apply.
     const second = await run(...handoff);
@@ -2560,7 +2562,7 @@ describe("harness CLI vertical slice", () => {
     expect(second.stdout).toContain(`verified finding ${findingId}`);
     expect(finished()).toHaveLength(2);
     expect(finished()[1]).toMatchObject({
-      promptVersion: "wbh-verify/v1",
+      promptVersion: "wbh-verify/v4",
       attempt: 2,
     });
   });
@@ -4354,6 +4356,83 @@ describe("harness CLI vertical slice", () => {
     );
     expect(scoped.stdout).toMatch(/^wordfence in-scope /m);
     expect(scoped.stdout).toMatch(/^patchstack in-scope /m);
+  });
+
+  it("hands a latest-version re-verification to the skill while retaining the judge and new Snapshot", async () => {
+    const { run, configPath, root, handoffs, sweepHeldAtHandoff, ledger } =
+      await harness();
+    const campaignId = "campaign-reverify-handoff";
+    const campaign = ["--campaign", campaignId];
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "--all",
+          ...campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const queue = await run("review", ...campaign);
+    const findingId = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      queue.stdout,
+    )![1]!;
+    const original = ledger()
+      .read({ campaignId, findingId, type: "finding-recorded", limit: 1 })
+      .at(0)?.event;
+    expect(original?.type).toBe("finding-recorded");
+
+    const directory = join(root, "reverify-handoff");
+    const result = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      findingId,
+      "--config",
+      configPath,
+      "--handoff",
+      directory,
+      "--port",
+      "18082",
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(": runtime-confirmed");
+    expect(handoffs).toEqual([
+      { directory, httpPort: 18082, databasePort: 3307 },
+    ]);
+    expect(sweepHeldAtHandoff).toEqual([true]);
+    const derivedId = /^reverified finding \S+ as (\S+) on/m.exec(
+      result.stdout,
+    )![1]!;
+    const derived = ledger()
+      .read({
+        campaignId,
+        findingId: derivedId,
+        type: "finding-recorded",
+        limit: 1,
+      })
+      .at(0)?.event;
+    expect(derived?.type).toBe("finding-recorded");
+    if (
+      derived?.type !== "finding-recorded" ||
+      original?.type !== "finding-recorded"
+    )
+      throw new Error("The versioned Finding was not recorded");
+    expect(derived.snapshotDigest).not.toBe(original.snapshotDigest);
+    expect(derived.derivedFromFindingId).toBe(findingId);
+    expect(derived.derivationKind).toBe("latest-version");
+    const verified = ledger()
+      .read({ campaignId, findingId: derivedId, type: "verification-finished" })
+      .at(-1)?.event;
+    expect(verified?.type).toBe("verification-finished");
+    if (verified?.type !== "verification-finished")
+      throw new Error("The versioned verification was not recorded");
+    expect(verified.snapshotDigest).toBe(derived.snapshotDigest);
+    expect(verified.basis?.kind).toBe("latest-version");
+    expect(verified.promptVersion).toBe("wbh-verify/v4");
   });
 
   it("pins the original plugin sources when an automatic policy re-verifies a fixed version", async () => {
