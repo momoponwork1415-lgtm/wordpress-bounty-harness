@@ -5,17 +5,25 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 
-import { admitWordPressFinding } from "../../../src/profiles/wordpress/discovery/finding.js";
+import {
+  admitWordPressFinding,
+  wordpressFindingClaimSchema,
+  type WordPressFinding,
+} from "../../../src/profiles/wordpress/discovery/finding.js";
+import { isWordPressProgrammeImpact } from "../../../src/profiles/wordpress/discovery/programme-impacts.js";
 import type { WordPressLabHandle } from "../../../src/profiles/wordpress/lab/index.js";
 import {
   HandoffVerifier,
   WBH_VERIFY_SKILL_ID,
 } from "../../../src/profiles/wordpress/verification/handoff-verifier.js";
+import { createWordPressJudges } from "../../../src/profiles/wordpress/verification/judges.js";
 import {
   WORDPRESS_VERIFIER_FILE_NAMES,
   type WordPressVerifierRun,
 } from "../../../src/profiles/wordpress/verification/wordpress-verifier.js";
+import { finding as syntheticFinding, quietLab } from "./judge-fixture.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const SKILL_PATH = new URL(
@@ -507,5 +515,33 @@ describe("HandoffVerifier (#352)", () => {
     expect(result.outcome.status).toBe("incomplete");
     expect(f.calls).toEqual([]);
     expect(await f.exists("lab.json")).toBe(false);
+  });
+});
+
+describe("wbh-verify per-impact procedures (#437)", () => {
+  it("names every in-scope impact that has a judge in its procedures", async () => {
+    const text = await readFile(SKILL_PATH, "utf8");
+    const section = text.slice(text.indexOf("## 種別ごとの手順"));
+    const impacts = z
+      .object({
+        properties: z.object({
+          impact: z.object({ enum: z.array(z.string()) }),
+        }),
+      })
+      .parse(z.toJSONSchema(wordpressFindingClaimSchema, { io: "output" }))
+      .properties.impact.enum as WordPressFinding["impact"][];
+    const judges = createWordPressJudges({
+      store: {} as never,
+      lab: quietLab(),
+    });
+    const judged = impacts.filter(
+      (impact) =>
+        isWordPressProgrammeImpact(impact) &&
+        judges.for(syntheticFinding(impact)) !== null,
+    );
+    expect(judged).toContain("stored-xss");
+    expect(
+      judged.filter((impact) => !section.includes(`\`${impact}\``)),
+    ).toEqual([]);
   });
 });
