@@ -175,8 +175,8 @@ harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <
 | 6 | 所有者 | `harness review scope --campaign <id> --finding <id>`（`wordfence in-scope` のものだけ先へ） |
 | 7 | 所有者 | `harness lab up --for-review --campaign <id> --finding <id>` で手で再現する |
 | 8 | 所有者 | `harness review decide ... --reproduced match --reproduce-minutes <n>`（skill が示したコマンドを確かめ、手での再現の結果を足して打つ。再現の記録は判断の前に台帳へ入る） |
-| 9 | skill | `wbh-report`（英語の下書きを Private Evidence に書き、`review draft` で digest を記録） |
-| 10 | 所有者 | `harness review authorize --to wordfence` → 送信 → `harness review submitted` → `harness review outcome` |
+| 9 | skill | `wbh-report`（英語の下書きに、提出先のフォームの項目ごとの値と添付の一覧を付けて Private Evidence に書き、`review draft` で digest を記録） |
+| 10 | 所有者 | `harness review authorize --to <wordfence か patchstack>` → 下書きの項目ごとの値を拡張機能で貼って送信 → `harness review submitted` → `harness review outcome` |
 
 1 件あたりの見積りは reverify 30 分、手での再現 40 分、skill 30 分。1 回の batch は 3 件までにし、超える分は `defer` にする。RAM 16 GiB 未満の host では batch の前に `continuous stop`、後に `continuous resume` と `continuous run` を打つ（人手に数えない保守）。runner を起動し直す前に `lab down` で review 用の Lab を消す。
 
