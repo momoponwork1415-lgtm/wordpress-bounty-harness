@@ -72,6 +72,7 @@ import {
   openWordPressCampaignSession,
   readWordPressCampaignConfig,
   readWordPressCampaignPolicy,
+  wordPressRuntimeCaps,
   wordPressRuntimeCeilings,
   type WordPressCampaignBoundaries,
   type WordPressCampaignConfig,
@@ -999,19 +1000,9 @@ async function runWordPressCampaign(
     ...(input.targetLimit === undefined
       ? {}
       : { targetLimit: input.targetLimit }),
-    ...(config.resources.maxConcurrentTargetsByRuntime === undefined
+    ...(wordPressRuntimeCaps(config) === undefined
       ? {}
-      : {
-          runtimeCaps: {
-            // The same identity and share that pick the runtime at discovery.
-            runtimeOf: (target: WordPressTargetSelection) =>
-              assignDiscoveryRuntime(
-                target.targetId,
-                config.discovery.runtimeShare,
-              ),
-            ceilings: wordPressRuntimeCeilings(config),
-          },
-        }),
+      : { runtimeCaps: wordPressRuntimeCaps(config)! }),
     ...(input.stop === undefined ? {} : { stop: input.stop }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.retryIncompleteVerifications === undefined
@@ -1342,15 +1333,12 @@ export function createWordPressCliProfile(
     async verifyNext(state, input) {
       const session = await openWordPressCampaignSession(options, state, {
         configPath: input.configPath,
-        ...(input.handoff === undefined ? {} : { handoff: input.handoff }),
+        handoff: input.handoff,
       });
       return verifyNextFinding({
         ...(input.campaignId === undefined
           ? {}
           : { campaignId: input.campaignId }),
-        ...(input.campaignPrefix === undefined
-          ? {}
-          : { campaignPrefix: input.campaignPrefix }),
         ...(input.findingId === undefined
           ? {}
           : { only: { findingId: input.findingId } }),

@@ -24,7 +24,6 @@ afterEach(async () => {
 type Step = (input: {
   campaignId: string;
   target: string | null;
-  retryIncompleteVerifications: boolean;
   signal?: AbortSignal;
   resumeInterrupted?: { log(line: string): void };
   resumeProviderLimited?: { log(line: string): void };
@@ -171,38 +170,6 @@ async function expectLatchedStop(
 }
 
 describe("continuous runner", () => {
-  it("consumes verification work while a discovery batch is running", async () => {
-    let campaignStarted!: () => void;
-    let finishCampaign!: () => void;
-    const started = new Promise<void>((resolve) => {
-      campaignStarted = resolve;
-    });
-    const finished = new Promise<void>((resolve) => {
-      finishCampaign = resolve;
-    });
-    let verifiedDuringCampaign = false;
-    const t = await setup(
-      [
-        async () => {
-          campaignStarted();
-          await finished;
-          return {};
-        },
-      ],
-      {
-        verifyConcurrency: 1,
-        verifyNext: async () => {
-          await started;
-          verifiedDuringCampaign = true;
-          finishCampaign();
-          return null;
-        },
-      },
-    );
-    expect(await t.runner.run()).toBe("operator");
-    expect(verifiedDuringCampaign).toBe(true);
-  });
-
   it.each([
     ["rate-limit", [5, 10, 20, 40, 60, 60]],
     ["quota", [30, 60, 360]],
@@ -223,9 +190,6 @@ describe("continuous runner", () => {
         t.calls
           .slice(1, -1)
           .every((call) => call.resumeProviderLimited !== undefined),
-      ).toBe(true);
-      expect(
-        t.calls.slice(1).every((call) => call.retryIncompleteVerifications),
       ).toBe(true);
     },
   );
@@ -276,6 +240,12 @@ describe("continuous runner", () => {
   it("does not offer resume after a terminal incomplete marker", async () => {
     const steps: Step[] = [];
     const t = await setup(steps);
+    // The ledger takes only a diagnostic that Private Evidence holds.
+    const diagnostic = await new PrivateArtifactStore({
+      rootDirectory: join(t.root, "evidence"),
+      maxEntries: 4,
+      maxBytes: 1024,
+    }).putFiles({ "target-skip-diagnostic.json": "{}" });
     steps.push(async ({ campaignId }) => {
       await t.trial(campaignId, {
         outcome: "provider-limited",
@@ -287,12 +257,7 @@ describe("continuous runner", () => {
         selectionId: "wporg:x@1.0.0",
         stage: "discovery",
         reason: "run-failed",
-        artifacts: [
-          {
-            kind: "target-skip-diagnostic",
-            digest: `sha256:${"b".repeat(64)}`,
-          },
-        ],
+        artifacts: [{ kind: "target-skip-diagnostic", digest: diagnostic }],
       });
       return { stopped: "incomplete" };
     });
@@ -302,6 +267,155 @@ describe("continuous runner", () => {
       return {};
     });
     expect(await t.runner.run()).toBe("operator");
+    // The runner catches a step's error, so a failed expectation shows here.
+    expect(t.runner.memo().lastError).toBeUndefined();
+    expect(t.calls[1]?.campaignId).toBe(t.calls[0]?.campaignId);
+  });
+
+  it("backs off only the runtimes a limit stopped, each on its own steps, and holds the other until its own wait ends", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    const held: string[][] = [];
+    const targets = {
+      claude: `sha256:${"c".repeat(64)}`,
+      codex: `sha256:${"d".repeat(64)}`,
+    };
+    let runs = 0;
+    const limitedOn =
+      (limits: Partial<Record<keyof typeof targets, "quota" | "rate-limit">>) =>
+      async (input: Parameters<Step>[0]): Promise<Partial<CampaignSummary>> => {
+        const { targetLimit } = input as Parameters<
+          ContinuousDeps["runCampaign"]
+        >[0];
+        held.push([...(targetLimit.heldRuntimes?.() ?? [])].sort());
+        const runtimes = Object.keys(limits) as (keyof typeof targets)[];
+        for (const runtime of runtimes) {
+          const snapshotDigest = targets[runtime];
+          const runId = `limited-${++runs}`;
+          await t.append(input.campaignId, {
+            type: "discovery-run-started",
+            snapshotDigest,
+            runId,
+            labId: "lab",
+            runKind: "explore",
+            history: { mode: "none" },
+            configuration: { promptVariant: "v8" },
+          });
+          await t.append(input.campaignId, {
+            type: "discovery-run-finished",
+            snapshotDigest,
+            runId,
+            outcome: "provider-limited",
+            reason: "provider",
+            providerLimit: limits[runtime],
+            costUsd: "unavailable",
+            wallTimeMs: 1,
+          });
+          await t.append(input.campaignId, {
+            type: "campaign-stopped",
+            snapshotDigest,
+            reason: "provider-limit",
+            runtime,
+          });
+        }
+        return runtimes.length === 0
+          ? {}
+          : { stopped: "provider-limit", limitedRuntimes: runtimes.sort() };
+      };
+    steps.push(
+      // Claude hits its quota and Codex a rate limit in the same batch.
+      limitedOn({ claude: "quota", codex: "rate-limit" }),
+      // After Codex's 5 minutes Claude is still held; Codex hits it again.
+      limitedOn({ codex: "rate-limit" }),
+      // After Codex's next 10 minutes Claude is still held; the batch ends.
+      limitedOn({}),
+      // A new batch starts with no runtime held.
+      limitedOn({}),
+    );
+    await t.runner.run();
+    expect(held).toEqual([[], ["claude"], ["claude"], []]);
+    expect(t.log.filter((line) => line.includes(" backoff runtime="))).toEqual([
+      "2026-10-20T00:00:00.000Z backoff runtime=claude step=1 minutes=30 providerLimit=quota",
+      "2026-10-20T00:00:00.000Z backoff runtime=codex step=1 minutes=5 providerLimit=rate-limit",
+      "2026-10-20T00:05:00.000Z backoff runtime=codex step=2 minutes=10 providerLimit=rate-limit",
+    ]);
+    expect(t.calls.map((call) => call.campaignId)).toEqual([
+      "prod-20261020-1",
+      "prod-20261020-1",
+      "prod-20261020-1",
+      "prod-20261020-2",
+      "prod-20261020-3",
+    ]);
+    // The runner waits for the earliest runtime to come back, not the latest.
+    expect(t.log.filter((line) => line.includes(" backoff until="))).toEqual([
+      "2026-10-20T00:00:00.000Z backoff until=2026-10-20T00:05:00.000Z runtime=codex",
+      "2026-10-20T00:05:00.000Z backoff until=2026-10-20T00:15:00.000Z runtime=codex",
+    ]);
+  });
+
+  it("after a restart, holds a runtime whose saved backoff has not ended and starts one whose backoff has", async () => {
+    const held: string[][] = [];
+    const t = await setup([
+      (input) => {
+        const { targetLimit } = input as Parameters<
+          ContinuousDeps["runCampaign"]
+        >[0];
+        held.push([...(targetLimit.heldRuntimes?.() ?? [])]);
+        return {};
+      },
+    ]);
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify({
+        state: "backoff",
+        campaignId: "prod-20261019-4",
+        runtimeBackoff: {
+          claude: { step: 2, until: "2026-10-20T00:30:00.000Z" },
+          codex: { step: 1, until: "2026-10-19T23:55:00.000Z" },
+        },
+      }),
+    );
+    await t.runner.run();
+    expect(t.calls[0]!.campaignId).toBe("prod-20261019-4");
+    expect(held).toEqual([["claude"]]);
+  });
+
+  it("offers provider-limited resume to the batch after a runtime's own backoff", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    const seen: { hours: number; held: string[] }[] = [];
+    steps.push(
+      async ({ campaignId }) => {
+        await t.trial(campaignId, {
+          outcome: "provider-limited",
+          reason: "provider",
+          providerLimit: "rate-limit",
+        });
+        await t.append(campaignId, {
+          type: "campaign-stopped",
+          reason: "provider-limit",
+          runtime: "codex",
+        });
+        return { stopped: "provider-limit", limitedRuntimes: ["codex"] };
+      },
+      (input) => {
+        const { targetLimit } = input as Parameters<
+          ContinuousDeps["runCampaign"]
+        >[0];
+        seen.push({
+          hours: t.hours(),
+          held: [...(targetLimit.heldRuntimes?.() ?? [])],
+        });
+        return {};
+      },
+    );
+    expect(await t.runner.run()).toBe("operator");
+    // Codex's own 5 minutes passed and nothing is held when the Trial resumes.
+    expect(seen).toEqual([{ hours: 5 / 60, held: [] }]);
+    expect(t.calls[0]?.resumeProviderLimited).toBeUndefined();
+    expect(t.calls[1]?.campaignId).toBe(t.calls[0]?.campaignId);
+    expect(t.calls[1]?.resumeProviderLimited).toBeDefined();
+    expect(t.runner.memo().lastError).toBeUndefined();
   });
 
   it("starts a new campaign id after a finished one, numbered from the ledger", async () => {
@@ -414,7 +528,6 @@ describe("continuous runner", () => {
     );
     expect(t.calls[0]).toMatchObject({
       campaignId: "prod-20261019-4",
-      retryIncompleteVerifications: true,
     });
   });
 
@@ -455,7 +568,6 @@ describe("continuous runner", () => {
       expect(await createContinuousRunner(t.deps).run()).toBe("operator");
       expect(t.calls[1]).toMatchObject({
         campaignId: t.calls[0]?.campaignId,
-        retryIncompleteVerifications: true,
       });
       expect(existsSync(continuousPaths(t.root).stop)).toBe(false);
     },
@@ -511,7 +623,6 @@ describe("continuous runner", () => {
     await t.runner.run();
     expect(t.calls[0]).toMatchObject({
       campaignId: "prod-20261019-4",
-      retryIncompleteVerifications: true,
     });
     // The profile's resume lines reach the runner log with a timestamp (ADR 0036).
     expect(t.log).toContain(
@@ -665,7 +776,6 @@ describe("continuous runner", () => {
     await t.runner.run();
     expect(t.calls[0]).toMatchObject({
       campaignId: "prod-20261020-1",
-      retryIncompleteVerifications: false,
     });
     expect(selects).toBe(1);
   });

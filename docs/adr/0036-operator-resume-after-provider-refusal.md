@@ -127,7 +127,7 @@ v8 の協調 Trial は Root 1 thread を同じ gVisor container の中で `codex
 1. **待機と再開。** runner は既存の rate-limit / quota backoff を終えてから、対象の枠内で最新の `provider-limited` segment を再開する。起動直後の run も同じ扱いにする。`campaign resume` と同じ判定・復元・新しい使い捨て sandbox・Snapshot・固定の再開段落・残り wall を使い、元の `trialId` の segment として記録する。新しい Trial を最初から起動しない。手動の `campaign run` が `provider-limited` で終了コード 3 を返す動きは維持する。
 2. **再開できないとき。** `runtime-profile-differs`、`session-evidence-missing`、`wall-exhausted` などの拒否、または再開回数の上限に達したときは、理由をログと Private Evidence の診断に記録し、対象を理由付き `incomplete` / `target-skipped(run-failed)` として閉じる。同じ対象を新しい Trial としてやり直さない。`campaign resume` の判定自体は拒否時に event を書かない規則を維持する。
 3. **上限。** runner が自動で作る再開 segment は、同じ Trial で最大 5 とする。元の run はこの 5 に数えないので、元の run と合わせると最大 6 segment になる。再開は、既存の残り wall 5 分以上という規則を満たす間だけ行う。手動で作られた再開 segment も 5 の枠を消費する（最新 segment の `resumeSegment` が 5 なら `resume-limit` で閉じる）。再開 segment が再び `provider-limited` なら、次の backoff 後にこの規則で再判定する。上限に達した Trial は正常な候補 0 件として数えない。
-4. **他の停止理由。** `provider-cyber-policy` は引き続き操作者が run を名指ししたときだけ再開する。Claude の `provider-refusal` は Trial を終了し、別モデルへの切り替えも自動再開もしない。上の追記 3 による `interrupted` の自動回収と再開は続ける。探索 prompt と再開段落は変更しない。
+4. **他の停止理由。** `provider-cyber-policy` は引き続き操作者が run を名指ししたときだけ再開する。Claude の `provider-refusal` は Trial を終了し、別モデルへの切り替えも自動再開もしない。※ 2026-10-21 追記で、Claude の `provider-refusal` も操作者が名指ししたときに再開するように改めた。自動再開しないことは変わらない。上の追記 3 による `interrupted` の自動回収と再開は続ける。探索 prompt と再開段落は変更しない。
 
 再開後に完了した chain と、再開拒否・上限で閉じた chain は Trial 1 回とし、各 segment の wall・token・source 読取・子の活動を通算する。後者は理由付き `incomplete` として選定からも除外する。先行 segment に探索活動があれば、最後の segment で新たな読取が無くてもその活動は消さない。全 segment を通して活動が無い場合は、正常な候補 0 件にしない。再開した segment が拒否・上限以外（`failed` など）で終わり、どの segment も source を読まず、子を起動せず、broker 転送が 1 以下だった chain は、SPEC §6 の規則のとおり Trial に数えず、その対象は次の選定で戻る。再開待ちの単独 `provider-limited` run は、ADR 0029 のとおりまだ Trial に数えない。これにより、provider の都合で止まった時間を新規 Trial に捨てず、最低 60 分と 120 分上限を同じ Trial で測る。
 
@@ -161,3 +161,23 @@ v8 の協調 Trial は Root 1 thread を同じ gVisor container の中で `codex
 ### 消し方
 
 `src/discovery/claude-session.ts` の `claudeRunSession` と `claudeSessionFromDiagnostic`、`resume-trial.ts` の `claudeSessionOfSealedDiagnostic`、Claude の runtime の `run.resume` の admission と seed の受け渡し、`GvisorClaudeSandbox` の `resume` と `seedResume`、runner の `resumeSessionId`、CLI の `resumeWordPressRun` の runtime の選び分け、`Ledger.resumes` と `ledger resumes`、`tests/discovery/claude-resume.test.ts` を削除する。receipt の Claude の path の形と `session` は読取互換として残す。
+
+## 2026-10-21 追記: Claude の拒否も、Codex の cyber-policy と同じく操作者が再開する
+
+所有者は 2026-10-21 に「拒否の場合も再開するほうがいいかも codex の cyber policy とおんなじ」と決めた。この日、Root Opus ＋ 子 Sonnet の本番 Trial は 9 本中 3 本が `provider/provider-refusal` で止まった。拒否された run も、止まるまでに Finding を台帳に記録していた（`codepress-admin-columns@7.1.7` は 5 件）。
+
+### 決定
+
+- Claude の `provider-refusal` で止まった Root は、Codex の `provider-cyber-policy` と同じ扱いにする。操作者が `campaign resume --run <runId>` で名指しして再開する。経路は 2026-10-20 追記のとおりで、コードは変えない。
+- 操作者が再開を回すときは、1 本ずつ回す。再開した segment がまた拒否されたら、その Trial はそれ以上再開しない。
+- 再開の分も、runner の runtime ごとの同時数（`maxConcurrentTargetsByRuntime` と `continuous concurrency --runtime`）の中に収める。再開している間は、runner の上限を 1 つ下げる。
+
+### 変えないこと
+
+- Harness に自動再開の経路は足さない。再開段落、目的 prompt、skill も変えず、拒否を避ける文も足さない。
+- 拒否の記録（`incomplete(provider: provider-refusal)` と `target-skipped(provider-refused)`）と、別モデルへの切り替えを止めることは変えない。
+- 不変条件 2 と 8 は変えない。
+
+### 消し方
+
+この節を削除する。操作者は Claude の拒否で止まった run を名指ししなくなる。コードの変更は無い。

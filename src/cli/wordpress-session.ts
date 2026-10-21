@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
 import {
+  assignDiscoveryRuntime,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   EGRESS_BROKER_MEMORY_MIB,
   runtimeShareSchema,
@@ -51,6 +52,7 @@ import {
   type WordPressReconstruction,
 } from "../profiles/wordpress/verification/reproduction-package.js";
 import type { CliState } from "./index.js";
+import type { RuntimeTargetCaps } from "./pipeline.js";
 
 const text = z.strictObject({
   version: z.string().min(1).max(64),
@@ -270,6 +272,30 @@ export function wordPressRuntimeCeilings(
       (entry): entry is [string, number] => entry[1] !== undefined,
     ),
   );
+}
+
+/**
+ * The per-runtime caps and runtime of each target, or undefined when the
+ * campaign has neither caps nor a share. A provider limit stops only one
+ * runtime's targets when both runtimes get targets and no in-campaign
+ * Verifier (Codex) shares the limited subscription.
+ */
+export function wordPressRuntimeCaps(
+  config: WordPressCampaignConfig,
+): RuntimeTargetCaps<WordPressTargetSelection> | undefined {
+  const share = config.discovery.runtimeShare;
+  if (config.resources.maxConcurrentTargetsByRuntime === undefined && !share)
+    return undefined;
+  return {
+    // The same identity and share that pick the runtime at discovery.
+    runtimeOf: (target) => assignDiscoveryRuntime(target.targetId, share),
+    ceilings: wordPressRuntimeCeilings(config),
+    providerLimitPerRuntime:
+      share !== undefined &&
+      share.codex > 0 &&
+      share.claude > 0 &&
+      config.discovery.lab === "none",
+  };
 }
 
 /** A selection policy file, validated against the profile schema. */

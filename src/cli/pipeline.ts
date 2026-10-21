@@ -104,6 +104,12 @@ export type CampaignSummary = {
   }[];
   /** Set when the campaign stopped early and can be resumed with the same id. */
   readonly stopped?: "provider-limit" | "incomplete" | "operator";
+  /**
+   * With `stopped: "provider-limit"`, the runtimes whose limit stopped their
+   * targets while the other runtime's targets went on. Absent, the limit
+   * stopped the whole campaign.
+   */
+  readonly limitedRuntimes?: readonly string[];
   readonly targets: readonly {
     readonly targetId: string;
     readonly version: string;
@@ -137,6 +143,8 @@ export interface TargetLimit {
   readRuntime?(runtime: string): Promise<number | null>;
   /** One runtime's effective limit, on the first read and each time it changes. */
   reportRuntime?(runtime: string, limit: number): void;
+  /** Runtimes in provider backoff: none of their targets starts until they leave it. */
+  heldRuntimes?(): ReadonlySet<string>;
   readonly pollMs?: number;
 }
 
@@ -147,6 +155,13 @@ export interface TargetLimit {
 export interface RuntimeTargetCaps<Target> {
   readonly runtimeOf: (target: Target) => string;
   readonly ceilings: Readonly<Record<string, number>>;
+  /**
+   * A provider limit in discovery stops only the targets of the runtime that
+   * hit it; the other runtime's targets keep starting. Absent, it stops the
+   * whole campaign. The in-campaign Verifier does not look at it, so the
+   * profile sets it only for campaigns without a discovery Lab.
+   */
+  readonly providerLimitPerRuntime?: boolean;
 }
 
 type Claim =
@@ -192,17 +207,18 @@ function targetScheduler<Target>(options: {
       }
       byRuntime.set(runtime, limit);
     }
-    return { total, byRuntime };
+    return { total, byRuntime, held: live?.heldRuntimes?.() ?? new Set() };
   };
   return {
     /** Takes the first startable index out of `pending`, or waits so the caller checks again. */
     async claim(pending: number[]): Promise<Claim> {
-      const { total, byRuntime } = await limits();
+      const { total, byRuntime, held } = await limits();
       // Everything below runs without an await, so two workers never take the same target.
       if (pending.length === 0) return { kind: "empty" };
       if (active < total) {
         const position = pending.findIndex((index) => {
           const runtime = runtimes[index];
+          if (runtime !== undefined && held.has(runtime)) return false;
           const limit =
             runtime === undefined ? undefined : byRuntime.get(runtime);
           return (
@@ -297,7 +313,27 @@ export async function runCampaignPipeline<
   };
   let stopped: CampaignSummary["stopped"];
   let fatalError: Error | undefined;
-  const requestStop = (reason: NonNullable<CampaignSummary["stopped"]>) => {
+  let selected: readonly Target[] = [];
+  // Selection order; a target leaves when it starts.
+  const pending: number[] = [];
+  const limitedRuntimes = new Set<string>();
+  const runtimeOf = (target: Target): string | undefined =>
+    options.runtimeCaps?.providerLimitPerRuntime === true
+      ? options.runtimeCaps.runtimeOf(target)
+      : undefined;
+  /** With a runtime, a provider limit stops only that runtime's pending targets. */
+  const requestStop = (
+    reason: NonNullable<CampaignSummary["stopped"]>,
+    runtime?: string,
+  ) => {
+    if (reason === "provider-limit" && runtime !== undefined) {
+      limitedRuntimes.add(runtime);
+      // They stay unstarted for the resume; synchronous, so no claim takes one.
+      for (let at = pending.length - 1; at >= 0; at--)
+        if (runtimeOf(selected[pending[at]!]!) === runtime)
+          pending.splice(at, 1);
+      return;
+    }
     if (reason === "provider-limit" || stopped === undefined) stopped = reason;
   };
 
@@ -529,13 +565,15 @@ export async function runCampaignPipeline<
           discovered.stoppedBy === "provider-limit" &&
           discovered.runCount > 0
         ) {
-          requestStop("provider-limit");
+          const runtime = runtimeOf(target);
+          requestStop("provider-limit", runtime);
           await append({
             ...base,
             identity: `campaign-stopped-${options.newId()}`,
             occurredAt: at(),
             type: "campaign-stopped",
             reason: "provider-limit",
+            ...(runtime === undefined ? {} : { runtime }),
           });
         } else if (
           discovered.stoppedBy === "incomplete" &&
@@ -699,13 +737,15 @@ export async function runCampaignPipeline<
         discovered.stoppedBy === "provider-limit" &&
         discovered.runCount > 0
       ) {
-        requestStop(discovered.stoppedBy);
+        const runtime = runtimeOf(target);
+        requestStop(discovered.stoppedBy, runtime);
         await append({
           ...base,
           identity: `campaign-stopped-${options.newId()}`,
           occurredAt: at(),
           type: "campaign-stopped",
           reason: discovered.stoppedBy,
+          ...(runtime === undefined ? {} : { runtime }),
         });
         result.target = { ...summary, verifications: [] };
         return;
@@ -944,12 +984,9 @@ export async function runCampaignPipeline<
     return result;
   };
 
-  const selected = (await pipeline.select()).filter(
-    (target) => !isCompleted(target),
-  );
+  selected = (await pipeline.select()).filter((target) => !isCompleted(target));
   const results: (TargetResult | undefined)[] = Array(selected.length);
-  // Selection order; a target leaves when it starts.
-  const pending = selected.map((_, index) => index);
+  pending.push(...selected.map((_, index) => index));
   const scheduler = targetScheduler({
     ceiling: maxConcurrentTargets,
     selected,
@@ -1010,11 +1047,16 @@ export async function runCampaignPipeline<
   const skipped = results.flatMap((result) =>
     result?.skipped === undefined ? [] : [result.skipped],
   );
+  // A whole-campaign stop keeps its old summary; a runtime stop names its runtimes.
+  const runtimeStopped =
+    stopped !== "provider-limit" && limitedRuntimes.size > 0;
+  if (runtimeStopped) stopped = "provider-limit";
   return {
     campaignId,
     targets,
     skipped,
     ...(stopped === undefined ? {} : { stopped }),
+    ...(runtimeStopped ? { limitedRuntimes: [...limitedRuntimes].sort() } : {}),
   };
 }
 
@@ -1034,9 +1076,12 @@ export type VerifyNextSummary = {
   readonly status: VerificationResultV1["status"];
 };
 
-const verificationInFlight = new Set<string>();
-
-/** Consume one unverified or bounded-retry Finding without starting a discovery Lab. */
+/**
+ * The handoff queue (#423): every recorded, unparked Finding without a verdict,
+ * in ledger order, one per call, without a discovery Lab. Retry budgets count
+ * the current skill version's attempts only, so an incomplete left by another
+ * Verifier version (the retired automatic `verifier-v8`) keeps a Finding queued.
+ */
 export async function verifyNextFinding<
   Setup extends { readonly scenario?: { readonly id: string } | undefined },
   Handle extends LabHandle,
@@ -1044,10 +1089,9 @@ export async function verifyNextFinding<
   Reconstruction,
 >(options: {
   readonly campaignId?: string;
-  readonly campaignPrefix?: string;
   /**
-   * The one Finding an operator or skill named. They supply what the automatic
-   * rules could not, so the prompt-version match and retry budget do not apply.
+   * The one Finding an operator or skill named. They supply what the queue
+   * rules could not, so parking and the retry budget do not apply.
    */
   readonly only?: { readonly findingId: string };
   readonly ledger: Ledger;
@@ -1057,24 +1101,26 @@ export async function verifyNextFinding<
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
 }): Promise<VerifyNextSummary | null> {
+  const scope =
+    options.campaignId === undefined ? {} : { campaignId: options.campaignId };
   const findings = options.ledger.readAll({
-    ...(options.campaignId === undefined
-      ? {}
-      : { campaignId: options.campaignId }),
+    ...scope,
     type: "finding-recorded",
   });
   const histories = options.ledger.readAll({
-    ...(options.campaignId === undefined
-      ? {}
-      : { campaignId: options.campaignId }),
+    ...scope,
     type: "verification-finished",
   });
-  const labs = options.ledger.readAll({
-    ...(options.campaignId === undefined
-      ? {}
-      : { campaignId: options.campaignId }),
-    type: "lab-provisioned",
-  });
+  const labs = options.ledger.readAll({ ...scope, type: "lab-provisioned" });
+  const parked = new Set(
+    options.ledger
+      .readAll({ ...scope, type: "finding-parked" })
+      .flatMap(({ event }) =>
+        event.type === "finding-parked"
+          ? [`${event.campaignId}\0${event.findingId}`]
+          : [],
+      ),
+  );
   for (const { event } of findings) {
     if (
       event.type !== "finding-recorded" ||
@@ -1082,17 +1128,15 @@ export async function verifyNextFinding<
     )
       continue;
     if (
-      options.campaignPrefix !== undefined &&
-      !event.campaignId.startsWith(`${options.campaignPrefix}-`)
-    )
-      continue;
-    if (
       options.only !== undefined &&
       event.findingId !== options.only.findingId
     )
       continue;
-    const key = `${event.campaignId}\0${event.findingId}`;
-    if (verificationInFlight.has(key)) continue;
+    if (
+      options.only === undefined &&
+      parked.has(`${event.campaignId}\0${event.findingId}`)
+    )
+      continue;
     const history = histories.filter(
       (record): record is VerificationRecord =>
         record.event.type === "verification-finished" &&
@@ -1100,11 +1144,22 @@ export async function verifyNextFinding<
         record.event.findingId === event.findingId &&
         record.event.basis === undefined,
     );
-    const previous = history.at(-1);
+    const latest = history.at(-1);
+    // This version's latest attempt; its budget decides a retry.
+    const previous = history
+      .filter(
+        ({ event: prior }) =>
+          prior.promptVersion === options.verification.promptVersion,
+      )
+      .at(-1);
+    if (
+      options.only === undefined &&
+      latest !== undefined &&
+      latest.event.result.status !== "incomplete"
+    )
+      continue;
     if (previous !== undefined && options.only === undefined) {
       if (previous.event.result.status !== "incomplete") continue;
-      if (previous.event.promptVersion !== options.verification.promptVersion)
-        continue;
       const reason = previous.event.result.reason;
       const attemptsForReason = countAttemptsForReason(
         history.map(({ event: prior }) => prior),
@@ -1132,53 +1187,43 @@ export async function verifyNextFinding<
       )
         continue;
     }
-    verificationInFlight.add(key);
-    try {
-      const snapshot = await options.loadSnapshot(event.snapshotDigest);
-      const setup = options.setupFor(snapshot);
-      if (
-        options.only === undefined &&
-        previous?.event.result.status === "incomplete" &&
-        previous.event.result.reason === "precondition" &&
-        !shouldAutomaticallyRetryVerification({
-          reason: "precondition",
-          attemptsForReason: 1,
-          sameLabSetup: true,
-          previousScenarioId: scenarioForVerification(
-            previous,
-            labs,
-            event.snapshotDigest,
-          ),
-          currentScenarioId: setup.scenario?.id ?? null,
-        })
-      )
-        continue;
-      const verificationId = options.newId();
-      const result = await options.verification.verify({
-        campaignId: event.campaignId,
-        findingId: event.findingId,
-        verificationId,
-        attempt: Math.max(
-          history.length + 1,
-          (previous?.event.attempt ?? 0) + 1,
+    const snapshot = await options.loadSnapshot(event.snapshotDigest);
+    const setup = options.setupFor(snapshot);
+    if (
+      options.only === undefined &&
+      previous?.event.result.status === "incomplete" &&
+      previous.event.result.reason === "precondition" &&
+      !shouldAutomaticallyRetryVerification({
+        reason: "precondition",
+        attemptsForReason: 1,
+        sameLabSetup: true,
+        previousScenarioId: scenarioForVerification(
+          previous,
+          labs,
+          event.snapshotDigest,
         ),
-        ...(previous === undefined
-          ? {}
-          : { retryOf: previous.event.verificationId }),
-        snapshot,
-        setup,
-        campaignLabSetupDigest: canonicalDigest(setup),
-        reconstruction: options.reconstructionFor(snapshot),
-      });
-      return {
-        campaignId: event.campaignId,
-        findingId: event.findingId,
-        verificationId,
-        status: result.status,
-      };
-    } finally {
-      verificationInFlight.delete(key);
-    }
+        currentScenarioId: setup.scenario?.id ?? null,
+      })
+    )
+      continue;
+    const verificationId = options.newId();
+    const result = await options.verification.verify({
+      campaignId: event.campaignId,
+      findingId: event.findingId,
+      verificationId,
+      attempt: Math.max(history.length + 1, (latest?.event.attempt ?? 0) + 1),
+      ...(latest === undefined ? {} : { retryOf: latest.event.verificationId }),
+      snapshot,
+      setup,
+      campaignLabSetupDigest: canonicalDigest(setup),
+      reconstruction: options.reconstructionFor(snapshot),
+    });
+    return {
+      campaignId: event.campaignId,
+      findingId: event.findingId,
+      verificationId,
+      status: result.status,
+    };
   }
   return null;
 }
