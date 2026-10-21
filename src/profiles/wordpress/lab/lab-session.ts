@@ -49,7 +49,8 @@ export class WordPressLabSession {
   readonly receiver: string;
   readonly databasePassword: string;
   readonly readerPassword: string;
-  readonly adminPassword: string;
+  /** Rotated when handoff setup ends (#430); the Lab browser reads the current one. */
+  adminPassword: string;
   /** Only the WordPress container's environment holds this. */
   readonly executionSalt: string;
   readonly attackerAccounts: Readonly<{
@@ -72,7 +73,7 @@ export class WordPressLabSession {
   readonly executionNonces = new Set<string>();
   readonly scriptNonces = new Set<string>();
   canaries?: WordPressCanaryLedger;
-  /** Option digests taken when canaries were seeded. */
+  /** Option digests taken when canaries were seeded, or when handoff setup ended. */
   optionBaseline?: ReadonlyMap<string, string>;
   receiverIp?: string;
   /** gVisor containers cannot use Docker's name resolution, so WordPress gets this address. */

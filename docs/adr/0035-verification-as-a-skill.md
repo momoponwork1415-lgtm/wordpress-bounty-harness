@@ -42,3 +42,10 @@ supersedes: 0026 for the administrator boundary of a Verifier run
 ## 2026-10-21 注記（#423、所有者決定 2026-10-21）
 
 決定の「Codex Verifier の経路は変えない」と「誰が回すか」を改める。runner（`continuous run`）の検証 worker と `--verify-concurrency` を削除し、`verify next` は `--handoff` を必須にした（無ければ UsageError）。受理した scope 内 Finding は全 campaign から handoff 列に並び、再試行予算は現行の skill 版の試行で数える。Codex Verifier（`verifier-v8`）は `review reverify`（`--handoff` なし）と `discovery.lab: attached` の campaign 内検証にだけ残る。後者は scenario 再試行と一体なので #353 で扱う。台帳の `verifier-v8` の event は読み続ける。本 ADR を消すときは #423 の PR も revert する。
+
+## 2026-10-21 追記: 基線を取る時点と、設定管理者の無効化（#430、所有者の委任で AI）
+
+PR #415 のレビュー指摘 2 への対応。決定の本文は変えず、次の 2 点を足す。
+
+- **基線の時点。** `setup-done` を受けた Harness は、`observation-ready` と `attack.json` を置く前に、HTTP 捕捉の起点、Lab 状態の基線、攻撃者 account の role の基線、監視する option の基線をすべて取り直す。判定はこの時点より後の変化だけで行う。SQL と file の canary は基線を取り直さない。`setup-done` の時点で播種した値から変わっていれば、その attempt は `attack.json` を出さずに理由付き `incomplete`（`setup-boundary`）にする。
+- **設定管理者の無効化。** 同じく `attack.json` を置く前に、Harness は Lab の中で、`lab.json` に渡した設定管理者の session と application password をすべて破棄し、password を変える。canary 管理者と canary user にも同じことをする。前提作りの間に得た session は、`setup-done` の後では認証に通らない。これは Lab 側の決まった操作で、skill の「使わない」という文には頼らない。無効化に失敗した attempt は、`attack.json` を出さずに理由付き `incomplete`（`setup-boundary`）にする。skill 本文は変えない。

@@ -1719,6 +1719,51 @@ describe("WordPress gVisor Lab", () => {
     });
   });
 
+  it("ends handoff setup by revoking its administrator and retaking the option baseline (#430)", async () => {
+    const { lab, snapshot, setup, commands, database } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup);
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const { handle } = provisioned;
+    expect(await lab.finishSetup(handle)).toBe(false);
+    expect((await lab.seedCanaries(handle)).status).toBe("seeded");
+    const setupPassword = lab.reviewAdministrator(handle)?.password;
+    // An ordinary setup change is part of the new baseline, not of the attack.
+    database.options.set("users_can_register", "1");
+    expect(await lab.finishSetup(handle)).toBe(true);
+    const variable = commands
+      .flatMap((command) => command.args)
+      .find((arg) => arg.startsWith("WBH_SETUP_PRINCIPALS="));
+    const principals = JSON.parse(
+      variable?.slice("WBH_SETUP_PRINCIPALS=".length) ?? "[]",
+    ) as [string, string][];
+    expect(principals.map(([login]) => login)).toEqual([
+      "harness-admin",
+      "wbh-canary-admin-fixed-nonce",
+      "wbh-canary-fixed-nonce",
+    ]);
+    const rotated = lab.reviewAdministrator(handle)?.password;
+    expect(rotated).not.toBe(setupPassword);
+    expect(principals[0]?.[1]).toBe(rotated);
+    // The new password reaches PHP only through the environment.
+    expect(
+      commands
+        .flatMap((command) => command.args)
+        .filter((arg) => arg.includes(rotated!)),
+    ).toEqual([variable]);
+    expect(await lab.observeOptions(handle)).toEqual({
+      status: "observed",
+      changed: [],
+    });
+    database.options.set("default_role", '"administrator"');
+    expect(await lab.observeOptions(handle)).toEqual({
+      status: "observed",
+      changed: ["default_role"],
+    });
+    // A seeded canary that setup moved cannot be restored by a new baseline.
+    database.deleted.add("/etc/wbh-canary");
+    expect(await lab.finishSetup(handle)).toBe(false);
+  });
+
   it("exposes the active review Lab receiver address only to its owned handle", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const provisioned = await lab.provision(snapshot, setup, {

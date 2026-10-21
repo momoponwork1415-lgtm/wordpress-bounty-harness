@@ -198,7 +198,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
               url: `http://127.0.0.1:${exposed.httpPort}`,
               hostHeader: new URL(input.lab.endpoint).host,
             },
-            /** Setup only; after `setup-done` the attacker position alone (ADR 0035). */
+            /** Setup only; revoked at `setup-done`, then the attacker position alone (ADR 0035). */
             administrator,
             ...(input.lab.scenario === undefined
               ? {}

@@ -17,6 +17,7 @@ import type {
   ProvisionResult,
 } from "../../../lab/index.js";
 import {
+  closeWordPressSetup,
   placeVerificationCanaries,
   seedWordPressCanaries,
 } from "./canary-placement.js";
@@ -134,6 +135,12 @@ export interface WordPressLab extends LabProvisioner<
   ): { readonly username: "harness-admin"; readonly password: string } | null;
   /** Review-only receiver address for a human-operated browser in the Lab network. */
   reviewReceiverIp(handle: WordPressLabHandle): string | null;
+  /**
+   * Ends handoff precondition setup (#430): revokes the setup administrator
+   * and the canary principals, then retakes the role and option baselines.
+   * False when the Lab cannot, or when setup moved the SQL or file canaries.
+   */
+  finishSetup(handle: WordPressLabHandle): Promise<boolean>;
   canaryLedger(handle: WordPressLabHandle): WordPressCanaryLedger | null;
   prepareExecutionCanary(handle: WordPressLabHandle): ExecutionCanary | null;
   /**
@@ -579,6 +586,25 @@ export function openWordPressLab(options: {
     },
     reviewReceiverIp(handle) {
       return sessionFor(handle)?.receiverIp ?? null;
+    },
+    async finishSetup(handle) {
+      const lab = sessionFor(handle);
+      if (lab === undefined) return false;
+      try {
+        // No baseline can restore a seeded value; a moved one ends the attempt.
+        const table = await observe.observeCanaryTable(lab);
+        const files = await observe.observeCanaryFiles(lab);
+        if (
+          table.status !== "intact" ||
+          files.status !== "observed" ||
+          files.deleted.length > 0
+        )
+          return false;
+        await closeWordPressSetup(lab);
+        return true;
+      } catch {
+        return false;
+      }
     },
     async teardown(handle) {
       const lab = sessionFor(handle);

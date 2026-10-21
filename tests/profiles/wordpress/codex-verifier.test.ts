@@ -193,6 +193,7 @@ async function fixture(
     }),
     lab: {
       markCapture: async () => "0",
+      finishSetup: async () => true,
       prepareExecutionCanary: () =>
         issueCanary
           ? { nonce: "fake-nonce", php: "synthetic-canary-php" }
