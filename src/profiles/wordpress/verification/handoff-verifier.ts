@@ -66,8 +66,9 @@ const ABORT_REASON_CODES = new Set([
 
 /**
  * Hands one Verifier run to a skill running on the host (#352): writes
- * setup-only `lab.json`, waits for `setup-done`, restarts the Harness
- * observation, then releases attacker-only `attack.json` and waits for the six
+ * setup-only `lab.json`, waits for `setup-done`, has the Harness close setup
+ * and restart its observation, then releases
+ * attacker-only `attack.json` and waits for the six
  * Verifier files or `abort`. It never reads the files'
  * meaning; `WordPressVerifier` and the judges do that as for any transport.
  */
@@ -232,8 +233,13 @@ export class HandoffVerifier implements WordPressVerifierTransport {
                 "timeout",
                 "setup-done was not placed within the wall",
               );
-        // Setup is finished: capture and diff only what follows.
-        await input.restartObservation();
+        // Setup is finished: only what follows is captured and diffed, and
+        // no attacker data is released unless the Harness closed setup (#430).
+        if (!(await input.restartObservation()))
+          return incomplete(
+            "setup-boundary",
+            "The Harness could not close setup and retake the Lab baseline; repeat in a fresh Lab",
+          );
         await writeFile(join(directory, "observation-ready"), "", {
           mode: 0o600,
           flag: "wx",

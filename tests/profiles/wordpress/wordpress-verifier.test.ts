@@ -42,6 +42,7 @@ async function fixture(options: {
   readonly issueCanary?: boolean;
   readonly receiptRunId?: string;
   readonly captureMarker?: string | null;
+  readonly setupCloses?: boolean;
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-wordpress-verifier-"));
   roots.push(root);
@@ -98,6 +99,8 @@ async function fixture(options: {
         : {}),
       async run(input) {
         runs.push(input);
+        if (options.setupPreconditions && options.setupCloses !== false)
+          await input.restartObservation();
         return {
           promptDigest: digest,
           receipt: {
@@ -268,6 +271,32 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
     expect(f.runs).toHaveLength(1);
     expect(f.ledger.read({ type: "verifier-run-finished" })).toHaveLength(1);
     expect(f.ledger.read({ type: "finding-parked" })).toHaveLength(0);
+  });
+
+  it("marks a closed setup in the recipe and refuses files from an unclosed one (#430)", async () => {
+    const closed = await fixture({
+      impact: "stored-xss",
+      setupPreconditions: true,
+    });
+    const attempt = await closed.attempt();
+    if (attempt.status !== "attempted") throw new Error("not attempted");
+    expect(
+      await closed.store.readFile(
+        attempt.recipeDigest,
+        "setup-boundary.json",
+        4096,
+      ),
+    ).toMatchObject({ status: "resolved" });
+    const unclosed = await fixture({
+      impact: "stored-xss",
+      setupPreconditions: true,
+      setupCloses: false,
+    });
+    expect(await unclosed.attempt()).toEqual({
+      status: "incomplete",
+      reason: "recipe",
+      nextStep: "setup-not-closed",
+    });
   });
 
   it("keeps the missing-scenario gate for a transport without setup capability", async () => {
