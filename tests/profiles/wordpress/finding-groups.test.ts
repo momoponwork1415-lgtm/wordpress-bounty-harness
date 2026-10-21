@@ -4,13 +4,15 @@ import { join } from "node:path";
 
 import { afterEach, expect, it } from "vitest";
 
+import { verifyNextFinding } from "../../../src/cli/pipeline.js";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import { Ledger, type LedgerEventV1 } from "../../../src/ledger/index.js";
-import { exportReviewBundle } from "../../../src/review/index.js";
+import { exportReviewBundle, Review } from "../../../src/review/index.js";
 import { recordWordPressReport } from "../../../src/profiles/wordpress/discovery/candidate-admission.js";
 
 // #424: 同じ Snapshot で plugin 側の file:function が重なる Finding を受理時に群にし、
-// 群の識別子を台帳に残す。判定と提出の単位は Finding のまま。
+// 群の識別子を台帳に残す。review と verify next は群の代表を先に出す。捨てない。
+// 判定と提出の単位は Finding のまま。
 
 const digestOf = (c: string) => `sha256:${c.repeat(64)}`;
 const campaignId = "campaign-groups";
@@ -150,6 +152,65 @@ it("records overlapping plugin frames as one group and keeps the rest apart (#42
     group(separate.findingId, 1, true),
   );
   expect(await exported(legacy)).toEqual(group(legacy, 1, true));
+});
+
+it("puts each group's representative first in verify next and review, and drops none (#424)", async () => {
+  const { ledger, evidence, first, overlapping, separate, legacy } =
+    await seed();
+  // verify next（handoff の列）: 各群の代表が先、群の残りはその後。全件を検証する。
+  const picked: string[] = [];
+  const verification = {
+    promptVersion: "stub/v1",
+    async verify(input: { findingId: string; verificationId: string }) {
+      picked.push(input.findingId);
+      // 自動再試行しない incomplete を残し、次の呼び出しは別の Finding へ進む。
+      const result = {
+        status: "incomplete" as const,
+        reason: "evidence" as const,
+        nextStep: "Synthetic next step",
+      };
+      await ledger.append({
+        ...base,
+        identity: input.verificationId,
+        type: "verification-finished",
+        verificationId: input.verificationId,
+        findingId: input.findingId,
+        labSetupDigest: digestOf("b"),
+        promptVersion: "stub/v1",
+        result,
+      });
+      return result;
+    },
+  };
+  for (let index = 0; index < 5; index++)
+    await verifyNextFinding({
+      campaignId,
+      ledger,
+      newId: () => `verification-${index}`,
+      loadSnapshot: async () => ({}) as never,
+      setupFor: () => ({}),
+      reconstructionFor: () => ({}),
+      verification: verification as never,
+    });
+  const order = [first.findingId, separate.findingId, legacy];
+  expect(picked).toEqual([...order, overlapping.findingId]);
+  // review: 同じ順で、各項目に群の識別子と群内の件数が付く。
+  const queue = new Review({
+    ledger,
+    artifactStore: evidence,
+    scopeEvaluator: {
+      programmeIds: ["wordfence"],
+      policyDigest: digestOf("d"),
+      assess: async () => [],
+    },
+    factsProvider: { load: async () => ({}) },
+  }).queue({ campaignId });
+  expect(queue.items.map((item) => [item.ref.findingId, item.group])).toEqual([
+    [first.findingId, group(first.findingId, 2, true)],
+    [separate.findingId, group(separate.findingId, 1, true)],
+    [legacy, group(legacy, 1, true)],
+    [overlapping.findingId, group(first.findingId, 2, false)],
+  ]);
 });
 
 // 受入条件 3: 本番の振り分け（#424 の comment）のうち acf-extended・wp-seopress・pods と

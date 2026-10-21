@@ -6,6 +6,10 @@ import {
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
+import {
+  readFindingGroups,
+  type FindingGroup,
+} from "../ledger/finding-groups.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 import {
   countAttemptsForReason,
@@ -64,7 +68,7 @@ const scopeResult = z.strictObject({
 });
 
 type Decision = ReviewDecisionV1["decision"];
-export type ReviewItem =
+export type ReviewItem = (
   | {
       readonly status: "runtime-confirmed" | "reproduced";
       readonly ref: ReviewRef;
@@ -93,7 +97,11 @@ export type ReviewItem =
       readonly reason: string;
       readonly nextStep: string;
       readonly decision: Decision | null;
-    };
+    }
+) & {
+  /** #424: the overlap group; it orders the queue, while decisions stay per Finding. */
+  readonly group: FindingGroup;
+};
 export type ReviewQueue = {
   readonly items: readonly ReviewItem[];
   readonly contradicted: number;
@@ -256,6 +264,10 @@ export class Review<TFacts = unknown> {
     }
     const incompleteByReason: Record<string, number> = Object.create(null);
     const retryPendingByReason: Record<string, number> = Object.create(null);
+    const groups = readFindingGroups(
+      this.#ledger,
+      campaignId === undefined ? {} : { campaignId },
+    );
     let contradicted = 0;
     let unverified = 0;
     for (const { event: finding } of this.#ledger.readAll({
@@ -282,6 +294,7 @@ export class Review<TFacts = unknown> {
         verificationId: event.verificationId,
         snapshotDigest: event.snapshotDigest,
       };
+      const group = groups.of(finding.campaignId, finding.findingId);
       const decided = latestDecision.get(key(finding));
       const decision =
         decided !== undefined && decided.sequence > sequence
@@ -298,6 +311,7 @@ export class Review<TFacts = unknown> {
           evidenceDigest: result.evidenceDigest,
           refutationDigest: result.refutationDigest ?? null,
           decision,
+          group,
         });
       } else if (
         result.status === "runtime-confirmed" ||
@@ -315,6 +329,7 @@ export class Review<TFacts = unknown> {
           evidenceDigest: result.evidenceDigest,
           reproductionPackageDigest: result.reproductionPackageDigest,
           decision,
+          group,
         });
       else {
         // The queue predicts the runner's next pass with nothing changed: same
@@ -341,11 +356,12 @@ export class Review<TFacts = unknown> {
           reason: result.reason,
           nextStep: result.nextStep,
           decision,
+          group,
         });
       }
     }
     return {
-      items,
+      items: groups.order(items, (item) => item.ref),
       contradicted,
       unverified,
       incompleteByReason,

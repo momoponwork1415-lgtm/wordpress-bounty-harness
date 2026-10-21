@@ -136,5 +136,19 @@ export function readFindingGroups(
       const { findingId: id } = findings[root]!;
       return { id, size: sizes.get(root)!, representative: root === index };
     },
+    /** Representatives first in recorded order, then each group's other Findings, group by group. */
+    order<T>(items: readonly T[], ref: (item: T) => FindingRef): T[] {
+      const rank = (item: T) => {
+        const index = indexOf(ref(item));
+        return index === undefined || roots[index] === index
+          ? -1
+          : roots[index]!;
+      };
+      // Array sort is stable: equal ranks keep the order they came in.
+      return items
+        .map((item) => ({ item, rank: rank(item) }))
+        .sort((left, right) => left.rank - right.rank)
+        .map(({ item }) => item);
+    },
   };
 }
