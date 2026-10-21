@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  autoResumesProviderLimit,
+  providerLimitedAutoResumeRefusal,
   readResumeProgress,
   recordedFailureAfterRuns,
 } from "../../src/discovery/campaign-progress.js";
@@ -73,6 +75,31 @@ async function open() {
 }
 
 describe("readResumeProgress", () => {
+  it("offers five automatic resume segments to Codex runs only, including a startup failure", () => {
+    expect(providerLimitedAutoResumeRefusal({})).toBeUndefined();
+    expect(
+      providerLimitedAutoResumeRefusal({ resumeSegment: 4 }),
+    ).toBeUndefined();
+    expect(providerLimitedAutoResumeRefusal({ resumeSegment: 5 })).toBe(
+      "resume-limit",
+    );
+    // Claude keeps ADR 0029's backoff-then-new-Trial path; unmarked starts
+    // predate the runtime share and ran on Codex.
+    expect(
+      autoResumesProviderLimit({
+        configuration: { runtime: "codex-native/v1", promptVariant: "v" },
+      }),
+    ).toBe(true);
+    expect(
+      autoResumesProviderLimit({ configuration: { promptVariant: "v" } }),
+    ).toBe(true);
+    expect(
+      autoResumesProviderLimit({
+        configuration: { runtime: "claude-code/v1", promptVariant: "v" },
+      }),
+    ).toBe(false);
+  });
+
   it("spends ordinals only for explorations that count, and lowest free ones for legacy starts", async () => {
     const { start, finish, target } = await open();
     await start("stamped-2", { trialOrdinal: 2, runKind: "explore" });

@@ -202,6 +202,8 @@ export interface CliProfile {
        * the target runs again as a new Trial.
        */
       readonly resumeInterrupted?: { log(line: string): void };
+      /** The runner only, after provider backoff: resume a stopped Codex Trial. */
+      readonly resumeProviderLimited?: { log(line: string): void };
       /** The runner only: the operator's live limit under maxConcurrentTargets. */
       readonly targetLimit?: TargetLimit;
     },

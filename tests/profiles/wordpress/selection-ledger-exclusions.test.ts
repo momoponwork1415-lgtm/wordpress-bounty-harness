@@ -588,6 +588,36 @@ describe("WordPress ledger exclusions", () => {
     ).toEqual([[], [], ["previously-selected"]]);
   });
 
+  it("does not reselect a provider-limited Trial whose automatic resume was refused", () => {
+    const events = [
+      selected("limited", "1.0.0"),
+      started("wp2shell-bounty-v2"),
+      ledgerEventV1Schema.parse({
+        ...base("campaign-1", digest("a"), "limited-finish"),
+        type: "discovery-run-finished",
+        runId: "run-campaign-1-wp2shell-bounty-v2",
+        outcome: "provider-limited",
+        reason: "provider",
+        providerLimit: "rate-limit",
+        costUsd: "unavailable",
+        wallTimeMs: 41 * 60_000,
+      }),
+    ];
+    const candidate = [{ slug: "limited", version: "1.0.0" }];
+    expect(inspect(reader(events), candidate)[0]?.reasons).toEqual([]);
+    const terminal = ledgerEventV1Schema.parse({
+      ...base("campaign-1", digest("a"), "resume-refused"),
+      type: "target-skipped",
+      selectionId: "wporg:limited@1.0.0",
+      stage: "discovery",
+      reason: "run-failed",
+      artifacts: [{ kind: "target-skip-diagnostic", digest: digest("b") }],
+    });
+    expect(
+      inspect(reader([...events, terminal]), candidate)[0]?.reasons,
+    ).toEqual(["previously-selected"]);
+  });
+
   it("ignores child runs when counting exploration Trials", () => {
     const child = ledgerEventV1Schema.parse({
       ...started("wp2shell-bounty-v2"),

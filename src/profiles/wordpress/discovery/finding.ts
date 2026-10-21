@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../../../infrastructure/canonical-json.js";
+import { WORDPRESS_DEPENDENCY_SOURCE_ROOTS } from "../sandbox-layout.js";
 import { normalizeWordPressSourcePath } from "./source-path.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -88,6 +92,24 @@ export type WordPressFinding = z.infer<typeof wordpressFindingClaimSchema> & {
     readonly digest: string;
   };
 };
+
+/**
+ * #424: the plugin-side `file:function` places of a Finding, its keys for the
+ * overlap groups. Frames in WordPress core, PHP or a dependency plugin are
+ * shared by unrelated Findings, so they are not keys.
+ */
+export function wordPressFindingGroupKeys(
+  finding: Pick<WordPressFinding, "sourceTrace">,
+): string[] {
+  return finding.sourceTrace
+    .filter(
+      (frame) =>
+        !WORDPRESS_DEPENDENCY_SOURCE_ROOTS.some((root) =>
+          frame.file.startsWith(`${root.label}/`),
+        ),
+    )
+    .map((frame) => canonicalJson([frame.file, frame.function]));
+}
 
 /** Agent claims remain unconfirmed; only the Harness judge can confirm them. */
 export function admitWordPressFinding(

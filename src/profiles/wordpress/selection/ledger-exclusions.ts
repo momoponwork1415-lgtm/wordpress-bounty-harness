@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import {
-  countsAsTrial,
+  countsAsTrialChain,
   recordedTrialActivity,
 } from "../../../discovery/counts-as-trial.js";
 import type { Ledger, LedgerEventV1 } from "../../../ledger/index.js";
@@ -149,8 +149,30 @@ export function inspectWordPressLedgerExclusions(input: {
   for (const event of ledgerEvents(input.ledger, "discovery-run-finished"))
     if (event.type === "discovery-run-finished")
       finishedRuns.set(`${event.campaignId}\0${event.runId}`, event);
+  // A provider-limited run alone is retried after backoff. The runner's
+  // reasoned resume refusal/cap writes this terminal skip with its diagnostic;
+  // that incomplete Trial must not be selected again in a later campaign.
+  const terminalLimitedSnapshots = new Set<string>();
+  for (const event of ledgerEvents(input.ledger, "target-skipped"))
+    if (
+      event.type === "target-skipped" &&
+      event.stage === "discovery" &&
+      event.reason === "run-failed" &&
+      event.artifacts.some(
+        (artifact) => artifact.kind === "target-skip-diagnostic",
+      )
+    )
+      terminalLimitedSnapshots.add(snapshotKey(event));
   const activeRuns = recordedTrialActivity(input.ledger);
-  for (const event of ledgerEvents(input.ledger, "discovery-run-started")) {
+  const starts = ledgerEvents(input.ledger, "discovery-run-started");
+  const startsById = new Map(
+    starts.flatMap((event) =>
+      event.type === "discovery-run-started"
+        ? [[`${event.campaignId}\0${event.runId}`, event] as const]
+        : [],
+    ),
+  );
+  for (const event of starts) {
     if (event.type !== "discovery-run-started") continue;
     const key = snapshotKey(event);
     recordPrompt(key, event.configuration.promptVariant);
@@ -158,7 +180,19 @@ export function inspectWordPressLedgerExclusions(input: {
     if ((event.runKind ?? "explore") !== "explore") continue;
     exploredSnapshots.add(key);
     const runKey = `${event.campaignId}\0${event.runId}`;
-    if (!countsAsTrial(finishedRuns.get(runKey), activeRuns.has(runKey)))
+    const finished = finishedRuns.get(runKey);
+    const segment = (runId: string) => ({
+      finished: finishedRuns.get(`${event.campaignId}\0${runId}`),
+      hasRecordedActivity: activeRuns.has(`${event.campaignId}\0${runId}`),
+      resumesRun: startsById.get(`${event.campaignId}\0${runId}`)?.resumesRun,
+    });
+    if (
+      !countsAsTrialChain(event.runId, segment) &&
+      !(
+        finished?.outcome === "provider-limited" &&
+        terminalLimitedSnapshots.has(key)
+      )
+    )
       continue;
     const slug = selectedBySnapshot.get(key);
     const version = versionBySnapshot.get(key);
