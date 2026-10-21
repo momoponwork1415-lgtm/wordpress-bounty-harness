@@ -187,6 +187,114 @@ describe("continuous runner", () => {
     },
   );
 
+  it("backs off only the runtimes a limit stopped, each on its own steps, and holds the other until its own wait ends", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    const held: string[][] = [];
+    const targets = {
+      claude: `sha256:${"c".repeat(64)}`,
+      codex: `sha256:${"d".repeat(64)}`,
+    };
+    let runs = 0;
+    const limitedOn =
+      (limits: Partial<Record<keyof typeof targets, "quota" | "rate-limit">>) =>
+      async (input: Parameters<Step>[0]): Promise<Partial<CampaignSummary>> => {
+        const { targetLimit } = input as Parameters<
+          ContinuousDeps["runCampaign"]
+        >[0];
+        held.push([...(targetLimit.heldRuntimes?.() ?? [])].sort());
+        const runtimes = Object.keys(limits) as (keyof typeof targets)[];
+        for (const runtime of runtimes) {
+          const snapshotDigest = targets[runtime];
+          const runId = `limited-${++runs}`;
+          await t.append(input.campaignId, {
+            type: "discovery-run-started",
+            snapshotDigest,
+            runId,
+            labId: "lab",
+            runKind: "explore",
+            history: { mode: "none" },
+            configuration: { promptVariant: "v8" },
+          });
+          await t.append(input.campaignId, {
+            type: "discovery-run-finished",
+            snapshotDigest,
+            runId,
+            outcome: "provider-limited",
+            reason: "provider",
+            providerLimit: limits[runtime],
+            costUsd: "unavailable",
+            wallTimeMs: 1,
+          });
+          await t.append(input.campaignId, {
+            type: "campaign-stopped",
+            snapshotDigest,
+            reason: "provider-limit",
+            runtime,
+          });
+        }
+        return runtimes.length === 0
+          ? {}
+          : { stopped: "provider-limit", limitedRuntimes: runtimes.sort() };
+      };
+    steps.push(
+      // Claude hits its quota and Codex a rate limit in the same batch.
+      limitedOn({ claude: "quota", codex: "rate-limit" }),
+      // After Codex's 5 minutes Claude is still held; Codex hits it again.
+      limitedOn({ codex: "rate-limit" }),
+      // After Codex's next 10 minutes Claude is still held; the batch ends.
+      limitedOn({}),
+      // A new batch starts with no runtime held.
+      limitedOn({}),
+    );
+    await t.runner.run();
+    expect(held).toEqual([[], ["claude"], ["claude"], []]);
+    expect(t.log.filter((line) => line.includes(" backoff runtime="))).toEqual([
+      "2026-10-20T00:00:00.000Z backoff runtime=claude step=1 minutes=30 providerLimit=quota",
+      "2026-10-20T00:00:00.000Z backoff runtime=codex step=1 minutes=5 providerLimit=rate-limit",
+      "2026-10-20T00:05:00.000Z backoff runtime=codex step=2 minutes=10 providerLimit=rate-limit",
+    ]);
+    expect(t.calls.map((call) => call.campaignId)).toEqual([
+      "prod-20261020-1",
+      "prod-20261020-1",
+      "prod-20261020-1",
+      "prod-20261020-2",
+      "prod-20261020-3",
+    ]);
+    // The runner waits for the earliest runtime to come back, not the latest.
+    expect(t.log.filter((line) => line.includes(" backoff until="))).toEqual([
+      "2026-10-20T00:00:00.000Z backoff until=2026-10-20T00:05:00.000Z runtime=codex",
+      "2026-10-20T00:05:00.000Z backoff until=2026-10-20T00:15:00.000Z runtime=codex",
+    ]);
+  });
+
+  it("after a restart, holds a runtime whose saved backoff has not ended and starts one whose backoff has", async () => {
+    const held: string[][] = [];
+    const t = await setup([
+      (input) => {
+        const { targetLimit } = input as Parameters<
+          ContinuousDeps["runCampaign"]
+        >[0];
+        held.push([...(targetLimit.heldRuntimes?.() ?? [])]);
+        return {};
+      },
+    ]);
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify({
+        state: "backoff",
+        campaignId: "prod-20261019-4",
+        runtimeBackoff: {
+          claude: { step: 2, until: "2026-10-20T00:30:00.000Z" },
+          codex: { step: 1, until: "2026-10-19T23:55:00.000Z" },
+        },
+      }),
+    );
+    await t.runner.run();
+    expect(t.calls[0]!.campaignId).toBe("prod-20261019-4");
+    expect(held).toEqual([["claude"]]);
+  });
+
   it("starts a new campaign id after a finished one, numbered from the ledger", async () => {
     const steps: Step[] = [];
     const t = await setup(steps);

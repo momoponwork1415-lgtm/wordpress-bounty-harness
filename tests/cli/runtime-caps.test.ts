@@ -42,6 +42,7 @@ async function campaign(
     readonly ceilings?: Readonly<Record<string, number>>;
     readonly live?: () => number | null;
     readonly liveRuntime?: (runtime: string) => number | null;
+    readonly held?: () => ReadonlySet<string>;
     readonly pollMs?: number;
     readonly stop?: () => boolean;
   } = {},
@@ -76,7 +77,9 @@ async function campaign(
     newId: () => `id-${++ids}`,
     discoveryLab: "none",
     maxConcurrentTargets: options.maxConcurrentTargets ?? 4,
-    ...(options.live === undefined && options.liveRuntime === undefined
+    ...(options.live === undefined &&
+    options.liveRuntime === undefined &&
+    options.held === undefined
       ? {}
       : {
           targetLimit: {
@@ -89,6 +92,9 @@ async function campaign(
               options.liveRuntime?.(runtime) ?? null,
             reportRuntime: (runtime: string, limit: number) =>
               reports.push(`${runtime}=${limit}`),
+            ...(options.held === undefined
+              ? {}
+              : { heldRuntimes: options.held }),
             pollMs: options.pollMs ?? 5,
           },
         }),
@@ -223,6 +229,25 @@ describe("per-runtime target caps", () => {
       "claude=1",
       "claude=3",
     ]);
+  });
+
+  it("starts no target of a runtime in provider backoff until it leaves it", async () => {
+    let held: ReadonlySet<string> = new Set(["claude"]);
+    const c = await campaign(["c1", "x1", "c2", "x2"], {
+      maxConcurrentTargets: 4,
+      ceilings: { claude: 2, codex: 2 },
+      held: () => held,
+    });
+    await until(() => c.started.length === 2);
+    await settle();
+    expect(c.started).toEqual(["x1", "x2"]);
+
+    // The backoff ends: the next poll starts the held targets.
+    held = new Set();
+    await until(() => c.started.length === 4);
+    expect(c.started).toEqual(["x1", "x2", "c1", "c2"]);
+    for (const name of [...c.started]) c.end(name);
+    await c.done;
   });
 
   it("still holds the total under the live total limit", async () => {

@@ -85,10 +85,11 @@ v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入�
   - **runtime ごとの同時対象数**（2026-10-19、所有者の指示「Opus 3 本、Codex 3 本」、ADR 0032 の 2026-10-19 追記 2）: `resources.maxConcurrentTargetsByRuntime: {"codex": <n>, "claude": <n>}` は、runtime ごとに同時に走る対象の上限。書かなければ合計の `maxConcurrentTargets` だけが効く。各値は 0〜`maxConcurrentTargets` で、`discovery.runtimeShare` の重みが正の runtime には 1 以上が要る（`runtimeShare` が無ければ Codex に要る）。枠が空くと、選定順で最初の「runtime に空きがある対象」が始まる。Codex 3 本と Claude 3 本を同時に回す設定は `"discovery": {"lab": "none", "runtimeShare": {"codex": 1, "claude": 1}}` と `"resources": {"maxConcurrentRuns": 1, "maxConcurrentTargets": 6, "memoryBudgetMiB": 10752, "maxConcurrentTargetsByRuntime": {"codex": 3, "claude": 3}}`。`memoryBudgetMiB` は対象ごとの値なので、6 対象でも 10752 のままでよい。host 設定には `claude` の節が要る。
   - Labのメモリは対象ごとに別に要る。
 - **上限での停止と再開**: provider のrate limit / quotaの応答を受けたとき。
-  - 新しいrunを出さず、進行中のrunを記録して止まる。終了コードは3で、台帳に `campaign-stopped(provider-limit)` が残る。
-  - 手で回すときは同じコマンドをもう一度実行すると再開する。`continuous run` の下では runner が backoff（quota は 30 → 60 分、rate-limit は 5 → 60 分、2 回連続なら 6 時間）の後に同じ campaign ID で再開する。ADR 0032 Q18 で止めたのは外側 cron の quota tick であり、runner の in-process の待機は別物。開始済みTrialは追加せず、未検証のFindingを検証して未消費の対象へ進む。
+  - 新しいrunを出さず、進行中のrunを記録して止まる（下の分割 campaign では、上限に当たった runtime の新しいrunだけを出さない）。終了コードは3で、台帳に `campaign-stopped(provider-limit)` が残る。
+  - `discovery.runtimeShare` で Codex と Claude の両方に正の重みを付け、`discovery.lab` が `none` の campaign では、上限に当たった runtime の対象だけが止まる。もう一方の runtime の対象は起動と完了を続ける。このとき `campaign-stopped` に `runtime`（`codex` / `claude`）が付く。`runtime` の無いイベントは、従来どおり campaign 全体の停止である。片方の重みが 0 の campaign と `runtimeShare` の無い campaign の動きは変わらない（ADR 0032 の 2026-10-20 追記 3）。
+  - 手で回すときは同じコマンドをもう一度実行すると再開する。`continuous run` の下では runner が backoff（quota は 30 → 60 分、rate-limit は 5 → 60 分、2 回連続なら 6 時間）の後に同じ campaign ID で再開する。runtime 別に止まった場合は、待ち時間の段階も runtime ごとに数える。runner は待ち時間が最も早く終わる runtime に合わせて再開し、まだ待ち時間の残る runtime の対象は、その終わりまで起動しない。ADR 0032 Q18 で止めたのは外側 cron の quota tick であり、runner の in-process の待機は別物。開始済みTrialは追加せず、未検証のFindingを検証して未消費の対象へ進む。
   - 拒否（`provider-cyber-policy`）、wall、schema、CLI 終了などの対象単位の失敗は campaign を止めず、その対象を `target-skipped`（理由 `provider-refused` / `run-failed`）にして次へ進む。同じ campaign の再実行ではその対象を再開しない。
-  - Verifier が provider の上限を受けたときも同じく `campaign-stopped(provider-limit)` で止める。再開時はその検証を同じ Lab Setup で 1 回だけ自動再試行する。
+  - Verifier が provider の上限を受けたときは、runtime を問わず campaign 全体を `campaign-stopped(provider-limit)` で止める。再開時はその検証を同じ Lab Setup で 1 回だけ自動再試行する。
   - operator の stop は対象の境界で効く。進行中の対象は終わらせ、新しい対象を始めず、台帳に `campaign-stopped(operator)` が残る。
 - **旧入口分担の記録**: 旧 `assignment` mode（2026-10-18 削除）の索引・成分digestは過去Trialの照合用に台帳から読む。v8 の新規探索では mode は `wp2shell` だけで、入口索引も渡さない。
 - **過去Trialの記録**: 旧 `stage` / `continuationOf` 付きevent、旧ablation arm、旧prompt・入口索引のdigestは台帳から読める。新規探索には旧prompt・旧modeを使わず、段やcontinuationも新規に書かない。Leadの本文はPrivate Evidenceに置き、台帳にはdigestと分類だけを記録する。
