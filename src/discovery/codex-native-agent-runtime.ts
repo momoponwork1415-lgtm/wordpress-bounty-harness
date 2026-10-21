@@ -16,6 +16,7 @@ import {
 import {
   codexThreadIdSchema,
   createNativeRunReceipt,
+  isClaudeTranscriptPath,
   isCodexSessionPath,
   nativeRunReceiptSchema,
   type NativeRunReceipt,
@@ -388,7 +389,12 @@ const discoveryResumeInputSchema = z.strictObject({
   sessions: z
     .array(
       z.strictObject({
-        path: z.string().refine(isCodexSessionPath),
+        /** A Codex rollout path or a Claude Code transcript path; each sandbox admits only its own. */
+        path: z
+          .string()
+          .refine(
+            (path) => isCodexSessionPath(path) || isClaudeTranscriptPath(path),
+          ),
         threadId: codexThreadIdSchema,
         kind: z.enum(["root", "child"]),
         /** Sealed in Private Evidence by the earlier segment; carried forward unchanged. */
@@ -1274,6 +1280,7 @@ function admittedRun(
       (cooperative &&
         run.minimumActiveMs !== undefined &&
         run.resumePrompt !== undefined &&
+        run.resume.sessions.every((file) => isCodexSessionPath(file.path)) &&
         run.resume.sessions.some(
           (file) =>
             file.kind === "root" && file.threadId === run.resume?.threadId,

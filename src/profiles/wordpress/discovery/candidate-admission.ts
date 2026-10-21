@@ -225,6 +225,9 @@ async function recordCandidate(
         identity: `candidate-held-${key}`,
         type: "candidate-held",
         issuePaths,
+        ...(error instanceof z.ZodError
+          ? { issueCodes: error.issues.map((issue) => issue.code) }
+          : {}),
         ...classifyWordPressCandidate(normalized.value, kind),
       },
     );

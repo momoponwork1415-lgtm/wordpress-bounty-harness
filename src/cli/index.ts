@@ -8,8 +8,10 @@ import { summarizeRecordedRuntimes } from "../discovery/index.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import {
   type CampaignFunnel,
+  type ResumeRow,
   type StopRow,
   type FunnelCounts,
+  type LedgerEventV1,
 } from "../ledger/index.js";
 import {
   exportReviewBundle,
@@ -282,6 +284,12 @@ export interface CliProfile {
       readonly findingId: string;
       readonly configPath: string;
       readonly version?: string;
+      /** Hand the versioned Lab to the verification skill. */
+      readonly handoff?: {
+        readonly directory: string;
+        readonly httpPort: number;
+        readonly databasePort: number;
+      };
       /** Read a confirmed route from a separate campaign without writing to it. */
       readonly referenceCampaignId?: string;
       /** Use a separately recorded, immutable Snapshot for this version. */
@@ -374,6 +382,32 @@ export function formatStopRow(row: StopRow): string {
       ? []
       : [`explore=${row.explore}`, `within60s=${row.within60s ?? 0}`];
   return [row.type, ...fields, `count=${row.count}`, ...extra].join("  ");
+}
+
+/** One resumed segment: the stop it continued, then how it ended and how long it ran. */
+export function formatResumeRow(row: ResumeRow): string {
+  const stop = (value: {
+    readonly outcome?: string;
+    readonly reason?: string;
+    readonly reasonDetail?: string;
+  }) =>
+    value.outcome === undefined
+      ? "unfinished"
+      : [value.outcome, value.reason, value.reasonDetail]
+          .filter((part) => part !== undefined)
+          .join("/");
+  return [
+    row.campaignId,
+    `segment ${row.segment}`,
+    `run ${row.runId}`,
+    `resumes ${row.resumesRun}`,
+    `after ${stop(row.resumed)}`,
+    ...(row.runtime === undefined ? [] : [`runtime ${row.runtime}`]),
+    `ended ${stop(row)}`,
+    ...(row.wallTimeMs === undefined
+      ? []
+      : [`active ${(row.wallTimeMs / 60_000).toFixed(1)} min`]),
+  ].join("  ");
 }
 
 export function formatFunnel(funnel: CampaignFunnel): string[] {
@@ -1067,19 +1101,50 @@ const COMMANDS: readonly Command[] = [
   command({
     name: "review reverify",
     usage: [
-      "review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>]",
+      "review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--handoff <dir> [--port <n>] [--db-port <n>]]",
     ],
-    options: { campaign: STR, config: STR, finding: STR, version: STR },
+    options: {
+      campaign: STR,
+      config: STR,
+      "db-port": STR,
+      finding: STR,
+      handoff: STR,
+      port: STR,
+      version: STR,
+    },
     handler: async ({ values, state, environment, io }) => {
       const version = values.version;
       if (version !== undefined && !/^[0-9][A-Za-z0-9.+-]{0,31}$/.test(version))
         throw new UsageError("--version is invalid");
-      const summary = await environment.profile.reverify(state, {
+      if (
+        values.handoff === undefined &&
+        (values.port !== undefined || values["db-port"] !== undefined)
+      )
+        throw new UsageError("--port and --db-port require --handoff");
+      const input = {
         campaignId: required(values.campaign, "campaign"),
         findingId: required(values.finding, "finding"),
         configPath: resolve(required(values.config, "config")),
         ...(version === undefined ? {} : { version }),
-      });
+        ...(values.handoff === undefined
+          ? {}
+          : {
+              handoff: {
+                directory: resolve(values.handoff),
+                httpPort: integerOption(values.port, "port", 8080, 65535),
+                databasePort: integerOption(
+                  values["db-port"],
+                  "db-port",
+                  3307,
+                  65535,
+                ),
+              },
+            }),
+      };
+      const release = await holdLabSweep(state.stateDirectory, process.pid);
+      const summary = await environment.profile
+        .reverify(state, input)
+        .finally(release);
       io.stdout(
         `reverified finding ${values.finding} as ${summary.findingId} on ${summary.targetId} ${summary.version}  snapshot ${summary.snapshotDigest}  verification ${summary.verificationId}: ${summary.status}`,
       );
@@ -1293,6 +1358,23 @@ const COMMANDS: readonly Command[] = [
     },
   }),
   command({
+    name: "ledger resumes",
+    usage: ["ledger resumes [--campaign <id>] [--since <ISO>]"],
+    options: { campaign: STR, since: STR },
+    handler: async ({ values, state, print }) => {
+      const instant = since(values.since);
+      const rows = state.ledger.resumes({
+        ...(values.campaign === undefined
+          ? {}
+          : { campaignId: values.campaign }),
+        ...(instant === undefined ? {} : { since: instant }),
+      });
+      if (rows.length === 0) print(["no resumed segments recorded"]);
+      print(rows.map(formatResumeRow));
+      return 0;
+    },
+  }),
+  command({
     name: "ledger usage",
     usage: ["ledger usage [--campaign <id>]"],
     options: { campaign: STR },
@@ -1334,7 +1416,7 @@ const COMMANDS: readonly Command[] = [
       io.stdout("recorded runtimes (oldest first)");
       for (const { runtime, runs, firstDay, lastDay } of groups)
         io.stdout(
-          `  ${runtime.requestedModelId} effort ${runtime.requestedEffort}  codex-cli ${runtime.codexCliVersion}  catalog ${runtime.bundledCatalogDigest}  tier ${runtime.serviceTier}  access ${runtime.cyberAccessProgram}  auth ${runtime.authenticationMethod}  runs ${runs}  ${firstDay}..${lastDay}`,
+          `  ${runtime.requestedModelId} effort ${runtime.requestedEffort}  child ${runtime.subagent.modelId} effort ${runtime.subagent.effort}  codex-cli ${runtime.codexCliVersion}  catalog ${runtime.bundledCatalogDigest}  tier ${runtime.serviceTier}  access ${runtime.cyberAccessProgram}  auth ${runtime.authenticationMethod}  runs ${runs}  ${firstDay}..${lastDay}`,
         );
       return 0;
     },
@@ -1479,6 +1561,50 @@ const COMMANDS: readonly Command[] = [
     "continuous concurrency",
     "continuous concurrency [<n>] [--runtime <name>] --config <path>",
   ),
+  // 2026-10-20: held Finding candidates (ADR 0018) had no listing; registered last as above.
+  command({
+    name: "review held",
+    usage: ["review held --campaign <id>"],
+    options: { campaign: STR },
+    handler: async ({ values, state, print }) => {
+      const campaignId = required(values.campaign, "campaign");
+      // As in the funnel, a later normalization of the same candidate clears its hold.
+      const held = new Map<
+        string,
+        Extract<LedgerEventV1, { type: "candidate-held" }>
+      >();
+      const records = (["candidate-normalized", "candidate-held"] as const)
+        .flatMap((type) => state.ledger.readAll({ campaignId, type }))
+        .sort((a, b) => a.sequence - b.sequence);
+      for (const { event } of records) {
+        if (
+          (event.type !== "candidate-normalized" &&
+            event.type !== "candidate-held") ||
+          event.candidateKind !== "finding"
+        )
+          continue;
+        const key = `${event.runId}\0${event.candidateIndex}`;
+        if (event.type === "candidate-held") held.set(key, event);
+        else held.delete(key);
+      }
+      if (held.size === 0) print(["no held findings"]);
+      for (const event of held.values()) {
+        const candidate = event.artifacts.find(
+          (artifact) => artifact.kind === "candidate",
+        )?.digest;
+        const issues = event.issuePaths
+          .map((path, index) => {
+            const code = event.issueCodes?.[index];
+            return code === undefined ? path : `${path}(${code})`;
+          })
+          .join(", ");
+        print([
+          `held  ${event.impact ?? "unclassified"}  ${candidate ?? "(candidate unavailable)"}  ${event.runId}#${event.candidateIndex}  issues: ${issues}  ${candidate === undefined ? "" : state.store.contentPath(candidate)}`.trimEnd(),
+        ]);
+      }
+      return 0;
+    },
+  }),
 ];
 
 const COMMAND_BY_NAME = commandIndex(COMMANDS);

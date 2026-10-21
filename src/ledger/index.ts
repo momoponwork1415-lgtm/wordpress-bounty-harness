@@ -320,6 +320,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     candidateIndex: z.number().int().nonnegative(),
     parserVersion: id.optional(),
     issuePaths: z.array(z.string().max(256)),
+    /** Zod issue codes, index-aligned with issuePaths; absent on events before 2026-10-20. */
+    issueCodes: z.array(id).optional(),
     impact: id.optional(),
     primitive: id.optional(),
     missingEdge: id.optional(),
@@ -526,6 +528,28 @@ export type StopRow = {
   /** discovery-run-finished only: runs started as explore, and runs that ended within 60 s. */
   readonly explore?: number;
   readonly within60s?: number;
+};
+/**
+ * One resumed segment for `ledger resumes` (ADR 0036): the stop it resumed and
+ * how it ended. `outcome` is absent while the segment has no finish.
+ */
+export type ResumeRow = {
+  readonly campaignId: string;
+  readonly runId: string;
+  readonly resumesRun: string;
+  readonly segment: number;
+  readonly startedAt: string;
+  readonly runtime?: string;
+  /** The finish of the segment it resumed. */
+  readonly resumed: {
+    readonly outcome?: string;
+    readonly reason?: string;
+    readonly reasonDetail?: string;
+  };
+  readonly outcome?: string;
+  readonly reason?: string;
+  readonly reasonDetail?: string;
+  readonly wallTimeMs?: number;
 };
 export type LedgerRecord = {
   readonly sequence: number;
@@ -1229,6 +1253,82 @@ export class Ledger {
         ? group
         : { type: group.type, fields: group.fields, count: group.count },
     );
+  }
+
+  /**
+   * Every resumed segment, in ledger order, with the stop it resumed and its
+   * own finish, from existing fields only. `since` keeps segments started at
+   * or after that instant.
+   */
+  resumes(
+    query: { readonly campaignId?: string; readonly since?: string } = {},
+  ): readonly ResumeRow[] {
+    const { clauses, params } = scopeClauses({ campaignId: query.campaignId });
+    const since =
+      query.since === undefined
+        ? undefined
+        : Date.parse(z.iso.datetime({ offset: true }).parse(query.since));
+    const rows = this.#db
+      .prepare(
+        `SELECT event_json FROM ledger_events WHERE event_type IN ('discovery-run-started', 'discovery-run-finished')${clauses.map((clause) => ` AND ${clause}`).join("")} ORDER BY sequence`,
+      )
+      .all(...params);
+    const segments: Extract<
+      LedgerEventV1,
+      { type: "discovery-run-started" }
+    >[] = [];
+    const finishes = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "discovery-run-finished" }>
+    >();
+    for (const row of rows) {
+      const event = ledgerEventV1Schema.parse(
+        JSON.parse(
+          z.object({ event_json: z.string() }).parse(row).event_json,
+        ) as unknown,
+      );
+      if (event.type === "discovery-run-finished")
+        finishes.set(`${event.campaignId} ${event.runId}`, event);
+      else if (
+        event.type === "discovery-run-started" &&
+        event.resumesRun !== undefined &&
+        (since === undefined || Date.parse(event.occurredAt) >= since)
+      )
+        segments.push(event);
+    }
+    const stop = (
+      finished:
+        Extract<LedgerEventV1, { type: "discovery-run-finished" }> | undefined,
+    ) =>
+      finished === undefined
+        ? {}
+        : {
+            outcome: finished.outcome,
+            ...(finished.reason === undefined
+              ? {}
+              : { reason: finished.reason }),
+            ...(finished.reasonDetail === undefined
+              ? {}
+              : { reasonDetail: finished.reasonDetail }),
+          };
+    return segments.map((segment) => {
+      const finished = finishes.get(`${segment.campaignId} ${segment.runId}`);
+      return {
+        campaignId: segment.campaignId,
+        runId: segment.runId,
+        resumesRun: segment.resumesRun!,
+        segment: segment.resumeSegment ?? 0,
+        startedAt: segment.occurredAt,
+        ...(segment.configuration.runtime === undefined
+          ? {}
+          : { runtime: segment.configuration.runtime }),
+        resumed: stop(
+          finishes.get(`${segment.campaignId} ${segment.resumesRun}`),
+        ),
+        ...stop(finished),
+        ...(finished === undefined ? {} : { wallTimeMs: finished.wallTimeMs }),
+      };
+    });
   }
 
   /** One campaign's funnel, or every campaign's events since an instant. */

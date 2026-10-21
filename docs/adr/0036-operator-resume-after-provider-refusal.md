@@ -130,3 +130,30 @@ v8 の協調 Trial は Root 1 thread を同じ gVisor container の中で `codex
 4. **他の停止理由。** `provider-cyber-policy` は引き続き操作者が run を名指ししたときだけ再開する。Claude の `provider-refusal` は Trial を終了し、別モデルへの切り替えも自動再開もしない。上の追記 3 による `interrupted` の自動回収と再開は続ける。探索 prompt と再開段落は変更しない。
 
 再開後に完了した chain と、再開拒否・上限で閉じた chain は Trial 1 回とし、各 segment の wall・token・source 読取・子の活動を通算する。後者は理由付き `incomplete` として選定からも除外する。先行 segment に探索活動があれば、最後の segment で新たな読取が無くてもその活動は消さない。全 segment を通して活動が無い場合は、正常な候補 0 件にしない。再開待ちの単独 `provider-limited` run は、ADR 0029 のとおりまだ Trial に数えない。これにより、provider の都合で止まった時間を新規 Trial に捨てず、最低 60 分と 120 分上限を同じ Trial で測る。
+
+## 2026-10-20 追記: Claude（Opus）の run も再開できる
+
+所有者は 2026-10-20 に「opus も再開できるようにする」と決めた。2026-10-19 の Opus の本番 Trial（`opus-prod-20261019-1` の `95e35b42-…`）は 26 分で `provider-refusal` になり、同じ日の Opus の再探索 6 本も `schema`（`root-report-unreadable`）か `provider-authentication` で止まった。どれも Root と子の transcript は Private Evidence に封じてあったが、Claude の runtime は `run.resume` を受け付けず、receipt にも `session` が無かったので再開できなかった。
+
+### 決定
+
+- **receipt。** Claude の run は、止まった理由を問わず receipt に `session` を書く。`rootThreadId` は Root の session id（runner の stdout が最後に名指しした session、無ければ唯一の最上位 transcript）、`rootTurns` は Root が始めた turn の数（SDK の `system/init` の数）、`files[]` は Root の transcript（`<project>/<session>.jsonl`）と子の transcript（`<project>/<session>/subagents/agent-<id>.jsonl`）で、path は Claude 設定ディレクトリの `projects/` からの相対 path、digest は run が封じた diagnostic attachment の digest である。receipt の path の検査は、Codex の `rollout-*.jsonl` か、この Claude の形のどちらかを受け付ける。
+- **旧 receipt。** 2026-10-20 より前の Claude の receipt には `session` が無い。ただし同じ run が封じた diagnostic の最後に `harness.transcripts`（全 transcript の path と digest）がある。規則 5 は、Claude の receipt に限り、そこから同じ規則で session を読む。読めなければ従来どおり `session-unrecorded` で拒否する。Codex の旧 receipt は変えない。
+- **復元。** 新しい使い捨て container の Claude 設定ディレクトリ（`/tmp/claude`）の `projects/<相対 path>` に transcript を、`/workspace/research/` に notes の完全な file を、空の新規 directory へ `wx` で書いてから起動する。path は上の 2 つの形以外を拒否し、Root の transcript が無い seed も拒否する。
+- **最初の turn。** runner は設定の `resumeSessionId` を受け取ると、最初の turn から Agent SDK の `resume: <session id>` で、元の prompt と同じ digest の再開段落を送る。目的 prompt は送り直さない。以後は従来どおり、最低時間まで同じ段落で継続する。最低時間と wall は規則 6 と同じく `resume-trial.ts` が決める。子の上限 4、Snapshot、runtime profile の digest は元の run と同じものを使う。
+- **admission。** Claude の runtime は、Claude の transcript だけから成り、Root の session の transcript を含む `run.resume` を受け付ける。他の admission の検査は変えない。runtime profile の digest が元の receipt と違えば、Codex と同じく `runtime-profile-differs` で拒否する。
+- **runtime の選び方。** `campaign resume` は、元の run の `discovery-run-started.configuration.runtime` が `claude-code/v1` なら Claude の runtime で走らせ、再開した segment の開始 event にも同じ `runtime` を書く。campaign 設定が Claude に対象を割り当てていなければ（`runtimeShare.claude` が 0）、`runtime-profile-differs` で拒否する。
+- **再開した segment の記録。** 前の segment の子は前の segment が記録したので、再開した segment は新しい子だけを `agentRuns` に記録する。Root の stop の判定には、復元した部分を除いた、この segment が足した transcript だけを使う。前の segment の拒否を、この segment の拒否と数えないためである。
+- **測り方。** `ledger resumes [--campaign <id>] [--since <ISO>]` は、再開した segment ごとに、再開した run とその停止理由、runtime、segment の終わり方（outcome / reason / reasonDetail）、走った分数（`wallTimeMs`）を 1 行に出す。台帳に足す項目は無く、既存の `resumesRun`・`resumeSegment`・`discovery-run-finished` から読む。拒否で止まった run の再開が通るか、どれだけ走って次に何で止まるかは、これで数える。
+
+### 変えないこと
+
+- 自動では再開しない。拒否で止まった run を自動で再開する経路も足さない。操作者が名指しした 1 run の 1 segment だけを走らせる。
+- 再開段落、目的 prompt、skill は変えない。拒否を避ける文も足さない。
+- 拒否の扱い（#408）は変えない。拒否は `provider/provider-refusal`、別のモデルへの切り替えは止めたまま、broker は束縛したモデル以外を 403 `model-not-admitted` で断る。
+- 終了 event の無い Claude の run（電源断など）の回収は対象外である。Claude の sandbox は印を書かないので、`run-unfinished` で拒否する。runner の再起動では、その対象は新しい Trial に戻る。
+- 不変条件 2（使い捨ての gVisor、broker 経由の外向きのみ）と 8（台帳は digest だけ、transcript は Private Evidence）は変えない。
+
+### 消し方
+
+`src/discovery/claude-session.ts` の `claudeRunSession` と `claudeSessionFromDiagnostic`、`resume-trial.ts` の `claudeSessionOfSealedDiagnostic`、Claude の runtime の `run.resume` の admission と seed の受け渡し、`GvisorClaudeSandbox` の `resume` と `seedResume`、runner の `resumeSessionId`、CLI の `resumeWordPressRun` の runtime の選び分け、`Ledger.resumes` と `ledger resumes`、`tests/discovery/claude-resume.test.ts` を削除する。receipt の Claude の path の形と `session` は読取互換として残す。

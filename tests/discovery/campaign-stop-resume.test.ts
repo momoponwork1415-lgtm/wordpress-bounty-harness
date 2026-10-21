@@ -7,6 +7,7 @@ import { exploreTrials } from "../../src/cli/continuous.js";
 import {
   createNativeRunReceipt,
   defineAgentRuntimeProfile,
+  defineClaudeRuntimeProfile,
   ProviderAttachmentStore,
   runDiscoveryCampaign,
   summarizeRecordedRuntimes,
@@ -667,6 +668,7 @@ describe("discovery campaign stop and resume", () => {
           serviceTier: "priority",
           cyberAccessProgram: "standard",
           authenticationMethod: "host-private-bearer",
+          subagent: { modelId: "unavailable", effort: "unavailable" },
         },
         runs: 2,
         firstDay: "2026-10-08",
@@ -681,6 +683,7 @@ describe("discovery campaign stop and resume", () => {
           serviceTier: "priority",
           cyberAccessProgram: "standard",
           authenticationMethod: "host-private-bearer",
+          subagent: { modelId: "unavailable", effort: "unavailable" },
         },
         runs: 6,
         firstDay: "2026-10-08",
@@ -696,5 +699,43 @@ describe("discovery campaign stop and resume", () => {
         })
       ).map((group) => group.runtime.codexCliVersion),
     ).toEqual(["0.162.0"]);
+  });
+
+  it("keeps Claude profiles that differ only in the children's model apart in the recorded runtimes", async () => {
+    const { ledger, evidence, campaign } = await open();
+    const claude = (subagentModel: "claude-opus-5-5" | "claude-sonnet-5-5") =>
+      defineClaudeRuntimeProfile(
+        {
+          id: "opus",
+          requestedModelId: "claude-opus-5-5",
+          requestedEffort: "high",
+          claudeCliVersion: "2.1.296",
+          authenticationMethod: "anthropic-oauth-host",
+          subagent: { modelId: subagentModel, effort: "high" },
+        },
+        digest,
+      );
+    for (const [prefix, model] of [
+      ["opus-children", "claude-opus-5-5"],
+      ["sonnet-children", "claude-sonnet-5-5"],
+    ] as const)
+      await campaign({
+        prefix,
+        campaignId: prefix,
+        profile: claude(model),
+        replies: () => "empty",
+      });
+    expect(
+      (await summarizeRecordedRuntimes({ ledger, store: evidence })).map(
+        ({ runtime, runs }) => [
+          runtime.requestedModelId,
+          runtime.subagent.modelId,
+          runs,
+        ],
+      ),
+    ).toEqual([
+      ["claude-opus-5-5", "claude-opus-5-5", 6],
+      ["claude-opus-5-5", "claude-sonnet-5-5", 6],
+    ]);
   });
 });

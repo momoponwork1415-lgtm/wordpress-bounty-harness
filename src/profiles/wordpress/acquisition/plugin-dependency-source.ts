@@ -140,6 +140,7 @@ export function openWordPressOrgPluginDependencySource(options: {
         slug,
         status: result.status,
         ...("reason" in result ? { detail: result.reason } : {}),
+        ...("intake" in result ? { reasons: result.intake.reasons } : {}),
       });
     if (
       result.intake.packet.pluginIdentity !== wordPressOrgPluginIdentity(slug)

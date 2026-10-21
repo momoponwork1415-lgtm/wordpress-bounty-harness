@@ -10,6 +10,8 @@ export const CLAUDE_RUNNER_DENIALS = {
  * at most four live children, and the same Root session resumed with the
  * pinned directive until the wall floor (ADR 0033). Only compact Root events
  * reach stdout; full transcripts stay in the mounted Claude config directory.
+ * With `resumeSessionId`, the first turn resumes that restored session with
+ * the pinned directive instead of sending the objective again (ADR 0036).
  */
 export const CLAUDE_RUNNER_SOURCE = String.raw`
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -30,7 +32,9 @@ if (
   typeof config.resumePrompt !== "string" || config.resumePrompt.length === 0 ||
   !Number.isSafeInteger(config.minimumActiveMs) || config.minimumActiveMs <= 0 ||
   typeof config.model !== "string" || typeof config.effort !== "string" ||
-  typeof config.outputSchema !== "object" || config.outputSchema === null
+  typeof config.outputSchema !== "object" || config.outputSchema === null ||
+  (config.resumeSessionId !== undefined &&
+    (typeof config.resumeSessionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(config.resumeSessionId)))
 ) process.exit(2);
 
 let pending = 0;
@@ -99,7 +103,8 @@ function compact(message) {
 
 const abortController = new AbortController();
 for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => abortController.abort());
-let sessionId;
+// An operator's resume (ADR 0036) starts on the restored session instead of a new one.
+let sessionId = config.resumeSessionId;
 let turns = 0;
 async function turn(prompt) {
   turns += 1;
@@ -139,7 +144,9 @@ async function turn(prompt) {
 
 const startedAt = Date.now();
 try {
-  if (!(await turn(config.prompt))) process.exit(3);
+  // A resumed session already holds the objective; it gets the pinned directive only.
+  if (!(await turn(config.resumeSessionId === undefined ? config.prompt : config.resumePrompt)))
+    process.exit(3);
   while (Date.now() - startedAt < config.minimumActiveMs)
     if (!(await turn(config.resumePrompt))) process.exit(3);
 } catch (error) {

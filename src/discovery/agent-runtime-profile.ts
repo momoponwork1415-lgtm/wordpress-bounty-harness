@@ -48,13 +48,22 @@ export const agentRuntimeProfileDefinitionSchema = bodySchema.omit({
  * one shape; the CLI version is measured from the pinned image.
  */
 const claudeEffort = z.enum(["low", "medium", "high", "xhigh", "max"]);
+/**
+ * The Claude models a profile may bind, for the Root and for the children
+ * separately (#418). The broker admits exactly the pair the profile names.
+ */
+export const claudeModelSchema = z.enum([
+  "claude-opus-5-5",
+  "claude-sonnet-5-5",
+  "claude-haiku-5-5",
+]);
 const claudeBodySchema = z.strictObject({
   kind: z.literal("agent-runtime-profile"),
   schemaVersion: z.literal(2),
   id: value,
   transportKind: z.literal("claude-code/v1"),
   sandboxImageDigest: digest,
-  requestedModelId: z.literal("claude-opus-5-5"),
+  requestedModelId: claudeModelSchema,
   requestedEffort: claudeEffort,
   claudeCliVersion: z
     .string()
@@ -69,7 +78,7 @@ const claudeBodySchema = z.strictObject({
   cyberAccessProgram: z.literal("unavailable"),
   serviceTier: z.literal("unavailable"),
   subagent: z.strictObject({
-    modelId: z.literal("claude-opus-5-5"),
+    modelId: claudeModelSchema,
     effort: claudeEffort,
   }),
 });

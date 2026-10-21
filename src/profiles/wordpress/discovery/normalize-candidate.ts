@@ -1,6 +1,49 @@
+import { z } from "zod";
+
 import { wordpressFindingClaimSchema } from "./finding.js";
 import { wordpressLeadClaimSchema } from "./lead.js";
 import { normalizeWordPressSourcePath } from "./source-path.js";
+
+// Limits and labels come from the claim schemas, so the repair cannot drift from them (ADR 0019).
+const propertiesSchema = z.object({
+  properties: z.record(
+    z.string(),
+    z.object({
+      maxLength: z.number().optional(),
+      enum: z.array(z.string()).optional(),
+    }),
+  ),
+});
+const [findingProperties, leadProperties] = [
+  wordpressFindingClaimSchema,
+  wordpressLeadClaimSchema,
+].map(
+  (schema) =>
+    propertiesSchema.parse(z.toJSONSchema(schema, { io: "output" })).properties,
+);
+const claimProperties = { ...leadProperties, ...findingProperties };
+const ATTACKER_POSITIONS = claimProperties.attackerPosition?.enum ?? [];
+const escapeRegExp = (text: string) =>
+  text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// The label leads the text; case, spaces and underscores may differ from the enum spelling.
+const IMPACT_LABELS = (claimProperties.impact?.enum ?? []).map((label) => ({
+  label,
+  pattern: new RegExp(
+    `^\\s*${label.split("-").map(escapeRegExp).join("[\\s_-]+")}(?![a-z0-9+])`,
+    "i",
+  ),
+}));
+
+function truncate(text: string, maximum: number): string {
+  const end = /[\uD800-\uDBFF]/.test(text.charAt(maximum - 1))
+    ? maximum - 1
+    : maximum;
+  return text.slice(0, end);
+}
+
+function isImpactLabel(value: unknown): boolean {
+  return wordpressFindingClaimSchema.shape.impact.safeParse(value).success;
+}
 
 /** Syntax repair only. The claim schemas still decide whether a candidate is admissible. */
 export function normalizeWordPressCandidate(candidate: unknown): {
@@ -33,6 +76,54 @@ export function normalizeWordPressCandidate(candidate: unknown): {
     if (Array.isArray(text) && text.every((part) => typeof part === "string")) {
       result[field] = text.join("\n");
       changes.push({ path: field, operation: "text-array-joined" });
+    }
+    const maximum = claimProperties[field]?.maxLength;
+    const joined = result[field];
+    if (
+      maximum !== undefined &&
+      typeof joined === "string" &&
+      joined.length > maximum
+    ) {
+      result[field] = truncate(joined, maximum);
+      changes.push({ path: field, operation: "text-truncated" });
+    }
+  }
+  const position = result.attackerPosition;
+  if (typeof position === "string" && !ATTACKER_POSITIONS.includes(position)) {
+    const named = ATTACKER_POSITIONS.filter((word) =>
+      position.toLowerCase().includes(word),
+    );
+    if (named.length === 1) {
+      result.attackerPosition = named[0];
+      changes.push({
+        path: "attackerPosition",
+        operation: "attacker-position-coerced",
+      });
+    }
+  }
+  const impact = result.impact;
+  if (typeof impact === "object" && impact !== null && !Array.isArray(impact)) {
+    const fields = impact as Record<string, unknown>;
+    const strings = Object.values(fields).filter(
+      (part) => typeof part === "string",
+    );
+    const lifted =
+      strings.length === 1
+        ? strings[0]
+        : ["impact", "kind", "type", "category"]
+            .map((key) => fields[key])
+            .find((part) => typeof part === "string");
+    if (lifted !== undefined) {
+      result.impact = lifted;
+      changes.push({ path: "impact", operation: "impact-lifted" });
+    }
+  }
+  const label = result.impact;
+  if (typeof label === "string" && !isImpactLabel(label)) {
+    const named = IMPACT_LABELS.filter(({ pattern }) => pattern.test(label));
+    if (named.length === 1) {
+      result.impact = named[0]!.label;
+      changes.push({ path: "impact", operation: "impact-label-coerced" });
     }
   }
   if (Array.isArray(result.sourceTrace)) {

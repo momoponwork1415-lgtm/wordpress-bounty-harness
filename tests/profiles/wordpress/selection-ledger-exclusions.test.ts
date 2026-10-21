@@ -479,6 +479,53 @@ describe("WordPress ledger exclusions", () => {
     ]);
   });
 
+  it("excludes a version whose source freeze was deferred until the version changes", () => {
+    const skipped = (
+      slug: string,
+      version: string,
+      campaignId: string,
+      reason = "deferred",
+    ) =>
+      ledgerEventV1Schema.parse({
+        ...base(campaignId, digest("f"), `skip-${campaignId}-${slug}`),
+        type: "target-skipped",
+        selectionId: `wporg:${slug}@${version}`,
+        stage: "freeze",
+        reason,
+      });
+    const result = inspectWordPressLedgerExclusions({
+      ledger: reader([
+        // The same selection attempt froze another target, so the deferral is the target's own.
+        skipped("bad-header", "1.0.0", "selection-1"),
+        skipped("timed-out", "1.0.0", "selection-1", "connect-timeout"),
+        selected("fine", "1.0.0", "selection-1", digest("a")),
+        // Nothing froze in this attempt: the host may have failed, not the target.
+        skipped("host-down", "1.0.0", "selection-2"),
+        // Deferred once, then frozen and explored: the Trial rule decides.
+        skipped("recovered", "1.0.0", "selection-1"),
+        ...trial("recovered", "1.0.0", "campaign-3", digest("c")),
+      ]),
+      candidates: [
+        { slug: "bad-header", version: "1.0.0" },
+        { slug: "bad-header", version: "1.0.1" },
+        { slug: "timed-out", version: "1.0.0" },
+        { slug: "host-down", version: "1.0.0" },
+        { slug: "recovered", version: "1.0.0" },
+      ],
+      revisitPolicy: { kind: "never" },
+      currentPromptVariant: "wp2shell-bounty-v2",
+    });
+    expect(
+      result.map(({ slug, version, reasons }) => [slug, version, reasons]),
+    ).toEqual([
+      ["bad-header", "1.0.0", ["freeze-deferred"]],
+      ["bad-header", "1.0.1", []],
+      ["timed-out", "1.0.0", []],
+      ["host-down", "1.0.0", []],
+      ["recovered", "1.0.0", ["previously-selected"]],
+    ]);
+  });
+
   it("reselects a fully observed non-Trial and a provider-limited run, and retains a partial Trial", () => {
     const finished = (
       runId: string,

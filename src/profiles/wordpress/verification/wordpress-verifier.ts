@@ -110,8 +110,59 @@ export type WordPressVerifierTransportResult = Readonly<{
         readonly status: "transport-failed";
         readonly reason: "provider" | "sandbox";
       }
-    | { readonly status: "incomplete"; readonly nextStep: string };
+    | {
+        readonly status: "incomplete";
+        readonly nextStep: string;
+        /** Optional unmet setup detail, retained in Private Evidence only. */
+        readonly precondition?: string;
+      };
 }>;
+
+const HANDOFF_ABORT_CODES = new Set([
+  "precondition-unavailable",
+  "route-unavailable",
+  "observer-unavailable",
+  "handoff-interrupted",
+  "unspecified",
+]);
+const HANDOFF_RECEIPT_CODES = new Set([
+  "directory-in-use",
+  "stale-directory",
+  "administrator",
+  "attacker-account",
+  "exposure",
+  "abort",
+  "timeout",
+]);
+
+/** Whitelist transport control codes; never copy an agent or Lab diagnostic into the result. */
+function handoffIncompleteCode(
+  nextStep: string,
+  receipt: VerifierRunReceipt,
+): string {
+  const abortCode = nextStep.startsWith("handoff:")
+    ? nextStep.slice("handoff:".length)
+    : "";
+  if (HANDOFF_ABORT_CODES.has(abortCode)) return `abort-${abortCode}`;
+  const receiptReason = "reason" in receipt ? receipt.reason : undefined;
+  return typeof receiptReason === "string" &&
+    HANDOFF_RECEIPT_CODES.has(receiptReason)
+    ? receiptReason
+    : "handoff-incomplete";
+}
+
+function unmetPreconditionCode(classification: ClassifiedPrecondition): string {
+  switch (classification.preconditionClass) {
+    case "admin-configuration":
+      return "admin-configuration-precondition";
+    case "common-usage":
+      return "common-usage-precondition";
+    case "default":
+      return "unmet-default-precondition";
+    case "unknown":
+      return "unclassified-precondition";
+  }
+}
 
 /**
  * Runs one Verifier against the Lab it is given and returns the agent's files.
@@ -119,6 +170,8 @@ export type WordPressVerifierTransportResult = Readonly<{
  * or writes the ledger; `WordPressVerifier` does that for every transport.
  */
 export interface WordPressVerifierTransport {
+  /** The transport can prepare ordinary Lab state before attacker observation starts. */
+  readonly preconditionSetup?: "transport";
   run(input: WordPressVerifierRun): Promise<WordPressVerifierTransportResult>;
 }
 
@@ -437,7 +490,12 @@ export class WordPressVerifier implements Verifier<
         reason: "precondition",
         nextStep: "admin-configuration-precondition",
       };
-    if (initialPrecondition.nextScenarioId !== undefined)
+    const transportSetsUpPreconditions =
+      this.options.transport.preconditionSetup === "transport";
+    if (
+      !transportSetsUpPreconditions &&
+      initialPrecondition.nextScenarioId !== undefined
+    )
       return {
         status: "incomplete",
         reason: "precondition",
@@ -448,7 +506,10 @@ export class WordPressVerifier implements Verifier<
         ),
         nextScenarioId: initialPrecondition.nextScenarioId,
       };
-    if (initialPrecondition.reasonCode !== undefined)
+    if (
+      !transportSetsUpPreconditions &&
+      initialPrecondition.reasonCode !== undefined
+    )
       return {
         status: "incomplete",
         reason: "precondition",
@@ -517,18 +578,39 @@ export class WordPressVerifier implements Verifier<
     });
     if (result.outcome.status === "transport-failed")
       throw new VerifierTransportIncompleteError(result.outcome.reason);
-    if (result.outcome.status === "incomplete")
+    if (result.outcome.status === "incomplete") {
+      if (!transportSetsUpPreconditions)
+        return {
+          status: "incomplete",
+          reason: "recipe",
+          nextStep: result.outcome.nextStep,
+        };
+      const detailDigest = await this.options.store.putFiles({
+        "transport-detail.txt": result.outcome.nextStep,
+        ...(result.outcome.precondition?.trim()
+          ? { precondition: result.outcome.precondition }
+          : {}),
+      });
+      const code = handoffIncompleteCode(
+        result.outcome.nextStep,
+        result.receipt,
+      );
       return {
         status: "incomplete",
-        reason: "recipe",
-        nextStep: result.outcome.nextStep,
+        reason:
+          code === "abort-precondition-unavailable" ? "precondition" : "recipe",
+        nextStep: `${code}:${detailDigest}`,
       };
+    }
     const data = result.outcome.files;
 
     if (
       data.precondition !== undefined &&
       data.precondition.trim().length > 0
     ) {
+      const detailDigest = transportSetsUpPreconditions
+        ? await this.options.store.putFiles({ precondition: data.precondition })
+        : undefined;
       const classified = classifyWordPressPrecondition({
         configurationPrecondition: finding.configurationPrecondition,
         attachmentPrecondition: data.precondition,
@@ -546,25 +628,30 @@ export class WordPressVerifier implements Verifier<
         status: "incomplete",
         reason: "precondition",
         nextStep:
-          classified.preconditionClass === "admin-configuration"
-            ? "admin-configuration-precondition"
-            : (classified.reasonCode ??
-              (classified.nextScenarioId === undefined
-                ? "catalogue に無い前提"
-                : nextWordPressScenario(
-                    `${finding.configurationPrecondition} ${data.precondition}`,
-                    lab.scenario?.id,
-                    {
-                      secondaryLocaleConfigured:
-                        lab.secondaryLocale !== undefined,
-                    },
-                  ))),
+          detailDigest === undefined
+            ? classified.preconditionClass === "admin-configuration"
+              ? "admin-configuration-precondition"
+              : (classified.reasonCode ??
+                (classified.nextScenarioId === undefined
+                  ? "catalogue に無い前提"
+                  : nextWordPressScenario(
+                      `${finding.configurationPrecondition} ${data.precondition}`,
+                      lab.scenario?.id,
+                      {
+                        secondaryLocaleConfigured:
+                          lab.secondaryLocale !== undefined,
+                      },
+                    )))
+            : `${unmetPreconditionCode(classified)}:${detailDigest}`,
         ...(classified.nextScenarioId === undefined
           ? {}
           : { nextScenarioId: classified.nextScenarioId }),
       };
     }
-    if (initialPrecondition.preconditionClass === "unknown")
+    if (
+      !transportSetsUpPreconditions &&
+      initialPrecondition.preconditionClass === "unknown"
+    )
       return {
         status: "incomplete",
         reason: "precondition",
@@ -632,20 +719,28 @@ export class WordPressVerifier implements Verifier<
       }
     }
     let session: string | undefined;
+    // An empty file explicitly says that no separate principal's session was
+    // observed. This applies to every attacker role; judges still verify the
+    // actual attacker principal from Harness-captured HTTP when required.
+    const explicitlyEmptySession =
+      data["session.json"] !== undefined &&
+      data["session.json"].trim().length === 0;
     if (data["session.json"] !== undefined) {
-      try {
-        session = canonicalJson(
-          sessionSchema.parse(JSON.parse(data["session.json"]) as unknown),
-        );
-      } catch {
-        return {
-          status: "incomplete",
-          reason: "recipe",
-          nextStep: "Repair the session.json cookie record, then repeat",
-        };
+      if (!explicitlyEmptySession) {
+        try {
+          session = canonicalJson(
+            sessionSchema.parse(JSON.parse(data["session.json"]) as unknown),
+          );
+        } catch {
+          return {
+            status: "incomplete",
+            reason: "recipe",
+            nextStep: "Repair the session.json cookie record, then repeat",
+          };
+        }
       }
     }
-    session ??= sessionFromHttp(http);
+    if (!explicitlyEmptySession) session ??= sessionFromHttp(http);
     const recipeDigest = await this.options.store.putFiles({
       "http.json": data["http.json"],
       "steps.md": data["steps.md"],

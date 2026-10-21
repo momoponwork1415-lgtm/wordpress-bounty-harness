@@ -35,7 +35,9 @@ export type WordPressLedgerExclusionReason =
   | "legacy-started"
   | "legacy-ambiguous"
   /** This exact version failed Lab provisioning (e.g. a missing dependency plugin) and never started a Trial. */
-  | "lab-provision-failed";
+  | "lab-provision-failed"
+  /** This exact version's source freeze was deferred (e.g. an unreadable plugin header) while the same attempt froze another target. */
+  | "freeze-deferred";
 
 /** Earlier generations' history, exported once outside Git (D2). */
 export type WordPressLegacyHistory =
@@ -115,8 +117,11 @@ export function inspectWordPressLedgerExclusions(input: {
     promptVersions.set(key, versions);
   };
 
+  // An attempt that froze any target shows the host could freeze; its deferrals belong to the target.
+  const attemptsThatFroze = new Set<string>();
   for (const event of ledgerEvents(input.ledger, "target-selected")) {
     if (event.type !== "target-selected") continue;
+    attemptsThatFroze.add(event.campaignId);
     const identity = parseWordPressOrgSelectionId(event.selectionId);
     if (identity === null) continue;
     const key = snapshotKey(event);
@@ -222,12 +227,36 @@ export function inspectWordPressLedgerExclusions(input: {
     labFailedVersions.set(slug, versions);
   }
 
+  const exploredVersions = new Set<string>();
+  for (const key of exploredSnapshots) {
+    const slug = selectedBySnapshot.get(key);
+    const version = versionBySnapshot.get(key);
+    if (slug !== undefined && version !== undefined)
+      exploredVersions.add(`${slug}@${version}`);
+  }
+  const deferredVersions = new Set<string>();
+  for (const event of ledgerEvents(input.ledger, "target-skipped")) {
+    if (
+      event.type !== "target-skipped" ||
+      event.stage !== "freeze" ||
+      event.reason !== "deferred" ||
+      !attemptsThatFroze.has(event.campaignId)
+    )
+      continue;
+    const identity = parseWordPressOrgSelectionId(event.selectionId);
+    if (identity === null) continue;
+    const key = `${identity.slug}@${identity.version}`;
+    if (!exploredVersions.has(key)) deferredVersions.add(key);
+  }
+
   const legacy = input.legacyHistory ?? "unavailable";
   return input.candidates.map(({ slug, version }) => {
     const reasons: WordPressLedgerExclusionReason[] = [];
     if (unpublishedFindingSlugs.has(slug)) reasons.push("unpublished-finding");
     if (labFailedVersions.get(slug)?.has(version))
       reasons.push("lab-provision-failed");
+    if (deferredVersions.has(`${slug}@${version}`))
+      reasons.push("freeze-deferred");
     // A reconsidered slug forgets the Trials that predate the legacy export, not the ones run since.
     const exportedAt =
       legacy !== "unavailable" && legacy.reconsider.has(slug)

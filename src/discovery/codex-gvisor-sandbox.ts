@@ -316,16 +316,35 @@ function admittedResumeSeed(seed: CodexSandboxResumeSeed): boolean {
     sessionBytes += size;
   }
   if (sessionBytes > MAX_CAPTURE_BYTES) return false;
-  if (seed.research.length > MAX_RESEARCH_ENTRIES) return false;
+  return admittedResearchSeed(seed.research);
+}
+
+/** The notes a resume restores: relative paths, no duplicates, within the archive's own limits. */
+export function admittedResearchSeed(
+  research: CodexSandboxResumeSeed["research"],
+): boolean {
+  if (research.length > MAX_RESEARCH_ENTRIES) return false;
   const researchPaths = new Set<string>();
   let researchBytes = 0;
-  for (const file of seed.research) {
+  for (const file of research) {
     if (!isResearchRelativePath(file.path) || researchPaths.has(file.path))
       return false;
     researchPaths.add(file.path);
     researchBytes += file.content.byteLength;
   }
   return researchBytes <= MAX_RESEARCH_BYTES;
+}
+
+/** Writes restored notes into the fresh, empty notes directory; `wx` refuses any pre-existing file. */
+export async function seedResearch(
+  researchDirectory: string,
+  research: CodexSandboxResumeSeed["research"],
+): Promise<void> {
+  for (const file of research) {
+    const target = join(researchDirectory, ...file.path.split("/"));
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    await writeFile(target, file.content, { flag: "wx", mode: 0o600 });
+  }
 }
 
 /** Write the seed into the fresh, empty Codex home and notes directory; `wx` refuses any pre-existing file. */
@@ -339,11 +358,7 @@ async function seedResume(
     await mkdir(dirname(target), { recursive: true, mode: 0o700 });
     await writeFile(target, file.content, { flag: "wx", mode: 0o600 });
   }
-  for (const file of seed.research) {
-    const target = join(researchDirectory, ...file.path.split("/"));
-    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-    await writeFile(target, file.content, { flag: "wx", mode: 0o600 });
-  }
+  await seedResearch(researchDirectory, seed.research);
 }
 
 /**

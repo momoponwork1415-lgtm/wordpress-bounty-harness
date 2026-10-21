@@ -136,12 +136,16 @@ function contentRefusal(value: unknown, depth = 0): string | undefined {
   return undefined;
 }
 
-/** Decide one parsed Messages request bound to `model`. */
+/** Decide one parsed Messages request bound to the grant's `models`. */
 export function admitAnthropicRequest(
   payload: unknown,
-  model: string,
+  models: readonly string[],
 ): AnthropicRequestDecision {
-  if (!isRecord(payload) || payload.model !== model)
+  if (
+    !isRecord(payload) ||
+    typeof payload.model !== "string" ||
+    !models.includes(payload.model)
+  )
     return { status: "refused", reason: "model-not-admitted" };
   const body: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(payload)) {

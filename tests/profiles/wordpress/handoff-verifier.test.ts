@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -28,19 +28,33 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
-async function until(condition: () => boolean, ms = 2_000): Promise<void> {
+async function until(
+  condition: () => boolean | Promise<boolean>,
+  ms = 2_000,
+): Promise<void> {
   const deadline = Date.now() + ms;
-  while (!condition()) {
+  while (!(await condition())) {
     if (Date.now() > deadline) throw new Error("Condition not met in time");
     await sleep(5);
   }
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 /** A fake Lab that records the host exposure calls; the directory is the real handoff. */
 async function fixture(options: {
   readonly administrator?: null;
+  readonly attackerPosition?: "unauthenticated" | "subscriber" | "customer";
+  readonly customerAccount?: false;
   readonly wallTimeMs?: number;
   readonly clock?: () => Date;
+  readonly restartObservation?: () => Promise<void>;
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-handoff-verifier-"));
   roots.push(root);
@@ -48,7 +62,7 @@ async function fixture(options: {
   const finding = admitWordPressFinding(
     {
       claim: "A synthetic stored script reaches an administrator screen",
-      attackerPosition: "unauthenticated",
+      attackerPosition: options.attackerPosition ?? "unauthenticated",
       impact: "stored-xss",
       configurationPrecondition: "A form exists on a public page",
       brokenProperty: "Submitted text is rendered unescaped",
@@ -72,6 +86,9 @@ async function fixture(options: {
     recorderIp: "172.20.0.4",
     attackerAccounts: {
       subscriber: { username: "sub", password: "sub-pass" },
+      ...(options.customerAccount === false
+        ? {}
+        : { customer: { username: "customer", password: "customer-pass" } }),
     },
   };
   const calls: unknown[] = [];
@@ -125,6 +142,7 @@ async function fixture(options: {
     },
     restartObservation: async () => {
       restarts++;
+      await options.restartObservation?.();
     },
   };
   const place = (name: string, text = "") =>
@@ -146,7 +164,64 @@ async function fixture(options: {
 }
 
 describe("HandoffVerifier (#352)", () => {
-  it("writes lab.json, restarts observation after setup-done, returns the six files", async () => {
+  it.each([
+    "setup-done",
+    "observation-ready",
+    "abort",
+    "lab.json",
+    ".lab.json.tmp",
+    "attack.json",
+    ".attack.json.tmp",
+    "review-export.json",
+    ...WORDPRESS_VERIFIER_FILE_NAMES,
+  ])(
+    "refuses a stale %s without exposing the Lab or overwriting it",
+    async (name) => {
+      const f = await fixture({ clock: () => new Date(), wallTimeMs: 60 });
+      await mkdir(f.directory);
+      await f.place(name, "previous-attempt");
+
+      const result = await f.transport.run(f.run);
+
+      expect(result.outcome).toEqual({
+        status: "incomplete",
+        nextStep:
+          "handoff: The directory contains files from another attempt; use a fresh handoff directory",
+      });
+      expect(result.receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "stale-directory",
+      });
+      expect(f.calls).toEqual([]);
+      expect(f.restarts()).toBe(0);
+      expect(await f.exists(".wbh-handoff-active")).toBe(false);
+      expect(await readFile(join(f.directory, name), "utf8")).toBe(
+        "previous-attempt",
+      );
+    },
+  );
+
+  it("refuses a second run in the same active handoff directory", async () => {
+    const f = await fixture({ clock: () => new Date(), wallTimeMs: 1_000 });
+    const pending = f.transport.run(f.run);
+    await until(() => f.calls.length > 0);
+
+    const second = await f.transport.run({ ...f.run, runId: "verify-2" });
+    expect(second.outcome).toEqual({
+      status: "incomplete",
+      nextStep:
+        "handoff: Another attempt is using the handoff directory; use a fresh handoff directory",
+    });
+    expect(second.receipt).toMatchObject({ reason: "directory-in-use" });
+    expect(f.calls).toEqual([["expose", { httpPort: 8080, via: "recorder" }]]);
+
+    await f.place("abort", "test complete");
+    expect((await pending).outcome.status).toBe("incomplete");
+    expect(f.calls.at(-1)).toEqual(["withdraw"]);
+    expect(await f.exists(".wbh-handoff-active")).toBe(false);
+  });
+
+  it("releases attacker data only after setup baseline and returns the six files", async () => {
     const f = await fixture({});
     const pending = f.transport.run(f.run);
     await until(() => f.calls.length > 0);
@@ -163,18 +238,25 @@ describe("HandoffVerifier (#352)", () => {
     });
     const lab = JSON.parse(labJson) as Record<string, unknown>;
     expect(lab).toMatchObject({
-      schema: "wbh-handoff-lab/v1",
+      schema: "wbh-handoff-lab/v2",
       skill: WBH_VERIFY_SKILL_ID,
       runId: "verify-1",
       findingId: f.run.finding.findingId,
       endpoint: "http://wordpress.lab",
       host: { url: "http://127.0.0.1:8080", hostHeader: "wordpress.lab" },
-      accounts: { subscriber: { username: "sub", password: "sub-pass" } },
       administrator: { username: "harness-admin", password: "admin-pass" },
-      canary: f.run.canary,
       reviewExport: join(f.directory, "review-export.json"),
+      files: { attack: join(f.directory, "attack.json") },
     });
     expect(lab).not.toHaveProperty("internalIp");
+    expect(lab).not.toHaveProperty("accounts");
+    expect(lab).not.toHaveProperty("canary");
+    expect(lab).not.toHaveProperty("database");
+    expect(lab).not.toHaveProperty("referenceRoute");
+    expect(await f.exists(".lab.json.tmp")).toBe(false);
+    expect(await f.exists("attack.json")).toBe(false);
+    expect(labJson).not.toContain("sub-pass");
+    expect(labJson).not.toContain("customer-pass");
     expect(
       await readFile(join(f.directory, "review-export.json"), "utf8"),
     ).toBe('{"schema":"review-export/v1"}');
@@ -182,8 +264,25 @@ describe("HandoffVerifier (#352)", () => {
     // Setup is still running: nothing is observed yet.
     await sleep(30);
     expect(f.restarts()).toBe(0);
+    expect(await f.exists("observation-ready")).toBe(false);
+    expect(await f.exists("attack.json")).toBe(false);
     await f.place("setup-done");
-    await until(() => f.restarts() === 1);
+    await until(() => f.exists("attack.json"));
+    expect(await f.exists("observation-ready")).toBe(true);
+    expect(f.restarts()).toBe(1);
+    const attack = JSON.parse(
+      await readFile(join(f.directory, "attack.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(attack).toMatchObject({
+      schema: "wbh-handoff-attack/v1",
+      runId: "verify-1",
+      findingId: f.run.finding.findingId,
+      snapshotDigest: digest,
+      accounts: {},
+      canary: f.run.canary,
+    });
+    expect(attack).not.toHaveProperty("administrator");
+    expect(await f.exists(".attack.json.tmp")).toBe(false);
 
     for (const name of WORDPRESS_VERIFIER_FILE_NAMES)
       await f.place(name, name === "precondition" ? "" : `${name} body`);
@@ -215,6 +314,74 @@ describe("HandoffVerifier (#352)", () => {
     expect(f.calls.at(-1)).toEqual(["withdraw"]);
   });
 
+  it.each(["subscriber", "customer"] as const)(
+    "hands only the %s attacker account after setup",
+    async (attackerPosition) => {
+      const f = await fixture({ attackerPosition });
+      const pending = f.transport.run(f.run);
+      await until(() => f.exists("lab.json"));
+      const lab = JSON.parse(
+        await readFile(join(f.directory, "lab.json"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(lab).not.toHaveProperty("accounts");
+      expect(await f.exists("attack.json")).toBe(false);
+      await f.place("setup-done");
+      await until(() => f.exists("attack.json"));
+      const attack = JSON.parse(
+        await readFile(join(f.directory, "attack.json"), "utf8"),
+      ) as { accounts: unknown };
+      expect(attack.accounts).toEqual({
+        [attackerPosition]: f.run.lab.attackerAccounts[attackerPosition],
+      });
+      await f.place("abort", "handoff-interrupted");
+      await pending;
+    },
+  );
+
+  it("stops before exposing the Lab when the Finding's attacker account is unavailable", async () => {
+    const f = await fixture({
+      attackerPosition: "customer",
+      customerAccount: false,
+    });
+    const result = await f.transport.run(f.run);
+    expect(result.outcome).toMatchObject({ status: "incomplete" });
+    expect(f.calls).toEqual([]);
+    expect(await f.exists("lab.json")).toBe(false);
+  });
+
+  it("acknowledges observation only after the Harness baseline has restarted", async () => {
+    const entered = deferred();
+    const release = deferred();
+    const f = await fixture({
+      restartObservation: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    const pending = f.transport.run(f.run);
+    try {
+      await until(() => f.exists("lab.json"));
+      expect(await f.exists("observation-ready")).toBe(false);
+      await f.place("setup-done");
+      await entered.promise;
+      expect(await f.exists("observation-ready")).toBe(false);
+      expect(await f.exists("attack.json")).toBe(false);
+      release.resolve();
+      await until(() => f.exists("attack.json"));
+      const lab = JSON.parse(
+        await readFile(join(f.directory, "lab.json"), "utf8"),
+      ) as { files: { observationReady: string; attack: string } };
+      expect(lab.files.observationReady).toBe(
+        join(f.directory, "observation-ready"),
+      );
+      expect(lab.files.attack).toBe(join(f.directory, "attack.json"));
+    } finally {
+      release.resolve();
+      await f.place("abort", "test complete");
+      await pending;
+    }
+  });
+
   it("does not read files placed before setup-done until setup-done arrives", async () => {
     const f = await fixture({});
     const pending = f.transport.run(f.run);
@@ -232,18 +399,62 @@ describe("HandoffVerifier (#352)", () => {
     const f = await fixture({});
     const pending = f.transport.run(f.run);
     await until(() => f.calls.length > 0);
-    await f.place("abort", "form editor unavailable\nmore detail");
+    await f.place("precondition", "The ordinary setup could not be completed.");
+    await f.place("abort", "precondition-unavailable\nprivate detail");
     const result = await pending;
     expect(result.outcome).toEqual({
       status: "incomplete",
-      nextStep: "handoff: Aborted before setup-done: form editor unavailable",
+      nextStep: "handoff:precondition-unavailable",
+      precondition: "The ordinary setup could not be completed.",
     });
+    expect(JSON.stringify(result)).not.toContain("private detail");
     expect(result.receipt).toMatchObject({
       terminal: "incomplete",
       reason: "abort",
     });
     expect(f.restarts()).toBe(0);
     expect(f.calls.at(-1)).toEqual(["withdraw"]);
+  });
+
+  it("normalizes arbitrary abort text before writing an incomplete result", async () => {
+    const f = await fixture({});
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    await f.place("abort", "sensitive free text");
+    const result = await pending;
+    expect(result.outcome).toEqual({
+      status: "incomplete",
+      nextStep: "handoff:unspecified",
+    });
+    expect(JSON.stringify(result)).not.toContain("sensitive free text");
+  });
+
+  it("honors abort even when setup-done is present", async () => {
+    const f = await fixture({});
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    await f.place("abort", "precondition-unavailable");
+    await f.place("setup-done");
+    const result = await pending;
+    expect(result.outcome).toMatchObject({ status: "incomplete" });
+    expect(result.receipt).toMatchObject({ reason: "abort" });
+    expect(f.restarts()).toBe(0);
+  });
+
+  it("honors abort even when all six recipe files are present", async () => {
+    const f = await fixture({});
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    await f.place("setup-done");
+    await until(() => f.exists("observation-ready"));
+    await f.place("abort", "route-unavailable");
+    for (const name of WORDPRESS_VERIFIER_FILE_NAMES)
+      await f.place(name, name === "precondition" ? "" : "complete-looking");
+    const result = await pending;
+    expect(result.outcome).toEqual({
+      status: "incomplete",
+      nextStep: "handoff:route-unavailable",
+    });
   });
 
   it("records an abort after setup-done as incomplete without reading partial files", async () => {
@@ -257,7 +468,7 @@ describe("HandoffVerifier (#352)", () => {
     const result = await pending;
     expect(result.outcome).toEqual({
       status: "incomplete",
-      nextStep: "handoff: Aborted after setup-done: no reason given",
+      nextStep: "handoff:unspecified",
     });
   });
 

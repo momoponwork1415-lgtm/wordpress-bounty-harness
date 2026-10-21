@@ -13,8 +13,10 @@ import {
   type TrialContext,
   type TrialOutcome,
 } from "./execute-trial.js";
+import { claudeSessionFromDiagnostic } from "./claude-session.js";
 import {
   readNativeRunReceipt,
+  type NativeRunReceipt,
   type NativeRunSession,
 } from "./native-run-receipts.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
@@ -137,6 +139,9 @@ function configurationOf(
     ...(configuration.labAccess === undefined
       ? {}
       : { labAccess: configuration.labAccess }),
+    ...(configuration.runtime === undefined
+      ? {}
+      : { runtime: configuration.runtime }),
   };
 }
 
@@ -360,11 +365,18 @@ export async function assessTrialResume(options: {
       ? undefined
       : await readNativeRunReceipt(options.evidence, receiptReference.digest);
   if (receipt === undefined) return refused("receipt-unavailable");
-  if (receipt.session === undefined) return refused("session-unrecorded");
+  const chain = segmentChain(starts, options.runId);
+  const session =
+    receipt.session ??
+    (await claudeSessionOfSealedDiagnostic(
+      options.attachments,
+      receipt,
+      chain.length - 1,
+    ));
+  if (session === undefined) return refused("session-unrecorded");
   if (receipt.runtimeProfileDigest !== options.profileDigest)
     return refused("runtime-profile-differs", receipt.runtimeProfileDigest);
 
-  const chain = segmentChain(starts, options.runId);
   const consumedWallMs = chain.reduce(
     (sum, segment) => sum + (finishes.get(segment.runId)?.wallTimeMs ?? 0),
     0,
@@ -373,10 +385,7 @@ export async function assessTrialResume(options: {
   if (remainingWallMs < RESUME_WALL_FLOOR_MS)
     return refused("wall-exhausted", `${consumedWallMs}ms consumed`);
 
-  const sessions = await restoreSessionFiles(
-    options.attachments,
-    receipt.session,
-  );
+  const sessions = await restoreSessionFiles(options.attachments, session);
   if (sessions === undefined) return refused("session-evidence-missing");
   const research = await restoreResearch(
     options.attachments,
@@ -399,7 +408,7 @@ export async function assessTrialResume(options: {
       ),
       configuration: configurationOf(started),
       resume: {
-        threadId: receipt.session.rootThreadId,
+        threadId: session.rootThreadId,
         segment: chain.length,
         sessions,
         research: research ?? [],
@@ -407,6 +416,30 @@ export async function assessTrialResume(options: {
       researchRestored: research !== undefined,
     },
   };
+}
+
+/**
+ * A Claude Code receipt sealed before receipts carried `session` (before
+ * 2026-10-20): its sealed diagnostic lists every transcript and digest, so the
+ * session is read from there. Codex receipts without `session` stay unresumable.
+ */
+async function claudeSessionOfSealedDiagnostic(
+  attachments: Pick<ProviderAttachmentStore, "readByDigest">,
+  receipt: NativeRunReceipt,
+  segment: number,
+): Promise<NativeRunSession | undefined> {
+  if (
+    receipt.claudeCliVersion === undefined ||
+    receipt.diagnosticArtifactDigest === undefined
+  )
+    return undefined;
+  const stored = await attachments.readByDigest(
+    "diagnostic",
+    receipt.diagnosticArtifactDigest,
+  );
+  return stored.status === "resolved"
+    ? claudeSessionFromDiagnostic(stored.bytes.toString("utf8"), segment)
+    : undefined;
 }
 
 async function restoreSessionFiles(

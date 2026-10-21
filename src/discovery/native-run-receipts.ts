@@ -35,9 +35,39 @@ export function isCodexSessionPath(path: string): boolean {
       ) && /^rollout-[A-Za-z0-9_.-]+\.jsonl$/.test(file)
   );
 }
-const codexSessionPathSchema = z.string().refine(isCodexSessionPath, {
-  message: "Codex session path is not a sessions-relative rollout file",
-});
+const SESSION_SEGMENT = /^[A-Za-z0-9_.-]{1,255}$/;
+/**
+ * A Claude Code transcript's path relative to `$CLAUDE_CONFIG_DIR/projects`:
+ * `<project>/<session>.jsonl` for a session, or
+ * `<project>/<session>/subagents/agent-<id>.jsonl` for a child. `resume` finds
+ * a session by this layout under the working directory's project.
+ */
+export function isClaudeTranscriptPath(path: string): boolean {
+  if (path.length === 0 || path.length > 512) return false;
+  const segments = path.split("/");
+  if (
+    !segments.every(
+      (segment) =>
+        SESSION_SEGMENT.test(segment) && segment !== "." && segment !== "..",
+    )
+  )
+    return false;
+  if (segments.length === 2)
+    return /^[A-Za-z0-9_-]{1,128}\.jsonl$/.test(segments[1]!);
+  return (
+    segments.length === 4 &&
+    /^[A-Za-z0-9_-]{1,128}$/.test(segments[1]!) &&
+    segments[2] === "subagents" &&
+    /^agent-[A-Za-z0-9_-]{1,64}\.jsonl$/.test(segments[3]!)
+  );
+}
+/** A Codex rollout path or a Claude Code transcript path; each runtime restores only its own. */
+const sessionPathSchema = z
+  .string()
+  .refine((path) => isCodexSessionPath(path) || isClaudeTranscriptPath(path), {
+    message:
+      "Session path is not a sessions-relative rollout or transcript file",
+  });
 const reported = z.union([
   z.string().min(1).max(128),
   z.literal("unavailable"),
@@ -96,6 +126,8 @@ const bodySchema = z.strictObject({
    * The cooperative Root thread and the session files Private Evidence holds
    * for it (ADR 0036). An operator may resume the same thread in a new
    * disposable sandbox from these; receipts without it are not resumable.
+   * On a Claude Code run the thread is the Root session id and the paths are
+   * `projects/`-relative transcripts.
    */
   session: z
     .strictObject({
@@ -107,7 +139,7 @@ const bodySchema = z.strictObject({
       files: z
         .array(
           z.strictObject({
-            path: codexSessionPathSchema,
+            path: sessionPathSchema,
             threadId: codexThreadIdSchema,
             kind: z.enum(["root", "child"]),
             diagnosticArtifactDigest: digest,

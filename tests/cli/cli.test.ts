@@ -251,6 +251,8 @@ async function harness(
   };
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
+    leaseDirectory: join(root, "host-lab-lease"),
+    leaseWaitMs: 0,
     images: {
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
@@ -2552,7 +2554,7 @@ describe("harness CLI vertical slice", () => {
             event.type === "verification-finished" &&
             event.findingId === findingId,
         );
-    expect(finished()).toMatchObject([{ promptVersion: "wbh-verify/v1" }]);
+    expect(finished()).toMatchObject([{ promptVersion: "wbh-verify/v4" }]);
 
     // The operator named the Finding again: the retry rules of the automatic queue do not apply.
     const second = await run(...handoff);
@@ -2560,7 +2562,7 @@ describe("harness CLI vertical slice", () => {
     expect(second.stdout).toContain(`verified finding ${findingId}`);
     expect(finished()).toHaveLength(2);
     expect(finished()[1]).toMatchObject({
-      promptVersion: "wbh-verify/v1",
+      promptVersion: "wbh-verify/v4",
       attempt: 2,
     });
   });
@@ -2738,6 +2740,61 @@ describe("harness CLI vertical slice", () => {
     expect(completed.code).toBe(3);
     expect(completed.stderr).toBe("not resumable: run-completed");
     expect(transportRuns).toHaveLength(2);
+  });
+
+  it("resumes a refused Claude run on the Claude runtime it recorded, and lists the segment in `ledger resumes`", async () => {
+    const { run, configPath, transportRuns, ledger } = await harness({
+      claude: true,
+      refuseOnCalls: [1],
+      refusalSession: true,
+      zeroFindings: true,
+      config: {
+        promptId: undefined,
+        discovery: { lab: "none", runtimeShare: { codex: 0, claude: 1 } },
+      },
+    });
+    const campaign = "campaign-claude-resume";
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "--all",
+          "--campaign",
+          campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const refusedRunId = transportRuns[0]!.runId;
+    const resumed = await run(
+      "campaign",
+      "resume",
+      "--campaign",
+      campaign,
+      "--run",
+      refusedRunId,
+      "--config",
+      configPath,
+    );
+    expect(resumed.code).toBe(0);
+    expect(transportRuns[1]).toMatchObject({
+      profile: { digest: claudeProfile.digest },
+      campaignInput: { modelProfileDigest: claudeProfile.digest },
+      resume: { threadId: REFUSED_ROOT_THREAD, segment: 1 },
+    });
+    const starts = ledger()
+      .read({ campaignId: campaign, type: "discovery-run-started" })
+      .map(({ event }) => event);
+    expect(starts[1]).toMatchObject({
+      resumesRun: refusedRunId,
+      configuration: { runtime: "claude-code/v1" },
+    });
+    const resumes = await run("ledger", "resumes", "--campaign", campaign);
+    expect(resumes.stdout).toContain(
+      `segment 1  run ${transportRuns[1]!.runId}  resumes ${refusedRunId}  after failed/provider/provider-cyber-policy  runtime claude-code/v1  ended completed`,
+    );
   });
 
   it("does not resume a refused run whose receipt predates session records or whose campaign attaches a Lab", async () => {
@@ -3007,6 +3064,63 @@ describe("harness CLI vertical slice", () => {
     expect(funnel.stdout).toContain("campaign *");
   });
 
+  it("lists held Finding candidates with their issue paths and codes", async () => {
+    const { run, ledger, store, configPath } = await harness();
+    const warm = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-warm",
+      "--config",
+      configPath,
+    );
+    expect(warm.code).toBe(0);
+    const empty = await run("review", "held", "--campaign", "campaign-held");
+    expect(empty.code).toBe(0);
+    expect(empty.stdout).toContain("no held findings");
+    const candidate = await store().putFiles({
+      "candidate.json": Buffer.from(JSON.stringify({ impact: "stored-xss" })),
+    });
+    const held = (
+      candidateKind: "finding" | "lead",
+      candidateIndex: number,
+      extra: object,
+    ) =>
+      ledger().append({
+        schemaVersion: 1,
+        identity: `held-${candidateKind}-${candidateIndex}`,
+        campaignId: "campaign-held",
+        snapshotDigest: `sha256:${"b".repeat(64)}`,
+        occurredAt: "2026-10-20T00:00:00Z",
+        type: "candidate-held",
+        runId: "run-1",
+        candidateKind,
+        candidateIndex,
+        artifacts: [{ kind: "candidate", digest: candidate }],
+        ...extra,
+      } as never);
+    // An event from before issue codes were recorded reads unchanged.
+    await held("finding", 0, {
+      issuePaths: ["configurationPrecondition"],
+      impact: "stored-xss",
+    });
+    await held("finding", 1, {
+      issuePaths: ["attackerPosition", "impact"],
+      issueCodes: ["invalid_value", "invalid_value"],
+      impact: "unclassified",
+    });
+    await held("lead", 0, { issuePaths: ["summary"] });
+    const listed = await run("review", "held", "--campaign", "campaign-held");
+    expect(listed.code).toBe(0);
+    const lines = listed.stdout.split("\n").filter((line) => line !== "");
+    expect(lines).toEqual([
+      `held  stored-xss  ${candidate}  run-1#0  issues: configurationPrecondition  ${store().contentPath(candidate)}`,
+      `held  unclassified  ${candidate}  run-1#1  issues: attackerPosition(invalid_value), impact(invalid_value)  ${store().contentPath(candidate)}`,
+    ]);
+    expect((await run("review", "held")).code).not.toBe(0);
+  });
+
   it("verifies a child Finding on resume and runs the provider-limited Trial again", async () => {
     const { run, configPath, prompts, ledger } = await harness({
       limitOnCalls: [1],
@@ -3106,7 +3220,7 @@ describe("harness CLI vertical slice", () => {
     expect(runtimes.code).toBe(0);
     expect(runtimes.stdout.split("\n")).toEqual([
       "recorded runtimes (oldest first)",
-      `  gpt-6.1-sol effort high  codex-cli 0.161.0  catalog ${sha("e")}  tier priority  access standard  auth host-private-bearer  runs 3  2026-10-08..2026-10-08`,
+      `  gpt-6.1-sol effort high  child unavailable effort unavailable  codex-cli 0.161.0  catalog ${sha("e")}  tier priority  access standard  auth host-private-bearer  runs 3  2026-10-08..2026-10-08`,
     ]);
     const usage = await run("ledger", "usage");
     expect(usage.code).toBe(0);
@@ -4242,6 +4356,83 @@ describe("harness CLI vertical slice", () => {
     );
     expect(scoped.stdout).toMatch(/^wordfence in-scope /m);
     expect(scoped.stdout).toMatch(/^patchstack in-scope /m);
+  });
+
+  it("hands a latest-version re-verification to the skill while retaining the judge and new Snapshot", async () => {
+    const { run, configPath, root, handoffs, sweepHeldAtHandoff, ledger } =
+      await harness();
+    const campaignId = "campaign-reverify-handoff";
+    const campaign = ["--campaign", campaignId];
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "--all",
+          ...campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const queue = await run("review", ...campaign);
+    const findingId = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      queue.stdout,
+    )![1]!;
+    const original = ledger()
+      .read({ campaignId, findingId, type: "finding-recorded", limit: 1 })
+      .at(0)?.event;
+    expect(original?.type).toBe("finding-recorded");
+
+    const directory = join(root, "reverify-handoff");
+    const result = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      findingId,
+      "--config",
+      configPath,
+      "--handoff",
+      directory,
+      "--port",
+      "18082",
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(": runtime-confirmed");
+    expect(handoffs).toEqual([
+      { directory, httpPort: 18082, databasePort: 3307 },
+    ]);
+    expect(sweepHeldAtHandoff).toEqual([true]);
+    const derivedId = /^reverified finding \S+ as (\S+) on/m.exec(
+      result.stdout,
+    )![1]!;
+    const derived = ledger()
+      .read({
+        campaignId,
+        findingId: derivedId,
+        type: "finding-recorded",
+        limit: 1,
+      })
+      .at(0)?.event;
+    expect(derived?.type).toBe("finding-recorded");
+    if (
+      derived?.type !== "finding-recorded" ||
+      original?.type !== "finding-recorded"
+    )
+      throw new Error("The versioned Finding was not recorded");
+    expect(derived.snapshotDigest).not.toBe(original.snapshotDigest);
+    expect(derived.derivedFromFindingId).toBe(findingId);
+    expect(derived.derivationKind).toBe("latest-version");
+    const verified = ledger()
+      .read({ campaignId, findingId: derivedId, type: "verification-finished" })
+      .at(-1)?.event;
+    expect(verified?.type).toBe("verification-finished");
+    if (verified?.type !== "verification-finished")
+      throw new Error("The versioned verification was not recorded");
+    expect(verified.snapshotDigest).toBe(derived.snapshotDigest);
+    expect(verified.basis?.kind).toBe("latest-version");
+    expect(verified.promptVersion).toBe("wbh-verify/v4");
   });
 
   it("pins the original plugin sources when an automatic policy re-verifies a fixed version", async () => {

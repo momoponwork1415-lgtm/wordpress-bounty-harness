@@ -15,7 +15,17 @@ import {
   type DiscoveryTransportRun,
 } from "./codex-native-agent-runtime.js";
 import {
+  CHILD_ID,
+  CHILD_TRANSCRIPT,
+  claudeRunSession,
+  jsonLines,
+  lastSessionId,
+  object,
+  type Event,
+} from "./claude-session.js";
+import {
   createNativeRunReceipt,
+  isClaudeTranscriptPath,
   type NativeRunReceipt,
 } from "./native-run-receipts.js";
 import type {
@@ -33,7 +43,6 @@ import {
   dependencyMountPathsOf,
 } from "./sandbox-layout.js";
 
-type Event = Record<string, unknown>;
 type AgentRun = NonNullable<DiscoveryTransportResult["agentRuns"]>[number];
 type Reason = Exclude<NativeRunReceipt["reason"], "unavailable">;
 type ProviderLimit = "rate-limit" | "quota";
@@ -45,32 +54,13 @@ type Failure = {
 
 /** Where the sandbox mounts the Claude config directory; transcript paths start here. */
 const TRANSCRIPT_ROOT = "/tmp/claude/projects/";
-const CHILD_ID = /^[A-Za-z0-9_-]{1,64}$/;
-/** Claude Code writes each child's session to `<project>/<session>/subagents/agent-<id>.jsonl`. */
-const CHILD_TRANSCRIPT =
-  /(?:^|\/)subagents\/agent-([A-Za-z0-9_-]{1,64})\.jsonl$/;
 /** Claude Code labels the assistant messages it writes for an API error with this model. */
 const SYNTHETIC_MODEL = "<synthetic>";
 
-const object = (value: unknown): Event | undefined =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Event)
-    : undefined;
 const count = (value: unknown): number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : 0;
-
-function jsonLines(text: string): Event[] {
-  return text.split("\n").flatMap((line) => {
-    try {
-      const value = object(JSON.parse(line) as unknown);
-      return value === undefined ? [] : [value];
-    } catch {
-      return [];
-    }
-  });
-}
 
 const contentOf = (event: Event): Event[] => {
   const content = object(event.message)?.content;
@@ -106,6 +96,20 @@ function commandsOf(events: readonly Event[]): ObservedCommand[] {
         parsed: [{ type, path }],
       };
     });
+}
+
+/** Models the assistant messages report; Claude Code's own error turns are left out. */
+function reportedModels(events: readonly Event[]): Set<string> {
+  return new Set(
+    events.flatMap((event) => {
+      const model = object(event.message)?.model;
+      return event.type === "assistant" &&
+        typeof model === "string" &&
+        model !== SYNTHETIC_MODEL
+        ? [model]
+        : [];
+    }),
+  );
 }
 
 /** Token counts of distinct assistant messages; Claude Code repeats a message's usage per content block. */
@@ -246,27 +250,30 @@ export function claudeProviderFailure(
   return undefined;
 }
 
-/** The Root's own session file: the transcript of the session stdout last named. */
+/**
+ * The Root's own session file: the transcript of the session stdout last
+ * named. On a resumed segment only what this segment appended counts; the
+ * restored part ended in the earlier segment's stop.
+ */
 function rootTranscript(
   events: readonly Event[],
   transcripts: ClaudeSandboxResult["transcripts"],
+  restored: ReadonlyMap<string, string> = new Map(),
 ): Event[] {
-  const session = events
-    .flatMap((event) =>
-      typeof event.session_id === "string"
-        ? [event.session_id]
-        : event.type === "harness.turn" && typeof event.sessionId === "string"
-          ? [event.sessionId]
-          : [],
-    )
-    .at(-1);
-  if (session === undefined || !CHILD_ID.test(session)) return [];
+  const session = lastSessionId(events);
+  if (session === undefined) return [];
   const file = transcripts?.find(
     (entry) =>
       entry.path === `${session}.jsonl` ||
       entry.path.endsWith(`/${session}.jsonl`),
   );
-  return jsonLines(file?.content ?? "");
+  if (file === undefined) return [];
+  const before = restored.get(file.path);
+  return jsonLines(
+    before !== undefined && file.content.startsWith(before)
+      ? file.content.slice(before.length)
+      : file.content,
+  );
 }
 
 /** Every Root turn's structured report, merged as the Codex path merges turns. */
@@ -337,7 +344,16 @@ function admitted(run: DiscoveryTransportRun, sandboxImage: string): boolean {
     admitAgentRuntimeProfile(profile, sandboxImage).status === "admitted" &&
     profile.subagent.effort === profile.requestedEffort &&
     run.outputKind === undefined &&
-    run.resume === undefined &&
+    // A resume carries the restored Claude transcripts, the Root session's among them.
+    (run.resume === undefined ||
+      (run.resume.sessions.every((file) => isClaudeTranscriptPath(file.path)) &&
+        run.resume.sessions.some(
+          (file) =>
+            file.kind === "root" &&
+            file.threadId === run.resume?.threadId &&
+            file.path.split("/").length === 2 &&
+            file.path.endsWith(`/${file.threadId}.jsonl`),
+        ))) &&
     run.minimumActiveMs !== undefined &&
     run.resumePrompt !== undefined &&
     run.prompt.includes(run.resumePrompt) &&
@@ -427,6 +443,8 @@ export class ClaudeNativeAgentRuntime {
             schemaVersion: 1,
             runtimeProfileDigest: profile.digest,
             model: profile.requestedModelId,
+            // The broker admits the children's model besides the Root's.
+            subagentModel: profile.subagent.modelId,
             protocol: "anthropic-messages",
             // Claude Code sends one Messages request per model turn, for the
             // Root and up to four children at once, and its side requests are
@@ -452,7 +470,27 @@ export class ClaudeNativeAgentRuntime {
                   model: profile.requestedModelId,
                   effort: profile.requestedEffort,
                   outputSchema: reportJsonSchema,
+                  ...(run.resume === undefined
+                    ? {}
+                    : { resumeSessionId: run.resume.threadId }),
                 },
+                subagentModel: profile.subagent.modelId,
+                ...(run.resume === undefined
+                  ? {}
+                  : {
+                      resume: {
+                        sessionId: run.resume.threadId,
+                        transcripts: run.resume.sessions.map(
+                          ({ path, content }) => ({ path, content }),
+                        ),
+                        research: run.resume.research.map(
+                          ({ path, contentBase64 }) => ({
+                            path,
+                            content: Buffer.from(contentBase64, "base64"),
+                          }),
+                        ),
+                      },
+                    }),
                 sourceMount: {
                   directory: run.sourceDirectory,
                   expectedTree: run.sourceTree,
@@ -579,6 +617,25 @@ export class ClaudeNativeAgentRuntime {
         : await put("findings", canonicalJson(report));
     const activeMs =
       Date.parse(result.completedAt) - Date.parse(result.startedAt);
+    const restoredRoot = new Map(
+      (run.resume?.sessions ?? []).flatMap((file) =>
+        file.kind === "root" ? [[file.path, file.content] as const] : [],
+      ),
+    );
+    const session = claudeRunSession(
+      events,
+      [...sealed].map(([path, digest]) => ({
+        path,
+        ...(digest === undefined ? {} : { digest }),
+      })),
+      run.resume?.segment ?? 0,
+    );
+    // The Root answered on another model than the profile binds, as a child would.
+    const rootModelMismatch: Failure | undefined = [
+      ...reportedModels(events),
+    ].some((model) => model !== run.profile.requestedModelId)
+      ? { reason: "policy", detail: "root-profile-mismatch" }
+      : undefined;
     const failure: Failure | undefined =
       result.isolation.backend !== "gvisor" ||
       result.isolation.runtime !== "runsc" ||
@@ -590,9 +647,10 @@ export class ClaudeNativeAgentRuntime {
           ? { reason: "policy", detail: "claude-image-mismatch" }
           : (brokerMetrics?.requestLimitExceeded ?? 0) > 0
             ? { reason: "policy", detail: "broker-request-cap" }
-            : (claudeProviderFailure(
+            : (rootModelMismatch ??
+              claudeProviderFailure(
                 events,
-                rootTranscript(events, result.transcripts),
+                rootTranscript(events, result.transcripts, restoredRoot),
               ) ??
               (result.failureKind === "timed-out"
                 ? { reason: "wall" }
@@ -669,6 +727,7 @@ export class ClaudeNativeAgentRuntime {
         ...(diagnostic === undefined
           ? {}
           : { diagnosticArtifactDigest: diagnostic.digest }),
+        ...(session === undefined ? {} : { session }),
         grantReceiptDigest,
         ...(attachment === undefined
           ? {}
@@ -690,6 +749,12 @@ export class ClaudeNativeAgentRuntime {
   ): Promise<AgentRun[]> {
     const paths = new Map<string, string | undefined>();
     const stops = new Map<string, Event>();
+    // Children restored from an earlier segment were recorded by that segment.
+    const restored = new Set(
+      (run.resume?.sessions ?? []).flatMap((file) =>
+        file.kind === "child" ? [file.threadId] : [],
+      ),
+    );
     for (const event of jsonLines(result.stdout))
       if (
         event.type === "harness.child-stop" &&
@@ -713,20 +778,13 @@ export class ClaudeNativeAgentRuntime {
         paths.set(agentId, file.path);
     }
     const agentRuns: AgentRun[] = [];
-    for (const [agentId, path] of [...paths].slice(0, 255)) {
+    for (const [agentId, path] of [...paths]
+      .filter(([agentId]) => !restored.has(agentId))
+      .slice(0, 255)) {
       const stop = stops.get(agentId);
       const raw = result.transcripts?.find((file) => file.path === path);
       const transcript = jsonLines(raw?.content ?? "");
-      const models = new Set(
-        transcript.flatMap((event) => {
-          const model = object(event.message)?.model;
-          return event.type === "assistant" &&
-            typeof model === "string" &&
-            model !== SYNTHETIC_MODEL
-            ? [model]
-            : [];
-        }),
-      );
+      const models = reportedModels(transcript);
       const times = transcript.flatMap((event) =>
         typeof event.timestamp === "string" &&
         Number.isFinite(Date.parse(event.timestamp))
