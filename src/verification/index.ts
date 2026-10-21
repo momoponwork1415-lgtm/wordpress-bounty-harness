@@ -233,6 +233,16 @@ export interface LabStateObserver<Handle extends LabHandle> {
   after(lab: Handle, before: LabStateCapture): Promise<LabStateDiffRecord>;
 }
 
+/**
+ * Harness-owned recording of what the declared victim sees, taken after the
+ * judge observed (#439). Its artifacts are review material by digest; no judge
+ * reads them, and a failed or empty recording never changes the result.
+ */
+export interface VictimViewObserver<Handle extends LabHandle> {
+  record(lab: Handle, recipeDigest: string): Promise<readonly ArtifactRef[]>;
+}
+type ArtifactRef = { readonly kind: string; readonly digest: string };
+
 type Incomplete = Extract<VerificationResultV1, { status: "incomplete" }>;
 type ReplayNeeded = {
   readonly status: "replay-needed";
@@ -260,6 +270,8 @@ type VerificationRun<
   readonly onStateDiff: (record: LabStateDiffRecord) => void;
   /** Receives the Verifier's stored recipe, review material whatever the judge says (#437). */
   readonly onRecipe: (recipeDigest: string) => void;
+  /** Receives the victim-view artifacts recorded after the judge (#439). */
+  readonly onVictimView: (artifacts: readonly ArtifactRef[]) => void;
 };
 const incomplete = (
   reason: Incomplete["reason"],
@@ -292,6 +304,8 @@ export type VerificationOptions<
   readonly promptVersion?: string;
   /** Optional before / after Lab state diff; absent, the event carries no diff field. */
   readonly stateObserver?: LabStateObserver<Handle>;
+  /** Optional victim-side screenshots and video after the judge (#439). */
+  readonly victimViewObserver?: VictimViewObserver<Handle>;
   readonly clock?: () => Date;
 };
 
@@ -353,6 +367,7 @@ export class Verification<
     let evidenceCapture: "harness-captured" | "agent-authored" | undefined;
     let labStateDiff: LabStateDiffRecord | undefined;
     let recipeDigest: string | undefined;
+    let victimView: readonly ArtifactRef[] = [];
     const loaded = await this.#loadFinding(campaignId, findingId);
 
     const decide = async (): Promise<VerificationResultV1> => {
@@ -457,6 +472,9 @@ export class Verification<
         onRecipe: (digest) => {
           recipeDigest = digest;
         },
+        onVictimView: (artifacts) => {
+          victimView = artifacts;
+        },
       };
       try {
         const labEvent = await this.#options.ledger.append({
@@ -520,10 +538,10 @@ export class Verification<
       (await this.#options.store.resolve(recipeDigest)).status === "resolved"
         ? [{ kind: "recipe", digest: recipeDigest }]
         : []),
-      ...(labStateDiff?.status === "captured"
-        ? labStateDiff.artifacts
-        : []
-      ).map((artifact) => ({ kind: artifact.kind, digest: artifact.digest })),
+      ...[
+        ...(labStateDiff?.status === "captured" ? labStateDiff.artifacts : []),
+        ...victimView,
+      ].map((artifact) => ({ kind: artifact.kind, digest: artifact.digest })),
     ];
     const appended = await this.#options.ledger.append({
       schemaVersion: 1,
@@ -552,7 +570,7 @@ export class Verification<
           }),
       result: decided,
       ...(evidenceCapture === undefined ? {} : { evidenceCapture }),
-      // The diff is review material by digest; a failed capture is recorded, never a verdict.
+      // The diff and the victim view are review material by digest; a failed capture is recorded, never a verdict.
       ...(labStateDiff === undefined
         ? {}
         : labStateDiff.status === "captured"
@@ -598,6 +616,7 @@ export class Verification<
       basisKind,
       onCapture,
       onStateDiff,
+      onVictimView,
     } = run;
     if (lab.snapshotDigest !== snapshotDigest)
       return incomplete(
@@ -664,20 +683,29 @@ export class Verification<
       };
     run.onRecipe(attempt.recipeDigest);
     if (judge === null) return { status: "replay-needed", attempt };
-    let observation: JudgeObservation;
+    let observed: JudgeObservation | null;
     try {
-      observation = await judge.observe({
+      observed = await judge.observe({
         finding,
         lab,
         recipeDigest: attempt.recipeDigest,
         ...(referenceRoute === undefined ? {} : { referenceRoute }),
       });
     } catch {
+      observed = null;
+    }
+    // Only after the judge: the recording cannot move what the judge saw (#439).
+    const viewer = this.#options.victimViewObserver;
+    if (viewer !== undefined)
+      onVictimView(
+        await viewer.record(lab, attempt.recipeDigest).catch(() => []),
+      );
+    if (observed === null)
       return incomplete(
         "observation",
         "The judge could not observe the Lab; repeat in a fresh Lab",
       );
-    }
+    const observation: JudgeObservation = observed;
     if (observation.status === "incomplete") {
       if (
         observation.reason === "observation" &&

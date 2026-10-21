@@ -25,6 +25,8 @@ import type {
   WordPressStoredScriptFailureCode,
   WordPressStoredScriptObservation,
   WordPressVictimBrowserDiagnostic,
+  WordPressVictimViewRecording,
+  WordPressVictimViewVisit,
 } from "./contract.js";
 import type { WordPressLabSession } from "./lab-session.js";
 
@@ -45,6 +47,8 @@ echo json_encode(["http" => $http !== false ? "ok" : "failed", "database" => $da
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 const MAX_BROWSER_DIAGNOSTIC_BYTES = 16 * 1024;
 const PNG_SIGNATURE = Buffer.from("89504e470d0a1a0a", "hex");
+const MAX_VIDEO_BYTES = 8 * 1024 * 1024;
+const WEBM_SIGNATURE = Buffer.from("1a45dfa3", "hex");
 const diagnosticCountSchema = z.number().int().min(0).max(999_999);
 const victimBrowserDiagnosticSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -73,6 +77,7 @@ const victimBrowserDiagnosticSchema = z.strictObject({
 });
 const browserVisitOutputSchema = z.strictObject({
   screenshotBase64: z.string(),
+  videoBase64: z.string().optional(),
   diagnostic: z.unknown().optional(),
 });
 
@@ -89,7 +94,11 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-  const page = await browser.newPage();
+  // Only a victim-view recording (#439) asks for video; judge visits never do.
+  const videoDirectory = process.env.WBH_RECORD_VIDEO === "1" ? "/tmp/wbh-video" : undefined;
+  const page = videoDirectory === undefined
+    ? await browser.newPage()
+    : await (await browser.newContext({ recordVideo: { dir: videoDirectory } })).newPage();
   const dismissDialogs = (tab) => tab.on("dialog", (dialog) => { void dialog.dismiss(); });
   // Record bounded categories only. Browser messages, request URLs, and page
   // content are never copied into the diagnostic.
@@ -294,8 +303,17 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   const screenshot = await visiblePage.screenshot({ type: "png" });
   if (screenshot.length > ${MAX_SCREENSHOT_BYTES})
     throw new Error("Browser screenshot exceeds the evidence limit");
+  let videoBase64;
+  if (videoDirectory !== undefined) {
+    const video = page.video();
+    await page.context().close();
+    const recorded = require("node:fs").readFileSync(await video.path());
+    // An oversized video is left out; the screenshot still stands.
+    if (recorded.length <= ${MAX_VIDEO_BYTES}) videoBase64 = recorded.toString("base64");
+  }
   process.stdout.write(JSON.stringify({
     screenshotBase64: screenshot.toString("base64"),
+    ...(videoBase64 === undefined ? {} : { videoBase64 }),
     ...(documentDiagnostic === undefined ? {} : {
       diagnostic: {
         schemaVersion: 1,
@@ -613,12 +631,16 @@ async function visitStoredScriptPage(input: {
   readonly path: string;
   readonly role: WordPressVictimRoute["role"];
   readonly actions?: VictimActions;
+  /** Also record a WebM of the visit (#439); judge visits leave this unset. */
+  readonly record?: boolean;
 }): Promise<{
   readonly fired: boolean;
   readonly screenshot: Buffer;
+  readonly video?: Buffer;
   readonly diagnostic?: WordPressVictimBrowserDiagnostic;
 }> {
   const { lab, receiverIp, issued, path, role, actions } = input;
+  const record = input.record === true;
   const account =
     role === "administrator"
       ? { username: "harness-admin", password: lab.adminPassword }
@@ -656,13 +678,15 @@ async function visitStoredScriptPage(input: {
       `WBH_VISIT_ACTIONS=${JSON.stringify(actions ?? [])}`,
       "--env",
       `WBH_SCRIPT_NONCES=${JSON.stringify([...lab.scriptNonces])}`,
+      ...(record ? ["--env", "WBH_RECORD_VIDEO=1"] : []),
       "--entrypoint=node",
       lab.images.browser,
       "-e",
       BROWSER_VISIT,
     ],
     120_000,
-    Math.ceil(MAX_SCREENSHOT_BYTES / 3) * 4 + MAX_BROWSER_DIAGNOSTIC_BYTES,
+    Math.ceil((MAX_SCREENSHOT_BYTES + (record ? MAX_VIDEO_BYTES : 0)) / 3) * 4 +
+      MAX_BROWSER_DIAGNOSTIC_BYTES,
   );
   if (result.exitCode !== 0) {
     const known: readonly [string, WordPressStoredScriptFailureCode][] = [
@@ -715,11 +739,75 @@ async function visitStoredScriptPage(input: {
     screenshot.toString("base64") !== encoded
   )
     throw new Error("Browser screenshot is invalid");
+  const videoEncoded = parsed.data.videoBase64;
+  const video =
+    videoEncoded === undefined
+      ? undefined
+      : Buffer.from(videoEncoded, "base64");
+  if (
+    video !== undefined &&
+    (!record ||
+      video.length > MAX_VIDEO_BYTES ||
+      !video.subarray(0, WEBM_SIGNATURE.length).equals(WEBM_SIGNATURE) ||
+      video.toString("base64") !== videoEncoded)
+  )
+    throw new Error("Browser video is invalid");
   return {
     fired: (await readBeaconCount(lab, issued)) > before,
     screenshot,
+    ...(video === undefined ? {} : { video }),
     ...(diagnostic.success ? { diagnostic: diagnostic.data } : {}),
   };
+}
+
+/**
+ * Opens each declared victim visit once more after the judge observed and
+ * keeps what the browser showed (#439). It records; it decides nothing, and
+ * whether a beacon arrived is not part of the recording.
+ */
+export async function recordVictimView(
+  lab: WordPressLabSession,
+  input: unknown,
+): Promise<WordPressVictimViewRecording> {
+  const { receiverIp } = lab;
+  if (receiverIp === undefined) return { status: "unavailable", reason: "lab" };
+  const victim = wordpressVictimRouteSchema.safeParse(input);
+  if (!victim.success) return { status: "unavailable", reason: "victim-input" };
+  if (observerInputCarriesCanary(victim.data, lab.scriptNonces))
+    return { status: "unavailable", reason: "observer-canary-input" };
+  const issued = new Set([...lab.scriptNonces].map((token) => `/b/${token}`));
+  const visits: WordPressVictimViewVisit[] = [];
+  for (const visit of victim.data.paths) {
+    const path = typeof visit === "string" ? visit : visit.path;
+    const actions = typeof visit === "string" ? undefined : visit.actions;
+    try {
+      const { screenshot, video } = await visitStoredScriptPage({
+        lab,
+        receiverIp,
+        issued,
+        path,
+        role: victim.data.role,
+        record: true,
+        ...(actions === undefined ? {} : { actions }),
+      });
+      visits.push({
+        status: "recorded",
+        path,
+        screenshot,
+        ...(video === undefined ? {} : { video }),
+      });
+    } catch (error) {
+      visits.push({
+        status: "unavailable",
+        path,
+        failureCode:
+          error instanceof BrowserVisitFailure
+            ? error.failureCode
+            : "browser-visit",
+      });
+    }
+  }
+  return { status: "recorded", role: victim.data.role, visits };
 }
 
 export async function observeStoredScript(
