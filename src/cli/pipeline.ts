@@ -10,6 +10,7 @@ import type {
   LabProvisioner,
   LabReachability,
 } from "../lab/index.js";
+import { readFindingGroups } from "../ledger/finding-groups.js";
 import type { Ledger, LedgerEventV1, LedgerRecord } from "../ledger/index.js";
 import { targetSelectionId, type TargetSelection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
@@ -1078,7 +1079,8 @@ export type VerifyNextSummary = {
 
 /**
  * The handoff queue (#423): every recorded, unparked Finding without a verdict,
- * in ledger order, one per call, without a discovery Lab. Retry budgets count
+ * in ledger order with each overlap group's first Finding ahead of the rest of
+ * its group (#424), one per call, without a discovery Lab. Retry budgets count
  * the current skill version's attempts only, so an incomplete left by another
  * Verifier version (the retired automatic `verifier-v8`) keeps a Finding queued.
  */
@@ -1103,10 +1105,11 @@ export async function verifyNextFinding<
 }): Promise<VerifyNextSummary | null> {
   const scope =
     options.campaignId === undefined ? {} : { campaignId: options.campaignId };
-  const findings = options.ledger.readAll({
-    ...scope,
-    type: "finding-recorded",
-  });
+  // #424: each overlap group's first Finding comes before the rest of its group; none is dropped.
+  const findings = readFindingGroups(options.ledger, scope).order(
+    options.ledger.readAll({ ...scope, type: "finding-recorded" }),
+    ({ event }) => event,
+  );
   const histories = options.ledger.readAll({
     ...scope,
     type: "verification-finished",

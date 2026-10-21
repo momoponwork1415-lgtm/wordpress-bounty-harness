@@ -115,6 +115,7 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 ## 8. 人間レビューとDisclosure
 
 - レビュー列に出すもの: 対象範囲内の Finding は判定器の結果に関係なく全件出す。`runtime-confirmed` は証拠refと再現パッケージ、`incomplete` は次の手、`contradicted` は判定器の証拠refと、あれば反証を付ける（#185、ADR 0031）。人間は再現パッケージで自分の手で再現してから文案を査読する。
+- 並べ方: 同じ Snapshot で plugin 側の `file:function` が 1 つでも重なる Finding は、受理時に同じ群にする（連結成分）。`review` と `verify next` は群の代表（受理順で最初の Finding）を先に出し、残りはその後に群ごとに並べる。捨てない。群は順序と表示だけに使い、判定・判断・提出は Finding ごとに行う（#424）。
 - 人間が決めること: 再現パッケージを使って自分の手でLab上の攻撃を再現し、影響が意味を持つか、意図された動作ではないか、重複でないか、どのprogrammeへ出すか、文案と外部行動を承認する。Labの再構築とプラグイン設定はHarnessが保存したsetup manifestから自動化する。
 - 重複: 検証後・提出前にWordfence Intelligence mirrorの更新と照合を試み、PatchstackとWPScanの公開記録も照合する。照合元と時刻を記録し、staleまたは不明を「重複なし」にしない。候補の同一性は人間が最終判断する。
 - 文案: Harnessは判定器が通したHTTP・canary・必要な画面証拠に基づき、短い英語レポートとWordfence入力用JSONを作る。新しい証拠を文章で創作しない。提出は人間だけが行う。
@@ -175,7 +176,7 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 - funnel view: raw findings → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・種別別に読み取り専用で導く。
 - 添付: Codex `findings.json` 等はPrivate Evidenceにdigest付きで保存し、台帳からは参照だけ。旧Trialの `coverage.json` は参照を読み続ける（ADR 0034）。
 - Trialの台帳項目: `trialId`、`trialOrdinal`、`runKind`。再開した segment は同じ `trialId` に `resumesRun` / `resumeSegment` を付け、元 run の `failed` は残す（ADR 0036）。旧Trialの arm、source索引・分担のdigest、`stage` / `continuationOf`、`incomplete(depth)` は既存eventの読取互換として残し、新しい主経路では書かない（ADR 0034）。Leadは欠けた辺・primitive・storage分類と本文のdigestだけを記録する。
-- `lab-provisioned.reachability.http` と `verification-finished.evidenceCapture` は追加されたoptional項目。旧eventは引き続き読める。過去の `campaign-stopped.reason = daily-run-cap` も読めるが、新しいcampaignに日次上限の設定・停止はない。
+- `lab-provisioned.reachability.http`、`verification-finished.evidenceCapture`、`finding-recorded.group`（群の識別子と、群を作る鍵の digest。#424）は追加されたoptional項目。旧eventは引き続き読める。過去の `campaign-stopped.reason = daily-run-cap` も読めるが、新しいcampaignに日次上限の設定・停止はない。
 
 ## 10. 評価
 

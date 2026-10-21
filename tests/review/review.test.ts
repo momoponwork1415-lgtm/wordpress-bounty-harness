@@ -615,6 +615,7 @@ describe("review queue and decisions", () => {
       evidenceDigest: refutation,
       refutationDigest: null,
       decision: null,
+      group: { id: "finding-3", size: 1, representative: true },
     });
   });
 
