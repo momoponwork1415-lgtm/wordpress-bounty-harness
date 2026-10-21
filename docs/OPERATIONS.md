@@ -33,7 +33,7 @@
 harness history status                                   # 履歴mirrorの鮮度。fresh以外は終了コード1
 harness runtime check --config <path>                    # 起動時検査の全項目とCodex image / runtime profileの一致。欠ければ終了コード1
 harness select --config src/profiles/wordpress/policy/selection.json   # WordPress.org から `maximumTargets`（3〜10）件までの対象を選び Snapshot 固定。承認は不要
-harness campaign run --all --campaign <id> --config <campaign.json>    # campaign 設定は同じ選定方針を参照する。最新の選定バッチから discovery（探索用 Lab は既定で付けない）。検証は後から verify next で Finding ごと
+harness campaign run --all --campaign <id> --config <campaign.json>    # campaign 設定は同じ選定方針を参照する。最新の選定バッチから discovery（探索用 Lab は既定で付けない）。検証は後から verify next --handoff で Finding ごと
 harness review [--campaign <id>]                         # 検証済みの列を見る
 ```
 
@@ -66,7 +66,7 @@ harness ledger resumes --campaign <id>                                      # �
 
 Claude（Opus）の run も同じコマンドで再開する（ADR 0036 の 2026-10-20 追記）。`--config` には、元の campaign と同じく Claude に対象を割り当てる設定（`discovery.runtimeShare.claude` が 1 以上）を渡す。再開した segment は、元の run が台帳に記録した runtime（`configuration.runtime`）で走る。Claude の runtime profile の digest が元の receipt と違えば `runtime-profile-differs` で拒否する。新しい sandbox の Claude 設定ディレクトリ（`/tmp/claude/projects/`）に Root と子の transcript を、`/workspace/research/` に notes を戻し、runner は Root の session id で `resume` して、最初の turn から再開段落を送る。目的 prompt は送り直さない。2026-10-20 より前の Claude の receipt には `session` が無いが、同じ run が封じた diagnostic に transcript の一覧と digest が載っているので、そこから session を読む。拒否で止まった run も名指しすれば再開できる。自動では再開しない。終了 event の無い Claude の run（電源断など）は回収の仕組みがまだ無いので `run-unfinished` で拒否する。`ledger resumes` は再開した segment ごとに 1 行を出す。行には、再開した segment、その前の停止理由、runtime、終わり方、走った分数が並ぶ。
 
-`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v8` のRoot＋最大4子による協調Trialを1回行い、wall上限は120分。最低60分は能動的に探索し、Rootが早く最終報告したときは同じ協調セッションで探索を続ける。継続不能、wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、同一対象の追加Trialは起動しない。各 Finding は後から `verify next`（`continuous run` では検証 worker が順に、検証 skill では `--handoff`、ADR 0035）で Finding 単位の Lab と判定器を通る（下の `discovery.lab`）。
+`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v8` のRoot＋最大4子による協調Trialを1回行い、wall上限は120分。最低60分は能動的に探索し、Rootが早く最終報告したときは同じ協調セッションで探索を続ける。継続不能、wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、同一対象の追加Trialは起動しない。受理した scope 内 Finding はその時点で handoff 列に並び、検証 skill が `verify next --handoff`（ADR 0035）で 1 件ずつ Finding 単位の Lab と判定器に通す（下の `discovery.lab`）。runner は検証しない（#423）。
 wall 到達時は agent と broker を名前で `docker stop -t 10`（失敗時は `docker kill`）してから、子の報告を回収し `discovery-run-finished` に `incomplete(wall)` を記録して Lab を片付ける。
 `continuous run` に SIGTERM を送ると進行中の探索 run を同じ手順で停止し、`stopped reason=operator` を記録して終了する。
 
@@ -117,20 +117,20 @@ v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入�
 
 ```sh
 harness campaign run <slug> --campaign <id> --config <campaign.json> [--repeat 3]
-harness verify next --campaign <id> --config <campaign.json>
+harness verify next --config <campaign.json> --handoff <dir>
 harness ledger funnel --campaign <id>
 ```
 
-`verify next` は未検証または既存の有界再検証規則に該当する Finding を 1 件選び、その Finding の Snapshot に新しい検証 Lab を立てて Verifier と判定器を回し、Lab を片付ける。対象が無ければ `no verification pending` と出す。`--repeat 3` は同じ Snapshot に別々の Trial ID を 3 つ作る。既定は 1 回。funnel の `by Lab` は探索用 Lab の有無、`verification Lab failed` は検証側の供給失敗を示す。
+`verify next` は handoff 列から Finding を 1 件取り、その Finding の Snapshot に新しい検証 Lab を立てて skill と判定器に通し、Lab を片付ける。handoff 列には、parked でなく結論（`runtime-confirmed`、`contradicted`、`reproduced`）の出ていない Finding が、全 campaign から台帳順に並ぶ。`--campaign <id>` を付けると、その campaign に絞る。再試行予算（ADR 0022）は現行の skill 版の試行だけで数える。そのため、旧 Codex Verifier（`verifier-v8`）が `incomplete` で残した Finding も列に並ぶ。`--handoff` の無い `verify next` は UsageError で止まる（#423）。対象が無ければ `no verification pending` と出す。`--repeat 3` は同じ Snapshot に別々の Trial ID を 3 つ作る。既定は 1 回。funnel の `by Lab` は探索用 Lab の有無、`verification Lab failed` は検証側の供給失敗を示す。
 
 ```sh
-harness verify next --campaign <id> --config <campaign.json> --handoff <dir> [--finding <id>] [--port 8080] [--db-port 3307]
+harness verify next --config <campaign.json> --handoff <dir> [--campaign <id> [--finding <id>]] [--port 8080] [--db-port 3307]
 ```
 
-`--handoff <dir>` は Verifier を Codex から skill `wbh-verify` への受け渡しに替える（ADR 0035）。Harness は検証 Lab を立てて `127.0.0.1:<port>` に Lab の recorder 経由で公開し、setup 用の `<dir>/lab.json`（接続先と Host header、設定管理者の資格、`<dir>/review-export.json` の path）を書く。skill が `<dir>/setup-done` を置くと Harness は HTTP 捕捉と Lab 状態の基線を取り直し、完了後に `<dir>/observation-ready`、続いて攻撃用の `<dir>/attack.json`（Finding の攻撃者位置の資格、canary、必要な比較 route）を置く。skill は合図と `attack.json` の両方を待ってから攻撃者位置で操作し、6 file（`route.json` `http.json` `session.json` `steps.md` `refutation.md` `precondition`）か `<dir>/abort` を置く。session がなければ `session.json` は空 file にする。待ち時間の上限は Codex Verifier と同じ 30 分で、超過と `abort` は理由付き `incomplete`。以後は判定器 → `verification-finished`（現行 `promptVersion: wbh-verify/v4`、旧 v1・v2・v3 の本文は `.claude/skills/wbh-verify/versions/`）→ review queue と同じ。`--finding <id>` は操作者が名指しした Finding を自動再試行の規則（prompt 版の一致、再試行予算）に関わらず検証する。`<dir>` は 1 attempt 専用に Git の外へ置き、終わったら消す。既存の受け渡し file がある directory は使えない。
+`--handoff <dir>` は検証 Lab を skill `wbh-verify` に受け渡す（ADR 0035）。Harness は検証 Lab を立てて `127.0.0.1:<port>` に Lab の recorder 経由で公開し、setup 用の `<dir>/lab.json`（接続先と Host header、設定管理者の資格、`<dir>/review-export.json` の path）を書く。skill が `<dir>/setup-done` を置くと Harness は HTTP 捕捉と Lab 状態の基線を取り直し、完了後に `<dir>/observation-ready`、続いて攻撃用の `<dir>/attack.json`（Finding の攻撃者位置の資格、canary、必要な比較 route）を置く。skill は合図と `attack.json` の両方を待ってから攻撃者位置で操作し、6 file（`route.json` `http.json` `session.json` `steps.md` `refutation.md` `precondition`）か `<dir>/abort` を置く。session がなければ `session.json` は空 file にする。待ち時間の上限は Codex Verifier と同じ 30 分で、超過と `abort` は理由付き `incomplete`。以後は判定器 → `verification-finished`（現行 `promptVersion: wbh-verify/v4`、旧 v1・v2・v3 の本文は `.claude/skills/wbh-verify/versions/`）→ review queue と同じ。`--finding <id>`（`--campaign` と併せて指定する）は操作者が名指しした Finding を、列の規則（parked、再試行予算）に関わらず検証する。`<dir>` は 1 attempt 専用に Git の外へ置き、終わったら消す。既存の受け渡し file がある directory は使えない。
 `route.json` の HTTP step に本文がある場合、`body` は実際に送信した wire body と一致させる。本文が空のときだけ省略できる。
 
-`continuous run --verify-concurrency <n>` は探索 batch と並行して検証 queue を消化する。既定の `n` は 1。検証 Lab の同時数は `resources.maxConcurrentTargets` に含めず、`--verify-concurrency` で別に制限する。
+`continuous run` は探索だけを回し、検証 Lab を立てない（#423。旧 `--verify-concurrency` と検証 worker は削除した）。handoff 列は探索 batch と並行して skill が消化してよく、検証 Lab の数は `resources.maxConcurrentTargets` に含めない。
 
 handoff の `route.json` で被害者画面を開くとき、`victim.paths` に 1 path あたり最大 5 件の型付き `actions`（`click`、`click-text`、`fill`）を指定できる。操作の選択は skill が行い、実行と canary 観測は Harness の Lab browser が行う。
 

@@ -38,3 +38,7 @@ supersedes: 0026 for the administrator boundary of a Verifier run
 ## 2026-10-19 注記（文書整理、所有者の委任で AI）
 
 「採らなかった選択肢」の「（#353 で削除）」は予定で、scenario 選択と plugin 別 adapter はまだ main にある。削除は帰結の受入の数字（Brizy、TranslatePress 3.2.6）を docs/evaluation に置いた後に #353 で行う（#352 は受け入れの Issue に絞った）。
+
+## 2026-10-21 注記（#423、所有者決定 2026-10-21）
+
+決定の「Codex Verifier の経路は変えない」と「誰が回すか」を改める。runner（`continuous run`）の検証 worker と `--verify-concurrency` を削除し、`verify next` は `--handoff` を必須にした（無ければ UsageError）。受理した scope 内 Finding は全 campaign から handoff 列に並び、再試行予算は現行の skill 版の試行で数える。Codex Verifier（`verifier-v8`）は `review reverify`（`--handoff` なし）と `discovery.lab: attached` の campaign 内検証にだけ残る。後者は scenario 再試行と一体なので #353 で扱う。台帳の `verifier-v8` の event は読み続ける。本 ADR を消すときは #423 の PR も revert する。

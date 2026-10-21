@@ -1815,14 +1815,21 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("runs without a discovery Lab, then verifies one Finding in a fresh Lab", async () => {
-    const { run, configPath, prompts, ledger, live, labIdsDuringVerification } =
-      await harness({
-        entryPoints: true,
-        config: {
-          promptId: undefined,
-          discovery: { lab: "none" },
-        },
-      });
+    const {
+      run,
+      configPath,
+      prompts,
+      ledger,
+      live,
+      labIdsDuringVerification,
+      root,
+    } = await harness({
+      entryPoints: true,
+      config: {
+        promptId: undefined,
+        discovery: { lab: "none" },
+      },
+    });
     const campaignId = "campaign-explore-only";
     const discovered = await run(
       "campaign",
@@ -1860,6 +1867,8 @@ describe("harness CLI vertical slice", () => {
       campaignId,
       "--config",
       configPath,
+      "--handoff",
+      join(root, "handoff"),
     );
     expect(verified.code).toBe(0);
     expect(verified.stdout).toContain("verified finding");
@@ -2507,17 +2516,19 @@ describe("harness CLI vertical slice", () => {
     expect(recorded.length).toBeGreaterThan(0);
     const findingId = recorded[0]!;
 
+    // A named Finding belongs to a named campaign.
     const refused = await run(
       "verify",
       "next",
-      "--campaign",
-      campaign,
       "--config",
       configPath,
+      "--handoff",
+      join(root, "handoff"),
       "--finding",
       findingId,
     );
-    expect(refused.code).not.toBe(0);
+    expect(refused.code).toBe(2);
+    expect(refused.stderr.split("\n")[0]).toBe("--finding needs --campaign");
     expect(handoffs).toHaveLength(0);
 
     const handoff = [
@@ -2565,6 +2576,157 @@ describe("harness CLI vertical slice", () => {
       promptVersion: "wbh-verify/v4",
       attempt: 2,
     });
+  });
+
+  it("leaves every accepted Finding to the handoff queue: the runner verifies none, and verify next takes them in order with --handoff only (#423)", async () => {
+    const {
+      run,
+      root,
+      profile,
+      configPath,
+      ledger,
+      handoffs,
+      labIdsDuringVerification,
+    } = await harness({
+      entryPoints: true,
+      config: { discovery: { lab: "none" } },
+    });
+    const { wordpressVersion } = JSON.parse(
+      await readFile(configPath, "utf8"),
+    ) as { wordpressVersion: string };
+    const policy = JSON.parse(
+      await readFile(join(root, "selection.json"), "utf8"),
+    ) as object;
+    await mkdir(join(root, "policies"));
+    await writeFile(
+      join(root, "policies", "selection.json"),
+      JSON.stringify({ ...policy, wordpressVersion }),
+    );
+    (profile as { hostStatus?: unknown }).hostStatus = async () => ({
+      loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
+      programmeObservedAt: new Date(now),
+      freeBytes: 100 * 1024 ** 3,
+      legacyHistoryAvailable: true,
+      loginMarginMinutes: 60,
+    });
+    // The runner explores its first batch; any later state change stops it.
+    const runner = await run(
+      "continuous",
+      "run",
+      "--config",
+      configPath,
+      "--selection",
+      join(root, "policies", "selection.json"),
+      "--notify",
+      `grep -q ' running campaignId=prod-[0-9]*-1$' || touch '${join(root, "state", "continuous.stop")}'`,
+    );
+    expect(runner.code).toBe(0);
+    expect(runner.stdout).toMatch(/ batch prod-\d{8}-1 stopped=none /);
+    const findings = ledger()
+      .read({ type: "finding-recorded" })
+      .flatMap(({ event }) =>
+        event.type === "finding-recorded"
+          ? [{ campaignId: event.campaignId, findingId: event.findingId }]
+          : [],
+      );
+    expect(findings.length).toBeGreaterThan(1);
+    // The runner started no Verifier and no verification Lab.
+    expect(ledger().read({ type: "verification-finished" })).toHaveLength(0);
+    expect(ledger().read({ type: "lab-provisioned" })).toHaveLength(0);
+    expect(labIdsDuringVerification).toHaveLength(0);
+
+    // A Finding the retired automatic Verifier left incomplete stays in the
+    // queue; one parked after it does not.
+    const [first, ...rest] = findings;
+    const parked = rest.at(-1)!;
+    const snapshotDigest = ledger().read({ type: "finding-recorded" })[0]!.event
+      .snapshotDigest;
+    for (const event of [
+      {
+        ...first!,
+        identity: "verification-retired-automatic",
+        type: "verification-finished" as const,
+        verificationId: "verification-retired-automatic",
+        labSetupDigest: sha("f"),
+        promptVersion: "verifier-v8",
+        result: {
+          status: "incomplete" as const,
+          reason: "precondition" as const,
+          nextStep: "common-usage-scenario-missing",
+        },
+      },
+      {
+        ...parked,
+        identity: "parked-after-verification",
+        type: "finding-parked" as const,
+        runId: "run-parked",
+        category: "stored-xss",
+        reason: "admin-configuration-precondition" as const,
+        artifacts: [],
+      },
+    ])
+      expect(
+        (
+          await ledger().append({
+            schemaVersion: 1,
+            snapshotDigest,
+            occurredAt: now,
+            ...event,
+          })
+        ).status,
+      ).toBe("appended");
+
+    const refused = await run(
+      "verify",
+      "next",
+      "--campaign",
+      first!.campaignId,
+      "--config",
+      configPath,
+    );
+    expect(refused.code).toBe(2);
+    expect(refused.stderr.split("\n")[0]).toBe(
+      "verify next runs only through the verification skill; pass --handoff <dir>",
+    );
+    expect(handoffs).toHaveLength(0);
+    expect(labIdsDuringVerification).toHaveLength(0);
+
+    // Without --campaign the queue spans every campaign, in ledger order.
+    const queued = findings.filter((finding) => finding !== parked);
+    const taken: string[] = [];
+    for (const index of queued.keys()) {
+      const next = await run(
+        "verify",
+        "next",
+        "--config",
+        configPath,
+        "--handoff",
+        join(root, `handoff-${index}`),
+      );
+      expect(next.code).toBe(0);
+      taken.push(/^verified finding (\S+) as /m.exec(next.stdout)?.[1] ?? "");
+    }
+    expect(taken).toEqual(queued.map(({ findingId }) => findingId));
+    expect(handoffs).toHaveLength(queued.length);
+    const drained = await run(
+      "verify",
+      "next",
+      "--config",
+      configPath,
+      "--handoff",
+      join(root, "handoff-drained"),
+    );
+    expect(drained.stdout).toBe("no verification pending");
+    expect(
+      ledger()
+        .read({ type: "verification-finished" })
+        .flatMap(({ event }) =>
+          event.type === "verification-finished" &&
+          event.identity !== "verification-retired-automatic"
+            ? [event.promptVersion]
+            : [],
+        ),
+    ).toEqual(queued.map(() => "wbh-verify/v4"));
   });
 
   it.each([

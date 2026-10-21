@@ -24,7 +24,6 @@ afterEach(async () => {
 type Step = (input: {
   campaignId: string;
   target: string | null;
-  retryIncompleteVerifications: boolean;
   signal?: AbortSignal;
   resumeInterrupted?: { log(line: string): void };
 }) => Promise<Partial<CampaignSummary>> | Partial<CampaignSummary>;
@@ -170,38 +169,6 @@ async function expectLatchedStop(
 }
 
 describe("continuous runner", () => {
-  it("consumes verification work while a discovery batch is running", async () => {
-    let campaignStarted!: () => void;
-    let finishCampaign!: () => void;
-    const started = new Promise<void>((resolve) => {
-      campaignStarted = resolve;
-    });
-    const finished = new Promise<void>((resolve) => {
-      finishCampaign = resolve;
-    });
-    let verifiedDuringCampaign = false;
-    const t = await setup(
-      [
-        async () => {
-          campaignStarted();
-          await finished;
-          return {};
-        },
-      ],
-      {
-        verifyConcurrency: 1,
-        verifyNext: async () => {
-          await started;
-          verifiedDuringCampaign = true;
-          finishCampaign();
-          return null;
-        },
-      },
-    );
-    expect(await t.runner.run()).toBe("operator");
-    expect(verifiedDuringCampaign).toBe(true);
-  });
-
   it.each([
     ["rate-limit", [5, 10, 20, 40, 60, 60]],
     ["quota", [30, 60, 360]],
@@ -217,9 +184,6 @@ describe("continuous runner", () => {
         minutes.map(String),
       );
       expect(new Set(t.calls.map((call) => call.campaignId)).size).toBe(1);
-      expect(
-        t.calls.slice(1).every((call) => call.retryIncompleteVerifications),
-      ).toBe(true);
     },
   );
 
@@ -333,7 +297,6 @@ describe("continuous runner", () => {
     );
     expect(t.calls[0]).toMatchObject({
       campaignId: "prod-20261019-4",
-      retryIncompleteVerifications: true,
     });
   });
 
@@ -374,7 +337,6 @@ describe("continuous runner", () => {
       expect(await createContinuousRunner(t.deps).run()).toBe("operator");
       expect(t.calls[1]).toMatchObject({
         campaignId: t.calls[0]?.campaignId,
-        retryIncompleteVerifications: true,
       });
       expect(existsSync(continuousPaths(t.root).stop)).toBe(false);
     },
@@ -430,7 +392,6 @@ describe("continuous runner", () => {
     await t.runner.run();
     expect(t.calls[0]).toMatchObject({
       campaignId: "prod-20261019-4",
-      retryIncompleteVerifications: true,
     });
     // The profile's resume lines reach the runner log with a timestamp (ADR 0036).
     expect(t.log).toContain(
@@ -584,7 +545,6 @@ describe("continuous runner", () => {
     await t.runner.run();
     expect(t.calls[0]).toMatchObject({
       campaignId: "prod-20261020-1",
-      retryIncompleteVerifications: false,
     });
     expect(selects).toBe(1);
   });

@@ -1006,9 +1006,12 @@ export type VerifyNextSummary = {
   readonly status: VerificationResultV1["status"];
 };
 
-const verificationInFlight = new Set<string>();
-
-/** Consume one unverified or bounded-retry Finding without starting a discovery Lab. */
+/**
+ * The handoff queue (#423): every recorded, unparked Finding without a verdict,
+ * in ledger order, one per call, without a discovery Lab. Retry budgets count
+ * the current skill version's attempts only, so an incomplete left by another
+ * Verifier version (the retired automatic `verifier-v8`) keeps a Finding queued.
+ */
 export async function verifyNextFinding<
   Setup extends { readonly scenario?: { readonly id: string } | undefined },
   Handle extends LabHandle,
@@ -1016,10 +1019,9 @@ export async function verifyNextFinding<
   Reconstruction,
 >(options: {
   readonly campaignId?: string;
-  readonly campaignPrefix?: string;
   /**
-   * The one Finding an operator or skill named. They supply what the automatic
-   * rules could not, so the prompt-version match and retry budget do not apply.
+   * The one Finding an operator or skill named. They supply what the queue
+   * rules could not, so parking and the retry budget do not apply.
    */
   readonly only?: { readonly findingId: string };
   readonly ledger: Ledger;
@@ -1029,24 +1031,26 @@ export async function verifyNextFinding<
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
 }): Promise<VerifyNextSummary | null> {
+  const scope =
+    options.campaignId === undefined ? {} : { campaignId: options.campaignId };
   const findings = options.ledger.readAll({
-    ...(options.campaignId === undefined
-      ? {}
-      : { campaignId: options.campaignId }),
+    ...scope,
     type: "finding-recorded",
   });
   const histories = options.ledger.readAll({
-    ...(options.campaignId === undefined
-      ? {}
-      : { campaignId: options.campaignId }),
+    ...scope,
     type: "verification-finished",
   });
-  const labs = options.ledger.readAll({
-    ...(options.campaignId === undefined
-      ? {}
-      : { campaignId: options.campaignId }),
-    type: "lab-provisioned",
-  });
+  const labs = options.ledger.readAll({ ...scope, type: "lab-provisioned" });
+  const parked = new Set(
+    options.ledger
+      .readAll({ ...scope, type: "finding-parked" })
+      .flatMap(({ event }) =>
+        event.type === "finding-parked"
+          ? [`${event.campaignId}\0${event.findingId}`]
+          : [],
+      ),
+  );
   for (const { event } of findings) {
     if (
       event.type !== "finding-recorded" ||
@@ -1054,17 +1058,15 @@ export async function verifyNextFinding<
     )
       continue;
     if (
-      options.campaignPrefix !== undefined &&
-      !event.campaignId.startsWith(`${options.campaignPrefix}-`)
-    )
-      continue;
-    if (
       options.only !== undefined &&
       event.findingId !== options.only.findingId
     )
       continue;
-    const key = `${event.campaignId}\0${event.findingId}`;
-    if (verificationInFlight.has(key)) continue;
+    if (
+      options.only === undefined &&
+      parked.has(`${event.campaignId}\0${event.findingId}`)
+    )
+      continue;
     const history = histories.filter(
       (record): record is VerificationRecord =>
         record.event.type === "verification-finished" &&
@@ -1072,11 +1074,22 @@ export async function verifyNextFinding<
         record.event.findingId === event.findingId &&
         record.event.basis === undefined,
     );
-    const previous = history.at(-1);
+    const latest = history.at(-1);
+    // This version's latest attempt; its budget decides a retry.
+    const previous = history
+      .filter(
+        ({ event: prior }) =>
+          prior.promptVersion === options.verification.promptVersion,
+      )
+      .at(-1);
+    if (
+      options.only === undefined &&
+      latest !== undefined &&
+      latest.event.result.status !== "incomplete"
+    )
+      continue;
     if (previous !== undefined && options.only === undefined) {
       if (previous.event.result.status !== "incomplete") continue;
-      if (previous.event.promptVersion !== options.verification.promptVersion)
-        continue;
       const reason = previous.event.result.reason;
       const attemptsForReason = countAttemptsForReason(
         history.map(({ event: prior }) => prior),
@@ -1104,53 +1117,43 @@ export async function verifyNextFinding<
       )
         continue;
     }
-    verificationInFlight.add(key);
-    try {
-      const snapshot = await options.loadSnapshot(event.snapshotDigest);
-      const setup = options.setupFor(snapshot);
-      if (
-        options.only === undefined &&
-        previous?.event.result.status === "incomplete" &&
-        previous.event.result.reason === "precondition" &&
-        !shouldAutomaticallyRetryVerification({
-          reason: "precondition",
-          attemptsForReason: 1,
-          sameLabSetup: true,
-          previousScenarioId: scenarioForVerification(
-            previous,
-            labs,
-            event.snapshotDigest,
-          ),
-          currentScenarioId: setup.scenario?.id ?? null,
-        })
-      )
-        continue;
-      const verificationId = options.newId();
-      const result = await options.verification.verify({
-        campaignId: event.campaignId,
-        findingId: event.findingId,
-        verificationId,
-        attempt: Math.max(
-          history.length + 1,
-          (previous?.event.attempt ?? 0) + 1,
+    const snapshot = await options.loadSnapshot(event.snapshotDigest);
+    const setup = options.setupFor(snapshot);
+    if (
+      options.only === undefined &&
+      previous?.event.result.status === "incomplete" &&
+      previous.event.result.reason === "precondition" &&
+      !shouldAutomaticallyRetryVerification({
+        reason: "precondition",
+        attemptsForReason: 1,
+        sameLabSetup: true,
+        previousScenarioId: scenarioForVerification(
+          previous,
+          labs,
+          event.snapshotDigest,
         ),
-        ...(previous === undefined
-          ? {}
-          : { retryOf: previous.event.verificationId }),
-        snapshot,
-        setup,
-        campaignLabSetupDigest: canonicalDigest(setup),
-        reconstruction: options.reconstructionFor(snapshot),
-      });
-      return {
-        campaignId: event.campaignId,
-        findingId: event.findingId,
-        verificationId,
-        status: result.status,
-      };
-    } finally {
-      verificationInFlight.delete(key);
-    }
+        currentScenarioId: setup.scenario?.id ?? null,
+      })
+    )
+      continue;
+    const verificationId = options.newId();
+    const result = await options.verification.verify({
+      campaignId: event.campaignId,
+      findingId: event.findingId,
+      verificationId,
+      attempt: Math.max(history.length + 1, (latest?.event.attempt ?? 0) + 1),
+      ...(latest === undefined ? {} : { retryOf: latest.event.verificationId }),
+      snapshot,
+      setup,
+      campaignLabSetupDigest: canonicalDigest(setup),
+      reconstruction: options.reconstructionFor(snapshot),
+    });
+    return {
+      campaignId: event.campaignId,
+      findingId: event.findingId,
+      verificationId,
+      status: result.status,
+    };
   }
   return null;
 }

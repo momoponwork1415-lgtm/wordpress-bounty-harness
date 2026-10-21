@@ -11,8 +11,8 @@ type FinishedVerification = Extract<
 >;
 
 /**
- * ADR 0022 retry budget, shared by the runner (which retries) and the review
- * queue (which predicts what the runner will do). Counts include the attempt
+ * ADR 0022 retry budget, shared by the verification queues (which retry) and the
+ * review queue (which predicts what they will do). Counts include the attempt
  * that produced the current reason. `recipe` / `observation` get two automatic
  * retries on the same Lab Setup, `provision` one re-provision, `provider` one
  * retry on resume (2026-10-14 addendum), `precondition` only when the scenario
