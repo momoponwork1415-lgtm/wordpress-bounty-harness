@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -263,7 +263,11 @@ const ref = {
 };
 
 /** The same Review that writes the records the export reads back. */
-function reviewOver(ledger: Ledger, store: PrivateArtifactStore): Review {
+function reviewOver(
+  ledger: Ledger,
+  store: PrivateArtifactStore,
+  clock = () => new Date("2026-10-09T00:00:00Z"),
+): Review {
   return new Review({
     ledger,
     artifactStore: store,
@@ -280,7 +284,7 @@ function reviewOver(ledger: Ledger, store: PrivateArtifactStore): Review {
       ],
     },
     factsProvider: { load: async () => ({}) },
-    clock: () => new Date("2026-10-09T00:00:00Z"),
+    clock,
   });
 }
 
@@ -460,6 +464,7 @@ describe("review export", () => {
         duplicate: null,
         decidedAt: "2026-10-08T02:00:00Z",
       },
+      duplicate: null,
       humanReproduction: null,
       latestReverification: null,
       latestDraft: null,
@@ -546,6 +551,7 @@ describe("review export", () => {
       decisions: [],
       scopeAssessments: [],
       decision: null,
+      duplicate: null,
       humanReproduction: null,
       latestReverification: null,
       latestDraft: null,
@@ -781,5 +787,95 @@ describe("review export", () => {
       reasonCode: "duplicate",
       duplicate: "possible-match:CVE-2026-0001",
     });
+  });
+
+  it("keeps the stage-4 result, what backs it and when, until the next one is recorded (#442)", async () => {
+    const { ledger, store } = await fixture({
+      verification: "confirmed",
+      review: "none",
+    });
+    let now = "2026-10-09T00:00:00Z";
+    const review = reviewOver(ledger, store, () => new Date(now));
+    const decide = (extra: Partial<Parameters<Review["decide"]>[0]> = {}) =>
+      review.decide({
+        ref,
+        decision: "accept",
+        reasonCode: "accepted",
+        openedEvidence: [],
+        decidedBy: "owner",
+        ...extra,
+      });
+    const exported = () =>
+      exportReviewBundle({
+        ledger,
+        store,
+        campaignId: "campaign-1",
+        findingId: "finding-1",
+      });
+
+    // A decision before any check carries an `unavailable` nobody recorded.
+    await decide();
+    expect((await exported()).review.duplicate).toEqual({
+      status: "unavailable",
+      reference: null,
+      reason: null,
+      checkedAt: null,
+      note: null,
+    });
+
+    const url = "https://records.invalid/synthetic/1.2/stored-xss";
+    now = "2026-10-09T01:00:00Z";
+    await decide({
+      duplicate: { status: "possible-match", reference: url },
+      duplicateNote: "Three databases searched; one record matches.\n",
+    });
+    // A later decision without a result (here, the reproduction) keeps it.
+    now = "2026-10-09T02:00:00Z";
+    await decide({ reasonCode: "reproduced-by-hand" });
+    const kept = await exported();
+    expect(kept.review.decision).toMatchObject({
+      reasonCode: "reproduced-by-hand",
+      duplicate: `possible-match:${url}`,
+      decidedAt: "2026-10-09T02:00:00.000Z",
+    });
+    expect(kept.review.duplicate).toMatchObject({
+      status: "possible-match",
+      reference: url,
+      reason: null,
+      checkedAt: "2026-10-09T01:00:00.000Z",
+    });
+    const note = kept.review.duplicate!.note!;
+    expect(await readFile(note.path, "utf8")).toBe(
+      "Three databases searched; one record matches.\n",
+    );
+    expect(kept.privateEvidence.artifacts).toContainEqual(
+      expect.objectContaining({ kind: "dedupe-note", digest: note.digest }),
+    );
+
+    // `unavailable` keeps its reason; only a recorded `no-match` reads `no-match`.
+    now = "2026-10-09T03:00:00Z";
+    await decide({
+      duplicate: { status: "unavailable", reason: "mirror-stale" },
+    });
+    expect((await exported()).review).toMatchObject({
+      decision: { duplicate: "unavailable" },
+      duplicate: {
+        status: "unavailable",
+        reference: null,
+        reason: "mirror-stale",
+        checkedAt: "2026-10-09T03:00:00.000Z",
+        note: null,
+      },
+    });
+    now = "2026-10-09T04:00:00Z";
+    await decide({ duplicate: { status: "no-match" } });
+    expect((await exported()).review).toMatchObject({
+      decision: { duplicate: "no-match" },
+      duplicate: { status: "no-match", checkedAt: "2026-10-09T04:00:00.000Z" },
+    });
+
+    await expect(decide({ duplicateNote: "No result." })).rejects.toThrow(
+      "A dedupe note needs the result it supports",
+    );
   });
 });

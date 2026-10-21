@@ -12,7 +12,7 @@
    - 結果は `basis: latest-version` 付きの検証として台帳に残る。scope 評価が「最新版で成立」とみなすのは、この検証が `runtime-confirmed` または `reproduced` のときだけ。
    - 再検証の後は、レビュー列の判断をやり直す。
 3. `src/profiles/wordpress/policy/programme-scope.md` の観測日と Wordfence / Patchstack の公式規則を照合する。差分や矛盾があれば方針を更新し、`ambiguous` として人間の判断に回す。
-4. 重複照合（#12 のローカル Wordfence 履歴DB）、影響、意図された動作かどうかを判断する。照合が unavailable のときは結果を推定しない。
+4. 重複照合（#12 のローカル Wordfence 履歴DB）、影響、意図された動作かどうかを判断する。照合が unavailable のときは結果を推定しない。照合の記録は下の「重複照合の記録」に従う。
 5. 正確な Submission Candidate、文案の版 digest、送信先に結び付けて人間が承認する。実際の提出は人間が各プログラムの画面で行う。
 
 scope 評価の事実は、判定器の観測条件、選定記録（`target-selection.json`）、最新版での再検証の有無、検証 Lab と版固定された通常利用 scenario の一致から作る。Verifier の `defaultSettings` 自己申告は設定範囲の判定に使わない。scenario の記録が欠ける・一致しない場合は設定範囲を `ambiguous` とし、確認済みの技術的記録を変更しない。scope 評価自体の障害は scope の `incomplete` である。候補と文案は `in-scope` の評価からだけ作る。後で文案を改訂した場合、旧版の承認では新しい候補を admit しない。
@@ -25,3 +25,12 @@ Claude Code の skill が読むのは `review export --campaign <id> --finding <
 
 実行前後差分は `Verification` の `LabStateObserver` が Verifier の実行前後に取り、before / after / diff を Private Evidence に置いて `verification-finished` の `artifacts`（`lab-state-before` / `lab-state-after` / `lab-state-diff`）と `labStateDiff` に digest で残す。取得失敗は `labStateDiff: { status: "missing", reason }` として記録し、検証結果は変えない。差分は Verifier にも判定器にも渡さない。profile が差分ファイルを汎用の `StateDiffSummary`（settings / principals / tables）に要約して export に渡す。
 
+
+## 重複照合の記録（#442、ADR 0038 の段 4）
+
+- 照合は skill `wbh-dedupe` が行い、所有者が `review decide --duplicate no-match|unavailable[:<理由>]|possible-match:<参照> --duplicate-note <path>` で結果を記録する。
+- Review は結果を判断せず、値、記録した時刻、skill のメモ（Private Evidence の `dedupe-note.md`）の digest を判断の記録に残す。
+- `--duplicate` を付けない後の判断（再現の記録など）は、記録済みの結果を引き継ぐ。一度も記録していない判断は `unavailable` を持ち、`checkedAt` は null になる。
+- `review export` は、結果を `review.decision.duplicate`（1 本の文字列）と `review.duplicate`（参照、理由、時刻、メモの path と digest）に出す。`review --campaign <id>` も Finding ごとに `duplicate:` の行を出す。
+- 提出の文案（`wbh-report` v2）に進むのは、最後の判断が `accept`、人間の再現が `match`、`review.decision.duplicate` が `no-match` の Finding だけである。
+- `possible-match` は照合先を残して所有者が最終判断し、`unavailable` は落とさずに再照合を待つ。

@@ -4441,6 +4441,62 @@ describe("harness CLI vertical slice", () => {
     });
   });
 
+  it("records the wbh-dedupe result with its note, lists it in the queue and keeps it through the reproduction (#442)", async () => {
+    const { run, configPath, root } = await harness();
+    const campaign = ["--campaign", "campaign-1"];
+    await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      (await run("review", ...campaign)).stdout,
+    )![1]!;
+    const decide = (...extra: string[]) =>
+      run(
+        "review",
+        "decide",
+        ...campaign,
+        "--finding",
+        finding,
+        "--decision",
+        "accept",
+        "--reason",
+        "reproduced-by-hand",
+        ...extra,
+      );
+    const note = join(root, "dedupe-note.md");
+    await writeFile(note, "Public records only.\n");
+
+    expect((await decide("--duplicate-note", note)).code).toBe(2);
+    expect((await decide("--duplicate", "unavailable:")).code).toBe(2);
+    const matched = await decide(
+      "--duplicate",
+      "possible-match:CVE-2026-0001",
+      "--duplicate-note",
+      note,
+    );
+    expect(matched.stderr).toBe("");
+    expect((await decide("--reproduced", "match")).code).toBe(0);
+    expect((await run("review", ...campaign)).stdout).toMatch(
+      /^ {2}duplicate: possible-match {2}CVE-2026-0001 {2}checked \S+Z$/m,
+    );
+    const exported = reviewExportV1Schema.parse(
+      JSON.parse(
+        (await run("review", "export", ...campaign, "--finding", finding))
+          .stdout,
+      ),
+    );
+    // wbh-report v2 writes only on `no-match`; this one stays out.
+    expect(exported.review.decision?.duplicate).toBe(
+      "possible-match:CVE-2026-0001",
+    );
+    expect(exported.review.duplicate?.note?.path).toMatch(/dedupe-note\.md$/);
+
+    expect((await decide("--duplicate", "unavailable:mirror-stale")).code).toBe(
+      0,
+    );
+    expect((await run("review", ...campaign)).stdout).toMatch(
+      /^ {2}duplicate: unavailable {2}mirror-stale {2}checked \S+Z$/m,
+    );
+  });
+
   it("assesses scope from the judge's evidence and the selection record without injected facts", async () => {
     const { run, configPath } = await harness();
     const campaign = ["--campaign", "campaign-1"];
