@@ -35,6 +35,7 @@ import {
   assessmentSchema,
   authorizationSchema,
   DEDUPE_NOTE_FILE,
+  decisionRefSchema,
   digest,
   draftSchema,
   duplicateSchema,
@@ -45,6 +46,7 @@ import {
   reviewDecisionV1Schema,
   scopeStatus,
   type DuplicateCheck,
+  type ReviewDecisionRef,
   type ReviewDecisionV1,
   type ReviewRecordByKind,
   type ReviewRecordKind,
@@ -59,6 +61,7 @@ export {
   REVIEW_RECORD_FILE,
   REVIEW_RECORD_MAX_BYTES,
   type DuplicateCheck,
+  type ReviewDecisionRef,
   type ReviewDecisionV1,
   type ReviewRecordByKind,
   type ReviewRecordKind,
@@ -103,6 +106,13 @@ export type ReviewItem = (
       readonly category: string;
       readonly reason: string;
       readonly nextStep: string;
+      readonly decision: Decision | null;
+    }
+  | {
+      /** #436: no verification yet, so a decision can come before any Lab (ADR 0038 段 1). */
+      readonly status: "not-verified";
+      readonly ref: ReviewDecisionRef;
+      readonly category: string;
       readonly decision: Decision | null;
     }
 ) & {
@@ -294,8 +304,21 @@ export class Review<TFacts = unknown> {
       preconditionClassCounts[classification] =
         (preconditionClassCounts[classification] ?? 0) + 1;
       const verified = latestVerification.get(key(finding));
+      const group = groups.of(finding.campaignId, finding.findingId);
+      const decided = latestDecision.get(key(finding));
       if (verified === undefined) {
         unverified++;
+        items.push({
+          status: "not-verified",
+          ref: {
+            campaignId: finding.campaignId,
+            findingId: finding.findingId,
+            snapshotDigest: finding.snapshotDigest,
+          },
+          category: finding.category,
+          decision: decided?.decision ?? null,
+          group,
+        });
         continue;
       }
       const { event, sequence } = verified;
@@ -305,8 +328,6 @@ export class Review<TFacts = unknown> {
         verificationId: event.verificationId,
         snapshotDigest: event.snapshotDigest,
       };
-      const group = groups.of(finding.campaignId, finding.findingId);
-      const decided = latestDecision.get(key(finding));
       const decision =
         decided !== undefined && decided.sequence > sequence
           ? decided.decision
@@ -382,7 +403,8 @@ export class Review<TFacts = unknown> {
   }
 
   async decide(input: {
-    readonly ref: ReviewRef;
+    /** Without a verification ID, the Finding must be listed as `not-verified` (#436). */
+    readonly ref: ReviewDecisionRef;
     readonly decision: Decision;
     readonly reasonCode: string;
     readonly openedEvidence: readonly string[];
@@ -394,33 +416,16 @@ export class Review<TFacts = unknown> {
     /** Seconds the human spent, reported by the skill or CLI caller (ADR 0032 Q22). */
     readonly humanElapsedSeconds?: number;
   }): Promise<ReviewDecisionV1> {
-    const ref = refSchema.parse(input.ref);
+    const ref = decisionRefSchema.parse(input.ref);
     if (input.duplicateNote !== undefined && input.duplicate === undefined)
       throw new Error("A dedupe note needs the result it supports");
-    const verification = this.#ledger
-      .readAll({ type: "verification-finished" })
-      .find(
-        ({ event }) =>
-          event.type === "verification-finished" &&
-          event.campaignId === ref.campaignId &&
-          event.findingId === ref.findingId &&
-          event.verificationId === ref.verificationId &&
-          event.snapshotDigest === ref.snapshotDigest,
-      )?.event;
-    if (verification?.type !== "verification-finished")
-      throw new Error("Only recorded verifications are reviewed");
-    if (
-      (verification.result.status === "incomplete" ||
-        verification.result.status === "contradicted") &&
-      !this.queue({ campaignId: ref.campaignId }).items.some(
-        (item) =>
-          item.ref.findingId === ref.findingId &&
-          item.ref.verificationId === ref.verificationId,
-      )
-    )
-      throw new Error(
-        `This ${verification.result.status} verification is not the current review item`,
-      );
+    const { status, since } =
+      ref.verificationId === undefined
+        ? this.#unverifiedItem(ref)
+        : this.#verificationItem({
+            ...ref,
+            verificationId: ref.verificationId,
+          });
     const trace = this.#traceOf(ref.campaignId, ref.findingId);
     const decidedAt = this.#clock();
     // A later decision (e.g. the one carrying `--reproduced`) must not erase stage 4.
@@ -445,17 +450,14 @@ export class Review<TFacts = unknown> {
     const record = reviewDecisionV1Schema.parse({
       schemaVersion: 1,
       ref,
-      verificationStatus: verification.result.status,
+      verificationStatus: status,
       decision: input.decision,
       reasonCode: input.reasonCode,
       duplicate,
       openedEvidence: [...input.openedEvidence],
       decidedBy: input.decidedBy,
       decidedAt: decidedAt.toISOString(),
-      elapsedMs: Math.max(
-        0,
-        decidedAt.getTime() - Date.parse(verification.occurredAt),
-      ),
+      elapsedMs: Math.max(0, decidedAt.getTime() - Date.parse(since)),
       ...(input.humanElapsedSeconds === undefined
         ? {}
         : { humanElapsedSeconds: input.humanElapsedSeconds }),
@@ -471,7 +473,9 @@ export class Review<TFacts = unknown> {
       type: "review-decided",
       findingId: ref.findingId,
       decision: record.decision,
-      verificationId: ref.verificationId,
+      ...(ref.verificationId === undefined
+        ? {}
+        : { verificationId: ref.verificationId }),
       ...(record.humanElapsedSeconds === undefined
         ? {}
         : { humanElapsedSeconds: record.humanElapsedSeconds }),
@@ -489,6 +493,93 @@ export class Review<TFacts = unknown> {
     if (appended.status === "conflict")
       throw new Error("Review decision ledger conflict");
     return record;
+  }
+
+  /** The recorded verification a decision names; an unfinished one only while it is the current item. */
+  #verificationItem(ref: ReviewRef): {
+    readonly status: ReviewDecisionV1["verificationStatus"];
+    readonly since: string;
+  } {
+    const verification = this.#ledger
+      .readAll({ type: "verification-finished" })
+      .find(
+        ({ event }) =>
+          event.type === "verification-finished" &&
+          event.campaignId === ref.campaignId &&
+          event.findingId === ref.findingId &&
+          event.verificationId === ref.verificationId &&
+          event.snapshotDigest === ref.snapshotDigest,
+      )?.event;
+    if (verification?.type !== "verification-finished")
+      throw new Error("Only recorded verifications are reviewed");
+    if (
+      (verification.result.status === "incomplete" ||
+        verification.result.status === "contradicted") &&
+      !this.queue({ campaignId: ref.campaignId }).items.some(
+        (item) =>
+          item.ref.findingId === ref.findingId &&
+          item.ref.verificationId === ref.verificationId,
+      )
+    )
+      throw new Error(
+        `This ${verification.result.status} verification is not the current review item`,
+      );
+    return {
+      status: verification.result.status,
+      since: verification.occurredAt,
+    };
+  }
+
+  /** #436: a decision before any verification, on a Finding the queue lists as `not-verified`. */
+  #unverifiedItem(ref: ReviewDecisionRef): {
+    readonly status: "not-verified";
+    readonly since: string;
+  } {
+    const listed = this.queue({ campaignId: ref.campaignId }).items.some(
+      (item) =>
+        item.status === "not-verified" &&
+        item.ref.findingId === ref.findingId &&
+        item.ref.snapshotDigest === ref.snapshotDigest,
+    );
+    const finding = this.#ledger
+      .read({
+        campaignId: ref.campaignId,
+        findingId: ref.findingId,
+        type: "finding-recorded",
+        limit: 1,
+      })
+      .at(0)?.event;
+    if (!listed || finding === undefined)
+      throw new Error("This Finding is not an unverified review item");
+    return { status: "not-verified", since: finding.occurredAt };
+  }
+
+  /**
+   * The reason code of each listed item's decision, read from its private
+   * record. An item whose record is unreadable (older events) has none.
+   */
+  async decisionReasons(
+    items: readonly ReviewItem[],
+  ): Promise<ReadonlyMap<ReviewItem, string>> {
+    const reasons = new Map<ReviewItem, string>();
+    for (const item of items) {
+      if (item.decision === null) continue;
+      const event = this.#ledger
+        .readAll({
+          campaignId: item.ref.campaignId,
+          findingId: item.ref.findingId,
+          type: "review-decided",
+        })
+        .at(-1)?.event;
+      if (event === undefined) continue;
+      const read = await readReviewRecord(
+        this.#store,
+        event,
+        "review-decision",
+      );
+      if (read.status === "read") reasons.set(item, read.record.reasonCode);
+    }
+    return reasons;
   }
 
   /** #442: the stage-4 result in force for a Finding, as its latest decision carries it. */

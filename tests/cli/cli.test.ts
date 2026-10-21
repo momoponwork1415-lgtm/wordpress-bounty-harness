@@ -2578,6 +2578,108 @@ describe("harness CLI vertical slice", () => {
     });
   });
 
+  it("records a reject before verification, lists it with its reason, and keeps it out of verify next (#436)", async () => {
+    const { run, configPath, ledger, root } = await harness({
+      entryPoints: true,
+      config: { discovery: { lab: "none" } },
+    });
+    const campaign = ["--campaign", "campaign-screen"];
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      ...campaign,
+      "--config",
+      configPath,
+    );
+    const findings = ledger()
+      .read({ campaignId: "campaign-screen", type: "finding-recorded" })
+      .flatMap(({ event }) =>
+        event.type === "finding-recorded" ? [event.findingId] : [],
+      );
+    expect(findings.length).toBeGreaterThan(1);
+    const rejected = findings[0]!;
+    const listed = await run("review", ...campaign);
+    expect(listed.stdout).toMatch(
+      new RegExp(
+        `^not-verified\\s+campaign-screen\\s+finding ${rejected} `,
+        "m",
+      ),
+    );
+    // An unverified Finding has no package to reproduce.
+    const reproduce = await run(
+      "review",
+      "decide",
+      ...campaign,
+      "--finding",
+      rejected,
+      "--decision",
+      "accept",
+      "--reason",
+      "manual",
+      "--reproduced",
+      "match",
+    );
+    expect(reproduce.code).toBe(2);
+    const decided = await run(
+      "review",
+      "decide",
+      ...campaign,
+      "--finding",
+      rejected,
+      "--decision",
+      "reject",
+      "--reason",
+      "out-of-scope",
+      "--minutes",
+      "2",
+    );
+    expect(decided.stderr).toBe("");
+    expect(decided.stdout).toContain(
+      `recorded reject (out-of-scope) for finding ${rejected}`,
+    );
+    expect((await run("review", ...campaign)).stdout).toContain(
+      "decision: reject (out-of-scope)",
+    );
+    // The handoff queue takes every other Finding and never the rejected one.
+    const taken: string[] = [];
+    for (const index of findings.keys()) {
+      const next = await run(
+        "verify",
+        "next",
+        ...campaign,
+        "--config",
+        configPath,
+        "--handoff",
+        join(root, `handoff-screen-${index}`),
+      );
+      taken.push(
+        /^verified finding (\S+) as /m.exec(next.stdout)?.[1] ?? next.stdout,
+      );
+    }
+    expect(taken).toEqual([...findings.slice(1), "no verification pending"]);
+    expect(
+      ledger()
+        .read({ campaignId: "campaign-screen", type: "verification-finished" })
+        .flatMap(({ event }) =>
+          event.type === "verification-finished" ? [event.findingId] : [],
+        ),
+    ).toEqual(findings.slice(1));
+    // Naming the Finding still verifies it: the operator supplies what the queue rule could not.
+    const named = await run(
+      "verify",
+      "next",
+      ...campaign,
+      "--config",
+      configPath,
+      "--handoff",
+      join(root, "handoff-screen-named"),
+      "--finding",
+      rejected,
+    );
+    expect(named.stdout).toContain(`verified finding ${rejected}`);
+  });
+
   it("leaves every accepted Finding to the handoff queue: the runner verifies none, and verify next takes them in order with --handoff only (#423)", async () => {
     const {
       run,

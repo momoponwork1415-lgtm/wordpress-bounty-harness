@@ -1078,7 +1078,8 @@ export type VerifyNextSummary = {
 };
 
 /**
- * The handoff queue (#423): every recorded, unparked Finding without a verdict,
+ * The handoff queue (#423): every recorded, unparked Finding without a verdict
+ * whose latest review decision is not `reject` (#436, ADR 0038 段 1),
  * in ledger order with each overlap group's first Finding ahead of the rest of
  * its group (#424), one per call, without a discovery Lab. Retry budgets count
  * the current skill version's attempts only, so an incomplete left by another
@@ -1093,7 +1094,7 @@ export async function verifyNextFinding<
   readonly campaignId?: string;
   /**
    * The one Finding an operator or skill named. They supply what the queue
-   * rules could not, so parking and the retry budget do not apply.
+   * rules could not, so parking, a `reject` and the retry budget do not apply.
    */
   readonly only?: { readonly findingId: string };
   readonly ledger: Ledger;
@@ -1124,6 +1125,14 @@ export async function verifyNextFinding<
           : [],
       ),
   );
+  // The latest decision per Finding; a `reject` keeps it out of the Lab.
+  const decisions = new Map<string, string>();
+  for (const { event } of options.ledger.readAll({
+    ...scope,
+    type: "review-decided",
+  }))
+    if (event.type === "review-decided")
+      decisions.set(`${event.campaignId}\0${event.findingId}`, event.decision);
   for (const { event } of findings) {
     if (
       event.type !== "finding-recorded" ||
@@ -1137,7 +1146,8 @@ export async function verifyNextFinding<
       continue;
     if (
       options.only === undefined &&
-      parked.has(`${event.campaignId}\0${event.findingId}`)
+      (parked.has(`${event.campaignId}\0${event.findingId}`) ||
+        decisions.get(`${event.campaignId}\0${event.findingId}`) === "reject")
     )
       continue;
     const history = histories.filter(
