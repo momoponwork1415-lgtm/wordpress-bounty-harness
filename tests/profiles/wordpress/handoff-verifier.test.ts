@@ -54,7 +54,7 @@ async function fixture(options: {
   readonly customerAccount?: false;
   readonly wallTimeMs?: number;
   readonly clock?: () => Date;
-  readonly restartObservation?: () => Promise<void>;
+  readonly restartObservation?: () => Promise<boolean>;
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-handoff-verifier-"));
   roots.push(root);
@@ -142,7 +142,7 @@ async function fixture(options: {
     },
     restartObservation: async () => {
       restarts++;
-      await options.restartObservation?.();
+      return (await options.restartObservation?.()) ?? true;
     },
   };
   const place = (name: string, text = "") =>
@@ -356,6 +356,7 @@ describe("HandoffVerifier (#352)", () => {
       restartObservation: async () => {
         entered.resolve();
         await release.promise;
+        return true;
       },
     });
     const pending = f.transport.run(f.run);
@@ -380,6 +381,19 @@ describe("HandoffVerifier (#352)", () => {
       await f.place("abort", "test complete");
       await pending;
     }
+  });
+
+  it("withholds attacker data when the Harness cannot close setup (#430)", async () => {
+    const f = await fixture({ restartObservation: async () => false });
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    await f.place("setup-done");
+    const result = await pending;
+    expect(result.outcome).toMatchObject({ status: "incomplete" });
+    expect(result.receipt).toMatchObject({ reason: "setup-boundary" });
+    expect(await f.exists("observation-ready")).toBe(false);
+    expect(await f.exists("attack.json")).toBe(false);
+    expect(f.calls.at(-1)).toEqual(["withdraw"]);
   });
 
   it("does not read files placed before setup-done until setup-done arrives", async () => {

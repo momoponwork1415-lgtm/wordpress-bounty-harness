@@ -20,6 +20,7 @@ import {
   type WordPressLabHandle,
 } from "../lab/index.js";
 import { nextWordPressScenario } from "../lab/scenarios.js";
+import { SETUP_BOUNDARY_FILE } from "./http-evidence.js";
 import {
   classifyWordPressPrecondition,
   type ClassifiedPrecondition,
@@ -77,11 +78,12 @@ export type WordPressVerifierRun = Readonly<{
   canary?: WordPressVerifierCanary;
   referenceRoute?: WordPressVerifierReferenceRoute;
   /**
-   * Restarts the Harness-owned HTTP capture and Lab state baseline from now.
-   * A transport whose precondition setup precedes the attacker steps calls it
-   * once setup is done; the Codex transport never does.
+   * Ends precondition setup: restarts the Harness-owned HTTP capture and Lab
+   * state baseline from now. A transport whose
+   * setup precedes the attacker steps calls it once setup is done and stops
+   * on false; the Codex transport never does.
    */
-  restartObservation: () => Promise<void>;
+  restartObservation: () => Promise<boolean>;
 }>;
 
 export const WORDPRESS_VERIFIER_FILE_NAMES = [
@@ -133,6 +135,7 @@ const HANDOFF_RECEIPT_CODES = new Set([
   "exposure",
   "abort",
   "timeout",
+  "setup-boundary",
 ]);
 
 /** Whitelist transport control codes; never copy an agent or Lab diagnostic into the result. */
@@ -538,14 +541,23 @@ export class WordPressVerifier implements Verifier<
 
     const runId = `verify-${finding.findingId}-${randomUUID()}`;
     let captureMarker = await this.options.lab.markCapture(lab);
+    let setupClosed = false;
     const result = await this.options.transport.run({
       runId,
       finding,
       lab: verifierLabView(lab, finding),
-      // Precondition setup before this call is neither captured nor judged.
+      // Precondition setup before this call is neither captured nor judged,
+      // and judges accept only the attacker after it (#430).
       restartObservation: async () => {
-        captureMarker = await this.options.lab.markCapture(lab);
-        await restartObservation?.();
+        try {
+          captureMarker = await this.options.lab.markCapture(lab);
+          if (captureMarker === null) return false;
+          await restartObservation?.();
+        } catch {
+          return false;
+        }
+        setupClosed = true;
+        return true;
       },
       ...(canary === undefined ? {} : { canary }),
       ...(routeReference?.success
@@ -603,6 +615,13 @@ export class WordPressVerifier implements Verifier<
       };
     }
     const data = result.outcome.files;
+    // Files count only after the Harness closed setup and restarted capture.
+    if (transportSetsUpPreconditions && !setupClosed)
+      return {
+        status: "incomplete",
+        reason: "recipe",
+        nextStep: "setup-not-closed",
+      };
 
     if (
       data.precondition !== undefined &&
@@ -749,6 +768,14 @@ export class WordPressVerifier implements Verifier<
         : { "capture-marker.json": canonicalJson({ marker: captureMarker }) }),
       ...(route === undefined ? {} : { "route.json": route }),
       ...(session === undefined ? {} : { "session.json": session }),
+      ...(setupClosed
+        ? {
+            [SETUP_BOUNDARY_FILE]: canonicalJson({
+              schemaVersion: 1,
+              captureFrom: "setup-done",
+            }),
+          }
+        : {}),
     });
 
     const refutationDigest =

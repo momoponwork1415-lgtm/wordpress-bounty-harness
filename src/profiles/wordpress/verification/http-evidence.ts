@@ -14,6 +14,12 @@ import type { HttpEvidenceReader } from "../../../review/index.js";
  */
 export const PROXY_CAPTURE_FILE = "proxy-capture.jsonl";
 export const AUTHORED_HTTP_FILE = "http.json";
+/**
+ * The Harness marks a recipe whose capture starts at `setup-done`, after an
+ * administrator prepared the Lab (#430). Judges then accept only the Lab
+ * attacker in that capture.
+ */
+export const SETUP_BOUNDARY_FILE = "setup-boundary.json";
 
 const PROXY_CAPTURE_MAX_BYTES = 64 * 1024 * 1024;
 const AUTHORED_HTTP_MAX_BYTES = 5 * 1024 * 1024;
