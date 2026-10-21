@@ -21,7 +21,11 @@ import type {
   WordPressLab,
   WordPressLabHandle,
 } from "../lab/index.js";
-import { AUTHORED_HTTP_FILE, PROXY_CAPTURE_FILE } from "./http-evidence.js";
+import {
+  AUTHORED_HTTP_FILE,
+  PROXY_CAPTURE_FILE,
+  SETUP_BOUNDARY_FILE,
+} from "./http-evidence.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
 import { createWordPressStandardReproducer } from "./standard-reproducer.js";
 import { requestContainsSecret } from "./request-secret.js";
@@ -665,6 +669,14 @@ function canaryJudge(
         };
       const httpEvidence = await readHttpEvidence(options, lab, recipeDigest);
       if ("status" in httpEvidence) return httpEvidence;
+      const unattributed = await postSetupAttribution(options, {
+        finding,
+        lab,
+        recipeDigest,
+        canaries,
+        httpEvidence,
+      });
+      if (unattributed !== null) return unattributed;
       const smokeBindingFile = await options.store.readFile(
         recipeDigest,
         "smoke-binding.json",
@@ -1255,6 +1267,166 @@ const browserStepsSchema = z.looseObject({
     .max(30),
 });
 
+/**
+ * Who authenticated one captured request: only the Lab attacker account, or a
+ * login in `reached` (a principal the attack itself obtained). Any other
+ * session, a stale one included, and any header the Lab cannot resolve to a
+ * principal are defects.
+ */
+async function requestPrincipal(
+  options: Options,
+  finding: WordPressFinding,
+  lab: WordPressLabHandle,
+  request: NonNullable<ReturnType<typeof capturedRequest>>,
+  reached: readonly string[],
+): Promise<{ readonly defect: string } | { readonly authenticated: boolean }> {
+  const headers = new Map<string, string>();
+  for (const [name, value] of Object.entries(request.headers)) {
+    const key = name.toLowerCase();
+    if (headers.has(key) || typeof value !== "string")
+      return {
+        defect: "The captured HTTP authentication headers are ambiguous",
+      };
+    headers.set(key, value);
+    if (
+      (key.startsWith("x-") &&
+        key !== "x-requested-with" &&
+        key !== "x-wp-nonce") ||
+      (/(?:auth|sess|token|jwt|api.?key|credential|nonce)/i.test(key) &&
+        key !== "x-wp-nonce")
+    )
+      return {
+        defect:
+          "The captured HTTP request has an unsupported authentication header",
+      };
+  }
+  const attacker =
+    finding.attackerPosition === "unauthenticated"
+      ? null
+      : lab.attackerAccounts[finding.attackerPosition];
+  if (attacker === null && headers.has("x-wp-nonce"))
+    return {
+      defect: "The unauthenticated attack used an authentication nonce header",
+    };
+
+  const cookieHeader = headers.get("cookie") ?? "";
+  const cookies: { name: string; value: string }[] = [];
+  const seenCookies = new Set<string>();
+  for (const field of cookieHeader === "" ? [] : cookieHeader.split(";")) {
+    const separator = field.indexOf("=");
+    const name = field.slice(0, separator).trim();
+    const value = field.slice(separator + 1).trim();
+    if (
+      separator <= 0 ||
+      !/^[A-Za-z0-9_-]+$/.test(name) ||
+      value === "" ||
+      seenCookies.has(name)
+    )
+      return { defect: "The captured HTTP cookie header is ambiguous" };
+    seenCookies.add(name);
+    cookies.push({ name, value });
+  }
+  const authenticationCookies: {
+    value: string;
+    scheme: "logged_in" | "auth" | "secure_auth";
+  }[] = [];
+  for (const cookie of cookies) {
+    const scheme = /^wordpress_logged_in_[A-Za-z0-9_-]+$/.test(cookie.name)
+      ? "logged_in"
+      : /^wordpress_sec_[A-Za-z0-9_-]+$/.test(cookie.name)
+        ? "secure_auth"
+        : /^wordpress_[A-Za-z0-9_-]+$/.test(cookie.name) &&
+            cookie.name !== "wordpress_test_cookie"
+          ? "auth"
+          : null;
+    if (scheme !== null) {
+      authenticationCookies.push({ value: cookie.value, scheme });
+    } else if (
+      (cookie.name.startsWith("wordpress_") &&
+        cookie.name !== "wordpress_test_cookie") ||
+      unknownAuthenticationCookie.test(cookie.name)
+    ) {
+      return {
+        defect:
+          "The captured HTTP request has an unsupported authentication cookie",
+      };
+    }
+  }
+  if (
+    attacker === null &&
+    reached.length === 0 &&
+    authenticationCookies.length > 0
+  )
+    return {
+      defect: "A post-setup request used a logged-in WordPress session",
+    };
+  for (const cookie of authenticationCookies) {
+    const actor = await options.lab.observeSessionUser(
+      lab,
+      cookie.value,
+      cookie.scheme,
+    );
+    if (
+      actor.status !== "user" ||
+      (actor.login !== attacker?.username && !reached.includes(actor.login))
+    )
+      return {
+        defect: "A post-setup request session differs from the Lab attacker",
+      };
+  }
+  return { authenticated: authenticationCookies.length > 0 };
+}
+
+/**
+ * After handoff setup (#430, ADR 0035) the capture starts at `setup-done`. It
+ * must be the Harness's own; each request in it may authenticate only as the
+ * Lab attacker or a canary principal the attack reached; and the attacker
+ * account's role baseline must be exactly its declared role. Otherwise no
+ * judge may confirm.
+ */
+async function postSetupAttribution(
+  options: Options,
+  { finding, lab, recipeDigest, canaries, httpEvidence }: DecideInput,
+): Promise<Incomplete | null> {
+  const boundary = await options.store.readFile(
+    recipeDigest,
+    SETUP_BOUNDARY_FILE,
+    4096,
+  );
+  if (boundary.status === "missing") return null;
+  const missing = (nextStep: string): Incomplete => ({
+    status: "incomplete",
+    reason: "evidence",
+    nextStep,
+  });
+  if (httpEvidence.capture !== "harness-captured" || httpEvidence.http === null)
+    return missing(
+      "The post-setup HTTP capture is unavailable; repeat in a fresh Lab",
+    );
+  if (finding.attackerPosition !== "unauthenticated") {
+    const account = lab.attackerAccounts[finding.attackerPosition];
+    const baseline =
+      account === undefined
+        ? undefined
+        : canaries.roleBaseline[account.username];
+    if (baseline?.length !== 1 || baseline[0] !== finding.attackerPosition)
+      return missing(
+        "The Lab attacker account's role baseline is not its declared role; repeat in a fresh Lab",
+      );
+  }
+  for (const exchange of httpEvidence.http.exchanges) {
+    const request = capturedRequest(exchange);
+    if (request === null)
+      return missing("A captured post-setup HTTP request is incomplete");
+    const principal = await requestPrincipal(options, finding, lab, request, [
+      canaries.adminUser,
+      canaries.user,
+    ]);
+    if ("defect" in principal) return missing(principal.defect);
+  }
+  return null;
+}
+
 /** A script receipt is attributable only to a captured, correctly positioned attack. */
 async function capturedScriptAttack(
   options: Options,
@@ -1334,100 +1506,22 @@ async function capturedScriptAttack(
     // The capture begins after setup-done and ends before the Lab browser
     // visits any victim page. A canary-free administrator request in this
     // interval could have planted the script that the browser later sees.
-    const headers = new Map<string, string>();
-    for (const [name, value] of Object.entries(request.headers)) {
-      const key = name.toLowerCase();
-      if (headers.has(key) || typeof value !== "string")
-        return missing(
-          "The captured HTTP authentication headers are ambiguous",
-        );
-      headers.set(key, value);
-      if (
-        (key.startsWith("x-") &&
-          key !== "x-requested-with" &&
-          key !== "x-wp-nonce") ||
-        (/(?:auth|sess|token|jwt|api.?key|credential|nonce)/i.test(key) &&
-          key !== "x-wp-nonce")
-      )
-        return missing(
-          "The captured HTTP request has an unsupported authentication header",
-        );
-    }
+    const principal = await requestPrincipal(
+      options,
+      finding,
+      lab,
+      request,
+      [],
+    );
+    if ("defect" in principal) return missing(principal.defect);
     if (
-      finding.attackerPosition === "unauthenticated" &&
-      headers.has("x-wp-nonce")
+      finding.attackerPosition !== "unauthenticated" &&
+      bearsCanary &&
+      !principal.authenticated
     )
       return missing(
-        "The unauthenticated attack used an authentication nonce header",
+        "The canary-bearing request has no verifiable attacker session",
       );
-
-    const cookieHeader = headers.get("cookie") ?? "";
-    const cookies: { name: string; value: string }[] = [];
-    const seenCookies = new Set<string>();
-    for (const field of cookieHeader === "" ? [] : cookieHeader.split(";")) {
-      const separator = field.indexOf("=");
-      const name = field.slice(0, separator).trim();
-      const value = field.slice(separator + 1).trim();
-      if (
-        separator <= 0 ||
-        !/^[A-Za-z0-9_-]+$/.test(name) ||
-        value === "" ||
-        seenCookies.has(name)
-      )
-        return missing("The captured HTTP cookie header is ambiguous");
-      seenCookies.add(name);
-      cookies.push({ name, value });
-    }
-    const authenticationCookies: {
-      value: string;
-      scheme: "logged_in" | "auth" | "secure_auth";
-    }[] = [];
-    for (const cookie of cookies) {
-      const scheme = /^wordpress_logged_in_[A-Za-z0-9_-]+$/.test(cookie.name)
-        ? "logged_in"
-        : /^wordpress_sec_[A-Za-z0-9_-]+$/.test(cookie.name)
-          ? "secure_auth"
-          : /^wordpress_[A-Za-z0-9_-]+$/.test(cookie.name) &&
-              cookie.name !== "wordpress_test_cookie"
-            ? "auth"
-            : null;
-      if (scheme !== null) {
-        authenticationCookies.push({ value: cookie.value, scheme });
-      } else if (
-        (cookie.name.startsWith("wordpress_") &&
-          cookie.name !== "wordpress_test_cookie") ||
-        unknownAuthenticationCookie.test(cookie.name)
-      ) {
-        return missing(
-          "The captured HTTP request has an unsupported authentication cookie",
-        );
-      }
-    }
-    if (finding.attackerPosition === "unauthenticated") {
-      if (authenticationCookies.length > 0)
-        return missing(
-          "A post-setup request used a logged-in WordPress session",
-        );
-    } else {
-      if (bearsCanary && authenticationCookies.length === 0)
-        return missing(
-          "The canary-bearing request has no verifiable attacker session",
-        );
-      for (const cookie of authenticationCookies) {
-        const actor = await options.lab.observeSessionUser(
-          lab,
-          cookie.value,
-          cookie.scheme,
-        );
-        if (
-          actor.status !== "user" ||
-          actor.login !== expectedAccount?.username
-        )
-          return missing(
-            "A post-setup request session differs from the Lab attacker",
-          );
-      }
-    }
   }
   if (bearingRequests === 0)
     return missing(
