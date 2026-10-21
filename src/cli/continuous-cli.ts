@@ -92,7 +92,6 @@ export async function continuousCommand(
     readonly campaignPrefix: string;
     readonly notify: string | undefined;
     readonly resume: boolean;
-    readonly verifyConcurrency?: number;
     /** Isolated test lease; production uses the shared host path. */
     readonly hostLabLeaseDirectory?: string;
     /** Positionals after the subcommand: `continuous concurrency <n>`. */
@@ -262,13 +261,6 @@ export async function continuousCommand(
     return ["stopped", "stopping", "stale"].includes(displayState) ? 1 : 0;
   }
   if (sub !== "run") return 2;
-  const verifyConcurrency = context.verifyConcurrency ?? 1;
-  if (
-    !Number.isSafeInteger(verifyConcurrency) ||
-    verifyConcurrency < 1 ||
-    verifyConcurrency > 8
-  )
-    throw new Error("--verify-concurrency must be an integer from 1 to 8");
   const configPath = context.configPath;
   const selectionPath = context.selectionPath;
   if (configPath === undefined || selectionPath === undefined)
@@ -284,27 +276,10 @@ export async function continuousCommand(
   if (hostStatus === undefined)
     throw new Error("continuous run needs a host profile");
   const host = () => hostStatus(state, { configPath, selectionPath });
-  let activeVerification = 0;
   const runner = createContinuousRunner({
     stateDirectory: state.stateDirectory,
     campaignPrefix: context.campaignPrefix,
     ledger: state.ledger,
-    verifyConcurrency,
-    ...(profile.verifyNext === undefined
-      ? {}
-      : {
-          verifyNext: async () => {
-            activeVerification++;
-            try {
-              return await profile.verifyNext!(state, {
-                configPath,
-                campaignPrefix: context.campaignPrefix,
-              });
-            } finally {
-              activeVerification--;
-            }
-          },
-        }),
     async select() {
       const report = await profile.select(state, {
         configPath: selectionPath,
@@ -328,7 +303,6 @@ export async function continuousCommand(
       }),
     // An operator's Lab (`lab up`, `lab up --for-review`) outlives a sweep.
     async cleanupLeftovers() {
-      if (activeVerification > 0) return 0;
       if (await labSweepHeld(state.stateDirectory)) return 0;
       if (await profile.labHeld(state)) return 0;
       const lease = await acquireHostLabLease({
