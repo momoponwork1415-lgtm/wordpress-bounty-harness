@@ -11,7 +11,7 @@ description: accept 済みで重複照合が no-match の Finding 1 件につい
 
 - 提出先は Wordfence、Patchstack、個別の vendor の順に探す（ADR 0038 の 32 行）。
 - 報酬が出ない先には提出しない。報酬が出ると確かめられない先も選ばない。どの先も選べなければ、結論は `none` にする（#438 の受入条件 3）。
-- Wordfence は、vendor が既に VDP を持つ対象を受け付けない。その対象は Patchstack か vendor に出す（ADR 0038 の 19 行）。
+- Wordfence が vendor の既存の VDP を理由に受け付けなかった対象は、Patchstack か vendor に出す（ADR 0038 の 19 行）。これは Wordfence が断った後の扱いである。Patchstack の「Active VDP」の表示から、Wordfence が断ると予測する根拠にはしない。
 - 1 つの Finding に決める提出先は 1 つだけである。2 つの先に出さない（#438 の受入条件 5）。
 - 提出は所有者が行う。この skill は提出先を提案し、メモを書くだけである（不変条件 6・7）。
 
@@ -55,7 +55,8 @@ campaign、Finding、`target.targetId`、`target.versions.explored`、`finding.i
 
 - WordPress.org の頁で、作者名、作者の profile、配布中かどうか、有効インストール数、readme の中の脆弱性の報告先に関する文を読む。
 - ブランドの持ち主を確かめる。頁の作者の行、vendor のサイトの footer、作者の profile が公開している他のプラグインから、親会社を読む。
-- readme の中で Patchstack、WPScan、Wordfence を名指しする文は、vendor 自身の方針として読まない（#188 出典対照表の表 2 の 12）。Patchstack の VDP かどうかは、段 A の 3 で Patchstack の database を見て決める。
+- readme の中で Patchstack、WPScan、Wordfence を名指しする文は、vendor 自身の方針として読まない（#188 出典対照表の表 2 の 12）。
+- Patchstack の database のプラグインの頁で、「Active VDP」の表示と Security Policy の頁があるかを読む。これは事実としてメモの「見た証拠」に書き、段 A の 3 の根拠にはしない。
 
 ### 4. 段 A: Wordfence
 
@@ -63,25 +64,26 @@ campaign、Finding、`target.targetId`、`target.versions.explored`、`finding.i
 
 1. 作者か親会社が除外資産に当たる。写しの 45〜50 行と `excludedAuthors` を見る。写しの 54 行は、除外資産を CVE も報酬も無いとしている。
 2. 提出の時点で配布が止まっている。または、Finding が vendor のサイトで動く web service に依る（写しの 52 行）。
-3. vendor が既に VDP を持つ（所有者の決定、ADR 0038 の 19 行）。写しは、自前のバグバウンティを持つ 6 社を除外資産に挙げ（45〜50 行）、一覧は網羅ではないと書いている（43 行）。それ以外の vendor の VDP を名指しする行は写しに無いので、この項目の根拠は所有者の決定である。VDP があるとみなすのは、次の 2 つだけである。
-   - Patchstack の database のプラグインの頁に「Active VDP」の表示と Security Policy の頁がある。
-   - vendor か親会社が、脆弱性の報告先と手順を定めた方針の頁を公開している。自前の頁と、公開一覧にある programme の頁を数える。報告先を Wordfence とする方針は数えない。連絡先のアドレスや「responsible disclosure」の 1 文だけの記述も数えない（#188 出典対照表の表 2 の 13）。
+3. vendor か親会社が、自前の脆弱性の programme を運用している。写しは、自前のバグバウンティを持つ 6 社を除外資産に挙げ（45〜50 行）、一覧は網羅ではないと書いている（43 行）。この項目には、その意味での programme の証拠があるときだけ当てる。
+   - 証拠になるのは、vendor か親会社の自前の頁か、公開一覧（HackerOne、Bugcrowd、Intigriti、YesWeHack）にある programme の頁である。
+   - 報告のアドレスだけを書いた方針の頁と、報告先を Patchstack か Wordfence とする方針の頁は、証拠にしない。「responsible disclosure」の 1 文だけの記述も証拠にしない（#188 出典対照表の表 2 の 12 と 13）。
+   - Patchstack の「Active VDP」の表示も証拠にしない。dev set の 2 件はどちらもこの表示があり、どちらも Wordfence が受理して報酬を払った記録がある。
 4. `review.scopeAssessments` に、`programmeId` が `wordfence` で `status` が `out-of-scope` の判定がある。メモには、その判定に当たる写しの行を引く。閾値は 9〜39 行、対象外の種別は 77〜103 行、よく棄却される報告は 105〜160 行にある。
 
-どれにも当たらなければ、結論を `wordfence` にし、段 B 以降は調べない。写しが報酬の対象外と書いているのは、除外資産（54 行）と対象外の一覧（162 行）だけである。
+どれにも当たらなければ、結論を `wordfence` にし、段 C 以降は調べない。段 B も、下の Active VDP の場合を除いて調べない。写しが報酬の対象外と書いているのは、除外資産（54 行）と対象外の一覧（162 行）だけである。
 
 - 判定が `ambiguous` のときと、判定が無いときも、規則の行が明示して外していなければ `wordfence` のままにする。確かめる点は「所有者が確かめること」に書く。迷う程度では次の先へ移らない。
-- 3 を Patchstack の「Active VDP」の表示だけで満たしたときは、そのことを「所有者が確かめること」に書く。
+- Patchstack の「Active VDP」の表示があり、結論が `wordfence` のときも、段 B を調べて表に書く。結論は `wordfence` のまま変えない。Wordfence が既存の VDP を理由に断ったときに、所有者が段 B の結果を使う。
 
 ### 5. 段 B: Patchstack
 
-段 A で「受けない」となったときだけ行う。写しは `patchstack-scope-2026-10-21.md` である。
+段 A で「受けない」となったときと、段 A の Active VDP の場合に行う。写しは `patchstack-scope-2026-10-21.md` である。
 
 1. mVDP の対象かどうかを読む。Patchstack の規則 §3.9 は「Patchstack mVDP program」を Active VDP の一覧へリンクしている（2026-10-21 に確認）。プラグインの頁の「Active VDP」の表示と Security Policy の頁を見て、報酬の文と報告先の指定の文を写す。頁が読めないときは「不明」と書き、「無い」とは書かない。
 2. 受けるかどうかを見る。`review.scopeAssessments` の `patchstack` の判定と、写しの行を照らす。受理の条件は 11〜15 行、受理種別は 17〜31 行、権限は 37〜41 行、受理しない種別は 43〜47 行、条件を欠くものは 49〜57 行、mVDP の外で扱わないものは 59〜64 行（インストール数は 64 行）、提出要件は 66〜79 行、設定の前提は 81〜87 行、閾値は 91〜97 行、その他の除外は 99〜138 行にある。明示の行に当たれば「受けない」とする。
 3. 報酬を見る。一般の受理種別に条件どおり当たる報告（14 行、17〜31 行）には XP が付き、月の報酬 pool から XP の割合で払われる（規則 §18.3）。13 行の zero-day の条件をすべて満たす報告には、XP の代わりに固定の報酬が出る（規則 §22）。mVDP の対象であることだけで受ける報告（15 行）は、XP が付かないことがある（15 行「may no longer receive XP」、規則 §3.9）。この場合は報酬を確かめられないので、`patchstack` にしない。
 
-受けると読めて報酬もあるなら、結論を `patchstack` にして終える。それ以外は段 C へ進む。
+段 A で「受けない」となったときは、受けると読めて報酬もあるなら結論を `patchstack` にして終え、それ以外は段 C へ進む。段 A の Active VDP の場合は、結果を表に書くだけで、結論は変えない。
 
 ### 6. 段 C: 個別の vendor
 
@@ -114,8 +116,8 @@ Finding: <id>
 その後に、次の 4 節をこの順で置く。
 
 1. 段ごとの結果。段 A〜D を 1 行ずつの表にする。列は、提出先、受けるか（受ける / 受けない / 確かめられない / 調べていない）、報酬（あり / なし / 確かめられない / 調べていない）、当たった規則の行、見た証拠である。
-2. 当たった規則の行。「ファイル:行」と 12 語以内の引用を、1 行に 1 つ書く。所有者の決定を根拠にした行は「ADR 0038:19」と書き、写しに名指しの行が無いことを添える。
-3. 見た証拠。開いた公開ページの URL、読んだ文（12 語以内）、開いた時刻を 1 行に 1 つ書く。見つからなかったものも書く（例: vendor の方針の頁が無かった）。
+2. 当たった規則の行。「ファイル:行」と 12 語以内の引用を、1 行に 1 つ書く。所有者の決定を根拠にした行は「ADR 0038:<行>」と書く。
+3. 見た証拠。開いた公開ページの URL、読んだ文（12 語以内）、開いた時刻を 1 行に 1 つ書く。見つからなかったものも書く（例: vendor の方針の頁が無かった）。Patchstack の「Active VDP」の表示と Security Policy の頁の有無は、毎回ここに書く。
 4. 所有者が手で確かめること。下の雛形から当てはまる行を選び、この Finding で確かめる点を足す。
 
 Finding の本文、ペイロード、HTTP 記録、認証情報はメモに写さない。書くのは、公開ページの事実、規則の行、export の分類名（`finding.impact` と `finding.attackerPosition` の値）だけである。
@@ -123,7 +125,7 @@ Finding の本文、ペイロード、HTTP 記録、認証情報はメモに写�
 ## 所有者が確かめることの雛形
 
 - 毎回書く。写しは所有者が 2026-10-21 に貼ったものである。提出の前に、所有者が公式ページを開き、除外資産と対象範囲が写しと同じかを見る（`programme-scope.md` の 3 行）。Wordfence の除外資産の一覧は網羅ではない（写しの 43 行）。
-- 段 A の 3 を Patchstack の「Active VDP」の表示だけで満たしたとき。この判断の根拠は所有者の決定で、写しに Patchstack の VDP を名指しする行は無い。所有者が Wordfence にこの扱いを確かめる（写しの 43 行は、事前の確認先を Wordfence の窓口としている）。
+- Patchstack の「Active VDP」の表示があるとき。「Patchstack の Active VDP あり。Wordfence が既存 VDP を理由に受けなかったときは、段 B の結果に従って Patchstack に出す」と書く。
 - 結論が `wordfence` のとき。フォームで脆弱性の開示を Wordfence に任せない（No）と、報酬も CVE も出ない（`wordfence-submission-form-2026-10-21.md` の 13 行）。
 - 結論が `patchstack` のとき。規則に明らかに合わない報告は、1 週間の利用停止になる（`patchstack-scope-2026-10-21.md` の 140〜146 行）。確かめられない条件が残るなら、所有者が提出の前に解く。
 - 結論の programme について、`review.scopeAssessments` に `in-scope` の判定が無いとき。`review draft --programme` にはこの判定が要る。所有者が `harness review scope --campaign <id> --finding <id>` を打つ（runtime-confirmed か reproduced の Finding だけに打てる）。
