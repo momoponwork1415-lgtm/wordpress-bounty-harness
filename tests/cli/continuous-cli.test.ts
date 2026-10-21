@@ -441,9 +441,6 @@ describe("continuous run", () => {
       "continuous run needs --config and --selection",
     );
     await expect(
-      t.command("run", { ...RUN_OPTIONS, verifyConcurrency: 9 }),
-    ).rejects.toThrow("--verify-concurrency must be an integer from 1 to 8");
-    await expect(
       t.command("run", { ...RUN_OPTIONS, campaignPrefix: "selection-x" }),
     ).rejects.toThrow("--campaign-prefix must be a short slug");
     await expect(t.command("run", RUN_OPTIONS)).rejects.toThrow(

@@ -225,20 +225,22 @@ export interface CliProfile {
       readonly configPath: string;
     },
   ): Promise<ResumeCampaignRunSummary>;
-  /** Verify one unverified or retry-eligible Finding in a fresh Lab. */
+  /**
+   * Hand the next Finding of the handoff queue (every campaign unless one is
+   * named) to the verification skill in a fresh Lab (#423).
+   */
   verifyNext?(
     state: CliState,
     input: {
       readonly campaignId?: string;
-      readonly campaignPrefix?: string;
       readonly configPath: string;
-      /** Hand the Lab to a skill through this directory instead of the agent transport. */
-      readonly handoff?: {
+      /** Where the skill and the Harness exchange files. */
+      readonly handoff: {
         readonly directory: string;
         readonly httpPort: number;
         readonly databasePort: number;
       };
-      /** With `handoff`: the one Finding the operator named, outside the automatic retry rules. */
+      /** The one Finding the operator named, outside the queue's retry rules. */
       readonly findingId?: string;
     },
   ): Promise<VerifyNextSummary | null>;
@@ -708,7 +710,6 @@ const continuousFlags = {
   "campaign-prefix": STR,
   notify: STR,
   resume: BOOL,
-  "verify-concurrency": STR,
   runtime: STR,
 } as const;
 
@@ -734,10 +735,6 @@ function continuousRow(name: string, usage: string): Command {
         notify: values.notify,
         resume: values.resume ?? false,
         runtime: values.runtime,
-        verifyConcurrency:
-          values["verify-concurrency"] === undefined
-            ? 1
-            : Number(values["verify-concurrency"]),
       });
     },
   });
@@ -878,7 +875,7 @@ const COMMANDS: readonly Command[] = [
   }),
   continuousRow(
     "continuous run",
-    "continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--verify-concurrency <n>] [--notify <command>] [--resume]",
+    "continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--notify <command>] [--resume]",
   ),
   continuousRow("continuous stop", "continuous stop"),
   continuousRow("continuous resume", "continuous resume"),
@@ -1152,7 +1149,7 @@ const COMMANDS: readonly Command[] = [
   command({
     name: "verify next",
     usage: [
-      "verify next --campaign <id> --config <path> [--handoff <dir> [--finding <id>] [--port <n>] [--db-port <n>]]",
+      "verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>]] [--port <n>] [--db-port <n>]",
     ],
     options: {
       campaign: STR,
@@ -1165,27 +1162,30 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, state, environment, io }) => {
       if (environment.profile.verifyNext === undefined)
         throw new Error("verify next needs a verification profile");
-      if (values.finding !== undefined && values.handoff === undefined)
-        throw new UsageError("--finding names a Finding for --handoff only");
+      // The automatic Verifier is retired; every Finding waits for the skill (#423).
+      if (values.handoff === undefined)
+        throw new UsageError(
+          "verify next runs only through the verification skill; pass --handoff <dir>",
+        );
+      if (values.finding !== undefined && values.campaign === undefined)
+        throw new UsageError("--finding needs --campaign");
       const release = await holdLabSweep(state.stateDirectory, process.pid);
       const summary = await environment.profile
         .verifyNext(state, {
-          campaignId: required(values.campaign, "campaign"),
-          configPath: resolve(required(values.config, "config")),
-          ...(values.handoff === undefined
+          ...(values.campaign === undefined
             ? {}
-            : {
-                handoff: {
-                  directory: resolve(values.handoff),
-                  httpPort: integerOption(values.port, "port", 8080, 65535),
-                  databasePort: integerOption(
-                    values["db-port"],
-                    "db-port",
-                    3307,
-                    65535,
-                  ),
-                },
-              }),
+            : { campaignId: values.campaign }),
+          configPath: resolve(required(values.config, "config")),
+          handoff: {
+            directory: resolve(values.handoff),
+            httpPort: integerOption(values.port, "port", 8080, 65535),
+            databasePort: integerOption(
+              values["db-port"],
+              "db-port",
+              3307,
+              65535,
+            ),
+          },
           ...(values.finding === undefined
             ? {}
             : { findingId: values.finding }),

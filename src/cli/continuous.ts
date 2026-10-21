@@ -159,11 +159,6 @@ export interface ContinuousDeps {
   readonly stateDirectory: string;
   readonly campaignPrefix: string;
   readonly ledger: Pick<Ledger, "readAll">;
-  readonly verifyConcurrency?: number;
-  verifyNext?(): Promise<{
-    readonly findingId: string;
-    readonly status: string;
-  } | null>;
   /** Freezes a batch of at least SELECT_MINIMUM targets, or none. */
   select(): Promise<{
     readonly batchId: string | null;
@@ -174,7 +169,6 @@ export interface ContinuousDeps {
   runCampaign(input: {
     readonly campaignId: string;
     readonly target: string | null;
-    readonly retryIncompleteVerifications: boolean;
     readonly stop: () => boolean;
     readonly signal?: AbortSignal;
     /** Resume the campaign's runs whose host died instead of running them again (ADR 0036). */
@@ -601,37 +595,8 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       await deps.preflight();
       if (stopRequested()) return stop("operator");
       await deps.cleanupLeftovers();
-      let verifying = true;
-      const verifyWorker = async () => {
-        while (verifying && !stopRequested()) {
-          try {
-            const result = await deps.verifyNext!();
-            if (result !== null) {
-              deps.io.log(
-                `${deps.clock().toISOString()} verification finding=${result.findingId} status=${result.status}`,
-              );
-              continue;
-            }
-          } catch (error) {
-            deps.io.log(
-              `${deps.clock().toISOString()} verification error=${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-          await new Promise<void>((resolve) => setTimeout(resolve, 1000));
-        }
-      };
-      const workers =
-        deps.verifyNext === undefined
-          ? []
-          : Array.from({ length: deps.verifyConcurrency ?? 1 }, () =>
-              verifyWorker(),
-            );
-      try {
-        return await loop();
-      } finally {
-        verifying = false;
-        await Promise.all(workers);
-      }
+      // The runner explores only; every accepted Finding waits for `verify next --handoff` (#423).
+      return await loop();
     } finally {
       deps.signals.off("SIGINT", onSignal);
       deps.signals.off("SIGTERM", onSignal);
@@ -646,12 +611,10 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       (memo.campaignId && {
         campaignId: memo.campaignId,
         target: memo.target ?? null,
-        retry: true,
       }) ||
       (unboundBatch(deps) && {
         campaignId: nextCampaignId(deps),
         target: null,
-        retry: false,
       }) ||
       undefined;
     for (;;) {
@@ -696,7 +659,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         current = {
           campaignId: nextCampaignId(deps),
           target: memo.probe ? (selected.targets[0] ?? null) : null,
-          retry: false,
         };
       }
       memo.campaignId = current.campaignId;
@@ -710,7 +672,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         summary = await deps.runCampaign({
           campaignId: current.campaignId,
           target: current.target,
-          retryIncompleteVerifications: current.retry,
           stop: stopRequested,
           signal: operatorController.signal,
           resumeInterrupted: {
@@ -757,10 +718,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         `${deps.clock().toISOString()} batch ${current.campaignId} stopped=${summary.stopped ?? "none"} skipped=${summary.skipped.length} leftovers=${removed}`,
       );
       if (stopRequested()) return stop("operator");
-      if (summary.stopped === "incomplete") {
-        current.retry = true;
-        continue;
-      }
+      if (summary.stopped === "incomplete") continue;
       if (
         summary.stopped === "provider-limit" &&
         (summary.limitedRuntimes?.length ?? 0) > 0
@@ -783,7 +741,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         const [runtime, { until }] = Object.entries(memo.runtimeBackoff)
           .filter(([, held]) => Date.parse(held.until) > now)
           .sort(([, a], [, b]) => a.until.localeCompare(b.until))[0]!;
-        current.retry = true;
         await hold("backoff", Date.parse(until) - now, { runtime });
         continue;
       }
@@ -791,7 +748,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         const limit = providerLimitOf(deps, current.campaignId);
         const step = memo.backoffStep++;
         const minutes = backoffMinutes(limit, step);
-        current.retry = true;
         await hold("backoff", minutes * MINUTE, {
           step: String(step + 1),
           minutes: String(minutes),
