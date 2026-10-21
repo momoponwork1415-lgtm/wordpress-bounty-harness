@@ -249,6 +249,14 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     ]),
     /** Failed Lab teardown ids; historical stop events have no ids. */
     cleanupLabIds: z.array(id).min(1).max(2).optional(),
+    /**
+     * A provider limit that stopped only this runtime's targets (2026-10-20).
+     * Absent, as in every older event, the limit stopped the whole campaign.
+     */
+    runtime: z
+      .string()
+      .regex(/^[a-z][a-z0-9-]{0,31}$/)
+      .optional(),
   }),
   /**
    * A target was left behind by an error. Before a snapshot exists, the
@@ -1244,7 +1252,7 @@ export class Ledger {
           });
           break;
         case "campaign-stopped":
-          add(event.type, { reason: event.reason });
+          add(event.type, { reason: event.reason, runtime: event.runtime });
           break;
       }
     }

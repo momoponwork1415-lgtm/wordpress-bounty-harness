@@ -65,6 +65,13 @@ const continuousMemoSchema = z.object({
   campaignId: z.string().optional(),
   target: z.string().nullable().optional(),
   backoffStep: z.number().int().nonnegative().default(0),
+  /** Per runtime, after a limit that stopped only its targets: its step and when it may start again. */
+  runtimeBackoff: z
+    .record(
+      z.string(),
+      z.object({ step: z.number().int().positive(), until: z.string() }),
+    )
+    .default({}),
   consecutiveErrorBatches: z.number().int().nonnegative().default(0),
   consecutiveRefusalBatches: z.number().int().nonnegative().default(0),
   consecutiveNoProgressBatches: z.number().int().nonnegative().default(0),
@@ -363,10 +370,29 @@ function nextCampaignId(deps: ContinuousDeps): string {
   return `${head}${highest + 1}`;
 }
 
-/** The latest usage limit any run of this campaign hit; quota when unknown. */
-function providerLimitOf(deps: ContinuousDeps, campaignId: string) {
+/**
+ * The latest usage limit any run of this campaign hit, or with a runtime, any
+ * run of a target that runtime's stop names; quota when unknown.
+ */
+function providerLimitOf(
+  deps: ContinuousDeps,
+  campaignId: string,
+  runtime?: string,
+) {
+  const stoppedTargets = new Set(
+    readAll(deps.ledger, { campaignId, type: "campaign-stopped" }).flatMap(
+      (event) =>
+        event.type === "campaign-stopped" && event.runtime === runtime
+          ? [event.snapshotDigest]
+          : [],
+    ),
+  );
   const limits = (["discovery-run-finished", "verifier-run-finished"] as const)
     .flatMap((type) => readAll(deps.ledger, { campaignId, type }))
+    .filter(
+      (event) =>
+        runtime === undefined || stoppedTargets.has(event.snapshotDigest),
+    )
     .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))
     .flatMap((event) =>
       "providerLimit" in event && event.providerLimit !== undefined
@@ -374,6 +400,15 @@ function providerLimitOf(deps: ContinuousDeps, campaignId: string) {
         : [],
     );
   return limits.at(-1) === "rate-limit" ? "rate-limit" : "quota";
+}
+
+/** The wait before the step-th retry (0-based) after this kind of limit. */
+function backoffMinutes(limit: "rate-limit" | "quota", step: number): number {
+  return limit === "rate-limit"
+    ? BACKOFF_RATE_LIMIT_MINUTES[
+        Math.min(step, BACKOFF_RATE_LIMIT_MINUTES.length - 1)
+      ]!
+    : (BACKOFF_QUOTA_MINUTES[step] ?? QUOTA_LONG_SLEEP_HOURS * 60);
 }
 
 /** The latest automatic batch that no campaign has bound yet. */
@@ -475,6 +510,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     state: "starting",
     detail: {},
     backoffStep: 0,
+    runtimeBackoff: {},
     consecutiveErrorBatches: 0,
     consecutiveRefusalBatches: 0,
     consecutiveNoProgressBatches: 0,
@@ -692,6 +728,13 @@ export function createContinuousRunner(deps: ContinuousDeps) {
               deps.io.log(
                 `${deps.clock().toISOString()} concurrency runtime=${runtime} effective=${limit} campaign=${campaignId}`,
               ),
+            heldRuntimes: () =>
+              new Set(
+                Object.entries(memo.runtimeBackoff).flatMap(
+                  ([runtime, { until }]) =>
+                    Date.parse(until) > deps.clock().getTime() ? [runtime] : [],
+                ),
+              ),
           },
         });
         memo.consecutiveErrorBatches = 0;
@@ -718,15 +761,36 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         current.retry = true;
         continue;
       }
+      if (
+        summary.stopped === "provider-limit" &&
+        (summary.limitedRuntimes?.length ?? 0) > 0
+      ) {
+        // Each limited runtime backs off on its own steps. The runner waits for
+        // the first to return; one still in backoff is held at the next start.
+        const now = deps.clock().getTime();
+        for (const runtime of summary.limitedRuntimes!) {
+          const limit = providerLimitOf(deps, current.campaignId, runtime);
+          const step = memo.runtimeBackoff[runtime]?.step ?? 0;
+          const minutes = backoffMinutes(limit, step);
+          memo.runtimeBackoff[runtime] = {
+            step: step + 1,
+            until: new Date(now + minutes * MINUTE).toISOString(),
+          };
+          deps.io.log(
+            `${deps.clock().toISOString()} backoff runtime=${runtime} step=${step + 1} minutes=${minutes} providerLimit=${limit}`,
+          );
+        }
+        const [runtime, { until }] = Object.entries(memo.runtimeBackoff)
+          .filter(([, held]) => Date.parse(held.until) > now)
+          .sort(([, a], [, b]) => a.until.localeCompare(b.until))[0]!;
+        current.retry = true;
+        await hold("backoff", Date.parse(until) - now, { runtime });
+        continue;
+      }
       if (summary.stopped === "provider-limit") {
         const limit = providerLimitOf(deps, current.campaignId);
         const step = memo.backoffStep++;
-        const minutes =
-          limit === "rate-limit"
-            ? BACKOFF_RATE_LIMIT_MINUTES[
-                Math.min(step, BACKOFF_RATE_LIMIT_MINUTES.length - 1)
-              ]!
-            : (BACKOFF_QUOTA_MINUTES[step] ?? QUOTA_LONG_SLEEP_HOURS * 60);
+        const minutes = backoffMinutes(limit, step);
         current.retry = true;
         await hold("backoff", minutes * MINUTE, {
           step: String(step + 1),
@@ -737,6 +801,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       }
       // The campaign finished: the next batch gets a new id.
       memo.backoffStep = 0;
+      memo.runtimeBackoff = {};
       const facts = batchFacts(deps, current.campaignId);
       delete memo.campaignId;
       delete memo.target;
