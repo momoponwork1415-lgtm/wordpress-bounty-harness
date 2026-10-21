@@ -20,6 +20,7 @@ import {
   type Review,
   type ReviewQueue,
   type StateDiffReader,
+  type VerifierRecordReader,
 } from "../review/index.js";
 import type {
   CampaignSummary,
@@ -302,6 +303,8 @@ export interface CliProfile {
   stateDiffReader(state: CliState): StateDiffReader;
   /** Reads the profile's HTTP evidence record for `review export`; names of its files stay in the profile. */
   httpEvidenceReader(state: CliState): HttpEvidenceReader;
+  /** Reads the Verifier's steps and the victim-side observer record for `review export` (#437). */
+  verifierRecordReader(state: CliState): VerifierRecordReader;
   /** Removes the Lab an earlier `lab up` recorded; containers, networks and volumes. */
   labDown(
     state: CliState,
@@ -955,6 +958,7 @@ const COMMANDS: readonly Command[] = [
         findingId: required(values.finding, "finding"),
         stateDiff: environment.profile.stateDiffReader(state),
         httpEvidence: environment.profile.httpEvidenceReader(state),
+        verifierRecord: environment.profile.verifierRecordReader(state),
         clock: state.clock,
         ...(environment.profile.latestVersion === undefined
           ? {}
