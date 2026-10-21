@@ -17,7 +17,7 @@ afterEach(async () => {
   for (const close of closers.splice(0)) await close();
 });
 
-async function open() {
+async function open(subagentModel?: string) {
   const oauthToken = `sk-ant-oat-${randomBytes(24).toString("hex")}`;
   const grantToken = randomBytes(32).toString("hex");
   const upstream: {
@@ -53,8 +53,9 @@ async function open() {
     anthropicOauthToken: oauthToken,
     grantToken,
     model: "claude-opus-5-5",
+    ...(subagentModel === undefined ? {} : { subagentModel }),
     protocol: "anthropic-messages",
-    maxRequests: 1,
+    maxRequests: subagentModel === undefined ? 1 : 2,
     maxRequestBytes: 4096,
     maxResponseBytes: 4096,
     expiresAt,
@@ -168,6 +169,24 @@ describe("Anthropic subscription egress proxy", () => {
     expect((await send({ body: { model: "claude-opus-5-5" } })).status).toBe(
       429,
     );
+  });
+
+  it("admits the Root model and the children's model of one grant, and no third model", async () => {
+    const { upstream, send } = await open("claude-sonnet-5-5");
+    const third = await send({ body: { model: "claude-haiku-5-5" } });
+    expect(third.status).toBe(403);
+    expect(third.body).toContain("model-not-admitted");
+    expect(upstream).toHaveLength(0);
+    expect((await send({ body: { model: "claude-opus-5-5" } })).status).toBe(
+      200,
+    );
+    expect((await send({ body: { model: "claude-sonnet-5-5" } })).status).toBe(
+      200,
+    );
+    expect(upstream.map(({ body }) => body)).toEqual([
+      { model: "claude-opus-5-5" },
+      { model: "claude-sonnet-5-5" },
+    ]);
   });
 
   it("refuses an OAuth token bound to another origin or protocol", async () => {

@@ -434,6 +434,7 @@ describe("Claude sandbox seed", () => {
         outputSchema: {},
         resumeSessionId: SESSION,
       },
+      subagentModel: "claude-opus-5-5",
       resume: {
         sessionId: SESSION,
         transcripts: [{ path: ROOT_PATH, content: "restored root\n" }],

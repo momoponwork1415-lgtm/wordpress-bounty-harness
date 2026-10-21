@@ -3220,7 +3220,7 @@ describe("harness CLI vertical slice", () => {
     expect(runtimes.code).toBe(0);
     expect(runtimes.stdout.split("\n")).toEqual([
       "recorded runtimes (oldest first)",
-      `  gpt-6.1-sol effort high  codex-cli 0.161.0  catalog ${sha("e")}  tier priority  access standard  auth host-private-bearer  runs 3  2026-10-08..2026-10-08`,
+      `  gpt-6.1-sol effort high  child unavailable effort unavailable  codex-cli 0.161.0  catalog ${sha("e")}  tier priority  access standard  auth host-private-bearer  runs 3  2026-10-08..2026-10-08`,
     ]);
     const usage = await run("ledger", "usage");
     expect(usage.code).toBe(0);

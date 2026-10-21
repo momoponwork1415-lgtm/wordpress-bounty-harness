@@ -279,7 +279,92 @@ describe("Claude native agent runtime", () => {
     expect(requests[0]).toMatchObject({
       protocol: "anthropic-messages",
       model: "claude-opus-5-5",
+      subagentModel: "claude-opus-5-5",
     });
+    expect(commands[0]?.subagentModel).toBe("claude-opus-5-5");
+  });
+
+  it("runs the children on the profile's subagent model and holds each child to it", async () => {
+    const sonnetChildren = defineClaudeRuntimeProfile(
+      {
+        id: "opus-sonnet",
+        requestedModelId: "claude-opus-5-5",
+        requestedEffort: "high",
+        claudeCliVersion: "2.1.296",
+        authenticationMethod: "anthropic-oauth-host",
+        subagent: { modelId: "claude-sonnet-5-5", effort: "high" },
+      },
+      digest,
+    );
+    const mixed: DiscoveryTransportRun = {
+      ...run,
+      profile: sonnetChildren,
+      campaignInput: {
+        ...run.campaignInput,
+        modelProfileDigest: sonnetChildren.digest,
+      },
+    };
+    const child = (model: string) => ({
+      transcripts: [
+        {
+          path: "-workspace-main/s1/subagents/agent-agent1.jsonl",
+          content: childTranscript(model),
+        },
+      ],
+    });
+    const sonnet = await runtime(
+      lines(readTool, ...childEvents, turn([])),
+      child("claude-sonnet-5-5"),
+    );
+    const result = await sonnet.runtime.execute(mixed);
+    expect(result.receipt).toMatchObject({
+      terminal: "completed",
+      requestedModelId: "claude-opus-5-5",
+      subagent: { modelId: "claude-sonnet-5-5", effort: "high" },
+    });
+    expect(result.agentRuns?.[0]?.receipt).toMatchObject({
+      terminal: "completed",
+    });
+    expect(sonnet.requests[0]).toMatchObject({
+      model: "claude-opus-5-5",
+      subagentModel: "claude-sonnet-5-5",
+    });
+    expect(sonnet.commands[0]).toMatchObject({
+      input: { model: "claude-opus-5-5" },
+      subagentModel: "claude-sonnet-5-5",
+    });
+    // A child that ran on the Root's model is not the profile's child.
+    const opus = await runtime(
+      lines(readTool, ...childEvents, turn([])),
+      child("claude-opus-5-5"),
+    );
+    expect(
+      (await opus.runtime.execute(mixed)).agentRuns?.[0]?.receipt,
+    ).toMatchObject({
+      terminal: "incomplete",
+      reason: "policy",
+      reasonDetail: "child-profile-mismatch",
+    });
+  });
+
+  it("ends the run incomplete(policy) when the Root answered on another model than the profile binds", async () => {
+    const { runtime: claude } = await runtime(
+      lines(
+        {
+          ...readTool,
+          message: { ...readTool.message, model: "claude-sonnet-5-5" },
+        },
+        turn([{ claim: "kept" }]),
+      ),
+    );
+    const result = await claude.execute(run);
+    expect(result.receipt).toMatchObject({
+      terminal: "incomplete",
+      reason: "policy",
+      reasonDetail: "root-profile-mismatch",
+    });
+    // The Root's report is still stored for review of the run.
+    expect(result.attachment).toBeDefined();
   });
 
   it("records a provider refusal as a provider stop without a usage limit and keeps earlier turns", async () => {

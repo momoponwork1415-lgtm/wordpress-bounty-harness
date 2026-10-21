@@ -98,6 +98,20 @@ function commandsOf(events: readonly Event[]): ObservedCommand[] {
     });
 }
 
+/** Models the assistant messages report; Claude Code's own error turns are left out. */
+function reportedModels(events: readonly Event[]): Set<string> {
+  return new Set(
+    events.flatMap((event) => {
+      const model = object(event.message)?.model;
+      return event.type === "assistant" &&
+        typeof model === "string" &&
+        model !== SYNTHETIC_MODEL
+        ? [model]
+        : [];
+    }),
+  );
+}
+
 /** Token counts of distinct assistant messages; Claude Code repeats a message's usage per content block. */
 function transcriptUsage(events: readonly Event[]): NativeRunReceipt["usage"] {
   const byMessage = new Map<string, Event>();
@@ -429,6 +443,8 @@ export class ClaudeNativeAgentRuntime {
             schemaVersion: 1,
             runtimeProfileDigest: profile.digest,
             model: profile.requestedModelId,
+            // The broker admits the children's model besides the Root's.
+            subagentModel: profile.subagent.modelId,
             protocol: "anthropic-messages",
             // Claude Code sends one Messages request per model turn, for the
             // Root and up to four children at once, and its side requests are
@@ -458,6 +474,7 @@ export class ClaudeNativeAgentRuntime {
                     ? {}
                     : { resumeSessionId: run.resume.threadId }),
                 },
+                subagentModel: profile.subagent.modelId,
                 ...(run.resume === undefined
                   ? {}
                   : {
@@ -613,6 +630,12 @@ export class ClaudeNativeAgentRuntime {
       })),
       run.resume?.segment ?? 0,
     );
+    // The Root answered on another model than the profile binds, as a child would.
+    const rootModelMismatch: Failure | undefined = [
+      ...reportedModels(events),
+    ].some((model) => model !== run.profile.requestedModelId)
+      ? { reason: "policy", detail: "root-profile-mismatch" }
+      : undefined;
     const failure: Failure | undefined =
       result.isolation.backend !== "gvisor" ||
       result.isolation.runtime !== "runsc" ||
@@ -624,7 +647,8 @@ export class ClaudeNativeAgentRuntime {
           ? { reason: "policy", detail: "claude-image-mismatch" }
           : (brokerMetrics?.requestLimitExceeded ?? 0) > 0
             ? { reason: "policy", detail: "broker-request-cap" }
-            : (claudeProviderFailure(
+            : (rootModelMismatch ??
+              claudeProviderFailure(
                 events,
                 rootTranscript(events, result.transcripts, restoredRoot),
               ) ??
@@ -760,16 +784,7 @@ export class ClaudeNativeAgentRuntime {
       const stop = stops.get(agentId);
       const raw = result.transcripts?.find((file) => file.path === path);
       const transcript = jsonLines(raw?.content ?? "");
-      const models = new Set(
-        transcript.flatMap((event) => {
-          const model = object(event.message)?.model;
-          return event.type === "assistant" &&
-            typeof model === "string" &&
-            model !== SYNTHETIC_MODEL
-            ? [model]
-            : [];
-        }),
-      );
+      const models = reportedModels(transcript);
       const times = transcript.flatMap((event) =>
         typeof event.timestamp === "string" &&
         Number.isFinite(Date.parse(event.timestamp))

@@ -327,6 +327,103 @@ describe("provider credential egress", () => {
     await expect(
       broker("api-key").withGrant(claude, async () => "unused"),
     ).rejects.toThrow("Provider protocol, model and credential differ");
+    // The children's model follows the same rule as the Root's.
+    await expect(
+      broker("anthropic-oauth").withGrant(
+        { ...claude, subagentModel: "gpt-6-sol" },
+        async () => "unused",
+      ),
+    ).rejects.toThrow("Provider protocol, model and credential differ");
+    await expect(
+      broker("api-key").withGrant(
+        { ...request, subagentModel: "claude-sonnet-5-5" },
+        async () => "unused",
+      ),
+    ).rejects.toThrow("Provider protocol, model and credential differ");
     expect(commands).toEqual([]);
+  });
+
+  it("binds a Claude Root model and children's model into the broker, the grant and the receipt", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-egress-"));
+    try {
+      const credentialFilePath = join(root, "credential");
+      const proxyBundleDirectory = join(root, "bundle");
+      await writeFile(credentialFilePath, `sk-ant-oat-${"x".repeat(32)}`, {
+        mode: 0o600,
+      });
+      await chmod(credentialFilePath, 0o600);
+      await mkdir(proxyBundleDirectory);
+      await writeFile(
+        join(proxyBundleDirectory, "provider-credential-proxy-cli.js"),
+        "// fixture",
+      );
+      const commands: string[][] = [];
+      const broker = createProviderCredentialEgressBroker({
+        dockerExecutablePath: "/usr/bin/docker",
+        brokerImage: `node@${digest}`,
+        credentialFilePath,
+        credentialKind: "anthropic-oauth",
+        scratchRootDirectory: root,
+        proxyBundleDirectory,
+        clock,
+        resolveProviderAddresses: async () => ["203.0.113.10"],
+        runDocker: async (args) => {
+          commands.push([...args]);
+          return {
+            exitCode: 0,
+            stdout:
+              args[0] === "inspect"
+                ? "172.28.0.2\n"
+                : args[0] === "network" && args[1] === "inspect"
+                  ? "true\n"
+                  : "",
+            stderr: "",
+          };
+        },
+      });
+      const result = await broker.withGrant(
+        {
+          ...request,
+          model: "claude-opus-5-5",
+          subagentModel: "claude-sonnet-5-5",
+          protocol: "anthropic-messages",
+        },
+        async (grant) => [grant.model, grant.subagentModel],
+      );
+      expect(result.operation).toEqual({
+        status: "completed",
+        value: ["claude-opus-5-5", "claude-sonnet-5-5"],
+      });
+      expect(result.receipt).toMatchObject({
+        model: "claude-opus-5-5",
+        subagentModel: "claude-sonnet-5-5",
+      });
+      const created = commands.find((args) => args[0] === "create");
+      expect(created).toEqual(
+        expect.arrayContaining([
+          "PROVIDER_MODEL=claude-opus-5-5",
+          "PROVIDER_SUBAGENT_MODEL=claude-sonnet-5-5",
+        ]),
+      );
+      // A grant without a children's model admits the Root model only.
+      const single = await broker.withGrant(
+        {
+          ...request,
+          model: "claude-opus-5-5",
+          protocol: "anthropic-messages",
+        },
+        async (grant) => grant.subagentModel ?? "none",
+      );
+      expect(single.operation).toEqual({ status: "completed", value: "none" });
+      expect(single.receipt).not.toHaveProperty("subagentModel");
+      expect(
+        commands
+          .filter((args) => args[0] === "create")
+          .at(-1)
+          ?.some((arg) => arg.startsWith("PROVIDER_SUBAGENT_MODEL=")),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
