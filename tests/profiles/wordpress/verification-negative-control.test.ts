@@ -45,6 +45,7 @@ async function verifyOnce(
   let seededRow = "";
   let salt = "";
   let attempted = false;
+  let attackerUsername = "";
   const beacons: string[] = [];
   const root = await mkdtemp(join(tmpdir(), "wbh-negative-"));
   directories.push(root);
@@ -64,6 +65,8 @@ async function verifyOnce(
   const snapshot: Snapshot = { ...body, digest: canonicalDigest(body) };
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
+    leaseDirectory: join(root, "host-lab-lease"),
+    leaseWaitMs: 0,
     images: {
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
@@ -88,6 +91,45 @@ async function verifyOnce(
           return { exitCode: 0, stdout: '{"runsc":{}}', stderr: "" };
         if (request.args[0] === "inspect")
           return { exitCode: 0, stdout: "172.20.0.2", stderr: "" };
+        if (
+          impact === "stored-xss" &&
+          request.args[0] === "exec" &&
+          request.args[1]?.endsWith("-proxy") &&
+          request.args[2] === "tail"
+        ) {
+          const body = "value=fixed-nonce";
+          const response = "saved";
+          return {
+            exitCode: 0,
+            stdout: `${JSON.stringify({
+              request: {
+                method: "POST",
+                path: "/synthetic",
+                headers: {
+                  cookie: "wordpress_logged_in_fixture=attacker-session",
+                },
+                body,
+                bodyBase64: Buffer.from(body).toString("base64"),
+                truncated: false,
+              },
+              response: {
+                statusCode: 200,
+                headers: {},
+                body: response,
+                bodyBase64: Buffer.from(response).toString("base64"),
+                truncated: false,
+              },
+            })}\n`,
+            stderr: "",
+          };
+        }
+        if (
+          impact === "stored-xss" &&
+          request.args[0] === "exec" &&
+          request.args[1]?.endsWith("-proxy") &&
+          request.args[2] === "sh"
+        )
+          return { exitCode: 0, stdout: "0", stderr: "" };
         const saltArg = request.args.find((arg) =>
           arg.startsWith("WBH_EXECUTION_SALT="),
         );
@@ -106,10 +148,37 @@ async function verifyOnce(
             beacons.push("/b/fixed-nonce");
           return {
             exitCode: 0,
-            stdout: Buffer.concat([
-              Buffer.from("89504e470d0a1a0a", "hex"),
-              Buffer.from("synthetic observer output"),
-            ]).toString("base64"),
+            stdout: JSON.stringify({
+              screenshotBase64: Buffer.concat([
+                Buffer.from("89504e470d0a1a0a", "hex"),
+                Buffer.from("synthetic observer output"),
+              ]).toString("base64"),
+              diagnostic: {
+                schemaVersion: 1,
+                document: {
+                  readyState: "complete",
+                  elementCount: 1,
+                  imageCount: 0,
+                  brokenImageCount: 0,
+                  inlineHandlerCount: 0,
+                  canaryAttributeCount: 0,
+                  canaryInlineHandlerCount: 0,
+                },
+                runtime: {
+                  pageErrorCounts: {
+                    syntax: 0,
+                    reference: 0,
+                    type: 0,
+                    security: 0,
+                    other: 0,
+                  },
+                  consoleErrorCount: 0,
+                  failedRequestCount: 0,
+                  http4xxCount: 0,
+                  http5xxCount: 0,
+                },
+              },
+            }),
             stderr: "",
           };
         }
@@ -177,9 +246,11 @@ async function verifyOnce(
           return {
             exitCode: 0,
             stdout:
-              changed && attacker !== undefined
-                ? "wbh-canary-admin-fixed-nonce\n"
-                : "wbh-subscriber-attacker\n",
+              impact === "stored-xss" && attacker !== undefined
+                ? `${attackerUsername}\n`
+                : changed && attacker !== undefined
+                  ? "wbh-canary-admin-fixed-nonce\n"
+                  : "wbh-subscriber-attacker\n",
             stderr: "",
           };
         }
@@ -251,6 +322,7 @@ async function verifyOnce(
     verifier: {
       // The Verifier always claims success; only the Lab state may decide.
       async attempt({ lab: handle }) {
+        attackerUsername = handle.attackerAccounts.subscriber.username;
         lab.prepareExecutionCanary(handle);
         lab.prepareScriptCanary(handle);
         attempted = true;
@@ -259,14 +331,18 @@ async function verifyOnce(
           recipeDigest: await store.putFiles({
             "route.json": JSON.stringify({
               role: "subscriber",
-              account: "lab-subscriber",
+              account:
+                impact === "stored-xss" ? attackerUsername : "lab-subscriber",
               defaultSettings: true,
               configurationChanges: [],
               steps: [
                 {
                   kind: "http",
-                  method: "GET",
+                  method: impact === "stored-xss" ? "POST" : "GET",
                   path: "/synthetic",
+                  ...(impact === "stored-xss"
+                    ? { body: "value=fixed-nonce" }
+                    : {}),
                   expected: "Administrator access obtained",
                 },
                 ...(impact === "stored-xss"
@@ -288,6 +364,9 @@ async function verifyOnce(
                 },
               ],
             }),
+            ...(impact === "stored-xss"
+              ? { "capture-marker.json": JSON.stringify({ marker: "0" }) }
+              : {}),
             "session.json": JSON.stringify({ cookie: "synthetic-session" }),
             "notes.md": "Administrator access was obtained.\n",
           }),

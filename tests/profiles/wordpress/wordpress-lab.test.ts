@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -28,6 +29,31 @@ import { wpMembersOrdinarySetupScript } from "../../../src/profiles/wordpress/la
 
 const directories: string[] = [];
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
+const browserDiagnostic = {
+  schemaVersion: 1,
+  document: {
+    readyState: "complete",
+    elementCount: 12,
+    imageCount: 1,
+    brokenImageCount: 1,
+    inlineHandlerCount: 1,
+    canaryAttributeCount: 1,
+    canaryInlineHandlerCount: 1,
+  },
+  runtime: {
+    pageErrorCounts: {
+      syntax: 1,
+      reference: 0,
+      type: 0,
+      security: 0,
+      other: 0,
+    },
+    consoleErrorCount: 1,
+    failedRequestCount: 1,
+    http4xxCount: 1,
+    http5xxCount: 0,
+  },
+} as const;
 
 afterEach(async () => {
   await Promise.all(
@@ -113,12 +139,16 @@ async function fixture(
     firesOn: [] as string[],
     beacons: [] as string[],
     browserFailureAt: null as string | null,
+    browserFailureMessage: "private-debug-marker",
+    browserDiagnosticOutput: "valid" as "valid" | "missing" | "invalid",
   };
   const salts = new Map<string, string>();
   let seededRow = "";
   let pluginReadableByCli = false;
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
+    leaseDirectory: join(root, "host-lab-lease"),
+    leaseWaitMs: 0,
     images: {
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
@@ -292,16 +322,26 @@ async function fixture(
             return {
               exitCode: 1,
               stdout: "",
-              stderr: "private-debug-marker",
+              stderr: database.browserFailureMessage,
             };
           if (visit !== undefined && database.firesOn.includes(visit))
             database.beacons.push("/b/fixed-nonce");
           return {
             exitCode: 0,
-            stdout: Buffer.concat([
-              Buffer.from("89504e470d0a1a0a", "hex"),
-              Buffer.from("synthetic observer output"),
-            ]).toString("base64"),
+            stdout: JSON.stringify({
+              screenshotBase64: Buffer.concat([
+                Buffer.from("89504e470d0a1a0a", "hex"),
+                Buffer.from("synthetic observer output"),
+              ]).toString("base64"),
+              ...(database.browserDiagnosticOutput === "missing"
+                ? {}
+                : {
+                    diagnostic:
+                      database.browserDiagnosticOutput === "valid"
+                        ? browserDiagnostic
+                        : { schemaVersion: 99 },
+                  }),
+            }),
             stderr: "",
           };
         }
@@ -559,6 +599,28 @@ describe("WordPress gVisor Lab", () => {
     ).toBe(true);
     expect(JSON.stringify(verification.handle)).not.toContain("wbh-sensitive-");
     await lab.teardown(verification.handle);
+  });
+
+  it("admits only one verification Lab at a time in a shared host lease", async () => {
+    const { lab, snapshot, setup } = await fixture();
+    const first = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    expect(first.status).toBe("ready");
+    if (first.status !== "ready") return;
+    try {
+      expect(
+        await lab.provision(snapshot, setup, { purpose: "verification" }),
+      ).toMatchObject({ status: "incomplete", reason: "provision" });
+    } finally {
+      expect(await lab.teardown(first.handle)).toEqual({ status: "removed" });
+    }
+    const next = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    expect(next.status).toBe("ready");
+    if (next.status === "ready")
+      expect(await lab.teardown(next.handle)).toEqual({ status: "removed" });
   });
 
   it("pins ordinary scenarios and seeds translation data with an approved comment", async () => {
@@ -1741,6 +1803,7 @@ describe("WordPress gVisor Lab", () => {
             path: "/wp-admin/admin.php?page=fixture",
             actions: [
               { kind: "click-text", text: "Choose a value", exact: false },
+              { kind: "fill", selector: "#recipient-search", value: "sample" },
             ],
           },
         ],
@@ -1763,6 +1826,53 @@ describe("WordPress gVisor Lab", () => {
       screenshot: expect.any(Buffer),
     });
     expect(await contexts([])).toEqual({ status: "observed", contexts: [] });
+    const noBeaconVictimVisit = await contexts([], {
+      role: "administrator",
+      paths: ["/wp-admin/admin.php?page=fixture"],
+    });
+    expect(noBeaconVictimVisit).toEqual({
+      status: "observed",
+      contexts: [],
+      screenshot: expect.any(Buffer),
+      victimBrowserDiagnostic: browserDiagnostic,
+    });
+    expect(JSON.stringify(noBeaconVictimVisit)).not.toContain("page=fixture");
+
+    database.browserDiagnosticOutput = "missing";
+    expect(
+      await contexts(["/wp-admin/admin.php?page=fixture"], {
+        role: "administrator",
+        paths: ["/wp-admin/admin.php?page=fixture"],
+      }),
+    ).toEqual({
+      status: "observed",
+      contexts: ["victim-route-page"],
+      victimRole: "administrator",
+      screenshot: expect.any(Buffer),
+    });
+    expect(
+      await contexts([], {
+        role: "administrator",
+        paths: ["/wp-admin/admin.php?page=fixture"],
+      }),
+    ).toEqual({
+      status: "observed",
+      contexts: [],
+      screenshot: expect.any(Buffer),
+    });
+    database.browserDiagnosticOutput = "invalid";
+    expect(
+      await contexts(["/wp-admin/admin.php?page=fixture"], {
+        role: "administrator",
+        paths: ["/wp-admin/admin.php?page=fixture"],
+      }),
+    ).toEqual({
+      status: "observed",
+      contexts: ["victim-route-page"],
+      victimRole: "administrator",
+      screenshot: expect.any(Buffer),
+    });
+    database.browserDiagnosticOutput = "valid";
 
     database.browserFailureAt = "/wp-admin/admin.php?page=fixture";
     const failedVictimVisit = await contexts([], {
@@ -1772,11 +1882,45 @@ describe("WordPress gVisor Lab", () => {
     expect(failedVictimVisit).toEqual({
       status: "unavailable",
       phase: "victim-page",
+      failureCode: "browser-visit",
+      privateDiagnostic: Buffer.from("private-debug-marker"),
     });
-    expect(JSON.stringify(failedVictimVisit)).not.toContain(
-      "private-debug-marker",
-    );
     expect(JSON.stringify(failedVictimVisit)).not.toContain("page=fixture");
+    database.browserFailureMessage = "x".repeat(20_000);
+    const boundedFailure = await contexts([], {
+      role: "administrator",
+      paths: ["/wp-admin/admin.php?page=fixture"],
+    });
+    expect(boundedFailure).toMatchObject({
+      status: "unavailable",
+      phase: "victim-page",
+      failureCode: "browser-visit",
+    });
+    if (boundedFailure.status !== "unavailable")
+      throw new Error("Expected bounded browser failure");
+    expect(boundedFailure.privateDiagnostic?.length).toBe(16 * 1024);
+    database.browserFailureMessage = "Victim action left the Lab origin";
+    expect(
+      await contexts([], {
+        role: "administrator",
+        paths: ["/wp-admin/admin.php?page=fixture"],
+      }),
+    ).toEqual({
+      status: "unavailable",
+      phase: "victim-page",
+      failureCode: "victim-navigation",
+    });
+    database.browserFailureMessage = "Victim request carried the script canary";
+    expect(
+      await contexts([], {
+        role: "administrator",
+        paths: ["/wp-admin/admin.php?page=fixture"],
+      }),
+    ).toEqual({
+      status: "unavailable",
+      phase: "victim-page",
+      failureCode: "victim-canary-request",
+    });
     database.browserFailureAt = null;
 
     const browsers = commands.filter(
@@ -1815,8 +1959,13 @@ describe("WordPress gVisor Lab", () => {
     expect(
       browsers.some((browser) =>
         browser.args.includes(
-          'WBH_VISIT_ACTIONS=[{"kind":"click-text","text":"Choose a value","exact":false}]',
+          'WBH_VISIT_ACTIONS=[{"kind":"click-text","text":"Choose a value","exact":false},{"kind":"fill","selector":"#recipient-search","value":"sample"}]',
         ),
+      ),
+    ).toBe(true);
+    expect(
+      browsers.every((browser) =>
+        browser.args.includes('WBH_SCRIPT_NONCES=["fixed-nonce"]'),
       ),
     ).toBe(true);
     expect(
@@ -1849,6 +1998,48 @@ describe("WordPress gVisor Lab", () => {
     ).toEqual({ status: "unavailable", phase: "victim-input" });
     expect(
       await lab.observeStoredScript(handle, {
+        routePaths: ["/?q=fixed-nonce"],
+      }),
+    ).toEqual({
+      status: "unavailable",
+      phase: "route-input",
+      failureCode: "observer-canary-input",
+    });
+    expect(
+      await lab.observeStoredScript(handle, {
+        routePaths: [`/?q=${Buffer.from("fixed-nonce").toString("base64")}`],
+      }),
+    ).toEqual({
+      status: "unavailable",
+      phase: "route-input",
+      failureCode: "observer-canary-input",
+    });
+    expect(
+      await lab.observeStoredScript(handle, {
+        routePaths: [],
+        victim: {
+          role: "administrator",
+          paths: [
+            {
+              path: "/wp-admin/",
+              actions: [
+                {
+                  kind: "fill",
+                  selector: "#field",
+                  value: "fixed-nonce",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      status: "unavailable",
+      phase: "victim-input",
+      failureCode: "observer-canary-input",
+    });
+    expect(
+      await lab.observeStoredScript(handle, {
         routePaths: [],
         victim: {
           role: "administrator",
@@ -1869,6 +2060,207 @@ describe("WordPress gVisor Lab", () => {
           command.args.some((arg) => arg.endsWith("-canary")),
       ),
     ).toBe(true);
+  });
+
+  it("observes only a selected popup that inherits the Lab origin", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    lab.prepareScriptCanary(provisioned.handle);
+    await lab.observeStoredScript(provisioned.handle, {
+      routePaths: [],
+      victim: {
+        role: "unauthenticated",
+        paths: [
+          { path: "/?p=7", actions: [{ kind: "click", selector: "#open" }] },
+        ],
+      },
+    });
+    const visit = commands.find((command) =>
+      command.args.includes("WBH_VISIT_PATH=/?p=7"),
+    );
+    const script = visit?.args[visit.args.indexOf("-e") + 1];
+    if (script === undefined) throw new Error("Browser visit script missing");
+    expect(await lab.teardown(provisioned.handle)).toEqual({
+      status: "removed",
+    });
+
+    const runPopupVisit = async (input: {
+      url: string;
+      browserOpener?: boolean;
+      effectiveOrigin?: string;
+      openerAccessible?: boolean;
+      extraPopup?: boolean;
+      captureDiagnostic?: boolean;
+    }): Promise<string> => {
+      let onPage: ((tab: unknown) => void) | undefined;
+      let resolvePopup: ((tab: unknown) => void) | undefined;
+      const contextListeners = new Map<string, (value: unknown) => void>();
+      const popupListeners = new Map<string, (value: unknown) => void>();
+      let finish: (result: string) => void = () => {};
+      const completed = new Promise<string>((resolve) => {
+        finish = resolve;
+      });
+      const context = {
+        on(event: string, listener: (value: unknown) => void) {
+          contextListeners.set(event, listener);
+          if (event === "page") onPage = listener;
+        },
+      };
+      const popup = {
+        on(event: string, listener: (value: unknown) => void) {
+          popupListeners.set(event, listener);
+        },
+        url: () => input.url,
+        opener: async () => (input.browserOpener === false ? null : main),
+        evaluate: async (
+          check: (argument: string | string[]) => unknown,
+          argument: string | string[],
+        ) => check(argument),
+        waitForLoadState: async () => {},
+        waitForTimeout: async () => {},
+        isClosed: () => false,
+        screenshot: async () => Buffer.from("89504e470d0a1a0a", "hex"),
+      };
+      const target = {
+        waitFor: async () => {},
+        count: async () => 1,
+        evaluate: async () => true,
+        click: async () => {
+          onPage?.(popup);
+          if (input.extraPopup) onPage?.({ on() {}, isClosed: () => false });
+          if (input.captureDiagnostic) {
+            popupListeners.get("pageerror")?.({
+              name: "SyntaxError",
+              message: "private runtime detail",
+            });
+            popupListeners.get("console")?.({
+              type: () => "error",
+              text: () => "private console detail",
+            });
+            contextListeners.get("requestfailed")?.({
+              url: () => "private request detail",
+            });
+            contextListeners.get("response")?.({
+              status: () => 404,
+              url: () => "private response detail",
+            });
+          }
+          resolvePopup?.(popup);
+        },
+      };
+      const main = {
+        on() {},
+        context: () => context,
+        goto: async () => {},
+        url: () => "http://wordpress/?p=7",
+        locator: () => target,
+        waitForEvent: () =>
+          new Promise<unknown>((resolve) => {
+            resolvePopup = resolve;
+          }),
+        isClosed: () => false,
+      };
+      const opener = input.openerAccessible === false ? {} : { document: {} };
+      Object.defineProperty(opener, "document", {
+        get: () => {
+          if (input.openerAccessible === false)
+            throw new Error("Cross-origin opener");
+          return {};
+        },
+      });
+      class ImageElement {
+        complete = true;
+        naturalWidth = 0;
+        attributes: { name: string; value: string }[] = [];
+      }
+      runInNewContext(script, {
+        require: () => ({
+          chromium: {
+            launch: async () => ({
+              newPage: async () => main,
+              close: async () => {},
+            }),
+          },
+        }),
+        process: {
+          env: {
+            WBH_VISIT_PATH: "/?p=7",
+            WBH_VISIT_ACTIONS: JSON.stringify([
+              { kind: "click", selector: "#open" },
+            ]),
+            WBH_SCRIPT_NONCES: '["marker"]',
+          },
+          stdout: {
+            write: (value: string) =>
+              finish(input.captureDiagnostic ? value : "observed"),
+          },
+          exitCode: 0,
+        },
+        console: { error: (message: unknown) => finish(String(message)) },
+        window: {
+          origin: input.effectiveOrigin ?? "http://wordpress",
+          opener,
+        },
+        Buffer,
+        URL,
+        HTMLImageElement: ImageElement,
+        document: {
+          readyState: "complete",
+          querySelectorAll: () => [
+            new ImageElement(),
+            { attributes: [{ name: "onclick", value: "marker" }] },
+          ],
+        },
+      });
+      return completed;
+    };
+
+    expect(await runPopupVisit({ url: "about:blank" })).toBe("observed");
+    const diagnosticOutput = await runPopupVisit({
+      url: "about:blank",
+      captureDiagnostic: true,
+    });
+    expect(diagnosticOutput).not.toContain("private runtime detail");
+    expect(diagnosticOutput).not.toContain("private request detail");
+    expect(JSON.parse(diagnosticOutput).diagnostic).toMatchObject({
+      document: {
+        elementCount: 2,
+        imageCount: 1,
+        brokenImageCount: 1,
+        canaryAttributeCount: 1,
+        canaryInlineHandlerCount: 1,
+      },
+      runtime: {
+        pageErrorCounts: { syntax: 1 },
+        consoleErrorCount: 1,
+        failedRequestCount: 1,
+        http4xxCount: 1,
+      },
+    });
+    expect(
+      await runPopupVisit({ url: "about:blank", browserOpener: false }),
+    ).toBe("Victim action left the Lab origin");
+    expect(
+      await runPopupVisit({ url: "about:blank", effectiveOrigin: "null" }),
+    ).toBe("Victim action left the Lab origin");
+    expect(
+      await runPopupVisit({ url: "about:blank", openerAccessible: false }),
+    ).toBe("Victim action left the Lab origin");
+    expect(await runPopupVisit({ url: "https://outside.invalid/" })).toBe(
+      "Victim action left the Lab origin",
+    );
+    expect(
+      await runPopupVisit({
+        url: "http://wordpress/?p=8",
+        browserOpener: false,
+      }),
+    ).toBe("observed");
+    expect(await runPopupVisit({ url: "about:blank", extraPopup: true })).toBe(
+      "Unobserved victim popup opened",
+    );
   });
 
   it("does not start target containers when source differs from its snapshot", async () => {

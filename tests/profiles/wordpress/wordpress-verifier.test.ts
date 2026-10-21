@@ -35,7 +35,9 @@ type Outcome = WordPressVerifierTransportResult["outcome"];
  */
 async function fixture(options: {
   readonly impact?: WordPressFinding["impact"];
+  readonly attackerPosition?: WordPressFinding["attackerPosition"];
   readonly configurationPrecondition?: string;
+  readonly setupPreconditions?: boolean;
   readonly outcome?: Outcome;
   readonly issueCanary?: boolean;
   readonly receiptRunId?: string;
@@ -55,7 +57,7 @@ async function fixture(options: {
   const finding = admitWordPressFinding(
     {
       claim: "A synthetic access rule is missing",
-      attackerPosition: "subscriber",
+      attackerPosition: options.attackerPosition ?? "subscriber",
       impact: options.impact ?? "account-takeover",
       configurationPrecondition: options.configurationPrecondition ?? "default",
       brokenProperty: "Only the owner may read it",
@@ -91,6 +93,9 @@ async function fixture(options: {
   const issueCanary = options.issueCanary ?? true;
   const verifier = new WordPressVerifier({
     transport: {
+      ...(options.setupPreconditions
+        ? { preconditionSetup: "transport" as const }
+        : {}),
       async run(input) {
         runs.push(input);
         return {
@@ -252,45 +257,164 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
     },
   );
 
-  it("parks an admin-configuration precondition before any transport runs", async () => {
+  it("lets a setup-capable transport handle an ordinary missing Lab scenario", async () => {
+    const f = await fixture({
+      impact: "stored-xss",
+      setupPreconditions: true,
+      configurationPrecondition:
+        "A public form is placed on a published page with default settings.",
+    });
+    expect(await f.attempt()).toMatchObject({ status: "attempted" });
+    expect(f.runs).toHaveLength(1);
+    expect(f.ledger.read({ type: "verifier-run-finished" })).toHaveLength(1);
+    expect(f.ledger.read({ type: "finding-parked" })).toHaveLength(0);
+  });
+
+  it("keeps the missing-scenario gate for a transport without setup capability", async () => {
     const f = await fixture({
       impact: "stored-xss",
       configurationPrecondition:
-        "An administrator selects Password protected visibility for a published block.",
-    });
-    expect(await f.attempt()).toEqual({
-      status: "incomplete",
-      reason: "precondition",
-      nextStep: "admin-configuration-precondition",
-    });
-    expect(f.runs).toHaveLength(0);
-    expect(f.ledger.read({ type: "finding-parked" })[0]?.event).toMatchObject({
-      findingId: f.finding.findingId,
-      runId: "discovery-1",
-      category: "stored-xss",
-      reason: "admin-configuration-precondition",
-      preconditionClass: "admin-configuration",
-      artifacts: f.record.artifacts,
-    });
-  });
-
-  it("parks a precondition the transport's files disclose and records the run first", async () => {
-    const f = await fixture({
-      outcome: {
-        status: "files",
-        files: {
-          precondition: "The slider button Link is set to {author_name}.",
-        },
-      },
+        "A public form is placed on a published page with default settings.",
     });
     expect(await f.attempt()).toMatchObject({
       status: "incomplete",
       reason: "precondition",
-      nextStep: "admin-configuration-precondition",
     });
+    expect(f.runs).toHaveLength(0);
+  });
+
+  it("lets a setup-capable transport resolve an unclassified precondition", async () => {
+    const f = await fixture({
+      setupPreconditions: true,
+      configurationPrecondition: "Ordinary setup described by the Finding.",
+    });
+    expect(await f.attempt()).toMatchObject({ status: "attempted" });
+    expect(f.runs).toHaveLength(1);
+  });
+
+  it.each([false, true])(
+    "parks an admin-configuration precondition before a setup-capable=%s transport runs",
+    async (setupPreconditions) => {
+      const f = await fixture({
+        impact: "stored-xss",
+        setupPreconditions,
+        configurationPrecondition:
+          "An administrator selects Password protected visibility for a published block.",
+      });
+      expect(await f.attempt()).toEqual({
+        status: "incomplete",
+        reason: "precondition",
+        nextStep: "admin-configuration-precondition",
+      });
+      expect(f.runs).toHaveLength(0);
+      expect(f.ledger.read({ type: "finding-parked" })[0]?.event).toMatchObject(
+        {
+          findingId: f.finding.findingId,
+          runId: "discovery-1",
+          category: "stored-xss",
+          reason: "admin-configuration-precondition",
+          preconditionClass: "admin-configuration",
+          artifacts: f.record.artifacts,
+        },
+      );
+    },
+  );
+
+  it("parks a precondition the transport's files disclose and records the run first", async () => {
+    const privateDetail = "The ordinary setup is unavailable in this Lab.";
+    const f = await fixture({
+      setupPreconditions: true,
+      outcome: {
+        status: "files",
+        files: {
+          precondition: `The slider button Link is set to {author_name}. ${privateDetail}`,
+        },
+      },
+    });
+    const attempt = await f.attempt();
+    expect(attempt).toMatchObject({
+      status: "incomplete",
+      reason: "precondition",
+    });
+    if (attempt.status !== "incomplete") return;
+    expect(attempt.nextStep).toMatch(
+      /^admin-configuration-precondition:sha256:[a-f0-9]{64}$/,
+    );
+    const evidenceDigest = attempt.nextStep.slice(
+      "admin-configuration-precondition:".length,
+    );
+    const privateEvidence = await f.store.readFile(
+      evidenceDigest,
+      "precondition",
+      4096,
+    );
+    expect(privateEvidence.status).toBe("resolved");
+    if (privateEvidence.status === "resolved")
+      expect(privateEvidence.bytes.toString("utf8")).toContain(privateDetail);
+    expect(JSON.stringify(attempt)).not.toContain(privateDetail);
+    expect(JSON.stringify(f.ledger.read({}))).not.toContain(privateDetail);
     expect(f.runs).toHaveLength(1);
     expect(f.ledger.read({ type: "verifier-run-finished" })).toHaveLength(1);
     expect(f.ledger.read({ type: "finding-parked" })).toHaveLength(1);
+  });
+
+  it("retains a handoff abort precondition privately and returns a whitelisted code with its digest", async () => {
+    const privateDetail = "Private setup failure detail for this attempt";
+    const f = await fixture({
+      setupPreconditions: true,
+      outcome: {
+        status: "incomplete",
+        nextStep: "handoff:precondition-unavailable",
+        precondition: privateDetail,
+      },
+    });
+    const attempt = await f.attempt();
+    expect(attempt).toMatchObject({
+      status: "incomplete",
+      reason: "precondition",
+    });
+    if (attempt.status !== "incomplete") return;
+    expect(attempt.nextStep).toMatch(
+      /^abort-precondition-unavailable:sha256:[a-f0-9]{64}$/,
+    );
+    const evidenceDigest = attempt.nextStep.slice(
+      "abort-precondition-unavailable:".length,
+    );
+    const privateEvidence = await f.store.readFile(
+      evidenceDigest,
+      "precondition",
+      4096,
+    );
+    expect(privateEvidence.status).toBe("resolved");
+    if (privateEvidence.status === "resolved")
+      expect(privateEvidence.bytes.toString("utf8")).toBe(privateDetail);
+    expect(JSON.stringify(attempt)).not.toContain(privateDetail);
+    expect(JSON.stringify(f.ledger.read({}))).not.toContain(privateDetail);
+  });
+
+  it("keeps an unknown handoff diagnostic private", async () => {
+    const privateDetail = "Private transport diagnostic for this attempt";
+    const f = await fixture({
+      setupPreconditions: true,
+      outcome: { status: "incomplete", nextStep: privateDetail },
+    });
+    const attempt = await f.attempt();
+    expect(attempt).toMatchObject({ status: "incomplete", reason: "recipe" });
+    if (attempt.status !== "incomplete") return;
+    expect(attempt.nextStep).toMatch(
+      /^handoff-incomplete:sha256:[a-f0-9]{64}$/,
+    );
+    const evidenceDigest = attempt.nextStep.slice("handoff-incomplete:".length);
+    const privateEvidence = await f.store.readFile(
+      evidenceDigest,
+      "transport-detail.txt",
+      4096,
+    );
+    expect(privateEvidence.status).toBe("resolved");
+    if (privateEvidence.status === "resolved")
+      expect(privateEvidence.bytes.toString("utf8")).toBe(privateDetail);
+    expect(JSON.stringify(attempt)).not.toContain(privateDetail);
+    expect(JSON.stringify(f.ledger.read({}))).not.toContain(privateDetail);
   });
 
   it("records the run, then raises a transport failure with the transport's own reason", async () => {
@@ -384,6 +508,79 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
     });
     expect((await read("refutation.md")).status).toBe("missing");
     expect(attempt.refutationDigest).toMatch(/^sha256:/);
+  });
+
+  it.each(["unauthenticated", "subscriber", "customer"] as const)(
+    "accepts an empty session file for a %s route without inferring a cookie",
+    async (attackerPosition) => {
+      const f = await fixture({
+        impact: "stored-xss",
+        attackerPosition,
+        outcome: {
+          status: "files",
+          files: {
+            "http.json": JSON.stringify({
+              exchanges: [
+                {
+                  request: { method: "GET", path: "/" },
+                  response: {
+                    body: "ordinary",
+                    headers: {
+                      "set-cookie": "wordpress_logged_in_x=unrelated; Path=/",
+                    },
+                  },
+                },
+              ],
+            }),
+            "steps.md": "Visit the page",
+            "route.json": JSON.stringify({
+              role: attackerPosition,
+              defaultSettings: true,
+            }),
+            "session.json": "",
+            "refutation.md": "",
+            precondition: "",
+          },
+        },
+      });
+      const attempt = await f.attempt();
+      expect(attempt.status).toBe("attempted");
+      if (attempt.status !== "attempted") return;
+      expect(
+        await f.store.readFile(attempt.recipeDigest, "session.json", 4096),
+      ).toMatchObject({ status: "missing" });
+    },
+  );
+
+  it("rejects a malformed nonempty session file for an authenticated route", async () => {
+    const f = await fixture({
+      outcome: {
+        status: "files",
+        files: {
+          "http.json": JSON.stringify({
+            exchanges: [
+              {
+                request: { method: "GET", path: "/" },
+                response: { body: "ordinary" },
+              },
+            ],
+          }),
+          "steps.md": "Visit the page",
+          "route.json": JSON.stringify({
+            role: "subscriber",
+            defaultSettings: true,
+          }),
+          "session.json": "not-json",
+          "refutation.md": "",
+          precondition: "",
+        },
+      },
+    });
+    expect(await f.attempt()).toMatchObject({
+      status: "incomplete",
+      reason: "recipe",
+      nextStep: "Repair the session.json cookie record, then repeat",
+    });
   });
 
   it("keeps a route whose role differs from the Finding incomplete as recipe", async () => {

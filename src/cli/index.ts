@@ -282,6 +282,12 @@ export interface CliProfile {
       readonly findingId: string;
       readonly configPath: string;
       readonly version?: string;
+      /** Hand the versioned Lab to the verification skill. */
+      readonly handoff?: {
+        readonly directory: string;
+        readonly httpPort: number;
+        readonly databasePort: number;
+      };
       /** Read a confirmed route from a separate campaign without writing to it. */
       readonly referenceCampaignId?: string;
       /** Use a separately recorded, immutable Snapshot for this version. */
@@ -1093,19 +1099,50 @@ const COMMANDS: readonly Command[] = [
   command({
     name: "review reverify",
     usage: [
-      "review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>]",
+      "review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--handoff <dir> [--port <n>] [--db-port <n>]]",
     ],
-    options: { campaign: STR, config: STR, finding: STR, version: STR },
+    options: {
+      campaign: STR,
+      config: STR,
+      "db-port": STR,
+      finding: STR,
+      handoff: STR,
+      port: STR,
+      version: STR,
+    },
     handler: async ({ values, state, environment, io }) => {
       const version = values.version;
       if (version !== undefined && !/^[0-9][A-Za-z0-9.+-]{0,31}$/.test(version))
         throw new UsageError("--version is invalid");
-      const summary = await environment.profile.reverify(state, {
+      if (
+        values.handoff === undefined &&
+        (values.port !== undefined || values["db-port"] !== undefined)
+      )
+        throw new UsageError("--port and --db-port require --handoff");
+      const input = {
         campaignId: required(values.campaign, "campaign"),
         findingId: required(values.finding, "finding"),
         configPath: resolve(required(values.config, "config")),
         ...(version === undefined ? {} : { version }),
-      });
+        ...(values.handoff === undefined
+          ? {}
+          : {
+              handoff: {
+                directory: resolve(values.handoff),
+                httpPort: integerOption(values.port, "port", 8080, 65535),
+                databasePort: integerOption(
+                  values["db-port"],
+                  "db-port",
+                  3307,
+                  65535,
+                ),
+              },
+            }),
+      };
+      const release = await holdLabSweep(state.stateDirectory, process.pid);
+      const summary = await environment.profile
+        .reverify(state, input)
+        .finally(release);
       io.stdout(
         `reverified finding ${values.finding} as ${summary.findingId} on ${summary.targetId} ${summary.version}  snapshot ${summary.snapshotDigest}  verification ${summary.verificationId}: ${summary.status}`,
       );

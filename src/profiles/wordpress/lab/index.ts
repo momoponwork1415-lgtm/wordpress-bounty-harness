@@ -6,6 +6,10 @@ import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
+import {
+  acquireHostLabLease,
+  type HostLabLease,
+} from "../../../infrastructure/host-lab-lease.js";
 import type { HttpCaptureRead } from "../../../lab/capture.js";
 import type {
   LabProvisioner,
@@ -268,6 +272,9 @@ export function openWordPressLab(options: {
   readonly runner?: DockerRunner;
   readonly nonce?: () => string;
   readonly healthAttempts?: number;
+  /** Dependency injection for isolated Lab tests; hosts use the one shared path. */
+  readonly leaseDirectory?: string;
+  readonly leaseWaitMs?: number;
 }): WordPressLab {
   if (!isAbsolute(options.dockerExecutablePath))
     throw new Error("Docker executable path must be absolute");
@@ -280,6 +287,7 @@ export function openWordPressLab(options: {
     options.runner ?? nativeDockerRunner(options.dockerExecutablePath),
   );
   const active = new Map<string, WordPressLabSession>();
+  const leases = new Map<string, HostLabLease>();
   /** The one place a handle is checked: only the exact issued object reaches its Lab. */
   const sessionFor = (
     handle: WordPressLabHandle,
@@ -304,57 +312,59 @@ export function openWordPressLab(options: {
     for (const image of Object.values(options.images))
       await docker.require(["image", "inspect", image], 30_000);
   };
+  const cleanupLeftovers: WordPressLab["cleanupLeftovers"] = async ({
+    remove,
+    patterns = {},
+    labId: onlyLab,
+  }) => {
+    if (onlyLab !== undefined && !exactLabId.test(onlyLab))
+      throw new Error("Lab id is invalid");
+    const owned =
+      onlyLab === undefined ? LAB_LEFTOVERS : labLeftoverPatterns(onlyLab);
+    const kinds = [
+      ["containers", ["ps", "-a", "--format", "{{.Names}}"], ["rm", "-f"]],
+      [
+        "networks",
+        ["network", "ls", "--format", "{{.Name}}"],
+        ["network", "rm"],
+      ],
+      ["volumes", ["volume", "ls", "--format", "{{.Name}}"], ["volume", "rm"]],
+    ] as const;
+    const found: Record<(typeof kinds)[number][0], string[]> = {
+      containers: [],
+      networks: [],
+      volumes: [],
+    };
+    for (const [kind, list] of kinds) {
+      const matching = [...owned[kind], ...(patterns[kind] ?? [])];
+      // A host with thousands of anonymous volumes lists far more than the 64 KiB default.
+      const listing = await docker.run(list, 60_000, 8 * 1024 * 1024);
+      if (listing.exitCode !== 0)
+        throw new LabDockerFailure(
+          listing.stderr ||
+            `Docker command exited with status ${listing.exitCode}`,
+        );
+      found[kind] = listing.stdout
+        .split("\n")
+        .map((name) => name.trim())
+        .filter((name) => matching.some((pattern) => pattern.test(name)));
+    }
+    // Containers go first so their networks and volumes are no longer in use.
+    if (remove)
+      for (const [kind, , removal] of kinds)
+        if (found[kind].length > 0)
+          await docker.require([...removal, ...found[kind]]);
+    return found;
+  };
   return {
-    async cleanupLeftovers({ remove, patterns = {}, labId: onlyLab }) {
-      if (onlyLab !== undefined && !exactLabId.test(onlyLab))
-        throw new Error("Lab id is invalid");
-      const owned =
-        onlyLab === undefined ? LAB_LEFTOVERS : labLeftoverPatterns(onlyLab);
-      const kinds = [
-        ["containers", ["ps", "-a", "--format", "{{.Names}}"], ["rm", "-f"]],
-        [
-          "networks",
-          ["network", "ls", "--format", "{{.Name}}"],
-          ["network", "rm"],
-        ],
-        [
-          "volumes",
-          ["volume", "ls", "--format", "{{.Name}}"],
-          ["volume", "rm"],
-        ],
-      ] as const;
-      const found: Record<(typeof kinds)[number][0], string[]> = {
-        containers: [],
-        networks: [],
-        volumes: [],
-      };
-      for (const [kind, list] of kinds) {
-        const matching = [...owned[kind], ...(patterns[kind] ?? [])];
-        // A host with thousands of anonymous volumes lists far more than the 64 KiB default.
-        const listing = await docker.run(list, 60_000, 8 * 1024 * 1024);
-        if (listing.exitCode !== 0)
-          throw new LabDockerFailure(
-            listing.stderr ||
-              `Docker command exited with status ${listing.exitCode}`,
-          );
-        found[kind] = listing.stdout
-          .split("\n")
-          .map((name) => name.trim())
-          .filter((name) => matching.some((pattern) => pattern.test(name)));
-      }
-      // Containers go first so their networks and volumes are no longer in use.
-      if (remove)
-        for (const [kind, , removal] of kinds)
-          if (found[kind].length > 0)
-            await docker.require([...removal, ...found[kind]]);
-      return found;
-    },
+    cleanupLeftovers,
     async provision(
       candidateSnapshot,
       candidateSetup,
       context,
     ): Promise<ProvisionResult<WordPressLabHandle>> {
       let lab: WordPressLabSession | undefined;
+      let lease: HostLabLease | undefined;
       try {
         const prepared = await prepareWordPressLab(
           candidateSnapshot,
@@ -363,6 +373,37 @@ export function openWordPressLab(options: {
         );
         const { setup, phpVersion } = prepared;
         await preflight();
+        if (context?.purpose === "verification") {
+          const acquired = await acquireHostLabLease({
+            ...(options.leaseDirectory === undefined
+              ? {}
+              : { directory: options.leaseDirectory }),
+            waitMs: options.leaseWaitMs ?? 30 * 60_000,
+          });
+          if (acquired === null)
+            return {
+              status: "incomplete",
+              reason: "provision",
+              nextStep:
+                "Another verification Lab held the host lease; retry after it finishes",
+            };
+          lease = acquired;
+          const recovered = await lease.recover(async (labId) => {
+            const leftovers = await cleanupLeftovers({ remove: false, labId });
+            return (
+              leftovers.containers.length +
+                leftovers.networks.length +
+                leftovers.volumes.length >
+              0
+            );
+          });
+          if (recovered.status === "blocked")
+            return {
+              status: "incomplete",
+              reason: "provision",
+              nextStep: recovered.reason,
+            };
+        }
         const secondaryLocale =
           setup.translatePress?.administratorSecondaryLocale ??
           prepared.scenario?.secondaryLocale ??
@@ -375,6 +416,7 @@ export function openWordPressLab(options: {
           forVerification: context?.purpose === "verification",
           ...(secondaryLocale === undefined ? {} : { secondaryLocale }),
         });
+        if (lease !== undefined) await lease.reserveLab(lab.id);
         const { internalIp, recorderIp } = await startLabContainers(
           lab,
           attempts,
@@ -423,9 +465,19 @@ export function openWordPressLab(options: {
         });
         lab.bind(handle);
         active.set(lab.id, lab);
+        if (lease !== undefined) {
+          leases.set(lab.id, lease);
+          lease = undefined;
+        }
         return { status: "ready", handle };
       } catch (error: unknown) {
-        if (lab !== undefined) await lab.cleanup();
+        if (lab !== undefined) {
+          const cleaned = await lab.cleanup();
+          if (lease !== undefined && lease.reservation?.kind === "lab") {
+            if (cleaned) await lease.clear();
+            else await lease.cleanupNeeded();
+          }
+        }
         return {
           status: "incomplete",
           reason:
@@ -442,6 +494,8 @@ export function openWordPressLab(options: {
             ? { diagnostic: error.diagnostic }
             : {}),
         };
+      } finally {
+        if (lease !== undefined) await lease.release();
       }
     },
     async seedCanaries(handle) {
@@ -534,14 +588,25 @@ export function openWordPressLab(options: {
           reason: "cleanup",
           nextStep: "Inspect Lab resources and remove them before retry",
         };
-      if (!(await lab.cleanup()))
-        return {
-          status: "incomplete",
-          reason: "cleanup",
-          nextStep: "Inspect and remove remaining Lab resources",
-        };
-      active.delete(lab.id);
-      return { status: "removed" };
+      const lease = leases.get(lab.id);
+      try {
+        if (!(await lab.cleanup())) {
+          if (lease !== undefined) await lease.cleanupNeeded();
+          return {
+            status: "incomplete",
+            reason: "cleanup",
+            nextStep: "Inspect and remove remaining Lab resources",
+          };
+        }
+        active.delete(lab.id);
+        if (lease !== undefined) await lease.clear();
+        return { status: "removed" };
+      } finally {
+        if (lease !== undefined) {
+          leases.delete(lab.id);
+          await lease.release();
+        }
+      }
     },
     async captureState(handle) {
       const lab = sessionFor(handle);
