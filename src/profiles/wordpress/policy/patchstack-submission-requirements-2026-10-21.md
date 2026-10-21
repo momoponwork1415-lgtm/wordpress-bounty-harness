@@ -2,7 +2,7 @@
 
 所有者が 2026-10-21 に Patchstack の提出要件のページから貼った文の写しである。原文は英語のまま置く。URL は所有者から受け取っていないので、使う前に公開ページと照合する。報告書 skill（`wbh-report`、#439）が報告書の形をこの文に揃えるために読む。探索エージェントには渡さない。
 
-Wordfence の受理規則の文は、所有者が別に持ってくる（#436）。届いたら同じ形式で `wordfence-acceptance-rules-<日付>.md` として隣に置く。
+Wordfence の規則は、所有者が 2026-10-21 に貼った `wordfence-scope-2026-10-21.md`（対象範囲と除外）と `wordfence-submission-form-2026-10-21.md`（フォームの項目）に置いた。Patchstack の対象範囲の全文は `patchstack-scope-2026-10-21.md`、フォームの項目は `patchstack-submission-form-2026-10-21.md` にある。
 
 ## 原文
 
