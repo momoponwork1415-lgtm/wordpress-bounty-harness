@@ -122,7 +122,7 @@ harness verify next --config <campaign.json> --handoff <dir>
 harness ledger funnel --campaign <id>
 ```
 
-`verify next` は handoff 列から Finding を 1 件取り、その Finding の Snapshot に新しい検証 Lab を立てて skill と判定器に通し、Lab を片付ける。handoff 列には、parked でなく結論（`runtime-confirmed`、`contradicted`、`reproduced`）の出ていない Finding が、全 campaign から台帳順に並ぶ。`--campaign <id>` を付けると、その campaign に絞る。再試行予算（ADR 0022）は現行の skill 版の試行だけで数える。そのため、旧 Codex Verifier（`verifier-v8`）が `incomplete` で残した Finding も列に並ぶ。`--handoff` の無い `verify next` は UsageError で止まる（#423）。対象が無ければ `no verification pending` と出す。`--repeat 3` は同じ Snapshot に別々の Trial ID を 3 つ作る。既定は 1 回。funnel の `by Lab` は探索用 Lab の有無、`verification Lab failed` は検証側の供給失敗を示す。
+`verify next` は handoff 列から Finding を 1 件取り、その Finding の Snapshot に新しい検証 Lab を立てて skill と判定器に通し、Lab を片付ける。handoff 列には、parked でなく結論（`runtime-confirmed`、`contradicted`、`reproduced`）の出ていない Finding が、全 campaign から台帳順に並ぶ。最新の判断が `reject` の Finding（段 1 で落としたものを含む、#436）は並ばない。`--campaign <id>` を付けると、その campaign に絞る。再試行予算（ADR 0022）は現行の skill 版の試行だけで数える。そのため、旧 Codex Verifier（`verifier-v8`）が `incomplete` で残した Finding も列に並ぶ。`--handoff` の無い `verify next` は UsageError で止まる（#423）。対象が無ければ `no verification pending` と出す。`--repeat 3` は同じ Snapshot に別々の Trial ID を 3 つ作る。既定は 1 回。funnel の `by Lab` は探索用 Lab の有無、`verification Lab failed` は検証側の供給失敗を示す。
 
 ```sh
 harness verify next --config <campaign.json> --handoff <dir> [--campaign <id> [--finding <id>]] [--port 8080] [--db-port 3307]
@@ -167,6 +167,7 @@ harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <
 
 | 順 | 誰が | 何を |
 | --- | --- | --- |
+| 0 | skill → 所有者 | 検証の前に `wbh-screen`（段 1、ADR 0038）。`not-verified` か `incomplete` の Finding を規則の写しに照らし、`提出不可` / `条件付き` / `可` と引いた行を出す。`提出不可` なら所有者が `harness review decide ... --decision reject --reason out-of-scope` を打ち、Finding は handoff 列から外れる。`条件付き` と `可` は何も打たず、`verify next --handoff` に進む |
 | 1 | 所有者 | `harness review export --campaign <id> --finding <id>` |
 | 2 | skill | `wbh-review`（要約と accept / reject / defer の提案。`verification.status` が `incomplete` なら 3〜8 を飛ばし `defer` の提案で終える） |
 | 3 | skill | `wbh-dedupe`（重複の 3 値と根拠）。所有者が `review decide ... --duplicate <3 値> --duplicate-note <path>` で記録する。`--duplicate` を付けない後の判断も、記録済みの結果を引き継ぐ。9 に進むのは `no-match` だけ |
@@ -199,7 +200,7 @@ harness review outcome --candidate <id> --outcome triaged|resolved|duplicate|inf
 - `export` は Finding（claim / attackerPosition / brokenProperty / impact）、HTTP の method / path / status 行、反証メモ、検証 Lab の実行前後差分の要約（option 名と digest、ユーザーの役割、テーブル件数と checksum）、探索した版と台帳が知る最新版、install 数、Private Evidence の path を 1 本の JSON にまとめる。候補本文、payload、HTTP 本文、option 値は path と digest でだけ参照し、stdout に値を出さない。
 - `review parked` の reason は `outside-programme-boundary`（影響分類が対象外）と `admin-configuration-precondition`（特定値または非既定の管理者設定が前提）の 2 種類。どちらも Finding の Private Evidence を保持し、検証・review queue に入れない。
 - `review held` は、正規化しても schema を通らなかった Finding 候補（ADR 0018）を 1 行ずつ出す。並べるのは impact 分類、生の candidate の digest と path、run ID と候補番号、issue path（2026-10-20 以降の event では zod の issue code も）だけで、本文は出さない。同じ候補が後で正規化し直されたものは出さない。
-- `decide --minutes` は人間がその項目に使った時間を `human-effort-recorded` に分で、`review-decided` に `humanElapsedSeconds` として残す。決定は検証 ID、探索 run ID、prompt digest に結び付いて記録され、提出から run と prompt まで辿れる。
+- `decide --minutes` は人間がその項目に使った時間を `human-effort-recorded` に分で、`review-decided` に `humanElapsedSeconds` として残す。決定は検証 ID、探索 run ID、prompt digest に結び付いて記録され、提出から run と prompt まで辿れる。検証の前の Finding（`review` に `not-verified` で並ぶもの）にも記録でき、その記録は検証 ID を持たない（#436）。落とした判断を取り消すときは、別の判断（`defer` など）を記録する。最新の判断が `reject` でなくなれば、Finding は handoff 列に戻る。
 - `scope` は判定器の証拠と選定記録から事実を読む。最新版での確認が要るプログラムは、`reverify` が `runtime-confirmed` を返した後でだけ満たされる。
 - 確認済みrouteのないFindingは、前回が`incomplete(precondition)`でLab記録があり、`--version`なしで選定されたSnapshotが元のFindingと同じ場合だけ、前回と異なるscenario IDのLabで独立再検証できる。Snapshotが異なる場合と`--version`付きの修正版比較はLab起動前に拒否する。元のverification eventは残り、再試行は新しいverificationIdとsetup digestを記録する。
 - `authorize` は「この文案のこの版を、この送信先へ出す」ことの記録で、送信はしない。送信は人間がWordfence / Patchstackの画面で行い、`submitted` で記録する。

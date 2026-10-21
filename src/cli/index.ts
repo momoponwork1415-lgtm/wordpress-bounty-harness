@@ -482,11 +482,14 @@ export function formatQueue(
   contentPath: (digest: string) => string,
   /** #442: the stage-4 result each item's latest decision carries. */
   duplicates: ReadonlyMap<ReviewItem, DuplicateCheck | null> = new Map(),
+  /** Each decision's reason code, so a Finding dropped before its Lab shows why (#436). */
+  reasons: ReadonlyMap<ReviewItem, string> = new Map(),
 ): string[] {
   const lines: string[] = [];
   for (const item of queue.items) {
     const head = `${item.status}  ${item.ref.campaignId}  finding ${item.ref.findingId}  ${item.category}`;
-    const decision = `  decision: ${item.decision ?? "none"}`;
+    const reason = reasons.get(item);
+    const decision = `  decision: ${item.decision ?? "none"}${reason === undefined ? "" : ` (${reason})`}`;
     const check = duplicates.get(item) ?? null;
     const duplicate = `  duplicate: ${
       check === null
@@ -500,7 +503,7 @@ export function formatQueue(
             .filter((part) => part !== null)
             .join("  ")
     }`;
-    const verification = `  verification ${item.ref.verificationId}  snapshot ${item.ref.snapshotDigest}`;
+    const verification = `  verification ${item.ref.verificationId ?? "none"}  snapshot ${item.ref.snapshotDigest}`;
     // #424: the overlap group orders the queue; each Finding is still decided on its own.
     const group = `  group ${item.group.id}  ${item.group.size} finding(s)${item.group.representative ? "  representative" : ""}`;
     if (item.status === "contradicted")
@@ -518,6 +521,8 @@ export function formatQueue(
         decision,
         duplicate,
       );
+    else if (item.status === "not-verified")
+      lines.push(head, verification, group, decision, duplicate);
     else if (item.status !== "incomplete")
       lines.push(
         head,
@@ -932,6 +937,7 @@ const COMMANDS: readonly Command[] = [
           queue,
           (digest) => state.store.contentPath(digest),
           duplicates,
+          await review.decisionReasons(queue.items),
         ),
       );
       return 0;
@@ -1049,7 +1055,7 @@ const COMMANDS: readonly Command[] = [
           throw new UsageError(
             "--reproduced must be match, mismatch or unavailable",
           );
-        if (item.status === "incomplete" || item.status === "contradicted")
+        if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
           throw new UsageError(
             "Only an evidence-backed package can be reproduced",
           );
@@ -1061,7 +1067,11 @@ const COMMANDS: readonly Command[] = [
           : await humanMinutes(values["reproduce-minutes"], io, "reproduce");
       // One caller input: the minutes land on the decision (ADR 0032 Q22) and on the effort record.
       const minutes = await humanMinutes(values.minutes, io, "read");
-      if (reproduced !== undefined) {
+      // Only an evidence-backed item gets here with --reproduced (checked above).
+      if (
+        reproduced !== undefined &&
+        (item.status === "runtime-confirmed" || item.status === "reproduced")
+      ) {
         // The human reproduction precedes the decision it informs.
         await review.recordHumanReproduction({
           ref: item.ref,
@@ -1532,7 +1542,7 @@ const COMMANDS: readonly Command[] = [
       if (launch === undefined)
         throw new UsageError("This profile has no review Lab provisioner");
       const item = queued(environment.profile.review(state), values);
-      if (item.status === "incomplete" || item.status === "contradicted")
+      if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
         throw new UsageError(
           "A reproduction package is required for review Lab setup",
         );
