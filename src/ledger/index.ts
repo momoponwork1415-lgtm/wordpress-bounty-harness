@@ -347,6 +347,11 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     derivationKind: z
       .enum(["latest-version", "fixed-version-control"])
       .optional(),
+    /**
+     * #424: the overlap group at admission (its first Finding) and the digests
+     * of the profile keys it is built from. Absent on events before 2026-10-21.
+     */
+    group: z.strictObject({ id, keys: z.array(digest) }).optional(),
   }),
   /** A Finding held outside the active verification and review queues. */
   event({

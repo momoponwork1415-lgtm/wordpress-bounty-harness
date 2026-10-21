@@ -16,9 +16,10 @@ import {
   canonicalDigest,
   canonicalJson,
 } from "../../../infrastructure/canonical-json.js";
+import { admitFindingGroup } from "../../../ledger/finding-groups.js";
 import type { Ledger } from "../../../ledger/index.js";
 import { classifyWordPressPrecondition } from "../verification/precondition-class.js";
-import { admitWordPressFinding } from "./finding.js";
+import { admitWordPressFinding, wordPressFindingGroupKeys } from "./finding.js";
 import { admitWordPressLead, wordPressLeadSignature } from "./lead.js";
 import {
   classifyWordPressCandidate,
@@ -117,6 +118,13 @@ async function recordFinding(
     ...(finding.historyRecordId === undefined
       ? {}
       : { historyRecordId: finding.historyRecordId }),
+    // #424: 同じ Snapshot で plugin 側の file:function が重なる Finding の群。表示と順序だけに使う。
+    group: admitFindingGroup(options.ledger, {
+      campaignId: options.base.campaignId,
+      snapshotDigest: options.snapshotDigest,
+      findingId: finding.findingId,
+      keys: wordPressFindingGroupKeys(finding),
+    }),
   });
   return {
     kind: "finding",

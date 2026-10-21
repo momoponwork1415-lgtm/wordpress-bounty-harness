@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
+import { readFindingGroups } from "../ledger/finding-groups.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 import {
   readReviewRecord,
@@ -119,6 +120,15 @@ export const reviewExportV1Schema = z.strictObject({
     promptDigest: digest.nullable(),
     /** Full private record, including fields this bundle leaves out. */
     path: z.string().nullable(),
+  }),
+  /**
+   * #424: Findings of the same Snapshot whose profile keys overlap. The group
+   * orders review; the decision and the submission stay per Finding.
+   */
+  group: z.strictObject({
+    id,
+    size: z.number().int().positive(),
+    representative: z.boolean(),
   }),
   verification: z
     .strictObject({
@@ -613,6 +623,7 @@ export async function exportReviewBundle(options: {
           ? null
           : join(contentPath(findingRef.digest), "finding.json"),
     },
+    group: readFindingGroups(ledger, { campaignId }).of(campaignId, findingId),
     verification:
       verification === undefined
         ? null
