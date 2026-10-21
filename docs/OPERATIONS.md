@@ -169,7 +169,7 @@ harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <
 | --- | --- | --- |
 | 1 | 所有者 | `harness review export --campaign <id> --finding <id>` |
 | 2 | skill | `wbh-review`（要約と accept / reject / defer の提案。`verification.status` が `incomplete` なら 3〜8 を飛ばし `defer` の提案で終える） |
-| 3 | skill | `wbh-dedupe`（重複の 3 値と根拠） |
+| 3 | skill | `wbh-dedupe`（重複の 3 値と根拠）。所有者が `review decide ... --duplicate <3 値> --duplicate-note <path>` で記録する。`--duplicate` を付けない後の判断も、記録済みの結果を引き継ぐ。9 に進むのは `no-match` だけ |
 | 4 | 所有者 | WordPress.org の plugin 頁で最新版を確認（export に `target.versions.latestObserved` があればそれを使う） |
 | 5 | 所有者 | `harness review reverify --campaign <id> --finding <id> --config <path> --handoff <dir>`（確認した最新版を自動選択。版を明示して固定版と比較するときは `--version <版>`） |
 | 6 | 所有者 | `harness review scope --campaign <id> --finding <id>`（`wordfence in-scope` のものだけ先へ） |
@@ -184,7 +184,7 @@ harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <
 harness review parked --campaign <id>                       # parked Finding と reason を一覧する
 harness review held --campaign <id>                         # 保留（candidate-held）の Finding 候補と schema の issue を一覧する
 harness review export --campaign <id> --finding <id>         # 1画面のレビュー材料をJSON 1本（schema review-export/v1）で出す。台帳には書かない。skillはこれだけを読む
-harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--minutes <n>]
+harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate no-match|unavailable[:<reason>]|possible-match:<ref> [--duplicate-note <path>]] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--minutes <n>]
 harness review dedupe --campaign <id> --finding <id>          # ローカルWordfence履歴mirrorと照合
 harness review scope --campaign <id> --finding <id>           # Wordfence / Patchstack ごとに in-scope / out-of-scope / ambiguous
 harness review reverify --campaign <id> --finding <id> --config <path>   # 最新版を新しいLabで検証し直す

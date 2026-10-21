@@ -15,9 +15,11 @@ import {
 } from "../ledger/index.js";
 import {
   exportReviewBundle,
-  type DuplicateLookupResult,
+  type DuplicateCheck,
+  type DuplicateResult,
   type HttpEvidenceReader,
   type Review,
+  type ReviewItem,
   type ReviewQueue,
   type StateDiffReader,
   type VerifierRecordReader,
@@ -478,11 +480,26 @@ export function formatQueue(
   queue: ReviewQueue,
   /** The store's own location of an artifact's files, so the printed path opens. */
   contentPath: (digest: string) => string,
+  /** #442: the stage-4 result each item's latest decision carries. */
+  duplicates: ReadonlyMap<ReviewItem, DuplicateCheck | null> = new Map(),
 ): string[] {
   const lines: string[] = [];
   for (const item of queue.items) {
     const head = `${item.status}  ${item.ref.campaignId}  finding ${item.ref.findingId}  ${item.category}`;
     const decision = `  decision: ${item.decision ?? "none"}`;
+    const check = duplicates.get(item) ?? null;
+    const duplicate = `  duplicate: ${
+      check === null
+        ? "none"
+        : [
+            check.status,
+            check.status === "possible-match" ? check.reference : null,
+            check.status === "unavailable" ? (check.reason ?? null) : null,
+            `checked ${check.checkedAt ?? "never"}`,
+          ]
+            .filter((part) => part !== null)
+            .join("  ")
+    }`;
     const verification = `  verification ${item.ref.verificationId}  snapshot ${item.ref.snapshotDigest}`;
     // #424: the overlap group orders the queue; each Finding is still decided on its own.
     const group = `  group ${item.group.id}  ${item.group.size} finding(s)${item.group.representative ? "  representative" : ""}`;
@@ -499,6 +516,7 @@ export function formatQueue(
             : `${item.refutationDigest} (${contentPath(item.refutationDigest)})`
         }`,
         decision,
+        duplicate,
       );
     else if (item.status !== "incomplete")
       lines.push(
@@ -515,6 +533,7 @@ export function formatQueue(
         `  evidence: ${item.evidenceDigest}`,
         `  reproduction package: ${item.reproductionPackageDigest} (${contentPath(item.reproductionPackageDigest)})`,
         decision,
+        duplicate,
       );
     else
       lines.push(
@@ -524,6 +543,7 @@ export function formatQueue(
         `  reason: ${item.reason}`,
         `  next: ${item.nextStep}`,
         decision,
+        duplicate,
       );
   }
   const counts = (byReason: Readonly<Record<string, number>>) =>
@@ -547,14 +567,19 @@ export function formatQueue(
   return lines;
 }
 
-function parseDuplicate(value: string | undefined): DuplicateLookupResult {
-  if (value === undefined || value === "unavailable")
-    return { status: "unavailable" };
+/** Absent, the decision keeps the result in force (#442). */
+function parseDuplicate(
+  value: string | undefined,
+): DuplicateResult | undefined {
+  if (value === undefined) return undefined;
+  if (value === "unavailable") return { status: "unavailable" };
   if (value === "no-match") return { status: "no-match" };
+  if (value.startsWith("unavailable:") && value.length > 12)
+    return { status: "unavailable", reason: value.slice(12) };
   if (value.startsWith("possible-match:") && value.length > 15)
     return { status: "possible-match", reference: value.slice(15) };
   throw new UsageError(
-    "--duplicate must be unavailable, no-match or possible-match:<ref>",
+    "--duplicate must be no-match, unavailable[:<reason>] or possible-match:<ref>",
   );
 }
 
@@ -895,16 +920,18 @@ const COMMANDS: readonly Command[] = [
     usage: ["review [--campaign <id>]"],
     options: { campaign: STR },
     handler: async ({ values, state, environment, print }) => {
+      const review = environment.profile.review(state);
+      const queue = review.queue(
+        values.campaign === undefined ? {} : { campaignId: values.campaign },
+      );
+      const duplicates = new Map<ReviewItem, DuplicateCheck | null>();
+      for (const item of queue.items)
+        duplicates.set(item, await review.duplicateOf(item.ref));
       print(
         formatQueue(
-          environment.profile
-            .review(state)
-            .queue(
-              values.campaign === undefined
-                ? {}
-                : { campaignId: values.campaign },
-            ),
+          queue,
           (digest) => state.store.contentPath(digest),
+          duplicates,
         ),
       );
       return 0;
@@ -974,13 +1001,14 @@ const COMMANDS: readonly Command[] = [
   command({
     name: "review decide",
     usage: [
-      "review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--by <name>] [--minutes <n>]",
+      "review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate no-match|unavailable[:<reason>]|possible-match:<ref> [--duplicate-note <path>]] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--by <name>] [--minutes <n>]",
     ],
     options: {
       by: STR,
       campaign: STR,
       decision: STR,
       duplicate: STR,
+      "duplicate-note": STR,
       finding: STR,
       minutes: STR,
       opened: STRS,
@@ -1001,6 +1029,13 @@ const COMMANDS: readonly Command[] = [
         throw new UsageError("--decision must be accept, reject or defer");
       const reasonCode = required(values.reason, "reason");
       const duplicate = parseDuplicate(values.duplicate);
+      const notePath = values["duplicate-note"];
+      if (notePath !== undefined && duplicate === undefined)
+        throw new UsageError("--duplicate-note needs --duplicate");
+      const duplicateNote =
+        notePath === undefined
+          ? undefined
+          : await readFile(resolve(notePath), "utf8");
       const reproduced = values.reproduced;
       if (reproduced === undefined) {
         if (values["reproduce-minutes"] !== undefined)
@@ -1048,7 +1083,8 @@ const COMMANDS: readonly Command[] = [
         decision,
         reasonCode,
         openedEvidence: values.opened ?? [],
-        duplicate,
+        ...(duplicate === undefined ? {} : { duplicate }),
+        ...(duplicateNote === undefined ? {} : { duplicateNote }),
         decidedBy: values.by ?? "operator",
         ...(minutes === null
           ? {}

@@ -54,13 +54,33 @@ export const authorizationSchema = z.strictObject({
   authorizedBy: id,
   authorizedAt: z.iso.datetime(),
 });
+/**
+ * #442 (ADR 0038 stage 4): the wbh-dedupe result a decision carries. The
+ * skill compares; Review keeps the value, when it was recorded and the
+ * skill's note. Records before #442 hold the status and reference only.
+ */
+const duplicateRecorded = {
+  /** When `review decide --duplicate` recorded it; absent, no result was recorded. */
+  checkedAt: z.iso.datetime().optional(),
+  /** The skill's note (`DEDUPE_NOTE_FILE`) in Private Evidence. */
+  note: digest.optional(),
+};
 export const duplicateSchema = z.discriminatedUnion("status", [
-  z.strictObject({ status: z.enum(["unavailable", "no-match"]) }),
+  z.strictObject({ status: z.literal("no-match"), ...duplicateRecorded }),
+  z.strictObject({
+    status: z.literal("unavailable"),
+    /** Why the check could not finish; the Finding waits for a re-check. */
+    reason: z.string().min(1).max(256).optional(),
+    ...duplicateRecorded,
+  }),
   z.strictObject({
     status: z.literal("possible-match"),
-    reference: z.string().min(1).max(256),
+    /** The public record(s) matched: CVE id or public record URL. */
+    reference: z.string().min(1).max(2048),
+    ...duplicateRecorded,
   }),
 ]);
+export const DEDUPE_NOTE_FILE = "dedupe-note.md";
 export const reviewDecisionV1Schema = z.strictObject({
   schemaVersion: z.literal(1),
   ref: refSchema,
@@ -93,6 +113,7 @@ export type ScopeAssessment = z.infer<typeof assessmentSchema>;
 export type SubmissionDraft = z.infer<typeof draftSchema>;
 export type ExternalActionAuthorization = z.infer<typeof authorizationSchema>;
 export type ReviewDecisionV1 = z.infer<typeof reviewDecisionV1Schema>;
+export type DuplicateCheck = z.infer<typeof duplicateSchema>;
 
 /** The ledger artifact kind each record is filed under, and its shape. */
 export interface ReviewRecordByKind {

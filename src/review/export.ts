@@ -6,7 +6,9 @@ import type { PrivateArtifactStore } from "../infrastructure/private-artifact-st
 import { readFindingGroups } from "../ledger/finding-groups.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 import {
+  DEDUPE_NOTE_FILE,
   readReviewRecord,
+  type DuplicateCheck,
   type ReviewRecordByKind,
   type ReviewRecordKind,
 } from "./records.js";
@@ -245,6 +247,24 @@ export const reviewExportV1Schema = z.strictObject({
         decidedAt: z.iso.datetime({ offset: true }),
       })
       .nullable(),
+    /**
+     * #442 (ADR 0038 stage 4): the wbh-dedupe result the latest decision
+     * carries, with what backs it. Only `no-match` goes on to stage 5;
+     * `unavailable` waits for a re-check. `checkedAt` is null when no result
+     * was recorded. Null before any decision.
+     */
+    duplicate: z
+      .strictObject({
+        status: z.enum(["possible-match", "no-match", "unavailable"]),
+        /** `possible-match`: the CVE id or public record URL. */
+        reference: z.string().nullable(),
+        /** `unavailable`: why the check could not finish. */
+        reason: z.string().nullable(),
+        checkedAt: z.iso.datetime({ offset: true }).nullable(),
+        /** The skill's note: databases, search terms, time, differences. */
+        note: fileRefSchema.nullable(),
+      })
+      .nullable(),
     humanReproduction: z
       .strictObject({
         result: z.enum(["match", "mismatch", "unavailable"]),
@@ -395,6 +415,25 @@ async function httpSummary(
         httpRow(exchange.method, exchange.address, exchange.status),
       ),
     truncated: record.exchanges.length > MAX_ROWS,
+  };
+}
+
+function duplicateView(
+  check: DuplicateCheck,
+  contentPath: (artifact: string) => string,
+): ReviewExportV1["review"]["duplicate"] {
+  return {
+    status: check.status,
+    reference: check.status === "possible-match" ? check.reference : null,
+    reason: check.status === "unavailable" ? (check.reason ?? null) : null,
+    checkedAt: check.checkedAt ?? null,
+    note:
+      check.note === undefined
+        ? null
+        : {
+            path: join(contentPath(check.note), DEDUPE_NOTE_FILE),
+            digest: check.note,
+          },
   };
 }
 
@@ -787,6 +826,10 @@ export async function exportReviewBundle(options: {
                     : decisionRecord.duplicate.status,
               decidedAt: lastDecision.occurredAt,
             },
+      duplicate:
+        decisionRecord === null
+          ? null
+          : duplicateView(decisionRecord.duplicate, contentPath),
       humanReproduction:
         reproduction?.type !== "human-reproduction-recorded"
           ? null

@@ -34,14 +34,17 @@ export {
 import {
   assessmentSchema,
   authorizationSchema,
+  DEDUPE_NOTE_FILE,
   digest,
   draftSchema,
+  duplicateSchema,
   id,
   readReviewRecord,
   refSchema,
   REVIEW_RECORD_FILE,
   reviewDecisionV1Schema,
   scopeStatus,
+  type DuplicateCheck,
   type ReviewDecisionV1,
   type ReviewRecordByKind,
   type ReviewRecordKind,
@@ -51,9 +54,11 @@ import {
 } from "./records.js";
 
 export {
+  DEDUPE_NOTE_FILE,
   readReviewRecord,
   REVIEW_RECORD_FILE,
   REVIEW_RECORD_MAX_BYTES,
+  type DuplicateCheck,
   type ReviewDecisionV1,
   type ReviewRecordByKind,
   type ReviewRecordKind,
@@ -139,6 +144,10 @@ export type ExternalActionAdmission =
 export type DuplicateLookupResult =
   | { readonly status: "unavailable" | "no-match" }
   | { readonly status: "possible-match"; readonly reference: string };
+/** What `review decide --duplicate` records from wbh-dedupe (#442): an `unavailable` may say why. */
+export type DuplicateResult =
+  | DuplicateLookupResult
+  | { readonly status: "unavailable"; readonly reason: string };
 
 export interface ProgrammeScopeEvaluator<TFacts = unknown> {
   readonly programmeIds: readonly string[];
@@ -377,12 +386,17 @@ export class Review<TFacts = unknown> {
     readonly decision: Decision;
     readonly reasonCode: string;
     readonly openedEvidence: readonly string[];
-    readonly duplicate?: DuplicateLookupResult;
+    /** The wbh-dedupe result (#442); absent, the decision keeps the one in force. */
+    readonly duplicate?: DuplicateResult;
+    /** The skill's note behind that result; Review files it in Private Evidence. */
+    readonly duplicateNote?: string;
     readonly decidedBy: string;
     /** Seconds the human spent, reported by the skill or CLI caller (ADR 0032 Q22). */
     readonly humanElapsedSeconds?: number;
   }): Promise<ReviewDecisionV1> {
     const ref = refSchema.parse(input.ref);
+    if (input.duplicateNote !== undefined && input.duplicate === undefined)
+      throw new Error("A dedupe note needs the result it supports");
     const verification = this.#ledger
       .readAll({ type: "verification-finished" })
       .find(
@@ -409,13 +423,32 @@ export class Review<TFacts = unknown> {
       );
     const trace = this.#traceOf(ref.campaignId, ref.findingId);
     const decidedAt = this.#clock();
+    // A later decision (e.g. the one carrying `--reproduced`) must not erase stage 4.
+    let duplicate: DuplicateCheck =
+      input.duplicate === undefined
+        ? ((await this.duplicateOf(ref)) ?? { status: "unavailable" })
+        : duplicateSchema.parse({
+            ...input.duplicate,
+            checkedAt: decidedAt.toISOString(),
+          });
+    if (input.duplicateNote !== undefined)
+      duplicate = {
+        ...duplicate,
+        note: await this.#store.putFiles({
+          [DEDUPE_NOTE_FILE]: z
+            .string()
+            .min(1)
+            .max(100_000)
+            .parse(input.duplicateNote),
+        }),
+      };
     const record = reviewDecisionV1Schema.parse({
       schemaVersion: 1,
       ref,
       verificationStatus: verification.result.status,
       decision: input.decision,
       reasonCode: input.reasonCode,
-      duplicate: input.duplicate ?? { status: "unavailable" },
+      duplicate,
       openedEvidence: [...input.openedEvidence],
       decidedBy: input.decidedBy,
       decidedAt: decidedAt.toISOString(),
@@ -446,11 +479,33 @@ export class Review<TFacts = unknown> {
       ...(trace?.promptDigest === undefined
         ? {}
         : { promptDigest: trace.promptDigest }),
-      artifacts: [{ kind: "review-decision", digest: artifactDigest }],
+      artifacts: [
+        { kind: "review-decision", digest: artifactDigest },
+        ...(duplicate.note === undefined
+          ? []
+          : [{ kind: "dedupe-note", digest: duplicate.note }]),
+      ],
     });
     if (appended.status === "conflict")
       throw new Error("Review decision ledger conflict");
     return record;
+  }
+
+  /** #442: the stage-4 result in force for a Finding, as its latest decision carries it. */
+  async duplicateOf(input: {
+    readonly campaignId: string;
+    readonly findingId: string;
+  }): Promise<DuplicateCheck | null> {
+    const latest = this.#ledger
+      .readAll({
+        campaignId: id.parse(input.campaignId),
+        findingId: id.parse(input.findingId),
+        type: "review-decided",
+      })
+      .at(-1)?.event;
+    if (latest === undefined) return null;
+    const read = await readReviewRecord(this.#store, latest, "review-decision");
+    return read.status === "read" ? read.record.duplicate : null;
   }
 
   async assessScope(input: {
