@@ -32,8 +32,16 @@ function paths(schema: z.ZodType, prefix = ""): string[] {
   }
 }
 
+const skills = [
+  "wbh-review",
+  "wbh-dedupe",
+  "wbh-report",
+  "wbh-destination",
+  "wbh-screen",
+];
+
 describe("review skills", () => {
-  it.each(["wbh-review", "wbh-dedupe", "wbh-report", "wbh-destination"])(
+  it.each(skills)(
     "%s reads only fields that review-export/v1 has",
     async (skill) => {
       const allowed = new Set(paths(reviewExportV1Schema));

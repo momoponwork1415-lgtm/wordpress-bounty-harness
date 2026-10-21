@@ -565,7 +565,7 @@ async function queueFixture() {
 }
 
 describe("review queue and decisions", () => {
-  it("lists evidence-backed, contradicted and pending incomplete items", async () => {
+  it("lists evidence-backed, contradicted, pending incomplete and unverified items", async () => {
     const { review } = await queueFixture();
     const queue = review.queue({ campaignId: "campaign-1" });
     expect(queue.contradicted).toBe(1);
@@ -592,7 +592,63 @@ describe("review queue and decisions", () => {
         status: "contradicted",
         ref: expect.objectContaining({ findingId: "finding-3" }),
       }),
+      // #436: a Finding with no verification yet is listed, so it can be decided before its Lab.
+      {
+        status: "not-verified",
+        ref: {
+          campaignId: "campaign-1",
+          findingId: "finding-4",
+          snapshotDigest: snapshot,
+        },
+        category: "other",
+        decision: null,
+        group: { id: "finding-4", size: 1, representative: true },
+      },
     ]);
+  });
+
+  it("records a reject before any verification and lists it with its reason (#436)", async () => {
+    const { review, ledger } = await queueFixture();
+    const unverified = {
+      campaignId: "campaign-1",
+      findingId: "finding-4",
+      snapshotDigest: snapshot,
+    };
+    const recorded = await review.decide({
+      ref: unverified,
+      decision: "reject",
+      reasonCode: "out-of-scope",
+      openedEvidence: [],
+      decidedBy: "operator",
+    });
+    expect(recorded).toMatchObject({
+      ref: unverified,
+      verificationStatus: "not-verified",
+      reasonCode: "out-of-scope",
+      elapsedMs: 3_600_000,
+    });
+    expect(recorded.ref).not.toHaveProperty("verificationId");
+    const [event] = ledger.read({ type: "review-decided" });
+    expect(event?.event).not.toHaveProperty("verificationId");
+    const queue = review.queue({ campaignId: "campaign-1" });
+    const item = queue.items.find((it) => it.ref.findingId === "finding-4");
+    expect(item).toMatchObject({ status: "not-verified", decision: "reject" });
+    expect((await review.decisionReasons(queue.items)).get(item!)).toBe(
+      "out-of-scope",
+    );
+    // The count of unverified Findings and the funnel stay as they were.
+    expect(queue.unverified).toBe(1);
+    expect(ledger.funnel("campaign-1").reviewed).toBe(0);
+    // A verified Finding is decided only on its verification.
+    await expect(
+      review.decide({
+        ref: { ...unverified, findingId: "finding-1" },
+        decision: "reject",
+        reasonCode: "out-of-scope",
+        openedEvidence: [],
+        decidedBy: "operator",
+      }),
+    ).rejects.toThrow("not an unverified review item");
   });
 
   it("puts a contradicted Finding in the queue with the judge and its evidence digest", async () => {

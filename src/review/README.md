@@ -26,6 +26,14 @@ Claude Code の skill が読むのは `review export --campaign <id> --finding <
 実行前後差分は `Verification` の `LabStateObserver` が Verifier の実行前後に取り、before / after / diff を Private Evidence に置いて `verification-finished` の `artifacts`（`lab-state-before` / `lab-state-after` / `lab-state-diff`）と `labStateDiff` に digest で残す。取得失敗は `labStateDiff: { status: "missing", reason }` として記録し、検証結果は変えない。差分は Verifier にも判定器にも渡さない。profile が差分ファイルを汎用の `StateDiffSummary`（settings / principals / tables）に要約して export に渡す。
 
 
+## 検証の前の判断（#436、ADR 0038 の段 1）
+
+- `review --campaign <id>` は、検証がまだ無い Finding も `not-verified` の項目として出す。`unverified` の件数は変えない。
+- `review decide` は `not-verified` の項目にも記録できる。判断の記録の `ref` は検証 ID を持たず、`verificationStatus` は `not-verified` になる。`elapsedMs` は Finding の記録の時刻から数える。前からの記録はそのまま読める。`--reproduced` は付けられない。
+- 規則の写しに照らす判断は skill `wbh-screen` が行い、Review は値を判断しない。`提出不可` は `--decision reject --reason out-of-scope` で記録する。
+- 最新の判断が `reject` の Finding は、handoff 列（`verify next`）に並ばない。`--finding` で名指ししたときだけ検証する。
+- `review --campaign <id>` の `decision:` の行は、記録が読めれば理由のコードも出す（例: `decision: reject (out-of-scope)`）。
+
 ## 重複照合の記録（#442、ADR 0038 の段 4）
 
 - 照合は skill `wbh-dedupe` が行い、所有者が `review decide --duplicate no-match|unavailable[:<理由>]|possible-match:<参照> --duplicate-note <path>` で結果を記録する。

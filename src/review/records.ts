@@ -21,6 +21,16 @@ export const refSchema = z.strictObject({
   verificationId: id,
   snapshotDigest: digest,
 });
+/**
+ * #436: a decision may come before any verification (ADR 0038 段 1), so its
+ * ref names no verification then. Records written earlier always name one.
+ */
+export const decisionRefSchema = z.strictObject({
+  campaignId: id,
+  findingId: id,
+  verificationId: id.optional(),
+  snapshotDigest: digest,
+});
 export const scopeStatus = z.enum([
   "in-scope",
   "out-of-scope",
@@ -83,12 +93,13 @@ export const duplicateSchema = z.discriminatedUnion("status", [
 export const DEDUPE_NOTE_FILE = "dedupe-note.md";
 export const reviewDecisionV1Schema = z.strictObject({
   schemaVersion: z.literal(1),
-  ref: refSchema,
+  ref: decisionRefSchema,
   verificationStatus: z.enum([
     "runtime-confirmed",
     "reproduced",
     "contradicted",
     "incomplete",
+    "not-verified",
   ]),
   decision: z.enum(["accept", "reject", "defer"]),
   reasonCode: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
@@ -96,6 +107,7 @@ export const reviewDecisionV1Schema = z.strictObject({
   openedEvidence: z.array(digest).max(100),
   decidedBy: id,
   decidedAt: z.iso.datetime(),
+  /** From the verification, or from the Finding's record when none exists yet. */
   elapsedMs: z.number().int().nonnegative(),
   /** Seconds the human reported spending on this item (ADR 0032 Q22); absent on older records. */
   humanElapsedSeconds: z.number().int().nonnegative().max(604_800).optional(),
@@ -109,6 +121,7 @@ export const reviewDecisionV1Schema = z.strictObject({
 });
 
 export type ReviewRef = z.infer<typeof refSchema>;
+export type ReviewDecisionRef = z.infer<typeof decisionRefSchema>;
 export type ScopeAssessment = z.infer<typeof assessmentSchema>;
 export type SubmissionDraft = z.infer<typeof draftSchema>;
 export type ExternalActionAuthorization = z.infer<typeof authorizationSchema>;
