@@ -99,8 +99,7 @@ async function fixture(options: {
         : {}),
       async run(input) {
         runs.push(input);
-        if (options.setupPreconditions && options.setupCloses !== false)
-          await input.restartObservation();
+        if (options.setupPreconditions) await input.restartObservation();
         return {
           promptDigest: digest,
           receipt: {
@@ -126,6 +125,7 @@ async function fixture(options: {
     },
     lab: {
       markCapture: async () => options.captureMarker ?? "7",
+      finishSetup: async () => options.setupCloses ?? true,
       prepareExecutionCanary: () =>
         issueCanary ? { nonce: "n", php: "synthetic-canary-php" } : null,
       prepareScriptCanary: () =>

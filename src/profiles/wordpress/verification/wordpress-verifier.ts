@@ -78,8 +78,8 @@ export type WordPressVerifierRun = Readonly<{
   canary?: WordPressVerifierCanary;
   referenceRoute?: WordPressVerifierReferenceRoute;
   /**
-   * Ends precondition setup: restarts the Harness-owned HTTP capture and Lab
-   * state baseline from now. A transport whose
+   * Ends precondition setup: revokes the setup administrator, then restarts
+   * the Harness-owned baselines and HTTP capture from now. A transport whose
    * setup precedes the attacker steps calls it once setup is done and stops
    * on false; the Codex transport never does.
    */
@@ -350,6 +350,7 @@ export class WordPressVerifier implements Verifier<
         | "prepareScriptCanary"
         | "canaryLedger"
         | "markCapture"
+        | "finishSetup"
       >;
       readonly clock: () => Date;
     },
@@ -547,9 +548,10 @@ export class WordPressVerifier implements Verifier<
       finding,
       lab: verifierLabView(lab, finding),
       // Precondition setup before this call is neither captured nor judged,
-      // and judges accept only the attacker after it (#430).
+      // and its administrator cannot act after it (#430).
       restartObservation: async () => {
         try {
+          if (!(await this.options.lab.finishSetup(lab))) return false;
           captureMarker = await this.options.lab.markCapture(lab);
           if (captureMarker === null) return false;
           await restartObservation?.();
@@ -772,6 +774,7 @@ export class WordPressVerifier implements Verifier<
         ? {
             [SETUP_BOUNDARY_FILE]: canonicalJson({
               schemaVersion: 1,
+              setupAdministrator: "revoked",
               captureFrom: "setup-done",
             }),
           }
