@@ -740,4 +740,28 @@ describe("runner restart after the host died (ADR 0036, 2026-10-19 addendum 3)",
       superseded: 1,
     });
   });
+
+  it("falls back after a refused interrupted run that already started a child", async () => {
+    const t = await fixture();
+    await t.startOnHostA();
+    await t.ledger.append({
+      schemaVersion: 1,
+      campaignId: "campaign-1",
+      snapshotDigest: digest,
+      occurredAt: T0,
+      identity: "child-before-host-stop",
+      type: "discovery-run-started",
+      runId: "run-1-child",
+      trialId: "run-1",
+      trialOrdinal: 0,
+      runKind: "child",
+      parentRunId: "run-1",
+      labAttached: false,
+      history: { mode: "none" },
+      configuration: { promptVariant: "wp2shell-bounty-v8" },
+    });
+    const runner = restart(t, { segment: "completed", refuse: true });
+    expect((await runner.run()).runCount).toBe(1);
+    expect(runner.executed).toEqual(["run-new"]);
+  });
 });

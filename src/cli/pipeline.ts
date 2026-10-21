@@ -51,6 +51,9 @@ export interface CampaignPipeline<
     readonly resumeInterrupted?: NonNullable<
       DiscoveryOptions["resumeInterrupted"]
     >;
+    readonly resumeProviderLimited?: NonNullable<
+      DiscoveryOptions["resumeProviderLimited"]
+    >;
   }>;
   readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
   readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
@@ -574,8 +577,21 @@ export async function runCampaignPipeline<
           });
         } else if (
           discovered.stoppedBy === "incomplete" &&
-          discovered.runCount > 0
+          (discovered.runCount > 0 || discovered.resumeRefusal !== undefined)
         ) {
+          const diagnosticDigest =
+            discovered.resumeRefusal === undefined
+              ? undefined
+              : await options.store.putFiles({
+                  "target-skip-diagnostic.json": canonicalJson({
+                    kind: "resume-refused",
+                    runId: discovered.resumeRefusal.runId,
+                    reason: discovered.resumeRefusal.reason,
+                    ...(discovered.resumeRefusal.detail === undefined
+                      ? {}
+                      : { detail: discovered.resumeRefusal.detail }),
+                  }),
+                });
           await append({
             ...base,
             identity: `target-skipped-${options.newId()}`,
@@ -583,9 +599,21 @@ export async function runCampaignPipeline<
             type: "target-skipped",
             selectionId,
             stage: "discovery",
-            reason: refusedTrial(snapshot.digest)
-              ? "provider-refused"
-              : "run-failed",
+            reason:
+              discovered.resumeRefusal === undefined &&
+              refusedTrial(snapshot.digest)
+                ? "provider-refused"
+                : "run-failed",
+            ...(diagnosticDigest === undefined
+              ? {}
+              : {
+                  artifacts: [
+                    {
+                      kind: "target-skip-diagnostic" as const,
+                      digest: diagnosticDigest,
+                    },
+                  ],
+                }),
           });
         }
         return;
