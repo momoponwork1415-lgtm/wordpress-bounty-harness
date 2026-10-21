@@ -481,10 +481,13 @@ export function formatQueue(
     const head = `${item.status}  ${item.ref.campaignId}  finding ${item.ref.findingId}  ${item.category}`;
     const decision = `  decision: ${item.decision ?? "none"}`;
     const verification = `  verification ${item.ref.verificationId}  snapshot ${item.ref.snapshotDigest}`;
+    // #424: the overlap group orders the queue; each Finding is still decided on its own.
+    const group = `  group ${item.group.id}  ${item.group.size} finding(s)${item.group.representative ? "  representative" : ""}`;
     if (item.status === "contradicted")
       lines.push(
         head,
         verification,
+        group,
         `  observer: ${item.judgeId}`,
         `  evidence: ${item.evidenceDigest} (${contentPath(item.evidenceDigest)})`,
         `  refutation: ${
@@ -498,6 +501,7 @@ export function formatQueue(
       lines.push(
         head,
         verification,
+        group,
         `  observer: ${item.judgeId}`,
         `  observed: ${
           Object.entries(item.conditions)
@@ -513,6 +517,7 @@ export function formatQueue(
       lines.push(
         head,
         verification,
+        group,
         `  reason: ${item.reason}`,
         `  next: ${item.nextStep}`,
         decision,
