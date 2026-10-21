@@ -719,8 +719,8 @@ function resumeProviderLimitedFor(
         ...(detail === undefined ? {} : { detail }),
       };
     };
-    // Older Codex starts lack a runtime marker; the pinned receipt is checked
-    // by resumeWordPressRun before any sandbox starts.
+    // Only Codex runs reach here (autoResumesProviderLimit); the pinned
+    // receipt is checked by resumeWordPressRun before any sandbox starts.
     const policyRefusal = providerLimitedAutoResumeRefusal(started);
     if (policyRefusal !== undefined) return incomplete(policyRefusal);
     const resumed = await resumeWordPressRun(

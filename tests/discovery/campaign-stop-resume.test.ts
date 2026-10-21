@@ -78,6 +78,7 @@ async function open() {
     readonly profile?: AgentRuntimeProfile;
     readonly campaignId?: string;
     readonly maxRuns?: number;
+    readonly runtime?: "codex-native/v1" | "claude-code/v1";
     readonly resumeProviderLimited?: NonNullable<
       Parameters<typeof runDiscoveryCampaign>[0]["resumeProviderLimited"]
     >;
@@ -202,6 +203,9 @@ async function open() {
           configuration: {
             promptVariant: "short-objective",
             assignmentUnit: "plugin",
+            ...(options.runtime === undefined
+              ? {}
+              : { runtime: options.runtime }),
           },
           run: {
             runId: `${options.prefix}-${index}`,
@@ -343,7 +347,7 @@ describe("discovery campaign stop and resume", () => {
     expect(ledger.read({ type: "discovery-run-started" })).toHaveLength(1);
   });
 
-  it("counts a resumed bootstrap failure as the same incomplete Trial", async () => {
+  it("does not count a resumed chain in which no segment worked as a Trial (SPEC §6)", async () => {
     const { ledger, campaign } = await open();
     await campaign({ prefix: "first", maxRuns: 1, replies: () => "limit" });
     const base = {
@@ -388,21 +392,59 @@ describe("discovery campaign stop and resume", () => {
         unauthorizedRequests: 0,
       },
     });
+    // No segment read source, started a child or forwarded more than one
+    // request: the chain is not a Trial and the ordinal stays free.
+    expect(exploreTrials(ledger, {})).toMatchObject({
+      started: 1,
+      finished: ["failed"],
+      notTrials: 1,
+    });
     expect(
       await campaign({
         prefix: "replacement",
         maxRuns: 1,
-        replies: () => {
-          throw new Error("The incomplete Trial must not start fresh");
-        },
+        replies: () => "empty",
       }),
-    ).toMatchObject({ runCount: 0, stoppedBy: "incomplete" });
+    ).toMatchObject({ runCount: 1, stoppedBy: "max-runs" });
     expect(exploreTrials(ledger, {})).toMatchObject({
-      started: 1,
-      finished: ["failed"],
-      notTrials: 0,
+      started: 2,
+      finished: ["failed", "completed"],
+      notTrials: 1,
     });
-    expect(ledger.read({ type: "discovery-run-started" })).toHaveLength(2);
+  });
+
+  it("leaves a Claude provider-limited run to a new Trial after backoff (ADR 0029, 2026-10-19)", async () => {
+    const { ledger, campaign } = await open();
+    const runtime = "claude-code/v1" as const;
+    expect(
+      (
+        await campaign({
+          prefix: "first",
+          maxRuns: 1,
+          runtime,
+          replies: () => "limit",
+        })
+      ).stoppedBy,
+    ).toBe("provider-limit");
+    const offered: string[] = [];
+    const result = await campaign({
+      prefix: "replacement",
+      maxRuns: 1,
+      runtime,
+      replies: () => "empty",
+      resumeProviderLimited: async (started) => {
+        offered.push(started.runId);
+        throw new Error("A Claude run must not be resumed automatically");
+      },
+    });
+    expect(offered).toEqual([]);
+    expect(result).toMatchObject({ runCount: 1, stoppedBy: "max-runs" });
+    expect(result.resumeRefusal).toBeUndefined();
+    expect(exploreTrials(ledger, {})).toMatchObject({
+      started: 2,
+      finished: ["provider-limited", "completed"],
+      notTrials: 1,
+    });
   });
 
   it("reuses ordinal 0 after a start-only crash and returns its slug to selection", async () => {

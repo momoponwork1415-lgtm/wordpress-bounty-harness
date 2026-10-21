@@ -18,6 +18,7 @@ import type {
   LedgerReadAllQuery,
 } from "../ledger/index.js";
 import {
+  autoResumesProviderLimit,
   countsAsTrialChain,
   latestSegment,
   recordedTrialActivity,
@@ -378,22 +379,21 @@ function providerLimitOf(deps: ContinuousDeps, campaignId: string) {
   return limits.at(-1) === "rate-limit" ? "rate-limit" : "quota";
 }
 
-/** Whether this campaign still has a provider-limited latest segment to continue. */
-function pendingProviderLimited(
-  deps: ContinuousDeps,
+/** Whether this campaign still has a provider-limited latest Codex segment to continue. */
+export function pendingProviderLimited(
+  ledger: Pick<Ledger, "readAll">,
   campaignId: string,
 ): boolean {
   const terminal = new Set(
-    readAll(deps.ledger, { campaignId, type: "target-skipped" }).flatMap(
-      (event) =>
-        event.type === "target-skipped" &&
-        event.stage === "discovery" &&
-        (event.reason === "run-failed" || event.reason === "provider-refused")
-          ? [event.snapshotDigest]
-          : [],
+    readAll(ledger, { campaignId, type: "target-skipped" }).flatMap((event) =>
+      event.type === "target-skipped" &&
+      event.stage === "discovery" &&
+      (event.reason === "run-failed" || event.reason === "provider-refused")
+        ? [event.snapshotDigest]
+        : [],
     ),
   );
-  const starts = readAll(deps.ledger, {
+  const starts = readAll(ledger, {
     campaignId,
     type: "discovery-run-started",
   }).filter(
@@ -404,7 +404,7 @@ function pendingProviderLimited(
       (event.runKind ?? "explore") === "explore",
   );
   const finishes = new Map(
-    readAll(deps.ledger, { campaignId, type: "discovery-run-finished" })
+    readAll(ledger, { campaignId, type: "discovery-run-finished" })
       .filter(
         (
           event,
@@ -417,6 +417,7 @@ function pendingProviderLimited(
   );
   return starts.some((start, index) => {
     if (start.resumesRun !== undefined) return false;
+    if (!autoResumesProviderLimit(start)) return false;
     if (terminal.has(start.snapshotDigest)) return false;
     const superseded = starts
       .slice(index + 1)
@@ -719,7 +720,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     // The process may have died during the wait, or just after the ledger
     // recorded a limit but before it wrote the backoff memo. Resume only after
     // the remaining saved wait or a fresh wait, respectively.
-    if (current && pendingProviderLimited(deps, current.campaignId)) {
+    if (current && pendingProviderLimited(deps.ledger, current.campaignId)) {
       const until =
         memo.state === "backoff" ? Date.parse(memo.detail.until ?? "") : NaN;
       if (Number.isFinite(until)) {
@@ -838,7 +839,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       if (stopRequested()) return stop("operator");
       if (summary.stopped === "incomplete") {
         current.retry = true;
-        if (pendingProviderLimited(deps, current.campaignId))
+        if (pendingProviderLimited(deps.ledger, current.campaignId))
           await backoffProvider(current.campaignId);
         continue;
       }

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  autoResumesProviderLimit,
   providerLimitedAutoResumeRefusal,
   readResumeProgress,
   recordedFailureAfterRuns,
@@ -74,28 +75,29 @@ async function open() {
 }
 
 describe("readResumeProgress", () => {
-  it("offers five automatic Codex resume segments, including a startup failure", () => {
-    const codex = { runtime: "codex-native/v1" as const, promptVariant: "v" };
+  it("offers five automatic resume segments to Codex runs only, including a startup failure", () => {
+    expect(providerLimitedAutoResumeRefusal({})).toBeUndefined();
     expect(
-      providerLimitedAutoResumeRefusal({ configuration: codex }),
+      providerLimitedAutoResumeRefusal({ resumeSegment: 4 }),
     ).toBeUndefined();
+    expect(providerLimitedAutoResumeRefusal({ resumeSegment: 5 })).toBe(
+      "resume-limit",
+    );
+    // Claude keeps ADR 0029's backoff-then-new-Trial path; unmarked starts
+    // predate the runtime share and ran on Codex.
     expect(
-      providerLimitedAutoResumeRefusal({
-        configuration: codex,
-        resumeSegment: 4,
+      autoResumesProviderLimit({
+        configuration: { runtime: "codex-native/v1", promptVariant: "v" },
       }),
-    ).toBeUndefined();
+    ).toBe(true);
     expect(
-      providerLimitedAutoResumeRefusal({
-        configuration: codex,
-        resumeSegment: 5,
-      }),
-    ).toBe("resume-limit");
+      autoResumesProviderLimit({ configuration: { promptVariant: "v" } }),
+    ).toBe(true);
     expect(
-      providerLimitedAutoResumeRefusal({
+      autoResumesProviderLimit({
         configuration: { runtime: "claude-code/v1", promptVariant: "v" },
       }),
-    ).toBe("runtime-not-codex");
+    ).toBe(false);
   });
 
   it("spends ordinals only for explorations that count, and lowest free ones for legacy starts", async () => {

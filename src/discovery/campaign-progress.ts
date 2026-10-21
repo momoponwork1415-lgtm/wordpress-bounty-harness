@@ -8,15 +8,22 @@ import { supersedingRun } from "./resume-trial.js";
 type FinishedEvent = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
 type StartedEvent = Extract<LedgerEventV1, { type: "discovery-run-started" }>;
 
-/** Only Codex may be retried automatically, and five prior resume segments exhaust the Trial. */
+/**
+ * The runner resumes a provider-limited run only on Codex (ADR 0036, addendum
+ * 4). A Claude run keeps ADR 0029's 2026-10-19 path: after the backoff its
+ * target runs again as a new Trial. Starts without a runtime predate the
+ * runtime share and ran on Codex.
+ */
+export function autoResumesProviderLimit(
+  started: Pick<StartedEvent, "configuration">,
+): boolean {
+  return started.configuration.runtime !== "claude-code/v1";
+}
+
+/** Five resume segments exhaust a Trial's automatic resumes; the original run is not one of them. */
 export function providerLimitedAutoResumeRefusal(
-  started: Pick<StartedEvent, "resumeSegment" | "configuration">,
-): "runtime-not-codex" | "resume-limit" | undefined {
-  if (
-    started.configuration.runtime !== undefined &&
-    started.configuration.runtime !== "codex-native/v1"
-  )
-    return "runtime-not-codex";
+  started: Pick<StartedEvent, "resumeSegment">,
+): "resume-limit" | undefined {
   if ((started.resumeSegment ?? 0) >= 5) return "resume-limit";
   return undefined;
 }
@@ -71,7 +78,7 @@ export function interruptedExplorations(
   return interrupted;
 }
 
-/** The latest provider-limited segment per Trial ordinal, before a replacement Trial starts. */
+/** The latest provider-limited Codex segment per Trial ordinal, before a replacement Trial starts. */
 export function providerLimitedExplorations(
   target: CampaignTarget,
 ): ReadonlyMap<number, StartedEvent> {
@@ -80,6 +87,7 @@ export function providerLimitedExplorations(
   const limited = new Map<number, StartedEvent>();
   for (const event of starts)
     if (
+      autoResumesProviderLimit(event) &&
       finishes.get(event.runId)?.outcome === "provider-limited" &&
       latestSegment(starts, event.runId) === event.runId &&
       supersedingRun(starts, event) === undefined

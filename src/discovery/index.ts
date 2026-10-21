@@ -13,6 +13,7 @@ export {
   recordedTrialActivity,
 } from "./counts-as-trial.js";
 export {
+  autoResumesProviderLimit,
   latestSegment,
   providerLimitedAutoResumeRefusal,
 } from "./campaign-progress.js";

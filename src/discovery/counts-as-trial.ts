@@ -74,13 +74,11 @@ export function countsAsTrialChain(
   if (latest.finished?.outcome === "provider-limited") return false;
   if (countsAsTrial(latest.finished, latest.hasRecordedActivity)) return true;
   const seen = new Set([runId]);
-  let hadProviderLimit = false;
   let parent = latest.resumesRun;
   while (parent !== undefined && !seen.has(parent)) {
     seen.add(parent);
     const earlier = segment(parent);
     const observed = earlier.finished;
-    if (observed?.outcome === "provider-limited") hadProviderLimit = true;
     if (
       countsAsTrial(observed, earlier.hasRecordedActivity) ||
       earlier.hasRecordedActivity ||
@@ -92,7 +90,7 @@ export function countsAsTrialChain(
       return true;
     parent = earlier.resumesRun;
   }
-  // A resumed session that then fails is a terminal incomplete Trial even if
-  // neither segment managed to read source. It must not be selected afresh.
-  return latest.finished.outcome === "failed" && hadProviderLimit;
+  // SPEC §6: no segment read source, started a child or forwarded more than
+  // one request, so the chain is not a Trial and its target is selected again.
+  return false;
 }
