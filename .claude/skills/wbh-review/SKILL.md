@@ -21,7 +21,7 @@ description: review queue の Finding 1 件を review export と段 1（wbh-scre
 6. **hop を補わない。** `finding.sourceTrace` に書かれていない辺を自分で埋めて経路を完成させない。足りない辺は欠落として記録する。
 7. **攻撃者位置と到達性。** `finding.attackerPosition` が未認証 / subscriber / customer のどれか、入口に外部から届くかを `http.exchanges` の method / path / status の列で確認する。HTTP は実際の攻撃者 surface（Lab への HTTP 捕捉）のものだけを使う。`http.source` が `agent-authored` なら Verifier の自己申告であり、`harness-captured` と同じ重さでは読まない。
 8. **通常構成か。** `finding.configurationPrecondition` と、取得済みなら `labStateDiff.summary.settings` を見て、optional な設定を default と扱っていないかを確認する。無条件で成立する効果と、server や設定に依存する効果は分けて書く。
-   **段 1 の結果。** 規則の写しに照らす検証前の篩は `wbh-screen` が行う（ADR 0038 の段 1）。この skill では繰り返さない。`privateEvidence.directory` に `wbh-screen` のメモ（`screen-<campaign>-<Finding>.md`）があれば、その結果（`提出不可` / `条件付き` / `可`）と引いた行を写す。無ければ、無いと書く。現時点の技術的な `verification.status` とは別欄にする。
+   **段 1 の結果。** 規則の写しに照らす検証前の篩は `wbh-screen` が行う（ADR 0038 の段 1）。この skill では繰り返さない。`privateEvidence.directory` に `wbh-screen` のメモ（`screen-<campaign>-<Finding>.md`）があれば、段 1 の結果（`提出可` / `提出不可`、確度、提出先の制約）と引いた行を写す。無ければ、無いと書く。現時点の技術的な `verification.status` とは別欄にする。
 9. **何が変わったか。** `labStateDiff.summary`（settings / principals / tables の added / removed / changed）を `finding.sourceTrace` の sink と照合する。`labStateDiff.status` が `captured` でなければ、その事実を書く。永続化や外部観測可能な sink まで追えるか。`verification.status` と `verification.reason`、`verification.judgeId`、`verification.evidenceCapture` を併記する。判定器の結果が `incomplete` でも、それは「確認できなかった」であり「偽」ではない。
    **Verifier の記録と被害者側の観測。** `observations.steps.path` は Verifier が書いた手順の記録で、証拠ではない。`observations.victim` があれば、`observations.victim.role`、`observations.victim.pages` の path と操作の数、`observations.victim.firing`、`observations.victim.record.path`、`observations.victim.screenshot` を観測可能な事実として写す。`firing` は Harness の Lab browser が記録した状態で、`observed` でも判定器の結果の代わりにしない。`observations` が null なら、Verifier の記録が無いと書く。
 10. **反証と欠落。** `refutation.text` にある反証、countercontrol、未解決の gap を写す。1 つの観測だけで結論しない。未解決の前提が残るなら、決定的な問いを 1 つだけに絞って書く。
@@ -32,7 +32,7 @@ description: review queue の Finding 1 件を review export と段 1（wbh-scre
 
 ## 出力
 
-1. **1 画面の要約**（人間向け）。順に: 固定した組、1 文の結果、攻撃者位置と入口、通常構成か、段 1 の結果、変わったもの、判定器と Verifier の結果、被害者側の観測、反証と欠落、最新版との関係、scope。観測可能な事実を書き、verdict を先に書かない。
+1. **1 画面の要約**（人間向け）。順に: 固定した組、1 文の結果、攻撃者位置と入口、通常構成か、段 1 の結果（提出可 / 提出不可、確度、提出先の制約）、変わったもの、判定器と Verifier の結果、被害者側の観測、反証と欠落、最新版との関係、scope。観測可能な事実を書き、verdict を先に書かない。
 2. **判定は 1 つ。** `accept`（提出候補として次へ）、`reject`（category を 1 つ: `intended-behavior`、`same-user`、`public-information`、`cosmetic`、`insufficient-impact`、`duplicate`、`out-of-scope`）、`defer`（判断できない。環境や tool の失敗、未解決の前提）。tool / UI の失敗を reject にしない。
 3. **記録は所有者が打つ。** 提案に添えて次のコマンドを示し、この skill は実行しない: `harness review decide --campaign <id> --finding <id> --decision <accept|reject|defer> --reason <category> [--opened <digest>]... [--duplicate unavailable|no-match|possible-match:<ref>] --by <name> --minutes <n>`。`--by` は所有者の名前、`--minutes` は所有者が読んだ分数。
 4. **非公開 note。** 要約、反証、残る不確実性、次の action を Private Evidence の Finding ディレクトリ（export の `privateEvidence.directory`）に Markdown 1 本で置く。Git には置かない。
