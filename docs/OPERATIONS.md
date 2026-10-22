@@ -167,7 +167,7 @@ harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <
 
 | 順 | 誰が | 何を |
 | --- | --- | --- |
-| 0 | skill → 所有者 | 検証の前に `wbh-screen`（段 1、ADR 0038）。`not-verified` か `incomplete` の Finding を規則の写しに照らし、`提出不可` / `条件付き` / `可` と引いた行を出す。`提出不可` なら所有者が `harness review decide ... --decision reject --reason out-of-scope` を打ち、Finding は handoff 列から外れる。`条件付き` と `可` は何も打たず、`verify next --handoff` に進む |
+| 0 | skill → 所有者 | 検証の前に `wbh-screen` v2（段 1、ADR 0038）。campaign ごとに `not-verified` か `incomplete` の Finding をまとめて規則の写しに照らし、Finding ごとに `提出可` / `提出不可` と確度（高 / 中 / 低）を決める。結果は対象ごとの表にして、Private Evidence の `screen-report-<日付>.md` に書く（1 件だけでもよい）。`提出不可` は報告の末尾にある `harness review decide ... --decision reject --reason out-of-scope` を所有者が打ち（所有者が運用者に記録を任せたときは運用者が打つ）、Finding は handoff 列から外れる。`提出可` は何も打たず、`verify next --handoff` に進む |
 | 1 | 所有者 | `harness review export --campaign <id> --finding <id>` |
 | 2 | skill | `wbh-review`（要約と accept / reject / defer の提案。`verification.status` が `incomplete` なら 3〜8 を飛ばし `defer` の提案で終える） |
 | 3 | skill | `wbh-dedupe`（重複の 3 値と根拠）。所有者が `review decide ... --duplicate <3 値> --duplicate-note <path>` で記録する。`--duplicate` を付けない後の判断も、記録済みの結果を引き継ぐ。9 に進むのは `no-match` だけ |
