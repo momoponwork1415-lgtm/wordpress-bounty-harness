@@ -3,9 +3,9 @@ name: wbh-report
 description: 実行時確認の証拠がある Finding について、Wordfence 向けの英語の暫定報告書、フォーム入力用 JSON、添付の一覧を Private Evidence に作り、review draft で digest を記録する。人間の手動再現と査読はその後に行う。送信はしない。
 ---
 
-# wbh-report v4
+# wbh-report v5
 
-Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Finding から、人間が手動再現する前に**暫定版**を作る。旧経路の `reproduced` は、この Wordfence 主経路には入れない。暫定版とフォーム入力用 JSON は、手動再現済み・提出可能と主張しない。人間が最後に Lab で再現し、報告書と JSON を査読・修正してから、別の版として記録する。Patchstack 向けの報告作成条件と Markdown の形は v3 のままにする。Patchstack も承認前には、人間が査読した最終文案を別 revision として保存し、その後に人間の `accept` を記録する。提出先は段 5（wbh-destination、#438）の非公開メモで決まる。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版の v1〜v3 は `versions/` に残す。
+Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Finding から、人間が手動再現する前に**暫定版**を作る。旧経路の `reproduced` は、この Wordfence 主経路には入れない。暫定版とフォーム入力用 JSON は、手動再現済み・提出可能と主張しない。人間が最後に Lab で再現し、報告書と JSON を査読・修正してから、別の版として記録する。Patchstack 向けの報告作成条件と Markdown の形は v3 のままにする。Patchstack も承認前には、人間が査読した最終文案を別 revision として保存し、その後に人間の `accept` を記録する。提出先は段 5（wbh-destination、#438）の非公開メモで決まる。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版の v1〜v4 は `versions/` に残す。
 
 ## 読む入力
 
@@ -107,7 +107,7 @@ Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Find
 6. **Product References**: WordPress.org のプラグインの頁へのリンクを書く。
 7. **Other Details**: 公開記録との差別化（重複照合のメモにある `no-match` の文）、prior disclosures、release の比較、claim していないことは、ここにだけ書く。Description と PoC には入れない。
 8. **Attachments**: 添付するファイルを 1 行に 1 つ、PoC の step の順に書く。行には、種類（HTTP 記録、画面、録画、PoC script、archive）、Private Evidence の中のパス、sha256 を書く。画面のファイル名は `<step 番号>-<写っているもの>.png` にする。期限のある共有 URL など、第三者のサイトへのリンクで代えない（Patchstack「Upload PoCs and other files as attachments」）。
-   - Wordfence のフォームでファイルを付けられるのは、Video Demonstration の 1 つだけである（250 MiB まで）。録画 1 本をそこに当て、画面は所有者が確かめるために一覧に残す。
+   - Wordfence のフォームでファイルを付けられるのは、任意の Video Demonstration の 1 つだけである（250 MiB まで）。録画が実在するときだけ、人間がそこに 1 本添付する。録画が無ければ欄は空のままでよい。画面は所有者が確かめるために一覧に残す。
    - Patchstack は ZIP 5 つまで、合計 100 MB までである。画面、録画、PoC script、archive は ZIP に入れ、ZIP ごとに中身を並べる。How to reproduce の本文だけで再現できるように書き、添付だけに置いた情報に頼らない。
 9. **Form fields (<programme>)**: 下の「提出フォームの項目」の表に従い、項目ごとに見出しを 1 つ置き、その下に貼る値だけを書く。見出しは写しの項目名そのままにする。
    - 長い項目の値は、対応する節の本文と同じ文にする。
@@ -137,7 +137,7 @@ Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Find
 | References | | "Provide any supporting URLs where applicable." | Product References |
 | Contributing Researchers | | 検索か新規入力 | 人間 |
 | What is your Proof of Concept? | * | 選択（例: "Other, or text instructions"）。本文は Markdown | 選択は `Other, or text instructions`、本文は Proof of Concept |
-| Video Demonstration | | ファイル 1 つ、250 MiB まで | Attachments の録画。付けるのは人間 |
+| Video Demonstration | | 任意。ファイル 1 つ、250 MiB まで | 録画が実在するときだけ人間が添付。無ければ空欄 |
 | Environment | * | PHP、WordPress、MySQL の版と、特別な設定 | Environment and configuration |
 | Certification | * | | 人間 |
 | AI use と、使った AI tool(s) | * | | 人間 |
