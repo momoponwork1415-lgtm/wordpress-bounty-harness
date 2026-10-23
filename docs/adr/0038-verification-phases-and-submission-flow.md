@@ -151,3 +151,15 @@ v3 を戻すときは `versions/v2.2.md` を skill 本文に戻し、OPERATIONS 
 所有者は canary の確認に時間がかかる場合、Harness 所有ブラウザで dialog を観測した事実を先に記録し、人間が後で手動再現する経路を選んだ。追記 4 の「`incomplete` は提出用の文案としない」は維持する。現在の `verification-finished` が `incomplete(observation)` でも、同じ Snapshot と Lab Setup に結び付いた Harness 所有ブラウザの dialog、同一検証内の setup 後の Harness 捕捉攻撃要求との marker 一致、その要求から被害者画面の訪問までの順序、別の被害者 principal を確かめた場合に限り、`wbh-report` は Wordfence 用の**登録しない内部プレビュー**を Git 外 Private Evidence に作れる。これらの一致と順序は因果関係を証明しない。人間が既存コンテンツによる dialog の可能性を調べるまで、攻撃による発火や脆弱性の再現成功と断定しない。ブラウザを開いたこと、クリック、画面内の文字列、Verifier の自己申告は dialog 観測の代用にならない。
 
 内部プレビューには観測した事実と未確認事項を分けて書き、フォーム入力用 JSON は必須値に根拠が揃う場合だけ `human_verification.status: pending` で添える。動画は実在する場合だけ扱う。この経路から `review draft`、`submission-package/v1` manifest、Submission Candidate、外部承認・送信へは進めない。現行の `lab up --for-review` も確認済み再現パッケージを要する。canary を使わず人間の再現だけで正式な提出経路へ進める場合は、手動確認用 Lab とその記録、scope・文案・承認の basis を別途設計する。`runtime-confirmed` の nonce 条件、digest 不一致の `incomplete`、人間の最終査読と外部行動の承認は変更しない。
+
+## 2026-10-24 追記 10: 判定器の役割と提出準備の到達点を固定する
+
+所有者は、canary の回収に検証時間を費やすよりも、Harness が捕捉した発火を事実として残し、人間が手動で成立を確かめる方針を選んだ。提出準備の到達点を、**公開中の最新版の同じ Target Snapshot、通常の公開サイトで使う構成での人間の手動再現 `match`、解決済みの重複照合と Wordfence scope、証拠に基づく英語報告書と Fill-Only JSON、人間の最終査読に渡せる状態**とする。当面は Wordfence を主な提出先とし、Patchstack 向けの追加実装は報告が増えてから扱う。動画は必須としない。人間の手動再現は既存の「提出前のレビュー」に含め、人間による未検証候補の採否ゲートを増やさない。
+
+判定器は引き続き必要である。Harness が所有する HTTP・ブラウザ観測と Snapshot / Lab Setup digest、攻撃者と被害者の主体、手順の順序を整合させ、agent の自己申告を事実と取り違えないために使う。ただし、観測器の dialog、marker の一致、画像だけから脆弱性成立を自動認定しない。`runtime-confirmed` を出す条件は nonce 付き canary の回収のままとし、この強い自動証明を人間の手動再現経路の前提にはしない。通常利用か、被害者への影響が十分か、Wordfence の条件付き除外に当たるかは、観測と公開資料を使って skill と人間が判断する。
+
+有効な手順と同じ最新版 Snapshot で人間の再現が `mismatch` なら、その候補は提出へ進めない。原因の調査や新しい検証の記録はできる。環境、手順、観測、証拠の不足で再現不能なら `incomplete` / `defer` と次の手を残し、否定や棄却にしない。どちらの場合も、軽量観測を `runtime-confirmed` に格上げしない。探索出口で `finding-parked` にする既存の 10 impact 分類はそのまま維持する。
+
+追記 9 の内部プレビューはこの到達点の前段であり、`human_verification.status: pending` の JSON を拡張機能で提出させない。現在の `review reverify`、`lab up --for-review`、scope / draft / Candidate の契約は `incomplete` の手動再現を正式な提出根拠として受け付けない。手動 Lab の再構築、同じ Snapshot の人間の `match` と捕捉証拠の結合、重複・scope・文案・承認が参照する basis は、別 PR で実装し受入試験を通す。それまでは内部プレビューを正式な文案や提出候補と呼ばない。既存の confirmed 経路と funnel 集計はこの決定だけでは変えない。
+
+進捗は `runtime-confirmed` の件数を提出完了の代理指標にせず、上記の再現・重複・scope・報告書・Fill-Only JSON・最終査読の準備が揃った Finding 件数で見る。外部送信は従来どおり、正確な Submission Candidate、文案 digest、送信先に結び付いた所有者の承認を要し、Harness は送信しない。

@@ -4,7 +4,7 @@
 
 ## 1. 目的と指標
 
-- 目的: WordPressプラグインの未知脆弱性をAIで発見し、実行時検証を通ったものだけを人間がWordfence / Patchstackへ提出して報奨を得る。
+- 目的: WordPressプラグインの未知脆弱性をAIで発見し、公開中の最新版の通常利用構成で人間が手動再現し、重複・対象範囲と根拠付き報告書を確認したものを、人間が承認して提出し報奨を得る。当面はWordfenceを主な提出先とし、Patchstack向けの追加自動化は報告が増えてから扱う（ADR 0038）。
 - 収益の式: 月に回せる対象数 × 当たり率 × in-scope率 × 平均報奨 − 月費用（約$700）。
 - 比較指標: 提出先で受理された報奨見込みと実際の報奨を、対象数・探索時間・provider使用量で割って見る。実測前に月間件数を達成条件として固定しない。
 - 設計の優先順位: 大手が公開している設計・結果規則をまず当て、WordPress固有で避けられない部分だけを自作する。
@@ -23,6 +23,8 @@
 ## 3. 流れ
 
 開発対象のslugと版を指定（運用時は機械選定） → Snapshot固定 → WP2Shell目的promptによるRoot＋最大4 subagentの協調Trialを対象ごとに1回（探索用Labは既定で付けない、`discovery.lab: none`） → Finding単位にLabを供給し、既存の検証skill（`verify next --handoff`、ADR 0035）が再現 → 決定論的判定器 → 最新版で再検証 → 重複・scope照合 → 英語レポートJSON案と再現パッケージ → 人間の手動Lab再現と査読 → 外部行動承認 → 人間が提出し転帰を記録。台帳は全段階を追記する。評価は台帳を読むだけで、探索へ答えを渡さない（ADR 0029）。
+
+この流れの最終目標では、nonce付きcanaryを回収した `runtime-confirmed` は提出の必須条件ではない。Harnessの捕捉した発火などの軽量観測はそのまま事実として記録し、成立の最終確認は同じ最新版Snapshotの手動Lab再現で行う。現行の `incomplete` から正式な文案・Submission Candidateへ進む経路は未実装であり、内部プレビューだけを作れる（ADR 0038 の2026-10-24追記9・10）。
 
 ## 4. モジュール境界
 
@@ -127,6 +129,8 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 - 記録: 判断、理由コード、判断までの時間、開いた証拠。覆し率は監視信号。
 - 提出転帰（triaged / resolved / duplicate / informative / N/A / rejected）を台帳へ戻し、選定方針と判定器の改善材料にする。自分の未公開の発見は公開されるまで探索へ戻さない（公開後はADR 0012の履歴として扱う）。
 
+当面の提出準備完了条件は、公開中の最新版の同一Snapshotと通常利用構成で人間の手動再現が `match`、重複照合が解決済み、Wordfenceのscopeが確認済み、証拠に結び付いた英語報告書とFill-Only JSONが人間の最終査読に渡せること。人間の有効な手順で `mismatch` ならその候補は提出へ進めず、環境・手順・観測の不足で再現できない場合は `incomplete` / `defer` として次の手を残す。どちらも観測だけを `runtime-confirmed` や `contradicted` に読み替えない。手動再現の記録と正式な提出basisを結ぶ実装は別途必要である（ADR 0038）。
+
 ## 8a. プログラム対象範囲の方針
 
 技術的な真偽（`runtime-confirmed`）とプログラム対象範囲は分ける。対象範囲は原則 `review` で提出先ごとに評価する。Programme Boundary 外の影響分類は第7節の規則で検証前に park する。管理者による機能設定はそれだけで除外せず、明示除外の事実が既に確認できれば段 1 で分け、未確認なら検証後に誤設定・権限付与・通常の利用形態を評価する。方針は [src/profiles/wordpress/policy/programme-scope.md](../src/profiles/wordpress/policy/programme-scope.md) に観測日付きで置き、提出前に公式ページで再確認する。
@@ -192,6 +196,7 @@ TranslatePressの公開済み脆弱版・修正版で縦断経路を実証した
 - **過去の比較結果**: 旧単独Trialと二段構えの段・継続付きTrialはv8主経路の分母に混ぜない。旧prompt armと索引あり・なしの結果は履歴として読むが、新規探索ではprompt A/B・ablation・assignment・入口索引切替のmodeを起動しない。隔離と判定器を外すablationも行わない。
 - **前向き評価**: 本番Campaignの台帳を、後日公開されたadvisory（自分の提出以外も含む）と照合する。未発見の経路を後から分析できるが、個別の脆弱性の存在を実行時に知ることはできない。
 - **提出転帰**: triaged / resolved / duplicate / informative / N/A / rejected の率と、報奨額。収益に直結する最終の数字。
+- **提出準備の進捗**: 同じ最新版Snapshotでの人間の再現 `match`、重複・scopeの確認、根拠付き英語報告書とFill-Only JSON、人間の最終査読の準備が揃ったFinding件数を数える。`runtime-confirmed` 件数を提出完了の代理指標にしない。既存のfunnelはこの判断のために変更しない。
 - **funnel**: 協調Trialの実行と完了 → 最終JSON到達 → 受理 / 保留 → verifier通過 → confirmed / contradicted / incomplete → reviewed → in-scope → submitted → outcome。campaign別・種別別にTrial wall中央値、usage、失敗理由を読む。旧arm・旧入口索引のexamined率・旧段・継続付きTrialは履歴として別に読めるようにする。非cache入力1M tokenあたりとagent wall 1時間あたりの `runtime-confirmed` と、Findingごとの検証attempt数を同じ表で出す（ADR 0023、0029）。
 
 ### 判定器の負の対照（安い。判定器のテストとして回す）
