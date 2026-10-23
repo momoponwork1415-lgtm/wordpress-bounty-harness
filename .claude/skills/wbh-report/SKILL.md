@@ -1,11 +1,11 @@
 ---
 name: wbh-report
-description: 実行時確認の証拠がある Finding について、Wordfence 向けの英語の暫定報告書、フォーム入力用 JSON、添付の一覧を Private Evidence に作り、review draft で digest を記録する。人間の手動再現と査読はその後に行う。送信はしない。
+description: Wordfence 向けの英語報告書とフォーム入力用 JSON を Private Evidence に作る。nonce 確認済みなら review draft に記録し、ブラウザ dialog の観測なら因果関係と人間確認待ちの内部プレビューにとどめる。送信はしない。
 ---
 
-# wbh-report v6
+# wbh-report v7
 
-Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Finding から、人間が手動再現する前に**暫定版**を作る。旧経路の `reproduced` は、この Wordfence 主経路には入れない。暫定版とフォーム入力用 JSON は、手動再現済み・提出可能と主張しない。人間が最後に Lab で再現し、報告書と JSON を査読・修正してから、別の版として記録する。Patchstack 向けの報告作成条件と Markdown の形は v3 のままにする。Patchstack も承認前には、人間が査読した最終文案を別 revision として保存し、その後に人間の `accept` を記録する。提出先は段 5（wbh-destination、#438）の非公開メモで決まる。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版の v1〜v5 は `versions/` に残す。
+Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Finding から、人間が手動再現する前に**登録する暫定版**を作る。旧経路の `reproduced` は、この Wordfence 主経路には入れない。`incomplete(observation)` に Harness 所有ブラウザの dialog 観測がある場合は、後述の**登録しない内部プレビュー**だけを作れる。攻撃要求との marker 一致と順序は、dialog の原因まで証明しない。どちらも手動再現済み・提出可能と主張しない。人間が最後に Lab で再現し、報告書と JSON を査読・修正してから、別の版として記録する。Patchstack 向けの報告作成条件と Markdown の形は v3 のままにする。Patchstack も承認前には、人間が査読した最終文案を別 revision として保存し、その後に人間の `accept` を記録する。提出先は段 5（wbh-destination、#438）の非公開メモで決まる。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版の v1〜v6 は `versions/` に残す。
 
 ## 読む入力
 
@@ -20,6 +20,7 @@ Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Find
 - 添付の材料（Private Evidence）。どの節に使うかは下の「Lab の記録の使い道」にある。
   - HTTP 記録は `http.path` にある。`http.source` が `harness-captured` のものだけを request の出典にする。`agent-authored` は Verifier の自己申告なので使わない。
   - 被害者側の画面は `observations.victim.screenshot` にある（Lab 観測器が撮った PNG）。
+  - `incomplete(observation)` の内部プレビューでは `observations.victim.browserSignal.record` の Lab browser 記録を読む。`pageAfterDialogScreenshot` は dialog を閉じた後の画面で、dialog 自体の画像ではない。
   - 人間が再現のときに撮った画面と録画は、最終化のときに使う。暫定版に存在しない添付として書かない。
   - PR #455 の Lab の画面と録画が main に入ったら、添付の一覧はそれも取る。
 - 過去の提出（所有者の提出フォルダ。WSL では `/mnt/d/wordfence/submissions`）。参考にするのは、節の並び、PoC の書き方、添付の種類だけである。本文、プラグイン名、CVE、URL、ペイロード、request、画像は、下書きにも会話にも写さない。
@@ -27,7 +28,7 @@ Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Find
 
 ## 書く前の確認
 
-1. Wordfence 向けは、Finding と検証結果の Target Snapshot digest が一致し、Harness の判定器による `verification.status` が `runtime-confirmed` で、実行時の再現パッケージと nonce 付き canary の証拠が参照できることを確かめる。`incomplete`、旧経路の `reproduced`、自己申告だけの観測、digest 不一致からはこの主経路の暫定版を書かない。`review.decision.decision` が `accept`、`review.decision.reasonCode` が `preliminary-pass` で、`review.decision.decidedAt` が現行 `verification.occurredAt` より後であることを確かめる。これは AI の中間記録で、提出前の人間査読ではない。この段階では `review.humanReproduction.result` の `match` と人間の最終 `accept` は要求しない。Patchstack 向けは v3 と同じく、最後の判断が `accept` で、人間の再現が `match` のときだけ書く。
+1. Wordfence 向けの**登録する暫定版**は、Finding と検証結果の Target Snapshot digest が一致し、Harness の判定器による `verification.status` が `runtime-confirmed` で、実行時の再現パッケージと nonce 付き canary の証拠が参照できることを確かめる。`incomplete`、旧経路の `reproduced`、自己申告だけの観測、digest 不一致からはこの主経路の暫定版を書かない。`review.decision.decision` が `accept`、`review.decision.reasonCode` が `preliminary-pass` で、`review.decision.decidedAt` が現行 `verification.occurredAt` より後であることを確かめる。これは AI の中間記録で、提出前の人間査読ではない。この段階では `review.humanReproduction.result` の `match` と人間の最終 `accept` は要求しない。`incomplete(observation)` の内部プレビューは後述の条件だけで分けて扱う。Patchstack 向けは v3 と同じく、最後の判断が `accept` で、人間の再現が `match` のときだけ書く。
 2. 提出先を固定する。提出先メモの結論が `patchstack` か `wordfence` のときだけ書く。メモが無いとき、結論が `none` や `vendor:<名>` のときは、書かずに止める。1 つの Finding を 2 つの提出先に出さない。
 3. 最新版で確かめたかを見る。`target.versions.latestObserved` か `target.versions.latestKnown` が `target.versions.explored` より新しければ、最新版での再確認（`review reverify --config <path> --handoff <dir>`。`--version` を付けない）の結果が `review.latestReverification` にあり、Wordfence 主経路では `runtime-confirmed` であることを確かめる。結果が無いか `incomplete` なら書かない。`review.latestReverification.findingId` が元の Finding ID と違う場合、**元 Finding の文案・draft を止める**。その ID を `review export --campaign <id> --finding <derived Finding ID>` で開き、derived Finding 自身の Target Snapshot、判定器の証拠、最新版、重複、scope、提出先を改めて照合してから、その ID で報告書と `review draft` を作る。元 Finding の HTTP や source trace を最新版の証拠として流用しない。報告書には、確かめた版と、それが確認日の時点で最新版だったことを書く（Patchstack「tested against the latest available version」）。
 4. 重複を確かめる。`review.duplicate.status` が `no-match` で、`review.duplicate.checkedAt` が現行 `verification.occurredAt` より後のときだけ書く。`possible-match` と `unavailable` のときは書かない（Patchstack「Duplicates of earlier reports or already-published CVEs」、ADR 0038 の段 4）。Wordfence の scope は、段 4 で同じ Finding ID に実行した最新の `review scope` 出力の assessment ID に `scope:` を付けた値と `review.scopeAssessments[].assessmentId` を突き合わせ、同じ要素の `status` が `in-scope` であることを確かめる。export の履歴内の古い `in-scope` だけでは進めない。`ambiguous`、期限切れ、未評価は止める。公開範囲とインストール数も、書く前に確かめ直す。
@@ -211,7 +212,7 @@ JSON を出す場合は、フォーム用の文字列と Markdown の対応す�
 | `finding.sourceTrace` | Affected Code References | |
 | `review.duplicate.note` | Other Details の差別化の文 | 付けない |
 
-## 出力と記録
+## 出力と記録（`runtime-confirmed` の登録する暫定版）
 
 1. 報告書 1 本を Markdown で、`privateEvidence.directory` の直下に書く。このディレクトリは Finding ごとに分かれていない（提出先メモと同じ）。Wordfence 向けは `report-<campaign>-<Finding>-r<revision>.md` とし、版ごとに別ファイルにして以前の版を上書きしない。添付の写しは `report-<campaign>-<Finding>-r<revision>/` に置く。Patchstack 向けは v3 の `report-<campaign>-<Finding>.md`、添付は `report-<campaign>-<Finding>/` のままとし、ZIP もそこに作る。束ねた報告書には、書き始めた Finding の ID を使う。Git には書かない。一時的にも repo の中に作らない。
 2. Wordfence 向けは、同じ版の `report-<campaign>-<Finding>-r<revision>.wordfence-fill.json` を書く。必須の `fields[].value` を根拠で満たせないときは JSON を出さず、不足を Private Evidence の査読チェックに記録して止める。JSON ができたら、その相対 path と sha256 を Markdown の `Internal package binding` に入れる。続いて `report-<campaign>-<Finding>-r<revision>.submission-package.json` を書き、`schema_version: "submission-package/v1"`、一意の `id`、`created_at`、`report_group_id`（Wordfence は Finding ID）、`program: "wordfence"`、`report`、`fill_json`、`attachments`、`human_only_remaining` を入れる。`report` と `fill_json` はそれぞれ Private Evidence 内の相対 `path`、`media_type`、`bytes`、`sha256` の object、`attachments` は同じ形の object の配列にする。`human_only_remaining` には手動再現、査読、開示・Certification・AI 利用の Yes/No などの人間専用欄、外部承認、送信を残す。manifest は Markdown の sha256 を持ち、Markdown は JSON の sha256 と manifest の path を持つ。両方の digest が実ファイルと一致することを確かめる。
@@ -229,6 +230,17 @@ JSON を出す場合は、フォーム用の文字列と Markdown の対応す�
 4. `harness review draft --campaign <id> --finding <id> --programme <patchstack|wordfence> --file <path> --prepared-by ai` で Markdown の digest を記録する。Wordfence の暫定 Markdown は JSON の sha256 を含むので、承認対象の draft revision はフォーム入力値にも結び付く。束ねた Patchstack 報告書は、含めた Finding ごとに同じファイルで記録する。
 5. Wordfence の人間の手動再現後は、実際の手順・Environment・画面と report / JSON の値を人間が照合し、別 revision の Markdown、JSON、manifest を作る。人間は JSON と manifest の sha256 を**実ファイルから再計算**し、Markdown の `Internal package binding`、manifest の `report` / `fill_json` / `attachments` と一致することも確認する。`human_verification.status` は人間が確認した結果にだけ更新する。人間は `review decide --reproduced match`、最終 Markdown の `review draft --prepared-by human`、`review decide --decision accept`、正確な文案版と送信先に対する `review authorize` をこの順で行う。Patchstack は v3 の条件に従って手動再現の `match` と報告作成前の `accept` を確かめてから Markdown を作る。その後、承認前に人間が同じ文案を査読して `review draft --prepared-by human` で最終 revision を保存し、さらに人間の `review decide --decision accept` を記録する。Patchstack 用の JSON や追加の自動化は作らない。この skill は AI の文案記録までを行い、後の人間の判断や承認を代行しない。
 6. 録画は、実在するものだけを添付の一覧に入れる。このスキルは録画を起動しない。
+
+## `incomplete(observation)` の内部プレビュー
+
+この経路は、Lab browser の dialog 観測を人間へ渡す作業資料に限る。上の「書く前の確認」にある `runtime-confirmed`、最新の `in-scope` scope assessment、暫定 `accept`、重複 `no-match`、最新版確認を満たしたと**読み替えない**。欠ける結果は査読チェックに書き、提出可能性を結論しない。
+
+1. `review export` の現在の `verification` が `status: incomplete`、`reason: observation` で、`observations.victim.browserSignal` の `kind` が `numeric-dialog`、`status` が `dialog-observed`、`capturedAttackerRequestMarkerMatch` が `true`、`verificationSequence` が `post-setup-request-before-victim-visit`、`victimPrincipal` が `separate` のときだけ進む。画面にある文字列、クリック、Verifier の手順メモ、marker の不一致、順序が確立していない観測は代用しない。`http.source` が `harness-captured` であることも確認する。
+2. `observations.victim.browserSignal.record.path` の JSON を Private Evidence から読み、実ファイルの sha256 が `observations.victim.browserSignal.record.digest` と一致することを確かめる。record でも `status`、`capturedAttackerRequestMarkerMatch`、`verificationSequence`、`victimPrincipal` が 1 と一致し、`requiresHumanPreexistingContentCheck` が `true` であることを確かめる。`dialogEvent` の `type` は `alert`、`message` は record の `marker` と一致すること、`topLevelPageOriginAtEvent` は `http://wordpress`、`topLevelPageUrlAtEvent` と空でない `frameUrlsAtEvent` の全 URL も同じ origin であることを確かめる。record の `victimRole` は宣言した被害者 role と一致させる。`review export` は現行 `verification-finished` の evidence digest からこの record を読む。record の `snapshotDigest` と `labSetupDigest` がそれぞれ export の `snapshotDigest`、現行 `verification.labSetupDigest` と一致しない場合は止める。この対応によって現行 `verification.verificationId` の観測として扱い、過去 attempt の観測を流用しない。`verification.reason` が `digest-mismatch` のときは、signal の表示に関係なく止める。
+3. Wordfence の明示除外が同じ Snapshot の `wbh-screen` v4 で確認済みなら作らない。`review.duplicate`、最新版、scope、提出先の資料はあれば読み、無いものや未解決のものを査読チェックに列挙する。元 Finding に最新版の派生 Finding が記録されていれば、元の ID では作らず、派生 ID の export と観測を読み直す。Lab の観測した版より広い affected version は書かない。
+4. Private Evidence に `report-<campaign>-<Finding>-preview-r<revision>.md` を新しい版として書く。先頭に `Internal observation preview: a matching request preceded a browser dialog in one verification. Causality, preexisting content, nonce confirmation, and human reproduction remain unverified. Do not submit.` と入れる。同じ検証内で setup 後の攻撃要求と、その後の被害者訪問中に dialog を観測した事実だけを書き、要求が dialog を引き起こしたと断定しない。人間が既存コンテンツ由来の発火でないことを確認するまで、脆弱性の再現成功と書かない。`pageAfterDialogScreenshot` は dialog を閉じた後の画面であり、dialog の画像とは説明しない。本文は Harness 捕捉 HTTP、固定 source、ブラウザ記録で裏付けられる事実だけにし、人間が歩いていない PoC、影響、通常構成を断定しない。未確認点と証拠の path・digest を非公開の査読チェックに残す。
+5. Wordfence Fill-Only v3 の 16 項目をすべて根拠付きの値で満たせる場合だけ、同じ版の `report-<campaign>-<Finding>-preview-r<revision>.wordfence-fill.json` を作る。Harness 捕捉の raw HTTP、固定 source と参照箇所、確認版と affected version、攻撃者の認証条件、PoC、impact、フォーム選択肢の値を個別に照合する。setup だけの記録、Verifier の自己申告、一般論、未確認の最新版・影響範囲から値を補わない。`human_verification` は `{ "status": "pending" }` とし、Markdown に JSON の path と sha256 を結び付ける。必須値が欠ける場合は JSON を作らず、不足を査読チェックに残す。AI tool(s) は規定の初期テンプレートを使い、人間専用欄は入力しない。
+6. この版は **`review draft` に登録せず、`submission-package/v1` manifest と Submission Candidate を作らない**。`review authorize`、`review submitted` に進めず、`pending` JSON をフォームへ入力しない。人間の手動再現を記録して正式な提出経路へ進めるには、別の Review API 経路が必要である。このスキルで判定器の結果を `runtime-confirmed` や `reproduced` に変えない。
 
 ## しないこと
 
