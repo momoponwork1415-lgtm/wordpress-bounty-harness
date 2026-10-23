@@ -287,8 +287,6 @@ export async function runCampaignPipeline<
   readonly runtimeCaps?: RuntimeTargetCaps<Target>;
   readonly discoveryLab?: "attached" | "none";
   readonly repeat?: number;
-  /** An explicit operator retry after repairing the Verifier protocol. */
-  readonly retryIncompleteVerifications?: boolean;
   /** Checked before each next target. True drains in-flight targets and stops as `operator`. */
   readonly stop?: () => boolean;
   readonly signal?: AbortSignal;
@@ -413,7 +411,6 @@ export async function runCampaignPipeline<
       const previous = history.at(-1);
       if (previous === undefined) return false;
       if (previous.event.result.status !== "incomplete") return true;
-      if (options.retryIncompleteVerifications === true) return false;
       if (
         previous.event.promptVersion === undefined ||
         previous.event.promptVersion !== pipeline.verification.promptVersion
@@ -803,15 +800,10 @@ export async function runCampaignPipeline<
             record.event.snapshotDigest === snapshot.digest &&
             record.event.findingId === event.findingId,
         );
-        const shouldRetry = (allowManualOverride: boolean): boolean => {
+        const shouldRetry = (): boolean => {
           const previous = history.at(-1);
           if (previous === undefined) return true;
           if (previous.event.result.status !== "incomplete") return false;
-          if (
-            allowManualOverride &&
-            options.retryIncompleteVerifications === true
-          )
-            return true;
           if (
             previous.event.promptVersion === undefined ||
             previous.event.promptVersion !== pipeline.verification.promptVersion
@@ -839,7 +831,7 @@ export async function runCampaignPipeline<
             currentScenarioId: handle?.scenario?.id ?? null,
           });
         };
-        if (!shouldRetry(true)) continue;
+        if (!shouldRetry()) continue;
         do {
           const previous = history.at(-1)?.event;
           const verificationId = options.newId();
@@ -916,11 +908,10 @@ export async function runCampaignPipeline<
             });
             break;
           }
-          // The operator override applies to the first attempt only.
           if (
             result.status !== "incomplete" ||
             result.reason === "precondition" ||
-            !shouldRetry(false)
+            !shouldRetry()
           )
             break;
         } while (true);

@@ -192,8 +192,6 @@ export interface CliProfile {
       readonly target: string | null;
       /** Explicit independent Trials on the same Snapshot. */
       readonly repeat?: number;
-      /** Retry an incomplete independent verification on the same Lab setup. */
-      readonly retryIncompleteVerifications?: boolean;
       /** Checked before each next target; true drains the campaign as `operator`. */
       readonly stop?: () => boolean;
       /** Aborts exploration currently running when continuous mode receives SIGTERM. */
@@ -444,11 +442,19 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
     funnel.unpricedRuns === funnel.runCount
       ? "cost unavailable"
       : `cost $${funnel.knownCostUsd.toFixed(2)} known, ${funnel.unpricedRuns} run(s) unavailable`;
+  const labFailures = `verification Lab failed ${funnel.verificationLabFailed}`;
+  const hasAttachedHistory = Object.values(funnel.byLab.attached).some(
+    (count) => count > 0,
+  );
   const lines = [
     `campaign ${funnel.campaignId}`,
     `agent runs ${funnel.runCount} (discovery attempts ${funnel.discoveryAttempts})  ${cost}  summed agent time ${(funnel.wallTimeMs / 1000).toFixed(1)}s`,
-    `incomplete(depth) ${funnel.incompleteDepth}`,
-    `by Lab: attached runs ${funnel.byLab.attached.runs} findings ${funnel.byLab.attached.findings} confirmed ${funnel.byLab.attached.confirmed}; none runs ${funnel.byLab.none.runs} findings ${funnel.byLab.none.findings} confirmed ${funnel.byLab.none.confirmed}; verification Lab failed ${funnel.verificationLabFailed}`,
+    ...(funnel.incompleteDepth > 0
+      ? [`incomplete(depth) ${funnel.incompleteDepth}`]
+      : []),
+    hasAttachedHistory
+      ? `by Lab: attached runs ${funnel.byLab.attached.runs} findings ${funnel.byLab.attached.findings} confirmed ${funnel.byLab.attached.confirmed}; none runs ${funnel.byLab.none.runs} findings ${funnel.byLab.none.findings} confirmed ${funnel.byLab.none.confirmed}; ${labFailures}`
+      : labFailures,
     stages(funnel),
     `noncache input ${funnel.noncachedInputTokens} token(s) (${funnel.unavailableInputRuns} run(s) unavailable)  confirmed / 1M tokens ${rate(funnel.confirmedPerMillionInputTokens)}  confirmed / agent wall hour ${rate(funnel.confirmedPerAgentWallHour)}`,
     `owner minutes / submission ${rate(funnel.ownerMinutesPerSubmission)}  opened findings / submission ${rate(funnel.openedFindingsPerSubmission)}  manual reproduction agreement ${funnel.manualReproductionAgreement === null ? "unavailable" : `${(funnel.manualReproductionAgreement * 100).toFixed(1)}%`}`,
@@ -982,14 +988,13 @@ const COMMANDS: readonly Command[] = [
     required: ["campaign", "config"],
     maxPositionals: 1,
     usage: [
-      "campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--repeat <n>] [--retry-incomplete]",
+      "campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--repeat <n>]",
     ],
     options: {
       all: BOOL,
       campaign: STR,
       config: STR,
       repeat: STR,
-      "retry-incomplete": BOOL,
       selection: STR,
     },
     validate: (values, rest) => {
@@ -1013,7 +1018,6 @@ const COMMANDS: readonly Command[] = [
           configPath: resolve(required(values.config, "config")),
           target,
           repeat,
-          retryIncompleteVerifications: values["retry-incomplete"] === true,
           ...(values.selection === undefined
             ? {}
             : { selectionPolicyPath: resolve(values.selection) }),

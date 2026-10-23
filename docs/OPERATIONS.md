@@ -116,6 +116,8 @@ v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入�
 
 `campaign.json` の `discovery.lab` は既定（省略時）が `"none"` で、探索用 Lab を供給せず、Finding は台帳に記録して検証を後へ送る（所有者決定 2026-10-18「通常モードは Lab を起動しない探索」）。旧 `"attached"` は 2026-10-23 に退役し、実 host では起動前に退役エラーになる。`none` へ暗黙に切り替えない。過去の attached Trial の台帳と集計は引き続き読める。
 
+旧 `campaign run --retry-incomplete` も退役した。指定すると、状態を開く前に不明なオプションとして拒否する。過去の再試行記録は引き続き読める（ADR 0022）。
+
 ```sh
 harness campaign run <slug> --campaign <id> --config <campaign.json> [--repeat 3]
 harness verify next --config <campaign.json> --handoff <dir>
@@ -214,6 +216,8 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 ```
 
 収益の式は「対象数 × 当たり率 × in-scope率 × 平均報奨 − 月費用」。funnelの各段がこの各項に対応する。
+
+旧方式の `incomplete(depth)` は件数があるときだけ表示する。`by Lab` は attached Lab の履歴集計があるときだけ表示し、現在の表示でも `verification Lab failed` は省かない。旧比較の `by arm` も記録があれば表示する。台帳の読取と集計は変えない。
 
 | 細い段 | 直す場所 |
 | --- | --- |

@@ -19,7 +19,7 @@ amended-by: 0032（自動再試行の範囲）
 
 - 自動再試行は同じ Finding、同じ Snapshot digest、同じ Verifier prompt 版で行い、attempt ごとに新しい Lab を立てる。
 - `verification-finished` event に `attempt` と `retryOf`（前の verificationId）を持つ。無限再試行はしない。
-- `--retry-incomplete` は残し、人間が上限を越えて再試行するときに使う。
+- 当時は `--retry-incomplete` を残し、人間が上限を越えて再試行するときに使った。2026-10-23 の退役は末尾を参照。
 
 ## 理由
 
@@ -41,3 +41,11 @@ amended-by: 0032（自動再試行の範囲）
 - `ledger funnel`（ADR 0023）は Finding ごとの attempt 数を読めるようにする。
 
 **2026-10-19 追記:** 自動再試行の範囲は ADR 0032 が改めた。
+
+## 2026-10-23 追記: 旧 campaign 再試行オプションを退役する
+
+所有者が承認した不要コードの削除として、`campaign run --retry-incomplete` を削除する。旧 Verifier と attached Lab の実ホストでの起動は既に退役している（ADR 0035）。現在の探索 Lab なしの経路では、この指定は検証の再試行に使われない。
+
+CLI の選択肢、指定の受け渡し、旧パイプラインの上限を上書きする分岐を削除する。指定された場合は、不明なオプションとして状態を開く前に拒否する。別の実行経路へ転送しない。
+
+既存の再試行回数の制限、履歴に基づく判定、受け渡しの経路、`attempt` / `retryOf` を含む旧イベントの読取は維持する。シナリオの移管や #352 の受入完了を意味しない。

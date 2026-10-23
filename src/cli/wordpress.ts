@@ -1006,11 +1006,6 @@ async function runWordPressCampaign(
       : { runtimeCaps: wordPressRuntimeCaps(config)! }),
     ...(input.stop === undefined ? {} : { stop: input.stop }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
-    ...(input.retryIncompleteVerifications === undefined
-      ? {}
-      : {
-          retryIncompleteVerifications: input.retryIncompleteVerifications,
-        }),
     ledger: state.ledger,
     store: state.store,
     clock: state.clock,

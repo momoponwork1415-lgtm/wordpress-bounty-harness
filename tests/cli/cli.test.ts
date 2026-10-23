@@ -1448,7 +1448,7 @@ describe("harness CLI vertical slice", () => {
     });
   });
 
-  it("automatically retries a recipe twice with fresh Labs and keeps a manual override", async () => {
+  it("automatically retries a recipe twice with fresh Labs and rejects the retired manual override", async () => {
     const { run, configPath, ledger, labIdsDuringVerification, live } =
       await harness({ verifierRecipeFailures: 3 });
     const args = [
@@ -1510,7 +1510,13 @@ describe("harness CLI vertical slice", () => {
         type: "verification-finished",
       }),
     ).toHaveLength(3);
-    expect((await run(...args, "--retry-incomplete")).code).toBe(0);
+    const recordsBeforeRetiredOverride = ledger().readAll({});
+    const retiredOverride = await run(...args, "--retry-incomplete");
+    expect(retiredOverride.code).toBe(2);
+    expect(retiredOverride.stderr).toContain(
+      "Unknown option '--retry-incomplete'",
+    );
+    expect(ledger().readAll({})).toEqual(recordsBeforeRetiredOverride);
     expect(
       ledger()
         .read({
@@ -1519,10 +1525,7 @@ describe("harness CLI vertical slice", () => {
           type: "verification-finished",
         })
         .at(-1)?.event,
-    ).toMatchObject({
-      attempt: 4,
-      retryOf: first[2]?.verificationId,
-    });
+    ).toEqual(first[2]);
   });
 
   it("bounds verification Lab provision failures to two attempts", async () => {
@@ -3245,14 +3248,20 @@ describe("harness CLI vertical slice", () => {
     expect(review.code).toBe(0);
     expect(review.stdout).toContain(`finding ${first.findingId}`);
     expect(review.stdout).toContain("incomplete");
-    expect((await run(...command, "--retry-incomplete")).code).toBe(0);
+    const recordsBeforeRetiredOverride = ledger().readAll({});
+    const retiredOverride = await run(...command, "--retry-incomplete");
+    expect(retiredOverride.code).toBe(2);
+    expect(retiredOverride.stderr).toContain(
+      "Unknown option '--retry-incomplete'",
+    );
+    expect(ledger().readAll({})).toEqual(recordsBeforeRetiredOverride);
     expect(
       ledger().read({
         campaignId: "campaign-quota-exhausted",
         findingId: first.findingId,
         type: "verification-finished",
       }),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
   });
 
   it("lists parked Findings by one-line property and says when there are none (#185)", async () => {
