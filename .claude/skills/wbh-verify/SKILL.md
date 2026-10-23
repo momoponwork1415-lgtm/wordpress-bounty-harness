@@ -22,7 +22,7 @@ description: scope 内 Finding 1 件を、Harness が `verify next --handoff <di
 
 | ファイル | 内容 |
 | --- | --- |
-| `route.json` | `{"role":"unauthenticated","defaultSettings":true,"steps":[{"kind":"http","method":"POST","path":"/<path>","expected":"<observation>"}],"victim":{"role":"administrator","paths":["/<path>"]}}`。`role` は Finding と一致させ、`steps` は実行した HTTP 手順だけにする。`victim` は必要なときだけ入れる。 |
+| `route.json` | `{"role":"unauthenticated","account":"none","defaultSettings":true,"configurationChanges":[],"steps":[{"kind":"http","method":"POST","path":"/<path>","expected":"<observation>"}],"victim":{"role":"administrator","paths":["/<path>"]}}`。`role`・`account`・`defaultSettings`・`configurationChanges`・`steps` は必ず書く。`role` は Finding の `attackerPosition` と一致させ、`account` は攻撃者 account の username をそのまま（`unauthenticated` なら `none`）にする。`steps` は実行した HTTP 手順だけにする。`victim` は必要なときだけ入れる。 |
 | `http.json` | 実際の通信を `{"exchanges":[{"request":{"path":"/…","method":"…"},"response":{"body":"…"}}]}` として記す。少なくとも 1 件必要。これはエージェントの記録であり証明ではない。 |
 | `session.json` | 別主体の有効な logged-in cookie を得たときだけ `{"cookie":"…"}`。`cookie` には `wordpress_logged_in_` cookie の値だけを入れ、名前と `=` は含めない。無ければ空ファイル。 |
 | `steps.md` | 実際に行った手順と観測。空にしない。書き方は次節の最後にある。 |
@@ -31,6 +31,22 @@ description: scope 内 Finding 1 件を、Harness が `verify next --handoff <di
 
 前提や観測が不足した場合は、その不足を記録する。反証や `contradicted` を自己申告しない。対象固有の手順は Finding とその固定ソースから判断し、このスキル本文に固定しない。
 
+## 判定器が照合すること
+
+判定器は `src/profiles/wordpress/verification/judges.ts` と `src/profiles/wordpress/lab/lab-observation.ts` にある。書く前に読める。下は、そこで照合される条件である。
+
+- **形を試す要求は前提作りの段で送る。** 捕捉は `setup-done` の後に始まるので、その前の要求は照合に混ざらない。
+- **canary を含む要求は 1 本だけにする。** 判定器は `http.json` のやり取りのうち canary を含むものを 1 件ずつ見て、そのすべてが完了した route step と一致することを求める。2 本送って 1 本しか書かなければ、残りが一致せず `incomplete` になる。送る本文は最初の 1 本の前に決める。
+- **応答が完了していること。** 2xx、または `Location` が同じ host で `/wp-login.php` でない 301・302・303・307・308 を完了とみなす。本文が JSON で `success` が偽なら、状態が 200 でも失敗とみなす。
+- **本文は 1 バイトも違わないこと。** 一致は method・path・本文で見る。`body` を省いた step は空の本文と照合される。送った wire body をそのまま書く。
+- **`headers` は書かなければ照合されない。** 書いた名前の値はすべて一致が要るので、必要がなければ書かない。
+- **canary を含む要求が 1 本も無ければ `incomplete`。** `route.json` や `http.json` に canary の token を書くだけでは数えない。
+- **`unauthenticated` の攻撃者位置では、`x-wp-nonce` を付けた要求と、どのセッションか決まらない cookie を送ると棄却される。** `unauthenticated` 以外では、canary を含む要求に攻撃者のセッションが確認できることが要る。
+- **被害者の画面と入力に canary の token を書かない。** `steps` の path か `victim` に token が現れると、Lab 観測器は観測そのものを棄却する（`observer-canary-input`）。
+- **攻撃者 account の role を変えない。** 攻撃者 account が宣言した低い権限だけを持つ状態でなくなると `incomplete` になる。
+
+`route.json` が schema に通らないと route が保存されず、攻撃者位置の誤りとして報告される。`role` が `finding.attackerPosition` と違うときも同じ文になる。書く前に上の表の形と見比べる。
+
 ## 種別ごとの手順
 
 `finding.impact` で手順の形を選ぶ。どの入力面と画面を使うかは Finding と固定ソースから決める。
@@ -38,7 +54,7 @@ description: scope 内 Finding 1 件を、Harness が `verify next --handoff <di
 **`stored-xss`**
 
 1. 攻撃者位置で届く入力面（コメントのような公開面への投稿や送信）に script canary を載せ、保存させる。直接の nonce 付き POST には `canary.javascript` を使う。入力面が長いコードを切り詰めるなら、`canary.loaderJavascript` を実行させる。これは同じ POST を送る短い module を読み込む。module の URL を画像や stylesheet として読み込んでも beacon は記録されない。
-2. 保存した値が描画される画面を、`route.json` の `victim.paths` に 1〜5 件書く。`victim.role` には、その画面を開く被害者を選ぶ。管理者なら `administrator`、ログインしていない訪問者なら `unauthenticated` にする。攻撃者自身の account で開く画面は被害者にならない。
+2. 保存した値が描画される画面を、`route.json` の `victim.paths` に 1〜5 件書く。描画が読み込みだけで起きる画面を選ぶ。Lab browser は route と victim の前に `/`、`/wp-admin/`、`/wp-admin/edit.php` を自分で開くので、一覧画面は確かめやすい。画面側の JavaScript が組む経路（fragment で切り替わる画面）や新しいタブを開く link しか無いときは、`actions` を付けたうえで、その画面を選んだ理由を `steps.md` に書く。遷移できないと観測は `victim-page (victim-navigation)` で終わる。`victim.role` には、その画面を開く被害者を選ぶ。管理者なら `administrator`、ログインしていない訪問者なら `unauthenticated` にする。攻撃者自身の account で開く画面は被害者にならない。
 3. Harness の Lab browser が、攻撃者とは別のセッションでその画面を開き、beacon の着信を観測する。
 
 **`rce`、`php-file-write`**
