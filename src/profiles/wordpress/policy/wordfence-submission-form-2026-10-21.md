@@ -2,6 +2,8 @@
 
 所有者が 2026-10-21 に Wordfence の提出フォームから console の JavaScript で取った項目の写しである。残したのは項目名、必須印（*）、選択肢と説明文だけで、フォームに入っていた値は写していない。報告書 skill（`wbh-report`、#439）が節をこの項目に対応付けるために読む。送信は所有者が自身の拡張機能で行う。
 
+2026-10-23 に所有者が提示したフォーム画面でも、`Video Demonstration` に必須印がないことを再確認した。
+
 ## 項目
 
 ### Software
@@ -26,7 +28,7 @@
 ### Proof of Concept
 
 - What is your Proof of Concept? * — 選択（例: "Other, or text instructions"）。説明: "Provide a working concept, showing how the vulnerability can be exploited. This can be a simple walkthrough or a completely automated script. Markdown syntax is supported, use the View as Markdown control to preview your submission."
-- Video Demonstration — ファイル 1 つ。説明: "Attach a video demonstrating the exploit. The file will be uploaded securely when you submit this report, and will be deleted from our systems once triaged. Maximum file size: 250 MiB."
+- Video Demonstration — 任意（必須印なし）、ファイル 1 つ。説明: "Attach a video demonstrating the exploit. The file will be uploaded securely when you submit this report, and will be deleted from our systems once triaged. Maximum file size: 250 MiB."
 - Environment * — 説明: "Please provide all environment, setting, and configuration details used to replicate this vulnerability (i.e. versions of PHP, WordPress, and MySQL; special plugin settings, etc.)"
 - Certification * — "Please certify that you have tested this Proof of Concept step-by-step, and that it works in the configuration/environment you have specified above?"
 - AI use * — "Did you use AI to generate this report or find this vulnerability? Please note: we do not discourage using AI, however, we would like to know when it is being used." 続いて "What AI tool(s) did you use to generate this report or discover this vulnerability?" *
@@ -40,6 +42,6 @@
 ## 報告書との対応（skill が守ること）
 
 - Impact Statement は 200 字以内の 1 文。
-- Proof of Concept は Markdown で、手順の本文をここに置く。動画は別項目で 250 MiB まで。
+- Proof of Concept は Markdown で、手順の本文をここに置く。動画は任意の別項目で 250 MiB まで。
 - Environment には PHP / WordPress / MySQL の版と、有効にした設定を書く。
 - AI 利用の申告、CVE と他 vendor への報告の有無、同意は人間が答える。skill は下書きにその欄を空で用意する。

@@ -30,7 +30,7 @@ amends: 0031（段 1 で落とした Finding は Lab に回さないが、理由
 | 3 | Harness が立てた Lab で、種別ごとに明確な手順で再現する。被害者側の表示は Lab 観測器が行う。判定器が `incomplete` を返しても、観測（HTTP 記録、画面、動画）は review に届ける | skill `wbh-verify` v7（#437）、判定器は変えない |
 | 4 | 同じ plugin の同じ版で公開済みの脆弱性が無いかを照合する。無ければ提出候補にする | skill `wbh-dedupe`（#442） |
 | 5 | 提出先を Wordfence → Patchstack → vendor の順で決める。報酬が出ない先には提出しない | skill（#438） |
-| 6 | Patchstack / Wordfence の要件に揃えた英語の報告書を書き、HTTP 記録・画面・動画を添える。過去の提出を参照する | skill `wbh-report`（#439） |
+| 6 | Patchstack / Wordfence の要件に揃えた英語の報告書を書き、HTTP 記録・画面を添える。動画は実在する場合だけ添える。過去の提出を参照する | skill `wbh-report`（#439） |
 
 その後、所有者が手動で再現して中身を理解し、自身の拡張機能で提出する。Harness は送信しない（不変条件 7）。
 

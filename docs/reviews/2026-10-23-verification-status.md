@@ -107,4 +107,4 @@ HTTP recorder には 1 body 1 MiB・試行全体 64 MiB の上限があり、必
 
 この事例は [Wordfence に公開済み](https://www.wordfence.com/blog/2026/08/400000-wordpress-sites-affected-by-account-takeover-vulnerability-in-translatepress-wordpress-plugin/)で、3.3.2 で修正されている。所有者の指示に従い、重複照合は**報告書の形式を試す今回の開発演習に限り**省く。過去版に対する確認を現行版の scope や提出適格性として扱わず、正式な `review draft`、外部行動の承認、送信には進めない。
 
-新しい検証の証拠から、英語の暫定 Markdown、`wordfence-fill-only/2` の 15 項目 JSON、`submission-package/v1` manifest、内部チェックリストを Git 外に作った。15 項目の重複・型・必須値と、Markdown・JSON・添付の byte 数と SHA 整合を確認した。`human_verification.status` は `pending` で、画面・録画・人間の手動再現は未取得である。これらを含む暫定 package は形式の試験結果であり、送信可能という結論ではない。
+新しい検証の証拠から、英語の暫定 Markdown、`wordfence-fill-only/2` の 15 項目 JSON、`submission-package/v1` manifest、内部チェックリストを Git 外に作った。15 項目の重複・型・必須値と、Markdown・JSON・添付の byte 数と SHA 整合を確認した。`human_verification.status` は `pending` で、画面と人間の手動再現は未取得である。動画も未取得だが、Wordfence の Video Demonstration は任意である。これらを含む暫定 package は形式の試験結果であり、送信可能という結論ではない。
