@@ -144,4 +144,4 @@ v3 を戻すときは `versions/v2.2.md` を skill 本文に戻し、OPERATIONS 
 
 旧規則で入口 park された Finding は、Private Evidence の原本と Snapshot・identity・Programme Boundary を照合してから追記専用の復帰 event で検証列へ戻す。影響分類そのものが Programme Boundary 外の Finding と、検証中に park された Finding は、この復帰操作では戻さない。本番 runner が旧台帳 schema を使っている間は新しい event を共有台帳へ追記せず、runner 更新後に行う。復帰によって受理可能・脆弱性・提出可能と認定したことにはならない。
 
-根拠は 2026-10-24 に確認した [Wordfence の公式規則](https://www.wordfence.com/bug-bounty-program-terms/) の「Environmental/Configuration-Based Issues」と管理者による明示的な権限付与の条項。通常の機能有効化を一律に除外する文はなく、誤設定かどうかと低権限の攻撃者に届くかを個別に確認する必要がある。判定器の nonce canary・Snapshot digest・`incomplete` の条件は変更しない。
+根拠は 2026-10-24 に確認した [Wordfence の公式規則](https://www.wordfence.com/bug-bounty-program-terms/) の「Environmental/Configuration-Based Issues」と管理者による明示的な権限付与の条項。通常の機能有効化を一律に除外する文はない。Finding に明示除外に当たる事実が既にあれば段 1 で分け、まだ確かでなければ誤設定かどうかと低権限の攻撃者に届くかを Lab で確認する。判定器の nonce canary・Snapshot digest・`incomplete` の条件は変更しない。
