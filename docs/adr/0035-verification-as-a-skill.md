@@ -58,3 +58,9 @@ PR #415 のレビュー指摘 2 への対応。決定の本文は変えず、次
 - 既存の handoff、共有の `WordPressVerifier`、設定管理者の無効化、Snapshot 照合、scope の park、canary と判定器は変更しない。
 - scenario の生成と選択、plugin 別 adapter、共有コードに残る指示の連鎖は今回の削除に含めず、#353 に残す。これらに関する受入条件は維持する。
 - 旧 Verifier の prompt 本文と digest、台帳の `verifier-v8` event、Private Evidence の読取は維持する。過去の記録を新しい検証結果に読み替えない。退役を戻す場合は、この削除 PR を revert する。
+
+## 2026-10-24 追記: 退役した依存と設定の整理（所有者指示）
+
+- 共通セッションは旧 Verifier を必須とせず、検証を明示的に使う時だけ構築する。実 host の例外専用 Verifier は削除し、未提供の旧経路を使おうとした場合は退役エラーにする。handoff へ暗黙に切り替えない。
+- 実行用 campaign 設定の `discovery.lab` は `none` だけを受理する。`attached` は host 初期化より前の設定検査で拒否し、`none` へ変換しない。
+- 旧 `labAttached`、Verifier の版と digest、Private Evidence の読取は変更しない。旧 attached Trial の再開拒否も維持する。#352 の受入とシナリオ削除の残件は別に扱う。

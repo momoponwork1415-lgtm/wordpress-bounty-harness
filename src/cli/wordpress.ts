@@ -534,7 +534,7 @@ async function planWordPressDiscovery(
 ): Promise<WordPressDiscoveryPlan> {
   const { config, repeat, boundaries, state, objective, trustBoundary } =
     context;
-  if ((lab === undefined) !== (config.discovery.lab === "none"))
+  if (lab !== undefined)
     throw new Error(
       "Discovery Lab mode differs from the campaign configuration",
     );
@@ -581,8 +581,7 @@ async function planWordPressDiscovery(
       modelProfileDigest: runtime.runtimeProfile.digest,
       promptDigest: objective.digest,
       stopRules,
-      lab:
-        lab === undefined ? { mode: "none" } : { setupDigest: lab.setupDigest },
+      lab: { mode: "none" },
       history: { mode: "none" },
     },
     runWallTimeMs: wallMinutes * 60_000,
@@ -612,7 +611,7 @@ async function planWordPressDiscovery(
                 : ("mounted" as const),
           },
           labAccess: {
-            database: lab?.database === undefined ? "none" : "read-only",
+            database: "none",
           },
           ...(share === undefined
             ? {}
@@ -626,23 +625,6 @@ async function planWordPressDiscovery(
           prompt: promptFor(selectedObjective),
           minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
           resumePrompt,
-          ...(lab === undefined
-            ? {}
-            : {
-                lab: {
-                  endpoint: lab.endpoint,
-                  networkName: lab.networkName,
-                  internalIp: lab.internalIp,
-                  ...(lab.database === undefined
-                    ? {}
-                    : {
-                        database: {
-                          host: lab.database.host,
-                          ipv4: lab.database.ipv4,
-                        },
-                      }),
-                },
-              }),
           ...wordPressSourceMounts(source),
           expiresAt: new Date(now + wallMinutes * 60_000).toISOString(),
         },
@@ -799,12 +781,6 @@ async function resumeWordPressRun(
       readonly outcome: Awaited<ReturnType<typeof executeTrialResume>>;
     }
 > {
-  if (config.discovery.lab !== "none")
-    return {
-      status: "refused",
-      reason: "lab-attached",
-      detail: "resume supports discovery.lab = none only",
-    };
   const started = state.ledger
     .readAll({ campaignId: input.campaignId, type: "discovery-run-started" })
     .map(({ event }) => event)
@@ -1067,7 +1043,9 @@ async function runWordPressCampaign(
           objective,
           trustBoundary,
         }),
-      verification: session.verification,
+      get verification() {
+        return session.verification;
+      },
       reconstructionFor: session.reconstructionFor,
     },
   });
