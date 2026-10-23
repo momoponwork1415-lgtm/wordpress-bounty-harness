@@ -1,0 +1,19 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+  "entry": [
+    // package.json#bin is compiled here by tsconfig.build.json.
+    "src/cli/main.ts!",
+    // copy-assets.mjs ships this as a separate executable, not a CLI import.
+    "src/lab/recorder/cli.ts!",
+    // Launched by its compiled filename rather than by an import.
+    "src/discovery/provider-credential-proxy-cli.ts!",
+    // Operator-invoked utilities are independent entry points.
+    "scripts/*.mjs!",
+  ],
+  // Utilities import emitted .js files; inspect their sources even before a build.
+  "paths": { "../dist/*": ["./src/*"] },
+  "project": ["src/**/*.ts!", "scripts/*.mjs!", "tests/**/*.ts"],
+  "vitest": { "entry": ["tests/**/*.test.ts"] },
+  // This test explicitly checks for the optional system binary and skips without it.
+  "ignoreBinaries": ["php"],
+}
