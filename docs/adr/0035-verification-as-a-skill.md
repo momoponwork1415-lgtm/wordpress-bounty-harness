@@ -49,3 +49,12 @@ PR #415 のレビュー指摘 2 への対応。決定の本文は変えず、次
 
 - **基線の時点。** `setup-done` を受けた Harness は、`observation-ready` と `attack.json` を置く前に、HTTP 捕捉の起点、Lab 状態の基線、攻撃者 account の role の基線、監視する option の基線をすべて取り直す。判定はこの時点より後の変化だけで行う。SQL と file の canary は基線を取り直さない。`setup-done` の時点で播種した値から変わっていれば、その attempt は `attack.json` を出さずに理由付き `incomplete`（`setup-boundary`）にする。
 - **設定管理者の無効化。** 同じく `attack.json` を置く前に、Harness は Lab の中で、`lab.json` に渡した設定管理者の session と application password をすべて破棄し、password を変える。canary 管理者と canary user にも同じことをする。前提作りの間に得た session は、`setup-done` の後では認証に通らない。これは Lab 側の決まった操作で、skill の「使わない」という文には頼らない。無効化に失敗した attempt は、`attack.json` を出さずに理由付き `incomplete`（`setup-boundary`）にする。skill 本文は変えない。
+
+## 2026-10-23 追記: 旧 Codex Verifier の退役（所有者指示）
+
+所有者は、#352 の指定した受入記録が揃っていないとの報告を受けて「削除までして」と指示した。旧 Codex Verifier の退役を受入完了より先に行う。これは Brizy / TranslatePress 3.2.6 の受入達成や handoff の同等性を示す決定ではない。
+
+- `CodexVerifier` の実装、専用 test、実 host での構築を削除する。実 host では `--handoff` のない `review reverify` と `discovery.lab: attached` を退役エラーで止め、別の実行経路へ暗黙に切り替えない。
+- 既存の handoff、共有の `WordPressVerifier`、設定管理者の無効化、Snapshot 照合、scope の park、canary と判定器は変更しない。
+- scenario の生成と選択、plugin 別 adapter、共有コードに残る指示の連鎖は今回の削除に含めず、#353 に残す。これらに関する受入条件は維持する。
+- 旧 Verifier の prompt 本文と digest、台帳の `verifier-v8` event、Private Evidence の読取は維持する。過去の記録を新しい検証結果に読み替えない。退役を戻す場合は、この削除 PR を revert する。

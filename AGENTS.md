@@ -55,7 +55,7 @@
   - precondition の文からシナリオを選ぶ正規表現
   - プラグイン別の Lab アダプタとシナリオ
 
-  入口・保存先索引、coverage と `incomplete(depth)`、公開履歴カタログの生成は削除済みである（ADR 0034、2026-10-18）。SPEC と ADR 0029 の該当行も改訂した。Verifier 指示の連鎖とシナリオ / アダプタは、#352 のスキル化は済んだが、削除はまだ終わっていない（PR #374、ADR 0035）。#352 の受け入れの後に #353 で消し、そのとき ADR 0026 の該当行を改訂する。受け入れの条件は、Brizy / TranslatePress で受け渡し（handoff）が判定器の結論まで届くことである。それまでは、下の検証 Lab 節にあるシナリオの行を、既存 Trial の記録を読むための記述として扱う。
+  入口・保存先索引、coverage と `incomplete(depth)`、公開履歴カタログの生成は削除済みである（ADR 0034、2026-10-18）。SPEC と ADR 0029 の該当行も改訂した。旧 Codex Verifier の実装と host の構築経路は、所有者の 2026-10-23 の削除指示で退役した（ADR 0035）。実 host は `--handoff` のない `review reverify` と `discovery.lab: attached` を退役エラーで止める。これは #352 の受入完了を意味しない。共有コードに残る旧指示の連鎖、シナリオ選択 / 生成、プラグイン別アダプタの削除は #353 に残る。共有の境界検査と記録は退役対象にしない。残る削除対象は #352 の受け入れの後に消し、そのとき ADR 0026 の該当行を改訂する。受け入れの条件は、Brizy / TranslatePress で受け渡し（handoff）が判定器の結論まで届くことである。それまでは、下の検証 Lab 節にあるシナリオの行を、既存 Trial の記録を読むための記述として扱う。
 
 ## 単一協調 Trial の探索（SPEC.md 第 6 節、ADR 0029）
 
@@ -77,7 +77,7 @@
 ## 検証 Lab の前提（SPEC.md 第 7 節、ADR 0026）
 
 - WordPress プロファイルの通常機能シナリオは、プラグインに依存しない状態を優先して追加する。追加するものは、頻出する `incomplete(precondition)` の理由を集計して決め、版と digest を固定する。
-- 被害者側の操作は、Harness が所有する Lab 観測器が型付きの手順で行う。Verifier にブラウザを渡さない。管理者セッションは、前提を作るためだけに `verify next --handoff` のスキルへ渡す。`setup-done` 以後は攻撃者の位置に限る（ADR 0035）。Codex Verifier には渡さない。
+- 被害者側の操作は、Harness が所有する Lab 観測器が型付きの手順で行う。Verifier にブラウザを渡さない。管理者セッションは、前提を作るためだけに `verify next --handoff` のスキルへ渡す。`setup-done` 以後は攻撃者の位置に限る（ADR 0035）。旧 Codex Verifier の実行経路は退役済みである。
 
 ## `profiles/wordpress/` の規則（ADR 0011）
 

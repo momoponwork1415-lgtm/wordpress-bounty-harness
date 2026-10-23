@@ -30,10 +30,8 @@ import {
   openSnapshot,
   openSnapshotReader,
   SourceAcquisitionError,
-  type Snapshot,
 } from "../snapshot/index.js";
 import { exportReviewBundle } from "../review/index.js";
-import type { Verifier } from "../verification/index.js";
 import {
   createWordPressOrgFetchAdapter,
   openMaterializedSources,
@@ -43,22 +41,14 @@ import {
   openWordPressOrgSnapshotSource,
   openWordPressOrgTargetSource,
 } from "../profiles/wordpress/acquisition/index.js";
-import {
-  mountedWordPressSourcePack,
-  type WordPressMountedSourcePack,
-} from "../profiles/wordpress/acquisition/mounted-source-pack.js";
-import type { WordPressFinding } from "../profiles/wordpress/discovery/finding.js";
-import {
-  openWordPressLab,
-  type WordPressLabHandle,
-} from "../profiles/wordpress/lab/index.js";
+import { mountedWordPressSourcePack } from "../profiles/wordpress/acquisition/mounted-source-pack.js";
+import { openWordPressLab } from "../profiles/wordpress/lab/index.js";
 import { openWordPressReviewLab } from "../profiles/wordpress/lab/review-lab.js";
 import { loadWordpressScopePolicy } from "../profiles/wordpress/scope-policy.js";
 import {
   createWordPressSelection,
   type WordPressSelectionPolicy,
 } from "../profiles/wordpress/selection/index.js";
-import { CodexVerifier } from "../profiles/wordpress/verification/codex-verifier.js";
 import { openWordfenceAdvisoryHistory } from "../profiles/wordpress/wordfence-history/advisory-counts.js";
 import { HandoffVerifier } from "../profiles/wordpress/verification/handoff-verifier.js";
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
@@ -164,6 +154,9 @@ const intakePolicy = {
 
 const digestOf = (image: string): string =>
   image.slice(image.lastIndexOf("@") + 1);
+
+const LEGACY_VERIFIER_RETIRED =
+  "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";
 
 export async function loadWordPressHostConfig(
   path: string,
@@ -343,6 +336,8 @@ export async function createWordPressHostProfile(options: {
     config: WordPressCampaignConfig,
     state: CliState,
   ): Promise<WordPressCampaignBoundaries> => {
+    if (config.discovery.lab === "attached")
+      throw new Error("Attached discovery Labs are retired");
     for (const directory of Object.values(directories))
       await mkdir(directory, { recursive: true, mode: 0o700 });
     const sandbox = new GvisorCodexSandbox({
@@ -499,57 +494,6 @@ export async function createWordPressHostProfile(options: {
       return selection;
     };
 
-    const frozen = new Map<string, Snapshot>();
-    const verifier: Verifier<WordPressFinding, WordPressLabHandle> = {
-      async attempt({
-        campaignId,
-        finding,
-        lab: handle,
-        record,
-        referenceRoute,
-      }) {
-        const snapshot = frozen.get(handle.snapshotDigest);
-        const source =
-          snapshot === undefined
-            ? undefined
-            : await sources.resolve(snapshot).catch(() => undefined);
-        let sourcePack: WordPressMountedSourcePack | undefined;
-        try {
-          sourcePack =
-            source === undefined
-              ? undefined
-              : mountedWordPressSourcePack(source);
-        } catch {
-          sourcePack = undefined;
-        }
-        if (sourcePack === undefined)
-          return {
-            status: "incomplete",
-            reason: "precondition",
-            nextStep:
-              "Freeze the target again so its materialized source matches the Lab snapshot",
-          };
-        return new WordPressVerifier({
-          transport: new CodexVerifier({
-            runtime,
-            profile: runtimeProfile,
-            sourcePack,
-            clock: state.clock,
-          }),
-          store: state.store,
-          ledger: state.ledger,
-          lab,
-          clock: state.clock,
-        }).attempt({
-          campaignId,
-          finding,
-          lab: handle,
-          record,
-          ...(referenceRoute === undefined ? {} : { referenceRoute }),
-        });
-      },
-    };
-
     return {
       selection: {
         inspectBatch: async (policy: WordPressSelectionPolicy) =>
@@ -591,7 +535,6 @@ export async function createWordPressHostProfile(options: {
           throw new SourceAcquisitionError("source-mismatch", {
             reason: "selected-target-source-mismatch",
           });
-        frozen.set(snapshot.digest, snapshot);
         return snapshot;
       },
       async loadSnapshot(digest) {
@@ -602,7 +545,6 @@ export async function createWordPressHostProfile(options: {
             digest,
           });
         await sources.resolve(loaded.snapshot);
-        frozen.set(digest, loaded.snapshot);
         return loaded.snapshot;
       },
       lab,
@@ -623,8 +565,12 @@ export async function createWordPressHostProfile(options: {
       executor: runtime,
       ...(claude === undefined ? {} : { claude }),
       attachments,
-      verifier,
-      // The same Harness half as the Codex path; only the transport hands the Lab to a skill (#352).
+      verifier: {
+        async attempt() {
+          throw new Error(LEGACY_VERIFIER_RETIRED);
+        },
+      },
+      // The Harness owns the records and judges; the transport hands the Lab to a skill (#352).
       handoffVerifier: (handoff) => ({
         attempt: ({
           campaignId,
@@ -692,6 +638,10 @@ export async function createWordPressHostProfile(options: {
   });
   return {
     ...profile,
+    async reverify(state, input) {
+      if (input.handoff === undefined) throw new Error(LEGACY_VERIFIER_RETIRED);
+      return profile.reverify(state, input);
+    },
     /** `lab up --for-review`: a fresh Lab from a sealed package, no discovery. */
     reviewLab: (state, input) =>
       openWordPressReviewLab({
