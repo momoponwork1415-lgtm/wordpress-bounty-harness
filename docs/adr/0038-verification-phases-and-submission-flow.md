@@ -99,3 +99,13 @@ Lab の側で前提を用意する道（サービスの代役を固定して置�
 片方を、Harness が渡す `canary.javascript` を 1 文字も変えずに実行する形でやり直したところ、7 分で `runtime-confirmed` が出た。変えたのは運び手だけである。
 
 v7 は、この受け口の契約と「自分で組まない」を `stored-xss` の手順 1 に書いた。判定器と受け口のコードは変えていない。
+
+## 2026-10-23 追記 4: 暫定文案を先に作り、人間の確認を最後に置く
+
+所有者は、検証に時間がかかる現状を踏まえ、6 段の結果から AI が英語の暫定文案と添付一覧まで用意し、その後に人間が手動で再現して文案を査読する順を選んだ。当面は Wordfence 向けの報告でこの経路を通し、Patchstack 向けの追加自動化は報告が増えてから扱う。段 1 の結果で `reject` を記録する操作、検証後の重複・scope・提出先の照合、暫定 `accept` の記録も AI 操作役が所有者に代わって担う。上の段 1 に残る「所有者が記録する」という当時の運用は、この追記で置き換える。各 skill の判断方法は変えず、旧運用を記す skill 本文の版更新は別 PR で行う。AI の中間判断に人間の作業時間を付けず、提出前の人間査読と区別する。
+
+`wbh-report` は、判定器と Lab が残した事実だけを使い、Wordfence 向け英語 Markdown、フォーム入力用 JSON、添付一覧と manifest を Private Evidence に暫定版として作る。今回の Wordfence 向け経路は `runtime-confirmed` の Finding に限る。Review API は `reproduced` も人間の再現より先に `review draft --prepared-by ai` で保存できるが、この skill の経路には含めない。`incomplete` は観測と次の手を review に残すが、提出用の文案としない。重複が `possible-match` / `unavailable`、scope が `ambiguous` の場合も根拠不足として止める。6 段を起動・引き継ぐ自動 orchestrator はまだ無く、AI 操作役が skill と CLI を順に実行する。
+
+最新版の再検証で新しい Target Snapshot になれば、元 Finding とは別の派生 Finding ID が作られる。AI は `review reverify` の出力 `as <findingId>` を受け取り、その ID で `wbh-review`、重複照合と暫定 `review decide`、scope 評価、提出先選択、報告書作成をやり直す。元 Finding の暫定判断や重複結果は継承しない。元 Finding の文案は、この派生 Finding が記録された時点で承認と提出へ進めない。同じ Snapshot での再試行は元 ID のまま扱う。
+
+人間は暫定版を受け取ってから Lab で再現し、同じ検証 ID と再現パッケージ digest に対する `match` を記録する。続けて本文・手順・版・影響・添付・送信先を査読し、Markdown、JSON、manifest の最終版を作って `review draft --prepared-by human` で文案を保存する。その版の保存と手動再現より後に、同じ人が `review decide --decision accept` を記録する。`review authorize` と提出時の admission は、最新の文案が人間の最終版で、最新の再現が `match`、最後の判断が同じ人の `accept` であること、および Candidate・文案 digest・送信先の一致を要求する。`mismatch` / `unavailable`、新版の保存、後続の否定判断、後続の検証や同じ Finding の最新版再検証では、旧文案の承認を通さない。CLI の `human` 属性と `--by` は本人認証ではないため、AI は手動再現・人間の最終版・最終 `accept`・承認のコマンドを代行しない。送信は引き続き人間が行う。
