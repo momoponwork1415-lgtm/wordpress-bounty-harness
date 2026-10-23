@@ -1043,6 +1043,14 @@ const COMMANDS: readonly Command[] = [
           ? undefined
           : await readFile(resolve(notePath), "utf8");
       const reproduced = values.reproduced;
+      const decidedBy = values.by ?? "operator";
+      const nonHumanDecision = ["ai", "agent", "automation", "system"].includes(
+        decidedBy.trim().toLowerCase(),
+      );
+      if (nonHumanDecision && values.minutes !== undefined)
+        throw new UsageError("--minutes requires a human reviewer");
+      if (nonHumanDecision && reproduced !== undefined)
+        throw new UsageError("--reproduced requires a human reviewer");
       if (reproduced === undefined) {
         if (values["reproduce-minutes"] !== undefined)
           throw new UsageError("--reproduce-minutes needs --reproduced");
@@ -1066,7 +1074,9 @@ const COMMANDS: readonly Command[] = [
           ? null
           : await humanMinutes(values["reproduce-minutes"], io, "reproduce");
       // One caller input: the minutes land on the decision (ADR 0032 Q22) and on the effort record.
-      const minutes = await humanMinutes(values.minutes, io, "read");
+      const minutes = nonHumanDecision
+        ? null
+        : await humanMinutes(values.minutes, io, "read");
       // Only an evidence-backed item gets here with --reproduced (checked above).
       if (
         reproduced !== undefined &&
@@ -1095,7 +1105,7 @@ const COMMANDS: readonly Command[] = [
         openedEvidence: values.opened ?? [],
         ...(duplicate === undefined ? {} : { duplicate }),
         ...(duplicateNote === undefined ? {} : { duplicateNote }),
-        decidedBy: values.by ?? "operator",
+        decidedBy,
         ...(minutes === null
           ? {}
           : { humanElapsedSeconds: Math.round(minutes * 60) }),
@@ -1271,6 +1281,10 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, state, environment, io }) => {
       const review = environment.profile.review(state);
       const item = queued(review, values);
+      if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
+        throw new UsageError(
+          "A confirmed verification is required for a draft",
+        );
       const programmeId = required(values.programme, "programme");
       const view = await review.inspect({
         campaignId: item.ref.campaignId,
@@ -1280,12 +1294,13 @@ const COMMANDS: readonly Command[] = [
         .filter(
           (candidate) =>
             candidate.programmeId === programmeId &&
-            candidate.status === "in-scope",
+            candidate.ref.verificationId === item.ref.verificationId &&
+            candidate.ref.snapshotDigest === item.ref.snapshotDigest,
         )
         .at(-1);
-      if (assessment === undefined)
+      if (assessment?.status !== "in-scope")
         throw new UsageError(`No in-scope assessment for ${programmeId}`);
-      const preparedBy = values["prepared-by"] ?? "human";
+      const preparedBy = values["prepared-by"] ?? "ai";
       if (preparedBy !== "human" && preparedBy !== "ai")
         throw new UsageError("--prepared-by must be human or ai");
       const draft = await review.saveDraft({

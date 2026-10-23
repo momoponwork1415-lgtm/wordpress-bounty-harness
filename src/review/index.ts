@@ -737,29 +737,7 @@ export class Review<TFacts = unknown> {
       throw new Error("An in-scope assessment is required");
     if (!this.#isCurrentVerification(assessment.ref))
       throw new Error("A current verification is required before drafting");
-    const verification = this.#requireConfirmed(assessment.ref);
-    if (verification.result.status === "reproduced") {
-      const packageDigest = verification.result.reproductionPackageDigest;
-      const manual = this.#ledger
-        .readAll({ type: "human-reproduction-recorded" })
-        .map(({ event }) => event)
-        .filter(
-          (event) =>
-            event.type === "human-reproduction-recorded" &&
-            event.campaignId === assessment.ref.campaignId &&
-            event.findingId === assessment.ref.findingId &&
-            event.verificationId === assessment.ref.verificationId &&
-            event.reproductionPackageDigest === packageDigest,
-        )
-        .at(-1);
-      if (
-        manual?.type !== "human-reproduction-recorded" ||
-        manual.result !== "match"
-      )
-        throw new Error(
-          "A matching manual reproduction is required before drafting a reproduced candidate",
-        );
-    }
+    this.#requireConfirmed(assessment.ref);
     const prior = (await this.#allDrafts()).filter(
       (item) => item.assessmentId === assessmentId,
     );
