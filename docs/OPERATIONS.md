@@ -163,36 +163,34 @@ harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <
 
 ## 3. 提出までの操作
 
-1 件のレビューは次の順で進める。skill は提案と文案だけを出し、台帳に書くコマンドは所有者が打つ。
+当面は Wordfence 向けの 1 件の Finding を、AI 操作役が検証から英語の暫定文案まで用意し、最後に所有者が Lab で手動再現して文案と送信先を確認する順で進める（SPEC §3、ADR 0038）。Patchstack 向けの追加自動化は、報告が増えてから扱う。6 段を連続実行する自動 orchestrator はまだ無い。AI 操作役が各 skill と CLI を順に起動し、所有者に代わって中間記録を実行する。既存の段別 skill にある「所有者が打つ」は当時の運用であり、判断方法は変えない。skill 本文の版更新は別 PR で行う。AI の中間判断は `review decide --by ai` で記録し、`--minutes` を付けて人間の作業時間に混ぜない。`incomplete`、重複照合の `possible-match` / `unavailable`、scope の `ambiguous` は提出用の文案に進めず、理由と次の手を review に残す。権限・対象範囲の拡張が必要なら所有者の明示承認を得る。
 
 | 順 | 誰が | 何を |
 | --- | --- | --- |
-| 0 | skill → 所有者 | 検証の前に `wbh-screen` v2.2（段 1、ADR 0038）。campaign ごとに `not-verified` か `incomplete` の Finding をまとめて規則の写しに照らし、Finding ごとに `提出可` / `提出不可` と確度（高 / 中 / 低）を決める。写しが条件付きで外す前提（競合、キャッシュ汚染、時間窓、設定依存）は、ローカル Wordfence 履歴 mirror の 2025 年以降の先例の数で決め（0 件なら提出不可、1〜2 件なら確度 低）、同じ slug の直近の公開で回避 / 重複の候補になるものは Lab の前に修正差分を見る。前提が「古い版から更新した跡」か「外部サービスへの認証付きの接続」でしか作れない Finding は「Lab 不可」と注記し、次の一手を所有者の判断にする（提出可否は変えない）。結果は対象ごとの表にして、Private Evidence の `screen-report-<日付>.md` に書く（1 件だけでもよい）。`提出不可` は報告の末尾にある `harness review decide ... --decision reject --reason out-of-scope` を所有者が打ち（所有者が運用者に記録を任せたときは運用者が打つ）、Finding は handoff 列から外れる。`提出可` は何も打たず、`verify next --handoff` に進む |
-| 1 | 所有者 | `harness review export --campaign <id> --finding <id>` |
-| 2 | skill | `wbh-review`（要約と accept / reject / defer の提案。`verification.status` が `incomplete` なら 3〜8 を飛ばし `defer` の提案で終える） |
-| 3 | skill | `wbh-dedupe`（重複の 3 値と根拠）。所有者が `review decide ... --duplicate <3 値> --duplicate-note <path>` で記録する。`--duplicate` を付けない後の判断も、記録済みの結果を引き継ぐ。9 に進むのは `no-match` だけ |
-| 4 | 所有者 | WordPress.org の plugin 頁で最新版を確認（export に `target.versions.latestObserved` があればそれを使う） |
-| 5 | 所有者 | `harness review reverify --campaign <id> --finding <id> --config <path> --handoff <dir>`（確認した最新版を自動選択。版を明示して固定版と比較するときは `--version <版>`） |
-| 6 | 所有者 | `harness review scope --campaign <id> --finding <id>`（`wordfence in-scope` のものだけ先へ） |
-| 7 | 所有者 | `harness lab up --for-review --campaign <id> --finding <id>` で手で再現する |
-| 8 | 所有者 | `harness review decide ... --reproduced match --reproduce-minutes <n>`（skill が示したコマンドを確かめ、手での再現の結果を足して打つ。再現の記録は判断の前に台帳へ入る） |
-| 9 | skill | `wbh-report`（英語の下書きに、提出先のフォームの項目ごとの値と添付の一覧を付けて Private Evidence に書き、`review draft` で digest を記録） |
-| 10 | 所有者 | `harness review authorize --to <wordfence か patchstack>` → 下書きの項目ごとの値を拡張機能で貼って送信 → `harness review submitted` → `harness review outcome` |
+| 0 | AI 操作役 | 検証前に `wbh-screen` v2.2（段 1、ADR 0038）で campaign の `not-verified` / `incomplete` を規則の写しに照らし、Finding ごとに `提出可` / `提出不可` と確度を決める。条件付きの前提はローカル Wordfence 履歴 mirror の先例を数え、同じ slug の直近の公開があれば修正差分も見る。「更新の跡」や「外部サービス」のため Lab で前提を作れないものは注記する。対象ごとの表を Private Evidence の `screen-report-<日付>.md` に置く。`提出不可` は `review decide ... --decision reject --reason out-of-scope --by ai` で理由を記録し、`提出可` は `verify next --handoff` に進める |
+| 1 | AI 操作役 | `verify next --handoff` と `wbh-verify`（段 2・3）で検証し、`review export --campaign <id> --finding <id>` から判定器の結果と証拠を読む。`wbh-review` は要約と判断案を作る。`incomplete` は観測と次の手を残し、暫定文案には進めない |
+| 2 | AI 操作役 | `wbh-dedupe`（段 4）の 3 値と根拠を記録する。`no-match` で `wbh-review` も受理を提案したら `review decide ... --decision accept --reason preliminary-pass --by ai --duplicate no-match --duplicate-note <path>` とし、これは提出前の人間査読ではない。`possible-match` / `unavailable` は `--decision defer --reason duplicate-unresolved --by ai` と照合値・メモを記録して止める |
+| 3 | AI 操作役 | WordPress.org の頁と export で最新版を確認し、`review reverify --campaign <id> --finding <id> --config <path> --handoff <dir>` で最新版の Snapshot と Lab で再検証する。出力の `as <findingId>` を以後の Finding ID として控える。新しい Snapshot では派生 Finding ID が作られ、元 Finding の暫定 `accept` や重複結果は継承されない。最新版で成立した証拠が無ければ先へ進めない |
+| 4 | AI 操作役 | 段 3 の `as <findingId>` に対して `review export`、`wbh-review`、`wbh-dedupe` を再実行する。受理案と `no-match` が揃ったら `review decide --decision accept --reason preliminary-pass --by ai --duplicate no-match --duplicate-note <path>` を新 ID に記録する。ほかの結果は理由を記録して止める。続けて同じ ID で `review scope` と `wbh-destination`（段 5）を行う。Wordfence が `in-scope` で報酬対象の場合だけ、今回の文案へ進む |
+| 5 | AI 操作役 | 段 3 の `as <findingId>` に判定器の `runtime-confirmed` がある場合だけ、同じ ID の `wbh-report`（段 6）で Wordfence 向け英語 Markdown の**暫定文案**、`wordfence-fill-only/2` JSON、添付一覧と package manifest を Private Evidence に作る。Markdown に JSON の digest を記し、同じ ID で `review draft ... --programme wordfence --prepared-by ai` を実行して文案版を記録する。未確認箇所は人間の確認事項として別に示す。これだけでは提出を承認できない |
+| 6 | 所有者 | 段 3 の `as <findingId>` を使って `lab up --for-review --campaign <id> --finding <id>` で再現パッケージの手順を自分の手で試す。結果を同じ ID の `review decide ... --decision defer --reason pending-final-review --reproduced match|mismatch|unavailable --by <name> --reproduce-minutes <n>` で記録する。`mismatch` / `unavailable` ならここで止まり、原因の調査か再検証へ戻す |
+| 7 | 所有者 | 同じ ID の暫定文案の実値、版、影響、手順、添付、フォーム欄と送信先を査読し、JSON と manifest も最終版に作り直す。確認した提出用 Markdown を同じ ID の `review draft ... --programme wordfence --prepared-by human` で**新しい最終版**として保存する。本文を変えなくても人間が確認した最終版を保存する。その後、同じ人が同じ ID の `review decide ... --decision accept --reason reviewed-report --by <name>` で最終査読を記録する |
+| 8 | 所有者 | 最終版の正確な Submission Candidate・文案 digest・送信先に `review authorize --candidate <id> --draft <digest> --to wordfence --by <same name>` で承認を記録する。自身の拡張機能でフォームへ入力して送信し、`review submitted` と `review outcome` で転帰を記録する。Harness は送信しない |
 
-1 件あたりの見積りは reverify 30 分、手での再現 40 分、skill 30 分。1 回の batch は 3 件までにし、超える分は `defer` にする。RAM 16 GiB 未満の host では batch の前に `continuous stop`、後に `continuous resume` と `continuous run` を打つ（人手に数えない保守）。runner を起動し直す前に `lab down` で review 用の Lab を消す。
+従来の 1 件あたりの見積りは reverify 30 分、手での再現 40 分、skill 30 分である。新しい順序では段ごとの所要時間を測り直す。1 回の batch は 3 件までにし、超える分は `defer` にする。RAM 16 GiB 未満の host では batch の前に `continuous stop`、後に `continuous resume` と `continuous run` を打つ（人手に数えない保守）。runner を起動し直す前に `lab down` で review 用の Lab を消す。
 
 ```
 harness review parked --campaign <id>                       # parked Finding と reason を一覧する
 harness review held --campaign <id>                         # 保留（candidate-held）の Finding 候補と schema の issue を一覧する
 harness review export --campaign <id> --finding <id>         # 1画面のレビュー材料をJSON 1本（schema review-export/v1）で出す。台帳には書かない。skillはこれだけを読む
-harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate no-match|unavailable[:<reason>]|possible-match:<ref> [--duplicate-note <path>]] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--minutes <n>]
+harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--by <name>] [--opened <digest>]... [--duplicate no-match|unavailable[:<reason>]|possible-match:<ref> [--duplicate-note <path>]] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--minutes <n>]
 harness review dedupe --campaign <id> --finding <id>          # ローカルWordfence履歴mirrorと照合
 harness review scope --campaign <id> --finding <id>           # Wordfence / Patchstack ごとに in-scope / out-of-scope / ambiguous
 harness review reverify --campaign <id> --finding <id> --config <path>   # 最新版を新しいLabで検証し直す
 harness review reverify --campaign <id> --finding <id> --config <path> --handoff <dir> [--port 8080] [--db-port 3307] # 新しい版のLabをskillへ渡し、判定器で再検証
 harness review reverify --campaign <id> --finding <id> --config <new-scenario.json> # incompleteを元のSnapshotで再試行
 harness review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]
-harness review authorize --candidate <id> --draft <digest> --to <destination>
+harness review authorize --candidate <id> --draft <digest> --to <destination> --by <name>
 harness review submitted --candidate <id> --draft <digest> --to <destination>
 harness review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]
 ```
@@ -203,7 +201,8 @@ harness review outcome --candidate <id> --outcome triaged|resolved|duplicate|inf
 - `decide --minutes` は人間がその項目に使った時間を `human-effort-recorded` に分で、`review-decided` に `humanElapsedSeconds` として残す。決定は検証 ID、探索 run ID、prompt digest に結び付いて記録され、提出から run と prompt まで辿れる。検証の前の Finding（`review` に `not-verified` で並ぶもの）にも記録でき、その記録は検証 ID を持たない（#436）。落とした判断を取り消すときは、別の判断（`defer` など）を記録する。最新の判断が `reject` でなくなれば、Finding は handoff 列に戻る。
 - `scope` は判定器の証拠と選定記録から事実を読む。最新版での確認が要るプログラムは、`reverify` が `runtime-confirmed` を返した後でだけ満たされる。
 - 確認済みrouteのないFindingは、前回が`incomplete(precondition)`でLab記録があり、`--version`なしで選定されたSnapshotが元のFindingと同じ場合だけ、前回と異なるscenario IDのLabで独立再検証できる。Snapshotが異なる場合と`--version`付きの修正版比較はLab起動前に拒否する。元のverification eventは残り、再試行は新しいverificationIdとsetup digestを記録する。
-- `authorize` は「この文案のこの版を、この送信先へ出す」ことの記録で、送信はしない。送信は人間がWordfence / Patchstackの画面で行い、`submitted` で記録する。
+- `draft --prepared-by ai` は暫定文案の版を保存する。Review API は `reproduced` も早期保存できるが、今回の Wordfence 向け `wbh-report` は `runtime-confirmed` だけを扱う。`authorize` は、同じ検証と再現パッケージに対する人間の手動再現が最新の記録で `match`、かつ最新の文案が `--prepared-by human` で保存され、その後に同じ人の最後の `review decide --decision accept` がある場合にだけ、正確な Candidate・文案 digest・送信先の承認を記録する。後続の検証や同じ Finding の最新版再検証があれば、旧文案の承認・提出を止める。`admitExternalAction` も提出時にこれらの条件を確認する。Harness は送信しない。今回の Wordfence への送信は人間が画面で行い、`submitted` で記録する。
+- `--prepared-by human` と `--by <name>` は CLI が記録する属性で、本人認証ではない。AI 操作役は手動再現の `--reproduced`、最終版の `--prepared-by human`、最終 `accept` と `authorize` を代行しない。
 - 提出後の転帰と報奨額を `outcome` で台帳に戻す。選定方針と判定器の改善材料になる。探索へは戻らない。
 - Reflected XSSはWordfence向けの候補にならない。authz / IDORは、乗っ取り・権限昇格・サイト全体への影響に届くときだけ in-scope。
 
