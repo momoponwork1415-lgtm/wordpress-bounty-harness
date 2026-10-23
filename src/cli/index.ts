@@ -1092,14 +1092,11 @@ const COMMANDS: readonly Command[] = [
     options: { campaign: STR },
     handler: async ({ values, state, print }) => {
       // Parked Findings remain inspectable by reason without joining the review queue.
-      const parked = state.ledger.read({
+      const parked = state.ledger.activeParked({
         campaignId: required(values.campaign, "campaign"),
-        type: "finding-parked",
-        limit: 1000,
       });
       if (parked.length === 0) print(["no parked findings"]);
-      for (const { event } of parked) {
-        if (event.type !== "finding-parked") continue;
+      for (const event of parked) {
         const reference = event.artifacts.find(
           (artifact) => artifact.kind === "finding",
         );

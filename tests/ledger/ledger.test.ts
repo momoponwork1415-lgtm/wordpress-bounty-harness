@@ -434,6 +434,106 @@ describe("Ledger public interface", () => {
     expect(ledger.read({ type: "finding-parked" })).toHaveLength(1);
   });
 
+  it("restores only a matching precondition park after the Finding is recorded", async () => {
+    const { ledger, artifactStore } = await fixture();
+    const snapshot = `sha256:${"a".repeat(64)}`;
+    const findingDigest = await evidence(artifactStore);
+    const base = (identity: string) => ({
+      schemaVersion: 1 as const,
+      identity,
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-24T00:00:00Z",
+      artifacts: [{ kind: "finding", digest: findingDigest }],
+    });
+    await ledger.append({
+      ...base("normalized"),
+      type: "candidate-normalized",
+      runId: "run-1",
+      candidateKind: "finding",
+      candidateIndex: 0,
+      changes: [],
+    });
+    await ledger.append({
+      ...base("parked"),
+      type: "finding-parked",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "stored-xss",
+      reason: "admin-configuration-precondition",
+      preconditionClass: "admin-configuration",
+    });
+    await ledger.append({
+      ...base("recorded"),
+      type: "finding-recorded",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "stored-xss",
+      preconditionClass: "unknown",
+    });
+    expect(ledger.activeParked({ campaignId: "campaign-1" })).toHaveLength(1);
+    expect(ledger.funnel("campaign-1")).toMatchObject({ parked: 1, raw: 0 });
+    await ledger.append({
+      ...base("wrong-recorded-identity"),
+      type: "finding-park-restored",
+      findingId: "finding-1",
+      parkedIdentity: "parked",
+      recordedIdentity: "different",
+      reason: "admission-correction",
+    });
+    expect(ledger.activeParked({ campaignId: "campaign-1" })).toHaveLength(1);
+    await ledger.append({
+      ...base("restored"),
+      type: "finding-park-restored",
+      findingId: "finding-1",
+      parkedIdentity: "parked",
+      recordedIdentity: "recorded",
+      reason: "admission-correction",
+    });
+    expect(ledger.activeParked({ campaignId: "campaign-1" })).toHaveLength(0);
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      reached: 1,
+      accepted: 1,
+      parked: 0,
+      raw: 1,
+    });
+    expect(ledger.read({ type: "finding-parked" })).toHaveLength(1);
+  });
+
+  it("never restores a Programme Boundary park even with a matching marker", async () => {
+    const { ledger, artifactStore } = await fixture();
+    const findingDigest = await evidence(artifactStore);
+    const base = (identity: string) => ({
+      ...common(identity),
+      artifacts: [{ kind: "finding" as const, digest: findingDigest }],
+    });
+    await ledger.append({
+      ...base("scope-parked"),
+      type: "finding-parked",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "other",
+      reason: "outside-programme-boundary",
+    });
+    await ledger.append({
+      ...base("scope-recorded"),
+      type: "finding-recorded",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "other",
+    });
+    await ledger.append({
+      ...base("forged-restoration"),
+      type: "finding-park-restored",
+      findingId: "finding-1",
+      parkedIdentity: "scope-parked",
+      recordedIdentity: "scope-recorded",
+      reason: "admission-correction",
+    });
+    expect(ledger.activeParked({ campaignId: "campaign-1" })).toHaveLength(1);
+    expect(ledger.funnel("campaign-1")).toMatchObject({ parked: 1, raw: 0 });
+  });
+
   it("counts accepted legacy candidates even when another index was rejected first", async () => {
     const { ledger } = await fixture();
     await ledger.append({

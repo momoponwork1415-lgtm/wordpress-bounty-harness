@@ -60,9 +60,7 @@ const refOf = ({ campaignId, findingId }: FindingRef) =>
 function groupedFindings(ledger: Ledger, campaignId?: string) {
   const scope = campaignId === undefined ? {} : { campaignId };
   const parked = new Set(
-    ledger
-      .readAll({ ...scope, type: "finding-parked" })
-      .map(({ event }) => refOf(event as FindingRef)),
+    ledger.activeParked(scope).map((event) => refOf(event)),
   );
   return ledger
     .readAll({ ...scope, type: "finding-recorded" })

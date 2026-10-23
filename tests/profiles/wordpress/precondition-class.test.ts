@@ -7,7 +7,7 @@ describe("Harness-owned WordPress precondition classification", () => {
     expect(
       classifyWordPressPrecondition({
         configurationPrecondition:
-          "An administrator publishes a block with the editor's Password protected visibility setting.",
+          "An administrator sets the block's Password protected visibility setting to password-protected.",
       }).preconditionClass,
     ).toBe("admin-configuration");
     expect(
@@ -38,6 +38,84 @@ describe("Harness-owned WordPress precondition classification", () => {
         configurationPrecondition: "A public slider is published.",
       }).preconditionClass,
     ).toBe("common-usage");
+  });
+
+  it("does not treat a product name or a negated visibility requirement as an enabled setting", () => {
+    expect(
+      classifyWordPressPrecondition({
+        configurationPrecondition:
+          "An administrator opens Password-Protected Showcase > Dashboard. Public content does not require password protection.",
+      }).preconditionClass,
+    ).toBe("unknown");
+    expect(
+      classifyWordPressPrecondition({
+        configurationPrecondition: "No password-protected post is required.",
+      }).preconditionClass,
+    ).toBe("unknown");
+    expect(
+      classifyWordPressPrecondition({
+        configurationPrecondition: "The post is not password-protected.",
+      }).preconditionClass,
+    ).toBe("unknown");
+  });
+
+  it("does not park negated or unnecessary password protection", () => {
+    for (const configurationPrecondition of [
+      "A non-password-protected post is published.",
+      "A password-protected post is not required.",
+      "Do not create a password-protected post.",
+      "No password-protected page is needed.",
+    ])
+      expect(
+        classifyWordPressPrecondition({ configurationPrecondition })
+          .preconditionClass,
+      ).not.toBe("admin-configuration");
+  });
+
+  it("does not park an absent placeholder or inactive visibility setting", () => {
+    for (const configurationPrecondition of [
+      "No placeholder value is needed for the public form.",
+      "The password-protected visibility setting remains off.",
+      "A block with no password-protected visibility setting is published.",
+      "パスワード保護は不要。",
+      "プレースホルダー値は不要。",
+      "No non-default setting is required.",
+      "The option is not explicitly enabled.",
+      "No setting is enabled to expose the form.",
+    ])
+      expect(
+        classifyWordPressPrecondition({ configurationPrecondition })
+          .preconditionClass,
+      ).not.toBe("admin-configuration");
+  });
+
+  it("still parks explicitly password-protected content", () => {
+    for (const configurationPrecondition of [
+      "An administrator publishes a password-protected post.",
+      "A password-protected page is published.",
+      "The post is password-protected.",
+      "The page must be password-protected.",
+      "A password-protected post must be published.",
+    ])
+      expect(
+        classifyWordPressPrecondition({ configurationPrecondition })
+          .preconditionClass,
+      ).toBe("admin-configuration");
+  });
+
+  it("still identifies an administrator's explicit checkbox choice", () => {
+    expect(
+      classifyWordPressPrecondition({
+        configurationPrecondition:
+          "An admin has ticked the Legacy Mode setting. A public page remains visible.",
+      }).preconditionClass,
+    ).toBe("admin-configuration");
+    expect(
+      classifyWordPressPrecondition({
+        configurationPrecondition:
+          "The placeholder value is set to {visitor_name}.",
+      }).preconditionClass,
+    ).toBe("admin-configuration");
   });
 
   it("selects an existing generic scenario for ordinary content", () => {
