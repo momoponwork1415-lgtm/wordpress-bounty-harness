@@ -346,6 +346,120 @@ describe("review public interface", () => {
     });
   });
 
+  it("keeps inspection history and evidence order within one Finding, including candidate-linked authorizations", async () => {
+    const { review, ledger, artifactStore } = await fixture();
+    const [assessment] = await review.assessScope({ ref });
+    if (assessment === undefined) throw new Error("missing assessment");
+    const firstDraft = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "First draft",
+      preparedBy: "ai",
+    });
+    const secondDraft = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "Second draft",
+      preparedBy: "ai",
+    });
+    const scopeDigests = ledger
+      .readAll({ type: "scope-assessed" })
+      .flatMap(({ event }) => event.artifacts.map(({ digest }) => digest));
+    const draftDigests = ledger
+      .readAll({ type: "draft-saved" })
+      .flatMap(({ event }) => event.artifacts.map(({ digest }) => digest));
+    const older = await artifactStore.putFiles({ "note.txt": "older" });
+    const newer = await artifactStore.putFiles({ "note.txt": "newer" });
+    const authorized = await artifactStore.putFiles({ "note.txt": "receipt" });
+    const unrelated = await artifactStore.putFiles({ "note.txt": "other" });
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: ref.campaignId,
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-08T02:00:00Z",
+    };
+    const verification = {
+      ...base,
+      type: "verification-finished" as const,
+      findingId: ref.findingId,
+      labSetupDigest: labSetup,
+      result: {
+        status: "incomplete" as const,
+        reason: "evidence" as const,
+        nextStep: "Review the recorded evidence",
+      },
+    };
+    await ledger.append({
+      ...verification,
+      identity: "older-inspection-verification",
+      verificationId: "older-inspection-verification",
+      artifacts: [
+        { kind: "record", digest: older },
+        { kind: "copy", digest: older },
+      ],
+    });
+    // Stored authorization receipts intentionally have no Finding ID.
+    const authorization = {
+      ...base,
+      type: "external-action-authorized" as const,
+      candidateId: firstDraft.candidateId,
+      revisionDigest: firstDraft.digest,
+      destination: "wordfence",
+      artifacts: [{ kind: "review-authorization", digest: authorized }],
+    };
+    await ledger.append({
+      ...authorization,
+      identity: "inspection-authorization",
+    });
+    await ledger.append({
+      ...verification,
+      identity: "latest-inspection-verification",
+      verificationId: "latest-inspection-verification",
+      artifacts: [{ kind: "record", digest: newer }],
+    });
+    for (const [campaignId, findingId] of [
+      [ref.campaignId, "other-finding"],
+      ["other-campaign", ref.findingId],
+    ] as const) {
+      await ledger.append({
+        ...verification,
+        campaignId,
+        findingId,
+        identity: `unrelated:${campaignId}:${findingId}`,
+        verificationId: `unrelated:${campaignId}:${findingId}`,
+        artifacts: [{ kind: "record", digest: unrelated }],
+      });
+    }
+    await ledger.append({
+      ...authorization,
+      identity: "authorization-other-campaign",
+      campaignId: "other-campaign",
+      artifacts: [{ kind: "review-authorization", digest: unrelated }],
+    });
+    await ledger.append({
+      ...authorization,
+      identity: "authorization-other-candidate",
+      candidateId: unrelated,
+      artifacts: [{ kind: "review-authorization", digest: unrelated }],
+    });
+
+    const view = await review.inspect({
+      campaignId: ref.campaignId,
+      findingId: ref.findingId,
+    });
+    expect(view).toMatchObject({
+      verificationStatus: "incomplete",
+      reproductionPackageDigest: null,
+      drafts: [firstDraft, secondDraft],
+    });
+    expect(view.privateEvidenceDigests).toEqual([
+      older,
+      older,
+      newer,
+      ...scopeDigests,
+      ...draftDigests,
+      authorized,
+    ]);
+  });
+
   it("evaluates each configured programme once and retains a confirmed finding when scope fails", async () => {
     const { review, ledger } = await fixture();
     const assessments = await review.assessScope({ ref });
