@@ -4450,6 +4450,108 @@ describe("harness CLI vertical slice", () => {
     });
   });
 
+  it.each([
+    {
+      name: "below the primary installation floor",
+      minimumActiveInstallations: 10_000,
+      maximumActiveInstallations: 20_000,
+      cascade: [{ minimumActiveInstallations: 1_000 }],
+    },
+    {
+      name: "above the primary installation ceiling",
+      minimumActiveInstallations: 0,
+      maximumActiveInstallations: 1_000,
+      cascade: [
+        {
+          minimumActiveInstallations: 1_000,
+          maximumActiveInstallations: null,
+        },
+      ],
+    },
+  ])(
+    "re-verifies an existing Finding from an automatic cascade $name",
+    async ({
+      minimumActiveInstallations,
+      maximumActiveInstallations,
+      cascade,
+    }) => {
+      const { seedHistory, run, configPath, root, ledger, frozenSelections } =
+        await harness();
+      const campaign = ["--campaign", "campaign-1"];
+      expect(
+        (
+          await run(
+            "campaign",
+            "run",
+            "--all",
+            ...campaign,
+            "--config",
+            configPath,
+          )
+        ).code,
+      ).toBe(0);
+      await seedHistory("campaign-1");
+      const finding = ledger()
+        .read({ campaignId: "campaign-1", type: "finding-recorded" })
+        .map(({ event }) => event)
+        .find(
+          (event) =>
+            event.type === "finding-recorded" &&
+            event.category === "account-takeover",
+        );
+      expect(finding?.type).toBe("finding-recorded");
+      if (finding?.type !== "finding-recorded") return;
+
+      const policyPath = join(root, "selection.json");
+      const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      delete policy.candidateSlugs;
+      delete policy.pinnedVersions;
+      await writeFile(
+        policyPath,
+        JSON.stringify({
+          ...policy,
+          promptVariant: "wp2shell-bounty-v8",
+          revisitPolicy: { kind: "never" },
+          wordpressVersion: "6.8",
+          maximumTargets: 3,
+          candidateSource: {
+            kind: "wordpress-org",
+            popularPages: 1,
+            tags: [],
+            pagesPerTag: 1,
+            perPage: 20,
+            maxCandidates: 20,
+            maxAgeDays: 1,
+          },
+          minimumActiveInstallations,
+          maximumActiveInstallations,
+          cascade,
+        }),
+      );
+      const reverified = await run(
+        "review",
+        "reverify",
+        ...campaign,
+        "--finding",
+        finding.findingId,
+        "--config",
+        configPath,
+        "--version",
+        "3.3",
+      );
+      expect(reverified.stderr).toBe("");
+      expect(reverified.code).toBe(0);
+      expect(frozenSelections.at(-1)).toMatchObject({
+        slug: "synthetic-plugin",
+        version: "3.3",
+        dependencyVersionPolicy: "pinned-only",
+      });
+    },
+  );
+
   it("retries an incomplete Finding on its original Snapshot with a fresh scenario and verification event", async () => {
     const {
       seedHistory,

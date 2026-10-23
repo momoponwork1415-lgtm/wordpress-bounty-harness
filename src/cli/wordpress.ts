@@ -1473,11 +1473,13 @@ export function createWordPressCliProfile(
                 ? (({
                     candidateSource: _candidateSource,
                     pluginDependencySlugs: _pluginDependencySlugs,
+                    cascade: _cascade,
                     ...rest
                   }) => rest)(unranked)
                 : unranked;
             const {
               targetSourcePins: _targetSourcePins,
+              maximumActiveInstallations: _maximumActiveInstallations,
               ...policyWithoutCapturedSources
             } = reverifyPolicy as WordPressSelectionPolicy & {
               targetSourcePins?: Readonly<Record<string, unknown>>;
@@ -1544,6 +1546,9 @@ export function createWordPressCliProfile(
             // Ledger-aware select would exclude it; rank the pinned policy.
             const selected = await boundaries.selection.rank({
               ...policyWithoutCapturedSources,
+              // This Finding was already selected. Re-verification needs its
+              // current source, even if it has moved out of the selection band.
+              minimumActiveInstallations: 0,
               candidateSlugs: [slug],
               pluginDependencyPins: { [slug]: pluginDependencyPins },
               pinnedVersions: version === undefined ? {} : { [slug]: version },
