@@ -38,7 +38,7 @@ Claude Code の skill が読むのは `review export --campaign <id> --finding <
 
 - `review --campaign <id>` は、検証がまだ無い Finding も `not-verified` の項目として出す。`unverified` の件数は変えない。
 - `review decide` は `not-verified` の項目にも記録できる。判断の記録の `ref` は検証 ID を持たず、`verificationStatus` は `not-verified` になる。`elapsedMs` は Finding の記録の時刻から数える。前からの記録はそのまま読める。`--reproduced` は付けられない。
-- 規則の写しに照らす判断は skill `wbh-screen` が行い、Review は値を判断しない。`提出不可` は `--decision reject --reason out-of-scope` で記録する。
+- 規則の写しに照らす検証前の Wordfence 候補選別は skill `wbh-screen` v3 が行い、Review は値を判断しない。`採用` / `非採用` は検証投資の判断であり、技術的な真偽や programme 全体の scope ではない。`非採用` から `--decision reject` を自動記録しない。旧 v2.x の `提出不可` に基づく既存の review decision は履歴として残す。
 - 最新の判断が `reject` の Finding は、handoff 列（`verify next`）に並ばない。`--finding` で名指ししたときだけ検証する。
 - `review --campaign <id>` の `decision:` の行は、記録が読めれば理由のコードも出す（例: `decision: reject (out-of-scope)`）。
 
