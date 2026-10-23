@@ -310,9 +310,10 @@ export class Review<TFacts = unknown> {
       string,
       Extract<LedgerEventV1, { type: "finding-parked" }>
     >();
-    for (const { event } of this.#ledger.readAll({ type: "finding-parked" }))
-      if (event.type === "finding-parked" && inCampaign(event))
-        parkedEvents.set(key(event), event);
+    for (const event of this.#ledger.activeParked(
+      campaignId === undefined ? {} : { campaignId },
+    ))
+      if (inCampaign(event)) parkedEvents.set(key(event), event);
     const parked = new Set(parkedEvents.keys());
     const latestPreconditionClass = new Map<string, string>();
     for (const { event } of this.#ledger.readAll({

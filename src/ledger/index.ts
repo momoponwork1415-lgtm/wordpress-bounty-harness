@@ -365,6 +365,14 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     ]),
     preconditionClass: id.optional(),
   }),
+  /** Correct an admission-time precondition park without deleting its audit event. */
+  event({
+    type: z.literal("finding-park-restored"),
+    findingId: id,
+    parkedIdentity: id,
+    recordedIdentity: id,
+    reason: z.literal("admission-correction"),
+  }),
   event({
     type: z.literal("finding-precondition-classified"),
     findingId: id,
@@ -568,6 +576,69 @@ export type LedgerRecord = {
   readonly sequence: number;
   readonly event: LedgerEventV1;
 };
+
+type ParkedFinding = Extract<LedgerEventV1, { type: "finding-parked" }>;
+
+const findingKey = (event: { campaignId: string; findingId: string }) =>
+  `${event.campaignId}\0${event.findingId}`;
+
+/** Historical parks remain in the ledger; a matching correction activates the recorded Finding. */
+function activeParkedFromEvents(
+  events: readonly LedgerEventV1[],
+): ParkedFinding[] {
+  const parked = new Map<string, ParkedFinding>();
+  const recorded = new Map<
+    string,
+    Extract<LedgerEventV1, { type: "finding-recorded" }>
+  >();
+  const recordedFindingKeys = new Set<string>();
+  const parkedBeforeRecording = new Map<string, boolean>();
+  for (const event of events) {
+    if (event.type === "finding-recorded") {
+      recorded.set(event.identity, event);
+      recordedFindingKeys.add(findingKey(event));
+    }
+    if (event.type === "finding-parked") {
+      parked.set(findingKey(event), event);
+      parkedBeforeRecording.set(
+        findingKey(event),
+        !recordedFindingKeys.has(findingKey(event)),
+      );
+    }
+    if (event.type !== "finding-park-restored") continue;
+    const earlier = parked.get(findingKey(event));
+    const admitted = recorded.get(event.recordedIdentity);
+    if (
+      earlier?.identity === event.parkedIdentity &&
+      earlier.reason !== "outside-programme-boundary" &&
+      parkedBeforeRecording.get(findingKey(event)) === true &&
+      admitted?.campaignId === event.campaignId &&
+      admitted.findingId === event.findingId &&
+      admitted.snapshotDigest === event.snapshotDigest &&
+      admitted.runId === earlier.runId &&
+      admitted.category === earlier.category &&
+      admitted.artifacts.some((artifact) =>
+        earlier.artifacts.some(
+          (prior) =>
+            prior.kind === "finding" &&
+            artifact.kind === "finding" &&
+            prior.digest === artifact.digest,
+        ),
+      ) &&
+      event.artifacts.some((artifact) =>
+        earlier.artifacts.some(
+          (prior) =>
+            prior.kind === "finding" &&
+            artifact.kind === "finding" &&
+            prior.digest === artifact.digest,
+        ),
+      ) &&
+      earlier.snapshotDigest === event.snapshotDigest
+    )
+      parked.delete(findingKey(event));
+  }
+  return [...parked.values()];
+}
 export type FunnelCounts = {
   readonly reached: number;
   readonly accepted: number;
@@ -1082,6 +1153,15 @@ export class Ledger {
     }
   }
 
+  /** The currently parked Findings, after append-only admission corrections. */
+  activeParked(
+    query: { readonly campaignId?: string } = {},
+  ): readonly ParkedFinding[] {
+    return activeParkedFromEvents(
+      this.readAll(query).map(({ event }) => event),
+    );
+  }
+
   usage(query: { readonly campaignId?: string } = {}): readonly UsageRow[] {
     const campaign =
       query.campaignId === undefined ? undefined : id.parse(query.campaignId);
@@ -1495,10 +1575,6 @@ export class Ledger {
           if (!findings.has(current.findingId))
             findings.set(current.findingId, current);
           break;
-        case "finding-parked":
-          if (!parkedFindings.has(current.findingId))
-            parkedFindings.set(current.findingId, current);
-          break;
         case "lead-recorded":
           if (!normalizationSeen.has(`${current.runId}\0lead`))
             legacyReached.push({
@@ -1543,6 +1619,9 @@ export class Ledger {
           break;
       }
     }
+
+    for (const parked of activeParkedFromEvents(events))
+      parkedFindings.set(parked.findingId, parked);
 
     const inScopeByProgramme: Record<string, number> = Object.create(
       null,

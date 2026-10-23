@@ -424,6 +424,27 @@ it("records a Finding whose precondition is over the schema limit and keeps the 
   ).toBe(1100);
 });
 
+it("admits a Finding when password protection is absent and only a product name mentions it", async () => {
+  const { events, report } = await recordDirectly([
+    {
+      ...finding,
+      impact: "stored-xss",
+      configurationPrecondition:
+        "An administrator opens Password-Protected Showcase > Dashboard. Public content does not require password protection.",
+    },
+  ]);
+  expect(report.candidates.map((candidate) => candidate.outcome)).toEqual([
+    "recorded",
+  ]);
+  expect(
+    events.find((event) => event.type === "finding-recorded"),
+  ).toMatchObject({
+    category: "stored-xss",
+    preconditionClass: "unknown",
+  });
+  expect(events.some((event) => event.type === "finding-parked")).toBe(false);
+});
+
 it("records a Finding whose attacker position and impact are free text with one label", async () => {
   const { events, changes } = await recordDirectly([
     {
