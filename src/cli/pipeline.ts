@@ -396,16 +396,11 @@ export async function runCampaignPipeline<
     if (snapshotDigest === undefined || !concludedSnapshots.has(snapshotDigest))
       return false;
     if (options.discoveryLab === "none") return true;
+    const parked = new Set(
+      ledger.activeParked({ campaignId }).map((event) => event.findingId),
+    );
     return (findingsBySnapshot.get(snapshotDigest) ?? []).every((findingId) => {
-      if (
-        ledger.read({
-          campaignId,
-          findingId,
-          type: "finding-parked",
-          limit: 1,
-        }).length > 0
-      )
-        return true;
+      if (parked.has(findingId)) return true;
       const history =
         verificationHistory.get(`${snapshotDigest}\0${findingId}`) ?? [];
       const previous = history.at(-1);
@@ -765,6 +760,9 @@ export async function runCampaignPipeline<
           type: "finding-recorded",
         })
         .filter(({ event }) => event.snapshotDigest === snapshot.digest);
+      const parked = new Set(
+        ledger.activeParked({ campaignId }).map((event) => event.findingId),
+      );
       const providerLimited = (findingId: string): boolean => {
         const run = ledger
           .readAll({
@@ -780,15 +778,7 @@ export async function runCampaignPipeline<
       };
       for (const { event } of findings) {
         if (event.type !== "finding-recorded") continue;
-        if (
-          ledger.read({
-            campaignId,
-            findingId: event.findingId,
-            type: "finding-parked",
-            limit: 1,
-          }).length > 0
-        )
-          continue;
+        if (parked.has(event.findingId)) continue;
         // The Verifier shares the subscription; a usage limit stops the campaign.
         if (stopped === "provider-limit") break;
         const history = earlier.filter(
@@ -1109,12 +1099,8 @@ export async function verifyNextFinding<
   const labs = options.ledger.readAll({ ...scope, type: "lab-provisioned" });
   const parked = new Set(
     options.ledger
-      .readAll({ ...scope, type: "finding-parked" })
-      .flatMap(({ event }) =>
-        event.type === "finding-parked"
-          ? [`${event.campaignId}\0${event.findingId}`]
-          : [],
-      ),
+      .activeParked(scope)
+      .map((event) => `${event.campaignId}\0${event.findingId}`),
   );
   // The latest decision per Finding; a `reject` keeps it out of the Lab.
   const decisions = new Map<string, string>();

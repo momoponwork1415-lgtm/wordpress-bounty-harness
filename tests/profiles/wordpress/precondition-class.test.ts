@@ -40,6 +40,46 @@ describe("Harness-owned WordPress precondition classification", () => {
     ).toBe("common-usage");
   });
 
+  it("does not treat a product name or a negated visibility requirement as an enabled setting", () => {
+    expect(
+      classifyWordPressPrecondition({
+        configurationPrecondition:
+          "An administrator opens Password-Protected Showcase > Dashboard. Public content does not require password protection.",
+      }).preconditionClass,
+    ).toBe("unknown");
+    expect(
+      classifyWordPressPrecondition({
+        configurationPrecondition: "No password-protected post is required.",
+      }).preconditionClass,
+    ).toBe("unknown");
+    expect(
+      classifyWordPressPrecondition({
+        configurationPrecondition: "The post is not password-protected.",
+      }).preconditionClass,
+    ).toBe("unknown");
+  });
+
+  it("still parks explicitly password-protected content", () => {
+    for (const configurationPrecondition of [
+      "An administrator publishes a password-protected post.",
+      "A password-protected page is published.",
+      "The post is password-protected.",
+    ])
+      expect(
+        classifyWordPressPrecondition({ configurationPrecondition })
+          .preconditionClass,
+      ).toBe("admin-configuration");
+  });
+
+  it("still identifies an administrator's explicit checkbox choice", () => {
+    expect(
+      classifyWordPressPrecondition({
+        configurationPrecondition:
+          "An admin has ticked the Legacy Mode setting. A public page remains visible.",
+      }).preconditionClass,
+    ).toBe("admin-configuration");
+  });
+
   it("selects an existing generic scenario for ordinary content", () => {
     expect(
       classifyWordPressPrecondition({
