@@ -495,7 +495,7 @@ describe("review public interface", () => {
     ).rejects.toThrow("in-scope");
   });
 
-  it("requires a matching human reproduction of the current reproduced package before drafting", async () => {
+  it("permits a reproduced AI draft before manual confirmation but gates authorization", async () => {
     const { review, ledger } = await fixture();
     const original = ledger.read({ type: "verification-finished" })[0]?.event;
     if (
@@ -527,23 +527,63 @@ describe("review public interface", () => {
     const reproducedRef = { ...ref, verificationId: "verification-2" };
     const [assessment] = await review.assessScope({ ref: reproducedRef });
     if (assessment === undefined) throw new Error("missing assessment");
-    const draft = () =>
-      review.saveDraft({
-        assessmentId: assessment.id,
-        content: "Synthetic report",
-        preparedBy: "ai",
+    const draft = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "Synthetic report",
+      preparedBy: "ai",
+    });
+    expect(draft.revision).toBe(1);
+    const premature = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "Reviewed synthetic report",
+      preparedBy: "human",
+    });
+    const authorizePremature = () =>
+      review.authorizeExternalAction({
+        candidateId: premature.candidateId,
+        draftDigest: premature.digest,
+        destination: "wordfence",
+        authorizedBy: "human-1",
       });
-    await expect(draft()).rejects.toThrow("manual reproduction");
+    await expect(authorizePremature()).rejects.toThrow(
+      "manual-reproduction-required",
+    );
     await review.recordHumanReproduction({
       ref: reproducedRef,
       result: "mismatch",
     });
-    await expect(draft()).rejects.toThrow("manual reproduction");
+    await expect(authorizePremature()).rejects.toThrow(
+      "manual-reproduction-required",
+    );
     await review.recordHumanReproduction({
       ref: reproducedRef,
       result: "match",
     });
-    await expect(draft()).resolves.toMatchObject({ revision: 1 });
+    await expect(authorizePremature()).rejects.toThrow(
+      "human-reviewed-draft-required",
+    );
+    const reviewed = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "Reviewed after manual reproduction",
+      preparedBy: "human",
+    });
+    const authorize = () =>
+      review.authorizeExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+        authorizedBy: "human-1",
+      });
+    await expect(authorize()).rejects.toThrow("human-accept-required");
+    await review.decide({
+      ref: reproducedRef,
+      decision: "accept",
+      reasonCode: "final-human-review",
+      duplicate: { status: "no-match" },
+      openedEvidence: [],
+      decidedBy: "human-1",
+    });
+    await expect(authorize()).resolves.toBeUndefined();
     expect(ledger.read({ type: "human-reproduction-recorded" })).toHaveLength(
       2,
     );
@@ -628,6 +668,48 @@ describe("review public interface", () => {
         }),
       ).rejects.toThrow("current verification");
     }
+  });
+
+  it("requires an explicitly named human actor for the final acceptance and authorization", async () => {
+    const { review } = await fixture();
+    const [assessment] = await review.assessScope({ ref });
+    if (assessment === undefined) throw new Error("missing assessment");
+    await review.recordHumanReproduction({ ref, result: "match" });
+    const draft = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "Reviewed report",
+      preparedBy: "human",
+    });
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "ai-triage",
+      openedEvidence: [],
+      decidedBy: "ai",
+    });
+    const exact = {
+      candidateId: draft.candidateId,
+      draftDigest: draft.digest,
+      destination: "wordfence",
+    };
+    await expect(
+      review.authorizeExternalAction({ ...exact, authorizedBy: "operator" }),
+    ).rejects.toThrow("human-accept-required");
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "final-human-review",
+      duplicate: { status: "no-match" },
+      openedEvidence: [],
+      decidedBy: "operator",
+    });
+    for (const actor of ["", "   ", "AI", "agent", "automation", "system"])
+      await expect(
+        review.authorizeExternalAction({ ...exact, authorizedBy: actor }),
+      ).rejects.toThrow();
+    await expect(
+      review.authorizeExternalAction({ ...exact, authorizedBy: "operator" }),
+    ).resolves.toBeUndefined();
   });
 
   it("marks malformed programme coverage incomplete without changing verification", async () => {

@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runCli } from "../../src/cli/index.js";
+import { runCli, type CliIo } from "../../src/cli/index.js";
 import { reviewExportV1Schema } from "../../src/review/index.js";
 import {
   createWordPressCliProfile,
@@ -100,6 +100,7 @@ const claim = (impact: string, file: string) => ({
 /** Real modules; only WordPress.org, Docker/runsc and the provider CLI are fakes. */
 async function harness(
   options: {
+    readonly askMinutes?: CliIo["askMinutes"];
     readonly scopeFacts?: Parameters<
       typeof createWordPressCliProfile
     >[0]["scopeFacts"];
@@ -929,6 +930,9 @@ async function harness(
     const code = await runCli(argv, environment, {
       stdout: (line) => stdout.push(line),
       stderr: (line) => stderr.push(line),
+      ...(options.askMinutes === undefined
+        ? {}
+        : { askMinutes: options.askMinutes }),
     });
     return { code, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
   };
@@ -4294,7 +4298,7 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {
-    const { run, configPath, root } = await harness({
+    const { run, configPath, root, ledger } = await harness({
       scopeFacts: {
         // Synthetic facts standing in for judge evidence and target observations.
         load: async () => ({
@@ -4337,8 +4341,6 @@ describe("harness CLI vertical slice", () => {
       "wordfence",
       "--file",
       draftPath,
-      "--prepared-by",
-      "ai",
     );
     expect(drafted.stderr).toBe("");
     expect(drafted.stdout).not.toContain("Synthetic private draft text");
@@ -4469,10 +4471,55 @@ describe("harness CLI vertical slice", () => {
     expect(funnel.stdout).toContain("outcomes: resolved 1  reward $250.00");
     expect(funnel.stdout).toContain("in-scope by programme: patchstack");
     expect(funnel.stdout).toMatch(/wordfence 1/);
+
+    const previous = ledger()
+      .read({
+        campaignId: "campaign-1",
+        findingId: finding,
+        type: "verification-finished",
+      })
+      .at(-1)?.event;
+    if (previous?.type !== "verification-finished")
+      throw new Error("missing verification");
+    await ledger().append({
+      ...previous,
+      identity: "verification-after-report",
+      verificationId: "verification-after-report",
+      occurredAt: "2026-10-08T03:00:00Z",
+    });
+    const staleScope = await run(
+      "review",
+      "draft",
+      ...target,
+      "--programme",
+      "wordfence",
+      "--file",
+      draftPath,
+    );
+    expect(staleScope.code).toBe(2);
+    expect(staleScope.stderr).toContain("No in-scope assessment for wordfence");
+    expect((await run("review", "scope", ...target)).code).toBe(0);
+    expect(
+      (
+        await run(
+          "review",
+          "draft",
+          ...target,
+          "--programme",
+          "wordfence",
+          "--file",
+          draftPath,
+        )
+      ).code,
+    ).toBe(0);
   });
 
   it("records only the decision when review decide has no --reproduced", async () => {
-    const { run, configPath, ledger } = await harness();
+    const { run, configPath, ledger } = await harness({
+      askMinutes: async () => {
+        throw new Error("AI decision prompted for human time");
+      },
+    });
     const campaign = ["--campaign", "campaign-1"];
     await run("campaign", "run", "--all", ...campaign, "--config", configPath);
     const queue = await run("review", ...campaign);
@@ -4514,6 +4561,50 @@ describe("harness CLI vertical slice", () => {
           : [],
       ),
     ).toEqual([["read", 5]]);
+    const ai = await run(
+      "review",
+      "decide",
+      ...campaign,
+      "--finding",
+      finding,
+      "--decision",
+      "defer",
+      "--reason",
+      "ai-triage",
+      "--by",
+      "ai",
+    );
+    expect(ai.code).toBe(0);
+    expect(
+      (
+        await run(
+          "review",
+          "decide",
+          ...campaign,
+          "--finding",
+          finding,
+          "--decision",
+          "defer",
+          "--reason",
+          "ai-triage",
+          "--by",
+          "ai",
+          "--minutes",
+          "0",
+        )
+      ).code,
+    ).toBe(2);
+    const afterAi = ledger().readAll({
+      campaignId: "campaign-1",
+      findingId: finding,
+    });
+    expect(
+      afterAi.filter(({ event }) => event.type === "human-effort-recorded"),
+    ).toHaveLength(1);
+    expect(
+      afterAi.filter(({ event }) => event.type === "review-decided").at(-1)
+        ?.event,
+    ).not.toHaveProperty("humanElapsedSeconds");
   });
 
   it("records the human reproduction before the decision when review decide has --reproduced", async () => {
