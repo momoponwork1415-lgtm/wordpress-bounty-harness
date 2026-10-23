@@ -1303,13 +1303,13 @@ const COMMANDS: readonly Command[] = [
   command({
     name: "review authorize",
     usage: [
-      "review authorize --candidate <id> --draft <digest> --to <destination>",
+      "review authorize --candidate <id> --draft <digest> --to <destination> --by <name>",
     ],
-    options: { candidate: STR, draft: STR, to: STR },
+    options: { by: STR, candidate: STR, draft: STR, to: STR },
     handler: async ({ values, state, environment, io }) => {
       await environment.profile.review(state).authorizeExternalAction({
         ...exactDraft(values),
-        authorizedBy: "operator",
+        authorizedBy: required(values.by, "by"),
       });
       io.stdout("authorization recorded; Harness sends nothing");
       return 0;

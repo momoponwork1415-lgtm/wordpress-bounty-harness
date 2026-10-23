@@ -76,6 +76,13 @@ const scopeResult = z.strictObject({
   destination: id,
   reason: z.string().min(1).max(2000),
 });
+const nonHumanActors = new Set(["ai", "agent", "automation", "system"]);
+const humanActor = id
+  .transform((value) => value.trim())
+  .refine(
+    (value) => value.length > 0 && !nonHumanActors.has(value.toLowerCase()),
+    "A named human actor is required",
+  );
 
 type Decision = ReviewDecisionV1["decision"];
 export type ReviewItem = (
@@ -149,7 +156,11 @@ export type ExternalActionAdmission =
       readonly reason:
         | "candidate-or-draft-not-found"
         | "exact-authorization-required"
-        | "superseded-draft";
+        | "superseded-draft"
+        | "human-reviewed-draft-required"
+        | "manual-reproduction-required"
+        | "human-accept-required"
+        | "stale-verification";
     };
 export type DuplicateLookupResult =
   | { readonly status: "unavailable" | "no-match" }
@@ -724,6 +735,8 @@ export class Review<TFacts = unknown> {
       assessment.policyDigest !== this.#scopeEvaluator.policyDigest
     )
       throw new Error("An in-scope assessment is required");
+    if (!this.#isCurrentVerification(assessment.ref))
+      throw new Error("A current verification is required before drafting");
     const verification = this.#requireConfirmed(assessment.ref);
     if (verification.result.status === "reproduced") {
       const packageDigest = verification.result.reproductionPackageDigest;
@@ -802,7 +815,7 @@ export class Review<TFacts = unknown> {
     const candidateId = digest.parse(input.candidateId);
     const draftDigest = digest.parse(input.draftDigest);
     const destination = id.parse(input.destination);
-    const authorizedBy = id.parse(input.authorizedBy);
+    const authorizedBy = humanActor.parse(input.authorizedBy);
     const draft = (await this.#allDrafts()).find(
       (item) =>
         item.candidateId === candidateId &&
@@ -819,6 +832,9 @@ export class Review<TFacts = unknown> {
     );
     if (assessment === undefined)
       throw new Error("An in-scope assessment is required");
+    const gate = await this.#finalReviewGate(draft, assessment, authorizedBy);
+    if (typeof gate === "string")
+      throw new Error(`Final human review is required: ${gate}`);
     const record = authorizationSchema.parse({
       candidateId,
       draftDigest,
@@ -829,7 +845,7 @@ export class Review<TFacts = unknown> {
     const artifactDigest = await this.#storeRecord(record);
     const appended = await this.#ledger.append({
       schemaVersion: 1,
-      identity: `authorization:${canonicalDigest(record)}`,
+      identity: `authorization:${canonicalDigest({ record, finalReviewSequence: gate })}`,
       campaignId: assessment.ref.campaignId,
       snapshotDigest: assessment.ref.snapshotDigest,
       occurredAt: record.authorizedAt,
@@ -882,16 +898,175 @@ export class Review<TFacts = unknown> {
       return { status: "not-authorized", reason: "superseded-draft" };
     const authorization = this.#ledger
       .readAll({ type: "external-action-authorized" })
-      .find(
+      .filter(
         ({ event }) =>
           event.type === "external-action-authorized" &&
           event.candidateId === candidateId &&
           event.revisionDigest === draftDigest &&
           event.destination === destination,
+      )
+      .at(-1);
+    if (authorization === undefined)
+      return {
+        status: "not-authorized",
+        reason: "exact-authorization-required",
+      };
+    const authorizationRecord = await this.#readRecord(
+      authorization.event,
+      "review-authorization",
+    );
+    const gate = await this.#finalReviewGate(
+      draft,
+      assessment,
+      authorizationRecord.authorizedBy,
+    );
+    if (typeof gate === "string")
+      return { status: "not-authorized", reason: gate };
+    return authorization.sequence > gate
+      ? { status: "authorized", authorizationId: authorization.event.identity }
+      : { status: "not-authorized", reason: "exact-authorization-required" };
+  }
+
+  /** Returns the final decision sequence only after the human steps are in order. */
+  async #finalReviewGate(
+    draft: SubmissionDraft,
+    assessment: ScopeAssessment,
+    reviewer: string,
+  ): Promise<
+    | "superseded-draft"
+    | "human-reviewed-draft-required"
+    | "manual-reproduction-required"
+    | "human-accept-required"
+    | "stale-verification"
+    | number
+  > {
+    const latestRevision = Math.max(
+      ...(await this.#allDrafts())
+        .filter((item) => item.assessmentId === draft.assessmentId)
+        .map((item) => item.revision),
+    );
+    if (draft.revision !== latestRevision) return "superseded-draft";
+    if (draft.preparedBy !== "human") return "human-reviewed-draft-required";
+    if (!this.#isCurrentVerification(assessment.ref))
+      return "stale-verification";
+
+    const verification = this.#requireConfirmed(assessment.ref);
+    if (
+      verification.result.status !== "runtime-confirmed" &&
+      verification.result.status !== "reproduced"
+    )
+      return "manual-reproduction-required";
+    const reproductionPackageDigest =
+      verification.result.reproductionPackageDigest;
+    const manual = this.#ledger
+      .readAll({
+        campaignId: assessment.ref.campaignId,
+        findingId: assessment.ref.findingId,
+        type: "human-reproduction-recorded",
+      })
+      .filter(
+        ({ event }) =>
+          event.type === "human-reproduction-recorded" &&
+          event.verificationId === assessment.ref.verificationId &&
+          event.reproductionPackageDigest === reproductionPackageDigest,
+      )
+      .at(-1);
+    if (
+      manual?.event.type !== "human-reproduction-recorded" ||
+      manual.event.result !== "match"
+    )
+      return "manual-reproduction-required";
+
+    const saved = this.#ledger
+      .readAll({
+        campaignId: assessment.ref.campaignId,
+        findingId: assessment.ref.findingId,
+        type: "draft-saved",
+      })
+      .find(
+        ({ event }) =>
+          event.type === "draft-saved" &&
+          event.candidateId === draft.candidateId &&
+          event.revisionDigest === draft.digest,
       );
-    return authorization === undefined
-      ? { status: "not-authorized", reason: "exact-authorization-required" }
-      : { status: "authorized", authorizationId: authorization.event.identity };
+    if (saved === undefined || manual.sequence >= saved.sequence)
+      return "human-reviewed-draft-required";
+    const decision = this.#ledger
+      .readAll({
+        campaignId: assessment.ref.campaignId,
+        findingId: assessment.ref.findingId,
+        type: "review-decided",
+      })
+      .at(-1);
+    if (
+      decision?.event.type !== "review-decided" ||
+      decision.sequence <= saved.sequence ||
+      decision.sequence <= manual.sequence ||
+      decision.event.decision !== "accept" ||
+      decision.event.verificationId !== assessment.ref.verificationId ||
+      decision.event.snapshotDigest !== assessment.ref.snapshotDigest
+    )
+      return "human-accept-required";
+    const reviewRecord = await readReviewRecord(
+      this.#store,
+      decision.event,
+      "review-decision",
+    );
+    const reviewedBy =
+      reviewRecord.status === "read"
+        ? humanActor.safeParse(reviewRecord.record.decidedBy)
+        : null;
+    return reviewRecord.status === "read" &&
+      reviewRecord.record.duplicate.status === "no-match" &&
+      reviewedBy?.success === true &&
+      reviewedBy.data === reviewer
+      ? decision.sequence
+      : "human-accept-required";
+  }
+
+  /** A later attempt or latest-version Finding supersedes a submission basis. */
+  #isCurrentVerification(ref: ReviewRef): boolean {
+    const latestAttempt = this.#ledger
+      .readAll({
+        campaignId: ref.campaignId,
+        findingId: ref.findingId,
+        type: "verification-finished",
+      })
+      .at(-1)?.event;
+    if (
+      latestAttempt?.type !== "verification-finished" ||
+      latestAttempt.verificationId !== ref.verificationId ||
+      latestAttempt.snapshotDigest !== ref.snapshotDigest
+    )
+      return false;
+
+    const findings = this.#ledger
+      .readAll({ campaignId: ref.campaignId, type: "finding-recorded" })
+      .map(({ event }) => event)
+      .filter((event) => event.type === "finding-recorded");
+    const byId = new Map(findings.map((event) => [event.findingId, event]));
+    const rootOf = (findingId: string): string => {
+      let current = findingId;
+      const seen = new Set<string>();
+      while (!seen.has(current)) {
+        seen.add(current);
+        const parent = byId.get(current)?.derivedFromFindingId;
+        if (parent === undefined) break;
+        current = parent;
+      }
+      return current;
+    };
+    const root = rootOf(ref.findingId);
+    const newestLatest = findings
+      .filter(
+        (event) =>
+          event.derivationKind === "latest-version" &&
+          rootOf(event.findingId) === root,
+      )
+      .at(-1);
+    return (
+      newestLatest === undefined || newestLatest.findingId === ref.findingId
+    );
   }
 
   /** Records that the human submitted this exact authorized draft; Harness sends nothing. */
