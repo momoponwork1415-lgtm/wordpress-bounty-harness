@@ -1427,10 +1427,11 @@ async function postSetupAttribution(
   return null;
 }
 
-/** A script receipt is attributable only to a captured, correctly positioned attack. */
+/** Checks an issued nonce or marker against a same-attempt post-setup request. */
 async function capturedScriptAttack(
   options: Options,
   input: DecideInput,
+  dialogMarker?: string,
 ): Promise<Incomplete | { readonly attackerRole: string }> {
   const { finding, lab, recipeDigest, canaries, httpEvidence } = input;
   const missing = (nextStep: string): Incomplete => ({
@@ -1442,10 +1443,16 @@ async function capturedScriptAttack(
     return missing(
       "The attacker HTTP capture is unavailable; repeat in a fresh Lab",
     );
-  const nonces = options.lab.issuedScriptNonces(lab);
+  // A dialog marker is useful review evidence, never a nonce-beacon proof.
+  const nonces =
+    dialogMarker === undefined
+      ? options.lab.issuedScriptNonces(lab)
+      : [dialogMarker];
   if (nonces === null || nonces.length === 0)
     return missing(
-      "The issued script canary cannot be bound to the attack capture",
+      dialogMarker === undefined
+        ? "The issued script canary cannot be bound to the attack capture"
+        : "The numeric dialog marker cannot be bound to the attack capture",
     );
   const route = routeDefinitionSchema.safeParse(
     await readJson(options.store, recipeDigest, "route.json"),
@@ -1499,7 +1506,7 @@ async function capturedScriptAttack(
         )
       )
         return missing(
-          "A canary-bearing HTTP request does not match a completed attacker route step",
+          "A signal-bearing HTTP request does not match a completed attacker route step",
         );
     }
 
@@ -1520,12 +1527,14 @@ async function capturedScriptAttack(
       !principal.authenticated
     )
       return missing(
-        "The canary-bearing request has no verifiable attacker session",
+        "The signal-bearing request has no verifiable attacker session",
       );
   }
   if (bearingRequests === 0)
     return missing(
-      "No captured attacker HTTP request carried the issued script canary",
+      dialogMarker === undefined
+        ? "No captured attacker HTTP request carried the issued script canary"
+        : "No captured attacker HTTP request carried the numeric dialog marker",
     );
   if (expectedAccount !== null && expectedAccount !== undefined) {
     const baseline = canaries.roleBaseline[expectedAccount.username];
@@ -1633,6 +1642,75 @@ function storedScriptJudge(options: Options) {
         ...independentContexts,
         ...(victimContextVerified ? (["victim-route-page"] as const) : []),
       ];
+      if (
+        qualifyingContexts.length === 0 &&
+        victim?.dialogMarker !== undefined &&
+        script.dialogVisitIndex !== undefined &&
+        script.dialogVisitIndex < victim.paths.length &&
+        script.dialogScreenshot !== undefined &&
+        script.dialogEvent?.type === "alert" &&
+        script.dialogEvent.message === victim.dialogMarker &&
+        script.dialogEvent.topLevelPageOriginAtEvent === "http://wordpress" &&
+        script.dialogEvent.frameUrlsAtEvent.length > 0 &&
+        [
+          script.dialogEvent.topLevelPageUrlAtEvent,
+          ...script.dialogEvent.frameUrlsAtEvent,
+        ].every((url) => {
+          try {
+            return new URL(url).origin === "http://wordpress";
+          } catch {
+            return false;
+          }
+        }) &&
+        (script.victimRole === victim.role || script.victimRole === "self")
+      ) {
+        const victimPrincipal =
+          script.victimRole === "self" ? "self" : "separate";
+        const attack = await capturedScriptAttack(
+          options,
+          { finding, lab, recipeDigest, canaries, httpEvidence },
+          victim.dialogMarker,
+        );
+        const capturedAttackerRequestMarkerMatch = !("status" in attack);
+        const verificationSequence = capturedAttackerRequestMarkerMatch
+          ? "post-setup-request-before-victim-visit"
+          : "not-established";
+        const evidenceDigest = await options.store.putFiles({
+          "browser-dialog-observation.json": canonicalJson({
+            judgeId: "wordpress-stored-script",
+            status: "dialog-observed",
+            kind: "numeric-dialog",
+            marker: victim.dialogMarker,
+            dialogEvent: script.dialogEvent,
+            victimRole: victim.role,
+            victimPrincipal,
+            victimVisitIndex: script.dialogVisitIndex,
+            capturedAttackerRequestMarkerMatch,
+            verificationSequence,
+            requiresHumanPreexistingContentCheck: true,
+            snapshotDigest: lab.snapshotDigest,
+            labSetupDigest: lab.setupDigest,
+          }),
+          "victim-page-after-dialog.png": script.dialogScreenshot,
+          ...(httpEvidence.captureBytes === undefined
+            ? {}
+            : { [PROXY_CAPTURE_FILE]: httpEvidence.captureBytes }),
+        });
+        return {
+          status: "incomplete",
+          reason: "status" in attack ? attack.reason : "observation",
+          nextStep:
+            "status" in attack
+              ? attack.nextStep
+              : victimPrincipal === "self"
+                ? "The numeric dialog appeared in the attacker's own browser session; repeat with a separate victim and check preexisting content"
+                : "The Lab browser saw the numeric dialog after a same-attempt post-setup attacker request with the same marker; a human must check preexisting content, reproduce, and assess impact",
+          evidenceDigest,
+          ...(httpEvidence.capture === "harness-captured"
+            ? { evidenceCapture: "harness-captured" as const }
+            : {}),
+        };
+      }
       if (qualifyingContexts.length === 0) {
         if (script.victimRole === "self") {
           const evidenceDigest = await options.store.putFiles({

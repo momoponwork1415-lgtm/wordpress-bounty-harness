@@ -83,6 +83,28 @@ const browserRoute = {
   ],
 };
 const observerBytes = Buffer.from("synthetic observer output");
+const labDialogEvent = (
+  marker: string,
+  frameUrlsAtEvent = ["http://wordpress/"],
+) => ({
+  type: "alert" as const,
+  message: marker,
+  topLevelPageUrlAtEvent: "http://wordpress/",
+  topLevelPageOriginAtEvent: "http://wordpress" as const,
+  frameUrlsAtEvent,
+});
+async function recordedDialog(
+  store: Awaited<ReturnType<typeof judgeOnce>>["store"],
+  evidenceDigest: string,
+) {
+  const read = await store.readFile(
+    evidenceDigest,
+    "browser-dialog-observation.json",
+    8192,
+  );
+  if (read.status !== "resolved") throw new Error("Expected dialog record");
+  return JSON.parse(read.bytes.toString("utf8")) as unknown;
+}
 
 async function judge(
   observation: WordPressStoredScriptObservation,
@@ -90,13 +112,18 @@ async function judge(
   overrides: Partial<JudgeLab> = {},
   position: "subscriber" | "unauthenticated" = "subscriber",
 ) {
+  const dialogMarker = victim?.dialogMarker;
+  const attackBody =
+    dialogMarker === undefined
+      ? requestBody
+      : `${requestBody}&dialog=${dialogMarker}`;
   const visited: (readonly string[])[] = [];
   const victims: (WordPressVictimRoute | undefined)[] = [];
   const result = await judgeOnce({
     impact: "stored-xss",
     finding: { ...syntheticFinding("stored-xss"), attackerPosition: position },
     lab: quietLab({
-      readCapture: async () => capture(defaultHeaders),
+      readCapture: async () => capture(defaultHeaders, attackBody),
       issuedScriptNonces: () => [nonce],
       observeSessionUser: async () => ({
         status: "user",
@@ -112,6 +139,9 @@ async function judge(
     files: {
       "route.json": JSON.stringify({
         ...browserRoute,
+        steps: browserRoute.steps.map((step) =>
+          step.kind === "http" ? { ...step, body: attackBody } : step,
+        ),
         role: position,
         account: position === "unauthenticated" ? "none" : "lab-subscriber",
         victim,
@@ -132,6 +162,80 @@ async function judge(
 }
 
 describe("WordPress stored script judge", () => {
+  it("records a same-attempt request marker and victim dialog without confirming execution", async () => {
+    const marker = "7381930362";
+    const { observed, store } = await judge(
+      {
+        status: "observed",
+        contexts: [],
+        dialogVisitIndex: 0,
+        dialogEvent: labDialogEvent(marker),
+        dialogScreenshot: observerBytes,
+        victimRole: "administrator",
+      },
+      {
+        role: "administrator",
+        paths: [
+          {
+            path: "/wp-admin/admin.php?page=fixture",
+            actions: [{ kind: "click-text", text: "Open", exact: true }],
+          },
+        ],
+        dialogMarker: marker,
+      },
+    );
+    expect(observed).toMatchObject({
+      status: "incomplete",
+      reason: "observation",
+      evidenceDigest: expect.stringMatching(/^sha256:/),
+    });
+    if (observed?.status !== "incomplete" || !observed.evidenceDigest)
+      throw new Error("Expected dialog evidence");
+    expect(await recordedDialog(store, observed.evidenceDigest)).toMatchObject({
+      status: "dialog-observed",
+      capturedAttackerRequestMarkerMatch: true,
+      verificationSequence: "post-setup-request-before-victim-visit",
+      requiresHumanPreexistingContentCheck: true,
+      victimRole: "administrator",
+    });
+  });
+
+  it("keeps the evidence reason when no captured attacker request has the observed marker", async () => {
+    const marker = "5837294610";
+    const { observed, store } = await judge(
+      {
+        status: "observed",
+        contexts: [],
+        victimRole: "unauthenticated",
+        dialogVisitIndex: 0,
+        dialogEvent: labDialogEvent(marker),
+        dialogScreenshot: observerBytes,
+      },
+      {
+        role: "unauthenticated",
+        paths: [
+          {
+            path: "/",
+            actions: [{ kind: "click-text", text: "Open", exact: true }],
+          },
+        ],
+        dialogMarker: marker,
+      },
+      { readCapture: async () => capture(defaultHeaders, requestBody) },
+    );
+    expect(observed).toMatchObject({
+      status: "incomplete",
+      reason: "evidence",
+      evidenceDigest: expect.stringMatching(/^sha256:/),
+    });
+    if (observed?.status !== "incomplete" || !observed.evidenceDigest)
+      throw new Error("Expected dialog evidence");
+    expect(await recordedDialog(store, observed.evidenceDigest)).toMatchObject({
+      status: "dialog-observed",
+      capturedAttackerRequestMarkerMatch: false,
+      verificationSequence: "not-established",
+    });
+  });
   const fired = {
     status: "observed" as const,
     contexts: ["front" as const],

@@ -2059,6 +2059,24 @@ describe("WordPress gVisor Lab", () => {
       phase: "route-input",
       failureCode: "observer-canary-input",
     });
+    const marker = "5837294610";
+    const doubleEncodedMarker = [...marker]
+      .map((digit) => `%25${digit.charCodeAt(0).toString(16)}`)
+      .join("");
+    expect(
+      await lab.observeStoredScript(handle, {
+        routePaths: [`/?q=${doubleEncodedMarker}`],
+        victim: {
+          role: "unauthenticated",
+          paths: ["/"],
+          dialogMarker: marker,
+        },
+      }),
+    ).toEqual({
+      status: "unavailable",
+      phase: "victim-input",
+      failureCode: "observer-marker-input",
+    });
     expect(
       await lab.observeStoredScript(handle, {
         routePaths: [],

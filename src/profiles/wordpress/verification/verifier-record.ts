@@ -19,6 +19,41 @@ const observerSchema = z.looseObject({
   status: z.string().optional(),
   observedVia: z.string().optional(),
 });
+const dialogSchema = z.looseObject({
+  judgeId: z.literal("wordpress-stored-script"),
+  kind: z.literal("numeric-dialog"),
+  status: z.literal("dialog-observed"),
+  marker: z.string().regex(/^[1-9][0-9]{9,14}$/),
+  dialogEvent: z.strictObject({
+    type: z.literal("alert"),
+    message: z.string(),
+    topLevelPageUrlAtEvent: z.string().max(2048),
+    topLevelPageOriginAtEvent: z.literal("http://wordpress"),
+    frameUrlsAtEvent: z.array(z.string().max(2048)).min(1).max(50),
+  }),
+  victimRole: z.enum([
+    "administrator",
+    "subscriber",
+    "customer",
+    "unauthenticated",
+  ]),
+  victimPrincipal: z.enum(["self", "separate"]),
+  snapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  labSetupDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  capturedAttackerRequestMarkerMatch: z.boolean(),
+  verificationSequence: z.enum([
+    "post-setup-request-before-victim-visit",
+    "not-established",
+  ]),
+  requiresHumanPreexistingContentCheck: z.literal(true),
+});
+function atLabOrigin(url: string): boolean {
+  try {
+    return new URL(url).origin === "http://wordpress";
+  } catch {
+    return false;
+  }
+}
 const SCREEN_FILES = ["victim-screen.png", "victim-screen-diagnostic.png"];
 
 /**
@@ -60,6 +95,27 @@ export function createWordPressVerifierRecordReader(options: {
       const failure =
         seen === null ? await evidence("observer-diagnostic.json") : null;
       const failed = parse(observerSchema, failure) !== null;
+      const dialog = await evidence("browser-dialog-observation.json");
+      const candidateSignal = parse(dialogSchema, dialog);
+      const signal =
+        candidateSignal !== null &&
+        route.victim.dialogMarker !== undefined &&
+        candidateSignal.marker === route.victim.dialogMarker &&
+        candidateSignal.dialogEvent.message === candidateSignal.marker &&
+        candidateSignal.victimRole === route.victim.role &&
+        atLabOrigin(candidateSignal.dialogEvent.topLevelPageUrlAtEvent) &&
+        candidateSignal.dialogEvent.frameUrlsAtEvent.every(atLabOrigin) &&
+        (candidateSignal.capturedAttackerRequestMarkerMatch
+          ? candidateSignal.verificationSequence ===
+            "post-setup-request-before-victim-visit"
+          : candidateSignal.verificationSequence === "not-established")
+          ? candidateSignal
+          : null;
+      const pageAfterDialogScreenshot =
+        signal === null
+          ? null
+          : ((await evidence("victim-page-after-dialog.png"))?.ref.path ??
+            null);
       let screenshot: string | null = null;
       for (const name of seen === null ? [] : SCREEN_FILES)
         screenshot ??= (await evidence(name))?.ref.path ?? null;
@@ -86,6 +142,20 @@ export function createWordPressVerifierRecordReader(options: {
           record:
             (seen !== null ? beacon : failed ? failure : null)?.ref ?? null,
           screenshot,
+          ...(signal === null || dialog === null
+            ? {}
+            : {
+                browserSignal: {
+                  kind: signal.kind,
+                  status: signal.status,
+                  capturedAttackerRequestMarkerMatch:
+                    signal.capturedAttackerRequestMarkerMatch,
+                  verificationSequence: signal.verificationSequence,
+                  victimPrincipal: signal.victimPrincipal,
+                  record: dialog.ref,
+                  pageAfterDialogScreenshot,
+                },
+              }),
         },
       };
     },

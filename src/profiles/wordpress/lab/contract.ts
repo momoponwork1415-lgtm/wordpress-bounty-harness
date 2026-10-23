@@ -122,6 +122,7 @@ export type WordPressStoredScriptFailureCode =
   | "victim-navigation"
   | "victim-unobserved-popup"
   | "observer-canary-input"
+  | "observer-marker-input"
   | "victim-canary-request"
   | "victim-screenshot";
 
@@ -152,6 +153,14 @@ export interface WordPressVictimBrowserDiagnostic {
   };
 }
 
+export interface WordPressDialogEvent {
+  readonly type: "alert";
+  readonly message: string;
+  readonly topLevelPageUrlAtEvent: string;
+  readonly topLevelPageOriginAtEvent: "http://wordpress";
+  readonly frameUrlsAtEvent: readonly string[];
+}
+
 export type WordPressStoredScriptObservation =
   | {
       readonly status: "observed";
@@ -167,6 +176,12 @@ export type WordPressStoredScriptObservation =
       readonly screenshot?: Buffer;
       /** Last completed non-firing victim visit; Private Evidence only. */
       readonly victimBrowserDiagnostic?: WordPressVictimBrowserDiagnostic;
+      /** A dialog with the declared numeric marker appeared during this victim visit. */
+      readonly dialogVisitIndex?: number;
+      /** Exact Lab browser event with top-level and all frame URLs captured at event time. */
+      readonly dialogEvent?: WordPressDialogEvent;
+      /** Screenshot after the observer dismissed that dialog; Private Evidence only. */
+      readonly dialogScreenshot?: Buffer;
     }
   | { readonly status: "not-prepared" }
   | {
