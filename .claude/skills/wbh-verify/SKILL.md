@@ -53,7 +53,8 @@ description: scope 内 Finding 1 件を、Harness が `verify next --handoff <di
 
 **`stored-xss`**
 
-1. 攻撃者位置で届く入力面（コメントのような公開面への投稿や送信）に script canary を載せ、保存させる。直接の nonce 付き POST には `canary.javascript` を使う。入力面が長いコードを切り詰めるなら、`canary.loaderJavascript` を実行させる。これは同じ POST を送る短い module を読み込む。module の URL を画像や stylesheet として読み込んでも beacon は記録されない。
+1. 攻撃者位置で届く入力面（コメントのような公開面への投稿や送信）に script canary を載せ、保存させる。`attack.json` の `canary.javascript` か `canary.loaderJavascript` を、**文字列として変えずに**実行させる。出口が element の中身の位置なら `canary.javascript` をそのまま script 要素の中に置ける。長さで切られるか、属性の位置で引用符が足りないときは `canary.loaderJavascript` を使う。これは同じ POST を送る短い module を読み込む。
+   canary の受け口が記録するのは、`/b/<token>` への POST で、`X-WBH-Script-Canary` header の値が token と一致し、`Origin` が Lab の WordPress のものである要求だけである（`src/profiles/wordpress/lab/container-startup.ts`）。それ以外は 403 になる。だから、`beaconUrl` を使って自分で要求を組まない。header の無い `fetch`、`img` や stylesheet としての読み込み、`/b/` への GET では beacon は記録されない。どちらの形も実行できないときは、試したことを `refutation.md` に書く。運び手を自分で発明しない。
 2. 保存した値が描画される画面を、`route.json` の `victim.paths` に 1〜5 件書く。描画が読み込みだけで起きる画面を選ぶ。Lab browser は route と victim の前に `/`、`/wp-admin/`、`/wp-admin/edit.php` を自分で開くので、一覧画面は確かめやすい。画面側の JavaScript が組む経路（fragment で切り替わる画面）や新しいタブを開く link しか無いときは、`actions` を付けたうえで、その画面を選んだ理由を `steps.md` に書く。遷移できないと観測は `victim-page (victim-navigation)` で終わる。`victim.role` には、その画面を開く被害者を選ぶ。管理者なら `administrator`、ログインしていない訪問者なら `unauthenticated` にする。攻撃者自身の account で開く画面は被害者にならない。
 3. Harness の Lab browser が、攻撃者とは別のセッションでその画面を開き、beacon の着信を観測する。
 
