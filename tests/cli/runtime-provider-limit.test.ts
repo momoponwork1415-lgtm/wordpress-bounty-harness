@@ -287,33 +287,28 @@ describe("runtime-scoped stops", () => {
     expect(summary.limitedRuntimes).toEqual(["claude"]);
   });
 
-  const config = (
-    share: { codex: number; claude: number } | undefined,
-    lab: "none" | "attached" = "none",
-  ) =>
+  const config = (share: { codex: number; claude: number } | undefined) =>
     wordpressCampaignConfigSchema.parse({
       schemaVersion: 1,
       programmeBoundary: { version: "v", text: "t" },
       wordpressVersion: "6.8",
       lab: { siteTitle: "s", initialPosts: [], customerRole: false },
       discovery: {
-        lab,
+        lab: "none",
         ...(share === undefined ? {} : { runtimeShare: share }),
       },
     });
 
   it.each([
-    ["both runtimes weighted, no Lab", { codex: 1, claude: 1 }, "none", true],
-    ["Claude weighted 0", { codex: 1, claude: 0 }, "none", false],
-    ["Codex weighted 0", { codex: 0, claude: 1 }, "none", false],
-    // The in-campaign Verifier runs on Codex after discovery with a Lab.
-    ["both weighted, attached Lab", { codex: 1, claude: 1 }, "attached", false],
+    ["both runtimes weighted, no Lab", { codex: 1, claude: 1 }, true],
+    ["Claude weighted 0", { codex: 1, claude: 0 }, false],
+    ["Codex weighted 0", { codex: 0, claude: 1 }, false],
   ] as const)(
     "derives the runtime-scoped stop from the config: %s",
-    (_, share, lab, perRuntime) => {
-      expect(
-        wordPressRuntimeCaps(config(share, lab))?.providerLimitPerRuntime,
-      ).toBe(perRuntime);
+    (_, share, perRuntime) => {
+      expect(wordPressRuntimeCaps(config(share))?.providerLimitPerRuntime).toBe(
+        perRuntime,
+      );
     },
   );
 

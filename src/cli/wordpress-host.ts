@@ -62,6 +62,7 @@ import {
 import type { CliProfile, CliState } from "./index.js";
 import { createWordPressCliProfile } from "./wordpress.js";
 import {
+  LEGACY_VERIFIER_RETIRED,
   readWordPressCampaignConfig,
   readWordPressSelectionPolicyFile,
   type WordPressCampaignBoundaries,
@@ -154,9 +155,6 @@ const intakePolicy = {
 
 const digestOf = (image: string): string =>
   image.slice(image.lastIndexOf("@") + 1);
-
-const LEGACY_VERIFIER_RETIRED =
-  "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";
 
 export async function loadWordPressHostConfig(
   path: string,
@@ -336,8 +334,6 @@ export async function createWordPressHostProfile(options: {
     config: WordPressCampaignConfig,
     state: CliState,
   ): Promise<WordPressCampaignBoundaries> => {
-    if (config.discovery.lab === "attached")
-      throw new Error("Attached discovery Labs are retired");
     for (const directory of Object.values(directories))
       await mkdir(directory, { recursive: true, mode: 0o700 });
     const sandbox = new GvisorCodexSandbox({
@@ -565,11 +561,6 @@ export async function createWordPressHostProfile(options: {
       executor: runtime,
       ...(claude === undefined ? {} : { claude }),
       attachments,
-      verifier: {
-        async attempt() {
-          throw new Error(LEGACY_VERIFIER_RETIRED);
-        },
-      },
       // The Harness owns the records and judges; the transport hands the Lab to a skill (#352).
       handoffVerifier: (handoff) => ({
         attempt: ({
