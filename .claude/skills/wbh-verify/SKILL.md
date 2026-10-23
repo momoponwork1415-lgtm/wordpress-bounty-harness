@@ -22,7 +22,7 @@ description: scope 内 Finding 1 件を、Harness が `verify next --handoff` �
 
 | ファイル | 内容 |
 | --- | --- |
-| `route.json` | `{"role":"unauthenticated","account":"none","defaultSettings":true,"configurationChanges":[],"steps":[{"kind":"http","method":"POST","path":"/<path>","expected":"<observation>"}],"victim":{"role":"administrator","paths":["/<path>"]}}`。`role`・`account`・`defaultSettings`・`configurationChanges`・`steps` は必ず書く。`role` は Finding の `attackerPosition` と一致させ、`account` は攻撃者 account の username をそのまま（`unauthenticated` なら `none`）にする。`steps` は実行した HTTP 手順だけにする。`victim` は必要なときだけ入れる。 |
+| `route.json` | `{"role":"unauthenticated","account":"none","defaultSettings":true,"configurationChanges":[],"steps":[{"kind":"http","method":"POST","path":"/<path>","expected":"<observation>"}],"victim":{"role":"administrator","paths":["/<path>"]}}`。`role`・`account`・`defaultSettings`・`configurationChanges`・`steps` は必ず書く。`role` は Finding の `attackerPosition` と一致させ、`account` は攻撃者 account の username をそのまま（`unauthenticated` なら `none`）にする。`steps` は実行した HTTP 手順だけにする。`victim` は必要なときだけ入れる。数値 alert を観測させるときだけ `victim.dialogMarker` に 10〜15 桁のマーカーを文字列で加える。 |
 | `http.json` | 実際の通信を `{"exchanges":[{"request":{"path":"/…","method":"…"},"response":{"body":"…"}}]}` として記す。少なくとも 1 件必要。これはエージェントの記録であり証明ではない。 |
 | `session.json` | 別主体の有効な logged-in cookie を得たときだけ `{"cookie":"…"}`。`cookie` には `wordpress_logged_in_` cookie の値だけを入れ、名前と `=` は含めない。無ければ空ファイル。 |
 | `steps.md` | 実際に行った手順と観測。空にしない。書き方は次節の最後にある。 |
@@ -42,7 +42,7 @@ description: scope 内 Finding 1 件を、Harness が `verify next --handoff` �
 - **`headers` は書かなければ照合されない。** 書いた名前の値はすべて一致が要るので、必要がなければ書かない。
 - **canary を含む要求が 1 本も無ければ `incomplete`。** `route.json` や `http.json` に canary の token を書くだけでは数えない。
 - **`unauthenticated` の攻撃者位置では、`x-wp-nonce` を付けた要求と、どのセッションか決まらない cookie を送ると棄却される。** `unauthenticated` 以外では、canary を含む要求に攻撃者のセッションが確認できることが要る。
-- **被害者の画面と入力に canary の token を書かない。** `steps` の path か `victim` に token が現れると、Lab 観測器は観測そのものを棄却する（`observer-canary-input`）。
+- **被害者の画面と入力に canary の token を書かない。** `steps` の path か `victim` に token が現れると、Lab 観測器は観測そのものを棄却する（`observer-canary-input`）。数値マーカーも Lab browser の訪問 path（route の観測用 path と `victim.paths`）や被害者の操作値に入れず、攻撃者の要求だけに載せる。
 - **攻撃者 account の role を変えない。** 攻撃者 account が宣言した低い権限だけを持つ状態でなくなると `incomplete` になる。
 
 `route.json` が schema に通らないと route が保存されず、攻撃者位置の誤りとして報告される。`role` が `finding.attackerPosition` と違うときも同じ文になる。書く前に上の表の形と見比べる。
@@ -54,11 +54,12 @@ description: scope 内 Finding 1 件を、Harness が `verify next --handoff` �
 **`stored-xss`**
 
 1. 攻撃者位置で届く入力面（コメントのような公開面への投稿や送信）に script canary を載せ、保存させる。`attack.json` の `canary.javascript` か `canary.loaderJavascript` を、**文字列として変えずに**実行させる。出口が element の中身の位置なら `canary.javascript` をそのまま script 要素の中に置ける。長さで切られるか、属性の位置で引用符が足りないときは `canary.loaderJavascript` を使う。これは同じ POST を送る短い module を読み込む。
-   canary の受け口が記録するのは、`/b/<token>` への POST で、`X-WBH-Script-Canary` header の値が token と一致し、`Origin` が Lab の WordPress のものである要求だけである（`src/profiles/wordpress/lab/container-startup.ts`）。それ以外は 403 になる。だから、`beaconUrl` を使って自分で要求を組まない。header の無い `fetch`、`img` や stylesheet としての読み込み、`/b/` への GET では beacon は記録されない。どちらの形も実行できないときは、試したことを `refutation.md` に書く。運び手を自分で発明しない。
+   canary の受け口が記録するのは、`/b/<token>` への POST で、`X-WBH-Script-Canary` header の値が token と一致し、`Origin` が Lab の WordPress のものである要求だけである（`src/profiles/wordpress/lab/container-startup.ts`）。それ以外は 403 になる。だから、`beaconUrl` を使って自分で要求を組まない。header の無い `fetch`、`img` や stylesheet としての読み込み、`/b/` への GET では beacon は記録されない。どちらの形も実行できないときは、試したことを `refutation.md` に書く。canary の運び手を自分で発明しない。
+   canary のコードがその出力面に収まらないなど、nonce beacon の回収が難しいときは、低い確度のブラウザ観測として数値 alert を試せる。その attempt だけで使う先頭が 0 でない 10〜15 桁の数字を選び、攻撃者の入力に `alert(<その数字>)` を載せる。`victim.dialogMarker` に同じ数字を文字列で宣言する。前提作り中にそのマーカーを置かず、`observation-ready` 後にマーカーを含む攻撃者 HTTP 要求を 1 本だけ送り、その method・path・送信した wire body と応答を route / http 記録に残す。canary のコードを数値 alert に置き換えた場合、nonce beacon の証明にはならない。
    `href` のように操作して初めて評価される出口では、固定ソースと前提作り中の Lab の HTTP 応答から出力形を確かめる。`target="_blank"` だけを根拠に `javascript:` を実行不能と決めて click を省かない。`rel` などの属性とブラウザ挙動で結果が変わる。通常の操作が必要なら手順 2 の `actions` に指定し、`setup-done` 後は管理者資格を再利用せず、Harness の Lab browser に観測させる。
 2. 保存した値が描画される画面を、`route.json` の `victim.paths` に 1〜5 件書く。描画が読み込みだけで起きる画面を選ぶ。Lab browser は route と victim の前に `/`、`/wp-admin/`、`/wp-admin/edit.php` を自分で開くので、一覧画面は確かめやすい。画面側の JavaScript が組む経路（fragment で切り替わる画面）や新しいタブを開く link しか無いときは、`actions` を付けたうえで、その画面を選んだ理由を `steps.md` に書く。遷移できないと観測は `victim-page (victim-navigation)` で終わる。`victim.role` には、その画面を開く被害者を選ぶ。管理者なら `administrator`、ログインしていない訪問者なら `unauthenticated` にする。攻撃者自身の account で開く画面は被害者にならない。
    値がサニタイズで落ちて操作対象が無い場合は、無意味な click を作らない。入力から保存・描画までのどこで落ちたか、固定ソースのファイルと行、および Lab の観測を `refutation.md` に書く。他の出力経路も固定ソースで確認する。canary が届かないことだけを反証にしない。
-3. Harness の Lab browser が、攻撃者とは別のセッションでその画面を開き、beacon の着信を観測する。
+3. Harness の Lab browser が、攻撃者とは別のセッションでその画面を開く。canary 経路では beacon の着信を観測する。数値 alert 経路では、宣言した被害者画面・操作中に Lab と同じ origin で一致した dialog を観測し、dismiss 後の画面とイベントを Private Evidence に残す。`steps.md` に使用した経路、数値 alert を選んだ理由、被害者の role、画面と操作、実際の観測を分けて書く。数値の一致と攻撃要求の捕捉があっても、既存コンテンツからの発火、因果関係、影響は人間が確認する。結果は `incomplete` の補助証拠で、`runtime-confirmed` や人間の手動再現ではない。
 
 **`rce`、`php-file-write`**
 
