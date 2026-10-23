@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
-import { Review } from "../../src/review/index.js";
+import { exportReviewBundle, Review } from "../../src/review/index.js";
 
 const snapshot = `sha256:${"a".repeat(64)}`;
 const labSetup = `sha256:${"b".repeat(64)}`;
@@ -137,6 +137,107 @@ const ref = {
 };
 
 describe("review public interface", () => {
+  it.each([
+    [snapshot, "verification-2"],
+    [`sha256:${"c".repeat(64)}`, ref.verificationId],
+  ])(
+    "keeps decisions for a previous verification historical (%s, %s)",
+    async (snapshotDigest, verificationId) => {
+      const { review, ledger, artifactStore } = await fixture();
+      const original = ledger.read({ type: "verification-finished" })[0]!.event;
+      if (original.type !== "verification-finished") throw new Error("missing");
+      const latestRef = {
+        ...ref,
+        snapshotDigest,
+        verificationId,
+      };
+      await ledger.append({
+        ...original,
+        ...latestRef,
+        identity: "verification-2",
+      });
+      const decision = {
+        reasonCode: "historical-review",
+        openedEvidence: [],
+        decidedBy: "owner",
+      };
+      await review.decide({ ...decision, ref, decision: "defer" });
+      expect(review.queue().items[0]?.decision).toBeNull();
+      await review.decide({
+        ...decision,
+        ref: latestRef,
+        decision: "accept",
+        reasonCode: "current-review",
+      });
+      await review.decide({ ...decision, ref, decision: "reject" });
+      const queue = review.queue();
+      expect(queue.items[0]?.decision).toBe("accept");
+      expect(
+        (await review.decisionReasons(queue.items)).get(queue.items[0]!),
+      ).toBe("current-review");
+      const exported = await exportReviewBundle({
+        ledger,
+        store: artifactStore,
+        campaignId: ref.campaignId,
+        findingId: ref.findingId,
+      });
+      expect(exported.review.decision?.decision).toBe("reject");
+    },
+  );
+
+  it.each([
+    ["scope-assessed", "campaign-1", "other-finding"],
+    ["scope-assessed", "other-campaign", "finding-1"],
+    ["draft-saved", "campaign-1", "other-finding"],
+    ["draft-saved", "other-campaign", "finding-1"],
+  ] as const)(
+    "reads one Finding without an unrelated missing %s in %s/%s",
+    async (type, campaignId, findingId) => {
+      const { review, ledger, artifactStore } = await fixture();
+      const [assessment] = await review.assessScope({ ref });
+      if (assessment === undefined) throw new Error("missing assessment");
+      const input = {
+        assessmentId: assessment.id,
+        content: "Draft",
+        preparedBy: "ai" as const,
+      };
+      await review.saveDraft(input);
+      const event = ledger.read({ type })[0]!.event;
+      if (event.type !== "scope-assessed" && event.type !== "draft-saved")
+        throw new Error("missing record event");
+      const absent = await artifactStore.putFiles({ "record.json": "{}" });
+      const stored = await artifactStore.resolve(absent);
+      if (stored.status !== "resolved") throw new Error("missing record");
+      await ledger.append({
+        ...event,
+        identity: "unrelated-record",
+        campaignId,
+        findingId,
+        artifacts: [
+          {
+            kind: type === "scope-assessed" ? "review-scope" : "review-draft",
+            digest: absent,
+          },
+        ],
+      });
+      await rm(stored.contentDirectory, { recursive: true });
+      expect(
+        await review.inspect({
+          campaignId: ref.campaignId,
+          findingId: ref.findingId,
+        }),
+      ).toMatchObject({
+        scopeAssessments: [{ id: assessment.id }, expect.anything()],
+        drafts: [{ revision: 1 }],
+      });
+      expect((await review.saveDraft(input)).revision).toBe(2);
+      expect(await review.assessScope({ ref })).toHaveLength(2);
+      await expect(review.inspect({ campaignId, findingId })).rejects.toThrow(
+        "Private Evidence is unavailable",
+      );
+    },
+  );
+
   it("excludes a later parked Finding and counts its latest precondition class", async () => {
     const { review, ledger } = await fixture();
     const base = {

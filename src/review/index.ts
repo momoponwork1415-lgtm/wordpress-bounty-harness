@@ -295,12 +295,15 @@ export class Review<TFacts = unknown> {
         history.push(event);
         verificationHistory.set(key(event), history);
       }
-    const latestDecision = new Map<string, DecisionHistoryEntry>();
+    const decisionHistory = new Map<string, DecisionHistoryEntry[]>();
     for (const entry of readDecisionHistory(
       this.#ledger,
       campaignId === undefined ? {} : { campaignId },
-    ))
-      latestDecision.set(key(entry.event), entry);
+    )) {
+      const history = decisionHistory.get(key(entry.event)) ?? [];
+      history.push(entry);
+      decisionHistory.set(key(entry.event), history);
+    }
 
     const items: ReviewItem[] = [];
     const parkedEvents = new Map<
@@ -353,7 +356,7 @@ export class Review<TFacts = unknown> {
         (preconditionClassCounts[classification] ?? 0) + 1;
       const verified = latestVerification.get(key(finding));
       const group = groups.of(finding.campaignId, finding.findingId);
-      const decided = latestDecision.get(key(finding));
+      const decisions = decisionHistory.get(key(finding)) ?? [];
       if (verified === undefined) {
         unverified++;
         items.push({
@@ -364,7 +367,7 @@ export class Review<TFacts = unknown> {
             snapshotDigest: finding.snapshotDigest,
           },
           category: finding.category,
-          decision: currentReviewDecision(decided)?.decision ?? null,
+          decision: currentReviewDecision(decisions, finding)?.decision ?? null,
           group,
         });
         continue;
@@ -377,7 +380,7 @@ export class Review<TFacts = unknown> {
         snapshotDigest: event.snapshotDigest,
       };
       const decision =
-        currentReviewDecision(decided, sequence)?.decision ?? null;
+        currentReviewDecision(decisions, ref, sequence)?.decision ?? null;
       const result = event.result;
       if (result.status === "contradicted") {
         contradicted++;
@@ -675,8 +678,11 @@ export class Review<TFacts = unknown> {
     const reasons = new Map<ReviewItem, string>();
     for (const item of items) {
       if (item.decision === null) continue;
-      const event = readDecisionHistory(this.#ledger, item.ref).at(-1)?.event;
-      if (event === undefined) continue;
+      const event = currentReviewDecision(
+        readDecisionHistory(this.#ledger, item.ref),
+        item.ref,
+      );
+      if (event === null) continue;
       const read = await readReviewRecord(
         this.#store,
         event,
@@ -818,7 +824,7 @@ export class Review<TFacts = unknown> {
     readonly preparedBy: "ai" | "human";
   }): Promise<SubmissionDraftRef> {
     const assessmentId = digest.parse(input.assessmentId);
-    const assessment = (await this.#allAssessments()).find(
+    const assessment = (await this.#allAssessments({ assessmentId })).find(
       (item) => item.id === assessmentId,
     );
     if (
@@ -829,7 +835,7 @@ export class Review<TFacts = unknown> {
     if (!this.#isCurrentVerification(assessment.ref))
       throw new Error("A current verification is required before drafting");
     this.#requireConfirmed(assessment.ref);
-    const prior = (await this.#allDrafts()).filter(
+    const prior = (await this.#allDrafts(assessment.ref)).filter(
       (item) => item.assessmentId === assessmentId,
     );
     const revision = Math.max(0, ...prior.map((item) => item.revision)) + 1;
@@ -885,7 +891,9 @@ export class Review<TFacts = unknown> {
     const draftDigest = digest.parse(input.draftDigest);
     const destination = id.parse(input.destination);
     const authorizedBy = humanActor.parse(input.authorizedBy);
-    const draft = (await this.#allDrafts()).find(
+    const draft = (
+      await this.#allDrafts({ candidateId, revisionDigest: draftDigest })
+    ).find(
       (item) =>
         item.candidateId === candidateId &&
         item.digest === draftDigest &&
@@ -893,7 +901,9 @@ export class Review<TFacts = unknown> {
     );
     if (draft === undefined)
       throw new Error("An exact Submission Candidate and Draft are required");
-    const assessment = (await this.#allAssessments()).find(
+    const assessment = (
+      await this.#allAssessments({ assessmentId: draft.assessmentId })
+    ).find(
       (item) =>
         item.id === draft.assessmentId &&
         item.status === "in-scope" &&
@@ -936,7 +946,9 @@ export class Review<TFacts = unknown> {
     const candidateId = digest.parse(input.candidateId);
     const draftDigest = digest.parse(input.draftDigest);
     const destination = id.parse(input.destination);
-    const draft = (await this.#allDrafts()).find(
+    const draft = (
+      await this.#allDrafts({ candidateId, revisionDigest: draftDigest })
+    ).find(
       (item) =>
         item.candidateId === candidateId &&
         item.digest === draftDigest &&
@@ -947,7 +959,9 @@ export class Review<TFacts = unknown> {
         status: "not-authorized",
         reason: "candidate-or-draft-not-found",
       };
-    const assessment = (await this.#allAssessments()).find(
+    const assessment = (
+      await this.#allAssessments({ assessmentId: draft.assessmentId })
+    ).find(
       (item) =>
         item.id === draft.assessmentId &&
         item.status === "in-scope" &&
@@ -959,7 +973,7 @@ export class Review<TFacts = unknown> {
         reason: "exact-authorization-required",
       };
     const latest = Math.max(
-      ...(await this.#allDrafts())
+      ...(await this.#allDrafts(assessment.ref))
         .filter((item) => item.assessmentId === draft.assessmentId)
         .map((item) => item.revision),
     );
@@ -1010,7 +1024,7 @@ export class Review<TFacts = unknown> {
     | number
   > {
     const latestRevision = Math.max(
-      ...(await this.#allDrafts())
+      ...(await this.#allDrafts(assessment.ref))
         .filter((item) => item.assessmentId === draft.assessmentId)
         .map((item) => item.revision),
     );
@@ -1147,14 +1161,22 @@ export class Review<TFacts = unknown> {
     const admission = await this.admitExternalAction(input);
     if (admission.status !== "authorized")
       throw new Error(`Submission is not authorized: ${admission.reason}`);
-    const draft = (await this.#allDrafts()).find(
+    const draft = (
+      await this.#allDrafts({
+        candidateId: input.candidateId,
+        revisionDigest: input.draftDigest,
+      })
+    ).find(
       (item) =>
         item.candidateId === input.candidateId &&
         item.digest === input.draftDigest,
     );
-    const assessment = (await this.#allAssessments()).find(
-      (item) => item.id === draft?.assessmentId,
-    );
+    const assessment =
+      draft === undefined
+        ? undefined
+        : (
+            await this.#allAssessments({ assessmentId: draft.assessmentId })
+          ).find((item) => item.id === draft.assessmentId);
     if (assessment === undefined)
       throw new Error("Submission Candidate has no assessment");
     const recordedAt = this.#clock().toISOString();
@@ -1337,13 +1359,13 @@ export class Review<TFacts = unknown> {
           event.findingId === query.findingId,
       )
       .at(-1);
-    const assessments = (await this.#allAssessments()).filter(
+    const assessments = (await this.#allAssessments(query)).filter(
       (item) =>
         item.ref.campaignId === query.campaignId &&
         item.ref.findingId === query.findingId,
     );
     const assessmentIds = new Set(assessments.map((item) => item.id));
-    const drafts = (await this.#allDrafts())
+    const drafts = (await this.#allDrafts(query))
       .filter((item) => assessmentIds.has(item.assessmentId))
       .map(({ content: _content, ...reference }) => reference);
     const candidateIds = new Set(drafts.map((draft) => draft.candidateId));
@@ -1469,16 +1491,35 @@ export class Review<TFacts = unknown> {
     return read.record;
   }
 
-  async #allAssessments(): Promise<ScopeAssessment[]> {
+  async #allAssessments(
+    input: {
+      readonly campaignId?: string;
+      readonly findingId?: string;
+      readonly assessmentId?: string;
+    } = {},
+  ): Promise<ScopeAssessment[]> {
+    const { assessmentId, campaignId, findingId } = input;
+    const entries = this.#ledger.readAll({
+      ...(campaignId === undefined ? {} : { campaignId }),
+      ...(findingId === undefined ? {} : { findingId }),
+      type: "scope-assessed",
+    });
+    const exact =
+      assessmentId === undefined
+        ? undefined
+        : entries.find(
+            ({ event }) => event.identity === `scope:${assessmentId}`,
+          );
+    // Preserve records with identities outside the current writer convention.
     return Promise.all(
-      this.#ledger
-        .readAll({ type: "scope-assessed" })
-        .map(({ event }) => this.#readRecord(event, "review-scope")),
+      (exact === undefined ? entries : [exact]).map(({ event }) =>
+        this.#readRecord(event, "review-scope"),
+      ),
     );
   }
 
   async #scopeAssessments(ref: ReviewRef): Promise<ScopeAssessment[]> {
-    return (await this.#allAssessments()).filter(
+    return (await this.#allAssessments(ref)).filter(
       (item) =>
         item.ref.findingId === ref.findingId &&
         item.ref.campaignId === ref.campaignId &&
@@ -1487,10 +1528,29 @@ export class Review<TFacts = unknown> {
     );
   }
 
-  async #allDrafts(): Promise<SubmissionDraft[]> {
+  async #allDrafts(
+    input: {
+      readonly campaignId?: string;
+      readonly findingId?: string;
+      readonly candidateId?: string;
+      readonly revisionDigest?: string;
+    } = {},
+  ): Promise<SubmissionDraft[]> {
+    const { candidateId, revisionDigest, campaignId, findingId } = input;
     return Promise.all(
       this.#ledger
-        .readAll({ type: "draft-saved" })
+        .readAll({
+          ...(campaignId === undefined ? {} : { campaignId }),
+          ...(findingId === undefined ? {} : { findingId }),
+          type: "draft-saved",
+        })
+        .filter(
+          ({ event }) =>
+            event.type === "draft-saved" &&
+            (candidateId === undefined || event.candidateId === candidateId) &&
+            (revisionDigest === undefined ||
+              event.revisionDigest === revisionDigest),
+        )
         .map(({ event }) => this.#readRecord(event, "review-draft")),
     );
   }

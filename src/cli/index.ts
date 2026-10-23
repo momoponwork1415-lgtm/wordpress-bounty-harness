@@ -368,12 +368,11 @@ function required(value: string | undefined, name: string): string {
 }
 
 async function humanMinutes(
-  value: string | undefined,
+  value: number | undefined,
   io: CliIo,
   action: "read" | "reproduce" | "submit" | "outcome",
 ): Promise<number | null> {
-  if (value === undefined) return io.askMinutes?.(action) ?? null;
-  return parseMinutes(value);
+  return value ?? io.askMinutes?.(action) ?? null;
 }
 
 function parseMinutes(value: string): number {
@@ -755,8 +754,7 @@ interface Command extends CommandShape {
   ): (context: Omit<CommandContext<FlagSet>, "values">) => Promise<number>;
 }
 
-/** Declares one row; the handler's `values` is typed from the row's own `options`. */
-function command<const Flags extends FlagSet>(row: {
+interface CommandRow<Flags extends FlagSet> {
   readonly name: string;
   readonly usage: string | readonly string[];
   readonly options: Flags;
@@ -767,8 +765,37 @@ function command<const Flags extends FlagSet>(row: {
     values: FlagValues<Flags>,
     rest: readonly string[],
   ) => void;
-  readonly handler: (context: CommandContext<Flags>) => Promise<number>;
-}): Command {
+}
+
+/** Convert input once before opening state; keep the result typed in the handler. */
+function command<const Flags extends FlagSet, Input>(
+  row: CommandRow<Flags> & {
+    readonly prepareInput: (values: FlagValues<Flags>) => Input;
+    readonly handler: (
+      context: CommandContext<Flags> & { readonly input: Input },
+    ) => Promise<number>;
+  },
+): Command;
+function command<const Flags extends FlagSet>(
+  row: CommandRow<Flags> & {
+    readonly handler: (context: CommandContext<Flags>) => Promise<number>;
+  },
+): Command;
+function command<Flags extends FlagSet, Input>(
+  row: CommandRow<Flags> &
+    (
+      | {
+          readonly prepareInput: (values: FlagValues<Flags>) => Input;
+          readonly handler: (
+            context: CommandContext<Flags> & { readonly input: Input },
+          ) => Promise<number>;
+        }
+      | {
+          readonly prepareInput?: undefined;
+          readonly handler: (context: CommandContext<Flags>) => Promise<number>;
+        }
+    ),
+): Command {
   return {
     name: row.name,
     usage: typeof row.usage === "string" ? [row.usage] : row.usage,
@@ -796,6 +823,10 @@ function command<const Flags extends FlagSet>(row: {
           `${row.name} received unexpected positional arguments`,
         );
       row.validate?.(values, rest);
+      if (row.prepareInput !== undefined) {
+        const input = row.prepareInput(values);
+        return (context) => row.handler({ ...context, values, input });
+      }
       return (context) => row.handler({ ...context, values });
     },
   };
@@ -1133,18 +1164,20 @@ const COMMANDS: readonly Command[] = [
       reproduced: STR,
       "reproduce-minutes": STR,
     },
-    validate: (values) => {
-      if (isNonHumanReviewer(values.by ?? "operator")) {
+    prepareInput: (values) => {
+      const decidedBy = values.by ?? "operator";
+      const nonHumanDecision = isNonHumanReviewer(decidedBy);
+      if (nonHumanDecision) {
         if (values.minutes !== undefined)
           throw new UsageError("--minutes requires a human reviewer");
         if (values.reproduced !== undefined)
           throw new UsageError("--reproduced requires a human reviewer");
       }
-      choice(required(values.decision, "decision"), "decision", [
-        "accept",
-        "reject",
-        "defer",
-      ] as const);
+      const decision = choice(
+        required(values.decision, "decision"),
+        "decision",
+        ["accept", "reject", "defer"] as const,
+      );
       const duplicate = parseDuplicate(values.duplicate);
       if (values["duplicate-note"] !== undefined && duplicate === undefined)
         throw new UsageError("--duplicate-note needs --duplicate");
@@ -1153,34 +1186,6 @@ const COMMANDS: readonly Command[] = [
         values["reproduce-minutes"] !== undefined
       )
         throw new UsageError("--reproduce-minutes needs --reproduced");
-      if (values.reproduced !== undefined)
-        choice(values.reproduced, "reproduced", [
-          "match",
-          "mismatch",
-          "unavailable",
-        ] as const);
-      if (values.minutes !== undefined) parseMinutes(values.minutes);
-      if (values["reproduce-minutes"] !== undefined)
-        parseMinutes(values["reproduce-minutes"]);
-    },
-    handler: async ({ values, state, environment, io }) => {
-      const review = environment.profile.review(state);
-      const item = queued(review, values);
-      const findingId = item.ref.findingId;
-      const decision = choice(
-        required(values.decision, "decision"),
-        "decision",
-        ["accept", "reject", "defer"] as const,
-      );
-      const reasonCode = required(values.reason, "reason");
-      const duplicate = parseDuplicate(values.duplicate);
-      const notePath = values["duplicate-note"];
-      const duplicateNote =
-        notePath === undefined
-          ? undefined
-          : await readFile(resolve(notePath), "utf8");
-      const decidedBy = values.by ?? "operator";
-      const nonHumanDecision = isNonHumanReviewer(decidedBy);
       const reproduced =
         values.reproduced === undefined
           ? undefined
@@ -1189,6 +1194,34 @@ const COMMANDS: readonly Command[] = [
               "mismatch",
               "unavailable",
             ] as const);
+      return {
+        decision,
+        decidedBy,
+        nonHumanDecision,
+        duplicate,
+        reproduced,
+        minutes:
+          values.minutes === undefined
+            ? undefined
+            : parseMinutes(values.minutes),
+        reproduceMinutes:
+          values["reproduce-minutes"] === undefined
+            ? undefined
+            : parseMinutes(values["reproduce-minutes"]),
+      };
+    },
+    handler: async ({ values, input, state, environment, io }) => {
+      const review = environment.profile.review(state);
+      const item = queued(review, values);
+      const findingId = item.ref.findingId;
+      const { decision, decidedBy, nonHumanDecision, duplicate, reproduced } =
+        input;
+      const reasonCode = required(values.reason, "reason");
+      const notePath = values["duplicate-note"];
+      const duplicateNote =
+        notePath === undefined
+          ? undefined
+          : await readFile(resolve(notePath), "utf8");
       if (reproduced !== undefined) {
         if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
           throw new UsageError(
@@ -1198,10 +1231,10 @@ const COMMANDS: readonly Command[] = [
       const reproduceMinutes =
         reproduced === undefined
           ? null
-          : await humanMinutes(values["reproduce-minutes"], io, "reproduce");
+          : await humanMinutes(input.reproduceMinutes, io, "reproduce");
       const minutes = nonHumanDecision
         ? null
-        : await humanMinutes(values.minutes, io, "read");
+        : await humanMinutes(input.minutes, io, "read");
       const recorded = await review.recordDecision({
         ref: item.ref,
         decision,
@@ -1402,13 +1435,13 @@ const COMMANDS: readonly Command[] = [
       "prepared-by": STR,
       programme: STR,
     },
-    validate: (values) => {
-      choice(values["prepared-by"] ?? "ai", "prepared-by", [
+    prepareInput: (values) => ({
+      preparedBy: choice(values["prepared-by"] ?? "ai", "prepared-by", [
         "human",
         "ai",
-      ] as const);
-    },
-    handler: async ({ values, state, environment, io }) => {
+      ] as const),
+    }),
+    handler: async ({ values, input, state, environment, io }) => {
       const review = environment.profile.review(state);
       const item = queued(review, values);
       if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
@@ -1430,14 +1463,10 @@ const COMMANDS: readonly Command[] = [
         .at(-1);
       if (assessment?.status !== "in-scope")
         throw new UsageError(`No in-scope assessment for ${programmeId}`);
-      const preparedBy = choice(values["prepared-by"] ?? "ai", "prepared-by", [
-        "human",
-        "ai",
-      ] as const);
       const draft = await review.saveDraft({
         assessmentId: assessment.id,
         content: await readFile(resolve(required(values.file, "file")), "utf8"),
-        preparedBy,
+        preparedBy: input.preparedBy,
       });
       // The draft text stays in Private Evidence; only its identity is printed.
       io.stdout(
@@ -1494,9 +1523,11 @@ const COMMANDS: readonly Command[] = [
       "review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
     ],
     options: { candidate: STR, outcome: STR, reward: STR },
-    validate: (values) => {
-      const outcome = required(values.outcome, "outcome");
-      if (!OUTCOMES.includes(outcome as (typeof OUTCOMES)[number]))
+    prepareInput: (values) => {
+      const outcome = OUTCOMES.find(
+        (candidate) => candidate === values.outcome,
+      );
+      if (outcome === undefined)
         throw new UsageError(`--outcome must be one of ${OUTCOMES.join(", ")}`);
       const reward =
         values.reward === undefined ? undefined : Number(values.reward);
@@ -1506,15 +1537,10 @@ const COMMANDS: readonly Command[] = [
           !Number.isFinite(reward))
       )
         throw new UsageError("--reward must be a non-negative USD amount");
+      return { outcome, reward };
     },
-    handler: async ({ values, state, environment, io }) => {
-      const outcome = choice(
-        required(values.outcome, "outcome"),
-        "outcome",
-        OUTCOMES,
-      );
-      const reward =
-        values.reward === undefined ? undefined : Number(values.reward);
+    handler: async ({ values, input, state, environment, io }) => {
+      const { outcome, reward } = input;
       await environment.profile.review(state).recordOutcome({
         candidateId: required(values.candidate, "candidate"),
         outcome,
@@ -1541,11 +1567,8 @@ const COMMANDS: readonly Command[] = [
     readOnly: true,
     usage: ["ledger funnel --campaign <id> | --since <ISO>"],
     options: { campaign: STR, since: STR },
-    validate: (values) => {
-      campaignOrSince(values);
-    },
-    handler: async ({ values, state, print }) => {
-      const scope = campaignOrSince(values);
+    prepareInput: campaignOrSince,
+    handler: async ({ input: scope, state, print }) => {
       print(
         formatFunnel(
           state.ledger.funnel(
@@ -1562,11 +1585,8 @@ const COMMANDS: readonly Command[] = [
     readOnly: true,
     usage: ["ledger stops [--campaign <id>] [--since <ISO>]"],
     options: { campaign: STR, since: STR },
-    validate: (values) => {
-      since(values.since);
-    },
-    handler: async ({ values, state, print }) => {
-      const instant = since(values.since);
+    prepareInput: (values) => since(values.since),
+    handler: async ({ values, input: instant, state, print }) => {
       const rows = state.ledger.stops({
         ...(values.campaign === undefined
           ? {}
@@ -1583,11 +1603,8 @@ const COMMANDS: readonly Command[] = [
     readOnly: true,
     usage: ["ledger resumes [--campaign <id>] [--since <ISO>]"],
     options: { campaign: STR, since: STR },
-    validate: (values) => {
-      since(values.since);
-    },
-    handler: async ({ values, state, print }) => {
-      const instant = since(values.since);
+    prepareInput: (values) => since(values.since),
+    handler: async ({ values, input: instant, state, print }) => {
       const rows = state.ledger.resumes({
         ...(values.campaign === undefined
           ? {}

@@ -29,6 +29,7 @@ export async function openState(
     await mkdir(root, { recursive: true, mode: 0o700 });
   const store = new PrivateArtifactStore({
     rootDirectory: join(root, "private-evidence"),
+    readOnly: options.readOnly ?? false,
     maxEntries: 64,
     // A bounded capture and its supporting evidence fit in one artifact.
     maxBytes: 72 * 1024 * 1024,

@@ -2,6 +2,10 @@
 
 `Review` は `runtime-confirmed` と `reproduced` の再現パッケージを参照し、programme ごとの scope 評価、版付きの文案、外部行動の承認を台帳に記録する。文案本文と判断に使った資料は Git 外の Private Evidence に置き、台帳には digest 参照だけを残す。`admitExternalAction` は完全一致の承認を照会するだけで、報告や連絡を送信しない。
 
+重複候補の比較、提出規則の文脈の解釈、提出先の提案は `wbh-dedupe`・`wbh-destination`、報告文と添付一覧の作成は `wbh-report` が受け持つ。Harness は形式と明示条件の照合、根拠・判断者・時点の保存、文案の版と承認対象の対応を保証する。最終査読、対象範囲や権限の拡張、外部送信の承認と実行は人間が行う。CLI は記録と照会の入口とし、解釈や執筆を重複実装しない。
+
+現在の一覧と理由表示には、現在の検証 ID・Snapshot digest に対応する最後の判断を使う。後から古い検証への判断を追記しても、現在の表示を上書きしない。`review export` の判断は履歴上の最後の記録を保つため、現在の一覧とは異なる場合がある。単件の資料は台帳の参照で絞ってから読む。古い非標準 identity の scope 評価を ID で探すときだけ、互換性のため従来の全件読取りに戻る。
+
 `review --campaign <id>` は証拠付きの候補と、対象範囲内の `incomplete` を全件個別に表示する（#185、ADR 0031）。あわせて `incomplete` の最新 1 件を Finding ごとに、runner がまだ自動再試行する `retry candidates by reason` と、再試行が尽きて人間の手に渡る `incomplete by reason` に分けて数える。この分け方は runner（`src/cli/pipeline.ts`）と同じ関数 `shouldAutomaticallyRetryVerification`（`src/verification/retry-budget.ts`、ADR 0022）で決め、attempt は Lab Setup digest・Verifier prompt 版・理由が同じものだけを数える。`recipe`・`observation` は 3 回目、`provision`・`provider` は 2 回目から尽きた側に入る。`precondition` は scenario ID が変わったときだけ runner が再試行するが、review 列は Lab Setup を持たず変化を予測できないので常に尽きた側に数える。`evidence`・`cleanup`・`digest-mismatch`・`no-judge`・`sandbox` は 1 回目から尽きた側。再試行の実行そのものはこの列では行わない。
 
 当面は Wordfence 向けに、AI 操作役が `review export --campaign <id> --finding <id>` の参照を読み、screen、skill による検証、重複照合、最新版での再検証、scope 評価、提出先選択、英語の暫定文案までを順に進める（SPEC §3、ADR 0038）。Patchstack 向けの追加自動化は報告が増えてから扱う。6 段を起動・引き継ぐ自動 orchestrator はまだ無い。AI 操作役は所有者に代わって中間記録を実行するが、各 skill の判断方法は変えない。旧運用を記す skill 本文の版更新は別 PR で行う。AI の中間判断は `review decide --by ai` として記録し、`--minutes` を付けて人間の作業時間に混ぜない。`incomplete` や根拠のない重複・scope 判定を提出可能な文案として扱わない。各 skill と CLI の操作順は [OPERATIONS 第 3 節](../../docs/OPERATIONS.md)にある。
