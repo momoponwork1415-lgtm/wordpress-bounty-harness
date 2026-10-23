@@ -161,7 +161,9 @@ The following issues are frequently reported to our program but are not consider
 
 We no longer assign CVE IDs to any vulnerabilities found in the out of scope list above and they will not be eligible for a bounty through our bug bounty program.
 
-## 読み方（段 1 の篩で使う行）
+## 読み方（2026-10-21 時点の段 1、履歴）
+
+この節は当時の緩い段 1 の判断を残す。2026-10-23 以降の Wordfence 候補選別には ADR 0038 の追記 5 と `wbh-screen` v3 を優先し、末尾の「受理が怪しい程度は落とさない」を現行の判定規則として使わない。上の英語の規則原文は変更していない。
 
 所有者の 2026-10-21 の決定では、段 1 で落とすのは「確実に受理されない」ものだけである。原文のうち、前提の厳しさを理由に明示で除外している行は次のとおり。
 

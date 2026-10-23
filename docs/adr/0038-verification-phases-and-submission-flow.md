@@ -109,3 +109,13 @@ v7 は、この受け口の契約と「自分で組まない」を `stored-xss` 
 最新版の再検証で新しい Target Snapshot になれば、元 Finding とは別の派生 Finding ID が作られる。AI は `review reverify` の出力 `as <findingId>` を受け取り、その ID で `wbh-review`、重複照合と暫定 `review decide`、scope 評価、提出先選択、報告書作成をやり直す。元 Finding の暫定判断や重複結果は継承しない。元 Finding の文案は、この派生 Finding が記録された時点で承認と提出へ進めない。同じ Snapshot での再試行は元 ID のまま扱う。
 
 人間は暫定版を受け取ってから Lab で再現し、同じ検証 ID と再現パッケージ digest に対する `match` を記録する。続けて本文・手順・版・影響・添付・送信先を査読し、Markdown、JSON、manifest の最終版を作って `review draft --prepared-by human` で文案を保存する。その版の保存と手動再現より後に、同じ人が `review decide --decision accept` を記録する。`review authorize` と提出時の admission は、最新の文案が人間の最終版で、最新の再現が `match`、最後の判断が同じ人の `accept` であること、および Candidate・文案 digest・送信先の一致を要求する。`mismatch` / `unavailable`、新版の保存、後続の否定判断、後続の検証や同じ Finding の最新版再検証では、旧文案の承認を通さない。CLI の `human` 属性と `--by` は本人認証ではないため、AI は手動再現・人間の最終版・最終 `accept`・承認のコマンドを代行しない。送信は引き続き人間が行う。
+
+## 2026-10-23 追記 5: Wordfence 候補を保守的に選ぶ
+
+所有者は、検証に時間がかかるため、未確認の Finding も先に読んで Wordfence の受理基準に照らし、Lab に時間を使う候補を悲観的に選ぶと決めた。段 1 の `wbh-screen` を v3 にする。判定は `Wordfence 候補として採用 / 非採用` の二値で、`保留` を新しい状態としては設けない。これは v2.2 の `提出可 / 提出不可` と同じ意味ではなく、技術的な真偽、正式な programme scope、提出許可のいずれも決めない。
+
+`採用`には、Finding の主張に攻撃者からサイトまたは別利用者への実害までの具体的な経路、通常の前提、Wordfence の資産・install 閾値・役割・最終影響との整合が要る。`stored-xss` 等のラベルだけでは足りない。`not-verified` または `incomplete` 自体を非採用の根拠にしない。明示除外、重要な辺の記述欠落、近接する公開修正との独立性未証明は `非採用` とし、理由を分け、再評価に必要な証拠を 1 つ書く。Lab で前提を作れないこと自体は受理見込みを変えず、準備か手動確認を別の次の一手として残す。公開履歴 mirror は報奨採否の台帳ではなく、`informational=0` の中にも Wordfence 報奨範囲外の Contributor+ の記録がある。条件付き前提の近い公開記録は直近 6 か月で数え、0 件も 3 件以上も採否の閾値に使わない。これにより 2026-10-22 の「五分五分なら提出可」と 2026-10-23 の「先例 0 件なら提出不可」という段 1 の規則を置き換える。
+
+`非採用` は Wordfence 向けの検証投資の判断なので、Programme Boundary 全体の `out-of-scope` や Finding の `contradicted` に読み替えない。段 1 は `review decide --decision reject` を実行・提案しない。`verify next` の列は変えず、操作役は v3 の `採用`を Finding ID で名指しして Lab に回す。v2.2 で既に記録された `reject` はこの変更だけでは書き換えず、名指しの再評価で判断が変われば新しい `defer` decision として記録し、handoff 列へ戻す。報告と個別メモは版・時刻付きで Private Evidence に残し、後段の判定器、重複、scope、暫定文案、人間の再現と承認の門は変えない。当面 Patchstack の候補選別は後回しにする。条件付き公開記録の傾向を見る窓は直近 6 か月だが、同じ slug の既知修正との照合は mirror の全期間を使う。近い修正の独立性は別工程で source 差分を比較した非公開メモを、ID・Snapshot・版・入力面を照合してから v3 に渡す。
+
+v3 を戻すときは `versions/v2.2.md` を skill 本文に戻し、OPERATIONS §3 の段 0 と `wbh-review` の段 1 の読み方を戻す。旧版の結果を新しい判断として流用しない。
