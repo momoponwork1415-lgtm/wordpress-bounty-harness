@@ -145,7 +145,7 @@ it("recovers a false-positive park into the review and verification queues witho
   expect(ledger.read({ type: "finding-recorded" })).toHaveLength(1);
 });
 
-it("refuses both a still-explicit admin setting and a Programme Boundary park", async () => {
+it("restores a setting park but refuses a Programme Boundary park", async () => {
   const setting = await fixture({
     precondition:
       "An administrator sets the Featured Tile checkbox to checked.",
@@ -156,7 +156,10 @@ it("refuses both a still-explicit admin setting and a Programme Boundary park", 
       campaignId: "campaign-1",
       findingId: setting.finding.findingId,
     }),
-  ).rejects.toThrow("still has an admin-configuration precondition");
+  ).resolves.toEqual({ status: "restored" });
+  expect(
+    setting.ledger.activeParked({ campaignId: "campaign-1" }),
+  ).toHaveLength(0);
 
   const excluded = await fixture({
     precondition: "default",

@@ -68,8 +68,6 @@ async function assessCorrection(options: RestoreOptions) {
   const { preconditionClass } = classifyWordPressPrecondition({
     configurationPrecondition: finding.configurationPrecondition,
   });
-  if (preconditionClass === "admin-configuration")
-    throw new Error("Finding still has an admin-configuration precondition");
 
   const recordedIdentity = `discovery-finding-${findingId}`;
   const existing = ledger
@@ -118,10 +116,9 @@ export async function inspectParkedWordPressFinding(options: RestoreOptions) {
 }
 
 /**
- * Repair a precondition false positive already parked at admission. The old
+ * Restore an admission park caused by the retired configuration gate. The old
  * event and Private Evidence remain intact; the new events restore its queue
- * position. Programme Boundary parks and still-classified admin settings
- * cannot pass this operation.
+ * position. Programme Boundary parks cannot pass this operation.
  */
 export async function restoreParkedWordPressFinding(
   options: RestoreOptions,
