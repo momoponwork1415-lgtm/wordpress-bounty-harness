@@ -129,3 +129,11 @@ v3 を戻すときは `versions/v2.2.md` を skill 本文に戻し、OPERATIONS 
 旧版の `reject` は、各 Finding を新基準で再評価し、明示除外でなければ新しい `defer` 判断を追記して通常の検証列へ戻す。旧判断は削除しない。探索時の Programme Boundary による `finding-parked` の 10 分類と、明示された特別な管理者設定の規則は変えない。群の代表から検証しても、群内の Finding は保持する。
 
 次の作業は判定器の条件変更より、検証が判定器の結論に届くことを優先する。まず公開済み開発対象の Brizy / TranslatePress を現行 `wbh-verify` で受け渡し、所要時間、`runtime-confirmed` / `contradicted` / `incomplete`、未完の理由を #352 に記録する。前提・観測・手順の不足は各原因に絞って直す。nonce 付き canary、Snapshot digest、一時 Lab と `incomplete` の扱いは SPEC 第 2 節のまま維持する。判定器の条件を緩めて通過数を増やさない。
+
+## 2026-10-24 追記 7: 操作が必要な出口を一律に除外しない
+
+代表 22 件の受け渡しで、ある stored XSS 候補を 2 回試した。1 回目は被害者画面への遷移に失敗し、2 回目は保存値が属性まで届いたが、click を宣言せず beacon を観測しなかった。この 2 回から分かるのは、その手順で発火を観測できなかったことまでであり、操作後にも発火しないことではない。
+
+`target="_blank"` の anchor は通常 opener を持たないが、HTML Standard は `rel=opener` を明示的な例外として定める。Mozilla の公開記録にも、`download` または `rel=opener` が付いたときの JavaScript 実行が記されている。したがって、`target="_blank"` の `href` にある `javascript:` を属性名だけで「原理として成立しない」と決めて click を省くと偽陰性になり得る（[HTML Standard](https://html.spec.whatwg.org/multipage/links.html#link-type-opener)、[Mozilla Bug 1863882](https://bugzilla.mozilla.org/show_bug.cgi?id=1863882)）。
+
+`wbh-verify` v8 は、固定ソースと前提作り中の Lab の HTTP 応答で出力形を確認し、通常の操作を要する出口は型付き `victim.actions` に宣言して Harness の Lab browser で観測する。`setup-done` 後に管理者資格は再利用しない。値がサニタイズで消えるなど具体的な否定根拠があれば、入力・保存・描画のどこで落ちたかを `refutation.md` に記す。canary 不着だけで反証と断定せず、判定器の条件は変えない。この確認は段 3 で行い、段 1 の明示除外条件を増やさない。
