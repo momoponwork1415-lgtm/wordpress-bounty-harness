@@ -98,10 +98,25 @@ const claim = (impact: string, file: string) => ({
   labObservations: "Synthetic observation",
 });
 
+/** Keep the first execution in flight until the second has actually started. */
+function waitForSecondExecution(): () => Promise<void> {
+  let started = 0;
+  let release!: () => void;
+  const secondStarted = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return () => {
+    if (++started === 2) release();
+    return secondStarted;
+  };
+}
+
 /** Real modules; only WordPress.org, Docker/runsc and the provider CLI are fakes. */
 async function harness(
   options: {
     readonly askMinutes?: CliIo["askMinutes"];
+    /** A test-owned barrier for observing overlapping synthetic executions. */
+    readonly executionStarted?: () => Promise<void>;
     readonly scopeFacts?: Parameters<
       typeof createWordPressCliProfile
     >[0]["scopeFacts"];
@@ -621,7 +636,7 @@ async function harness(
         coordinations.push(run.coordination);
         expirations.push(run.expiresAt);
         maxInFlight = Math.max(maxInFlight, ++inFlight);
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await options.executionStarted?.();
         inFlight--;
         if (options.limitOnCalls?.includes(call) === true) {
           const childAttachment =
@@ -2225,6 +2240,7 @@ describe("harness CLI vertical slice", () => {
     const { run, configPath, prompts, ledger, maxInFlight, live, docker } =
       await harness({
         candidates: ["synthetic-plugin", "second-plugin", "third-plugin"],
+        executionStarted: waitForSecondExecution(),
         limitOnCalls: [1],
         zeroFindings: true,
         config: {
@@ -3432,6 +3448,7 @@ describe("harness CLI vertical slice", () => {
 
   it("runs discovery concurrently within the configured count and memory budget", async () => {
     const { run, configPath, maxInFlight } = await harness({
+      executionStarted: waitForSecondExecution(),
       candidates: [
         "synthetic-plugin",
         "second-plugin",
