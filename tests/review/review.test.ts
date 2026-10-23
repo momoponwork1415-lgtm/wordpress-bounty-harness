@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1214,6 +1214,173 @@ describe("review queue and decisions", () => {
         decidedBy: "operator",
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe("one human review operation", () => {
+  const decisionInput = {
+    ref,
+    decision: "accept" as const,
+    reasonCode: "accepted",
+    openedEvidence: [],
+    decidedBy: "operator",
+    duplicate: { status: "no-match" as const },
+    duplicateNote: "Synthetic review note",
+  };
+
+  it("records related human work in order and carries the same reading time into the decision", async () => {
+    const { review, ledger } = await fixture();
+    const before = ledger.readAll({}).length;
+    const record = await review.recordDecision({
+      ...decisionInput,
+      minutes: 2.5,
+      reproduction: { result: "match", minutes: 7.25 },
+    });
+    const events = ledger
+      .readAll({})
+      .slice(before)
+      .map(({ event }) => event);
+    expect(events).toMatchObject([
+      { type: "human-reproduction-recorded", result: "match" },
+      { type: "human-effort-recorded", action: "reproduce", minutes: 7.25 },
+      { type: "review-decided", humanElapsedSeconds: 150 },
+      { type: "human-effort-recorded", action: "read", minutes: 2.5 },
+    ]);
+    expect(events).toHaveLength(4);
+    expect(record).toMatchObject({
+      humanElapsedSeconds: 150,
+      duplicate: {
+        status: "no-match",
+        note: expect.stringMatching(/^sha256:/),
+      },
+    });
+  });
+
+  it("leaves optional human records absent when no time or reproduction was reported", async () => {
+    const { review, ledger } = await fixture();
+    const before = ledger.readAll({}).length;
+    const record = await review.recordDecision(decisionInput);
+    expect(record).not.toHaveProperty("humanElapsedSeconds");
+    expect(
+      ledger
+        .readAll({})
+        .slice(before)
+        .map(({ event }) => event.type),
+    ).toEqual(["review-decided"]);
+  });
+
+  it.each([
+    { name: "reason", override: { reasonCode: "invalid reason" } },
+    { name: "evidence digest", override: { openedEvidence: ["not-a-digest"] } },
+    { name: "author", override: { decidedBy: "" } },
+    { name: "empty note", override: { duplicateNote: "" } },
+    {
+      name: "oversized note",
+      override: { duplicateNote: "x".repeat(100_001) },
+    },
+    {
+      name: "duplicate reference",
+      override: {
+        duplicate: { status: "possible-match" as const, reference: "" },
+      },
+    },
+    { name: "reading time", override: { minutes: 1441 } },
+    {
+      name: "reproduction time",
+      override: { reproduction: { result: "match" as const, minutes: -1 } },
+    },
+    {
+      name: "unknown verification",
+      override: { ref: { ...ref, verificationId: "unknown" } },
+    },
+    {
+      name: "snapshot mismatch",
+      override: { ref: { ...ref, snapshotDigest: labSetup } },
+    },
+  ])("writes no event or artifact for invalid $name", async ({ override }) => {
+    const { review, ledger, artifactStore } = await fixture();
+    const eventsBefore = ledger.readAll({});
+    const filesBefore = await readdir(artifactStore.rootDirectory);
+    await expect(
+      review.recordDecision({
+        ...decisionInput,
+        minutes: 2,
+        reproduction: { result: "match", minutes: 4 },
+        ...override,
+      }),
+    ).rejects.toThrow();
+    expect(ledger.readAll({})).toEqual(eventsBefore);
+    expect(await readdir(artifactStore.rootDirectory)).toEqual(filesBefore);
+  });
+
+  it("rejects a reproduction on an unverified item before recording any human work", async () => {
+    const { review, ledger, artifactStore } = await queueFixture();
+    const eventsBefore = ledger.readAll({});
+    const filesBefore = await readdir(artifactStore.rootDirectory);
+    await expect(
+      review.recordDecision({
+        ...decisionInput,
+        ref: {
+          campaignId: ref.campaignId,
+          findingId: "finding-4",
+          snapshotDigest: snapshot,
+        },
+        minutes: 2,
+        reproduction: { result: "match", minutes: 4 },
+      }),
+    ).rejects.toThrow();
+    expect(ledger.readAll({})).toEqual(eventsBefore);
+    expect(await readdir(artifactStore.rootDirectory)).toEqual(filesBefore);
+  });
+
+  it.each(["ai", "agent", "automation", " SYSTEM "])(
+    "does not attribute human time or reproduction to %s",
+    async (decidedBy) => {
+      const { review, ledger, artifactStore } = await fixture();
+      const eventsBefore = ledger.readAll({});
+      const filesBefore = await readdir(artifactStore.rootDirectory);
+      for (const humanWork of [
+        { minutes: 0 },
+        { reproduction: { result: "match" as const } },
+      ]) {
+        await expect(
+          review.recordDecision({ ...decisionInput, decidedBy, ...humanWork }),
+        ).rejects.toThrow("A named human actor is required");
+      }
+      expect(ledger.readAll({})).toEqual(eventsBefore);
+      expect(await readdir(artifactStore.rootDirectory)).toEqual(filesBefore);
+    },
+  );
+
+  it("allows an AI decision without human time or reproduction", async () => {
+    const { review, ledger } = await fixture();
+    const before = ledger.readAll({}).length;
+    const record = await review.recordDecision({
+      ...decisionInput,
+      decidedBy: "ai",
+    });
+    expect(record.decidedBy).toBe("ai");
+    expect(record).not.toHaveProperty("humanElapsedSeconds");
+    expect(
+      ledger
+        .readAll({})
+        .slice(before)
+        .map(({ event }) => event.type),
+    ).toEqual(["review-decided"]);
+  });
+
+  it("validates standalone decide before filing its note", async () => {
+    const { review, ledger, artifactStore } = await fixture();
+    const eventsBefore = ledger.readAll({});
+    const filesBefore = await readdir(artifactStore.rootDirectory);
+    await expect(
+      review.decide({
+        ...decisionInput,
+        reasonCode: "invalid reason",
+      }),
+    ).rejects.toThrow();
+    expect(ledger.readAll({})).toEqual(eventsBefore);
+    expect(await readdir(artifactStore.rootDirectory)).toEqual(filesBefore);
   });
 });
 

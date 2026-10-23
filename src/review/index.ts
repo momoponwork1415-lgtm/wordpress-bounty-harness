@@ -15,6 +15,11 @@ import {
   countAttemptsForReason,
   shouldAutomaticallyRetryVerification,
 } from "../verification/retry-budget.js";
+import {
+  currentReviewDecision,
+  readDecisionHistory,
+  type DecisionHistoryEntry,
+} from "./decision-history.js";
 import { openReproductionPackage } from "./reproduction-package.js";
 
 export {
@@ -85,6 +90,41 @@ const humanActor = id
   );
 
 type Decision = ReviewDecisionV1["decision"];
+type DecisionInput = {
+  /** Without a verification ID, the Finding must be listed as `not-verified` (#436). */
+  readonly ref: ReviewDecisionRef;
+  readonly decision: Decision;
+  readonly reasonCode: string;
+  readonly openedEvidence: readonly string[];
+  /** The wbh-dedupe result (#442); absent, the decision keeps the one in force. */
+  readonly duplicate?: DuplicateResult;
+  /** The skill's note behind that result; Review files it in Private Evidence. */
+  readonly duplicateNote?: string;
+  readonly decidedBy: string;
+  /** Seconds the human spent, reported by the skill or CLI caller (ADR 0032 Q22). */
+  readonly humanElapsedSeconds?: number;
+};
+type HumanEffortInput = {
+  readonly campaignId?: string;
+  readonly findingId?: string;
+  readonly candidateId?: string;
+  readonly action: "read" | "reproduce" | "submit" | "outcome";
+  readonly minutes: number;
+};
+type HumanReproductionInput = {
+  readonly ref: ReviewRef;
+  readonly result: "match" | "mismatch" | "unavailable";
+};
+type HumanRecord = Extract<
+  LedgerEventV1,
+  { type: "human-effort-recorded" | "human-reproduction-recorded" }
+>;
+type PreparedDecision = {
+  readonly record: ReviewDecisionV1;
+  readonly duplicateNote?: string;
+};
+const humanMinutesSchema = z.number().finite().nonnegative().max(1440);
+const duplicateNoteSchema = z.string().min(1).max(100_000);
 export type ReviewItem = (
   | {
       readonly status: "runtime-confirmed" | "reproduced";
@@ -255,15 +295,12 @@ export class Review<TFacts = unknown> {
         history.push(event);
         verificationHistory.set(key(event), history);
       }
-    const latestDecision = new Map<
-      string,
-      { sequence: number; decision: Decision }
-    >();
-    for (const { sequence, event } of this.#ledger.readAll({
-      type: "review-decided",
-    }))
-      if (event.type === "review-decided" && inCampaign(event))
-        latestDecision.set(key(event), { sequence, decision: event.decision });
+    const latestDecision = new Map<string, DecisionHistoryEntry>();
+    for (const entry of readDecisionHistory(
+      this.#ledger,
+      campaignId === undefined ? {} : { campaignId },
+    ))
+      latestDecision.set(key(entry.event), entry);
 
     const items: ReviewItem[] = [];
     const parkedEvents = new Map<
@@ -327,7 +364,7 @@ export class Review<TFacts = unknown> {
             snapshotDigest: finding.snapshotDigest,
           },
           category: finding.category,
-          decision: decided?.decision ?? null,
+          decision: currentReviewDecision(decided)?.decision ?? null,
           group,
         });
         continue;
@@ -340,9 +377,7 @@ export class Review<TFacts = unknown> {
         snapshotDigest: event.snapshotDigest,
       };
       const decision =
-        decided !== undefined && decided.sequence > sequence
-          ? decided.decision
-          : null;
+        currentReviewDecision(decided, sequence)?.decision ?? null;
       const result = event.result;
       if (result.status === "contradicted") {
         contradicted++;
@@ -413,20 +448,71 @@ export class Review<TFacts = unknown> {
     };
   }
 
-  async decide(input: {
-    /** Without a verification ID, the Finding must be listed as `not-verified` (#436). */
-    readonly ref: ReviewDecisionRef;
-    readonly decision: Decision;
-    readonly reasonCode: string;
-    readonly openedEvidence: readonly string[];
-    /** The wbh-dedupe result (#442); absent, the decision keeps the one in force. */
-    readonly duplicate?: DuplicateResult;
-    /** The skill's note behind that result; Review files it in Private Evidence. */
-    readonly duplicateNote?: string;
-    readonly decidedBy: string;
-    /** Seconds the human spent, reported by the skill or CLI caller (ADR 0032 Q22). */
-    readonly humanElapsedSeconds?: number;
-  }): Promise<ReviewDecisionV1> {
+  /**
+   * One human review operation. Validate all records before the first write;
+   * keep the reproduction, its time, the decision and reading time in order.
+   * This is not a transaction spanning SQLite and Private Evidence: an I/O
+   * failure can still interrupt an already validated operation.
+   */
+  async recordDecision(
+    input: Omit<DecisionInput, "humanElapsedSeconds"> & {
+      readonly minutes?: number;
+      readonly reproduction?: {
+        readonly result: HumanReproductionInput["result"];
+        readonly minutes?: number;
+      };
+    },
+  ): Promise<ReviewDecisionV1> {
+    const decidedBy =
+      input.minutes !== undefined || input.reproduction !== undefined
+        ? humanActor.parse(input.decidedBy)
+        : input.decidedBy;
+    const minutes = humanMinutesSchema.optional().parse(input.minutes);
+    const reproduction =
+      input.reproduction === undefined
+        ? undefined
+        : this.#prepareHumanReproduction({
+            ref: refSchema.parse(input.ref),
+            result: input.reproduction.result,
+          });
+    const reproductionEffort =
+      input.reproduction?.minutes === undefined
+        ? undefined
+        : this.#prepareHumanEffort({
+            campaignId: input.ref.campaignId,
+            findingId: input.ref.findingId,
+            action: "reproduce",
+            minutes: input.reproduction.minutes,
+          });
+    const decision = await this.#prepareDecision({
+      ...input,
+      decidedBy,
+      ...(minutes === undefined
+        ? {}
+        : { humanElapsedSeconds: Math.round(minutes * 60) }),
+    });
+    const readEffort =
+      minutes === undefined
+        ? undefined
+        : this.#prepareHumanEffort({
+            campaignId: decision.record.ref.campaignId,
+            findingId: decision.record.ref.findingId,
+            action: "read",
+            minutes,
+          });
+    if (reproduction !== undefined) await this.#recordHumanEvent(reproduction);
+    if (reproductionEffort !== undefined)
+      await this.#recordHumanEvent(reproductionEffort);
+    const recorded = await this.#persistDecision(decision);
+    if (readEffort !== undefined) await this.#recordHumanEvent(readEffort);
+    return recorded;
+  }
+
+  async decide(input: DecisionInput): Promise<ReviewDecisionV1> {
+    return this.#persistDecision(await this.#prepareDecision(input));
+  }
+
+  async #prepareDecision(input: DecisionInput): Promise<PreparedDecision> {
     const ref = decisionRefSchema.parse(input.ref);
     if (input.duplicateNote !== undefined && input.duplicate === undefined)
       throw new Error("A dedupe note needs the result it supports");
@@ -437,27 +523,19 @@ export class Review<TFacts = unknown> {
             ...ref,
             verificationId: ref.verificationId,
           });
+    const duplicateNote = duplicateNoteSchema
+      .optional()
+      .parse(input.duplicateNote);
     const trace = this.#traceOf(ref.campaignId, ref.findingId);
     const decidedAt = this.#clock();
     // A later decision (e.g. the one carrying `--reproduced`) must not erase stage 4.
-    let duplicate: DuplicateCheck =
+    const duplicate: DuplicateCheck =
       input.duplicate === undefined
         ? ((await this.duplicateOf(ref)) ?? { status: "unavailable" })
         : duplicateSchema.parse({
             ...input.duplicate,
             checkedAt: decidedAt.toISOString(),
           });
-    if (input.duplicateNote !== undefined)
-      duplicate = {
-        ...duplicate,
-        note: await this.#store.putFiles({
-          [DEDUPE_NOTE_FILE]: z
-            .string()
-            .min(1)
-            .max(100_000)
-            .parse(input.duplicateNote),
-        }),
-      };
     const record = reviewDecisionV1Schema.parse({
       schemaVersion: 1,
       ref,
@@ -474,6 +552,28 @@ export class Review<TFacts = unknown> {
         : { humanElapsedSeconds: input.humanElapsedSeconds }),
       ...(trace === undefined ? {} : { trace }),
     });
+    return {
+      record,
+      ...(duplicateNote === undefined ? {} : { duplicateNote }),
+    };
+  }
+
+  async #persistDecision(
+    prepared: PreparedDecision,
+  ): Promise<ReviewDecisionV1> {
+    const record =
+      prepared.duplicateNote === undefined
+        ? prepared.record
+        : {
+            ...prepared.record,
+            duplicate: {
+              ...prepared.record.duplicate,
+              note: await this.#store.putFiles({
+                [DEDUPE_NOTE_FILE]: prepared.duplicateNote,
+              }),
+            },
+          };
+    const { ref, trace, duplicate } = record;
     const artifactDigest = await this.#storeRecord(record);
     const appended = await this.#ledger.append({
       schemaVersion: 1,
@@ -575,13 +675,7 @@ export class Review<TFacts = unknown> {
     const reasons = new Map<ReviewItem, string>();
     for (const item of items) {
       if (item.decision === null) continue;
-      const event = this.#ledger
-        .readAll({
-          campaignId: item.ref.campaignId,
-          findingId: item.ref.findingId,
-          type: "review-decided",
-        })
-        .at(-1)?.event;
+      const event = readDecisionHistory(this.#ledger, item.ref).at(-1)?.event;
       if (event === undefined) continue;
       const read = await readReviewRecord(
         this.#store,
@@ -598,13 +692,10 @@ export class Review<TFacts = unknown> {
     readonly campaignId: string;
     readonly findingId: string;
   }): Promise<DuplicateCheck | null> {
-    const latest = this.#ledger
-      .readAll({
-        campaignId: id.parse(input.campaignId),
-        findingId: id.parse(input.findingId),
-        type: "review-decided",
-      })
-      .at(-1)?.event;
+    const latest = readDecisionHistory(this.#ledger, {
+      campaignId: id.parse(input.campaignId),
+      findingId: id.parse(input.findingId),
+    }).at(-1)?.event;
     if (latest === undefined) return null;
     const read = await readReviewRecord(this.#store, latest, "review-decision");
     return read.status === "read" ? read.record.duplicate : null;
@@ -1122,19 +1213,12 @@ export class Review<TFacts = unknown> {
   }
 
   /** One append-only receipt for work the owner actually completed. */
-  async recordHumanEffort(input: {
-    readonly campaignId?: string;
-    readonly findingId?: string;
-    readonly candidateId?: string;
-    readonly action: "read" | "reproduce" | "submit" | "outcome";
-    readonly minutes: number;
-  }): Promise<void> {
-    const minutes = z
-      .number()
-      .finite()
-      .nonnegative()
-      .max(1440)
-      .parse(input.minutes);
+  async recordHumanEffort(input: HumanEffortInput): Promise<void> {
+    await this.#recordHumanEvent(this.#prepareHumanEffort(input));
+  }
+
+  #prepareHumanEffort(input: HumanEffortInput): HumanRecord {
+    const minutes = humanMinutesSchema.parse(input.minutes);
     const candidateEvent =
       input.candidateId === undefined
         ? undefined
@@ -1167,7 +1251,7 @@ export class Review<TFacts = unknown> {
     const snapshotDigest = finding?.snapshotDigest ?? candidate?.snapshotDigest;
     if (snapshotDigest === undefined)
       throw new Error("Human effort needs a recorded Snapshot");
-    const appended = await this.#ledger.append({
+    return {
       schemaVersion: 1,
       identity: `human-effort:${randomUUID()}`,
       campaignId,
@@ -1177,15 +1261,18 @@ export class Review<TFacts = unknown> {
       ...(findingId === undefined ? {} : { findingId }),
       action: input.action,
       minutes,
-    });
-    if (appended.status !== "appended")
-      throw new Error("Human effort ledger conflict");
+      artifacts: [],
+    };
   }
 
-  async recordHumanReproduction(input: {
-    readonly ref: ReviewRef;
-    readonly result: "match" | "mismatch" | "unavailable";
-  }): Promise<void> {
+  async recordHumanReproduction(input: HumanReproductionInput): Promise<void> {
+    await this.#recordHumanEvent(this.#prepareHumanReproduction(input));
+  }
+
+  #prepareHumanReproduction(input: HumanReproductionInput): HumanRecord {
+    const result = z
+      .enum(["match", "mismatch", "unavailable"])
+      .parse(input.result);
     const ref = refSchema.parse(input.ref);
     const verification = this.#requireConfirmed(ref);
     if (
@@ -1193,7 +1280,7 @@ export class Review<TFacts = unknown> {
       verification.result.status !== "reproduced"
     )
       throw new Error("A matching evidence-backed verification is required");
-    const appended = await this.#ledger.append({
+    return {
       schemaVersion: 1,
       identity: `human-reproduction:${randomUUID()}`,
       campaignId: ref.campaignId,
@@ -1203,10 +1290,19 @@ export class Review<TFacts = unknown> {
       findingId: ref.findingId,
       verificationId: ref.verificationId,
       reproductionPackageDigest: verification.result.reproductionPackageDigest,
-      result: input.result,
-    });
+      result,
+      artifacts: [],
+    };
+  }
+
+  async #recordHumanEvent(event: HumanRecord): Promise<void> {
+    const appended = await this.#ledger.append(event);
     if (appended.status !== "appended")
-      throw new Error("Human reproduction ledger conflict");
+      throw new Error(
+        event.type === "human-effort-recorded"
+          ? "Human effort ledger conflict"
+          : "Human reproduction ledger conflict",
+      );
   }
 
   async inspectDuplicate(input: {

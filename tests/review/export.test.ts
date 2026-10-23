@@ -746,6 +746,90 @@ describe("review export", () => {
     expect(failed.target.versions.latestObserved).toBeNull();
   });
 
+  it("keeps the last historical decision in export after the queue decision expires", async () => {
+    const { ledger, store } = await fixture({
+      verification: "confirmed",
+      review: "none",
+    });
+    const review = reviewOver(ledger, store);
+    await review.decide({
+      ref,
+      decision: "defer",
+      reasonCode: "needs-review",
+      duplicate: { status: "no-match" },
+      openedEvidence: [],
+      decidedBy: "owner",
+    });
+    expect(
+      review.queue({ campaignId: ref.campaignId }).items[0]?.decision,
+    ).toBe("defer");
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "later-verification",
+      campaignId: ref.campaignId,
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-10T00:00:00Z",
+      type: "verification-finished",
+      findingId: ref.findingId,
+      verificationId: "later-verification",
+      labSetupDigest: labSetup,
+      result: {
+        status: "incomplete",
+        reason: "evidence",
+        nextStep: "Review evidence",
+      },
+    });
+    expect(
+      review.queue({ campaignId: ref.campaignId }).items[0]?.decision,
+    ).toBeNull();
+    const bundle = await exportReviewBundle({
+      ledger,
+      store,
+      campaignId: ref.campaignId,
+      findingId: ref.findingId,
+    });
+    expect(bundle.review.decision).toMatchObject({
+      decision: "defer",
+      reasonCode: "needs-review",
+      duplicate: "no-match",
+    });
+    // Historical duplicate checks survive a new verification, independently of
+    // whether the old human decision is still current in the queue.
+    expect(await review.duplicateOf(ref)).toMatchObject({ status: "no-match" });
+    const after = reviewOver(
+      ledger,
+      store,
+      () => new Date("2026-10-11T00:00:00Z"),
+    );
+    await after.decide({
+      ref: { ...ref, verificationId: "later-verification" },
+      decision: "reject",
+      reasonCode: "reviewed",
+      openedEvidence: [],
+      decidedBy: "owner",
+    });
+    const queue = after.queue({ campaignId: ref.campaignId });
+    const item = queue.items[0];
+    expect(item?.decision).toBe("reject");
+    expect((await after.decisionReasons(queue.items)).get(item!)).toBe(
+      "reviewed",
+    );
+    const latest = await exportReviewBundle({
+      ledger,
+      store,
+      campaignId: ref.campaignId,
+      findingId: ref.findingId,
+    });
+    expect(latest.review.decision).toMatchObject({
+      decision: "reject",
+      duplicate: "no-match",
+    });
+    expect(latest.review.decisions.map(({ decision }) => decision)).toEqual([
+      "defer",
+      "reject",
+    ]);
+  });
+
   it("carries a possible-match reference from Review's decision record", async () => {
     const { ledger, store } = await fixture({
       verification: "confirmed",

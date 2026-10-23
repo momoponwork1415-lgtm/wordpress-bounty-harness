@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
+import { readDecisionHistory } from "./decision-history.js";
 import {
   DEDUPE_NOTE_FILE,
   readReviewRecord,
@@ -238,7 +239,7 @@ export const reviewExportV1Schema = z.strictObject({
         status: z.string(),
       }),
     ),
-    /** The latest decision's private record; null before any decision. */
+    /** The latest historical decision, even after a newer verification; null before any decision. */
     decision: z
       .strictObject({
         decision: z.enum(["accept", "reject", "defer"]),
@@ -652,10 +653,9 @@ export async function exportReviewBundle(options: {
         : { status: "captured", path: contentPath(diffRef.digest), summary };
   }
 
-  const decisions = ledger
-    .readAll({ campaignId, findingId, type: "review-decided" })
-    .map(({ event }) => event)
-    .filter((event) => event.type === "review-decided");
+  const decisions = readDecisionHistory(ledger, { campaignId, findingId }).map(
+    ({ event }) => event,
+  );
   for (const event of decisions)
     for (const artifact of event.artifacts)
       addArtifact(artifact.kind, artifact.digest);
@@ -673,8 +673,11 @@ export async function exportReviewBundle(options: {
     const read = await readReviewRecord(store, event, kind);
     return read.status === "read" ? read.record : null;
   };
-  const lastDecision = decisions.at(-1);
-  const decisionRecord = await privateRecord(lastDecision, "review-decision");
+  const latestHistoricalDecision = decisions.at(-1);
+  const decisionRecord = await privateRecord(
+    latestHistoricalDecision,
+    "review-decision",
+  );
   const ofFinding = (type: LedgerEventV1["type"], ids: readonly string[]) =>
     ids.flatMap((findingIdOf) =>
       ledger
@@ -813,10 +816,10 @@ export async function exportReviewBundle(options: {
         status: event.status,
       })),
       decision:
-        lastDecision === undefined
+        latestHistoricalDecision === undefined
           ? null
           : {
-              decision: lastDecision.decision,
+              decision: latestHistoricalDecision.decision,
               reasonCode: decisionRecord?.reasonCode ?? null,
               duplicate:
                 decisionRecord === null
@@ -824,7 +827,7 @@ export async function exportReviewBundle(options: {
                   : decisionRecord.duplicate.status === "possible-match"
                     ? `${decisionRecord.duplicate.status}:${decisionRecord.duplicate.reference}`
                     : decisionRecord.duplicate.status,
-              decidedAt: lastDecision.occurredAt,
+              decidedAt: latestHistoricalDecision.occurredAt,
             },
       duplicate:
         decisionRecord === null

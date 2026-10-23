@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runCli, type CliIo } from "../../src/cli/index.js";
+import { openState } from "../../src/cli/state.js";
 import { reviewExportV1Schema } from "../../src/review/index.js";
 import {
   createWordPressCliProfile,
@@ -3501,6 +3502,8 @@ describe("harness CLI vertical slice", () => {
 
   it("shows the history mirror freshness by the same rule as the duplicate lookup", async () => {
     const { run, root } = await harness({ history: true });
+    // Viewing never initializes state; seed the fixture explicitly.
+    await openState(join(root, "state"));
     const stale = await run("history", "status");
     expect(stale.code).toBe(1);
     expect(stale.stdout).toBe(
@@ -3535,7 +3538,9 @@ describe("harness CLI vertical slice", () => {
     expect(mismatched.stdout).toBe(
       "history mirror unavailable  database and state disagree",
     );
-    const unconfigured = await (await harness()).run("history", "status");
+    const withoutMirror = await harness();
+    await openState(join(withoutMirror.root, "state"));
+    const unconfigured = await withoutMirror.run("history", "status");
     expect(unconfigured.code).toBe(1);
     expect(unconfigured.stdout).toBe("history mirror not configured");
   });
