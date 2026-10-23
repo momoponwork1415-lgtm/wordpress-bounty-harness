@@ -114,7 +114,7 @@ v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入�
 
 ### 探索だけ回し、検証を 1 件ずつ回す
 
-`campaign.json` の `discovery.lab` は既定（省略時）が `"none"` で、探索用 Lab を供給せず、Finding は台帳に記録して検証を後へ送る（所有者決定 2026-10-18「通常モードは Lab を起動しない探索」）。`"attached"` にすると従来どおり探索用 Lab を供給する。設定変更は campaign.json の PR で行い、prompt 本文は変えない。
+`campaign.json` の `discovery.lab` は既定（省略時）が `"none"` で、探索用 Lab を供給せず、Finding は台帳に記録して検証を後へ送る（所有者決定 2026-10-18「通常モードは Lab を起動しない探索」）。旧 `"attached"` は 2026-10-23 に退役し、実 host では起動前に退役エラーになる。`none` へ暗黙に切り替えない。過去の attached Trial の台帳と集計は引き続き読める。
 
 ```sh
 harness campaign run <slug> --campaign <id> --config <campaign.json> [--repeat 3]
@@ -128,7 +128,7 @@ harness ledger funnel --campaign <id>
 harness verify next --config <campaign.json> --handoff <dir> [--campaign <id> [--finding <id>]] [--port 8080] [--db-port 3307]
 ```
 
-`--handoff <dir>` は検証 Lab を skill `wbh-verify` に受け渡す（ADR 0035）。Harness は検証 Lab を立てて `127.0.0.1:<port>` に Lab の recorder 経由で公開し、setup 用の `<dir>/lab.json`（接続先と Host header、設定管理者の資格、`<dir>/review-export.json` の path）を書く。skill が `<dir>/setup-done` を置くと Harness は設定管理者の session と application password を破棄して password を変え（canary 管理者と canary user も同じ）、HTTP 捕捉、Lab 状態、role と option の基線を取り直し（#430）、完了後に `<dir>/observation-ready`、続いて攻撃用の `<dir>/attack.json`（Finding の攻撃者位置の資格、canary、必要な比較 route）を置く。skill は合図と `attack.json` の両方を待ってから攻撃者位置で操作し、6 file（`route.json` `http.json` `session.json` `steps.md` `refutation.md` `precondition`）か `<dir>/abort` を置く。session がなければ `session.json` は空 file にする。待ち時間の上限は Codex Verifier と同じ 30 分で、超過と `abort` は理由付き `incomplete`。以後は判定器 → `verification-finished`（現行 `promptVersion: wbh-verify/v7`、旧 v1〜v6 の本文は `.claude/skills/wbh-verify/versions/`）→ review queue と同じ。`--finding <id>`（`--campaign` と併せて指定する）は操作者が名指しした Finding を、列の規則（parked、再試行予算）に関わらず検証する。`<dir>` は 1 attempt 専用に Git の外へ置き、終わったら消す。既存の受け渡し file がある directory は使えない。
+`--handoff <dir>` は検証 Lab を skill `wbh-verify` に受け渡す（ADR 0035）。Harness は検証 Lab を立てて `127.0.0.1:<port>` に Lab の recorder 経由で公開し、setup 用の `<dir>/lab.json`（接続先と Host header、設定管理者の資格、`<dir>/review-export.json` の path）を書く。skill が `<dir>/setup-done` を置くと Harness は設定管理者の session と application password を破棄して password を変え（canary 管理者と canary user も同じ）、HTTP 捕捉、Lab 状態、role と option の基線を取り直し（#430）、完了後に `<dir>/observation-ready`、続いて攻撃用の `<dir>/attack.json`（Finding の攻撃者位置の資格、canary、必要な比較 route）を置く。skill は合図と `attack.json` の両方を待ってから攻撃者位置で操作し、6 file（`route.json` `http.json` `session.json` `steps.md` `refutation.md` `precondition`）か `<dir>/abort` を置く。session がなければ `session.json` は空 file にする。待ち時間の上限は従来どおり 30 分で、超過と `abort` は理由付き `incomplete`。以後は判定器 → `verification-finished`（現行 `promptVersion: wbh-verify/v7`、旧 v1〜v6 の本文は `.claude/skills/wbh-verify/versions/`）→ review queue と同じ。`--finding <id>`（`--campaign` と併せて指定する）は操作者が名指しした Finding を、列の規則（parked、再試行予算）に関わらず検証する。`<dir>` は 1 attempt 専用に Git の外へ置き、終わったら消す。既存の受け渡し file がある directory は使えない。
 `route.json` の HTTP step に本文がある場合、`body` は実際に送信した wire body と一致させる。本文が空のときだけ省略できる。
 
 `continuous run` は探索だけを回し、検証 Lab を立てない（#423。旧 `--verify-concurrency` と検証 worker は削除した）。handoff 列は探索 batch と並行して skill が消化してよく、検証 Lab の数は `resources.maxConcurrentTargets` に含めない。
@@ -158,7 +158,7 @@ harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <
 - Claude Opus の Trial を runner に混ぜるときは、runner の campaign 設定に `discovery.runtimeShare` と `resources.maxConcurrentTargetsByRuntime` を書く（2026-10-19、所有者の指示「Opus 3 本、Codex 3 本」）。ただし、provider 上限で止まったときに runner が batch 全体を待たせる動きは変えていない。Claude の quota で止まると、backoff の間は同じ batch の Codex の新しい対象も始まらない。runner の `waiting-login` が見るのは Codex のログインだけである。Opus を runner に混ぜずに回すときは、`runtimeShare: { "codex": 0, "claude": 100 }` を書いた別の campaign 設定と別の campaign ID で、`campaign run` を手で回す。`--state` は本番と同じものを使う。手で回す `campaign run` は、生きている間 `<state>/sweep-holds/<pid>` を置くので、runner の残骸掃除が Opus のコンテナを消すことはない。台帳では `configuration.runtime` で Codex と分けて読む。
 - Opus が応答を拒否した（`stop_reason: refusal`）run は、Root も子も `incomplete(provider: provider-refusal)` と記録し、Codex の `provider-cyber-policy` と同じく `target-skipped(provider-refused)` になる。拒否されたとき、Claude Code は別のモデルに切り替えずにそこで止まる（`CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1` と `CLAUDE_CODE_NO_MODEL_FALLBACK=1`。2026-10-19 の所有者の決定）。それでも別モデルを求めた要求は、broker が 403 `model-not-admitted` で断る。この 403 を Claude Code は「Failed to authenticate」と書くが、拒否の後に出たものは拒否として扱う。拒否の後でない 403 `model-not-admitted` は `incomplete(policy: model-not-admitted)` にする。
 - 同じ plugin slug の再訪は選定方針の `revisitPolicy`（版上昇かつ最後の Trial から 90 日、ADR 0037 の 2026-10-19 追記 3）で決まり、所有者の事前承認は要らない。同じ版を手で再 Trial するときは ADR 0032 Q6 のまま 1 Trial ごとに所有者が事前承認する。
-- 週次 smoke（#126）は、既知の `runtime-confirmed` Finding に `review reverify` を 1 回打つことで代える（campaign ID は `smoke-<YYYYMMDD>`）。
+- 週次 smoke（#126）は、既知の `runtime-confirmed` Finding に `review reverify` を 1 回打つことで代える（campaign ID は `smoke-<YYYYMMDD>`）。旧 Codex Verifier の経路は退役したため、実 host は `--handoff` がなければ退役エラーで止まる。
 - 最新版で確認した新しい `runtime-confirmed` Finding が出たら、その Snapshot と Lab Setup を保持し、週次 smoke の case に加える。通った検証は回帰試験になる。
 
 ## 3. 提出までの操作
@@ -186,9 +186,7 @@ harness review export --campaign <id> --finding <id>         # 1画面のレビ�
 harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--by <name>] [--opened <digest>]... [--duplicate no-match|unavailable[:<reason>]|possible-match:<ref> [--duplicate-note <path>]] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--minutes <n>]
 harness review dedupe --campaign <id> --finding <id>          # ローカルWordfence履歴mirrorと照合
 harness review scope --campaign <id> --finding <id>           # Wordfence / Patchstack ごとに in-scope / out-of-scope / ambiguous
-harness review reverify --campaign <id> --finding <id> --config <path>   # 最新版を新しいLabで検証し直す
 harness review reverify --campaign <id> --finding <id> --config <path> --handoff <dir> [--port 8080] [--db-port 3307] # 新しい版のLabをskillへ渡し、判定器で再検証
-harness review reverify --campaign <id> --finding <id> --config <new-scenario.json> # incompleteを元のSnapshotで再試行
 harness review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]
 harness review authorize --candidate <id> --draft <digest> --to <destination> --by <name>
 harness review submitted --candidate <id> --draft <digest> --to <destination>
