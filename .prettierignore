@@ -5,3 +5,6 @@ pnpm-lock.yaml
 
 # 人間が書く設計文書は整形ゲートの外に置く。
 **/*.md
+
+# 採取したフォーム選択肢は、PR の行数を抑えるため 10 件ずつ並べる。
+docs/reviews/2026-10-23-wordfence-form-options.json

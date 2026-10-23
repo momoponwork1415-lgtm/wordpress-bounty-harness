@@ -14,7 +14,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runCli } from "../../src/cli/index.js";
+import { runCli, type CliIo } from "../../src/cli/index.js";
+import { openState } from "../../src/cli/state.js";
 import { reviewExportV1Schema } from "../../src/review/index.js";
 import {
   createWordPressCliProfile,
@@ -35,6 +36,8 @@ import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acqu
 import { wordPressDiscoveryOutputContractV4 } from "../../src/profiles/wordpress/discovery/output-contract.js";
 import {
   openWordPressLab,
+  diffWordPressLabState,
+  wordpressLabStateSchema,
   type DockerRequest,
 } from "../../src/profiles/wordpress/lab/index.js";
 import type { ProgrammeIntelligence } from "../../src/profiles/wordpress/programme-intelligence/index.js";
@@ -46,7 +49,7 @@ import {
   openSnapshot,
   SourceAcquisitionError,
 } from "../../src/snapshot/index.js";
-import { VerifierTransportIncompleteError } from "../../src/verification/index.js";
+import { wordPressScenario } from "../../src/profiles/wordpress/lab/scenarios.js";
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
 const uuid = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
@@ -97,9 +100,26 @@ const claim = (impact: string, file: string) => ({
   labObservations: "Synthetic observation",
 });
 
+/** Keep the first execution in flight until the second has actually started. */
+function waitForSecondExecution(): () => Promise<void> {
+  let started = 0;
+  let release!: () => void;
+  const secondStarted = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return () => {
+    if (++started === 2) release();
+    return secondStarted;
+  };
+}
+
 /** Real modules; only WordPress.org, Docker/runsc and the provider CLI are fakes. */
 async function harness(
   options: {
+    readonly askMinutes?: CliIo["askMinutes"];
+    readonly omitLegacyVerifier?: boolean;
+    /** A test-owned barrier for observing overlapping synthetic executions. */
+    readonly executionStarted?: () => Promise<void>;
     readonly scopeFacts?: Parameters<
       typeof createWordPressCliProfile
     >[0]["scopeFacts"];
@@ -116,8 +136,6 @@ async function harness(
     readonly refuseOnCalls?: readonly number[];
     /** A refused receipt names its Root thread and session file, as a cooperative run's does (ADR 0036). */
     readonly refusalSession?: boolean;
-    /** Verifier attempts (1-based) that end on a provider quota. */
-    readonly verifierQuotaOnAttempts?: readonly number[];
     readonly leadsOnCalls?: Readonly<Record<number, readonly unknown[]>>;
     readonly zeroFindings?: boolean;
     /** Candidate slugs; the first is not pinned. */
@@ -139,22 +157,10 @@ async function harness(
       readonly cliVersion: string;
       readonly bundledCatalogDigest: string;
     };
-    readonly labProbeHttp?: "ok" | "failed";
-    readonly labProvisionFailure?: boolean;
-    readonly labMissingExtension?: boolean;
-    readonly labSeedFailure?: boolean;
-    readonly labSeedThrows?: boolean;
-    readonly labTeardownFails?: boolean;
-    readonly verifierLabTeardownFails?: boolean;
-    /** The first Finding lacks a runnable recipe until a new Lab scenario is selected. */
-    readonly firstVerifierIncomplete?: boolean;
-    readonly verifierRecipeFailures?: number;
-    readonly verifierLabProvisionFailures?: number;
     readonly coreSource?: boolean;
     readonly dependencySources?: boolean;
     /** Plugin sources sealed in the original and control Snapshots. */
     readonly snapshotPluginDependencies?: Readonly<Record<string, string>>;
-    readonly databaseAccess?: "read-only" | "none";
     readonly legacyHistoryUnavailable?: boolean;
   } = {},
 ) {
@@ -321,25 +327,6 @@ async function harness(
         }
         if (request.args[0] === "info")
           return { exitCode: 0, stdout: '{"runsc":{}}', stderr: "" };
-        if (
-          options.labMissingExtension === true &&
-          request.args[0] === "exec" &&
-          request.args[2] === "php" &&
-          request.args[4]?.includes('extension_loaded("pdo_mysql")')
-        )
-          return { exitCode: 43, stdout: "", stderr: "" };
-        if (
-          options.labProvisionFailure === true &&
-          request.args[0] === "network" &&
-          request.args[1] === "create"
-        )
-          return { exitCode: 1, stdout: "", stderr: "fixture docker error" };
-        if (
-          options.labSeedFailure === true &&
-          request.args.includes("wbh_canary_fixed-nonce") &&
-          request.args.includes("add")
-        )
-          return { exitCode: 1, stdout: "", stderr: "fixture seed error" };
         if (request.args[0] === "inspect")
           return { exitCode: 0, stdout: "172.20.0.2", stderr: "" };
         if (request.args.some((arg) => arg.startsWith("SHOW TABLES FROM ")))
@@ -348,7 +335,7 @@ async function harness(
           return {
             exitCode: 0,
             stdout: JSON.stringify({
-              http: options.labProbeHttp ?? "ok",
+              http: "ok",
               database: request.args.some((arg) =>
                 arg.startsWith("WBH_DB_USER="),
               )
@@ -504,9 +491,6 @@ async function harness(
   const sweepHeldAtDiscovery: boolean[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
-  let verificationProvisionAttempts = 0;
-  let teardownCalls = 0;
-  const verificationLabIds = new Set<string>();
   const boundaries: WordPressCampaignBoundaries = {
     selection,
     freeze: async (target) => {
@@ -530,47 +514,7 @@ async function harness(
         throw new Error("Synthetic Snapshot is absent");
       return snapshot;
     },
-    lab: {
-      ...lab,
-      teardown: async (...args: Parameters<typeof lab.teardown>) => {
-        teardownCalls++;
-        if (
-          options.labTeardownFails === true ||
-          (options.verifierLabTeardownFails === true &&
-            verificationLabIds.has(args[0].id))
-        )
-          return {
-            status: "incomplete" as const,
-            reason: "cleanup" as const,
-            nextStep: "Synthetic Lab cleanup needs operator repair",
-          };
-        return lab.teardown(...args);
-      },
-      ...(options.labSeedThrows === true
-        ? {
-            seedCanaries: async () => {
-              throw new Error("Synthetic seed exception");
-            },
-          }
-        : {}),
-      provision: async (...args: Parameters<typeof lab.provision>) => {
-        if (args[2]?.purpose === "verification") {
-          verificationProvisionAttempts++;
-          if (
-            verificationProvisionAttempts <=
-            (options.verifierLabProvisionFailures ?? 0)
-          )
-            throw new Error("Synthetic verification Lab provision failure");
-        }
-        const provisioned = await lab.provision(...args);
-        if (
-          args[2]?.purpose === "verification" &&
-          provisioned.status === "ready"
-        )
-          verificationLabIds.add(provisioned.handle.id);
-        return provisioned;
-      },
-    },
+    lab,
     sourceFor: async () => ({
       directory: sourceDirectory,
       tree,
@@ -619,7 +563,7 @@ async function harness(
         coordinations.push(run.coordination);
         expirations.push(run.expiresAt);
         maxInFlight = Math.max(maxInFlight, ++inFlight);
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await options.executionStarted?.();
         inFlight--;
         if (options.limitOnCalls?.includes(call) === true) {
           const childAttachment =
@@ -772,7 +716,7 @@ async function harness(
       sweepHeldAtHandoff.push(
         existsSync(join(root, "state", "sweep-holds", String(process.pid))),
       );
-      return boundaries.verifier;
+      return boundaries.verifier!;
     },
     verifier: {
       // A fresh-container Verifier; it hands back a recipe, never a verdict.
@@ -784,37 +728,7 @@ async function harness(
             return id === undefined ? [] : [id];
           }),
         );
-        const attempt = ++verifierAttempts;
-        if (options.verifierQuotaOnAttempts?.includes(attempt) === true) {
-          // As the Codex Verifier does: record the limited run, then fail transport.
-          await state.ledger.append({
-            schemaVersion: 1,
-            identity: `verifier-quota-${attempt}`,
-            campaignId: input.campaignId,
-            snapshotDigest: input.finding.snapshotDigest,
-            occurredAt: now,
-            type: "verifier-run-finished",
-            findingId: input.finding.findingId,
-            runId: `verifier-run-${attempt}`,
-            promptDigest: `sha256:${"e".repeat(64)}`,
-            receiptDigest: `sha256:${"e".repeat(64)}`,
-            terminal: "incomplete",
-            providerLimit: "quota",
-          });
-          throw new VerifierTransportIncompleteError("provider");
-        }
-        if (attempt <= (options.verifierRecipeFailures ?? 0))
-          return {
-            status: "incomplete",
-            reason: "recipe",
-            nextStep: "Repeat the synthetic recipe",
-          };
-        if (attempt === 1 && options.firstVerifierIncomplete === true)
-          return {
-            status: "incomplete",
-            reason: "precondition",
-            nextStep: "Repeat with another ordinary Lab scenario",
-          };
+        verifierAttempts++;
         return {
           status: "attempted",
           recipeDigest: await state.store.putFiles({
@@ -860,15 +774,17 @@ async function harness(
         : {}),
       boundaries: async (_config, opened) => {
         state = opened;
+        const available = { ...boundaries };
+        if (options.omitLegacyVerifier) delete available.verifier;
         return options.claude === true
           ? {
-              ...boundaries,
+              ...available,
               claude: {
                 runtimeProfile: claudeProfile,
                 executor: boundaries.executor,
               },
             }
-          : boundaries;
+          : available;
       },
       selectionBoundaries: async (opened) => {
         state = opened;
@@ -901,9 +817,8 @@ async function harness(
     JSON.stringify({
       schemaVersion: 1,
       selectionPolicyPath: policyPath,
-      // The policy default is "none" (owner decision 2026-10-18); these tests
-      // exercise the attached-Lab path unless a test overrides it.
-      discovery: { lab: "attached" },
+      // Match the current host: discovery never attaches a Lab.
+      discovery: { lab: "none" },
       promptId: "wp2shell-bounty-v8",
       programmeBoundary: {
         version: "v1",
@@ -917,9 +832,6 @@ async function harness(
         siteTitle: "Synthetic",
         initialPosts: ["Welcome"],
         customerRole: false,
-        ...(options.databaseAccess === undefined
-          ? {}
-          : { databaseAccess: options.databaseAccess }),
       },
     }),
   );
@@ -929,11 +841,152 @@ async function harness(
     const code = await runCli(argv, environment, {
       stdout: (line) => stdout.push(line),
       stderr: (line) => stderr.push(line),
+      ...(options.askMinutes === undefined
+        ? {}
+        : { askMinutes: options.askMinutes }),
     });
     return { code, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
   };
+  /** Existing private records for CLI review tests; no Verifier or Lab is run. */
+  const seedHistory = async (
+    campaignId: string,
+    status: "confirmed" | "precondition" = "confirmed",
+  ) => {
+    const config = wordpressCampaignConfigSchema.parse(
+      JSON.parse(await readFile(configPath, "utf8")),
+    );
+    const { scenarioId, ...labSetup } = config.lab;
+    const scenario =
+      scenarioId === undefined ? undefined : wordPressScenario(scenarioId);
+    for (const { event: finding } of state.ledger.read({
+      campaignId,
+      type: "finding-recorded",
+    })) {
+      if (finding.type !== "finding-recorded") continue;
+      const verificationId = `historical-${finding.findingId}`;
+      const setup = {
+        schemaVersion: 1,
+        snapshotDigest: finding.snapshotDigest,
+        ...labSetup,
+        ...(scenario === undefined
+          ? {}
+          : { scenario: { id: scenario.id, digest: scenario.digest } }),
+      };
+      const labSetupDigest = canonicalDigest(setup);
+      const route = {
+        snapshotDigest: finding.snapshotDigest,
+        labSetupDigest,
+        role: "subscriber",
+        defaultSettings: true,
+        configurationChanges: [],
+        steps: [],
+      };
+      const evidenceDigest = await state.store.putFiles({
+        "confirmed-route.json": JSON.stringify(route),
+      });
+      const recipeDigest = await state.store.putFiles({
+        "route.json": JSON.stringify(route),
+        "http.json": JSON.stringify([{ status: 200 }]),
+      });
+      const reproductionPackageDigest = await state.store.putFiles({
+        "manual.md": "Synthetic recorded review package",
+        "lab.json": JSON.stringify(setup),
+        "evidence.json": JSON.stringify({
+          judgeEvidenceDigest: evidenceDigest,
+        }),
+      });
+      const before = wordpressLabStateSchema.parse({
+        schema: "wordpress-lab-state/v1",
+        capturedAt: now,
+        tablePrefix: "wp_",
+        options: [
+          {
+            name: "synthetic_plugin_shared",
+            value: "untouched",
+            autoload: "no",
+          },
+        ],
+        users: [],
+        tables: [],
+      });
+      const after = {
+        ...before,
+        options: [{ ...before.options[0]!, value: "written-synthetic" }],
+      };
+      const beforeDigest = await state.store.putFiles({
+        "lab-state.json": JSON.stringify(before),
+      });
+      const afterDigest = await state.store.putFiles({
+        "lab-state.json": JSON.stringify(after),
+      });
+      const diffDigest = await state.store.putFiles({
+        "lab-state-diff.json": JSON.stringify(
+          diffWordPressLabState(before, after, {
+            before: beforeDigest,
+            after: afterDigest,
+          }),
+        ),
+      });
+      const base = {
+        schemaVersion: 1 as const,
+        campaignId,
+        snapshotDigest: finding.snapshotDigest,
+        occurredAt: now,
+      };
+      await state.ledger.append({
+        ...base,
+        identity: `verification-lab-${verificationId}`,
+        type: "lab-provisioned",
+        labId: verificationId,
+        status: "ready",
+        purpose: "verification",
+        ...(scenario === undefined
+          ? {}
+          : { scenario: { id: scenario.id, digest: scenario.digest } }),
+      });
+      await state.ledger.append({
+        ...base,
+        identity: verificationId,
+        type: "verification-finished",
+        verificationId,
+        findingId: finding.findingId,
+        attempt: 1,
+        promptVersion: "verifier-v8",
+        labSetupDigest,
+        evidenceCapture: "agent-authored",
+        labStateDiff: { status: "captured" },
+        artifacts: [
+          { kind: "recipe", digest: recipeDigest },
+          { kind: "lab-state-before", digest: beforeDigest },
+          { kind: "lab-state-after", digest: afterDigest },
+          { kind: "lab-state-diff", digest: diffDigest },
+        ],
+        result:
+          finding.category === "account-takeover" && status === "confirmed"
+            ? {
+                status: "runtime-confirmed",
+                judgeId: "synthetic-recorded-judge",
+                proofKind: "nonce-canary",
+                conditions: {
+                  attackerRole: "subscriber",
+                  defaultSettings: "true",
+                  observedVia: "session",
+                  reachedRole: "administrator",
+                },
+                evidenceDigest,
+                reproductionPackageDigest,
+              }
+            : {
+                status: "incomplete",
+                reason: status === "precondition" ? "precondition" : "evidence",
+                nextStep: "Review the recorded synthetic evidence",
+              },
+      });
+    }
+  };
   return {
     run,
+    seedHistory,
     configPath,
     prompts,
     transportRuns,
@@ -955,8 +1008,6 @@ async function harness(
     profile: environment.profile,
     store: () => state.store,
     maxInFlight: () => maxInFlight,
-    verificationProvisionAttempts: () => verificationProvisionAttempts,
-    teardownCalls: () => teardownCalls,
     frozenSelections,
   };
 }
@@ -1139,7 +1190,7 @@ describe("discovery runtime share", () => {
   it("starts nothing for a Claude-assigned target when the host offers no Claude runtime", async () => {
     const { run, configPath, transportRuns } = await harness({
       config: {
-        discovery: { lab: "attached", runtimeShare: { codex: 0, claude: 1 } },
+        discovery: { lab: "none", runtimeShare: { codex: 0, claude: 1 } },
       },
     });
     await run(
@@ -1187,32 +1238,6 @@ describe("discovery runtime share", () => {
 });
 
 describe("harness CLI vertical slice", () => {
-  it("records read-only DB access without storing its account in the ledger", async () => {
-    const { run, configPath, prompts, ledger } = await harness();
-    await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-db",
-      "--config",
-      configPath,
-    );
-    expect(prompts[0]).toContain(
-      "Database (read-only, Lab only): host database port 3306",
-    );
-    expect(prompts[0]).toContain("## Finding and Lead output contract");
-    const started = ledger()
-      .read({ type: "discovery-run-started" })
-      .at(0)?.event;
-    expect(started).toMatchObject({
-      configuration: { labAccess: { database: "read-only" } },
-    });
-    if (started?.type === "discovery-run-started")
-      expect(started.configuration.contractDigest).toMatch(/^sha256:/);
-    expect(JSON.stringify(started)).not.toContain("wbh_reader");
-  });
-
   it("adds the generated v4 contract to the sole runnable prompt and records separate digests", async () => {
     const { run, configPath, prompts, ledger } = await harness();
     const result = await run(
@@ -1260,27 +1285,6 @@ describe("harness CLI vertical slice", () => {
         promptId: "wp2shell-bounty-v2",
       }).success,
     ).toBe(false);
-  });
-
-  it("keeps DB access disabled when the campaign requests none", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
-      databaseAccess: "none",
-    });
-    await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-no-db",
-      "--config",
-      configPath,
-    );
-    expect(prompts[0]).toContain("Database: not exposed to this run.");
-    expect(
-      ledger().read({ type: "discovery-run-started" }).at(0)?.event,
-    ).toMatchObject({
-      configuration: { labAccess: { database: "none" } },
-    });
   });
 
   it("includes the frozen core path in the discovery Lab context", async () => {
@@ -1343,298 +1347,8 @@ describe("harness CLI vertical slice", () => {
     );
   });
 
-  it("records the seed stage when canary setup fails", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
-      labSeedFailure: true,
-    });
-    await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-seed",
-      "--config",
-      configPath,
-    );
-    expect(prompts).toHaveLength(0);
-    const event = ledger().read({ type: "lab-provisioned" }).at(0)?.event;
-    expect(event).toMatchObject({
-      status: "failed",
-      failureStage: "seed",
-      reason: "provision",
-    });
-    expect(JSON.stringify(event)).not.toContain("fixture seed error");
-  });
-
-  it("records the Lab provision stage and stores Docker diagnostics by private digest", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
-      labProvisionFailure: true,
-    });
-    const result = await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-provision",
-      "--config",
-      configPath,
-    );
-    expect(result.stdout).toContain("stopped by setup-failed");
-    expect(prompts).toHaveLength(0);
-    const event = ledger().read({ type: "lab-provisioned" }).at(0)?.event;
-    expect(event).toMatchObject({
-      status: "failed",
-      failureStage: "provision",
-      reason: "provision",
-      artifacts: [
-        { kind: "lab-diagnostic", digest: expect.stringMatching(/^sha256:/) },
-      ],
-    });
-    expect(JSON.stringify(event)).not.toContain("fixture docker error");
-  });
-
-  it("records a missing PHP extension as an incomplete precondition without starting discovery", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
-      labMissingExtension: true,
-    });
-    const result = await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-missing-extension",
-      "--config",
-      configPath,
-    );
-    expect(result.stdout).toContain("stopped by incomplete(precondition)");
-    expect(prompts).toHaveLength(0);
-    expect(
-      ledger().read({ type: "lab-provisioned" }).at(0)?.event,
-    ).toMatchObject({
-      status: "failed",
-      failureStage: "provision",
-      reason: "precondition",
-    });
-    expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(0);
-  });
-
-  it("records a failed Lab probe before starting discovery", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
-      labProbeHttp: "failed",
-    });
-    const result = await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-probe",
-      "--config",
-      configPath,
-    );
-    expect(result.stdout).toContain("stopped by setup-failed");
-    expect(prompts).toHaveLength(0);
-    expect(
-      ledger().read({ type: "lab-provisioned" }).at(0)?.event,
-    ).toMatchObject({
-      status: "failed",
-      reachability: { http: "failed", database: "ok" },
-      failureStage: "probe",
-      reason: "reachability",
-    });
-  });
-
-  it("automatically retries a recipe twice with fresh Labs and keeps a manual override", async () => {
-    const { run, configPath, ledger, labIdsDuringVerification, live } =
-      await harness({ verifierRecipeFailures: 3 });
-    const args = [
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "retry-campaign",
-      "--config",
-      configPath,
-    ];
-    expect((await run(...args)).code).toBe(0);
-    const events = ledger()
-      .read({ campaignId: "retry-campaign", type: "verification-finished" })
-      .map(({ event }) => event)
-      .filter((event) => event.type === "verification-finished");
-    const first = events.filter(
-      (event) => event.findingId === events[0]?.findingId,
-    );
-    expect(first).toHaveLength(3);
-    const findingId = first[0]!.findingId;
-    expect(first.map((event) => event.result)).toEqual(
-      Array.from({ length: 3 }, () =>
-        expect.objectContaining({ status: "incomplete", reason: "recipe" }),
-      ),
-    );
-    expect(first.map((event) => event.attempt)).toEqual([1, 2, 3]);
-    expect(first.map((event) => event.promptVersion)).toEqual(
-      Array.from({ length: 3 }, () => "verifier-v8"),
-    );
-    expect(first.map((event) => event.retryOf)).toEqual([
-      undefined,
-      first[0]?.verificationId,
-      first[1]?.verificationId,
-    ]);
-    const verifierLabs = labIdsDuringVerification
-      .slice(0, 3)
-      .map((ids) => ids.at(-1));
-    expect(new Set(verifierLabs).size).toBe(3);
-    for (const [index, ids] of labIdsDuringVerification.slice(0, 3).entries()) {
-      expect(ids).toHaveLength(2); // Discovery Lab and one fresh verification Lab.
-      if (index > 0) expect(ids).not.toContain(verifierLabs[index - 1]);
-    }
-    expect(live.containers.size).toBe(0);
-    expect(live.networks.size).toBe(0);
-    expect(live.volumes.size).toBe(0);
-    const labsBeforeExhaustedRecipeResume = ledger().read({
-      campaignId: "retry-campaign",
-      type: "lab-provisioned",
-    }).length;
-    expect((await run(...args)).code).toBe(0);
-    expect(
-      ledger().read({ campaignId: "retry-campaign", type: "lab-provisioned" }),
-    ).toHaveLength(labsBeforeExhaustedRecipeResume);
-    expect(
-      ledger().read({
-        campaignId: "retry-campaign",
-        findingId,
-        type: "verification-finished",
-      }),
-    ).toHaveLength(3);
-    expect((await run(...args, "--retry-incomplete")).code).toBe(0);
-    expect(
-      ledger()
-        .read({
-          campaignId: "retry-campaign",
-          findingId,
-          type: "verification-finished",
-        })
-        .at(-1)?.event,
-    ).toMatchObject({
-      attempt: 4,
-      retryOf: first[2]?.verificationId,
-    });
-  });
-
-  it("bounds verification Lab provision failures to two attempts", async () => {
-    const { run, configPath, ledger, verificationProvisionAttempts } =
-      await harness({ verifierLabProvisionFailures: 2 });
-    const args = [
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "provision-retry",
-      "--config",
-      configPath,
-    ];
-    expect((await run(...args)).code).toBe(0);
-    const events = ledger()
-      .read({ campaignId: "provision-retry", type: "verification-finished" })
-      .map(({ event }) => event)
-      .filter((event) => event.type === "verification-finished");
-    const first = events.filter(
-      (event) => event.findingId === events[0]?.findingId,
-    );
-    expect(first.map((event) => event.attempt)).toEqual([1, 2]);
-    expect(first.map((event) => event.result)).toEqual([
-      expect.objectContaining({ status: "incomplete", reason: "provision" }),
-      expect.objectContaining({ status: "incomplete", reason: "provision" }),
-    ]);
-    expect(first[1]?.retryOf).toBe(first[0]?.verificationId);
-    expect(verificationProvisionAttempts()).toBe(events.length);
-  });
-
-  it("retries a precondition only after a default Lab changes to a named scenario", async () => {
-    const { run, configPath, ledger } = await harness({
-      firstVerifierIncomplete: true,
-    });
-    const args = [
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "scenario-retry",
-      "--config",
-      configPath,
-    ];
-    expect((await run(...args)).code).toBe(0);
-    const first = ledger()
-      .read({ campaignId: "scenario-retry", type: "verification-finished" })
-      .map(({ event }) => event)
-      .find(
-        (event) =>
-          event.type === "verification-finished" &&
-          event.result.status === "incomplete" &&
-          event.result.reason === "precondition",
-      );
-    expect(first).toMatchObject({
-      attempt: 1,
-      result: { status: "incomplete", reason: "precondition" },
-    });
-    if (first?.type !== "verification-finished") return;
-    const labsBeforeUnchangedResume = ledger().read({
-      campaignId: "scenario-retry",
-      type: "lab-provisioned",
-    }).length;
-    expect((await run(...args)).code).toBe(0);
-    expect(
-      ledger().read({ campaignId: "scenario-retry", type: "lab-provisioned" }),
-    ).toHaveLength(labsBeforeUnchangedResume);
-    expect(
-      ledger().read({
-        campaignId: "scenario-retry",
-        findingId: first.findingId,
-        type: "verification-finished",
-      }),
-    ).toHaveLength(1);
-    const config = JSON.parse(await readFile(configPath, "utf8")) as {
-      lab: Record<string, unknown>;
-    };
-    config.lab.scenarioId = "private-page-v1";
-    await writeFile(configPath, JSON.stringify(config));
-    expect((await run(...args)).code).toBe(0);
-    const after = ledger()
-      .read({
-        campaignId: "scenario-retry",
-        findingId: first.findingId,
-        type: "verification-finished",
-      })
-      .map(({ event }) => event);
-    expect(after).toHaveLength(2);
-    expect(after[1]).toMatchObject({
-      attempt: 2,
-      retryOf: first.verificationId,
-      result: { status: "runtime-confirmed" },
-    });
-    const labsBefore = ledger().read({
-      campaignId: "scenario-retry",
-      type: "lab-provisioned",
-    }).length;
-    config.lab.scenarioId = "approved-comment-v1";
-    await writeFile(configPath, JSON.stringify(config));
-    expect((await run(...args)).code).toBe(0);
-    expect(
-      ledger().read({ campaignId: "scenario-retry", type: "lab-provisioned" })
-        .length,
-    ).toBe(labsBefore);
-    expect(
-      ledger()
-        .read({
-          campaignId: "scenario-retry",
-          findingId: first.findingId,
-          type: "verification-finished",
-        })
-        .map(({ event }) => event),
-    ).toEqual(after);
-  });
-
-  it("runs a pinned campaign end to end and exposes review and funnel", async () => {
-    const { run, configPath, prompts, docker } = await harness();
+  it("keeps discovery unverified and reads existing review records and funnel", async () => {
+    const { seedHistory, run, configPath, prompts, docker } = await harness();
 
     const campaign = await run(
       "campaign",
@@ -1649,11 +1363,11 @@ describe("harness CLI vertical slice", () => {
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("wporg:synthetic-plugin 3.3.1");
     expect(campaign.stdout).toContain("stopped by max-runs");
-    expect(campaign.stdout).toContain(": runtime-confirmed");
-    expect(campaign.stdout).toContain(": incomplete");
+    expect(campaign.stdout).toContain("lab none");
+    expect(campaign.stdout).not.toContain(": runtime-confirmed");
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Trust boundary");
-    expect(prompts[0]).toMatch(/subscriber: wbh-subscriber-/);
+    expect(prompts[0]).not.toMatch(/subscriber: wbh-subscriber-/);
     // The Lab administrator exists for setup only and never reaches the agent.
     expect(prompts[0]).not.toContain("harness-admin");
     expect(prompts[0]).not.toMatch(/^- (administrator|editor|contributor)/m);
@@ -1664,6 +1378,7 @@ describe("harness CLI vertical slice", () => {
       ),
     ).toBe(true);
 
+    await seedHistory("campaign-1");
     const queue = await run("review", "--campaign", "campaign-1");
     expect(queue.code).toBe(0);
     expect(queue.stdout).toMatch(/^runtime-confirmed .* account-takeover$/m);
@@ -1814,7 +1529,7 @@ describe("harness CLI vertical slice", () => {
     ).toHaveLength(1);
   });
 
-  it("runs without a discovery Lab, then verifies one Finding in a fresh Lab", async () => {
+  it("runs without a legacy Verifier or discovery Lab, then explicitly hands off one Finding", async () => {
     const {
       run,
       configPath,
@@ -1824,6 +1539,7 @@ describe("harness CLI vertical slice", () => {
       labIdsDuringVerification,
       root,
     } = await harness({
+      omitLegacyVerifier: true,
       entryPoints: true,
       config: {
         promptId: undefined,
@@ -2209,14 +1925,15 @@ describe("harness CLI vertical slice", () => {
     // The limited run is not a Trial (owner decision 2026-10-19): its ordinal
     // runs again and the campaign reaches its run limit.
     expect(resumed.stdout).toContain("stopped by max-runs");
-    expect(resumed.stdout.match(/^  finding /gm)).toHaveLength(2);
-    expect(resumed.stdout).toContain("raw 2 → verifier通過 2 → confirmed 1");
+    expect(resumed.stdout).not.toMatch(/^  finding /m);
+    expect(resumed.stdout).toContain("raw 2 → verifier通過 0 → confirmed 0");
   });
 
   it("finishes in-flight targets after a provider limit, then resumes only unfinished targets", async () => {
     const { run, configPath, prompts, ledger, maxInFlight, live, docker } =
       await harness({
         candidates: ["synthetic-plugin", "second-plugin", "third-plugin"],
+        executionStarted: waitForSecondExecution(),
         limitOnCalls: [1],
         zeroFindings: true,
         config: {
@@ -2264,8 +1981,7 @@ describe("harness CLI vertical slice", () => {
         type: "discovery-run-started",
       }),
     ).toHaveLength(4);
-    // Two Labs on the first invocation, then the provider-limited target and
-    // the never-started target. The completed in-flight target is skipped.
+    // Neither invocation provisions a discovery Lab.
     expect(
       ledger()
         .read({
@@ -2276,160 +1992,10 @@ describe("harness CLI vertical slice", () => {
           ({ event }) =>
             event.type === "lab-provisioned" && event.purpose === "discovery",
         ),
-    ).toHaveLength(4);
+    ).toHaveLength(0);
     expect(live.containers.size).toBe(0);
     expect(live.networks.size).toBe(0);
     expect(live.volumes.size).toBe(0);
-  });
-
-  it("tears down each parallel target Lab when setup throws without global cleanup", async () => {
-    const { run, configPath, live, docker, ledger } = await harness({
-      candidates: ["synthetic-plugin", "second-plugin"],
-      labSeedThrows: true,
-      config: {
-        promptId: undefined,
-        resources: {
-          maxConcurrentRuns: 1,
-          maxConcurrentTargets: 2,
-          memoryBudgetMiB: 10_752,
-        },
-      },
-    });
-    const result = await run(
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "campaign-parallel-cleanup",
-      "--config",
-      configPath,
-    );
-    expect(result.code).toBe(0);
-    expect(
-      ledger().read({
-        campaignId: "campaign-parallel-cleanup",
-        type: "target-skipped",
-      }),
-    ).toHaveLength(2);
-    expect(live.containers.size).toBe(0);
-    expect(live.networks.size).toBe(0);
-    expect(live.volumes.size).toBe(0);
-    expect(docker.some(({ args }) => args[0] === "ps")).toBe(false);
-    const targetRemovals = docker
-      .map(({ args }) => args)
-      .filter(
-        (args) =>
-          args[0] === "rm" &&
-          args.slice(2).some((name) => name.startsWith("wbh-")),
-      );
-    expect(targetRemovals).toHaveLength(2);
-    for (const removal of targetRemovals) {
-      const ids = new Set(
-        removal.slice(2).map((name) => /^wbh-([0-9a-f-]{36})-/.exec(name)?.[1]),
-      );
-      expect(ids.size).toBe(1);
-      expect(ids.has(undefined)).toBe(false);
-    }
-  });
-
-  it("stops after a discovery Lab cleanup failure and gates same-campaign resume", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
-      candidates: ["synthetic-plugin", "zz-next-plugin"],
-      zeroFindings: true,
-      labTeardownFails: true,
-      config: {
-        promptId: undefined,
-      },
-    });
-    const command = [
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "campaign-cleanup-incomplete",
-      "--config",
-      configPath,
-    ];
-    const first = await run(...command);
-    expect(first.code).toBe(1);
-    expect(first.stderr).toContain(
-      "Synthetic Lab cleanup needs operator repair",
-    );
-    expect(prompts).toHaveLength(1);
-    expect(ledger().read({ type: "target-skipped" })).toHaveLength(1);
-    expect(ledger().read({ type: "campaign-stopped" })).toMatchObject([
-      { event: { reason: "incomplete", cleanupLabIds: [expect.any(String)] } },
-    ]);
-    const second = await run(...command);
-    expect(second.code).toBe(1);
-    expect(second.stderr).toContain("cleanup is incomplete");
-    expect(prompts).toHaveLength(1);
-  });
-
-  it("drains in-flight Labs before returning a cleanup failure", async () => {
-    const { run, configPath, prompts, teardownCalls } = await harness({
-      candidates: ["synthetic-plugin", "second-plugin", "zz-next-plugin"],
-      zeroFindings: true,
-      labTeardownFails: true,
-      config: {
-        promptId: undefined,
-        resources: {
-          maxConcurrentRuns: 1,
-          maxConcurrentTargets: 2,
-          memoryBudgetMiB: 10_752,
-        },
-      },
-    });
-    const result = await run(
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "campaign-drain",
-      "--config",
-      configPath,
-    );
-    expect(result.code).toBe(1);
-    expect(prompts).toHaveLength(2);
-    expect(teardownCalls()).toBe(2);
-  });
-
-  it("stops on Verifier Lab cleanup failure without losing its review item", async () => {
-    const { run, configPath, prompts, ledger } = await harness({
-      candidates: ["synthetic-plugin", "zz-next-plugin"],
-      verifierLabTeardownFails: true,
-      config: {
-        promptId: undefined,
-      },
-    });
-    const command = [
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "campaign-verifier-cleanup",
-      "--config",
-      configPath,
-    ];
-    const first = await run(...command);
-    expect(first.code).toBe(1);
-    expect(prompts).toHaveLength(1);
-    expect(ledger().read({ type: "verification-finished" })).toMatchObject([
-      { event: { result: { status: "incomplete", reason: "cleanup" } } },
-    ]);
-    expect(ledger().read({ type: "campaign-stopped" })).toMatchObject([
-      { event: { reason: "incomplete", cleanupLabIds: [expect.any(String)] } },
-    ]);
-    const review = await run(
-      "review",
-      "--campaign",
-      "campaign-verifier-cleanup",
-    );
-    expect(review.stdout).toContain("incomplete");
-    expect(review.stdout).toContain("reason: cleanup");
-    const second = await run(...command);
-    expect(second.code).toBe(1);
-    expect(prompts).toHaveLength(1);
   });
 
   it("checks every recorded cleanup Lab id before resuming", async () => {
@@ -2457,27 +2023,6 @@ describe("harness CLI vertical slice", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain(`Lab ${uuid} cleanup is incomplete`);
     expect(prompts).toHaveLength(0);
-  });
-
-  it("keeps a target Lab until its verification finishes, then removes it", async () => {
-    const { run, configPath, labIdsDuringVerification, live, docker } =
-      await harness({});
-    const result = await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-target-lifecycle",
-      "--config",
-      configPath,
-    );
-    expect(result.code).toBe(0);
-    expect(labIdsDuringVerification[0]).toHaveLength(2);
-    expect(new Set(labIdsDuringVerification[0]).size).toBe(2);
-    expect(live.containers.size).toBe(0);
-    expect(live.networks.size).toBe(0);
-    expect(live.volumes.size).toBe(0);
-    expect(docker.some(({ args }) => args[0] === "ps")).toBe(false);
   });
 
   it("verify next --handoff names the skill as prompt version and re-verifies the named Finding (#352)", async () => {
@@ -3061,7 +2606,7 @@ describe("harness CLI vertical slice", () => {
     );
   });
 
-  it("does not resume a refused run whose receipt predates session records or whose campaign attaches a Lab", async () => {
+  it("does not resume a refused run whose receipt predates session records or whose recorded Trial attached a Lab", async () => {
     const legacy = await harness({
       refuseOnCalls: [1],
       zeroFindings: true,
@@ -3097,34 +2642,28 @@ describe("harness CLI vertical slice", () => {
     expect(legacyResume.stderr).toBe("not resumable: session-unrecorded");
     expect(legacy.transportRuns).toHaveLength(1);
 
-    const attached = await harness({
-      refuseOnCalls: [1],
-      refusalSession: true,
-      zeroFindings: true,
-      config: {
-        promptId: undefined,
-      },
+    const started = legacy
+      .ledger()
+      .read({ type: "discovery-run-started" })[0]?.event;
+    if (started?.type !== "discovery-run-started")
+      throw new Error("Missing recorded run");
+    await legacy.ledger().append({
+      ...started,
+      identity: "historical-attached",
+      runId: "historical-attached",
+      labAttached: true,
+      labId: "historical-lab",
     });
-    expect(
-      (
-        await attached.run(
-          "campaign",
-          "run",
-          "--all",
-          ...command(attached.configPath, "campaign-attached"),
-        )
-      ).code,
-    ).toBe(0);
-    const attachedResume = await attached.run(
+    const attachedResume = await legacy.run(
       "campaign",
       "resume",
       "--run",
-      attached.transportRuns[0]!.runId,
-      ...command(attached.configPath, "campaign-attached"),
+      "historical-attached",
+      ...command(legacy.configPath, "campaign-legacy"),
     );
     expect(attachedResume.code).toBe(3);
     expect(attachedResume.stderr).toContain("not resumable: lab-attached");
-    expect(attached.transportRuns).toHaveLength(1);
+    expect(legacy.transportRuns).toHaveLength(1);
   });
 
   it("drains at the next target boundary when the operator stops, then resumes", async () => {
@@ -3158,96 +2697,6 @@ describe("harness CLI vertical slice", () => {
     expect(resumed.code).toBe(0);
     expect(prompts).toHaveLength(3);
     expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(3);
-  });
-
-  it("stops the campaign on a Verifier quota and retries that verification once on resume", async () => {
-    const { run, configPath, ledger } = await harness({
-      verifierQuotaOnAttempts: [1],
-    });
-    const command = [
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "campaign-verifier-quota",
-      "--config",
-      configPath,
-    ];
-    const stopped = await run(...command);
-    expect(stopped.code).toBe(3);
-    expect(stopped.stdout).toContain(
-      "campaign stopped by provider-limit; run the same command again to resume",
-    );
-    const verified = () =>
-      ledger()
-        .read({ type: "verification-finished" })
-        .map(({ event }) =>
-          event.type === "verification-finished" ? event.result : null,
-        );
-    // The second Finding is not verified after the limit.
-    expect(verified()).toMatchObject([
-      { status: "incomplete", reason: "provider" },
-    ]);
-    const resumed = await run(...command);
-    expect(resumed.code).toBe(0);
-    expect(verified()).toHaveLength(3);
-    expect(verified().slice(1)).not.toContainEqual(
-      expect.objectContaining({ reason: "provider" }),
-    );
-    expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(1);
-  });
-
-  it("does not provision a Lab after the Verifier quota retry is exhausted", async () => {
-    const { run, configPath, ledger, prompts } = await harness({
-      verifierQuotaOnAttempts: [1, 2],
-    });
-    const command = [
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "campaign-quota-exhausted",
-      "--config",
-      configPath,
-    ];
-    expect((await run(...command)).code).toBe(3);
-    expect((await run(...command)).code).toBe(3);
-    const first = ledger().read({
-      campaignId: "campaign-quota-exhausted",
-      type: "verification-finished",
-    })[0]?.event;
-    if (first?.type !== "verification-finished")
-      throw new Error("Missing quota verification");
-    // One other Finding was pending when quota stopped the first two runs.
-    expect((await run(...command)).code).toBe(0);
-    const labsAfterPendingFinding = ledger().read({
-      campaignId: "campaign-quota-exhausted",
-      type: "lab-provisioned",
-    }).length;
-    expect((await run(...command)).code).toBe(0);
-    expect(
-      ledger().read({
-        campaignId: "campaign-quota-exhausted",
-        type: "lab-provisioned",
-      }),
-    ).toHaveLength(labsAfterPendingFinding);
-    expect(prompts).toHaveLength(1);
-    const review = await run(
-      "review",
-      "--campaign",
-      "campaign-quota-exhausted",
-    );
-    expect(review.code).toBe(0);
-    expect(review.stdout).toContain(`finding ${first.findingId}`);
-    expect(review.stdout).toContain("incomplete");
-    expect((await run(...command, "--retry-incomplete")).code).toBe(0);
-    expect(
-      ledger().read({
-        campaignId: "campaign-quota-exhausted",
-        findingId: first.findingId,
-        type: "verification-finished",
-      }),
-    ).toHaveLength(3);
   });
 
   it("lists parked Findings by one-line property and says when there are none (#185)", async () => {
@@ -3385,7 +2834,7 @@ describe("harness CLI vertical slice", () => {
     expect((await run("review", "held")).code).not.toBe(0);
   });
 
-  it("verifies a child Finding on resume and runs the provider-limited Trial again", async () => {
+  it("preserves a child Finding on resume and leaves verification to an explicit handoff", async () => {
     const { run, configPath, prompts, ledger } = await harness({
       limitOnCalls: [1],
       childFindingOnLimitedCall: true,
@@ -3408,16 +2857,17 @@ describe("harness CLI vertical slice", () => {
     const resumed = await run(...command);
     expect(resumed.code).toBe(0);
     // The limited run is not a Trial (owner decision 2026-10-19): a
-    // replacement Trial runs, and the child's Finding is still verified once.
+    // replacement Trial runs, and the child's Finding stays in the handoff queue.
     expect(resumed.stdout).toContain("runs 1  stopped by no-new-finding");
     expect(prompts).toHaveLength(2);
     expect(ledger().read({ type: "finding-recorded" })).toHaveLength(1);
-    expect(ledger().read({ type: "verification-finished" })).toHaveLength(1);
+    expect(ledger().read({ type: "verification-finished" })).toHaveLength(0);
     expect(ledger().read({ type: "discovery-concluded" })).toHaveLength(1);
   });
 
   it("runs discovery concurrently within the configured count and memory budget", async () => {
     const { run, configPath, maxInFlight } = await harness({
+      executionStarted: waitForSecondExecution(),
       candidates: [
         "synthetic-plugin",
         "second-plugin",
@@ -3497,6 +2947,8 @@ describe("harness CLI vertical slice", () => {
 
   it("shows the history mirror freshness by the same rule as the duplicate lookup", async () => {
     const { run, root } = await harness({ history: true });
+    // Viewing never initializes state; seed the fixture explicitly.
+    await openState(join(root, "state"));
     const stale = await run("history", "status");
     expect(stale.code).toBe(1);
     expect(stale.stdout).toBe(
@@ -3531,7 +2983,9 @@ describe("harness CLI vertical slice", () => {
     expect(mismatched.stdout).toBe(
       "history mirror unavailable  database and state disagree",
     );
-    const unconfigured = await (await harness()).run("history", "status");
+    const withoutMirror = await harness();
+    await openState(join(withoutMirror.root, "state"));
+    const unconfigured = await withoutMirror.run("history", "status");
     expect(unconfigured.code).toBe(1);
     expect(unconfigured.stdout).toBe("history mirror not configured");
   });
@@ -4294,7 +3748,7 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {
-    const { run, configPath, root } = await harness({
+    const { seedHistory, run, configPath, root, ledger } = await harness({
       scopeFacts: {
         // Synthetic facts standing in for judge evidence and target observations.
         load: async () => ({
@@ -4311,6 +3765,7 @@ describe("harness CLI vertical slice", () => {
     });
     const campaign = ["--campaign", "campaign-1"];
     await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    await seedHistory("campaign-1");
     const queue = await run("review", ...campaign);
     const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
       queue.stdout,
@@ -4327,15 +3782,6 @@ describe("harness CLI vertical slice", () => {
     expect(scoped.stdout).toMatch(/^wordfence in-scope /m);
     expect(scoped.stdout).toMatch(/^patchstack \S+ /m);
 
-    await run(
-      "review",
-      "decide",
-      ...target,
-      "--decision",
-      "accept",
-      "--reason",
-      "reproduced-by-hand",
-    );
     const draftPath = join(root, "draft.md");
     await writeFile(draftPath, "Synthetic private draft text\n");
     const drafted = await run(
@@ -4349,8 +3795,59 @@ describe("harness CLI vertical slice", () => {
     );
     expect(drafted.stderr).toBe("");
     expect(drafted.stdout).not.toContain("Synthetic private draft text");
-    const [, candidate, draft] =
+    const [, provisionalCandidate, provisionalDraft] =
       /candidate (\S+)\s+draft (\S+)\s+revision 1/.exec(drafted.stdout)!;
+    const provisional = [
+      "--candidate",
+      provisionalCandidate!,
+      "--draft",
+      provisionalDraft!,
+      "--to",
+      "wordfence",
+    ];
+
+    const early = await run("review", "submitted", ...provisional);
+    expect(early.code).toBe(1);
+    expect(early.stderr).toContain("not authorized");
+    const premature = await run(
+      "review",
+      "authorize",
+      ...provisional,
+      "--by",
+      "operator",
+    );
+    expect(premature.code).toBe(1);
+    expect(premature.stderr).toContain("human-reviewed-draft-required");
+    const reproduced = await run(
+      "review",
+      "decide",
+      ...target,
+      "--decision",
+      "defer",
+      "--reason",
+      "manual-reproduction",
+      "--reproduced",
+      "match",
+      "--reproduce-minutes",
+      "5",
+      "--minutes",
+      "3",
+    );
+    expect(reproduced.code).toBe(0);
+    const finalDraft = await run(
+      "review",
+      "draft",
+      ...target,
+      "--programme",
+      "wordfence",
+      "--file",
+      draftPath,
+      "--prepared-by",
+      "human",
+    );
+    expect(finalDraft.code).toBe(0);
+    const [, candidate, draft] =
+      /candidate (\S+)\s+draft (\S+)\s+revision 2/.exec(finalDraft.stdout)!;
     const exact = [
       "--candidate",
       candidate!,
@@ -4359,11 +3856,24 @@ describe("harness CLI vertical slice", () => {
       "--to",
       "wordfence",
     ];
-
-    const early = await run("review", "submitted", ...exact);
-    expect(early.code).toBe(1);
-    expect(early.stderr).toContain("not authorized");
-    expect((await run("review", "authorize", ...exact)).code).toBe(0);
+    const reviewed = await run(
+      "review",
+      "decide",
+      ...target,
+      "--decision",
+      "accept",
+      "--reason",
+      "reproduced-by-hand",
+      "--duplicate",
+      "no-match",
+      "--minutes",
+      "3",
+    );
+    expect(reviewed.code).toBe(0);
+    expect((await run("review", "authorize", ...exact)).code).toBe(2);
+    expect(
+      (await run("review", "authorize", ...exact, "--by", "operator")).code,
+    ).toBe(0);
     expect((await run("review", "submitted", ...exact)).code).toBe(0);
     expect(
       (
@@ -4412,12 +3922,58 @@ describe("harness CLI vertical slice", () => {
     expect(funnel.stdout).toContain("outcomes: resolved 1  reward $250.00");
     expect(funnel.stdout).toContain("in-scope by programme: patchstack");
     expect(funnel.stdout).toMatch(/wordfence 1/);
+
+    const previous = ledger()
+      .read({
+        campaignId: "campaign-1",
+        findingId: finding,
+        type: "verification-finished",
+      })
+      .at(-1)?.event;
+    if (previous?.type !== "verification-finished")
+      throw new Error("missing verification");
+    await ledger().append({
+      ...previous,
+      identity: "verification-after-report",
+      verificationId: "verification-after-report",
+      occurredAt: "2026-10-08T03:00:00Z",
+    });
+    const staleScope = await run(
+      "review",
+      "draft",
+      ...target,
+      "--programme",
+      "wordfence",
+      "--file",
+      draftPath,
+    );
+    expect(staleScope.code).toBe(2);
+    expect(staleScope.stderr).toContain("No in-scope assessment for wordfence");
+    expect((await run("review", "scope", ...target)).code).toBe(0);
+    expect(
+      (
+        await run(
+          "review",
+          "draft",
+          ...target,
+          "--programme",
+          "wordfence",
+          "--file",
+          draftPath,
+        )
+      ).code,
+    ).toBe(0);
   });
 
   it("records only the decision when review decide has no --reproduced", async () => {
-    const { run, configPath, ledger } = await harness();
+    const { seedHistory, run, configPath, ledger } = await harness({
+      askMinutes: async () => {
+        throw new Error("AI decision prompted for human time");
+      },
+    });
     const campaign = ["--campaign", "campaign-1"];
     await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    await seedHistory("campaign-1");
     const queue = await run("review", ...campaign);
     const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
       queue.stdout,
@@ -4457,12 +4013,57 @@ describe("harness CLI vertical slice", () => {
           : [],
       ),
     ).toEqual([["read", 5]]);
+    const ai = await run(
+      "review",
+      "decide",
+      ...campaign,
+      "--finding",
+      finding,
+      "--decision",
+      "defer",
+      "--reason",
+      "ai-triage",
+      "--by",
+      "ai",
+    );
+    expect(ai.code).toBe(0);
+    expect(
+      (
+        await run(
+          "review",
+          "decide",
+          ...campaign,
+          "--finding",
+          finding,
+          "--decision",
+          "defer",
+          "--reason",
+          "ai-triage",
+          "--by",
+          "ai",
+          "--minutes",
+          "0",
+        )
+      ).code,
+    ).toBe(2);
+    const afterAi = ledger().readAll({
+      campaignId: "campaign-1",
+      findingId: finding,
+    });
+    expect(
+      afterAi.filter(({ event }) => event.type === "human-effort-recorded"),
+    ).toHaveLength(1);
+    expect(
+      afterAi.filter(({ event }) => event.type === "review-decided").at(-1)
+        ?.event,
+    ).not.toHaveProperty("humanElapsedSeconds");
   });
 
   it("records the human reproduction before the decision when review decide has --reproduced", async () => {
-    const { run, configPath, ledger } = await harness();
+    const { seedHistory, run, configPath, ledger } = await harness();
     const campaign = ["--campaign", "campaign-1"];
     await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    await seedHistory("campaign-1");
     const queue = await run("review", ...campaign);
     const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
       queue.stdout,
@@ -4544,9 +4145,10 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("records the wbh-dedupe result with its note, lists it in the queue and keeps it through the reproduction (#442)", async () => {
-    const { run, configPath, root } = await harness();
+    const { seedHistory, run, configPath, root } = await harness();
     const campaign = ["--campaign", "campaign-1"];
     await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    await seedHistory("campaign-1");
     const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
       (await run("review", ...campaign)).stdout,
     )![1]!;
@@ -4600,9 +4202,10 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("assesses scope from the judge's evidence and the selection record without injected facts", async () => {
-    const { run, configPath } = await harness();
+    const { seedHistory, run, configPath } = await harness();
     const campaign = ["--campaign", "campaign-1"];
     await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    await seedHistory("campaign-1");
     const queue = await run("review", ...campaign);
     const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
       queue.stdout,
@@ -4625,7 +4228,7 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("re-verifies a finding on the target's latest version and only then treats the version as verified", async () => {
-    const { run, configPath } = await harness();
+    const { seedHistory, run, configPath, root } = await harness();
     const config = JSON.parse(await readFile(configPath, "utf8")) as {
       lab: Record<string, unknown>;
     };
@@ -4633,6 +4236,7 @@ describe("harness CLI vertical slice", () => {
     await writeFile(configPath, JSON.stringify(config));
     const campaign = ["--campaign", "campaign-1"];
     await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    await seedHistory("campaign-1");
     const queue = await run("review", ...campaign);
     const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
       queue.stdout,
@@ -4642,6 +4246,8 @@ describe("harness CLI vertical slice", () => {
     const reverified = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding,
@@ -4679,8 +4285,15 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("hands a latest-version re-verification to the skill while retaining the judge and new Snapshot", async () => {
-    const { run, configPath, root, handoffs, sweepHeldAtHandoff, ledger } =
-      await harness();
+    const {
+      seedHistory,
+      run,
+      configPath,
+      root,
+      handoffs,
+      sweepHeldAtHandoff,
+      ledger,
+    } = await harness();
     const campaignId = "campaign-reverify-handoff";
     const campaign = ["--campaign", campaignId];
     expect(
@@ -4695,6 +4308,7 @@ describe("harness CLI vertical slice", () => {
         )
       ).code,
     ).toBe(0);
+    await seedHistory(campaignId);
     const queue = await run("review", ...campaign);
     const findingId = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
       queue.stdout,
@@ -4756,12 +4370,13 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("pins the original plugin sources when an automatic policy re-verifies a fixed version", async () => {
-    const { run, configPath, root, ledger, frozenSelections } = await harness({
-      snapshotPluginDependencies: {
-        elementor: "3.34.4",
-        "header-helper": "1.2.3",
-      },
-    });
+    const { seedHistory, run, configPath, root, ledger, frozenSelections } =
+      await harness({
+        snapshotPluginDependencies: {
+          elementor: "3.34.4",
+          "header-helper": "1.2.3",
+        },
+      });
     const campaign = ["--campaign", "campaign-1"];
     expect(
       (
@@ -4775,6 +4390,7 @@ describe("harness CLI vertical slice", () => {
         )
       ).code,
     ).toBe(0);
+    await seedHistory("campaign-1");
     const finding = ledger()
       .read({ campaignId: "campaign-1", type: "finding-recorded" })
       .map(({ event }) => event)
@@ -4812,6 +4428,8 @@ describe("harness CLI vertical slice", () => {
     const reverified = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding.findingId,
@@ -4833,9 +4451,15 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("retries an incomplete Finding on its original Snapshot with a fresh scenario and verification event", async () => {
-    const { run, configPath, ledger, verifierReferenceRoutes } = await harness({
+    const {
+      seedHistory,
+      run,
+      configPath,
+      ledger,
+      verifierReferenceRoutes,
+      root,
+    } = await harness({
       pinned: false,
-      firstVerifierIncomplete: true,
     });
     const config = JSON.parse(await readFile(configPath, "utf8")) as {
       lab: Record<string, unknown>;
@@ -4855,6 +4479,7 @@ describe("harness CLI vertical slice", () => {
         )
       ).code,
     ).toBe(0);
+    await seedHistory("campaign-1", "precondition");
     const finding = ledger()
       .read({ campaignId: "campaign-1", type: "finding-recorded" })
       .map(({ event }) => event)
@@ -4882,6 +4507,8 @@ describe("harness CLI vertical slice", () => {
     const repeated = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding.findingId,
@@ -4899,6 +4526,8 @@ describe("harness CLI vertical slice", () => {
     const retried = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding.findingId,
@@ -4950,9 +4579,14 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("retries a pinned older Snapshot after a scenario change without creating a fixed-version control", async () => {
-    const { run, configPath, ledger, verifierReferenceRoutes } = await harness({
-      firstVerifierIncomplete: true,
-    });
+    const {
+      seedHistory,
+      run,
+      configPath,
+      ledger,
+      verifierReferenceRoutes,
+      root,
+    } = await harness({});
     const config = JSON.parse(await readFile(configPath, "utf8")) as {
       lab: Record<string, unknown>;
     };
@@ -4971,6 +4605,7 @@ describe("harness CLI vertical slice", () => {
         )
       ).code,
     ).toBe(0);
+    await seedHistory("campaign-1", "precondition");
     const finding = ledger()
       .read({ campaignId: "campaign-1", type: "finding-recorded" })
       .map(({ event }) => event)
@@ -5002,6 +4637,8 @@ describe("harness CLI vertical slice", () => {
     const retried = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding.findingId,
@@ -5036,9 +4673,8 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("rejects unconfirmed version changes and fixed-version controls before starting a Lab", async () => {
-    const { run, configPath, ledger, docker } = await harness({
-      firstVerifierIncomplete: true,
-    });
+    const { seedHistory, run, configPath, ledger, docker, root } =
+      await harness({});
     const campaign = ["--campaign", "campaign-1"];
     expect(
       (
@@ -5052,6 +4688,7 @@ describe("harness CLI vertical slice", () => {
         )
       ).code,
     ).toBe(0);
+    await seedHistory("campaign-1", "precondition");
     const finding = ledger()
       .read({ campaignId: "campaign-1", type: "finding-recorded" })
       .map(({ event }) => event)
@@ -5072,6 +4709,8 @@ describe("harness CLI vertical slice", () => {
     const changedSnapshot = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding.findingId,
@@ -5083,6 +4722,8 @@ describe("harness CLI vertical slice", () => {
     const fixedVersion = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding.findingId,
@@ -5102,9 +4743,10 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("reconfirms a legacy route on the same Snapshot before a fixed-version control", async () => {
-    const { run, configPath, ledger } = await harness();
+    const { seedHistory, run, configPath, ledger, root } = await harness();
     const campaign = ["--campaign", "campaign-1"];
     await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    await seedHistory("campaign-1");
     const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
       (await run("review", ...campaign)).stdout,
     )![1]!;
@@ -5112,6 +4754,8 @@ describe("harness CLI vertical slice", () => {
     const sameVersion = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding,
@@ -5133,6 +4777,8 @@ describe("harness CLI vertical slice", () => {
     const controlled = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding,
@@ -5159,7 +4805,8 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("reuses the recorded SVN source pin for same-version re-verification", async () => {
-    const { run, configPath, ledger, frozenSelections, root } = await harness();
+    const { seedHistory, run, configPath, ledger, frozenSelections, root } =
+      await harness();
     const config = JSON.parse(await readFile(configPath, "utf8")) as {
       selectionPolicyPath: string;
     };
@@ -5188,6 +4835,7 @@ describe("harness CLI vertical slice", () => {
         )
       ).code,
     ).toBe(0);
+    await seedHistory("campaign-1");
     const finding = ledger()
       .read({ campaignId: "campaign-1", type: "finding-recorded" })
       .map(({ event }) => event)
@@ -5204,6 +4852,8 @@ describe("harness CLI vertical slice", () => {
     const sameVersion = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding.findingId,
@@ -5222,6 +4872,8 @@ describe("harness CLI vertical slice", () => {
     const conflicting = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding.findingId,
@@ -5235,8 +4887,14 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("rechecks a confirmed Finding on its original Snapshot after the Lab scenario changes", async () => {
-    const { run, configPath, ledger, verifierReferenceRoutes } =
-      await harness();
+    const {
+      seedHistory,
+      run,
+      configPath,
+      ledger,
+      verifierReferenceRoutes,
+      root,
+    } = await harness();
     const campaign = ["--campaign", "campaign-1"];
     expect(
       (
@@ -5250,6 +4908,7 @@ describe("harness CLI vertical slice", () => {
         )
       ).code,
     ).toBe(0);
+    await seedHistory("campaign-1");
     const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
       (await run("review", ...campaign)).stdout,
     )![1]!;
@@ -5274,6 +4933,8 @@ describe("harness CLI vertical slice", () => {
     const mismatchedControl = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding,
@@ -5293,6 +4954,8 @@ describe("harness CLI vertical slice", () => {
     const retried = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding,
@@ -5338,6 +5001,8 @@ describe("harness CLI vertical slice", () => {
     const controlled = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding,
@@ -5356,7 +5021,8 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("replays a confirmed route into a separate campaign without adding a verdict to the source campaign", async () => {
-    const { run, configPath, ledger, state, profile } = await harness();
+    const { seedHistory, run, configPath, ledger, state, profile, root } =
+      await harness();
     await run(
       "campaign",
       "run",
@@ -5366,6 +5032,7 @@ describe("harness CLI vertical slice", () => {
       "--config",
       configPath,
     );
+    await seedHistory("source-campaign");
     const source = ledger().read({
       campaignId: "source-campaign",
       limit: 1000,
@@ -5397,6 +5064,11 @@ describe("harness CLI vertical slice", () => {
       ).toMatchObject({ status: "appended" });
 
     const replayed = await profile.reverify(state(), {
+      handoff: {
+        directory: join(root, "handoff"),
+        httpPort: 18080,
+        databasePort: 3307,
+      },
       campaignId: "smoke-campaign",
       findingId: finding.findingId,
       referenceCampaignId: "source-campaign",
@@ -5417,6 +5089,11 @@ describe("harness CLI vertical slice", () => {
 
     await expect(
       profile.reverify(state(), {
+        handoff: {
+          directory: join(root, "handoff"),
+          httpPort: 18080,
+          databasePort: 3307,
+        },
         campaignId: "smoke-campaign",
         findingId: finding.findingId,
         referenceCampaignId: "absent-campaign",
@@ -5444,7 +5121,8 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("exports one-screen review material with Private Evidence paths and removes a recorded Lab (#186)", async () => {
-    const { run, configPath, docker, live, ledger, root } = await harness();
+    const { seedHistory, run, configPath, docker, live, ledger, root } =
+      await harness();
     const campaign = await run(
       "campaign",
       "run",
@@ -5455,6 +5133,7 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(campaign.code).toBe(0);
+    await seedHistory("campaign-1");
     const queue = await run("review", "--campaign", "campaign-1");
     const confirmedFinding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
       queue.stdout,

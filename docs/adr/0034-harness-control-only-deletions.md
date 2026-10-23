@@ -62,3 +62,7 @@ Verifier 指示の連鎖（`wordpress-verifier.ts` の nextStep）、`scenarios.
 
 - 「第 1 項（dispatch / assignment / ablation / 比較 arm の mode）は #351」: 実際の削除は PR #357（#351 を v8 の上で置き直したもの）。
 - 「#352 と同時に削除するもの」: #352 の skill 化は PR #374（[ADR 0035](0035-verification-as-a-skill.md)）で merge したが、Verifier 指示の連鎖、`scenarios.ts` の `nextWordPressScenario`、plugin 別 Lab adapter、`lab.scenarioId` はまだ main にある。削除は #352 の受け入れ（Brizy / TranslatePress で handoff が判定器の結論まで届く）の後に #353 で行う。front matter の「0026（scenario catalogue の行は #352 で改訂）」も同じ時点に読み替える。
+
+## 2026-10-23 追記: 旧 Verifier 実行経路の退役
+
+所有者の削除指示により、旧 `CodexVerifier` と実 host の構築経路だけを受入完了より先に退役させる（[ADR 0035](0035-verification-as-a-skill.md) の同日追記）。handoff の同等性や #352 の受入達成を主張するものではない。scenario catalogue、選択、plugin 別 adapter と共有の指示の連鎖は今回削除せず、#353 の残る範囲とする。既存の handoff、共有の境界検査、判定器と履歴の読取は維持する。

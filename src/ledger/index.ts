@@ -665,38 +665,7 @@ export type ArmCounts = {
 const querySchema = z.strictObject({
   campaignId: id.optional(),
   type: z
-    .enum([
-      "target-selected",
-      "selection-batch-bound",
-      "snapshot-frozen",
-      "lab-provisioned",
-      "discovery-run-started",
-      "discovery-run-finished",
-      "discovery-concluded",
-      "campaign-stopped",
-      "target-skipped",
-      "evaluation-case-blocked",
-      "candidate-rejected",
-      "candidate-normalized",
-      "candidate-held",
-      "finding-recorded",
-      "finding-parked",
-      "finding-precondition-classified",
-      "lead-recorded",
-      "child-report-recovered",
-      "discovery-report-recovered",
-      "verifier-run-finished",
-      "verification-finished",
-      "review-item-opened",
-      "review-decided",
-      "scope-assessed",
-      "draft-saved",
-      "external-action-authorized",
-      "submission-recorded",
-      "submission-outcome",
-      "human-effort-recorded",
-      "human-reproduction-recorded",
-    ])
+    .enum(ledgerEventV1Schema.options.map(({ shape }) => shape.type.value))
     .optional(),
   findingId: id.optional(),
   afterSequence: z.number().int().nonnegative().optional(),
@@ -763,13 +732,20 @@ function findingIdOf(value: LedgerEventV1): string | null {
 export class Ledger {
   readonly #db: DatabaseSync;
   readonly #artifacts: PrivateArtifactStore;
+  readonly #readOnly: boolean;
 
   constructor(options: {
     readonly databasePath: string;
     readonly artifactStore: PrivateArtifactStore;
+    /** Open an existing ledger without initialization or append capability. */
+    readonly readOnly?: boolean;
   }) {
-    this.#db = new DatabaseSync(options.databasePath);
+    this.#readOnly = options.readOnly ?? false;
+    this.#db = new DatabaseSync(options.databasePath, {
+      readOnly: this.#readOnly,
+    });
     this.#artifacts = options.artifactStore;
+    if (this.#readOnly) return;
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS ledger_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -788,6 +764,7 @@ export class Ledger {
   async append(
     candidate: LedgerEventInput,
   ): Promise<{ readonly status: "appended" | "existing" | "conflict" }> {
+    if (this.#readOnly) throw new Error("Cannot append to a read-only ledger");
     const parsed = ledgerEventV1Schema.parse(candidate);
     if (
       parsed.type === "lead-recorded" &&

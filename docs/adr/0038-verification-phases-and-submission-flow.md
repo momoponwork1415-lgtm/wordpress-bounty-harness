@@ -30,7 +30,7 @@ amends: 0031（段 1 で落とした Finding は Lab に回さないが、理由
 | 3 | Harness が立てた Lab で、種別ごとに明確な手順で再現する。被害者側の表示は Lab 観測器が行う。判定器が `incomplete` を返しても、観測（HTTP 記録、画面、動画）は review に届ける | skill `wbh-verify` v7（#437）、判定器は変えない |
 | 4 | 同じ plugin の同じ版で公開済みの脆弱性が無いかを照合する。無ければ提出候補にする | skill `wbh-dedupe`（#442） |
 | 5 | 提出先を Wordfence → Patchstack → vendor の順で決める。報酬が出ない先には提出しない | skill（#438） |
-| 6 | Patchstack / Wordfence の要件に揃えた英語の報告書を書き、HTTP 記録・画面・動画を添える。過去の提出を参照する | skill `wbh-report`（#439） |
+| 6 | Patchstack / Wordfence の要件に揃えた英語の報告書を書き、HTTP 記録・画面を添える。動画は実在する場合だけ添える。過去の提出を参照する | skill `wbh-report`（#439） |
 
 その後、所有者が手動で再現して中身を理解し、自身の拡張機能で提出する。Harness は送信しない（不変条件 7）。
 
@@ -100,12 +100,40 @@ Lab の側で前提を用意する道（サービスの代役を固定して置�
 
 v7 は、この受け口の契約と「自分で組まない」を `stored-xss` の手順 1 に書いた。判定器と受け口のコードは変えていない。
 
-## 2026-10-23 追記 4: 段 3 の skill を v8 にし、成立しない運び手を名指しする
+## 2026-10-23 追記 4: 暫定文案を先に作り、人間の確認を最後に置く
 
-代表 22 件の受け渡しを一巡させた。1 件に 2 つの Lab を使い、どちらも観測で終わった。1 度目は被害者画面で「Lab の出自を離れた」と判定され、2 度目は操作役が固定ソースを読んで、出口が `target="_blank"` の付いた anchor の `href` しか無いことを確かめ、click を使わずに読み込みだけの画面を宣言した。2 度目の診断は、保存した値がその画面の属性まで届いたこと（属性 1 件、`readyState` は complete、4xx は 0）と、何も実行されなかったことを記録している。
+所有者は、検証に時間がかかる現状を踏まえ、6 段の結果から AI が英語の暫定文案と添付一覧まで用意し、その後に人間が手動で再現して文案を査読する順を選んだ。当面は Wordfence 向けの報告でこの経路を通し、Patchstack 向けの追加自動化は報告が増えてから扱う。段 1 の結果で `reject` を記録する操作、検証後の重複・scope・提出先の照合、暫定 `accept` の記録も AI 操作役が所有者に代わって担う。上の段 1 に残る「所有者が記録する」という当時の運用は、この追記で置き換える。各 skill の判断方法は変えず、旧運用を記す skill 本文の版更新は別 PR で行う。AI の中間判断に人間の作業時間を付けず、提出前の人間査読と区別する。
 
-この形の運び手は原理として成立しない。`target="_blank"` の anchor が開く文脈には opener が無く、元の文書と同じ出自にならないので scheme は実行されない。実行されても、その文脈の出自は不定で、canary の受け口は `Origin` が合わず 403 を返す。前者だけなら Lab の制約だが、後者があるので、受け口を通る道が無い。
+`wbh-report` は、判定器と Lab が残した事実だけを使い、Wordfence 向け英語 Markdown、フォーム入力用 JSON、添付一覧と manifest を Private Evidence に暫定版として作る。今回の Wordfence 向け経路は `runtime-confirmed` の Finding に限る。Review API は `reproduced` も人間の再現より先に `review draft --prepared-by ai` で保存できるが、この skill の経路には含めない。`incomplete` は観測と次の手を review に残すが、提出用の文案としない。重複が `possible-match` / `unavailable`、scope が `ambiguous` の場合も根拠不足として止める。6 段を起動・引き継ぐ自動 orchestrator はまだ無く、AI 操作役が skill と CLI を順に実行する。
 
-v8 は、この運び手を `stored-xss` の手順 1 に名前を付けて書き、出口がその形しか無いときは click を試さず、読み込みだけで値が届く画面を宣言して、固定ソースのファイルと行を `refutation.md` に書くようにした。Harness のコードは変えていない。
+最新版の再検証で新しい Target Snapshot になれば、元 Finding とは別の派生 Finding ID が作られる。AI は `review reverify` の出力 `as <findingId>` を受け取り、その ID で `wbh-review`、重複照合と暫定 `review decide`、scope 評価、提出先選択、報告書作成をやり直す。元 Finding の暫定判断や重複結果は継承しない。元 Finding の文案は、この派生 Finding が記録された時点で承認と提出へ進めない。同じ Snapshot での再試行は元 ID のまま扱う。
 
-段 1 には置かなかった。段 1 が読むのは review export の欄と規則の写しであって、固定ソースではない。出口の形を段 1 で決めるには探索 agent の主張を根拠にすることになり、手順 3 に反する。
+人間は暫定版を受け取ってから Lab で再現し、同じ検証 ID と再現パッケージ digest に対する `match` を記録する。続けて本文・手順・版・影響・添付・送信先を査読し、Markdown、JSON、manifest の最終版を作って `review draft --prepared-by human` で文案を保存する。その版の保存と手動再現より後に、同じ人が `review decide --decision accept` を記録する。`review authorize` と提出時の admission は、最新の文案が人間の最終版で、最新の再現が `match`、最後の判断が同じ人の `accept` であること、および Candidate・文案 digest・送信先の一致を要求する。`mismatch` / `unavailable`、新版の保存、後続の否定判断、後続の検証や同じ Finding の最新版再検証では、旧文案の承認を通さない。CLI の `human` 属性と `--by` は本人認証ではないため、AI は手動再現・人間の最終版・最終 `accept`・承認のコマンドを代行しない。送信は引き続き人間が行う。
+
+## 2026-10-23 追記 5: Wordfence 候補を保守的に選ぶ
+
+所有者は、検証に時間がかかるため、未確認の Finding も先に読んで Wordfence の受理基準に照らし、Lab に時間を使う候補を悲観的に選ぶと決めた。段 1 の `wbh-screen` を v3 にする。判定は `Wordfence 候補として採用 / 非採用` の二値で、`保留` を新しい状態としては設けない。これは v2.2 の `提出可 / 提出不可` と同じ意味ではなく、技術的な真偽、正式な programme scope、提出許可のいずれも決めない。
+
+`採用`には、Finding の主張に攻撃者からサイトまたは別利用者への実害までの具体的な経路、通常の前提、Wordfence の資産・install 閾値・役割・最終影響との整合が要る。`stored-xss` 等のラベルだけでは足りない。`not-verified` または `incomplete` 自体を非採用の根拠にしない。明示除外、重要な辺の記述欠落、近接する公開修正との独立性未証明は `非採用` とし、理由を分け、再評価に必要な証拠を 1 つ書く。Lab で前提を作れないこと自体は受理見込みを変えず、準備か手動確認を別の次の一手として残す。公開履歴 mirror は報奨採否の台帳ではなく、`informational=0` の中にも Wordfence 報奨範囲外の Contributor+ の記録がある。条件付き前提の近い公開記録は直近 6 か月で数え、0 件も 3 件以上も採否の閾値に使わない。これにより 2026-10-22 の「五分五分なら提出可」と 2026-10-23 の「先例 0 件なら提出不可」という段 1 の規則を置き換える。
+
+`非採用` は Wordfence 向けの検証投資の判断なので、Programme Boundary 全体の `out-of-scope` や Finding の `contradicted` に読み替えない。段 1 は `review decide --decision reject` を実行・提案しない。`verify next` の列は変えず、操作役は v3 の `採用`を Finding ID で名指しして Lab に回す。v2.2 で既に記録された `reject` はこの変更だけでは書き換えず、名指しの再評価で判断が変われば新しい `defer` decision として記録し、handoff 列へ戻す。報告と個別メモは版・時刻付きで Private Evidence に残し、後段の判定器、重複、scope、暫定文案、人間の再現と承認の門は変えない。当面 Patchstack の候補選別は後回しにする。条件付き公開記録の傾向を見る窓は直近 6 か月だが、同じ slug の既知修正との照合は mirror の全期間を使う。近い修正の独立性は別工程で source 差分を比較した非公開メモを、ID・Snapshot・版・入力面を照合してから v3 に渡す。
+
+v3 を戻すときは `versions/v2.2.md` を skill 本文に戻し、OPERATIONS §3 の段 0 と `wbh-review` の段 1 の読み方を戻す。旧版の結果を新しい判断として流用しない。
+
+## 2026-10-24 追記 6: 明示除外だけを検証前に分け、検証の到達を優先する
+
+所有者は、段 1 の保守的な `採用 / 非採用` が、未確認の通常構成、実害、再現性、既知修正との関係まで検証前に判断していたため、方針を改めた。段 1 の `wbh-screen` v4 は `検証へ / 明示除外` の二値とする。これは追記 5 の採用基準を置き換える。`明示除外` は Wordfence の規則が一律に外す条件と、その Finding の確認できた事実が直接一致する場合に限る。規則の条件句を満たすか未測定、主張の辺が欠ける、通常構成が不明、ミラーが無い、近接する既知修正があるだけの場合は、未解決事項を付けて `検証へ` にする。時間窓、競合、任意機能の有効化を名前だけで除外しない。
+
+公開履歴の件数と同じ slug の記録は、段 1 での除外条件にしない。修正回避や重複は段 4 で経路と差分を照合する。通常構成、被害者への実害、競合の再現性、最新版での成立は Lab の観測を得てから Wordfence の条件付き除外と照らす。`検証へ` は脆弱性や受理の確認ではない。段 1 は技術判定も programme 全体の対象範囲も変更せず、台帳の `reject` を書かない。Wordfence 以外の提出先は後段で判断する。
+
+旧版の `reject` は、各 Finding を新基準で再評価し、明示除外でなければ新しい `defer` 判断を追記して通常の検証列へ戻す。旧判断は削除しない。探索時の Programme Boundary による `finding-parked` の 10 分類と、明示された特別な管理者設定の規則は変えない。群の代表から検証しても、群内の Finding は保持する。
+
+次の作業は判定器の条件変更より、検証が判定器の結論に届くことを優先する。まず公開済み開発対象の Brizy / TranslatePress を現行 `wbh-verify` で受け渡し、所要時間、`runtime-confirmed` / `contradicted` / `incomplete`、未完の理由を #352 に記録する。前提・観測・手順の不足は各原因に絞って直す。nonce 付き canary、Snapshot digest、一時 Lab と `incomplete` の扱いは SPEC 第 2 節のまま維持する。判定器の条件を緩めて通過数を増やさない。
+
+## 2026-10-24 追記 7: 操作が必要な出口を一律に除外しない
+
+代表 22 件の受け渡しで、ある stored XSS 候補を 2 回試した。1 回目は被害者画面への遷移に失敗し、2 回目は保存値が属性まで届いたが、click を宣言せず beacon を観測しなかった。この 2 回から分かるのは、その手順で発火を観測できなかったことまでであり、操作後にも発火しないことではない。
+
+`target="_blank"` の anchor は通常 opener を持たないが、HTML Standard は `rel=opener` を明示的な例外として定める。Mozilla の公開記録にも、`download` または `rel=opener` が付いたときの JavaScript 実行が記されている。したがって、`target="_blank"` の `href` にある `javascript:` を属性名だけで「原理として成立しない」と決めて click を省くと偽陰性になり得る（[HTML Standard](https://html.spec.whatwg.org/multipage/links.html#link-type-opener)、[Mozilla Bug 1863882](https://bugzilla.mozilla.org/show_bug.cgi?id=1863882)）。
+
+`wbh-verify` v8 は、固定ソースと前提作り中の Lab の HTTP 応答で出力形を確認し、通常の操作を要する出口は型付き `victim.actions` に宣言して Harness の Lab browser で観測する。`setup-done` 後に管理者資格は再利用しない。値がサニタイズで消えるなど具体的な否定根拠があれば、入力・保存・描画のどこで落ちたかを `refutation.md` に記す。canary 不着だけで反証と断定せず、判定器の条件は変えない。この確認は段 3 で行い、段 1 の明示除外条件を増やさない。

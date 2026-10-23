@@ -15,6 +15,11 @@ import {
   countAttemptsForReason,
   shouldAutomaticallyRetryVerification,
 } from "../verification/retry-budget.js";
+import {
+  currentReviewDecision,
+  readDecisionHistory,
+  type DecisionHistoryEntry,
+} from "./decision-history.js";
 import { openReproductionPackage } from "./reproduction-package.js";
 
 export {
@@ -76,8 +81,50 @@ const scopeResult = z.strictObject({
   destination: id,
   reason: z.string().min(1).max(2000),
 });
+const nonHumanActors = new Set(["ai", "agent", "automation", "system"]);
+const humanActor = id
+  .transform((value) => value.trim())
+  .refine(
+    (value) => value.length > 0 && !nonHumanActors.has(value.toLowerCase()),
+    "A named human actor is required",
+  );
 
 type Decision = ReviewDecisionV1["decision"];
+type DecisionInput = {
+  /** Without a verification ID, the Finding must be listed as `not-verified` (#436). */
+  readonly ref: ReviewDecisionRef;
+  readonly decision: Decision;
+  readonly reasonCode: string;
+  readonly openedEvidence: readonly string[];
+  /** The wbh-dedupe result (#442); absent, the decision keeps the one in force. */
+  readonly duplicate?: DuplicateResult;
+  /** The skill's note behind that result; Review files it in Private Evidence. */
+  readonly duplicateNote?: string;
+  readonly decidedBy: string;
+  /** Seconds the human spent, reported by the skill or CLI caller (ADR 0032 Q22). */
+  readonly humanElapsedSeconds?: number;
+};
+type HumanEffortInput = {
+  readonly campaignId?: string;
+  readonly findingId?: string;
+  readonly candidateId?: string;
+  readonly action: "read" | "reproduce" | "submit" | "outcome";
+  readonly minutes: number;
+};
+type HumanReproductionInput = {
+  readonly ref: ReviewRef;
+  readonly result: "match" | "mismatch" | "unavailable";
+};
+type HumanRecord = Extract<
+  LedgerEventV1,
+  { type: "human-effort-recorded" | "human-reproduction-recorded" }
+>;
+type PreparedDecision = {
+  readonly record: ReviewDecisionV1;
+  readonly duplicateNote?: string;
+};
+const humanMinutesSchema = z.number().finite().nonnegative().max(1440);
+const duplicateNoteSchema = z.string().min(1).max(100_000);
 export type ReviewItem = (
   | {
       readonly status: "runtime-confirmed" | "reproduced";
@@ -149,7 +196,11 @@ export type ExternalActionAdmission =
       readonly reason:
         | "candidate-or-draft-not-found"
         | "exact-authorization-required"
-        | "superseded-draft";
+        | "superseded-draft"
+        | "human-reviewed-draft-required"
+        | "manual-reproduction-required"
+        | "human-accept-required"
+        | "stale-verification";
     };
 export type DuplicateLookupResult =
   | { readonly status: "unavailable" | "no-match" }
@@ -244,15 +295,15 @@ export class Review<TFacts = unknown> {
         history.push(event);
         verificationHistory.set(key(event), history);
       }
-    const latestDecision = new Map<
-      string,
-      { sequence: number; decision: Decision }
-    >();
-    for (const { sequence, event } of this.#ledger.readAll({
-      type: "review-decided",
-    }))
-      if (event.type === "review-decided" && inCampaign(event))
-        latestDecision.set(key(event), { sequence, decision: event.decision });
+    const decisionHistory = new Map<string, DecisionHistoryEntry[]>();
+    for (const entry of readDecisionHistory(
+      this.#ledger,
+      campaignId === undefined ? {} : { campaignId },
+    )) {
+      const history = decisionHistory.get(key(entry.event)) ?? [];
+      history.push(entry);
+      decisionHistory.set(key(entry.event), history);
+    }
 
     const items: ReviewItem[] = [];
     const parkedEvents = new Map<
@@ -305,7 +356,7 @@ export class Review<TFacts = unknown> {
         (preconditionClassCounts[classification] ?? 0) + 1;
       const verified = latestVerification.get(key(finding));
       const group = groups.of(finding.campaignId, finding.findingId);
-      const decided = latestDecision.get(key(finding));
+      const decisions = decisionHistory.get(key(finding)) ?? [];
       if (verified === undefined) {
         unverified++;
         items.push({
@@ -316,7 +367,7 @@ export class Review<TFacts = unknown> {
             snapshotDigest: finding.snapshotDigest,
           },
           category: finding.category,
-          decision: decided?.decision ?? null,
+          decision: currentReviewDecision(decisions, finding)?.decision ?? null,
           group,
         });
         continue;
@@ -329,9 +380,7 @@ export class Review<TFacts = unknown> {
         snapshotDigest: event.snapshotDigest,
       };
       const decision =
-        decided !== undefined && decided.sequence > sequence
-          ? decided.decision
-          : null;
+        currentReviewDecision(decisions, ref, sequence)?.decision ?? null;
       const result = event.result;
       if (result.status === "contradicted") {
         contradicted++;
@@ -402,20 +451,71 @@ export class Review<TFacts = unknown> {
     };
   }
 
-  async decide(input: {
-    /** Without a verification ID, the Finding must be listed as `not-verified` (#436). */
-    readonly ref: ReviewDecisionRef;
-    readonly decision: Decision;
-    readonly reasonCode: string;
-    readonly openedEvidence: readonly string[];
-    /** The wbh-dedupe result (#442); absent, the decision keeps the one in force. */
-    readonly duplicate?: DuplicateResult;
-    /** The skill's note behind that result; Review files it in Private Evidence. */
-    readonly duplicateNote?: string;
-    readonly decidedBy: string;
-    /** Seconds the human spent, reported by the skill or CLI caller (ADR 0032 Q22). */
-    readonly humanElapsedSeconds?: number;
-  }): Promise<ReviewDecisionV1> {
+  /**
+   * One human review operation. Validate all records before the first write;
+   * keep the reproduction, its time, the decision and reading time in order.
+   * This is not a transaction spanning SQLite and Private Evidence: an I/O
+   * failure can still interrupt an already validated operation.
+   */
+  async recordDecision(
+    input: Omit<DecisionInput, "humanElapsedSeconds"> & {
+      readonly minutes?: number;
+      readonly reproduction?: {
+        readonly result: HumanReproductionInput["result"];
+        readonly minutes?: number;
+      };
+    },
+  ): Promise<ReviewDecisionV1> {
+    const decidedBy =
+      input.minutes !== undefined || input.reproduction !== undefined
+        ? humanActor.parse(input.decidedBy)
+        : input.decidedBy;
+    const minutes = humanMinutesSchema.optional().parse(input.minutes);
+    const reproduction =
+      input.reproduction === undefined
+        ? undefined
+        : this.#prepareHumanReproduction({
+            ref: refSchema.parse(input.ref),
+            result: input.reproduction.result,
+          });
+    const reproductionEffort =
+      input.reproduction?.minutes === undefined
+        ? undefined
+        : this.#prepareHumanEffort({
+            campaignId: input.ref.campaignId,
+            findingId: input.ref.findingId,
+            action: "reproduce",
+            minutes: input.reproduction.minutes,
+          });
+    const decision = await this.#prepareDecision({
+      ...input,
+      decidedBy,
+      ...(minutes === undefined
+        ? {}
+        : { humanElapsedSeconds: Math.round(minutes * 60) }),
+    });
+    const readEffort =
+      minutes === undefined
+        ? undefined
+        : this.#prepareHumanEffort({
+            campaignId: decision.record.ref.campaignId,
+            findingId: decision.record.ref.findingId,
+            action: "read",
+            minutes,
+          });
+    if (reproduction !== undefined) await this.#recordHumanEvent(reproduction);
+    if (reproductionEffort !== undefined)
+      await this.#recordHumanEvent(reproductionEffort);
+    const recorded = await this.#persistDecision(decision);
+    if (readEffort !== undefined) await this.#recordHumanEvent(readEffort);
+    return recorded;
+  }
+
+  async decide(input: DecisionInput): Promise<ReviewDecisionV1> {
+    return this.#persistDecision(await this.#prepareDecision(input));
+  }
+
+  async #prepareDecision(input: DecisionInput): Promise<PreparedDecision> {
     const ref = decisionRefSchema.parse(input.ref);
     if (input.duplicateNote !== undefined && input.duplicate === undefined)
       throw new Error("A dedupe note needs the result it supports");
@@ -426,27 +526,19 @@ export class Review<TFacts = unknown> {
             ...ref,
             verificationId: ref.verificationId,
           });
+    const duplicateNote = duplicateNoteSchema
+      .optional()
+      .parse(input.duplicateNote);
     const trace = this.#traceOf(ref.campaignId, ref.findingId);
     const decidedAt = this.#clock();
     // A later decision (e.g. the one carrying `--reproduced`) must not erase stage 4.
-    let duplicate: DuplicateCheck =
+    const duplicate: DuplicateCheck =
       input.duplicate === undefined
         ? ((await this.duplicateOf(ref)) ?? { status: "unavailable" })
         : duplicateSchema.parse({
             ...input.duplicate,
             checkedAt: decidedAt.toISOString(),
           });
-    if (input.duplicateNote !== undefined)
-      duplicate = {
-        ...duplicate,
-        note: await this.#store.putFiles({
-          [DEDUPE_NOTE_FILE]: z
-            .string()
-            .min(1)
-            .max(100_000)
-            .parse(input.duplicateNote),
-        }),
-      };
     const record = reviewDecisionV1Schema.parse({
       schemaVersion: 1,
       ref,
@@ -463,6 +555,28 @@ export class Review<TFacts = unknown> {
         : { humanElapsedSeconds: input.humanElapsedSeconds }),
       ...(trace === undefined ? {} : { trace }),
     });
+    return {
+      record,
+      ...(duplicateNote === undefined ? {} : { duplicateNote }),
+    };
+  }
+
+  async #persistDecision(
+    prepared: PreparedDecision,
+  ): Promise<ReviewDecisionV1> {
+    const record =
+      prepared.duplicateNote === undefined
+        ? prepared.record
+        : {
+            ...prepared.record,
+            duplicate: {
+              ...prepared.record.duplicate,
+              note: await this.#store.putFiles({
+                [DEDUPE_NOTE_FILE]: prepared.duplicateNote,
+              }),
+            },
+          };
+    const { ref, trace, duplicate } = record;
     const artifactDigest = await this.#storeRecord(record);
     const appended = await this.#ledger.append({
       schemaVersion: 1,
@@ -564,14 +678,11 @@ export class Review<TFacts = unknown> {
     const reasons = new Map<ReviewItem, string>();
     for (const item of items) {
       if (item.decision === null) continue;
-      const event = this.#ledger
-        .readAll({
-          campaignId: item.ref.campaignId,
-          findingId: item.ref.findingId,
-          type: "review-decided",
-        })
-        .at(-1)?.event;
-      if (event === undefined) continue;
+      const event = currentReviewDecision(
+        readDecisionHistory(this.#ledger, item.ref),
+        item.ref,
+      );
+      if (event === null) continue;
       const read = await readReviewRecord(
         this.#store,
         event,
@@ -587,13 +698,10 @@ export class Review<TFacts = unknown> {
     readonly campaignId: string;
     readonly findingId: string;
   }): Promise<DuplicateCheck | null> {
-    const latest = this.#ledger
-      .readAll({
-        campaignId: id.parse(input.campaignId),
-        findingId: id.parse(input.findingId),
-        type: "review-decided",
-      })
-      .at(-1)?.event;
+    const latest = readDecisionHistory(this.#ledger, {
+      campaignId: id.parse(input.campaignId),
+      findingId: id.parse(input.findingId),
+    }).at(-1)?.event;
     if (latest === undefined) return null;
     const read = await readReviewRecord(this.#store, latest, "review-decision");
     return read.status === "read" ? read.record.duplicate : null;
@@ -716,7 +824,7 @@ export class Review<TFacts = unknown> {
     readonly preparedBy: "ai" | "human";
   }): Promise<SubmissionDraftRef> {
     const assessmentId = digest.parse(input.assessmentId);
-    const assessment = (await this.#allAssessments()).find(
+    const assessment = (await this.#allAssessments({ assessmentId })).find(
       (item) => item.id === assessmentId,
     );
     if (
@@ -724,30 +832,10 @@ export class Review<TFacts = unknown> {
       assessment.policyDigest !== this.#scopeEvaluator.policyDigest
     )
       throw new Error("An in-scope assessment is required");
-    const verification = this.#requireConfirmed(assessment.ref);
-    if (verification.result.status === "reproduced") {
-      const packageDigest = verification.result.reproductionPackageDigest;
-      const manual = this.#ledger
-        .readAll({ type: "human-reproduction-recorded" })
-        .map(({ event }) => event)
-        .filter(
-          (event) =>
-            event.type === "human-reproduction-recorded" &&
-            event.campaignId === assessment.ref.campaignId &&
-            event.findingId === assessment.ref.findingId &&
-            event.verificationId === assessment.ref.verificationId &&
-            event.reproductionPackageDigest === packageDigest,
-        )
-        .at(-1);
-      if (
-        manual?.type !== "human-reproduction-recorded" ||
-        manual.result !== "match"
-      )
-        throw new Error(
-          "A matching manual reproduction is required before drafting a reproduced candidate",
-        );
-    }
-    const prior = (await this.#allDrafts()).filter(
+    if (!this.#isCurrentVerification(assessment.ref))
+      throw new Error("A current verification is required before drafting");
+    this.#requireConfirmed(assessment.ref);
+    const prior = (await this.#allDrafts(assessment.ref)).filter(
       (item) => item.assessmentId === assessmentId,
     );
     const revision = Math.max(0, ...prior.map((item) => item.revision)) + 1;
@@ -802,8 +890,10 @@ export class Review<TFacts = unknown> {
     const candidateId = digest.parse(input.candidateId);
     const draftDigest = digest.parse(input.draftDigest);
     const destination = id.parse(input.destination);
-    const authorizedBy = id.parse(input.authorizedBy);
-    const draft = (await this.#allDrafts()).find(
+    const authorizedBy = humanActor.parse(input.authorizedBy);
+    const draft = (
+      await this.#allDrafts({ candidateId, revisionDigest: draftDigest })
+    ).find(
       (item) =>
         item.candidateId === candidateId &&
         item.digest === draftDigest &&
@@ -811,7 +901,9 @@ export class Review<TFacts = unknown> {
     );
     if (draft === undefined)
       throw new Error("An exact Submission Candidate and Draft are required");
-    const assessment = (await this.#allAssessments()).find(
+    const assessment = (
+      await this.#allAssessments({ assessmentId: draft.assessmentId })
+    ).find(
       (item) =>
         item.id === draft.assessmentId &&
         item.status === "in-scope" &&
@@ -819,6 +911,9 @@ export class Review<TFacts = unknown> {
     );
     if (assessment === undefined)
       throw new Error("An in-scope assessment is required");
+    const gate = await this.#finalReviewGate(draft, assessment, authorizedBy);
+    if (typeof gate === "string")
+      throw new Error(`Final human review is required: ${gate}`);
     const record = authorizationSchema.parse({
       candidateId,
       draftDigest,
@@ -829,7 +924,7 @@ export class Review<TFacts = unknown> {
     const artifactDigest = await this.#storeRecord(record);
     const appended = await this.#ledger.append({
       schemaVersion: 1,
-      identity: `authorization:${canonicalDigest(record)}`,
+      identity: `authorization:${canonicalDigest({ record, finalReviewSequence: gate })}`,
       campaignId: assessment.ref.campaignId,
       snapshotDigest: assessment.ref.snapshotDigest,
       occurredAt: record.authorizedAt,
@@ -851,7 +946,9 @@ export class Review<TFacts = unknown> {
     const candidateId = digest.parse(input.candidateId);
     const draftDigest = digest.parse(input.draftDigest);
     const destination = id.parse(input.destination);
-    const draft = (await this.#allDrafts()).find(
+    const draft = (
+      await this.#allDrafts({ candidateId, revisionDigest: draftDigest })
+    ).find(
       (item) =>
         item.candidateId === candidateId &&
         item.digest === draftDigest &&
@@ -862,7 +959,9 @@ export class Review<TFacts = unknown> {
         status: "not-authorized",
         reason: "candidate-or-draft-not-found",
       };
-    const assessment = (await this.#allAssessments()).find(
+    const assessment = (
+      await this.#allAssessments({ assessmentId: draft.assessmentId })
+    ).find(
       (item) =>
         item.id === draft.assessmentId &&
         item.status === "in-scope" &&
@@ -874,7 +973,7 @@ export class Review<TFacts = unknown> {
         reason: "exact-authorization-required",
       };
     const latest = Math.max(
-      ...(await this.#allDrafts())
+      ...(await this.#allDrafts(assessment.ref))
         .filter((item) => item.assessmentId === draft.assessmentId)
         .map((item) => item.revision),
     );
@@ -882,16 +981,175 @@ export class Review<TFacts = unknown> {
       return { status: "not-authorized", reason: "superseded-draft" };
     const authorization = this.#ledger
       .readAll({ type: "external-action-authorized" })
-      .find(
+      .filter(
         ({ event }) =>
           event.type === "external-action-authorized" &&
           event.candidateId === candidateId &&
           event.revisionDigest === draftDigest &&
           event.destination === destination,
+      )
+      .at(-1);
+    if (authorization === undefined)
+      return {
+        status: "not-authorized",
+        reason: "exact-authorization-required",
+      };
+    const authorizationRecord = await this.#readRecord(
+      authorization.event,
+      "review-authorization",
+    );
+    const gate = await this.#finalReviewGate(
+      draft,
+      assessment,
+      authorizationRecord.authorizedBy,
+    );
+    if (typeof gate === "string")
+      return { status: "not-authorized", reason: gate };
+    return authorization.sequence > gate
+      ? { status: "authorized", authorizationId: authorization.event.identity }
+      : { status: "not-authorized", reason: "exact-authorization-required" };
+  }
+
+  /** Returns the final decision sequence only after the human steps are in order. */
+  async #finalReviewGate(
+    draft: SubmissionDraft,
+    assessment: ScopeAssessment,
+    reviewer: string,
+  ): Promise<
+    | "superseded-draft"
+    | "human-reviewed-draft-required"
+    | "manual-reproduction-required"
+    | "human-accept-required"
+    | "stale-verification"
+    | number
+  > {
+    const latestRevision = Math.max(
+      ...(await this.#allDrafts(assessment.ref))
+        .filter((item) => item.assessmentId === draft.assessmentId)
+        .map((item) => item.revision),
+    );
+    if (draft.revision !== latestRevision) return "superseded-draft";
+    if (draft.preparedBy !== "human") return "human-reviewed-draft-required";
+    if (!this.#isCurrentVerification(assessment.ref))
+      return "stale-verification";
+
+    const verification = this.#requireConfirmed(assessment.ref);
+    if (
+      verification.result.status !== "runtime-confirmed" &&
+      verification.result.status !== "reproduced"
+    )
+      return "manual-reproduction-required";
+    const reproductionPackageDigest =
+      verification.result.reproductionPackageDigest;
+    const manual = this.#ledger
+      .readAll({
+        campaignId: assessment.ref.campaignId,
+        findingId: assessment.ref.findingId,
+        type: "human-reproduction-recorded",
+      })
+      .filter(
+        ({ event }) =>
+          event.type === "human-reproduction-recorded" &&
+          event.verificationId === assessment.ref.verificationId &&
+          event.reproductionPackageDigest === reproductionPackageDigest,
+      )
+      .at(-1);
+    if (
+      manual?.event.type !== "human-reproduction-recorded" ||
+      manual.event.result !== "match"
+    )
+      return "manual-reproduction-required";
+
+    const saved = this.#ledger
+      .readAll({
+        campaignId: assessment.ref.campaignId,
+        findingId: assessment.ref.findingId,
+        type: "draft-saved",
+      })
+      .find(
+        ({ event }) =>
+          event.type === "draft-saved" &&
+          event.candidateId === draft.candidateId &&
+          event.revisionDigest === draft.digest,
       );
-    return authorization === undefined
-      ? { status: "not-authorized", reason: "exact-authorization-required" }
-      : { status: "authorized", authorizationId: authorization.event.identity };
+    if (saved === undefined || manual.sequence >= saved.sequence)
+      return "human-reviewed-draft-required";
+    const decision = this.#ledger
+      .readAll({
+        campaignId: assessment.ref.campaignId,
+        findingId: assessment.ref.findingId,
+        type: "review-decided",
+      })
+      .at(-1);
+    if (
+      decision?.event.type !== "review-decided" ||
+      decision.sequence <= saved.sequence ||
+      decision.sequence <= manual.sequence ||
+      decision.event.decision !== "accept" ||
+      decision.event.verificationId !== assessment.ref.verificationId ||
+      decision.event.snapshotDigest !== assessment.ref.snapshotDigest
+    )
+      return "human-accept-required";
+    const reviewRecord = await readReviewRecord(
+      this.#store,
+      decision.event,
+      "review-decision",
+    );
+    const reviewedBy =
+      reviewRecord.status === "read"
+        ? humanActor.safeParse(reviewRecord.record.decidedBy)
+        : null;
+    return reviewRecord.status === "read" &&
+      reviewRecord.record.duplicate.status === "no-match" &&
+      reviewedBy?.success === true &&
+      reviewedBy.data === reviewer
+      ? decision.sequence
+      : "human-accept-required";
+  }
+
+  /** A later attempt or latest-version Finding supersedes a submission basis. */
+  #isCurrentVerification(ref: ReviewRef): boolean {
+    const latestAttempt = this.#ledger
+      .readAll({
+        campaignId: ref.campaignId,
+        findingId: ref.findingId,
+        type: "verification-finished",
+      })
+      .at(-1)?.event;
+    if (
+      latestAttempt?.type !== "verification-finished" ||
+      latestAttempt.verificationId !== ref.verificationId ||
+      latestAttempt.snapshotDigest !== ref.snapshotDigest
+    )
+      return false;
+
+    const findings = this.#ledger
+      .readAll({ campaignId: ref.campaignId, type: "finding-recorded" })
+      .map(({ event }) => event)
+      .filter((event) => event.type === "finding-recorded");
+    const byId = new Map(findings.map((event) => [event.findingId, event]));
+    const rootOf = (findingId: string): string => {
+      let current = findingId;
+      const seen = new Set<string>();
+      while (!seen.has(current)) {
+        seen.add(current);
+        const parent = byId.get(current)?.derivedFromFindingId;
+        if (parent === undefined) break;
+        current = parent;
+      }
+      return current;
+    };
+    const root = rootOf(ref.findingId);
+    const newestLatest = findings
+      .filter(
+        (event) =>
+          event.derivationKind === "latest-version" &&
+          rootOf(event.findingId) === root,
+      )
+      .at(-1);
+    return (
+      newestLatest === undefined || newestLatest.findingId === ref.findingId
+    );
   }
 
   /** Records that the human submitted this exact authorized draft; Harness sends nothing. */
@@ -903,14 +1161,22 @@ export class Review<TFacts = unknown> {
     const admission = await this.admitExternalAction(input);
     if (admission.status !== "authorized")
       throw new Error(`Submission is not authorized: ${admission.reason}`);
-    const draft = (await this.#allDrafts()).find(
+    const draft = (
+      await this.#allDrafts({
+        candidateId: input.candidateId,
+        revisionDigest: input.draftDigest,
+      })
+    ).find(
       (item) =>
         item.candidateId === input.candidateId &&
         item.digest === input.draftDigest,
     );
-    const assessment = (await this.#allAssessments()).find(
-      (item) => item.id === draft?.assessmentId,
-    );
+    const assessment =
+      draft === undefined
+        ? undefined
+        : (
+            await this.#allAssessments({ assessmentId: draft.assessmentId })
+          ).find((item) => item.id === draft.assessmentId);
     if (assessment === undefined)
       throw new Error("Submission Candidate has no assessment");
     const recordedAt = this.#clock().toISOString();
@@ -969,19 +1235,12 @@ export class Review<TFacts = unknown> {
   }
 
   /** One append-only receipt for work the owner actually completed. */
-  async recordHumanEffort(input: {
-    readonly campaignId?: string;
-    readonly findingId?: string;
-    readonly candidateId?: string;
-    readonly action: "read" | "reproduce" | "submit" | "outcome";
-    readonly minutes: number;
-  }): Promise<void> {
-    const minutes = z
-      .number()
-      .finite()
-      .nonnegative()
-      .max(1440)
-      .parse(input.minutes);
+  async recordHumanEffort(input: HumanEffortInput): Promise<void> {
+    await this.#recordHumanEvent(this.#prepareHumanEffort(input));
+  }
+
+  #prepareHumanEffort(input: HumanEffortInput): HumanRecord {
+    const minutes = humanMinutesSchema.parse(input.minutes);
     const candidateEvent =
       input.candidateId === undefined
         ? undefined
@@ -1014,7 +1273,7 @@ export class Review<TFacts = unknown> {
     const snapshotDigest = finding?.snapshotDigest ?? candidate?.snapshotDigest;
     if (snapshotDigest === undefined)
       throw new Error("Human effort needs a recorded Snapshot");
-    const appended = await this.#ledger.append({
+    return {
       schemaVersion: 1,
       identity: `human-effort:${randomUUID()}`,
       campaignId,
@@ -1024,15 +1283,18 @@ export class Review<TFacts = unknown> {
       ...(findingId === undefined ? {} : { findingId }),
       action: input.action,
       minutes,
-    });
-    if (appended.status !== "appended")
-      throw new Error("Human effort ledger conflict");
+      artifacts: [],
+    };
   }
 
-  async recordHumanReproduction(input: {
-    readonly ref: ReviewRef;
-    readonly result: "match" | "mismatch" | "unavailable";
-  }): Promise<void> {
+  async recordHumanReproduction(input: HumanReproductionInput): Promise<void> {
+    await this.#recordHumanEvent(this.#prepareHumanReproduction(input));
+  }
+
+  #prepareHumanReproduction(input: HumanReproductionInput): HumanRecord {
+    const result = z
+      .enum(["match", "mismatch", "unavailable"])
+      .parse(input.result);
     const ref = refSchema.parse(input.ref);
     const verification = this.#requireConfirmed(ref);
     if (
@@ -1040,7 +1302,7 @@ export class Review<TFacts = unknown> {
       verification.result.status !== "reproduced"
     )
       throw new Error("A matching evidence-backed verification is required");
-    const appended = await this.#ledger.append({
+    return {
       schemaVersion: 1,
       identity: `human-reproduction:${randomUUID()}`,
       campaignId: ref.campaignId,
@@ -1050,10 +1312,19 @@ export class Review<TFacts = unknown> {
       findingId: ref.findingId,
       verificationId: ref.verificationId,
       reproductionPackageDigest: verification.result.reproductionPackageDigest,
-      result: input.result,
-    });
+      result,
+      artifacts: [],
+    };
+  }
+
+  async #recordHumanEvent(event: HumanRecord): Promise<void> {
+    const appended = await this.#ledger.append(event);
     if (appended.status !== "appended")
-      throw new Error("Human reproduction ledger conflict");
+      throw new Error(
+        event.type === "human-effort-recorded"
+          ? "Human effort ledger conflict"
+          : "Human reproduction ledger conflict",
+      );
   }
 
   async inspectDuplicate(input: {
@@ -1079,56 +1350,35 @@ export class Review<TFacts = unknown> {
     const query = z
       .strictObject({ campaignId: id, findingId: id })
       .parse(input);
-    const verification = this.#ledger
-      .readAll({ type: "verification-finished" })
-      .filter(
-        ({ event }) =>
-          event.type === "verification-finished" &&
-          event.campaignId === query.campaignId &&
-          event.findingId === query.findingId,
-      )
-      .at(-1);
-    const assessments = (await this.#allAssessments()).filter(
+    const verifications = this.#ledger.readAll({
+      ...query,
+      type: "verification-finished",
+    });
+    const verification = verifications.at(-1);
+    const assessments = (await this.#allAssessments(query)).filter(
       (item) =>
         item.ref.campaignId === query.campaignId &&
         item.ref.findingId === query.findingId,
     );
     const assessmentIds = new Set(assessments.map((item) => item.id));
-    const drafts = (await this.#allDrafts())
+    const drafts = (await this.#allDrafts(query))
       .filter((item) => assessmentIds.has(item.assessmentId))
       .map(({ content: _content, ...reference }) => reference);
     const candidateIds = new Set(drafts.map((draft) => draft.candidateId));
+    // Keep the historical type order and duplicate references. Authorization
+    // events have no Finding ID; their drafts establish that relationship.
     const privateEvidenceDigests = [
+      ...verifications,
+      ...this.#ledger.readAll({ ...query, type: "scope-assessed" }),
+      ...this.#ledger.readAll({ ...query, type: "draft-saved" }),
       ...this.#ledger
-        .readAll({ type: "verification-finished" })
-        .filter(
-          ({ event }) =>
-            event.type === "verification-finished" &&
-            event.campaignId === query.campaignId &&
-            event.findingId === query.findingId,
-        ),
-      ...this.#ledger
-        .readAll({ type: "scope-assessed" })
-        .filter(
-          ({ event }) =>
-            event.type === "scope-assessed" &&
-            event.campaignId === query.campaignId &&
-            event.findingId === query.findingId,
-        ),
-      ...this.#ledger
-        .readAll({ type: "draft-saved" })
-        .filter(
-          ({ event }) =>
-            event.type === "draft-saved" &&
-            event.campaignId === query.campaignId &&
-            event.findingId === query.findingId,
-        ),
-      ...this.#ledger
-        .readAll({ type: "external-action-authorized" })
+        .readAll({
+          campaignId: query.campaignId,
+          type: "external-action-authorized",
+        })
         .filter(
           ({ event }) =>
             event.type === "external-action-authorized" &&
-            event.campaignId === query.campaignId &&
             candidateIds.has(event.candidateId),
         ),
     ].flatMap(({ event }) =>
@@ -1220,16 +1470,35 @@ export class Review<TFacts = unknown> {
     return read.record;
   }
 
-  async #allAssessments(): Promise<ScopeAssessment[]> {
+  async #allAssessments(
+    input: {
+      readonly campaignId?: string;
+      readonly findingId?: string;
+      readonly assessmentId?: string;
+    } = {},
+  ): Promise<ScopeAssessment[]> {
+    const { assessmentId, campaignId, findingId } = input;
+    const entries = this.#ledger.readAll({
+      ...(campaignId === undefined ? {} : { campaignId }),
+      ...(findingId === undefined ? {} : { findingId }),
+      type: "scope-assessed",
+    });
+    const exact =
+      assessmentId === undefined
+        ? undefined
+        : entries.find(
+            ({ event }) => event.identity === `scope:${assessmentId}`,
+          );
+    // Preserve records with identities outside the current writer convention.
     return Promise.all(
-      this.#ledger
-        .readAll({ type: "scope-assessed" })
-        .map(({ event }) => this.#readRecord(event, "review-scope")),
+      (exact === undefined ? entries : [exact]).map(({ event }) =>
+        this.#readRecord(event, "review-scope"),
+      ),
     );
   }
 
   async #scopeAssessments(ref: ReviewRef): Promise<ScopeAssessment[]> {
-    return (await this.#allAssessments()).filter(
+    return (await this.#allAssessments(ref)).filter(
       (item) =>
         item.ref.findingId === ref.findingId &&
         item.ref.campaignId === ref.campaignId &&
@@ -1238,10 +1507,29 @@ export class Review<TFacts = unknown> {
     );
   }
 
-  async #allDrafts(): Promise<SubmissionDraft[]> {
+  async #allDrafts(
+    input: {
+      readonly campaignId?: string;
+      readonly findingId?: string;
+      readonly candidateId?: string;
+      readonly revisionDigest?: string;
+    } = {},
+  ): Promise<SubmissionDraft[]> {
+    const { candidateId, revisionDigest, campaignId, findingId } = input;
     return Promise.all(
       this.#ledger
-        .readAll({ type: "draft-saved" })
+        .readAll({
+          ...(campaignId === undefined ? {} : { campaignId }),
+          ...(findingId === undefined ? {} : { findingId }),
+          type: "draft-saved",
+        })
+        .filter(
+          ({ event }) =>
+            event.type === "draft-saved" &&
+            (candidateId === undefined || event.candidateId === candidateId) &&
+            (revisionDigest === undefined ||
+              event.revisionDigest === revisionDigest),
+        )
         .map(({ event }) => this.#readRecord(event, "review-draft")),
     );
   }

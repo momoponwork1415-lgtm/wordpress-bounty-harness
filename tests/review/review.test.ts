@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
-import { Review } from "../../src/review/index.js";
+import { exportReviewBundle, Review } from "../../src/review/index.js";
 
 const snapshot = `sha256:${"a".repeat(64)}`;
 const labSetup = `sha256:${"b".repeat(64)}`;
@@ -137,6 +137,107 @@ const ref = {
 };
 
 describe("review public interface", () => {
+  it.each([
+    [snapshot, "verification-2"],
+    [`sha256:${"c".repeat(64)}`, ref.verificationId],
+  ])(
+    "keeps decisions for a previous verification historical (%s, %s)",
+    async (snapshotDigest, verificationId) => {
+      const { review, ledger, artifactStore } = await fixture();
+      const original = ledger.read({ type: "verification-finished" })[0]!.event;
+      if (original.type !== "verification-finished") throw new Error("missing");
+      const latestRef = {
+        ...ref,
+        snapshotDigest,
+        verificationId,
+      };
+      await ledger.append({
+        ...original,
+        ...latestRef,
+        identity: "verification-2",
+      });
+      const decision = {
+        reasonCode: "historical-review",
+        openedEvidence: [],
+        decidedBy: "owner",
+      };
+      await review.decide({ ...decision, ref, decision: "defer" });
+      expect(review.queue().items[0]?.decision).toBeNull();
+      await review.decide({
+        ...decision,
+        ref: latestRef,
+        decision: "accept",
+        reasonCode: "current-review",
+      });
+      await review.decide({ ...decision, ref, decision: "reject" });
+      const queue = review.queue();
+      expect(queue.items[0]?.decision).toBe("accept");
+      expect(
+        (await review.decisionReasons(queue.items)).get(queue.items[0]!),
+      ).toBe("current-review");
+      const exported = await exportReviewBundle({
+        ledger,
+        store: artifactStore,
+        campaignId: ref.campaignId,
+        findingId: ref.findingId,
+      });
+      expect(exported.review.decision?.decision).toBe("reject");
+    },
+  );
+
+  it.each([
+    ["scope-assessed", "campaign-1", "other-finding"],
+    ["scope-assessed", "other-campaign", "finding-1"],
+    ["draft-saved", "campaign-1", "other-finding"],
+    ["draft-saved", "other-campaign", "finding-1"],
+  ] as const)(
+    "reads one Finding without an unrelated missing %s in %s/%s",
+    async (type, campaignId, findingId) => {
+      const { review, ledger, artifactStore } = await fixture();
+      const [assessment] = await review.assessScope({ ref });
+      if (assessment === undefined) throw new Error("missing assessment");
+      const input = {
+        assessmentId: assessment.id,
+        content: "Draft",
+        preparedBy: "ai" as const,
+      };
+      await review.saveDraft(input);
+      const event = ledger.read({ type })[0]!.event;
+      if (event.type !== "scope-assessed" && event.type !== "draft-saved")
+        throw new Error("missing record event");
+      const absent = await artifactStore.putFiles({ "record.json": "{}" });
+      const stored = await artifactStore.resolve(absent);
+      if (stored.status !== "resolved") throw new Error("missing record");
+      await ledger.append({
+        ...event,
+        identity: "unrelated-record",
+        campaignId,
+        findingId,
+        artifacts: [
+          {
+            kind: type === "scope-assessed" ? "review-scope" : "review-draft",
+            digest: absent,
+          },
+        ],
+      });
+      await rm(stored.contentDirectory, { recursive: true });
+      expect(
+        await review.inspect({
+          campaignId: ref.campaignId,
+          findingId: ref.findingId,
+        }),
+      ).toMatchObject({
+        scopeAssessments: [{ id: assessment.id }, expect.anything()],
+        drafts: [{ revision: 1 }],
+      });
+      expect((await review.saveDraft(input)).revision).toBe(2);
+      expect(await review.assessScope({ ref })).toHaveLength(2);
+      await expect(review.inspect({ campaignId, findingId })).rejects.toThrow(
+        "Private Evidence is unavailable",
+      );
+    },
+  );
+
   it("excludes a later parked Finding and counts its latest precondition class", async () => {
     const { review, ledger } = await fixture();
     const base = {
@@ -245,6 +346,120 @@ describe("review public interface", () => {
     });
   });
 
+  it("keeps inspection history and evidence order within one Finding, including candidate-linked authorizations", async () => {
+    const { review, ledger, artifactStore } = await fixture();
+    const [assessment] = await review.assessScope({ ref });
+    if (assessment === undefined) throw new Error("missing assessment");
+    const firstDraft = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "First draft",
+      preparedBy: "ai",
+    });
+    const secondDraft = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "Second draft",
+      preparedBy: "ai",
+    });
+    const scopeDigests = ledger
+      .readAll({ type: "scope-assessed" })
+      .flatMap(({ event }) => event.artifacts.map(({ digest }) => digest));
+    const draftDigests = ledger
+      .readAll({ type: "draft-saved" })
+      .flatMap(({ event }) => event.artifacts.map(({ digest }) => digest));
+    const older = await artifactStore.putFiles({ "note.txt": "older" });
+    const newer = await artifactStore.putFiles({ "note.txt": "newer" });
+    const authorized = await artifactStore.putFiles({ "note.txt": "receipt" });
+    const unrelated = await artifactStore.putFiles({ "note.txt": "other" });
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: ref.campaignId,
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-08T02:00:00Z",
+    };
+    const verification = {
+      ...base,
+      type: "verification-finished" as const,
+      findingId: ref.findingId,
+      labSetupDigest: labSetup,
+      result: {
+        status: "incomplete" as const,
+        reason: "evidence" as const,
+        nextStep: "Review the recorded evidence",
+      },
+    };
+    await ledger.append({
+      ...verification,
+      identity: "older-inspection-verification",
+      verificationId: "older-inspection-verification",
+      artifacts: [
+        { kind: "record", digest: older },
+        { kind: "copy", digest: older },
+      ],
+    });
+    // Stored authorization receipts intentionally have no Finding ID.
+    const authorization = {
+      ...base,
+      type: "external-action-authorized" as const,
+      candidateId: firstDraft.candidateId,
+      revisionDigest: firstDraft.digest,
+      destination: "wordfence",
+      artifacts: [{ kind: "review-authorization", digest: authorized }],
+    };
+    await ledger.append({
+      ...authorization,
+      identity: "inspection-authorization",
+    });
+    await ledger.append({
+      ...verification,
+      identity: "latest-inspection-verification",
+      verificationId: "latest-inspection-verification",
+      artifacts: [{ kind: "record", digest: newer }],
+    });
+    for (const [campaignId, findingId] of [
+      [ref.campaignId, "other-finding"],
+      ["other-campaign", ref.findingId],
+    ] as const) {
+      await ledger.append({
+        ...verification,
+        campaignId,
+        findingId,
+        identity: `unrelated:${campaignId}:${findingId}`,
+        verificationId: `unrelated:${campaignId}:${findingId}`,
+        artifacts: [{ kind: "record", digest: unrelated }],
+      });
+    }
+    await ledger.append({
+      ...authorization,
+      identity: "authorization-other-campaign",
+      campaignId: "other-campaign",
+      artifacts: [{ kind: "review-authorization", digest: unrelated }],
+    });
+    await ledger.append({
+      ...authorization,
+      identity: "authorization-other-candidate",
+      candidateId: unrelated,
+      artifacts: [{ kind: "review-authorization", digest: unrelated }],
+    });
+
+    const view = await review.inspect({
+      campaignId: ref.campaignId,
+      findingId: ref.findingId,
+    });
+    expect(view).toMatchObject({
+      verificationStatus: "incomplete",
+      reproductionPackageDigest: null,
+      drafts: [firstDraft, secondDraft],
+    });
+    expect(view.privateEvidenceDigests).toEqual([
+      older,
+      older,
+      newer,
+      ...scopeDigests,
+      ...draftDigests,
+      authorized,
+    ]);
+  });
+
   it("evaluates each configured programme once and retains a confirmed finding when scope fails", async () => {
     const { review, ledger } = await fixture();
     const assessments = await review.assessScope({ ref });
@@ -271,7 +486,7 @@ describe("review public interface", () => {
     ).toMatchObject({ result: { status: "runtime-confirmed" } });
   });
 
-  it("binds a private draft revision and human authorization to the exact candidate and destination", async () => {
+  it("requires a human-reviewed revision, matching reproduction, and final acceptance before exact authorization", async () => {
     const { review, ledger } = await fixture();
     const [assessment] = await review.assessScope({ ref });
     if (assessment === undefined) throw new Error("missing assessment");
@@ -290,52 +505,169 @@ describe("review public interface", () => {
         })
       ).status,
     ).toBe("not-authorized");
+    await expect(
+      review.authorizeExternalAction({
+        candidateId: draft.candidateId,
+        draftDigest: draft.digest,
+        destination: "wordfence",
+        authorizedBy: "human-1",
+      }),
+    ).rejects.toThrow("human-reviewed-draft-required");
+    await review.recordHumanReproduction({ ref, result: "match" });
+    const reviewed = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "Private report text",
+      preparedBy: "human",
+    });
+    expect(reviewed.revision).toBe(2);
+    await expect(
+      review.authorizeExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+        authorizedBy: "human-1",
+      }),
+    ).rejects.toThrow("human-accept-required");
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "dedupe-not-checked",
+      openedEvidence: [],
+      decidedBy: "human-1",
+    });
+    await expect(
+      review.authorizeExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+        authorizedBy: "human-1",
+      }),
+    ).rejects.toThrow("human-accept-required");
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "final-human-review",
+      duplicate: { status: "no-match" },
+      openedEvidence: [],
+      decidedBy: "human-1",
+    });
     await review.authorizeExternalAction({
-      candidateId: draft.candidateId,
-      draftDigest: draft.digest,
+      candidateId: reviewed.candidateId,
+      draftDigest: reviewed.digest,
       destination: "wordfence",
       authorizedBy: "human-1",
     });
     expect(
       await review.admitExternalAction({
-        candidateId: draft.candidateId,
-        draftDigest: draft.digest,
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({ status: "authorized" });
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "rechecked-final-review",
+      openedEvidence: [],
+      decidedBy: "human-1",
+    });
+    expect(
+      await review.admitExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({
+      status: "not-authorized",
+      reason: "exact-authorization-required",
+    });
+    await review.authorizeExternalAction({
+      candidateId: reviewed.candidateId,
+      draftDigest: reviewed.digest,
+      destination: "wordfence",
+      authorizedBy: "human-1",
+    });
+    expect(
+      await review.admitExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
         destination: "wordfence",
       }),
     ).toMatchObject({ status: "authorized" });
     expect(
       (
         await review.admitExternalAction({
-          candidateId: draft.candidateId,
-          draftDigest: draft.digest,
+          candidateId: reviewed.candidateId,
+          draftDigest: reviewed.digest,
           destination: "patchstack",
         })
       ).status,
     ).toBe("not-authorized");
+    await review.recordHumanReproduction({ ref, result: "mismatch" });
+    expect(
+      await review.admitExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({
+      status: "not-authorized",
+      reason: "manual-reproduction-required",
+    });
+    await review.recordHumanReproduction({ ref, result: "match" });
+    expect(
+      await review.admitExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({
+      status: "not-authorized",
+      reason: "human-reviewed-draft-required",
+    });
     const second = await review.saveDraft({
       assessmentId: assessment.id,
       content: "Revised private report",
       preparedBy: "human",
     });
-    expect(second.revision).toBe(2);
+    expect(second.revision).toBe(3);
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "final-human-review-after-recheck",
+      openedEvidence: [],
+      decidedBy: "human-1",
+    });
     expect(
-      (
-        await review.admitExternalAction({
-          candidateId: second.candidateId,
-          draftDigest: second.digest,
-          destination: "wordfence",
-        })
-      ).status,
-    ).toBe("not-authorized");
+      await review.admitExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({ status: "not-authorized", reason: "superseded-draft" });
     expect(
-      (
-        await review.admitExternalAction({
-          candidateId: draft.candidateId,
-          draftDigest: draft.digest,
-          destination: "wordfence",
-        })
-      ).status,
-    ).toBe("not-authorized");
+      await review.admitExternalAction({
+        candidateId: second.candidateId,
+        draftDigest: second.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({
+      status: "not-authorized",
+      reason: "exact-authorization-required",
+    });
+    await review.authorizeExternalAction({
+      candidateId: second.candidateId,
+      draftDigest: second.digest,
+      destination: "wordfence",
+      authorizedBy: "human-1",
+    });
+    expect(
+      await review.admitExternalAction({
+        candidateId: second.candidateId,
+        draftDigest: second.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({ status: "authorized" });
     expect(JSON.stringify(ledger.read({ type: "draft-saved" }))).not.toContain(
       "Private report text",
     );
@@ -346,7 +678,7 @@ describe("review public interface", () => {
       }),
     ).toMatchObject({
       verificationStatus: "runtime-confirmed",
-      drafts: [{ revision: 1 }, { revision: 2 }],
+      drafts: [{ revision: 1 }, { revision: 2 }, { revision: 3 }],
     });
   });
 
@@ -378,7 +710,7 @@ describe("review public interface", () => {
     ).rejects.toThrow("in-scope");
   });
 
-  it("requires a matching human reproduction of the current reproduced package before drafting", async () => {
+  it("permits a reproduced AI draft before manual confirmation but gates authorization", async () => {
     const { review, ledger } = await fixture();
     const original = ledger.read({ type: "verification-finished" })[0]?.event;
     if (
@@ -410,26 +742,189 @@ describe("review public interface", () => {
     const reproducedRef = { ...ref, verificationId: "verification-2" };
     const [assessment] = await review.assessScope({ ref: reproducedRef });
     if (assessment === undefined) throw new Error("missing assessment");
-    const draft = () =>
-      review.saveDraft({
-        assessmentId: assessment.id,
-        content: "Synthetic report",
-        preparedBy: "ai",
+    const draft = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "Synthetic report",
+      preparedBy: "ai",
+    });
+    expect(draft.revision).toBe(1);
+    const premature = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "Reviewed synthetic report",
+      preparedBy: "human",
+    });
+    const authorizePremature = () =>
+      review.authorizeExternalAction({
+        candidateId: premature.candidateId,
+        draftDigest: premature.digest,
+        destination: "wordfence",
+        authorizedBy: "human-1",
       });
-    await expect(draft()).rejects.toThrow("manual reproduction");
+    await expect(authorizePremature()).rejects.toThrow(
+      "manual-reproduction-required",
+    );
     await review.recordHumanReproduction({
       ref: reproducedRef,
       result: "mismatch",
     });
-    await expect(draft()).rejects.toThrow("manual reproduction");
+    await expect(authorizePremature()).rejects.toThrow(
+      "manual-reproduction-required",
+    );
     await review.recordHumanReproduction({
       ref: reproducedRef,
       result: "match",
     });
-    await expect(draft()).resolves.toMatchObject({ revision: 1 });
+    await expect(authorizePremature()).rejects.toThrow(
+      "human-reviewed-draft-required",
+    );
+    const reviewed = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "Reviewed after manual reproduction",
+      preparedBy: "human",
+    });
+    const authorize = () =>
+      review.authorizeExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+        authorizedBy: "human-1",
+      });
+    await expect(authorize()).rejects.toThrow("human-accept-required");
+    await review.decide({
+      ref: reproducedRef,
+      decision: "accept",
+      reasonCode: "final-human-review",
+      duplicate: { status: "no-match" },
+      openedEvidence: [],
+      decidedBy: "human-1",
+    });
+    await expect(authorize()).resolves.toBeUndefined();
     expect(ledger.read({ type: "human-reproduction-recorded" })).toHaveLength(
       2,
     );
+  });
+
+  it("does not admit an old review after a later incomplete attempt or latest-version Finding", async () => {
+    for (const later of ["attempt", "latest-version"] as const) {
+      const { review, ledger } = await fixture();
+      const [assessment] = await review.assessScope({ ref });
+      if (assessment === undefined) throw new Error("missing assessment");
+      await review.recordHumanReproduction({ ref, result: "match" });
+      const draft = await review.saveDraft({
+        assessmentId: assessment.id,
+        content: "Reviewed report",
+        preparedBy: "human",
+      });
+      await review.decide({
+        ref,
+        decision: "accept",
+        reasonCode: "final-human-review",
+        duplicate: { status: "no-match" },
+        openedEvidence: [],
+        decidedBy: "human-1",
+      });
+      const exact = {
+        candidateId: draft.candidateId,
+        draftDigest: draft.digest,
+        destination: "wordfence",
+      };
+      await review.authorizeExternalAction({
+        ...exact,
+        authorizedBy: "human-1",
+      });
+      expect(await review.admitExternalAction(exact)).toMatchObject({
+        status: "authorized",
+      });
+      const appended = await ledger.append(
+        later === "attempt"
+          ? {
+              schemaVersion: 1,
+              identity: "verification-later-incomplete",
+              campaignId: ref.campaignId,
+              snapshotDigest: ref.snapshotDigest,
+              occurredAt: "2026-10-08T02:00:00Z",
+              type: "verification-finished" as const,
+              findingId: ref.findingId,
+              verificationId: "verification-later-incomplete",
+              labSetupDigest: labSetup,
+              result: {
+                status: "incomplete" as const,
+                reason: "observation" as const,
+                nextStep: "Repeat observation",
+              },
+            }
+          : {
+              schemaVersion: 1,
+              identity: "finding-new-latest",
+              campaignId: ref.campaignId,
+              snapshotDigest: `sha256:${"c".repeat(64)}`,
+              occurredAt: "2026-10-08T02:00:00Z",
+              type: "finding-recorded" as const,
+              findingId: "finding-new-latest",
+              runId: "reverify-run",
+              category: "sqli",
+              derivedFromFindingId: ref.findingId,
+              derivationKind: "latest-version" as const,
+            },
+      );
+      expect(appended.status).toBe("appended");
+      expect(await review.admitExternalAction(exact)).toMatchObject({
+        status: "not-authorized",
+        reason: "stale-verification",
+      });
+      await expect(
+        review.authorizeExternalAction({ ...exact, authorizedBy: "human-1" }),
+      ).rejects.toThrow("stale-verification");
+      await expect(
+        review.saveDraft({
+          assessmentId: assessment.id,
+          content: "Stale provisional report",
+          preparedBy: "ai",
+        }),
+      ).rejects.toThrow("current verification");
+    }
+  });
+
+  it("requires an explicitly named human actor for the final acceptance and authorization", async () => {
+    const { review } = await fixture();
+    const [assessment] = await review.assessScope({ ref });
+    if (assessment === undefined) throw new Error("missing assessment");
+    await review.recordHumanReproduction({ ref, result: "match" });
+    const draft = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "Reviewed report",
+      preparedBy: "human",
+    });
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "ai-triage",
+      openedEvidence: [],
+      decidedBy: "ai",
+    });
+    const exact = {
+      candidateId: draft.candidateId,
+      draftDigest: draft.digest,
+      destination: "wordfence",
+    };
+    await expect(
+      review.authorizeExternalAction({ ...exact, authorizedBy: "operator" }),
+    ).rejects.toThrow("human-accept-required");
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "final-human-review",
+      duplicate: { status: "no-match" },
+      openedEvidence: [],
+      decidedBy: "operator",
+    });
+    for (const actor of ["", "   ", "AI", "agent", "automation", "system"])
+      await expect(
+        review.authorizeExternalAction({ ...exact, authorizedBy: actor }),
+      ).rejects.toThrow();
+    await expect(
+      review.authorizeExternalAction({ ...exact, authorizedBy: "operator" }),
+    ).resolves.toBeUndefined();
   });
 
   it("marks malformed programme coverage incomplete without changing verification", async () => {
@@ -463,10 +958,19 @@ describe("review public interface", () => {
     const { review, ledger, artifactStore } = await fixture();
     const [first] = await review.assessScope({ ref });
     if (first === undefined) throw new Error("missing assessment");
+    await review.recordHumanReproduction({ ref, result: "match" });
     const draft = await review.saveDraft({
       assessmentId: first.id,
       content: "Private report",
-      preparedBy: "ai",
+      preparedBy: "human",
+    });
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "final-human-review",
+      duplicate: { status: "no-match" },
+      openedEvidence: [],
+      decidedBy: "human-1",
     });
     await review.authorizeExternalAction({
       candidateId: draft.candidateId,
@@ -928,17 +1432,178 @@ describe("review queue and decisions", () => {
   });
 });
 
+describe("one human review operation", () => {
+  const decisionInput = {
+    ref,
+    decision: "accept" as const,
+    reasonCode: "accepted",
+    openedEvidence: [],
+    decidedBy: "operator",
+    duplicate: { status: "no-match" as const },
+    duplicateNote: "Synthetic review note",
+  };
+
+  it("records related human work in order and carries the same reading time into the decision", async () => {
+    const { review, ledger } = await fixture();
+    const before = ledger.readAll({}).length;
+    const record = await review.recordDecision({
+      ...decisionInput,
+      minutes: 2.5,
+      reproduction: { result: "match", minutes: 7.25 },
+    });
+    const events = ledger
+      .readAll({})
+      .slice(before)
+      .map(({ event }) => event);
+    expect(events).toMatchObject([
+      { type: "human-reproduction-recorded", result: "match" },
+      { type: "human-effort-recorded", action: "reproduce", minutes: 7.25 },
+      { type: "review-decided", humanElapsedSeconds: 150 },
+      { type: "human-effort-recorded", action: "read", minutes: 2.5 },
+    ]);
+    expect(events).toHaveLength(4);
+    expect(record).toMatchObject({
+      humanElapsedSeconds: 150,
+      duplicate: {
+        status: "no-match",
+        note: expect.stringMatching(/^sha256:/),
+      },
+    });
+  });
+
+  it("leaves optional human records absent when no time or reproduction was reported", async () => {
+    const { review, ledger } = await fixture();
+    const before = ledger.readAll({}).length;
+    const record = await review.recordDecision(decisionInput);
+    expect(record).not.toHaveProperty("humanElapsedSeconds");
+    expect(
+      ledger
+        .readAll({})
+        .slice(before)
+        .map(({ event }) => event.type),
+    ).toEqual(["review-decided"]);
+  });
+
+  it.each([
+    { name: "reason", override: { reasonCode: "invalid reason" } },
+    { name: "evidence digest", override: { openedEvidence: ["not-a-digest"] } },
+    { name: "author", override: { decidedBy: "" } },
+    { name: "empty note", override: { duplicateNote: "" } },
+    {
+      name: "oversized note",
+      override: { duplicateNote: "x".repeat(100_001) },
+    },
+    {
+      name: "duplicate reference",
+      override: {
+        duplicate: { status: "possible-match" as const, reference: "" },
+      },
+    },
+    { name: "reading time", override: { minutes: 1441 } },
+    {
+      name: "reproduction time",
+      override: { reproduction: { result: "match" as const, minutes: -1 } },
+    },
+    {
+      name: "unknown verification",
+      override: { ref: { ...ref, verificationId: "unknown" } },
+    },
+    {
+      name: "snapshot mismatch",
+      override: { ref: { ...ref, snapshotDigest: labSetup } },
+    },
+  ])("writes no event or artifact for invalid $name", async ({ override }) => {
+    const { review, ledger, artifactStore } = await fixture();
+    const eventsBefore = ledger.readAll({});
+    const filesBefore = await readdir(artifactStore.rootDirectory);
+    await expect(
+      review.recordDecision({
+        ...decisionInput,
+        minutes: 2,
+        reproduction: { result: "match", minutes: 4 },
+        ...override,
+      }),
+    ).rejects.toThrow();
+    expect(ledger.readAll({})).toEqual(eventsBefore);
+    expect(await readdir(artifactStore.rootDirectory)).toEqual(filesBefore);
+  });
+
+  it("rejects a reproduction on an unverified item before recording any human work", async () => {
+    const { review, ledger, artifactStore } = await queueFixture();
+    const eventsBefore = ledger.readAll({});
+    const filesBefore = await readdir(artifactStore.rootDirectory);
+    await expect(
+      review.recordDecision({
+        ...decisionInput,
+        ref: {
+          campaignId: ref.campaignId,
+          findingId: "finding-4",
+          snapshotDigest: snapshot,
+        },
+        minutes: 2,
+        reproduction: { result: "match", minutes: 4 },
+      }),
+    ).rejects.toThrow();
+    expect(ledger.readAll({})).toEqual(eventsBefore);
+    expect(await readdir(artifactStore.rootDirectory)).toEqual(filesBefore);
+  });
+
+  it.each(["ai", "agent", "automation", " SYSTEM "])(
+    "does not attribute human time or reproduction to %s",
+    async (decidedBy) => {
+      const { review, ledger, artifactStore } = await fixture();
+      const eventsBefore = ledger.readAll({});
+      const filesBefore = await readdir(artifactStore.rootDirectory);
+      for (const humanWork of [
+        { minutes: 0 },
+        { reproduction: { result: "match" as const } },
+      ]) {
+        await expect(
+          review.recordDecision({ ...decisionInput, decidedBy, ...humanWork }),
+        ).rejects.toThrow("A named human actor is required");
+      }
+      expect(ledger.readAll({})).toEqual(eventsBefore);
+      expect(await readdir(artifactStore.rootDirectory)).toEqual(filesBefore);
+    },
+  );
+
+  it("allows an AI decision without human time or reproduction", async () => {
+    const { review, ledger } = await fixture();
+    const before = ledger.readAll({}).length;
+    const record = await review.recordDecision({
+      ...decisionInput,
+      decidedBy: "ai",
+    });
+    expect(record.decidedBy).toBe("ai");
+    expect(record).not.toHaveProperty("humanElapsedSeconds");
+    expect(
+      ledger
+        .readAll({})
+        .slice(before)
+        .map(({ event }) => event.type),
+    ).toEqual(["review-decided"]);
+  });
+
+  it("validates standalone decide before filing its note", async () => {
+    const { review, ledger, artifactStore } = await fixture();
+    const eventsBefore = ledger.readAll({});
+    const filesBefore = await readdir(artifactStore.rootDirectory);
+    await expect(
+      review.decide({
+        ...decisionInput,
+        reasonCode: "invalid reason",
+      }),
+    ).rejects.toThrow();
+    expect(ledger.readAll({})).toEqual(eventsBefore);
+    expect(await readdir(artifactStore.rootDirectory)).toEqual(filesBefore);
+  });
+});
+
 describe("review submission records", () => {
   it("records a human submission only for an exactly authorized draft, then its outcome", async () => {
     const { review, ledger } = await fixture();
-    await review.decide({
-      ref,
-      decision: "accept",
-      reasonCode: "reproduced-by-hand",
-      openedEvidence: [],
-      decidedBy: "operator",
-    });
     const [assessment] = await review.assessScope({ ref });
+    await review.recordHumanReproduction({ ref, result: "match" });
     const draft = await review.saveDraft({
       assessmentId: assessment!.id,
       content: "Private report text",
@@ -949,6 +1614,14 @@ describe("review submission records", () => {
       draftDigest: draft.digest,
       destination: "wordfence",
     };
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "reproduced-by-hand",
+      duplicate: { status: "no-match" },
+      openedEvidence: [],
+      decidedBy: "human-1",
+    });
     await expect(review.recordSubmission(submission)).rejects.toThrow();
     await expect(
       review.recordOutcome({

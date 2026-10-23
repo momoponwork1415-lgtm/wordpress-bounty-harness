@@ -1,6 +1,6 @@
 ---
 name: wbh-verify
-description: scope 内 Finding 1 件を、Harness が `verify next --handoff <dir>` で立てた Lab 上で再現する。review export と setup 用 `lab.json` を読み、通常機能の前提を作って `setup-done` を置く。`observation-ready` 後に攻撃用 `attack.json` を読み、種別ごとの手順に従って攻撃者位置だけで route を実行し、6 ファイルを書く。判定はしない。
+description: scope 内 Finding 1 件を、Harness が `verify next --handoff` で立てた Lab 上で再現する。review export と setup 用 `lab.json` を読み、通常機能の前提を作って `setup-done` を置く。`observation-ready` 後に攻撃用 `attack.json` を読み、種別ごとの手順に従って攻撃者位置だけで route を実行し、6 ファイルを書く。判定はしない。
 ---
 
 # wbh-verify
@@ -55,9 +55,9 @@ description: scope 内 Finding 1 件を、Harness が `verify next --handoff <di
 
 1. 攻撃者位置で届く入力面（コメントのような公開面への投稿や送信）に script canary を載せ、保存させる。`attack.json` の `canary.javascript` か `canary.loaderJavascript` を、**文字列として変えずに**実行させる。出口が element の中身の位置なら `canary.javascript` をそのまま script 要素の中に置ける。長さで切られるか、属性の位置で引用符が足りないときは `canary.loaderJavascript` を使う。これは同じ POST を送る短い module を読み込む。
    canary の受け口が記録するのは、`/b/<token>` への POST で、`X-WBH-Script-Canary` header の値が token と一致し、`Origin` が Lab の WordPress のものである要求だけである（`src/profiles/wordpress/lab/container-startup.ts`）。それ以外は 403 になる。だから、`beaconUrl` を使って自分で要求を組まない。header の無い `fetch`、`img` や stylesheet としての読み込み、`/b/` への GET では beacon は記録されない。どちらの形も実行できないときは、試したことを `refutation.md` に書く。運び手を自分で発明しない。
-   **成立しない運び手が 1 つある。** `target="_blank"` の付いた anchor の `href` に置く `javascript:` の URL である。この anchor が開く文脈には opener が無く、元の文書と同じ出自にならないので、その scheme は実行されない。実行されたとしても、その文脈の出自は不定なので、受け口は `Origin` が合わず 403 を返す。固定ソースを読んで、出口がこの形の `href` しか無いと分かったときは、click を試さない。
+   `href` のように操作して初めて評価される出口では、固定ソースと前提作り中の Lab の HTTP 応答から出力形を確かめる。`target="_blank"` だけを根拠に `javascript:` を実行不能と決めて click を省かない。`rel` などの属性とブラウザ挙動で結果が変わる。通常の操作が必要なら手順 2 の `actions` に指定し、`setup-done` 後は管理者資格を再利用せず、Harness の Lab browser に観測させる。
 2. 保存した値が描画される画面を、`route.json` の `victim.paths` に 1〜5 件書く。描画が読み込みだけで起きる画面を選ぶ。Lab browser は route と victim の前に `/`、`/wp-admin/`、`/wp-admin/edit.php` を自分で開くので、一覧画面は確かめやすい。画面側の JavaScript が組む経路（fragment で切り替わる画面）や新しいタブを開く link しか無いときは、`actions` を付けたうえで、その画面を選んだ理由を `steps.md` に書く。遷移できないと観測は `victim-page (victim-navigation)` で終わる。`victim.role` には、その画面を開く被害者を選ぶ。管理者なら `administrator`、ログインしていない訪問者なら `unauthenticated` にする。攻撃者自身の account で開く画面は被害者にならない。
-   出口が手順 1 の成立しない運び手しか無いときも、route は実行して、保存した値が読み込みだけで届く画面を `victim.paths` に書き、`actions` は付けない。Harness の診断が、値がその画面の属性まで届いたかを記録する。そのうえで、出口がその形しか無いことを、固定ソースのファイルと行を挙げて `refutation.md` に書く。判定はしない。
+   値がサニタイズで落ちて操作対象が無い場合は、無意味な click を作らない。入力から保存・描画までのどこで落ちたか、固定ソースのファイルと行、および Lab の観測を `refutation.md` に書く。他の出力経路も固定ソースで確認する。canary が届かないことだけを反証にしない。
 3. Harness の Lab browser が、攻撃者とは別のセッションでその画面を開き、beacon の着信を観測する。
 
 **`rce`、`php-file-write`**

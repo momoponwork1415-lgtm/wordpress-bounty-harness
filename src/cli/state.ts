@@ -22,11 +22,14 @@ export async function openState(
     readonly clock?: () => Date;
     readonly newId?: () => string;
   } = {},
+  options: { readonly readOnly?: boolean } = {},
 ): Promise<CliState> {
   const root = resolve(directory);
-  await mkdir(root, { recursive: true, mode: 0o700 });
+  if (options.readOnly !== true)
+    await mkdir(root, { recursive: true, mode: 0o700 });
   const store = new PrivateArtifactStore({
     rootDirectory: join(root, "private-evidence"),
+    readOnly: options.readOnly ?? false,
     maxEntries: 64,
     // A bounded capture and its supporting evidence fit in one artifact.
     maxBytes: 72 * 1024 * 1024,
@@ -37,6 +40,7 @@ export async function openState(
     ledger: new Ledger({
       databasePath: join(root, "ledger.sqlite"),
       artifactStore: store,
+      readOnly: options.readOnly ?? false,
     }),
     clock: environment.clock ?? (() => new Date()),
     newId: environment.newId ?? randomUUID,

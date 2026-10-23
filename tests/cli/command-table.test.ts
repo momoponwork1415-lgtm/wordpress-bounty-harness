@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,7 +15,7 @@ import {
 const PINNED_USAGE = [
   "usage: harness [--state <dir>] <command>",
   "  select --config <path> [--minimum <n>]",
-  "  campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--repeat <n>] [--retry-incomplete]",
+  "  campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--repeat <n>]",
   "  continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--notify <command>] [--resume]",
   "  continuous stop",
   "  continuous resume",
@@ -29,7 +29,7 @@ const PINNED_USAGE = [
   "  review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--handoff <dir> [--port <n>] [--db-port <n>]]",
   "  verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>]] [--port <n>] [--db-port <n>]",
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
-  "  review authorize --candidate <id> --draft <digest> --to <destination>",
+  "  review authorize --candidate <id> --draft <digest> --to <destination> --by <name>",
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
   "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
   "  ledger funnel --campaign <id> | --since <ISO>",
@@ -71,7 +71,12 @@ async function run(...argv: string[]) {
       stderr: (line) => stderr.push(line),
     },
   );
-  return { code, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
+  return {
+    code,
+    stdout: stdout.join("\n"),
+    stderr: stderr.join("\n"),
+    directory,
+  };
 }
 
 describe("command table", () => {
@@ -95,6 +100,23 @@ describe("command table", () => {
       true,
     );
     expect(result.stderr.endsWith(`\n${PINNED_USAGE}`)).toBe(true);
+  });
+
+  it("rejects the retired campaign retry override before initializing state", async () => {
+    const result = await run(
+      "campaign",
+      "run",
+      "--all",
+      "--campaign",
+      "synthetic",
+      "--config",
+      "/unused/campaign.json",
+      "--retry-incomplete",
+    );
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("Unknown option '--retry-incomplete'");
+    expect(result.stdout).toBe("");
+    expect(await readdir(result.directory)).toEqual([]);
   });
 
   it("keeps each usage line under its own row and every flag it names declared by that row", () => {

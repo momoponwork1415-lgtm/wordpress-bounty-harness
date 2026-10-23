@@ -13,7 +13,14 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3"
-    ]
+    ],
+    "packageExtensions": {
+      "dependency-cruiser@18.7.0": {
+        "dependencies": {
+          "typescript": "6.0.3"
+        }
+      }
+    }
   },
   "scripts": {
     "check": "pnpm typecheck && pnpm lint && pnpm test",
@@ -23,11 +30,17 @@
     "lint": "prettier --check . --ignore-unknown",
     "format": "prettier --write . --ignore-unknown",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:architecture": "vitest run tests/architecture/module-boundary.test.ts",
+    "analyze:dependencies": "depcruise src --config .dependency-cruiser.json --output-type err",
+    "analyze:unused": "knip --tsConfig tsconfig.build.json",
+    "analyze:unused:production": "knip --tsConfig tsconfig.build.json --production"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.20.5",
+    "dependency-cruiser": "18.7.0",
+    "knip": "6.42.1",
     "prettier": "3.9.9",
     "typescript": "7.0.2",
     "vitest": "5.0.3"

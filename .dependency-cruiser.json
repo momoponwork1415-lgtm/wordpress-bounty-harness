@@ -1,0 +1,32 @@
+{
+  "$schema": "https://www.dependency-cruiser.org/schema.json",
+  "forbidden": [
+    {
+      "name": "generic-modules-do-not-import-adapters",
+      "comment": "ADR 0011: generic modules may not depend on profile or CLI implementation, including type imports.",
+      "severity": "error",
+      "from": {
+        "path": "^src/(selection|snapshot|lab|discovery|verification|ledger|review|infrastructure)/"
+      },
+      "to": { "path": "^src/(profiles|cli)/" }
+    },
+    {
+      "name": "runtime-cycles",
+      "comment": "Diagnostic only: type-only edges do not form a runtime cycle. Existing cycles require individual design review.",
+      "severity": "warn",
+      "from": { "path": "^src/" },
+      "to": {
+        "circular": true,
+        "viaOnly": {
+          "dependencyTypesNot": ["type-only", "pre-compilation-only"]
+        }
+      }
+    }
+  ],
+  "options": {
+    "doNotFollow": { "path": "node_modules" },
+    "includeOnly": "^src/",
+    "tsPreCompilationDeps": "specify",
+    "tsConfig": { "fileName": "tsconfig.json" }
+  }
+}

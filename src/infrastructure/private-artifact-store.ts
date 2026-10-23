@@ -96,12 +96,14 @@ export type PrivateArtifactJsonResolution<T> =
 
 export class PrivateArtifactStore {
   readonly #rootDirectory: string;
+  readonly #readOnly: boolean;
   readonly #limits: { readonly maxEntries: number; readonly maxBytes: number };
 
   constructor(options: {
     readonly rootDirectory: string;
     readonly maxEntries: number;
     readonly maxBytes: number;
+    readonly readOnly?: boolean;
   }) {
     if (
       !isAbsolute(options.rootDirectory) ||
@@ -114,6 +116,7 @@ export class PrivateArtifactStore {
       throw new TypeError("Private artifact store options are invalid");
     }
     this.#rootDirectory = resolve(options.rootDirectory);
+    this.#readOnly = options.readOnly ?? false;
     this.#limits = {
       maxEntries: options.maxEntries,
       maxBytes: options.maxBytes,
@@ -395,6 +398,11 @@ export class PrivateArtifactStore {
   }
 
   async #prepareRoot(): Promise<void> {
+    if (this.#readOnly)
+      throw new PrivateArtifactStoreError(
+        "read-only",
+        "Cannot write to a read-only artifact store",
+      );
     await mkdir(this.#rootDirectory, { recursive: true, mode: 0o700 });
     const stat = await lstat(this.#rootDirectory);
     if (!stat.isDirectory() || stat.isSymbolicLink()) {
@@ -471,6 +479,7 @@ export class PrivateArtifactStore {
 export class PrivateArtifactStoreError extends Error {
   constructor(
     readonly code:
+      | "read-only"
       | "invalid-staging"
       | "invalid-artifact-id"
       | "size-limit-exceeded"
