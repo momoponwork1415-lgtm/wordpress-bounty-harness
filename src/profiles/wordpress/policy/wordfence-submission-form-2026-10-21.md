@@ -31,7 +31,8 @@
 - Video Demonstration — 任意（必須印なし）、ファイル 1 つ。説明: "Attach a video demonstrating the exploit. The file will be uploaded securely when you submit this report, and will be deleted from our systems once triaged. Maximum file size: 250 MiB."
 - Environment * — 説明: "Please provide all environment, setting, and configuration details used to replicate this vulnerability (i.e. versions of PHP, WordPress, and MySQL; special plugin settings, etc.)"
 - Certification * — "Please certify that you have tested this Proof of Concept step-by-step, and that it works in the configuration/environment you have specified above?"
-- AI use * — "Did you use AI to generate this report or find this vulnerability? Please note: we do not discourage using AI, however, we would like to know when it is being used." 続いて "What AI tool(s) did you use to generate this report or discover this vulnerability?" *
+- AI use * — "Did you use AI to generate this report or find this vulnerability? Please note: we do not discourage using AI, however, we would like to know when it is being used."
+- What AI tool(s) did you use to generate this report or discover this vulnerability? * — テキスト欄。2026-10-23 に所有者が提示したフォーム画面で、AI 利用の選択とは別の必須欄として確認した。同日の DOM では `form#submit-vulnerability textarea#pocAiToolsUsed` が見えるが、対応する `label` 要素はない。
 
 ### Other Details
 
@@ -44,4 +45,6 @@
 - Impact Statement は 200 字以内の 1 文。
 - Proof of Concept は Markdown で、手順の本文をここに置く。動画は任意の別項目で 250 MiB まで。
 - Environment には PHP / WordPress / MySQL の版と、有効にした設定を書く。
-- AI 利用の申告、CVE と他 vendor への報告の有無、同意は人間が答える。skill は下書きにその欄を空で用意する。
+- AI 利用の Yes/No、CVE と他 vendor への報告の有無、同意は人間が答える。skill は下書きにその欄を空で用意する。AI tool(s) 欄は `OpenAI Codex and Claude Code` を初期テンプレートとし、人間が最終査読で実際の利用状況に合わせて修正する。
+
+Vulnerability Type、Authentication Level Required、Common Weakness (CWE) Type の全選択肢は、[2026-10-23 の取得記録](../../../../docs/reviews/2026-10-23-wordfence-form-options.md)と[選択肢 JSON](../../../../docs/reviews/2026-10-23-wordfence-form-options.json)に置く。提出時には live form の選択肢と照合する。
