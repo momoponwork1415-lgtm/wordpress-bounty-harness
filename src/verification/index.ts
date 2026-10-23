@@ -353,6 +353,7 @@ export class Verification<
     let evidenceCapture: "harness-captured" | "agent-authored" | undefined;
     let labStateDiff: LabStateDiffRecord | undefined;
     let recipeDigest: string | undefined;
+    let reviewLabReady = false;
     const loaded = await this.#loadFinding(campaignId, findingId);
 
     const decide = async (): Promise<VerificationResultV1> => {
@@ -430,6 +431,7 @@ export class Verification<
       }
       const lab = provisioned.handle;
       labSetupDigest = lab.setupDigest;
+      reviewLabReady = lab.snapshotDigest === snapshotDigest;
       let result: VerificationResultV1 = incomplete(
         "evidence",
         "Verification stopped unexpectedly; repeat in a fresh Lab",
@@ -514,8 +516,36 @@ export class Verification<
     };
 
     const decided = await decide();
+    // A low-confidence observation can be checked by a person in a new Lab.
+    // This is reconstruction material only; it never changes the judge result.
+    let reviewLabDigest: string | undefined;
+    if (
+      reviewLabReady &&
+      decided.status === "incomplete" &&
+      decided.reason === "observation" &&
+      evidenceCapture === "harness-captured" &&
+      decided.evidenceDigest !== undefined &&
+      recipeDigest !== undefined
+    ) {
+      try {
+        reviewLabDigest = await this.#options.store.putFiles({
+          "lab.json": canonicalJson({
+            schema: "review-lab-reconstruction/v1",
+            snapshotDigest,
+            labSetupDigest,
+            setup: input.setup,
+            snapshot: input.snapshot,
+          }),
+        });
+      } catch {
+        // Missing review material fails closed when a human asks to open it.
+      }
+    }
     // The recipe is review material by digest (#437); one the store lost stays out.
     const artifacts = [
+      ...(reviewLabDigest === undefined
+        ? []
+        : [{ kind: "review-lab-reconstruction", digest: reviewLabDigest }]),
       ...(recipeDigest !== undefined &&
       (await this.#options.store.resolve(recipeDigest)).status === "resolved"
         ? [{ kind: "recipe", digest: recipeDigest }]

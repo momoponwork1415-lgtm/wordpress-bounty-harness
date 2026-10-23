@@ -59,6 +59,10 @@ export async function openWordPressReviewLab(input: {
       `Frozen Snapshot artifact differs from the package: ${frozen.reason}`,
     );
   const setup = setupSchema.parse(reconstruction.setup);
+  if (setup.snapshotDigest !== reconstruction.snapshotDigest)
+    throw new Error(
+      "Review Lab setup Snapshot digest differs from the package",
+    );
   const provisioned = await input.lab.provision(frozen.snapshot, setup, {
     purpose: "verification",
   });

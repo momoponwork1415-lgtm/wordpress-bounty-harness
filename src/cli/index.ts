@@ -21,6 +21,7 @@ import {
   type Review,
   type ReviewItem,
   type ReviewQueue,
+  type ReviewRef,
   type StateDiffReader,
   type VerifierRecordReader,
 } from "../review/index.js";
@@ -171,6 +172,15 @@ export interface CliProfile {
     readonly browserImage: string;
     close(): Promise<void>;
   }>;
+  /** Profile-owned admission of an incomplete observation to a manual Lab. */
+  reviewLabPackage?(
+    state: CliState,
+    ref: ReviewRef,
+  ): Promise<{
+    readonly packageDigest: string;
+    readonly recipeDigest: string;
+    readonly evidenceDigest: string;
+  } | null>;
   /** Lines describing the public history mirror, and whether it is fresh; null when none is configured. */
   historyStatus(
     state: CliState,
@@ -699,7 +709,7 @@ export async function runForegroundReviewLab(
           `manual client: docker run --rm -it --runtime=runsc --network ${shellQuote(session.networkName)} --add-host ${shellQuote(`wordpress:${session.recorderIp}`)} --add-host ${shellQuote(`canary:${session.receiverIp}`)} --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs=/tmp:rw,nosuid,nodev,size=512m --entrypoint sh ${shellQuote(session.browserImage)}`,
         );
         io.stdout(
-          "Run the package's manual HTTP or browser steps in that client; interrupt this command to remove the Lab.",
+          "Run the private reproduction steps in that client; interrupt this command to remove the Lab.",
         );
         // Printing is synchronous, so an interrupt raised while printing is already recorded here.
         if (!interrupted) await waitForInterrupt();
@@ -1738,16 +1748,35 @@ const COMMANDS: readonly Command[] = [
       if (launch === undefined)
         throw new UsageError("This profile has no review Lab provisioner");
       const item = queued(environment.profile.review(state), values);
-      if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
+      const manual =
+        item.status === "incomplete"
+          ? await environment.profile.reviewLabPackage?.(state, item.ref)
+          : null;
+      const packageDigest =
+        item.status === "runtime-confirmed" || item.status === "reproduced"
+          ? item.reproductionPackageDigest
+          : manual?.packageDigest;
+      if (packageDigest === null || packageDigest === undefined)
         throw new UsageError(
-          "A reproduction package is required for review Lab setup",
+          "An evidence-bound review Lab package is required",
         );
+      if (manual !== null && manual !== undefined) {
+        io.stdout(
+          `private recipe steps: ${state.store.contentPath(manual.recipeDigest)}/steps.md`,
+        );
+        io.stdout(
+          `private victim route: ${state.store.contentPath(manual.recipeDigest)}/route.json`,
+        );
+        io.stdout(
+          `private browser observation: ${state.store.contentPath(manual.evidenceDigest)}/browser-dialog-observation.json`,
+        );
+      }
       const release = await holdLabSweep(state.stateDirectory, process.pid);
       try {
         await runForegroundReviewLab(
           () =>
             launch(state, {
-              packageDigest: item.reproductionPackageDigest,
+              packageDigest,
               category: item.category,
             }),
           io,
