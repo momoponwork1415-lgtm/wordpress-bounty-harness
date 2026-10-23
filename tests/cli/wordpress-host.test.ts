@@ -1,4 +1,12 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -136,11 +144,13 @@ async function setup(
     proxyBundleDirectory,
     fetch: () => Promise.reject(new Error("no network in tests")),
   });
-  const run = async () => {
+  const run = async (
+    argv: readonly string[] = ["runtime", "check", "--config", configPath],
+  ) => {
     const stdout: string[] = [];
     const stderr: string[] = [];
     const code = await runCli(
-      ["runtime", "check", "--config", configPath],
+      argv,
       { stateDirectory: join(root, "state"), profile },
       {
         stdout: (line) => stdout.push(line),
@@ -149,7 +159,7 @@ async function setup(
     );
     return { code, stdout, stderr };
   };
-  return { run, calls, credentialFilePath };
+  return { run, calls, credentialFilePath, configPath, root };
 }
 
 /** Only checks run before an adapter exists: no target container, no network. */
@@ -157,6 +167,68 @@ const startedContainers = (calls: readonly (readonly string[])[]) =>
   calls.filter((args) => args[0] === "run" && !args.includes("--network=none"));
 
 describe("WordPress host entry", () => {
+  it("rejects retired non-handoff reverification before initializing host boundaries", async () => {
+    const { run, calls, configPath, root } = await setup({ runsc: false });
+    const result = await run([
+      "review",
+      "reverify",
+      "--campaign",
+      "synthetic",
+      "--finding",
+      "synthetic",
+      "--config",
+      configPath,
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.stderr.join("\n")).toContain(
+      "The legacy Codex Verifier is retired",
+    );
+    expect(calls).toEqual([]);
+    await expect(lstat(join(root, "work"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("rejects retired attached discovery Labs before host work-directory or Docker initialization", async () => {
+    const { run, calls, configPath, root } = await setup();
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    await writeFile(
+      configPath,
+      JSON.stringify({ ...config, discovery: { lab: "attached" } }),
+    );
+    const result = await run();
+    expect(result.code).toBe(1);
+    expect(result.stderr.join("\n")).toContain(
+      "Attached discovery Labs are retired",
+    );
+    expect(calls).toEqual([]);
+    await expect(lstat(join(root, "work"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("keeps the existing host preflight for explicitly requested handoff reverification", async () => {
+    const { run, calls, configPath, root } = await setup({ runsc: false });
+    const result = await run([
+      "review",
+      "reverify",
+      "--campaign",
+      "synthetic",
+      "--finding",
+      "synthetic",
+      "--config",
+      configPath,
+      "--handoff",
+      join(root, "handoff"),
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.stderr.join("\n")).toContain(
+      "Host preflight failed; nothing was started",
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    expect(startedContainers(calls)).toEqual([]);
+  });
+
   it("checks the host, then compares the probed Codex image with the runtime profile", async () => {
     const { run, calls } = await setup();
     const result = await run();
