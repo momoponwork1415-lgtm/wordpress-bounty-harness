@@ -4144,6 +4144,125 @@ describe("harness CLI vertical slice", () => {
     });
   });
 
+  it("exports only the human result for the current verification attempt", async () => {
+    const { seedHistory, run, configPath, ledger } = await harness();
+    const campaign = ["--campaign", "campaign-1"];
+    await run("campaign", "run", "--all", ...campaign, "--config", configPath);
+    await seedHistory("campaign-1");
+    const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+      (await run("review", ...campaign)).stdout,
+    )![1]!;
+    const decide = (result: "match" | "mismatch") =>
+      run(
+        "review",
+        "decide",
+        ...campaign,
+        "--finding",
+        finding,
+        "--decision",
+        result === "match" ? "defer" : "reject",
+        "--reason",
+        "manual-check",
+        "--reproduced",
+        result,
+      );
+    const exportedHuman = async () => {
+      const output = await run(
+        "review",
+        "export",
+        ...campaign,
+        "--finding",
+        finding,
+      );
+      expect(output.code).toBe(0);
+      return reviewExportV1Schema.parse(JSON.parse(output.stdout)).review
+        .humanReproduction;
+    };
+
+    expect((await decide("match")).code).toBe(0);
+    expect(await exportedHuman()).toMatchObject({
+      result: "match",
+      minutes: null,
+    });
+
+    const previous = ledger()
+      .readAll({
+        campaignId: "campaign-1",
+        findingId: finding,
+        type: "verification-finished",
+      })
+      .at(-1)?.event;
+    if (previous?.type !== "verification-finished")
+      throw new Error("Expected a verification fixture");
+    expect(
+      (
+        await ledger().append({
+          ...previous,
+          identity: `second-${previous.verificationId}`,
+          verificationId: `second-${previous.verificationId}`,
+          attempt: 2,
+        })
+      ).status,
+    ).toBe("appended");
+    expect(await exportedHuman()).toBeNull();
+
+    expect((await decide("match")).code).toBe(0);
+    expect(await exportedHuman()).toMatchObject({ result: "match" });
+    const matching = ledger()
+      .readAll({
+        campaignId: "campaign-1",
+        findingId: finding,
+        type: "human-reproduction-recorded",
+      })
+      .at(-1)?.event;
+    if (matching?.type !== "human-reproduction-recorded")
+      throw new Error("Expected a human reproduction fixture");
+    expect(
+      (
+        await ledger().append({
+          ...matching,
+          identity: "wrong-package",
+          reproductionPackageDigest: `sha256:${"e".repeat(64)}`,
+        })
+      ).status,
+    ).toBe("appended");
+    expect(await exportedHuman()).toMatchObject({ result: "match" });
+    expect(
+      (
+        await ledger().append({
+          ...matching,
+          identity: "wrong-snapshot",
+          snapshotDigest: `sha256:${"f".repeat(64)}`,
+        })
+      ).status,
+    ).toBe("appended");
+    expect(await exportedHuman()).toMatchObject({ result: "match" });
+
+    const old = ledger()
+      .readAll({
+        campaignId: "campaign-1",
+        findingId: finding,
+        type: "human-reproduction-recorded",
+      })
+      .at(0)?.event;
+    if (old?.type !== "human-reproduction-recorded")
+      throw new Error("Expected the original manual result");
+    expect(
+      (await ledger().append({ ...old, identity: "late-old-attempt" })).status,
+    ).toBe("appended");
+    expect(await exportedHuman()).toMatchObject({ result: "match" });
+
+    expect((await decide("mismatch")).code).toBe(0);
+    expect(await exportedHuman()).toMatchObject({ result: "mismatch" });
+    expect(
+      ledger().readAll({
+        campaignId: "campaign-1",
+        findingId: finding,
+        type: "human-reproduction-recorded",
+      }),
+    ).toHaveLength(6);
+  });
+
   it("records the wbh-dedupe result with its note, lists it in the queue and keeps it through the reproduction (#442)", async () => {
     const { seedHistory, run, configPath, root } = await harness();
     const campaign = ["--campaign", "campaign-1"];

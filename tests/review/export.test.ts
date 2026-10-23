@@ -18,7 +18,6 @@ import {
   type StateDiffSummary,
 } from "../../src/review/index.js";
 
-const sha = (hex: string) => `sha256:${hex.repeat(64)}`;
 const snapshot = `sha256:${"a".repeat(64)}`;
 const labSetup = `sha256:${"b".repeat(64)}`;
 const promptDigest = `sha256:${"c".repeat(64)}`;
@@ -649,7 +648,29 @@ describe("review export", () => {
       preparedBy: "ai",
     });
     const latest = `sha256:${"f".repeat(64)}`;
+    const confirmed = ledger
+      .readAll({
+        campaignId: "campaign-1",
+        findingId: "finding-1",
+        type: "verification-finished",
+      })
+      .at(-1)?.event;
+    if (
+      confirmed?.type !== "verification-finished" ||
+      confirmed.result.status !== "runtime-confirmed"
+    )
+      throw new Error("Expected a confirmed fixture");
     for (const event of [
+      {
+        ...base,
+        identity: "reproduced-1",
+        occurredAt: "2026-10-09T01:00:00Z",
+        type: "human-reproduction-recorded" as const,
+        findingId: "finding-1",
+        verificationId: "verification-1",
+        reproductionPackageDigest: confirmed.result.reproductionPackageDigest,
+        result: "match" as const,
+      },
       {
         ...base,
         identity: "effort-1",
@@ -658,16 +679,6 @@ describe("review export", () => {
         findingId: "finding-1",
         action: "reproduce" as const,
         minutes: 35,
-      },
-      {
-        ...base,
-        identity: "reproduced-1",
-        occurredAt: "2026-10-09T01:00:00Z",
-        type: "human-reproduction-recorded" as const,
-        findingId: "finding-1",
-        verificationId: "verification-1",
-        reproductionPackageDigest: sha("9"),
-        result: "match" as const,
       },
       {
         ...base,
@@ -700,8 +711,21 @@ describe("review export", () => {
           nextStep: "Repeat",
         },
       },
-    ])
+    ]) {
       expect((await ledger.append(event)).status).toBe("appended");
+      if (event.type === "human-effort-recorded") {
+        const beforeLatestVersion = await exportReviewBundle({
+          ledger,
+          store,
+          campaignId: "campaign-1",
+          findingId: "finding-1",
+        });
+        expect(beforeLatestVersion.review.humanReproduction).toMatchObject({
+          result: "match",
+          minutes: 35,
+        });
+      }
+    }
     const exported = (observe: () => Promise<never | object>) =>
       exportReviewBundle({
         ledger,
@@ -725,7 +749,8 @@ describe("review export", () => {
         duplicate: "possible-match:CVE-1",
         decidedAt: "2026-10-09T00:00:00.000Z",
       },
-      humanReproduction: { result: "match", minutes: 35 },
+      // The latest-version derived Finding supersedes this historical match.
+      humanReproduction: null,
       latestReverification: {
         verificationId: "verification-2",
         findingId: "finding-2",
