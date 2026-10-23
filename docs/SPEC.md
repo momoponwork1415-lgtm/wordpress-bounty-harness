@@ -96,6 +96,8 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - 既存 handoff: `verify next` は `--handoff <dir>` を必須とし（runner は自動検証しない、#423）、Verifier の transport を skill `wbh-verify` への受け渡しに替え、前提作りのためだけに Lab の設定管理者を渡し、`<dir>/setup-done` 以後に HTTP 捕捉と Lab 状態の基線を取り、攻撃者位置のみで route を実行させる。判定器と event 形は同じ（ADR 0035）。
 
 WordPress profile は Finding の `configurationPrecondition` と Verifier attachment の `precondition` を Harness 所有の決定論的規則で `default` / `common-usage` / `admin-configuration` / `unknown` に分ける。既定値の宣言と版付き通常機能 scenario catalogue に照合し、明示された特定値や非既定の管理者設定だけを `admin-configuration-precondition` で `finding-parked` にする。一般利用は対応 scenario ID への有界再検証へ回し、未収録なら `common-usage-scenario-missing` を残して #213 の集計対象にする。規則で決められない前提は `incomplete(precondition)` として review queue に残す。Verifier 自身の分類申告は判定に使わない。
+
+製品名とパスワード保護の否定表現の語句一致だけで park された 1 件は、明示的な非既定設定を示さない誤分類として扱う。既存の `finding-parked` がこの誤分類による場合は、元の Finding artifact の identity・Snapshot・Programme Boundary と現在の分類を照合する。`admin-configuration` でなくなった Finding だけに `finding-recorded` と `finding-park-restored` を追記し、旧 park は残す。検証列、レビュー列、群、funnel と `review parked` は、対応する記録済み Finding に結び付く復帰イベントがある場合だけ旧 park を無効として投影する。明示された管理者設定と Programme Boundary 外の Finding はこの復帰操作の対象外とする。
 - HTTP証拠: Verifierの宛先はLab内のHarness所有reverse proxyへ向け、request / responseをPrivate EvidenceにJSON Linesで捕捉する。判定器は捕捉記録を優先し、request側をdecode後も検査する。捕捉が無い場合だけVerifierの `http.json` を補助資料として読み、台帳のoptionalな `evidenceCapture` は `harness-captured` / `agent-authored` のenumだけを記録する。実行時確認には引き続きnonce canaryの回収を要する。
 - Verifierの出力: `http.json`、`steps.md`、`route.json`、別主体のcookieをLabが検査する `session.json`、`refutation.md`、設定前提。payload、cookie、HTTP本文はPrivate Evidenceに置く。
 - 判定器（Harness所有、決定論的）。作るのは両プログラムで報奨に届く分類だけ。Reflected XSS、CSRF、到達先のないmissing authorization / IDOR、コンテンツ削除は判定器を作らず、探索の目的にも含めない（記録はする）:
