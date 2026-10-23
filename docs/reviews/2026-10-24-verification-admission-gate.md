@@ -17,3 +17,5 @@
 合成 Finding の候補受理・Verifier・旧 park 復帰テストを更新し、`pnpm check` で 1175 件成功、2 件 skip。実台帳を読み取り専用で復帰検査した結果も 3 件とも `ready`（`admin-configuration` 2、`unknown` 1）だった。判定器、nonce canary、Snapshot digest、`incomplete` の条件は変更していない。
 
 本番 runner は旧版で稼働中であり、新 event を読むまで共有台帳に復帰を適用しない。3 件は現時点でまだ検証列に戻っていない。また、固定された通常シナリオを持たない handoff は scope の通常設定判定が `ambiguous` になり得る。これは検証結果そのものとは別の、報告工程へ進むための証拠の不足として扱う。
+
+所有者は同日、2026-10-17 に一律 park とした 5 impact 分類については、今回も既存の Programme Boundary を維持すると回答した。この変更では 5 分類と元から対象外の 5 分類を動かさない。
