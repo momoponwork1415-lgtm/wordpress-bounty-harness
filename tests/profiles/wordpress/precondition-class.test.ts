@@ -7,7 +7,7 @@ describe("Harness-owned WordPress precondition classification", () => {
     expect(
       classifyWordPressPrecondition({
         configurationPrecondition:
-          "An administrator publishes a block with the editor's Password protected visibility setting.",
+          "An administrator sets the block's Password protected visibility setting to password-protected.",
       }).preconditionClass,
     ).toBe("admin-configuration");
     expect(
@@ -76,6 +76,12 @@ describe("Harness-owned WordPress precondition classification", () => {
     for (const configurationPrecondition of [
       "No placeholder value is needed for the public form.",
       "The password-protected visibility setting remains off.",
+      "A block with no password-protected visibility setting is published.",
+      "パスワード保護は不要。",
+      "プレースホルダー値は不要。",
+      "No non-default setting is required.",
+      "The option is not explicitly enabled.",
+      "No setting is enabled to expose the form.",
     ])
       expect(
         classifyWordPressPrecondition({ configurationPrecondition })

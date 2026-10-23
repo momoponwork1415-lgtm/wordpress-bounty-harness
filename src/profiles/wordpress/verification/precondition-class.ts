@@ -21,11 +21,9 @@ const DEFAULT =
   /^(?:default|defaults|default settings|no (?:special|additional|nondefault) (?:settings|configuration)|none required)$/i;
 /** A concrete non-default choice must be explicit before it can exclude a Finding. */
 const ADMIN_SETTING =
-  /(?:(?:start time|button link).{0,30}\{[^}]{1,80}\}|(?:setting|option|configuration|visibility)\s+(?:is\s+)?(?:set|enabled|disabled|changed|selected|configured)\s+(?:to|as)|(?:administrator|admin)\s+(?:has\s+)?(?:sets?|selects?|chooses?|configures?|enables?|disables?)\s+.{0,50}(?:to\s+\S+|as\s+\S+|placeholder|password[- ]protect)|(?:administrator|admin)\s+(?:has\s+)?tick(?:s|ed)?\s+(?:the\s+)?[^.]{0,50}\b(?:setting|checkbox)\b|(?:trusted editor|administrator|admin).{0,35}restricts?\s+(?:the\s+)?pattern|heading level.{0,30}enabled.{0,25}mapping|(?:explicitly|specifically)\s+(?:enabled|disabled|configured|selected)|non[- ]?default\s+(?:setting|option|configuration)|非既定|特定.{0,8}(?:設定|値)|パスワード保護|プレースホルダー.{0,8}(?:設定|値))/i;
-const SELECTED_VISIBILITY_SETTING =
-  /(?:\bwith\s+[^.]{0,35}password[- ]protect(?:ed|ion)?\s+visibility\s+setting\b|password[- ]protect(?:ed|ion)?\s+visibility\s+setting\s+(?:(?:is|was)\s+)?(?:set|selected|configured)\s+(?:to|as)\s+\S+)/i;
+  /(?:(?:start time|button link).{0,30}\{[^}]{1,80}\}|(?:setting|option|configuration|visibility)\s+(?:is\s+)?(?:set|enabled|disabled|changed|selected|configured)\s+(?:to|as)|(?:administrator|admin)\s+(?:has\s+)?(?:sets?|selects?|chooses?|configures?|enables?|disables?)\s+.{0,50}(?:to\s+\S+|as\s+\S+|placeholder|password[- ]protect)|(?:administrator|admin)\s+(?:has\s+)?tick(?:s|ed)?\s+(?:the\s+)?[^.]{0,50}\b(?:setting|checkbox)\b|(?:trusted editor|administrator|admin).{0,35}restricts?\s+(?:the\s+)?pattern|heading level.{0,30}enabled.{0,25}mapping)/gi;
 const SELECTED_PLACEHOLDER =
-  /placeholder\s+(?:value|setting|text)\s+(?:(?:is|was)\s+)?(?:set|selected|configured)\s+(?:to|as)\s+\S+/i;
+  /placeholder\s+(?:value|setting|text)\s+(?:(?:is|was)\s+)?(?:set|selected|configured)\s+(?:to|as)\s+\S+/gi;
 /** Content with affirmative password visibility is an explicit non-default choice. */
 const PASSWORD_PROTECTED_CONTENT =
   /\b(?:password[- ]protected\s+(?:post|page|block|content)|(?:post|page|block|content)\s+(?:is|must be)\s+password[- ]protected)\b/gi;
@@ -50,7 +48,21 @@ function affirmativePasswordProtectedContent(statement: string): boolean {
   });
 }
 const RESTRICTED_PATTERN =
-  /(?:trusted editor|administrator|admin).{0,35}restricts?\s+(?:the\s+)?synced\s+pattern/i;
+  /(?:trusted editor|administrator|admin).{0,35}restricts?\s+(?:the\s+)?synced\s+pattern/gi;
+/** Ignore lexical matches in negated clauses before treating a setting as chosen. */
+function affirmativeAdminSetting(statement: string): boolean {
+  return [ADMIN_SETTING, SELECTED_PLACEHOLDER, RESTRICTED_PATTERN].some(
+    (pattern) =>
+      [...statement.matchAll(pattern)].some((match) => {
+        const before =
+          statement
+            .slice(0, match.index)
+            .split(/[.;!?。]/)
+            .at(-1) ?? "";
+        return !/\b(?:no|not|never|without)\b/i.test(before + match[0]);
+      }),
+  );
+}
 /** These are ordinary content operations; they are not arbitrary plugin settings. */
 const COMMON_USAGE =
   /(?:public|published|公開).{0,60}(?:post|page|block|slider|widget|投稿|ページ|ブロック|スライダー|ウィジェット)|(?:post|page|block|slider|widget|投稿|ページ|ブロック|スライダー|ウィジェット).{0,60}(?:public|published|公開)|(?:place|insert|add|render|publish|create|置く|配置|挿入|作成).{0,30}(?:block|slider|widget|ブロック|スライダー|ウィジェット)/i;
@@ -74,11 +86,8 @@ export function classifyWordPressPrecondition(input: {
   if (
     statements.some(
       (statement) =>
-        ADMIN_SETTING.test(statement) ||
-        SELECTED_VISIBILITY_SETTING.test(statement) ||
-        SELECTED_PLACEHOLDER.test(statement) ||
-        affirmativePasswordProtectedContent(statement) ||
-        RESTRICTED_PATTERN.test(statement),
+        affirmativeAdminSetting(statement) ||
+        affirmativePasswordProtectedContent(statement),
     )
   )
     return { preconditionClass: "admin-configuration" };
