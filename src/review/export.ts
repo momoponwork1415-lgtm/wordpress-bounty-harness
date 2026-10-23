@@ -220,6 +220,22 @@ export const reviewExportV1Schema = z.strictObject({
           firing: z.enum(firingStatuses),
           record: fileRefSchema.nullable(),
           screenshot: z.string().nullable(),
+          /** Browser-owned execution signal; never a nonce-beacon verdict. */
+          browserSignal: z
+            .strictObject({
+              kind: z.literal("numeric-dialog"),
+              status: z.literal("dialog-observed"),
+              capturedAttackerRequestMarkerMatch: z.boolean(),
+              verificationSequence: z.enum([
+                "post-setup-request-before-victim-visit",
+                "not-established",
+              ]),
+              victimPrincipal: z.enum(["self", "separate"]),
+              record: fileRefSchema,
+              /** Context page after Playwright dismissed the dialog, not a dialog image. */
+              pageAfterDialogScreenshot: z.string().nullable(),
+            })
+            .optional(),
         })
         .nullable(),
     })
@@ -354,6 +370,16 @@ export interface VerifierRecord {
     readonly firing: (typeof firingStatuses)[number];
     readonly record: z.infer<typeof fileRefSchema> | null;
     readonly screenshot: string | null;
+    readonly browserSignal?: {
+      readonly kind: "numeric-dialog";
+      readonly status: "dialog-observed";
+      readonly capturedAttackerRequestMarkerMatch: boolean;
+      readonly verificationSequence:
+        "post-setup-request-before-victim-visit" | "not-established";
+      readonly victimPrincipal: "self" | "separate";
+      readonly record: z.infer<typeof fileRefSchema>;
+      readonly pageAfterDialogScreenshot: string | null;
+    };
   } | null;
 }
 

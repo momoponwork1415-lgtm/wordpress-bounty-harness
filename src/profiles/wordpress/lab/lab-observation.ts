@@ -15,6 +15,7 @@ import type {
   ScriptCanary,
   WordPressCanaryFilesObservation,
   WordPressCanaryTableObservation,
+  WordPressDialogEvent,
   WordPressExecutionObservation,
   WordPressFileCanary,
   WordPressLabHandle,
@@ -73,6 +74,15 @@ const victimBrowserDiagnosticSchema = z.strictObject({
 });
 const browserVisitOutputSchema = z.strictObject({
   screenshotBase64: z.string(),
+  dialogEvent: z
+    .strictObject({
+      type: z.literal("alert"),
+      message: z.string(),
+      topLevelPageUrlAtEvent: z.string().max(2048),
+      topLevelPageOriginAtEvent: z.literal("http://wordpress"),
+      frameUrlsAtEvent: z.array(z.string().max(2048)).min(1).max(50),
+    })
+    .optional(),
   diagnostic: z.unknown().optional(),
 });
 
@@ -84,13 +94,26 @@ class BrowserVisitFailure extends Error {
     super(`Browser visit failed:${failureCode}`);
   }
 }
-/** One page visit by the Lab's observer; dialogs are dismissed and never count. */
+/** One page visit by the Lab's observer; only nonce beacons confirm execution. */
 const BROWSER_VISIT = `const { chromium } = require("playwright");
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
   const page = await browser.newPage();
-  const dismissDialogs = (tab) => tab.on("dialog", (dialog) => { void dialog.dismiss(); });
+  const dialogMarker = process.env.WBH_DIALOG_MARKER ?? "";
+  const markerDialogs = new Map();
+  let recordingRuntime = false;
+  const dismissDialogs = (tab) => tab.on("dialog", (dialog) => {
+    if (recordingRuntime && dialogMarker !== "" &&
+        dialog.type() === "alert" && dialog.message() === dialogMarker)
+      markerDialogs.set(tab, {
+        type: dialog.type(),
+        message: dialog.message(),
+        topLevelPageUrlAtEvent: tab.url(),
+        frameUrlsAtEvent: tab.frames().map((frame) => frame.url()),
+      });
+    void dialog.dismiss();
+  });
   // Record bounded categories only. Browser messages, request URLs, and page
   // content are never copied into the diagnostic.
   const limit = 999999;
@@ -102,7 +125,6 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
     http4xxCount: 0,
     http5xxCount: 0,
   };
-  let recordingRuntime = false;
   const observeRuntime = (tab) => {
     tab.on("pageerror", (error) => {
       if (!recordingRuntime) return;
@@ -254,6 +276,23 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   for (const tab of observedPages)
     if (!tab.isClosed() && !await atLabOrigin(tab))
       throw new Error("Victim observation left the Lab origin");
+  let dialogEvent;
+  for (const [tab, event] of markerDialogs) {
+    // Page dialogs have no source frame; reject non-Lab frames and later navigation.
+    if (tab !== visiblePage || !observedPages.has(tab) || tab.isClosed() ||
+        tab.url() !== event.topLevelPageUrlAtEvent ||
+        event.topLevelPageUrlAtEvent.length > 2048 ||
+        event.frameUrlsAtEvent.length === 0 ||
+        event.frameUrlsAtEvent.length > 50 ||
+        event.frameUrlsAtEvent.some((url) => url.length > 2048)) continue;
+    const origin = (url) => {
+      try { return new URL(url).origin; } catch { return null; }
+    };
+    if (origin(event.topLevelPageUrlAtEvent) !== base ||
+        event.frameUrlsAtEvent.some((url) => origin(url) !== base)) continue;
+    dialogEvent = { ...event, topLevelPageOriginAtEvent: base };
+    break;
+  }
   recordingRuntime = false;
   let documentDiagnostic;
   try {
@@ -296,6 +335,7 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
     throw new Error("Browser screenshot exceeds the evidence limit");
   process.stdout.write(JSON.stringify({
     screenshotBase64: screenshot.toString("base64"),
+    ...(dialogEvent === undefined ? {} : { dialogEvent }),
     ...(documentDiagnostic === undefined ? {} : {
       diagnostic: {
         schemaVersion: 1,
@@ -349,6 +389,11 @@ const victimVisitSchema = z.union([
 export const wordpressVictimRouteSchema = z.strictObject({
   role: z.enum(["administrator", "subscriber", "customer", "unauthenticated"]),
   paths: z.array(victimVisitSchema).min(1).max(5),
+  /** Written in attacker JavaScript as alert(1234567890), without quotes. */
+  dialogMarker: z
+    .string()
+    .regex(/^[1-9][0-9]{9,14}$/)
+    .optional(),
 });
 export type WordPressVictimRoute = z.infer<typeof wordpressVictimRouteSchema>;
 type VictimActions = readonly z.infer<typeof wordpressVictimActionSchema>[];
@@ -358,15 +403,22 @@ function observerInputCarriesCanary(
   nonces: ReadonlySet<string>,
 ): boolean {
   const raw = JSON.stringify(value ?? null);
-  let decoded = raw;
-  try {
-    decoded = decodeURIComponent(raw);
-  } catch {
-    // Malformed percent encoding still receives the raw comparison.
+  const layers = [raw];
+  let current = raw;
+  for (let depth = 0; depth < 5; depth++) {
+    // Decode ASCII markers even alongside malformed percent sequences.
+    const next = current.replace(/%([0-9a-fA-F]{2})/g, (_, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    );
+    if (next === current) break;
+    layers.push(next);
+    current = next;
   }
+  // Reject unresolved deep percent encoding instead of trusting a hidden marker.
+  if (/%[0-9a-fA-F]{2}/.test(current)) return true;
   return [...nonces].some((nonce) => {
-    if (raw.includes(nonce) || decoded.includes(nonce)) return true;
-    for (const source of [raw, decoded]) {
+    for (const source of layers) {
+      if (source.includes(nonce)) return true;
       for (const token of source.match(/[A-Za-z0-9+/]{8,}={0,2}/g) ?? [])
         if (Buffer.from(token, "base64").toString("utf8").includes(nonce))
           return true;
@@ -613,8 +665,10 @@ async function visitStoredScriptPage(input: {
   readonly path: string;
   readonly role: WordPressVictimRoute["role"];
   readonly actions?: VictimActions;
+  readonly dialogMarker?: string;
 }): Promise<{
   readonly fired: boolean;
+  readonly dialogEvent?: WordPressDialogEvent;
   readonly screenshot: Buffer;
   readonly diagnostic?: WordPressVictimBrowserDiagnostic;
 }> {
@@ -656,6 +710,9 @@ async function visitStoredScriptPage(input: {
       `WBH_VISIT_ACTIONS=${JSON.stringify(actions ?? [])}`,
       "--env",
       `WBH_SCRIPT_NONCES=${JSON.stringify([...lab.scriptNonces])}`,
+      ...(input.dialogMarker === undefined
+        ? []
+        : ["--env", `WBH_DIALOG_MARKER=${input.dialogMarker}`]),
       "--entrypoint=node",
       lab.images.browser,
       "-e",
@@ -717,6 +774,9 @@ async function visitStoredScriptPage(input: {
     throw new Error("Browser screenshot is invalid");
   return {
     fired: (await readBeaconCount(lab, issued)) > before,
+    ...(parsed.data.dialogEvent === undefined
+      ? {}
+      : { dialogEvent: parsed.data.dialogEvent }),
     screenshot,
     ...(diagnostic.success ? { diagnostic: diagnostic.data } : {}),
   };
@@ -759,6 +819,19 @@ export async function observeStoredScript(
       phase: "victim-input",
       failureCode: "observer-canary-input",
     };
+  if (
+    victim?.success &&
+    victim.data.dialogMarker !== undefined &&
+    observerInputCarriesCanary(
+      { routePaths: routePaths.data, paths: victim.data.paths },
+      new Set([victim.data.dialogMarker]),
+    )
+  )
+    return {
+      status: "unavailable",
+      phase: "victim-input",
+      failureCode: "observer-marker-input",
+    };
   const issued = new Set([...lab.scriptNonces].map((token) => `/b/${token}`));
   let phase: WordPressStoredScriptFailurePhase = "front";
   try {
@@ -766,11 +839,15 @@ export async function observeStoredScript(
     let screenshot: Buffer | undefined;
     let diagnosticVictimScreenshot: Buffer | undefined;
     let victimBrowserDiagnostic: WordPressVictimBrowserDiagnostic | undefined;
+    let dialogVisitIndex: number | undefined;
+    let dialogScreenshot: Buffer | undefined;
+    let dialogEvent: WordPressDialogEvent | undefined;
     const fired = async (
       path: string,
       role: WordPressVictimRoute["role"],
       actions?: VictimActions,
       victimVisit = false,
+      victimIndex?: number,
     ): Promise<boolean> => {
       const observation = await visitStoredScriptPage({
         lab,
@@ -779,7 +856,21 @@ export async function observeStoredScript(
         path,
         role,
         ...(actions === undefined ? {} : { actions }),
+        ...(victimVisit &&
+        victim?.success &&
+        victim.data.dialogMarker !== undefined
+          ? { dialogMarker: victim.data.dialogMarker }
+          : {}),
       });
+      if (
+        victimVisit &&
+        observation.dialogEvent !== undefined &&
+        dialogVisitIndex === undefined
+      ) {
+        dialogVisitIndex = victimIndex;
+        dialogScreenshot = observation.screenshot;
+        dialogEvent = observation.dialogEvent;
+      }
       if (observation.fired) screenshot ??= observation.screenshot;
       else if (victimVisit) {
         diagnosticVictimScreenshot = observation.screenshot;
@@ -802,21 +893,24 @@ export async function observeStoredScript(
     let victimPage = false;
     if (victim?.success) {
       phase = "victim-page";
-      for (const visit of victim.data.paths) {
+      for (const [index, visit] of victim.data.paths.entries()) {
         const path = typeof visit === "string" ? visit : visit.path;
         const actions = typeof visit === "string" ? undefined : visit.actions;
-        if (await fired(path, victim.data.role, actions, true))
+        if (await fired(path, victim.data.role, actions, true, index))
           victimPage = true;
       }
     }
     if (victimPage) contexts.push("victim-route-page");
     const victimRole =
-      victim?.success && victimPage ? victim.data.role : undefined;
+      victim?.success && (victimPage || dialogVisitIndex !== undefined)
+        ? victim.data.role
+        : undefined;
     const sameAccount =
       (victimRole === "subscriber" || victimRole === "customer") &&
       lab.victimAccounts[victimRole]?.username ===
         lab.handle.attackerAccounts[victimRole]?.username;
-    const selectedScreenshot = screenshot ?? diagnosticVictimScreenshot;
+    const selectedScreenshot =
+      screenshot ?? dialogScreenshot ?? diagnosticVictimScreenshot;
     return {
       status: "observed",
       contexts,
@@ -829,6 +923,11 @@ export async function observeStoredScript(
       ...(victimBrowserDiagnostic === undefined
         ? {}
         : { victimBrowserDiagnostic }),
+      ...(dialogVisitIndex === undefined ||
+      dialogScreenshot === undefined ||
+      dialogEvent === undefined
+        ? {}
+        : { dialogVisitIndex, dialogScreenshot, dialogEvent }),
     };
   } catch (error) {
     return {

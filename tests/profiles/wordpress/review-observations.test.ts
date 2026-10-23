@@ -214,6 +214,54 @@ describe("an incomplete judge result keeps its observations in review (#437)", (
 describe("WordPress verifier record reader (#437)", () => {
   const observer = (record: object) =>
     canonicalJson({ judgeId: "wordpress-stored-script", ...record });
+  it("exports a browser dialog signal separately from canary firing", async () => {
+    const { store } = await evidenceStore();
+    const reader = createWordPressVerifierRecordReader({ store });
+    const recipeDigest = await store.putFiles({
+      "route.json":
+        '{"victim":{"role":"administrator","paths":["/wp-admin/"],"dialogMarker":"7381930362"}}',
+    });
+    const evidenceDigest = await store.putFiles({
+      "browser-dialog-observation.json": observer({
+        kind: "numeric-dialog",
+        status: "dialog-observed",
+        marker: "7381930362",
+        dialogEvent: {
+          type: "alert",
+          message: "7381930362",
+          topLevelPageUrlAtEvent: "http://wordpress/wp-admin/",
+          topLevelPageOriginAtEvent: "http://wordpress",
+          frameUrlsAtEvent: ["http://wordpress/wp-admin/"],
+        },
+        capturedAttackerRequestMarkerMatch: true,
+        verificationSequence: "post-setup-request-before-victim-visit",
+        requiresHumanPreexistingContentCheck: true,
+        victimRole: "administrator",
+        victimPrincipal: "separate",
+        snapshotDigest: `sha256:${"1".repeat(64)}`,
+        labSetupDigest: `sha256:${"2".repeat(64)}`,
+      }),
+      "victim-page-after-dialog.png": "synthetic screenshot",
+    });
+    const result = await reader.read({ recipeDigest, evidenceDigest });
+    expect(result.victim).toMatchObject({
+      firing: "not-recorded",
+      screenshot: null,
+      browserSignal: {
+        kind: "numeric-dialog",
+        status: "dialog-observed",
+        capturedAttackerRequestMarkerMatch: true,
+        verificationSequence: "post-setup-request-before-victim-visit",
+        victimPrincipal: "separate",
+        record: {
+          path: expect.stringMatching(/browser-dialog-observation\.json$/),
+        },
+        pageAfterDialogScreenshot: expect.stringMatching(
+          /victim-page-after-dialog\.png$/,
+        ),
+      },
+    });
+  });
   it.each([
     [
       { "canary-observation.json": observer({ observedVia: "canary-beacon" }) },
