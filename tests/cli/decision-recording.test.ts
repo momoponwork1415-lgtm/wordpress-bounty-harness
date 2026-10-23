@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runCli, type CliProfile } from "../../src/cli/index.js";
+import { runCli, type CliIo, type CliProfile } from "../../src/cli/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
 import { Review } from "../../src/review/index.js";
@@ -108,7 +108,14 @@ async function fixture() {
   return {
     ledger,
     store,
-    async decide(reason: string) {
+    async decide(
+      reason: string,
+      minutes: {
+        read?: string;
+        reproduce?: string;
+        ask?: CliIo["askMinutes"];
+      } = { read: "2.5", reproduce: "7.25" },
+    ) {
       const stdout: string[] = [];
       const stderr: string[] = [];
       const code = await runCli(
@@ -131,10 +138,10 @@ async function fixture() {
           notePath,
           "--reproduced",
           "match",
-          "--reproduce-minutes",
-          "7.25",
-          "--minutes",
-          "2.5",
+          ...(minutes.reproduce === undefined
+            ? []
+            : ["--reproduce-minutes", minutes.reproduce]),
+          ...(minutes.read === undefined ? [] : ["--minutes", minutes.read]),
           "--by",
           "operator",
         ],
@@ -142,6 +149,7 @@ async function fixture() {
         {
           stdout: (line) => stdout.push(line),
           stderr: (line) => stderr.push(line),
+          ...(minutes.ask === undefined ? {} : { askMinutes: minutes.ask }),
         },
       );
       return { code, stdout, stderr };
@@ -150,6 +158,28 @@ async function fixture() {
 }
 
 describe("CLI human review operation", () => {
+  it("keeps explicit zero minutes and prompts only for the omitted duration", async () => {
+    const { ledger, decide } = await fixture();
+    const asked: string[] = [];
+    const result = await decide("accepted", {
+      reproduce: "0",
+      ask: async (action) => {
+        asked.push(action);
+        return 3.25;
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(asked).toEqual(["read"]);
+    expect(
+      ledger
+        .readAll({ type: "human-effort-recorded" })
+        .map(({ event }) => event),
+    ).toMatchObject([
+      { action: "reproduce", minutes: 0 },
+      { action: "read", minutes: 3.25 },
+    ]);
+  });
+
   it("does not leave partial records or a filed note when the decision reason is invalid", async () => {
     const { ledger, store, decide } = await fixture();
     const eventsBefore = ledger.readAll();

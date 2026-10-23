@@ -27,17 +27,29 @@ export function readDecisionHistory(
 }
 
 /**
- * A queue decision is current only when it follows the latest verification.
- * Without a verification, the latest historical decision is still current.
+ * A queue decision must name the current target and follow its verification.
+ * Later decisions on older targets stay historical without replacing it.
  * Exports and duplicate-check carry-forward intentionally read history instead.
  */
 export function currentReviewDecision(
-  latestHistorical: DecisionHistoryEntry | undefined,
+  history: readonly DecisionHistoryEntry[],
+  ref: Pick<
+    DecisionEvent,
+    "campaignId" | "findingId" | "snapshotDigest" | "verificationId"
+  >,
   latestVerificationSequence?: number,
 ): DecisionEvent | null {
-  return latestHistorical !== undefined &&
-    (latestVerificationSequence === undefined ||
-      latestHistorical.sequence > latestVerificationSequence)
-    ? latestHistorical.event
-    : null;
+  return (
+    history
+      .filter(
+        ({ sequence, event }) =>
+          event.campaignId === ref.campaignId &&
+          event.findingId === ref.findingId &&
+          event.snapshotDigest === ref.snapshotDigest &&
+          event.verificationId === ref.verificationId &&
+          (latestVerificationSequence === undefined ||
+            sequence > latestVerificationSequence),
+      )
+      .at(-1)?.event ?? null
+  );
 }

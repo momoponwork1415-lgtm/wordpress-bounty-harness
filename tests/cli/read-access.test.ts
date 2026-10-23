@@ -420,7 +420,7 @@ describe("CLI read-only commands", () => {
     expect(await readdir(setup.stateDirectory)).toEqual([]);
   });
 
-  it("passes an append-protected ledger to the profile through the CLI entry point", async () => {
+  it("passes write-protected ledger and artifact storage through the CLI entry point", async () => {
     const setup = await fixture();
     const writer = await setup.seed();
     const before = await databaseSnapshot(setup.databasePath);
@@ -445,6 +445,25 @@ describe("CLI read-only commands", () => {
     await expect(
       captured.ledger.append({ ...effort, identity: "unexpected-write" }),
     ).rejects.toThrow("read-only ledger");
+    await expect(captured.store.stage()).rejects.toThrow(
+      "read-only artifact store",
+    );
+    await expect(
+      captured.store.putFiles({ "note.txt": "unexpected write" }),
+    ).rejects.toThrow("read-only artifact store");
+    await expect(
+      captured.store.commit("unexpected-write", {
+        rootDirectory: join(
+          captured.store.rootDirectory,
+          ".active-artifact-test",
+        ),
+        contentDirectory: join(
+          captured.store.rootDirectory,
+          ".active-artifact-test/content",
+        ),
+      }),
+    ).rejects.toThrow("read-only artifact store");
     expect(await databaseSnapshot(setup.databasePath)).toEqual(before);
+    expect(await readdir(setup.stateDirectory)).toEqual(["ledger.sqlite"]);
   });
 });
