@@ -101,6 +101,21 @@ async function campaign(
     existingControls: "Capability check elsewhere",
     labObservations: "Canary user changed",
   };
+  // The child finished before cancellation; fixture I/O must not race shutdown.
+  const wallChildAttachment =
+    options.wallOnFirstRun && options.childSurvivesBrokenRoot
+      ? await attachments.put(
+          "findings",
+          Buffer.from(
+            JSON.stringify({
+              findings: [claim],
+              leads: [],
+              examined: "child source",
+              unexamined: "none",
+            }),
+          ),
+        )
+      : undefined;
   let calls = 0;
   const result = await runDiscoveryCampaign({
     campaignId: "campaign-1",
@@ -112,7 +127,7 @@ async function campaign(
     evidence,
     recordReport: recordWordPressReport,
     executor: {
-      async execute(run, ...rest) {
+      async execute(run, signal) {
         expect(run.expiresAt).toBe(
           options.wallOnFirstRun
             ? "2026-10-08T07:00:00.030Z"
@@ -122,23 +137,14 @@ async function campaign(
         if (ordinal === 0 && options.wallOnFirstRun) {
           if (options.ignoreAbort)
             return await new Promise<never>(() => undefined);
-          const signal = (rest as [AbortSignal | undefined])[0];
-          await new Promise<void>((resolve) =>
-            signal?.addEventListener("abort", () => resolve(), { once: true }),
-          );
-          const childAttachment = options.childSurvivesBrokenRoot
-            ? await attachments.put(
-                "findings",
-                Buffer.from(
-                  JSON.stringify({
-                    findings: [claim],
-                    leads: [],
-                    examined: "child source",
-                    unexamined: "none",
-                  }),
-                ),
-              )
-            : undefined;
+          if (signal === undefined)
+            throw new Error(
+              "Synthetic wall executor needs a cancellation signal",
+            );
+          if (!signal.aborted)
+            await new Promise<void>((resolve) =>
+              signal.addEventListener("abort", () => resolve(), { once: true }),
+            );
           return {
             receipt: createNativeRunReceipt({
               runId: run.runId,
@@ -149,13 +155,13 @@ async function campaign(
               startedAt: "2026-10-08T07:00:00Z",
               completedAt: "2026-10-08T07:00:01Z",
             }),
-            ...(childAttachment === undefined
+            ...(wallChildAttachment === undefined
               ? {}
               : {
                   agentRuns: [
                     {
                       agentPath: "/root/child-1",
-                      attachment: childAttachment,
+                      attachment: wallChildAttachment,
                       receipt: createNativeRunReceipt({
                         runId: "child-1",
                         targetSnapshotDigest: run.targetSnapshotDigest,
@@ -164,7 +170,7 @@ async function campaign(
                         reason: "unavailable",
                         startedAt: "2026-10-08T07:00:00Z",
                         completedAt: "2026-10-08T07:00:01Z",
-                        reportArtifactDigest: childAttachment.digest,
+                        reportArtifactDigest: wallChildAttachment.digest,
                       }),
                     },
                   ],
