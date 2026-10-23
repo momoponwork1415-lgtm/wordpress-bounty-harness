@@ -25,7 +25,7 @@ import {
 } from "./wordpress-verifier.js";
 
 /** The skill that runs this transport; its body is the fixed instruction the run's promptDigest names. */
-export const WBH_VERIFY_SKILL_ID = "wbh-verify/v8" as const;
+export const WBH_VERIFY_SKILL_ID = "wbh-verify/v9" as const;
 const SKILL_URL = new URL(
   "../../../../.claude/skills/wbh-verify/SKILL.md",
   import.meta.url,
