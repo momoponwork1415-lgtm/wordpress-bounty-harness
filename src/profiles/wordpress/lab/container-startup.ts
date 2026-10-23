@@ -108,6 +108,9 @@ async function startWordPress(lab: WordPressLabSession): Promise<string> {
     lab.network,
     "--network-alias",
     "wordpress",
+    // runsc cannot reliably resolve Docker's alias from inside this container.
+    // Keep WordPress self-requests on its own loopback interface.
+    "--add-host=wordpress:127.0.0.1",
     "--security-opt=no-new-privileges",
     "--volume",
     `${lab.volume}:/var/www/html`,
