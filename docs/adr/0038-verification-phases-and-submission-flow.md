@@ -137,3 +137,11 @@ v3 を戻すときは `versions/v2.2.md` を skill 本文に戻し、OPERATIONS 
 `target="_blank"` の anchor は通常 opener を持たないが、HTML Standard は `rel=opener` を明示的な例外として定める。Mozilla の公開記録にも、`download` または `rel=opener` が付いたときの JavaScript 実行が記されている。したがって、`target="_blank"` の `href` にある `javascript:` を属性名だけで「原理として成立しない」と決めて click を省くと偽陰性になり得る（[HTML Standard](https://html.spec.whatwg.org/multipage/links.html#link-type-opener)、[Mozilla Bug 1863882](https://bugzilla.mozilla.org/show_bug.cgi?id=1863882)）。
 
 `wbh-verify` v8 は、固定ソースと前提作り中の Lab の HTTP 応答で出力形を確認し、通常の操作を要する出口は型付き `victim.actions` に宣言して Harness の Lab browser で観測する。`setup-done` 後に管理者資格は再利用しない。値がサニタイズで消えるなど具体的な否定根拠があれば、入力・保存・描画のどこで落ちたかを `refutation.md` に記す。canary 不着だけで反証と断定せず、判定器の条件は変えない。この確認は段 3 で行い、段 1 の明示除外条件を増やさない。
+
+## 2026-10-24 追記 8: 設定前提の文言では検証を止めない
+
+追記 6 の「明示除外だけを検証前に分ける」を、探索候補の入口と handoff の直前にも適用する。追記 6 末尾の「明示された特別な管理者設定の規則は変えない」をこの決定で上書きする。`configurationPrecondition` に管理者が機能を有効化したと書かれているだけでは、Wordfence の「管理者の誤設定」や「低権限者への明示的な権限付与」と一致すると決められない。`admin-configuration` の分類は準備と後段の確認事項として残し、分類だけによる `finding-parked` と transport 前の中止をやめる。Lab で作れない前提は理由を付けた `incomplete(precondition)` としてレビュー列へ残す。
+
+旧規則で入口 park された Finding は、Private Evidence の原本と Snapshot・identity・Programme Boundary を照合してから追記専用の復帰 event で検証列へ戻す。影響分類そのものが Programme Boundary 外の Finding と、検証中に park された Finding は、この復帰操作では戻さない。本番 runner が旧台帳 schema を使っている間は新しい event を共有台帳へ追記せず、runner 更新後に行う。復帰によって受理可能・脆弱性・提出可能と認定したことにはならない。
+
+根拠は 2026-10-24 に確認した [Wordfence の公式規則](https://www.wordfence.com/bug-bounty-program-terms/) の「Environmental/Configuration-Based Issues」と管理者による明示的な権限付与の条項。通常の機能有効化を一律に除外する文はない。Finding に明示除外に当たる事実が既にあれば段 1 で分け、まだ確かでなければ誤設定かどうかと低権限の攻撃者に届くかを Lab で確認する。判定器の nonce canary・Snapshot digest・`incomplete` の条件は変更しない。

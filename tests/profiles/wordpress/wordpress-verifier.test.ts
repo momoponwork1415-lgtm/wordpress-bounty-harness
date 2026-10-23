@@ -322,7 +322,7 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
   });
 
   it.each([false, true])(
-    "parks an admin-configuration precondition before a setup-capable=%s transport runs",
+    "passes an admin-configuration precondition to a setup-capable=%s transport",
     async (setupPreconditions) => {
       const f = await fixture({
         impact: "stored-xss",
@@ -330,26 +330,16 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
         configurationPrecondition:
           "An administrator selects Password protected visibility for a published block.",
       });
-      expect(await f.attempt()).toEqual({
-        status: "incomplete",
-        reason: "precondition",
-        nextStep: "admin-configuration-precondition",
-      });
-      expect(f.runs).toHaveLength(0);
-      expect(f.ledger.read({ type: "finding-parked" })[0]?.event).toMatchObject(
-        {
-          findingId: f.finding.findingId,
-          runId: "discovery-1",
-          category: "stored-xss",
-          reason: "admin-configuration-precondition",
-          preconditionClass: "admin-configuration",
-          artifacts: f.record.artifacts,
-        },
-      );
+      expect(await f.attempt()).toMatchObject({ status: "attempted" });
+      expect(f.runs).toHaveLength(1);
+      expect(f.ledger.read({ type: "finding-parked" })).toHaveLength(0);
+      expect(
+        f.ledger.read({ type: "finding-precondition-classified" })[0]?.event,
+      ).toMatchObject({ preconditionClass: "admin-configuration" });
     },
   );
 
-  it("parks a precondition the transport's files disclose and records the run first", async () => {
+  it("records a precondition the transport's files disclose without parking the Finding", async () => {
     const privateDetail = "The ordinary setup is unavailable in this Lab.";
     const f = await fixture({
       setupPreconditions: true,
@@ -384,7 +374,7 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
     expect(JSON.stringify(f.ledger.read({}))).not.toContain(privateDetail);
     expect(f.runs).toHaveLength(1);
     expect(f.ledger.read({ type: "verifier-run-finished" })).toHaveLength(1);
-    expect(f.ledger.read({ type: "finding-parked" })).toHaveLength(1);
+    expect(f.ledger.read({ type: "finding-parked" })).toHaveLength(0);
   });
 
   it("retains a handoff abort precondition privately and returns a whitelisted code with its digest", async () => {

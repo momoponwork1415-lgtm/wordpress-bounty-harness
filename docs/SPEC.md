@@ -95,9 +95,9 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - 旧 Codex Verifier の入力契約（履歴参照）: 新しいコンテナ。渡すのはFinding、固定source pack、Lab endpoint、低権限account、RO DB account、Lab Setup（profileの版付き通常機能シナリオIDを含む、ADR 0020・0026）と、impactに応じてLabが検証時に発行したcanary。Findingの前提はplugin非依存の通常利用scenarioを優先するcatalogueと照合し、不足は `incomplete(precondition)` の次の手に次のscenario IDを書く。`incomplete(precondition)` の理由コードを台帳から、次の手の本文をPrivate Evidenceから集計し、頻出前提をcatalogueへ追加する。探索の会話履歴と作業領域、ブラウザ、管理者セッションは渡さない。役割はrecipeの環境不備の修正と反証に限り、再探索はしない。被害者側の操作はHarness所有のLab観測器が型で制限した手順で実行する。
 - 既存 handoff: `verify next` は `--handoff <dir>` を必須とし（runner は自動検証しない、#423）、Verifier の transport を skill `wbh-verify` への受け渡しに替え、前提作りのためだけに Lab の設定管理者を渡し、`<dir>/setup-done` 以後に HTTP 捕捉と Lab 状態の基線を取り、攻撃者位置のみで route を実行させる。判定器と event 形は同じ（ADR 0035）。
 
-WordPress profile は Finding の `configurationPrecondition` と Verifier attachment の `precondition` を Harness 所有の決定論的規則で `default` / `common-usage` / `admin-configuration` / `unknown` に分ける。既定値の宣言と版付き通常機能 scenario catalogue に照合し、明示された特定値や非既定の管理者設定だけを `admin-configuration-precondition` で `finding-parked` にする。一般利用は対応 scenario ID への有界再検証へ回し、未収録なら `common-usage-scenario-missing` を残して #213 の集計対象にする。規則で決められない前提は `incomplete(precondition)` として review queue に残す。Verifier 自身の分類申告は判定に使わない。
+WordPress profile は Finding の `configurationPrecondition` と Verifier attachment の `precondition` を Harness 所有の決定論的規則で `default` / `common-usage` / `admin-configuration` / `unknown` に分ける。この分類を記録して検証の準備で参照するが、`admin-configuration` という文言分類だけでは park しない。一般利用は対応 scenario ID への有界再検証へ回し、未収録なら `common-usage-scenario-missing` を残して #213 の集計対象にする。規則で決められない前提は `incomplete(precondition)` として review queue に残す。Verifier 自身の分類申告は判定に使わない。管理者の誤設定・明示的な権限付与が Wordfence の明示除外に当たる事実を確認できる場合は段 1 で分け、未確認なら検証で設定と利用形態を確かめる（ADR 0038 の 2026-10-24 追記 8）。
 
-製品名とパスワード保護の否定表現の語句一致だけで park された 1 件は、明示的な非既定設定を示さない誤分類として扱う。既存の `finding-parked` がこの誤分類による場合は、元の Finding artifact の identity・Snapshot・Programme Boundary と現在の分類を照合する。`admin-configuration` でなくなった Finding だけに `finding-recorded` と `finding-park-restored` を追記し、旧 park は残す。検証列、レビュー列、群、funnel と `review parked` は、対応する記録済み Finding に結び付く復帰イベントがある場合だけ旧 park を無効として投影する。明示された管理者設定と Programme Boundary 外の Finding はこの復帰操作の対象外とする。
+旧規則で `admin-configuration-precondition` に park された Finding は、元の Finding artifact の identity・Snapshot・Programme Boundary を照合し、`finding-recorded` と `finding-park-restored` を追記して検証列へ戻せる。旧 park は残す。検証列、レビュー列、群、funnel と `review parked` は、対応する記録済み Finding に結び付く復帰イベントがある場合だけ旧 park を無効として投影する。Programme Boundary 外の Finding と検証中に park された Finding はこの復帰操作の対象外とする。旧版の runner が新 event を読めるまでは、本番台帳への復帰 event 追記を保留する。
 - HTTP証拠: Verifierの宛先はLab内のHarness所有reverse proxyへ向け、request / responseをPrivate EvidenceにJSON Linesで捕捉する。判定器は捕捉記録を優先し、request側をdecode後も検査する。捕捉が無い場合だけVerifierの `http.json` を補助資料として読み、台帳のoptionalな `evidenceCapture` は `harness-captured` / `agent-authored` のenumだけを記録する。実行時確認には引き続きnonce canaryの回収を要する。
 - Verifierの出力: `http.json`、`steps.md`、`route.json`、別主体のcookieをLabが検査する `session.json`、`refutation.md`、設定前提。payload、cookie、HTTP本文はPrivate Evidenceに置く。
 - 判定器（Harness所有、決定論的）。作るのは両プログラムで報奨に届く分類だけ。Reflected XSS、CSRF、到達先のないmissing authorization / IDOR、コンテンツ削除は判定器を作らず、探索の目的にも含めない（記録はする）:
@@ -129,7 +129,7 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 
 ## 8a. プログラム対象範囲の方針
 
-技術的な真偽（`runtime-confirmed`）とプログラム対象範囲は分ける。対象範囲は原則 `review` で提出先ごとに評価する。影響分類が対象外の Finding と、明示的な管理者の特別設定が前提の Finding は第7節の規則で検証前に park する。方針は [src/profiles/wordpress/policy/programme-scope.md](../src/profiles/wordpress/policy/programme-scope.md) に観測日付きで置き、提出前に公式ページで再確認する。
+技術的な真偽（`runtime-confirmed`）とプログラム対象範囲は分ける。対象範囲は原則 `review` で提出先ごとに評価する。Programme Boundary 外の影響分類は第7節の規則で検証前に park する。管理者による機能設定はそれだけで除外せず、明示除外の事実が既に確認できれば段 1 で分け、未確認なら検証後に誤設定・権限付与・通常の利用形態を評価する。方針は [src/profiles/wordpress/policy/programme-scope.md](../src/profiles/wordpress/policy/programme-scope.md) に観測日付きで置き、提出前に公式ページで再確認する。
 
 2026-10-08時点の方針（Wordfence公式ページの写しとPatchstack 2026年版ガイドライン、判断者の指示）:
 

@@ -92,12 +92,10 @@ async function recordFinding(
     category: finding.impact,
     preconditionClass,
   };
-  // 対象範囲外の効果と管理者設定前提は候補として残すが、検証にも review にも回さない。
+  // Programme Boundary の外にある効果だけを入口で止める。設定の受理可否は検証後に判断する。
   const parkReason = !isWordPressProgrammeImpact(finding.impact)
     ? "outside-programme-boundary"
-    : preconditionClass === "admin-configuration"
-      ? "admin-configuration-precondition"
-      : undefined;
+    : undefined;
   if (parkReason !== undefined) {
     const status = await appendEvent(
       options,

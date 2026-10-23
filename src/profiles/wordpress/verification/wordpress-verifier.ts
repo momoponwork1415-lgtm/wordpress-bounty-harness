@@ -359,7 +359,6 @@ export class WordPressVerifier implements Verifier<
   async #recordPrecondition(
     campaignId: string,
     finding: WordPressFinding,
-    record: RecordedFinding,
     classification: ClassifiedPrecondition,
     identitySuffix: string,
   ): Promise<void> {
@@ -367,9 +366,6 @@ export class WordPressVerifier implements Verifier<
       .update(
         `${campaignId}\0${finding.findingId}\0${identitySuffix}\0${classification.preconditionClass}`,
       )
-      .digest("hex");
-    const parkedIdentity = createHash("sha256")
-      .update(`${campaignId}\0${finding.findingId}\0parked`)
       .digest("hex");
     const classified = await this.options.ledger.append({
       schemaVersion: 1,
@@ -383,23 +379,6 @@ export class WordPressVerifier implements Verifier<
     });
     if (classified.status === "conflict")
       throw new Error("Finding precondition classification conflict");
-    if (classification.preconditionClass !== "admin-configuration") return;
-    const parked = await this.options.ledger.append({
-      schemaVersion: 1,
-      identity: `parked-${parkedIdentity}`,
-      campaignId,
-      snapshotDigest: finding.snapshotDigest,
-      occurredAt: this.options.clock().toISOString(),
-      type: "finding-parked",
-      findingId: finding.findingId,
-      runId: record.runId,
-      category: record.category,
-      reason: "admin-configuration-precondition",
-      preconditionClass: "admin-configuration",
-      artifacts: record.artifacts,
-    });
-    if (parked.status === "conflict")
-      throw new Error("Finding precondition parking conflict");
   }
 
   /** The canary the Finding's impact needs, issued fresh for this attempt. */
@@ -484,16 +463,9 @@ export class WordPressVerifier implements Verifier<
       await this.#recordPrecondition(
         campaignId,
         finding,
-        record,
         initialPrecondition,
         "finding",
       );
-    if (initialPrecondition.preconditionClass === "admin-configuration")
-      return {
-        status: "incomplete",
-        reason: "precondition",
-        nextStep: "admin-configuration-precondition",
-      };
     const transportSetsUpPreconditions =
       this.options.transport.preconditionSetup === "transport";
     if (
@@ -638,13 +610,7 @@ export class WordPressVerifier implements Verifier<
         currentScenarioId: lab.scenario?.id,
         secondaryLocaleConfigured: lab.secondaryLocale !== undefined,
       });
-      await this.#recordPrecondition(
-        campaignId,
-        finding,
-        record,
-        classified,
-        runId,
-      );
+      await this.#recordPrecondition(campaignId, finding, classified, runId);
       return {
         status: "incomplete",
         reason: "precondition",

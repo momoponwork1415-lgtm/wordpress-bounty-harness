@@ -623,24 +623,24 @@ it("parks a Finding outside the Programme Boundary without verifying or counting
   });
 });
 
-it("parks an in-scope Finding with a special admin setting while retaining private evidence", async () => {
+it("records an in-scope Finding with an admin setting for validation", async () => {
   const { result, ledger, evidence } = await campaign([0], {
     precondition:
       "An administrator selects Password protected visibility for a published block.",
   });
-  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(0);
-  const parked = ledger.read({ type: "finding-parked" });
-  expect(parked[0]?.event).toMatchObject({
-    reason: "admin-configuration-precondition",
+  const recorded = ledger.read({ type: "finding-recorded" });
+  expect(recorded).toHaveLength(1);
+  expect(recorded[0]?.event).toMatchObject({
     preconditionClass: "admin-configuration",
   });
-  const reference = parked[0]?.event.artifacts[0];
+  expect(ledger.read({ type: "finding-parked" })).toHaveLength(0);
+  const reference = recorded[0]?.event.artifacts[0];
   expect(reference?.kind).toBe("finding");
   expect(
     reference &&
       (await evidence.readFile(reference.digest, "finding.json", 100_000))
         .status,
   ).toBe("resolved");
-  expect(result.findingsRecorded).toBe(0);
-  expect(ledger.funnel("campaign-1")).toMatchObject({ parked: 1, raw: 0 });
+  expect(result.findingsRecorded).toBe(1);
+  expect(ledger.funnel("campaign-1")).toMatchObject({ parked: 0, raw: 1 });
 });
