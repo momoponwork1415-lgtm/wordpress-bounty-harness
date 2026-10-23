@@ -179,6 +179,34 @@ export type WordPressStoredScriptObservation =
       readonly privateDiagnostic?: Buffer;
     };
 
+/** One declared victim visit the Lab browser opened again after the judge (#439). */
+export type WordPressVictimViewVisit =
+  | {
+      readonly status: "recorded";
+      readonly path: string;
+      readonly screenshot: Buffer;
+      /** One WebM of the first page; absent when it exceeded the limit. */
+      readonly video?: Buffer;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly path: string;
+      readonly failureCode: WordPressStoredScriptFailureCode;
+    };
+
+/** Private Evidence for the human's report; no judge reads it. */
+export type WordPressVictimViewRecording =
+  | {
+      readonly status: "recorded";
+      readonly role:
+        "administrator" | "subscriber" | "customer" | "unauthenticated";
+      readonly visits: readonly WordPressVictimViewVisit[];
+    }
+  | {
+      readonly status: "unavailable";
+      readonly reason: "lab" | "victim-input" | "observer-canary-input";
+    };
+
 export type WordPressOptionsObservation =
   | { readonly status: "observed"; readonly changed: readonly string[] }
   | { readonly status: "unavailable" };

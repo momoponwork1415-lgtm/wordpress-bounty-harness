@@ -333,6 +333,9 @@ async function fixture(
                 Buffer.from("89504e470d0a1a0a", "hex"),
                 Buffer.from("synthetic observer output"),
               ]).toString("base64"),
+              ...(request.args.includes("WBH_RECORD_VIDEO=1")
+                ? { videoBase64: "GkXfo3N5bnRoZXRpYw==" }
+                : {}),
               ...(database.browserDiagnosticOutput === "missing"
                 ? {}
                 : {
@@ -1784,6 +1787,57 @@ describe("WordPress gVisor Lab", () => {
 
     expect(await lab.teardown(handle)).toEqual({ status: "removed" });
     expect(lab.reviewReceiverIp(handle)).toBeNull();
+  });
+
+  it("records a screenshot and a WebM per declared victim visit, only when asked (#439)", async () => {
+    const { lab, snapshot, setup, commands, database } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const { handle } = provisioned;
+    lab.prepareScriptCanary(handle);
+    database.browserFailureAt = "/?p=9";
+    database.browserFailureMessage = "Victim login failed";
+    const recording = await lab.recordVictimView(handle, {
+      role: "administrator",
+      paths: ["/?p=8", "/?p=9"],
+    });
+    expect(recording).toEqual({
+      status: "recorded",
+      role: "administrator",
+      visits: [
+        {
+          status: "recorded",
+          path: "/?p=8",
+          screenshot: expect.any(Buffer),
+          video: Buffer.from("1a45dfa373796e746865746963", "hex"),
+        },
+        { status: "unavailable", path: "/?p=9", failureCode: "victim-login" },
+      ],
+    });
+    const recorded = () =>
+      commands.filter((command) => command.args.includes("WBH_RECORD_VIDEO=1"));
+    expect(recorded().map((command) => command.args)).toEqual([
+      expect.arrayContaining([
+        "--runtime=runsc",
+        "WBH_LOGIN_USER=harness-admin",
+      ]),
+      expect.arrayContaining([
+        "--runtime=runsc",
+        "WBH_LOGIN_USER=harness-admin",
+      ]),
+    ]);
+    // The judge's own visits never ask the browser for video.
+    database.browserFailureAt = null;
+    await lab.observeStoredScript(handle, { routePaths: ["/?p=7"] });
+    expect(
+      await lab.recordVictimView(handle, {
+        role: "unauthenticated",
+        paths: ["/?q=fixed-nonce"],
+      }),
+    ).toEqual({ status: "unavailable", reason: "observer-canary-input" });
+    expect(recorded()).toHaveLength(2);
   });
 
   it("runs a beacon receiver and reports which page contexts made an issued script canary reach it", async () => {

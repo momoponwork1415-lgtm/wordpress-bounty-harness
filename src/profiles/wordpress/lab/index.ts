@@ -37,6 +37,7 @@ import type {
   WordPressSessionObservation,
   WordPressSourceResolver,
   WordPressStoredScriptObservation,
+  WordPressVictimViewRecording,
 } from "./contract.js";
 import {
   exposeWordPressLabToHost,
@@ -179,6 +180,14 @@ export interface WordPressLab extends LabProvisioner<
       readonly victim?: WordPressVictimRoute;
     },
   ): Promise<WordPressStoredScriptObservation>;
+  /**
+   * Opens each declared victim visit again, after the judge, and returns what
+   * the browser showed (#439). Review material only; no judge calls it.
+   */
+  recordVictimView(
+    handle: WordPressLabHandle,
+    victim: unknown,
+  ): Promise<WordPressVictimViewRecording>;
   /** Names of watched options (canary and critical) that differ from the seeded baseline. */
   observeOptions(
     handle: WordPressLabHandle,
@@ -720,6 +729,12 @@ export function openWordPressLab(options: {
       return lab === undefined
         ? { status: "unavailable", phase: "lab" }
         : observe.observeStoredScript(lab, input);
+    },
+    async recordVictimView(handle, victim) {
+      const lab = sessionFor(handle);
+      return lab === undefined
+        ? { status: "unavailable", reason: "lab" }
+        : observe.recordVictimView(lab, victim);
     },
     async observeOptions(handle) {
       const lab = sessionFor(handle);

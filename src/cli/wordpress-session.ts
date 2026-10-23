@@ -47,6 +47,7 @@ import {
 import { WBH_VERIFY_SKILL_ID } from "../profiles/wordpress/verification/handoff-verifier.js";
 import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import { createWordPressLabStateObserver } from "../profiles/wordpress/verification/lab-state-diff.js";
+import { createWordPressVictimViewObserver } from "../profiles/wordpress/verification/victim-view.js";
 import {
   wordpressReproductionRenderer,
   type WordPressReconstruction,
@@ -402,6 +403,10 @@ function verificationFor(
         : WBH_VERIFY_SKILL_ID,
     // Whole-site before / after diff around the Verifier run; review material, not proof (#186).
     stateObserver: createWordPressLabStateObserver({
+      store: state.store,
+      lab: boundaries.lab,
+    }),
+    victimViewObserver: createWordPressVictimViewObserver({
       store: state.store,
       lab: boundaries.lab,
     }),

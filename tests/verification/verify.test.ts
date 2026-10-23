@@ -14,6 +14,7 @@ import {
   type Judge,
   type LabStateObserver,
   type Verifier,
+  type VictimViewObserver,
 } from "../../src/verification/index.js";
 
 const snapshotDigest = `sha256:${"a".repeat(64)}`;
@@ -83,6 +84,10 @@ async function fixture(
     readonly stateObserver?: (
       store: PrivateArtifactStore,
     ) => LabStateObserver<LabHandle>;
+    readonly victimViewObserver?: (
+      store: PrivateArtifactStore,
+    ) => VictimViewObserver<LabHandle>;
+    readonly onJudge?: () => void;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-verify-"));
@@ -282,6 +287,7 @@ async function fixture(
   const judge: Judge<SyntheticFinding, LabHandle> = {
     id: "synthetic-canary",
     async observe({ lab: observed }) {
+      options.onJudge?.();
       if (options.judge === "throws") throw new Error("Lab unreachable");
       if (options.judge === "incomplete")
         return {
@@ -406,6 +412,9 @@ async function fixture(
     ...(options.stateObserver === undefined
       ? {}
       : { stateObserver: options.stateObserver(store) }),
+    ...(options.victimViewObserver === undefined
+      ? {}
+      : { victimViewObserver: options.victimViewObserver(store) }),
   });
   const basisKind =
     options.fixedVersion === true
@@ -1217,5 +1226,58 @@ describe("Lab state observer around the Verifier run", () => {
     });
     expect(result).toMatchObject({ status: "incomplete", reason: "sandbox" });
     expect(afterCalls).toBe(1);
+  });
+});
+
+describe("victim-view observer after the judge (#439)", () => {
+  const recorder =
+    (order: string[], fail = false) =>
+    (store: PrivateArtifactStore): VictimViewObserver<LabHandle> => ({
+      async record(lab) {
+        order.push(`record:${lab.id}`);
+        if (fail) throw new Error("browser unavailable");
+        const digest = await store.putFiles({ "victim-view.json": "{}" });
+        return [{ kind: "victim-view", digest }];
+      },
+    });
+  const artifactsOf = (ledger: Ledger) =>
+    ledger
+      .read({ type: "verification-finished" })
+      .flatMap(({ event }) => event.artifacts)
+      .filter((artifact) => artifact.kind === "victim-view");
+
+  it("records after the judge and adds the artifact without changing the verdict", async () => {
+    const order: string[] = [];
+    const { result, ledger } = await fixture({
+      onJudge: () => order.push("judge"),
+      victimViewObserver: recorder(order),
+    });
+    expect(result.status).toBe("runtime-confirmed");
+    expect(order).toEqual(["judge", "record:lab-1"]);
+    expect(artifactsOf(ledger)).toEqual([
+      { kind: "victim-view", digest: expect.any(String) },
+    ]);
+    const failed = await fixture({ victimViewObserver: recorder([], true) });
+    expect(failed.result.status).toBe("runtime-confirmed");
+    expect(artifactsOf(failed.ledger)).toEqual([]);
+  });
+
+  it("records even when the judge throws, and not without a recipe", async () => {
+    const order: string[] = [];
+    const thrown = await fixture({
+      judge: "throws",
+      victimViewObserver: recorder(order),
+    });
+    expect(thrown.result).toMatchObject({ reason: "observation" });
+    expect(order).toEqual(["record:lab-1"]);
+    await fixture({
+      victimViewObserver: recorder(order),
+      verifier: async () => ({
+        status: "incomplete",
+        reason: "recipe",
+        nextStep: "Repair the route",
+      }),
+    });
+    expect(order).toEqual(["record:lab-1"]);
   });
 });
