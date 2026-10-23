@@ -4327,15 +4327,6 @@ describe("harness CLI vertical slice", () => {
     expect(scoped.stdout).toMatch(/^wordfence in-scope /m);
     expect(scoped.stdout).toMatch(/^patchstack \S+ /m);
 
-    await run(
-      "review",
-      "decide",
-      ...target,
-      "--decision",
-      "accept",
-      "--reason",
-      "reproduced-by-hand",
-    );
     const draftPath = join(root, "draft.md");
     await writeFile(draftPath, "Synthetic private draft text\n");
     const drafted = await run(
@@ -4346,11 +4337,64 @@ describe("harness CLI vertical slice", () => {
       "wordfence",
       "--file",
       draftPath,
+      "--prepared-by",
+      "ai",
     );
     expect(drafted.stderr).toBe("");
     expect(drafted.stdout).not.toContain("Synthetic private draft text");
-    const [, candidate, draft] =
+    const [, provisionalCandidate, provisionalDraft] =
       /candidate (\S+)\s+draft (\S+)\s+revision 1/.exec(drafted.stdout)!;
+    const provisional = [
+      "--candidate",
+      provisionalCandidate!,
+      "--draft",
+      provisionalDraft!,
+      "--to",
+      "wordfence",
+    ];
+
+    const early = await run("review", "submitted", ...provisional);
+    expect(early.code).toBe(1);
+    expect(early.stderr).toContain("not authorized");
+    const premature = await run(
+      "review",
+      "authorize",
+      ...provisional,
+      "--by",
+      "operator",
+    );
+    expect(premature.code).toBe(1);
+    expect(premature.stderr).toContain("human-reviewed-draft-required");
+    const reproduced = await run(
+      "review",
+      "decide",
+      ...target,
+      "--decision",
+      "defer",
+      "--reason",
+      "manual-reproduction",
+      "--reproduced",
+      "match",
+      "--reproduce-minutes",
+      "5",
+      "--minutes",
+      "3",
+    );
+    expect(reproduced.code).toBe(0);
+    const finalDraft = await run(
+      "review",
+      "draft",
+      ...target,
+      "--programme",
+      "wordfence",
+      "--file",
+      draftPath,
+      "--prepared-by",
+      "human",
+    );
+    expect(finalDraft.code).toBe(0);
+    const [, candidate, draft] =
+      /candidate (\S+)\s+draft (\S+)\s+revision 2/.exec(finalDraft.stdout)!;
     const exact = [
       "--candidate",
       candidate!,
@@ -4359,11 +4403,24 @@ describe("harness CLI vertical slice", () => {
       "--to",
       "wordfence",
     ];
-
-    const early = await run("review", "submitted", ...exact);
-    expect(early.code).toBe(1);
-    expect(early.stderr).toContain("not authorized");
-    expect((await run("review", "authorize", ...exact)).code).toBe(0);
+    const reviewed = await run(
+      "review",
+      "decide",
+      ...target,
+      "--decision",
+      "accept",
+      "--reason",
+      "reproduced-by-hand",
+      "--duplicate",
+      "no-match",
+      "--minutes",
+      "3",
+    );
+    expect(reviewed.code).toBe(0);
+    expect((await run("review", "authorize", ...exact)).code).toBe(2);
+    expect(
+      (await run("review", "authorize", ...exact, "--by", "operator")).code,
+    ).toBe(0);
     expect((await run("review", "submitted", ...exact)).code).toBe(0);
     expect(
       (

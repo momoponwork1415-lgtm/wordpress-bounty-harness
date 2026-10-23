@@ -271,7 +271,7 @@ describe("review public interface", () => {
     ).toMatchObject({ result: { status: "runtime-confirmed" } });
   });
 
-  it("binds a private draft revision and human authorization to the exact candidate and destination", async () => {
+  it("requires a human-reviewed revision, matching reproduction, and final acceptance before exact authorization", async () => {
     const { review, ledger } = await fixture();
     const [assessment] = await review.assessScope({ ref });
     if (assessment === undefined) throw new Error("missing assessment");
@@ -290,52 +290,169 @@ describe("review public interface", () => {
         })
       ).status,
     ).toBe("not-authorized");
+    await expect(
+      review.authorizeExternalAction({
+        candidateId: draft.candidateId,
+        draftDigest: draft.digest,
+        destination: "wordfence",
+        authorizedBy: "human-1",
+      }),
+    ).rejects.toThrow("human-reviewed-draft-required");
+    await review.recordHumanReproduction({ ref, result: "match" });
+    const reviewed = await review.saveDraft({
+      assessmentId: assessment.id,
+      content: "Private report text",
+      preparedBy: "human",
+    });
+    expect(reviewed.revision).toBe(2);
+    await expect(
+      review.authorizeExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+        authorizedBy: "human-1",
+      }),
+    ).rejects.toThrow("human-accept-required");
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "dedupe-not-checked",
+      openedEvidence: [],
+      decidedBy: "human-1",
+    });
+    await expect(
+      review.authorizeExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+        authorizedBy: "human-1",
+      }),
+    ).rejects.toThrow("human-accept-required");
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "final-human-review",
+      duplicate: { status: "no-match" },
+      openedEvidence: [],
+      decidedBy: "human-1",
+    });
     await review.authorizeExternalAction({
-      candidateId: draft.candidateId,
-      draftDigest: draft.digest,
+      candidateId: reviewed.candidateId,
+      draftDigest: reviewed.digest,
       destination: "wordfence",
       authorizedBy: "human-1",
     });
     expect(
       await review.admitExternalAction({
-        candidateId: draft.candidateId,
-        draftDigest: draft.digest,
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({ status: "authorized" });
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "rechecked-final-review",
+      openedEvidence: [],
+      decidedBy: "human-1",
+    });
+    expect(
+      await review.admitExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({
+      status: "not-authorized",
+      reason: "exact-authorization-required",
+    });
+    await review.authorizeExternalAction({
+      candidateId: reviewed.candidateId,
+      draftDigest: reviewed.digest,
+      destination: "wordfence",
+      authorizedBy: "human-1",
+    });
+    expect(
+      await review.admitExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
         destination: "wordfence",
       }),
     ).toMatchObject({ status: "authorized" });
     expect(
       (
         await review.admitExternalAction({
-          candidateId: draft.candidateId,
-          draftDigest: draft.digest,
+          candidateId: reviewed.candidateId,
+          draftDigest: reviewed.digest,
           destination: "patchstack",
         })
       ).status,
     ).toBe("not-authorized");
+    await review.recordHumanReproduction({ ref, result: "mismatch" });
+    expect(
+      await review.admitExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({
+      status: "not-authorized",
+      reason: "manual-reproduction-required",
+    });
+    await review.recordHumanReproduction({ ref, result: "match" });
+    expect(
+      await review.admitExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({
+      status: "not-authorized",
+      reason: "human-reviewed-draft-required",
+    });
     const second = await review.saveDraft({
       assessmentId: assessment.id,
       content: "Revised private report",
       preparedBy: "human",
     });
-    expect(second.revision).toBe(2);
+    expect(second.revision).toBe(3);
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "final-human-review-after-recheck",
+      openedEvidence: [],
+      decidedBy: "human-1",
+    });
     expect(
-      (
-        await review.admitExternalAction({
-          candidateId: second.candidateId,
-          draftDigest: second.digest,
-          destination: "wordfence",
-        })
-      ).status,
-    ).toBe("not-authorized");
+      await review.admitExternalAction({
+        candidateId: reviewed.candidateId,
+        draftDigest: reviewed.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({ status: "not-authorized", reason: "superseded-draft" });
     expect(
-      (
-        await review.admitExternalAction({
-          candidateId: draft.candidateId,
-          draftDigest: draft.digest,
-          destination: "wordfence",
-        })
-      ).status,
-    ).toBe("not-authorized");
+      await review.admitExternalAction({
+        candidateId: second.candidateId,
+        draftDigest: second.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({
+      status: "not-authorized",
+      reason: "exact-authorization-required",
+    });
+    await review.authorizeExternalAction({
+      candidateId: second.candidateId,
+      draftDigest: second.digest,
+      destination: "wordfence",
+      authorizedBy: "human-1",
+    });
+    expect(
+      await review.admitExternalAction({
+        candidateId: second.candidateId,
+        draftDigest: second.digest,
+        destination: "wordfence",
+      }),
+    ).toMatchObject({ status: "authorized" });
     expect(JSON.stringify(ledger.read({ type: "draft-saved" }))).not.toContain(
       "Private report text",
     );
@@ -346,7 +463,7 @@ describe("review public interface", () => {
       }),
     ).toMatchObject({
       verificationStatus: "runtime-confirmed",
-      drafts: [{ revision: 1 }, { revision: 2 }],
+      drafts: [{ revision: 1 }, { revision: 2 }, { revision: 3 }],
     });
   });
 
@@ -432,6 +549,87 @@ describe("review public interface", () => {
     );
   });
 
+  it("does not admit an old review after a later incomplete attempt or latest-version Finding", async () => {
+    for (const later of ["attempt", "latest-version"] as const) {
+      const { review, ledger } = await fixture();
+      const [assessment] = await review.assessScope({ ref });
+      if (assessment === undefined) throw new Error("missing assessment");
+      await review.recordHumanReproduction({ ref, result: "match" });
+      const draft = await review.saveDraft({
+        assessmentId: assessment.id,
+        content: "Reviewed report",
+        preparedBy: "human",
+      });
+      await review.decide({
+        ref,
+        decision: "accept",
+        reasonCode: "final-human-review",
+        duplicate: { status: "no-match" },
+        openedEvidence: [],
+        decidedBy: "human-1",
+      });
+      const exact = {
+        candidateId: draft.candidateId,
+        draftDigest: draft.digest,
+        destination: "wordfence",
+      };
+      await review.authorizeExternalAction({
+        ...exact,
+        authorizedBy: "human-1",
+      });
+      expect(await review.admitExternalAction(exact)).toMatchObject({
+        status: "authorized",
+      });
+      const appended = await ledger.append(
+        later === "attempt"
+          ? {
+              schemaVersion: 1,
+              identity: "verification-later-incomplete",
+              campaignId: ref.campaignId,
+              snapshotDigest: ref.snapshotDigest,
+              occurredAt: "2026-10-08T02:00:00Z",
+              type: "verification-finished" as const,
+              findingId: ref.findingId,
+              verificationId: "verification-later-incomplete",
+              labSetupDigest: labSetup,
+              result: {
+                status: "incomplete" as const,
+                reason: "observation" as const,
+                nextStep: "Repeat observation",
+              },
+            }
+          : {
+              schemaVersion: 1,
+              identity: "finding-new-latest",
+              campaignId: ref.campaignId,
+              snapshotDigest: `sha256:${"c".repeat(64)}`,
+              occurredAt: "2026-10-08T02:00:00Z",
+              type: "finding-recorded" as const,
+              findingId: "finding-new-latest",
+              runId: "reverify-run",
+              category: "sqli",
+              derivedFromFindingId: ref.findingId,
+              derivationKind: "latest-version" as const,
+            },
+      );
+      expect(appended.status).toBe("appended");
+      expect(await review.admitExternalAction(exact)).toMatchObject({
+        status: "not-authorized",
+        reason: "stale-verification",
+      });
+      await expect(
+        review.authorizeExternalAction({ ...exact, authorizedBy: "human-1" }),
+      ).rejects.toThrow("stale-verification");
+      await expect(
+        review.saveDraft({
+          assessmentId: assessment.id,
+          content: "Stale provisional report",
+          preparedBy: "ai",
+        }),
+      ).rejects.toThrow("current verification");
+    }
+  });
+
   it("marks malformed programme coverage incomplete without changing verification", async () => {
     const { review, ledger } = await fixture({
       programmeIds: ["wordfence", "patchstack"],
@@ -463,10 +661,19 @@ describe("review public interface", () => {
     const { review, ledger, artifactStore } = await fixture();
     const [first] = await review.assessScope({ ref });
     if (first === undefined) throw new Error("missing assessment");
+    await review.recordHumanReproduction({ ref, result: "match" });
     const draft = await review.saveDraft({
       assessmentId: first.id,
       content: "Private report",
-      preparedBy: "ai",
+      preparedBy: "human",
+    });
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "final-human-review",
+      duplicate: { status: "no-match" },
+      openedEvidence: [],
+      decidedBy: "human-1",
     });
     await review.authorizeExternalAction({
       candidateId: draft.candidateId,
@@ -931,14 +1138,8 @@ describe("review queue and decisions", () => {
 describe("review submission records", () => {
   it("records a human submission only for an exactly authorized draft, then its outcome", async () => {
     const { review, ledger } = await fixture();
-    await review.decide({
-      ref,
-      decision: "accept",
-      reasonCode: "reproduced-by-hand",
-      openedEvidence: [],
-      decidedBy: "operator",
-    });
     const [assessment] = await review.assessScope({ ref });
+    await review.recordHumanReproduction({ ref, result: "match" });
     const draft = await review.saveDraft({
       assessmentId: assessment!.id,
       content: "Private report text",
@@ -949,6 +1150,14 @@ describe("review submission records", () => {
       draftDigest: draft.digest,
       destination: "wordfence",
     };
+    await review.decide({
+      ref,
+      decision: "accept",
+      reasonCode: "reproduced-by-hand",
+      duplicate: { status: "no-match" },
+      openedEvidence: [],
+      decidedBy: "human-1",
+    });
     await expect(review.recordSubmission(submission)).rejects.toThrow();
     await expect(
       review.recordOutcome({
