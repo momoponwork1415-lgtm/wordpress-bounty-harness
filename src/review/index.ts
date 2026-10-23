@@ -1350,15 +1350,11 @@ export class Review<TFacts = unknown> {
     const query = z
       .strictObject({ campaignId: id, findingId: id })
       .parse(input);
-    const verification = this.#ledger
-      .readAll({ type: "verification-finished" })
-      .filter(
-        ({ event }) =>
-          event.type === "verification-finished" &&
-          event.campaignId === query.campaignId &&
-          event.findingId === query.findingId,
-      )
-      .at(-1);
+    const verifications = this.#ledger.readAll({
+      ...query,
+      type: "verification-finished",
+    });
+    const verification = verifications.at(-1);
     const assessments = (await this.#allAssessments(query)).filter(
       (item) =>
         item.ref.campaignId === query.campaignId &&
@@ -1369,37 +1365,20 @@ export class Review<TFacts = unknown> {
       .filter((item) => assessmentIds.has(item.assessmentId))
       .map(({ content: _content, ...reference }) => reference);
     const candidateIds = new Set(drafts.map((draft) => draft.candidateId));
+    // Keep the historical type order and duplicate references. Authorization
+    // events have no Finding ID; their drafts establish that relationship.
     const privateEvidenceDigests = [
+      ...verifications,
+      ...this.#ledger.readAll({ ...query, type: "scope-assessed" }),
+      ...this.#ledger.readAll({ ...query, type: "draft-saved" }),
       ...this.#ledger
-        .readAll({ type: "verification-finished" })
-        .filter(
-          ({ event }) =>
-            event.type === "verification-finished" &&
-            event.campaignId === query.campaignId &&
-            event.findingId === query.findingId,
-        ),
-      ...this.#ledger
-        .readAll({ type: "scope-assessed" })
-        .filter(
-          ({ event }) =>
-            event.type === "scope-assessed" &&
-            event.campaignId === query.campaignId &&
-            event.findingId === query.findingId,
-        ),
-      ...this.#ledger
-        .readAll({ type: "draft-saved" })
-        .filter(
-          ({ event }) =>
-            event.type === "draft-saved" &&
-            event.campaignId === query.campaignId &&
-            event.findingId === query.findingId,
-        ),
-      ...this.#ledger
-        .readAll({ type: "external-action-authorized" })
+        .readAll({
+          campaignId: query.campaignId,
+          type: "external-action-authorized",
+        })
         .filter(
           ({ event }) =>
             event.type === "external-action-authorized" &&
-            event.campaignId === query.campaignId &&
             candidateIds.has(event.candidateId),
         ),
     ].flatMap(({ event }) =>
