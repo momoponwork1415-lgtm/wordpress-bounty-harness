@@ -65,12 +65,18 @@ export const DISCOVERY_RUN_MEMORY_MIB =
 
 const runnablePrompt = z.literal(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID);
 
+export const LEGACY_VERIFIER_RETIRED =
+  "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";
+
 /** Human-edited, Git-tracked run configuration. It carries no credentials or keys. */
 const commonCampaignFields = {
   schemaVersion: z.literal(1),
   discovery: z
     .strictObject({
-      lab: z.enum(["attached", "none"]),
+      lab: z.literal("none", {
+        error:
+          "Attached discovery Labs are retired; discovery.lab must be none",
+      }),
       /** Opt-in split of targets between Codex and Claude; absent, all run on Codex. */
       runtimeShare: runtimeShareSchema.optional(),
     })
@@ -206,7 +212,8 @@ export interface WordPressCampaignBoundaries {
     readonly executor: WordPressCampaignBoundaries["executor"];
   };
   readonly attachments: ProviderAttachmentStore;
-  readonly verifier: Verifier<WordPressFinding, WordPressLabHandle>;
+  /** Legacy injected adapters may provide one; the real host no longer does. */
+  readonly verifier?: Verifier<WordPressFinding, WordPressLabHandle>;
   /** `verify next --handoff`: a Verifier that hands the Lab to a skill on the host (#352). */
   readonly handoffVerifier?: (
     handoff: VerifierHandoff,
@@ -277,8 +284,8 @@ export function wordPressRuntimeCeilings(
 /**
  * The per-runtime caps and runtime of each target, or undefined when the
  * campaign has neither caps nor a share. A provider limit stops only one
- * runtime's targets when both runtimes get targets and no in-campaign
- * Verifier (Codex) shares the limited subscription.
+ * runtime's targets when both runtimes get targets. Campaigns run discovery
+ * without a Lab or an in-campaign Verifier.
  */
 export function wordPressRuntimeCaps(
   config: WordPressCampaignConfig,
@@ -291,10 +298,7 @@ export function wordPressRuntimeCaps(
     runtimeOf: (target) => assignDiscoveryRuntime(target.targetId, share),
     ceilings: wordPressRuntimeCeilings(config),
     providerLimitPerRuntime:
-      share !== undefined &&
-      share.codex > 0 &&
-      share.claude > 0 &&
-      config.discovery.lab === "none",
+      share !== undefined && share.codex > 0 && share.claude > 0,
   };
 }
 
@@ -384,18 +388,20 @@ function verificationFor(
 ): WordPressVerification {
   if (handoff !== undefined && boundaries.handoffVerifier === undefined)
     throw new Error("This profile has no handoff Verifier");
+  const verifier =
+    handoff === undefined
+      ? boundaries.verifier
+      : boundaries.handoffVerifier!(handoff);
+  if (verifier === undefined) throw new Error(LEGACY_VERIFIER_RETIRED);
   return new Verification({
     ledger: state.ledger,
     store: state.store,
     lab: boundaries.lab,
-    // The skill id is the prompt version of a handoff run; the ledger tells the two apart.
-    verifier:
-      handoff === undefined
-        ? boundaries.verifier
-        : boundaries.handoffVerifier!(handoff),
+    verifier,
     judges: createWordPressJudges({ store: state.store, lab: boundaries.lab }),
     readFinding: readWordPressFinding,
     renderer: wordpressReproductionRenderer,
+    // The skill id is the prompt version of a handoff run; the ledger tells the two apart.
     promptVersion:
       handoff === undefined
         ? WORDPRESS_VERIFIER_PROMPT_ID
@@ -425,6 +431,7 @@ export interface WordPressCampaignSession {
   readonly boundaries: WordPressCampaignBoundaries;
   readonly setupFor: (snapshot: Snapshot) => WordPressLabSetup;
   readonly reconstructionFor: (snapshot: Snapshot) => WordPressReconstruction;
+  /** Built once on use; administration and history access require no Verifier. */
   readonly verification: WordPressVerification;
 }
 
@@ -446,12 +453,19 @@ export async function openWordPressCampaignSession(
       : { ...parsed, selectionPolicyPath: input.selectionPolicyPath };
   const boundaries = await options.boundaries(config, state);
   let policy: Promise<WordPressSelectionPolicy> | undefined;
+  let verification: WordPressVerification | undefined;
   return {
     config,
     policy: () => (policy ??= readWordPressCampaignPolicy(config)),
     boundaries,
     setupFor: setupFor(config),
     reconstructionFor: reconstructionFor(config),
-    verification: verificationFor(state, boundaries, input.handoff),
+    get verification() {
+      return (verification ??= verificationFor(
+        state,
+        boundaries,
+        input.handoff,
+      ));
+    },
   };
 }

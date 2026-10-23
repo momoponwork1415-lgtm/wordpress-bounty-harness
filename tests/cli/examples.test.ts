@@ -45,6 +45,13 @@ it("starts the checked-in v8 campaign with one concurrent target on WordPress 7.
   });
   expect(config.resources.maxConcurrentTargets).toBe(1);
   expect(config.wordpressVersion).toBe("7.1.3");
+  expect(config.discovery.lab).toBe("none");
+  expect(
+    wordpressCampaignConfigSchema.safeParse({
+      ...(source as object),
+      discovery: { lab: "attached" },
+    }).success,
+  ).toBe(false);
   for (const [maxConcurrentTargets, accepted] of [
     [10, true],
     [11, false],
@@ -85,6 +92,7 @@ it.each(["3.3.1", "3.2.6"])(
     expect(wordpressCampaignConfigSchema.parse(source)).toMatchObject({
       promptId: "wp2shell-bounty-v8",
       runWallTimeMinutes: 120,
+      discovery: { lab: "none" },
     });
   },
 );

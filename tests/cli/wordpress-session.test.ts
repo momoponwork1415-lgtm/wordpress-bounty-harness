@@ -2,12 +2,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CliState } from "../../src/cli/index.js";
 import {
   DISCOVERY_RUN_MEMORY_MIB,
   openWordPressCampaignSession,
+  type VerifierHandoff,
   type WordPressCampaignBoundaries,
   type WordPressCampaignConfig,
 } from "../../src/cli/wordpress-session.js";
@@ -37,6 +38,8 @@ async function fixture(options: {
   readonly config?: Record<string, unknown>;
   readonly policy?: Record<string, unknown> | null;
   readonly policyName?: string;
+  readonly legacyVerifier?: boolean;
+  readonly handoffVerifier?: WordPressCampaignBoundaries["handoffVerifier"];
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-session-"));
   directories.push(root);
@@ -63,7 +66,10 @@ async function fixture(options: {
   const boundaryCalls: WordPressCampaignConfig[] = [];
   const boundaries = {
     lab: {},
-    verifier: {},
+    ...(options.legacyVerifier === false ? {} : { verifier: {} }),
+    ...(options.handoffVerifier === undefined
+      ? {}
+      : { handoffVerifier: options.handoffVerifier }),
   } as unknown as WordPressCampaignBoundaries;
   const state = {
     stateDirectory: join(root, "state"),
@@ -72,7 +78,10 @@ async function fixture(options: {
     ledger: {},
     store: {},
   } as unknown as CliState;
-  const open = (input?: { selectionPolicyPath?: string }) =>
+  const open = (input?: {
+    selectionPolicyPath?: string;
+    handoff?: VerifierHandoff;
+  }) =>
     openWordPressCampaignSession(
       {
         boundaries: async (config) => {
@@ -112,6 +121,68 @@ describe("WordPress campaign session", () => {
     expect(session.verification.promptVersion).toBeDefined();
   });
 
+  it("opens administration without a legacy Verifier and never selects handoff implicitly", async () => {
+    const handoffVerifier = vi.fn(() => {
+      throw new Error("Handoff was not requested");
+    });
+    const { open, boundaryCalls, boundaries } = await fixture({
+      legacyVerifier: false,
+      handoffVerifier,
+    });
+    const session = await open();
+    expect(boundaryCalls).toHaveLength(1);
+    expect(session.boundaries).toBe(boundaries);
+    expect(session.boundaries.verifier).toBeUndefined();
+    expect(session.config.wordpressVersion).toBe("6.8");
+    expect((await session.policy()).id).toBe("session-test-policy");
+    const snapshot = { digest: "sha256:" + "a".repeat(64) } as Parameters<
+      typeof session.setupFor
+    >[0];
+    expect(session.setupFor(snapshot).snapshotDigest).toBe(snapshot.digest);
+    expect(session.reconstructionFor(snapshot).wordpressVersion).toBe("6.8");
+    expect(() => session.verification).toThrow(
+      "The legacy Codex Verifier is retired",
+    );
+    expect(handoffVerifier).not.toHaveBeenCalled();
+  });
+
+  it("constructs an explicitly requested handoff Verifier once, only when verification is used", async () => {
+    const attempt = vi.fn(async () => {
+      throw new Error("Session construction must not execute a Verifier");
+    });
+    const handoffVerifier = vi.fn(() => ({ attempt }));
+    const { open, root } = await fixture({
+      legacyVerifier: false,
+      handoffVerifier,
+    });
+    const handoff = {
+      directory: join(root, "handoff"),
+      httpPort: 8080,
+      databasePort: 3306,
+    };
+    const session = await open({ handoff });
+    expect(handoffVerifier).not.toHaveBeenCalled();
+    const verification = session.verification;
+    expect(session.verification).toBe(verification);
+    expect(handoffVerifier).toHaveBeenCalledExactlyOnceWith(handoff);
+    expect(attempt).not.toHaveBeenCalled();
+  });
+
+  it("requires the explicitly requested handoff adapter without falling back to a legacy Verifier", async () => {
+    const { open, root } = await fixture({});
+    const session = await open({
+      handoff: {
+        directory: join(root, "handoff"),
+        httpPort: 8080,
+        databasePort: 3306,
+      },
+    });
+    expect(session.boundaries.verifier).toBeDefined();
+    expect(() => session.verification).toThrow(
+      "This profile has no handoff Verifier",
+    );
+  });
+
   it("reads the policy the config names once, on demand", async () => {
     const { open, policyPath } = await fixture({});
     const session = await open();
@@ -149,6 +220,14 @@ describe("WordPress campaign session", () => {
     await expect(open()).rejects.toThrow(
       `The memory budget is below one discovery run (${DISCOVERY_RUN_MEMORY_MIB} MiB)`,
     );
+    expect(boundaryCalls).toHaveLength(0);
+  });
+
+  it("rejects the retired attached setting before building any boundaries", async () => {
+    const { open, boundaryCalls } = await fixture({
+      config: { discovery: { lab: "attached" } },
+    });
+    await expect(open()).rejects.toThrow("Attached discovery Labs are retired");
     expect(boundaryCalls).toHaveLength(0);
   });
 
