@@ -145,3 +145,9 @@ v3 を戻すときは `versions/v2.2.md` を skill 本文に戻し、OPERATIONS 
 旧規則で入口 park された Finding は、Private Evidence の原本と Snapshot・identity・Programme Boundary を照合してから追記専用の復帰 event で検証列へ戻す。影響分類そのものが Programme Boundary 外の Finding と、検証中に park された Finding は、この復帰操作では戻さない。本番 runner が旧台帳 schema を使っている間は新しい event を共有台帳へ追記せず、runner 更新後に行う。復帰によって受理可能・脆弱性・提出可能と認定したことにはならない。
 
 根拠は 2026-10-24 に確認した [Wordfence の公式規則](https://www.wordfence.com/bug-bounty-program-terms/) の「Environmental/Configuration-Based Issues」と管理者による明示的な権限付与の条項。通常の機能有効化を一律に除外する文はない。Finding に明示除外に当たる事実が既にあれば段 1 で分け、まだ確かでなければ誤設定かどうかと低権限の攻撃者に届くかを Lab で確認する。判定器の nonce canary・Snapshot digest・`incomplete` の条件は変更しない。
+
+## 2026-10-24 追記 9: 発火の観測から人間向け内部プレビューを作る
+
+所有者は canary の確認に時間がかかる場合、Harness 所有ブラウザで dialog を観測した事実を先に記録し、人間が後で手動再現する経路を選んだ。追記 4 の「`incomplete` は提出用の文案としない」は維持する。現在の `verification-finished` が `incomplete(observation)` でも、同じ Snapshot と Lab Setup に結び付いた Harness 所有ブラウザの dialog、同一検証内の setup 後の Harness 捕捉攻撃要求との marker 一致、その要求から被害者画面の訪問までの順序、別の被害者 principal を確かめた場合に限り、`wbh-report` は Wordfence 用の**登録しない内部プレビュー**を Git 外 Private Evidence に作れる。これらの一致と順序は因果関係を証明しない。人間が既存コンテンツによる dialog の可能性を調べるまで、攻撃による発火や脆弱性の再現成功と断定しない。ブラウザを開いたこと、クリック、画面内の文字列、Verifier の自己申告は dialog 観測の代用にならない。
+
+内部プレビューには観測した事実と未確認事項を分けて書き、フォーム入力用 JSON は必須値に根拠が揃う場合だけ `human_verification.status: pending` で添える。動画は実在する場合だけ扱う。この経路から `review draft`、`submission-package/v1` manifest、Submission Candidate、外部承認・送信へは進めない。現行の `lab up --for-review` も確認済み再現パッケージを要する。canary を使わず人間の再現だけで正式な提出経路へ進める場合は、手動確認用 Lab とその記録、scope・文案・承認の basis を別途設計する。`runtime-confirmed` の nonce 条件、digest 不一致の `incomplete`、人間の最終査読と外部行動の承認は変更しない。

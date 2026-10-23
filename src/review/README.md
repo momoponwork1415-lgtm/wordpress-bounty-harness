@@ -8,7 +8,7 @@
 
 `review --campaign <id>` は証拠付きの候補と、対象範囲内の `incomplete` を全件個別に表示する（#185、ADR 0031）。あわせて `incomplete` の最新 1 件を Finding ごとに、runner がまだ自動再試行する `retry candidates by reason` と、再試行が尽きて人間の手に渡る `incomplete by reason` に分けて数える。この分け方は runner（`src/cli/pipeline.ts`）と同じ関数 `shouldAutomaticallyRetryVerification`（`src/verification/retry-budget.ts`、ADR 0022）で決め、attempt は Lab Setup digest・Verifier prompt 版・理由が同じものだけを数える。`recipe`・`observation` は 3 回目、`provision`・`provider` は 2 回目から尽きた側に入る。`precondition` は scenario ID が変わったときだけ runner が再試行するが、review 列は Lab Setup を持たず変化を予測できないので常に尽きた側に数える。`evidence`・`cleanup`・`digest-mismatch`・`no-judge`・`sandbox` は 1 回目から尽きた側。再試行の実行そのものはこの列では行わない。
 
-当面は Wordfence 向けに、AI 操作役が `review export --campaign <id> --finding <id>` の参照を読み、screen、skill による検証、重複照合、最新版での再検証、scope 評価、提出先選択、英語の暫定文案までを順に進める（SPEC §3、ADR 0038）。Patchstack 向けの追加自動化は報告が増えてから扱う。6 段を起動・引き継ぐ自動 orchestrator はまだ無い。AI 操作役は所有者に代わって中間記録を実行するが、各 skill の判断方法は変えない。旧運用を記す skill 本文の版更新は別 PR で行う。AI の中間判断は `review decide --by ai` として記録し、`--minutes` を付けて人間の作業時間に混ぜない。`incomplete` や根拠のない重複・scope 判定を提出可能な文案として扱わない。各 skill と CLI の操作順は [OPERATIONS 第 3 節](../../docs/OPERATIONS.md)にある。
+当面は Wordfence 向けに、AI 操作役が `review export --campaign <id> --finding <id>` の参照を読み、screen、skill による検証、重複照合、最新版での再検証、scope 評価、提出先選択、英語の暫定文案までを順に進める（SPEC §3、ADR 0038）。Patchstack 向けの追加自動化は報告が増えてから扱う。6 段を起動・引き継ぐ自動 orchestrator はまだ無い。AI 操作役は所有者に代わって中間記録を実行するが、各 skill の判断方法は変えない。旧運用を記す skill 本文の版更新は別 PR で行う。AI の中間判断は `review decide --by ai` として記録し、`--minutes` を付けて人間の作業時間に混ぜない。`incomplete` や根拠のない重複・scope 判定を提出可能な文案として扱わない。`incomplete(observation)` に攻撃要求との marker 一致と順序、別の被害者での Lab browser dialog 観測がある場合、`wbh-report` v7 は因果関係の確認待ちの内部プレビューだけを Private Evidence に作れる。各 skill と CLI の操作順は [OPERATIONS 第 3 節](../../docs/OPERATIONS.md)にある。
 
 1. `review reverify --campaign <id> --finding <id> --config <path>` で、対象の最新版を新しい Target Snapshot に固定し、同じ Finding を新しい Lab で再検証する。
    - 旧 digest の検証結果を最新版の証拠として流用しない。
@@ -16,6 +16,8 @@
    - 元 Finding の暫定 `accept` と重複結果は派生 ID に継承されない。以後は出力された ID を使い、最新版の証拠でレビュー列の判断をやり直す。元 Finding の文案は、派生 ID ができた時点で承認できない。
 2. 出力された Finding ID で `review export`、`wbh-review`、`wbh-dedupe` を再実行する。受理案と重複 `no-match` が揃ったら同じ ID に AI の暫定 `accept` を記録し、`review scope` と `wbh-destination` を行う。`src/profiles/wordpress/policy/programme-scope.md` の観測日と Wordfence の公式規則を照合し、差分や矛盾があれば方針を更新する。scope が `ambiguous`、重複が `unavailable` / `possible-match` なら暫定文案には進めない。照合の記録は下の「重複照合の記録」に従う。
 3. 今回の Wordfence 向け `wbh-report` は、出力された Finding ID に判定器が `runtime-confirmed` とした証拠から、英語 Markdown の暫定文案、`wordfence-fill-only/3` のフォーム入力用 JSON、添付一覧、`submission-package/v1` manifest を Git 外の Private Evidence に作る。Markdown に JSON の digest を結び付け、同じ ID の `review draft --programme wordfence --prepared-by ai` は文案版の digest を記録する。Review API は `reproduced` も人間の手動再現前に暫定 draft として保存できるが、今回の Wordfence skill は対象にしない。暫定文案には未観測の手順や結果を補わない。
+
+`incomplete(observation)` の内部プレビューはこの 3 の正式な暫定文案に含めない。観測 signal と Snapshot / Lab Setup、攻撃要求との marker 一致と順序を照合した英語 Markdown、必須値が揃う場合だけ `pending` の Fill-Only JSON を Private Evidence に作る。因果関係と既存コンテンツ由来かどうかは人間の確認待ちとする。`review draft` と manifest は作らず、scope assessment や人間の手動再現が済んだと扱わない。現在の `lab up --for-review`、人間の再現記録、提出承認は確認済み再現パッケージが必要であり、このプレビューだけでは進めない。
 
 その後、人間は次を行う。
 
@@ -48,5 +50,5 @@ Claude Code の skill が読むのは `review export --campaign <id> --finding <
 - Review は結果を判断せず、値、記録した時刻、skill のメモ（Private Evidence の `dedupe-note.md`）の digest を判断の記録に残す。
 - `--duplicate` を付けない後の判断（再現の記録など）は、記録済みの結果を引き継ぐ。一度も記録していない判断は `unavailable` を持ち、`checkedAt` は null になる。
 - `review export` は、結果を `review.decision.duplicate`（1 本の文字列）と `review.duplicate`（参照、理由、時刻、メモの path と digest）に出す。`review --campaign <id>` も Finding ごとに `duplicate:` の行を出す。
-- 提出前の暫定文案（`wbh-report`）に進むのは、AI の中間判断が `accept`、`review.decision.duplicate` が `no-match`、Wordfence の scope が `in-scope` の Finding だけである。この `accept` は人間の最終査読を代えない。人間の再現 `match` は、最終文案の承認に必要である。
+- 提出前の**登録する暫定文案**（`wbh-report`）に進むのは、AI の中間判断が `accept`、`review.decision.duplicate` が `no-match`、Wordfence の scope が `in-scope` の Finding だけである。この `accept` は人間の最終査読を代えない。人間の再現 `match` は、最終文案の承認に必要である。内部プレビューは提出候補として登録しない。
 - `possible-match` は照合先を残して所有者が最終判断し、`unavailable` は落とさずに再照合を待つ。
