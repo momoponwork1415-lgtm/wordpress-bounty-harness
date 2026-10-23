@@ -219,6 +219,7 @@ JSON を出す場合は、フォーム用の文字列と Markdown の対応す�
    - 英語だけで書かれているか。
    - Environment に WordPress、PHP、データベースの版と、確かめた版と最新版の確認日があるか。
    - PoC の各 step に行為者が書かれ、HTTP request を送る step に raw の request があるか。
+   - Affected Code References の各 URL が固定した版のファイルを指し、該当する行番号アンカーを持つか。
    - WP-CLI やサーバー上だけの手順が無いか。
    - Attachments の各行のファイルが実在し、sha256 が一致し、外部リンクで代えていないか。Wordfence 向けは録画があれば 1 本で 250 MiB 以内か。Patchstack 向けは ZIP が 5 つ以内で、合計 100 MB 以内か。
    - Form fields に写しの項目がすべてあるか。長い項目の値が対応する節と同じ文か。字数が写しの上限に収まっているか。人間が答える項目が空か。
