@@ -167,6 +167,8 @@ harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <
 
 当面は Wordfence 向けの 1 件の Finding を、AI 操作役が検証から英語の暫定文案まで用意し、最後に所有者が Lab で手動再現して文案と送信先を確認する順で進める（SPEC §3、ADR 0038）。Patchstack 向けの追加自動化は、報告が増えてから扱う。6 段を連続実行する自動 orchestrator はまだ無い。AI 操作役が各 skill と CLI を順に起動し、所有者に代わって中間記録を実行する。既存の段別 skill にある「所有者が打つ」は当時の運用であり、判断方法は変えない。skill 本文の版更新は別 PR で行う。AI の中間判断は `review decide --by ai` で記録し、`--minutes` を付けて人間の作業時間に混ぜない。`incomplete`、重複照合の `possible-match` / `unavailable`、scope の `ambiguous` は提出用の文案に進めず、理由と次の手を review に残す。`incomplete(observation)` に同じ検証内の攻撃要求との marker 一致、順序、別の被害者での Lab browser dialog 観測がある場合、`wbh-report` v7 は因果関係と既存コンテンツの確認待ちの内部プレビューだけを作れる。権限・対象範囲の拡張が必要なら所有者の明示承認を得る。
 
+最終目標は、公開中最新版の通常利用構成で所有者が手動再現し、同じSnapshotでの `match`、重複・Wordfence scopeの確認、証拠付き英語報告書とFill-Only JSONが揃ったFindingを最終査読へ渡すこと。canary不着だけでは候補を落とさない。Harnessの判定器は捕捉したHTTP・ブラウザ観測・digestの整合性を守り、`runtime-confirmed` は引き続きnonce付きcanaryの回収だけで出す。現行CLIでは `incomplete` から正式な文案・Candidateへ進む手動再現basisは未実装で、上の内部プレビューは提出準備完了に数えない。有効な手順で `mismatch` なら提出を止め、環境・手順・観測不足なら `incomplete` / `defer` と次の手を残す。
+
 | 順 | 誰が | 何を |
 | --- | --- | --- |
 | 0 | AI 操作役 | 検証前に `wbh-screen` v4（段 1、ADR 0038）で `not-verified` / `incomplete` と旧 `reject` を Wordfence の明示除外に照らし、`検証へ` / `明示除外` に分ける。規則の条件句を実測していないもの、根拠不足、資料欠落、近接する公開修正との関係が不明なものは、未解決事項を付けて `検証へ` とする。ミラーの件数や鮮度は前段の停止条件にしない。結果は Private Evidence の報告と個別メモに残し、台帳の技術判定や `reject` に変換しない。`検証へ` の群代表を名指し `verify next --config <path> --campaign <id> --finding <id> --handoff <dir>` で通す。旧版の `reject` が新基準では `検証へ` なら、AI 操作役が `review decide --campaign <id> --finding <id> --decision defer --reason screen-v4-reassessment --by ai` を追記し、通常の検証列への復帰を確認する。Lab の前提不足は検証課題として残す |
@@ -217,6 +219,8 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 ```
 
 収益の式は「対象数 × 当たり率 × in-scope率 × 平均報奨 − 月費用」。funnelの各段がこの各項に対応する。
+
+提出準備の進捗は、同じ最新版Snapshotの手動再現 `match`、重複・scopeの確認、根拠付き英語報告書とFill-Only JSON、最終査読の準備が揃ったFinding件数で見る。`runtime-confirmed` 件数は判定器の到達度として残し、提出完了の代理指標にしない。既存の `ledger funnel` の集計は変えない。
 
 旧方式の `incomplete(depth)` は件数があるときだけ表示する。`by Lab` は attached Lab の履歴集計があるときだけ表示し、現在の表示でも `verification Lab failed` は省かない。旧比較の `by arm` も記録があれば表示する。台帳の読取と集計は変えない。
 
