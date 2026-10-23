@@ -11,7 +11,7 @@
    - 新しい Snapshot では派生 Finding ID が作られ、CLI の `as <findingId>` に出る。同じ Snapshot なら元 ID のままになる。結果は `basis: latest-version` 付きの検証として台帳に残る。scope 評価が「最新版で成立」とみなすのは、この検証が `runtime-confirmed` または `reproduced` のときだけ。
    - 元 Finding の暫定 `accept` と重複結果は派生 ID に継承されない。以後は出力された ID を使い、最新版の証拠でレビュー列の判断をやり直す。元 Finding の文案は、派生 ID ができた時点で承認できない。
 2. 出力された Finding ID で `review export`、`wbh-review`、`wbh-dedupe` を再実行する。受理案と重複 `no-match` が揃ったら同じ ID に AI の暫定 `accept` を記録し、`review scope` と `wbh-destination` を行う。`src/profiles/wordpress/policy/programme-scope.md` の観測日と Wordfence の公式規則を照合し、差分や矛盾があれば方針を更新する。scope が `ambiguous`、重複が `unavailable` / `possible-match` なら暫定文案には進めない。照合の記録は下の「重複照合の記録」に従う。
-3. 今回の Wordfence 向け `wbh-report` は、出力された Finding ID に判定器が `runtime-confirmed` とした証拠から、英語 Markdown の暫定文案、`wordfence-fill-only/2` のフォーム入力用 JSON、添付一覧、`submission-package/v1` manifest を Git 外の Private Evidence に作る。Markdown に JSON の digest を結び付け、同じ ID の `review draft --programme wordfence --prepared-by ai` は文案版の digest を記録する。Review API は `reproduced` も人間の手動再現前に暫定 draft として保存できるが、今回の Wordfence skill は対象にしない。暫定文案には未観測の手順や結果を補わない。
+3. 今回の Wordfence 向け `wbh-report` は、出力された Finding ID に判定器が `runtime-confirmed` とした証拠から、英語 Markdown の暫定文案、`wordfence-fill-only/3` のフォーム入力用 JSON、添付一覧、`submission-package/v1` manifest を Git 外の Private Evidence に作る。Markdown に JSON の digest を結び付け、同じ ID の `review draft --programme wordfence --prepared-by ai` は文案版の digest を記録する。Review API は `reproduced` も人間の手動再現前に暫定 draft として保存できるが、今回の Wordfence skill は対象にしない。暫定文案には未観測の手順や結果を補わない。
 
 その後、人間は次を行う。
 

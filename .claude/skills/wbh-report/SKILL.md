@@ -3,9 +3,9 @@ name: wbh-report
 description: 実行時確認の証拠がある Finding について、Wordfence 向けの英語の暫定報告書、フォーム入力用 JSON、添付の一覧を Private Evidence に作り、review draft で digest を記録する。人間の手動再現と査読はその後に行う。送信はしない。
 ---
 
-# wbh-report v5
+# wbh-report v6
 
-Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Finding から、人間が手動再現する前に**暫定版**を作る。旧経路の `reproduced` は、この Wordfence 主経路には入れない。暫定版とフォーム入力用 JSON は、手動再現済み・提出可能と主張しない。人間が最後に Lab で再現し、報告書と JSON を査読・修正してから、別の版として記録する。Patchstack 向けの報告作成条件と Markdown の形は v3 のままにする。Patchstack も承認前には、人間が査読した最終文案を別 revision として保存し、その後に人間の `accept` を記録する。提出先は段 5（wbh-destination、#438）の非公開メモで決まる。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版の v1〜v4 は `versions/` に残す。
+Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Finding から、人間が手動再現する前に**暫定版**を作る。旧経路の `reproduced` は、この Wordfence 主経路には入れない。暫定版とフォーム入力用 JSON は、手動再現済み・提出可能と主張しない。人間が最後に Lab で再現し、報告書と JSON を査読・修正してから、別の版として記録する。Patchstack 向けの報告作成条件と Markdown の形は v3 のままにする。Patchstack も承認前には、人間が査読した最終文案を別 revision として保存し、その後に人間の `accept` を記録する。提出先は段 5（wbh-destination、#438）の非公開メモで決まる。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版の v1〜v5 は `versions/` に残す。
 
 ## 読む入力
 
@@ -113,7 +113,7 @@ Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Find
    - 長い項目の値は、対応する節の本文と同じ文にする。
    - 人間が答える項目は、見出しだけを置いて本文を空にする（Wordfence のフォームの写し「skill は下書きにその欄を空で用意する」）。
    - 写しに選択肢が無い選択の項目には、skill が案を書く。人間は貼る前に live form の選択肢で確かめる。
-10. **Internal package binding**（Wordfence のみ）: 提出欄へは貼らない内部節として、同じ版の `wordfence-fill-only/2` JSON の Private Evidence 内相対 path と sha256、`submission-package/v1` manifest の相対 path を書く。暫定版では人間の手動再現・査読が未完了と明記し、最終版では実際の結果に更新する。JSON を作り直したら、この sha256 と Markdown の版も更新する。manifest は Markdown と JSON の sha256 を持つため、Markdown に manifest 自身の sha256 は埋めない。
+10. **Internal package binding**（Wordfence のみ）: 提出欄へは貼らない内部節として、同じ版の `wordfence-fill-only/3` JSON の Private Evidence 内相対 path と sha256、`submission-package/v1` manifest の相対 path を書く。暫定版では人間の手動再現・査読が未完了と明記し、最終版では実際の結果に更新する。JSON を作り直したら、この sha256 と Markdown の版も更新する。manifest は Markdown と JSON の sha256 を持つため、Markdown に manifest 自身の sha256 は埋めない。
 
 ## 提出フォームの項目
 
@@ -140,7 +140,8 @@ Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Find
 | Video Demonstration | | 任意。ファイル 1 つ、250 MiB まで | 録画が実在するときだけ人間が添付。無ければ空欄 |
 | Environment | * | PHP、WordPress、MySQL の版と、特別な設定 | Environment and configuration |
 | Certification | * | | 人間 |
-| AI use と、使った AI tool(s) | * | | 人間 |
+| AI use | * | Yes / No | 人間 |
+| What AI tool(s) did you use to generate this report or discover this vulnerability? | * | テキスト欄 | 初期テンプレート `OpenAI Codex and Claude Code`。人間が最終査読で実際に使ったツールに合わせて修正する |
 | Have you requested a CVE from another CNA for this vulnerability? | * | | 人間 |
 | Have you reported this to another vendor, other than the software vendor? | * | | 人間 |
 | 規約への同意 | * | | 人間 |
@@ -169,11 +170,11 @@ Wordfence 向けは、Harness の判定器が `runtime-confirmed` とした Find
 
 ## Wordfence のフォーム入力用 JSON
 
-Wordfence の暫定版には、Markdown と同じ Private Evidence に `wordfence-fill-only/2` JSON を別に書く。これは所有者の既存 Fill-Only Extension の入力である。拡張機能は `schema_version`、`fields` 配列、`human_verification` の存在を調べ、各 `fields[].key` をフォーム上の入力欄に対応付けて入力後に読み戻す。`human_verification.status` は表示するだけで入力を止めないため、**暫定 JSON を live form に読み込まない**。人間の再現・査読後の版だけを使う。拡張機能は Submit を実行しない。
+Wordfence の暫定版には、Markdown と同じ Private Evidence に `wordfence-fill-only/3` JSON を別に書く。これは所有者の Fill-Only Extension の入力である。契約の正本は `src/profiles/wordpress/policy/wordfence-fill-only-v3.md`。拡張機能は 16 項目の構造を入力前に検査し、各 `fields[].key` をフォーム上の入力欄に対応付けて入力後に読み戻す。`human_verification.status` が `pending` の暫定 JSON は確認表示までとし、フォームへ入力しない。人間の再現・査読後の `confirmed` 版だけを使う。拡張機能は Submit を実行しない。
 
-最上位は `schema_version: "wordfence-fill-only/2"`、`generated_at`、`target`、`fields`、`poc`、`human_verification`、`human_only` とする。`target` には `software_name`、`software_slug`、確認した `version` を入れる。`poc` の `markdown` は Markdown の Proof of Concept 節と同じ本文にする。`human_verification` は暫定版で `{ "status": "pending" }` とし、人間が行っていない確認日時・結果を入れない。`human_only` の `never_automate` は、開示の委任、Certification、AI 利用申告、CVE・他 vendor への報告、研究者 identity、規約同意、CAPTCHA、Submit を文字列の配列で列挙する。根拠の digest があれば `source` に置く。`report_style` は内部の版名として使え、拡張機能は読まない。
+最上位は `schema_version: "wordfence-fill-only/3"`、`generated_at`、`target`、`fields`、`poc`、`human_verification`、`human_only` とする。`target` には `software_name`、`software_slug`、確認した `version` を入れる。`poc` の `markdown` は Markdown の Proof of Concept 節と同じ本文にする。`human_verification` は暫定版で `{ "status": "pending" }` とし、人間が行っていない確認日時・結果を入れない。`human_only` の `never_automate` は、開示の委任、Certification、AI 利用の Yes/No、CVE・他 vendor への報告、研究者 identity、規約同意、CAPTCHA、Submit を文字列の配列で列挙する。AI tool(s) の名前は `fields` に入れる。根拠の digest があれば `source` に置く。`report_style` は内部の版名として使え、拡張機能は読まない。
 
-`fields` の各要素には `field_number`（表示順を示す整数）、`key`、`kind`、`required`（boolean）、`value` を入れる。`field_number` は拡張機能のエラー表示用であり、フォームとの対応は `key` で決まる。`choice` / `text` / `long-text` の `value` は文字列、`multi-text` は文字列の配列にする。次の 15 項目をこの順で置く。選択肢の実値は提出時の live form で人間が確かめ、暫定版の段階で存在しない選択肢を作らない。
+`fields` の各要素には `field_number`（自動入力項目の順を示す整数）、`key`、`kind`、`required`（boolean）、`value` を入れる。`field_number` は拡張機能のエラー表示用であり、フォームとの対応は `key` で決まる。`choice` / `text` / `long-text` の `value` は文字列、`multi-text` は文字列の配列にする。次の 16 項目をこの順で置く。選択肢の実値は提出時の live form で人間が確かめ、暫定版の段階で存在しない選択肢を作らない。`cwe` は `CWE-<番号>` とし、拡張機能はフォーム選択肢の番号と完全一致させる。`ai_tools` は初期テンプレート `OpenAI Codex and Claude Code` を入れる。人間が最終査読で実際に使ったツールを確認し、必要なら修正する。
 
 | `field_number` | `key` | `kind` | `required` | Markdown の値 |
 | --- | --- | --- | --- | --- |
@@ -192,10 +193,11 @@ Wordfence の暫定版には、Markdown と同じ Private Evidence に `wordfenc
 | 13 | `proof_of_concept_type` | `choice` | true | What is your Proof of Concept? の選択案 |
 | 14 | `proof_of_concept` | `long-text` | true | Proof of Concept の本文 |
 | 15 | `environment` | `long-text` | true | Environment and configuration の本文 |
+| 16 | `ai_tools` | `long-text` | true | What AI tool(s) did you use to generate this report or discover this vulnerability? の値 |
 
-人間が答える欄は `fields` に入れない。任意の `affected_version_from` も、確認した下限が無ければ入れない。必須の値を実証できない場合は仮の値で JSON を完成させず、報告書の暫定版と非公開の不足一覧を残して JSON / manifest / `review draft` の記録を止める。
+人間が答える欄は `fields` に入れない。v3 は `<=` と確認した上限の版だけを入力し、`affected_version_from` は `fields` に入れない。必須の値を実証できない場合は仮の値で JSON を完成させず、報告書の暫定版と非公開の不足一覧を残して JSON / manifest / `review draft` の記録を止める。
 
-JSON を出す場合は、フォーム用の文字列と Markdown の対応する節が同じであること、15 個の `key` が重複なくそろうこと、`multi-text` だけが配列であること、`human_verification.status` が `pending` であることを機械的に確認する。選択肢の live form との一致は、提出前の人間の査読で確認する。
+JSON を出す場合は、フォーム用の文字列と Markdown の対応する節が同じであること、16 個の `key` が重複なくそろうこと、`ai_tools` に初期テンプレートが入っていること、`multi-text` だけが配列であること、`human_verification.status` が `pending` であることを機械的に確認する。選択肢の live form との一致と AI tool(s) の実際の利用状況は、提出前の人間の査読で確認する。
 
 ## Lab の記録の使い道
 
@@ -212,7 +214,7 @@ JSON を出す場合は、フォーム用の文字列と Markdown の対応す�
 ## 出力と記録
 
 1. 報告書 1 本を Markdown で、`privateEvidence.directory` の直下に書く。このディレクトリは Finding ごとに分かれていない（提出先メモと同じ）。Wordfence 向けは `report-<campaign>-<Finding>-r<revision>.md` とし、版ごとに別ファイルにして以前の版を上書きしない。添付の写しは `report-<campaign>-<Finding>-r<revision>/` に置く。Patchstack 向けは v3 の `report-<campaign>-<Finding>.md`、添付は `report-<campaign>-<Finding>/` のままとし、ZIP もそこに作る。束ねた報告書には、書き始めた Finding の ID を使う。Git には書かない。一時的にも repo の中に作らない。
-2. Wordfence 向けは、同じ版の `report-<campaign>-<Finding>-r<revision>.wordfence-fill.json` を書く。必須の `fields[].value` を根拠で満たせないときは JSON を出さず、不足を Private Evidence の査読チェックに記録して止める。JSON ができたら、その相対 path と sha256 を Markdown の `Internal package binding` に入れる。続いて `report-<campaign>-<Finding>-r<revision>.submission-package.json` を書き、`schema_version: "submission-package/v1"`、一意の `id`、`created_at`、`report_group_id`（Wordfence は Finding ID）、`program: "wordfence"`、`report`、`fill_json`、`attachments`、`human_only_remaining` を入れる。`report` と `fill_json` はそれぞれ Private Evidence 内の相対 `path`、`media_type`、`bytes`、`sha256` の object、`attachments` は同じ形の object の配列にする。`human_only_remaining` には手動再現、査読、開示・Certification・AI 利用等の人間専用欄、外部承認、送信を残す。manifest は Markdown の sha256 を持ち、Markdown は JSON の sha256 と manifest の path を持つ。両方の digest が実ファイルと一致することを確かめる。
+2. Wordfence 向けは、同じ版の `report-<campaign>-<Finding>-r<revision>.wordfence-fill.json` を書く。必須の `fields[].value` を根拠で満たせないときは JSON を出さず、不足を Private Evidence の査読チェックに記録して止める。JSON ができたら、その相対 path と sha256 を Markdown の `Internal package binding` に入れる。続いて `report-<campaign>-<Finding>-r<revision>.submission-package.json` を書き、`schema_version: "submission-package/v1"`、一意の `id`、`created_at`、`report_group_id`（Wordfence は Finding ID）、`program: "wordfence"`、`report`、`fill_json`、`attachments`、`human_only_remaining` を入れる。`report` と `fill_json` はそれぞれ Private Evidence 内の相対 `path`、`media_type`、`bytes`、`sha256` の object、`attachments` は同じ形の object の配列にする。`human_only_remaining` には手動再現、査読、開示・Certification・AI 利用の Yes/No などの人間専用欄、外部承認、送信を残す。manifest は Markdown の sha256 を持ち、Markdown は JSON の sha256 と manifest の path を持つ。両方の digest が実ファイルと一致することを確かめる。
 3. 書き終えたら、次を自分で数えて確かめる。
    - Description の語数（前提の文を除く）と、Impact Statement の字数。
    - 提出欄に placeholder が残っていないか、版の範囲が検証した版に収まっているか。人間専用欄は空にする。
@@ -223,14 +225,14 @@ JSON を出す場合は、フォーム用の文字列と Markdown の対応す�
    - WP-CLI やサーバー上だけの手順が無いか。
    - Attachments の各行のファイルが実在し、sha256 が一致し、外部リンクで代えていないか。Wordfence 向けは録画があれば 1 本で 250 MiB 以内か。Patchstack 向けは ZIP が 5 つ以内で、合計 100 MB 以内か。
    - Form fields に写しの項目がすべてあるか。長い項目の値が対応する節と同じ文か。字数が写しの上限に収まっているか。人間が答える項目が空か。
-   - Wordfence 向けは、Markdown の `Internal package binding` と JSON と manifest の path / sha256 が一致し、15 個の入力項目の値が Form fields と一致するか。`human_verification.status` が暫定版では `pending` か。JSON に人間専用の欄や人間の確認済みという主張が無いか。
+   - Wordfence 向けは、Markdown の `Internal package binding` と JSON と manifest の path / sha256 が一致し、16 個の入力項目の値が Form fields と一致するか。`human_verification.status` が暫定版では `pending` か。`ai_tools` が初期テンプレートか。JSON に人間専用の欄や人間の確認済みという主張が無いか。
 4. `harness review draft --campaign <id> --finding <id> --programme <patchstack|wordfence> --file <path> --prepared-by ai` で Markdown の digest を記録する。Wordfence の暫定 Markdown は JSON の sha256 を含むので、承認対象の draft revision はフォーム入力値にも結び付く。束ねた Patchstack 報告書は、含めた Finding ごとに同じファイルで記録する。
 5. Wordfence の人間の手動再現後は、実際の手順・Environment・画面と report / JSON の値を人間が照合し、別 revision の Markdown、JSON、manifest を作る。人間は JSON と manifest の sha256 を**実ファイルから再計算**し、Markdown の `Internal package binding`、manifest の `report` / `fill_json` / `attachments` と一致することも確認する。`human_verification.status` は人間が確認した結果にだけ更新する。人間は `review decide --reproduced match`、最終 Markdown の `review draft --prepared-by human`、`review decide --decision accept`、正確な文案版と送信先に対する `review authorize` をこの順で行う。Patchstack は v3 の条件に従って手動再現の `match` と報告作成前の `accept` を確かめてから Markdown を作る。その後、承認前に人間が同じ文案を査読して `review draft --prepared-by human` で最終 revision を保存し、さらに人間の `review decide --decision accept` を記録する。Patchstack 用の JSON や追加の自動化は作らない。この skill は AI の文案記録までを行い、後の人間の判断や承認を代行しない。
 6. 録画は、実在するものだけを添付の一覧に入れる。このスキルは録画を起動しない。
 
 ## しないこと
 
-- 送信しない。フォームを開かない。Submit を自動化しない。提出は所有者が自分の拡張機能で行う（ADR 0038）。暫定 JSON を live form に読み込まない。上の表で「人間」と書いた項目、Other Details の最終文、CAPTCHA、最終確認は人間が行う。AI の関与は正確に開示する。
+- 送信しない。フォームを開かない。Submit を自動化しない。提出は所有者が自分の拡張機能で行う（ADR 0038）。`pending` の暫定 JSON は拡張機能の確認表示までにとどめ、フォームへ入力しない。上の表で「人間」と書いた項目、Other Details の最終文、CAPTCHA、最終確認は人間が行う。AI の関与は正確に開示する。
 - `submitted` に進めない。`review decide --reproduced`、最終版の `review draft --prepared-by human`、`review decide --decision accept`、`review authorize`、`review submitted` は人間が実行する。
 - ペイロード、資格情報、HTTP 本文、報告書の本文、過去の提出の中身を会話に貼らない。最終応答はパス、digest、状態だけにする。
 - 束ねるのは、Patchstack 向けの同じ種別の Finding だけである。種別の違う Finding や、提出先の違う Finding を 1 本にしない。
