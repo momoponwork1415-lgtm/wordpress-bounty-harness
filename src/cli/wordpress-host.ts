@@ -43,6 +43,7 @@ import {
 } from "../profiles/wordpress/acquisition/index.js";
 import { mountedWordPressSourcePack } from "../profiles/wordpress/acquisition/mounted-source-pack.js";
 import { openWordPressLab } from "../profiles/wordpress/lab/index.js";
+import { observedReviewLabPackage } from "../profiles/wordpress/lab/observed-review-lab.js";
 import { openWordPressReviewLab } from "../profiles/wordpress/lab/review-lab.js";
 import { loadWordpressScopePolicy } from "../profiles/wordpress/scope-policy.js";
 import {
@@ -655,6 +656,12 @@ export async function createWordPressHostProfile(options: {
           }),
         }),
         browserImage: host.images.browser,
+      }),
+    reviewLabPackage: (state, ref) =>
+      observedReviewLabPackage({
+        ledger: state.ledger,
+        store: state.store,
+        ref,
       }),
     /** One WordPress.org observation for `review export`; failures are null. */
     async latestVersion(state, targetId) {

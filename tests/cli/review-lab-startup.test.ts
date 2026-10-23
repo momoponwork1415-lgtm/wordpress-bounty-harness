@@ -117,7 +117,7 @@ describe("review Lab foreground signals", () => {
         {
           stdout(line) {
             lines.push(line);
-            if (line.startsWith("Run the package")) presented();
+            if (line.startsWith("Run the private")) presented();
           },
           stderr: () => undefined,
         },
