@@ -17,7 +17,9 @@
 2. 出力された Finding ID で `review export`、`wbh-review`、`wbh-dedupe` を再実行する。受理案と重複 `no-match` が揃ったら同じ ID に AI の暫定 `accept` を記録し、`review scope` と `wbh-destination` を行う。`src/profiles/wordpress/policy/programme-scope.md` の観測日と Wordfence の公式規則を照合し、差分や矛盾があれば方針を更新する。scope が `ambiguous`、重複が `unavailable` / `possible-match` なら暫定文案には進めない。照合の記録は下の「重複照合の記録」に従う。
 3. 今回の Wordfence 向け `wbh-report` は、出力された Finding ID に判定器が `runtime-confirmed` とした証拠から、英語 Markdown の暫定文案、`wordfence-fill-only/3` のフォーム入力用 JSON、添付一覧、`submission-package/v1` manifest を Git 外の Private Evidence に作る。Markdown に JSON の digest を結び付け、同じ ID の `review draft --programme wordfence --prepared-by ai` は文案版の digest を記録する。Review API は `reproduced` も人間の手動再現前に暫定 draft として保存できるが、今回の Wordfence skill は対象にしない。暫定文案には未観測の手順や結果を補わない。
 
-`incomplete(observation)` の内部プレビューはこの 3 の正式な暫定文案に含めない。観測 signal と Snapshot / Lab Setup、攻撃要求との marker 一致と順序を照合した英語 Markdown、必須値が揃う場合だけ `pending` の Fill-Only JSON を Private Evidence に作る。因果関係と既存コンテンツ由来かどうかは人間の確認待ちとする。`review draft` と manifest は作らず、scope assessment や人間の手動再現が済んだと扱わない。現在の `lab up --for-review`、人間の再現記録、提出承認は確認済み再現パッケージが必要であり、このプレビューだけでは進めない。
+`incomplete(observation)` の内部プレビューはこの 3 の正式な暫定文案に含めない。観測 signal と Snapshot / Lab Setup、攻撃要求との marker 一致と順序を照合した英語 Markdown、必須値が揃う場合だけ `pending` の Fill-Only JSON を Private Evidence に作れる。因果関係と既存コンテンツ由来かどうかは人間の確認待ちとする。`review draft` と manifest は作らず、scope assessment や提出用の人間の再現が済んだと扱わない。captured numeric-dialog の現在の `incomplete(observation)` は `lab up --for-review` で新しい Lab を開き、`review observe` で手動観測を別に記録できる。
+
+`review observe --by` は本人認証ではなく人間の記名申告である。指定された証拠ファイルは観測資料として保存するが、因果関係の自動証明にも `runtime-confirmed` にもならず、提出承認の条件を満たさない。
 
 その後、人間は次を行う。
 

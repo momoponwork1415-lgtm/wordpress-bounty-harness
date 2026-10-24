@@ -5,9 +5,11 @@ import { z } from "zod";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
-import { digest, refSchema, type ReviewRef } from "./records.js";
+import { digest, id, refSchema, type ReviewRef } from "./records.js";
 
 export const MANUAL_LAB_RECEIPT_FILE = "manual-lab-session.json";
+export const MANUAL_OBSERVATION_EVIDENCE_FILE =
+  "manual-observation-evidence.bin";
 
 const receiptSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -143,4 +145,153 @@ export async function recordManualObservationLabReady(input: {
   if (appended.status !== "appended")
     throw new Error("Manual Lab session ledger conflict");
   return sessionReceiptDigest;
+}
+
+type ReadyEvent = Extract<
+  LedgerEventV1,
+  { type: "manual-observation-lab-ready" }
+>;
+type ResultEvent = Extract<
+  LedgerEventV1,
+  { type: "manual-observation-recorded" }
+>;
+
+function latestReady(
+  ledger: Ledger,
+  ref: ReviewRef,
+  verification: FinishedVerification,
+): { event: ReadyEvent; sequence: number } | null {
+  const verificationSequence = ledger
+    .readAll({
+      campaignId: ref.campaignId,
+      findingId: ref.findingId,
+      type: "verification-finished",
+    })
+    .at(-1)?.sequence;
+  if (verificationSequence === undefined) return null;
+  return (
+    (ledger
+      .readAll({
+        campaignId: ref.campaignId,
+        findingId: ref.findingId,
+        type: "manual-observation-lab-ready",
+      })
+      .filter(
+        ({ event, sequence }) =>
+          event.type === "manual-observation-lab-ready" &&
+          sequence > verificationSequence &&
+          event.verificationId === ref.verificationId &&
+          event.snapshotDigest === ref.snapshotDigest &&
+          event.labSetupDigest === verification.labSetupDigest,
+      )
+      .at(-1) as { event: ReadyEvent; sequence: number } | undefined) ?? null
+  );
+}
+
+function matchingReady(
+  ledger: Ledger,
+  ref: ReviewRef,
+  verification: FinishedVerification,
+  packageDigest: string,
+  receiptDigest: string,
+): { event: ReadyEvent; sequence: number } | null {
+  const latest = latestReady(ledger, ref, verification);
+  return latest?.event.packageDigest === packageDigest &&
+    latest.event.sessionReceiptDigest === receiptDigest
+    ? latest
+    : null;
+}
+
+/** Only a named human may record a result; the judge verdict remains incomplete. */
+export async function recordManualObservation(input: {
+  readonly ledger: Ledger;
+  readonly store: PrivateArtifactStore;
+  readonly ref: ReviewRef;
+  readonly packageDigest: string;
+  readonly sessionReceiptDigest: string;
+  readonly evidence: Uint8Array;
+  readonly result: "match" | "mismatch" | "unavailable";
+  readonly recordedBy: string;
+  readonly clock?: () => Date;
+}): Promise<ResultEvent> {
+  const ref = refSchema.parse(input.ref);
+  const packageDigest = digest.parse(input.packageDigest);
+  const receiptDigest = digest.parse(input.sessionReceiptDigest);
+  const result = z
+    .enum(["match", "mismatch", "unavailable"])
+    .parse(input.result);
+  const recordedBy = id.parse(input.recordedBy.trim());
+  if (
+    ["ai", "agent", "automation", "system"].includes(recordedBy.toLowerCase())
+  )
+    throw new Error("A named human actor is required");
+  if (input.evidence.byteLength === 0 || input.evidence.byteLength > 10_000_000)
+    throw new Error("Manual observation evidence must be 1-10000000 bytes");
+  const verification = currentObservationVerification(input.ledger, ref);
+  if (verification === null)
+    throw new Error("A current incomplete observation is required");
+  if (
+    verification.evidenceCapture !== "harness-captured" ||
+    !verification.artifacts.some(
+      (artifact) =>
+        artifact.kind === "review-lab-reconstruction" &&
+        artifact.digest === packageDigest,
+    )
+  )
+    throw new Error("A matching captured review Lab package is required");
+  const ready = matchingReady(
+    input.ledger,
+    ref,
+    verification,
+    packageDigest,
+    receiptDigest,
+  );
+  if (ready === null)
+    throw new Error("A matching ready manual Lab receipt is required");
+  const stored = await input.store.readJson(
+    receiptDigest,
+    MANUAL_LAB_RECEIPT_FILE,
+    receiptSchema,
+    10_000,
+  );
+  if (
+    stored.status !== "resolved" ||
+    stored.value.ref.campaignId !== ref.campaignId ||
+    stored.value.ref.findingId !== ref.findingId ||
+    stored.value.ref.verificationId !== ref.verificationId ||
+    stored.value.ref.snapshotDigest !== ref.snapshotDigest ||
+    stored.value.labSetupDigest !== verification.labSetupDigest ||
+    stored.value.packageDigest !== packageDigest ||
+    stored.value.readyAt !== ready.event.occurredAt
+  )
+    throw new Error(
+      "Manual Lab receipt content does not match the current attempt",
+    );
+  const evidenceDigest = await input.store.putFiles({
+    [MANUAL_OBSERVATION_EVIDENCE_FILE]: input.evidence,
+  });
+  const event: ResultEvent = {
+    schemaVersion: 1,
+    identity: `manual-observation:${randomUUID()}`,
+    campaignId: ref.campaignId,
+    findingId: ref.findingId,
+    verificationId: ref.verificationId,
+    snapshotDigest: ref.snapshotDigest,
+    labSetupDigest: verification.labSetupDigest,
+    packageDigest,
+    sessionReceiptDigest: receiptDigest,
+    evidenceDigest,
+    result,
+    recordedBy,
+    occurredAt: (input.clock ?? (() => new Date()))().toISOString(),
+    type: "manual-observation-recorded",
+    artifacts: [
+      { kind: "manual-lab-session", digest: receiptDigest },
+      { kind: "manual-observation-evidence", digest: evidenceDigest },
+    ],
+  };
+  const appended = await input.ledger.append(event);
+  if (appended.status !== "appended")
+    throw new Error("Manual observation ledger conflict");
+  return event;
 }

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -16,6 +16,7 @@ import {
 import {
   exportReviewBundle,
   MANUAL_LAB_RECEIPT_FILE,
+  recordManualObservation,
   recordManualObservationLabReady,
   type DuplicateCheck,
   type DuplicateResult,
@@ -1157,6 +1158,63 @@ const COMMANDS: readonly Command[] = [
             }),
       });
       io.stdout(canonicalJson(bundle));
+      return 0;
+    },
+  }),
+  command({
+    name: "review observe",
+    required: ["campaign", "finding", "receipt", "result", "evidence", "by"],
+    usage: [
+      "review observe --campaign <id> --finding <id> --receipt <digest> --result match|mismatch|unavailable --evidence <path> --by <human>",
+    ],
+    options: {
+      campaign: STR,
+      finding: STR,
+      receipt: STR,
+      result: STR,
+      evidence: STR,
+      by: STR,
+    },
+    handler: async ({ values, state, environment, io }) => {
+      const item = queued(environment.profile.review(state), values);
+      if (item.status !== "incomplete" || item.reason !== "observation")
+        throw new UsageError("A current incomplete observation is required");
+      const manual = await environment.profile.reviewLabPackage?.(
+        state,
+        item.ref,
+      );
+      if (manual === null || manual === undefined)
+        throw new UsageError("A captured observation package is required");
+      const result = choice(required(values.result, "result"), "result", [
+        "match",
+        "mismatch",
+        "unavailable",
+      ] as const);
+      const actor = required(values.by, "by");
+      if (isNonHumanReviewer(actor))
+        throw new UsageError("A named human actor is required");
+      const evidencePath = resolve(required(values.evidence, "evidence"));
+      const evidenceStat = await lstat(evidencePath);
+      if (
+        !evidenceStat.isFile() ||
+        evidenceStat.size === 0 ||
+        evidenceStat.size > 10_000_000
+      )
+        throw new UsageError("--evidence must be a 1-10000000 byte file");
+      const recorded = await recordManualObservation({
+        ledger: state.ledger,
+        store: state.store,
+        ref: item.ref,
+        packageDigest: manual.packageDigest,
+        sessionReceiptDigest: required(values.receipt, "receipt"),
+        evidence: await readFile(evidencePath),
+        result,
+        recordedBy: actor,
+        clock: state.clock,
+      });
+      io.stdout(
+        `manual observation ${recorded.result} recorded for finding ${item.ref.findingId} (evidence ${recorded.evidenceDigest})`,
+      );
       return 0;
     },
   }),
