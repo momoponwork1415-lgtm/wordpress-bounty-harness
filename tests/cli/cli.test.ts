@@ -2123,7 +2123,7 @@ describe("harness CLI vertical slice", () => {
     });
   });
 
-  it("records a reject before verification, lists it with its reason, and keeps it out of verify next (#436)", async () => {
+  it("hides a current reject from the normal review list, while preserving audit and later review (#436)", async () => {
     const { run, configPath, ledger, root } = await harness({
       entryPoints: true,
       config: { discovery: { lab: "none" } },
@@ -2183,9 +2183,16 @@ describe("harness CLI vertical slice", () => {
     expect(decided.stdout).toContain(
       `recorded reject (out-of-scope) for finding ${rejected}`,
     );
-    expect((await run("review", ...campaign)).stdout).toContain(
-      "decision: reject (out-of-scope)",
+    const visible = await run("review", ...campaign);
+    expect(visible.stdout).not.toContain(rejected);
+    expect(visible.stdout).toContain(
+      `visible findings: ${findings.length - 1}`,
     );
+    expect(visible.stdout).not.toContain("unverified:");
+    const audit = await run("review", ...campaign, "--all");
+    expect(audit.stdout).toContain(rejected);
+    expect(audit.stdout).toContain("decision: reject (out-of-scope)");
+    expect(audit.stdout).toContain(`unverified: ${findings.length}`);
     // The handoff queue takes every other Finding and never the rejected one.
     const taken: string[] = [];
     for (const index of findings.keys()) {
@@ -2223,6 +2230,96 @@ describe("harness CLI vertical slice", () => {
       rejected,
     );
     expect(named.stdout).toContain(`verified finding ${rejected}`);
+    // The old unverified reject does not hide a newer verification attempt.
+    const afterAttempt = await run("review", ...campaign);
+    expect(afterAttempt.stdout).toContain(`finding ${rejected}`);
+    const rejectAgain = await run(
+      "review",
+      "decide",
+      ...campaign,
+      "--finding",
+      rejected,
+      "--decision",
+      "reject",
+      "--reason",
+      "out-of-scope",
+    );
+    expect(rejectAgain.code).toBe(0);
+    expect((await run("review", ...campaign)).stdout).not.toContain(rejected);
+    const restore = await run(
+      "review",
+      "decide",
+      ...campaign,
+      "--finding",
+      rejected,
+      "--decision",
+      "defer",
+      "--reason",
+      "new-evidence",
+    );
+    expect(restore.code).toBe(0);
+    expect((await run("review", ...campaign)).stdout).toContain(
+      `finding ${rejected}`,
+    );
+  });
+
+  it("hides legacy recorded impacts outside the current WordPress programme boundary only in the normal list", async () => {
+    const { run, configPath, ledger } = await harness({
+      entryPoints: true,
+      config: { discovery: { lab: "none" } },
+    });
+    const campaignId = "campaign-legacy-impact";
+    await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      campaignId,
+      "--config",
+      configPath,
+    );
+    const existing = ledger()
+      .read({ campaignId, type: "finding-recorded" })
+      .find(({ event }) => event.type === "finding-recorded")?.event;
+    if (existing?.type !== "finding-recorded")
+      throw new Error("missing Finding");
+    const findingId = "legacy-excluded-impact";
+    const groupKey = sha("9");
+    await ledger().append({
+      schemaVersion: 1,
+      type: "finding-recorded",
+      identity: findingId,
+      campaignId,
+      findingId,
+      snapshotDigest: existing.snapshotDigest,
+      occurredAt: now,
+      runId: existing.runId,
+      category: "other",
+      artifacts: [],
+      group: { id: findingId, keys: [groupKey] },
+    });
+    const visibleFindingId = "legacy-visible-member";
+    await ledger().append({
+      schemaVersion: 1,
+      type: "finding-recorded",
+      identity: visibleFindingId,
+      campaignId,
+      findingId: visibleFindingId,
+      snapshotDigest: existing.snapshotDigest,
+      occurredAt: now,
+      runId: existing.runId,
+      category: "stored-xss",
+      artifacts: [],
+      group: { id: findingId, keys: [groupKey] },
+    });
+    const visible = await run("review", "--campaign", campaignId);
+    expect(visible.stdout).not.toContain(findingId);
+    expect(visible.stdout).toContain(`finding ${visibleFindingId}  stored-xss`);
+    expect(visible.stdout).toContain("group 1 visible finding(s)");
+    const audit = await run("review", "--campaign", campaignId, "--all");
+    expect(audit.stdout).toContain(`finding ${findingId}  other`);
+    expect(audit.stdout).toContain(`group ${findingId}  2 finding(s)`);
+    expect(audit.stdout).toContain("unverified:");
   });
 
   it("leaves every accepted Finding to the handoff queue: the runner verifies none, and verify next takes them in order with --handoff only (#423)", async () => {

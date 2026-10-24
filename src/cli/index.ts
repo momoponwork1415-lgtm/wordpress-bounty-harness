@@ -157,6 +157,8 @@ export type ResumeCampaignRunSummary =
 /** A profile composition: everything target-specific the commands need. */
 export interface CliProfile {
   review(state: CliState): Review;
+  /** Current programme impact boundary for displaying legacy recorded Findings. */
+  isProgrammeImpact?(category: string): boolean;
   /** A profile may provide a fresh, foreground Lab for human reproduction. */
   reviewLab?(
     state: CliState,
@@ -520,8 +522,15 @@ export function formatQueue(
   duplicates: ReadonlyMap<ReviewItem, DuplicateCheck | null> = new Map(),
   /** Each decision's reason code, so a Finding dropped before its Lab shows why (#436). */
   reasons: ReadonlyMap<ReviewItem, string> = new Map(),
+  summary: "full" | "visible" = "full",
 ): string[] {
   const lines: string[] = [];
+  const visibleGroupSizes = new Map<string, number>();
+  if (summary === "visible")
+    for (const item of queue.items) {
+      const key = `${item.ref.campaignId}\u0000${item.group.id}`;
+      visibleGroupSizes.set(key, (visibleGroupSizes.get(key) ?? 0) + 1);
+    }
   for (const item of queue.items) {
     const head = `${item.status}  ${item.ref.campaignId}  finding ${item.ref.findingId}  ${item.category}`;
     const reason = reasons.get(item);
@@ -541,7 +550,10 @@ export function formatQueue(
     }`;
     const verification = `  verification ${item.ref.verificationId ?? "none"}  snapshot ${item.ref.snapshotDigest}`;
     // #424: the overlap group orders the queue; each Finding is still decided on its own.
-    const group = `  group ${item.group.id}  ${item.group.size} finding(s)${item.group.representative ? "  representative" : ""}`;
+    const group =
+      summary === "visible"
+        ? `  group ${visibleGroupSizes.get(`${item.ref.campaignId}\u0000${item.group.id}`)} visible finding(s)`
+        : `  group ${item.group.id}  ${item.group.size} finding(s)${item.group.representative ? "  representative" : ""}`;
     if (item.status === "contradicted")
       lines.push(
         head,
@@ -586,6 +598,11 @@ export function formatQueue(
         decision,
         duplicate,
       );
+  }
+  if (summary === "visible") {
+    if (queue.items.length === 0) lines.push("review queue is empty");
+    lines.push(`visible findings: ${queue.items.length}`);
+    return lines;
   }
   const counts = (byReason: Readonly<Record<string, number>>) =>
     Object.entries(byReason)
@@ -1073,22 +1090,37 @@ const COMMANDS: readonly Command[] = [
   command({
     name: "review",
     readOnly: true,
-    usage: ["review [--campaign <id>]"],
-    options: { campaign: STR },
+    usage: ["review [--campaign <id>] [--all]"],
+    options: { campaign: STR, all: BOOL },
     handler: async ({ values, state, environment, print }) => {
       const review = environment.profile.review(state);
       const queue = review.queue(
         values.campaign === undefined ? {} : { campaignId: values.campaign },
       );
+      // Keep the full Review queue for named decisions and exports. The normal
+      // list is only a projection of work that still needs the owner's attention.
+      const displayed =
+        values.all === true
+          ? queue
+          : {
+              ...queue,
+              items: queue.items.filter(
+                (item) =>
+                  item.decision !== "reject" &&
+                  (environment.profile.isProgrammeImpact?.(item.category) ??
+                    true),
+              ),
+            };
       const duplicates = new Map<ReviewItem, DuplicateCheck | null>();
-      for (const item of queue.items)
+      for (const item of displayed.items)
         duplicates.set(item, await review.duplicateOf(item.ref));
       print(
         formatQueue(
-          queue,
+          displayed,
           (digest) => state.store.contentPath(digest),
           duplicates,
-          await review.decisionReasons(queue.items),
+          await review.decisionReasons(displayed.items),
+          values.all === true ? "full" : "visible",
         ),
       );
       return 0;

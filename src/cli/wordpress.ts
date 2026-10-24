@@ -20,6 +20,7 @@ import {
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
 import { recordWordPressReport } from "../profiles/wordpress/discovery/candidate-admission.js";
+import { isWordPressProgrammeImpact } from "../profiles/wordpress/discovery/programme-impacts.js";
 import {
   admitWordPressFinding,
   readWordPressFinding,
@@ -1055,6 +1056,7 @@ export function createWordPressCliProfile(
   options: WordPressCliProfileOptions,
 ): CliProfile {
   return {
+    isProgrammeImpact: isWordPressProgrammeImpact,
     review: (state) =>
       new Review({
         ledger: state.ledger,

@@ -6,7 +6,9 @@
 
 現在の一覧と理由表示には、現在の検証 ID・Snapshot digest に対応する最後の判断を使う。後から古い検証への判断を追記しても、現在の表示を上書きしない。`review export` の判断は履歴上の最後の記録を保つため、現在の一覧とは異なる場合がある。単件の資料は台帳の参照で絞ってから読む。古い非標準 identity の scope 評価を ID で探すときだけ、互換性のため従来の全件読取りに戻る。
 
-`review --campaign <id>` は証拠付きの候補と、対象範囲内の `incomplete` を全件個別に表示する（#185、ADR 0031）。あわせて `incomplete` の最新 1 件を Finding ごとに、runner がまだ自動再試行する `retry candidates by reason` と、再試行が尽きて人間の手に渡る `incomplete by reason` に分けて数える。この分け方は runner（`src/cli/pipeline.ts`）と同じ関数 `shouldAutomaticallyRetryVerification`（`src/verification/retry-budget.ts`、ADR 0022）で決め、attempt は Lab Setup digest・Verifier prompt 版・理由が同じものだけを数える。`recipe`・`observation` は 3 回目、`provision`・`provider` は 2 回目から尽きた側に入る。`precondition` は scenario ID が変わったときだけ runner が再試行するが、review 列は Lab Setup を持たず変化を予測できないので常に尽きた側に数える。`evidence`・`cleanup`・`digest-mismatch`・`no-judge`・`sandbox` は 1 回目から尽きた側。再試行の実行そのものはこの列では行わない。
+`review --campaign <id>` の通常表示は、現在の検証・Snapshot に対する `reject` と、旧台帳で `finding-recorded` のまま残る現在の WordPress Programme Boundary 外の impact を隠す。通常表示の集計は表示件数だけとし、隠した Finding を含む内訳を出さない。`review --campaign <id> --all` は従来の全件と理由別集計を表示する。`finding-parked` は別の `review parked` で確認する。通常表示で隠した Finding も、ID を指定した `review export` と `review decide` で調査・再判断できる。`incomplete` だけでは隠さない。
+
+`--all` では `incomplete` の最新 1 件を Finding ごとに、runner がまだ自動再試行する `retry candidates by reason` と、再試行が尽きて人間の手に渡る `incomplete by reason` に分けて数える。この分け方は runner（`src/cli/pipeline.ts`）と同じ関数 `shouldAutomaticallyRetryVerification`（`src/verification/retry-budget.ts`、ADR 0022）で決め、attempt は Lab Setup digest・Verifier prompt 版・理由が同じものだけを数える。`recipe`・`observation` は 3 回目、`provision`・`provider` は 2 回目から尽きた側に入る。`precondition` は scenario ID が変わったときだけ runner が再試行するが、review 列は Lab Setup を持たず変化を予測できないので常に尽きた側に数える。`evidence`・`cleanup`・`digest-mismatch`・`no-judge`・`sandbox` は 1 回目から尽きた側。再試行の実行そのものはこの列では行わない。
 
 当面は Wordfence 向けに、AI 操作役が `review export --campaign <id> --finding <id>` の参照を読み、screen、skill による検証、重複照合、最新版での再検証、scope 評価、提出先選択、英語の暫定文案までを順に進める（SPEC §3、ADR 0038）。Patchstack 向けの追加自動化は報告が増えてから扱う。6 段を起動・引き継ぐ自動 orchestrator はまだ無い。AI 操作役は所有者に代わって中間記録を実行するが、各 skill の判断方法は変えない。旧運用を記す skill 本文の版更新は別 PR で行う。AI の中間判断は `review decide --by ai` として記録し、`--minutes` を付けて人間の作業時間に混ぜない。`incomplete` や根拠のない重複・scope 判定を提出可能な文案として扱わない。`incomplete(observation)` に攻撃要求との marker 一致と順序、別の被害者での Lab browser dialog 観測がある場合、`wbh-report` v7 は因果関係の確認待ちの内部プレビューだけを Private Evidence に作れる。各 skill と CLI の操作順は [OPERATIONS 第 3 節](../../docs/OPERATIONS.md)にある。
 
@@ -42,7 +44,7 @@ Claude Code の skill が読むのは `review export --campaign <id> --finding <
 - `review decide` は `not-verified` の項目にも記録できる。判断の記録の `ref` は検証 ID を持たず、`verificationStatus` は `not-verified` になる。`elapsedMs` は Finding の記録の時刻から数える。前からの記録はそのまま読める。`--reproduced` は付けられない。
 - 規則の写しに照らす検証前の Wordfence 候補選別は skill `wbh-screen` v3 が行い、Review は値を判断しない。`採用` / `非採用` は検証投資の判断であり、技術的な真偽や programme 全体の scope ではない。`非採用` から `--decision reject` を自動記録しない。旧 v2.x の `提出不可` に基づく既存の review decision は履歴として残す。
 - 最新の判断が `reject` の Finding は、handoff 列（`verify next`）に並ばない。`--finding` で名指ししたときだけ検証する。
-- `review --campaign <id>` の `decision:` の行は、記録が読めれば理由のコードも出す（例: `decision: reject (out-of-scope)`）。
+- `review --campaign <id> --all` の `decision:` の行は、記録が読めれば理由のコードも出す（例: `decision: reject (out-of-scope)`）。通常表示には現在の `reject` を載せない。
 
 ## 重複照合の記録（#442、ADR 0038 の段 4）
 
