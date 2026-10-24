@@ -33,6 +33,8 @@ scope 評価の事実は、判定器の観測条件、選定記録（`target-sel
 
 Claude Code の skill が読むのは `review export --campaign <id> --finding <id>` の JSON 1 本（`schema: review-export/v1`、`src/review/export.ts`）だけで、台帳の event schema には依存しない（ADR 0031）。中身は Finding の claim / attackerPosition / brokenProperty / impact、HTTP の method / path / status 行、反証メモ、検証 Lab の実行前後差分の要約、探索した版と台帳が知る最新版、install 数、Private Evidence の path。候補本文、payload、HTTP 本文、設定値は path と digest でだけ参照する。
 
+`review.humanReproduction` は現行の検証 ID・Snapshot・再現パッケージ digest に一致する最後の手動結果だけを示す。後続の検証試行や同じ系統の最新版 Finding ができた場合は `null` とし、古い手動結果は追記専用の台帳に残す。`minutes` はその手動結果の直後に作業時間が記録された場合だけ表示する。
+
 実行前後差分は `Verification` の `LabStateObserver` が Verifier の実行前後に取り、before / after / diff を Private Evidence に置いて `verification-finished` の `artifacts`（`lab-state-before` / `lab-state-after` / `lab-state-diff`）と `labStateDiff` に digest で残す。取得失敗は `labStateDiff: { status: "missing", reason }` として記録し、検証結果は変えない。差分は Verifier にも判定器にも渡さない。profile が差分ファイルを汎用の `StateDiffSummary`（settings / principals / tables）に要約して export に渡す。
 
 

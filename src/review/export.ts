@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
+import { isCurrentVerification } from "./current-verification.js";
 import { readDecisionHistory } from "./decision-history.js";
 import {
   DEDUPE_NOTE_FILE,
@@ -710,15 +711,51 @@ export async function exportReviewBundle(options: {
         .readAll({ campaignId, findingId: findingIdOf, type })
         .map(({ event }) => event),
     );
-  const reproduction = ofFinding("human-reproduction-recorded", [findingId]).at(
-    -1,
-  );
-  const reproduceMinutes = ofFinding("human-effort-recorded", [findingId])
-    .filter(
-      (event) =>
-        event.type === "human-effort-recorded" && event.action === "reproduce",
-    )
-    .at(-1);
+  const reproductions = ledger
+    .readAll({ campaignId, findingId, type: "human-reproduction-recorded" })
+    .flatMap(({ event, sequence }) =>
+      event.type === "human-reproduction-recorded" ? [{ event, sequence }] : [],
+    );
+  const currentPackageDigest =
+    verification?.result.status === "runtime-confirmed" ||
+    verification?.result.status === "reproduced"
+      ? verification.result.reproductionPackageDigest
+      : null;
+  const currentReproduction =
+    verification !== undefined &&
+    currentPackageDigest !== null &&
+    isCurrentVerification(ledger, {
+      campaignId,
+      findingId,
+      verificationId: verification.verificationId,
+      snapshotDigest: verification.snapshotDigest,
+    })
+      ? (reproductions
+          .filter(
+            ({ event }) =>
+              event.verificationId === verification.verificationId &&
+              event.snapshotDigest === verification.snapshotDigest &&
+              event.snapshotDigest === finding.snapshotDigest &&
+              event.reproductionPackageDigest === currentPackageDigest,
+          )
+          .at(-1) ?? null)
+      : null;
+  // Review writes effort immediately after its manual result. Older or
+  // unrelated effort cannot supply minutes for the current result.
+  const nextEvent =
+    currentReproduction === null
+      ? undefined
+      : ledger
+          .read({ afterSequence: currentReproduction.sequence, limit: 1 })
+          .at(0)?.event;
+  const reproduceMinutes =
+    nextEvent?.type === "human-effort-recorded" &&
+    nextEvent.campaignId === campaignId &&
+    nextEvent.findingId === findingId &&
+    nextEvent.snapshotDigest === finding.snapshotDigest &&
+    nextEvent.action === "reproduce"
+      ? nextEvent.minutes
+      : null;
   const derived = ledger
     .readAll({ type: "finding-recorded" })
     .map(({ event }) => event)
@@ -860,15 +897,12 @@ export async function exportReviewBundle(options: {
           ? null
           : duplicateView(decisionRecord.duplicate, contentPath),
       humanReproduction:
-        reproduction?.type !== "human-reproduction-recorded"
+        currentReproduction === null
           ? null
           : {
-              result: reproduction.result,
-              minutes:
-                reproduceMinutes?.type === "human-effort-recorded"
-                  ? reproduceMinutes.minutes
-                  : null,
-              recordedAt: reproduction.occurredAt,
+              result: currentReproduction.event.result,
+              minutes: reproduceMinutes,
+              recordedAt: currentReproduction.event.occurredAt,
             },
       latestReverification:
         reverification?.type !== "verification-finished"
