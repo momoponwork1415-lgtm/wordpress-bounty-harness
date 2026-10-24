@@ -15,6 +15,8 @@ import {
 } from "../ledger/index.js";
 import {
   exportReviewBundle,
+  MANUAL_LAB_RECEIPT_FILE,
+  recordManualObservationLabReady,
   type DuplicateCheck,
   type DuplicateResult,
   type HttpEvidenceReader,
@@ -670,6 +672,7 @@ export async function runForegroundReviewLab(
   launch: () => Promise<ReviewLabSession>,
   io: CliIo,
   signals: ReviewSignalSource = process,
+  onReady?: (session: ReviewLabSession) => Promise<void>,
 ): Promise<void> {
   let interrupted = false;
   let release: (() => void) | undefined;
@@ -692,6 +695,7 @@ export async function runForegroundReviewLab(
   try {
     const session = await launch();
     try {
+      if (!interrupted) await onReady?.(session);
       if (!interrupted) {
         io.stdout(
           `review Lab ready on ${session.endpoint} (network ${session.networkName}, recorder ${session.recorderIp})`,
@@ -1748,6 +1752,10 @@ const COMMANDS: readonly Command[] = [
       if (launch === undefined)
         throw new UsageError("This profile has no review Lab provisioner");
       const item = queued(environment.profile.review(state), values);
+      if (item.status === "not-verified")
+        throw new UsageError(
+          "An evidence-bound review Lab package is required",
+        );
       const manual =
         item.status === "incomplete"
           ? await environment.profile.reviewLabPackage?.(state, item.ref)
@@ -1780,6 +1788,22 @@ const COMMANDS: readonly Command[] = [
               category: item.category,
             }),
           io,
+          process,
+          manual === null || manual === undefined
+            ? undefined
+            : async (session) => {
+                const receipt = await recordManualObservationLabReady({
+                  ledger: state.ledger,
+                  store: state.store,
+                  ref: item.ref,
+                  packageDigest: manual.packageDigest,
+                  sessionLabel: session.networkName,
+                  clock: state.clock,
+                });
+                io.stdout(
+                  `manual observation receipt: ${receipt} (${state.store.contentPath(receipt)}/${MANUAL_LAB_RECEIPT_FILE})`,
+                );
+              },
         );
       } finally {
         await release();
