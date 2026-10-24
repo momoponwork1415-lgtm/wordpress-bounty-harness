@@ -163,3 +163,9 @@ v3 を戻すときは `versions/v2.2.md` を skill 本文に戻し、OPERATIONS 
 追記 9 の内部プレビューはこの到達点の前段であり、`human_verification.status: pending` の JSON を拡張機能で提出させない。現在の `review reverify`、`lab up --for-review`、scope / draft / Candidate の契約は `incomplete` の手動再現を正式な提出根拠として受け付けない。手動 Lab の再構築、同じ Snapshot の人間の `match` と捕捉証拠の結合、重複・scope・文案・承認が参照する basis は、別 PR で実装し受入試験を通す。それまでは内部プレビューを正式な文案や提出候補と呼ばない。既存の confirmed 経路と funnel 集計はこの決定だけでは変えない。
 
 進捗は `runtime-confirmed` の件数を提出完了の代理指標にせず、上記の再現・重複・scope・報告書・Fill-Only JSON・最終査読の準備が揃った Finding 件数で見る。外部送信は従来どおり、正確な Submission Candidate、文案 digest、送信先に結び付いた所有者の承認を要し、Harness は送信しない。
+
+## 2026-10-24 追記 11: 提出しないと判断した Finding を通常一覧から隠す
+
+所有者は「もう出さないと決めたものは私に表示されるべきではない」と決めた。通常の `review --campaign <id>` は、現在の検証 ID と Target Snapshot に対して有効な判断が `reject` の Finding を表示しない。現在の WordPress Programme Boundary が park する impact でありながら、旧台帳の `finding-recorded` として review queue に残る Finding も表示しない。通常一覧の合計と status 別件数は、表示対象だけで数える。これにより、上の段 1 にある「落とした Finding は `harness review` の一覧に残る」という旧表示規則を置き換える。
+
+この変更は表示の投影に限る。`Review.queue()` は従来のレビュー対象を保持し、追記専用台帳の記録も消さない。`review --campaign <id> --all` は従来の全件と理由別集計を示す。ID を指定した `review export` と `review decide` でも調査・再判断でき、`finding-parked` は `review parked` で見られる。新しい検証や Snapshot で旧 `reject` が現在の判断でなくなった場合と、新しい `defer` 判断を記録した場合は通常一覧に戻る。`incomplete`、Wordfence 専用の `wbh-screen` の非採用メモ、未解決の重複・scope は、それだけで通常一覧から隠す条件にしない。

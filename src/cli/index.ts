@@ -602,6 +602,21 @@ export function formatQueue(
   if (summary === "visible") {
     if (queue.items.length === 0) lines.push("review queue is empty");
     lines.push(`visible findings: ${queue.items.length}`);
+    const statuses = [
+      "runtime-confirmed",
+      "reproduced",
+      "contradicted",
+      "incomplete",
+      "not-verified",
+    ] as const;
+    lines.push(
+      `visible by status: ${statuses
+        .map(
+          (status) =>
+            `${status} ${queue.items.filter((item) => item.status === status).length}`,
+        )
+        .join(", ")}`,
+    );
     return lines;
   }
   const counts = (byReason: Readonly<Record<string, number>>) =>

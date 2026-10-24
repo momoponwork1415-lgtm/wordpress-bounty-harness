@@ -2188,11 +2188,15 @@ describe("harness CLI vertical slice", () => {
     expect(visible.stdout).toContain(
       `visible findings: ${findings.length - 1}`,
     );
+    expect(visible.stdout).toContain(
+      `visible by status: runtime-confirmed 0, reproduced 0, contradicted 0, incomplete 0, not-verified ${findings.length - 1}`,
+    );
     expect(visible.stdout).not.toContain("unverified:");
     const audit = await run("review", ...campaign, "--all");
     expect(audit.stdout).toContain(rejected);
     expect(audit.stdout).toContain("decision: reject (out-of-scope)");
     expect(audit.stdout).toContain(`unverified: ${findings.length}`);
+    expect(audit.stdout).not.toContain("visible by status:");
     // The handoff queue takes every other Finding and never the rejected one.
     const taken: string[] = [];
     for (const index of findings.keys()) {
@@ -2245,7 +2249,14 @@ describe("harness CLI vertical slice", () => {
       "out-of-scope",
     );
     expect(rejectAgain.code).toBe(0);
-    expect((await run("review", ...campaign)).stdout).not.toContain(rejected);
+    const afterCurrentReject = await run("review", ...campaign);
+    expect(afterCurrentReject.stdout).not.toContain(rejected);
+    expect(afterCurrentReject.stdout).toContain(
+      "visible by status: runtime-confirmed 0, reproduced 0, contradicted 0, incomplete 1, not-verified 0",
+    );
+    expect((await run("review", ...campaign, "--all")).stdout).toContain(
+      `runtime-confirmed  campaign-screen  finding ${rejected}`,
+    );
     const restore = await run(
       "review",
       "decide",
@@ -2316,6 +2327,9 @@ describe("harness CLI vertical slice", () => {
     expect(visible.stdout).not.toContain(findingId);
     expect(visible.stdout).toContain(`finding ${visibleFindingId}  stored-xss`);
     expect(visible.stdout).toContain("group 1 visible finding(s)");
+    expect(visible.stdout).toContain(
+      "visible by status: runtime-confirmed 0, reproduced 0, contradicted 0, incomplete 0, not-verified",
+    );
     const audit = await run("review", "--campaign", campaignId, "--all");
     expect(audit.stdout).toContain(`finding ${findingId}  other`);
     expect(audit.stdout).toContain(`group ${findingId}  2 finding(s)`);

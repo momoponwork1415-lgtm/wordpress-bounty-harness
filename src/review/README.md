@@ -6,7 +6,7 @@
 
 現在の一覧と理由表示には、現在の検証 ID・Snapshot digest に対応する最後の判断を使う。後から古い検証への判断を追記しても、現在の表示を上書きしない。`review export` の判断は履歴上の最後の記録を保つため、現在の一覧とは異なる場合がある。単件の資料は台帳の参照で絞ってから読む。古い非標準 identity の scope 評価を ID で探すときだけ、互換性のため従来の全件読取りに戻る。
 
-`review --campaign <id>` の通常表示は、現在の検証・Snapshot に対する `reject` と、旧台帳で `finding-recorded` のまま残る現在の WordPress Programme Boundary 外の impact を隠す。通常表示の集計は表示件数だけとし、隠した Finding を含む内訳を出さない。`review --campaign <id> --all` は従来の全件と理由別集計を表示する。`finding-parked` は別の `review parked` で確認する。通常表示で隠した Finding も、ID を指定した `review export` と `review decide` で調査・再判断できる。`incomplete` だけでは隠さない。
+`review --campaign <id>` の通常表示は、現在の検証・Snapshot に対する `reject` と、旧台帳で `finding-recorded` のまま残る現在の WordPress Programme Boundary 外の impact を隠す。通常表示の集計は表示件数と表示対象だけの status 別件数とし、隠した Finding を含む内訳を出さない。`review --campaign <id> --all` は従来の全件と理由別集計を表示する。`finding-parked` は別の `review parked` で確認する。通常表示で隠した Finding も、ID を指定した `review export` と `review decide` で調査・再判断できる。`incomplete` だけでは隠さない。
 
 `--all` では `incomplete` の最新 1 件を Finding ごとに、runner がまだ自動再試行する `retry candidates by reason` と、再試行が尽きて人間の手に渡る `incomplete by reason` に分けて数える。この分け方は runner（`src/cli/pipeline.ts`）と同じ関数 `shouldAutomaticallyRetryVerification`（`src/verification/retry-budget.ts`、ADR 0022）で決め、attempt は Lab Setup digest・Verifier prompt 版・理由が同じものだけを数える。`recipe`・`observation` は 3 回目、`provision`・`provider` は 2 回目から尽きた側に入る。`precondition` は scenario ID が変わったときだけ runner が再試行するが、review 列は Lab Setup を持たず変化を予測できないので常に尽きた側に数える。`evidence`・`cleanup`・`digest-mismatch`・`no-judge`・`sandbox` は 1 回目から尽きた側。再試行の実行そのものはこの列では行わない。
 
