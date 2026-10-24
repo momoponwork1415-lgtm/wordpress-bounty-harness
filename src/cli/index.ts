@@ -15,7 +15,9 @@ import {
 } from "../ledger/index.js";
 import {
   exportReviewBundle,
+  exportReviewBundleV2,
   MANUAL_LAB_RECEIPT_FILE,
+  manualObservationEvidenceStatus,
   recordManualObservation,
   recordManualObservationLabReady,
   type DuplicateCheck,
@@ -523,6 +525,11 @@ export function formatQueue(
   duplicates: ReadonlyMap<ReviewItem, DuplicateCheck | null> = new Map(),
   /** Each decision's reason code, so a Finding dropped before its Lab shows why (#436). */
   reasons: ReadonlyMap<ReviewItem, string> = new Map(),
+  /** Resolved from Private Evidence before printing a human observation. */
+  manualEvidence: ReadonlyMap<
+    ReviewItem,
+    "available" | "unavailable"
+  > = new Map(),
 ): string[] {
   const lines: string[] = [];
   for (const item of queue.items) {
@@ -586,6 +593,11 @@ export function formatQueue(
         group,
         `  reason: ${item.reason}`,
         `  next: ${item.nextStep}`,
+        ...(item.manualObservation === undefined
+          ? []
+          : [
+              `  manual observation: ${item.manualObservation.result} (evidence ${manualEvidence.get(item) ?? "unchecked"}; receipt ${item.manualObservation.sessionReceiptDigest}, evidence ${item.manualObservation.evidenceDigest})`,
+            ]),
         decision,
         duplicate,
       );
@@ -1086,14 +1098,28 @@ const COMMANDS: readonly Command[] = [
         values.campaign === undefined ? {} : { campaignId: values.campaign },
       );
       const duplicates = new Map<ReviewItem, DuplicateCheck | null>();
+      const manualEvidence = new Map<ReviewItem, "available" | "unavailable">();
       for (const item of queue.items)
         duplicates.set(item, await review.duplicateOf(item.ref));
+      for (const item of queue.items)
+        if (
+          item.status === "incomplete" &&
+          item.manualObservation !== undefined
+        )
+          manualEvidence.set(
+            item,
+            await manualObservationEvidenceStatus(
+              state.store,
+              item.manualObservation,
+            ),
+          );
       print(
         formatQueue(
           queue,
           (digest) => state.store.contentPath(digest),
           duplicates,
           await review.decisionReasons(queue.items),
+          manualEvidence,
         ),
       );
       return 0;
@@ -1137,11 +1163,11 @@ const COMMANDS: readonly Command[] = [
     name: "review export",
     readOnly: true,
     required: ["campaign", "finding"],
-    usage: ["review export --campaign <id> --finding <id>"],
-    options: { campaign: STR, finding: STR },
+    usage: ["review export --campaign <id> --finding <id> [--version 2]"],
+    options: { campaign: STR, finding: STR, version: STR },
     handler: async ({ values, state, environment, io }) => {
       // The one read interface for the skills (ADR 0031). Bodies and payloads stay behind paths.
-      const bundle = await exportReviewBundle({
+      const options = {
         ledger: state.ledger,
         store: state.store,
         campaignId: required(values.campaign, "campaign"),
@@ -1156,7 +1182,14 @@ const COMMANDS: readonly Command[] = [
               observeLatestVersion: (targetId: string) =>
                 environment.profile.latestVersion!(state, targetId),
             }),
-      });
+      };
+      const version = values.version ?? "1";
+      if (version !== "1" && version !== "2")
+        throw new UsageError("--version must be 1 or 2");
+      const bundle =
+        version === "2"
+          ? await exportReviewBundleV2(options)
+          : await exportReviewBundle(options);
       io.stdout(canonicalJson(bundle));
       return 0;
     },

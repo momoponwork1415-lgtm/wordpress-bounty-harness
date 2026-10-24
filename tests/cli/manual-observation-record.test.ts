@@ -9,6 +9,8 @@ import { openState } from "../../src/cli/state.js";
 import {
   Review,
   MANUAL_OBSERVATION_EVIDENCE_FILE,
+  reviewExportV1Schema,
+  reviewExportV2Schema,
 } from "../../src/review/index.js";
 
 const snapshot = `sha256:${"a".repeat(64)}`;
@@ -68,6 +70,9 @@ async function fixture() {
     artifacts: [{ kind: "review-lab-reconstruction", digest: packageDigest }],
   });
   let selectedPackage = packageDigest;
+  let observeLatestVersion:
+    (() => Promise<{ version: string; observedAt: string } | null>) | null =
+    null;
   const profile = {
     review: (current: typeof state) =>
       new Review({
@@ -97,6 +102,11 @@ async function fixture() {
       browserImage: "browser@sha256:test",
       async close() {},
     }),
+    stateDiffReader: () => ({ read: async () => null }),
+    httpEvidenceReader: () => ({ read: async () => null }),
+    verifierRecordReader: () => ({ read: unused }),
+    latestVersion: async () =>
+      observeLatestVersion === null ? null : observeLatestVersion(),
   } as unknown as CliProfile;
   const evidencePath = join(root, "manual-note.txt");
   await writeFile(evidencePath, "Human observed the dialog in the fresh Lab");
@@ -147,12 +157,18 @@ async function fixture() {
     state,
     base,
     packageDigest,
+    observationDigest,
     evidencePath,
     run,
     lab,
     observe,
     selectPackage: (digest: string) => {
       selectedPackage = digest;
+    },
+    onLatestVersion: (
+      observe: () => Promise<{ version: string; observedAt: string } | null>,
+    ) => {
+      observeLatestVersion = observe;
     },
   };
 }
@@ -258,4 +274,159 @@ it("rejects a changed selected package and a receipt from a prior verification a
   expect(
     f.state.ledger.readAll({ type: "manual-observation-recorded" }),
   ).toHaveLength(0);
+});
+
+async function exportBundle(
+  f: Awaited<ReturnType<typeof fixture>>,
+  version = "2",
+) {
+  const exported = await f.run(
+    "review",
+    "export",
+    "--campaign",
+    "campaign-1",
+    "--finding",
+    "finding-1",
+    "--version",
+    version,
+  );
+  expect(exported.code).toBe(0);
+  return reviewExportV2Schema.parse(JSON.parse(exported.stdout.join("\n")));
+}
+
+it("shows the current result in the queue and opt-in v2 export while v1 remains strict", async () => {
+  const f = await fixture();
+  const receipt = receiptOf((await f.lab()).stdout);
+  expect((await f.observe(receipt, "match")).code).toBe(0);
+  const queue = await f.run("review", "--campaign", "campaign-1");
+  expect(queue.stdout.join("\n")).toContain(
+    "manual observation: match (evidence available;",
+  );
+  expect(queue.stdout.join("\n")).toContain("incomplete");
+  expect(queue.stdout.join("\n")).not.toContain("runtime-confirmed");
+  const v2 = await exportBundle(f);
+  expect(v2.schema).toBe("review-export/v2");
+  expect(v2.review.manualObservation).toMatchObject({
+    result: "match",
+    evidenceStatus: "available",
+    sessionReceipt: { digest: receipt },
+  });
+  const legacy = await f.run(
+    "review",
+    "export",
+    "--campaign",
+    "campaign-1",
+    "--finding",
+    "finding-1",
+  );
+  expect(legacy.code).toBe(0);
+  const v1 = reviewExportV1Schema.parse(JSON.parse(legacy.stdout.join("\n")));
+  expect(v1.schema).toBe("review-export/v1");
+  expect(v1.review).not.toHaveProperty("manualObservation");
+});
+
+it("hides the prior result when a second Lab is ready or verification is retried", async () => {
+  const f = await fixture();
+  const first = receiptOf((await f.lab()).stdout);
+  expect((await f.observe(first, "match")).code).toBe(0);
+  const second = receiptOf((await f.lab()).stdout);
+  expect((await exportBundle(f)).review.manualObservation).toBeNull();
+  expect(
+    (await f.run("review", "--campaign", "campaign-1")).stdout.join("\n"),
+  ).not.toContain("manual observation: match");
+  expect((await f.observe(second, "mismatch")).code).toBe(0);
+  expect((await exportBundle(f)).review.manualObservation?.result).toBe(
+    "mismatch",
+  );
+  await f.state.ledger.append({
+    ...f.base,
+    identity: "verification-2",
+    type: "verification-finished",
+    findingId: "finding-1",
+    verificationId: "verification-2",
+    labSetupDigest: setup,
+    result: { status: "incomplete", reason: "observation", nextStep: "Retry" },
+  });
+  expect((await exportBundle(f)).review.manualObservation).toBeNull();
+});
+
+it("marks a result unavailable when private evidence is missing", async () => {
+  const f = await fixture();
+  const receipt = receiptOf((await f.lab()).stdout);
+  expect((await f.observe(receipt, "match")).code).toBe(0);
+  const event = f.state.ledger.readAll({
+    type: "manual-observation-recorded",
+  })[0]?.event;
+  if (event?.type !== "manual-observation-recorded")
+    throw new Error("Result event missing");
+  await rm(f.state.store.contentPath(event.evidenceDigest), {
+    recursive: true,
+  });
+  expect((await exportBundle(f)).review.manualObservation).toMatchObject({
+    result: "match",
+    evidenceStatus: "unavailable",
+  });
+  expect(
+    (await f.run("review", "--campaign", "campaign-1")).stdout.join("\n"),
+  ).toContain("manual observation: match (evidence unavailable;");
+});
+
+it("hides an old Snapshot's result after a latest-version Finding is recorded", async () => {
+  const f = await fixture();
+  const receipt = receiptOf((await f.lab()).stdout);
+  expect((await f.observe(receipt, "match")).code).toBe(0);
+  await f.state.ledger.append({
+    ...f.base,
+    identity: "finding-latest",
+    snapshotDigest: `sha256:${"c".repeat(64)}`,
+    occurredAt: "2026-10-24T12:02:00Z",
+    type: "finding-recorded",
+    findingId: "finding-latest",
+    runId: "synthetic-run-latest",
+    category: "stored-xss",
+    derivedFromFindingId: "finding-1",
+    derivationKind: "latest-version",
+  });
+  expect((await exportBundle(f)).review.manualObservation).toBeNull();
+  expect(
+    (await f.run("review", "--campaign", "campaign-1")).stdout.join("\n"),
+  ).not.toContain("manual observation: match");
+});
+
+it("does not attach a later attempt's result to an export assembled before it", async () => {
+  const f = await fixture();
+  await f.state.ledger.append({
+    ...f.base,
+    identity: "selection-1",
+    type: "target-selected",
+    selectionId: "plugin@1.0",
+  });
+  const first = receiptOf((await f.lab()).stdout);
+  expect((await f.observe(first, "match")).code).toBe(0);
+  f.onLatestVersion(async () => {
+    await f.state.ledger.append({
+      ...f.base,
+      identity: "verification-2",
+      type: "verification-finished",
+      findingId: "finding-1",
+      verificationId: "verification-2",
+      labSetupDigest: setup,
+      result: {
+        status: "incomplete",
+        reason: "observation",
+        nextStep: "Review again",
+        evidenceDigest: f.observationDigest,
+      },
+      evidenceCapture: "harness-captured",
+      artifacts: [
+        { kind: "review-lab-reconstruction", digest: f.packageDigest },
+      ],
+    });
+    const second = receiptOf((await f.lab()).stdout);
+    expect((await f.observe(second, "mismatch")).code).toBe(0);
+    return { version: "1.1", observedAt: at };
+  });
+  const bundle = await exportBundle(f);
+  expect(bundle.verification?.verificationId).toBe("verification-1");
+  expect(bundle.review.manualObservation).toBeNull();
 });

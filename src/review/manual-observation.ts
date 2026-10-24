@@ -11,6 +11,31 @@ export const MANUAL_LAB_RECEIPT_FILE = "manual-lab-session.json";
 export const MANUAL_OBSERVATION_EVIDENCE_FILE =
   "manual-observation-evidence.bin";
 
+/** Projection never treats a missing or corrupt private artifact as usable proof. */
+export async function manualObservationEvidenceStatus(
+  store: PrivateArtifactStore,
+  record: {
+    readonly sessionReceiptDigest: string;
+    readonly evidenceDigest: string;
+  },
+): Promise<"available" | "unavailable"> {
+  const [receipt, evidence] = await Promise.all([
+    store.readFile(
+      record.sessionReceiptDigest,
+      MANUAL_LAB_RECEIPT_FILE,
+      10_000,
+    ),
+    store.readFile(
+      record.evidenceDigest,
+      MANUAL_OBSERVATION_EVIDENCE_FILE,
+      10_000_000,
+    ),
+  ]);
+  return receipt.status === "resolved" && evidence.status === "resolved"
+    ? "available"
+    : "unavailable";
+}
+
 const receiptSchema = z.strictObject({
   schemaVersion: z.literal(1),
   ref: refSchema,
@@ -294,4 +319,33 @@ export async function recordManualObservation(input: {
   if (appended.status !== "appended")
     throw new Error("Manual observation ledger conflict");
   return event;
+}
+
+export function currentManualObservation(
+  ledger: Ledger,
+  ref: ReviewRef,
+): ResultEvent | null {
+  const verification = currentObservationVerification(ledger, ref);
+  if (verification === null) return null;
+  const ready = latestReady(ledger, ref, verification);
+  if (ready === null) return null;
+  return (
+    (ledger
+      .readAll({
+        campaignId: ref.campaignId,
+        findingId: ref.findingId,
+        type: "manual-observation-recorded",
+      })
+      .filter(
+        ({ event, sequence }) =>
+          event.type === "manual-observation-recorded" &&
+          event.verificationId === ref.verificationId &&
+          event.snapshotDigest === ref.snapshotDigest &&
+          event.labSetupDigest === verification.labSetupDigest &&
+          event.packageDigest === ready.event.packageDigest &&
+          event.sessionReceiptDigest === ready.event.sessionReceiptDigest &&
+          ready.sequence < sequence,
+      )
+      .at(-1)?.event as ResultEvent | undefined) ?? null
+  );
 }

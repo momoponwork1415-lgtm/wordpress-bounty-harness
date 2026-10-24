@@ -21,7 +21,13 @@
 
 `review observe --by` は本人認証ではなく人間の記名申告である。指定された証拠ファイルは観測資料として保存するが、因果関係の自動証明にも `runtime-confirmed` にもならず、提出承認の条件を満たさない。
 
-その後、人間は次を行う。
+### `incomplete(observation)` の手動観測
+
+captured numeric-dialog の Finding で `lab up --for-review --campaign <id> --finding <id>` を実行すると、Lab の ready 後に `manual observation receipt: <digest> (<path>)` を表示する。人間がその新しい Lab で手順を実行し、観測内容をローカルファイルに残した後、`review observe --campaign <id> --finding <id> --receipt <digest> --result match|mismatch|unavailable --evidence <path> --by <human>` で記録する。ready receipt と人間の証拠は Git 外の Private Evidence に封印し、台帳には digest のみを追記する。同じ検証でも次の Lab が ready になれば前の結果は現在の表示から外れ、古い receipt での追記を拒む。別の検証試行や最新版の派生 Finding ができた場合も旧記録は現在の表示から外れる。`review --campaign <id>` は現在の手動結果と証拠の可用性を表示する。既存の `review export` は厳密な `review-export/v1` のままなので、手動結果を含む資料には `review export --campaign <id> --finding <id> --version 2` を使う。これは判定器の `runtime-confirmed`、`review decide --reproduced`、scope、文案、提出承認を代えない。
+
+### runtime-confirmed / reproduced の既存提出経路
+
+以下は確認済み再現パッケージを持つ Finding の提出前手順である。`incomplete(observation)` の手動観測だけでは進めない。
 
 1. 最新版再検証の出力 `as <findingId>` を使って `review export` で再現パッケージを開く。同じ ID の `lab up --for-review --campaign <id> --finding <id>` は封印済み setup manifest と Snapshot から新しい Lab を立て、手動クライアントの起動コマンドを表示する。遠隔攻撃者の視点の HTTP リクエストとブラウザ操作で自分の手で再現し、同じ ID の `review decide ... --decision defer --reason pending-final-review --reproduced match|mismatch|unavailable --by <name>` で結果を記録する。`mismatch` / `unavailable` なら提出を進めず、原因を調べる。
 2. 暫定文案の手順、影響、版、提出先、フォーム欄と添付を査読し、Markdown、JSON、manifest を最終版に作り直す。確認した提出用 Markdown を `review draft --prepared-by human` で最終版として新たに保存する。内容を変えなくてもこの版の記録が必要である。その後、同じ人が `review decide --decision accept --reason reviewed-report --by <name>` で最終査読を記録する。
