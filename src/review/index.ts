@@ -23,6 +23,11 @@ import {
 import { openReproductionPackage } from "./reproduction-package.js";
 
 export {
+  MANUAL_LAB_RECEIPT_FILE,
+  recordManualObservationLabReady,
+} from "./manual-observation.js";
+
+export {
   exportReviewBundle,
   REVIEW_EXPORT_SCHEMA_ID,
   reviewExportV1Schema,

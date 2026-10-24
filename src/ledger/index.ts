@@ -519,6 +519,15 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     reproductionPackageDigest: digest,
     result: z.enum(["match", "mismatch", "unavailable"]),
   }),
+  event({
+    /** A fresh manual Lab reached ready; session details stay in Private Evidence. */
+    type: z.literal("manual-observation-lab-ready"),
+    findingId: id,
+    verificationId: id,
+    labSetupDigest: digest,
+    packageDigest: digest,
+    sessionReceiptDigest: digest,
+  }),
 ]);
 
 export type LedgerEventV1 = z.infer<typeof ledgerEventV1Schema>;

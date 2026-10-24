@@ -43,6 +43,9 @@ describe("review Lab foreground signals", () => {
       () => launch,
       { stdout: (line) => lines.push(line), stderr: () => undefined },
       signals,
+      async () => {
+        throw new Error("An interrupted launch must not mint a receipt");
+      },
     );
     expect(signals.listenerCount("SIGINT")).toBe(1);
     expect(signals.listenerCount("SIGTERM")).toBe(1);
@@ -153,5 +156,28 @@ describe("review Lab foreground signals", () => {
     ).rejects.toThrow("startup failed");
     expect(signals.listenerCount("SIGINT")).toBe(0);
     expect(signals.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("closes the ready Lab when sealing its session receipt fails", async () => {
+    const signals = new EventEmitter();
+    const lines: string[] = [];
+    let closes = 0;
+    await expect(
+      runForegroundReviewLab(
+        async () => ({
+          ...sessionFields,
+          async close() {
+            closes += 1;
+          },
+        }),
+        { stdout: (line) => lines.push(line), stderr: () => undefined },
+        signals,
+        async () => {
+          throw new Error("receipt store failed");
+        },
+      ),
+    ).rejects.toThrow("receipt store failed");
+    expect(closes).toBe(1);
+    expect(lines).toEqual([]);
   });
 });
