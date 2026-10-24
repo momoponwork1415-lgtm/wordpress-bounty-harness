@@ -21,11 +21,15 @@ import {
   type DecisionHistoryEntry,
 } from "./decision-history.js";
 import { isCurrentVerification } from "./current-verification.js";
+import { currentManualObservation } from "./manual-observation.js";
 import { openReproductionPackage } from "./reproduction-package.js";
 
 export {
+  currentManualObservation,
+  currentObservationVerification,
   MANUAL_LAB_RECEIPT_FILE,
   MANUAL_OBSERVATION_EVIDENCE_FILE,
+  manualObservationEvidenceStatus,
   recordManualObservation,
   recordManualObservationLabReady,
 } from "./manual-observation.js";
@@ -43,6 +47,12 @@ export {
   type VerifierRecord,
   type VerifierRecordReader,
 } from "./export.js";
+export {
+  exportReviewBundleV2,
+  REVIEW_EXPORT_V2_SCHEMA_ID,
+  reviewExportV2Schema,
+  type ReviewExportV2,
+} from "./manual-observation-export.js";
 
 import {
   assessmentSchema,
@@ -162,6 +172,13 @@ export type ReviewItem = (
       readonly reason: string;
       readonly nextStep: string;
       readonly decision: Decision | null;
+      /** A human's current Lab result is independent of the judge status. */
+      readonly manualObservation?: {
+        readonly result: "match" | "mismatch" | "unavailable";
+        readonly recordedAt: string;
+        readonly evidenceDigest: string;
+        readonly sessionReceiptDigest: string;
+      };
     }
   | {
       /** #436: no verification yet, so a decision can come before any Lab (ADR 0038 段 1). */
@@ -439,6 +456,10 @@ export class Review<TFacts = unknown> {
         });
         const counts = pending ? retryPendingByReason : incompleteByReason;
         counts[result.reason] = (counts[result.reason] ?? 0) + 1;
+        const manual =
+          result.reason === "observation"
+            ? currentManualObservation(this.#ledger, ref)
+            : null;
         items.push({
           status: result.status,
           ref,
@@ -446,6 +467,16 @@ export class Review<TFacts = unknown> {
           reason: result.reason,
           nextStep: result.nextStep,
           decision,
+          ...(manual === null
+            ? {}
+            : {
+                manualObservation: {
+                  result: manual.result,
+                  recordedAt: manual.occurredAt,
+                  evidenceDigest: manual.evidenceDigest,
+                  sessionReceiptDigest: manual.sessionReceiptDigest,
+                },
+              }),
           group,
         });
       }
