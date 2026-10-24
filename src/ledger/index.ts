@@ -528,6 +528,18 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     packageDigest: digest,
     sessionReceiptDigest: digest,
   }),
+  event({
+    /** Human observation of an incomplete attempt, never a judge verdict. */
+    type: z.literal("manual-observation-recorded"),
+    findingId: id,
+    verificationId: id,
+    labSetupDigest: digest,
+    packageDigest: digest,
+    sessionReceiptDigest: digest,
+    evidenceDigest: digest,
+    result: z.enum(["match", "mismatch", "unavailable"]),
+    recordedBy: id,
+  }),
 ]);
 
 export type LedgerEventV1 = z.infer<typeof ledgerEventV1Schema>;

@@ -25,6 +25,8 @@ import { openReproductionPackage } from "./reproduction-package.js";
 
 export {
   MANUAL_LAB_RECEIPT_FILE,
+  MANUAL_OBSERVATION_EVIDENCE_FILE,
+  recordManualObservation,
   recordManualObservationLabReady,
 } from "./manual-observation.js";
 
