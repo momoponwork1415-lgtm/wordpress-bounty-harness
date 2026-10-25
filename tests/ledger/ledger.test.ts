@@ -284,6 +284,49 @@ describe("Ledger public interface", () => {
     });
   });
 
+  it("records the Trial's launch mode and still reads starts without one (ADR 0039)", async () => {
+    const { ledger } = await fixture();
+    await ledger.append({
+      ...common("wide-start"),
+      type: "discovery-run-started",
+      runId: "run-wide",
+      labId: "lab-wide",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "wp2shell-bounty-v10-wide",
+        mode: "wide",
+      },
+    });
+    await ledger.append({
+      ...common("old-start"),
+      type: "discovery-run-started",
+      runId: "run-old",
+      labId: "lab-old",
+      history: { mode: "none" },
+      configuration: { promptVariant: "wp2shell-bounty-v8" },
+    });
+    const starts = ledger
+      .read({ type: "discovery-run-started" })
+      .map(({ event }) =>
+        event.type === "discovery-run-started" ? event.configuration : null,
+      );
+    expect(starts[0]).toMatchObject({ mode: "wide" });
+    expect(starts[1]).not.toHaveProperty("mode");
+    await expect(
+      ledger.append({
+        ...common("bad-start"),
+        type: "discovery-run-started",
+        runId: "run-bad",
+        labId: "lab-bad",
+        history: { mode: "none" },
+        configuration: {
+          promptVariant: "wp2shell-bounty-v8",
+          mode: "screening" as never,
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("counts boundary candidates once across rejection and replay, with classified holds and token rates", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);

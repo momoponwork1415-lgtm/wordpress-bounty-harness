@@ -2,7 +2,7 @@
 status: accepted
 date: 2026-10-11
 supersedes: 0025 for the default discovery route; 0017 for the default prompt
-amended-by: 0033（v8・最低 60 分・子 4・依存 source）, 0034（索引・coverage の削除）, 0035（検証は skill）, 0036（操作者の再開）
+amended-by: 0033（v8・最低 60 分・子 4・依存 source）, 0034（索引・coverage の削除）, 0035（検証は skill）, 0036（操作者の再開）, 0039（deep / wide の mode）
 ---
 
 # 探索の主経路を単一の WP2Shell 協調 Trial に戻す

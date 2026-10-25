@@ -852,7 +852,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
       (command.minimumActiveMs === undefined
         ? command.resumeArgs !== undefined || command.resumePrompt !== undefined
         : !Number.isSafeInteger(command.minimumActiveMs) ||
-          command.minimumActiveMs <= 0 ||
+          command.minimumActiveMs < 0 ||
           command.minimumActiveMs > this.#options.timeoutMs ||
           command.researchMount === undefined ||
           command.resumeArgs?.[0] !== "exec" ||
