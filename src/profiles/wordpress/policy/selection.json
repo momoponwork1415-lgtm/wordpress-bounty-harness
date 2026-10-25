@@ -1,8 +1,8 @@
 {
   "kind": "wordpress-selection-policy",
   "schemaVersion": 1,
-  "id": "wordpress-selection-2026-10-23",
-  "promptVariant": "wp2shell-bounty-v8",
+  "id": "wordpress-selection-2026-10-26",
+  "promptVariant": "wp2shell-bounty-v10",
   "pluginDependencySlugs": {
     "unlimited-elements-for-elementor": ["elementor"]
   },
@@ -33,7 +33,6 @@
   "maximumActiveInstallations": 1000000,
   "cascade": [
     { "minimumActiveInstallations": 50000 },
-    { "minimumActiveInstallations": 30000 },
     {
       "minimumActiveInstallations": 1000000,
       "maximumActiveInstallations": null,

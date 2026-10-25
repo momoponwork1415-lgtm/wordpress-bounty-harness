@@ -125,11 +125,11 @@ export async function readLivePid(
 }
 
 /**
- * A process that owns discovery or Lab resources outside the runner
- * (`lab up --for-review`, `campaign resume`, `verify next`) holds the runner's
- * leftover sweep while its pid lives. Each holder has its own file.
+ * A process that owns discovery resources outside the runner (`campaign run`,
+ * `campaign resume`) holds the runner's leftover sweep while its pid lives.
+ * Each holder has its own file.
  */
-export async function holdLabSweep(
+export async function holdDiscoverySweep(
   stateDirectory: string,
   pid: number,
 ): Promise<() => Promise<void>> {
@@ -140,7 +140,7 @@ export async function holdLabSweep(
   return () => rm(path, { force: true });
 }
 
-export async function labSweepHeld(
+export async function discoverySweepHeld(
   stateDirectory: string,
   alive: (pid: number) => boolean = pidAlive,
 ): Promise<boolean> {
@@ -179,7 +179,7 @@ export interface ContinuousDeps {
     /** The operator's live limits (total and per runtime), read before each new target starts. */
     readonly targetLimit: TargetLimit;
   }): Promise<CampaignSummary>;
-  /** Removes crashed Lab leftovers (not review Labs); returns how many. */
+  /** Removes crashed discovery leftovers, never a Lab (#526); returns how many. */
   cleanupLeftovers(): Promise<number>;
   /** The same host check as `runtime check`; throws on failure. */
   preflight(): Promise<void>;

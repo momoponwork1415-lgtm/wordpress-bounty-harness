@@ -27,6 +27,7 @@ const reservationSchema = z.discriminatedUnion("kind", [
     token: z.string().uuid(),
     owner: ownerSchema,
   }),
+  // Written by runners before #526; still read so a stale file is recovered.
   z.strictObject({
     kind: z.literal("sweep"),
     token: z.string().uuid(),
@@ -167,7 +168,6 @@ export interface HostLabLease {
     | { readonly status: "blocked"; readonly reason: string }
   >;
   reserveLab(labId: string): Promise<void>;
-  reserveSweep(): Promise<void>;
   cleanupNeeded(): Promise<void>;
   clear(): Promise<void>;
   release(): Promise<void>;
@@ -253,15 +253,6 @@ export async function acquireHostLabLease(input: {
           token,
           owner,
         };
-        await publishReservation(path.reservation, next);
-        assertHeld();
-        reservation = next;
-      },
-      async reserveSweep() {
-        assertHeld();
-        if (reservation !== null)
-          throw new Error("Host Lab reservation exists");
-        const next: HostLabReservation = { kind: "sweep", token, owner };
         await publishReservation(path.reservation, next);
         assertHeld();
         reservation = next;

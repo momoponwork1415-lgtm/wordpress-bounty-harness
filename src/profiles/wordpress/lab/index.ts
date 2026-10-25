@@ -214,11 +214,14 @@ export interface WordPressLab extends LabProvisioner<
    * Lists Docker resources a crashed run left behind: Lab names and the given
    * patterns only. Removes them when asked; use only while no campaign runs.
    * With `labId`, only that Lab's resources (and its host gateway) are named.
+   * With `labs: false`, only the given patterns are named, so a live Lab is
+   * never touched (the runner's discovery sweep, #526).
    */
   cleanupLeftovers(input: {
     readonly remove: boolean;
     readonly patterns?: LeftoverPatterns;
     readonly labId?: string;
+    readonly labs?: boolean;
   }): Promise<Leftovers>;
 }
 
@@ -323,11 +326,15 @@ export function openWordPressLab(options: {
     remove,
     patterns = {},
     labId: onlyLab,
+    labs = true,
   }) => {
     if (onlyLab !== undefined && !exactLabId.test(onlyLab))
       throw new Error("Lab id is invalid");
-    const owned =
-      onlyLab === undefined ? LAB_LEFTOVERS : labLeftoverPatterns(onlyLab);
+    const owned: LeftoverPatterns = !labs
+      ? {}
+      : onlyLab === undefined
+        ? LAB_LEFTOVERS
+        : labLeftoverPatterns(onlyLab);
     const kinds = [
       ["containers", ["ps", "-a", "--format", "{{.Names}}"], ["rm", "-f"]],
       [
@@ -343,7 +350,7 @@ export function openWordPressLab(options: {
       volumes: [],
     };
     for (const [kind, list] of kinds) {
-      const matching = [...owned[kind], ...(patterns[kind] ?? [])];
+      const matching = [...(owned[kind] ?? []), ...(patterns[kind] ?? [])];
       // A host with thousands of anonymous volumes lists far more than the 64 KiB default.
       const listing = await docker.run(list, 60_000, 8 * 1024 * 1024);
       if (listing.exitCode !== 0)

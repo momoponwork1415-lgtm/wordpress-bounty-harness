@@ -147,7 +147,7 @@ v5 で変えたもの: 受け入れる種類の順位と「落とす種類」の
 | 行 | 現行 |
 | --- | --- |
 | Q1 `content-deletion` | 本 ADR の 2026-10-17 節で `finding-parked`（Q1 を上書き） |
-| Q4 install 下限 100,000 | 主帯の下限は 100,000 のまま。主帯が尽きたときだけ cascade 50k → 30k → ≥1M（paying class 記録 ≥2）を試す（[ADR 0037](0037-selection-uses-advisory-history-counts.md) の 2026-10-19 追記 4） |
+| Q4 install 下限 100,000 | 主帯の下限は 100,000 のまま。主帯が尽きたときだけ cascade 50k → 30k → ≥1M（paying class 記録 ≥2）を試す（[ADR 0037](0037-selection-uses-advisory-history-counts.md) の 2026-10-19 追記 4。2026-10-26 に 30k の段を外した、ADR 0037 追記） |
 | Q5 / Q9 順位と採点式 | ADR 0037 の 2026-10-19 追記 2 の重み（`installations: 0.5`、`recency: 0`、`historyPayingClass: 1`、`recordRecency: 1`）。所有者は 2026-10-19 に重みの決定を AI に委任した |
 | Q6 2 回目以降の独立 Trial | 選定による再訪は ADR 0037 追記 3（版上昇かつ最後の Trial から 90 日、`revisitPolicy: version-increased`）。「再訪は選定の結果であり、campaign 単位の承認ではない」。同じ版を手で再 Trial するときの扱いは Q6 のまま |
 | 確認 除外作者 5 社 | `policy/selection.json` の `excludedAuthors` は 7 名。WooCommerce と MailPoet は Automattic 資産として 2026-10-17 に足した（`policy/selection.md`） |

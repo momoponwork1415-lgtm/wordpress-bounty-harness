@@ -5,11 +5,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { continuousCommand } from "../../src/cli/continuous-cli.js";
-import { acquireHostLabLease } from "../../src/infrastructure/host-lab-lease.js";
 import {
   continuousPaths,
-  holdLabSweep,
-  labSweepHeld,
+  discoverySweepHeld,
+  holdDiscoverySweep,
   requestContinuousStop,
 } from "../../src/cli/continuous.js";
 import type { CliIo, CliProfile, CliState } from "../../src/cli/index.js";
@@ -36,7 +35,6 @@ function fakeProfile(overrides: Partial<CliProfile> = {}): CliProfile {
     historyStatus: unused("historyStatus"),
     select: unused("select"),
     runCampaign: unused("runCampaign"),
-    labHeld: unused("labHeld"),
     cleanupLeftovers: unused("cleanupLeftovers"),
     checkRuntime: unused("checkRuntime"),
     reverify: unused("reverify"),
@@ -84,7 +82,6 @@ async function setup(
       state,
       profile,
       io,
-      hostLabLeaseDirectory: join(root, "host-lab-lease"),
       configPath: undefined,
       selectionPath: undefined,
       campaignPrefix: "prod",
@@ -150,10 +147,11 @@ function hostProfile(
       legacyHistoryAvailable: true,
       loginMarginMinutes: 60,
     }),
-    labHeld: async () => false,
     checkRuntime: async () => [],
     async cleanupLeftovers(_state, input) {
-      sweeps.push(input.remove ? "remove" : "list");
+      sweeps.push(
+        `${input.remove ? "remove" : "list"}${input.labs ? " with labs" : ""}`,
+      );
       return { containers: ["c"], networks: [], volumes: [] };
     },
     // The operator stops at the first selection; the sweep before it is what matters.
@@ -470,7 +468,7 @@ describe("continuous run", () => {
     expect(sweeps).toEqual([]);
   });
 
-  it("sweeps leftovers through the profile when no operator Lab is held", async () => {
+  it("sweeps only discovery leftovers through the profile", async () => {
     const sweeps: string[] = [];
     const t = await setup((stateDirectory) =>
       hostProfile({ stateDirectory, sweeps }),
@@ -480,54 +478,27 @@ describe("continuous run", () => {
     expect(t.stdout.at(-1)).toMatch(/ stopped reason=operator$/);
   });
 
-  it("skips the broad sweep while another state holds a verification Lab", async () => {
+  it("keeps the sweep held until every holder has released it", async () => {
+    const t = await setup(fakeProfile());
+    const first = await holdDiscoverySweep(t.root, process.pid);
+    const second = await holdDiscoverySweep(t.root, process.ppid);
+    await first();
+    expect(await discoverySweepHeld(t.root)).toBe(true);
+    await second();
+    expect(await discoverySweepHeld(t.root)).toBe(false);
+    // A holder whose process died no longer holds the sweep.
+    await holdDiscoverySweep(t.root, process.pid);
+    expect(await discoverySweepHeld(t.root, () => false)).toBe(false);
+  });
+
+  it("skips the sweep while a hand-run campaign holds it", async () => {
     const sweeps: string[] = [];
     const t = await setup((stateDirectory) =>
       hostProfile({ stateDirectory, sweeps }),
     );
-    const lease = await acquireHostLabLease({
-      directory: join(t.root, "host-lab-lease"),
-      waitMs: 0,
-    });
-    expect(lease).not.toBeNull();
-    try {
-      expect(await t.command("run", RUN_OPTIONS)).toBe(0);
-      expect(sweeps).toEqual([]);
-    } finally {
-      await lease?.release();
-    }
-  });
-
-  it("keeps the sweep held until every holder has released it", async () => {
-    const t = await setup(fakeProfile());
-    const first = await holdLabSweep(t.root, process.pid);
-    const second = await holdLabSweep(t.root, process.ppid);
-    await first();
-    expect(await labSweepHeld(t.root)).toBe(true);
-    await second();
-    expect(await labSweepHeld(t.root)).toBe(false);
-    // A holder whose process died no longer holds the sweep.
-    await holdLabSweep(t.root, process.pid);
-    expect(await labSweepHeld(t.root, () => false)).toBe(false);
-  });
-
-  it("skips the sweep while the profile holds a Lab or a review Lab pid lives", async () => {
-    for (const hold of ["profile", "review-lab"] as const) {
-      const sweeps: string[] = [];
-      const t = await setup((stateDirectory) =>
-        hostProfile({
-          stateDirectory,
-          sweeps,
-          labHeld: async () => hold === "profile",
-        }),
-      );
-      const release =
-        hold === "review-lab"
-          ? await holdLabSweep(t.root, process.pid)
-          : async () => undefined;
-      expect(await t.command("run", RUN_OPTIONS)).toBe(0);
-      await release();
-      expect(sweeps).toEqual([]);
-    }
+    const release = await holdDiscoverySweep(t.root, process.pid);
+    expect(await t.command("run", RUN_OPTIONS)).toBe(0);
+    await release();
+    expect(sweeps).toEqual([]);
   });
 });

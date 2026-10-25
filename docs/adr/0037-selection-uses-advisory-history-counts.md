@@ -87,3 +87,10 @@ amended-by: 本文末尾の 2026-10-19 追記（公開統計による重みの�
 - 「採らなかった選択肢」の「100 万超の例外自体は本 ADR の対象外で #295 に残る」: 追記 4 の cascade 最後の段で実装し、#295 は close。
 - 鮮度 gate: 決定 3 と追記 2 の既定は 2 日のまま。mirror 更新が API の rate limit で通らない間の一時値として、PR #383 が `selection.json` を 14 日にした（所有者決定 2026-10-19「いったん 14 日のものでいい」）。日次更新（cron 19:10 UTC）が 1 回通ったら 2 に戻す（#385）。
 - 帰結の「mirror の日次更新（#231）が前提」: #231 は close 済みで、更新は host の cron が旧環境の `refresh_wordfence.py` を回している（`docs/agents/production-monitoring.md` 第 2 節）。
+
+## 2026-10-26 追記: active install は 50,000 以上に限る（所有者決定、AI が記録）
+
+- 所有者が 2026-10-26 に「本番の選定は active install 50,000 以上の plugin に限る」と決めた。追記 4 の cascade から 30k の段を外し、50k → ≥1M かつ paying class 記録 ≥2 の 2 段にした。≥1M の段は残す。主帯（100k–1M）、50k の段、段の順は変えない。
+- 方針 id を `wordpress-selection-2026-10-26` に上げた。方針 digest が変わるので、旧 id に束縛済みの batch は再開できず、batch の境界で切り替える（帰結の方針 id の項と同じ）。
+- 追記 4 と OPERATIONS 第 1 節の「50k → 30k → ≥1M」は、この追記で 50k → ≥1M に読み替える。追記 4 の本文は履歴として直さない。`cascadeStep` は 1 始まりのまま、≥1M の段は 3 から 2 になる。過去の `target-selected` の `cascadeStep: 3` は 30k の段を含む方針で選ばれたもので、読み続ける。
+- 参照: #533。
