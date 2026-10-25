@@ -65,6 +65,7 @@ const exchange = JSON.stringify({
 async function fixture(options: {
   readonly requests: number;
   readonly maxResets: number;
+  readonly resetsUsedBefore?: number;
   readonly resetSucceeds?: boolean;
   readonly captureAvailable?: boolean;
 }) {
@@ -124,6 +125,9 @@ async function fixture(options: {
     lab,
     handle,
     maxResets: options.maxResets,
+    ...(options.resetsUsedBefore === undefined
+      ? {}
+      : { resetsUsedBefore: options.resetsUsedBefore }),
     store,
     clock: () => new Date("2026-10-25T00:00:00.000Z"),
   });
@@ -201,6 +205,40 @@ describe("exploration Lab driver", () => {
     expect(await read(record.artifactDigest!, "capture.jsonl")).toBe(
       `${exchange}\n${exchange}\n`,
     );
+  });
+
+  it("gives a resumed segment only the resets earlier segments left", async () => {
+    const { trialLab, allAnswered, answers, read, resets } = await fixture({
+      requests: 2,
+      maxResets: 2,
+      resetsUsedBefore: 1,
+    });
+    await trialLab.open();
+    await allAnswered;
+    const record = await trialLab.seal();
+    expect(resets()).toBe(1);
+    expect(answers).toEqual([
+      {
+        id: "0".repeat(32),
+        statusCode: 200,
+        body: { status: "reset", resetsUsed: 2, maxResets: 2 },
+      },
+      {
+        id: "1".repeat(32),
+        statusCode: 429,
+        body: {
+          status: "refused",
+          reason: "budget",
+          resetsUsed: 2,
+          maxResets: 2,
+        },
+      },
+    ]);
+    // The segment's own counts; the ledger sums them across segments.
+    expect(record).toMatchObject({ resets: 1, refusedResets: 1 });
+    expect(
+      JSON.parse(await read(record.artifactDigest!, "exploration-lab.json")),
+    ).toMatchObject({ maxResets: 2, resetsUsedBefore: 1 });
   });
 
   it("refuses every later reset once one failed, and still seals", async () => {

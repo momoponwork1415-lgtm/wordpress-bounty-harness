@@ -160,8 +160,15 @@ async function turn(prompt) {
 
 const startedAt = Date.now();
 try {
-  // A resumed session already holds the objective; it gets the pinned directive only.
-  if (!(await turn(config.resumeSessionId === undefined ? config.prompt : config.resumePrompt)))
+  // A resumed session already holds the objective; it gets the pinned directive
+  // only, after any Harness-generated facts for this segment (a fresh Lab).
+  if (!(await turn(
+    config.resumeSessionId === undefined
+      ? config.prompt
+      : typeof config.resumeNotice === "string" && config.resumeNotice.length > 0
+        ? config.resumeNotice + "\n\n" + config.resumePrompt
+        : config.resumePrompt,
+  )))
     process.exit(3);
   while (Date.now() - startedAt < config.minimumActiveMs)
     if (!(await turn(config.resumePrompt))) process.exit(3);

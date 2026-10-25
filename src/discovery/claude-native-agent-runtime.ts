@@ -396,6 +396,8 @@ function admitted(run: DiscoveryTransportRun, sandboxImage: string): boolean {
     run.minimumActiveMs !== undefined &&
     run.resumePrompt !== undefined &&
     run.prompt.includes(run.resumePrompt) &&
+    (run.resumeNotice === undefined ||
+      (run.resume !== undefined && run.prompt.includes(run.resumeNotice))) &&
     run.campaignInput.snapshotDigest === run.targetSnapshotDigest &&
     run.campaignInput.modelProfileDigest === profile.digest &&
     (run.lab === undefined) ===
@@ -521,6 +523,9 @@ export class ClaudeNativeAgentRuntime {
                   ...(run.resume === undefined
                     ? {}
                     : { resumeSessionId: run.resume.threadId }),
+                  ...(run.resume === undefined || run.resumeNotice === undefined
+                    ? {}
+                    : { resumeNotice: run.resumeNotice }),
                 },
                 subagentModel: profile.subagent.modelId,
                 ...(run.resume === undefined

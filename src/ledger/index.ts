@@ -56,6 +56,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     labId: id,
     status: z.enum(["ready", "failed"]),
     purpose: z.enum(["discovery", "verification"]).optional(),
+    /** The Lab setup digest; a resumed segment's fresh Lab must match it. */
+    setupDigest: digest.optional(),
     scenario: z.strictObject({ id, digest }).optional(),
     reachability: z
       .strictObject({

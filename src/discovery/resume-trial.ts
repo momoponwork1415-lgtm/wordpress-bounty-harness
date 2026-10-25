@@ -42,6 +42,7 @@ export type ResumeRefusalReason =
   | "already-resumed"
   | "run-completed"
   | "lab-attached"
+  | "lab-mode-differs"
   | "snapshot-digest-differs"
   | "prompt-version-differs"
   | "resume-paragraph-missing"
@@ -69,6 +70,11 @@ export type ResumePlan = {
   readonly resume: DiscoveryResumeInput;
   /** False when the earlier segment left no notes archive to restore. */
   readonly researchRestored: boolean;
+  /**
+   * An exploration-Lab Trial (ADR 0003, 2026-10-25 addendum): the resets the
+   * earlier segments used, so the new segment's Lab gets what is left.
+   */
+  readonly lab?: { readonly resetsUsed: number };
 };
 
 export type ResumeAssessment =
@@ -306,6 +312,12 @@ export async function assessTrialResume(options: {
   readonly prompt: string;
   readonly resumePrompt: string;
   readonly profileDigest: string;
+  /**
+   * True when the caller gives the new segment a fresh exploration Lab. A
+   * Trial resumes with a Lab exactly when it started with one; Trials of the
+   * retired attached Lab (no `configuration.lab`) stay unresumable.
+   */
+  readonly lab?: boolean;
   /** The Trial's wall and active minimum, shared across segments. */
   readonly wallTimeMs: number;
   readonly minimumActiveMs: number;
@@ -351,8 +363,11 @@ export async function assessTrialResume(options: {
     (event) => event.resumesRun === options.runId,
   );
   if (later !== undefined) return refused("already-resumed", later.runId);
-  if (started.labAttached !== false || started.labId !== undefined)
+  const withLab = started.labAttached !== false || started.labId !== undefined;
+  const explorationLab = started.configuration.lab?.mode === "attached";
+  if (withLab && (!explorationLab || options.lab !== true))
     return refused("lab-attached");
+  if (!withLab && options.lab === true) return refused("lab-mode-differs");
   if (started.snapshotDigest !== options.snapshotDigest)
     return refused("snapshot-digest-differs", started.snapshotDigest);
   if (started.configuration.promptDigest !== options.promptDigest)
@@ -440,6 +455,17 @@ export async function assessTrialResume(options: {
         research: research ?? [],
       },
       researchRestored: research !== undefined,
+      ...(withLab
+        ? {
+            lab: {
+              resetsUsed: chain.reduce(
+                (sum, segment) =>
+                  sum + (finishes.get(segment.runId)?.labObserved?.resets ?? 0),
+                0,
+              ),
+            },
+          }
+        : {}),
     },
   };
 }

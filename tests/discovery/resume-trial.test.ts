@@ -141,6 +141,8 @@ async function recordRun(
     readonly wallTimeMs?: number;
     readonly session?: "recorded" | "none" | "evidence-missing";
     readonly labAttached?: boolean;
+    /** An exploration-Lab Trial (configuration.lab attached) and the resets its finish recorded. */
+    readonly explorationLab?: { readonly resets: number };
     readonly snapshotDigest?: string;
     readonly promptDigest?: string;
     readonly runKind?: "explore" | "child";
@@ -257,8 +259,8 @@ async function recordRun(
           resumesRun: options.resumesRun,
           resumeSegment: options.resumeSegment ?? 1,
         }),
-    ...(options.labAttached === true
-      ? { labId: "lab-1", labAttached: true }
+    ...(options.labAttached === true || options.explorationLab !== undefined
+      ? { labId: `lab-${options.runId}`, labAttached: true }
       : { labAttached: false }),
     history: { mode: "none" },
     configuration: {
@@ -271,6 +273,9 @@ async function recordRun(
       assignmentUnit: "plugin",
       labAccess: { database: "none" },
       ...RUN_PARAMETERS,
+      ...(options.explorationLab === undefined
+        ? {}
+        : { lab: { mode: "attached" as const, maxResets: 2 } }),
     },
   });
   expect(started.status).toBe("appended");
@@ -296,6 +301,16 @@ async function recordRun(
             : { providerLimit: options.providerLimit }),
         }),
     diagnosticArtifactDigest: rootAttachment.digest,
+    ...(options.explorationLab === undefined
+      ? {}
+      : {
+          labObserved: {
+            requests: 3,
+            droppedRequests: 0,
+            resets: options.explorationLab.resets,
+            refusedResets: 0,
+          },
+        }),
     ...(research === undefined
       ? {}
       : { researchArtifact: { digest: research.digest, truncated: false } }),
@@ -444,6 +459,56 @@ describe("resumability rule (ADR 0036)", () => {
       });
       expect(stores.ledger.readAll({}).length, testCase.label).toBe(before);
     }
+  });
+
+  it("resumes an exploration-Lab Trial only with a fresh Lab and carries the resets its segments used", async () => {
+    const stores = await open();
+    await recordRun(stores, {
+      runId: "run-0",
+      explorationLab: { resets: 1 },
+      wallTimeMs: 20 * 60_000,
+    });
+    await recordRun(stores, {
+      runId: "run-1",
+      trialId: "run-0",
+      resumesRun: "run-0",
+      resumeSegment: 1,
+      explorationLab: { resets: 0 },
+      wallTimeMs: 20 * 60_000,
+    });
+    const before = stores.ledger.readAll({}).length;
+    // The caller gives no Lab: the Trial ran with one, so it is refused.
+    expect(await assess(stores)).toMatchObject({
+      status: "refused",
+      reason: "lab-attached",
+    });
+    const assessment = await assess(stores, { lab: true });
+    expect(assessment).toMatchObject({
+      status: "resumable",
+      plan: { segment: 2, lab: { resetsUsed: 1 } },
+    });
+    expect(stores.ledger.readAll({}).length).toBe(before);
+
+    // A Trial without a Lab is not given one on resume.
+    const plain = await open();
+    await recordRun(plain, { runId: "run-1" });
+    expect(await assess(plain, { lab: true })).toMatchObject({
+      status: "refused",
+      reason: "lab-mode-differs",
+    });
+    const unchanged = await assess(plain);
+    expect(unchanged.status).toBe("resumable");
+    expect(
+      unchanged.status === "resumable" ? unchanged.plan.lab : "refused",
+    ).toBeUndefined();
+
+    // The retired attached Lab (no configuration.lab attached) stays unresumable.
+    const legacy = await open();
+    await recordRun(legacy, { runId: "run-1", labAttached: true });
+    expect(await assess(legacy, { lab: true })).toMatchObject({
+      status: "refused",
+      reason: "lab-attached",
+    });
   });
 
   it("admits a run that stopped for any reason, not only a provider refusal", async () => {

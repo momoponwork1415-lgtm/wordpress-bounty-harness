@@ -43,10 +43,17 @@ export function openWordPressExplorationLab(options: {
   >;
   readonly handle: WordPressLabHandle;
   readonly maxResets: number;
+  /** Resets earlier segments of the same Trial used; the budget is the Trial's. */
+  readonly resetsUsedBefore?: number;
   readonly store: PrivateArtifactStore;
   readonly clock: () => Date;
 }): TrialLab {
   const { lab, handle, maxResets, store, clock } = options;
+  const resetsUsedBefore = options.resetsUsedBefore ?? 0;
+  /** Resets the Trial has used so far, across its segments. */
+  const usedInTrial = () =>
+    resetsUsedBefore +
+    resets.filter((entry) => entry.status !== "refused").length;
   const states = createWordPressLabStateObserver({ store, lab });
   const generations: Generation[] = [];
   const resets: ResetRecord[] = [];
@@ -85,7 +92,7 @@ export function openWordPressExplorationLab(options: {
     record: Omit<ResetRecord, "requestedAt" | "answeredAt">,
     statusCode: number,
   ): Promise<void> => {
-    const used = resets.filter((entry) => entry.status !== "refused").length;
+    const used = usedInTrial();
     const status = record.status;
     await lab.answerControlRequest(handle, request.id, {
       statusCode,
@@ -103,7 +110,7 @@ export function openWordPressExplorationLab(options: {
     });
   };
   const handleReset = async (request: ControlRequest): Promise<void> => {
-    const used = resets.filter((entry) => entry.status !== "refused").length;
+    const used = usedInTrial();
     if (broken)
       return answer(request, { status: "refused", reason: "unavailable" }, 503);
     if (used >= maxResets)
@@ -169,6 +176,7 @@ export function openWordPressExplorationLab(options: {
         labId: handle.id,
         setupDigest: handle.setupDigest,
         maxResets,
+        resetsUsedBefore,
         capture:
           capture.status === "captured"
             ? {

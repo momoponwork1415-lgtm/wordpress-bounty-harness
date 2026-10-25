@@ -487,6 +487,9 @@ export async function runCampaignPipeline<
           labId,
           status: provisioned.status === "ready" ? "ready" : "failed",
           purpose: "discovery",
+          ...(provisioned.status === "ready"
+            ? { setupDigest: provisioned.handle.setupDigest }
+            : {}),
           ...(provisioned.status !== "ready" ||
           provisioned.handle.scenario === undefined
             ? {}

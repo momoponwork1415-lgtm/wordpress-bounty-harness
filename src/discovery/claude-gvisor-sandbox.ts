@@ -85,6 +85,8 @@ export interface ClaudeSandboxCommand {
     readonly outputSchema: object;
     /** Resume this restored session; the first turn is the pinned directive (ADR 0036). */
     readonly resumeSessionId?: string;
+    /** With `resumeSessionId`: Harness-generated facts sent before the directive on the first turn. */
+    readonly resumeNotice?: string;
   };
   /**
    * The model every child runs on, from the profile's `subagent.modelId`
@@ -362,6 +364,10 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       !dependencyMountPathsAreDisjoint(
         command.dependencyMounts.map((mount) => mount.path),
       ) ||
+      (command.input.resumeNotice !== undefined &&
+        (command.input.resumeSessionId === undefined ||
+          command.input.resumeNotice.length === 0 ||
+          command.input.resumeNotice.length > 4_096)) ||
       (command.resume === undefined
         ? command.input.resumeSessionId !== undefined
         : !admittedResumeSeed(command.resume, command.input.resumeSessionId))

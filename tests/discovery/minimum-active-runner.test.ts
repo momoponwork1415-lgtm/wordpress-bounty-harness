@@ -169,6 +169,30 @@ it("resumes a restored thread with the pinned directive as its first turn and ne
   }
 });
 
+it("puts a resumed segment's notice before the directive on its first turn only", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "minimum-active-notice-"));
+  try {
+    await writeEchoingCodex(directory);
+    const { exitCode, stderr, turns } = await runRunner(directory, [
+      "300",
+      JSON.stringify(["exec", "--json", "-"]),
+      JSON.stringify(["exec", "resume", "--json"]),
+      "Before giving up, keep exploring.",
+      "restored-root-thread",
+      Buffer.from("## Lab\n\nThis segment has a new Lab.").toString("base64"),
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    expect(turns.length).toBeGreaterThanOrEqual(2);
+    expect(turns[0]!.prompt).toBe(
+      "## Lab\n\nThis segment has a new Lab.\n\nBefore giving up, keep exploring.",
+    );
+    for (const turn of turns.slice(1))
+      expect(turn.prompt).toBe("Before giving up, keep exploring.");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 it("runs exactly one turn when the floor is 0 (wide mode, ADR 0039)", async () => {
   const directory = await mkdtemp(join(tmpdir(), "minimum-active-zero-"));
   try {

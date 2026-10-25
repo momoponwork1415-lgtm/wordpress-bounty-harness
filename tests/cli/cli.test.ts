@@ -1849,6 +1849,209 @@ describe("harness CLI vertical slice", () => {
     expect(live.volumes.size).toBe(0);
   });
 
+  it("resumes an exploration-Lab Trial on a fresh Lab of the same setup, with the resets left and a notice (Phase D1)", async () => {
+    // Each segment answers its control requests before the transport returns.
+    let answers: unknown[] = [];
+    let answersBefore = 0;
+    let expectedPerSegment: number[] = [1, 2];
+    let segment = 0;
+    const {
+      run,
+      configPath,
+      transportRuns,
+      ledger,
+      live,
+      controlRequests,
+      controlAnswers,
+      state,
+    } = await harness({
+      omitLegacyVerifier: true,
+      refuseOnCalls: [1],
+      refusalSession: true,
+      zeroFindings: true,
+      config: { promptId: undefined, discovery: { lab: "attached" } },
+      executionStarted: async () => {
+        const expected = answersBefore + (expectedPerSegment[segment++] ?? 0);
+        for (let poll = 0; poll < 200 && answers.length < expected; poll++)
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        answersBefore = answers.length;
+      },
+    });
+    answers = controlAnswers;
+    const reset = (id: string) => ({
+      id: id.repeat(32),
+      command: "reset",
+      receivedAt: now,
+    });
+    controlRequests.push(reset("a"));
+    const campaignId = "campaign-exploration-resume";
+    const first = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      campaignId,
+      "--config",
+      configPath,
+    );
+    expect(first.code).toBe(0);
+    const refusedRunId = transportRuns[0]!.runId;
+    expect(transportRuns[0]?.resumeNotice).toBeUndefined();
+
+    controlRequests.push(reset("b"), reset("c"));
+    const resumed = await run(
+      "campaign",
+      "resume",
+      "--campaign",
+      campaignId,
+      "--run",
+      refusedRunId,
+      "--config",
+      configPath,
+    );
+    if (resumed.code !== 0) throw new Error(resumed.stderr);
+    expect(transportRuns).toHaveLength(2);
+    const labs = ledger()
+      .read({ campaignId, type: "lab-provisioned" })
+      .map(({ event }) => event);
+    expect(labs).toMatchObject([
+      { status: "ready", purpose: "discovery" },
+      { status: "ready", purpose: "discovery" },
+    ]);
+    const [firstLab, secondLab] = labs.map((event) =>
+      event.type === "lab-provisioned" ? event : undefined,
+    );
+    expect(secondLab!.labId).not.toBe(firstLab!.labId);
+    expect(secondLab!.setupDigest).toBe(firstLab!.setupDigest);
+    expect(firstLab!.setupDigest).toMatch(/^sha256:/);
+
+    const segmentRun = transportRuns[1]!;
+    expect(segmentRun.lab).toEqual({
+      endpoint: "http://wordpress",
+      networkName: `wbh-${secondLab!.labId}-net`,
+      internalIp: "172.20.0.2",
+      control: { host: "labctl", ipv4: "172.20.0.130" },
+    });
+    expect(segmentRun.resume).toMatchObject({ segment: 1 });
+    expect(segmentRun.campaignInput.lab).toEqual({
+      setupDigest: firstLab!.setupDigest,
+    });
+    const notice = segmentRun.resumeNotice!;
+    expect(notice).toContain(
+      "## Lab\n\nThis segment resumes the Trial in a new sandbox with a new Lab. The site was provisioned again from the same setup: nothing changed in the earlier Lab remains, and the accounts below replace the earlier ones.",
+    );
+    expect(notice).toContain("at most 2 times in all and has used 1");
+    expect(notice).not.toContain(transportRuns[0]!.prompt.slice(0, 200));
+    expect(segmentRun.prompt).toContain(notice);
+    expect(segmentRun.prompt).toContain(segmentRun.resumePrompt!);
+    // The segment gets the one reset the first left, then the budget refusal.
+    expect(controlAnswers).toEqual([
+      {
+        statusCode: 200,
+        body: { status: "reset", resetsUsed: 1, maxResets: 2 },
+      },
+      {
+        statusCode: 200,
+        body: { status: "reset", resetsUsed: 2, maxResets: 2 },
+      },
+      {
+        statusCode: 429,
+        body: {
+          status: "refused",
+          reason: "budget",
+          resetsUsed: 2,
+          maxResets: 2,
+        },
+      },
+    ]);
+    const starts = ledger()
+      .read({ campaignId, type: "discovery-run-started" })
+      .map(({ event }) => event);
+    expect(starts[1]).toMatchObject({
+      runId: segmentRun.runId,
+      trialId: refusedRunId,
+      resumesRun: refusedRunId,
+      resumeSegment: 1,
+      labAttached: true,
+      labId: secondLab!.labId,
+    });
+    // Each segment seals its own bundle.
+    const finishes = ledger()
+      .read({ campaignId, type: "discovery-run-finished" })
+      .map(({ event }) => event);
+    expect(finishes).toMatchObject([
+      { labObserved: { resets: 1, refusedResets: 0 } },
+      { labObserved: { resets: 1, refusedResets: 1 } },
+    ]);
+    const bundles = finishes.map((event) =>
+      event.type === "discovery-run-finished"
+        ? event.artifacts?.find(({ kind }) => kind === "exploration-lab")
+            ?.digest
+        : undefined,
+    );
+    expect(bundles[0]).toMatch(/^sha256:/);
+    expect(bundles[1]).toMatch(/^sha256:/);
+    expect(bundles[1]).not.toBe(bundles[0]);
+    const sealed = await state().store.readFile(
+      bundles[1]!,
+      "exploration-lab.json",
+      1024 * 1024,
+    );
+    if (sealed.status !== "resolved") throw new Error(sealed.status);
+    expect(JSON.parse(sealed.bytes.toString("utf8"))).toMatchObject({
+      labId: secondLab!.labId,
+      setupDigest: firstLab!.setupDigest,
+      maxResets: 2,
+      resetsUsedBefore: 1,
+    });
+    // Both Labs are gone.
+    expect(live.containers.size).toBe(0);
+    expect(live.networks.size).toBe(0);
+    expect(live.volumes.size).toBe(0);
+  });
+
+  it("does not resume an exploration-Lab Trial under a campaign with discovery.lab none", async () => {
+    const attached = await harness({
+      omitLegacyVerifier: true,
+      refuseOnCalls: [1],
+      refusalSession: true,
+      zeroFindings: true,
+      config: { promptId: undefined, discovery: { lab: "attached" } },
+    });
+    const campaignId = "campaign-exploration-resume-none";
+    expect(
+      (
+        await attached.run(
+          "campaign",
+          "run",
+          "synthetic-plugin",
+          "--campaign",
+          campaignId,
+          "--config",
+          attached.configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const written = JSON.parse(await readFile(attached.configPath, "utf8"));
+    written.discovery.lab = "none";
+    await writeFile(attached.configPath, JSON.stringify(written));
+    const resumed = await attached.run(
+      "campaign",
+      "resume",
+      "--campaign",
+      campaignId,
+      "--run",
+      attached.transportRuns[0]!.runId,
+      "--config",
+      attached.configPath,
+    );
+    expect(resumed.code).toBe(3);
+    expect(resumed.stderr).toBe(
+      "not resumable: lab-mode-differs (the campaign configuration has discovery.lab none)",
+    );
+    expect(attached.transportRuns).toHaveLength(1);
+  });
+
   it("refuses --repeat with an attached exploration Lab", async () => {
     const { run, configPath, ledger, transportRuns } = await harness({
       omitLegacyVerifier: true,

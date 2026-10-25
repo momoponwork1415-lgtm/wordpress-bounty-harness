@@ -869,6 +869,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
       (command.resume !== undefined &&
         (command.minimumActiveMs === undefined ||
           !admittedResumeSeed(command.resume))) ||
+      (command.resumeNotice !== undefined &&
+        (command.resume === undefined ||
+          command.resumeNotice.length === 0 ||
+          command.resumeNotice.length > 4_096)) ||
       (command.runMarker !== undefined &&
         (command.researchMount === undefined ||
           !runIdPattern.test(command.runMarker.runId) ||
@@ -1060,7 +1064,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
               command.resumePrompt!,
               ...(command.resume === undefined
                 ? []
-                : [command.resume.threadId]),
+                : [
+                    command.resume.threadId,
+                    ...(command.resumeNotice === undefined
+                      ? []
+                      : [Buffer.from(command.resumeNotice).toString("base64")]),
+                  ]),
             ]),
       ];
       let result: NativeModelProcessResult;
