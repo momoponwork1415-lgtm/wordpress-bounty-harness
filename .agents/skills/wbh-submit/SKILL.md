@@ -9,7 +9,7 @@ description: WordPress bounty の提出作業を ChatGPT/Codex または Claude 
 
 ## セッションの開始・再開
 
-1. repository、Harness state、対象 campaign を確認する。既に会話で固定したものは再質問しない。`harness review --campaign <id>` と各 `review export`、既存の非公開判断・提出記録を読み、現時点の queue を作る。探索を新たに走らせない。必要な段だけ、repo の `.claude/skills/wbh-screen`、`wbh-verify`、`wbh-dedupe`、`wbh-destination`、`wbh-report` を参照する。
+1. repository、Harness state、対象 campaign を確認する。既に会話で固定したものは再質問しない。`harness review --campaign <id>` と各 `review export`、既存の非公開判断・提出記録を読み、現時点の queue を作る。探索を新たに走らせない。必要な段だけ、repo の `.claude/skills/wbh-screen`、`wbh-verify`、`wbh-review`、`wbh-dedupe`、`wbh-destination`、`wbh-report` を参照する。
 2. Programme Boundary の parked、提出しないと決めたもの、提出済みのものを、次候補の表示から外す。利用者が明示的に一覧を求めたときだけ別に見せる。歴史的な記録は消さない。Harness の正式な状態と、利用者が会話で伝えた提出済み事実を混同しない。
 3. 残る Finding を一括で安く選別する。`wbh-screen` の現行版と Wordfence 規則の写しを読み、**明示的な除外条項に、独立に確認した事実が直接一致するものだけ**を分ける。公開ミラーの類例が 0 件、`incomplete`、短い時間窓、競合、特別な設定、最初の数人に限る表示という名前だけでは落とさない。
 4. 残りを前提の軽さ、最終影響、最新版との関係で短い候補表にする。対象が多ければ、上位数件と残件数だけ見せる。利用者が「次」と言ったら、既に見送った候補を再表示せず、次を進める。
