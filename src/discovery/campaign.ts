@@ -3,6 +3,7 @@ import { z } from "zod";
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
+import type { TrialLab } from "../lab/index.js";
 import {
   interruptedExplorations,
   providerLimitedExplorations,
@@ -131,6 +132,8 @@ export type ProviderLimitedResumeResult =
 export async function runDiscoveryCampaign(options: {
   readonly campaignId: string;
   readonly labId?: string;
+  /** The exploration Lab of the one planned Trial; its id is the run's `labId`. */
+  readonly lab?: TrialLab;
   /** An explicit repeat runs every planned independent Trial unless a run fails. */
   readonly repeatAll?: boolean;
   readonly input: CampaignInputV1;
@@ -182,6 +185,16 @@ export async function runDiscoveryCampaign(options: {
   const id = z.string().min(1).max(128);
   id.parse(options.campaignId);
   if (options.labId !== undefined) id.parse(options.labId);
+  if (options.lab !== undefined) {
+    id.parse(options.lab.labId);
+    // One Lab serves one Trial (ADR 0003, 2026-10-25 addendum).
+    if (
+      options.plannedTrials.length !== 1 ||
+      (options.labId !== undefined && options.labId !== options.lab.labId)
+    )
+      throw new Error("An exploration Lab serves exactly one Trial");
+  }
+  const labId = options.lab?.labId ?? options.labId;
   const clock = options.clock ?? (() => new Date());
   const concurrency = options.concurrency ?? 1;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4)
@@ -205,7 +218,8 @@ export async function runDiscoveryCampaign(options: {
   const startedExplorations = new Set(progress.startedExplorations);
   const context: TrialContext = {
     campaignId: options.campaignId,
-    ...(options.labId === undefined ? {} : { labId: options.labId }),
+    ...(labId === undefined ? {} : { labId }),
+    ...(options.lab === undefined ? {} : { lab: options.lab }),
     input,
     ...(options.runWallTimeMs === undefined
       ? {}

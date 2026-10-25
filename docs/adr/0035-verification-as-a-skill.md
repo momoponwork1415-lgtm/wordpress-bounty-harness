@@ -65,6 +65,11 @@ PR #415 のレビュー指摘 2 への対応。決定の本文は変えず、次
 - 実行用 campaign 設定の `discovery.lab` は `none` だけを受理する。`attached` は host 初期化より前の設定検査で拒否し、`none` へ変換しない。
 - 旧 `labAttached`、Verifier の版と digest、Private Evidence の読取は変更しない。旧 attached Trial の再開拒否も維持する。#352 の受入とシナリオ削除の残件は別に扱う。
 
+## 2026-10-25 追記: attached の探索 Lab の復活（Phase D1）
+
+- `discovery.lab: attached` は、ADR 0003 の 2026-10-25 追記の探索 Lab として再び受理する。探索 Lab は Trial の間だけ使い、canary も判定器も置かない。
+- campaign 内の自動検証は戻さない。attached の campaign も、検証は `verify next --handoff` で Finding ごとの検証 Lab に送る。到達しなくなっていた campaign 内検証の経路（旧 Verifier の再試行と scenario による再実行）は pipeline から削除した。旧 attached Trial の再開拒否は維持する。
+
 ## 2026-10-26 追記: 検証 Lab の単一枠を外す（#432、所有者決定 2026-10-26）
 
 PR #415 は handoff の接続と同時に、host 単位の検証 Lab lease（`src/infrastructure/host-lab-lease.ts`、1 host 1 枠、取得待ち 30 分）を入れた。本 ADR の本文にも PARKING.md の再開条件にも無いまま入ったもので、OPERATIONS.md の「host 共通 claim は持たない」と食い違っていた。所有者は 2026-10-26 に「検証ラボの並列数は制限しません」と決めた。

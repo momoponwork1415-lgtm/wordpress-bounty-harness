@@ -282,6 +282,8 @@ export interface CodexSandboxCommand {
   readonly resumePrompt?: string;
   /** Operator-triggered resume: start with `exec resume <threadId>` on the restored session. */
   readonly resume?: CodexSandboxResumeSeed;
+  /** With `resume`: Harness-generated text put before the pinned directive on the first turn only. */
+  readonly resumeNotice?: string;
   /**
    * Names the run in a marker outside every mount, so a later process can find
    * this sandbox's directories when the host dies mid-run (ADR 0036, 2026-10-19
@@ -322,6 +324,8 @@ export interface CodexSandboxCommand {
   };
   readonly labHost?: { readonly name: string; readonly ipv4: string };
   readonly databaseHost?: { readonly name: string; readonly ipv4: string };
+  /** The exploration Lab's control endpoint (ADR 0003, 2026-10-25 addendum). */
+  readonly controlHost?: { readonly name: string; readonly ipv4: string };
 }
 export interface CodexSandboxResult {
   readonly status: "exited" | "failed";
@@ -398,6 +402,12 @@ export interface DiscoveryTransportRun {
   /** A versioned excerpt already present in prompt, used only for early Root resumes. */
   readonly resumePrompt?: string;
   /**
+   * With `resume` only: Harness-generated facts that changed for this segment
+   * (a fresh exploration Lab, ADR 0003 addendum), sent before the pinned
+   * directive on the segment's first turn. It is part of `prompt`.
+   */
+  readonly resumeNotice?: string;
+  /**
    * Operator-triggered continuation of an earlier segment's Root thread in a
    * new sandbox (ADR 0036): the restored session files and notes, and which
    * segment this run is. Children listed here were recorded by earlier segments.
@@ -410,8 +420,11 @@ export interface DiscoveryTransportRun {
   readonly lab?: {
     readonly endpoint: string;
     readonly networkName: string;
+    /** The address the endpoint's host name resolves to inside the sandbox. */
     readonly internalIp: string;
     readonly database?: { readonly host: string; readonly ipv4: string };
+    /** An exploration Lab's control endpoint (ADR 0003, 2026-10-25 addendum). */
+    readonly control?: { readonly host: string; readonly ipv4: string };
   };
   readonly campaignInput: CampaignInputV1;
   readonly sourceDirectory: string;
@@ -490,6 +503,7 @@ const discoveryTransportRunSchema = z.strictObject({
     .max(120 * 60_000)
     .optional(),
   resumePrompt: z.string().min(1).max(2_048).optional(),
+  resumeNotice: z.string().min(1).max(4_096).optional(),
   resume: discoveryResumeInputSchema.optional(),
   coordination: z.literal("cooperative").optional(),
   outputKind: z.literal("verification").optional(),
@@ -499,6 +513,12 @@ const discoveryTransportRunSchema = z.strictObject({
       networkName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
       internalIp: z.ipv4(),
       database: z
+        .strictObject({
+          host: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+          ipv4: z.ipv4(),
+        })
+        .optional(),
+      control: z
         .strictObject({
           host: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
           ipv4: z.ipv4(),
@@ -1404,6 +1424,8 @@ function admittedRun(
     (run.resumePrompt === undefined ||
       (run.minimumActiveMs !== undefined &&
         run.prompt.includes(run.resumePrompt))) &&
+    (run.resumeNotice === undefined ||
+      (run.resume !== undefined && run.prompt.includes(run.resumeNotice))) &&
     (run.resume === undefined ||
       (cooperative &&
         run.minimumActiveMs !== undefined &&
@@ -1617,6 +1639,9 @@ function sandboxCommand(
             runtimeProfileDigest: run.profile.digest,
           },
         }),
+    ...(run.resume === undefined || run.resumeNotice === undefined
+      ? {}
+      : { resumeNotice: run.resumeNotice }),
     ...(run.resume === undefined
       ? {}
       : {
@@ -1687,6 +1712,14 @@ function sandboxCommand(
           databaseHost: {
             name: run.lab.database.host,
             ipv4: run.lab.database.ipv4,
+          },
+        }),
+    ...(run.lab?.control === undefined
+      ? {}
+      : {
+          controlHost: {
+            name: run.lab.control.host,
+            ipv4: run.lab.control.ipv4,
           },
         }),
   };

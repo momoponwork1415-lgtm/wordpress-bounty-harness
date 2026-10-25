@@ -48,3 +48,31 @@ export interface LabProvisioner<Setup, Handle extends LabHandle> {
       }
   >;
 }
+
+/**
+ * A Lab attached to one discovery Trial (ADR 0003, 2026-10-25 addendum). The
+ * Harness only serves the control endpoint and seals what it observed; it
+ * draws no conclusion from the Lab.
+ */
+export interface TrialLab {
+  readonly labId: string;
+  /** Takes the first state and starts answering the control endpoint. */
+  open(): Promise<void>;
+  /** Stops answering, seals the capture and states in Private Evidence; never throws. */
+  seal(): Promise<TrialLabRecord>;
+}
+
+/** What one Trial's Lab saw, as the finish event records it. */
+export interface TrialLabRecord {
+  /** Private Evidence bundle: HTTP capture, states before and after each reset. */
+  readonly artifactDigest?: string;
+  /** HTTP exchanges that passed the Lab recorder, including those past its cap. */
+  readonly requests: number;
+  /** Exchanges the recorder counted but did not keep once its cap was reached. */
+  readonly droppedRequests: number;
+  readonly resets: number;
+  /** Reset requests answered with a refusal (budget spent or Lab unavailable). */
+  readonly refusedResets: number;
+  /** Commands whose answer did not reach the control endpoint, even after one retry. */
+  readonly droppedAnswers: number;
+}

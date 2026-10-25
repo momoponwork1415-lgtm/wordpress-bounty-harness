@@ -55,6 +55,18 @@ export interface WordPressLabHandle extends LabHandle {
     subscriber: { readonly username: string; readonly password: string };
     customer?: { readonly username: string; readonly password: string };
   }>;
+  /**
+   * Exploration Labs only (ADR 0003, 2026-10-25 addendum): the control
+   * endpoint and the administrator the agent holds for the whole Trial. A
+   * verification handle never carries either.
+   */
+  readonly exploration?: {
+    readonly control: { readonly host: "labctl"; readonly ipv4: string };
+    readonly administrator: {
+      readonly username: "harness-admin";
+      readonly password: string;
+    };
+  };
 }
 
 export interface WordPressCanaryLedger {

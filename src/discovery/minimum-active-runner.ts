@@ -12,6 +12,9 @@ const resumeArgs = JSON.parse(process.argv[4]);
 const resumePrompt = process.argv[5];
 // Operator-triggered resume of an earlier segment: the Root thread already exists.
 const resumeThreadId = process.argv[6];
+// With a resume only: Harness-generated facts for this segment, before the directive on its first turn.
+const resumeNotice =
+  process.argv[7] === undefined ? "" : Buffer.from(process.argv[7], "base64").toString("utf8");
 if (
   !Number.isSafeInteger(minimumActiveMs) ||
   minimumActiveMs < 0 ||
@@ -79,7 +82,10 @@ if (resumeThreadId === undefined) {
 } else {
   // The first turn of a resumed segment continues the restored thread with the
   // same pinned directive; the initial objective is not sent again.
-  exitCode = await turn([...resumeArgs, threadId, "-"], resumePrompt);
+  exitCode = await turn(
+    [...resumeArgs, threadId, "-"],
+    resumeNotice === "" ? resumePrompt : resumeNotice + "\n\n" + resumePrompt,
+  );
   if (exitCode !== 0 || process.exitCode === 2) process.exit(exitCode || 2);
 }
 

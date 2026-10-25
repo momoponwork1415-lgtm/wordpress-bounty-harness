@@ -22,3 +22,10 @@ await cp(
   new URL("../dist/lab-recorder/", import.meta.url),
   { recursive: true },
 );
+
+// So is the exploration Lab's control endpoint (labctl).
+await cp(
+  new URL("../dist/lab/control/", import.meta.url),
+  new URL("../dist/lab-control/", import.meta.url),
+  { recursive: true },
+);

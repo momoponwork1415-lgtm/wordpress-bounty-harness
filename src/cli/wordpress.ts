@@ -62,6 +62,7 @@ import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js"
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
+import { openWordPressExplorationLab } from "../profiles/wordpress/lab/exploration-lab.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
 import type { WordPressReconstruction } from "../profiles/wordpress/verification/reproduction-package.js";
 import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
@@ -409,6 +410,7 @@ type WordPressDiscoveryContext = {
   readonly config: WordPressCampaignConfig;
   readonly repeat: number;
   readonly boundaries: WordPressCampaignBoundaries;
+  readonly setupFor: WordPressCampaignSession["setupFor"];
   readonly state: CliState;
   readonly objective: WordPressDiscoveryAsset;
   readonly trustBoundary: WordPressDiscoveryAsset;
@@ -483,6 +485,8 @@ function wordPressDiscoveryPromptText(options: {
   readonly trustBoundary: WordPressDiscoveryAsset;
   readonly config: WordPressCampaignConfig;
   readonly lab: WordPressDiscoveryInput["lab"];
+  /** A resumed segment's fresh Lab: how many resets earlier segments used. */
+  readonly resumedLab?: { readonly resetsUsed: number };
   readonly source: WordPressDiscoverySource;
   readonly runParameters: RunParameters;
 }): string {
@@ -490,11 +494,6 @@ function wordPressDiscoveryPromptText(options: {
   const objectiveOnly = wordPressDiscoveryContractPlan(
     objective.id,
   ).objectiveOnly;
-  // Only low-privilege Lab accounts exist on the handle; nothing else is offered.
-  const accounts = Object.entries(lab?.attackerAccounts ?? {}).map(
-    ([role, account]) =>
-      `- ${role}: ${account.username} / ${account.password} (Lab only)`,
-  );
   return [
     objective.text.trim(),
     ...(objectiveOnly ? [wordPressOutputContractFor(objective.id).text] : []),
@@ -508,14 +507,11 @@ function wordPressDiscoveryPromptText(options: {
           "This Trial has no Lab. Runtime confirmation happens during verification.",
         ]
       : [
-          "## Lab",
-          `Endpoint: ${lab.endpoint}`,
-          ...accounts,
-          ...(lab.database === undefined
-            ? ["Database: not exposed to this run."]
-            : [
-                `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
-              ]),
+          wordPressLabSection(
+            lab,
+            config.discovery.lab.maxResets,
+            options.resumedLab,
+          ),
         ]),
     ...(source.dependency === undefined
       ? []
@@ -532,6 +528,45 @@ function wordPressDiscoveryPromptText(options: {
       : []),
     "## Assigned files",
     `All files under ${WORDPRESS_SANDBOX_LAYOUT.target}.`,
+  ].join("\n\n");
+}
+
+/**
+ * The Harness-generated `## Lab` section of a Trial with an exploration Lab
+ * (ADR 0003, 2026-10-25 addendum). It states the endpoint, both accounts,
+ * the reset budget and that the Lab confirms nothing; it says nothing about
+ * what to try. Passwords are written here: the sandbox has no other channel
+ * for Lab credentials. A resumed segment's section states that its Lab is new
+ * and how much of the Trial's reset budget is used; it is that segment's
+ * first-turn notice. Agent-facing text: changes need `owner-approved`.
+ */
+export function wordPressLabSection(
+  lab: WordPressLabHandle,
+  maxResets: number,
+  resumed?: { readonly resetsUsed: number },
+): string {
+  const exploration = lab.exploration;
+  if (exploration === undefined)
+    throw new Error("The discovery Lab is not an exploration Lab");
+  const { administrator, control } = exploration;
+  const accounts = Object.entries(lab.attackerAccounts).flatMap(
+    ([role, account]) =>
+      account === undefined
+        ? []
+        : [`- ${role} account: ${account.username} / ${account.password}`],
+  );
+  return [
+    "## Lab",
+    [
+      resumed === undefined
+        ? "This Trial has one Lab of its own for its whole wall time. It runs the frozen target and its dependency plugins on WordPress in gVisor. This sandbox reaches it over HTTP only; the Lab has no internet access."
+        : "This segment resumes the Trial in a new sandbox with a new Lab. The site was provisioned again from the same setup: nothing changed in the earlier Lab remains, and the accounts below replace the earlier ones. The Lab runs the frozen target and its dependency plugins on WordPress in gVisor. This sandbox reaches it over HTTP only; the Lab has no internet access.",
+      `- Site: ${lab.endpoint}/`,
+      `- Administrator account: ${administrator.username} / ${administrator.password}`,
+      ...accounts,
+      `- Reset: \`POST http://${control.host}/reset\` removes the site and provisions it again from the same setup; the accounts above stay the same. ${resumed === undefined ? `This Trial may reset at most ${maxResets} times` : `This Trial may reset at most ${maxResets} times in all and has used ${resumed.resetsUsed}`}, and the answer states how many are used. Other requests through \`${lab.endpoint}\` are counted, not limited.`,
+    ].join("\n"),
+    "The Harness records the HTTP traffic through the site address and the site state before and after each reset. Nothing observed in this Lab is a confirmation. A setting you make as administrator is a configuration precondition; state it in `configurationPrecondition`. In a Finding or Lead, `labObservations` states what you tried in the Lab and what you saw.",
   ].join("\n\n");
 }
 
@@ -579,10 +614,12 @@ async function planWordPressDiscovery(
 ): Promise<WordPressDiscoveryPlan> {
   const { config, repeat, boundaries, state, objective, trustBoundary } =
     context;
-  if (lab !== undefined)
+  if ((lab === undefined) !== (config.discovery.lab.mode === "none"))
     throw new Error(
       "Discovery Lab mode differs from the campaign configuration",
     );
+  if (lab !== undefined && lab.exploration === undefined)
+    throw new Error("The discovery Lab is not an exploration Lab");
   const wallMinutes = config.runWallTimeMinutes;
   const objectiveOnly = (id: string) =>
     wordPressDiscoveryContractPlan(id).objectiveOnly;
@@ -628,7 +665,8 @@ async function planWordPressDiscovery(
       modelProfileDigest: runtime.runtimeProfile.digest,
       promptDigest: objective.digest,
       stopRules,
-      lab: { mode: "none" },
+      lab:
+        lab === undefined ? { mode: "none" } : { setupDigest: lab.setupDigest },
       history: { mode: "none" },
     },
     runWallTimeMs: wallMinutes * 60_000,
@@ -686,6 +724,21 @@ async function planWordPressDiscovery(
           maxChildren: runParameters.maxChildren,
           minimumActiveMs: wordPressMinimumActiveMs(config),
           resumePrompt,
+          ...(lab?.exploration === undefined
+            ? {}
+            : {
+                // HTTP only: `wordpress` resolves to the Lab recorder, which
+                // captures every exchange; the database is not exposed.
+                lab: {
+                  endpoint: lab.endpoint,
+                  networkName: lab.networkName,
+                  internalIp: lab.recorderIp,
+                  control: {
+                    host: lab.exploration.control.host,
+                    ipv4: lab.exploration.control.ipv4,
+                  },
+                },
+              }),
           ...wordPressSourceMounts(source),
           expiresAt: new Date(now + wallMinutes * 60_000).toISOString(),
         },
@@ -699,7 +752,7 @@ async function planWordPressDiscovery(
     executor: runtime.executor,
     attachments: boundaries.attachments,
     recordReport: recordWordPressReport,
-    ...(context.resumeInterrupted === undefined || lab !== undefined
+    ...(context.resumeInterrupted === undefined
       ? {}
       : {
           resumeInterrupted: resumeInterruptedFor(
@@ -707,7 +760,7 @@ async function planWordPressDiscovery(
             context.resumeInterrupted.log,
           ),
         }),
-    ...(context.resumeProviderLimited === undefined || lab !== undefined
+    ...(context.resumeProviderLimited === undefined
       ? {}
       : {
           resumeProviderLimited: resumeProviderLimitedFor(
@@ -827,7 +880,8 @@ async function resumeWordPressRun(
   {
     config,
     boundaries,
-  }: Pick<WordPressCampaignSession, "config" | "boundaries">,
+    setupFor,
+  }: Pick<WordPressCampaignSession, "config" | "boundaries" | "setupFor">,
   input: { readonly campaignId: string; readonly runId: string },
   signal?: AbortSignal,
 ): Promise<
@@ -881,15 +935,39 @@ async function resumeWordPressRun(
       reason: "snapshot-digest-differs",
       detail: snapshot.digest,
     };
+  // A Trial with an exploration Lab resumes with a fresh Lab of the same
+  // setup (ADR 0003, 2026-10-25 addendum); the earlier one is already sealed.
+  const recordedLab = started.configuration.lab;
+  const attached = recordedLab?.mode === "attached";
+  if (attached && config.discovery.lab.mode === "none")
+    return {
+      status: "refused",
+      reason: "lab-mode-differs",
+      detail: "the campaign configuration has discovery.lab none",
+    };
+  // The Lab budget is the Trial's: a segment keeps the one the Trial started with.
+  if (attached && recordedLab.maxResets !== config.discovery.lab.maxResets)
+    return {
+      status: "refused",
+      reason: "lab-budget-differs",
+      detail: `the Trial started with discovery.lab.maxResets ${recordedLab.maxResets}; the campaign configuration has ${config.discovery.lab.maxResets}`,
+    };
   const source = await boundaries.sourceFor(snapshot);
-  const prompt = wordPressDiscoveryPromptText({
-    objective,
-    trustBoundary,
-    config,
-    lab: undefined,
-    source,
-    runParameters: wordPressRunParameters(config, runtime.runtimeProfile),
-  });
+  const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
+  const promptWith = (
+    lab: WordPressLabHandle | undefined,
+    resumedLab?: { readonly resetsUsed: number },
+  ) =>
+    wordPressDiscoveryPromptText({
+      objective,
+      trustBoundary,
+      config,
+      lab,
+      ...(resumedLab === undefined ? {} : { resumedLab }),
+      source,
+      runParameters,
+    });
+  const prompt = promptWith(undefined);
   const context = {
     campaignId: input.campaignId,
     input: {
@@ -932,6 +1010,7 @@ async function resumeWordPressRun(
     profileDigest: runtime.runtimeProfile.digest,
     wallTimeMs: config.runWallTimeMinutes * 60_000,
     minimumActiveMs: wordPressMinimumActiveMs(config),
+    lab: attached,
     // A run whose host died is sealed first, then resumed like any other (ADR 0036).
     ...(recoverInterrupted === undefined
       ? {}
@@ -957,15 +1036,194 @@ async function resumeWordPressRun(
   });
   if (assessment.status === "refused") return assessment;
   const { plan } = assessment;
-  const outcome = await executeTrialResume(
-    {
-      ...context,
-      executor: runtime.executor,
-      ...(signal === undefined ? {} : { signal }),
-    },
+  if (plan.lab === undefined) {
+    const outcome = await executeTrialResume(
+      {
+        ...context,
+        executor: runtime.executor,
+        ...(signal === undefined ? {} : { signal }),
+      },
+      plan,
+      { runId: state.newId(), ...run },
+    );
+    return { status: "resumed" as const, plan, outcome };
+  }
+  return resumeWithExplorationLab({
+    state,
+    config,
+    boundaries,
+    setup: setupFor(snapshot),
+    snapshot,
+    campaignId: input.campaignId,
+    previousLabId: started.labId,
     plan,
-    { runId: state.newId(), ...run },
-  );
+    maxResets: recordedLab!.maxResets,
+    resetsUsed: plan.lab.resetsUsed,
+    promptWith,
+    context,
+    run,
+    executor: runtime.executor,
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * One resumed segment of a Trial with an exploration Lab: a fresh Lab of the
+ * setup the previous segment's Lab recorded, the reset budget that is left,
+ * and a `## Lab` section saying so as the segment's first-turn notice. The
+ * segment seals its own `exploration-lab` bundle; the Lab is torn down after.
+ */
+async function resumeWithExplorationLab(options: {
+  readonly state: CliState;
+  readonly config: WordPressCampaignConfig;
+  readonly boundaries: WordPressCampaignBoundaries;
+  readonly setup: WordPressLabSetup;
+  readonly snapshot: Snapshot;
+  readonly campaignId: string;
+  readonly previousLabId: string | undefined;
+  readonly plan: ResumePlan;
+  /** The reset budget the resumed run recorded when it started. */
+  readonly maxResets: number;
+  readonly resetsUsed: number;
+  readonly promptWith: (
+    lab: WordPressLabHandle,
+    resumedLab: { readonly resetsUsed: number },
+  ) => string;
+  readonly context: Omit<
+    Parameters<typeof executeTrialResume>[0],
+    "executor" | "signal"
+  >;
+  readonly run: Omit<Parameters<typeof executeTrialResume>[2], "runId">;
+  readonly executor: Parameters<typeof executeTrialResume>[0]["executor"];
+  readonly signal?: AbortSignal;
+}): Promise<
+  | {
+      readonly status: "refused";
+      readonly reason: string;
+      readonly detail?: string;
+    }
+  | {
+      readonly status: "resumed";
+      readonly plan: ResumePlan;
+      readonly outcome: Awaited<ReturnType<typeof executeTrialResume>>;
+    }
+> {
+  const { state, boundaries, snapshot, campaignId, plan } = options;
+  const previous = state.ledger
+    .readAll({ campaignId, type: "lab-provisioned" })
+    .map(({ event }) => event)
+    .find(
+      (event) =>
+        event.type === "lab-provisioned" &&
+        event.labId === options.previousLabId,
+    );
+  const previousSetupDigest =
+    previous?.type === "lab-provisioned" ? previous.setupDigest : undefined;
+  if (previousSetupDigest === undefined)
+    return {
+      status: "refused",
+      reason: "lab-setup-unrecorded",
+      ...(options.previousLabId === undefined
+        ? {}
+        : { detail: options.previousLabId }),
+    };
+  const base = () => ({
+    schemaVersion: 1 as const,
+    campaignId,
+    snapshotDigest: snapshot.digest,
+    occurredAt: state.clock().toISOString(),
+  });
+  const provisioned = await boundaries.lab.provision(snapshot, options.setup, {
+    purpose: "discovery",
+  });
+  if (provisioned.status !== "ready") {
+    const labId = state.newId();
+    await state.ledger.append({
+      ...base(),
+      identity: `lab-provisioned-${labId}`,
+      type: "lab-provisioned",
+      labId,
+      status: "failed",
+      purpose: "discovery",
+      failureStage: "provision",
+      reason: provisioned.reason,
+    });
+    return { status: "refused", reason: "lab-provision-failed" };
+  }
+  const handle = provisioned.handle;
+  let outcome: Awaited<ReturnType<typeof executeTrialResume>> | undefined;
+  try {
+    await state.ledger.append({
+      ...base(),
+      identity: `lab-provisioned-${handle.id}`,
+      type: "lab-provisioned",
+      labId: handle.id,
+      status: "ready",
+      purpose: "discovery",
+      setupDigest: handle.setupDigest,
+    });
+    if (handle.setupDigest !== previousSetupDigest)
+      return {
+        status: "refused",
+        reason: "lab-setup-differs",
+        detail: previousSetupDigest,
+      };
+    if (handle.exploration === undefined)
+      throw new Error("The discovery Lab is not an exploration Lab");
+    const resumedLab = { resetsUsed: options.resetsUsed };
+    const notice = wordPressLabSection(handle, options.maxResets, resumedLab);
+    outcome = await executeTrialResume(
+      {
+        ...options.context,
+        input: {
+          ...options.context.input,
+          lab: { setupDigest: handle.setupDigest },
+        },
+        labId: handle.id,
+        lab: openWordPressExplorationLab({
+          lab: boundaries.lab,
+          handle,
+          maxResets: options.maxResets,
+          resetsUsedBefore: options.resetsUsed,
+          store: state.store,
+          clock: state.clock,
+        }),
+        executor: options.executor,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      },
+      plan,
+      {
+        runId: state.newId(),
+        ...options.run,
+        prompt: options.promptWith(handle, resumedLab),
+        resumeNotice: notice,
+        lab: {
+          endpoint: handle.endpoint,
+          networkName: handle.networkName,
+          internalIp: handle.recorderIp,
+          control: {
+            host: handle.exploration.control.host,
+            ipv4: handle.exploration.control.ipv4,
+          },
+        },
+      },
+    );
+  } finally {
+    const removed = await boundaries.lab.teardown(handle).catch(() => null);
+    if (removed?.status !== "removed") {
+      await state.ledger.append({
+        ...base(),
+        identity: `campaign-stopped-${state.newId()}`,
+        type: "campaign-stopped",
+        reason: "incomplete",
+        cleanupLabIds: [handle.id],
+      });
+      throw new Error(
+        removed?.nextStep ??
+          "Inspect and remove remaining Lab resources before retry",
+      );
+    }
+  }
   return { status: "resumed" as const, plan, outcome };
 }
 
@@ -1089,6 +1347,14 @@ async function runWordPressCampaign(
         return snapshot;
       },
       lab: boundaries.lab,
+      explorationLab: (handle) =>
+        openWordPressExplorationLab({
+          lab: boundaries.lab,
+          handle,
+          maxResets: config.discovery.lab.maxResets,
+          store: state.store,
+          clock: state.clock,
+        }),
       setupFor: session.setupFor,
       discovery: (discoveryInput) =>
         planWordPressDiscovery(discoveryInput, {
@@ -1102,6 +1368,7 @@ async function runWordPressCampaign(
           config,
           repeat: input.repeat ?? 1,
           boundaries,
+          setupFor: session.setupFor,
           state,
           objective,
           trustBoundary,

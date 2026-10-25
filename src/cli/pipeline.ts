@@ -5,11 +5,7 @@ import {
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
-import type {
-  LabHandle,
-  LabProvisioner,
-  LabReachability,
-} from "../lab/index.js";
+import type { LabHandle, LabProvisioner, TrialLab } from "../lab/index.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
 import type { Ledger, LedgerEventV1, LedgerRecord } from "../ledger/index.js";
 import { targetSelectionId, type TargetSelection } from "../selection/index.js";
@@ -36,6 +32,8 @@ export interface CampaignPipeline<
   readonly select: () => Promise<readonly Target[]>;
   readonly freeze: (target: Target) => Promise<Snapshot>;
   readonly lab: LabProvisioner<Setup, Handle>;
+  /** `discovery.lab: attached`: drives one Trial's exploration Lab (ADR 0003, 2026-10-25 addendum). */
+  readonly explorationLab?: (handle: Handle) => TrialLab;
   readonly setupFor: (snapshot: Snapshot) => Setup;
   readonly discovery: (input: {
     readonly target: Target;
@@ -304,6 +302,16 @@ export async function runCampaignPipeline<
   const maxConcurrentTargets = options.maxConcurrentTargets ?? 1;
   if (!Number.isSafeInteger(maxConcurrentTargets) || maxConcurrentTargets < 1)
     throw new Error("Invalid target concurrency");
+  // An attached Lab serves exactly one Trial (ADR 0003, 2026-10-25 addendum):
+  // refused once here, before anything is selected or frozen.
+  if (options.discoveryLab !== "none") {
+    if ((options.repeat ?? 1) > 1)
+      throw new Error(
+        "An exploration Lab serves one Trial; --repeat needs discovery.lab none",
+      );
+    if (pipeline.explorationLab === undefined)
+      throw new Error("This profile has no exploration Lab");
+  }
   type TargetSummary = CampaignSummary["targets"][number];
   type SkippedSummary = CampaignSummary["skipped"][number];
   type TargetResult = {
@@ -359,83 +367,13 @@ export async function runCampaignPipeline<
       (event.reason === "provider-refused" || event.reason === "run-failed")
     )
       concludedSnapshots.add(event.snapshotDigest);
-  const findingsBySnapshot = new Map<string, string[]>();
-  for (const { event } of ledger.readAll({
-    campaignId,
-    type: "finding-recorded",
-  })) {
-    if (event.type !== "finding-recorded") continue;
-    const findings = findingsBySnapshot.get(event.snapshotDigest) ?? [];
-    findings.push(event.findingId);
-    findingsBySnapshot.set(event.snapshotDigest, findings);
-  }
-  const verificationHistory = new Map<string, VerificationRecord[]>();
-  for (const record of ledger.readAll({
-    campaignId,
-    type: "verification-finished",
-  })) {
-    const { event } = record;
-    if (event.type !== "verification-finished" || event.basis !== undefined)
-      continue;
-    const key = `${event.snapshotDigest}\0${event.findingId}`;
-    const history = verificationHistory.get(key) ?? [];
-    history.push({ sequence: record.sequence, event });
-    verificationHistory.set(key, history);
-  }
-  const recordedLabs = ledger.readAll({
-    campaignId,
-    type: "lab-provisioned",
-  });
-  // An incomplete result remains reviewable. Skip target work only when the
-  // ledger proves that no automatic verification is due on this resume.
-  const isCompleted = (
-    target: Target,
-    currentScenarioId?: string | null,
-  ): boolean => {
+  // Verification is its own step (`verify next`, ADR 0035), so a concluded
+  // discovery completes the target with or without a Lab.
+  const isCompleted = (target: Target): boolean => {
     const snapshotDigest = selectedSnapshots.get(targetSelectionId(target));
-    if (snapshotDigest === undefined || !concludedSnapshots.has(snapshotDigest))
-      return false;
-    if (options.discoveryLab === "none") return true;
-    const parked = new Set(
-      ledger.activeParked({ campaignId }).map((event) => event.findingId),
+    return (
+      snapshotDigest !== undefined && concludedSnapshots.has(snapshotDigest)
     );
-    return (findingsBySnapshot.get(snapshotDigest) ?? []).every((findingId) => {
-      if (parked.has(findingId)) return true;
-      const history =
-        verificationHistory.get(`${snapshotDigest}\0${findingId}`) ?? [];
-      const previous = history.at(-1);
-      if (previous === undefined) return false;
-      if (previous.event.result.status !== "incomplete") return true;
-      if (
-        previous.event.promptVersion === undefined ||
-        previous.event.promptVersion !== pipeline.verification.promptVersion
-      )
-        return true;
-      const reason = previous.event.result.reason;
-      if (reason === "precondition" && currentScenarioId === undefined)
-        return false;
-      const attemptsForReason = countAttemptsForReason(
-        history.map(({ event }) => event),
-        {
-          labSetupDigest: previous.event.labSetupDigest,
-          promptVersion: previous.event.promptVersion,
-          reason,
-        },
-      );
-      // If the previous setup would not allow a retry, a different setup
-      // cannot allow one under ADR 0022 either.
-      return !shouldAutomaticallyRetryVerification({
-        reason,
-        attemptsForReason,
-        sameLabSetup: true,
-        previousScenarioId: scenarioForVerification(
-          previous,
-          recordedLabs,
-          snapshotDigest,
-        ),
-        currentScenarioId,
-      });
-    });
   };
 
   /** A refusal is a provider failure without a usage limit (e.g. cyber_policy). */
@@ -499,7 +437,7 @@ export async function runCampaignPipeline<
       const setup = pipeline.setupFor(snapshot);
       if (
         selectedSnapshots.get(selectionId) === snapshot.digest &&
-        isCompleted(target, setup.scenario?.id ?? null)
+        isCompleted(target)
       )
         return;
       const base = {
@@ -535,393 +473,127 @@ export async function runCampaignPipeline<
       });
 
       stage = "discovery";
-      if (options.discoveryLab === "none") {
-        const prepared = await pipeline.discovery({ target, snapshot });
-        const discovered = await runDiscoveryCampaign({
-          campaignId,
-          ledger,
-          evidence: options.store,
-          clock,
-          ...prepared,
-          repeatAll: (options.repeat ?? 1) > 1,
+      if (options.discoveryLab !== "none") {
+        const provisioned = await pipeline.lab.provision(snapshot, setup, {
+          purpose: "discovery",
         });
-        result.target = {
-          targetId: target.targetId,
-          version: target.version,
-          snapshotDigest: snapshot.digest,
-          lab: "none",
-          runCount: discovered.runCount,
-          stoppedBy: discovered.stoppedBy,
-          verifications: [],
-        };
-        if (
-          discovered.stoppedBy === "provider-limit" &&
-          discovered.runCount > 0
-        ) {
-          const runtime = runtimeOf(target);
-          requestStop("provider-limit", runtime);
-          await append({
-            ...base,
-            identity: `campaign-stopped-${options.newId()}`,
-            occurredAt: at(),
-            type: "campaign-stopped",
-            reason: "provider-limit",
-            ...(runtime === undefined ? {} : { runtime }),
-          });
-        } else if (
-          discovered.stoppedBy === "incomplete" &&
-          (discovered.runCount > 0 || discovered.resumeRefusal !== undefined)
-        ) {
-          const diagnosticDigest =
-            discovered.resumeRefusal === undefined
-              ? undefined
-              : await options.store.putFiles({
-                  "target-skip-diagnostic.json": canonicalJson({
-                    kind: "resume-refused",
-                    runId: discovered.resumeRefusal.runId,
-                    reason: discovered.resumeRefusal.reason,
-                    ...(discovered.resumeRefusal.detail === undefined
-                      ? {}
-                      : { detail: discovered.resumeRefusal.detail }),
-                  }),
-                });
-          await append({
-            ...base,
-            identity: `target-skipped-${options.newId()}`,
-            occurredAt: at(),
-            type: "target-skipped",
-            selectionId,
-            stage: "discovery",
-            reason:
-              discovered.resumeRefusal === undefined &&
-              refusedTrial(snapshot.digest)
-                ? "provider-refused"
-                : "run-failed",
-            ...(diagnosticDigest === undefined
-              ? {}
-              : {
-                  artifacts: [
-                    {
-                      kind: "target-skip-diagnostic" as const,
-                      digest: diagnosticDigest,
-                    },
-                  ],
-                }),
-          });
+        if (provisioned.status === "ready") handle = provisioned.handle;
+        const labId =
+          provisioned.status === "ready"
+            ? provisioned.handle.id
+            : options.newId();
+        await append({
+          ...base,
+          identity: `lab-provisioned-${labId}`,
+          occurredAt: at(),
+          type: "lab-provisioned",
+          labId,
+          status: provisioned.status === "ready" ? "ready" : "failed",
+          purpose: "discovery",
+          ...(provisioned.status === "ready"
+            ? { setupDigest: provisioned.handle.setupDigest }
+            : {}),
+          ...(provisioned.status !== "ready" ||
+          provisioned.handle.scenario === undefined
+            ? {}
+            : { scenario: provisioned.handle.scenario }),
+          ...(provisioned.status === "ready"
+            ? {}
+            : {
+                failureStage: "provision" as const,
+                reason: provisioned.reason,
+              }),
+          ...(provisioned.status === "ready" ||
+          provisioned.diagnostic === undefined
+            ? {}
+            : {
+                artifacts: [
+                  {
+                    kind: "lab-diagnostic",
+                    digest: await options.store.putFiles({
+                      "stderr.txt": provisioned.diagnostic,
+                    }),
+                  },
+                ],
+              }),
+        });
+        if (provisioned.status !== "ready") {
+          result.target = {
+            targetId: target.targetId,
+            version: target.version,
+            snapshotDigest: snapshot.digest,
+            lab: "failed",
+            runCount: 0,
+            stoppedBy:
+              provisioned.reason === "precondition"
+                ? "incomplete(precondition)"
+                : "setup-failed",
+            verifications: [],
+          };
+          return;
         }
-        return;
       }
-      const provisioned = await pipeline.lab.provision(snapshot, setup);
-      if (provisioned.status === "ready") handle = provisioned.handle;
-      const seeded =
-        provisioned.status === "ready"
-          ? await pipeline.lab.seedCanaries(provisioned.handle)
-          : null;
-      const labId =
-        provisioned.status === "ready"
-          ? provisioned.handle.id
-          : options.newId();
-      const reachability =
-        provisioned.status === "ready" &&
-        seeded?.status === "seeded" &&
-        pipeline.lab.probe !== undefined
-          ? await pipeline.lab
-              .probe(provisioned.handle)
-              .catch((): LabReachability => ({
-                http: "failed",
-                database: "failed",
-              }))
-          : undefined;
-      const ready =
-        provisioned.status === "ready" &&
-        seeded?.status === "seeded" &&
-        reachability?.http !== "failed";
-      const failure =
-        provisioned.status === "incomplete"
-          ? { failureStage: "provision" as const, reason: provisioned.reason }
-          : seeded?.status === "incomplete"
-            ? { failureStage: "seed" as const, reason: seeded.reason }
-            : reachability?.http === "failed"
-              ? {
-                  failureStage: "probe" as const,
-                  reason: "reachability" as const,
-                }
-              : undefined;
-      const diagnostic =
-        provisioned.status === "incomplete"
-          ? provisioned.diagnostic
-          : seeded?.status === "incomplete"
-            ? seeded.diagnostic
-            : undefined;
-      await append({
-        ...base,
-        identity: `lab-provisioned-${labId}`,
-        occurredAt: at(),
-        type: "lab-provisioned",
-        labId,
-        status: ready ? "ready" : "failed",
-        purpose: "discovery",
-        ...(provisioned.status !== "ready" ||
-        provisioned.handle.scenario === undefined
-          ? {}
-          : { scenario: provisioned.handle.scenario }),
-        ...(reachability === undefined ? {} : { reachability }),
-        ...(failure === undefined ? {} : failure),
-        ...(diagnostic === undefined
-          ? {}
-          : {
-              artifacts: [
-                {
-                  kind: "lab-diagnostic",
-                  digest: await options.store.putFiles({
-                    "stderr.txt": diagnostic,
-                  }),
-                },
-              ],
-            }),
-      });
-      if (!ready || provisioned.status !== "ready") {
-        result.target = {
-          targetId: target.targetId,
-          version: target.version,
-          snapshotDigest: snapshot.digest,
-          lab: "failed",
-          runCount: 0,
-          stoppedBy:
-            provisioned.status === "incomplete" &&
-            provisioned.reason === "precondition"
-              ? "incomplete(precondition)"
-              : "setup-failed",
-          verifications: [],
-        };
-        return;
-      }
-
       const prepared = await pipeline.discovery({
         target,
         snapshot,
-        lab: provisioned.handle,
+        ...(handle === undefined ? {} : { lab: handle }),
       });
-      const campaignInput = prepared.input;
-      const campaignLabSetupDigest = campaignInput.lab.setupDigest;
-      if (campaignLabSetupDigest === undefined)
-        throw new Error("Attached discovery is missing its Lab setup digest");
       const discovered = await runDiscoveryCampaign({
         campaignId,
-        labId,
         ledger,
         evidence: options.store,
         clock,
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(handle === undefined
+          ? {}
+          : {
+              lab: pipeline.explorationLab!(handle),
+              ...(options.signal === undefined
+                ? {}
+                : { signal: options.signal }),
+            }),
         ...prepared,
         repeatAll: (options.repeat ?? 1) > 1,
       });
-      const summary = {
+      result.target = {
         targetId: target.targetId,
         version: target.version,
         snapshotDigest: snapshot.digest,
-        lab: "ready" as const,
+        lab: handle === undefined ? "none" : "ready",
         runCount: discovered.runCount,
         stoppedBy: discovered.stoppedBy,
+        verifications: [],
       };
-      // The Verifier draws on the same subscription, so this target does not
-      // start verification after a new provider stop. Other in-flight targets finish.
       if (
         discovered.stoppedBy === "provider-limit" &&
         discovered.runCount > 0
       ) {
         const runtime = runtimeOf(target);
-        requestStop(discovered.stoppedBy, runtime);
+        requestStop("provider-limit", runtime);
         await append({
           ...base,
           identity: `campaign-stopped-${options.newId()}`,
           occurredAt: at(),
           type: "campaign-stopped",
-          reason: discovered.stoppedBy,
+          reason: "provider-limit",
           ...(runtime === undefined ? {} : { runtime }),
         });
-        result.target = { ...summary, verifications: [] };
-        return;
-      }
-      stage = "verification";
-      const earlier = ledger.readAll({
-        campaignId,
-        type: "verification-finished",
-      });
-      const labs = ledger.readAll({ campaignId, type: "lab-provisioned" });
-      const verifications: {
-        findingId: string;
-        status: VerificationResultV1["status"];
-      }[] = [];
-      let verificationCleanupFailed = false;
-      const findings = ledger
-        .readAll({
-          campaignId,
-          type: "finding-recorded",
-        })
-        .filter(({ event }) => event.snapshotDigest === snapshot.digest);
-      const parked = new Set(
-        ledger.activeParked({ campaignId }).map((event) => event.findingId),
-      );
-      const providerLimited = (findingId: string): boolean => {
-        const run = ledger
-          .readAll({
-            campaignId,
-            findingId,
-            type: "verifier-run-finished",
-          })
-          .at(-1)?.event;
-        return (
-          run?.type === "verifier-run-finished" &&
-          run.providerLimit !== undefined
-        );
-      };
-      for (const { event } of findings) {
-        if (event.type !== "finding-recorded") continue;
-        if (parked.has(event.findingId)) continue;
-        // The Verifier shares the subscription; a usage limit stops the campaign.
-        if (stopped === "provider-limit") break;
-        const history = earlier.filter(
-          (
-            record,
-          ): record is { sequence: number; event: FinishedVerification } =>
-            record.event.type === "verification-finished" &&
-            record.event.basis === undefined &&
-            record.event.snapshotDigest === snapshot.digest &&
-            record.event.findingId === event.findingId,
-        );
-        const shouldRetry = (): boolean => {
-          const previous = history.at(-1);
-          if (previous === undefined) return true;
-          if (previous.event.result.status !== "incomplete") return false;
-          if (
-            previous.event.promptVersion === undefined ||
-            previous.event.promptVersion !== pipeline.verification.promptVersion
-          )
-            return false;
-          const reason = previous.event.result.reason;
-          const attemptsForReason = countAttemptsForReason(
-            history.map(({ event: prior }) => prior),
-            {
-              labSetupDigest: campaignLabSetupDigest,
-              promptVersion: previous.event.promptVersion,
-              reason,
-            },
-          );
-          return shouldAutomaticallyRetryVerification({
-            reason,
-            attemptsForReason,
-            sameLabSetup:
-              previous.event.labSetupDigest === campaignLabSetupDigest,
-            previousScenarioId: scenarioForVerification(
-              previous,
-              labs,
-              snapshot.digest,
-            ),
-            currentScenarioId: handle?.scenario?.id ?? null,
-          });
-        };
-        if (!shouldRetry()) continue;
-        do {
-          const previous = history.at(-1)?.event;
-          const verificationId = options.newId();
-          const result = await pipeline.verification.verify({
-            campaignId,
-            findingId: event.findingId,
-            verificationId,
-            attempt: Math.max(history.length + 1, (previous?.attempt ?? 0) + 1),
-            ...(previous === undefined
-              ? {}
-              : { retryOf: previous.verificationId }),
-            snapshot,
-            setup,
-            campaignLabSetupDigest,
-            reconstruction: pipeline.reconstructionFor(snapshot),
-          });
-          const recorded = ledger
-            .readAll({
-              campaignId,
-              findingId: event.findingId,
-              type: "verification-finished",
-            })
-            .at(-1);
-          if (
-            recorded?.event.type !== "verification-finished" ||
-            recorded.event.verificationId !== verificationId
-          )
-            throw new Error("Verification result was not recorded");
-          history.push({ sequence: recorded.sequence, event: recorded.event });
-          verifications.push({
-            findingId: event.findingId,
-            status: result.status,
-          });
-          if (result.status === "incomplete" && result.reason === "cleanup") {
-            fatalError ??= new Error(result.nextStep);
-            verificationCleanupFailed = true;
-            requestStop("incomplete");
-            const cleanupLabIds =
-              result.cleanupLabIds ??
-              ledger
-                .readAll({ campaignId, type: "lab-provisioned" })
-                .filter(
-                  ({ event: labEvent }) =>
-                    labEvent.identity ===
-                      `verification-lab-${verificationId}` ||
-                    labEvent.identity ===
-                      `verification-replay-lab-${verificationId}`,
-                )
-                .flatMap(({ event: labEvent }) =>
-                  labEvent.type === "lab-provisioned" ? [labEvent.labId] : [],
-                );
-            await append({
-              ...base,
-              identity: `campaign-stopped-${options.newId()}`,
-              occurredAt: at(),
-              type: "campaign-stopped",
-              reason: "incomplete",
-              ...(cleanupLabIds.length === 0 ? {} : { cleanupLabIds }),
-            });
-            break;
-          }
-          if (
-            result.status === "incomplete" &&
-            result.reason === "provider" &&
-            providerLimited(event.findingId)
-          ) {
-            requestStop("provider-limit");
-            await append({
-              ...base,
-              identity: `campaign-stopped-${options.newId()}`,
-              occurredAt: at(),
-              type: "campaign-stopped",
-              reason: "provider-limit",
-            });
-            break;
-          }
-          if (
-            result.status !== "incomplete" ||
-            result.reason === "precondition" ||
-            !shouldRetry()
-          )
-            break;
-        } while (true);
-        if (verificationCleanupFailed) break;
-      }
-      result.target = { ...summary, verifications };
-      // A resumed target has already spent its one Trial. Keep its typed
-      // failure and verify any captured child findings, then move on.
-      if (discovered.runCount === 0) return;
-      if (discovered.stoppedBy === "provider-limit") {
-        requestStop(discovered.stoppedBy);
-        await append({
-          ...base,
-          identity: `campaign-stopped-${options.newId()}`,
-          occurredAt: at(),
-          type: "campaign-stopped",
-          reason: discovered.stoppedBy,
-        });
-      } else if (discovered.stoppedBy === "incomplete") {
-        // A refusal or a failed run leaves this target; the campaign goes on.
+      } else if (
+        discovered.stoppedBy === "incomplete" &&
+        (discovered.runCount > 0 || discovered.resumeRefusal !== undefined)
+      ) {
+        const diagnosticDigest =
+          discovered.resumeRefusal === undefined
+            ? undefined
+            : await options.store.putFiles({
+                "target-skip-diagnostic.json": canonicalJson({
+                  kind: "resume-refused",
+                  runId: discovered.resumeRefusal.runId,
+                  reason: discovered.resumeRefusal.reason,
+                  ...(discovered.resumeRefusal.detail === undefined
+                    ? {}
+                    : { detail: discovered.resumeRefusal.detail }),
+                }),
+              });
         await append({
           ...base,
           identity: `target-skipped-${options.newId()}`,
@@ -929,9 +601,21 @@ export async function runCampaignPipeline<
           type: "target-skipped",
           selectionId,
           stage: "discovery",
-          reason: refusedTrial(snapshot.digest)
-            ? "provider-refused"
-            : "run-failed",
+          reason:
+            discovered.resumeRefusal === undefined &&
+            refusedTrial(snapshot.digest)
+              ? "provider-refused"
+              : "run-failed",
+          ...(diagnosticDigest === undefined
+            ? {}
+            : {
+                artifacts: [
+                  {
+                    kind: "target-skip-diagnostic" as const,
+                    digest: diagnosticDigest,
+                  },
+                ],
+              }),
         });
       }
     };
