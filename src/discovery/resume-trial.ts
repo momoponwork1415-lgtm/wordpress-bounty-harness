@@ -130,6 +130,12 @@ function configurationOf(
     ...(configuration.contractDigest === undefined
       ? {}
       : { contractDigest: configuration.contractDigest }),
+    ...(configuration.sectionDigests === undefined
+      ? {}
+      : { sectionDigests: configuration.sectionDigests }),
+    ...(configuration.inputDigest === undefined
+      ? {}
+      : { inputDigest: configuration.inputDigest }),
     ...(configuration.trustBoundaryVersion === undefined
       ? {}
       : { trustBoundaryVersion: configuration.trustBoundaryVersion }),

@@ -1,0 +1,1 @@
+Do not return merely because current approaches fail or agents report no findings. Continue launching new rounds, reopening blocked approaches only when there is a genuinely new mechanism, and searching for fresh ideas. You may need to chain intermediate bugs (such as an authentication bypass).

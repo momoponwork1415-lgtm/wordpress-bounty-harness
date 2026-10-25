@@ -83,7 +83,7 @@ it("runs the wide example as a 20-minute v11-wide Trial on the production select
   );
   expect(config).toMatchObject({
     discovery: { lab: "none", mode: "wide" },
-    promptId: "wp2shell-bounty-v11-wide",
+    promptId: "wp2shell-bounty-v12-wide",
     runWallTimeMinutes: 20,
   });
   // The production selection policy names the deep objective; both modes select from it.

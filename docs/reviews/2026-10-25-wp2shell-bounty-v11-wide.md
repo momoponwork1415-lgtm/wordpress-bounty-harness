@@ -1,5 +1,7 @@
 # 種別ごとの専門エージェントで探す探索 prompt v11-wide（2026-10-25）
 
+状態（2026-10-25 更新）: `wide` の現行の目的文は [v12-wide](2026-10-25-wp2shell-bounty-v12-wide.md) に替わり、v11-wide は `archived`（本番で走った Trial は無い）。以下は置き換え前の記述である。
+
 状態: `wide` mode の現行の目的文（ADR 0039 の 2026-10-25 追記、#518）。#524（#522、`deep` の目的文 v10）の上に積む。所有者は 2026-10-25 に、`wide` の目的文を「PRISM の方針に近づける」と決めた。v11-wide は、到達先（sink）の種別ごとに専門エージェントを 1 体ずつ固定で置き、各エージェントが入口を一通り終えたら止める。`deep`（v10）は変えない。`wp2shell-bounty-v10-wide` は本番 campaign `prod-20261025-1` で走ったので、本文と行を `archived` で残し、digest を照合できるようにした。
 
 - 本文: `src/profiles/wordpress/prompts/wp2shell-bounty-v11-wide.md`

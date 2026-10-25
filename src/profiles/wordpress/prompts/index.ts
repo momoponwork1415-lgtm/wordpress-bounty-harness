@@ -24,6 +24,24 @@ export const WORDPRESS_DISCOVERY_MODES = ["deep", "wide"] as const;
 /** Generated Finding / Lead contract versions the Harness appends (ADR 0019). */
 export type WordPressOutputContractVersion = "v1" | "v2" | "v4";
 
+/**
+ * The human-written parts of a discovery objective (redesign 2026-10-25 §5).
+ * Run parameters and the output contract are generated, so they are not here.
+ */
+export const WORDPRESS_PROMPT_SECTIONS = [
+  "objective",
+  "strategy",
+  "coordination",
+  "persistence",
+] as const;
+export type WordPressPromptSection = (typeof WORDPRESS_PROMPT_SECTIONS)[number];
+
+/** One file under `sections/<section>/`; a file holds whole paragraphs only. */
+export interface WordPressPromptFragment {
+  readonly section: WordPressPromptSection;
+  readonly file: string;
+}
+
 export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
   /**
    * `null`: the body carries its own handwritten output contract.
@@ -32,7 +50,18 @@ export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
   readonly outputContract: WordPressOutputContractVersion | null;
   /** Required on a `current` row: the campaign mode that launches it. */
   readonly mode?: WordPressDiscoveryMode;
+  /**
+   * The body is composed from these files in order. The composition is
+   * byte-identical to `${id}.md`, which stays as the reference copy, so
+   * `digest` is the same either way.
+   */
+  readonly fragments?: readonly WordPressPromptFragment[];
 }
+
+// Paragraphs both current objectives carry unchanged.
+const TASK = { section: "objective", file: "task-v10" } as const;
+const LIFETIME = { section: "coordination", file: "lifetime-v10" } as const;
+const SOURCES = { section: "objective", file: "sources-v8" } as const;
 
 export const WORDPRESS_DISCOVERY_PROMPTS = [
   {
@@ -175,6 +204,18 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     outputContract: "v4",
     status: "current",
     mode: "deep",
+    fragments: [
+      TASK,
+      { section: "objective", file: "first-principles-v7" },
+      { section: "coordination", file: "dynamic-v7" },
+      { section: "strategy", file: "portfolio-v10" },
+      { section: "coordination", file: "registry-v7" },
+      LIFETIME,
+      { section: "persistence", file: "research-v10" },
+      SOURCES,
+      { section: "coordination", file: "persist-deep-v7" },
+      { section: "coordination", file: "stop-deep-v8" },
+    ],
   },
   {
     id: "wp2shell-bounty-v10-wide",
@@ -188,8 +229,26 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:e7c46f4b5289731f7d780640f009b58a305f99099e2ba10148fb2c1b6b4f676b",
     outputContract: "v4",
+    status: "archived",
+  },
+  {
+    id: "wp2shell-bounty-v12-wide",
+    digest:
+      "sha256:9a79a3b20fdba7af54f32464d868ab00806335c526781aba026e76ce9290c3c3",
+    outputContract: "v4",
     status: "current",
     mode: "wide",
+    fragments: [
+      TASK,
+      { section: "objective", file: "first-principles-v11" },
+      { section: "strategy", file: "sinks-v12" },
+      { section: "strategy", file: "shapes-v12" },
+      LIFETIME,
+      { section: "persistence", file: "research-v11" },
+      SOURCES,
+      { section: "coordination", file: "fixed-v11" },
+      { section: "coordination", file: "stop-wide-v11" },
+    ],
   },
   {
     id: "wp2shell-whitebox-v1.7",
@@ -304,7 +363,17 @@ export interface WordPressDiscoveryAsset {
   readonly sourceUrl: URL;
   readonly text: string;
   readonly digest: `sha256:${string}`;
+  /**
+   * Set only for an objective composed from fragments: sha256 of each
+   * section's fragments composed alone, in the order the row lists them.
+   */
+  readonly sectionDigests?: Partial<
+    Record<WordPressPromptSection, `sha256:${string}`>
+  >;
 }
+
+const sha256 = (bytes: Uint8Array | string): `sha256:${string}` =>
+  `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 
 async function readPromptFile<Id extends string>(
   id: Id,
@@ -320,7 +389,7 @@ async function readPromptFile<Id extends string>(
     id,
     sourceUrl,
     text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    digest: sha256(bytes),
   };
 }
 
@@ -331,12 +400,56 @@ const VERIFIER_PROMPT_IDS: ReadonlySet<string> = new Set(
   WORDPRESS_VERIFIER_PROMPTS.map((prompt) => prompt.id),
 );
 
+/**
+ * Fragments are whole paragraphs, each file ending in one newline. Joining
+ * them with the blank line that separates paragraphs gives the `.md` bytes.
+ */
+function composeFragments(texts: readonly string[]): string {
+  return `${texts.map((text) => text.slice(0, -1)).join("\n\n")}\n`;
+}
+
+async function readFragment(fragment: WordPressPromptFragment) {
+  const text = await readFile(
+    new URL(
+      `./sections/${fragment.section}/${fragment.file}.md`,
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  if (!/^\S[\s\S]*\S\n$/.test(text) || text.endsWith("\n\n"))
+    throw new Error("A prompt fragment must hold whole paragraphs");
+  return text;
+}
+
 export async function loadWordPressDiscoveryAsset(
   id: WordPressDiscoveryAssetId,
 ): Promise<WordPressDiscoveryAsset> {
   if (!DISCOVERY_ASSET_IDS.has(id))
     throw new Error("Unknown WordPress discovery asset");
-  return readPromptFile(id);
+  if (id === WORDPRESS_TRUST_BOUNDARY.id) return readPromptFile(id);
+  const record = wordPressDiscoveryPrompt(id);
+  if (record.fragments === undefined) return readPromptFile(id);
+  const texts = await Promise.all(record.fragments.map(readFragment));
+  const text = composeFragments(texts);
+  const digest = sha256(text);
+  if (digest !== record.digest)
+    throw new Error("Composed prompt differs from its pinned digest");
+  const sectionDigests: Partial<
+    Record<WordPressPromptSection, `sha256:${string}`>
+  > = {};
+  for (const section of WORDPRESS_PROMPT_SECTIONS) {
+    const own = texts.filter(
+      (_, index) => record.fragments![index]!.section === section,
+    );
+    if (own.length > 0) sectionDigests[section] = sha256(composeFragments(own));
+  }
+  return {
+    id,
+    sourceUrl: new URL(`./${id}.md`, import.meta.url),
+    text,
+    digest,
+    sectionDigests,
+  };
 }
 
 export async function loadWordPressVerifierPrompt(
