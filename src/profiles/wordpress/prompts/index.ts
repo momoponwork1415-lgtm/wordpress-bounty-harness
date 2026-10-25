@@ -221,12 +221,14 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
   {
     id: "wp2shell-bounty-v11",
     digest:
-      "sha256:03d87941138ba92f7e5ab41e716de9b115cc63509a43739cb766e8dad7a37481",
+      "sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9",
     outputContract: "v4",
     status: "current",
     mode: "deep",
     // v10 without the lifetime paragraph, the child count and the minutes;
     // the Run parameters section states the enforced values (ADR 0039 追記 4).
+    // The hand-over paragraph follows the research paragraph (owner
+    // 2026-10-26, ADR 0039 追記 4).
     fragments: [
       TASK,
       { section: "objective", file: "first-principles-v7" },
@@ -234,6 +236,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
       { section: "strategy", file: "portfolio-v10" },
       { section: "coordination", file: "registry-v7" },
       { section: "persistence", file: "research-v10" },
+      { section: "coordination", file: "handover-v11" },
       SOURCES,
       { section: "coordination", file: "persist-deep-v7" },
       { section: "coordination", file: "stop-deep-v11" },
@@ -274,21 +277,23 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
   {
     id: "wp2shell-bounty-v13-wide",
     digest:
-      "sha256:4be7c360dac8f3e9651a1174dab462e4aec1f32bcb623dfe0180fda63637efbc",
+      "sha256:0dd2072b4c6a544d47ebb6df94c7981f2fbb758b4dee82e063896ff91f892bb8",
     outputContract: "v4",
     status: "current",
     mode: "wide",
-    // v12-wide without the lifetime paragraph and the specialist count
-    // (ADR 0039 追記 4).
+    // v12-wide without the lifetime paragraph and the specialist count, with
+    // the hand-over paragraph and the registry-based stop rule (owner
+    // 2026-10-26, ADR 0039 追記 4).
     fragments: [
       TASK,
       { section: "objective", file: "first-principles-v11" },
       { section: "strategy", file: "sinks-v13" },
       { section: "strategy", file: "shapes-v12" },
       { section: "persistence", file: "research-v11" },
+      { section: "coordination", file: "handover-v11" },
       SOURCES,
       { section: "coordination", file: "fixed-v13" },
-      { section: "coordination", file: "stop-wide-v11" },
+      { section: "coordination", file: "stop-wide-v13" },
     ],
   },
   {

@@ -1,21 +1,22 @@
-# 探索 prompt v11: v10 から子の寿命と数値の文を外す（2026-10-25）
+# 探索 prompt v11: v10 から子の寿命と数値の文を外し、子の交代の段落を足す（2026-10-25、2026-10-26 改訂）
 
-状態: `deep` mode の現行の目的文（ADR 0039 の 2026-10-25 追記 4）。Phase C2（[探索アーキテクチャ再設計](2026-10-25-exploration-architecture-redesign.md) 第 5 節、第 11 節 C2）。所有者は 2026-10-25 に、子のツール呼び出し 80 回の段落には根拠が無いので外すこと、Harness が強制して `## Run parameters` 節で伝える数（子の数、最低時間、wall）を本文から外すことを決めた（同文書 第 12 節 Q7）。v11 は v10 から 1 段落を外し、2 段落の数値の句を外したもので、ほかの段落は 1 バイトも変えない。v10 の本文と digest は `archived` の行として残す。
+状態: `deep` mode の現行の目的文（ADR 0039 の 2026-10-25 追記 4）。Phase C2（[探索アーキテクチャ再設計](2026-10-25-exploration-architecture-redesign.md) 第 5 節、第 11 節 C2）。所有者は 2026-10-25 に、子のツール呼び出し 80 回の段落には根拠が無いので外すこと、Harness が強制して `## Run parameters` 節で伝える数（子の数、最低時間、wall）を本文から外すことを決めた（同文書 第 12 節 Q7）。所有者は 2026-10-26 に、子を替える目安は 80 回という固定値ではなく、Claude runtime がすでにしているように切りのいいところだと補った（「80 回という固定値ではなく、Claude のように切りのいいところで子を替える」）。v11 は v10 から 1 段落を外し、2 段落の数値の句を外し、子の交代の段落を 1 つ足したもので、ほかの段落は 1 バイトも変えない。v11 はまだ走っていないので、同じ id のまま本文を改め、digest を付け直した（ADR 0039 追記 4 の 2026-10-26 段落）。v10 の本文と digest は `archived` の行として残す。
 
 - 本文: `src/profiles/wordpress/prompts/wp2shell-bounty-v11.md`（節の fragments から合成し、この `.md` とバイト一致することを test で固定する）
-- digest: `sha256:03d87941138ba92f7e5ab41e716de9b115cc63509a43739cb766e8dad7a37481`
+- digest: `sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9`（2026-10-26。交代の段落を足す前の digest は `sha256:03d87941138ba92f7e5ab41e716de9b115cc63509a43739cb766e8dad7a37481` で、どの run も使っていない）
 - 出力契約: Harness 生成の v4 節（v10 と同じ、ADR 0019）
-- fragments: `objective/task-v10`、`objective/first-principles-v7`、`coordination/dynamic-v11`（新）、`strategy/portfolio-v10`、`coordination/registry-v7`、`persistence/research-v10`、`objective/sources-v8`、`coordination/persist-deep-v7`、`coordination/stop-deep-v11`（新）
+- fragments: `objective/task-v10`、`objective/first-principles-v7`、`coordination/dynamic-v11`（新）、`strategy/portfolio-v10`、`coordination/registry-v7`、`persistence/research-v10`、`coordination/handover-v11`（新、v13-wide と共有）、`objective/sources-v8`、`coordination/persist-deep-v7`、`coordination/stop-deep-v11`（新）
 
-出典: v10 の本文（[v10 の文書](2026-10-25-wp2shell-bounty-v10.md)）と [出典対照表](2026-10-13-prompt-source-comparison.md) 第 2 節の既存の行（#14、#17、#20）。新しい行は足していない。
+出典: v10 の本文（[v10 の文書](2026-10-25-wp2shell-bounty-v10.md)）と [出典対照表](2026-10-13-prompt-source-comparison.md) 第 2 節の既存の行（#14、#17、#20）、2026-10-26 に足した行 #29（所有者の指示 2026-10-26 と、PR #535 で観測した Claude runtime の子の使い方）。
 
 ## 0. v10 との差分
 
-空行で区切った段落（箇条 1 本も 1 段落に数える）で見ると、v11 は 15 段落で、v10 の 16 段落から 1 段落を外したものである。変えた段落は 2 つで、ほかの 13 段落は 1 バイトも変えていない（`tests/profiles/wordpress/discovery-prompts.test.ts` の v11 の test で確かめる）。
+空行で区切った段落（箇条 1 本も 1 段落に数える）で見ると、v11 は 16 段落で、v10 の 16 段落から 1 段落を外し、1 段落を足したものである。変えた段落は 2 つで、ほかの 13 段落は 1 バイトも変えていない（`tests/profiles/wordpress/discovery-prompts.test.ts` の v11 の test で確かめる）。
 
 1. 「Keep every agent short. No agent may exceed 80 tool calls. …」の段落を外した。80 という数はどこにも移していない。Harness は子のツール呼び出しを数えて記録するだけで、上限は置かない。
 2. 「Use multiagents aggressively.」の段落から「You may spawn up to 4 agents at any one time.」の 1 文を外した。子の同時数の上限は、Harness が `discovery.maxChildren`（既定 4）で強制し、生成節 `## Run parameters` の「Maximum concurrent child agents: N.」で伝える。「固定配分をしない」の文と指針の箇条は変えていない。
 3. 最後の段落（再開段落、「Before giving up,」で始まる）の「one hour」を「the minimum active exploration time stated in the Run parameters」に替え、「that hour」「the hour」を「that time」に替え、「The Trial has a 120-minute wall cap.」の文を外した。最低時間と wall は生成節の「Minimum active exploration time: N minutes.」「Wall time: N minutes.」で伝える。段落は「Before giving up,」で始まるので、再開の規則（ADR 0036、0039）は変わらない。
+4. 研究 file の段落（「Every agent writes its findings …」）の直後に、子の交代の段落（「Each agent is given one piece of work and returns when that piece is done. …」、fragment `coordination/handover-v11`）を足した（2026-10-26）。子には仕事を 1 つ渡し、その仕事が終わったら返らせる。切れ目は子が決め、経路を file に書き、registry を更新して報告する。Root は返った子に次の仕事を送らず、新しい子を立てる。新しい子は registry と file を読んでから続ける。回数の上限は置かない。v13-wide も同じ fragment を同じ位置に持つ。
 
 「Do not return merely because current approaches fail …」の段落には数が無いので変えていない。
 
@@ -46,6 +47,8 @@ Use multiagents aggressively. Do not use a fixed assignment such as "N agents fo
 
 Every agent writes its findings to /workspace/research/<family>.md and returns at most thirty lines: the verdict, the concrete source paths that support it, and a pointer to that file. Keep the approach-family registry at /workspace/research/REGISTRY.md and update it at the end of every wave. Findings that exist only in an agent's context are lost work; write them down.
 
+Each agent is given one piece of work and returns when that piece is done. Where the piece ends is the agent's own call: finish the slice of entry points or the hypothesis it is on, write the routes to its file, update the registry, and report, instead of stretching one context across a whole sink or approach family. The root agent does not send further work to an agent that has returned; it starts a fresh agent for the next piece, and that agent reads the registry and the file before it continues.
+
 The plugin depends on WordPress, PHP, MySQL and a lot of other libraries and software. Pinned WordPress core source, when supplied, is available at /workspace/wordpress. Pinned PHP source, when supplied, is available at /workspace/php; other supplied plugin and library source is under /workspace/dependencies/<slug>. Read the supplied dependency source instead of recalling what core or the language does. An in-scope effect may require chaining bugs in these underlying libraries. Record a required dependency source that is not supplied as an unresolved gap.
 
 Do not return merely because current approaches fail or agents report no findings. Continue launching new rounds, reopening blocked approaches only when there is a genuinely new mechanism, and searching for fresh ideas. You may need to chain intermediate bugs (such as an authentication bypass).
@@ -55,7 +58,7 @@ Before giving up, use at least the minimum active exploration time stated in the
 
 ## 2. 日本語訳の全文
 
-変えた 2 段落以外は、[v10 の文書](2026-10-25-wp2shell-bounty-v10.md) 第 2 節の訳をそのまま使った。
+変えた 2 段落と足した 1 段落以外は、[v10 の文書](2026-10-25-wp2shell-bounty-v10.md) 第 2 節の訳をそのまま使った。
 
 > 現在の課題:
 >
@@ -75,6 +78,8 @@ Before giving up, use at least the minimum active exploration time stated in the
 >
 > どのエージェントも、発見を /workspace/research/<family>.md に書き、返すのは 30 行以内とする。中身は結論、それを支える具体的なソースの path、そのファイルへの参照である。着眼点の系統の一覧は /workspace/research/REGISTRY.md に置き、wave が終わるたびに更新せよ。エージェントの文脈の中にしか無い発見は失われた仕事である。書き残せ。
 >
+> 各エージェントには仕事を 1 つ渡し、その仕事が終わったら返らせる。仕事の切れ目はエージェント自身が決める。取り組んでいる入口のひとまとまりか仮説を終え、経路を自分のファイルに書き、一覧を更新して報告せよ。1 つの文脈を、到達先全体や着眼点の系統全体へ引き延ばしてはならない。Root は、返ったエージェントに次の仕事を送らない。次の仕事には新しいエージェントを立て、そのエージェントは一覧とファイルを読んでから続ける。
+>
 > プラグインは WordPress、PHP、MySQL、そのほか多くのライブラリやソフトウェアに依存する。固定された WordPress 本体のソースが渡される場合は、/workspace/wordpress にある。固定された PHP のソースが渡される場合は /workspace/php にあり、そのほかに渡されたプラグインとライブラリのソースは /workspace/dependencies/<slug> にある。WordPress 本体や言語の振る舞いを記憶で決めず、渡された依存ソースを読め。対象内の影響に至るには、これらの基盤ライブラリのバグを連鎖させる必要があるかもしれない。必要な依存ソースが渡されていなければ、未解決の欠落として記録せよ。
 >
 > 現在の方法が失敗した、またはエージェントが発見なしと報告したという理由だけで終えてはならない。新しいラウンドを始め、実質的に新しい仕組みが見つかったときだけ行き詰まった経路を再開し、新しい発想を探せ。認証回避などの中間のバグを連鎖させる必要があるかもしれない。
@@ -89,7 +94,8 @@ Before giving up, use at least the minimum active exploration time stated in the
 | --- | --- | --- | --- | --- |
 | 3. 複数エージェント | 固定配分の禁止、指針で進める | 17 | W0 記事原文。子の数は P1 の列が `{{AGENT_CAP}}` として外から入れた値で、本リポでは Harness 生成の `## Run parameters` 節が値を渡す（ADR 0019 と同じ形、ADR 0039 追記 3） | 「最大 4 体」の文を外した（所有者決定 2026-10-25、再設計 第 12 節 Q7） |
 | （外した段落） | 子を短命にし、80 回で引き継ぐ | 14 | W1 の箇条。所有者決定 2026-10-25「根拠が無い」 | 段落ごと外した |
-| 8. 最低時間（再開段落、v10 の 9） | Run parameters に書かれた最低の能動探索時間、早い最終報告は同じセッションで再開 | 20 | W0 記事原文「at least 6 hours」を v8 で 1 時間に置換（ADR 0033）。P1 の列は「at least {{EFFORT_FLOOR}}」と外から入れた値で書く。v11 はこの形に倣い、値を生成節に置いた | 「1 時間」を生成節の値の参照に替え、「wall 上限 120 分」の文を外した |
+| 6. 子の交代（足した段落） | 子には仕事を 1 つ渡し、切りのいいところで返らせる。Root は返った子に次の仕事を送らず、新しい子を立てる | 29 | 所有者の指示 2026-10-26「80 回という固定値ではなく、Claude のように切りのいいところで子を替える」。観測: PR #535 の本番 10 Trial で、Claude runtime の子 78 体は同一スレッドの追依頼が 0（one-shot）、子由来の Finding は 3/3 | 段落を足した（2026-10-26） |
+| 9. 最低時間（再開段落、v10 の 9） | Run parameters に書かれた最低の能動探索時間、早い最終報告は同じセッションで再開 | 20 | W0 記事原文「at least 6 hours」を v8 で 1 時間に置換（ADR 0033）。P1 の列は「at least {{EFFORT_FLOOR}}」と外から入れた値で書く。v11 はこの形に倣い、値を生成節に置いた | 「1 時間」を生成節の値の参照に替え、「wall 上限 120 分」の文を外した |
 
 出典に無い要素は足していない。「the Run parameters」という語は、Harness が生成する節の見出しを指すだけである。対象固有の関数名、オプション名、URL、画面名、製品名、PoC、ペイロードは入れていない（test で確かめる）。
 
@@ -99,7 +105,8 @@ Before giving up, use at least the minimum active exploration time stated in the
 
 - 種別別の候補数（v10 の文書 第 4 節と同じ）
 - provider 時間あたりの Finding・Lead
-- 子の数とツール呼び出しの分布（80 回の段落を外した影響。Harness は数えて receipt に残す）
+- 子の数とツール呼び出しの分布（80 回の段落を外し、交代の段落を足した影響。Harness は数えて receipt に残す）
+- 同じ子への追依頼の数（交代の段落の影響。PR #535 の読取器で数える）
 - 最初の最終報告の時刻と、最低時間による同一セッション継続の回数
 
 本文の数値文を外しても、Harness が強制する値は変わらない。子の上限、最低時間、wall は C1（ADR 0039 追記 3）から設定値で、同じ値を生成節 `## Run parameters` が Root に伝える。台帳の `configuration` には `sectionDigests` と `inputDigest` が残るので、v10 と同じ設定で走った Trial は、節の digest の違いだけで分けられる。数字がまとまった時点で [docs/knowledge/experiments.md](../knowledge/experiments.md) へ行を足す。この PR では足さない。

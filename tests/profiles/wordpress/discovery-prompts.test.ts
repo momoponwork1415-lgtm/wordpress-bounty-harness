@@ -119,6 +119,9 @@ const sectionsUrl = new URL(
 const sha256 = (text: string) =>
   `sha256:${createHash("sha256").update(text).digest("hex")}`;
 
+const HANDOVER_OPENING =
+  "Each agent is given one piece of work and returns when that piece is done.";
+
 describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
   const composed = WORDPRESS_DISCOVERY_PROMPTS.flatMap((row) =>
     "fragments" in row ? [row] : [],
@@ -144,11 +147,11 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       "wp2shell-bounty-v10":
         "sha256:fd4e395ecb50923487c9bab6dbae81f0aff4e67342abecedda3f53cd9ff5f8b3",
       "wp2shell-bounty-v11":
-        "sha256:03d87941138ba92f7e5ab41e716de9b115cc63509a43739cb766e8dad7a37481",
+        "sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9",
       "wp2shell-bounty-v12-wide":
         "sha256:9a79a3b20fdba7af54f32464d868ab00806335c526781aba026e76ce9290c3c3",
       "wp2shell-bounty-v13-wide":
-        "sha256:4be7c360dac8f3e9651a1174dab462e4aec1f32bcb623dfe0180fda63637efbc",
+        "sha256:0dd2072b4c6a544d47ebb6df94c7981f2fbb758b4dee82e063896ff91f892bb8",
     } as const;
     for (const row of composed) {
       const bytes = (await promptBytes(row.id)).toString("utf8");
@@ -198,6 +201,7 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
     ];
     expect(deep.filter((file) => wide.includes(file))).toEqual([
       "objective/task-v10",
+      "coordination/handover-v11",
       "objective/sources-v8",
     ]);
     // The lifetime paragraph is left only to the archived rows.
@@ -464,19 +468,28 @@ describe("WordPress discovery prompt assets", () => {
     );
   });
 
-  it("makes v11 the v10 text without the lifetime paragraph, the child count and the minutes (ADR 0039, 2026-10-25 追記 4)", async () => {
+  it("makes v11 the v10 text without the lifetime paragraph, the child count and the minutes, plus the hand-over paragraph (ADR 0039 追記 4, 2026-10-25 and 2026-10-26)", async () => {
     const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
     const v10 = paragraphs(
       (await loadWordPressDiscoveryAsset("wp2shell-bounty-v10")).text,
     );
     const text = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v11"))
       .text;
-    const v11 = paragraphs(text);
-    // One paragraph removed; two changed in place; every other paragraph is byte-identical.
+    const withHandover = paragraphs(text);
+    // One paragraph removed; one inserted after the research paragraph (owner
+    // 2026-10-26); two changed in place; every other paragraph is byte-identical.
     const lifetime = v10.findIndex((paragraph) =>
       paragraph.startsWith("Keep every agent short."),
     );
     const withoutLifetime = v10.filter((_, index) => index !== lifetime);
+    const handover = withHandover.findIndex((paragraph) =>
+      paragraph.startsWith(HANDOVER_OPENING),
+    );
+    expect(withHandover[handover - 1]).toBe(v10[lifetime + 1]);
+    expect(withHandover[handover - 1]).toMatch(
+      /^Every agent writes its findings/,
+    );
+    const v11 = withHandover.filter((_, index) => index !== handover);
     expect(v11).toHaveLength(withoutLifetime.length);
     const changed = v11.flatMap((paragraph, index) =>
       paragraph === withoutLifetime[index] ? [] : [index],
@@ -514,23 +527,32 @@ describe("WordPress discovery prompt assets", () => {
     );
   });
 
-  it("makes v13-wide the v12-wide text without the lifetime paragraph and the specialist count (ADR 0039, 2026-10-25 追記 4)", async () => {
+  it("makes v13-wide the v12-wide text without the lifetime paragraph and the specialist count, plus the hand-over paragraph and the registry stop rule (ADR 0039 追記 4, 2026-10-25 and 2026-10-26)", async () => {
     const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
     const v12 = paragraphs(
       (await loadWordPressDiscoveryAsset("wp2shell-bounty-v12-wide")).text,
     );
     const text = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v13-wide"))
       .text;
-    const v13 = paragraphs(text);
+    const withHandover = paragraphs(text);
     const lifetime = v12.findIndex((paragraph) =>
       paragraph.startsWith("Keep every agent short."),
     );
     const withoutLifetime = v12.filter((_, index) => index !== lifetime);
+    // The hand-over paragraph follows the research paragraph (owner 2026-10-26).
+    const handover = withHandover.findIndex((paragraph) =>
+      paragraph.startsWith(HANDOVER_OPENING),
+    );
+    expect(withHandover[handover - 1]).toBe(v12[lifetime + 1]);
+    expect(withHandover[handover - 1]).toMatch(
+      /^Every specialist writes its routes/,
+    );
+    const v13 = withHandover.filter((_, index) => index !== handover);
     expect(v13).toHaveLength(withoutLifetime.length);
     const changed = v13.flatMap((paragraph, index) =>
       paragraph === withoutLifetime[index] ? [] : [index],
     );
-    expect(changed).toEqual([3, v13.length - 2]);
+    expect(changed).toEqual([3, v13.length - 2, v13.length - 1]);
     expect(v13[3]).toBe(
       withoutLifetime[3]!.replace(
         "Use four specialist agents, one per sink class, running in parallel:",
@@ -543,6 +565,18 @@ describe("WordPress discovery prompt assets", () => {
         .replace(
           "The root agent assigns the four sinks,",
           "The root agent assigns one sink class to each specialist,",
+        )
+        .replace(
+          "It does not redirect specialists toward promising leads and does not launch further rounds.",
+          "It does not redirect specialists toward promising leads; the only new specialists it starts are the ones that continue a sink whose entry points remain.",
+        ),
+    );
+    expect(v13.at(-1)).toBe(
+      withoutLifetime
+        .at(-1)!
+        .replace(
+          "Stop when every specialist has reported that it has worked through the entry points for its sink,",
+          "Stop when the registry shows that the entry points of every sink have been worked through,",
         ),
     );
     // The four sink classes stay listed; the stop rule stays last (ADR 0039).

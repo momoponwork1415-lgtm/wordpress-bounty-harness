@@ -1,23 +1,23 @@
-# 探索 prompt v13-wide: v12-wide から子の寿命と体数の文を外す（2026-10-25）
+# 探索 prompt v13-wide: v12-wide から子の寿命と体数の文を外し、子の交代の段落を足す（2026-10-25、2026-10-26 改訂）
 
-状態: `wide` mode の現行の目的文（ADR 0039 の 2026-10-25 追記 4）。Phase C2（[探索アーキテクチャ再設計](2026-10-25-exploration-architecture-redesign.md) 第 5 節、第 11 節 C2）。所有者は 2026-10-25 に、子のツール呼び出し 80 回の段落には根拠が無いので外すこと、Harness が強制して `## Run parameters` 節で伝える数（子の数、wall）を本文から外すことを決めた（同文書 第 12 節 Q7）。同じ日の訂正で、Codex と Claude のどちらでも、Root と到達先の種別ごとに 1 体の専門エージェントの形を保つと決めた。1 体が種別を順に掃く形は作らない。v13-wide は v12-wide から 1 段落を外し、2 段落の「four」を外したもので、ほかの段落は 1 バイトも変えない。v12-wide の本文と digest は `archived` の行として残す。
+状態: `wide` mode の現行の目的文（ADR 0039 の 2026-10-25 追記 4）。Phase C2（[探索アーキテクチャ再設計](2026-10-25-exploration-architecture-redesign.md) 第 5 節、第 11 節 C2）。所有者は 2026-10-25 に、子のツール呼び出し 80 回の段落には根拠が無いので外すこと、Harness が強制して `## Run parameters` 節で伝える数（子の数、wall）を本文から外すことを決めた（同文書 第 12 節 Q7）。同じ日の訂正で、Codex と Claude のどちらでも、Root と到達先の種別ごとに 1 体の専門エージェントの形を保つと決めた。1 体が種別を順に掃く形は作らない。所有者は 2026-10-26 に、子を替える目安は 80 回という固定値ではなく、Claude runtime がすでにしているように切りのいいところだと補った（「80 回という固定値ではなく、Claude のように切りのいいところで子を替える」）。v13-wide は v12-wide から 1 段落を外し、子の交代の段落を 1 つ足し、3 段落を替えたもので、ほかの段落は 1 バイトも変えない。v13-wide はまだ走っていないので、同じ id のまま本文を改め、digest を付け直した（ADR 0039 追記 4 の 2026-10-26 段落）。v12-wide の本文と digest は `archived` の行として残す。
 
 - 本文: `src/profiles/wordpress/prompts/wp2shell-bounty-v13-wide.md`（節の fragments から合成し、この `.md` とバイト一致することを test で固定する）
-- digest: `sha256:4be7c360dac8f3e9651a1174dab462e4aec1f32bcb623dfe0180fda63637efbc`
+- digest: `sha256:0dd2072b4c6a544d47ebb6df94c7981f2fbb758b4dee82e063896ff91f892bb8`（2026-10-26。交代の段落を足す前の digest は `sha256:4be7c360dac8f3e9651a1174dab462e4aec1f32bcb623dfe0180fda63637efbc` で、どの run も使っていない）
 - 出力契約: Harness 生成の v4 節（v12-wide と同じ、ADR 0019）
-- fragments: `objective/task-v10`、`objective/first-principles-v11`、`strategy/sinks-v13`（新）、`strategy/shapes-v12`、`persistence/research-v11`、`objective/sources-v8`、`coordination/fixed-v13`（新）、`coordination/stop-wide-v11`
+- fragments: `objective/task-v10`、`objective/first-principles-v11`、`strategy/sinks-v13`（新）、`strategy/shapes-v12`、`persistence/research-v11`、`coordination/handover-v11`（新、v11 と共有）、`objective/sources-v8`、`coordination/fixed-v13`（新）、`coordination/stop-wide-v13`（新。v11-wide と v12-wide は `coordination/stop-wide-v11` のまま）
 
-出典: v12-wide の本文（[v12-wide の文書](2026-10-25-wp2shell-bounty-v12-wide.md)）と [出典対照表](2026-10-13-prompt-source-comparison.md) の既存の行（第 2 節の #14、第 2.1 節の PRISM-a）。新しい行は足していない。出力契約、trust 境界、Programme Boundary、source の場所、研究 notes の場所、`## Run parameters` は、v12-wide と同じく Harness が別節として渡す。
+出典: v12-wide の本文（[v12-wide の文書](2026-10-25-wp2shell-bounty-v12-wide.md)）と [出典対照表](2026-10-13-prompt-source-comparison.md) の既存の行（第 2 節の #14、第 2.1 節の PRISM-a、PRISM-d）と、2026-10-26 に足した行 #29、#30（所有者の指示 2026-10-26 と、PR #535 で観測した Claude runtime の子の使い方）。出力契約、trust 境界、Programme Boundary、source の場所、研究 notes の場所、`## Run parameters` は、v12-wide と同じく Harness が別節として渡す。
 
 ## 0. v12-wide との差分
 
-段落単位で見ると、v13-wide は 8 段落で、v12-wide の 9 段落から 1 段落を外したものである。変えた段落は 2 つで、ほかの 6 段落は 1 バイトも変えていない（`tests/profiles/wordpress/discovery-prompts.test.ts` の v13-wide の test で確かめる）。
+段落単位で見ると、v13-wide は 9 段落で、v12-wide の 9 段落から 1 段落を外し、1 段落を足したものである。変えた段落は 3 つで、ほかの 5 段落は 1 バイトも変えていない（`tests/profiles/wordpress/discovery-prompts.test.ts` の v13-wide の test で確かめる）。
 
 1. 専門エージェントの段落（第 3 段落、v12-wide の文書と同じ数え方）の冒頭「Use four specialist agents, one per sink class, running in parallel:」を「Use one specialist agent per sink class, running in parallel:」に替えた。(1)〜(4) の到達先の種別、前向きと後ろ向きのたどり、入口の順、早期 hook、1〜2 hop、設定依存の前提は 1 語も変えていない。種別が 4 つ並ぶので、専門エージェントの数は種別から決まる。子の同時数の上限は Harness が `discovery.maxChildren`（既定 4）で強制し、生成節 `## Run parameters` で伝える。
 2. 「Keep every agent short. No agent may exceed 80 tool calls. …」の段落を外した。80 という数はどこにも移していない。
-3. Root の役割の段落の「The root agent assigns the four sinks,」を「The root agent assigns one sink class to each specialist,」に替えた。振り向けをしない、追加のラウンドを起こさない、確定は Harness 判定器、の文は変えていない。
-
-停止規則の段落（「Stop when」で始まる最後の段落）には数が無いので変えていない。再開の規則（ADR 0036、0039）も変わらない。
+3. Root の役割の段落の「The root agent assigns the four sinks,」を「The root agent assigns one sink class to each specialist,」に替えた。2026-10-26 に、同じ段落の「It does not redirect specialists toward promising leads and does not launch further rounds.」を「It does not redirect specialists toward promising leads; the only new specialists it starts are the ones that continue a sink whose entry points remain.」に替えた。交代の段落で専門エージェントが到達先の途中で返るので、Root が立ててよい新しい専門エージェントを、入口が残る到達先の続きに限った。振り向けをしない文と、確定は Harness 判定器の文は変えていない。
+4. 研究 file の段落（「Every specialist writes its routes …」）の直後に、子の交代の段落（「Each agent is given one piece of work and returns when that piece is done. …」、fragment `coordination/handover-v11`）を足した（2026-10-26）。v11 と同じ段落である。
+5. 停止規則の段落（「Stop when」で始まる最後の段落）の最初の文「Stop when every specialist has reported that it has worked through the entry points for its sink, or when the Trial wall is reached, whichever comes first.」を「Stop when the registry shows that the entry points of every sink have been worked through, or when the Trial wall is reached, whichever comes first.」に替えた（2026-10-26、fragment `coordination/stop-wide-v13`）。専門エージェントが途中で替わるので、終わったかどうかを 1 体の報告ではなく registry で見る。残りの文は変えていない。段落は「Stop when」で始まるので、再開の規則（ADR 0036、0039）も変わらない。
 
 ## 1. 実行する英文の全文
 
@@ -34,16 +34,18 @@ Shapes that recur in published WordPress findings, to check at every sink: (a) a
 
 Every specialist writes its routes to /workspace/research/<sink>.md and returns at most thirty lines: the verdict, the concrete source paths that support it, and a pointer to that file. Keep the sink registry at /workspace/research/REGISTRY.md, listing which entry points each specialist has finished and which remain, and update it whenever a specialist reports. Routes that exist only in an agent's context are lost work; write them down.
 
+Each agent is given one piece of work and returns when that piece is done. Where the piece ends is the agent's own call: finish the slice of entry points or the hypothesis it is on, write the routes to its file, update the registry, and report, instead of stretching one context across a whole sink or approach family. The root agent does not send further work to an agent that has returned; it starts a fresh agent for the next piece, and that agent reads the registry and the file before it continues.
+
 The plugin depends on WordPress, PHP, MySQL and a lot of other libraries and software. Pinned WordPress core source, when supplied, is available at /workspace/wordpress. Pinned PHP source, when supplied, is available at /workspace/php; other supplied plugin and library source is under /workspace/dependencies/<slug>. Read the supplied dependency source instead of recalling what core or the language does. An in-scope effect may require chaining bugs in these underlying libraries. Record a required dependency source that is not supplied as an unresolved gap.
 
-The root agent assigns one sink class to each specialist, merges duplicate routes, doubly checks every concrete bug for sanity before it is reported, and reports. It does not redirect specialists toward promising leads and does not launch further rounds. Runtime confirmation is decided later by the independent Harness judge, not by the discovery agents.
+The root agent assigns one sink class to each specialist, merges duplicate routes, doubly checks every concrete bug for sanity before it is reported, and reports. It does not redirect specialists toward promising leads; the only new specialists it starts are the ones that continue a sink whose entry points remain. Runtime confirmation is decided later by the independent Harness judge, not by the discovery agents.
 
-Stop when every specialist has reported that it has worked through the entry points for its sink, or when the Trial wall is reached, whichever comes first. Do not fabricate elapsed time. Reaching either bound is a normal ending: report the registry, every route that reached a sink with its exact remaining gap, and the entry points left unread. Reporting zero candidates after bounded closure is a normal ending.
+Stop when the registry shows that the entry points of every sink have been worked through, or when the Trial wall is reached, whichever comes first. Do not fabricate elapsed time. Reaching either bound is a normal ending: report the registry, every route that reached a sink with its exact remaining gap, and the entry points left unread. Reporting zero candidates after bounded closure is a normal ending.
 ```
 
 ## 2. 日本語訳の全文
 
-変えた 2 段落以外は、[v12-wide の文書](2026-10-25-wp2shell-bounty-v12-wide.md) 第 2 節の訳をそのまま使った。
+変えた 3 段落と足した 1 段落以外は、[v12-wide の文書](2026-10-25-wp2shell-bounty-v12-wide.md) 第 2 節の訳をそのまま使った。
 
 > 現在の課題:
 >
@@ -57,11 +59,13 @@ Stop when every specialist has reported that it has worked through the entry poi
 >
 > どの専門エージェントも、経路を /workspace/research/<sink>.md に書き、返すのは 30 行以内とする。中身は結論、それを支える具体的なソースの path、そのファイルへの参照である。到達先の一覧は /workspace/research/REGISTRY.md に置き、各専門エージェントがどの入口を終え、どの入口が残っているかを書いて、専門エージェントが報告するたびに更新せよ。エージェントの文脈の中にしか無い経路は失われた仕事である。書き残せ。
 >
+> 各エージェントには仕事を 1 つ渡し、その仕事が終わったら返らせる。仕事の切れ目はエージェント自身が決める。取り組んでいる入口のひとまとまりか仮説を終え、経路を自分のファイルに書き、一覧を更新して報告せよ。1 つの文脈を、到達先全体や着眼点の系統全体へ引き延ばしてはならない。Root は、返ったエージェントに次の仕事を送らない。次の仕事には新しいエージェントを立て、そのエージェントは一覧とファイルを読んでから続ける。
+>
 > プラグインは WordPress、PHP、MySQL、そのほか多くのライブラリやソフトウェアに依存する。固定された WordPress 本体のソースが渡される場合は、/workspace/wordpress にある。固定された PHP のソースが渡される場合は /workspace/php にあり、そのほかに渡されたプラグインとライブラリのソースは /workspace/dependencies/<slug> にある。WordPress 本体や言語の振る舞いを記憶で決めず、渡された依存ソースを読め。対象内の影響に至るには、これらの基盤ライブラリのバグを連鎖させる必要があるかもしれない。必要な依存ソースが渡されていなければ、未解決の欠落として記録せよ。
 >
-> Root は各専門エージェントに到達先の種別を 1 つずつ割り当て、重複する経路をまとめ、具体的なバグはどれも報告の前に妥当性を二重に点検し、報告する。有望な手掛かりへ専門エージェントを振り向けることはせず、追加のラウンドも起動しない。実行時の確定は、探索エージェントではなく、後続の独立した Harness 判定器が行う。
+> Root は各専門エージェントに到達先の種別を 1 つずつ割り当て、重複する経路をまとめ、具体的なバグはどれも報告の前に妥当性を二重に点検し、報告する。有望な手掛かりへ専門エージェントを振り向けることはしない。新しく立てる専門エージェントは、入口が残っている到達先を続けるものだけである。実行時の確定は、探索エージェントではなく、後続の独立した Harness 判定器が行う。
 >
-> すべての専門エージェントが、担当の到達先について入口を一通り終えたと報告したとき、または Trial の wall に達したとき、どちらか早いほうで止めよ。経過時間を偽ってはならない。どちらの上限に達しても正常な終わり方である。一覧、到達先に届いたすべての経路とその正確な残りの欠落、読み残した入口を報告せよ。上限のある探索を閉じた後に候補 0 件と報告するのも、正常な終わり方である。
+> 一覧で、すべての到達先について入口を一通り終えたと分かったとき、または Trial の wall に達したとき、どちらか早いほうで止めよ。経過時間を偽ってはならない。どちらの上限に達しても正常な終わり方である。一覧、到達先に届いたすべての経路とその正確な残りの欠落、読み残した入口を報告せよ。上限のある探索を閉じた後に候補 0 件と報告するのも、正常な終わり方である。
 
 ## 3. 出典対照
 
@@ -71,7 +75,9 @@ Stop when every specialist has reported that it has worked through the entry poi
 | --- | --- | --- | --- | --- |
 | 3. 専門エージェント | 到達先の種別ごとに 1 体の専門エージェントを並列に使う | PRISM-a、17 | 【本人】「専門のエージェントが 1 体ずつ、脆弱性のスペクトルの別々の波長を分析する」。「4 体」は v11-wide が #17 の子の数（W0 の 4）から書いた数である。子の同時数の上限は、C1 から Harness 生成の `## Run parameters` 節が伝える（ADR 0039 追記 3） | 「four」を外した（所有者決定 2026-10-25、再設計 第 12 節 Q7） |
 | （外した段落） | 子を短命にし、80 回で引き継ぐ | 14 | W1 の箇条。所有者決定 2026-10-25「根拠が無い」 | 段落ごと外した |
-| 7. Root の役割 | 各専門エージェントに種別を 1 つずつ割り当て、重複をまとめ、二重に点検して報告する。振り向けない | PRISM-a、13、16 | v11-wide の文書 第 3 節と同じ | 「the four sinks」を「one sink class to each specialist」に替えた |
+| 6. 子の交代（足した段落） | 子には仕事を 1 つ渡し、切りのいいところで返らせる。Root は返った子に次の仕事を送らず、新しい子を立てる | 29 | 所有者の指示 2026-10-26「80 回という固定値ではなく、Claude のように切りのいいところで子を替える」。観測: PR #535 の本番 10 Trial で、Claude runtime の子 78 体は同一スレッドの追依頼が 0（one-shot）、子由来の Finding は 3/3 | 段落を足した（2026-10-26） |
+| 8. Root の役割 | 各専門エージェントに種別を 1 つずつ割り当て、重複をまとめ、二重に点検して報告する。振り向けない。新しく立てるのは、入口が残る到達先の続きだけ | PRISM-a、13、16、30 | v11-wide の文書 第 3 節と同じ。最後の点は #30（所有者の指示 2026-10-26） | 「the four sinks」を「one sink class to each specialist」に替えた。「does not launch further rounds」を、入口が残る到達先を続ける専門エージェントだけを立てる文に替えた（2026-10-26） |
+| 9. 停止規則 | registry で全到達先の入口が終わったと分かったとき、または wall で止める | PRISM-d、20、25、30 | v11-wide の文書 第 3 節と同じ。registry で見る点は #30（所有者の指示 2026-10-26） | 最初の文の「every specialist has reported」を「the registry shows」に替えた（2026-10-26） |
 
 出典に無い要素は足していない。対象固有の関数名、オプション名、URL、画面名、製品名、PoC、ペイロードは入れていない（test で製品名、CVE、PoC、payload の語と、公開記録の対象名が無いことを確かめる）。
 
@@ -83,7 +89,8 @@ Stop when every specialist has reported that it has worked through the entry poi
 - 到達先の種別ごとの候補数
 - parked の比率
 - 入口を終えて止まった Trial と wall で止まった Trial の比
-- 子の数とツール呼び出しの分布（80 回の段落を外した影響）、runtime（Codex / Claude）ごとに分ける
+- 子の数とツール呼び出しの分布（80 回の段落を外し、交代の段落を足した影響）、runtime（Codex / Claude）ごとに分ける
+- 同じ子への追依頼の数（交代の段落の影響。PR #535 の読取器で数える）
 
 本文の数値文を外しても、Harness が強制する値は変わらない。子の上限、最低時間、wall は C1（ADR 0039 追記 3）から設定値で、同じ値を生成節 `## Run parameters` が Root に伝える。台帳の `configuration` には `sectionDigests` と `inputDigest` が残るので、v12-wide と同じ設定で走った Trial は、節の digest の違いだけで分けられる。数字がまとまった時点で [docs/knowledge/experiments.md](../knowledge/experiments.md) へ行を足す。この PR では足さない。
 
