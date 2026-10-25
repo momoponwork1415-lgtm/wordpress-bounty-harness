@@ -66,7 +66,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(20);
+    expect(ids).toHaveLength(21);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -80,7 +80,7 @@ describe("WordPress prompt table", () => {
     expect(
       WORDPRESS_DISCOVERY_PROMPTS.filter((row) => row.status === "current"),
     ).toHaveLength(1);
-    expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v8");
+    expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v10");
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
     ).toHaveLength(1);
@@ -222,7 +222,11 @@ describe("WordPress discovery prompt assets", () => {
   it("keeps the objective-only assets free of the claim contract", async () => {
     for (const id of WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS) {
       const { text } = await loadWordPressDiscoveryAsset(id);
-      if (id === "wp2shell-bounty-v7" || id === "wp2shell-bounty-v8")
+      if (
+        id === "wp2shell-bounty-v7" ||
+        id === "wp2shell-bounty-v8" ||
+        id === "wp2shell-bounty-v10"
+      )
         expect(text).toContain("Use multiagents aggressively");
       else expect(text).toMatch(/Lead|Finding/);
       expect(text).not.toMatch(
@@ -391,6 +395,40 @@ describe("WordPress discovery prompt assets", () => {
     }
   });
 
+  it("archives v8 and changes only the portfolio bullet in v10 (#522)", async () => {
+    expect(
+      WORDPRESS_DISCOVERY_PROMPTS.find((row) => row.id === "wp2shell-bounty-v8")
+        ?.status,
+    ).toBe("archived");
+    const v8 = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v8")).text;
+    const v10 = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v10")).text;
+    const v8Lines = v8.split("\n");
+    const v10Lines = v10.split("\n");
+    expect(v10Lines).toHaveLength(v8Lines.length);
+    const changed = v10Lines.flatMap((line, index) =>
+      line === v8Lines[index] ? [] : [index],
+    );
+    expect(changed).toHaveLength(1);
+    const before = v8Lines[changed[0]!]!;
+    const after = v10Lines[changed[0]!]!;
+    expect(before).toMatch(/^- Begin with a genuinely diverse portfolio/);
+    expect(after).toMatch(
+      /^- Begin with a genuinely diverse portfolio of approaches, weighted by where publicly credited findings/,
+    );
+    expect(after).toContain("state the setting as the precondition");
+    expect(after).not.toMatch(
+      /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|Relevanssi|Brizy|Elementor|\b(?:PoC|CVE|advisory|payload)\b/i,
+    );
+    // The resume directive is the last paragraph and stays byte-identical.
+    const lastParagraph = (text: string) =>
+      text
+        .trim()
+        .split(/\n\s*\n/)
+        .at(-1);
+    expect(lastParagraph(v10)).toMatch(/^Before giving up,/);
+    expect(lastParagraph(v10)).toBe(lastParagraph(v8));
+  });
+
   it("rejects an unknown asset ID at the public boundary", async () => {
     await expect(
       loadWordPressDiscoveryAsset("../policy/programme-scope" as never),
@@ -404,7 +442,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v5" ||
         id === "wp2shell-bounty-v6" ||
         id === "wp2shell-bounty-v7" ||
-        id === "wp2shell-bounty-v8"
+        id === "wp2shell-bounty-v8" ||
+        id === "wp2shell-bounty-v10"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).

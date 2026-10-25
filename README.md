@@ -14,7 +14,7 @@ WordPress プラグインの未知の脆弱性を AI が探し、判定器が `r
 
 ## 今の動き方
 
-- 探索: `select` で対象を選び、`campaign run` が gVisor（`runsc`）の使い捨て環境で目的 prompt `wp2shell-bounty-v8` の協調 Trial を 1 回走らせる。
+- 探索: `select` で対象を選び、`campaign run` が gVisor（`runsc`）の使い捨て環境で目的 prompt `wp2shell-bounty-v10` の協調 Trial を 1 回走らせる。
 - 検証: `verify next --handoff <dir>` が Finding ごとに Lab を立て、skill `wbh-verify` がその Lab で再現する。`runtime-confirmed` は Harness の判定器だけが出す。
 - 人間のレビュー: skill `wbh-review`・`wbh-dedupe`・`wbh-report` が下調べと下書きを作り、所有者が `review decide` と `review authorize` で決める。Harness は外部へ送らない。
 

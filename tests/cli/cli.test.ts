@@ -819,7 +819,7 @@ async function harness(
       selectionPolicyPath: policyPath,
       // Match the current host: discovery never attaches a Lab.
       discovery: { lab: "none" },
-      promptId: "wp2shell-bounty-v8",
+      promptId: "wp2shell-bounty-v10",
       programmeBoundary: {
         version: "v1",
         text: "Synthetic programme boundary",
@@ -1250,7 +1250,7 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(result.code).toBe(0);
-    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v8");
+    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v10");
     const contract = wordPressDiscoveryOutputContractV4();
     expect(prompts[0]).toContain(objective.text.trim());
     expect(prompts[0]).toContain(contract.text);
@@ -1429,7 +1429,7 @@ describe("harness CLI vertical slice", () => {
       programmeBoundary: { version: "v1", text: "Synthetic" },
       wordpressVersion: "6.8",
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
-      promptId: "wp2shell-bounty-v8",
+      promptId: "wp2shell-bounty-v10",
     };
     expect(
       wordpressCampaignConfigSchema.safeParse({
@@ -1784,7 +1784,7 @@ describe("harness CLI vertical slice", () => {
     };
     const production = wordpressCampaignConfigSchema.parse(base);
     expect(production).toMatchObject({
-      promptId: "wp2shell-bounty-v8",
+      promptId: "wp2shell-bounty-v10",
       runWallTimeMinutes: 120,
     });
     for (const forbidden of [
@@ -1812,7 +1812,7 @@ describe("harness CLI vertical slice", () => {
         wordpressCampaignConfigSchema.safeParse({
           ...base,
           mode,
-          promptId: "wp2shell-bounty-v8",
+          promptId: "wp2shell-bounty-v10",
         }).success,
       ).toBe(false);
   });
@@ -3210,7 +3210,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...policy,
-        promptVariant: "wp2shell-bounty-v8",
+        promptVariant: "wp2shell-bounty-v10",
         revisitPolicy: { kind: "never" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -3406,7 +3406,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...manual,
-        promptVariant: "wp2shell-bounty-v8",
+        promptVariant: "wp2shell-bounty-v10",
         revisitPolicy: { kind: "never" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -3491,7 +3491,7 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(mismatched.code).toBe(1);
-    expect(mismatched.stderr).toContain("wp2shell-bounty-v8");
+    expect(mismatched.stderr).toContain("wp2shell-bounty-v10");
     await writeFile(configPath, JSON.stringify(campaignConfig));
     const campaign = await run(
       "campaign",
@@ -4528,7 +4528,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...policy,
-        promptVariant: "wp2shell-bounty-v8",
+        promptVariant: "wp2shell-bounty-v10",
         revisitPolicy: { kind: "never" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -4632,7 +4632,7 @@ describe("harness CLI vertical slice", () => {
         policyPath,
         JSON.stringify({
           ...policy,
-          promptVariant: "wp2shell-bounty-v8",
+          promptVariant: "wp2shell-bounty-v10",
           revisitPolicy: { kind: "never" },
           wordpressVersion: "6.8",
           maximumTargets: 3,
@@ -5389,7 +5389,7 @@ describe("harness CLI vertical slice", () => {
       attackerPosition: "subscriber",
       impact: "account-takeover",
       brokenProperty: "Synthetic property",
-      promptVariant: "wp2shell-bounty-v8",
+      promptVariant: "wp2shell-bounty-v10",
       promptDigest: expect.stringMatching(/^sha256:/),
     });
     expect(bundle.target).toMatchObject({
