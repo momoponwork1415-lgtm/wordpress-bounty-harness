@@ -8,6 +8,7 @@ import type { PrivateArtifactStore } from "../infrastructure/private-artifact-st
 import type { LabHandle, LabProvisioner, TrialLab } from "../lab/index.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
 import type { Ledger, LedgerEventV1, LedgerRecord } from "../ledger/index.js";
+import { humanReproducedBasis } from "../review/manual-observation.js";
 import { targetSelectionId, type TargetSelection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
 import { storeTargetSkipDiagnostic } from "./skip-diagnostic.js";
@@ -980,13 +981,36 @@ export async function reverifyOnSelectedVersion<
         event.type === "verification-finished" &&
         event.snapshotDigest === finding.snapshotDigest &&
         (event.result.status === "runtime-confirmed" ||
-          event.result.status === "reproduced"),
+          event.result.status === "reproduced" ||
+          // #525 (ADR 0040): a result a person observed and reproduced as `match`.
+          humanReproducedBasis(ledger, {
+            campaignId: referenceCampaignId,
+            findingId,
+            verificationId: event.verificationId,
+            snapshotDigest: event.snapshotDigest,
+          }) !== null),
     )
     .at(-1);
   if (observed === undefined && options.snapshotCampaignId !== undefined)
     throw new Error("A confirmed route is required for pinned smoke replay");
   let referenceRoute: unknown;
   let hasCapturedRouteBinding = false;
+  if (
+    observed?.type === "verification-finished" &&
+    observed.result.status === "incomplete"
+  ) {
+    // The human-observed attempt's own route; it carries no Harness binding.
+    const recipe = observed.artifacts.find(
+      (artifact) => artifact.kind === "recipe",
+    );
+    const routeFile =
+      recipe === undefined
+        ? undefined
+        : await options.store.readFile(recipe.digest, "route.json", 64 * 1024);
+    if (routeFile?.status !== "resolved")
+      throw new Error("The observed route is unavailable in Private Evidence");
+    referenceRoute = JSON.parse(routeFile.bytes.toString("utf8")) as unknown;
+  }
   if (
     observed?.type === "verification-finished" &&
     (observed.result.status === "runtime-confirmed" ||

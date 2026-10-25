@@ -24,7 +24,7 @@
 
 開発対象のslugと版を指定（運用時は機械選定） → Snapshot固定 → WP2Shell目的promptによるRoot＋subagent（上限は `discovery.maxChildren`、既定 4）の協調Trialを対象ごとに1回（探索用Labは既定で付けない、`discovery.lab: none`） → Finding単位にLabを供給し、既存の検証skill（`verify next --handoff`、ADR 0035）が再現 → Harnessが捕捉とLab browserの記録を残し、人間の観測を待つ（`incomplete(awaiting-human-observation)`、ADR 0040） → 最新版で再検証 → 重複・scope照合 → 人間がreview Labで観測と再現を記録（`review observe`、`review decide --reproduced`） → 英語レポートJSON案 → 人間の査読 → 外部行動承認 → 人間が提出し転帰を記録。台帳は全段階を追記する。評価は台帳を読むだけで、探索へ答えを渡さない（ADR 0029）。
 
-この流れの最終目標では、nonce付きcanaryを回収した `runtime-confirmed` は提出の必須条件ではない。Harnessの捕捉した発火などの軽量観測はそのまま事実として記録し、成立の最終確認は同じ最新版Snapshotの手動Lab再現で行う。現行の `incomplete` から正式な文案・Submission Candidateへ進む経路は未実装であり、内部プレビューだけを作れる（ADR 0038 の2026-10-24追記9・10）。
+この流れの最終目標では、nonce付きcanaryを回収した `runtime-confirmed` は提出の必須条件ではない。Harnessの捕捉した発火などの軽量観測はそのまま事実として記録し、成立の最終確認は同じ最新版Snapshotの手動Lab再現で行う。`incomplete(awaiting-human-observation)` は、人間の `review observe` の `match` と `review decide --reproduced match` が揃うと、scope・正式な文案・Submission Candidate・承認の根拠になる。それ以前は内部プレビューだけを作れる（ADR 0038 の2026-10-24追記9・10、ADR 0040 の2026-10-26追記）。
 
 ## 4. モジュール境界
 
@@ -129,7 +129,7 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 - 記録: 判断、理由コード、判断までの時間、開いた証拠。覆し率は監視信号。
 - 提出転帰（triaged / resolved / duplicate / informative / N/A / rejected）を台帳へ戻し、選定方針と検証の改善材料にする。自分の未公開の発見は公開されるまで探索へ戻さない（公開後はADR 0012の履歴として扱う）。
 
-当面の提出準備完了条件は、公開中の最新版の同一Snapshotと通常利用構成で人間の手動再現が `match`、重複照合が解決済み、Wordfenceのscopeが確認済み、証拠に結び付いた英語報告書とFill-Only JSONが人間の最終査読に渡せること。人間の有効な手順で `mismatch` ならその候補は提出へ進めず、環境・手順・観測の不足で再現できない場合は `incomplete` / `defer` として次の手を残す。どちらも観測だけを `runtime-confirmed` や `contradicted` に読み替えない。手動再現の記録と正式な提出basisを結ぶ実装は別途必要である（ADR 0038）。
+当面の提出準備完了条件は、公開中の最新版の同一Snapshotと通常利用構成で人間の手動再現が `match`、重複照合が解決済み、Wordfenceのscopeが確認済み、証拠に結び付いた英語報告書とFill-Only JSONが人間の最終査読に渡せること。人間の有効な手順で `mismatch` ならその候補は提出へ進めず、環境・手順・観測の不足で再現できない場合は `incomplete` / `defer` として次の手を残す。どちらも観測だけを `runtime-confirmed` や `contradicted` に読み替えない。`incomplete(awaiting-human-observation)` では、名指しした人間の `review observe` の match と `review decide --reproduced match` が正式な提出basisになる（ADR 0038、ADR 0040 の2026-10-26追記）。
 
 ## 8a. プログラム対象範囲の方針
 

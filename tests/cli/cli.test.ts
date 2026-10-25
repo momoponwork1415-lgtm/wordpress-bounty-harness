@@ -18,6 +18,11 @@ import { runCli, type CliIo } from "../../src/cli/index.js";
 import { openState } from "../../src/cli/state.js";
 import { reviewExportV1Schema } from "../../src/review/index.js";
 import {
+  recordManualObservation,
+  recordManualObservationLabReady,
+} from "../../src/review/manual-observation.js";
+import { observedReviewLabPackage } from "../../src/profiles/wordpress/lab/observed-review-lab.js";
+import {
   createWordPressCliProfile,
   wordpressCampaignConfigSchema,
   type WordPressCampaignBoundaries,
@@ -6041,6 +6046,7 @@ describe("harness CLI vertical slice", () => {
 
   it("rechecks a confirmed Finding on its original Snapshot after the Lab scenario changes", async () => {
     const {
+      state,
       seedHistory,
       run,
       configPath,
@@ -6151,7 +6157,7 @@ describe("harness CLI vertical slice", () => {
         ),
     ).toMatchObject({ scenario: { id: "approved-comment-v1" } });
 
-    const controlled = await run(
+    const refused = await run(
       "review",
       "reverify",
       "--handoff",
@@ -6166,10 +6172,86 @@ describe("harness CLI vertical slice", () => {
     );
     // #525: the recheck in the new scenario awaits a human observation, so no
     // confirmed route exists there yet and the control is still refused.
-    expect(controlled.code).not.toBe(0);
-    expect(controlled.stderr).toContain(
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain(
       "requires the confirmed Finding's Lab scenario",
     );
+
+    // A person observes the recheck in a review Lab and reproduces it (ADR 0040).
+    const ref = {
+      campaignId: "campaign-1",
+      findingId: finding,
+      verificationId: latest.verificationId,
+      snapshotDigest: latest.snapshotDigest,
+    };
+    const { store } = state();
+    const admitted = await observedReviewLabPackage({
+      ledger: ledger(),
+      store,
+      ref,
+    });
+    if (admitted === null) throw new Error("no review Lab package");
+    const receipt = await recordManualObservationLabReady({
+      ledger: ledger(),
+      store,
+      ref,
+      packageDigest: admitted.packageDigest,
+      sessionLabel: "wbh-review-net",
+    });
+    await recordManualObservation({
+      ledger: ledger(),
+      store,
+      ref,
+      packageDigest: admitted.packageDigest,
+      sessionReceiptDigest: receipt,
+      evidence: new TextEncoder().encode("screen recording notes"),
+      result: "match",
+      recordedBy: "owner",
+    });
+    const reproduced = await run(
+      "review",
+      "decide",
+      ...campaign,
+      "--finding",
+      finding,
+      "--decision",
+      "defer",
+      "--reason",
+      "manual-reproduction",
+      "--reproduced",
+      "match",
+      "--by",
+      "owner",
+      "--minutes",
+      "1",
+      "--reproduce-minutes",
+      "1",
+    );
+    expect(reproduced.stderr).toBe("");
+    expect(reproduced.stdout).toContain("manual reproduction match recorded");
+
+    // That basis is the confirmed route for a fixed-version control.
+    const controlled = await run(
+      "review",
+      "reverify",
+      "--handoff",
+      join(root, "handoff"),
+      ...campaign,
+      "--finding",
+      finding,
+      "--config",
+      configPath,
+      "--version",
+      "3.3",
+    );
+    expect(controlled.stderr).toBe("");
+    expect(controlled.code).toBe(0);
+    expect(verifierReferenceRoutes.at(-1)).toBeDefined();
+    expect(
+      ledger()
+        .read({ campaignId: "campaign-1", type: "verification-finished" })
+        .at(-1)?.event,
+    ).toMatchObject({ basis: { kind: "fixed-version" } });
   });
 
   it("replays a confirmed route into a separate campaign without adding a verdict to the source campaign", async () => {

@@ -672,6 +672,22 @@ function queued(review: Review, values: Values) {
   return item;
 }
 
+/** #525 (ADR 0040): an old judge result, or a result a person observed in a review Lab. */
+function hasSubmissionBasis(
+  item: ReviewItem,
+): item is Extract<
+  ReviewItem,
+  { readonly status: "runtime-confirmed" | "reproduced" | "incomplete" }
+> {
+  return (
+    item.status === "runtime-confirmed" ||
+    item.status === "reproduced" ||
+    (item.status === "incomplete" &&
+      item.reason === "awaiting-human-observation" &&
+      item.manualObservation?.result === "match")
+  );
+}
+
 function exactDraft(values: Values) {
   return {
     candidateId: required(values.candidate, "candidate"),
@@ -1339,7 +1355,7 @@ const COMMANDS: readonly Command[] = [
           ? undefined
           : await readFile(resolve(notePath), "utf8");
       if (reproduced !== undefined) {
-        if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
+        if (!hasSubmissionBasis(item))
           throw new UsageError(
             "Only an evidence-backed package can be reproduced",
           );
@@ -1410,7 +1426,7 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, state, environment, io }) => {
       const review = environment.profile.review(state);
       const item = queued(review, values);
-      if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
+      if (!hasSubmissionBasis(item))
         throw new UsageError(
           "Scope is assessed only for evidence-backed findings",
         );
@@ -1547,7 +1563,7 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, input, state, environment, io }) => {
       const review = environment.profile.review(state);
       const item = queued(review, values);
-      if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
+      if (!hasSubmissionBasis(item))
         throw new UsageError(
           "A confirmed verification is required for a draft",
         );
