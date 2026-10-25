@@ -45,7 +45,7 @@ cd /home/dev/wordpress-bounty-harness-prod7 && node dist/cli/main.js --state ~/.
 
 ## 4. 許す操作は 1 つ
 
-Root が `provider-cyber-policy` で止まったとき、ADR 0036 と OPERATIONS を読み、`continuous run` が同じ host で動いている間に `campaign resume` を打てるか（batch 間の Lab 掃除、campaign process は host に 1 つの規則）を確かめる。文書が安全だと言うときだけ 1 回打つ。
+Root が `provider-cyber-policy` で止まったとき、ADR 0036 と OPERATIONS を読み、`continuous run` が同じ host で動いている間に `campaign resume` を打てるか（runner の batch 間の掃除は探索の残骸だけを消し、`campaign resume` が生きている間は `<state>/sweep-holds/<pid>` で止まる。runtime ごとの同時数に収まるか）を確かめる。文書が安全だと言うときだけ 1 回打つ。
 
 ```bash
 cd /home/dev/wordpress-bounty-harness-prod7 && node dist/cli/main.js --state ~/.local/state/wordpress-bounty-harness --host ~/.config/wordpress-bounty-harness/host-production-v5.json campaign resume --campaign <id> --run <runId> --config ~/.config/wordpress-bounty-harness/campaign-production-4x.json

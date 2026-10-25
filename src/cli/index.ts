@@ -36,7 +36,7 @@ import type {
   TargetLimit,
   VerifyNextSummary,
 } from "./pipeline.js";
-import { holdLabSweep } from "./continuous.js";
+import { holdDiscoverySweep } from "./continuous.js";
 import {
   continuousCommand,
   type ContinuousHostStatus,
@@ -273,12 +273,17 @@ export interface CliProfile {
     state: CliState,
     input: { readonly configPath: string; readonly selectionPath: string },
   ): Promise<ContinuousHostStatus>;
-  /** Whether `lab up` holds a Lab for an operator; `continuous run` skips its sweep meanwhile. */
-  labHeld(state: CliState): Promise<boolean>;
-  /** Docker resources a crashed run left behind; removed only when asked. */
+  /**
+   * Docker resources a crashed run left behind; removed only when asked.
+   * `labs: false` names only discovery resources and never a Lab (#526).
+   */
   cleanupLeftovers(
     state: CliState,
-    input: { readonly configPath: string; readonly remove: boolean },
+    input: {
+      readonly configPath: string;
+      readonly remove: boolean;
+      readonly labs: boolean;
+    },
   ): Promise<{
     readonly containers: readonly string[];
     readonly networks: readonly string[];
@@ -1038,7 +1043,10 @@ const COMMANDS: readonly Command[] = [
       const target = rest[0] ?? null;
       const repeat = values.repeat === undefined ? 1 : Number(values.repeat);
       // A manual campaign beside the runner keeps its containers (#399).
-      const release = await holdLabSweep(state.stateDirectory, process.pid);
+      const release = await holdDiscoverySweep(
+        state.stateDirectory,
+        process.pid,
+      );
       const summary = await environment.profile
         .runCampaign(state, {
           campaignId: required(values.campaign, "campaign"),
@@ -1460,10 +1468,7 @@ const COMMANDS: readonly Command[] = [
               },
             }),
       };
-      const release = await holdLabSweep(state.stateDirectory, process.pid);
-      const summary = await environment.profile
-        .reverify(state, input)
-        .finally(release);
+      const summary = await environment.profile.reverify(state, input);
       io.stdout(
         `reverified finding ${values.finding} as ${summary.findingId} on ${summary.targetId} ${summary.version}  snapshot ${summary.snapshotDigest}  verification ${summary.verificationId}: ${summary.status}`,
       );
@@ -1498,28 +1503,23 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, state, environment, io }) => {
       if (environment.profile.verifyNext === undefined)
         throw new Error("verify next needs a verification profile");
-      const release = await holdLabSweep(state.stateDirectory, process.pid);
-      const summary = await environment.profile
-        .verifyNext(state, {
-          ...(values.campaign === undefined
-            ? {}
-            : { campaignId: values.campaign }),
-          configPath: resolve(required(values.config, "config")),
-          handoff: {
-            directory: resolve(required(values.handoff, "handoff")),
-            httpPort: integerOption(values.port, "port", 8080, 65535),
-            databasePort: integerOption(
-              values["db-port"],
-              "db-port",
-              3307,
-              65535,
-            ),
-          },
-          ...(values.finding === undefined
-            ? {}
-            : { findingId: values.finding }),
-        })
-        .finally(release);
+      const summary = await environment.profile.verifyNext(state, {
+        ...(values.campaign === undefined
+          ? {}
+          : { campaignId: values.campaign }),
+        configPath: resolve(required(values.config, "config")),
+        handoff: {
+          directory: resolve(required(values.handoff, "handoff")),
+          httpPort: integerOption(values.port, "port", 8080, 65535),
+          databasePort: integerOption(
+            values["db-port"],
+            "db-port",
+            3307,
+            65535,
+          ),
+        },
+        ...(values.finding === undefined ? {} : { findingId: values.finding }),
+      });
       io.stdout(
         summary === null
           ? "no verification pending"
@@ -1812,6 +1812,7 @@ const COMMANDS: readonly Command[] = [
       const leftovers = await environment.profile.cleanupLeftovers(state, {
         configPath: resolve(required(values.config, "config")),
         remove,
+        labs: true,
       });
       for (const kind of ["containers", "networks", "volumes"] as const)
         io.stdout(
@@ -1870,35 +1871,30 @@ const COMMANDS: readonly Command[] = [
           `private browser observation: ${state.store.contentPath(manual.evidenceDigest)}/browser-dialog-observation.json`,
         );
       }
-      const release = await holdLabSweep(state.stateDirectory, process.pid);
-      try {
-        await runForegroundReviewLab(
-          () =>
-            launch(state, {
-              packageDigest,
-              category: item.category,
-            }),
-          io,
-          process,
-          manual === null || manual === undefined
-            ? undefined
-            : async (session) => {
-                const receipt = await recordManualObservationLabReady({
-                  ledger: state.ledger,
-                  store: state.store,
-                  ref: item.ref,
-                  packageDigest: manual.packageDigest,
-                  sessionLabel: session.networkName,
-                  clock: state.clock,
-                });
-                io.stdout(
-                  `manual observation receipt: ${receipt} (${state.store.contentPath(receipt)}/${MANUAL_LAB_RECEIPT_FILE})`,
-                );
-              },
-        );
-      } finally {
-        await release();
-      }
+      await runForegroundReviewLab(
+        () =>
+          launch(state, {
+            packageDigest,
+            category: item.category,
+          }),
+        io,
+        process,
+        manual === null || manual === undefined
+          ? undefined
+          : async (session) => {
+              const receipt = await recordManualObservationLabReady({
+                ledger: state.ledger,
+                store: state.store,
+                ref: item.ref,
+                packageDigest: manual.packageDigest,
+                sessionLabel: session.networkName,
+                clock: state.clock,
+              });
+              io.stdout(
+                `manual observation receipt: ${receipt} (${state.store.contentPath(receipt)}/${MANUAL_LAB_RECEIPT_FILE})`,
+              );
+            },
+      );
       return 0;
     },
   }),
@@ -1928,7 +1924,10 @@ const COMMANDS: readonly Command[] = [
       if (environment.profile.resumeCampaignRun === undefined)
         throw new UsageError("This profile cannot resume a discovery run");
       const campaignId = required(values.campaign, "campaign");
-      const release = await holdLabSweep(state.stateDirectory, process.pid);
+      const release = await holdDiscoverySweep(
+        state.stateDirectory,
+        process.pid,
+      );
       const summary = await environment.profile
         .resumeCampaignRun(state, {
           campaignId,
