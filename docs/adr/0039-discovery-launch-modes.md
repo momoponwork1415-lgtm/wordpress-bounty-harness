@@ -107,3 +107,25 @@ amends: 0029（新規探索の唯一の mode）, 0033（最低 60 分は deep �
 - 同じ値を Harness が生成する `## Run parameters` 節で Root にも伝え（ADR 0019 と同じ形）、台帳の `configuration` に `wallMinutes`、`minimumActiveMinutes`、`maxChildren`、`lab`、`model`、`effort` として残す。2026-10-25 より前の event には無い。
 - 目的文の本文と digest は変えない。本文の数値文（「80 tool calls」、「at least one hour」、「120-minute wall cap」など）は C2 の版上げで外す。生成節が増えたので `inputDigest` は変わる。
 - 消し方: `discovery.maxChildren`、`discovery.minimumActiveMinutes`、`discovery.lab` の object 形と `## Run parameters` 節を外し、`agents.max_threads=4`、hook の 4、mode ごとの定数（`wide` の wall 20 分を含む）に戻す。台帳の追加 field は読み取り専用で残す。
+
+## 2026-10-25 追記 4: 目的文の次の版（`deep` は v11、`wide` は v13-wide）。子の寿命の段落と数値の文を外す（所有者決定、Phase C2）
+
+所有者は 2026-10-25 に、子のツール呼び出し 80 回の段落（「Keep every agent short. …」）には根拠が無いので、`deep` と `wide` の両方の次の版から外すと決めた。80 という数はどこにも移さない。同じ対話で、Harness が強制して `## Run parameters` 節で伝える数（wall、最低時間、子の数）は、本文に重ねて持たないと決めた（`docs/reviews/2026-10-25-exploration-architecture-redesign.md` 第 7 節、第 12 節 Q7）。Root は Run parameters の上限の中で、何体の子を使うかを決める。
+
+同じ日の訂正で、Codex と Claude のどちらの runtime でも、Root と到達先の種別ごとに 1 体の専門エージェントの形を保つと決めた。1 体のエージェントが種別を順に掃く形の目的文と、協調の形を選ぶ設定は作らない。
+
+- `deep` の現行の目的文は `wp2shell-bounty-v11`（~~`sha256:03d87941138ba92f7e5ab41e716de9b115cc63509a43739cb766e8dad7a37481`~~。2026-10-26 に `sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9` へ置き換えた。下の 2026-10-26 の段落）とする。v10 から寿命の段落を外し、「You may spawn up to 4 agents at any one time.」の 1 文を外し、最後の段落の「one hour」を「the minimum active exploration time stated in the Run parameters」に替えて「The Trial has a 120-minute wall cap.」を外した。最後の段落は「Before giving up,」で始まるので、再開段落の規則は変わらない（[本文と出典対照](../reviews/2026-10-25-wp2shell-bounty-v11.md)）。
+- `wide` の現行の目的文は `wp2shell-bounty-v13-wide`（~~`sha256:4be7c360dac8f3e9651a1174dab462e4aec1f32bcb623dfe0180fda63637efbc`~~。2026-10-26 に `sha256:0dd2072b4c6a544d47ebb6df94c7981f2fbb758b4dee82e063896ff91f892bb8` へ置き換えた。下の 2026-10-26 の段落）とする。v12-wide から寿命の段落を外し、「Use four specialist agents, one per sink class,」を「Use one specialist agent per sink class,」に、「The root agent assigns the four sinks,」を「The root agent assigns one sink class to each specialist,」に替えた。4 つの到達先の種別はそのまま並ぶので、専門エージェントの数は種別から決まる。最後の段落は「Stop when」のまま（[本文と出典対照](../reviews/2026-10-25-wp2shell-bounty-v13-wide.md)）。
+- `wp2shell-bounty-v10` と `wp2shell-bounty-v12-wide` は `archived` にする。本文、digest、fragments の行は残し、走った Trial の目的文、digest、節の digest を照合できるようにする。`archived` の行は `mode` を持たないので、新規の campaign では選べない。
+- どちらの新版も、出典対照表の既存の行（第 2 節の #14、#17、#20、第 2.1 節の PRISM-a）だけで組み、新しい行は足していない（2026-10-26 に #29、#30 を足した。下の段落）。ほかの段落は 1 バイトも変えていない（`tests/profiles/wordpress/discovery-prompts.test.ts` の v11 と v13-wide の test）。
+- `src/profiles/wordpress/policy/campaign.json` の `promptId` と `src/profiles/wordpress/policy/selection.json` の `promptVariant` は v11、`examples/campaign-wide-20.json` の `promptId` は v13-wide にする。本番の選定方針の revisit は `version-increased` なので、`promptVariant` の版上げで再訪の対象は変わらない。
+- 測った数字: 数字待ち（本番で取る。所有者の 2026-10-25 の決定）。Trial は回していない。
+- 戻すときは、`deep` は v11 → v10 → v8、`wide` は v13-wide → v12-wide → v11-wide → v10-wide → v8 の順に戻す。手順は各版の文書の第 5 節にある。
+
+2026-10-26 の補い（所有者）: 所有者は 2026-10-26 に、外した 80 回の段落の代わりを示した。規則は固定の回数ではなく、Claude runtime がすでにしているように、切りのいいところで子を替えることである（「80 回という固定値ではなく、Claude のように切りのいいところで子を替える」）。子には仕事を 1 つ渡し、子はその仕事が終わったら返る。Root は返った子に次の仕事を送らず、次の仕事には新しい子を立てる。観測した根拠は PR #535 の本番 10 Trial で、Claude runtime の子 78 体は同一スレッドの追依頼が 0（one-shot）で、子由来の Finding は 3/3 だった。Codex の子 47 体は追依頼 147 で、子由来の Finding は 0/0 だった。v11 と v13-wide はまだ main に入っておらず、どの run も使っていないので、同じ id のまま本文を改めた。
+
+- 共有の fragment `coordination/handover-v11` を足し、v11 では `persistence/research-v10` の直後、v13-wide では `persistence/research-v11` の直後に置いた。回数の上限は本文にも Harness にも置かない。
+- v13-wide だけ、`coordination/fixed-v13` の「and does not launch further rounds」の文を「the only new specialists it starts are the ones that continue a sink whose entry points remain」に替え、停止規則を `coordination/stop-wide-v13` にして最初の文を「Stop when the registry shows that the entry points of every sink have been worked through, …」に替えた。子が到達先の途中で返るので、新しく立てる専門エージェントと止める判断を registry に合わせた。v11-wide と v12-wide は `coordination/stop-wide-v11` のまま。
+- 新しい digest は、`wp2shell-bounty-v11` が `sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9`、`wp2shell-bounty-v13-wide` が `sha256:0dd2072b4c6a544d47ebb6df94c7981f2fbb758b4dee82e063896ff91f892bb8` である。上の箇条の旧 digest は打ち消し線で残した。
+- 出典対照表 第 2 節に #29（子の交代）と #30（v13-wide の Root の 1 文と停止規則の最初の文）を足した。出典は所有者の指示 2026-10-26 と PR #535 の観測で、AI が足した要素は無い。
+- 測った数字: 数字待ちのまま。Trial は回していない。

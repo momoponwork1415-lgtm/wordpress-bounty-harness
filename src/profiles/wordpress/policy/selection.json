@@ -2,7 +2,7 @@
   "kind": "wordpress-selection-policy",
   "schemaVersion": 1,
   "id": "wordpress-selection-2026-10-26",
-  "promptVariant": "wp2shell-bounty-v10",
+  "promptVariant": "wp2shell-bounty-v11",
   "pluginDependencySlugs": {
     "unlimited-elements-for-elementor": ["elementor"]
   },

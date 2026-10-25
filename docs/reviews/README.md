@@ -52,7 +52,7 @@ Codex への依頼文:
 
 - `2026-10-14-final-design.md`: 探索の Lab、即時の検証、`owner-approved` の付け手、Step 1 の「人手 0」の範囲は、2026-10-18〜19 の決定（ADR 0033〜0037、#238 の comment）で変わった。
 - `2026-10-17-thorough-search-v6-plan.md`: 入口索引と coverage は ADR 0034 で削除した。
-- prompt v4〜v7 の草案と対照表: 旧版の記録。新規探索は `wp2shell-bounty-v10` だけ（2026-10-25、#522。v8 は ADR 0033 で入り、照合用に残す）。
+- prompt v4〜v7 の草案と対照表: 旧版の記録。新規探索は `deep` の `wp2shell-bounty-v11` と `wide` の `wp2shell-bounty-v13-wide` だけ（ADR 0039 の 2026-10-25 追記 4。v10 と v12-wide は archived、v8 は ADR 0033 で入り、照合用に残す）。
 
 ## archive/
 

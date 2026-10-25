@@ -1,6 +1,8 @@
 # 探索 prompt v10: 着眼点を公開事例の頻度で重み付けし、子を短く保つ（2026-10-25）
 
-状態: #522 の Draft。新規の探索 Trial で実行可能な目的 prompt を `wp2shell-bounty-v10` にし、v8 は過去 Trial の digest 照合用に `archived` で残す。所有者決定 2026-10-25 により、v10 は本番の対象で試し、採否は所有者が結果の手応えで決める。開発セットでの v8 との比較は置かない（第 4 節）。うまくいかなければ v8 に戻す（第 5 節）。
+状態: 2026-10-25 に `archived`。`deep` の現行は [v11](2026-10-25-wp2shell-bounty-v11.md)（ADR 0039 の 2026-10-25 追記 4）。以下は当時の記録。
+
+当時の状態: #522 の Draft。新規の探索 Trial で実行可能な目的 prompt を `wp2shell-bounty-v10` にし、v8 は過去 Trial の digest 照合用に `archived` で残す。所有者決定 2026-10-25 により、v10 は本番の対象で試し、採否は所有者が結果の手応えで決める。開発セットでの v8 との比較は置かない（第 4 節）。うまくいかなければ v8 に戻す（第 5 節）。
 
 - 本文: `src/profiles/wordpress/prompts/wp2shell-bounty-v10.md`
 - digest: `sha256:fd4e395ecb50923487c9bab6dbae81f0aff4e67342abecedda3f53cd9ff5f8b3`

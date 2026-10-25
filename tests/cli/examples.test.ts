@@ -23,7 +23,7 @@ const example = async (file: string, version = "3.3.1"): Promise<unknown> =>
     ),
   ) as unknown;
 
-it("starts the checked-in v10 campaign with one concurrent target on WordPress 7.1.3", async () => {
+it("starts the checked-in v11 campaign with one concurrent target on WordPress 7.1.3", async () => {
   const source = JSON.parse(
     await readFile(
       join(
@@ -41,7 +41,7 @@ it("starts the checked-in v10 campaign with one concurrent target on WordPress 7
   ) as unknown;
   const config = wordpressCampaignConfigSchema.parse(source);
   expect(config).toMatchObject({
-    promptId: "wp2shell-bounty-v10",
+    promptId: "wp2shell-bounty-v11",
     runWallTimeMinutes: 120,
   });
   expect(config.resources.maxConcurrentTargets).toBe(1);
@@ -70,7 +70,7 @@ it("starts the checked-in v10 campaign with one concurrent target on WordPress 7
     ).toBe(accepted);
 });
 
-it("runs the wide example as a 20-minute v12-wide Trial on the production selection policy (ADR 0039)", async () => {
+it("runs the wide example as a 20-minute v13-wide Trial on the production selection policy (ADR 0039)", async () => {
   const config = wordpressCampaignConfigSchema.parse(
     JSON.parse(
       await readFile(
@@ -92,12 +92,12 @@ it("runs the wide example as a 20-minute v12-wide Trial on the production select
       mode: "wide",
       minimumActiveMinutes: 0,
     },
-    promptId: "wp2shell-bounty-v12-wide",
+    promptId: "wp2shell-bounty-v13-wide",
     runWallTimeMinutes: 20,
   });
   // The production selection policy names the deep objective; both modes select from it.
   expect((await readWordPressCampaignPolicy(config)).promptVariant).toBe(
-    "wp2shell-bounty-v10",
+    "wp2shell-bounty-v11",
   );
 });
 
@@ -119,7 +119,7 @@ it("retains the v6 measurement example as an unrunnable historical fixture", asy
 });
 
 it.each(["3.3.1", "3.2.6"])(
-  "runs the pinned %s production example as one source-first 120-minute v10 Trial",
+  "runs the pinned %s production example as one source-first 120-minute v11 Trial",
   async (version) => {
     const source = (await example(
       "campaign-production-v1.json",
@@ -127,7 +127,7 @@ it.each(["3.3.1", "3.2.6"])(
     )) as Record<string, unknown>;
     expect(source).not.toHaveProperty("promptId");
     expect(wordpressCampaignConfigSchema.parse(source)).toMatchObject({
-      promptId: "wp2shell-bounty-v10",
+      promptId: "wp2shell-bounty-v11",
       runWallTimeMinutes: 120,
       discovery: { lab: { mode: "none" } },
     });
