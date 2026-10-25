@@ -196,7 +196,7 @@ sequenceDiagram
   participant F as 前検査
   participant S as select
   participant C as campaign run
-  participant Lab as Lab 掃除
+  participant Lab as 探索残骸の掃除
   participant M as continuous.json（メモ）
 
   R->>F: 停止要求 / Programme 写しの鮮度 / disk / login

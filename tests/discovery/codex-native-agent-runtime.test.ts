@@ -1135,6 +1135,211 @@ describe("Codex native agent runtime", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it("reads every child turn's report and keeps not-a-report for children that never wrote one", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-child-turns-"));
+    try {
+      const cooperativeProfile = defineAgentRuntimeProfile({
+        id: "cooperative-child-turns",
+        transportKind: "codex-native/v1",
+        sandboxImageDigest: digest,
+        requestedModelId: "gpt-6-sol",
+        requestedEffort: "high",
+        codexCliVersion: "0.161.0",
+        bundledCatalogDigest: digest,
+        authenticationMethod: "host-private-bearer",
+        cyberAccessProgram: "daybreak_blue",
+        serviceTier: "priority",
+        subagent: { modelId: "gpt-6-sol", effort: "high" },
+      });
+      const parentThreadId = "parent-child-turns";
+      const stdout = transcript.replace(
+        /"thread_id":"[^"]+"/,
+        `"thread_id":"${parentThreadId}"`,
+      );
+      const rootRollout = JSON.stringify({
+        timestamp: now,
+        type: "session_meta",
+        payload: { id: parentThreadId, source: "exec" },
+      });
+      const report = (
+        findings: readonly string[],
+        leads: readonly string[],
+        examined: string,
+      ) =>
+        JSON.stringify({
+          findings: findings.map((claim) => ({ claim })),
+          leads: leads.map((summary) => ({ summary })),
+          examined,
+          unexamined: "none",
+        });
+      const turnStarted = {
+        type: "event_msg",
+        payload: { type: "task_started" },
+      };
+      const commentary = {
+        type: "event_msg",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "AgentMessage",
+            phase: "commentary",
+            content: [{ type: "Text", text: "Reading the entry points." }],
+          },
+        },
+      };
+      const fromRoot = (ordinal: number) => ({
+        type: "response_item",
+        payload: {
+          type: "agent_message",
+          author: "/root",
+          recipient: `/root/child-${ordinal}`,
+          content: [{ type: "input_text", text: "Follow up." }],
+        },
+      });
+      const done = (message: string | null, error?: unknown) => ({
+        type: "event_msg",
+        payload: {
+          type: "task_complete",
+          last_agent_message: message,
+          ...(error === undefined ? {} : { error }),
+        },
+      });
+      const interrupted = {
+        type: "event_msg",
+        payload: { type: "turn_aborted", reason: "interrupted" },
+      };
+      const childRollout = (ordinal: number, turns: readonly unknown[]) =>
+        [
+          {
+            timestamp: new Date(Date.parse(now) + ordinal * 1000).toISOString(),
+            type: "session_meta",
+            payload: {
+              id: `child-${ordinal}`,
+              source: {
+                subagent: {
+                  thread_spawn: {
+                    parent_thread_id: parentThreadId,
+                    depth: 1,
+                    agent_path: `/root/child-${ordinal}`,
+                  },
+                },
+              },
+            },
+          },
+          {
+            type: "turn_context",
+            payload: {
+              model: "gpt-6-sol",
+              effort: "high",
+              cyber_access_program: "daybreak_blue",
+            },
+          },
+          ...turns,
+        ]
+          .map((value) => JSON.stringify(value))
+          .join("\n");
+      const attachments = new ProviderAttachmentStore(root);
+      const result = await new CodexNativeAgentRuntime(
+        sandbox(stdout, [], {
+          rollouts: [
+            rootRollout,
+            // The production shape (2026-10-20..25): the provider-limited Root
+            // segment ended and its live children were interrupted mid-turn.
+            childRollout(1, [
+              turnStarted,
+              interrupted,
+              fromRoot(1),
+              turnStarted,
+              commentary,
+              interrupted,
+            ]),
+            // Or the child's own turn ran out of provider retries.
+            childRollout(2, [
+              turnStarted,
+              fromRoot(2),
+              turnStarted,
+              commentary,
+              done(null, {
+                message: "synthetic",
+                codex_error_info: {
+                  response_too_many_failed_attempts: { http_status_code: 429 },
+                },
+              }),
+            ]),
+            // A report, then a prose reply to a Root follow-up.
+            childRollout(3, [
+              turnStarted,
+              done(report(["first"], [], "turn one")),
+              fromRoot(3),
+              turnStarted,
+              done("Acknowledged; nothing further."),
+            ]),
+            // One report per follow-up turn, then a failed last turn.
+            childRollout(4, [
+              turnStarted,
+              done(report(["first"], ["lead one"], "turn one")),
+              fromRoot(4),
+              turnStarted,
+              done(report(["first", "second"], ["lead two"], "turn two")),
+              fromRoot(4),
+              turnStarted,
+              interrupted,
+            ]),
+          ],
+        }),
+        broker(),
+        attachments,
+        image,
+        () => new Date(now),
+      ).execute({
+        ...run,
+        profile: cooperativeProfile,
+        coordination: "cooperative",
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      const children = result.agentRuns ?? [];
+      expect(children.map((child) => child.receipt.runId)).toEqual([
+        "child-1",
+        "child-2",
+        "child-3",
+        "child-4",
+      ]);
+      for (const child of children.slice(0, 2)) {
+        expect(child.receipt).toMatchObject({
+          terminal: "incomplete",
+          reason: "schema",
+          reasonDetail: "child-final-message-not-report",
+        });
+        expect(child.attachment).toBeUndefined();
+      }
+      const reportOf = async (index: number) => {
+        const child = children[index];
+        expect(child?.receipt.terminal).toBe("completed");
+        if (child?.attachment === undefined)
+          throw new Error("Missing child report");
+        expect(child.receipt.reportArtifactDigest).toBe(
+          child.attachment.digest,
+        );
+        const read = await attachments.read(child.attachment);
+        if (read.status !== "resolved") throw new Error("Unreadable report");
+        return JSON.parse(read.bytes.toString("utf8")) as unknown;
+      };
+      expect(await reportOf(2)).toEqual(
+        JSON.parse(report(["first"], [], "turn one")),
+      );
+      expect(await reportOf(3)).toEqual({
+        findings: [{ claim: "first" }, { claim: "second" }],
+        leads: [{ summary: "lead one" }, { summary: "lead two" }],
+        examined: "turn two",
+        unexamined: "none",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("keeps child coverage normalization narrow and bounded", () => {
     const childRollout = (report: unknown) =>
       [
