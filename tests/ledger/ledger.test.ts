@@ -327,6 +327,61 @@ describe("Ledger public interface", () => {
     ).rejects.toThrow();
   });
 
+  it("records section and input digests and still reads starts without them (redesign 2026-10-25 §5)", async () => {
+    const { ledger } = await fixture();
+    const sectionDigests = {
+      objective: revision,
+      strategy: `sha256:${"e".repeat(64)}`,
+      coordination: `sha256:${"f".repeat(64)}`,
+      persistence: `sha256:${"a".repeat(64)}`,
+    };
+    await ledger.append({
+      ...common("sectioned-start"),
+      type: "discovery-run-started",
+      runId: "run-sectioned",
+      labId: "lab-sectioned",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "wp2shell-bounty-v10",
+        promptDigest: revision,
+        sectionDigests,
+        inputDigest: `sha256:${"b".repeat(64)}`,
+      },
+    });
+    await ledger.append({
+      ...common("unsectioned-start"),
+      type: "discovery-run-started",
+      runId: "run-unsectioned",
+      labId: "lab-unsectioned",
+      history: { mode: "none" },
+      configuration: { promptVariant: "wp2shell-bounty-v8" },
+    });
+    const starts = ledger
+      .read({ type: "discovery-run-started" })
+      .map(({ event }) =>
+        event.type === "discovery-run-started" ? event.configuration : null,
+      );
+    expect(starts[0]).toMatchObject({
+      sectionDigests,
+      inputDigest: `sha256:${"b".repeat(64)}`,
+    });
+    expect(starts[1]).not.toHaveProperty("sectionDigests");
+    expect(starts[1]).not.toHaveProperty("inputDigest");
+    await expect(
+      ledger.append({
+        ...common("unknown-section-start"),
+        type: "discovery-run-started",
+        runId: "run-unknown-section",
+        labId: "lab-unknown-section",
+        history: { mode: "none" },
+        configuration: {
+          promptVariant: "wp2shell-bounty-v10",
+          sectionDigests: { knowledge: revision } as never,
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("counts boundary candidates once across rejection and replay, with classified holds and token rates", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);

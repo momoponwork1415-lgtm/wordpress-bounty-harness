@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -22,6 +22,7 @@ import {
   WORDPRESS_DISCOVERY_PROMPT_IDS,
   WORDPRESS_DISCOVERY_PROMPTS,
   WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS,
+  WORDPRESS_PROMPT_SECTIONS,
   WORDPRESS_TRUST_BOUNDARY,
   WORDPRESS_VERIFIER_PROMPT_ID,
   WORDPRESS_VERIFIER_PROMPTS,
@@ -105,6 +106,100 @@ describe("WordPress prompt table", () => {
   it("carries no entry-index coverage column after ADR 0034", () => {
     for (const row of WORDPRESS_DISCOVERY_PROMPTS)
       expect(row).not.toHaveProperty("entryIndexCoverage");
+  });
+});
+
+const sectionsUrl = new URL(
+  "../../../src/profiles/wordpress/prompts/sections/",
+  import.meta.url,
+);
+const sha256 = (text: string) =>
+  `sha256:${createHash("sha256").update(text).digest("hex")}`;
+
+describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
+  const composed = WORDPRESS_DISCOVERY_PROMPTS.flatMap((row) =>
+    "fragments" in row ? [row] : [],
+  );
+  const fragmentText = (section: string, file: string) =>
+    readFile(new URL(`${section}/${file}.md`, sectionsUrl), "utf8");
+
+  it("splits exactly the current objectives and keeps archived ones as single files", () => {
+    expect(composed.map((row) => row.id)).toEqual([
+      "wp2shell-bounty-v10",
+      "wp2shell-bounty-v12-wide",
+    ]);
+    expect(
+      WORDPRESS_DISCOVERY_PROMPTS.filter((row) => row.status === "current"),
+    ).toEqual(composed);
+  });
+
+  it("composes byte-identical text to the kept .md under the unchanged digest", async () => {
+    const pinned = {
+      "wp2shell-bounty-v10":
+        "sha256:fd4e395ecb50923487c9bab6dbae81f0aff4e67342abecedda3f53cd9ff5f8b3",
+      "wp2shell-bounty-v12-wide":
+        "sha256:9a79a3b20fdba7af54f32464d868ab00806335c526781aba026e76ce9290c3c3",
+    } as const;
+    for (const row of composed) {
+      const bytes = (await promptBytes(row.id)).toString("utf8");
+      const fragments = await Promise.all(
+        row.fragments.map(({ section, file }) => fragmentText(section, file)),
+      );
+      // Every fragment is whole paragraphs; together they are the .md's paragraphs in order.
+      expect(
+        fragments.flatMap((text) => text.replace(/\n$/, "").split("\n\n")),
+      ).toEqual(bytes.replace(/\n$/, "").split("\n\n"));
+      const asset = await loadWordPressDiscoveryAsset(row.id);
+      expect(asset.text).toBe(bytes);
+      expect(asset.digest).toBe(sha256(bytes));
+      expect(asset.digest).toBe(pinned[row.id]);
+    }
+  });
+
+  it("digests each section as its own fragments composed in row order", async () => {
+    for (const row of composed) {
+      const asset = await loadWordPressDiscoveryAsset(row.id);
+      const expected: Record<string, string> = {};
+      for (const section of WORDPRESS_PROMPT_SECTIONS) {
+        const texts = await Promise.all(
+          row.fragments
+            .filter((fragment) => fragment.section === section)
+            .map(({ file }) => fragmentText(section, file)),
+        );
+        expected[section] = sha256(
+          `${texts.map((text) => text.slice(0, -1)).join("\n\n")}\n`,
+        );
+      }
+      expect(asset.sectionDigests).toEqual(expected);
+    }
+    for (const id of ["wp2shell-bounty-v10-wide", "wp2shell-bounty-v11-wide"])
+      expect(await loadWordPressDiscoveryAsset(id as never)).not.toHaveProperty(
+        "sectionDigests",
+      );
+  });
+
+  it("shares the common paragraphs as one file and leaves no file unused", async () => {
+    const files = (row: (typeof composed)[number]) =>
+      row.fragments.map(({ section, file }) => `${section}/${file}`);
+    const [deep, wide] = composed.map(files);
+    expect(deep!.filter((file) => wide!.includes(file))).toEqual([
+      "objective/task-v10",
+      "coordination/lifetime-v10",
+      "objective/sources-v8",
+    ]);
+    const onDisk = (await readdir(sectionsUrl, { recursive: true }))
+      .filter((path) => path.endsWith(".md"))
+      .map((path) => path.replace(/\.md$/, ""))
+      .sort();
+    expect(onDisk).toEqual([...new Set([...deep!, ...wide!])].sort());
+    for (const path of onDisk)
+      expect(WORDPRESS_PROMPT_SECTIONS).toContain(path.split("/")[0]);
+  });
+
+  it("pins the generated v4 contract the composed objectives receive", () => {
+    expect(wordPressDiscoveryOutputContractV4().digest).toBe(
+      "sha256:5acd5157fc82cb76c35490af607513a1558477c4eb03acaa046fdf0a64c99883",
+    );
   });
 });
 

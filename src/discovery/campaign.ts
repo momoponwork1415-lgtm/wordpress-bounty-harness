@@ -68,6 +68,14 @@ export type PlannedDiscoveryRun = {
     readonly promptDigest?: string;
     readonly objectiveDigest?: string;
     readonly contractDigest?: string;
+    /** sha256 of each human-written section of a fragment-composed objective. */
+    readonly sectionDigests?: {
+      readonly [
+        section in "objective" | "strategy" | "coordination" | "persistence"
+      ]?: string | undefined;
+    };
+    /** sha256 of the complete prompt text handed to the Root. */
+    readonly inputDigest?: string;
     readonly trustBoundaryVersion?: string;
     readonly sourcePack?: { readonly dependency: "mounted" | "none" };
     readonly labAccess?: { readonly database: "read-only" | "none" };

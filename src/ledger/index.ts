@@ -97,6 +97,21 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       promptDigest: digest.optional(),
       objectiveDigest: digest.optional(),
       contractDigest: digest.optional(),
+      /**
+       * Redesign 2026-10-25 §5: sha256 of each human-written section of an
+       * objective composed from fragments; absent on earlier events and on
+       * single-file objectives.
+       */
+      sectionDigests: z
+        .strictObject({
+          objective: digest.optional(),
+          strategy: digest.optional(),
+          coordination: digest.optional(),
+          persistence: digest.optional(),
+        })
+        .optional(),
+      /** sha256 of the complete prompt text handed to the Root; absent before 2026-10-25. */
+      inputDigest: digest.optional(),
       /** Legacy Trial field; retained so append-only ledgers remain readable. */
       continuationPromptDigest: digest.optional(),
       trustBoundaryVersion: id.optional(),
