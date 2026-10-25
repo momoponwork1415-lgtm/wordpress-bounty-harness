@@ -13,7 +13,7 @@
 
 1. 探索エージェントへ渡すのは、固定source、人間が書いたtrust境界宣言、Programme Boundary、任意のLab、そして時点で切った対象の公開履歴（カタログ情報のみ）だけ。評価対象の答え（held-outのadvisory本文、原因箇所、PoC）と、評価runではheld-outの公開日以降の記録は渡さない。PoC、payload、他人の再現手順は本番でも渡さない（[ADR 0012](adr/0012-time-cut-known-vulnerability-history.md)）。
 2. 探索・検証はgVisor（`runsc`）の使い捨て環境でのみ対象を実行する。ホストで対象コードを実行しない。弱い隔離へ暗黙に切り替えない。外向き通信は認証ブローカー経由のprovider APIだけ。
-3. `runtime-confirmed` はHarness所有の決定論的判定器だけが出す。エージェントやrecipeの自己申告は確認にしない。証明はnonce付きcanaryの回収に限り、リバースシェル・永続化・ホストアクセスを使わない。
+3. 確定は、人間がLabのdialog、観測記録、捕捉を読んで行う。Harnessは判定器を持たず、新しい検証は `runtime-confirmed` を出さない。エージェントやrecipeの自己申告は確認にしない。リバースシェル・永続化・ホストアクセスを使わない。既存の `runtime-confirmed` は判定器があった時期の記録として読み続ける（2026-10-25 改訂、[ADR 0039](adr/0039-human-lab-observation-replaces-judges.md)）。
 4. 検証の失敗（環境・手順・観測・証拠の不足）は `incomplete` であり、`contradicted` にも棄却にもしない。
 5. 判定は、Findingと検証結果が同じTarget Snapshot digestを持つときだけ行う。digest不一致は `incomplete`。最新版への再検証では新しいSnapshotに結び付けたFindingを別に記録し、旧Findingへの由来だけを参照する。
 6. 人間の判断点は「提出前のレビュー」と「外部行動の承認」の2つ。対象選定の承認、未検証候補の採否はない。権限・対象範囲の拡張は人間の明示承認を要する。
@@ -100,9 +100,9 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 WordPress profile は Finding の `configurationPrecondition` と Verifier attachment の `precondition` を Harness 所有の決定論的規則で `default` / `common-usage` / `admin-configuration` / `unknown` に分ける。この分類を記録して検証の準備で参照するが、`admin-configuration` という文言分類だけでは park しない。一般利用は対応 scenario ID への有界再検証へ回し、未収録なら `common-usage-scenario-missing` を残して #213 の集計対象にする。規則で決められない前提は `incomplete(precondition)` として review queue に残す。Verifier 自身の分類申告は判定に使わない。管理者の誤設定・明示的な権限付与が Wordfence の明示除外に当たる事実を確認できる場合は段 1 で分け、未確認なら検証で設定と利用形態を確かめる（ADR 0038 の 2026-10-24 追記 8）。
 
 旧規則で `admin-configuration-precondition` に park された Finding は、元の Finding artifact の identity・Snapshot・Programme Boundary を照合し、`finding-recorded` と `finding-park-restored` を追記して検証列へ戻せる。旧 park は残す。検証列、レビュー列、群、funnel と `review parked` は、対応する記録済み Finding に結び付く復帰イベントがある場合だけ旧 park を無効として投影する。Programme Boundary 外の Finding と検証中に park された Finding はこの復帰操作の対象外とする。旧版の runner が新 event を読めるまでは、本番台帳への復帰 event 追記を保留する。
-- HTTP証拠: Verifierの宛先はLab内のHarness所有reverse proxyへ向け、request / responseをPrivate EvidenceにJSON Linesで捕捉する。判定器は捕捉記録を優先し、request側をdecode後も検査する。捕捉が無い場合だけVerifierの `http.json` を補助資料として読み、台帳のoptionalな `evidenceCapture` は `harness-captured` / `agent-authored` のenumだけを記録する。実行時確認には引き続きnonce canaryの回収を要する。
+- HTTP証拠: Verifierの宛先はLab内のHarness所有reverse proxyへ向け、request / responseをPrivate EvidenceにJSON Linesで捕捉する。捕捉が無い場合だけVerifierの `http.json` を補助資料として読み、台帳のoptionalな `evidenceCapture` は `harness-captured` / `agent-authored` のenumだけを記録する。2026-10-25 以降、捕捉の無いattemptは `incomplete(evidence)` にする（ADR 0039）。
 - Verifierの出力: `http.json`、`steps.md`、`route.json`、別主体のcookieをLabが検査する `session.json`、`refutation.md`、設定前提。payload、cookie、HTTP本文はPrivate Evidenceに置く。
-- 判定器（Harness所有、決定論的）。作るのは両プログラムで報奨に届く分類だけ。Reflected XSS、CSRF、到達先のないmissing authorization / IDOR、コンテンツ削除は判定器を作らず、探索の目的にも含めない（記録はする）:
+- 判定器（2026-10-25 に削除、ADR 0039）。下の表は、既存の `runtime-confirmed` / `contradicted` の記録を読むための、判定器があった時期の成功条件である。新しい検証では、Harnessは `setup-done` 以後のHTTP捕捉、Verifierの `http.json`、Lab状態の差分、`route.json` の `victim` が宣言した画面をLab browserが開いた記録（数値dialogと画面）を残し、成立は判定しない。canaryは播種しない:
 
 | 種別 | 成功条件 | 不採用の観測 |
 | --- | --- | --- |
@@ -115,9 +115,9 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 | Stored XSS | 低権限主体が置いたnonce付き値が、影響を受けるページ、またはFindingが宣言する被害者ロールで開いた画面（ADR 0021）をheadless browserで開いたときに実行され、Labのcanary受信先へ届く。発火contextとサイト全体への広がりを分けて記録 | alertの有無、文字列の存在だけ、ブラウザ操作なしの自己申告 |
 | 機微な対象の読み取り（`sensitive-object-access`） | Labが低権限主体の読めない対象に置いたnonce付きcanary文字列が、低権限または未認証の主体への応答に現れる。読めた対象の種類を記録し、scope判定は別段階（ADR 0024）。2026-10-17 から `finding-parked`（ADR 0032） | 文字列の反射、件数・応答長・エラーメッセージの差 |
 
-- 結果: `runtime-confirmed` / `contradicted` / `incomplete`。`incomplete` は理由コード（provision、precondition、recipe、observation、evidence、cleanup、digest-mismatch）と次の手を持つ。再試行は理由ごとに決める: `recipe` と `observation` は同じLab Setupで最大2回自動再試行、`precondition` はシナリオIDが変わったときだけ、`provision` は再供給1回、それ以外は人間へ回す。attempt番号と前のverificationIdを台帳に残す（ADR 0022）。
-- 判定器を定義できない種別は自動確認せず、`incomplete(no-judge)` として人間へ回す。
-- **再現パッケージ（Reproduction Package）**: `runtime-confirmed` になった各Findingについて、判定器が通った経路に限定して、人間が自分の手で再現できる資料を生成する。手順は遠隔攻撃者の視点（HTTPリクエストとブラウザ操作）で書き、WP-CLIやサーバー側だけの操作を成立条件に含めない（Patchstackの提出要件）。内容は (1) 手動手順（前提の設定、使うロールとアカウント、送るリクエスト、期待する観測）、(2) 最小スクリプト（Python、標準ライブラリと `requests` だけで動く）、(3) Labの再構築情報（WordPress版、プラグイン版とdigest、有効化した設定、ロール）、(4) 判定器が取った証拠（HTTP記録、画面画像、canary回収ログ）。置き場はPrivate Evidence（Git外）で、`review` から開く。レポートの査読と提出文案の根拠に使う。Verifierの作業ログをそのまま出さない。
+- 結果: `runtime-confirmed` / `contradicted` / `incomplete`。2026-10-25 以降の新しい検証は `incomplete` だけを出し、Harnessの捕捉が残ったattemptは `incomplete(awaiting-human-observation)` として人間の観測を待つ（ADR 0039）。`incomplete` は理由コード（provision、precondition、recipe、observation、evidence、cleanup、digest-mismatch、awaiting-human-observation）と次の手を持つ。再試行は理由ごとに決める: `recipe` は同じLab Setupで最大2回自動再試行（`observation` の自動再試行は判定器とともに止めた）、`precondition` はシナリオIDが変わったときだけ、`provision` は再供給1回、それ以外は人間へ回す。attempt番号と前のverificationIdを台帳に残す（ADR 0022）。
+- 判定器を定義できない種別は自動確認せず、`incomplete(no-judge)` として人間へ回す。2026-10-25 以降の新しい検証は `incomplete(no-judge)` を出さない。既存の記録は読み続ける（ADR 0039）。
+- **再現パッケージ（Reproduction Package）**: 2026-10-25 以降の新しい検証は再現パッケージを作らない。既存の `runtime-confirmed` の再現パッケージは読み続け、人間の再現は `lab up --for-review` の review Lab で行う（ADR 0039）。以下は既存の記録の説明である。`runtime-confirmed` になった各Findingについて、判定器が通った経路に限定して、人間が自分の手で再現できる資料を生成する。手順は遠隔攻撃者の視点（HTTPリクエストとブラウザ操作）で書き、WP-CLIやサーバー側だけの操作を成立条件に含めない（Patchstackの提出要件）。内容は (1) 手動手順（前提の設定、使うロールとアカウント、送るリクエスト、期待する観測）、(2) 最小スクリプト（Python、標準ライブラリと `requests` だけで動く）、(3) Labの再構築情報（WordPress版、プラグイン版とdigest、有効化した設定、ロール）、(4) 判定器が取った証拠（HTTP記録、画面画像、canary回収ログ）。置き場はPrivate Evidence（Git外）で、`review` から開く。レポートの査読と提出文案の根拠に使う。Verifierの作業ログをそのまま出さない。
 
 ## 8. 人間レビューとDisclosure
 
@@ -220,7 +220,7 @@ TranslatePressの公開済み脆弱版・修正版で縦断経路を実証した
 1. 探索に既知脆弱性の答えを与えない（旧ADR 0003を引き継ぐ）。→ **0012で置き換え**: 評価では時点で切り、本番では対象の公開履歴（カタログ情報）を変種分析の入力として渡す（本番で catalog を渡す経路は 0034 で削除）。
 2. 自動の実行時検証を人間レビューの前に置く（旧ADR 0135を置き換える）。
 3. 探索エージェントは隔離Lab内で対象を実行してよい。Lab外への到達と外部行動は禁止。
-4. `runtime-confirmed` はHarness所有の決定論的判定器だけが出す。
+4. `runtime-confirmed` はHarness所有の決定論的判定器だけが出す（2026-10-25 に ADR 0039 で改訂）。
 5. 単一の追記専用台帳と、snapshot digestによる判定の有効条件。
 6. 対象選定の人間承認を持たず、方針だけを人間が所有する。
 7. モデルの記録項目（model、effort、CLI版、カタログdigest、認証、access program、service tier、subagent）。

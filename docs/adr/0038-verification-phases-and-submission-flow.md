@@ -163,3 +163,7 @@ v3 を戻すときは `versions/v2.2.md` を skill 本文に戻し、OPERATIONS 
 追記 9 の内部プレビューはこの到達点の前段であり、`human_verification.status: pending` の JSON を拡張機能で提出させない。現在の `review reverify`、`lab up --for-review`、scope / draft / Candidate の契約は `incomplete` の手動再現を正式な提出根拠として受け付けない。手動 Lab の再構築、同じ Snapshot の人間の `match` と捕捉証拠の結合、重複・scope・文案・承認が参照する basis は、別 PR で実装し受入試験を通す。それまでは内部プレビューを正式な文案や提出候補と呼ばない。既存の confirmed 経路と funnel 集計はこの決定だけでは変えない。
 
 進捗は `runtime-confirmed` の件数を提出完了の代理指標にせず、上記の再現・重複・scope・報告書・Fill-Only JSON・最終査読の準備が揃った Finding 件数で見る。外部送信は従来どおり、正確な Submission Candidate、文案 digest、送信先に結び付いた所有者の承認を要し、Harness は送信しない。
+
+## 2026-10-25 注記（#525、所有者決定 2026-10-25）
+
+追記 10 の「判定器は引き続き必要である」と「`runtime-confirmed` を出す条件は nonce 付き canary の回収のまま」は、[ADR 0039](0039-human-lab-observation-replaces-judges.md) で置き換えた。判定器は削除し、段 3 の結果は `incomplete(awaiting-human-observation)` になる。観測器の dialog、marker の一致、画像だけから成立を自動認定しないことと、正式な文案・提出候補へ進む basis を別 PR で作ることは変えない。
