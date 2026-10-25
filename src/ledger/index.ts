@@ -836,6 +836,10 @@ export class Ledger {
     this.#db = new DatabaseSync(options.databasePath, {
       readOnly: this.#readOnly,
     });
+    // Several discovery processes append to the shared ledger. Node's SQLite
+    // connection defaults to zero wait time, so a concurrent writer otherwise
+    // turns a short transaction into a failed Trial.
+    this.#db.exec("PRAGMA busy_timeout = 30000");
     this.#artifacts = options.artifactStore;
     if (this.#readOnly) return;
     this.#db.exec(`
