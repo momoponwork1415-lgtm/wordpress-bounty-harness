@@ -799,6 +799,20 @@ export function recoverChildReportFromRollout(
     readonly cyberAccessProgram: string;
   },
 ): z.infer<typeof childReportSchema> {
+  const child = archivedChild(raw, expected);
+  const report = parseChildFinalMessage(child.finalMessage);
+  return {
+    ...report,
+    findings: report.findings.map(childClaim),
+    leads: report.leads.map(childClaim),
+  };
+}
+
+type ArchivedChildExpectation = Parameters<
+  typeof recoverChildReportFromRollout
+>[1];
+
+function archivedChild(raw: string, expected: ArchivedChildExpectation) {
   const child = decodeChildRollout(raw, expected.parentThreadId);
   if (
     child === undefined ||
@@ -810,12 +824,26 @@ export function recoverChildReportFromRollout(
     child.finalMessage === undefined
   )
     throw new Error("Archived child report lineage or runtime does not match");
-  const report = parseChildFinalMessage(child.finalMessage);
-  return {
-    ...report,
-    findings: report.findings.map(childClaim),
-    leads: report.leads.map(childClaim),
-  };
+  return { ...child, finalMessage: child.finalMessage };
+}
+
+/**
+ * An archived completed child, read as the capture now reads it: `recorded` is
+ * the last-message report the capture stored before every turn was read, and
+ * `merged` is every turn's report merged. Both stay as the child wrote them.
+ */
+export function recoverChildTurnReportsFromRollout(
+  raw: string,
+  expected: ArchivedChildExpectation,
+): {
+  readonly recorded: z.infer<typeof candidateReportSchema>;
+  readonly merged: z.infer<typeof candidateReportSchema>;
+} {
+  const child = archivedChild(raw, expected);
+  const merged = childTurnsReport(child.turnMessages);
+  if (merged === undefined)
+    throw new Error("Archived child has no turn report");
+  return { recorded: parseChildFinalMessage(child.finalMessage), merged };
 }
 type Observed = NonNullable<NativeRunReceipt["observed"]>;
 function sourcePath(

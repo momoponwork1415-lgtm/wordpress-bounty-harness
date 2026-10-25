@@ -276,6 +276,16 @@ node scripts/recover-child-reports.mjs \
   --attachments /path/to/private/provider-attachments
 ```
 
+完了した Codex の子の前のターンの報告（#539 より前の取り込みは最後のターンしか読まなかった）は、`--mode turns` で追記する。不変 rollout が記録済みの報告を再現することを確かめてから、記録済みの報告に無い Finding / Lead だけを `child-turns-merge-v1` として記録する。Root がまだ終わっていない子は飛ばし、数を出す。先に `--dry-run` を付けると、state を読み取り専用で開いて件数だけを出す。
+
+```sh
+node scripts/recover-child-reports.mjs \
+  --campaign <id> \
+  --state /path/to/private/state \
+  --attachments /path/to/private/provider-attachments \
+  --mode turns [--dry-run]
+```
+
 復旧後は同じcampaign IDで `campaign run` を再開する。`incomplete` のTrialを正常な0件として扱わず、独立Verifierへ渡すのは復旧して台帳へ入ったFindingだけにする。
 
 ### Codex CLI / model catalogの更新
