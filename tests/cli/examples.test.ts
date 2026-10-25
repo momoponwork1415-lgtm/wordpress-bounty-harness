@@ -66,7 +66,7 @@ it("starts the checked-in v10 campaign with one concurrent target on WordPress 7
     ).toBe(accepted);
 });
 
-it("runs the wide example as a 20-minute v10-wide Trial on the production selection policy (ADR 0039)", async () => {
+it("runs the wide example as a 20-minute v11-wide Trial on the production selection policy (ADR 0039)", async () => {
   const config = wordpressCampaignConfigSchema.parse(
     JSON.parse(
       await readFile(
@@ -83,7 +83,7 @@ it("runs the wide example as a 20-minute v10-wide Trial on the production select
   );
   expect(config).toMatchObject({
     discovery: { lab: "none", mode: "wide" },
-    promptId: "wp2shell-bounty-v10-wide",
+    promptId: "wp2shell-bounty-v11-wide",
     runWallTimeMinutes: 20,
   });
   // The production selection policy names the deep objective; both modes select from it.

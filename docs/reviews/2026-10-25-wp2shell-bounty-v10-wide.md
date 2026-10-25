@@ -1,6 +1,8 @@
 # 下限なしの探索 prompt v10-wide（2026-10-25）
 
-状態: `wide` mode の目的文（ADR 0039、#518）。#524（#522、`deep` の目的文 v10）の上に積む。所有者決定 2026-10-25 により、`wide` の目的文は v10 から作り、`deep` と `wide` の違いを「早く終えるか、粘って探すか」だけにした。先に作った v9-wide は merge も実行もしていないので消した。`wide` は最低実行時間を置かず、既定の wall は 20 分（上限 120 分）とする。Root の最初の最終報告で Trial を終え、Harness は同じセッションを続けさせない。
+状態: `archived`。2026-10-25 に `wide` の現行の目的文を [v11-wide](2026-10-25-wp2shell-bounty-v11-wide.md) に替えた（ADR 0039 の 2026-10-25 追記）。本番 campaign `prod-20261025-1` で走ったので、本文と digest は照合のために残す。以下は `wide` の目的文だったときの記述である。
+
+元の状態: `wide` mode の目的文（ADR 0039、#518）。#524（#522、`deep` の目的文 v10）の上に積む。所有者決定 2026-10-25 により、`wide` の目的文は v10 から作り、`deep` と `wide` の違いを「早く終えるか、粘って探すか」だけにした。先に作った v9-wide は merge も実行もしていないので消した。`wide` は最低実行時間を置かず、既定の wall は 20 分（上限 120 分）とする。Root の最初の最終報告で Trial を終え、Harness は同じセッションを続けさせない。
 
 - 本文: `src/profiles/wordpress/prompts/wp2shell-bounty-v10-wide.md`
 - digest: `sha256:b886625bc576196e38879b3dd85bd25bc5d75e5e960c79b4d8aaec8c1e494a18`

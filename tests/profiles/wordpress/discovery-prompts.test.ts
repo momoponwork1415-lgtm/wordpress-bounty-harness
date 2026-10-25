@@ -68,7 +68,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(22);
+    expect(ids).toHaveLength(23);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -92,7 +92,7 @@ describe("WordPress prompt table", () => {
     ).toHaveLength(WORDPRESS_DISCOVERY_MODES.length);
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
       deep: "wp2shell-bounty-v10",
-      wide: "wp2shell-bounty-v10-wide",
+      wide: "wp2shell-bounty-v11-wide",
     });
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v10");
     expect(
@@ -242,6 +242,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v10"
       )
         expect(text).toContain("Use multiagents aggressively");
+      else if (id === "wp2shell-bounty-v11-wide")
+        expect(text).toContain("four specialist agents");
       else expect(text).toMatch(/Lead|Finding/);
       expect(text).not.toMatch(
         /sourceTrace|labObservations|JSON string|Each Finding is an object/,
@@ -249,7 +251,7 @@ describe("WordPress discovery prompt assets", () => {
     }
   });
 
-  it("makes v10-wide v10 without the persist paragraph and with the stop rule in place of the floor (ADR 0039)", async () => {
+  it("keeps the archived v10-wide as v10 without the persist paragraph and with the stop rule in place of the floor (ADR 0039)", async () => {
     const deep = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v10"))
       .text;
     const wide = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v10-wide"))
@@ -257,7 +259,6 @@ describe("WordPress discovery prompt assets", () => {
     const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
     const deepParagraphs = paragraphs(deep);
     const wideParagraphs = paragraphs(wide);
-    // Deep and wide differ only in "finish early vs keep searching": exactly two paragraphs.
     expect(deepParagraphs.at(-2)).toMatch(
       /^Do not return merely because current approaches fail/,
     );
@@ -268,6 +269,34 @@ describe("WordPress discovery prompt assets", () => {
     );
     expect(wide).not.toMatch(
       /60 minutes|one hour|Before giving up|Do not return merely/,
+    );
+  });
+
+  it("makes v11-wide the v10 task with four fixed sink specialists and a stop rule (ADR 0039, 2026-10-25)", async () => {
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const v10 = paragraphs(
+      (await loadWordPressDiscoveryAsset("wp2shell-bounty-v10")).text,
+    );
+    const text = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v11-wide"))
+      .text;
+    const v11 = paragraphs(text);
+    const startingWith = (rows: readonly string[], prefix: string) =>
+      rows.find((paragraph) => paragraph.startsWith(prefix));
+    // Task statement unchanged; the first-principles paragraph gains one guard sentence.
+    expect(v11.slice(0, 2)).toEqual(v10.slice(0, 2));
+    expect(v11[2]?.startsWith(`${v10[2]} Before you report a candidate,`)).toBe(
+      true,
+    );
+    for (const prefix of ["Keep every agent short.", "The plugin depends on"]) {
+      expect(startingWith(v11, prefix)).toBeDefined();
+      expect(startingWith(v11, prefix)).toBe(startingWith(v10, prefix));
+    }
+    expect(v11.at(-1)).toMatch(/^Stop when/);
+    expect(startingWith(v11, "Before giving up")).toBeUndefined();
+    expect(startingWith(v11, "Do not return merely")).toBeUndefined();
+    expect(text.match(/four specialist agents/g)).toHaveLength(1);
+    expect(text).not.toMatch(
+      /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|\b(?:PoC|CVE|advisory|payload)\b/i,
     );
   });
 
@@ -523,7 +552,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v7" ||
         id === "wp2shell-bounty-v8" ||
         id === "wp2shell-bounty-v10" ||
-        id === "wp2shell-bounty-v10-wide"
+        id === "wp2shell-bounty-v10-wide" ||
+        id === "wp2shell-bounty-v11-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).
