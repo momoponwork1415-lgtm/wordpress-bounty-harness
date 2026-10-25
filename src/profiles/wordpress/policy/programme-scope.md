@@ -4,7 +4,7 @@
 
 ## 機械判定パラメータ（v1）
 
-このブロックは下の人間向け方針と同時に更新する。`requiredObservations` は Harness 判定器が観測した条件だけで満たし、不明なら `ambiguous` とする。
+このブロックは下の人間向け方針と同時に更新する。`requiredObservations` は Harness 判定器が観測した条件だけで満たし、不明なら `ambiguous` とする。2026-10-25 以降の新しい結果では、判定器の代わりに、人間が review Lab で記録した `match` と `review decide --reproduced match` が、分類が主張する効果の観測として満たす（ADR 0040）。判定器だけが記録した条件（path と拡張子の制御、サイト全体への広がり、option の分類）は含めない。
 
 ```json scope-policy-v1
 {

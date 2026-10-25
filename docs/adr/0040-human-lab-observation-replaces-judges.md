@@ -39,3 +39,14 @@ amends: 0021（判定器と canary の回収）, 0026（観測器の判定）, 0
 ## 消し方
 
 この ADR の PR を revert する。判定器、canary、再現パッケージの生成、`observation` の自動再試行が戻る。この PR の後に記録した `incomplete(awaiting-human-observation)` は、旧版でも理由コードを読めないため、revert の前にその event の扱いを決める。
+
+## 2026-10-26 追記: 段 6 の根拠（#525、所有者の委任で AI）
+
+帰結の「正式な文案と提出候補は今も `runtime-confirmed` / `reproduced` を要する」を、次のように改めた。
+
+- 最新の検証が `incomplete(awaiting-human-observation)` で、Harness の捕捉があり、名指しした人間が同じ attempt の review Lab で `manual-observation-recorded` の `match` を記録したとき、`review decide --reproduced` はその review Lab package の digest に対して記録できる。
+- その `--reproduced match` が揃うと、`review scope`、`review draft`、`review authorize` はこれを根拠に進む。判定器の再現パッケージは要らない。最終の人間の査読、人間の `accept`、重複 `no-match`、正確な文案と送信先への承認の条件は変えない。
+- scope の事実は、判定器の条件の代わりに、Finding の攻撃者位置、Lab browser の被害者の記録、人間の `match` を読む。`match` は分類が主張する効果の観測として数え、判定器だけが記録した条件（path と拡張子の制御、サイト全体への広がり、option の分類）は含めない。それを要するプログラムは `ambiguous` のままになる。
+- 修正版の対照（`review reverify --version`）は、同じ根拠の attempt の `route.json` を参照の route として使える。
+- `verification-finished` は書き換えない。
+

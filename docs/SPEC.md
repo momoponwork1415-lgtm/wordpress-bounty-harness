@@ -24,7 +24,7 @@
 
 開発対象のslugと版を指定（運用時は機械選定） → Snapshot固定 → WP2Shell目的promptによるRoot＋最大4 subagentの協調Trialを対象ごとに1回（探索用Labは既定で付けない、`discovery.lab: none`） → Finding単位にLabを供給し、既存の検証skill（`verify next --handoff`、ADR 0035）が再現 → Harnessが捕捉とLab browserの記録を残し、人間の観測を待つ（`incomplete(awaiting-human-observation)`、ADR 0040） → 最新版で再検証 → 重複・scope照合 → 人間がreview Labで観測と再現を記録（`review observe`、`review decide --reproduced`） → 英語レポートJSON案 → 人間の査読 → 外部行動承認 → 人間が提出し転帰を記録。台帳は全段階を追記する。評価は台帳を読むだけで、探索へ答えを渡さない（ADR 0029）。
 
-この流れの最終目標では、nonce付きcanaryを回収した `runtime-confirmed` は提出の必須条件ではない。Harnessの捕捉した発火などの軽量観測はそのまま事実として記録し、成立の最終確認は同じ最新版Snapshotの手動Lab再現で行う。現行の `incomplete` から正式な文案・Submission Candidateへ進む経路は未実装であり、内部プレビューだけを作れる（ADR 0038 の2026-10-24追記9・10）。
+この流れの最終目標では、nonce付きcanaryを回収した `runtime-confirmed` は提出の必須条件ではない。Harnessの捕捉した発火などの軽量観測はそのまま事実として記録し、成立の最終確認は同じ最新版Snapshotの手動Lab再現で行う。`incomplete(awaiting-human-observation)` は、人間の `review observe` の `match` と `review decide --reproduced match` が揃うと、scope・正式な文案・Submission Candidate・承認の根拠になる。それ以前は内部プレビューだけを作れる（ADR 0038 の2026-10-24追記9・10、ADR 0040 の2026-10-26追記）。
 
 ## 4. モジュール境界
 
