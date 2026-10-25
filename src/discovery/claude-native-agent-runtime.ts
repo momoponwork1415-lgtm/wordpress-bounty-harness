@@ -430,6 +430,14 @@ function labHost(run: DiscoveryTransportRun) {
             ipv4: run.lab.database.ipv4,
           },
         }),
+    ...(run.lab.control === undefined
+      ? {}
+      : {
+          controlHost: {
+            name: run.lab.control.host,
+            ipv4: run.lab.control.ipv4,
+          },
+        }),
   };
 }
 

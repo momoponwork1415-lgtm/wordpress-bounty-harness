@@ -226,6 +226,20 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         dbQueries: z.number().int().nonnegative(),
       })
       .optional(),
+    /**
+     * What the Harness observed in the Trial's exploration Lab (ADR 0003,
+     * 2026-10-25 addendum): exchanges that passed the Lab recorder and resets
+     * through the control endpoint. Absent on Trials without one and on
+     * earlier events; the capture itself is the `exploration-lab` artifact.
+     */
+    labObserved: z
+      .strictObject({
+        requests: z.number().int().nonnegative(),
+        droppedRequests: z.number().int().nonnegative(),
+        resets: z.number().int().nonnegative(),
+        refusedResets: z.number().int().nonnegative(),
+      })
+      .optional(),
     /** Unique direct children seen and admitted by a cooperative Root run. */
     childThreadsObserved: z.number().int().nonnegative().optional(),
     childThreadsAdmitted: z.number().int().nonnegative().max(255).optional(),

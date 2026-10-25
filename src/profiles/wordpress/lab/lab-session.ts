@@ -28,7 +28,13 @@ export interface LabImages {
 
 type Account = { readonly username: string; readonly password: string };
 /** Docker objects the session creates, in the order `cleanup` removes containers. */
-const CONTAINERS = ["wordpress", "database", "receiver", "recorder"] as const;
+const CONTAINERS = [
+  "wordpress",
+  "database",
+  "receiver",
+  "recorder",
+  "control",
+] as const;
 type CreatedResource = (typeof CONTAINERS)[number] | "volume" | "network";
 
 /**
@@ -47,6 +53,15 @@ export class WordPressLabSession {
   readonly recorder: string;
   /** Beacon receiver container; only the Lab reads what it logged. */
   readonly receiver: string;
+  /** Exploration Labs only: the control endpoint (`labctl`) the agent calls. */
+  readonly control: string;
+  /**
+   * A discovery-purpose Lab attached to one Trial (ADR 0003, 2026-10-25
+   * addendum): no canaries, no lease, a control endpoint, and a fixed
+   * WordPress address so a reset can recreate the site behind the same
+   * recorder.
+   */
+  readonly exploration: boolean;
   readonly databasePassword: string;
   readonly readerPassword: string;
   /** Rotated when handoff setup ends (#430); the Lab browser reads the current one. */
@@ -76,6 +91,9 @@ export class WordPressLabSession {
   /** Option digests taken when canaries were seeded, or when handoff setup ended. */
   optionBaseline?: ReadonlyMap<string, string>;
   receiverIp?: string;
+  /** Exploration Labs: the address WordPress keeps across resets. */
+  wordpressIp?: string;
+  controlIp?: string;
   /** gVisor containers cannot use Docker's name resolution, so WordPress gets this address. */
   databaseIp?: string;
   #handle?: WordPressLabHandle;
@@ -86,6 +104,7 @@ export class WordPressLabSession {
     readonly nonce: () => string;
     readonly customerRole: boolean;
     readonly forVerification: boolean;
+    readonly forExploration?: boolean;
     readonly secondaryLocale?: string;
   }) {
     const id = randomUUID();
@@ -117,6 +136,8 @@ export class WordPressLabSession {
     this.wordpress = `${prefix}-wp`;
     this.recorder = `${prefix}-proxy`;
     this.receiver = `${prefix}-canary`;
+    this.control = `${prefix}-ctl`;
+    this.exploration = input.forExploration === true;
     this.databasePassword = randomUUID();
     this.readerPassword = randomBytes(32).toString("hex");
     this.adminPassword = randomUUID();

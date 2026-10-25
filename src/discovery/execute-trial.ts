@@ -1,4 +1,5 @@
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
+import type { TrialLab, TrialLabRecord } from "../lab/index.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 import type {
   CampaignInputV1,
@@ -47,6 +48,8 @@ type EventBase = {
 export type TrialContext = {
   readonly campaignId: string;
   readonly labId?: string;
+  /** The Trial's exploration Lab: opened before the transport, sealed before the finish. */
+  readonly lab?: TrialLab;
   readonly input: CampaignInputV1;
   readonly runWallTimeMs?: number;
   readonly signal?: AbortSignal;
@@ -86,6 +89,8 @@ export type TrialOutcome = {
   readonly foundNew: boolean;
   readonly heldBoundary: boolean;
   readonly findingsRecorded: number;
+  /** What the Harness observed in the Trial's exploration Lab, when one was attached. */
+  readonly lab?: TrialLabRecord;
 };
 
 type TrialDraft = { -readonly [K in keyof TrialOutcome]: TrialOutcome[K] };
@@ -112,6 +117,16 @@ export function finishedEventFrom(
     ...(outcome.outcome === "completed" || outcome.failure === undefined
       ? {}
       : outcome.failure),
+    ...(outcome.lab === undefined
+      ? {}
+      : {
+          labObserved: {
+            requests: outcome.lab.requests,
+            droppedRequests: outcome.lab.droppedRequests,
+            resets: outcome.lab.resets,
+            refusedResets: outcome.lab.refusedResets,
+          },
+        }),
     artifacts: [
       ...(outcome.receiptDigest === undefined
         ? []
@@ -119,6 +134,9 @@ export function finishedEventFrom(
       ...(outcome.readPathsDigest === undefined
         ? []
         : [{ kind: "read-paths", digest: outcome.readPathsDigest }]),
+      ...(outcome.lab?.artifactDigest === undefined
+        ? []
+        : [{ kind: "exploration-lab", digest: outcome.lab.artifactDigest }]),
     ],
   };
 }
@@ -316,6 +334,7 @@ export async function executeTrial(
     runWallTimeMs,
     receiptOnSilence: syntheticReceipt,
   });
+  await context.lab?.open();
   try {
     const execution = context.executor.execute(
       {
@@ -396,6 +415,7 @@ export async function executeTrial(
   } finally {
     cancellation.dispose();
   }
+  if (context.lab !== undefined) draft.lab = await context.lab.seal();
   const currentObservation = {
     ...draft.receipt,
     outcome: draft.outcome,

@@ -97,6 +97,8 @@ export interface ClaudeSandboxCommand {
   readonly dependencyMounts: readonly (Mount & { readonly path: string })[];
   readonly labHost?: { readonly name: string; readonly ipv4: string };
   readonly databaseHost?: { readonly name: string; readonly ipv4: string };
+  /** The exploration Lab's control endpoint (ADR 0003, 2026-10-25 addendum). */
+  readonly controlHost?: { readonly name: string; readonly ipv4: string };
 }
 
 export interface ClaudeSandboxResult {
@@ -347,6 +349,12 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         (command.labHost === undefined ||
           !host.test(command.databaseHost.name) ||
           isIP(command.databaseHost.ipv4) !== 4)) ||
+      (command.controlHost !== undefined &&
+        (command.labHost === undefined ||
+          !host.test(command.controlHost.name) ||
+          command.controlHost.name === command.labHost.name ||
+          command.controlHost.name === command.databaseHost?.name ||
+          isIP(command.controlHost.ipv4) !== 4)) ||
       command.dependencyMounts.length > 33 ||
       !command.dependencyMounts.every((mount) =>
         isDependencyMountPath(mount.path),
@@ -408,8 +416,11 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         `--name=${containerName}`,
         "--interactive",
         `--network=${grant.dockerNetworkName}`,
-        ...[command.labHost, command.databaseHost].flatMap((entry) =>
-          entry === undefined ? [] : [`--add-host=${entry.name}:${entry.ipv4}`],
+        ...[command.labHost, command.databaseHost, command.controlHost].flatMap(
+          (entry) =>
+            entry === undefined
+              ? []
+              : [`--add-host=${entry.name}:${entry.ipv4}`],
         ),
         ...verified.map(
           (mount) =>

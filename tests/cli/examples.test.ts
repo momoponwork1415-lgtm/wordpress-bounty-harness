@@ -53,11 +53,11 @@ it("starts the checked-in v11 campaign with one concurrent target on WordPress 7
   });
   expect(config.discovery.mode).toBe("deep");
   expect(
-    wordpressCampaignConfigSchema.safeParse({
+    wordpressCampaignConfigSchema.parse({
       ...(source as object),
       discovery: { lab: "attached" },
-    }).success,
-  ).toBe(false);
+    }).discovery.lab,
+  ).toEqual({ mode: "attached", maxResets: 2 });
   for (const [maxConcurrentTargets, accepted] of [
     [10, true],
     [11, false],

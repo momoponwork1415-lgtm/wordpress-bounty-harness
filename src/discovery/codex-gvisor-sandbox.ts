@@ -819,6 +819,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
           command.labHost === undefined ||
           command.databaseHost.name === command.labHost.name ||
           isIP(command.databaseHost.ipv4) !== 4)) ||
+      (command.controlHost !== undefined &&
+        (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.controlHost.name) ||
+          command.labHost === undefined ||
+          command.controlHost.name === command.labHost.name ||
+          command.controlHost.name === command.databaseHost?.name ||
+          isIP(command.controlHost.ipv4) !== 4)) ||
       command.sourceMount.mode !== "ro" ||
       command.sourceMount.path !== SANDBOX_SOURCE_MOUNT_PATH ||
       !isAbsolute(command.sourceMount.directory) ||
@@ -1009,6 +1015,11 @@ export class GvisorCodexSandbox implements CodexSandbox {
           ? []
           : [
               `--add-host=${command.databaseHost.name}:${command.databaseHost.ipv4}`,
+            ]),
+        ...(command.controlHost === undefined
+          ? []
+          : [
+              `--add-host=${command.controlHost.name}:${command.controlHost.ipv4}`,
             ]),
         `--mount=type=bind,src=${source},dst=${SANDBOX_SOURCE_MOUNT_PATH},readonly`,
         ...(dependency === undefined

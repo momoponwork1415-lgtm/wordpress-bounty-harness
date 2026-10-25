@@ -1875,10 +1875,15 @@ describe("Codex native agent runtime", () => {
             lab: {
               ...run.lab,
               database: { host: "database", ipv4: "172.20.0.3" },
+              control: { host: "labctl", ipv4: "172.20.0.130" },
             },
           })
         ).receipt.terminal,
       ).toBe("completed");
+      expect(commands[0]?.controlHost).toEqual({
+        name: "labctl",
+        ipv4: "172.20.0.130",
+      });
       expect(commands[0]?.dependencyMount).toEqual({
         directory: dependencySource.directory,
         expectedTree: dependencySource.tree,

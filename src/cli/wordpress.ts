@@ -62,6 +62,7 @@ import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js"
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
+import { openWordPressExplorationLab } from "../profiles/wordpress/lab/exploration-lab.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
 import type { WordPressReconstruction } from "../profiles/wordpress/verification/reproduction-package.js";
 import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
@@ -490,11 +491,6 @@ function wordPressDiscoveryPromptText(options: {
   const objectiveOnly = wordPressDiscoveryContractPlan(
     objective.id,
   ).objectiveOnly;
-  // Only low-privilege Lab accounts exist on the handle; nothing else is offered.
-  const accounts = Object.entries(lab?.attackerAccounts ?? {}).map(
-    ([role, account]) =>
-      `- ${role}: ${account.username} / ${account.password} (Lab only)`,
-  );
   return [
     objective.text.trim(),
     ...(objectiveOnly ? [wordPressOutputContractFor(objective.id).text] : []),
@@ -507,16 +503,7 @@ function wordPressDiscoveryPromptText(options: {
       ? [
           "This Trial has no Lab. Runtime confirmation happens during verification.",
         ]
-      : [
-          "## Lab",
-          `Endpoint: ${lab.endpoint}`,
-          ...accounts,
-          ...(lab.database === undefined
-            ? ["Database: not exposed to this run."]
-            : [
-                `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
-              ]),
-        ]),
+      : [wordPressLabSection(lab, config.discovery.lab.maxResets)]),
     ...(source.dependency === undefined
       ? []
       : [
@@ -532,6 +519,40 @@ function wordPressDiscoveryPromptText(options: {
       : []),
     "## Assigned files",
     `All files under ${WORDPRESS_SANDBOX_LAYOUT.target}.`,
+  ].join("\n\n");
+}
+
+/**
+ * The Harness-generated `## Lab` section of a Trial with an exploration Lab
+ * (ADR 0003, 2026-10-25 addendum). It states the endpoint, both accounts,
+ * the reset budget and that the Lab confirms nothing; it says nothing about
+ * what to try. Passwords are written here: the sandbox has no other channel
+ * for Lab credentials. Agent-facing text: changes need `owner-approved`.
+ */
+export function wordPressLabSection(
+  lab: WordPressLabHandle,
+  maxResets: number,
+): string {
+  const exploration = lab.exploration;
+  if (exploration === undefined)
+    throw new Error("The discovery Lab is not an exploration Lab");
+  const { administrator, control } = exploration;
+  const accounts = Object.entries(lab.attackerAccounts).flatMap(
+    ([role, account]) =>
+      account === undefined
+        ? []
+        : [`- ${role} account: ${account.username} / ${account.password}`],
+  );
+  return [
+    "## Lab",
+    [
+      "This Trial has one Lab of its own for its whole wall time. It runs the frozen target and its dependency plugins on WordPress in gVisor. This sandbox reaches it over HTTP only; the Lab has no internet access.",
+      `- Site: ${lab.endpoint}/`,
+      `- Administrator account: ${administrator.username} / ${administrator.password}`,
+      ...accounts,
+      `- Reset: \`POST http://${control.host}/reset\` removes the site and provisions it again from the same setup; the accounts above stay the same. This Trial may reset at most ${maxResets} times, and the answer states how many are used. Other requests to the Lab are counted, not limited.`,
+    ].join("\n"),
+    "The Harness records the HTTP traffic through the site address and the site state before and after each reset. Nothing observed in this Lab is a confirmation. A setting you make as administrator is a configuration precondition; state it in `configurationPrecondition`. In a Finding or Lead, `labObservations` states what you tried in the Lab and what you saw.",
   ].join("\n\n");
 }
 
@@ -579,10 +600,12 @@ async function planWordPressDiscovery(
 ): Promise<WordPressDiscoveryPlan> {
   const { config, repeat, boundaries, state, objective, trustBoundary } =
     context;
-  if (lab !== undefined)
+  if ((lab === undefined) !== (config.discovery.lab.mode === "none"))
     throw new Error(
       "Discovery Lab mode differs from the campaign configuration",
     );
+  if (lab !== undefined && lab.exploration === undefined)
+    throw new Error("The discovery Lab is not an exploration Lab");
   const wallMinutes = config.runWallTimeMinutes;
   const objectiveOnly = (id: string) =>
     wordPressDiscoveryContractPlan(id).objectiveOnly;
@@ -628,7 +651,8 @@ async function planWordPressDiscovery(
       modelProfileDigest: runtime.runtimeProfile.digest,
       promptDigest: objective.digest,
       stopRules,
-      lab: { mode: "none" },
+      lab:
+        lab === undefined ? { mode: "none" } : { setupDigest: lab.setupDigest },
       history: { mode: "none" },
     },
     runWallTimeMs: wallMinutes * 60_000,
@@ -686,6 +710,21 @@ async function planWordPressDiscovery(
           maxChildren: runParameters.maxChildren,
           minimumActiveMs: wordPressMinimumActiveMs(config),
           resumePrompt,
+          ...(lab?.exploration === undefined
+            ? {}
+            : {
+                // HTTP only: `wordpress` resolves to the Lab recorder, which
+                // captures every exchange; the database is not exposed.
+                lab: {
+                  endpoint: lab.endpoint,
+                  networkName: lab.networkName,
+                  internalIp: lab.recorderIp,
+                  control: {
+                    host: lab.exploration.control.host,
+                    ipv4: lab.exploration.control.ipv4,
+                  },
+                },
+              }),
           ...wordPressSourceMounts(source),
           expiresAt: new Date(now + wallMinutes * 60_000).toISOString(),
         },
@@ -1089,6 +1128,14 @@ async function runWordPressCampaign(
         return snapshot;
       },
       lab: boundaries.lab,
+      explorationLab: (handle) =>
+        openWordPressExplorationLab({
+          lab: boundaries.lab,
+          handle,
+          maxResets: config.discovery.lab.maxResets,
+          store: state.store,
+          clock: state.clock,
+        }),
       setupFor: session.setupFor,
       discovery: (discoveryInput) =>
         planWordPressDiscovery(discoveryInput, {

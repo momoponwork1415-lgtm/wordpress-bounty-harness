@@ -83,8 +83,8 @@ const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = { deep: 60, wide: 0 } as const;
 /**
  * Whether a discovery Lab is attached and how often the Root may reset it
  * (redesign 2026-10-25 §7). The string form is normalised to the object.
- * Phase D1 supplies the Lab; until it is merged no run gets one, so
- * `attached` is refused here, before any host work.
+ * `attached` gives each Trial one exploration Lab for its whole wall (ADR
+ * 0003, 2026-10-25 addendum); resets are budgeted by `maxResets`.
  */
 const discoveryLabSchema = z
   .union([
@@ -96,11 +96,7 @@ const discoveryLabSchema = z
       maxResets: z.number().int().min(0).max(5).optional(),
     }),
   ])
-  .transform(({ mode, maxResets }) => ({ mode, maxResets: maxResets ?? 2 }))
-  .refine((lab) => lab.mode === "none", {
-    message:
-      "Attached discovery Labs are retired until Phase D1 is merged; discovery.lab must be none",
-  });
+  .transform(({ mode, maxResets }) => ({ mode, maxResets: maxResets ?? 2 }));
 
 export const LEGACY_VERIFIER_RETIRED =
   "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";

@@ -322,6 +322,8 @@ export interface CodexSandboxCommand {
   };
   readonly labHost?: { readonly name: string; readonly ipv4: string };
   readonly databaseHost?: { readonly name: string; readonly ipv4: string };
+  /** The exploration Lab's control endpoint (ADR 0003, 2026-10-25 addendum). */
+  readonly controlHost?: { readonly name: string; readonly ipv4: string };
 }
 export interface CodexSandboxResult {
   readonly status: "exited" | "failed";
@@ -410,8 +412,11 @@ export interface DiscoveryTransportRun {
   readonly lab?: {
     readonly endpoint: string;
     readonly networkName: string;
+    /** The address the endpoint's host name resolves to inside the sandbox. */
     readonly internalIp: string;
     readonly database?: { readonly host: string; readonly ipv4: string };
+    /** An exploration Lab's control endpoint (ADR 0003, 2026-10-25 addendum). */
+    readonly control?: { readonly host: string; readonly ipv4: string };
   };
   readonly campaignInput: CampaignInputV1;
   readonly sourceDirectory: string;
@@ -499,6 +504,12 @@ const discoveryTransportRunSchema = z.strictObject({
       networkName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
       internalIp: z.ipv4(),
       database: z
+        .strictObject({
+          host: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+          ipv4: z.ipv4(),
+        })
+        .optional(),
+      control: z
         .strictObject({
           host: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
           ipv4: z.ipv4(),
@@ -1687,6 +1698,14 @@ function sandboxCommand(
           databaseHost: {
             name: run.lab.database.host,
             ipv4: run.lab.database.ipv4,
+          },
+        }),
+    ...(run.lab?.control === undefined
+      ? {}
+      : {
+          controlHost: {
+            name: run.lab.control.host,
+            ipv4: run.lab.control.ipv4,
           },
         }),
   };

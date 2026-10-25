@@ -115,7 +115,11 @@ v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入�
 
 ### 探索だけ回し、検証を 1 件ずつ回す
 
-`campaign.json` の `discovery.lab` は `"none"` か `{"mode": "none", "maxResets": 2}` を受理し、どちらも後者の形に直す（省略時も同じ）。`maxResets`（0〜5、既定 2）は探索 Lab の再供給の予算で、Phase D1 が入るまで `mode` は `none` だけを受理する（ADR 0039 の追記 3）。探索用 Lab を供給せず、Finding は台帳に記録して検証を後へ送る（所有者決定 2026-10-18「通常モードは Lab を起動しない探索」）。旧 `"attached"` は 2026-10-23 に退役し、2026-10-24 から共通の設定検査で host 初期化前に拒否する。`none` へ暗黙に切り替えない。過去の attached Trial の台帳と集計は引き続き読める。管理用セッションに旧 Verifier は不要で、未提供の旧経路を明示利用すると退役エラーになる。
+`campaign.json` の `discovery.lab` は `"none"`、`"attached"`、`{"mode": "none" | "attached", "maxResets": 0〜5}` を受理し、object の形に直す（省略時は `{"mode": "none", "maxResets": 2}`）。`none` は探索用 Lab を供給せず、Finding は台帳に記録して検証を後へ送る（所有者決定 2026-10-18「通常モードは Lab を起動しない探索」）。
+
+`attached`（Phase D1、ADR 0003 の 2026-10-25 追記）は、Trial ごとに探索 Lab を 1 台立て、Trial の終わりに壊す。host lease は取らず、検証 Lab と並走する。sandbox からは `http://wordpress`（recorder 経由の HTTP）と `http://labctl/` だけに届き、Lab DB は渡さない。Root には生成節 `## Lab` で URL、管理者と低権限の account とパスワード、再供給の予算を伝える。`POST http://labctl/reset` は WordPress・DB・site volume を同じ setup で作り直し、`maxResets`（既定 2）を超えた要求は 429 で拒否する。canary は置かず、判定もしない。Trial の終わりに recorder の捕捉（`capture.jsonl`）と、Lab の世代ごとの状態の before / after / 差分を Private Evidence の `exploration-lab` に封じ、`discovery-run-finished` に digest と `labObserved`（`requests`、`droppedRequests`、`resets`、`refusedResets`）を残す。`attached` では `--repeat` を拒否し、runner の自動再開と `campaign resume` も使わない（旧 attached Trial と同じく再開を拒否する）。Lab の container は Trial あたり 4 つ（WordPress、DB、recorder、labctl）で、network は Docker が選んだ subnet を明示して作り直し、WordPress の address を固定する。`pnpm build` で `dist/lab-control/` ができていることが前提である。
+
+2026-10-23〜25 の間は `"attached"` を退役として拒否していた。過去の attached Trial の台帳と集計は引き続き読める。`none` と `attached` を暗黙に切り替えない。管理用セッションに旧 Verifier は不要で、未提供の旧経路を明示利用すると退役エラーになる。
 
 旧 `campaign run --retry-incomplete` も退役した。指定すると、状態を開く前に不明なオプションとして拒否する。過去の再試行記録は引き続き読める（ADR 0022）。
 

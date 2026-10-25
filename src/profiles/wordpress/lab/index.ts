@@ -13,6 +13,11 @@ import {
   type LabOwnerRecord,
 } from "../../../infrastructure/lab-owner-record.js";
 import type { HttpCaptureRead } from "../../../lab/capture.js";
+import {
+  CONTROL_COMMANDS,
+  type ControlAnswer,
+  type ControlRequest,
+} from "../../../lab/control/index.js";
 import type {
   LabProvisioner,
   LabReachability,
@@ -23,7 +28,11 @@ import {
   placeVerificationCanaries,
   seedWordPressCanaries,
 } from "./canary-placement.js";
-import { startLabContainers } from "./container-startup.js";
+import {
+  controlCommand,
+  recreateSiteContainers,
+  startLabContainers,
+} from "./container-startup.js";
 import type {
   ExecutionCanary,
   Leftovers,
@@ -105,6 +114,11 @@ export {
 export type Resources = WordPressLabSession;
 
 const pinnedImage = z.string().regex(/^[^\s@]+@sha256:[a-f0-9]{64}$/);
+const controlRequestSchema = z.strictObject({
+  id: z.string().regex(/^[a-f0-9]{32}$/),
+  command: z.enum(CONTROL_COMMANDS),
+  receivedAt: z.iso.datetime(),
+});
 
 class MissingWordPressExtension extends Error {
   constructor() {
@@ -213,6 +227,27 @@ export interface WordPressLab extends LabProvisioner<
       readonly via?: "wordpress" | "recorder";
     },
   ): Promise<HostExposure>;
+  /**
+   * Exploration Labs only: recreates WordPress, its database and the site
+   * volume and initializes them from the same setup, so the handle's setup
+   * digest still holds. The network, recorder and control endpoint stay.
+   * False when the handle is not an exploration Lab or the reset failed.
+   */
+  reset(handle: WordPressLabHandle): Promise<boolean>;
+  /**
+   * The command waiting at the exploration Lab's control endpoint, null when
+   * none came within `waitSeconds`, `unavailable` when the endpoint is not.
+   */
+  nextControlRequest(
+    handle: WordPressLabHandle,
+    waitSeconds: number,
+  ): Promise<ControlRequest | null | "unavailable">;
+  /** Hands the endpoint the answer it returns to the caller; false when it could not. */
+  answerControlRequest(
+    handle: WordPressLabHandle,
+    id: string,
+    answer: ControlAnswer,
+  ): Promise<boolean>;
   /** Removes the `exposeToHost` gateway before teardown; true when it is gone. */
   withdrawFromHost(handle: WordPressLabHandle): Promise<boolean>;
   /**
@@ -233,7 +268,7 @@ export interface WordPressLab extends LabProvisioner<
 const labId = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const labLeftoverPatterns = (id: string) =>
   ({
-    containers: [new RegExp(`^wbh-${id}-(?:db|wp|canary|proxy|host)$`)],
+    containers: [new RegExp(`^wbh-${id}-(?:db|wp|canary|proxy|host|ctl)$`)],
     networks: [new RegExp(`^wbh-${id}-net$`)],
     volumes: [new RegExp(`^wbh-${id}-site$`)],
   }) as const;
@@ -264,6 +299,17 @@ function issueHandle(input: {
     internalIp,
     recorderIp,
     attackerAccounts: lab.attackerAccounts,
+    ...(lab.exploration && lab.controlIp !== undefined
+      ? {
+          exploration: {
+            control: { host: "labctl" as const, ipv4: lab.controlIp },
+            administrator: {
+              username: "harness-admin" as const,
+              password: lab.adminPassword,
+            },
+          },
+        }
+      : {}),
     ...(setup.databaseAccess === "read-only"
       ? {
           database: {
@@ -304,6 +350,8 @@ export function openWordPressLab(options: {
   const active = new Map<string, WordPressLabSession>();
   /** One owner record per live Lab of this process; there is no host-wide slot (#432). */
   const owners = new Map<string, LabOwnerRecord>();
+  /** What an exploration Lab was initialized from; a reset initializes from it again. */
+  const preparedLabs = new Map<string, PreparedWordPressLab>();
   /** The one place a handle is checked: only the exact issued object reaches its Lab. */
   const sessionFor = (
     handle: WordPressLabHandle,
@@ -424,6 +472,7 @@ export function openWordPressLab(options: {
           nonce,
           customerRole: setup.customerRole,
           forVerification: context?.purpose === "verification",
+          forExploration: context?.purpose === "discovery",
           ...(secondaryLocale === undefined ? {} : { secondaryLocale }),
         });
         // Any number of Labs may run at once; this only keeps broad cleanups off this one.
@@ -483,6 +532,7 @@ export function openWordPressLab(options: {
         active.set(lab.id, lab);
         owners.set(lab.id, owner);
         owner = undefined;
+        if (lab.exploration) preparedLabs.set(lab.id, prepared);
         return { status: "ready", handle };
       } catch (error: unknown) {
         // A Lab that failed to provision is no longer used; whatever remains is a leftover.
@@ -623,12 +673,66 @@ export function openWordPressLab(options: {
             nextStep: "Inspect and remove remaining Lab resources",
           };
         active.delete(lab.id);
+        preparedLabs.delete(lab.id);
         return { status: "removed" };
       } finally {
         // The owner is done with this Lab; what a failed cleanup left is a leftover.
         await owners.get(lab.id)?.release();
         owners.delete(lab.id);
       }
+    },
+    async reset(handle) {
+      const lab = sessionFor(handle);
+      const prepared = lab === undefined ? undefined : preparedLabs.get(lab.id);
+      if (lab === undefined || prepared === undefined) return false;
+      try {
+        await recreateSiteContainers(lab, attempts);
+        await initializeWordPress(lab, prepared);
+        if (prepared.setup.databaseAccess === "read-only")
+          await grantReadOnlyDatabaseAccess(lab);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async nextControlRequest(handle, waitSeconds) {
+      const lab = sessionFor(handle);
+      if (
+        lab === undefined ||
+        !lab.exploration ||
+        !Number.isSafeInteger(waitSeconds) ||
+        waitSeconds < 0 ||
+        waitSeconds > 60
+      )
+        return "unavailable";
+      const result = await lab
+        .docker(
+          controlCommand(lab, ["next", String(waitSeconds)]),
+          (waitSeconds + 30) * 1_000,
+        )
+        .catch(() => null);
+      if (result?.exitCode === 3) return null;
+      if (result?.exitCode !== 0) return "unavailable";
+      const parsed = controlRequestSchema.safeParse(
+        (() => {
+          try {
+            return JSON.parse(result.stdout) as unknown;
+          } catch {
+            return null;
+          }
+        })(),
+      );
+      return parsed.success ? parsed.data : "unavailable";
+    },
+    async answerControlRequest(handle, id, answer) {
+      const lab = sessionFor(handle);
+      if (lab === undefined || !lab.exploration || !/^[a-f0-9]{32}$/.test(id))
+        return false;
+      const encoded = Buffer.from(JSON.stringify(answer)).toString("base64");
+      const result = await lab
+        .docker(controlCommand(lab, ["answer", id, encoded]))
+        .catch(() => null);
+      return result?.exitCode === 0;
     },
     async captureState(handle) {
       const lab = sessionFor(handle);

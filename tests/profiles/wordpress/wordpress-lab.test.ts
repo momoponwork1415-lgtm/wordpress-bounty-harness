@@ -129,6 +129,7 @@ async function fixture(
     digest: canonicalDigest(snapshotBody),
   };
   const commands: DockerRequest[] = [];
+  const fixedAddresses = new Map<string, string>();
   /** What the fake database holds in the SQL canary table. */
   const database = {
     table: "seeded" as "seeded" | "changed" | "dropped",
@@ -210,6 +211,24 @@ async function fixture(
     runner: {
       async run(request) {
         commands.push(request);
+        // An exploration Lab's WordPress takes a fixed address on a fixed subnet.
+        const fixedIp = request.args.find((arg) => arg.startsWith("--ip="));
+        if (request.args[0] === "run" && fixedIp !== undefined)
+          fixedAddresses.set(
+            request.args[request.args.indexOf("--name") + 1] ?? "",
+            fixedIp.slice("--ip=".length),
+          );
+        if (request.args[0] === "network" && request.args[1] === "inspect")
+          return { exitCode: 0, stdout: "172.20.0.0/24\n", stderr: "" };
+        if (
+          request.args[0] === "inspect" &&
+          fixedAddresses.has(request.args.at(-1) ?? "")
+        )
+          return {
+            exitCode: 0,
+            stdout: fixedAddresses.get(request.args.at(-1) ?? "")!,
+            stderr: "",
+          };
         const [verb, object] = request.args;
         const named = request.args[request.args.indexOf("--name") + 1] ?? "";
         const operands = request.args.filter((arg) => !arg.startsWith("-"));
@@ -307,7 +326,9 @@ async function fixture(
                 ? "172.20.0.4"
                 : request.args.at(-1)?.endsWith("-canary")
                   ? "172.20.0.5"
-                  : "172.20.0.2",
+                  : request.args.at(-1)?.endsWith("-ctl")
+                    ? "172.20.0.130"
+                    : "172.20.0.2",
             stderr: "",
           };
         if (request.args[0] === "exec" && request.args[1]?.endsWith("-proxy")) {
@@ -665,6 +686,118 @@ describe("WordPress gVisor Lab", () => {
       commands.some((command) => command.args.includes("wbh_private_note")),
     ).toBe(true);
     expect(JSON.stringify(verification.handle)).not.toContain("wbh-sensitive-");
+    await lab.teardown(verification.handle);
+  });
+
+  it("gives an exploration Lab a fixed WordPress address, a control endpoint and an administrator, and resets it behind the same recorder", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "discovery",
+    });
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status !== "ready") return;
+    const { handle } = provisioned;
+    const id = handle.id;
+    // Docker picks the subnet; the network is made again with it given explicitly.
+    expect(
+      commands
+        .filter(
+          ({ args }) =>
+            args[0] === "network" && (args[1] === "create" || args[1] === "rm"),
+        )
+        .map(({ args }) => args.slice(1).join(" ")),
+    ).toEqual([
+      `create --internal wbh-${id}-net`,
+      `rm wbh-${id}-net`,
+      `create --internal --subnet=172.20.0.0/24 --ip-range=172.20.0.128/25 wbh-${id}-net`,
+    ]);
+    expect(handle.internalIp).toBe("172.20.0.10");
+    expect(handle.exploration).toEqual({
+      control: { host: "labctl", ipv4: "172.20.0.130" },
+      administrator: {
+        username: "harness-admin",
+        password: lab.reviewAdministrator(handle)!.password,
+      },
+    });
+    const started = (suffix: string) =>
+      commands.filter(
+        ({ args }) => args[0] === "run" && args.includes(`wbh-${id}-${suffix}`),
+      );
+    expect(started("ctl")).toHaveLength(1);
+    expect(started("ctl")[0]?.args).toEqual(
+      expect.arrayContaining([
+        "--runtime=runsc",
+        "--read-only",
+        "--cap-drop=ALL",
+        "serve",
+      ]),
+    );
+    // No canary receiver runs in an exploration Lab.
+    expect(started("canary")).toHaveLength(0);
+    const verification = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status === "ready")
+      expect(await lab.teardown(verification.handle)).toEqual({
+        status: "removed",
+      });
+
+    const before = commands.length;
+    expect(await lab.reset(handle)).toBe(true);
+    const reset = commands.slice(before).map(({ args }) => args);
+    expect(reset[0]).toEqual(["rm", "--force", `wbh-${id}-wp`, `wbh-${id}-db`]);
+    expect(reset).toContainEqual(["volume", "rm", "--force", `wbh-${id}-site`]);
+    expect(started("wp").at(-1)?.args).toContain("--ip=172.20.0.10");
+    expect(started("wp")).toHaveLength(2);
+    expect(started("proxy")).toHaveLength(1);
+    expect(started("ctl")).toHaveLength(1);
+    // The same accounts come back.
+    expect(
+      reset.filter(
+        (args) =>
+          args.includes("user") &&
+          args.includes("create") &&
+          args.includes(handle.attackerAccounts.subscriber.username),
+      ),
+    ).toHaveLength(1);
+
+    const asked = commands.length;
+    expect(await lab.nextControlRequest(handle, 10)).toBe("unavailable");
+    expect(commands[asked]?.args).toEqual([
+      "exec",
+      `wbh-${id}-ctl`,
+      "node",
+      "/opt/wbh-control/cli.js",
+      "next",
+      "10",
+    ]);
+    expect(
+      await lab.answerControlRequest(handle, "a".repeat(32), {
+        statusCode: 200,
+        body: { status: "reset" },
+      }),
+    ).toBe(true);
+    expect(await lab.teardown(handle)).toEqual({ status: "removed" });
+    expect(
+      commands.some(
+        ({ args }) => args[0] === "rm" && args.includes(`wbh-${id}-ctl`),
+      ),
+    ).toBe(true);
+  });
+
+  it("resets only exploration Labs", async () => {
+    const { lab, snapshot, setup } = await fixture();
+    const verification = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    expect(verification.status).toBe("ready");
+    if (verification.status !== "ready") return;
+    expect(verification.handle.exploration).toBeUndefined();
+    expect(await lab.reset(verification.handle)).toBe(false);
+    expect(await lab.nextControlRequest(verification.handle, 1)).toBe(
+      "unavailable",
+    );
     await lab.teardown(verification.handle);
   });
 
