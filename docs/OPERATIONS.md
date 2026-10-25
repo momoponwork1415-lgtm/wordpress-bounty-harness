@@ -66,7 +66,7 @@ harness ledger resumes --campaign <id>                                      # �
 
 Claude（Opus）の run も同じコマンドで再開する（ADR 0036 の 2026-10-20 追記）。`--config` には、元の campaign と同じく Claude に対象を割り当てる設定（`discovery.runtimeShare.claude` が 1 以上）を渡す。再開した segment は、元の run が台帳に記録した runtime（`configuration.runtime`）で走る。Claude の runtime profile の digest が元の receipt と違えば `runtime-profile-differs` で拒否する。新しい sandbox の Claude 設定ディレクトリ（`/tmp/claude/projects/`）に Root と子の transcript を、`/workspace/research/` に notes を戻し、runner は Root の session id で `resume` して、最初の turn から再開段落を送る。目的 prompt は送り直さない。2026-10-20 より前の Claude の receipt には `session` が無いが、同じ run が封じた diagnostic に transcript の一覧と digest が載っているので、そこから session を読む。拒否で止まった run も名指しすれば再開できる。自動では再開しない。終了 event の無い Claude の run（電源断など）は回収の仕組みがまだ無いので `run-unfinished` で拒否する。`ledger resumes` は再開した segment ごとに 1 行を出す。行には、再開した segment、その前の停止理由、runtime、終わり方、走った分数が並ぶ。
 
-`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v11`（`deep`）のRoot＋子による協調Trialを1回行い、子の上限は設定値 `discovery.maxChildren`（既定 4、1〜8）、wall上限は120分。最低60分（`discovery.minimumActiveMinutes`）は能動的に探索し、Rootが早く最終報告したときは同じ協調セッションで探索を続ける。継続不能、wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、同一対象の追加Trialは起動しない。受理した scope 内 Finding はその時点で handoff 列に並び、検証 skill が `verify next --handoff`（ADR 0035）で 1 件ずつ Finding 単位の Lab と判定器に通す（下の `discovery.lab`）。runner は検証しない（#423）。
+`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v11`（`deep`）のRoot＋子による協調Trialを1回行い、子の上限は設定値 `discovery.maxChildren`（既定 4、1〜8）、wall上限は120分。最低60分（`discovery.minimumActiveMinutes`）は能動的に探索し、Rootが早く最終報告したときは同じ協調セッションで探索を続ける。継続不能、wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、同一対象の追加Trialは起動しない。受理した scope 内 Finding はその時点で handoff 列に並び、検証 skill が `verify next --handoff`（ADR 0035）で 1 件ずつ Finding 単位の Lab に通し、Harness が捕捉と Lab browser の記録を残す（下の `discovery.lab`。判定器は ADR 0040 で削除した）。runner は検証しない（#423）。
 wall 到達時は agent と broker を名前で `docker stop -t 10`（失敗時は `docker kill`）してから、子の報告を回収し `discovery-run-finished` に `incomplete(wall)` を記録して Lab を片付ける。
 `continuous run` に SIGTERM を送ると進行中の探索 run を同じ手順で停止し、`stopped reason=operator` を記録して終了する。
 
@@ -101,15 +101,16 @@ v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入�
 - User Registration & Membership 5.2.8 の通常利用画面は campaign の `lab.scenarioId` に `public-registration-and-account-v1` を指定して作る。scenario の版と digest は profile が固定し、探索 Lab と検証 Lab の両方で同じ登録フォーム・ログイン・アカウント画面を供給する。WordPress 標準の `users_can_register=1` を設定し、`default_role=subscriber` を検査する。現行の人間向け再現資料はこの設定を `enabledSettings` に自動列挙しないため、#141 で扱う。
 - 同じ版の公開無料会員フォーム、無料プラン、通常加入済み subscriber、会員管理画面が必要なときは `public-free-membership-v1` を指定する。plugin 自身の初期化と会員サービスで作り、探索 Lab と検証 Lab は同じ setup digest を持つ。この scenario は旧 `public-registration-and-account-v1` を残したまま追加する。
 - wpDiscuz 7.6.72 の通常コメント環境は campaign の `lab.scenarioId` に `public-plugin-comment-v1` を指定して作る。profile が管理者初回訪問に相当する初期化を行い、公開フォームと承認済みの無害なコメントを用意する。探索 Lab と検証 Lab は同じ scenario digest と setup digest を持つ。
-- VerifierのHTTPはLab内のrunsc捕捉proxyへ向ける。判定器はHarness捕捉のrequest / responseを優先し、捕捉がないときだけVerifierの `http.json` を `agent-authored` として読む。HTTP本文はPrivate Evidence、台帳にはoptionalな `verification-finished.evidenceCapture` enumだけを残す。`runtime-confirmed` には引き続きcanary回収が要る。
+- VerifierのHTTPはLab内のrunsc捕捉proxyへ向ける。Harnessの捕捉が残ったattemptは `incomplete(awaiting-human-observation)`、捕捉がなければ `incomplete(evidence)` になる。Verifierの `http.json` は `agent-authored` の補助記録として読む。HTTP本文はPrivate Evidence、台帳にはoptionalな `verification-finished.evidenceCapture` enumだけを残す。新しい検証は `runtime-confirmed` を出さず、canaryも播種しない（ADR 0040）。
 - 失敗した探索 run は `discovery-run-finished.reason`、`reasonDetail`、`providerLimit` で区別する。`reasonDetail` は検査名などの短いコードで、実行記録や HTTP 本文は含まない。
 
 人間が触るのは `review` だけ。並ぶのは次の2種類。
 
 | 種類 | 付いてくるもの | 人間がすること |
 | --- | --- | --- |
-| `runtime-confirmed` | 再現パッケージ（手動手順、Pythonスクリプト、Lab再構築情報、判定器の証拠）と、判定器が観測した条件 | 自分の手で再現する。影響が意味を持つか、意図された動作でないか、重複でないかを判断する |
-| `incomplete` | 理由コードと次の手 | 環境・手順の不足なら再検証を指示する。`no-judge`（判定器がない種別）なら手で確かめる |
+| `incomplete(awaiting-human-observation)` | Harnessの捕捉、Lab状態の差分、Lab browserの記録（dialogと画面）、Verifierの `route.json` と手順 | `lab up --for-review` の新しい review Lab で自分の目で確かめ、`review observe` と `review decide --reproduced` で記録する。影響が意味を持つか、意図された動作でないか、重複でないかを判断する |
+| ほかの `incomplete` | 理由コードと次の手 | 環境・手順の不足なら再検証を指示する |
+| `runtime-confirmed`（判定器があった時期の記録） | 再現パッケージ（手動手順、Pythonスクリプト、Lab再構築情報、判定器の証拠）と、判定器が観測した条件 | 自分の手で再現する。既存の `incomplete(no-judge)` も手で確かめる |
 
 `contradicted` は件数しか出ない。
 
@@ -135,13 +136,13 @@ harness ledger funnel --campaign <id>
 harness verify next --config <campaign.json> --handoff <dir> [--campaign <id> [--finding <id>]] [--port <n>] [--db-port <n>]
 ```
 
-`--handoff <dir>` は検証 Lab を skill `wbh-verify` に受け渡す（ADR 0035）。Harness は検証 Lab を立てて `127.0.0.1:<port>` に Lab の recorder 経由で公開し（`--port` と `--db-port` を省くと Docker が空いている loopback port を選ぶ。実際の port は `lab.json` の `host.url` と `attack.json` の `database.port` に書く）、setup 用の `<dir>/lab.json`（接続先と Host header、設定管理者の資格、`<dir>/review-export.json` の path）を書く。skill が `<dir>/setup-done` を置くと Harness は設定管理者の session と application password を破棄して password を変え、HTTP 捕捉と Lab 状態の基線を取り直し（#430）、完了後に `<dir>/observation-ready`、続いて攻撃用の `<dir>/attack.json`（Finding の攻撃者位置の資格、必要な比較 route）を置く。skill は合図と `attack.json` の両方を待ってから攻撃者位置で操作し、6 file（`route.json` `http.json` `session.json` `steps.md` `refutation.md` `precondition`）か `<dir>/abort` を置く。session がなければ `session.json` は空 file にする。待ち時間の上限は従来どおり 30 分で、超過と `abort` は理由付き `incomplete`。以後は Harness の捕捉と Lab browser の記録 → `verification-finished`（`incomplete(awaiting-human-observation)`、判定器は 2026-10-25 に削除、ADR 0040。現行 `promptVersion: wbh-verify/v10`、旧 v1〜v9 の本文は `.claude/skills/wbh-verify/versions/`）→ review queue と同じ。`--finding <id>`（`--campaign` と併せて指定する）は操作者が名指しした Finding を、列の規則（parked、再試行予算）に関わらず検証する。`<dir>` は 1 attempt 専用に Git の外へ置き、終わったら消す。既存の受け渡し file がある directory は使えない。
+`--handoff <dir>` は検証 Lab を skill `wbh-verify` に受け渡す（ADR 0035）。Harness は検証 Lab を立てて `127.0.0.1:<port>` に Lab の recorder 経由で公開し（`--port` と `--db-port` を省くと Docker が空いている loopback port を選ぶ。実際の port は `lab.json` の `host.url` と `attack.json` の `database.port` に書く）、setup 用の `<dir>/lab.json`（接続先と Host header、設定管理者の資格、`<dir>/review-export.json` の path）を書く。skill が `<dir>/setup-done` を置くと Harness は設定管理者の session と application password を破棄して password を変え、HTTP 捕捉と Lab 状態の基線を取り直し（#430）、完了後に `<dir>/observation-ready`、続いて攻撃用の `<dir>/attack.json`（Finding の攻撃者位置の資格、必要な比較 route）を置く。skill は合図と `attack.json` の両方を待ってから攻撃者位置で操作し、6 file（`route.json` `http.json` `session.json` `steps.md` `refutation.md` `precondition`）か `<dir>/abort` を置く。session がなければ `session.json` は空 file にする。待ち時間の上限は従来どおり 30 分で、超過と `abort` は理由付き `incomplete`。以後は Harness の捕捉と Lab browser の記録 → `verification-finished`（`incomplete(awaiting-human-observation)`、判定器は 2026-10-25 に削除、ADR 0040。現行 `promptVersion: wbh-verify/v10`、旧 v1〜v9 の本文は `.claude/skills/wbh-verify/versions/`）→ review queue と同じ。確定の根拠は、所有者が新しい review Lab で記録した `review observe` の match と `review decide --reproduced match` だけである（不変条件 3）。AI 操作役は `review observe` と `review decide --reproduced` を打たない。どちらも所有者のコマンドである。`--finding <id>`（`--campaign` と併せて指定する）は操作者が名指しした Finding を、列の規則（parked、再試行予算）に関わらず検証する。`<dir>` は 1 attempt 専用に Git の外へ置き、終わったら消す。既存の受け渡し file がある directory は使えない。
 検証 Lab（`verify next --handoff`、`review reverify --handoff`、`lab up --for-review`）は同じ host で何台でも同時に立てられる。Harness は台数を制限せず、待たせもしない（2026-10-26 所有者決定、#432）。Lab ごとに container・network・volume の名前は Lab ID で分かれ、host の port は上のとおり Lab ごとに取る。`--port` を固定して 2 台に同じ値を渡すと、後の Lab は公開に失敗して理由付き `incomplete` になる。1 台は WordPress・MySQL・recorder・canary receiver の 4 container（host に公開する間は gateway を足して 5）で、host の memory（約 47 GB）が実際の上限になる。#526 より前の checkout で動く runner は Lab も掃除し、持ち主の記録を読まない。`verify next` は sweep-hold を置かないので、並列の `verify next` を使う前に runner を新しい checkout で再起動する。
 `route.json` の HTTP step に本文がある場合、`body` は実際に送信した wire body と一致させる。本文が空のときだけ省略できる。
 
 `continuous run` は探索だけを回し、検証 Lab を立てない（#423。旧 `--verify-concurrency` と検証 worker は削除した）。handoff 列は探索 batch と並行して skill が消化してよく、検証 Lab の数は `resources.maxConcurrentTargets` に含めない。
 
-handoff の `route.json` で被害者画面を開くとき、`victim.paths` に 1 path あたり最大 5 件の型付き `actions`（`click`、`click-text`、`fill`）を指定できる。操作の選択は skill が行い、実行と canary 観測は Harness の Lab browser が行う。
+handoff の `route.json` で被害者画面を開くとき、`victim.paths` に 1 path あたり最大 5 件の型付き `actions`（`click`、`click-text`、`fill`）を指定できる。操作の選択は skill が行い、実行と dialog・画面の記録は Harness の Lab browser が行う。
 
 ### 継続運転（`continuous run`、最終設計 P6）
 
@@ -173,12 +174,12 @@ harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <
 
 当面は Wordfence 向けの 1 件の Finding を、AI 操作役が検証から英語の暫定文案まで用意し、最後に所有者が Lab で手動再現して文案と送信先を確認する順で進める（SPEC §3、ADR 0038）。Patchstack 向けの追加自動化は、報告が増えてから扱う。6 段を連続実行する自動 orchestrator はまだ無い。AI 操作役が各 skill と CLI を順に起動し、所有者に代わって中間記録を実行する。既存の段別 skill にある「所有者が打つ」は当時の運用であり、判断方法は変えない。skill 本文の版更新は別 PR で行う。AI の中間判断は `review decide --by ai` で記録し、`--minutes` を付けて人間の作業時間に混ぜない。`incomplete`、重複照合の `possible-match` / `unavailable`、scope の `ambiguous` は提出用の文案に進めず、理由と次の手を review に残す。`incomplete(observation)` に同じ検証内の攻撃要求との marker 一致、順序、別の被害者での Lab browser dialog 観測がある場合、`wbh-report` v7 は因果関係と既存コンテンツの確認待ちの内部プレビューだけを作れる。権限・対象範囲の拡張が必要なら所有者の明示承認を得る。
 
-最終目標は、公開中最新版の通常利用構成で所有者が手動再現し、同じSnapshotでの `match`、重複・Wordfence scopeの確認、証拠付き英語報告書とFill-Only JSONが揃ったFindingを最終査読へ渡すこと。canary不着だけでは候補を落とさない。Harnessの判定器は捕捉したHTTP・ブラウザ観測・digestの整合性を守り、`runtime-confirmed` は引き続きnonce付きcanaryの回収だけで出す。現行CLIでは `incomplete` から正式な文案・Candidateへ進む手動再現basisは未実装で、上の内部プレビューは提出準備完了に数えない。有効な手順で `mismatch` なら提出を止め、環境・手順・観測不足なら `incomplete` / `defer` と次の手を残す。
+最終目標は、公開中最新版の通常利用構成で所有者が手動再現し、同じSnapshotでの `match`、重複・Wordfence scopeの確認、証拠付き英語報告書とFill-Only JSONが揃ったFindingを最終査読へ渡すこと。canary不着だけでは候補を落とさない。Harnessは判定器を持たず、捕捉したHTTP・ブラウザ観測・digestの整合性を記録として守る。新しい検証は `runtime-confirmed` を出さない（ADR 0040）。現行CLIでは `incomplete` から正式な文案・Candidateへ進む手動再現basisは未実装で、上の内部プレビューは提出準備完了に数えない。有効な手順で `mismatch` なら提出を止め、環境・手順・観測不足なら `incomplete` / `defer` と次の手を残す。
 
 | 順 | 誰が | 何を |
 | --- | --- | --- |
 | 0 | AI 操作役 | 検証前に `wbh-screen` v4（段 1、ADR 0038）で `not-verified` / `incomplete` と旧 `reject` を Wordfence の明示除外に照らし、`検証へ` / `明示除外` に分ける。規則の条件句を実測していないもの、根拠不足、資料欠落、近接する公開修正との関係が不明なものは、未解決事項を付けて `検証へ` とする。ミラーの件数や鮮度は前段の停止条件にしない。結果は Private Evidence の報告と個別メモに残し、台帳の技術判定や `reject` に変換しない。`検証へ` の群代表を名指し `verify next --config <path> --campaign <id> --finding <id> --handoff <dir>` で通す。旧版の `reject` が新基準では `検証へ` なら、AI 操作役が `review decide --campaign <id> --finding <id> --decision defer --reason screen-v4-reassessment --by ai` を追記し、通常の検証列への復帰を確認する。Lab の前提不足は検証課題として残す |
-| 1 | AI 操作役 | `verify next --handoff` と `wbh-verify`（段 2・3）で検証し、`review export --campaign <id> --finding <id>` から判定器の結果と証拠を読む。`wbh-review` は要約と判断案を作る。`incomplete` は観測と次の手を残し、登録する暫定文案には進めない |
+| 1 | AI 操作役 | `verify next --handoff` と `wbh-verify`（段 2・3）で検証し、`review export --campaign <id> --finding <id>` から検証の結果と Harness の捕捉を読む。`wbh-review` は要約と判断案を作る。`incomplete` は観測と次の手を残し、登録する暫定文案には進めない |
 | 1a | AI 操作役 | 現行 `incomplete(observation)` の `review export` に `dialog-observed` signal があり、同じ Snapshot・Lab Setup、攻撃要求との marker 一致、setup 後の要求から被害者訪問までの順序、別の被害者を確認できる場合だけ、`wbh-report` v7 で Wordfence 用の内部プレビューを Git 外に作れる。因果関係と既存コンテンツ由来かどうかは人間の確認待ちと記す。英語 Markdown と、必須値がすべて根拠付きなら `human_verification.status: pending` の Fill-Only JSON を作る。`review draft`、package manifest、Submission Candidate は作らず、この行から段 6 の正式な手動再現記録や提出へ進まない |
 | 2 | AI 操作役 | `wbh-dedupe`（段 4）の 3 値と根拠を記録する。`no-match` で `wbh-review` も受理を提案したら `review decide ... --decision accept --reason preliminary-pass --by ai --duplicate no-match --duplicate-note <path>` とし、これは提出前の人間査読ではない。`possible-match` / `unavailable` は `--decision defer --reason duplicate-unresolved --by ai` と照合値・メモを記録して止める |
 | 3 | AI 操作役 | WordPress.org の頁と export で最新版を確認し、`review reverify --campaign <id> --finding <id> --config <path> --handoff <dir>` で最新版の Snapshot と Lab で再検証する。出力の `as <findingId>` を以後の Finding ID として控える。新しい Snapshot では派生 Finding ID が作られ、元 Finding の暫定 `accept` や重複結果は継承されない。最新版で成立した証拠が無ければ先へ進めない |
@@ -197,7 +198,7 @@ harness review export --campaign <id> --finding <id>         # 1画面のレビ�
 harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--by <name>] [--opened <digest>]... [--duplicate no-match|unavailable[:<reason>]|possible-match:<ref> [--duplicate-note <path>]] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--minutes <n>]
 harness review dedupe --campaign <id> --finding <id>          # ローカルWordfence履歴mirrorと照合
 harness review scope --campaign <id> --finding <id>           # Wordfence / Patchstack ごとに in-scope / out-of-scope / ambiguous
-harness review reverify --campaign <id> --finding <id> --config <path> --handoff <dir> [--port <n>] [--db-port <n>] # 新しい版のLabをskillへ渡し、判定器で再検証
+harness review reverify --campaign <id> --finding <id> --config <path> --handoff <dir> [--port <n>] [--db-port <n>] # 新しい版のLabをskillへ渡して再検証し、捕捉を人間の観測待ちで残す
 harness review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]
 harness review authorize --candidate <id> --draft <digest> --to <destination> --by <name>
 harness review submitted --candidate <id> --draft <digest> --to <destination>
@@ -208,11 +209,11 @@ harness review outcome --candidate <id> --outcome triaged|resolved|duplicate|inf
 - `review parked` の reason は `outside-programme-boundary`（影響分類が対象外）と `admin-configuration-precondition`（特定値または非既定の管理者設定が前提）の 2 種類。どちらも Finding の Private Evidence を保持し、検証・review queue に入れない。
 - `review held` は、正規化しても schema を通らなかった Finding 候補（ADR 0018）を 1 行ずつ出す。並べるのは impact 分類、生の candidate の digest と path、run ID と候補番号、issue path（2026-10-20 以降の event では zod の issue code も）だけで、本文は出さない。同じ候補が後で正規化し直されたものは出さない。
 - `decide --minutes` は人間がその項目に使った時間を `human-effort-recorded` に分で、`review-decided` に `humanElapsedSeconds` として残す。決定は検証 ID、探索 run ID、prompt digest に結び付いて記録され、提出から run と prompt まで辿れる。検証の前の Finding（`review` に `not-verified` で並ぶもの）にも記録でき、その記録は検証 ID を持たない（#436）。落とした判断を取り消すときは、別の判断（`defer` など）を記録する。最新の判断が `reject` でなくなれば、Finding は handoff 列に戻る。
-- `scope` は判定器の証拠と選定記録から事実を読む。最新版での確認が要るプログラムは、`reverify` が `runtime-confirmed` を返した後でだけ満たされる。
+- `scope` は検証の証拠（判定器があった時期の記録を含む）と選定記録から事実を読む。最新版での確認が要るプログラムは、`reverify` が `runtime-confirmed` を返した後でだけ満たされる。
 - 確認済みrouteのないFindingは、前回が`incomplete(precondition)`でLab記録があり、`--version`なしで選定されたSnapshotが元のFindingと同じ場合だけ、前回と異なるscenario IDのLabで独立再検証できる。Snapshotが異なる場合と`--version`付きの修正版比較はLab起動前に拒否する。元のverification eventは残り、再試行は新しいverificationIdとsetup digestを記録する。
 - `draft --prepared-by ai` は登録する暫定文案の版を保存する。Review API は `reproduced` も早期保存できるが、今回の Wordfence 向け登録経路は `runtime-confirmed` だけを扱う。`incomplete(observation)` の内部プレビューは `review draft` を呼ばない。`authorize` は、同じ検証と再現パッケージに対する人間の手動再現が最新の記録で `match`、かつ最新の文案が `--prepared-by human` で保存され、その後に同じ人の最後の `review decide --decision accept` がある場合にだけ、正確な Candidate・文案 digest・送信先の承認を記録する。後続の検証や同じ Finding の最新版再検証があれば、旧文案の承認・提出を止める。`admitExternalAction` も提出時にこれらの条件を確認する。Harness は送信しない。今回の Wordfence への送信は人間が画面で行い、`submitted` で記録する。
-- `--prepared-by human` と `--by <name>` は CLI が記録する属性で、本人認証ではない。AI 操作役は手動再現の `--reproduced`、最終版の `--prepared-by human`、最終 `accept` と `authorize` を代行しない。
-- 提出後の転帰と報奨額を `outcome` で台帳に戻す。選定方針と判定器の改善材料になる。探索へは戻らない。
+- `--prepared-by human` と `--by <name>` は CLI が記録する属性で、本人認証ではない。AI 操作役は人間の観測の `review observe`、手動再現の `--reproduced`、最終版の `--prepared-by human`、最終 `accept` と `authorize` を代行しない。
+- 提出後の転帰と報奨額を `outcome` で台帳に戻す。選定方針と検証の改善材料になる。探索へは戻らない。
 - Reflected XSSはWordfence向けの候補にならない。authz / IDORは、乗っ取り・権限昇格・サイト全体への影響に届くときだけ in-scope。
 
 ## 4. 見るべき数字
@@ -233,7 +234,7 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 | 細い段 | 直す場所 |
 | --- | --- |
 | raw Findingが少ない | 探索 prompt の版（開発セット 3 Trial、DEVELOPMENT 第 5 節）、選定方針 |
-| verifier通過が少ない | 判定器の成功条件、Lab構成（`incomplete` の理由コードを見る） |
+| verifier通過が少ない | 検証 skill と Lab構成（`incomplete` の理由コードを見る） |
 | in-scopeが少ない | 選定方針（対象外になりやすい種別・tierを避ける） |
 | duplicateが多い | Finding 後の重複照合と履歴mirrorの鮮度。選定は mirror の件数と公開日だけを採点に使い、記録の内容は重複照合でだけ読む（ADR 0037） |
 
