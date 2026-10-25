@@ -8,7 +8,7 @@ import type {
 } from "./claude-gvisor-sandbox.js";
 import {
   extractCandidateReport,
-  mergeRootTurnReports,
+  mergeTurnReports,
   observedFromCommands,
   reportJsonSchema,
   type DiscoveryTransportResult,
@@ -278,7 +278,7 @@ function rootTranscript(
 
 /** Every Root turn's structured report, merged as the Codex path merges turns. */
 function rootReport(events: readonly Event[]) {
-  return mergeRootTurnReports(
+  return mergeTurnReports(
     events
       .filter((event) => event.type === "result")
       .flatMap((event) =>
