@@ -142,6 +142,7 @@ function configurationOf(
     ...(configuration.runtime === undefined
       ? {}
       : { runtime: configuration.runtime }),
+    ...(configuration.mode === undefined ? {} : { mode: configuration.mode }),
   };
 }
 

@@ -30,7 +30,8 @@ import type {
 } from "../profiles/wordpress/lab/index.js";
 import { wordPressScenario } from "../profiles/wordpress/lab/scenarios.js";
 import {
-  WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS,
+  WORDPRESS_DISCOVERY_MODES,
   WORDPRESS_VERIFIER_PROMPT_ID,
 } from "../profiles/wordpress/prompts/index.js";
 import type {
@@ -63,7 +64,17 @@ const text = z.strictObject({
 export const DISCOVERY_RUN_MEMORY_MIB =
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
 
-const runnablePrompt = z.literal(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID);
+/** The current objective of either launch mode; superRefine ties it to the mode (ADR 0039). */
+const runnablePrompt = z.enum([
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.deep,
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.wide,
+]);
+
+/** ADR 0039: a `wide` campaign without runWallTimeMinutes gets this wall. */
+export const WORDPRESS_WIDE_DEFAULT_WALL_MINUTES = 20;
+/** ADR 0029 / 0033: the `deep` wall, and the active floor its wall must exceed. */
+const WORDPRESS_DEEP_DEFAULT_WALL_MINUTES = 120;
+const WORDPRESS_DEEP_MINIMUM_ACTIVE_MINUTES = 60;
 
 export const LEGACY_VERIFIER_RETIRED =
   "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";
@@ -79,11 +90,12 @@ const commonCampaignFields = {
       }),
       /** Opt-in split of targets between Codex and Claude; absent, all run on Codex. */
       runtimeShare: runtimeShareSchema.optional(),
+      /** The launch mode of every Trial this campaign starts (ADR 0039). */
+      mode: z.enum(WORDPRESS_DISCOVERY_MODES).default("deep"),
     })
-    .default({ lab: "none" }),
+    .default({ lab: "none", mode: "deep" }),
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
-  runWallTimeMinutes: z.number().positive().max(120).default(120),
   /** Host bounds: targets, per-target discovery runs and their memory budget. */
   resources: z
     .strictObject({
@@ -124,10 +136,32 @@ const commonCampaignFields = {
 export const wordpressCampaignConfigSchema = z
   .strictObject({
     ...commonCampaignFields,
-    runWallTimeMinutes: z.number().gt(60).max(120).default(120),
-    promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
+    /** Defaults by mode below: 120 for `deep`, 20 for `wide` (ADR 0039). */
+    runWallTimeMinutes: z.number().positive().max(120).optional(),
+    /** Defaults to the current objective of the mode. */
+    promptId: runnablePrompt.optional(),
   })
   .superRefine((config, context) => {
+    const mode = config.discovery.mode;
+    if (
+      config.promptId !== undefined &&
+      config.promptId !== WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS[mode]
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["promptId"],
+        message: `The ${mode} mode runs ${WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS[mode]} only`,
+      });
+    if (
+      mode === "deep" &&
+      config.runWallTimeMinutes !== undefined &&
+      config.runWallTimeMinutes <= WORDPRESS_DEEP_MINIMUM_ACTIVE_MINUTES
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["runWallTimeMinutes"],
+        message: `A deep wall must exceed the ${WORDPRESS_DEEP_MINIMUM_ACTIVE_MINUTES}-minute active floor`,
+      });
     const caps = config.resources.maxConcurrentTargetsByRuntime;
     if (caps !== undefined) {
       const share = config.discovery.runtimeShare ?? { codex: 1, claude: 0 };
@@ -167,7 +201,18 @@ export const wordpressCampaignConfigSchema = z
         path: ["lab", "scenarioId"],
         message: "Unknown WordPress Lab scenario",
       });
-  });
+  })
+  .transform((config) => ({
+    ...config,
+    promptId:
+      config.promptId ??
+      WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS[config.discovery.mode],
+    runWallTimeMinutes:
+      config.runWallTimeMinutes ??
+      (config.discovery.mode === "wide"
+        ? WORDPRESS_WIDE_DEFAULT_WALL_MINUTES
+        : WORDPRESS_DEEP_DEFAULT_WALL_MINUTES),
+  }));
 export type WordPressCampaignConfig = z.infer<
   typeof wordpressCampaignConfigSchema
 >;
@@ -316,8 +361,9 @@ export async function readWordPressSelectionPolicyFile(
 
 /**
  * The policy a campaign config names (or the profile default). The two must
- * agree on the WordPress core version and the prompt variant; this is the one
- * place that checks it.
+ * agree on the WordPress core version, and a policy's prompt variant must be a
+ * current objective; both modes select from the same policy (ADR 0039). This
+ * is the one place that checks it.
  */
 export async function readWordPressCampaignPolicy(
   config: WordPressCampaignConfig,
@@ -333,7 +379,9 @@ export async function readWordPressCampaignPolicy(
     throw new Error("Selection and campaign WordPress versions differ");
   if (
     policy.promptVariant !== undefined &&
-    policy.promptVariant !== config.promptId
+    !Object.values(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).some(
+      (id) => id === policy.promptVariant,
+    )
   )
     throw new Error("Selection and campaign prompt variants differ");
   return policy;

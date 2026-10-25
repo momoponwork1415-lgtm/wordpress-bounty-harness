@@ -1747,6 +1747,7 @@ describe("harness CLI vertical slice", () => {
     // Owner decision 2026-10-18: the normal mode explores without a Lab.
     expect(wordpressCampaignConfigSchema.parse(base).discovery).toEqual({
       lab: "none",
+      mode: "deep",
     });
     expect(
       wordpressCampaignConfigSchema.safeParse({
@@ -1821,6 +1822,84 @@ describe("harness CLI vertical slice", () => {
           promptId: "wp2shell-bounty-v10",
         }).success,
       ).toBe(false);
+  });
+
+  it("ties the objective and the wall to the discovery mode (ADR 0039)", () => {
+    const base = {
+      schemaVersion: 1 as const,
+      programmeBoundary: { version: "v1", text: "Synthetic" },
+      wordpressVersion: "6.8",
+      lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
+    };
+    const wide = { lab: "none", mode: "wide" } as const;
+    const deep = { lab: "none", mode: "deep" } as const;
+    expect(
+      wordpressCampaignConfigSchema.parse({ ...base, discovery: wide }),
+    ).toMatchObject({
+      discovery: wide,
+      promptId: "wp2shell-bounty-v11-wide",
+      runWallTimeMinutes: 20,
+    });
+    expect(
+      wordpressCampaignConfigSchema.parse({ ...base, discovery: deep }),
+    ).toMatchObject({
+      promptId: "wp2shell-bounty-v10",
+      runWallTimeMinutes: 120,
+    });
+    expect(
+      wordpressCampaignConfigSchema.parse({
+        ...base,
+        discovery: wide,
+        promptId: "wp2shell-bounty-v11-wide",
+        runWallTimeMinutes: 20,
+      }).runWallTimeMinutes,
+    ).toBe(20);
+    for (const rejected of [
+      { discovery: deep, promptId: "wp2shell-bounty-v11-wide" },
+      { promptId: "wp2shell-bounty-v11-wide" },
+      { discovery: wide, promptId: "wp2shell-bounty-v8" },
+      { discovery: wide, promptId: "wp2shell-bounty-v10-wide" },
+      { discovery: deep, runWallTimeMinutes: 60 },
+      { discovery: deep, runWallTimeMinutes: 20 },
+      { discovery: wide, runWallTimeMinutes: 121 },
+      { discovery: { lab: "none", mode: "screening" } },
+    ])
+      expect(
+        wordpressCampaignConfigSchema.safeParse({ ...base, ...rejected })
+          .success,
+      ).toBe(false);
+  });
+
+  it("launches a wide Trial without a floor and records its mode (ADR 0039)", async () => {
+    const { run, configPath, transportRuns, prompts, ledger } = await harness({
+      config: {
+        discovery: { lab: "none", mode: "wide" },
+        promptId: undefined,
+      },
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-wide",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(0);
+    expect(transportRuns[0]?.minimumActiveMs).toBe(0);
+    expect(transportRuns[0]?.resumePrompt?.startsWith("Stop when")).toBe(true);
+    expect(prompts[0]).toContain(transportRuns[0]?.resumePrompt);
+    const started = ledger().read({
+      campaignId: "campaign-wide",
+      type: "discovery-run-started",
+    });
+    expect(started[0]?.event.type).toBe("discovery-run-started");
+    if (started[0]?.event.type === "discovery-run-started")
+      expect(started[0].event.configuration).toMatchObject({
+        promptVariant: "wp2shell-bounty-v11-wide",
+        mode: "wide",
+      });
   });
 
   it("rejects historical prompt and history ablation configs at the new-run boundary", () => {

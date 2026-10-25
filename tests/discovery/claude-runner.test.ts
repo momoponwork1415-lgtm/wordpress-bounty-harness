@@ -39,7 +39,7 @@ export async function* query({ options }) {
 }
 `;
 
-async function runWith(sdkSource: string) {
+async function runWith(sdkSource: string, minimumActiveMs = 1) {
   root = await mkdtemp(join(tmpdir(), "claude-runner-"));
   const sdk = join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk");
   await mkdir(sdk, { recursive: true });
@@ -58,7 +58,7 @@ async function runWith(sdkSource: string) {
     JSON.stringify({
       prompt: "p",
       resumePrompt: "r",
-      minimumActiveMs: 1,
+      minimumActiveMs,
       model: "m",
       effort: "high",
       outputSchema: { type: "object" },
@@ -108,5 +108,14 @@ describe("Claude runner", () => {
       ...events.filter((event) => event.type === "harness.turn"),
     ])
       expect(Number.isFinite(Date.parse(String(event.at)))).toBe(true);
+  });
+
+  it("accepts a 0 floor and runs the first turn only (wide mode, ADR 0039)", async () => {
+    const events = await runWith(FAKE_SDK, 0);
+    expect(
+      events
+        .filter((event) => event.type === "harness.turn")
+        .map(({ at: _at, ...rest }) => rest),
+    ).toEqual([{ type: "harness.turn", turn: 1, sessionId: "s" }]);
   });
 });
