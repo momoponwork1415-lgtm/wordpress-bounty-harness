@@ -371,8 +371,9 @@ export function openWordPressLab(options: {
     }
     // Without `labId`, a Lab whose owner process lives is never named (#432).
     // Read after listing: a Lab records its owner before its first resource exists.
+    // `labs: false` names no Lab, so it never reads owner records (#526).
     const { live, dead } =
-      onlyLab === undefined || remove
+      labs && (onlyLab === undefined || remove)
         ? await readLabOwners(options.ownerDirectory)
         : { live: new Set<string>(), dead: new Set<string>() };
     if (onlyLab === undefined)
@@ -386,10 +387,13 @@ export function openWordPressLab(options: {
       for (const [kind, , removal] of kinds)
         if (found[kind].length > 0)
           await docker.require([...removal, ...found[kind]]);
-      await forgetLabOwners(
-        onlyLab === undefined ? dead : [...dead].filter((id) => id === onlyLab),
-        options.ownerDirectory,
-      );
+      if (labs)
+        await forgetLabOwners(
+          onlyLab === undefined
+            ? dead
+            : [...dead].filter((id) => id === onlyLab),
+          options.ownerDirectory,
+        );
     }
     return found;
   };

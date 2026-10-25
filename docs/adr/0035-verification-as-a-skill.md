@@ -73,8 +73,9 @@ PR #415 は handoff の接続と同時に、host 単位の検証 Lab lease（`sr
 
 - lease を削除する。`verify next --handoff`、`review reverify --handoff`、`lab up --for-review` の Lab は同じ host で何台でも同時に立ち、互いを待たない。Harness は台数の上限も soft な上限も置かない。
 - host への公開は Lab ごとに port を取る。`--port` と `--db-port` を省くと Docker が空いている `127.0.0.1` の port を選び、Harness は実際に bind された port を `lab.json` の `host.url` と `attack.json` の `database.port` に書く。skill は今までどおりこの 2 file だけを読む。skill 本文は変えない。
-- lease が担っていた「広い掃除が他のプロセスの Lab を消さない」守りだけは、Lab ごとの持ち主記録（`~/.local/state/wordpress-bounty-harness-host/lab-owners/<labId>.json`、pid・boot id・process の開始 tick）で置き換える。Lab は最初の Docker 資源を作る前に記録を書き、持ち主が片付けを試みた後に（成否を問わず）消す。片付けで残ったものは残骸になる。`lab cleanup` と runner の掃除は、持ち主が生きている Lab を一覧にも削除にも出さない。持ち主が死んだ Lab と記録の無い Lab は残骸として扱う。記録は排他ではなく、誰も待たせない。Lab ID を名指しする照合（`lab down`、campaign 再開前の残存確認）は記録を見ずに今までどおり数える。
+- lease が担っていた「広い掃除が他のプロセスの Lab を消さない」守りだけは、Lab ごとの持ち主記録（`~/.local/state/wordpress-bounty-harness-host/lab-owners/<labId>.json`、pid・boot id・process の開始 tick）で置き換える。Lab は最初の Docker 資源を作る前に記録を書き、持ち主が片付けを試みた後に（成否を問わず）消す。片付けで残ったものは残骸になる。`lab cleanup` は、持ち主が生きている Lab を一覧にも削除にも出さない。持ち主が死んだ Lab と記録の無い Lab は残骸として扱う。runner の掃除は ADR 0036 の 2026-10-25 追記（#526）で Lab を名指ししなくなったので、持ち主の記録も読まず、消さない。記録は排他ではなく、誰も待たせない。Lab ID を名指しする照合（`lab down`、campaign 再開前の残存確認）は記録を見ずに今までどおり数える。
 - 移行の間だけ、旧版のプロセスが lease の `verification.json` に持つ生きた Lab も持ち主ありとして扱う。旧版が host から消えたら、この読取を消す。
+- #526 より前の checkout で動く runner は、Lab も掃除し、持ち主の記録を読まない。同じ state の `verify next` も、#526 以後は sweep-hold を置かない。そのため、並列の `verify next` を使う前に runner を新しい checkout で再起動する。
 
 ### 変えないこと
 

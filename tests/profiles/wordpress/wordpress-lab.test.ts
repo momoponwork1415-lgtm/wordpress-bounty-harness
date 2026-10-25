@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -766,6 +767,53 @@ describe("WordPress gVisor Lab", () => {
         volumes: [`wbh-${alive}-site`],
       },
     );
+  });
+
+  it("never reads or forgets owner records in the runner's discovery sweep, even when they are unreadable (#526)", async () => {
+    const { lab, docker, ownerDirectory } = await fixture();
+    const dead = randomUUID();
+    await mkdir(ownerDirectory, { recursive: true });
+    const deadRecord = join(ownerDirectory, `${dead}.json`);
+    await writeFile(
+      deadRecord,
+      JSON.stringify({
+        schemaVersion: 1,
+        labId: dead,
+        owner: { pid: 1, bootId: "previous-boot", startTicks: "1" },
+      }),
+    );
+    docker.containers.add(`wbh-${dead}-wp`);
+    docker.containers.add(`codex-agent-${dead}`);
+    docker.networks.add(`wbh-${dead}-net`);
+    const patterns = { containers: [/^codex-agent-/] };
+    // A dead owner's record and its Lab survive: the sweep names no Lab.
+    expect(
+      await lab.cleanupLeftovers({ remove: true, labs: false, patterns }),
+    ).toEqual({
+      containers: [`codex-agent-${dead}`],
+      networks: [],
+      volumes: [],
+    });
+    expect(existsSync(deadRecord)).toBe(true);
+    expect([...docker.containers]).toEqual([`wbh-${dead}-wp`]);
+    // An unreadable owner directory (readdir EACCES) does not stop the sweep.
+    docker.containers.add(`codex-agent-${dead}`);
+    await chmod(ownerDirectory, 0o000);
+    try {
+      expect(
+        await lab.cleanupLeftovers({ remove: true, labs: false, patterns }),
+      ).toEqual({
+        containers: [`codex-agent-${dead}`],
+        networks: [],
+        volumes: [],
+      });
+      // The control: a sweep that names Labs does read the directory.
+      if (process.getuid?.() !== 0)
+        await expect(lab.cleanupLeftovers({ remove: true })).rejects.toThrow();
+    } finally {
+      await chmod(ownerDirectory, 0o755);
+    }
+    expect(existsSync(deadRecord)).toBe(true);
   });
 
   it("pins ordinary scenarios and seeds translation data with an approved comment", async () => {
