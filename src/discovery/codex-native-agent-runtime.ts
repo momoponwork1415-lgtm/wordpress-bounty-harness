@@ -19,6 +19,7 @@ import {
   isClaudeTranscriptPath,
   isCodexSessionPath,
   nativeRunReceiptSchema,
+  type NativeRunAgentFields,
   type NativeRunReceipt,
   type NativeRunSession,
 } from "./native-run-receipts.js";
@@ -130,6 +131,46 @@ export function mergeTurnReports(messages: readonly string[]) {
     leads: distinct("leads"),
   };
 }
+/**
+ * When the Root first handed in a readable report, and how many distinct
+ * candidates its later turns added (A2). Turns without a time leave both out.
+ */
+export function finalReportTimeline(
+  turns: readonly { readonly at?: unknown; readonly message: string }[],
+): Pick<
+  NativeRunAgentFields,
+  "firstFinalReportAt" | "candidatesAfterFirstFinalReport"
+> {
+  let first: string | undefined;
+  let after = 0;
+  const seen = new Set<string>();
+  for (const turn of turns) {
+    let report;
+    try {
+      report = extractCandidateReport(turn.message);
+    } catch {
+      continue;
+    }
+    const later = first !== undefined;
+    if (!later) {
+      if (typeof turn.at !== "string" || !Number.isFinite(Date.parse(turn.at)))
+        return {};
+      first = new Date(turn.at).toISOString();
+    }
+    for (const claim of [
+      ...report.findings.map((value) => `finding:${canonicalJson(value)}`),
+      ...report.leads.map((value) => `lead:${canonicalJson(value)}`),
+    ]) {
+      if (seen.has(claim)) continue;
+      seen.add(claim);
+      if (later) after++;
+    }
+  }
+  return first === undefined
+    ? {}
+    : { firstFinalReportAt: first, candidatesAfterFirstFinalReport: after };
+}
+
 /** Candidate extraction is independent of transcript event admission. */
 function extractRootCandidateReport(stdout: string) {
   const messages: string[] = [];
@@ -150,8 +191,11 @@ function extractRootCandidateReport(stdout: string) {
   return mergeTurnReports(messages);
 }
 
-function extractRootCandidateReportFromRollout(raw: string) {
-  const messages: string[] = [];
+/** Each Root turn's final message in a rollout, with the time its `task_complete` was written. */
+export function rootTurnsFromRollout(
+  raw: string,
+): { readonly at?: unknown; readonly message: string }[] {
+  const turns: { at?: unknown; message: string }[] = [];
   for (const line of raw.split("\n")) {
     try {
       const event = object(JSON.parse(line) as unknown);
@@ -161,12 +205,21 @@ function extractRootCandidateReportFromRollout(raw: string) {
         payload?.type === "task_complete" &&
         typeof payload.last_agent_message === "string"
       )
-        messages.push(payload.last_agent_message);
+        turns.push({
+          at: event.timestamp,
+          message: payload.last_agent_message,
+        });
     } catch {
       // An interrupted rollout can end with a partial line.
     }
   }
-  return mergeTurnReports(messages);
+  return turns;
+}
+
+function extractRootCandidateReportFromRollout(raw: string) {
+  return mergeTurnReports(
+    rootTurnsFromRollout(raw).map((turn) => turn.message),
+  );
 }
 function childClaim(value: unknown): unknown {
   if (typeof value !== "string") return value;
@@ -634,6 +687,8 @@ export function rootThreadIdFromRollout(raw: string): string {
 type ChildRollout = {
   readonly threadId: string;
   readonly agentPath: string;
+  /** `agent_role` of the spawn; the CLI writes null for the default role. */
+  readonly agentRole: string | undefined;
   readonly modelId: string | undefined;
   readonly effort: string | undefined;
   readonly cyberAccessProgram: string | undefined;
@@ -653,6 +708,7 @@ function decodeChildRollout(
 ): ChildRollout | undefined {
   let threadId: string | undefined;
   let agentPath: string | undefined;
+  let agentRole: string | undefined;
   let modelId: string | undefined;
   let effort: string | undefined;
   let cyberAccessProgram: string | undefined;
@@ -685,6 +741,9 @@ function decodeChildRollout(
       ) {
         threadId = payload.id;
         agentPath = spawn.agent_path;
+        const role = spawn.agent_role ?? payload?.agent_role;
+        if (typeof role === "string" && /^[A-Za-z0-9_.-]{1,128}$/.test(role))
+          agentRole = role;
         if (typeof event.timestamp === "string") startedAt = event.timestamp;
       }
     } else if (event.type === "session_capture") {
@@ -726,6 +785,7 @@ function decodeChildRollout(
   return {
     threadId,
     agentPath,
+    agentRole,
     modelId,
     effort,
     cyberAccessProgram,
@@ -1222,6 +1282,8 @@ type ExecutionState = {
   sandboxExitCode: number | undefined;
   /** Root thread, segment and session files; set once the Root rollout is captured. */
   session: NativeRunSession | undefined;
+  /** Role and first-report timeline of a cooperative Root; set with the Root rollout. */
+  rootAgent: NativeRunAgentFields;
   childSessionFiles: NativeRunSession["files"];
   researchArtifact:
     | {
@@ -1248,6 +1310,7 @@ function executionState(
     brokerMetrics: undefined,
     sandboxExitCode: undefined,
     session: undefined,
+    rootAgent: {},
     childSessionFiles: [],
     researchArtifact: undefined,
   };
@@ -1271,6 +1334,7 @@ function incompleteExecution(
       ...(providerLimit === undefined ? {} : { providerLimit }),
       startedAt: state.startedAt,
       completedAt,
+      ...state.rootAgent,
       ...(grantReceiptDigest === undefined ? {} : { grantReceiptDigest }),
       ...(state.sandboxExitCode === undefined
         ? {}
@@ -1996,6 +2060,11 @@ export class CodexNativeAgentRuntime {
       dependencyMountPathsOf(state.run),
     );
     state.rootUsage ??= usageFromRollout(rootRollout);
+    if (state.cooperative)
+      state.rootAgent = {
+        agentRole: "root",
+        ...finalReportTimeline(rootTurnsFromRollout(rootRollout)),
+      };
   }
 
   async #captureChildren(
@@ -2113,6 +2182,10 @@ export class CodexNativeAgentRuntime {
       ...(reasonDetail === undefined ? {} : { reasonDetail }),
       startedAt: child.startedAt,
       completedAt: child.completedAt,
+      agentRole: "child",
+      agentType: child.agentRole ?? "unavailable",
+      // spawn_agent / followup_task messages are encrypted in the rollout.
+      delegationDigest: "unavailable",
       usage: {
         inputTokens: child.usage?.input_tokens ?? "unavailable",
         cachedInputTokens: child.usage?.cached_input_tokens ?? "unavailable",
@@ -2327,6 +2400,7 @@ export class CodexNativeAgentRuntime {
         reason: "unavailable",
         startedAt: result.startedAt,
         completedAt: result.completedAt,
+        ...state.rootAgent,
         usage: state.rootUsage ?? decoded.usage,
         observed: state.rootObserved ?? decoded.observed,
         ...(state.childThreadsObserved === undefined

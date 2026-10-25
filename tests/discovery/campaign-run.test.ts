@@ -52,6 +52,8 @@ async function campaign(
       readonly admitted: number;
     };
     readonly research?: { readonly truncated: boolean };
+    /** Each clock read is one second after the last (#212). */
+    readonly ticking?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-campaign-"));
@@ -128,11 +130,12 @@ async function campaign(
     recordReport: recordWordPressReport,
     executor: {
       async execute(run, signal) {
-        expect(run.expiresAt).toBe(
-          options.wallOnFirstRun
-            ? "2026-10-08T07:00:00.030Z"
-            : "2026-10-08T08:00:00.000Z",
-        );
+        if (!options.ticking)
+          expect(run.expiresAt).toBe(
+            options.wallOnFirstRun
+              ? "2026-10-08T07:00:00.030Z"
+              : "2026-10-08T08:00:00.000Z",
+          );
         const ordinal = calls++;
         if (ordinal === 0 && options.wallOnFirstRun) {
           if (options.ignoreAbort)
@@ -366,7 +369,12 @@ async function campaign(
         },
       }),
     ),
-    clock: () => new Date("2026-10-08T07:00:00Z"),
+    clock: options.ticking
+      ? (() => {
+          let at = Date.parse("2026-10-08T07:00:00Z");
+          return () => new Date((at += 1000));
+        })()
+      : () => new Date("2026-10-08T07:00:00Z"),
   });
   return { result, calls, ledger, evidence, attachments };
 }
@@ -643,4 +651,22 @@ it("records an in-scope Finding with an admin setting for validation", async () 
   ).toBe("resolved");
   expect(result.findingsRecorded).toBe(1);
   expect(ledger.funnel("campaign-1")).toMatchObject({ parked: 0, raw: 1 });
+});
+
+it("stamps each event with the time it was recorded and the Finding with its Trial (#212, A2)", async () => {
+  const { ledger } = await campaign([], {
+    childSurvivesBrokenRoot: true,
+    singleTrial: true,
+    ticking: true,
+  });
+  const events = ledger
+    .read({ campaignId: "campaign-1" })
+    .map(({ event }) => event)
+    .filter((event) => event.type !== "lab-provisioned");
+  const times = events.map((event) => event.occurredAt);
+  expect(new Set(times).size).toBe(times.length);
+  expect([...times].sort()).toEqual(times);
+  expect(
+    events.find((event) => event.type === "finding-recorded"),
+  ).toMatchObject({ runId: "child-1", trialId: "run-0" });
 });

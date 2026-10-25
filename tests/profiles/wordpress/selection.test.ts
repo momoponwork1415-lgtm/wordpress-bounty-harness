@@ -361,7 +361,7 @@ describe("WordPress selection public interface", () => {
 
   it("ships the statistics-derived weights (ADR 0037, 2026-10-19 addendum) and the owner's cascade order in the default policy", async () => {
     const policy = await loadWordPressSelectionPolicy();
-    expect(policy.id).toBe("wordpress-selection-2026-10-23");
+    expect(policy.id).toBe("wordpress-selection-2026-10-26");
     // docs/reviews/2026-10-19-selection-statistics.md §5.1: paying class decides,
     // record recency splits ties, installs come last; WordPress.org recency is a leak.
     expect(policy.scoreWeights).toEqual({
@@ -389,10 +389,9 @@ describe("WordPress selection public interface", () => {
       "arbitrary-file-upload",
       "remote-code-execution",
     ]);
-    // The owner's order (2026-10-18): 50k, 30k, then ≥1M with two paying-class records.
+    // The owner's order (2026-10-18), with the 30k step dropped on 2026-10-26: 50k, then ≥1M with two paying-class records.
     expect("cascade" in policy && policy.cascade).toEqual([
       { minimumActiveInstallations: 50_000 },
-      { minimumActiveInstallations: 30_000 },
       {
         minimumActiveInstallations: 1_000_000,
         maximumActiveInstallations: null,
@@ -1343,7 +1342,6 @@ describe("install-band cascade (ADR 0037, 2026-10-19 addendum)", () => {
     scoreWeights: { installations: 0.5, recency: 0, historyPayingClass: 1 },
     cascade: [
       { minimumActiveInstallations: 50_000 },
-      { minimumActiveInstallations: 30_000 },
       {
         minimumActiveInstallations: 1_000_000,
         maximumActiveInstallations: null,
@@ -1493,67 +1491,63 @@ describe("install-band cascade (ADR 0037, 2026-10-19 addendum)", () => {
       { step: 0, eligible: 0 },
       { step: 1, eligible: 1 },
     ]);
-    // The report shows that step's reasons: the explored slug and the 30k candidate.
+    // The report shows that step's reasons: the explored slug and the 35k candidate,
+    // which no step admits now that the 30k step is gone (owner decision 2026-10-26).
     expect(
       first.inspections.find((item) => item.slug === "band-a")?.reasons,
     ).toEqual(["previously-selected"]);
     expect(
       first.inspections.find((item) => item.slug === "low")?.reasons,
     ).toEqual(["below-installation-threshold"]);
-    // Step 2 (30k).
-    const second = await decideWith(["band-a", "mid"], 1);
-    expect(second.cascadeStep).toBe(2);
-    expect(second.selected.map((item) => item.slug)).toEqual(["low"]);
-    expect(second.cascade.map(({ step }) => step)).toEqual([0, 1, 2]);
-    // Step 3 (≥1M with two paying-class records): the quiet giant and the
+    // Step 2 (≥1M with two paying-class records): the quiet giant and the
     // excluded author stay out; the band candidates are below its floor
     // (Ledger reasons attach only to candidates the band admits).
-    const third = await decideWith(["band-a", "mid", "low"], 1);
-    expect(third.cascadeStep).toBe(3);
-    expect(third.selected.map((item) => [item.slug, item.cascadeStep])).toEqual(
-      [["giant-paying", 3]],
-    );
+    const second = await decideWith(["band-a", "mid"], 1);
+    expect(second.cascadeStep).toBe(2);
+    expect(
+      second.selected.map((item) => [item.slug, item.cascadeStep]),
+    ).toEqual([["giant-paying", 2]]);
     const belowGiantFloor = [
       "below-installation-threshold",
       "below-paying-class-minimum",
     ];
-    expect(third.inspections.map((item) => [item.slug, item.reasons])).toEqual([
-      ["band-a", belowGiantFloor],
-      ["mid", belowGiantFloor],
-      ["low", belowGiantFloor],
-      ["giant-paying", []],
-      ["giant-quiet", ["below-paying-class-minimum"]],
-      ["giant-automattic", ["excluded-author"]],
-    ]);
-    for (const item of third.selected)
+    expect(second.inspections.map((item) => [item.slug, item.reasons])).toEqual(
+      [
+        ["band-a", belowGiantFloor],
+        ["mid", belowGiantFloor],
+        ["low", belowGiantFloor],
+        ["giant-paying", []],
+        ["giant-quiet", ["below-paying-class-minimum"]],
+        ["giant-automattic", ["excluded-author"]],
+      ],
+    );
+    for (const item of second.selected)
       expect(wordPressTargetSelectionSchema.safeParse(item).success).toBe(true);
-    // Every band exhausted: the primary band's empty decision stands.
-    const none = await decideWith(["band-a", "mid", "low", "giant-paying"], 1);
+    // Every band exhausted: the 35k candidate is never admitted, and the
+    // primary band's empty decision stands.
+    const none = await decideWith(["band-a", "mid", "giant-paying"], 1);
     expect(none.cascadeStep).toBeUndefined();
     expect(none.selected).toEqual([]);
     expect(none.cascade).toEqual([
       { step: 0, eligible: 0 },
       { step: 1, eligible: 0 },
       { step: 2, eligible: 0 },
-      { step: 3, eligible: 0 },
     ]);
   });
 
   it("measures exhaustion against the caller's minimum and keeps the primary band's candidates inside a wider step", async () => {
-    const decision = await decideWith([], 3);
-    // Primary 1 < 3, step 1 adds mid (2 < 3), step 2 adds low (3).
-    expect(decision.cascadeStep).toBe(2);
+    const decision = await decideWith([], 2);
+    // Primary 1 < 2, step 1 adds mid (2); the 35k candidate is never admitted.
+    expect(decision.cascadeStep).toBe(1);
     expect(decision.cascade).toEqual([
       { step: 0, eligible: 1 },
       { step: 1, eligible: 2 },
-      { step: 2, eligible: 3 },
     ]);
     expect(decision.selected.map((item) => item.slug)).toEqual([
       "band-a",
       "mid",
-      "low",
     ]);
-    expect(decision.selected.every((item) => item.cascadeStep === 2)).toBe(
+    expect(decision.selected.every((item) => item.cascadeStep === 1)).toBe(
       true,
     );
     // The same policy digest binds the batch whichever step admitted it.
@@ -1571,7 +1565,7 @@ describe("install-band cascade (ADR 0037, 2026-10-19 addendum)", () => {
     const decision = await openWordPressSelection({
       candidates: harnessed.selection,
       ledger: ledgerOf(
-        ["band-a", "mid", "low"].flatMap((slug, index) => trialOf(slug, index)),
+        ["band-a", "mid"].flatMap((slug, index) => trialOf(slug, index)),
       ),
       promptVariant: "wp2shell-bounty-v8",
     }).decide(quietWeights, { minimum: 1 });

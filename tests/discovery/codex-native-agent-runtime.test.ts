@@ -1080,12 +1080,21 @@ describe("Codex native agent runtime", () => {
         truncated: false,
       });
       expect(result.agentRuns).toHaveLength(1);
+      expect(result.receipt).toMatchObject({ agentRole: "root" });
+      expect(result.receipt).not.toHaveProperty("firstFinalReportAt");
       expect(result.agentRuns?.[0]?.receipt).toMatchObject({
         runId: "child-thread",
         terminal: "completed",
         usage: { inputTokens: 8, outputTokens: 3 },
         observed: { toolCalls: 1, filesRead: 1, uniqueFilesRead: 1 },
+        // The spawn message is encrypted; the CLI wrote no agent_role.
+        agentRole: "child",
+        agentType: "unavailable",
+        delegationDigest: "unavailable",
       });
+      expect(result.agentRuns?.[0]?.receipt).not.toHaveProperty(
+        "delegationLength",
+      );
       const attachment = result.agentRuns?.[0]?.attachment;
       expect(attachment && (await attachments.read(attachment))).toMatchObject({
         status: "resolved",

@@ -224,6 +224,13 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         reasoningOutputTokens: tokens,
       })
       .optional(),
+    /** Copied from the run's receipt; absent on events before 2026-10-25 (A2). */
+    agentRole: z.enum(["root", "child"]).optional(),
+    agentType: z.string().min(1).max(128).optional(),
+    delegationDigest: z.union([digest, z.literal("unavailable")]).optional(),
+    delegationLength: z.number().int().nonnegative().optional(),
+    firstFinalReportAt: z.iso.datetime({ offset: true }).optional(),
+    candidatesAfterFirstFinalReport: z.number().int().nonnegative().optional(),
   }),
   event({
     type: z.literal("discovery-concluded"),
@@ -338,6 +345,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     type: z.literal("finding-recorded"),
     findingId: id,
     runId: id,
+    /** The Trial the run belongs to; absent on events before 2026-10-25 (A2). */
+    trialId: id.optional(),
     category: id,
     preconditionClass: id.optional(),
     continuationOrdinal: z.number().int().nonnegative().optional(),
@@ -795,6 +804,28 @@ const storedRow = z.strictObject({
   event_json: z.string(),
 });
 
+const recordedTime = z.object({ occurredAt: z.string() });
+
+/**
+ * #212: events carry the time they were recorded, so a retried append of the
+ * same fact differs only in `occurredAt`; that is the event already stored.
+ */
+function priorStatus(
+  row: unknown,
+  parsed: LedgerEventV1,
+  inputDigest: string,
+): "existing" | "conflict" {
+  const stored = storedRow.parse(row);
+  if (stored.input_digest === inputDigest) return "existing";
+  const recordedAt = recordedTime.safeParse(JSON.parse(stored.event_json)).data
+    ?.occurredAt;
+  return recordedAt !== undefined &&
+    stored.input_digest ===
+      canonicalDigest({ ...parsed, occurredAt: recordedAt })
+    ? "existing"
+    : "conflict";
+}
+
 type Counts = { -readonly [K in keyof FunnelCounts]: number };
 
 function emptyCounts(): Counts {
@@ -873,14 +904,8 @@ export class Ledger {
         "SELECT sequence, identity, input_digest, event_json FROM ledger_events WHERE identity = ?",
       )
       .get(parsed.identity);
-    if (prior !== undefined) {
-      return {
-        status:
-          storedRow.parse(prior).input_digest === inputDigest
-            ? "existing"
-            : "conflict",
-      };
-    }
+    if (prior !== undefined)
+      return { status: priorStatus(prior, parsed, inputDigest) };
     for (const ref of parsed.artifacts) {
       const resolution = await this.#artifacts.resolve(ref.digest);
       if (
@@ -936,10 +961,7 @@ export class Ledger {
         )
         .get(parsed.identity);
       if (existing !== undefined) {
-        const status =
-          storedRow.parse(existing).input_digest === inputDigest
-            ? "existing"
-            : "conflict";
+        const status = priorStatus(existing, parsed, inputDigest);
         this.#db.exec("COMMIT");
         return { status };
       }
