@@ -83,6 +83,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
         WordPressLab,
         "exposeToHost" | "withdrawFromHost" | "reviewAdministrator"
       >;
+      /** Requested loopback ports; 0 takes a free one. `lab.json` names the bound ports. */
       readonly ports: { readonly http: number; readonly database: number };
       /** The Finding's review export JSON, written beside `lab.json`. */
       readonly reviewExport: () => Promise<string>;
