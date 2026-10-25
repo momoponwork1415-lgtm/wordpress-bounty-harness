@@ -38,6 +38,7 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 - [2026-10-17-thorough-search-v6-plan.md](2026-10-17-thorough-search-v6-plan.md): prompt v6 に向けた網羅性の見直し計画。
 - [2026-10-18-wp2shell-bounty-v7.md](2026-10-18-wp2shell-bounty-v7.md): prompt v7 の採用本文。
 - [2026-10-18-v8-r2-public-record-comparison.md](2026-10-18-v8-r2-public-record-comparison.md): v8 r2 の Trial と公開記録の照合。
+- [2026-10-25-wp2shell-bounty-v10.md](2026-10-25-wp2shell-bounty-v10.md): prompt v10 の本文、日本語訳、v8 との差分と出典対照。
 
 Codex への依頼文:
 
@@ -51,7 +52,7 @@ Codex への依頼文:
 
 - `2026-10-14-final-design.md`: 探索の Lab、即時の検証、`owner-approved` の付け手、Step 1 の「人手 0」の範囲は、2026-10-18〜19 の決定（ADR 0033〜0037、#238 の comment）で変わった。
 - `2026-10-17-thorough-search-v6-plan.md`: 入口索引と coverage は ADR 0034 で削除した。
-- prompt v4〜v7 の草案と対照表: 旧版の記録。新規探索は `wp2shell-bounty-v8` だけ（ADR 0033）。
+- prompt v4〜v7 の草案と対照表: 旧版の記録。新規探索は `wp2shell-bounty-v10` だけ（2026-10-25、#522。v8 は ADR 0033 で入り、照合用に残す）。
 
 ## archive/
 

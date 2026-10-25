@@ -1,8 +1,12 @@
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
-import { canonicalJson } from "../../../infrastructure/canonical-json.js";
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../../../infrastructure/canonical-json.js";
 import type { Ledger, LedgerEventV1 } from "../../../ledger/index.js";
 import {
   recoverChildReportFromRollout,
+  recoverChildTurnReportsFromRollout,
   rootThreadIdFromRollout,
 } from "../../../discovery/codex-native-agent-runtime.js";
 import { readNativeRunReceipt } from "../../../discovery/native-run-receipts.js";
@@ -10,40 +14,38 @@ import type { ProviderAttachmentStore } from "../../../discovery/provider-resear
 import { recordWordPressReport } from "./candidate-admission.js";
 
 const parserVersion = "child-coverage-array-v1";
+/** #539: completed Codex children whose earlier turns' reports the capture dropped. */
+const turnsParserVersion = "child-turns-merge-v1";
 
 type Started = Extract<LedgerEventV1, { type: "discovery-run-started" }>;
 type Finished = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
-
-/**
- * Reinterpret child runs that failed with `child-final-message-not-report` from
- * their immutable private rollouts. The failed events stay; `child-report-recovered`
- * and the admitted Findings / Leads are appended (docs/OPERATIONS.md).
- */
-export async function recoverWordPressChildReports(options: {
+type Recovery = Extract<LedgerEventV1, { type: "child-report-recovered" }>;
+type Options = {
   readonly campaignId: string;
   readonly ledger: Ledger;
   readonly evidence: PrivateArtifactStore;
   readonly attachments: Pick<ProviderAttachmentStore, "put" | "readByDigest">;
   readonly clock?: () => Date;
-}): Promise<{
+};
+type Counts = {
   readonly recovered: number;
   readonly findings: number;
   readonly leads: number;
-}> {
+};
+
+/** The campaign's archived runs, receipts and diagnostics, read once per call. */
+function archive(options: Options) {
   const { campaignId, ledger, evidence, attachments } = options;
   const events = ledger.readAll({ campaignId }).map(({ event }) => event);
   const started = new Map<string, Started>();
   const finished = new Map<string, Finished>();
-  const recoveries = new Map<
-    string,
-    Extract<LedgerEventV1, { type: "child-report-recovered" }>
-  >();
+  const recoveries = new Map<string, Recovery>();
   for (const event of events) {
     if (event.type === "discovery-run-started") started.set(event.runId, event);
     else if (event.type === "discovery-run-finished")
       finished.set(event.runId, event);
     else if (event.type === "child-report-recovered")
-      recoveries.set(event.runId, event);
+      recoveries.set(event.identity, event);
   }
   const existingIdentities = new Set(events.map((event) => event.identity));
 
@@ -64,22 +66,9 @@ export async function recoverWordPressChildReports(options: {
       throw new Error("Archived child diagnostic is unavailable");
     return result.bytes.toString("utf8");
   };
-  const append = async (event: Parameters<Ledger["append"]>[0]) => {
-    const result = await ledger.append(event);
-    if (result.status === "conflict")
-      throw new Error(`Ledger conflict: ${event.identity}`);
-  };
 
-  let recovered = 0;
-  let findings = 0;
-  let leads = 0;
-  for (const childFinish of finished.values()) {
-    if (
-      childFinish.outcome !== "failed" ||
-      childFinish.reason !== "schema" ||
-      childFinish.reasonDetail !== "child-final-message-not-report"
-    )
-      continue;
+  /** A child run bound to its Root, Trial and Snapshot, with both receipts and rollouts. */
+  const bound = async (childFinish: Finished) => {
     const childStart = started.get(childFinish.runId);
     if (
       childStart === undefined ||
@@ -106,9 +95,6 @@ export async function recoverWordPressChildReports(options: {
     ]);
     if (
       childReceipt.runId !== childStart.runId ||
-      childReceipt.terminal !== "incomplete" ||
-      childReceipt.reason !== "schema" ||
-      childReceipt.reasonDetail !== "child-final-message-not-report" ||
       childReceipt.targetSnapshotDigest !== childStart.snapshotDigest ||
       rootReceipt.targetSnapshotDigest !== childStart.snapshotDigest ||
       childReceipt.runtimeProfileDigest !== rootReceipt.runtimeProfileDigest ||
@@ -120,17 +106,40 @@ export async function recoverWordPressChildReports(options: {
       diagnosticOf(rootReceipt.diagnosticArtifactDigest),
       diagnosticOf(childReceipt.diagnosticArtifactDigest),
     ]);
-    const report = recoverChildReportFromRollout(childRaw, {
-      parentThreadId: rootThreadIdFromRollout(rootRaw),
-      childThreadId: childStart.runId,
-      agentPath: childStart.configuration.agentPath,
-      modelId: childReceipt.requestedModelId,
-      effort: childReceipt.requestedEffort,
-      cyberAccessProgram: childReceipt.cyberAccessProgram,
-    });
+    return {
+      childStart: { ...childStart, parentRunId: childStart.parentRunId },
+      childReceipt,
+      sourceDiagnosticDigest: childReceipt.diagnosticArtifactDigest,
+      childRaw,
+      expected: {
+        parentThreadId: rootThreadIdFromRollout(rootRaw),
+        childThreadId: childStart.runId,
+        agentPath: childStart.configuration.agentPath,
+        modelId: childReceipt.requestedModelId,
+        effort: childReceipt.requestedEffort,
+        cyberAccessProgram: childReceipt.cyberAccessProgram,
+      },
+    };
+  };
+
+  /**
+   * Seal the reinterpretation, append `child-report-recovered`, then admit the
+   * report through the one WordPress admission path. A rerun appends nothing.
+   */
+  const record = async (input: {
+    readonly identity: string;
+    readonly parserVersion: string;
+    readonly childStart: Started & { readonly parentRunId: string };
+    readonly sourceDiagnosticDigest: string;
+    readonly report: Parameters<typeof recordWordPressReport>[0];
+    readonly select?: (kind: "finding" | "lead", index: number) => boolean;
+    /** Older recoveries kept the parser version out of their admission identities. */
+    readonly versionedAdmission: boolean;
+  }) => {
+    const { childStart } = input;
     const reportRef = await attachments.put(
       "findings",
-      Buffer.from(canonicalJson(report)),
+      Buffer.from(canonicalJson(input.report)),
     );
     const recoveryDigest = await evidence.putFiles({
       "recovery.json": canonicalJson({
@@ -138,18 +147,17 @@ export async function recoverWordPressChildReports(options: {
         runId: childStart.runId,
         parentRunId: childStart.parentRunId,
         snapshotDigest: childStart.snapshotDigest,
-        sourceDiagnosticDigest: childReceipt.diagnosticArtifactDigest,
+        sourceDiagnosticDigest: input.sourceDiagnosticDigest,
         reportArtifactDigest: reportRef.digest,
-        parserVersion,
+        parserVersion: input.parserVersion,
       }),
     });
-    const previousRecovery = recoveries.get(childStart.runId);
+    const previous = recoveries.get(input.identity);
     if (
-      previousRecovery !== undefined &&
-      (previousRecovery.sourceDiagnosticDigest !==
-        childReceipt.diagnosticArtifactDigest ||
-        previousRecovery.reportArtifactDigest !== reportRef.digest ||
-        previousRecovery.parserVersion !== parserVersion)
+      previous !== undefined &&
+      (previous.sourceDiagnosticDigest !== input.sourceDiagnosticDigest ||
+        previous.reportArtifactDigest !== reportRef.digest ||
+        previous.parserVersion !== input.parserVersion)
     )
       throw new Error("Archived recovery provenance changed");
     const base = {
@@ -157,21 +165,22 @@ export async function recoverWordPressChildReports(options: {
       campaignId,
       snapshotDigest: childStart.snapshotDigest,
       occurredAt:
-        previousRecovery?.occurredAt ??
+        previous?.occurredAt ??
         (options.clock ?? (() => new Date()))().toISOString(),
     };
-    await append({
+    const appended = await ledger.append({
       ...base,
-      identity: `child-report-recovered-${childStart.runId}-v1`,
+      identity: input.identity,
       type: "child-report-recovered",
       runId: childStart.runId,
-      sourceDiagnosticDigest: childReceipt.diagnosticArtifactDigest,
+      sourceDiagnosticDigest: input.sourceDiagnosticDigest,
       reportArtifactDigest: reportRef.digest,
-      parserVersion,
+      parserVersion: input.parserVersion,
       artifacts: [{ kind: "child-report-recovery", digest: recoveryDigest }],
     });
-    if (previousRecovery === undefined) recovered++;
-    const recorded = await recordWordPressReport(report, {
+    if (appended.status === "conflict")
+      throw new Error(`Ledger conflict: ${input.identity}`);
+    const recorded = await recordWordPressReport(input.report, {
       ledger,
       evidence,
       base,
@@ -180,13 +189,142 @@ export async function recoverWordPressChildReports(options: {
       snapshotDigest: childStart.snapshotDigest,
       reportArtifactDigest: reportRef.digest,
       existingIdentities,
+      ...(input.versionedAdmission
+        ? { parserVersion: input.parserVersion }
+        : {}),
+      ...(input.select === undefined ? {} : { select: input.select }),
     });
+    let findings = 0;
+    let leads = 0;
     for (const candidate of recorded.candidates) {
       if (candidate.outcome !== "recorded" || candidate.status !== "appended")
         continue;
       if (candidate.kind === "finding") findings++;
       else leads++;
     }
+    return { recovered: previous === undefined ? 1 : 0, findings, leads };
+  };
+
+  return { started, finished, receiptOf, bound, record };
+}
+
+const add = (left: Counts, right: Counts): Counts => ({
+  recovered: left.recovered + right.recovered,
+  findings: left.findings + right.findings,
+  leads: left.leads + right.leads,
+});
+
+/**
+ * Reinterpret child runs that failed with `child-final-message-not-report` from
+ * their immutable private rollouts. The failed events stay; `child-report-recovered`
+ * and the admitted Findings / Leads are appended (docs/OPERATIONS.md).
+ */
+export async function recoverWordPressChildReports(
+  options: Options,
+): Promise<Counts> {
+  const { finished, bound, record } = archive(options);
+  let counts: Counts = { recovered: 0, findings: 0, leads: 0 };
+  for (const childFinish of finished.values()) {
+    if (
+      childFinish.outcome !== "failed" ||
+      childFinish.reason !== "schema" ||
+      childFinish.reasonDetail !== "child-final-message-not-report"
+    )
+      continue;
+    const child = await bound(childFinish);
+    if (
+      child.childReceipt.terminal !== "incomplete" ||
+      child.childReceipt.reason !== "schema" ||
+      child.childReceipt.reasonDetail !== "child-final-message-not-report"
+    )
+      throw new Error("Archived receipts do not match the ledger");
+    counts = add(
+      counts,
+      await record({
+        identity: `child-report-recovered-${child.childStart.runId}-v1`,
+        parserVersion,
+        childStart: child.childStart,
+        sourceDiagnosticDigest: child.sourceDiagnosticDigest,
+        report: recoverChildReportFromRollout(child.childRaw, child.expected),
+        versionedAdmission: false,
+      }),
+    );
   }
-  return { recovered, findings, leads };
+  return counts;
+}
+
+/**
+ * #539: a completed Codex child answered each Root follow-up with a new report,
+ * and the capture kept only the last one. Re-read every turn from the archived
+ * rollout and admit only the claims the recorded report lacks, so the Findings
+ * already in the ledger are not recorded twice. The rollout must reproduce the
+ * recorded report exactly; otherwise nothing is appended.
+ */
+export async function recoverWordPressChildTurnReports(
+  options: Options & { readonly dryRun?: boolean },
+): Promise<Counts & { readonly skipped: number }> {
+  const { started, finished, receiptOf, bound, record } = archive(options);
+  let counts: Counts = { recovered: 0, findings: 0, leads: 0 };
+  let skipped = 0;
+  for (const childFinish of finished.values()) {
+    const childStart = started.get(childFinish.runId);
+    if (childFinish.outcome !== "completed" || childStart?.runKind !== "child")
+      continue;
+    // A Root still running (or never finished) has no sealed rollout yet; a later run reads it.
+    if (
+      childStart.parentRunId === undefined ||
+      !finished.has(childStart.parentRunId)
+    ) {
+      skipped++;
+      continue;
+    }
+    // Claude Code children keep their own transcript form (no Codex turns).
+    if ((await receiptOf(childFinish)).claudeCliVersion !== undefined) continue;
+    const child = await bound(childFinish);
+    if (
+      child.childReceipt.terminal !== "completed" ||
+      child.childReceipt.reportArtifactDigest === undefined
+    )
+      throw new Error("Archived receipts do not match the ledger");
+    const { recorded, merged } = recoverChildTurnReportsFromRollout(
+      child.childRaw,
+      child.expected,
+    );
+    if (canonicalDigest(recorded) !== child.childReceipt.reportArtifactDigest)
+      throw new Error("Archived child rollout does not reproduce its report");
+    const known = {
+      finding: new Set(recorded.findings.map((claim) => canonicalJson(claim))),
+      lead: new Set(recorded.leads.map((claim) => canonicalJson(claim))),
+    };
+    const added = {
+      finding: merged.findings.flatMap((claim, index) =>
+        known.finding.has(canonicalJson(claim)) ? [] : [index],
+      ),
+      lead: merged.leads.flatMap((claim, index) =>
+        known.lead.has(canonicalJson(claim)) ? [] : [index],
+      ),
+    };
+    if (added.finding.length + added.lead.length === 0) continue;
+    if (options.dryRun === true) {
+      counts = add(counts, {
+        recovered: 1,
+        findings: added.finding.length,
+        leads: added.lead.length,
+      });
+      continue;
+    }
+    counts = add(
+      counts,
+      await record({
+        identity: `child-report-recovered-${child.childStart.runId}-${turnsParserVersion}`,
+        parserVersion: turnsParserVersion,
+        childStart: child.childStart,
+        sourceDiagnosticDigest: child.sourceDiagnosticDigest,
+        report: merged,
+        select: (kind, index) => added[kind].includes(index),
+        versionedAdmission: true,
+      }),
+    );
+  }
+  return { ...counts, skipped };
 }
