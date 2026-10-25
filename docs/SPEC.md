@@ -155,7 +155,7 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 | --- | --- | --- |
 | `selection` | 対象外資産（作者、配布停止、ベンダー側service）を落とす。install下限と上限は[選定方針 JSON](../src/profiles/wordpress/policy/selection.json)を正本とし、プログラムの報奨対象下限は別のscope規則として記録する。公開履歴はローカル mirror の slug 単位の件数と公開日だけを採点に使い、記録の内容は読まず探索にも渡さない。mirror が方針の鮮度を超えて古ければ選定を止める（ADR 0037、ADR 0030 を上書き） | 機械的。方針と除外理由を残す |
 | `lab` | discoveryとverifierに渡す認証情報を未認証・subscriber・customer（WooCommerce有効時）に限る。contributor以上と管理者の認証情報は渡さない（例外: 検証skillのhandoffには前提作りのためだけにLabの設定管理者を渡し、`setup-done` 以後は攻撃者位置の資格だけを使う。ADR 0035）。設定は既定のまま、一般的な利用範囲の初期データ（公開フォーム1つ等）はprofileのsetup manifestで入れ、Lab Setup digestに記録する | 機械的。contributor以上の経路は試せない。設定変更もできない |
-| `discovery` | Harnessが付けるProgramme Boundaryの節に対象内の影響（下表）を書き（v5以降、目的promptは分類の順位を持たない。ADR 0032 の 2026-10-16 節）、trust境界宣言でcontributor以上と管理者の明示設定を信頼側に置く | 誘導。agentは他も報告してよいが、台帳で分類される |
+| `discovery` | Harnessが付けるProgramme Boundaryの節に対象内の影響（下表）を書き（v5以降、目的promptは分類の順位を持たない。ADR 0032 の 2026-10-16 節）、trust境界宣言でcontributor以上と管理者が意図して付与する権限を信頼側に置く（通常のサイトが有効にし得る設定は除外せず前提として書く。ADR 0038 の 2026-10-26 追記 11） | 誘導。agentは他も報告してよいが、台帳で分類される |
 | `verification` と `review` | 判定器の成功条件をプログラムの受理条件に合わせる（下表）。scope評価はFindingと判定器の観測だけから、方針ファイルの規則で `in-scope` / `out` / `ambiguous` を出す。agentの自己申告は使わない | 機械的。提出候補にならない |
 
 影響の共通分類（両プログラムの受理条件を1つの語彙にしたもの。判定器とscope評価が共有する）:
