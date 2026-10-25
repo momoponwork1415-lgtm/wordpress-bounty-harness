@@ -96,7 +96,19 @@ runtime-confirmed 26 件はすべて ATO で、同じ dev-set 対象の再発見
 
 ## 4. バグハンターの公開手法
 
-（web 調査の結果をここに入れる。調査中。）
+web 調査の全文（34 出典、研究者別）は [2026-10-25-wordpress-bug-hunter-methods.md](2026-10-25-wordpress-bug-hunter-methods.md) にある。要点は次のとおり。
+
+- **上位 20 名のうち手法を自分で語っているのは 2 名だけ**で、他は profile と CVE のクレジットしか無い。Ananda Dhakal（Patchstack 所属）は 2026-08 に「コード解析の大半は Claude と Codex がやり、自分の仕事はモデルが誤魔化していないかを外から PoC で確かめること」と書いている。Kinorth（João Pedro Soares de Alcântara）は 2025 年の対談で、SVN から全 plugin を落とし、新規追加分だけを残し、権限を見ない AJAX hook から正規表現で当たり、確かめた 1 件ごとに正規表現を書いて全体へ当てた、と述べている（2024-10 に 275 件）。
+- **Wordfence PRISM は Wordfence 自身の自律 AI 研究者**で、2026-04 ごろに始まり、種別ごとの専門 agent が「WordPress の ground truth」に沿って掃き、PoC を実行して確かめる。Wordfence はこれを breadth-first、Argus を depth-first と呼ぶ。累計 355 件、1 日 2.8 件。モデルと prompt は非公開。
+- **提出の市場は 2026 年に変わった。** Wordfence では AI 支援の報告が 16% から約 66% に増え、AI 使用の申告と人手での検証を規約で求め、大量生成の提出を禁じ、未検証 PoC を幻覚として数える。Patchstack は 2026-06 から contributor 権限を範囲から外し、未検証の報告に 1 週間の停止を科す。Patchstack の月間提出は 1,124 → 2,141 件、受理率は 66.5% → 13.5%、重複は 2026-03 に 429 件で、1 件に 20 件超の重複が付いた例がある。
+- **大量監査の公開例。** Austin Ginder は上位 5,000 plugin の最新版を Claude Code の 4 つの slash command（監査 → 導入して発火 → 提出 → 追跡）で回した。Muhan Luo は Semgrep と Claude で約 11,000 候補を約 1,400 に絞り、約 120 USD で 7 件を得た。TrendAI / CHT は 72 時間で 300 件超（1 件約 20 USD）を出し、人手の確認 30〜60 分 / 件が律速だと書いている。
+- **共通する型。** 入口は AJAX / REST の登録点と nonce・capability の取り違えから。安い絞り込み（regex / semgrep）を前、LLM の読み取りを後、確定は実環境の再現だけ。確かめた 1 件を型にして全 plugin へ横に広げる。対象は最新版だけ。重複が最大の損失要因で、「明らかなものから先に、速く出す」が対策として語られる。提出前に公開履歴とどう照合するかを書いた人はいなかった。
+
+本リポジトリへの含意。
+
+- 市場の主流は「安い型 × 全 plugin × 実環境で確定」で、Harness の判定器と Lab はこの「確定」の部分をすでに持っている。足りないのは型の供給で、それが §6 の sweep の種に当たる。
+- 重複が受理率を 13.5% まで下げている以上、探索の後の `wbh-dedupe` と、同じ slug の直近公開を先に見る `wbh-screen` の前倒しは、探索の改善と同じ重さを持つ。
+- PRISM と Argus の breadth / depth の分け方は、#518 の wide / deep と同じ区別である。
 
 ## 5. 使い方 A: 着眼語彙を事例から作る（prompt の版上げ）
 
