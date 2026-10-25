@@ -18,7 +18,7 @@ describe("Programme Boundary impact labels (#185)", () => {
         "utf8",
       ),
     ) as { programmeBoundary: { version: string; text: string } };
-    expect(campaign.programmeBoundary.version).toBe("wordfence-2026-10-17");
+    expect(campaign.programmeBoundary.version).toBe("wordfence-2026-10-26");
     const outOfScope = campaign.programmeBoundary.text.split(
       "Out of scope for this campaign: ",
     )[1];
@@ -41,6 +41,14 @@ describe("Programme Boundary impact labels (#185)", () => {
       ...WORDPRESS_PROGRAMME_EXCLUDED_IMPACTS,
     ]);
     for (const term of Object.values(terms)) expect(outOfScope).toContain(term);
+    // ADR 0038 追記 11: an enableable setting is a precondition, not an exclusion.
+    expect(outOfScope).not.toContain("explicit configuration");
+    expect(outOfScope).toContain(
+      "a permission an administrator explicitly grants",
+    );
+    expect(outOfScope).toContain(
+      "A plugin setting an administrator can enable is not an exclusion",
+    );
   });
 
   it("routes every excluded label away from verification and review", () => {
