@@ -134,26 +134,11 @@ function fakeLab(options: { readonly setupDigest?: string } = {}) {
       provisionedIds.push(fresh.id);
       return { status: "ready", handle: fresh };
     },
-    async seedCanaries() {
-      calls.push("seedCanaries");
-      return { status: "seeded", digest: sha("d") };
-    },
     reviewAdministrator() {
       return { username: "harness-admin", password: "admin-pass" };
     },
     reviewReceiverIp() {
       return "172.20.0.5";
-    },
-    canaryLedger() {
-      return null;
-    },
-    prepareScriptCanary() {
-      return {
-        nonce: "fixed-nonce",
-        beaconUrl: "http://canary/b/fixed-nonce",
-        javascript: "fetch('http://canary/b/fixed-nonce')",
-        loaderJavascript: "x()",
-      };
     },
     async teardown() {
       calls.push("teardown");
@@ -164,7 +149,7 @@ function fakeLab(options: { readonly setupDigest?: string } = {}) {
 }
 
 describe("WordPress review Lab", () => {
-  it("opens a fresh manual Lab from a sealed, current incomplete dialog observation", async () => {
+  it("opens a fresh manual Lab from a sealed result awaiting a human observation (#525)", async () => {
     const root = await mkdtemp(join(tmpdir(), "wbh-observed-review-"));
     directories.push(root);
     const stateDirectory = join(root, "state");
@@ -209,6 +194,7 @@ describe("WordPress review Lab", () => {
         },
       }),
     });
+    // A judge-era dialog record, as old `incomplete(observation)` events reference it.
     const dialog = {
       judgeId: "wordpress-stored-script",
       kind: "numeric-dialog",
@@ -230,7 +216,7 @@ describe("WordPress review Lab", () => {
       requiresHumanPreexistingContentCheck: true,
     } as const;
     const evidenceDigest = await store.putFiles({
-      "browser-dialog-observation.json": canonicalJson(dialog),
+      "proxy-capture.jsonl": '{"method":"GET","path":"/synthetic"}\n',
     });
     const { lab, calls, provisionedIds } = fakeLab();
     const result = await new Verification({
@@ -240,24 +226,10 @@ describe("WordPress review Lab", () => {
       verifier: {
         attempt: async () => ({ status: "attempted", recipeDigest }),
       },
-      judges: {
-        for: () => ({
-          id: "wordpress-stored-script",
-          observe: async () => ({
-            status: "incomplete",
-            reason: "observation",
-            nextStep: "Human reproduction needed",
-            evidenceCapture: "harness-captured",
-            evidenceDigest,
-          }),
-        }),
+      observer: {
+        observe: async () => ({ status: "recorded", evidenceDigest }),
       },
       readFinding: (value) => value as typeof finding,
-      renderer: {
-        render: async () => {
-          throw new Error("No proof package");
-        },
-      },
     }).verify({
       campaignId: "campaign-1",
       findingId: finding.findingId,
@@ -265,11 +237,10 @@ describe("WordPress review Lab", () => {
       snapshot,
       setup,
       campaignLabSetupDigest: labSetupDigest,
-      reconstruction: {},
     });
     expect(result).toMatchObject({
       status: "incomplete",
-      reason: "observation",
+      reason: "awaiting-human-observation",
     });
     const first = ledger
       .readAll({
@@ -346,14 +317,7 @@ describe("WordPress review Lab", () => {
     expect(exitCode).toBe(0);
     expect(errors).toEqual([]);
     expect(provisionedIds).toEqual(["lab-1", "lab-2"]);
-    expect(calls).toEqual([
-      "provision",
-      "seedCanaries",
-      "teardown",
-      "provision",
-      "seedCanaries",
-      "teardown",
-    ]);
+    expect(calls).toEqual(["provision", "teardown", "provision", "teardown"]);
     expect(lines).toContain(
       "review Lab ready on http://wordpress (network wbh-lab-1-net, recorder 172.20.0.4)",
     );
@@ -367,7 +331,7 @@ describe("WordPress review Lab", () => {
       `private victim route: ${store.contentPath(recipeDigest)}/route.json`,
     );
     expect(lines).toContain(
-      `private browser observation: ${store.contentPath(evidenceDigest)}/browser-dialog-observation.json`,
+      `private Lab observation: ${store.contentPath(evidenceDigest)}`,
     );
     expect(
       lines.some(
@@ -376,6 +340,7 @@ describe("WordPress review Lab", () => {
       ),
     ).toBe(true);
 
+    // An old `incomplete(observation)` event still needs its bound dialog record.
     const mismatchedEvidence = await store.putFiles({
       "browser-dialog-observation.json": canonicalJson({
         ...dialog,
@@ -440,14 +405,13 @@ describe("WordPress review Lab", () => {
 
     const session = await openWordPressReviewLab({
       packageDigest,
-      category: "stored-xss",
       store,
       snapshots: frozenSnapshots,
       lab,
       browserImage,
     });
 
-    expect(calls).toEqual(["provision", "seedCanaries"]);
+    expect(calls).toEqual(["provision"]);
     expect(provisioned).toEqual([
       { snapshot, setup: { ...setup, databaseAccess: "none" } },
     ]);
@@ -460,29 +424,13 @@ describe("WordPress review Lab", () => {
         subscriber: { username: "attacker", password: "attacker-pass" },
       },
       administrator: { username: "harness-admin", password: "admin-pass" },
-      canaries: { script: { nonce: "fixed-nonce" } },
       browserImage,
     });
 
     await session.close();
     await session.close();
-    expect(calls).toEqual(["provision", "seedCanaries", "teardown"]);
-  });
-
-  it("issues no script canary outside stored-xss", async () => {
-    const store = await privateStore();
-    const packageDigest = await sealedPackage(store, reconstruction);
-    const { lab } = fakeLab();
-    const session = await openWordPressReviewLab({
-      packageDigest,
-      category: "sqli",
-      store,
-      snapshots: frozenSnapshots,
-      lab,
-      browserImage,
-    });
-    expect(session.canaries).toEqual({});
-    await session.close();
+    expect(calls).toEqual(["provision", "teardown"]);
+    expect(session).not.toHaveProperty("canaries");
   });
 
   it("refuses a missing package before touching the Lab", async () => {
@@ -491,7 +439,6 @@ describe("WordPress review Lab", () => {
     await expect(
       openWordPressReviewLab({
         packageDigest: sha("f"),
-        category: "stored-xss",
         store,
         snapshots: frozenSnapshots,
         lab,
@@ -511,7 +458,6 @@ describe("WordPress review Lab", () => {
     await expect(
       openWordPressReviewLab({
         packageDigest,
-        category: "stored-xss",
         store,
         snapshots: frozenSnapshots,
         lab,
@@ -531,7 +477,6 @@ describe("WordPress review Lab", () => {
     await expect(
       openWordPressReviewLab({
         packageDigest,
-        category: "stored-xss",
         store,
         snapshots: frozenSnapshots,
         lab,
@@ -560,7 +505,6 @@ describe("WordPress review Lab", () => {
     await expect(
       openWordPressReviewLab({
         packageDigest,
-        category: "stored-xss",
         store,
         snapshots: frozenSnapshots,
         lab,
@@ -579,7 +523,6 @@ describe("WordPress review Lab", () => {
     await expect(
       openWordPressReviewLab({
         packageDigest,
-        category: "stored-xss",
         store,
         snapshots: frozenSnapshots,
         lab,
@@ -599,7 +542,6 @@ describe("WordPress review Lab", () => {
       () =>
         openWordPressReviewLab({
           packageDigest,
-          category: "stored-xss",
           store,
           snapshots: frozenSnapshots,
           lab,
@@ -609,7 +551,7 @@ describe("WordPress review Lab", () => {
         stdout(line) {
           lines.push(line);
           if (line.startsWith("Run the private")) {
-            expect(calls).toEqual(["provision", "seedCanaries"]);
+            expect(calls).toEqual(["provision"]);
             // The Lab is live; the human interrupts the command.
             queueMicrotask(() => signals.emit("SIGINT"));
           }
@@ -619,7 +561,7 @@ describe("WordPress review Lab", () => {
       signals,
     );
     await running;
-    expect(calls).toEqual(["provision", "seedCanaries", "teardown"]);
+    expect(calls).toEqual(["provision", "teardown"]);
     expect(lines.at(-1)).toBe("review Lab removed");
     expect(signals.listenerCount("SIGINT")).toBe(0);
     expect(signals.listenerCount("SIGTERM")).toBe(0);

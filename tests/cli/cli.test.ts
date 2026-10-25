@@ -114,6 +114,9 @@ function waitForSecondExecution(): () => Promise<void> {
 }
 
 /** Real modules; only WordPress.org, Docker/runsc and the provider CLI are fakes. */
+/** One attacker GET as the Lab recorder writes it. */
+const SYNTHETIC_CAPTURE = `{"request":{"method":"GET","path":"/synthetic","headers":{},"body":"","bodyBase64":"","truncated":false},"response":{"statusCode":200,"headers":{},"body":"ok","bodyBase64":"b2s=","truncated":false}}\n`;
+
 async function harness(
   options: {
     readonly askMinutes?: CliIo["askMinutes"];
@@ -344,24 +347,26 @@ async function harness(
             }),
             stderr: "",
           };
-        if (request.args.includes("--field=roles"))
-          return { exitCode: 0, stdout: "subscriber\n", stderr: "" };
+        // The recorder holds one attacker request after setup-done.
+        if (request.args[0] === "exec" && request.args[1]?.endsWith("-proxy")) {
+          if (request.args[2] === "wc")
+            return {
+              exitCode: 0,
+              stdout: "0 /var/lib/wbh/capture.jsonl\n",
+              stderr: "",
+            };
+          if (request.args[2] === "tail")
+            return { exitCode: 0, stdout: SYNTHETIC_CAPTURE, stderr: "" };
+          if (request.args[2] === "sh")
+            return { exitCode: 0, stdout: "0", stderr: "" };
+        }
         if (request.args.includes("eval"))
-          return {
-            exitCode: 0,
-            stdout: request.args.includes(
-              "WBH_SESSION_COOKIE=synthetic-victim-session",
-            )
-              ? "wbh-canary-admin-fixed-nonce\n"
-              : "\n",
-            stderr: "",
-          };
+          return { exitCode: 0, stdout: "\n", stderr: "" };
         if (request.args.includes("--porcelain"))
           return { exitCode: 0, stdout: "7", stderr: "" };
         return { exitCode: 0, stdout: "ok", stderr: "" };
       },
     },
-    nonce: () => "fixed-nonce",
     healthAttempts: 1,
   });
 
@@ -750,6 +755,8 @@ async function harness(
             "session.json": JSON.stringify({
               cookie: "synthetic-victim-session",
             }),
+            // As WordPressVerifier records the recorder offset at setup-done.
+            "capture-marker.json": JSON.stringify({ marker: "0" }),
           }),
         };
       },
@@ -1588,7 +1595,12 @@ describe("harness CLI vertical slice", () => {
     );
     expect(verified.code).toBe(0);
     expect(verified.stdout).toContain("verified finding");
-    expect(verified.stdout).toContain("runtime-confirmed");
+    expect(verified.stdout).toContain(": incomplete");
+    expect(
+      ledger().read({ campaignId, type: "verification-finished" })[0]?.event,
+    ).toMatchObject({
+      result: { status: "incomplete", reason: "awaiting-human-observation" },
+    });
     expect(
       ledger().read({ campaignId, type: "verification-finished" }),
     ).toHaveLength(1);
@@ -2110,7 +2122,7 @@ describe("harness CLI vertical slice", () => {
             event.type === "verification-finished" &&
             event.findingId === findingId,
         );
-    expect(finished()).toMatchObject([{ promptVersion: "wbh-verify/v9" }]);
+    expect(finished()).toMatchObject([{ promptVersion: "wbh-verify/v10" }]);
 
     // The operator named the Finding again: the retry rules of the automatic queue do not apply.
     const second = await run(...handoff);
@@ -2118,7 +2130,7 @@ describe("harness CLI vertical slice", () => {
     expect(second.stdout).toContain(`verified finding ${findingId}`);
     expect(finished()).toHaveLength(2);
     expect(finished()[1]).toMatchObject({
-      promptVersion: "wbh-verify/v9",
+      promptVersion: "wbh-verify/v10",
       attempt: 2,
     });
   });
@@ -2373,7 +2385,7 @@ describe("harness CLI vertical slice", () => {
             ? [event.promptVersion]
             : [],
         ),
-    ).toEqual(queued.map(() => "wbh-verify/v9"));
+    ).toEqual(queued.map(() => "wbh-verify/v10"));
   });
 
   it.each([
@@ -4346,7 +4358,7 @@ describe("harness CLI vertical slice", () => {
     );
   });
 
-  it("re-verifies a finding on the target's latest version and only then treats the version as verified", async () => {
+  it("re-verifies a finding on the target's latest version and leaves the new result awaiting a human observation", async () => {
     const { seedHistory, run, configPath, root } = await harness();
     const config = JSON.parse(await readFile(configPath, "utf8")) as {
       lab: Record<string, unknown>;
@@ -4376,7 +4388,7 @@ describe("harness CLI vertical slice", () => {
     expect(reverified.stderr).toBe("");
     expect(reverified.code).toBe(0);
     expect(reverified.stdout).toMatch(
-      /^reverified finding \S+ as \S+ on wporg:synthetic-plugin 9\.9\.9  snapshot sha256:[a-f0-9]{64}  verification \S+: runtime-confirmed$/m,
+      /^reverified finding \S+ as \S+ on wporg:synthetic-plugin 9\.9\.9  snapshot sha256:[a-f0-9]{64}  verification \S+: incomplete$/m,
     );
     const derived = /^reverified finding \S+ as (\S+) on/m.exec(
       reverified.stdout,
@@ -4399,11 +4411,14 @@ describe("harness CLI vertical slice", () => {
       "--finding",
       derived,
     );
-    expect(scoped.stdout).toMatch(/^wordfence in-scope /m);
-    expect(scoped.stdout).toMatch(/^patchstack in-scope /m);
+    // #525: the new result waits for a human observation, so scope is not assessed yet.
+    expect(scoped.code).toBe(2);
+    expect(scoped.stderr).toContain(
+      "Scope is assessed only for evidence-backed findings",
+    );
   });
 
-  it("hands a latest-version re-verification to the skill while retaining the judge and new Snapshot", async () => {
+  it("hands a latest-version re-verification to the skill while retaining the new Snapshot", async () => {
     const {
       seedHistory,
       run,
@@ -4452,7 +4467,7 @@ describe("harness CLI vertical slice", () => {
       "18082",
     );
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain(": runtime-confirmed");
+    expect(result.stdout).toContain(": incomplete");
     expect(handoffs).toEqual([
       { directory, httpPort: 18082, databasePort: 3307 },
     ]);
@@ -4485,7 +4500,7 @@ describe("harness CLI vertical slice", () => {
       throw new Error("The versioned verification was not recorded");
     expect(verified.snapshotDigest).toBe(derived.snapshotDigest);
     expect(verified.basis?.kind).toBe("latest-version");
-    expect(verified.promptVersion).toBe("wbh-verify/v9");
+    expect(verified.promptVersion).toBe("wbh-verify/v10");
   });
 
   it("pins the original plugin sources when an automatic policy re-verifies a fixed version", async () => {
@@ -4759,7 +4774,7 @@ describe("harness CLI vertical slice", () => {
     expect(retried.stdout).toContain(
       `reverified finding ${finding.findingId} as ${finding.findingId}`,
     );
-    expect(retried.stdout).toContain(": runtime-confirmed");
+    expect(retried.stdout).toContain(": incomplete");
     expect(verifierReferenceRoutes.at(-1)).toBeUndefined();
     const after = ledger()
       .read({
@@ -4773,7 +4788,7 @@ describe("harness CLI vertical slice", () => {
     expect(after[1]).toMatchObject({
       findingId: finding.findingId,
       snapshotDigest: finding.snapshotDigest,
-      result: { status: "runtime-confirmed" },
+      result: { status: "incomplete", reason: "awaiting-human-observation" },
       basis: {
         kind: "latest-version",
         findingSnapshotDigest: finding.snapshotDigest,
@@ -4885,7 +4900,7 @@ describe("harness CLI vertical slice", () => {
     expect(after[1]).toMatchObject({
       findingId: finding.findingId,
       snapshotDigest: finding.snapshotDigest,
-      result: { status: "runtime-confirmed" },
+      result: { status: "incomplete", reason: "awaiting-human-observation" },
     });
     expect(after[1]).not.toHaveProperty("basis");
     expect(
@@ -5022,7 +5037,11 @@ describe("harness CLI vertical slice", () => {
       "--finding",
       finding,
     );
-    expect(scoped.stdout).toMatch(/^wordfence ambiguous /m);
+    // #525: the control's result waits for a human observation; scope is not assessed yet.
+    expect(scoped.code).toBe(2);
+    expect(scoped.stderr).toContain(
+      "Scope is assessed only for evidence-backed findings",
+    );
   });
 
   it("reuses the recorded SVN source pin for same-version re-verification", async () => {
@@ -5189,7 +5208,7 @@ describe("harness CLI vertical slice", () => {
     expect(retried.stdout).toContain(
       `reverified finding ${finding} as ${finding} on wporg:synthetic-plugin 3.3.1`,
     );
-    expect(retried.stdout).toContain(": runtime-confirmed");
+    expect(retried.stdout).toContain(": incomplete");
     expect(verifierReferenceRoutes.at(-1)).toBeUndefined();
     expect(
       ledger().read({ campaignId: "campaign-1", type: "finding-recorded" }),
@@ -5202,7 +5221,7 @@ describe("harness CLI vertical slice", () => {
     expect(after).toHaveLength(before.length + 1);
     expect(after.at(-1)?.event).toMatchObject({
       findingId: finding,
-      result: { status: "runtime-confirmed" },
+      result: { status: "incomplete", reason: "awaiting-human-observation" },
     });
     expect(after.at(-1)?.event).not.toHaveProperty("basis");
     const latest = after.at(-1)?.event;
@@ -5232,13 +5251,12 @@ describe("harness CLI vertical slice", () => {
       "--version",
       "3.3",
     );
-    expect(controlled.code).toBe(0);
-    expect(verifierReferenceRoutes.at(-1)).toBeDefined();
-    expect(
-      ledger()
-        .read({ campaignId: "campaign-1", type: "verification-finished" })
-        .at(-1)?.event,
-    ).toMatchObject({ basis: { kind: "fixed-version" } });
+    // #525: the recheck in the new scenario awaits a human observation, so no
+    // confirmed route exists there yet and the control is still refused.
+    expect(controlled.code).not.toBe(0);
+    expect(controlled.stderr).toContain(
+      "requires the confirmed Finding's Lab scenario",
+    );
   });
 
   it("replays a confirmed route into a separate campaign without adding a verdict to the source campaign", async () => {
@@ -5296,7 +5314,7 @@ describe("harness CLI vertical slice", () => {
       snapshotCampaignId: "source-campaign",
       configPath,
     });
-    expect(replayed.status).toBe("runtime-confirmed");
+    expect(replayed.status).toBe("incomplete");
     expect(
       ledger().read({ campaignId: "source-campaign", limit: 1000 }),
     ).toHaveLength(source.length);
@@ -5304,7 +5322,7 @@ describe("harness CLI vertical slice", () => {
       .read({ campaignId: "smoke-campaign", type: "verification-finished" })
       .at(-1)?.event;
     expect(verification).toMatchObject({
-      result: { status: "runtime-confirmed" },
+      result: { status: "incomplete", reason: "awaiting-human-observation" },
     });
     expect(verification).not.toHaveProperty("basis");
 

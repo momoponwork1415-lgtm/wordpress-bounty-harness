@@ -113,11 +113,6 @@ describe("WordPress campaign session", () => {
       scenario: { id: "approved-comment-v1" },
     });
     expect(session.setupFor(snapshot)).not.toHaveProperty("scenarioId");
-    expect(session.reconstructionFor(snapshot)).toMatchObject({
-      wordpressVersion: "6.8",
-      roles: ["unauthenticated", "subscriber", "customer"],
-      enabledSettings: ["The first published post has one approved comment"],
-    });
     expect(session.verification.promptVersion).toBeDefined();
   });
 
@@ -139,7 +134,6 @@ describe("WordPress campaign session", () => {
       typeof session.setupFor
     >[0];
     expect(session.setupFor(snapshot).snapshotDigest).toBe(snapshot.digest);
-    expect(session.reconstructionFor(snapshot).wordpressVersion).toBe("6.8");
     expect(() => session.verification).toThrow(
       "The legacy Codex Verifier is retired",
     );

@@ -27,18 +27,6 @@ import {
 } from "./precondition-class.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
 
-/** The canary a Finding's impact needs, issued fresh for one attempt; only the Lab observes it. */
-export type WordPressVerifierCanary =
-  | { readonly kind: "execution"; readonly php: string }
-  | {
-      readonly kind: "script";
-      readonly beaconUrl: string;
-      readonly javascript: string;
-      readonly loaderJavascript: string;
-    }
-  | { readonly kind: "principal"; readonly username: string }
-  | { readonly kind: "sql"; readonly table: string };
-
 export type WordPressLowPrivilegeAccounts = Readonly<{
   subscriber: Readonly<{ username: string; password: string }>;
   customer?: Readonly<{ username: string; password: string }>;
@@ -62,7 +50,7 @@ export type WordPressVerifierLab = Readonly<{
   attackerAccounts: WordPressLowPrivilegeAccounts;
 }>;
 
-/** The judge-owned earlier route, already validated, for a version comparison. */
+/** An earlier recorded route, already validated, for a version comparison. */
 export type WordPressVerifierReferenceRoute = Readonly<{
   role: "unauthenticated" | "subscriber" | "customer";
   defaultSettings: boolean;
@@ -75,7 +63,6 @@ export type WordPressVerifierRun = Readonly<{
   runId: string;
   finding: WordPressFinding;
   lab: WordPressVerifierLab;
-  canary?: WordPressVerifierCanary;
   referenceRoute?: WordPressVerifierReferenceRoute;
   /**
    * Ends precondition setup: revokes the setup administrator, then restarts
@@ -169,8 +156,8 @@ function unmetPreconditionCode(classification: ClassifiedPrecondition): string {
 
 /**
  * Runs one Verifier against the Lab it is given and returns the agent's files.
- * It never reads the Finding record, issues canaries, classifies preconditions
- * or writes the ledger; `WordPressVerifier` does that for every transport.
+ * It never reads the Finding record, classifies preconditions or writes the
+ * ledger; `WordPressVerifier` does that for every transport.
  */
 export interface WordPressVerifierTransport {
   /** The transport can prepare ordinary Lab state before attacker observation starts. */
@@ -320,19 +307,10 @@ function verifierLabView(
   };
 }
 
-const CANARY_IMPACTS: ReadonlySet<WordPressFinding["impact"]> = new Set([
-  "rce",
-  "php-file-write",
-  "stored-xss",
-  "auth-bypass-to-admin",
-  "account-takeover",
-  "sqli",
-]);
-
 /**
- * The Harness-owned half of every Verifier attempt: precondition gate, canary
- * issuance, Lab view, run recording and recipe assembly. The transport only
- * runs the agent and returns its files.
+ * The Harness-owned half of every Verifier attempt: precondition gate, Lab
+ * view, run recording and recipe assembly. The transport only runs the agent
+ * and returns its files. No canary is issued since #525 (ADR 0039).
  */
 export class WordPressVerifier implements Verifier<
   WordPressFinding,
@@ -343,15 +321,8 @@ export class WordPressVerifier implements Verifier<
       readonly transport: WordPressVerifierTransport;
       readonly store: PrivateArtifactStore;
       readonly ledger: Ledger;
-      /** Issues the canary a Finding's impact needs; only the Lab can observe it. */
-      readonly lab: Pick<
-        WordPressLab,
-        | "prepareExecutionCanary"
-        | "prepareScriptCanary"
-        | "canaryLedger"
-        | "markCapture"
-        | "finishSetup"
-      >;
+      /** Marks the Harness capture and closes handoff setup. */
+      readonly lab: Pick<WordPressLab, "markCapture" | "finishSetup">;
       readonly clock: () => Date;
     },
   ) {}
@@ -379,48 +350,6 @@ export class WordPressVerifier implements Verifier<
     });
     if (classified.status === "conflict")
       throw new Error("Finding precondition classification conflict");
-  }
-
-  /** The canary the Finding's impact needs, issued fresh for this attempt. */
-  #canaryFor(
-    finding: WordPressFinding,
-    lab: WordPressLabHandle,
-  ): WordPressVerifierCanary | undefined {
-    switch (finding.impact) {
-      case "rce":
-      case "php-file-write": {
-        const canary = this.options.lab.prepareExecutionCanary(lab);
-        return canary === null
-          ? undefined
-          : { kind: "execution", php: canary.php };
-      }
-      case "stored-xss": {
-        const canary = this.options.lab.prepareScriptCanary(lab);
-        return canary === null
-          ? undefined
-          : {
-              kind: "script",
-              beaconUrl: canary.beaconUrl,
-              javascript: canary.javascript,
-              loaderJavascript: canary.loaderJavascript,
-            };
-      }
-      case "auth-bypass-to-admin":
-      case "account-takeover": {
-        const canaries = this.options.lab.canaryLedger(lab);
-        return canaries === null
-          ? undefined
-          : { kind: "principal", username: canaries.adminUser };
-      }
-      case "sqli": {
-        const canaries = this.options.lab.canaryLedger(lab);
-        return canaries === null || canaries.sqlCanary.table.length === 0
-          ? undefined
-          : { kind: "sql", table: canaries.sqlCanary.table };
-      }
-      default:
-        return undefined;
-    }
   }
 
   async attempt({
@@ -501,17 +430,8 @@ export class WordPressVerifier implements Verifier<
         status: "incomplete",
         reason: "precondition",
         nextStep:
-          "catalogue に無い前提: Restore the judge-owned route for the version comparison",
+          "catalogue に無い前提: Restore the recorded route for the version comparison",
       };
-    const canary = this.#canaryFor(finding, lab);
-    if (CANARY_IMPACTS.has(finding.impact) && canary === undefined)
-      return {
-        status: "incomplete",
-        reason: "precondition",
-        nextStep:
-          "catalogue に無い前提: Issue a canary from a fresh Lab and repeat",
-      };
-
     const runId = `verify-${finding.findingId}-${randomUUID()}`;
     let captureMarker = await this.options.lab.markCapture(lab);
     let setupClosed = false;
@@ -519,8 +439,8 @@ export class WordPressVerifier implements Verifier<
       runId,
       finding,
       lab: verifierLabView(lab, finding),
-      // Precondition setup before this call is neither captured nor judged,
-      // and its administrator cannot act after it (#430).
+      // Precondition setup before this call is not captured, and its
+      // administrator cannot act after it (#430).
       restartObservation: async () => {
         try {
           if (!(await this.options.lab.finishSetup(lab))) return false;
@@ -533,7 +453,6 @@ export class WordPressVerifier implements Verifier<
         setupClosed = true;
         return true;
       },
-      ...(canary === undefined ? {} : { canary }),
       ...(routeReference?.success
         ? {
             referenceRoute: {
@@ -560,7 +479,6 @@ export class WordPressVerifier implements Verifier<
       findingId: finding.findingId,
       promptDigest: result.promptDigest,
       receipt: result.receipt,
-      ...(canary === undefined ? {} : { canaryIssued: canary.kind }),
     });
     if (result.outcome.status === "transport-failed")
       throw new VerifierTransportIncompleteError(result.outcome.reason);
@@ -707,8 +625,7 @@ export class WordPressVerifier implements Verifier<
     }
     let session: string | undefined;
     // An empty file explicitly says that no separate principal's session was
-    // observed. This applies to every attacker role; judges still verify the
-    // actual attacker principal from Harness-captured HTTP when required.
+    // observed. This applies to every attacker role.
     const explicitlyEmptySession =
       data["session.json"] !== undefined &&
       data["session.json"].trim().length === 0;

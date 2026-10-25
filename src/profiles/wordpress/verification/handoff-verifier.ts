@@ -25,7 +25,7 @@ import {
 } from "./wordpress-verifier.js";
 
 /** The skill that runs this transport; its body is the fixed instruction the run's promptDigest names. */
-export const WBH_VERIFY_SKILL_ID = "wbh-verify/v9" as const;
+export const WBH_VERIFY_SKILL_ID = "wbh-verify/v10" as const;
 const SKILL_URL = new URL(
   "../../../../.claude/skills/wbh-verify/SKILL.md",
   import.meta.url,
@@ -69,8 +69,9 @@ const ABORT_REASON_CODES = new Set([
  * setup-only `lab.json`, waits for `setup-done`, has the Harness close setup
  * and restart its observation, then releases
  * attacker-only `attack.json` and waits for the six
- * Verifier files or `abort`. It never reads the files'
- * meaning; `WordPressVerifier` and the judges do that as for any transport.
+ * Verifier files or `abort`. It never reads the files' meaning;
+ * `WordPressVerifier` records them as for any transport, and a person
+ * confirms the Finding in a Lab (#525).
  */
 export class HandoffVerifier implements WordPressVerifierTransport {
   readonly preconditionSetup = "transport" as const;
@@ -267,7 +268,6 @@ export class HandoffVerifier implements WordPressVerifierTransport {
                     readOnlyAccount: input.lab.database.readOnlyAccount,
                   },
                 }),
-            ...(input.canary === undefined ? {} : { canary: input.canary }),
             ...(input.referenceRoute === undefined
               ? {}
               : { referenceRoute: input.referenceRoute }),

@@ -122,8 +122,6 @@ async function startWordPress(lab: WordPressLabSession): Promise<string> {
     "WORDPRESS_DB_USER=root",
     "--env",
     `WORDPRESS_DB_PASSWORD=${lab.databasePassword}`,
-    "--env",
-    `WBH_EXECUTION_SALT=${lab.executionSalt}`,
     lab.images.wordpress,
   ]);
   lab.created.add("wordpress");

@@ -16,8 +16,8 @@ export const PROXY_CAPTURE_FILE = "proxy-capture.jsonl";
 export const AUTHORED_HTTP_FILE = "http.json";
 /**
  * The Harness marks a recipe whose capture starts at `setup-done`, after an
- * administrator prepared the Lab (#430). Judges then accept only the Lab
- * attacker in that capture.
+ * administrator prepared the Lab (#430). Only that capture is kept as the
+ * Harness record of the attack.
  */
 export const SETUP_BOUNDARY_FILE = "setup-boundary.json";
 
@@ -43,7 +43,7 @@ const authoredHttpSchema = z.looseObject({
 });
 
 /**
- * Reads a judge's HTTP evidence for `review export`: the captured record when
+ * Reads a verification's HTTP evidence for `review export`: the captured record when
  * the Harness recorded one, else the Verifier's record. Only method, address
  * and status leave this module; Review strips query values and bodies never
  * appear. A capture line that does not parse is left out, not fatal.

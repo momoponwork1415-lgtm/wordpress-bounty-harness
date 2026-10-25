@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,8 +36,6 @@ const browserDiagnostic = {
     imageCount: 1,
     brokenImageCount: 1,
     inlineHandlerCount: 1,
-    canaryAttributeCount: 1,
-    canaryInlineHandlerCount: 1,
   },
   runtime: {
     pageErrorCounts: {
@@ -123,27 +120,19 @@ async function fixture(
     digest: canonicalDigest(snapshotBody),
   };
   const commands: DockerRequest[] = [];
-  /** What the fake database holds in the SQL canary table. */
+  /** What the fake Lab browser and WP-CLI answer. */
   const database = {
-    table: "seeded" as "seeded" | "changed" | "dropped",
-    /** What the WordPress container holds at the Execution Canary path. */
-    execution: "executed" as "executed" | "plain-write" | "absent",
-    /** Canary file paths that no longer exist. */
-    deleted: new Set<string>(),
     /** Option values as `wp option get --format=json` prints them. */
     options: new Map<string, string>([
       ["users_can_register", "0"],
       ["default_role", '"subscriber"'],
     ]),
-    /** Paths whose visit makes the stored script reach the beacon receiver. */
-    firesOn: [] as string[],
-    beacons: [] as string[],
+    /** Paths whose visit shows an alert with the declared marker. */
+    dialogOn: [] as string[],
     browserFailureAt: null as string | null,
     browserFailureMessage: "private-debug-marker",
     browserDiagnosticOutput: "valid" as "valid" | "missing" | "invalid",
   };
-  const salts = new Map<string, string>();
-  let seededRow = "";
   let pluginReadableByCli = false;
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
@@ -275,7 +264,7 @@ async function fixture(
         if (request.args.some((arg) => arg.startsWith("SHOW TABLES FROM ")))
           return {
             exitCode: 0,
-            stdout: "wp_options\nwp_posts\nwbh_canary\ninvalid;table\n",
+            stdout: "wp_options\nwp_posts\ninvalid;table\n",
             stderr: "",
           };
         if (request.args.includes("core") && request.args.includes("version"))
@@ -284,33 +273,6 @@ async function fixture(
             stdout: `${core?.runningVersion ?? "6.8.3"}\n`,
             stderr: "",
           };
-        const saltArg = request.args.find((arg) =>
-          arg.startsWith("WBH_EXECUTION_SALT="),
-        );
-        if (request.args[0] === "run" && saltArg !== undefined)
-          salts.set(
-            request.args[request.args.indexOf("--name") + 1] ?? "",
-            saltArg.slice("WBH_EXECUTION_SALT=".length),
-          );
-        if (
-          request.args[0] === "exec" &&
-          request.args[2] === "cat" &&
-          request.args[3]?.startsWith("/tmp/wbh-execution-")
-        ) {
-          const token = request.args[3]?.replace("/tmp/wbh-execution-", "");
-          if (database.execution === "absent")
-            return { exitCode: 1, stdout: "", stderr: "missing" };
-          return {
-            exitCode: 0,
-            stdout:
-              database.execution === "executed"
-                ? createHash("sha256")
-                    .update(`${token}${salts.get(request.args[1] ?? "")}`)
-                    .digest("hex")
-                : (token ?? ""),
-            stderr: "",
-          };
-        }
         if (
           request.args[0] === "run" &&
           request.args.includes(`verification-browser@${sha("4")}`)
@@ -324,8 +286,23 @@ async function fixture(
               stdout: "",
               stderr: database.browserFailureMessage,
             };
-          if (visit !== undefined && database.firesOn.includes(visit))
-            database.beacons.push("/b/fixed-nonce");
+          const marker = request.args
+            .find((arg) => arg.startsWith("WBH_DIALOG_MARKER="))
+            ?.slice("WBH_DIALOG_MARKER=".length);
+          const dialog =
+            visit !== undefined &&
+            marker !== undefined &&
+            database.dialogOn.includes(visit)
+              ? {
+                  dialogEvent: {
+                    type: "alert",
+                    message: marker,
+                    topLevelPageUrlAtEvent: `http://wordpress${visit}`,
+                    topLevelPageOriginAtEvent: "http://wordpress",
+                    frameUrlsAtEvent: [`http://wordpress${visit}`],
+                  },
+                }
+              : {};
           return {
             exitCode: 0,
             stdout: JSON.stringify({
@@ -333,6 +310,7 @@ async function fixture(
                 Buffer.from("89504e470d0a1a0a", "hex"),
                 Buffer.from("synthetic observer output"),
               ]).toString("base64"),
+              ...dialog,
               ...(database.browserDiagnosticOutput === "missing"
                 ? {}
                 : {
@@ -345,16 +323,6 @@ async function fixture(
             stderr: "",
           };
         }
-        if (
-          request.args[0] === "exec" &&
-          request.args[1]?.endsWith("-canary") &&
-          request.args[2] === "cat"
-        )
-          return {
-            exitCode: database.beacons.length === 0 ? 1 : 0,
-            stdout: database.beacons.map((line) => `${line}\n`).join(""),
-            stderr: "",
-          };
         const option = request.args.indexOf("option");
         if (option >= 0 && request.args[option + 1] === "get") {
           const value = database.options.get(request.args[option + 2] ?? "");
@@ -362,52 +330,11 @@ async function fixture(
             ? { exitCode: 1, stdout: "", stderr: "missing" }
             : { exitCode: 0, stdout: `${value}\n`, stderr: "" };
         }
-        if (request.args[0] === "exec" && request.args[2] === "test")
-          return {
-            exitCode: database.deleted.has(request.args[4] ?? "") ? 1 : 0,
-            stdout: "",
-            stderr: "",
-          };
-        if (request.args[0] === "exec" && request.args[2] === "grep")
-          return {
-            exitCode: 0,
-            stdout: "/var/www/html/wp-content/uploads/synthetic.php\n",
-            stderr: "",
-          };
-        if (request.args.includes("--field=roles"))
-          return { exitCode: 0, stdout: "subscriber\n", stderr: "" };
-        const query = request.args.includes("query")
-          ? (request.args[request.args.indexOf("query") + 1] ?? "")
-          : null;
-        if (query?.startsWith("CREATE TABLE"))
-          seededRow = /'([a-f0-9]{32})'/.exec(query)?.[1] ?? "";
-        else if (query?.includes("information_schema"))
-          return {
-            exitCode: 0,
-            stdout: database.table === "dropped" ? "0\n" : "1\n",
-            stderr: "",
-          };
-        else if (query?.startsWith("SELECT"))
-          return {
-            exitCode: 0,
-            stdout:
-              database.table === "seeded"
-                ? `1\t${seededRow}\n`
-                : `1\t${seededRow}\n2\tadded\n`,
-            stderr: "",
-          };
-        if (request.args.includes("eval"))
-          return {
-            exitCode: 0,
-            stdout: "wbh-canary-fixed-nonce\n",
-            stderr: "",
-          };
         if (request.args.includes("--porcelain"))
           return { exitCode: 0, stdout: "7", stderr: "" };
         return { exitCode: 0, stdout: "ok", stderr: "" };
       },
     },
-    nonce: () => "fixed-nonce",
     healthAttempts: 1,
   });
   const setup = {
@@ -556,49 +483,6 @@ describe("WordPress gVisor Lab", () => {
       expect(args).toContain("--user=33:33");
       expect(args).not.toContain("--allow-root");
     }
-  });
-
-  it("provisions protected canaries only in a verification Lab", async () => {
-    const { lab, snapshot, setup, commands } = await fixture();
-    const discovery = await lab.provision(snapshot, setup, {
-      purpose: "discovery",
-    });
-    expect(discovery.status).toBe("ready");
-    if (discovery.status !== "ready") return;
-    expect(await lab.seedCanaries(discovery.handle)).toMatchObject({
-      status: "seeded",
-    });
-    expect(lab.canaryLedger(discovery.handle)?.sensitiveCanaries).toEqual([]);
-    expect(
-      commands.some((command) =>
-        command.args.includes("--post_status=private"),
-      ),
-    ).toBe(false);
-    await lab.teardown(discovery.handle);
-
-    const verification = await lab.provision(snapshot, setup, {
-      purpose: "verification",
-    });
-    expect(verification.status).toBe("ready");
-    if (verification.status !== "ready") return;
-    expect(await lab.seedCanaries(verification.handle)).toMatchObject({
-      status: "seeded",
-    });
-    expect(
-      lab
-        .canaryLedger(verification.handle)
-        ?.sensitiveCanaries.map((item) => item.kind),
-    ).toEqual(["private-post", "other-user-meta"]);
-    expect(
-      commands.some((command) =>
-        command.args.includes("--post_status=private"),
-      ),
-    ).toBe(true);
-    expect(
-      commands.some((command) => command.args.includes("wbh_private_note")),
-    ).toBe(true);
-    expect(JSON.stringify(verification.handle)).not.toContain("wbh-sensitive-");
-    await lab.teardown(verification.handle);
   });
 
   it("admits only one verification Lab at a time in a shared host lease", async () => {
@@ -1305,7 +1189,7 @@ describe("WordPress gVisor Lab", () => {
     await lab.teardown(provisioned.handle);
   });
 
-  it("grants SELECT only on existing non-canary tables before seeding", async () => {
+  it("grants SELECT only on existing tables", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const provisioned = await lab.provision(snapshot, {
       ...setup,
@@ -1333,17 +1217,7 @@ describe("WordPress gVisor Lab", () => {
     expect(sql.includes("GRANT SELECT ON wordpress.wp_options")).toBe(true);
     expect(sql.includes("GRANT SELECT ON wordpress.wp_posts")).toBe(true);
     expect(sql.includes("wordpress.*")).toBe(false);
-    expect(sql.includes("wbh_canary")).toBe(false);
     expect(sql.includes("invalid;table")).toBe(false);
-    expect(await lab.seedCanaries(provisioned.handle)).toMatchObject({
-      status: "seeded",
-    });
-    const grantIndex = commands.indexOf(grant);
-    const canaryIndex = commands.findIndex((command) =>
-      command.args.some((arg) => arg.startsWith("CREATE TABLE wbh_canary")),
-    );
-    expect(grantIndex).toBeGreaterThanOrEqual(0);
-    expect(canaryIndex).toBeGreaterThan(grantIndex);
     await lab.teardown(provisioned.handle);
   });
 
@@ -1436,7 +1310,7 @@ describe("WordPress gVisor Lab", () => {
     await lab.teardown(provisioned.handle);
   });
 
-  it("provisions two independent internal labs, seeds canaries, and removes resources", async () => {
+  it("provisions two independent internal labs and removes resources", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const first = await lab.provision(snapshot, setup);
     const second = await lab.provision(snapshot, setup);
@@ -1469,17 +1343,12 @@ describe("WordPress gVisor Lab", () => {
     ).toBe(true);
     expect(Object.keys(first.handle.attackerAccounts)).toEqual(["subscriber"]);
     expect(JSON.stringify(first.handle)).not.toContain("harness-admin");
-    const canaries = await lab.seedCanaries(first.handle);
-    expect(canaries.status).toBe("seeded");
-    expect(lab.canaryLedger(first.handle)).toMatchObject({
-      nonce: "fixed-nonce",
-      postId: "7",
-    });
-    const execution = lab.prepareExecutionCanary(first.handle);
-    expect(execution?.php).toContain("file_put_contents");
-    expect(await lab.observeExecution(first.handle)).toMatchObject({
-      status: "executed",
-    });
+    // The Lab seeds nothing for a judge (#525): no canary row, file or account.
+    expect(
+      commands.some((command) =>
+        command.args.some((arg) => /wbh[-_]canary/.test(arg)),
+      ),
+    ).toBe(false);
     expect(
       commands
         .filter(
@@ -1502,7 +1371,6 @@ describe("WordPress gVisor Lab", () => {
       ),
     ).toBe(false);
     expect(await lab.teardown(first.handle)).toEqual({ status: "removed" });
-    expect(lab.canaryLedger(first.handle)).toBeNull();
     expect(await lab.teardown(second.handle)).toEqual({ status: "removed" });
   });
 
@@ -1519,216 +1387,12 @@ describe("WordPress gVisor Lab", () => {
     );
   });
 
-  it("resolves a presented session inside the Lab without placing it in PHP source", async () => {
+  it("ends handoff setup by revoking its administrator (#430, #525)", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
-    const provisioned = await lab.provision(snapshot, setup);
-    if (provisioned.status !== "ready") throw new Error("not ready");
-    expect(
-      await lab.observeSessionUser(provisioned.handle, "synthetic%7C1%7Cvalue"),
-    ).toEqual({ status: "user", login: "wbh-canary-fixed-nonce" });
-    const evaluation = commands.find((command) =>
-      command.args.includes("eval"),
-    );
-    expect(evaluation?.args).toContain(
-      "WBH_SESSION_COOKIE=synthetic%7C1%7Cvalue",
-    );
-    expect(evaluation?.args).toContain("--runtime=runsc");
-    expect(
-      evaluation?.args.some(
-        (arg) => arg.includes("synthetic") && arg.includes("wp_validate"),
-      ),
-    ).toBe(false);
-    const before = commands.length;
-    expect(
-      await lab.observeSessionUser(provisioned.handle, "bad value'"),
-    ).toEqual({ status: "none" });
-    expect(commands.length).toBe(before);
-  });
-
-  it("seeds an administrator canary and records each attacker role baseline", async () => {
-    const { lab, snapshot, setup, commands } = await fixture();
-    const provisioned = await lab.provision(snapshot, setup);
-    if (provisioned.status !== "ready") throw new Error("not ready");
-    expect((await lab.seedCanaries(provisioned.handle)).status).toBe("seeded");
-    const subscriber = provisioned.handle.attackerAccounts.subscriber.username;
-    expect(lab.canaryLedger(provisioned.handle)).toMatchObject({
-      user: "wbh-canary-fixed-nonce",
-      adminUser: "wbh-canary-admin-fixed-nonce",
-      roleBaseline: { [subscriber]: ["subscriber"] },
-    });
-    expect(
-      commands.some(
-        (command) =>
-          command.args.includes("wbh-canary-admin-fixed-nonce") &&
-          command.args.includes("--role=administrator"),
-      ),
-    ).toBe(true);
-    expect(JSON.stringify(provisioned.handle)).not.toContain("canary-admin");
-    expect(
-      await lab.observeAccountRoles(provisioned.handle, subscriber),
-    ).toEqual({
-      status: "roles",
-      roles: ["subscriber"],
-    });
-    const before = commands.length;
-    expect(
-      await lab.observeAccountRoles(provisioned.handle, "bad name;"),
-    ).toEqual({ status: "unavailable" });
-    expect(commands.length).toBe(before);
-  });
-
-  it("gives the administrator canary the configured published secondary locale", async () => {
-    const { lab, snapshot, setup, commands } = await fixture(
-      "ready",
-      undefined,
-      "translatepress-multilingual",
-    );
-    const provisioned = await lab.provision(snapshot, {
-      ...setup,
-      translatePress: { administratorSecondaryLocale: "fr_FR" },
-    });
-    if (provisioned.status !== "ready") throw new Error("not ready");
-    expect((await lab.seedCanaries(provisioned.handle)).status).toBe("seeded");
-    expect(
-      commands.some(
-        (command) =>
-          command.args.includes("eval") &&
-          command.args.some(
-            (arg) =>
-              arg.includes("wbh-canary-admin-fixed-nonce") &&
-              arg.includes('get_user_locale($admin->ID)!=="fr_FR"'),
-          ),
-      ),
-    ).toBe(true);
-  });
-
-  it("seeds a SQL canary row whose value appears nowhere else and reports whether the table changed", async () => {
-    const { lab, snapshot, setup, commands, database } = await fixture();
-    const provisioned = await lab.provision(snapshot, setup);
-    if (provisioned.status !== "ready") throw new Error("not ready");
-    expect(await lab.observeCanaryTable(provisioned.handle)).toEqual({
-      status: "unavailable",
-    });
-    expect((await lab.seedCanaries(provisioned.handle)).status).toBe("seeded");
-    const ledger = lab.canaryLedger(provisioned.handle);
-    expect(ledger?.sqlCanary.table).toBe("wbh_canary");
-    expect(ledger?.sqlCanary.value).toMatch(/^[a-f0-9]{32}$/);
-    // Only the table insert carries the row value; posts, options and files do not.
-    expect(
-      commands.filter((command) =>
-        command.args.some((arg) => arg.includes(ledger!.sqlCanary.value)),
-      ),
-    ).toHaveLength(1);
-    expect(await lab.observeCanaryTable(provisioned.handle)).toEqual({
-      status: "intact",
-    });
-    database.table = "changed";
-    expect(await lab.observeCanaryTable(provisioned.handle)).toEqual({
-      status: "changed",
-    });
-    database.table = "dropped";
-    expect(await lab.observeCanaryTable(provisioned.handle)).toEqual({
-      status: "changed",
-    });
-  });
-
-  it("observes an Execution Canary only when its code ran with the Lab's hidden salt", async () => {
-    const { lab, snapshot, setup, commands, database } = await fixture();
-    const provisioned = await lab.provision(snapshot, setup);
-    if (provisioned.status !== "ready") throw new Error("not ready");
-    expect(await lab.observeExecution(provisioned.handle)).toEqual({
-      status: "not-prepared",
-    });
-    const canary = lab.prepareExecutionCanary(provisioned.handle);
-    expect(canary?.php).toContain("WBH_EXECUTION_SALT");
-    const saltValue = commands
-      .flatMap((command) => command.args)
-      .find((arg) => arg.startsWith("WBH_EXECUTION_SALT="))
-      ?.slice("WBH_EXECUTION_SALT=".length);
-    expect(saltValue).toMatch(/^[a-f0-9]{32}$/);
-    // Neither the handle nor the canary handed to a Verifier carries the salt.
-    expect(JSON.stringify(provisioned.handle)).not.toContain(saltValue);
-    expect(canary?.php).not.toContain(saltValue);
-    expect(await lab.observeExecution(provisioned.handle)).toEqual({
-      status: "executed",
-      files: ["wp-content/uploads/synthetic.php"],
-    });
-    database.execution = "plain-write";
-    expect(await lab.observeExecution(provisioned.handle)).toEqual({
-      status: "not-executed",
-    });
-    database.execution = "absent";
-    expect(await lab.observeExecution(provisioned.handle)).toEqual({
-      status: "not-executed",
-    });
-  });
-
-  it("places secret canary files outside wp-content and reports which ones were deleted", async () => {
-    const { lab, snapshot, setup, commands, database } = await fixture();
-    const provisioned = await lab.provision(snapshot, setup);
-    if (provisioned.status !== "ready") throw new Error("not ready");
-    expect(await lab.observeCanaryFiles(provisioned.handle)).toEqual({
-      status: "unavailable",
-    });
-    expect((await lab.seedCanaries(provisioned.handle)).status).toBe("seeded");
-    const files = lab.canaryLedger(provisioned.handle)?.fileCanaries ?? [];
-    expect(files.map(({ kind, path }) => ({ kind, path }))).toEqual([
-      { kind: "outside-webroot", path: "/etc/wbh-canary" },
-      { kind: "php-source", path: "/var/www/html/wbh-canary.php" },
-    ]);
-    for (const file of files) {
-      expect(file.value).toMatch(/^[a-f0-9]{32}$/);
-      expect(file.path).not.toContain("wp-content");
-      // Only the command that writes the file carries its value.
-      expect(
-        commands.filter((command) =>
-          command.args.some((arg) => arg.includes(file.value)),
-        ),
-      ).toHaveLength(1);
-    }
-    expect(files[0]?.value).not.toBe(files[1]?.value);
-    expect(await lab.observeCanaryFiles(provisioned.handle)).toEqual({
-      status: "observed",
-      deleted: [],
-    });
-    database.deleted.add("/var/www/html/wbh-canary.php");
-    expect(await lab.observeCanaryFiles(provisioned.handle)).toEqual({
-      status: "observed",
-      deleted: ["php-source"],
-    });
-  });
-
-  it("records option baselines at seeding and reports only canary or critical options that changed", async () => {
-    const { lab, snapshot, setup, database } = await fixture();
-    const provisioned = await lab.provision(snapshot, setup);
-    if (provisioned.status !== "ready") throw new Error("not ready");
-    expect(await lab.observeOptions(provisioned.handle)).toEqual({
-      status: "unavailable",
-    });
-    expect((await lab.seedCanaries(provisioned.handle)).status).toBe("seeded");
-    expect(await lab.observeOptions(provisioned.handle)).toEqual({
-      status: "observed",
-      changed: [],
-    });
-    database.options.set("blogdescription", '"changed tagline"');
-    database.options.set("default_role", '"administrator"');
-    database.options.set("wbh_canary_fixed-nonce", '"overwritten"');
-    expect(await lab.observeOptions(provisioned.handle)).toEqual({
-      status: "observed",
-      changed: ["wbh_canary_fixed-nonce", "default_role"],
-    });
-  });
-
-  it("ends handoff setup by revoking its administrator and retaking the option baseline (#430)", async () => {
-    const { lab, snapshot, setup, commands, database } = await fixture();
     const provisioned = await lab.provision(snapshot, setup);
     if (provisioned.status !== "ready") throw new Error("not ready");
     const { handle } = provisioned;
-    expect(await lab.finishSetup(handle)).toBe(false);
-    expect((await lab.seedCanaries(handle)).status).toBe("seeded");
     const setupPassword = lab.reviewAdministrator(handle)?.password;
-    // An ordinary setup change is part of the new baseline, not of the attack.
-    database.options.set("users_can_register", "1");
     expect(await lab.finishSetup(handle)).toBe(true);
     const variable = commands
       .flatMap((command) => command.args)
@@ -1736,11 +1400,7 @@ describe("WordPress gVisor Lab", () => {
     const principals = JSON.parse(
       variable?.slice("WBH_SETUP_PRINCIPALS=".length) ?? "[]",
     ) as [string, string][];
-    expect(principals.map(([login]) => login)).toEqual([
-      "harness-admin",
-      "wbh-canary-admin-fixed-nonce",
-      "wbh-canary-fixed-nonce",
-    ]);
+    expect(principals.map(([login]) => login)).toEqual(["harness-admin"]);
     const rotated = lab.reviewAdministrator(handle)?.password;
     expect(rotated).not.toBe(setupPassword);
     expect(principals[0]?.[1]).toBe(rotated);
@@ -1750,17 +1410,7 @@ describe("WordPress gVisor Lab", () => {
         .flatMap((command) => command.args)
         .filter((arg) => arg.includes(rotated!)),
     ).toEqual([variable]);
-    expect(await lab.observeOptions(handle)).toEqual({
-      status: "observed",
-      changed: [],
-    });
-    database.options.set("default_role", '"administrator"');
-    expect(await lab.observeOptions(handle)).toEqual({
-      status: "observed",
-      changed: ["default_role"],
-    });
-    // A seeded canary that setup moved cannot be restored by a new baseline.
-    database.deleted.add("/etc/wbh-canary");
+    expect(await lab.teardown(handle)).toEqual({ status: "removed" });
     expect(await lab.finishSetup(handle)).toBe(false);
   });
 
@@ -1786,141 +1436,83 @@ describe("WordPress gVisor Lab", () => {
     expect(lab.reviewReceiverIp(handle)).toBeNull();
   });
 
-  it("runs a beacon receiver and reports which page contexts made an issued script canary reach it", async () => {
+  it("opens the declared victim pages and records the marker dialog and screen without deciding (#525)", async () => {
     const { lab, snapshot, setup, commands, database } = await fixture();
     const provisioned = await lab.provision(snapshot, setup, {
       purpose: "verification",
     });
     if (provisioned.status !== "ready") throw new Error("not ready");
     const { handle } = provisioned;
-    const receiver = commands.find((command) =>
-      command.args.includes("canary"),
-    );
-    expect(receiver?.args).toEqual(
-      expect.arrayContaining(["--runtime=runsc", "--read-only"]),
-    );
-    expect(
-      await lab.observeStoredScript(handle, { routePaths: ["/?p=7"] }),
-    ).toEqual({ status: "not-prepared" });
-    expect(lab.prepareScriptCanary(handle)).toEqual({
-      nonce: "fixed-nonce",
-      beaconUrl: "http://canary:8080/b/fixed-nonce",
-      javascript:
-        'fetch("http://canary:8080/b/fixed-nonce", { method: "POST", headers: { "X-WBH-Script-Canary": "fixed-nonce" } });',
-      loaderJavascript: 'import("//canary:8080/c/fixed-nonce")',
-    });
+    const pages = (victim: WordPressVictimRoute) =>
+      lab.observeVictimPages(handle, victim);
 
-    const contexts = async (
-      firesOn: string[],
-      victim?: WordPressVictimRoute,
-    ) => {
-      database.firesOn = firesOn;
-      return lab.observeStoredScript(handle, {
-        routePaths: ["/?p=7"],
-        ...(victim === undefined ? {} : { victim }),
-      });
-    };
-    expect(await contexts(["/"])).toEqual({
-      status: "observed",
-      contexts: ["front"],
-      screenshot: expect.any(Buffer),
-    });
-    expect(await contexts(["/wp-admin/", "/wp-admin/edit.php"])).toEqual({
-      status: "observed",
-      contexts: ["admin-all"],
-      screenshot: expect.any(Buffer),
-    });
-    expect(await contexts(["/wp-admin/"])).toEqual({
-      status: "observed",
-      contexts: ["admin-partial"],
-      screenshot: expect.any(Buffer),
-    });
-    expect(await contexts(["/?p=7"])).toEqual({
-      status: "observed",
-      contexts: ["route-page"],
-      screenshot: expect.any(Buffer),
-    });
-    expect(
-      await contexts(["/wp-admin/admin.php?page=fixture"], {
-        role: "administrator",
-        paths: [
-          {
-            path: "/wp-admin/admin.php?page=fixture",
-            actions: [
-              { kind: "click-text", text: "Choose a value", exact: false },
-              { kind: "fill", selector: "#recipient-search", value: "sample" },
-            ],
-          },
-        ],
-      }),
-    ).toEqual({
-      status: "observed",
-      contexts: ["victim-route-page"],
-      victimRole: "administrator",
-      screenshot: expect.any(Buffer),
-    });
-    expect(
-      await contexts(["/?p=8"], {
-        role: "subscriber",
-        paths: ["/?p=8"],
-      }),
-    ).toEqual({
-      status: "observed",
-      contexts: ["victim-route-page"],
-      victimRole: "subscriber",
-      screenshot: expect.any(Buffer),
-    });
-    expect(await contexts([])).toEqual({ status: "observed", contexts: [] });
-    const noBeaconVictimVisit = await contexts([], {
+    const adminVisit = await pages({
       role: "administrator",
-      paths: ["/wp-admin/admin.php?page=fixture"],
+      paths: [
+        {
+          path: "/wp-admin/admin.php?page=fixture",
+          actions: [
+            { kind: "click-text", text: "Choose a value", exact: false },
+            { kind: "fill", selector: "#recipient-search", value: "sample" },
+          ],
+        },
+      ],
     });
-    expect(noBeaconVictimVisit).toEqual({
+    expect(adminVisit).toEqual({
       status: "observed",
-      contexts: [],
+      victimRole: "administrator",
       screenshot: expect.any(Buffer),
       victimBrowserDiagnostic: browserDiagnostic,
     });
-    expect(JSON.stringify(noBeaconVictimVisit)).not.toContain("page=fixture");
+    expect(JSON.stringify(adminVisit)).not.toContain("page=fixture");
+    expect(await pages({ role: "subscriber", paths: ["/?p=8"] })).toMatchObject(
+      { status: "observed", victimRole: "subscriber" },
+    );
+
+    const marker = "5837294610";
+    database.dialogOn = ["/?p=9"];
+    const dialog = await pages({
+      role: "unauthenticated",
+      paths: ["/?p=8", "/?p=9"],
+      dialogMarker: marker,
+    });
+    expect(dialog).toMatchObject({
+      status: "observed",
+      victimRole: "unauthenticated",
+      dialog: {
+        visitIndex: 1,
+        event: { type: "alert", message: marker },
+        screenshot: expect.any(Buffer),
+      },
+    });
+    database.dialogOn = [];
 
     database.browserDiagnosticOutput = "missing";
     expect(
-      await contexts(["/wp-admin/admin.php?page=fixture"], {
+      await pages({
         role: "administrator",
         paths: ["/wp-admin/admin.php?page=fixture"],
       }),
     ).toEqual({
       status: "observed",
-      contexts: ["victim-route-page"],
       victimRole: "administrator",
-      screenshot: expect.any(Buffer),
-    });
-    expect(
-      await contexts([], {
-        role: "administrator",
-        paths: ["/wp-admin/admin.php?page=fixture"],
-      }),
-    ).toEqual({
-      status: "observed",
-      contexts: [],
       screenshot: expect.any(Buffer),
     });
     database.browserDiagnosticOutput = "invalid";
     expect(
-      await contexts(["/wp-admin/admin.php?page=fixture"], {
+      await pages({
         role: "administrator",
         paths: ["/wp-admin/admin.php?page=fixture"],
       }),
     ).toEqual({
       status: "observed",
-      contexts: ["victim-route-page"],
       victimRole: "administrator",
       screenshot: expect.any(Buffer),
     });
     database.browserDiagnosticOutput = "valid";
 
     database.browserFailureAt = "/wp-admin/admin.php?page=fixture";
-    const failedVictimVisit = await contexts([], {
+    const failedVictimVisit = await pages({
       role: "administrator",
       paths: ["/wp-admin/admin.php?page=fixture"],
     });
@@ -1932,7 +1524,7 @@ describe("WordPress gVisor Lab", () => {
     });
     expect(JSON.stringify(failedVictimVisit)).not.toContain("page=fixture");
     database.browserFailureMessage = "x".repeat(20_000);
-    const boundedFailure = await contexts([], {
+    const boundedFailure = await pages({
       role: "administrator",
       paths: ["/wp-admin/admin.php?page=fixture"],
     });
@@ -1946,7 +1538,7 @@ describe("WordPress gVisor Lab", () => {
     expect(boundedFailure.privateDiagnostic?.length).toBe(16 * 1024);
     database.browserFailureMessage = "Victim action left the Lab origin";
     expect(
-      await contexts([], {
+      await pages({
         role: "administrator",
         paths: ["/wp-admin/admin.php?page=fixture"],
       }),
@@ -1954,17 +1546,6 @@ describe("WordPress gVisor Lab", () => {
       status: "unavailable",
       phase: "victim-page",
       failureCode: "victim-navigation",
-    });
-    database.browserFailureMessage = "Victim request carried the script canary";
-    expect(
-      await contexts([], {
-        role: "administrator",
-        paths: ["/wp-admin/admin.php?page=fixture"],
-      }),
-    ).toEqual({
-      status: "unavailable",
-      phase: "victim-page",
-      failureCode: "victim-canary-request",
     });
     database.browserFailureAt = null;
 
@@ -1976,23 +1557,21 @@ describe("WordPress gVisor Lab", () => {
     expect(browsers.length).toBeGreaterThan(0);
     for (const browser of browsers) {
       expect(browser.args).toContain("--runtime=runsc");
-      expect(browser.args).toContain("--add-host=canary:172.20.0.5");
+      expect(browser.args.some((arg) => arg.includes("canary"))).toBe(false);
     }
-    // Only the admin visits log in, and only the Lab's own browser sees that account.
+    // Only the declared pages are opened; nothing else is visited for a verdict.
     expect(
       browsers
-        .filter((browser) =>
-          browser.args.includes("WBH_LOGIN_USER=harness-admin"),
-        )
         .map((browser) =>
           browser.args.find((arg) => arg.startsWith("WBH_VISIT_PATH=")),
+        )
+        .filter(
+          (arg) =>
+            arg !== "WBH_VISIT_PATH=/wp-admin/admin.php?page=fixture" &&
+            arg !== "WBH_VISIT_PATH=/?p=8" &&
+            arg !== "WBH_VISIT_PATH=/?p=9",
         ),
-    ).toEqual(
-      expect.arrayContaining([
-        "WBH_VISIT_PATH=/wp-admin/",
-        "WBH_VISIT_PATH=/wp-admin/edit.php",
-      ]),
-    );
+    ).toEqual([]);
     expect(
       browsers.some(
         (browser) =>
@@ -2006,11 +1585,6 @@ describe("WordPress gVisor Lab", () => {
         browser.args.includes(
           'WBH_VISIT_ACTIONS=[{"kind":"click-text","text":"Choose a value","exact":false},{"kind":"fill","selector":"#recipient-search","value":"sample"}]',
         ),
-      ),
-    ).toBe(true);
-    expect(
-      browsers.every((browser) =>
-        browser.args.includes('WBH_SCRIPT_NONCES=["fixed-nonce"]'),
       ),
     ).toBe(true);
     expect(
@@ -2028,49 +1602,16 @@ describe("WordPress gVisor Lab", () => {
     expect(JSON.stringify(handle)).not.toContain("harness-admin");
     expect(JSON.stringify(handle)).not.toContain("wbh-victim-subscriber-");
     expect(
-      commands.some((command) =>
-        command.args.some((arg) => arg.startsWith("wbh-victim-subscriber-")),
-      ),
-    ).toBe(true);
-    expect(
-      await lab.observeStoredScript(handle, { routePaths: ["no-slash"] }),
-    ).toEqual({ status: "unavailable", phase: "route-input" });
-    expect(
-      await lab.observeStoredScript(handle, {
-        routePaths: [],
-        victim: { role: "administrator", paths: ["/\\outside.invalid"] },
-      }),
+      await pages({ role: "administrator", paths: ["/\\outside.invalid"] }),
     ).toEqual({ status: "unavailable", phase: "victim-input" });
-    expect(
-      await lab.observeStoredScript(handle, {
-        routePaths: ["/?q=fixed-nonce"],
-      }),
-    ).toEqual({
-      status: "unavailable",
-      phase: "route-input",
-      failureCode: "observer-canary-input",
-    });
-    expect(
-      await lab.observeStoredScript(handle, {
-        routePaths: [`/?q=${Buffer.from("fixed-nonce").toString("base64")}`],
-      }),
-    ).toEqual({
-      status: "unavailable",
-      phase: "route-input",
-      failureCode: "observer-canary-input",
-    });
-    const marker = "5837294610";
     const doubleEncodedMarker = [...marker]
       .map((digit) => `%25${digit.charCodeAt(0).toString(16)}`)
       .join("");
     expect(
-      await lab.observeStoredScript(handle, {
-        routePaths: [`/?q=${doubleEncodedMarker}`],
-        victim: {
-          role: "unauthenticated",
-          paths: ["/"],
-          dialogMarker: marker,
-        },
+      await pages({
+        role: "unauthenticated",
+        paths: [`/?q=${doubleEncodedMarker}`],
+        dialogMarker: marker,
       }),
     ).toEqual({
       status: "unavailable",
@@ -2078,51 +1619,17 @@ describe("WordPress gVisor Lab", () => {
       failureCode: "observer-marker-input",
     });
     expect(
-      await lab.observeStoredScript(handle, {
-        routePaths: [],
-        victim: {
-          role: "administrator",
-          paths: [
-            {
-              path: "/wp-admin/",
-              actions: [
-                {
-                  kind: "fill",
-                  selector: "#field",
-                  value: "fixed-nonce",
-                },
-              ],
-            },
-          ],
-        },
-      }),
-    ).toEqual({
-      status: "unavailable",
-      phase: "victim-input",
-      failureCode: "observer-canary-input",
-    });
-    expect(
-      await lab.observeStoredScript(handle, {
-        routePaths: [],
-        victim: {
-          role: "administrator",
-          paths: [
-            {
-              path: "/wp-admin/",
-              actions: [{ kind: "evaluate", source: "alert(1)" }],
-            },
-          ],
-        } as unknown as WordPressVictimRoute,
-      }),
+      await pages({
+        role: "administrator",
+        paths: [
+          {
+            path: "/wp-admin/",
+            actions: [{ kind: "evaluate", source: "alert(1)" }],
+          },
+        ],
+      } as unknown as WordPressVictimRoute),
     ).toEqual({ status: "unavailable", phase: "victim-input" });
     expect(await lab.teardown(handle)).toEqual({ status: "removed" });
-    expect(
-      commands.some(
-        (command) =>
-          command.args[0] === "rm" &&
-          command.args.some((arg) => arg.endsWith("-canary")),
-      ),
-    ).toBe(true);
   });
 
   it("observes only a selected popup that inherits the Lab origin", async () => {
@@ -2131,15 +1638,11 @@ describe("WordPress gVisor Lab", () => {
       purpose: "verification",
     });
     if (provisioned.status !== "ready") throw new Error("not ready");
-    lab.prepareScriptCanary(provisioned.handle);
-    await lab.observeStoredScript(provisioned.handle, {
-      routePaths: [],
-      victim: {
-        role: "unauthenticated",
-        paths: [
-          { path: "/?p=7", actions: [{ kind: "click", selector: "#open" }] },
-        ],
-      },
+    await lab.observeVictimPages(provisioned.handle, {
+      role: "unauthenticated",
+      paths: [
+        { path: "/?p=7", actions: [{ kind: "click", selector: "#open" }] },
+      ],
     });
     const visit = commands.find((command) =>
       command.args.includes("WBH_VISIT_PATH=/?p=7"),
@@ -2254,7 +1757,6 @@ describe("WordPress gVisor Lab", () => {
             WBH_VISIT_ACTIONS: JSON.stringify([
               { kind: "click", selector: "#open" },
             ]),
-            WBH_SCRIPT_NONCES: '["marker"]',
           },
           stdout: {
             write: (value: string) =>
@@ -2293,8 +1795,7 @@ describe("WordPress gVisor Lab", () => {
         elementCount: 2,
         imageCount: 1,
         brokenImageCount: 1,
-        canaryAttributeCount: 1,
-        canaryInlineHandlerCount: 1,
+        inlineHandlerCount: 1,
       },
       runtime: {
         pageErrorCounts: { syntax: 1 },

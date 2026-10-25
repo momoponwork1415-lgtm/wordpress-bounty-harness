@@ -44,13 +44,9 @@ import {
   type WordPressSelectionPolicy,
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
+import { createWordPressAttemptObserver } from "../profiles/wordpress/verification/attempt-observer.js";
 import { WBH_VERIFY_SKILL_ID } from "../profiles/wordpress/verification/handoff-verifier.js";
-import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import { createWordPressLabStateObserver } from "../profiles/wordpress/verification/lab-state-diff.js";
-import {
-  wordpressReproductionRenderer,
-  type WordPressReconstruction,
-} from "../profiles/wordpress/verification/reproduction-package.js";
 import type { CliState } from "./index.js";
 import type { RuntimeTargetCaps } from "./pipeline.js";
 
@@ -240,7 +236,7 @@ export type WordPressCliProfileOptions = {
   readonly scopePolicy: WordpressScopePolicy;
   /** Git-outside legacy history JSON, read on every selection (D2). */
   readonly legacyHistoryFile?: string;
-  /** Overrides the scope facts read from judge evidence and the selection record. */
+  /** Overrides the scope facts read from recorded judge evidence and the selection record. */
   readonly scopeFacts?: ScopeFactsProvider<WordpressScopeInput>;
   /** Local Wordfence history mirror; absent, duplicate lookup is unavailable. */
   readonly wordfenceHistory?: {
@@ -252,8 +248,7 @@ export type WordPressCliProfileOptions = {
 export type WordPressVerification = Verification<
   WordPressFinding,
   WordPressLabSetup,
-  WordPressLabHandle,
-  WordPressReconstruction
+  WordPressLabHandle
 >;
 
 /** The campaign config file, validated; a budget below one discovery run stops here. */
@@ -352,35 +347,6 @@ const setupFor =
     };
   };
 
-const reconstructionFor =
-  (config: WordPressCampaignConfig) =>
-  (snapshot: Snapshot): WordPressReconstruction => ({
-    wordpressVersion: config.wordpressVersion,
-    target: snapshot.target,
-    enabledSettings: [
-      ...(config.lab.translatePress === undefined &&
-      config.lab.scenarioId !== "translatepress-translation-data-v1"
-        ? []
-        : [
-            `TranslatePress publishes ${config.lab.translatePress?.administratorSecondaryLocale ?? "fr_FR"} as a secondary language`,
-            `The administrator uses ${config.lab.translatePress?.administratorSecondaryLocale ?? "fr_FR"} as profile locale`,
-          ]),
-      ...(config.lab.scenarioId === "translatepress-translation-data-v1"
-        ? ["TranslatePress has one ordinary reviewed translation"]
-        : []),
-      ...(config.lab.initialApprovedComment === true ||
-      config.lab.scenarioId === "approved-comment-v1" ||
-      config.lab.scenarioId === "translatepress-translation-data-v1"
-        ? ["The first published post has one approved comment"]
-        : []),
-    ],
-    roles: [
-      "unauthenticated",
-      "subscriber",
-      ...(config.lab.customerRole ? ["customer"] : []),
-    ],
-  });
-
 function verificationFor(
   state: CliState,
   boundaries: WordPressCampaignBoundaries,
@@ -398,9 +364,12 @@ function verificationFor(
     store: state.store,
     lab: boundaries.lab,
     verifier,
-    judges: createWordPressJudges({ store: state.store, lab: boundaries.lab }),
+    // Records the Lab's capture and browser; a person confirms in a Lab (#525).
+    observer: createWordPressAttemptObserver({
+      store: state.store,
+      lab: boundaries.lab,
+    }),
     readFinding: readWordPressFinding,
-    renderer: wordpressReproductionRenderer,
     // The skill id is the prompt version of a handoff run; the ledger tells the two apart.
     promptVersion:
       handoff === undefined
@@ -430,7 +399,6 @@ export interface WordPressCampaignSession {
   readonly policy: () => Promise<WordPressSelectionPolicy>;
   readonly boundaries: WordPressCampaignBoundaries;
   readonly setupFor: (snapshot: Snapshot) => WordPressLabSetup;
-  readonly reconstructionFor: (snapshot: Snapshot) => WordPressReconstruction;
   /** Built once on use; administration and history access require no Verifier. */
   readonly verification: WordPressVerification;
 }
@@ -459,7 +427,6 @@ export async function openWordPressCampaignSession(
     policy: () => (policy ??= readWordPressCampaignPolicy(config)),
     boundaries,
     setupFor: setupFor(config),
-    reconstructionFor: reconstructionFor(config),
     get verification() {
       return (verification ??= verificationFor(
         state,

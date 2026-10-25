@@ -15,15 +15,22 @@ import { Ledger } from "../../../src/ledger/index.js";
 import {
   admitWordPressFinding,
   readWordPressFinding,
+  type WordPressFinding,
 } from "../../../src/profiles/wordpress/discovery/finding.js";
 import { openWordPressLab } from "../../../src/profiles/wordpress/lab/index.js";
+import { observedReviewLabPackage } from "../../../src/profiles/wordpress/lab/observed-review-lab.js";
+import { createWordPressAttemptObserver } from "../../../src/profiles/wordpress/verification/attempt-observer.js";
 import {
   HandoffVerifier,
   WBH_VERIFY_SKILL_ID,
 } from "../../../src/profiles/wordpress/verification/handoff-verifier.js";
-import { createWordPressJudges } from "../../../src/profiles/wordpress/verification/judges.js";
-import { wordpressReproductionRenderer } from "../../../src/profiles/wordpress/verification/reproduction-package.js";
+import { createWordPressVerifierRecordReader } from "../../../src/profiles/wordpress/verification/verifier-record.js";
 import { WordPressVerifier } from "../../../src/profiles/wordpress/verification/wordpress-verifier.js";
+import {
+  currentManualObservation,
+  recordManualObservation,
+  recordManualObservationLabReady,
+} from "../../../src/review/manual-observation.js";
 import type { Snapshot } from "../../../src/snapshot/index.js";
 import { Verification } from "../../../src/verification/index.js";
 
@@ -34,15 +41,19 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 
-/** The fake Docker host: roles, sessions (cookie → login) and the recorder's bytes. */
+/** The fake Docker host: sessions (cookie → login), the recorder's bytes and browser visits. */
 type LabState = {
   attacker: string;
-  readonly roles: Map<string, string[]>;
   readonly sessions: Map<string, string>;
   capture: Buffer;
-  seededRow: string;
   readonly revoked: string[];
+  readonly visits: string[];
 };
+const PNG = Buffer.concat([
+  Buffer.from("89504e470d0a1a0a", "hex"),
+  Buffer.from("synthetic screen"),
+]);
+const MARKER = "4815162342";
 
 /** One recorder line for a host request carrying `cookie`. */
 function send(state: LabState, cookie: string, path: string): void {
@@ -73,12 +84,11 @@ async function until(path: string): Promise<string> {
 }
 
 type Scenario = {
-  /** What the skill does with the setup administrator before `setup-done`. */
-  readonly setup?: (state: LabState) => void;
-  /** What happens after `attack.json`, besides one attacker request. */
-  readonly attack?: (state: LabState) => void;
-  /** The `session.json` text the skill reports. */
-  readonly session?: string;
+  readonly impact?: WordPressFinding["impact"];
+  /** The skill sends no attacker request after `setup-done`. */
+  readonly silent?: boolean;
+  /** The victim pages `route.json` declares for the Lab browser. */
+  readonly victim?: unknown;
 };
 
 /** The skill's side: setup as the administrator, `setup-done`, then the attacker route. */
@@ -88,28 +98,39 @@ async function skill(directory: string, state: LabState, scenario: Scenario) {
   };
   state.sessions.set("admin-session", lab.administrator.username);
   send(state, "admin-session", "/wp-admin/options-general.php");
-  scenario.setup?.(state);
   await writeFile(join(directory, "setup-done"), "");
-  await until(join(directory, "attack.json"));
+  const attack = JSON.parse(
+    await until(join(directory, "attack.json")),
+  ) as Record<string, unknown>;
   const revokedBeforeAttack = [...state.revoked];
   state.sessions.set("attacker-session", state.attacker);
-  send(state, "attacker-session", "/synthetic");
-  scenario.attack?.(state);
+  if (scenario.silent !== true) send(state, "attacker-session", "/synthetic");
   for (const [name, text] of Object.entries({
-    "route.json":
-      '{"role":"subscriber","defaultSettings":true,"steps":[{"kind":"http","method":"GET","path":"/synthetic","expected":"Administrator access"}]}',
+    "route.json": JSON.stringify({
+      role: "subscriber",
+      defaultSettings: true,
+      steps: [
+        {
+          kind: "http",
+          method: "GET",
+          path: "/synthetic",
+          expected: "The claimed effect",
+        },
+      ],
+      ...(scenario.victim === undefined ? {} : { victim: scenario.victim }),
+    }),
     "http.json":
       '{"exchanges":[{"request":{"method":"GET","path":"/synthetic"},"response":{"body":"ok"}}]}',
-    "session.json": scenario.session ?? "",
+    "session.json": "",
     "steps.md": "Synthetic steps",
     "refutation.md": "",
     precondition: "",
   }))
     await writeFile(join(directory, name), text);
-  return { revokedBeforeAttack };
+  return { revokedBeforeAttack, attack };
 }
 
-/** Real Lab code over a fake Docker host, the real handoff transport and the real judges. */
+/** Real Lab code over a fake Docker host, the real handoff transport and the real observer. */
 async function verifyThroughHandoff(scenario: Scenario) {
   const root = await mkdtemp(join(tmpdir(), "wbh-handoff-e2e-"));
   directories.push(root);
@@ -129,11 +150,10 @@ async function verifyThroughHandoff(scenario: Scenario) {
   const snapshot: Snapshot = { ...body, digest: canonicalDigest(body) };
   const state: LabState = {
     attacker: "",
-    roles: new Map(),
     sessions: new Map(),
     capture: Buffer.alloc(0),
-    seededRow: "",
     revoked: [],
+    visits: [],
   };
   const ok = (stdout = "ok") => ({ exitCode: 0, stdout, stderr: "" });
   const lab = openWordPressLab({
@@ -189,21 +209,31 @@ async function verifyThroughHandoff(scenario: Scenario) {
           state.revoked.push(...logins);
           return ok();
         }
-        const cookie = env("WBH_SESSION_COOKIE");
-        if (cookie !== undefined)
-          return ok(`${state.sessions.get(cookie) ?? ""}\n`);
-        if (args.includes("--field=roles"))
-          return ok((state.roles.get(at("get")) ?? ["subscriber"]).join(","));
-        if (at("option") === "get") return ok('"subscriber"\n');
-        const query = args.includes("query") ? at("query") : "";
-        if (query.startsWith("CREATE TABLE"))
-          state.seededRow = /'([a-f0-9]{32})'/.exec(query)?.[1] ?? "";
-        if (query.includes("information_schema")) return ok("1\n");
-        if (query.startsWith("SELECT")) return ok(`1\t${state.seededRow}\n`);
+        const visit = env("WBH_VISIT_PATH");
+        if (visit !== undefined) {
+          // The Lab browser: one victim visit, with a dialog when a marker is declared.
+          state.visits.push(visit);
+          const marker = env("WBH_DIALOG_MARKER");
+          return ok(
+            JSON.stringify({
+              screenshotBase64: PNG.toString("base64"),
+              ...(marker === undefined
+                ? {}
+                : {
+                    dialogEvent: {
+                      type: "alert",
+                      message: marker,
+                      topLevelPageUrlAtEvent: "http://wordpress/?p=1",
+                      topLevelPageOriginAtEvent: "http://wordpress",
+                      frameUrlsAtEvent: ["http://wordpress/?p=1"],
+                    },
+                  }),
+            }),
+          );
+        }
         return ok(args.includes("--porcelain") ? "7" : "ok");
       },
     },
-    nonce: () => "fixed-nonce",
     healthAttempts: 1,
   });
   const store = new PrivateArtifactStore({
@@ -219,7 +249,7 @@ async function verifyThroughHandoff(scenario: Scenario) {
     {
       claim: "Synthetic subscriber escalation claim",
       attackerPosition: "subscriber",
-      impact: "privesc-to-admin",
+      impact: scenario.impact ?? "privesc-to-admin",
       configurationPrecondition: "default",
       brokenProperty: "Synthetic property",
       sourceTrace: [{ file: "example.php", function: "fixture", line: 1 }],
@@ -253,9 +283,8 @@ async function verifyThroughHandoff(scenario: Scenario) {
     ledger,
     store,
     lab,
-    judges: createWordPressJudges({ store, lab }),
+    observer: createWordPressAttemptObserver({ store, lab }),
     readFinding: readWordPressFinding,
-    renderer: wordpressReproductionRenderer,
     promptVersion: WBH_VERIFY_SKILL_ID,
     // The same composition as `verify next --handoff` in the CLI host.
     verifier: {
@@ -292,81 +321,144 @@ async function verifyThroughHandoff(scenario: Scenario) {
         customerRole: false,
       },
       campaignLabSetupDigest: sha("b"),
-      reconstruction: {
-        wordpressVersion: "6.8",
-        target: snapshot.target,
-        enabledSettings: [],
-        roles: ["unauthenticated", "subscriber"],
-      },
     }),
     skill(directory, state, scenario),
   ]);
   const event = ledger
     .read({ campaignId: "campaign-1", type: "verification-finished" })
     .at(0)?.event;
-  return { result, event, ...observed };
+  return { result, event, ledger, store, finding, state, ...observed };
 }
 
-const escalate = (state: LabState) =>
-  state.roles.set(state.attacker, ["administrator", "subscriber"]);
+const AWAITING = {
+  status: "incomplete",
+  reason: "awaiting-human-observation",
+} as const;
 
-describe("handoff verification through the real transport and judges (#430)", () => {
-  it.each([
-    [
-      "setup gives the attacker account the administrator role",
-      { setup: escalate },
-      { reason: "evidence", nextStep: expect.stringMatching(/role baseline/) },
-    ],
-    [
-      "setup signs in as the administrator canary and reports that session",
-      {
-        setup: (state: LabState) =>
-          state.sessions.set("canary-session", "wbh-canary-admin-fixed-nonce"),
-        session: '{"cookie":"canary-session"}',
-      },
-      { reason: "observation" },
-    ],
-    [
-      "the setup administrator's session is used after setup-done",
-      {
-        attack: (state: LabState) => {
-          send(state, "admin-session", "/wp-admin/users.php");
-          escalate(state);
-        },
-      },
-      {
-        reason: "evidence",
-        nextStep: "A post-setup request session differs from the Lab attacker",
-      },
-    ],
-  ] as const)(
-    "keeps the result incomplete when %s",
-    async (_name, scenario: Scenario, reason) => {
-      const { result, event, revokedBeforeAttack } =
-        await verifyThroughHandoff(scenario);
-      expect(result).toMatchObject({ status: "incomplete", ...reason });
-      expect(event).toMatchObject({
-        type: "verification-finished",
-        promptVersion: WBH_VERIFY_SKILL_ID,
-        result: { status: "incomplete", ...reason },
-      });
-      // The setup administrator and the canary principals lost their sessions
-      // before the attacker data was released.
-      expect(revokedBeforeAttack).toEqual([
-        "harness-admin",
-        "wbh-canary-admin-fixed-nonce",
-        "wbh-canary-fixed-nonce",
-      ]);
-    },
-  );
-
-  it("confirms a change the attacker route makes after setup-done", async () => {
-    const { result, event } = await verifyThroughHandoff({ attack: escalate });
-    expect(result).toMatchObject({
-      status: "runtime-confirmed",
-      judgeId: "wordpress-administrator-principal",
-      conditions: { reachedRole: "administrator", observedVia: "role-change" },
+describe("handoff verification through the real transport and observer (#525)", () => {
+  it("records a finished handoff as awaiting a human observation, with the Harness capture", async () => {
+    const { result, event, store, attack, revokedBeforeAttack } =
+      await verifyThroughHandoff({});
+    expect(result).toMatchObject(AWAITING);
+    expect(event).toMatchObject({
+      type: "verification-finished",
+      promptVersion: WBH_VERIFY_SKILL_ID,
+      evidenceCapture: "harness-captured",
+      result: AWAITING,
     });
-    expect(event).toMatchObject({ evidenceCapture: "harness-captured" });
+    // The attacker data carries no canary, and setup ended before it was released.
+    expect(attack).not.toHaveProperty("canary");
+    expect(revokedBeforeAttack).toEqual(["harness-admin"]);
+    if (result.status !== "incomplete" || result.evidenceDigest === undefined)
+      throw new Error("No evidence was recorded");
+    const capture = await store.readFile(
+      result.evidenceDigest,
+      "proxy-capture.jsonl",
+      1024 * 1024,
+    );
+    expect(capture.status).toBe("resolved");
+    // Only what the attacker sent after setup-done is the Harness record.
+    if (capture.status === "resolved") {
+      expect(capture.bytes.toString()).toContain("/synthetic");
+      expect(capture.bytes.toString()).not.toContain("options-general.php");
+    }
+  });
+
+  it("keeps a handoff with no captured attacker request incomplete(evidence)", async () => {
+    const { result } = await verifyThroughHandoff({ silent: true });
+    expect(result).toMatchObject({ status: "incomplete", reason: "evidence" });
+  });
+
+  it("has the Lab browser record the victim pages' marker dialog without deciding (stored XSS)", async () => {
+    const { result, event, store, state } = await verifyThroughHandoff({
+      impact: "stored-xss",
+      victim: {
+        role: "administrator",
+        paths: ["/wp-admin/edit-comments.php"],
+        dialogMarker: MARKER,
+      },
+    });
+    expect(result).toMatchObject(AWAITING);
+    expect(state.visits).toEqual(["/wp-admin/edit-comments.php"]);
+    if (result.status !== "incomplete" || result.evidenceDigest === undefined)
+      throw new Error("No evidence was recorded");
+    const record = await store.readJson(
+      result.evidenceDigest,
+      "lab-browser-observation.json",
+      (await import("zod")).z.looseObject({}),
+      64 * 1024,
+    );
+    expect(record).toMatchObject({
+      status: "resolved",
+      value: {
+        observerId: "wordpress-lab-browser",
+        status: "visited",
+        victimRole: "administrator",
+        dialog: { marker: MARKER, visitIndex: 0 },
+      },
+    });
+    const recipe =
+      event?.type === "verification-finished"
+        ? event.artifacts.find((artifact) => artifact.kind === "recipe")
+        : undefined;
+    const observed = await createWordPressVerifierRecordReader({
+      store,
+    }).read({
+      recipeDigest: recipe!.digest,
+      evidenceDigest: result.evidenceDigest,
+    });
+    expect(observed.victim).toMatchObject({
+      role: "administrator",
+      firing: "observed",
+      screenshot: expect.stringContaining("victim-page-after-dialog.png"),
+    });
+  });
+
+  it("lets a named person record a Lab observation for the result (#525)", async () => {
+    const { result, event, ledger, store, finding } =
+      await verifyThroughHandoff({});
+    if (event?.type !== "verification-finished") throw new Error("no event");
+    const ref = {
+      campaignId: "campaign-1",
+      findingId: finding.findingId,
+      verificationId: event.verificationId,
+      snapshotDigest: event.snapshotDigest,
+    };
+    const admitted = await observedReviewLabPackage({ ledger, store, ref });
+    expect(admitted).toEqual({
+      packageDigest: expect.stringMatching(/^sha256:/),
+      recipeDigest: expect.stringMatching(/^sha256:/),
+      evidenceDigest:
+        result.status === "incomplete" ? result.evidenceDigest : undefined,
+    });
+    const receipt = await recordManualObservationLabReady({
+      ledger,
+      store,
+      ref,
+      packageDigest: admitted!.packageDigest,
+      sessionLabel: "wbh-review-net",
+    });
+    const recorded = await recordManualObservation({
+      ledger,
+      store,
+      ref,
+      packageDigest: admitted!.packageDigest,
+      sessionReceiptDigest: receipt,
+      evidence: new TextEncoder().encode("screen recording notes"),
+      result: "match",
+      recordedBy: "owner",
+    });
+    expect(recorded).toMatchObject({
+      type: "manual-observation-recorded",
+      result: "match",
+    });
+    expect(currentManualObservation(ledger, ref)).toMatchObject({
+      result: "match",
+      recordedBy: "owner",
+    });
+    // The verification event itself is never rewritten into a confirmation.
+    expect(
+      ledger.read({ type: "verification-finished" }).at(-1)?.event,
+    ).toMatchObject({ result: AWAITING });
   });
 });

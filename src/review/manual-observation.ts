@@ -85,7 +85,8 @@ export function currentObservationVerification(
     latest.verificationId !== parsed.verificationId ||
     latest.snapshotDigest !== parsed.snapshotDigest ||
     latest.result.status !== "incomplete" ||
-    latest.result.reason !== "observation"
+    (latest.result.reason !== "observation" &&
+      latest.result.reason !== "awaiting-human-observation")
   )
     return null;
 
@@ -227,7 +228,7 @@ function matchingReady(
     : null;
 }
 
-/** Only a named human may record a result; the judge verdict remains incomplete. */
+/** Only a named human may record a result; the verification result stays incomplete. */
 export async function recordManualObservation(input: {
   readonly ledger: Ledger;
   readonly store: PrivateArtifactStore;
