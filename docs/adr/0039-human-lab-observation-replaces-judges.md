@@ -1,0 +1,40 @@
+---
+status: accepted
+date: 2026-10-25
+supersedes: 0004
+amends: 0021（判定器と canary の回収）, 0026（観測器の判定）, 0031（決定論の観測から判定器を外す）, 0035（canary と判定器）, 0038（追記 10 の判定器の役割）
+---
+
+# 判定器と canary を削除し、確定は人間が Lab で観測して行う（#525）
+
+## 背景
+
+所有者は 2026-10-25 に、Codex 側で検証を回した結果として「判定器は残さない」と決めた（[#525](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/525)）。Lab で alert は発火しているのに判定器では判定できない結果が多く、所有者自身が Lab でアラートを確かめる方が確実だった。本番台帳では自動検証が 0/40、handoff が 3/22 で、検証の失敗理由の大半は `incomplete(precondition)` 80 件と `incomplete(no-judge)` 44 件だった（[設計課題の報告](../reviews/2026-10-20-design-issues-from-production-results.md)）。
+
+## 決定
+
+- 判定器の code を消す。`judges.ts`、canary の播種と照合、`verification/index.ts` の判定呼び出しと、判定器の結果による自動再試行（`observation`）を削除する。使わない設定にして残さない（AGENTS.md「削除」）。
+- 確定は、人間が Lab の dialog、観測記録、捕捉を読んで行う。新しい検証は `runtime-confirmed`、`contradicted`、`incomplete(no-judge)` を出さない。
+- handoff の attempt が終わり、Harness の捕捉が残ったものは `verification-finished` の `incomplete(awaiting-human-observation)` として記録する。捕捉が無いものは `incomplete(evidence)` にする。人間の確認は既存の `lab up --for-review` と `review observe`（`manual-observation-recorded`）、`review decide` で記録する。`verification-finished` を確定に書き換えない。
+- 残すもの: Finding 単位の Lab の供給、`verify next --handoff` の受け渡し、recorder による HTTP 捕捉、Lab 状態の差分、Lab browser による被害者画面の記録（宣言した数値マーカーの dialog と画面）、`manual-observation-*`、台帳と Private Evidence。
+- 既存の `runtime-confirmed` 26 件と、判定器があった時期のほかの記録は読み取り専用で読み続ける。
+
+## 理由
+
+判定器が結論を出せない Finding の確認は、結局人間が Lab で行っていた。検証時間は canary の回収に使われていた（ADR 0038 追記 10）。人間が Lab で確かめる方が確実だった。
+
+## 採らなかった選択肢
+
+- 自動検証を止めて判定器の code は残す: 使わない設定にして残す中間状態は置かない（AGENTS.md「削除」）。
+- `verification-finished` に人間の確定を表す新しい結果値を足す: 検証の記録と人間の判断が混ざる。人間の記録は既存の `manual-observation-recorded` と `review decide` に寄せる。
+
+## 帰結
+
+- SPEC 第 2 節の不変条件 3 と第 7 節の判定器の表を改めた。ADR 0004 はこの ADR で置き換え、ADR 0021 / 0026 / 0031 / 0035 / 0038 に注記を足した。
+- skill `wbh-verify` は v10 にし、canary の節と判定器が照合する条件を消した。旧 v9 は `versions/` に残す。
+- 正式な文案と提出候補（`review scope`、`review draft`、`review authorize`、`review decide --reproduced`）は、今も `runtime-confirmed` / `reproduced` を要する。新しい検証の結果をそこへ通す basis は、ADR 0038 追記 10 のとおり別 PR で作る。
+- 受入: handoff の結果が `incomplete(awaiting-human-observation)` に届き、`lab up --for-review` と `review observe` で人間の観測を記録できること。本番の handoff 3 件の数字は所有者の go の後に取る。
+
+## 消し方
+
+この ADR の PR を revert する。判定器、canary、再現パッケージの生成、`observation` の自動再試行が戻る。この PR の後に記録した `incomplete(awaiting-human-observation)` は、旧版でも理由コードを読めないため、revert の前にその event の扱いを決める。
