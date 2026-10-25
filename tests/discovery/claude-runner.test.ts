@@ -30,6 +30,47 @@ export async function* query({ options }) {
 }
 `;
 
+/** A stand-in SDK whose Root asks for five children at once and then ends its turn. */
+const FIVE_CHILDREN_SDK = `
+export async function* query({ options }) {
+  const hook = options.hooks.PreToolUse[0].hooks[0];
+  for (let index = 0; index < 5; index += 1) await hook({ tool_name: "Agent" });
+  yield { type: "result", subtype: "success", is_error: false, session_id: "s" };
+}
+`;
+
+async function runWith(sdkSource: string) {
+  root = await mkdtemp(join(tmpdir(), "claude-runner-"));
+  const sdk = join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk");
+  await mkdir(sdk, { recursive: true });
+  await writeFile(
+    join(sdk, "package.json"),
+    JSON.stringify({
+      name: "@anthropic-ai/claude-agent-sdk",
+      type: "module",
+      main: "index.js",
+    }),
+  );
+  await writeFile(join(sdk, "index.js"), sdkSource);
+  await writeFile(join(root, "runner.mjs"), CLAUDE_RUNNER_SOURCE);
+  const child = run(process.execPath, [join(root, "runner.mjs")]);
+  child.child.stdin?.end(
+    JSON.stringify({
+      prompt: "p",
+      resumePrompt: "r",
+      minimumActiveMs: 1,
+      model: "m",
+      effort: "high",
+      outputSchema: { type: "object" },
+    }),
+  );
+  const { stdout } = await child;
+  return stdout
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 let root: string | undefined;
 afterEach(async () => {
   if (root !== undefined) await rm(root, { recursive: true, force: true });
@@ -37,36 +78,9 @@ afterEach(async () => {
 
 describe("Claude runner", () => {
   it("lets the Root hand in its report through StructuredOutput and keeps it from children", async () => {
-    root = await mkdtemp(join(tmpdir(), "claude-runner-"));
-    const sdk = join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk");
-    await mkdir(sdk, { recursive: true });
-    await writeFile(
-      join(sdk, "package.json"),
-      JSON.stringify({
-        name: "@anthropic-ai/claude-agent-sdk",
-        type: "module",
-        main: "index.js",
-      }),
+    const result = (await runWith(FAKE_SDK)).find(
+      (event) => event.type === "result",
     );
-    await writeFile(join(sdk, "index.js"), FAKE_SDK);
-    await writeFile(join(root, "runner.mjs"), CLAUDE_RUNNER_SOURCE);
-    const child = run(process.execPath, [join(root, "runner.mjs")]);
-    child.child.stdin?.end(
-      JSON.stringify({
-        prompt: "p",
-        resumePrompt: "r",
-        minimumActiveMs: 1,
-        model: "m",
-        effort: "high",
-        outputSchema: { type: "object" },
-      }),
-    );
-    const { stdout } = await child;
-    const result = stdout
-      .split("\n")
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .find((event) => event.type === "result");
     expect(result?.decisions).toEqual([
       "allow",
       CLAUDE_RUNNER_DENIALS.outsideSurface,
@@ -74,5 +88,25 @@ describe("Claude runner", () => {
       "allow",
     ]);
     expect(result?.allowedTools).toContain("StructuredOutput");
+  });
+
+  it("stamps child-spawn decisions and turns with the time the runner saw them", async () => {
+    const events = await runWith(FIVE_CHILDREN_SDK);
+    const decisions = events.filter(
+      (event) => event.type === "harness.child-decision",
+    );
+    // The 1 ms floor may start a second turn; the first turn's five calls decide.
+    expect(decisions.slice(0, 5).map((event) => event.decision)).toEqual([
+      "allow",
+      "allow",
+      "allow",
+      "allow",
+      "child-limit",
+    ]);
+    for (const event of [
+      ...decisions,
+      ...events.filter((event) => event.type === "harness.turn"),
+    ])
+      expect(Number.isFinite(Date.parse(String(event.at)))).toBe(true);
   });
 });

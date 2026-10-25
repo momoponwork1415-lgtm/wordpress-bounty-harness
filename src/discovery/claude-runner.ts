@@ -24,6 +24,8 @@ const MAX_FINAL_MESSAGE = 64 * 1024;
 const DENIALS = ${JSON.stringify(CLAUDE_RUNNER_DENIALS)};
 
 const emit = (value) => process.stdout.write(JSON.stringify(value) + "\n");
+// Harness records carry the wall-clock time the hook or turn saw (A2).
+const now = () => new Date().toISOString();
 let raw = "";
 for await (const chunk of process.stdin) raw += chunk.toString();
 const config = JSON.parse(raw);
@@ -52,20 +54,25 @@ const preToolUse = async (input) => {
   if (!TOOLS.includes(input.tool_name)) return deny(DENIALS.outsideSurface);
   if (input.tool_name !== "Agent") return {};
   if (input.agent_id !== undefined) return deny(DENIALS.outsideSurface);
-  if (pending + live.size >= MAX_CHILDREN) return deny(DENIALS.childLimit);
+  if (pending + live.size >= MAX_CHILDREN) {
+    emit({ type: "harness.child-decision", at: now(), decision: "child-limit", live: live.size, pending });
+    return deny(DENIALS.childLimit);
+  }
+  emit({ type: "harness.child-decision", at: now(), decision: "allow", live: live.size, pending });
   pending += 1;
   return {};
 };
 const subagentStart = async (input) => {
   pending = Math.max(0, pending - 1);
   live.add(input.agent_id);
-  emit({ type: "harness.child-start", agentId: input.agent_id, agentType: input.agent_type });
+  emit({ type: "harness.child-start", at: now(), agentId: input.agent_id, agentType: input.agent_type });
   return {};
 };
 const subagentStop = async (input) => {
   live.delete(input.agent_id);
   emit({
     type: "harness.child-stop",
+    at: now(),
     agentId: input.agent_id,
     transcriptPath: input.agent_transcript_path,
     ...(typeof input.last_assistant_message === "string"
@@ -138,7 +145,7 @@ async function turn(prompt) {
     if (event !== undefined) emit(event);
     if (message.type === "result") result = message;
   }
-  emit({ type: "harness.turn", turn: turns, sessionId: sessionId ?? null });
+  emit({ type: "harness.turn", at: now(), turn: turns, sessionId: sessionId ?? null });
   return result?.subtype === "success" && result.is_error !== true;
 }
 

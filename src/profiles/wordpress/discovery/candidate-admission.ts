@@ -113,6 +113,7 @@ async function recordFinding(
     ...common,
     identity: `discovery-finding-${finding.findingId}`,
     type: "finding-recorded",
+    trialId: options.trialId,
     ...(finding.historyRecordId === undefined
       ? {}
       : { historyRecordId: finding.historyRecordId }),

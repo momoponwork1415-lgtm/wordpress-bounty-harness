@@ -12,6 +12,10 @@ import {
   runFinishedFieldsFrom,
   sealNativeRunReceipt,
 } from "../../src/discovery/index.js";
+import {
+  finalReportTimeline,
+  rootTurnsFromRollout,
+} from "../../src/discovery/codex-native-agent-runtime.js";
 import { canonicalJson } from "../../src/infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 
@@ -197,5 +201,59 @@ describe("native run receipts", () => {
         childThreadsAdmitted: 4,
       }),
     ).toThrow();
+  });
+});
+
+describe("receipt capture fields (A2)", () => {
+  it("leaves them out of receipts that do not set them and copies them to the finish", () => {
+    expect(receipt).not.toHaveProperty("agentRole");
+    expect(nativeRunReceiptSchema.parse(receipt)).toEqual(receipt);
+    const child = createNativeRunReceipt({
+      ...identity,
+      terminal: "completed",
+      reason: "unavailable",
+      startedAt: "2026-10-08T00:00:00Z",
+      completedAt: "2026-10-08T00:00:01Z",
+      agentRole: "child",
+      agentType: "unavailable",
+      delegationDigest: "unavailable",
+      firstFinalReportAt: undefined,
+    });
+    expect(child).not.toHaveProperty("firstFinalReportAt");
+    expect(runFinishedFieldsFrom(child)).toMatchObject({
+      agentRole: "child",
+      agentType: "unavailable",
+      delegationDigest: "unavailable",
+    });
+  });
+
+  it("times the Root's first report from its rollout and counts the candidates later turns added", () => {
+    const turn = (timestamp: string, findings: string[]) =>
+      JSON.stringify({
+        timestamp,
+        type: "event_msg",
+        payload: {
+          type: "task_complete",
+          last_agent_message: JSON.stringify({
+            findings: findings.map((claim) => JSON.stringify({ claim })),
+            leads: [],
+            examined: "source",
+            unexamined: "none",
+          }),
+        },
+      });
+    const rollout = [
+      turn("2026-10-08T00:20:00Z", []),
+      "not json",
+      turn("2026-10-08T00:40:00Z", ["a"]),
+      turn("2026-10-08T01:00:00Z", ["a", "b"]),
+    ].join("\n");
+    expect(finalReportTimeline(rootTurnsFromRollout(rollout))).toEqual({
+      firstFinalReportAt: "2026-10-08T00:20:00.000Z",
+      candidatesAfterFirstFinalReport: 2,
+    });
+    expect(
+      finalReportTimeline([{ message: "progress prose" }, { message: "{}" }]),
+    ).toEqual({});
   });
 });

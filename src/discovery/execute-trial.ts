@@ -229,17 +229,24 @@ export async function executeTrial(
           expiresAt: new Date(clock().getTime() + runWallTimeMs).toISOString(),
         };
   assertPlannedForInput(run, input);
+  const startedAt = trial.startRecordedAt ?? clock().toISOString();
+  // #212: every event spread from `base` carries the time it was built, not
+  // the Trial's start; the Ledger treats a retry that differs only in time as
+  // the event already recorded.
   const base: EventBase = {
     schemaVersion: 1,
     campaignId: context.campaignId,
     snapshotDigest: input.snapshotDigest,
-    occurredAt: trial.startRecordedAt ?? clock().toISOString(),
+    get occurredAt() {
+      return clock().toISOString();
+    },
   };
   const started =
     trial.startRecordedAt !== undefined
       ? { status: "existing" as const }
       : await context.ledger.append({
           ...base,
+          occurredAt: startedAt,
           identity: `discovery-start-${run.runId}`,
           type: "discovery-run-started",
           runId: run.runId,
@@ -301,7 +308,7 @@ export async function executeTrial(
       profile: run.profile,
       terminal: "incomplete",
       reason,
-      startedAt: base.occurredAt,
+      startedAt,
       completedAt: clock().toISOString(),
     });
   const cancellation = armCancellation({
