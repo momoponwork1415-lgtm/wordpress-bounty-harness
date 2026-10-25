@@ -86,6 +86,37 @@ const observed = z.strictObject({
   labRequests: count,
   dbQueries: count,
 });
+/**
+ * Who ran the thread and what it was asked, and when the Root first handed in
+ * a report (A2 capture, 2026-10-25). Absent on receipts sealed before it. A
+ * Codex delegation is encrypted in the rollout, so its digest is
+ * `unavailable`; a Claude delegation is the Root's `Agent` prompt.
+ */
+const agentFields = {
+  agentRole: z.enum(["root", "child"]).optional(),
+  agentType: reported.optional(),
+  delegationDigest: z.union([digest, z.literal("unavailable")]).optional(),
+  delegationLength: count.optional(),
+  firstFinalReportAt: z.iso.datetime({ offset: true }).optional(),
+  /** Distinct Root candidates first reported by a turn after the first report. */
+  candidatesAfterFirstFinalReport: count.optional(),
+};
+export type NativeRunAgentFields = {
+  -readonly [K in keyof typeof agentFields]?: z.infer<(typeof agentFields)[K]>;
+};
+const AGENT_FIELD_KEYS = Object.keys(
+  agentFields,
+) as (keyof NativeRunAgentFields)[];
+
+/** The agent fields that are set; a receipt never carries an undefined member. */
+function agentFieldsOf(value: NativeRunAgentFields): NativeRunAgentFields {
+  return Object.fromEntries(
+    AGENT_FIELD_KEYS.flatMap((key) =>
+      value[key] === undefined ? [] : [[key, value[key]]],
+    ),
+  );
+}
+
 const bodySchema = z.strictObject({
   kind: z.literal("native-run-receipt"),
   schemaVersion: z.literal(1),
@@ -178,6 +209,7 @@ const bodySchema = z.strictObject({
   }),
   grantReceiptDigest: z.union([digest, z.literal("unavailable")]),
   reportArtifactDigest: z.union([digest, z.literal("unavailable")]),
+  ...agentFields,
 });
 
 export const nativeRunReceiptSchema = bodySchema
@@ -254,7 +286,7 @@ export function createNativeRunReceipt(
     readonly session?: NativeRunSession;
     readonly grantReceiptDigest?: string;
     readonly reportArtifactDigest?: string;
-  },
+  } & NativeRunAgentFields,
 ): NativeRunReceipt {
   const profile = agentRuntimeProfileSchema.parse(input.profile);
   const body = bodySchema.parse({
@@ -310,6 +342,7 @@ export function createNativeRunReceipt(
     isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
     grantReceiptDigest: input.grantReceiptDigest ?? "unavailable",
     reportArtifactDigest: input.reportArtifactDigest ?? "unavailable",
+    ...agentFieldsOf(input),
   });
   return nativeRunReceiptSchema.parse({
     ...body,
@@ -384,9 +417,11 @@ export function runFinishedFieldsFrom(
   | "brokerMetrics"
   | "sandboxExitCode"
   | "diagnosticArtifactDigest"
+  | keyof NativeRunAgentFields
 > {
   return {
     usage: receipt.usage,
+    ...agentFieldsOf(receipt),
     ...(receipt.observed === undefined ? {} : { observed: receipt.observed }),
     ...(receipt.childThreadsObserved === undefined
       ? {}

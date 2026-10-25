@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 
 import { canonicalJson } from "../infrastructure/canonical-json.js";
+import { bytesDigest } from "../infrastructure/content-digest.js";
 import { admitAgentRuntimeProfile } from "./agent-runtime-profile.js";
 import type {
   ClaudeSandbox,
@@ -8,6 +9,7 @@ import type {
 } from "./claude-gvisor-sandbox.js";
 import {
   extractCandidateReport,
+  finalReportTimeline,
   mergeTurnReports,
   observedFromCommands,
   reportJsonSchema,
@@ -36,9 +38,11 @@ import type {
   ProviderAttachmentRef,
   ProviderAttachmentStore,
 } from "./provider-research-report.js";
-import type { ObservedCommand } from "./read-paths.js";
 import {
-  SANDBOX_SOURCE_MOUNT_PATH,
+  commandFromClaudeToolUse,
+  type ObservedCommand,
+} from "./read-paths.js";
+import {
   dependencyMountPathsAreDisjoint,
   dependencyMountPathsOf,
 } from "./sandbox-layout.js";
@@ -78,24 +82,7 @@ function commandsOf(events: readonly Event[]): ObservedCommand[] {
     .filter((event) => event.type === "assistant")
     .flatMap(contentOf)
     .filter((block) => block.type === "tool_use")
-    .map((block) => {
-      const input = object(block.input) ?? {};
-      const path =
-        typeof input.file_path === "string"
-          ? input.file_path
-          : typeof input.path === "string"
-            ? input.path
-            : undefined;
-      if (block.name === "Bash" && typeof input.command === "string")
-        return { text: input.command, cwd: SANDBOX_SOURCE_MOUNT_PATH };
-      if (path === undefined) return { text: String(block.name) };
-      const type = block.name === "Read" ? "read" : "search";
-      return {
-        text: `${type} ${path}`,
-        cwd: SANDBOX_SOURCE_MOUNT_PATH,
-        parsed: [{ type, path }],
-      };
-    });
+    .map(commandFromClaudeToolUse);
 }
 
 /** Models the assistant messages report; Claude Code's own error turns are left out. */
@@ -276,19 +263,62 @@ function rootTranscript(
   );
 }
 
+/** Each Root turn's report text, timed by the runner's `harness.turn` record after it. */
+function rootTurns(events: readonly Event[]) {
+  const turns: { at?: unknown; message: string }[] = [];
+  for (const event of events)
+    if (event.type === "result") {
+      const message =
+        object(event.structured_output) !== undefined
+          ? JSON.stringify(event.structured_output)
+          : event.result;
+      if (typeof message === "string") turns.push({ message });
+    } else if (event.type === "harness.turn")
+      for (const turn of turns) turn.at ??= event.at;
+  return turns;
+}
+
 /** Every Root turn's structured report, merged as the Codex path merges turns. */
 function rootReport(events: readonly Event[]) {
-  return mergeTurnReports(
-    events
-      .filter((event) => event.type === "result")
-      .flatMap((event) =>
-        object(event.structured_output) !== undefined
-          ? [JSON.stringify(event.structured_output)]
-          : typeof event.result === "string"
-            ? [event.result]
-            : [],
-      ),
-  );
+  return mergeTurnReports(rootTurns(events).map((turn) => turn.message));
+}
+
+/**
+ * The text the Root delegated to each child, by agent id: the Root
+ * transcript's `Agent` tool_use joined to its result's `toolUseResult.agentId`.
+ * A child still running at the end has no result yet.
+ */
+function delegationsOf(root: readonly Event[]): Map<string, string> {
+  const prompts = new Map<unknown, string>();
+  const delegated = new Map<string, string>();
+  for (const event of root)
+    for (const block of contentOf(event)) {
+      const prompt = object(block.input)?.prompt;
+      const agentId = object(event.toolUseResult)?.agentId;
+      const text = prompts.get(block.tool_use_id);
+      if (
+        block.type === "tool_use" &&
+        block.name === "Agent" &&
+        typeof prompt === "string"
+      )
+        prompts.set(block.id, prompt);
+      else if (
+        block.type === "tool_result" &&
+        typeof agentId === "string" &&
+        text !== undefined
+      )
+        delegated.set(agentId, text);
+    }
+  return delegated;
+}
+
+function delegationFields(text: string | undefined) {
+  return text === undefined
+    ? { delegationDigest: "unavailable" as const }
+    : {
+        delegationDigest: bytesDigest(text),
+        delegationLength: text.length,
+      };
 }
 
 function rootUsage(events: readonly Event[]): NativeRunReceipt["usage"] {
@@ -335,6 +365,14 @@ function childReport(finalMessage: unknown, transcript: readonly Event[]) {
     }
   }
   return undefined;
+}
+
+/** A child transcript opens with the delegation as its first user message. */
+function firstUserText(transcript: readonly Event[]): string | undefined {
+  const content = object(
+    transcript.find((event) => event.type === "user")?.message,
+  )?.content;
+  return typeof content === "string" ? content : undefined;
 }
 
 function admitted(run: DiscoveryTransportRun, sandboxImage: string): boolean {
@@ -595,11 +633,18 @@ export class ClaudeNativeAgentRuntime {
       result.research === undefined
         ? undefined
         : await put("research", result.research.archive);
+    const restoredRoot = new Map(
+      (run.resume?.sessions ?? []).flatMap((file) =>
+        file.kind === "root" ? [[file.path, file.content] as const] : [],
+      ),
+    );
+    const rootEvents = rootTranscript(events, result.transcripts, restoredRoot);
     const agentRuns = await this.#children(
       run,
       result,
       grantReceiptDigest,
       sealed,
+      delegationsOf(rootEvents),
     );
     const childIds = new Set([
       ...events.flatMap((event) =>
@@ -617,11 +662,6 @@ export class ClaudeNativeAgentRuntime {
         : await put("findings", canonicalJson(report));
     const activeMs =
       Date.parse(result.completedAt) - Date.parse(result.startedAt);
-    const restoredRoot = new Map(
-      (run.resume?.sessions ?? []).flatMap((file) =>
-        file.kind === "root" ? [[file.path, file.content] as const] : [],
-      ),
-    );
     const session = claudeRunSession(
       events,
       [...sealed].map(([path, digest]) => ({
@@ -648,10 +688,7 @@ export class ClaudeNativeAgentRuntime {
           : (brokerMetrics?.requestLimitExceeded ?? 0) > 0
             ? { reason: "policy", detail: "broker-request-cap" }
             : (rootModelMismatch ??
-              claudeProviderFailure(
-                events,
-                rootTranscript(events, result.transcripts, restoredRoot),
-              ) ??
+              claudeProviderFailure(events, rootEvents) ??
               (result.failureKind === "timed-out"
                 ? { reason: "wall" }
                 : result.failureKind === "cancelled"
@@ -718,6 +755,8 @@ export class ClaudeNativeAgentRuntime {
           : { providerLimit: failure.providerLimit }),
         startedAt: failure === undefined ? result.startedAt : startedAt,
         completedAt: result.completedAt,
+        agentRole: "root",
+        ...finalReportTimeline(rootTurns(events)),
         usage: rootUsage(events),
         observed: observedFromCommands(commandsOf(events), mounts),
         childThreadsObserved: childIds.size,
@@ -746,9 +785,11 @@ export class ClaudeNativeAgentRuntime {
     result: ClaudeSandboxResult,
     grantReceiptDigest: string,
     sealed: ReadonlyMap<string, string | undefined>,
+    delegations: ReadonlyMap<string, string>,
   ): Promise<AgentRun[]> {
     const paths = new Map<string, string | undefined>();
     const stops = new Map<string, Event>();
+    const agentTypes = new Map<string, string>();
     // Children restored from an earlier segment were recorded by that segment.
     const restored = new Set(
       (run.resume?.sessions ?? []).flatMap((file) =>
@@ -757,6 +798,13 @@ export class ClaudeNativeAgentRuntime {
     );
     for (const event of jsonLines(result.stdout))
       if (
+        event.type === "harness.child-start" &&
+        typeof event.agentId === "string" &&
+        typeof event.agentType === "string" &&
+        /^[A-Za-z0-9_.:-]{1,128}$/.test(event.agentType)
+      )
+        agentTypes.set(event.agentId, event.agentType);
+      else if (
         event.type === "harness.child-stop" &&
         typeof event.agentId === "string" &&
         CHILD_ID.test(event.agentId)
@@ -820,6 +868,12 @@ export class ClaudeNativeAgentRuntime {
             : { reasonDetail: failure.detail }),
           startedAt: times[0] ?? result.startedAt,
           completedAt: times.at(-1) ?? result.completedAt,
+          agentRole: "child",
+          agentType: agentTypes.get(agentId) ?? "unavailable",
+          // A child without a joined result opens its transcript with the delegation.
+          ...delegationFields(
+            delegations.get(agentId) ?? firstUserText(transcript),
+          ),
           usage: transcriptUsage(transcript),
           observed: observedFromCommands(
             commandsOf(transcript),

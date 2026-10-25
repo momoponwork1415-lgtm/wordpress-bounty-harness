@@ -134,4 +134,66 @@ describe("recordReadPaths", () => {
       ),
     ).toBe(undefined);
   });
+
+  it("stores read paths from a Claude transcript's Read, Grep and Glob calls", async () => {
+    const root = await mkdtemp(join(tmpdir(), "read-paths-"));
+    directories.push(root);
+    const attachments = new ProviderAttachmentStore(root);
+    const toolUse = (name: string, input: Record<string, unknown>) => ({
+      type: "tool_use",
+      id: `toolu_${name}`,
+      name,
+      input,
+    });
+    const transcript = [
+      { type: "user", message: { content: "Look at the AJAX handlers" } },
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "Reading." },
+            toolUse("Read", { file_path: "/workspace/main/includes/ajax.php" }),
+            toolUse("Grep", {
+              pattern: "wp_ajax_",
+              path: "/workspace/main/admin/menu.php",
+            }),
+            toolUse("Glob", { pattern: "**/*.php", path: "/workspace/main" }),
+            toolUse("Read", { file_path: "/workspace/wordpress/wp-load.php" }),
+            toolUse("Agent", { prompt: "Check a.php", subagent_type: "x" }),
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "toolu_Read" }],
+        },
+      },
+    ]
+      .map((event) => JSON.stringify(event))
+      .join("\n");
+    const diagnostic = await attachments.put(
+      "diagnostic",
+      Buffer.from(transcript),
+    );
+    const files: Record<string, string | Uint8Array>[] = [];
+    const evidence = {
+      async putFiles(entry: Record<string, string | Uint8Array>) {
+        files.push(entry);
+        return `sha256:${"f".repeat(64)}`;
+      },
+    };
+    await recordReadPaths(attachments, evidence, diagnostic.digest, [
+      "/workspace/wordpress",
+    ]);
+    expect(files).toEqual([
+      {
+        "read-paths.json": JSON.stringify([
+          "@wordpress/wp-load.php",
+          "admin/menu.php",
+          "includes/ajax.php",
+        ]),
+      },
+    ]);
+  });
 });

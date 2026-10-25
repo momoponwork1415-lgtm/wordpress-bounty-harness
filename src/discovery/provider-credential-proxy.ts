@@ -417,8 +417,10 @@ function chatgptListener(
       else if (upstream.status >= 400) counters.upstreamClientError += 1;
       else counters.upstreamSuccess += 1;
       const contentType = upstream.headers.get("content-type");
+      const retryAfter = upstream.headers.get("retry-after");
       response.writeHead(upstream.status, {
         ...(contentType === null ? {} : { "content-type": contentType }),
+        ...(retryAfter === null ? {} : { "retry-after": retryAfter }),
       });
       const complete = await streamRedacted(
         upstream,

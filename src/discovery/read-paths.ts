@@ -19,15 +19,52 @@ export type ObservedCommand = {
   readonly parsed?: readonly unknown[];
 };
 
-/** Completed command events of one archived rollout; malformed lines are skipped. */
+type Loose = { [key: string]: unknown } | null | undefined;
+
+/**
+ * One Claude Code `tool_use` block as a command record: `Read` is a read and
+ * `Grep` / `Glob` a search of the path they name, `Bash` its command line.
+ */
+export function commandFromClaudeToolUse(block: {
+  readonly name?: unknown;
+  readonly input?: unknown;
+}): ObservedCommand {
+  const input = (block.input ?? {}) as { [key: string]: unknown };
+  const path =
+    typeof input.file_path === "string"
+      ? input.file_path
+      : typeof input.path === "string"
+        ? input.path
+        : undefined;
+  if (block.name === "Bash" && typeof input.command === "string")
+    return { text: input.command, cwd: SANDBOX_SOURCE_MOUNT_PATH };
+  if (path === undefined) return { text: String(block.name) };
+  const type = block.name === "Read" ? "read" : "search";
+  return {
+    text: `${type} ${path}`,
+    cwd: SANDBOX_SOURCE_MOUNT_PATH,
+    parsed: [{ type, path }],
+  };
+}
+
+/**
+ * Completed command events of one archived rollout, or the `tool_use` blocks
+ * of a Claude Code transcript or runner stdout; malformed lines are skipped.
+ */
 export function commandsFromRollout(raw: string): ObservedCommand[] {
   const commands: ObservedCommand[] = [];
   for (const line of raw.split("\n")) {
-    type Loose = { [key: string]: unknown } | null | undefined;
     let event: Loose;
     try {
       event = JSON.parse(line) as Loose;
     } catch {
+      continue;
+    }
+    const content = (event?.message as Loose)?.content;
+    if (event?.type === "assistant" && Array.isArray(content)) {
+      for (const block of content as Loose[])
+        if (block?.type === "tool_use")
+          commands.push(commandFromClaudeToolUse(block));
       continue;
     }
     const payload = event?.payload as Loose;
