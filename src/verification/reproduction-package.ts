@@ -18,7 +18,7 @@ const conditionsSchema = z
   .default({});
 
 /**
- * The `verification-finished` result. Since #525 (ADR 0039) a verification
+ * The `verification-finished` result. Since #525 (ADR 0040) a verification
  * ends `incomplete`: `awaiting-human-observation` when the Verifier finished
  * and the Harness recorded its observation, a failure reason otherwise.
  * `runtime-confirmed`, `reproduced`, `contradicted` and `no-judge` came from

@@ -34,4 +34,4 @@ amends: 0002
 
 ## 2026-10-25 注記（#525、所有者決定 2026-10-25）
 
-決定の「決定論の観測（判定器、実行前後の差分）」から判定器を外した（[ADR 0039](0039-human-lab-observation-replaces-judges.md)）。Harness が持つ決定論の観測は、HTTP 捕捉、実行前後の差分、Lab browser の記録である。Programme Boundary 内の Finding を判定結果に関係なく人間へ届けることは変えない。
+決定の「決定論の観測（判定器、実行前後の差分）」から判定器を外した（[ADR 0040](0040-human-lab-observation-replaces-judges.md)）。Harness が持つ決定論の観測は、HTTP 捕捉、実行前後の差分、Lab browser の記録である。Programme Boundary 内の Finding を判定結果に関係なく人間へ届けることは変えない。

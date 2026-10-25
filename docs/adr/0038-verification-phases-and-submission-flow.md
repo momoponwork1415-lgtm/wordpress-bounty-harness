@@ -166,4 +166,4 @@ v3 を戻すときは `versions/v2.2.md` を skill 本文に戻し、OPERATIONS 
 
 ## 2026-10-25 注記（#525、所有者決定 2026-10-25）
 
-追記 10 の「判定器は引き続き必要である」と「`runtime-confirmed` を出す条件は nonce 付き canary の回収のまま」は、[ADR 0039](0039-human-lab-observation-replaces-judges.md) で置き換えた。判定器は削除し、段 3 の結果は `incomplete(awaiting-human-observation)` になる。観測器の dialog、marker の一致、画像だけから成立を自動認定しないことと、正式な文案・提出候補へ進む basis を別 PR で作ることは変えない。
+追記 10 の「判定器は引き続き必要である」と「`runtime-confirmed` を出す条件は nonce 付き canary の回収のまま」は、[ADR 0040](0040-human-lab-observation-replaces-judges.md) で置き換えた。判定器は削除し、段 3 の結果は `incomplete(awaiting-human-observation)` になる。観測器の dialog、marker の一致、画像だけから成立を自動認定しないことと、正式な文案・提出候補へ進む basis を別 PR で作ることは変えない。

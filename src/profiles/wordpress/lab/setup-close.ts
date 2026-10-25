@@ -9,7 +9,7 @@ const REVOKE_PRINCIPALS_SCRIPT = `$principals = json_decode((string) getenv("WBH
  * Ends handoff precondition setup (#430, ADR 0035). The setup administrator
  * keeps no session, application password or known password, so nothing
  * signed in before `setup-done` authenticates after it. The Lab seeds no
- * canary since #525 (ADR 0039).
+ * canary since #525 (ADR 0040).
  */
 export async function closeWordPressSetup(
   lab: WordPressLabSession,

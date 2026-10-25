@@ -67,10 +67,10 @@ PR #415 のレビュー指摘 2 への対応。決定の本文は変えず、次
 
 ## 2026-10-25 注記（#525、所有者決定 2026-10-25）
 
-[ADR 0039](0039-human-lab-observation-replaces-judges.md) で、題の「canary・判定器」と、次の行を改めた。
+[ADR 0040](0040-human-lab-observation-replaces-judges.md) で、題の「canary・判定器」と、次の行を改めた。
 
 - `lab.json` / `attack.json` に canary の節は無い。6 file は recipe として保存し、判定器には渡さない。Harness は `setup-done` 以後の捕捉と Lab browser の記録を残し、結果を `incomplete(awaiting-human-observation)` にする。
 - 帰結の「`runtime-confirmed` は判定器だけが出す」は、「新しい検証は `runtime-confirmed` を出さず、確定は人間が Lab で観測して行う」に置き換わる。`abort` / wall 超過の `incomplete` と digest 照合は変えない。
 - 2026-10-21 追記の基線: SQL と file の canary の照合（`setup-boundary`）は無くなった。HTTP 捕捉の起点と Lab 状態の基線は取り直す。判定のための role と option の基線は無くなった（Lab 状態の差分には users と options が残る）。
 - 2026-10-21 追記の無効化: 破棄して password を変えるのは設定管理者だけになった。canary 管理者と canary user は作らない。
-- 受入の数字（判定器が結論を出す件数）は、ADR 0039 の受入（handoff の結果が人間の観測待ちに届く件数）に読み替える。
+- 受入の数字（判定器が結論を出す件数）は、ADR 0040 の受入（handoff の結果が人間の観測待ちに届く件数）に読み替える。
