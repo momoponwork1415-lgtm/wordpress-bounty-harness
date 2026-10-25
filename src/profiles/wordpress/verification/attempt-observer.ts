@@ -44,7 +44,7 @@ const missingCapture = (nextStep: string): AttemptObservation => ({
 });
 
 /**
- * What the Harness keeps after a finished WordPress attempt (#525, ADR 0039):
+ * What the Harness keeps after a finished WordPress attempt (#525, ADR 0040):
  * the recorder's capture from `setup-done` on, the Verifier's own `http.json`
  * beside it, and, when `route.json` declares victim pages, what the Lab
  * browser saw there. Nothing here decides whether the Finding holds; a person

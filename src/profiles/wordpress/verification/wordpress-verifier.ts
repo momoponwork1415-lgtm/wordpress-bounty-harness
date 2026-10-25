@@ -310,7 +310,7 @@ function verifierLabView(
 /**
  * The Harness-owned half of every Verifier attempt: precondition gate, Lab
  * view, run recording and recipe assembly. The transport only runs the agent
- * and returns its files. No canary is issued since #525 (ADR 0039).
+ * and returns its files. No canary is issued since #525 (ADR 0040).
  */
 export class WordPressVerifier implements Verifier<
   WordPressFinding,

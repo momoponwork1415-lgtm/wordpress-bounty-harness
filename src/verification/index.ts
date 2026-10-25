@@ -130,7 +130,7 @@ export class VerifierTransportIncompleteError extends Error {
 
 /**
  * Harness-owned observation after a finished Verifier attempt (#525, ADR
- * 0039): the Lab's own HTTP capture and browser records, stored as review
+ * 0040): the Lab's own HTTP capture and browser records, stored as review
  * material. It never decides; a person confirms the Finding in a Lab.
  */
 export interface AttemptObserver<Finding, Handle extends LabHandle> {
@@ -258,7 +258,7 @@ export class Verification<
 
   /**
    * Every result is incomplete: a failure keeps its reason, and a finished
-   * attempt waits for a person to observe it in a Lab (#525, ADR 0039).
+   * attempt waits for a person to observe it in a Lab (#525, ADR 0040).
    */
   async verify(input: {
     readonly campaignId: string;

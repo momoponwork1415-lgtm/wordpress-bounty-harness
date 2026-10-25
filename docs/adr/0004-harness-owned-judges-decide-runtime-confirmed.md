@@ -1,6 +1,6 @@
 ---
 status: accepted
-superseded-by: 0039
+superseded-by: 0040
 ---
 # runtime-confirmed はHarness所有の決定論的判定器だけが出す
 
@@ -8,4 +8,4 @@ superseded-by: 0039
 
 ## 2026-10-25 注記（#525、所有者決定 2026-10-25）
 
-この決定は [ADR 0039](0039-human-lab-observation-replaces-judges.md) で置き換えた。判定器は削除し、新しい検証は `runtime-confirmed` も `incomplete(no-judge)` も出さない。確定は、人間が Lab の dialog、観測記録、捕捉を読んで行う。既存の `runtime-confirmed` は、判定器があった時期の記録として読み続ける。
+この決定は [ADR 0040](0040-human-lab-observation-replaces-judges.md) で置き換えた。判定器は削除し、新しい検証は `runtime-confirmed` も `incomplete(no-judge)` も出さない。確定は、人間が Lab の dialog、観測記録、捕捉を読んで行う。既存の `runtime-confirmed` は、判定器があった時期の記録として読み続ける。

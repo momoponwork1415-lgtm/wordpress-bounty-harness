@@ -1,6 +1,6 @@
 ---
 status: accepted
-superseded-in-part-by: 0039（判定器と canary の回収）
+superseded-in-part-by: 0040（判定器と canary の回収）
 ---
 
 # Stored XSS 判定器は Finding が宣言する被害者ロールと画面で発火を観測する
@@ -35,4 +35,4 @@ ADR 0017 で Wordfence 向けの site-wide 条件は scope 段階へ移したが
 
 ## 2026-10-25 注記（#525、所有者決定 2026-10-25）
 
-Stored XSS 判定器と script canary は [ADR 0039](0039-human-lab-observation-replaces-judges.md) で削除した。`route.json` の `victim`（被害者ロールと画面、最大 5 件、型付きの操作）は残し、Lab browser はその画面だけを開いて、宣言した数値マーカーの dialog と画面を Private Evidence に記録する。固定の訪問先（front、`/wp-admin/`、`/wp-admin/edit.php`、route path）と発火 context の記録はやめた。「canary の回収だけが証明である」は「確定は人間が Lab で観測して行う」に置き換わる。
+Stored XSS 判定器と script canary は [ADR 0040](0040-human-lab-observation-replaces-judges.md) で削除した。`route.json` の `victim`（被害者ロールと画面、最大 5 件、型付きの操作）は残し、Lab browser はその画面だけを開いて、宣言した数値マーカーの dialog と画面を Private Evidence に記録する。固定の訪問先（front、`/wp-admin/`、`/wp-admin/edit.php`、route path）と発火 context の記録はやめた。「canary の回収だけが証明である」は「確定は人間が Lab で観測して行う」に置き換わる。

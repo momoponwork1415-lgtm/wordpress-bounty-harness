@@ -17,7 +17,7 @@ type FinishedVerification = Extract<
  * same Lab Setup, `provision` one re-provision, `provider` one retry on resume
  * (2026-10-14 addendum), `precondition` only when the scenario id changed;
  * every other reason goes to a human without retry. `observation` came from
- * the deleted judges and no longer retries (#525, ADR 0039).
+ * the deleted judges and no longer retries (#525, ADR 0040).
  */
 export function shouldAutomaticallyRetryVerification(input: {
   readonly reason: IncompleteReason;
