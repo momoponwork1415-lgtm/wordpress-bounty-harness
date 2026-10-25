@@ -181,3 +181,21 @@ v8 の協調 Trial は Root 1 thread を同じ gVisor container の中で `codex
 ### 消し方
 
 この節を削除する。操作者は Claude の拒否で止まった run を名指ししなくなる。コードの変更は無い。
+
+## 2026-10-25 追記: runner の掃除は探索の残骸だけにする
+
+所有者は 2026-10-25 に、探索ランナー（`continuous run`）は host 上の Lab を掃除しないと決めた（#526）。検証は探索と並行させる（2026-10-20 の決定）。本番の探索は `discovery.lab: none` で Lab を立てないので、runner には消すべき自分の Lab が無い。この追記は、追記 3 の「残骸の掃除」の行を改める。
+
+### 決定
+
+- runner の起動時と batch 後の掃除は、探索 container（`codex-agent-<uuid>`、`claude-agent-<uuid>`）と broker（`provider-egress-broker-*` の container、`provider-egress-*` の network）だけを消す。Lab（`wbh-<uuid>-*`）は消さない。`codex-scratch` の下に触れないことは変わらない。
+- Lab の後始末は、Lab を立てた側が持つ（`verify next --handoff`、`review reverify`、`lab up --for-review`、`lab down`、操作者の `lab cleanup`）。
+- runner の掃除を止めるのは、手で回す `campaign run` と `campaign resume` が置く `<state>/sweep-holds/<pid>` だけにする。検証の command、旧形 `lab up` の記録、検証 Lab の host lease は、もう runner の掃除を止めない。
+
+### 変えないこと
+
+- 死んだ持ち主の run の回収（container を消してから残骸を封じる）、`lab cleanup` と `lab down` が消す対象、検証 Lab の host lease は変えない。
+
+### 消し方
+
+この節と #526 の差分を戻す。探索が Lab を立てる設定が復活したときに戻す。

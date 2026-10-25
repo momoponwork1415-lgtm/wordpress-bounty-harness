@@ -47,7 +47,6 @@ const profile: CliProfile = {
   verifyNext: unused,
   latestVersion: unused,
   hostStatus: unused,
-  labHeld: unused,
   cleanupLeftovers: unused,
   checkRuntime: unused,
   reverify: unused,

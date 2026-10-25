@@ -132,4 +132,22 @@ describe("host verification Lab lease", () => {
     });
     await recovered!.release();
   });
+
+  it("recovers a sweep reservation an older runner left after its death (#526)", async () => {
+    const root = await directory();
+    await writeFile(
+      join(root, "verification.json"),
+      JSON.stringify({
+        kind: "sweep",
+        token: randomUUID(),
+        owner: { pid: 1, bootId: "previous-boot", startTicks: "1" },
+      }),
+    );
+    const lease = await acquire(root);
+    expect(lease).not.toBeNull();
+    expect(await lease!.recover(async () => true)).toEqual({ status: "ready" });
+    await lease!.reserveLab(randomUUID());
+    await lease!.clear();
+    await lease!.release();
+  });
 });
