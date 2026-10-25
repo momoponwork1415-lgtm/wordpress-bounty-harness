@@ -382,6 +382,58 @@ describe("Ledger public interface", () => {
     ).rejects.toThrow();
   });
 
+  it("records the enforced run parameters and still reads starts without them (redesign 2026-10-25 §7)", async () => {
+    const { ledger } = await fixture();
+    const parameters = {
+      wallMinutes: 120,
+      minimumActiveMinutes: 0,
+      maxChildren: 6,
+      lab: { mode: "none" as const, maxResets: 2 },
+      model: "claude-opus-5-5",
+      effort: "high",
+    };
+    await ledger.append({
+      ...common("parameterised-start"),
+      type: "discovery-run-started",
+      runId: "run-parameterised",
+      labId: "lab-parameterised",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "wp2shell-bounty-v12-wide",
+        ...parameters,
+      },
+    });
+    await ledger.append({
+      ...common("unparameterised-start"),
+      type: "discovery-run-started",
+      runId: "run-unparameterised",
+      labId: "lab-unparameterised",
+      history: { mode: "none" },
+      configuration: { promptVariant: "wp2shell-bounty-v8" },
+    });
+    const starts = ledger
+      .read({ type: "discovery-run-started" })
+      .map(({ event }) =>
+        event.type === "discovery-run-started" ? event.configuration : null,
+      );
+    expect(starts[0]).toMatchObject(parameters);
+    expect(starts[1]).not.toHaveProperty("maxChildren");
+    expect(starts[1]).not.toHaveProperty("lab");
+    await expect(
+      ledger.append({
+        ...common("bad-lab-start"),
+        type: "discovery-run-started",
+        runId: "run-bad-lab",
+        labId: "lab-bad-lab",
+        history: { mode: "none" },
+        configuration: {
+          promptVariant: "wp2shell-bounty-v10",
+          lab: { mode: "shared", maxResets: 2 } as never,
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("counts boundary candidates once across rejection and replay, with classified holds and token rates", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);

@@ -53,6 +53,14 @@ const resumePrompt = "Before giving up, keep exploring the fixed source.";
 const prompt = `Find impact in the fixed source.\n\n${resumePrompt}\n\n## Trust boundary\n\nLow privilege only.`;
 const WALL_MS = 120 * 60_000;
 const MINIMUM_MS = 60 * 60_000;
+const RUN_PARAMETERS = {
+  wallMinutes: 120,
+  minimumActiveMinutes: 60,
+  maxChildren: 4,
+  lab: { mode: "none" as const, maxResets: 2 },
+  model: "gpt-6-sol",
+  effort: "high",
+};
 const ROOT_THREAD = "11111111-2222-4333-8444-555555555555";
 const CHILD_THREAD = "66666666-7777-4888-9999-000000000000";
 const ROOT_PATH = "2026/10/19/rollout-2026-10-19T00-00-00-root.jsonl";
@@ -262,6 +270,7 @@ async function recordRun(
       sourcePack: { dependency: "mounted" },
       assignmentUnit: "plugin",
       labAccess: { database: "none" },
+      ...RUN_PARAMETERS,
     },
   });
   expect(started.status).toBe("appended");
@@ -337,6 +346,8 @@ describe("resumability rule (ADR 0036)", () => {
       configuration: {
         promptVariant: "wp2shell-bounty-v8",
         promptDigest,
+        // The enforced values the original start recorded carry into the segment.
+        ...RUN_PARAMETERS,
       },
     });
     // An old start event's assignment unit is read but not carried into the segment.

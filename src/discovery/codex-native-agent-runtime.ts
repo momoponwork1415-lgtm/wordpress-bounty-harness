@@ -381,11 +381,18 @@ export type InterruptedRunRecovery =
       readonly result: DiscoveryTransportResult;
       discard(): Promise<void>;
     };
+/** ADR 0029: live children of one Root unless the campaign sets another ceiling. */
+export const DEFAULT_MAX_CHILDREN = 4;
+/** The highest ceiling a campaign may set (redesign 2026-10-25 §7). */
+export const MAX_CHILDREN_LIMIT = 8;
+
 export interface DiscoveryTransportRun {
   readonly runId: string;
   readonly targetSnapshotDigest: string;
   readonly profile: AgentRuntimeProfile;
   readonly prompt: string;
+  /** Live children the Root may hold at once; absent, DEFAULT_MAX_CHILDREN. */
+  readonly maxChildren?: number;
   /** A completed discovery report is not admitted before this active wall floor. */
   readonly minimumActiveMs?: number;
   /** A versioned excerpt already present in prompt, used only for early Root resumes. */
@@ -474,6 +481,7 @@ const discoveryTransportRunSchema = z.strictObject({
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
+  maxChildren: z.number().int().min(1).max(MAX_CHILDREN_LIMIT).optional(),
   /** 0 is the `wide` mode: no active floor, the first turn only (ADR 0039). */
   minimumActiveMs: z
     .number()
@@ -1506,7 +1514,7 @@ function codexArgs(
           "--enable",
           "multi_agent",
           "-c",
-          "agents.max_threads=4",
+          `agents.max_threads=${run.maxChildren ?? DEFAULT_MAX_CHILDREN}`,
           "-c",
           "agents.max_depth=1",
         ]
@@ -1564,7 +1572,7 @@ function codexResumeArgs(
     "--enable",
     "multi_agent",
     "-c",
-    "agents.max_threads=4",
+    `agents.max_threads=${run.maxChildren ?? DEFAULT_MAX_CHILDREN}`,
     "-c",
     "agents.max_depth=1",
     "-c",
@@ -2096,7 +2104,7 @@ export class CodexNativeAgentRuntime {
       const byStart = left.child.startedAt.localeCompare(right.child.startedAt);
       return byStart || left.order - right.order;
     });
-    // max_threads=4 bounds live children, not the number of waves in a Trial.
+    // max_threads bounds live children, not the number of waves in a Trial.
     const admitted = children.slice(0, 255);
     const agentRuns: AgentRun[] = [];
     const sessionFiles: NativeRunSession["files"][number][] = [];

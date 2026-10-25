@@ -149,7 +149,26 @@ function configurationOf(
       ? {}
       : { runtime: configuration.runtime }),
     ...(configuration.mode === undefined ? {} : { mode: configuration.mode }),
+    ...pickDefined(configuration, [
+      "wallMinutes",
+      "minimumActiveMinutes",
+      "maxChildren",
+      "lab",
+      "model",
+      "effort",
+    ]),
   };
+}
+
+function pickDefined<T extends object, K extends keyof T>(
+  source: T,
+  keys: readonly K[],
+): { [P in K]?: Exclude<T[P], undefined> } {
+  return Object.fromEntries(
+    keys.flatMap((key) =>
+      source[key] === undefined ? [] : [[key, source[key]]],
+    ),
+  ) as { [P in K]?: Exclude<T[P], undefined> };
 }
 
 /**

@@ -82,6 +82,16 @@ export type PlannedDiscoveryRun = {
     readonly runtime?: "codex-native/v1" | "claude-code/v1";
     /** The launch mode the campaign config fixed for this Trial (ADR 0039). */
     readonly mode?: "deep" | "wide";
+    /** What the Harness enforced, as the Run parameters section states it. */
+    readonly wallMinutes?: number;
+    readonly minimumActiveMinutes?: number;
+    readonly maxChildren?: number;
+    readonly lab?: {
+      readonly mode: "none" | "attached";
+      readonly maxResets: number;
+    };
+    readonly model?: string;
+    readonly effort?: string;
   };
 };
 

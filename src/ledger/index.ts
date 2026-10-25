@@ -143,6 +143,21 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         .optional(),
       /** ADR 0039: the Trial's launch mode; absent on events before 2026-10-25. */
       mode: z.enum(["deep", "wide"]).optional(),
+      /**
+       * Redesign 2026-10-25 §7: the values the Harness enforced and stated in
+       * the Run parameters section; absent on earlier events.
+       */
+      wallMinutes: z.number().positive().optional(),
+      minimumActiveMinutes: z.number().nonnegative().optional(),
+      maxChildren: z.number().int().positive().optional(),
+      lab: z
+        .strictObject({
+          mode: z.enum(["none", "attached"]),
+          maxResets: z.number().int().nonnegative(),
+        })
+        .optional(),
+      model: id.optional(),
+      effort: id.optional(),
       axis: z.literal("history").optional(),
       arm: z.enum(["a", "b"]).optional(),
       arms: z

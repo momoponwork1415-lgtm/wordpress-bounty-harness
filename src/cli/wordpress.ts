@@ -11,8 +11,13 @@ import {
   executeTrialResume,
   providerLimitedAutoResumeRefusal,
   recordInterruptedRun,
+  runParametersSection,
 } from "../discovery/index.js";
-import type { PlannedDiscoveryRun, ResumePlan } from "../discovery/index.js";
+import type {
+  PlannedDiscoveryRun,
+  ResumePlan,
+  RunParameters,
+} from "../discovery/index.js";
 import { Review } from "../review/index.js";
 import { targetSelectionId } from "../selection/index.js";
 import { SourceAcquisitionError, type Snapshot } from "../snapshot/index.js";
@@ -430,14 +435,30 @@ type WordPressDiscoverySource = Awaited<
   ReturnType<WordPressCampaignBoundaries["sourceFor"]>
 >;
 
-/** ADR 0033: the deep Root explores at least this long; a resumed segment inherits what is left of it. */
-const WORDPRESS_DEEP_MINIMUM_ACTIVE_MS = 60 * 60_000;
-
-/** The active floor of a campaign's mode: 60 minutes for `deep`, none for `wide` (ADR 0039). */
+/**
+ * The campaign's active floor (60 minutes by default for `deep`, none for
+ * `wide`, ADR 0033 / 0039); a resumed segment inherits what is left of it.
+ */
 function wordPressMinimumActiveMs(config: WordPressCampaignConfig): number {
-  return config.discovery.mode === "wide"
-    ? 0
-    : WORDPRESS_DEEP_MINIMUM_ACTIVE_MS;
+  return config.discovery.minimumActiveMinutes * 60_000;
+}
+
+/** What the Harness enforces for one Trial on `profile`, as the Root is told and the ledger records. */
+function wordPressRunParameters(
+  config: WordPressCampaignConfig,
+  profile: WordPressCampaignBoundaries["runtimeProfile"],
+): RunParameters {
+  return {
+    wallMinutes: config.runWallTimeMinutes,
+    minimumActiveMinutes: config.discovery.minimumActiveMinutes,
+    maxChildren: config.discovery.maxChildren,
+    lab: config.discovery.lab,
+    runtime: {
+      transportKind: profile.transportKind,
+      model: profile.requestedModelId,
+      effort: profile.requestedEffort,
+    },
+  };
 }
 
 function wordPressOutputContractFor(id: string) {
@@ -463,6 +484,7 @@ function wordPressDiscoveryPromptText(options: {
   readonly config: WordPressCampaignConfig;
   readonly lab: WordPressDiscoveryInput["lab"];
   readonly source: WordPressDiscoverySource;
+  readonly runParameters: RunParameters;
 }): string {
   const { objective, trustBoundary, config, lab, source } = options;
   const objectiveOnly = wordPressDiscoveryContractPlan(
@@ -476,6 +498,7 @@ function wordPressDiscoveryPromptText(options: {
   return [
     objective.text.trim(),
     ...(objectiveOnly ? [wordPressOutputContractFor(objective.id).text] : []),
+    runParametersSection(options.runParameters),
     "## Trust boundary",
     trustBoundary.text.trim(),
     `## Programme Boundary (${config.programmeBoundary.version})`,
@@ -582,6 +605,7 @@ async function planWordPressDiscovery(
   // One Trial per target; only an explicit `--repeat` plans more (ADR 0029).
   const maxRuns = repeat;
   const stopRules = { maxRuns, noFindingRuns: 1 };
+  const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
   const promptFor = (selectedObjective: typeof objective) =>
     wordPressDiscoveryPromptText({
       objective: selectedObjective,
@@ -589,6 +613,7 @@ async function planWordPressDiscovery(
       config,
       lab,
       source,
+      runParameters,
     });
   const now = state.clock().getTime();
   return {
@@ -645,6 +670,12 @@ async function planWordPressDiscovery(
             ? {}
             : { runtime: runtime.runtimeProfile.transportKind }),
           mode: config.discovery.mode,
+          wallMinutes: runParameters.wallMinutes,
+          minimumActiveMinutes: runParameters.minimumActiveMinutes,
+          maxChildren: runParameters.maxChildren,
+          lab: runParameters.lab,
+          model: runParameters.runtime.model,
+          effort: runParameters.runtime.effort,
         },
         run: {
           runId: trialId,
@@ -652,6 +683,7 @@ async function planWordPressDiscovery(
           profile: runtime.runtimeProfile,
           coordination: "cooperative" as const,
           prompt,
+          maxChildren: runParameters.maxChildren,
           minimumActiveMs: wordPressMinimumActiveMs(config),
           resumePrompt,
           ...wordPressSourceMounts(source),
@@ -856,6 +888,7 @@ async function resumeWordPressRun(
     config,
     lab: undefined,
     source,
+    runParameters: wordPressRunParameters(config, runtime.runtimeProfile),
   });
   const context = {
     campaignId: input.campaignId,
@@ -881,6 +914,7 @@ async function resumeWordPressRun(
     profile: runtime.runtimeProfile,
     coordination: "cooperative" as const,
     prompt,
+    maxChildren: config.discovery.maxChildren,
     resumePrompt,
     ...wordPressSourceMounts(source),
   };
@@ -1000,7 +1034,7 @@ async function runWordPressCampaign(
   ]);
   return runCampaignPipeline({
     campaignId: input.campaignId,
-    discoveryLab: config.discovery.lab,
+    discoveryLab: config.discovery.lab.mode,
     repeat: input.repeat ?? 1,
     maxConcurrentTargets: config.resources.maxConcurrentTargets,
     ...(input.targetLimit === undefined

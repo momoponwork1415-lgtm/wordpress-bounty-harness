@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CLAUDE_RUNNER_DENIALS,
   CLAUDE_RUNNER_SOURCE,
+  claudeRunnerChildLimitDenial,
 } from "../../src/discovery/claude-runner.js";
 
 const run = promisify(execFile);
@@ -39,7 +40,24 @@ export async function* query({ options }) {
 }
 `;
 
-async function runWith(sdkSource: string, minimumActiveMs = 1) {
+/** A stand-in SDK whose Root asks for three children before any of them starts. */
+const AGENT_SDK = `
+export async function* query({ options }) {
+  const hook = options.hooks.PreToolUse[0].hooks[0];
+  const decisions = [];
+  for (let call = 0; call < 3; call += 1) {
+    const answer = await hook({ tool_name: "Agent" });
+    decisions.push(answer.hookSpecificOutput?.permissionDecisionReason ?? "allow");
+  }
+  yield { type: "result", subtype: "success", is_error: false, session_id: "s", decisions };
+}
+`;
+
+async function runWith(
+  sdkSource: string,
+  minimumActiveMs = 1,
+  maxChildren = 4,
+) {
   root = await mkdtemp(join(tmpdir(), "claude-runner-"));
   const sdk = join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk");
   await mkdir(sdk, { recursive: true });
@@ -59,6 +77,7 @@ async function runWith(sdkSource: string, minimumActiveMs = 1) {
       prompt: "p",
       resumePrompt: "r",
       minimumActiveMs,
+      maxChildren,
       model: "m",
       effort: "high",
       outputSchema: { type: "object" },
@@ -117,5 +136,23 @@ describe("Claude runner", () => {
         .filter((event) => event.type === "harness.turn")
         .map(({ at: _at, ...rest }) => rest),
     ).toEqual([{ type: "harness.turn", turn: 1, sessionId: "s" }]);
+  });
+
+  it("denies a child beyond the campaign's maxChildren with that number", async () => {
+    const result = (await runWith(AGENT_SDK, 0, 2)).find(
+      (event) => event.type === "result",
+    );
+    expect(result?.decisions).toEqual([
+      "allow",
+      "allow",
+      claudeRunnerChildLimitDenial(2),
+    ]);
+    expect(claudeRunnerChildLimitDenial(2)).toBe(
+      "At most 2 children can run at once in this Trial.",
+    );
+  });
+
+  it("refuses to start without a positive maxChildren", async () => {
+    await expect(runWith(FAKE_SDK, 0, 0)).rejects.toThrow();
   });
 });
