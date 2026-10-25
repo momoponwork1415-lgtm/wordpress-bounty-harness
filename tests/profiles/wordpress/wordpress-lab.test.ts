@@ -412,6 +412,9 @@ async function fixture(
                 Buffer.from("89504e470d0a1a0a", "hex"),
                 Buffer.from("synthetic observer output"),
               ]).toString("base64"),
+              httpStatus: 404,
+              dialogCount: 1,
+              consoleErrorCount: 3,
               ...(database.browserDiagnosticOutput === "missing"
                 ? {}
                 : {
@@ -784,6 +787,77 @@ describe("WordPress gVisor Lab", () => {
         ({ args }) => args[0] === "rm" && args.includes(`wbh-${id}-ctl`),
       ),
     ).toBe(true);
+  });
+
+  it("opens an exploration Lab page as one of the Lab's own accounts in the verification observer's browser (Phase D2)", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "discovery",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const { handle } = provisioned;
+    const before = commands.length;
+    const observed = await lab.observeExplorationPage(handle, {
+      role: "subscriber",
+      path: "/?p=1",
+      actions: [{ kind: "click-text", text: "Open", exact: true }],
+      dialogMarker: "1234567890",
+    });
+    expect(observed).toMatchObject({
+      status: "observed",
+      httpStatus: 404,
+      dialogCount: 1,
+      markerDialog: false,
+      consoleErrorCount: 3,
+    });
+    const browser = commands
+      .slice(before)
+      .find(({ args }) => args.includes(`verification-browser@${sha("4")}`));
+    expect(browser?.args).toEqual(
+      expect.arrayContaining([
+        "--runtime=runsc",
+        "--network",
+        `wbh-${handle.id}-net`,
+        "--add-host=wordpress:172.20.0.10",
+        "--read-only",
+        "--cap-drop=ALL",
+        `WBH_LOGIN_USER=${handle.attackerAccounts.subscriber.username}`,
+        `WBH_LOGIN_PASSWORD=${handle.attackerAccounts.subscriber.password}`,
+        "WBH_VISIT_PATH=/?p=1",
+        `WBH_VISIT_ACTIONS=${JSON.stringify([{ kind: "click-text", text: "Open", exact: true }])}`,
+        "WBH_SCRIPT_NONCES=[]",
+        "WBH_DIALOG_MARKER=1234567890",
+      ]),
+    );
+    // No canary receiver exists to point the browser at.
+    expect(
+      browser?.args.some((arg) => arg.startsWith("--add-host=canary:")),
+    ).toBe(false);
+    // A visitor logs in as nobody; a role the Lab lacks is refused.
+    const visitor = commands.length;
+    await lab.observeExplorationPage(handle, { role: "visitor", path: "/" });
+    expect(
+      commands
+        .slice(visitor)
+        .some(({ args }) =>
+          args.some((arg) => arg.startsWith("WBH_LOGIN_USER=")),
+        ),
+    ).toBe(false);
+    expect(
+      await lab.observeExplorationPage(handle, { role: "customer", path: "/" }),
+    ).toEqual({ status: "role-unavailable" });
+    const verification = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    if (verification.status !== "ready") throw new Error("not ready");
+    expect(
+      await lab.observeExplorationPage(verification.handle, {
+        role: "visitor",
+        path: "/",
+      }),
+    ).toEqual({ status: "unavailable" });
+    await lab.teardown(verification.handle);
+    await lab.teardown(handle);
   });
 
   it("resets only exploration Labs", async () => {

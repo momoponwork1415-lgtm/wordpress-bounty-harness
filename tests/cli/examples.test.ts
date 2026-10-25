@@ -46,7 +46,11 @@ it("starts the checked-in v11 campaign with one concurrent target on WordPress 7
   });
   expect(config.resources.maxConcurrentTargets).toBe(1);
   expect(config.wordpressVersion).toBe("7.1.3");
-  expect(config.discovery.lab).toEqual({ mode: "none", maxResets: 2 });
+  expect(config.discovery.lab).toEqual({
+    mode: "none",
+    maxResets: 2,
+    maxObservations: 20,
+  });
   expect(config.discovery).toMatchObject({
     maxChildren: 4,
     minimumActiveMinutes: 60,
@@ -57,7 +61,7 @@ it("starts the checked-in v11 campaign with one concurrent target on WordPress 7
       ...(source as object),
       discovery: { lab: "attached" },
     }).discovery.lab,
-  ).toEqual({ mode: "attached", maxResets: 2 });
+  ).toEqual({ mode: "attached", maxResets: 2, maxObservations: 20 });
   for (const [maxConcurrentTargets, accepted] of [
     [10, true],
     [11, false],

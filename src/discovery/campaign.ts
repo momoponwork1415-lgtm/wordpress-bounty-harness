@@ -90,6 +90,7 @@ export type PlannedDiscoveryRun = {
     readonly lab?: {
       readonly mode: "none" | "attached";
       readonly maxResets: number;
+      readonly maxObservations?: number | undefined;
     };
     readonly model?: string;
     readonly effort?: string;

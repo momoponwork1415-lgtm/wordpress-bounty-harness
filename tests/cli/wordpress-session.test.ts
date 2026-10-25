@@ -231,6 +231,7 @@ describe("WordPress campaign session", () => {
     expect(session.config.discovery.lab).toEqual({
       mode: "attached",
       maxResets: 3,
+      maxObservations: 20,
     });
   });
 

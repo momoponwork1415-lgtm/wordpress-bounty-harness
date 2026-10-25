@@ -735,6 +735,8 @@ describe("executeTrialResume", () => {
                 resets: 0,
                 refusedResets: 0,
                 droppedAnswers: 0,
+                observations: 0,
+                refusedObservations: 0,
               };
             },
           },

@@ -294,6 +294,24 @@ async function harness(
       async run(request) {
         docker.push(request);
         track(request.args);
+        // The Lab's observer browser (verification and the exploration Lab's /observe).
+        if (
+          request.args[0] === "run" &&
+          request.args.includes(`verification-browser@${sha("4")}`)
+        )
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              screenshotBase64: Buffer.concat([
+                Buffer.from("89504e470d0a1a0a", "hex"),
+                Buffer.from("synthetic page"),
+              ]).toString("base64"),
+              httpStatus: 200,
+              dialogCount: 1,
+              consoleErrorCount: 0,
+            }),
+            stderr: "",
+          };
         if (request.args[0] === "ps")
           return {
             exitCode: 0,
@@ -1717,7 +1735,9 @@ describe("harness CLI vertical slice", () => {
     });
   });
 
-  it("attaches one exploration Lab to the Trial, answers a reset and seals what it captured (Phase D1)", async () => {
+  it("attaches one exploration Lab to the Trial, answers a reset and an observation and seals what it captured (Phase D1, D2)", async () => {
+    // The transport returns only after the Lab answered both requests.
+    let answered: unknown[] = [];
     const {
       run,
       configPath,
@@ -1732,12 +1752,25 @@ describe("harness CLI vertical slice", () => {
     } = await harness({
       omitLegacyVerifier: true,
       config: { promptId: undefined, discovery: { lab: "attached" } },
+      executionStarted: async () => {
+        for (let poll = 0; poll < 500 && answered.length < 2; poll++)
+          await new Promise((resolve) => setTimeout(resolve, 10));
+      },
     });
-    controlRequests.push({
-      id: "a".repeat(32),
-      command: "reset",
-      receivedAt: now,
-    });
+    answered = controlAnswers;
+    controlRequests.push(
+      {
+        id: "a".repeat(32),
+        command: "reset",
+        receivedAt: now,
+      },
+      {
+        id: "b".repeat(32),
+        command: "observe",
+        receivedAt: now,
+        body: { role: "subscriber", path: "/?p=1" },
+      },
+    );
     const campaignId = "campaign-exploration-lab";
     const discovered = await run(
       "campaign",
@@ -1776,6 +1809,15 @@ describe("harness CLI vertical slice", () => {
     );
     expect(prompts[0]).toContain("at most 2 times");
     expect(prompts[0]).toContain(
+      "\n\nObserve: `POST http://labctl/observe` with a JSON body opens one page of the site in the Harness's headless browser inside the Lab",
+    );
+    expect(prompts[0]).toContain(
+      'where role is "visitor" (not logged in), "subscriber" or "administrator"',
+    );
+    expect(prompts[0]).toContain(
+      "This Trial may observe at most 20 times, and the answer states how many are used. The answer is an observation, not a confirmation; report what you observed in `labObservations`.",
+    );
+    expect(prompts[0]).toContain(
       "Nothing observed in this Lab is a confirmation.",
     );
     expect(prompts[0]).toContain("- Lab: attached, at most 2 resets.");
@@ -1792,6 +1834,18 @@ describe("harness CLI vertical slice", () => {
       {
         statusCode: 200,
         body: { status: "reset", resetsUsed: 1, maxResets: 2 },
+      },
+      {
+        statusCode: 200,
+        body: {
+          status: "observed",
+          httpStatus: 200,
+          dialogOpened: true,
+          consoleErrorCount: 0,
+          screenshotDigest: expect.stringMatching(/^sha256:/),
+          observationsUsed: 1,
+          maxObservations: 20,
+        },
       },
     ]);
     const startedEvent = ledger().read({
@@ -1816,6 +1870,8 @@ describe("harness CLI vertical slice", () => {
         droppedRequests: 0,
         resets: 1,
         refusedResets: 0,
+        observations: 1,
+        refusedObservations: 0,
       },
     });
     const bundle =
@@ -2259,7 +2315,7 @@ describe("harness CLI vertical slice", () => {
     ).toBe(false);
     // Owner decision 2026-10-18: the normal mode explores without a Lab.
     expect(wordpressCampaignConfigSchema.parse(base).discovery).toEqual({
-      lab: { mode: "none", maxResets: 2 },
+      lab: { mode: "none", maxResets: 2, maxObservations: 20 },
       mode: "deep",
       maxChildren: 4,
       minimumActiveMinutes: 60,
@@ -2376,13 +2432,13 @@ describe("harness CLI vertical slice", () => {
         ...base,
         discovery: { lab: "attached" },
       }).discovery.lab,
-    ).toEqual({ mode: "attached", maxResets: 2 });
+    ).toEqual({ mode: "attached", maxResets: 2, maxObservations: 20 });
     expect(
       wordpressCampaignConfigSchema.parse({
         ...base,
         discovery: { lab: { mode: "attached", maxResets: 5 } },
       }).discovery.lab,
-    ).toEqual({ mode: "attached", maxResets: 5 });
+    ).toEqual({ mode: "attached", maxResets: 5, maxObservations: 20 });
     for (const rejected of [
       { discovery: deep, promptId: "wp2shell-bounty-v13-wide" },
       { promptId: "wp2shell-bounty-v13-wide" },

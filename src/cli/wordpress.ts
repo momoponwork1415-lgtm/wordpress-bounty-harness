@@ -454,7 +454,15 @@ function wordPressRunParameters(
     wallMinutes: config.runWallTimeMinutes,
     minimumActiveMinutes: config.discovery.minimumActiveMinutes,
     maxChildren: config.discovery.maxChildren,
-    lab: config.discovery.lab,
+    // The observe budget is recorded for attached Labs only, so Lab-less
+    // runs keep the configuration they had.
+    lab:
+      config.discovery.lab.mode === "none"
+        ? {
+            mode: config.discovery.lab.mode,
+            maxResets: config.discovery.lab.maxResets,
+          }
+        : config.discovery.lab,
     runtime: {
       transportKind: profile.transportKind,
       model: profile.requestedModelId,
@@ -486,7 +494,7 @@ function wordPressDiscoveryPromptText(options: {
   readonly config: WordPressCampaignConfig;
   readonly lab: WordPressDiscoveryInput["lab"];
   /** A resumed segment's fresh Lab: how many resets earlier segments used. */
-  readonly resumedLab?: { readonly resetsUsed: number };
+  readonly resumedLab?: WordPressLabUsed;
   readonly source: WordPressDiscoverySource;
   readonly runParameters: RunParameters;
 }): string {
@@ -506,13 +514,7 @@ function wordPressDiscoveryPromptText(options: {
       ? [
           "This Trial has no Lab. Runtime confirmation happens during verification.",
         ]
-      : [
-          wordPressLabSection(
-            lab,
-            config.discovery.lab.maxResets,
-            options.resumedLab,
-          ),
-        ]),
+      : [wordPressLabSection(lab, config.discovery.lab, options.resumedLab)]),
     ...(source.dependency === undefined
       ? []
       : [
@@ -531,20 +533,32 @@ function wordPressDiscoveryPromptText(options: {
   ].join("\n\n");
 }
 
+/** What earlier segments of a resumed Trial used of its Lab budgets. */
+type WordPressLabUsed = {
+  readonly resetsUsed: number;
+  readonly observationsUsed: number;
+};
+type WordPressLabBudget = {
+  readonly maxResets: number;
+  readonly maxObservations: number;
+};
+
 /**
  * The Harness-generated `## Lab` section of a Trial with an exploration Lab
- * (ADR 0003, 2026-10-25 addendum). It states the endpoint, both accounts,
- * the reset budget and that the Lab confirms nothing; it says nothing about
- * what to try. Passwords are written here: the sandbox has no other channel
- * for Lab credentials. A resumed segment's section states that its Lab is new
- * and how much of the Trial's reset budget is used; it is that segment's
- * first-turn notice. Agent-facing text: changes need `owner-approved`.
+ * (ADR 0003, 2026-10-25 addendum). It states the endpoint, the accounts,
+ * the reset and observe commands with their budgets, and that the Lab
+ * confirms nothing; it says nothing about what to try. Passwords are written
+ * here: the sandbox has no other channel for Lab credentials. A resumed
+ * segment's section states that its Lab is new and how much of the Trial's
+ * budgets is used; it is that segment's first-turn notice. Agent-facing
+ * text: changes need `owner-approved`.
  */
 export function wordPressLabSection(
   lab: WordPressLabHandle,
-  maxResets: number,
-  resumed?: { readonly resetsUsed: number },
+  budget: WordPressLabBudget,
+  resumed?: WordPressLabUsed,
 ): string {
+  const { maxResets, maxObservations } = budget;
   const exploration = lab.exploration;
   if (exploration === undefined)
     throw new Error("The discovery Lab is not an exploration Lab");
@@ -555,6 +569,14 @@ export function wordPressLabSection(
         ? []
         : [`- ${role} account: ${account.username} / ${account.password}`],
   );
+  const roles = [
+    `"visitor" (not logged in)`,
+    ...Object.entries(lab.attackerAccounts).flatMap(([role, account]) =>
+      account === undefined ? [] : [`"${role}"`],
+    ),
+    `"administrator"`,
+  ];
+  const roleList = `${roles.slice(0, -1).join(", ")} or ${roles.at(-1)}`;
   return [
     "## Lab",
     [
@@ -566,6 +588,7 @@ export function wordPressLabSection(
       ...accounts,
       `- Reset: \`POST http://${control.host}/reset\` removes the site and provisions it again from the same setup; the accounts above stay the same. ${resumed === undefined ? `This Trial may reset at most ${maxResets} times` : `This Trial may reset at most ${maxResets} times in all and has used ${resumed.resetsUsed}`}, and the answer states how many are used. Other requests through \`${lab.endpoint}\` are counted, not limited.`,
     ].join("\n"),
+    `Observe: \`POST http://${control.host}/observe\` with a JSON body opens one page of the site in the Harness's headless browser inside the Lab and answers with what the browser saw. The body is \`{"role": ..., "path": "/..."}\`, where role is ${roleList}, and the browser logs in with that account above. It may add \`"actions"\`, up to 5 steps run in order after the page loads, each \`{"kind": "click", "selector": "..."}\`, \`{"kind": "click-text", "text": "...", "exact": true}\` or \`{"kind": "fill", "selector": "...", "value": "..."}\`, and \`"dialogMarker"\`, 10 to 15 digits not starting with 0. The answer gives the HTTP status of the path, whether a dialog opened and, with a marker, whether an alert with exactly that text opened, the console error count, and the digest of a screenshot the Harness keeps. ${resumed === undefined ? `This Trial may observe at most ${maxObservations} times` : `This Trial may observe at most ${maxObservations} times in all and has used ${resumed.observationsUsed}`}, and the answer states how many are used. The answer is an observation, not a confirmation; report what you observed in \`labObservations\`.`,
     "The Harness records the HTTP traffic through the site address and the site state before and after each reset. Nothing observed in this Lab is a confirmation. A setting you make as administrator is a configuration precondition; state it in `configurationPrecondition`. In a Finding or Lead, `labObservations` states what you tried in the Lab and what you saw.",
   ].join("\n\n");
 }
@@ -952,11 +975,17 @@ async function resumeWordPressRun(
       reason: "lab-budget-differs",
       detail: `the Trial started with discovery.lab.maxResets ${recordedLab.maxResets}; the campaign configuration has ${config.discovery.lab.maxResets}`,
     };
+  const labBudget: WordPressLabBudget | undefined = attached
+    ? {
+        maxResets: recordedLab.maxResets,
+        maxObservations: config.discovery.lab.maxObservations,
+      }
+    : undefined;
   const source = await boundaries.sourceFor(snapshot);
   const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
   const promptWith = (
     lab: WordPressLabHandle | undefined,
-    resumedLab?: { readonly resetsUsed: number },
+    resumedLab?: WordPressLabUsed,
   ) =>
     wordPressDiscoveryPromptText({
       objective,
@@ -1057,8 +1086,8 @@ async function resumeWordPressRun(
     campaignId: input.campaignId,
     previousLabId: started.labId,
     plan,
-    maxResets: recordedLab!.maxResets,
-    resetsUsed: plan.lab.resetsUsed,
+    budget: labBudget!,
+    used: plan.lab,
     promptWith,
     context,
     run,
@@ -1082,12 +1111,12 @@ async function resumeWithExplorationLab(options: {
   readonly campaignId: string;
   readonly previousLabId: string | undefined;
   readonly plan: ResumePlan;
-  /** The reset budget the resumed run recorded when it started. */
-  readonly maxResets: number;
-  readonly resetsUsed: number;
+  /** The Lab budget the resumed run recorded when it started. */
+  readonly budget: WordPressLabBudget;
+  readonly used: WordPressLabUsed;
   readonly promptWith: (
     lab: WordPressLabHandle,
-    resumedLab: { readonly resetsUsed: number },
+    resumedLab: WordPressLabUsed,
   ) => string;
   readonly context: Omit<
     Parameters<typeof executeTrialResume>[0],
@@ -1170,8 +1199,8 @@ async function resumeWithExplorationLab(options: {
       };
     if (handle.exploration === undefined)
       throw new Error("The discovery Lab is not an exploration Lab");
-    const resumedLab = { resetsUsed: options.resetsUsed };
-    const notice = wordPressLabSection(handle, options.maxResets, resumedLab);
+    const resumedLab = options.used;
+    const notice = wordPressLabSection(handle, options.budget, resumedLab);
     outcome = await executeTrialResume(
       {
         ...options.context,
@@ -1183,8 +1212,10 @@ async function resumeWithExplorationLab(options: {
         lab: openWordPressExplorationLab({
           lab: boundaries.lab,
           handle,
-          maxResets: options.maxResets,
-          resetsUsedBefore: options.resetsUsed,
+          maxResets: options.budget.maxResets,
+          resetsUsedBefore: options.used.resetsUsed,
+          maxObservations: options.budget.maxObservations,
+          observationsUsedBefore: options.used.observationsUsed,
           store: state.store,
           clock: state.clock,
         }),
@@ -1352,6 +1383,7 @@ async function runWordPressCampaign(
           lab: boundaries.lab,
           handle,
           maxResets: config.discovery.lab.maxResets,
+          maxObservations: config.discovery.lab.maxObservations,
           store: state.store,
           clock: state.clock,
         }),

@@ -8,10 +8,15 @@ import type { TrialLab, TrialLabRecord } from "../../../lab/index.js";
 import type { LabStateDiffRecord } from "../../../verification/index.js";
 import { createWordPressLabStateObserver } from "../verification/lab-state-diff.js";
 import type { WordPressLab, WordPressLabHandle } from "./index.js";
+import {
+  wordpressExplorationObserveSchema,
+  type WordPressExplorationObserveRequest,
+} from "./lab-observation.js";
 
 /** The Private Evidence bundle one Trial's exploration Lab leaves behind. */
 export const EXPLORATION_LAB_CAPTURE_FILE = "capture.jsonl";
 export const EXPLORATION_LAB_RECORD_FILE = "exploration-lab.json";
+export const EXPLORATION_LAB_SCREENSHOT_FILE = "screenshot.png";
 /** How long one `docker exec … next` waits for a command before asking again. */
 const CONTROL_WAIT_SECONDS = 10;
 
@@ -30,13 +35,29 @@ type ResetRecord = {
   /** The answer did not reach labctl, even after one retry. */
   readonly answerDropped?: true;
 };
+type ObservationRecord = {
+  readonly requestedAt: string;
+  readonly answeredAt: string;
+  readonly status: "observed" | "failed" | "refused";
+  readonly reason?:
+    | "budget"
+    | "unavailable"
+    | "invalid-request"
+    | "role-unavailable"
+    | "harness-error";
+  readonly request?: WordPressExplorationObserveRequest;
+  readonly answer: Readonly<Record<string, unknown>>;
+  /** The answer did not reach labctl, even after one retry. */
+  readonly answerDropped?: true;
+};
 
 /**
  * One Trial's exploration Lab as the Harness drives it (ADR 0003, 2026-10-25
- * addendum): it answers `POST /reset` within `maxResets`, takes the site
- * state before and after every Lab generation, and at the end seals the
- * recorder's capture with those states. It judges nothing; whether anything
- * fired is the agent's report (`labObservations`) and the human's call.
+ * addendum): it answers `POST /reset` within `maxResets` and `POST /observe`
+ * within `maxObservations`, takes the site state before and after every Lab
+ * generation, and at the end seals the recorder's capture with those states
+ * and the observations. It judges nothing; whether anything fired is the
+ * agent's report (`labObservations`) and the human's call.
  */
 export function openWordPressExplorationLab(options: {
   readonly lab: Pick<
@@ -46,16 +67,26 @@ export function openWordPressExplorationLab(options: {
     | "reset"
     | "nextControlRequest"
     | "answerControlRequest"
+    | "observeExplorationPage"
   >;
   readonly handle: WordPressLabHandle;
   readonly maxResets: number;
   /** Resets earlier segments of the same Trial used; the budget is the Trial's. */
   readonly resetsUsedBefore?: number;
+  readonly maxObservations: number;
+  /** Observations earlier segments of the same Trial used. */
+  readonly observationsUsedBefore?: number;
   readonly store: PrivateArtifactStore;
   readonly clock: () => Date;
 }): TrialLab {
-  const { lab, handle, maxResets, store, clock } = options;
+  const { lab, handle, maxResets, maxObservations, store, clock } = options;
   const resetsUsedBefore = options.resetsUsedBefore ?? 0;
+  const observationsUsedBefore = options.observationsUsedBefore ?? 0;
+  const observations: ObservationRecord[] = [];
+  /** Observer visits the Trial has used so far, across its segments. */
+  const observedInTrial = () =>
+    observationsUsedBefore +
+    observations.filter((entry) => entry.status !== "refused").length;
   /** Resets the Trial has used so far, across its segments. */
   const usedInTrial = () =>
     resetsUsedBefore +
@@ -152,22 +183,124 @@ export function openWordPressExplorationLab(options: {
     await openGeneration();
     return answer(request, { status: "reset" }, 200);
   };
+  const answerObservation = async (
+    request: ControlRequest,
+    record: Omit<
+      ObservationRecord,
+      "requestedAt" | "answeredAt" | "answer" | "answerDropped"
+    >,
+    statusCode: number,
+    result: Readonly<Record<string, unknown>> = {},
+  ): Promise<void> => {
+    const body = {
+      status: record.status,
+      ...(record.reason === undefined ? {} : { reason: record.reason }),
+      ...result,
+      observationsUsed:
+        observedInTrial() + (record.status === "refused" ? 0 : 1),
+      maxObservations,
+    };
+    const delivered = await send(request.id, { statusCode, body });
+    observations.push({
+      requestedAt: request.receivedAt,
+      answeredAt: clock().toISOString(),
+      ...record,
+      answer: body,
+      ...(delivered ? {} : { answerDropped: true as const }),
+    });
+  };
+  const handleObserve = async (request: ControlRequest): Promise<void> => {
+    const parsed = wordpressExplorationObserveSchema.safeParse(request.body);
+    if (!parsed.success)
+      return answerObservation(
+        request,
+        { status: "refused", reason: "invalid-request" },
+        400,
+      );
+    const asked = parsed.data;
+    if (broken)
+      return answerObservation(
+        request,
+        { status: "refused", reason: "unavailable", request: asked },
+        503,
+      );
+    if (observedInTrial() >= maxObservations)
+      return answerObservation(
+        request,
+        { status: "refused", reason: "budget", request: asked },
+        429,
+      );
+    const observed = await lab
+      .observeExplorationPage(handle, asked)
+      .catch(() => ({ status: "unavailable" }) as const);
+    if (observed.status === "role-unavailable")
+      return answerObservation(
+        request,
+        { status: "refused", reason: "role-unavailable", request: asked },
+        400,
+      );
+    if (observed.status === "unavailable")
+      return answerObservation(
+        request,
+        { status: "refused", reason: "unavailable", request: asked },
+        503,
+      );
+    if (observed.status === "failed")
+      return answerObservation(
+        request,
+        { status: "failed", request: asked },
+        502,
+        {
+          failureCode: observed.failureCode,
+        },
+      );
+    const screenshotDigest = await store
+      .putFiles({ [EXPLORATION_LAB_SCREENSHOT_FILE]: observed.screenshot })
+      .catch(() => null);
+    return answerObservation(
+      request,
+      { status: "observed", request: asked },
+      200,
+      {
+        httpStatus: observed.httpStatus ?? null,
+        dialogOpened: observed.dialogCount > 0,
+        ...(asked.dialogMarker === undefined
+          ? {}
+          : {
+              marker: {
+                text: asked.dialogMarker,
+                alertOpened: observed.markerDialog === true,
+              },
+            }),
+        consoleErrorCount: observed.consoleErrorCount,
+        screenshotDigest,
+      },
+    );
+  };
   /**
    * Runs one command. A throw answers it `failed` with a fixed reason (no
-   * message, no stack), counts the attempt and is logged with the resets,
+   * message, no stack), counts the attempt and is logged with its command,
    * so the loop keeps serving.
    */
   const handleCommand = async (request: ControlRequest): Promise<void> => {
     try {
-      await handleReset(request);
+      if (request.command === "reset") await handleReset(request);
+      else if (request.command === "observe") await handleObserve(request);
     } catch {
-      // The site state the next generation starts from is no longer known.
-      before = null;
-      await answer(
-        request,
-        { status: "failed", reason: "harness-error" },
-        500,
-      ).catch(() => undefined);
+      if (request.command === "reset") {
+        // The site state the next generation starts from is no longer known.
+        before = null;
+        await answer(
+          request,
+          { status: "failed", reason: "harness-error" },
+          500,
+        ).catch(() => undefined);
+      } else
+        await answerObservation(
+          request,
+          { status: "failed", reason: "harness-error" },
+          500,
+        ).catch(() => undefined);
     }
   };
   const serve = async (): Promise<void> => {
@@ -225,6 +358,11 @@ export function openWordPressExplorationLab(options: {
         refusedResets: resets.filter((entry) => entry.status === "refused")
           .length,
         droppedAnswers,
+        observations: observations.filter((entry) => entry.status !== "refused")
+          .length,
+        refusedObservations: observations.filter(
+          (entry) => entry.status === "refused",
+        ).length,
       };
       const record = {
         schemaVersion: 1,
@@ -232,6 +370,8 @@ export function openWordPressExplorationLab(options: {
         setupDigest: handle.setupDigest,
         maxResets,
         resetsUsedBefore,
+        maxObservations,
+        observationsUsedBefore,
         capture:
           capture.status === "captured"
             ? {
@@ -243,6 +383,7 @@ export function openWordPressExplorationLab(options: {
             : { status: "unavailable" },
         generations,
         resetLog: resets,
+        observationLog: observations,
         ...counts,
       };
       try {

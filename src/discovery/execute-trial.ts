@@ -126,6 +126,8 @@ export function finishedEventFrom(
             resets: outcome.lab.resets,
             refusedResets: outcome.lab.refusedResets,
             droppedAnswers: outcome.lab.droppedAnswers,
+            observations: outcome.lab.observations,
+            refusedObservations: outcome.lab.refusedObservations,
           },
         }),
     artifacts: [

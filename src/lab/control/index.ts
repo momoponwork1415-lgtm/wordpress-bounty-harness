@@ -19,13 +19,17 @@ import { join } from "node:path";
  */
 export const CONTROL_STATE_DIRECTORY = "/var/lib/wbh-control";
 /** The commands the endpoint relays; anything else is answered 404 here. */
-export const CONTROL_COMMANDS = ["reset"] as const;
+export const CONTROL_COMMANDS = ["reset", "observe"] as const;
 export type ControlCommand = (typeof CONTROL_COMMANDS)[number];
+/** The largest request body relayed; the host validates its shape. */
+export const MAX_CONTROL_BODY_BYTES = 16 * 1024;
 
 export interface ControlRequest {
   readonly id: string;
   readonly command: ControlCommand;
   readonly receivedAt: string;
+  /** The parsed JSON body, when the request had one; never interpreted here. */
+  readonly body?: unknown;
 }
 
 export interface ControlAnswer {
@@ -63,17 +67,52 @@ export function createControlServer(options: {
   const pollMs = options.pollMs ?? 250;
   const clock = options.clock ?? (() => new Date());
   let busy = false;
-  return createServer((request, response) => {
-    request.resume();
+  const server = createServer((request, response) => {
     const path = (request.url ?? "/").split("?")[0];
     const command = CONTROL_COMMANDS.find((name) => path === `/${name}`);
     if (request.method !== "POST" || command === undefined) {
+      request.resume();
       reply(response, 404, {
         status: "unknown-command",
         commands: CONTROL_COMMANDS.map((name) => `POST /${name}`),
       });
       return;
     }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let tooLarge = false;
+    request.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_CONTROL_BODY_BYTES) tooLarge = true;
+      else chunks.push(chunk);
+    });
+    request.on("end", () => {
+      if (tooLarge) {
+        reply(response, 413, {
+          status: "body-too-large",
+          maxBytes: MAX_CONTROL_BODY_BYTES,
+        });
+        return;
+      }
+      const text = Buffer.concat(chunks).toString("utf8").trim();
+      let body: unknown;
+      if (text !== "")
+        try {
+          body = JSON.parse(text) as unknown;
+        } catch {
+          reply(response, 400, { status: "invalid-json" });
+          return;
+        }
+      relay(response, command, body);
+    });
+  });
+  return server;
+
+  function relay(
+    response: ServerResponse,
+    command: ControlCommand,
+    body: unknown,
+  ): void {
     if (busy) {
       reply(response, 409, { status: "busy" });
       return;
@@ -84,6 +123,7 @@ export function createControlServer(options: {
       id,
       command,
       receivedAt: clock().toISOString(),
+      ...(body === undefined ? {} : { body }),
     };
     writeAtomically(
       join(options.directory, REQUEST_FILE),
@@ -117,7 +157,7 @@ export function createControlServer(options: {
       setTimeout(poll, pollMs);
     };
     poll();
-  });
+  }
 }
 
 /** The pending command, or null; the host calls this through `docker exec`. */

@@ -75,4 +75,8 @@ export interface TrialLabRecord {
   readonly refusedResets: number;
   /** Commands whose answer did not reach the control endpoint, even after one retry. */
   readonly droppedAnswers: number;
+  /** Observer visits the Lab ran for the agent (`POST /observe`, Phase D2). */
+  readonly observations: number;
+  /** Observe requests refused (invalid, budget spent, role or Lab unavailable). */
+  readonly refusedObservations: number;
 }

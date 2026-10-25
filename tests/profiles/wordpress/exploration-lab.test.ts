@@ -44,6 +44,10 @@ const state = (blogname: string): WordPressLabState => ({
   tables: [],
 });
 
+const PNG = Buffer.concat([
+  Buffer.from("89504e470d0a1a0a", "hex"),
+  Buffer.from("synthetic"),
+]);
 const exchange = JSON.stringify({
   request: {
     method: "GET",
@@ -72,6 +76,13 @@ async function fixture(options: {
   /** The first this many answers do not reach labctl. */
   readonly answerFails?: number;
   readonly captureAvailable?: boolean;
+  /** Observe bodies queued after the resets, in order. */
+  readonly observe?: readonly unknown[];
+  readonly maxObservations?: number;
+  readonly observationsUsedBefore?: number;
+  readonly observed?: Awaited<
+    ReturnType<WordPressLab["observeExplorationPage"]>
+  >;
 }) {
   const directory = await mkdtemp(join(tmpdir(), "wbh-exploration-lab-"));
   directories.push(directory);
@@ -80,14 +91,21 @@ async function fixture(options: {
     maxEntries: 8,
     maxBytes: 1024 * 1024,
   });
-  const queue: ControlRequest[] = Array.from(
-    { length: options.requests },
-    (_, index) => ({
+  const queue: ControlRequest[] = [
+    ...Array.from({ length: options.requests }, (_, index) => ({
       id: String(index).repeat(32),
-      command: "reset",
+      command: "reset" as const,
       receivedAt: "2026-10-25T00:00:00.000Z",
-    }),
-  );
+    })),
+    ...(options.observe ?? []).map((body, index) => ({
+      id: "abcdef"[index]!.repeat(32),
+      command: "observe" as const,
+      receivedAt: "2026-10-25T00:00:00.000Z",
+      body,
+    })),
+  ];
+  const expectedAnswers = queue.length;
+  const observedRequests: unknown[] = [];
   let drained!: () => void;
   const allAnswered = new Promise<void>((resolve) => (drained = resolve));
   if (queue.length === 0) drained();
@@ -116,6 +134,19 @@ async function fixture(options: {
     async nextControlRequest() {
       return queue[0] ?? null;
     },
+    async observeExplorationPage(_handle, request) {
+      observedRequests.push(request);
+      return (
+        options.observed ?? {
+          status: "observed",
+          httpStatus: 200,
+          dialogCount: 1,
+          markerDialog: true,
+          consoleErrorCount: 2,
+          screenshot: PNG,
+        }
+      );
+    },
     async answerControlRequest(_handle, id, answer) {
       if (++answerCalls <= (options.answerFails ?? 0)) return false;
       queue.splice(
@@ -123,7 +154,7 @@ async function fixture(options: {
         1,
       );
       answers.push({ id, ...answer });
-      if (answers.length === options.requests) drained();
+      if (answers.length === expectedAnswers) drained();
       return true;
     },
   } satisfies Pick<
@@ -133,6 +164,7 @@ async function fixture(options: {
     | "reset"
     | "nextControlRequest"
     | "answerControlRequest"
+    | "observeExplorationPage"
   >;
   const trialLab = openWordPressExplorationLab({
     lab,
@@ -141,19 +173,27 @@ async function fixture(options: {
     ...(options.resetsUsedBefore === undefined
       ? {}
       : { resetsUsedBefore: options.resetsUsedBefore }),
+    maxObservations: options.maxObservations ?? 20,
+    ...(options.observationsUsedBefore === undefined
+      ? {}
+      : { observationsUsedBefore: options.observationsUsedBefore }),
     store,
     clock: () => new Date("2026-10-25T00:00:00.000Z"),
   });
-  const read = async (digest: string, name: string) => {
+  const readBytes = async (digest: string, name: string) => {
     const file = await store.readFile(digest, name, 1024 * 1024);
     if (file.status !== "resolved") throw new Error(file.status);
-    return file.bytes.toString("utf8");
+    return file.bytes;
   };
+  const read = async (digest: string, name: string) =>
+    (await readBytes(digest, name)).toString("utf8");
   return {
     trialLab,
     allAnswered,
     answers,
     read,
+    readBytes,
+    observedRequests,
     resets: () => resets,
   };
 }
@@ -252,6 +292,180 @@ describe("exploration Lab driver", () => {
     expect(
       JSON.parse(await read(record.artifactDigest!, "exploration-lab.json")),
     ).toMatchObject({ maxResets: 2, resetsUsedBefore: 1 });
+  });
+
+  it("runs typed observe requests within the budget, keeps each screenshot and seals the log (Phase D2)", async () => {
+    const {
+      trialLab,
+      allAnswered,
+      answers,
+      read,
+      readBytes,
+      observedRequests,
+    } = await fixture({
+      requests: 0,
+      maxResets: 2,
+      maxObservations: 2,
+      observationsUsedBefore: 1,
+      observe: [
+        { role: "subscriber", path: "/?p=1", dialogMarker: "1234567890" },
+        { role: "visitor", path: "/", script: "alert(1)" },
+        { role: "administrator", path: "/wp-admin/" },
+      ],
+    });
+    await trialLab.open();
+    await allAnswered;
+    const record = await trialLab.seal();
+    // Only the valid request reaches the observer; no free-form field passes.
+    expect(observedRequests).toEqual([
+      { role: "subscriber", path: "/?p=1", dialogMarker: "1234567890" },
+    ]);
+    expect(answers).toEqual([
+      {
+        id: "a".repeat(32),
+        statusCode: 200,
+        body: {
+          status: "observed",
+          httpStatus: 200,
+          dialogOpened: true,
+          marker: { text: "1234567890", alertOpened: true },
+          consoleErrorCount: 2,
+          screenshotDigest: expect.stringMatching(/^sha256:/),
+          observationsUsed: 2,
+          maxObservations: 2,
+        },
+      },
+      {
+        id: "b".repeat(32),
+        statusCode: 400,
+        body: {
+          status: "refused",
+          reason: "invalid-request",
+          observationsUsed: 2,
+          maxObservations: 2,
+        },
+      },
+      {
+        id: "c".repeat(32),
+        statusCode: 429,
+        body: {
+          status: "refused",
+          reason: "budget",
+          observationsUsed: 2,
+          maxObservations: 2,
+        },
+      },
+    ]);
+    // Nothing in the answer says the hypothesis holds.
+    expect(JSON.stringify(answers)).not.toMatch(/confirm/i);
+    const screenshot = (answers[0] as { body: { screenshotDigest: string } })
+      .body.screenshotDigest;
+    expect(await readBytes(screenshot, "screenshot.png")).toEqual(PNG);
+    expect(record).toMatchObject({
+      resets: 0,
+      observations: 1,
+      refusedObservations: 2,
+    });
+    const sealed = JSON.parse(
+      await read(record.artifactDigest!, "exploration-lab.json"),
+    );
+    expect(sealed).toMatchObject({
+      maxObservations: 2,
+      observationsUsedBefore: 1,
+      observations: 1,
+      refusedObservations: 2,
+    });
+    expect(
+      sealed.observationLog.map(
+        (entry: { status: string; reason?: string }) =>
+          entry.reason ?? entry.status,
+      ),
+    ).toEqual(["observed", "invalid-request", "budget"]);
+    expect(sealed.observationLog[0].request).toEqual({
+      role: "subscriber",
+      path: "/?p=1",
+      dialogMarker: "1234567890",
+    });
+  });
+
+  it("answers an observer failure and a missing role without a screenshot", async () => {
+    const failed = await fixture({
+      requests: 0,
+      maxResets: 2,
+      observe: [{ role: "subscriber", path: "/" }],
+      observed: { status: "failed", failureCode: "victim-login" },
+    });
+    await failed.trialLab.open();
+    await failed.allAnswered;
+    expect(await failed.trialLab.seal()).toMatchObject({
+      observations: 1,
+      refusedObservations: 0,
+    });
+    expect(failed.answers).toEqual([
+      {
+        id: "a".repeat(32),
+        statusCode: 502,
+        body: {
+          status: "failed",
+          failureCode: "victim-login",
+          observationsUsed: 1,
+          maxObservations: 20,
+        },
+      },
+    ]);
+    const missing = await fixture({
+      requests: 0,
+      maxResets: 2,
+      observe: [{ role: "customer", path: "/" }],
+      observed: { status: "role-unavailable" },
+    });
+    await missing.trialLab.open();
+    await missing.allAnswered;
+    expect(await missing.trialLab.seal()).toMatchObject({
+      observations: 0,
+      refusedObservations: 1,
+    });
+    expect(missing.answers).toMatchObject([
+      {
+        statusCode: 400,
+        body: { status: "refused", reason: "role-unavailable" },
+      },
+    ]);
+  });
+
+  it("answers an observe request the Harness threw on as failed and counts it", async () => {
+    const { trialLab, allAnswered, answers, read } = await fixture({
+      requests: 0,
+      maxResets: 2,
+      observe: [{ role: "subscriber", path: "/" }],
+      // An observer result that throws when read makes the driver throw mid-command.
+      observed: Object.defineProperty({}, "status", {
+        get() {
+          throw new Error("secret-bearing failure");
+        },
+      }) as never,
+    });
+    await trialLab.open();
+    await allAnswered;
+    const record = await trialLab.seal();
+    expect(answers).toEqual([
+      {
+        id: "a".repeat(32),
+        statusCode: 500,
+        body: {
+          status: "failed",
+          reason: "harness-error",
+          observationsUsed: 1,
+          maxObservations: 20,
+        },
+      },
+    ]);
+    expect(record).toMatchObject({ observations: 1, refusedObservations: 0 });
+    expect(
+      JSON.parse(await read(record.artifactDigest!, "exploration-lab.json"))
+        .observationLog,
+    ).toMatchObject([{ status: "failed", reason: "harness-error" }]);
+    expect(JSON.stringify(answers)).not.toContain("secret-bearing");
   });
 
   it("refuses every later reset once one failed, and still seals", async () => {
