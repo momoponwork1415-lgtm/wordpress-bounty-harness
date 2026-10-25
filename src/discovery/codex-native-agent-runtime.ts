@@ -101,7 +101,8 @@ export function extractCandidateReport(message: string) {
     throw new Error("Final message has no candidate arrays");
   return candidateReportSchema.parse(value);
 }
-export function mergeRootTurnReports(messages: readonly string[]) {
+/** Every turn's report, merged: Root continuation turns and child follow-up turns alike. */
+export function mergeTurnReports(messages: readonly string[]) {
   const reports: z.infer<typeof candidateReportSchema>[] = [];
   for (const message of messages) {
     try {
@@ -146,7 +147,7 @@ function extractRootCandidateReport(stdout: string) {
       // A malformed event does not erase a later final message.
     }
   }
-  return mergeRootTurnReports(messages);
+  return mergeTurnReports(messages);
 }
 
 function extractRootCandidateReportFromRollout(raw: string) {
@@ -165,7 +166,7 @@ function extractRootCandidateReportFromRollout(raw: string) {
       // An interrupted rollout can end with a partial line.
     }
   }
-  return mergeRootTurnReports(messages);
+  return mergeTurnReports(messages);
 }
 function childClaim(value: unknown): unknown {
   if (typeof value !== "string") return value;
@@ -639,6 +640,8 @@ type ChildRollout = {
   readonly usage: z.infer<typeof usageSchema> | undefined;
   readonly commands: readonly ObservedCommand[];
   readonly finalMessage: string | undefined;
+  /** Each completed turn's final message, in order; a Root follow-up starts a new turn. */
+  readonly turnMessages: readonly string[];
   readonly startedAt: string;
   readonly completedAt: string;
   readonly captureTruncated: boolean;
@@ -655,6 +658,7 @@ function decodeChildRollout(
   let cyberAccessProgram: string | undefined;
   let usage: z.infer<typeof usageSchema> | undefined;
   let finalMessage: string | undefined;
+  const turnMessages: string[] = [];
   let startedAt: string | undefined;
   let completedAt: string | undefined;
   let captureTruncated = false;
@@ -710,8 +714,10 @@ function decodeChildRollout(
               : {}),
           });
       } else if (payload?.type === "task_complete") {
-        if (typeof payload.last_agent_message === "string")
+        if (typeof payload.last_agent_message === "string") {
           finalMessage = payload.last_agent_message;
+          turnMessages.push(payload.last_agent_message);
+        }
         if (typeof event.timestamp === "string") completedAt = event.timestamp;
       }
     }
@@ -726,6 +732,7 @@ function decodeChildRollout(
     usage,
     commands,
     finalMessage,
+    turnMessages,
     startedAt: startedAt ?? new Date(0).toISOString(),
     completedAt: completedAt ?? startedAt ?? new Date(0).toISOString(),
     captureTruncated,
@@ -736,6 +743,26 @@ function parseChildFinalMessage(
   message: string,
 ): z.infer<typeof candidateReportSchema> {
   return extractCandidateReport(message);
+}
+
+/**
+ * A child answers each Root follow-up with a new turn and a new report, so a
+ * later prose reply or a failed last turn must not erase the earlier reports.
+ * One report is kept as written; several are merged as Root turns are.
+ */
+function childTurnsReport(
+  messages: readonly string[],
+): z.infer<typeof candidateReportSchema> | undefined {
+  const reports = messages.filter((message) => {
+    try {
+      extractCandidateReport(message);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (reports.length === 1) return parseChildFinalMessage(reports[0]!);
+  return mergeTurnReports(reports);
 }
 
 /** Recover a final report from the receipt-bound private Root rollout. */
@@ -2038,7 +2065,9 @@ export class CodexNativeAgentRuntime {
     let attachment: ProviderAttachmentRef | undefined;
     if (reason === undefined) {
       try {
-        const report = parseChildFinalMessage(child.finalMessage ?? "");
+        const report = childTurnsReport(child.turnMessages);
+        if (report === undefined)
+          throw new Error("No child turn ended with a report");
         attachment = await this.attachments.put(
           "findings",
           Buffer.from(canonicalJson(report)),
