@@ -35,38 +35,44 @@ afterEach(async () => {
   if (root !== undefined) await rm(root, { recursive: true, force: true });
 });
 
+/** Runs the runner source against the stand-in SDK and returns its stdout events. */
+async function runRunner(minimumActiveMs: number) {
+  root = await mkdtemp(join(tmpdir(), "claude-runner-"));
+  const sdk = join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk");
+  await mkdir(sdk, { recursive: true });
+  await writeFile(
+    join(sdk, "package.json"),
+    JSON.stringify({
+      name: "@anthropic-ai/claude-agent-sdk",
+      type: "module",
+      main: "index.js",
+    }),
+  );
+  await writeFile(join(sdk, "index.js"), FAKE_SDK);
+  await writeFile(join(root, "runner.mjs"), CLAUDE_RUNNER_SOURCE);
+  const child = run(process.execPath, [join(root, "runner.mjs")]);
+  child.child.stdin?.end(
+    JSON.stringify({
+      prompt: "p",
+      resumePrompt: "r",
+      minimumActiveMs,
+      model: "m",
+      effort: "high",
+      outputSchema: { type: "object" },
+    }),
+  );
+  const { stdout } = await child;
+  return stdout
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 describe("Claude runner", () => {
   it("lets the Root hand in its report through StructuredOutput and keeps it from children", async () => {
-    root = await mkdtemp(join(tmpdir(), "claude-runner-"));
-    const sdk = join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk");
-    await mkdir(sdk, { recursive: true });
-    await writeFile(
-      join(sdk, "package.json"),
-      JSON.stringify({
-        name: "@anthropic-ai/claude-agent-sdk",
-        type: "module",
-        main: "index.js",
-      }),
+    const result = (await runRunner(1)).find(
+      (event) => event.type === "result",
     );
-    await writeFile(join(sdk, "index.js"), FAKE_SDK);
-    await writeFile(join(root, "runner.mjs"), CLAUDE_RUNNER_SOURCE);
-    const child = run(process.execPath, [join(root, "runner.mjs")]);
-    child.child.stdin?.end(
-      JSON.stringify({
-        prompt: "p",
-        resumePrompt: "r",
-        minimumActiveMs: 1,
-        model: "m",
-        effort: "high",
-        outputSchema: { type: "object" },
-      }),
-    );
-    const { stdout } = await child;
-    const result = stdout
-      .split("\n")
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .find((event) => event.type === "result");
     expect(result?.decisions).toEqual([
       "allow",
       CLAUDE_RUNNER_DENIALS.outsideSurface,
@@ -74,5 +80,12 @@ describe("Claude runner", () => {
       "allow",
     ]);
     expect(result?.allowedTools).toContain("StructuredOutput");
+  });
+
+  it("accepts a 0 floor and runs the first turn only (wide mode, ADR 0039)", async () => {
+    const events = await runRunner(0);
+    expect(events.filter((event) => event.type === "harness.turn")).toEqual([
+      { type: "harness.turn", turn: 1, sessionId: "s" },
+    ]);
   });
 });

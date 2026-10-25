@@ -169,6 +169,25 @@ it("resumes a restored thread with the pinned directive as its first turn and ne
   }
 });
 
+it("runs exactly one turn when the floor is 0 (wide mode, ADR 0039)", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "minimum-active-zero-"));
+  try {
+    await writeEchoingCodex(directory);
+    const { exitCode, stderr, turns } = await runRunner(directory, [
+      "0",
+      JSON.stringify(["exec", "--json", "-"]),
+      JSON.stringify(["exec", "resume", "--json"]),
+      "Stop when two consecutive waves produce nothing new.",
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    expect(turns).toEqual([
+      { args: ["exec", "--json", "-"], prompt: "Initial full objective" },
+    ]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 it("exits non-zero when the resumed CLI reports a different thread or the thread id is malformed", async () => {
   const directory = await mkdtemp(join(tmpdir(), "minimum-active-resume-bad-"));
   try {

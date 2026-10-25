@@ -420,10 +420,11 @@ const discoveryTransportRunSchema = z.strictObject({
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
+  /** 0 is the `wide` mode: no active floor, the first turn only (ADR 0039). */
   minimumActiveMs: z
     .number()
     .int()
-    .positive()
+    .nonnegative()
     .max(120 * 60_000)
     .optional(),
   resumePrompt: z.string().min(1).max(2_048).optional(),

@@ -8,7 +8,8 @@ export const CLAUDE_RUNNER_DENIALS = {
  * Runs inside the disposable gVisor container, never on the host. It drives
  * Claude Code through the Agent SDK pinned in the image: one Root session,
  * at most four live children, and the same Root session resumed with the
- * pinned directive until the wall floor (ADR 0033). Only compact Root events
+ * pinned directive until the wall floor (ADR 0033); a 0 floor (the `wide`
+ * mode, ADR 0039) runs the first turn only. Only compact Root events
  * reach stdout; full transcripts stay in the mounted Claude config directory.
  * With `resumeSessionId`, the first turn resumes that restored session with
  * the pinned directive instead of sending the objective again (ADR 0036).
@@ -30,7 +31,7 @@ const config = JSON.parse(raw);
 if (
   typeof config.prompt !== "string" || config.prompt.length === 0 ||
   typeof config.resumePrompt !== "string" || config.resumePrompt.length === 0 ||
-  !Number.isSafeInteger(config.minimumActiveMs) || config.minimumActiveMs <= 0 ||
+  !Number.isSafeInteger(config.minimumActiveMs) || config.minimumActiveMs < 0 ||
   typeof config.model !== "string" || typeof config.effort !== "string" ||
   typeof config.outputSchema !== "object" || config.outputSchema === null ||
   (config.resumeSessionId !== undefined &&

@@ -9,9 +9,17 @@ import { readFile } from "node:fs/promises";
 interface WordPressPromptRecord {
   readonly id: string;
   readonly digest: `sha256:${string}`;
-  /** Exactly one row per table is `current`; everything else is archived. */
+  /** Exactly one row per table (per mode for discovery) is `current`; everything else is archived. */
   readonly status: "current" | "archived";
 }
+
+/**
+ * The launch mode a discovery objective is written for (ADR 0039). `deep` is
+ * the single cooperative Trial with the 60-minute active floor; `wide` is the
+ * short bounded pass without a floor. Archived rows carry no mode.
+ */
+export type WordPressDiscoveryMode = "deep" | "wide";
+export const WORDPRESS_DISCOVERY_MODES = ["deep", "wide"] as const;
 
 /** Generated Finding / Lead contract versions the Harness appends (ADR 0019). */
 export type WordPressOutputContractVersion = "v1" | "v2" | "v4";
@@ -22,6 +30,8 @@ export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
    * Otherwise the body is objective-only and receives this generated version.
    */
   readonly outputContract: WordPressOutputContractVersion | null;
+  /** Required on a `current` row: the campaign mode that launches it. */
+  readonly mode?: WordPressDiscoveryMode;
 }
 
 export const WORDPRESS_DISCOVERY_PROMPTS = [
@@ -164,6 +174,15 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
       "sha256:fd4e395ecb50923487c9bab6dbae81f0aff4e67342abecedda3f53cd9ff5f8b3",
     outputContract: "v4",
     status: "current",
+    mode: "deep",
+  },
+  {
+    id: "wp2shell-bounty-v10-wide",
+    digest:
+      "sha256:b886625bc576196e38879b3dd85bd25bc5d75e5e960c79b4d8aaec8c1e494a18",
+    outputContract: "v4",
+    status: "current",
+    mode: "wide",
   },
   {
     id: "wp2shell-whitebox-v1.7",
@@ -213,9 +232,12 @@ type CurrentOf<Row extends WordPressPromptRecord> = Extract<
 
 function currentOf<const Row extends WordPressPromptRecord>(
   rows: readonly Row[],
+  mode?: WordPressDiscoveryMode,
 ): CurrentOf<Row> {
   const current = rows.filter(
-    (row): row is CurrentOf<Row> => row.status === "current",
+    (row): row is CurrentOf<Row> =>
+      row.status === "current" &&
+      (mode === undefined || ("mode" in row && row.mode === mode)),
   );
   if (current.length !== 1)
     throw new Error("Exactly one prompt version must be current");
@@ -230,10 +252,22 @@ export type WordPressDiscoveryAssetId =
 export const WORDPRESS_DISCOVERY_PROMPT_IDS: readonly WordPressDiscoveryPromptId[] =
   WORDPRESS_DISCOVERY_PROMPTS.map((prompt) => prompt.id);
 
-/** The only discovery objective accepted for new WordPress campaign runs. */
-export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID = currentOf(
-  WORDPRESS_DISCOVERY_PROMPTS,
-).id;
+/** The current discovery objective of each launch mode (ADR 0039). */
+export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS = {
+  deep: currentOf(WORDPRESS_DISCOVERY_PROMPTS, "deep").id,
+  wide: currentOf(WORDPRESS_DISCOVERY_PROMPTS, "wide").id,
+} as const satisfies Record<WordPressDiscoveryMode, WordPressDiscoveryPromptId>;
+
+/** The `deep` objective: the single cooperative Trial every earlier decision names. */
+export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID =
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.deep;
+
+/** The mode a current objective launches under; archived objectives have none. */
+export function wordPressDiscoveryModeOf(
+  id: string,
+): WordPressDiscoveryMode | undefined {
+  return wordPressDiscoveryPrompt(id).mode;
+}
 
 /** These objectives receive the current Harness-generated output contract. */
 export const WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS: readonly WordPressDiscoveryPromptId[] =

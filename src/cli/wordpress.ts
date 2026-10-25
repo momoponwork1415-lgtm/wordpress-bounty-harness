@@ -37,6 +37,8 @@ import type {
 import {
   loadWordPressDiscoveryAsset,
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS,
+  wordPressDiscoveryModeOf,
   wordPressDiscoveryPrompt,
   type WordPressDiscoveryAsset,
 } from "../profiles/wordpress/prompts/index.js";
@@ -108,7 +110,9 @@ async function loadSelectInput(configPath: string): Promise<{
       );
     if (
       directPolicy.data.promptVariant !== undefined &&
-      directPolicy.data.promptVariant !== WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID
+      !Object.values(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).some(
+        (id) => id === directPolicy.data.promptVariant,
+      )
     )
       throw new Error("New selections use the current prompt variant only");
     return {
@@ -425,8 +429,15 @@ type WordPressDiscoverySource = Awaited<
   ReturnType<WordPressCampaignBoundaries["sourceFor"]>
 >;
 
-/** ADR 0033: the Root explores at least this long; a resumed segment inherits what is left of it. */
-const WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS = 60 * 60_000;
+/** ADR 0033: the deep Root explores at least this long; a resumed segment inherits what is left of it. */
+const WORDPRESS_DEEP_MINIMUM_ACTIVE_MS = 60 * 60_000;
+
+/** The active floor of a campaign's mode: 60 minutes for `deep`, none for `wide` (ADR 0039). */
+function wordPressMinimumActiveMs(config: WordPressCampaignConfig): number {
+  return config.discovery.mode === "wide"
+    ? 0
+    : WORDPRESS_DEEP_MINIMUM_ACTIVE_MS;
+}
 
 function wordPressOutputContractFor(id: string) {
   const { contract } = wordPressDiscoveryContractPlan(id);
@@ -500,15 +511,25 @@ function wordPressDiscoveryPromptText(options: {
   ].join("\n\n");
 }
 
-/** The last paragraph of the objective is the pinned directive early Root resumes receive. */
+/**
+ * The last paragraph of the objective is the pinned directive early Root
+ * resumes receive. The deep objective's starts "Before giving up,"; the wide
+ * objective's is its bounded stop rule and starts "Stop when" (ADR 0039).
+ */
+const WORDPRESS_RESUME_PARAGRAPH_PREFIX = {
+  deep: "Before giving up,",
+  wide: "Stop when",
+} as const;
+
 function wordPressResumeParagraph(objective: WordPressDiscoveryAsset): string {
   const resumePrompt = objective.text
     .trim()
     .split(/\n\s*\n/)
     .at(-1);
+  const mode = wordPressDiscoveryModeOf(objective.id) ?? "deep";
   if (
     resumePrompt === undefined ||
-    !resumePrompt.startsWith("Before giving up,")
+    !resumePrompt.startsWith(WORDPRESS_RESUME_PARAGRAPH_PREFIX[mode])
   )
     throw new Error("Versioned minimum exploration directive is missing");
   return resumePrompt;
@@ -616,6 +637,7 @@ async function planWordPressDiscovery(
           ...(share === undefined
             ? {}
             : { runtime: runtime.runtimeProfile.transportKind }),
+          mode: config.discovery.mode,
         },
         run: {
           runId: trialId,
@@ -623,7 +645,7 @@ async function planWordPressDiscovery(
           profile: runtime.runtimeProfile,
           coordination: "cooperative" as const,
           prompt: promptFor(selectedObjective),
-          minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
+          minimumActiveMs: wordPressMinimumActiveMs(config),
           resumePrompt,
           ...wordPressSourceMounts(source),
           expiresAt: new Date(now + wallMinutes * 60_000).toISOString(),
@@ -868,7 +890,7 @@ async function resumeWordPressRun(
     resumePrompt,
     profileDigest: runtime.runtimeProfile.digest,
     wallTimeMs: config.runWallTimeMinutes * 60_000,
-    minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
+    minimumActiveMs: wordPressMinimumActiveMs(config),
     // A run whose host died is sealed first, then resumed like any other (ADR 0036).
     ...(recoverInterrupted === undefined
       ? {}
@@ -887,7 +909,7 @@ async function resumeWordPressRun(
               interrupted,
               {
                 ...run,
-                minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
+                minimumActiveMs: wordPressMinimumActiveMs(config),
               },
             ),
         }),

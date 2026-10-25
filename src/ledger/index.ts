@@ -126,6 +126,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       labAccess: z
         .strictObject({ database: z.enum(["read-only", "none"]) })
         .optional(),
+      /** ADR 0039: the Trial's launch mode; absent on events before 2026-10-25. */
+      mode: z.enum(["deep", "wide"]).optional(),
       axis: z.literal("history").optional(),
       arm: z.enum(["a", "b"]).optional(),
       arms: z

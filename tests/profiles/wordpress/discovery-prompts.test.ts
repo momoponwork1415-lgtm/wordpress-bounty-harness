@@ -16,7 +16,9 @@ import {
   loadWordPressDiscoveryAsset,
   loadWordPressVerifierPrompt,
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS,
   WORDPRESS_DISCOVERY_ASSET_IDS,
+  WORDPRESS_DISCOVERY_MODES,
   WORDPRESS_DISCOVERY_PROMPT_IDS,
   WORDPRESS_DISCOVERY_PROMPTS,
   WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS,
@@ -66,7 +68,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(21);
+    expect(ids).toHaveLength(22);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -77,9 +79,21 @@ describe("WordPress prompt table", () => {
         (row) => row.outputContract !== null,
       ).map((row) => row.id),
     );
+    // ADR 0039: exactly one current objective per launch mode.
+    for (const mode of WORDPRESS_DISCOVERY_MODES)
+      expect(
+        WORDPRESS_DISCOVERY_PROMPTS.filter(
+          (row) =>
+            row.status === "current" && "mode" in row && row.mode === mode,
+        ),
+      ).toHaveLength(1);
     expect(
       WORDPRESS_DISCOVERY_PROMPTS.filter((row) => row.status === "current"),
-    ).toHaveLength(1);
+    ).toHaveLength(WORDPRESS_DISCOVERY_MODES.length);
+    expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
+      deep: "wp2shell-bounty-v10",
+      wide: "wp2shell-bounty-v10-wide",
+    });
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v10");
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
@@ -233,6 +247,28 @@ describe("WordPress discovery prompt assets", () => {
         /sourceTrace|labObservations|JSON string|Each Finding is an object/,
       );
     }
+  });
+
+  it("makes v10-wide v10 without the persist paragraph and with the stop rule in place of the floor (ADR 0039)", async () => {
+    const deep = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v10"))
+      .text;
+    const wide = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v10-wide"))
+      .text;
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const deepParagraphs = paragraphs(deep);
+    const wideParagraphs = paragraphs(wide);
+    // Deep and wide differ only in "finish early vs keep searching": exactly two paragraphs.
+    expect(deepParagraphs.at(-2)).toMatch(
+      /^Do not return merely because current approaches fail/,
+    );
+    expect(deepParagraphs.at(-1)).toMatch(/^Before giving up,/);
+    expect(wideParagraphs.slice(0, -1)).toEqual(deepParagraphs.slice(0, -2));
+    expect(wideParagraphs.at(-1)).toMatch(
+      /^Stop when two consecutive waves produce no new approach family and no new candidate/,
+    );
+    expect(wide).not.toMatch(
+      /60 minutes|one hour|Before giving up|Do not return merely/,
+    );
   });
 
   it("keeps the v2 method in v3 without an effort floor or handwritten output contract", async () => {
@@ -486,7 +522,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v6" ||
         id === "wp2shell-bounty-v7" ||
         id === "wp2shell-bounty-v8" ||
-        id === "wp2shell-bounty-v10"
+        id === "wp2shell-bounty-v10" ||
+        id === "wp2shell-bounty-v10-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).

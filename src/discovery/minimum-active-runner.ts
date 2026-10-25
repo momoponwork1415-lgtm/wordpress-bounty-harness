@@ -1,4 +1,8 @@
-/** Runs inside the disposable gVisor container, never on the host. */
+/**
+ * Runs inside the disposable gVisor container, never on the host. It resumes
+ * the Root thread with the pinned directive until the active floor; a 0 floor
+ * (the `wide` mode, ADR 0039) runs the first turn only.
+ */
 export const MINIMUM_ACTIVE_RUNNER_SOURCE = String.raw`
 import { spawn } from "node:child_process";
 
@@ -10,7 +14,7 @@ const resumePrompt = process.argv[5];
 const resumeThreadId = process.argv[6];
 if (
   !Number.isSafeInteger(minimumActiveMs) ||
-  minimumActiveMs <= 0 ||
+  minimumActiveMs < 0 ||
   !Array.isArray(initialArgs) ||
   !Array.isArray(resumeArgs) ||
   typeof resumePrompt !== "string" ||

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { wordpressCampaignConfigSchema } from "../../src/cli/wordpress.js";
+import { readWordPressCampaignPolicy } from "../../src/cli/wordpress-session.js";
 import { wordPressSelectionPolicySchema } from "../../src/profiles/wordpress/selection/index.js";
 import { wordfenceProgrammeTranscriptionSchema } from "../../src/profiles/wordpress/wordfence-programme/index.js";
 
@@ -46,6 +47,7 @@ it("starts the checked-in v10 campaign with one concurrent target on WordPress 7
   expect(config.resources.maxConcurrentTargets).toBe(1);
   expect(config.wordpressVersion).toBe("7.1.3");
   expect(config.discovery.lab).toBe("none");
+  expect(config.discovery.mode).toBe("deep");
   expect(
     wordpressCampaignConfigSchema.safeParse({
       ...(source as object),
@@ -62,6 +64,32 @@ it("starts the checked-in v10 campaign with one concurrent target on WordPress 7
         resources: { ...config.resources, maxConcurrentTargets },
       }).success,
     ).toBe(accepted);
+});
+
+it("runs the wide example as a 20-minute v10-wide Trial on the production selection policy (ADR 0039)", async () => {
+  const config = wordpressCampaignConfigSchema.parse(
+    JSON.parse(
+      await readFile(
+        join(
+          import.meta.dirname,
+          "..",
+          "..",
+          "examples",
+          "campaign-wide-20.json",
+        ),
+        "utf8",
+      ),
+    ) as unknown,
+  );
+  expect(config).toMatchObject({
+    discovery: { lab: "none", mode: "wide" },
+    promptId: "wp2shell-bounty-v10-wide",
+    runWallTimeMinutes: 20,
+  });
+  // The production selection policy names the deep objective; both modes select from it.
+  expect((await readWordPressCampaignPolicy(config)).promptVariant).toBe(
+    "wp2shell-bounty-v10",
+  );
 });
 
 it("retains the v6 measurement example as an unrunnable historical fixture", async () => {
