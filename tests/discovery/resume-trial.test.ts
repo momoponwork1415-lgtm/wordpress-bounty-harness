@@ -682,6 +682,92 @@ describe("executeTrialResume", () => {
     ).toMatchObject({ outcome: "failed", reasonDetail: "no-work" });
   });
 
+  it("seals the exploration Lab even when an operator-stopped run cannot seal its receipt", async () => {
+    const stores = await open();
+    await recordRun(stores, {
+      runId: "run-1",
+      providerLimit: "quota",
+      wallTimeMs: 60_000,
+    });
+    const assessment = await assess(stores);
+    if (assessment.status !== "resumable") throw new Error(assessment.reason);
+    let failing = false;
+    // The store refuses the synthetic receipt the operator stop seals.
+    const evidence = new Proxy(stores.evidence, {
+      get(target, key) {
+        if (key === "putFiles" && failing)
+          return async () => {
+            throw new Error("store full");
+          };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const lab = { opened: 0, sealed: 0 };
+    await expect(
+      executeTrialResume(
+        {
+          campaignId: "campaign-1",
+          input: {
+            schemaVersion: 1,
+            snapshotDigest: digest,
+            trustBoundary: {
+              version: "trust-boundary-v1",
+              text: "Low privilege only.",
+            },
+            programmeBoundary: { version: "v1", text: "Boundary" },
+            modelProfileDigest: profile.digest,
+            promptDigest,
+            stopRules: { maxRuns: 1, noFindingRuns: 1 },
+            lab: { mode: "none" },
+            history: { mode: "none" },
+          },
+          lab: {
+            labId: "lab-1",
+            async open() {
+              lab.opened++;
+            },
+            async seal() {
+              lab.sealed++;
+              return {
+                requests: 0,
+                droppedRequests: 0,
+                resets: 0,
+                refusedResets: 0,
+                droppedAnswers: 0,
+              };
+            },
+          },
+          signal: AbortSignal.abort("operator"),
+          executor: {
+            async execute() {
+              failing = true;
+              throw new Error("stopped");
+            },
+          },
+          attachments: stores.attachments,
+          evidence,
+          ledger: stores.ledger,
+          recordReport: recordWordPressReport,
+          clock: () => new Date(now),
+        },
+        assessment.plan,
+        {
+          runId: "run-1-segment-1",
+          targetSnapshotDigest: digest,
+          profile,
+          coordination: "cooperative",
+          prompt,
+          resumePrompt,
+          sourceDirectory: "/private/frozen-source",
+          sourceTree: { digest, entries: 1, bytes: 1 },
+        },
+      ),
+    ).rejects.toThrow("store full");
+    // The control loop stopped although the run ended in a throw.
+    expect(lab).toEqual({ opened: 1, sealed: 1 });
+  });
+
   it("runs the segment under the same Trial, links it in the ledger and counts the Trial once in the funnel", async () => {
     const stores = await open();
     await recordRun(stores, { runId: "run-1", wallTimeMs: 25 * 60_000 });

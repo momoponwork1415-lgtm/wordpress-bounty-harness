@@ -125,6 +125,7 @@ export function finishedEventFrom(
             droppedRequests: outcome.lab.droppedRequests,
             resets: outcome.lab.resets,
             refusedResets: outcome.lab.refusedResets,
+            droppedAnswers: outcome.lab.droppedAnswers,
           },
         }),
     artifacts: [
@@ -414,8 +415,11 @@ export async function executeTrial(
     }
   } finally {
     cancellation.dispose();
+    // Stops the control loop however the run ended, even when the transport's
+    // receipt could not be sealed; a Lab that cannot seal leaves no record.
+    const sealed = await context.lab?.seal().catch(() => undefined);
+    if (sealed !== undefined) draft.lab = sealed;
   }
-  if (context.lab !== undefined) draft.lab = await context.lab.seal();
   const currentObservation = {
     ...draft.receipt,
     outcome: draft.outcome,

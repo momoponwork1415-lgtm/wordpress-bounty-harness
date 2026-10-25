@@ -67,6 +67,10 @@ async function fixture(options: {
   readonly maxResets: number;
   readonly resetsUsedBefore?: number;
   readonly resetSucceeds?: boolean;
+  /** The first this many resets throw instead of answering. */
+  readonly resetThrows?: number;
+  /** The first this many answers do not reach labctl. */
+  readonly answerFails?: number;
   readonly captureAvailable?: boolean;
 }) {
   const directory = await mkdtemp(join(tmpdir(), "wbh-exploration-lab-"));
@@ -89,6 +93,7 @@ async function fixture(options: {
   if (queue.length === 0) drained();
   const answers: unknown[] = [];
   let resets = 0;
+  let answerCalls = 0;
   const lab: Parameters<typeof openWordPressExplorationLab>[0]["lab"] = {
     async captureState() {
       return { status: "captured", state: state(`generation-${resets}`) };
@@ -103,12 +108,20 @@ async function fixture(options: {
     },
     async reset() {
       resets++;
+      if (resets <= (options.resetThrows ?? 0))
+        throw new Error("secret-bearing failure /home/dev/state");
       return options.resetSucceeds ?? true;
     },
+    // Like labctl, a command stays pending until its answer lands.
     async nextControlRequest() {
-      return queue.shift() ?? null;
+      return queue[0] ?? null;
     },
     async answerControlRequest(_handle, id, answer) {
+      if (++answerCalls <= (options.answerFails ?? 0)) return false;
+      queue.splice(
+        queue.findIndex((request) => request.id === id),
+        1,
+      );
       answers.push({ id, ...answer });
       if (answers.length === options.requests) drained();
       return true;
@@ -261,6 +274,76 @@ describe("exploration Lab driver", () => {
     expect(record.artifactDigest).toMatch(/^sha256:/);
   });
 
+  it("answers a command the Harness threw on as failed, counts it and keeps serving", async () => {
+    const { trialLab, allAnswered, answers, read, resets } = await fixture({
+      requests: 2,
+      maxResets: 2,
+      resetThrows: 1,
+    });
+    await trialLab.open();
+    await allAnswered;
+    const record = await trialLab.seal();
+    expect(resets()).toBe(2);
+    // A fixed reason only: nothing of the error's message reaches the agent.
+    expect(answers).toEqual([
+      {
+        id: "0".repeat(32),
+        statusCode: 500,
+        body: {
+          status: "failed",
+          reason: "harness-error",
+          resetsUsed: 1,
+          maxResets: 2,
+        },
+      },
+      {
+        id: "1".repeat(32),
+        statusCode: 200,
+        body: { status: "reset", resetsUsed: 2, maxResets: 2 },
+      },
+    ]);
+    expect(record).toMatchObject({ resets: 2, refusedResets: 0 });
+    const sealed = JSON.parse(
+      await read(record.artifactDigest!, "exploration-lab.json"),
+    );
+    expect(sealed.resetLog).toMatchObject([
+      { status: "failed", reason: "harness-error" },
+      { status: "reset" },
+    ]);
+    expect(JSON.stringify(sealed)).not.toContain("secret-bearing");
+    // The generation the throw interrupted has no trusted before state.
+    expect(
+      sealed.generations.map(
+        (generation: { state: { status: string } }) => generation.state.status,
+      ),
+    ).toEqual(["captured", "missing", "captured"]);
+  });
+
+  it("retries an answer once, counts it dropped, and hands labctl the same answer when it asks again", async () => {
+    const { trialLab, allAnswered, answers, read, resets } = await fixture({
+      requests: 1,
+      maxResets: 2,
+      answerFails: 2,
+    });
+    await trialLab.open();
+    await allAnswered;
+    const record = await trialLab.seal();
+    // The command ran once; the kept answer was delivered on labctl's next ask.
+    expect(resets()).toBe(1);
+    expect(answers).toEqual([
+      {
+        id: "0".repeat(32),
+        statusCode: 200,
+        body: { status: "reset", resetsUsed: 1, maxResets: 2 },
+      },
+    ]);
+    expect(record).toMatchObject({ resets: 1, droppedAnswers: 1 });
+    expect(
+      JSON.parse(await read(record.artifactDigest!, "exploration-lab.json"))
+        .resetLog,
+    ).toMatchObject([{ status: "reset", answerDropped: true }]);
+  });
+
   it("records zero requests when the capture cannot be read", async () => {
     const { trialLab, read } = await fixture({
       requests: 0,
@@ -274,6 +357,7 @@ describe("exploration Lab driver", () => {
       droppedRequests: 0,
       resets: 0,
       refusedResets: 0,
+      droppedAnswers: 0,
     });
     expect(
       JSON.parse(await read(record.artifactDigest!, "exploration-lab.json"))

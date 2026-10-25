@@ -73,4 +73,6 @@ export interface TrialLabRecord {
   readonly resets: number;
   /** Reset requests answered with a refusal (budget spent or Lab unavailable). */
   readonly refusedResets: number;
+  /** Commands whose answer did not reach the control endpoint, even after one retry. */
+  readonly droppedAnswers: number;
 }

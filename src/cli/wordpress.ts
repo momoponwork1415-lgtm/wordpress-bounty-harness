@@ -564,7 +564,7 @@ export function wordPressLabSection(
       `- Site: ${lab.endpoint}/`,
       `- Administrator account: ${administrator.username} / ${administrator.password}`,
       ...accounts,
-      `- Reset: \`POST http://${control.host}/reset\` removes the site and provisions it again from the same setup; the accounts above stay the same. ${resumed === undefined ? `This Trial may reset at most ${maxResets} times` : `This Trial may reset at most ${maxResets} times in all and has used ${resumed.resetsUsed}`}, and the answer states how many are used. Other requests to the Lab are counted, not limited.`,
+      `- Reset: \`POST http://${control.host}/reset\` removes the site and provisions it again from the same setup; the accounts above stay the same. ${resumed === undefined ? `This Trial may reset at most ${maxResets} times` : `This Trial may reset at most ${maxResets} times in all and has used ${resumed.resetsUsed}`}, and the answer states how many are used. Other requests through \`${lab.endpoint}\` are counted, not limited.`,
     ].join("\n"),
     "The Harness records the HTTP traffic through the site address and the site state before and after each reset. Nothing observed in this Lab is a confirmation. A setting you make as administrator is a configuration precondition; state it in `configurationPrecondition`. In a Finding or Lead, `labObservations` states what you tried in the Lab and what you saw.",
   ].join("\n\n");
@@ -937,12 +937,20 @@ async function resumeWordPressRun(
     };
   // A Trial with an exploration Lab resumes with a fresh Lab of the same
   // setup (ADR 0003, 2026-10-25 addendum); the earlier one is already sealed.
-  const attached = started.configuration.lab?.mode === "attached";
+  const recordedLab = started.configuration.lab;
+  const attached = recordedLab?.mode === "attached";
   if (attached && config.discovery.lab.mode === "none")
     return {
       status: "refused",
       reason: "lab-mode-differs",
       detail: "the campaign configuration has discovery.lab none",
+    };
+  // The Lab budget is the Trial's: a segment keeps the one the Trial started with.
+  if (attached && recordedLab.maxResets !== config.discovery.lab.maxResets)
+    return {
+      status: "refused",
+      reason: "lab-budget-differs",
+      detail: `the Trial started with discovery.lab.maxResets ${recordedLab.maxResets}; the campaign configuration has ${config.discovery.lab.maxResets}`,
     };
   const source = await boundaries.sourceFor(snapshot);
   const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
@@ -1049,6 +1057,7 @@ async function resumeWordPressRun(
     campaignId: input.campaignId,
     previousLabId: started.labId,
     plan,
+    maxResets: recordedLab!.maxResets,
     resetsUsed: plan.lab.resetsUsed,
     promptWith,
     context,
@@ -1073,6 +1082,8 @@ async function resumeWithExplorationLab(options: {
   readonly campaignId: string;
   readonly previousLabId: string | undefined;
   readonly plan: ResumePlan;
+  /** The reset budget the resumed run recorded when it started. */
+  readonly maxResets: number;
   readonly resetsUsed: number;
   readonly promptWith: (
     lab: WordPressLabHandle,
@@ -1160,11 +1171,7 @@ async function resumeWithExplorationLab(options: {
     if (handle.exploration === undefined)
       throw new Error("The discovery Lab is not an exploration Lab");
     const resumedLab = { resetsUsed: options.resetsUsed };
-    const notice = wordPressLabSection(
-      handle,
-      options.config.discovery.lab.maxResets,
-      resumedLab,
-    );
+    const notice = wordPressLabSection(handle, options.maxResets, resumedLab);
     outcome = await executeTrialResume(
       {
         ...options.context,
@@ -1176,7 +1183,7 @@ async function resumeWithExplorationLab(options: {
         lab: openWordPressExplorationLab({
           lab: boundaries.lab,
           handle,
-          maxResets: options.config.discovery.lab.maxResets,
+          maxResets: options.maxResets,
           resetsUsedBefore: options.resetsUsed,
           store: state.store,
           clock: state.clock,

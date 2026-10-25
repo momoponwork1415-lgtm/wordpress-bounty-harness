@@ -2052,7 +2052,55 @@ describe("harness CLI vertical slice", () => {
     expect(attached.transportRuns).toHaveLength(1);
   });
 
-  it("refuses --repeat with an attached exploration Lab", async () => {
+  it("does not resume an exploration-Lab Trial when the campaign's reset budget changed", async () => {
+    const attached = await harness({
+      omitLegacyVerifier: true,
+      refuseOnCalls: [1],
+      refusalSession: true,
+      zeroFindings: true,
+      config: { promptId: undefined, discovery: { lab: "attached" } },
+    });
+    const campaignId = "campaign-exploration-resume-budget";
+    expect(
+      (
+        await attached.run(
+          "campaign",
+          "run",
+          "synthetic-plugin",
+          "--campaign",
+          campaignId,
+          "--config",
+          attached.configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const written = JSON.parse(await readFile(attached.configPath, "utf8"));
+    written.discovery.lab = { mode: "attached", maxResets: 3 };
+    await writeFile(attached.configPath, JSON.stringify(written));
+    const resumed = await attached.run(
+      "campaign",
+      "resume",
+      "--campaign",
+      campaignId,
+      "--run",
+      attached.transportRuns[0]!.runId,
+      "--config",
+      attached.configPath,
+    );
+    expect(resumed.code).toBe(3);
+    expect(resumed.stderr).toBe(
+      "not resumable: lab-budget-differs (the Trial started with discovery.lab.maxResets 2; the campaign configuration has 3)",
+    );
+    expect(attached.transportRuns).toHaveLength(1);
+    expect(
+      attached
+        .ledger()
+        .read({ campaignId, type: "lab-provisioned" })
+        .map(({ event }) => event),
+    ).toHaveLength(1);
+  });
+
+  it("refuses --repeat with an attached exploration Lab once, before any freeze", async () => {
     const { run, configPath, ledger, transportRuns } = await harness({
       omitLegacyVerifier: true,
       config: { promptId: undefined, discovery: { lab: "attached" } },
@@ -2069,14 +2117,17 @@ describe("harness CLI vertical slice", () => {
       "--repeat",
       "2",
     );
-    expect(transportRuns).toHaveLength(0);
-    expect(ledger().read({ campaignId, type: "lab-provisioned" })).toHaveLength(
-      0,
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(
+      "An exploration Lab serves one Trial; --repeat needs discovery.lab none",
     );
-    expect(
-      ledger().read({ campaignId, type: "target-skipped" })[0]?.event,
-    ).toMatchObject({ stage: "discovery" });
-    expect(result.stdout + result.stderr).toContain("skipped");
+    expect(transportRuns).toHaveLength(0);
+    for (const type of [
+      "snapshot-frozen",
+      "target-skipped",
+      "lab-provisioned",
+    ] as const)
+      expect(ledger().read({ campaignId, type })).toHaveLength(0);
   });
 
   it("--repeat 3 records three independent Trial IDs on the same Snapshot", async () => {

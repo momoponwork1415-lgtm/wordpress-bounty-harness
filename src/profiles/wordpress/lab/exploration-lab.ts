@@ -1,6 +1,9 @@
 import { canonicalJson } from "../../../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
-import type { ControlRequest } from "../../../lab/control/index.js";
+import type {
+  ControlAnswer,
+  ControlRequest,
+} from "../../../lab/control/index.js";
 import type { TrialLab, TrialLabRecord } from "../../../lab/index.js";
 import type { LabStateDiffRecord } from "../../../verification/index.js";
 import { createWordPressLabStateObserver } from "../verification/lab-state-diff.js";
@@ -22,7 +25,10 @@ type ResetRecord = {
   readonly requestedAt: string;
   readonly answeredAt: string;
   readonly status: "reset" | "refused" | "failed";
-  readonly reason?: "budget" | "unavailable";
+  /** `harness-error`: the Harness threw while handling the command; the attempt counts. */
+  readonly reason?: "budget" | "unavailable" | "harness-error";
+  /** The answer did not reach labctl, even after one retry. */
+  readonly answerDropped?: true;
 };
 
 /**
@@ -62,6 +68,9 @@ export function openWordPressExplorationLab(options: {
   let broken = false;
   let closing = false;
   let serving: Promise<void> | undefined;
+  /** Answers that did not reach labctl, by request id; labctl asks again until it times out. */
+  const undelivered = new Map<string, ControlAnswer>();
+  let droppedAnswers = 0;
   let wake: (() => void) | undefined;
   /** A pause `seal` cuts short. */
   const sleep = (ms: number) =>
@@ -87,14 +96,31 @@ export function openWordPressExplorationLab(options: {
     generationStartedAt = clock().toISOString();
     before = await states.before(handle);
   };
+  /** Hands one answer to labctl, and once more when the first try does not land. */
+  const deliver = async (
+    id: string,
+    reply: ControlAnswer,
+  ): Promise<boolean> => {
+    for (let attempt = 0; attempt < 2; attempt++)
+      if (await lab.answerControlRequest(handle, id, reply).catch(() => false))
+        return true;
+    return false;
+  };
+  /** Delivers an answer; one that does not land is counted once and kept for labctl's next ask. */
+  const send = async (id: string, reply: ControlAnswer): Promise<boolean> => {
+    if (await deliver(id, reply)) return true;
+    droppedAnswers++;
+    undelivered.set(id, reply);
+    return false;
+  };
   const answer = async (
     request: ControlRequest,
-    record: Omit<ResetRecord, "requestedAt" | "answeredAt">,
+    record: Omit<ResetRecord, "requestedAt" | "answeredAt" | "answerDropped">,
     statusCode: number,
   ): Promise<void> => {
     const used = usedInTrial();
     const status = record.status;
-    await lab.answerControlRequest(handle, request.id, {
+    const delivered = await send(request.id, {
       statusCode,
       body: {
         status,
@@ -107,6 +133,7 @@ export function openWordPressExplorationLab(options: {
       requestedAt: request.receivedAt,
       answeredAt: clock().toISOString(),
       ...record,
+      ...(delivered ? {} : { answerDropped: true as const }),
     });
   };
   const handleReset = async (request: ControlRequest): Promise<void> => {
@@ -125,6 +152,24 @@ export function openWordPressExplorationLab(options: {
     await openGeneration();
     return answer(request, { status: "reset" }, 200);
   };
+  /**
+   * Runs one command. A throw answers it `failed` with a fixed reason (no
+   * message, no stack), counts the attempt and is logged with the resets,
+   * so the loop keeps serving.
+   */
+  const handleCommand = async (request: ControlRequest): Promise<void> => {
+    try {
+      await handleReset(request);
+    } catch {
+      // The site state the next generation starts from is no longer known.
+      before = null;
+      await answer(
+        request,
+        { status: "failed", reason: "harness-error" },
+        500,
+      ).catch(() => undefined);
+    }
+  };
   const serve = async (): Promise<void> => {
     while (!closing) {
       const asked = Date.now();
@@ -132,8 +177,17 @@ export function openWordPressExplorationLab(options: {
         .nextControlRequest(handle, CONTROL_WAIT_SECONDS)
         .catch(() => "unavailable" as const);
       if (request !== null && request !== "unavailable") {
-        if (request.command === "reset") await handleReset(request);
-        continue;
+        const kept = undelivered.get(request.id);
+        if (kept === undefined) {
+          await handleCommand(request);
+          continue;
+        }
+        // labctl still waits on a command already run: hand it the same
+        // answer again, never run the command twice.
+        if (await deliver(request.id, kept)) {
+          undelivered.delete(request.id);
+          continue;
+        }
       }
       // An endpoint that is gone, or answers at once, is asked again only
       // after a pause, so the loop never spins.
@@ -170,6 +224,7 @@ export function openWordPressExplorationLab(options: {
         resets: resets.filter((entry) => entry.status !== "refused").length,
         refusedResets: resets.filter((entry) => entry.status === "refused")
           .length,
+        droppedAnswers,
       };
       const record = {
         schemaVersion: 1,

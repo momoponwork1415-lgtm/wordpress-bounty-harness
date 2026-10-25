@@ -302,6 +302,16 @@ export async function runCampaignPipeline<
   const maxConcurrentTargets = options.maxConcurrentTargets ?? 1;
   if (!Number.isSafeInteger(maxConcurrentTargets) || maxConcurrentTargets < 1)
     throw new Error("Invalid target concurrency");
+  // An attached Lab serves exactly one Trial (ADR 0003, 2026-10-25 addendum):
+  // refused once here, before anything is selected or frozen.
+  if (options.discoveryLab !== "none") {
+    if ((options.repeat ?? 1) > 1)
+      throw new Error(
+        "An exploration Lab serves one Trial; --repeat needs discovery.lab none",
+      );
+    if (pipeline.explorationLab === undefined)
+      throw new Error("This profile has no exploration Lab");
+  }
   type TargetSummary = CampaignSummary["targets"][number];
   type SkippedSummary = CampaignSummary["skipped"][number];
   type TargetResult = {
@@ -463,14 +473,7 @@ export async function runCampaignPipeline<
       });
 
       stage = "discovery";
-      // An attached Lab serves exactly one Trial (ADR 0003, 2026-10-25 addendum).
       if (options.discoveryLab !== "none") {
-        if ((options.repeat ?? 1) > 1)
-          throw new Error(
-            "An exploration Lab serves one Trial; --repeat needs discovery.lab none",
-          );
-        if (pipeline.explorationLab === undefined)
-          throw new Error("This profile has no exploration Lab");
         const provisioned = await pipeline.lab.provision(snapshot, setup, {
           purpose: "discovery",
         });

@@ -240,6 +240,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         droppedRequests: z.number().int().nonnegative(),
         resets: z.number().int().nonnegative(),
         refusedResets: z.number().int().nonnegative(),
+        /** Control answers that did not reach labctl after one retry. */
+        droppedAnswers: z.number().int().nonnegative().optional(),
       })
       .optional(),
     /** Unique direct children seen and admitted by a cooperative Root run. */
