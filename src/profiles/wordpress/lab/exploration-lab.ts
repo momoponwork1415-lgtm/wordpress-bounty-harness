@@ -45,11 +45,37 @@ type ObservationRecord = {
     | "invalid-request"
     | "role-unavailable"
     | "harness-error";
+  /** With `invalid-request`: the name of the first field that failed, never its value. */
+  readonly field?: string;
   readonly request?: WordPressExplorationObserveRequest;
   readonly answer: Readonly<Record<string, unknown>>;
   /** The answer did not reach labctl, even after one retry. */
   readonly answerDropped?: true;
 };
+
+/**
+ * The first failing field of an observe request as a dotted path (`body` for
+ * the whole body). An unaccepted field is named when its name is a plain
+ * identifier; no value is ever echoed.
+ */
+function invalidField(
+  issues: readonly {
+    readonly code: string;
+    readonly path: readonly PropertyKey[];
+    readonly keys?: readonly string[];
+  }[],
+): string {
+  const issue = issues[0];
+  const unknown =
+    issue?.code === "unrecognized_keys" ? issue.keys?.[0] : undefined;
+  const path = [
+    ...(issue?.path ?? []).map(String),
+    ...(unknown !== undefined && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(unknown)
+      ? [unknown]
+      : []),
+  ];
+  return path.length === 0 ? "body" : path.join(".");
+}
 
 /**
  * One Trial's exploration Lab as the Harness drives it (ADR 0003, 2026-10-25
@@ -195,6 +221,7 @@ export function openWordPressExplorationLab(options: {
     const body = {
       status: record.status,
       ...(record.reason === undefined ? {} : { reason: record.reason }),
+      ...(record.field === undefined ? {} : { field: record.field }),
       ...result,
       observationsUsed:
         observedInTrial() + (record.status === "refused" ? 0 : 1),
@@ -214,7 +241,11 @@ export function openWordPressExplorationLab(options: {
     if (!parsed.success)
       return answerObservation(
         request,
-        { status: "refused", reason: "invalid-request" },
+        {
+          status: "refused",
+          reason: "invalid-request",
+          field: invalidField(parsed.error.issues),
+        },
         400,
       );
     const asked = parsed.data;

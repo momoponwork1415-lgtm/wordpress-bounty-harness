@@ -1814,6 +1814,18 @@ describe("harness CLI vertical slice", () => {
     expect(prompts[0]).toContain(
       'where role is "visitor" (not logged in), "subscriber" or "administrator"',
     );
+    // The limits the request schema enforces are stated, not discovered by refusal.
+    for (const limit of [
+      "The path starts with a single `/`, has no whitespace or backslash, and is at most 2048 characters.",
+      "1 to 5 steps run in order after the page loads",
+      "A selector is 1 to 200 characters of letters, digits, spaces and `# . _ [ ] = \" ' ( ) : > + ~ * , -`;",
+      "`text` and a fill `value` are 1 to 120 characters; `exact` is a boolean, true or false.",
+      'It may also add `"dialogMarker"`, a string of 10 to 15 digits not starting with 0.',
+      "the answer's `field` names the first field that failed.",
+      "a request sent while another is waiting is answered 409 `busy`.",
+      "Other requests through `http://wordpress` are counted, not limited.",
+    ])
+      expect(prompts[0]).toContain(limit);
     expect(prompts[0]).toContain(
       "This Trial may observe at most 20 times, and the answer states how many are used. The answer is an observation, not a confirmation; report what you observed in `labObservations`.",
     );
@@ -2154,6 +2166,48 @@ describe("harness CLI vertical slice", () => {
         .read({ campaignId, type: "lab-provisioned" })
         .map(({ event }) => event),
     ).toHaveLength(1);
+  });
+
+  it("does not resume an exploration-Lab Trial when the campaign's observe budget changed (Phase D2)", async () => {
+    const attached = await harness({
+      omitLegacyVerifier: true,
+      refuseOnCalls: [1],
+      refusalSession: true,
+      zeroFindings: true,
+      config: { promptId: undefined, discovery: { lab: "attached" } },
+    });
+    const campaignId = "campaign-exploration-observe-budget";
+    expect(
+      (
+        await attached.run(
+          "campaign",
+          "run",
+          "synthetic-plugin",
+          "--campaign",
+          campaignId,
+          "--config",
+          attached.configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const written = JSON.parse(await readFile(attached.configPath, "utf8"));
+    written.discovery.lab = { mode: "attached", maxObservations: 30 };
+    await writeFile(attached.configPath, JSON.stringify(written));
+    const resumed = await attached.run(
+      "campaign",
+      "resume",
+      "--campaign",
+      campaignId,
+      "--run",
+      attached.transportRuns[0]!.runId,
+      "--config",
+      attached.configPath,
+    );
+    expect(resumed.code).toBe(3);
+    expect(resumed.stderr).toBe(
+      "not resumable: lab-budget-differs (the Trial started with discovery.lab.maxObservations 20; the campaign configuration has 30)",
+    );
+    expect(attached.transportRuns).toHaveLength(1);
   });
 
   it("refuses --repeat with an attached exploration Lab once, before any freeze", async () => {

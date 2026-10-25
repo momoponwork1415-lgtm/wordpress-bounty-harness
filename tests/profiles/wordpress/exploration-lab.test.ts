@@ -341,6 +341,7 @@ describe("exploration Lab driver", () => {
         body: {
           status: "refused",
           reason: "invalid-request",
+          field: "script",
           observationsUsed: 2,
           maxObservations: 2,
         },
@@ -431,6 +432,57 @@ describe("exploration Lab driver", () => {
         body: { status: "refused", reason: "role-unavailable" },
       },
     ]);
+  });
+
+  it("names the field an invalid observe request failed on, never its value", async () => {
+    const { trialLab, allAnswered, answers, observedRequests } = await fixture({
+      requests: 0,
+      maxResets: 2,
+      observe: [
+        "not an object",
+        { role: "subscriber", path: "//evil.example/" },
+        {
+          role: "subscriber",
+          path: "/",
+          actions: [{ kind: "fill", selector: "#q", value: "v".repeat(121) }],
+        },
+        {
+          role: "subscriber",
+          path: "/",
+          actions: [{ kind: "click", selector: "a{color:red}" }],
+        },
+        {
+          role: "subscriber",
+          path: "/",
+          actions: [{ kind: "click-text", text: "Go", exact: "yes" }],
+        },
+        { role: "subscriber", path: "/", dialogMarker: "0123456789" },
+      ],
+    });
+    await trialLab.open();
+    await allAnswered;
+    await trialLab.seal();
+    expect(observedRequests).toEqual([]);
+    expect(
+      answers.map(
+        (entry) => (entry as { body: { field?: string } }).body.field,
+      ),
+    ).toEqual([
+      "body",
+      "path",
+      "actions.0.value",
+      "actions.0.selector",
+      "actions.0.exact",
+      "dialogMarker",
+    ]);
+    const text = JSON.stringify(answers);
+    for (const value of [
+      "evil.example",
+      "v".repeat(121),
+      "color:red",
+      "0123456789",
+    ])
+      expect(text).not.toContain(value);
   });
 
   it("answers an observe request the Harness threw on as failed and counts it", async () => {

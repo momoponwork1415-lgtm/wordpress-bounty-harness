@@ -588,7 +588,7 @@ export function wordPressLabSection(
       ...accounts,
       `- Reset: \`POST http://${control.host}/reset\` removes the site and provisions it again from the same setup; the accounts above stay the same. ${resumed === undefined ? `This Trial may reset at most ${maxResets} times` : `This Trial may reset at most ${maxResets} times in all and has used ${resumed.resetsUsed}`}, and the answer states how many are used. Other requests through \`${lab.endpoint}\` are counted, not limited.`,
     ].join("\n"),
-    `Observe: \`POST http://${control.host}/observe\` with a JSON body opens one page of the site in the Harness's headless browser inside the Lab and answers with what the browser saw. The body is \`{"role": ..., "path": "/..."}\`, where role is ${roleList}, and the browser logs in with that account above. It may add \`"actions"\`, up to 5 steps run in order after the page loads, each \`{"kind": "click", "selector": "..."}\`, \`{"kind": "click-text", "text": "...", "exact": true}\` or \`{"kind": "fill", "selector": "...", "value": "..."}\`, and \`"dialogMarker"\`, 10 to 15 digits not starting with 0. The answer gives the HTTP status of the path, whether a dialog opened and, with a marker, whether an alert with exactly that text opened, the console error count, and the digest of a screenshot the Harness keeps. ${resumed === undefined ? `This Trial may observe at most ${maxObservations} times` : `This Trial may observe at most ${maxObservations} times in all and has used ${resumed.observationsUsed}`}, and the answer states how many are used. The answer is an observation, not a confirmation; report what you observed in \`labObservations\`.`,
+    `Observe: \`POST http://${control.host}/observe\` with a JSON body opens one page of the site in the Harness's headless browser inside the Lab and answers with what the browser saw. The body is \`{"role": ..., "path": "/..."}\`, where role is ${roleList}, and the browser logs in with that account above. The path starts with a single \`/\`, has no whitespace or backslash, and is at most 2048 characters. It may add \`"actions"\`, 1 to 5 steps run in order after the page loads, each \`{"kind": "click", "selector": "..."}\`, \`{"kind": "click-text", "text": "...", "exact": true}\` or \`{"kind": "fill", "selector": "...", "value": "..."}\`. A selector is 1 to 200 characters of letters, digits, spaces and \`# . _ [ ] = " ' ( ) : > + ~ * , -\`; \`text\` and a fill \`value\` are 1 to 120 characters; \`exact\` is a boolean, true or false. It may also add \`"dialogMarker"\`, a string of 10 to 15 digits not starting with 0. No other field is accepted; a body that does not fit is refused as \`invalid-request\`, and the answer's \`field\` names the first field that failed. The control endpoint takes one command at a time: a request sent while another is waiting is answered 409 \`busy\`. The answer gives the HTTP status of the path, whether a dialog opened and, with a marker, whether an alert with exactly that text opened, the console error count, and the digest of a screenshot the Harness keeps. ${resumed === undefined ? `This Trial may observe at most ${maxObservations} times` : `This Trial may observe at most ${maxObservations} times in all and has used ${resumed.observationsUsed}`}, and the answer states how many are used. The answer is an observation, not a confirmation; report what you observed in \`labObservations\`.`,
     "The Harness records the HTTP traffic through the site address and the site state before and after each reset. Nothing observed in this Lab is a confirmation. A setting you make as administrator is a configuration precondition; state it in `configurationPrecondition`. In a Finding or Lead, `labObservations` states what you tried in the Lab and what you saw.",
   ].join("\n\n");
 }
@@ -968,19 +968,32 @@ async function resumeWordPressRun(
       reason: "lab-mode-differs",
       detail: "the campaign configuration has discovery.lab none",
     };
-  // The Lab budget is the Trial's: a segment keeps the one the Trial started with.
-  if (attached && recordedLab.maxResets !== config.discovery.lab.maxResets)
-    return {
-      status: "refused",
+  // The Lab budget is the Trial's: a segment keeps the one the Trial started
+  // with, and a campaign configured otherwise does not resume it.
+  let labBudget: WordPressLabBudget | undefined;
+  if (attached) {
+    const current = config.discovery.lab;
+    const budgetDiffers = (
+      name: "maxResets" | "maxObservations",
+      recorded: number | undefined,
+    ) => ({
+      status: "refused" as const,
       reason: "lab-budget-differs",
-      detail: `the Trial started with discovery.lab.maxResets ${recordedLab.maxResets}; the campaign configuration has ${config.discovery.lab.maxResets}`,
-    };
-  const labBudget: WordPressLabBudget | undefined = attached
-    ? {
-        maxResets: recordedLab.maxResets,
-        maxObservations: config.discovery.lab.maxObservations,
-      }
-    : undefined;
+      detail:
+        recorded === undefined
+          ? `the Trial started without discovery.lab.${name}; the campaign configuration has ${current[name]}`
+          : `the Trial started with discovery.lab.${name} ${recorded}; the campaign configuration has ${current[name]}`,
+    });
+    if (recordedLab.maxResets !== current.maxResets)
+      return budgetDiffers("maxResets", recordedLab.maxResets);
+    const { maxObservations } = recordedLab;
+    if (
+      maxObservations === undefined ||
+      maxObservations !== current.maxObservations
+    )
+      return budgetDiffers("maxObservations", maxObservations);
+    labBudget = { maxResets: recordedLab.maxResets, maxObservations };
+  }
   const source = await boundaries.sourceFor(snapshot);
   const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
   const promptWith = (
