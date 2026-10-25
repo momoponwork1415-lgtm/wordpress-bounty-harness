@@ -28,6 +28,7 @@ const slugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/);
 const versionSchema = z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$/);
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const MAX_PLUGIN_DEPENDENCIES = 16;
+const WOOCOMMERCE_SLUG = "woocommerce";
 
 const pinsetBodySchema = z.strictObject({
   kind: z.literal("wordpress-plugin-dependency-pinset"),
@@ -51,7 +52,12 @@ const pinsetBodySchema = z.strictObject({
 const pinsetSchema = pinsetBodySchema.safeExtend({ digest: digestSchema });
 type PinsetBody = z.infer<typeof pinsetBodySchema>;
 
-/** Match WordPress get_file_data(): only the first 8 KiB of the main PHP file. */
+/**
+ * Match WordPress get_file_data(): only the first 8 KiB of the main PHP file.
+ * `Requires Plugins` is the WordPress header. A plugin that names a WooCommerce
+ * version in `WC requires at least` / `WC tested up to` presupposes WooCommerce
+ * even without it, so that header maps to the `woocommerce` slug.
+ */
 export function requiredPluginSlugs(
   mainPluginBytes: Uint8Array,
 ): readonly string[] {
@@ -63,8 +69,8 @@ export function requiredPluginSlugs(
     .exec(header)?.[1]
     ?.replace(/\s*(?:\*\/|\?>).*$/, "")
     .trim();
-  if (raw === undefined || raw === "") return [];
-  const slugs = raw.split(",").map((value) => value.trim());
+  const slugs =
+    raw === undefined || raw === "" ? [] : raw.split(",").map((v) => v.trim());
   if (
     slugs.length > MAX_PLUGIN_DEPENDENCIES ||
     slugs.some((slug) => !slugSchema.safeParse(slug).success)
@@ -72,6 +78,12 @@ export function requiredPluginSlugs(
     throw new SourceAcquisitionError("deferred", {
       reason: "invalid-required-plugins-header",
     });
+  if (
+    /^(?:[ \t]*<\?(?:php)?)?[ \t\/*#@]*WC (?:requires at least|tested up to):[ \t]*[^\s*]/im.test(
+      header,
+    )
+  )
+    slugs.push(WOOCOMMERCE_SLUG);
   return [...new Set(slugs)];
 }
 
@@ -117,10 +129,18 @@ export function openWordPressOrgPluginDependencySource(options: {
     packet: TargetIntakePacket,
     capturedSource?: AcquiredSource,
   ) =>
+    // WooCommerce's own header names its WooCommerce version; it is not a
+    // dependency of itself.
     requiredPluginSlugs(
       await (capturedSource ?? sourceFromPacket(packet)).readFile(
         packet.mainPluginFile,
       ),
+    ).filter(
+      (slug) =>
+        !(
+          slug === WOOCOMMERCE_SLUG &&
+          packet.canonicalInstallDirectory === WOOCOMMERCE_SLUG
+        ),
     );
   const acquire = async (
     slug: string,

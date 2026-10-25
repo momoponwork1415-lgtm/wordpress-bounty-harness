@@ -81,7 +81,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 - 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
 - 旧Trialの公開履歴入力・照合仕様: ローカルWordfence履歴DBから、snapshotの版より前（評価runではheld-outの公開日より前）に公開された対象プラグインの記録を抽出した。内容は種別、影響版、修正版、公開日、公開記録のタイトル、修正版との差分で変わったファイルの一覧までで、PoC・payload・再現手順は含めない。渡した・渡さないは `CampaignInput` に記録する（ADR 0012）。v8 以降の新規探索にはこの履歴を渡さない。
-- 入力: 新規探索には版・digest付きの目的prompt `wp2shell-bounty-v10` と `wp2shell` mode だけを使う。v8 を含む旧版と旧modeは過去Trialの目的文・digest・実験結果の照合用に残すが、新規Trialには選べない。人間が書いたtrust境界宣言、Programme Boundary、固定した対象plugin、WordPress core、実行imageに対応するPHP、必要な依存pluginの読み取り専用source pack、Lab（任意）のHTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB accountを渡す。依存pluginは `Requires Plugins` ヘッダと選定方針の明示指定から決める。自動選定の本番対象はfreeze時点の公式stable版、手動・歴史的評価対象は明示版pinを使い、全て版とdigestをSnapshotに固定する。v10 には固定source由来の入口索引や公開履歴カタログを渡さず、分担と仮説はRootが決める。旧Trialの索引と公開履歴の記録は読み続ける。
+- 入力: 新規探索には版・digest付きの目的prompt `wp2shell-bounty-v10` と `wp2shell` mode だけを使う。v8 を含む旧版と旧modeは過去Trialの目的文・digest・実験結果の照合用に残すが、新規Trialには選べない。人間が書いたtrust境界宣言、Programme Boundary、固定した対象plugin、WordPress core、実行imageに対応するPHP、必要な依存pluginの読み取り専用source pack、Lab（任意）のHTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB accountを渡す。依存pluginは `Requires Plugins` ヘッダ、WooCommerceの版ヘッダ（`WC requires at least` / `WC tested up to`、`woocommerce` に対応づける）、選定方針の明示指定から決める。自動選定の本番対象はfreeze時点の公式stable版、手動・歴史的評価対象は明示版pinを使い、全て版とdigestをSnapshotに固定する。v10 には固定source由来の入口索引や公開履歴カタログを渡さず、分担と仮説はRootが決める。旧Trialの索引と公開履歴の記録は読み続ける。
 - 許可する操作: 固定sourceの読み取り、LabへのHTTP、Lab DBのRO accountによる読み取り。探索runにcanaryは渡さず、canaryの発行と確認は検証段階のHarnessが行う。外向き通信は認証ブローカー経由のprovider APIだけ。
 - 構成: 対象ごとにRoot＋最大4子の協調Trialを1回行う。Harnessは人数上限、隔離、wall、証拠保存、停止を管理し、子の有効なFindingとLeadはRootの最終JSONと独立して保存する。開発セットの3回反復は独立したTrialとして測り、本番の対象ごと1回という既定を変えない（ADR 0029）。
 - 出力: `Finding[]`（0件可）、`Lead[]`（0件可）。v8 以降に入口索引のcoverage recordや網羅の終了条件を課さない。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。候補は生のまま保存し、profileの正規化を通してから受理する。受理できない候補は `candidate-held` として分類とissue pathだけを台帳に残し、保留だけのTrialは無成果に数えない（ADR 0018）。Finding / Leadの出力契約はprompt本文ではなくHarnessがschemaから生成する節として渡し、目的文と契約節のdigestを別に記録する（ADR 0019）。
@@ -155,7 +155,7 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 | --- | --- | --- |
 | `selection` | 対象外資産（作者、配布停止、ベンダー側service）を落とす。install下限と上限は[選定方針 JSON](../src/profiles/wordpress/policy/selection.json)を正本とし、プログラムの報奨対象下限は別のscope規則として記録する。公開履歴はローカル mirror の slug 単位の件数と公開日だけを採点に使い、記録の内容は読まず探索にも渡さない。mirror が方針の鮮度を超えて古ければ選定を止める（ADR 0037、ADR 0030 を上書き） | 機械的。方針と除外理由を残す |
 | `lab` | discoveryとverifierに渡す認証情報を未認証・subscriber・customer（WooCommerce有効時）に限る。contributor以上と管理者の認証情報は渡さない（例外: 検証skillのhandoffには前提作りのためだけにLabの設定管理者を渡し、`setup-done` 以後は攻撃者位置の資格だけを使う。ADR 0035）。設定は既定のまま、一般的な利用範囲の初期データ（公開フォーム1つ等）はprofileのsetup manifestで入れ、Lab Setup digestに記録する | 機械的。contributor以上の経路は試せない。設定変更もできない |
-| `discovery` | Harnessが付けるProgramme Boundaryの節に対象内の影響（下表）を書き（v5以降、目的promptは分類の順位を持たない。ADR 0032 の 2026-10-16 節）、trust境界宣言でcontributor以上と管理者が意図して付与する権限を信頼側に置く（通常のサイトが有効にし得る設定は除外せず前提として書く。ADR 0038 の 2026-10-26 追記 11） | 誘導。agentは他も報告してよいが、台帳で分類される |
+| `discovery` | Harnessが付けるProgramme Boundaryの節に対象内の影響（下表）を書き（v5以降、目的promptは分類の順位を持たない。ADR 0032 の 2026-10-16 節）、trust境界宣言でcontributor以上と管理者の明示設定を信頼側に置く | 誘導。agentは他も報告してよいが、台帳で分類される |
 | `verification` と `review` | 判定器の成功条件をプログラムの受理条件に合わせる（下表）。scope評価はFindingと判定器の観測だけから、方針ファイルの規則で `in-scope` / `out` / `ambiguous` を出す。agentの自己申告は使わない | 機械的。提出候補にならない |
 
 影響の共通分類（両プログラムの受理条件を1つの語彙にしたもの。判定器とscope評価が共有する）:

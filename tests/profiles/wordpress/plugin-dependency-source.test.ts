@@ -156,6 +156,91 @@ describe("WordPress plugin dependency source", () => {
     ).toThrow(SourceAcquisitionError);
   });
 
+  it("maps the WC version headers to woocommerce without duplicating Requires Plugins", () => {
+    const wc = (lines: string) =>
+      Buffer.from(`<?php\n/*\nPlugin Name: Addon\n${lines}\n*/\n`);
+    expect(requiredPluginSlugs(wc("WC requires at least: 8.0"))).toEqual([
+      "woocommerce",
+    ]);
+    expect(requiredPluginSlugs(wc("WC tested up to: 9.4"))).toEqual([
+      "woocommerce",
+    ]);
+    expect(
+      requiredPluginSlugs(
+        wc(" * WC requires at least: 8.0\n * WC tested up to: 9.4"),
+      ),
+    ).toEqual(["woocommerce"]);
+    expect(
+      requiredPluginSlugs(
+        wc("Requires Plugins: woocommerce\nWC requires at least: 8.0"),
+      ),
+    ).toEqual(["woocommerce"]);
+    expect(
+      requiredPluginSlugs(
+        wc("Requires Plugins: elementor\nWC requires at least: 8.0"),
+      ),
+    ).toEqual(["elementor", "woocommerce"]);
+    expect(requiredPluginSlugs(wc("Requires Plugins: elementor"))).toEqual([
+      "elementor",
+    ]);
+    expect(requiredPluginSlugs(wc("Requires at least: 6.0"))).toEqual([]);
+    expect(requiredPluginSlugs(wc("WC requires at least:"))).toEqual([]);
+    expect(
+      requiredPluginSlugs(
+        Buffer.from(`${" ".repeat(8192)}WC requires at least: 8.0`),
+      ),
+    ).toEqual([]);
+  });
+
+  it("pins woocommerce once from the WC header and never makes it depend on itself", async () => {
+    const { packet, storageDirectory } = await fixture();
+    const target = await packet(
+      "addon",
+      "1.0.0",
+      "<?php\n/* Plugin Name: Addon\nWC requires at least: 8.0 */",
+    );
+    const woocommerce = await packet(
+      "woocommerce",
+      "9.4.0",
+      "<?php\n/* Plugin Name: WooCommerce\nWC requires at least: 9.0 */",
+    );
+    const observed: string[] = [];
+    const acquire = openWordPressOrgPluginDependencySource({
+      storageDirectory,
+      policy,
+      targetSource: {
+        async observe({ slug }) {
+          observed.push(slug);
+          return {
+            status: "observed",
+            observation: { stableVersion: "9.4.0" },
+            observationRef: {
+              kind: "wordpress-org-target-observation-ref",
+              schemaVersion: 1,
+              id: `observation-${slug}`,
+              digest: digest(slug),
+            },
+          } as Awaited<ReturnType<WordPressOrgTargetSource["observe"]>>;
+        },
+        async acquire() {
+          return {
+            status: "ready",
+            intake: { packet: woocommerce },
+          } as Awaited<ReturnType<WordPressOrgTargetSource["acquire"]>>;
+        },
+      },
+    });
+    // The header and the policy list both name woocommerce: one dependency.
+    expect(
+      await acquire(target, {}, ["woocommerce"], "stable-observed"),
+    ).toMatchObject([{ identity: "wporg:woocommerce", version: "9.4.0" }]);
+    expect(observed).toEqual(["woocommerce"]);
+    // Header alone, no policy entry.
+    expect(await acquire(target, {}, [], "stable-observed")).toMatchObject([
+      { identity: "wporg:woocommerce", version: "9.4.0" },
+    ]);
+  });
+
   it("pins transitive and explicit plugins before the target and reuses versions", async () => {
     const { packet, storageDirectory } = await fixture();
     const target = await packet(
