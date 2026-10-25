@@ -4,7 +4,7 @@ import { wordpressCampaignConfigSchema } from "../../src/cli/wordpress.js";
 import { runParametersSection } from "../../src/discovery/run-parameters.js";
 
 describe("Run parameters section (redesign 2026-10-25 §5.1)", () => {
-  it("states each enforced value and omits a zero floor", () => {
+  it("states each enforced value, including a zero floor", () => {
     const runtime = {
       transportKind: "claude-code/v1",
       model: "claude-opus-5-5",
@@ -38,7 +38,7 @@ describe("Run parameters section (redesign 2026-10-25 §5.1)", () => {
         lab: { mode: "none", maxResets: 2 },
         runtime,
       }),
-    ).not.toContain("Minimum active");
+    ).toContain("- Minimum active exploration time: 0 minutes (no minimum).");
   });
 
   it("normalises both discovery.lab forms to one object with a reset budget", () => {

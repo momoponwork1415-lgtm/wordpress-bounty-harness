@@ -1935,7 +1935,7 @@ describe("harness CLI vertical slice", () => {
     expect(transportRuns[0]?.maxChildren).toBe(6);
     expect(transportRuns[0]?.resumePrompt?.startsWith("Stop when")).toBe(true);
     expect(prompts[0]).toContain(transportRuns[0]?.resumePrompt);
-    // No floor line; the enforced ceiling and the 120-minute wall are stated.
+    // A zero floor is stated explicitly, with the ceiling and the 120-minute wall.
     expect(prompts[0]).toContain(
       [
         "## Run parameters",
@@ -1943,6 +1943,7 @@ describe("harness CLI vertical slice", () => {
           "The Harness sets and enforces these values for this Trial.",
           "- Runtime: codex-native/v1, model gpt-6.1-sol, effort high.",
           "- Wall time: 120 minutes.",
+          "- Minimum active exploration time: 0 minutes (no minimum).",
           "- Maximum concurrent child agents: 6.",
           "- Lab: none.",
         ].join("\n"),

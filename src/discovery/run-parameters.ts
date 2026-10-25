@@ -5,7 +5,7 @@
  */
 export interface RunParameters {
   readonly wallMinutes: number;
-  /** 0 means no floor; the line is then left out of the section. */
+  /** 0 means no floor; the section then says so explicitly. */
   readonly minimumActiveMinutes: number;
   readonly maxChildren: number;
   readonly lab: {
@@ -32,11 +32,9 @@ export function runParametersSection(parameters: RunParameters): string {
       "The Harness sets and enforces these values for this Trial.",
       `- Runtime: ${runtime.transportKind}, model ${runtime.model}, effort ${runtime.effort}.`,
       `- Wall time: ${parameters.wallMinutes} minutes.`,
-      ...(parameters.minimumActiveMinutes > 0
-        ? [
-            `- Minimum active exploration time: ${parameters.minimumActiveMinutes} minutes.`,
-          ]
-        : []),
+      parameters.minimumActiveMinutes > 0
+        ? `- Minimum active exploration time: ${parameters.minimumActiveMinutes} minutes.`
+        : "- Minimum active exploration time: 0 minutes (no minimum).",
       `- Maximum concurrent child agents: ${parameters.maxChildren}.`,
       lab.mode === "none"
         ? "- Lab: none."
