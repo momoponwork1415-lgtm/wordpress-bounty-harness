@@ -18,6 +18,12 @@ import {
   type WordPressFinding,
 } from "../../../src/profiles/wordpress/discovery/finding.js";
 import { openWordPressLab } from "../../../src/profiles/wordpress/lab/index.js";
+import { wordPressScenario } from "../../../src/profiles/wordpress/lab/scenarios.js";
+import { createWordPressScopeFacts } from "../../../src/profiles/wordpress/scope-facts.js";
+import {
+  createWordpressScopeEvaluator,
+  loadWordpressScopePolicy,
+} from "../../../src/profiles/wordpress/scope-policy.js";
 import { observedReviewLabPackage } from "../../../src/profiles/wordpress/lab/observed-review-lab.js";
 import { createWordPressAttemptObserver } from "../../../src/profiles/wordpress/verification/attempt-observer.js";
 import {
@@ -32,6 +38,8 @@ import {
   recordManualObservationLabReady,
 } from "../../../src/review/manual-observation.js";
 import type { Snapshot } from "../../../src/snapshot/index.js";
+import { Review } from "../../../src/review/index.js";
+import { exportReviewBundleV2 } from "../../../src/review/manual-observation-export.js";
 import { Verification } from "../../../src/verification/index.js";
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
@@ -89,6 +97,8 @@ type Scenario = {
   readonly silent?: boolean;
   /** The victim pages `route.json` declares for the Lab browser. */
   readonly victim?: unknown;
+  /** A latest-version attempt on a pinned ordinary Lab scenario, as scope needs. */
+  readonly ordinaryLatestVersion?: boolean;
 };
 
 /** The skill's side: setup as the administrator, `setup-done`, then the attacker route. */
@@ -277,6 +287,20 @@ async function verifyThroughHandoff(scenario: Scenario) {
     category: finding.impact,
     artifacts: [{ kind: "finding", digest: findingDigest }],
   });
+  if (scenario.ordinaryLatestVersion === true)
+    // The latest stable version frozen in this campaign, as `review reverify` records it.
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "snapshot-frozen",
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot.digest,
+      occurredAt: "2026-10-21T00:00:00Z",
+      type: "snapshot-frozen",
+      sourceDigest: snapshot.target.sourceDigest,
+      dependencyDigests: snapshot.dependencies.map(
+        (dependency) => dependency.sourceDigest,
+      ),
+    });
   const clock = () => new Date();
   const directory = join(root, "handoff");
   const verification = new Verification({
@@ -313,12 +337,30 @@ async function verifyThroughHandoff(scenario: Scenario) {
       findingId: finding.findingId,
       verificationId: "verification-1",
       snapshot,
+      ...(scenario.ordinaryLatestVersion === true
+        ? {
+            basis: {
+              kind: "latest-version" as const,
+              findingSnapshotDigest: snapshot.digest,
+            },
+          }
+        : {}),
       setup: {
         schemaVersion: 1,
         snapshotDigest: snapshot.digest,
         siteTitle: "Synthetic",
-        initialPosts: [],
+        // The approved-comment scenario needs a first post to comment on.
+        initialPosts:
+          scenario.ordinaryLatestVersion === true ? ["Welcome"] : [],
         customerRole: false,
+        ...(scenario.ordinaryLatestVersion === true
+          ? {
+              scenario: {
+                id: ORDINARY.id,
+                digest: ORDINARY.digest,
+              },
+            }
+          : {}),
       },
       campaignLabSetupDigest: sha("b"),
     }),
@@ -327,8 +369,19 @@ async function verifyThroughHandoff(scenario: Scenario) {
   const event = ledger
     .read({ campaignId: "campaign-1", type: "verification-finished" })
     .at(0)?.event;
-  return { result, event, ledger, store, finding, state, ...observed };
+  return {
+    result,
+    event,
+    ledger,
+    store,
+    finding,
+    state,
+    snapshot,
+    ...observed,
+  };
 }
+
+const ORDINARY = wordPressScenario("approved-comment-v1")!;
 
 const AWAITING = {
   status: "incomplete",
@@ -457,6 +510,152 @@ describe("handoff verification through the real transport and observer (#525)", 
       recordedBy: "owner",
     });
     // The verification event itself is never rewritten into a confirmation.
+    expect(
+      ledger.read({ type: "verification-finished" }).at(-1)?.event,
+    ).toMatchObject({ result: AWAITING });
+  });
+
+  it("takes a human-observed result to a Submission Candidate and an exact authorization (#525)", async () => {
+    const { result, event, ledger, store, finding, snapshot } =
+      await verifyThroughHandoff({ ordinaryLatestVersion: true });
+    expect(result).toMatchObject(AWAITING);
+    if (event?.type !== "verification-finished") throw new Error("no event");
+    const ref = {
+      campaignId: "campaign-1",
+      findingId: finding.findingId,
+      verificationId: event.verificationId,
+      snapshotDigest: event.snapshotDigest,
+    };
+    // The selection record scope reads, as `campaign run` writes it.
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "target-selected",
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot.digest,
+      occurredAt: "2026-10-21T00:00:00Z",
+      type: "target-selected",
+      selectionId: "selection-1",
+      artifacts: [
+        {
+          kind: "target-selection",
+          digest: await store.putFiles({
+            "target-selection.json": canonicalJson({
+              activeInstallations: 5_000,
+              slug: "synthetic-plugin",
+            }),
+          }),
+        },
+      ],
+    });
+    const review = new Review({
+      ledger,
+      artifactStore: store,
+      scopeEvaluator: createWordpressScopeEvaluator(
+        await loadWordpressScopePolicy(),
+      ),
+      factsProvider: createWordPressScopeFacts({ ledger, store }),
+    });
+    const reproduce = () =>
+      review.recordDecision({
+        ref,
+        decision: "defer",
+        reasonCode: "manual-reproduction",
+        openedEvidence: [],
+        decidedBy: "owner",
+        reproduction: { result: "match" },
+      });
+    // Without a person's Lab observation there is nothing to reproduce or assess.
+    await expect(reproduce()).rejects.toThrow(
+      "A matching evidence-backed verification is required",
+    );
+    await expect(review.assessScope({ ref })).rejects.toThrow(
+      "A matching evidence-backed verification is required",
+    );
+
+    const admitted = await observedReviewLabPackage({ ledger, store, ref });
+    if (admitted === null) throw new Error("no review Lab package");
+    const receipt = await recordManualObservationLabReady({
+      ledger,
+      store,
+      ref,
+      packageDigest: admitted.packageDigest,
+      sessionLabel: "wbh-review-net",
+    });
+    await recordManualObservation({
+      ledger,
+      store,
+      ref,
+      packageDigest: admitted.packageDigest,
+      sessionReceiptDigest: receipt,
+      evidence: new TextEncoder().encode("screen recording notes"),
+      result: "match",
+      recordedBy: "owner",
+    });
+    // The observation alone is not the reviewer's reproduction.
+    await expect(review.assessScope({ ref })).rejects.toThrow(
+      "A matching evidence-backed verification is required",
+    );
+    await reproduce();
+    expect(
+      ledger.read({ type: "human-reproduction-recorded" }).at(-1)?.event,
+    ).toMatchObject({
+      verificationId: ref.verificationId,
+      reproductionPackageDigest: admitted.packageDigest,
+      result: "match",
+    });
+
+    // wbh-review and wbh-report read both human records from the v2 export.
+    const exported = await exportReviewBundleV2({
+      ledger,
+      store,
+      campaignId: "campaign-1",
+      findingId: finding.findingId,
+      verifierRecord: createWordPressVerifierRecordReader({ store }),
+    });
+    expect(exported.verification).toMatchObject({
+      status: "incomplete",
+      reason: "awaiting-human-observation",
+    });
+    expect(exported.review).toMatchObject({
+      manualObservation: { result: "match", evidenceStatus: "available" },
+      humanReproduction: { result: "match" },
+    });
+
+    const assessed = await review.assessScope({ ref });
+    expect(assessed.map((item) => [item.programmeId, item.status])).toEqual([
+      ["wordfence", "in-scope"],
+      ["patchstack", "in-scope"],
+    ]);
+    const wordfence = assessed.find(
+      (item) => item.programmeId === "wordfence",
+    )!;
+    const draft = await review.saveDraft({
+      assessmentId: wordfence.id,
+      content: "Synthetic report reviewed by the owner",
+      preparedBy: "human",
+    });
+    expect(draft).toMatchObject({
+      candidateId: expect.stringMatching(/^sha256:/),
+      destination: "wordfence",
+    });
+    await review.recordDecision({
+      ref,
+      decision: "accept",
+      reasonCode: "manual-reproduction",
+      openedEvidence: [],
+      duplicate: { status: "no-match" },
+      decidedBy: "owner",
+    });
+    const exact = {
+      candidateId: draft.candidateId,
+      draftDigest: draft.digest,
+      destination: "wordfence",
+    };
+    await review.authorizeExternalAction({ ...exact, authorizedBy: "owner" });
+    expect(await review.admitExternalAction(exact)).toMatchObject({
+      status: "authorized",
+    });
+    // The verification event is never rewritten into a confirmation.
     expect(
       ledger.read({ type: "verification-finished" }).at(-1)?.event,
     ).toMatchObject({ result: AWAITING });

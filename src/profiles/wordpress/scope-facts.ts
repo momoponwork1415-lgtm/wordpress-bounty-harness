@@ -85,6 +85,86 @@ function categoryOf(
 }
 
 /**
+ * #525 (ADR 0040): what a person's `match` in a review Lab stands for. It is
+ * the effect the Finding's category claims, in the policy's observation
+ * vocabulary. Conditions only a judge recorded (path and extension control,
+ * site-wide reach, an option's class) are not implied, so a programme that
+ * needs them stays `ambiguous`.
+ */
+const HUMAN_OBSERVED_EFFECT: Readonly<Record<string, readonly string[]>> = {
+  rce: ["execution-canary"],
+  "php-file-write": ["execution-canary"],
+  "arbitrary-file-read": ["canary-file-read"],
+  "arbitrary-file-download": ["canary-file-read"],
+  lfi: ["canary-file-read"],
+  rfi: ["canary-file-read"],
+  "arbitrary-file-delete": ["canary-file-deleted"],
+  sqli: ["canary-row-access"],
+  "options-update": ["option-canary-changed"],
+  "stored-xss": ["javascript-executed"],
+  "privesc-to-admin": [
+    "admin-capability-reached",
+    "contributor-capability-reached",
+  ],
+  "privesc-to-contributor+": ["contributor-capability-reached"],
+  "auth-bypass-to-admin": ["admin-session-reached", "other-session-reached"],
+  "account-takeover": ["admin-session-reached", "other-session-reached"],
+  "auth-bypass-non-admin": ["other-session-reached"],
+  "sensitive-object-access": ["sensitive-canary-access"],
+  "content-deletion": ["other-content-deleted"],
+};
+
+const labBrowserSchema = z.looseObject({
+  observerId: z.literal("wordpress-lab-browser"),
+  status: z.literal("visited"),
+  victimRole: z.enum([
+    "administrator",
+    "subscriber",
+    "customer",
+    "unauthenticated",
+    "self",
+  ]),
+});
+
+/**
+ * Scope input for a result a person observed as `match` in a review Lab
+ * (#525, ADR 0040): the Finding's attacker position (the only account the
+ * Harness released after setup), the Lab browser's victim record when there
+ * is one, the selection record, the verified Lab scenario and the version
+ * comparison.
+ */
+export function wordpressHumanObservedScopeFacts(input: {
+  readonly category: string;
+  readonly attacker: z.infer<typeof attackerRole>;
+  readonly victimRole?: NonNullable<WordpressScopeInput["victimRole"]>;
+  readonly target: { readonly activeInstallations: number };
+  readonly latestVersionVerified: boolean;
+  readonly ordinaryScenarioVerified: boolean;
+}): WordpressScopeInput {
+  return {
+    category: input.category as WordpressScopeInput["category"],
+    attacker: attackerRole.parse(input.attacker),
+    activeInstalls: input.target.activeInstallations,
+    wordpressOrgListed: true,
+    premium: false,
+    ...(input.latestVersionVerified ? { latestVersionVerified: true } : {}),
+    ...(input.ordinaryScenarioVerified
+      ? { defaultOrCommonSettings: true }
+      : {}),
+    ...(input.victimRole === undefined
+      ? {}
+      : {
+          victimRole: input.victimRole,
+          // The Lab browser signs in as its own victim account unless it reports `self`.
+          ...(input.victimRole === "self"
+            ? {}
+            : { victimPrincipal: "separate" as const }),
+        }),
+    observations: [...(HUMAN_OBSERVED_EFFECT[input.category] ?? [])],
+  };
+}
+
+/**
  * Scope input from Harness-owned records only: the judge's conditions, the
  * selection record, the verified Lab scenario and the version comparison.
  */
@@ -134,8 +214,15 @@ export function createWordPressScopeFacts(options: {
   readonly store: PrivateArtifactStore;
 }): ScopeFactsProvider<WordpressScopeInput> {
   return {
-    async load({ ref, verification }) {
+    async load({ ref, verification, humanObservation }) {
+      const humanObserved =
+        humanObservation !== undefined &&
+        humanObservation.result === "match" &&
+        humanObservation.verificationId === verification.verificationId &&
+        verification.result.status === "incomplete" &&
+        verification.result.reason === "awaiting-human-observation";
       if (
+        !humanObserved &&
         verification.result.status !== "runtime-confirmed" &&
         verification.result.status !== "reproduced"
       )
@@ -199,11 +286,54 @@ export function createWordPressScopeFacts(options: {
         pinnedScenario?.digest === lab.scenario.digest &&
         (pinnedScenario.pluginSlug === null ||
           pinnedScenario.pluginSlug === target.slug);
+      const latestVersionVerified =
+        verification.basis?.kind === "latest-version";
+      if (humanObserved && verification.result.status === "incomplete") {
+        const findingFile = finding.artifacts.find(
+          (artifact) => artifact.kind === "finding",
+        );
+        const recorded =
+          findingFile === undefined
+            ? undefined
+            : await options.store.readJson(
+                findingFile.digest,
+                "finding.json",
+                z.looseObject({ attackerPosition: attackerRole }),
+                1024 * 1024,
+              );
+        if (recorded?.status !== "resolved")
+          throw new Error("Finding private record is unreadable");
+        const evidenceDigest = verification.result.evidenceDigest;
+        const browser =
+          evidenceDigest === undefined
+            ? undefined
+            : await options.store.readJson(
+                evidenceDigest,
+                "lab-browser-observation.json",
+                labBrowserSchema,
+                64 * 1024,
+              );
+        return wordpressHumanObservedScopeFacts({
+          category: finding.category,
+          attacker: recorded.value.attackerPosition,
+          ...(browser?.status === "resolved"
+            ? { victimRole: browser.value.victimRole }
+            : {}),
+          target,
+          latestVersionVerified,
+          ordinaryScenarioVerified,
+        });
+      }
+      if (
+        verification.result.status !== "runtime-confirmed" &&
+        verification.result.status !== "reproduced"
+      )
+        throw new Error("Scope facts need an evidence-backed verification");
       return wordpressScopeFacts({
         category: finding.category,
         conditions: verification.result.conditions,
         target,
-        latestVersionVerified: verification.basis?.kind === "latest-version",
+        latestVersionVerified,
         ordinaryScenarioVerified,
       });
     },

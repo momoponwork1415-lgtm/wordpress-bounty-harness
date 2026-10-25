@@ -350,3 +350,60 @@ export function currentManualObservation(
       .at(-1)?.event as ResultEvent | undefined) ?? null
   );
 }
+
+/**
+ * #525 (ADR 0040): with no judge, a new result is a submission basis only
+ * through people. The latest attempt awaits a human observation, kept the
+ * Harness capture, and a named person recorded `match` for it in a fresh
+ * review Lab. The package digest is that sealed review Lab package.
+ */
+export function humanObservedBasis(
+  ledger: Ledger,
+  ref: ReviewRef,
+): {
+  readonly verification: FinishedVerification;
+  readonly packageDigest: string;
+  readonly observation: ResultEvent;
+} | null {
+  const verification = currentObservationVerification(ledger, ref);
+  if (
+    verification === null ||
+    verification.result.status !== "incomplete" ||
+    verification.result.reason !== "awaiting-human-observation" ||
+    verification.evidenceCapture !== "harness-captured"
+  )
+    return null;
+  const observation = currentManualObservation(ledger, ref);
+  if (observation === null || observation.result !== "match") return null;
+  return {
+    verification,
+    packageDigest: observation.packageDigest,
+    observation,
+  };
+}
+
+/** The same basis once the reviewer's own `review decide --reproduced match` is recorded for it. */
+export function humanReproducedBasis(
+  ledger: Ledger,
+  ref: ReviewRef,
+): ReturnType<typeof humanObservedBasis> {
+  const observed = humanObservedBasis(ledger, ref);
+  if (observed === null) return null;
+  const reproduction = ledger
+    .readAll({
+      campaignId: ref.campaignId,
+      findingId: ref.findingId,
+      type: "human-reproduction-recorded",
+    })
+    .filter(
+      ({ event }) =>
+        event.type === "human-reproduction-recorded" &&
+        event.verificationId === ref.verificationId &&
+        event.reproductionPackageDigest === observed.packageDigest,
+    )
+    .at(-1)?.event;
+  return reproduction?.type === "human-reproduction-recorded" &&
+    reproduction.result === "match"
+    ? observed
+    : null;
+}
