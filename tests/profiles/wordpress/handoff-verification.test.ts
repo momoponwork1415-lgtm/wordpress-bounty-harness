@@ -16,6 +16,7 @@ import {
   admitWordPressFinding,
   readWordPressFinding,
 } from "../../../src/profiles/wordpress/discovery/finding.js";
+import { readLabOwners } from "../../../src/infrastructure/lab-owner-record.js";
 import { openWordPressLab } from "../../../src/profiles/wordpress/lab/index.js";
 import {
   HandoffVerifier,
@@ -72,6 +73,64 @@ async function until(path: string): Promise<string> {
   throw new Error(`${path} did not appear`);
 }
 
+/** The fake Docker daemon that several Labs share: its objects and the ports it bound. */
+type DockerHost = {
+  readonly containers: Set<string>;
+  readonly networks: Set<string>;
+  readonly volumes: Set<string>;
+  readonly ports: Map<string, number>;
+  nextPort: number;
+};
+const dockerHost = (): DockerHost => ({
+  containers: new Set(),
+  networks: new Set(),
+  volumes: new Set(),
+  ports: new Map(),
+  nextPort: 32768,
+});
+
+/** Keeps the fake daemon's objects; answers listings and `docker port`, else null. */
+function daemon(host: DockerHost, args: readonly string[]) {
+  const [verb, object] = args;
+  const named = args[args.indexOf("--name") + 1] ?? "";
+  const operands = args.filter((arg) => !arg.startsWith("-"));
+  const listing = (names: Set<string>) => ({
+    exitCode: 0,
+    stdout: [...names].join("\n"),
+    stderr: "",
+  });
+  if ((verb === "run" && args.includes("--detach")) || verb === "create") {
+    host.containers.add(named);
+    args.forEach((arg, index) => {
+      const published = /^127\.0\.0\.1:(\d*):(\d+)$/.exec(arg);
+      if (args[index - 1] === "--publish" && published !== null)
+        host.ports.set(
+          `${named} ${published[2]}/tcp`,
+          published[1] === "" ? host.nextPort++ : Number(published[1]),
+        );
+    });
+  }
+  if (verb === "rm")
+    for (const name of operands.slice(1)) host.containers.delete(name);
+  if (verb === "network" && object === "create")
+    host.networks.add(args.at(-1)!);
+  if (verb === "network" && object === "rm")
+    for (const name of operands.slice(2)) host.networks.delete(name);
+  if (verb === "volume" && object === "create") host.volumes.add(args.at(-1)!);
+  if (verb === "volume" && object === "rm")
+    for (const name of operands.slice(2)) host.volumes.delete(name);
+  if (verb === "ps") return listing(host.containers);
+  if (verb === "network" && object === "ls") return listing(host.networks);
+  if (verb === "volume" && object === "ls") return listing(host.volumes);
+  if (verb === "port") {
+    const bound = host.ports.get(`${args[1]} ${args[2]}`);
+    return bound === undefined
+      ? { exitCode: 1, stdout: "", stderr: "no public port" }
+      : { exitCode: 0, stdout: `127.0.0.1:${bound}\n`, stderr: "" };
+  }
+  return null;
+}
+
 type Scenario = {
   /** What the skill does with the setup administrator before `setup-done`. */
   readonly setup?: (state: LabState) => void;
@@ -79,12 +138,15 @@ type Scenario = {
   readonly attack?: (state: LabState) => void;
   /** The `session.json` text the skill reports. */
   readonly session?: string;
+  /** Runs after `attack.json` with the connection `lab.json` named, before the six files. */
+  readonly beforeFiles?: (lab: { readonly url: string }) => Promise<void>;
 };
 
 /** The skill's side: setup as the administrator, `setup-done`, then the attacker route. */
 async function skill(directory: string, state: LabState, scenario: Scenario) {
   const lab = JSON.parse(await until(join(directory, "lab.json"))) as {
     administrator: { username: string };
+    host: { url: string };
   };
   state.sessions.set("admin-session", lab.administrator.username);
   send(state, "admin-session", "/wp-admin/options-general.php");
@@ -95,6 +157,7 @@ async function skill(directory: string, state: LabState, scenario: Scenario) {
   state.sessions.set("attacker-session", state.attacker);
   send(state, "attacker-session", "/synthetic");
   scenario.attack?.(state);
+  await scenario.beforeFiles?.({ url: lab.host.url });
   for (const [name, text] of Object.entries({
     "route.json":
       '{"role":"subscriber","defaultSettings":true,"steps":[{"kind":"http","method":"GET","path":"/synthetic","expected":"Administrator access"}]}',
@@ -110,7 +173,14 @@ async function skill(directory: string, state: LabState, scenario: Scenario) {
 }
 
 /** Real Lab code over a fake Docker host, the real handoff transport and the real judges. */
-async function verifyThroughHandoff(scenario: Scenario) {
+async function verifyThroughHandoff(
+  scenario: Scenario,
+  shared: {
+    readonly host: DockerHost;
+    readonly ownerDirectory?: string;
+    readonly ports: { readonly http: number; readonly database: number };
+  } = { host: dockerHost(), ports: { http: 18080, database: 13307 } },
+) {
   const root = await mkdtemp(join(tmpdir(), "wbh-handoff-e2e-"));
   directories.push(root);
   const sourceDirectory = join(root, "source");
@@ -138,8 +208,7 @@ async function verifyThroughHandoff(scenario: Scenario) {
   const ok = (stdout = "ok") => ({ exitCode: 0, stdout, stderr: "" });
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
-    leaseDirectory: join(root, "host-lab-lease"),
-    leaseWaitMs: 0,
+    ownerDirectory: shared.ownerDirectory ?? join(root, "lab-owners"),
     images: {
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
@@ -160,6 +229,8 @@ async function verifyThroughHandoff(scenario: Scenario) {
     },
     runner: {
       async run({ args }) {
+        const answered = daemon(shared.host, args);
+        if (answered !== null) return answered;
         const at = (word: string) => args[args.indexOf(word) + 1] ?? "";
         const env = (name: string) =>
           args
@@ -265,7 +336,7 @@ async function verifyThroughHandoff(scenario: Scenario) {
             directory,
             handle: input.lab,
             lab,
-            ports: { http: 18080, database: 13307 },
+            ports: shared.ports,
             reviewExport: async () => '{"schema":"review-export/v1"}',
             clock,
             pollIntervalMs: 5,
@@ -359,6 +430,72 @@ describe("handoff verification through the real transport and judges (#430)", ()
       ]);
     },
   );
+
+  it("runs two handoffs at once on one host, each on its own free port, and removes only its own Lab (#432)", async () => {
+    const host = dockerHost();
+    const root = await mkdtemp(join(tmpdir(), "wbh-handoff-parallel-"));
+    directories.push(root);
+    const ownerDirectory = join(root, "lab-owners");
+    const urls: string[] = [];
+    let bothLive!: () => void;
+    const together = new Promise<void>((resolve) => (bothLive = resolve));
+    let firstDone!: () => void;
+    const firstRemoved = new Promise<void>((resolve) => (firstDone = resolve));
+    const labIds = () =>
+      new Set(
+        [...host.containers].map((name) =>
+          name.split("-").slice(1, 6).join("-"),
+        ),
+      );
+    let whileBoth: ReadonlySet<string> = new Set();
+    let afterFirst:
+      | {
+          readonly live: ReadonlySet<string>;
+          readonly hosted: ReadonlySet<string>;
+        }
+      | undefined;
+    const reach = async (lab: { readonly url: string }) => {
+      urls.push(lab.url);
+      if (urls.length === 2) {
+        whileBoth = labIds();
+        bothLive();
+      }
+      await together;
+    };
+    const shared = { host, ownerDirectory, ports: { http: 0, database: 0 } };
+    const first = verifyThroughHandoff(
+      { attack: escalate, beforeFiles: reach },
+      shared,
+    ).finally(() => firstDone());
+    const second = verifyThroughHandoff(
+      {
+        attack: escalate,
+        beforeFiles: async (lab) => {
+          await reach(lab);
+          await firstRemoved;
+          afterFirst = {
+            live: (await readLabOwners(ownerDirectory)).live,
+            hosted: labIds(),
+          };
+        },
+      },
+      shared,
+    );
+    const results = await Promise.all([first, second]);
+    for (const { result } of results)
+      expect(result).toMatchObject({ status: "runtime-confirmed" });
+    // Both Labs were live together, each behind its own loopback port.
+    expect(whileBoth.size).toBe(2);
+    expect(new Set(urls).size).toBe(2);
+    for (const url of urls)
+      expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d{5}$/);
+    // The first teardown left the second Lab and its owner record in place.
+    expect(afterFirst?.hosted.size).toBe(1);
+    expect(afterFirst?.live).toEqual(afterFirst?.hosted);
+    const [survivor] = afterFirst!.hosted;
+    expect(whileBoth).toContain(survivor);
+    expect([...host.containers, ...host.networks, ...host.volumes]).toEqual([]);
+  });
 
   it("confirms a change the attacker route makes after setup-done", async () => {
     const { result, event } = await verifyThroughHandoff({ attack: escalate });

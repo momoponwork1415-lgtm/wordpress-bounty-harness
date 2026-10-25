@@ -127,10 +127,11 @@ harness ledger funnel --campaign <id>
 `verify next` は handoff 列から Finding を 1 件取り、その Finding の Snapshot に新しい検証 Lab を立てて skill と判定器に通し、Lab を片付ける。handoff 列には、parked でなく結論（`runtime-confirmed`、`contradicted`、`reproduced`）の出ていない Finding が、全 campaign から台帳順に並ぶ。最新の判断が `reject` の Finding（段 1 で落としたものを含む、#436）は並ばない。`--campaign <id>` を付けると、その campaign に絞る。再試行予算（ADR 0022）は現行の skill 版の試行だけで数える。そのため、旧 Codex Verifier（`verifier-v8`）が `incomplete` で残した Finding も列に並ぶ。`--handoff` の無い `verify next` は UsageError で止まる（#423）。対象が無ければ `no verification pending` と出す。`--repeat 3` は同じ Snapshot に別々の Trial ID を 3 つ作る。既定は 1 回。funnel の `by Lab` は探索用 Lab の有無、`verification Lab failed` は検証側の供給失敗を示す。
 
 ```sh
-harness verify next --config <campaign.json> --handoff <dir> [--campaign <id> [--finding <id>]] [--port 8080] [--db-port 3307]
+harness verify next --config <campaign.json> --handoff <dir> [--campaign <id> [--finding <id>]] [--port <n>] [--db-port <n>]
 ```
 
-`--handoff <dir>` は検証 Lab を skill `wbh-verify` に受け渡す（ADR 0035）。Harness は検証 Lab を立てて `127.0.0.1:<port>` に Lab の recorder 経由で公開し、setup 用の `<dir>/lab.json`（接続先と Host header、設定管理者の資格、`<dir>/review-export.json` の path）を書く。skill が `<dir>/setup-done` を置くと Harness は設定管理者の session と application password を破棄して password を変え（canary 管理者と canary user も同じ）、HTTP 捕捉、Lab 状態、role と option の基線を取り直し（#430）、完了後に `<dir>/observation-ready`、続いて攻撃用の `<dir>/attack.json`（Finding の攻撃者位置の資格、canary、必要な比較 route）を置く。skill は合図と `attack.json` の両方を待ってから攻撃者位置で操作し、6 file（`route.json` `http.json` `session.json` `steps.md` `refutation.md` `precondition`）か `<dir>/abort` を置く。session がなければ `session.json` は空 file にする。待ち時間の上限は従来どおり 30 分で、超過と `abort` は理由付き `incomplete`。以後は判定器 → `verification-finished`（現行 `promptVersion: wbh-verify/v9`、旧 v1〜v8 の本文は `.claude/skills/wbh-verify/versions/`）→ review queue と同じ。`--finding <id>`（`--campaign` と併せて指定する）は操作者が名指しした Finding を、列の規則（parked、再試行予算）に関わらず検証する。`<dir>` は 1 attempt 専用に Git の外へ置き、終わったら消す。既存の受け渡し file がある directory は使えない。
+`--handoff <dir>` は検証 Lab を skill `wbh-verify` に受け渡す（ADR 0035）。Harness は検証 Lab を立てて `127.0.0.1:<port>` に Lab の recorder 経由で公開し（`--port` と `--db-port` を省くと Docker が空いている loopback port を選ぶ。実際の port は `lab.json` の `host.url` と `attack.json` の `database.port` に書く）、setup 用の `<dir>/lab.json`（接続先と Host header、設定管理者の資格、`<dir>/review-export.json` の path）を書く。skill が `<dir>/setup-done` を置くと Harness は設定管理者の session と application password を破棄して password を変え（canary 管理者と canary user も同じ）、HTTP 捕捉、Lab 状態、role と option の基線を取り直し（#430）、完了後に `<dir>/observation-ready`、続いて攻撃用の `<dir>/attack.json`（Finding の攻撃者位置の資格、canary、必要な比較 route）を置く。skill は合図と `attack.json` の両方を待ってから攻撃者位置で操作し、6 file（`route.json` `http.json` `session.json` `steps.md` `refutation.md` `precondition`）か `<dir>/abort` を置く。session がなければ `session.json` は空 file にする。待ち時間の上限は従来どおり 30 分で、超過と `abort` は理由付き `incomplete`。以後は判定器 → `verification-finished`（現行 `promptVersion: wbh-verify/v9`、旧 v1〜v8 の本文は `.claude/skills/wbh-verify/versions/`）→ review queue と同じ。`--finding <id>`（`--campaign` と併せて指定する）は操作者が名指しした Finding を、列の規則（parked、再試行予算）に関わらず検証する。`<dir>` は 1 attempt 専用に Git の外へ置き、終わったら消す。既存の受け渡し file がある directory は使えない。
+検証 Lab（`verify next --handoff`、`review reverify --handoff`、`lab up --for-review`）は同じ host で何台でも同時に立てられる。Harness は台数を制限せず、待たせもしない（2026-10-26 所有者決定、#432）。Lab ごとに container・network・volume の名前は Lab ID で分かれ、host の port は上のとおり Lab ごとに取る。`--port` を固定して 2 台に同じ値を渡すと、後の Lab は公開に失敗して理由付き `incomplete` になる。1 台は WordPress・MySQL・recorder・canary receiver の 4 container（host に公開する間は gateway を足して 5）で、host の memory（約 47 GB）が実際の上限になる。
 `route.json` の HTTP step に本文がある場合、`body` は実際に送信した wire body と一致させる。本文が空のときだけ省略できる。
 
 `continuous run` は探索だけを回し、検証 Lab を立てない（#423。旧 `--verify-concurrency` と検証 worker は削除した）。handoff 列は探索 batch と並行して skill が消化してよく、検証 Lab の数は `resources.maxConcurrentTargets` に含めない。
@@ -147,7 +148,7 @@ harness continuous status --state <dir>
 harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <campaign.json>
 ```
 
-- `run` は `select` → `campaign run --all` → 次の batch を回り続ける。実行履歴の正本は台帳で、`<state>/continuous.json` / `.pid` / `.log` は作業用、`.stop` は理由とともに解除まで残す停止指示。第 2 の journal、owner lease、host 共通 claim、crash 復旧の自動化は持たない。
+- `run` は `select` → `campaign run --all` → 次の batch を回り続ける。実行履歴の正本は台帳で、`<state>/continuous.json` / `.pid` / `.log` は作業用、`.stop` は理由とともに解除まで残す停止指示。第 2 の journal、owner lease、host 共通 claim、crash 復旧の自動化は持たない。検証 Lab の host 単位の lease（1 host 1 枠）も 2026-10-26 に削除した（#432）。残したのは Lab ごとの持ち主記録（`~/.local/state/wordpress-bounty-harness-host/lab-owners/<labId>.json`）だけで、誰も待たせず、広い掃除が生きている持ち主の Lab を消さないためだけに読む。
 - 止まるのは operator の stop、候補枯渇（`exhausted`）、Programme 写しの 35 日超（`programme-stale`）、legacy JSON の欠落（`legacy-history-missing`）、例外 3 batch 連続（`errors`。mirror の鮮度 gate で `select` が止まったときも例外として数える、ADR 0037）、completed 0 の batch 3 連続（`no-progress`）の 6 つ。明示的な operator stop と他 5 つの理由は、理由付き停止マーカーを残して終了コード 0 で終え、systemd の `Restart=on-failure` では再起動しない。`OnFailure` はこれらの停止では発火しないため、停止の通知は `--notify` と `continuous status` の監視で行う。例外による crash は終了コード 1 で再起動対象。quota、拒否、ログイン失効（`waiting-login`）、disk 不足では止まらず待つ。
 - `status` は状態、pid、最後の例外、今日と今週の Trial 数・completed・provider-limited・provider-refused・run-failed・Lab 失敗・unsettled、review queue と parked を出す。Trial 数は探索 run の開始数から、Trial に数えない run（単独の provider 上限 run と、source・子・転送の無い run。SPEC §6）と、終了 event の無いまま runner の再起動でやり直された run（`superseded`）を引いた数で、provider-limited の run 数はその横に別に出す。`unsettled` は終了 event の無い run から `superseded` を引いた数で、実行中の run と、まだ再開できる死んだ run（runner の次の起動か `campaign resume` で再開する）を数える。再開した segment は元の Trial に数え、Trial の結果は最後の segment で決める。停止マーカーが残り pid が生きていれば `stopping`、pid が死んでいれば `stopped(<理由>)`、停止マーカーがなく memo だけ実行中なら `stale` と表示し、いずれも終了コード 1。`stop` は `<state>/continuous.stop` に `operator` を記録し、runner は次の対象の境界で止まる。停止マーカーは crash や systemd 再起動でも消えず、通常の `continuous run` は選定・campaign・Lab 掃除を始めない。
 - レビュー後または異常停止の原因を確認・修正した後は pid が消えたことを `continuous status` で確認し、systemd 運用なら `continuous resume --state <dir>` で停止マーカーを解除してから unit を起動する。手動運用なら `continuous run ... --resume` で解除と起動を一度に行える。実行中 pid がある間の再開は拒否する。systemd unit の `ExecStart` に `--resume` を固定しない。SIGINT / SIGTERM は進行中の対象を drain して終了するが、停止マーカーは残さない。runner は `campaign run --selection <path>` と同じく campaign 設定の `selectionPolicyPath` を差し替えて走る。起動時と各 batch の後の残骸の掃除は、探索の残骸（`provider-egress-broker-*`、`codex-agent-<uuid>`、`claude-agent-<uuid>` の container と `provider-egress-*` の network）だけを消し、Lab（`wbh-<uuid>-*`）には触らない（#526）。Lab の後始末は、Lab を立てた側（`verify next --handoff`、`review reverify`、`lab up --for-review`、`lab down`、操作者の `lab cleanup`）が持つ。検証は探索と並行して走らせてよく、runner を止めて待つ必要はない。手で回す `campaign run` と `campaign resume` は、生きている間 `<state>/sweep-holds/<pid>` を 1 プロセス 1 ファイルで置き、その間 runner は掃除をしない。終わるとファイルを消す。pid が死んだファイルは保留に数えない。
@@ -191,7 +192,7 @@ harness review export --campaign <id> --finding <id>         # 1画面のレビ�
 harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--by <name>] [--opened <digest>]... [--duplicate no-match|unavailable[:<reason>]|possible-match:<ref> [--duplicate-note <path>]] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--minutes <n>]
 harness review dedupe --campaign <id> --finding <id>          # ローカルWordfence履歴mirrorと照合
 harness review scope --campaign <id> --finding <id>           # Wordfence / Patchstack ごとに in-scope / out-of-scope / ambiguous
-harness review reverify --campaign <id> --finding <id> --config <path> --handoff <dir> [--port 8080] [--db-port 3307] # 新しい版のLabをskillへ渡し、判定器で再検証
+harness review reverify --campaign <id> --finding <id> --config <path> --handoff <dir> [--port <n>] [--db-port <n>] # 新しい版のLabをskillへ渡し、判定器で再検証
 harness review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]
 harness review authorize --candidate <id> --draft <digest> --to <destination> --by <name>
 harness review submitted --candidate <id> --draft <digest> --to <destination>
@@ -312,9 +313,11 @@ harness lab cleanup --config <path>            # 一覧だけ
 harness lab cleanup --config <path> --remove   # 削除
 ```
 
+持ち主のプロセスが生きている Lab（Lab ごとの持ち主記録、#432）は、一覧にも削除にも出ない。持ち主が死んだ Lab と記録の無い Lab は残骸として出る。削除したときは、死んだ持ち主の記録も消す。
+
 - 対象は、Labが付ける `wbh-<uuid>-{db,wp,canary,proxy,host,net,site}` と、探索が付ける `provider-egress-broker-<id>` / `provider-egress-<id>` / `codex-agent-<uuid>` / `claude-agent-<uuid>` の名前に一致するものだけ。
-- **実行中のcampaignも検証 Lab もないときに使う。** 立っている Lab も消える。
-- `continuous run` が起動時と batch の後に行う掃除は、このうち Lab 以外だけを対象にする（#526）。
+- **実行中のcampaignがないときに使う。** 持ち主の記録が無い Lab は、立っていても消える。
+- `continuous run` が起動時と batch の後に行う掃除は、このうち Lab 以外だけを対象にする（#526）。持ち主の記録も読まず、消さない。
 
 ## 6. 評価
 

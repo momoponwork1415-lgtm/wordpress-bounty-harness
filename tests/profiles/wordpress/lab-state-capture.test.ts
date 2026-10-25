@@ -476,7 +476,16 @@ describe("WordPress Lab host exposure", () => {
         handle,
         requireDocker: async (args) => {
           calls.push([...args]);
-          return { exitCode: 0, stdout: "", stderr: "" };
+          return {
+            exitCode: 0,
+            stdout:
+              args[0] === "port"
+                ? args[2] === "80/tcp"
+                  ? "127.0.0.1:8080\n"
+                  : "127.0.0.1:3307\n"
+                : "",
+            stderr: "",
+          };
         },
       },
       { image: "node-recorder@sha256:abc", httpPort: 8080, databasePort: 3307 },
@@ -487,7 +496,7 @@ describe("WordPress Lab host exposure", () => {
       httpPort: 8080,
       databasePort: 3307,
     });
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(5);
     const run = calls[0]!;
     expect(run.slice(0, 3)).toEqual([
       "create",
@@ -508,6 +517,96 @@ describe("WordPress Lab host exposure", () => {
       hostGatewayName(resource.id),
     ]);
     expect(calls[2]).toEqual(["start", hostGatewayName(resource.id)]);
+    // The exposure reports the ports Docker bound, not the ones asked for.
+    expect(calls.slice(3)).toEqual([
+      ["port", hostGatewayName(resource.id), "80/tcp"],
+      ["port", hostGatewayName(resource.id), "3306/tcp"],
+    ]);
+  });
+
+  it("asks Docker for free loopback ports when the port is 0 and reports the bound ones (#432)", async () => {
+    const calls: string[][] = [];
+    const handle = {
+      id: resource.id,
+      internalIp: "172.20.0.3",
+      database: { ipv4: "172.20.0.2" },
+    } as unknown as WordPressLabHandle;
+    const exposure = await exposeWordPressLabToHost(
+      {
+        ...resource,
+        handle,
+        requireDocker: async (args) => {
+          calls.push([...args]);
+          return {
+            exitCode: 0,
+            stdout:
+              args[0] !== "port"
+                ? ""
+                : args[2] === "80/tcp"
+                  ? "127.0.0.1:41001\n"
+                  : "127.0.0.1:41002\n",
+            stderr: "",
+          };
+        },
+      },
+      { image: "image", httpPort: 0, databasePort: 0 },
+    );
+    expect(exposure).toMatchObject({
+      status: "exposed",
+      httpPort: 41001,
+      databasePort: 41002,
+    });
+    expect(calls[0]).toContain("127.0.0.1::80");
+    expect(calls[0]).toContain("127.0.0.1::3306");
+    // Without a database, only WordPress is published.
+    const web = await exposeWordPressLabToHost(
+      {
+        ...resource,
+        handle: {
+          id: resource.id,
+          internalIp: "172.20.0.3",
+        } as unknown as WordPressLabHandle,
+        requireDocker: async (args) => ({
+          exitCode: 0,
+          stdout: args[0] === "port" ? "127.0.0.1:41003\n" : "",
+          stderr: "",
+        }),
+      },
+      { image: "image", httpPort: 0, databasePort: 0 },
+    );
+    expect(web).toMatchObject({ httpPort: 41003, databasePort: null });
+  });
+
+  it("removes the gateway when Docker bound no loopback port", async () => {
+    const calls: string[][] = [];
+    const handle = {
+      id: resource.id,
+      internalIp: "172.20.0.3",
+    } as unknown as WordPressLabHandle;
+    const exposure = await exposeWordPressLabToHost(
+      {
+        ...resource,
+        handle,
+        requireDocker: async (args) => {
+          calls.push([...args]);
+          return {
+            exitCode: 0,
+            stdout: args[0] === "port" ? "[::1]:41001\n" : "",
+            stderr: "",
+          };
+        },
+      },
+      { image: "image", httpPort: 0 },
+    );
+    expect(exposure).toEqual({
+      status: "unavailable",
+      diagnostic: "The host gateway bound no loopback port",
+    });
+    expect(calls.at(-1)).toEqual([
+      "rm",
+      "--force",
+      hostGatewayName(resource.id),
+    ]);
   });
 
   it("stays unavailable on bad ports or a failing gateway start", async () => {

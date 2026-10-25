@@ -7,9 +7,11 @@ import { z } from "zod";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
 import {
-  acquireHostLabLease,
-  type HostLabLease,
-} from "../../../infrastructure/host-lab-lease.js";
+  forgetLabOwners,
+  readLabOwners,
+  recordLabOwner,
+  type LabOwnerRecord,
+} from "../../../infrastructure/lab-owner-record.js";
 import type { HttpCaptureRead } from "../../../lab/capture.js";
 import type {
   LabProvisioner,
@@ -198,7 +200,10 @@ export interface WordPressLab extends LabProvisioner<
     | { readonly status: "captured"; readonly state: WordPressLabState }
     | { readonly status: "unavailable" }
   >;
-  /** Publishes the Lab on host loopback ports for a human's browser and curl (`lab up`). */
+  /**
+   * Publishes the Lab on host loopback ports for a human's browser and curl.
+   * Port 0 takes a free port; the result names the ports actually bound (#432).
+   */
   exposeToHost(
     handle: WordPressLabHandle,
     input: {
@@ -234,6 +239,7 @@ const labLeftoverPatterns = (id: string) =>
   }) as const;
 const LAB_LEFTOVERS = labLeftoverPatterns(labId);
 const exactLabId = new RegExp(`^${labId}$`);
+const labOfResource = new RegExp(`^wbh-(${labId})-`);
 
 /** The handle hands the Verifier only what it may use; the session keeps the rest. */
 function issueHandle(input: {
@@ -283,8 +289,7 @@ export function openWordPressLab(options: {
   readonly nonce?: () => string;
   readonly healthAttempts?: number;
   /** Dependency injection for isolated Lab tests; hosts use the one shared path. */
-  readonly leaseDirectory?: string;
-  readonly leaseWaitMs?: number;
+  readonly ownerDirectory?: string;
 }): WordPressLab {
   if (!isAbsolute(options.dockerExecutablePath))
     throw new Error("Docker executable path must be absolute");
@@ -297,7 +302,8 @@ export function openWordPressLab(options: {
     options.runner ?? nativeDockerRunner(options.dockerExecutablePath),
   );
   const active = new Map<string, WordPressLabSession>();
-  const leases = new Map<string, HostLabLease>();
+  /** One owner record per live Lab of this process; there is no host-wide slot (#432). */
+  const owners = new Map<string, LabOwnerRecord>();
   /** The one place a handle is checked: only the exact issued object reaches its Lab. */
   const sessionFor = (
     handle: WordPressLabHandle,
@@ -363,11 +369,27 @@ export function openWordPressLab(options: {
         .map((name) => name.trim())
         .filter((name) => matching.some((pattern) => pattern.test(name)));
     }
+    // Read after listing: a Lab records its owner before its first resource exists.
+    const { live, dead } =
+      onlyLab === undefined || remove
+        ? await readLabOwners(options.ownerDirectory)
+        : { live: new Set<string>(), dead: new Set<string>() };
+    if (onlyLab === undefined)
+      for (const [kind] of kinds)
+        found[kind] = found[kind].filter((name) => {
+          const owner = labOfResource.exec(name)?.[1];
+          return owner === undefined || !live.has(owner);
+        });
     // Containers go first so their networks and volumes are no longer in use.
-    if (remove)
+    if (remove) {
       for (const [kind, , removal] of kinds)
         if (found[kind].length > 0)
           await docker.require([...removal, ...found[kind]]);
+      await forgetLabOwners(
+        onlyLab === undefined ? dead : [...dead].filter((id) => id === onlyLab),
+        options.ownerDirectory,
+      );
+    }
     return found;
   };
   return {
@@ -378,7 +400,7 @@ export function openWordPressLab(options: {
       context,
     ): Promise<ProvisionResult<WordPressLabHandle>> {
       let lab: WordPressLabSession | undefined;
-      let lease: HostLabLease | undefined;
+      let owner: LabOwnerRecord | undefined;
       try {
         const prepared = await prepareWordPressLab(
           candidateSnapshot,
@@ -387,37 +409,6 @@ export function openWordPressLab(options: {
         );
         const { setup, phpVersion } = prepared;
         await preflight();
-        if (context?.purpose === "verification") {
-          const acquired = await acquireHostLabLease({
-            ...(options.leaseDirectory === undefined
-              ? {}
-              : { directory: options.leaseDirectory }),
-            waitMs: options.leaseWaitMs ?? 30 * 60_000,
-          });
-          if (acquired === null)
-            return {
-              status: "incomplete",
-              reason: "provision",
-              nextStep:
-                "Another verification Lab held the host lease; retry after it finishes",
-            };
-          lease = acquired;
-          const recovered = await lease.recover(async (labId) => {
-            const leftovers = await cleanupLeftovers({ remove: false, labId });
-            return (
-              leftovers.containers.length +
-                leftovers.networks.length +
-                leftovers.volumes.length >
-              0
-            );
-          });
-          if (recovered.status === "blocked")
-            return {
-              status: "incomplete",
-              reason: "provision",
-              nextStep: recovered.reason,
-            };
-        }
         const secondaryLocale =
           setup.translatePress?.administratorSecondaryLocale ??
           prepared.scenario?.secondaryLocale ??
@@ -430,7 +421,13 @@ export function openWordPressLab(options: {
           forVerification: context?.purpose === "verification",
           ...(secondaryLocale === undefined ? {} : { secondaryLocale }),
         });
-        if (lease !== undefined) await lease.reserveLab(lab.id);
+        // Any number of Labs may run at once; this only keeps broad cleanups off this one.
+        owner = await recordLabOwner({
+          labId: lab.id,
+          ...(options.ownerDirectory === undefined
+            ? {}
+            : { directory: options.ownerDirectory }),
+        });
         const { internalIp, recorderIp } = await startLabContainers(
           lab,
           attempts,
@@ -479,19 +476,13 @@ export function openWordPressLab(options: {
         });
         lab.bind(handle);
         active.set(lab.id, lab);
-        if (lease !== undefined) {
-          leases.set(lab.id, lease);
-          lease = undefined;
-        }
+        owners.set(lab.id, owner);
+        owner = undefined;
         return { status: "ready", handle };
       } catch (error: unknown) {
-        if (lab !== undefined) {
-          const cleaned = await lab.cleanup();
-          if (lease !== undefined && lease.reservation?.kind === "lab") {
-            if (cleaned) await lease.clear();
-            else await lease.cleanupNeeded();
-          }
-        }
+        // A Lab that failed to provision is no longer used; whatever remains is a leftover.
+        if (lab !== undefined) await lab.cleanup();
+        await owner?.release();
         return {
           status: "incomplete",
           reason:
@@ -508,8 +499,6 @@ export function openWordPressLab(options: {
             ? { diagnostic: error.diagnostic }
             : {}),
         };
-      } finally {
-        if (lease !== undefined) await lease.release();
       }
     },
     async seedCanaries(handle) {
@@ -621,24 +610,19 @@ export function openWordPressLab(options: {
           reason: "cleanup",
           nextStep: "Inspect Lab resources and remove them before retry",
         };
-      const lease = leases.get(lab.id);
       try {
-        if (!(await lab.cleanup())) {
-          if (lease !== undefined) await lease.cleanupNeeded();
+        if (!(await lab.cleanup()))
           return {
             status: "incomplete",
             reason: "cleanup",
             nextStep: "Inspect and remove remaining Lab resources",
           };
-        }
         active.delete(lab.id);
-        if (lease !== undefined) await lease.clear();
         return { status: "removed" };
       } finally {
-        if (lease !== undefined) {
-          leases.delete(lab.id);
-          await lease.release();
-        }
+        // The owner is done with this Lab; what a failed cleanup left is a leftover.
+        await owners.get(lab.id)?.release();
+        owners.delete(lab.id);
       }
     },
     async captureState(handle) {

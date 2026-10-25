@@ -500,8 +500,8 @@ export class Verification<
           };
         }
       }
-      // The provider's host lease permits only one verification Lab. Keep the
-      // recipe and state-diff evidence, release the agent Lab, then replay.
+      // One verification holds one Lab at a time. Keep the recipe and
+      // state-diff evidence, release the agent Lab, then replay.
       if (replayAttempt !== undefined && primaryLabRemoved) {
         try {
           result = await this.#replayInFreshLab(run, replayAttempt);
