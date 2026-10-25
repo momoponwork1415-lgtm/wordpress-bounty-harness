@@ -36,7 +36,7 @@ import type {
   TargetLimit,
   VerifyNextSummary,
 } from "./pipeline.js";
-import { holdLabSweep } from "./continuous.js";
+import { holdDiscoverySweep } from "./continuous.js";
 import {
   continuousCommand,
   type ContinuousHostStatus,
@@ -165,7 +165,7 @@ export interface CliProfile {
   /** A profile may provide a fresh, foreground Lab for human reproduction. */
   reviewLab?(
     state: CliState,
-    input: { readonly packageDigest: string; readonly category: string },
+    input: { readonly packageDigest: string },
   ): Promise<{
     readonly endpoint: string;
     readonly networkName: string;
@@ -173,7 +173,6 @@ export interface CliProfile {
     readonly receiverIp: string;
     readonly attackerAccounts: unknown;
     readonly administrator: unknown;
-    readonly canaries: unknown;
     readonly browserImage: string;
     close(): Promise<void>;
   }>;
@@ -273,12 +272,17 @@ export interface CliProfile {
     state: CliState,
     input: { readonly configPath: string; readonly selectionPath: string },
   ): Promise<ContinuousHostStatus>;
-  /** Whether `lab up` holds a Lab for an operator; `continuous run` skips its sweep meanwhile. */
-  labHeld(state: CliState): Promise<boolean>;
-  /** Docker resources a crashed run left behind; removed only when asked. */
+  /**
+   * Docker resources a crashed run left behind; removed only when asked.
+   * `labs: false` names only discovery resources and never a Lab (#526).
+   */
   cleanupLeftovers(
     state: CliState,
-    input: { readonly configPath: string; readonly remove: boolean },
+    input: {
+      readonly configPath: string;
+      readonly remove: boolean;
+      readonly labs: boolean;
+    },
   ): Promise<{
     readonly containers: readonly string[];
     readonly networks: readonly string[];
@@ -668,6 +672,22 @@ function queued(review: Review, values: Values) {
   return item;
 }
 
+/** #525 (ADR 0040): an old judge result, or a result a person observed in a review Lab. */
+function hasSubmissionBasis(
+  item: ReviewItem,
+): item is Extract<
+  ReviewItem,
+  { readonly status: "runtime-confirmed" | "reproduced" | "incomplete" }
+> {
+  return (
+    item.status === "runtime-confirmed" ||
+    item.status === "reproduced" ||
+    (item.status === "incomplete" &&
+      item.reason === "awaiting-human-observation" &&
+      item.manualObservation?.result === "match")
+  );
+}
+
 function exactDraft(values: Values) {
   return {
     candidateId: required(values.candidate, "candidate"),
@@ -719,7 +739,6 @@ export async function runForegroundReviewLab(
         io.stdout(
           `review administrator: ${JSON.stringify(session.administrator)}`,
         );
-        io.stdout(`fresh canaries: ${JSON.stringify(session.canaries)}`);
         const shellQuote = (value: string) =>
           `'${value.replaceAll("'", "'\\''")}'`;
         io.stdout(
@@ -1038,7 +1057,10 @@ const COMMANDS: readonly Command[] = [
       const target = rest[0] ?? null;
       const repeat = values.repeat === undefined ? 1 : Number(values.repeat);
       // A manual campaign beside the runner keeps its containers (#399).
-      const release = await holdLabSweep(state.stateDirectory, process.pid);
+      const release = await holdDiscoverySweep(
+        state.stateDirectory,
+        process.pid,
+      );
       const summary = await environment.profile
         .runCampaign(state, {
           campaignId: required(values.campaign, "campaign"),
@@ -1210,7 +1232,11 @@ const COMMANDS: readonly Command[] = [
     },
     handler: async ({ values, state, environment, io }) => {
       const item = queued(environment.profile.review(state), values);
-      if (item.status !== "incomplete" || item.reason !== "observation")
+      if (
+        item.status !== "incomplete" ||
+        (item.reason !== "observation" &&
+          item.reason !== "awaiting-human-observation")
+      )
         throw new UsageError("A current incomplete observation is required");
       const manual = await environment.profile.reviewLabPackage?.(
         state,
@@ -1329,7 +1355,7 @@ const COMMANDS: readonly Command[] = [
           ? undefined
           : await readFile(resolve(notePath), "utf8");
       if (reproduced !== undefined) {
-        if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
+        if (!hasSubmissionBasis(item))
           throw new UsageError(
             "Only an evidence-backed package can be reproduced",
           );
@@ -1400,7 +1426,7 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, state, environment, io }) => {
       const review = environment.profile.review(state);
       const item = queued(review, values);
-      if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
+      if (!hasSubmissionBasis(item))
         throw new UsageError(
           "Scope is assessed only for evidence-backed findings",
         );
@@ -1435,8 +1461,8 @@ const COMMANDS: readonly Command[] = [
         (values.port !== undefined || values["db-port"] !== undefined)
       )
         throw new UsageError("--port and --db-port require --handoff");
-      integerOption(values.port, "port", 8080, 65535);
-      integerOption(values["db-port"], "db-port", 3307, 65535);
+      integerOption(values.port, "port", 0, 65535);
+      integerOption(values["db-port"], "db-port", 0, 65535);
     },
     handler: async ({ values, state, environment, io }) => {
       const version = values.version;
@@ -1450,20 +1476,17 @@ const COMMANDS: readonly Command[] = [
           : {
               handoff: {
                 directory: resolve(values.handoff),
-                httpPort: integerOption(values.port, "port", 8080, 65535),
+                httpPort: integerOption(values.port, "port", 0, 65535),
                 databasePort: integerOption(
                   values["db-port"],
                   "db-port",
-                  3307,
+                  0,
                   65535,
                 ),
               },
             }),
       };
-      const release = await holdLabSweep(state.stateDirectory, process.pid);
-      const summary = await environment.profile
-        .reverify(state, input)
-        .finally(release);
+      const summary = await environment.profile.reverify(state, input);
       io.stdout(
         `reverified finding ${values.finding} as ${summary.findingId} on ${summary.targetId} ${summary.version}  snapshot ${summary.snapshotDigest}  verification ${summary.verificationId}: ${summary.status}`,
       );
@@ -1492,34 +1515,24 @@ const COMMANDS: readonly Command[] = [
         );
       if (values.finding !== undefined && values.campaign === undefined)
         throw new UsageError("--finding needs --campaign");
-      integerOption(values.port, "port", 8080, 65535);
-      integerOption(values["db-port"], "db-port", 3307, 65535);
+      integerOption(values.port, "port", 0, 65535);
+      integerOption(values["db-port"], "db-port", 0, 65535);
     },
     handler: async ({ values, state, environment, io }) => {
       if (environment.profile.verifyNext === undefined)
         throw new Error("verify next needs a verification profile");
-      const release = await holdLabSweep(state.stateDirectory, process.pid);
-      const summary = await environment.profile
-        .verifyNext(state, {
-          ...(values.campaign === undefined
-            ? {}
-            : { campaignId: values.campaign }),
-          configPath: resolve(required(values.config, "config")),
-          handoff: {
-            directory: resolve(required(values.handoff, "handoff")),
-            httpPort: integerOption(values.port, "port", 8080, 65535),
-            databasePort: integerOption(
-              values["db-port"],
-              "db-port",
-              3307,
-              65535,
-            ),
-          },
-          ...(values.finding === undefined
-            ? {}
-            : { findingId: values.finding }),
-        })
-        .finally(release);
+      const summary = await environment.profile.verifyNext(state, {
+        ...(values.campaign === undefined
+          ? {}
+          : { campaignId: values.campaign }),
+        configPath: resolve(required(values.config, "config")),
+        handoff: {
+          directory: resolve(required(values.handoff, "handoff")),
+          httpPort: integerOption(values.port, "port", 0, 65535),
+          databasePort: integerOption(values["db-port"], "db-port", 0, 65535),
+        },
+        ...(values.finding === undefined ? {} : { findingId: values.finding }),
+      });
       io.stdout(
         summary === null
           ? "no verification pending"
@@ -1550,7 +1563,7 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, input, state, environment, io }) => {
       const review = environment.profile.review(state);
       const item = queued(review, values);
-      if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
+      if (!hasSubmissionBasis(item))
         throw new UsageError(
           "A confirmed verification is required for a draft",
         );
@@ -1812,6 +1825,7 @@ const COMMANDS: readonly Command[] = [
       const leftovers = await environment.profile.cleanupLeftovers(state, {
         configPath: resolve(required(values.config, "config")),
         remove,
+        labs: true,
       });
       for (const kind of ["containers", "networks", "volumes"] as const)
         io.stdout(
@@ -1867,38 +1881,29 @@ const COMMANDS: readonly Command[] = [
           `private victim route: ${state.store.contentPath(manual.recipeDigest)}/route.json`,
         );
         io.stdout(
-          `private browser observation: ${state.store.contentPath(manual.evidenceDigest)}/browser-dialog-observation.json`,
+          `private Lab observation: ${state.store.contentPath(manual.evidenceDigest)}`,
         );
       }
-      const release = await holdLabSweep(state.stateDirectory, process.pid);
-      try {
-        await runForegroundReviewLab(
-          () =>
-            launch(state, {
-              packageDigest,
-              category: item.category,
-            }),
-          io,
-          process,
-          manual === null || manual === undefined
-            ? undefined
-            : async (session) => {
-                const receipt = await recordManualObservationLabReady({
-                  ledger: state.ledger,
-                  store: state.store,
-                  ref: item.ref,
-                  packageDigest: manual.packageDigest,
-                  sessionLabel: session.networkName,
-                  clock: state.clock,
-                });
-                io.stdout(
-                  `manual observation receipt: ${receipt} (${state.store.contentPath(receipt)}/${MANUAL_LAB_RECEIPT_FILE})`,
-                );
-              },
-        );
-      } finally {
-        await release();
-      }
+      await runForegroundReviewLab(
+        () => launch(state, { packageDigest }),
+        io,
+        process,
+        manual === null || manual === undefined
+          ? undefined
+          : async (session) => {
+              const receipt = await recordManualObservationLabReady({
+                ledger: state.ledger,
+                store: state.store,
+                ref: item.ref,
+                packageDigest: manual.packageDigest,
+                sessionLabel: session.networkName,
+                clock: state.clock,
+              });
+              io.stdout(
+                `manual observation receipt: ${receipt} (${state.store.contentPath(receipt)}/${MANUAL_LAB_RECEIPT_FILE})`,
+              );
+            },
+      );
       return 0;
     },
   }),
@@ -1928,7 +1933,10 @@ const COMMANDS: readonly Command[] = [
       if (environment.profile.resumeCampaignRun === undefined)
         throw new UsageError("This profile cannot resume a discovery run");
       const campaignId = required(values.campaign, "campaign");
-      const release = await holdLabSweep(state.stateDirectory, process.pid);
+      const release = await holdDiscoverySweep(
+        state.stateDirectory,
+        process.pid,
+      );
       const summary = await environment.profile
         .resumeCampaignRun(state, {
           campaignId,

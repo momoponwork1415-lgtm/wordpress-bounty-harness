@@ -1,42 +1,36 @@
-import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute } from "node:path";
 
 import { z } from "zod";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
 import {
-  acquireHostLabLease,
-  type HostLabLease,
-} from "../../../infrastructure/host-lab-lease.js";
+  forgetLabOwners,
+  readLabOwners,
+  recordLabOwner,
+  type LabOwnerRecord,
+} from "../../../infrastructure/lab-owner-record.js";
 import type { HttpCaptureRead } from "../../../lab/capture.js";
+import {
+  CONTROL_COMMANDS,
+  type ControlAnswer,
+  type ControlRequest,
+} from "../../../lab/control/index.js";
 import type {
   LabProvisioner,
   LabReachability,
   ProvisionResult,
 } from "../../../lab/index.js";
 import {
-  closeWordPressSetup,
-  placeVerificationCanaries,
-  seedWordPressCanaries,
-} from "./canary-placement.js";
-import { startLabContainers } from "./container-startup.js";
+  controlCommand,
+  recreateSiteContainers,
+  startLabContainers,
+} from "./container-startup.js";
 import type {
-  ExecutionCanary,
   Leftovers,
   LeftoverPatterns,
-  ScriptCanary,
-  WordPressCanaryFilesObservation,
-  WordPressCanaryLedger,
-  WordPressCanaryTableObservation,
-  WordPressExecutionObservation,
   WordPressLabHandle,
-  WordPressOptionsObservation,
-  WordPressRoleObservation,
-  WordPressSessionObservation,
   WordPressSourceResolver,
-  WordPressStoredScriptObservation,
+  WordPressVictimPagesObservation,
 } from "./contract.js";
 import {
   exposeWordPressLabToHost,
@@ -50,7 +44,11 @@ import {
   type DockerRunner,
 } from "./lab-docker.js";
 import * as observe from "./lab-observation.js";
-import type { WordPressVictimRoute } from "./lab-observation.js";
+import type {
+  WordPressExplorationObservation,
+  WordPressExplorationObserveRequest,
+  WordPressVictimRoute,
+} from "./lab-observation.js";
 import {
   DATABASE_NAME,
   READ_ONLY_DATABASE_USER,
@@ -62,18 +60,17 @@ import {
   type PreparedWordPressLab,
   type WordPressLabSetup,
 } from "./provision-input.js";
-import { STANDARD_REPRODUCER_SCRIPT } from "./standard-script.js";
 import {
   captureWordPressLabState,
   type WordPressLabState,
 } from "./state-capture.js";
+import { closeWordPressSetup } from "./setup-close.js";
 import {
   grantReadOnlyDatabaseAccess,
   initializeWordPress,
 } from "./wordpress-initialization.js";
 
 export type * from "./contract.js";
-export { WORDPRESS_SENSITIVE_OBJECT_KINDS_V1 } from "./contract.js";
 export type {
   DockerRequest,
   DockerResult,
@@ -95,14 +92,23 @@ export type {
 } from "./provision-input.js";
 export { WORDPRESS_CORE_IDENTITY } from "./provision-input.js";
 export {
+  wordpressExplorationObserveSchema,
   wordpressVisitPathSchema,
   wordpressVictimRouteSchema,
+  type WordPressExplorationObservation,
+  type WordPressExplorationObserveRequest,
   type WordPressVictimRoute,
 } from "./lab-observation.js";
 /** Name the plugin-specific adapters (removed in #353) use for the Lab they run against. */
 export type Resources = WordPressLabSession;
 
 const pinnedImage = z.string().regex(/^[^\s@]+@sha256:[a-f0-9]{64}$/);
+const controlRequestSchema = z.strictObject({
+  id: z.string().regex(/^[a-f0-9]{32}$/),
+  command: z.enum(CONTROL_COMMANDS),
+  receivedAt: z.iso.datetime(),
+  body: z.unknown().optional(),
+});
 
 class MissingWordPressExtension extends Error {
   constructor() {
@@ -121,14 +127,6 @@ export interface WordPressLab extends LabProvisioner<
     handle: WordPressLabHandle,
     sinceMarker: string,
   ): Promise<HttpCaptureRead>;
-  /** Executes only the Harness-owned standard script in an isolated Lab peer. */
-  runStandardScript(
-    handle: WordPressLabHandle,
-    input: string,
-  ): Promise<
-    | { readonly status: "completed"; readonly output: string }
-    | { readonly status: "unavailable" }
-  >;
   /** Review-only credential, never part of the attacker/Verifier handle. */
   reviewAdministrator(
     handle: WordPressLabHandle,
@@ -136,58 +134,18 @@ export interface WordPressLab extends LabProvisioner<
   /** Review-only receiver address for a human-operated browser in the Lab network. */
   reviewReceiverIp(handle: WordPressLabHandle): string | null;
   /**
-   * Ends handoff precondition setup (#430): revokes the setup administrator
-   * and the canary principals, then retakes the role and option baselines.
-   * False when the Lab cannot, or when setup moved the SQL or file canaries.
+   * Ends handoff precondition setup (#430): revokes the setup administrator.
+   * False when the Lab cannot.
    */
   finishSetup(handle: WordPressLabHandle): Promise<boolean>;
-  canaryLedger(handle: WordPressLabHandle): WordPressCanaryLedger | null;
-  prepareExecutionCanary(handle: WordPressLabHandle): ExecutionCanary | null;
   /**
-   * Checks every Execution Canary issued for this Lab. Only code that ran inside
-   * the WordPress container can produce the salted marker; a plain file write cannot.
+   * Opens the declared victim pages in fresh Lab browsers and records the
+   * marker dialog and the screen (#525). Review material, never a verdict.
    */
-  observeExecution(
+  observeVictimPages(
     handle: WordPressLabHandle,
-  ): Promise<WordPressExecutionObservation>;
-  /** Asks WordPress inside the Lab which user a logged-in cookie value authenticates. */
-  observeSessionUser(
-    handle: WordPressLabHandle,
-    cookie: string,
-    scheme?: "logged_in" | "auth" | "secure_auth",
-  ): Promise<WordPressSessionObservation>;
-  /** Compares the SQL canary table with the row seeded into it. */
-  observeCanaryTable(
-    handle: WordPressLabHandle,
-  ): Promise<WordPressCanaryTableObservation>;
-  /** Reports which seeded canary files no longer exist. */
-  observeCanaryFiles(
-    handle: WordPressLabHandle,
-  ): Promise<WordPressCanaryFilesObservation>;
-  /** Issues a nonce whose beacon URL a stored script would request from inside the Lab. */
-  prepareScriptCanary(handle: WordPressLabHandle): ScriptCanary | null;
-  /** Harness-owned issued script nonces for comparing a captured route across Labs. */
-  issuedScriptNonces(handle: WordPressLabHandle): readonly string[] | null;
-  /**
-   * Opens the front page, two admin screens and the route's pages in fresh
-   * browsers; a context counts only when the receiver logged an issued nonce.
-   */
-  observeStoredScript(
-    handle: WordPressLabHandle,
-    input: {
-      readonly routePaths: readonly string[];
-      readonly victim?: WordPressVictimRoute;
-    },
-  ): Promise<WordPressStoredScriptObservation>;
-  /** Names of watched options (canary and critical) that differ from the seeded baseline. */
-  observeOptions(
-    handle: WordPressLabHandle,
-  ): Promise<WordPressOptionsObservation>;
-  /** Reads an account's current roles inside the Lab. */
-  observeAccountRoles(
-    handle: WordPressLabHandle,
-    username: string,
-  ): Promise<WordPressRoleObservation>;
+    victim: WordPressVictimRoute,
+  ): Promise<WordPressVictimPagesObservation>;
   /**
    * Reads the whole site state (options, users with roles, per-table row counts
    * and checksums) from the Lab's own database (#186). Review material only.
@@ -198,7 +156,10 @@ export interface WordPressLab extends LabProvisioner<
     | { readonly status: "captured"; readonly state: WordPressLabState }
     | { readonly status: "unavailable" }
   >;
-  /** Publishes the Lab on host loopback ports for a human's browser and curl (`lab up`). */
+  /**
+   * Publishes the Lab on host loopback ports for a human's browser and curl.
+   * Port 0 takes a free port; the result names the ports actually bound (#432).
+   */
   exposeToHost(
     handle: WordPressLabHandle,
     input: {
@@ -208,29 +169,65 @@ export interface WordPressLab extends LabProvisioner<
       readonly via?: "wordpress" | "recorder";
     },
   ): Promise<HostExposure>;
+  /**
+   * Exploration Labs only: recreates WordPress, its database and the site
+   * volume and initializes them from the same setup, so the handle's setup
+   * digest still holds. The network, recorder and control endpoint stay.
+   * False when the handle is not an exploration Lab or the reset failed.
+   */
+  reset(handle: WordPressLabHandle): Promise<boolean>;
+  /**
+   * The command waiting at the exploration Lab's control endpoint, null when
+   * none came within `waitSeconds`, `unavailable` when the endpoint is not.
+   */
+  nextControlRequest(
+    handle: WordPressLabHandle,
+    waitSeconds: number,
+  ): Promise<ControlRequest | null | "unavailable">;
+  /** Hands the endpoint the answer it returns to the caller; false when it could not. */
+  answerControlRequest(
+    handle: WordPressLabHandle,
+    id: string,
+    answer: ControlAnswer,
+  ): Promise<boolean>;
+  /**
+   * Exploration Labs only (Phase D2): opens one path as a role of the Lab's
+   * own accounts in the verification observer's browser and reports what it
+   * saw. `unavailable` when the handle is not an exploration Lab.
+   */
+  observeExplorationPage(
+    handle: WordPressLabHandle,
+    request: WordPressExplorationObserveRequest,
+  ): Promise<
+    WordPressExplorationObservation | { readonly status: "unavailable" }
+  >;
   /** Removes the `exposeToHost` gateway before teardown; true when it is gone. */
   withdrawFromHost(handle: WordPressLabHandle): Promise<boolean>;
   /**
    * Lists Docker resources a crashed run left behind: Lab names and the given
    * patterns only. Removes them when asked; use only while no campaign runs.
    * With `labId`, only that Lab's resources (and its host gateway) are named.
+   * With `labs: false`, only the given patterns are named, so a live Lab is
+   * never touched (the runner's discovery sweep, #526).
    */
   cleanupLeftovers(input: {
     readonly remove: boolean;
     readonly patterns?: LeftoverPatterns;
     readonly labId?: string;
+    readonly labs?: boolean;
   }): Promise<Leftovers>;
 }
 
 const labId = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const labLeftoverPatterns = (id: string) =>
   ({
-    containers: [new RegExp(`^wbh-${id}-(?:db|wp|canary|proxy|host)$`)],
+    containers: [new RegExp(`^wbh-${id}-(?:db|wp|canary|proxy|host|ctl)$`)],
     networks: [new RegExp(`^wbh-${id}-net$`)],
     volumes: [new RegExp(`^wbh-${id}-site$`)],
   }) as const;
 const LAB_LEFTOVERS = labLeftoverPatterns(labId);
 const exactLabId = new RegExp(`^${labId}$`);
+const labOfResource = new RegExp(`^wbh-(${labId})-`);
 
 /** The handle hands the Verifier only what it may use; the session keeps the rest. */
 function issueHandle(input: {
@@ -255,6 +252,17 @@ function issueHandle(input: {
     internalIp,
     recorderIp,
     attackerAccounts: lab.attackerAccounts,
+    ...(lab.exploration && lab.controlIp !== undefined
+      ? {
+          exploration: {
+            control: { host: "labctl" as const, ipv4: lab.controlIp },
+            administrator: {
+              username: "harness-admin" as const,
+              password: lab.adminPassword,
+            },
+          },
+        }
+      : {}),
     ...(setup.databaseAccess === "read-only"
       ? {
           database: {
@@ -277,11 +285,9 @@ export function openWordPressLab(options: {
   readonly images: LabImages;
   readonly source: WordPressSourceResolver;
   readonly runner?: DockerRunner;
-  readonly nonce?: () => string;
   readonly healthAttempts?: number;
   /** Dependency injection for isolated Lab tests; hosts use the one shared path. */
-  readonly leaseDirectory?: string;
-  readonly leaseWaitMs?: number;
+  readonly ownerDirectory?: string;
 }): WordPressLab {
   if (!isAbsolute(options.dockerExecutablePath))
     throw new Error("Docker executable path must be absolute");
@@ -289,12 +295,14 @@ export function openWordPressLab(options: {
   const attempts = options.healthAttempts ?? 60;
   if (!Number.isSafeInteger(attempts) || attempts < 1)
     throw new Error("Invalid health attempt count");
-  const nonce = options.nonce ?? randomUUID;
   const docker = createLabDocker(
     options.runner ?? nativeDockerRunner(options.dockerExecutablePath),
   );
   const active = new Map<string, WordPressLabSession>();
-  const leases = new Map<string, HostLabLease>();
+  /** One owner record per live Lab of this process; there is no host-wide slot (#432). */
+  const owners = new Map<string, LabOwnerRecord>();
+  /** What an exploration Lab was initialized from; a reset initializes from it again. */
+  const preparedLabs = new Map<string, PreparedWordPressLab>();
   /** The one place a handle is checked: only the exact issued object reaches its Lab. */
   const sessionFor = (
     handle: WordPressLabHandle,
@@ -323,11 +331,15 @@ export function openWordPressLab(options: {
     remove,
     patterns = {},
     labId: onlyLab,
+    labs = true,
   }) => {
     if (onlyLab !== undefined && !exactLabId.test(onlyLab))
       throw new Error("Lab id is invalid");
-    const owned =
-      onlyLab === undefined ? LAB_LEFTOVERS : labLeftoverPatterns(onlyLab);
+    const owned: LeftoverPatterns = !labs
+      ? {}
+      : onlyLab === undefined
+        ? LAB_LEFTOVERS
+        : labLeftoverPatterns(onlyLab);
     const kinds = [
       ["containers", ["ps", "-a", "--format", "{{.Names}}"], ["rm", "-f"]],
       [
@@ -343,7 +355,7 @@ export function openWordPressLab(options: {
       volumes: [],
     };
     for (const [kind, list] of kinds) {
-      const matching = [...owned[kind], ...(patterns[kind] ?? [])];
+      const matching = [...(owned[kind] ?? []), ...(patterns[kind] ?? [])];
       // A host with thousands of anonymous volumes lists far more than the 64 KiB default.
       const listing = await docker.run(list, 60_000, 8 * 1024 * 1024);
       if (listing.exitCode !== 0)
@@ -356,11 +368,32 @@ export function openWordPressLab(options: {
         .map((name) => name.trim())
         .filter((name) => matching.some((pattern) => pattern.test(name)));
     }
+    // Without `labId`, a Lab whose owner process lives is never named (#432).
+    // Read after listing: a Lab records its owner before its first resource exists.
+    // `labs: false` names no Lab, so it never reads owner records (#526).
+    const { live, dead } =
+      labs && (onlyLab === undefined || remove)
+        ? await readLabOwners(options.ownerDirectory)
+        : { live: new Set<string>(), dead: new Set<string>() };
+    if (onlyLab === undefined)
+      for (const [kind] of kinds)
+        found[kind] = found[kind].filter((name) => {
+          const owner = labOfResource.exec(name)?.[1];
+          return owner === undefined || !live.has(owner);
+        });
     // Containers go first so their networks and volumes are no longer in use.
-    if (remove)
+    if (remove) {
       for (const [kind, , removal] of kinds)
         if (found[kind].length > 0)
           await docker.require([...removal, ...found[kind]]);
+      if (labs)
+        await forgetLabOwners(
+          onlyLab === undefined
+            ? dead
+            : [...dead].filter((id) => id === onlyLab),
+          options.ownerDirectory,
+        );
+    }
     return found;
   };
   return {
@@ -371,7 +404,7 @@ export function openWordPressLab(options: {
       context,
     ): Promise<ProvisionResult<WordPressLabHandle>> {
       let lab: WordPressLabSession | undefined;
-      let lease: HostLabLease | undefined;
+      let owner: LabOwnerRecord | undefined;
       try {
         const prepared = await prepareWordPressLab(
           candidateSnapshot,
@@ -380,37 +413,6 @@ export function openWordPressLab(options: {
         );
         const { setup, phpVersion } = prepared;
         await preflight();
-        if (context?.purpose === "verification") {
-          const acquired = await acquireHostLabLease({
-            ...(options.leaseDirectory === undefined
-              ? {}
-              : { directory: options.leaseDirectory }),
-            waitMs: options.leaseWaitMs ?? 30 * 60_000,
-          });
-          if (acquired === null)
-            return {
-              status: "incomplete",
-              reason: "provision",
-              nextStep:
-                "Another verification Lab held the host lease; retry after it finishes",
-            };
-          lease = acquired;
-          const recovered = await lease.recover(async (labId) => {
-            const leftovers = await cleanupLeftovers({ remove: false, labId });
-            return (
-              leftovers.containers.length +
-                leftovers.networks.length +
-                leftovers.volumes.length >
-              0
-            );
-          });
-          if (recovered.status === "blocked")
-            return {
-              status: "incomplete",
-              reason: "provision",
-              nextStep: recovered.reason,
-            };
-        }
         const secondaryLocale =
           setup.translatePress?.administratorSecondaryLocale ??
           prepared.scenario?.secondaryLocale ??
@@ -418,12 +420,18 @@ export function openWordPressLab(options: {
         lab = new WordPressLabSession({
           docker,
           images: options.images,
-          nonce,
           customerRole: setup.customerRole,
           forVerification: context?.purpose === "verification",
+          forExploration: context?.purpose === "discovery",
           ...(secondaryLocale === undefined ? {} : { secondaryLocale }),
         });
-        if (lease !== undefined) await lease.reserveLab(lab.id);
+        // Any number of Labs may run at once; this only keeps broad cleanups off this one.
+        owner = await recordLabOwner({
+          labId: lab.id,
+          ...(options.ownerDirectory === undefined
+            ? {}
+            : { directory: options.ownerDirectory }),
+        });
         const { internalIp, recorderIp } = await startLabContainers(
           lab,
           attempts,
@@ -459,8 +467,6 @@ export function openWordPressLab(options: {
             );
         }
         await initializeWordPress(lab, prepared);
-        if (context?.purpose === "verification")
-          await placeVerificationCanaries(lab);
         if (setup.databaseAccess === "read-only")
           await grantReadOnlyDatabaseAccess(lab);
         const handle = issueHandle({
@@ -472,19 +478,14 @@ export function openWordPressLab(options: {
         });
         lab.bind(handle);
         active.set(lab.id, lab);
-        if (lease !== undefined) {
-          leases.set(lab.id, lease);
-          lease = undefined;
-        }
+        owners.set(lab.id, owner);
+        owner = undefined;
+        if (lab.exploration) preparedLabs.set(lab.id, prepared);
         return { status: "ready", handle };
       } catch (error: unknown) {
-        if (lab !== undefined) {
-          const cleaned = await lab.cleanup();
-          if (lease !== undefined && lease.reservation?.kind === "lab") {
-            if (cleaned) await lease.clear();
-            else await lease.cleanupNeeded();
-          }
-        }
+        // A Lab that failed to provision is no longer used; whatever remains is a leftover.
+        if (lab !== undefined) await lab.cleanup();
+        await owner?.release();
         return {
           status: "incomplete",
           reason:
@@ -501,81 +502,6 @@ export function openWordPressLab(options: {
             ? { diagnostic: error.diagnostic }
             : {}),
         };
-      } finally {
-        if (lease !== undefined) await lease.release();
-      }
-    },
-    async seedCanaries(handle) {
-      const lab = sessionFor(handle);
-      if (lab === undefined)
-        return {
-          status: "incomplete",
-          reason: "provision",
-          nextStep: "Provision a fresh Lab before seeding canaries",
-        };
-      try {
-        return { status: "seeded", digest: await seedWordPressCanaries(lab) };
-      } catch (error: unknown) {
-        return {
-          status: "incomplete",
-          reason: "provision",
-          nextStep: "Discard this Lab and seed canaries in a fresh Lab",
-          ...(error instanceof LabDockerFailure && error.diagnostic
-            ? { diagnostic: error.diagnostic }
-            : {}),
-        };
-      }
-    },
-    async runStandardScript(handle, input) {
-      const lab = sessionFor(handle);
-      if (
-        lab === undefined ||
-        Buffer.byteLength(STANDARD_REPRODUCER_SCRIPT) > 64 * 1024 ||
-        Buffer.byteLength(input) > 128 * 1024
-      )
-        return { status: "unavailable" };
-      const directory = await mkdtemp(join(tmpdir(), "wbh-reproduction-"));
-      try {
-        await Promise.all([
-          writeFile(
-            join(directory, "standard-reproduce.py"),
-            STANDARD_REPRODUCER_SCRIPT,
-            {
-              mode: 0o600,
-            },
-          ),
-          writeFile(join(directory, "input.json"), input, { mode: 0o600 }),
-        ]);
-        const result = await lab.docker(
-          [
-            "run",
-            "--rm",
-            "--runtime=runsc",
-            "--network",
-            lab.network,
-            "--add-host",
-            `wordpress:${handle.recorderIp}`,
-            "--read-only",
-            "--cap-drop=ALL",
-            "--security-opt=no-new-privileges",
-            "--pids-limit=64",
-            "--memory=256m",
-            "--mount",
-            `type=bind,src=${directory},dst=/run/wbh-reproduction,readonly`,
-            options.images.browser,
-            "python3",
-            "/run/wbh-reproduction/standard-reproduce.py",
-          ],
-          90_000,
-          128 * 1024,
-        );
-        return result.exitCode === 0
-          ? { status: "completed", output: result.stdout }
-          : { status: "unavailable" };
-      } catch {
-        return { status: "unavailable" };
-      } finally {
-        await rm(directory, { recursive: true, force: true });
       }
     },
     reviewAdministrator(handle) {
@@ -591,15 +517,6 @@ export function openWordPressLab(options: {
       const lab = sessionFor(handle);
       if (lab === undefined) return false;
       try {
-        // No baseline can restore a seeded value; a moved one ends the attempt.
-        const table = await observe.observeCanaryTable(lab);
-        const files = await observe.observeCanaryFiles(lab);
-        if (
-          table.status !== "intact" ||
-          files.status !== "observed" ||
-          files.deleted.length > 0
-        )
-          return false;
         await closeWordPressSetup(lab);
         return true;
       } catch {
@@ -614,25 +531,80 @@ export function openWordPressLab(options: {
           reason: "cleanup",
           nextStep: "Inspect Lab resources and remove them before retry",
         };
-      const lease = leases.get(lab.id);
       try {
-        if (!(await lab.cleanup())) {
-          if (lease !== undefined) await lease.cleanupNeeded();
+        if (!(await lab.cleanup()))
           return {
             status: "incomplete",
             reason: "cleanup",
             nextStep: "Inspect and remove remaining Lab resources",
           };
-        }
         active.delete(lab.id);
-        if (lease !== undefined) await lease.clear();
+        preparedLabs.delete(lab.id);
         return { status: "removed" };
       } finally {
-        if (lease !== undefined) {
-          leases.delete(lab.id);
-          await lease.release();
-        }
+        // The owner is done with this Lab; what a failed cleanup left is a leftover.
+        await owners.get(lab.id)?.release();
+        owners.delete(lab.id);
       }
+    },
+    async reset(handle) {
+      const lab = sessionFor(handle);
+      const prepared = lab === undefined ? undefined : preparedLabs.get(lab.id);
+      if (lab === undefined || prepared === undefined) return false;
+      try {
+        await recreateSiteContainers(lab, attempts);
+        await initializeWordPress(lab, prepared);
+        if (prepared.setup.databaseAccess === "read-only")
+          await grantReadOnlyDatabaseAccess(lab);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async nextControlRequest(handle, waitSeconds) {
+      const lab = sessionFor(handle);
+      if (
+        lab === undefined ||
+        !lab.exploration ||
+        !Number.isSafeInteger(waitSeconds) ||
+        waitSeconds < 0 ||
+        waitSeconds > 60
+      )
+        return "unavailable";
+      const result = await lab
+        .docker(
+          controlCommand(lab, ["next", String(waitSeconds)]),
+          (waitSeconds + 30) * 1_000,
+        )
+        .catch(() => null);
+      if (result?.exitCode === 3) return null;
+      if (result?.exitCode !== 0) return "unavailable";
+      const parsed = controlRequestSchema.safeParse(
+        (() => {
+          try {
+            return JSON.parse(result.stdout) as unknown;
+          } catch {
+            return null;
+          }
+        })(),
+      );
+      return parsed.success ? parsed.data : "unavailable";
+    },
+    async answerControlRequest(handle, id, answer) {
+      const lab = sessionFor(handle);
+      if (lab === undefined || !lab.exploration || !/^[a-f0-9]{32}$/.test(id))
+        return false;
+      const encoded = Buffer.from(JSON.stringify(answer)).toString("base64");
+      const result = await lab
+        .docker(controlCommand(lab, ["answer", id, encoded]))
+        .catch(() => null);
+      return result?.exitCode === 0;
+    },
+    async observeExplorationPage(handle, request) {
+      const lab = sessionFor(handle);
+      if (lab === undefined || !lab.exploration)
+        return { status: "unavailable" };
+      return observe.observeExplorationPage(lab, request);
     },
     async captureState(handle) {
       const lab = sessionFor(handle);
@@ -682,62 +654,11 @@ export function openWordPressLab(options: {
         ? observe.labUnreachable(handle)
         : observe.probe(lab);
     },
-    canaryLedger(handle) {
-      return sessionFor(handle)?.canaries ?? null;
-    },
-    prepareExecutionCanary(handle) {
-      const lab = sessionFor(handle);
-      return lab === undefined ? null : observe.prepareExecutionCanary(lab);
-    },
-    async observeSessionUser(handle, cookie, scheme) {
+    async observeVictimPages(handle, victim) {
       const lab = sessionFor(handle);
       return lab === undefined
-        ? { status: "unavailable" }
-        : observe.observeSessionUser(lab, cookie, scheme);
-    },
-    async observeCanaryTable(handle) {
-      const lab = sessionFor(handle);
-      return lab === undefined
-        ? { status: "unavailable" }
-        : observe.observeCanaryTable(lab);
-    },
-    async observeCanaryFiles(handle) {
-      const lab = sessionFor(handle);
-      return lab === undefined
-        ? { status: "unavailable" }
-        : observe.observeCanaryFiles(lab);
-    },
-    prepareScriptCanary(handle) {
-      const lab = sessionFor(handle);
-      return lab === undefined ? null : observe.prepareScriptCanary(lab);
-    },
-    issuedScriptNonces(handle) {
-      const lab = sessionFor(handle);
-      return lab === undefined ? null : [...lab.scriptNonces];
-    },
-    async observeStoredScript(handle, input) {
-      const lab = sessionFor(handle);
-      return lab === undefined
-        ? { status: "unavailable", phase: "lab" }
-        : observe.observeStoredScript(lab, input);
-    },
-    async observeOptions(handle) {
-      const lab = sessionFor(handle);
-      return lab === undefined
-        ? { status: "unavailable" }
-        : observe.observeOptions(lab);
-    },
-    async observeAccountRoles(handle, username) {
-      const lab = sessionFor(handle);
-      return lab === undefined
-        ? { status: "unavailable" }
-        : lab.roles(username);
-    },
-    async observeExecution(handle) {
-      const lab = sessionFor(handle);
-      return lab === undefined
-        ? { status: "unavailable" }
-        : observe.observeExecution(lab);
+        ? { status: "unavailable", phase: "victim-page" }
+        : observe.observeVictimPages(lab, victim);
     },
   };
 }

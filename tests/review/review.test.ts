@@ -1074,8 +1074,9 @@ describe("review queue and decisions", () => {
     const queue = review.queue({ campaignId: "campaign-1" });
     expect(queue.contradicted).toBe(1);
     expect(queue.unverified).toBe(1);
-    expect(queue.incompleteByReason).toEqual({});
-    expect(queue.retryPendingByReason).toEqual({ observation: 1 });
+    // An observation attempt is not retried since #525: a person reads it.
+    expect(queue.incompleteByReason).toEqual({ observation: 1 });
+    expect(queue.retryPendingByReason).toEqual({});
     expect(queue.items).toEqual([
       expect.objectContaining({
         status: "runtime-confirmed",
@@ -1213,6 +1214,9 @@ describe("review queue and decisions", () => {
   // Same ADR 0022 budget as the runner: the attempt count includes the current one.
   it.each([
     { reason: "recipe", additional: 3 },
+    // The fixture already holds one observation attempt; #525 retries none.
+    { reason: "observation", additional: 0 },
+    { reason: "awaiting-human-observation", additional: 1 },
     { reason: "provision", additional: 2 },
     { reason: "provider", additional: 2 },
     { reason: "no-judge", additional: 1 },
@@ -1247,8 +1251,6 @@ describe("review queue and decisions", () => {
 
   it.each([
     { reason: "recipe", additional: 2 },
-    // The fixture already holds one observation attempt.
-    { reason: "observation", additional: 1 },
     { reason: "provision", additional: 1 },
     { reason: "provider", additional: 1 },
   ] as const)(

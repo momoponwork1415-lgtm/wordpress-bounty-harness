@@ -856,6 +856,20 @@ describe("gVisor Codex sandbox", () => {
           databaseHost: { name: "wordpress", ipv4: "172.20.0.3" },
         }),
       ).rejects.toThrow();
+      // An exploration Lab's control endpoint is one more host name, never the site's.
+      await sandbox.execute({
+        ...command,
+        controlHost: { name: "labctl", ipv4: "172.20.0.130" },
+      });
+      expect(
+        calls.filter(({ args }) => args[0] === "run").at(-1)?.args,
+      ).toContain("--add-host=labctl:172.20.0.130");
+      await expect(
+        sandbox.execute({
+          ...command,
+          controlHost: { name: "wordpress", ipv4: "172.20.0.130" },
+        }),
+      ).rejects.toThrow();
       researchContents = Buffer.alloc(8 * 1024 * 1024 + 1, 0x61);
       const truncated = await sandbox.execute(command);
       expect(truncated.research?.truncated).toBe(true);
@@ -867,8 +881,8 @@ describe("gVisor Codex sandbox", () => {
         collectedBytes: 8 * 1024 * 1024,
         entries: [{ path: "REGISTRY.md", truncated: true }],
       });
-      expect(calls).toHaveLength(24);
-      expect(new Set(researchDirectories).size).toBe(6);
+      expect(calls).toHaveLength(28);
+      expect(new Set(researchDirectories).size).toBe(7);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -13,18 +13,27 @@ import {
   admitWordPressFinding,
   readWordPressFinding,
 } from "../../../src/profiles/wordpress/discovery/finding.js";
-import { createWordPressJudges } from "../../../src/profiles/wordpress/verification/judges.js";
-import { wordpressReproductionRenderer } from "../../../src/profiles/wordpress/verification/reproduction-package.js";
+import type { WordPressLabHandle } from "../../../src/profiles/wordpress/lab/index.js";
+import { createWordPressAttemptObserver } from "../../../src/profiles/wordpress/verification/attempt-observer.js";
 import { createWordPressVerifierRecordReader } from "../../../src/profiles/wordpress/verification/verifier-record.js";
 import { WordPressVerifier } from "../../../src/profiles/wordpress/verification/wordpress-verifier.js";
 import { exportReviewBundle, Review } from "../../../src/review/index.js";
 import { Verification } from "../../../src/verification/index.js";
-import {
-  handle,
-  quietLab,
-  setupDigest,
+
+const snapshotDigest = `sha256:${"a".repeat(64)}`;
+const setupDigest = `sha256:${"b".repeat(64)}`;
+const handle: WordPressLabHandle = {
+  id: "lab-1",
   snapshotDigest,
-} from "./judge-fixture.js";
+  setupDigest,
+  endpoint: "http://wordpress",
+  networkName: "wbh-lab-net",
+  internalIp: "172.20.0.2",
+  recorderIp: "172.20.0.4",
+  attackerAccounts: {
+    subscriber: { username: "lab-subscriber", password: "fixture-placeholder" },
+  },
+};
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -47,7 +56,7 @@ async function evidenceStore() {
 }
 
 const QUERY_VALUE = "victim-query-sentinel";
-const STEPS = "Steps sentinel: posted the canary, declared the victim page";
+const STEPS = "Steps sentinel: posted the script, declared the victim page";
 /** One attacker POST as the Lab recorder writes it. */
 const CAPTURE = `{"request":{"method":"POST","path":"/synthetic","headers":{"cookie":"wordpress_logged_in_fixture=attacker-session"},"body":"v=1","bodyBase64":"dj0x","truncated":false},"response":{"statusCode":200,"headers":{},"body":"saved","bodyBase64":"c2F2ZWQ=","truncated":false}}\n`;
 /** The six files a handoff skill leaves; the victim page carries a query value. */
@@ -60,7 +69,7 @@ const FILES = {
   precondition: "",
 };
 
-describe("an incomplete judge result keeps its observations in review (#437)", () => {
+describe("a result awaiting a human observation keeps its records in review (#437, #525)", () => {
   it("queues the Finding and exports the Verifier's steps and the victim visit", async () => {
     const { store, ledger } = await evidenceStore();
     const finding = admitWordPressFinding(
@@ -91,29 +100,16 @@ describe("an incomplete judge result keeps its observations in review (#437)", (
       category: "stored-xss",
       artifacts: [{ kind: "finding", digest: findingDigest }],
     });
-    // The Lab browser opened the declared page; no beacon reached the receiver.
+    // The Lab browser opened the declared page; no dialog was shown.
     const lab = {
-      ...quietLab({
-        readCapture: async () => ({
-          status: "captured" as const,
-          ...httpCapture(Buffer.from(CAPTURE), 0),
-        }),
-        observeSessionUser: async () => ({
-          status: "user",
-          login: "lab-subscriber",
-        }),
-        observeStoredScript: async () => ({
-          status: "observed",
-          contexts: [],
-          screenshot: Buffer.from("synthetic screen"),
-        }),
+      readCapture: async () => ({
+        status: "captured" as const,
+        ...httpCapture(Buffer.from(CAPTURE), 0),
       }),
-      prepareExecutionCanary: () => null,
-      prepareScriptCanary: () => ({
-        nonce: "synthetic-nonce",
-        beaconUrl: "http://receiver/beacon",
-        javascript: "/* synthetic */",
-        loaderJavascript: "/* synthetic */",
+      observeVictimPages: async () => ({
+        status: "observed" as const,
+        victimRole: "administrator" as const,
+        screenshot: Buffer.from("synthetic screen"),
       }),
       markCapture: async () => "0",
       finishSetup: async () => true,
@@ -144,12 +140,10 @@ describe("an incomplete judge result keeps its observations in review (#437)", (
       store,
       lab: {
         provision: async () => ({ status: "ready" as const, handle }),
-        seedCanaries: async () => ({ status: "seeded", digest: setupDigest }),
         teardown: async () => ({ status: "removed" }),
       },
-      judges: createWordPressJudges({ store, lab }),
+      observer: createWordPressAttemptObserver({ store, lab }),
       readFinding: readWordPressFinding,
-      renderer: wordpressReproductionRenderer,
       verifier,
       clock,
     }).verify({
@@ -159,11 +153,10 @@ describe("an incomplete judge result keeps its observations in review (#437)", (
       snapshot: { digest: snapshotDigest },
       setup: {},
       campaignLabSetupDigest: setupDigest,
-      reconstruction: {} as never,
     });
     expect(result).toMatchObject({
       status: "incomplete",
-      reason: "observation",
+      reason: "awaiting-human-observation",
     });
 
     const queue = new Review({
@@ -199,10 +192,12 @@ describe("an incomplete judge result keeps its observations in review (#437)", (
         ],
         firing: "not-observed",
         record: {
-          path: expect.stringMatching(/\/content\/canary-observation\.json$/),
+          path: expect.stringMatching(
+            /\/content\/lab-browser-observation\.json$/,
+          ),
           digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
         },
-        screenshot: expect.stringMatching(/victim-screen-diagnostic\.png$/),
+        screenshot: expect.stringMatching(/victim-screen\.png$/),
       },
     });
     const serialized = canonicalJson(bundle);
@@ -212,6 +207,45 @@ describe("an incomplete judge result keeps its observations in review (#437)", (
 });
 
 describe("WordPress verifier record reader (#437)", () => {
+  it("reads the Lab browser's dialog record without a judge (#525)", async () => {
+    const { store } = await evidenceStore();
+    const reader = createWordPressVerifierRecordReader({ store });
+    const recipeDigest = await store.putFiles({
+      "route.json":
+        '{"victim":{"role":"administrator","paths":["/wp-admin/"],"dialogMarker":"7381930362"}}',
+    });
+    const event = {
+      type: "alert",
+      message: "7381930362",
+      topLevelPageUrlAtEvent: "http://wordpress/wp-admin/",
+      topLevelPageOriginAtEvent: "http://wordpress",
+      frameUrlsAtEvent: ["http://wordpress/wp-admin/"],
+    };
+    const evidenceDigest = await store.putFiles({
+      "lab-browser-observation.json": canonicalJson({
+        schemaVersion: 1,
+        observerId: "wordpress-lab-browser",
+        snapshotDigest,
+        labSetupDigest: setupDigest,
+        status: "visited",
+        victimRole: "administrator",
+        visits: 1,
+        dialog: { marker: "7381930362", visitIndex: 0, event },
+      }),
+      "victim-page-after-dialog.png": "synthetic screenshot",
+    });
+    const result = await reader.read({ recipeDigest, evidenceDigest });
+    expect(result.victim).toMatchObject({
+      role: "administrator",
+      firing: "observed",
+      record: {
+        path: expect.stringMatching(/lab-browser-observation\.json$/),
+      },
+      screenshot: expect.stringMatching(/victim-page-after-dialog\.png$/),
+    });
+    expect(result.victim).not.toHaveProperty("browserSignal");
+  });
+
   const observer = (record: object) =>
     canonicalJson({ judgeId: "wordpress-stored-script", ...record });
   it("exports a browser dialog signal separately from canary firing", async () => {

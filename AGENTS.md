@@ -19,7 +19,7 @@
 
 1. 探索エージェントへ渡すのは、固定したソース、人間が書いた trust 境界宣言、Programme Boundary、Lab、時点で切った対象の公開履歴だけである。公開履歴はカタログ情報に限る（ADR 0012）。評価対象の答え、held-out 公開日以降の記録、PoC、ペイロード、再現手順は渡さない。
 2. 対象は gVisor（`runsc`）の使い捨て環境の中でだけ実行する。ホストでは実行せず、弱い隔離へ暗黙に切り替えない。外向き通信は、認証ブローカー経由の provider API に限る。
-3. `runtime-confirmed` を出すのは、Harness が所有する決定論的な判定器だけである。証明は nonce 付き canary の回収に限る。エージェントや recipe の自己申告、リバースシェル、永続化、ホストへのアクセスは証明にしない。
+3. Harness は判定器を持たない。確定の根拠は、名指しした人間が新しい review Lab で記録した `review observe` の match と `review decide --reproduced match` だけである（ADR 0040）。エージェントや recipe の自己申告、捕捉を読んだだけの推定、AI が打った `review observe` / `--reproduced` は根拠にしない。リバースシェル、永続化、ホストへのアクセスは証明にしない。既存の `runtime-confirmed` の event は、判定器があった時期の記録として読み続ける。
 4. 検証の失敗（環境、手順、観測、証拠の不足）は `incomplete` にする。`contradicted` にも棄却にもしない。
 5. 判定は、Finding と検証結果の Target Snapshot digest が同じときだけ行う。digest が一致しなければ `incomplete` にする。
 6. 人間の判断点は「提出前のレビュー」と「外部行動の承認」の 2 つとする。対象選定の承認と、未検証候補の採否は置かない。権限・対象範囲の拡張には、人間の明示の承認が要る。
@@ -38,15 +38,15 @@
   - 制限時間と子の数
   - 出力の全件保存と、スキーマによる正規化
   - Programme Boundary 外の Finding を出口で止めること（park）
-  - Finding 単位の Lab の供給と canary の播種
-  - 判定器
+  - Finding 単位の Lab の供給と、HTTP 捕捉・Lab browser の記録
+  - 人間の観測（`review observe`、`review decide --reproduced`）の記録。判定器と canary は持たない（ADR 0040）
   - 台帳と Private Evidence
   - レビューの記録
 
   判断の要らない処理だけをコードにする（LESSONS 4）。
 
-- **探索と検証の中身はプロンプトとスキルが受け持つ。** どこを読むか、何を索引にするか、どの順で仮説を立てるか、どう再現するか、前提をどう作るかは、エージェントの仕事である。探索は、目的プロンプト（記事の wp2shell）を渡して Root に任せる。検証は、Harness が立てた Lab に対してスキルが行う。`runtime-confirmed` を出すのは判定器だけである。
-- **移す合図。** Harness のコードに「エージェントにこう探させる」「この前提ならこのシナリオ」「索引の網羅率」のような判断が現れたら、プロンプトかスキルへ移す。エージェントの自己申告を Harness が根拠にするコードが現れたら、判定器か観測器へ移す。観測（読んだファイル、経過時間、トークン、出力）は Harness が取る。舵取りは取らない。
+- **探索と検証の中身はプロンプトとスキルが受け持つ。** どこを読むか、何を索引にするか、どの順で仮説を立てるか、どう再現するか、前提をどう作るかは、エージェントの仕事である。探索は、目的プロンプト（記事の wp2shell）を渡して Root に任せる。検証は、Harness が立てた Lab に対してスキルが行う。確定は、Lab で観測した人間の記録だけで行う（不変条件 3）。
+- **移す合図。** Harness のコードに「エージェントにこう探させる」「この前提ならこのシナリオ」「索引の網羅率」のような判断が現れたら、プロンプトかスキルへ移す。エージェントの自己申告を Harness が根拠にするコードが現れたら、観測器の記録へ移すか、人間の観測に回す。観測（読んだファイル、経過時間、トークン、出力）は Harness が取る。舵取りは取らない。
 - **削除。** 次のものは境界の外側にあるので、スキル化と同時に削除する。使わない設定にして残す中間状態は置かない。
   - 入口・保存先索引の探索入力
   - task-plan と dispatch
@@ -55,13 +55,13 @@
   - precondition の文からシナリオを選ぶ正規表現
   - プラグイン別の Lab アダプタとシナリオ
 
-  入口・保存先索引、coverage と `incomplete(depth)`、公開履歴カタログの生成は削除済みである（ADR 0034、2026-10-18）。SPEC と ADR 0029 の該当行も改訂した。旧 Codex Verifier の実装と host の構築経路は、所有者の 2026-10-23 の削除指示で退役した（ADR 0035）。実 host は `--handoff` のない `review reverify` と `discovery.lab: attached` を退役エラーで止める。これは #352 の受入完了を意味しない。共有コードに残る旧指示の連鎖、シナリオ選択 / 生成、プラグイン別アダプタの削除は #353 に残る。共有の境界検査と記録は退役対象にしない。残る削除対象は #352 の受け入れの後に消し、そのとき ADR 0026 の該当行を改訂する。受け入れの条件は、Brizy / TranslatePress で受け渡し（handoff）が判定器の結論まで届くことである。それまでは、下の検証 Lab 節にあるシナリオの行を、既存 Trial の記録を読むための記述として扱う。
+  入口・保存先索引、coverage と `incomplete(depth)`、公開履歴カタログの生成は削除済みである（ADR 0034、2026-10-18）。SPEC と ADR 0029 の該当行も改訂した。旧 Codex Verifier の実装と host の構築経路は、所有者の 2026-10-23 の削除指示で退役した（ADR 0035）。実 host は `--handoff` のない `review reverify` と `discovery.lab: attached` を退役エラーで止める。これは #352 の受入完了を意味しない。共有コードに残る旧指示の連鎖、シナリオ選択 / 生成、プラグイン別アダプタの削除は #353 に残る。共有の境界検査と記録は退役対象にしない。残る削除対象は #352 の受け入れの後に消し、そのとき ADR 0026 の該当行を改訂する。受け入れの条件は、Brizy / TranslatePress で受け渡し（handoff）が人間の観測の記録（`review observe`）まで届くことである（判定器は ADR 0040 で削除した）。それまでは、下の検証 Lab 節にあるシナリオの行を、既存 Trial の記録を読むための記述として扱う。
 
 ## 単一協調 Trial の探索（SPEC.md 第 6 節、ADR 0029）
 
-- 新規探索で実行できる目的プロンプトは `wp2shell-bounty-v10` に限る（v8 は過去 Trial の照合用に残す）。起動モードも `wp2shell` に限る。対象ごとに 1 回、Root と子が協調する Trial を行い、子は 4 体までとする。制限時間の上限は 120 分で、最低 60 分は能動的に探索する。最終報告が早く出たときは、同じ協調セッションで続ける。継続できない場合と、制限時間・provider・broker・スキーマなどの失敗は、理由付きの `incomplete` にする。これらは正常な候補 0 件に数えない（ADR 0033）。止まった Root のスレッドは、止まった理由を問わず（`completed` 以外）再開できる。Codex の run の `provider-limited` と死んだ持ち主の `interrupted` を除き、操作者が名指ししたときだけ再開する（ADR 0036 の 2026-10-19 追記 4）。Claude の `provider-refusal` も、Codex の `provider-cyber-policy` と同じく名指しで再開する（ADR 0036 の 2026-10-21 追記）。名指しには `campaign resume --run <runId>` を使う。再開は新しい使い捨てサンドボックスで行い、同じ Snapshot、同じ再開段落、残りの制限時間を使う。再開した続きは、同じ Trial の再開区間（segment）として数える。プロンプトの言い換えはしない（ADR 0036）。終了イベントの無い run（電源断など）も、持ち主のプロセスが死んでいれば、残ったセッションとメモを封じて `interrupted` で終わらせてから再開できる。ランナーの再起動が同じ対象をやり直した後は再開しない（ADR 0036 の 2026-10-19 追記 2）。持ち主のプロセスが死んだ run は、再起動したランナーが新しい Trial より先に自動で再開する（拒否された場合は従来どおり新しい Trial に戻る）。Codex の run の `provider-limited` は、Codex CLI の同一会話内再試行が尽きた後、ランナーが backoff して同じ Trial を再開区間最大 5 まで再開する。起動直後も再開し、拒否されたら理由付き `incomplete` にして新しい Trial は作らない。Claude の run の `provider-limited` は、backoff 後に新しい Trial としてやり直す（ADR 0029 の 2026-10-19 追記）。
+- 新規探索の mode は、campaign 設定の `discovery.mode` で `deep` か `wide` を選ぶ（ADR 0039）。実行できる目的プロンプトは、`deep` では `wp2shell-bounty-v11`、`wide` では `wp2shell-bounty-v13-wide` に限る（v8、v10、v10-wide、v11-wide、v12-wide は過去 Trial の照合用に残す。ADR 0039 の 2026-10-25 追記 4）。起動モードは `wp2shell` に限る。mode は Trial の属性として台帳に残し、途中で変えない。どちらも対象ごとに 1 回、Root と子が協調する Trial を行う。同時に生きる子の上限は設定値 `discovery.maxChildren`（既定 4、1〜8）で、Harness が強制する。何体使うかは Root がその中で決める。制限時間の上限は 120 分である。`deep` は既定の制限時間が 120 分で、既定の最低時間（`discovery.minimumActiveMinutes`、既定 60 分）は能動的に探索する。最終報告が早く出たときは、同じ協調セッションで続ける。`wide` は最低時間を置かず、既定の制限時間は 120 分（`runWallTimeMinutes` で短くできる）で、最初の最終報告で終える。これらの値は目的文に書かず、Harness が生成する `## Run parameters` 節で Root に伝える（ADR 0039 の 2026-10-25 追記 3・4）。継続できない場合と、制限時間・provider・broker・スキーマなどの失敗は、理由付きの `incomplete` にする。これらは正常な候補 0 件に数えない（ADR 0033）。止まった Root のスレッドは、止まった理由を問わず（`completed` 以外）再開できる。Codex の run の `provider-limited` と死んだ持ち主の `interrupted` を除き、操作者が名指ししたときだけ再開する（ADR 0036 の 2026-10-19 追記 4）。Claude の `provider-refusal` も、Codex の `provider-cyber-policy` と同じく名指しで再開する（ADR 0036 の 2026-10-21 追記）。名指しには `campaign resume --run <runId>` を使う。再開は新しい使い捨てサンドボックスで行い、同じ Snapshot、同じ再開段落、残りの制限時間を使う。再開した続きは、同じ Trial の再開区間（segment）として数える。プロンプトの言い換えはしない（ADR 0036）。終了イベントの無い run（電源断など）も、持ち主のプロセスが死んでいれば、残ったセッションとメモを封じて `interrupted` で終わらせてから再開できる。ランナーの再起動が同じ対象をやり直した後は再開しない（ADR 0036 の 2026-10-19 追記 2）。持ち主のプロセスが死んだ run は、再起動したランナーが新しい Trial より先に自動で再開する（拒否された場合は従来どおり新しい Trial に戻る）。Codex の run の `provider-limited` は、Codex CLI の同一会話内再試行が尽きた後、ランナーが backoff して同じ Trial を再開区間最大 5 まで再開する。起動直後も再開し、拒否されたら理由付き `incomplete` にして新しい Trial は作らない。Claude の run の `provider-limited` は、backoff 後に新しい Trial としてやり直す（ADR 0029 の 2026-10-19 追記）。
 - v8 以降には入口索引を渡さない。着眼点は、固定したソースから Root 自身が決める。最低時間を守るための同一セッション内の継続のほかには、screening から条件付き deep-dive へ進む分岐も、入口網羅の終了条件も置かない。子が出した有効な Finding と Lead は、Root の報告とは独立に保存する。
-- Snapshot は、対象プラグイン、WordPress 本体、実行イメージに対応する PHP ソース、依存プラグインを版と digest で固定する。依存プラグインは、`Requires Plugins` と選定方針での明示指定から決める。自動選定の本番対象には凍結時点の公式安定版を使い、手動や歴史的な評価対象には明示した版の固定を使う。探索ではすべてのソースを読み取り専用で渡し、Lab にも固定したプラグイン依存を供給する。依存の欠落を黙って無視しない。
+- Snapshot は、対象プラグイン、WordPress 本体、実行イメージに対応する PHP ソース、依存プラグインを版と digest で固定する。依存プラグインは、`Requires Plugins`、WooCommerce の版ヘッダ（`WC requires at least` / `WC tested up to`）、選定方針での明示指定から決める。自動選定の本番対象には凍結時点の公式安定版を使い、手動や歴史的な評価対象には明示した版の固定を使う。WooCommerce の版ヘッダだけから決めた `woocommerce` は任意の依存として扱う。版の固定だけで決める方針（`candidateSlugs` と reverify）で固定が無ければ、`woocommerce` を入れず、依存の pinset に理由 `header-derived-unpinned` を残す。`Requires Plugins` と選定方針で指定した依存は、固定が無ければ従来どおり止める。探索ではすべてのソースを読み取り専用で渡し、Lab にも固定したプラグイン依存を供給する。依存の欠落を黙って無視しない。
 - 旧版の探索プロンプトと実験結果は、過去 Trial の digest と構成を照合するために残す。ただし、旧版を使う新規 Trial は起動しない。索引あり・なしの Trial や旧来の段付き Trial を、同じ比較の分母に混ぜない。v8 以降は、脆弱性が必ずあるという前提も、固定した攻撃経路も与えない。
 - エージェントに渡る文章（プロンプト本文、スキル本文、Harness が生成する節の雛形）は、`owner-approved` ラベルが付くまでマージしない。2026-10-13 以降、所有者は採否とラベル付与を AI に委任している。AI は委任を明記した PR コメントを残す（DEVELOPMENT.md 第 5 節）。2026-10-18 以降は、所有者の読了もマージの条件ではない。ADR・SPEC・方針・判定器のパスも含めて、委任済みの AI が差分を確認してラベルを付ける。採否は探索の数字で決める（ADR 0032 の 2026-10-18 節）。AI は出典対照表にある要素だけを書き、要素を足さない。
 - プロンプト本文を変えたら版を上げ、旧版を残して、固定した digest を更新する。旧プロンプトは、過去 Trial の目的文と digest を照合するために維持する。台帳にある旧 `stage` / `continuationOf` 付きのイベントも読み続け、既存のイベントを消さない。
@@ -70,9 +70,9 @@
   - Programme Boundary の外にある 5 種: `other`、`csrf-to-write`、`missing-authz`、`idor`、`reflected-xss`
   - 所有者が 2026-10-17 に「重大かどうかの判別が付きにくい」として外した 5 種: `sensitive-object-access`、`content-deletion`、`options-update`、`privesc-to-contributor+`、`auth-bypass-non-admin`
 
-  これらは検証列、レビュー列、funnel の raw に入れない。この決定は、Q1 の `content-deletion` 復帰を上書きする（ADR 0032 の 2026-10-17 節）。探索プロンプトの目的文は変えず、出口で振り分ける。一覧は `review parked --campaign <id>` で見る。対象範囲内の Finding は、判定器の結果に関係なく全件がレビュー列に出る（#185、ADR 0031）。
+  これらは検証列、レビュー列、funnel の raw に入れない。この決定は、Q1 の `content-deletion` 復帰を上書きする（ADR 0032 の 2026-10-17 節）。探索プロンプトの目的文は変えず、出口で振り分ける。一覧は `review parked --campaign <id>` で見る。対象範囲内の Finding は、検証の結果に関係なく全件がレビュー列に出る（#185、ADR 0031）。
 
-- contributor 以上と、管理者が意図して付与する権限は、trust 境界の内側に置く。公開済み 7 件の再発見は配線と判定器の確認であり、未知の発見率は示さない。プロンプトとシナリオに、対象固有の関数名、オプション名、URL、画面名を入れない。
+- contributor 以上と、管理者が意図して付与する権限は、trust 境界の内側に置く。公開済み 7 件の再発見は配線と検証の確認であり、未知の発見率は示さない。プロンプトとシナリオに、対象固有の関数名、オプション名、URL、画面名を入れない。
 
 ## 検証 Lab の前提（SPEC.md 第 7 節、ADR 0026）
 
@@ -85,7 +85,7 @@ WordPress 固有のものは `profiles/wordpress/` に置く。次のものが�
 
 - WordPress.org からの取得
 - WordPress + MySQL の Lab 供給
-- PHP 向けの判定器
+- PHP 向けの Lab 観測器（HTTP 捕捉、Lab 状態の差分、Lab browser）
 - Wordfence / Patchstack の対象範囲方針
 - trust 境界宣言の雛形
 - Lead 型

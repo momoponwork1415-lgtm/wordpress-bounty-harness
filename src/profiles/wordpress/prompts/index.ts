@@ -9,12 +9,38 @@ import { readFile } from "node:fs/promises";
 interface WordPressPromptRecord {
   readonly id: string;
   readonly digest: `sha256:${string}`;
-  /** Exactly one row per table is `current`; everything else is archived. */
+  /** Exactly one row per table (per mode for discovery) is `current`; everything else is archived. */
   readonly status: "current" | "archived";
 }
 
+/**
+ * The launch mode a discovery objective is written for (ADR 0039). `deep` is
+ * the single cooperative Trial with the 60-minute active floor; `wide` is the
+ * short bounded pass without a floor. Archived rows carry no mode.
+ */
+export type WordPressDiscoveryMode = "deep" | "wide";
+export const WORDPRESS_DISCOVERY_MODES = ["deep", "wide"] as const;
+
 /** Generated Finding / Lead contract versions the Harness appends (ADR 0019). */
 export type WordPressOutputContractVersion = "v1" | "v2" | "v4";
+
+/**
+ * The human-written parts of a discovery objective (redesign 2026-10-25 §5).
+ * Run parameters and the output contract are generated, so they are not here.
+ */
+export const WORDPRESS_PROMPT_SECTIONS = [
+  "objective",
+  "strategy",
+  "coordination",
+  "persistence",
+] as const;
+export type WordPressPromptSection = (typeof WORDPRESS_PROMPT_SECTIONS)[number];
+
+/** One file under `sections/<section>/`; a file holds whole paragraphs only. */
+export interface WordPressPromptFragment {
+  readonly section: WordPressPromptSection;
+  readonly file: string;
+}
 
 export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
   /**
@@ -22,7 +48,22 @@ export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
    * Otherwise the body is objective-only and receives this generated version.
    */
   readonly outputContract: WordPressOutputContractVersion | null;
+  /** Required on a `current` row: the campaign mode that launches it. */
+  readonly mode?: WordPressDiscoveryMode;
+  /**
+   * The body is composed from these files in order. The composition is
+   * byte-identical to `${id}.md`, which stays as the reference copy, so
+   * `digest` is the same either way.
+   */
+  readonly fragments?: readonly WordPressPromptFragment[];
 }
+
+// Paragraphs the deep and wide objectives share unchanged.
+const TASK = { section: "objective", file: "task-v10" } as const;
+const SOURCES = { section: "objective", file: "sources-v8" } as const;
+// Only the archived v10 and v12-wide carry it; v11 and v13-wide drop it
+// (owner decision 2026-10-25, redesign §12 Q7).
+const LIFETIME = { section: "coordination", file: "lifetime-v10" } as const;
 
 export const WORDPRESS_DISCOVERY_PROMPTS = [
   {
@@ -163,7 +204,97 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:fd4e395ecb50923487c9bab6dbae81f0aff4e67342abecedda3f53cd9ff5f8b3",
     outputContract: "v4",
+    status: "archived",
+    fragments: [
+      TASK,
+      { section: "objective", file: "first-principles-v7" },
+      { section: "coordination", file: "dynamic-v7" },
+      { section: "strategy", file: "portfolio-v10" },
+      { section: "coordination", file: "registry-v7" },
+      LIFETIME,
+      { section: "persistence", file: "research-v10" },
+      SOURCES,
+      { section: "coordination", file: "persist-deep-v7" },
+      { section: "coordination", file: "stop-deep-v8" },
+    ],
+  },
+  {
+    id: "wp2shell-bounty-v11",
+    digest:
+      "sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9",
+    outputContract: "v4",
     status: "current",
+    mode: "deep",
+    // v10 without the lifetime paragraph, the child count and the minutes;
+    // the Run parameters section states the enforced values (ADR 0039 追記 4).
+    // The hand-over paragraph follows the research paragraph (owner
+    // 2026-10-26, ADR 0039 追記 4).
+    fragments: [
+      TASK,
+      { section: "objective", file: "first-principles-v7" },
+      { section: "coordination", file: "dynamic-v11" },
+      { section: "strategy", file: "portfolio-v10" },
+      { section: "coordination", file: "registry-v7" },
+      { section: "persistence", file: "research-v10" },
+      { section: "coordination", file: "handover-v11" },
+      SOURCES,
+      { section: "coordination", file: "persist-deep-v7" },
+      { section: "coordination", file: "stop-deep-v11" },
+    ],
+  },
+  {
+    id: "wp2shell-bounty-v10-wide",
+    digest:
+      "sha256:b886625bc576196e38879b3dd85bd25bc5d75e5e960c79b4d8aaec8c1e494a18",
+    outputContract: "v4",
+    status: "archived",
+  },
+  {
+    id: "wp2shell-bounty-v11-wide",
+    digest:
+      "sha256:e7c46f4b5289731f7d780640f009b58a305f99099e2ba10148fb2c1b6b4f676b",
+    outputContract: "v4",
+    status: "archived",
+  },
+  {
+    id: "wp2shell-bounty-v12-wide",
+    digest:
+      "sha256:9a79a3b20fdba7af54f32464d868ab00806335c526781aba026e76ce9290c3c3",
+    outputContract: "v4",
+    status: "archived",
+    fragments: [
+      TASK,
+      { section: "objective", file: "first-principles-v11" },
+      { section: "strategy", file: "sinks-v12" },
+      { section: "strategy", file: "shapes-v12" },
+      LIFETIME,
+      { section: "persistence", file: "research-v11" },
+      SOURCES,
+      { section: "coordination", file: "fixed-v11" },
+      { section: "coordination", file: "stop-wide-v11" },
+    ],
+  },
+  {
+    id: "wp2shell-bounty-v13-wide",
+    digest:
+      "sha256:0dd2072b4c6a544d47ebb6df94c7981f2fbb758b4dee82e063896ff91f892bb8",
+    outputContract: "v4",
+    status: "current",
+    mode: "wide",
+    // v12-wide without the lifetime paragraph and the specialist count, with
+    // the hand-over paragraph and the registry-based stop rule (owner
+    // 2026-10-26, ADR 0039 追記 4).
+    fragments: [
+      TASK,
+      { section: "objective", file: "first-principles-v11" },
+      { section: "strategy", file: "sinks-v13" },
+      { section: "strategy", file: "shapes-v12" },
+      { section: "persistence", file: "research-v11" },
+      { section: "coordination", file: "handover-v11" },
+      SOURCES,
+      { section: "coordination", file: "fixed-v13" },
+      { section: "coordination", file: "stop-wide-v13" },
+    ],
   },
   {
     id: "wp2shell-whitebox-v1.7",
@@ -213,9 +344,12 @@ type CurrentOf<Row extends WordPressPromptRecord> = Extract<
 
 function currentOf<const Row extends WordPressPromptRecord>(
   rows: readonly Row[],
+  mode?: WordPressDiscoveryMode,
 ): CurrentOf<Row> {
   const current = rows.filter(
-    (row): row is CurrentOf<Row> => row.status === "current",
+    (row): row is CurrentOf<Row> =>
+      row.status === "current" &&
+      (mode === undefined || ("mode" in row && row.mode === mode)),
   );
   if (current.length !== 1)
     throw new Error("Exactly one prompt version must be current");
@@ -230,10 +364,22 @@ export type WordPressDiscoveryAssetId =
 export const WORDPRESS_DISCOVERY_PROMPT_IDS: readonly WordPressDiscoveryPromptId[] =
   WORDPRESS_DISCOVERY_PROMPTS.map((prompt) => prompt.id);
 
-/** The only discovery objective accepted for new WordPress campaign runs. */
-export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID = currentOf(
-  WORDPRESS_DISCOVERY_PROMPTS,
-).id;
+/** The current discovery objective of each launch mode (ADR 0039). */
+export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS = {
+  deep: currentOf(WORDPRESS_DISCOVERY_PROMPTS, "deep").id,
+  wide: currentOf(WORDPRESS_DISCOVERY_PROMPTS, "wide").id,
+} as const satisfies Record<WordPressDiscoveryMode, WordPressDiscoveryPromptId>;
+
+/** The `deep` objective: the single cooperative Trial every earlier decision names. */
+export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID =
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.deep;
+
+/** The mode a current objective launches under; archived objectives have none. */
+export function wordPressDiscoveryModeOf(
+  id: string,
+): WordPressDiscoveryMode | undefined {
+  return wordPressDiscoveryPrompt(id).mode;
+}
 
 /** These objectives receive the current Harness-generated output contract. */
 export const WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS: readonly WordPressDiscoveryPromptId[] =
@@ -263,7 +409,17 @@ export interface WordPressDiscoveryAsset {
   readonly sourceUrl: URL;
   readonly text: string;
   readonly digest: `sha256:${string}`;
+  /**
+   * Set only for an objective composed from fragments: sha256 of each
+   * section's fragments composed alone, in the order the row lists them.
+   */
+  readonly sectionDigests?: Partial<
+    Record<WordPressPromptSection, `sha256:${string}`>
+  >;
 }
+
+const sha256 = (bytes: Uint8Array | string): `sha256:${string}` =>
+  `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 
 async function readPromptFile<Id extends string>(
   id: Id,
@@ -279,7 +435,7 @@ async function readPromptFile<Id extends string>(
     id,
     sourceUrl,
     text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    digest: sha256(bytes),
   };
 }
 
@@ -290,12 +446,56 @@ const VERIFIER_PROMPT_IDS: ReadonlySet<string> = new Set(
   WORDPRESS_VERIFIER_PROMPTS.map((prompt) => prompt.id),
 );
 
+/**
+ * Fragments are whole paragraphs, each file ending in one newline. Joining
+ * them with the blank line that separates paragraphs gives the `.md` bytes.
+ */
+function composeFragments(texts: readonly string[]): string {
+  return `${texts.map((text) => text.slice(0, -1)).join("\n\n")}\n`;
+}
+
+async function readFragment(fragment: WordPressPromptFragment) {
+  const text = await readFile(
+    new URL(
+      `./sections/${fragment.section}/${fragment.file}.md`,
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  if (!/^\S[\s\S]*\S\n$/.test(text) || text.endsWith("\n\n"))
+    throw new Error("A prompt fragment must hold whole paragraphs");
+  return text;
+}
+
 export async function loadWordPressDiscoveryAsset(
   id: WordPressDiscoveryAssetId,
 ): Promise<WordPressDiscoveryAsset> {
   if (!DISCOVERY_ASSET_IDS.has(id))
     throw new Error("Unknown WordPress discovery asset");
-  return readPromptFile(id);
+  if (id === WORDPRESS_TRUST_BOUNDARY.id) return readPromptFile(id);
+  const record = wordPressDiscoveryPrompt(id);
+  if (record.fragments === undefined) return readPromptFile(id);
+  const texts = await Promise.all(record.fragments.map(readFragment));
+  const text = composeFragments(texts);
+  const digest = sha256(text);
+  if (digest !== record.digest)
+    throw new Error("Composed prompt differs from its pinned digest");
+  const sectionDigests: Partial<
+    Record<WordPressPromptSection, `sha256:${string}`>
+  > = {};
+  for (const section of WORDPRESS_PROMPT_SECTIONS) {
+    const own = texts.filter(
+      (_, index) => record.fragments![index]!.section === section,
+    );
+    if (own.length > 0) sectionDigests[section] = sha256(composeFragments(own));
+  }
+  return {
+    id,
+    sourceUrl: new URL(`./${id}.md`, import.meta.url),
+    text,
+    digest,
+    sectionDigests,
+  };
 }
 
 export async function loadWordPressVerifierPrompt(

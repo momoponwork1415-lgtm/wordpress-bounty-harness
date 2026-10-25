@@ -113,11 +113,6 @@ describe("WordPress campaign session", () => {
       scenario: { id: "approved-comment-v1" },
     });
     expect(session.setupFor(snapshot)).not.toHaveProperty("scenarioId");
-    expect(session.reconstructionFor(snapshot)).toMatchObject({
-      wordpressVersion: "6.8",
-      roles: ["unauthenticated", "subscriber", "customer"],
-      enabledSettings: ["The first published post has one approved comment"],
-    });
     expect(session.verification.promptVersion).toBeDefined();
   });
 
@@ -139,7 +134,6 @@ describe("WordPress campaign session", () => {
       typeof session.setupFor
     >[0];
     expect(session.setupFor(snapshot).snapshotDigest).toBe(snapshot.digest);
-    expect(session.reconstructionFor(snapshot).wordpressVersion).toBe("6.8");
     expect(() => session.verification).toThrow(
       "The legacy Codex Verifier is retired",
     );
@@ -223,12 +217,16 @@ describe("WordPress campaign session", () => {
     expect(boundaryCalls).toHaveLength(0);
   });
 
-  it("rejects the retired attached setting before building any boundaries", async () => {
-    const { open, boundaryCalls } = await fixture({
-      config: { discovery: { lab: "attached" } },
+  it("accepts an attached exploration Lab with its reset budget (Phase D1)", async () => {
+    const { open } = await fixture({
+      config: { discovery: { lab: { mode: "attached", maxResets: 3 } } },
     });
-    await expect(open()).rejects.toThrow("Attached discovery Labs are retired");
-    expect(boundaryCalls).toHaveLength(0);
+    const session = await open();
+    expect(session.config.discovery.lab).toEqual({
+      mode: "attached",
+      maxResets: 3,
+      maxObservations: 20,
+    });
   });
 
   it("replaces the config's selection policy path in process", async () => {

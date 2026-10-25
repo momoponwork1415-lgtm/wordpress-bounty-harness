@@ -38,14 +38,14 @@ cd /home/dev/wordpress-bounty-harness-prod7 && node dist/cli/main.js --state ~/.
 5〜10 分おきに次を見る。
 
 1. **選定**: 選ばれた slug と版、score の内訳（paying class 件数、最終記録の新しさ、install）、`cascadeStep` の有無（主帯なら無印）、除外理由の件数。選定レポートは `target-selected` の artifact digest から Private Evidence を辿る。読むのは slug・版・数字だけ。
-2. **Trial**: `discovery-run-started` の prompt 版が v10 か、同時に走る Root の数、Root ごとの子の数、wall、観測値（読んだ file 数、token）。
+2. **Trial**: `discovery-run-started` の prompt 版が mode の現行版（`deep` は v11、`wide` は v13-wide）か、同時に走る Root の数、Root ごとの子の数、wall、観測値（読んだ file 数、token）。
 3. **失敗**: provider 429（`provider-limited`）、`provider-cyber-policy` の拒否、`run-failed`、schema error、停滞（終了 event が無く出力も 30 分以上止まる run。2026-10-17 は websocket 426 の後に無言で止まり wall も発火しなかった）。host の memory（`free -g`）と container 数（`docker ps --format '{{.Names}}'` の `wbh-`）。
 4. **Finding**: 件数だけ。category 別、`finding-parked` か対象範囲内か。本文、payload、path、証拠は読まない・引用しない。
 5. **runner の停止**: `stopped(<理由>)` になったら理由と直前の例外を記録する。再起動はしない。
 
 ## 4. 許す操作は 1 つ
 
-Root が `provider-cyber-policy` で止まったとき、ADR 0036 と OPERATIONS を読み、`continuous run` が同じ host で動いている間に `campaign resume` を打てるか（batch 間の Lab 掃除、campaign process は host に 1 つの規則）を確かめる。文書が安全だと言うときだけ 1 回打つ。
+Root が `provider-cyber-policy` で止まったとき、ADR 0036 と OPERATIONS を読み、`continuous run` が同じ host で動いている間に `campaign resume` を打てるか（runner の batch 間の掃除は探索の残骸だけを消し、`campaign resume` が生きている間は `<state>/sweep-holds/<pid>` で止まる。runtime ごとの同時数に収まるか）を確かめる。文書が安全だと言うときだけ 1 回打つ。
 
 ```bash
 cd /home/dev/wordpress-bounty-harness-prod7 && node dist/cli/main.js --state ~/.local/state/wordpress-bounty-harness --host ~/.config/wordpress-bounty-harness/host-production-v5.json campaign resume --campaign <id> --run <runId> --config ~/.config/wordpress-bounty-harness/campaign-production-4x.json

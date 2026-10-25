@@ -3,13 +3,13 @@ name: wbh-review
 description: review queue の Finding 1 件を review export と段 1（wbh-screen）の結果から読み、観測可能な事実を 1 画面に要約し、accept / reject / defer の提案と所有者が打つ review decide のコマンドを出す。Harness の state は変えない。
 ---
 
-# wbh-review
+# wbh-review v2
 
-対象: `harness review --campaign <id>` に並ぶ Programme Boundary 内の Finding。1 回の起動で 1 件を扱う。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js`。台帳と Private Evidence の場所は `--state <dir>` か `WBH_STATE_DIRECTORY`。
+対象: `harness review --campaign <id>` に並ぶ Programme Boundary 内の Finding。1 回の起動で 1 件を扱う。旧版の v1 は `versions/` に残す。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js`。台帳と Private Evidence の場所は `--state <dir>` か `WBH_STATE_DIRECTORY`。
 
 ## 読む入力
 
-`harness review export --campaign <id> --finding <id>` が出す JSON 1 本（schema `review-export/v1`）、その中の `privateEvidence.artifacts` / `http.path` / `refutation.path` が指す Private Evidence の path、`wbh-screen` の非公開メモを読む。まず `screen-<campaign>-<Finding>-v4.md` を探し、無ければ旧版のメモを版付きの履歴として読む。現行の screen 結果と呼ぶのは、v4 メモの `snapshotDigest` が現在の export と一致するときだけ。旧版の `提出可 / 提出不可`、`採用 / 非採用` を v4 の `検証へ / 明示除外` に読み替えない。台帳の SQLite を直接読まない。対象の PHP を実行しない。WordPress を bootstrap しない。Lab を自分で建てない。
+`harness review export --campaign <id> --finding <id> --version 2` が出す JSON 1 本（schema `review-export/v2`）、その中の `privateEvidence.artifacts` / `http.path` / `refutation.path` が指す Private Evidence の path、`wbh-screen` の非公開メモを読む。まず `screen-<campaign>-<Finding>-v4.md` を探し、無ければ旧版のメモを版付きの履歴として読む。現行の screen 結果と呼ぶのは、v4 メモの `snapshotDigest` が現在の export と一致するときだけ。旧版の `提出可 / 提出不可`、`採用 / 非採用` を v4 の `検証へ / 明示除外` に読み替えない。台帳の SQLite を直接読まない。対象の PHP を実行しない。WordPress を bootstrap しない。Lab を自分で建てない。
 
 ## 手順
 
@@ -26,9 +26,9 @@ description: review queue の Finding 1 件を review export と段 1（wbh-scre
    **Verifier の記録と被害者側の観測。** `observations.steps.path` は Verifier が書いた手順の記録で、証拠ではない。`observations.victim` があれば、`observations.victim.role`、`observations.victim.pages` の path と操作の数、`observations.victim.firing`、`observations.victim.record.path`、`observations.victim.screenshot` を観測可能な事実として写す。`firing` は Harness の Lab browser が記録した状態で、`observed` でも判定器の結果の代わりにしない。`observations` が null なら、Verifier の記録が無いと書く。
 10. **反証と欠落。** `refutation.text` にある反証、countercontrol、未解決の gap を写す。1 つの観測だけで結論しない。未解決の前提が残るなら、決定的な問いを 1 つだけに絞って書く。
 11. **最新版。** `target.versions.latestKnown` が `target.versions.explored` と違えば書く。最新版での確認は `harness review reverify --campaign <id> --finding <id> --config <path> --version <latest>` で別に行い、この skill の中では実行しない。
-12. **`verification.status` で分ける。** `verification` が null か `verification.status` が `incomplete` なら、8 の段 1 の結果を要約に含め、13 と 14 を行わず、非公開 note と `defer` の提案で終える。検証失敗を除外例への該当や反証に読み替えない。
+12. **`verification.status` で分ける。** `verification.status` が `incomplete` で `verification.reason` が `awaiting-human-observation` なら、`review.manualObservation` を見る。`result` が `match` なら 13 と 14 へ進む。`review.manualObservation` が null なら、14 の review Lab を案内し、人間が `review observe` で観測を記録するまで `defer` を提案する（ADR 0040）。それ以外で `verification` が null か `verification.status` が `incomplete` なら、8 の段 1 の結果を要約に含め、13 と 14 を行わず、非公開 note と `defer` の提案で終える。検証失敗を除外例への該当や反証に読み替えない。
 13. **scope は別々に。** Wordfence と Patchstack の判定は `harness review scope --campaign <id> --finding <id>` の結果を引く。2 つを混ぜない。score、rank、報酬の予測は書かない。
-14. **人間が手で行う操作。** 画面での再現が要るときは `harness lab up --for-review --campaign <id> --finding <id>` を案内し、操作は人間が行う。UI の経路を source や記憶から作らない。画面に出ている言葉で記録する。人間が再現したら `harness review decide --campaign <id> --finding <id> --decision <accept|reject|defer> --reason <category> --reproduced match|mismatch|unavailable --reproduce-minutes <n>` を記録する。
+14. **人間が手で行う操作。** 画面での再現が要るときは `harness lab up --for-review --campaign <id> --finding <id>` を案内し、操作は人間が行う。UI の経路を source や記憶から作らない。画面に出ている言葉で記録する。`awaiting-human-observation` の結果では、人間が見たものを先に `harness review observe --campaign <id> --finding <id> --receipt <digest> --result match|mismatch|unavailable --evidence <path> --by <name>` で記録する。人間が再現したら `harness review decide --campaign <id> --finding <id> --decision <accept|reject|defer> --reason <category> --reproduced match|mismatch|unavailable --reproduce-minutes <n>` を記録する。
 
 ## 出力
 
@@ -41,4 +41,4 @@ description: review queue の Finding 1 件を review export と段 1（wbh-scre
 
 - payload、credential、HTTP 本文、未公開の Finding の中身を Git にも会話にも書かない。最終応答は path、状態、件数、reject の category だけ。
 - Harness の state を変えない（`review decide` も所有者が打つ）。外部に提出しない。次の skill（wbh-dedupe、wbh-report）を自動で起動しない。
-- 判定器の代わりをしない。`runtime-confirmed` を出すのは Harness の判定器だけ。
+- 確定を代わりに出さない。確定は、人間が Lab の dialog、観測記録、捕捉を読んで行う（ADR 0040）。

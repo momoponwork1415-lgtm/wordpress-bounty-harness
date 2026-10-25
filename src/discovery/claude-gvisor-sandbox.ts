@@ -78,11 +78,15 @@ export interface ClaudeSandboxCommand {
     readonly prompt: string;
     readonly resumePrompt: string;
     readonly minimumActiveMs: number;
+    /** The PreToolUse hook's ceiling on live children. */
+    readonly maxChildren: number;
     readonly model: string;
     readonly effort: string;
     readonly outputSchema: object;
     /** Resume this restored session; the first turn is the pinned directive (ADR 0036). */
     readonly resumeSessionId?: string;
+    /** With `resumeSessionId`: Harness-generated facts sent before the directive on the first turn. */
+    readonly resumeNotice?: string;
   };
   /**
    * The model every child runs on, from the profile's `subagent.modelId`
@@ -95,6 +99,8 @@ export interface ClaudeSandboxCommand {
   readonly dependencyMounts: readonly (Mount & { readonly path: string })[];
   readonly labHost?: { readonly name: string; readonly ipv4: string };
   readonly databaseHost?: { readonly name: string; readonly ipv4: string };
+  /** The exploration Lab's control endpoint (ADR 0003, 2026-10-25 addendum). */
+  readonly controlHost?: { readonly name: string; readonly ipv4: string };
 }
 
 export interface ClaudeSandboxResult {
@@ -345,6 +351,12 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         (command.labHost === undefined ||
           !host.test(command.databaseHost.name) ||
           isIP(command.databaseHost.ipv4) !== 4)) ||
+      (command.controlHost !== undefined &&
+        (command.labHost === undefined ||
+          !host.test(command.controlHost.name) ||
+          command.controlHost.name === command.labHost.name ||
+          command.controlHost.name === command.databaseHost?.name ||
+          isIP(command.controlHost.ipv4) !== 4)) ||
       command.dependencyMounts.length > 33 ||
       !command.dependencyMounts.every((mount) =>
         isDependencyMountPath(mount.path),
@@ -352,6 +364,10 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       !dependencyMountPathsAreDisjoint(
         command.dependencyMounts.map((mount) => mount.path),
       ) ||
+      (command.input.resumeNotice !== undefined &&
+        (command.input.resumeSessionId === undefined ||
+          command.input.resumeNotice.length === 0 ||
+          command.input.resumeNotice.length > 4_096)) ||
       (command.resume === undefined
         ? command.input.resumeSessionId !== undefined
         : !admittedResumeSeed(command.resume, command.input.resumeSessionId))
@@ -406,8 +422,11 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         `--name=${containerName}`,
         "--interactive",
         `--network=${grant.dockerNetworkName}`,
-        ...[command.labHost, command.databaseHost].flatMap((entry) =>
-          entry === undefined ? [] : [`--add-host=${entry.name}:${entry.ipv4}`],
+        ...[command.labHost, command.databaseHost, command.controlHost].flatMap(
+          (entry) =>
+            entry === undefined
+              ? []
+              : [`--add-host=${entry.name}:${entry.ipv4}`],
         ),
         ...verified.map(
           (mount) =>

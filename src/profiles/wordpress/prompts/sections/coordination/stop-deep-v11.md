@@ -1,0 +1,1 @@
+Before giving up, use at least the minimum active exploration time stated in the Run parameters for active exploration. The Harness will resume this same session if your final report arrives before that time has elapsed. On such a resume, continue analyzing fresh source-grounded routes, launch new agent rounds, and challenge earlier conclusions until that time is met.

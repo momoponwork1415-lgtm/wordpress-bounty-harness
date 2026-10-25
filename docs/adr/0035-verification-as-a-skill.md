@@ -64,3 +64,38 @@ PR #415 のレビュー指摘 2 への対応。決定の本文は変えず、次
 - 共通セッションは旧 Verifier を必須とせず、検証を明示的に使う時だけ構築する。実 host の例外専用 Verifier は削除し、未提供の旧経路を使おうとした場合は退役エラーにする。handoff へ暗黙に切り替えない。
 - 実行用 campaign 設定の `discovery.lab` は `none` だけを受理する。`attached` は host 初期化より前の設定検査で拒否し、`none` へ変換しない。
 - 旧 `labAttached`、Verifier の版と digest、Private Evidence の読取は変更しない。旧 attached Trial の再開拒否も維持する。#352 の受入とシナリオ削除の残件は別に扱う。
+
+## 2026-10-25 追記: attached の探索 Lab の復活（Phase D1）
+
+- `discovery.lab: attached` は、ADR 0003 の 2026-10-25 追記の探索 Lab として再び受理する。探索 Lab は Trial の間だけ使い、canary も判定器も置かない。
+- campaign 内の自動検証は戻さない。attached の campaign も、検証は `verify next --handoff` で Finding ごとの検証 Lab に送る。到達しなくなっていた campaign 内検証の経路（旧 Verifier の再試行と scenario による再実行）は pipeline から削除した。旧 attached Trial の再開拒否は維持する。
+
+## 2026-10-25 注記（#525、所有者決定 2026-10-25）
+
+[ADR 0040](0040-human-lab-observation-replaces-judges.md) で、題の「canary・判定器」と、次の行を改めた。
+
+- `lab.json` / `attack.json` に canary の節は無い。6 file は recipe として保存し、判定器には渡さない。Harness は `setup-done` 以後の捕捉と Lab browser の記録を残し、結果を `incomplete(awaiting-human-observation)` にする。
+- 帰結の「`runtime-confirmed` は判定器だけが出す」は、「新しい検証は `runtime-confirmed` を出さず、確定は人間が Lab で観測して行う」に置き換わる。`abort` / wall 超過の `incomplete` と digest 照合は変えない。
+- 2026-10-21 追記の基線: SQL と file の canary の照合（`setup-boundary`）は無くなった。HTTP 捕捉の起点と Lab 状態の基線は取り直す。判定のための role と option の基線は無くなった（Lab 状態の差分には users と options が残る）。
+- 2026-10-21 追記の無効化: 破棄して password を変えるのは設定管理者だけになった。canary 管理者と canary user は作らない。
+- 受入の数字（判定器が結論を出す件数）は、ADR 0040 の受入（handoff の結果が人間の観測待ちに届く件数）に読み替える。
+
+## 2026-10-26 追記: 検証 Lab の単一枠を外す（#432、所有者決定 2026-10-26）
+
+PR #415 は handoff の接続と同時に、host 単位の検証 Lab lease（`src/infrastructure/host-lab-lease.ts`、1 host 1 枠、取得待ち 30 分）を入れた。本 ADR の本文にも PARKING.md の再開条件にも無いまま入ったもので、OPERATIONS.md の「host 共通 claim は持たない」と食い違っていた。所有者は 2026-10-26 に「検証ラボの並列数は制限しません」と決めた。
+
+### 決定
+
+- lease を削除する。`verify next --handoff`、`review reverify --handoff`、`lab up --for-review` の Lab は同じ host で何台でも同時に立ち、互いを待たない。Harness は台数の上限も soft な上限も置かない。
+- host への公開は Lab ごとに port を取る。`--port` と `--db-port` を省くと Docker が空いている `127.0.0.1` の port を選び、Harness は実際に bind された port を `lab.json` の `host.url` と `attack.json` の `database.port` に書く。skill は今までどおりこの 2 file だけを読む。skill 本文は変えない。
+- lease が担っていた「広い掃除が他のプロセスの Lab を消さない」守りだけは、Lab ごとの持ち主記録（`~/.local/state/wordpress-bounty-harness-host/lab-owners/<labId>.json`、pid・boot id・process の開始 tick）で置き換える。Lab は最初の Docker 資源を作る前に記録を書き、持ち主が片付けを試みた後に（成否を問わず）消す。片付けで残ったものは残骸になる。`lab cleanup` は、持ち主が生きている Lab を一覧にも削除にも出さない。持ち主が死んだ Lab と記録の無い Lab は残骸として扱う。runner の掃除は ADR 0036 の 2026-10-25 追記（#526）で Lab を名指ししなくなったので、持ち主の記録も読まず、消さない。記録は排他ではなく、誰も待たせない。Lab ID を名指しする照合（`lab down`、campaign 再開前の残存確認）は記録を見ずに今までどおり数える。
+- 移行の間だけ、旧版のプロセスが lease の `verification.json` に持つ生きた Lab も持ち主ありとして扱う。旧版が host から消えたら、この読取を消す。
+- #526 より前の checkout で動く runner は、Lab も掃除し、持ち主の記録を読まない。同じ state の `verify next` も、#526 以後は sweep-hold を置かない。そのため、並列の `verify next` を使う前に runner を新しい checkout で再起動する。
+
+### 変えないこと
+
+- 1 回の検証の中で Lab を 1 台ずつ使う順序（agent の Lab を片付けてから再現用の Lab を立てる）、`verification-finished` の形、判定器、Snapshot digest の照合、gVisor と内部 network の隔離。
+
+### 消し方
+
+この節と #432 の PR を revert する。lease が戻り、検証 Lab は再び 1 host 1 枠になり、port は `--port 8080` / `--db-port 3307` の既定に戻る。

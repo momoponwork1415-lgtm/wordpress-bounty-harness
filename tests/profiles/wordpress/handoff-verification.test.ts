@@ -15,16 +15,32 @@ import { Ledger } from "../../../src/ledger/index.js";
 import {
   admitWordPressFinding,
   readWordPressFinding,
+  type WordPressFinding,
 } from "../../../src/profiles/wordpress/discovery/finding.js";
+import { readLabOwners } from "../../../src/infrastructure/lab-owner-record.js";
 import { openWordPressLab } from "../../../src/profiles/wordpress/lab/index.js";
+import { wordPressScenario } from "../../../src/profiles/wordpress/lab/scenarios.js";
+import { createWordPressScopeFacts } from "../../../src/profiles/wordpress/scope-facts.js";
+import {
+  createWordpressScopeEvaluator,
+  loadWordpressScopePolicy,
+} from "../../../src/profiles/wordpress/scope-policy.js";
+import { observedReviewLabPackage } from "../../../src/profiles/wordpress/lab/observed-review-lab.js";
+import { createWordPressAttemptObserver } from "../../../src/profiles/wordpress/verification/attempt-observer.js";
 import {
   HandoffVerifier,
   WBH_VERIFY_SKILL_ID,
 } from "../../../src/profiles/wordpress/verification/handoff-verifier.js";
-import { createWordPressJudges } from "../../../src/profiles/wordpress/verification/judges.js";
-import { wordpressReproductionRenderer } from "../../../src/profiles/wordpress/verification/reproduction-package.js";
+import { createWordPressVerifierRecordReader } from "../../../src/profiles/wordpress/verification/verifier-record.js";
 import { WordPressVerifier } from "../../../src/profiles/wordpress/verification/wordpress-verifier.js";
+import {
+  currentManualObservation,
+  recordManualObservation,
+  recordManualObservationLabReady,
+} from "../../../src/review/manual-observation.js";
 import type { Snapshot } from "../../../src/snapshot/index.js";
+import { Review } from "../../../src/review/index.js";
+import { exportReviewBundleV2 } from "../../../src/review/manual-observation-export.js";
 import { Verification } from "../../../src/verification/index.js";
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
@@ -34,15 +50,19 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 
-/** The fake Docker host: roles, sessions (cookie → login) and the recorder's bytes. */
+/** The fake Docker host: sessions (cookie → login), the recorder's bytes and browser visits. */
 type LabState = {
   attacker: string;
-  readonly roles: Map<string, string[]>;
   readonly sessions: Map<string, string>;
   capture: Buffer;
-  seededRow: string;
   readonly revoked: string[];
+  readonly visits: string[];
 };
+const PNG = Buffer.concat([
+  Buffer.from("89504e470d0a1a0a", "hex"),
+  Buffer.from("synthetic screen"),
+]);
+const MARKER = "4815162342";
 
 /** One recorder line for a host request carrying `cookie`. */
 function send(state: LabState, cookie: string, path: string): void {
@@ -72,45 +92,126 @@ async function until(path: string): Promise<string> {
   throw new Error(`${path} did not appear`);
 }
 
+/** The fake Docker daemon that several Labs share: its objects and the ports it bound. */
+type DockerHost = {
+  readonly containers: Set<string>;
+  readonly networks: Set<string>;
+  readonly volumes: Set<string>;
+  readonly ports: Map<string, number>;
+  nextPort: number;
+};
+const dockerHost = (): DockerHost => ({
+  containers: new Set(),
+  networks: new Set(),
+  volumes: new Set(),
+  ports: new Map(),
+  nextPort: 32768,
+});
+
+/** Keeps the fake daemon's objects; answers listings and `docker port`, else null. */
+function daemon(host: DockerHost, args: readonly string[]) {
+  const [verb, object] = args;
+  const named = args[args.indexOf("--name") + 1] ?? "";
+  const operands = args.filter((arg) => !arg.startsWith("-"));
+  const listing = (names: Set<string>) => ({
+    exitCode: 0,
+    stdout: [...names].join("\n"),
+    stderr: "",
+  });
+  if ((verb === "run" && args.includes("--detach")) || verb === "create") {
+    host.containers.add(named);
+    args.forEach((arg, index) => {
+      const published = /^127\.0\.0\.1:(\d*):(\d+)$/.exec(arg);
+      if (args[index - 1] === "--publish" && published !== null)
+        host.ports.set(
+          `${named} ${published[2]}/tcp`,
+          published[1] === "" ? host.nextPort++ : Number(published[1]),
+        );
+    });
+  }
+  if (verb === "rm")
+    for (const name of operands.slice(1)) host.containers.delete(name);
+  if (verb === "network" && object === "create")
+    host.networks.add(args.at(-1)!);
+  if (verb === "network" && object === "rm")
+    for (const name of operands.slice(2)) host.networks.delete(name);
+  if (verb === "volume" && object === "create") host.volumes.add(args.at(-1)!);
+  if (verb === "volume" && object === "rm")
+    for (const name of operands.slice(2)) host.volumes.delete(name);
+  if (verb === "ps") return listing(host.containers);
+  if (verb === "network" && object === "ls") return listing(host.networks);
+  if (verb === "volume" && object === "ls") return listing(host.volumes);
+  if (verb === "port") {
+    const bound = host.ports.get(`${args[1]} ${args[2]}`);
+    return bound === undefined
+      ? { exitCode: 1, stdout: "", stderr: "no public port" }
+      : { exitCode: 0, stdout: `127.0.0.1:${bound}\n`, stderr: "" };
+  }
+  return null;
+}
+
 type Scenario = {
-  /** What the skill does with the setup administrator before `setup-done`. */
-  readonly setup?: (state: LabState) => void;
-  /** What happens after `attack.json`, besides one attacker request. */
-  readonly attack?: (state: LabState) => void;
-  /** The `session.json` text the skill reports. */
-  readonly session?: string;
+  readonly impact?: WordPressFinding["impact"];
+  /** The skill sends no attacker request after `setup-done`. */
+  readonly silent?: boolean;
+  /** The victim pages `route.json` declares for the Lab browser. */
+  readonly victim?: unknown;
+  /** Runs after `attack.json` with the connection `lab.json` named, before the six files. */
+  readonly beforeFiles?: (lab: { readonly url: string }) => Promise<void>;
+  /** A latest-version attempt on a pinned ordinary Lab scenario, as scope needs. */
+  readonly ordinaryLatestVersion?: boolean;
 };
 
 /** The skill's side: setup as the administrator, `setup-done`, then the attacker route. */
 async function skill(directory: string, state: LabState, scenario: Scenario) {
   const lab = JSON.parse(await until(join(directory, "lab.json"))) as {
     administrator: { username: string };
+    host: { url: string };
   };
   state.sessions.set("admin-session", lab.administrator.username);
   send(state, "admin-session", "/wp-admin/options-general.php");
-  scenario.setup?.(state);
   await writeFile(join(directory, "setup-done"), "");
-  await until(join(directory, "attack.json"));
+  const attack = JSON.parse(
+    await until(join(directory, "attack.json")),
+  ) as Record<string, unknown>;
   const revokedBeforeAttack = [...state.revoked];
   state.sessions.set("attacker-session", state.attacker);
-  send(state, "attacker-session", "/synthetic");
-  scenario.attack?.(state);
+  if (scenario.silent !== true) send(state, "attacker-session", "/synthetic");
+  await scenario.beforeFiles?.({ url: lab.host.url });
   for (const [name, text] of Object.entries({
-    "route.json":
-      '{"role":"subscriber","defaultSettings":true,"steps":[{"kind":"http","method":"GET","path":"/synthetic","expected":"Administrator access"}]}',
+    "route.json": JSON.stringify({
+      role: "subscriber",
+      defaultSettings: true,
+      steps: [
+        {
+          kind: "http",
+          method: "GET",
+          path: "/synthetic",
+          expected: "The claimed effect",
+        },
+      ],
+      ...(scenario.victim === undefined ? {} : { victim: scenario.victim }),
+    }),
     "http.json":
       '{"exchanges":[{"request":{"method":"GET","path":"/synthetic"},"response":{"body":"ok"}}]}',
-    "session.json": scenario.session ?? "",
+    "session.json": "",
     "steps.md": "Synthetic steps",
     "refutation.md": "",
     precondition: "",
   }))
     await writeFile(join(directory, name), text);
-  return { revokedBeforeAttack };
+  return { revokedBeforeAttack, attack };
 }
 
-/** Real Lab code over a fake Docker host, the real handoff transport and the real judges. */
-async function verifyThroughHandoff(scenario: Scenario) {
+/** Real Lab code over a fake Docker host, the real handoff transport and the real observer. */
+async function verifyThroughHandoff(
+  scenario: Scenario,
+  shared: {
+    readonly host: DockerHost;
+    readonly ownerDirectory?: string;
+    readonly ports: { readonly http: number; readonly database: number };
+  } = { host: dockerHost(), ports: { http: 18080, database: 13307 } },
+) {
   const root = await mkdtemp(join(tmpdir(), "wbh-handoff-e2e-"));
   directories.push(root);
   const sourceDirectory = join(root, "source");
@@ -129,17 +230,15 @@ async function verifyThroughHandoff(scenario: Scenario) {
   const snapshot: Snapshot = { ...body, digest: canonicalDigest(body) };
   const state: LabState = {
     attacker: "",
-    roles: new Map(),
     sessions: new Map(),
     capture: Buffer.alloc(0),
-    seededRow: "",
     revoked: [],
+    visits: [],
   };
   const ok = (stdout = "ok") => ({ exitCode: 0, stdout, stderr: "" });
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
-    leaseDirectory: join(root, "host-lab-lease"),
-    leaseWaitMs: 0,
+    ownerDirectory: shared.ownerDirectory ?? join(root, "lab-owners"),
     images: {
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
@@ -160,6 +259,8 @@ async function verifyThroughHandoff(scenario: Scenario) {
     },
     runner: {
       async run({ args }) {
+        const answered = daemon(shared.host, args);
+        if (answered !== null) return answered;
         const at = (word: string) => args[args.indexOf(word) + 1] ?? "";
         const env = (name: string) =>
           args
@@ -189,21 +290,31 @@ async function verifyThroughHandoff(scenario: Scenario) {
           state.revoked.push(...logins);
           return ok();
         }
-        const cookie = env("WBH_SESSION_COOKIE");
-        if (cookie !== undefined)
-          return ok(`${state.sessions.get(cookie) ?? ""}\n`);
-        if (args.includes("--field=roles"))
-          return ok((state.roles.get(at("get")) ?? ["subscriber"]).join(","));
-        if (at("option") === "get") return ok('"subscriber"\n');
-        const query = args.includes("query") ? at("query") : "";
-        if (query.startsWith("CREATE TABLE"))
-          state.seededRow = /'([a-f0-9]{32})'/.exec(query)?.[1] ?? "";
-        if (query.includes("information_schema")) return ok("1\n");
-        if (query.startsWith("SELECT")) return ok(`1\t${state.seededRow}\n`);
+        const visit = env("WBH_VISIT_PATH");
+        if (visit !== undefined) {
+          // The Lab browser: one victim visit, with a dialog when a marker is declared.
+          state.visits.push(visit);
+          const marker = env("WBH_DIALOG_MARKER");
+          return ok(
+            JSON.stringify({
+              screenshotBase64: PNG.toString("base64"),
+              ...(marker === undefined
+                ? {}
+                : {
+                    dialogEvent: {
+                      type: "alert",
+                      message: marker,
+                      topLevelPageUrlAtEvent: "http://wordpress/?p=1",
+                      topLevelPageOriginAtEvent: "http://wordpress",
+                      frameUrlsAtEvent: ["http://wordpress/?p=1"],
+                    },
+                  }),
+            }),
+          );
+        }
         return ok(args.includes("--porcelain") ? "7" : "ok");
       },
     },
-    nonce: () => "fixed-nonce",
     healthAttempts: 1,
   });
   const store = new PrivateArtifactStore({
@@ -219,7 +330,7 @@ async function verifyThroughHandoff(scenario: Scenario) {
     {
       claim: "Synthetic subscriber escalation claim",
       attackerPosition: "subscriber",
-      impact: "privesc-to-admin",
+      impact: scenario.impact ?? "privesc-to-admin",
       configurationPrecondition: "default",
       brokenProperty: "Synthetic property",
       sourceTrace: [{ file: "example.php", function: "fixture", line: 1 }],
@@ -247,15 +358,28 @@ async function verifyThroughHandoff(scenario: Scenario) {
     category: finding.impact,
     artifacts: [{ kind: "finding", digest: findingDigest }],
   });
+  if (scenario.ordinaryLatestVersion === true)
+    // The latest stable version frozen in this campaign, as `review reverify` records it.
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "snapshot-frozen",
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot.digest,
+      occurredAt: "2026-10-21T00:00:00Z",
+      type: "snapshot-frozen",
+      sourceDigest: snapshot.target.sourceDigest,
+      dependencyDigests: snapshot.dependencies.map(
+        (dependency) => dependency.sourceDigest,
+      ),
+    });
   const clock = () => new Date();
   const directory = join(root, "handoff");
   const verification = new Verification({
     ledger,
     store,
     lab,
-    judges: createWordPressJudges({ store, lab }),
+    observer: createWordPressAttemptObserver({ store, lab }),
     readFinding: readWordPressFinding,
-    renderer: wordpressReproductionRenderer,
     promptVersion: WBH_VERIFY_SKILL_ID,
     // The same composition as `verify next --handoff` in the CLI host.
     verifier: {
@@ -265,7 +389,7 @@ async function verifyThroughHandoff(scenario: Scenario) {
             directory,
             handle: input.lab,
             lab,
-            ports: { http: 18080, database: 13307 },
+            ports: shared.ports,
             reviewExport: async () => '{"schema":"review-export/v1"}',
             clock,
             pollIntervalMs: 5,
@@ -284,89 +408,390 @@ async function verifyThroughHandoff(scenario: Scenario) {
       findingId: finding.findingId,
       verificationId: "verification-1",
       snapshot,
+      ...(scenario.ordinaryLatestVersion === true
+        ? {
+            basis: {
+              kind: "latest-version" as const,
+              findingSnapshotDigest: snapshot.digest,
+            },
+          }
+        : {}),
       setup: {
         schemaVersion: 1,
         snapshotDigest: snapshot.digest,
         siteTitle: "Synthetic",
-        initialPosts: [],
+        // The approved-comment scenario needs a first post to comment on.
+        initialPosts:
+          scenario.ordinaryLatestVersion === true ? ["Welcome"] : [],
         customerRole: false,
+        ...(scenario.ordinaryLatestVersion === true
+          ? {
+              scenario: {
+                id: ORDINARY.id,
+                digest: ORDINARY.digest,
+              },
+            }
+          : {}),
       },
       campaignLabSetupDigest: sha("b"),
-      reconstruction: {
-        wordpressVersion: "6.8",
-        target: snapshot.target,
-        enabledSettings: [],
-        roles: ["unauthenticated", "subscriber"],
-      },
     }),
     skill(directory, state, scenario),
   ]);
   const event = ledger
     .read({ campaignId: "campaign-1", type: "verification-finished" })
     .at(0)?.event;
-  return { result, event, ...observed };
+  return {
+    result,
+    event,
+    ledger,
+    store,
+    finding,
+    state,
+    snapshot,
+    ...observed,
+  };
 }
 
-const escalate = (state: LabState) =>
-  state.roles.set(state.attacker, ["administrator", "subscriber"]);
+const ORDINARY = wordPressScenario("approved-comment-v1")!;
 
-describe("handoff verification through the real transport and judges (#430)", () => {
-  it.each([
-    [
-      "setup gives the attacker account the administrator role",
-      { setup: escalate },
-      { reason: "evidence", nextStep: expect.stringMatching(/role baseline/) },
-    ],
-    [
-      "setup signs in as the administrator canary and reports that session",
+const AWAITING = {
+  status: "incomplete",
+  reason: "awaiting-human-observation",
+} as const;
+
+describe("handoff verification through the real transport and observer (#525)", () => {
+  it("records a finished handoff as awaiting a human observation, with the Harness capture", async () => {
+    const { result, event, store, attack, revokedBeforeAttack } =
+      await verifyThroughHandoff({});
+    expect(result).toMatchObject(AWAITING);
+    expect(event).toMatchObject({
+      type: "verification-finished",
+      promptVersion: WBH_VERIFY_SKILL_ID,
+      evidenceCapture: "harness-captured",
+      result: AWAITING,
+    });
+    // The attacker data carries no canary, and setup ended before it was released.
+    expect(attack).not.toHaveProperty("canary");
+    expect(revokedBeforeAttack).toEqual(["harness-admin"]);
+    if (result.status !== "incomplete" || result.evidenceDigest === undefined)
+      throw new Error("No evidence was recorded");
+    const capture = await store.readFile(
+      result.evidenceDigest,
+      "proxy-capture.jsonl",
+      1024 * 1024,
+    );
+    expect(capture.status).toBe("resolved");
+    // Only what the attacker sent after setup-done is the Harness record.
+    if (capture.status === "resolved") {
+      expect(capture.bytes.toString()).toContain("/synthetic");
+      expect(capture.bytes.toString()).not.toContain("options-general.php");
+    }
+  });
+
+  it("runs two handoffs at once on one host, each on its own free port, and removes only its own Lab (#432)", async () => {
+    const host = dockerHost();
+    const root = await mkdtemp(join(tmpdir(), "wbh-handoff-parallel-"));
+    directories.push(root);
+    const ownerDirectory = join(root, "lab-owners");
+    const urls: string[] = [];
+    let bothLive!: () => void;
+    const together = new Promise<void>((resolve) => (bothLive = resolve));
+    let firstDone!: () => void;
+    const firstRemoved = new Promise<void>((resolve) => (firstDone = resolve));
+    const labIds = () =>
+      new Set(
+        [...host.containers].map((name) =>
+          name.split("-").slice(1, 6).join("-"),
+        ),
+      );
+    let whileBoth: ReadonlySet<string> = new Set();
+    let afterFirst:
+      | {
+          readonly live: ReadonlySet<string>;
+          readonly hosted: ReadonlySet<string>;
+        }
+      | undefined;
+    const reach = async (lab: { readonly url: string }) => {
+      urls.push(lab.url);
+      if (urls.length === 2) {
+        whileBoth = labIds();
+        bothLive();
+      }
+      await together;
+    };
+    const shared = { host, ownerDirectory, ports: { http: 0, database: 0 } };
+    const first = verifyThroughHandoff({ beforeFiles: reach }, shared).finally(
+      () => firstDone(),
+    );
+    const second = verifyThroughHandoff(
       {
-        setup: (state: LabState) =>
-          state.sessions.set("canary-session", "wbh-canary-admin-fixed-nonce"),
-        session: '{"cookie":"canary-session"}',
-      },
-      { reason: "observation" },
-    ],
-    [
-      "the setup administrator's session is used after setup-done",
-      {
-        attack: (state: LabState) => {
-          send(state, "admin-session", "/wp-admin/users.php");
-          escalate(state);
+        beforeFiles: async (lab) => {
+          await reach(lab);
+          await firstRemoved;
+          afterFirst = {
+            live: (await readLabOwners(ownerDirectory)).live,
+            hosted: labIds(),
+          };
         },
       },
-      {
-        reason: "evidence",
-        nextStep: "A post-setup request session differs from the Lab attacker",
-      },
-    ],
-  ] as const)(
-    "keeps the result incomplete when %s",
-    async (_name, scenario: Scenario, reason) => {
-      const { result, event, revokedBeforeAttack } =
-        await verifyThroughHandoff(scenario);
-      expect(result).toMatchObject({ status: "incomplete", ...reason });
-      expect(event).toMatchObject({
-        type: "verification-finished",
-        promptVersion: WBH_VERIFY_SKILL_ID,
-        result: { status: "incomplete", ...reason },
-      });
-      // The setup administrator and the canary principals lost their sessions
-      // before the attacker data was released.
-      expect(revokedBeforeAttack).toEqual([
-        "harness-admin",
-        "wbh-canary-admin-fixed-nonce",
-        "wbh-canary-fixed-nonce",
-      ]);
-    },
-  );
+      shared,
+    );
+    const results = await Promise.all([first, second]);
+    for (const { result } of results) expect(result).toMatchObject(AWAITING);
+    // Both Labs were live together, each behind its own loopback port.
+    expect(whileBoth.size).toBe(2);
+    expect(new Set(urls).size).toBe(2);
+    for (const url of urls)
+      expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d{5}$/);
+    // The first teardown left the second Lab and its owner record in place.
+    expect(afterFirst?.hosted.size).toBe(1);
+    expect(afterFirst?.live).toEqual(afterFirst?.hosted);
+    const [survivor] = afterFirst!.hosted;
+    expect(whileBoth).toContain(survivor);
+    expect([...host.containers, ...host.networks, ...host.volumes]).toEqual([]);
+  });
 
-  it("confirms a change the attacker route makes after setup-done", async () => {
-    const { result, event } = await verifyThroughHandoff({ attack: escalate });
-    expect(result).toMatchObject({
-      status: "runtime-confirmed",
-      judgeId: "wordpress-administrator-principal",
-      conditions: { reachedRole: "administrator", observedVia: "role-change" },
+  it("keeps a handoff with no captured attacker request incomplete(evidence)", async () => {
+    const { result } = await verifyThroughHandoff({ silent: true });
+    expect(result).toMatchObject({ status: "incomplete", reason: "evidence" });
+  });
+
+  it("has the Lab browser record the victim pages' marker dialog without deciding (stored XSS)", async () => {
+    const { result, event, store, state } = await verifyThroughHandoff({
+      impact: "stored-xss",
+      victim: {
+        role: "administrator",
+        paths: ["/wp-admin/edit-comments.php"],
+        dialogMarker: MARKER,
+      },
     });
-    expect(event).toMatchObject({ evidenceCapture: "harness-captured" });
+    expect(result).toMatchObject(AWAITING);
+    expect(state.visits).toEqual(["/wp-admin/edit-comments.php"]);
+    if (result.status !== "incomplete" || result.evidenceDigest === undefined)
+      throw new Error("No evidence was recorded");
+    const record = await store.readJson(
+      result.evidenceDigest,
+      "lab-browser-observation.json",
+      (await import("zod")).z.looseObject({}),
+      64 * 1024,
+    );
+    expect(record).toMatchObject({
+      status: "resolved",
+      value: {
+        observerId: "wordpress-lab-browser",
+        status: "visited",
+        victimRole: "administrator",
+        dialog: { marker: MARKER, visitIndex: 0 },
+      },
+    });
+    const recipe =
+      event?.type === "verification-finished"
+        ? event.artifacts.find((artifact) => artifact.kind === "recipe")
+        : undefined;
+    const observed = await createWordPressVerifierRecordReader({
+      store,
+    }).read({
+      recipeDigest: recipe!.digest,
+      evidenceDigest: result.evidenceDigest,
+    });
+    expect(observed.victim).toMatchObject({
+      role: "administrator",
+      firing: "observed",
+      screenshot: expect.stringContaining("victim-page-after-dialog.png"),
+    });
+  });
+
+  it("lets a named person record a Lab observation for the result (#525)", async () => {
+    const { result, event, ledger, store, finding } =
+      await verifyThroughHandoff({});
+    if (event?.type !== "verification-finished") throw new Error("no event");
+    const ref = {
+      campaignId: "campaign-1",
+      findingId: finding.findingId,
+      verificationId: event.verificationId,
+      snapshotDigest: event.snapshotDigest,
+    };
+    const admitted = await observedReviewLabPackage({ ledger, store, ref });
+    expect(admitted).toEqual({
+      packageDigest: expect.stringMatching(/^sha256:/),
+      recipeDigest: expect.stringMatching(/^sha256:/),
+      evidenceDigest:
+        result.status === "incomplete" ? result.evidenceDigest : undefined,
+    });
+    const receipt = await recordManualObservationLabReady({
+      ledger,
+      store,
+      ref,
+      packageDigest: admitted!.packageDigest,
+      sessionLabel: "wbh-review-net",
+    });
+    const recorded = await recordManualObservation({
+      ledger,
+      store,
+      ref,
+      packageDigest: admitted!.packageDigest,
+      sessionReceiptDigest: receipt,
+      evidence: new TextEncoder().encode("screen recording notes"),
+      result: "match",
+      recordedBy: "owner",
+    });
+    expect(recorded).toMatchObject({
+      type: "manual-observation-recorded",
+      result: "match",
+    });
+    expect(currentManualObservation(ledger, ref)).toMatchObject({
+      result: "match",
+      recordedBy: "owner",
+    });
+    // The verification event itself is never rewritten into a confirmation.
+    expect(
+      ledger.read({ type: "verification-finished" }).at(-1)?.event,
+    ).toMatchObject({ result: AWAITING });
+  });
+
+  it("takes a human-observed result to a Submission Candidate and an exact authorization (#525)", async () => {
+    const { result, event, ledger, store, finding, snapshot } =
+      await verifyThroughHandoff({ ordinaryLatestVersion: true });
+    expect(result).toMatchObject(AWAITING);
+    if (event?.type !== "verification-finished") throw new Error("no event");
+    const ref = {
+      campaignId: "campaign-1",
+      findingId: finding.findingId,
+      verificationId: event.verificationId,
+      snapshotDigest: event.snapshotDigest,
+    };
+    // The selection record scope reads, as `campaign run` writes it.
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "target-selected",
+      campaignId: "campaign-1",
+      snapshotDigest: snapshot.digest,
+      occurredAt: "2026-10-21T00:00:00Z",
+      type: "target-selected",
+      selectionId: "selection-1",
+      artifacts: [
+        {
+          kind: "target-selection",
+          digest: await store.putFiles({
+            "target-selection.json": canonicalJson({
+              activeInstallations: 5_000,
+              slug: "synthetic-plugin",
+            }),
+          }),
+        },
+      ],
+    });
+    const review = new Review({
+      ledger,
+      artifactStore: store,
+      scopeEvaluator: createWordpressScopeEvaluator(
+        await loadWordpressScopePolicy(),
+      ),
+      factsProvider: createWordPressScopeFacts({ ledger, store }),
+    });
+    const reproduce = () =>
+      review.recordDecision({
+        ref,
+        decision: "defer",
+        reasonCode: "manual-reproduction",
+        openedEvidence: [],
+        decidedBy: "owner",
+        reproduction: { result: "match" },
+      });
+    // Without a person's Lab observation there is nothing to reproduce or assess.
+    await expect(reproduce()).rejects.toThrow(
+      "A matching evidence-backed verification is required",
+    );
+    await expect(review.assessScope({ ref })).rejects.toThrow(
+      "A matching evidence-backed verification is required",
+    );
+
+    const admitted = await observedReviewLabPackage({ ledger, store, ref });
+    if (admitted === null) throw new Error("no review Lab package");
+    const receipt = await recordManualObservationLabReady({
+      ledger,
+      store,
+      ref,
+      packageDigest: admitted.packageDigest,
+      sessionLabel: "wbh-review-net",
+    });
+    await recordManualObservation({
+      ledger,
+      store,
+      ref,
+      packageDigest: admitted.packageDigest,
+      sessionReceiptDigest: receipt,
+      evidence: new TextEncoder().encode("screen recording notes"),
+      result: "match",
+      recordedBy: "owner",
+    });
+    // The observation alone is not the reviewer's reproduction.
+    await expect(review.assessScope({ ref })).rejects.toThrow(
+      "A matching evidence-backed verification is required",
+    );
+    await reproduce();
+    expect(
+      ledger.read({ type: "human-reproduction-recorded" }).at(-1)?.event,
+    ).toMatchObject({
+      verificationId: ref.verificationId,
+      reproductionPackageDigest: admitted.packageDigest,
+      result: "match",
+    });
+
+    // wbh-review and wbh-report read both human records from the v2 export.
+    const exported = await exportReviewBundleV2({
+      ledger,
+      store,
+      campaignId: "campaign-1",
+      findingId: finding.findingId,
+      verifierRecord: createWordPressVerifierRecordReader({ store }),
+    });
+    expect(exported.verification).toMatchObject({
+      status: "incomplete",
+      reason: "awaiting-human-observation",
+    });
+    expect(exported.review).toMatchObject({
+      manualObservation: { result: "match", evidenceStatus: "available" },
+      humanReproduction: { result: "match" },
+    });
+
+    const assessed = await review.assessScope({ ref });
+    expect(assessed.map((item) => [item.programmeId, item.status])).toEqual([
+      ["wordfence", "in-scope"],
+      ["patchstack", "in-scope"],
+    ]);
+    const wordfence = assessed.find(
+      (item) => item.programmeId === "wordfence",
+    )!;
+    const draft = await review.saveDraft({
+      assessmentId: wordfence.id,
+      content: "Synthetic report reviewed by the owner",
+      preparedBy: "human",
+    });
+    expect(draft).toMatchObject({
+      candidateId: expect.stringMatching(/^sha256:/),
+      destination: "wordfence",
+    });
+    await review.recordDecision({
+      ref,
+      decision: "accept",
+      reasonCode: "manual-reproduction",
+      openedEvidence: [],
+      duplicate: { status: "no-match" },
+      decidedBy: "owner",
+    });
+    const exact = {
+      candidateId: draft.candidateId,
+      draftDigest: draft.digest,
+      destination: "wordfence",
+    };
+    await review.authorizeExternalAction({ ...exact, authorizedBy: "owner" });
+    expect(await review.admitExternalAction(exact)).toMatchObject({
+      status: "authorized",
+    });
+    // The verification event is never rewritten into a confirmation.
+    expect(
+      ledger.read({ type: "verification-finished" }).at(-1)?.event,
+    ).toMatchObject({ result: AWAITING });
   });
 });

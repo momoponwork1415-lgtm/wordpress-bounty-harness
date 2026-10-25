@@ -28,6 +28,7 @@ const slugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/);
 const versionSchema = z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$/);
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const MAX_PLUGIN_DEPENDENCIES = 16;
+const WOOCOMMERCE_SLUG = "woocommerce";
 
 const pinsetBodySchema = z.strictObject({
   kind: z.literal("wordpress-plugin-dependency-pinset"),
@@ -47,14 +48,33 @@ const pinsetBodySchema = z.strictObject({
       explicitlyPinned: z.boolean(),
     }),
   ),
+  // Present only when a header-derived dependency was left out (#467 review).
+  skippedDependencies: z
+    .array(
+      z.strictObject({
+        slug: slugSchema,
+        declaredBy: z.array(slugSchema),
+        reason: z.literal("header-derived-unpinned"),
+      }),
+    )
+    .optional(),
 });
 const pinsetSchema = pinsetBodySchema.safeExtend({ digest: digestSchema });
 type PinsetBody = z.infer<typeof pinsetBodySchema>;
 
-/** Match WordPress get_file_data(): only the first 8 KiB of the main PHP file. */
-export function requiredPluginSlugs(
-  mainPluginBytes: Uint8Array,
-): readonly string[] {
+/**
+ * Match WordPress get_file_data(): only the first 8 KiB of the main PHP file.
+ * `Requires Plugins` is the WordPress header. A plugin that names a WooCommerce
+ * version in `WC requires at least` / `WC tested up to` presupposes WooCommerce
+ * even without it, so that header maps to the `woocommerce` slug. The WC header
+ * does not tell a required integration from an optional one, so its slug is
+ * returned separately as `headerDerived` (only when `Requires Plugins` does not
+ * already name it).
+ */
+function pluginDependencyHeaders(mainPluginBytes: Uint8Array): {
+  readonly required: readonly string[];
+  readonly headerDerived: readonly string[];
+} {
   const header = Buffer.from(mainPluginBytes)
     .subarray(0, 8 * 1024)
     .toString("utf8")
@@ -63,16 +83,36 @@ export function requiredPluginSlugs(
     .exec(header)?.[1]
     ?.replace(/\s*(?:\*\/|\?>).*$/, "")
     .trim();
-  if (raw === undefined || raw === "") return [];
-  const slugs = raw.split(",").map((value) => value.trim());
+  const required = [
+    ...new Set(
+      raw === undefined || raw === ""
+        ? []
+        : raw.split(",").map((v) => v.trim()),
+    ),
+  ];
+  const headerDerived =
+    !required.includes(WOOCOMMERCE_SLUG) &&
+    /^(?:[ \t]*<\?(?:php)?)?[ \t\/*#@]*WC (?:requires at least|tested up to):[ \t]*[^\s*]/im.test(
+      header,
+    )
+      ? [WOOCOMMERCE_SLUG]
+      : [];
   if (
-    slugs.length > MAX_PLUGIN_DEPENDENCIES ||
-    slugs.some((slug) => !slugSchema.safeParse(slug).success)
+    required.length + headerDerived.length > MAX_PLUGIN_DEPENDENCIES ||
+    required.some((slug) => !slugSchema.safeParse(slug).success)
   )
     throw new SourceAcquisitionError("deferred", {
       reason: "invalid-required-plugins-header",
     });
-  return [...new Set(slugs)];
+  return { required, headerDerived };
+}
+
+/** Every slug the headers name, `Requires Plugins` first. */
+export function requiredPluginSlugs(
+  mainPluginBytes: Uint8Array,
+): readonly string[] {
+  const { required, headerDerived } = pluginDependencyHeaders(mainPluginBytes);
+  return [...required, ...headerDerived];
 }
 
 function acquisitionKind(
@@ -116,12 +156,21 @@ export function openWordPressOrgPluginDependencySource(options: {
   const declaredBy = async (
     packet: TargetIntakePacket,
     capturedSource?: AcquiredSource,
-  ) =>
-    requiredPluginSlugs(
+  ) => {
+    const { required, headerDerived } = pluginDependencyHeaders(
       await (capturedSource ?? sourceFromPacket(packet)).readFile(
         packet.mainPluginFile,
       ),
     );
+    return [
+      ...required.map((slug) => ({ slug, headerDerived: false })),
+      // WooCommerce's own header names its WooCommerce version; it is not a
+      // dependency of itself.
+      ...headerDerived
+        .filter((slug) => slug !== packet.canonicalInstallDirectory)
+        .map((slug) => ({ slug, headerDerived: true })),
+    ];
+  };
   const acquire = async (
     slug: string,
     version: string,
@@ -246,23 +295,32 @@ export function openWordPressOrgPluginDependencySource(options: {
     }
 
     const roots = [
-      ...(await declaredBy(targetPacket, targetSource)).map((slug) => ({
-        slug,
-        parent: targetSlug,
-      })),
+      ...(await declaredBy(targetPacket, targetSource)).map(
+        ({ slug, headerDerived }) => ({
+          slug,
+          parent: targetSlug,
+          headerDerived,
+        }),
+      ),
       ...Object.keys(explicitPins)
         .sort()
-        .map((slug) => ({ slug, parent: null })),
-      ...explicitSlugs.map((slug) => ({ slug, parent: null })),
+        .map((slug) => ({ slug, parent: null, headerDerived: false })),
+      ...explicitSlugs.map((slug) => ({
+        slug,
+        parent: null,
+        headerDerived: false,
+      })),
     ];
     const active = new Set<string>();
     const visited = new Set<string>();
     const entries: PinsetBody["dependencies"][number][] = [];
     const sources: AcquiredSource[] = [];
     const declaredParents = new Map<string, Set<string>>();
+    const skippedParents = new Map<string, Set<string>>();
     const visit = async (
       slug: string,
       parent: string | null,
+      headerDerived: boolean,
     ): Promise<void> => {
       if (slug === targetSlug || active.has(slug))
         throw new SourceAcquisitionError("deferred", {
@@ -273,6 +331,20 @@ export function openWordPressOrgPluginDependencySource(options: {
       if (parent !== null) parents.add(parent);
       declaredParents.set(slug, parents);
       if (visited.has(slug)) return;
+      // Under pinned-only, a slug only the WC header names is optional: the
+      // header cannot say the target needs it, and fixed dev-set or reverify
+      // policies predate the header rule. Record the omission in the pinset.
+      if (
+        headerDerived &&
+        parent !== null &&
+        versionPolicy === "pinned-only" &&
+        explicitPins[slug] === undefined
+      ) {
+        const skipped = skippedParents.get(slug) ?? new Set<string>();
+        skipped.add(parent);
+        skippedParents.set(slug, skipped);
+        return;
+      }
       if (visited.size + active.size >= MAX_PLUGIN_DEPENDENCIES)
         throw new SourceAcquisitionError("quota-exceeded", {
           reason: "too-many-required-plugins",
@@ -307,7 +379,8 @@ export function openWordPressOrgPluginDependencySource(options: {
       const version =
         explicitPins[slug] ?? observation.observation.stableVersion;
       const packet = await acquire(slug, version, observation.observationRef);
-      for (const child of await declaredBy(packet)) await visit(child, slug);
+      for (const child of await declaredBy(packet))
+        await visit(child.slug, slug, child.headerDerived);
       active.delete(slug);
       visited.add(slug);
       entries.push({
@@ -320,7 +393,15 @@ export function openWordPressOrgPluginDependencySource(options: {
       });
       sources.push(sourceFromPacket(packet));
     };
-    for (const { slug, parent } of roots) await visit(slug, parent);
+    for (const { slug, parent, headerDerived } of roots)
+      await visit(slug, parent, headerDerived);
+    const skippedDependencies = [...skippedParents]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([slug, parents]) => ({
+        slug,
+        declaredBy: [...parents].sort(),
+        reason: "header-derived-unpinned" as const,
+      }));
 
     const body = pinsetBodySchema.parse({
       kind: "wordpress-plugin-dependency-pinset",
@@ -334,6 +415,7 @@ export function openWordPressOrgPluginDependencySource(options: {
         ...entry,
         declaredBy: [...(declaredParents.get(entry.slug) ?? [])].sort(),
       })),
+      ...(skippedDependencies.length === 0 ? {} : { skippedDependencies }),
     });
     const pinset = pinsetSchema.parse({
       ...body,

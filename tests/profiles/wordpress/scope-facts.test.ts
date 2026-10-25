@@ -4,7 +4,10 @@ import {
   assessWordpressScope,
   loadWordpressScopePolicy,
 } from "../../../src/profiles/wordpress/scope-policy.js";
-import { wordpressScopeFacts } from "../../../src/profiles/wordpress/scope-facts.js";
+import {
+  wordpressHumanObservedScopeFacts,
+  wordpressScopeFacts,
+} from "../../../src/profiles/wordpress/scope-facts.js";
 
 const target = { activeInstallations: 5_000 };
 const route = { attackerRole: "subscriber", defaultSettings: "true" };
@@ -251,5 +254,55 @@ describe("WordPress scope facts from judge conditions", () => {
       ordinaryScenarioVerified: true,
     });
     expect(facts.victimRole).toBe("self");
+  });
+});
+
+describe("WordPress scope facts from a person's Lab observation (#525)", () => {
+  const observed = (category: string, victimRole?: "administrator" | "self") =>
+    wordpressHumanObservedScopeFacts({
+      category,
+      attacker: "subscriber",
+      ...(victimRole === undefined ? {} : { victimRole }),
+      target,
+      latestVersionVerified: true,
+      ordinaryScenarioVerified: true,
+    });
+
+  it("reads the claimed effect from the match and the victim from the Lab browser record", async () => {
+    const policy = await loadWordpressScopePolicy();
+    const xss = observed("stored-xss", "administrator");
+    expect(xss).toMatchObject({
+      observations: ["javascript-executed"],
+      victimRole: "administrator",
+      victimPrincipal: "separate",
+    });
+    // Site-wide reach was a judge condition; Patchstack still needs it.
+    expect(
+      assessWordpressScope(policy, xss).map((item) => [
+        item.programme,
+        item.status,
+      ]),
+    ).toEqual([
+      ["wordfence", "in-scope"],
+      ["patchstack", "ambiguous"],
+    ]);
+    expect(
+      assessWordpressScope(policy, observed("stored-xss", "self")).map(
+        (item) => item.reason,
+      ),
+    ).toEqual(["self-xss", "self-xss"]);
+  });
+
+  it("does not imply path and extension control for a file read", async () => {
+    const facts = observed("arbitrary-file-read");
+    expect(facts.observations).toEqual(["canary-file-read"]);
+    expect(
+      assessWordpressScope(await loadWordpressScopePolicy(), facts).map(
+        (item) => [item.programme, item.status],
+      ),
+    ).toEqual([
+      ["wordfence", "in-scope"],
+      ["patchstack", "ambiguous"],
+    ]);
   });
 });

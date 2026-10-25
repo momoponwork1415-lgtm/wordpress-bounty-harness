@@ -41,9 +41,27 @@ for (const [c, id] of process.argv.slice(2).map((s) => s.split("="))) {
 
 - 1 campaign の流れ: `target-selected` → `snapshot-frozen` → `lab-provisioned` → `discovery-run-started`（explore 1 + child 3）→ `candidate-normalized` → `finding-recorded` / `finding-parked` / `lead-recorded` → `discovery-run-finished` → `discovery-concluded` → `verifier-run-finished` → `verification-finished`。
 - 失敗の場所: `lab-provisioned.status failed`（failureStage, reason）、`discovery-run-finished.reason`（provider / schema / sandbox / policy / evidence、`reasonDetail` に `provider-cyber-policy` や `timed-out`）、`target-skipped.reason`（stage freeze / discovery / verification）、`verification-finished.result.reason`（incomplete の 10 種）。
-- 時刻: `occurredAt` はホストの時計。ずれていることがあるので、長さは `wallTimeMs` で読む。#212 が直るまで、同じ run の started と finished は同じ `occurredAt` を持つ。
+- 時刻: `occurredAt` はホストの時計。ずれていることがあるので、長さは `wallTimeMs` で読む。#212 の修正（A2）より前の探索 event は、Root も子も Finding もすべて Trial 開始時刻を持つ。修正後は、各 event が記録した時刻を持つ。子の実際の開始と終了は receipt の `startedAt` / `completedAt` で読む。旧 event は書き換えない。
 - 「Trial に数えない run」は `discovery-run-finished.observed`（filesRead、childThreadsObserved、brokerMetrics.forwardedRequests）で判る。
 - `incomplete` は陰性ではない。件数を「候補 0 件」に混ぜない。
+
+## Trial の時系列を出す
+
+Root の委任 → 子の調査 → 報告 → Root の次の判断を、1 Trial ずつ時系列にする読取器。台帳と Private Evidence と transcript を読むだけで、何も書かない（`scripts/trial-timeline.mjs`、Node 22 の `node:sqlite` を `readOnly` で開く）。
+
+```bash
+node scripts/trial-timeline.mjs --state <state> --campaign <id>                      # campaign の Trial 一覧
+node scripts/trial-timeline.mjs --state <state> --campaign <id> --trial <trialId>    # 1 Trial の時系列（--run <runId> でも指せる）
+node scripts/trial-timeline.mjs --state <state> --campaign <id> --trial <trialId> --json
+```
+
+`--work <dir>` は transcript の置き場（既定 `~/.local/share/wordpress-bounty-harness/work`、中の `provider-attachments/`）。無くても台帳と receipt の列は出る。
+
+- 出すもの: Root の開始と終了、子の委任（時刻、委任文の sha256 と文字数）、子の終了（wall、`observed` の toolCalls / filesRead / uniqueFilesRead）、子ごとの Finding / parked / Lead の件数、子の報告が Root に渡った時刻とその後の Root の最初の行動、Root の最初の最終報告の時刻、同一スレッドへの追依頼の回数、再開区間（segment）、終了理由。
+- 出さないもの: 委任文・報告・候補の本文、payload、file の中身。digest、件数、時刻だけ（不変条件 8）。ラベルは、短い識別子だけをそのまま、それ以外は digest にして出す。
+- 出どころ: 時刻は receipt の `startedAt` / `completedAt` と transcript の `timestamp` から取る。台帳の `occurredAt` は使わない（#212）。Claude は Root の session transcript（`Agent` の `tool_use`、`queue-operation` の task-notification、`StructuredOutput` が最終報告）。Codex は Root の rollout（`spawn_agent`、`followup_task`、`SubAgentActivity`、`phase: final_answer`）と子の rollout。session transcript が無い receipt は run の stream で代える（時刻が近似になる）。
+- Codex の委任文は暗号化されていて、委任文の digest は `unavailable`。`task_name` と暗号文の長さだけ出す。
+- 読み方の注意: 出力末尾の「Not derivable today」に、その Trial で取れなかったものを列挙する。取れなかったものを 0 と読まない。
 
 ## 開かないもの
 

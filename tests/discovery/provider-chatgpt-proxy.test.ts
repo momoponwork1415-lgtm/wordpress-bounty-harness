@@ -26,7 +26,9 @@ type Received = {
   readonly body: string;
 };
 
-async function open(options: { maxRequests?: number } = {}) {
+async function open(
+  options: { maxRequests?: number; upstreamRateLimit?: boolean } = {},
+) {
   const accessToken = `real-access-${randomBytes(24).toString("hex")}`;
   const accountId = `real-account-${randomBytes(8).toString("hex")}`;
   const grantToken = randomBytes(32).toString("base64url");
@@ -41,6 +43,14 @@ async function open(options: { maxRequests?: number } = {}) {
         headers: request.headers,
         body: Buffer.concat(chunks).toString("utf8"),
       });
+      if (options.upstreamRateLimit) {
+        response.writeHead(429, {
+          "content-type": "application/json",
+          "retry-after": "7",
+        });
+        response.end('{"error":"rate-limited"}');
+        return;
+      }
       response.writeHead(200, { "content-type": "text/event-stream" });
       // An upstream echo of the token must not reach the agent, even when it
       // arrives split across two streamed chunks.
@@ -93,7 +103,11 @@ async function open(options: { maxRequests?: number } = {}) {
     readonly body?: string;
     readonly authorization?: string;
   }) =>
-    new Promise<{ status: number; body: string }>((resolve, reject) => {
+    new Promise<{
+      status: number;
+      headers: IncomingHttpHeaders;
+      body: string;
+    }>((resolve, reject) => {
       const request = httpsRequest(
         {
           host: "127.0.0.1",
@@ -114,6 +128,7 @@ async function open(options: { maxRequests?: number } = {}) {
           response.on("end", () =>
             resolve({
               status: response.statusCode ?? 0,
+              headers: response.headers,
               body: Buffer.concat(chunks).toString("utf8"),
             }),
           );
@@ -133,6 +148,23 @@ async function open(options: { maxRequests?: number } = {}) {
 }
 
 describe("ChatGPT subscription egress proxy", () => {
+  it("passes the upstream 429 retry delay to the Codex CLI", async () => {
+    const { responses, received, proxy } = await open({
+      upstreamRateLimit: true,
+    });
+    const limited = await responses("gpt-6-luna");
+    expect(limited.status).toBe(429);
+    expect(limited.headers["retry-after"]).toBe("7");
+    expect(received).toHaveLength(1);
+    expect(
+      await (await fetch(`${proxy.healthOrigin ?? ""}/healthz`)).json(),
+    ).toMatchObject({
+      forwardedRequests: 1,
+      requestLimitExceeded: 0,
+      upstreamClientError: 1,
+    });
+  });
+
   it("logs connection refusal and upstream status without credentials or payloads", async () => {
     const lines: string[] = [];
     const write = vi

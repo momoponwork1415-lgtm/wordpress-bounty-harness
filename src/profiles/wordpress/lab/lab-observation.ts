@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import { z } from "zod";
 
 import {
@@ -9,23 +7,12 @@ import {
   type HttpCaptureRead,
 } from "../../../lab/capture.js";
 import type { LabReachability } from "../../../lab/index.js";
-import { BEACON_LOG } from "./container-startup.js";
 import type {
-  ExecutionCanary,
-  ScriptCanary,
-  WordPressCanaryFilesObservation,
-  WordPressCanaryTableObservation,
   WordPressDialogEvent,
-  WordPressExecutionObservation,
-  WordPressFileCanary,
   WordPressLabHandle,
-  WordPressOptionsObservation,
-  WordPressScriptContext,
-  WordPressSessionObservation,
-  WordPressStoredScriptFailurePhase,
-  WordPressStoredScriptFailureCode,
-  WordPressStoredScriptObservation,
   WordPressVictimBrowserDiagnostic,
+  WordPressVictimPagesFailureCode,
+  WordPressVictimPagesObservation,
 } from "./contract.js";
 import type { WordPressLabSession } from "./lab-session.js";
 
@@ -55,8 +42,6 @@ const victimBrowserDiagnosticSchema = z.strictObject({
     imageCount: diagnosticCountSchema,
     brokenImageCount: diagnosticCountSchema,
     inlineHandlerCount: diagnosticCountSchema,
-    canaryAttributeCount: diagnosticCountSchema,
-    canaryInlineHandlerCount: diagnosticCountSchema,
   }),
   runtime: z.strictObject({
     pageErrorCounts: z.strictObject({
@@ -74,6 +59,10 @@ const victimBrowserDiagnosticSchema = z.strictObject({
 });
 const browserVisitOutputSchema = z.strictObject({
   screenshotBase64: z.string(),
+  /** Status of the response to the visited path itself, before any action. */
+  httpStatus: z.number().int().min(100).max(599).optional(),
+  dialogCount: diagnosticCountSchema.optional(),
+  consoleErrorCount: diagnosticCountSchema.optional(),
   dialogEvent: z
     .strictObject({
       type: z.literal("alert"),
@@ -88,13 +77,13 @@ const browserVisitOutputSchema = z.strictObject({
 
 class BrowserVisitFailure extends Error {
   constructor(
-    readonly failureCode: WordPressStoredScriptFailureCode,
+    readonly failureCode: WordPressVictimPagesFailureCode,
     readonly privateDiagnostic?: Buffer,
   ) {
     super(`Browser visit failed:${failureCode}`);
   }
 }
-/** One page visit by the Lab's observer; only nonce beacons confirm execution. */
+/** One victim page visit by the Lab's observer; it records, and never decides. */
 const BROWSER_VISIT = `const { chromium } = require("playwright");
 (async () => {
   const browser = await chromium.launch({ headless: true });
@@ -103,7 +92,10 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   const dialogMarker = process.env.WBH_DIALOG_MARKER ?? "";
   const markerDialogs = new Map();
   let recordingRuntime = false;
+  // Every dialog while recording is counted; only the marker's is described.
+  let dialogCount = 0;
   const dismissDialogs = (tab) => tab.on("dialog", (dialog) => {
+    if (recordingRuntime) dialogCount = Math.min(999999, dialogCount + 1);
     if (recordingRuntime && dialogMarker !== "" &&
         dialog.type() === "alert" && dialog.message() === dialogMarker)
       markerDialogs.set(tab, {
@@ -183,9 +175,6 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   };
   const user = process.env.WBH_LOGIN_USER;
   if (user) {
-    // The login page is not the page under observation. A script there must
-    // not make a later victim route look as though it fired.
-    await page.route("http://canary:8080/**", (route) => route.abort());
     await page.goto(base + "/wp-login.php");
     await page.fill("#user_login", user);
     await page.fill("#user_pass", process.env.WBH_LOGIN_PASSWORD ?? "");
@@ -193,36 +182,11 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
     const cookies = await page.context().cookies(base);
     if (!cookies.some((cookie) => cookie.name.startsWith("wordpress_logged_in_")))
       throw new Error("Victim login failed");
-    await page.unroute("http://canary:8080/**");
   }
-  const scriptNonces = JSON.parse(process.env.WBH_SCRIPT_NONCES ?? "[]");
-  const carriesScriptNonce = (value) => {
-    const raw = typeof value === "string" ? value : JSON.stringify(value ?? null);
-    let decoded = raw;
-    try { decoded = decodeURIComponent(raw); } catch { /* malformed encoding stays raw */ }
-    return scriptNonces.some((nonce) => {
-      if (raw.includes(nonce) || decoded.includes(nonce)) return true;
-      for (const source of [raw, decoded]) {
-        for (const token of source.match(new RegExp("[A-Za-z0-9+/]{8,}={0,2}", "g")) ?? [])
-          if (Buffer.from(token, "base64").toString("utf8").includes(nonce)) return true;
-        for (const token of source.match(new RegExp("[a-fA-F0-9]{16,}", "g")) ?? [])
-          if (Buffer.from(token, "hex").toString("utf8").includes(nonce)) return true;
-      }
-      return false;
-    });
-  };
-  let victimCanaryRequest = false;
-  page.context().on("request", (request) => {
-    if (new URL(request.url()).origin !== base) return;
-    if (
-      carriesScriptNonce(request.url()) ||
-      carriesScriptNonce(request.postData()) ||
-      carriesScriptNonce(request.headers())
-    ) victimCanaryRequest = true;
-  });
   let visiblePage = page;
   recordingRuntime = true;
-  await visiblePage.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
+  const navigation = await visiblePage.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
+  const httpStatus = navigation ? navigation.status() : undefined;
   if (new URL(visiblePage.url()).origin !== base)
     throw new Error("Victim navigation left the Lab origin");
   const actions = JSON.parse(process.env.WBH_VISIT_ACTIONS ?? "[]");
@@ -269,8 +233,6 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
       throw new Error("Victim action left the Lab origin");
   }
   await visiblePage.waitForTimeout(3000);
-  if (victimCanaryRequest)
-    throw new Error("Victim request carried the script canary");
   if ([...openedPages].some((tab) => !observedPages.has(tab)))
     throw new Error("Unobserved victim popup opened");
   for (const tab of observedPages)
@@ -296,26 +258,19 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   recordingRuntime = false;
   let documentDiagnostic;
   try {
-    documentDiagnostic = await visiblePage.evaluate((nonces) => {
+    documentDiagnostic = await visiblePage.evaluate(() => {
     const limit = 999999;
     const elements = document.querySelectorAll("*");
     let imageCount = 0;
     let brokenImageCount = 0;
     let inlineHandlerCount = 0;
-    let canaryAttributeCount = 0;
-    let canaryInlineHandlerCount = 0;
     for (const element of elements) {
       if (element instanceof HTMLImageElement) {
         imageCount++;
         if (element.complete && element.naturalWidth === 0) brokenImageCount++;
       }
-      for (const attribute of element.attributes) {
-        const handler = attribute.name.toLowerCase().startsWith("on");
-        const carriesCanary = nonces.some((nonce) => attribute.value.includes(nonce));
-        if (handler) inlineHandlerCount++;
-        if (carriesCanary) canaryAttributeCount++;
-        if (handler && carriesCanary) canaryInlineHandlerCount++;
-      }
+      for (const attribute of element.attributes)
+        if (attribute.name.toLowerCase().startsWith("on")) inlineHandlerCount++;
     }
     return {
       readyState: document.readyState,
@@ -323,18 +278,19 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
       imageCount: Math.min(limit, imageCount),
       brokenImageCount: Math.min(limit, brokenImageCount),
       inlineHandlerCount: Math.min(limit, inlineHandlerCount),
-      canaryAttributeCount: Math.min(limit, canaryAttributeCount),
-      canaryInlineHandlerCount: Math.min(limit, canaryInlineHandlerCount),
     };
-    }, scriptNonces);
+    });
   } catch {
-    // Diagnostics must never turn a completed canary observation into failure.
+    // Diagnostics must never turn a completed observation into failure.
   }
   const screenshot = await visiblePage.screenshot({ type: "png" });
   if (screenshot.length > ${MAX_SCREENSHOT_BYTES})
     throw new Error("Browser screenshot exceeds the evidence limit");
   process.stdout.write(JSON.stringify({
     screenshotBase64: screenshot.toString("base64"),
+    ...(httpStatus === undefined ? {} : { httpStatus }),
+    dialogCount,
+    consoleErrorCount: runtime.consoleErrorCount,
     ...(dialogEvent === undefined ? {} : { dialogEvent }),
     ...(documentDiagnostic === undefined ? {} : {
       diagnostic: {
@@ -398,10 +354,8 @@ export const wordpressVictimRouteSchema = z.strictObject({
 export type WordPressVictimRoute = z.infer<typeof wordpressVictimRouteSchema>;
 type VictimActions = readonly z.infer<typeof wordpressVictimActionSchema>[];
 
-function observerInputCarriesCanary(
-  value: unknown,
-  nonces: ReadonlySet<string>,
-): boolean {
+/** True when the observer's own input carries the marker, however it was encoded. */
+function observerInputCarriesMarker(value: unknown, marker: string): boolean {
   const raw = JSON.stringify(value ?? null);
   const layers = [raw];
   let current = raw;
@@ -416,18 +370,16 @@ function observerInputCarriesCanary(
   }
   // Reject unresolved deep percent encoding instead of trusting a hidden marker.
   if (/%[0-9a-fA-F]{2}/.test(current)) return true;
-  return [...nonces].some((nonce) => {
-    for (const source of layers) {
-      if (source.includes(nonce)) return true;
-      for (const token of source.match(/[A-Za-z0-9+/]{8,}={0,2}/g) ?? [])
-        if (Buffer.from(token, "base64").toString("utf8").includes(nonce))
-          return true;
-      for (const token of source.match(/[a-fA-F0-9]{16,}/g) ?? [])
-        if (Buffer.from(token, "hex").toString("utf8").includes(nonce))
-          return true;
-    }
-    return false;
-  });
+  for (const source of layers) {
+    if (source.includes(marker)) return true;
+    for (const token of source.match(/[A-Za-z0-9+/]{8,}={0,2}/g) ?? [])
+      if (Buffer.from(token, "base64").toString("utf8").includes(marker))
+        return true;
+    for (const token of source.match(/[a-fA-F0-9]{16,}/g) ?? [])
+      if (Buffer.from(token, "hex").toString("utf8").includes(marker))
+        return true;
+  }
+  return false;
 }
 
 export async function markCapture(
@@ -550,138 +502,26 @@ export async function probe(
   }
 }
 
-export function prepareExecutionCanary(
-  lab: WordPressLabSession,
-): ExecutionCanary | null {
-  const token = lab.nonce();
-  if (!/^[A-Za-z0-9-]{1,100}$/.test(token)) return null;
-  lab.executionNonces.add(token);
-  const path = `/tmp/wbh-execution-${token}`;
-  return {
-    nonce: token,
-    php: `<?php file_put_contents('${path}', hash('sha256', '${token}' . getenv('WBH_EXECUTION_SALT'))); ?>`,
-  };
-}
-
-export async function observeSessionUser(
-  lab: WordPressLabSession,
-  cookie: string,
-  scheme: "logged_in" | "auth" | "secure_auth" = "logged_in",
-): Promise<WordPressSessionObservation> {
-  // The value travels as an environment variable, never as PHP source.
-  if (!/^[A-Za-z0-9%|._@+-]{1,4096}$/.test(cookie)) return { status: "none" };
-  try {
-    const result = await lab.wp(
-      [
-        "eval",
-        '$id = wp_validate_auth_cookie(rawurldecode((string) getenv("WBH_SESSION_COOKIE")), (string) getenv("WBH_SESSION_SCHEME")); echo $id ? get_userdata($id)->user_login : "";',
-      ],
-      [`WBH_SESSION_COOKIE=${cookie}`, `WBH_SESSION_SCHEME=${scheme}`],
-    );
-    const login = result.stdout.trim();
-    return login === "" ? { status: "none" } : { status: "user", login };
-  } catch {
-    return { status: "unavailable" };
-  }
-}
-
-export async function observeCanaryTable(
-  lab: WordPressLabSession,
-): Promise<WordPressCanaryTableObservation> {
-  const canary = lab.canaries?.sqlCanary;
-  if (canary === undefined) return { status: "unavailable" };
-  try {
-    const present = await lab.wp([
-      "db",
-      "query",
-      `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '${canary.table}'`,
-      "--skip-column-names",
-    ]);
-    if (present.stdout.trim() === "0") return { status: "changed" };
-    const rows = await lab.wp([
-      "db",
-      "query",
-      `SELECT id, value FROM ${canary.table} ORDER BY id`,
-      "--skip-column-names",
-    ]);
-    return {
-      status:
-        rows.stdout.trim() === `1\t${canary.value}` ? "intact" : "changed",
-    };
-  } catch {
-    return { status: "unavailable" };
-  }
-}
-
-export async function observeCanaryFiles(
-  lab: WordPressLabSession,
-): Promise<WordPressCanaryFilesObservation> {
-  const files = lab.canaries?.fileCanaries;
-  if (files === undefined) return { status: "unavailable" };
-  const deleted: WordPressFileCanary["kind"][] = [];
-  for (const file of files) {
-    const result = await lab.docker(
-      ["exec", lab.wordpress, "test", "-e", file.path],
-      10_000,
-    );
-    if (result.exitCode === 1) deleted.push(file.kind);
-    else if (result.exitCode !== 0) return { status: "unavailable" };
-  }
-  return { status: "observed", deleted };
-}
-
-export function prepareScriptCanary(
-  lab: WordPressLabSession,
-): ScriptCanary | null {
-  const token = lab.nonce();
-  if (!/^[A-Za-z0-9-]{1,100}$/.test(token)) return null;
-  lab.scriptNonces.add(token);
-  const beaconUrl = `http://canary:8080/b/${token}`;
-  return {
-    nonce: token,
-    beaconUrl,
-    javascript: `fetch(${JSON.stringify(beaconUrl)}, { method: "POST", headers: { "X-WBH-Script-Canary": ${JSON.stringify(token)} } });`,
-    loaderJavascript: `import("//canary:8080/c/${token}")`,
-  };
-}
-
-async function readBeaconCount(
-  lab: WordPressLabSession,
-  issued: ReadonlySet<string>,
-): Promise<number> {
-  const log = await lab.docker(
-    ["exec", lab.receiver, "cat", BEACON_LOG],
-    10_000,
-  );
-  if (log.exitCode === 1 && log.stdout === "") return 0;
-  if (log.exitCode !== 0) throw new Error("Beacon log unreadable");
-  return log.stdout.split("\n").filter((line) => issued.has(line)).length;
-}
-
-async function visitStoredScriptPage(input: {
+/**
+ * One visit by the Lab's Playwright observer as `account` (none: logged out).
+ * Shared by the verification victim pages and by the exploration Lab's
+ * `/observe`. It records, and never decides.
+ */
+async function runBrowserVisit(input: {
   readonly lab: WordPressLabSession;
-  readonly receiverIp: string;
-  readonly issued: ReadonlySet<string>;
   readonly path: string;
-  readonly role: WordPressVictimRoute["role"];
+  readonly account?: { readonly username: string; readonly password: string };
   readonly actions?: VictimActions;
   readonly dialogMarker?: string;
 }): Promise<{
-  readonly fired: boolean;
+  readonly httpStatus?: number;
+  readonly dialogCount?: number;
+  readonly consoleErrorCount?: number;
   readonly dialogEvent?: WordPressDialogEvent;
   readonly screenshot: Buffer;
   readonly diagnostic?: WordPressVictimBrowserDiagnostic;
 }> {
-  const { lab, receiverIp, issued, path, role, actions } = input;
-  const account =
-    role === "administrator"
-      ? { username: "harness-admin", password: lab.adminPassword }
-      : role === "unauthenticated"
-        ? undefined
-        : lab.victimAccounts[role];
-  if (role !== "unauthenticated" && account === undefined)
-    throw new Error("Victim role is unavailable");
-  const before = await readBeaconCount(lab, issued);
+  const { lab, path, account, actions } = input;
   const result = await lab.docker(
     [
       "run",
@@ -690,7 +530,6 @@ async function visitStoredScriptPage(input: {
       "--network",
       lab.network,
       `--add-host=wordpress:${lab.handle.internalIp}`,
-      `--add-host=canary:${receiverIp}`,
       "--read-only",
       "--cap-drop=ALL",
       "--security-opt=no-new-privileges",
@@ -708,8 +547,6 @@ async function visitStoredScriptPage(input: {
       `WBH_VISIT_PATH=${path}`,
       "--env",
       `WBH_VISIT_ACTIONS=${JSON.stringify(actions ?? [])}`,
-      "--env",
-      `WBH_SCRIPT_NONCES=${JSON.stringify([...lab.scriptNonces])}`,
       ...(input.dialogMarker === undefined
         ? []
         : ["--env", `WBH_DIALOG_MARKER=${input.dialogMarker}`]),
@@ -722,7 +559,7 @@ async function visitStoredScriptPage(input: {
     Math.ceil(MAX_SCREENSHOT_BYTES / 3) * 4 + MAX_BROWSER_DIAGNOSTIC_BYTES,
   );
   if (result.exitCode !== 0) {
-    const known: readonly [string, WordPressStoredScriptFailureCode][] = [
+    const known: readonly [string, WordPressVictimPagesFailureCode][] = [
       ["Victim login failed", "victim-login"],
       ["Victim action not visible", "victim-action-not-visible"],
       [
@@ -736,7 +573,6 @@ async function visitStoredScriptPage(input: {
       ["Victim action left the Lab origin", "victim-navigation"],
       ["Victim observation left the Lab origin", "victim-navigation"],
       ["Unobserved victim popup opened", "victim-unobserved-popup"],
-      ["Victim request carried the script canary", "victim-canary-request"],
       ["Browser screenshot exceeds the evidence limit", "victim-screenshot"],
     ];
     const failureCode =
@@ -773,7 +609,15 @@ async function visitStoredScriptPage(input: {
   )
     throw new Error("Browser screenshot is invalid");
   return {
-    fired: (await readBeaconCount(lab, issued)) > before,
+    ...(parsed.data.httpStatus === undefined
+      ? {}
+      : { httpStatus: parsed.data.httpStatus }),
+    ...(parsed.data.dialogCount === undefined
+      ? {}
+      : { dialogCount: parsed.data.dialogCount }),
+    ...(parsed.data.consoleErrorCount === undefined
+      ? {}
+      : { consoleErrorCount: parsed.data.consoleErrorCount }),
     ...(parsed.data.dialogEvent === undefined
       ? {}
       : { dialogEvent: parsed.data.dialogEvent }),
@@ -782,157 +626,193 @@ async function visitStoredScriptPage(input: {
   };
 }
 
-export async function observeStoredScript(
+async function visitVictimPage(input: {
+  readonly lab: WordPressLabSession;
+  readonly path: string;
+  readonly role: WordPressVictimRoute["role"];
+  readonly actions?: VictimActions;
+  readonly dialogMarker?: string;
+}): Promise<{
+  readonly dialogEvent?: WordPressDialogEvent;
+  readonly screenshot: Buffer;
+  readonly diagnostic?: WordPressVictimBrowserDiagnostic;
+}> {
+  const { lab, path, role, actions } = input;
+  const account =
+    role === "administrator"
+      ? { username: "harness-admin", password: lab.adminPassword }
+      : role === "unauthenticated"
+        ? undefined
+        : lab.victimAccounts[role];
+  if (role !== "unauthenticated" && account === undefined)
+    throw new Error("Victim role is unavailable");
+  const visit = await runBrowserVisit({
+    lab,
+    path,
+    ...(account === undefined ? {} : { account }),
+    ...(actions === undefined ? {} : { actions }),
+    ...(input.dialogMarker === undefined
+      ? {}
+      : { dialogMarker: input.dialogMarker }),
+  });
+  return {
+    ...(visit.dialogEvent === undefined
+      ? {}
+      : { dialogEvent: visit.dialogEvent }),
+    screenshot: visit.screenshot,
+    ...(visit.diagnostic === undefined ? {} : { diagnostic: visit.diagnostic }),
+  };
+}
+
+/**
+ * The exploration Lab's `/observe` (ADR 0003, 2026-10-25 addendum, Phase D2):
+ * the agent names a role of the Lab's own accounts, a path and optional typed
+ * actions; the verification observer opens it. No script is accepted and
+ * nothing is judged: the answer is what the browser saw.
+ */
+export const wordpressExplorationObserveSchema = z.strictObject({
+  role: z.enum(["visitor", "subscriber", "customer", "administrator"]),
+  path: wordpressVisitPathSchema,
+  actions: z.array(wordpressVictimActionSchema).min(1).max(5).optional(),
+  /** Written in the page's JavaScript as alert(1234567890), without quotes. */
+  dialogMarker: z
+    .string()
+    .regex(/^[1-9][0-9]{9,14}$/)
+    .optional(),
+});
+export type WordPressExplorationObserveRequest = z.infer<
+  typeof wordpressExplorationObserveSchema
+>;
+
+export type WordPressExplorationObservation =
+  | {
+      readonly status: "observed";
+      /** Status of the response to `path`; absent when the browser saw none. */
+      readonly httpStatus?: number;
+      /** Dialogs that opened on the observed pages, any text. */
+      readonly dialogCount: number;
+      /** With a marker only: whether an alert with exactly that text opened. */
+      readonly markerDialog?: boolean;
+      readonly consoleErrorCount: number;
+      readonly screenshot: Buffer;
+    }
+  | {
+      readonly status: "failed";
+      readonly failureCode: WordPressVictimPagesFailureCode;
+    }
+  | { readonly status: "role-unavailable" };
+
+export async function observeExplorationPage(
   lab: WordPressLabSession,
-  input: {
-    readonly routePaths: readonly string[];
-    readonly victim?: WordPressVictimRoute;
-  },
-): Promise<WordPressStoredScriptObservation> {
-  const { receiverIp } = lab;
-  if (receiverIp === undefined) return { status: "unavailable", phase: "lab" };
-  if (lab.scriptNonces.size === 0) return { status: "not-prepared" };
-  const routePaths = z
-    .array(wordpressVisitPathSchema)
-    .max(5)
-    .safeParse(input.routePaths);
-  if (!routePaths.success)
-    return { status: "unavailable", phase: "route-input" };
-  const victim =
-    input.victim === undefined
-      ? undefined
-      : wordpressVictimRouteSchema.safeParse(input.victim);
-  if (victim !== undefined && !victim.success)
-    return { status: "unavailable", phase: "victim-input" };
-  if (observerInputCarriesCanary(routePaths.data, lab.scriptNonces))
+  request: WordPressExplorationObserveRequest,
+): Promise<WordPressExplorationObservation> {
+  const account =
+    request.role === "administrator"
+      ? { username: "harness-admin", password: lab.adminPassword }
+      : request.role === "visitor"
+        ? undefined
+        : lab.attackerAccounts[request.role];
+  if (request.role !== "visitor" && account === undefined)
+    return { status: "role-unavailable" };
+  try {
+    const visit = await runBrowserVisit({
+      lab,
+      path: request.path,
+      ...(account === undefined ? {} : { account }),
+      ...(request.actions === undefined ? {} : { actions: request.actions }),
+      ...(request.dialogMarker === undefined
+        ? {}
+        : { dialogMarker: request.dialogMarker }),
+    });
     return {
-      status: "unavailable",
-      phase: "route-input",
-      failureCode: "observer-canary-input",
+      status: "observed",
+      ...(visit.httpStatus === undefined
+        ? {}
+        : { httpStatus: visit.httpStatus }),
+      dialogCount: visit.dialogCount ?? 0,
+      ...(request.dialogMarker === undefined
+        ? {}
+        : { markerDialog: visit.dialogEvent !== undefined }),
+      consoleErrorCount: visit.consoleErrorCount ?? 0,
+      screenshot: visit.screenshot,
     };
-  if (
-    victim?.success &&
-    observerInputCarriesCanary(victim.data, lab.scriptNonces)
-  )
+  } catch (error) {
     return {
-      status: "unavailable",
-      phase: "victim-input",
-      failureCode: "observer-canary-input",
+      status: "failed",
+      failureCode:
+        error instanceof BrowserVisitFailure
+          ? error.failureCode
+          : "browser-visit",
     };
+  }
+}
+
+/**
+ * Opens the declared victim pages in fresh Lab browsers as the declared
+ * victim and records what each showed: the first dialog carrying the declared
+ * marker, and the last page's screen (#525). A person reads the record; this
+ * observer decides nothing.
+ */
+export async function observeVictimPages(
+  lab: WordPressLabSession,
+  input: WordPressVictimRoute,
+): Promise<WordPressVictimPagesObservation> {
+  const victim = wordpressVictimRouteSchema.safeParse(input);
+  if (!victim.success) return { status: "unavailable", phase: "victim-input" };
+  const { role, paths, dialogMarker } = victim.data;
   if (
-    victim?.success &&
-    victim.data.dialogMarker !== undefined &&
-    observerInputCarriesCanary(
-      { routePaths: routePaths.data, paths: victim.data.paths },
-      new Set([victim.data.dialogMarker]),
-    )
+    dialogMarker !== undefined &&
+    observerInputCarriesMarker({ paths }, dialogMarker)
   )
     return {
       status: "unavailable",
       phase: "victim-input",
       failureCode: "observer-marker-input",
     };
-  const issued = new Set([...lab.scriptNonces].map((token) => `/b/${token}`));
-  let phase: WordPressStoredScriptFailurePhase = "front";
   try {
-    const contexts: WordPressScriptContext[] = [];
     let screenshot: Buffer | undefined;
-    let diagnosticVictimScreenshot: Buffer | undefined;
     let victimBrowserDiagnostic: WordPressVictimBrowserDiagnostic | undefined;
-    let dialogVisitIndex: number | undefined;
-    let dialogScreenshot: Buffer | undefined;
-    let dialogEvent: WordPressDialogEvent | undefined;
-    const fired = async (
-      path: string,
-      role: WordPressVictimRoute["role"],
-      actions?: VictimActions,
-      victimVisit = false,
-      victimIndex?: number,
-    ): Promise<boolean> => {
-      const observation = await visitStoredScriptPage({
+    let dialog:
+      | {
+          readonly visitIndex: number;
+          readonly event: WordPressDialogEvent;
+          readonly screenshot: Buffer;
+        }
+      | undefined;
+    for (const [index, visit] of paths.entries()) {
+      const observation = await visitVictimPage({
         lab,
-        receiverIp,
-        issued,
-        path,
+        path: typeof visit === "string" ? visit : visit.path,
         role,
-        ...(actions === undefined ? {} : { actions }),
-        ...(victimVisit &&
-        victim?.success &&
-        victim.data.dialogMarker !== undefined
-          ? { dialogMarker: victim.data.dialogMarker }
-          : {}),
+        ...(typeof visit === "string" ? {} : { actions: visit.actions }),
+        ...(dialogMarker === undefined ? {} : { dialogMarker }),
       });
-      if (
-        victimVisit &&
-        observation.dialogEvent !== undefined &&
-        dialogVisitIndex === undefined
-      ) {
-        dialogVisitIndex = victimIndex;
-        dialogScreenshot = observation.screenshot;
-        dialogEvent = observation.dialogEvent;
-      }
-      if (observation.fired) screenshot ??= observation.screenshot;
-      else if (victimVisit) {
-        diagnosticVictimScreenshot = observation.screenshot;
-        victimBrowserDiagnostic = observation.diagnostic;
-      }
-      return observation.fired;
-    };
-    if (await fired("/", "unauthenticated")) contexts.push("front");
-    phase = "dashboard";
-    const dashboard = await fired("/wp-admin/", "administrator");
-    phase = "posts";
-    const posts = await fired("/wp-admin/edit.php", "administrator");
-    if (dashboard && posts) contexts.push("admin-all");
-    else if (dashboard || posts) contexts.push("admin-partial");
-    let routePage = false;
-    phase = "route-page";
-    for (const path of routePaths.data)
-      if (await fired(path, "unauthenticated")) routePage = true;
-    if (routePage) contexts.push("route-page");
-    let victimPage = false;
-    if (victim?.success) {
-      phase = "victim-page";
-      for (const [index, visit] of victim.data.paths.entries()) {
-        const path = typeof visit === "string" ? visit : visit.path;
-        const actions = typeof visit === "string" ? undefined : visit.actions;
-        if (await fired(path, victim.data.role, actions, true, index))
-          victimPage = true;
-      }
+      screenshot = observation.screenshot;
+      victimBrowserDiagnostic = observation.diagnostic;
+      if (observation.dialogEvent !== undefined && dialog === undefined)
+        dialog = {
+          visitIndex: index,
+          event: observation.dialogEvent,
+          screenshot: observation.screenshot,
+        };
     }
-    if (victimPage) contexts.push("victim-route-page");
-    const victimRole =
-      victim?.success && (victimPage || dialogVisitIndex !== undefined)
-        ? victim.data.role
-        : undefined;
     const sameAccount =
-      (victimRole === "subscriber" || victimRole === "customer") &&
-      lab.victimAccounts[victimRole]?.username ===
-        lab.handle.attackerAccounts[victimRole]?.username;
-    const selectedScreenshot =
-      screenshot ?? dialogScreenshot ?? diagnosticVictimScreenshot;
+      (role === "subscriber" || role === "customer") &&
+      lab.victimAccounts[role]?.username ===
+        lab.handle.attackerAccounts[role]?.username;
     return {
       status: "observed",
-      contexts,
-      ...(victimRole === undefined
-        ? {}
-        : { victimRole: sameAccount ? ("self" as const) : victimRole }),
-      ...(selectedScreenshot === undefined
-        ? {}
-        : { screenshot: selectedScreenshot }),
+      victimRole: sameAccount ? "self" : role,
+      ...(screenshot === undefined ? {} : { screenshot }),
       ...(victimBrowserDiagnostic === undefined
         ? {}
         : { victimBrowserDiagnostic }),
-      ...(dialogVisitIndex === undefined ||
-      dialogScreenshot === undefined ||
-      dialogEvent === undefined
-        ? {}
-        : { dialogVisitIndex, dialogScreenshot, dialogEvent }),
+      ...(dialog === undefined ? {} : { dialog }),
     };
   } catch (error) {
     return {
       status: "unavailable",
-      phase,
+      phase: "victim-page",
       failureCode:
         error instanceof BrowserVisitFailure
           ? error.failureCode
@@ -942,51 +822,5 @@ export async function observeStoredScript(
         ? { privateDiagnostic: error.privateDiagnostic }
         : {}),
     };
-  }
-}
-
-export async function observeOptions(
-  lab: WordPressLabSession,
-): Promise<WordPressOptionsObservation> {
-  const baseline = lab.optionBaseline;
-  if (baseline === undefined) return { status: "unavailable" };
-  try {
-    const changed: string[] = [];
-    for (const [name, digest] of baseline)
-      if ((await lab.optionDigest(name)) !== digest) changed.push(name);
-    return { status: "observed", changed };
-  } catch {
-    return { status: "unavailable" };
-  }
-}
-
-export async function observeExecution(
-  lab: WordPressLabSession,
-): Promise<WordPressExecutionObservation> {
-  if (lab.executionNonces.size === 0) return { status: "not-prepared" };
-  try {
-    for (const token of lab.executionNonces) {
-      const marker = await lab.docker(
-        ["exec", lab.wordpress, "cat", `/tmp/wbh-execution-${token}`],
-        10_000,
-      );
-      const expected = createHash("sha256")
-        .update(`${token}${lab.executionSalt}`)
-        .digest("hex");
-      if (marker.exitCode !== 0 || marker.stdout.trim() !== expected) continue;
-      const found = await lab.docker(
-        ["exec", lab.wordpress, "grep", "-rlF", "--", token, "/var/www/html"],
-        30_000,
-      );
-      const files = found.stdout
-        .split("\n")
-        .filter((line) => line.startsWith("/var/www/html/"))
-        .slice(0, 5)
-        .map((line) => line.slice("/var/www/html/".length));
-      return { status: "executed", files };
-    }
-    return { status: "not-executed" };
-  } catch {
-    return { status: "unavailable" };
   }
 }

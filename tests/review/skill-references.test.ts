@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 
 import { reviewExportV1Schema } from "../../src/review/export.js";
+import { reviewExportV2Schema } from "../../src/review/manual-observation-export.js";
 
 /** Every dotted path the export can hold, through nullable, arrays and unions. */
 function paths(schema: z.ZodType, prefix = ""): string[] {
@@ -40,11 +41,16 @@ const skills = [
   "wbh-screen",
 ];
 
+/** Skills that read `review export --version 2` for the human Lab observation (#525). */
+const readsV2 = new Set(["wbh-review", "wbh-report"]);
+
 describe("review skills", () => {
   it.each(skills)(
-    "%s reads only fields that review-export/v1 has",
+    "%s reads only fields that the review export it names has",
     async (skill) => {
-      const allowed = new Set(paths(reviewExportV1Schema));
+      const allowed = new Set(
+        paths(readsV2.has(skill) ? reviewExportV2Schema : reviewExportV1Schema),
+      );
       const text = await readFile(
         new URL(`../../.claude/skills/${skill}/SKILL.md`, import.meta.url),
         "utf8",

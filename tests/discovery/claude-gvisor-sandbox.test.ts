@@ -60,6 +60,7 @@ describe("Claude gVisor sandbox", () => {
           prompt: "Objective.",
           resumePrompt: "Before giving up.",
           minimumActiveMs: 1,
+          maxChildren: 4,
           model: "claude-opus-5-5",
           effort: "high",
           outputSchema: {},
@@ -68,6 +69,7 @@ describe("Claude gVisor sandbox", () => {
         sourceMount: { directory: source, expectedTree: tree },
         dependencyMounts: [],
         labHost: { name: "wordpress", ipv4: "172.20.0.2" },
+        controlHost: { name: "labctl", ipv4: "172.20.0.130" },
       });
       expect(result).toMatchObject({
         status: "exited",
@@ -97,6 +99,7 @@ describe("Claude gVisor sandbox", () => {
           "--env=CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1",
           "--env=CLAUDE_CODE_NO_MODEL_FALLBACK=1",
           "--add-host=wordpress:172.20.0.2",
+          "--add-host=labctl:172.20.0.130",
           expect.stringMatching(/dst=\/workspace\/main,readonly$/),
         ]),
       );
@@ -146,6 +149,7 @@ describe("Claude gVisor sandbox", () => {
           prompt: "p",
           resumePrompt: "r",
           minimumActiveMs: 1,
+          maxChildren: 4,
           model: "gpt-6-sol",
           effort: "high",
           outputSchema: {},

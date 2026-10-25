@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 
 import { RECORDER_STATE_DIRECTORY } from "../../../lab/capture.js";
+import { CONTROL_STATE_DIRECTORY } from "../../../lab/control/index.js";
 import type { WordPressLabSession } from "./lab-session.js";
 
 export const BEACON_LOG = "/tmp/wbh-beacons";
@@ -71,13 +72,73 @@ async function containerIp(
   );
 }
 
-async function startNetworkAndDatabase(
+/** The address `offset` places after the network address of an IPv4 subnet. */
+function subnetAddress(base: string, offset: number): string {
+  const value =
+    base.split(".").reduce((sum, octet) => sum * 256 + Number(octet), 0) +
+    offset;
+  return [24, 16, 8, 0].map((shift) => (value >>> shift) & 255).join(".");
+}
+
+/** A locally administered MAC derived from an IPv4 address, as Docker once did. */
+function macFor(address: string): string {
+  return [
+    "02",
+    "42",
+    ...address
+      .split(".")
+      .map((octet) => Number(octet).toString(16).padStart(2, "0")),
+  ].join(":");
+}
+
+/**
+ * Exploration Labs: Docker picks a free subnet, then the network is made
+ * again with that subnet given explicitly, which Docker requires before a
+ * container may take a fixed address. Dynamic addresses come from the upper
+ * half only, so the fixed WordPress address stays free across resets.
+ */
+async function createFixedSubnetNetwork(
   lab: WordPressLabSession,
 ): Promise<void> {
-  await lab.requireDocker(["network", "create", "--internal", lab.network]);
-  lab.created.add("network");
-  await lab.requireDocker(["volume", "create", lab.volume]);
-  lab.created.add("volume");
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await lab.requireDocker(["network", "create", "--internal", lab.network]);
+    lab.created.add("network");
+    const subnet = (
+      await lab.requireDocker([
+        "network",
+        "inspect",
+        "--format",
+        "{{range .IPAM.Config}}{{.Subnet}}{{end}}",
+        lab.network,
+      ])
+    ).stdout.trim();
+    await lab.requireDocker(["network", "rm", lab.network]);
+    lab.created.delete("network");
+    const match = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(subnet);
+    const prefix = Number(match?.[2]);
+    if (match === null || isIP(match[1]!) !== 4 || prefix < 8 || prefix > 24)
+      throw new Error("Lab subnet is unavailable");
+    const base = privateIpv4(match[1]!);
+    const upperHalf = subnetAddress(base, 2 ** (32 - prefix - 1));
+    // Another network can take the subnet between the two calls; try again.
+    const created = await lab.docker([
+      "network",
+      "create",
+      "--internal",
+      `--subnet=${subnet}`,
+      `--ip-range=${upperHalf}/${prefix + 1}`,
+      lab.network,
+    ]);
+    if (created.exitCode === 0) {
+      lab.created.add("network");
+      lab.wordpressIp = subnetAddress(base, 10);
+      return;
+    }
+  }
+  throw new Error("Lab network with a fixed subnet is unavailable");
+}
+
+async function startDatabase(lab: WordPressLabSession): Promise<void> {
   await lab.requireDocker([
     "run",
     "--detach",
@@ -97,6 +158,19 @@ async function startNetworkAndDatabase(
   lab.databaseIp = await containerIp(lab, lab.database);
 }
 
+async function startNetworkAndDatabase(
+  lab: WordPressLabSession,
+): Promise<void> {
+  if (lab.exploration) await createFixedSubnetNetwork(lab);
+  else {
+    await lab.requireDocker(["network", "create", "--internal", lab.network]);
+    lab.created.add("network");
+  }
+  await lab.requireDocker(["volume", "create", lab.volume]);
+  lab.created.add("volume");
+  await startDatabase(lab);
+}
+
 async function startWordPress(lab: WordPressLabSession): Promise<string> {
   await lab.requireDocker([
     "run",
@@ -106,6 +180,14 @@ async function startWordPress(lab: WordPressLabSession): Promise<string> {
     "--runtime=runsc",
     "--network",
     lab.network,
+    // The MAC follows the address too: the recorder's gVisor neighbour cache
+    // keeps the old one for about a minute after a reset otherwise.
+    ...(lab.wordpressIp === undefined
+      ? []
+      : [
+          `--ip=${lab.wordpressIp}`,
+          `--mac-address=${macFor(lab.wordpressIp)}`,
+        ]),
     "--network-alias",
     "wordpress",
     // runsc cannot reliably resolve Docker's alias from inside this container.
@@ -122,8 +204,6 @@ async function startWordPress(lab: WordPressLabSession): Promise<string> {
     "WORDPRESS_DB_USER=root",
     "--env",
     `WORDPRESS_DB_PASSWORD=${lab.databasePassword}`,
-    "--env",
-    `WBH_EXECUTION_SALT=${lab.executionSalt}`,
     lab.images.wordpress,
   ]);
   lab.created.add("wordpress");
@@ -221,7 +301,50 @@ async function waitForHealth(
   throw new Error("WordPress health check failed");
 }
 
-/** Starts only runsc containers; caller owns cleanup after any failure. */
+/** Where the control endpoint's code is mounted, read-only, like the recorder's. */
+const CONTROL_MOUNT = "/opt/wbh-control";
+
+/**
+ * Exploration Labs: the control endpoint the agent calls (`http://labctl/`).
+ * It only relays commands to the host Harness, which polls it with `docker exec`.
+ */
+async function startControl(lab: WordPressLabSession): Promise<void> {
+  await lab.requireDocker([
+    "run",
+    "--detach",
+    "--name",
+    lab.control,
+    "--runtime=runsc",
+    "--network",
+    lab.network,
+    "--read-only",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    `--tmpfs=${CONTROL_STATE_DIRECTORY}:rw,nosuid,nodev,size=1m`,
+    "--volume",
+    `${fileURLToPath(new URL("../../../lab-control/", import.meta.url))}:${CONTROL_MOUNT}:ro`,
+    "--entrypoint=node",
+    lab.images.recorder,
+    `${CONTROL_MOUNT}/cli.js`,
+    "serve",
+  ]);
+  lab.created.add("control");
+  lab.controlIp = await containerIp(lab, lab.control);
+}
+
+/** The command line that runs one control mode inside the endpoint's container. */
+export function controlCommand(
+  lab: WordPressLabSession,
+  args: readonly string[],
+): readonly string[] {
+  return ["exec", lab.control, "node", `${CONTROL_MOUNT}/cli.js`, ...args];
+}
+
+/**
+ * Starts only runsc containers; caller owns cleanup after any failure. A
+ * verification Lab gets the beacon receiver; an exploration Lab gets the
+ * control endpoint instead and no canary receiver.
+ */
 export async function startLabContainers(
   lab: WordPressLabSession,
   attempts: number,
@@ -229,7 +352,33 @@ export async function startLabContainers(
   await startNetworkAndDatabase(lab);
   const internalIp = await startWordPress(lab);
   const recorderIp = await startRecorder(lab, internalIp);
-  await startReceiver(lab);
+  if (lab.exploration) await startControl(lab);
+  else await startReceiver(lab);
   await waitForHealth(lab, attempts);
   return { internalIp, recorderIp };
+}
+
+/**
+ * An exploration Lab's reset: WordPress, its database and the site volume are
+ * removed and made again; WordPress takes its fixed address back, so the
+ * network, recorder and control endpoint (and the sandbox's view of them)
+ * stay. The caller initializes WordPress from the same setup afterwards.
+ */
+export async function recreateSiteContainers(
+  lab: WordPressLabSession,
+  attempts: number,
+): Promise<void> {
+  if (!lab.exploration || lab.wordpressIp === undefined)
+    throw new Error("Only an exploration Lab is reset");
+  await lab.requireDocker(["rm", "--force", lab.wordpress, lab.database]);
+  lab.created.delete("wordpress");
+  lab.created.delete("database");
+  await lab.requireDocker(["volume", "rm", "--force", lab.volume]);
+  lab.created.delete("volume");
+  await lab.requireDocker(["volume", "create", lab.volume]);
+  lab.created.add("volume");
+  await startDatabase(lab);
+  if ((await startWordPress(lab)) !== lab.wordpressIp)
+    throw new Error("WordPress did not take its fixed address back");
+  await waitForHealth(lab, attempts);
 }

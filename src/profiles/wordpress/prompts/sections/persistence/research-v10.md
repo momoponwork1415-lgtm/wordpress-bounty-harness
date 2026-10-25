@@ -1,0 +1,1 @@
+Every agent writes its findings to /workspace/research/<family>.md and returns at most thirty lines: the verdict, the concrete source paths that support it, and a pointer to that file. Keep the approach-family registry at /workspace/research/REGISTRY.md and update it at the end of every wave. Findings that exist only in an agent's context are lost work; write them down.

@@ -1,4 +1,5 @@
-import { readFile, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { z } from "zod";
@@ -10,8 +11,13 @@ import {
   executeTrialResume,
   providerLimitedAutoResumeRefusal,
   recordInterruptedRun,
+  runParametersSection,
 } from "../discovery/index.js";
-import type { PlannedDiscoveryRun, ResumePlan } from "../discovery/index.js";
+import type {
+  PlannedDiscoveryRun,
+  ResumePlan,
+  RunParameters,
+} from "../discovery/index.js";
 import { Review } from "../review/index.js";
 import { targetSelectionId } from "../selection/index.js";
 import { SourceAcquisitionError, type Snapshot } from "../snapshot/index.js";
@@ -37,6 +43,8 @@ import type {
 import {
   loadWordPressDiscoveryAsset,
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS,
+  wordPressDiscoveryModeOf,
   wordPressDiscoveryPrompt,
   type WordPressDiscoveryAsset,
 } from "../profiles/wordpress/prompts/index.js";
@@ -54,8 +62,8 @@ import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js"
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/index.js";
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
+import { openWordPressExplorationLab } from "../profiles/wordpress/lab/exploration-lab.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
-import type { WordPressReconstruction } from "../profiles/wordpress/verification/reproduction-package.js";
 import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
 import type { CliProfile, CliState } from "./index.js";
 import {
@@ -108,7 +116,9 @@ async function loadSelectInput(configPath: string): Promise<{
       );
     if (
       directPolicy.data.promptVariant !== undefined &&
-      directPolicy.data.promptVariant !== WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID
+      !Object.values(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).some(
+        (id) => id === directPolicy.data.promptVariant,
+      )
     )
       throw new Error("New selections use the current prompt variant only");
     return {
@@ -383,8 +393,7 @@ type WordPressDiscoveryPipeline = CampaignPipeline<
   WordPressTargetSelection,
   WordPressLabSetup,
   WordPressLabHandle,
-  WordPressFinding,
-  WordPressReconstruction
+  WordPressFinding
 >;
 type WordPressDiscoveryInput = Parameters<
   WordPressDiscoveryPipeline["discovery"]
@@ -399,6 +408,7 @@ type WordPressDiscoveryContext = {
   readonly config: WordPressCampaignConfig;
   readonly repeat: number;
   readonly boundaries: WordPressCampaignBoundaries;
+  readonly setupFor: WordPressCampaignSession["setupFor"];
   readonly state: CliState;
   readonly objective: WordPressDiscoveryAsset;
   readonly trustBoundary: WordPressDiscoveryAsset;
@@ -425,8 +435,39 @@ type WordPressDiscoverySource = Awaited<
   ReturnType<WordPressCampaignBoundaries["sourceFor"]>
 >;
 
-/** ADR 0033: the Root explores at least this long; a resumed segment inherits what is left of it. */
-const WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS = 60 * 60_000;
+/**
+ * The campaign's active floor (60 minutes by default for `deep`, none for
+ * `wide`, ADR 0033 / 0039); a resumed segment inherits what is left of it.
+ */
+function wordPressMinimumActiveMs(config: WordPressCampaignConfig): number {
+  return config.discovery.minimumActiveMinutes * 60_000;
+}
+
+/** What the Harness enforces for one Trial on `profile`, as the Root is told and the ledger records. */
+function wordPressRunParameters(
+  config: WordPressCampaignConfig,
+  profile: WordPressCampaignBoundaries["runtimeProfile"],
+): RunParameters {
+  return {
+    wallMinutes: config.runWallTimeMinutes,
+    minimumActiveMinutes: config.discovery.minimumActiveMinutes,
+    maxChildren: config.discovery.maxChildren,
+    // The observe budget is recorded for attached Labs only, so Lab-less
+    // runs keep the configuration they had.
+    lab:
+      config.discovery.lab.mode === "none"
+        ? {
+            mode: config.discovery.lab.mode,
+            maxResets: config.discovery.lab.maxResets,
+          }
+        : config.discovery.lab,
+    runtime: {
+      transportKind: profile.transportKind,
+      model: profile.requestedModelId,
+      effort: profile.requestedEffort,
+    },
+  };
+}
 
 function wordPressOutputContractFor(id: string) {
   const { contract } = wordPressDiscoveryContractPlan(id);
@@ -450,20 +491,19 @@ function wordPressDiscoveryPromptText(options: {
   readonly trustBoundary: WordPressDiscoveryAsset;
   readonly config: WordPressCampaignConfig;
   readonly lab: WordPressDiscoveryInput["lab"];
+  /** A resumed segment's fresh Lab: how many resets earlier segments used. */
+  readonly resumedLab?: WordPressLabUsed;
   readonly source: WordPressDiscoverySource;
+  readonly runParameters: RunParameters;
 }): string {
   const { objective, trustBoundary, config, lab, source } = options;
   const objectiveOnly = wordPressDiscoveryContractPlan(
     objective.id,
   ).objectiveOnly;
-  // Only low-privilege Lab accounts exist on the handle; nothing else is offered.
-  const accounts = Object.entries(lab?.attackerAccounts ?? {}).map(
-    ([role, account]) =>
-      `- ${role}: ${account.username} / ${account.password} (Lab only)`,
-  );
   return [
     objective.text.trim(),
     ...(objectiveOnly ? [wordPressOutputContractFor(objective.id).text] : []),
+    runParametersSection(options.runParameters),
     "## Trust boundary",
     trustBoundary.text.trim(),
     `## Programme Boundary (${config.programmeBoundary.version})`,
@@ -472,16 +512,7 @@ function wordPressDiscoveryPromptText(options: {
       ? [
           "This Trial has no Lab. Runtime confirmation happens during verification.",
         ]
-      : [
-          "## Lab",
-          `Endpoint: ${lab.endpoint}`,
-          ...accounts,
-          ...(lab.database === undefined
-            ? ["Database: not exposed to this run."]
-            : [
-                `Database (read-only, Lab only): host ${lab.database.host} port ${lab.database.port} database ${lab.database.name} user ${lab.database.readOnlyAccount.username} / ${lab.database.readOnlyAccount.password}`,
-              ]),
-        ]),
+      : [wordPressLabSection(lab, config.discovery.lab, options.resumedLab)]),
     ...(source.dependency === undefined
       ? []
       : [
@@ -500,15 +531,85 @@ function wordPressDiscoveryPromptText(options: {
   ].join("\n\n");
 }
 
-/** The last paragraph of the objective is the pinned directive early Root resumes receive. */
+/** What earlier segments of a resumed Trial used of its Lab budgets. */
+type WordPressLabUsed = {
+  readonly resetsUsed: number;
+  readonly observationsUsed: number;
+};
+type WordPressLabBudget = {
+  readonly maxResets: number;
+  readonly maxObservations: number;
+};
+
+/**
+ * The Harness-generated `## Lab` section of a Trial with an exploration Lab
+ * (ADR 0003, 2026-10-25 addendum). It states the endpoint, the accounts,
+ * the reset and observe commands with their budgets, and that the Lab
+ * confirms nothing; it says nothing about what to try. Passwords are written
+ * here: the sandbox has no other channel for Lab credentials. A resumed
+ * segment's section states that its Lab is new and how much of the Trial's
+ * budgets is used; it is that segment's first-turn notice. Agent-facing
+ * text: changes need `owner-approved`.
+ */
+export function wordPressLabSection(
+  lab: WordPressLabHandle,
+  budget: WordPressLabBudget,
+  resumed?: WordPressLabUsed,
+): string {
+  const { maxResets, maxObservations } = budget;
+  const exploration = lab.exploration;
+  if (exploration === undefined)
+    throw new Error("The discovery Lab is not an exploration Lab");
+  const { administrator, control } = exploration;
+  const accounts = Object.entries(lab.attackerAccounts).flatMap(
+    ([role, account]) =>
+      account === undefined
+        ? []
+        : [`- ${role} account: ${account.username} / ${account.password}`],
+  );
+  const roles = [
+    `"visitor" (not logged in)`,
+    ...Object.entries(lab.attackerAccounts).flatMap(([role, account]) =>
+      account === undefined ? [] : [`"${role}"`],
+    ),
+    `"administrator"`,
+  ];
+  const roleList = `${roles.slice(0, -1).join(", ")} or ${roles.at(-1)}`;
+  return [
+    "## Lab",
+    [
+      resumed === undefined
+        ? "This Trial has one Lab of its own for its whole wall time. It runs the frozen target and its dependency plugins on WordPress in gVisor. This sandbox reaches it over HTTP only; the Lab has no internet access."
+        : "This segment resumes the Trial in a new sandbox with a new Lab. The site was provisioned again from the same setup: nothing changed in the earlier Lab remains, and the accounts below replace the earlier ones. The Lab runs the frozen target and its dependency plugins on WordPress in gVisor. This sandbox reaches it over HTTP only; the Lab has no internet access.",
+      `- Site: ${lab.endpoint}/`,
+      `- Administrator account: ${administrator.username} / ${administrator.password}`,
+      ...accounts,
+      `- Reset: \`POST http://${control.host}/reset\` removes the site and provisions it again from the same setup; the accounts above stay the same. ${resumed === undefined ? `This Trial may reset at most ${maxResets} times` : `This Trial may reset at most ${maxResets} times in all and has used ${resumed.resetsUsed}`}, and the answer states how many are used. Other requests through \`${lab.endpoint}\` are counted, not limited.`,
+    ].join("\n"),
+    `Observe: \`POST http://${control.host}/observe\` with a JSON body opens one page of the site in the Harness's headless browser inside the Lab and answers with what the browser saw. The body is \`{"role": ..., "path": "/..."}\`, where role is ${roleList}, and the browser logs in with that account above. The path starts with a single \`/\`, has no whitespace or backslash, and is at most 2048 characters. It may add \`"actions"\`, 1 to 5 steps run in order after the page loads, each \`{"kind": "click", "selector": "..."}\`, \`{"kind": "click-text", "text": "...", "exact": true}\` or \`{"kind": "fill", "selector": "...", "value": "..."}\`. A selector is 1 to 200 characters of letters, digits, spaces and \`# . _ [ ] = " ' ( ) : > + ~ * , -\`; \`text\` and a fill \`value\` are 1 to 120 characters; \`exact\` is a boolean, true or false. It may also add \`"dialogMarker"\`, a string of 10 to 15 digits not starting with 0. No other field is accepted; a body that does not fit is refused as \`invalid-request\`, and the answer's \`field\` names the first field that failed. The control endpoint takes one command at a time: a request sent while another is waiting is answered 409 \`busy\`. The answer gives the HTTP status of the path, whether a dialog opened and, with a marker, whether an alert with exactly that text opened, the console error count, and the digest of a screenshot the Harness keeps. ${resumed === undefined ? `This Trial may observe at most ${maxObservations} times` : `This Trial may observe at most ${maxObservations} times in all and has used ${resumed.observationsUsed}`}, and the answer states how many are used. The answer is an observation, not a confirmation; report what you observed in \`labObservations\`.`,
+    "The Harness records the HTTP traffic through the site address and the site state before and after each reset. Nothing observed in this Lab is a confirmation. A setting you make as administrator is a configuration precondition; state it in `configurationPrecondition`. In a Finding or Lead, `labObservations` states what you tried in the Lab and what you saw.",
+  ].join("\n\n");
+}
+
+/**
+ * The last paragraph of the objective is the pinned directive early Root
+ * resumes receive. The deep objective's starts "Before giving up,"; the wide
+ * objective's is its bounded stop rule and starts "Stop when" (ADR 0039).
+ */
+const WORDPRESS_RESUME_PARAGRAPH_PREFIX = {
+  deep: "Before giving up,",
+  wide: "Stop when",
+} as const;
+
 function wordPressResumeParagraph(objective: WordPressDiscoveryAsset): string {
   const resumePrompt = objective.text
     .trim()
     .split(/\n\s*\n/)
     .at(-1);
+  const mode = wordPressDiscoveryModeOf(objective.id) ?? "deep";
   if (
     resumePrompt === undefined ||
-    !resumePrompt.startsWith("Before giving up,")
+    !resumePrompt.startsWith(WORDPRESS_RESUME_PARAGRAPH_PREFIX[mode])
   )
     throw new Error("Versioned minimum exploration directive is missing");
   return resumePrompt;
@@ -534,10 +635,12 @@ async function planWordPressDiscovery(
 ): Promise<WordPressDiscoveryPlan> {
   const { config, repeat, boundaries, state, objective, trustBoundary } =
     context;
-  if (lab !== undefined)
+  if ((lab === undefined) !== (config.discovery.lab.mode === "none"))
     throw new Error(
       "Discovery Lab mode differs from the campaign configuration",
     );
+  if (lab !== undefined && lab.exploration === undefined)
+    throw new Error("The discovery Lab is not an exploration Lab");
   const wallMinutes = config.runWallTimeMinutes;
   const objectiveOnly = (id: string) =>
     wordPressDiscoveryContractPlan(id).objectiveOnly;
@@ -560,6 +663,7 @@ async function planWordPressDiscovery(
   // One Trial per target; only an explicit `--repeat` plans more (ADR 0029).
   const maxRuns = repeat;
   const stopRules = { maxRuns, noFindingRuns: 1 };
+  const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
   const promptFor = (selectedObjective: typeof objective) =>
     wordPressDiscoveryPromptText({
       objective: selectedObjective,
@@ -567,6 +671,7 @@ async function planWordPressDiscovery(
       config,
       lab,
       source,
+      runParameters,
     });
   const now = state.clock().getTime();
   return {
@@ -581,7 +686,8 @@ async function planWordPressDiscovery(
       modelProfileDigest: runtime.runtimeProfile.digest,
       promptDigest: objective.digest,
       stopRules,
-      lab: { mode: "none" },
+      lab:
+        lab === undefined ? { mode: "none" } : { setupDigest: lab.setupDigest },
       history: { mode: "none" },
     },
     runWallTimeMs: wallMinutes * 60_000,
@@ -593,6 +699,7 @@ async function planWordPressDiscovery(
       const trialId = state.newId();
       const selectedObjective = objective;
       const resumePrompt = wordPressResumeParagraph(selectedObjective);
+      const prompt = promptFor(selectedObjective);
       const explore: PlannedDiscoveryRun = {
         configuration: {
           promptVariant: selectedObjective.id,
@@ -603,6 +710,11 @@ async function planWordPressDiscovery(
                 contractDigest: outputContractFor(selectedObjective.id).digest,
               }
             : {}),
+          ...(selectedObjective.sectionDigests === undefined
+            ? {}
+            : { sectionDigests: selectedObjective.sectionDigests }),
+          // The whole text the Root receives: objective plus generated sections.
+          inputDigest: `sha256:${createHash("sha256").update(prompt).digest("hex")}`,
           trustBoundaryVersion: trustBoundary.id,
           sourcePack: {
             dependency:
@@ -616,15 +728,38 @@ async function planWordPressDiscovery(
           ...(share === undefined
             ? {}
             : { runtime: runtime.runtimeProfile.transportKind }),
+          mode: config.discovery.mode,
+          wallMinutes: runParameters.wallMinutes,
+          minimumActiveMinutes: runParameters.minimumActiveMinutes,
+          maxChildren: runParameters.maxChildren,
+          lab: runParameters.lab,
+          model: runParameters.runtime.model,
+          effort: runParameters.runtime.effort,
         },
         run: {
           runId: trialId,
           targetSnapshotDigest: snapshot.digest,
           profile: runtime.runtimeProfile,
           coordination: "cooperative" as const,
-          prompt: promptFor(selectedObjective),
-          minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
+          prompt,
+          maxChildren: runParameters.maxChildren,
+          minimumActiveMs: wordPressMinimumActiveMs(config),
           resumePrompt,
+          ...(lab?.exploration === undefined
+            ? {}
+            : {
+                // HTTP only: `wordpress` resolves to the Lab recorder, which
+                // captures every exchange; the database is not exposed.
+                lab: {
+                  endpoint: lab.endpoint,
+                  networkName: lab.networkName,
+                  internalIp: lab.recorderIp,
+                  control: {
+                    host: lab.exploration.control.host,
+                    ipv4: lab.exploration.control.ipv4,
+                  },
+                },
+              }),
           ...wordPressSourceMounts(source),
           expiresAt: new Date(now + wallMinutes * 60_000).toISOString(),
         },
@@ -638,7 +773,7 @@ async function planWordPressDiscovery(
     executor: runtime.executor,
     attachments: boundaries.attachments,
     recordReport: recordWordPressReport,
-    ...(context.resumeInterrupted === undefined || lab !== undefined
+    ...(context.resumeInterrupted === undefined
       ? {}
       : {
           resumeInterrupted: resumeInterruptedFor(
@@ -646,7 +781,7 @@ async function planWordPressDiscovery(
             context.resumeInterrupted.log,
           ),
         }),
-    ...(context.resumeProviderLimited === undefined || lab !== undefined
+    ...(context.resumeProviderLimited === undefined
       ? {}
       : {
           resumeProviderLimited: resumeProviderLimitedFor(
@@ -766,7 +901,8 @@ async function resumeWordPressRun(
   {
     config,
     boundaries,
-  }: Pick<WordPressCampaignSession, "config" | "boundaries">,
+    setupFor,
+  }: Pick<WordPressCampaignSession, "config" | "boundaries" | "setupFor">,
   input: { readonly campaignId: string; readonly runId: string },
   signal?: AbortSignal,
 ): Promise<
@@ -820,14 +956,58 @@ async function resumeWordPressRun(
       reason: "snapshot-digest-differs",
       detail: snapshot.digest,
     };
+  // A Trial with an exploration Lab resumes with a fresh Lab of the same
+  // setup (ADR 0003, 2026-10-25 addendum); the earlier one is already sealed.
+  const recordedLab = started.configuration.lab;
+  const attached = recordedLab?.mode === "attached";
+  if (attached && config.discovery.lab.mode === "none")
+    return {
+      status: "refused",
+      reason: "lab-mode-differs",
+      detail: "the campaign configuration has discovery.lab none",
+    };
+  // The Lab budget is the Trial's: a segment keeps the one the Trial started
+  // with, and a campaign configured otherwise does not resume it.
+  let labBudget: WordPressLabBudget | undefined;
+  if (attached) {
+    const current = config.discovery.lab;
+    const budgetDiffers = (
+      name: "maxResets" | "maxObservations",
+      recorded: number | undefined,
+    ) => ({
+      status: "refused" as const,
+      reason: "lab-budget-differs",
+      detail:
+        recorded === undefined
+          ? `the Trial started without discovery.lab.${name}; the campaign configuration has ${current[name]}`
+          : `the Trial started with discovery.lab.${name} ${recorded}; the campaign configuration has ${current[name]}`,
+    });
+    if (recordedLab.maxResets !== current.maxResets)
+      return budgetDiffers("maxResets", recordedLab.maxResets);
+    const { maxObservations } = recordedLab;
+    if (
+      maxObservations === undefined ||
+      maxObservations !== current.maxObservations
+    )
+      return budgetDiffers("maxObservations", maxObservations);
+    labBudget = { maxResets: recordedLab.maxResets, maxObservations };
+  }
   const source = await boundaries.sourceFor(snapshot);
-  const prompt = wordPressDiscoveryPromptText({
-    objective,
-    trustBoundary,
-    config,
-    lab: undefined,
-    source,
-  });
+  const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
+  const promptWith = (
+    lab: WordPressLabHandle | undefined,
+    resumedLab?: WordPressLabUsed,
+  ) =>
+    wordPressDiscoveryPromptText({
+      objective,
+      trustBoundary,
+      config,
+      lab,
+      ...(resumedLab === undefined ? {} : { resumedLab }),
+      source,
+      runParameters,
+    });
+  const prompt = promptWith(undefined);
   const context = {
     campaignId: input.campaignId,
     input: {
@@ -852,6 +1032,7 @@ async function resumeWordPressRun(
     profile: runtime.runtimeProfile,
     coordination: "cooperative" as const,
     prompt,
+    maxChildren: config.discovery.maxChildren,
     resumePrompt,
     ...wordPressSourceMounts(source),
   };
@@ -868,7 +1049,8 @@ async function resumeWordPressRun(
     resumePrompt,
     profileDigest: runtime.runtimeProfile.digest,
     wallTimeMs: config.runWallTimeMinutes * 60_000,
-    minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
+    minimumActiveMs: wordPressMinimumActiveMs(config),
+    lab: attached,
     // A run whose host died is sealed first, then resumed like any other (ADR 0036).
     ...(recoverInterrupted === undefined
       ? {}
@@ -887,22 +1069,203 @@ async function resumeWordPressRun(
               interrupted,
               {
                 ...run,
-                minimumActiveMs: WORDPRESS_DISCOVERY_MINIMUM_ACTIVE_MS,
+                minimumActiveMs: wordPressMinimumActiveMs(config),
               },
             ),
         }),
   });
   if (assessment.status === "refused") return assessment;
   const { plan } = assessment;
-  const outcome = await executeTrialResume(
-    {
-      ...context,
-      executor: runtime.executor,
-      ...(signal === undefined ? {} : { signal }),
-    },
+  if (plan.lab === undefined) {
+    const outcome = await executeTrialResume(
+      {
+        ...context,
+        executor: runtime.executor,
+        ...(signal === undefined ? {} : { signal }),
+      },
+      plan,
+      { runId: state.newId(), ...run },
+    );
+    return { status: "resumed" as const, plan, outcome };
+  }
+  return resumeWithExplorationLab({
+    state,
+    config,
+    boundaries,
+    setup: setupFor(snapshot),
+    snapshot,
+    campaignId: input.campaignId,
+    previousLabId: started.labId,
     plan,
-    { runId: state.newId(), ...run },
-  );
+    budget: labBudget!,
+    used: plan.lab,
+    promptWith,
+    context,
+    run,
+    executor: runtime.executor,
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * One resumed segment of a Trial with an exploration Lab: a fresh Lab of the
+ * setup the previous segment's Lab recorded, the reset budget that is left,
+ * and a `## Lab` section saying so as the segment's first-turn notice. The
+ * segment seals its own `exploration-lab` bundle; the Lab is torn down after.
+ */
+async function resumeWithExplorationLab(options: {
+  readonly state: CliState;
+  readonly config: WordPressCampaignConfig;
+  readonly boundaries: WordPressCampaignBoundaries;
+  readonly setup: WordPressLabSetup;
+  readonly snapshot: Snapshot;
+  readonly campaignId: string;
+  readonly previousLabId: string | undefined;
+  readonly plan: ResumePlan;
+  /** The Lab budget the resumed run recorded when it started. */
+  readonly budget: WordPressLabBudget;
+  readonly used: WordPressLabUsed;
+  readonly promptWith: (
+    lab: WordPressLabHandle,
+    resumedLab: WordPressLabUsed,
+  ) => string;
+  readonly context: Omit<
+    Parameters<typeof executeTrialResume>[0],
+    "executor" | "signal"
+  >;
+  readonly run: Omit<Parameters<typeof executeTrialResume>[2], "runId">;
+  readonly executor: Parameters<typeof executeTrialResume>[0]["executor"];
+  readonly signal?: AbortSignal;
+}): Promise<
+  | {
+      readonly status: "refused";
+      readonly reason: string;
+      readonly detail?: string;
+    }
+  | {
+      readonly status: "resumed";
+      readonly plan: ResumePlan;
+      readonly outcome: Awaited<ReturnType<typeof executeTrialResume>>;
+    }
+> {
+  const { state, boundaries, snapshot, campaignId, plan } = options;
+  const previous = state.ledger
+    .readAll({ campaignId, type: "lab-provisioned" })
+    .map(({ event }) => event)
+    .find(
+      (event) =>
+        event.type === "lab-provisioned" &&
+        event.labId === options.previousLabId,
+    );
+  const previousSetupDigest =
+    previous?.type === "lab-provisioned" ? previous.setupDigest : undefined;
+  if (previousSetupDigest === undefined)
+    return {
+      status: "refused",
+      reason: "lab-setup-unrecorded",
+      ...(options.previousLabId === undefined
+        ? {}
+        : { detail: options.previousLabId }),
+    };
+  const base = () => ({
+    schemaVersion: 1 as const,
+    campaignId,
+    snapshotDigest: snapshot.digest,
+    occurredAt: state.clock().toISOString(),
+  });
+  const provisioned = await boundaries.lab.provision(snapshot, options.setup, {
+    purpose: "discovery",
+  });
+  if (provisioned.status !== "ready") {
+    const labId = state.newId();
+    await state.ledger.append({
+      ...base(),
+      identity: `lab-provisioned-${labId}`,
+      type: "lab-provisioned",
+      labId,
+      status: "failed",
+      purpose: "discovery",
+      failureStage: "provision",
+      reason: provisioned.reason,
+    });
+    return { status: "refused", reason: "lab-provision-failed" };
+  }
+  const handle = provisioned.handle;
+  let outcome: Awaited<ReturnType<typeof executeTrialResume>> | undefined;
+  try {
+    await state.ledger.append({
+      ...base(),
+      identity: `lab-provisioned-${handle.id}`,
+      type: "lab-provisioned",
+      labId: handle.id,
+      status: "ready",
+      purpose: "discovery",
+      setupDigest: handle.setupDigest,
+    });
+    if (handle.setupDigest !== previousSetupDigest)
+      return {
+        status: "refused",
+        reason: "lab-setup-differs",
+        detail: previousSetupDigest,
+      };
+    if (handle.exploration === undefined)
+      throw new Error("The discovery Lab is not an exploration Lab");
+    const resumedLab = options.used;
+    const notice = wordPressLabSection(handle, options.budget, resumedLab);
+    outcome = await executeTrialResume(
+      {
+        ...options.context,
+        input: {
+          ...options.context.input,
+          lab: { setupDigest: handle.setupDigest },
+        },
+        labId: handle.id,
+        lab: openWordPressExplorationLab({
+          lab: boundaries.lab,
+          handle,
+          maxResets: options.budget.maxResets,
+          resetsUsedBefore: options.used.resetsUsed,
+          maxObservations: options.budget.maxObservations,
+          observationsUsedBefore: options.used.observationsUsed,
+          store: state.store,
+          clock: state.clock,
+        }),
+        executor: options.executor,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      },
+      plan,
+      {
+        runId: state.newId(),
+        ...options.run,
+        prompt: options.promptWith(handle, resumedLab),
+        resumeNotice: notice,
+        lab: {
+          endpoint: handle.endpoint,
+          networkName: handle.networkName,
+          internalIp: handle.recorderIp,
+          control: {
+            host: handle.exploration.control.host,
+            ipv4: handle.exploration.control.ipv4,
+          },
+        },
+      },
+    );
+  } finally {
+    const removed = await boundaries.lab.teardown(handle).catch(() => null);
+    if (removed?.status !== "removed") {
+      await state.ledger.append({
+        ...base(),
+        identity: `campaign-stopped-${state.newId()}`,
+        type: "campaign-stopped",
+        reason: "incomplete",
+        cleanupLabIds: [handle.id],
+      });
+      throw new Error(
+        removed?.nextStep ??
+          "Inspect and remove remaining Lab resources before retry",
+      );
+    }
+  }
   return { status: "resumed" as const, plan, outcome };
 }
 
@@ -971,7 +1334,7 @@ async function runWordPressCampaign(
   ]);
   return runCampaignPipeline({
     campaignId: input.campaignId,
-    discoveryLab: config.discovery.lab,
+    discoveryLab: config.discovery.lab.mode,
     repeat: input.repeat ?? 1,
     maxConcurrentTargets: config.resources.maxConcurrentTargets,
     ...(input.targetLimit === undefined
@@ -1026,6 +1389,15 @@ async function runWordPressCampaign(
         return snapshot;
       },
       lab: boundaries.lab,
+      explorationLab: (handle) =>
+        openWordPressExplorationLab({
+          lab: boundaries.lab,
+          handle,
+          maxResets: config.discovery.lab.maxResets,
+          maxObservations: config.discovery.lab.maxObservations,
+          store: state.store,
+          clock: state.clock,
+        }),
       setupFor: session.setupFor,
       discovery: (discoveryInput) =>
         planWordPressDiscovery(discoveryInput, {
@@ -1039,6 +1411,7 @@ async function runWordPressCampaign(
           config,
           repeat: input.repeat ?? 1,
           boundaries,
+          setupFor: session.setupFor,
           state,
           objective,
           trustBoundary,
@@ -1046,7 +1419,6 @@ async function runWordPressCampaign(
       get verification() {
         return session.verification;
       },
-      reconstructionFor: session.reconstructionFor,
     },
   });
 }
@@ -1320,7 +1692,6 @@ export function createWordPressCliProfile(
         newId: state.newId,
         loadSnapshot: session.boundaries.loadSnapshot,
         setupFor: session.setupFor,
-        reconstructionFor: session.reconstructionFor,
         verification: session.verification,
       });
     },
@@ -1331,17 +1702,11 @@ export function createWordPressCliProfile(
     verifierRecordReader: (state) =>
       createWordPressVerifierRecordReader({ store: state.store }),
     labDown: (state, input) => wordPressLabDown(state, input, options),
-    // A record that exists holds the sweep even when unreadable; `lab down` decides.
     targetCeiling: async (configPath) =>
       (await readWordPressCampaignConfig(configPath)).resources
         .maxConcurrentTargets,
     runtimeCeilings: async (configPath) =>
       wordPressRuntimeCeilings(await readWordPressCampaignConfig(configPath)),
-    labHeld: (state) =>
-      stat(labUpRecordPath(state)).then(
-        () => true,
-        () => false,
-      ),
     async cleanupLeftovers(state, input) {
       const { boundaries } = await openWordPressCampaignSession(
         options,
@@ -1350,6 +1715,7 @@ export function createWordPressCliProfile(
       );
       return boundaries.lab.cleanupLeftovers({
         remove: input.remove,
+        labs: input.labs,
         patterns: DISCOVERY_LEFTOVER_PATTERNS,
       });
     },
@@ -1566,7 +1932,6 @@ export function createWordPressCliProfile(
           loadSnapshot: boundaries.loadSnapshot,
           setupFor: session.setupFor,
           verification: session.verification,
-          reconstructionFor: session.reconstructionFor,
         },
       });
     },

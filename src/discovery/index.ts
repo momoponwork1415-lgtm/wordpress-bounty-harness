@@ -42,6 +42,8 @@ export {
 } from "./agent-runtime-profile.js";
 export {
   CodexNativeAgentRuntime,
+  DEFAULT_MAX_CHILDREN,
+  MAX_CHILDREN_LIMIT,
   recoverChildReportFromRollout,
   rootThreadIdFromRollout,
   type CodexSandbox,
@@ -72,6 +74,7 @@ export {
   type GvisorClaudeSandboxOptions,
 } from "./claude-gvisor-sandbox.js";
 export { CLAUDE_RUNNER_DENIALS } from "./claude-runner.js";
+export { runParametersSection, type RunParameters } from "./run-parameters.js";
 export {
   assignDiscoveryRuntime,
   runtimeShareSchema,

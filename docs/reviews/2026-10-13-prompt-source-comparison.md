@@ -63,10 +63,10 @@
 | 11 | 一案支配の禁止・blocked の再開条件 | ✓ | ✓ | ✓ | — | ✓ | ✓ | |
 | 12 | 非互換 route の並走と cross-pollinate | ✓ | ✓ | ✓ | — | — | — | |
 | 13 | adversarial agent | 「doubly checked for sanity」 | ✓ | ✓ | — | — | — | |
-| 14 | agent を短命にする | — | 「No agent may exceed 80 tool calls… hands off」 | 「agent lifetime, not count, consumes the run」 | — | — | — | |
+| 14 | agent を短命にする | — | 「No agent may exceed 80 tool calls… hands off」 | 「agent lifetime, not count, consumes the run」 | — | — | — | v10・v10-wide〜v12-wide で採用。v11・v13-wide で外した（所有者決定 2026-10-25「根拠が無い」、ADR 0039 追記 4）。v11・v13-wide では固定の回数の代わりに #29 の段落を置く（2026-10-26） |
 | 15 | 研究 file | — | 「research/<family>.md、30 行以内で返す」 | 「put your own notes in research/」 | — | run-local evidenceSummary | — | |
 | 16 | Root の役割 | 「synthesize, challenge, redirect, launch new rounds」 | ✓ | + 「global shortlist of at most five」「owns phase order, budget, honest closure」 | — | ✓ | ✓ | |
-| 17 | 子の数 | 4 | 4 | `{{AGENT_CAP}}` | 自由 | 4 | 3 | |
+| 17 | 子の数 | 4 | 4 | `{{AGENT_CAP}}` | 自由 | 4 | 3 | v11・v13-wide から本文に数を書かず、Harness 生成の `## Run parameters` 節が `discovery.maxChildren` の値を伝える（P1 の `{{AGENT_CAP}}` と同じく外から入れる形。ADR 0039 追記 3・4） |
 | 18 | 依存 source | 「third_party/ wordpress-7.0.4, php-8.3.6」 | 同 | `{{DEPENDENCY_NOTE}}` | — | pinned dependency | `/workspace/wordpress` | |
 | 19 | 1 波目が空でも続ける | 「Do not stop after the first wave fails」 | ✓ | ✓ | — | ✓ | ✓ | |
 | 20 | 停止条件 | 「at least 6 hours」 | 「2 連続波で新 family も finding も無し、または 3 時間」 | 「at least {{EFFORT_FLOOR}}… Do not fabricate elapsed time」 | 「bounded closure」 | 停止条件あり | 「2 波連続増分なし、最低時間なし」 | |
@@ -78,6 +78,28 @@
 | 26 | 2 hop 以上（入口と着地） | — | — | 「Give at least two hops」 | ✓ | ✓ | — | |
 | 27 | 全 impact を Finding にする条件 | — | — | 「fully-supported weaker route beats unsupported stronger one」 | — | 「route ごとの principal・path・controls」 | 「部分 primitive を Finding にしない」 | |
 | 28 | 着眼点の重み付けと設定依存の前提（2026-10-25 追加） | — | — | — | — | — | — | v10 で採用。出典: Wordfence mirror 集計 2026-10-25（docs/reviews/2026-10-25-wordfence-mirror-as-exploration-input.md 表 1・表 2）、所有者決定 2026-10-25「それでいこう」。[v10 の文書](2026-10-25-wp2shell-bounty-v10.md) |
+| 29 | 子は 1 つの仕事ごとに替える。仕事の切れ目は子が決め、終えたら経路を file に書き、registry を更新して返る。Root は返った子に次の仕事を送らず、新しい子を立てる。新しい子は registry と file を読んでから続ける（2026-10-26 追加） | — | — | — | — | — | — | v11・v13-wide で採用（`coordination/handover-v11`）。出典: 所有者の指示 2026-10-26「80 回という固定値ではなく、Claude のように切りのいいところで子を替える」。観測した根拠: PR #535 の本番 10 Trial で、Claude runtime の子 78 体は同一スレッドの追依頼が 0（one-shot）で、子由来の Finding は 3/3。Codex の子 47 体は追依頼 147 で、子由来の Finding は 0/0。#14 の固定回数に代わる。[v11 の文書](2026-10-25-wp2shell-bounty-v11.md)、[v13-wide の文書](2026-10-25-wp2shell-bounty-v13-wide.md) |
+| 30 | `wide` の Root が新しく立てる専門エージェントは、入口が残る到達先を続けるものだけにする。止めるのは、registry で全到達先の入口が終わったと分かったとき（2026-10-26 追加） | — | — | — | — | — | — | v13-wide で採用（`coordination/fixed-v13` の 1 文と `coordination/stop-wide-v13` の最初の文）。出典は #29 と同じ所有者の指示 2026-10-26。#29 で専門エージェントが到達先の途中で返るので、「追加のラウンドを起こさない」と「すべての専門エージェントが入口を終えたと報告したとき止める」の 2 文を、#29 に合わせて替えた。PRISM-a の担当の固定と、PRISM-d の面を掃き終えたら止める方針は変えない。[v13-wide の文書](2026-10-25-wp2shell-bounty-v13-wide.md) |
+
+
+### 2.1 Wordfence PRISM の公開記述（docs/reviews/2026-10-25-wordfence-argus-and-prism.md §5、所有者決定 2026-10-25）
+
+2026-10-25 に追加した。所有者は 2026-10-25 に、`wide` の目的文を「PRISM の方針に近づける」と決めた。この節の行は、Wordfence が PRISM について本人の言葉で書いた記述（[調査の文書](2026-10-25-wordfence-argus-and-prism.md) 第 5.1 節と第 5.4 節）から取った。PRISM の prompt は公開されていない。行は設計の方針だけで、文言をそのまま取り込んだものではない。最初の採用は `wp2shell-bounty-v11-wide`（[v11-wide の文書](2026-10-25-wp2shell-bounty-v11-wide.md)）。 PRISM-e〜l は 2026-10-25 に足した。PRISM-e は本人の記述、PRISM-f〜l は Wordfence の公開記録（詳細ページ 75 件）から対象名を外して束ねた形で、ADR 0012 (a) の一般パターンに当たる（[PRISM 報告](2026-10-25-wordfence-prism-argus-method-and-cases.md) §3.2、§3.3。同報告 §5 の「PRISM-e〜j」はこの表では PRISM-g〜l に当たる）。最初の採用は `wp2shell-bounty-v12-wide`（[v12-wide の文書](2026-10-25-wp2shell-bounty-v12-wide.md)）。
+
+| # | 要素 | PRISM 本人の記述 | 本リポでの書き方 | 採否 |
+| --- | --- | --- | --- | --- |
+| PRISM-a | 脆弱性の種別ごとに専門のエージェントを 1 体ずつ置き、担当を固定する | 「専門のエージェントが 1 体ずつ、脆弱性のスペクトルの別々の波長を分析する。XSS からデシリアライズまで」（プロフィール、§5.1 [25]）、「脆弱性の種類ごとを含め、さまざまな分野の『専門家』に頼る」（2026-04-10、§5.1 [12]） | 到達先（sink）の種別ごとに子を 1 体ずつ固定で割り当てる。Root は担当を振り直さない | v11-wide で採用 |
+| PRISM-b | 1〜2 段の短い経路を単位にし、長い連鎖を狙わない | 「ふつう 1 件の発見は 1 つから数個の欠陥、あるいは 1〜2 段の短い跳躍になる。それがまさに正しいトレードオフだ」（§5.1 [2]、§5.4 の 4） | 入口から到達先までの 1〜2 hop の経路を報告の単位にし、多段の連鎖は組まない | v11-wide で採用 |
+| PRISM-c | WordPress の ground truth に導かれる | 「WordPress の ground truth に導かれ、経験的な PoC の実行で検証される」（プロフィール、§5.1 [25]） | 候補を報告する前に、到達先の手前の guard（capability の確認、nonce、エスケープ関数、query の準備）が実際に何をするかを、固定した WordPress 本体のソースで確かめる。PoC の実行は探索に入れない（検証は Harness の Lab と判定器が受け持つ、不変条件 3） | v11-wide で採用 |
+| PRISM-d | 種別ごとの面を掃き終えたら止める | 「あらゆるバグ種別と脅威モデルにわたる広大な面を掃く」（§5.4 の 2）、「そのすべてを捕まえたい」（§5.4 の 4） | 各専門エージェントが担当の到達先について入口を一通り終えたら止める。PRISM は停止条件を明文で書いていない。この行は「面を覆う」という記述を停止規則に読み替えたもの | v11-wide で採用。v13-wide では、終わったかどうかを registry で見る形にした（#30、2026-10-26） |
+| PRISM-e | 到達先から逆向きにも追う | 「危険な操作から逆向きにたどって信頼できないものが届くかを見る。または信頼できない入力から順向きにたどって何に触れられるかを見る。違うのは、その追跡をどこまで深く押すか」（2026-08-25、[PRISM 報告](2026-10-25-wordfence-prism-argus-method-and-cases.md) §2.1） | 各専門エージェントが、入口から到達先への順向きに加え、到達先から信頼できない入力への逆向きにも追う。P1 の #9 にある backward の向き | v12-wide で採用 |
+| PRISM-f | 毎 request で走る早期 hook のハンドラを入口にする | 本人の記述ではなく公開記録。PRISM の詳細ページ 40 件中 6 件が `init`、login、検証、2FA、SSO の早期 hook を入口にする（同報告 §3.2） | 入口の列挙は変えず、早期 hook のハンドラも入口として扱う 1 文を足す | v12-wide で採用 |
+| PRISM-g | 唯一の gate が nonce で、その nonce をプラグイン自身が未ログインの訪問者に印字している | 公開記録 6 件（Tourfic、WPBot、Kali Forms、AI Copilot、GeoDirectory、Advanced IP Blocker。同報告 §3.3 (a)） | 対象名を外した形 (a)。ADR 0012 (a) の一般パターン | v12-wide で採用 |
+| PRISM-h | 早期 hook で毎 request 走り、request parameter から option を書くかユーザーをログインさせる | 公開記録 7 件（ARVE、SMS Alert、Advanced IP Blocker、WPO365、Customer Email Verification、Autopay、WP Compress。同 (b)） | 形 (b) | v12-wide で採用 |
+| PRISM-i | 独自の login-as、検証、2FA、SSO、support access が、ユーザー提供の識別子を前段に結び付けずに信頼する | 公開記録 4 件（Groundhogg、WPO365、Advanced IP Blocker、WPMU DEV。同 (c)） | 形 (c) | v12-wide で採用 |
+| PRISM-j | sanitizer の後に decode する順序で、encode された値が描画時に戻る | 公開記録 2 件（Mang Board、Premium Packages。同 (d)） | 形 (d) | v12-wide で採用 |
+| PRISM-k | permission callback が true を返す REST route | 公開記録 2 件（FundEngine、Booking Package。同 (e)） | 形 (e) | v12-wide で採用 |
+| PRISM-l | allow-list が最上位の key だけを見て、入れ子の key が query に届く | 公開記録 1 件（rtMedia。同 (f)） | 形 (f) | v12-wide で採用 |
 
 ## 3. 対照表 2: 公開 harness
 

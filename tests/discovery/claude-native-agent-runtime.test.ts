@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -272,6 +272,7 @@ describe("Claude native agent runtime", () => {
       prompt: run.prompt,
       resumePrompt,
       minimumActiveMs: run.minimumActiveMs,
+      maxChildren: 4,
       model: "claude-opus-5-5",
       effort: "high",
       outputSchema: reportJsonSchema,
@@ -282,6 +283,76 @@ describe("Claude native agent runtime", () => {
       subagentModel: "claude-opus-5-5",
     });
     expect(commands[0]?.subagentModel).toBe("claude-opus-5-5");
+  });
+
+  it("records each child's role, type and delegation digest and the Root's first report time (A2)", async () => {
+    const delegation = "Look at a.php in depth";
+    const sha256 = (text: string) =>
+      `sha256:${createHash("sha256").update(text).digest("hex")}`;
+    const rootTranscript = lines(
+      {
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_1",
+              name: "Agent",
+              input: { prompt: delegation, subagent_type: "general-purpose" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        toolUseResult: { agentId: "agent1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "toolu_1" }] },
+      },
+    );
+    const stdout = lines(
+      readTool,
+      turn([{ claim: "first" }]),
+      {
+        type: "harness.turn",
+        at: "2026-10-19T00:30:00.000Z",
+        turn: 1,
+        sessionId: "s1",
+      },
+      ...childEvents,
+      turn([{ claim: "first" }, { claim: "second" }]),
+      { type: "harness.turn", at: end, turn: 2, sessionId: "s1" },
+    );
+    const child = {
+      path: "-workspace-main/s1/subagents/agent-agent1.jsonl",
+      content: childTranscript(),
+    };
+    const joined = await runtime(stdout, {
+      transcripts: [
+        { path: "-workspace-main/s1.jsonl", content: rootTranscript },
+        child,
+      ],
+    });
+    const result = await joined.runtime.execute(run);
+    expect(result.receipt).toMatchObject({
+      terminal: "completed",
+      agentRole: "root",
+      firstFinalReportAt: "2026-10-19T00:30:00.000Z",
+      candidatesAfterFirstFinalReport: 1,
+    });
+    expect(result.agentRuns?.[0]?.receipt).toMatchObject({
+      agentRole: "child",
+      agentType: "general-purpose",
+      delegationDigest: sha256(delegation),
+      delegationLength: delegation.length,
+    });
+    // Without the Root transcript the child's first user message is the delegation.
+    const alone = await runtime(stdout);
+    expect(
+      (await alone.runtime.execute(run)).agentRuns?.[0]?.receipt,
+    ).toMatchObject({
+      delegationDigest: sha256("Look at a.php"),
+      delegationLength: "Look at a.php".length,
+    });
   });
 
   it("runs the children on the profile's subagent model and holds each child to it", async () => {

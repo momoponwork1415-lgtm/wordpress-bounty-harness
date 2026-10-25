@@ -19,6 +19,7 @@ import {
   isClaudeTranscriptPath,
   isCodexSessionPath,
   nativeRunReceiptSchema,
+  type NativeRunAgentFields,
   type NativeRunReceipt,
   type NativeRunSession,
 } from "./native-run-receipts.js";
@@ -130,6 +131,46 @@ export function mergeTurnReports(messages: readonly string[]) {
     leads: distinct("leads"),
   };
 }
+/**
+ * When the Root first handed in a readable report, and how many distinct
+ * candidates its later turns added (A2). Turns without a time leave both out.
+ */
+export function finalReportTimeline(
+  turns: readonly { readonly at?: unknown; readonly message: string }[],
+): Pick<
+  NativeRunAgentFields,
+  "firstFinalReportAt" | "candidatesAfterFirstFinalReport"
+> {
+  let first: string | undefined;
+  let after = 0;
+  const seen = new Set<string>();
+  for (const turn of turns) {
+    let report;
+    try {
+      report = extractCandidateReport(turn.message);
+    } catch {
+      continue;
+    }
+    const later = first !== undefined;
+    if (!later) {
+      if (typeof turn.at !== "string" || !Number.isFinite(Date.parse(turn.at)))
+        return {};
+      first = new Date(turn.at).toISOString();
+    }
+    for (const claim of [
+      ...report.findings.map((value) => `finding:${canonicalJson(value)}`),
+      ...report.leads.map((value) => `lead:${canonicalJson(value)}`),
+    ]) {
+      if (seen.has(claim)) continue;
+      seen.add(claim);
+      if (later) after++;
+    }
+  }
+  return first === undefined
+    ? {}
+    : { firstFinalReportAt: first, candidatesAfterFirstFinalReport: after };
+}
+
 /** Candidate extraction is independent of transcript event admission. */
 function extractRootCandidateReport(stdout: string) {
   const messages: string[] = [];
@@ -150,8 +191,11 @@ function extractRootCandidateReport(stdout: string) {
   return mergeTurnReports(messages);
 }
 
-function extractRootCandidateReportFromRollout(raw: string) {
-  const messages: string[] = [];
+/** Each Root turn's final message in a rollout, with the time its `task_complete` was written. */
+export function rootTurnsFromRollout(
+  raw: string,
+): { readonly at?: unknown; readonly message: string }[] {
+  const turns: { at?: unknown; message: string }[] = [];
   for (const line of raw.split("\n")) {
     try {
       const event = object(JSON.parse(line) as unknown);
@@ -161,12 +205,21 @@ function extractRootCandidateReportFromRollout(raw: string) {
         payload?.type === "task_complete" &&
         typeof payload.last_agent_message === "string"
       )
-        messages.push(payload.last_agent_message);
+        turns.push({
+          at: event.timestamp,
+          message: payload.last_agent_message,
+        });
     } catch {
       // An interrupted rollout can end with a partial line.
     }
   }
-  return mergeTurnReports(messages);
+  return turns;
+}
+
+function extractRootCandidateReportFromRollout(raw: string) {
+  return mergeTurnReports(
+    rootTurnsFromRollout(raw).map((turn) => turn.message),
+  );
 }
 function childClaim(value: unknown): unknown {
   if (typeof value !== "string") return value;
@@ -229,6 +282,8 @@ export interface CodexSandboxCommand {
   readonly resumePrompt?: string;
   /** Operator-triggered resume: start with `exec resume <threadId>` on the restored session. */
   readonly resume?: CodexSandboxResumeSeed;
+  /** With `resume`: Harness-generated text put before the pinned directive on the first turn only. */
+  readonly resumeNotice?: string;
   /**
    * Names the run in a marker outside every mount, so a later process can find
    * this sandbox's directories when the host dies mid-run (ADR 0036, 2026-10-19
@@ -269,6 +324,8 @@ export interface CodexSandboxCommand {
   };
   readonly labHost?: { readonly name: string; readonly ipv4: string };
   readonly databaseHost?: { readonly name: string; readonly ipv4: string };
+  /** The exploration Lab's control endpoint (ADR 0003, 2026-10-25 addendum). */
+  readonly controlHost?: { readonly name: string; readonly ipv4: string };
 }
 export interface CodexSandboxResult {
   readonly status: "exited" | "failed";
@@ -328,15 +385,28 @@ export type InterruptedRunRecovery =
       readonly result: DiscoveryTransportResult;
       discard(): Promise<void>;
     };
+/** ADR 0029: live children of one Root unless the campaign sets another ceiling. */
+export const DEFAULT_MAX_CHILDREN = 4;
+/** The highest ceiling a campaign may set (redesign 2026-10-25 §7). */
+export const MAX_CHILDREN_LIMIT = 8;
+
 export interface DiscoveryTransportRun {
   readonly runId: string;
   readonly targetSnapshotDigest: string;
   readonly profile: AgentRuntimeProfile;
   readonly prompt: string;
+  /** Live children the Root may hold at once; absent, DEFAULT_MAX_CHILDREN. */
+  readonly maxChildren?: number;
   /** A completed discovery report is not admitted before this active wall floor. */
   readonly minimumActiveMs?: number;
   /** A versioned excerpt already present in prompt, used only for early Root resumes. */
   readonly resumePrompt?: string;
+  /**
+   * With `resume` only: Harness-generated facts that changed for this segment
+   * (a fresh exploration Lab, ADR 0003 addendum), sent before the pinned
+   * directive on the segment's first turn. It is part of `prompt`.
+   */
+  readonly resumeNotice?: string;
   /**
    * Operator-triggered continuation of an earlier segment's Root thread in a
    * new sandbox (ADR 0036): the restored session files and notes, and which
@@ -350,8 +420,11 @@ export interface DiscoveryTransportRun {
   readonly lab?: {
     readonly endpoint: string;
     readonly networkName: string;
+    /** The address the endpoint's host name resolves to inside the sandbox. */
     readonly internalIp: string;
     readonly database?: { readonly host: string; readonly ipv4: string };
+    /** An exploration Lab's control endpoint (ADR 0003, 2026-10-25 addendum). */
+    readonly control?: { readonly host: string; readonly ipv4: string };
   };
   readonly campaignInput: CampaignInputV1;
   readonly sourceDirectory: string;
@@ -421,13 +494,16 @@ const discoveryTransportRunSchema = z.strictObject({
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   profile: agentRuntimeProfileSchema,
   prompt: z.string().min(1),
+  maxChildren: z.number().int().min(1).max(MAX_CHILDREN_LIMIT).optional(),
+  /** 0 is the `wide` mode: no active floor, the first turn only (ADR 0039). */
   minimumActiveMs: z
     .number()
     .int()
-    .positive()
+    .nonnegative()
     .max(120 * 60_000)
     .optional(),
   resumePrompt: z.string().min(1).max(2_048).optional(),
+  resumeNotice: z.string().min(1).max(4_096).optional(),
   resume: discoveryResumeInputSchema.optional(),
   coordination: z.literal("cooperative").optional(),
   outputKind: z.literal("verification").optional(),
@@ -437,6 +513,12 @@ const discoveryTransportRunSchema = z.strictObject({
       networkName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
       internalIp: z.ipv4(),
       database: z
+        .strictObject({
+          host: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+          ipv4: z.ipv4(),
+        })
+        .optional(),
+      control: z
         .strictObject({
           host: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
           ipv4: z.ipv4(),
@@ -634,6 +716,8 @@ export function rootThreadIdFromRollout(raw: string): string {
 type ChildRollout = {
   readonly threadId: string;
   readonly agentPath: string;
+  /** `agent_role` of the spawn; the CLI writes null for the default role. */
+  readonly agentRole: string | undefined;
   readonly modelId: string | undefined;
   readonly effort: string | undefined;
   readonly cyberAccessProgram: string | undefined;
@@ -653,6 +737,7 @@ function decodeChildRollout(
 ): ChildRollout | undefined {
   let threadId: string | undefined;
   let agentPath: string | undefined;
+  let agentRole: string | undefined;
   let modelId: string | undefined;
   let effort: string | undefined;
   let cyberAccessProgram: string | undefined;
@@ -685,6 +770,9 @@ function decodeChildRollout(
       ) {
         threadId = payload.id;
         agentPath = spawn.agent_path;
+        const role = spawn.agent_role ?? payload?.agent_role;
+        if (typeof role === "string" && /^[A-Za-z0-9_.-]{1,128}$/.test(role))
+          agentRole = role;
         if (typeof event.timestamp === "string") startedAt = event.timestamp;
       }
     } else if (event.type === "session_capture") {
@@ -726,6 +814,7 @@ function decodeChildRollout(
   return {
     threadId,
     agentPath,
+    agentRole,
     modelId,
     effort,
     cyberAccessProgram,
@@ -1222,6 +1311,8 @@ type ExecutionState = {
   sandboxExitCode: number | undefined;
   /** Root thread, segment and session files; set once the Root rollout is captured. */
   session: NativeRunSession | undefined;
+  /** Role and first-report timeline of a cooperative Root; set with the Root rollout. */
+  rootAgent: NativeRunAgentFields;
   childSessionFiles: NativeRunSession["files"];
   researchArtifact:
     | {
@@ -1248,6 +1339,7 @@ function executionState(
     brokerMetrics: undefined,
     sandboxExitCode: undefined,
     session: undefined,
+    rootAgent: {},
     childSessionFiles: [],
     researchArtifact: undefined,
   };
@@ -1271,6 +1363,7 @@ function incompleteExecution(
       ...(providerLimit === undefined ? {} : { providerLimit }),
       startedAt: state.startedAt,
       completedAt,
+      ...state.rootAgent,
       ...(grantReceiptDigest === undefined ? {} : { grantReceiptDigest }),
       ...(state.sandboxExitCode === undefined
         ? {}
@@ -1331,6 +1424,8 @@ function admittedRun(
     (run.resumePrompt === undefined ||
       (run.minimumActiveMs !== undefined &&
         run.prompt.includes(run.resumePrompt))) &&
+    (run.resumeNotice === undefined ||
+      (run.resume !== undefined && run.prompt.includes(run.resumeNotice))) &&
     (run.resume === undefined ||
       (cooperative &&
         run.minimumActiveMs !== undefined &&
@@ -1441,7 +1536,7 @@ function codexArgs(
           "--enable",
           "multi_agent",
           "-c",
-          "agents.max_threads=4",
+          `agents.max_threads=${run.maxChildren ?? DEFAULT_MAX_CHILDREN}`,
           "-c",
           "agents.max_depth=1",
         ]
@@ -1499,7 +1594,7 @@ function codexResumeArgs(
     "--enable",
     "multi_agent",
     "-c",
-    "agents.max_threads=4",
+    `agents.max_threads=${run.maxChildren ?? DEFAULT_MAX_CHILDREN}`,
     "-c",
     "agents.max_depth=1",
     "-c",
@@ -1544,6 +1639,9 @@ function sandboxCommand(
             runtimeProfileDigest: run.profile.digest,
           },
         }),
+    ...(run.resume === undefined || run.resumeNotice === undefined
+      ? {}
+      : { resumeNotice: run.resumeNotice }),
     ...(run.resume === undefined
       ? {}
       : {
@@ -1614,6 +1712,14 @@ function sandboxCommand(
           databaseHost: {
             name: run.lab.database.host,
             ipv4: run.lab.database.ipv4,
+          },
+        }),
+    ...(run.lab?.control === undefined
+      ? {}
+      : {
+          controlHost: {
+            name: run.lab.control.host,
+            ipv4: run.lab.control.ipv4,
           },
         }),
   };
@@ -1996,6 +2102,11 @@ export class CodexNativeAgentRuntime {
       dependencyMountPathsOf(state.run),
     );
     state.rootUsage ??= usageFromRollout(rootRollout);
+    if (state.cooperative)
+      state.rootAgent = {
+        agentRole: "root",
+        ...finalReportTimeline(rootTurnsFromRollout(rootRollout)),
+      };
   }
 
   async #captureChildren(
@@ -2026,7 +2137,7 @@ export class CodexNativeAgentRuntime {
       const byStart = left.child.startedAt.localeCompare(right.child.startedAt);
       return byStart || left.order - right.order;
     });
-    // max_threads=4 bounds live children, not the number of waves in a Trial.
+    // max_threads bounds live children, not the number of waves in a Trial.
     const admitted = children.slice(0, 255);
     const agentRuns: AgentRun[] = [];
     const sessionFiles: NativeRunSession["files"][number][] = [];
@@ -2113,6 +2224,10 @@ export class CodexNativeAgentRuntime {
       ...(reasonDetail === undefined ? {} : { reasonDetail }),
       startedAt: child.startedAt,
       completedAt: child.completedAt,
+      agentRole: "child",
+      agentType: child.agentRole ?? "unavailable",
+      // spawn_agent / followup_task messages are encrypted in the rollout.
+      delegationDigest: "unavailable",
       usage: {
         inputTokens: child.usage?.input_tokens ?? "unavailable",
         cachedInputTokens: child.usage?.cached_input_tokens ?? "unavailable",
@@ -2327,6 +2442,7 @@ export class CodexNativeAgentRuntime {
         reason: "unavailable",
         startedAt: result.startedAt,
         completedAt: result.completedAt,
+        ...state.rootAgent,
         usage: state.rootUsage ?? decoded.usage,
         observed: state.rootObserved ?? decoded.observed,
         ...(state.childThreadsObserved === undefined

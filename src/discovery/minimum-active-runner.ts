@@ -1,4 +1,8 @@
-/** Runs inside the disposable gVisor container, never on the host. */
+/**
+ * Runs inside the disposable gVisor container, never on the host. It resumes
+ * the Root thread with the pinned directive until the active floor; a 0 floor
+ * (the `wide` mode, ADR 0039) runs the first turn only.
+ */
 export const MINIMUM_ACTIVE_RUNNER_SOURCE = String.raw`
 import { spawn } from "node:child_process";
 
@@ -8,9 +12,12 @@ const resumeArgs = JSON.parse(process.argv[4]);
 const resumePrompt = process.argv[5];
 // Operator-triggered resume of an earlier segment: the Root thread already exists.
 const resumeThreadId = process.argv[6];
+// With a resume only: Harness-generated facts for this segment, before the directive on its first turn.
+const resumeNotice =
+  process.argv[7] === undefined ? "" : Buffer.from(process.argv[7], "base64").toString("utf8");
 if (
   !Number.isSafeInteger(minimumActiveMs) ||
-  minimumActiveMs <= 0 ||
+  minimumActiveMs < 0 ||
   !Array.isArray(initialArgs) ||
   !Array.isArray(resumeArgs) ||
   typeof resumePrompt !== "string" ||
@@ -75,7 +82,10 @@ if (resumeThreadId === undefined) {
 } else {
   // The first turn of a resumed segment continues the restored thread with the
   // same pinned directive; the initial objective is not sent again.
-  exitCode = await turn([...resumeArgs, threadId, "-"], resumePrompt);
+  exitCode = await turn(
+    [...resumeArgs, threadId, "-"],
+    resumeNotice === "" ? resumePrompt : resumeNotice + "\n\n" + resumePrompt,
+  );
   if (exitCode !== 0 || process.exitCode === 2) process.exit(exitCode || 2);
 }
 

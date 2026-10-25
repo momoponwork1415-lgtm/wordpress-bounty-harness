@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -16,10 +16,13 @@ import {
   loadWordPressDiscoveryAsset,
   loadWordPressVerifierPrompt,
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS,
   WORDPRESS_DISCOVERY_ASSET_IDS,
+  WORDPRESS_DISCOVERY_MODES,
   WORDPRESS_DISCOVERY_PROMPT_IDS,
   WORDPRESS_DISCOVERY_PROMPTS,
   WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS,
+  WORDPRESS_PROMPT_SECTIONS,
   WORDPRESS_TRUST_BOUNDARY,
   WORDPRESS_VERIFIER_PROMPT_ID,
   WORDPRESS_VERIFIER_PROMPTS,
@@ -66,7 +69,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(21);
+    expect(ids).toHaveLength(26);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -77,10 +80,25 @@ describe("WordPress prompt table", () => {
         (row) => row.outputContract !== null,
       ).map((row) => row.id),
     );
+    // ADR 0039: exactly one current objective per launch mode.
+    for (const mode of WORDPRESS_DISCOVERY_MODES)
+      expect(
+        WORDPRESS_DISCOVERY_PROMPTS.filter(
+          (row) =>
+            row.status === "current" && "mode" in row && row.mode === mode,
+        ),
+      ).toHaveLength(1);
     expect(
       WORDPRESS_DISCOVERY_PROMPTS.filter((row) => row.status === "current"),
-    ).toHaveLength(1);
-    expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v10");
+    ).toHaveLength(WORDPRESS_DISCOVERY_MODES.length);
+    expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
+      deep: "wp2shell-bounty-v11",
+      wide: "wp2shell-bounty-v13-wide",
+    });
+    expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v11");
+    // Archived rows carry no mode, so only a current row launches (ADR 0039).
+    for (const row of WORDPRESS_DISCOVERY_PROMPTS)
+      if (row.status === "archived") expect(row).not.toHaveProperty("mode");
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
     ).toHaveLength(1);
@@ -91,6 +109,116 @@ describe("WordPress prompt table", () => {
   it("carries no entry-index coverage column after ADR 0034", () => {
     for (const row of WORDPRESS_DISCOVERY_PROMPTS)
       expect(row).not.toHaveProperty("entryIndexCoverage");
+  });
+});
+
+const sectionsUrl = new URL(
+  "../../../src/profiles/wordpress/prompts/sections/",
+  import.meta.url,
+);
+const sha256 = (text: string) =>
+  `sha256:${createHash("sha256").update(text).digest("hex")}`;
+
+const HANDOVER_OPENING =
+  "Each agent is given one piece of work and returns when that piece is done.";
+
+describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
+  const composed = WORDPRESS_DISCOVERY_PROMPTS.flatMap((row) =>
+    "fragments" in row ? [row] : [],
+  );
+  const fragmentText = (section: string, file: string) =>
+    readFile(new URL(`${section}/${file}.md`, sectionsUrl), "utf8");
+
+  it("composes every current objective and keeps the archived v10 and v12-wide composed", () => {
+    expect(composed.map((row) => row.id)).toEqual([
+      "wp2shell-bounty-v10",
+      "wp2shell-bounty-v11",
+      "wp2shell-bounty-v12-wide",
+      "wp2shell-bounty-v13-wide",
+    ]);
+    for (const row of WORDPRESS_DISCOVERY_PROMPTS.filter(
+      (entry) => entry.status === "current",
+    ))
+      expect(composed).toContain(row);
+  });
+
+  it("composes byte-identical text to the kept .md under the unchanged digest", async () => {
+    const pinned = {
+      "wp2shell-bounty-v10":
+        "sha256:fd4e395ecb50923487c9bab6dbae81f0aff4e67342abecedda3f53cd9ff5f8b3",
+      "wp2shell-bounty-v11":
+        "sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9",
+      "wp2shell-bounty-v12-wide":
+        "sha256:9a79a3b20fdba7af54f32464d868ab00806335c526781aba026e76ce9290c3c3",
+      "wp2shell-bounty-v13-wide":
+        "sha256:0dd2072b4c6a544d47ebb6df94c7981f2fbb758b4dee82e063896ff91f892bb8",
+    } as const;
+    for (const row of composed) {
+      const bytes = (await promptBytes(row.id)).toString("utf8");
+      const fragments = await Promise.all(
+        row.fragments.map(({ section, file }) => fragmentText(section, file)),
+      );
+      // Every fragment is whole paragraphs; together they are the .md's paragraphs in order.
+      expect(
+        fragments.flatMap((text) => text.replace(/\n$/, "").split("\n\n")),
+      ).toEqual(bytes.replace(/\n$/, "").split("\n\n"));
+      const asset = await loadWordPressDiscoveryAsset(row.id);
+      expect(asset.text).toBe(bytes);
+      expect(asset.digest).toBe(sha256(bytes));
+      expect(asset.digest).toBe(pinned[row.id]);
+    }
+  });
+
+  it("digests each section as its own fragments composed in row order", async () => {
+    for (const row of composed) {
+      const asset = await loadWordPressDiscoveryAsset(row.id);
+      const expected: Record<string, string> = {};
+      for (const section of WORDPRESS_PROMPT_SECTIONS) {
+        const texts = await Promise.all(
+          row.fragments
+            .filter((fragment) => fragment.section === section)
+            .map(({ file }) => fragmentText(section, file)),
+        );
+        expected[section] = sha256(
+          `${texts.map((text) => text.slice(0, -1)).join("\n\n")}\n`,
+        );
+      }
+      expect(asset.sectionDigests).toEqual(expected);
+    }
+    for (const id of ["wp2shell-bounty-v10-wide", "wp2shell-bounty-v11-wide"])
+      expect(await loadWordPressDiscoveryAsset(id as never)).not.toHaveProperty(
+        "sectionDigests",
+      );
+  });
+
+  it("shares the common paragraphs as one file and leaves no file unused", async () => {
+    const files = (row: (typeof composed)[number]) =>
+      row.fragments.map(({ section, file }) => `${section}/${file}`);
+    const byId = (id: string) => files(composed.find((row) => row.id === id)!);
+    const [deep, wide] = [
+      byId("wp2shell-bounty-v11"),
+      byId("wp2shell-bounty-v13-wide"),
+    ];
+    expect(deep.filter((file) => wide.includes(file))).toEqual([
+      "objective/task-v10",
+      "coordination/handover-v11",
+      "objective/sources-v8",
+    ]);
+    // The lifetime paragraph is left only to the archived rows.
+    expect([...deep, ...wide]).not.toContain("coordination/lifetime-v10");
+    const onDisk = (await readdir(sectionsUrl, { recursive: true }))
+      .filter((path) => path.endsWith(".md"))
+      .map((path) => path.replace(/\.md$/, ""))
+      .sort();
+    expect(onDisk).toEqual([...new Set(composed.flatMap(files))].sort());
+    for (const path of onDisk)
+      expect(WORDPRESS_PROMPT_SECTIONS).toContain(path.split("/")[0]);
+  });
+
+  it("pins the generated v4 contract the composed objectives receive", () => {
+    expect(wordPressDiscoveryOutputContractV4().digest).toBe(
+      "sha256:5acd5157fc82cb76c35490af607513a1558477c4eb03acaa046fdf0a64c99883",
+    );
   });
 });
 
@@ -225,14 +353,241 @@ describe("WordPress discovery prompt assets", () => {
       if (
         id === "wp2shell-bounty-v7" ||
         id === "wp2shell-bounty-v8" ||
-        id === "wp2shell-bounty-v10"
+        id === "wp2shell-bounty-v10" ||
+        id === "wp2shell-bounty-v11"
       )
         expect(text).toContain("Use multiagents aggressively");
+      else if (
+        id === "wp2shell-bounty-v11-wide" ||
+        id === "wp2shell-bounty-v12-wide"
+      )
+        expect(text).toContain("four specialist agents");
+      else if (id === "wp2shell-bounty-v13-wide")
+        expect(text).toContain("one specialist agent per sink class");
       else expect(text).toMatch(/Lead|Finding/);
       expect(text).not.toMatch(
         /sourceTrace|labObservations|JSON string|Each Finding is an object/,
       );
     }
+  });
+
+  it("keeps the archived v10-wide as v10 without the persist paragraph and with the stop rule in place of the floor (ADR 0039)", async () => {
+    const deep = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v10"))
+      .text;
+    const wide = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v10-wide"))
+      .text;
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const deepParagraphs = paragraphs(deep);
+    const wideParagraphs = paragraphs(wide);
+    expect(deepParagraphs.at(-2)).toMatch(
+      /^Do not return merely because current approaches fail/,
+    );
+    expect(deepParagraphs.at(-1)).toMatch(/^Before giving up,/);
+    expect(wideParagraphs.slice(0, -1)).toEqual(deepParagraphs.slice(0, -2));
+    expect(wideParagraphs.at(-1)).toMatch(
+      /^Stop when two consecutive waves produce no new approach family and no new candidate/,
+    );
+    expect(wide).not.toMatch(
+      /60 minutes|one hour|Before giving up|Do not return merely/,
+    );
+  });
+
+  it("makes v11-wide the v10 task with four fixed sink specialists and a stop rule (ADR 0039, 2026-10-25)", async () => {
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const v10 = paragraphs(
+      (await loadWordPressDiscoveryAsset("wp2shell-bounty-v10")).text,
+    );
+    const text = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v11-wide"))
+      .text;
+    const v11 = paragraphs(text);
+    const startingWith = (rows: readonly string[], prefix: string) =>
+      rows.find((paragraph) => paragraph.startsWith(prefix));
+    // Task statement unchanged; the first-principles paragraph gains one guard sentence.
+    expect(v11.slice(0, 2)).toEqual(v10.slice(0, 2));
+    expect(v11[2]?.startsWith(`${v10[2]} Before you report a candidate,`)).toBe(
+      true,
+    );
+    for (const prefix of ["Keep every agent short.", "The plugin depends on"]) {
+      expect(startingWith(v11, prefix)).toBeDefined();
+      expect(startingWith(v11, prefix)).toBe(startingWith(v10, prefix));
+    }
+    expect(v11.at(-1)).toMatch(/^Stop when/);
+    expect(startingWith(v11, "Before giving up")).toBeUndefined();
+    expect(startingWith(v11, "Do not return merely")).toBeUndefined();
+    expect(text.match(/four specialist agents/g)).toHaveLength(1);
+    expect(text).not.toMatch(
+      /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|\b(?:PoC|CVE|advisory|payload)\b/i,
+    );
+  });
+
+  it("makes v12-wide the v11-wide text with backward tracing, early-hook entries and six recurring shapes (ADR 0039, 2026-10-25 追記 2)", async () => {
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const v11 = paragraphs(
+      (await loadWordPressDiscoveryAsset("wp2shell-bounty-v11-wide")).text,
+    );
+    const text = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v12-wide"))
+      .text;
+    const v12 = paragraphs(text);
+    // One paragraph inserted after the specialists; every other paragraph is byte-identical to v11-wide.
+    expect(v12).toHaveLength(v11.length + 1);
+    expect(v12.slice(0, 3)).toEqual(v11.slice(0, 3));
+    expect(v12.slice(5)).toEqual(v11.slice(4));
+    expect(v12[4]).toMatch(
+      /^Shapes that recur in published WordPress findings/,
+    );
+    expect(v12[4]?.match(/\([a-f]\)/g)).toEqual([
+      "(a)",
+      "(b)",
+      "(c)",
+      "(d)",
+      "(e)",
+      "(f)",
+    ]);
+    // The specialists paragraph gains backward tracing and the early-hook entry sentence only.
+    const specialists = v12[3] ?? "";
+    expect(specialists).toContain(
+      "and backward from each sink to the untrusted inputs that can arrive there,",
+    );
+    expect(specialists).toContain(
+      "Also treat as entry points the handlers that run on every request from early hooks",
+    );
+    expect(
+      specialists
+        .replace(
+          ", and backward from each sink to the untrusted inputs that can arrive there, and reports",
+          " and reports",
+        )
+        .replace(
+          /Also treat as entry points the handlers that run on every request from early hooks[^.]*\. /,
+          "",
+        ),
+    ).toBe(v11[3]);
+    expect(text.match(/four specialist agents/g)).toHaveLength(1);
+    expect(text).not.toMatch(
+      /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|Tourfic|Groundhogg|rtMedia|\b(?:PoC|CVE|advisory|payload)\b/i,
+    );
+  });
+
+  it("makes v11 the v10 text without the lifetime paragraph, the child count and the minutes, plus the hand-over paragraph (ADR 0039 追記 4, 2026-10-25 and 2026-10-26)", async () => {
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const v10 = paragraphs(
+      (await loadWordPressDiscoveryAsset("wp2shell-bounty-v10")).text,
+    );
+    const text = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v11"))
+      .text;
+    const withHandover = paragraphs(text);
+    // One paragraph removed; one inserted after the research paragraph (owner
+    // 2026-10-26); two changed in place; every other paragraph is byte-identical.
+    const lifetime = v10.findIndex((paragraph) =>
+      paragraph.startsWith("Keep every agent short."),
+    );
+    const withoutLifetime = v10.filter((_, index) => index !== lifetime);
+    const handover = withHandover.findIndex((paragraph) =>
+      paragraph.startsWith(HANDOVER_OPENING),
+    );
+    expect(withHandover[handover - 1]).toBe(v10[lifetime + 1]);
+    expect(withHandover[handover - 1]).toMatch(
+      /^Every agent writes its findings/,
+    );
+    const v11 = withHandover.filter((_, index) => index !== handover);
+    expect(v11).toHaveLength(withoutLifetime.length);
+    const changed = v11.flatMap((paragraph, index) =>
+      paragraph === withoutLifetime[index] ? [] : [index],
+    );
+    expect(changed).toEqual([3, v11.length - 1]);
+    expect(v11[3]).toBe(
+      withoutLifetime[3]!.replace(
+        " You may spawn up to 4 agents at any one time.",
+        "",
+      ),
+    );
+    expect(v11.at(-1)).toBe(
+      withoutLifetime
+        .at(-1)!
+        .replace(
+          "use at least one hour for active exploration",
+          "use at least the minimum active exploration time stated in the Run parameters for active exploration",
+        )
+        .replace("before that hour has elapsed", "before that time has elapsed")
+        .replace(
+          "until the hour is met. The Trial has a 120-minute wall cap.",
+          "until that time is met.",
+        ),
+    );
+    // The resume directive stays the last paragraph (ADR 0036, 0039).
+    expect(v11.at(-1)).toMatch(/^Before giving up,/);
+    expect(text).toContain(
+      "Do not return merely because current approaches fail",
+    );
+    expect(text).not.toMatch(
+      /tool calls|one hour|\bhour\b|minutes?\b(?! active exploration time)|wall cap|up to \d|\b\d+ agents\b/,
+    );
+    expect(text).not.toMatch(
+      /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|Tourfic|Groundhogg|rtMedia|\b(?:PoC|CVE|advisory|payload)\b/i,
+    );
+  });
+
+  it("makes v13-wide the v12-wide text without the lifetime paragraph and the specialist count, plus the hand-over paragraph and the registry stop rule (ADR 0039 追記 4, 2026-10-25 and 2026-10-26)", async () => {
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const v12 = paragraphs(
+      (await loadWordPressDiscoveryAsset("wp2shell-bounty-v12-wide")).text,
+    );
+    const text = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v13-wide"))
+      .text;
+    const withHandover = paragraphs(text);
+    const lifetime = v12.findIndex((paragraph) =>
+      paragraph.startsWith("Keep every agent short."),
+    );
+    const withoutLifetime = v12.filter((_, index) => index !== lifetime);
+    // The hand-over paragraph follows the research paragraph (owner 2026-10-26).
+    const handover = withHandover.findIndex((paragraph) =>
+      paragraph.startsWith(HANDOVER_OPENING),
+    );
+    expect(withHandover[handover - 1]).toBe(v12[lifetime + 1]);
+    expect(withHandover[handover - 1]).toMatch(
+      /^Every specialist writes its routes/,
+    );
+    const v13 = withHandover.filter((_, index) => index !== handover);
+    expect(v13).toHaveLength(withoutLifetime.length);
+    const changed = v13.flatMap((paragraph, index) =>
+      paragraph === withoutLifetime[index] ? [] : [index],
+    );
+    expect(changed).toEqual([3, v13.length - 2, v13.length - 1]);
+    expect(v13[3]).toBe(
+      withoutLifetime[3]!.replace(
+        "Use four specialist agents, one per sink class, running in parallel:",
+        "Use one specialist agent per sink class, running in parallel:",
+      ),
+    );
+    expect(v13.at(-2)).toBe(
+      withoutLifetime
+        .at(-2)!
+        .replace(
+          "The root agent assigns the four sinks,",
+          "The root agent assigns one sink class to each specialist,",
+        )
+        .replace(
+          "It does not redirect specialists toward promising leads and does not launch further rounds.",
+          "It does not redirect specialists toward promising leads; the only new specialists it starts are the ones that continue a sink whose entry points remain.",
+        ),
+    );
+    expect(v13.at(-1)).toBe(
+      withoutLifetime
+        .at(-1)!
+        .replace(
+          "Stop when every specialist has reported that it has worked through the entry points for its sink,",
+          "Stop when the registry shows that the entry points of every sink have been worked through,",
+        ),
+    );
+    // The four sink classes stay listed; the stop rule stays last (ADR 0039).
+    expect(v13[3]?.match(/\([1-4]\)/g)).toEqual(["(1)", "(2)", "(3)", "(4)"]);
+    expect(v13.at(-1)).toMatch(/^Stop when/);
+    expect(text).not.toMatch(
+      /\bfour\b|tool calls|\bhour\b|\bminutes?\b|\b\d+ (?:agents|specialists)\b/,
+    );
+    expect(text).not.toMatch(
+      /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|Tourfic|Groundhogg|rtMedia|\b(?:PoC|CVE|advisory|payload)\b/i,
+    );
   });
 
   it("keeps the v2 method in v3 without an effort floor or handwritten output contract", async () => {
@@ -486,7 +841,12 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v6" ||
         id === "wp2shell-bounty-v7" ||
         id === "wp2shell-bounty-v8" ||
-        id === "wp2shell-bounty-v10"
+        id === "wp2shell-bounty-v10" ||
+        id === "wp2shell-bounty-v11" ||
+        id === "wp2shell-bounty-v10-wide" ||
+        id === "wp2shell-bounty-v11-wide" ||
+        id === "wp2shell-bounty-v12-wide" ||
+        id === "wp2shell-bounty-v13-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).

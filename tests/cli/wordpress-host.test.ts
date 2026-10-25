@@ -1,12 +1,4 @@
-import {
-  chmod,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -182,24 +174,6 @@ describe("WordPress host entry", () => {
     expect(result.code).toBe(1);
     expect(result.stderr.join("\n")).toContain(
       "The legacy Codex Verifier is retired",
-    );
-    expect(calls).toEqual([]);
-    await expect(lstat(join(root, "work"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
-  it("rejects retired attached discovery Labs before host work-directory or Docker initialization", async () => {
-    const { run, calls, configPath, root } = await setup();
-    const config = JSON.parse(await readFile(configPath, "utf8"));
-    await writeFile(
-      configPath,
-      JSON.stringify({ ...config, discovery: { lab: "attached" } }),
-    );
-    const result = await run();
-    expect(result.code).toBe(1);
-    expect(result.stderr.join("\n")).toContain(
-      "Attached discovery Labs are retired",
     );
     expect(calls).toEqual([]);
     await expect(lstat(join(root, "work"))).rejects.toMatchObject({

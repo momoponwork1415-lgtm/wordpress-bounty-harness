@@ -819,6 +819,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
           command.labHost === undefined ||
           command.databaseHost.name === command.labHost.name ||
           isIP(command.databaseHost.ipv4) !== 4)) ||
+      (command.controlHost !== undefined &&
+        (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.controlHost.name) ||
+          command.labHost === undefined ||
+          command.controlHost.name === command.labHost.name ||
+          command.controlHost.name === command.databaseHost?.name ||
+          isIP(command.controlHost.ipv4) !== 4)) ||
       command.sourceMount.mode !== "ro" ||
       command.sourceMount.path !== SANDBOX_SOURCE_MOUNT_PATH ||
       !isAbsolute(command.sourceMount.directory) ||
@@ -852,7 +858,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
       (command.minimumActiveMs === undefined
         ? command.resumeArgs !== undefined || command.resumePrompt !== undefined
         : !Number.isSafeInteger(command.minimumActiveMs) ||
-          command.minimumActiveMs <= 0 ||
+          command.minimumActiveMs < 0 ||
           command.minimumActiveMs > this.#options.timeoutMs ||
           command.researchMount === undefined ||
           command.resumeArgs?.[0] !== "exec" ||
@@ -863,6 +869,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
       (command.resume !== undefined &&
         (command.minimumActiveMs === undefined ||
           !admittedResumeSeed(command.resume))) ||
+      (command.resumeNotice !== undefined &&
+        (command.resume === undefined ||
+          command.resumeNotice.length === 0 ||
+          command.resumeNotice.length > 4_096)) ||
       (command.runMarker !== undefined &&
         (command.researchMount === undefined ||
           !runIdPattern.test(command.runMarker.runId) ||
@@ -1010,6 +1020,11 @@ export class GvisorCodexSandbox implements CodexSandbox {
           : [
               `--add-host=${command.databaseHost.name}:${command.databaseHost.ipv4}`,
             ]),
+        ...(command.controlHost === undefined
+          ? []
+          : [
+              `--add-host=${command.controlHost.name}:${command.controlHost.ipv4}`,
+            ]),
         `--mount=type=bind,src=${source},dst=${SANDBOX_SOURCE_MOUNT_PATH},readonly`,
         ...(dependency === undefined
           ? []
@@ -1049,7 +1064,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
               command.resumePrompt!,
               ...(command.resume === undefined
                 ? []
-                : [command.resume.threadId]),
+                : [
+                    command.resume.threadId,
+                    ...(command.resumeNotice === undefined
+                      ? []
+                      : [Buffer.from(command.resumeNotice).toString("base64")]),
+                  ]),
             ]),
       ];
       let result: NativeModelProcessResult;

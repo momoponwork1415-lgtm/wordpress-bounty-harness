@@ -12,7 +12,11 @@ const boundDialog = z.looseObject({
   labSetupDigest: z.string(),
 });
 
-/** A browser dialog is review material only when it is bound to this attempt. */
+/**
+ * The review Lab package for a person's own observation. Since #525 every
+ * finished attempt (`incomplete(awaiting-human-observation)`) gets one; an
+ * older `incomplete(observation)` still needs its bound stored-XSS dialog.
+ */
 export async function observedReviewLabPackage(input: {
   readonly ledger: Ledger;
   readonly store: PrivateArtifactStore;
@@ -41,7 +45,6 @@ export async function observedReviewLabPackage(input: {
     .at(-1);
   if (
     finding?.type !== "finding-recorded" ||
-    finding.category !== "stored-xss" ||
     finding.snapshotDigest !== ref.snapshotDigest ||
     ledger
       .activeParked({ campaignId: ref.campaignId })
@@ -50,7 +53,8 @@ export async function observedReviewLabPackage(input: {
     verification.verificationId !== ref.verificationId ||
     verification.snapshotDigest !== ref.snapshotDigest ||
     verification.result.status !== "incomplete" ||
-    verification.result.reason !== "observation" ||
+    (verification.result.reason !== "observation" &&
+      verification.result.reason !== "awaiting-human-observation") ||
     verification.result.evidenceDigest === undefined ||
     verification.evidenceCapture !== "harness-captured"
   )
@@ -72,6 +76,14 @@ export async function observedReviewLabPackage(input: {
   const setup = setupSchema.safeParse(opened.reconstruction.setup);
   if (!setup.success || setup.data.snapshotDigest !== ref.snapshotDigest)
     return null;
+  const admitted = {
+    packageDigest: reconstruction.digest,
+    recipeDigest: recipe.digest,
+    evidenceDigest: verification.result.evidenceDigest,
+  };
+  if (verification.result.reason === "awaiting-human-observation")
+    return admitted;
+  if (finding.category !== "stored-xss") return null;
   const dialog = await store.readJson(
     verification.result.evidenceDigest,
     "browser-dialog-observation.json",
@@ -94,10 +106,6 @@ export async function observedReviewLabPackage(input: {
     signal.capturedAttackerRequestMarkerMatch &&
     signal.verificationSequence === "post-setup-request-before-victim-visit" &&
     signal.victimPrincipal === "separate"
-    ? {
-        packageDigest: reconstruction.digest,
-        recipeDigest: recipe.digest,
-        evidenceDigest: verification.result.evidenceDigest,
-      }
+    ? admitted
     : null;
 }

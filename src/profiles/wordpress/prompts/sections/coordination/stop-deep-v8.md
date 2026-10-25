@@ -1,0 +1,1 @@
+Before giving up, use at least one hour for active exploration. The Harness will resume this same session if your final report arrives before that hour has elapsed. On such a resume, continue analyzing fresh source-grounded routes, launch new agent rounds, and challenge earlier conclusions until the hour is met. The Trial has a 120-minute wall cap.

@@ -4,16 +4,10 @@ import { canonicalJson } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { LabHandle, LabProvisioner } from "../lab/index.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
-import {
-  publishReproductionPackage,
-  type ReproductionRenderer,
-  type VerificationResultV1,
-} from "./reproduction-package.js";
+import type { VerificationResultV1 } from "./reproduction-package.js";
 
 export {
-  publishReproductionPackage,
   verificationResultV1Schema,
-  type ReproductionRenderer,
   type VerificationResultV1,
 } from "./reproduction-package.js";
 export {
@@ -29,7 +23,7 @@ const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export interface VerifiableFinding {
   readonly findingId: string;
   readonly snapshotDigest: string;
-  /** Profile classification, used only to select a reproduction template. */
+  /** Profile classification; Verification itself does not read it. */
   readonly impact?: string;
 }
 
@@ -56,12 +50,12 @@ export interface Verifier<Finding, Handle extends LabHandle> {
     readonly lab: Handle;
     /** The campaign's `finding-recorded` event; carries only digest references. */
     readonly record: RecordedFinding;
-    /** Earlier judge-owned route for a same-path version comparison. */
+    /** An earlier recorded route for a same-path version comparison. */
     readonly referenceRoute?: unknown;
     /**
      * Retakes the Harness-owned Lab state baseline from now. A Verifier whose
      * precondition setup precedes the attacker steps calls it once setup is
-     * done, so what setup changed is neither diffed nor judged.
+     * done, so what setup changed is neither captured nor diffed.
      */
     readonly restartObservation?: () => Promise<void>;
   }): Promise<VerifierAttempt>;
@@ -134,68 +128,28 @@ export class VerifierTransportIncompleteError extends Error {
   }
 }
 
-/** Harness-owned deterministic observation of a nonce canary. */
-export interface Judge<Finding, Handle extends LabHandle> {
-  readonly id: string;
+/**
+ * Harness-owned observation after a finished Verifier attempt (#525, ADR
+ * 0040): the Lab's own HTTP capture and browser records, stored as review
+ * material. It never decides; a person confirms the Finding in a Lab.
+ */
+export interface AttemptObserver<Finding, Handle extends LabHandle> {
   observe(input: {
     readonly finding: Finding;
     readonly lab: Handle;
     readonly recipeDigest: string;
-    readonly referenceRoute?: unknown;
-  }): Promise<JudgeObservation>;
+  }): Promise<AttemptObservation>;
 }
-export type JudgeObservation =
+export type AttemptObservation =
   | {
-      readonly status: "observed";
+      readonly status: "recorded";
+      /** Holds the Harness HTTP capture; the browser record when one was taken. */
       readonly evidenceDigest: string;
-      readonly evidenceCapture?: "harness-captured" | "agent-authored";
-      /** Facts the judge observed, e.g. attacker role and reached role. */
-      readonly conditions: Readonly<Record<string, string>>;
     }
   | {
-      readonly status: "not-observed";
-      /** Negative evidence must come from a Harness-owned capture. */
-      readonly evidenceCapture?: "harness-captured" | "agent-authored";
-      readonly evidenceDigest?: string;
-    }
-  | {
+      /** The Harness capture is missing or damaged, so there is nothing to show a person. */
       readonly status: "incomplete";
-      readonly reason: "precondition" | "observation" | "evidence";
-      readonly nextStep: string;
-      readonly evidenceCapture?: "harness-captured" | "agent-authored";
-      readonly evidenceDigest?: string;
-    };
-
-export interface JudgeSet<Finding, Handle extends LabHandle> {
-  for(finding: Finding): Judge<Finding, Handle> | null;
-  /** Optional profile fallback when no nonce judge can establish the claim. */
-  readonly reproducer?: Reproducer<Finding, Handle>;
-}
-
-export interface Reproducer<Finding, Handle extends LabHandle> {
-  readonly id: string;
-  /** Whether this impact can be proven by this reproducer's evidence channel. */
-  supports(finding: Finding): boolean;
-  observe(input: {
-    readonly finding: Finding;
-    readonly lab: Handle;
-    readonly recipeDigest: string;
-    readonly referenceRoute?: unknown;
-  }): Promise<ReproducerObservation>;
-}
-export type ReproducerObservation =
-  | {
-      readonly status: "observed";
-      readonly evidenceDigest: string;
-      readonly conditions: Readonly<Record<string, string>>;
-    }
-  | {
-      readonly status: "not-observed";
-      readonly evidenceDigest: string;
-    }
-  | {
-      readonly status: "incomplete";
-      readonly reason: "recipe" | "observation" | "evidence";
+      readonly reason: "evidence";
       readonly nextStep: string;
     };
 
@@ -225,8 +179,8 @@ export type LabStateDiffRecord =
 
 /**
  * Harness-owned deterministic observation of the whole Lab state around the
- * Verifier run (#186). The Verifier never receives it, and no judge reads it:
- * it is review material, not proof.
+ * Verifier run (#186). The Verifier never receives it: it is review
+ * material, not proof.
  */
 export interface LabStateObserver<Handle extends LabHandle> {
   before(lab: Handle): Promise<LabStateCapture | null>;
@@ -234,33 +188,25 @@ export interface LabStateObserver<Handle extends LabHandle> {
 }
 
 type Incomplete = Extract<VerificationResultV1, { status: "incomplete" }>;
-type ReplayNeeded = {
-  readonly status: "replay-needed";
-  readonly attempt: Extract<VerifierAttempt, { status: "attempted" }>;
-};
 type VerificationRun<
   Finding extends VerifiableFinding,
-  Setup,
   Handle extends LabHandle,
-  Reconstruction,
 > = {
   readonly campaignId: string;
-  readonly verificationId: string;
   readonly finding: Finding;
   readonly record: FindingRecord;
   readonly snapshotDigest: string;
   readonly lab: Handle;
-  readonly reconstruction: Reconstruction;
-  readonly setup: Setup;
-  readonly snapshot: { readonly digest: string };
   readonly referenceRoute: unknown;
-  readonly basisKind: "latest-version" | "fixed-version" | undefined;
-  readonly onCapture: (capture: "harness-captured" | "agent-authored") => void;
+  readonly onCapture: (capture: "harness-captured") => void;
   /** Receives where the before / after Lab state diff went (#186). */
   readonly onStateDiff: (record: LabStateDiffRecord) => void;
-  /** Receives the Verifier's stored recipe, review material whatever the judge says (#437). */
+  /** Receives the Verifier's stored recipe, review material whatever happens next (#437). */
   readonly onRecipe: (recipeDigest: string) => void;
 };
+/** What a person does next with a finished attempt; no Harness code confirms (#525). */
+const AWAITING_HUMAN_OBSERVATION_NEXT_STEP =
+  "Open a fresh review Lab, read the Harness capture and browser record, and record the human observation";
 const incomplete = (
   reason: Incomplete["reason"],
   nextStep: string,
@@ -278,16 +224,15 @@ export type VerificationOptions<
   Finding extends VerifiableFinding,
   Setup,
   Handle extends LabHandle,
-  Reconstruction,
 > = {
   readonly ledger: Ledger;
   readonly store: PrivateArtifactStore;
   readonly lab: LabProvisioner<Setup, Handle>;
   readonly verifier: Verifier<Finding, Handle>;
-  readonly judges: JudgeSet<Finding, Handle>;
+  /** Records what the Lab shows after a finished attempt; it never decides. */
+  readonly observer: AttemptObserver<Finding, Handle>;
   /** Profile parser for the private Finding record. */
   readonly readFinding: (value: unknown) => Finding;
-  readonly renderer: ReproductionRenderer<Reconstruction>;
   /** Opaque, immutable Verifier instruction version for retry compatibility. */
   readonly promptVersion?: string;
   /** Optional before / after Lab state diff; absent, the event carries no diff field. */
@@ -299,19 +244,11 @@ export class Verification<
   Finding extends VerifiableFinding,
   Setup,
   Handle extends LabHandle,
-  Reconstruction,
 > {
   readonly promptVersion: string | undefined;
-  readonly #options: VerificationOptions<
-    Finding,
-    Setup,
-    Handle,
-    Reconstruction
-  >;
+  readonly #options: VerificationOptions<Finding, Setup, Handle>;
 
-  constructor(
-    options: VerificationOptions<Finding, Setup, Handle, Reconstruction>,
-  ) {
+  constructor(options: VerificationOptions<Finding, Setup, Handle>) {
     this.#options = options;
     this.promptVersion =
       options.promptVersion === undefined
@@ -319,7 +256,10 @@ export class Verification<
         : id.parse(options.promptVersion);
   }
 
-  /** Failures stay incomplete; judges alone confirm, while captured scripts may reproduce. */
+  /**
+   * Every result is incomplete: a failure keeps its reason, and a finished
+   * attempt waits for a person to observe it in a Lab (#525, ADR 0040).
+   */
   async verify(input: {
     readonly campaignId: string;
     readonly findingId: string;
@@ -336,7 +276,6 @@ export class Verification<
     };
     readonly setup: Setup;
     readonly campaignLabSetupDigest: string;
-    readonly reconstruction: Reconstruction;
     readonly referenceRoute?: unknown;
   }): Promise<VerificationResultV1> {
     const campaignId = id.parse(input.campaignId);
@@ -350,7 +289,7 @@ export class Verification<
       input.retryOf === undefined ? undefined : id.parse(input.retryOf);
     const snapshotDigest = digest.parse(input.snapshot.digest);
     let labSetupDigest = digest.parse(input.campaignLabSetupDigest);
-    let evidenceCapture: "harness-captured" | "agent-authored" | undefined;
+    let evidenceCapture: "harness-captured" | undefined;
     let labStateDiff: LabStateDiffRecord | undefined;
     let recipeDigest: string | undefined;
     let reviewLabReady = false;
@@ -394,12 +333,6 @@ export class Verification<
             "Record a fixed-version control Finding derived from a different Snapshot",
           );
       }
-      const judge = this.#options.judges.for(finding);
-      if (judge === null && !this.#options.judges.reproducer?.supports(finding))
-        return incomplete(
-          "no-judge",
-          "No standard reproduction runner is configured for this impact",
-        );
       const provisioned = await this.#options.lab
         .provision(input.snapshot, input.setup, { purpose: "verification" })
         .catch(() => null);
@@ -436,20 +369,13 @@ export class Verification<
         "evidence",
         "Verification stopped unexpectedly; repeat in a fresh Lab",
       );
-      let replayAttempt: ReplayNeeded["attempt"] | undefined;
-      let primaryLabRemoved = false;
-      const run: VerificationRun<Finding, Setup, Handle, Reconstruction> = {
+      const run: VerificationRun<Finding, Handle> = {
         campaignId,
-        verificationId,
         finding,
         record,
         snapshotDigest,
         lab,
-        reconstruction: input.reconstruction,
-        setup: input.setup,
-        snapshot: input.snapshot,
         referenceRoute: input.referenceRoute,
-        basisKind: input.basis?.kind,
         onCapture: (capture) => {
           evidenceCapture = capture;
         },
@@ -477,9 +403,7 @@ export class Verification<
         });
         if (labEvent.status === "conflict")
           throw new Error("Verification Lab identity conflict");
-        const judged = await this.#judge(run, judge);
-        if (judged.status === "replay-needed") replayAttempt = judged.attempt;
-        else result = judged;
+        result = await this.#attempt(run);
       } catch {
         result = incomplete(
           "evidence",
@@ -487,8 +411,7 @@ export class Verification<
         );
       } finally {
         const removed = await this.#options.lab.teardown(lab).catch(() => null);
-        if (removed?.status === "removed") primaryLabRemoved = true;
-        else {
+        if (removed?.status !== "removed") {
           const cleanupLabIds =
             result.status === "incomplete" ? (result.cleanupLabIds ?? []) : [];
           result = {
@@ -500,29 +423,16 @@ export class Verification<
           };
         }
       }
-      // The provider's host lease permits only one verification Lab. Keep the
-      // recipe and state-diff evidence, release the agent Lab, then replay.
-      if (replayAttempt !== undefined && primaryLabRemoved) {
-        try {
-          result = await this.#replayInFreshLab(run, replayAttempt);
-        } catch {
-          result = incomplete(
-            "evidence",
-            "The fresh reproduction Lab stopped unexpectedly; repeat",
-          );
-        }
-      }
       return result;
     };
 
     const decided = await decide();
-    // A low-confidence observation can be checked by a person in a new Lab.
-    // This is reconstruction material only; it never changes the judge result.
+    // A person checks a finished attempt in a new Lab built from this material.
     let reviewLabDigest: string | undefined;
     if (
       reviewLabReady &&
       decided.status === "incomplete" &&
-      decided.reason === "observation" &&
+      decided.reason === "awaiting-human-observation" &&
       evidenceCapture === "harness-captured" &&
       decided.evidenceDigest !== undefined &&
       recipeDigest !== undefined
@@ -611,21 +521,16 @@ export class Verification<
   }
 
   /** `snapshotDigest` is the snapshot under test: the Finding's own, or its target's latest. */
-  async #judge(
-    run: VerificationRun<Finding, Setup, Handle, Reconstruction>,
-    judge: Judge<Finding, Handle> | null,
-  ): Promise<VerificationResultV1 | ReplayNeeded> {
+  async #attempt(
+    run: VerificationRun<Finding, Handle>,
+  ): Promise<VerificationResultV1> {
     const {
       campaignId,
       finding,
       record,
       snapshotDigest,
       lab,
-      reconstruction,
-      setup,
-      snapshot,
       referenceRoute,
-      basisKind,
       onCapture,
       onStateDiff,
     } = run;
@@ -633,12 +538,6 @@ export class Verification<
       return incomplete(
         "digest-mismatch",
         "Provision the Lab from the snapshot under test",
-      );
-    const seeded = await this.#options.lab.seedCanaries(lab).catch(() => null);
-    if (seeded?.status !== "seeded")
-      return incomplete(
-        "provision",
-        seeded?.nextStep ?? "Seed canaries in a fresh Lab",
       );
     // The observer sees the Lab before and after the Verifier; the Verifier sees neither capture.
     const observer = this.#options.stateObserver;
@@ -693,257 +592,33 @@ export class Verification<
           : { nextScenarioId: attempt.nextScenarioId }),
       };
     run.onRecipe(attempt.recipeDigest);
-    if (judge === null) return { status: "replay-needed", attempt };
-    let observation: JudgeObservation;
+    let observation: AttemptObservation;
     try {
-      observation = await judge.observe({
+      observation = await this.#options.observer.observe({
         finding,
         lab,
         recipeDigest: attempt.recipeDigest,
-        ...(referenceRoute === undefined ? {} : { referenceRoute }),
       });
     } catch {
       return incomplete(
-        "observation",
-        "The judge could not observe the Lab; repeat in a fresh Lab",
+        "evidence",
+        "The Harness could not record the Lab observation; repeat in a fresh Lab",
+        attempt.refutationDigest,
       );
     }
-    if (observation.status === "incomplete") {
-      if (
-        observation.reason === "observation" &&
-        this.#options.judges.reproducer?.supports(finding) === true
-      ) {
-        return { status: "replay-needed", attempt };
-      }
-      if (observation.evidenceCapture !== undefined)
-        onCapture(observation.evidenceCapture);
+    if (observation.status === "incomplete")
       return incomplete(
         observation.reason,
         observation.nextStep,
         attempt.refutationDigest,
-        observation.evidenceDigest,
       );
-    }
-    if (observation.status === "observed") {
-      if (observation.evidenceCapture !== undefined)
-        onCapture(observation.evidenceCapture);
-      return publishReproductionPackage({
-        store: this.#options.store,
-        renderer: this.#options.renderer,
-        category: finding.impact ?? "unclassified",
-        findingSnapshotDigest: snapshotDigest,
-        labSnapshotDigest: lab.snapshotDigest,
-        labSetupDigest: lab.setupDigest,
-        judgeResult: {
-          status: "runtime-confirmed",
-          judgeId: judge.id,
-          proofKind: "nonce-canary",
-          conditions: observation.conditions,
-          evidenceDigest: observation.evidenceDigest,
-        },
-        reconstruction,
-        setup,
-        snapshot,
-      });
-    }
-    if (observation.evidenceCapture !== undefined)
-      onCapture(observation.evidenceCapture);
-    if (
-      basisKind === "fixed-version" &&
-      referenceRoute !== undefined &&
-      observation.evidenceCapture === "harness-captured" &&
-      observation.evidenceDigest !== undefined &&
-      attempt.refutationDigest !== undefined
-    )
-      return {
-        status: "contradicted",
-        judgeId: judge.id,
-        evidenceDigest: observation.evidenceDigest,
-        refutationDigest: attempt.refutationDigest,
-      };
-    return incomplete(
-      "observation",
-      "The judge saw no canary without a captured fixed-version negative control; repair the recipe and repeat",
-      attempt.refutationDigest,
-      observation.evidenceCapture === "harness-captured"
-        ? observation.evidenceDigest
-        : undefined,
-    );
-  }
-
-  /** The Verifier can modify its Lab; only a separately provisioned Lab may reproduce. */
-  async #replayInFreshLab(
-    run: VerificationRun<Finding, Setup, Handle, Reconstruction>,
-    attempt: Extract<VerifierAttempt, { status: "attempted" }>,
-  ): Promise<VerificationResultV1> {
-    const provisioned = await this.#options.lab
-      .provision(run.snapshot, run.setup, { purpose: "verification" })
-      .catch(() => null);
-    if (provisioned === null || provisioned.status !== "ready")
-      return incomplete(
-        "provision",
-        provisioned?.nextStep ??
-          "Provision a fresh reproduction Lab and repeat",
-      );
-    const replayLab = provisioned.handle;
-    // A provider returning the agent's Lab has not supplied an independent run.
-    if (replayLab.id === run.lab.id) {
-      const removed = await this.#options.lab
-        .teardown(replayLab)
-        .catch(() => null);
-      if (removed?.status !== "removed")
-        return {
-          ...incomplete(
-            "cleanup",
-            removed?.nextStep ?? "Inspect and remove the reproduction Lab",
-          ),
-          cleanupLabIds: [replayLab.id],
-        };
-      return incomplete(
-        "provision",
-        "Provision a distinct reproduction Lab before replaying the route",
-      );
-    }
-    let result: VerificationResultV1 = incomplete(
-      "evidence",
-      "The fresh reproduction Lab stopped unexpectedly; repeat",
-    );
-    try {
-      result = await this.#observeFreshLab(run, attempt, replayLab);
-    } catch {
-      result = incomplete(
-        "evidence",
-        "The fresh reproduction Lab stopped unexpectedly; repeat",
-      );
-    } finally {
-      const removed = await this.#options.lab
-        .teardown(replayLab)
-        .catch(() => null);
-      if (removed?.status !== "removed")
-        result = {
-          ...incomplete(
-            "cleanup",
-            removed?.nextStep ?? "Inspect and remove the reproduction Lab",
-          ),
-          cleanupLabIds: [replayLab.id],
-        };
-    }
-    return result;
-  }
-
-  async #observeFreshLab(
-    run: VerificationRun<Finding, Setup, Handle, Reconstruction>,
-    attempt: Extract<VerifierAttempt, { status: "attempted" }>,
-    replayLab: Handle,
-  ): Promise<VerificationResultV1> {
-    if (
-      replayLab.snapshotDigest !== run.snapshotDigest ||
-      replayLab.setupDigest !== run.lab.setupDigest ||
-      canonicalJson(replayLab.scenario ?? null) !==
-        canonicalJson(run.lab.scenario ?? null)
-    )
-      return incomplete(
-        "digest-mismatch",
-        "Recreate the reproduction Lab from the same Snapshot and setup",
-      );
-    const appended = await this.#options.ledger.append({
-      schemaVersion: 1,
-      identity: `verification-replay-lab-${run.verificationId}`,
-      campaignId: run.campaignId,
-      snapshotDigest: run.snapshotDigest,
-      occurredAt: (this.#options.clock ?? (() => new Date()))().toISOString(),
-      type: "lab-provisioned",
-      labId: replayLab.id,
-      status: "ready",
-      purpose: "verification",
-      ...(replayLab.scenario === undefined
-        ? {}
-        : { scenario: replayLab.scenario }),
-    });
-    if (appended.status === "conflict")
-      return incomplete(
-        "evidence",
-        "The reproduction Lab ledger identity conflicts",
-      );
-    const seeded = await this.#options.lab
-      .seedCanaries(replayLab)
-      .catch(() => null);
-    if (seeded?.status !== "seeded")
-      return incomplete(
-        "provision",
-        seeded?.nextStep ?? "Seed canaries in a fresh reproduction Lab",
-      );
-    return this.#reproduce({ ...run, lab: replayLab }, attempt);
-  }
-
-  async #reproduce(
-    run: VerificationRun<Finding, Setup, Handle, Reconstruction>,
-    attempt: Extract<VerifierAttempt, { status: "attempted" }>,
-  ): Promise<VerificationResultV1> {
-    const {
-      finding,
-      snapshotDigest,
-      lab,
-      reconstruction,
-      setup,
-      snapshot,
-      referenceRoute,
-      basisKind,
-      onCapture,
-    } = run;
-    const reproducer = this.#options.judges.reproducer;
-    if (reproducer === undefined)
-      return incomplete(
-        "no-judge",
-        "No standard reproduction runner is configured",
-      );
-    let observation: ReproducerObservation;
-    try {
-      observation = await reproducer.observe({
-        finding,
-        lab,
-        recipeDigest: attempt.recipeDigest,
-        ...(referenceRoute === undefined ? {} : { referenceRoute }),
-      });
-    } catch {
-      return incomplete(
-        "observation",
-        "The standard reproduction failed in a fresh Lab",
-      );
-    }
-    if (observation.status === "incomplete")
-      return incomplete(observation.reason, observation.nextStep);
     onCapture("harness-captured");
-    if (observation.status === "not-observed") {
-      return incomplete(
-        "observation",
-        "The captured standard script did not reach the expected observation; a nonce judge is required to contradict the fixed-version claim",
-        attempt.refutationDigest,
-        observation.evidenceDigest,
-      );
-    }
-    return publishReproductionPackage({
-      store: this.#options.store,
-      renderer: this.#options.renderer,
-      category: finding.impact ?? "unclassified",
-      findingSnapshotDigest: snapshotDigest,
-      labSnapshotDigest: lab.snapshotDigest,
-      labSetupDigest: lab.setupDigest,
-      judgeResult: {
-        status: "reproduced",
-        reproducerId: reproducer.id,
-        proofKind: "captured-script-observation",
-        conditions: observation.conditions,
-        evidenceDigest: observation.evidenceDigest,
-      },
-      reconstruction,
-      setup,
-      snapshot,
-      negativeControl:
-        basisKind === "latest-version"
-          ? "unavailable-no-fixed-release"
-          : "pending-fixed-version",
-    });
+    return incomplete(
+      "awaiting-human-observation",
+      AWAITING_HUMAN_OBSERVATION_NEXT_STEP,
+      attempt.refutationDigest,
+      observation.evidenceDigest,
+    );
   }
 
   async #loadFinding(

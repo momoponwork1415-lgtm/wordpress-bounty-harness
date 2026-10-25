@@ -5,6 +5,8 @@ import { z } from "zod";
 import {
   assignDiscoveryRuntime,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
+  DEFAULT_MAX_CHILDREN,
+  MAX_CHILDREN_LIMIT,
   EGRESS_BROKER_MEMORY_MIB,
   runtimeShareSchema,
 } from "../discovery/index.js";
@@ -30,7 +32,8 @@ import type {
 } from "../profiles/wordpress/lab/index.js";
 import { wordPressScenario } from "../profiles/wordpress/lab/scenarios.js";
 import {
-  WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS,
+  WORDPRESS_DISCOVERY_MODES,
   WORDPRESS_VERIFIER_PROMPT_ID,
 } from "../profiles/wordpress/prompts/index.js";
 import type {
@@ -44,13 +47,9 @@ import {
   type WordPressSelectionPolicy,
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
+import { createWordPressAttemptObserver } from "../profiles/wordpress/verification/attempt-observer.js";
 import { WBH_VERIFY_SKILL_ID } from "../profiles/wordpress/verification/handoff-verifier.js";
-import { createWordPressJudges } from "../profiles/wordpress/verification/judges.js";
 import { createWordPressLabStateObserver } from "../profiles/wordpress/verification/lab-state-diff.js";
-import {
-  wordpressReproductionRenderer,
-  type WordPressReconstruction,
-} from "../profiles/wordpress/verification/reproduction-package.js";
 import type { CliState } from "./index.js";
 import type { RuntimeTargetCaps } from "./pipeline.js";
 
@@ -63,7 +62,45 @@ const text = z.strictObject({
 export const DISCOVERY_RUN_MEMORY_MIB =
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
 
-const runnablePrompt = z.literal(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID);
+/** The current objective of either launch mode; superRefine ties it to the mode (ADR 0039). */
+const runnablePrompt = z.enum([
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.deep,
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.wide,
+]);
+
+/**
+ * ADR 0029 cap and the default wall of both modes. `wide` used 20 until the
+ * owner's 2026-10-25 decision (ADR 0039 addendum 3).
+ */
+const WORDPRESS_DEFAULT_WALL_MINUTES = 120;
+/** ADR 0033 / 0039: the active floor by mode unless discovery.minimumActiveMinutes sets one. */
+const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = { deep: 60, wide: 0 } as const;
+
+/**
+ * Whether a discovery Lab is attached and how often the Root may reset it
+ * (redesign 2026-10-25 §7). The string form is normalised to the object.
+ * `attached` gives each Trial one exploration Lab for its whole wall (ADR
+ * 0003, 2026-10-25 addendum); resets are budgeted by `maxResets` and observer
+ * visits (`POST /observe`, Phase D2) by `maxObservations`.
+ */
+const discoveryLabSchema = z
+  .union([
+    z.enum(["none", "attached"]).transform((mode) => ({
+      mode,
+      maxResets: undefined,
+      maxObservations: undefined,
+    })),
+    z.strictObject({
+      mode: z.enum(["none", "attached"]),
+      maxResets: z.number().int().min(0).max(5).optional(),
+      maxObservations: z.number().int().min(0).max(100).optional(),
+    }),
+  ])
+  .transform(({ mode, maxResets, maxObservations }) => ({
+    mode,
+    maxResets: maxResets ?? 2,
+    maxObservations: maxObservations ?? 20,
+  }));
 
 export const LEGACY_VERIFIER_RETIRED =
   "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";
@@ -73,17 +110,24 @@ const commonCampaignFields = {
   schemaVersion: z.literal(1),
   discovery: z
     .strictObject({
-      lab: z.literal("none", {
-        error:
-          "Attached discovery Labs are retired; discovery.lab must be none",
-      }),
+      lab: discoveryLabSchema.prefault("none"),
       /** Opt-in split of targets between Codex and Claude; absent, all run on Codex. */
       runtimeShare: runtimeShareSchema.optional(),
+      /** The launch mode of every Trial this campaign starts (ADR 0039). */
+      mode: z.enum(WORDPRESS_DISCOVERY_MODES).default("deep"),
+      /** Ceiling on live children; the Root decides how many it uses. */
+      maxChildren: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_CHILDREN_LIMIT)
+        .default(DEFAULT_MAX_CHILDREN),
+      /** Defaults by mode: 60 for `deep`, 0 for `wide` (ADR 0039). */
+      minimumActiveMinutes: z.number().int().min(0).max(119).optional(),
     })
-    .default({ lab: "none" }),
+    .prefault({}),
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
-  runWallTimeMinutes: z.number().positive().max(120).default(120),
   /** Host bounds: targets, per-target discovery runs and their memory budget. */
   resources: z
     .strictObject({
@@ -124,10 +168,34 @@ const commonCampaignFields = {
 export const wordpressCampaignConfigSchema = z
   .strictObject({
     ...commonCampaignFields,
-    runWallTimeMinutes: z.number().gt(60).max(120).default(120),
-    promptId: runnablePrompt.default(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID),
+    /** Defaults to the 120-minute cap in both modes (ADR 0039 addendum 3). */
+    runWallTimeMinutes: z.number().positive().max(120).optional(),
+    /** Defaults to the current objective of the mode. */
+    promptId: runnablePrompt.optional(),
   })
   .superRefine((config, context) => {
+    const mode = config.discovery.mode;
+    if (
+      config.promptId !== undefined &&
+      config.promptId !== WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS[mode]
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["promptId"],
+        message: `The ${mode} mode runs ${WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS[mode]} only`,
+      });
+    const floor =
+      config.discovery.minimumActiveMinutes ??
+      WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES[mode];
+    if (
+      floor > 0 &&
+      (config.runWallTimeMinutes ?? WORDPRESS_DEFAULT_WALL_MINUTES) <= floor
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["runWallTimeMinutes"],
+        message: `A ${mode} wall must exceed the ${floor}-minute active floor`,
+      });
     const caps = config.resources.maxConcurrentTargetsByRuntime;
     if (caps !== undefined) {
       const share = config.discovery.runtimeShare ?? { codex: 1, claude: 0 };
@@ -167,7 +235,21 @@ export const wordpressCampaignConfigSchema = z
         path: ["lab", "scenarioId"],
         message: "Unknown WordPress Lab scenario",
       });
-  });
+  })
+  .transform((config) => ({
+    ...config,
+    discovery: {
+      ...config.discovery,
+      minimumActiveMinutes:
+        config.discovery.minimumActiveMinutes ??
+        WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES[config.discovery.mode],
+    },
+    promptId:
+      config.promptId ??
+      WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS[config.discovery.mode],
+    runWallTimeMinutes:
+      config.runWallTimeMinutes ?? WORDPRESS_DEFAULT_WALL_MINUTES,
+  }));
 export type WordPressCampaignConfig = z.infer<
   typeof wordpressCampaignConfigSchema
 >;
@@ -220,7 +302,10 @@ export interface WordPressCampaignBoundaries {
   ) => Verifier<WordPressFinding, WordPressLabHandle>;
 }
 
-/** Where `verify next --handoff` exchanges files with the skill, and the host ports it uses. */
+/**
+ * Where `verify next --handoff` exchanges files with the skill, and the host
+ * ports it asks for; 0 takes a free port, which `lab.json` then names (#432).
+ */
 export type VerifierHandoff = {
   readonly directory: string;
   readonly httpPort: number;
@@ -240,7 +325,7 @@ export type WordPressCliProfileOptions = {
   readonly scopePolicy: WordpressScopePolicy;
   /** Git-outside legacy history JSON, read on every selection (D2). */
   readonly legacyHistoryFile?: string;
-  /** Overrides the scope facts read from judge evidence and the selection record. */
+  /** Overrides the scope facts read from recorded judge evidence and the selection record. */
   readonly scopeFacts?: ScopeFactsProvider<WordpressScopeInput>;
   /** Local Wordfence history mirror; absent, duplicate lookup is unavailable. */
   readonly wordfenceHistory?: {
@@ -252,8 +337,7 @@ export type WordPressCliProfileOptions = {
 export type WordPressVerification = Verification<
   WordPressFinding,
   WordPressLabSetup,
-  WordPressLabHandle,
-  WordPressReconstruction
+  WordPressLabHandle
 >;
 
 /** The campaign config file, validated; a budget below one discovery run stops here. */
@@ -313,8 +397,9 @@ export async function readWordPressSelectionPolicyFile(
 
 /**
  * The policy a campaign config names (or the profile default). The two must
- * agree on the WordPress core version and the prompt variant; this is the one
- * place that checks it.
+ * agree on the WordPress core version, and a policy's prompt variant must be a
+ * current objective; both modes select from the same policy (ADR 0039). This
+ * is the one place that checks it.
  */
 export async function readWordPressCampaignPolicy(
   config: WordPressCampaignConfig,
@@ -330,7 +415,9 @@ export async function readWordPressCampaignPolicy(
     throw new Error("Selection and campaign WordPress versions differ");
   if (
     policy.promptVariant !== undefined &&
-    policy.promptVariant !== config.promptId
+    !Object.values(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).some(
+      (id) => id === policy.promptVariant,
+    )
   )
     throw new Error("Selection and campaign prompt variants differ");
   return policy;
@@ -352,35 +439,6 @@ const setupFor =
     };
   };
 
-const reconstructionFor =
-  (config: WordPressCampaignConfig) =>
-  (snapshot: Snapshot): WordPressReconstruction => ({
-    wordpressVersion: config.wordpressVersion,
-    target: snapshot.target,
-    enabledSettings: [
-      ...(config.lab.translatePress === undefined &&
-      config.lab.scenarioId !== "translatepress-translation-data-v1"
-        ? []
-        : [
-            `TranslatePress publishes ${config.lab.translatePress?.administratorSecondaryLocale ?? "fr_FR"} as a secondary language`,
-            `The administrator uses ${config.lab.translatePress?.administratorSecondaryLocale ?? "fr_FR"} as profile locale`,
-          ]),
-      ...(config.lab.scenarioId === "translatepress-translation-data-v1"
-        ? ["TranslatePress has one ordinary reviewed translation"]
-        : []),
-      ...(config.lab.initialApprovedComment === true ||
-      config.lab.scenarioId === "approved-comment-v1" ||
-      config.lab.scenarioId === "translatepress-translation-data-v1"
-        ? ["The first published post has one approved comment"]
-        : []),
-    ],
-    roles: [
-      "unauthenticated",
-      "subscriber",
-      ...(config.lab.customerRole ? ["customer"] : []),
-    ],
-  });
-
 function verificationFor(
   state: CliState,
   boundaries: WordPressCampaignBoundaries,
@@ -398,9 +456,12 @@ function verificationFor(
     store: state.store,
     lab: boundaries.lab,
     verifier,
-    judges: createWordPressJudges({ store: state.store, lab: boundaries.lab }),
+    // Records the Lab's capture and browser; a person confirms in a Lab (#525).
+    observer: createWordPressAttemptObserver({
+      store: state.store,
+      lab: boundaries.lab,
+    }),
     readFinding: readWordPressFinding,
-    renderer: wordpressReproductionRenderer,
     // The skill id is the prompt version of a handoff run; the ledger tells the two apart.
     promptVersion:
       handoff === undefined
@@ -430,7 +491,6 @@ export interface WordPressCampaignSession {
   readonly policy: () => Promise<WordPressSelectionPolicy>;
   readonly boundaries: WordPressCampaignBoundaries;
   readonly setupFor: (snapshot: Snapshot) => WordPressLabSetup;
-  readonly reconstructionFor: (snapshot: Snapshot) => WordPressReconstruction;
   /** Built once on use; administration and history access require no Verifier. */
   readonly verification: WordPressVerification;
 }
@@ -459,7 +519,6 @@ export async function openWordPressCampaignSession(
     policy: () => (policy ??= readWordPressCampaignPolicy(config)),
     boundaries,
     setupFor: setupFor(config),
-    reconstructionFor: reconstructionFor(config),
     get verification() {
       return (verification ??= verificationFor(
         state,

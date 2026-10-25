@@ -56,6 +56,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     labId: id,
     status: z.enum(["ready", "failed"]),
     purpose: z.enum(["discovery", "verification"]).optional(),
+    /** The Lab setup digest; a resumed segment's fresh Lab must match it. */
+    setupDigest: digest.optional(),
     scenario: z.strictObject({ id, digest }).optional(),
     reachability: z
       .strictObject({
@@ -97,6 +99,21 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       promptDigest: digest.optional(),
       objectiveDigest: digest.optional(),
       contractDigest: digest.optional(),
+      /**
+       * Redesign 2026-10-25 §5: sha256 of each human-written section of an
+       * objective composed from fragments; absent on earlier events and on
+       * single-file objectives.
+       */
+      sectionDigests: z
+        .strictObject({
+          objective: digest.optional(),
+          strategy: digest.optional(),
+          coordination: digest.optional(),
+          persistence: digest.optional(),
+        })
+        .optional(),
+      /** sha256 of the complete prompt text handed to the Root; absent before 2026-10-25. */
+      inputDigest: digest.optional(),
       /** Legacy Trial field; retained so append-only ledgers remain readable. */
       continuationPromptDigest: digest.optional(),
       trustBoundaryVersion: id.optional(),
@@ -126,6 +143,25 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       labAccess: z
         .strictObject({ database: z.enum(["read-only", "none"]) })
         .optional(),
+      /** ADR 0039: the Trial's launch mode; absent on events before 2026-10-25. */
+      mode: z.enum(["deep", "wide"]).optional(),
+      /**
+       * Redesign 2026-10-25 §7: the values the Harness enforced and stated in
+       * the Run parameters section; absent on earlier events.
+       */
+      wallMinutes: z.number().positive().optional(),
+      minimumActiveMinutes: z.number().nonnegative().optional(),
+      maxChildren: z.number().int().positive().optional(),
+      lab: z
+        .strictObject({
+          mode: z.enum(["none", "attached"]),
+          maxResets: z.number().int().nonnegative(),
+          /** Attached Labs from Phase D2 on; absent on earlier events. */
+          maxObservations: z.number().int().nonnegative().optional(),
+        })
+        .optional(),
+      model: id.optional(),
+      effort: id.optional(),
       axis: z.literal("history").optional(),
       arm: z.enum(["a", "b"]).optional(),
       arms: z
@@ -194,6 +230,25 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         dbQueries: z.number().int().nonnegative(),
       })
       .optional(),
+    /**
+     * What the Harness observed in the Trial's exploration Lab (ADR 0003,
+     * 2026-10-25 addendum): exchanges that passed the Lab recorder and resets
+     * through the control endpoint. Absent on Trials without one and on
+     * earlier events; the capture itself is the `exploration-lab` artifact.
+     */
+    labObserved: z
+      .strictObject({
+        requests: z.number().int().nonnegative(),
+        droppedRequests: z.number().int().nonnegative(),
+        resets: z.number().int().nonnegative(),
+        refusedResets: z.number().int().nonnegative(),
+        /** Control answers that did not reach labctl after one retry. */
+        droppedAnswers: z.number().int().nonnegative().optional(),
+        /** Phase D2; absent on earlier events. */
+        observations: z.number().int().nonnegative().optional(),
+        refusedObservations: z.number().int().nonnegative().optional(),
+      })
+      .optional(),
     /** Unique direct children seen and admitted by a cooperative Root run. */
     childThreadsObserved: z.number().int().nonnegative().optional(),
     childThreadsAdmitted: z.number().int().nonnegative().max(255).optional(),
@@ -224,6 +279,13 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         reasoningOutputTokens: tokens,
       })
       .optional(),
+    /** Copied from the run's receipt; absent on events before 2026-10-25 (A2). */
+    agentRole: z.enum(["root", "child"]).optional(),
+    agentType: z.string().min(1).max(128).optional(),
+    delegationDigest: z.union([digest, z.literal("unavailable")]).optional(),
+    delegationLength: z.number().int().nonnegative().optional(),
+    firstFinalReportAt: z.iso.datetime({ offset: true }).optional(),
+    candidatesAfterFirstFinalReport: z.number().int().nonnegative().optional(),
   }),
   event({
     type: z.literal("discovery-concluded"),
@@ -338,6 +400,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     type: z.literal("finding-recorded"),
     findingId: id,
     runId: id,
+    /** The Trial the run belongs to; absent on events before 2026-10-25 (A2). */
+    trialId: id.optional(),
     category: id,
     preconditionClass: id.optional(),
     continuationOrdinal: z.number().int().nonnegative().optional(),
@@ -795,6 +859,28 @@ const storedRow = z.strictObject({
   event_json: z.string(),
 });
 
+const recordedTime = z.object({ occurredAt: z.string() });
+
+/**
+ * #212: events carry the time they were recorded, so a retried append of the
+ * same fact differs only in `occurredAt`; that is the event already stored.
+ */
+function priorStatus(
+  row: unknown,
+  parsed: LedgerEventV1,
+  inputDigest: string,
+): "existing" | "conflict" {
+  const stored = storedRow.parse(row);
+  if (stored.input_digest === inputDigest) return "existing";
+  const recordedAt = recordedTime.safeParse(JSON.parse(stored.event_json)).data
+    ?.occurredAt;
+  return recordedAt !== undefined &&
+    stored.input_digest ===
+      canonicalDigest({ ...parsed, occurredAt: recordedAt })
+    ? "existing"
+    : "conflict";
+}
+
 type Counts = { -readonly [K in keyof FunnelCounts]: number };
 
 function emptyCounts(): Counts {
@@ -873,14 +959,8 @@ export class Ledger {
         "SELECT sequence, identity, input_digest, event_json FROM ledger_events WHERE identity = ?",
       )
       .get(parsed.identity);
-    if (prior !== undefined) {
-      return {
-        status:
-          storedRow.parse(prior).input_digest === inputDigest
-            ? "existing"
-            : "conflict",
-      };
-    }
+    if (prior !== undefined)
+      return { status: priorStatus(prior, parsed, inputDigest) };
     for (const ref of parsed.artifacts) {
       const resolution = await this.#artifacts.resolve(ref.digest);
       if (
@@ -936,10 +1016,7 @@ export class Ledger {
         )
         .get(parsed.identity);
       if (existing !== undefined) {
-        const status =
-          storedRow.parse(existing).input_digest === inputDigest
-            ? "existing"
-            : "conflict";
+        const status = priorStatus(existing, parsed, inputDigest);
         this.#db.exec("COMMIT");
         return { status };
       }

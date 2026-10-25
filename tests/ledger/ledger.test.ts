@@ -284,6 +284,156 @@ describe("Ledger public interface", () => {
     });
   });
 
+  it("records the Trial's launch mode and still reads starts without one (ADR 0039)", async () => {
+    const { ledger } = await fixture();
+    await ledger.append({
+      ...common("wide-start"),
+      type: "discovery-run-started",
+      runId: "run-wide",
+      labId: "lab-wide",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "wp2shell-bounty-v11-wide",
+        mode: "wide",
+      },
+    });
+    await ledger.append({
+      ...common("old-start"),
+      type: "discovery-run-started",
+      runId: "run-old",
+      labId: "lab-old",
+      history: { mode: "none" },
+      configuration: { promptVariant: "wp2shell-bounty-v8" },
+    });
+    const starts = ledger
+      .read({ type: "discovery-run-started" })
+      .map(({ event }) =>
+        event.type === "discovery-run-started" ? event.configuration : null,
+      );
+    expect(starts[0]).toMatchObject({ mode: "wide" });
+    expect(starts[1]).not.toHaveProperty("mode");
+    await expect(
+      ledger.append({
+        ...common("bad-start"),
+        type: "discovery-run-started",
+        runId: "run-bad",
+        labId: "lab-bad",
+        history: { mode: "none" },
+        configuration: {
+          promptVariant: "wp2shell-bounty-v8",
+          mode: "screening" as never,
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("records section and input digests and still reads starts without them (redesign 2026-10-25 §5)", async () => {
+    const { ledger } = await fixture();
+    const sectionDigests = {
+      objective: revision,
+      strategy: `sha256:${"e".repeat(64)}`,
+      coordination: `sha256:${"f".repeat(64)}`,
+      persistence: `sha256:${"a".repeat(64)}`,
+    };
+    await ledger.append({
+      ...common("sectioned-start"),
+      type: "discovery-run-started",
+      runId: "run-sectioned",
+      labId: "lab-sectioned",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "wp2shell-bounty-v10",
+        promptDigest: revision,
+        sectionDigests,
+        inputDigest: `sha256:${"b".repeat(64)}`,
+      },
+    });
+    await ledger.append({
+      ...common("unsectioned-start"),
+      type: "discovery-run-started",
+      runId: "run-unsectioned",
+      labId: "lab-unsectioned",
+      history: { mode: "none" },
+      configuration: { promptVariant: "wp2shell-bounty-v8" },
+    });
+    const starts = ledger
+      .read({ type: "discovery-run-started" })
+      .map(({ event }) =>
+        event.type === "discovery-run-started" ? event.configuration : null,
+      );
+    expect(starts[0]).toMatchObject({
+      sectionDigests,
+      inputDigest: `sha256:${"b".repeat(64)}`,
+    });
+    expect(starts[1]).not.toHaveProperty("sectionDigests");
+    expect(starts[1]).not.toHaveProperty("inputDigest");
+    await expect(
+      ledger.append({
+        ...common("unknown-section-start"),
+        type: "discovery-run-started",
+        runId: "run-unknown-section",
+        labId: "lab-unknown-section",
+        history: { mode: "none" },
+        configuration: {
+          promptVariant: "wp2shell-bounty-v10",
+          sectionDigests: { knowledge: revision } as never,
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("records the enforced run parameters and still reads starts without them (redesign 2026-10-25 §7)", async () => {
+    const { ledger } = await fixture();
+    const parameters = {
+      wallMinutes: 120,
+      minimumActiveMinutes: 0,
+      maxChildren: 6,
+      lab: { mode: "none" as const, maxResets: 2 },
+      model: "claude-opus-5-5",
+      effort: "high",
+    };
+    await ledger.append({
+      ...common("parameterised-start"),
+      type: "discovery-run-started",
+      runId: "run-parameterised",
+      labId: "lab-parameterised",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "wp2shell-bounty-v12-wide",
+        ...parameters,
+      },
+    });
+    await ledger.append({
+      ...common("unparameterised-start"),
+      type: "discovery-run-started",
+      runId: "run-unparameterised",
+      labId: "lab-unparameterised",
+      history: { mode: "none" },
+      configuration: { promptVariant: "wp2shell-bounty-v8" },
+    });
+    const starts = ledger
+      .read({ type: "discovery-run-started" })
+      .map(({ event }) =>
+        event.type === "discovery-run-started" ? event.configuration : null,
+      );
+    expect(starts[0]).toMatchObject(parameters);
+    expect(starts[1]).not.toHaveProperty("maxChildren");
+    expect(starts[1]).not.toHaveProperty("lab");
+    await expect(
+      ledger.append({
+        ...common("bad-lab-start"),
+        type: "discovery-run-started",
+        runId: "run-bad-lab",
+        labId: "lab-bad-lab",
+        history: { mode: "none" },
+        configuration: {
+          promptVariant: "wp2shell-bounty-v10",
+          lab: { mode: "shared", maxResets: 2 } as never,
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("counts boundary candidates once across rejection and replay, with classified holds and token rates", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);
@@ -1636,5 +1786,87 @@ describe("verification attempt metadata (#107)", () => {
         result: { status: "incomplete", reason: "recipe", nextStep: "Retry" },
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe("Ledger capture fields added for the Trial timeline (A2, #212)", () => {
+  it("reads events written before the fields and stores them when present", async () => {
+    const { ledger } = await fixture();
+    const finished = {
+      type: "discovery-run-finished" as const,
+      outcome: "completed" as const,
+      costUsd: "unavailable" as const,
+      wallTimeMs: 1,
+    };
+    expect(
+      await ledger.append({
+        ...common("old-finish"),
+        ...finished,
+        runId: "run-old",
+      }),
+    ).toEqual({ status: "appended" });
+    expect(
+      await ledger.append({
+        ...common("old-finding"),
+        type: "finding-recorded",
+        findingId: "finding-old",
+        runId: "run-old",
+        category: "injection",
+      }),
+    ).toEqual({ status: "appended" });
+    await ledger.append({
+      ...common("new-finish"),
+      ...finished,
+      runId: "run-child",
+      agentRole: "child",
+      agentType: "general-purpose",
+      delegationDigest: snapshot,
+      delegationLength: 42,
+    });
+    await ledger.append({
+      ...common("new-root-finish"),
+      ...finished,
+      runId: "run-root",
+      agentRole: "root",
+      firstFinalReportAt: "2026-10-08T00:40:00.000Z",
+      candidatesAfterFirstFinalReport: 3,
+    });
+    await ledger.append({
+      ...common("new-finding"),
+      type: "finding-recorded",
+      findingId: "finding-new",
+      runId: "run-child",
+      trialId: "trial-1",
+      category: "injection",
+    });
+    const events = ledger.read({}).map(({ event }) => event);
+    expect(events[0]).not.toHaveProperty("agentRole");
+    expect(events[1]).not.toHaveProperty("trialId");
+    expect(events[2]).toMatchObject({ delegationLength: 42 });
+    expect(events[3]).toMatchObject({ candidatesAfterFirstFinalReport: 3 });
+    expect(events[4]).toMatchObject({ trialId: "trial-1" });
+  });
+
+  it("treats a retried append that differs only in occurredAt as the event already recorded", async () => {
+    const { ledger } = await fixture();
+    const finding = {
+      ...common("finding-retry"),
+      type: "finding-recorded" as const,
+      findingId: "finding-retry",
+      runId: "run-1",
+      category: "injection",
+    };
+    expect(await ledger.append(finding)).toEqual({ status: "appended" });
+    expect(
+      await ledger.append({ ...finding, occurredAt: "2026-10-09T00:00:00Z" }),
+    ).toEqual({ status: "existing" });
+    expect(
+      await ledger.append({
+        ...finding,
+        occurredAt: "2026-10-09T00:00:00Z",
+        runId: "run-2",
+      }),
+    ).toEqual({ status: "conflict" });
+    expect(ledger.read({})[0]?.event.occurredAt).toBe("2026-10-08T00:00:00Z");
   });
 });

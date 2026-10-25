@@ -376,6 +376,68 @@ describe("Codex native agent runtime", () => {
     }
   });
 
+  it("admits a cooperative Trial without an active floor (wide mode, ADR 0039)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-zero-floor-"));
+    try {
+      const cooperativeProfile = defineAgentRuntimeProfile({
+        id: "cooperative-minimum",
+        transportKind: "codex-native/v1",
+        sandboxImageDigest: digest,
+        requestedModelId: "gpt-6-sol",
+        requestedEffort: "high",
+        codexCliVersion: "0.161.0",
+        bundledCatalogDigest: digest,
+        authenticationMethod: "host-private-bearer",
+        cyberAccessProgram: "daybreak_blue",
+        serviceTier: "priority",
+        subagent: { modelId: "gpt-6-sol", effort: "high" },
+      });
+      const commands: CodexSandboxCommand[] = [];
+      const runtime = new CodexNativeAgentRuntime(
+        sandbox(transcript, commands, {
+          completedAt: "2026-10-08T07:10:00.000Z",
+          rollouts: [
+            JSON.stringify({
+              timestamp: now,
+              type: "session_meta",
+              payload: {
+                id: JSON.parse(transcript.split("\n")[0]!)?.thread_id,
+                source: "exec",
+              },
+            }),
+          ],
+        }),
+        broker(),
+        new ProviderAttachmentStore(root),
+        image,
+        () => new Date(now),
+      );
+      const result = await runtime.execute({
+        ...run,
+        profile: cooperativeProfile,
+        coordination: "cooperative",
+        minimumActiveMs: 0,
+        maxChildren: 6,
+        expiresAt: "2026-10-08T09:00:00.000Z",
+        campaignInput: {
+          ...run.campaignInput,
+          modelProfileDigest: cooperativeProfile.digest,
+        },
+      });
+      expect(commands[0]?.minimumActiveMs).toBe(0);
+      // The campaign's ceiling reaches both the first turn and the resumes.
+      expect(commands[0]?.args).toContain("agents.max_threads=6");
+      expect(commands[0]?.resumeArgs).toContain("agents.max_threads=6");
+      expect(commands[0]?.args).not.toContain("agents.max_threads=4");
+      expect(result.receipt).not.toMatchObject({
+        reasonDetail: "early-final-before-minimum",
+      });
+      expect(result.receipt.terminal).toBe("completed");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("records a wall timeout as an incomplete receipt", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-wall-receipt-"));
     try {
@@ -1080,12 +1142,21 @@ describe("Codex native agent runtime", () => {
         truncated: false,
       });
       expect(result.agentRuns).toHaveLength(1);
+      expect(result.receipt).toMatchObject({ agentRole: "root" });
+      expect(result.receipt).not.toHaveProperty("firstFinalReportAt");
       expect(result.agentRuns?.[0]?.receipt).toMatchObject({
         runId: "child-thread",
         terminal: "completed",
         usage: { inputTokens: 8, outputTokens: 3 },
         observed: { toolCalls: 1, filesRead: 1, uniqueFilesRead: 1 },
+        // The spawn message is encrypted; the CLI wrote no agent_role.
+        agentRole: "child",
+        agentType: "unavailable",
+        delegationDigest: "unavailable",
       });
+      expect(result.agentRuns?.[0]?.receipt).not.toHaveProperty(
+        "delegationLength",
+      );
       const attachment = result.agentRuns?.[0]?.attachment;
       expect(attachment && (await attachments.read(attachment))).toMatchObject({
         status: "resolved",
@@ -1804,10 +1875,15 @@ describe("Codex native agent runtime", () => {
             lab: {
               ...run.lab,
               database: { host: "database", ipv4: "172.20.0.3" },
+              control: { host: "labctl", ipv4: "172.20.0.130" },
             },
           })
         ).receipt.terminal,
       ).toBe("completed");
+      expect(commands[0]?.controlHost).toEqual({
+        name: "labctl",
+        ipv4: "172.20.0.130",
+      });
       expect(commands[0]?.dependencyMount).toEqual({
         directory: dependencySource.directory,
         expectedTree: dependencySource.tree,

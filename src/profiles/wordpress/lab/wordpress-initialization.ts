@@ -1,4 +1,3 @@
-import { SQL_CANARY_TABLE } from "./canary-placement.js";
 import {
   DATABASE_NAME,
   READ_ONLY_DATABASE_USER,
@@ -308,7 +307,7 @@ export async function initializeWordPress(
   await seedScenarioMemberPost(input);
 }
 
-/** Grant SELECT on the tables present at provision time, before canary placement. */
+/** Grant SELECT on the tables present at provision time. */
 export async function grantReadOnlyDatabaseAccess(
   lab: WordPressLabSession,
 ): Promise<void> {
@@ -327,9 +326,7 @@ export async function grantReadOnlyDatabaseAccess(
   ).stdout
     .split("\n")
     .map((line) => line.trim())
-    .filter(
-      (line) => /^[A-Za-z0-9_]{1,64}$/.test(line) && line !== SQL_CANARY_TABLE,
-    );
+    .filter((line) => /^[A-Za-z0-9_]{1,64}$/.test(line));
   if (tables.length === 0) throw new Error("No tables to expose");
   await lab.requireDocker([
     "exec",
