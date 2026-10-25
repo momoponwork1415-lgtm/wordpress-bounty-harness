@@ -34,9 +34,9 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | --- | --- | --- | --- | --- | --- |
 | `selection` | 方針に従って対象を機械的に選び、予算内で順序付ける | `select(policy) → TargetSelection[]`、`inspect` | 選定方針（人間が編集）、WordPress.org の観測、台帳の過去選定、選定記録とスコア内訳 | WordPress.org / Programme観測の unavailable / stale をeligibleにしない | 開発対象はslugと版を直接指定可。公開履歴は mirror の件数と公開日だけを採点に使う（ADR 0037） |
 | `snapshot` | 対象plugin、WordPress本体、PHP、必要な依存pluginのsourceをdigestで固定する | `freeze(selection) → Snapshot`、`verify(digest)` | Target / Dependency Snapshot、canonical manifest | archiveの不正path・symlink・size超過を拒否し、必要な依存の欠落を黙って省略しない | 移植: `canonical-source-tree`、`canonical-json`、`immutable-file`、`private-artifact-store` |
-| `lab` | WordPress + MySQLの使い捨てgVisor環境を供給し、canaryとロール別アカウントを仕込む | `provision(snapshot, setup) → LabHandle`、`seedCanaries`、`teardown` | Lab Setup digest、canary台帳（nonceと配置先）、ロール認証情報（Lab内のみ） | source / image / runsc不一致では起動しない。provision失敗は `incomplete` 用の理由コード | 移植: `human-os` のgVisor候補検証Lab。拡張: canary seeding、ロール基準の正常操作記録。旧discovery用Labは退役し、過去の記録だけを読む |
+| `lab` | WordPress + MySQLの使い捨てgVisor環境を供給し、ロール別アカウントと、HTTP捕捉のrecorder・Lab browserを付ける。検証Labと、人間が観測する新しいreview Labの両方を立てる | `provision(snapshot, setup) → LabHandle`、`teardown` | Lab Setup digest、ロール認証情報（Lab内のみ） | source / image / runsc不一致では起動しない。provision失敗は `incomplete` 用の理由コード | 移植: `human-os` のgVisor候補検証Lab。拡張: ロール基準の正常操作記録。canaryの播種は2026-10-25に削除した（ADR 0040）。旧discovery用Labは退役し、過去の記録だけを読む |
 | `discovery` | 固定Snapshotで対象ごとにRoot＋子（上限は `discovery.maxChildren`、既定 4）の協調Trialを1回回す | `run(campaignInput) → DiscoveryRun`、`campaign(stopRule)` | Trial id、Root / 子の実行記録、model profile digest、prompt digest、usage、FindingとLeadのdigest参照 | provider / schema / sandbox失敗はtyped receiptとして残し、有効な個別成果を失わない。provider上限はcampaignを止め、runnerがbackoff後に同じcampaign IDで再開する（`runtimeShare` で両 runtime に分けた探索Labなしのcampaignでは、上限に当たった runtime の対象だけを止める。ADR 0032 の 2026-10-20 追記 3）。対象単位の失敗は `target-skipped` で次の対象へ進む | ADR 0029。旧単独Trialと二段構えの記録は読み続ける |
-| `verification` | 検証skillの出力を保存し、Harnessが捕捉したHTTP、Lab状態の差分、Lab browserの記録を残す。成立は判定しない（ADR 0040） | `verify(finding, snapshot, lab) → VerificationResult` | Verifier run記録、判定器の証拠（HTTP捕捉、canary回収、browser観測、ロール基準との差分）、Lab Setup digest | 前提不一致・observation失敗・cleanup失敗は `incomplete` | 新規。移植: Execution Canary |
+| `verification` | 検証skillの出力を保存し、Harnessが捕捉したHTTP、Lab状態の差分、Lab browserの記録を残す。成立は判定しない（ADR 0040） | `verify(finding, snapshot, lab) → VerificationResult` | Verifier run記録、Harnessの証拠（HTTP捕捉、Lab状態の差分、Lab browserの記録）、Lab Setup digest | 前提不一致・observation失敗・cleanup失敗は `incomplete`。捕捉が残ったattemptは `incomplete(awaiting-human-observation)` | 新規 |
 | `ledger` | 全イベントを追記し、funnelを読み取り専用で導く | `append(event)`、`read(query)`、`funnel(campaign)` | LedgerEvent（型付きunion、snapshot digest付き）、添付（Codex findings等）のdigest参照 | 同一identityへの異なる内容はconflict。削除しない | 新規。規則はADR 0024とMantisから |
 | `review` | 人間が検証済みFindingを見て提出判断をする。scope、重複、文案、承認 | `queue() → ReviewItem[]`、`decide`、`assessScope`、`draft`、`authorize` | ReviewDecision、Programme Scope Assessment、Submission Candidate、Submission Draft（版付き）、External Action Authorization | scope評価失敗はscopeだけ `incomplete`、Verified Vulnerabilityを失わない。必要な承認がなければadmitしない | 移植: `human-os` のscope評価・Draft・Authorization。新規: review CLI、ローカルWordfence履歴DB照合 |
 | `evaluation` | 2026-10-18 に削除（所有者指示）。`eval compare / prospective / case-blocked` と location-overlap 採点は運用・skill・runner のどれも呼んでいなかった。費用と転帰の集計は `ledger` の `funnel` / `usage` が持つ | — | — | — | — |
@@ -51,8 +51,8 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | profileが提供するもの | WordPress版の中身 |
 | --- | --- |
 | source取得 | WordPress.orgからの対象・依存pluginの取得と検査、固定実行imageからのWordPress本体・PHP sourceの取得 |
-| Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、canaryの配置先（options、post meta、ファイル、canaryユーザー） |
-| 判定器集合 | 第7節の種別別判定器 |
+| Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、HTTP捕捉のrecorder、Lab browser |
+| Lab観測器 | 第7節のHTTP捕捉、Lab状態の差分、被害者画面の記録。成立は判定しない（判定器集合は2026-10-25に削除、ADR 0040） |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
 | prompt雛形 | 新規探索では、campaign 設定の `discovery.mode` に応じて `wp2shell-bounty-v11`（`deep`）か `wp2shell-bounty-v13-wide`（`wide`）だけを実行可能にする。v8、v10、v10-wide、v11-wide、v12-wide を含む旧版は過去Trialのdigest・実験結果の照合用に保存し、新規探索には使わない。trust境界宣言の雛形も持つ。ADR 0019、0029、0033、0039 |
 | source補助 | （削除済み、ADR 0034）保存先索引と登録入口の生成は 2026-10-18 に Harness から外した。どこを読み何を索引にするかは prompt 側の Root が決める |
@@ -82,7 +82,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - 攻撃者位置: 未認証とsubscriber（customer相当）だけ。contributor以上はtrust境界の内側として宣言する（第8a節）。
 - 旧Trialの公開履歴入力・照合仕様: ローカルWordfence履歴DBから、snapshotの版より前（評価runではheld-outの公開日より前）に公開された対象プラグインの記録を抽出した。内容は種別、影響版、修正版、公開日、公開記録のタイトル、修正版との差分で変わったファイルの一覧までで、PoC・payload・再現手順は含めない。渡した・渡さないは `CampaignInput` に記録する（ADR 0012）。v8 以降の新規探索にはこの履歴を渡さない。
 - 入力: 新規探索には `wp2shell` の単一協調Trialだけを使う。目的promptは campaign 設定の `discovery.mode` で決まり、`deep` は版・digest付きの `wp2shell-bounty-v11`、`wide` は `wp2shell-bounty-v13-wide` に限る（ADR 0039 の 2026-10-25 追記 4。v10、v10-wide、v11-wide、v12-wide は archived）。目的文には子の数、最低時間、wall の数を書かず、生成節 `## Run parameters` が伝える。mode は Trial の属性として台帳の `configuration.mode` に残し、Trial の途中で変えない。v8・v10・v10-wide・v11-wide・v12-wide を含む旧版と旧modeは過去Trialの目的文・digest・実験結果の照合用に残すが、新規Trialには選べない。人間が書いたtrust境界宣言、Programme Boundary、固定した対象plugin、WordPress core、実行imageに対応するPHP、必要な依存pluginの読み取り専用source pack、Lab（任意）のHTTP endpointと低権限認証情報、provision時点のtableだけを読めるRO DB accountを渡す。依存pluginは `Requires Plugins` ヘッダ、WooCommerceの版ヘッダ（`WC requires at least` / `WC tested up to`、`woocommerce` に対応づける）、選定方針の明示指定から決める。版ヘッダだけから決めた `woocommerce` は、版pinだけで決める対象（手動・歴史的評価とreverify）でpinが無ければ固定せず、依存のpinsetに `header-derived-unpinned` と残す。自動選定の本番対象はfreeze時点の公式stable版、手動・歴史的評価対象は明示版pinを使い、全て版とdigestをSnapshotに固定する。v11 と v13-wide には固定source由来の入口索引や公開履歴カタログを渡さず、分担と仮説はRootが決める。旧Trialの索引と公開履歴の記録は読み続ける。
-- 許可する操作: 固定sourceの読み取り、LabへのHTTP、Lab DBのRO accountによる読み取り。探索runにcanaryは渡さず、canaryの発行と確認は検証段階のHarnessが行う。外向き通信は認証ブローカー経由のprovider APIだけ。`discovery.lab: attached` では Trial ごとに探索 Lab を 1 台立て、HTTP、Trial の間ずっと使える管理者と低権限の account、`discovery.lab.maxResets` 回までの再供給（`POST http://labctl/reset`）と、`discovery.lab.maxObservations` 回までの観測コマンド（`POST http://labctl/observe`、型付きの要求で Harness の観測器が被害者の役割で画面を開く）を渡し、Harness は HTTP の捕捉と状態の差分を封じて回数を数えるだけで判定しない。再開区間には同じ setup digest の新しい Lab を立て、Trial 全体の再供給予算の残りを渡す（ADR 0003 の 2026-10-25 追記）。
+- 許可する操作: 固定sourceの読み取り、LabへのHTTP、Lab DBのRO accountによる読み取り。探索runにcanaryは渡さない（検証段階もcanaryを発行しない、ADR 0040）。外向き通信は認証ブローカー経由のprovider APIだけ。`discovery.lab: attached` では Trial ごとに探索 Lab を 1 台立て、HTTP、Trial の間ずっと使える管理者と低権限の account、`discovery.lab.maxResets` 回までの再供給（`POST http://labctl/reset`）と、`discovery.lab.maxObservations` 回までの観測コマンド（`POST http://labctl/observe`、型付きの要求で Harness の観測器が被害者の役割で画面を開く）を渡し、Harness は HTTP の捕捉と状態の差分を封じて回数を数えるだけで判定しない。再開区間には同じ setup digest の新しい Lab を立て、Trial 全体の再供給予算の残りを渡す（ADR 0003 の 2026-10-25 追記）。
 - 構成: 対象ごとにRoot＋子（上限は `discovery.maxChildren`、既定 4）の協調Trialを1回行う。Harnessは人数上限、隔離、wall、証拠保存、停止を管理し、子の有効なFindingとLeadはRootの最終JSONと独立して保存する。開発セットの3回反復は独立したTrialとして測り、本番の対象ごと1回という既定を変えない（ADR 0029）。
 - 出力: `Finding[]`（0件可）、`Lead[]`（0件可）。v8 以降に入口索引のcoverage recordや網羅の終了条件を課さない。Leadはsourceに根拠があり、影響までの辺が1つ足りないprimitiveであり、Findingや検証結果ではない。schema失敗は0件の正常完了にしない。候補は生のまま保存し、profileの正規化を通してから受理する。受理できない候補は `candidate-held` として分類とissue pathだけを台帳に残し、保留だけのTrialは無成果に数えない（ADR 0018）。Finding / Leadの出力契約はprompt本文ではなくHarnessがschemaから生成する節として渡し、目的文と契約節のdigestを別に記録する（ADR 0019）。
 - 停止規則: `deep` の1 Trialの既定wall上限は120分。最低60分は能動的な探索を指示し、Rootの早期最終報告は同じ協調セッションで継続させる。Harnessが保証するのは60分の経過時間であり、能動性はsource読取・子の活動・ラウンド・provider使用量で事後評価する。継続不能、wall到達、provider上限、broker制限、実行・schema失敗は理由付きの `incomplete` とし、既に保存した子の成果を失わない。最終JSONに到達しなかったTrialを候補0件の正常完了にしない。`wide` は最低時間を置かず、既定wall 120分（上限、2026-10-25 までは20分）で、Rootの最初の最終報告でTrialを終える（ADR 0039、追記 3）。子の上限（`discovery.maxChildren`、既定4）、最低時間（`discovery.minimumActiveMinutes`）、Labの再供給予算（`discovery.lab.maxResets`）は設定値で、Harnessが強制し、同じ値を生成節 `## Run parameters` でRootに伝える（ADR 0039 追記 3）。旧版本文は変更せず履歴照合に残す。同一対象の自動追加Trialはしない。provider上限では新規Trialを止め（`runtimeShare` で両 runtime に分けた探索Labなしのcampaignでは、上限に当たった runtime の新規Trialだけを止める）、runner（`continuous run`）がbackoff後に同じcampaign IDで、Codex のrunは止まったTrialを同じRoot threadのsegmentとして再開する（Claude のrunは新しいTrialとしてやり直す）。拒否・wall・schema等の対象単位の失敗は `target-skipped` として次の対象へ進み、campaignを止めない。止まった Root thread は、止まった理由を問わず（`completed` は除く）、操作者が `campaign resume --run` で名指ししたとき、同じ Snapshot・同じ目的promptの再開段落（v8 以降の `deep` は `Before giving up,`、v10-wide 以降の `wide` は `Stop when` で始まる最後の段落）・残り wall で新しい使い捨て sandbox に再開し、同じ `trialId` の segment として記録する（Codex のrunの `provider-limited` と `interrupted` の runner 自動再開を除く、ADR 0036）。終了eventの無いrun（ホストの電源断など）は、sandboxが開始時に書く印で持ち主のプロセスが死んだと分かるときだけ、`campaign resume` が残ったsessionとnotesを封じて `failed(interrupted)` の終了eventを追記してから再開する。runnerの再起動が同じ対象を新しいTrialとしてやり直した後のrunは `superseded` で拒否する（ADR 0036 の 2026-10-19 追記 2）。持ち主のプロセスが死んだrunは、再起動したrunnerが新しいTrialを始める前に同じ経路で自動再開を試み、同じ対象の枠の中で走らせる。`interrupted` の再開が拒否されたら理由をログに書いて従来どおり新しいTrialに戻り、再開したsegmentが `incomplete` で終わってももう一度は自動再開しない（ADR 0036 の 2026-10-19 追記 3）。Rootがsourceを1件も読まず、子を起動せず、broker転送が1以下で終わったrunはTrialに数えず、その対象は次の選定で戻る（途中まで走ったTrialはTrialとして数え、再選定しない）。provider上限（`provider-limited`）で終わった初回runは、単独ではTrialに数えない。Codex のrunは、runnerが Codex CLI の同一会話内再試行が尽きた後にbackoffし、起動直後も含め同じTrialを、再開segment最大5まで、残りwallが5分以上ある間だけ再開する。再開が拒否されたら理由付き `incomplete` として対象を閉じ、Trial 1 回に数えて次の選定から除外し、新しいTrialを作らない。Claude のrunの `provider-limited` は、backoff後に新しいTrialとしてやり直し、選定でも除外しない（ADR 0029 の 2026-10-19 追記）。`provider-cyber-policy` と Claude の `provider-refusal` は名指し再開のみとする（ADR 0036 の 2026-10-19 追記 4、2026-10-21 追記）。正常完了の0件も脆弱性なしを意味せず、source読取とwallから早期終了と探索後の0件を分ける。
@@ -102,18 +102,18 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 旧規則で `admin-configuration-precondition` に park された Finding は、元の Finding artifact の identity・Snapshot・Programme Boundary を照合し、`finding-recorded` と `finding-park-restored` を追記して検証列へ戻せる。旧 park は残す。検証列、レビュー列、群、funnel と `review parked` は、対応する記録済み Finding に結び付く復帰イベントがある場合だけ旧 park を無効として投影する。Programme Boundary 外の Finding と検証中に park された Finding はこの復帰操作の対象外とする。旧版の runner が新 event を読めるまでは、本番台帳への復帰 event 追記を保留する。
 - HTTP証拠: Verifierの宛先はLab内のHarness所有reverse proxyへ向け、request / responseをPrivate EvidenceにJSON Linesで捕捉する。捕捉が無い場合だけVerifierの `http.json` を補助資料として読み、台帳のoptionalな `evidenceCapture` は `harness-captured` / `agent-authored` のenumだけを記録する。2026-10-25 以降、捕捉の無いattemptは `incomplete(evidence)` にする（ADR 0040）。
 - Verifierの出力: `http.json`、`steps.md`、`route.json`、別主体のcookieをLabが検査する `session.json`、`refutation.md`、設定前提。payload、cookie、HTTP本文はPrivate Evidenceに置く。
-- 判定器（2026-10-25 に削除、ADR 0040）。下の表は、既存の `runtime-confirmed` / `contradicted` の記録を読むための、判定器があった時期の成功条件である。新しい検証では、Harnessは `setup-done` 以後のHTTP捕捉、Verifierの `http.json`、Lab状態の差分、`route.json` の `victim` が宣言した画面をLab browserが開いた記録（数値dialogと画面）を残し、成立は判定しない。canaryは播種しない:
+- 判定器は2026-10-25に削除した（ADR 0040）。判定器があった時期の成功条件は ADR 0004・0021・0024 とこの文書の Git 履歴に残り、既存の `runtime-confirmed` / `contradicted` の記録はそれで読む。新しい検証では、Harnessは `setup-done` 以後のHTTP捕捉、Verifierの `http.json`、Lab状態の差分、`route.json` の `victim` が宣言した画面をLab browserが開いた記録（数値dialogと画面）を残し、成立は判定しない。canaryは播種しない。人間が新しいreview Labで種別ごとに確かめる観測は下表のとおりで、名指しした人間が `review observe` の match と `review decide --reproduced match` を記録したときだけ確定の根拠になる（不変条件 3）:
 
-| 種別 | 成功条件 | 不採用の観測 |
+| 種別 | 人間がreview Labで確かめる観測 | 根拠にしない観測 |
 | --- | --- | --- |
-| RCE / PHPファイル書き込み | Execution Canary（nonce）がLab内で実行された痕跡 | シェル取得、`.php.png` や安全な拡張子内のコード |
-| SQLi | canary行の値が応答に現れる、またはcanary表への書き込みが観測される。Labは `wp_magic_quotes` 既定のまま | timing差 |
-| 任意ファイル読み取り / LFI / RFI | Labが置いたcanaryファイルの内容が応答に現れる。pathと拡張子の両方を攻撃者が決めたことを記録 | パス文字列の反射 |
-| options更新 | Labが置いたcanary option、または重大なoption（`users_can_register`、`default_role`、`siteurl`、`admin_email` 等）が低権限主体から変わる。2026-10-17 から `finding-parked` で検証に入らない（ADR 0032） | 影響のないoption |
-| 管理者への権限昇格 / 認証回避 / アカウント乗っ取り | 低権限主体が管理者の認証状態または管理者相当の能力を得る（Labのcanaryユーザー、各ロールの正常操作記録との差） | パスワードリセットメールの存在だけ、エラーメッセージの差 |
+| RCE / PHPファイル書き込み | 攻撃者が決めたPHPコードがLab内で実行される | シェル取得、`.php.png` や安全な拡張子内のコード |
+| SQLi | 攻撃者の読めない行の値が応答に現れる、または攻撃者の書き込めない表への書き込みが起きる。Labは `wp_magic_quotes` 既定のまま | timing差 |
+| 任意ファイル読み取り / LFI / RFI | Lab内の攻撃者が決めたファイルの内容が応答に現れる。pathと拡張子の両方を攻撃者が決めたことを記録 | パス文字列の反射 |
+| options更新 | 重大なoption（`users_can_register`、`default_role`、`siteurl`、`admin_email` 等）が低権限主体から変わる。2026-10-17 から `finding-parked` で検証に入らない（ADR 0032） | 影響のないoption |
+| 管理者への権限昇格 / 認証回避 / アカウント乗っ取り | 低権限主体が管理者の認証状態または管理者相当の能力を得る（各ロールの正常操作記録との差） | パスワードリセットメールの存在だけ、エラーメッセージの差 |
 | contributor以上への権限昇格 / 非管理者の認証回避 | 低権限主体がcontributor以上の能力または他主体の認証状態を得る。2026-10-17 から `finding-parked`（ADR 0032） | 同上 |
-| Stored XSS | 低権限主体が置いたnonce付き値が、影響を受けるページ、またはFindingが宣言する被害者ロールで開いた画面（ADR 0021）をheadless browserで開いたときに実行され、Labのcanary受信先へ届く。発火contextとサイト全体への広がりを分けて記録 | alertの有無、文字列の存在だけ、ブラウザ操作なしの自己申告 |
-| 機微な対象の読み取り（`sensitive-object-access`） | Labが低権限主体の読めない対象に置いたnonce付きcanary文字列が、低権限または未認証の主体への応答に現れる。読めた対象の種類を記録し、scope判定は別段階（ADR 0024）。2026-10-17 から `finding-parked`（ADR 0032） | 文字列の反射、件数・応答長・エラーメッセージの差 |
+| Stored XSS | 低権限主体が置いた値が、影響を受けるページ、またはFindingが宣言する被害者ロールで開いた画面（ADR 0021）を開いたときに実行される（Lab browserのdialogの記録と、人間がreview Labで開いた画面）。発火contextとサイト全体への広がりを分けて記録 | 文字列の存在だけ、ブラウザ操作なしの自己申告 |
+| 機微な対象の読み取り（`sensitive-object-access`） | 低権限主体の読めない対象の値が、低権限または未認証の主体への応答に現れる。読めた対象の種類を記録し、scope判定は別段階（ADR 0024）。2026-10-17 から `finding-parked`（ADR 0032） | 文字列の反射、件数・応答長・エラーメッセージの差 |
 
 - 結果: `runtime-confirmed` / `contradicted` / `incomplete`。2026-10-25 以降の新しい検証は `incomplete` だけを出し、Harnessの捕捉が残ったattemptは `incomplete(awaiting-human-observation)` として人間の観測を待つ（ADR 0040）。`incomplete` は理由コード（provision、precondition、recipe、observation、evidence、cleanup、digest-mismatch、awaiting-human-observation）と次の手を持つ。再試行は理由ごとに決める: `recipe` は同じLab Setupで最大2回自動再試行（`observation` の自動再試行は判定器とともに止めた）、`precondition` はシナリオIDが変わったときだけ、`provision` は再供給1回、それ以外は人間へ回す。attempt番号と前のverificationIdを台帳に残す（ADR 0022）。
 - 判定器を定義できない種別は自動確認せず、`incomplete(no-judge)` として人間へ回す。2026-10-25 以降の新しい検証は `incomplete(no-judge)` を出さない。既存の記録は読み続ける（ADR 0040）。
@@ -121,13 +121,13 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 
 ## 8. 人間レビューとDisclosure
 
-- レビュー列に出すもの: 対象範囲内の Finding は判定器の結果に関係なく全件出す。`runtime-confirmed` は証拠refと再現パッケージ、`incomplete` は次の手、`contradicted` は判定器の証拠refと、あれば反証を付ける（#185、ADR 0031）。人間は再現パッケージで自分の手で再現してから文案を査読する。
+- レビュー列に出すもの: 対象範囲内の Finding は検証の結果に関係なく全件出す。`incomplete(awaiting-human-observation)` はHarnessの捕捉とLab browserの記録、ほかの `incomplete` は次の手を付ける。判定器があった時期の `runtime-confirmed` は証拠refと再現パッケージ、`contradicted` は判定器の証拠refと、あれば反証を付ける（#185、ADR 0031、ADR 0040）。人間は `lab up --for-review` の新しいreview Labで自分の手で再現し、`review observe` と `review decide --reproduced` で記録してから文案を査読する。
 - 並べ方: 同じ Snapshot で plugin 側の `file:function` が 1 つでも重なる Finding は、受理時に同じ群にする（連結成分）。`review` と `verify next` は群の代表（受理順で最初の Finding）を先に出し、残りはその後に群ごとに並べる。捨てない。群は順序と表示だけに使い、判定・判断・提出は Finding ごとに行う（#424）。
-- 人間が決めること: 再現パッケージを使って自分の手でLab上の攻撃を再現し、影響が意味を持つか、意図された動作ではないか、重複でないか、どのprogrammeへ出すか、文案と外部行動を承認する。Labの再構築とプラグイン設定はHarnessが保存したsetup manifestから自動化する。
+- 人間が決めること: review Lab（既存の `runtime-confirmed` は再現パッケージ）を使って自分の手でLab上の攻撃を再現し、影響が意味を持つか、意図された動作ではないか、重複でないか、どのprogrammeへ出すか、文案と外部行動を承認する。Labの再構築とプラグイン設定はHarnessが保存したsetup manifestから自動化する。
 - 重複: 検証後・提出前にWordfence Intelligence mirrorの更新と照合を試み、PatchstackとWPScanの公開記録も照合する。照合元と時刻を記録し、staleまたは不明を「重複なし」にしない。候補の同一性は人間が最終判断する。
-- 文案: Harnessは判定器が通したHTTP・canary・必要な画面証拠に基づき、短い英語レポートとWordfence入力用JSONを作る。新しい証拠を文章で創作しない。提出は人間だけが行う。
+- 文案: Harnessは、人間が観測と再現を記録した結果のHTTP捕捉・Lab browserの記録・必要な画面証拠（既存の `runtime-confirmed` では判定器の証拠）に基づき、短い英語レポートとWordfence入力用JSONを作る。新しい証拠を文章で創作しない。提出は人間だけが行う。
 - 記録: 判断、理由コード、判断までの時間、開いた証拠。覆し率は監視信号。
-- 提出転帰（triaged / resolved / duplicate / informative / N/A / rejected）を台帳へ戻し、選定方針と判定器の改善材料にする。自分の未公開の発見は公開されるまで探索へ戻さない（公開後はADR 0012の履歴として扱う）。
+- 提出転帰（triaged / resolved / duplicate / informative / N/A / rejected）を台帳へ戻し、選定方針と検証の改善材料にする。自分の未公開の発見は公開されるまで探索へ戻さない（公開後はADR 0012の履歴として扱う）。
 
 当面の提出準備完了条件は、公開中の最新版の同一Snapshotと通常利用構成で人間の手動再現が `match`、重複照合が解決済み、Wordfenceのscopeが確認済み、証拠に結び付いた英語報告書とFill-Only JSONが人間の最終査読に渡せること。人間の有効な手順で `mismatch` ならその候補は提出へ進めず、環境・手順・観測の不足で再現できない場合は `incomplete` / `defer` として次の手を残す。どちらも観測だけを `runtime-confirmed` や `contradicted` に読み替えない。手動再現の記録と正式な提出basisを結ぶ実装は別途必要である（ADR 0038）。
 
@@ -140,8 +140,8 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 - 攻撃者の権限は未認証とsubscriber / customer相当に限る。Wordfenceは contributor / author（中間権限）と administrator / editor / shop manager / `unfiltered_html`（PR:H）を要するものを明示的に対象外にしている。Patchstackはcontributorをx0.75のmVDPのみ、editor以上は不受理。したがってtrust境界宣言ではcontributor以上を信頼する側に置き、探索の攻撃者位置を未認証とsubscriberに限る。
 - Wordfenceの分類と閾値（判断者は1337 tier）: High Threat（任意PHP file upload / read / delete、任意options更新、RCE、管理者への認証回避 / 権限昇格）は25件以上、Stored XSS / SQLiは500件以上、その他は500件以上。1,000件未満はWordPress.org掲載が条件、premiumは1,000件未満を除外。
 - Wordfenceの対象外資産（WordPress core、Automattic、Facebook、Google、SiteGround、Yoast、配布停止、ベンダー側web service）は `selection` の除外リストに入れる。
-- Reflected XSS、CSRF、Missing Authorization、IDORはWordfenceで明示的に対象外。候補としては記録するが、Submission Candidateにしない。ただし同じ欠陥が任意options更新、任意コンテンツ削除、権限昇格、認証回避、機微情報の漏えいに到達する場合は、到達先の種別として対象（2026-10-17 以降、このうち options 更新・コンテンツ削除・管理者未満への昇格と認証回避・機微情報は `finding-parked`。ADR 0032 の 2026-10-17 節）。判定器はauthz系も技術的に確認し、scope評価で到達先を問う。
-- Wordfenceの却下条件のうちLabと判定器に効くもの: `wp_magic_quotes` 無効前提のSQLi、SVG / 二重拡張子 / 安全な拡張子内のコードによるupload、nonceで守られたactionのmissing authorization、管理者の誤設定前提。Labは既定設定で供給し、file upload系はExecution Canaryの実行で証明する。
+- Reflected XSS、CSRF、Missing Authorization、IDORはWordfenceで明示的に対象外。候補としては記録するが、Submission Candidateにしない。ただし同じ欠陥が任意options更新、任意コンテンツ削除、権限昇格、認証回避、機微情報の漏えいに到達する場合は、到達先の種別として対象（2026-10-17 以降、このうち options 更新・コンテンツ削除・管理者未満への昇格と認証回避・機微情報は `finding-parked`。ADR 0032 の 2026-10-17 節）。検証はauthz系も技術的に確かめ、scope評価で到達先を問う。
+- Wordfenceの却下条件のうちLabと人間の観測に効くもの: `wp_magic_quotes` 無効前提のSQLi、SVG / 二重拡張子 / 安全な拡張子内のコードによるupload、nonceで守られたactionのmissing authorization、管理者の誤設定前提。Labは既定設定で供給し、file upload系は、攻撃者が決めたコードの実行を人間がreview Labで確かめる。
 - Patchstack（報告フォーム2026-06-01改定の写し `src/profiles/wordpress/policy/patchstack-scope-2026-10-08.md`）: 攻撃者は未認証 / subscriber / customerだけ（contributorはmVDPのみ）。受理種別には条件が付く: ファイル系とLFI / RFIはpathと拡張子の完全制御、権限昇格はcontributor以上へ到達、設定変更は重大な影響を持つoption、broken access controlは機微な対象、XSSはサイト全体に効くstoredかJS実行を伴うreflected、CSRFは受理種別の書き込みへ連鎖。1,000件未満はCVSS 8.5以上のみ、100件未満は不受理。
 - Reflected XSSとCSRFはPatchstackでは条件付きで受理されるが、この設計では探索の目的にも提出候補にもしない（判断者の指示、2026-10-08）。記録だけ残す。
 - 両プログラムとも最新版・既定設定での成立を要する。提出直前に最新版のsnapshotで再検証し、再現パッケージは遠隔攻撃者の視点の手順（HTTPリクエスト、画面画像）で書き、WP-CLIなどサーバー側だけの手順を含めない。
@@ -156,25 +156,25 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 | `selection` | 対象外資産（作者、配布停止、ベンダー側service）を落とす。install下限と上限は[選定方針 JSON](../src/profiles/wordpress/policy/selection.json)を正本とし、プログラムの報奨対象下限は別のscope規則として記録する。公開履歴はローカル mirror の slug 単位の件数と公開日だけを採点に使い、記録の内容は読まず探索にも渡さない。mirror が方針の鮮度を超えて古ければ選定を止める（ADR 0037、ADR 0030 を上書き） | 機械的。方針と除外理由を残す |
 | `lab` | discoveryとverifierに渡す認証情報を未認証・subscriber・customer（WooCommerce有効時）に限る。contributor以上と管理者の認証情報は渡さない（例外: 検証skillのhandoffには前提作りのためだけにLabの設定管理者を渡し、`setup-done` 以後は攻撃者位置の資格だけを使う。ADR 0035）。設定は既定のまま、一般的な利用範囲の初期データ（公開フォーム1つ等）はprofileのsetup manifestで入れ、Lab Setup digestに記録する | 機械的。contributor以上の経路は試せない。設定変更もできない |
 | `discovery` | Harnessが付けるProgramme Boundaryの節に対象内の影響（下表）を書き（v5以降、目的promptは分類の順位を持たない。ADR 0032 の 2026-10-16 節）、trust境界宣言でcontributor以上と管理者が意図して付与する権限を信頼側に置く（通常のサイトが有効にし得る設定は除外せず前提として書く。ADR 0038 の 2026-10-26 追記 11） | 誘導。agentは他も報告してよいが、台帳で分類される |
-| `verification` と `review` | 判定器の成功条件をプログラムの受理条件に合わせる（下表）。scope評価はFindingと判定器の観測だけから、方針ファイルの規則で `in-scope` / `out` / `ambiguous` を出す。agentの自己申告は使わない | 機械的。提出候補にならない |
+| `verification` と `review` | 人間がreview Labで確かめる観測をプログラムの受理条件に合わせる（下表）。scope評価はFindingと検証の観測（2026-10-25 以降は人間の観測と再現の記録、既存の記録では判定器の観測）だけから、方針ファイルの規則で `in-scope` / `out` / `ambiguous` を出す。agentの自己申告は使わない | 機械的。提出候補にならない |
 
-影響の共通分類（両プログラムの受理条件を1つの語彙にしたもの。判定器とscope評価が共有する）:
+影響の共通分類（両プログラムの受理条件を1つの語彙にしたもの。検証とscope評価が共有する）:
 
-| 分類 | 判定器の成功条件 | Wordfence | Patchstack |
+| 分類 | 人間が確かめる観測 | Wordfence | Patchstack |
 | --- | --- | --- | --- |
-| `rce` / `php-file-write` | Execution Canaryが実行される。SVG、二重拡張子、安全な拡張子内のコードは不可 | High Threat ≥25 | 受理 |
-| `arbitrary-file-read` / `delete` / `download` | canaryファイルに届く。pathと拡張子の両方を攻撃者が決められたことを判定器が記録する | High Threat（PHPファイル）/ その他 ≥500 | 受理（path + 拡張子の完全制御が条件） |
+| `rce` / `php-file-write` | 攻撃者が決めたコードがLab内で実行される。SVG、二重拡張子、安全な拡張子内のコードは不可 | High Threat ≥25 | 受理 |
+| `arbitrary-file-read` / `delete` / `download` | Lab内の攻撃者が決めたファイルに届く。pathと拡張子の両方を攻撃者が決められたことを記録する | High Threat（PHPファイル）/ その他 ≥500 | 受理（path + 拡張子の完全制御が条件） |
 | `lfi` / `rfi` | 同上 | その他 ≥500 | 受理（同上） |
-| `sqli` | canary行の読み出しまたは書き込み。Labは `wp_magic_quotes` 既定のまま | Common ≥500 | 受理 |
-| `options-update` | Labが置いたcanary optionまたは重大なoption（`users_can_register`、`default_role`、`siteurl`、`admin_email` 等）が低権限から変わる。2026-10-17 から `finding-parked`（ADR 0032） | High Threat ≥25 | 受理（重大な影響が条件） |
+| `sqli` | 攻撃者の読めない行の読み出しまたは書き込み。Labは `wp_magic_quotes` 既定のまま | Common ≥500 | 受理 |
+| `options-update` | 重大なoption（`users_can_register`、`default_role`、`siteurl`、`admin_email` 等）が低権限から変わる。2026-10-17 から `finding-parked`（ADR 0032） | High Threat ≥25 | 受理（重大な影響が条件） |
 | `privesc-to-admin` / `auth-bypass-to-admin` / `account-takeover` | 低権限主体が管理者の認証状態または管理者相当の能力を得る | High Threat ≥25 | 受理 |
 | `privesc-to-contributor+` / `auth-bypass-non-admin` | 低権限主体がcontributor以上の能力または他主体の認証状態を得る。2026-10-17 から `finding-parked`（ADR 0032） | その他 ≥500 | 受理（contributor以上が条件） |
-| `sensitive-object-access` | 第7節の判定器（ADR 0024）。2026-10-17 から `finding-parked`（ADR 0032） | その他 ≥500（Sensitive Information Disclosure） | 受理（機微な対象が条件） |
-| `content-deletion` | 判定器を作らない。2026-10-17 から `finding-parked`（ADR 0032） | その他 ≥500 | broken access controlの条件次第 |
-| `stored-xss` | 低権限主体のnonce付き値が、影響を受けるページで実行されcanary受信先へ届く。発火contextと範囲を記録 | Common ≥500。特定ページだけでも候補 | 受理（サイト全体に効くことが条件。それ以外はmVDPのみ） |
-| `reflected-xss` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（JS実行、nonce不要が条件）だが出さない |
-| `csrf-to-write` | 判定器を作らない。探索の目的に含めない。記録のみ | 対象外 | 受理（連鎖が条件）だが出さない |
-| `missing-authz` / `idor`（到達先なし） | 判定器を作らない。到達先がある場合はその分類で判定する | 対象外 | 機微な対象以外は対象外 |
+| `sensitive-object-access` | 第7節の観測（ADR 0024）。2026-10-17 から `finding-parked`（ADR 0032） | その他 ≥500（Sensitive Information Disclosure） | 受理（機微な対象が条件） |
+| `content-deletion` | 検証しない。2026-10-17 から `finding-parked`（ADR 0032） | その他 ≥500 | broken access controlの条件次第 |
+| `stored-xss` | 低権限主体の置いた値が、影響を受けるページで実行される（Lab browserのdialogと、人間がreview Labで開いた画面）。発火contextと範囲を記録 | Common ≥500。特定ページだけでも候補 | 受理（サイト全体に効くことが条件。それ以外はmVDPのみ） |
+| `reflected-xss` | 検証しない。探索の目的に含めない。記録のみ | 対象外 | 受理（JS実行、nonce不要が条件）だが出さない |
+| `csrf-to-write` | 検証しない。探索の目的に含めない。記録のみ | 対象外 | 受理（連鎖が条件）だが出さない |
+| `missing-authz` / `idor`（到達先なし） | 検証しない。到達先がある場合はその分類で確かめる | 対象外 | 機微な対象以外は対象外 |
 
 分類に入らない主張（DoS、open redirect、SSRF、情報列挙等）は `other` として台帳に残し、探索の目的にも提出候補にもしない。
 
@@ -292,13 +292,13 @@ TranslatePressの公開済み開発対象を脆弱版と修正版で固定し、
 | 用語 | 意味 |
 | --- | --- |
 | Target Snapshot | plugin sourceをmanifest digestで固定した読み取り専用の対象 |
-| Lab | 使い捨てのgVisor環境で動くWordPress + MySQL。canaryとロール別アカウントを持つ |
+| Lab | 使い捨てのgVisor環境で動くWordPress + MySQL。ロール別アカウント、HTTP捕捉のrecorder、Lab browserを持つ |
 | Trial | 独立試行の単位。主経路では対象ごとにRoot＋子（上限は `discovery.maxChildren`、既定 4）の協調Trialを1回行う。旧単独・二段構えTrialも台帳では区別して読む |
 | Discovery Run | モデル実行の記録単位。Rootと子の実行をTrialの中で区別する |
 | Finding | Discovery Runが出した、攻撃者前提・property・traceを持つ主張。確認ではない |
 | Lead | sourceに根拠があるが、影響までの辺が1つ不足するprimitive。Findingでも確認結果でもない |
 | Verifier | 新しいコンテナで反証を試みる独立エージェント。再探索はしない |
-| 判定器 | Harness所有の決定論的な確認手段。`runtime-confirmed` を出せる唯一の主体 |
+| 判定器 | 2026-10-25 に削除したHarness所有の決定論的な確認手段（ADR 0040）。既存の `runtime-confirmed` はこれで出た。新しい確定は人間の `review observe` の match と `review decide --reproduced match` で行う |
 | Verified Vulnerability | `runtime-confirmed` からだけ作る技術的記録。programme scopeと独立 |
 | Trust境界宣言 | 人間が書く「何を信頼するか」の宣言。既知脆弱性を含まない |
 | 公開履歴（history） | 対象プラグインの公開advisoryのカタログ情報。旧Trialでは時点で切って探索に渡した。生成は ADR 0034 で削除し、台帳の記録を読むだけ。PoCは含まない |
