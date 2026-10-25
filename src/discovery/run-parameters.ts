@@ -11,6 +11,8 @@ export interface RunParameters {
   readonly lab: {
     readonly mode: "none" | "attached";
     readonly maxResets: number;
+    /** Attached Labs only (Phase D2); not stated in the section. */
+    readonly maxObservations?: number;
   };
   readonly runtime: {
     readonly transportKind: string;

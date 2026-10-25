@@ -84,19 +84,27 @@ const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = { deep: 60, wide: 0 } as const;
  * Whether a discovery Lab is attached and how often the Root may reset it
  * (redesign 2026-10-25 §7). The string form is normalised to the object.
  * `attached` gives each Trial one exploration Lab for its whole wall (ADR
- * 0003, 2026-10-25 addendum); resets are budgeted by `maxResets`.
+ * 0003, 2026-10-25 addendum); resets are budgeted by `maxResets` and observer
+ * visits (`POST /observe`, Phase D2) by `maxObservations`.
  */
 const discoveryLabSchema = z
   .union([
-    z
-      .enum(["none", "attached"])
-      .transform((mode) => ({ mode, maxResets: undefined })),
+    z.enum(["none", "attached"]).transform((mode) => ({
+      mode,
+      maxResets: undefined,
+      maxObservations: undefined,
+    })),
     z.strictObject({
       mode: z.enum(["none", "attached"]),
       maxResets: z.number().int().min(0).max(5).optional(),
+      maxObservations: z.number().int().min(0).max(100).optional(),
     }),
   ])
-  .transform(({ mode, maxResets }) => ({ mode, maxResets: maxResets ?? 2 }));
+  .transform(({ mode, maxResets, maxObservations }) => ({
+    mode,
+    maxResets: maxResets ?? 2,
+    maxObservations: maxObservations ?? 20,
+  }));
 
 export const LEGACY_VERIFIER_RETIRED =
   "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";

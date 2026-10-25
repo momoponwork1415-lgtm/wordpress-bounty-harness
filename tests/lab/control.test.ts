@@ -30,9 +30,10 @@ async function fixture(options: { answerTimeoutMs?: number } = {}) {
   const address = server.address();
   if (address === null || typeof address === "string")
     throw new Error("Control endpoint has no TCP address");
-  const call = async (method: string, path: string) => {
+  const call = async (method: string, path: string, body?: string) => {
     const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
       method,
+      ...(body === undefined ? {} : { body }),
     });
     return { status: response.status, body: await response.json() };
   };
@@ -67,13 +68,47 @@ describe("exploration Lab control endpoint", () => {
     const { directory, call } = await fixture();
     for (const [method, path] of [
       ["GET", "/reset"],
-      ["POST", "/observe"],
+      ["POST", "/screenshot"],
       ["GET", "/"],
     ] as const)
       expect(await call(method, path)).toEqual({
         status: 404,
-        body: { status: "unknown-command", commands: ["POST /reset"] },
+        body: {
+          status: "unknown-command",
+          commands: ["POST /reset", "POST /observe"],
+        },
       });
+    expect(await nextControlRequest(directory, 50, 10)).toBeNull();
+  });
+
+  it("relays an observe request's JSON body as it came and refuses bodies it cannot pass on", async () => {
+    const { directory, call } = await fixture();
+    const pending = call(
+      "POST",
+      "/observe",
+      JSON.stringify({ role: "visitor", path: "/", extra: [1] }),
+    );
+    const request = await nextControlRequest(directory, 2_000, 10);
+    // The endpoint does not check the shape; the host does.
+    expect(request).toMatchObject({
+      command: "observe",
+      body: { role: "visitor", path: "/", extra: [1] },
+    });
+    answerControlRequest(directory, request!.id, {
+      statusCode: 400,
+      body: { status: "refused", reason: "invalid-request" },
+    });
+    expect((await pending).status).toBe(400);
+    expect(await call("POST", "/observe", "{not json")).toEqual({
+      status: 400,
+      body: { status: "invalid-json" },
+    });
+    expect(
+      await call("POST", "/observe", JSON.stringify({ a: "x".repeat(17_000) })),
+    ).toEqual({
+      status: 413,
+      body: { status: "body-too-large", maxBytes: 16_384 },
+    });
     expect(await nextControlRequest(directory, 50, 10)).toBeNull();
   });
 

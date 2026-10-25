@@ -49,11 +49,15 @@ describe("Run parameters section (redesign 2026-10-25 §5.1)", () => {
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
     };
     for (const [lab, expected] of [
-      ["none", { mode: "none", maxResets: 2 }],
-      [{ mode: "none" }, { mode: "none", maxResets: 2 }],
+      ["none", { mode: "none", maxResets: 2, maxObservations: 20 }],
+      [{ mode: "none" }, { mode: "none", maxResets: 2, maxObservations: 20 }],
       [
         { mode: "none", maxResets: 5 },
-        { mode: "none", maxResets: 5 },
+        { mode: "none", maxResets: 5, maxObservations: 20 },
+      ],
+      [
+        { mode: "attached", maxObservations: 0 },
+        { mode: "attached", maxResets: 2, maxObservations: 0 },
       ],
     ] as const)
       expect(

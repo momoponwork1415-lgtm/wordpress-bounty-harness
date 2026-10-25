@@ -156,6 +156,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         .strictObject({
           mode: z.enum(["none", "attached"]),
           maxResets: z.number().int().nonnegative(),
+          /** Attached Labs from Phase D2 on; absent on earlier events. */
+          maxObservations: z.number().int().nonnegative().optional(),
         })
         .optional(),
       model: id.optional(),
@@ -242,6 +244,9 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         refusedResets: z.number().int().nonnegative(),
         /** Control answers that did not reach labctl after one retry. */
         droppedAnswers: z.number().int().nonnegative().optional(),
+        /** Phase D2; absent on earlier events. */
+        observations: z.number().int().nonnegative().optional(),
+        refusedObservations: z.number().int().nonnegative().optional(),
       })
       .optional(),
     /** Unique direct children seen and admitted by a cooperative Root run. */

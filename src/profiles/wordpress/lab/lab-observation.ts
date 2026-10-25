@@ -74,6 +74,10 @@ const victimBrowserDiagnosticSchema = z.strictObject({
 });
 const browserVisitOutputSchema = z.strictObject({
   screenshotBase64: z.string(),
+  /** Status of the response to the visited path itself, before any action. */
+  httpStatus: z.number().int().min(100).max(599).optional(),
+  dialogCount: diagnosticCountSchema.optional(),
+  consoleErrorCount: diagnosticCountSchema.optional(),
   dialogEvent: z
     .strictObject({
       type: z.literal("alert"),
@@ -103,7 +107,10 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   const dialogMarker = process.env.WBH_DIALOG_MARKER ?? "";
   const markerDialogs = new Map();
   let recordingRuntime = false;
+  // Every dialog while recording is counted; only the marker's is described.
+  let dialogCount = 0;
   const dismissDialogs = (tab) => tab.on("dialog", (dialog) => {
+    if (recordingRuntime) dialogCount = Math.min(999999, dialogCount + 1);
     if (recordingRuntime && dialogMarker !== "" &&
         dialog.type() === "alert" && dialog.message() === dialogMarker)
       markerDialogs.set(tab, {
@@ -222,7 +229,8 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   });
   let visiblePage = page;
   recordingRuntime = true;
-  await visiblePage.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
+  const navigation = await visiblePage.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
+  const httpStatus = navigation ? navigation.status() : undefined;
   if (new URL(visiblePage.url()).origin !== base)
     throw new Error("Victim navigation left the Lab origin");
   const actions = JSON.parse(process.env.WBH_VISIT_ACTIONS ?? "[]");
@@ -335,6 +343,9 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
     throw new Error("Browser screenshot exceeds the evidence limit");
   process.stdout.write(JSON.stringify({
     screenshotBase64: screenshot.toString("base64"),
+    ...(httpStatus === undefined ? {} : { httpStatus }),
+    dialogCount,
+    consoleErrorCount: runtime.consoleErrorCount,
     ...(dialogEvent === undefined ? {} : { dialogEvent }),
     ...(documentDiagnostic === undefined ? {} : {
       diagnostic: {
@@ -658,30 +669,28 @@ async function readBeaconCount(
   return log.stdout.split("\n").filter((line) => issued.has(line)).length;
 }
 
-async function visitStoredScriptPage(input: {
+/**
+ * One visit by the Lab's Playwright observer as `account` (none: logged out).
+ * Shared by verification, which adds the canary receiver and script nonces,
+ * and by the exploration Lab's `/observe`, which has neither.
+ */
+async function runBrowserVisit(input: {
   readonly lab: WordPressLabSession;
-  readonly receiverIp: string;
-  readonly issued: ReadonlySet<string>;
   readonly path: string;
-  readonly role: WordPressVictimRoute["role"];
+  readonly account?: { readonly username: string; readonly password: string };
   readonly actions?: VictimActions;
   readonly dialogMarker?: string;
+  /** The canary receiver a stored script would beacon to (verification). */
+  readonly receiverIp?: string;
 }): Promise<{
-  readonly fired: boolean;
+  readonly httpStatus?: number;
+  readonly dialogCount?: number;
+  readonly consoleErrorCount?: number;
   readonly dialogEvent?: WordPressDialogEvent;
   readonly screenshot: Buffer;
   readonly diagnostic?: WordPressVictimBrowserDiagnostic;
 }> {
-  const { lab, receiverIp, issued, path, role, actions } = input;
-  const account =
-    role === "administrator"
-      ? { username: "harness-admin", password: lab.adminPassword }
-      : role === "unauthenticated"
-        ? undefined
-        : lab.victimAccounts[role];
-  if (role !== "unauthenticated" && account === undefined)
-    throw new Error("Victim role is unavailable");
-  const before = await readBeaconCount(lab, issued);
+  const { lab, path, account, actions, receiverIp } = input;
   const result = await lab.docker(
     [
       "run",
@@ -690,7 +699,7 @@ async function visitStoredScriptPage(input: {
       "--network",
       lab.network,
       `--add-host=wordpress:${lab.handle.internalIp}`,
-      `--add-host=canary:${receiverIp}`,
+      ...(receiverIp === undefined ? [] : [`--add-host=canary:${receiverIp}`]),
       "--read-only",
       "--cap-drop=ALL",
       "--security-opt=no-new-privileges",
@@ -773,13 +782,148 @@ async function visitStoredScriptPage(input: {
   )
     throw new Error("Browser screenshot is invalid");
   return {
-    fired: (await readBeaconCount(lab, issued)) > before,
+    ...(parsed.data.httpStatus === undefined
+      ? {}
+      : { httpStatus: parsed.data.httpStatus }),
+    ...(parsed.data.dialogCount === undefined
+      ? {}
+      : { dialogCount: parsed.data.dialogCount }),
+    ...(parsed.data.consoleErrorCount === undefined
+      ? {}
+      : { consoleErrorCount: parsed.data.consoleErrorCount }),
     ...(parsed.data.dialogEvent === undefined
       ? {}
       : { dialogEvent: parsed.data.dialogEvent }),
     screenshot,
     ...(diagnostic.success ? { diagnostic: diagnostic.data } : {}),
   };
+}
+
+async function visitStoredScriptPage(input: {
+  readonly lab: WordPressLabSession;
+  readonly receiverIp: string;
+  readonly issued: ReadonlySet<string>;
+  readonly path: string;
+  readonly role: WordPressVictimRoute["role"];
+  readonly actions?: VictimActions;
+  readonly dialogMarker?: string;
+}): Promise<{
+  readonly fired: boolean;
+  readonly dialogEvent?: WordPressDialogEvent;
+  readonly screenshot: Buffer;
+  readonly diagnostic?: WordPressVictimBrowserDiagnostic;
+}> {
+  const { lab, receiverIp, issued, path, role, actions } = input;
+  const account =
+    role === "administrator"
+      ? { username: "harness-admin", password: lab.adminPassword }
+      : role === "unauthenticated"
+        ? undefined
+        : lab.victimAccounts[role];
+  if (role !== "unauthenticated" && account === undefined)
+    throw new Error("Victim role is unavailable");
+  const before = await readBeaconCount(lab, issued);
+  const visit = await runBrowserVisit({
+    lab,
+    path,
+    receiverIp,
+    ...(account === undefined ? {} : { account }),
+    ...(actions === undefined ? {} : { actions }),
+    ...(input.dialogMarker === undefined
+      ? {}
+      : { dialogMarker: input.dialogMarker }),
+  });
+  return {
+    fired: (await readBeaconCount(lab, issued)) > before,
+    ...(visit.dialogEvent === undefined
+      ? {}
+      : { dialogEvent: visit.dialogEvent }),
+    screenshot: visit.screenshot,
+    ...(visit.diagnostic === undefined ? {} : { diagnostic: visit.diagnostic }),
+  };
+}
+
+/**
+ * The exploration Lab's `/observe` (ADR 0003, 2026-10-25 addendum, Phase D2):
+ * the agent names a role of the Lab's own accounts, a path and optional typed
+ * actions; the verification observer opens it. No script is accepted and
+ * nothing is judged: the answer is what the browser saw.
+ */
+export const wordpressExplorationObserveSchema = z.strictObject({
+  role: z.enum(["visitor", "subscriber", "customer", "administrator"]),
+  path: wordpressVisitPathSchema,
+  actions: z.array(wordpressVictimActionSchema).min(1).max(5).optional(),
+  /** Written in the page's JavaScript as alert(1234567890), without quotes. */
+  dialogMarker: z
+    .string()
+    .regex(/^[1-9][0-9]{9,14}$/)
+    .optional(),
+});
+export type WordPressExplorationObserveRequest = z.infer<
+  typeof wordpressExplorationObserveSchema
+>;
+
+export type WordPressExplorationObservation =
+  | {
+      readonly status: "observed";
+      /** Status of the response to `path`; absent when the browser saw none. */
+      readonly httpStatus?: number;
+      /** Dialogs that opened on the observed pages, any text. */
+      readonly dialogCount: number;
+      /** With a marker only: whether an alert with exactly that text opened. */
+      readonly markerDialog?: boolean;
+      readonly consoleErrorCount: number;
+      readonly screenshot: Buffer;
+    }
+  | {
+      readonly status: "failed";
+      readonly failureCode: WordPressStoredScriptFailureCode;
+    }
+  | { readonly status: "role-unavailable" };
+
+export async function observeExplorationPage(
+  lab: WordPressLabSession,
+  request: WordPressExplorationObserveRequest,
+): Promise<WordPressExplorationObservation> {
+  const account =
+    request.role === "administrator"
+      ? { username: "harness-admin", password: lab.adminPassword }
+      : request.role === "visitor"
+        ? undefined
+        : lab.attackerAccounts[request.role];
+  if (request.role !== "visitor" && account === undefined)
+    return { status: "role-unavailable" };
+  try {
+    const visit = await runBrowserVisit({
+      lab,
+      path: request.path,
+      ...(account === undefined ? {} : { account }),
+      ...(request.actions === undefined ? {} : { actions: request.actions }),
+      ...(request.dialogMarker === undefined
+        ? {}
+        : { dialogMarker: request.dialogMarker }),
+    });
+    return {
+      status: "observed",
+      ...(visit.httpStatus === undefined
+        ? {}
+        : { httpStatus: visit.httpStatus }),
+      dialogCount: visit.dialogCount ?? 0,
+      ...(request.dialogMarker === undefined
+        ? {}
+        : { markerDialog: visit.dialogEvent !== undefined }),
+      consoleErrorCount: visit.consoleErrorCount ?? 0,
+      screenshot: visit.screenshot,
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      failureCode:
+        error instanceof BrowserVisitFailure
+          ? error.failureCode
+          : "browser-visit",
+    };
+  }
 }
 
 export async function observeStoredScript(

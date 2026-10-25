@@ -61,7 +61,11 @@ import {
   type DockerRunner,
 } from "./lab-docker.js";
 import * as observe from "./lab-observation.js";
-import type { WordPressVictimRoute } from "./lab-observation.js";
+import type {
+  WordPressExplorationObservation,
+  WordPressExplorationObserveRequest,
+  WordPressVictimRoute,
+} from "./lab-observation.js";
 import {
   DATABASE_NAME,
   READ_ONLY_DATABASE_USER,
@@ -106,8 +110,11 @@ export type {
 } from "./provision-input.js";
 export { WORDPRESS_CORE_IDENTITY } from "./provision-input.js";
 export {
+  wordpressExplorationObserveSchema,
   wordpressVisitPathSchema,
   wordpressVictimRouteSchema,
+  type WordPressExplorationObservation,
+  type WordPressExplorationObserveRequest,
   type WordPressVictimRoute,
 } from "./lab-observation.js";
 /** Name the plugin-specific adapters (removed in #353) use for the Lab they run against. */
@@ -118,6 +125,7 @@ const controlRequestSchema = z.strictObject({
   id: z.string().regex(/^[a-f0-9]{32}$/),
   command: z.enum(CONTROL_COMMANDS),
   receivedAt: z.iso.datetime(),
+  body: z.unknown().optional(),
 });
 
 class MissingWordPressExtension extends Error {
@@ -248,6 +256,17 @@ export interface WordPressLab extends LabProvisioner<
     id: string,
     answer: ControlAnswer,
   ): Promise<boolean>;
+  /**
+   * Exploration Labs only (Phase D2): opens one path as a role of the Lab's
+   * own accounts in the verification observer's browser and reports what it
+   * saw. `unavailable` when the handle is not an exploration Lab.
+   */
+  observeExplorationPage(
+    handle: WordPressLabHandle,
+    request: WordPressExplorationObserveRequest,
+  ): Promise<
+    WordPressExplorationObservation | { readonly status: "unavailable" }
+  >;
   /** Removes the `exposeToHost` gateway before teardown; true when it is gone. */
   withdrawFromHost(handle: WordPressLabHandle): Promise<boolean>;
   /**
@@ -733,6 +752,12 @@ export function openWordPressLab(options: {
         .docker(controlCommand(lab, ["answer", id, encoded]))
         .catch(() => null);
       return result?.exitCode === 0;
+    },
+    async observeExplorationPage(handle, request) {
+      const lab = sessionFor(handle);
+      if (lab === undefined || !lab.exploration)
+        return { status: "unavailable" };
+      return observe.observeExplorationPage(lab, request);
     },
     async captureState(handle) {
       const lab = sessionFor(handle);

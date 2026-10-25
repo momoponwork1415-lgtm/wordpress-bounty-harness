@@ -74,7 +74,11 @@ export type ResumePlan = {
    * An exploration-Lab Trial (ADR 0003, 2026-10-25 addendum): the resets the
    * earlier segments used, so the new segment's Lab gets what is left.
    */
-  readonly lab?: { readonly resetsUsed: number };
+  readonly lab?: {
+    readonly resetsUsed: number;
+    /** Observer visits (`POST /observe`) the earlier segments used. */
+    readonly observationsUsed: number;
+  };
 };
 
 export type ResumeAssessment =
@@ -461,6 +465,12 @@ export async function assessTrialResume(options: {
               resetsUsed: chain.reduce(
                 (sum, segment) =>
                   sum + (finishes.get(segment.runId)?.labObserved?.resets ?? 0),
+                0,
+              ),
+              observationsUsed: chain.reduce(
+                (sum, segment) =>
+                  sum +
+                  (finishes.get(segment.runId)?.labObserved?.observations ?? 0),
                 0,
               ),
             },
