@@ -77,6 +77,7 @@
 | 25 | 0 件は正常終了 | — | 「Reaching either bound is a normal ending」 | 「Reporting zero leads after bounded closure is a normal ending」 | ✓ | ✓ | ✓（Harness 側） | |
 | 26 | 2 hop 以上（入口と着地） | — | — | 「Give at least two hops」 | ✓ | ✓ | — | |
 | 27 | 全 impact を Finding にする条件 | — | — | 「fully-supported weaker route beats unsupported stronger one」 | — | 「route ごとの principal・path・controls」 | 「部分 primitive を Finding にしない」 | |
+| 28 | 着眼点の重み付けと設定依存の前提（2026-10-25 追加） | — | — | — | — | — | — | v10 で採用。出典: Wordfence mirror 集計 2026-10-25（docs/reviews/2026-10-25-wordfence-mirror-as-exploration-input.md 表 1・表 2）、所有者決定 2026-10-25「それでいこう」。[v10 の文書](2026-10-25-wp2shell-bounty-v10.md) |
 
 ## 3. 対照表 2: 公開 harness
 

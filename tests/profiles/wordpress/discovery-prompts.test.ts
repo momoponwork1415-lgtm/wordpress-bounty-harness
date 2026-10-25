@@ -66,7 +66,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(20);
+    expect(ids).toHaveLength(21);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -80,7 +80,7 @@ describe("WordPress prompt table", () => {
     expect(
       WORDPRESS_DISCOVERY_PROMPTS.filter((row) => row.status === "current"),
     ).toHaveLength(1);
-    expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v8");
+    expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v10");
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
     ).toHaveLength(1);
@@ -222,7 +222,11 @@ describe("WordPress discovery prompt assets", () => {
   it("keeps the objective-only assets free of the claim contract", async () => {
     for (const id of WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS) {
       const { text } = await loadWordPressDiscoveryAsset(id);
-      if (id === "wp2shell-bounty-v7" || id === "wp2shell-bounty-v8")
+      if (
+        id === "wp2shell-bounty-v7" ||
+        id === "wp2shell-bounty-v8" ||
+        id === "wp2shell-bounty-v10"
+      )
         expect(text).toContain("Use multiagents aggressively");
       else expect(text).toMatch(/Lead|Finding/);
       expect(text).not.toMatch(
@@ -391,6 +395,83 @@ describe("WordPress discovery prompt assets", () => {
     }
   });
 
+  it("archives v8 and changes exactly the two-hop clause, the portfolio bullet and two inserted paragraphs in v10 (#522)", async () => {
+    expect(
+      WORDPRESS_DISCOVERY_PROMPTS.find((row) => row.id === "wp2shell-bounty-v8")
+        ?.status,
+    ).toBe("archived");
+    const v8 = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v8")).text;
+    const v10 = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v10")).text;
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const v8Paragraphs = paragraphs(v8);
+    const v10Paragraphs = paragraphs(v10);
+
+    // Two paragraphs are inserted, directly before the dependency paragraph.
+    const dependency = v10Paragraphs.findIndex((paragraph) =>
+      paragraph.startsWith("The plugin depends on WordPress, PHP, MySQL"),
+    );
+    expect(dependency).toBeGreaterThan(1);
+    const inserted = v10Paragraphs.slice(dependency - 2, dependency);
+    expect(inserted[0]).toMatch(
+      /^Keep every agent short\. No agent may exceed 80 tool calls\./,
+    );
+    expect(inserted[1]).toMatch(
+      /^Every agent writes its findings to \/workspace\/research\/<family>\.md /,
+    );
+    expect(inserted[1]).toContain("/workspace/research/REGISTRY.md");
+    const withoutInserted = v10Paragraphs.filter(
+      (_, index) => index < dependency - 2 || index >= dependency,
+    );
+    expect(withoutInserted).toHaveLength(v8Paragraphs.length);
+
+    // Every other paragraph is byte-identical except the task statement and the portfolio list.
+    const changed = withoutInserted.flatMap((paragraph, index) =>
+      paragraph === v8Paragraphs[index] ? [] : [index],
+    );
+    expect(changed).toHaveLength(2);
+    const [statement, portfolio] = changed as [number, number];
+
+    // (1) The task statement gains only the two-hop clause.
+    expect(withoutInserted[statement]).toBe(
+      v8Paragraphs[statement]!.replace(
+        "complete chain to an in-scope effect.",
+        "complete chain to an in-scope effect; give at least two hops, the entry and the landing.",
+      ),
+    );
+    expect(withoutInserted[statement]).not.toBe(v8Paragraphs[statement]);
+
+    // (2) The portfolio paragraph differs only in its first bullet line.
+    const v8Lines = v8Paragraphs[portfolio]!.split("\n");
+    const v10Lines = withoutInserted[portfolio]!.split("\n");
+    expect(v10Lines).toHaveLength(v8Lines.length);
+    const changedLines = v10Lines.flatMap((line, index) =>
+      line === v8Lines[index] ? [] : [index],
+    );
+    expect(changedLines).toHaveLength(1);
+    const before = v8Lines[changedLines[0]!]!;
+    const after = v10Lines[changedLines[0]!]!;
+    expect(before).toMatch(/^- Begin with a genuinely diverse portfolio/);
+    expect(after).toMatch(
+      /^- Begin with a genuinely diverse portfolio of approaches, weighted by where publicly credited findings/,
+    );
+    expect(after).toContain("state the setting as the precondition");
+    for (const text of [after, ...inserted])
+      expect(text).not.toMatch(
+        /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|Relevanssi|Brizy|Elementor|\b(?:PoC|CVE|advisory|payload)\b/i,
+      );
+
+    // The persist paragraph and the resume directive stay byte-identical; the latter is last.
+    expect(v10Paragraphs).toContain(
+      v8Paragraphs.find((paragraph) =>
+        paragraph.startsWith(
+          "Do not return merely because current approaches fail",
+        ),
+      ),
+    );
+    expect(v10Paragraphs.at(-1)).toMatch(/^Before giving up,/);
+    expect(v10Paragraphs.at(-1)).toBe(v8Paragraphs.at(-1));
+  });
+
   it("rejects an unknown asset ID at the public boundary", async () => {
     await expect(
       loadWordPressDiscoveryAsset("../policy/programme-scope" as never),
@@ -404,7 +485,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v5" ||
         id === "wp2shell-bounty-v6" ||
         id === "wp2shell-bounty-v7" ||
-        id === "wp2shell-bounty-v8"
+        id === "wp2shell-bounty-v8" ||
+        id === "wp2shell-bounty-v10"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).
