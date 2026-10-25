@@ -82,7 +82,7 @@
 
 ### 2.1 Wordfence PRISM の公開記述（docs/reviews/2026-10-25-wordfence-argus-and-prism.md §5、所有者決定 2026-10-25）
 
-2026-10-25 に追加した。所有者は 2026-10-25 に、`wide` の目的文を「PRISM の方針に近づける」と決めた。この節の行は、Wordfence が PRISM について本人の言葉で書いた記述（[調査の文書](2026-10-25-wordfence-argus-and-prism.md) 第 5.1 節と第 5.4 節）から取った。PRISM の prompt は公開されていない。行は設計の方針だけで、文言をそのまま取り込んだものではない。最初の採用は `wp2shell-bounty-v11-wide`（[v11-wide の文書](2026-10-25-wp2shell-bounty-v11-wide.md)）。
+2026-10-25 に追加した。所有者は 2026-10-25 に、`wide` の目的文を「PRISM の方針に近づける」と決めた。この節の行は、Wordfence が PRISM について本人の言葉で書いた記述（[調査の文書](2026-10-25-wordfence-argus-and-prism.md) 第 5.1 節と第 5.4 節）から取った。PRISM の prompt は公開されていない。行は設計の方針だけで、文言をそのまま取り込んだものではない。最初の採用は `wp2shell-bounty-v11-wide`（[v11-wide の文書](2026-10-25-wp2shell-bounty-v11-wide.md)）。 PRISM-e〜l は 2026-10-25 に足した。PRISM-e は本人の記述、PRISM-f〜l は Wordfence の公開記録（詳細ページ 75 件）から対象名を外して束ねた形で、ADR 0012 (a) の一般パターンに当たる（[PRISM 報告](2026-10-25-wordfence-prism-argus-method-and-cases.md) §3.2、§3.3。同報告 §5 の「PRISM-e〜j」はこの表では PRISM-g〜l に当たる）。最初の採用は `wp2shell-bounty-v12-wide`（[v12-wide の文書](2026-10-25-wp2shell-bounty-v12-wide.md)）。
 
 | # | 要素 | PRISM 本人の記述 | 本リポでの書き方 | 採否 |
 | --- | --- | --- | --- | --- |
@@ -90,6 +90,14 @@
 | PRISM-b | 1〜2 段の短い経路を単位にし、長い連鎖を狙わない | 「ふつう 1 件の発見は 1 つから数個の欠陥、あるいは 1〜2 段の短い跳躍になる。それがまさに正しいトレードオフだ」（§5.1 [2]、§5.4 の 4） | 入口から到達先までの 1〜2 hop の経路を報告の単位にし、多段の連鎖は組まない | v11-wide で採用 |
 | PRISM-c | WordPress の ground truth に導かれる | 「WordPress の ground truth に導かれ、経験的な PoC の実行で検証される」（プロフィール、§5.1 [25]） | 候補を報告する前に、到達先の手前の guard（capability の確認、nonce、エスケープ関数、query の準備）が実際に何をするかを、固定した WordPress 本体のソースで確かめる。PoC の実行は探索に入れない（検証は Harness の Lab と判定器が受け持つ、不変条件 3） | v11-wide で採用 |
 | PRISM-d | 種別ごとの面を掃き終えたら止める | 「あらゆるバグ種別と脅威モデルにわたる広大な面を掃く」（§5.4 の 2）、「そのすべてを捕まえたい」（§5.4 の 4） | 各専門エージェントが担当の到達先について入口を一通り終えたら止める。PRISM は停止条件を明文で書いていない。この行は「面を覆う」という記述を停止規則に読み替えたもの | v11-wide で採用 |
+| PRISM-e | 到達先から逆向きにも追う | 「危険な操作から逆向きにたどって信頼できないものが届くかを見る。または信頼できない入力から順向きにたどって何に触れられるかを見る。違うのは、その追跡をどこまで深く押すか」（2026-08-25、[PRISM 報告](2026-10-25-wordfence-prism-argus-method-and-cases.md) §2.1） | 各専門エージェントが、入口から到達先への順向きに加え、到達先から信頼できない入力への逆向きにも追う。P1 の #9 にある backward の向き | v12-wide で採用 |
+| PRISM-f | 毎 request で走る早期 hook のハンドラを入口にする | 本人の記述ではなく公開記録。PRISM の詳細ページ 40 件中 6 件が `init`、login、検証、2FA、SSO の早期 hook を入口にする（同報告 §3.2） | 入口の列挙は変えず、早期 hook のハンドラも入口として扱う 1 文を足す | v12-wide で採用 |
+| PRISM-g | 唯一の gate が nonce で、その nonce をプラグイン自身が未ログインの訪問者に印字している | 公開記録 6 件（Tourfic、WPBot、Kali Forms、AI Copilot、GeoDirectory、Advanced IP Blocker。同報告 §3.3 (a)） | 対象名を外した形 (a)。ADR 0012 (a) の一般パターン | v12-wide で採用 |
+| PRISM-h | 早期 hook で毎 request 走り、request parameter から option を書くかユーザーをログインさせる | 公開記録 7 件（ARVE、SMS Alert、Advanced IP Blocker、WPO365、Customer Email Verification、Autopay、WP Compress。同 (b)） | 形 (b) | v12-wide で採用 |
+| PRISM-i | 独自の login-as、検証、2FA、SSO、support access が、ユーザー提供の識別子を前段に結び付けずに信頼する | 公開記録 4 件（Groundhogg、WPO365、Advanced IP Blocker、WPMU DEV。同 (c)） | 形 (c) | v12-wide で採用 |
+| PRISM-j | sanitizer の後に decode する順序で、encode された値が描画時に戻る | 公開記録 2 件（Mang Board、Premium Packages。同 (d)） | 形 (d) | v12-wide で採用 |
+| PRISM-k | permission callback が true を返す REST route | 公開記録 2 件（FundEngine、Booking Package。同 (e)） | 形 (e) | v12-wide で採用 |
+| PRISM-l | allow-list が最上位の key だけを見て、入れ子の key が query に届く | 公開記録 1 件（rtMedia。同 (f)） | 形 (f) | v12-wide で採用 |
 
 ## 3. 対照表 2: 公開 harness
 

@@ -68,7 +68,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(23);
+    expect(ids).toHaveLength(24);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -92,7 +92,7 @@ describe("WordPress prompt table", () => {
     ).toHaveLength(WORDPRESS_DISCOVERY_MODES.length);
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
       deep: "wp2shell-bounty-v10",
-      wide: "wp2shell-bounty-v11-wide",
+      wide: "wp2shell-bounty-v12-wide",
     });
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v10");
     expect(
@@ -242,7 +242,10 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v10"
       )
         expect(text).toContain("Use multiagents aggressively");
-      else if (id === "wp2shell-bounty-v11-wide")
+      else if (
+        id === "wp2shell-bounty-v11-wide" ||
+        id === "wp2shell-bounty-v12-wide"
+      )
         expect(text).toContain("four specialist agents");
       else expect(text).toMatch(/Lead|Finding/);
       expect(text).not.toMatch(
@@ -297,6 +300,54 @@ describe("WordPress discovery prompt assets", () => {
     expect(text.match(/four specialist agents/g)).toHaveLength(1);
     expect(text).not.toMatch(
       /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|\b(?:PoC|CVE|advisory|payload)\b/i,
+    );
+  });
+
+  it("makes v12-wide the v11-wide text with backward tracing, early-hook entries and six recurring shapes (ADR 0039, 2026-10-25 追記 2)", async () => {
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const v11 = paragraphs(
+      (await loadWordPressDiscoveryAsset("wp2shell-bounty-v11-wide")).text,
+    );
+    const text = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v12-wide"))
+      .text;
+    const v12 = paragraphs(text);
+    // One paragraph inserted after the specialists; every other paragraph is byte-identical to v11-wide.
+    expect(v12).toHaveLength(v11.length + 1);
+    expect(v12.slice(0, 3)).toEqual(v11.slice(0, 3));
+    expect(v12.slice(5)).toEqual(v11.slice(4));
+    expect(v12[4]).toMatch(
+      /^Shapes that recur in published WordPress findings/,
+    );
+    expect(v12[4]?.match(/\([a-f]\)/g)).toEqual([
+      "(a)",
+      "(b)",
+      "(c)",
+      "(d)",
+      "(e)",
+      "(f)",
+    ]);
+    // The specialists paragraph gains backward tracing and the early-hook entry sentence only.
+    const specialists = v12[3] ?? "";
+    expect(specialists).toContain(
+      "and backward from each sink to the untrusted inputs that can arrive there,",
+    );
+    expect(specialists).toContain(
+      "Also treat as entry points the handlers that run on every request from early hooks",
+    );
+    expect(
+      specialists
+        .replace(
+          ", and backward from each sink to the untrusted inputs that can arrive there, and reports",
+          " and reports",
+        )
+        .replace(
+          /Also treat as entry points the handlers that run on every request from early hooks[^.]*\. /,
+          "",
+        ),
+    ).toBe(v11[3]);
+    expect(text.match(/four specialist agents/g)).toHaveLength(1);
+    expect(text).not.toMatch(
+      /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|Tourfic|Groundhogg|rtMedia|\b(?:PoC|CVE|advisory|payload)\b/i,
     );
   });
 
@@ -553,7 +604,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v8" ||
         id === "wp2shell-bounty-v10" ||
         id === "wp2shell-bounty-v10-wide" ||
-        id === "wp2shell-bounty-v11-wide"
+        id === "wp2shell-bounty-v11-wide" ||
+        id === "wp2shell-bounty-v12-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).
