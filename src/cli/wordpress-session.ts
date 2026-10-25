@@ -220,7 +220,10 @@ export interface WordPressCampaignBoundaries {
   ) => Verifier<WordPressFinding, WordPressLabHandle>;
 }
 
-/** Where `verify next --handoff` exchanges files with the skill, and the host ports it uses. */
+/**
+ * Where `verify next --handoff` exchanges files with the skill, and the host
+ * ports it asks for; 0 takes a free port, which `lab.json` then names (#432).
+ */
 export type VerifierHandoff = {
   readonly directory: string;
   readonly httpPort: number;

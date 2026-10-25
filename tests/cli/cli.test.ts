@@ -257,8 +257,7 @@ async function harness(
   };
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
-    leaseDirectory: join(root, "host-lab-lease"),
-    leaseWaitMs: 0,
+    ownerDirectory: join(root, "lab-owners"),
     images: {
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
@@ -2095,7 +2094,7 @@ describe("harness CLI vertical slice", () => {
     expect(first.code).toBe(0);
     expect(first.stdout).toContain(`verified finding ${findingId}`);
     expect(handoffs).toEqual([
-      { directory: join(root, "handoff"), httpPort: 18080, databasePort: 3307 },
+      { directory: join(root, "handoff"), httpPort: 18080, databasePort: 0 },
     ]);
     // Verification runs beside the runner: its sweep never names a Lab (#526).
     expect(sweepHeldAtHandoff).toEqual([false]);
@@ -4509,6 +4508,8 @@ describe("harness CLI vertical slice", () => {
       directory,
       "--port",
       "18082",
+      "--db-port",
+      "3307",
     );
     expect(result.code).toBe(0);
     expect(result.stdout).toContain(": runtime-confirmed");

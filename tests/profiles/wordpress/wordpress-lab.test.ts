@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -9,8 +10,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { measureCanonicalSourceTree } from "../../../src/infrastructure/canonical-source-tree.js";
 import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import {
+  readLabOwners,
+  recordLabOwner,
+} from "../../../src/infrastructure/lab-owner-record.js";
+import {
   openWordPressLab,
   type DockerRequest,
+  type WordPressLabHandle,
   type WordPressVictimRoute,
 } from "../../../src/profiles/wordpress/lab/index.js";
 import type { Snapshot } from "../../../src/snapshot/index.js";
@@ -143,12 +149,19 @@ async function fixture(
     browserDiagnosticOutput: "valid" as "valid" | "missing" | "invalid",
   };
   const salts = new Map<string, string>();
+  /** The fake Docker daemon's objects and the loopback ports it bound. */
+  const docker = {
+    containers: new Set<string>(),
+    networks: new Set<string>(),
+    volumes: new Set<string>(),
+    ports: new Map<string, number>(),
+    nextPort: 32768,
+  };
   let seededRow = "";
   let pluginReadableByCli = false;
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
-    leaseDirectory: join(root, "host-lab-lease"),
-    leaseWaitMs: 0,
+    ownerDirectory: join(root, "lab-owners"),
     images: {
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
@@ -197,6 +210,51 @@ async function fixture(
     runner: {
       async run(request) {
         commands.push(request);
+        const [verb, object] = request.args;
+        const named = request.args[request.args.indexOf("--name") + 1] ?? "";
+        const operands = request.args.filter((arg) => !arg.startsWith("-"));
+        const listing = (names: Set<string>) => ({
+          exitCode: 0,
+          stdout: [...names].join("\n"),
+          stderr: "",
+        });
+        if (
+          (verb === "run" && request.args.includes("--detach")) ||
+          verb === "create"
+        ) {
+          docker.containers.add(named);
+          request.args.forEach((arg, index) => {
+            const published = /^127\.0\.0\.1:(\d*):(\d+)$/.exec(arg);
+            if (request.args[index - 1] === "--publish" && published !== null)
+              docker.ports.set(
+                `${named} ${published[2]}/tcp`,
+                published[1] === "" ? docker.nextPort++ : Number(published[1]),
+              );
+          });
+        }
+        if (verb === "rm")
+          for (const name of operands.slice(1)) docker.containers.delete(name);
+        if (verb === "network" && object === "create")
+          docker.networks.add(request.args.at(-1)!);
+        if (verb === "network" && object === "rm")
+          for (const name of operands.slice(2)) docker.networks.delete(name);
+        if (verb === "volume" && object === "create")
+          docker.volumes.add(request.args.at(-1)!);
+        if (verb === "volume" && object === "rm")
+          for (const name of operands.slice(2)) docker.volumes.delete(name);
+        if (verb === "ps") return listing(docker.containers);
+        if (verb === "network" && object === "ls")
+          return listing(docker.networks);
+        if (verb === "volume" && object === "ls")
+          return listing(docker.volumes);
+        if (verb === "port") {
+          const bound = docker.ports.get(
+            `${request.args[1]} ${request.args[2]}`,
+          );
+          return bound === undefined
+            ? { exitCode: 1, stdout: "", stderr: "no public port" }
+            : { exitCode: 0, stdout: `127.0.0.1:${bound}\n`, stderr: "" };
+        }
         if (request.args[0] === "info")
           return {
             exitCode: 0,
@@ -417,7 +475,16 @@ async function fixture(
     initialPosts: ["Welcome"],
     customerRole: false,
   };
-  return { lab, snapshot, setup, commands, sourceDirectory, database };
+  return {
+    lab,
+    snapshot,
+    setup,
+    commands,
+    sourceDirectory,
+    database,
+    docker,
+    ownerDirectory: join(root, "lab-owners"),
+  };
 }
 
 describe("WordPress gVisor Lab", () => {
@@ -601,26 +668,152 @@ describe("WordPress gVisor Lab", () => {
     await lab.teardown(verification.handle);
   });
 
-  it("admits only one verification Lab at a time in a shared host lease", async () => {
-    const { lab, snapshot, setup } = await fixture();
-    const first = await lab.provision(snapshot, setup, {
-      purpose: "verification",
+  it("runs verification Labs side by side on their own names and loopback ports (#432)", async () => {
+    const { lab, snapshot, setup, docker, ownerDirectory } = await fixture();
+    const readable = { ...setup, databaseAccess: "read-only" as const };
+    const labs = await Promise.all(
+      [1, 2, 3].map(() =>
+        lab.provision(snapshot, readable, { purpose: "verification" }),
+      ),
+    );
+    const handles = labs.map((provisioned) => {
+      if (provisioned.status !== "ready") throw new Error(provisioned.nextStep);
+      return provisioned.handle;
     });
-    expect(first.status).toBe("ready");
-    if (first.status !== "ready") return;
+    const [first, ...others] = handles as [
+      WordPressLabHandle,
+      ...WordPressLabHandle[],
+    ];
+    expect(new Set(handles.map(({ id }) => id)).size).toBe(3);
+    expect(new Set(handles.map(({ networkName }) => networkName)).size).toBe(3);
+    for (const { id } of handles)
+      expect([...docker.volumes]).toContain(`wbh-${id}-site`);
+    expect((await readLabOwners(ownerDirectory)).live).toEqual(
+      new Set(handles.map(({ id }) => id)),
+    );
+    // Port 0 takes a free port; the exposure names the one Docker bound.
+    const exposures = await Promise.all(
+      handles.map((handle) =>
+        lab.exposeToHost(handle, { httpPort: 0, databasePort: 0 }),
+      ),
+    );
+    const ports = exposures.flatMap((exposure) =>
+      exposure.status === "exposed"
+        ? [exposure.httpPort, exposure.databasePort]
+        : [],
+    );
+    expect(ports).toHaveLength(6);
+    expect(new Set(ports).size).toBe(6);
+    expect(ports).not.toContain(0);
+    // A broad cleanup, as the runner's or the operator's, names none of the live Labs.
+    const swept = await lab.cleanupLeftovers({ remove: true });
+    expect(swept).toEqual({ containers: [], networks: [], volumes: [] });
+    // Removing one Lab leaves the others' containers, network, volume and record.
+    expect(await lab.withdrawFromHost(first)).toBe(true);
+    expect(await lab.teardown(first)).toEqual({ status: "removed" });
+    const remaining = [
+      ...docker.containers,
+      ...docker.networks,
+      ...docker.volumes,
+    ];
+    expect(remaining.some((name) => name.includes(first.id))).toBe(false);
+    for (const { id } of others) {
+      expect(docker.containers).toContain(`wbh-${id}-wp`);
+      expect(docker.containers).toContain(`wbh-${id}-host`);
+      expect(docker.networks).toContain(`wbh-${id}-net`);
+    }
+    expect((await readLabOwners(ownerDirectory)).live).toEqual(
+      new Set(others.map(({ id }) => id)),
+    );
+    for (const handle of others) {
+      await lab.withdrawFromHost(handle);
+      expect(await lab.teardown(handle)).toEqual({ status: "removed" });
+    }
+    expect((await readLabOwners(ownerDirectory)).live.size).toBe(0);
+  });
+
+  it("removes in a broad cleanup only the Labs whose owner process is gone", async () => {
+    const { lab, docker, ownerDirectory } = await fixture();
+    const [alive, dead, unowned] = [randomUUID(), randomUUID(), randomUUID()];
+    await recordLabOwner({ labId: alive, directory: ownerDirectory });
+    await writeFile(
+      join(ownerDirectory, `${dead}.json`),
+      JSON.stringify({
+        schemaVersion: 1,
+        labId: dead,
+        owner: { pid: 1, bootId: "previous-boot", startTicks: "1" },
+      }),
+    );
+    for (const id of [alive, dead, unowned]) {
+      docker.containers.add(`wbh-${id}-wp`);
+      docker.networks.add(`wbh-${id}-net`);
+      docker.volumes.add(`wbh-${id}-site`);
+    }
+    expect(await lab.cleanupLeftovers({ remove: true })).toEqual({
+      containers: [`wbh-${dead}-wp`, `wbh-${unowned}-wp`],
+      networks: [`wbh-${dead}-net`, `wbh-${unowned}-net`],
+      volumes: [`wbh-${dead}-site`, `wbh-${unowned}-site`],
+    });
+    expect([...docker.containers]).toEqual([`wbh-${alive}-wp`]);
+    expect(await readLabOwners(ownerDirectory)).toEqual({
+      live: new Set([alive]),
+      dead: new Set(),
+    });
+    // Naming the exact Lab still lists it: `lab down` and the resume check decide.
+    expect(await lab.cleanupLeftovers({ remove: false, labId: alive })).toEqual(
+      {
+        containers: [`wbh-${alive}-wp`],
+        networks: [`wbh-${alive}-net`],
+        volumes: [`wbh-${alive}-site`],
+      },
+    );
+  });
+
+  it("never reads or forgets owner records in the runner's discovery sweep, even when they are unreadable (#526)", async () => {
+    const { lab, docker, ownerDirectory } = await fixture();
+    const dead = randomUUID();
+    await mkdir(ownerDirectory, { recursive: true });
+    const deadRecord = join(ownerDirectory, `${dead}.json`);
+    await writeFile(
+      deadRecord,
+      JSON.stringify({
+        schemaVersion: 1,
+        labId: dead,
+        owner: { pid: 1, bootId: "previous-boot", startTicks: "1" },
+      }),
+    );
+    docker.containers.add(`wbh-${dead}-wp`);
+    docker.containers.add(`codex-agent-${dead}`);
+    docker.networks.add(`wbh-${dead}-net`);
+    const patterns = { containers: [/^codex-agent-/] };
+    // A dead owner's record and its Lab survive: the sweep names no Lab.
+    expect(
+      await lab.cleanupLeftovers({ remove: true, labs: false, patterns }),
+    ).toEqual({
+      containers: [`codex-agent-${dead}`],
+      networks: [],
+      volumes: [],
+    });
+    expect(existsSync(deadRecord)).toBe(true);
+    expect([...docker.containers]).toEqual([`wbh-${dead}-wp`]);
+    // An unreadable owner directory (readdir EACCES) does not stop the sweep.
+    docker.containers.add(`codex-agent-${dead}`);
+    await chmod(ownerDirectory, 0o000);
     try {
       expect(
-        await lab.provision(snapshot, setup, { purpose: "verification" }),
-      ).toMatchObject({ status: "incomplete", reason: "provision" });
+        await lab.cleanupLeftovers({ remove: true, labs: false, patterns }),
+      ).toEqual({
+        containers: [`codex-agent-${dead}`],
+        networks: [],
+        volumes: [],
+      });
+      // The control: a sweep that names Labs does read the directory.
+      if (process.getuid?.() !== 0)
+        await expect(lab.cleanupLeftovers({ remove: true })).rejects.toThrow();
     } finally {
-      expect(await lab.teardown(first.handle)).toEqual({ status: "removed" });
+      await chmod(ownerDirectory, 0o755);
     }
-    const next = await lab.provision(snapshot, setup, {
-      purpose: "verification",
-    });
-    expect(next.status).toBe("ready");
-    if (next.status === "ready")
-      expect(await lab.teardown(next.handle)).toEqual({ status: "removed" });
+    expect(existsSync(deadRecord)).toBe(true);
   });
 
   it("pins ordinary scenarios and seeds translation data with an approved comment", async () => {

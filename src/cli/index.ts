@@ -1443,8 +1443,8 @@ const COMMANDS: readonly Command[] = [
         (values.port !== undefined || values["db-port"] !== undefined)
       )
         throw new UsageError("--port and --db-port require --handoff");
-      integerOption(values.port, "port", 8080, 65535);
-      integerOption(values["db-port"], "db-port", 3307, 65535);
+      integerOption(values.port, "port", 0, 65535);
+      integerOption(values["db-port"], "db-port", 0, 65535);
     },
     handler: async ({ values, state, environment, io }) => {
       const version = values.version;
@@ -1458,11 +1458,11 @@ const COMMANDS: readonly Command[] = [
           : {
               handoff: {
                 directory: resolve(values.handoff),
-                httpPort: integerOption(values.port, "port", 8080, 65535),
+                httpPort: integerOption(values.port, "port", 0, 65535),
                 databasePort: integerOption(
                   values["db-port"],
                   "db-port",
-                  3307,
+                  0,
                   65535,
                 ),
               },
@@ -1497,8 +1497,8 @@ const COMMANDS: readonly Command[] = [
         );
       if (values.finding !== undefined && values.campaign === undefined)
         throw new UsageError("--finding needs --campaign");
-      integerOption(values.port, "port", 8080, 65535);
-      integerOption(values["db-port"], "db-port", 3307, 65535);
+      integerOption(values.port, "port", 0, 65535);
+      integerOption(values["db-port"], "db-port", 0, 65535);
     },
     handler: async ({ values, state, environment, io }) => {
       if (environment.profile.verifyNext === undefined)
@@ -1510,13 +1510,8 @@ const COMMANDS: readonly Command[] = [
         configPath: resolve(required(values.config, "config")),
         handoff: {
           directory: resolve(required(values.handoff, "handoff")),
-          httpPort: integerOption(values.port, "port", 8080, 65535),
-          databasePort: integerOption(
-            values["db-port"],
-            "db-port",
-            3307,
-            65535,
-          ),
+          httpPort: integerOption(values.port, "port", 0, 65535),
+          databasePort: integerOption(values["db-port"], "db-port", 0, 65535),
         },
         ...(values.finding === undefined ? {} : { findingId: values.finding }),
       });
