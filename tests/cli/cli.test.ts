@@ -1122,7 +1122,8 @@ describe("discovery runtime share", () => {
       existsSync(join(root, "state", "sweep-holds", String(process.pid))),
     ).toBe(false);
 
-    // The same objective and output contract as a Codex Trial reach the agent.
+    // The same objective and output contract as a Codex Trial reach the agent;
+    // only the Run parameters line naming the runtime differs.
     const codex = await harness({
       claude: true,
       config: { discovery: { lab: "none" } },
@@ -1136,7 +1137,11 @@ describe("discovery runtime share", () => {
       "--config",
       codex.configPath,
     );
-    expect(prompts[0]).toBe(codex.prompts[0]);
+    const withoutRuntime = (prompt: string | undefined) =>
+      prompt?.replace(/^- Runtime: .*$/m, "");
+    expect(prompts[0]).toContain("- Runtime: claude-code/v1, model ");
+    expect(codex.prompts[0]).toContain("- Runtime: codex-native/v1, model ");
+    expect(withoutRuntime(prompts[0])).toBe(withoutRuntime(codex.prompts[0]));
     expect(transportRuns[0]?.resumePrompt).toBe(
       codex.transportRuns[0]?.resumePrompt,
     );
@@ -1274,8 +1279,19 @@ describe("harness CLI vertical slice", () => {
         inputDigest: `sha256:${createHash("sha256")
           .update(prompts[0]!)
           .digest("hex")}`,
+        wallMinutes: 120,
+        minimumActiveMinutes: 60,
+        maxChildren: 4,
+        lab: { mode: "none", maxResets: 2 },
       },
     });
+    // The generated section follows the contract and states the deep floor.
+    expect(prompts[0]).toContain(
+      `${contract.text}\n\n## Run parameters\n\nThe Harness sets and enforces these values for this Trial.\n`,
+    );
+    expect(prompts[0]).toContain(
+      "- Wall time: 120 minutes.\n- Minimum active exploration time: 60 minutes.\n- Maximum concurrent child agents: 4.\n- Lab: none.",
+    );
     expect(Object.keys(objective.sectionDigests ?? {})).toEqual([
       "objective",
       "strategy",
@@ -1756,8 +1772,10 @@ describe("harness CLI vertical slice", () => {
     ).toBe(false);
     // Owner decision 2026-10-18: the normal mode explores without a Lab.
     expect(wordpressCampaignConfigSchema.parse(base).discovery).toEqual({
-      lab: "none",
+      lab: { mode: "none", maxResets: 2 },
       mode: "deep",
+      maxChildren: 4,
+      minimumActiveMinutes: 60,
     });
     expect(
       wordpressCampaignConfigSchema.safeParse({
@@ -1843,12 +1861,13 @@ describe("harness CLI vertical slice", () => {
     };
     const wide = { lab: "none", mode: "wide" } as const;
     const deep = { lab: "none", mode: "deep" } as const;
+    // ADR 0039 addendum 3: wide has no floor and the 120-minute cap as its wall.
     expect(
       wordpressCampaignConfigSchema.parse({ ...base, discovery: wide }),
     ).toMatchObject({
-      discovery: wide,
+      discovery: { mode: "wide", minimumActiveMinutes: 0 },
       promptId: "wp2shell-bounty-v12-wide",
-      runWallTimeMinutes: 20,
+      runWallTimeMinutes: 120,
     });
     expect(
       wordpressCampaignConfigSchema.parse({ ...base, discovery: deep }),
@@ -1874,6 +1893,16 @@ describe("harness CLI vertical slice", () => {
       { discovery: deep, runWallTimeMinutes: 20 },
       { discovery: wide, runWallTimeMinutes: 121 },
       { discovery: { lab: "none", mode: "screening" } },
+      {
+        discovery: { ...deep, minimumActiveMinutes: 90 },
+        runWallTimeMinutes: 90,
+      },
+      { discovery: { ...wide, minimumActiveMinutes: 120 } },
+      { discovery: { ...deep, maxChildren: 0 } },
+      { discovery: { ...deep, maxChildren: 9 } },
+      { discovery: { lab: { mode: "none", maxResets: 6 } } },
+      { discovery: { lab: { mode: "attached", maxResets: 2 } } },
+      { discovery: { lab: "attached" } },
     ])
       expect(
         wordpressCampaignConfigSchema.safeParse({ ...base, ...rejected })
@@ -1884,8 +1913,9 @@ describe("harness CLI vertical slice", () => {
   it("launches a wide Trial without a floor and records its mode (ADR 0039)", async () => {
     const { run, configPath, transportRuns, prompts, ledger } = await harness({
       config: {
-        discovery: { lab: "none", mode: "wide" },
+        discovery: { lab: "none", mode: "wide", maxChildren: 6 },
         promptId: undefined,
+        runWallTimeMinutes: undefined,
       },
     });
     const campaign = await run(
@@ -1899,8 +1929,23 @@ describe("harness CLI vertical slice", () => {
     );
     expect(campaign.code).toBe(0);
     expect(transportRuns[0]?.minimumActiveMs).toBe(0);
+    expect(transportRuns[0]?.maxChildren).toBe(6);
     expect(transportRuns[0]?.resumePrompt?.startsWith("Stop when")).toBe(true);
     expect(prompts[0]).toContain(transportRuns[0]?.resumePrompt);
+    // No floor line; the enforced ceiling and the 120-minute wall are stated.
+    expect(prompts[0]).toContain(
+      [
+        "## Run parameters",
+        [
+          "The Harness sets and enforces these values for this Trial.",
+          "- Runtime: codex-native/v1, model gpt-6.1-sol, effort high.",
+          "- Wall time: 120 minutes.",
+          "- Maximum concurrent child agents: 6.",
+          "- Lab: none.",
+        ].join("\n"),
+        "## Trust boundary",
+      ].join("\n\n"),
+    );
     const started = ledger().read({
       campaignId: "campaign-wide",
       type: "discovery-run-started",
@@ -1910,6 +1955,12 @@ describe("harness CLI vertical slice", () => {
       expect(started[0].event.configuration).toMatchObject({
         promptVariant: "wp2shell-bounty-v12-wide",
         mode: "wide",
+        wallMinutes: 120,
+        minimumActiveMinutes: 0,
+        maxChildren: 6,
+        lab: { mode: "none", maxResets: 2 },
+        model: "gpt-6.1-sol",
+        effort: "high",
       });
   });
 

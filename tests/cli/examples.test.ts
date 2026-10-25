@@ -46,7 +46,11 @@ it("starts the checked-in v10 campaign with one concurrent target on WordPress 7
   });
   expect(config.resources.maxConcurrentTargets).toBe(1);
   expect(config.wordpressVersion).toBe("7.1.3");
-  expect(config.discovery.lab).toBe("none");
+  expect(config.discovery.lab).toEqual({ mode: "none", maxResets: 2 });
+  expect(config.discovery).toMatchObject({
+    maxChildren: 4,
+    minimumActiveMinutes: 60,
+  });
   expect(config.discovery.mode).toBe("deep");
   expect(
     wordpressCampaignConfigSchema.safeParse({
@@ -66,7 +70,7 @@ it("starts the checked-in v10 campaign with one concurrent target on WordPress 7
     ).toBe(accepted);
 });
 
-it("runs the wide example as a 20-minute v11-wide Trial on the production selection policy (ADR 0039)", async () => {
+it("runs the wide example as a 20-minute v12-wide Trial on the production selection policy (ADR 0039)", async () => {
   const config = wordpressCampaignConfigSchema.parse(
     JSON.parse(
       await readFile(
@@ -81,8 +85,13 @@ it("runs the wide example as a 20-minute v11-wide Trial on the production select
       ),
     ) as unknown,
   );
+  // The example keeps its explicit 20-minute wall; without it, wide gets 120 (ADR 0039 addendum 3).
   expect(config).toMatchObject({
-    discovery: { lab: "none", mode: "wide" },
+    discovery: {
+      lab: { mode: "none" },
+      mode: "wide",
+      minimumActiveMinutes: 0,
+    },
     promptId: "wp2shell-bounty-v12-wide",
     runWallTimeMinutes: 20,
   });
@@ -120,7 +129,7 @@ it.each(["3.3.1", "3.2.6"])(
     expect(wordpressCampaignConfigSchema.parse(source)).toMatchObject({
       promptId: "wp2shell-bounty-v10",
       runWallTimeMinutes: 120,
-      discovery: { lab: "none" },
+      discovery: { lab: { mode: "none" } },
     });
   },
 );

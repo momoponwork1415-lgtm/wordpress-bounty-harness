@@ -95,3 +95,15 @@ amends: 0029（新規探索の唯一の mode）, 0033（最低 60 分は deep �
 - `deep` は v10 のまま変えない。4 体の専門エージェント、1〜2 hop、停止規則、再開段落、最低時間、既定の wall は追記 1 のまま変えない。
 - 測った数字は、所有者の 2026-10-25 の決定（#521 のコメント）どおり本番の対象で取る。参考として、v10-wide は本番 `prod-20261025-1`〜`-3` の 24 対象で Finding 0、Lead 17 だった（v11-wide、v12-wide はまだ走っていない）。
 - 戻すときは v12-wide → v11-wide → v10-wide → v8 の順に戻す。手順は v12-wide の文書の第 5 節にある。
+
+## 2026-10-25 追記 3: 子の上限・最低時間・Lab 予算を設定値にし、`wide` の既定 wall を 120 分にする（所有者決定、Phase C1）
+
+所有者は 2026-10-25 に、Harness が強制するのは子の最大数、時間、Lab の予算の 3 つだけと決めた（`docs/reviews/2026-10-25-exploration-architecture-redesign.md` 第 7 節、第 12 節 Q3・Q7・追加「最低 60 分」）。同じ対話で、`wide` は時間を気にせず、入口の一巡が終わるまで走らせ、終わりは停止規則の段落に任せると決めた。上の決定の表にある `wide` の「既定の wall 20 分」を、この追記で次のとおり改める。表の行は当時の記録として残す。
+
+- `wide` の最低時間は 0 のまま。既定の wall は 120 分（ADR 0029 の上限）にする。`runWallTimeMinutes` を明示した campaign はその値のまま走る。`examples/campaign-wide-20.json` は 20 分を明示しているので変わらない。
+- `deep` の既定（最低 60 分、wall 120 分）は変えない。最低時間は `discovery.minimumActiveMinutes`（0〜119）で上書きできる。0 より大きいときは wall がそれを超えなければならない。
+- 子の上限は `discovery.maxChildren`（1〜8、既定 4）にする。Codex は `agents.max_threads`、Claude は PreToolUse hook がこの値で同時に生きる子を止める。実際に何体使うかは Root が決める。
+- `discovery.lab` は `{ mode: "none" | "attached", maxResets }`（`maxResets` は 0〜5、既定 2）にし、文字列の `"none"` も同じ形に直して受け付ける。探索 Lab は Phase D1 で供給するので、それまで `attached` は設定検査で拒否する。
+- 同じ値を Harness が生成する `## Run parameters` 節で Root にも伝え（ADR 0019 と同じ形）、台帳の `configuration` に `wallMinutes`、`minimumActiveMinutes`、`maxChildren`、`lab`、`model`、`effort` として残す。2026-10-25 より前の event には無い。
+- 目的文の本文と digest は変えない。本文の数値文（「80 tool calls」、「at least one hour」、「120-minute wall cap」など）は C2 の版上げで外す。生成節が増えたので `inputDigest` は変わる。
+- 消し方: `discovery.maxChildren`、`discovery.minimumActiveMinutes`、`discovery.lab` の object 形と `## Run parameters` 節を外し、`agents.max_threads=4`、hook の 4、mode ごとの定数（`wide` の wall 20 分を含む）に戻す。台帳の追加 field は読み取り専用で残す。

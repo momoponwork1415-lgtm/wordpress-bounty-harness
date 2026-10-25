@@ -5,6 +5,8 @@ import { z } from "zod";
 import {
   assignDiscoveryRuntime,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
+  DEFAULT_MAX_CHILDREN,
+  MAX_CHILDREN_LIMIT,
   EGRESS_BROKER_MEMORY_MIB,
   runtimeShareSchema,
 } from "../discovery/index.js";
@@ -70,11 +72,35 @@ const runnablePrompt = z.enum([
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.wide,
 ]);
 
-/** ADR 0039: a `wide` campaign without runWallTimeMinutes gets this wall. */
-export const WORDPRESS_WIDE_DEFAULT_WALL_MINUTES = 20;
-/** ADR 0029 / 0033: the `deep` wall, and the active floor its wall must exceed. */
-const WORDPRESS_DEEP_DEFAULT_WALL_MINUTES = 120;
-const WORDPRESS_DEEP_MINIMUM_ACTIVE_MINUTES = 60;
+/**
+ * ADR 0029 cap and the default wall of both modes. `wide` used 20 until the
+ * owner's 2026-10-25 decision (ADR 0039 addendum 3).
+ */
+const WORDPRESS_DEFAULT_WALL_MINUTES = 120;
+/** ADR 0033 / 0039: the active floor by mode unless discovery.minimumActiveMinutes sets one. */
+const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = { deep: 60, wide: 0 } as const;
+
+/**
+ * Whether a discovery Lab is attached and how often the Root may reset it
+ * (redesign 2026-10-25 §7). The string form is normalised to the object.
+ * Phase D1 supplies the Lab; until it is merged no run gets one, so
+ * `attached` is refused here, before any host work.
+ */
+const discoveryLabSchema = z
+  .union([
+    z
+      .enum(["none", "attached"])
+      .transform((mode) => ({ mode, maxResets: undefined })),
+    z.strictObject({
+      mode: z.enum(["none", "attached"]),
+      maxResets: z.number().int().min(0).max(5).optional(),
+    }),
+  ])
+  .transform(({ mode, maxResets }) => ({ mode, maxResets: maxResets ?? 2 }))
+  .refine((lab) => lab.mode === "none", {
+    message:
+      "Attached discovery Labs are retired until Phase D1 is merged; discovery.lab must be none",
+  });
 
 export const LEGACY_VERIFIER_RETIRED =
   "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";
@@ -84,16 +110,22 @@ const commonCampaignFields = {
   schemaVersion: z.literal(1),
   discovery: z
     .strictObject({
-      lab: z.literal("none", {
-        error:
-          "Attached discovery Labs are retired; discovery.lab must be none",
-      }),
+      lab: discoveryLabSchema.prefault("none"),
       /** Opt-in split of targets between Codex and Claude; absent, all run on Codex. */
       runtimeShare: runtimeShareSchema.optional(),
       /** The launch mode of every Trial this campaign starts (ADR 0039). */
       mode: z.enum(WORDPRESS_DISCOVERY_MODES).default("deep"),
+      /** Ceiling on live children; the Root decides how many it uses. */
+      maxChildren: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_CHILDREN_LIMIT)
+        .default(DEFAULT_MAX_CHILDREN),
+      /** Defaults by mode: 60 for `deep`, 0 for `wide` (ADR 0039). */
+      minimumActiveMinutes: z.number().int().min(0).max(119).optional(),
     })
-    .default({ lab: "none", mode: "deep" }),
+    .prefault({}),
   selectionPolicyPath: z.string().min(1).optional(),
   programmeBoundary: text,
   /** Host bounds: targets, per-target discovery runs and their memory budget. */
@@ -136,7 +168,7 @@ const commonCampaignFields = {
 export const wordpressCampaignConfigSchema = z
   .strictObject({
     ...commonCampaignFields,
-    /** Defaults by mode below: 120 for `deep`, 20 for `wide` (ADR 0039). */
+    /** Defaults to the 120-minute cap in both modes (ADR 0039 addendum 3). */
     runWallTimeMinutes: z.number().positive().max(120).optional(),
     /** Defaults to the current objective of the mode. */
     promptId: runnablePrompt.optional(),
@@ -152,15 +184,17 @@ export const wordpressCampaignConfigSchema = z
         path: ["promptId"],
         message: `The ${mode} mode runs ${WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS[mode]} only`,
       });
+    const floor =
+      config.discovery.minimumActiveMinutes ??
+      WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES[mode];
     if (
-      mode === "deep" &&
-      config.runWallTimeMinutes !== undefined &&
-      config.runWallTimeMinutes <= WORDPRESS_DEEP_MINIMUM_ACTIVE_MINUTES
+      floor > 0 &&
+      (config.runWallTimeMinutes ?? WORDPRESS_DEFAULT_WALL_MINUTES) <= floor
     )
       context.addIssue({
         code: "custom",
         path: ["runWallTimeMinutes"],
-        message: `A deep wall must exceed the ${WORDPRESS_DEEP_MINIMUM_ACTIVE_MINUTES}-minute active floor`,
+        message: `A ${mode} wall must exceed the ${floor}-minute active floor`,
       });
     const caps = config.resources.maxConcurrentTargetsByRuntime;
     if (caps !== undefined) {
@@ -204,14 +238,17 @@ export const wordpressCampaignConfigSchema = z
   })
   .transform((config) => ({
     ...config,
+    discovery: {
+      ...config.discovery,
+      minimumActiveMinutes:
+        config.discovery.minimumActiveMinutes ??
+        WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES[config.discovery.mode],
+    },
     promptId:
       config.promptId ??
       WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS[config.discovery.mode],
     runWallTimeMinutes:
-      config.runWallTimeMinutes ??
-      (config.discovery.mode === "wide"
-        ? WORDPRESS_WIDE_DEFAULT_WALL_MINUTES
-        : WORDPRESS_DEEP_DEFAULT_WALL_MINUTES),
+      config.runWallTimeMinutes ?? WORDPRESS_DEFAULT_WALL_MINUTES,
   }));
 export type WordPressCampaignConfig = z.infer<
   typeof wordpressCampaignConfigSchema

@@ -78,6 +78,8 @@ export interface ClaudeSandboxCommand {
     readonly prompt: string;
     readonly resumePrompt: string;
     readonly minimumActiveMs: number;
+    /** The PreToolUse hook's ceiling on live children. */
+    readonly maxChildren: number;
     readonly model: string;
     readonly effort: string;
     readonly outputSchema: object;

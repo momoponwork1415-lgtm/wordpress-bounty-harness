@@ -13,6 +13,7 @@ import {
   mergeTurnReports,
   observedFromCommands,
   reportJsonSchema,
+  DEFAULT_MAX_CHILDREN,
   type DiscoveryTransportResult,
   type DiscoveryTransportRun,
 } from "./codex-native-agent-runtime.js";
@@ -485,8 +486,8 @@ export class ClaudeNativeAgentRuntime {
             subagentModel: profile.subagent.modelId,
             protocol: "anthropic-messages",
             // Claude Code sends one Messages request per model turn, for the
-            // Root and up to four children at once, and its side requests are
-            // pinned to the same model. Five streams over the 120-minute wall at
+            // Root and its live children (four by default), and its side requests
+            // are pinned to the same model. Five streams over the 120-minute wall at
             // one turn per 3.6 s is 10,000, the broker's ceiling; a Trial that
             // needs more is runaway traffic and stops as broker-request-cap.
             maxRequests: 10_000,
@@ -505,6 +506,7 @@ export class ClaudeNativeAgentRuntime {
                   prompt: run.prompt,
                   resumePrompt: run.resumePrompt!,
                   minimumActiveMs: run.minimumActiveMs!,
+                  maxChildren: run.maxChildren ?? DEFAULT_MAX_CHILDREN,
                   model: profile.requestedModelId,
                   effort: profile.requestedEffort,
                   outputSchema: reportJsonSchema,

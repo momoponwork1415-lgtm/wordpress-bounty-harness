@@ -84,6 +84,7 @@ v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入�
   - **同時対象数**: `resources.maxConcurrentTargets`（1〜10）は対象ごとの campaign を何本同時に走らせるか。対象ごとの run は `maxRuns: 1` なので、実際に同時に走る探索 run はこの数になる。`memoryBudgetMiB` は対象ごとの run 数だけを縛り、対象をまたいだ合計は見ない（container の memory 上限は予約ではなく、Lab なし探索の実測は Codex 約 170 MiB、broker 約 110 MiB）。1 batch で選ぶ数は選定方針の `maximumTargets`（3〜10）で、同時対象数と同じにすると batch の最後に 1 本だけ走る時間が無くなる。`continuous run` のログイン余裕は `ceil(maximumTargets / maxConcurrentTargets) × (runWallTimeMinutes + 105)` 分（2026-10-19、所有者の指示で上限を 4 / 5 から 10 / 10 へ。#347）。`maxConcurrentTargetsByRuntime.codex` を書いたときは、`maxConcurrentTargets` の代わりにその値（小さいほう）で波を数える。batch が全部 Codex に偏っても足りるようにするためである。
   - **runtime ごとの同時対象数**（2026-10-19、所有者の指示「Opus 3 本、Codex 3 本」、ADR 0032 の 2026-10-19 追記 2）: `resources.maxConcurrentTargetsByRuntime: {"codex": <n>, "claude": <n>}` は、runtime ごとに同時に走る対象の上限。書かなければ合計の `maxConcurrentTargets` だけが効く。各値は 0〜`maxConcurrentTargets` で、`discovery.runtimeShare` の重みが正の runtime には 1 以上が要る（`runtimeShare` が無ければ Codex に要る）。枠が空くと、選定順で最初の「runtime に空きがある対象」が始まる。Codex 3 本と Claude 3 本を同時に回す設定は `"discovery": {"lab": "none", "runtimeShare": {"codex": 1, "claude": 1}}` と `"resources": {"maxConcurrentRuns": 1, "maxConcurrentTargets": 6, "memoryBudgetMiB": 10752, "maxConcurrentTargetsByRuntime": {"codex": 3, "claude": 3}}`。`memoryBudgetMiB` は対象ごとの値なので、6 対象でも 10752 のままでよい。host 設定には `claude` の節が要る。
   - Labのメモリは対象ごとに別に要る。
+- **子の上限と最低時間**（2026-10-25、ADR 0039 の追記 3）: `discovery.maxChildren`（1〜8、既定 4）は同時に生きる子の上限で、Codex の `agents.max_threads` と Claude の hook に渡る。`discovery.minimumActiveMinutes`（0〜119）は最低時間で、省略すると `deep` は 60、`wide` は 0。`runWallTimeMinutes` は省略すると両 mode とも 120。これらの値は生成節 `## Run parameters` で Root に伝わり、`discovery-run-started.configuration` に残る。
 - **上限での停止と再開**: provider のrate limit / quotaの応答を受けたとき。
   - 新しいrunを出さず、進行中のrunを記録して止まる（下の分割 campaign では、上限に当たった runtime の新しいrunだけを出さない）。終了コードは3で、台帳に `campaign-stopped(provider-limit)` が残る。
   - `discovery.runtimeShare` で Codex と Claude の両方に正の重みを付け、`discovery.lab` が `none` の campaign では、上限に当たった runtime の対象だけが止まる。もう一方の runtime の対象は起動と完了を続ける。このとき `campaign-stopped` に `runtime`（`codex` / `claude`）が付く。`runtime` の無いイベントは、従来どおり campaign 全体の停止である。片方の重みが 0 の campaign と `runtimeShare` の無い campaign の動きは変わらない（ADR 0032 の 2026-10-20 追記 3）。
@@ -114,7 +115,7 @@ v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入�
 
 ### 探索だけ回し、検証を 1 件ずつ回す
 
-`campaign.json` の `discovery.lab` は `"none"` だけを受理し、省略時も `"none"` になる。探索用 Lab を供給せず、Finding は台帳に記録して検証を後へ送る（所有者決定 2026-10-18「通常モードは Lab を起動しない探索」）。旧 `"attached"` は 2026-10-23 に退役し、2026-10-24 から共通の設定検査で host 初期化前に拒否する。`none` へ暗黙に切り替えない。過去の attached Trial の台帳と集計は引き続き読める。管理用セッションに旧 Verifier は不要で、未提供の旧経路を明示利用すると退役エラーになる。
+`campaign.json` の `discovery.lab` は `"none"` か `{"mode": "none", "maxResets": 2}` を受理し、どちらも後者の形に直す（省略時も同じ）。`maxResets`（0〜5、既定 2）は探索 Lab の再供給の予算で、Phase D1 が入るまで `mode` は `none` だけを受理する（ADR 0039 の追記 3）。探索用 Lab を供給せず、Finding は台帳に記録して検証を後へ送る（所有者決定 2026-10-18「通常モードは Lab を起動しない探索」）。旧 `"attached"` は 2026-10-23 に退役し、2026-10-24 から共通の設定検査で host 初期化前に拒否する。`none` へ暗黙に切り替えない。過去の attached Trial の台帳と集計は引き続き読める。管理用セッションに旧 Verifier は不要で、未提供の旧経路を明示利用すると退役エラーになる。
 
 旧 `campaign run --retry-incomplete` も退役した。指定すると、状態を開く前に不明なオプションとして拒否する。過去の再試行記録は引き続き読める（ADR 0022）。
 

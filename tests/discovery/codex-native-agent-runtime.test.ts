@@ -417,6 +417,7 @@ describe("Codex native agent runtime", () => {
         profile: cooperativeProfile,
         coordination: "cooperative",
         minimumActiveMs: 0,
+        maxChildren: 6,
         expiresAt: "2026-10-08T09:00:00.000Z",
         campaignInput: {
           ...run.campaignInput,
@@ -424,6 +425,10 @@ describe("Codex native agent runtime", () => {
         },
       });
       expect(commands[0]?.minimumActiveMs).toBe(0);
+      // The campaign's ceiling reaches both the first turn and the resumes.
+      expect(commands[0]?.args).toContain("agents.max_threads=6");
+      expect(commands[0]?.resumeArgs).toContain("agents.max_threads=6");
+      expect(commands[0]?.args).not.toContain("agents.max_threads=4");
       expect(result.receipt).not.toMatchObject({
         reasonDetail: "early-final-before-minimum",
       });

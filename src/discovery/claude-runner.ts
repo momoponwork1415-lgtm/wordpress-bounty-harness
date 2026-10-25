@@ -1,15 +1,21 @@
-/** What a hook tells the model when it refuses a tool call; both are in the PR's source map. */
+/**
+ * What a hook tells the model when it refuses a tool call; both are in the
+ * PR's source map. `{n}` is the campaign's `discovery.maxChildren`.
+ */
 export const CLAUDE_RUNNER_DENIALS = {
   outsideSurface: "Tool is outside the Trial surface.",
-  childLimit: "At most four children can run at once in this Trial.",
+  childLimit: "At most {n} children can run at once in this Trial.",
 } as const;
+
+export const claudeRunnerChildLimitDenial = (maxChildren: number): string =>
+  CLAUDE_RUNNER_DENIALS.childLimit.replace("{n}", String(maxChildren));
 
 /**
  * Runs inside the disposable gVisor container, never on the host. It drives
  * Claude Code through the Agent SDK pinned in the image: one Root session,
- * at most four live children, and the same Root session resumed with the
- * pinned directive until the wall floor (ADR 0033); a 0 floor (the `wide`
- * mode, ADR 0039) runs the first turn only. Only compact Root events
+ * at most `maxChildren` live children (the campaign's ceiling), and the
+ * same Root session resumed with the pinned directive until the wall floor
+ * (ADR 0033); a 0 floor (the `wide` mode, ADR 0039) runs the first turn only. Only compact Root events
  * reach stdout; full transcripts stay in the mounted Claude config directory.
  * With `resumeSessionId`, the first turn resumes that restored session with
  * the pinned directive instead of sending the objective again (ADR 0036).
@@ -20,7 +26,6 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 const TOOLS = ["Read", "Glob", "Grep", "Bash", "Write", "Edit", "Agent"];
 // The SDK gives the Root this tool for the json_schema report; children answer in text.
 const REPORT_TOOL = "StructuredOutput";
-const MAX_CHILDREN = 4;
 const MAX_FINAL_MESSAGE = 64 * 1024;
 const DENIALS = ${JSON.stringify(CLAUDE_RUNNER_DENIALS)};
 
@@ -34,11 +39,14 @@ if (
   typeof config.prompt !== "string" || config.prompt.length === 0 ||
   typeof config.resumePrompt !== "string" || config.resumePrompt.length === 0 ||
   !Number.isSafeInteger(config.minimumActiveMs) || config.minimumActiveMs < 0 ||
+  !Number.isSafeInteger(config.maxChildren) || config.maxChildren < 1 ||
   typeof config.model !== "string" || typeof config.effort !== "string" ||
   typeof config.outputSchema !== "object" || config.outputSchema === null ||
   (config.resumeSessionId !== undefined &&
     (typeof config.resumeSessionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(config.resumeSessionId)))
 ) process.exit(2);
+const MAX_CHILDREN = config.maxChildren;
+const CHILD_LIMIT = DENIALS.childLimit.replace("{n}", String(MAX_CHILDREN));
 
 let pending = 0;
 const live = new Set();
@@ -57,7 +65,7 @@ const preToolUse = async (input) => {
   if (input.agent_id !== undefined) return deny(DENIALS.outsideSurface);
   if (pending + live.size >= MAX_CHILDREN) {
     emit({ type: "harness.child-decision", at: now(), decision: "child-limit", live: live.size, pending });
-    return deny(DENIALS.childLimit);
+    return deny(CHILD_LIMIT);
   }
   emit({ type: "harness.child-decision", at: now(), decision: "allow", live: live.size, pending });
   pending += 1;

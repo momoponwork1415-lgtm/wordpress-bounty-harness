@@ -272,6 +272,7 @@ describe("Claude native agent runtime", () => {
       prompt: run.prompt,
       resumePrompt,
       minimumActiveMs: run.minimumActiveMs,
+      maxChildren: 4,
       model: "claude-opus-5-5",
       effort: "high",
       outputSchema: reportJsonSchema,
