@@ -58,10 +58,12 @@ export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
   readonly fragments?: readonly WordPressPromptFragment[];
 }
 
-// Paragraphs both current objectives carry unchanged.
+// Paragraphs the deep and wide objectives share unchanged.
 const TASK = { section: "objective", file: "task-v10" } as const;
-const LIFETIME = { section: "coordination", file: "lifetime-v10" } as const;
 const SOURCES = { section: "objective", file: "sources-v8" } as const;
+// Only the archived v10 and v12-wide carry it; v11 and v13-wide drop it
+// (owner decision 2026-10-25, redesign §12 Q7).
+const LIFETIME = { section: "coordination", file: "lifetime-v10" } as const;
 
 export const WORDPRESS_DISCOVERY_PROMPTS = [
   {
@@ -202,8 +204,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:fd4e395ecb50923487c9bab6dbae81f0aff4e67342abecedda3f53cd9ff5f8b3",
     outputContract: "v4",
-    status: "current",
-    mode: "deep",
+    status: "archived",
     fragments: [
       TASK,
       { section: "objective", file: "first-principles-v7" },
@@ -215,6 +216,27 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
       SOURCES,
       { section: "coordination", file: "persist-deep-v7" },
       { section: "coordination", file: "stop-deep-v8" },
+    ],
+  },
+  {
+    id: "wp2shell-bounty-v11",
+    digest:
+      "sha256:03d87941138ba92f7e5ab41e716de9b115cc63509a43739cb766e8dad7a37481",
+    outputContract: "v4",
+    status: "current",
+    mode: "deep",
+    // v10 without the lifetime paragraph, the child count and the minutes;
+    // the Run parameters section states the enforced values (ADR 0039 追記 4).
+    fragments: [
+      TASK,
+      { section: "objective", file: "first-principles-v7" },
+      { section: "coordination", file: "dynamic-v11" },
+      { section: "strategy", file: "portfolio-v10" },
+      { section: "coordination", file: "registry-v7" },
+      { section: "persistence", file: "research-v10" },
+      SOURCES,
+      { section: "coordination", file: "persist-deep-v7" },
+      { section: "coordination", file: "stop-deep-v11" },
     ],
   },
   {
@@ -236,8 +258,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:9a79a3b20fdba7af54f32464d868ab00806335c526781aba026e76ce9290c3c3",
     outputContract: "v4",
-    status: "current",
-    mode: "wide",
+    status: "archived",
     fragments: [
       TASK,
       { section: "objective", file: "first-principles-v11" },
@@ -247,6 +268,26 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
       { section: "persistence", file: "research-v11" },
       SOURCES,
       { section: "coordination", file: "fixed-v11" },
+      { section: "coordination", file: "stop-wide-v11" },
+    ],
+  },
+  {
+    id: "wp2shell-bounty-v13-wide",
+    digest:
+      "sha256:4be7c360dac8f3e9651a1174dab462e4aec1f32bcb623dfe0180fda63637efbc",
+    outputContract: "v4",
+    status: "current",
+    mode: "wide",
+    // v12-wide without the lifetime paragraph and the specialist count
+    // (ADR 0039 追記 4).
+    fragments: [
+      TASK,
+      { section: "objective", file: "first-principles-v11" },
+      { section: "strategy", file: "sinks-v13" },
+      { section: "strategy", file: "shapes-v12" },
+      { section: "persistence", file: "research-v11" },
+      SOURCES,
+      { section: "coordination", file: "fixed-v13" },
       { section: "coordination", file: "stop-wide-v11" },
     ],
   },

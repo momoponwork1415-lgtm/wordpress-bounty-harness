@@ -1,0 +1,1 @@
+The root agent assigns one sink class to each specialist, merges duplicate routes, doubly checks every concrete bug for sanity before it is reported, and reports. It does not redirect specialists toward promising leads and does not launch further rounds. Runtime confirmation is decided later by the independent Harness judge, not by the discovery agents.

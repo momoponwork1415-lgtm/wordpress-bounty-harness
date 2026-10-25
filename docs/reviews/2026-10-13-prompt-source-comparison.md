@@ -63,10 +63,10 @@
 | 11 | 一案支配の禁止・blocked の再開条件 | ✓ | ✓ | ✓ | — | ✓ | ✓ | |
 | 12 | 非互換 route の並走と cross-pollinate | ✓ | ✓ | ✓ | — | — | — | |
 | 13 | adversarial agent | 「doubly checked for sanity」 | ✓ | ✓ | — | — | — | |
-| 14 | agent を短命にする | — | 「No agent may exceed 80 tool calls… hands off」 | 「agent lifetime, not count, consumes the run」 | — | — | — | |
+| 14 | agent を短命にする | — | 「No agent may exceed 80 tool calls… hands off」 | 「agent lifetime, not count, consumes the run」 | — | — | — | v10・v10-wide〜v12-wide で採用。v11・v13-wide で外した（所有者決定 2026-10-25「根拠が無い」、ADR 0039 追記 4） |
 | 15 | 研究 file | — | 「research/<family>.md、30 行以内で返す」 | 「put your own notes in research/」 | — | run-local evidenceSummary | — | |
 | 16 | Root の役割 | 「synthesize, challenge, redirect, launch new rounds」 | ✓ | + 「global shortlist of at most five」「owns phase order, budget, honest closure」 | — | ✓ | ✓ | |
-| 17 | 子の数 | 4 | 4 | `{{AGENT_CAP}}` | 自由 | 4 | 3 | |
+| 17 | 子の数 | 4 | 4 | `{{AGENT_CAP}}` | 自由 | 4 | 3 | v11・v13-wide から本文に数を書かず、Harness 生成の `## Run parameters` 節が `discovery.maxChildren` の値を伝える（P1 の `{{AGENT_CAP}}` と同じく外から入れる形。ADR 0039 追記 3・4） |
 | 18 | 依存 source | 「third_party/ wordpress-7.0.4, php-8.3.6」 | 同 | `{{DEPENDENCY_NOTE}}` | — | pinned dependency | `/workspace/wordpress` | |
 | 19 | 1 波目が空でも続ける | 「Do not stop after the first wave fails」 | ✓ | ✓ | — | ✓ | ✓ | |
 | 20 | 停止条件 | 「at least 6 hours」 | 「2 連続波で新 family も finding も無し、または 3 時間」 | 「at least {{EFFORT_FLOOR}}… Do not fabricate elapsed time」 | 「bounded closure」 | 停止条件あり | 「2 波連続増分なし、最低時間なし」 | |

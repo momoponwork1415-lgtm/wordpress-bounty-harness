@@ -107,3 +107,17 @@ amends: 0029（新規探索の唯一の mode）, 0033（最低 60 分は deep �
 - 同じ値を Harness が生成する `## Run parameters` 節で Root にも伝え（ADR 0019 と同じ形）、台帳の `configuration` に `wallMinutes`、`minimumActiveMinutes`、`maxChildren`、`lab`、`model`、`effort` として残す。2026-10-25 より前の event には無い。
 - 目的文の本文と digest は変えない。本文の数値文（「80 tool calls」、「at least one hour」、「120-minute wall cap」など）は C2 の版上げで外す。生成節が増えたので `inputDigest` は変わる。
 - 消し方: `discovery.maxChildren`、`discovery.minimumActiveMinutes`、`discovery.lab` の object 形と `## Run parameters` 節を外し、`agents.max_threads=4`、hook の 4、mode ごとの定数（`wide` の wall 20 分を含む）に戻す。台帳の追加 field は読み取り専用で残す。
+
+## 2026-10-25 追記 4: 目的文の次の版（`deep` は v11、`wide` は v13-wide）。子の寿命の段落と数値の文を外す（所有者決定、Phase C2）
+
+所有者は 2026-10-25 に、子のツール呼び出し 80 回の段落（「Keep every agent short. …」）には根拠が無いので、`deep` と `wide` の両方の次の版から外すと決めた。80 という数はどこにも移さない。同じ対話で、Harness が強制して `## Run parameters` 節で伝える数（wall、最低時間、子の数）は、本文に重ねて持たないと決めた（`docs/reviews/2026-10-25-exploration-architecture-redesign.md` 第 7 節、第 12 節 Q7）。Root は Run parameters の上限の中で、何体の子を使うかを決める。
+
+同じ日の訂正で、Codex と Claude のどちらの runtime でも、Root と到達先の種別ごとに 1 体の専門エージェントの形を保つと決めた。1 体のエージェントが種別を順に掃く形の目的文と、協調の形を選ぶ設定は作らない。
+
+- `deep` の現行の目的文は `wp2shell-bounty-v11`（`sha256:03d87941138ba92f7e5ab41e716de9b115cc63509a43739cb766e8dad7a37481`）とする。v10 から寿命の段落を外し、「You may spawn up to 4 agents at any one time.」の 1 文を外し、最後の段落の「one hour」を「the minimum active exploration time stated in the Run parameters」に替えて「The Trial has a 120-minute wall cap.」を外した。最後の段落は「Before giving up,」で始まるので、再開段落の規則は変わらない（[本文と出典対照](../reviews/2026-10-25-wp2shell-bounty-v11.md)）。
+- `wide` の現行の目的文は `wp2shell-bounty-v13-wide`（`sha256:4be7c360dac8f3e9651a1174dab462e4aec1f32bcb623dfe0180fda63637efbc`）とする。v12-wide から寿命の段落を外し、「Use four specialist agents, one per sink class,」を「Use one specialist agent per sink class,」に、「The root agent assigns the four sinks,」を「The root agent assigns one sink class to each specialist,」に替えた。4 つの到達先の種別はそのまま並ぶので、専門エージェントの数は種別から決まる。最後の段落は「Stop when」のまま（[本文と出典対照](../reviews/2026-10-25-wp2shell-bounty-v13-wide.md)）。
+- `wp2shell-bounty-v10` と `wp2shell-bounty-v12-wide` は `archived` にする。本文、digest、fragments の行は残し、走った Trial の目的文、digest、節の digest を照合できるようにする。`archived` の行は `mode` を持たないので、新規の campaign では選べない。
+- どちらの新版も、出典対照表の既存の行（第 2 節の #14、#17、#20、第 2.1 節の PRISM-a）だけで組み、新しい行は足していない。ほかの段落は 1 バイトも変えていない（`tests/profiles/wordpress/discovery-prompts.test.ts` の v11 と v13-wide の test）。
+- `src/profiles/wordpress/policy/campaign.json` の `promptId` と `src/profiles/wordpress/policy/selection.json` の `promptVariant` は v11、`examples/campaign-wide-20.json` の `promptId` は v13-wide にする。本番の選定方針の revisit は `version-increased` なので、`promptVariant` の版上げで再訪の対象は変わらない。
+- 測った数字: 数字待ち（本番で取る。所有者の 2026-10-25 の決定）。Trial は回していない。
+- 戻すときは、`deep` は v11 → v10 → v8、`wide` は v13-wide → v12-wide → v11-wide → v10-wide → v8 の順に戻す。手順は各版の文書の第 5 節にある。
