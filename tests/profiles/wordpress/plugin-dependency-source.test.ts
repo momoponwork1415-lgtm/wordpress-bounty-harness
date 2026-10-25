@@ -241,6 +241,146 @@ describe("WordPress plugin dependency source", () => {
     ]);
   });
 
+  it("caps the header slugs after adding the WC-header woocommerce", () => {
+    const sixteen = Array.from({ length: 16 }, (_, i) => `dep-${i}`).join(", ");
+    expect(
+      requiredPluginSlugs(Buffer.from(`/* Requires Plugins: ${sixteen} */`)),
+    ).toHaveLength(16);
+    expect(() =>
+      requiredPluginSlugs(
+        Buffer.from(
+          `/*\nRequires Plugins: ${sixteen}\nWC requires at least: 8.0\n*/`,
+        ),
+      ),
+    ).toThrow(SourceAcquisitionError);
+  });
+
+  it("treats a WC-header woocommerce as optional under pinned-only and records the skip", async () => {
+    const { packet, storageDirectory } = await fixture();
+    // TranslatePress 3.3.1 style: no Requires Plugins, only the WC header.
+    const target = await packet(
+      "translatepress-multilingual",
+      "3.3.1",
+      "<?php\n/*\nPlugin Name: TranslatePress\nWC requires at least: 2.5.0\nWC tested up to: 10.2.2\n*/",
+    );
+    const woocommerce = await packet(
+      "woocommerce",
+      "9.4.0",
+      "<?php\n/* Plugin Name: WooCommerce\nWC requires at least: 9.0 */",
+    );
+    const observed: string[] = [];
+    const acquire = openWordPressOrgPluginDependencySource({
+      storageDirectory,
+      policy,
+      targetSource: {
+        async observe({ slug }) {
+          observed.push(slug);
+          return {
+            status: "observed",
+            observation: { stableVersion: "9.9.9" },
+            observationRef: {
+              kind: "wordpress-org-target-observation-ref",
+              schemaVersion: 1,
+              id: `observation-${slug}`,
+              digest: digest(slug),
+            },
+          } as Awaited<ReturnType<WordPressOrgTargetSource["observe"]>>;
+        },
+        async acquire() {
+          return {
+            status: "ready",
+            intake: { packet: woocommerce },
+          } as Awaited<ReturnType<WordPressOrgTargetSource["acquire"]>>;
+        },
+      },
+    });
+    expect(await acquire(target, {}, [], "pinned-only")).toEqual([]);
+    expect(observed).toEqual([]);
+    const pinsetDirectory = join(storageDirectory, "plugin-dependency-pins");
+    const readPinsets = async () => {
+      const fs = await import("node:fs/promises");
+      return Promise.all(
+        (await fs.readdir(pinsetDirectory)).map(
+          async (file) =>
+            JSON.parse(await readFile(join(pinsetDirectory, file), "utf8")) as {
+              explicitPins: Record<string, string>;
+              dependencies: { slug: string }[];
+              skippedDependencies?: unknown;
+            },
+        ),
+      );
+    };
+    expect(await readPinsets()).toMatchObject([
+      {
+        explicitPins: {},
+        dependencies: [],
+        skippedDependencies: [
+          {
+            slug: "woocommerce",
+            declaredBy: ["translatepress-multilingual"],
+            reason: "header-derived-unpinned",
+          },
+        ],
+      },
+    ]);
+    // A saved pinset is reused on the repeat freeze.
+    expect(await acquire(target, {}, [], "pinned-only")).toEqual([]);
+
+    // With a pin the same header resolves woocommerce at the pinned version.
+    expect(
+      await acquire(target, { woocommerce: "9.4.0" }, [], "pinned-only"),
+    ).toMatchObject([{ identity: "wporg:woocommerce", version: "9.4.0" }]);
+    const pinned = (await readPinsets()).find(
+      ({ explicitPins }) => explicitPins.woocommerce === "9.4.0",
+    );
+    expect(pinned).toMatchObject({ dependencies: [{ slug: "woocommerce" }] });
+    expect(pinned).not.toHaveProperty("skippedDependencies");
+
+    // stable-observed keeps the header rule for production targets.
+    expect(await acquire(target, {}, [], "stable-observed")).toMatchObject([
+      { identity: "wporg:woocommerce" },
+    ]);
+  });
+
+  it("keeps woocommerce strict under pinned-only when Requires Plugins or the policy names it", async () => {
+    const { packet, storageDirectory } = await fixture();
+    const unreachable = {
+      async observe(): Promise<never> {
+        throw new Error("No metadata request without an explicit version");
+      },
+      async acquire(): Promise<never> {
+        throw new Error("No source request without an explicit version");
+      },
+    };
+    const acquire = openWordPressOrgPluginDependencySource({
+      storageDirectory,
+      policy,
+      targetSource: unreachable,
+    });
+    const required = await packet(
+      "addon",
+      "1.0.0",
+      "<?php\n/* Plugin Name: Addon\nRequires Plugins: woocommerce\nWC requires at least: 8.0 */",
+    );
+    await expect(
+      acquire(required, {}, [], "pinned-only"),
+    ).rejects.toMatchObject({
+      kind: "deferred",
+      diagnostic: { reason: "unpinned-required-plugin", slug: "woocommerce" },
+    });
+    const headerOnly = await packet(
+      "other-addon",
+      "1.0.0",
+      "<?php\n/* Plugin Name: Other\nWC tested up to: 9.4 */",
+    );
+    await expect(
+      acquire(headerOnly, {}, ["woocommerce"], "pinned-only"),
+    ).rejects.toMatchObject({
+      kind: "deferred",
+      diagnostic: { reason: "unpinned-required-plugin", slug: "woocommerce" },
+    });
+  });
+
   it("pins transitive and explicit plugins before the target and reuses versions", async () => {
     const { packet, storageDirectory } = await fixture();
     const target = await packet(

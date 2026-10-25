@@ -32,7 +32,11 @@ import {
 } from "../../src/discovery/index.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
-import type { WordPressOrgTargetSource } from "../../src/profiles/wordpress/acquisition/index.js";
+import {
+  openWordPressOrgPluginDependencySource,
+  type TargetIntakePacket,
+  type WordPressOrgTargetSource,
+} from "../../src/profiles/wordpress/acquisition/index.js";
 import { wordPressDiscoveryOutputContractV4 } from "../../src/profiles/wordpress/discovery/output-contract.js";
 import {
   openWordPressLab,
@@ -52,6 +56,8 @@ import {
 import { wordPressScenario } from "../../src/profiles/wordpress/lab/scenarios.js";
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
+const sha256 = (bytes: Uint8Array | string) =>
+  `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 const uuid = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
 const now = "2026-10-08T00:00:00.000Z";
 const directories: string[] = [];
@@ -4626,6 +4632,98 @@ describe("harness CLI vertical slice", () => {
         "header-helper": "1.2.3",
       },
     });
+
+    // The original Snapshot predates the WC-header rule (#467) and has no
+    // woocommerce. The selection reverify hands to freeze must still resolve
+    // when the target's header names a WooCommerce version.
+    const reverifySelection = frozenSelections.at(-1)!;
+    expect(reverifySelection.pluginDependencyPins).not.toHaveProperty(
+      "woocommerce",
+    );
+    const storageDirectory = join(root, "wc-header-wporg");
+    const blobs = join(storageDirectory, "target-intake", "blobs");
+    await mkdir(blobs, { recursive: true });
+    const packet = async (slug: string, version: string, main: string) => {
+      const bytes = Buffer.from(main);
+      const fileDigest = sha256(bytes);
+      await writeFile(join(blobs, fileDigest.slice(7)), bytes);
+      const manifest = {
+        kind: "canonical-file-manifest" as const,
+        schemaVersion: 1 as const,
+        entries: [
+          { path: `${slug}.php`, digest: fileDigest, size: bytes.length },
+        ],
+      };
+      return {
+        pluginIdentity: `wporg:${slug}`,
+        version,
+        canonicalInstallDirectory: slug,
+        mainPluginFile: `${slug}.php`,
+        sourceTree: { digest: canonicalDigest(manifest), manifest, entries: 1 },
+      } as TargetIntakePacket;
+    };
+    const target = await packet(
+      reverifySelection.slug,
+      reverifySelection.version,
+      "<?php\n/*\nPlugin Name: Synthetic\nRequires Plugins: elementor\nWC requires at least: 2.5.0\n*/",
+    );
+    const dependencyPackets = new Map<string, TargetIntakePacket>();
+    for (const [slug, version] of Object.entries(
+      reverifySelection.pluginDependencyPins ?? {},
+    ))
+      dependencyPackets.set(
+        slug,
+        await packet(slug, version, `<?php\n/* Plugin Name: ${slug} */`),
+      );
+    const resolve = openWordPressOrgPluginDependencySource({
+      storageDirectory,
+      policy: {
+        kind: "target-intake-policy",
+        schemaVersion: 1,
+        id: "reverify-wc-header",
+        digest: sha256("reverify-wc-header"),
+        limits: {
+          maxEntries: 100,
+          maxFileBytes: 1_000_000,
+          maxTotalBytes: 4_000_000,
+          maxPathBytes: 200,
+          maxDepth: 8,
+        },
+      },
+      targetSource: {
+        async observe({ slug }) {
+          return {
+            status: "observed",
+            observation: { stableVersion: "9.9.9" },
+            observationRef: {
+              kind: "wordpress-org-target-observation-ref",
+              schemaVersion: 1,
+              id: `observation-${slug}`,
+              digest: sha256(slug),
+            },
+          } as Awaited<ReturnType<WordPressOrgTargetSource["observe"]>>;
+        },
+        async acquire({ observationRef }) {
+          const slug = observationRef.id.replace(/^observation-/, "");
+          return {
+            status: "ready",
+            intake: { packet: dependencyPackets.get(slug)! },
+          } as Awaited<ReturnType<WordPressOrgTargetSource["acquire"]>>;
+        },
+      },
+    });
+    const resolved = await resolve(
+      target,
+      reverifySelection.pluginDependencyPins ?? {},
+      reverifySelection.pluginDependencySlugs ?? [],
+      reverifySelection.dependencyVersionPolicy ?? "pinned-only",
+    );
+    expect(
+      resolved.map(({ identity, version }) => [identity, version]).sort(),
+    ).toEqual([
+      ["wporg:elementor", "3.34.4"],
+      ["wporg:header-helper", "1.2.3"],
+    ]);
   });
 
   it.each([
