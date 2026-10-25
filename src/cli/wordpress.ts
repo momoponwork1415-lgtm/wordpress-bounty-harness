@@ -1,4 +1,4 @@
-import { readFile, rm, stat } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { z } from "zod";
@@ -1331,17 +1331,11 @@ export function createWordPressCliProfile(
     verifierRecordReader: (state) =>
       createWordPressVerifierRecordReader({ store: state.store }),
     labDown: (state, input) => wordPressLabDown(state, input, options),
-    // A record that exists holds the sweep even when unreadable; `lab down` decides.
     targetCeiling: async (configPath) =>
       (await readWordPressCampaignConfig(configPath)).resources
         .maxConcurrentTargets,
     runtimeCeilings: async (configPath) =>
       wordPressRuntimeCeilings(await readWordPressCampaignConfig(configPath)),
-    labHeld: (state) =>
-      stat(labUpRecordPath(state)).then(
-        () => true,
-        () => false,
-      ),
     async cleanupLeftovers(state, input) {
       const { boundaries } = await openWordPressCampaignSession(
         options,
@@ -1350,6 +1344,7 @@ export function createWordPressCliProfile(
       );
       return boundaries.lab.cleanupLeftovers({
         remove: input.remove,
+        labs: input.labs,
         patterns: DISCOVERY_LEFTOVER_PATTERNS,
       });
     },
