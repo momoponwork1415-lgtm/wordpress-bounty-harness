@@ -295,6 +295,7 @@ async function harness(
               `wbh-${uuid}-proxy`,
               `provider-egress-broker-${uuid}`,
               `codex-agent-${uuid}`,
+              `claude-agent-${uuid}`,
               "operator-postgres",
               "wbh-notes",
               ...live.containers,
@@ -485,7 +486,7 @@ async function harness(
   const handoffs: NonNullable<
     Parameters<NonNullable<WordPressCampaignBoundaries["handoffVerifier"]>>[0]
   >[] = [];
-  /** Whether this process held the runner's leftover sweep at each handoff. */
+  /** Whether this process held the runner's leftover sweep at each handoff (never, #526). */
   const sweepHeldAtHandoff: boolean[] = [];
   /** Whether this process held the runner's leftover sweep at each discovery run. */
   const sweepHeldAtDiscovery: boolean[] = [];
@@ -2096,8 +2097,8 @@ describe("harness CLI vertical slice", () => {
     expect(handoffs).toEqual([
       { directory: join(root, "handoff"), httpPort: 18080, databasePort: 3307 },
     ]);
-    // The runner's leftover sweep waits while this Verifier's Lab lives.
-    expect(sweepHeldAtHandoff).toEqual([true]);
+    // Verification runs beside the runner: its sweep never names a Lab (#526).
+    expect(sweepHeldAtHandoff).toEqual([false]);
     expect(
       existsSync(join(root, "state", "sweep-holds", String(process.pid))),
     ).toBe(false);
@@ -3021,7 +3022,7 @@ describe("harness CLI vertical slice", () => {
     const listed = await run("lab", "cleanup", "--config", configPath);
     expect(listed.code).toBe(0);
     expect(listed.stdout.split("\n")).toEqual([
-      `leftover containers 5: wbh-${uuid}-db, wbh-${uuid}-wp, wbh-${uuid}-proxy, provider-egress-broker-${uuid}, codex-agent-${uuid}`,
+      `leftover containers 6: wbh-${uuid}-db, wbh-${uuid}-wp, wbh-${uuid}-proxy, provider-egress-broker-${uuid}, codex-agent-${uuid}, claude-agent-${uuid}`,
       `leftover networks 2: wbh-${uuid}-net, provider-egress-${uuid}`,
       `leftover volumes 1: wbh-${uuid}-site`,
       "nothing removed; run again with --remove when no campaign is running",
@@ -3043,7 +3044,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(removed.code).toBe(0);
     expect(removed.stdout).toContain(
-      "removed 5 containers, 2 networks, 1 volumes",
+      "removed 6 containers, 2 networks, 1 volumes",
     );
     const removals = docker
       .map(({ args }) => args)
@@ -3061,6 +3062,7 @@ describe("harness CLI vertical slice", () => {
         `wbh-${uuid}-proxy`,
         `provider-egress-broker-${uuid}`,
         `codex-agent-${uuid}`,
+        `claude-agent-${uuid}`,
       ],
       ["network", "rm", `wbh-${uuid}-net`, `provider-egress-${uuid}`],
       ["volume", "rm", `wbh-${uuid}-site`],
@@ -3745,6 +3747,63 @@ describe("harness CLI vertical slice", () => {
         )
       ).code,
     ).not.toBe(0);
+  });
+
+  it("sweeps only discovery leftovers while a verification Lab runs beside the runner (#526)", async () => {
+    const { run, root, profile, configPath, docker } = await harness();
+    const state = join(root, "state");
+    const { wordpressVersion } = JSON.parse(
+      await readFile(configPath, "utf8"),
+    ) as { wordpressVersion: string };
+    const policy = JSON.parse(
+      await readFile(join(root, "selection.json"), "utf8"),
+    ) as object;
+    await mkdir(join(root, "policies"));
+    await writeFile(
+      join(root, "policies", "selection.json"),
+      JSON.stringify({ ...policy, wordpressVersion }),
+    );
+    (profile as { hostStatus?: unknown }).hostStatus = async () => ({
+      loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
+      programmeObservedAt: new Date(now),
+      freeBytes: 100 * 1024 ** 3,
+      legacyHistoryAvailable: true,
+      loginMarginMinutes: 60,
+    });
+    // The fake host lists a live Lab (wbh-<uuid>-*) next to discovery leftovers.
+    const started = await run(
+      "continuous",
+      "run",
+      "--config",
+      configPath,
+      "--selection",
+      join(root, "policies", "selection.json"),
+      "--notify",
+      `touch '${join(state, "continuous.stop")}'`,
+    );
+    expect(started.code).toBe(0);
+    const removed = docker
+      .map(({ args }) => args)
+      .filter(
+        (args) =>
+          args[0] === "rm" ||
+          ((args[0] === "network" || args[0] === "volume") && args[1] === "rm"),
+      );
+    expect(removed).toEqual([
+      [
+        "rm",
+        "-f",
+        `provider-egress-broker-${uuid}`,
+        `codex-agent-${uuid}`,
+        `claude-agent-${uuid}`,
+      ],
+      ["network", "rm", `provider-egress-${uuid}`],
+    ]);
+    // `lab cleanup` (and `lab down`) still name the Lab's resources.
+    const listed = await run("lab", "cleanup", "--config", configPath);
+    expect(listed.stdout).toContain(`wbh-${uuid}-wp`);
+    expect(listed.stdout).toContain(`wbh-${uuid}-net`);
+    expect(listed.stdout).toContain(`wbh-${uuid}-site`);
   });
 
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {
@@ -4456,7 +4515,7 @@ describe("harness CLI vertical slice", () => {
     expect(handoffs).toEqual([
       { directory, httpPort: 18082, databasePort: 3307 },
     ]);
-    expect(sweepHeldAtHandoff).toEqual([true]);
+    expect(sweepHeldAtHandoff).toEqual([false]);
     const derivedId = /^reverified finding \S+ as (\S+) on/m.exec(
       result.stdout,
     )![1]!;
