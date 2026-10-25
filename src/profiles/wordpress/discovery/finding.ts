@@ -111,7 +111,7 @@ export function wordPressFindingGroupKeys(
     .map((frame) => canonicalJson([frame.file, frame.function]));
 }
 
-/** Agent claims remain unconfirmed; only the Harness judge can confirm them. */
+/** Agent claims remain unconfirmed; only a person confirms them in a Lab (#525). */
 export function admitWordPressFinding(
   candidate: unknown,
   context: unknown,

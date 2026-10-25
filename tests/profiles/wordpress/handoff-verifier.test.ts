@@ -5,25 +5,17 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterEach, describe, expect, it } from "vitest";
-import { z } from "zod";
 
-import {
-  admitWordPressFinding,
-  wordpressFindingClaimSchema,
-  type WordPressFinding,
-} from "../../../src/profiles/wordpress/discovery/finding.js";
-import { isWordPressProgrammeImpact } from "../../../src/profiles/wordpress/discovery/programme-impacts.js";
+import { admitWordPressFinding } from "../../../src/profiles/wordpress/discovery/finding.js";
 import type { WordPressLabHandle } from "../../../src/profiles/wordpress/lab/index.js";
 import {
   HandoffVerifier,
   WBH_VERIFY_SKILL_ID,
 } from "../../../src/profiles/wordpress/verification/handoff-verifier.js";
-import { createWordPressJudges } from "../../../src/profiles/wordpress/verification/judges.js";
 import {
   WORDPRESS_VERIFIER_FILE_NAMES,
   type WordPressVerifierRun,
 } from "../../../src/profiles/wordpress/verification/wordpress-verifier.js";
-import { finding as syntheticFinding, quietLab } from "./judge-fixture.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const SKILL_PATH = new URL(
@@ -141,12 +133,6 @@ async function fixture(options: {
       internalIp: handle.internalIp,
       recorderIp: handle.recorderIp,
       attackerAccounts: handle.attackerAccounts,
-    },
-    canary: {
-      kind: "script",
-      beaconUrl: "http://canary/b/n",
-      javascript: "fetch('http://canary/b/n')",
-      loaderJavascript: "import('http://canary/l/n')",
     },
     restartObservation: async () => {
       restarts++;
@@ -287,8 +273,8 @@ describe("HandoffVerifier (#352)", () => {
       findingId: f.run.finding.findingId,
       snapshotDigest: digest,
       accounts: {},
-      canary: f.run.canary,
     });
+    expect(attack).not.toHaveProperty("canary");
     expect(attack).not.toHaveProperty("administrator");
     expect(await f.exists(".attack.json.tmp")).toBe(false);
 
@@ -518,30 +504,18 @@ describe("HandoffVerifier (#352)", () => {
   });
 });
 
-describe("wbh-verify per-impact procedures (#437)", () => {
-  it("names every in-scope impact that has a judge in its procedures", async () => {
+describe("wbh-verify without a Harness canary (#525)", () => {
+  it("does not tell the operator to place a canary the Harness no longer issues", async () => {
     const text = await readFile(SKILL_PATH, "utf8");
-    const section = text.slice(text.indexOf("## 種別ごとの手順"));
-    const impacts = z
-      .object({
-        properties: z.object({
-          impact: z.object({ enum: z.array(z.string()) }),
-        }),
-      })
-      .parse(z.toJSONSchema(wordpressFindingClaimSchema, { io: "output" }))
-      .properties.impact.enum as WordPressFinding["impact"][];
-    const judges = createWordPressJudges({
-      store: {} as never,
-      lab: quietLab(),
-    });
-    const judged = impacts.filter(
-      (impact) =>
-        isWordPressProgrammeImpact(impact) &&
-        judges.for(syntheticFinding(impact)) !== null,
-    );
-    expect(judged).toContain("stored-xss");
-    expect(
-      judged.filter((impact) => !section.includes(`\`${impact}\``)),
-    ).toEqual([]);
+    for (const field of [
+      "canary.javascript",
+      "canary.loaderJavascript",
+      "canary.php",
+      "canary.table",
+      "canary.username",
+      "beaconUrl",
+    ])
+      expect(text).not.toContain(field);
+    expect(text).toContain("`stored-xss`");
   });
 });

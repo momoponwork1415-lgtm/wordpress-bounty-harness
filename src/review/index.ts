@@ -457,7 +457,8 @@ export class Review<TFacts = unknown> {
         const counts = pending ? retryPendingByReason : incompleteByReason;
         counts[result.reason] = (counts[result.reason] ?? 0) + 1;
         const manual =
-          result.reason === "observation"
+          result.reason === "observation" ||
+          result.reason === "awaiting-human-observation"
             ? currentManualObservation(this.#ledger, ref)
             : null;
         items.push({

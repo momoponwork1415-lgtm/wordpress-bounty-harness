@@ -7,13 +7,7 @@ import { setupSchema } from "./provision-input.js";
 /** The Lab operations a human review session uses; observation stays with verification. */
 export type WordPressReviewLabProvisioner = Pick<
   WordPressLab,
-  | "provision"
-  | "seedCanaries"
-  | "reviewAdministrator"
-  | "reviewReceiverIp"
-  | "canaryLedger"
-  | "prepareScriptCanary"
-  | "teardown"
+  "provision" | "reviewAdministrator" | "reviewReceiverIp" | "teardown"
 >;
 
 export interface WordPressReviewLabSession {
@@ -29,7 +23,6 @@ export interface WordPressReviewLabSession {
     readonly username: string;
     readonly password: string;
   };
-  readonly canaries: unknown;
   readonly browserImage: string;
   /** Removes the Lab; a second call is a no-op. The caller decides when. */
   close(): Promise<void>;
@@ -38,7 +31,6 @@ export interface WordPressReviewLabSession {
 /** Builds one fresh review Lab from a sealed package without running discovery. */
 export async function openWordPressReviewLab(input: {
   readonly packageDigest: string;
-  readonly category: string;
   readonly store: PrivateArtifactStore;
   /** The frozen Snapshots the package must agree with. */
   readonly snapshots: SnapshotReader;
@@ -78,21 +70,12 @@ export async function openWordPressReviewLab(input: {
   try {
     if (handle.setupDigest !== reconstruction.labSetupDigest)
       throw new Error("Review Lab setup digest differs from the package");
-    const seeded = await input.lab.seedCanaries(handle);
-    if (seeded.status !== "seeded") throw new Error(seeded.nextStep);
     const administrator = input.lab.reviewAdministrator(handle);
     if (administrator === null)
       throw new Error("Review administrator is unavailable");
     const receiverIp = input.lab.reviewReceiverIp(handle);
     if (receiverIp === null)
-      throw new Error("Review canary receiver is unavailable");
-    const ledger = input.lab.canaryLedger(handle);
-    const script =
-      input.category === "stored-xss"
-        ? input.lab.prepareScriptCanary(handle)
-        : null;
-    if (input.category === "stored-xss" && script === null)
-      throw new Error("Review script canary is unavailable");
+      throw new Error("Review Lab receiver is unavailable");
     return {
       endpoint: handle.endpoint,
       networkName: handle.networkName,
@@ -100,10 +83,6 @@ export async function openWordPressReviewLab(input: {
       receiverIp,
       attackerAccounts: handle.attackerAccounts,
       administrator,
-      canaries: {
-        ...(ledger === null ? {} : { ledger }),
-        ...(script === null ? {} : { script }),
-      },
       browserImage: input.browserImage,
       close,
     };

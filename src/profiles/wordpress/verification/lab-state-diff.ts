@@ -23,7 +23,7 @@ export const LAB_STATE_DIFF_FILE = "lab-state-diff.json";
 /**
  * Captures the whole WordPress Lab state before and after the Verifier run and
  * writes `lab-state.json` (before, after) and `lab-state-diff.json` to Private
- * Evidence (#186). The Verifier never sees these; judges never read them.
+ * Evidence (#186). The Verifier never sees these.
  */
 export function createWordPressLabStateObserver(options: {
   readonly store: PrivateArtifactStore;

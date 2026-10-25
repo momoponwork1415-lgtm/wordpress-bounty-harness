@@ -189,7 +189,6 @@ it("puts each group's representative first in verify next and review, and drops 
       newId: () => `verification-${index}`,
       loadSnapshot: async () => ({}) as never,
       setupFor: () => ({}),
-      reconstructionFor: () => ({}),
       verification: verification as never,
     });
   const order = [first.findingId, separate.findingId, legacy];

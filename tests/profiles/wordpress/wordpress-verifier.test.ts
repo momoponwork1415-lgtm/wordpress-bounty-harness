@@ -39,7 +39,6 @@ async function fixture(options: {
   readonly configurationPrecondition?: string;
   readonly setupPreconditions?: boolean;
   readonly outcome?: Outcome;
-  readonly issueCanary?: boolean;
   readonly receiptRunId?: string;
   readonly captureMarker?: string | null;
   readonly setupCloses?: boolean;
@@ -91,7 +90,6 @@ async function fixture(options: {
     .read({ campaignId: "campaign-1", type: "finding-recorded", limit: 1 })
     .at(0)?.event as RecordedFinding;
   const runs: WordPressVerifierRun[] = [];
-  const issueCanary = options.issueCanary ?? true;
   const verifier = new WordPressVerifier({
     transport: {
       ...(options.setupPreconditions
@@ -126,33 +124,6 @@ async function fixture(options: {
     lab: {
       markCapture: async () => options.captureMarker ?? "7",
       finishSetup: async () => options.setupCloses ?? true,
-      prepareExecutionCanary: () =>
-        issueCanary ? { nonce: "n", php: "synthetic-canary-php" } : null,
-      prepareScriptCanary: () =>
-        issueCanary
-          ? {
-              nonce: "n",
-              beaconUrl: "http://wordpress/fake-beacon",
-              javascript: "fetch()",
-              loaderJavascript: "import()",
-            }
-          : null,
-      canaryLedger: () =>
-        issueCanary
-          ? {
-              nonce: "n",
-              adminUser: "wbh-canary-admin",
-              roleBaseline: {},
-              sqlCanary: { table: "wbh_canary", value: "withheld-value" },
-              fileCanaries: [],
-              sensitiveCanaries: [],
-              option: "o",
-              postId: "1",
-              postMeta: "m",
-              file: "/tmp/f",
-              user: "u",
-            }
-          : null,
     },
     store,
     ledger,
@@ -193,7 +164,7 @@ async function fixture(options: {
 }
 
 describe("WordPressVerifier.attempt with a non-Codex transport", () => {
-  it("gives the transport a named-field Lab view with low-privilege accounts and the issued canary", async () => {
+  it("gives the transport a named-field Lab view with low-privilege accounts and no canary (#525)", async () => {
     const f = await fixture({ impact: "stored-xss" });
     const attempt = await f.attempt();
     expect(attempt.status).toBe("attempted");
@@ -217,12 +188,7 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
       customer: { username: "customer", password: "customer-secret" },
     });
     expect(JSON.stringify(run)).not.toContain("admin-secret");
-    expect(run.canary).toEqual({
-      kind: "script",
-      beaconUrl: "http://wordpress/fake-beacon",
-      javascript: "fetch()",
-      loaderJavascript: "import()",
-    });
+    expect(run).not.toHaveProperty("canary");
     expect(run.referenceRoute).toBeUndefined();
     expect(
       f.ledger.read({ type: "verifier-run-finished" }).at(0)?.event,
@@ -231,32 +197,28 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
       runId: run.runId,
       promptDigest: digest,
       terminal: "completed",
-      canaryIssued: "script",
     });
+    expect(
+      f.ledger.read({ type: "verifier-run-finished" }).at(0)?.event,
+    ).not.toHaveProperty("canaryIssued");
   });
 
-  it("withholds the database from a sensitive-object transport and the SQL canary value from every transport", async () => {
+  it("withholds the database from a sensitive-object transport only", async () => {
     const sensitive = await fixture({ impact: "sensitive-object-access" });
     await sensitive.attempt();
     expect(sensitive.runs[0]?.lab.database).toBeUndefined();
-    expect(sensitive.runs[0]?.canary).toBeUndefined();
     const sqli = await fixture({ impact: "sqli" });
     await sqli.attempt();
     expect(sqli.runs[0]?.lab.database).toMatchObject({ host: "database" });
-    expect(sqli.runs[0]?.canary).toEqual({ kind: "sql", table: "wbh_canary" });
-    expect(JSON.stringify(sqli.runs[0])).not.toContain("withheld-value");
   });
 
   it.each(["rce", "account-takeover"] as const)(
-    "returns incomplete without a %s run when the Lab cannot issue the canary",
+    "runs a %s transport without waiting for a canary (#525)",
     async (impact) => {
-      const f = await fixture({ impact, issueCanary: false });
-      expect(await f.attempt()).toMatchObject({
-        status: "incomplete",
-        reason: "precondition",
-      });
-      expect(f.runs).toHaveLength(0);
-      expect(f.ledger.read({ type: "verifier-run-finished" })).toHaveLength(0);
+      const f = await fixture({ impact });
+      expect(await f.attempt()).toMatchObject({ status: "attempted" });
+      expect(f.runs).toHaveLength(1);
+      expect(f.runs[0]).not.toHaveProperty("canary");
     },
   );
 
@@ -443,7 +405,7 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
     await expect(f.attempt()).rejects.toMatchObject({ reason: "sandbox" });
     expect(
       f.ledger.read({ type: "verifier-run-finished" }).at(0)?.event,
-    ).toMatchObject({ terminal: "incomplete", canaryIssued: "principal" });
+    ).toMatchObject({ terminal: "incomplete" });
   });
 
   it("passes a transport's incomplete step through as a recipe failure", async () => {

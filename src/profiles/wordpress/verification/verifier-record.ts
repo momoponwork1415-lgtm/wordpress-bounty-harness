@@ -9,11 +9,30 @@ import type {
   VerifierRecordReader,
 } from "../../../review/index.js";
 import { wordpressVictimRouteSchema } from "../lab/index.js";
+import {
+  LAB_BROWSER_OBSERVATION_FILE,
+  VICTIM_SCREEN_FILE,
+} from "./attempt-observer.js";
 
 const routeSchema = z.looseObject({
   victim: wordpressVictimRouteSchema.optional(),
 });
-/** Only the stored script judge has the Lab browser open the victim pages. */
+/** Since #525 the attempt observer opens the victim pages and records what it saw. */
+const labBrowserSchema = z.looseObject({
+  observerId: z.literal("wordpress-lab-browser"),
+  status: z.enum(["visited", "visit-failed"]),
+  dialog: z
+    .looseObject({
+      marker: z.string(),
+      event: z.looseObject({
+        message: z.string(),
+        topLevelPageUrlAtEvent: z.string().max(2048),
+        frameUrlsAtEvent: z.array(z.string().max(2048)).min(1).max(50),
+      }),
+    })
+    .optional(),
+});
+/** Records the deleted stored script judge left; they stay readable. */
 const observerSchema = z.looseObject({
   judgeId: z.literal("wordpress-stored-script"),
   status: z.string().optional(),
@@ -60,7 +79,8 @@ const SCREEN_FILES = ["victim-screen.png", "victim-screen-diagnostic.png"];
  * Reads, for `review export`, the Verifier's `steps.md` and what the Lab
  * browser recorded on the victim pages `route.json` declared (#437). It copies
  * the observer's own status; the Verifier's narrative is never an observation,
- * and another judge's record is not a visit.
+ * and another judge's record is not a visit. Records made since #525 come
+ * from the attempt observer; older ones from the deleted judges.
  */
 export function createWordPressVerifierRecordReader(options: {
   readonly store: PrivateArtifactStore;
@@ -90,6 +110,42 @@ export function createWordPressVerifierRecordReader(options: {
       if (route?.victim === undefined) return { steps, victim: null };
       const evidence = async (name: string) =>
         evidenceDigest === null ? null : file(evidenceDigest, name);
+      const pages = route.victim.paths.map((page) =>
+        typeof page === "string"
+          ? { address: page, actions: 0 }
+          : { address: page.path, actions: page.actions.length },
+      );
+      const browserRecord = await evidence(LAB_BROWSER_OBSERVATION_FILE);
+      const browser = parse(labBrowserSchema, browserRecord);
+      if (browser !== null && browserRecord !== null) {
+        const dialog = browser.dialog;
+        const fired =
+          dialog !== undefined &&
+          route.victim.dialogMarker !== undefined &&
+          dialog.marker === route.victim.dialogMarker &&
+          dialog.event.message === dialog.marker &&
+          atLabOrigin(dialog.event.topLevelPageUrlAtEvent) &&
+          dialog.event.frameUrlsAtEvent.every(atLabOrigin);
+        return {
+          steps,
+          victim: {
+            role: route.victim.role,
+            pages,
+            firing:
+              browser.status === "visit-failed"
+                ? "visit-failed"
+                : fired
+                  ? "observed"
+                  : "not-observed",
+            record: browserRecord.ref,
+            screenshot:
+              (
+                (await evidence("victim-page-after-dialog.png")) ??
+                (await evidence(VICTIM_SCREEN_FILE))
+              )?.ref.path ?? null,
+          },
+        };
+      }
       const beacon = await evidence("canary-observation.json");
       const seen = parse(observerSchema, beacon);
       const failure =
@@ -126,11 +182,7 @@ export function createWordPressVerifierRecordReader(options: {
         steps,
         victim: {
           role: route.victim.role,
-          pages: route.victim.paths.map((page) =>
-            typeof page === "string"
-              ? { address: page, actions: 0 }
-              : { address: page.path, actions: page.actions.length },
-          ),
+          pages,
           firing:
             seen !== null
               ? fired
