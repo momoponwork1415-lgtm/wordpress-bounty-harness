@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -614,6 +615,7 @@ async function planWordPressDiscovery(
       const trialId = state.newId();
       const selectedObjective = objective;
       const resumePrompt = wordPressResumeParagraph(selectedObjective);
+      const prompt = promptFor(selectedObjective);
       const explore: PlannedDiscoveryRun = {
         configuration: {
           promptVariant: selectedObjective.id,
@@ -624,6 +626,11 @@ async function planWordPressDiscovery(
                 contractDigest: outputContractFor(selectedObjective.id).digest,
               }
             : {}),
+          ...(selectedObjective.sectionDigests === undefined
+            ? {}
+            : { sectionDigests: selectedObjective.sectionDigests }),
+          // The whole text the Root receives: objective plus generated sections.
+          inputDigest: `sha256:${createHash("sha256").update(prompt).digest("hex")}`,
           trustBoundaryVersion: trustBoundary.id,
           sourcePack: {
             dependency:
@@ -644,7 +651,7 @@ async function planWordPressDiscovery(
           targetSnapshotDigest: snapshot.digest,
           profile: runtime.runtimeProfile,
           coordination: "cooperative" as const,
-          prompt: promptFor(selectedObjective),
+          prompt,
           minimumActiveMs: wordPressMinimumActiveMs(config),
           resumePrompt,
           ...wordPressSourceMounts(source),

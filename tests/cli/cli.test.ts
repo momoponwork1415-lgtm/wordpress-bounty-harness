@@ -1270,8 +1270,18 @@ describe("harness CLI vertical slice", () => {
         promptDigest: objective.digest,
         objectiveDigest: objective.digest,
         contractDigest: contract.digest,
+        sectionDigests: objective.sectionDigests,
+        inputDigest: `sha256:${createHash("sha256")
+          .update(prompts[0]!)
+          .digest("hex")}`,
       },
     });
+    expect(Object.keys(objective.sectionDigests ?? {})).toEqual([
+      "objective",
+      "strategy",
+      "coordination",
+      "persistence",
+    ]);
   });
 
   it("keeps old objective bytes readable but rejects them for new campaigns", async () => {

@@ -1,0 +1,1 @@
+Keep every agent short. No agent may exceed 80 tool calls. An agent approaching that bound writes its state out and hands off to a fresh agent instead of continuing. A long-lived agent re-sends its entire accumulated context on every turn, so agent lifetime, not agent count, is what consumes the run.
