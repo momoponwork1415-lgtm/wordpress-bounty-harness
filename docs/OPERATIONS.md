@@ -308,12 +308,12 @@ harness lab down [--config <path>]
 
 ### Lab / brokerの残骸
 
+持ち主のプロセスが生きている Lab（Lab ごとの持ち主記録、#432）は、一覧にも削除にも出ない。持ち主が死んだ Lab と記録の無い Lab は残骸として出る。削除したときは、死んだ持ち主の記録も消す。
+
 ```
 harness lab cleanup --config <path>            # 一覧だけ
 harness lab cleanup --config <path> --remove   # 削除
 ```
-
-持ち主のプロセスが生きている Lab（Lab ごとの持ち主記録、#432）は、一覧にも削除にも出ない。持ち主が死んだ Lab と記録の無い Lab は残骸として出る。削除したときは、死んだ持ち主の記録も消す。
 
 - 対象は、Labが付ける `wbh-<uuid>-{db,wp,canary,proxy,host,net,site}` と、探索が付ける `provider-egress-broker-<id>` / `provider-egress-<id>` / `codex-agent-<uuid>` / `claude-agent-<uuid>` の名前に一致するものだけ。
 - **実行中のcampaignがないときに使う。** 持ち主の記録が無い Lab は、立っていても消える。

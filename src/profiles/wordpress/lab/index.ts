@@ -369,6 +369,7 @@ export function openWordPressLab(options: {
         .map((name) => name.trim())
         .filter((name) => matching.some((pattern) => pattern.test(name)));
     }
+    // Without `labId`, a Lab whose owner process lives is never named (#432).
     // Read after listing: a Lab records its owner before its first resource exists.
     const { live, dead } =
       onlyLab === undefined || remove

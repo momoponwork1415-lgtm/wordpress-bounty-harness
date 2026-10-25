@@ -4508,10 +4508,14 @@ describe("harness CLI vertical slice", () => {
       directory,
       "--port",
       "18082",
+      "--db-port",
+      "3307",
     );
     expect(result.code).toBe(0);
     expect(result.stdout).toContain(": runtime-confirmed");
-    expect(handoffs).toEqual([{ directory, httpPort: 18082, databasePort: 0 }]);
+    expect(handoffs).toEqual([
+      { directory, httpPort: 18082, databasePort: 3307 },
+    ]);
     expect(sweepHeldAtHandoff).toEqual([false]);
     const derivedId = /^reverified finding \S+ as (\S+) on/m.exec(
       result.stdout,
