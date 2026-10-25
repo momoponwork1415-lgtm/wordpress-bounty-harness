@@ -30,15 +30,6 @@ export interface LabProvisioner<Setup, Handle extends LabHandle> {
     context?: { readonly purpose: "discovery" | "verification" },
   ): Promise<ProvisionResult<Handle>>;
   probe?(handle: Handle): Promise<LabReachability>;
-  seedCanaries(handle: Handle): Promise<
-    | { readonly status: "seeded"; readonly digest: string }
-    | {
-        readonly status: "incomplete";
-        readonly reason: "provision";
-        readonly nextStep: string;
-        readonly diagnostic?: string;
-      }
-  >;
   teardown(handle: Handle): Promise<
     | { readonly status: "removed" }
     | {

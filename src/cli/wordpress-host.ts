@@ -562,7 +562,7 @@ export async function createWordPressHostProfile(options: {
       executor: runtime,
       ...(claude === undefined ? {} : { claude }),
       attachments,
-      // The Harness owns the records and judges; the transport hands the Lab to a skill (#352).
+      // The Harness owns the records; the transport hands the Lab to a skill (#352).
       handoffVerifier: (handoff) => ({
         attempt: ({
           campaignId,

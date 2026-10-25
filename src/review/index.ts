@@ -21,7 +21,11 @@ import {
   type DecisionHistoryEntry,
 } from "./decision-history.js";
 import { isCurrentVerification } from "./current-verification.js";
-import { currentManualObservation } from "./manual-observation.js";
+import {
+  currentManualObservation,
+  humanObservedBasis,
+  humanReproducedBasis,
+} from "./manual-observation.js";
 import { openReproductionPackage } from "./reproduction-package.js";
 
 export {
@@ -252,6 +256,11 @@ export interface ScopeFactsProvider<TFacts> {
       LedgerEventV1,
       { type: "verification-finished" }
     >;
+    /** #525: the person's Lab observation, when it is the basis instead of a judge. */
+    readonly humanObservation?: Extract<
+      LedgerEventV1,
+      { type: "manual-observation-recorded" }
+    >;
   }): Promise<TFacts>;
 }
 
@@ -262,6 +271,19 @@ export interface DuplicateLookup {
     readonly findingId: string;
   }): Promise<DuplicateLookupResult>;
 }
+
+/** What a person reproduces against, and what scope, drafts and the final gate rest on. */
+type ReproducibleBasis = {
+  readonly verification: Extract<
+    LedgerEventV1,
+    { type: "verification-finished" }
+  >;
+  readonly packageDigest: string;
+  readonly humanObservation?: Extract<
+    LedgerEventV1,
+    { type: "manual-observation-recorded" }
+  >;
+};
 
 export class Review<TFacts = unknown> {
   readonly #ledger: Ledger;
@@ -457,7 +479,8 @@ export class Review<TFacts = unknown> {
         const counts = pending ? retryPendingByReason : incompleteByReason;
         counts[result.reason] = (counts[result.reason] ?? 0) + 1;
         const manual =
-          result.reason === "observation"
+          result.reason === "observation" ||
+          result.reason === "awaiting-human-observation"
             ? currentManualObservation(this.#ledger, ref)
             : null;
         items.push({
@@ -751,7 +774,8 @@ export class Review<TFacts = unknown> {
     readonly ref: ReviewRef;
   }): Promise<readonly ScopeAssessment[]> {
     const ref = refSchema.parse(input.ref);
-    const verification = this.#requireConfirmed(ref);
+    const { verification, humanObservation } =
+      this.#requireSubmissionBasis(ref);
     const existing = (await this.#scopeAssessments(ref)).filter(
       (item) => item.policyDigest === this.#scopeEvaluator.policyDigest,
     );
@@ -782,7 +806,11 @@ export class Review<TFacts = unknown> {
     let results: readonly z.infer<typeof scopeResult>[];
     let failed = false;
     try {
-      const facts = await this.#factsProvider.load({ ref, verification });
+      const facts = await this.#factsProvider.load({
+        ref,
+        verification,
+        ...(humanObservation === undefined ? {} : { humanObservation }),
+      });
       results = z
         .array(scopeResult)
         .parse(await this.#scopeEvaluator.assess({ ref, facts }));
@@ -874,7 +902,7 @@ export class Review<TFacts = unknown> {
       throw new Error("An in-scope assessment is required");
     if (!this.#isCurrentVerification(assessment.ref))
       throw new Error("A current verification is required before drafting");
-    this.#requireConfirmed(assessment.ref);
+    this.#requireSubmissionBasis(assessment.ref);
     const prior = (await this.#allDrafts(assessment.ref)).filter(
       (item) => item.assessmentId === assessmentId,
     );
@@ -1073,14 +1101,9 @@ export class Review<TFacts = unknown> {
     if (!this.#isCurrentVerification(assessment.ref))
       return "stale-verification";
 
-    const verification = this.#requireConfirmed(assessment.ref);
-    if (
-      verification.result.status !== "runtime-confirmed" &&
-      verification.result.status !== "reproduced"
-    )
-      return "manual-reproduction-required";
-    const reproductionPackageDigest =
-      verification.result.reproductionPackageDigest;
+    const basis = this.#reproducibleBasis(assessment.ref);
+    if (basis === null) return "manual-reproduction-required";
+    const reproductionPackageDigest = basis.packageDigest;
     const manual = this.#ledger
       .readAll({
         campaignId: assessment.ref.campaignId,
@@ -1296,11 +1319,8 @@ export class Review<TFacts = unknown> {
       .enum(["match", "mismatch", "unavailable"])
       .parse(input.result);
     const ref = refSchema.parse(input.ref);
-    const verification = this.#requireConfirmed(ref);
-    if (
-      verification.result.status !== "runtime-confirmed" &&
-      verification.result.status !== "reproduced"
-    )
+    const basis = this.#reproducibleBasis(ref);
+    if (basis === null)
       throw new Error("A matching evidence-backed verification is required");
     return {
       schemaVersion: 1,
@@ -1311,7 +1331,7 @@ export class Review<TFacts = unknown> {
       type: "human-reproduction-recorded",
       findingId: ref.findingId,
       verificationId: ref.verificationId,
-      reproductionPackageDigest: verification.result.reproductionPackageDigest,
+      reproductionPackageDigest: basis.packageDigest,
       result,
       artifacts: [],
     };
@@ -1399,6 +1419,50 @@ export class Review<TFacts = unknown> {
           ? verification.event.result.reproductionPackageDigest
           : null,
     };
+  }
+
+  /**
+   * What a person reproduces against: the judge-era package of an old
+   * confirmed result, or (#525, ADR 0040) the sealed review Lab package of a
+   * result awaiting a human observation that a named person observed as
+   * `match`.
+   */
+  #reproducibleBasis(ref: ReviewRef): ReproducibleBasis | null {
+    const observed = humanObservedBasis(this.#ledger, ref);
+    if (observed !== null)
+      return {
+        verification: observed.verification,
+        packageDigest: observed.packageDigest,
+        humanObservation: observed.observation,
+      };
+    try {
+      const verification = this.#requireConfirmed(ref);
+      return verification.result.status === "runtime-confirmed" ||
+        verification.result.status === "reproduced"
+        ? {
+            verification,
+            packageDigest: verification.result.reproductionPackageDigest,
+          }
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The basis for scope, drafts and the final gate. An old confirmed result
+   * keeps its rules; a human-observed result also needs the reviewer's
+   * `review decide --reproduced match` against the same review Lab package.
+   */
+  #requireSubmissionBasis(ref: ReviewRef): ReproducibleBasis {
+    const basis = this.#reproducibleBasis(ref);
+    if (
+      basis === null ||
+      (basis.humanObservation !== undefined &&
+        humanReproducedBasis(this.#ledger, ref) === null)
+    )
+      throw new Error("A matching evidence-backed verification is required");
+    return basis;
   }
 
   #requireConfirmed(

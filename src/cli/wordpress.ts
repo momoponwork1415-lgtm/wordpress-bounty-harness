@@ -64,7 +64,6 @@ import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/in
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
 import { openWordPressExplorationLab } from "../profiles/wordpress/lab/exploration-lab.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
-import type { WordPressReconstruction } from "../profiles/wordpress/verification/reproduction-package.js";
 import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
 import type { CliProfile, CliState } from "./index.js";
 import {
@@ -394,8 +393,7 @@ type WordPressDiscoveryPipeline = CampaignPipeline<
   WordPressTargetSelection,
   WordPressLabSetup,
   WordPressLabHandle,
-  WordPressFinding,
-  WordPressReconstruction
+  WordPressFinding
 >;
 type WordPressDiscoveryInput = Parameters<
   WordPressDiscoveryPipeline["discovery"]
@@ -1421,7 +1419,6 @@ async function runWordPressCampaign(
       get verification() {
         return session.verification;
       },
-      reconstructionFor: session.reconstructionFor,
     },
   });
 }
@@ -1695,7 +1692,6 @@ export function createWordPressCliProfile(
         newId: state.newId,
         loadSnapshot: session.boundaries.loadSnapshot,
         setupFor: session.setupFor,
-        reconstructionFor: session.reconstructionFor,
         verification: session.verification,
       });
     },
@@ -1936,7 +1932,6 @@ export function createWordPressCliProfile(
           loadSnapshot: boundaries.loadSnapshot,
           setupFor: session.setupFor,
           verification: session.verification,
-          reconstructionFor: session.reconstructionFor,
         },
       });
     },

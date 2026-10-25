@@ -165,7 +165,7 @@ export interface CliProfile {
   /** A profile may provide a fresh, foreground Lab for human reproduction. */
   reviewLab?(
     state: CliState,
-    input: { readonly packageDigest: string; readonly category: string },
+    input: { readonly packageDigest: string },
   ): Promise<{
     readonly endpoint: string;
     readonly networkName: string;
@@ -173,7 +173,6 @@ export interface CliProfile {
     readonly receiverIp: string;
     readonly attackerAccounts: unknown;
     readonly administrator: unknown;
-    readonly canaries: unknown;
     readonly browserImage: string;
     close(): Promise<void>;
   }>;
@@ -673,6 +672,22 @@ function queued(review: Review, values: Values) {
   return item;
 }
 
+/** #525 (ADR 0040): an old judge result, or a result a person observed in a review Lab. */
+function hasSubmissionBasis(
+  item: ReviewItem,
+): item is Extract<
+  ReviewItem,
+  { readonly status: "runtime-confirmed" | "reproduced" | "incomplete" }
+> {
+  return (
+    item.status === "runtime-confirmed" ||
+    item.status === "reproduced" ||
+    (item.status === "incomplete" &&
+      item.reason === "awaiting-human-observation" &&
+      item.manualObservation?.result === "match")
+  );
+}
+
 function exactDraft(values: Values) {
   return {
     candidateId: required(values.candidate, "candidate"),
@@ -724,7 +739,6 @@ export async function runForegroundReviewLab(
         io.stdout(
           `review administrator: ${JSON.stringify(session.administrator)}`,
         );
-        io.stdout(`fresh canaries: ${JSON.stringify(session.canaries)}`);
         const shellQuote = (value: string) =>
           `'${value.replaceAll("'", "'\\''")}'`;
         io.stdout(
@@ -1218,7 +1232,11 @@ const COMMANDS: readonly Command[] = [
     },
     handler: async ({ values, state, environment, io }) => {
       const item = queued(environment.profile.review(state), values);
-      if (item.status !== "incomplete" || item.reason !== "observation")
+      if (
+        item.status !== "incomplete" ||
+        (item.reason !== "observation" &&
+          item.reason !== "awaiting-human-observation")
+      )
         throw new UsageError("A current incomplete observation is required");
       const manual = await environment.profile.reviewLabPackage?.(
         state,
@@ -1337,7 +1355,7 @@ const COMMANDS: readonly Command[] = [
           ? undefined
           : await readFile(resolve(notePath), "utf8");
       if (reproduced !== undefined) {
-        if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
+        if (!hasSubmissionBasis(item))
           throw new UsageError(
             "Only an evidence-backed package can be reproduced",
           );
@@ -1408,7 +1426,7 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, state, environment, io }) => {
       const review = environment.profile.review(state);
       const item = queued(review, values);
-      if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
+      if (!hasSubmissionBasis(item))
         throw new UsageError(
           "Scope is assessed only for evidence-backed findings",
         );
@@ -1545,7 +1563,7 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, input, state, environment, io }) => {
       const review = environment.profile.review(state);
       const item = queued(review, values);
-      if (item.status !== "runtime-confirmed" && item.status !== "reproduced")
+      if (!hasSubmissionBasis(item))
         throw new UsageError(
           "A confirmed verification is required for a draft",
         );
@@ -1863,15 +1881,11 @@ const COMMANDS: readonly Command[] = [
           `private victim route: ${state.store.contentPath(manual.recipeDigest)}/route.json`,
         );
         io.stdout(
-          `private browser observation: ${state.store.contentPath(manual.evidenceDigest)}/browser-dialog-observation.json`,
+          `private Lab observation: ${state.store.contentPath(manual.evidenceDigest)}`,
         );
       }
       await runForegroundReviewLab(
-        () =>
-          launch(state, {
-            packageDigest,
-            category: item.category,
-          }),
+        () => launch(state, { packageDigest }),
         io,
         process,
         manual === null || manual === undefined

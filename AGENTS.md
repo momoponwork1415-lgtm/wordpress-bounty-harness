@@ -19,7 +19,7 @@
 
 1. 探索エージェントへ渡すのは、固定したソース、人間が書いた trust 境界宣言、Programme Boundary、Lab、時点で切った対象の公開履歴だけである。公開履歴はカタログ情報に限る（ADR 0012）。評価対象の答え、held-out 公開日以降の記録、PoC、ペイロード、再現手順は渡さない。
 2. 対象は gVisor（`runsc`）の使い捨て環境の中でだけ実行する。ホストでは実行せず、弱い隔離へ暗黙に切り替えない。外向き通信は、認証ブローカー経由の provider API に限る。
-3. `runtime-confirmed` を出すのは、Harness が所有する決定論的な判定器だけである。証明は nonce 付き canary の回収に限る。エージェントや recipe の自己申告、リバースシェル、永続化、ホストへのアクセスは証明にしない。
+3. Harness は判定器を持たない。確定の根拠は、名指しした人間が新しい review Lab で記録した `review observe` の match と `review decide --reproduced match` だけである（ADR 0040）。エージェントや recipe の自己申告、捕捉を読んだだけの推定、AI が打った `review observe` / `--reproduced` は根拠にしない。リバースシェル、永続化、ホストへのアクセスは証明にしない。既存の `runtime-confirmed` の event は、判定器があった時期の記録として読み続ける。
 4. 検証の失敗（環境、手順、観測、証拠の不足）は `incomplete` にする。`contradicted` にも棄却にもしない。
 5. 判定は、Finding と検証結果の Target Snapshot digest が同じときだけ行う。digest が一致しなければ `incomplete` にする。
 6. 人間の判断点は「提出前のレビュー」と「外部行動の承認」の 2 つとする。対象選定の承認と、未検証候補の採否は置かない。権限・対象範囲の拡張には、人間の明示の承認が要る。
@@ -38,15 +38,15 @@
   - 制限時間と子の数
   - 出力の全件保存と、スキーマによる正規化
   - Programme Boundary 外の Finding を出口で止めること（park）
-  - Finding 単位の Lab の供給と canary の播種
-  - 判定器
+  - Finding 単位の Lab の供給と、HTTP 捕捉・Lab browser の記録
+  - 人間の観測（`review observe`、`review decide --reproduced`）の記録。判定器と canary は持たない（ADR 0040）
   - 台帳と Private Evidence
   - レビューの記録
 
   判断の要らない処理だけをコードにする（LESSONS 4）。
 
-- **探索と検証の中身はプロンプトとスキルが受け持つ。** どこを読むか、何を索引にするか、どの順で仮説を立てるか、どう再現するか、前提をどう作るかは、エージェントの仕事である。探索は、目的プロンプト（記事の wp2shell）を渡して Root に任せる。検証は、Harness が立てた Lab に対してスキルが行う。`runtime-confirmed` を出すのは判定器だけである。
-- **移す合図。** Harness のコードに「エージェントにこう探させる」「この前提ならこのシナリオ」「索引の網羅率」のような判断が現れたら、プロンプトかスキルへ移す。エージェントの自己申告を Harness が根拠にするコードが現れたら、判定器か観測器へ移す。観測（読んだファイル、経過時間、トークン、出力）は Harness が取る。舵取りは取らない。
+- **探索と検証の中身はプロンプトとスキルが受け持つ。** どこを読むか、何を索引にするか、どの順で仮説を立てるか、どう再現するか、前提をどう作るかは、エージェントの仕事である。探索は、目的プロンプト（記事の wp2shell）を渡して Root に任せる。検証は、Harness が立てた Lab に対してスキルが行う。確定は、Lab で観測した人間の記録だけで行う（不変条件 3）。
+- **移す合図。** Harness のコードに「エージェントにこう探させる」「この前提ならこのシナリオ」「索引の網羅率」のような判断が現れたら、プロンプトかスキルへ移す。エージェントの自己申告を Harness が根拠にするコードが現れたら、観測器の記録へ移すか、人間の観測に回す。観測（読んだファイル、経過時間、トークン、出力）は Harness が取る。舵取りは取らない。
 - **削除。** 次のものは境界の外側にあるので、スキル化と同時に削除する。使わない設定にして残す中間状態は置かない。
   - 入口・保存先索引の探索入力
   - task-plan と dispatch
@@ -55,7 +55,7 @@
   - precondition の文からシナリオを選ぶ正規表現
   - プラグイン別の Lab アダプタとシナリオ
 
-  入口・保存先索引、coverage と `incomplete(depth)`、公開履歴カタログの生成は削除済みである（ADR 0034、2026-10-18）。SPEC と ADR 0029 の該当行も改訂した。旧 Codex Verifier の実装と host の構築経路は、所有者の 2026-10-23 の削除指示で退役した（ADR 0035）。実 host は `--handoff` のない `review reverify` と `discovery.lab: attached` を退役エラーで止める。これは #352 の受入完了を意味しない。共有コードに残る旧指示の連鎖、シナリオ選択 / 生成、プラグイン別アダプタの削除は #353 に残る。共有の境界検査と記録は退役対象にしない。残る削除対象は #352 の受け入れの後に消し、そのとき ADR 0026 の該当行を改訂する。受け入れの条件は、Brizy / TranslatePress で受け渡し（handoff）が判定器の結論まで届くことである。それまでは、下の検証 Lab 節にあるシナリオの行を、既存 Trial の記録を読むための記述として扱う。
+  入口・保存先索引、coverage と `incomplete(depth)`、公開履歴カタログの生成は削除済みである（ADR 0034、2026-10-18）。SPEC と ADR 0029 の該当行も改訂した。旧 Codex Verifier の実装と host の構築経路は、所有者の 2026-10-23 の削除指示で退役した（ADR 0035）。実 host は `--handoff` のない `review reverify` と `discovery.lab: attached` を退役エラーで止める。これは #352 の受入完了を意味しない。共有コードに残る旧指示の連鎖、シナリオ選択 / 生成、プラグイン別アダプタの削除は #353 に残る。共有の境界検査と記録は退役対象にしない。残る削除対象は #352 の受け入れの後に消し、そのとき ADR 0026 の該当行を改訂する。受け入れの条件は、Brizy / TranslatePress で受け渡し（handoff）が人間の観測の記録（`review observe`）まで届くことである（判定器は ADR 0040 で削除した）。それまでは、下の検証 Lab 節にあるシナリオの行を、既存 Trial の記録を読むための記述として扱う。
 
 ## 単一協調 Trial の探索（SPEC.md 第 6 節、ADR 0029）
 
@@ -70,9 +70,9 @@
   - Programme Boundary の外にある 5 種: `other`、`csrf-to-write`、`missing-authz`、`idor`、`reflected-xss`
   - 所有者が 2026-10-17 に「重大かどうかの判別が付きにくい」として外した 5 種: `sensitive-object-access`、`content-deletion`、`options-update`、`privesc-to-contributor+`、`auth-bypass-non-admin`
 
-  これらは検証列、レビュー列、funnel の raw に入れない。この決定は、Q1 の `content-deletion` 復帰を上書きする（ADR 0032 の 2026-10-17 節）。探索プロンプトの目的文は変えず、出口で振り分ける。一覧は `review parked --campaign <id>` で見る。対象範囲内の Finding は、判定器の結果に関係なく全件がレビュー列に出る（#185、ADR 0031）。
+  これらは検証列、レビュー列、funnel の raw に入れない。この決定は、Q1 の `content-deletion` 復帰を上書きする（ADR 0032 の 2026-10-17 節）。探索プロンプトの目的文は変えず、出口で振り分ける。一覧は `review parked --campaign <id>` で見る。対象範囲内の Finding は、検証の結果に関係なく全件がレビュー列に出る（#185、ADR 0031）。
 
-- contributor 以上と、管理者が意図して付与する権限は、trust 境界の内側に置く。公開済み 7 件の再発見は配線と判定器の確認であり、未知の発見率は示さない。プロンプトとシナリオに、対象固有の関数名、オプション名、URL、画面名を入れない。
+- contributor 以上と、管理者が意図して付与する権限は、trust 境界の内側に置く。公開済み 7 件の再発見は配線と検証の確認であり、未知の発見率は示さない。プロンプトとシナリオに、対象固有の関数名、オプション名、URL、画面名を入れない。
 
 ## 検証 Lab の前提（SPEC.md 第 7 節、ADR 0026）
 
@@ -85,7 +85,7 @@ WordPress 固有のものは `profiles/wordpress/` に置く。次のものが�
 
 - WordPress.org からの取得
 - WordPress + MySQL の Lab 供給
-- PHP 向けの判定器
+- PHP 向けの Lab 観測器（HTTP 捕捉、Lab 状態の差分、Lab browser）
 - Wordfence / Patchstack の対象範囲方針
 - trust 境界宣言の雛形
 - Lead 型

@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
+import { humanObservedBasis } from "./manual-observation.js";
 import { isCurrentVerification } from "./current-verification.js";
 import { readDecisionHistory } from "./decision-history.js";
 import {
@@ -720,7 +721,15 @@ export async function exportReviewBundle(options: {
     verification?.result.status === "runtime-confirmed" ||
     verification?.result.status === "reproduced"
       ? verification.result.reproductionPackageDigest
-      : null;
+      : verification === undefined
+        ? null
+        : // #525 (ADR 0040): the sealed review Lab package a person observed as `match`.
+          (humanObservedBasis(ledger, {
+            campaignId,
+            findingId,
+            verificationId: verification.verificationId,
+            snapshotDigest: verification.snapshotDigest,
+          })?.packageDigest ?? null);
   const currentReproduction =
     verification !== undefined &&
     currentPackageDigest !== null &&

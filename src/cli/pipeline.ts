@@ -8,6 +8,7 @@ import type { PrivateArtifactStore } from "../infrastructure/private-artifact-st
 import type { LabHandle, LabProvisioner, TrialLab } from "../lab/index.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
 import type { Ledger, LedgerEventV1, LedgerRecord } from "../ledger/index.js";
+import { humanReproducedBasis } from "../review/manual-observation.js";
 import { targetSelectionId, type TargetSelection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
 import { storeTargetSkipDiagnostic } from "./skip-diagnostic.js";
@@ -27,7 +28,6 @@ export interface CampaignPipeline<
   Setup extends { readonly scenario?: { readonly id: string } | undefined },
   Handle extends LabHandle,
   Finding extends VerifiableFinding,
-  Reconstruction,
 > {
   readonly select: () => Promise<readonly Target[]>;
   readonly freeze: (target: Target) => Promise<Snapshot>;
@@ -54,8 +54,7 @@ export interface CampaignPipeline<
       DiscoveryOptions["resumeProviderLimited"]
     >;
   }>;
-  readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
-  readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
+  readonly verification: Verification<Finding, Setup, Handle>;
 }
 
 type SkipStage = "freeze" | "discovery" | "verification";
@@ -263,18 +262,11 @@ export async function runCampaignPipeline<
   Setup extends { readonly scenario?: { readonly id: string } | undefined },
   Handle extends LabHandle,
   Finding extends VerifiableFinding,
-  Reconstruction,
 >(options: {
   readonly campaignId: string;
   readonly ledger: Ledger;
   readonly store: PrivateArtifactStore;
-  readonly pipeline: CampaignPipeline<
-    Target,
-    Setup,
-    Handle,
-    Finding,
-    Reconstruction
-  >;
+  readonly pipeline: CampaignPipeline<Target, Setup, Handle, Finding>;
   readonly clock: () => Date;
   readonly newId: () => string;
   /** Targets in flight at once; discovery run concurrency remains per target. */
@@ -754,7 +746,6 @@ export async function verifyNextFinding<
   Setup extends { readonly scenario?: { readonly id: string } | undefined },
   Handle extends LabHandle,
   Finding extends VerifiableFinding,
-  Reconstruction,
 >(options: {
   readonly campaignId?: string;
   /**
@@ -766,8 +757,7 @@ export async function verifyNextFinding<
   readonly newId: () => string;
   readonly loadSnapshot: (digest: string) => Promise<Snapshot>;
   readonly setupFor: (snapshot: Snapshot) => Setup;
-  readonly reconstructionFor: (snapshot: Snapshot) => Reconstruction;
-  readonly verification: Verification<Finding, Setup, Handle, Reconstruction>;
+  readonly verification: Verification<Finding, Setup, Handle>;
 }): Promise<VerifyNextSummary | null> {
   const scope =
     options.campaignId === undefined ? {} : { campaignId: options.campaignId };
@@ -890,7 +880,6 @@ export async function verifyNextFinding<
       snapshot,
       setup,
       campaignLabSetupDigest: canonicalDigest(setup),
-      reconstruction: options.reconstructionFor(snapshot),
     });
     return {
       campaignId: event.campaignId,
@@ -914,7 +903,6 @@ export async function reverifyOnSelectedVersion<
   },
   Handle extends LabHandle,
   Finding extends VerifiableFinding,
-  Reconstruction,
 >(options: {
   readonly campaignId: string;
   readonly findingId: string;
@@ -926,8 +914,8 @@ export async function reverifyOnSelectedVersion<
   readonly ledger: Ledger;
   readonly store: PrivateArtifactStore;
   readonly pipeline: Pick<
-    CampaignPipeline<Target, Setup, Handle, Finding, Reconstruction>,
-    "freeze" | "setupFor" | "verification" | "reconstructionFor"
+    CampaignPipeline<Target, Setup, Handle, Finding>,
+    "freeze" | "setupFor" | "verification"
   > & {
     /** The current or explicitly pinned version of the same target. */
     readonly selectVersion: (input: {
@@ -993,13 +981,36 @@ export async function reverifyOnSelectedVersion<
         event.type === "verification-finished" &&
         event.snapshotDigest === finding.snapshotDigest &&
         (event.result.status === "runtime-confirmed" ||
-          event.result.status === "reproduced"),
+          event.result.status === "reproduced" ||
+          // #525 (ADR 0040): a result a person observed and reproduced as `match`.
+          humanReproducedBasis(ledger, {
+            campaignId: referenceCampaignId,
+            findingId,
+            verificationId: event.verificationId,
+            snapshotDigest: event.snapshotDigest,
+          }) !== null),
     )
     .at(-1);
   if (observed === undefined && options.snapshotCampaignId !== undefined)
     throw new Error("A confirmed route is required for pinned smoke replay");
   let referenceRoute: unknown;
   let hasCapturedRouteBinding = false;
+  if (
+    observed?.type === "verification-finished" &&
+    observed.result.status === "incomplete"
+  ) {
+    // The human-observed attempt's own route; it carries no Harness binding.
+    const recipe = observed.artifacts.find(
+      (artifact) => artifact.kind === "recipe",
+    );
+    const routeFile =
+      recipe === undefined
+        ? undefined
+        : await options.store.readFile(recipe.digest, "route.json", 64 * 1024);
+    if (routeFile?.status !== "resolved")
+      throw new Error("The observed route is unavailable in Private Evidence");
+    referenceRoute = JSON.parse(routeFile.bytes.toString("utf8")) as unknown;
+  }
   if (
     observed?.type === "verification-finished" &&
     (observed.result.status === "runtime-confirmed" ||
@@ -1314,7 +1325,6 @@ export async function reverifyOnSelectedVersion<
       : { basis: { kind: basisKind, findingSnapshotDigest: snapshot.digest } }),
     setup,
     campaignLabSetupDigest: canonicalDigest(setup),
-    reconstruction: pipeline.reconstructionFor(snapshot),
     // The smoke replay compares the route digest, so it is passed untouched.
     referenceRoute: pinnedReplay
       ? referenceRoute

@@ -14,13 +14,14 @@ describe("ADR 0022 retry budget", () => {
   // One row per reason: automatic retries left after 1, 2, 3 attempts on the same Lab Setup.
   it.each<{ reason: IncompleteReason; retryAfter: readonly boolean[] }>([
     { reason: "recipe", retryAfter: [true, true, false] },
-    { reason: "observation", retryAfter: [true, true, false] },
+    { reason: "observation", retryAfter: [false, false, false] },
     { reason: "provision", retryAfter: [true, false, false] },
     { reason: "provider", retryAfter: [true, false, false] },
     { reason: "evidence", retryAfter: [false, false, false] },
     { reason: "cleanup", retryAfter: [false, false, false] },
     { reason: "digest-mismatch", retryAfter: [false, false, false] },
     { reason: "no-judge", retryAfter: [false, false, false] },
+    { reason: "awaiting-human-observation", retryAfter: [false, false, false] },
     { reason: "sandbox", retryAfter: [false, false, false] },
   ])("$reason: attempts 1..3 -> $retryAfter", ({ reason, retryAfter }) => {
     expect(

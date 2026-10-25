@@ -1,11 +1,6 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
-import type {
-  WordPressCanaryLedger,
-  WordPressLabHandle,
-  WordPressRoleObservation,
-  WordPressSensitiveCanary,
-} from "./contract.js";
+import type { WordPressLabHandle } from "./contract.js";
 import type {
   DockerResult,
   LabDocker,
@@ -38,8 +33,8 @@ const CONTAINERS = [
 type CreatedResource = (typeof CONTAINERS)[number] | "volume" | "network";
 
 /**
- * One provisioned Lab: its Docker object names, secrets, accounts, the
- * canaries seeded into it and the command runners bound to its network.
+ * One provisioned Lab: its Docker object names, secrets, accounts and the
+ * command runners bound to its network.
  * Everything a sibling module needs about a Lab comes from this object;
  * `index.ts` maps a `WordPressLabHandle` to its session and nothing else
  * holds Lab state.
@@ -66,8 +61,6 @@ export class WordPressLabSession {
   readonly readerPassword: string;
   /** Rotated when handoff setup ends (#430); the Lab browser reads the current one. */
   adminPassword: string;
-  /** Only the WordPress container's environment holds this. */
-  readonly executionSalt: string;
   readonly attackerAccounts: Readonly<{
     subscriber: Account;
     customer?: Account;
@@ -79,17 +72,10 @@ export class WordPressLabSession {
   }>;
   readonly administratorSecondaryLocale?: string;
   readonly images: LabImages;
-  readonly nonce: () => string;
   readonly docker: RunDocker;
   readonly requireDocker: RequireDocker;
   /** Docker objects created so far; `cleanup` removes only these. */
   readonly created = new Set<CreatedResource>();
-  readonly sensitiveCanaries: WordPressSensitiveCanary[] = [];
-  readonly executionNonces = new Set<string>();
-  readonly scriptNonces = new Set<string>();
-  canaries?: WordPressCanaryLedger;
-  /** Option digests taken when canaries were seeded, or when handoff setup ended. */
-  optionBaseline?: ReadonlyMap<string, string>;
   receiverIp?: string;
   /** Exploration Labs: the address WordPress keeps across resets. */
   wordpressIp?: string;
@@ -101,7 +87,6 @@ export class WordPressLabSession {
   constructor(input: {
     readonly docker: LabDocker;
     readonly images: LabImages;
-    readonly nonce: () => string;
     readonly customerRole: boolean;
     readonly forVerification: boolean;
     readonly forExploration?: boolean;
@@ -153,9 +138,7 @@ export class WordPressLabSession {
     };
     if (input.secondaryLocale !== undefined)
       this.administratorSecondaryLocale = input.secondaryLocale;
-    this.executionSalt = randomBytes(16).toString("hex");
     this.images = input.images;
-    this.nonce = input.nonce;
     this.docker = input.docker.run;
     this.requireDocker = input.docker.require;
   }
@@ -218,34 +201,6 @@ export class WordPressLabSession {
     environment: readonly string[] = [],
   ): Promise<DockerResult> =>
     this.requireDocker(this.wpCommand(args, environment));
-
-  /** Digest of an option as WP-CLI prints it; a missing option has its own marker. */
-  async optionDigest(name: string): Promise<string> {
-    const result = await this.docker(
-      this.wpCommand(["option", "get", name, "--format=json"]),
-    );
-    if (result.exitCode === 1) return "absent";
-    if (result.exitCode !== 0) throw new Error("Option unreadable");
-    return createHash("sha256").update(result.stdout.trim()).digest("hex");
-  }
-
-  async roles(username: string): Promise<WordPressRoleObservation> {
-    if (!/^[A-Za-z0-9._@-]{1,60}$/.test(username))
-      return { status: "unavailable" };
-    try {
-      const result = await this.wp(["user", "get", username, "--field=roles"]);
-      return {
-        status: "roles",
-        roles: result.stdout
-          .split(",")
-          .map((role) => role.trim())
-          .filter((role) => role.length > 0)
-          .sort(),
-      };
-    } catch {
-      return { status: "unavailable" };
-    }
-  }
 
   /** Removes what this session created; true when every removal succeeded. */
   async cleanup(): Promise<boolean> {

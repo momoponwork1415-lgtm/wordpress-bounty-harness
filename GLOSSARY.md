@@ -44,17 +44,17 @@
 | Discovery run | モデル実行の記録単位。Trial の中で何回モデルを呼んだかと区別する。 |
 | Finding | 攻撃者の立場、入口から影響までのソース上の経路、観測を備えた未確認の主張。 |
 | Lead | ソースに根拠があり、影響までに未解決の辺が残る手がかり。Finding でも検証結果でもない。 |
-| canary | Lab に播種する nonce 付きの値。`runtime-confirmed` の証明は canary の回収に限る（SPEC 第 2 節の不変条件 3）。 |
-| VerificationResult | 新しい Lab の判定器が出す `runtime-confirmed`、`contradicted`、`incomplete` のいずれか。 |
+| canary | 判定器があった時期に Lab へ播種した nonce 付きの値。既存の `runtime-confirmed` は canary の回収で出た。2026-10-25 以降の新しい検証は canary を播種せず、確定の根拠は人間の `review observe` の match と `review decide --reproduced match` だけである（SPEC 第 2 節の不変条件 3、ADR 0040）。 |
+| VerificationResult | 新しい Lab での検証 attempt の結果。2026-10-25 以降の新しい検証は `incomplete` だけを出し、Harness の捕捉が残ったものは `incomplete(awaiting-human-observation)` として人間の観測を待つ。判定器があった時期の `runtime-confirmed` / `contradicted` は記録として読み続ける（ADR 0040）。 |
 | Reproduction Package | 人間が Lab を再構築し、遠隔攻撃者の手順で同じ結果を確かめるための証拠と手順。 |
 | Submission Candidate | 最新版で確認済みの脆弱性、提出先、文案の版を結び付けたレビュー対象。 |
 | Private Evidence | HTTP 記録、ペイロード、画像、認証情報、未公開の発見を置く Git 外の保管先。 |
 | Programme Boundary | Harness が探索に付ける節で、報奨プログラムの対象内とする影響を書く。外にある impact の Finding は `finding-parked` に回す（SPEC 第 8a 節・第 8b 節）。 |
-| レビュー列 | 人間のレビューを待つ Finding の列（review queue）。対象範囲内の Finding は、判定器の結果に関係なく全件が出る（SPEC 第 8 節、ADR 0031）。 |
+| レビュー列 | 人間のレビューを待つ Finding の列（review queue）。対象範囲内の Finding は、検証の結果に関係なく全件が出る（SPEC 第 8 節、ADR 0031）。 |
 | 保留候補（candidate-held） | 探索 run の最終 JSON から抽出したが、正規化後も出力契約を通らない Finding / Lead 候補。分類と issue path だけを台帳に残し、本文は Private Evidence に置く。Finding でも検証対象でもない（ADR 0018）。 |
 | finding-parked | Programme Boundary 外の impact と、判別の付きにくい 5 分類の Finding。台帳と Private Evidence に残し、検証・レビュー列・funnel の raw に入れない。一覧は `review parked` で見る（ADR 0032）。 |
 | 段（cascade） | 選定の主帯（インストール数 100k–1M）が尽きたときだけ、順に試す段。順は 50k → 30k → ≥1M かつ paying class 記録 ≥2。`target-selected` に `cascadeStep` が残る（ADR 0037）。 |
 | 再開区間（segment） | 止まった Root のスレッド（理由は問わない。`completed` は除く）を、操作者が `campaign resume` で新しいサンドボックスに再開した続き。同じ Trial に数え、`resumesRun` / `resumeSegment` が記録される（ADR 0036）。 |
 | 中断した run（interrupted） | ホストの電源断などで持ち主のプロセスが死に、終了イベントが無いまま残った run。`campaign resume` が残骸を封じて `reason: interrupted` の終了イベントを追記してから再開する。死んだかどうかは、サンドボックスが書く印の boot id と pid で決める（ADR 0036 の 2026-10-19 追記 2）。再起動した `continuous run` も、新しい Trial より先に同じ経路で自動再開する（追記 3）。 |
-| 受け渡し（handoff） | `verify next --handoff <dir>` で Harness が Finding 単位の Lab を立て、スキル `wbh-verify` が前提作りと再現を行う検証の経路。判定は判定器だけが出す（ADR 0035）。 |
+| 受け渡し（handoff） | `verify next --handoff <dir>` で Harness が Finding 単位の Lab を立て、スキル `wbh-verify` が前提作りと再現を行う検証の経路。Harness は捕捉と Lab browser の記録を残すだけで成立を判定せず、確定は人間が review Lab で記録する（ADR 0035、ADR 0040）。 |
 | 通常機能シナリオ | プロファイルが版と digest で管理する、対象プラグインの通常の利用状態の定義。Lab Setup に含め、Finding の前提と照合する。権限の付与や危険設定は含まない（ADR 0020）。 |

@@ -2,6 +2,7 @@
 status: accepted
 supersedes: 0020 for scenario selection priority and victim-side operations
 superseded-in-part-by: 0035 for the administrator boundary of a handoff Verifier run
+superseded-in-part-by: 0040 for the observer verdict
 ---
 
 # 検証 Lab は汎用 scenario を主とし、Verifier にブラウザを渡さない
@@ -28,3 +29,7 @@ WordPress profile の版・digest付き通常機能 scenario catalogue に、plu
 - [ADR 0020](0020-versioned-feature-scenarios-for-lab.md) の scenario ID、digest、Finding の前提照合、再試行時の Lab Setup 変更条件を維持し、catalogue の追加順と被害者操作の所有者を更新する。過去の対象向け scenario は履歴として残す。
 - [ADR 0021](0021-stored-script-judge-victim-context.md) の被害者ロールと画面の宣言、[ADR 0004](0004-harness-owned-judges-decide-runtime-confirmed.md) の nonce 判定は維持する。
 - `incomplete` の集計に payload、HTTP本文、recipe を台帳へ持ち込まない。台帳は理由と digest 参照だけを持つ。
+
+## 2026-10-25 注記（#525、所有者決定 2026-10-25）
+
+「観測器は Finding が宣言した被害者ロールと画面の文脈で canary を観測し」は、[ADR 0040](0040-human-lab-observation-replaces-judges.md) で「宣言した画面を開き、数値マーカーの dialog と画面を記録する」に改めた。canary は播種しない。観測器は記録だけを残し、成立を判定しない。「ADR 0004 の nonce 判定は維持する」は ADR 0040 で置き換えた。被害者側の操作を Harness 所有の Lab 観測器が型付きの手順で行うことと、Verifier にブラウザを渡さないことは変えない。

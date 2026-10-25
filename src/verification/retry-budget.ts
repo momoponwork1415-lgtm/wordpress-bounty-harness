@@ -13,10 +13,11 @@ type FinishedVerification = Extract<
 /**
  * ADR 0022 retry budget, shared by the verification queues (which retry) and the
  * review queue (which predicts what they will do). Counts include the attempt
- * that produced the current reason. `recipe` / `observation` get two automatic
- * retries on the same Lab Setup, `provision` one re-provision, `provider` one
- * retry on resume (2026-10-14 addendum), `precondition` only when the scenario
- * id changed; every other reason goes to a human without retry.
+ * that produced the current reason. `recipe` gets two automatic retries on the
+ * same Lab Setup, `provision` one re-provision, `provider` one retry on resume
+ * (2026-10-14 addendum), `precondition` only when the scenario id changed;
+ * every other reason goes to a human without retry. `observation` came from
+ * the deleted judges and no longer retries (#525, ADR 0040).
  */
 export function shouldAutomaticallyRetryVerification(input: {
   readonly reason: IncompleteReason;
@@ -28,7 +29,6 @@ export function shouldAutomaticallyRetryVerification(input: {
 }): boolean {
   switch (input.reason) {
     case "recipe":
-    case "observation":
       return input.sameLabSetup && input.attemptsForReason < 3;
     case "provision":
     case "provider":

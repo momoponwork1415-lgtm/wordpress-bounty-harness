@@ -164,6 +164,10 @@ v3 を戻すときは `versions/v2.2.md` を skill 本文に戻し、OPERATIONS 
 
 進捗は `runtime-confirmed` の件数を提出完了の代理指標にせず、上記の再現・重複・scope・報告書・Fill-Only JSON・最終査読の準備が揃った Finding 件数で見る。外部送信は従来どおり、正確な Submission Candidate、文案 digest、送信先に結び付いた所有者の承認を要し、Harness は送信しない。
 
+## 2026-10-25 注記（#525、所有者決定 2026-10-25）
+
+追記 10 の「判定器は引き続き必要である」と「`runtime-confirmed` を出す条件は nonce 付き canary の回収のまま」は、[ADR 0040](0040-human-lab-observation-replaces-judges.md) で置き換えた。判定器は削除し、段 3 の結果は `incomplete(awaiting-human-observation)` になる。観測器の dialog、marker の一致、画像だけから成立を自動認定しないことは変えない。正式な文案・提出候補へ進む basis は、人間の `review observe` の `match` と `review decide --reproduced match` にした（ADR 0040 の 2026-10-26 追記）。
+
 ## 2026-10-26 追記 11: Programme Boundary の文から管理者設定の除外を外す
 
 PR #524 のマージ前レビュー（2026-10-26）で、`src/profiles/wordpress/policy/campaign.json` の `programmeBoundary.text` が、対象外の最後に「an administrator's explicit configuration or grant of permissions」を残していると分かった。これは追記 8 の「設定前提の文言では検証を止めない」と食い違う。目的プロンプト v10 の「Behaviour that depends on a plugin setting an administrator can enable is in scope when a typical site may plausibly enable it; state the setting as the precondition.」とも食い違う。探索エージェントには両方の文が渡る。
