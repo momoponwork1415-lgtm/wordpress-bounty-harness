@@ -74,3 +74,14 @@ amends: 0029（新規探索の唯一の mode）, 0033（最低 60 分は deep �
 - `src/cli/wordpress.ts` の `wordPressMinimumActiveMs` と mode ごとの再開段落を消し、60 分の定数と「Before giving up,」に戻す。runner が 0 の下限を受け付ける変更は残してよい。
 - 台帳の `configuration.mode` は、記録済みの event を読むために読み取り専用で残す。
 - `examples/campaign-wide-20.json` を消し、本 ADR を `superseded` にして、SPEC、AGENTS.md、DEVELOPMENT.md の該当文を戻す。
+
+## 2026-10-25 追記: `wide` の目的文を v11-wide にする（PRISM の方針、所有者決定）
+
+所有者は 2026-10-25 に、`wide` の目的文を「PRISM の方針に近づける」と決めた。根拠は、Wordfence が PRISM について本人の言葉で書いた記述（`docs/reviews/2026-10-25-wordfence-argus-and-prism.md` 第 5 節）である。PRISM は脆弱性の種別ごとに専門のエージェントを 1 体ずつ置き、1〜2 段の短い経路を狙い、WordPress の ground truth に導かれる。この記述を出典対照表の第 2.1 節に PRISM-a〜d の行として足し、その行と既存の行だけで新しい目的文を組んだ（[本文と出典対照](../reviews/2026-10-25-wp2shell-bounty-v11-wide.md)）。
+
+- `wide` の現行の目的文は `wp2shell-bounty-v11-wide`（`sha256:e7c46f4b5289731f7d780640f009b58a305f99099e2ba10148fb2c1b6b4f676b`）とする。到達先の種別ごとに 4 体の専門エージェントを固定で置き（HTML 出力、SQL、ファイル・パス・include・アップロード・unserialize、本人確認と認証）、各エージェントが担当の入口を一通り終えたら止める。
+- `wp2shell-bounty-v10-wide` は本番 campaign `prod-20261025-1` で 1 回分を回したので、本文と行を `archived` で残す。走った Trial の目的文と digest を照合するためである。
+- `deep` は v10 のまま変えない。
+- これで、上の決定にある「2 つの mode の違いは、早く終えるか、粘って探すかの違いだけである」は成り立たなくなる。v11-wide からの違いは、「早く終え、種別ごとの専門エージェントを固定で置く」（`wide`）と「粘り、多様な着眼点の組を Root が動かす」（`deep`）の違いである。v11-wide は、v8 から続く「固定配分をしない」規則（出典対照表 1 の #17）を、所有者決定によって外した。mode の比較で違いが出ても、原因を時間配分だけに絞ることはできない。
+- v11-wide でも最後の段落は「Stop when」で始まる。再開段落の規則と、最低時間・既定の wall はこの ADR の決定のまま変えない。
+- 戻すときは v11-wide → v10-wide → v8 の順に戻す。手順は v11-wide の文書の第 5 節にある。

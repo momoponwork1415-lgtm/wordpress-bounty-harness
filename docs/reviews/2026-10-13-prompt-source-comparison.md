@@ -79,6 +79,18 @@
 | 27 | 全 impact を Finding にする条件 | — | — | 「fully-supported weaker route beats unsupported stronger one」 | — | 「route ごとの principal・path・controls」 | 「部分 primitive を Finding にしない」 | |
 | 28 | 着眼点の重み付けと設定依存の前提（2026-10-25 追加） | — | — | — | — | — | — | v10 で採用。出典: Wordfence mirror 集計 2026-10-25（docs/reviews/2026-10-25-wordfence-mirror-as-exploration-input.md 表 1・表 2）、所有者決定 2026-10-25「それでいこう」。[v10 の文書](2026-10-25-wp2shell-bounty-v10.md) |
 
+
+### 2.1 Wordfence PRISM の公開記述（docs/reviews/2026-10-25-wordfence-argus-and-prism.md §5、所有者決定 2026-10-25）
+
+2026-10-25 に追加した。所有者は 2026-10-25 に、`wide` の目的文を「PRISM の方針に近づける」と決めた。この節の行は、Wordfence が PRISM について本人の言葉で書いた記述（[調査の文書](2026-10-25-wordfence-argus-and-prism.md) 第 5.1 節と第 5.4 節）から取った。PRISM の prompt は公開されていない。行は設計の方針だけで、文言をそのまま取り込んだものではない。最初の採用は `wp2shell-bounty-v11-wide`（[v11-wide の文書](2026-10-25-wp2shell-bounty-v11-wide.md)）。
+
+| # | 要素 | PRISM 本人の記述 | 本リポでの書き方 | 採否 |
+| --- | --- | --- | --- | --- |
+| PRISM-a | 脆弱性の種別ごとに専門のエージェントを 1 体ずつ置き、担当を固定する | 「専門のエージェントが 1 体ずつ、脆弱性のスペクトルの別々の波長を分析する。XSS からデシリアライズまで」（プロフィール、§5.1 [25]）、「脆弱性の種類ごとを含め、さまざまな分野の『専門家』に頼る」（2026-04-10、§5.1 [12]） | 到達先（sink）の種別ごとに子を 1 体ずつ固定で割り当てる。Root は担当を振り直さない | v11-wide で採用 |
+| PRISM-b | 1〜2 段の短い経路を単位にし、長い連鎖を狙わない | 「ふつう 1 件の発見は 1 つから数個の欠陥、あるいは 1〜2 段の短い跳躍になる。それがまさに正しいトレードオフだ」（§5.1 [2]、§5.4 の 4） | 入口から到達先までの 1〜2 hop の経路を報告の単位にし、多段の連鎖は組まない | v11-wide で採用 |
+| PRISM-c | WordPress の ground truth に導かれる | 「WordPress の ground truth に導かれ、経験的な PoC の実行で検証される」（プロフィール、§5.1 [25]） | 候補を報告する前に、到達先の手前の guard（capability の確認、nonce、エスケープ関数、query の準備）が実際に何をするかを、固定した WordPress 本体のソースで確かめる。PoC の実行は探索に入れない（検証は Harness の Lab と判定器が受け持つ、不変条件 3） | v11-wide で採用 |
+| PRISM-d | 種別ごとの面を掃き終えたら止める | 「あらゆるバグ種別と脅威モデルにわたる広大な面を掃く」（§5.4 の 2）、「そのすべてを捕まえたい」（§5.4 の 4） | 各専門エージェントが担当の到達先について入口を一通り終えたら止める。PRISM は停止条件を明文で書いていない。この行は「面を覆う」という記述を停止規則に読み替えたもの | v11-wide で採用 |
+
 ## 3. 対照表 2: 公開 harness
 
 | # | 要素 | A Anthropic DCRH | B Google Mantis | C Cloudflare | D Trail of Bits | F Visa VVAH | E / G / H（参考） | 採否 |

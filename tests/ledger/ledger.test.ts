@@ -293,7 +293,7 @@ describe("Ledger public interface", () => {
       labId: "lab-wide",
       history: { mode: "none" },
       configuration: {
-        promptVariant: "wp2shell-bounty-v10-wide",
+        promptVariant: "wp2shell-bounty-v11-wide",
         mode: "wide",
       },
     });
