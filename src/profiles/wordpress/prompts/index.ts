@@ -161,7 +161,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
   {
     id: "wp2shell-bounty-v10",
     digest:
-      "sha256:d220835a56f29dcb7c93f18c53677ca862a99bc8bbfd4306df263dccd2ad04f3",
+      "sha256:fd4e395ecb50923487c9bab6dbae81f0aff4e67342abecedda3f53cd9ff5f8b3",
     outputContract: "v4",
     status: "current",
   },
