@@ -13,7 +13,7 @@
 
 1. 探索エージェントへ渡すのは、固定source、人間が書いたtrust境界宣言、Programme Boundary、任意のLab、そして時点で切った対象の公開履歴（カタログ情報のみ）だけ。評価対象の答え（held-outのadvisory本文、原因箇所、PoC）と、評価runではheld-outの公開日以降の記録は渡さない。PoC、payload、他人の再現手順は本番でも渡さない（[ADR 0012](adr/0012-time-cut-known-vulnerability-history.md)）。
 2. 探索・検証はgVisor（`runsc`）の使い捨て環境でのみ対象を実行する。ホストで対象コードを実行しない。弱い隔離へ暗黙に切り替えない。外向き通信は認証ブローカー経由のprovider APIだけ。
-3. 確定は、人間がLabのdialog、観測記録、捕捉を読んで行う。Harnessは判定器を持たず、新しい検証は `runtime-confirmed` を出さない。エージェントやrecipeの自己申告は確認にしない。リバースシェル・永続化・ホストアクセスを使わない。既存の `runtime-confirmed` は判定器があった時期の記録として読み続ける（2026-10-25 改訂、[ADR 0040](adr/0040-human-lab-observation-replaces-judges.md)）。
+3. Harnessは判定器を持たない。確定の根拠は、名指しした人間が新しいreview Labで記録した `review observe` のmatchと `review decide --reproduced match` だけである。エージェントやrecipeの自己申告、捕捉を読んだだけの推定、AIが打った `review observe` / `--reproduced` は根拠にしない。リバースシェル・永続化・ホストアクセスを使わず、証明にもしない。新しい検証は `runtime-confirmed` を出さず、既存の `runtime-confirmed` は判定器があった時期の記録として読み続ける（2026-10-25 改訂、2026-10-26 に根拠を明記、[ADR 0040](adr/0040-human-lab-observation-replaces-judges.md)）。
 4. 検証の失敗（環境・手順・観測・証拠の不足）は `incomplete` であり、`contradicted` にも棄却にもしない。
 5. 判定は、Findingと検証結果が同じTarget Snapshot digestを持つときだけ行う。digest不一致は `incomplete`。最新版への再検証では新しいSnapshotに結び付けたFindingを別に記録し、旧Findingへの由来だけを参照する。
 6. 人間の判断点は「提出前のレビュー」と「外部行動の承認」の2つ。対象選定の承認、未検証候補の採否はない。権限・対象範囲の拡張は人間の明示承認を要する。
@@ -22,7 +22,7 @@
 
 ## 3. 流れ
 
-開発対象のslugと版を指定（運用時は機械選定） → Snapshot固定 → WP2Shell目的promptによるRoot＋最大4 subagentの協調Trialを対象ごとに1回（探索用Labは既定で付けない、`discovery.lab: none`） → Finding単位にLabを供給し、既存の検証skill（`verify next --handoff`、ADR 0035）が再現 → 決定論的判定器 → 最新版で再検証 → 重複・scope照合 → 英語レポートJSON案と再現パッケージ → 人間の手動Lab再現と査読 → 外部行動承認 → 人間が提出し転帰を記録。台帳は全段階を追記する。評価は台帳を読むだけで、探索へ答えを渡さない（ADR 0029）。
+開発対象のslugと版を指定（運用時は機械選定） → Snapshot固定 → WP2Shell目的promptによるRoot＋最大4 subagentの協調Trialを対象ごとに1回（探索用Labは既定で付けない、`discovery.lab: none`） → Finding単位にLabを供給し、既存の検証skill（`verify next --handoff`、ADR 0035）が再現 → Harnessが捕捉とLab browserの記録を残し、人間の観測を待つ（`incomplete(awaiting-human-observation)`、ADR 0040） → 最新版で再検証 → 重複・scope照合 → 人間がreview Labで観測と再現を記録（`review observe`、`review decide --reproduced`） → 英語レポートJSON案 → 人間の査読 → 外部行動承認 → 人間が提出し転帰を記録。台帳は全段階を追記する。評価は台帳を読むだけで、探索へ答えを渡さない（ADR 0029）。
 
 この流れの最終目標では、nonce付きcanaryを回収した `runtime-confirmed` は提出の必須条件ではない。Harnessの捕捉した発火などの軽量観測はそのまま事実として記録し、成立の最終確認は同じ最新版Snapshotの手動Lab再現で行う。現行の `incomplete` から正式な文案・Submission Candidateへ進む経路は未実装であり、内部プレビューだけを作れる（ADR 0038 の2026-10-24追記9・10）。
 
@@ -36,7 +36,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `snapshot` | 対象plugin、WordPress本体、PHP、必要な依存pluginのsourceをdigestで固定する | `freeze(selection) → Snapshot`、`verify(digest)` | Target / Dependency Snapshot、canonical manifest | archiveの不正path・symlink・size超過を拒否し、必要な依存の欠落を黙って省略しない | 移植: `canonical-source-tree`、`canonical-json`、`immutable-file`、`private-artifact-store` |
 | `lab` | WordPress + MySQLの使い捨てgVisor環境を供給し、canaryとロール別アカウントを仕込む | `provision(snapshot, setup) → LabHandle`、`seedCanaries`、`teardown` | Lab Setup digest、canary台帳（nonceと配置先）、ロール認証情報（Lab内のみ） | source / image / runsc不一致では起動しない。provision失敗は `incomplete` 用の理由コード | 移植: `human-os` のgVisor候補検証Lab。拡張: canary seeding、ロール基準の正常操作記録。旧discovery用Labは退役し、過去の記録だけを読む |
 | `discovery` | 固定Snapshotで対象ごとにRoot＋最大4子の協調Trialを1回回す | `run(campaignInput) → DiscoveryRun`、`campaign(stopRule)` | Trial id、Root / 子の実行記録、model profile digest、prompt digest、usage、FindingとLeadのdigest参照 | provider / schema / sandbox失敗はtyped receiptとして残し、有効な個別成果を失わない。provider上限はcampaignを止め、runnerがbackoff後に同じcampaign IDで再開する（`runtimeShare` で両 runtime に分けた探索Labなしのcampaignでは、上限に当たった runtime の対象だけを止める。ADR 0032 の 2026-10-20 追記 3）。対象単位の失敗は `target-skipped` で次の対象へ進む | ADR 0029。旧単独Trialと二段構えの記録は読み続ける |
-| `verification` | 検証skillの出力を保存し、Harnessが捕捉したHTTPとcanaryを判定器で照合する | `verify(finding, snapshot, lab) → VerificationResult` | Verifier run記録、判定器の証拠（HTTP捕捉、canary回収、browser観測、ロール基準との差分）、Lab Setup digest | 前提不一致・observation失敗・cleanup失敗は `incomplete` | 新規。移植: Execution Canary |
+| `verification` | 検証skillの出力を保存し、Harnessが捕捉したHTTP、Lab状態の差分、Lab browserの記録を残す。成立は判定しない（ADR 0040） | `verify(finding, snapshot, lab) → VerificationResult` | Verifier run記録、判定器の証拠（HTTP捕捉、canary回収、browser観測、ロール基準との差分）、Lab Setup digest | 前提不一致・observation失敗・cleanup失敗は `incomplete` | 新規。移植: Execution Canary |
 | `ledger` | 全イベントを追記し、funnelを読み取り専用で導く | `append(event)`、`read(query)`、`funnel(campaign)` | LedgerEvent（型付きunion、snapshot digest付き）、添付（Codex findings等）のdigest参照 | 同一identityへの異なる内容はconflict。削除しない | 新規。規則はADR 0024とMantisから |
 | `review` | 人間が検証済みFindingを見て提出判断をする。scope、重複、文案、承認 | `queue() → ReviewItem[]`、`decide`、`assessScope`、`draft`、`authorize` | ReviewDecision、Programme Scope Assessment、Submission Candidate、Submission Draft（版付き）、External Action Authorization | scope評価失敗はscopeだけ `incomplete`、Verified Vulnerabilityを失わない。必要な承認がなければadmitしない | 移植: `human-os` のscope評価・Draft・Authorization。新規: review CLI、ローカルWordfence履歴DB照合 |
 | `evaluation` | 2026-10-18 に削除（所有者指示）。`eval compare / prospective / case-blocked` と location-overlap 採点は運用・skill・runner のどれも呼んでいなかった。費用と転帰の集計は `ledger` の `funnel` / `usage` が持つ | — | — | — | — |

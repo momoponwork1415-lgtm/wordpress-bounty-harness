@@ -31,7 +31,7 @@ const handle: WordPressLabHandle = {
   internalIp: "172.20.0.2",
   recorderIp: "172.20.0.4",
   attackerAccounts: {
-    subscriber: { username: "lab-subscriber", password: "lab-only" },
+    subscriber: { username: "lab-subscriber", password: "fixture-placeholder" },
   },
 };
 

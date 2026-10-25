@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded
 superseded-by: 0040
 ---
 # runtime-confirmed はHarness所有の決定論的判定器だけが出す
