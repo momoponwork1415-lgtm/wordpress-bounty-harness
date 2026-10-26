@@ -157,13 +157,35 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
       runtime.http5xxCount = increment(runtime.http5xxCount);
   });
   const base = "http://wordpress";
-  const atLabOrigin = async (tab) => {
+  // A failure line names the check that failed and what the observer saw, for
+  // the person who reads Private Evidence; nothing reads it for a verdict
+  // (#470). URLs keep origin and path only, so nonces in a query stay out.
+  const shownUrl = (url) => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:")
+        return (parsed.origin + parsed.pathname).slice(0, 512);
+    } catch {}
+    return String(url).slice(0, 64);
+  };
+  const fail = (message, detail) => {
+    throw new Error(message + " " + JSON.stringify(detail));
+  };
+  const settle = (promise) => promise.then((value) => value, () => null);
+  // Names the check a tab failed, or null when the tab is on the Lab origin.
+  // The about:blank allowance holds only for a blank window that a Lab page's
+  // script opened with window.open() and that kept its opener, so it inherits
+  // the Lab origin. A link with target="_blank" opens without an opener in
+  // current Chromium (implicit noopener); a blank tab it leaves fails the
+  // opener checks, and a tab it opens must load a Lab URL itself.
+  const labOriginMismatch = async (tab) => {
     const url = tab.url();
-    if (new URL(url).origin === base) return true;
+    if (new URL(url).origin === base) return null;
+    if (url !== "about:blank") return "url-origin";
     const opener = popupOpeners.get(tab);
-    if (url !== "about:blank" || opener === undefined) return false;
-    if (await tab.opener() !== opener) return false;
-    return tab.evaluate((origin) => {
+    if (opener === undefined) return "blank-not-selected-popup";
+    if (await tab.opener() !== opener) return "blank-opener-differs";
+    const inherits = await tab.evaluate((origin) => {
       try {
         return window.origin === origin &&
           window.opener !== null &&
@@ -172,6 +194,28 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
         return false;
       }
     }, base).catch(() => false);
+    return inherits ? null : "blank-origin-not-inherited";
+  };
+  // What the page held when a typed action found no visible element: how many
+  // elements matched at all, and the start of the visible text. Input values,
+  // attributes and scripts are not visible text, so hidden nonces stay out.
+  const missingTarget = async (tab, action, actionIndex, target) => {
+    const looseTextCount = action.kind === "click-text" && action.exact
+      ? await settle(tab.getByText(action.text, { exact: false }).count())
+      : undefined;
+    return {
+      check: "action-visible",
+      actionIndex,
+      kind: action.kind,
+      ...(action.kind === "click-text"
+        ? { text: action.text, exact: action.exact }
+        : { selector: action.selector }),
+      url: shownUrl(tab.url()),
+      attachedCount: await settle(target.count()),
+      ...(looseTextCount === undefined ? {} : { looseTextCount }),
+      visibleText: await settle(tab.evaluate(() =>
+        (document.body?.innerText ?? "").replace(/\\s+/g, " ").trim().slice(0, 1024))),
+    };
   };
   const user = process.env.WBH_LOGIN_USER;
   if (user) {
@@ -188,17 +232,28 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   const navigation = await visiblePage.goto(base + process.env.WBH_VISIT_PATH, { waitUntil: "load" });
   const httpStatus = navigation ? navigation.status() : undefined;
   if (new URL(visiblePage.url()).origin !== base)
-    throw new Error("Victim navigation left the Lab origin");
+    fail("Victim navigation left the Lab origin", {
+      check: "visit-origin",
+      url: shownUrl(visiblePage.url()),
+      expectedOrigin: base,
+    });
   const actions = JSON.parse(process.env.WBH_VISIT_ACTIONS ?? "[]");
-  for (const action of actions) {
+  for (const [actionIndex, action] of actions.entries()) {
     const target = action.kind === "click-text"
       ? visiblePage.getByText(action.text, { exact: action.exact })
       : visiblePage.locator(action.selector);
-    await target.waitFor({ state: "visible", timeout: 10000 }).catch(() => {
-      throw new Error("Victim action not visible");
-    });
-    if (await target.count() !== 1)
-      throw new Error("Victim action did not identify one visible element");
+    const visible = await target.waitFor({ state: "visible", timeout: 10000 })
+      .then(() => true, () => false);
+    if (!visible)
+      fail("Victim action not visible",
+        await missingTarget(visiblePage, action, actionIndex, target));
+    const matchCount = await target.count();
+    if (matchCount !== 1)
+      fail("Victim action did not identify one visible element", {
+        check: "action-single",
+        actionIndex,
+        matchCount,
+      });
     const opener = visiblePage;
     const expectsPopup = await target.evaluate((element) => {
       const carriers = [
@@ -229,15 +284,30 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
       visiblePage = opened;
     }
     await visiblePage.waitForLoadState("load", { timeout: 10000 });
-    if (!await atLabOrigin(visiblePage))
-      throw new Error("Victim action left the Lab origin");
+    const mismatch = await labOriginMismatch(visiblePage);
+    if (mismatch !== null)
+      fail("Victim action left the Lab origin", {
+        check: mismatch,
+        actionIndex,
+        popup: opened !== null,
+        url: shownUrl(visiblePage.url()),
+        expectedOrigin: base,
+      });
   }
   await visiblePage.waitForTimeout(3000);
   if ([...openedPages].some((tab) => !observedPages.has(tab)))
     throw new Error("Unobserved victim popup opened");
-  for (const tab of observedPages)
-    if (!tab.isClosed() && !await atLabOrigin(tab))
-      throw new Error("Victim observation left the Lab origin");
+  for (const [tabIndex, tab] of [...observedPages].entries()) {
+    if (tab.isClosed()) continue;
+    const mismatch = await labOriginMismatch(tab);
+    if (mismatch !== null)
+      fail("Victim observation left the Lab origin", {
+        check: mismatch,
+        tabIndex,
+        url: shownUrl(tab.url()),
+        expectedOrigin: base,
+      });
+  }
   let dialogEvent;
   for (const [tab, event] of markerDialogs) {
     // Page dialogs have no source frame; reject non-Lab frames and later navigation.
@@ -575,14 +645,21 @@ async function runBrowserVisit(input: {
       ["Unobserved victim popup opened", "victim-unobserved-popup"],
       ["Browser screenshot exceeds the evidence limit", "victim-screenshot"],
     ];
-    const failureCode =
-      known.find(([message]) => result.stderr.includes(message))?.[1] ??
-      "browser-visit";
-    const stderr = Buffer.from(result.stderr, "utf8");
+    // A known failure keeps the one stderr line that names it, with the
+    // check and what the observer saw (#470); anything else keeps stderr.
+    // The name starts its line, so page text in the detail cannot rename it.
+    const lines = result.stderr.split("\n");
+    const matched = known
+      .map(([message, code]) => ({
+        code,
+        line: lines.find((line) => line.startsWith(message)),
+      }))
+      .find((entry) => entry.line !== undefined);
+    const diagnostic = Buffer.from(matched?.line ?? result.stderr, "utf8");
     throw new BrowserVisitFailure(
-      failureCode,
-      failureCode === "browser-visit" && stderr.length > 0
-        ? Buffer.from(stderr.subarray(0, MAX_BROWSER_DIAGNOSTIC_BYTES))
+      matched?.code ?? "browser-visit",
+      diagnostic.length > 0
+        ? Buffer.from(diagnostic.subarray(0, MAX_BROWSER_DIAGNOSTIC_BYTES))
         : undefined,
     );
   }
