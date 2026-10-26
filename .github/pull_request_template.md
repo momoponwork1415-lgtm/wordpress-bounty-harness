@@ -14,7 +14,9 @@
 
 ## 測った数字
 
-探索に触る PR は開発セットの Trial 結果（Trial 数 / completed / Finding / Lead / wall 中央値 / 失敗理由）。触らない PR は「なし」。
+探索に触る PR は、同じ 6 case・同じ版で次の 3 つを出す（出し方は docs/reviews/2026-10-26-system-history-and-metrics.md 第 4 節）。
+M1 開発セットの OK 率（scope 内 Finding が 1 件以上の case 数 / 6、公開経路一致の数を併記）、M2 Trial あたりの scope 内 Finding（Trial 数 / completed / Finding / Lead / wall 中央値 / 失敗理由を含む）、M3 common-usage の割合。
+検証・レビュー・提出に触る PR は M4 確認数 / M5 提出数 / M6 報酬のどれが動くかを書く。触らない PR は「なし」。
 
 ## 消し方
 
