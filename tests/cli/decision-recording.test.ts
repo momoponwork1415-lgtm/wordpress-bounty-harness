@@ -1,172 +1,69 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { runCli, type CliIo, type CliProfile } from "../../src/cli/index.js";
-import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
-import { Ledger } from "../../src/ledger/index.js";
-import { Review } from "../../src/review/index.js";
+import type { CliIo } from "../../src/cli/index.js";
+import {
+  RECORDED_AT,
+  recordedReviewState,
+} from "../support/recorded-review-state.js";
 
-const SNAPSHOT = `sha256:${"a".repeat(64)}`;
-const NOW = "2026-10-23T12:00:00.000Z";
-const roots: string[] = [];
-afterEach(async () => {
-  await Promise.all(
-    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+/** The shared recorded history; no target or verification is run. */
+async function fixture(askMinutes?: CliIo["askMinutes"]) {
+  const state = await recordedReviewState(
+    askMinutes === undefined ? {} : { askMinutes },
   );
-});
-
-function unused(): never {
-  throw new Error("Only human review recording is available in this fixture");
-}
-
-const profile: CliProfile = {
-  review: (state) =>
-    new Review({
-      ledger: state.ledger,
-      artifactStore: state.store,
-      scopeEvaluator: {
-        programmeIds: ["synthetic"],
-        policyDigest: SNAPSHOT,
-        assess: unused,
-      },
-      factsProvider: { load: unused },
-      clock: state.clock,
-    }),
-  historyStatus: unused,
-  stateDiffReader: unused,
-  httpEvidenceReader: unused,
-  verifierRecordReader: unused,
-  select: unused,
-  runCampaign: unused,
-  targetCeiling: unused,
-  runtimeCeilings: unused,
-  resumeCampaignRun: unused,
-  verifyNext: unused,
-  latestVersion: unused,
-  hostStatus: unused,
-  cleanupLeftovers: unused,
-  checkRuntime: unused,
-  reverify: unused,
-  reviewLab: unused,
-  labDown: unused,
-};
-
-/** Recorded metadata and text artifacts only; no target or verification is run. */
-async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "wbh-cli-decision-"));
-  roots.push(root);
-  const stateDirectory = join(root, "state");
-  await mkdir(stateDirectory);
-  const store = new PrivateArtifactStore({
-    rootDirectory: join(stateDirectory, "private-evidence"),
-    maxEntries: 8,
-    maxBytes: 100_000,
-  });
-  const evidence = await store.putFiles({ "evidence.txt": "Synthetic record" });
-  const packageDigest = await store.putFiles({
-    "package.txt": "Synthetic historical package reference",
-  });
-  const ledger = new Ledger({
-    databasePath: join(stateDirectory, "ledger.sqlite"),
-    artifactStore: store,
-  });
-  const base = {
-    schemaVersion: 1 as const,
-    campaignId: "campaign-1",
-    snapshotDigest: SNAPSHOT,
-    occurredAt: "2026-10-23T11:00:00Z",
-  };
-  await ledger.append({
-    ...base,
-    identity: "finding-1",
-    type: "finding-recorded",
-    findingId: "finding-1",
-    runId: "synthetic-record",
-    category: "synthetic",
-  });
-  await ledger.append({
-    ...base,
-    identity: "verification-1",
-    type: "verification-finished",
-    findingId: "finding-1",
-    verificationId: "verification-1",
-    labSetupDigest: `sha256:${"b".repeat(64)}`,
-    result: {
-      status: "runtime-confirmed",
-      judgeId: "synthetic",
-      proofKind: "nonce-canary",
-      evidenceDigest: evidence,
-      reproductionPackageDigest: packageDigest,
-    },
-  });
-  const notePath = join(root, "review-note.md");
+  const { findingId, evidenceDigest } = state.findings.accountTakeover;
+  const notePath = join(state.root, "review-note.md");
   await writeFile(notePath, "Synthetic human review note");
   return {
-    ledger,
-    store,
-    async decide(
+    ...state,
+    findingId,
+    decide: (
       reason: string,
-      minutes: {
-        read?: string;
-        reproduce?: string;
-        ask?: CliIo["askMinutes"];
-      } = { read: "2.5", reproduce: "7.25" },
-    ) {
-      const stdout: string[] = [];
-      const stderr: string[] = [];
-      const code = await runCli(
-        [
-          "review",
-          "decide",
-          "--campaign",
-          "campaign-1",
-          "--finding",
-          "finding-1",
-          "--decision",
-          "accept",
-          "--reason",
-          reason,
-          "--opened",
-          evidence,
-          "--duplicate",
-          "no-match",
-          "--duplicate-note",
-          notePath,
-          "--reproduced",
-          "match",
-          ...(minutes.reproduce === undefined
-            ? []
-            : ["--reproduce-minutes", minutes.reproduce]),
-          ...(minutes.read === undefined ? [] : ["--minutes", minutes.read]),
-          "--by",
-          "operator",
-        ],
-        { stateDirectory, profile, clock: () => new Date(NOW) },
-        {
-          stdout: (line) => stdout.push(line),
-          stderr: (line) => stderr.push(line),
-          ...(minutes.ask === undefined ? {} : { askMinutes: minutes.ask }),
-        },
-      );
-      return { code, stdout, stderr };
-    },
+      minutes: { read?: string; reproduce?: string } = {
+        read: "2.5",
+        reproduce: "7.25",
+      },
+    ) =>
+      state.run(
+        "review",
+        "decide",
+        "--campaign",
+        "campaign-1",
+        "--finding",
+        findingId,
+        "--decision",
+        "accept",
+        "--reason",
+        reason,
+        "--opened",
+        evidenceDigest!,
+        "--duplicate",
+        "no-match",
+        "--duplicate-note",
+        notePath,
+        "--reproduced",
+        "match",
+        ...(minutes.reproduce === undefined
+          ? []
+          : ["--reproduce-minutes", minutes.reproduce]),
+        ...(minutes.read === undefined ? [] : ["--minutes", minutes.read]),
+        "--by",
+        "operator",
+      ),
   };
 }
 
 describe("CLI human review operation", () => {
   it("keeps explicit zero minutes and prompts only for the omitted duration", async () => {
-    const { ledger, decide } = await fixture();
     const asked: string[] = [];
-    const result = await decide("accepted", {
-      reproduce: "0",
-      ask: async (action) => {
-        asked.push(action);
-        return 3.25;
-      },
+    const { ledger, decide } = await fixture(async (action) => {
+      asked.push(action);
+      return 3.25;
     });
+    const result = await decide("accepted", { reproduce: "0" });
     expect(result.code).toBe(0);
     expect(asked).toEqual(["read"]);
     expect(
@@ -185,23 +82,23 @@ describe("CLI human review operation", () => {
     const artifactsBefore = await readdir(store.rootDirectory);
     const result = await decide("invalid reason");
     expect(result.code).toBe(1);
-    expect(result.stderr.join("\n")).toContain("reasonCode");
-    expect(result.stdout).toEqual([]);
+    expect(result.stderr).toContain("reasonCode");
+    expect(result.stdout).toBe("");
     expect(ledger.readAll()).toEqual(eventsBefore);
     expect(await readdir(store.rootDirectory)).toEqual(artifactsBefore);
   });
 
   it("records related work and prints completion in the existing order", async () => {
-    const { ledger, decide } = await fixture();
+    const { ledger, decide, findingId } = await fixture();
     const countBefore = ledger.readAll().length;
     const result = await decide("accepted");
     expect(result).toEqual({
       code: 0,
-      stderr: [],
+      stderr: "",
       stdout: [
-        "manual reproduction match recorded for finding finding-1",
-        `recorded accept (accepted) for finding finding-1 at ${NOW}`,
-      ],
+        `manual reproduction match recorded for finding ${findingId}`,
+        `recorded accept (accepted) for finding ${findingId} at ${RECORDED_AT}`,
+      ].join("\n"),
     });
     const recorded = ledger
       .readAll()
