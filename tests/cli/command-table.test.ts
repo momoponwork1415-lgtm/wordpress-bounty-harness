@@ -22,6 +22,7 @@ const PINNED_USAGE = [
   "  continuous status",
   "  review [--campaign <id>]",
   "  review parked --campaign <id>",
+  "  review restore --campaign <id> --finding <id> --reason <text> [--by <name>]",
   "  review leads --campaign <id>",
   "  review export --campaign <id> --finding <id> [--version 2]",
   "  review observe --campaign <id> --finding <id> --receipt <digest> --result match|mismatch|unavailable --evidence <path> --by <human>",

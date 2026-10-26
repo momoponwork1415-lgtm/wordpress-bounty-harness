@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
+import { readDiscoveryOwners } from "../../src/infrastructure/lab-owner-record.js";
 import {
   BROKER_TLS_HOSTNAME,
   CHATGPT_PLACEHOLDER_ACCOUNT_ID,
@@ -42,6 +43,7 @@ describe("gVisor Codex sandbox", () => {
         image: `node@${digest}`,
         bundledCatalogPath: "/opt/codex/model-catalog.json",
         scratchRootDirectory: root,
+        ownerDirectory: join(root, "discovery-owners"),
         maxOutputBytes: 1024 * 1024,
         timeoutMs: 30,
         randomUuid: () => sandboxUuid,
@@ -132,7 +134,7 @@ describe("gVisor Codex sandbox", () => {
     }
   });
 
-  it("names and explicitly removes a stopped agent container (#176)", async () => {
+  it("names, owns and explicitly removes a stopped agent container (#176, #550)", async () => {
     const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));
     try {
       const source = join(root, "source");
@@ -143,22 +145,29 @@ describe("gVisor Codex sandbox", () => {
         maxBytes: 1024,
       });
       const calls: (readonly string[])[] = [];
+      const ownerDirectory = join(root, "discovery-owners");
+      /** What a sweep in another state directory reads while the agent runs. */
+      let ownedWhileRunning: ReadonlySet<string> | undefined;
       const sandbox = new GvisorCodexSandbox({
         dockerExecutablePath: "/usr/bin/docker",
         image: `node@${digest}`,
         bundledCatalogPath: "/opt/codex/model-catalog.json",
         scratchRootDirectory: root,
+        ownerDirectory,
         maxOutputBytes: 1024 * 1024,
         timeoutMs: 60_000,
         randomUuid: () => sandboxUuid,
         runDocker: async (args) => {
           calls.push(args);
-          if (args.includes("--network=internal-run"))
+          if (args.includes("--network=internal-run")) {
+            ownedWhileRunning = (await readDiscoveryOwners(ownerDirectory))
+              .live;
             return {
               kind: "timed-out" as const,
               stdout: "",
               stderr: "synthetic timeout",
             };
+          }
           return {
             kind: "exited" as const,
             exitCode: 0,
@@ -206,6 +215,11 @@ describe("gVisor Codex sandbox", () => {
         "--force",
         `codex-agent-${sandboxUuid}`,
       ]);
+      expect(ownedWhileRunning).toEqual(
+        new Set([`codex-agent-${sandboxUuid}`]),
+      );
+      // Released after the removal, even when the run timed out.
+      expect((await readDiscoveryOwners(ownerDirectory)).live.size).toBe(0);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -232,6 +246,7 @@ describe("gVisor Codex sandbox", () => {
         image: `node@${digest}`,
         bundledCatalogPath: "/opt/codex/model-catalog.json",
         scratchRootDirectory: root,
+        ownerDirectory: join(root, "discovery-owners"),
         maxOutputBytes: 1024 * 1024,
         timeoutMs: 60_000,
         clock: () => new Date("2026-10-08T07:00:00Z"),
@@ -358,6 +373,7 @@ describe("gVisor Codex sandbox", () => {
         image: `node@${digest}`,
         bundledCatalogPath: "/opt/codex/model-catalog.json",
         scratchRootDirectory: root,
+        ownerDirectory: join(root, "discovery-owners"),
         maxOutputBytes: 1024 * 1024,
         timeoutMs: 60_000,
         runDocker: async (args) => {
@@ -475,6 +491,7 @@ describe("gVisor Codex sandbox", () => {
         image: `node@${digest}`,
         bundledCatalogPath: "/opt/codex/model-catalog.json",
         scratchRootDirectory: root,
+        ownerDirectory: join(root, "discovery-owners"),
         maxOutputBytes: 1024 * 1024,
         timeoutMs: 60_000,
         runDocker: async (args) => {
@@ -588,6 +605,7 @@ describe("gVisor Codex sandbox", () => {
         image: `node@${digest}`,
         bundledCatalogPath: "/opt/codex/model-catalog.json",
         scratchRootDirectory: root,
+        ownerDirectory: join(root, "discovery-owners"),
         maxOutputBytes: 1024 * 1024,
         timeoutMs: 60_000,
         clock: () => new Date("2026-10-08T07:00:00Z"),
@@ -897,6 +915,7 @@ describe("gVisor Codex sandbox", () => {
         image: `node@${digest}`,
         bundledCatalogPath: "/opt/codex/model-catalog.json",
         scratchRootDirectory: root,
+        ownerDirectory: join(root, "discovery-owners"),
         maxOutputBytes: 1024 * 1024,
         timeoutMs: 60_000,
         runDocker: async (args) => {

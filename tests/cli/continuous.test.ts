@@ -100,6 +100,7 @@ async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
         ...result,
       } as CampaignSummary;
     },
+    discardStaleSelection: async () => null,
     cleanupLeftovers: async () => 0,
     preflight: async () => undefined,
     legacyHistoryAvailable: async () => true,
@@ -778,5 +779,86 @@ describe("continuous runner", () => {
       campaignId: "prod-20261020-1",
     });
     expect(selects).toBe(1);
+  });
+
+  it.each([
+    ["the memoised campaign", true],
+    ["an unbound batch", false],
+  ] as const)(
+    "drops %s frozen under another policy and selects afresh without holding (#302)",
+    async (_, memoised) => {
+      const order: string[] = [];
+      const asked: string[] = [];
+      const t = await setup([async () => ({})], {
+        discardStaleSelection: async (campaignId) => (
+          asked.push(campaignId),
+          "selection-1"
+        ),
+        select: async () => (
+          order.push("select"),
+          { batchId: "selection-9", targets: ["a"] }
+        ),
+      });
+      await t.append("selection-1", {
+        type: "target-selected",
+        selectionId: "wporg:a@1.0.0",
+      });
+      if (memoised)
+        await writeFile(
+          continuousPaths(t.root).memo,
+          JSON.stringify({ campaignId: "prod-20261019-4", target: null }),
+        );
+      const runCampaign = t.deps.runCampaign;
+      t.deps.runCampaign = async (input) => (
+        order.push(`run ${input.campaignId}`),
+        runCampaign(input)
+      );
+      expect(await createContinuousRunner(t.deps).run()).toBe("operator");
+      expect(asked).toEqual([memoised ? "prod-20261019-4" : "prod-20261020-1"]);
+      expect(order[0]).toBe("select");
+      expect(order).not.toContain("run prod-20261019-4");
+      expect(t.log.join("\n")).toContain(
+        "selection-batch-discarded batch=selection-1",
+      );
+      expect(t.states()).not.toContain("holding-error");
+      expect(t.hours()).toBe(0);
+    },
+  );
+
+  it("does not recover a batch the runner already discarded", async () => {
+    let selects = 0;
+    const t = await setup([async () => ({})], {
+      select: async () => (
+        selects++,
+        { batchId: "selection-9", targets: ["a"] }
+      ),
+    });
+    await t.append("selection-1", {
+      type: "target-selected",
+      selectionId: "wporg:a@1.0.0",
+    });
+    await t.append("selection-1", {
+      type: "selection-batch-discarded",
+      policyDigest: `sha256:${"c".repeat(64)}`,
+      currentPolicyDigest: `sha256:${"d".repeat(64)}`,
+      reason: "policy-changed",
+    });
+    await t.runner.run();
+    // The first campaign follows a fresh selection, and a second one stops it.
+    expect(selects).toBe(2);
+  });
+
+  it("hands select the stop request, so a stop during selection records no batch (#302)", async () => {
+    let seen: boolean | undefined;
+    const t = await setup([], {
+      select: async ({ stop }) => {
+        await writeFile(continuousPaths(t.root).stop, "");
+        seen = stop();
+        return { batchId: null, targets: [] };
+      },
+    });
+    expect(await t.runner.run()).toBe("operator");
+    expect(seen).toBe(true);
+    expect(t.calls).toHaveLength(0);
   });
 });

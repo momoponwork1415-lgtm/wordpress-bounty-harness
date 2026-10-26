@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { createProviderCredentialEgressBroker } from "../../src/discovery/index.js";
+import { readDiscoveryOwners } from "../../src/infrastructure/lab-owner-record.js";
 import { openProviderCredentialProxy } from "../../src/discovery/index.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
@@ -140,6 +141,68 @@ describe("provider credential egress", () => {
     }
   });
 
+  it("records itself as the owner of its network and broker before creating them (#550)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-egress-"));
+    try {
+      const credentialFilePath = join(root, "credential");
+      const proxyBundleDirectory = join(root, "bundle");
+      const ownerDirectory = join(root, "discovery-owners");
+      await writeFile(credentialFilePath, randomBytes(32).toString("hex"), {
+        mode: 0o600,
+      });
+      await mkdir(proxyBundleDirectory);
+      await writeFile(
+        join(proxyBundleDirectory, "provider-credential-proxy-cli.js"),
+        "// fixture",
+      );
+      const grantId = "6f1c1f9e-2a7b-4c1e-9d55-0d6a3b2f8e11";
+      const network = `provider-egress-${grantId}`;
+      const container = `provider-egress-broker-${grantId}`;
+      /** What a sweep in another state directory would read at each creation. */
+      const ownedAtCreate: string[][] = [];
+      const broker = createProviderCredentialEgressBroker({
+        dockerExecutablePath: "/usr/bin/docker",
+        brokerImage: `node@${digest}`,
+        credentialFilePath,
+        scratchRootDirectory: root,
+        ownerDirectory,
+        proxyBundleDirectory,
+        clock,
+        randomUuid: () => grantId,
+        resolveProviderAddresses: async () => ["203.0.113.10"],
+        runDocker: async (args) => {
+          if (
+            (args[0] === "network" && args[1] === "create") ||
+            args[0] === "create"
+          )
+            ownedAtCreate.push(
+              [...(await readDiscoveryOwners(ownerDirectory)).live].sort(),
+            );
+          return {
+            exitCode: 0,
+            stdout: args[0] === "inspect" ? "172.28.0.2\n" : "",
+            stderr: "",
+          };
+        },
+      });
+      const result = await broker.withGrant(request, async () =>
+        [...(await readDiscoveryOwners(ownerDirectory)).live].sort(),
+      );
+      expect(ownedAtCreate).toEqual([[network], [container, network].sort()]);
+      expect(result.operation).toEqual({
+        status: "completed",
+        value: [container, network].sort(),
+      });
+      // Released once removed: nothing is left for a later sweep to skip.
+      expect(await readDiscoveryOwners(ownerDirectory)).toEqual({
+        live: new Set(),
+        dead: new Set(),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps provider credentials outside the agent grant and emits a bounded runsc receipt", async () => {
     const root = await mkdtemp(join(tmpdir(), "provider-egress-"));
     try {
@@ -161,6 +224,7 @@ describe("provider credential egress", () => {
         brokerImage: `node@${digest}`,
         credentialFilePath,
         scratchRootDirectory: root,
+        ownerDirectory: join(root, "discovery-owners"),
         proxyBundleDirectory,
         clock,
         resolveProviderAddresses: async () => ["203.0.113.10"],
@@ -364,6 +428,7 @@ describe("provider credential egress", () => {
         credentialFilePath,
         credentialKind: "anthropic-oauth",
         scratchRootDirectory: root,
+        ownerDirectory: join(root, "discovery-owners"),
         proxyBundleDirectory,
         clock,
         resolveProviderAddresses: async () => ["203.0.113.10"],

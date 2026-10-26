@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import {
@@ -145,6 +146,8 @@ async function harness(
     readonly limitOnCalls?: readonly number[];
     /** A completed child report survives a provider-limited Root Trial. */
     readonly childFindingOnLimitedCall?: boolean;
+    /** Provider calls (1-based) whose failed Root ends with a provider-ended, an aborted and a not-a-report child (#540). */
+    readonly endedChildrenOnCalls?: readonly number[];
     readonly failOnCalls?: readonly number[];
     /** Provider calls (1-based) the provider refuses without a usage limit. */
     readonly refuseOnCalls?: readonly number[];
@@ -721,6 +724,31 @@ async function harness(
                 }),
           };
         }
+        // The child receipts the runtime writes for each way a child ends without a report (#540).
+        const endedChildren =
+          options.endedChildrenOnCalls?.includes(call) === true
+            ? {
+                agentRuns: (
+                  [
+                    ["provider", "child-provider-error:server_overloaded"],
+                    ["interrupted", "child-turn-aborted"],
+                    ["schema", "child-final-message-not-report"],
+                  ] as const
+                ).map(([reason, reasonDetail]) => ({
+                  agentPath: `/root/child-${reason}`,
+                  receipt: createNativeRunReceipt({
+                    runId: `${run.runId}-child-${reason}`,
+                    targetSnapshotDigest: run.targetSnapshotDigest,
+                    profile: run.profile,
+                    terminal: "incomplete",
+                    reason,
+                    reasonDetail,
+                    startedAt: now,
+                    completedAt: now,
+                  }),
+                })),
+              }
+            : {};
         if (options.refuseOnCalls?.includes(call) === true) {
           const rootRollout =
             options.refusalSession === true
@@ -764,6 +792,7 @@ async function harness(
                     },
                   }),
             }),
+            ...endedChildren,
           };
         }
         if (options.failOnCalls?.includes(call) === true)
@@ -778,6 +807,7 @@ async function harness(
               startedAt: now,
               completedAt: now,
             }),
+            ...endedChildren,
           };
         const report = {
           findings:
@@ -3156,14 +3186,19 @@ describe("harness CLI vertical slice", () => {
   });
 
   it.each([
-    { failure: "refuseOnCalls", reason: "provider-refused" },
-    { failure: "failOnCalls", reason: "run-failed" },
+    { failure: "refuseOnCalls", reason: "provider-refused", children: false },
+    { failure: "failOnCalls", reason: "run-failed", children: false },
+    // #540: children that ended on the provider or an abort are recorded as
+    // such, and the Root's own end still decides the skip and the resume.
+    { failure: "refuseOnCalls", reason: "provider-refused", children: true },
+    { failure: "failOnCalls", reason: "run-failed", children: true },
   ] as const)(
-    "skips a target whose Trial hits $reason and starts the next target",
-    async ({ failure, reason }) => {
+    "skips a target whose Trial hits $reason and starts the next target (children $children)",
+    async ({ failure, reason, children }) => {
       const { run, configPath, prompts, ledger } = await harness({
         candidates: ["synthetic-plugin", "zz-next-plugin"],
         [failure]: [1],
+        ...(children ? { endedChildrenOnCalls: [1] } : {}),
         config: {
           promptId: undefined,
         },
@@ -3196,11 +3231,36 @@ describe("harness CLI vertical slice", () => {
         },
       ]);
       expect(ledger().read({ type: "campaign-stopped" })).toHaveLength(0);
+      const childEnds = ledger()
+        .read({ type: "discovery-run-finished", limit: 100 })
+        .flatMap(({ event }) =>
+          event.type === "discovery-run-finished" &&
+          event.runId.includes("-child-")
+            ? [[event.outcome, event.reason, event.providerLimit]]
+            : [],
+        );
+      expect(childEnds).toEqual(
+        children
+          ? [
+              ["failed", "provider", undefined],
+              ["failed", "interrupted", undefined],
+              ["failed", "schema", undefined],
+            ]
+          : [],
+      );
       // The skipped target is not resumed and its Trial is not replaced.
       const again = await run(...command);
       expect(again.code).toBe(0);
       expect(prompts).toHaveLength(2);
-      expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(2);
+      expect(
+        ledger()
+          .read({ type: "discovery-run-started", limit: 100 })
+          .filter(
+            ({ event }) =>
+              event.type === "discovery-run-started" &&
+              event.runKind !== "child",
+          ),
+      ).toHaveLength(2);
     },
   );
 
@@ -4033,6 +4093,70 @@ describe("harness CLI vertical slice", () => {
       );
   });
 
+  it("refuses a campaign id too long for the ledger identities before running (#281)", async () => {
+    const { run, configPath, ledger, prompts } = await harness();
+    const tooLong = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "c".repeat(41),
+      "--config",
+      configPath,
+    );
+    expect(tooLong.code).toBe(2);
+    expect(tooLong.stderr).toContain(
+      "--campaign must be at most 40 characters",
+    );
+    expect(prompts).toHaveLength(0);
+    // The longest accepted id still writes both per-snapshot identities.
+    const campaignId = "c".repeat(40);
+    const longest = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      campaignId,
+      "--config",
+      configPath,
+    );
+    if (longest.stderr) throw new Error(longest.stderr);
+    expect(longest.code).toBe(0);
+    for (const type of ["target-selected", "snapshot-frozen"] as const)
+      expect(
+        ledger()
+          .read({ campaignId, type })
+          .map(({ event }) => event.identity.length),
+      ).toEqual([128]);
+    expect(ledger().read({ type: "target-skipped" })).toHaveLength(0);
+  });
+
+  it("exits non-zero when every target was skipped (#281)", async () => {
+    const { run, configPath, ledger } = await harness({
+      candidates: ["broken-plugin", "synthetic-plugin"],
+      failFreeze: "broken-plugin",
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "broken-plugin",
+      "--campaign",
+      "campaign-all-skipped",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(1);
+    expect(campaign.stderr).toContain(
+      "skipped wporg:broken-plugin 9.9.9 at freeze",
+    );
+    expect(
+      ledger().read({
+        campaignId: "campaign-all-skipped",
+        type: "target-skipped",
+      }),
+    ).toHaveLength(1);
+  });
+
   it("records a source freeze failure during selection without leaking diagnostics", async () => {
     const { run, configPath, ledger, store } = await harness({
       candidates: ["broken-plugin", "synthetic-plugin"],
@@ -4558,6 +4682,185 @@ describe("harness CLI vertical slice", () => {
     expect(ledger().read({ campaignId: "campaign-old-bound" })).toHaveLength(1);
   });
 
+  it("drops a batch frozen under another policy on restart and selects its targets again (#302)", async () => {
+    const { run, root, profile, configPath, ledger, store } = await harness({
+      candidates: ["item-a", "item-b", "item-c"],
+      listingObservations: [
+        {
+          kind: "popular" as const,
+          page: 1,
+          sourceUrl:
+            "https://api.wordpress.org/plugins/info/1.2/?request%5Bbrowse%5D=popular",
+          checkedAt: now,
+          status: "available" as const,
+          observedAt: now,
+          contentDigest: sha("b"),
+        },
+      ],
+    });
+    const state = join(root, "state");
+    const { wordpressVersion } = JSON.parse(
+      await readFile(configPath, "utf8"),
+    ) as { wordpressVersion: string };
+    const manual = JSON.parse(
+      await readFile(join(root, "selection.json"), "utf8"),
+    ) as Record<string, unknown>;
+    delete manual.candidateSlugs;
+    delete manual.pinnedVersions;
+    const automatic = {
+      ...manual,
+      promptVariant: "wp2shell-bounty-v11",
+      revisitPolicy: { kind: "never" },
+      wordpressVersion,
+      maximumTargets: 3,
+      candidateSource: {
+        kind: "wordpress-org",
+        popularPages: 1,
+        tags: [],
+        pagesPerTag: 1,
+        perPage: 20,
+        maxCandidates: 20,
+        maxAgeDays: 1,
+      },
+    };
+    await mkdir(join(root, "policies"));
+    const policyPath = join(root, "policies", "selection.json");
+    await writeFile(policyPath, JSON.stringify(automatic));
+    (profile as { hostStatus?: unknown }).hostStatus = async () => ({
+      loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
+      programmeObservedAt: new Date(now),
+      freeBytes: 100 * 1024 ** 3,
+      legacyHistoryAvailable: true,
+      loginMarginMinutes: 60,
+    });
+    const batches = () => {
+      const byBatch = new Map<string, string[]>();
+      for (const { event } of ledger().read({
+        type: "target-selected",
+        limit: 100,
+      }))
+        if (
+          event.type === "target-selected" &&
+          event.campaignId.startsWith("selection-")
+        )
+          byBatch.set(event.campaignId, [
+            ...(byBatch.get(event.campaignId) ?? []),
+            event.selectionId,
+          ]);
+      return [...byBatch];
+    };
+    const discarded = () =>
+      ledger()
+        .read({ type: "selection-batch-discarded", limit: 100 })
+        .map(({ event }) => event);
+    // The first state change asks the runner to stop after its selection.
+    const runner = (...extra: string[]) =>
+      run(
+        "continuous",
+        "run",
+        "--config",
+        configPath,
+        "--selection",
+        policyPath,
+        "--notify",
+        `touch '${join(state, "continuous.stop")}'`,
+        ...extra,
+      );
+
+    // A runner stop seen while sources froze records no batch.
+    const stoppedSelection = await profile.select(
+      await openState(state, { clock: () => new Date(now) }),
+      { configPath: policyPath, minimum: 1, stop: () => true },
+    );
+    expect(stoppedSelection).toMatchObject({ batchId: null, selected: [] });
+    expect(batches()).toEqual([]);
+    // An unbound batch from an earlier start, under the earlier policy.
+    expect((await run("select", "--config", policyPath)).code).toBe(0);
+    const [[orphan, orphanTargets]] = batches() as [[string, string[]]];
+    expect(orphanTargets).toHaveLength(3);
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...automatic,
+        revisitPolicy: { kind: "version-increased" },
+      }),
+    );
+    const restarted = await runner();
+    expect(restarted.code).toBe(0);
+    expect(restarted.stdout).toContain(
+      `selection-batch-discarded batch=${orphan} campaign=prod-`,
+    );
+    expect(restarted.stdout).not.toContain("holding-error");
+    expect(discarded()).toEqual([
+      expect.objectContaining({
+        campaignId: orphan,
+        reason: "policy-changed",
+      }),
+    ]);
+    const [discard] = discarded();
+    if (discard?.type !== "selection-batch-discarded")
+      throw new Error("no discard event");
+    expect(discard.policyDigest).not.toBe(discard.currentPolicyDigest);
+    // Its targets started no Trial, so the fresh selection takes them again.
+    const [, [fresh, freshTargets]] = batches() as [
+      unknown,
+      [string, string[]],
+    ];
+    expect(new Set(freshTargets)).toEqual(new Set(orphanTargets));
+
+    // A memoised campaign bound to the fresh batch, restarted under a third policy.
+    const memo = JSON.parse(
+      await readFile(join(state, "continuous.json"), "utf8"),
+    ) as { campaignId: string };
+    const selected = ledger().read({
+      campaignId: fresh,
+      type: "target-selected",
+      limit: 100,
+    });
+    const reportDigest = selected[0]!.event.artifacts.find(
+      (artifact) => artifact.kind === "selection-report",
+    )!.digest;
+    const report = await store().readFile(
+      reportDigest,
+      "selection-report.json",
+      2 * 1024 * 1024,
+    );
+    if (report.status !== "resolved") throw new Error("report unavailable");
+    expect(
+      await ledger().append({
+        schemaVersion: 1,
+        identity: "memo-bound-batch",
+        campaignId: memo.campaignId,
+        snapshotDigest: selected[0]!.event.snapshotDigest,
+        occurredAt: now,
+        type: "selection-batch-bound",
+        selectionBatchId: fresh,
+        policyDigest: (
+          JSON.parse(report.bytes.toString("utf8")) as { policyDigest: string }
+        ).policyDigest,
+        selectionIds: freshTargets,
+        artifacts: [{ kind: "selection-report", digest: reportDigest }],
+      }),
+    ).toMatchObject({ status: "appended" });
+    await writeFile(
+      policyPath,
+      JSON.stringify({ ...automatic, maximumTargets: 4 }),
+    );
+    const resumed = await runner("--resume");
+    expect(resumed.code).toBe(0);
+    expect(resumed.stdout).toContain(
+      `selection-batch-discarded batch=${fresh} campaign=${memo.campaignId}`,
+    );
+    expect(resumed.stdout).not.toContain("holding-error");
+    expect(discarded().map((event) => event.campaignId)).toEqual([
+      orphan,
+      fresh,
+    ]);
+    expect((await run("continuous", "status")).stdout).not.toContain(
+      "last error",
+    );
+  });
+
   it("runs the continuous runner on the host status, stops it, and reports it", async () => {
     const { run, root, profile, configPath, ledger } = await harness();
     const state = join(root, "state");
@@ -4718,6 +5021,90 @@ describe("harness CLI vertical slice", () => {
     expect(listed.stdout).toContain(`wbh-${uuid}-wp`);
     expect(listed.stdout).toContain(`wbh-${uuid}-net`);
     expect(listed.stdout).toContain(`wbh-${uuid}-site`);
+  });
+
+  it("leaves the live discovery resources of a runner in another state directory to it (#550)", async () => {
+    const { run, root, profile, configPath, docker } = await harness();
+    const state = join(root, "state");
+    const { wordpressVersion } = JSON.parse(
+      await readFile(configPath, "utf8"),
+    ) as { wordpressVersion: string };
+    const policy = JSON.parse(
+      await readFile(join(root, "selection.json"), "utf8"),
+    ) as object;
+    await mkdir(join(root, "policies"));
+    await writeFile(
+      join(root, "policies", "selection.json"),
+      JSON.stringify({ ...policy, wordpressVersion }),
+    );
+    (profile as { hostStatus?: unknown }).hostStatus = async () => ({
+      loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
+      programmeObservedAt: new Date(now),
+      freeBytes: 100 * 1024 ** 3,
+      legacyHistoryAvailable: true,
+      loginMarginMinutes: 60,
+    });
+    // The other runner: a live process with its own state directory and no
+    // sweep-hold here. Its records sit in the host-wide directory.
+    const other = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+    try {
+      const pid = other.pid!;
+      const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+      const owner = {
+        pid,
+        bootId: (
+          await readFile("/proc/sys/kernel/random/boot_id", "utf8")
+        ).trim(),
+        startTicks: stat
+          .slice(stat.lastIndexOf(")") + 2)
+          .trim()
+          .split(/\s+/)[19]!,
+      };
+      const owners = join(root, "discovery-owners");
+      await mkdir(owners);
+      const record = (resource: string, recorded: unknown) =>
+        writeFile(
+          join(owners, `${resource}.json`),
+          JSON.stringify({ schemaVersion: 1, resource, owner: recorded }),
+        );
+      for (const resource of [
+        `codex-agent-${uuid}`,
+        `provider-egress-broker-${uuid}`,
+        `provider-egress-${uuid}`,
+      ])
+        await record(resource, owner);
+      // A run killed on an earlier boot: its owner is gone.
+      await record(`claude-agent-${uuid}`, {
+        pid: 1,
+        bootId: "previous-boot",
+        startTicks: "1",
+      });
+      const started = await run(
+        "continuous",
+        "run",
+        "--config",
+        configPath,
+        "--selection",
+        join(root, "policies", "selection.json"),
+        "--notify",
+        `touch '${join(state, "continuous.stop")}'`,
+      );
+      expect(started.code).toBe(0);
+      const removed = docker
+        .map(({ args }) => args)
+        .filter(
+          (args) =>
+            args[0] === "rm" ||
+            ((args[0] === "network" || args[0] === "volume") &&
+              args[1] === "rm"),
+        );
+      // Only the dead owner's container goes; the live runner keeps its three.
+      expect(removed).toEqual([["rm", "-f", `claude-agent-${uuid}`]]);
+      expect(existsSync(join(owners, `claude-agent-${uuid}.json`))).toBe(false);
+      expect(existsSync(join(owners, `codex-agent-${uuid}.json`))).toBe(true);
+    } finally {
+      other.kill("SIGKILL");
+    }
   });
 
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {
