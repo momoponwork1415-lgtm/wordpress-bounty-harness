@@ -215,19 +215,9 @@ export function createWordPressScopeFacts(options: {
   readonly store: PrivateArtifactStore;
 }): ScopeFactsProvider<WordpressScopeInput> {
   return {
-    async load({ ref, verification, humanObservation }) {
-      const humanObserved =
-        humanObservation !== undefined &&
-        humanObservation.result === "match" &&
-        humanObservation.verificationId === verification.verificationId &&
-        verification.result.status === "incomplete" &&
-        verification.result.reason === "awaiting-human-observation";
-      if (
-        !humanObserved &&
-        verification.result.status !== "runtime-confirmed" &&
-        verification.result.status !== "reproduced"
-      )
-        throw new Error("Scope facts need an evidence-backed verification");
+    async load({ ref, basis }) {
+      // Review's `scope` basis decided what counts; this only reads its records.
+      const { verification } = basis;
       const finding = options.ledger
         .read({
           campaignId: ref.campaignId,
@@ -289,7 +279,7 @@ export function createWordPressScopeFacts(options: {
           pinnedScenario.pluginSlug === target.slug);
       const latestVersionVerified =
         verification.basis?.kind === "latest-version";
-      if (humanObserved && verification.result.status === "incomplete") {
+      if (basis.kind === "human-observed") {
         const findingFile = finding.artifacts.find(
           (artifact) => artifact.kind === "finding",
         );
@@ -304,7 +294,7 @@ export function createWordPressScopeFacts(options: {
               );
         if (recorded?.status !== "resolved")
           throw new Error("Finding private record is unreadable");
-        const evidenceDigest = verification.result.evidenceDigest;
+        const evidenceDigest = basis.verification.result.evidenceDigest;
         const browser =
           evidenceDigest === undefined
             ? undefined
@@ -325,14 +315,9 @@ export function createWordPressScopeFacts(options: {
           ordinaryScenarioVerified,
         });
       }
-      if (
-        verification.result.status !== "runtime-confirmed" &&
-        verification.result.status !== "reproduced"
-      )
-        throw new Error("Scope facts need an evidence-backed verification");
       return wordpressScopeFacts({
         category: finding.category,
-        conditions: verification.result.conditions,
+        conditions: basis.verification.result.conditions,
         target,
         latestVersionVerified,
         ordinaryScenarioVerified,

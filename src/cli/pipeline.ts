@@ -18,7 +18,7 @@ import {
   type Ledger,
   type LedgerEventV1,
 } from "../ledger/index.js";
-import { humanReproducedBasis } from "../review/manual-observation.js";
+import { submissionBasis } from "../review/submission-basis.js";
 import { targetSelectionId, type TargetSelection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
 import { storeTargetSkipDiagnostic } from "./skip-diagnostic.js";
@@ -960,15 +960,18 @@ export async function reverifyOnSelectedVersion<
       (event) =>
         event.type === "verification-finished" &&
         event.snapshotDigest === finding.snapshotDigest &&
-        (event.result.status === "runtime-confirmed" ||
-          event.result.status === "reproduced" ||
-          // #525 (ADR 0040): a result a person observed and reproduced as `match`.
-          humanReproducedBasis(ledger, {
+        // A judge-era result, or (#525, ADR 0040) one a person observed and
+        // reproduced as `match`: the same basis `review scope` rests on.
+        submissionBasis(
+          ledger,
+          {
             campaignId: referenceCampaignId,
             findingId,
             verificationId: event.verificationId,
             snapshotDigest: event.snapshotDigest,
-          }) !== null),
+          },
+          "scope",
+        ).status === "basis",
     )
     .at(-1);
   if (observed === undefined && options.snapshotCampaignId !== undefined)
