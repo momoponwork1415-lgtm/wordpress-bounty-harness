@@ -50,12 +50,12 @@ export const configurationClassSchema = z
     z
       .literal("admin-authored-unsafe-content")
       .describe(
-        "An administrator must write the unsafe markup or script themselves.",
+        "An administrator must author the unsafe thing themselves: markup, script, a field or column definition, a query condition, a template or snippet that no typical site would create.",
       ),
     z
       .literal("admin-setting-change")
       .describe(
-        "An administrator must set an option to a value that creates the vulnerability, which a typical site would not choose.",
+        "An administrator must set an option to a value that creates the vulnerability or disables a safeguard (for example turning sanitisation off), which a typical site would not choose.",
       ),
     z
       .literal("developer-mode")
