@@ -13,7 +13,7 @@
 
 1. 探索エージェントへ渡すのは、固定source、人間が書いたtrust境界宣言、Programme Boundary、任意のLab、そして時点で切った対象の公開履歴（カタログ情報のみ）だけ。評価対象の答え（held-outのadvisory本文、原因箇所、PoC）と、評価runではheld-outの公開日以降の記録は渡さない。PoC、payload、他人の再現手順は本番でも渡さない（[ADR 0012](adr/0012-time-cut-known-vulnerability-history.md)）。
 2. 探索・検証はgVisor（`runsc`）の使い捨て環境でのみ対象を実行する。ホストで対象コードを実行しない。弱い隔離へ暗黙に切り替えない。外向き通信は認証ブローカー経由のprovider APIだけ。
-3. Harnessは判定器を持たない。確定の根拠は、名指しした人間が新しいreview Labで記録した `review observe` のmatchと `review decide --reproduced match` だけである。エージェントやrecipeの自己申告、捕捉を読んだだけの推定、AIが打った `review observe` / `--reproduced` は根拠にしない。リバースシェル・永続化・ホストアクセスを使わず、証明にもしない。新しい検証は `runtime-confirmed` を出さず、既存の `runtime-confirmed` は判定器があった時期の記録として読み続ける（2026-10-25 改訂、2026-10-26 に根拠を明記、[ADR 0040](adr/0040-human-lab-observation-replaces-judges.md)）。
+3. Harnessは判定器を持たない。確定の根拠は、名指しした人間が、記録後も残した検証Labか新しいreview Labで記録した `review observe` のmatchと `review decide --reproduced match` だけである（観測の場所は [ADR 0038 追記 12](adr/0038-verification-phases-and-submission-flow.md)）。エージェントやrecipeの自己申告、捕捉を読んだだけの推定、AIが打った `review observe` / `--reproduced` は根拠にしない。リバースシェル・永続化・ホストアクセスを使わず、証明にもしない。新しい検証は `runtime-confirmed` を出さず、既存の `runtime-confirmed` は判定器があった時期の記録として読み続ける（2026-10-25 改訂、2026-10-26 に根拠を明記、[ADR 0040](adr/0040-human-lab-observation-replaces-judges.md)）。
 4. 検証の失敗（環境・手順・観測・証拠の不足）は `incomplete` であり、`contradicted` にも棄却にもしない。
 5. 判定は、Findingと検証結果が同じTarget Snapshot digestを持つときだけ行う。digest不一致は `incomplete`。最新版への再検証では新しいSnapshotに結び付けたFindingを別に記録し、旧Findingへの由来だけを参照する。
 6. 人間の判断点は「提出前のレビュー」と「外部行動の承認」の2つ。対象選定の承認、未検証候補の採否はない。権限・対象範囲の拡張は人間の明示承認を要する。
