@@ -10,17 +10,13 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { isIP } from "node:net";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import {
   verifyCanonicalSourceTree,
   type ExpectedSourceTree,
 } from "../infrastructure/canonical-source-tree.js";
-import {
-  runNativeModelProcess,
-  type NativeModelProcessResult,
-} from "../infrastructure/native-model-process.js";
+import type { NativeModelProcessResult } from "../infrastructure/native-model-process.js";
 import { recordDiscoveryOwner } from "../infrastructure/lab-owner-record.js";
 import { stopDockerContainer } from "../infrastructure/stop-docker-container.js";
 import { CLAUDE_RUNNER_SOURCE } from "./claude-runner.js";
@@ -34,6 +30,18 @@ import {
   codexThreadIdSchema,
   isClaudeTranscriptPath,
 } from "./native-run-receipts.js";
+import {
+  GVISOR_ISOLATION,
+  admittedDockerName,
+  admittedLabHosts,
+  brokerGrantFault,
+  gvisorDockerClient,
+  gvisorRunArgs,
+  nonRootContainerUser,
+  type ContainerOption,
+  type DockerRun,
+  type GvisorContainer,
+} from "./gvisor-container.js";
 import type { ProviderCredentialEgressGrant } from "./provider-credential-egress-broker.js";
 import {
   SANDBOX_RESEARCH_MOUNT_PATH,
@@ -45,6 +53,8 @@ import {
 /** The same budget as a cooperative Codex Trial, so campaign memory math holds. */
 export const CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB =
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB;
+/** Two CPUs per Claude container, as before candidate 9; the Codex sandbox keeps one. */
+const CLAUDE_SANDBOX_CPUS = 2;
 const CLAUDE_CONFIG_MOUNT = "/tmp/claude";
 const MAX_TRANSCRIPT_FILES = 256;
 const MAX_TRANSCRIPT_BYTES = 60 * 1024 * 1024;
@@ -137,15 +147,6 @@ export interface ClaudeSandbox {
   ): Promise<ClaudeSandboxResult>;
 }
 
-type DockerRun = (
-  args: readonly string[],
-  stdin: string | undefined,
-  timeoutMs: number,
-  signal?: AbortSignal,
-  /** Values the docker client passes on by name, kept out of argv. */
-  hostEnvironment?: Readonly<Record<string, string>>,
-) => Promise<NativeModelProcessResult>;
-
 export interface GvisorClaudeSandboxOptions {
   readonly dockerExecutablePath: string;
   readonly image: string;
@@ -157,8 +158,6 @@ export interface GvisorClaudeSandboxOptions {
   /** Host-wide discovery owner records; tests isolate it (#550). */
   readonly ownerDirectory?: string;
 }
-
-const host = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 function admittedResumeSeed(
   seed: ClaudeSandboxResumeSeed,
@@ -241,17 +240,6 @@ async function collectTranscripts(
   return transcripts;
 }
 
-function nonRootUser(): string {
-  if (
-    typeof process.getuid !== "function" ||
-    typeof process.getgid !== "function" ||
-    process.getuid() <= 0 ||
-    process.getgid() <= 0
-  )
-    throw new Error("A non-root host user is required for the Claude sandbox");
-  return `${process.getuid()}:${process.getgid()}`;
-}
-
 export class GvisorClaudeSandbox implements ClaudeSandbox {
   readonly #options: GvisorClaudeSandboxOptions;
   readonly #user: string;
@@ -269,61 +257,37 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
     )
       throw new Error("Claude sandbox options are invalid");
     this.#options = options;
-    this.#user = nonRootUser();
+    this.#user = nonRootContainerUser("Claude sandbox");
   }
 
   #docker(secret?: string): DockerRun {
     return (
       this.#options.runDocker ??
-      ((args, stdin, timeoutMs, signal, hostEnvironment) =>
-        runNativeModelProcess({
-          executablePath: this.#options.dockerExecutablePath,
-          args,
-          ...(stdin === undefined ? {} : { stdin }),
-          workingDirectory: this.#options.scratchRootDirectory,
-          environment: {
-            PATH: process.env.PATH,
-            LANG: "C",
-            LC_ALL: "C",
-            TZ: "UTC",
-            ...hostEnvironment,
-          },
-          timeoutMs,
-          ...(signal === undefined ? {} : { signal }),
-          maxOutputBytes: this.#options.maxOutputBytes,
-          redact: (text) =>
-            secret === undefined ? text : text.split(secret).join("[REDACTED]"),
-        }))
+      gvisorDockerClient({
+        dockerExecutablePath: this.#options.dockerExecutablePath,
+        workingDirectory: this.#options.scratchRootDirectory,
+        maxOutputBytes: this.#options.maxOutputBytes,
+        ...(secret === undefined ? {} : { secret }),
+      })
     );
   }
 
-  #base(): string[] {
-    return [
-      "run",
-      "--rm",
-      "--pull=never",
-      "--runtime=runsc",
-      `--user=${this.#user}`,
-      "--read-only",
-      "--cap-drop=ALL",
-      "--security-opt=no-new-privileges",
-      "--pids-limit=256",
-      `--memory=${CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB}m`,
-      "--cpus=2",
-      "--tmpfs=/tmp:rw,nosuid,nodev,size=256m",
-    ];
+  #runArgs(
+    container: Pick<GvisorContainer, "entrypoint" | "command" | "agent">,
+  ): string[] {
+    return gvisorRunArgs({
+      user: this.#user,
+      memoryMiB: CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
+      cpus: CLAUDE_SANDBOX_CPUS,
+      image: this.#options.image,
+      ...container,
+    });
   }
 
   /** The Claude Code version the pinned image ships, with no network and no source. */
   async probe(): Promise<{ readonly cliVersion: string }> {
     const result = await this.#docker()(
-      [
-        ...this.#base(),
-        "--network=none",
-        "--entrypoint=claude",
-        this.#options.image,
-        "--version",
-      ],
+      this.#runArgs({ entrypoint: "claude", command: ["--version"] }),
       undefined,
       20_000,
     );
@@ -344,22 +308,11 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
     if (
       grant.protocol !== "anthropic-messages" ||
       grant.tls !== undefined ||
-      !/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(grant.baseUrl) ||
-      !/^Bearer [A-Za-z0-9_-]{32,}$/.test(grant.authorization) ||
-      !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(grant.dockerNetworkName) ||
-      (command.labHost !== undefined &&
-        (!host.test(command.labHost.name) ||
-          isIP(command.labHost.ipv4) !== 4)) ||
-      (command.databaseHost !== undefined &&
-        (command.labHost === undefined ||
-          !host.test(command.databaseHost.name) ||
-          isIP(command.databaseHost.ipv4) !== 4)) ||
-      (command.controlHost !== undefined &&
-        (command.labHost === undefined ||
-          !host.test(command.controlHost.name) ||
-          command.controlHost.name === command.labHost.name ||
-          command.controlHost.name === command.databaseHost?.name ||
-          isIP(command.controlHost.ipv4) !== 4)) ||
+      brokerGrantFault(grant) !== undefined ||
+      !admittedDockerName(grant.dockerNetworkName) ||
+      // Stricter than before candidate 9: a database host named like the Lab
+      // host is refused, as the Codex sandbox always did.
+      !admittedLabHosts(command) ||
       command.dependencyMounts.length > 33 ||
       !command.dependencyMounts.every((mount) =>
         isDependencyMountPath(mount.path),
@@ -420,55 +373,55 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       const { cliVersion } = await this.probe();
       const model = command.input.model;
       const subagentModel = command.subagentModel;
-      const args = [
-        ...this.#base(),
-        `--name=${containerName}`,
-        "--interactive",
-        `--network=${grant.dockerNetworkName}`,
-        ...[command.labHost, command.databaseHost, command.controlHost].flatMap(
-          (entry) =>
-            entry === undefined
-              ? []
-              : [`--add-host=${entry.name}:${entry.ipv4}`],
-        ),
-        ...verified.map(
-          (mount) =>
-            `--mount=type=bind,src=${mount.directory},dst=${mount.path},readonly`,
-        ),
-        `--mount=type=bind,src=${research},dst=${SANDBOX_RESEARCH_MOUNT_PATH}`,
-        `--mount=type=bind,src=${staging},dst=/opt/claude-support,readonly`,
-        `--mount=type=bind,src=${home},dst=${CLAUDE_CONFIG_MOUNT}`,
-        `--workdir=${SANDBOX_SOURCE_MOUNT_PATH}`,
-        "--env=HOME=/tmp",
-        `--env=CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_MOUNT}`,
-        `--env=ANTHROPIC_BASE_URL=${grant.baseUrl}`,
-        // A Trial-scoped grant the broker swaps for the owner's token; the
-        // docker client passes the value on by name so it stays out of argv.
-        "--env=ANTHROPIC_AUTH_TOKEN",
-        // The Root and its side requests name the Root model; every child
-        // names the subagent model. The broker admits exactly these two.
-        `--env=ANTHROPIC_MODEL=${model}`,
-        `--env=ANTHROPIC_DEFAULT_HAIKU_MODEL=${model}`,
-        `--env=ANTHROPIC_SMALL_FAST_MODEL=${model}`,
-        `--env=CLAUDE_CODE_SUBAGENT_MODEL=${subagentModel}`,
-        // Claude Code 2.1.257 and newer: a `model` the Root passes to the
-        // Agent tool does not override the subagent model.
-        "--env=CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1",
-        "--env=CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
-        "--env=DISABLE_AUTOUPDATER=1",
-        // The advisor is a server tool the broker refuses; keep Claude Code from offering it.
-        "--env=CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1",
-        // On a refusal Claude Code would switch the session to another model;
-        // the owner chose to stop there instead (2026-10-19). The broker still
-        // refuses any other model with 403 model-not-admitted.
-        "--env=CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1",
-        "--env=CLAUDE_CODE_NO_MODEL_FALLBACK=1",
-        // Claude Code's nested bubblewrap cannot run under runsc (owner, 2026-10-14).
-        "--env=CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0",
-        "--entrypoint=node",
-        this.#options.image,
-        "/opt/claude-support/runner.mjs",
-      ];
+      const mount = (
+        source: string,
+        target: string,
+        readonly: boolean,
+      ): ContainerOption => ({ mount: { source, target, readonly } });
+      const args = this.#runArgs({
+        agent: {
+          name: containerName,
+          network: grant.dockerNetworkName,
+          hosts: command,
+          options: [
+            ...verified.map(({ directory, path }) =>
+              mount(directory, path, true),
+            ),
+            mount(research, SANDBOX_RESEARCH_MOUNT_PATH, false),
+            mount(staging, "/opt/claude-support", true),
+            mount(home, CLAUDE_CONFIG_MOUNT, false),
+            { workdir: SANDBOX_SOURCE_MOUNT_PATH },
+            { env: "HOME", value: "/tmp" },
+            { env: "CLAUDE_CONFIG_DIR", value: CLAUDE_CONFIG_MOUNT },
+            { env: "ANTHROPIC_BASE_URL", value: grant.baseUrl },
+            // A Trial-scoped grant the broker swaps for the owner's token; the
+            // docker client passes the value on by name so it stays out of argv.
+            { env: "ANTHROPIC_AUTH_TOKEN" },
+            // The Root and its side requests name the Root model; every child
+            // names the subagent model. The broker admits exactly these two.
+            { env: "ANTHROPIC_MODEL", value: model },
+            { env: "ANTHROPIC_DEFAULT_HAIKU_MODEL", value: model },
+            { env: "ANTHROPIC_SMALL_FAST_MODEL", value: model },
+            { env: "CLAUDE_CODE_SUBAGENT_MODEL", value: subagentModel },
+            // Claude Code 2.1.257 and newer: a `model` the Root passes to the
+            // Agent tool does not override the subagent model.
+            { env: "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", value: "1" },
+            { env: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", value: "1" },
+            { env: "DISABLE_AUTOUPDATER", value: "1" },
+            // The advisor is a server tool the broker refuses; keep Claude Code from offering it.
+            { env: "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", value: "1" },
+            // On a refusal Claude Code would switch the session to another model;
+            // the owner chose to stop there instead (2026-10-19). The broker still
+            // refuses any other model with 403 model-not-admitted.
+            { env: "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", value: "1" },
+            { env: "CLAUDE_CODE_NO_MODEL_FALLBACK", value: "1" },
+            // Claude Code's nested bubblewrap cannot run under runsc (owner, 2026-10-14).
+            { env: "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", value: "0" },
+          ],
+        },
+        entrypoint: "node",
+        command: ["/opt/claude-support/runner.mjs"],
+      });
       // Before the container exists, so another runner's sweep never names it (#550).
       const owner = await recordDiscoveryOwner({
         resource: containerName,
@@ -549,7 +502,7 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         cliVersion,
         ...transcripts,
         ...notes,
-        isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
+        isolation: GVISOR_ISOLATION,
       };
     } finally {
       for (const directory of created)

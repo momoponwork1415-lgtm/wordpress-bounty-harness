@@ -9,7 +9,7 @@
 3. **owner-approved path**。`docs/adr/`、`docs/SPEC.md`、`trust-boundary-v1.md`、`policy/campaign.json`、`policy/programme-scope.md`、`programme-impacts.ts`、`judges.ts`、prompt 本文、`.claude/skills/` の本文。触っていれば `owner-approved` ラベルが付くまで merge しない。AI が委任で付けるときは、読んだ範囲と出典対照を PR comment に書く。
 4. **差分の大きさ**。追加 500 行以内。超えていれば分割を求める。
 5. **テスト**。公開 interface からの受入試験が 1 つ先にあるか（TEST-STRATEGY）。内部関数をなぞるだけのテストは数に入れない。
-6. **数字**。探索・配線・runtime・選定を触る PR は 3 Trial の表が要る（[measurement.md](measurement.md)）。無ければ Draft のまま「数字待ち」。
+6. **数字**。探索・配線・runtime・選定を触る PR は数字の表が要る。agent 入力は開発セット 6 case × 各 3 run と DEVELOPMENT §5 の 6 段、配線・runtime・選定は初回 3 Trial（[measurement.md](measurement.md)）。無ければ Draft のまま「数字待ち」。
 7. **CI**。required check 3 つが緑。strict ruleset なので base が古いと merge できない。
 
 ## 判定 comment の形

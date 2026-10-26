@@ -149,3 +149,12 @@ PR #537 のレビューで、再開（ADR 0036）が子の上限・最低時間�
 - 追記 3 より前の run には記録が無い。子の上限は当時の固定値 4 を使い、最低時間と wall は従来どおり今の設定から取る。
 - 目的文・Snapshot・runtime profile・Lab 予算が違えば拒否する規則（`prompt-version-differs` など）は変えない。
 - 消し方: この節と #548 の差分を戻す。再開はまた今の設定から組み直す。
+
+## 2026-10-26 追記 7: 本番の既定を `wide` にする（所有者決定）
+
+「帰結」の「本番の `src/profiles/wordpress/policy/campaign.json` は `deep` のまま」を改める。所有者は 2026-10-26 に、本番の既定を `wide` の `wp2shell-bounty-v14-wide` にすると決めた（ADR 0032 の 2026-10-26 追記 4、[監査](../reviews/2026-10-26-system-audit.md) 第 C.3 節と第 F.2 節）。
+
+- `campaign.json` は `discovery.mode: "wide"` と `promptId: "wp2shell-bounty-v14-wide"` にし、ほかの値（wall 120 分、`lab: none`、同時対象 1、Programme Boundary、WordPress の版）は変えない。最低時間は `wide` の既定の 0 になる。
+- `deep` の `wp2shell-bounty-v11` は名指しの Trial でだけ使う。campaign 設定の `discovery.mode` を `deep` にして回す。`discovery.mode` を省いたときの schema の既定は `deep` のままにする。
+- 選定方針の `promptVariant`（v11）は変えない。どちらの mode の現行 id でもよい（「決定」の節）。
+- 消し方: `campaign.json` の 2 つの値を `deep` と v11 に戻し、この節を消す。

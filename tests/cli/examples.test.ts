@@ -23,7 +23,7 @@ const example = async (file: string, version = "3.3.1"): Promise<unknown> =>
     ),
   ) as unknown;
 
-it("starts the checked-in v11 campaign with one concurrent target on WordPress 7.1.3", async () => {
+it("starts the checked-in wide v14 campaign with one concurrent target on WordPress 7.1.3 (owner decision 2026-10-26)", async () => {
   const source = JSON.parse(
     await readFile(
       join(
@@ -41,7 +41,7 @@ it("starts the checked-in v11 campaign with one concurrent target on WordPress 7
   ) as unknown;
   const config = wordpressCampaignConfigSchema.parse(source);
   expect(config).toMatchObject({
-    promptId: "wp2shell-bounty-v11",
+    promptId: "wp2shell-bounty-v14-wide",
     runWallTimeMinutes: 120,
   });
   expect(config.resources.maxConcurrentTargets).toBe(1);
@@ -53,13 +53,24 @@ it("starts the checked-in v11 campaign with one concurrent target on WordPress 7
   });
   expect(config.discovery).toMatchObject({
     maxChildren: 4,
-    minimumActiveMinutes: 60,
+    minimumActiveMinutes: 0,
   });
-  expect(config.discovery.mode).toBe("deep");
+  expect(config.discovery.mode).toBe("wide");
+  // deep v11 stays available for named Trials: the same file in deep mode still parses.
   expect(
     wordpressCampaignConfigSchema.parse({
       ...(source as object),
-      discovery: { lab: "attached" },
+      discovery: { lab: "none", mode: "deep" },
+      promptId: "wp2shell-bounty-v11",
+    }),
+  ).toMatchObject({
+    promptId: "wp2shell-bounty-v11",
+    discovery: { mode: "deep", minimumActiveMinutes: 60 },
+  });
+  expect(
+    wordpressCampaignConfigSchema.parse({
+      ...(source as object),
+      discovery: { lab: "attached", mode: "wide" },
     }).discovery.lab,
   ).toEqual({ mode: "attached", maxResets: 2, maxObservations: 20 });
   for (const [maxConcurrentTargets, accepted] of [

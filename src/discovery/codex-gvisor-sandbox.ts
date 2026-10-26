@@ -13,7 +13,6 @@ import {
 } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { isIP } from "node:net";
 
 import { z } from "zod";
 
@@ -25,14 +24,23 @@ import { canonicalJson } from "../infrastructure/canonical-json.js";
 import { recordDiscoveryOwner } from "../infrastructure/lab-owner-record.js";
 import { stopDockerContainer } from "../infrastructure/stop-docker-container.js";
 
-import {
-  runNativeModelProcess,
-  type NativeModelProcessResult,
-} from "../infrastructure/native-model-process.js";
+import type { NativeModelProcessResult } from "../infrastructure/native-model-process.js";
 import {
   BROKER_TLS_HOSTNAME,
   CHATGPT_PLACEHOLDER_ACCOUNT_ID,
 } from "./provider-credential-proxy.js";
+import {
+  GVISOR_ISOLATION,
+  admittedDockerName,
+  admittedLabHosts,
+  brokerGrantFault,
+  gvisorDockerClient,
+  gvisorRunArgs,
+  nonRootContainerUser,
+  type ContainerOption,
+  type DockerRun,
+  type GvisorContainer,
+} from "./gvisor-container.js";
 import type {
   CodexSandbox,
   CodexSandboxCommand,
@@ -56,12 +64,16 @@ import {
 export const CODEX_SANDBOX_MEMORY_MIB = 2048;
 /** A cooperative Trial keeps the Root and up to four CLI children in one sandbox. */
 export const CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB = 10240;
+/** One CPU per Codex container, as before candidate 9; the Claude sandbox keeps two. */
+const CODEX_SANDBOX_CPUS = 1;
 
 const imageSchema = z
   .string()
   .regex(/^(?:sha256:[a-f0-9]{64}|[^\s@]+@sha256:[a-f0-9]{64})$/);
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-const networkSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
+const networkSchema = z
+  .string()
+  .refine(admittedDockerName, "Docker name is invalid");
 const uuidSchema = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -605,13 +617,6 @@ export interface GvisorCodexSandboxOptions {
   readonly ownerDirectory?: string;
 }
 
-type DockerRun = (
-  args: readonly string[],
-  stdin: string | undefined,
-  timeoutMs: number,
-  signal?: AbortSignal,
-) => Promise<NativeModelProcessResult>;
-
 const base64url = (value: unknown) =>
   Buffer.from(JSON.stringify(value)).toString("base64url");
 
@@ -651,18 +656,6 @@ function grantLogin(grantToken: string, now: Date, expiresAt: string): string {
   });
 }
 
-function nonRootUser(): string {
-  if (
-    typeof process.getuid !== "function" ||
-    typeof process.getgid !== "function" ||
-    process.getuid() <= 0 ||
-    process.getgid() <= 0
-  ) {
-    throw new Error("A non-root host user is required for the Codex sandbox");
-  }
-  return `${process.getuid()}:${process.getgid()}`;
-}
-
 export class GvisorCodexSandbox implements CodexSandbox {
   readonly #options: GvisorCodexSandboxOptions;
   readonly #user: string;
@@ -689,7 +682,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
     }
     imageSchema.parse(options.image);
     this.#options = options;
-    this.#user = nonRootUser();
+    this.#user = nonRootContainerUser("Codex sandbox");
   }
 
   /** Measures the image's CLI version and bundled catalog, with no network and no source. */
@@ -705,15 +698,8 @@ export class GvisorCodexSandbox implements CodexSandbox {
   async #probe(
     runDocker: DockerRun,
   ): Promise<{ cliVersion: string; bundledCatalogDigest: string }> {
-    const base = this.#base();
     const versionResult = await runDocker(
-      [
-        ...base,
-        "--network=none",
-        "--entrypoint=codex",
-        this.#options.image,
-        "--version",
-      ],
+      this.#runArgs({ entrypoint: "codex", command: ["--version"] }),
       undefined,
       20_000,
     );
@@ -726,13 +712,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
     if (match?.[1] === undefined)
       throw new Error("Codex CLI version is invalid");
     const catalogResult = await runDocker(
-      [
-        ...base,
-        "--network=none",
-        "--entrypoint=sha256sum",
-        this.#options.image,
-        this.#options.bundledCatalogPath,
-      ],
+      this.#runArgs({
+        entrypoint: "sha256sum",
+        command: [this.#options.bundledCatalogPath],
+      }),
       undefined,
       20_000,
     );
@@ -750,47 +733,25 @@ export class GvisorCodexSandbox implements CodexSandbox {
   #docker(workingDirectory: string, secret?: string): DockerRun {
     return (
       this.#options.runDocker ??
-      ((
-        args: readonly string[],
-        stdin: string | undefined,
-        timeoutMs: number,
-        signal?: AbortSignal,
-      ) =>
-        runNativeModelProcess({
-          executablePath: this.#options.dockerExecutablePath,
-          args,
-          ...(stdin === undefined ? {} : { stdin }),
-          workingDirectory,
-          environment: {
-            PATH: process.env.PATH,
-            LANG: "C",
-            LC_ALL: "C",
-            TZ: "UTC",
-          },
-          timeoutMs,
-          ...(signal === undefined ? {} : { signal }),
-          maxOutputBytes: this.#options.maxOutputBytes,
-          redact: (text) =>
-            secret === undefined ? text : text.split(secret).join("[REDACTED]"),
-        }))
+      gvisorDockerClient({
+        dockerExecutablePath: this.#options.dockerExecutablePath,
+        workingDirectory,
+        maxOutputBytes: this.#options.maxOutputBytes,
+        ...(secret === undefined ? {} : { secret }),
+      })
     );
   }
 
-  #base(): string[] {
-    return [
-      "run",
-      "--rm",
-      "--pull=never",
-      "--runtime=runsc",
-      `--user=${this.#user}`,
-      "--read-only",
-      "--cap-drop=ALL",
-      "--security-opt=no-new-privileges",
-      "--pids-limit=256",
-      `--memory=${this.#options.memoryMiB ?? CODEX_SANDBOX_MEMORY_MIB}m`,
-      "--cpus=1",
-      "--tmpfs=/tmp:rw,nosuid,nodev,size=256m",
-    ];
+  #runArgs(
+    container: Pick<GvisorContainer, "entrypoint" | "command" | "agent">,
+  ): string[] {
+    return gvisorRunArgs({
+      user: this.#user,
+      memoryMiB: this.#options.memoryMiB ?? CODEX_SANDBOX_MEMORY_MIB,
+      cpus: CODEX_SANDBOX_CPUS,
+      image: this.#options.image,
+      ...container,
+    });
   }
 
   async execute(
@@ -799,37 +760,14 @@ export class GvisorCodexSandbox implements CodexSandbox {
   ): Promise<CodexSandboxResult> {
     networkSchema.parse(command.grant.dockerNetworkName);
     const tls = command.grant.tls;
-    if (
-      tls === undefined
-        ? !/^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:8080$/.test(command.grant.baseUrl)
-        : tls.hostname !== BROKER_TLS_HOSTNAME ||
-          command.grant.baseUrl !== `https://${BROKER_TLS_HOSTNAME}:8080` ||
-          isIP(tls.address) !== 4 ||
-          !/^-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]+-----END CERTIFICATE-----\n$/.test(
-            tls.caPem,
-          )
-    ) {
+    const grantFault = brokerGrantFault(command.grant);
+    if (grantFault === "address")
       throw new Error("Provider broker address is invalid");
-    }
-    if (!/^Bearer [A-Za-z0-9_-]{32,}$/.test(command.grant.authorization)) {
+    if (grantFault === "authorization")
       throw new Error("Provider grant is invalid");
-    }
     if (
       command.executable !== "codex" ||
-      (command.labHost !== undefined &&
-        (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.labHost.name) ||
-          isIP(command.labHost.ipv4) !== 4)) ||
-      (command.databaseHost !== undefined &&
-        (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.databaseHost.name) ||
-          command.labHost === undefined ||
-          command.databaseHost.name === command.labHost.name ||
-          isIP(command.databaseHost.ipv4) !== 4)) ||
-      (command.controlHost !== undefined &&
-        (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(command.controlHost.name) ||
-          command.labHost === undefined ||
-          command.controlHost.name === command.labHost.name ||
-          command.controlHost.name === command.databaseHost?.name ||
-          isIP(command.controlHost.ipv4) !== 4)) ||
+      !admittedLabHosts(command) ||
       command.sourceMount.mode !== "ro" ||
       command.sourceMount.path !== SANDBOX_SOURCE_MOUNT_PATH ||
       !isAbsolute(command.sourceMount.directory) ||
@@ -952,7 +890,6 @@ export class GvisorCodexSandbox implements CodexSandbox {
     networkSchema.parse(containerName);
     const token = command.grant.authorization.replace(/^Bearer /, "");
     const runDocker = this.#docker(scratchRoot, token);
-    const base = this.#base();
     let markerPath: string | undefined;
     try {
       await writeFile(
@@ -1011,72 +948,68 @@ export class GvisorCodexSandbox implements CodexSandbox {
         );
         markerPath = path;
       }
-      const args = [
-        ...base,
-        `--name=${containerName}`,
-        // The prompt arrives on stdin.
-        "--interactive",
-        `--network=${command.grant.dockerNetworkName}`,
-        ...(command.labHost === undefined
-          ? []
-          : [`--add-host=${command.labHost.name}:${command.labHost.ipv4}`]),
-        ...(command.databaseHost === undefined
-          ? []
-          : [
-              `--add-host=${command.databaseHost.name}:${command.databaseHost.ipv4}`,
-            ]),
-        ...(command.controlHost === undefined
-          ? []
-          : [
-              `--add-host=${command.controlHost.name}:${command.controlHost.ipv4}`,
-            ]),
-        `--mount=type=bind,src=${source},dst=${SANDBOX_SOURCE_MOUNT_PATH},readonly`,
-        ...(dependency === undefined
-          ? []
-          : [
-              `--mount=type=bind,src=${dependency.directory},dst=${dependency.path},readonly`,
-            ]),
-        ...additionalDependencies.map(
-          (mount) =>
-            `--mount=type=bind,src=${mount.directory},dst=${mount.path},readonly`,
-        ),
-        ...(researchDirectory === undefined
-          ? []
-          : [
-              `--mount=type=bind,src=${researchDirectory},dst=${SANDBOX_RESEARCH_MOUNT_PATH}`,
-            ]),
-
-        `--mount=type=bind,src=${staging},dst=/opt/codex-support,readonly`,
-        `--workdir=${SANDBOX_SOURCE_MOUNT_PATH}`,
-        "--env=HOME=/tmp",
-        "--env=CODEX_HOME=/tmp/codex",
-        `--mount=type=bind,src=${codexHome},dst=/tmp/codex`,
-        ...(tls === undefined
-          ? [`--env=OPENAI_API_KEY=${token}`]
-          : [
-              `--add-host=${BROKER_TLS_HOSTNAME}:${tls.address}`,
-              "--env=CODEX_CA_CERTIFICATE=/opt/codex-support/grant-ca.pem",
-            ]),
-        `--entrypoint=${command.minimumActiveMs === undefined ? "codex" : "node"}`,
-        this.#options.image,
-        ...(command.minimumActiveMs === undefined
-          ? command.args
-          : [
-              "/opt/codex-support/minimum-active-runner.mjs",
-              String(command.minimumActiveMs),
-              JSON.stringify(command.args),
-              JSON.stringify(command.resumeArgs),
-              command.resumePrompt!,
-              ...(command.resume === undefined
-                ? []
-                : [
-                    command.resume.threadId,
-                    ...(command.resumeNotice === undefined
-                      ? []
-                      : [Buffer.from(command.resumeNotice).toString("base64")]),
-                  ]),
-            ]),
-      ];
+      const readonly = (source: string, target: string): ContainerOption => ({
+        mount: { source, target, readonly: true },
+      });
+      const writable = (source: string, target: string): ContainerOption => ({
+        mount: { source, target, readonly: false },
+      });
+      const args = this.#runArgs({
+        agent: {
+          name: containerName,
+          network: command.grant.dockerNetworkName,
+          hosts: command,
+          options: [
+            readonly(source, SANDBOX_SOURCE_MOUNT_PATH),
+            ...(dependency === undefined
+              ? []
+              : [readonly(dependency.directory, dependency.path)]),
+            ...additionalDependencies.map((mount) =>
+              readonly(mount.directory, mount.path),
+            ),
+            ...(researchDirectory === undefined
+              ? []
+              : [writable(researchDirectory, SANDBOX_RESEARCH_MOUNT_PATH)]),
+            readonly(staging, "/opt/codex-support"),
+            { workdir: SANDBOX_SOURCE_MOUNT_PATH },
+            { env: "HOME", value: "/tmp" },
+            { env: "CODEX_HOME", value: "/tmp/codex" },
+            writable(codexHome, "/tmp/codex"),
+            ...(tls === undefined
+              ? [{ env: "OPENAI_API_KEY", value: token }]
+              : [
+                  { host: { name: BROKER_TLS_HOSTNAME, ipv4: tls.address } },
+                  {
+                    env: "CODEX_CA_CERTIFICATE",
+                    value: "/opt/codex-support/grant-ca.pem",
+                  },
+                ]),
+          ],
+        },
+        entrypoint: command.minimumActiveMs === undefined ? "codex" : "node",
+        command:
+          command.minimumActiveMs === undefined
+            ? command.args
+            : [
+                "/opt/codex-support/minimum-active-runner.mjs",
+                String(command.minimumActiveMs),
+                JSON.stringify(command.args),
+                JSON.stringify(command.resumeArgs),
+                command.resumePrompt!,
+                ...(command.resume === undefined
+                  ? []
+                  : [
+                      command.resume.threadId,
+                      ...(command.resumeNotice === undefined
+                        ? []
+                        : [
+                            Buffer.from(command.resumeNotice).toString(
+                              "base64",
+                            ),
+                          ]),
+                    ]),
+              ],
+      });
       let result: NativeModelProcessResult;
       // Before the container exists, so another runner's sweep never names it (#550).
       const owner = await recordDiscoveryOwner({
@@ -1159,7 +1092,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
         cliVersion,
         bundledCatalogDigest,
         ...captured,
-        isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
+        isolation: GVISOR_ISOLATION,
       };
     } finally {
       await rm(staging, { recursive: true, force: true });
@@ -1246,7 +1179,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
         cliVersion: marker.cliVersion,
         bundledCatalogDigest: marker.bundledCatalogDigest,
         ...captured,
-        isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
+        isolation: GVISOR_ISOLATION,
       },
       discard: async () => {
         for (const directory of directories)
