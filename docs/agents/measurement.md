@@ -1,10 +1,10 @@
 # 計測の手順（AI 向け）
 
-DEVELOPMENT §5 の「探索に触る PR は開発セットで最低 3 Trial の数字を貼る」を、AI が自分で回すための手順。正本は [DEVELOPMENT](../DEVELOPMENT.md) §5 と [SPEC](../SPEC.md) §6〜§7。規則は足さない。
+DEVELOPMENT §5 の「探索に触る PR は数字を貼る」（agent 入力は開発セット 6 case × 各 3 run の 6 段、所有者決定 2026-10-26）を、AI が自分で回すための手順。正本は [DEVELOPMENT](../DEVELOPMENT.md) §5 と [SPEC](../SPEC.md) §6〜§7。規則は足さない。
 
 ## いつ使うか
 
-- agent 入力（prompt、skill、Harness 生成の節）を変える PR → 再発見 case で 3 Trial。
+- agent 入力（prompt、skill、Harness 生成の節）を変える PR → 開発セット 6 case を各 3 run（18 Trial）。採否は DEVELOPMENT §5 の 6 段。
 - 配線・runtime・選定を変える PR → 異なる slug 3 件の初回 Trial（runner が回すのと同じ経路）。
 - どちらも本番の分母に混ぜない。campaign ID に branch 名か用途を入れる。
 
