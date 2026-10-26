@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 import { canonicalJson } from "../../../infrastructure/canonical-json.js";
@@ -17,6 +19,11 @@ import { AUTHORED_HTTP_FILE, PROXY_CAPTURE_FILE } from "./http-evidence.js";
 /** The Lab browser's record of the declared victim pages; read by `review export`. */
 export const LAB_BROWSER_OBSERVATION_FILE = "lab-browser-observation.json";
 export const VICTIM_SCREEN_FILE = "victim-screen.png";
+/** Opted-in WebM of a visit's first page (#549), `victim-visit-<n>.webm`. */
+const victimVideoFile = (visitIndex: number) =>
+  `victim-visit-${visitIndex + 1}.webm`;
+const sha256 = (bytes: Uint8Array) =>
+  `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 
 const markerSchema = z.strictObject({ marker: z.string().regex(/^\d+$/) });
 const routeSchema = z.looseObject({
@@ -48,11 +55,14 @@ const missingCapture = (nextStep: string): AttemptObservation => ({
  * the recorder's capture from `setup-done` on, the Verifier's own `http.json`
  * beside it, and, when `route.json` declares victim pages, what the Lab
  * browser saw there. Nothing here decides whether the Finding holds; a person
- * reads these records and reproduces in a review Lab.
+ * reads these records and reproduces in a review Lab. With `recordVideo`
+ * (`WBH_RECORD_VIDEO=1`, #549) each visit's WebM joins them, named with its
+ * sha256 in `lab-browser-observation.json`; the ledger keeps only the digest.
  */
 export function createWordPressAttemptObserver(options: {
   readonly store: PrivateArtifactStore;
   readonly lab: Pick<WordPressLab, "readCapture" | "observeVictimPages">;
+  readonly recordVideo?: boolean;
 }): AttemptObserver<WordPressFinding, WordPressLabHandle> {
   const { store } = options;
   return {
@@ -85,7 +95,11 @@ export function createWordPressAttemptObserver(options: {
       const browser =
         victim === undefined
           ? undefined
-          : await options.lab.observeVictimPages(lab, victim);
+          : await options.lab.observeVictimPages(
+              lab,
+              victim,
+              options.recordVideo === true ? { recordVideo: true } : {},
+            );
       const bound = {
         schemaVersion: 1,
         observerId: "wordpress-lab-browser",
@@ -102,6 +116,9 @@ export function createWordPressAttemptObserver(options: {
                   status: "visit-failed",
                   phase: browser.phase,
                   failureCode: browser.failureCode ?? "browser-visit",
+                  ...(browser.files === undefined
+                    ? {}
+                    : { files: browser.files }),
                 }),
                 ...(browser.privateDiagnostic === undefined
                   ? {}
@@ -113,6 +130,16 @@ export function createWordPressAttemptObserver(options: {
                   status: "visited",
                   victimRole: browser.victimRole,
                   visits: victim?.paths.length ?? 0,
+                  ...(browser.videos === undefined
+                    ? {}
+                    : {
+                        videos: browser.videos.map(({ visitIndex, video }) => ({
+                          visitIndex,
+                          file: victimVideoFile(visitIndex),
+                          size: video.length,
+                          sha256: sha256(video),
+                        })),
+                      }),
                   ...(browser.dialog === undefined
                     ? {}
                     : {
@@ -122,6 +149,9 @@ export function createWordPressAttemptObserver(options: {
                           event: browser.dialog.event,
                         },
                       }),
+                  ...(browser.files === undefined
+                    ? {}
+                    : { files: browser.files }),
                 }),
                 ...(browser.dialog === undefined
                   ? {}
@@ -138,6 +168,12 @@ export function createWordPressAttemptObserver(options: {
                         browser.victimBrowserDiagnostic,
                       ),
                     }),
+                ...Object.fromEntries(
+                  (browser.videos ?? []).map(({ visitIndex, video }) => [
+                    victimVideoFile(visitIndex),
+                    video,
+                  ]),
+                ),
               };
       return {
         status: "recorded",

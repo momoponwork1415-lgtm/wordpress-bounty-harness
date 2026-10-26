@@ -149,6 +149,7 @@ export interface WordPressLab extends LabProvisioner<
   observeVictimPages(
     handle: WordPressLabHandle,
     victim: WordPressVictimRoute,
+    options?: { readonly recordVideo?: boolean },
   ): Promise<WordPressVictimPagesObservation>;
   /**
    * Reads the whole site state (options, users with roles, per-table row counts
@@ -674,11 +675,11 @@ export function openWordPressLab(options: {
         ? observe.labUnreachable(handle)
         : observe.probe(lab);
     },
-    async observeVictimPages(handle, victim) {
+    async observeVictimPages(handle, victim, options) {
       const lab = sessionFor(handle);
       return lab === undefined
         ? { status: "unavailable", phase: "victim-page" }
-        : observe.observeVictimPages(lab, victim);
+        : observe.observeVictimPages(lab, victim, options);
     },
   };
 }

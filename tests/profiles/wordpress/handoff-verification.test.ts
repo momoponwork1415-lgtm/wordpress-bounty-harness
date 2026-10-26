@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +27,7 @@ import {
 } from "../../../src/profiles/wordpress/scope-policy.js";
 import { observedReviewLabPackage } from "../../../src/profiles/wordpress/lab/observed-review-lab.js";
 import { createWordPressAttemptObserver } from "../../../src/profiles/wordpress/verification/attempt-observer.js";
+import { victimFile } from "../../../src/profiles/wordpress/lab/victim-files.js";
 import {
   HandoffVerifier,
   WBH_VERIFY_SKILL_ID,
@@ -60,6 +62,10 @@ type LabState = {
 const PNG = Buffer.concat([
   Buffer.from("89504e470d0a1a0a", "hex"),
   Buffer.from("synthetic screen"),
+]);
+const WEBM = Buffer.concat([
+  Buffer.from("1a45dfa3", "hex"),
+  Buffer.from("synthetic recording"),
 ]);
 const MARKER = "4815162342";
 
@@ -159,6 +165,8 @@ type Scenario = {
   readonly beforeFiles?: (lab: { readonly url: string }) => Promise<void>;
   /** A latest-version attempt, as `review reverify` records it for scope. */
   readonly ordinaryLatestVersion?: boolean;
+  /** The operator's `WBH_RECORD_VIDEO=1` (#549). */
+  readonly recordVideo?: boolean;
 };
 
 /** The skill's side: setup as the administrator, `setup-done`, then the attacker route. */
@@ -297,6 +305,9 @@ async function verifyThroughHandoff(
           return ok(
             JSON.stringify({
               screenshotBase64: PNG.toString("base64"),
+              ...(args.includes("WBH_RECORD_VIDEO=1")
+                ? { videoBase64: WEBM.toString("base64") }
+                : {}),
               ...(marker === undefined
                 ? {}
                 : {
@@ -377,7 +388,11 @@ async function verifyThroughHandoff(
     ledger,
     store,
     lab,
-    observer: createWordPressAttemptObserver({ store, lab }),
+    observer: createWordPressAttemptObserver({
+      store,
+      lab,
+      ...(scenario.recordVideo === true ? { recordVideo: true } : {}),
+    }),
     readFinding: readWordPressFinding,
     promptVersion: WBH_VERIFY_SKILL_ID,
     // The same composition as `verify next --handoff` in the CLI host.
@@ -543,6 +558,68 @@ describe("handoff verification through the real transport and observer (#525)", 
     expect(result).toMatchObject({ status: "incomplete", reason: "evidence" });
   });
 
+  it("keeps the opted-in victim WebM in Private Evidence with its sha256, and only the digest in the ledger (#549)", async () => {
+    const { result, event, store } = await verifyThroughHandoff({
+      impact: "stored-xss",
+      recordVideo: true,
+      victim: {
+        role: "administrator",
+        paths: ["/wp-admin/edit-comments.php"],
+        dialogMarker: MARKER,
+      },
+    });
+    expect(result).toMatchObject(AWAITING);
+    if (result.status !== "incomplete" || result.evidenceDigest === undefined)
+      throw new Error("No evidence was recorded");
+    const record = await store.readJson(
+      result.evidenceDigest,
+      "lab-browser-observation.json",
+      (await import("zod")).z.looseObject({}),
+      64 * 1024,
+    );
+    expect(record).toMatchObject({
+      status: "resolved",
+      value: {
+        status: "visited",
+        videos: [
+          {
+            visitIndex: 0,
+            file: "victim-visit-1.webm",
+            size: WEBM.length,
+            sha256: `sha256:${createHash("sha256").update(WEBM).digest("hex")}`,
+          },
+        ],
+      },
+    });
+    const video = await store.readFile(
+      result.evidenceDigest,
+      "victim-visit-1.webm",
+      1024 * 1024,
+    );
+    expect(video.status === "resolved" && video.bytes.equals(WEBM)).toBe(true);
+    expect(JSON.stringify(event)).not.toContain(WEBM.toString("base64"));
+
+    // Without the opt-in no video is recorded.
+    const plain = await verifyThroughHandoff({
+      impact: "stored-xss",
+      victim: { role: "administrator", paths: ["/wp-admin/edit-comments.php"] },
+    });
+    if (
+      plain.result.status !== "incomplete" ||
+      plain.result.evidenceDigest === undefined
+    )
+      throw new Error("No evidence was recorded");
+    expect(
+      (
+        await plain.store.readFile(
+          plain.result.evidenceDigest,
+          "victim-visit-1.webm",
+          1024 * 1024,
+        )
+      ).status,
+    ).not.toBe("resolved");
+  });
+
   it("has the Lab browser record the victim pages' marker dialog without deciding (stored XSS)", async () => {
     const { result, event, store, state } = await verifyThroughHandoff({
       impact: "stored-xss",
@@ -585,6 +662,60 @@ describe("handoff verification through the real transport and observer (#525)", 
       role: "administrator",
       firing: "observed",
       screenshot: expect.stringContaining("victim-page-after-dialog.png"),
+    });
+  });
+
+  it("records which Harness fixture the Lab browser put into the victim's file input (#468)", async () => {
+    const { result, store, state } = await verifyThroughHandoff({
+      impact: "stored-xss",
+      victim: {
+        role: "administrator",
+        paths: [
+          {
+            path: "/wp-admin/upload.php?page=replace",
+            actions: [
+              {
+                kind: "set-file",
+                selector: "#userfile",
+                fixture: "image-jpeg",
+              },
+              { kind: "click", selector: "#submit" },
+            ],
+          },
+          "/wp-admin/upload.php",
+        ],
+        dialogMarker: MARKER,
+      },
+    });
+    expect(result).toMatchObject(AWAITING);
+    expect(state.visits).toEqual([
+      "/wp-admin/upload.php?page=replace",
+      "/wp-admin/upload.php",
+    ]);
+    if (result.status !== "incomplete" || result.evidenceDigest === undefined)
+      throw new Error("No evidence was recorded");
+    const jpeg = victimFile("image-jpeg");
+    const record = await store.readJson(
+      result.evidenceDigest,
+      "lab-browser-observation.json",
+      (await import("zod")).z.looseObject({}),
+      64 * 1024,
+    );
+    expect(record).toMatchObject({
+      status: "resolved",
+      value: {
+        status: "visited",
+        files: [
+          {
+            visitIndex: 0,
+            actionIndex: 0,
+            fixture: "image-jpeg",
+            fileName: "wbh-fixture.jpg",
+            size: jpeg.bytes.length,
+            sha256: jpeg.sha256,
+          },
+        ],
+      },
     });
   });
 

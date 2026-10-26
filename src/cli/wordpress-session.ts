@@ -455,6 +455,8 @@ function verificationFor(
     observer: createWordPressAttemptObserver({
       store: state.store,
       lab: boundaries.lab,
+      // Victim-page WebM is opt-in (#549); it stays in Private Evidence.
+      recordVideo: process.env.WBH_RECORD_VIDEO === "1",
     }),
     readFinding: readWordPressFinding,
     // The skill id is the prompt version of a handoff run; the ledger tells the two apart.

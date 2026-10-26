@@ -17,10 +17,16 @@ import {
 } from "../../../src/infrastructure/lab-owner-record.js";
 import {
   openWordPressLab,
+  wordpressExplorationObserveSchema,
   type DockerRequest,
   type WordPressLabHandle,
   type WordPressVictimRoute,
 } from "../../../src/profiles/wordpress/lab/index.js";
+import {
+  MAX_VICTIM_FILE_BYTES,
+  victimFile,
+  WORDPRESS_VICTIM_FILE_FIXTURES,
+} from "../../../src/profiles/wordpress/lab/victim-files.js";
 import type { Snapshot } from "../../../src/snapshot/index.js";
 import { retiredWordPressScenario } from "../../../src/profiles/wordpress/lab/retired-scenarios.js";
 
@@ -131,6 +137,8 @@ async function fixture(
     browserFailureAt: null as string | null,
     browserFailureMessage: "private-debug-marker",
     browserDiagnosticOutput: "valid" as "valid" | "missing" | "invalid",
+    /** WebM bytes the browser prints when the visit asks for video (#549). */
+    videoOutput: null as Buffer | null,
   };
   /** The fake Docker daemon's objects and the loopback ports it bound. */
   const docker = {
@@ -385,6 +393,10 @@ async function fixture(
               dialogCount: 1,
               consoleErrorCount: 3,
               ...dialog,
+              ...(database.videoOutput !== null &&
+              request.args.includes("WBH_RECORD_VIDEO=1")
+                ? { videoBase64: database.videoOutput.toString("base64") }
+                : {}),
               ...(database.browserDiagnosticOutput === "missing"
                 ? {}
                 : {
@@ -1499,6 +1511,173 @@ describe("WordPress gVisor Lab", () => {
     expect(await lab.teardown(handle)).toEqual({ status: "removed" });
   });
 
+  it("records each victim visit's WebM only when asked, within 8 MiB and with the EBML header (#549)", async () => {
+    const { lab, snapshot, setup, commands, database } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const { handle } = provisioned;
+    const route: WordPressVictimRoute = {
+      role: "administrator",
+      paths: ["/wp-admin/edit.php", "/wp-admin/upload.php"],
+    };
+    const webm = Buffer.concat([
+      Buffer.from("1a45dfa3", "hex"),
+      Buffer.from("synthetic webm"),
+    ]);
+    database.videoOutput = webm;
+
+    // Not asked: the browser is not told to record, and nothing is kept.
+    const plain = await lab.observeVictimPages(handle, route);
+    expect(plain).toMatchObject({ status: "observed" });
+    expect(plain).not.toHaveProperty("videos");
+    const browserRuns = () =>
+      commands.filter(
+        (command) =>
+          command.args[0] === "run" &&
+          command.args.includes(`verification-browser@${sha("4")}`),
+      );
+    expect(
+      browserRuns().some((command) =>
+        command.args.includes("WBH_RECORD_VIDEO=1"),
+      ),
+    ).toBe(false);
+
+    const recorded = await lab.observeVictimPages(handle, route, {
+      recordVideo: true,
+    });
+    expect(recorded).toMatchObject({
+      status: "observed",
+      videos: [
+        { visitIndex: 0, video: webm },
+        { visitIndex: 1, video: webm },
+      ],
+    });
+    expect(
+      browserRuns().filter((command) =>
+        command.args.includes("WBH_RECORD_VIDEO=1"),
+      ),
+    ).toHaveLength(2);
+
+    // A video that is not WebM, or over 8 MiB, is left out; the record stands.
+    for (const video of [
+      Buffer.from("not a webm"),
+      Buffer.concat([
+        Buffer.from("1a45dfa3", "hex"),
+        Buffer.alloc(8 * 1024 * 1024),
+      ]),
+    ]) {
+      database.videoOutput = video;
+      const dropped = await lab.observeVictimPages(handle, route, {
+        recordVideo: true,
+      });
+      expect(dropped).toMatchObject({
+        status: "observed",
+        screenshot: expect.any(Buffer),
+      });
+      expect(dropped).not.toHaveProperty("videos");
+    }
+    // 8 MiB bounds the attempt's videos together.
+    const half = Buffer.concat([
+      Buffer.from("1a45dfa3", "hex"),
+      Buffer.alloc(5 * 1024 * 1024),
+    ]);
+    database.videoOutput = half;
+    const bounded = await lab.observeVictimPages(handle, route, {
+      recordVideo: true,
+    });
+    if (bounded.status !== "observed") throw new Error("not observed");
+    // Lengths, not bytes: deep equality over megabytes is slow.
+    expect(
+      bounded.videos?.map(({ visitIndex, video }) => [
+        visitIndex,
+        video.length,
+      ]),
+    ).toEqual([[0, half.length]]);
+    database.videoOutput = null;
+    expect(await lab.teardown(handle)).toEqual({ status: "removed" });
+
+    // The visit script records the first page through a recording context.
+    const visit = browserRuns().find((command) =>
+      command.args.includes("WBH_RECORD_VIDEO=1"),
+    );
+    const script = visit?.args[visit.args.indexOf("-e") + 1];
+    if (script === undefined) throw new Error("Browser visit script missing");
+    const runVisit = async (record: boolean, videoBytes: Buffer) => {
+      let finish: (result: string) => void = () => {};
+      const completed = new Promise<string>((resolve) => {
+        finish = resolve;
+      });
+      const contexts: unknown[] = [];
+      let contextClosed = false;
+      const context = {
+        on() {},
+        close: async () => {
+          contextClosed = true;
+        },
+      };
+      const page = {
+        on() {},
+        context: () => context,
+        goto: async () => null,
+        url: () => "http://wordpress/wp-admin/edit.php",
+        evaluate: async () => "",
+        waitForTimeout: async () => {},
+        isClosed: () => false,
+        screenshot: async () => Buffer.from("89504e470d0a1a0a", "hex"),
+        video: () => ({ path: async () => "/tmp/wbh-video/page.webm" }),
+      };
+      runInNewContext(script, {
+        require: (name: string) =>
+          name === "node:fs"
+            ? {
+                readFileSync: (path: string) => {
+                  if (!contextClosed || path !== "/tmp/wbh-video/page.webm")
+                    throw new Error("Video read too early");
+                  return videoBytes;
+                },
+              }
+            : {
+                chromium: {
+                  launch: async () => ({
+                    newPage: async () => page,
+                    newContext: async (options: unknown) => {
+                      contexts.push(options);
+                      return { newPage: async () => page };
+                    },
+                    close: async () => {},
+                  }),
+                },
+              },
+        process: {
+          env: {
+            WBH_VISIT_PATH: "/wp-admin/edit.php",
+            ...(record ? { WBH_RECORD_VIDEO: "1" } : {}),
+          },
+          stdout: { write: (value: string) => finish(value) },
+          exitCode: 0,
+        },
+        console: { error: (message: unknown) => finish(String(message)) },
+        Buffer,
+        URL,
+      });
+      return { output: await completed, contexts };
+    };
+    const withVideo = await runVisit(true, webm);
+    expect(withVideo.contexts).toEqual([
+      { recordVideo: { dir: "/tmp/wbh-video" } },
+    ]);
+    expect(JSON.parse(withVideo.output)).toMatchObject({
+      videoBase64: webm.toString("base64"),
+    });
+    const oversized = await runVisit(true, Buffer.alloc(8 * 1024 * 1024 + 1));
+    expect(JSON.parse(oversized.output)).not.toHaveProperty("videoBase64");
+    const without = await runVisit(false, webm);
+    expect(without.contexts).toEqual([]);
+    expect(JSON.parse(without.output)).not.toHaveProperty("videoBase64");
+  });
+
   it("observes only a selected popup that inherits the Lab origin", async () => {
     const { lab, snapshot, setup, commands } = await fixture();
     const provisioned = await lab.provision(snapshot, setup, {
@@ -1766,6 +1945,220 @@ describe("WordPress gVisor Lab", () => {
     expect(await runPopupVisit({ url: "about:blank", extraPopup: true })).toBe(
       "Unobserved victim popup opened",
     );
+  });
+
+  it("puts only a Harness-owned fixture into the victim's file input and records its digest (#468)", async () => {
+    for (const name of WORDPRESS_VICTIM_FILE_FIXTURES) {
+      const file = victimFile(name);
+      expect(file.bytes.length).toBeGreaterThan(0);
+      expect(file.bytes.length).toBeLessThanOrEqual(MAX_VICTIM_FILE_BYTES);
+    }
+    expect(victimFile("image-png").bytes.subarray(0, 8).toString("hex")).toBe(
+      "89504e470d0a1a0a",
+    );
+    expect(victimFile("image-jpeg").bytes.subarray(0, 3).toString("hex")).toBe(
+      "ffd8ff",
+    );
+
+    const { lab, snapshot, setup, commands, database } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const { handle } = provisioned;
+    const png = victimFile("image-png", "original-name.PNG");
+    const route: WordPressVictimRoute = {
+      role: "administrator",
+      paths: [
+        "/wp-admin/upload.php",
+        {
+          path: "/wp-admin/upload.php?page=fixture",
+          actions: [
+            {
+              kind: "set-file",
+              selector: "#userfile",
+              fixture: "image-png",
+              fileName: "original-name.PNG",
+            },
+            { kind: "click", selector: "#submit" },
+          ],
+        },
+      ],
+    };
+    const supplied = [
+      {
+        visitIndex: 1,
+        actionIndex: 0,
+        fixture: "image-png",
+        fileName: "original-name.PNG",
+        size: png.bytes.length,
+        sha256: png.sha256,
+      },
+    ];
+    expect(await lab.observeVictimPages(handle, route)).toEqual({
+      status: "observed",
+      victimRole: "administrator",
+      screenshot: expect.any(Buffer),
+      victimBrowserDiagnostic: browserDiagnostic,
+      files: supplied,
+    });
+    const visit = commands.find((command) =>
+      command.args.includes("WBH_VISIT_PATH=/wp-admin/upload.php?page=fixture"),
+    );
+    const sent = visit?.args
+      .find((arg) => arg.startsWith("WBH_VISIT_ACTIONS="))
+      ?.slice("WBH_VISIT_ACTIONS=".length);
+    // The browser receives the fixture's bytes, resolved by the Harness.
+    expect(JSON.parse(sent ?? "null")).toEqual([
+      {
+        kind: "set-file",
+        selector: "#userfile",
+        file: {
+          name: "original-name.PNG",
+          mimeType: "image/png",
+          base64: png.bytes.toString("base64"),
+        },
+      },
+      { kind: "click", selector: "#submit" },
+    ]);
+
+    database.browserFailureAt = "/wp-admin/upload.php?page=fixture";
+    database.browserFailureMessage = "Victim action file failed";
+    expect(await lab.observeVictimPages(handle, route)).toEqual({
+      status: "unavailable",
+      phase: "victim-page",
+      failureCode: "victim-action-file",
+      privateDiagnostic: Buffer.from("Victim action file failed"),
+      files: supplied,
+    });
+    database.browserFailureAt = null;
+
+    // A route names a fixture: it cannot bring bytes, another fixture, or
+    // a name with another extension.
+    for (const action of [
+      {
+        kind: "set-file",
+        selector: "#userfile",
+        fixture: "image-png",
+        base64: "PD9waHAgZWNobyAxOw==",
+      },
+      { kind: "set-file", selector: "#userfile", fixture: "php-script" },
+      {
+        kind: "set-file",
+        selector: "#userfile",
+        fixture: "image-png",
+        fileName: "shell.php",
+      },
+      {
+        kind: "set-file",
+        selector: "#userfile",
+        fixture: "text-plain",
+        fileName: ".htaccess",
+      },
+    ])
+      expect(
+        await lab.observeVictimPages(handle, {
+          role: "administrator",
+          paths: [{ path: "/wp-admin/", actions: [action] }],
+        } as unknown as WordPressVictimRoute),
+      ).toEqual({ status: "unavailable", phase: "victim-input" });
+    // The exploration Lab's /observe keeps the page actions only.
+    expect(
+      wordpressExplorationObserveSchema.safeParse({
+        role: "administrator",
+        path: "/wp-admin/",
+        actions: [
+          { kind: "set-file", selector: "#userfile", fixture: "image-png" },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(await lab.teardown(handle)).toEqual({ status: "removed" });
+
+    // The visit script hands the bytes to the file input, which may be hidden.
+    const script = visit?.args[visit.args.indexOf("-e") + 1];
+    if (script === undefined || sent === undefined)
+      throw new Error("Browser visit script missing");
+    const runFileVisit = async (input: {
+      attached: boolean;
+      rejects?: boolean;
+    }) => {
+      let finish: (result: string) => void = () => {};
+      const completed = new Promise<string>((resolve) => {
+        finish = resolve;
+      });
+      const waited: string[] = [];
+      const given: unknown[] = [];
+      const clicked: string[] = [];
+      const locator = (selector: string) => ({
+        waitFor: async (options: { state: string }) => {
+          waited.push(options.state);
+          if (!input.attached) throw new Error("Timeout");
+        },
+        count: async () => (input.attached ? 1 : 0),
+        evaluate: async () => false,
+        setInputFiles: async (files: unknown) => {
+          if (input.rejects) throw new Error("Not a file input");
+          given.push(files);
+        },
+        click: async () => {
+          clicked.push(selector);
+        },
+      });
+      const main = {
+        on() {},
+        context: () => ({ on() {} }),
+        goto: async () => null,
+        url: () => "http://wordpress/wp-admin/upload.php",
+        evaluate: async () => "",
+        locator,
+        waitForEvent: () => Promise.reject(new Error("Timeout")),
+        waitForLoadState: async () => {},
+        waitForTimeout: async () => {},
+        isClosed: () => false,
+        screenshot: async () => Buffer.from("89504e470d0a1a0a", "hex"),
+      };
+      runInNewContext(script, {
+        require: () => ({
+          chromium: {
+            launch: async () => ({
+              newPage: async () => main,
+              close: async () => {},
+            }),
+          },
+        }),
+        process: {
+          env: {
+            WBH_VISIT_PATH: "/wp-admin/upload.php?page=fixture",
+            WBH_VISIT_ACTIONS: sent,
+          },
+          stdout: { write: () => finish("observed") },
+          exitCode: 0,
+        },
+        console: { error: (message: unknown) => finish(String(message)) },
+        Buffer,
+        URL,
+      });
+      return { output: await completed, waited, given, clicked };
+    };
+    const filled = await runFileVisit({ attached: true });
+    expect(filled.output).toBe("observed");
+    expect(filled.waited).toEqual(["attached", "visible"]);
+    expect(filled.given).toEqual([
+      { name: "original-name.PNG", mimeType: "image/png", buffer: png.bytes },
+    ]);
+    expect(filled.clicked).toEqual(["#submit"]);
+    expect((await runFileVisit({ attached: true, rejects: true })).output).toBe(
+      "Victim action file failed",
+    );
+    const missing = (await runFileVisit({ attached: false })).output;
+    expect(missing.startsWith("Victim action not visible {")).toBe(true);
+    expect(
+      JSON.parse(missing.slice("Victim action not visible ".length)),
+    ).toMatchObject({
+      check: "action-attached",
+      kind: "set-file",
+      selector: "#userfile",
+    });
   });
 
   it("does not start target containers when source differs from its snapshot", async () => {

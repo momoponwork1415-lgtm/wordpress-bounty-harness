@@ -79,6 +79,7 @@ export type WordPressVictimPagesFailureCode =
   | "victim-action-ambiguous"
   | "victim-action-click"
   | "victim-action-fill"
+  | "victim-action-file"
   | "victim-popup"
   | "victim-navigation"
   | "victim-unobserved-popup"
@@ -118,6 +119,16 @@ export interface WordPressDialogEvent {
   readonly frameUrlsAtEvent: readonly string[];
 }
 
+/** A Harness-owned fixture the observer put into a victim file input (#468). */
+export interface WordPressVictimFileRecord {
+  readonly visitIndex: number;
+  readonly actionIndex: number;
+  readonly fixture: string;
+  readonly fileName: string;
+  readonly size: number;
+  readonly sha256: string;
+}
+
 /** What the Lab browser saw on the declared victim pages; a record, never a verdict. */
 export type WordPressVictimPagesObservation =
   | {
@@ -131,6 +142,11 @@ export type WordPressVictimPagesObservation =
         | "self";
       /** The last victim page after its actions; Private Evidence only. */
       readonly screenshot?: Buffer;
+      /** Opted in (#549): each visit's first-page WebM; Private Evidence only. */
+      readonly videos?: readonly {
+        readonly visitIndex: number;
+        readonly video: Buffer;
+      }[];
       /** Counts from that last visit; Private Evidence only. */
       readonly victimBrowserDiagnostic?: WordPressVictimBrowserDiagnostic;
       /** The first visit that showed a dialog with the declared numeric marker. */
@@ -141,6 +157,8 @@ export type WordPressVictimPagesObservation =
         /** Screen after the observer dismissed that dialog; Private Evidence only. */
         readonly screenshot: Buffer;
       };
+      /** Fixture files the observer supplied, by digest; Private Evidence only. */
+      readonly files?: readonly WordPressVictimFileRecord[];
     }
   | {
       readonly status: "unavailable";
@@ -153,6 +171,8 @@ export type WordPressVictimPagesObservation =
        * failed check and what the observer saw; otherwise bounded stderr.
        */
       readonly privateDiagnostic?: Buffer;
+      /** On a victim-page failure, the fixture files the visits were given. */
+      readonly files?: readonly WordPressVictimFileRecord[];
     };
 
 export type LeftoverPatterns = {
