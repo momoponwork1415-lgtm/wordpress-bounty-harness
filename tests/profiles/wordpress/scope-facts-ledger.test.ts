@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../../src/ledger/index.js";
 import { createWordPressScopeFacts } from "../../../src/profiles/wordpress/scope-facts.js";
+import { submissionBasis } from "../../../src/review/submission-basis.js";
 import { retiredWordPressScenario } from "../../../src/profiles/wordpress/lab/retired-scenarios.js";
 import {
   assessWordpressScope,
@@ -157,25 +158,16 @@ describe("WordPress scope setup provenance", () => {
           reproductionPackageDigest,
         },
       });
-      const verification = ledger
-        .read({ campaignId: common.campaignId, type: "verification-finished" })
-        .map(({ event }) => event)
-        .find(
-          (event) =>
-            event.type === "verification-finished" &&
-            event.verificationId === verificationId,
-        );
-      if (verification?.type !== "verification-finished")
-        throw new Error("Expected verification event");
-      const facts = await provider.load({
-        ref: {
-          campaignId: common.campaignId,
-          findingId: "finding",
-          verificationId,
-          snapshotDigest: snapshot,
-        },
-        verification,
-      });
+      const ref = {
+        campaignId: common.campaignId,
+        findingId: "finding",
+        verificationId,
+        snapshotDigest: snapshot,
+      };
+      // Scope facts read the basis Review's gate found, never one built here.
+      const basis = submissionBasis(ledger, ref, "scope");
+      if (basis.status !== "basis") throw new Error("Expected a basis");
+      const facts = await provider.load({ ref, basis: basis.basis });
       expect(
         assessWordpressScope(policy, facts).map((item) => item.status),
         testCase.name,
