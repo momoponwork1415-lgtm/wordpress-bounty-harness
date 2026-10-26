@@ -17,6 +17,8 @@ describe("ADR 0022 retry budget", () => {
     { reason: "observation", retryAfter: [false, false, false] },
     { reason: "provision", retryAfter: [true, false, false] },
     { reason: "provider", retryAfter: [true, false, false] },
+    // Retried only on a changed Lab scenario; scenarios were removed in #353.
+    { reason: "precondition", retryAfter: [false, false, false] },
     { reason: "evidence", retryAfter: [false, false, false] },
     { reason: "cleanup", retryAfter: [false, false, false] },
     { reason: "digest-mismatch", retryAfter: [false, false, false] },
@@ -41,29 +43,6 @@ describe("ADR 0022 retry budget", () => {
       }),
     ).toBe(false);
   });
-
-  it.each([
-    { previous: "a", current: "b", retry: true },
-    { previous: "a", current: "a", retry: false },
-    { previous: null, current: "b", retry: true },
-    { previous: null, current: null, retry: false },
-    { previous: undefined, current: "b", retry: false },
-    { previous: "a", current: undefined, retry: false },
-  ])(
-    "precondition: scenario $previous -> $current retries $retry",
-    ({ previous, current, retry }) => {
-      for (const attemptsForReason of [1, 5])
-        expect(
-          shouldAutomaticallyRetryVerification({
-            reason: "precondition",
-            attemptsForReason,
-            sameLabSetup: true,
-            previousScenarioId: previous,
-            currentScenarioId: current,
-          }),
-        ).toBe(retry);
-    },
-  );
 
   it("counts attempts per Lab Setup digest, prompt version and reason", () => {
     const base = {

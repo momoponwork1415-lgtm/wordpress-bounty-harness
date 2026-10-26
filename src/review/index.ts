@@ -462,8 +462,7 @@ export class Review<TFacts = unknown> {
         });
       else {
         // The queue predicts the runner's next pass with nothing changed: same
-        // Lab Setup, same prompt version. It holds no Lab Setup, so a changed
-        // scenario id (the only `precondition` retry) is never predicted here.
+        // Lab Setup, same prompt version.
         const pending = shouldAutomaticallyRetryVerification({
           reason: result.reason,
           attemptsForReason: countAttemptsForReason(

@@ -103,8 +103,6 @@ export {
   type WordPressExplorationObserveRequest,
   type WordPressVictimRoute,
 } from "./lab-observation.js";
-/** Name the plugin-specific adapters (removed in #353) use for the Lab they run against. */
-export type Resources = WordPressLabSession;
 
 const pinnedImage = z.string().regex(/^[^\s@]+@sha256:[a-f0-9]{64}$/);
 const controlRequestSchema = z.strictObject({
