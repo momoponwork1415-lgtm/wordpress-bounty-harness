@@ -1314,7 +1314,7 @@ const COMMANDS: readonly Command[] = [
     name: "review observe",
     required: ["campaign", "finding", "receipt", "result", "evidence", "by"],
     usage: [
-      "review observe --campaign <id> --finding <id> --receipt <digest> --result match|mismatch|unavailable --evidence <path> --by <human>",
+      "review observe --campaign <id> --finding <id> --receipt <digest> --result match|mismatch|unavailable --evidence <path> --by <human> [--ordinary-site yes|no --ordinary-site-reason <text>]",
     ],
     options: {
       campaign: STR,
@@ -1323,6 +1323,8 @@ const COMMANDS: readonly Command[] = [
       result: STR,
       evidence: STR,
       by: STR,
+      "ordinary-site": STR,
+      "ordinary-site-reason": STR,
     },
     handler: async ({ values, state, environment, io }) => {
       const item = queued(environment.profile.review(state), values);
@@ -1346,6 +1348,30 @@ const COMMANDS: readonly Command[] = [
       const actor = required(values.by, "by");
       if (isNonHumanReviewer(actor))
         throw new UsageError("A named human actor is required");
+      // #578: the observer states whether the configuration they confirmed is
+      // one an ordinary public site uses; scope reads it, never guesses it.
+      const ordinarySite = values["ordinary-site"];
+      const ordinarySiteReason = values["ordinary-site-reason"]?.trim();
+      if ((ordinarySite === undefined) !== (ordinarySiteReason === undefined))
+        throw new UsageError(
+          "--ordinary-site and --ordinary-site-reason go together",
+        );
+      if (
+        ordinarySiteReason !== undefined &&
+        (ordinarySiteReason.length === 0 || ordinarySiteReason.length > 500)
+      )
+        throw new UsageError("--ordinary-site-reason must be 1-500 characters");
+      const configuration =
+        ordinarySite === undefined || ordinarySiteReason === undefined
+          ? undefined
+          : {
+              ordinaryPublicSite:
+                choice(ordinarySite, "ordinary-site", [
+                  "yes",
+                  "no",
+                ] as const) === "yes",
+              reason: ordinarySiteReason,
+            };
       const evidencePath = resolve(required(values.evidence, "evidence"));
       const evidenceStat = await lstat(evidencePath);
       if (
@@ -1363,10 +1389,17 @@ const COMMANDS: readonly Command[] = [
         evidence: await readFile(evidencePath),
         result,
         recordedBy: actor,
+        ...(configuration === undefined ? {} : { configuration }),
         clock: state.clock,
       });
       io.stdout(
-        `manual observation ${recorded.result} recorded for finding ${item.ref.findingId} (evidence ${recorded.evidenceDigest})`,
+        `manual observation ${recorded.result} recorded for finding ${item.ref.findingId} (evidence ${recorded.evidenceDigest}; ordinary public site ${
+          recorded.configuration === undefined
+            ? "not stated"
+            : recorded.configuration.ordinaryPublicSite
+              ? "yes"
+              : "no"
+        })`,
       );
       return 0;
     },

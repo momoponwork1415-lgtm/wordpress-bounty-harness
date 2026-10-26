@@ -265,7 +265,7 @@ describe("WordPress scope facts from a person's Lab observation (#525)", () => {
       ...(victimRole === undefined ? {} : { victimRole }),
       target,
       latestVersionVerified: true,
-      ordinaryScenarioVerified: true,
+      ordinaryPublicSite: true,
     });
 
   it("reads the claimed effect from the match and the victim from the Lab browser record", async () => {
@@ -305,4 +305,28 @@ describe("WordPress scope facts from a person's Lab observation (#525)", () => {
       ["patchstack", "ambiguous"],
     ]);
   });
+
+  it.each([
+    [true, "in-scope", "in-scope"],
+    [false, "out-of-scope", "version-or-configuration"],
+    [undefined, "ambiguous", "version-or-configuration-unknown"],
+  ] as const)(
+    "takes the configuration from the observer's statement %s (#578)",
+    async (ordinaryPublicSite, status, reason) => {
+      const facts = wordpressHumanObservedScopeFacts({
+        category: "sqli",
+        attacker: "subscriber",
+        target,
+        latestVersionVerified: true,
+        ...(ordinaryPublicSite === undefined ? {} : { ordinaryPublicSite }),
+      });
+      expect(facts.defaultOrCommonSettings).toBe(ordinaryPublicSite);
+      const wordfence = assessWordpressScope(
+        await loadWordpressScopePolicy(),
+        facts,
+      ).find((item) => item.programme === "wordfence")!;
+      expect(wordfence.status).toBe(status);
+      if (status !== "in-scope") expect(wordfence.reason).toBe(reason);
+    },
+  );
 });
