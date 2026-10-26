@@ -52,7 +52,7 @@ Step 1 の作業順: #185（Finding / Lead の境界と review queue）→ `revi
 ## 5. PR の規則
 
 - テンプレートの 5 項目（問い、変えたこと、変えなかったこと、測った数字、消し方）を日本語で埋める。AI が書いてよいが、所有者が分からない行があれば merge しない。書き直しを依頼する。
-- 探索に触る PR は数字を貼る。二段にする: agent 入力を変える PR（prompt 本文、契約節、Lab setup）は再発見 case（ADR 0027）で最低 3 Trial の completed と source 根拠付き候補の有無を記録する。配線・runtime・選定の PR は runner が流した異なる slug の初回 3 Trial の completed・wall・停止理由で足りる。同じ slug の反復で件数を埋めない。未 merge branch で本番 runner を回すときは campaign ID に branch 名を含め、本番の分母に混ぜない。数字のない探索変更は merge されない。
+- 探索に触る PR は数字を貼る。二段にする: agent 入力を変える PR（prompt 本文、契約節、Lab setup）は再発見 case（ADR 0027）で最低 3 Trial の completed と source 根拠付き候補の有無を記録する。配線・runtime・選定の PR は runner が流した異なる slug の初回 3 Trial の completed・wall・停止理由で足りる。同じ slug の反復で件数を埋めない。未 merge branch で本番 runner を回すときは campaign ID に branch 名を含め、本番の分母に混ぜない。数字のない探索変更は merge されない。数字は M1〜M6（docs/reviews/2026-10-26-system-history-and-metrics.md 第 4 節）の名前で出し、版をまたいで同じ問い合わせで比べられるようにする。
 - 実験軸（分担、継続、prompt 変種など）は opt-in の設定ブロック 1 つと profile の file 1 つに閉じ、台帳の run 記録に軸を残す。消し方を PR に書く。
 - agent に渡る文章（`src/profiles/wordpress/prompts/` の本文、`.claude/skills/` の本文、Harness が生成して渡す節の雛形: 出力契約、Lab・Programme Boundary の節、Verifier の victim 契約）を変える PR は、変更後の全文と日本語訳を PR 本文か `docs/reviews/` の文書に貼る。2026-10-13 に所有者は、出典対照表の採否と `owner-approved` の付与を AI に委任した（「採用するかどうかはあなたの方で決めてもらって構いません」「よしなにやってください」）。AI はラベルを付けるとき、委任を明記した PR comment を残す。出典に無い要素を足さない規則は変わらない。2026-10-18 に所有者は読了ゲートも外した（「owner-approved のラベルはいらないかも。結局、脆弱性を発見できるかどうかだからそっちで実験して結果がある程度わかるはず」、ADR 0032 の 2026-10-18 節）。所有者の全文読了は merge の条件ではなく、採否は探索の数字で決める。AI は出典付きで採った要素だけを書き、要素を足さない。
 - 1 PR は追加差分 500 行以内を目安にする（削除行は数えない）。超えるなら問いを分ける。
