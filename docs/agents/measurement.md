@@ -1,10 +1,11 @@
 # 計測の手順（AI 向け）
 
-DEVELOPMENT §5 の「探索に触る PR は数字を貼る」（agent 入力は開発セット 6 case × 各 3 run の 6 段、所有者決定 2026-10-26）を、AI が自分で回すための手順。正本は [DEVELOPMENT](../DEVELOPMENT.md) §5 と [SPEC](../SPEC.md) §6〜§7。規則は足さない。
+DEVELOPMENT §5 の「探索に触る PR は数字を貼る」（分母は本番の対象。開発セットは本番で Finding は出るのに `match` が 1 週間 0 件のときの切り分けだけ。所有者決定 2026-10-26）を、AI が自分で回すための手順。正本は [DEVELOPMENT](../DEVELOPMENT.md) §5 と [SPEC](../SPEC.md) §6〜§7。規則は足さない。
 
 ## いつ使うか
 
-- agent 入力（prompt、skill、Harness 生成の節）を変える PR → 開発セット 6 case を各 3 run（18 Trial）。採否は DEVELOPMENT §5 の 6 段。
+- agent 入力（prompt、skill、Harness 生成の節）を変える PR → 本番の同じ選定帯で旧版と新版を交互に回し、Trial 数をそろえる。採否は DEVELOPMENT §5 の 6 段（本番の読み替え）。
+- 本番で Finding は出るのに人間の `match` が 1 週間 0 件 → 開発セット 6 case を各 3 run（18 Trial）回し、探索と検証を切り分ける。
 - 配線・runtime・選定を変える PR → 異なる slug 3 件の初回 Trial（runner が回すのと同じ経路）。
 - どちらも本番の分母に混ぜない。campaign ID に branch 名か用途を入れる。
 

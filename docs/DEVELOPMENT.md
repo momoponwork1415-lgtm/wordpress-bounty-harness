@@ -59,11 +59,17 @@ Step 1 の作業順: #185（Finding / Lead の境界と review queue）→ `revi
 ## 5. PR の規則
 
 - テンプレートの 5 項目（問い、変えたこと、変えなかったこと、測った数字、消し方）を日本語で埋める。AI が書いてよいが、所有者が分からない行があれば merge しない。書き直しを依頼する。
-- 探索に触る PR は数字を貼る。二段にする: agent 入力を変える PR（prompt 本文、契約節、Lab setup）は、再発見 case（ADR 0027）の開発セット 6 case を各 3 run（18 Trial）回し、次の 6 段で採否を決める（所有者決定 2026-10-26、[監査](reviews/2026-10-26-system-audit.md) 第 B.3 節。同日の各 1 run の基準を置き換えた）。段の順に読み、(1) が通らなければ先を読まない。(2) と (3) は開発セットの数字で採否を決め、(4)〜(6) は採用した後の本番の数字で戻すかを決める。
-  1. 実行の健全性: 18 Trial のうち completed が 15 未満なら判定しない。provider-limited と failed は理由付きで別に数え、同じ case を再試行する。
-  2. 主指標の公開経路一致: 所有者の公開記録と同じ経路の Finding が出た run の数が、現行版以上であること。現行版で 3 run 中 2 run 以上一致した case が、新版で 0/3 になったら不合格。照合の結果は `docs/evaluation/` に書く。
-  3. M1: case ごとに、3 run 中 2 run 以上で scope 内 Finding が 1 件以上出ること。これが 6 case 中 5 case 以上。
-  4. 人間が読む量: 本番で scope 内 Finding の group が週 15 件以下。超えたら Trial を減らす（第 2 節、OPERATIONS 第 2 節）。
+- 探索に触る PR は数字を貼る。分母は本番の対象である（所有者決定 2026-10-26 の 2 回目: 「今後は開発ベンチではなく普通に本番探索して止まったらバグ修正」）。同日の 1 回目の決定（開発セット 6 case × 3 run）は、次の切り分けのときだけに残す。
+  - **本番で比べる。** agent 入力を変える PR（prompt 本文、契約節、Lab setup）は、同じ選定帯で旧版と新版を交互に回し、Trial 数をそろえて比べる。campaign ID に版を入れ、台帳の `discovery-run-started` の prompt 版で分ける。mirror を探索入力にしたときと同じやり方である（[2026-10-25 の報告](reviews/2026-10-25-wordfence-mirror-as-exploration-input.md)）。
+  - **開発セットに戻す条件。** 本番で対象範囲内の Finding は出ているのに、人間の観測（`review observe`）の `match` が 1 週間 0 件のとき。このときだけ、答えの分かっている開発セット 6 case を回し、探索と検証のどちらが壊れたかを切り分ける。Finding が 0 件のときは探索の問題なので、本番の停止理由と `incomplete` の理由から直す。
+  - **止まったら直す。** 本番の runner が止まった理由と、Finding の保留率・`incomplete` の理由の偏りは、[production-monitoring](agents/production-monitoring.md) で拾い、バグとして直す。
+  - **探索 Lab の採否も本番で。** 開発セットの Lab arm（2026-10-26 の l14、6 Trial）は記録だけ残し、採否は本番で 1 arm 回して決める。
+
+  採否の 6 段（[監査](reviews/2026-10-26-system-audit.md) 第 B.3 節）は次のとおり読み替える。段の順に読み、(1) が通らなければ先を読まない。
+  1. 実行の健全性: 比べる 2 版それぞれで、completed が Trial 数の 5 分の 4 未満なら判定しない。provider-limited と failed は理由付きで別に数える。
+  2. 主指標の公開経路一致: 開発セットに戻したときだけ測る。所有者の公開記録と同じ経路の Finding が出た run の数が、現行版以上であること。照合の結果は `docs/evaluation/` に書く。
+  3. M1: 本番で、scope 内 Finding が 1 件以上出た Trial の割合が、現行版を下回らないこと。
+  4. 人間が読む量: 上限を置かない（所有者決定 2026-10-26、「数は制限しない」）。列の長さは、検証の並列数と確認票の供給を増やす合図にだけ使う。
   5. 本番の当たり: 採用後の本番の最初の 30 Trial で、Finding が 1 件以上出た Trial が 0 なら戻す。
   6. 精度: 人間が観測した Finding のうち `match` の割合（M4）。閾値は最初の 20 件の観測で決める。
 
