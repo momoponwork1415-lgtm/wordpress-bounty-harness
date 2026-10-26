@@ -356,18 +356,37 @@ function childReport(finalMessage: unknown, transcript: readonly Event[]) {
   for (const text of [
     ...(typeof finalMessage === "string" ? [finalMessage] : []),
     ...texts,
-  ]) {
-    const trimmed = text
-      .trim()
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```$/, "");
-    try {
-      return extractCandidateReport(trimmed);
-    } catch {
-      // An earlier report of the same child may still be readable.
-    }
-  }
+  ])
+    for (const candidate of reportCandidates(text))
+      try {
+        return extractCandidateReport(candidate);
+      } catch {
+        // A later candidate, or an earlier report of the same child, may still be readable.
+      }
   return undefined;
+}
+
+/**
+ * Where a child's text can hold the contract's JSON object (ADR 0018 decision
+ * 1): the whole text, else the last ```json fence, else the last line that
+ * opens with `{` through the final `}`. Malformed JSON is not repaired.
+ */
+function reportCandidates(text: string): string[] {
+  const whole = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+  const fence = [...text.matchAll(/```json[ \t]*\r?\n([\s\S]*?)```/gi)].at(
+    -1,
+  )?.[1];
+  const line = text.lastIndexOf("\n{");
+  const opening = line >= 0 ? line + 1 : text.startsWith("{") ? 0 : -1;
+  const tail = opening < 0 ? undefined : text.slice(opening);
+  return [
+    whole,
+    ...(fence === undefined ? [] : [fence]),
+    ...(tail === undefined ? [] : [tail.slice(0, tail.lastIndexOf("}") + 1)]),
+  ];
 }
 
 /** A child transcript opens with the delegation as its first user message. */
