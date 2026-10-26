@@ -142,7 +142,7 @@ harness verify next --config <campaign.json> --handoff <dir> [--campaign <id> [-
 
 `continuous run` は探索だけを回し、検証 Lab を立てない（#423。旧 `--verify-concurrency` と検証 worker は削除した）。handoff 列は探索 batch と並行して skill が消化してよく、検証 Lab の数は `resources.maxConcurrentTargets` に含めない。
 
-handoff の `route.json` で被害者画面を開くとき、`victim.paths` に 1 path あたり最大 5 件の型付き `actions`（`click`、`click-text`、`fill`）を指定できる。操作の選択は skill が行い、実行と dialog・画面の記録は Harness の Lab browser が行う。
+handoff の `route.json` で被害者画面を開くとき、`victim.paths` に 1 path あたり最大 5 件の型付き `actions`（`click`、`click-text`、`fill`）を指定できる。操作の選択は skill が行い、実行と dialog・画面の記録は Harness の Lab browser が行う。被害者の操作にファイルが要るときは `set-file`（`selector`、`fixture`、省略できる `fileName`）を使う。`fixture` は Harness が持つ `image-png`、`image-jpeg`、`text-plain` のどれかで、中身は route から渡せない。`fileName` の拡張子は fixture のものに限る。入れたファイルは `lab-browser-observation.json` の `files` に sha256 と大きさで残る（#468）。探索 Lab の `/observe` は `set-file` を受け付けない。
 
 ### 継続運転（`continuous run`、最終設計 P6）
 
