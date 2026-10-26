@@ -61,6 +61,7 @@ import { WORDPRESS_SANDBOX_LAYOUT } from "../profiles/wordpress/sandbox-layout.j
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/index.js";
+import { restoreParkedWordPressFinding } from "../profiles/wordpress/discovery/restore-parked-finding.js";
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
 import { openWordPressExplorationLab } from "../profiles/wordpress/lab/exploration-lab.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
@@ -1784,6 +1785,15 @@ export function createWordPressCliProfile(
         verification: session.verification,
       });
     },
+    restoreParked: (state, input) =>
+      restoreParkedWordPressFinding({
+        ledger: state.ledger,
+        evidence: state.store,
+        campaignId: input.campaignId,
+        findingId: input.findingId,
+        clock: state.clock,
+        note: { restoredBy: input.restoredBy, reason: input.reason },
+      }),
     stateDiffReader: (state) =>
       createWordPressStateDiffReader({ store: state.store }),
     httpEvidenceReader: (state) =>
