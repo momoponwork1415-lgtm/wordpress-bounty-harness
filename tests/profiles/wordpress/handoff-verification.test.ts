@@ -27,6 +27,7 @@ import {
 } from "../../../src/profiles/wordpress/scope-policy.js";
 import { observedReviewLabPackage } from "../../../src/profiles/wordpress/lab/observed-review-lab.js";
 import { createWordPressAttemptObserver } from "../../../src/profiles/wordpress/verification/attempt-observer.js";
+import { victimFile } from "../../../src/profiles/wordpress/lab/victim-files.js";
 import {
   HandoffVerifier,
   WBH_VERIFY_SKILL_ID,
@@ -598,6 +599,60 @@ describe("handoff verification through the real transport and observer (#525)", 
       role: "administrator",
       firing: "observed",
       screenshot: expect.stringContaining("victim-page-after-dialog.png"),
+    });
+  });
+
+  it("records which Harness fixture the Lab browser put into the victim's file input (#468)", async () => {
+    const { result, store, state } = await verifyThroughHandoff({
+      impact: "stored-xss",
+      victim: {
+        role: "administrator",
+        paths: [
+          {
+            path: "/wp-admin/upload.php?page=replace",
+            actions: [
+              {
+                kind: "set-file",
+                selector: "#userfile",
+                fixture: "image-jpeg",
+              },
+              { kind: "click", selector: "#submit" },
+            ],
+          },
+          "/wp-admin/upload.php",
+        ],
+        dialogMarker: MARKER,
+      },
+    });
+    expect(result).toMatchObject(AWAITING);
+    expect(state.visits).toEqual([
+      "/wp-admin/upload.php?page=replace",
+      "/wp-admin/upload.php",
+    ]);
+    if (result.status !== "incomplete" || result.evidenceDigest === undefined)
+      throw new Error("No evidence was recorded");
+    const jpeg = victimFile("image-jpeg");
+    const record = await store.readJson(
+      result.evidenceDigest,
+      "lab-browser-observation.json",
+      (await import("zod")).z.looseObject({}),
+      64 * 1024,
+    );
+    expect(record).toMatchObject({
+      status: "resolved",
+      value: {
+        status: "visited",
+        files: [
+          {
+            visitIndex: 0,
+            actionIndex: 0,
+            fixture: "image-jpeg",
+            fileName: "wbh-fixture.jpg",
+            size: jpeg.bytes.length,
+            sha256: jpeg.sha256,
+          },
+        ],
+      },
     });
   });
 
