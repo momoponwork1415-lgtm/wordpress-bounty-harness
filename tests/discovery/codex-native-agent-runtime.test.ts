@@ -1206,7 +1206,7 @@ describe("Codex native agent runtime", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-  it("reads every child turn's report and keeps not-a-report for children that never wrote one", async () => {
+  it("reads every child turn's report and names how a child without one ended (#540)", async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-child-turns-"));
     try {
       const cooperativeProfile = defineAgentRuntimeProfile({
@@ -1356,6 +1356,25 @@ describe("Codex native agent runtime", () => {
               turnStarted,
               interrupted,
             ]),
+            // A reply that is not a report, after an earlier provider error.
+            childRollout(5, [
+              turnStarted,
+              done(null, {
+                message: "synthetic",
+                codex_error_info: "cyber_policy",
+              }),
+              fromRoot(5),
+              turnStarted,
+              done("Here is what I found, in prose."),
+            ]),
+            // A refusal ends the child's only turn.
+            childRollout(6, [
+              turnStarted,
+              done(null, {
+                message: "synthetic",
+                codex_error_info: "cyber_policy",
+              }),
+            ]),
           ],
         }),
         broker(),
@@ -1377,14 +1396,31 @@ describe("Codex native agent runtime", () => {
         "child-2",
         "child-3",
         "child-4",
+        "child-5",
+        "child-6",
       ]);
-      for (const child of children.slice(0, 2)) {
-        expect(child.receipt).toMatchObject({
+      // A provider error or an aborted last turn is not a schema failure;
+      // only a last reply that is not a report is.
+      const ended = [
+        [0, "interrupted", "child-turn-aborted"],
+        [
+          1,
+          "provider",
+          "child-provider-error:response_too_many_failed_attempts",
+        ],
+        [4, "schema", "child-final-message-not-report"],
+        [5, "provider", "provider-cyber-policy"],
+      ] as const;
+      for (const [index, reason, reasonDetail] of ended) {
+        const child = children[index];
+        expect(child?.receipt).toMatchObject({
           terminal: "incomplete",
-          reason: "schema",
-          reasonDetail: "child-final-message-not-report",
+          reason,
+          reasonDetail,
         });
-        expect(child.attachment).toBeUndefined();
+        // No provider limit: a child's end never stops the campaign by itself.
+        expect(child?.receipt.providerLimit).toBeUndefined();
+        expect(child?.attachment).toBeUndefined();
       }
       const reportOf = async (index: number) => {
         const child = children[index];

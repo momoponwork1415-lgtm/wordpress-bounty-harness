@@ -71,6 +71,7 @@ async function fixture() {
     image: `node@${digest}`,
     bundledCatalogPath: "/opt/codex/model-catalog.json",
     scratchRootDirectory: root,
+    ownerDirectory: join(root, "discovery-owners"),
     maxOutputBytes: 1024 * 1024,
     timeoutMs: 60_000,
     runDocker: async (args) => {
