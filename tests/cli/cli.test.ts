@@ -2589,7 +2589,7 @@ describe("harness CLI vertical slice", () => {
       wordpressCampaignConfigSchema.parse({ ...base, discovery: wide }),
     ).toMatchObject({
       discovery: { mode: "wide", minimumActiveMinutes: 0 },
-      promptId: "wp2shell-bounty-v14-wide",
+      promptId: "wp2shell-bounty-v16-wide",
       runWallTimeMinutes: 120,
     });
     expect(
@@ -2602,12 +2602,12 @@ describe("harness CLI vertical slice", () => {
       wordpressCampaignConfigSchema.parse({
         ...base,
         discovery: wide,
-        promptId: "wp2shell-bounty-v14-wide",
+        promptId: "wp2shell-bounty-v16-wide",
         runWallTimeMinutes: 20,
       }).runWallTimeMinutes,
     ).toBe(20);
     // DEVELOPMENT §5 (#599): the wide candidate launches only when named; the
-    // wide default stays the current v14-wide.
+    // wide default stays the current v16-wide.
     expect(
       wordpressCampaignConfigSchema.parse({
         ...base,
@@ -2706,7 +2706,7 @@ describe("harness CLI vertical slice", () => {
     expect(started[0]?.event.type).toBe("discovery-run-started");
     if (started[0]?.event.type === "discovery-run-started")
       expect(started[0].event.configuration).toMatchObject({
-        promptVariant: "wp2shell-bounty-v14-wide",
+        promptVariant: "wp2shell-bounty-v16-wide",
         mode: "wide",
         wallMinutes: 120,
         minimumActiveMinutes: 0,

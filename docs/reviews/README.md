@@ -52,7 +52,7 @@ Codex への依頼文:
 
 - `2026-10-14-final-design.md`: 探索の Lab、即時の検証、`owner-approved` の付け手、Step 1 の「人手 0」の範囲は、2026-10-18〜19 の決定（ADR 0033〜0037、#238 の comment）で変わった。
 - `2026-10-17-thorough-search-v6-plan.md`: 入口索引と coverage は ADR 0034 で削除した。
-- prompt v4〜v7 の草案と対照表: 旧版の記録。新規探索は `deep` の `wp2shell-bounty-v11` と `wide` の `wp2shell-bounty-v14-wide` だけ（ADR 0039 の 2026-10-26 追記。v10、v12-wide、v13-wide は archived、v8 は ADR 0033 で入り、照合用に残す）。`wide` の比較候補 `wp2shell-bounty-v15-wide` は名指しのときだけ走る（[本文と出典対照](2026-10-26-wp2shell-bounty-v15-wide.md)、ADR 0039 の 2026-10-26 追記 8）。
+- prompt v4〜v7 の草案と対照表: 旧版の記録。新規探索は `deep` の `wp2shell-bounty-v11` と `wide` の `wp2shell-bounty-v16-wide` だけ（[本文と出典対照](2026-10-26-wp2shell-bounty-v16-wide.md)、ADR 0039 の 2026-10-26 追記 9。v10、v12-wide、v13-wide、v14-wide は archived、v8 は ADR 0033 で入り、照合用に残す）。`wide` の比較候補 `wp2shell-bounty-v15-wide` は名指しのときだけ走る（[本文と出典対照](2026-10-26-wp2shell-bounty-v15-wide.md)、ADR 0039 の 2026-10-26 追記 8）。
 
 ## archive/
 

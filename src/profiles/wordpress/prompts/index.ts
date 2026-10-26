@@ -305,8 +305,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:42ec734364d93492bf9b936e415b94796da21fb154d3b29033cafbd58596229d",
     outputContract: "v4",
-    status: "current",
-    mode: "wide",
+    status: "archived",
     // v13-wide with only the sink strategy and fixed coordination fragments
     // replaced (owner guidance 2026-10-26, ADR 0039 addendum).
     fragments: [
@@ -341,6 +340,29 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
       { section: "coordination", file: "handover-v11" },
       SOURCES,
       { section: "coordination", file: "fixed-v15" },
+      { section: "coordination", file: "stop-wide-v13" },
+    ],
+  },
+  {
+    id: "wp2shell-bounty-v16-wide",
+    digest:
+      "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
+    outputContract: "v4",
+    status: "current",
+    mode: "wide",
+    // v14-wide with one sentence of the sink strategy replaced (owner
+    // instruction 2026-10-26: content only the vendor can place is not
+    // attacker input): third-party content is attacker-placeable only when
+    // someone other than the service's vendor can place it.
+    fragments: [
+      TASK,
+      { section: "objective", file: "first-principles-v11" },
+      { section: "strategy", file: "sinks-v16" },
+      { section: "strategy", file: "shapes-v12" },
+      { section: "persistence", file: "research-v11" },
+      { section: "coordination", file: "handover-v11" },
+      SOURCES,
+      { section: "coordination", file: "fixed-v14" },
       { section: "coordination", file: "stop-wide-v13" },
     ],
   },
