@@ -20,13 +20,14 @@ import {
   readDecisionHistory,
   type DecisionHistoryEntry,
 } from "./decision-history.js";
-import { isCurrentVerification } from "./current-verification.js";
-import {
-  currentManualObservation,
-  humanObservedBasis,
-  humanReproducedBasis,
-} from "./manual-observation.js";
+import { currentManualObservation } from "./manual-observation.js";
 import { openReproductionPackage } from "./reproduction-package.js";
+import {
+  submissionBasis,
+  type BasisAnswer,
+  type BasisUse,
+  type SubmissionBasis,
+} from "./submission-basis.js";
 
 export {
   currentManualObservation,
@@ -37,6 +38,13 @@ export {
   recordManualObservation,
   recordManualObservationLabReady,
 } from "./manual-observation.js";
+
+export type {
+  BasisAnswer,
+  BasisMissingReason,
+  BasisUse,
+  SubmissionBasis,
+} from "./submission-basis.js";
 
 export {
   exportReviewBundle,
@@ -103,6 +111,7 @@ const scopeResult = z.strictObject({
   destination: id,
   reason: z.string().min(1).max(2000),
 });
+const MISSING_BASIS = "A matching evidence-backed verification is required";
 const nonHumanActors = new Set(["ai", "agent", "automation", "system"]);
 const humanActor = id
   .transform((value) => value.trim())
@@ -248,19 +257,12 @@ export interface ProgrammeScopeEvaluator<TFacts = unknown> {
   }): Promise<readonly z.infer<typeof scopeResult>[]>;
 }
 
-/** Reads the judge-owned verification evidence; discovery claims are never scope facts. */
+/** Reads the Harness-owned records behind the basis; discovery claims are never scope facts. */
 export interface ScopeFactsProvider<TFacts> {
   load(input: {
     readonly ref: ReviewRef;
-    readonly verification: Extract<
-      LedgerEventV1,
-      { type: "verification-finished" }
-    >;
-    /** #525: the person's Lab observation, when it is the basis instead of a judge. */
-    readonly humanObservation?: Extract<
-      LedgerEventV1,
-      { type: "manual-observation-recorded" }
-    >;
+    /** Review's `scope` basis for `ref` (`submissionBasis`); never built by the caller. */
+    readonly basis: SubmissionBasis;
   }): Promise<TFacts>;
 }
 
@@ -271,19 +273,6 @@ export interface DuplicateLookup {
     readonly findingId: string;
   }): Promise<DuplicateLookupResult>;
 }
-
-/** What a person reproduces against, and what scope, drafts and the final gate rest on. */
-type ReproducibleBasis = {
-  readonly verification: Extract<
-    LedgerEventV1,
-    { type: "verification-finished" }
-  >;
-  readonly packageDigest: string;
-  readonly humanObservation?: Extract<
-    LedgerEventV1,
-    { type: "manual-observation-recorded" }
-  >;
-};
 
 export class Review<TFacts = unknown> {
   readonly #ledger: Ledger;
@@ -773,8 +762,7 @@ export class Review<TFacts = unknown> {
     readonly ref: ReviewRef;
   }): Promise<readonly ScopeAssessment[]> {
     const ref = refSchema.parse(input.ref);
-    const { verification, humanObservation } =
-      this.#requireSubmissionBasis(ref);
+    const basis = this.#requireBasis(ref, "scope");
     const existing = (await this.#scopeAssessments(ref)).filter(
       (item) => item.policyDigest === this.#scopeEvaluator.policyDigest,
     );
@@ -805,11 +793,7 @@ export class Review<TFacts = unknown> {
     let results: readonly z.infer<typeof scopeResult>[];
     let failed = false;
     try {
-      const facts = await this.#factsProvider.load({
-        ref,
-        verification,
-        ...(humanObservation === undefined ? {} : { humanObservation }),
-      });
+      const facts = await this.#factsProvider.load({ ref, basis });
       results = z
         .array(scopeResult)
         .parse(await this.#scopeEvaluator.assess({ ref, facts }));
@@ -899,9 +883,13 @@ export class Review<TFacts = unknown> {
       assessment.policyDigest !== this.#scopeEvaluator.policyDigest
     )
       throw new Error("An in-scope assessment is required");
-    if (!this.#isCurrentVerification(assessment.ref))
-      throw new Error("A current verification is required before drafting");
-    this.#requireSubmissionBasis(assessment.ref);
+    const basis = this.submissionBasis({ ref: assessment.ref, use: "draft" });
+    if (basis.status === "missing")
+      throw new Error(
+        basis.reason === "superseded"
+          ? "A current verification is required before drafting"
+          : MISSING_BASIS,
+      );
     const prior = (await this.#allDrafts(assessment.ref)).filter(
       (item) => item.assessmentId === assessmentId,
     );
@@ -1097,30 +1085,16 @@ export class Review<TFacts = unknown> {
     );
     if (draft.revision !== latestRevision) return "superseded-draft";
     if (draft.preparedBy !== "human") return "human-reviewed-draft-required";
-    if (!this.#isCurrentVerification(assessment.ref))
-      return "stale-verification";
-
-    const basis = this.#reproducibleBasis(assessment.ref);
-    if (basis === null) return "manual-reproduction-required";
-    const reproductionPackageDigest = basis.packageDigest;
-    const manual = this.#ledger
-      .readAll({
-        campaignId: assessment.ref.campaignId,
-        findingId: assessment.ref.findingId,
-        type: "human-reproduction-recorded",
-      })
-      .filter(
-        ({ event }) =>
-          event.type === "human-reproduction-recorded" &&
-          event.verificationId === assessment.ref.verificationId &&
-          event.reproductionPackageDigest === reproductionPackageDigest,
-      )
-      .at(-1);
-    if (
-      manual?.event.type !== "human-reproduction-recorded" ||
-      manual.event.result !== "match"
-    )
-      return "manual-reproduction-required";
+    const basis = this.submissionBasis({
+      ref: assessment.ref,
+      use: "authorize",
+    });
+    if (basis.status === "missing")
+      return basis.reason === "superseded"
+        ? "stale-verification"
+        : "manual-reproduction-required";
+    const manual = basis.basis.reproduction;
+    if (manual === null) return "manual-reproduction-required";
 
     const saved = this.#ledger
       .readAll({
@@ -1169,9 +1143,21 @@ export class Review<TFacts = unknown> {
       : "human-accept-required";
   }
 
-  /** A later attempt or latest-version Finding supersedes a submission basis. */
-  #isCurrentVerification(ref: ReviewRef): boolean {
-    return isCurrentVerification(this.#ledger, ref);
+  /**
+   * Basis or not for one review step, and why not (ADR 0040). Every caller
+   * that takes a Finding toward submission asks here; see `BasisUse`.
+   */
+  submissionBasis(input: {
+    readonly ref: ReviewRef;
+    readonly use: BasisUse;
+  }): BasisAnswer {
+    return submissionBasis(this.#ledger, input.ref, input.use);
+  }
+
+  #requireBasis(ref: ReviewRef, use: BasisUse): SubmissionBasis {
+    const answer = this.submissionBasis({ ref, use });
+    if (answer.status === "missing") throw new Error(MISSING_BASIS);
+    return answer.basis;
   }
 
   /** Records that the human submitted this exact authorized draft; Harness sends nothing. */
@@ -1318,9 +1304,7 @@ export class Review<TFacts = unknown> {
       .enum(["match", "mismatch", "unavailable"])
       .parse(input.result);
     const ref = refSchema.parse(input.ref);
-    const basis = this.#reproducibleBasis(ref);
-    if (basis === null)
-      throw new Error("A matching evidence-backed verification is required");
+    const basis = this.#requireBasis(ref, "reproduce");
     return {
       schemaVersion: 1,
       identity: `human-reproduction:${randomUUID()}`,
@@ -1358,8 +1342,10 @@ export class Review<TFacts = unknown> {
 
   async openReproductionPackage(input: { readonly ref: ReviewRef }) {
     const ref = refSchema.parse(input.ref);
-    const verification = this.#requireConfirmed(ref);
-    return openReproductionPackage(this.#store, verification.result);
+    const basis = this.#requireBasis(ref, "reproduce");
+    // A review Lab package opens with `lab up --for-review`, not here.
+    if (basis.kind !== "judge-era") throw new Error(MISSING_BASIS);
+    return openReproductionPackage(this.#store, basis.verification.result);
   }
 
   async inspect(input: {
@@ -1418,73 +1404,6 @@ export class Review<TFacts = unknown> {
           ? verification.event.result.reproductionPackageDigest
           : null,
     };
-  }
-
-  /**
-   * What a person reproduces against: the judge-era package of an old
-   * confirmed result, or (#525, ADR 0040) the sealed review Lab package of a
-   * result awaiting a human observation that a named person observed as
-   * `match`.
-   */
-  #reproducibleBasis(ref: ReviewRef): ReproducibleBasis | null {
-    const observed = humanObservedBasis(this.#ledger, ref);
-    if (observed !== null)
-      return {
-        verification: observed.verification,
-        packageDigest: observed.packageDigest,
-        humanObservation: observed.observation,
-      };
-    try {
-      const verification = this.#requireConfirmed(ref);
-      return verification.result.status === "runtime-confirmed" ||
-        verification.result.status === "reproduced"
-        ? {
-            verification,
-            packageDigest: verification.result.reproductionPackageDigest,
-          }
-        : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * The basis for scope, drafts and the final gate. An old confirmed result
-   * keeps its rules; a human-observed result also needs the reviewer's
-   * `review decide --reproduced match` against the same review Lab package.
-   */
-  #requireSubmissionBasis(ref: ReviewRef): ReproducibleBasis {
-    const basis = this.#reproducibleBasis(ref);
-    if (
-      basis === null ||
-      (basis.humanObservation !== undefined &&
-        humanReproducedBasis(this.#ledger, ref) === null)
-    )
-      throw new Error("A matching evidence-backed verification is required");
-    return basis;
-  }
-
-  #requireConfirmed(
-    ref: ReviewRef,
-  ): Extract<LedgerEventV1, { type: "verification-finished" }> {
-    const verification = this.#ledger
-      .readAll({ type: "verification-finished" })
-      .find(
-        ({ event }) =>
-          event.type === "verification-finished" &&
-          event.campaignId === ref.campaignId &&
-          event.findingId === ref.findingId &&
-          event.verificationId === ref.verificationId,
-      );
-    if (
-      verification?.event.type !== "verification-finished" ||
-      verification.event.snapshotDigest !== ref.snapshotDigest ||
-      (verification.event.result.status !== "runtime-confirmed" &&
-        verification.event.result.status !== "reproduced")
-    ) {
-      throw new Error("A matching evidence-backed verification is required");
-    }
-    return verification.event;
   }
 
   /** The discovery run that produced the Finding and the prompt digest it ran with. */
