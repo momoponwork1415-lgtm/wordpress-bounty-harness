@@ -3,9 +3,9 @@ name: wbh-destination
 description: accept 済みで重複照合が no-match の Finding 1 件について、提出先を Wordfence → Patchstack → 個別の vendor の順に調べる。報酬が出る先 1 つ（wordfence / patchstack / vendor:<名>）か none を、方針の写しの行と公開ページを根拠にして非公開メモに書く。台帳には書かず、送信もしない。
 ---
 
-# wbh-destination v2
+# wbh-destination v3
 
-検証から提出までの段 5（ADR 0038、#438）を行う。対象は、`harness review decide` で `accept` が記録され、重複照合の結果が `no-match` の Finding 1 件である。結論は `wordfence`、`patchstack`、`vendor:<名>`、`none` のどれか 1 つにする。wbh-report v2 はこのメモの結論を読んで、報告書を書くかどうかと提出先を決める。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版の v1 は `versions/v1.md` に残す。
+検証から提出までの段 5（ADR 0038、#438）を行う。対象は、`harness review decide` で `accept` が記録され、重複照合の結果が `no-match` の Finding 1 件である。結論は `wordfence`、`patchstack`、`vendor:<名>`、`none` のどれか 1 つにする。wbh-report v8 はこのメモの結論を読んで、報告書を書くかどうかと提出先を決める。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版の v1・v2 は `versions/v1.md`・`versions/v2.md` に残す。
 
 ## 前提にする所有者の決定
 
@@ -101,10 +101,10 @@ campaign、Finding、`target.targetId`、`target.versions.explored`、`finding.i
 
 置き場所は `privateEvidence.directory` の直下である。このディレクトリは Finding ごとに分かれていない Private Evidence の置き場なので、ファイル名を `destination-<campaign>-<Finding>.md` にする。Git には置かない。一時的にも repo の中に作らない。
 
-先頭の 7 行は次の形に固定する。wbh-report v2 は「結論」の行を読む。
+先頭の 7 行は次の形に固定する。wbh-report v8 は「結論」の行を読む。
 
 ```text
-# 提出先メモ（wbh-destination v2）
+# 提出先メモ（wbh-destination v3）
 結論: <wordfence | patchstack | vendor:<名> | none>
 campaign: <id>
 Finding: <id>
@@ -128,9 +128,9 @@ Finding の本文、ペイロード、HTTP 記録、認証情報はメモに写�
 - Patchstack の「Active VDP」の表示があるとき。「Patchstack の Active VDP あり。Wordfence が既存 VDP を理由に受けなかったときは、段 B の結果に従って Patchstack に出す」と書く。
 - 結論が `wordfence` のとき。フォームで脆弱性の開示を Wordfence に任せない（No）と、報酬も CVE も出ない（`wordfence-submission-form-2026-10-21.md` の 13 行）。
 - 結論が `patchstack` のとき。規則に明らかに合わない報告は、1 週間の利用停止になる（`patchstack-scope-2026-10-21.md` の 140〜146 行）。確かめられない条件が残るなら、所有者が提出の前に解く。
-- 結論の programme について、`review.scopeAssessments` に `in-scope` の判定が無いとき。`review draft --programme` にはこの判定が要る。AI 操作役が `harness review scope --campaign <id> --finding <id>` を打つ（runtime-confirmed か reproduced の Finding だけに打てる）。
+- 結論の programme について、`review.scopeAssessments` に `in-scope` の判定が無いとき。`review draft --programme` にはこの判定が要る。AI 操作役が `harness review scope --campaign <id> --finding <id>` を打つ（判定器の `runtime-confirmed` か `reproduced` の Finding、または人間の観測 `match` と `--reproduced match` がある `incomplete(awaiting-human-observation)` の Finding だけに打てる）。
 - vendor か Patchstack の方針に報告先の指定があるとき（ほかの先に出さない、公開まで秘密を守る、など）。その文と URL を書き、所有者が提出の前に読む。
-- 結論が `vendor:<名>` のとき。wbh-report v2 は vendor 向けの報告書を書かない。`review draft` も programme の判定が要るので、提出の記録は所有者が手で扱う。
+- 結論が `vendor:<名>` のとき。wbh-report v8 は vendor 向けの報告書を書かない。`review draft` も programme の判定が要るので、提出の記録は所有者が手で扱う。
 - 有効インストール数が閾値をまたぐとき。export の値（`target.activeInstallations`）と、確認した時点の WordPress.org の値を両方書く。
 - 提出するとき。結論の値を `harness review authorize --candidate <id> --draft <digest> --to <結論>` の送信先に写すのは、所有者である。
 
