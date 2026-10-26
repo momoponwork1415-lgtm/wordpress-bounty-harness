@@ -9,8 +9,13 @@ import { readFile } from "node:fs/promises";
 interface WordPressPromptRecord {
   readonly id: string;
   readonly digest: `sha256:${string}`;
-  /** Exactly one row per table (per mode for discovery) is `current`; everything else is archived. */
-  readonly status: "current" | "archived";
+  /**
+   * Exactly one row per table (per mode for discovery) is `current`. A
+   * discovery `candidate` is the new version of a production comparison
+   * (DEVELOPMENT §5): a campaign launches it only by naming it. Everything
+   * else is archived.
+   */
+  readonly status: "current" | "candidate" | "archived";
 }
 
 /**
@@ -48,7 +53,7 @@ export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
    * Otherwise the body is objective-only and receives this generated version.
    */
   readonly outputContract: WordPressOutputContractVersion | null;
-  /** Required on a `current` row: the campaign mode that launches it. */
+  /** Required on a `current` or `candidate` row: the campaign mode that launches it. */
   readonly mode?: WordPressDiscoveryMode;
   /**
    * The body is composed from these files in order. The composition is
@@ -317,6 +322,29 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     ],
   },
   {
+    id: "wp2shell-bounty-v15-wide",
+    digest:
+      "sha256:3e82116ebdd32e4e863d7daacf7a87d90c43f6c4e73efe49333668883fcf680d",
+    outputContract: "v4",
+    status: "candidate",
+    mode: "wide",
+    // v14-wide plus one sentence: the root agent copies the Harness `## Lab`
+    // section to every agent it starts (Issue #599). Both judge sentences now
+    // name the human's recorded observation in a review Lab (#555, ADR 0040).
+    // Compared with v14-wide in production before either is current.
+    fragments: [
+      { section: "objective", file: "task-v15" },
+      { section: "objective", file: "first-principles-v11" },
+      { section: "strategy", file: "sinks-v14" },
+      { section: "strategy", file: "shapes-v12" },
+      { section: "persistence", file: "research-v11" },
+      { section: "coordination", file: "handover-v11" },
+      SOURCES,
+      { section: "coordination", file: "fixed-v15" },
+      { section: "coordination", file: "stop-wide-v13" },
+    ],
+  },
+  {
     id: "wp2shell-whitebox-v1.7",
     digest:
       "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",
@@ -390,11 +418,20 @@ export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS = {
   wide: currentOf(WORDPRESS_DISCOVERY_PROMPTS, "wide").id,
 } as const satisfies Record<WordPressDiscoveryMode, WordPressDiscoveryPromptId>;
 
+/**
+ * Every objective a new campaign may name: the current one of each mode and
+ * any `candidate` under comparison with it (DEVELOPMENT §5).
+ */
+export const WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS =
+  WORDPRESS_DISCOVERY_PROMPTS.flatMap((row) =>
+    row.status === "archived" ? [] : [row.id],
+  );
+
 /** The `deep` objective: the single cooperative Trial every earlier decision names. */
 export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID =
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.deep;
 
-/** The mode a current objective launches under; archived objectives have none. */
+/** The mode a current or candidate objective launches under; archived objectives have none. */
 export function wordPressDiscoveryModeOf(
   id: string,
 ): WordPressDiscoveryMode | undefined {

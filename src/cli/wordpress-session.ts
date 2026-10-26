@@ -33,7 +33,9 @@ import type {
 import {
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS,
   WORDPRESS_DISCOVERY_MODES,
+  WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS,
   WORDPRESS_VERIFIER_PROMPT_ID,
+  wordPressDiscoveryModeOf,
 } from "../profiles/wordpress/prompts/index.js";
 import type {
   WordpressScopeInput,
@@ -61,11 +63,11 @@ const text = z.strictObject({
 export const DISCOVERY_RUN_MEMORY_MIB =
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
 
-/** The current objective of either launch mode; superRefine ties it to the mode (ADR 0039). */
-const runnablePrompt = z.enum([
-  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.deep,
-  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.wide,
-]);
+/**
+ * The current or candidate objective of either launch mode; superRefine ties
+ * it to the mode (ADR 0039, DEVELOPMENT §5).
+ */
+const runnablePrompt = z.enum(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS);
 
 /**
  * ADR 0029 cap and the default wall of both modes. `wide` used 20 until the
@@ -177,12 +179,12 @@ export const wordpressCampaignConfigSchema = z
     const mode = config.discovery.mode;
     if (
       config.promptId !== undefined &&
-      config.promptId !== WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS[mode]
+      wordPressDiscoveryModeOf(config.promptId) !== mode
     )
       context.addIssue({
         code: "custom",
         path: ["promptId"],
-        message: `The ${mode} mode runs ${WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS[mode]} only`,
+        message: `The ${mode} mode runs ${WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS.filter((id) => wordPressDiscoveryModeOf(id) === mode).join(" or ")} only`,
       });
     const floor =
       config.discovery.minimumActiveMinutes ??
@@ -415,7 +417,7 @@ export async function readWordPressCampaignPolicy(
     throw new Error("Selection and campaign WordPress versions differ");
   if (
     policy.promptVariant !== undefined &&
-    !Object.values(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).some(
+    !WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS.some(
       (id) => id === policy.promptVariant,
     )
   )

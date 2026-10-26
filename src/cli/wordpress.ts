@@ -44,7 +44,7 @@ import type {
 import {
   loadWordPressDiscoveryAsset,
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
-  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS,
+  WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS,
   wordPressDiscoveryModeOf,
   wordPressDiscoveryPrompt,
   WORDPRESS_TRUST_BOUNDARY,
@@ -121,7 +121,7 @@ async function loadSelectInput(configPath: string): Promise<{
       );
     if (
       directPolicy.data.promptVariant !== undefined &&
-      !Object.values(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).some(
+      !WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS.some(
         (id) => id === directPolicy.data.promptVariant,
       )
     )

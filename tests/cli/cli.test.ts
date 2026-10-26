@@ -2606,6 +2606,15 @@ describe("harness CLI vertical slice", () => {
         runWallTimeMinutes: 20,
       }).runWallTimeMinutes,
     ).toBe(20);
+    // DEVELOPMENT §5 (#599): the wide candidate launches only when named; the
+    // wide default stays the current v14-wide.
+    expect(
+      wordpressCampaignConfigSchema.parse({
+        ...base,
+        discovery: wide,
+        promptId: "wp2shell-bounty-v15-wide",
+      }).promptId,
+    ).toBe("wp2shell-bounty-v15-wide");
     // Phase D1: an attached exploration Lab, its reset budget defaulting to 2.
     expect(
       wordpressCampaignConfigSchema.parse({
@@ -2621,6 +2630,9 @@ describe("harness CLI vertical slice", () => {
     ).toEqual({ mode: "attached", maxResets: 5, maxObservations: 20 });
     for (const rejected of [
       { discovery: deep, promptId: "wp2shell-bounty-v13-wide" },
+      { discovery: deep, promptId: "wp2shell-bounty-v15-wide" },
+      { promptId: "wp2shell-bounty-v15-wide" },
+      { discovery: wide, promptId: "wp2shell-bounty-v11" },
       { promptId: "wp2shell-bounty-v13-wide" },
       { discovery: wide, promptId: "wp2shell-bounty-v13-wide" },
       { discovery: wide, promptId: "wp2shell-bounty-v8" },

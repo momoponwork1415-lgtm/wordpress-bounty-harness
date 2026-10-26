@@ -158,3 +158,14 @@ PR #537 のレビューで、再開（ADR 0036）が子の上限・最低時間�
 - `deep` の `wp2shell-bounty-v11` は名指しの Trial でだけ使う。campaign 設定の `discovery.mode` を `deep` にして回す。`discovery.mode` を省いたときの schema の既定は `deep` のままにする。
 - 選定方針の `promptVariant`（v11）は変えない。どちらの mode の現行 id でもよい（「決定」の節）。
 - 消し方: `campaign.json` の 2 つの値を `deep` と v11 に戻し、この節を消す。
+
+## 2026-10-26 追記 8: `wide` の比較候補 v15-wide（#599、#555、所有者決定）
+
+2026-10-26 の Lab arm（開発セット 6 Trial、v14-wide、`discovery.lab: attached`）は、Lab が `ready` になったのに Root も子も Lab に要求を 1 回も送らなかった。Harness の `## Lab` 節は Root にだけ渡り、子は Root の Agent tool から起動されるので、Root が写さない限り Lab を知らない（#599）。所有者は 2026-10-26 に、#599 の (a)、目的文に「Lab の節は子にも渡す」の 1 文を足して版を上げる案を選んだ。
+
+- `wp2shell-bounty-v15-wide`（`sha256:3e82116ebdd32e4e863d7daacf7a87d90c43f6c4e73efe49333668883fcf680d`）を足す。v14-wide から替える fragment は `objective/task-v10` → `objective/task-v15` と `coordination/fixed-v14` → `coordination/fixed-v15` の 2 つだけである。
+- `fixed-v15` は Root の段落に「When the Trial has a Lab, the root agent copies the `## Lab` section supplied by the Harness, unchanged, into the instructions of every agent it starts.」の 1 文を足す。Lab で何を試すかは書かない（AGENTS.md「Harness と AI の責務」）。最後の段落は「Stop when」のまま。
+- 同じ版で、判定器を現行として書いた 2 文（#555）を「確定は、名指しした人間が review Lab で記録した観測だけで行う」の意味に替える（出典: ADR 0040）。`task-v15` は 1 文目の判定器と canary の文、`fixed-v15` は Root の段落の最後の文である。ほかのバイトは v14-wide と同じ（`tests/profiles/wordpress/discovery-prompts.test.ts` の v15-wide の test）。`deep` の v11 は変えない。
+- 本番で v14-wide と交互に回して比べる（DEVELOPMENT 第 5 節）。そのため prompt 表に `candidate` の状態を足した。`candidate` の行は `mode` を持ち、campaign 設定の `promptId` で名指ししたときだけ起動する。`promptId` を省いた campaign は従来どおり mode の `current` を使う。`wide` の `current` は v14-wide のままで、`src/profiles/wordpress/policy/campaign.json` は変えない。採否が決まったら、採る版を `current`、もう一方を `archived` にし、`candidate` の行を残さない。
+- 測った数字: なし。本番で取る（受け入れは #599 のとおり、本番の Lab arm で Trial ごとの Lab 要求数が 0 でないこと）。
+- 消し方: v15-wide の行と 2 つの fragment を消す（Trial が走った後なら `archived` にして残す）。`candidate` の状態は、ほかに `candidate` の行が無ければ外す。
