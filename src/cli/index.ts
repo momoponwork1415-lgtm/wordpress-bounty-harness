@@ -205,6 +205,8 @@ export interface CliProfile {
       readonly minimum?: number;
       /** The runner's stop request; true before recording selects nothing (#302). */
       readonly stop?: () => boolean;
+      /** The runner only: batches the runners of other prefixes hold; their targets are not selected (#604). */
+      readonly reservedBatches?: readonly string[];
     },
   ): Promise<CliSelectionReport>;
   /**
@@ -228,6 +230,8 @@ export interface CliProfile {
       readonly configPath: string;
       /** A profile target name, or null for every selected target. */
       readonly target: string | null;
+      /** The runner only: the batch a new campaign binds, instead of the latest unbound one (#604). */
+      readonly selectionBatchId?: string;
       /** Explicit independent Trials on the same Snapshot. */
       readonly repeat?: number;
       /** Checked before each next target; true drains the campaign as `operator`. */
@@ -932,13 +936,14 @@ const continuousOptions = {
     notify: STR,
     resume: BOOL,
   },
-  "continuous stop": {},
-  "continuous resume": {},
+  "continuous stop": { "campaign-prefix": STR },
+  "continuous resume": { "campaign-prefix": STR },
   "continuous status": {},
   "continuous concurrency": { config: STR, runtime: STR },
 } as const;
 type ContinuousValues = FlagValues<
   (typeof continuousOptions)["continuous run"] &
+    (typeof continuousOptions)["continuous stop"] &
     (typeof continuousOptions)["continuous concurrency"]
 >;
 
@@ -959,7 +964,7 @@ function continuousRow(
         required(flags.config, "config");
         if (name === "continuous run") required(flags.selection, "selection");
       }
-      if (name === "continuous run" && flags["campaign-prefix"] !== undefined) {
+      if (flags["campaign-prefix"] !== undefined) {
         const prefix = flags["campaign-prefix"];
         if (
           prefix.startsWith("selection-") ||
@@ -1164,8 +1169,14 @@ const COMMANDS: readonly Command[] = [
     "continuous run",
     "continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--notify <command>] [--resume]",
   ),
-  continuousRow("continuous stop", "continuous stop"),
-  continuousRow("continuous resume", "continuous resume"),
+  continuousRow(
+    "continuous stop",
+    "continuous stop [--campaign-prefix <text>]",
+  ),
+  continuousRow(
+    "continuous resume",
+    "continuous resume [--campaign-prefix <text>]",
+  ),
   continuousRow("continuous status", "continuous status"),
   command({
     name: "review",

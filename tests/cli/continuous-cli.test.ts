@@ -168,7 +168,7 @@ describe("continuous status", () => {
     const t = await setup(fakeProfile());
     expect(await t.command("status")).toBe(0);
     expect(t.stdout).toEqual([
-      "state never-started  pid none",
+      "state never-started  pid none  prefix prod",
       "today  trials 0  completed 0  provider-limited 0  provider-refused 0  run-failed 0  lab-failed 0  unsettled 0  findings queue 0 + parked 0",
       "week  trials 0  completed 0  provider-limited 0  provider-refused 0  run-failed 0  lab-failed 0  unsettled 0  findings queue 0 + parked 0",
     ]);
@@ -229,14 +229,45 @@ describe("continuous status", () => {
     );
     expect(await t.command("status")).toBe(1);
     expect(t.stdout.slice(0, 2)).toEqual([
-      "state stale  campaignId crashed  pid none",
+      "state stale  campaignId crashed  pid none  prefix prod",
       "last error boom",
     ]);
     t.stdout.length = 0;
     await writeFile(t.paths.pid, String(process.pid));
     expect(await t.command("status")).toBe(0);
     expect(t.stdout[0]).toBe(
-      `state running  campaignId crashed  pid ${process.pid}`,
+      `state running  campaignId crashed  pid ${process.pid}  prefix prod`,
+    );
+  });
+
+  it("lists the runner of every campaign prefix in the state, one line each (#604)", async () => {
+    const t = await setup(fakeProfile());
+    const v15 = continuousPaths(t.state.stateDirectory, "prod-v15");
+    await writeFile(
+      t.paths.memo,
+      JSON.stringify({ state: "running", detail: { campaignId: "prod-1" } }),
+    );
+    await writeFile(t.paths.pid, String(process.pid));
+    await writeFile(
+      v15.memo,
+      JSON.stringify({
+        state: "running",
+        detail: { campaignId: "prod-v15-1" },
+        lastError: "boom",
+      }),
+    );
+    // A dead pid: the second runner's memo says running, so it is stale.
+    expect(await t.command("status")).toBe(1);
+    expect(t.stdout.slice(0, 3)).toEqual([
+      `state running  campaignId prod-1  pid ${process.pid}  prefix prod`,
+      "state stale  campaignId prod-v15-1  pid none  prefix prod-v15",
+      "last error boom",
+    ]);
+    t.stdout.length = 0;
+    await writeFile(v15.pid, String(process.pid));
+    expect(await t.command("status")).toBe(0);
+    expect(t.stdout[1]).toBe(
+      `state running  campaignId prod-v15-1  pid ${process.pid}  prefix prod-v15`,
     );
   });
 
@@ -392,12 +423,14 @@ describe("continuous stop and resume", () => {
     const t = await setup(fakeProfile());
     expect(await t.command("stop")).toBe(0);
     expect(t.stdout).toEqual([
-      "stop requested; the runner drains at the next target boundary",
+      "stop requested for prefix prod; the runner drains at the next target boundary",
     ]);
     expect(await readFile(t.paths.stop, "utf8")).toBe("operator\n");
     t.stdout.length = 0;
     expect(await t.command("status")).toBe(1);
-    expect(t.stdout[0]).toBe("state stopped  reason operator  pid none");
+    expect(t.stdout[0]).toBe(
+      "state stopped  reason operator  pid none  prefix prod",
+    );
     t.stdout.length = 0;
     expect(await t.command("resume")).toBe(0);
     expect(t.stdout).toEqual([
@@ -416,7 +449,7 @@ describe("continuous stop and resume", () => {
     t.stdout.length = 0;
     expect(await t.command("status")).toBe(1);
     expect(t.stdout[0]).toBe(
-      `state stopping  reason operator  pid ${process.pid}`,
+      `state stopping  reason operator  pid ${process.pid}  prefix prod`,
     );
     await expect(t.command("resume")).rejects.toThrow(
       `continuous run is still running as pid ${process.pid}`,
@@ -424,6 +457,24 @@ describe("continuous stop and resume", () => {
     // A dead pid in the file is no runner.
     await writeFile(t.paths.pid, "999999");
     expect(await t.command("resume")).toBe(0);
+  });
+
+  it("stops and resumes one prefix's runner, leaving the other's marker alone (#604)", async () => {
+    const t = await setup(fakeProfile());
+    const v15 = continuousPaths(t.state.stateDirectory, "prod-v15");
+    expect(await t.command("stop", { campaignPrefix: "prod-v15" })).toBe(0);
+    expect(await readFile(v15.stop, "utf8")).toBe("operator\n");
+    await expect(stat(t.paths.stop)).rejects.toThrow();
+    // Resuming the default prefix clears nothing of the other's.
+    expect(await t.command("resume")).toBe(0);
+    expect(await readFile(v15.stop, "utf8")).toBe("operator\n");
+    await writeFile(v15.pid, String(process.pid));
+    await expect(
+      t.command("resume", { campaignPrefix: "prod-v15" }),
+    ).rejects.toThrow(`still running as pid ${process.pid}`);
+    await expect(
+      t.command("stop", { campaignPrefix: "selection-x" }),
+    ).rejects.toThrow("--campaign-prefix must be a short slug");
   });
 
   it("returns 2 for an unknown subcommand", async () => {

@@ -2,8 +2,10 @@ import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
 import {
+  CAMPAIGN_PREFIX,
   clearContinuousStop,
   continuousPaths,
+  continuousPrefixes,
   createContinuousRunner,
   exploreTrials,
   discoverySweepHeld,
@@ -97,7 +99,15 @@ export async function continuousCommand(
   },
 ): Promise<number> {
   const { state, profile, io } = context;
-  const paths = continuousPaths(state.stateDirectory);
+  if (
+    context.campaignPrefix.startsWith("selection-") ||
+    !CAMPAIGN_PREFIX.test(context.campaignPrefix)
+  )
+    throw new Error(
+      "--campaign-prefix must be a short slug not starting with selection-",
+    );
+  // `run`, `stop` and `resume` act on one prefix's runner (#604).
+  const paths = continuousPaths(state.stateDirectory, context.campaignPrefix);
   if (context.runtime !== undefined && sub !== "concurrency")
     throw new Error("--runtime is only valid with continuous concurrency");
   if (sub === "concurrency" && context.runtime !== undefined) {
@@ -195,7 +205,10 @@ export async function continuousCommand(
     const pid = await readLivePid(paths.pid);
     if (pid !== null)
       throw new Error(`continuous run is still running as pid ${pid}`);
-    const cleared = await clearContinuousStop(state.stateDirectory);
+    const cleared = await clearContinuousStop(
+      state.stateDirectory,
+      context.campaignPrefix,
+    );
     io.stdout(
       cleared
         ? "stop request cleared; start continuous run to resume"
@@ -206,33 +219,53 @@ export async function continuousCommand(
   if (sub === "stop") {
     if (context.resume)
       throw new Error("--resume is only valid with continuous run");
-    requestContinuousStop(state.stateDirectory);
-    io.stdout("stop requested; the runner drains at the next target boundary");
+    requestContinuousStop(
+      state.stateDirectory,
+      "operator",
+      context.campaignPrefix,
+    );
+    io.stdout(
+      `stop requested for prefix ${context.campaignPrefix}; the runner drains at the next target boundary`,
+    );
     return 0;
   }
   if (sub === "status") {
     if (context.resume)
       throw new Error("--resume is only valid with continuous run");
-    const memo = await readContinuousMemo(state.stateDirectory);
-    const livePid = await readLivePid(paths.pid);
-    const stopReason = await readContinuousStopReason(state.stateDirectory);
-    const displayState =
-      stopReason !== null
-        ? livePid === null
-          ? "stopped"
-          : "stopping"
-        : memo !== null && memo.state !== "stopped" && livePid === null
-          ? "stale"
-          : (memo?.state ?? "never-started");
-    const displayDetail =
-      stopReason !== null ? { reason: stopReason } : (memo?.detail ?? {});
-    io.stdout(
-      `state ${displayState}${Object.entries(displayDetail)
-        .map(([key, value]) => `  ${key} ${value}`)
-        .join("")}  pid ${livePid ?? "none"}`,
-    );
-    if (memo?.lastError !== undefined)
-      io.stdout(`last error ${memo.lastError}`);
+    // One line per prefix's runner; the counts below cover the whole state (#604).
+    const prefixes = await continuousPrefixes(state.stateDirectory);
+    let failing = false;
+    for (const prefix of prefixes.length === 0
+      ? [context.campaignPrefix]
+      : prefixes) {
+      const memo = await readContinuousMemo(state.stateDirectory, prefix);
+      const livePid = await readLivePid(
+        continuousPaths(state.stateDirectory, prefix).pid,
+      );
+      const stopReason = await readContinuousStopReason(
+        state.stateDirectory,
+        prefix,
+      );
+      const displayState =
+        stopReason !== null
+          ? livePid === null
+            ? "stopped"
+            : "stopping"
+          : memo !== null && memo.state !== "stopped" && livePid === null
+            ? "stale"
+            : (memo?.state ?? "never-started");
+      const displayDetail =
+        stopReason !== null ? { reason: stopReason } : (memo?.detail ?? {});
+      io.stdout(
+        `state ${displayState}${Object.entries(displayDetail)
+          .map(([key, value]) => `  ${key} ${value}`)
+          .join("")}  pid ${livePid ?? "none"}  prefix ${prefix}`,
+      );
+      if (memo?.lastError !== undefined)
+        io.stdout(`last error ${memo.lastError}`);
+      if (["stopped", "stopping", "stale"].includes(displayState))
+        failing = true;
+    }
     // Unset means the config's maxConcurrentTargets.
     const live = await readContinuousConcurrency(state.stateDirectory);
     if (live !== null) io.stdout(`concurrency live ${live}`);
@@ -254,20 +287,13 @@ export async function continuousCommand(
         `${label}  trials ${c.trials}  completed ${c.completed}  provider-limited ${c.providerLimited}  provider-refused ${c.providerRefused}  run-failed ${c.runFailed}  lab-failed ${c.labFailed}  unsettled ${c.unsettled}  findings queue ${c.queue} + parked ${c.parked}`,
       );
     }
-    return ["stopped", "stopping", "stale"].includes(displayState) ? 1 : 0;
+    return failing ? 1 : 0;
   }
   if (sub !== "run") return 2;
   const configPath = context.configPath;
   const selectionPath = context.selectionPath;
   if (configPath === undefined || selectionPath === undefined)
     throw new Error("continuous run needs --config and --selection");
-  if (
-    context.campaignPrefix.startsWith("selection-") ||
-    !/^[a-z0-9][a-z0-9-]{0,40}$/.test(context.campaignPrefix)
-  )
-    throw new Error(
-      "--campaign-prefix must be a short slug not starting with selection-",
-    );
   const hostStatus = profile.hostStatus;
   if (hostStatus === undefined)
     throw new Error("continuous run needs a host profile");
@@ -276,11 +302,12 @@ export async function continuousCommand(
     stateDirectory: state.stateDirectory,
     campaignPrefix: context.campaignPrefix,
     ledger: state.ledger,
-    async select({ stop }) {
+    async select({ stop, reservedBatches }) {
       const report = await profile.select(state, {
         configPath: selectionPath,
         minimum: SELECT_MINIMUM,
         stop,
+        reservedBatches,
       });
       return {
         batchId: report.batchId,

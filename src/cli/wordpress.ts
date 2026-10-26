@@ -267,6 +267,8 @@ async function bindCampaignSelectionBatch(
   campaignId: string,
   targetSlug: string | null,
   legacyHistoryDigest: string,
+  /** The runner's own batch; without it, the latest batch of this policy (#604). */
+  requestedBatchId?: string,
 ): Promise<readonly ReservedSelection[]> {
   const bound = state.ledger.read({
     campaignId,
@@ -292,7 +294,7 @@ async function bindCampaignSelectionBatch(
   const batch = await reservedSelectionBatch(
     state,
     policy,
-    binding?.selectionBatchId,
+    binding?.selectionBatchId ?? requestedBatchId,
   );
   if (batch.legacyHistoryDigest !== legacyHistoryDigest)
     throw new Error(
@@ -1394,6 +1396,7 @@ async function runWordPressCampaign(
           input.campaignId,
           input.target,
           legacyHistoryDigest!,
+          input.selectionBatchId,
         )
       : undefined;
   const reservedDigests = new Map(
@@ -1592,7 +1595,12 @@ export function createWordPressCliProfile(
           : { legacyHistoryFile: options.legacyHistoryFile }),
         promptVariant,
         clock: state.clock,
-      }).decide(policy, { minimum });
+      }).decide(policy, {
+        minimum,
+        ...(input.reservedBatches === undefined
+          ? {}
+          : { reservedBatches: input.reservedBatches }),
+      });
       const inspected = decision.inspections;
       const inspectionBySlug = new Map(
         inspected.map((item) => [item.slug, item]),

@@ -83,7 +83,8 @@ async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
       calls.push(input);
       const step = steps.shift();
       // With the script spent, the operator stops the runner.
-      if (step === undefined) await writeFile(continuousPaths(root).stop, "");
+      if (step === undefined)
+        await writeFile(continuousPaths(root, deps.campaignPrefix).stop, "");
       else
         await append(input.campaignId, {
           type: "selection-batch-bound",
@@ -860,5 +861,147 @@ describe("continuous runner", () => {
     expect(await t.runner.run()).toBe("operator");
     expect(seen).toBe(true);
     expect(t.calls).toHaveLength(0);
+  });
+});
+
+describe("runners of two campaign prefixes in one state (#604)", () => {
+  const v15 = continuousPaths;
+
+  it("runs beside a live runner of another prefix without reading its memo or its stop marker", async () => {
+    // The default prefix's runner (pid 7) is mid-campaign and its operator asked it to stop.
+    const t = await setup([async () => ({})], {
+      campaignPrefix: "prod-v15",
+      pidAlive: (pid) => pid === 7,
+    });
+    const prod = continuousPaths(t.root);
+    await writeFile(prod.pid, "7");
+    await writeFile(prod.stop, "operator\n");
+    const prodMemo = JSON.stringify({
+      state: "running",
+      campaignId: "prod-20261020-1",
+      target: null,
+    });
+    await writeFile(prod.memo, prodMemo);
+    expect(await t.runner.run()).toBe("operator");
+    // Its own campaign, under its own id, and its own pid file while it ran.
+    expect(t.calls.map((call) => call.campaignId)).toEqual([
+      "prod-v15-20261020-1",
+      "prod-v15-20261020-2",
+    ]);
+    expect(v15(t.root, "prod-v15").pid).toBe(
+      join(t.root, "continuous-prod-v15.pid"),
+    );
+    expect(existsSync(v15(t.root, "prod-v15").pid)).toBe(false);
+    expect(existsSync(v15(t.root, "prod-v15").memo)).toBe(true);
+    // The other runner's files are as it left them.
+    expect(await readFile(prod.memo, "utf8")).toBe(prodMemo);
+    expect(await readFile(prod.pid, "utf8")).toBe("7");
+    expect(await readFile(prod.stop, "utf8")).toBe("operator\n");
+  });
+
+  it("refuses a second runner of the same prefix while the first one's pid lives", async () => {
+    const t = await setup([], {
+      campaignPrefix: "prod-v15",
+      pidAlive: (pid) => pid === 7,
+    });
+    await writeFile(continuousPaths(t.root, "prod-v15").pid, "7");
+    await expect(t.runner.run()).rejects.toThrow("already running as pid 7");
+    // The default prefix keeps the file a runner built before #604 holds.
+    const prod = await setup([], { pidAlive: (pid) => pid === 7 });
+    await writeFile(join(prod.root, "continuous.pid"), "7");
+    await expect(prod.runner.run()).rejects.toThrow("already running as pid 7");
+  });
+
+  it("writes a policy stop to its own marker only", async () => {
+    const t = await setup([], {
+      campaignPrefix: "prod-v15",
+      legacyHistoryAvailable: async () => false,
+    });
+    expect(await t.runner.run()).toBe("legacy-history-missing");
+    expect(
+      await readFile(continuousPaths(t.root, "prod-v15").stop, "utf8"),
+    ).toBe("legacy-history-missing\n");
+    expect(existsSync(continuousPaths(t.root).stop)).toBe(false);
+  });
+
+  it("resumes on start only the unfinished campaign of its own prefix", async () => {
+    const t = await setup([async () => ({})], { campaignPrefix: "prod-v15" });
+    // A dead runner of the default prefix left its campaign unfinished.
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify({ campaignId: "prod-20261019-4", target: null }),
+    );
+    await writeFile(
+      continuousPaths(t.root, "prod-v15").memo,
+      JSON.stringify({ campaignId: "prod-v15-20261019-2", target: null }),
+    );
+    expect(await t.runner.run()).toBe("operator");
+    expect(t.calls[0]).toMatchObject({ campaignId: "prod-v15-20261019-2" });
+    expect(t.calls[0]?.resumeInterrupted).toBeDefined();
+    expect(t.calls.map((call) => call.campaignId)).not.toContain(
+      "prod-20261019-4",
+    );
+  });
+
+  it("does not select or adopt the batches another prefix's runner holds, and binds the batch it selected", async () => {
+    const reserved: (readonly string[])[] = [];
+    const bound: (string | undefined)[] = [];
+    const t = await setup([async () => ({})], {
+      campaignPrefix: "prod-v15",
+      select: async ({ reservedBatches }) => (
+        reserved.push(reservedBatches),
+        { batchId: "selection-9", targets: ["a"] }
+      ),
+    });
+    const runCampaign = t.deps.runCampaign;
+    t.deps.runCampaign = async (input) => (
+      bound.push(input.selectionBatchId),
+      runCampaign(input)
+    );
+    // The default prefix's campaign bound selection-1 and has selected selection-3 next.
+    await t.append("prod-20261020-1", {
+      type: "selection-batch-bound",
+      selectionBatchId: "selection-1",
+      policyDigest: `sha256:${"b".repeat(64)}`,
+      selectionIds: ["wporg:x@1.0.0"],
+    });
+    await t.append("selection-3", {
+      type: "target-selected",
+      selectionId: "wporg:y@1.0.0",
+    });
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify({
+        campaignId: "prod-20261020-1",
+        selectionBatchId: "selection-3",
+      }),
+    );
+    expect(await createContinuousRunner(t.deps).run()).toBe("operator");
+    // selection-3 is the latest unbound batch, but it is not this runner's to adopt.
+    expect(reserved[0]).toEqual(
+      expect.arrayContaining(["selection-1", "selection-3"]),
+    );
+    expect(bound[0]).toBe("selection-9");
+    // The lock that serialises selection is gone once it has memoised its batch.
+    expect(existsSync(continuousPaths(t.root).selectLock)).toBe(false);
+  });
+
+  it("waits to select while a live runner of another prefix holds the selection lock", async () => {
+    let waits = 0;
+    let selects = 0;
+    const t = await setup([async () => ({})], {
+      campaignPrefix: "prod-v15",
+      pidAlive: (pid) => pid === 7 && waits < 2,
+      sleep: async () => void waits++,
+      select: async () => (
+        selects++,
+        { batchId: "selection-9", targets: ["a"] }
+      ),
+    });
+    await writeFile(continuousPaths(t.root).selectLock, "7");
+    expect(await t.runner.run()).toBe("operator");
+    expect(waits).toBe(2);
+    expect(selects).toBeGreaterThan(0);
+    expect(existsSync(continuousPaths(t.root).selectLock)).toBe(false);
   });
 });

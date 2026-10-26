@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import {
+  link,
   mkdir,
   readdir,
   readFile,
@@ -64,6 +65,8 @@ const continuousMemoSchema = z.object({
   state: z.string().default("starting"),
   detail: z.record(z.string(), z.string()).default({}),
   campaignId: z.string().optional(),
+  /** The selection batch this runner holds until its campaign finishes; other prefixes do not select its targets (#604). */
+  selectionBatchId: z.string().optional(),
   target: z.string().nullable().optional(),
   backoffStep: z.number().int().nonnegative().default(0),
   /** Per runtime, after a limit that stopped only its targets: its step and when it may start again. */
@@ -88,19 +91,20 @@ export type ContinuousMemo = z.infer<typeof continuousMemoSchema>;
 /** The saved memo, or null when none exists; a malformed memo is an error, not a state. */
 export async function readContinuousMemo(
   stateDirectory: string,
+  prefix: string = DEFAULT_CAMPAIGN_PREFIX,
 ): Promise<ContinuousMemo | null> {
-  const raw = await readFile(
-    continuousPaths(stateDirectory).memo,
-    "utf8",
-  ).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return null;
-    throw error;
-  });
+  const path = continuousPaths(stateDirectory, prefix).memo;
+  const raw = await readFile(path, "utf8").catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    },
+  );
   if (raw === null) return null;
   const parsed = continuousMemoSchema.safeParse(JSON.parse(raw) as unknown);
   if (!parsed.success)
     throw new Error(
-      `The runner memo ${continuousPaths(stateDirectory).memo} is malformed: ${parsed.error.message}`,
+      `The runner memo ${path} is malformed: ${parsed.error.message}`,
     );
   return parsed.data;
 }
@@ -161,7 +165,11 @@ export interface ContinuousDeps {
   readonly campaignPrefix: string;
   readonly ledger: Pick<Ledger, "readAll">;
   /** Freezes a batch of at least SELECT_MINIMUM targets, or none; a stop seen before recording records none (#302). */
-  select(input: { readonly stop: () => boolean }): Promise<{
+  select(input: {
+    readonly stop: () => boolean;
+    /** Batches the runners of other prefixes hold; their targets are not selected (#604). */
+    readonly reservedBatches: readonly string[];
+  }): Promise<{
     readonly batchId: string | null;
     /** Profile target names, in rank order. */
     readonly targets: readonly string[];
@@ -170,6 +178,8 @@ export interface ContinuousDeps {
   runCampaign(input: {
     readonly campaignId: string;
     readonly target: string | null;
+    /** The batch a new campaign binds, instead of the latest unbound one (#604). */
+    readonly selectionBatchId?: string;
     readonly stop: () => boolean;
     readonly signal?: AbortSignal;
     /** Resume the campaign's runs whose host died instead of running them again (ADR 0036). */
@@ -210,11 +220,31 @@ export interface ContinuousDeps {
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 
-export function continuousPaths(stateDirectory: string) {
+/** The prefix `continuous run` uses without `--campaign-prefix`. */
+export const DEFAULT_CAMPAIGN_PREFIX = "prod";
+export const CAMPAIGN_PREFIX = /^[a-z0-9][a-z0-9-]{0,40}$/;
+
+/**
+ * One runner per campaign prefix and state (#604): its pid, memo and stop
+ * marker are its own. The default prefix keeps the names it had when a state
+ * had one runner, so a runner built before #604 and a newer one of the same
+ * prefix still refuse each other. The log, the live limits and the sweep
+ * holds stay shared.
+ */
+export function continuousPaths(
+  stateDirectory: string,
+  prefix: string = DEFAULT_CAMPAIGN_PREFIX,
+) {
+  if (!CAMPAIGN_PREFIX.test(prefix) || prefix.startsWith("selection-"))
+    throw new Error(`Invalid campaign prefix: ${prefix}`);
+  const runner =
+    prefix === DEFAULT_CAMPAIGN_PREFIX ? "continuous" : `continuous-${prefix}`;
   return {
-    memo: join(stateDirectory, "continuous.json"),
-    pid: join(stateDirectory, "continuous.pid"),
-    stop: join(stateDirectory, "continuous.stop"),
+    memo: join(stateDirectory, `${runner}.json`),
+    pid: join(stateDirectory, `${runner}.pid`),
+    stop: join(stateDirectory, `${runner}.stop`),
+    /** Held by the one runner of the state that is selecting (#604). */
+    selectLock: join(stateDirectory, "continuous-select.lock"),
     log: join(stateDirectory, "continuous.log"),
     /** The live target limit under the config's maxConcurrentTargets. */
     concurrency: join(stateDirectory, "continuous.concurrency"),
@@ -223,12 +253,29 @@ export function continuousPaths(stateDirectory: string) {
   };
 }
 
+/** The prefixes whose runner left a pid, memo or stop marker in this state, sorted. */
+export async function continuousPrefixes(
+  stateDirectory: string,
+): Promise<readonly string[]> {
+  const names = await readdir(stateDirectory).catch(() => [] as string[]);
+  const prefixes = new Set<string>();
+  for (const name of names) {
+    const match = /^continuous(?:-(.+))?\.(?:json|pid|stop)$/.exec(name);
+    if (match === null) continue;
+    const prefix = match[1] ?? DEFAULT_CAMPAIGN_PREFIX;
+    if (CAMPAIGN_PREFIX.test(prefix) && !prefix.startsWith("selection-"))
+      prefixes.add(prefix);
+  }
+  return [...prefixes].sort();
+}
+
 /** Atomically publish an explicit operator or terminal policy stop. */
 export function requestContinuousStop(
   stateDirectory: string,
   reason: ContinuousStopReason = "operator",
+  prefix: string = DEFAULT_CAMPAIGN_PREFIX,
 ): void {
-  const path = continuousPaths(stateDirectory).stop;
+  const path = continuousPaths(stateDirectory, prefix).stop;
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
     writeFileSync(temporary, `${reason}\n`, { mode: 0o600, flag: "wx" });
@@ -241,9 +288,10 @@ export function requestContinuousStop(
 /** Empty legacy markers still mean operator stop; unknown contents fail closed. */
 export async function readContinuousStopReason(
   stateDirectory: string,
+  prefix: string = DEFAULT_CAMPAIGN_PREFIX,
 ): Promise<ContinuousStopReason | null> {
   const raw = await readFile(
-    continuousPaths(stateDirectory).stop,
+    continuousPaths(stateDirectory, prefix).stop,
     "utf8",
   ).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return null;
@@ -257,8 +305,9 @@ export async function readContinuousStopReason(
 /** Consume only the marker that existed at this instant. Later stop requests remain. */
 export async function clearContinuousStop(
   stateDirectory: string,
+  prefix: string = DEFAULT_CAMPAIGN_PREFIX,
 ): Promise<boolean> {
-  const path = continuousPaths(stateDirectory).stop;
+  const path = continuousPaths(stateDirectory, prefix).stop;
   const consumed = `${path}.resume-${process.pid}-${randomUUID()}`;
   try {
     await rename(path, consumed);
@@ -467,9 +516,13 @@ export function pendingProviderLimited(
   });
 }
 
-/** The latest automatic batch that no campaign has bound and the runner has not discarded. */
+/**
+ * The latest automatic batch that no campaign has bound and the runner has not
+ * discarded; none when that batch is one another prefix's runner holds.
+ */
 export function unboundBatch(
   ledger: Pick<Ledger, "readAll">,
+  held: ReadonlySet<string> = new Set(),
 ): string | undefined {
   const settled = new Set([
     ...readAll(ledger, { type: "selection-batch-bound" }).flatMap((event) =>
@@ -482,7 +535,9 @@ export function unboundBatch(
   const latest = readAll(ledger, { type: "target-selected" })
     .filter((event) => event.campaignId.startsWith("selection-"))
     .at(-1)?.campaignId;
-  return latest === undefined || settled.has(latest) ? undefined : latest;
+  return latest === undefined || settled.has(latest) || held.has(latest)
+    ? undefined
+    : latest;
 }
 
 /**
@@ -589,9 +644,34 @@ function batchFacts(deps: ContinuousDeps, campaignId: string) {
   return { completed, refusedAll };
 }
 
-/** One host, one operator, one production state (OPERATIONS §2). */
+/**
+ * The batches the runners of other prefixes hold: each one's memoised batch
+ * and the batch its unfinished campaign bound. A runner that stopped or died
+ * keeps them until its campaign finishes or its memo is deleted (#604).
+ */
+async function heldBySiblings(deps: ContinuousDeps): Promise<Set<string>> {
+  const held = new Set<string>();
+  for (const prefix of await continuousPrefixes(deps.stateDirectory)) {
+    if (prefix === deps.campaignPrefix) continue;
+    // A memo another runner is replacing is read again at the next selection.
+    const memo = await readContinuousMemo(deps.stateDirectory, prefix).catch(
+      () => null,
+    );
+    if (memo?.selectionBatchId !== undefined) held.add(memo.selectionBatchId);
+    if (memo?.campaignId !== undefined)
+      for (const event of readAll(deps.ledger, {
+        campaignId: memo.campaignId,
+        type: "selection-batch-bound",
+      }))
+        if (event.type === "selection-batch-bound")
+          held.add(event.selectionBatchId);
+  }
+  return held;
+}
+
+/** One host, one operator, one production state, one runner per campaign prefix (OPERATIONS §2, #604). */
 export function createContinuousRunner(deps: ContinuousDeps) {
-  const paths = continuousPaths(deps.stateDirectory);
+  const paths = continuousPaths(deps.stateDirectory, deps.campaignPrefix);
   let memo: ContinuousMemo = {
     state: "starting",
     detail: {},
@@ -607,11 +687,14 @@ export function createContinuousRunner(deps: ContinuousDeps) {
   let signalled = false;
   let operatorController = new AbortController();
   const stopRequested = () => signalled || existsSync(paths.stop);
+  // Atomic: the runners of other prefixes read this memo (#604).
   const save = async () => {
     memo.updatedAt = deps.clock().toISOString();
-    await writeFile(paths.memo, `${JSON.stringify(memo, null, 2)}\n`, {
+    const temporary = `${paths.memo}.${deps.pid}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(memo, null, 2)}\n`, {
       mode: 0o600,
     });
+    await rename(temporary, paths.memo);
   };
   /** A state change writes one line to the log and to --notify. */
   const enter = async (state: string, detail: Record<string, string> = {}) => {
@@ -648,9 +731,39 @@ export function createContinuousRunner(deps: ContinuousDeps) {
   };
   const stop = async (reason: ContinuousStopReason) => {
     if (reason !== "operator" && !existsSync(paths.stop))
-      requestContinuousStop(deps.stateDirectory, reason);
+      requestContinuousStop(deps.stateDirectory, reason, deps.campaignPrefix);
     await enter("stopped", { reason });
     return reason;
+  };
+
+  /**
+   * One runner of the state selects at a time and memoises its batch before it
+   * lets go, so the next one sees that batch as held (#604). A lock whose pid
+   * died is taken over; null when a stop arrives while waiting.
+   */
+  const lockSelection = async (): Promise<(() => Promise<void>) | null> => {
+    const mine = `${paths.selectLock}.${deps.pid}.tmp`;
+    await writeFile(mine, String(deps.pid), { mode: 0o600 });
+    try {
+      for (;;) {
+        try {
+          // A hard link appears whole, or not at all when the lock exists.
+          await link(mine, paths.selectLock);
+          return () => rm(paths.selectLock, { force: true });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        }
+        const holder = await readLivePid(paths.selectLock, deps.pidAlive);
+        if (holder === null || holder === deps.pid) {
+          await rm(paths.selectLock, { force: true });
+          continue;
+        }
+        if (stopRequested()) return null;
+        await deps.sleep(MINUTE);
+      }
+    } finally {
+      await rm(mine, { force: true });
+    }
   };
 
   const run = async (
@@ -662,15 +775,21 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     const previous = await readLivePid(paths.pid, deps.pidAlive);
     if (previous !== null && previous !== deps.pid)
       throw new Error(`continuous run is already running as pid ${previous}`);
-    memo = { ...memo, ...(await readContinuousMemo(deps.stateDirectory)) };
-    const heldReason = await readContinuousStopReason(deps.stateDirectory);
+    memo = {
+      ...memo,
+      ...(await readContinuousMemo(deps.stateDirectory, deps.campaignPrefix)),
+    };
+    const heldReason = await readContinuousStopReason(
+      deps.stateDirectory,
+      deps.campaignPrefix,
+    );
     if (heldReason !== null) {
       if (!options.resume) {
         // Preserve the marker and unfinished campaign across service restarts.
         await enter("stopped", { reason: heldReason });
         return heldReason;
       }
-      await clearContinuousStop(deps.stateDirectory);
+      await clearContinuousStop(deps.stateDirectory, deps.campaignPrefix);
     }
     await writeFile(paths.pid, String(deps.pid), { mode: 0o600 });
     const onSignal = () => {
@@ -699,14 +818,26 @@ export function createContinuousRunner(deps: ContinuousDeps) {
   const loop = async (): Promise<ContinuousStopReason> => {
     // An unfinished campaign resumes under its id.
     // An unbound batch from a crash runs before any new selection.
-    let current =
+    // A batch another prefix's runner holds is left to it (#604).
+    const adopted = unboundBatch(deps.ledger, await heldBySiblings(deps));
+    let current:
+      | {
+          campaignId: string;
+          target: string | null;
+          selectionBatchId?: string;
+        }
+      | undefined =
       (memo.campaignId && {
         campaignId: memo.campaignId,
         target: memo.target ?? null,
+        ...(memo.selectionBatchId === undefined
+          ? {}
+          : { selectionBatchId: memo.selectionBatchId }),
       }) ||
-      (unboundBatch(deps.ledger) && {
+      (adopted && {
         campaignId: nextCampaignId(deps),
         target: null,
+        selectionBatchId: adopted,
       }) ||
       undefined;
     // A batch frozen under another policy would only fail: drop it with a
@@ -721,6 +852,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
           `${deps.clock().toISOString()} selection-batch-discarded batch=${discarded} campaign=${current.campaignId} reason=policy-changed`,
         );
         delete memo.campaignId;
+        delete memo.selectionBatchId;
         delete memo.target;
         current = undefined;
       }
@@ -772,7 +904,21 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       }
       if (!current) {
         if (stopRequested()) return stop("operator");
-        const selected = await deps.select({ stop: stopRequested });
+        const release = await lockSelection();
+        if (release === null) return stop("operator");
+        let selected: Awaited<ReturnType<ContinuousDeps["select"]>>;
+        try {
+          selected = await deps.select({
+            stop: stopRequested,
+            reservedBatches: [...(await heldBySiblings(deps))],
+          });
+          // Memoised before the lock goes, so the next runner to select sees it.
+          if (selected.batchId === null) delete memo.selectionBatchId;
+          else memo.selectionBatchId = selected.batchId;
+          await save();
+        } finally {
+          await release();
+        }
         if (stopRequested()) return stop("operator");
         if (selected.batchId === null) {
           // A failed listing is not an empty pool.
@@ -793,9 +939,12 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         current = {
           campaignId: nextCampaignId(deps),
           target: memo.probe ? (selected.targets[0] ?? null) : null,
+          selectionBatchId: selected.batchId,
         };
       }
       memo.campaignId = current.campaignId;
+      if (current.selectionBatchId !== undefined)
+        memo.selectionBatchId = current.selectionBatchId;
       memo.target = current.target;
       if (stopRequested()) return stop("operator");
       await enter("running", { campaignId: current.campaignId });
@@ -808,6 +957,9 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         summary = await deps.runCampaign({
           campaignId: current.campaignId,
           target: current.target,
+          ...(current.selectionBatchId === undefined
+            ? {}
+            : { selectionBatchId: current.selectionBatchId }),
           stop: stopRequested,
           signal: operatorController.signal,
           resumeInterrupted: {
@@ -849,6 +1001,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         ).slice(0, 200);
         memo.consecutiveErrorBatches++;
         delete memo.campaignId;
+        delete memo.selectionBatchId;
         current = undefined;
         if (memo.consecutiveErrorBatches >= MAX_CONSECUTIVE_ERROR_BATCHES)
           return stop("errors");
@@ -904,6 +1057,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       memo.runtimeBackoff = {};
       const facts = batchFacts(deps, current.campaignId);
       delete memo.campaignId;
+      delete memo.selectionBatchId;
       delete memo.target;
       current = undefined;
       if (facts.refusedAll) {

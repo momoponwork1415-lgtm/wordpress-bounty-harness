@@ -526,6 +526,39 @@ describe("WordPress ledger exclusions", () => {
     ]);
   });
 
+  it("excludes every slug a batch held by another runner selected, until that batch is no longer held (#604)", () => {
+    const ledger = reader([
+      // Another prefix's runner holds this batch; neither target has started.
+      selected("held-a", "1.0.0", "selection-1", digest("a")),
+      selected("held-b", "2.0.0", "selection-1", digest("b")),
+      selected("free", "1.0.0", "selection-2", digest("c")),
+    ]);
+    const inspect = (reservedBatches?: ReadonlySet<string>) =>
+      inspectWordPressLedgerExclusions({
+        ledger,
+        candidates: [
+          { slug: "held-a", version: "1.0.0" },
+          // A newer version of a held slug waits too: one runner per slug.
+          { slug: "held-b", version: "2.0.1" },
+          { slug: "free", version: "1.0.0" },
+        ],
+        revisitPolicy: { kind: "never" },
+        currentPromptVariant: "wp2shell-bounty-v2",
+        ...(reservedBatches === undefined ? {} : { reservedBatches }),
+      }).map(({ slug, reasons }) => [slug, reasons]);
+    expect(inspect(new Set(["selection-1"]))).toEqual([
+      ["held-a", ["reserved-by-runner"]],
+      ["held-b", ["reserved-by-runner"]],
+      ["free", []],
+    ]);
+    // Selected but never started is not a Trial: once released, all are eligible again.
+    expect(inspect()).toEqual([
+      ["held-a", []],
+      ["held-b", []],
+      ["free", []],
+    ]);
+  });
+
   it("reselects a fully observed non-Trial and a provider-limited run, and retains a partial Trial", () => {
     const finished = (
       runId: string,
