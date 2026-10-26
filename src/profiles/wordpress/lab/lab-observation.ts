@@ -33,6 +33,8 @@ echo json_encode(["http" => $http !== false ? "ok" : "failed", "database" => $da
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 const MAX_BROWSER_DIAGNOSTIC_BYTES = 16 * 1024;
 const PNG_SIGNATURE = Buffer.from("89504e470d0a1a0a", "hex");
+const MAX_VIDEO_BYTES = 8 * 1024 * 1024;
+const WEBM_SIGNATURE = Buffer.from("1a45dfa3", "hex");
 const diagnosticCountSchema = z.number().int().min(0).max(999_999);
 const victimBrowserDiagnosticSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -59,6 +61,7 @@ const victimBrowserDiagnosticSchema = z.strictObject({
 });
 const browserVisitOutputSchema = z.strictObject({
   screenshotBase64: z.string(),
+  videoBase64: z.string().optional(),
   /** Status of the response to the visited path itself, before any action. */
   httpStatus: z.number().int().min(100).max(599).optional(),
   dialogCount: diagnosticCountSchema.optional(),
@@ -88,7 +91,11 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-  const page = await browser.newPage();
+  // Only a victim visit the operator opted into (#549) records video.
+  const videoDirectory = process.env.WBH_RECORD_VIDEO === "1" ? "/tmp/wbh-video" : undefined;
+  const page = videoDirectory === undefined
+    ? await browser.newPage()
+    : await (await browser.newContext({ recordVideo: { dir: videoDirectory } })).newPage();
   const dialogMarker = process.env.WBH_DIALOG_MARKER ?? "";
   const markerDialogs = new Map();
   let recordingRuntime = false;
@@ -356,8 +363,20 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
   const screenshot = await visiblePage.screenshot({ type: "png" });
   if (screenshot.length > ${MAX_SCREENSHOT_BYTES})
     throw new Error("Browser screenshot exceeds the evidence limit");
+  let videoBase64;
+  if (videoDirectory !== undefined) {
+    // The first page's WebM; a failed or oversized one is left out and the
+    // screenshot still stands.
+    try {
+      const video = page.video();
+      await page.context().close();
+      const recorded = require("node:fs").readFileSync(await video.path());
+      if (recorded.length <= ${MAX_VIDEO_BYTES}) videoBase64 = recorded.toString("base64");
+    } catch {}
+  }
   process.stdout.write(JSON.stringify({
     screenshotBase64: screenshot.toString("base64"),
+    ...(videoBase64 === undefined ? {} : { videoBase64 }),
     ...(httpStatus === undefined ? {} : { httpStatus }),
     dialogCount,
     consoleErrorCount: runtime.consoleErrorCount,
@@ -583,15 +602,19 @@ async function runBrowserVisit(input: {
   readonly account?: { readonly username: string; readonly password: string };
   readonly actions?: VictimActions;
   readonly dialogMarker?: string;
+  /** Also record a WebM of the first page (#549). */
+  readonly recordVideo?: boolean;
 }): Promise<{
   readonly httpStatus?: number;
   readonly dialogCount?: number;
   readonly consoleErrorCount?: number;
   readonly dialogEvent?: WordPressDialogEvent;
   readonly screenshot: Buffer;
+  readonly video?: Buffer;
   readonly diagnostic?: WordPressVictimBrowserDiagnostic;
 }> {
   const { lab, path, account, actions } = input;
+  const recordVideo = input.recordVideo === true;
   const result = await lab.docker(
     [
       "run",
@@ -620,13 +643,18 @@ async function runBrowserVisit(input: {
       ...(input.dialogMarker === undefined
         ? []
         : ["--env", `WBH_DIALOG_MARKER=${input.dialogMarker}`]),
+      ...(recordVideo ? ["--env", "WBH_RECORD_VIDEO=1"] : []),
       "--entrypoint=node",
       lab.images.browser,
       "-e",
       BROWSER_VISIT,
     ],
     120_000,
-    Math.ceil(MAX_SCREENSHOT_BYTES / 3) * 4 + MAX_BROWSER_DIAGNOSTIC_BYTES,
+    Math.ceil(
+      (MAX_SCREENSHOT_BYTES + (recordVideo ? MAX_VIDEO_BYTES : 0)) / 3,
+    ) *
+      4 +
+      MAX_BROWSER_DIAGNOSTIC_BYTES,
   );
   if (result.exitCode !== 0) {
     const known: readonly [string, WordPressVictimPagesFailureCode][] = [
@@ -685,6 +713,22 @@ async function runBrowserVisit(input: {
     screenshot.toString("base64") !== encoded
   )
     throw new Error("Browser screenshot is invalid");
+  // A video kept is one asked for, within 8 MiB, that starts as WebM (EBML);
+  // any other is left out, and the visit's record stands without it.
+  const videoEncoded = parsed.data.videoBase64;
+  const videoBytes =
+    videoEncoded === undefined
+      ? undefined
+      : Buffer.from(videoEncoded, "base64");
+  const video =
+    videoBytes !== undefined &&
+    recordVideo &&
+    videoBytes.length > 0 &&
+    videoBytes.length <= MAX_VIDEO_BYTES &&
+    videoBytes.subarray(0, WEBM_SIGNATURE.length).equals(WEBM_SIGNATURE) &&
+    videoBytes.toString("base64") === videoEncoded
+      ? videoBytes
+      : undefined;
   return {
     ...(parsed.data.httpStatus === undefined
       ? {}
@@ -699,6 +743,7 @@ async function runBrowserVisit(input: {
       ? {}
       : { dialogEvent: parsed.data.dialogEvent }),
     screenshot,
+    ...(video === undefined ? {} : { video }),
     ...(diagnostic.success ? { diagnostic: diagnostic.data } : {}),
   };
 }
@@ -709,9 +754,11 @@ async function visitVictimPage(input: {
   readonly role: WordPressVictimRoute["role"];
   readonly actions?: VictimActions;
   readonly dialogMarker?: string;
+  readonly recordVideo?: boolean;
 }): Promise<{
   readonly dialogEvent?: WordPressDialogEvent;
   readonly screenshot: Buffer;
+  readonly video?: Buffer;
   readonly diagnostic?: WordPressVictimBrowserDiagnostic;
 }> {
   const { lab, path, role, actions } = input;
@@ -731,12 +778,14 @@ async function visitVictimPage(input: {
     ...(input.dialogMarker === undefined
       ? {}
       : { dialogMarker: input.dialogMarker }),
+    ...(input.recordVideo === true ? { recordVideo: true } : {}),
   });
   return {
     ...(visit.dialogEvent === undefined
       ? {}
       : { dialogEvent: visit.dialogEvent }),
     screenshot: visit.screenshot,
+    ...(visit.video === undefined ? {} : { video: visit.video }),
     ...(visit.diagnostic === undefined ? {} : { diagnostic: visit.diagnostic }),
   };
 }
@@ -833,6 +882,7 @@ export async function observeExplorationPage(
 export async function observeVictimPages(
   lab: WordPressLabSession,
   input: WordPressVictimRoute,
+  options: { readonly recordVideo?: boolean } = {},
 ): Promise<WordPressVictimPagesObservation> {
   const victim = wordpressVictimRouteSchema.safeParse(input);
   if (!victim.success) return { status: "unavailable", phase: "victim-input" };
@@ -849,6 +899,8 @@ export async function observeVictimPages(
   try {
     let screenshot: Buffer | undefined;
     let victimBrowserDiagnostic: WordPressVictimBrowserDiagnostic | undefined;
+    const videos: { readonly visitIndex: number; readonly video: Buffer }[] =
+      [];
     let dialog:
       | {
           readonly visitIndex: number;
@@ -863,7 +915,16 @@ export async function observeVictimPages(
         role,
         ...(typeof visit === "string" ? {} : { actions: visit.actions }),
         ...(dialogMarker === undefined ? {} : { dialogMarker }),
+        ...(options.recordVideo === true ? { recordVideo: true } : {}),
       });
+      // 8 MiB bounds each video and all of an attempt's videos together.
+      if (
+        observation.video !== undefined &&
+        videos.reduce((total, kept) => total + kept.video.length, 0) +
+          observation.video.length <=
+          MAX_VIDEO_BYTES
+      )
+        videos.push({ visitIndex: index, video: observation.video });
       screenshot = observation.screenshot;
       victimBrowserDiagnostic = observation.diagnostic;
       if (observation.dialogEvent !== undefined && dialog === undefined)
@@ -880,6 +941,7 @@ export async function observeVictimPages(
     return {
       status: "observed",
       victimRole: sameAccount ? "self" : role,
+      ...(videos.length === 0 ? {} : { videos }),
       ...(screenshot === undefined ? {} : { screenshot }),
       ...(victimBrowserDiagnostic === undefined
         ? {}
