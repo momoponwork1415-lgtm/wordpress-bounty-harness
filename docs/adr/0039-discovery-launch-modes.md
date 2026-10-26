@@ -179,3 +179,16 @@ PR #537 のレビューで、再開（ADR 0036）が子の上限・最低時間�
 - 比較候補の v15-wide は `candidate` のまま変えない。`sinks-v14` を使うので、この文の修正は入っていない。`deep` の v11 も変えない。
 - 測った数字: なし。本番で、同じ選定帯の切り替え前（v14-wide）と切り替え後（v16-wide）の窓を比べる（DEVELOPMENT 第 5 節）。
 - 消し方: v16-wide を `archived` にして mode を外し、v14-wide を `current`・`mode: "wide"` に戻し、2 つの campaign 設定の `promptId` を v14-wide に戻す。v16-wide の本文、`sinks-v16` と digest は、Trial が走った後なら履歴照合のため残す。
+
+## 2026-10-27 追記 10: `wide` の目的文を v17-wide にする（所有者決定、迷ったら Lead）
+
+所有者は、新しい Finding 85 件を screen-out した。46 件は攻撃者が入力を制御できないもので、17 件は管理者が危険な設定を作らないと成り立たないものだった。これを受けて所有者は 2026-10-27 に「迷ったら報告はやめようか」と言い、AskUserQuestion の回答で「迷ったら Lead にする」を選んだ。本文、差分、出典対照表は [v17-wide の文書](../reviews/2026-10-27-wp2shell-bounty-v17-wide.md) に、日本語訳は [v17-wide 日本語訳](../reviews/2026-10-27-wp2shell-bounty-v17-wide-japanese.md) に置く。
+
+この決定は、追記 5 の「後段の人間レビューで多少の偽陽性を許容する」（2026-10-26 の「広く報告して review で落とす」。ADR 0038 の 2026-10-26 追記 13 の「変えないもの」でも引いている）を `wide` の現行の目的文について上書きする。追記 5 の本文は書き換えない。
+
+- `wp2shell-bounty-v17-wide`（`sha256:9a32ddcf2083c8e82952907742823bfaa29f8068d346132206b87cf412165bc9`）を `wide` の `current` にする。v16-wide から替える fragment は `strategy/sinks-v16` → `strategy/sinks-v17` と `coordination/fixed-v14` → `coordination/fixed-v17` の 2 つで、替えるのは 3 文である。ほかのバイトは v16-wide と同じ（`tests/profiles/wordpress/discovery-prompts.test.ts` の v17-wide の test）。
+- `sinks-v17` は、管理者が有効にできる設定の文に「管理者が安全でない形で作らなければならないフィールド、列、query の条件、テンプレート、スニペット、設定は、もっともらしい設定ではない」を足す。`fixed-v17` は、Root が chain を Finding か Lead のどちらかで必ず報告し、攻撃者が入力を置けることと典型的なサイトで sink に届くことの両方をソースが示すときだけ Finding にし、どちらかが不確かなら不確かさを明記した Lead にする。誤検知を許容する文は消える。
+- `wp2shell-bounty-v16-wide` は本文・fragment 構成・digest・契約 v5 を変えず `archived` にする。`src/profiles/wordpress/policy/campaign.json` と `examples/campaign-wide-20.json` の `promptId` を v17-wide にする。ほかの値は変えない。
+- 比較候補の v15-wide は `candidate` のまま変えない（`sinks-v14` と `fixed-v15` を使う）。`deep` の v11 も変えない。ADR 0038 の 2026-10-26 追記 13 の出口の park（申告欄の値による `declared-precondition`）は 2 つ目の線として残す。Lead の型と保存も変えない。
+- 測った数字: なし。本番で、同じ選定帯の切り替え前（v16-wide）と切り替え後（v17-wide）の窓を比べる（DEVELOPMENT 第 5 節）。見る数字は Trial あたりの Finding と Lead、人間が reject した Finding の割合、`declared-precondition` の park の件数である。
+- 消し方: v17-wide を `archived` にして mode を外し、v16-wide を `current`・`mode: "wide"` に戻し、2 つの campaign 設定の `promptId` を v16-wide に戻す。v17-wide の本文、`sinks-v17`、`fixed-v17` と digest は、Trial が走った後なら履歴照合のため残す。
