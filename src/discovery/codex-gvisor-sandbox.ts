@@ -663,6 +663,8 @@ function nonRootUser(): string {
 export class GvisorCodexSandbox implements CodexSandbox {
   readonly #options: GvisorCodexSandboxOptions;
   readonly #user: string;
+  /** Marked runs that ended in this process, kept until `release` (#512). */
+  readonly #ended = new Map<string, readonly string[]>();
 
   constructor(options: GvisorCodexSandboxOptions) {
     if (
@@ -1149,12 +1151,33 @@ export class GvisorCodexSandbox implements CodexSandbox {
         isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
       };
     } finally {
-      if (markerPath !== undefined) await rm(markerPath, { force: true });
       await rm(staging, { recursive: true, force: true });
-      await rm(codexHome, { recursive: true, force: true });
-      if (researchDirectory !== undefined)
-        await rm(researchDirectory, { recursive: true, force: true });
+      // A marked run keeps its marker, sessions and notes until its finish is
+      // in the ledger; a crash before that leaves them for `leftover` (#512).
+      if (markerPath !== undefined && researchDirectory !== undefined)
+        this.#ended.set(command.runMarker!.runId, [
+          markerPath,
+          codexHome,
+          researchDirectory,
+        ]);
+      else {
+        await rm(codexHome, { recursive: true, force: true });
+        if (researchDirectory !== undefined)
+          await rm(researchDirectory, { recursive: true, force: true });
+      }
     }
+  }
+
+  /**
+   * Removes the marker, then the directories, of a marked run that ended in
+   * this process. The Trial executor calls it once the run's finish is
+   * appended (#512); any other run id is left alone.
+   */
+  async release(runId: string): Promise<void> {
+    const paths = this.#ended.get(runId);
+    if (paths === undefined) return;
+    this.#ended.delete(runId);
+    for (const path of paths) await rm(path, { recursive: true, force: true });
   }
   /**
    * The directories a dead run left behind, read back as a failed result. A

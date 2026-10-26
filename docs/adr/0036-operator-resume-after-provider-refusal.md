@@ -199,3 +199,17 @@ v8 の協調 Trial は Root 1 thread を同じ gVisor container の中で `codex
 ### 消し方
 
 この節と #526 の差分を戻す。探索が Lab を立てる設定が復活したときに戻す。
+
+## 2026-10-26 追記: 印は終了 event を台帳に書いた後に消す
+
+2026-10-25 の並列探索で、`database is locked` のため `discovery-run-finished` を書けなかった run が 4 本残った（#512）。サンドボックスは、run が終わると `finally` で印とディレクトリを消していた。そのため、終了 event を書く前に失敗すると、追記 2 の回収に要る印が残らなかった。この追記は、追記 2 の「run が自分のプロセスの中で終われば、ディレクトリと一緒に印も消す」を改める。
+
+### 決定
+
+- run が終わっても、サンドボックスは印、Codex home、notes を消さない。staging だけを消す。
+- Trial の実行側（`executeTrial`）は、`discovery-run-finished` を台帳に追記した後で、印、Codex home、notes の順に消す。transport がまだ答えていなければ、答えた後に消す。
+- 追記の前にプロセスが死んだり追記が失敗したりした run は、印とディレクトリが残る。持ち主のプロセスが死んだ後に、追記 2 の回収が `interrupted` で封じる。持ち主が生きている間は `run-alive` のまま。
+
+### 消し方
+
+この節と #512 の差分を戻す。サンドボックスはまた `finally` で印を消す。
