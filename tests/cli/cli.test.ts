@@ -4476,6 +4476,185 @@ describe("harness CLI vertical slice", () => {
     expect(ledger().read({ campaignId: "campaign-old-bound" })).toHaveLength(1);
   });
 
+  it("drops a batch frozen under another policy on restart and selects its targets again (#302)", async () => {
+    const { run, root, profile, configPath, ledger, store } = await harness({
+      candidates: ["item-a", "item-b", "item-c"],
+      listingObservations: [
+        {
+          kind: "popular" as const,
+          page: 1,
+          sourceUrl:
+            "https://api.wordpress.org/plugins/info/1.2/?request%5Bbrowse%5D=popular",
+          checkedAt: now,
+          status: "available" as const,
+          observedAt: now,
+          contentDigest: sha("b"),
+        },
+      ],
+    });
+    const state = join(root, "state");
+    const { wordpressVersion } = JSON.parse(
+      await readFile(configPath, "utf8"),
+    ) as { wordpressVersion: string };
+    const manual = JSON.parse(
+      await readFile(join(root, "selection.json"), "utf8"),
+    ) as Record<string, unknown>;
+    delete manual.candidateSlugs;
+    delete manual.pinnedVersions;
+    const automatic = {
+      ...manual,
+      promptVariant: "wp2shell-bounty-v11",
+      revisitPolicy: { kind: "never" },
+      wordpressVersion,
+      maximumTargets: 3,
+      candidateSource: {
+        kind: "wordpress-org",
+        popularPages: 1,
+        tags: [],
+        pagesPerTag: 1,
+        perPage: 20,
+        maxCandidates: 20,
+        maxAgeDays: 1,
+      },
+    };
+    await mkdir(join(root, "policies"));
+    const policyPath = join(root, "policies", "selection.json");
+    await writeFile(policyPath, JSON.stringify(automatic));
+    (profile as { hostStatus?: unknown }).hostStatus = async () => ({
+      loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
+      programmeObservedAt: new Date(now),
+      freeBytes: 100 * 1024 ** 3,
+      legacyHistoryAvailable: true,
+      loginMarginMinutes: 60,
+    });
+    const batches = () => {
+      const byBatch = new Map<string, string[]>();
+      for (const { event } of ledger().read({
+        type: "target-selected",
+        limit: 100,
+      }))
+        if (
+          event.type === "target-selected" &&
+          event.campaignId.startsWith("selection-")
+        )
+          byBatch.set(event.campaignId, [
+            ...(byBatch.get(event.campaignId) ?? []),
+            event.selectionId,
+          ]);
+      return [...byBatch];
+    };
+    const discarded = () =>
+      ledger()
+        .read({ type: "selection-batch-discarded", limit: 100 })
+        .map(({ event }) => event);
+    // The first state change asks the runner to stop after its selection.
+    const runner = (...extra: string[]) =>
+      run(
+        "continuous",
+        "run",
+        "--config",
+        configPath,
+        "--selection",
+        policyPath,
+        "--notify",
+        `touch '${join(state, "continuous.stop")}'`,
+        ...extra,
+      );
+
+    // A runner stop seen while sources froze records no batch.
+    const stoppedSelection = await profile.select(
+      await openState(state, { clock: () => new Date(now) }),
+      { configPath: policyPath, minimum: 1, stop: () => true },
+    );
+    expect(stoppedSelection).toMatchObject({ batchId: null, selected: [] });
+    expect(batches()).toEqual([]);
+    // An unbound batch from an earlier start, under the earlier policy.
+    expect((await run("select", "--config", policyPath)).code).toBe(0);
+    const [[orphan, orphanTargets]] = batches() as [[string, string[]]];
+    expect(orphanTargets).toHaveLength(3);
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...automatic,
+        revisitPolicy: { kind: "version-increased" },
+      }),
+    );
+    const restarted = await runner();
+    expect(restarted.code).toBe(0);
+    expect(restarted.stdout).toContain(
+      `selection-batch-discarded batch=${orphan} campaign=prod-`,
+    );
+    expect(restarted.stdout).not.toContain("holding-error");
+    expect(discarded()).toEqual([
+      expect.objectContaining({
+        campaignId: orphan,
+        reason: "policy-changed",
+      }),
+    ]);
+    const [discard] = discarded();
+    if (discard?.type !== "selection-batch-discarded")
+      throw new Error("no discard event");
+    expect(discard.policyDigest).not.toBe(discard.currentPolicyDigest);
+    // Its targets started no Trial, so the fresh selection takes them again.
+    const [, [fresh, freshTargets]] = batches() as [
+      unknown,
+      [string, string[]],
+    ];
+    expect(new Set(freshTargets)).toEqual(new Set(orphanTargets));
+
+    // A memoised campaign bound to the fresh batch, restarted under a third policy.
+    const memo = JSON.parse(
+      await readFile(join(state, "continuous.json"), "utf8"),
+    ) as { campaignId: string };
+    const selected = ledger().read({
+      campaignId: fresh,
+      type: "target-selected",
+      limit: 100,
+    });
+    const reportDigest = selected[0]!.event.artifacts.find(
+      (artifact) => artifact.kind === "selection-report",
+    )!.digest;
+    const report = await store().readFile(
+      reportDigest,
+      "selection-report.json",
+      2 * 1024 * 1024,
+    );
+    if (report.status !== "resolved") throw new Error("report unavailable");
+    expect(
+      await ledger().append({
+        schemaVersion: 1,
+        identity: "memo-bound-batch",
+        campaignId: memo.campaignId,
+        snapshotDigest: selected[0]!.event.snapshotDigest,
+        occurredAt: now,
+        type: "selection-batch-bound",
+        selectionBatchId: fresh,
+        policyDigest: (
+          JSON.parse(report.bytes.toString("utf8")) as { policyDigest: string }
+        ).policyDigest,
+        selectionIds: freshTargets,
+        artifacts: [{ kind: "selection-report", digest: reportDigest }],
+      }),
+    ).toMatchObject({ status: "appended" });
+    await writeFile(
+      policyPath,
+      JSON.stringify({ ...automatic, maximumTargets: 4 }),
+    );
+    const resumed = await runner("--resume");
+    expect(resumed.code).toBe(0);
+    expect(resumed.stdout).toContain(
+      `selection-batch-discarded batch=${fresh} campaign=${memo.campaignId}`,
+    );
+    expect(resumed.stdout).not.toContain("holding-error");
+    expect(discarded().map((event) => event.campaignId)).toEqual([
+      orphan,
+      fresh,
+    ]);
+    expect((await run("continuous", "status")).stdout).not.toContain(
+      "last error",
+    );
+  });
+
   it("runs the continuous runner on the host status, stops it, and reports it", async () => {
     const { run, root, profile, configPath, ledger } = await harness();
     const state = join(root, "state");

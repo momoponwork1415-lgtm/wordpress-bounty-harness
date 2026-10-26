@@ -74,7 +74,7 @@ v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入�
 
 新規Trialで選べるpromptは、既定の `deep` の `wp2shell-bounty-v11` と `wide` の `wp2shell-bounty-v14-wide` だけ（ADR 0039 の 2026-10-26 追記。v10、v12-wide、v13-wide は archived、v8 は 2026-10-18 の所有者決定で入り、照合用に残す）。旧版と実験結果は履歴照合用に残し、探索には使わない。Snapshotに対象、WordPress core、実行imageと一致するPHP source、`Requires Plugins`、WooCommerceの版ヘッダ（`woocommerce`）または明示pinによる依存pluginを固定する。版ヘッダだけによる `woocommerce` は、pinだけで決める対象（`candidateSlugs` とreverify）でpinが無ければ入れず、依存のpinsetに `header-derived-unpinned` と残す。探索sourceは `/workspace/main`、`/workspace/wordpress`、`/workspace/php`、`/workspace/dependencies/<slug>` に読み取り専用でmountする。`ledger runtime` とrun receiptで実際のwall・source読取を確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
 
-自動選定の campaign は初回起動時に `selection-batch-bound` を追記し、選定バッチと対象集合を固定する。再開時はこの記録のバッチを読み、途中で `select` を再実行しても新しいバッチに切り替えない。選定時に固定した Snapshot と materialized source は digest を再検査して使い、campaign 開始時に同じ ZIP を再取得しない。公開一覧の取得元・確認日時・available/stale/unavailable と失敗理由は Private Evidence の選定レポートに記録する。
+自動選定の campaign は初回起動時に `selection-batch-bound` を追記し、選定バッチと対象集合を固定する。再開時はこの記録のバッチを読み、途中で `select` を再実行しても新しいバッチに切り替えない。runner が再起動したとき、続けようとする campaign の batch（束縛済みのもの、無ければ最新の未束縛のもの）が今の選定方針 digest と違えば、`selection-batch-discarded` を追記してその batch を捨て、新しい選定に進む（#302）。選定時に固定した Snapshot と materialized source は digest を再検査して使い、campaign 開始時に同じ ZIP を再取得しない。公開一覧の取得元・確認日時・available/stale/unavailable と失敗理由は Private Evidence の選定レポートに記録する。
 
 - **同時run数**: campaign設定の `resources` で決める。
   - 既定の `resources` は `{"maxConcurrentRuns": 1, "memoryBudgetMiB": 10752}`。新主経路は対象ごとに1 Trialで、wall上限は120分。
