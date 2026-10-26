@@ -3390,6 +3390,89 @@ describe("harness CLI vertical slice", () => {
     expect(transportRuns).toHaveLength(2);
   });
 
+  it("resumes under the run parameters the Trial recorded, not a changed campaign configuration (#548)", async () => {
+    const { run, configPath, transportRuns, ledger } = await harness({
+      refuseOnCalls: [1],
+      refusalSession: true,
+      zeroFindings: true,
+      config: {
+        promptId: undefined,
+        discovery: { lab: "none", maxChildren: 3, minimumActiveMinutes: 40 },
+      },
+    });
+    const campaign = "campaign-resume-parameters";
+    const command = ["--campaign", campaign, "--config", configPath];
+    expect((await run("campaign", "run", "--all", ...command)).code).toBe(0);
+    const refusedRunId = transportRuns[0]!.runId;
+    expect(transportRuns[0]).toMatchObject({
+      maxChildren: 3,
+      minimumActiveMs: 40 * 60_000,
+    });
+    // Between the segments the operator changes every run parameter.
+    const written = JSON.parse(await readFile(configPath, "utf8"));
+    written.discovery = {
+      lab: "none",
+      maxChildren: 6,
+      minimumActiveMinutes: 20,
+    };
+    written.runWallTimeMinutes = 60;
+    await writeFile(configPath, JSON.stringify(written));
+
+    const resumed = await run(
+      "campaign",
+      "resume",
+      "--run",
+      refusedRunId,
+      ...command,
+    );
+    expect(resumed.code).toBe(0);
+    const segment = transportRuns[1]!;
+    // The recorded 3 children, 40 min floor less the 10 min used, 120 min wall.
+    expect(segment).toMatchObject({
+      maxChildren: 3,
+      minimumActiveMs: 30 * 60_000,
+    });
+    expect(resumed.stdout).toContain("remaining wall 110 min");
+    expect(segment.prompt).toBe(transportRuns[0]!.prompt);
+    const starts = ledger()
+      .read({ campaignId: campaign, type: "discovery-run-started" })
+      .map(({ event }) => event);
+    expect(starts[1]).toMatchObject({
+      resumesRun: refusedRunId,
+      configuration: {
+        maxChildren: 3,
+        minimumActiveMinutes: 40,
+        wallMinutes: 120,
+      },
+    });
+
+    // A recorded objective that differs from the configured one still refuses.
+    const original = starts[0];
+    if (original?.type !== "discovery-run-started")
+      throw new Error("Missing recorded run");
+    await ledger().append({
+      ...original,
+      identity: "historical-prompt",
+      runId: "historical-prompt",
+      configuration: {
+        ...original.configuration,
+        promptDigest: `sha256:${"9".repeat(64)}`,
+      },
+    });
+    const otherPrompt = await run(
+      "campaign",
+      "resume",
+      "--run",
+      "historical-prompt",
+      ...command,
+    );
+    expect(otherPrompt.code).toBe(3);
+    expect(otherPrompt.stderr).toBe(
+      `not resumable: prompt-version-differs (sha256:${"9".repeat(64)})`,
+    );
+    expect(transportRuns).toHaveLength(2);
+  });
+
   it("resumes a refused Claude run on the Claude runtime it recorded, and lists the segment in `ledger resumes`", async () => {
     const { run, configPath, transportRuns, ledger } = await harness({
       claude: true,
