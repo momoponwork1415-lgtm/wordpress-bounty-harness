@@ -176,6 +176,8 @@ export interface CliProfile {
     readonly attackerAccounts: unknown;
     readonly administrator: unknown;
     readonly browserImage: string;
+    /** Host loopback for a human's browser and curl; absent when the profile publishes none (#586). */
+    readonly host?: { readonly url: string; readonly hostHeader: string };
     close(): Promise<void>;
   }>;
   /** Profile-owned admission of an incomplete observation to a manual Lab. */
@@ -766,6 +768,10 @@ export async function runForegroundReviewLab(
         io.stdout(
           `review administrator: ${JSON.stringify(session.administrator)}`,
         );
+        if (session.host !== undefined)
+          io.stdout(
+            `host loopback: ${session.host.url} (Host header: ${session.host.hostHeader})`,
+          );
         const shellQuote = (value: string) =>
           `'${value.replaceAll("'", "'\\''")}'`;
         io.stdout(
