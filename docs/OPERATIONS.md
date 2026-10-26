@@ -1,6 +1,6 @@
 # 運用手引き（完成後に人間がすること）
 
-探索主経路は、対象ごとにRoot＋subagentによる協調Trialを1回行う。目的promptは `discovery.mode` が `deep` なら `wp2shell-bounty-v11`、`wide` なら `wp2shell-bounty-v13-wide` で、子の上限は設定値 `discovery.maxChildren`（既定 4、1〜8）（[ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) のTrial構成、[ADR 0033](adr/0033-minimum-exploration-and-pinned-dependency-sources.md) の最低時間と依存source、[ADR 0019](adr/0019-harness-generated-output-contract.md) の生成出力契約）。新規探索で実行可能なのはv11・v13-wideと `wp2shell` modeだけ。旧版・旧mode・過去の実験結果は照合用に残す。実機縦断の受入前に本番稼働したものとみなさない。
+探索主経路は、対象ごとにRoot＋subagentによる協調Trialを1回行う。目的promptは `discovery.mode` が `deep` なら `wp2shell-bounty-v11`、`wide` なら `wp2shell-bounty-v14-wide` で、子の上限は設定値 `discovery.maxChildren`（既定 4、1〜8）（[ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) のTrial構成、[ADR 0033](adr/0033-minimum-exploration-and-pinned-dependency-sources.md) の最低時間と依存source、[ADR 0019](adr/0019-harness-generated-output-contract.md) の生成出力契約）。新規探索で実行可能なのはv11・v14-wideと `wp2shell` modeだけ。旧版・旧mode・過去の実験結果は照合用に残す。実機縦断の受入前に本番稼働したものとみなさない。
 
 対象読者: このHarnessを一人で回す運用者。正本は [SPEC.md](SPEC.md)。
 
@@ -72,7 +72,7 @@ wall 到達時は agent と broker を名前で `docker stop -t 10`（失敗時�
 
 v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入口索引を渡さない（索引の生成 code は ADR 0034 で削除）。旧v5/v6の索引、coverage と `incomplete(depth)` の記録は過去の評価結果として読み続ける。
 
-新規Trialで選べるpromptは、既定の `deep` の `wp2shell-bounty-v11` と `wide` の `wp2shell-bounty-v13-wide` だけ（ADR 0039 の 2026-10-25 追記 4。v10 と v12-wide は archived、v8 は 2026-10-18 の所有者決定で入り、照合用に残す）。旧版と実験結果は履歴照合用に残し、探索には使わない。Snapshotに対象、WordPress core、実行imageと一致するPHP source、`Requires Plugins`、WooCommerceの版ヘッダ（`woocommerce`）または明示pinによる依存pluginを固定する。版ヘッダだけによる `woocommerce` は、pinだけで決める対象（`candidateSlugs` とreverify）でpinが無ければ入れず、依存のpinsetに `header-derived-unpinned` と残す。探索sourceは `/workspace/main`、`/workspace/wordpress`、`/workspace/php`、`/workspace/dependencies/<slug>` に読み取り専用でmountする。`ledger runtime` とrun receiptで実際のwall・source読取を確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
+新規Trialで選べるpromptは、既定の `deep` の `wp2shell-bounty-v11` と `wide` の `wp2shell-bounty-v14-wide` だけ（ADR 0039 の 2026-10-26 追記。v10、v12-wide、v13-wide は archived、v8 は 2026-10-18 の所有者決定で入り、照合用に残す）。旧版と実験結果は履歴照合用に残し、探索には使わない。Snapshotに対象、WordPress core、実行imageと一致するPHP source、`Requires Plugins`、WooCommerceの版ヘッダ（`woocommerce`）または明示pinによる依存pluginを固定する。版ヘッダだけによる `woocommerce` は、pinだけで決める対象（`candidateSlugs` とreverify）でpinが無ければ入れず、依存のpinsetに `header-derived-unpinned` と残す。探索sourceは `/workspace/main`、`/workspace/wordpress`、`/workspace/php`、`/workspace/dependencies/<slug>` に読み取り専用でmountする。`ledger runtime` とrun receiptで実際のwall・source読取を確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
 
 自動選定の campaign は初回起動時に `selection-batch-bound` を追記し、選定バッチと対象集合を固定する。再開時はこの記録のバッチを読み、途中で `select` を再実行しても新しいバッチに切り替えない。選定時に固定した Snapshot と materialized source は digest を再検査して使い、campaign 開始時に同じ ZIP を再取得しない。公開一覧の取得元・確認日時・available/stale/unavailable と失敗理由は Private Evidence の選定レポートに記録する。
 

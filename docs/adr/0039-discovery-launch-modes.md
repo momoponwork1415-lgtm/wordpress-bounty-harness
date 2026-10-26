@@ -129,3 +129,14 @@ amends: 0029（新規探索の唯一の mode）, 0033（最低 60 分は deep �
 - 新しい digest は、`wp2shell-bounty-v11` が `sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9`、`wp2shell-bounty-v13-wide` が `sha256:0dd2072b4c6a544d47ebb6df94c7981f2fbb758b4dee82e063896ff91f892bb8` である。上の箇条の旧 digest は打ち消し線で残した。
 - 出典対照表 第 2 節に #29（子の交代）と #30（v13-wide の Root の 1 文と停止規則の最初の文）を足した。出典は所有者の指示 2026-10-26 と PR #535 の観測で、AI が足した要素は無い。
 - 測った数字: 数字待ちのまま。Trial は回していない。
+
+## 2026-10-26 追記 5: `wide` の目的文を v14-wide にする（所有者決定）
+
+所有者は 2026-10-26 に、入口や経路の書き方を命令ではなく例に寄せること、探索 AI は脆弱性探索に集中させて後段の人間レビューで多少の偽陽性を許容すること、hop 数を経路の上限として指定しないことを決めた。根拠と変更要素は [v14-wide の出典対照表](../reviews/2026-10-26-wp2shell-bounty-v14-wide-source-table.md) に置く。
+
+- `wide` の現行の目的文は `wp2shell-bounty-v14-wide`（`sha256:42ec734364d93492bf9b936e415b94796da21fb154d3b29033cafbd58596229d`）とする。`wp2shell-bounty-v13-wide` は本文・fragment 構成・digest を変えず `archived` にする。`deep` の `wp2shell-bounty-v11` は変えない。
+- v13-wide から替える fragment は `strategy/sinks-v13` → `strategy/sinks-v14` と `coordination/fixed-v13` → `coordination/fixed-v14` の 2 つだけである。ほかの fragment は同じ file 名を同じ順で再利用し、本文もバイト単位で同じにする。
+- `sinks-v14` は、入口順を観測頻度の例にし、短い経路を必須単位にせず source が全 hop を支える長い chain を許容する。第三者 service から取り込む内容を例示付きで attacker-placeable input とし、query・path・markup を組み立てる共有 helper は helper 側で引数の配列・想定外型まで一度確かめて到達する caller を列挙する。
+- `fixed-v14` は、source に根拠のある chain に不確かさが残っても明記して報告し、後段の人間レビューは多少の偽陽性を許容し、見落としをより高い費用として扱う。専門 agent の割当、残った入口を続ける子、最後の runtime confirmation の文は変えない。
+- 測った数字は merge 前に同じ 6 件で再計測して PR に貼る。この変更を作る作業では Trial を起動しない。
+- 戻すときは v14-wide を `archived` にして mode を外し、v13-wide を `current`・`mode: "wide"` に戻す。両版の本文、fragment と digest は履歴照合のため残す。

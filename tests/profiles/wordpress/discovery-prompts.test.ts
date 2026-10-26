@@ -69,7 +69,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(26);
+    expect(ids).toHaveLength(27);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -93,7 +93,7 @@ describe("WordPress prompt table", () => {
     ).toHaveLength(WORDPRESS_DISCOVERY_MODES.length);
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
       deep: "wp2shell-bounty-v11",
-      wide: "wp2shell-bounty-v13-wide",
+      wide: "wp2shell-bounty-v14-wide",
     });
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v11");
     // Archived rows carry no mode, so only a current row launches (ADR 0039).
@@ -135,6 +135,7 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       "wp2shell-bounty-v11",
       "wp2shell-bounty-v12-wide",
       "wp2shell-bounty-v13-wide",
+      "wp2shell-bounty-v14-wide",
     ]);
     for (const row of WORDPRESS_DISCOVERY_PROMPTS.filter(
       (entry) => entry.status === "current",
@@ -152,6 +153,8 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
         "sha256:9a79a3b20fdba7af54f32464d868ab00806335c526781aba026e76ce9290c3c3",
       "wp2shell-bounty-v13-wide":
         "sha256:0dd2072b4c6a544d47ebb6df94c7981f2fbb758b4dee82e063896ff91f892bb8",
+      "wp2shell-bounty-v14-wide":
+        "sha256:42ec734364d93492bf9b936e415b94796da21fb154d3b29033cafbd58596229d",
     } as const;
     for (const row of composed) {
       const bytes = (await promptBytes(row.id)).toString("utf8");
@@ -197,7 +200,7 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
     const byId = (id: string) => files(composed.find((row) => row.id === id)!);
     const [deep, wide] = [
       byId("wp2shell-bounty-v11"),
-      byId("wp2shell-bounty-v13-wide"),
+      byId("wp2shell-bounty-v14-wide"),
     ];
     expect(deep.filter((file) => wide.includes(file))).toEqual([
       "objective/task-v10",
@@ -362,7 +365,10 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v12-wide"
       )
         expect(text).toContain("four specialist agents");
-      else if (id === "wp2shell-bounty-v13-wide")
+      else if (
+        id === "wp2shell-bounty-v13-wide" ||
+        id === "wp2shell-bounty-v14-wide"
+      )
         expect(text).toContain("one specialist agent per sink class");
       else expect(text).toMatch(/Lead|Finding/);
       expect(text).not.toMatch(
@@ -587,6 +593,70 @@ describe("WordPress discovery prompt assets", () => {
     );
     expect(text).not.toMatch(
       /TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|Tourfic|Groundhogg|rtMedia|\b(?:PoC|CVE|advisory|payload)\b/i,
+    );
+  });
+
+  it("makes v14-wide the v13-wide objective with exactly the sink strategy and fixed coordination fragments replaced (ADR 0039, 2026-10-26 addendum)", async () => {
+    const rows = WORDPRESS_DISCOVERY_PROMPTS.filter(
+      (row) => "fragments" in row,
+    );
+    const v13 = rows.find((row) => row.id === "wp2shell-bounty-v13-wide")!;
+    const v14 = rows.find((row) => row.id === "wp2shell-bounty-v14-wide")!;
+    expect(v14.fragments).toHaveLength(v13.fragments.length);
+    expect(
+      v14.fragments.flatMap((fragment, index) =>
+        fragment.section === v13.fragments[index]!.section &&
+        fragment.file === v13.fragments[index]!.file
+          ? []
+          : [index],
+      ),
+    ).toEqual([2, 7]);
+    expect(v14.fragments[2]).toEqual({
+      section: "strategy",
+      file: "sinks-v14",
+    });
+    expect(v14.fragments[7]).toEqual({
+      section: "coordination",
+      file: "fixed-v14",
+    });
+
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const oldText = paragraphs(
+      (await loadWordPressDiscoveryAsset("wp2shell-bounty-v13-wide")).text,
+    );
+    const newText = paragraphs(
+      (await loadWordPressDiscoveryAsset("wp2shell-bounty-v14-wide")).text,
+    );
+    expect(newText).toHaveLength(oldText.length);
+    expect(
+      newText.flatMap((paragraph, index) =>
+        paragraph === oldText[index] ? [] : [index],
+      ),
+    ).toEqual([3, newText.length - 2]);
+
+    const sinks = newText[3]!;
+    expect(sinks).toContain(
+      "For example, entry points can be considered roughly in this order of observed frequency:",
+    );
+    expect(sinks).toContain(
+      "Content the plugin imports from third-party services (for example, a social feed, external reviews, a webhook sender or a remote API response) is attacker-placeable input",
+    );
+    expect(sinks).toContain(
+      "A shared helper that assembles a query, a path or markup is examined once at the helper",
+    );
+    expect(sinks).toContain(
+      "Routes are usually one or two hops, and a longer chain is welcome when the source supports every hop.",
+    );
+    expect(sinks).not.toContain("Work through entry points in this order");
+    expect(sinks).not.toContain("Do not build multi-step chains");
+
+    const fixed = newText.at(-2)!;
+    expect(fixed).toContain(
+      "a source-grounded chain is reported even when an uncertainty remains, with that uncertainty stated; the later human review tolerates some false positives, and a missed route is the costlier error.",
+    );
+    expect(fixed).not.toContain("doubly checks every concrete bug");
+    expect(fixed.split(". ").slice(1).join(". ")).toBe(
+      oldText.at(-2)!.split(". ").slice(1).join(". "),
     );
   });
 
@@ -846,7 +916,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v10-wide" ||
         id === "wp2shell-bounty-v11-wide" ||
         id === "wp2shell-bounty-v12-wide" ||
-        id === "wp2shell-bounty-v13-wide"
+        id === "wp2shell-bounty-v13-wide" ||
+        id === "wp2shell-bounty-v14-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).
