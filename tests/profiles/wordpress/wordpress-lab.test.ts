@@ -148,6 +148,8 @@ async function fixture(
     browserFailureAt: null as string | null,
     browserFailureMessage: "private-debug-marker",
     browserDiagnosticOutput: "valid" as "valid" | "missing" | "invalid",
+    /** WebM bytes the browser prints when the visit asks for video (#549). */
+    videoOutput: null as Buffer | null,
   };
   /** The fake Docker daemon's objects and the loopback ports it bound. */
   const docker = {
@@ -402,6 +404,10 @@ async function fixture(
               dialogCount: 1,
               consoleErrorCount: 3,
               ...dialog,
+              ...(database.videoOutput !== null &&
+              request.args.includes("WBH_RECORD_VIDEO=1")
+                ? { videoBase64: database.videoOutput.toString("base64") }
+                : {}),
               ...(database.browserDiagnosticOutput === "missing"
                 ? {}
                 : {
@@ -2136,6 +2142,173 @@ describe("WordPress gVisor Lab", () => {
       } as unknown as WordPressVictimRoute),
     ).toEqual({ status: "unavailable", phase: "victim-input" });
     expect(await lab.teardown(handle)).toEqual({ status: "removed" });
+  });
+
+  it("records each victim visit's WebM only when asked, within 8 MiB and with the EBML header (#549)", async () => {
+    const { lab, snapshot, setup, commands, database } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const { handle } = provisioned;
+    const route: WordPressVictimRoute = {
+      role: "administrator",
+      paths: ["/wp-admin/edit.php", "/wp-admin/upload.php"],
+    };
+    const webm = Buffer.concat([
+      Buffer.from("1a45dfa3", "hex"),
+      Buffer.from("synthetic webm"),
+    ]);
+    database.videoOutput = webm;
+
+    // Not asked: the browser is not told to record, and nothing is kept.
+    const plain = await lab.observeVictimPages(handle, route);
+    expect(plain).toMatchObject({ status: "observed" });
+    expect(plain).not.toHaveProperty("videos");
+    const browserRuns = () =>
+      commands.filter(
+        (command) =>
+          command.args[0] === "run" &&
+          command.args.includes(`verification-browser@${sha("4")}`),
+      );
+    expect(
+      browserRuns().some((command) =>
+        command.args.includes("WBH_RECORD_VIDEO=1"),
+      ),
+    ).toBe(false);
+
+    const recorded = await lab.observeVictimPages(handle, route, {
+      recordVideo: true,
+    });
+    expect(recorded).toMatchObject({
+      status: "observed",
+      videos: [
+        { visitIndex: 0, video: webm },
+        { visitIndex: 1, video: webm },
+      ],
+    });
+    expect(
+      browserRuns().filter((command) =>
+        command.args.includes("WBH_RECORD_VIDEO=1"),
+      ),
+    ).toHaveLength(2);
+
+    // A video that is not WebM, or over 8 MiB, is left out; the record stands.
+    for (const video of [
+      Buffer.from("not a webm"),
+      Buffer.concat([
+        Buffer.from("1a45dfa3", "hex"),
+        Buffer.alloc(8 * 1024 * 1024),
+      ]),
+    ]) {
+      database.videoOutput = video;
+      const dropped = await lab.observeVictimPages(handle, route, {
+        recordVideo: true,
+      });
+      expect(dropped).toMatchObject({
+        status: "observed",
+        screenshot: expect.any(Buffer),
+      });
+      expect(dropped).not.toHaveProperty("videos");
+    }
+    // 8 MiB bounds the attempt's videos together.
+    const half = Buffer.concat([
+      Buffer.from("1a45dfa3", "hex"),
+      Buffer.alloc(5 * 1024 * 1024),
+    ]);
+    database.videoOutput = half;
+    const bounded = await lab.observeVictimPages(handle, route, {
+      recordVideo: true,
+    });
+    if (bounded.status !== "observed") throw new Error("not observed");
+    // Lengths, not bytes: deep equality over megabytes is slow.
+    expect(
+      bounded.videos?.map(({ visitIndex, video }) => [
+        visitIndex,
+        video.length,
+      ]),
+    ).toEqual([[0, half.length]]);
+    database.videoOutput = null;
+    expect(await lab.teardown(handle)).toEqual({ status: "removed" });
+
+    // The visit script records the first page through a recording context.
+    const visit = browserRuns().find((command) =>
+      command.args.includes("WBH_RECORD_VIDEO=1"),
+    );
+    const script = visit?.args[visit.args.indexOf("-e") + 1];
+    if (script === undefined) throw new Error("Browser visit script missing");
+    const runVisit = async (record: boolean, videoBytes: Buffer) => {
+      let finish: (result: string) => void = () => {};
+      const completed = new Promise<string>((resolve) => {
+        finish = resolve;
+      });
+      const contexts: unknown[] = [];
+      let contextClosed = false;
+      const context = {
+        on() {},
+        close: async () => {
+          contextClosed = true;
+        },
+      };
+      const page = {
+        on() {},
+        context: () => context,
+        goto: async () => null,
+        url: () => "http://wordpress/wp-admin/edit.php",
+        evaluate: async () => "",
+        waitForTimeout: async () => {},
+        isClosed: () => false,
+        screenshot: async () => Buffer.from("89504e470d0a1a0a", "hex"),
+        video: () => ({ path: async () => "/tmp/wbh-video/page.webm" }),
+      };
+      runInNewContext(script, {
+        require: (name: string) =>
+          name === "node:fs"
+            ? {
+                readFileSync: (path: string) => {
+                  if (!contextClosed || path !== "/tmp/wbh-video/page.webm")
+                    throw new Error("Video read too early");
+                  return videoBytes;
+                },
+              }
+            : {
+                chromium: {
+                  launch: async () => ({
+                    newPage: async () => page,
+                    newContext: async (options: unknown) => {
+                      contexts.push(options);
+                      return { newPage: async () => page };
+                    },
+                    close: async () => {},
+                  }),
+                },
+              },
+        process: {
+          env: {
+            WBH_VISIT_PATH: "/wp-admin/edit.php",
+            ...(record ? { WBH_RECORD_VIDEO: "1" } : {}),
+          },
+          stdout: { write: (value: string) => finish(value) },
+          exitCode: 0,
+        },
+        console: { error: (message: unknown) => finish(String(message)) },
+        Buffer,
+        URL,
+      });
+      return { output: await completed, contexts };
+    };
+    const withVideo = await runVisit(true, webm);
+    expect(withVideo.contexts).toEqual([
+      { recordVideo: { dir: "/tmp/wbh-video" } },
+    ]);
+    expect(JSON.parse(withVideo.output)).toMatchObject({
+      videoBase64: webm.toString("base64"),
+    });
+    const oversized = await runVisit(true, Buffer.alloc(8 * 1024 * 1024 + 1));
+    expect(JSON.parse(oversized.output)).not.toHaveProperty("videoBase64");
+    const without = await runVisit(false, webm);
+    expect(without.contexts).toEqual([]);
+    expect(JSON.parse(without.output)).not.toHaveProperty("videoBase64");
   });
 
   it("observes only a selected popup that inherits the Lab origin", async () => {

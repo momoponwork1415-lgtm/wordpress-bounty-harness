@@ -142,6 +142,11 @@ export type WordPressVictimPagesObservation =
         | "self";
       /** The last victim page after its actions; Private Evidence only. */
       readonly screenshot?: Buffer;
+      /** Opted in (#549): each visit's first-page WebM; Private Evidence only. */
+      readonly videos?: readonly {
+        readonly visitIndex: number;
+        readonly video: Buffer;
+      }[];
       /** Counts from that last visit; Private Evidence only. */
       readonly victimBrowserDiagnostic?: WordPressVictimBrowserDiagnostic;
       /** The first visit that showed a dialog with the declared numeric marker. */
