@@ -208,7 +208,7 @@ TranslatePressの公開済み脆弱版・修正版で縦断経路を実証した
 ### 初期ベンチマークと追加評価
 
 - 初期対象はTranslatePress 3.2.6のStored XSSと3.3.1のアカウント乗っ取りを**評価側の公開事例**として扱う。3.2.5のReflected XSSは対象外分類の診断用で、本番開始ゲートに数えない。
-- 旧TranslatePress縦断ゲートは3.2.6のRoot＋3を先に1回、必要なら3.3.1を1回とした。新しい開発セットでは対象ごとの単一協調Trialを独立して反復し、探索に触る変更は最低3 Trialの completed、Finding、Lead、wall中央値、usage、失敗理由を記録する。候補0件はsource読取とwallから「読まずに終わった」か「読んで出なかった」かを分け、無条件にTrialを増やさない。具体的Leadは保存するが、Leadだけで判定器のゲートを満たさない。
+- 旧TranslatePress縦断ゲートは3.2.6のRoot＋3を先に1回、必要なら3.3.1を1回とした。新しい開発セットでは対象ごとの単一協調Trialを独立して反復し、探索に触る変更は開発セット6 caseを各3 run（18 Trial）回して、completed、Finding、Lead、wall中央値、usage、失敗理由を記録する。promptの採否は、実行の健全性、公開経路一致（主指標）、M1、人間が読む量、本番の当たり、精度の6段をこの順に読んで決める（所有者決定 2026-10-26。閾値は [DEVELOPMENT.md](DEVELOPMENT.md) 第5節、根拠は [監査](reviews/2026-10-26-system-audit.md) 第B.3節。同日の「各1 runでscope内Findingが1件以上」の基準を置き換えた）。候補0件はsource読取とwallから「読まずに終わった」か「読んで出なかった」かを分け、無条件にTrialを増やさない。具体的Leadは保存するが、Leadだけで判定器のゲートを満たさない。
 - 探索時の入力に評価対象のadvisory、原因箇所、PoC、payload、修正差分を混ぜない。評価情報はrunner・判定器側に隔離する。旧#73の単独TrialによるTranslatePress 3.2.5の2×2は候補0件で、協調Trialの優劣や当たり率を示さない。
 - 本番探索の開始ゲートは、上記2対象の**少なくとも1件**でsource根拠付きFindingを新しいLabのHarness判定器が `runtime-confirmed` とし、同一経路を修正版で再実行してconfirmedにならず、子の成果と費用・停止理由が欠落なく残ること。これで示せるのは配線と1分類の能力だけで、未知脆弱性の発見率ではない。
 - 本人発見の公開7件の再発見では、協調Trialにsource根拠付き候補が出るかと、新Labの判定器でconfirmedかつ修正版の別Snapshotで同じ経路が成立しないかを別指標にする。TranslatePress以外でStored XSS 1件以上とSQLi 1件以上を目標とし、各caseの落ちた段階と理由を台帳と日付付き評価文書に残す。探索のpromptとscenarioに対象固有の関数名、option名、URL、画面名を入れない。評価対象の記録本文、PoC、payload、原因箇所、修正差分を探索へ渡さない（ADR 0027）。

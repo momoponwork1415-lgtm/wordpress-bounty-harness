@@ -176,3 +176,16 @@ v5 で変えたもの: 受け入れる種類の順位と「落とす種類」の
 - 探索 run が provider 上限で終わったら、その runtime の未起動の対象だけを止める。もう一方の runtime の対象は起動と完了を続ける。`campaign-stopped` に `runtime` を付ける。両方の runtime が上限に当たれば、campaign 全体が止まる。
 - runner の backoff は runtime ごとに段階を数える。待ち時間が最も早く終わる runtime に合わせて同じ campaign ID で再開し、待ち時間の残る runtime の対象は、その終わりまで起動しない。
 - 上の条件に当たらない campaign と、Verifier の上限は、今までどおり campaign 全体を止める。
+
+## 2026-10-26 追記 4: prompt の合格基準を 6 段にし、本番の既定を wide v14 にする（所有者決定、オーケストレータ session b6beec6e）
+
+[システム全体の監査](../reviews/2026-10-26-system-audit.md) 第 F.2 節の問いに、所有者が 2026-10-26 に答えた。根拠の数字は同じ監査の第 B.3 節と第 C.3 節にある。
+
+| 項目 | 決定 |
+| --- | --- |
+| prompt の合格基準 | 監査 第 B.3 節の 6 段（実行の健全性、公開経路一致、M1、人間が読む量、本番の当たり、精度）を、開発セット 6 case × 各 3 run で読む。同日の「各 1 run で scope 内 Finding が 1 件以上」の基準を置き換える。閾値は DEVELOPMENT 第 5 節、SPEC 第 10 節 |
+| 本番の既定 mode | `src/profiles/wordpress/policy/campaign.json` を `wide` の `wp2shell-bounty-v14-wide` にする。ほかの値は変えない。`deep` の `wp2shell-bounty-v11` は名指しの Trial でだけ使う（ADR 0039 の 2026-10-26 追記 7） |
+| 探索の速さ | 探索は止めない。本番で scope 内 Finding の group が週 15 件を超えたら Trial を減らす（第 B.3 節の段 (4)。OPERATIONS 第 2 節、DEVELOPMENT 第 2 節） |
+| 記録だけ | 探索 Lab は、開発セットで `wide` の arm を 1 つ回してから残すかを決める。Claude の探索 runtime は残す |
+
+2026-10-18 の表の「採否の基準」の行は、探索の数字で決めるという点では変わらない。どの数字をどの順で読むかを、この追記で決めた。
