@@ -140,3 +140,12 @@ amends: 0029（新規探索の唯一の mode）, 0033（最低 60 分は deep �
 - `fixed-v14` は、source に根拠のある chain に不確かさが残っても明記して報告し、後段の人間レビューは多少の偽陽性を許容し、見落としをより高い費用として扱う。専門 agent の割当、残った入口を続ける子、最後の runtime confirmation の文は変えない。
 - 測った数字は merge 前に同じ 6 件で再計測して PR に貼る。この変更を作る作業では Trial を起動しない。
 - 戻すときは v14-wide を `archived` にして mode を外し、v13-wide を `current`・`mode: "wide"` に戻す。両版の本文、fragment と digest は履歴照合のため残す。
+
+## 2026-10-26 追記 6: 再開 segment は Trial が記録した Run parameters で走る（#548）
+
+PR #537 のレビューで、再開（ADR 0036）が子の上限・最低時間・wall を今の campaign 設定から組み直していると分かった。一方、再開 segment の `configuration` は最初の区間の値を写す。区間の間に設定を変えると、台帳の値と実際に強制した値が食い違っていた。
+
+- 再開 segment は、元の run の `configuration` にある `maxChildren`、`minimumActiveMinutes`、`wallMinutes` を強制し、`## Run parameters` 節も同じ値で組む。今の設定は使わない。
+- 追記 3 より前の run には記録が無い。子の上限は当時の固定値 4 を使い、最低時間と wall は従来どおり今の設定から取る。
+- 目的文・Snapshot・runtime profile・Lab 予算が違えば拒否する規則（`prompt-version-differs` など）は変えない。
+- 消し方: この節と #548 の差分を戻す。再開はまた今の設定から組み直す。
