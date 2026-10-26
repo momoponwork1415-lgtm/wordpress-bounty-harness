@@ -2480,7 +2480,7 @@ describe("harness CLI vertical slice", () => {
       wordpressCampaignConfigSchema.parse({ ...base, discovery: wide }),
     ).toMatchObject({
       discovery: { mode: "wide", minimumActiveMinutes: 0 },
-      promptId: "wp2shell-bounty-v13-wide",
+      promptId: "wp2shell-bounty-v14-wide",
       runWallTimeMinutes: 120,
     });
     expect(
@@ -2493,7 +2493,7 @@ describe("harness CLI vertical slice", () => {
       wordpressCampaignConfigSchema.parse({
         ...base,
         discovery: wide,
-        promptId: "wp2shell-bounty-v13-wide",
+        promptId: "wp2shell-bounty-v14-wide",
         runWallTimeMinutes: 20,
       }).runWallTimeMinutes,
     ).toBe(20);
@@ -2513,6 +2513,7 @@ describe("harness CLI vertical slice", () => {
     for (const rejected of [
       { discovery: deep, promptId: "wp2shell-bounty-v13-wide" },
       { promptId: "wp2shell-bounty-v13-wide" },
+      { discovery: wide, promptId: "wp2shell-bounty-v13-wide" },
       { discovery: wide, promptId: "wp2shell-bounty-v8" },
       { discovery: wide, promptId: "wp2shell-bounty-v10-wide" },
       { discovery: wide, promptId: "wp2shell-bounty-v11-wide" },
@@ -2584,7 +2585,7 @@ describe("harness CLI vertical slice", () => {
     expect(started[0]?.event.type).toBe("discovery-run-started");
     if (started[0]?.event.type === "discovery-run-started")
       expect(started[0].event.configuration).toMatchObject({
-        promptVariant: "wp2shell-bounty-v13-wide",
+        promptVariant: "wp2shell-bounty-v14-wide",
         mode: "wide",
         wallMinutes: 120,
         minimumActiveMinutes: 0,

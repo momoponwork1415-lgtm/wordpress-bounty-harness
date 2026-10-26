@@ -61,7 +61,7 @@ export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
 // Paragraphs the deep and wide objectives share unchanged.
 const TASK = { section: "objective", file: "task-v10" } as const;
 const SOURCES = { section: "objective", file: "sources-v8" } as const;
-// Only the archived v10 and v12-wide carry it; v11 and v13-wide drop it
+// Only the archived v10 and v12-wide carry it; v11, v13-wide and v14-wide drop it
 // (owner decision 2026-10-25, redesign §12 Q7).
 const LIFETIME = { section: "coordination", file: "lifetime-v10" } as const;
 
@@ -279,8 +279,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:0dd2072b4c6a544d47ebb6df94c7981f2fbb758b4dee82e063896ff91f892bb8",
     outputContract: "v4",
-    status: "current",
-    mode: "wide",
+    status: "archived",
     // v12-wide without the lifetime paragraph and the specialist count, with
     // the hand-over paragraph and the registry-based stop rule (owner
     // 2026-10-26, ADR 0039 追記 4).
@@ -293,6 +292,27 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
       { section: "coordination", file: "handover-v11" },
       SOURCES,
       { section: "coordination", file: "fixed-v13" },
+      { section: "coordination", file: "stop-wide-v13" },
+    ],
+  },
+  {
+    id: "wp2shell-bounty-v14-wide",
+    digest:
+      "sha256:42ec734364d93492bf9b936e415b94796da21fb154d3b29033cafbd58596229d",
+    outputContract: "v4",
+    status: "current",
+    mode: "wide",
+    // v13-wide with only the sink strategy and fixed coordination fragments
+    // replaced (owner guidance 2026-10-26, ADR 0039 addendum).
+    fragments: [
+      TASK,
+      { section: "objective", file: "first-principles-v11" },
+      { section: "strategy", file: "sinks-v14" },
+      { section: "strategy", file: "shapes-v12" },
+      { section: "persistence", file: "research-v11" },
+      { section: "coordination", file: "handover-v11" },
+      SOURCES,
+      { section: "coordination", file: "fixed-v14" },
       { section: "coordination", file: "stop-wide-v13" },
     ],
   },
