@@ -7,8 +7,6 @@ export interface LabHandle {
   readonly snapshotDigest: string;
   readonly setupDigest: string;
   readonly endpoint: string;
-  /** Profile-owned, digest-pinned ordinary Lab scenario, when selected. */
-  readonly scenario?: { readonly id: string; readonly digest: string };
 }
 
 /** The exception a Lab setup failed with, bounded before it enters Private Evidence (#284). */

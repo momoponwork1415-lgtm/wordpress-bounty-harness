@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../../src/ledger/index.js";
 import { createWordPressScopeFacts } from "../../../src/profiles/wordpress/scope-facts.js";
-import { wordPressScenario } from "../../../src/profiles/wordpress/lab/scenarios.js";
+import { retiredWordPressScenario } from "../../../src/profiles/wordpress/lab/retired-scenarios.js";
 import {
   assessWordpressScope,
   loadWordpressScopePolicy,
@@ -78,10 +78,14 @@ describe("WordPress scope setup provenance", () => {
       runId: "run",
       category: "sqli",
     });
-    const ordinary = wordPressScenario("public-plugin-comment-v1");
-    const wrongPlugin = wordPressScenario("public-member-post-v1");
-    if (ordinary === undefined || wrongPlugin === undefined)
-      throw new Error("Expected pinned scenarios");
+    // Past Lab records name scenarios removed in #353; they still read.
+    const pinned = (id: string) => {
+      const record = retiredWordPressScenario(id);
+      if (record === undefined) throw new Error("Expected pinned scenarios");
+      return { id, digest: record.digest };
+    };
+    const ordinary = pinned("public-plugin-comment-v1");
+    const wrongPlugin = pinned("public-member-post-v1");
     const cases: readonly {
       readonly name: string;
       readonly scenario?: { readonly id: string; readonly digest: string };

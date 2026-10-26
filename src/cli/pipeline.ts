@@ -36,7 +36,7 @@ type DiscoveryOptions = Parameters<typeof runDiscoveryCampaign>[0];
 /** Everything a campaign needs, built by a profile composition from public interfaces. */
 export interface CampaignPipeline<
   Target extends TargetSelection,
-  Setup extends { readonly scenario?: { readonly id: string } | undefined },
+  Setup,
   Handle extends LabHandle,
   Finding extends VerifiableFinding,
 > {
@@ -292,7 +292,7 @@ function targetScheduler<Target>(options: {
 /** Wiring only: each step is a module's public interface; rules stay in the modules. */
 export async function runCampaignPipeline<
   Target extends TargetSelection,
-  Setup extends { readonly scenario?: { readonly id: string } | undefined },
+  Setup,
   Handle extends LabHandle,
   Finding extends VerifiableFinding,
 >(options: {
@@ -523,10 +523,6 @@ export async function runCampaignPipeline<
           ...(provisioned.status === "ready"
             ? { setupDigest: provisioned.handle.setupDigest }
             : {}),
-          ...(provisioned.status !== "ready" ||
-          provisioned.handle.scenario === undefined
-            ? {}
-            : { scenario: provisioned.handle.scenario }),
           ...(provisioned.status === "ready"
             ? {}
             : {
@@ -785,7 +781,7 @@ export type VerifyNextSummary = {
  * Verifier version (the retired automatic `verifier-v8`) keeps a Finding queued.
  */
 export async function verifyNextFinding<
-  Setup extends { readonly scenario?: { readonly id: string } | undefined },
+  Setup,
   Handle extends LabHandle,
   Finding extends VerifiableFinding,
 >(options: {
@@ -908,7 +904,8 @@ export async function verifyNextFinding<
           labs,
           event.snapshotDigest,
         ),
-        currentScenarioId: setup.scenario?.id ?? null,
+        // Lab scenarios were removed in #353; a Lab now has none.
+        currentScenarioId: null,
       })
     )
       continue;
@@ -939,10 +936,7 @@ export async function verifyNextFinding<
  */
 export async function reverifyOnSelectedVersion<
   Target extends TargetSelection,
-  Setup extends {
-    readonly scenario?:
-      { readonly id: string; readonly digest: string } | undefined;
-  },
+  Setup,
   Handle extends LabHandle,
   Finding extends VerifiableFinding,
 >(options: {
@@ -1179,59 +1173,19 @@ export async function reverifyOnSelectedVersion<
       );
   }
   const originalSnapshot = snapshot.digest === finding.snapshotDigest;
-  // An unconfirmed Finding may be rechecked on its own Snapshot (also when the
-  // version is spelled out); any other Snapshot needs an evidence-backed route.
-  if (observed === undefined && !originalSnapshot)
+  // An unconfirmed Finding was rechecked only with a changed Lab scenario;
+  // scenarios were removed in #353, so it goes back through `verify next`.
+  if (observed === undefined)
     throw new Error(
-      options.version === undefined
-        ? "An unconfirmed Finding can only be retried on its original Snapshot"
-        : "An evidence-backed route is required for fixed-version comparison",
+      originalSnapshot
+        ? "An unconfirmed Finding is retried through verify next; Lab scenario retry was removed in #353"
+        : options.version === undefined
+          ? "An unconfirmed Finding can only be retried on its original Snapshot"
+          : "An evidence-backed route is required for fixed-version comparison",
     );
   const setup = pipeline.setupFor(snapshot);
-  if (observed === undefined) {
-    const previous = ledger
-      .readAll({
-        campaignId,
-        findingId,
-        type: "verification-finished",
-      })
-      .map(({ event }) => event)
-      .filter(
-        (event) =>
-          event.type === "verification-finished" &&
-          event.snapshotDigest === finding.snapshotDigest,
-      )
-      .at(-1);
-    if (
-      previous?.type !== "verification-finished" ||
-      previous.result.status !== "incomplete" ||
-      previous.result.reason !== "precondition"
-    )
-      throw new Error(
-        "A prior incomplete(precondition) verification is required for scenario retry",
-      );
-    const previousLab = ledger
-      .readAll({ campaignId, type: "lab-provisioned" })
-      .map(({ event }) => event)
-      .find(
-        (event) =>
-          event.type === "lab-provisioned" &&
-          event.identity === `verification-lab-${previous.verificationId}`,
-      );
-    if (previousLab?.type !== "lab-provisioned")
-      throw new Error(
-        "A prior verification Lab is required for scenario retry",
-      );
-    if (
-      setup.scenario === undefined ||
-      setup.scenario.id === previousLab.scenario?.id
-    )
-      throw new Error(
-        "An unconfirmed Finding requires a different Lab scenario for retry",
-      );
-  }
   if (
-    observed?.type === "verification-finished" &&
+    observed.type === "verification-finished" &&
     options.version !== undefined
   ) {
     const observedLab = ledger
@@ -1245,20 +1199,16 @@ export async function reverifyOnSelectedVersion<
           event.type === "lab-provisioned" &&
           event.identity === `verification-lab-${observed.verificationId}`,
       );
+    // A Lab has no scenario since #353; a route observed under one cannot be compared.
     const sameScenario =
       observedLab?.type === "lab-provisioned" &&
-      (setup.scenario === undefined
-        ? observedLab.scenario === undefined
-        : setup.scenario.id === observedLab.scenario?.id &&
-          setup.scenario.digest === observedLab.scenario.digest);
+      observedLab.scenario === undefined;
     if (
       originalSnapshot &&
-      (observedLab?.type !== "lab-provisioned" ||
-        (setup.scenario === undefined && hasCapturedRouteBinding) ||
-        (sameScenario && hasCapturedRouteBinding))
+      (observedLab?.type !== "lab-provisioned" || hasCapturedRouteBinding)
     )
       throw new Error(
-        "A fixed-version control requires a different Snapshot from the original Finding, or a changed Lab scenario for same-Snapshot recheck",
+        "A fixed-version control requires a different Snapshot from the original Finding",
       );
     if (!originalSnapshot && !sameScenario)
       throw new Error(
@@ -1347,8 +1297,8 @@ export async function reverifyOnSelectedVersion<
       throw new Error("The derived Finding could not be recorded");
     verificationFindingId = derived.finding.findingId;
   }
-  // A same-Snapshot recheck after a scenario change has no version basis; a
-  // pinned smoke replay on the original Snapshot has none either.
+  // A same-Snapshot recheck has no version basis; a pinned smoke replay on
+  // the original Snapshot has none either.
   const basisKind =
     options.version === undefined
       ? "latest-version"

@@ -7,17 +7,6 @@ import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
 import { verifyCanonicalSourceTree } from "../../../infrastructure/canonical-source-tree.js";
 import { snapshotSchema, type Snapshot } from "../../../snapshot/index.js";
 import type { WordPressSource, WordPressSourceResolver } from "./contract.js";
-import {
-  scenarioBookingPage,
-  scenarioBuilderPage,
-  scenarioFileAttachmentForm,
-  wordPressScenario,
-  type WordPressScenario,
-} from "./scenarios.js";
-import { assertSearchableCommentTarget } from "./relevanssi-search-index.js";
-import { assertSimplyScheduleBookingTarget } from "./simply-schedule-booking.js";
-import { assertBrizyBuilderPageTarget } from "./brizy-builder-page.js";
-import { assertBrizyFileAttachmentFormTarget } from "./brizy-file-attachment-form.js";
 import { PHP_RUNTIME_SOURCE_IDENTITY } from "../acquisition/php-runtime-source.js";
 import { wordPressOrgPluginIdentity } from "../target-identity.js";
 
@@ -41,6 +30,7 @@ export const setupSchema = z
         administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
       })
       .optional(),
+    /** Read only: past setups name a scenario removed in #353; no Lab is built from one. */
     scenario: z.strictObject({ id: z.string(), digest }).optional(),
   })
   .refine(
@@ -59,42 +49,10 @@ type PluginDirectory = { readonly slug: string; readonly directory: string };
 export interface PreparedWordPressLab {
   readonly snapshot: Snapshot;
   readonly setup: ParsedWordPressLabSetup;
-  readonly scenario: WordPressScenario | undefined;
   readonly target: PluginDirectory;
   readonly dependencies: readonly PluginDirectory[];
   readonly coreVersion: string | undefined;
   readonly phpVersion: string | undefined;
-}
-
-function validateScenario(
-  setup: ParsedWordPressLabSetup,
-): WordPressScenario | undefined {
-  const scenario =
-    setup.scenario === undefined
-      ? undefined
-      : wordPressScenario(setup.scenario.id);
-  if (
-    setup.scenario !== undefined &&
-    (scenario === undefined || scenario.digest !== setup.scenario.digest)
-  )
-    throw new Error("Unknown or changed Lab scenario");
-  if (scenario?.approvedComment && setup.initialPosts.length === 0)
-    throw new Error("Scenario requires an initial post");
-  if (
-    scenario?.translation !== null &&
-    scenario?.translation !== undefined &&
-    !setup.initialPosts.includes(scenario.translation.original)
-  )
-    throw new Error("Scenario translation requires its published post");
-  if (
-    scenario?.secondaryLocale !== null &&
-    scenario?.secondaryLocale !== undefined &&
-    setup.translatePress !== undefined &&
-    setup.translatePress.administratorSecondaryLocale !==
-      scenario.secondaryLocale
-  )
-    throw new Error("Scenario secondary locale conflicts with setup");
-  return scenario;
 }
 
 async function verifySource(
@@ -159,7 +117,7 @@ async function prepareDependencies(
   return { dependencies, coreVersion, phpVersion };
 }
 
-/** Validate immutable source and scenario before starting any container. */
+/** Validate immutable source and setup before starting any container. */
 export async function prepareWordPressLab(
   candidateSnapshot: unknown,
   candidateSetup: WordPressLabSetup,
@@ -172,7 +130,11 @@ export async function prepareWordPressLab(
   const setup = setupSchema.parse(candidateSetup);
   if (setup.snapshotDigest !== snapshot.digest)
     throw new Error("Lab setup snapshot mismatch");
-  const scenario = validateScenario(setup);
+  // Lab scenarios were removed in #353; wbh-verify prepares preconditions (ADR 0035).
+  if (setup.scenario !== undefined)
+    throw new Error(
+      "Lab scenarios were removed in #353; restore them from archive/pre-353-deletion",
+    );
   const resolved = await sourceResolver.resolve(snapshot);
   if (resolved.dependencies.length !== snapshot.dependencies.length)
     throw new Error("Dependency count mismatch");
@@ -185,25 +147,6 @@ export async function prepareWordPressLab(
     throw new Error("Customer role needs WooCommerce");
   if (resolved.target.kind !== "plugin")
     throw new Error("The target must be a plugin");
-  if (
-    scenario?.pluginSlug !== null &&
-    scenario?.pluginSlug !== undefined &&
-    resolved.target.pluginSlug !== scenario.pluginSlug
-  )
-    throw new Error("Lab scenario requires its plugin");
-  assertSearchableCommentTarget(scenario, resolved.target.pluginSlug);
-  assertSimplyScheduleBookingTarget(
-    scenarioBookingPage(scenario),
-    resolved.target.pluginSlug,
-  );
-  assertBrizyBuilderPageTarget(
-    scenarioBuilderPage(scenario),
-    resolved.target.pluginSlug,
-  );
-  assertBrizyFileAttachmentFormTarget(
-    scenarioFileAttachmentForm(scenario),
-    resolved.target.pluginSlug,
-  );
   if (
     setup.translatePress !== undefined &&
     resolved.target.pluginSlug !== "translatepress-multilingual"
@@ -220,7 +163,6 @@ export async function prepareWordPressLab(
   return {
     snapshot,
     setup,
-    scenario,
     target: { slug: resolved.target.pluginSlug, directory },
     dependencies,
     coreVersion,

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { PrivateArtifactStore } from "../../infrastructure/private-artifact-store.js";
 import type { Ledger } from "../../ledger/index.js";
 import type { ScopeFactsProvider } from "../../review/index.js";
-import { wordPressScenario } from "./lab/scenarios.js";
+import { retiredWordPressScenario } from "./lab/retired-scenarios.js";
 import type { WordpressScopeInput } from "./scope-policy.js";
 
 const attackerRole = z.enum(["unauthenticated", "subscriber", "customer"]);
@@ -251,7 +251,7 @@ export function createWordPressScopeFacts(options: {
         );
       const pinnedScenario =
         lab?.type === "lab-provisioned" && lab.scenario !== undefined
-          ? wordPressScenario(lab.scenario.id)
+          ? retiredWordPressScenario(lab.scenario.id)
           : undefined;
       const selected = options.ledger
         .readAll({

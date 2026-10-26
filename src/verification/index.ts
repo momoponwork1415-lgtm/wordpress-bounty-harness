@@ -123,7 +123,6 @@ export type VerifierAttempt =
       readonly status: "incomplete";
       readonly reason: "precondition" | "recipe";
       readonly nextStep: string;
-      readonly nextScenarioId?: string;
     };
 
 /** A transport receipt already recorded the failure; Verification preserves its cause. */
@@ -404,7 +403,6 @@ export class Verification<
           labId: lab.id,
           status: "ready",
           purpose: "verification",
-          ...(lab.scenario === undefined ? {} : { scenario: lab.scenario }),
         });
         if (labEvent.status === "conflict")
           throw new Error("Verification Lab identity conflict");
@@ -590,12 +588,7 @@ export class Verification<
     }
     await observeAfter();
     if (attempt.status === "incomplete")
-      return {
-        ...incomplete(attempt.reason, attempt.nextStep),
-        ...(attempt.nextScenarioId === undefined
-          ? {}
-          : { nextScenarioId: attempt.nextScenarioId }),
-      };
+      return incomplete(attempt.reason, attempt.nextStep);
     run.onRecipe(attempt.recipeDigest);
     let observation: AttemptObservation;
     try {

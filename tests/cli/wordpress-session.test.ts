@@ -58,7 +58,6 @@ async function fixture(options: {
         siteTitle: "Lab",
         initialPosts: ["Welcome"],
         customerRole: true,
-        scenarioId: "approved-comment-v1",
       },
       ...options.config,
     }),
@@ -110,10 +109,24 @@ describe("WordPress campaign session", () => {
       schemaVersion: 1,
       snapshotDigest: snapshot.digest,
       siteTitle: "Lab",
-      scenario: { id: "approved-comment-v1" },
     });
-    expect(session.setupFor(snapshot)).not.toHaveProperty("scenarioId");
+    expect(session.setupFor(snapshot)).not.toHaveProperty("scenario");
     expect(session.verification.promptVersion).toBeDefined();
+  });
+
+  it("rejects a config that names a Lab scenario removed in #353 before building boundaries", async () => {
+    const { open, boundaryCalls } = await fixture({
+      config: {
+        lab: {
+          siteTitle: "Lab",
+          initialPosts: ["Welcome"],
+          customerRole: true,
+          scenarioId: "approved-comment-v1",
+        },
+      },
+    });
+    await expect(open()).rejects.toThrow("Lab scenarios were removed in #353");
+    expect(boundaryCalls).toHaveLength(0);
   });
 
   it("opens administration without a legacy Verifier and never selects handoff implicitly", async () => {

@@ -105,23 +105,6 @@ it("runs the wide example as a 20-minute v14-wide Trial on the production select
   );
 });
 
-it("retains the v6 measurement example as an unrunnable historical fixture", async () => {
-  const measure = JSON.parse(
-    await readFile(
-      join(
-        import.meta.dirname,
-        "..",
-        "..",
-        "examples",
-        "campaign-v6-measure.json",
-      ),
-      "utf8",
-    ),
-  ) as Record<string, unknown>;
-  expect(measure.promptId).toBe("wp2shell-bounty-v6");
-  expect(wordpressCampaignConfigSchema.safeParse(measure).success).toBe(false);
-});
-
 it.each(["3.3.1", "3.2.6"])(
   "runs the pinned %s production example as one source-first 120-minute v11 Trial",
   async (version) => {

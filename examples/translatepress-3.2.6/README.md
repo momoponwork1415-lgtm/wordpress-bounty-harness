@@ -17,4 +17,4 @@ node dist/cli/main.js campaign run translatepress-multilingual --campaign <一�
 
 `*-comment-fixture.json` の2設定は過去の比較用。最初の公開投稿に無害な承認済みコメントを1件追加した結果を、commentなしTrialと混ぜない。
 
-`campaign-short-managed-v4-translation-data.json` と `selection-three-trials.json` は 2026-10-19 に削除し、Git 履歴にだけ残る。版付きの通常機能シナリオ `translatepress-translation-data-v1` の定義と digest pin は `src/profiles/wordpress/lab/scenarios.ts` に残る。
+`campaign-short-managed-v4-translation-data.json` と `selection-three-trials.json` は 2026-10-19 に削除し、Git 履歴にだけ残る。版付きの通常機能シナリオ `translatepress-translation-data-v1` は #353 で削除した。定義は tag `archive/pre-353-deletion` に、過去の記録を読むための digest pin は `src/profiles/wordpress/lab/retired-scenarios.ts` に残る。

@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-import { nextWordPressScenario } from "../lab/scenarios.js";
-
 export const preconditionClassSchema = z.enum([
   "default",
   "common-usage",
@@ -12,8 +10,6 @@ export type PreconditionClass = z.infer<typeof preconditionClassSchema>;
 
 export type ClassifiedPrecondition = {
   readonly preconditionClass: PreconditionClass;
-  readonly nextScenarioId?: string;
-  readonly reasonCode?: "common-usage-scenario-missing";
 };
 
 /** Only exact default declarations are trusted as a claim of default settings. */
@@ -71,8 +67,6 @@ const COMMON_USAGE =
 export function classifyWordPressPrecondition(input: {
   readonly configurationPrecondition: string;
   readonly attachmentPrecondition?: string | null;
-  readonly currentScenarioId?: string | undefined;
-  readonly secondaryLocaleConfigured?: boolean;
 }): ClassifiedPrecondition {
   const statements = [
     input.configurationPrecondition,
@@ -93,27 +87,7 @@ export function classifyWordPressPrecondition(input: {
     return { preconditionClass: "admin-configuration" };
   const nonDefault = statements.filter((statement) => !DEFAULT.test(statement));
   if (nonDefault.length === 0) return { preconditionClass: "default" };
-  const description = nonDefault.join(" ");
-  const scenario = nextWordPressScenario(description, undefined, {
-    secondaryLocaleConfigured: input.secondaryLocaleConfigured === true,
-  });
-  if (scenario !== "catalogue に無い前提") {
-    const missing = nextWordPressScenario(
-      description,
-      input.currentScenarioId,
-      { secondaryLocaleConfigured: input.secondaryLocaleConfigured === true },
-    );
-    return {
-      preconditionClass: "common-usage",
-      ...(missing === "catalogue に無い前提"
-        ? {}
-        : { nextScenarioId: scenario.split(":", 1)[0]! }),
-    };
-  }
-  if (COMMON_USAGE.test(description))
-    return {
-      preconditionClass: "common-usage",
-      reasonCode: "common-usage-scenario-missing",
-    };
+  if (COMMON_USAGE.test(nonDefault.join(" ")))
+    return { preconditionClass: "common-usage" };
   return { preconditionClass: "unknown" };
 }

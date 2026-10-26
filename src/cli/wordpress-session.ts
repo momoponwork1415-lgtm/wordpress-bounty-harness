@@ -30,7 +30,6 @@ import type {
   WordPressLabHandle,
   WordPressLabSetup,
 } from "../profiles/wordpress/lab/index.js";
-import { wordPressScenario } from "../profiles/wordpress/lab/scenarios.js";
 import {
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS,
   WORDPRESS_DISCOVERY_MODES,
@@ -162,6 +161,7 @@ const commonCampaignFields = {
         administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
       })
       .optional(),
+    /** Removed in #353; rejected below so an old config fails before any Lab. */
     scenarioId: z.string().optional(),
   }),
 };
@@ -226,14 +226,12 @@ export const wordpressCampaignConfigSchema = z
         path: ["lab", "initialApprovedComment"],
         message: "An approved comment requires an initial post",
       });
-    if (
-      config.lab.scenarioId !== undefined &&
-      wordPressScenario(config.lab.scenarioId) === undefined
-    )
+    if (config.lab.scenarioId !== undefined)
       context.addIssue({
         code: "custom",
         path: ["lab", "scenarioId"],
-        message: "Unknown WordPress Lab scenario",
+        message:
+          "Lab scenarios were removed in #353; wbh-verify prepares preconditions",
       });
   })
   .transform((config) => ({
@@ -428,16 +426,11 @@ export async function readWordPressCampaignPolicy(
 const setupFor =
   (config: WordPressCampaignConfig) =>
   (snapshot: Snapshot): WordPressLabSetup => {
-    const { scenarioId, ...lab } = config.lab;
-    const scenario =
-      scenarioId === undefined ? undefined : wordPressScenario(scenarioId);
+    const { scenarioId: _removed, ...lab } = config.lab;
     return {
       schemaVersion: 1,
       snapshotDigest: snapshot.digest,
       ...lab,
-      ...(scenario === undefined
-        ? {}
-        : { scenario: { id: scenario.id, digest: scenario.digest } }),
     };
   };
 

@@ -19,7 +19,6 @@ import {
   type WordPressLab,
   type WordPressLabHandle,
 } from "../lab/index.js";
-import { nextWordPressScenario } from "../lab/scenarios.js";
 import { SETUP_BOUNDARY_FILE } from "./http-evidence.js";
 import {
   classifyWordPressPrecondition,
@@ -44,7 +43,6 @@ export type WordPressVerifierLab = Readonly<{
   networkName: string;
   internalIp: string;
   recorderIp: string;
-  scenario?: WordPressLabHandle["scenario"];
   secondaryLocale?: string;
   database?: WordPressLabHandle["database"];
   attackerAccounts: WordPressLowPrivilegeAccounts;
@@ -298,7 +296,6 @@ function verifierLabView(
     networkName: lab.networkName,
     internalIp: lab.internalIp,
     recorderIp: lab.recorderIp,
-    ...(lab.scenario === undefined ? {} : { scenario: lab.scenario }),
     ...(lab.secondaryLocale === undefined
       ? {}
       : { secondaryLocale: lab.secondaryLocale }),
@@ -382,8 +379,6 @@ export class WordPressVerifier implements Verifier<
 
     const initialPrecondition = classifyWordPressPrecondition({
       configurationPrecondition: finding.configurationPrecondition,
-      currentScenarioId: lab.scenario?.id,
-      secondaryLocaleConfigured: lab.secondaryLocale !== undefined,
     });
     if (
       record.preconditionClass !== initialPrecondition.preconditionClass ||
@@ -397,29 +392,6 @@ export class WordPressVerifier implements Verifier<
       );
     const transportSetsUpPreconditions =
       this.options.transport.preconditionSetup === "transport";
-    if (
-      !transportSetsUpPreconditions &&
-      initialPrecondition.nextScenarioId !== undefined
-    )
-      return {
-        status: "incomplete",
-        reason: "precondition",
-        nextStep: nextWordPressScenario(
-          finding.configurationPrecondition,
-          lab.scenario?.id,
-          { secondaryLocaleConfigured: lab.secondaryLocale !== undefined },
-        ),
-        nextScenarioId: initialPrecondition.nextScenarioId,
-      };
-    if (
-      !transportSetsUpPreconditions &&
-      initialPrecondition.reasonCode !== undefined
-    )
-      return {
-        status: "incomplete",
-        reason: "precondition",
-        nextStep: initialPrecondition.reasonCode,
-      };
 
     const routeReference =
       referenceRoute === undefined
@@ -525,8 +497,6 @@ export class WordPressVerifier implements Verifier<
       const classified = classifyWordPressPrecondition({
         configurationPrecondition: finding.configurationPrecondition,
         attachmentPrecondition: data.precondition,
-        currentScenarioId: lab.scenario?.id,
-        secondaryLocaleConfigured: lab.secondaryLocale !== undefined,
       });
       await this.#recordPrecondition(campaignId, finding, classified, runId);
       return {
@@ -536,21 +506,8 @@ export class WordPressVerifier implements Verifier<
           detailDigest === undefined
             ? classified.preconditionClass === "admin-configuration"
               ? "admin-configuration-precondition"
-              : (classified.reasonCode ??
-                (classified.nextScenarioId === undefined
-                  ? "catalogue に無い前提"
-                  : nextWordPressScenario(
-                      `${finding.configurationPrecondition} ${data.precondition}`,
-                      lab.scenario?.id,
-                      {
-                        secondaryLocaleConfigured:
-                          lab.secondaryLocale !== undefined,
-                      },
-                    )))
+              : "catalogue に無い前提"
             : `${unmetPreconditionCode(classified)}:${detailDigest}`,
-        ...(classified.nextScenarioId === undefined
-          ? {}
-          : { nextScenarioId: classified.nextScenarioId }),
       };
     }
     if (

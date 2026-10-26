@@ -4,47 +4,16 @@ import {
   type WordPressLabSession,
 } from "./lab-session.js";
 import type { PreparedWordPressLab } from "./provision-input.js";
-import {
-  scenarioBookingPage,
-  scenarioBuilderPage,
-  scenarioFileAttachmentForm,
-  scenarioContent,
-  scenarioSearchableComment,
-  scenarioTranslationSeedScript,
-  translatePressLocaleSetupScript,
-} from "./scenarios.js";
-import { buildSearchableCommentIndex } from "./relevanssi-search-index.js";
-import { seedSimplyScheduleBooking } from "./simply-schedule-booking.js";
-import { seedBrizyBuilderPage } from "./brizy-builder-page.js";
-import { seedBrizyFileAttachmentForm } from "./brizy-file-attachment-form.js";
-import {
-  USER_REGISTRATION_SCENARIO_ID,
-  userRegistrationOrdinarySetupScript,
-} from "./user-registration-adapter.js";
-import {
-  USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID,
-  USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID,
-  userRegistrationMembershipEnrollmentScript,
-  userRegistrationMembershipInstallScript,
-  userRegistrationMembershipUnjoinedScript,
-} from "./user-registration-membership-adapter.js";
-import {
-  WPDISCUZ_COMMENT_SCENARIO_ID,
-  wpDiscuzOrdinarySetupScript,
-} from "./wpdiscuz-adapter.js";
-import {
-  WP_MEMBERS_SCENARIO_ID,
-  wpMembersOrdinarySetupScript,
-} from "./wp-members-adapter.js";
+
+/** Profile-owned TranslatePress locale setup (`lab.translatePress`). Lab setup data, never discovery input. */
+function translatePressLocaleSetupScript(locale: string): string {
+  return `$settings=get_option("trp_settings"); if(!is_array($settings)) exit(1); $base=$settings["default-language"] ?? "en_US"; $secondary="${locale}"; $settings["translation-languages"]=array_values(array_unique([$base,$secondary])); $settings["publish-languages"]=array_values(array_unique([$base,$secondary])); $settings["url-slugs"][$secondary]=strtolower(substr($secondary,0,2)); update_option("trp_settings",$settings); TRP_Translate_Press::get_trp_instance()->get_component("query")->check_table($base,$secondary); $admin=get_user_by("login","harness-admin"); if(!$admin) exit(2); update_user_meta($admin->ID,"locale",$secondary); if(get_user_locale($admin->ID)!==$secondary) exit(3);`;
+}
 
 interface WordPressInitialization {
   readonly lab: WordPressLabSession;
   readonly prepared: PreparedWordPressLab;
 }
-
-/** The plugin adapters removed in #353 still take the Lab and a two-argument command. */
-const adapterCommand = (lab: WordPressLabSession, args: readonly string[]) =>
-  lab.wp(args);
 
 async function installCore({
   lab,
@@ -151,13 +120,11 @@ async function createAccounts({ lab }: WordPressInitialization): Promise<void> {
 async function seedInitialPosts({
   lab,
   prepared,
-}: WordPressInitialization): Promise<string | undefined> {
-  const { setup, scenario } = prepared;
-  let approvedCommentPostId: string | undefined;
+}: WordPressInitialization): Promise<void> {
+  const { setup } = prepared;
   for (const [index, title] of setup.initialPosts.entries()) {
     const approvedComment =
-      index === 0 &&
-      (setup.initialApprovedComment === true || scenario?.approvedComment);
+      index === 0 && setup.initialApprovedComment === true;
     const created = await lab.wp([
       "post",
       "create",
@@ -169,97 +136,17 @@ async function seedInitialPosts({
     const postId = created.stdout.trim();
     if (!/^[1-9][0-9]*$/.test(postId))
       throw new Error("Seed post ID is unavailable");
-    approvedCommentPostId = postId;
     await lab.wp([
       "comment",
       "create",
       `--comment_post_ID=${postId}`,
-      `--comment_content=${scenarioSearchableComment(scenario)?.body ?? "Thanks for the useful post."}`,
+      "--comment_content=Thanks for the useful post.",
       "--comment_author=Lab Reader",
       "--comment_author_email=lab-reader@example.invalid",
       "--comment_type=comment",
       "--comment_approved=1",
     ]);
   }
-  return approvedCommentPostId;
-}
-
-async function seedScenarioContent({
-  lab,
-  prepared,
-}: WordPressInitialization): Promise<void> {
-  const content = scenarioContent(prepared.scenario);
-  if (content === undefined) return;
-  const created = await lab.wp([
-    "post",
-    "create",
-    `--post_type=${content.type}`,
-    `--post_status=${content.status}`,
-    `--post_name=${content.slug}`,
-    `--post_title=${content.title}`,
-    `--post_content=${content.body}`,
-    "--porcelain",
-  ]);
-  if (!/^[1-9][0-9]*$/.test(created.stdout.trim()))
-    throw new Error("Scenario content ID is unavailable");
-}
-
-async function seedScenarioTranslation({
-  lab,
-  prepared,
-}: WordPressInitialization): Promise<void> {
-  const script = scenarioTranslationSeedScript(prepared.scenario);
-  if (script !== undefined) await lab.wp(["eval", script]);
-}
-
-async function seedScenarioRegistration({
-  lab,
-  prepared,
-}: WordPressInitialization): Promise<void> {
-  const id = prepared.scenario?.id;
-  if (
-    id === USER_REGISTRATION_SCENARIO_ID ||
-    id === USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID ||
-    id === USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID
-  )
-    await lab.wp(["eval", userRegistrationOrdinarySetupScript()]);
-}
-
-async function seedScenarioMembership({
-  lab,
-  prepared,
-}: WordPressInitialization): Promise<void> {
-  const id = prepared.scenario?.id;
-  if (
-    id !== USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID &&
-    id !== USER_REGISTRATION_UNJOINED_MEMBERSHIP_SCENARIO_ID
-  )
-    return;
-  await lab.wp(["eval", userRegistrationMembershipInstallScript()]);
-  // Module classes are loaded at bootstrap, after the installer's option write.
-  const subscriber = lab.attackerAccounts.subscriber.username;
-  await lab.wp([
-    "eval",
-    id === USER_REGISTRATION_MEMBERSHIP_SCENARIO_ID
-      ? userRegistrationMembershipEnrollmentScript(subscriber)
-      : userRegistrationMembershipUnjoinedScript(subscriber),
-  ]);
-}
-
-async function seedScenarioCommentForm({
-  lab,
-  prepared,
-}: WordPressInitialization): Promise<void> {
-  if (prepared.scenario?.id === WPDISCUZ_COMMENT_SCENARIO_ID)
-    await lab.wp(["eval", wpDiscuzOrdinarySetupScript()]);
-}
-
-async function seedScenarioMemberPost({
-  lab,
-  prepared,
-}: WordPressInitialization): Promise<void> {
-  if (prepared.scenario?.id === WP_MEMBERS_SCENARIO_ID)
-    await lab.wp(["eval", wpMembersOrdinarySetupScript()]);
 }
 
 /** Initialize the isolated WordPress site after all containers are healthy. */
@@ -268,43 +155,11 @@ export async function initializeWordPress(
   prepared: PreparedWordPressLab,
 ): Promise<void> {
   const input: WordPressInitialization = { lab, prepared };
-  const { scenario, target } = prepared;
   await installCore(input);
   await installPlugins(input);
   await configureSecondaryLocale(input);
   await createAccounts(input);
-  const approvedCommentPostId = await seedInitialPosts(input);
-  await seedScenarioContent(input);
-  await seedScenarioTranslation(input);
-  await buildSearchableCommentIndex({
-    scenario,
-    targetSlug: target.slug,
-    postId: approvedCommentPostId,
-    resource: lab,
-    wp: adapterCommand,
-  });
-  await seedSimplyScheduleBooking({
-    bookingPage: scenarioBookingPage(scenario),
-    targetSlug: target.slug,
-    resource: lab,
-    wp: adapterCommand,
-  });
-  await seedBrizyBuilderPage({
-    builderPage: scenarioBuilderPage(scenario),
-    targetSlug: target.slug,
-    resource: lab,
-    wp: adapterCommand,
-  });
-  await seedBrizyFileAttachmentForm({
-    fileAttachmentForm: scenarioFileAttachmentForm(scenario),
-    targetSlug: target.slug,
-    resource: lab,
-    wp: adapterCommand,
-  });
-  await seedScenarioRegistration(input);
-  await seedScenarioMembership(input);
-  await seedScenarioCommentForm(input);
-  await seedScenarioMemberPost(input);
+  await seedInitialPosts(input);
 }
 
 /** Grant SELECT on the tables present at provision time. */

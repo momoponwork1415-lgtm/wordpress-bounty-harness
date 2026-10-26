@@ -248,7 +248,6 @@ function issueHandle(input: {
     id: lab.id,
     snapshotDigest: snapshot.digest,
     setupDigest: canonicalDigest({ setup, images }),
-    ...(setup.scenario === undefined ? {} : { scenario: setup.scenario }),
     ...(lab.administratorSecondaryLocale === undefined
       ? {}
       : { secondaryLocale: lab.administratorSecondaryLocale }),
@@ -436,9 +435,7 @@ export function openWordPressLab(options: {
         const { setup, phpVersion } = prepared;
         await preflight();
         const secondaryLocale =
-          setup.translatePress?.administratorSecondaryLocale ??
-          prepared.scenario?.secondaryLocale ??
-          undefined;
+          setup.translatePress?.administratorSecondaryLocale;
         lab = new WordPressLabSession({
           docker,
           images: options.images,
