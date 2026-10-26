@@ -5,9 +5,20 @@ import {
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
-import type { LabHandle, LabProvisioner, TrialLab } from "../lab/index.js";
+import {
+  provisionThrew,
+  storeLabDiagnostic,
+  type LabHandle,
+  type LabProvisioner,
+  type TrialLab,
+} from "../lab/index.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
-import type { Ledger, LedgerEventV1, LedgerRecord } from "../ledger/index.js";
+import {
+  LEDGER_ID_MAX_LENGTH,
+  type Ledger,
+  type LedgerEventV1,
+  type LedgerRecord,
+} from "../ledger/index.js";
 import { humanReproducedBasis } from "../review/manual-observation.js";
 import { targetSelectionId, type TargetSelection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
@@ -115,12 +126,34 @@ export type CampaignSummary = {
     readonly lab: "ready" | "failed" | "none";
     readonly runCount: number;
     readonly stoppedBy: string;
+    /** Why the target's Lab could not be set up; the diagnostic stays private (#284). */
+    readonly labFailure?: {
+      readonly failureStage: "provision" | "seed" | "probe";
+      readonly reason: string;
+      readonly nextStep: string;
+      readonly diagnosticDigest: string;
+    };
     readonly verifications: readonly {
       readonly findingId: string;
       readonly status: VerificationResultV1["status"];
     }[];
   }[];
 };
+
+// A campaign's per-snapshot identities; their format stays fixed so older ledgers still read (#281).
+const targetSelectedIdentity = (campaignId: string, snapshotDigest: string) =>
+  `target-selected-${campaignId}-${snapshotDigest}`;
+const snapshotFrozenIdentity = (campaignId: string, snapshotDigest: string) =>
+  `snapshot-frozen-${campaignId}-${snapshotDigest}`;
+
+/** The longest campaign id whose identities still fit the ledger's id limit (#281). */
+export const MAXIMUM_CAMPAIGN_ID_LENGTH =
+  LEDGER_ID_MAX_LENGTH -
+  Math.max(
+    ...[targetSelectedIdentity, snapshotFrozenIdentity].map(
+      (identity) => identity("", `sha256:${"0".repeat(64)}`).length,
+    ),
+  );
 
 /** How often a target held by the live limit looks at the limit again. */
 export const TARGET_LIMIT_POLL_MS = 30_000;
@@ -439,7 +472,7 @@ export async function runCampaignPipeline<
       };
       await appendOnce({
         ...base,
-        identity: `target-selected-${campaignId}-${snapshot.digest}`,
+        identity: targetSelectedIdentity(campaignId, snapshot.digest),
         occurredAt: target.selectedAt,
         type: "target-selected",
         selectionId,
@@ -455,7 +488,7 @@ export async function runCampaignPipeline<
       });
       await appendOnce({
         ...base,
-        identity: `snapshot-frozen-${campaignId}-${snapshot.digest}`,
+        identity: snapshotFrozenIdentity(campaignId, snapshot.digest),
         occurredAt: at(),
         type: "snapshot-frozen",
         sourceDigest: snapshot.target.sourceDigest,
@@ -466,14 +499,19 @@ export async function runCampaignPipeline<
 
       stage = "discovery";
       if (options.discoveryLab !== "none") {
-        const provisioned = await pipeline.lab.provision(snapshot, setup, {
-          purpose: "discovery",
-        });
+        const provisioned = await pipeline.lab
+          .provision(snapshot, setup, { purpose: "discovery" })
+          .catch(provisionThrew);
         if (provisioned.status === "ready") handle = provisioned.handle;
         const labId =
           provisioned.status === "ready"
             ? provisioned.handle.id
             : options.newId();
+        // Every failure keeps its exception and next step in Private Evidence (#284).
+        const diagnosticDigest =
+          provisioned.status === "ready"
+            ? undefined
+            : await storeLabDiagnostic(options.store, "provision", provisioned);
         await append({
           ...base,
           identity: `lab-provisioned-${labId}`,
@@ -495,17 +533,11 @@ export async function runCampaignPipeline<
                 failureStage: "provision" as const,
                 reason: provisioned.reason,
               }),
-          ...(provisioned.status === "ready" ||
-          provisioned.diagnostic === undefined
+          ...(diagnosticDigest === undefined
             ? {}
             : {
                 artifacts: [
-                  {
-                    kind: "lab-diagnostic",
-                    digest: await options.store.putFiles({
-                      "stderr.txt": provisioned.diagnostic,
-                    }),
-                  },
+                  { kind: "lab-diagnostic", digest: diagnosticDigest },
                 ],
               }),
         });
@@ -520,6 +552,16 @@ export async function runCampaignPipeline<
               provisioned.reason === "precondition"
                 ? "incomplete(precondition)"
                 : "setup-failed",
+            ...(diagnosticDigest === undefined
+              ? {}
+              : {
+                  labFailure: {
+                    failureStage: "provision" as const,
+                    reason: provisioned.reason,
+                    nextStep: provisioned.nextStep,
+                    diagnosticDigest,
+                  },
+                }),
             verifications: [],
           };
           return;

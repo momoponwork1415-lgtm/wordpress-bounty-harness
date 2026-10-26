@@ -14,8 +14,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  forgetDiscoveryOwners,
   forgetLabOwners,
+  readDiscoveryOwners,
   readLabOwners,
+  recordDiscoveryOwner,
   recordLabOwner,
 } from "../../src/infrastructure/lab-owner-record.js";
 
@@ -138,5 +141,58 @@ describe("Lab owner records", () => {
     await expect(
       recordLabOwner({ labId: "../escape", directory: await ownerDirectory() }),
     ).rejects.toThrow("Lab id is invalid");
+  });
+});
+
+describe("Discovery owner records (#550)", () => {
+  it("keeps one record per Docker resource and tells live owners from dead ones", async () => {
+    const directory = await ownerDirectory();
+    const id = randomUUID();
+    const live = await recordDiscoveryOwner({
+      resource: `codex-agent-${id}`,
+      directory,
+    });
+    const released = await recordDiscoveryOwner({
+      resource: `provider-egress-${id}`,
+      directory,
+    });
+    await writeFile(
+      join(directory, `claude-agent-${id}.json`),
+      JSON.stringify({
+        schemaVersion: 1,
+        resource: `claude-agent-${id}`,
+        owner: deadOwner,
+      }),
+    );
+    // A record naming another resource than its file is not proof of anything.
+    await writeFile(
+      join(directory, `provider-egress-broker-${id}.json`),
+      JSON.stringify({
+        schemaVersion: 1,
+        resource: `codex-agent-${id}`,
+        owner: deadOwner,
+      }),
+    );
+    await released.release();
+    expect(await readDiscoveryOwners(directory)).toEqual({
+      live: new Set([`codex-agent-${id}`, `provider-egress-broker-${id}`]),
+      dead: new Set([`claude-agent-${id}`]),
+    });
+    await forgetDiscoveryOwners([`claude-agent-${id}`, "../escape"], directory);
+    await live.release();
+    expect((await readdir(directory)).sort()).toEqual([
+      `provider-egress-broker-${id}.json`,
+    ]);
+    // Lab records never count discovery records, and the reverse.
+    expect((await readLabOwners(directory)).live.size).toBe(0);
+  });
+
+  it("rejects a name that is not a Docker resource name", async () => {
+    await expect(
+      recordDiscoveryOwner({
+        resource: "../escape",
+        directory: await ownerDirectory(),
+      }),
+    ).rejects.toThrow("Discovery resource name is invalid");
   });
 });

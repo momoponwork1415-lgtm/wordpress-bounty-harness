@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   assessTrialResume,
   assignDiscoveryRuntime,
+  DEFAULT_MAX_CHILDREN,
   DISCOVERY_LEFTOVER_PATTERNS,
   executeTrialResume,
   providerLimitedAutoResumeRefusal,
@@ -61,7 +62,9 @@ import { WORDPRESS_SANDBOX_LAYOUT } from "../profiles/wordpress/sandbox-layout.j
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
 import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/index.js";
+import { restoreParkedWordPressFinding } from "../profiles/wordpress/discovery/restore-parked-finding.js";
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
+import { storeLabDiagnostic } from "../lab/index.js";
 import { openWordPressExplorationLab } from "../profiles/wordpress/lab/exploration-lab.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
 import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
@@ -76,6 +79,7 @@ import {
   storeTargetSkipDiagnostic,
   type TargetSkipReason,
 } from "./skip-diagnostic.js";
+import { unboundBatch } from "./continuous.js";
 import {
   DISCOVERY_RUN_MEMORY_MIB,
   openWordPressCampaignSession,
@@ -329,6 +333,80 @@ async function bindCampaignSelectionBatch(
   if (appended.status !== "appended")
     throw new Error("Campaign selection batch binding conflicted");
   return selected;
+}
+
+/**
+ * The runner's check before it continues a campaign after a restart (#302).
+ * The campaign's batch is its bound one, or else the latest unbound automatic
+ * batch. A batch frozen under another policy digest can never bind or resume
+ * under this one, so the runner records why it drops it and selects afresh.
+ * Its targets started no Trial, so selection admits them again.
+ */
+async function discardStaleSelectionBatch(
+  state: CliState,
+  policy: WordPressSelectionPolicy,
+  campaignId: string,
+): Promise<string | null> {
+  if (!("candidateSource" in policy)) return null;
+  const binding = state.ledger.read({
+    campaignId,
+    type: "selection-batch-bound",
+    limit: 1,
+  })[0]?.event;
+  const batchId =
+    binding?.type === "selection-batch-bound"
+      ? binding.selectionBatchId
+      : unboundBatch(state.ledger);
+  if (batchId === undefined) return null;
+  const selected = state.ledger.read({
+    campaignId: batchId,
+    type: "target-selected",
+    limit: 1,
+  })[0]?.event;
+  const reportRef = selected?.artifacts.find(
+    (artifact) => artifact.kind === "selection-report",
+  );
+  if (selected === undefined || reportRef === undefined) return null;
+  let batchPolicyDigest =
+    binding?.type === "selection-batch-bound" ? binding.policyDigest : null;
+  if (batchPolicyDigest === null) {
+    const file = await state.store.readFile(
+      reportRef.digest,
+      "selection-report.json",
+      2 * 1024 * 1024,
+    );
+    // An unreadable report is left to the campaign's own error.
+    if (file.status !== "resolved") return null;
+    batchPolicyDigest = z
+      .object({ policyDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/) })
+      .parse(JSON.parse(file.bytes.toString("utf8"))).policyDigest;
+  }
+  const currentPolicyDigest = canonicalDigest(policy);
+  if (batchPolicyDigest === currentPolicyDigest) return null;
+  // A restart that died after the record but before its memo finds it here.
+  if (
+    state.ledger.read({
+      campaignId: batchId,
+      type: "selection-batch-discarded",
+      limit: 1,
+    }).length > 0
+  )
+    return batchId;
+  const appended = await state.ledger.append({
+    schemaVersion: 1,
+    identity: `selection-batch-discarded-${canonicalDigest(batchId).slice(7, 39)}`,
+    campaignId: batchId,
+    snapshotDigest: selected.snapshotDigest,
+    occurredAt: state.clock().toISOString(),
+    type: "selection-batch-discarded",
+    policyDigest: batchPolicyDigest,
+    currentPolicyDigest,
+    reason: "policy-changed",
+    artifacts: [{ kind: "selection-report", digest: reportRef.digest }],
+  });
+  if (appended.status === "conflict")
+    throw new Error("Selection batch discard conflicted");
+  return batchId;
 }
 
 /** The one Lab an earlier `lab up` kept between invocations; `lab down` reads and removes it. */
@@ -993,7 +1071,19 @@ async function resumeWordPressRun(
     labBudget = { maxResets: recordedLab.maxResets, maxObservations };
   }
   const source = await boundaries.sourceFor(snapshot);
-  const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
+  // A segment enforces the values its Trial recorded, not the campaign's
+  // current ones, so the copied configuration stays true (#548). Trials from
+  // before #537 recorded none: their children were capped at the default,
+  // and their wall and floor stay the configuration's as before.
+  const recorded = started.configuration;
+  const runParameters: RunParameters = {
+    ...wordPressRunParameters(config, runtime.runtimeProfile),
+    wallMinutes: recorded.wallMinutes ?? config.runWallTimeMinutes,
+    minimumActiveMinutes:
+      recorded.minimumActiveMinutes ?? config.discovery.minimumActiveMinutes,
+    maxChildren: recorded.maxChildren ?? DEFAULT_MAX_CHILDREN,
+  };
+  const minimumActiveMs = runParameters.minimumActiveMinutes * 60_000;
   const promptWith = (
     lab: WordPressLabHandle | undefined,
     resumedLab?: WordPressLabUsed,
@@ -1032,7 +1122,7 @@ async function resumeWordPressRun(
     profile: runtime.runtimeProfile,
     coordination: "cooperative" as const,
     prompt,
-    maxChildren: config.discovery.maxChildren,
+    maxChildren: runParameters.maxChildren,
     resumePrompt,
     ...wordPressSourceMounts(source),
   };
@@ -1048,8 +1138,8 @@ async function resumeWordPressRun(
     prompt,
     resumePrompt,
     profileDigest: runtime.runtimeProfile.digest,
-    wallTimeMs: config.runWallTimeMinutes * 60_000,
-    minimumActiveMs: wordPressMinimumActiveMs(config),
+    wallTimeMs: runParameters.wallMinutes * 60_000,
+    minimumActiveMs,
     lab: attached,
     // A run whose host died is sealed first, then resumed like any other (ADR 0036).
     ...(recoverInterrupted === undefined
@@ -1067,10 +1157,7 @@ async function resumeWordPressRun(
                   ),
               },
               interrupted,
-              {
-                ...run,
-                minimumActiveMs: wordPressMinimumActiveMs(config),
-              },
+              { ...run, minimumActiveMs },
             ),
         }),
   });
@@ -1187,6 +1274,16 @@ async function resumeWithExplorationLab(options: {
       purpose: "discovery",
       failureStage: "provision",
       reason: provisioned.reason,
+      artifacts: [
+        {
+          kind: "lab-diagnostic",
+          digest: await storeLabDiagnostic(
+            state.store,
+            "provision",
+            provisioned,
+          ),
+        },
+      ],
     });
     return { status: "refused", reason: "lab-provision-failed" };
   }
@@ -1540,6 +1637,11 @@ export function createWordPressCliProfile(
           });
         }
       }
+      // A runner stop that arrived while sources froze records no batch, so
+      // none is left unconsumed for the next start (#302).
+      if (input.stop?.() === true)
+        for (const { target } of chosen.splice(0))
+          reasons.get(target.slug)?.push("stopped");
       // Too few: write no selection, and say why for each frozen target.
       if (chosen.length < minimum)
         for (const { target } of chosen.splice(0))
@@ -1670,6 +1772,15 @@ export function createWordPressCliProfile(
         options,
         await openWordPressCampaignSession(options, state, input),
       ),
+    async discardStaleSelection(state, input) {
+      const parsed = await readWordPressCampaignConfig(input.configPath);
+      const policy = await readWordPressCampaignPolicy(
+        input.selectionPolicyPath === undefined
+          ? parsed
+          : { ...parsed, selectionPolicyPath: input.selectionPolicyPath },
+      );
+      return discardStaleSelectionBatch(state, policy, input.campaignId);
+    },
     resumeCampaignRun: async (state, input) =>
       resumeWordPressCampaignRun(
         state,
@@ -1695,6 +1806,15 @@ export function createWordPressCliProfile(
         verification: session.verification,
       });
     },
+    restoreParked: (state, input) =>
+      restoreParkedWordPressFinding({
+        ledger: state.ledger,
+        evidence: state.store,
+        campaignId: input.campaignId,
+        findingId: input.findingId,
+        clock: state.clock,
+        note: { restoredBy: input.restoredBy, reason: input.reason },
+      }),
     stateDiffReader: (state) =>
       createWordPressStateDiffReader({ store: state.store }),
     httpEvidenceReader: (state) =>

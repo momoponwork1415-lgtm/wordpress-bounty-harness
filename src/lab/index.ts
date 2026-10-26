@@ -1,3 +1,6 @@
+import { canonicalJson } from "../infrastructure/canonical-json.js";
+import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
+
 /** A profile owns target-specific setup; the generic Lab boundary only carries receipts. */
 export interface LabHandle {
   readonly id: string;
@@ -8,15 +11,63 @@ export interface LabHandle {
   readonly scenario?: { readonly id: string; readonly digest: string };
 }
 
+/** The exception a Lab setup failed with, bounded before it enters Private Evidence (#284). */
+export type LabFailureException = {
+  readonly className: string;
+  readonly message: string;
+};
+
+const LAB_EXCEPTION_MESSAGE_CHARACTERS = 500;
+
+export function describeLabException(error: unknown): LabFailureException {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    className:
+      error instanceof Error ? error.constructor.name || "Error" : typeof error,
+    message: Array.from(message)
+      .slice(0, LAB_EXCEPTION_MESSAGE_CHARACTERS)
+      .join(""),
+  };
+}
+
+export type ProvisionIncomplete = {
+  readonly status: "incomplete";
+  readonly reason: "provision" | "precondition";
+  readonly nextStep: string;
+  /** Private diagnostic data; callers store it outside the ledger. */
+  readonly diagnostic?: string;
+  /** Private, like `diagnostic`. */
+  readonly exception?: LabFailureException;
+};
+
 export type ProvisionResult<Handle extends LabHandle> =
-  | { readonly status: "ready"; readonly handle: Handle }
-  | {
-      readonly status: "incomplete";
-      readonly reason: "provision" | "precondition";
-      readonly nextStep: string;
-      /** Private diagnostic data; callers store it outside the ledger. */
-      readonly diagnostic?: string;
-    };
+  { readonly status: "ready"; readonly handle: Handle } | ProvisionIncomplete;
+
+/** A failed provision as a caller that caught its exception reports it. */
+export function provisionThrew(error: unknown): ProvisionIncomplete {
+  return {
+    status: "incomplete",
+    reason: "provision",
+    nextStep: "Read the Lab diagnostic, then provision a fresh Lab",
+    exception: describeLabException(error),
+  };
+}
+
+/**
+ * Seals why a Lab could not be set up in Private Evidence and returns the
+ * digest the ledger's `lab-diagnostic` artifact refers to (#284).
+ */
+export async function storeLabDiagnostic(
+  store: Pick<PrivateArtifactStore, "putFiles">,
+  failureStage: "provision" | "seed" | "probe",
+  failed: ProvisionIncomplete,
+): Promise<string> {
+  const { status: _status, diagnostic, ...summary } = failed;
+  return store.putFiles({
+    "lab-diagnostic.json": canonicalJson({ failureStage, ...summary }),
+    ...(diagnostic === undefined ? {} : { "stderr.txt": diagnostic }),
+  });
+}
 
 export type LabReachability = {
   readonly http: "ok" | "failed";

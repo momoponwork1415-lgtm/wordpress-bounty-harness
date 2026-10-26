@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,7 +10,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { measureCanonicalSourceTree } from "../../../src/infrastructure/canonical-source-tree.js";
 import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import {
+  readDiscoveryOwners,
   readLabOwners,
+  recordDiscoveryOwner,
   recordLabOwner,
 } from "../../../src/infrastructure/lab-owner-record.js";
 import {
@@ -911,6 +913,86 @@ describe("WordPress gVisor Lab", () => {
       await chmod(ownerDirectory, 0o755);
     }
     expect(existsSync(deadRecord)).toBe(true);
+  });
+
+  it("never names a discovery resource whose owner lives, whichever state directory started it (#550)", async () => {
+    const { lab, docker, ownerDirectory } = await fixture();
+    // Host-wide: the sibling of the Lab owner records, not a state directory.
+    const directory = join(dirname(ownerDirectory), "discovery-owners");
+    const [foreign, dead, own] = [randomUUID(), randomUUID(), randomUUID()];
+    // A live process (another runner's, standing in) owns these three.
+    const records = await Promise.all(
+      [
+        `codex-agent-${foreign}`,
+        `provider-egress-broker-${foreign}`,
+        `provider-egress-${foreign}`,
+      ].map((resource) => recordDiscoveryOwner({ resource, directory })),
+    );
+    // A runner killed on an earlier boot left these behind with their records.
+    for (const resource of [`claude-agent-${dead}`, `provider-egress-${dead}`])
+      await writeFile(
+        join(directory, `${resource}.json`),
+        JSON.stringify({
+          schemaVersion: 1,
+          resource,
+          owner: { pid: 1, bootId: "previous-boot", startTicks: "1" },
+        }),
+      );
+    for (const id of [foreign, dead, own]) {
+      docker.containers.add(`codex-agent-${id}`);
+      docker.networks.add(`provider-egress-${id}`);
+    }
+    docker.containers.add(`provider-egress-broker-${foreign}`);
+    docker.containers.add(`claude-agent-${dead}`);
+    const patterns = {
+      containers: [
+        /^codex-agent-/,
+        /^claude-agent-/,
+        /^provider-egress-broker-/,
+      ],
+      networks: [/^provider-egress-(?!broker-)/],
+    };
+    const expected = {
+      containers: [
+        `codex-agent-${dead}`,
+        `codex-agent-${own}`,
+        `claude-agent-${dead}`,
+      ],
+      networks: [`provider-egress-${dead}`, `provider-egress-${own}`],
+      volumes: [],
+    };
+    // Listing (`lab cleanup` without --remove) leaves the live owner out too.
+    expect(
+      await lab.cleanupLeftovers({ remove: false, labs: false, patterns }),
+    ).toEqual(expected);
+    expect(
+      await lab.cleanupLeftovers({ remove: true, labs: false, patterns }),
+    ).toEqual(expected);
+    expect([...docker.containers].sort()).toEqual(
+      [`codex-agent-${foreign}`, `provider-egress-broker-${foreign}`].sort(),
+    );
+    expect([...docker.networks]).toEqual([`provider-egress-${foreign}`]);
+    // Dead records go with their resources; the live owner keeps its own.
+    expect(await readDiscoveryOwners(directory)).toEqual({
+      live: new Set([
+        `codex-agent-${foreign}`,
+        `provider-egress-broker-${foreign}`,
+        `provider-egress-${foreign}`,
+      ]),
+      dead: new Set(),
+    });
+    // Once that owner releases (or dies), the next sweep removes what is left.
+    await Promise.all(records.map((record) => record.release()));
+    expect(
+      await lab.cleanupLeftovers({ remove: true, labs: false, patterns }),
+    ).toEqual({
+      containers: [
+        `codex-agent-${foreign}`,
+        `provider-egress-broker-${foreign}`,
+      ],
+      networks: [`provider-egress-${foreign}`],
+      volumes: [],
+    });
   });
 
   it("pins ordinary scenarios and seeds translation data with an approved comment", async () => {
