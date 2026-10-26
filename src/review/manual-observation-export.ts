@@ -6,6 +6,7 @@ import { exportReviewBundle, reviewExportV1Schema } from "./export.js";
 import {
   currentManualObservation,
   MANUAL_LAB_RECEIPT_FILE,
+  MANUAL_OBSERVATION_CONFIGURATION_FILE,
   MANUAL_OBSERVATION_EVIDENCE_FILE,
   manualObservationEvidenceStatus,
 } from "./manual-observation.js";
@@ -31,6 +32,16 @@ export const reviewExportV2Schema = z.strictObject({
           digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
           path: z.string().min(1),
         }),
+        /** #578: the observer's statement about the configuration; null when not stated. */
+        configuration: z
+          .strictObject({
+            ordinaryPublicSite: z.boolean(),
+            record: z.strictObject({
+              digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+              path: z.string().min(1),
+            }),
+          })
+          .nullable(),
       })
       .nullable(),
   }),
@@ -60,6 +71,14 @@ export async function exportReviewBundleV2(
     for (const [kind, digest] of [
       ["manual-lab-session", manual.sessionReceiptDigest],
       ["manual-observation-evidence", manual.evidenceDigest],
+      ...(manual.configuration === undefined
+        ? []
+        : [
+            [
+              "manual-observation-configuration",
+              manual.configuration.recordDigest,
+            ] as const,
+          ]),
     ] as const)
       if (
         !artifacts.some((item) => item.kind === kind && item.digest === digest)
@@ -93,6 +112,20 @@ export async function exportReviewBundleV2(
                   MANUAL_OBSERVATION_EVIDENCE_FILE,
                 ),
               },
+              configuration:
+                manual.configuration === undefined
+                  ? null
+                  : {
+                      ordinaryPublicSite:
+                        manual.configuration.ordinaryPublicSite,
+                      record: {
+                        digest: manual.configuration.recordDigest,
+                        path: join(
+                          contentPath(manual.configuration.recordDigest),
+                          MANUAL_OBSERVATION_CONFIGURATION_FILE,
+                        ),
+                      },
+                    },
             },
     },
     privateEvidence: { ...base.privateEvidence, artifacts },

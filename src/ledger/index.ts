@@ -618,6 +618,17 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     evidenceDigest: digest,
     result: z.enum(["match", "mismatch", "unavailable"]),
     recordedBy: id,
+    /**
+     * #578: whether the person stated that the configuration they confirmed is
+     * one an ordinary public site uses. Their statement with a short reason stays in Private
+     * Evidence. Absent on earlier events and when the person did not state it.
+     */
+    configuration: z
+      .strictObject({
+        ordinaryPublicSite: z.boolean(),
+        recordDigest: digest,
+      })
+      .optional(),
   }),
 ]);
 

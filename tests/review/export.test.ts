@@ -821,6 +821,13 @@ describe("review export", () => {
     // Historical duplicate checks survive a new verification, independently of
     // whether the old human decision is still current in the queue.
     expect(await review.duplicateOf(ref)).toMatchObject({ status: "no-match" });
+    expect(
+      (await review.listing({ campaignId: ref.campaignId })).rows[0],
+    ).toMatchObject({
+      item: { decision: null },
+      decisionReason: null,
+      duplicate: { status: "no-match" },
+    });
     const after = reviewOver(
       ledger,
       store,
@@ -836,9 +843,15 @@ describe("review export", () => {
     const queue = after.queue({ campaignId: ref.campaignId });
     const item = queue.items[0];
     expect(item?.decision).toBe("reject");
-    expect((await after.decisionReasons(queue.items)).get(item!)).toBe(
-      "reviewed",
-    );
+    expect((await after.listing({ campaignId: ref.campaignId })).rows).toEqual([
+      {
+        item,
+        decisionReason: "reviewed",
+        // Carried forward from the decision before the new verification.
+        duplicate: expect.objectContaining({ status: "no-match" }),
+        manualObservationEvidence: null,
+      },
+    ]);
     const latest = await exportReviewBundle({
       ledger,
       store,

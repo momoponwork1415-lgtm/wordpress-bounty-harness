@@ -20,23 +20,36 @@ import {
   readDecisionHistory,
   type DecisionHistoryEntry,
 } from "./decision-history.js";
-import { isCurrentVerification } from "./current-verification.js";
 import {
   currentManualObservation,
-  humanObservedBasis,
-  humanReproducedBasis,
+  manualObservationEvidenceStatus,
 } from "./manual-observation.js";
 import { openReproductionPackage } from "./reproduction-package.js";
+import {
+  submissionBasis,
+  type BasisAnswer,
+  type BasisUse,
+  type SubmissionBasis,
+} from "./submission-basis.js";
 
 export {
   currentManualObservation,
   currentObservationVerification,
   MANUAL_LAB_RECEIPT_FILE,
+  MANUAL_OBSERVATION_CONFIGURATION_FILE,
   MANUAL_OBSERVATION_EVIDENCE_FILE,
+  manualObservationConfigurationSchema,
   manualObservationEvidenceStatus,
   recordManualObservation,
   recordManualObservationLabReady,
 } from "./manual-observation.js";
+
+export type {
+  BasisAnswer,
+  BasisMissingReason,
+  BasisUse,
+  SubmissionBasis,
+} from "./submission-basis.js";
 
 export {
   exportReviewBundle,
@@ -103,6 +116,7 @@ const scopeResult = z.strictObject({
   destination: id,
   reason: z.string().min(1).max(2000),
 });
+const MISSING_BASIS = "A matching evidence-backed verification is required";
 const nonHumanActors = new Set(["ai", "agent", "automation", "system"]);
 const humanActor = id
   .transform((value) => value.trim())
@@ -112,6 +126,7 @@ const humanActor = id
   );
 
 type Decision = ReviewDecisionV1["decision"];
+type DecisionEvent = Extract<LedgerEventV1, { type: "review-decided" }>;
 type DecisionInput = {
   /** Without a verification ID, the Finding must be listed as `not-verified` (#436). */
   readonly ref: ReviewDecisionRef;
@@ -205,6 +220,26 @@ export type ReviewQueue = {
   readonly retryPendingByReason: Readonly<Record<string, number>>;
   readonly preconditionClassCounts: Readonly<Record<string, number>>;
 };
+/** One listed item and what is printed beside it (#494). */
+export type ReviewListingRow = {
+  readonly item: ReviewItem;
+  /**
+   * The reason code of `item.decision`, the decision on this Snapshot and
+   * verification; null without one or when its private record is unreadable.
+   */
+  readonly decisionReason: string | null;
+  /**
+   * #442: the stage-4 result the Finding's latest decision carries, whatever
+   * target that decision named, so it outlives a new verification; null
+   * without a decision or when its private record is unreadable.
+   */
+  readonly duplicate: DuplicateCheck | null;
+  /** Whether Private Evidence holds a human's Lab result; null without one. */
+  readonly manualObservationEvidence: "available" | "unavailable" | null;
+};
+export type ReviewListing = Omit<ReviewQueue, "items"> & {
+  readonly rows: readonly ReviewListingRow[];
+};
 export type SubmissionDraftRef = Omit<SubmissionDraft, "content">;
 export type ReviewView = {
   readonly verificationStatus:
@@ -248,19 +283,12 @@ export interface ProgrammeScopeEvaluator<TFacts = unknown> {
   }): Promise<readonly z.infer<typeof scopeResult>[]>;
 }
 
-/** Reads the judge-owned verification evidence; discovery claims are never scope facts. */
+/** Reads the Harness-owned records behind the basis; discovery claims are never scope facts. */
 export interface ScopeFactsProvider<TFacts> {
   load(input: {
     readonly ref: ReviewRef;
-    readonly verification: Extract<
-      LedgerEventV1,
-      { type: "verification-finished" }
-    >;
-    /** #525: the person's Lab observation, when it is the basis instead of a judge. */
-    readonly humanObservation?: Extract<
-      LedgerEventV1,
-      { type: "manual-observation-recorded" }
-    >;
+    /** Review's `scope` basis for `ref` (`submissionBasis`); never built by the caller. */
+    readonly basis: SubmissionBasis;
   }): Promise<TFacts>;
 }
 
@@ -271,19 +299,6 @@ export interface DuplicateLookup {
     readonly findingId: string;
   }): Promise<DuplicateLookupResult>;
 }
-
-/** What a person reproduces against, and what scope, drafts and the final gate rest on. */
-type ReproducibleBasis = {
-  readonly verification: Extract<
-    LedgerEventV1,
-    { type: "verification-finished" }
-  >;
-  readonly packageDigest: string;
-  readonly humanObservation?: Extract<
-    LedgerEventV1,
-    { type: "manual-observation-recorded" }
-  >;
-};
 
 export class Review<TFacts = unknown> {
   readonly #ledger: Ledger;
@@ -318,6 +333,67 @@ export class Review<TFacts = unknown> {
 
   /** Every verified Finding inside the Programme Boundary reaches a human, `contradicted` included. */
   queue(input: { readonly campaignId?: string } = {}): ReviewQueue {
+    const { entries, ...counts } = this.#collect(input);
+    return { ...counts, items: entries.map(({ item }) => item) };
+  }
+
+  /**
+   * The queue with what a human reads beside each item (#494), in one pass
+   * over the ledger; each private decision record is read at most once.
+   * Read only: nothing is cached past the call.
+   */
+  async listing(
+    input: { readonly campaignId?: string } = {},
+  ): Promise<ReviewListing> {
+    const { entries, ...counts } = this.#collect(input);
+    const records = new Map<DecisionEvent, Promise<ReviewDecisionV1 | null>>();
+    const recordOf = (event: DecisionEvent) => {
+      let record = records.get(event);
+      if (record === undefined) {
+        record = readReviewRecord(this.#store, event, "review-decision").then(
+          (read) => (read.status === "read" ? read.record : null),
+        );
+        records.set(event, record);
+      }
+      return record;
+    };
+    const rows: ReviewListingRow[] = [];
+    for (const { item, current, history } of entries) {
+      const latest = history.at(-1)?.event;
+      rows.push({
+        item,
+        decisionReason:
+          current === null
+            ? null
+            : ((await recordOf(current))?.reasonCode ?? null),
+        duplicate:
+          latest === undefined
+            ? null
+            : ((await recordOf(latest))?.duplicate ?? null),
+        manualObservationEvidence:
+          item.status === "incomplete" && item.manualObservation !== undefined
+            ? await manualObservationEvidenceStatus(
+                this.#store,
+                item.manualObservation,
+              )
+            : null,
+      });
+    }
+    return { ...counts, rows };
+  }
+
+  #collect(input: { readonly campaignId?: string }): Omit<
+    ReviewQueue,
+    "items"
+  > & {
+    readonly entries: readonly {
+      readonly item: ReviewItem;
+      /** The decision `item.decision` names: this target, after its verification. */
+      readonly current: DecisionEvent | null;
+      /** Every decision on the Finding in this Campaign, in append order. */
+      readonly history: readonly DecisionHistoryEntry[];
+    }[];
+  } {
     const campaignId =
       input.campaignId === undefined ? undefined : id.parse(input.campaignId);
     const key = (event: { campaignId: string; findingId: string }) =>
@@ -352,7 +428,11 @@ export class Review<TFacts = unknown> {
       decisionHistory.set(key(entry.event), history);
     }
 
-    const items: ReviewItem[] = [];
+    const entries: {
+      item: ReviewItem;
+      current: DecisionEvent | null;
+      history: readonly DecisionHistoryEntry[];
+    }[] = [];
     const parkedEvents = new Map<
       string,
       Extract<LedgerEventV1, { type: "finding-parked" }>
@@ -407,16 +487,21 @@ export class Review<TFacts = unknown> {
       const decisions = decisionHistory.get(key(finding)) ?? [];
       if (verified === undefined) {
         unverified++;
-        items.push({
-          status: "not-verified",
-          ref: {
-            campaignId: finding.campaignId,
-            findingId: finding.findingId,
-            snapshotDigest: finding.snapshotDigest,
+        const current = currentReviewDecision(decisions, finding);
+        entries.push({
+          item: {
+            status: "not-verified",
+            ref: {
+              campaignId: finding.campaignId,
+              findingId: finding.findingId,
+              snapshotDigest: finding.snapshotDigest,
+            },
+            category: finding.category,
+            decision: current?.decision ?? null,
+            group,
           },
-          category: finding.category,
-          decision: currentReviewDecision(decisions, finding)?.decision ?? null,
-          group,
+          current,
+          history: decisions,
         });
         continue;
       }
@@ -427,12 +512,14 @@ export class Review<TFacts = unknown> {
         verificationId: event.verificationId,
         snapshotDigest: event.snapshotDigest,
       };
-      const decision =
-        currentReviewDecision(decisions, ref, sequence)?.decision ?? null;
+      const current = currentReviewDecision(decisions, ref, sequence);
+      const decision = current?.decision ?? null;
+      const push = (item: ReviewItem) =>
+        entries.push({ item, current, history: decisions });
       const result = event.result;
       if (result.status === "contradicted") {
         contradicted++;
-        items.push({
+        push({
           status: result.status,
           ref,
           category: finding.category,
@@ -446,7 +533,7 @@ export class Review<TFacts = unknown> {
         result.status === "runtime-confirmed" ||
         result.status === "reproduced"
       )
-        items.push({
+        push({
           status: result.status,
           ref,
           category: finding.category,
@@ -482,7 +569,7 @@ export class Review<TFacts = unknown> {
           result.reason === "awaiting-human-observation"
             ? currentManualObservation(this.#ledger, ref)
             : null;
-        items.push({
+        push({
           status: result.status,
           ref,
           category: finding.category,
@@ -504,7 +591,7 @@ export class Review<TFacts = unknown> {
       }
     }
     return {
-      items: groups.order(items, (item) => item.ref),
+      entries: groups.order(entries, ({ item }) => item.ref),
       contradicted,
       unverified,
       incompleteByReason,
@@ -730,31 +817,6 @@ export class Review<TFacts = unknown> {
     return { status: "not-verified", since: finding.occurredAt };
   }
 
-  /**
-   * The reason code of each listed item's decision, read from its private
-   * record. An item whose record is unreadable (older events) has none.
-   */
-  async decisionReasons(
-    items: readonly ReviewItem[],
-  ): Promise<ReadonlyMap<ReviewItem, string>> {
-    const reasons = new Map<ReviewItem, string>();
-    for (const item of items) {
-      if (item.decision === null) continue;
-      const event = currentReviewDecision(
-        readDecisionHistory(this.#ledger, item.ref),
-        item.ref,
-      );
-      if (event === null) continue;
-      const read = await readReviewRecord(
-        this.#store,
-        event,
-        "review-decision",
-      );
-      if (read.status === "read") reasons.set(item, read.record.reasonCode);
-    }
-    return reasons;
-  }
-
   /** #442: the stage-4 result in force for a Finding, as its latest decision carries it. */
   async duplicateOf(input: {
     readonly campaignId: string;
@@ -773,10 +835,13 @@ export class Review<TFacts = unknown> {
     readonly ref: ReviewRef;
   }): Promise<readonly ScopeAssessment[]> {
     const ref = refSchema.parse(input.ref);
-    const { verification, humanObservation } =
-      this.#requireSubmissionBasis(ref);
+    const basis = this.#requireBasis(ref, "scope");
+    const observationIdentity = observationOf(basis);
+    // A new observation can state another configuration, so its facts are new.
     const existing = (await this.#scopeAssessments(ref)).filter(
-      (item) => item.policyDigest === this.#scopeEvaluator.policyDigest,
+      (item) =>
+        item.policyDigest === this.#scopeEvaluator.policyDigest &&
+        item.observationIdentity === observationIdentity,
     );
     if (existing.length > 0) {
       const byProgramme = new Map(
@@ -788,7 +853,7 @@ export class Review<TFacts = unknown> {
         if (!byProgramme.has(programmeId)) {
           byProgramme.set(
             programmeId,
-            await this.#persistAssessment(ref, {
+            await this.#persistAssessment(ref, observationIdentity, {
               programmeId,
               status: "incomplete",
               destination: programmeId,
@@ -805,11 +870,7 @@ export class Review<TFacts = unknown> {
     let results: readonly z.infer<typeof scopeResult>[];
     let failed = false;
     try {
-      const facts = await this.#factsProvider.load({
-        ref,
-        verification,
-        ...(humanObservation === undefined ? {} : { humanObservation }),
-      });
+      const facts = await this.#factsProvider.load({ ref, basis });
       results = z
         .array(scopeResult)
         .parse(await this.#scopeEvaluator.assess({ ref, facts }));
@@ -836,7 +897,7 @@ export class Review<TFacts = unknown> {
     const assessments: ScopeAssessment[] = [];
     for (const item of results) {
       assessments.push(
-        await this.#persistAssessment(ref, {
+        await this.#persistAssessment(ref, observationIdentity, {
           programmeId: item.programmeId,
           status: failed ? "incomplete" : item.status,
           destination: item.destination,
@@ -849,6 +910,7 @@ export class Review<TFacts = unknown> {
 
   async #persistAssessment(
     ref: ReviewRef,
+    observationIdentity: string | undefined,
     item: {
       readonly programmeId: string;
       readonly status: ScopeAssessment["status"];
@@ -856,15 +918,19 @@ export class Review<TFacts = unknown> {
       readonly reason: string;
     },
   ): Promise<ScopeAssessment> {
+    const bound =
+      observationIdentity === undefined ? {} : { observationIdentity };
     const record = assessmentSchema.parse({
       id: canonicalDigest({
         ref,
         policyDigest: this.#scopeEvaluator.policyDigest,
         ...item,
+        ...bound,
       }),
       ref,
       policyDigest: this.#scopeEvaluator.policyDigest,
       ...item,
+      ...bound,
       assessedAt: this.#clock().toISOString(),
     });
     const artifactDigest = await this.#storeRecord(record);
@@ -899,9 +965,17 @@ export class Review<TFacts = unknown> {
       assessment.policyDigest !== this.#scopeEvaluator.policyDigest
     )
       throw new Error("An in-scope assessment is required");
-    if (!this.#isCurrentVerification(assessment.ref))
-      throw new Error("A current verification is required before drafting");
-    this.#requireSubmissionBasis(assessment.ref);
+    const basis = this.submissionBasis({ ref: assessment.ref, use: "draft" });
+    if (basis.status === "missing")
+      throw new Error(
+        basis.reason === "superseded"
+          ? "A current verification is required before drafting"
+          : MISSING_BASIS,
+      );
+    if (assessment.observationIdentity !== observationOf(basis.basis))
+      throw new Error(
+        "An in-scope assessment of the current observation is required",
+      );
     const prior = (await this.#allDrafts(assessment.ref)).filter(
       (item) => item.assessmentId === assessmentId,
     );
@@ -1097,30 +1171,18 @@ export class Review<TFacts = unknown> {
     );
     if (draft.revision !== latestRevision) return "superseded-draft";
     if (draft.preparedBy !== "human") return "human-reviewed-draft-required";
-    if (!this.#isCurrentVerification(assessment.ref))
+    const basis = this.submissionBasis({
+      ref: assessment.ref,
+      use: "authorize",
+    });
+    if (basis.status === "missing")
+      return basis.reason === "superseded"
+        ? "stale-verification"
+        : "manual-reproduction-required";
+    if (assessment.observationIdentity !== observationOf(basis.basis))
       return "stale-verification";
-
-    const basis = this.#reproducibleBasis(assessment.ref);
-    if (basis === null) return "manual-reproduction-required";
-    const reproductionPackageDigest = basis.packageDigest;
-    const manual = this.#ledger
-      .readAll({
-        campaignId: assessment.ref.campaignId,
-        findingId: assessment.ref.findingId,
-        type: "human-reproduction-recorded",
-      })
-      .filter(
-        ({ event }) =>
-          event.type === "human-reproduction-recorded" &&
-          event.verificationId === assessment.ref.verificationId &&
-          event.reproductionPackageDigest === reproductionPackageDigest,
-      )
-      .at(-1);
-    if (
-      manual?.event.type !== "human-reproduction-recorded" ||
-      manual.event.result !== "match"
-    )
-      return "manual-reproduction-required";
+    const manual = basis.basis.reproduction;
+    if (manual === null) return "manual-reproduction-required";
 
     const saved = this.#ledger
       .readAll({
@@ -1169,9 +1231,21 @@ export class Review<TFacts = unknown> {
       : "human-accept-required";
   }
 
-  /** A later attempt or latest-version Finding supersedes a submission basis. */
-  #isCurrentVerification(ref: ReviewRef): boolean {
-    return isCurrentVerification(this.#ledger, ref);
+  /**
+   * Basis or not for one review step, and why not (ADR 0040). Every caller
+   * that takes a Finding toward submission asks here; see `BasisUse`.
+   */
+  submissionBasis(input: {
+    readonly ref: ReviewRef;
+    readonly use: BasisUse;
+  }): BasisAnswer {
+    return submissionBasis(this.#ledger, input.ref, input.use);
+  }
+
+  #requireBasis(ref: ReviewRef, use: BasisUse): SubmissionBasis {
+    const answer = this.submissionBasis({ ref, use });
+    if (answer.status === "missing") throw new Error(MISSING_BASIS);
+    return answer.basis;
   }
 
   /** Records that the human submitted this exact authorized draft; Harness sends nothing. */
@@ -1318,9 +1392,7 @@ export class Review<TFacts = unknown> {
       .enum(["match", "mismatch", "unavailable"])
       .parse(input.result);
     const ref = refSchema.parse(input.ref);
-    const basis = this.#reproducibleBasis(ref);
-    if (basis === null)
-      throw new Error("A matching evidence-backed verification is required");
+    const basis = this.#requireBasis(ref, "reproduce");
     return {
       schemaVersion: 1,
       identity: `human-reproduction:${randomUUID()}`,
@@ -1358,8 +1430,10 @@ export class Review<TFacts = unknown> {
 
   async openReproductionPackage(input: { readonly ref: ReviewRef }) {
     const ref = refSchema.parse(input.ref);
-    const verification = this.#requireConfirmed(ref);
-    return openReproductionPackage(this.#store, verification.result);
+    const basis = this.#requireBasis(ref, "reproduce");
+    // A review Lab package opens with `lab up --for-review`, not here.
+    if (basis.kind !== "judge-era") throw new Error(MISSING_BASIS);
+    return openReproductionPackage(this.#store, basis.verification.result);
   }
 
   async inspect(input: {
@@ -1418,73 +1492,6 @@ export class Review<TFacts = unknown> {
           ? verification.event.result.reproductionPackageDigest
           : null,
     };
-  }
-
-  /**
-   * What a person reproduces against: the judge-era package of an old
-   * confirmed result, or (#525, ADR 0040) the sealed review Lab package of a
-   * result awaiting a human observation that a named person observed as
-   * `match`.
-   */
-  #reproducibleBasis(ref: ReviewRef): ReproducibleBasis | null {
-    const observed = humanObservedBasis(this.#ledger, ref);
-    if (observed !== null)
-      return {
-        verification: observed.verification,
-        packageDigest: observed.packageDigest,
-        humanObservation: observed.observation,
-      };
-    try {
-      const verification = this.#requireConfirmed(ref);
-      return verification.result.status === "runtime-confirmed" ||
-        verification.result.status === "reproduced"
-        ? {
-            verification,
-            packageDigest: verification.result.reproductionPackageDigest,
-          }
-        : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * The basis for scope, drafts and the final gate. An old confirmed result
-   * keeps its rules; a human-observed result also needs the reviewer's
-   * `review decide --reproduced match` against the same review Lab package.
-   */
-  #requireSubmissionBasis(ref: ReviewRef): ReproducibleBasis {
-    const basis = this.#reproducibleBasis(ref);
-    if (
-      basis === null ||
-      (basis.humanObservation !== undefined &&
-        humanReproducedBasis(this.#ledger, ref) === null)
-    )
-      throw new Error("A matching evidence-backed verification is required");
-    return basis;
-  }
-
-  #requireConfirmed(
-    ref: ReviewRef,
-  ): Extract<LedgerEventV1, { type: "verification-finished" }> {
-    const verification = this.#ledger
-      .readAll({ type: "verification-finished" })
-      .find(
-        ({ event }) =>
-          event.type === "verification-finished" &&
-          event.campaignId === ref.campaignId &&
-          event.findingId === ref.findingId &&
-          event.verificationId === ref.verificationId,
-      );
-    if (
-      verification?.event.type !== "verification-finished" ||
-      verification.event.snapshotDigest !== ref.snapshotDigest ||
-      (verification.event.result.status !== "runtime-confirmed" &&
-        verification.event.result.status !== "reproduced")
-    ) {
-      throw new Error("A matching evidence-backed verification is required");
-    }
-    return verification.event;
   }
 
   /** The discovery run that produced the Finding and the prompt digest it ran with. */
@@ -1596,4 +1603,11 @@ export class Review<TFacts = unknown> {
         .map(({ event }) => this.#readRecord(event, "review-draft")),
     );
   }
+}
+
+/** The observation a human-observed basis rests on; judge-era bases have none. */
+function observationOf(basis: SubmissionBasis): string | undefined {
+  return basis.kind === "human-observed"
+    ? basis.observation.identity
+    : undefined;
 }

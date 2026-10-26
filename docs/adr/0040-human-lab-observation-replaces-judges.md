@@ -50,3 +50,14 @@ amends: 0021（判定器と canary の回収）, 0026（観測器の判定）, 0
 - 修正版の対照（`review reverify --version`）は、同じ根拠の attempt の `route.json` を参照の route として使える。
 - `verification-finished` は書き換えない。
 
+
+## 2026-10-26 追記 2: 通常の公開サイトの構成は観測者が申告する（#578）
+
+#353（PR #577）で Lab のシナリオが無くなり、scope の `defaultOrCommonSettings` を得る経路が無くなった。人間の観測の basis では、この事実を観測者の申告から取る。
+
+- `review observe` に `--ordinary-site yes|no` と `--ordinary-site-reason <text>`（1〜500 字）を足した。2 つは組で指定する。`manual-observation-recorded` には `configuration: { ordinaryPublicSite, recordDigest }` を任意の項目として追記する。理由の文は Private Evidence の `manual-observation-configuration.json` に置き、台帳は真偽と digest だけを持つ（不変条件 8）。
+- scope は、人間の観測の basis では、この申告の `ordinaryPublicSite` を `defaultOrCommonSettings` として読む。`yes` は `in-scope` の条件を満たし、`no` は `out-of-scope (version-or-configuration)`、申告が無ければ `ambiguous (version-or-configuration-unknown)` になる。Lab のシナリオの記録は、判定器があった時期の結果にだけ使う。
+- scope の評価は、読んだ観測の identity と結び付けて記録する。review Lab を開き直して新しい観測を記録すると、`review scope` は評価し直す。前の観測の評価からは `review draft` も `review authorize` も進めない。
+- `review export --version 2` の `review.manualObservation.configuration` に申告の真偽と記録の path を出す。
+
+消し方: この追記の PR を revert する。追記した `configuration` を持つ event は、旧版の台帳 schema では読めないため、revert の前に扱いを決める。
