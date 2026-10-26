@@ -66,13 +66,13 @@ harness ledger resumes --campaign <id>                                      # �
 
 Claude（Opus）の run も同じコマンドで再開する（ADR 0036 の 2026-10-20 追記）。`--config` には、元の campaign と同じく Claude に対象を割り当てる設定（`discovery.runtimeShare.claude` が 1 以上）を渡す。再開した segment は、元の run が台帳に記録した runtime（`configuration.runtime`）で走る。Claude の runtime profile の digest が元の receipt と違えば `runtime-profile-differs` で拒否する。新しい sandbox の Claude 設定ディレクトリ（`/tmp/claude/projects/`）に Root と子の transcript を、`/workspace/research/` に notes を戻し、runner は Root の session id で `resume` して、最初の turn から再開段落を送る。目的 prompt は送り直さない。2026-10-20 より前の Claude の receipt には `session` が無いが、同じ run が封じた diagnostic に transcript の一覧と digest が載っているので、そこから session を読む。拒否で止まった run も名指しすれば再開できる。自動では再開しない。終了 event の無い Claude の run（電源断など）は回収の仕組みがまだ無いので `run-unfinished` で拒否する。`ledger resumes` は再開した segment ごとに 1 行を出す。行には、再開した segment、その前の停止理由、runtime、終わり方、走った分数が並ぶ。
 
-`campaign run` は無人で回る。既定は対象ごとに `wp2shell-bounty-v11`（`deep`）のRoot＋子による協調Trialを1回行い、子の上限は設定値 `discovery.maxChildren`（既定 4、1〜8）、wall上限は120分。最低60分（`discovery.minimumActiveMinutes`）は能動的に探索し、Rootが早く最終報告したときは同じ協調セッションで探索を続ける。継続不能、wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、同一対象の追加Trialは起動しない。受理した scope 内 Finding はその時点で handoff 列に並び、検証 skill が `verify next --handoff`（ADR 0035）で 1 件ずつ Finding 単位の Lab に通し、Harness が捕捉と Lab browser の記録を残す（下の `discovery.lab`。判定器は ADR 0040 で削除した）。runner は検証しない（#423）。
+`campaign run` は無人で回る。本番の既定（`src/profiles/wordpress/policy/campaign.json`）は、2026-10-26 の所有者決定で `wide` の `wp2shell-bounty-v14-wide` にした。対象ごとにRoot＋子による協調Trialを1回行い、子の上限は設定値 `discovery.maxChildren`（既定 4、1〜8）、wall上限は120分。`wide` は最低時間を置かず、Rootの最初の最終報告でTrialを終える。`deep` の `wp2shell-bounty-v11` は名指しのTrialでだけ使い、campaign 設定の `discovery.mode` を `deep` にして回す。`deep` では最低60分（`discovery.minimumActiveMinutes`）は能動的に探索し、Rootが早く最終報告したときは同じ協調セッションで探索を続ける。campaign 設定で `discovery.mode` を省いたときの schema の既定は、今も `deep` である。継続不能、wall・provider・broker・schema等の失敗は理由付き `incomplete` として記録する。screeningや候補の有無による二段目、同一対象の追加Trialは起動しない。受理した scope 内 Finding はその時点で handoff 列に並び、検証 skill が `verify next --handoff`（ADR 0035）で 1 件ずつ Finding 単位の Lab に通し、Harness が捕捉と Lab browser の記録を残す（下の `discovery.lab`。判定器は ADR 0040 で削除した）。runner は検証しない（#423）。
 wall 到達時は agent と broker を名前で `docker stop -t 10`（失敗時は `docker kill`）してから、子の報告を回収し `discovery-run-finished` に `incomplete(wall)` を記録して Lab を片付ける。
 `continuous run` に SIGTERM を送ると進行中の探索 run を同じ手順で停止し、`stopped reason=operator` を記録して終了する。
 
 v7 以降（現行 v8）は固定 source からの探索をRootに任せ、入口索引を渡さない（索引の生成 code は ADR 0034 で削除）。旧v5/v6の索引、coverage と `incomplete(depth)` の記録は過去の評価結果として読み続ける。
 
-新規Trialで選べるpromptは、既定の `deep` の `wp2shell-bounty-v11` と `wide` の `wp2shell-bounty-v14-wide` だけ（ADR 0039 の 2026-10-26 追記。v10、v12-wide、v13-wide は archived、v8 は 2026-10-18 の所有者決定で入り、照合用に残す）。旧版と実験結果は履歴照合用に残し、探索には使わない。Snapshotに対象、WordPress core、実行imageと一致するPHP source、`Requires Plugins`、WooCommerceの版ヘッダ（`woocommerce`）または明示pinによる依存pluginを固定する。版ヘッダだけによる `woocommerce` は、pinだけで決める対象（`candidateSlugs` とreverify）でpinが無ければ入れず、依存のpinsetに `header-derived-unpinned` と残す。探索sourceは `/workspace/main`、`/workspace/wordpress`、`/workspace/php`、`/workspace/dependencies/<slug>` に読み取り専用でmountする。`ledger runtime` とrun receiptで実際のwall・source読取を確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
+新規Trialで選べるpromptは、`deep` の `wp2shell-bounty-v11` と、本番の既定の `wide` の `wp2shell-bounty-v14-wide` だけ（ADR 0039 の 2026-10-26 追記。v10、v12-wide、v13-wide は archived、v8 は 2026-10-18 の所有者決定で入り、照合用に残す）。旧版と実験結果は履歴照合用に残し、探索には使わない。Snapshotに対象、WordPress core、実行imageと一致するPHP source、`Requires Plugins`、WooCommerceの版ヘッダ（`woocommerce`）または明示pinによる依存pluginを固定する。版ヘッダだけによる `woocommerce` は、pinだけで決める対象（`candidateSlugs` とreverify）でpinが無ければ入れず、依存のpinsetに `header-derived-unpinned` と残す。探索sourceは `/workspace/main`、`/workspace/wordpress`、`/workspace/php`、`/workspace/dependencies/<slug>` に読み取り専用でmountする。`ledger runtime` とrun receiptで実際のwall・source読取を確認する。日次上限はない。provider limitで停止したcampaignは自動retryせず、同じIDで未消費の対象から再開する。
 
 自動選定の campaign は初回起動時に `selection-batch-bound` を追記し、選定バッチと対象集合を固定する。再開時はこの記録のバッチを読み、途中で `select` を再実行しても新しいバッチに切り替えない。runner が再起動したとき、続けようとする campaign の batch（束縛済みのもの、無ければ最新の未束縛のもの）が今の選定方針 digest と違えば、`selection-batch-discarded` を追記してその batch を捨て、新しい選定に進む（#302）。選定時に固定した Snapshot と materialized source は digest を再検査して使い、campaign 開始時に同じ ZIP を再取得しない。公開一覧の取得元・確認日時・available/stale/unavailable と失敗理由は Private Evidence の選定レポートに記録する。
 
@@ -168,6 +168,7 @@ harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <
 - 同じ plugin slug の再訪は選定方針の `revisitPolicy`（版上昇かつ最後の Trial から 90 日、ADR 0037 の 2026-10-19 追記 3）で決まり、所有者の事前承認は要らない。同じ版を手で再 Trial するときは ADR 0032 Q6 のまま 1 Trial ごとに所有者が事前承認する。
 - 週次 smoke（#126）は、既知の `runtime-confirmed` Finding に `review reverify` を 1 回打つことで代える（campaign ID は `smoke-<YYYYMMDD>`）。旧 Codex Verifier の経路は退役したため、実 host は `--handoff` がなければ退役エラーで止まる。
 - 最新版で確認した新しい `runtime-confirmed` Finding が出たら、その Snapshot と Lab Setup を保持し、週次 smoke の case に加える。通った検証は回帰試験になる。
+- **探索を絞る引き金**（所有者決定 2026-10-26、[監査](reviews/2026-10-26-system-audit.md) 第 B.3 節の段 (4)）: 探索は止めずに回し続ける。週に 1 回、本番で直近 7 日に記録された scope 内 Finding の group（`finding-recorded` の `group.id`）を数え、15 件を超えていたら `continuous concurrency <n>` で同時対象数を下げて Trial を減らす。数は DEVELOPMENT 第 2 節の Step 2 の引き金（scope 内候補が週 15 件超）と同じである。`occurredAt` は Trial の開始時刻なので（#212）、7 日の切り方は近似になる。数え方は `sqlite3 <state>/ledger.sqlite "select count(distinct coalesce(json_extract(event_json,'$.group.id'), finding_id)) from ledger_events where event_type='finding-recorded' and campaign_id like 'prod%' and julianday(json_extract(event_json,'$.occurredAt')) >= julianday('now','-7 days')"`。
 
 ## 3. 提出までの操作
 
@@ -233,7 +234,7 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 
 | 細い段 | 直す場所 |
 | --- | --- |
-| raw Findingが少ない | 探索 prompt の版（開発セット 3 Trial、DEVELOPMENT 第 5 節）、選定方針 |
+| raw Findingが少ない | 探索 prompt の版（開発セット 6 case × 3 run の 6 段、DEVELOPMENT 第 5 節）、選定方針 |
 | verifier通過が少ない | 検証 skill と Lab構成（`incomplete` の理由コードを見る） |
 | in-scopeが少ない | 選定方針（対象外になりやすい種別・tierを避ける） |
 | duplicateが多い | Finding 後の重複照合と履歴mirrorの鮮度。選定は mirror の件数と公開日だけを採点に使い、記録の内容は重複照合でだけ読む（ADR 0037） |

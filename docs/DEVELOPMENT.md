@@ -13,7 +13,7 @@
 | Step | 内容 | 完了条件・引き金 |
 | --- | --- | --- |
 | 1 | 選定 → Snapshot → Lab → 探索 → 検証の自律ループ。scope 内 Finding を全件人間に届ける。人間レビュー・報告書・重複照合は skill（ADR 0031） | ループが quota 1 週分を人手介入 0 で回り切る（保守に数えないものは OPERATIONS 第 1 節）。Programme Boundary 内の Finding が全件 `review export` に届く。所有者が skill で 1 回のレビュー batch を完了し所要時間を記録する。期日は runner 起動＋8 日（最終設計 docs/reviews/2026-10-14-final-design.md 第 10 節） |
-| 2 | レビュー側と検証側の作り込み | 週のレビュー batch が 6 時間超、または scope 内候補が週 15 件超。同じ手動作業を 3 回したら、その種類だけ道具化 |
+| 2 | レビュー側と検証側の作り込み | 週のレビュー batch が 6 時間超、または scope 内候補が週 15 件超。同じ手動作業を 3 回したら、その種類だけ道具化。探索は止めずに回し、本番で scope 内 Finding の group が週 15 件を超えたら Trial を減らす（所有者決定 2026-10-26、OPERATIONS 第 2 節） |
 | 3 | 候補: Claude 系 runtime、Patchstack、報告書の自動化 | Step 2 の後。[PARKING.md](PARKING.md) |
 
 Step 1 の間に凍結するもの: 不変条件、モジュール境界（ADR 0031 の後）、判定器の集合、選定方針の構造（数値は変えてよい。2026-10-19 の所有者決定で ADR 0037 が履歴の採点・cascade・再訪を足した）、探索 prompt（所有者が明示した v4 への 1 回の改訂と、2026-10-16 に所有者が本文を確認して既定にした v5 を除く）。agent に渡る文章は所有者本人または第 5 節で委任を受けた AI が全文を読む。それ以外の案は [PARKING.md](PARKING.md) に 1 行で書き、ADR にも Issue の milestone にもしない。
@@ -21,6 +21,13 @@ Step 1 の間に凍結するもの: 不変条件、モジュール境界（ADR 0
 2026-10-18 に所有者は追加で、WP2Shell 記事にほぼそのまま寄せた v7 を唯一の新規探索promptにし、旧 prompt と実験結果は履歴として残すと決めた。その後、Root の早期終了を観測し、`wp2shell-bounty-v8` を唯一の新規探索promptにして最低60分の能動的な探索を要求し、PHPと必要な依存pluginの固定sourceを渡すと決めた（ADR 0033）。上のprompt凍結からこの変更を除外する。2026-10-25 に所有者は、探索に `wide` / `deep` の mode を置き、`deep` の目的文を `wp2shell-bounty-v10`（#522）、`wide` の目的文を `wp2shell-bounty-v10-wide`（下限なし、既定wall 20分）にすると決めた（ADR 0039、#518）。v10 と v10-wide も上のprompt凍結から除外する。v10-wide は v10 から粘りの段落を外し、最低 1 時間の段落を 2 wave の停止規則に替えたもので、違いはこの 2 段落だけである。同日、所有者は `wide` の目的文を「PRISM の方針に近づける」と決め、種別ごとの専門エージェントを固定で置く `wp2shell-bounty-v11-wide` を `wide` の現行にした。v10-wide は本番で 1 回分を回したので archived で残す（ADR 0039 の 2026-10-25 追記）。v11-wide も上のprompt凍結から除外する。同日、所有者は子のツール呼び出し 80 回の段落を外し、Harness が強制する数（子の数、最低時間、wall）を本文から外すと決め、`deep` を `wp2shell-bounty-v11`、`wide` を `wp2shell-bounty-v13-wide` にした（ADR 0039 の 2026-10-25 追記 4）。v12-wide、v11、v13-wide も上のprompt凍結から除外する。2026-10-26 に所有者は入口と短い経路を命令ではなく例と許容で書き、多少の偽陽性を後段の人間レビューで受け入れる `wp2shell-bounty-v14-wide` を `wide` の現行にした（ADR 0039 の 2026-10-26 追記）。v14-wide も上のprompt凍結から除外する。v8 の本文と digest は変えない。wall上限は120分のまま。agent入力の変更に必要な開発Trialの数字と他の品質ゲートは第5節のまま。
 
 所有者決定 2026-10-25: 探索 prompt `wp2shell-bounty-v10`（#522）と `wide` mode（#518）は本番の対象で試し、所有者が結果の手応えで採否を決める試行とし、第 5 節の開発 Trial の数字は取らない。v8 は実績のある方法で、「これらの変更がうまくいかなかったら v8 に戻す」（戻し方は [v10 の文書](reviews/2026-10-25-wp2shell-bounty-v10.md) 第 5 節）。
+
+所有者決定 2026-10-26（[監査](reviews/2026-10-26-system-audit.md) 第 F.2 節への答え、ADR 0032 の 2026-10-26 追記 4）:
+
+- prompt の採否は、監査 第 B.3 節の 6 段で決める（第 5 節）。同日の「開発セット 6 case を各 1 run 回し、scope 内 Finding が 1 件以上の case を数える」基準は、これで置き換える。上の 2026-10-25 の「開発 Trial の数字は取らない」は v10 と最初の `wide` の試行についての決定で、以後の版の採否には使わない。
+- 本番の既定は `wide` の `wp2shell-bounty-v14-wide` にした（`src/profiles/wordpress/policy/campaign.json`）。`deep` の `wp2shell-bounty-v11` は名指しの Trial でだけ使う。
+- 探索は止めずに回す。本番で scope 内 Finding の group が週 15 件を超えたら Trial を減らす（監査 第 B.3 節の段 (4)。数え方は OPERATIONS 第 2 節）。数は上の表の Step 2 の引き金と同じである。
+- 記録だけ: 探索 Lab は、開発セットで `wide` の arm を 1 つ回してから残すかを決める。Claude の探索 runtime は残す。
 
 2026-10-21 に所有者は、Step 2「レビュー側と検証側の作り込み」を Step 1 の判定（#238、2026-10-27）を待たずに始めると決めた。Step 1 の行にある「検証の自律ループ」は、runner の自動検証を止めた PR #434 で handoff 列（`verify next --handoff`）に置き換わった。検証から提出までの 6 段と、所有者が手動で再現してから提出する流れは [ADR 0038](adr/0038-verification-phases-and-submission-flow.md) と親 Issue #441 にある。探索方式の改善は 6 段が通るまで後回しにする。選定から探索までの運転は 2026-10-21 に確認し、残った不具合は親 Issue #443 に集めた（[確認の記録](reviews/2026-10-21-selection-to-discovery-check.md)）。
 
@@ -52,7 +59,15 @@ Step 1 の作業順: #185（Finding / Lead の境界と review queue）→ `revi
 ## 5. PR の規則
 
 - テンプレートの 5 項目（問い、変えたこと、変えなかったこと、測った数字、消し方）を日本語で埋める。AI が書いてよいが、所有者が分からない行があれば merge しない。書き直しを依頼する。
-- 探索に触る PR は数字を貼る。二段にする: agent 入力を変える PR（prompt 本文、契約節、Lab setup）は再発見 case（ADR 0027）で最低 3 Trial の completed と source 根拠付き候補の有無を記録する。配線・runtime・選定の PR は runner が流した異なる slug の初回 3 Trial の completed・wall・停止理由で足りる。同じ slug の反復で件数を埋めない。未 merge branch で本番 runner を回すときは campaign ID に branch 名を含め、本番の分母に混ぜない。数字のない探索変更は merge されない。数字は M1〜M6（docs/reviews/2026-10-26-system-history-and-metrics.md 第 4 節）の名前で出し、版をまたいで同じ問い合わせで比べられるようにする。
+- 探索に触る PR は数字を貼る。二段にする: agent 入力を変える PR（prompt 本文、契約節、Lab setup）は、再発見 case（ADR 0027）の開発セット 6 case を各 3 run（18 Trial）回し、次の 6 段で採否を決める（所有者決定 2026-10-26、[監査](reviews/2026-10-26-system-audit.md) 第 B.3 節。同日の各 1 run の基準を置き換えた）。段の順に読み、(1) が通らなければ先を読まない。(2) と (3) は開発セットの数字で採否を決め、(4)〜(6) は採用した後の本番の数字で戻すかを決める。
+  1. 実行の健全性: 18 Trial のうち completed が 15 未満なら判定しない。provider-limited と failed は理由付きで別に数え、同じ case を再試行する。
+  2. 主指標の公開経路一致: 所有者の公開記録と同じ経路の Finding が出た run の数が、現行版以上であること。現行版で 3 run 中 2 run 以上一致した case が、新版で 0/3 になったら不合格。照合の結果は `docs/evaluation/` に書く。
+  3. M1: case ごとに、3 run 中 2 run 以上で scope 内 Finding が 1 件以上出ること。これが 6 case 中 5 case 以上。
+  4. 人間が読む量: 本番で scope 内 Finding の group が週 15 件以下。超えたら Trial を減らす（第 2 節、OPERATIONS 第 2 節）。
+  5. 本番の当たり: 採用後の本番の最初の 30 Trial で、Finding が 1 件以上出た Trial が 0 なら戻す。
+  6. 精度: 人間が観測した Finding のうち `match` の割合（M4）。閾値は最初の 20 件の観測で決める。
+
+  配線・runtime・選定の PR は runner が流した異なる slug の初回 3 Trial の completed・wall・停止理由で足りる。同じ slug の反復で件数を埋めない。未 merge branch で本番 runner を回すときは campaign ID に branch 名を含め、本番の分母に混ぜない。数字のない探索変更は merge されない。数字は M1〜M6（docs/reviews/2026-10-26-system-history-and-metrics.md 第 4 節）の名前で出し、版をまたいで同じ問い合わせで比べられるようにする。
 - 実験軸（分担、継続、prompt 変種など）は opt-in の設定ブロック 1 つと profile の file 1 つに閉じ、台帳の run 記録に軸を残す。消し方を PR に書く。
 - agent に渡る文章（`src/profiles/wordpress/prompts/` の本文、`.claude/skills/` の本文、Harness が生成して渡す節の雛形: 出力契約、Lab・Programme Boundary の節、Verifier の victim 契約）を変える PR は、変更後の全文と日本語訳を PR 本文か `docs/reviews/` の文書に貼る。2026-10-13 に所有者は、出典対照表の採否と `owner-approved` の付与を AI に委任した（「採用するかどうかはあなたの方で決めてもらって構いません」「よしなにやってください」）。AI はラベルを付けるとき、委任を明記した PR comment を残す。出典に無い要素を足さない規則は変わらない。2026-10-18 に所有者は読了ゲートも外した（「owner-approved のラベルはいらないかも。結局、脆弱性を発見できるかどうかだからそっちで実験して結果がある程度わかるはず」、ADR 0032 の 2026-10-18 節）。所有者の全文読了は merge の条件ではなく、採否は探索の数字で決める。AI は出典付きで採った要素だけを書き、要素を足さない。
 - 1 PR は追加差分 500 行以内を目安にする（削除行は数えない）。超えるなら問いを分ける。
