@@ -5,8 +5,7 @@ import { z } from "zod";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
-import { humanObservedBasis } from "./manual-observation.js";
-import { isCurrentVerification } from "./current-verification.js";
+import { submissionBasis } from "./submission-basis.js";
 import { readDecisionHistory } from "./decision-history.js";
 import {
   DEDUPE_NOTE_FILE,
@@ -717,28 +716,27 @@ export async function exportReviewBundle(options: {
     .flatMap(({ event, sequence }) =>
       event.type === "human-reproduction-recorded" ? [{ event, sequence }] : [],
     );
-  const currentPackageDigest =
-    verification?.result.status === "runtime-confirmed" ||
-    verification?.result.status === "reproduced"
-      ? verification.result.reproductionPackageDigest
-      : verification === undefined
-        ? null
-        : // #525 (ADR 0040): the sealed review Lab package a person observed as `match`.
-          (humanObservedBasis(ledger, {
+  // The package a person reproduces against: the judge-era package, or
+  // (#525, ADR 0040) the sealed review Lab package they observed as `match`.
+  const basis =
+    verification === undefined
+      ? null
+      : submissionBasis(
+          ledger,
+          {
             campaignId,
             findingId,
             verificationId: verification.verificationId,
             snapshotDigest: verification.snapshotDigest,
-          })?.packageDigest ?? null);
+          },
+          "reproduce",
+        );
+  const currentPackageDigest =
+    basis?.status === "basis" && basis.basis.current
+      ? basis.basis.packageDigest
+      : null;
   const currentReproduction =
-    verification !== undefined &&
-    currentPackageDigest !== null &&
-    isCurrentVerification(ledger, {
-      campaignId,
-      findingId,
-      verificationId: verification.verificationId,
-      snapshotDigest: verification.snapshotDigest,
-    })
+    verification !== undefined && currentPackageDigest !== null
       ? (reproductions
           .filter(
             ({ event }) =>

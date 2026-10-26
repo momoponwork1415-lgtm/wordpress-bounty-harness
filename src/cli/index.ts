@@ -23,6 +23,7 @@ import {
   type DuplicateCheck,
   type DuplicateResult,
   type HttpEvidenceReader,
+  type BasisUse,
   type Review,
   type ReviewItem,
   type ReviewQueue,
@@ -702,19 +703,15 @@ function queued(review: Review, values: Values) {
   return item;
 }
 
-/** #525 (ADR 0040): an old judge result, or a result a person observed in a review Lab. */
+/** Review's own basis for the step (ADR 0040); a Finding with no verification has none. */
 function hasSubmissionBasis(
+  review: Review,
   item: ReviewItem,
-): item is Extract<
-  ReviewItem,
-  { readonly status: "runtime-confirmed" | "reproduced" | "incomplete" }
-> {
+  use: BasisUse,
+): item is Exclude<ReviewItem, { readonly status: "not-verified" }> {
   return (
-    item.status === "runtime-confirmed" ||
-    item.status === "reproduced" ||
-    (item.status === "incomplete" &&
-      item.reason === "awaiting-human-observation" &&
-      item.manualObservation?.result === "match")
+    item.status !== "not-verified" &&
+    review.submissionBasis({ ref: item.ref, use }).status === "basis"
   );
 }
 
@@ -1477,7 +1474,7 @@ const COMMANDS: readonly Command[] = [
           ? undefined
           : await readFile(resolve(notePath), "utf8");
       if (reproduced !== undefined) {
-        if (!hasSubmissionBasis(item))
+        if (!hasSubmissionBasis(review, item, "reproduce"))
           throw new UsageError(
             "Only an evidence-backed package can be reproduced",
           );
@@ -1548,7 +1545,7 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, state, environment, io }) => {
       const review = environment.profile.review(state);
       const item = queued(review, values);
-      if (!hasSubmissionBasis(item))
+      if (!hasSubmissionBasis(review, item, "scope"))
         throw new UsageError(
           "Scope is assessed only for evidence-backed findings",
         );
@@ -1685,7 +1682,7 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, input, state, environment, io }) => {
       const review = environment.profile.review(state);
       const item = queued(review, values);
-      if (!hasSubmissionBasis(item))
+      if (!hasSubmissionBasis(review, item, "draft"))
         throw new UsageError(
           "A confirmed verification is required for a draft",
         );

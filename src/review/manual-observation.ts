@@ -5,7 +5,9 @@ import { z } from "zod";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
+import { supersededByLatestVersion } from "./current-verification.js";
 import { digest, id, refSchema, type ReviewRef } from "./records.js";
+import type { BasisMissingReason } from "./submission-basis.js";
 
 export const MANUAL_LAB_RECEIPT_FILE = "manual-lab-session.json";
 export const MANUAL_OBSERVATION_EVIDENCE_FILE =
@@ -51,12 +53,23 @@ type FinishedVerification = Extract<
   LedgerEventV1,
   { type: "verification-finished" }
 >;
-/** A later attempt or a newer derived Finding cannot reuse this Lab. */
-export function currentObservationVerification(
+
+/**
+ * The attempt a review Lab observation belongs to, or why there is none: the
+ * Finding is recorded on this Snapshot and not parked, the ref names its
+ * latest attempt, that attempt is `incomplete(observation)` or
+ * `incomplete(awaiting-human-observation)`, and no newer latest-version
+ * Finding replaces it.
+ */
+export function observationAttempt(
   ledger: Ledger,
   ref: ReviewRef,
-): FinishedVerification | null {
+):
+  | { readonly status: "current"; readonly verification: FinishedVerification }
+  | { readonly status: "missing"; readonly reason: BasisMissingReason } {
   const parsed = refSchema.parse(ref);
+  const missing = (reason: BasisMissingReason) =>
+    ({ status: "missing", reason }) as const;
   const finding = ledger
     .read({
       campaignId: parsed.campaignId,
@@ -67,57 +80,49 @@ export function currentObservationVerification(
     .at(0)?.event;
   if (
     finding?.type !== "finding-recorded" ||
-    finding.snapshotDigest !== parsed.snapshotDigest ||
+    finding.snapshotDigest !== parsed.snapshotDigest
+  )
+    return missing("snapshot-mismatch");
+  if (
     ledger
       .activeParked({ campaignId: parsed.campaignId })
       .some((event) => event.findingId === parsed.findingId)
   )
-    return null;
-  const latest = ledger
+    return missing("parked");
+  const attempts = ledger
     .readAll({
       campaignId: parsed.campaignId,
       findingId: parsed.findingId,
       type: "verification-finished",
     })
-    .at(-1)?.event;
+    .map(({ event }) => event)
+    .filter((event) => event.type === "verification-finished");
+  const latest = attempts.at(-1);
+  if (latest?.verificationId !== parsed.verificationId)
+    return missing(
+      attempts.some((event) => event.verificationId === parsed.verificationId)
+        ? "superseded"
+        : "no-verification",
+    );
+  if (latest.snapshotDigest !== parsed.snapshotDigest)
+    return missing("snapshot-mismatch");
   if (
-    latest?.type !== "verification-finished" ||
-    latest.verificationId !== parsed.verificationId ||
-    latest.snapshotDigest !== parsed.snapshotDigest ||
     latest.result.status !== "incomplete" ||
     (latest.result.reason !== "observation" &&
       latest.result.reason !== "awaiting-human-observation")
   )
-    return null;
+    return missing("not-awaiting-human-observation");
+  if (supersededByLatestVersion(ledger, parsed)) return missing("superseded");
+  return { status: "current", verification: latest };
+}
 
-  const findings = ledger
-    .readAll({ campaignId: parsed.campaignId, type: "finding-recorded" })
-    .map(({ event }) => event)
-    .filter((event) => event.type === "finding-recorded");
-  const byId = new Map(findings.map((event) => [event.findingId, event]));
-  const rootOf = (findingId: string): string => {
-    let current = findingId;
-    const seen = new Set<string>();
-    while (!seen.has(current)) {
-      seen.add(current);
-      const parent = byId.get(current)?.derivedFromFindingId;
-      if (parent === undefined) break;
-      current = parent;
-    }
-    return current;
-  };
-  const root = rootOf(parsed.findingId);
-  const newestLatest = findings
-    .filter(
-      (event) =>
-        event.derivationKind === "latest-version" &&
-        rootOf(event.findingId) === root,
-    )
-    .at(-1);
-  return newestLatest === undefined ||
-    newestLatest.findingId === parsed.findingId
-    ? latest
-    : null;
+/** A later attempt or a newer derived Finding cannot reuse this Lab. */
+export function currentObservationVerification(
+  ledger: Ledger,
+  ref: ReviewRef,
+): FinishedVerification | null {
+  const attempt = observationAttempt(ledger, ref);
+  return attempt.status === "current" ? attempt.verification : null;
 }
 
 /** One sealed receipt after a new review Lab actually reaches ready. */
@@ -349,61 +354,4 @@ export function currentManualObservation(
       )
       .at(-1)?.event as ResultEvent | undefined) ?? null
   );
-}
-
-/**
- * #525 (ADR 0040): with no judge, a new result is a submission basis only
- * through people. The latest attempt awaits a human observation, kept the
- * Harness capture, and a named person recorded `match` for it in a fresh
- * review Lab. The package digest is that sealed review Lab package.
- */
-export function humanObservedBasis(
-  ledger: Ledger,
-  ref: ReviewRef,
-): {
-  readonly verification: FinishedVerification;
-  readonly packageDigest: string;
-  readonly observation: ResultEvent;
-} | null {
-  const verification = currentObservationVerification(ledger, ref);
-  if (
-    verification === null ||
-    verification.result.status !== "incomplete" ||
-    verification.result.reason !== "awaiting-human-observation" ||
-    verification.evidenceCapture !== "harness-captured"
-  )
-    return null;
-  const observation = currentManualObservation(ledger, ref);
-  if (observation === null || observation.result !== "match") return null;
-  return {
-    verification,
-    packageDigest: observation.packageDigest,
-    observation,
-  };
-}
-
-/** The same basis once the reviewer's own `review decide --reproduced match` is recorded for it. */
-export function humanReproducedBasis(
-  ledger: Ledger,
-  ref: ReviewRef,
-): ReturnType<typeof humanObservedBasis> {
-  const observed = humanObservedBasis(ledger, ref);
-  if (observed === null) return null;
-  const reproduction = ledger
-    .readAll({
-      campaignId: ref.campaignId,
-      findingId: ref.findingId,
-      type: "human-reproduction-recorded",
-    })
-    .filter(
-      ({ event }) =>
-        event.type === "human-reproduction-recorded" &&
-        event.verificationId === ref.verificationId &&
-        event.reproductionPackageDigest === observed.packageDigest,
-    )
-    .at(-1)?.event;
-  return reproduction?.type === "human-reproduction-recorded" &&
-    reproduction.result === "match"
-    ? observed
-    : null;
 }
