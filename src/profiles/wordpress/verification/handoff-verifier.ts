@@ -31,6 +31,12 @@ const SKILL_URL = new URL(
   import.meta.url,
 );
 
+/**
+ * The handoff Lab's wall: setup and the route together, and since #600 the
+ * window a person observes in the same Lab after the attempt is recorded.
+ */
+export const HANDOFF_WALL_MS = 30 * 60_000;
+
 /** The receipt of one handoff run; `reason` is why it ended short of six files. */
 type HandoffRunReceipt = VerifierRunReceipt & {
   readonly transport: "handoff/v1";
@@ -106,7 +112,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
     const promptDigest = `sha256:${createHash("sha256").update(skill).digest("hex")}`;
     const startedAt = this.options.clock();
     const deadline =
-      startedAt.getTime() + (this.options.wallTimeMs ?? 30 * 60_000);
+      startedAt.getTime() + (this.options.wallTimeMs ?? HANDOFF_WALL_MS);
     const finish = (
       outcome: WordPressVerifierTransportResult["outcome"],
       reason?: string,

@@ -60,6 +60,8 @@ const receiptSchema = z.strictObject({
   /** The fresh Lab's network, not a credential or a host target URL. */
   sessionLabel: z.string().min(1).max(256),
   readyAt: z.iso.datetime({ offset: true }),
+  /** #600: the Lab the person observes in; absent on earlier receipts, which were review Labs. */
+  labKind: z.enum(["verification", "review"]).optional(),
 });
 
 type FinishedVerification = Extract<
@@ -138,13 +140,18 @@ export function currentObservationVerification(
   return attempt.status === "current" ? attempt.verification : null;
 }
 
-/** One sealed receipt after a new review Lab actually reaches ready. */
+/**
+ * One sealed receipt after a Lab is ready for a person: a new review Lab, or
+ * the recorded attempt's own verification Lab kept up for them (#600).
+ */
 export async function recordManualObservationLabReady(input: {
   readonly ledger: Ledger;
   readonly store: PrivateArtifactStore;
   readonly ref: ReviewRef;
   readonly packageDigest: string;
   readonly sessionLabel: string;
+  /** #600: the recorded attempt's own Lab, or a fresh review Lab (the default). */
+  readonly labKind?: "verification" | "review";
   readonly clock?: () => Date;
 }): Promise<string> {
   const ref = refSchema.parse(input.ref);
@@ -168,6 +175,7 @@ export async function recordManualObservationLabReady(input: {
     sessionId: randomUUID(),
     sessionLabel: input.sessionLabel,
     readyAt: (input.clock ?? (() => new Date()))().toISOString(),
+    labKind: input.labKind ?? "review",
   });
   const sessionReceiptDigest = await input.store.putFiles({
     [MANUAL_LAB_RECEIPT_FILE]: canonicalJson(receipt),
@@ -345,6 +353,7 @@ export async function recordManualObservation(input: {
     evidenceDigest,
     result,
     recordedBy,
+    labKind: stored.value.labKind ?? "review",
     ...(configuration === undefined || recordDigest === undefined
       ? {}
       : {

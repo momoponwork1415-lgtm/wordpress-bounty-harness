@@ -15,7 +15,7 @@ amends: 0021（判定器と canary の回収）, 0026（観測器の判定）, 0
 
 - 判定器の code を消す。`judges.ts`、canary の播種と照合、`verification/index.ts` の判定呼び出しと、判定器の結果による自動再試行（`observation`）を削除する。使わない設定にして残さない（AGENTS.md「削除」）。
 - 確定は、人間が Lab の dialog、観測記録、捕捉を読んで行う。新しい検証は `runtime-confirmed`、`contradicted`、`incomplete(no-judge)` を出さない。
-- 確定の根拠は、名指しした人間が新しい review Lab で記録した `review observe` の match と `review decide --reproduced match` だけである。エージェントや recipe の自己申告、捕捉を読んだだけの推定、AI が打った `review observe` / `--reproduced` は根拠にしない（2026-10-26 に明記）。
+- 確定の根拠は、名指しした人間が新しい review Lab で記録した `review observe` の match と `review decide --reproduced match` だけである（2026-10-26 に、記録後も残した検証 Lab での観測も根拠に加えた。[ADR 0038 追記 12](0038-verification-phases-and-submission-flow.md)）。エージェントや recipe の自己申告、捕捉を読んだだけの推定、AI が打った `review observe` / `--reproduced` は根拠にしない（2026-10-26 に明記）。
 - handoff の attempt が終わり、Harness の捕捉が残ったものは `verification-finished` の `incomplete(awaiting-human-observation)` として記録する。捕捉が無いものは `incomplete(evidence)` にする。人間の確認は既存の `lab up --for-review` と `review observe`（`manual-observation-recorded`）、`review decide` で記録する。`verification-finished` を確定に書き換えない。
 - 残すもの: Finding 単位の Lab の供給、`verify next --handoff` の受け渡し、recorder による HTTP 捕捉、Lab 状態の差分、Lab browser による被害者画面の記録（宣言した数値マーカーの dialog と画面）、`manual-observation-*`、台帳と Private Evidence。
 - 既存の `runtime-confirmed` 26 件と、判定器があった時期のほかの記録は読み取り専用で読み続ける。

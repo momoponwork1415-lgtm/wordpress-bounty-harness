@@ -188,6 +188,17 @@ export interface LabStateObserver<Handle extends LabHandle> {
 }
 
 type Incomplete = Extract<VerificationResultV1, { status: "incomplete" }>;
+
+/** A recorded attempt's live Lab, kept for a person's observation (#600). */
+export type HeldVerificationLab<Handle extends LabHandle> = {
+  readonly lab: Handle;
+  readonly ref: {
+    readonly campaignId: string;
+    readonly findingId: string;
+    readonly verificationId: string;
+    readonly snapshotDigest: string;
+  };
+};
 type VerificationRun<
   Finding extends VerifiableFinding,
   Handle extends LabHandle,
@@ -277,6 +288,13 @@ export class Verification<
     readonly setup: Setup;
     readonly campaignLabSetupDigest: string;
     readonly referenceRoute?: unknown;
+    /**
+     * #600: keeps the Lab of an attempt recorded as
+     * `incomplete(awaiting-human-observation)` for a person's observation.
+     * Called after the event is in the ledger; the Lab is removed when it
+     * returns or throws. Absent, the Lab is removed before recording.
+     */
+    readonly hold?: (held: HeldVerificationLab<Handle>) => Promise<void>;
   }): Promise<VerificationResultV1> {
     const campaignId = id.parse(input.campaignId);
     const findingId = id.parse(input.findingId);
@@ -293,6 +311,7 @@ export class Verification<
     let labStateDiff: LabStateDiffRecord | undefined;
     let recipeDigest: string | undefined;
     let reviewLabReady = false;
+    let held: Handle | undefined;
     const loaded = await this.#loadFinding(campaignId, findingId);
 
     const decide = async (): Promise<VerificationResultV1> => {
@@ -408,7 +427,15 @@ export class Verification<
           "evidence",
           "Verification stopped unexpectedly; repeat in a fresh Lab",
         );
-      } finally {
+      }
+      if (
+        input.hold !== undefined &&
+        result.status === "incomplete" &&
+        result.reason === "awaiting-human-observation"
+      )
+        // Removed after the person's observation, once the attempt is recorded.
+        held = lab;
+      else {
         const removed = await this.#options.lab.teardown(lab).catch(() => null);
         if (removed?.status !== "removed") {
           const cleanupLabIds =
@@ -426,97 +453,124 @@ export class Verification<
     };
 
     const decided = await decide();
-    // A person checks a finished attempt in a new Lab built from this material.
-    let reviewLabDigest: string | undefined;
-    if (
-      reviewLabReady &&
-      decided.status === "incomplete" &&
-      decided.reason === "awaiting-human-observation" &&
-      evidenceCapture === "harness-captured" &&
-      decided.evidenceDigest !== undefined &&
-      recipeDigest !== undefined
-    ) {
-      try {
-        reviewLabDigest = await this.#options.store.putFiles({
-          "lab.json": canonicalJson({
-            schema: "review-lab-reconstruction/v1",
-            snapshotDigest,
-            labSetupDigest,
-            setup: input.setup,
-            snapshot: input.snapshot,
-          }),
-        });
-      } catch {
-        // Missing review material fails closed when a human asks to open it.
+    const record = async (): Promise<VerificationResultV1> => {
+      // A person checks a finished attempt in a new Lab built from this material.
+      let reviewLabDigest: string | undefined;
+      if (
+        reviewLabReady &&
+        decided.status === "incomplete" &&
+        decided.reason === "awaiting-human-observation" &&
+        evidenceCapture === "harness-captured" &&
+        decided.evidenceDigest !== undefined &&
+        recipeDigest !== undefined
+      ) {
+        try {
+          reviewLabDigest = await this.#options.store.putFiles({
+            "lab.json": canonicalJson({
+              schema: "review-lab-reconstruction/v1",
+              snapshotDigest,
+              labSetupDigest,
+              setup: input.setup,
+              snapshot: input.snapshot,
+            }),
+          });
+        } catch {
+          // Missing review material fails closed when a human asks to open it.
+        }
       }
-    }
-    // The recipe is review material by digest (#437); one the store lost stays out.
-    const artifacts = [
-      ...(reviewLabDigest === undefined
-        ? []
-        : [{ kind: "review-lab-reconstruction", digest: reviewLabDigest }]),
-      ...(recipeDigest !== undefined &&
-      (await this.#options.store.resolve(recipeDigest)).status === "resolved"
-        ? [{ kind: "recipe", digest: recipeDigest }]
-        : []),
-      ...(labStateDiff?.status === "captured"
-        ? labStateDiff.artifacts
-        : []
-      ).map((artifact) => ({ kind: artifact.kind, digest: artifact.digest })),
-    ];
-    const appended = await this.#options.ledger.append({
-      schemaVersion: 1,
-      identity: `verification-${verificationId}`,
-      campaignId,
-      snapshotDigest,
-      occurredAt: (this.#options.clock ?? (() => new Date()))().toISOString(),
-      type: "verification-finished",
-      verificationId,
-      findingId,
-      labSetupDigest,
-      ...(attempt === undefined ? {} : { attempt }),
-      ...(retryOf === undefined ? {} : { retryOf }),
-      ...(this.promptVersion === undefined
-        ? {}
-        : { promptVersion: this.promptVersion }),
-      ...(input.basis === undefined
-        ? {}
-        : {
-            basis: {
-              kind: input.basis.kind,
-              findingSnapshotDigest: digest.parse(
-                input.basis.findingSnapshotDigest,
-              ),
-            },
-          }),
-      result: decided,
-      ...(evidenceCapture === undefined ? {} : { evidenceCapture }),
-      // The diff is review material by digest; a failed capture is recorded, never a verdict.
-      ...(labStateDiff === undefined
-        ? {}
-        : labStateDiff.status === "captured"
-          ? { labStateDiff: { status: "captured" as const } }
+      // The recipe is review material by digest (#437); one the store lost stays out.
+      const artifacts = [
+        ...(reviewLabDigest === undefined
+          ? []
+          : [{ kind: "review-lab-reconstruction", digest: reviewLabDigest }]),
+        ...(recipeDigest !== undefined &&
+        (await this.#options.store.resolve(recipeDigest)).status === "resolved"
+          ? [{ kind: "recipe", digest: recipeDigest }]
+          : []),
+        ...(labStateDiff?.status === "captured"
+          ? labStateDiff.artifacts
+          : []
+        ).map((artifact) => ({ kind: artifact.kind, digest: artifact.digest })),
+      ];
+      const appended = await this.#options.ledger.append({
+        schemaVersion: 1,
+        identity: `verification-${verificationId}`,
+        campaignId,
+        snapshotDigest,
+        occurredAt: (this.#options.clock ?? (() => new Date()))().toISOString(),
+        type: "verification-finished",
+        verificationId,
+        findingId,
+        labSetupDigest,
+        ...(attempt === undefined ? {} : { attempt }),
+        ...(retryOf === undefined ? {} : { retryOf }),
+        ...(this.promptVersion === undefined
+          ? {}
+          : { promptVersion: this.promptVersion }),
+        ...(input.basis === undefined
+          ? {}
           : {
-              labStateDiff: {
-                status: "missing" as const,
-                reason: labStateDiff.reason,
+              basis: {
+                kind: input.basis.kind,
+                findingSnapshotDigest: digest.parse(
+                  input.basis.findingSnapshotDigest,
+                ),
               },
             }),
-      ...(artifacts.length === 0 ? {} : { artifacts }),
-    });
-    if (appended.status === "conflict")
-      throw new Error("Verification identity conflict");
-    // The ledger may downgrade the result (digest or evidence); report what it kept.
-    const recorded = this.#options.ledger
-      .readAll({ campaignId, findingId, type: "verification-finished" })
-      .find(
-        ({ event }) =>
-          event.type === "verification-finished" &&
-          event.verificationId === verificationId,
-      );
-    if (recorded?.event.type !== "verification-finished")
-      throw new Error("Verification was not recorded");
-    return recorded.event.result;
+        result: decided,
+        ...(evidenceCapture === undefined ? {} : { evidenceCapture }),
+        // The diff is review material by digest; a failed capture is recorded, never a verdict.
+        ...(labStateDiff === undefined
+          ? {}
+          : labStateDiff.status === "captured"
+            ? { labStateDiff: { status: "captured" as const } }
+            : {
+                labStateDiff: {
+                  status: "missing" as const,
+                  reason: labStateDiff.reason,
+                },
+              }),
+        ...(artifacts.length === 0 ? {} : { artifacts }),
+      });
+      if (appended.status === "conflict")
+        throw new Error("Verification identity conflict");
+      // The ledger may downgrade the result (digest or evidence); report what it kept.
+      const recorded = this.#options.ledger
+        .readAll({ campaignId, findingId, type: "verification-finished" })
+        .find(
+          ({ event }) =>
+            event.type === "verification-finished" &&
+            event.verificationId === verificationId,
+        );
+      if (recorded?.event.type !== "verification-finished")
+        throw new Error("Verification was not recorded");
+      return recorded.event.result;
+    };
+    let recordedResult: VerificationResultV1;
+    try {
+      recordedResult = await record();
+    } catch (error) {
+      if (held !== undefined)
+        await this.#options.lab.teardown(held).catch(() => null);
+      throw error;
+    }
+    if (held !== undefined) {
+      const lab = held;
+      try {
+        await input.hold!({
+          lab,
+          ref: { campaignId, findingId, verificationId, snapshotDigest },
+        });
+      } finally {
+        // The attempt is already recorded; a Lab left behind is `lab down`'s to remove.
+        const removed = await this.#options.lab.teardown(lab).catch(() => null);
+        if (removed?.status !== "removed")
+          throw new Error(
+            `The held verification Lab ${lab.id} was not removed: ${removed?.nextStep ?? "inspect and remove remaining Lab resources"}`,
+          );
+      }
+    }
+    return recordedResult;
   }
 
   /** `snapshotDigest` is the snapshot under test: the Finding's own, or its target's latest. */

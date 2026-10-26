@@ -67,6 +67,12 @@ import { restoreParkedWordPressFinding } from "../profiles/wordpress/discovery/r
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
 import { storeLabDiagnostic } from "../lab/index.js";
 import { openWordPressExplorationLab } from "../profiles/wordpress/lab/exploration-lab.js";
+import {
+  holdWordPressVerificationLab,
+  releaseHeldLabRecord,
+} from "../profiles/wordpress/lab/review-lab.js";
+import { HANDOFF_WALL_MS } from "../profiles/wordpress/verification/handoff-verifier.js";
+import type { HeldVerificationLab } from "../verification/index.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
 import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
 import type { CliProfile, CliState } from "./index.js";
@@ -1793,19 +1799,51 @@ export function createWordPressCliProfile(
         configPath: input.configPath,
         handoff: input.handoff,
       });
-      return verifyNextFinding({
-        ...(input.campaignId === undefined
-          ? {}
-          : { campaignId: input.campaignId }),
-        ...(input.findingId === undefined
-          ? {}
-          : { only: { findingId: input.findingId } }),
-        ledger: state.ledger,
-        newId: state.newId,
-        loadSnapshot: session.boundaries.loadSnapshot,
-        setupFor: session.setupFor,
-        verification: session.verification,
-      });
+      const { lab } = session.boundaries;
+      const observation = input.observation;
+      let heldLabId: string | undefined;
+      try {
+        return await verifyNextFinding({
+          ...(input.campaignId === undefined
+            ? {}
+            : { campaignId: input.campaignId }),
+          ...(input.findingId === undefined
+            ? {}
+            : { only: { findingId: input.findingId } }),
+          ledger: state.ledger,
+          newId: state.newId,
+          loadSnapshot: session.boundaries.loadSnapshot,
+          setupFor: session.setupFor,
+          verification: session.verification,
+          // #600: a person observes in this Lab, which already holds the setup and the route.
+          ...(observation === undefined
+            ? {}
+            : {
+                hold: async (held: HeldVerificationLab<WordPressLabHandle>) => {
+                  heldLabId = held.lab.id;
+                  const kept = await holdWordPressVerificationLab({
+                    held,
+                    lab,
+                    ledger: state.ledger,
+                    store: state.store,
+                    stateDirectory: state.stateDirectory,
+                    clock: state.clock,
+                    wallMs: HANDOFF_WALL_MS,
+                    present: (held) => observation.present(held),
+                  });
+                  if (kept.status === "not-held")
+                    observation.skipped(kept.reason);
+                },
+              }),
+        });
+      } finally {
+        if (heldLabId !== undefined)
+          await releaseHeldLabRecord({
+            stateDirectory: state.stateDirectory,
+            labId: heldLabId,
+            lab,
+          });
+      }
     },
     restoreParked: (state, input) =>
       restoreParkedWordPressFinding({

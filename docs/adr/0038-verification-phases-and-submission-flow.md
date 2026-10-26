@@ -177,3 +177,16 @@ Programme Boundary を `wordfence-2026-10-26` 版にし、その節を次の文�
 変えないもの: contributor 以上と、管理者が意図して付与する権限は trust 境界の内側に置く。`options-update` は対象外のままとする（所有者、2026-10-26）。探索出口で `finding-parked` にする 10 の impact 分類は、ADR 0032 の 2026-10-17 節のまま変えない。Wordfence の「管理者の誤設定」の除外は、追記 8 のとおり段 1 と検証で事実を確かめて当てる。判定器の条件も変えない。
 
 消し方: `campaign.json` の `programmeBoundary` を `docs/knowledge/programme-boundary-wordfence-2026-10-17.md` の文と `wordfence-2026-10-17` 版に戻し、`tests/profiles/wordpress/programme-impacts.test.ts` の版と追加した 3 行、SPEC 第 8b 節の表の行を戻す。
+
+## 2026-10-26 追記 12: 観測の場所（#600）
+
+所有者決定 2026-10-26（3 回目のグリル）: 人間の観測は、operator が `observation-ready` まで進めた**検証 Lab そのもの**で行う。`lab up --for-review` の review Lab は package の初期設定（siteTitle / initialPosts / customerRole / databaseAccess）だけから作るので、検証中に skill が作った前提（フォームの作成、外部サービスに接続済みの状態など）が入らない。そのため、捕捉した要求を 1 本送っても発火しなかった（operator の報告、2026-10-26）。検証 Lab には前提も payload も残っている。
+
+- `verify next --handoff` は、attempt を `incomplete(awaiting-human-observation)` として台帳に記録し、Harness の捕捉と review Lab package があれば、その Lab を落とさずに残す。残すのは `lab down`、中断（SIGINT / SIGTERM）、wall のどれかが来るまでである。wall は handoff と同じ長さ（30 分）で、記録の時点から数える。
+- 残した Lab は review Lab と同じ方法で host に公開する。recorder を経由し、`127.0.0.1:80` を優先し、使えなければ空いている port を使う。出力には、接続先、hosts の 1 行（`127.0.0.1 wordpress`）、攻撃者 account、`setup-done` で作り直した Lab の管理者（人間の被害者側の操作に使う）、`manual observation receipt`（`review observe --receipt` に渡す digest）を出す。
+- receipt は従来の `manual-observation-lab-ready` として、記録済みの attempt の review Lab package に結び付けて封じる。`review observe` は、検証 Lab の receipt も review Lab の receipt も同じ規則で受ける。数えるのは最新の ready より後の観測だけである。`manual-observation-recorded` には、どちらの Lab で観測したかを `labKind: verification | review` として型付きで残す。値は Private Evidence の receipt から取り、台帳には型の値と digest だけを置く（不変条件 8）。`labKind` の無い既存の event は review Lab として読む。
+- Lab の記録は state dir の `review-lab.json` を共有し、`labKind: "verification"` を付ける。`lab down` は review Lab と同じ手順で持ち主の `verify next` に SIGTERM を送り、その後、残ったものを Lab id で消す。1 つの state dir で人間のために残せる Lab は 1 つである。すでに記録があるとき、または捕捉・package・公開・管理者のどれかが欠けたときは、Lab を残さずに従来どおり消し、理由を 1 行出す。
+- 変えないもの: gVisor と loopback だけの公開（不変条件 2）、失敗の `incomplete`（不変条件 4）、`verification-finished` を書き換えないこと、確定の根拠が名指しした人間の `review observe` の `match` と `review decide --reproduced match` だけであること（ADR 0040）。AI 操作役は、記録後の Lab を操作しない。また、`review observe` も打たない。review Lab は、後日の再観測のために残す。
+- ADR 0040 の「名指しした人間が新しい review Lab で記録した」は、この追記で「検証 Lab か新しい review Lab で記録した」に読み替える。skill 本文（`wbh-verify`、`wbh-review`）の該当行は #595 で直す。
+
+消し方: この追記の PR を revert する。Lab は attempt の記録の前に消える経路に戻る。`labKind` を持つ `manual-observation-recorded` は旧版の台帳 schema では読めないので、revert の前に扱いを決める。
