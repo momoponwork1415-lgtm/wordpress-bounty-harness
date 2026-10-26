@@ -238,7 +238,7 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
 
   it("pins the generated v5 contract the composed objectives receive and keeps v4", () => {
     expect(wordPressDiscoveryOutputContractV5().digest).toBe(
-      "sha256:ec07906a434a735bbd4be87f1a259c48e6f4fcfbc943f7758d9a98a3844ff869",
+      "sha256:4ead63b056590be4cbdd7f474bd79c7e301550454a7e4644d943a17bb0bd6ec4",
     );
     // Archived rows and earlier Trials' `contractDigest` (#613).
     expect(wordPressDiscoveryOutputContractV4().digest).toBe(
@@ -414,12 +414,12 @@ describe("WordPress discovery prompt assets", () => {
       "exploitTiming",
     ])
       for (const option of finding.properties[field]!.anyOf)
-        expect(option.description).toMatch(/^[^\n]{10,200}$/);
+        expect(option.description).toMatch(/^[^\n]{10,260}$/);
     expect(v5.text).toContain(
       "Anyone can write it, e.g. a comment on a public social-media page, or the attacker's own blocked request kept in a WAF log.",
     );
     expect(v5.text).toContain(
-      "Only the vendor or a third party writes it, e.g. scanner results, a vulnerability database, an API response body.",
+      "Only the service's vendor, the site itself or an administrator writes it, e.g. scanner results, a vulnerability database, a fixed vendor feed or notice, an official translation pack, an API response body, an administrator-run check's output.",
     );
     for (const archived of [
       wordPressDiscoveryOutputContract(),

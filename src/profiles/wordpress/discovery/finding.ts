@@ -84,7 +84,7 @@ export const attackerInputPathSchema = z
     z
       .literal("vendor-controlled-data")
       .describe(
-        "Only the vendor or a third party writes it, e.g. scanner results, a vulnerability database, an API response body.",
+        "Only the service's vendor, the site itself or an administrator writes it, e.g. scanner results, a vulnerability database, a fixed vendor feed or notice, an official translation pack, an API response body, an administrator-run check's output.",
       ),
   ])
   .describe("How the attacker's input reaches the sink.");
