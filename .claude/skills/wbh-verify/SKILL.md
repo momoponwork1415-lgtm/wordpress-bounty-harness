@@ -75,3 +75,5 @@ description: scope 内 Finding 1 件を、Harness が `verify next --handoff` �
 ## しないこと
 
 スキルは判定しない。確定は、人間が Lab の dialog、観測記録、捕捉を読んで行う。
+
+6 ファイルを確定した後は、Lab に要求を送らない。Harness は attempt を記録した後、捕捉と review Lab package があれば、人間が観測するために同じ Lab を残す（ADR 0038 の追記 12）。そのとき出力に出る管理者の account（`review administrator:`）は、人間が被害者側の操作に使うものなので使わない。`review observe` と `review decide --reproduced` も打たない。

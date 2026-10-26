@@ -3,9 +3,9 @@ name: wbh-dedupe
 description: 検証が終わった Finding 1 件について、ローカル Wordfence 履歴 mirror と Patchstack / WPScan の公開情報を slug と正確な版で照合し、possible-match / no-match / unavailable の 3 値と根拠を出す。記録は AI 操作役が review decide --duplicate --by ai で打つ。Web 検索だけで、gVisor も対象の実行も要らない。
 ---
 
-# wbh-dedupe v3
+# wbh-dedupe v4
 
-段 4（ADR 0038）の skill である。対象は、段 3 の検証が終わった review queue の Finding 1 件である。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。台帳の場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版は `versions/v1.md` と `versions/v2.md` に残してある。
+段 4（ADR 0038）の skill である。対象は、段 3 の検証が終わった review queue の Finding 1 件である。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。台帳の場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版は `versions/v1.md`、`versions/v2.md`、`versions/v3.md` に残してある。
 
 ## 読む入力
 
@@ -51,7 +51,7 @@ description: 検証が終わった Finding 1 件について、ローカル Word
 
 ## 結果の扱い
 
-- `no-match` の Finding だけが段 5（提出先の決定）に進む。wbh-report v2 は `review.decision.duplicate` が `no-match` のときだけ書く。
+- `no-match` の Finding だけが段 5（提出先の決定）に進む。wbh-report v8 は `review.duplicate.status` が `no-match` のときだけ書く。
 - `possible-match` は提出候補にしない。照合先の識別子を `<ref>` に残し、`defer` を記録して止める。
 - `unavailable` は落とさない。理由を残し、mirror の更新か外部の応答を待って再照合する。
 
