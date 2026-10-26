@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import {
@@ -4635,6 +4636,90 @@ describe("harness CLI vertical slice", () => {
     expect(listed.stdout).toContain(`wbh-${uuid}-wp`);
     expect(listed.stdout).toContain(`wbh-${uuid}-net`);
     expect(listed.stdout).toContain(`wbh-${uuid}-site`);
+  });
+
+  it("leaves the live discovery resources of a runner in another state directory to it (#550)", async () => {
+    const { run, root, profile, configPath, docker } = await harness();
+    const state = join(root, "state");
+    const { wordpressVersion } = JSON.parse(
+      await readFile(configPath, "utf8"),
+    ) as { wordpressVersion: string };
+    const policy = JSON.parse(
+      await readFile(join(root, "selection.json"), "utf8"),
+    ) as object;
+    await mkdir(join(root, "policies"));
+    await writeFile(
+      join(root, "policies", "selection.json"),
+      JSON.stringify({ ...policy, wordpressVersion }),
+    );
+    (profile as { hostStatus?: unknown }).hostStatus = async () => ({
+      loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
+      programmeObservedAt: new Date(now),
+      freeBytes: 100 * 1024 ** 3,
+      legacyHistoryAvailable: true,
+      loginMarginMinutes: 60,
+    });
+    // The other runner: a live process with its own state directory and no
+    // sweep-hold here. Its records sit in the host-wide directory.
+    const other = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+    try {
+      const pid = other.pid!;
+      const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+      const owner = {
+        pid,
+        bootId: (
+          await readFile("/proc/sys/kernel/random/boot_id", "utf8")
+        ).trim(),
+        startTicks: stat
+          .slice(stat.lastIndexOf(")") + 2)
+          .trim()
+          .split(/\s+/)[19]!,
+      };
+      const owners = join(root, "discovery-owners");
+      await mkdir(owners);
+      const record = (resource: string, recorded: unknown) =>
+        writeFile(
+          join(owners, `${resource}.json`),
+          JSON.stringify({ schemaVersion: 1, resource, owner: recorded }),
+        );
+      for (const resource of [
+        `codex-agent-${uuid}`,
+        `provider-egress-broker-${uuid}`,
+        `provider-egress-${uuid}`,
+      ])
+        await record(resource, owner);
+      // A run killed on an earlier boot: its owner is gone.
+      await record(`claude-agent-${uuid}`, {
+        pid: 1,
+        bootId: "previous-boot",
+        startTicks: "1",
+      });
+      const started = await run(
+        "continuous",
+        "run",
+        "--config",
+        configPath,
+        "--selection",
+        join(root, "policies", "selection.json"),
+        "--notify",
+        `touch '${join(state, "continuous.stop")}'`,
+      );
+      expect(started.code).toBe(0);
+      const removed = docker
+        .map(({ args }) => args)
+        .filter(
+          (args) =>
+            args[0] === "rm" ||
+            ((args[0] === "network" || args[0] === "volume") &&
+              args[1] === "rm"),
+        );
+      // Only the dead owner's container goes; the live runner keeps its three.
+      expect(removed).toEqual([["rm", "-f", `claude-agent-${uuid}`]]);
+      expect(existsSync(join(owners, `claude-agent-${uuid}.json`))).toBe(false);
+      expect(existsSync(join(owners, `codex-agent-${uuid}.json`))).toBe(true);
+    } finally {
+      other.kill("SIGKILL");
+    }
   });
 
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {
