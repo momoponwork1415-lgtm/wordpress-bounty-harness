@@ -1,11 +1,11 @@
 ---
 name: wbh-dedupe
-description: 検証が終わった Finding 1 件について、ローカル Wordfence 履歴 mirror と Patchstack / WPScan の公開情報を slug と正確な版で照合し、possible-match / no-match / unavailable の 3 値と根拠を出す。記録は所有者が review decide --duplicate で打つ。Web 検索だけで、gVisor も対象の実行も要らない。
+description: 検証が終わった Finding 1 件について、ローカル Wordfence 履歴 mirror と Patchstack / WPScan の公開情報を slug と正確な版で照合し、possible-match / no-match / unavailable の 3 値と根拠を出す。記録は AI 操作役が review decide --duplicate --by ai で打つ。Web 検索だけで、gVisor も対象の実行も要らない。
 ---
 
-# wbh-dedupe v2
+# wbh-dedupe v3
 
-段 4（ADR 0038）の skill である。対象は、段 3 の検証が終わった review queue の Finding 1 件である。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。台帳の場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版は `versions/v1.md` に残してある。
+段 4（ADR 0038）の skill である。対象は、段 3 の検証が終わった review queue の Finding 1 件である。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。台帳の場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版は `versions/v1.md` と `versions/v2.md` に残してある。
 
 ## 読む入力
 
@@ -37,21 +37,22 @@ description: 検証が終わった Finding 1 件について、ローカル Word
    - `unavailable:<理由>`。理由は、mirror が stale、database が応答しない、のように照合できなかった事情を短く書く。
 2. 根拠を書く。見た database と検索語、照合した時刻、該当した公開記録の識別子・公開日・影響版・修正版・種別を書く。`no-match` のときは差別化の 1〜3 文も書く。
 3. 非公開メモを Private Evidence の Finding ディレクトリ（export の `privateEvidence.directory`）に Markdown 1 本で置く。中身は 2 の根拠で、公開情報だけを書く。
-4. 所有者が打つ記録のコマンドを示す。この skill は台帳に直接書かない。
+4. AI 操作役が `review decide --by ai` で記録する。これは AI の中間記録で、提出前の人間の査読ではない。`--minutes` は付けず、人間の作業時間に混ぜない。
 
    ```
-   harness review decide --campaign <id> --finding <id> --decision <判断> --reason <理由コード> --duplicate <1 の値> --duplicate-note <3 のメモの path> --by <name> --minutes <n>
+   harness review decide --campaign <id> --finding <id> --decision <判断> --reason <理由コード> --duplicate <1 の値> --duplicate-note <3 のメモの path> --by ai
    ```
 
-   - `<判断>` と `<理由コード>` は、`review.decision` の値をそのまま写す。`review.decision` が null なら、wbh-review の判断と一緒に記録する。
-   - `--minutes` は照合にかかった分数にする。
+   - `no-match` で、wbh-review も受理を提案しているときは、`--decision accept --reason preliminary-pass` にする。
+   - `possible-match` と `unavailable` のときは、`--decision defer --reason duplicate-unresolved` にして止める。
+   - `no-match` でも wbh-review が受理を提案していないときは、`<判断>` と `<理由コード>` に `review.decision` の値をそのまま写す。`review.decision` が null なら、wbh-review の判断と一緒に記録する。
    - 記録の後で export を打ち直し、`review.duplicate` に値、時刻、メモの path が出ていることを確かめる。
    - 後の判断（再現の記録など）で `--duplicate` を付けなければ、記録した結果がそのまま引き継がれる。
 
 ## 結果の扱い
 
 - `no-match` の Finding だけが段 5（提出先の決定）に進む。wbh-report v2 は `review.decision.duplicate` が `no-match` のときだけ書く。
-- `possible-match` は提出候補にしない。照合先の識別子を `<ref>` に残し、所有者が最終判断する。
+- `possible-match` は提出候補にしない。照合先の識別子を `<ref>` に残し、`defer` を記録して止める。
 - `unavailable` は落とさない。理由を残し、mirror の更新か外部の応答を待って再照合する。
 
 ## しないこと
