@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,7 +23,9 @@ import type {
 } from "../../../src/profiles/wordpress/lab/index.js";
 import { observedReviewLabPackage } from "../../../src/profiles/wordpress/lab/observed-review-lab.js";
 import {
+  openRecordedWordPressReviewLab,
   openWordPressReviewLab,
+  wordPressReviewLabDown,
   type WordPressReviewLabProvisioner,
 } from "../../../src/profiles/wordpress/lab/review-lab.js";
 import { Review } from "../../../src/review/index.js";
@@ -111,7 +113,12 @@ const frozenSnapshots: SnapshotReader = {
 
 /** Records the Lab calls instead of running docker; the handle carries the chosen setup digest. */
 function fakeLab(
-  options: { readonly setupDigest?: string; readonly exposure?: false } = {},
+  options: {
+    readonly setupDigest?: string;
+    /** `port-80-busy`: another process holds 80; `none`: no port binds at all. */
+    readonly exposure?: "free" | "port-80-busy" | "none";
+    readonly labId?: string;
+  } = {},
 ) {
   const calls: string[] = [];
   const exposures: unknown[] = [];
@@ -133,7 +140,10 @@ function fakeLab(
     async provision(candidateSnapshot, candidateSetup) {
       calls.push("provision");
       provisioned.push({ snapshot: candidateSnapshot, setup: candidateSetup });
-      const fresh = { ...handle, id: `lab-${provisioned.length}` };
+      const fresh = {
+        ...handle,
+        id: options.labId ?? `lab-${provisioned.length}`,
+      };
       provisionedIds.push(fresh.id);
       return { status: "ready", handle: fresh };
     },
@@ -146,12 +156,14 @@ function fakeLab(
     async exposeToHost(_handle, input) {
       calls.push("expose");
       exposures.push(input);
-      return options.exposure === false
+      const exposure = options.exposure ?? "free";
+      return exposure === "none" ||
+        (exposure === "port-80-busy" && input.httpPort === 80)
         ? { status: "unavailable", diagnostic: "no loopback port" }
         : {
             status: "exposed",
             container: "wbh-lab-1-host",
-            httpPort: 49153,
+            httpPort: input.httpPort === 0 ? 49153 : input.httpPort,
             databasePort: null,
           };
     },
@@ -315,7 +327,7 @@ describe("WordPress review Lab", () => {
           lab,
           browserImage,
         }),
-    } as CliProfile;
+    } as Partial<CliProfile> as CliProfile;
     const errors: string[] = [];
     const command =
       "lab up --for-review --campaign campaign-1 --finding finding-1".split(
@@ -348,7 +360,10 @@ describe("WordPress review Lab", () => {
       'attacker accounts: {"subscriber":{"username":"attacker","password":"attacker-pass"}}',
     );
     expect(lines).toContain(
-      "host loopback: http://127.0.0.1:49153 (Host header: wordpress)",
+      "host loopback: http://127.0.0.1:80 (Host header: wordpress)",
+    );
+    expect(lines).toContain(
+      'browser: add the hosts line "127.0.0.1 wordpress" once, then open http://wordpress/',
     );
     expect(lines).toContain(
       `private recipe steps: ${store.contentPath(recipeDigest)}/steps.md`,
@@ -438,8 +453,8 @@ describe("WordPress review Lab", () => {
     });
 
     expect(calls).toEqual(["provision", "expose"]);
-    // A free loopback port through the recorder, as the handoff Lab publishes (#586).
-    expect(exposures).toEqual([{ httpPort: 0, via: "recorder" }]);
+    // Port 80 through the recorder, so the site's own redirects keep working (#592).
+    expect(exposures).toEqual([{ httpPort: 80, via: "recorder" }]);
     expect(provisioned).toEqual([
       { snapshot, setup: { ...setup, databaseAccess: "none" } },
     ]);
@@ -453,7 +468,12 @@ describe("WordPress review Lab", () => {
       },
       administrator: { username: "harness-admin", password: "admin-pass" },
       browserImage,
-      host: { url: "http://127.0.0.1:49153", hostHeader: "wordpress" },
+      labId: "lab-1",
+      host: {
+        url: "http://127.0.0.1:80",
+        hostHeader: "wordpress",
+        port: 80,
+      },
     });
 
     await session.close();
@@ -564,7 +584,7 @@ describe("WordPress review Lab", () => {
   it("tears the Lab down when it cannot be published on the host (#586)", async () => {
     const store = await privateStore();
     const packageDigest = await sealedPackage(store, reconstruction);
-    const { lab, calls } = fakeLab({ exposure: false });
+    const { lab, calls } = fakeLab({ exposure: "none" });
     await expect(
       openWordPressReviewLab({
         packageDigest,
@@ -576,7 +596,178 @@ describe("WordPress review Lab", () => {
     ).rejects.toThrow(
       "The review Lab could not be published on the host: no loopback port",
     );
+    expect(calls).toEqual([
+      ...["provision", "expose", "expose"],
+      ...["withdraw", "teardown"],
+    ]);
+  });
+
+  it("falls back to a free port when 80 is taken and says the browser needs a resolver rule (#592)", async () => {
+    const store = await privateStore();
+    const packageDigest = await sealedPackage(store, reconstruction);
+    const { lab, exposures } = fakeLab({ exposure: "port-80-busy" });
+    const signals = new EventEmitter();
+    const lines: string[] = [];
+    await runForegroundReviewLab(
+      () =>
+        openWordPressReviewLab({
+          packageDigest,
+          store,
+          snapshots: frozenSnapshots,
+          lab,
+          browserImage,
+        }),
+      {
+        stdout(line) {
+          lines.push(line);
+          if (line.startsWith("Run the private"))
+            queueMicrotask(() => signals.emit("SIGINT"));
+        },
+        stderr: () => undefined,
+      },
+      signals,
+    );
+    expect(exposures).toEqual([
+      { httpPort: 80, via: "recorder" },
+      { httpPort: 0, via: "recorder" },
+    ]);
+    expect(lines).toContain(
+      "host loopback: http://127.0.0.1:49153 (Host header: wordpress)",
+    );
+    expect(lines).toContain(
+      'browser: port 80 is in use, so http://wordpress/ is not reachable through a hosts line; start Chrome with --host-resolver-rules="MAP wordpress 127.0.0.1:49153" and open http://wordpress/',
+    );
+  });
+
+  it("records the review Lab so lab down closes it through its foreground owner (#592)", async () => {
+    const store = await privateStore();
+    const stateDirectory = await mkdtemp(join(tmpdir(), "wbh-review-state-"));
+    directories.push(stateDirectory);
+    const packageDigest = await sealedPackage(store, reconstruction);
+    const labId = "0f0e0d0c-0b0a-4908-8706-050403020100";
+    const { lab, calls } = fakeLab({ labId });
+    const open = () =>
+      openRecordedWordPressReviewLab({
+        packageDigest,
+        store,
+        snapshots: frozenSnapshots,
+        lab,
+        browserImage,
+        stateDirectory,
+        clock: () => new Date("2026-10-26T00:00:00Z"),
+      });
+    const session = await open();
+    expect(
+      JSON.parse(
+        await readFile(join(stateDirectory, "review-lab.json"), "utf8"),
+      ),
+    ).toEqual({
+      schemaVersion: 1,
+      labId,
+      network: "wbh-lab-1-net",
+      gateway: `wbh-${labId}-host`,
+      httpPort: 80,
+      startedAt: "2026-10-26T00:00:00.000Z",
+    });
+    // One review Lab per state directory, so lab down always names the live one.
+    await expect(open()).rejects.toThrow("run lab down first");
+    expect(calls).toEqual(["provision", "expose"]);
+
+    let owner: number | null = 4242;
+    const signalled: number[] = [];
+    const cleanups: unknown[] = [];
+    const summary = await wordPressReviewLabDown({
+      stateDirectory,
+      lab: {
+        async cleanupLeftovers(input) {
+          cleanups.push(input);
+          return { containers: [], networks: [], volumes: [] };
+        },
+      },
+      ownerOf: async (id) => (id === labId ? owner : null),
+      // The foreground process closes its session on SIGTERM.
+      signal(pid) {
+        signalled.push(pid);
+        void session.close().then(() => {
+          owner = null;
+        });
+      },
+    });
+    expect(signalled).toEqual([4242]);
     expect(calls).toEqual(["provision", "expose", "withdraw", "teardown"]);
+    expect(summary).toEqual({
+      labId,
+      ownerStopped: 4242,
+      removed: { containers: [], networks: [], volumes: [] },
+      remaining: { containers: [], networks: [], volumes: [] },
+    });
+    expect(cleanups).toEqual([
+      { remove: true, labId },
+      { remove: false, labId },
+    ]);
+    await expect(
+      readFile(join(stateDirectory, "review-lab.json")),
+    ).rejects.toThrow();
+    expect(
+      await wordPressReviewLabDown({
+        stateDirectory,
+        lab: {
+          cleanupLeftovers: async () => {
+            throw new Error("nothing to remove");
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("removes a review Lab whose owner died by its Lab id, gateway included (#592)", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "wbh-review-state-"));
+    directories.push(stateDirectory);
+    const labId = "0f0e0d0c-0b0a-4908-8706-050403020100";
+    await writeFile(
+      join(stateDirectory, "review-lab.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        labId,
+        network: `wbh-${labId}-net`,
+        gateway: `wbh-${labId}-host`,
+        httpPort: 80,
+        startedAt: "2026-10-26T00:00:00.000Z",
+      }),
+    );
+    const live = {
+      containers: [`wbh-${labId}-host`, `wbh-${labId}-wp`, `wbh-${labId}-db`],
+      networks: [`wbh-${labId}-net`],
+      volumes: [`wbh-${labId}-site`],
+    };
+    const signalled: number[] = [];
+    const summary = await wordPressReviewLabDown({
+      stateDirectory,
+      lab: {
+        async cleanupLeftovers({ remove, labId: only }) {
+          expect(only).toBe(labId);
+          const found = structuredClone(live);
+          if (remove)
+            for (const kind of ["containers", "networks", "volumes"] as const)
+              live[kind] = [];
+          return found;
+        },
+      },
+      ownerOf: async () => null,
+      signal: (pid) => signalled.push(pid),
+    });
+    expect(signalled).toEqual([]);
+    expect(summary).toMatchObject({
+      labId,
+      removed: {
+        containers: [`wbh-${labId}-host`, `wbh-${labId}-wp`, `wbh-${labId}-db`],
+      },
+      remaining: { containers: [], networks: [], volumes: [] },
+    });
+    expect(summary).not.toHaveProperty("ownerStopped");
+    await expect(
+      readFile(join(stateDirectory, "review-lab.json")),
+    ).rejects.toThrow();
   });
 
   it("tears the Lab down when the foreground runner receives SIGINT", async () => {

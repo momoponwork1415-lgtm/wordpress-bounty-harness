@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   forgetDiscoveryOwners,
   forgetLabOwners,
+  liveLabOwner,
   readDiscoveryOwners,
   readLabOwners,
   recordDiscoveryOwner,
@@ -97,6 +98,22 @@ describe("Lab owner records", () => {
     });
     await forgetLabOwners([exited], directory);
     expect((await readLabOwners(directory)).dead).toEqual(new Set([rebooted]));
+  });
+
+  it("names the pid of a Lab's living owner, and none for a dead or missing one (#592)", async () => {
+    const directory = await ownerDirectory();
+    const labId = randomUUID();
+    const record = await recordLabOwner({ labId, directory });
+    expect(await liveLabOwner(labId, directory)).toBe(process.pid);
+    const dead = randomUUID();
+    await writeFile(
+      join(directory, `${dead}.json`),
+      JSON.stringify({ schemaVersion: 1, labId: dead, owner: deadOwner }),
+    );
+    expect(await liveLabOwner(dead, directory)).toBeNull();
+    await record.release();
+    expect(await liveLabOwner(labId, directory)).toBeNull();
+    expect(await liveLabOwner("../escape", directory)).toBeNull();
   });
 
   it("treats an unreadable record as live: removal needs proof nobody owns the Lab", async () => {

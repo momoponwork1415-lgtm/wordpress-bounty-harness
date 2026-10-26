@@ -70,6 +70,8 @@ export type { CliState } from "./state.js";
 
 export type LabDownSummary = {
   readonly labId: string | null;
+  /** The foreground `lab up --for-review` process asked to close its Lab (#592). */
+  readonly ownerStopped?: number;
   readonly removed: {
     readonly containers: readonly string[];
     readonly networks: readonly string[];
@@ -177,7 +179,11 @@ export interface CliProfile {
     readonly administrator: unknown;
     readonly browserImage: string;
     /** Host loopback for a human's browser and curl; absent when the profile publishes none (#586). */
-    readonly host?: { readonly url: string; readonly hostHeader: string };
+    readonly host?: {
+      readonly url: string;
+      readonly hostHeader: string;
+      readonly port: number;
+    };
     close(): Promise<void>;
   }>;
   /** Profile-owned admission of an incomplete observation to a manual Lab. */
@@ -358,7 +364,7 @@ export interface CliProfile {
   httpEvidenceReader(state: CliState): HttpEvidenceReader;
   /** Reads the Verifier's steps and the victim-side observer record for `review export` (#437). */
   verifierRecordReader(state: CliState): VerifierRecordReader;
-  /** Removes the Lab an earlier `lab up` recorded; containers, networks and volumes. */
+  /** Removes the Lab `lab up --for-review` (or an earlier `lab up`) recorded; containers, networks and volumes. */
   labDown(
     state: CliState,
     input: { readonly configPath: string | null },
@@ -768,17 +774,23 @@ export async function runForegroundReviewLab(
         io.stdout(
           `review administrator: ${JSON.stringify(session.administrator)}`,
         );
-        if (session.host !== undefined)
+        if (session.host !== undefined) {
+          const { url, hostHeader, port } = session.host;
+          io.stdout(`host loopback: ${url} (Host header: ${hostHeader})`);
+          // The site redirects to its own name without a port, so a browser needs port 80 (#592).
           io.stdout(
-            `host loopback: ${session.host.url} (Host header: ${session.host.hostHeader})`,
+            port === 80
+              ? `browser: add the hosts line "127.0.0.1 ${hostHeader}" once, then open http://${hostHeader}/`
+              : `browser: port 80 is in use, so http://${hostHeader}/ is not reachable through a hosts line; start Chrome with --host-resolver-rules="MAP ${hostHeader} 127.0.0.1:${port}" and open http://${hostHeader}/`,
           );
+        }
         const shellQuote = (value: string) =>
           `'${value.replaceAll("'", "'\\''")}'`;
         io.stdout(
           `manual client: docker run --rm -it --runtime=runsc --network ${shellQuote(session.networkName)} --add-host ${shellQuote(`wordpress:${session.recorderIp}`)} --add-host ${shellQuote(`canary:${session.receiverIp}`)} --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs=/tmp:rw,nosuid,nodev,size=512m --entrypoint sh ${shellQuote(session.browserImage)}`,
         );
         io.stdout(
-          "Run the private reproduction steps in that client; interrupt this command to remove the Lab.",
+          "Run the private reproduction steps in that client; interrupt this command or run lab down to remove the Lab.",
         );
         // Printing is synchronous, so an interrupt raised while printing is already recorded here.
         if (!interrupted) await waitForInterrupt();
@@ -812,6 +824,9 @@ export function formatLabDown(summary: LabDownSummary): string[] {
     summary.labId === null
       ? "no lab recorded by lab up"
       : `lab ${summary.labId} down`,
+    ...(summary.ownerStopped === undefined
+      ? []
+      : [`  asked lab up process ${summary.ownerStopped} to close the Lab`]),
     `  ${count("containers")}`,
     `  ${count("networks")}`,
     `  ${count("volumes")}`,
