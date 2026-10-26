@@ -172,9 +172,11 @@ describe("review public interface", () => {
       await review.decide({ ...decision, ref, decision: "reject" });
       const queue = review.queue();
       expect(queue.items[0]?.decision).toBe("accept");
-      expect(
-        (await review.decisionReasons(queue.items)).get(queue.items[0]!),
-      ).toBe("current-review");
+      // The reason is the current decision's, not the later one on the old target.
+      expect((await review.listing()).rows[0]).toMatchObject({
+        item: { decision: "accept" },
+        decisionReason: "current-review",
+      });
       const exported = await exportReviewBundle({
         ledger,
         store: artifactStore,
@@ -1138,9 +1140,16 @@ describe("review queue and decisions", () => {
     const queue = review.queue({ campaignId: "campaign-1" });
     const item = queue.items.find((it) => it.ref.findingId === "finding-4");
     expect(item).toMatchObject({ status: "not-verified", decision: "reject" });
-    expect((await review.decisionReasons(queue.items)).get(item!)).toBe(
-      "out-of-scope",
-    );
+    expect(
+      (await review.listing({ campaignId: "campaign-1" })).rows.find(
+        (row) => row.item.ref.findingId === "finding-4",
+      ),
+    ).toMatchObject({
+      item: { status: "not-verified", decision: "reject" },
+      decisionReason: "out-of-scope",
+      duplicate: { status: "unavailable" },
+      manualObservationEvidence: null,
+    });
     // The count of unverified Findings and the funnel stay as they were.
     expect(queue.unverified).toBe(1);
     expect(ledger.funnel("campaign-1").reviewed).toBe(0);
