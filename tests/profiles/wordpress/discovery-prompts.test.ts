@@ -21,6 +21,7 @@ import {
   WORDPRESS_DISCOVERY_MODES,
   WORDPRESS_DISCOVERY_PROMPT_IDS,
   WORDPRESS_DISCOVERY_PROMPTS,
+  WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS,
   WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS,
   WORDPRESS_PROMPT_SECTIONS,
   WORDPRESS_TRUST_BOUNDARY,
@@ -69,7 +70,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(27);
+    expect(ids).toHaveLength(28);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -99,6 +100,16 @@ describe("WordPress prompt table", () => {
     // Archived rows carry no mode, so only a current row launches (ADR 0039).
     for (const row of WORDPRESS_DISCOVERY_PROMPTS)
       if (row.status === "archived") expect(row).not.toHaveProperty("mode");
+      else expect(row).toHaveProperty("mode");
+    // A candidate launches only when a campaign names it (DEVELOPMENT §5, #599).
+    expect(
+      WORDPRESS_DISCOVERY_PROMPTS.filter((row) => row.status === "candidate"),
+    ).toMatchObject([{ id: "wp2shell-bounty-v15-wide", mode: "wide" }]);
+    expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
+      "wp2shell-bounty-v11",
+      "wp2shell-bounty-v14-wide",
+      "wp2shell-bounty-v15-wide",
+    ]);
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
     ).toHaveLength(1);
@@ -136,9 +147,10 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       "wp2shell-bounty-v12-wide",
       "wp2shell-bounty-v13-wide",
       "wp2shell-bounty-v14-wide",
+      "wp2shell-bounty-v15-wide",
     ]);
     for (const row of WORDPRESS_DISCOVERY_PROMPTS.filter(
-      (entry) => entry.status === "current",
+      (entry) => entry.status !== "archived",
     ))
       expect(composed).toContain(row);
   });
@@ -155,6 +167,8 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
         "sha256:0dd2072b4c6a544d47ebb6df94c7981f2fbb758b4dee82e063896ff91f892bb8",
       "wp2shell-bounty-v14-wide":
         "sha256:42ec734364d93492bf9b936e415b94796da21fb154d3b29033cafbd58596229d",
+      "wp2shell-bounty-v15-wide":
+        "sha256:3e82116ebdd32e4e863d7daacf7a87d90c43f6c4e73efe49333668883fcf680d",
     } as const;
     for (const row of composed) {
       const bytes = (await promptBytes(row.id)).toString("utf8");
@@ -367,7 +381,8 @@ describe("WordPress discovery prompt assets", () => {
         expect(text).toContain("four specialist agents");
       else if (
         id === "wp2shell-bounty-v13-wide" ||
-        id === "wp2shell-bounty-v14-wide"
+        id === "wp2shell-bounty-v14-wide" ||
+        id === "wp2shell-bounty-v15-wide"
       )
         expect(text).toContain("one specialist agent per sink class");
       else expect(text).toMatch(/Lead|Finding/);
@@ -660,6 +675,62 @@ describe("WordPress discovery prompt assets", () => {
     );
   });
 
+  it("makes v15-wide the v14-wide objective plus the Lab hand-on sentence, with both judge sentences naming the human's review Lab observation (#599, #555)", async () => {
+    const rows = WORDPRESS_DISCOVERY_PROMPTS.filter(
+      (row) => "fragments" in row,
+    );
+    const v14 = rows.find((row) => row.id === "wp2shell-bounty-v14-wide")!;
+    const v15 = rows.find((row) => row.id === "wp2shell-bounty-v15-wide")!;
+    expect(v15.fragments).toHaveLength(v14.fragments.length);
+    expect(
+      v15.fragments.flatMap((fragment, index) =>
+        fragment.section === v14.fragments[index]!.section &&
+        fragment.file === v14.fragments[index]!.file
+          ? []
+          : [index],
+      ),
+    ).toEqual([0, 7]);
+    expect(v15.fragments[0]).toEqual({
+      section: "objective",
+      file: "task-v15",
+    });
+    expect(v15.fragments[7]).toEqual({
+      section: "coordination",
+      file: "fixed-v15",
+    });
+
+    const labSentence =
+      "When the Trial has a Lab, the root agent copies the `## Lab` section supplied by the Harness, unchanged, into the instructions of every agent it starts.";
+    const replacements = [
+      [
+        "Runtime confirmation belongs only to the later, independent Harness-owned deterministic judge, which must observe the corresponding nonce canary outcome in a fresh Lab.",
+        "Runtime confirmation is made later only by a named human's recorded observation in a review Lab.",
+      ],
+      [
+        "Runtime confirmation is decided later by the independent Harness judge, not by the discovery agents.",
+        `${labSentence} Runtime confirmation is made later only by a named human's recorded observation in a review Lab, not by the discovery agents.`,
+      ],
+    ] as const;
+    let expected = (
+      await loadWordPressDiscoveryAsset("wp2shell-bounty-v14-wide")
+    ).text;
+    for (const [before, after] of replacements) {
+      expect(expected.split(before)).toHaveLength(2);
+      expected = expected.replace(before, after);
+    }
+    const text = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v15-wide"))
+      .text;
+    expect(text).toBe(expected);
+
+    // The sentence sits in the root agent's paragraph; "Stop when" stays last.
+    const paragraphs = text.trim().split(/\n\s*\n/);
+    expect(paragraphs.at(-2)).toMatch(/^The root agent assigns/);
+    expect(paragraphs.at(-2)).toContain(labSentence);
+    expect(paragraphs.at(-1)).toMatch(/^Stop when/);
+    expect(text.split(labSentence)).toHaveLength(2);
+    expect(text).not.toMatch(/\bjudge\b|canary/i);
+  });
+
   it("keeps the v2 method in v3 without an effort floor or handwritten output contract", async () => {
     const { text } = await loadWordPressDiscoveryAsset("wp2shell-bounty-v3");
     expect(text).toContain(
@@ -917,7 +988,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v11-wide" ||
         id === "wp2shell-bounty-v12-wide" ||
         id === "wp2shell-bounty-v13-wide" ||
-        id === "wp2shell-bounty-v14-wide"
+        id === "wp2shell-bounty-v14-wide" ||
+        id === "wp2shell-bounty-v15-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).
