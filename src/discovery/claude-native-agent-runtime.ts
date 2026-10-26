@@ -17,6 +17,7 @@ import {
   type DiscoveryTransportResult,
   type DiscoveryTransportRun,
 } from "./codex-native-agent-runtime.js";
+import { isGvisorIsolation } from "./gvisor-container.js";
 import {
   CHILD_ID,
   CHILD_TRANSCRIPT,
@@ -694,62 +695,58 @@ export class ClaudeNativeAgentRuntime {
     ].some((model) => model !== run.profile.requestedModelId)
       ? { reason: "policy", detail: "root-profile-mismatch" }
       : undefined;
-    const failure: Failure | undefined =
-      result.isolation.backend !== "gvisor" ||
-      result.isolation.runtime !== "runsc" ||
-      result.isolation.fallbackUsed !== false
-        ? { reason: "sandbox", detail: "isolation-mismatch" }
-        : result.image !== this.sandboxImage ||
-            run.profile.transportKind !== "claude-code/v1" ||
-            result.cliVersion !== run.profile.claudeCliVersion
-          ? { reason: "policy", detail: "claude-image-mismatch" }
-          : (brokerMetrics?.requestLimitExceeded ?? 0) > 0
-            ? { reason: "policy", detail: "broker-request-cap" }
-            : (rootModelMismatch ??
-              claudeProviderFailure(events, rootEvents) ??
-              (result.failureKind === "timed-out"
-                ? { reason: "wall" }
-                : result.failureKind === "cancelled"
-                  ? { reason: "operator" }
-                  : result.status !== "exited" || result.exitCode !== 0
+    const failure: Failure | undefined = !isGvisorIsolation(result.isolation)
+      ? { reason: "sandbox", detail: "isolation-mismatch" }
+      : result.image !== this.sandboxImage ||
+          run.profile.transportKind !== "claude-code/v1" ||
+          result.cliVersion !== run.profile.claudeCliVersion
+        ? { reason: "policy", detail: "claude-image-mismatch" }
+        : (brokerMetrics?.requestLimitExceeded ?? 0) > 0
+          ? { reason: "policy", detail: "broker-request-cap" }
+          : (rootModelMismatch ??
+            claudeProviderFailure(events, rootEvents) ??
+            (result.failureKind === "timed-out"
+              ? { reason: "wall" }
+              : result.failureKind === "cancelled"
+                ? { reason: "operator" }
+                : result.status !== "exited" || result.exitCode !== 0
+                  ? {
+                      reason:
+                        result.status === "failed" || result.exitCode === 137
+                          ? "sandbox"
+                          : "provider",
+                      detail:
+                        result.failureKind ?? `claude-exit:${result.exitCode}`,
+                    }
+                  : diagnostic === undefined ||
+                      result.researchFailure !== undefined ||
+                      research === undefined
                     ? {
-                        reason:
-                          result.status === "failed" || result.exitCode === 137
-                            ? "sandbox"
-                            : "provider",
-                        detail:
-                          result.failureKind ??
-                          `claude-exit:${result.exitCode}`,
+                        reason: "evidence",
+                        detail: "research-capture-failed",
                       }
-                    : diagnostic === undefined ||
-                        result.researchFailure !== undefined ||
-                        research === undefined
+                    : result.transcriptFailure !== undefined ||
+                        !transcriptsSealed
                       ? {
                           reason: "evidence",
-                          detail: "research-capture-failed",
+                          detail: "transcript-capture-failed",
                         }
-                      : result.transcriptFailure !== undefined ||
-                          !transcriptsSealed
+                      : grant.cleanup.status !== "completed"
                         ? {
-                            reason: "evidence",
-                            detail: "transcript-capture-failed",
+                            reason: "provider",
+                            detail: "broker-cleanup-failed",
                           }
-                        : grant.cleanup.status !== "completed"
+                        : attachment === undefined
                           ? {
-                              reason: "provider",
-                              detail: "broker-cleanup-failed",
+                              reason: "schema",
+                              detail: "root-report-unreadable",
                             }
-                          : attachment === undefined
+                          : !(activeMs >= run.minimumActiveMs!)
                             ? {
-                                reason: "schema",
-                                detail: "root-report-unreadable",
+                                reason: "policy",
+                                detail: "early-final-before-minimum",
                               }
-                            : !(activeMs >= run.minimumActiveMs!)
-                              ? {
-                                  reason: "policy",
-                                  detail: "early-final-before-minimum",
-                                }
-                              : undefined));
+                            : undefined));
     return {
       ...(attachment === undefined ? {} : { attachment }),
       ...(research === undefined || result.research === undefined

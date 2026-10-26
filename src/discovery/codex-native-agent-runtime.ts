@@ -7,6 +7,7 @@ import {
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
 import { campaignInputV1Schema, type CampaignInputV1 } from "./campaign.js";
+import { isGvisorIsolation } from "./gvisor-container.js";
 import {
   admitAgentRuntimeProfile,
   admitCooperativeRuntimeProfile,
@@ -1503,12 +1504,7 @@ function sandboxAdmissionFailure(
   run: DiscoveryTransportRun,
   sandboxImage: string,
 ): "sandbox" | "policy" | undefined {
-  if (
-    result.isolation.backend !== "gvisor" ||
-    result.isolation.runtime !== "runsc" ||
-    result.isolation.fallbackUsed !== false
-  )
-    return "sandbox";
+  if (!isGvisorIsolation(result.isolation)) return "sandbox";
   if (
     result.image !== sandboxImage ||
     result.cliVersion !== run.profile.codexCliVersion ||
