@@ -71,7 +71,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(29);
+    expect(ids).toHaveLength(30);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -95,7 +95,7 @@ describe("WordPress prompt table", () => {
     ).toHaveLength(WORDPRESS_DISCOVERY_MODES.length);
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
       deep: "wp2shell-bounty-v11",
-      wide: "wp2shell-bounty-v16-wide",
+      wide: "wp2shell-bounty-v17-wide",
     });
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v11");
     // Archived rows carry no mode, so only a current row launches (ADR 0039).
@@ -109,7 +109,7 @@ describe("WordPress prompt table", () => {
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v11",
       "wp2shell-bounty-v15-wide",
-      "wp2shell-bounty-v16-wide",
+      "wp2shell-bounty-v17-wide",
     ]);
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
@@ -150,6 +150,7 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       "wp2shell-bounty-v14-wide",
       "wp2shell-bounty-v15-wide",
       "wp2shell-bounty-v16-wide",
+      "wp2shell-bounty-v17-wide",
     ]);
     for (const row of WORDPRESS_DISCOVERY_PROMPTS.filter(
       (entry) => entry.status !== "archived",
@@ -173,6 +174,8 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
         "sha256:3e82116ebdd32e4e863d7daacf7a87d90c43f6c4e73efe49333668883fcf680d",
       "wp2shell-bounty-v16-wide":
         "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
+      "wp2shell-bounty-v17-wide":
+        "sha256:9a32ddcf2083c8e82952907742823bfaa29f8068d346132206b87cf412165bc9",
     } as const;
     for (const row of composed) {
       const bytes = (await promptBytes(row.id)).toString("utf8");
@@ -218,7 +221,7 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
     const byId = (id: string) => files(composed.find((row) => row.id === id)!);
     const [deep, wide] = [
       byId("wp2shell-bounty-v11"),
-      byId("wp2shell-bounty-v16-wide"),
+      byId("wp2shell-bounty-v17-wide"),
     ];
     expect(deep.filter((file) => wide.includes(file))).toEqual([
       "objective/task-v10",
@@ -471,7 +474,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v13-wide" ||
         id === "wp2shell-bounty-v14-wide" ||
         id === "wp2shell-bounty-v15-wide" ||
-        id === "wp2shell-bounty-v16-wide"
+        id === "wp2shell-bounty-v16-wide" ||
+        id === "wp2shell-bounty-v17-wide"
       )
         expect(text).toContain("one specialist agent per sink class");
       else expect(text).toMatch(/Lead|Finding/);
@@ -858,6 +862,56 @@ describe("WordPress discovery prompt assets", () => {
     ).toMatch(/^Stop when/);
   });
 
+  it("makes v17-wide the v16-wide objective with only the plausible-setting sentence and the root's reporting sentence replaced (owner decision 2026-10-27)", async () => {
+    const rows = WORDPRESS_DISCOVERY_PROMPTS.filter(
+      (row) => "fragments" in row,
+    );
+    const v16 = rows.find((row) => row.id === "wp2shell-bounty-v16-wide")!;
+    const v17 = rows.find((row) => row.id === "wp2shell-bounty-v17-wide")!;
+    expect(v17.fragments).toHaveLength(v16.fragments.length);
+    expect(
+      v17.fragments.flatMap((fragment, index) =>
+        fragment.section === v16.fragments[index]!.section &&
+        fragment.file === v16.fragments[index]!.file
+          ? []
+          : [index],
+      ),
+    ).toEqual([2, 7]);
+    expect(v17.fragments[2]).toEqual({
+      section: "strategy",
+      file: "sinks-v17",
+    });
+    expect(v17.fragments[7]).toEqual({
+      section: "coordination",
+      file: "fixed-v17",
+    });
+
+    const settingBefore =
+      "Behaviour that depends on a plugin setting an administrator can enable is in scope when a typical site may plausibly enable it; state the setting as the precondition.";
+    const settingAfter =
+      "Behaviour that depends on a plugin setting an administrator can enable is in scope when a typical site may plausibly enable it; a field, column, query condition, template, snippet or setting that an administrator would have to create unsafely is not a plausible configuration. State the setting as the precondition.";
+    const rootBefore =
+      "The root agent assigns one sink class to each specialist, merges duplicate routes, and ensures that a source-grounded chain is reported even when an uncertainty remains, with that uncertainty stated; the later human review tolerates some false positives, and a missed route is the costlier error.";
+    const rootAfter =
+      "The root agent assigns one sink class to each specialist, merges duplicate routes, and ensures that every source-grounded chain the specialists found is reported either as a Finding or as a Lead. A chain is a Finding only when the source shows both that the attacker can place the input and that the sink is reachable on a typical site; when either is uncertain, it is a Lead with the uncertainty stated, not a Finding.";
+    const old = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v16-wide"))
+      .text;
+    expect(old.split(settingBefore)).toHaveLength(2);
+    expect(old.split(rootBefore)).toHaveLength(2);
+    const text = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v17-wide"))
+      .text;
+    expect(text).toBe(
+      old.replace(settingBefore, settingAfter).replace(rootBefore, rootAfter),
+    );
+    expect(text).not.toContain("tolerates some false positives");
+    expect(
+      text
+        .trim()
+        .split(/\n\s*\n/)
+        .at(-1),
+    ).toMatch(/^Stop when/);
+  });
+
   it("keeps the v2 method in v3 without an effort floor or handwritten output contract", async () => {
     const { text } = await loadWordPressDiscoveryAsset("wp2shell-bounty-v3");
     expect(text).toContain(
@@ -1117,7 +1171,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v13-wide" ||
         id === "wp2shell-bounty-v14-wide" ||
         id === "wp2shell-bounty-v15-wide" ||
-        id === "wp2shell-bounty-v16-wide"
+        id === "wp2shell-bounty-v16-wide" ||
+        id === "wp2shell-bounty-v17-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).

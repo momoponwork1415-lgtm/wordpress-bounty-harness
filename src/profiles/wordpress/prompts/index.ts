@@ -348,8 +348,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
     outputContract: "v5",
-    status: "current",
-    mode: "wide",
+    status: "archived",
     // v14-wide with one sentence of the sink strategy replaced (owner
     // instruction 2026-10-26: content only the vendor can place is not
     // attacker input): third-party content is attacker-placeable only when
@@ -363,6 +362,31 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
       { section: "coordination", file: "handover-v11" },
       SOURCES,
       { section: "coordination", file: "fixed-v14" },
+      { section: "coordination", file: "stop-wide-v13" },
+    ],
+  },
+  {
+    id: "wp2shell-bounty-v17-wide",
+    digest:
+      "sha256:9a32ddcf2083c8e82952907742823bfaa29f8068d346132206b87cf412165bc9",
+    outputContract: "v5",
+    status: "current",
+    mode: "wide",
+    // v16-wide with three sentences replaced (owner decision 2026-10-27:
+    // when in doubt, report a Lead, not a Finding): sinks-v17 says a field,
+    // column, query condition, template, snippet or setting an administrator
+    // would have to create unsafely is not a plausible configuration, and
+    // fixed-v17 reports every chain as a Finding or a Lead, a Finding only
+    // when the source shows both attacker placement and typical-site reach.
+    fragments: [
+      TASK,
+      { section: "objective", file: "first-principles-v11" },
+      { section: "strategy", file: "sinks-v17" },
+      { section: "strategy", file: "shapes-v12" },
+      { section: "persistence", file: "research-v11" },
+      { section: "coordination", file: "handover-v11" },
+      SOURCES,
+      { section: "coordination", file: "fixed-v17" },
       { section: "coordination", file: "stop-wide-v13" },
     ],
   },
