@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { canonicalJson } from "../../../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
 import { admitFindingGroup } from "../../../ledger/finding-groups.js";
 import type { Ledger } from "../../../ledger/index.js";
@@ -13,6 +14,11 @@ type RestoreOptions = {
   readonly campaignId: string;
   readonly findingId: string;
   readonly clock?: () => Date;
+  /**
+   * #529: who restored it and why. Kept in Private Evidence and referenced from
+   * the marker's artifacts, so the event shape that older runners read stays.
+   */
+  readonly note?: { readonly restoredBy: string; readonly reason: string };
 };
 
 async function assessCorrection(options: RestoreOptions) {
@@ -161,13 +167,31 @@ export async function restoreParkedWordPressFinding(
     if (appended.status === "conflict")
       throw new Error("Restored Finding identity conflict");
   }
+  const occurredAt = (options.clock ?? (() => new Date()))().toISOString();
+  const note =
+    options.note === undefined
+      ? []
+      : [
+          {
+            kind: "restore-note",
+            digest: await options.evidence.putFiles({
+              "restore-note.json": canonicalJson({
+                findingId,
+                parkedIdentity: parked.identity,
+                restoredBy: options.note.restoredBy,
+                reason: options.note.reason,
+                restoredAt: occurredAt,
+              }),
+            }),
+          },
+        ];
   const marker = await ledger.append({
     schemaVersion: 1,
     identity: `discovery-finding-park-restored-${findingId}`,
     campaignId,
     snapshotDigest: parked.snapshotDigest,
-    occurredAt: (options.clock ?? (() => new Date()))().toISOString(),
-    artifacts: [reference],
+    occurredAt,
+    artifacts: [reference, ...note],
     type: "finding-park-restored",
     findingId,
     parkedIdentity: parked.identity,
