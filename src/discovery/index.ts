@@ -151,7 +151,11 @@ export {
   type RecordedRuntime,
   type RecordedRuntimeGroup,
 } from "./recorded-runtimes.js";
-export { readPathsFromCommands, recordReadPaths } from "./read-paths.js";
+export {
+  readPathsFromCommands,
+  recordReadPaths,
+  type LabCommandRule,
+} from "./read-paths.js";
 export {
   SANDBOX_RESEARCH_MOUNT_PATH,
   SANDBOX_SOURCE_MOUNT_PATH,

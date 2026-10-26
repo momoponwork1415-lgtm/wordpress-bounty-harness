@@ -42,6 +42,7 @@ import {
   openWordPressOrgTargetSource,
 } from "../profiles/wordpress/acquisition/index.js";
 import { mountedWordPressSourcePack } from "../profiles/wordpress/acquisition/mounted-source-pack.js";
+import { wordPressLabCommandRule } from "../profiles/wordpress/discovery/lab-commands.js";
 import { openWordPressLab } from "../profiles/wordpress/lab/index.js";
 import { observedReviewLabPackage } from "../profiles/wordpress/lab/observed-review-lab.js";
 import { openWordPressReviewLab } from "../profiles/wordpress/lab/review-lab.js";
@@ -453,6 +454,7 @@ export async function createWordPressHostProfile(options: {
       }),
       attachments,
       host.images.codex,
+      wordPressLabCommandRule,
       state.clock,
     );
     const claude =
@@ -823,6 +825,7 @@ async function claudeBoundary(options: {
       }),
       options.attachments,
       claude.image,
+      wordPressLabCommandRule,
       options.clock,
     ),
   };

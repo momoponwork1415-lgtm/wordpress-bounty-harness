@@ -35,6 +35,7 @@ import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-s
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
 import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/candidate-admission.js";
+import { wordPressLabCommandRule } from "../../src/profiles/wordpress/discovery/lab-commands.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const catalog = `sha256:${"b".repeat(64)}`;
@@ -355,6 +356,7 @@ async function fixture() {
       broker(),
       attachments,
       image,
+      wordPressLabCommandRule,
       () => new Date(T0),
     );
     const running = runtimeA.execute(
@@ -382,6 +384,7 @@ async function fixture() {
       broker(),
       attachments,
       image,
+      wordPressLabCommandRule,
       () => new Date(T0),
     );
   const recover = (owner: SandboxOwner, alive: (pid: number) => boolean) =>
@@ -424,6 +427,7 @@ async function fixture() {
           broker(),
           attachments,
           image,
+          wordPressLabCommandRule,
           () => new Date(T0),
         ),
         seen: new Set(),

@@ -19,6 +19,16 @@ export type ObservedCommand = {
   readonly parsed?: readonly unknown[];
 };
 
+/**
+ * The profile's rule for which observed command lines reached its Lab
+ * (ADR 0011). The runtimes count them into `observed.labRequests` and
+ * `observed.dbQueries` without knowing the Lab's host names or clients.
+ */
+export interface LabCommandRule {
+  isLabRequest(command: string): boolean;
+  isDatabaseQuery(command: string): boolean;
+}
+
 type Loose = { [key: string]: unknown } | null | undefined;
 
 /**
