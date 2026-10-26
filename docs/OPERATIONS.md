@@ -208,7 +208,7 @@ harness review outcome --candidate <id> --outcome triaged|resolved|duplicate|inf
 ```
 
 - `export` は Finding（claim / attackerPosition / brokenProperty / impact）、HTTP の method / path / status 行、反証メモ、検証 Lab の実行前後差分の要約（option 名と digest、ユーザーの役割、テーブル件数と checksum）、探索した版と台帳が知る最新版、install 数、Private Evidence の path を 1 本の JSON にまとめる。候補本文、payload、HTTP 本文、option 値は path と digest でだけ参照し、stdout に値を出さない。
-- `review parked` の reason は `outside-programme-boundary`（影響分類が対象外）と `admin-configuration-precondition`（特定値または非既定の管理者設定が前提）の 2 種類。どちらも Finding の Private Evidence を保持し、検証・review queue に入れない。
+- `review parked` の reason は `outside-programme-boundary`（影響分類が対象外）、`admin-configuration-precondition`（特定値または非既定の管理者設定が前提。旧規則の park だけ）、`external-service-precondition`（サイトが API キーやアカウントで外部サービスにつながっていて、攻撃者の入力がそのサービスの応答にしか無い前提。#612）の 3 種類。どれも Finding の Private Evidence を保持し、検証・review queue に入れない。
 - `review held` は、正規化しても schema を通らなかった Finding 候補（ADR 0018）を 1 行ずつ出す。並べるのは impact 分類、生の candidate の digest と path、run ID と候補番号、issue path（2026-10-20 以降の event では zod の issue code も）だけで、本文は出さない。同じ候補が後で正規化し直されたものは出さない。
 - `decide --minutes` は人間がその項目に使った時間を `human-effort-recorded` に分で、`review-decided` に `humanElapsedSeconds` として残す。決定は検証 ID、探索 run ID、prompt digest に結び付いて記録され、提出から run と prompt まで辿れる。検証の前の Finding（`review` に `not-verified` で並ぶもの）にも記録でき、その記録は検証 ID を持たない（#436）。落とした判断を取り消すときは、別の判断（`defer` など）を記録する。最新の判断が `reject` でなくなれば、Finding は handoff 列に戻る。
 - `scope` は検証の証拠（判定器があった時期の記録を含む）と選定記録から事実を読む。最新版での確認が要るプログラムは、`reverify` が `runtime-confirmed` を返した後でだけ満たされる。

@@ -92,10 +92,13 @@ async function recordFinding(
     category: finding.impact,
     preconditionClass,
   };
-  // Programme Boundary の外にある効果だけを入口で止める。設定の受理可否は検証後に判断する。
+  // Programme Boundary の外にある効果と、攻撃者の入力が外部サービスの応答にしか無い前提を入口で止める（#612）。
+  // 管理者設定の受理可否は検証後に判断する。
   const parkReason = !isWordPressProgrammeImpact(finding.impact)
     ? "outside-programme-boundary"
-    : undefined;
+    : preconditionClass === "external-service"
+      ? "external-service-precondition"
+      : undefined;
   if (parkReason !== undefined) {
     const status = await appendEvent(
       options,

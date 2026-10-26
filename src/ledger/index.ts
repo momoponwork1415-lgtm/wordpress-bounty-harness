@@ -441,6 +441,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     reason: z.enum([
       "outside-programme-boundary",
       "admin-configuration-precondition",
+      "external-service-precondition",
     ]),
     preconditionClass: id.optional(),
   }),

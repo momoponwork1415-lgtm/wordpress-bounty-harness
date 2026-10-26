@@ -452,6 +452,7 @@ export class Review<TFacts = unknown> {
       default: 0,
       "common-usage": 0,
       "admin-configuration": 0,
+      "external-service": 0,
       unknown: 0,
     };
     for (const event of parkedEvents.values()) {

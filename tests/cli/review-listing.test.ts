@@ -212,7 +212,7 @@ describe("review listing on recorded history", () => {
         decision: defer
         duplicate: none
       incomplete by reason: awaiting-human-observation 1
-      precondition class: admin-configuration 0, common-usage 0, default 4, unknown 0
+      precondition class: admin-configuration 0, common-usage 0, default 4, external-service 0, unknown 0
       retry candidates by reason: none
       contradicted: 0  unverified: 2"
     `);
@@ -238,7 +238,7 @@ describe("review listing on recorded history", () => {
         decision: defer (awaiting-observation)
         duplicate: no-match  checked 2026-10-08T00:00:00.000Z
       incomplete by reason: awaiting-human-observation 1
-      precondition class: admin-configuration 0, common-usage 0, default 2, unknown 0
+      precondition class: admin-configuration 0, common-usage 0, default 2, external-service 0, unknown 0
       retry candidates by reason: none
       contradicted: 0  unverified: 0"
     `);
@@ -255,7 +255,7 @@ describe("review listing on recorded history", () => {
         decision: defer
         duplicate: none
       incomplete by reason: none
-      precondition class: admin-configuration 0, common-usage 0, default 2, unknown 0
+      precondition class: admin-configuration 0, common-usage 0, default 2, external-service 0, unknown 0
       retry candidates by reason: none
       contradicted: 0  unverified: 2"
     `);
@@ -292,7 +292,7 @@ describe("review listing on recorded history", () => {
         decision: none
         duplicate: none
       incomplete by reason: awaiting-human-observation 1
-      precondition class: admin-configuration 0, common-usage 0, default 2, unknown 0
+      precondition class: admin-configuration 0, common-usage 0, default 2, external-service 0, unknown 0
       retry candidates by reason: none
       contradicted: 0  unverified: 0"
     `);
@@ -300,7 +300,7 @@ describe("review listing on recorded history", () => {
       .toMatchInlineSnapshot(`
       "review queue is empty
       incomplete by reason: none
-      precondition class: admin-configuration 0, common-usage 0, default 0, unknown 0
+      precondition class: admin-configuration 0, common-usage 0, default 0, external-service 0, unknown 0
       retry candidates by reason: none
       contradicted: 0  unverified: 0"
     `);

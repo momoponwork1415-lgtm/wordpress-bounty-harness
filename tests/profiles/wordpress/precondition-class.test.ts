@@ -143,4 +143,50 @@ describe("Harness-owned WordPress precondition classification", () => {
       }).preconditionClass,
     ).toBe("unknown");
   });
+
+  it("separates a precondition whose attacker input only exists in an outside service (#612)", () => {
+    const external = (configurationPrecondition: string) =>
+      classifyWordPressPrecondition({ configurationPrecondition })
+        .preconditionClass;
+    expect(
+      external(
+        "The plugin is active and a valid API key is configured in its settings.",
+      ),
+    ).toBe("external-service");
+    expect(
+      external(
+        "The site's Brevo-style account is connected and a public form is published.",
+      ),
+    ).toBe("external-service");
+    expect(
+      external(
+        "The attacker must control the vulnerability title delivered by the scanner API.",
+      ),
+    ).toBe("external-service");
+    expect(
+      classifyWordPressPrecondition({
+        configurationPrecondition: "default",
+        attachmentPrecondition:
+          "The remote access token is set up by the administrator.",
+      }).preconditionClass,
+    ).toBe("external-service");
+  });
+
+  it("does not read an ordinary account or a plain declaration as an outside service (#612)", () => {
+    expect(
+      classifyWordPressPrecondition({
+        configurationPrecondition:
+          "The attacker has a normal Subscriber account. The selected local PHP file must exist.",
+      }).preconditionClass,
+    ).not.toBe("external-service");
+    expect(
+      classifyWordPressPrecondition({ configurationPrecondition: "default" }),
+    ).toEqual({ preconditionClass: "default" });
+    expect(
+      classifyWordPressPrecondition({
+        configurationPrecondition:
+          "An administrator sets the block's Password protected visibility setting to password-protected.",
+      }).preconditionClass,
+    ).toBe("admin-configuration");
+  });
 });

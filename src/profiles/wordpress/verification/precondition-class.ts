@@ -4,6 +4,7 @@ export const preconditionClassSchema = z.enum([
   "default",
   "common-usage",
   "admin-configuration",
+  "external-service",
   "unknown",
 ]);
 export type PreconditionClass = z.infer<typeof preconditionClassSchema>;
@@ -59,6 +60,16 @@ function affirmativeAdminSetting(statement: string): boolean {
       }),
   );
 }
+/**
+ * #612: the site is connected to an outside service by a key or an account.
+ * `exist` is not a verb here, so an ordinary account sentence never matches.
+ */
+const EXTERNAL_CONNECTION =
+  /\b(?:API keys?|credentials|access tokens?|[\w-]+ accounts?)\b[^.;!?]{0,12}?\b(?:(?:is|are)\s+)?(?:configured|connected|set up|activated|valid)\b/i;
+/** #612: the attacker reaches the sink only through what an outside service returns. */
+const ATTACKER_CONTROLS_REMOTE =
+  /\battacker(?:['’]s)?\s+(?:must|needs? to|has to|would (?:need|have) to)\s+(?:control|influence|alter|compromise|supply|operate|own)\b.{0,80}?\b(?:API|scanner|service|feed|response|upstream|remote|vendor|provider|WAF|firewall)\b/i;
+
 /** These are ordinary content operations; they are not arbitrary plugin settings. */
 const COMMON_USAGE =
   /(?:public|published|公開).{0,60}(?:post|page|block|slider|widget|投稿|ページ|ブロック|スライダー|ウィジェット)|(?:post|page|block|slider|widget|投稿|ページ|ブロック|スライダー|ウィジェット).{0,60}(?:public|published|公開)|(?:place|insert|add|render|publish|create|置く|配置|挿入|作成).{0,30}(?:block|slider|widget|ブロック|スライダー|ウィジェット)/i;
@@ -77,6 +88,14 @@ export function classifyWordPressPrecondition(input: {
         typeof value === "string" && value.trim().length > 0,
     )
     .map((value) => value.trim());
+  if (
+    statements.some(
+      (statement) =>
+        EXTERNAL_CONNECTION.test(statement) ||
+        ATTACKER_CONTROLS_REMOTE.test(statement),
+    )
+  )
+    return { preconditionClass: "external-service" };
   if (
     statements.some(
       (statement) =>

@@ -653,6 +653,22 @@ it("records an in-scope Finding with an admin setting for validation", async () 
   expect(ledger.funnel("campaign-1")).toMatchObject({ parked: 0, raw: 1 });
 });
 
+it("parks an in-scope Finding whose attacker input only exists in an outside service (#612)", async () => {
+  const { result, ledger } = await campaign([0], {
+    precondition:
+      "A valid API key is configured and the attacker must control the response of the remote scanner API.",
+  });
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(0);
+  const parked = ledger.read({ type: "finding-parked" });
+  expect(parked).toHaveLength(1);
+  expect(parked[0]?.event).toMatchObject({
+    reason: "external-service-precondition",
+    preconditionClass: "external-service",
+  });
+  expect(result.findingsRecorded).toBe(0);
+  expect(ledger.funnel("campaign-1")).toMatchObject({ parked: 1, raw: 0 });
+});
+
 it("stamps each event with the time it was recorded and the Finding with its Trial (#212, A2)", async () => {
   const { ledger } = await campaign([], {
     childSurvivesBrokenRoot: true,

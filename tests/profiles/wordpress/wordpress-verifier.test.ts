@@ -326,6 +326,36 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
     expect(f.ledger.read({ type: "finding-parked" })).toHaveLength(0);
   });
 
+  it.each([
+    [true, /^external-service-precondition:sha256:[a-f0-9]{64}$/],
+    [false, /^external-service-precondition$/],
+  ])(
+    "names an outside-service precondition the files disclose (setup-capable=%s, #612)",
+    async (setupPreconditions, expected) => {
+      const f = await fixture({
+        setupPreconditions,
+        outcome: {
+          status: "files",
+          files: {
+            precondition:
+              "The attacker must control the response of the remote feed.",
+          },
+        },
+      });
+      const attempt = await f.attempt();
+      expect(attempt).toMatchObject({
+        status: "incomplete",
+        reason: "precondition",
+      });
+      if (attempt.status !== "incomplete") return;
+      expect(attempt.nextStep).toMatch(expected);
+      expect(
+        f.ledger.read({ type: "finding-precondition-classified" }).at(-1)
+          ?.event,
+      ).toMatchObject({ preconditionClass: "external-service" });
+    },
+  );
+
   it("retains a handoff abort precondition privately and returns a whitelisted code with its digest", async () => {
     const privateDetail = "Private setup failure detail for this attempt";
     const f = await fixture({

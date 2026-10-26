@@ -143,6 +143,8 @@ function unmetPreconditionCode(classification: ClassifiedPrecondition): string {
   switch (classification.preconditionClass) {
     case "admin-configuration":
       return "admin-configuration-precondition";
+    case "external-service":
+      return "external-service-precondition";
     case "common-usage":
       return "common-usage-precondition";
     case "default":
@@ -382,7 +384,8 @@ export class WordPressVerifier implements Verifier<
     });
     if (
       record.preconditionClass !== initialPrecondition.preconditionClass ||
-      initialPrecondition.preconditionClass === "admin-configuration"
+      initialPrecondition.preconditionClass === "admin-configuration" ||
+      initialPrecondition.preconditionClass === "external-service"
     )
       await this.#recordPrecondition(
         campaignId,
@@ -504,8 +507,9 @@ export class WordPressVerifier implements Verifier<
         reason: "precondition",
         nextStep:
           detailDigest === undefined
-            ? classified.preconditionClass === "admin-configuration"
-              ? "admin-configuration-precondition"
+            ? classified.preconditionClass === "admin-configuration" ||
+              classified.preconditionClass === "external-service"
+              ? unmetPreconditionCode(classified)
               : "catalogue に無い前提"
             : `${unmetPreconditionCode(classified)}:${detailDigest}`,
       };
