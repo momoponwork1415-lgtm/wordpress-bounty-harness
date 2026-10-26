@@ -1120,9 +1120,16 @@ const COMMANDS: readonly Command[] = [
         return 0;
       }
       for (const target of summary.targets) {
+        const failure = target.labFailure;
         io.stdout(
-          `${target.targetId} ${target.version}  snapshot ${target.snapshotDigest}  lab ${target.lab}  runs ${target.runCount}  stopped by ${target.stoppedBy}`,
+          `${target.targetId} ${target.version}  snapshot ${target.snapshotDigest}  lab ${target.lab}  runs ${target.runCount}  stopped by ${target.stoppedBy}${
+            failure === undefined
+              ? ""
+              : `  failed at ${failure.failureStage} (${failure.reason})  diagnostic ${failure.diagnosticDigest.slice("sha256:".length, "sha256:".length + 12)}`
+          }`,
         );
+        if (failure !== undefined)
+          io.stdout(`  next step: ${failure.nextStep}`);
         for (const verification of target.verifications)
           io.stdout(
             `  finding ${verification.findingId}: ${verification.status}`,
@@ -1135,8 +1142,12 @@ const COMMANDS: readonly Command[] = [
       print(formatFunnel(state.ledger.funnel(summary.campaignId)));
       // A distinct exit code lets an unattended schedule tell a resumable stop apart.
       if (summary.stopped !== undefined) return 3;
-      // Every target skipped is a failure, not a quiet zero runs (#281).
-      return summary.targets.length === 0 ? 1 : 0;
+      // Every target skipped (#281) or a Lab that could not be set up (#284)
+      // is a failure, not a quiet zero.
+      return summary.targets.length === 0 ||
+        summary.targets.some((target) => target.stoppedBy === "setup-failed")
+        ? 1
+        : 0;
     },
   }),
   continuousRow(

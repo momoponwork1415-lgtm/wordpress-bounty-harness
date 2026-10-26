@@ -179,6 +179,8 @@ async function harness(
     /** Plugin sources sealed in the original and control Snapshots. */
     readonly snapshotPluginDependencies?: Readonly<Record<string, string>>;
     readonly legacyHistoryUnavailable?: boolean;
+    /** While it returns an error, the Lab's source resolution throws it inside provision. */
+    readonly labProvisionError?: () => Error | undefined;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
@@ -286,20 +288,24 @@ async function harness(
       recorder: `node-recorder@${sha("5")}`,
     },
     source: {
-      resolve: async (snapshot) => ({
-        target: {
-          kind: "plugin",
-          pluginSlug: "synthetic-plugin",
-          sourceDirectory,
-          sourceTree: tree,
-        },
-        dependencies: snapshot.dependencies.map((dependency) => ({
-          kind: "plugin" as const,
-          pluginSlug: dependency.identity.slice("wporg:".length),
-          sourceDirectory,
-          sourceTree: tree,
-        })),
-      }),
+      resolve: async (snapshot) => {
+        const failure = options.labProvisionError?.();
+        if (failure !== undefined) throw failure;
+        return {
+          target: {
+            kind: "plugin",
+            pluginSlug: "synthetic-plugin",
+            sourceDirectory,
+            sourceTree: tree,
+          },
+          dependencies: snapshot.dependencies.map((dependency) => ({
+            kind: "plugin" as const,
+            pluginSlug: dependency.identity.slice("wporg:".length),
+            sourceDirectory,
+            sourceTree: tree,
+          })),
+        };
+      },
     },
     runner: {
       async run(request) {
@@ -1693,6 +1699,123 @@ describe("harness CLI vertical slice", () => {
         type: "discovery-concluded",
       }),
     ).toHaveLength(1);
+  });
+
+  it("keeps a Lab provision exception and next step in the lab-diagnostic artifact and fails the campaign (#284)", async () => {
+    const message = `synthetic provision failure ${"x".repeat(600)}`;
+    const { run, configPath, ledger, prompts, state } = await harness({
+      omitLegacyVerifier: true,
+      config: { promptId: undefined, discovery: { lab: "attached" } },
+      labProvisionError: () => new Error(message),
+    });
+    const campaignId = "campaign-lab-diagnostic";
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      campaignId,
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(1);
+    expect(prompts).toHaveLength(0);
+    const labs = ledger().read({ campaignId, type: "lab-provisioned" });
+    expect(labs.map(({ event }) => event)).toMatchObject([
+      {
+        status: "failed",
+        purpose: "discovery",
+        failureStage: "provision",
+        reason: "provision",
+        artifacts: [{ kind: "lab-diagnostic" }],
+      },
+    ]);
+    const digest = labs[0]!.event.artifacts[0]!.digest;
+    const file = await state().store.readFile(
+      digest,
+      "lab-diagnostic.json",
+      1024 * 1024,
+    );
+    if (file.status !== "resolved") throw new Error(file.status);
+    expect(JSON.parse(file.bytes.toString("utf8"))).toEqual({
+      failureStage: "provision",
+      reason: "provision",
+      nextStep:
+        "Check source, pinned images, runsc, and Lab initialization; then provision a fresh Lab",
+      exception: { className: "Error", message: message.slice(0, 500) },
+    });
+    expect(result.stdout).toContain(
+      `lab failed  runs 0  stopped by setup-failed  failed at provision (provision)  diagnostic ${digest.slice(7, 19)}`,
+    );
+    expect(result.stdout).toContain(
+      "  next step: Check source, pinned images, runsc, and Lab initialization; then provision a fresh Lab",
+    );
+  });
+
+  it("keeps the handoff Lab's provision exception in Private Evidence (#284)", async () => {
+    let failLab = false;
+    const { run, configPath, ledger, state, root } = await harness({
+      omitLegacyVerifier: true,
+      entryPoints: true,
+      config: { promptId: undefined, discovery: { lab: "none" } },
+      labProvisionError: () =>
+        failLab ? new TypeError("synthetic handoff Lab failure") : undefined,
+    });
+    const campaignId = "campaign-handoff-lab-diagnostic";
+    const discovered = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      campaignId,
+      "--config",
+      configPath,
+    );
+    expect(discovered.code).toBe(0);
+    failLab = true;
+    const verified = await run(
+      "verify",
+      "next",
+      "--campaign",
+      campaignId,
+      "--config",
+      configPath,
+      "--handoff",
+      join(root, "handoff"),
+    );
+    expect(verified.code).toBe(0);
+    expect(verified.stdout).toContain(": incomplete");
+    const failed = ledger().read({
+      campaignId,
+      type: "verification-lab-failed",
+    });
+    expect(failed.map(({ event }) => event)).toMatchObject([
+      { reason: "provision", artifacts: [{ kind: "lab-diagnostic" }] },
+    ]);
+    const file = await state().store.readFile(
+      failed[0]!.event.artifacts[0]!.digest,
+      "lab-diagnostic.json",
+      1024 * 1024,
+    );
+    if (file.status !== "resolved") throw new Error(file.status);
+    expect(JSON.parse(file.bytes.toString("utf8"))).toMatchObject({
+      failureStage: "provision",
+      reason: "provision",
+      exception: {
+        className: "TypeError",
+        message: "synthetic handoff Lab failure",
+      },
+    });
+    expect(
+      ledger().read({ campaignId, type: "verification-finished" })[0]?.event,
+    ).toMatchObject({
+      result: {
+        status: "incomplete",
+        reason: "provision",
+        nextStep:
+          "Check source, pinned images, runsc, and Lab initialization; then provision a fresh Lab",
+      },
+    });
   });
 
   it("runs without a legacy Verifier or discovery Lab, then explicitly hands off one Finding", async () => {

@@ -63,6 +63,7 @@ import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-
 import { inspectHistoryMirror } from "../profiles/wordpress/wordfence-history/index.js";
 import { restoreParkedWordPressFinding } from "../profiles/wordpress/discovery/restore-parked-finding.js";
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
+import { storeLabDiagnostic } from "../lab/index.js";
 import { openWordPressExplorationLab } from "../profiles/wordpress/lab/exploration-lab.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
 import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
@@ -1263,6 +1264,16 @@ async function resumeWithExplorationLab(options: {
       purpose: "discovery",
       failureStage: "provision",
       reason: provisioned.reason,
+      artifacts: [
+        {
+          kind: "lab-diagnostic",
+          digest: await storeLabDiagnostic(
+            state.store,
+            "provision",
+            provisioned,
+          ),
+        },
+      ],
     });
     return { status: "refused", reason: "lab-provision-failed" };
   }

@@ -18,10 +18,11 @@ import {
   type ControlAnswer,
   type ControlRequest,
 } from "../../../lab/control/index.js";
-import type {
-  LabProvisioner,
-  LabReachability,
-  ProvisionResult,
+import {
+  describeLabException,
+  type LabProvisioner,
+  type LabReachability,
+  type ProvisionResult,
 } from "../../../lab/index.js";
 import {
   controlCommand,
@@ -522,6 +523,7 @@ export function openWordPressLab(options: {
           ...(error instanceof LabDockerFailure && error.diagnostic
             ? { diagnostic: error.diagnostic }
             : {}),
+          exception: describeLabException(error),
         };
       }
     },
