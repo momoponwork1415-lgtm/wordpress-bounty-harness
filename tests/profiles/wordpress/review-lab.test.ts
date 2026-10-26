@@ -110,8 +110,11 @@ const frozenSnapshots: SnapshotReader = {
 };
 
 /** Records the Lab calls instead of running docker; the handle carries the chosen setup digest. */
-function fakeLab(options: { readonly setupDigest?: string } = {}) {
+function fakeLab(
+  options: { readonly setupDigest?: string; readonly exposure?: false } = {},
+) {
   const calls: string[] = [];
+  const exposures: unknown[] = [];
   const provisioned: { snapshot: unknown; setup: unknown }[] = [];
   const provisionedIds: string[] = [];
   const handle: WordPressLabHandle = {
@@ -140,12 +143,28 @@ function fakeLab(options: { readonly setupDigest?: string } = {}) {
     reviewReceiverIp() {
       return "172.20.0.5";
     },
+    async exposeToHost(_handle, input) {
+      calls.push("expose");
+      exposures.push(input);
+      return options.exposure === false
+        ? { status: "unavailable", diagnostic: "no loopback port" }
+        : {
+            status: "exposed",
+            container: "wbh-lab-1-host",
+            httpPort: 49153,
+            databasePort: null,
+          };
+    },
+    async withdrawFromHost() {
+      calls.push("withdraw");
+      return true;
+    },
     async teardown() {
       calls.push("teardown");
       return { status: "removed" };
     },
   };
-  return { lab, calls, provisioned, provisionedIds, handle };
+  return { lab, calls, exposures, provisioned, provisionedIds, handle };
 }
 
 describe("WordPress review Lab", () => {
@@ -317,12 +336,19 @@ describe("WordPress review Lab", () => {
     expect(exitCode).toBe(0);
     expect(errors).toEqual([]);
     expect(provisionedIds).toEqual(["lab-1", "lab-2"]);
-    expect(calls).toEqual(["provision", "teardown", "provision", "teardown"]);
+    // The verification Lab is never published; the review Lab is (#586).
+    expect(calls).toEqual([
+      ...["provision", "teardown"],
+      ...["provision", "expose", "withdraw", "teardown"],
+    ]);
     expect(lines).toContain(
       "review Lab ready on http://wordpress (network wbh-lab-1-net, recorder 172.20.0.4)",
     );
     expect(lines).toContain(
       'attacker accounts: {"subscriber":{"username":"attacker","password":"attacker-pass"}}',
+    );
+    expect(lines).toContain(
+      "host loopback: http://127.0.0.1:49153 (Host header: wordpress)",
     );
     expect(lines).toContain(
       `private recipe steps: ${store.contentPath(recipeDigest)}/steps.md`,
@@ -401,7 +427,7 @@ describe("WordPress review Lab", () => {
   it("rebuilds the Lab from the package's reconstruction and the frozen Snapshot, then removes it on close", async () => {
     const store = await privateStore();
     const packageDigest = await sealedPackage(store, reconstruction);
-    const { lab, calls, provisioned } = fakeLab();
+    const { lab, calls, exposures, provisioned } = fakeLab();
 
     const session = await openWordPressReviewLab({
       packageDigest,
@@ -411,7 +437,9 @@ describe("WordPress review Lab", () => {
       browserImage,
     });
 
-    expect(calls).toEqual(["provision"]);
+    expect(calls).toEqual(["provision", "expose"]);
+    // A free loopback port through the recorder, as the handoff Lab publishes (#586).
+    expect(exposures).toEqual([{ httpPort: 0, via: "recorder" }]);
     expect(provisioned).toEqual([
       { snapshot, setup: { ...setup, databaseAccess: "none" } },
     ]);
@@ -425,11 +453,12 @@ describe("WordPress review Lab", () => {
       },
       administrator: { username: "harness-admin", password: "admin-pass" },
       browserImage,
+      host: { url: "http://127.0.0.1:49153", hostHeader: "wordpress" },
     });
 
     await session.close();
     await session.close();
-    expect(calls).toEqual(["provision", "teardown"]);
+    expect(calls).toEqual(["provision", "expose", "withdraw", "teardown"]);
     expect(session).not.toHaveProperty("canaries");
   });
 
@@ -529,7 +558,25 @@ describe("WordPress review Lab", () => {
         browserImage,
       }),
     ).rejects.toThrow("Review Lab setup digest differs from the package");
-    expect(calls).toEqual(["provision", "teardown"]);
+    expect(calls).toEqual(["provision", "withdraw", "teardown"]);
+  });
+
+  it("tears the Lab down when it cannot be published on the host (#586)", async () => {
+    const store = await privateStore();
+    const packageDigest = await sealedPackage(store, reconstruction);
+    const { lab, calls } = fakeLab({ exposure: false });
+    await expect(
+      openWordPressReviewLab({
+        packageDigest,
+        store,
+        snapshots: frozenSnapshots,
+        lab,
+        browserImage,
+      }),
+    ).rejects.toThrow(
+      "The review Lab could not be published on the host: no loopback port",
+    );
+    expect(calls).toEqual(["provision", "expose", "withdraw", "teardown"]);
   });
 
   it("tears the Lab down when the foreground runner receives SIGINT", async () => {
@@ -551,7 +598,7 @@ describe("WordPress review Lab", () => {
         stdout(line) {
           lines.push(line);
           if (line.startsWith("Run the private")) {
-            expect(calls).toEqual(["provision"]);
+            expect(calls).toEqual(["provision", "expose"]);
             // The Lab is live; the human interrupts the command.
             queueMicrotask(() => signals.emit("SIGINT"));
           }
@@ -561,7 +608,7 @@ describe("WordPress review Lab", () => {
       signals,
     );
     await running;
-    expect(calls).toEqual(["provision", "teardown"]);
+    expect(calls).toEqual(["provision", "expose", "withdraw", "teardown"]);
     expect(lines.at(-1)).toBe("review Lab removed");
     expect(signals.listenerCount("SIGINT")).toBe(0);
     expect(signals.listenerCount("SIGTERM")).toBe(0);
