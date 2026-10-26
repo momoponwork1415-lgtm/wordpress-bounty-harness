@@ -37,7 +37,9 @@ export type WordPressLedgerExclusionReason =
   /** This exact version failed Lab provisioning (e.g. a missing dependency plugin) and never started a Trial. */
   | "lab-provision-failed"
   /** This exact version's source freeze was deferred (e.g. an unreadable plugin header) while the same attempt froze another target. */
-  | "freeze-deferred";
+  | "freeze-deferred"
+  /** A batch another runner of the state holds selected this slug and has not finished (#604). */
+  | "reserved-by-runner";
 
 /** Earlier generations' history, exported once outside Git (D2). */
 export type WordPressLegacyHistory =
@@ -103,6 +105,8 @@ export function inspectWordPressLedgerExclusions(input: {
   readonly legacyHistory?: WordPressLegacyHistory;
   /** The instant `minimumDaysSinceTrial` is measured to; defaults to the wall clock. */
   readonly now?: Date;
+  /** Batches another runner holds; any slug they selected is excluded (#604). */
+  readonly reservedBatches?: ReadonlySet<string>;
 }): readonly WordPressLedgerExclusion[] {
   const revisitPolicy = wordPressRevisitPolicySchema.parse(input.revisitPolicy);
   const nowMs = (input.now ?? new Date()).getTime();
@@ -119,11 +123,14 @@ export function inspectWordPressLedgerExclusions(input: {
 
   // An attempt that froze any target shows the host could freeze; its deferrals belong to the target.
   const attemptsThatFroze = new Set<string>();
+  const reservedSlugs = new Set<string>();
   for (const event of ledgerEvents(input.ledger, "target-selected")) {
     if (event.type !== "target-selected") continue;
     attemptsThatFroze.add(event.campaignId);
     const identity = parseWordPressOrgSelectionId(event.selectionId);
     if (identity === null) continue;
+    if (input.reservedBatches?.has(event.campaignId))
+      reservedSlugs.add(identity.slug);
     const key = snapshotKey(event);
     selectedBySnapshot.set(key, identity.slug);
     versionBySnapshot.set(key, identity.version);
@@ -257,6 +264,7 @@ export function inspectWordPressLedgerExclusions(input: {
       reasons.push("lab-provision-failed");
     if (deferredVersions.has(`${slug}@${version}`))
       reasons.push("freeze-deferred");
+    if (reservedSlugs.has(slug)) reasons.push("reserved-by-runner");
     // A reconsidered slug forgets the Trials that predate the legacy export, not the ones run since.
     const exportedAt =
       legacy !== "unavailable" && legacy.reconsider.has(slug)

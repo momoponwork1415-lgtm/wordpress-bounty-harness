@@ -7,6 +7,7 @@ import { runInNewContext } from "node:vm";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { DISCOVERY_LEFTOVER_PATTERNS } from "../../../src/discovery/provider-credential-egress-broker.js";
 import { measureCanonicalSourceTree } from "../../../src/infrastructure/canonical-source-tree.js";
 import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import {
@@ -908,6 +909,49 @@ describe("WordPress gVisor Lab", () => {
       await chmod(ownerDirectory, 0o755);
     }
     expect(existsSync(deadRecord)).toBe(true);
+  });
+
+  it("leaves every resource of a live runner of another prefix to it in the runner's own sweep (#604)", async () => {
+    const { lab, docker, ownerDirectory } = await fixture();
+    const directory = join(dirname(ownerDirectory), "discovery-owners");
+    const [sibling, crashed] = [randomUUID(), randomUUID()];
+    // The other runner (this live process stands in) owns a Trial with an exploration Lab.
+    await recordLabOwner({ labId: sibling, directory: ownerDirectory });
+    for (const resource of [
+      `claude-agent-${sibling}`,
+      `provider-egress-broker-${sibling}`,
+      `provider-egress-${sibling}`,
+    ])
+      await recordDiscoveryOwner({ resource, directory });
+    docker.containers.add(`wbh-${sibling}-wp`);
+    docker.networks.add(`wbh-${sibling}-net`);
+    docker.containers.add(`claude-agent-${sibling}`);
+    docker.containers.add(`provider-egress-broker-${sibling}`);
+    docker.networks.add(`provider-egress-${sibling}`);
+    // A crash left a container with no owner record.
+    docker.containers.add(`codex-agent-${crashed}`);
+    // The sweep exactly as `continuous run` asks for it.
+    expect(
+      await lab.cleanupLeftovers({
+        remove: true,
+        labs: false,
+        patterns: DISCOVERY_LEFTOVER_PATTERNS,
+      }),
+    ).toEqual({
+      containers: [`codex-agent-${crashed}`],
+      networks: [],
+      volumes: [],
+    });
+    expect([...docker.containers].sort()).toEqual(
+      [
+        `wbh-${sibling}-wp`,
+        `claude-agent-${sibling}`,
+        `provider-egress-broker-${sibling}`,
+      ].sort(),
+    );
+    expect([...docker.networks].sort()).toEqual(
+      [`wbh-${sibling}-net`, `provider-egress-${sibling}`].sort(),
+    );
   });
 
   it("never names a discovery resource whose owner lives, whichever state directory started it (#550)", async () => {

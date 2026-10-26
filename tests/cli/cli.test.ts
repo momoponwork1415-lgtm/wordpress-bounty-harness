@@ -4746,6 +4746,88 @@ describe("harness CLI vertical slice", () => {
     expect(ledger().read({ campaignId: "campaign-old-bound" })).toHaveLength(1);
   });
 
+  it("keeps a held batch's targets out of another runner's selection and binds the batch a runner names (#604)", async () => {
+    const { run, configPath, root, ledger, profile } = await harness({
+      candidates: ["item-a", "item-b", "item-c", "item-d", "item-e", "item-f"],
+    });
+    const policyPath = join(root, "selection.json");
+    const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete manual.candidateSlugs;
+    delete manual.pinnedVersions;
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...manual,
+        promptVariant: "wp2shell-bounty-v11",
+        revisitPolicy: { kind: "never" },
+        wordpressVersion: "6.8",
+        maximumTargets: 3,
+        candidateSource: {
+          kind: "wordpress-org",
+          popularPages: 1,
+          tags: [],
+          pagesPerTag: 1,
+          perPage: 20,
+          maxCandidates: 20,
+          maxAgeDays: 1,
+        },
+      }),
+    );
+    const batches = () => {
+      const byBatch = new Map<string, string[]>();
+      for (const { event } of ledger().read({
+        type: "target-selected",
+        limit: 100,
+      }))
+        if (event.type === "target-selected")
+          byBatch.set(event.campaignId, [
+            ...(byBatch.get(event.campaignId) ?? []),
+            event.selectionId,
+          ]);
+      return [...byBatch];
+    };
+    // One runner's batch: selected, not started.
+    expect((await run("select", "--config", policyPath)).code).toBe(0);
+    const [[held, heldTargets]] = batches() as [[string, string[]]];
+    expect(heldTargets).toEqual([
+      "wporg:item-a@9.9.9",
+      "wporg:item-b@9.9.9",
+      "wporg:item-c@9.9.9",
+    ]);
+    // The other runner selects while that batch is held.
+    const state = () =>
+      openState(join(root, "state"), { clock: () => new Date(now) });
+    const other = await profile.select(await state(), {
+      configPath: policyPath,
+      minimum: 1,
+      reservedBatches: [held],
+    });
+    expect(other.selected.map(({ targetId }) => targetId)).toEqual([
+      "wporg:item-d",
+      "wporg:item-e",
+      "wporg:item-f",
+    ]);
+    // The first runner then binds its own batch, not the latest one.
+    await profile.runCampaign(await state(), {
+      campaignId: "prod-20261020-1",
+      configPath,
+      target: "item-a",
+      selectionBatchId: held,
+    });
+    expect(
+      ledger().read({
+        campaignId: "prod-20261020-1",
+        type: "selection-batch-bound",
+      })[0]?.event,
+    ).toMatchObject({
+      selectionBatchId: held,
+      selectionIds: ["wporg:item-a@9.9.9"],
+    });
+  });
+
   it("drops a batch frozen under another policy on restart and selects its targets again (#302)", async () => {
     const { run, root, profile, configPath, ledger, store } = await harness({
       candidates: ["item-a", "item-b", "item-c"],

@@ -138,6 +138,8 @@ export interface WordPressSelectionDecideOptions {
    * the policy's `cascade` steps are tried in order (default 1).
    */
   readonly minimum?: number;
+  /** Selection batches another runner holds unfinished; their slugs are excluded (#604). */
+  readonly reservedBatches?: readonly string[];
 }
 
 /** The selection `policy/selection.md` describes: policy, Ledger and legacy history. */
@@ -732,6 +734,7 @@ export function openWordPressSelection(input: {
           currentPromptVariant: policy.promptVariant ?? input.promptVariant,
           revisitPolicy: policy.revisitPolicy ?? { kind: "never" },
           now,
+          reservedBatches: new Set(options.reservedBatches ?? []),
         }).map(({ slug, reasons }) => [slug, reasons]),
       );
       const inspections = bandInspections.map((item) => ({
