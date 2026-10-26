@@ -7,7 +7,12 @@ import { setupSchema } from "./provision-input.js";
 /** The Lab operations a human review session uses; observation stays with verification. */
 export type WordPressReviewLabProvisioner = Pick<
   WordPressLab,
-  "provision" | "reviewAdministrator" | "reviewReceiverIp" | "teardown"
+  | "provision"
+  | "reviewAdministrator"
+  | "reviewReceiverIp"
+  | "exposeToHost"
+  | "withdrawFromHost"
+  | "teardown"
 >;
 
 export interface WordPressReviewLabSession {
@@ -24,6 +29,8 @@ export interface WordPressReviewLabSession {
     readonly password: string;
   };
   readonly browserImage: string;
+  /** The Lab on host loopback for a human's browser and curl, as the handoff Lab (#586). */
+  readonly host: { readonly url: string; readonly hostHeader: string };
   /** Removes the Lab; a second call is a no-op. The caller decides when. */
   close(): Promise<void>;
 }
@@ -64,6 +71,8 @@ export async function openWordPressReviewLab(input: {
   const close = async () => {
     if (!live) return;
     live = false;
+    // The gateway keeps the Lab network in use, so it goes before teardown.
+    await input.lab.withdrawFromHost(handle);
     const removed = await input.lab.teardown(handle);
     if (removed.status !== "removed") throw new Error(removed.nextStep);
   };
@@ -76,6 +85,15 @@ export async function openWordPressReviewLab(input: {
     const receiverIp = input.lab.reviewReceiverIp(handle);
     if (receiverIp === null)
       throw new Error("Review Lab receiver is unavailable");
+    // A free loopback port, so a review Lab never collides with a handoff Lab (#432).
+    const exposed = await input.lab.exposeToHost(handle, {
+      httpPort: 0,
+      via: "recorder",
+    });
+    if (exposed.status !== "exposed")
+      throw new Error(
+        `The review Lab could not be published on the host: ${exposed.diagnostic}`,
+      );
     return {
       endpoint: handle.endpoint,
       networkName: handle.networkName,
@@ -84,10 +102,15 @@ export async function openWordPressReviewLab(input: {
       attackerAccounts: handle.attackerAccounts,
       administrator,
       browserImage: input.browserImage,
+      host: {
+        url: `http://127.0.0.1:${exposed.httpPort}`,
+        hostHeader: new URL(handle.endpoint).host,
+      },
       close,
     };
   } catch (error) {
     live = false;
+    await input.lab.withdrawFromHost(handle);
     await input.lab.teardown(handle);
     throw error;
   }

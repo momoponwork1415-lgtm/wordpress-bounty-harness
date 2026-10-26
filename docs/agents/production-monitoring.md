@@ -42,6 +42,7 @@ cd /home/dev/wordpress-bounty-harness-prod7 && node dist/cli/main.js --state ~/.
 3. **失敗**: provider 429（`provider-limited`）、`provider-cyber-policy` の拒否、`run-failed`、schema error、停滞（終了 event が無く出力も 30 分以上止まる run。2026-10-17 は websocket 426 の後に無言で止まり wall も発火しなかった）。host の memory（`free -g`）と container 数（`docker ps --format '{{.Names}}'` の `wbh-`）。
 4. **Finding**: 件数だけ。category 別、`finding-parked` か対象範囲内か。本文、payload、path、証拠は読まない・引用しない。
 5. **runner の停止**: `stopped(<理由>)` になったら理由と直前の例外を記録する。再起動はしない。
+6. **検証の列**: 対象範囲内で、検証の無い Finding の group 数と、`incomplete(awaiting-human-observation)` のまま人間の観測が無い件数。滞留しても探索は絞らない（所有者決定 2026-10-26、「数は制限しない」）。数は検証の並列数と確認票の供給を増やす合図として使う。
 
 ## 4. 許す操作は 1 つ
 
