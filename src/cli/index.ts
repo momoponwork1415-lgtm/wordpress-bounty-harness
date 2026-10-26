@@ -195,8 +195,24 @@ export interface CliProfile {
       readonly configPath: string;
       /** Fewest frozen targets that make a batch; fewer selects nothing. */
       readonly minimum?: number;
+      /** The runner's stop request; true before recording selects nothing (#302). */
+      readonly stop?: () => boolean;
     },
   ): Promise<CliSelectionReport>;
+  /**
+   * The runner only, before it continues a campaign after a restart: when the
+   * campaign's selection batch was frozen under another policy, record that it
+   * is discarded and return its id; null when the batch can run (#302).
+   */
+  discardStaleSelection?(
+    state: CliState,
+    input: {
+      readonly campaignId: string;
+      readonly configPath: string;
+      /** Replaces the campaign config's selection policy path in process. */
+      readonly selectionPolicyPath?: string;
+    },
+  ): Promise<string | null>;
   runCampaign(
     state: CliState,
     input: {

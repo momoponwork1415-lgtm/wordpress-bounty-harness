@@ -77,6 +77,7 @@ import {
   storeTargetSkipDiagnostic,
   type TargetSkipReason,
 } from "./skip-diagnostic.js";
+import { unboundBatch } from "./continuous.js";
 import {
   DISCOVERY_RUN_MEMORY_MIB,
   openWordPressCampaignSession,
@@ -330,6 +331,80 @@ async function bindCampaignSelectionBatch(
   if (appended.status !== "appended")
     throw new Error("Campaign selection batch binding conflicted");
   return selected;
+}
+
+/**
+ * The runner's check before it continues a campaign after a restart (#302).
+ * The campaign's batch is its bound one, or else the latest unbound automatic
+ * batch. A batch frozen under another policy digest can never bind or resume
+ * under this one, so the runner records why it drops it and selects afresh.
+ * Its targets started no Trial, so selection admits them again.
+ */
+async function discardStaleSelectionBatch(
+  state: CliState,
+  policy: WordPressSelectionPolicy,
+  campaignId: string,
+): Promise<string | null> {
+  if (!("candidateSource" in policy)) return null;
+  const binding = state.ledger.read({
+    campaignId,
+    type: "selection-batch-bound",
+    limit: 1,
+  })[0]?.event;
+  const batchId =
+    binding?.type === "selection-batch-bound"
+      ? binding.selectionBatchId
+      : unboundBatch(state.ledger);
+  if (batchId === undefined) return null;
+  const selected = state.ledger.read({
+    campaignId: batchId,
+    type: "target-selected",
+    limit: 1,
+  })[0]?.event;
+  const reportRef = selected?.artifacts.find(
+    (artifact) => artifact.kind === "selection-report",
+  );
+  if (selected === undefined || reportRef === undefined) return null;
+  let batchPolicyDigest =
+    binding?.type === "selection-batch-bound" ? binding.policyDigest : null;
+  if (batchPolicyDigest === null) {
+    const file = await state.store.readFile(
+      reportRef.digest,
+      "selection-report.json",
+      2 * 1024 * 1024,
+    );
+    // An unreadable report is left to the campaign's own error.
+    if (file.status !== "resolved") return null;
+    batchPolicyDigest = z
+      .object({ policyDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/) })
+      .parse(JSON.parse(file.bytes.toString("utf8"))).policyDigest;
+  }
+  const currentPolicyDigest = canonicalDigest(policy);
+  if (batchPolicyDigest === currentPolicyDigest) return null;
+  // A restart that died after the record but before its memo finds it here.
+  if (
+    state.ledger.read({
+      campaignId: batchId,
+      type: "selection-batch-discarded",
+      limit: 1,
+    }).length > 0
+  )
+    return batchId;
+  const appended = await state.ledger.append({
+    schemaVersion: 1,
+    identity: `selection-batch-discarded-${canonicalDigest(batchId).slice(7, 39)}`,
+    campaignId: batchId,
+    snapshotDigest: selected.snapshotDigest,
+    occurredAt: state.clock().toISOString(),
+    type: "selection-batch-discarded",
+    policyDigest: batchPolicyDigest,
+    currentPolicyDigest,
+    reason: "policy-changed",
+    artifacts: [{ kind: "selection-report", digest: reportRef.digest }],
+  });
+  if (appended.status === "conflict")
+    throw new Error("Selection batch discard conflicted");
+  return batchId;
 }
 
 /** The one Lab an earlier `lab up` kept between invocations; `lab down` reads and removes it. */
@@ -1541,6 +1616,11 @@ export function createWordPressCliProfile(
           });
         }
       }
+      // A runner stop that arrived while sources froze records no batch, so
+      // none is left unconsumed for the next start (#302).
+      if (input.stop?.() === true)
+        for (const { target } of chosen.splice(0))
+          reasons.get(target.slug)?.push("stopped");
       // Too few: write no selection, and say why for each frozen target.
       if (chosen.length < minimum)
         for (const { target } of chosen.splice(0))
@@ -1671,6 +1751,15 @@ export function createWordPressCliProfile(
         options,
         await openWordPressCampaignSession(options, state, input),
       ),
+    async discardStaleSelection(state, input) {
+      const parsed = await readWordPressCampaignConfig(input.configPath);
+      const policy = await readWordPressCampaignPolicy(
+        input.selectionPolicyPath === undefined
+          ? parsed
+          : { ...parsed, selectionPolicyPath: input.selectionPolicyPath },
+      );
+      return discardStaleSelectionBatch(state, policy, input.campaignId);
+    },
     resumeCampaignRun: async (state, input) =>
       resumeWordPressCampaignRun(
         state,

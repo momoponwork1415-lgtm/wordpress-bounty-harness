@@ -160,8 +160,8 @@ export interface ContinuousDeps {
   readonly stateDirectory: string;
   readonly campaignPrefix: string;
   readonly ledger: Pick<Ledger, "readAll">;
-  /** Freezes a batch of at least SELECT_MINIMUM targets, or none. */
-  select(): Promise<{
+  /** Freezes a batch of at least SELECT_MINIMUM targets, or none; a stop seen before recording records none (#302). */
+  select(input: { readonly stop: () => boolean }): Promise<{
     readonly batchId: string | null;
     /** Profile target names, in rank order. */
     readonly targets: readonly string[];
@@ -179,6 +179,11 @@ export interface ContinuousDeps {
     /** The operator's live limits (total and per runtime), read before each new target starts. */
     readonly targetLimit: TargetLimit;
   }): Promise<CampaignSummary>;
+  /**
+   * Records why the campaign's selection batch can never run under the current
+   * policy and returns its id; null when it can run (#302).
+   */
+  discardStaleSelection(campaignId: string): Promise<string | null>;
   /** Removes crashed discovery leftovers, never a Lab (#526); returns how many. */
   cleanupLeftovers(): Promise<number>;
   /** The same host check as `runtime check`; throws on failure. */
@@ -462,17 +467,22 @@ export function pendingProviderLimited(
   });
 }
 
-/** The latest automatic batch that no campaign has bound yet. */
-function unboundBatch(deps: ContinuousDeps): string | undefined {
-  const bound = new Set(
-    readAll(deps.ledger, { type: "selection-batch-bound" }).flatMap((event) =>
+/** The latest automatic batch that no campaign has bound and the runner has not discarded. */
+export function unboundBatch(
+  ledger: Pick<Ledger, "readAll">,
+): string | undefined {
+  const settled = new Set([
+    ...readAll(ledger, { type: "selection-batch-bound" }).flatMap((event) =>
       event.type === "selection-batch-bound" ? [event.selectionBatchId] : [],
     ),
-  );
-  const latest = readAll(deps.ledger, { type: "target-selected" })
+    ...readAll(ledger, { type: "selection-batch-discarded" }).map(
+      (event) => event.campaignId,
+    ),
+  ]);
+  const latest = readAll(ledger, { type: "target-selected" })
     .filter((event) => event.campaignId.startsWith("selection-"))
     .at(-1)?.campaignId;
-  return latest === undefined || bound.has(latest) ? undefined : latest;
+  return latest === undefined || settled.has(latest) ? undefined : latest;
 }
 
 /**
@@ -694,11 +704,27 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         campaignId: memo.campaignId,
         target: memo.target ?? null,
       }) ||
-      (unboundBatch(deps) && {
+      (unboundBatch(deps.ledger) && {
         campaignId: nextCampaignId(deps),
         target: null,
       }) ||
       undefined;
+    // A batch frozen under another policy would only fail: drop it with a
+    // reason and select afresh instead of holding on the error (#302). Any
+    // other error surfaces from the campaign run as before.
+    if (current) {
+      const discarded = await deps
+        .discardStaleSelection(current.campaignId)
+        .catch(() => null);
+      if (discarded !== null) {
+        deps.io.log(
+          `${deps.clock().toISOString()} selection-batch-discarded batch=${discarded} campaign=${current.campaignId} reason=policy-changed`,
+        );
+        delete memo.campaignId;
+        delete memo.target;
+        current = undefined;
+      }
+    }
     let providerBackoffFinished = false;
     const backoffProvider = async (campaignId: string) => {
       const limit = providerLimitOf(deps, campaignId);
@@ -746,7 +772,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       }
       if (!current) {
         if (stopRequested()) return stop("operator");
-        const selected = await deps.select();
+        const selected = await deps.select({ stop: stopRequested });
         if (stopRequested()) return stop("operator");
         if (selected.batchId === null) {
           // A failed listing is not an empty pool.

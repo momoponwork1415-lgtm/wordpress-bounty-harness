@@ -261,6 +261,7 @@ it("runs the continuation driver only inside the gVisor agent container", async 
       image,
       bundledCatalogPath: "/opt/codex/model-catalog.json",
       scratchRootDirectory: directory,
+      ownerDirectory: join(directory, "discovery-owners"),
       maxOutputBytes: 1024 * 1024,
       timeoutMs: 10_000,
       runDocker: async (args) => {
