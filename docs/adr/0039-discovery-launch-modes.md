@@ -169,3 +169,13 @@ PR #537 のレビューで、再開（ADR 0036）が子の上限・最低時間�
 - 本番で v14-wide と交互に回して比べる（DEVELOPMENT 第 5 節）。そのため prompt 表に `candidate` の状態を足した。`candidate` の行は `mode` を持ち、campaign 設定の `promptId` で名指ししたときだけ起動する。`promptId` を省いた campaign は従来どおり mode の `current` を使う。`wide` の `current` は v14-wide のままで、`src/profiles/wordpress/policy/campaign.json` は変えない。採否が決まったら、採る版を `current`、もう一方を `archived` にし、`candidate` の行を残さない。
 - 測った数字: なし。本番で取る（受け入れは #599 のとおり、本番の Lab arm で Trial ごとの Lab 要求数が 0 でないこと）。
 - 消し方: v15-wide の行と 2 つの fragment を消す（Trial が走った後なら `archived` にして残す）。`candidate` の状態は、ほかに `candidate` の行が無ければ外す。
+
+## 2026-10-26 追記 9: `wide` の目的文を v16-wide にする（所有者指示）
+
+2026-10-26 の本番で、ベンダーだけが書く内容（セキュリティスキャナの結果、脆弱性データベース、WAF や API の応答本文、マーケティングサービスとの連携）を攻撃者入力として扱う Finding が 9 件出た。根拠は v14-wide の `sinks-v14` にある、第三者のサービスから取り込む内容を一律に攻撃者が置ける入力とする文だった。所有者は同日、この文を「置ける者がベンダーだけなら攻撃者ではない」に直すよう指示した。その前に「外部サービスでもいいが、SNS など書き込めればいい」とも言っている。本文、差分、出典対照表は [v16-wide の文書](../reviews/2026-10-26-wp2shell-bounty-v16-wide.md) に置く。
+
+- `wp2shell-bounty-v16-wide`（`sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3`）を `wide` の `current` にする。v14-wide から替える fragment は `strategy/sinks-v14` → `strategy/sinks-v16` の 1 つだけで、替えるのはその中の 1 文だけである。ほかのバイトは v14-wide と同じ（`tests/profiles/wordpress/discovery-prompts.test.ts` の v16-wide の test）。
+- `wp2shell-bounty-v14-wide` は本文・fragment 構成・digest を変えず `archived` にする。`src/profiles/wordpress/policy/campaign.json` と `examples/campaign-wide-20.json` の `promptId` を v16-wide にする。ほかの値は変えない。
+- 比較候補の v15-wide は `candidate` のまま変えない。`sinks-v14` を使うので、この文の修正は入っていない。`deep` の v11 も変えない。
+- 測った数字: なし。本番で、同じ選定帯の切り替え前（v14-wide）と切り替え後（v16-wide）の窓を比べる（DEVELOPMENT 第 5 節）。
+- 消し方: v16-wide を `archived` にして mode を外し、v14-wide を `current`・`mode: "wide"` に戻し、2 つの campaign 設定の `promptId` を v14-wide に戻す。v16-wide の本文、`sinks-v16` と digest は、Trial が走った後なら履歴照合のため残す。
