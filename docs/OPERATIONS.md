@@ -275,7 +275,7 @@ node scripts/export-legacy-slugs.mjs \
 
 ### 子の最終JSONがschemaで失敗したとき
 
-子のrunが `child-final-message-not-report` で失敗しても、Private Evidenceの不変rolloutに完全なJSONが残っている場合がある。parserを修正・テストした後、同じcampaignの失敗runを次のコマンドで再解釈できる。Rootと子のthread lineage、model、effort、cyber access、Snapshotを照合し、元の失敗eventは残したまま `child-report-recovered` と有効なFinding / Leadを追記する。source traceやrecipe本文は標準出力へ出さない。
+子のrunが `child-final-message-not-report` で失敗しても、Private Evidenceの不変rolloutに完全なJSONが残っている場合がある。Codex の子で、報告の無いまま最後の turn が provider error で終わったものは `provider`、`turn_aborted` で終わったものは `interrupted` として記録し、`schema` にはしない（#540）。parserを修正・テストした後、同じcampaignの失敗runを次のコマンドで再解釈できる。Rootと子のthread lineage、model、effort、cyber access、Snapshotを照合し、元の失敗eventは残したまま `child-report-recovered` と有効なFinding / Leadを追記する。source traceやrecipe本文は標準出力へ出さない。
 
 ```sh
 node scripts/recover-child-reports.mjs \

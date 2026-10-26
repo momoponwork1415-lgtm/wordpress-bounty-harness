@@ -145,6 +145,8 @@ async function harness(
     readonly limitOnCalls?: readonly number[];
     /** A completed child report survives a provider-limited Root Trial. */
     readonly childFindingOnLimitedCall?: boolean;
+    /** Provider calls (1-based) whose failed Root ends with a provider-ended, an aborted and a not-a-report child (#540). */
+    readonly endedChildrenOnCalls?: readonly number[];
     readonly failOnCalls?: readonly number[];
     /** Provider calls (1-based) the provider refuses without a usage limit. */
     readonly refuseOnCalls?: readonly number[];
@@ -721,6 +723,31 @@ async function harness(
                 }),
           };
         }
+        // The child receipts the runtime writes for each way a child ends without a report (#540).
+        const endedChildren =
+          options.endedChildrenOnCalls?.includes(call) === true
+            ? {
+                agentRuns: (
+                  [
+                    ["provider", "child-provider-error:server_overloaded"],
+                    ["interrupted", "child-turn-aborted"],
+                    ["schema", "child-final-message-not-report"],
+                  ] as const
+                ).map(([reason, reasonDetail]) => ({
+                  agentPath: `/root/child-${reason}`,
+                  receipt: createNativeRunReceipt({
+                    runId: `${run.runId}-child-${reason}`,
+                    targetSnapshotDigest: run.targetSnapshotDigest,
+                    profile: run.profile,
+                    terminal: "incomplete",
+                    reason,
+                    reasonDetail,
+                    startedAt: now,
+                    completedAt: now,
+                  }),
+                })),
+              }
+            : {};
         if (options.refuseOnCalls?.includes(call) === true) {
           const rootRollout =
             options.refusalSession === true
@@ -764,6 +791,7 @@ async function harness(
                     },
                   }),
             }),
+            ...endedChildren,
           };
         }
         if (options.failOnCalls?.includes(call) === true)
@@ -778,6 +806,7 @@ async function harness(
               startedAt: now,
               completedAt: now,
             }),
+            ...endedChildren,
           };
         const report = {
           findings:
@@ -3156,14 +3185,19 @@ describe("harness CLI vertical slice", () => {
   });
 
   it.each([
-    { failure: "refuseOnCalls", reason: "provider-refused" },
-    { failure: "failOnCalls", reason: "run-failed" },
+    { failure: "refuseOnCalls", reason: "provider-refused", children: false },
+    { failure: "failOnCalls", reason: "run-failed", children: false },
+    // #540: children that ended on the provider or an abort are recorded as
+    // such, and the Root's own end still decides the skip and the resume.
+    { failure: "refuseOnCalls", reason: "provider-refused", children: true },
+    { failure: "failOnCalls", reason: "run-failed", children: true },
   ] as const)(
-    "skips a target whose Trial hits $reason and starts the next target",
-    async ({ failure, reason }) => {
+    "skips a target whose Trial hits $reason and starts the next target (children $children)",
+    async ({ failure, reason, children }) => {
       const { run, configPath, prompts, ledger } = await harness({
         candidates: ["synthetic-plugin", "zz-next-plugin"],
         [failure]: [1],
+        ...(children ? { endedChildrenOnCalls: [1] } : {}),
         config: {
           promptId: undefined,
         },
@@ -3196,11 +3230,36 @@ describe("harness CLI vertical slice", () => {
         },
       ]);
       expect(ledger().read({ type: "campaign-stopped" })).toHaveLength(0);
+      const childEnds = ledger()
+        .read({ type: "discovery-run-finished", limit: 100 })
+        .flatMap(({ event }) =>
+          event.type === "discovery-run-finished" &&
+          event.runId.includes("-child-")
+            ? [[event.outcome, event.reason, event.providerLimit]]
+            : [],
+        );
+      expect(childEnds).toEqual(
+        children
+          ? [
+              ["failed", "provider", undefined],
+              ["failed", "interrupted", undefined],
+              ["failed", "schema", undefined],
+            ]
+          : [],
+      );
       // The skipped target is not resumed and its Trial is not replaced.
       const again = await run(...command);
       expect(again.code).toBe(0);
       expect(prompts).toHaveLength(2);
-      expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(2);
+      expect(
+        ledger()
+          .read({ type: "discovery-run-started", limit: 100 })
+          .filter(
+            ({ event }) =>
+              event.type === "discovery-run-started" &&
+              event.runKind !== "child",
+          ),
+      ).toHaveLength(2);
     },
   );
 
