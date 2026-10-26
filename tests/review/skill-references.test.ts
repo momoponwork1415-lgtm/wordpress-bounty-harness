@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 
+import { presentHeldVerificationLab } from "../../src/cli/index.js";
 import { reviewExportV1Schema } from "../../src/review/export.js";
 import { reviewExportV2Schema } from "../../src/review/manual-observation-export.js";
 
@@ -64,4 +65,61 @@ describe("review skills", () => {
       expect(references.filter((path) => !allowed.has(path))).toEqual([]);
     },
   );
+});
+
+/** #595: the skills quote the lines `verify next --handoff` prints for the Lab it keeps (#600). */
+describe("held verification Lab lines the skills quote", () => {
+  async function printed(): Promise<string[]> {
+    const lines: string[] = [];
+    const listeners: (() => void)[] = [];
+    await presentHeldVerificationLab(
+      {
+        ref: { campaignId: "c", findingId: "f", verificationId: "v" },
+        labId: "lab-1",
+        endpoint: "http://wordpress",
+        attackerAccounts: { subscriber: { username: "u", password: "p" } },
+        administrator: { username: "a", password: "p" },
+        host: {
+          url: "http://127.0.0.1:80",
+          hostHeader: "wordpress",
+          port: 80,
+        },
+        receipt: { digest: `sha256:${"a".repeat(64)}`, path: "/receipt" },
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      {
+        stdout(line) {
+          lines.push(line);
+          if (line.startsWith("Run lab down"))
+            for (const listener of listeners) listener();
+        },
+        stderr() {},
+      },
+      { on: (_signal, listener) => listeners.push(listener), off() {} },
+    );
+    return lines;
+  }
+
+  it.each([
+    [
+      "wbh-review",
+      [
+        "kept for a person's observation on",
+        "manual observation receipt:",
+        "attacker accounts:",
+        "review administrator:",
+      ],
+    ],
+    ["wbh-verify", ["review administrator:"]],
+  ])("%s quotes only printed lines", async (skill, quoted) => {
+    const lines = await printed();
+    const text = await readFile(
+      new URL(`../../.claude/skills/${skill}/SKILL.md`, import.meta.url),
+      "utf8",
+    );
+    for (const phrase of quoted) {
+      expect(text).toContain(phrase);
+      expect(lines.some((line) => line.includes(phrase))).toBe(true);
+    }
+  });
 });
