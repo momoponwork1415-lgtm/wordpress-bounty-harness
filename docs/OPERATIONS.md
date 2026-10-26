@@ -193,6 +193,7 @@ harness continuous concurrency [<n>] [--runtime <name>] --state <dir> --config <
 
 ```
 harness review parked --campaign <id>                       # parked Finding と reason を一覧する
+harness review leads --campaign <id>                        # Lead（影響まで 1 辺足りない primitive）を位置と要旨で一覧する
 harness review held --campaign <id>                         # 保留（candidate-held）の Finding 候補と schema の issue を一覧する
 harness review export --campaign <id> --finding <id>         # 1画面のレビュー材料をJSON 1本（schema review-export/v1）で出す。台帳には書かない。skillはこれだけを読む
 harness review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--by <name>] [--opened <digest>]... [--duplicate no-match|unavailable[:<reason>]|possible-match:<ref> [--duplicate-note <path>]] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--minutes <n>]

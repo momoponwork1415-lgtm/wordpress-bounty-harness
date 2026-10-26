@@ -3478,6 +3478,59 @@ describe("harness CLI vertical slice", () => {
     expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(3);
   });
 
+  it("lists recorded Leads with position and summary and says when there are none", async () => {
+    const { run, ledger, store, configPath } = await harness();
+    const warm = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-warm-leads",
+      "--config",
+      configPath,
+    );
+    expect(warm.code).toBe(0);
+    const empty = await run("review", "leads", "--campaign", "campaign-leads");
+    expect(empty.code).toBe(0);
+    expect(empty.stdout).toContain("no leads recorded");
+    const snapshot = `sha256:${"c".repeat(64)}`;
+    const digest = await store().putFiles({
+      "lead.json": Buffer.from(
+        JSON.stringify({
+          attackerPosition: "unauthenticated",
+          summary:
+            "Imported feed text reaches an administrator preview unescaped",
+        }),
+      ),
+    });
+    for (const ordinal of [1, 2]) {
+      await ledger().append({
+        schemaVersion: 1,
+        identity: `lead-${ordinal}`,
+        campaignId: "campaign-leads",
+        snapshotDigest: snapshot,
+        occurredAt: "2026-10-26T00:00:00Z",
+        type: "lead-recorded",
+        leadId: "lead-a",
+        runId: `run-${ordinal}`,
+        trialId: "trial-1",
+        missingEdge: "consumer",
+        primitive: "partial-execution",
+        storageKind: "option",
+        artifacts: [{ kind: "lead", digest }],
+      });
+    }
+    const listed = await run("review", "leads", "--campaign", "campaign-leads");
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toContain(
+      "lead  partial-execution/consumer  unauthenticated  lead-a  Imported feed text reaches an administrator preview unescaped",
+    );
+    // The same leadId recorded twice is listed once.
+    expect(listed.stdout.split("lead-a").length).toBe(2);
+    const none = await run("review", "leads");
+    expect(none.code).not.toBe(0);
+  });
+
   it("lists parked Findings by one-line property and says when there are none (#185)", async () => {
     const { run, ledger, store, configPath } = await harness();
     // Opening the state needs one real command; the campaign records only in-scope Findings.

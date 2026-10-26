@@ -1182,6 +1182,53 @@ const COMMANDS: readonly Command[] = [
     },
   }),
   command({
+    name: "review leads",
+    readOnly: true,
+    required: ["campaign"],
+    usage: ["review leads --campaign <id>"],
+    options: { campaign: STR },
+    handler: async ({ values, state, print }) => {
+      // Leads never join the review queue, but the human sees every one of them
+      // (owner decision 2026-10-26: report widely, drop in review, never hide a route in a Lead).
+      const seen = new Set<string>();
+      const leads = state.ledger
+        .readAll({ campaignId: required(values.campaign, "campaign") })
+        .map(({ event }) => event)
+        .flatMap((event) =>
+          event.type === "lead-recorded" && !seen.has(event.leadId)
+            ? (seen.add(event.leadId), [event])
+            : [],
+        );
+      if (leads.length === 0) print(["no leads recorded"]);
+      for (const event of leads) {
+        const reference = event.artifacts.find(
+          (artifact) => artifact.kind === "lead",
+        );
+        let position = "(position unknown)";
+        let summary = "(lead.json unavailable)";
+        if (reference !== undefined) {
+          const stored = await state.store.readJson(
+            reference.digest,
+            "lead.json",
+            z.object({
+              summary: z.string(),
+              attackerPosition: z.string().optional(),
+            }),
+            1024 * 1024,
+          );
+          if (stored.status === "resolved") {
+            summary = stored.value.summary;
+            position = stored.value.attackerPosition ?? position;
+          }
+        }
+        print([
+          `lead  ${event.primitive}/${event.missingEdge}  ${position}  ${event.leadId}  ${summary}`,
+        ]);
+      }
+      return 0;
+    },
+  }),
+  command({
     name: "review export",
     readOnly: true,
     required: ["campaign", "finding"],
