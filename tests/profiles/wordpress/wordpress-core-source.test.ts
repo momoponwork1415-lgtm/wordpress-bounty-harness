@@ -1,9 +1,17 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import { openWordPressCoreSource } from "../../../src/profiles/wordpress/acquisition/wordpress-core-source.js";
 
 const roots: string[] = [];
@@ -18,10 +26,14 @@ async function fixture(
   options: {
     version?: string;
     link?: boolean;
+    root?: string;
+    /** Runs after the copy reaches its staging directory, before it returns. */
+    afterCopy?: () => Promise<void>;
   } = {},
 ) {
-  const root = await mkdtemp(join(tmpdir(), "wbh-core-source-"));
-  roots.push(root);
+  const root =
+    options.root ?? (await mkdtemp(join(tmpdir(), "wbh-core-source-")));
+  if (options.root === undefined) roots.push(root);
   const calls: (readonly string[])[] = [];
   const source = openWordPressCoreSource({
     dockerExecutablePath: "/usr/bin/docker",
@@ -42,6 +54,7 @@ async function fixture(
         await writeFile(join(destination, "a.php"), "<?php // a");
         if (options.link)
           await symlink("a.php", join(destination, "linked.php"));
+        await options.afterCopy?.();
       }
       return {
         kind: "exited" as const,
@@ -73,6 +86,34 @@ describe("WordPress core source from the pinned Lab image", () => {
       "z.php",
     ]);
     expect(second[0]?.manifest).toEqual(first[0]?.manifest);
+  });
+
+  it("lets two processes extracting into the same directory at once resolve to the same core", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wbh-core-source-"));
+    roots.push(root);
+    // Both copies finish before either is moved into place, so one rename loses.
+    let arrived = 0;
+    let release!: () => void;
+    const bothCopied = new Promise<void>((resolve) => (release = resolve));
+    const afterCopy = async () => {
+      arrived += 1;
+      if (arrived === 2) release();
+      await bothCopied;
+    };
+    const one = await fixture({ root, afterCopy });
+    const two = await fixture({ root, afterCopy });
+    const [first, second] = await Promise.all([one.source(), two.source()]);
+    const staging = [one, two].map(
+      ({ calls }) => calls.find((args) => args[0] === "cp")?.[2],
+    );
+    expect(staging[0]).not.toBe(staging[1]);
+    expect(staging.every((path) => path?.includes(".staging-"))).toBe(true);
+    expect(second[0]?.manifest).toEqual(first[0]?.manifest);
+    expect(canonicalDigest(second[0]?.manifest)).toBe(
+      canonicalDigest(first[0]?.manifest),
+    );
+    expect(first[0]?.manifest.entries).toHaveLength(3);
+    expect(await readdir(join(root, "core"))).toEqual(["a".repeat(64)]);
   });
 
   it("rejects a core version different from the declared version", async () => {
