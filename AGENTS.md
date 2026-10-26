@@ -55,7 +55,7 @@
   - precondition の文からシナリオを選ぶ正規表現
   - プラグイン別の Lab アダプタとシナリオ
 
-  入口・保存先索引、coverage と `incomplete(depth)`、公開履歴カタログの生成は削除済みである（ADR 0034、2026-10-18）。SPEC と ADR 0029 の該当行も改訂した。旧 Codex Verifier の実装と host の構築経路は、所有者の 2026-10-23 の削除指示で退役した（ADR 0035）。実 host は `--handoff` のない `review reverify` と `discovery.lab: attached` を退役エラーで止める。これは #352 の受入完了を意味しない。シナリオの選択と生成、プラグイン別アダプタ、共有コードに残っていた旧指示の連鎖は、#352 の close（2026-10-26）の後に #353 で削除した（ADR 0026 の 2026-10-26 追記）。campaign 設定の `lab.scenarioId` と、シナリオを名指しする Lab Setup は、Lab を立てる前に拒否する。過去の Lab が記録した scenario は、台帳と対象範囲の評価のために読み続ける。削除前の状態は tag `archive/pre-353-deletion` に残る。共有の境界検査と記録は退役対象にしない。
+  入口・保存先索引、coverage と `incomplete(depth)`、公開履歴カタログの生成は削除済みである（ADR 0034、2026-10-18）。SPEC と ADR 0029 の該当行も改訂した。旧 Codex Verifier の実装と host の構築経路は、所有者の 2026-10-23 の削除指示で退役した（ADR 0035）。実 host は `--handoff` のない `review reverify` と `discovery.lab: attached` を退役エラーで止める。これは #352 の受入完了を意味しない。シナリオの選択と生成、プラグイン別アダプタ、共有コードに残っていた旧指示の連鎖は、#352 の close（2026-10-26）の後に #353（PR #577）で削除した（ADR 0026 の 2026-10-26 追記）。campaign 設定の `lab.scenarioId` と、シナリオを名指しする Lab Setup は、Lab を立てる前に拒否する。過去の Lab が記録した scenario は、台帳と対象範囲の評価のために読み続ける。削除前の状態は tag `archive/pre-353-deletion` に残る。共有の境界検査と記録は退役対象にしない。
 
 ## 単一協調 Trial の探索（SPEC.md 第 6 節、ADR 0029）
 

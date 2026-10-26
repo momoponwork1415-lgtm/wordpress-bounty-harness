@@ -9,7 +9,7 @@ superseded-in-part-by: 0040 for the observer verdict
 
 ## 決定
 
-WordPress profile の版・digest付き通常機能 scenario catalogue に、plugin に依存しない利用状態を優先して追加する。`incomplete(precondition)` の理由コードを台帳から、次の手の本文をdigestで参照するPrivate Evidenceから集計し、頻出する前提を2〜3件ずつ実装してから同じ Finding を再検証する。scenario は通常機能の有効化と無害なデータ投入だけを行い、対象固有の関数名、option名、URL、画面名、既知経路を含めない。（2026-10-26 改訂: scenario catalogue、precondition 文からの選択、plugin 別 adapter は #353 で削除した。下の 2026-10-26 追記。）
+WordPress profile の版・digest付き通常機能 scenario catalogue に、plugin に依存しない利用状態を優先して追加する。`incomplete(precondition)` の理由コードを台帳から、次の手の本文をdigestで参照するPrivate Evidenceから集計し、頻出する前提を2〜3件ずつ実装してから同じ Finding を再検証する。scenario は通常機能の有効化と無害なデータ投入だけを行い、対象固有の関数名、option名、URL、画面名、既知経路を含めない。（2026-10-26 改訂: scenario catalogue、precondition 文からの選択、plugin 別 adapter は #353（PR #577）で削除した。下の 2026-10-26 追記。）
 
 被害者側のブラウザ操作は Harness 所有の Lab 観測器が、型で制限した手順として実行する。Verifier にブラウザ、管理者セッション、scenario の編集権限を渡さない（2026-10-18 改訂: handoff の skill には前提作りのためだけに Lab の設定管理者を渡し、`setup-done` 以後は攻撃者位置のみ。[ADR 0035](0035-verification-as-a-skill.md)。Codex Verifier とブラウザについては本文のまま）。観測器は Finding が宣言した被害者ロールと画面の文脈で canary を観測し、結果を Private Evidence に保存する。必要な操作を catalogue と手順型で表せない場合は `incomplete(precondition)` または `incomplete(observation)` を理由と次の手付きで残す。
 
@@ -34,7 +34,7 @@ WordPress profile の版・digest付き通常機能 scenario catalogue に、plu
 
 「観測器は Finding が宣言した被害者ロールと画面の文脈で canary を観測し」は、[ADR 0040](0040-human-lab-observation-replaces-judges.md) で「宣言した画面を開き、数値マーカーの dialog と画面を記録する」に改めた。canary は播種しない。観測器は記録だけを残し、成立を判定しない。「ADR 0004 の nonce 判定は維持する」は ADR 0040 で置き換えた。被害者側の操作を Harness 所有の Lab 観測器が型付きの手順で行うことと、Verifier にブラウザを渡さないことは変えない。
 
-## 2026-10-26 追記: scenario の仕組みの削除（#353）
+## 2026-10-26 追記: scenario の仕組みの削除（#353、PR #577）
 
 決定の第 1 段落（版・digest 付きの通常機能 scenario catalogue と、`incomplete(precondition)` の集計から scenario を足す運用）は削除した。#352 は 2026-10-26 に close され、前提は ADR 0035 のとおり handoff の skill が Lab の通常機能で作る。
 
@@ -42,4 +42,4 @@ WordPress profile の版・digest付き通常機能 scenario catalogue に、plu
 - campaign 設定の `lab.scenarioId` と、scenario を名指しする Lab Setup は、Lab を立てる前に拒否する。暗黙に scenario なしの Lab へ切り替えない。
 - 読み続けるもの: 台帳の `lab-provisioned.scenario` と `verification-finished.result.nextScenarioId`、review export の scenario、対象範囲の評価が過去の Lab の scenario を照合するための digest pin（`retired-scenarios.ts`）。
 - 第 2 段落（被害者側の操作は Harness 所有の Lab 観測器が行い、Verifier にブラウザを渡さない）は変えない。
-- 削除前の状態は tag `archive/pre-353-deletion` に残る。戻すときは #353 の PR を revert する。
+- 削除前の状態は tag `archive/pre-353-deletion` に残る。戻すときは PR #577 を revert する。
